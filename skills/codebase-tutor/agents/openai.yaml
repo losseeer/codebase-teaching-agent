@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codebase Tutor"
+  short_description: "通过本地引擎开展可追溯源码教学、影响分析与选型证据审阅"
+  default_prompt: "Use $codebase-tutor to start a source-grounded lesson for this repository."

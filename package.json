@@ -1,0 +1,34 @@
+{
+  "name": "codebase-tutor",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.11.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "dev": "concurrently -n engine,gui -c cyan,magenta \"pnpm --filter @codebase-tutor/engine dev\" \"pnpm --filter @codebase-tutor/gui dev\"",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @codebase-tutor/engine test",
+    "test:watch": "pnpm --filter @codebase-tutor/engine test:watch",
+    "lint": "pnpm -r lint",
+    "test:e2e": "playwright test",
+    "test:all": "pnpm test && pnpm test:e2e",
+    "phase0:prepare-study": "pnpm --filter @codebase-tutor/engine phase0:prepare-study",
+    "phase0:audit": "pnpm --filter @codebase-tutor/engine phase0:audit"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.4",
+    "@playwright/test": "^1.54.1",
+    "concurrently": "^9.1.2",
+    "prettier": "^3.5.3",
+    "turbo": "^2.5.3",
+    "typescript": "^5.8.3"
+  }
+}

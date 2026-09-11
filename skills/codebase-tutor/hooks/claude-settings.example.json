@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/codebase-tutor/skills/codebase-tutor/hooks/post-tool-use.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
