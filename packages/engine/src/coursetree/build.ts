@@ -18,7 +18,7 @@ export function buildCourseTree(input: {
     const moduleName = dirname(file.path) === "." ? "根目录" : dirname(file.path);
     moduleFiles.set(moduleName, [...(moduleFiles.get(moduleName) ?? []), file]);
   }
-  const workflows = input.graph.entrypoints.map((anchor, index) => workflowNode(anchor, index, byPath, input.graph));
+  const workflows = input.graph.entrypoints.map((anchor) => workflowNode(anchor, byPath, input.graph));
   const modules = [...moduleFiles.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([moduleName, files]) => ({
     id: `module:${moduleName}`,
     title: `${moduleName} 模块`,
@@ -54,10 +54,10 @@ export function buildCourseTree(input: {
       id: "overview",
       title: "代码库全景",
       kind: "overview",
-      summary: `本课程从 ${workflows.length || 1} 个入口和 ${modules.length} 个模块建立心智地图。先理解工作流，再按需深入热点或模块。`,
+      summary: `本课程从 ${workflows.length || 1} 个入口和 ${modules.length} 个模块建立心智地图。先理解执行路径，再按需深入热点或模块。`,
       anchors: workflows[0]?.anchors ?? modules[0]?.anchors ?? [],
       children: [
-        { id: "workflows", title: "从入口理解工作流", kind: "overview", summary: "从路由、CLI 和应用入口追踪主要执行路径。", anchors: [], children: workflows.length ? workflows : [fallbackWorkflow(input.files, byPath)] },
+        { id: "workflows", title: "从入口理解执行路径", kind: "overview", summary: "从路由、CLI 和应用入口追踪主要执行路径。", anchors: [], children: workflows.length ? workflows : [fallbackWorkflow(input.files, byPath)] },
         { id: "modules", title: "模块地图", kind: "overview", summary: "按目录浏览职责边界；每个节点都附有源码锚点。", anchors: [], children: modules },
         { id: "micro", title: "微观精读", kind: "overview", summary: "函数级输入、输出、不变量、边界和陷阱。", anchors: [], children: implementations },
         { id: "decisions", title: "选型证据", kind: "overview", summary: "证据按直接、间接和推测分级；没有证据时明确保留待确认。", anchors: [], children: decisions }
@@ -76,11 +76,11 @@ export function attachQuality(tree: CourseTree, quality: QualityReport): CourseT
   return { ...tree, root: visit(tree.root) };
 }
 
-function workflowNode(anchor: { path: string; line: number; label: string }, index: number, summaries: Map<string, string>, graph: DependencyGraph): CourseNode {
+function workflowNode(anchor: { path: string; line: number; label: string }, summaries: Map<string, string>, graph: DependencyGraph): CourseNode {
   const dependencies = graph.imports.get(anchor.path) ?? [];
   return {
     id: `workflow:${anchor.path}`,
-    title: `工作流 ${index + 1}: ${anchor.path}`,
+    title: anchor.path,
     kind: "workflow",
     summary: `${anchor.label}。${summaries.get(anchor.path) ?? ""}`,
     anchors: [anchor],
@@ -89,7 +89,7 @@ function workflowNode(anchor: { path: string; line: number; label: string }, ind
       title: path,
       kind: "module" as const,
       summary: summaries.get(path) ?? "该依赖尚无摘要。",
-      anchors: [{ path, line: 1, label: "工作流依赖" }],
+      anchors: [{ path, line: 1, label: "入口依赖" }],
       children: []
     }))
   };

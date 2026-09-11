@@ -1,125 +1,249 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
-import { BarChart3, Code2, MessageCircleQuestion, RefreshCw, Send } from "lucide-react";
-import type { CostSummary, CourseTree, DecompositionDepth, FadedState, LearnerProfile, Pedagogy, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { FileSearch, X } from "lucide-react";
+import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
-import { EmptyState, Loading, Segmented, firstTeachNode, flatten, stageIndex } from "./helpers";
+import type { TeachingSessionApi } from "../agent/useTeachingSession";
+import { EmptyState, Loading, flatten } from "./helpers";
+import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
+import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
+import { showToast } from "../modules/toast";
+import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/store";
+import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
- * 教学会话工作区（苏格拉底式）：
- * - 左栏：三维调节（风格光谱 0-100 / 教学法 / 拆解层次）+ 教学阶梯（L1→L5）+ 锚点 + 成本 chip
- * - 右栏：聊天面板（用户消息 / 导师消息 / 流式 liveAnswer / composer）
- *
- * 与 prototype 的差异：
- * - prototype 是「共享主区 + Agent 侧栏」，3 个工作区共用 Agent rail
- * - 当前 GUI 是路由切换，每页有自己的 composer（更简单但与 §1.5 不一致）
- * - v0.2+ 应按 prototype 把 Agent rail 抽到 agent/，3 工作区共享
- */
+  教学会话工作区（对齐 prototype `.teaching-workspace`，两栏）：
+  - 左 「教学模块」（modules-pane）：模块 chips + 配置 + 推荐入口（课程节点按模块归类）+ 仓库文件（点击打开源码）
+  - 右 「实时源码」（source-pane）：只读源码 + 行高亮 + 源码 tabs + ⌘P 文件搜索
+  - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
+  - chat / composer / 流式订阅由 AgentRail 拥有（共享 useTeachingSession）
+  */
+export function TutorPage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
+  const repositoryId = workspace.repositoryId;
+  const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
+  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("teaching", modules));
+  const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
+  const [source, setSource] = useState<SourcePayload | null>(null);
+  const [tabs, setTabs] = useState<{ path: string; line: number }[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
-export function TutorPage({ workspace }: { workspace: Workspace }): ReactElement {
-  const [course, setCourse] = useState<CourseTree | null>(null);
-  const [selected, setSelected] = useState<ReturnType<typeof firstTeachNode> | null>(null);
-  const [session, setSession] = useState<TutorSession | null>(null);
-  const [settings, setSettings] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
-  const [cost, setCost] = useState<CostSummary | null>(null);
-  const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
-  const [liveAnswer, setLiveAnswer] = useState("");
-  const [error, setError] = useState("");
-  const [learner, setLearner] = useState<LearnerProfile | null>(null);
-  const [faded, setFaded] = useState<FadedState | null>(null);
-  const activeSessionId = useRef<string | undefined>(undefined);
+  useEffect(() => { saveModules(modules); }, [modules]);
+  useEffect(() => { saveActiveModule("teaching", activeModule); }, [activeModule]);
+
+  // 切换知识模块 → 往 teaching 线程记一条分隔线（prototype `switchModule` 同语义）
+  const previousModule = useRef<string | null>(null);
   useEffect(() => {
-    api.getCourse(workspace.repositoryId).then((tree) => { setCourse(tree); setSelected(firstTeachNode(tree.root)); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取课程"));
-    api.getLearner(workspace.repositoryId).then((profile) => { setLearner(profile); setSettings(profile.recommended.settings); }).catch(() => setLearner(null));
-  }, [workspace.repositoryId]);
-  useEffect(() => { setSession(null); setFaded(null); }, [selected?.id]);
+    const labelOf = (id: string): string => modules.find((item) => item.id === id)?.label ?? id;
+    if (previousModule.current && previousModule.current !== activeModule) t.pushDivider("teaching", `模块 · ${labelOf(previousModule.current)} → ${labelOf(activeModule)}`);
+    previousModule.current = activeModule;
+  }, [activeModule, modules]);
+
   useEffect(() => {
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
-    socket.onmessage = (event: MessageEvent<string>) => {
-      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string } };
-      if (serverEvent.type === "session.delta" && serverEvent.payload.sessionId === activeSessionId.current) {
-        setLiveAnswer((current) => current + (serverEvent.payload.delta ?? ""));
-      }
-    };
-    return () => socket.close();
-  }, []);
-  const send = async (): Promise<void> => {
-    if (!content.trim() || !selected) return;
-    setSending(true); setError("");
+    let current = true;
+    setFileTree([]);
+    api.getIndex(repositoryId).then((index) => { if (current) setFileTree(index.fileTree); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [repositoryId]);
+
+  const anchor = t.selected?.anchors[0];
+  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选往 teaching 线程推分隔线。 */
+  const loadSource = useCallback(async (path: string, line: number, note?: string, announce = true): Promise<void> => {
     try {
-      let active = session;
-      if (!active) { const created = await api.createSession(workspace.repositoryId, selected.id, settings); active = created.session; setFaded(created.faded); }
-      if (!active) return;
-      activeSessionId.current = active.id;
-      setLiveAnswer("");
-      const reply = await api.sendMessage(active.id, content, settings);
-      setSession(reply.session); setSettings(reply.session.settings); setCost(reply.cost); setLiveAnswer(""); setContent("");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "发送失败"); } finally { setSending(false); }
-  };
-  if (error && !course) return <EmptyState title="教学会话暂不可用" detail={error} />;
-  if (!course || !selected) return <Loading />;
-  const messages = session?.messages ?? [];
+      const next = await api.getSource(repositoryId, path, line);
+      setSource(next);
+      setTabs((current) => {
+        const tab = { path, line };
+        const existing = current.find((item) => item.path === path);
+        const nextTabs = existing ? current.map((item) => (item.path === path ? tab : item)) : [...current, tab];
+        return nextTabs.slice(-5);
+      });
+      if (!announce) return;
+      if (note) { t.pushDivider("teaching", note); showToast(note); }
+      else showToast(`已打开 · ${path}`);
+    } catch { showToast(`无法读取 ${path}`); }
+  }, [repositoryId, t]);
+  useEffect(() => {
+    if (!anchor) { setSource(null); return; }
+    // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
+    void loadSource(anchor.path, anchor.line, undefined, false);
+  }, [anchor?.path, anchor?.line, loadSource]);
+
+  // ⌘P / Ctrl+P 文件搜索（prototype 源码面板的「⌘ P 搜索文件」）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        setQuery("");
+      } else if (event.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const entries = useMemo<ModuleEntry[]>(() => (t.course ? classifyCourseNodes(t.course.root, modules) : []), [t.course, modules]);
+
+  // 推荐入口：优先用 engine 的 LLM 推荐（单轮调用，按模块缓存）；未配置 LLM / 失败时回落关键词分类
+  const [suggestedEntries, setSuggestedEntries] = useState<Record<string, SuggestedEntry[]>>({});
+  useEffect(() => {
+    if (!t.course) return;
+    const mod = modules.find((item) => item.id === activeModule);
+    if (!mod || suggestedEntries[activeModule]) return;
+    let current = true;
+    api.getModuleEntries(repositoryId, mod.label, mod.hint)
+      .then((result) => { if (current && result.source === "llm" && result.entries.length) setSuggestedEntries((curr) => ({ ...curr, [activeModule]: result.entries })); })
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [t.course, repositoryId, activeModule, modules, suggestedEntries]);
+  const visibleEntries: ModuleEntry[] = suggestedEntries[activeModule]?.length
+    ? suggestedEntries[activeModule].map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line, moduleId: activeModule }))
+    : entries.filter((entry) => entry.moduleId === activeModule);
+
+  const filePaths = useMemo(() => {
+    const out: string[] = [];
+    const walk = (nodes: FileTreeNode[]): void => { nodes.forEach((node) => { if (node.kind === "directory") walk(node.children ?? []); else out.push(node.path); }); };
+    walk(fileTree);
+    return out;
+  }, [fileTree]);
+  const paletteMatches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const pool = needle ? filePaths.filter((path) => path.toLowerCase().includes(needle)) : filePaths;
+    return pool.slice(0, 12);
+  }, [filePaths, query]);
+
+  if (t.error && !t.course) return <EmptyState title="教学会话暂不可用" detail={t.error} />;
+  if (!t.course || !t.selected) return <Loading />;
+  const { selected, course } = t;
+  const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
+
   return (
-    <section className="tutor-page">
-      <header className="tutor-header">
-        <div>
-          <p className="eyebrow">苏格拉底教学</p>
-          <h1>{selected.title}</h1>
-          <p>围绕源码证据逐层推进，连续两次要求降档会触发答案熔断并记录依赖事件。</p>
-          {learner && (
-            <small className="recommendation-note">
-              当前默认档：{learner.recommended.settings.pedagogy === "socratic" ? "引导" : learner.recommended.settings.pedagogy === "explanatory" ? "讲解" : "练习"} · {learner.recommended.settings.depth === "macro" ? "宏观" : "微观"} · 风格 {learner.recommended.settings.style}
-              {faded ? ` · faded ${faded.sampleCompleteness}/${faded.hintDepth}/${faded.stylePlainness}` : ""}
-            </small>
-          )}
-        </div>
-        <select value={selected.id} onChange={(event) => { const found = flatten(course.root).find((node) => node.id === event.target.value); if (found) setSelected(found); }} aria-label="选择课程节点">
-          {flatten(course.root).filter((node) => node.anchors.length).map((node) => <option key={node.id} value={node.id}>{node.title}</option>)}
-        </select>
+    <section className="page tutor-page">
+      {/*
+        紧凑单行 header：原型没有大标题区，节点选择已由左栏「推荐入口」承担
+        （v0.1 的 <select> 是模块面板出现前的遗留，已删除）。
+        */}
+      <header className="tutor-header-compact">
+        <p className="eyebrow">苏格拉底教学</p>
+        <h1>{selected.title}</h1>
       </header>
-      <div className="tutor-layout">
-        <aside className="session-controls">
-          <h2>语言风格 <output>{settings.style}</output></h2>
-          <input className="style-slider" type="range" min="0" max="100" value={settings.style} onChange={(event) => setSettings((current) => ({ ...current, style: Number(event.target.value) }))} aria-label="语言风格" />
-          <div className="range-labels"><span>严肃</span><span>通俗</span></div>
-          <h2 className="control-heading">教学法</h2>
-          <Segmented value={settings.pedagogy} items={[{ value: "socratic", label: "引导" }, { value: "explanatory", label: "讲解" }, { value: "practice", label: "练习" }]} onChange={(pedagogy) => setSettings((current) => ({ ...current, pedagogy: pedagogy as Pedagogy }))} />
-          <h2 className="control-heading">拆解层次</h2>
-          <Segmented value={settings.depth} items={[{ value: "macro", label: "宏观" }, { value: "micro", label: "微观" }]} onChange={(depth) => setSettings((current) => ({ ...current, depth: depth as DecompositionDepth }))} />
-          <div className="ladder">
-            <h2>教学阶梯</h2>
-            {["L1 定向", "L2 程序", "L3 概念", "检验", "确认"].map((label) => (
-              <div key={label} className={stageIndex(session?.stage) >= ["L1 定向", "L2 程序", "L3 概念", "检验", "确认"].indexOf(label) ? "ladder-step reached" : "ladder-step"}><span />{label}</div>
-            ))}
-          </div>
-          <div className="source-chip"><Code2 size={15} />{selected.anchors[0] ? `${selected.anchors[0].path}:${selected.anchors[0].line}` : "无源码锚点"}</div>
-          {cost && <div className={`cost-chip ${cost.mode}`}><BarChart3 size={15} />${cost.estimatedCostUsd.toFixed(4)} / ${cost.monthlyBudgetUsd.toFixed(2)}</div>}
-        </aside>
-        <div className="chat-panel">
-          <div className="chat-messages">
-            {messages.length === 0 && !liveAnswer ? (
-              <div className="starter"><MessageCircleQuestion size={25} /><p>先写下你对这个节点的一个观察或假设。</p></div>
+      <ContextLine strong="代码教学" detail={`${anchor ? `${anchor.path}:${anchor.line}` : "未定位"} · 模块「${moduleLabel}」`} />
+      <MobileSwitcher labels={["教学模块", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
+      <div className="workspace teaching-workspace">
+        <div className={paneClass(0)}>
+          <ModulesPane
+            where="teaching"
+            header="教学模块"
+            modules={modules}
+            activeId={activeModule}
+            onSelectModule={setActiveModule}
+            onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
+          >
+            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 模块可在「＋ 配置」里自定义</p>
+            <ModuleSectionLabel label="推荐入口" note={suggestedEntries[activeModule]?.length ? "LLM 从课程树推荐 · 可直接提问" : "按关键词归类 · 配置 LLM 后自动升级"} />
+            {visibleEntries.length ? (
+              <div className="entry-list">
+                {visibleEntries.map((entry) => (
+                  <button
+                    key={entry.id}
+                    className={`entry-item ${t.selected?.id === entry.id ? "selected" : ""}`}
+                    title={`${entry.path}:${entry.line}`}
+                    onClick={() => { const found = flatten(course.root).find((node) => node.id === entry.id); if (found) t.setSelected(found); }}
+                  >
+                    <span className="entry-dot" />
+                    <strong>{entry.title}</strong>
+                    <code>{entry.path.split("/").pop()}:{entry.line}</code>
+                  </button>
+                ))}
+              </div>
             ) : (
-              messages.map((message) => <div className={`message ${message.role}`} key={message.id}><span>{message.role === "user" ? "你" : "导师"}</span><p>{message.content}</p></div>)
+              <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或中栏源码挑一个文件，直接开始提问。</p>
             )}
-            {liveAnswer && <div className="message assistant streaming"><span>导师</span><p>{liveAnswer}<i /></p></div>}
-          </div>
-          {error && <p className="error-message">{error}</p>}
-          <div className="composer">
-            <textarea
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-              placeholder="描述你的推理，或输入「不知道」请求下一层提示"
-              rows={3}
-            />
-            <button className="primary icon-button" aria-label="发送消息" title="发送消息" onClick={() => void send()} disabled={sending || !content.trim()}>
-              {sending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}
-            </button>
-          </div>
+            <ModuleSectionLabel label="仓库文件" note="主要入口 · 任意目录与文件" />
+            <RepoTree nodes={fileTree} onOpenFile={(path) => void loadSource(path, 1, `已打开 · ${path}`)} activePath={source?.path} />
+          </ModulesPane>
+        </div>
+        <div className={paneClass(1)}>
+          <section className="pane source-pane">
+            <div className="pane-header"><h2>实时源码</h2><span>{source?.path ?? "未选择文件"}{filePaths.length ? ` · ${filePaths.length} 文件 · ⌘P 搜索` : ""}</span></div>
+            {tabs.length ? (
+              <div className="source-tabs" role="tablist" aria-label="打开的文件">
+                {tabs.map((tab) => (
+                  <button key={tab.path} role="tab" aria-selected={source?.path === tab.path} className={source?.path === tab.path ? "active" : ""} onClick={() => void loadSource(tab.path, tab.line)}>
+                    {tab.path.split("/").pop()}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="source-meta"><span>{source ? `只读 · 已定位第 ${source.line} 行` : "选择左侧仓库文件或推荐入口"}</span><span>⌘ P 搜索文件</span></div>
+            <SourceView source={source} />
+          </section>
         </div>
       </div>
+      {paletteOpen && (
+        <div className="palette-overlay" onClick={() => setPaletteOpen(false)}>
+          <div className="palette" role="dialog" aria-label="搜索仓库文件" onClick={(event) => event.stopPropagation()}>
+            <div className="palette-head">
+              <FileSearch size={14} />
+              <input
+                autoFocus
+                value={query}
+                placeholder="搜索仓库文件（回车打开第一个）"
+                aria-label="搜索仓库文件"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && paletteMatches[0]) { void loadSource(paletteMatches[0], 1, `已打开 · ${paletteMatches[0]}`); setPaletteOpen(false); } }}
+              />
+              <button className="palette-close" aria-label="关闭" onClick={() => setPaletteOpen(false)}><X size={13} /></button>
+            </div>
+            <div className="palette-list">
+              {paletteMatches.map((path) => (
+                <button key={path} onClick={() => { void loadSource(path, 1, `已打开 · ${path}`); setPaletteOpen(false); }}>{path}</button>
+              ))}
+              {!paletteMatches.length && <p className="palette-empty">没有匹配的文件</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+/** 仓库文件树（prototype `.repo-tree`）：目录默认折叠、首层展开，每目录最多展示 8 项 + 「显示其余 N 项」。 */
+function RepoTree({ nodes, onOpenFile, activePath }: { nodes: FileTreeNode[]; onOpenFile: (path: string) => void; activePath?: string }): ReactElement {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [fullyShown, setFullyShown] = useState<Set<string>>(() => new Set());
+  if (!nodes.length) return <p className="entry-empty">仓库文件树加载中，或该仓库暂无文件索引。</p>;
+  const LIMIT = 8;
+  const render = (items: FileTreeNode[], depth: number): ReactElement[] => {
+    const rows: ReactElement[] = [];
+    items.forEach((node) => {
+      if (node.kind === "directory") {
+        const open = expanded.has(node.path);
+        rows.push(
+          <button key={node.path} className={`rt-dir ${open ? "open" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; })}>
+            {open ? "⌄" : "›"} {node.name}<span>{node.children?.length ?? 0} 项</span>
+          </button>,
+        );
+        if (open && node.children) {
+          const shown = fullyShown.has(node.path) ? node.children : node.children.slice(0, LIMIT);
+          rows.push(...render(shown, depth + 1));
+          if (!fullyShown.has(node.path) && node.children.length > LIMIT) {
+            rows.push(
+              <button key={`${node.path}:more`} className="rt-more" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }} onClick={() => setFullyShown((prev) => new Set(prev).add(node.path))}>
+                显示其余 {node.children.length - LIMIT} 项
+              </button>,
+            );
+          }
+        }
+      } else {
+        rows.push(
+          <button key={node.path} className={`rt-file ${activePath === node.path ? "selected" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => onOpenFile(node.path)}>
+            ◇ <code>{node.name}</code>
+          </button>,
+        );
+      }
+    });
+    return rows;
+  };
+  return <div className="repo-tree">{render(nodes, 0)}</div>;
 }

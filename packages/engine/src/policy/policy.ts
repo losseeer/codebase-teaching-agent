@@ -18,7 +18,7 @@ export function policyFor(settingsOrStyle: TutorSettings | StyleLevel, overrides
       ? ["先给出带锚点的简短解释，再要求学习者复述证据", "不隐藏必要结论"]
       : ["把结论改写成可执行的观察任务", "要求学习者预测改变后的影响"];
   const depth = settings.depth === "macro"
-    ? ["优先解释工作流、模块边界和调用路径"]
+    ? ["优先解释执行路径、模块边界和调用路径"]
     : ["优先解释函数输入、输出、守卫、边界和陷阱"];
   return { level: settings.style, label, constraints: [...language, ...pedagogy, ...depth], pedagogy: settings.pedagogy, depth: settings.depth };
 }

@@ -2,8 +2,16 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { CompanionSuggestion, CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 4;
+
+// 一次性 pre-load：dlopen 对应当前 Node ABI 的 binding 路径，避免 better-sqlite3
+// 走默认 `bindings('better_sqlite3.node')` 触发 127↔147 mismatch。
+// 后端只需 `new Database(filename, { nativeBinding })` 即可。
+// 类型 cast 是因为 @types/better-sqlite3 只声明了 `nativeBinding: string`，但
+// runtime 接受 addon 对象（见 better-sqlite3/lib/database.js 注释 "string or addon object"）。
+const nativeBinding = loadAddon() as unknown as string;
 
 export class TutorDatabase {
   private readonly db: Database.Database;
@@ -11,7 +19,7 @@ export class TutorDatabase {
   constructor(readonly repositoryPath: string) {
     const tutorDir = join(repositoryPath, ".tutor");
     if (!existsSync(tutorDir)) mkdirSync(tutorDir, { recursive: true });
-    this.db = new Database(join(tutorDir, "tutor.db"));
+    this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
     this.db.pragma("journal_mode = WAL");
     this.migrate();
   }

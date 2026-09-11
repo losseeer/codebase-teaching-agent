@@ -1,130 +1,232 @@
-import { useEffect, useState, type ReactElement } from "react";
-import { BrainCircuit, CheckCircle2, Code2, RefreshCw } from "lucide-react";
-import type { Exercise, ExerciseKind, ExerciseResult, PracticeSummary } from "@codebase-tutor/shared";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import { BrainCircuit, CheckCircle2, RefreshCw } from "lucide-react";
+import type { Exercise, ExerciseGradingMode, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
+import type { TeachingSessionApi } from "../agent/useTeachingSession";
 import { exerciseKindLabel } from "./helpers";
+import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
+import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
+import { showToast } from "../modules/toast";
+import { classifyModule, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule } from "../modules/store";
+import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
- * 练习复习工作区：生成练习（4 种题型）→ 答题 → 自动判分 → SM-2 复习调度。
- * - 题型：output_prediction / change_localization / impact_analysis / decision_defense
- * - 输入模式：text / multi_select / evidence_and_text
- * - 判分模式：execution / set_match / rubric
- *
- * 对应 prototype `design-prototype.html` 中的「练习复习」视图（4 类练习 + 模块 chips）。
- * 当前 GUI 用工具栏下拉选题型；v0.2+ 引入 prototype 的模块 chips 与四类卡片网格。
- */
+  练习复习工作区（对齐 prototype `.practice-workspace`，两栏）：
+  - 左 「练习模块」（modules-pane）：模块 chips + 配置 + 「模块内的练习」卡片列表（真实掌握度记录，点击按 targetUnitId 重新出题）
+  - 右 「练习上下文」（source-pane）：相关代码（高亮）→ 你的回答（文本 / 选项）→ 提交回答 / 换一题 → 反馈面板
+  - 生成练习入口放在上下文行的 `.context-actions`（题型选择 + 生成），判分结果同时推送到 practice 线程
 
-export function PracticePage({ workspace }: { workspace: Workspace }): ReactElement {
+  对应 prototype `design-prototype.html` L67 / L330-342（practice-workspace + 练习上下文 + answer + feedback）。
+  */
+
+function gradingLabel(mode: ExerciseGradingMode): string {
+  if (mode === "execution") return "受限执行验证";
+  if (mode === "set_match") return "集合精确匹配";
+  return "证据 Rubric";
+}
+
+function unitName(unitId: string): string {
+  const tail = unitId.split(":").pop() ?? unitId;
+  return tail.replace(/^[a-z]+-/, "") || tail;
+}
+
+function escapeHtml(input: string): string {
+  return input.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] as string));
+}
+
+export function PracticePage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
+  const repositoryId = workspace.repositoryId;
   const [summary, setSummary] = useState<PracticeSummary | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
-  const [kind, setKind] = useState<ExerciseKind | "">("");
   const [text, setText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [source, setSource] = useState<SourcePayload | null>(null);
+  const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
+  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", modules));
+  const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
-  const refreshSummary = (): void => { api.getPractice(workspace.repositoryId).then(setSummary).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度")); };
-  useEffect(refreshSummary, [workspace.repositoryId]);
-  const loadExercise = async (): Promise<void> => {
-    setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
-    try { setExercise(await api.createExercise(workspace.repositoryId, kind ? { kind } : {})); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "无法生成练习"); }
-    finally { setLoading(false); }
+  useEffect(() => { saveModules(modules); }, [modules]);
+  useEffect(() => { saveActiveModule("practice", activeModule); }, [activeModule]);
+
+  const refreshSummary = (): void => {
+    api.getPractice(repositoryId).then(setSummary).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
   };
+  useEffect(refreshSummary, [repositoryId]);
+
+  // 切换知识模块 → practice 线程分隔线（prototype `switchModule` 同语义）
+  const previousModule = useRef<string | null>(null);
+  useEffect(() => {
+    const labelOf = (id: string): string => modules.find((item) => item.id === id)?.label ?? id;
+    if (previousModule.current && previousModule.current !== activeModule) t.pushDivider("practice", `模块 · ${labelOf(previousModule.current)} → ${labelOf(activeModule)}`);
+    previousModule.current = activeModule;
+  }, [activeModule, modules]);
+
+  // 题型统一走引擎的自适应推荐（context-line 的题型下拉已按用户要求移除；
+  // 针对具体单元的重练由左栏练习卡片 targetUnitId 承担）
+  const generate = async (targetUnitId?: string): Promise<void> => {
+    setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
+    try {
+      const next = await api.createExercise(repositoryId, targetUnitId ? { targetUnitId } : {});
+      setExercise(next);
+      t.setPracticeUnit(next.title);
+      const anchor = next.anchors[0];
+      t.pushDivider("practice", `${exerciseKindLabel(next.kind)} · ${next.title}${anchor ? ` → ${anchor.path}:${anchor.line}` : ""}`);
+      showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法生成练习");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const anchor = exercise?.anchors[0];
+    if (!anchor) { setSource(null); return; }
+    let current = true;
+    api.getSource(repositoryId, anchor.path, anchor.line).then((next) => { if (current) setSource(next); }).catch(() => { if (current) setSource(null); });
+    return () => { current = false; };
+  }, [exercise?.id, repositoryId]);
+
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const submit = async (): Promise<void> => {
     if (!exercise) return;
     setLoading(true); setError("");
     try {
       const answer = exercise.inputMode === "text" ? { text } : exercise.inputMode === "multi_select" ? { selectedIds } : { selectedIds, rationale: text };
-      setResult(await api.submitExercise(workspace.repositoryId, exercise.id, answer));
+      const next = await api.submitExercise(repositoryId, exercise.id, answer);
+      setResult(next);
       refreshSummary();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法提交答案"); }
-    finally { setLoading(false); }
+      t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${escapeHtml(next.feedback)}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法提交答案");
+    } finally {
+      setLoading(false);
+    }
   };
-  const recentMastery = [...(summary?.mastery ?? [])].sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""))[0]?.level ?? 1;
+
+  const moduleMastery = (summary?.mastery ?? [])
+    .filter((record) => classifyModule(record.unitId, modules) === activeModule)
+    .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
+  const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
+  const anchor = exercise?.anchors[0];
+  const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : text.trim().length > 0);
+
   return (
     <section className="page practice-page">
-      <header className="page-heading practice-header">
-        <div>
-          <p className="eyebrow">间隔复习</p>
-          <h1>源码练习</h1>
-          <p>题目只基于当前内容版本的实现、依赖图和已标注证据生成。</p>
-        </div>
-        <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>最近掌握度 {recentMastery}</span></div>
+      <header className="practice-header-compact">
+        <p className="eyebrow">间隔复习</p>
+        <h1>源码练习</h1>
+        <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>已练单元 {summary?.mastery.length ?? 0}</span></div>
       </header>
-      <div className="practice-toolbar">
-        <label>题型
-          <select value={kind} onChange={(event) => setKind(event.target.value as ExerciseKind | "")} aria-label="练习题型">
-            <option value="">自适应推荐</option>
-            <option value="output_prediction">预测输出</option>
-            <option value="change_localization">修改定位</option>
-            <option value="impact_analysis">影响分析</option>
-            <option value="decision_defense">选型辩护</option>
-          </select>
-        </label>
-        <button className="primary" onClick={() => void loadExercise()} disabled={loading}>
-          {loading ? <RefreshCw className="spin" size={17} /> : <BrainCircuit size={17} />}生成练习
-        </button>
-      </div>
-      {error && <p className="error-message">{error}</p>}
-      {!exercise ? (
-        <div className="practice-empty"><BrainCircuit size={28} /><p>生成一道练习，开始一次针对当前仓库的复习。</p></div>
-      ) : (
-        <div className="practice-workspace">
-          <article className="exercise-surface">
-            <div className="exercise-heading">
-              <div>
-                <span className="kind-badge">{exerciseKindLabel(exercise.kind)}</span>
-                <h2>{exercise.title}</h2>
-              </div>
-              <span className="difficulty">难度 {exercise.difficulty}/5</span>
-            </div>
-            <p className="exercise-prompt">{exercise.prompt}</p>
-            {exercise.anchors.length ? (
-              <div className="exercise-anchors">
-                {exercise.anchors.map((anchor) => <span key={`${anchor.path}:${anchor.line}`}><Code2 size={13} />{anchor.path}:{anchor.line}</span>)}
-              </div>
-            ) : null}
-            {exercise.inputMode === "text" ? (
-              <textarea className="exercise-text" value={text} onChange={(event) => setText(event.target.value)} rows={4} placeholder="填写你预测的返回值" aria-label="练习答案" />
-            ) : (
-              <div className="exercise-options">
-                {exercise.options?.map((option) => (
-                  <label key={option.id} className={selectedIds.includes(option.id) ? "exercise-option checked" : "exercise-option"}>
-                    <input type="checkbox" checked={selectedIds.includes(option.id)} onChange={() => toggle(option.id)} />
-                    <span><code>{option.label}</code>{option.detail ? <small>{option.detail}</small> : null}</span>
-                  </label>
+      <ContextLine strong="练习复习" detail={`模块「${moduleLabel}」 · 证据与反馈会回写学习状态`} />
+      <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
+      <div className="workspace practice-workspace">
+        <div className={paneClass(0)}>
+          <ModulesPane
+            where="practice"
+            header="练习模块"
+            modules={modules}
+            activeId={activeModule}
+            onSelectModule={setActiveModule}
+            onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
+          >
+            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 模块可在「＋ 配置」里自定义</p>
+            <ModuleSectionLabel label="模块内的练习" note={`${moduleMastery.length} 项`} />
+            {moduleMastery.length ? (
+              <div className="exercise-list">
+                {moduleMastery.map((record) => (
+                  <ExerciseCard key={record.unitId} record={record} selected={exercise?.targetUnitId === record.unitId} onPick={() => void generate(record.unitId)} />
                 ))}
               </div>
+            ) : (
+              <p className="entry-empty">该模块下暂时没有练习记录。用上方「生成练习」开始一次针对当前仓库的复习。</p>
             )}
-            {exercise.inputMode === "evidence_and_text" ? (
-              <textarea className="exercise-text" value={text} onChange={(event) => setText(event.target.value)} rows={4} placeholder="说明证据如何支撑结论，并标注证据强度" aria-label="辩护理由" />
-            ) : null}
-            <div className="exercise-actions">
-              <button className="primary" onClick={() => void submit()} disabled={loading || (exercise.inputMode === "text" && !text.trim()) || (exercise.inputMode === "evidence_and_text" && !text.trim())}>
-                {loading ? <RefreshCw className="spin" size={17} /> : <CheckCircle2 size={17} />}提交并判分
-              </button>
-              <button className="secondary" onClick={() => void loadExercise()} disabled={loading}>换一题</button>
-            </div>
-          </article>
-          <aside className="practice-status">
-            <h2>复习状态</h2>
-            <div><span>内容版本</span><code>{exercise.contentVersion.slice(0, 19)}</code></div>
-            <div><span>判分方式</span><strong>{exercise.gradingMode === "execution" ? "受限执行验证" : exercise.gradingMode === "set_match" ? "集合精确匹配" : "证据 Rubric"}</strong></div>
-            {result ? (
-              <div className={`result-panel ${result.passed ? "passed" : "needs-work"}`}>
-                <strong>{result.passed ? "已通过" : "继续完善"}</strong>
-                <output>{Math.round(result.score * 100)}%</output>
-                <p>{result.feedback}</p>
-                <small>下次复习：{new Date(result.review.dueAt).toLocaleDateString()}</small>
-                {result.rubric?.map((criterion) => <p className="rubric-line" key={criterion.id}>{criterion.label} {Math.round(criterion.score * 100)}/{Math.round(criterion.maxScore * 100)} · {criterion.feedback}</p>)}
-              </div>
-            ) : <p>完成后会更新 SM-2 间隔和单元掌握度。</p>}
-          </aside>
+          </ModulesPane>
         </div>
-      )}
+
+        <section className={`pane practice-context ${paneClass(1)}`}>
+          <div className="pane-header"><h2>练习上下文</h2><span>{anchor ? `${anchor.path} · 第 ${anchor.line} 行` : "尚未生成练习"}</span></div>
+          <div className="source-meta">
+            <span>{anchor ? "相关代码已高亮" : "生成练习后显示相关代码"}</span>
+            <span>{exercise ? `${gradingLabel(exercise.gradingMode)} · 内容版本 ${exercise.contentVersion.slice(0, 14)}` : "—"}</span>
+          </div>
+          {error ? <p className="error-message practice-error">{error}</p> : null}
+          {exercise ? (
+            <>
+              <div className="practice-code"><SourceView source={source} /></div>
+              <div className="answer">
+                <div className="answer-prompt">
+                  <div>
+                    <span className="kind-badge">{exerciseKindLabel(exercise.kind)}</span>
+                    <h2>{exercise.title}</h2>
+                  </div>
+                  <span className="difficulty">难度 {exercise.difficulty}/5</span>
+                </div>
+                <p className="exercise-prompt">{exercise.prompt}</p>
+                <span className="answer-label">你的回答</span>
+                {exercise.inputMode === "multi_select" ? (
+                  <div className="option-list">
+                    {exercise.options?.map((option) => (
+                      <label key={option.id} className={selectedIds.includes(option.id) ? "option checked" : "option"}>
+                        <input type="checkbox" checked={selectedIds.includes(option.id)} onChange={() => toggle(option.id)} />
+                        <span><code>{option.label}</code>{option.detail ? <small>{option.detail}</small> : null}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+                {exercise.inputMode !== "multi_select" ? (
+                  <textarea
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    rows={4}
+                    aria-label="练习答案"
+                    placeholder={exercise.inputMode === "evidence_and_text" ? "说明证据如何支撑结论，并标注证据强度" : "只填写你预测的返回值"}
+                  />
+                ) : null}
+                <div className="answer-actions">
+                  <button className="primary" onClick={() => void submit()} disabled={!canSubmit}>
+                    {loading ? <RefreshCw className="spin" size={15} /> : <CheckCircle2 size={15} />}提交回答
+                  </button>
+                  <button className="secondary" onClick={() => void generate(exercise.targetUnitId)} disabled={loading}>换一题</button>
+                </div>
+                <div className={`feedback${result ? (result.passed ? " passed" : " needs-work") : ""}`}>
+                  <strong>{result ? "反馈状态 · 已记录" : "反馈状态 · 尚未提交"}</strong>
+                  {result ? (
+                    <>
+                      <p>{result.passed ? "已通过" : "继续完善"} · 得分 {Math.round(result.score * 100)}% · {result.feedback}</p>
+                      {result.rubric?.map((criterion) => (
+                        <p className="rubric-line" key={criterion.id}>{criterion.label} {Math.round(criterion.score * 100)}/{Math.round(criterion.maxScore * 100)} · {criterion.feedback}</p>
+                      ))}
+                      <p>下次复习：{new Date(result.review.dueAt).toLocaleDateString()}（间隔 {result.review.intervalDays} 天）</p>
+                    </>
+                  ) : (
+                    <p>完成回答后，这里会显示证据引用、掌握度变化和下一项推荐。</p>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="practice-empty">
+              <BrainCircuit size={26} />
+              <p>从左栏选一个已练单元，或用上方「生成练习」针对当前仓库出一道新题。</p>
+              <button className="primary" onClick={() => void generate()} disabled={loading}>{loading ? <RefreshCw className="spin" size={15} /> : <BrainCircuit size={15} />}生成练习</button>
+            </div>
+          )}
+        </section>
+      </div>
     </section>
+  );
+}
+
+function ExerciseCard({ record, selected, onPick }: { record: MasteryRecord; selected: boolean; onPick: () => void }): ReactElement {
+  return (
+    <button className={`exercise-card${selected ? " selected" : ""}`} title={record.unitId} onClick={onPick}>
+      <small>掌握度 {record.level}/5 · 练习 {record.attempts} 次</small>
+      <strong>{unitName(record.unitId)}</strong>
+      <span>{record.lastPracticedAt ? `上次练习 ${new Date(record.lastPracticedAt).toLocaleDateString()} · 点击重新出题` : "尚无练习记录 · 点击出题"}</span>
+    </button>
   );
 }

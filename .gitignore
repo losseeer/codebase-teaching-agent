@@ -25,7 +25,7 @@ yarn-debug.log*
 # 设计文档 6MB 含 base64 字体/截图，diff 性能差；维护在本地文档系统
 # ─────────────────────────────────────────────────────────────
 codebase-teaching-agent.html
-开发计划.md
+开发计划.md 
 调研报告.md
 docs/
 *.local.md
@@ -67,3 +67,5 @@ coverage/
 course-*.png
 practice-*.png
 tutor-*.png
+
+.tutorignore

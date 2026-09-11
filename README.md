@@ -1,56 +1,94 @@
 # Codebase Tutor
 
-本地运行的代码库教学 Agent。导入一个仓库后，它会建立文件与热点索引、生成带源码锚点的宏观和微观课程树、影响半径、选型证据与可调教学会话。
+本地优先的代码库教学 Agent。导入一个真实仓库后，引擎会建立文件与 Git 热点索引、生成带源码锚点的课程树与运行路径地图，并围绕「宏观设计 / 代码教学 / 练习复习」三作用域提供常驻 Agent 侧栏。所有分析结果、SQLite 数据库和不可变学习日志（journal）都保存在被导入仓库的 `.tutor/` 目录——你的代码不出本机。
 
-## Quick start
+## 项目简介
 
-```sh
-pnpm install
-pnpm dev
+- **课程地图**：左侧「项目目录」按真实目录分组展示（可折叠、带语义标签），右侧「运行路径」画布由课程节点自动布局，支持拖拽平移、缩放与节点详情抽屉，每个节点可溯源到源码锚点。
+- **代码教学**：左侧「教学模块」由知识模块 chips + LLM 推荐入口 + 仓库文件树组成；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏经苏格拉底状态机驱动 LLM 进行源码问答式教学。
+- **练习复习**：按知识模块组织源码练习，由执行、断言与 Rubric 自动判分，并按 SM-2 算法调度复习。
+- **成本监控**：Token 用量统计、月度预算设置，触顶后 LLM 调用自动降级为本地规则路径。
+
+## 技术选型
+
+| 层 | 选型 |
+|---|---|
+| **engine** | Fastify v5（REST + WebSocket 流式）、better-sqlite3（双 ABI 原生绑定）、typescript-language-server（LSP 语义增强）、tsx 开发运行时 |
+| **gui** | Vite 6 + React 19 + react-router-dom v7 + lucide-react |
+| **shared** | 前后端共享 TypeScript 类型（workspace 内直接引用源码） |
+| **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档 |
+| **工具链** | pnpm 10 workspace + turbo + changesets；vitest + Playwright（`e2e/`）；TypeScript 5.8；concurrently 双进程开发 |
+
+## 仓库结构
+
 ```
-
-打开 `http://localhost:3000`，在导入页填入待学习仓库的绝对路径。分析结果、SQLite 数据库及不可变学习日志都会保存在该仓库的 `.tutor/` 目录。
-
-未配置模型服务时，应用使用内置的确定性摘要与教学后备，因此完整工作流不需要 API 密钥。设置 `TUTOR_SUMMARY_PROVIDER=ollama` 可使用本机 Ollama；不可用时会逐文件降级回确定性摘要。
-
-教学会话可通过统一 Provider 接入真实模型：
-
-```bash
-# OpenAI
-TUTOR_TEACHING_PROVIDER=openai OPENAI_API_KEY=... TUTOR_TEACHING_MODEL=gpt-4o-mini pnpm dev
-# 无密钥的本机 OpenAI-compatible 服务（例如 LM Studio）
-TUTOR_TEACHING_PROVIDER=openai-compatible TUTOR_OPENAI_URL=http://127.0.0.1:1234/v1 TUTOR_TEACHING_MODEL=local-model pnpm dev
-# Anthropic
-TUTOR_TEACHING_PROVIDER=anthropic ANTHROPIC_API_KEY=... TUTOR_TEACHING_MODEL=claude-3-5-sonnet-20241022 pnpm dev
-# Ollama
-TUTOR_TEACHING_PROVIDER=ollama TUTOR_TEACHING_MODEL=qwen2.5:7b pnpm dev
+.
+├── packages/
+│   ├── engine/                  # 分析与教学引擎（Fastify API，:3001）
+│   │   └── src/
+│   │       ├── server.ts        #   全部 REST 路由 + WebSocket 广播 + 启动计时
+│   │       ├── importer/        #   仓库导入：路径归一化、分析编排、增量重分析
+│   │       ├── indexer/         #   文件树 / Git 热点索引、.tutorignore 排除规则、文件变更监听
+│   │       ├── summarizer/      #   分层文件摘要（LLM 或本地启发式 + 缓存）
+│   │       ├── coursetree/      #   课程树构建、LLM 命名完善（llm-refine）、
+│   │       │                    #   模块推荐入口（entry-suggest）、节点投影
+│   │       ├── depgraph/        #   依赖图构建 / 影响面分析
+│   │       ├── implementation/  #   微观实现单元抽取（函数级）
+│   │       ├── decision/        #   选型决策单元与证据收集
+│   │       ├── lsp/             #   typescript-language-server 语义增强
+│   │       ├── quality/         #   分析结果校验（verifyAnalysis）
+│   │       ├── harness/         #   教学回复编排（Socratic 状态机 + LLM + 降级）
+│   │       ├── teaching/        #   教学阶段状态机（orient→…→confirmed）
+│   │       ├── policy/          #   教学设置（风格/教学法/层次）与校验
+│   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习
+│   │       ├── learner/         #   学习者画像 / 掌握度 / 渐隐提示
+│   │       ├── companion/       #   IDE 伴侣建议（Claude Code post-tool-use hook）
+│   │       ├── hooks/           #   teach-moment 事件过滤
+│   │       ├── cost/            #   token 用量汇总与月度预算
+│   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移）
+│   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）
+│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit）
+│   │       └── lib.ts           #   hash / id / 路径工具
+│   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
+│   │   ├── public/              #   design-prototype.html（界面基线）+ 截图
+│   │   └── src/
+│   │       ├── App.tsx          #   shell + 侧栏导航 + 单主区 Workbench
+│   │       ├── views/           #   课程地图 / 代码教学 / 练习复习 / 导入 / 成本监控
+│   │       ├── agent/           #   持久 Agent 侧栏 + useTeachingSession 状态源
+│   │       ├── map/             #   FlowMap 运行路径画布（自动布局 / 拖拽 / 缩放）
+│   │       ├── modules/         #   知识模块面板（localStorage 持久化）+ toast
+│   │       ├── source/          #   只读源码查看器（行高亮）
+│   │       ├── api/             #   REST 客户端
+│   │       ├── journal/ scope/  #   预留目录（UI 事件 / 作用域可见范围，仅 README）
+│   │       └── styles/          #   全局样式（页面不滚动，组件内滚动）
+│   └── shared/                  # 前后端共享类型定义
+├── e2e/                         # Playwright 端到端测试
+├── docs/                        # 设计方案 / UI 原型说明 / 调研报告
+├── skills/                      # 引擎侧技能扩展目录
+├── .env.example                 # LLM Provider 配置模板
+└── turbo.json / pnpm-workspace.yaml
 ```
-
-可选配置 `TUTOR_OPENAI_URL`、`TUTOR_ANTHROPIC_URL`、`TUTOR_OLLAMA_URL` 和 `TUTOR_LLM_TIMEOUT_MS`。Provider 会携带受限 RAG 上下文、重试一次；请求失败、无 API Key 或预算触顶时回到本地教学规则，状态机和日志链路继续运行。`GET /api/health` 会返回当前摘要档和教学档。
 
 ## 分析排除规则
 
-首次导入时，引擎会在被导入仓库根目录生成可编辑的 `.tutorignore`，可屏蔽不属于项目教学内容的路径。它支持常用 `.gitignore` 风格的注释、`*`、`?`、`**`、目录后缀和以 `!` 开头的重新纳入规则；初始内容见 [.tutorignore.example](.tutorignore.example)。
+首次导入时会在被导入仓库根目录生成可编辑的 `.tutorignore`（`.gitignore` 风格语法：注释、`*`、`?`、`**`、目录后缀与 `!` 重新包含规则），默认排除 `.git/`、`.tutor/`、各类 Agent 工作目录（`.claude/`、`.cursor/` 等）、`node_modules/`、构建产物与本地缓存；保存后自动触发重新分析。初始模板见 [.tutorignore.example](.tutorignore.example)，匹配实现见 `packages/engine/src/indexer/ignore.ts`。
 
-生成的默认文件包含 `.claude/`、`.workbuddy/`、`.codex/`、`.cursor/`、`.aider/`、`.continue/` 等 Agent 工作目录，以及 `node_modules/`、构建产物、缓存、覆盖率、`.git/` 和 `.tutor/`。默认行为完全由该文件决定，保存后文件监听器会自动触发重新分析。
-
-## M1 capabilities
-
-- 函数级 ImplementationUnit：输入、输出、不变量、边界和陷阱。
-- DecisionUnit：从 manifest、配置、README 和提交历史收集证据，严格区分直接、间接和推测。
-- 导入图与调用图的影响半径 API，文件 watch 增量更新，以及 LSP 不可用时的静态分析后备。
-- 连续语言风格、教学法和拆解层次的会话内热切换；本地规则 hook 过滤；成本预算降级。
-- A/B/C 对照实验配置和 journal CSV 导出。
-
-TypeScript LSP 随引擎安装；Python 项目会在本机存在 `pylsp` 时自动接入，否则显示静态分析后备状态。
-
-## Commands
+## 快速开始
 
 ```sh
-pnpm test
-pnpm build
-pnpm phase0:prepare-study -- /absolute/path/to/repository
-pnpm phase0:audit -- /absolute/path/to/repository
+pnpm install        # postinstall 会自动准备 better-sqlite3 双 ABI 原生绑定
+pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 ```
 
-`phase0:prepare-study` 为三档盲评生成去标识化材料；`phase0:audit` 为 20 条入口/选型解释抽检生成审核表。访谈招募、录音和人工编码模板见 `research/`。
+打开 `http://localhost:3000`，在导入页填入待学习仓库的路径（支持 `~/xxx`）即可。分析结果保存在该仓库的 `.tutor/`。
+
+接入 LLM：复制 `.env.example` 为 `.env` 填写后 `set -a; source .env; set +a` 再启动。主力档（`TUTOR_TEACHING_PROVIDER` / `TUTOR_TEACHING_MODEL`）驱动教学对话；轻量档（`TUTOR_LIGHT_PROVIDER` / `TUTOR_LIGHT_MODEL`，可选）承担推荐入口、练习题面润色、课程地图命名三个单轮轻任务，未配置时自动回落主力档。
+
+常用命令：
+
+```sh
+pnpm test        # engine 单测（vitest）
+pnpm build       # 全量构建
+pnpm lint        # tsc --noEmit
+pnpm test:e2e    # Playwright 端到端
+```

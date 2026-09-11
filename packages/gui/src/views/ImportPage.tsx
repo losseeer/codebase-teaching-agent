@@ -66,6 +66,7 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
           <div className="progress-top"><span>{job.message}</span><strong>{job.progress}%</strong></div>
           <div className="progress-track"><span style={{ width: `${job.progress}%` }} /></div>
           <p>{phaseLabel(job.phase)}</p>
+          {job.error && <p className="error-message">失败原因：{job.error}</p>}
         </div>
       )}
       {report && (

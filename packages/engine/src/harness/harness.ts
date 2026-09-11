@@ -87,6 +87,6 @@ function composeReply(kind: "advance" | "step_down" | "give_answer" | "confirm",
       : stage === "verify"
         ? "请用一句自己的话说明结论，并指向一处源码证据来检验它。"
         : "先定位入口：你认为这段代码最先接收的输入是什么？";
-  const focus = settings.depth === "micro" ? "本轮聚焦函数级输入、输出和边界。" : "本轮聚焦工作流与模块边界。";
+  const focus = settings.depth === "micro" ? "本轮聚焦函数级输入、输出和边界。" : "本轮聚焦执行路径与模块边界。";
   return `${sourceFact} 当前采用${policy.label}讲解。${focus}${question}`;
 }

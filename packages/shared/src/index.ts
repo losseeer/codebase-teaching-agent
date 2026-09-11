@@ -275,6 +275,15 @@ export interface Exercise {
   createdAt: string;
 }
 
+/** 教学模块「推荐入口」的单条 LLM 推荐（engine `/module-entries` 返回；id 必须能回查课程树节点）。 */
+export interface SuggestedEntry {
+  id: string;
+  title: string;
+  path: string;
+  line: number;
+  reason?: string;
+}
+
 export interface ExerciseAnswer {
   text?: string;
   selectedIds?: string[];
@@ -417,18 +426,6 @@ export interface CompanionSummary {
   pendingCount: number;
   actionCount: number;
   acceptanceRate: number | null;
-}
-
-export type ExperimentGroup = "A_tutor" | "B_direct_answer" | "C_no_assistant";
-
-export interface ExperimentConfig {
-  id: string;
-  repositoryId: string;
-  createdAt: string;
-  name: string;
-  groups: ExperimentGroup[];
-  assignedGroup?: ExperimentGroup;
-  participantId?: string;
 }
 
 export type JournalEventType =

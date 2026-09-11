@@ -207,12 +207,13 @@ export class RetryLlmProvider implements LlmProvider {
   }
 }
 
-export function createTeachingProvider(): LlmProvider | undefined {
-  const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
-  if (!provider) return undefined;
-  const model = process.env.TUTOR_TEACHING_MODEL ?? process.env.TUTOR_LLM_MODEL
-    ?? (provider === "anthropic" ? "claude-3-5-sonnet-20241022" : provider === "ollama" ? "llama3.2" : "gpt-4o-mini");
-  const timeoutMs = Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
+function defaultModel(provider: string): string {
+  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
+  if (provider === "ollama") return "llama3.2";
+  return "gpt-4o-mini";
+}
+
+function createProviderFromEnv(provider: string, model: string, timeoutMs: number): LlmProvider | undefined {
   if (provider === "anthropic") {
     const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.TUTOR_ANTHROPIC_API_KEY;
     if (!apiKey) return undefined;
@@ -225,6 +226,27 @@ export function createTeachingProvider(): LlmProvider | undefined {
     return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: process.env.TUTOR_OPENAI_URL ?? "https://api.openai.com/v1", apiKey, model, timeoutMs }));
   }
   return undefined;
+}
+
+/** 重量级（主力）档：驱动「代码教学」多轮对话。 */
+export function createTeachingProvider(): LlmProvider | undefined {
+  const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
+  if (!provider) return undefined;
+  const model = process.env.TUTOR_TEACHING_MODEL ?? process.env.TUTOR_LLM_MODEL ?? defaultModel(provider);
+  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
+}
+
+/**
+  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 课程地图命名完善）。
+  - `TUTOR_LIGHT_PROVIDER` + `TUTOR_LIGHT_MODEL` 显式配置（如 ollama 本地小模型 / gpt-4o-mini）
+  - 未配置时由调用方回落主力档（createTeachingProvider），保证只填一套配置也能跑通全部接入点
+  - 端点与密钥变量与主力档共用（同一厂商）；超时共用 TUTOR_LLM_TIMEOUT_MS
+  */
+export function createLightLlmProvider(): LlmProvider | undefined {
+  const provider = (process.env.TUTOR_LIGHT_PROVIDER ?? "").toLowerCase();
+  if (!provider) return undefined;
+  const model = process.env.TUTOR_LIGHT_MODEL ?? defaultModel(provider);
+  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
 }
 
 export function teachingProviderStatus(provider?: LlmProvider): TeachingProviderStatus {
