@@ -1,0 +1,30 @@
+{
+  "name": "@codebase-tutor/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "phase0:prepare-study": "tsx src/scripts/prepare-study.ts",
+    "phase0:audit": "tsx src/scripts/audit.ts"
+  },
+  "dependencies": {
+    "@codebase-tutor/shared": "workspace:*",
+    "@fastify/cors": "^11.0.1",
+    "@fastify/websocket": "^11.0.1",
+    "better-sqlite3": "^12.0.0",
+    "fastify": "^5.3.2",
+    "typescript": "^5.8.3",
+    "typescript-language-server": "^4.3.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.3",
+    "vitest": "^3.1.3"
+  }
+}

@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="zh-CN" data-page-node-id="2B9ShgZ4L5p6ORy70g5V0G">
+<head data-page-node-id="DmkRPpNPP89Vw3geYboJ4R">
+  <meta charset="UTF-8" data-page-node-id="8rwkeYZdsJtsmzUgl7Fzge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="bxi1jCPE1ke4iwSQOY1bwl" />
+  <title>Codebase Tutor · AI-native design prototype v3 (per-scope threads + modules)</title>
+  <style>
+    :root {
+      --ink: #17352c;
+      --muted: #657d72;
+      --line: #d9e5dd;
+      --soft: #f5f8f5;
+      --panel: #ffffff;
+      --rail: #17372e;
+      --accent: #d8ef58;
+      --accent-deep: #2d7356;
+      --blue: #4d7f9f;
+      --orange: #c8754f;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #eef3ef;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; min-height: 100vh; background: #eef3ef; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); }
+    .sidebar { padding: 22px 14px; color: #eaf3ec; background: var(--rail); display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 26px; font-weight: 750; }
+    .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 6px; background: var(--accent); color: var(--rail); font-size: 16px; }
+    .brand small { display: block; margin-top: 3px; color: #9db8ab; font-size: 10px; font-weight: 500; }
+    nav { display: grid; gap: 4px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; border: 0; border-radius: 5px; padding: 10px 11px; color: #bdcec3; background: transparent; text-align: left; font-size: 13px; }
+    .nav-item:hover { background: #21483d; color: #fff; }
+    .nav-item.active { color: var(--rail); background: var(--accent); font-weight: 700; }
+    .nav-item.planned { color: #8aa79a; }
+    .nav-item.planned:hover { color: #cfe0d6; background: #1d4137; }
+    .nav-tag { margin-left: auto; border-radius: 3px; padding: 1px 5px; color: #a9c6b6; background: #2c5346; font-size: 9px; font-weight: 600; }
+    .nav-icon { width: 18px; text-align: center; opacity: .85; }
+    .sidebar-note { margin-top: auto; border-top: 1px solid #355448; padding: 14px 8px 0; color: #acc1b4; font-size: 11px; line-height: 1.5; }
+    .status { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #c9dbcf; font-size: 11px; }
+    .status i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    main { min-width: 0; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 25px clamp(20px, 3vw, 44px) 20px; background: #f9fbf9; border-bottom: 1px solid var(--line); }
+    .topbar h1 { margin: 0; font-size: 23px; letter-spacing: 0; }
+    .topbar p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .repo-chip { display: flex; align-items: center; gap: 8px; border: 1px solid #c8d9ce; border-radius: 5px; padding: 8px 10px; color: #355c4b; background: #fff; font-size: 12px; white-space: nowrap; }
+    .repo-chip b { color: var(--accent-deep); }
+
+    /* studio = 主工作区 + 全局单 Agent 侧栏 */
+    .studio { display: grid; grid-template-columns: minmax(0, 1fr) 366px; gap: 18px; align-items: stretch; padding: 0 clamp(20px, 3vw, 44px) 42px; }
+    .workbench { min-width: 0; }
+    .workspace-tabs { display: flex; gap: 5px; margin: 19px 0 14px; border-bottom: 1px solid var(--line); }
+    .workspace-tabs button { border: 0; border-bottom: 3px solid transparent; padding: 10px 13px 11px; color: #648075; background: transparent; font-size: 13px; font-weight: 650; }
+    .workspace-tabs button:hover { color: var(--ink); }
+    .workspace-tabs button.active { border-bottom-color: var(--accent-deep); color: var(--ink); }
+    .context-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 35px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+    .context-line strong { color: var(--ink); font-size: 13px; }
+    .context-actions { display: flex; align-items: center; gap: 7px; }
+    .ghost { border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 9px; color: #35634f; background: #fff; font-size: 11px; }
+    .ghost:hover { background: #edf5ef; }
+    .workspace { display: none; min-height: 675px; border: 1px solid #cfddd4; border-radius: 7px; overflow: hidden; background: var(--panel); box-shadow: 0 12px 28px rgba(23,55,46,.06); }
+    .workspace.active { display: grid; }
+    .map-workspace { grid-template-columns: 242px minmax(0, 1fr); }
+    .teaching-workspace { grid-template-columns: 218px minmax(0, 1fr); }
+    .practice-workspace { grid-template-columns: 255px minmax(0, 1fr); }
+    .pane { min-width: 0; min-height: 0; }
+    .pane + .pane { border-left: 1px solid var(--line); }
+    .pane-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 51px; padding: 0 15px; border-bottom: 1px solid var(--line); background: #fbfdfb; }
+    .pane-header h2 { margin: 0; font-size: 13px; }
+    .pane-header span { color: #789085; font-size: 11px; }
+    .tree { height: calc(100% - 51px); padding: 13px 9px; overflow: auto; background: #fbfdfb; }
+    .tree-group { margin-bottom: 12px; }
+    .tree-label { display: flex; align-items: center; gap: 6px; padding: 7px 8px; color: #315b4b; font-size: 12px; font-weight: 700; }
+    .tree-label span { color: #81978d; font-size: 11px; font-weight: 500; }
+    .tree-file { display: flex; width: 100%; align-items: center; gap: 7px; border: 0; border-radius: 4px; padding: 7px 9px 7px 25px; color: #4a665b; background: transparent; text-align: left; font-size: 12px; }
+    .tree-file:hover { background: #eef6ef; }
+    .tree-file.selected { color: #1c4c3a; background: #dfefc0; font-weight: 700; }
+    .tree-file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-file em { margin-left: auto; color: #8aa097; font-size: 10px; font-style: normal; }
+    .map-canvas { position: relative; min-width: 0; overflow: auto; background: #f8fbf8; }
+    .map-canvas::before { content: ""; position: absolute; inset: 0; opacity: .38; background-image: linear-gradient(#e4ede6 1px, transparent 1px), linear-gradient(90deg, #e4ede6 1px, transparent 1px); background-size: 28px 28px; pointer-events: none; }
+    .map-inner { position: relative; min-width: 710px; min-height: 623px; padding: 34px 36px; }
+    .map-title { position: relative; z-index: 1; margin: 0 0 28px; color: #607b6f; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .flow-line { position: absolute; z-index: 0; height: 2px; background: #b4c9bb; transform-origin: left center; }
+    .flow-line.v { width: 2px; height: 72px; }
+    .flow-node { position: absolute; z-index: 1; width: 170px; border: 1px solid #c9dcd0; border-radius: 5px; padding: 12px 12px 11px; background: #fff; box-shadow: 0 4px 10px rgba(30,71,54,.04); text-align: left; }
+    .flow-node:hover { border-color: #79a88a; }
+    .flow-node.selected { border-color: var(--accent-deep); box-shadow: 0 0 0 3px rgba(45,115,86,.13); }
+    .flow-node .node-kind { display: block; margin-bottom: 5px; color: #729082; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .flow-node strong { display: block; color: #1e4b39; font-size: 13px; line-height: 1.35; }
+    .flow-node small { display: block; margin-top: 6px; color: #71887d; font-size: 10px; line-height: 1.35; }
+    .flow-node[data-node="root"] { left: 40px; top: 89px; width: 188px; background: #eff7e4; }
+    .flow-node[data-node="ingest"] { left: 294px; top: 62px; }
+    .flow-node[data-node="index"] { left: 516px; top: 62px; }
+    .flow-node[data-node="teach"] { left: 294px; top: 219px; }
+    .flow-node[data-node="practice"] { left: 516px; top: 219px; }
+    .flow-node[data-node="feedback"] { left: 294px; top: 376px; }
+    .flow-node[data-node="export"] { left: 516px; top: 376px; }
+    .flow-line.l1 { left: 228px; top: 117px; width: 65px; }
+    .flow-line.l2 { left: 464px; top: 90px; width: 52px; }
+    .flow-line.l3 { left: 379px; top: 148px; width: 2px; height: 71px; }
+    .flow-line.l4 { left: 601px; top: 148px; width: 2px; height: 71px; }
+    .flow-line.l5 { left: 379px; top: 305px; width: 2px; height: 71px; }
+    .flow-line.l6 { left: 601px; top: 305px; width: 2px; height: 71px; }
+    .flow-line.l7 { left: 464px; top: 247px; width: 52px; }
+    .flow-legend { position: absolute; left: 38px; right: 36px; bottom: 25px; display: flex; gap: 15px; color: #789086; font-size: 10px; }
+    .flow-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .flow-legend i { width: 9px; height: 9px; border: 1px solid #9abca4; border-radius: 2px; background: #fff; }
+    .flow-legend i.green { border-color: #90af66; background: #eff7e4; }
+
+    /* 全局单 Agent 侧栏 */
+    .agent-rail { display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; min-height: 675px; border: 1px solid #cfddd4; border-radius: 7px; overflow: hidden; background: var(--panel); box-shadow: 0 12px 28px rgba(23,55,46,.06); }
+    .agent-header { display: flex; align-items: center; gap: 9px; min-height: 56px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+    .agent-avatar { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 5px; color: var(--rail); background: var(--accent); font-size: 13px; font-weight: 800; }
+    .agent-header strong { font-size: 13px; }
+    .agent-header small { display: block; margin-top: 2px; color: #789085; font-size: 10px; }
+    .scope-bar { display: flex; gap: 5px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: #fbfdfb; }
+    .scope-chip { flex: 1; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 4px; color: #557568; background: #fff; font-size: 11px; }
+    .scope-chip:hover { background: #eef6ef; }
+    .scope-chip.active { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; font-weight: 700; }
+    .scope-context { display: grid; gap: 6px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: #f7faf7; font-size: 10px; }
+    .scope-context > div { display: flex; align-items: flex-start; gap: 7px; }
+    .scope-context > div > span { flex: 0 0 auto; width: 34px; padding-top: 2px; color: #81978d; font-weight: 700; white-space: nowrap; }
+    .scope-context code { color: #246046; }
+    .sees { display: flex; flex-wrap: wrap; gap: 4px; }
+    .sees em { border-radius: 3px; padding: 2px 5px; color: #3e6b55; background: #eaf3ec; font-style: normal; }
+    .agent-thread { min-height: 0; padding: 15px 14px; overflow: auto; }
+    .message { max-width: 94%; margin-bottom: 14px; }
+    .message.user { margin-left: auto; }
+    .message > span { display: block; margin-bottom: 5px; color: #799087; font-size: 10px; font-weight: 700; }
+    .message.user > span { text-align: right; }
+    .message p { margin: 0; border-radius: 5px; padding: 10px 11px; color: #315447; background: #f0f6f1; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+    .message.user p { color: #fff; background: #1d4939; }
+    .message code { color: #246046; font-size: 11px; }
+    .message.user code { color: #e2f1bb; }
+    .composer { display: flex; align-items: end; gap: 7px; padding: 11px; border-top: 1px solid var(--line); background: #fbfdfb; }
+    .composer textarea { flex: 1; min-height: 38px; max-height: 92px; resize: none; border: 1px solid #cbd9d1; border-radius: 4px; padding: 9px; color: var(--ink); background: #fff; outline: none; font-size: 12px; line-height: 1.4; }
+    .composer textarea:focus { border-color: #579172; box-shadow: 0 0 0 3px rgba(87,145,114,.12); }
+    .send { width: 38px; height: 38px; border: 0; border-radius: 4px; color: var(--rail); background: var(--accent); font-weight: 800; }
+    .send:hover { background: #c6e23e; }
+
+    .source-pane { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-height: 0; }
+    .source-tabs { display: flex; align-items: center; gap: 2px; padding: 7px 10px 0; border-bottom: 1px solid var(--line); background: #fbfdfb; overflow-x: auto; }
+    .source-tabs button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; padding: 7px 9px 8px; color: #789085; background: transparent; font-size: 11px; }
+    .source-tabs button.active { border-bottom-color: var(--accent-deep); color: var(--ink); font-weight: 700; }
+    .source-meta { display: flex; justify-content: space-between; padding: 9px 13px; color: #81978d; background: #f4f8f4; font-size: 10px; }
+    .toast { position: fixed; left: 50%; bottom: 28px; z-index: 40; transform: translateX(-50%) translateY(10px); border-radius: 5px; padding: 10px 15px; color: #eaf3ec; background: #17372e; font-size: 12px; box-shadow: 0 12px 28px rgba(23,55,46,.3); opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .code { margin: 0; padding: 16px 0 20px; overflow: auto; color: #dceee1; background: #10271f; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11px; line-height: 1.7; }
+    .code-line { display: block; min-width: max-content; padding-right: 18px; white-space: pre; }
+    .code-line b { display: inline-block; width: 43px; padding-right: 11px; color: #6e9785; font-weight: 400; text-align: right; user-select: none; }
+    .code-line.highlight { border-left: 3px solid var(--accent); background: rgba(216,239,88,.13); }
+    .kw { color: #d9ef79; }.fn { color: #9dd3b3; }.str { color: #e4b182; }.cm { color: #739486; }
+    .detail { padding: 15px; overflow: auto; }
+    .detail h3 { margin: 0 0 12px; font-size: 13px; }
+    .detail p { margin: 0 0 14px; color: #5e786d; font-size: 12px; line-height: 1.6; }
+    .detail-section { border-top: 1px solid var(--line); padding-top: 13px; margin-top: 13px; }
+    .detail-section h4 { margin: 0 0 8px; color: #3c6552; font-size: 11px; }
+    .detail-section ul { margin: 0; padding-left: 17px; color: #678176; font-size: 11px; line-height: 1.65; }
+    .tag { display: inline-flex; margin: 2px 4px 2px 0; border-radius: 3px; padding: 4px 6px; color: #3e6b55; background: #edf5ef; font-size: 10px; }
+    .ladder { display: grid; gap: 7px; }
+    .ladder-row { display: flex; align-items: center; gap: 8px; color: #8aa097; font-size: 11px; }
+    .ladder-row i { width: 8px; height: 8px; border: 1px solid #9cafA4; border-radius: 50%; }
+    .ladder-row.done { color: #285c47; font-weight: 700; }.ladder-row.done i { border-color: #a4c335; background: var(--accent); }
+    .exercise-list { height: calc(100% - 51px); padding: 12px 10px; overflow: auto; background: #fbfdfb; }
+    .exercise-card { border: 1px solid #dbe6de; border-radius: 5px; padding: 11px; margin-bottom: 9px; background: #fff; text-align: left; }
+    .exercise-card:hover { border-color: #8bb79a; }.exercise-card.selected { border-color: var(--accent-deep); background: #f1f8e7; }
+    .exercise-card small { display: block; margin-bottom: 5px; color: #7b9187; font-size: 10px; }.exercise-card strong { display: block; color: #2b5745; font-size: 12px; line-height: 1.4; }.exercise-card span { display: block; margin-top: 8px; color: #81958b; font-size: 10px; }
+    .prompt { padding: 20px 20px 12px; border-bottom: 1px solid var(--line); }.prompt h2 { margin: 0 0 8px; font-size: 17px; line-height: 1.4; }.prompt p { margin: 0; color: #5a7569; font-size: 12px; line-height: 1.6; }
+    .answer { padding: 14px 20px; overflow: auto; }.answer-label { display: block; margin-bottom: 7px; color: #527364; font-size: 11px; font-weight: 700; }.answer textarea { width: 100%; min-height: 105px; resize: vertical; border: 1px solid #cbd9d1; border-radius: 4px; padding: 10px; color: #335548; font-size: 12px; line-height: 1.55; outline: none; }.answer textarea:focus { border-color: #579172; }.option-list { display: grid; gap: 7px; margin-top: 13px; }.option { display: flex; align-items: start; gap: 8px; border: 1px solid #d6e2da; border-radius: 4px; padding: 9px; color: #49665b; font-size: 11px; line-height: 1.45; cursor: pointer; }.option:hover { background: #f4f9f3; }.option input { accent-color: var(--accent-deep); margin-top: 2px; }.option.checked { border-color: #91b574; background: #eff7e9; }.answer-actions { display: flex; gap: 7px; margin-top: 13px; }.primary { border: 0; border-radius: 4px; padding: 9px 12px; color: #fff; background: #1a6b52; font-size: 11px; font-weight: 700; }.primary:hover { background: #12513f; }.secondary { border: 1px solid #c7d7cd; border-radius: 4px; padding: 8px 11px; color: #35634f; background: #fff; font-size: 11px; }.feedback { margin-top: 15px; border-left: 3px solid #a6c778; padding: 12px; background: #f1f8e8; }.feedback strong { display: block; color: #2a6047; font-size: 12px; }.feedback p { margin: 6px 0 0; color: #5c7568; font-size: 11px; line-height: 1.5; }
+    .mobile-switcher { display: none; }
+    @media (max-width: 1180px) {
+      .studio { grid-template-columns: minmax(0, 1fr) 322px; }
+      .map-workspace { grid-template-columns: 214px minmax(0, 1fr); }
+      .teaching-workspace { grid-template-columns: 194px minmax(0, 1fr); }
+      .practice-workspace { grid-template-columns: 220px minmax(0, 1fr); }
+    }
+    @media (max-width: 960px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: sticky; top: 0; z-index: 10; min-height: auto; padding: 12px 16px; }
+      .brand { padding: 0 0 10px; }
+      .sidebar-note { display: none; }
+      nav { display: flex; overflow-x: auto; gap: 4px; }
+      .nav-item { flex: 0 0 auto; padding: 8px 11px; font-size: 12px; }
+      .nav-tag { display: none; }
+      .topbar { padding: 20px 16px 16px; }
+      .repo-chip { display: none; }
+      .studio { grid-template-columns: 1fr; gap: 14px; padding: 0 16px 30px; }
+      .workspace { min-height: auto; }
+      .map-workspace, .teaching-workspace, .practice-workspace { display: none; grid-template-columns: 1fr; }
+      .workspace.active { display: grid; }
+      .pane + .pane { border-top: 1px solid var(--line); border-left: 0; }
+      .tree { max-height: 260px; }
+      .map-canvas { min-height: 520px; }
+      .agent-rail { min-height: 480px; }
+      .pane-header { min-height: 47px; }
+      .mobile-switcher { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
+      .mobile-switcher button { flex: 0 0 auto; border: 1px solid #cbd9d1; border-radius: 4px; padding: 7px 9px; color: #557568; background: #fff; font-size: 11px; }
+      .mobile-switcher button.active { border-color: #7ba889; color: #224c3a; background: #e5f1d0; font-weight: 700; }
+    }
+    @media (max-width: 560px) {
+      .topbar h1 { font-size: 19px; }.workspace-tabs { overflow-x: auto; }.workspace-tabs button { flex: 0 0 auto; font-size: 12px; }.context-line { align-items: start; flex-direction: column; gap: 8px; }.map-inner { min-width: 650px; padding-left: 25px; }
+      .flow-node[data-node="root"] { left: 28px; }.flow-node[data-node="ingest"] { left: 270px; }.flow-node[data-node="index"] { left: 485px; }.flow-node[data-node="teach"] { left: 270px; }.flow-node[data-node="practice"] { left: 485px; }.flow-node[data-node="feedback"] { left: 270px; }.flow-node[data-node="export"] { left: 485px; }
+      .flow-line.l1 { left: 216px; }.flow-line.l2 { left: 440px; }.flow-line.l3, .flow-line.l5 { left: 355px; }.flow-line.l4, .flow-line.l6 { left: 570px; }.flow-line.l7 { left: 440px; }
+      .code { font-size: 10px; }.composer { padding: 9px; }.agent-header { flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+    }
+
+    /* ---- 迭代 v3：知识模块 / 仓库选择器 / 分作用域对话 ---- */
+    .modules-pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+    .module-body { min-height: 0; padding: 13px 11px 16px; overflow: auto; background: #fbfdfb; }
+    .module-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .module-chip { border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 8px; color: #557568; background: #fff; font-size: 11px; }
+    .module-chip:hover { background: #eef6ef; }
+    .module-chip.active { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; font-weight: 700; }
+    .module-chip em { margin-left: 5px; color: #8aa097; font-size: 10px; font-style: normal; }
+    .module-chip.active em { color: #4d7a62; }
+    .module-hint { margin: 9px 2px 0; color: #81978d; font-size: 10px; line-height: 1.5; }
+    .module-section-label { margin: 15px 2px 8px; color: #315b4b; font-size: 11px; font-weight: 700; }
+    .module-body .exercise-list { height: auto; padding: 0; background: transparent; }
+
+    .source-tabs { overflow: visible; }
+    .source-tab-list { display: flex; min-width: 0; gap: 2px; overflow-x: auto; }
+
+    .thread-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); color: #81978d; background: #f7faf7; font-size: 10px; }
+    .thread-meta b { color: #3f6a56; }
+    .thread-empty { border: 1px dashed #cfddd4; border-radius: 5px; padding: 15px 13px; color: #81978d; font-size: 11px; line-height: 1.65; text-align: center; }
+
+    /* ---- 迭代 v4：可配置知识模块 / 推荐入口 + 仓库文件为主 / 线程分隔线 / 滚动条 ---- */
+    .module-section-label span { margin-left: 7px; color: #8aa097; font-size: 10px; font-weight: 500; }
+    .entry-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .entry-item { display: flex; align-items: center; gap: 7px; width: 100%; border: 0; border-radius: 4px; padding: 6px 8px; color: #4a665b; background: transparent; text-align: left; font-size: 11px; }
+    .entry-item:hover { background: #eef6ef; }
+    .entry-item.selected { color: #1c4c3a; background: #dfefc0; font-weight: 700; }
+    .entry-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: #b8cdc0; }
+    .entry-item.selected .entry-dot { background: #4d8f6c; }
+    .entry-item strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .entry-item code { flex: 0 0 auto; margin-left: auto; color: #81978d; font-size: 10px; }
+    .entry-empty { margin: 0; border: 1px dashed #cfddd4; border-radius: 4px; padding: 10px; color: #81978d; font-size: 10px; line-height: 1.6; }
+    .repo-tree { margin-top: 2px; }
+    .repo-tree .tree-label { padding: 6px; font-size: 11px; }
+    .repo-tree .tree-file { padding: 6px 8px 6px 20px; font-size: 11px; }
+    .module-chip.add { border-style: dashed; color: #6f8d80; background: #fbfdfb; }
+    .module-chip.add:hover { background: #eef6ef; }
+    .module-chip.add.on { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; }
+
+    .module-config { margin: 9px 0 2px; border: 1px solid #cbd9d1; border-radius: 5px; padding: 9px; background: #fff; }
+    .module-config[hidden] { display: none; }
+    .cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 8px; color: #315b4b; font-size: 11px; font-weight: 700; }
+    .cfg-head span { color: #8aa097; font-size: 9px; font-weight: 500; }
+    .cfg-row, .cfg-add { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+    .cfg-row input, .cfg-add input { flex: 1; min-width: 0; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 7px; color: var(--ink); background: #fff; outline: none; font-size: 11px; }
+    .cfg-row input:focus, .cfg-add input:focus { border-color: #579172; }
+    .cfg-del, .cfg-add-btn { flex: 0 0 auto; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 8px; color: #6f8d80; background: #fff; font-size: 11px; }
+    .cfg-del:hover { border-color: #c98b7a; color: #b0553f; }
+    .cfg-add-btn { color: #35634f; background: #eef6ef; }
+    .cfg-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+    .cfg-foot span { color: #8aa097; font-size: 9px; }
+    .cfg-reset { border: 0; padding: 0; color: #4d7f9f; background: transparent; font-size: 10px; text-decoration: underline; }
+
+    .thread-divider { display: flex; align-items: center; gap: 8px; margin: 13px 0; color: #90a79b; font-size: 10px; }
+    .thread-divider::before, .thread-divider::after { content: ""; flex: 1; height: 1px; background: #dfe9e2; }
+    .thread-divider span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+    .agent-thread, .module-body { scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
+    .agent-thread { scrollbar-gutter: stable; }
+    .agent-thread::-webkit-scrollbar, .module-body::-webkit-scrollbar { width: 9px; }
+    .agent-thread::-webkit-scrollbar-track, .module-body::-webkit-scrollbar-track { background: #f2f6f3; }
+    .agent-thread::-webkit-scrollbar-thumb, .module-body::-webkit-scrollbar-thumb { border: 2px solid #f2f6f3; border-radius: 5px; background: #b9cdc1; }
+    .agent-thread::-webkit-scrollbar-thumb:hover, .module-body::-webkit-scrollbar-thumb:hover { background: #8fb0a0; }
+
+    /* 高度锁在视口内：对话线程与左栏各自内部滚动，页面不再被撑长 */
+    .agent-rail { position: sticky; top: 16px; height: calc(100vh - 265px); min-height: 560px; max-height: 900px; }
+    .teaching-workspace, .practice-workspace { height: calc(100vh - 265px); min-height: 560px; max-height: 900px; grid-template-rows: minmax(0, 1fr); }
+    @media (max-width: 960px) {
+      .agent-rail { position: static; top: auto; height: auto; min-height: 420px; max-height: 74vh; }
+      .teaching-workspace, .practice-workspace { height: auto; min-height: auto; max-height: none; grid-template-rows: auto; }
+    }
+  </style>
+</head>
+<body data-page-node-id="EwcgsbKVkYzJfreFKLwC5t">
+  <div class="shell" data-page-node-id="9UAupj7QWVv5e6DFJgMvKL">
+    <aside class="sidebar" data-page-node-id="fekEqmpSx51TXRsSZcBFrY">
+      <div class="brand" data-page-node-id="hUsqo23vdyiXQh7an8IGfi"><span class="brand-mark" data-page-node-id="Z5I6U6XHGgKgos2PfVVUAW">✦</span><div data-page-node-id="IHeLPmzXAIJD0xipqA2i04">Codebase Tutor<small data-page-node-id="WGKInkHqOZyjMJ2BVSO9kJ">AI-native code learning</small></div></div>
+      <nav aria-label="主导航" data-page-node-id="iuKtYiOSbpUZCGbLZ31yaA">
+        <button class="nav-item planned" data-nav="import" title="本轮原型沿用现有导入流程" data-page-node-id="dqysufEtKgXHB2fzkUtpmL"><span class="nav-icon" data-page-node-id="0HoUgjVHBWrFzZvV2L9oI2">↗</span>导入仓库<span class="nav-tag" data-page-node-id="HL3ukFS00Ud4ghzqQENe7k">既有</span></button>
+        <button class="nav-item active" data-nav="map" data-page-node-id="vfzqfW3n4fQN3G4NWnzag1"><span class="nav-icon" data-page-node-id="ZRIHnqmxCfkXH1uKnyWDLV">⌘</span>课程地图</button>
+        <button class="nav-item" data-nav="teaching" data-page-node-id="SSEKHkB3IGmMt0ccPDtkuQ"><span class="nav-icon" data-page-node-id="yqyTPqM2ENo1VNGiQdITKV">◌</span>教学会话</button>
+        <button class="nav-item" data-nav="practice" data-page-node-id="1DNzXvOWhKNjKthy4Kjv1r"><span class="nav-icon" data-page-node-id="RMRhNep6fbepeFNOAtF0Dg">✓</span>练习复习</button>
+        <button class="nav-item planned" data-nav="insights" title="本轮原型未覆盖" data-page-node-id="TEAPzlyps6MXjuEKSYAtBf"><span class="nav-icon" data-page-node-id="PC7OqakdoffFH6r8nyib98">⌁</span>学习状态<span class="nav-tag" data-page-node-id="aOJ463n84GyZVH1z5yUfR7">后续</span></button>
+      </nav>
+      <div class="sidebar-note" data-page-node-id="9V2NkHp8KKQvist3it5Pdj">专注于拆解、理解和教学真实代码库。所有索引与学习记录都留在本地。</div>
+      <div class="status" data-page-node-id="Pvzj2KGQH2JoBqI0jibvLI"><i data-page-node-id="qfIm2vl2OxqHhEAB5DbfE1"></i> 本地引擎已连接</div>
+    </aside>
+    <main data-page-node-id="3YxDQJYFTEqZIB1hvjzJY8">
+      <header class="topbar" data-page-node-id="QJ87aDWaCNik6VsGwmU1lL"><div data-page-node-id="trRNhbcTok3QKuR57gCzzp"><h1 id="page-title" data-page-node-id="Hd6UTNy0nRAADQVRJfryuh">课程地图</h1><p id="page-subtitle" data-page-node-id="b7z2EQd2EVnAWjBoLHqVBE">把仓库的结构、运行路径和学习任务放在同一张地图上。</p></div><div class="repo-chip" data-page-node-id="jKSm6Lc2BAiKUirna8IA87">仓库 <b data-page-node-id="IzJUxyCebqprbh7NvRjBXX">demo-storefront</b> · 126 文件</div></header>
+      <div class="studio" data-page-node-id="6joJ7jagIfJ8RbFOF0Ycue">
+        <div class="workbench" data-page-node-id="pHeaYdz6mTcYFYu4EP0S45">
+          <div class="workspace-tabs" role="tablist" data-page-node-id="38mrbJk2CYxvbpyS4jz3Fb"><button class="active" data-workspace="map" data-page-node-id="mGxVwYojSFMACfQGIj0B4A">课程地图</button><button data-workspace="teaching" data-page-node-id="eGELzJHUHPqCzBHB2f555W">教学会话</button><button data-workspace="practice" data-page-node-id="K1zzUdiAEcn3lGudcUex8O">练习复习</button></div>
+          <div id="context" class="context-line" data-page-node-id="q0opUnfJoEbjeRXQHRQ8ZV"></div>
+          <div class="mobile-switcher" id="mobile-switcher" data-page-node-id="kBXjJpsZQweJHpLWrPVrhy"></div>
+
+          <section class="workspace map-workspace active" data-panel="map" data-page-node-id="ZE5fZBbTxJAL0cVpLqXsyB">
+            <aside class="pane" data-page-node-id="d2xyFVUkxJZUv2bhPuuAO5"><div class="pane-header" data-page-node-id="0ud8pJ8UeHSVsKUOcitRC3"><h2 data-page-node-id="1DWNM1l7J7NXLJc6NYbO1q">项目目录</h2><span data-page-node-id="6tDnYZhcarN4yE5fUsKzlT">126 files</span></div><div class="tree" data-page-node-id="eE5uVlF6R3pv7Fo0QFXjDs"><div class="tree-group" data-page-node-id="6I6nWvj7hSu2ERx2PmY92P"><div class="tree-label" data-page-node-id="hYzbCvdCfbnTHG1hzBLK0F">⌄ <b data-page-node-id="hPtDwhZmQxoJwOH7Dxjfvu">src</b> <span data-page-node-id="skA0qqmx6NjGzkszYfwqZi">核心代码</span></div><button class="tree-file selected" data-file="router.ts" data-page-node-id="qKaIxn7sAkpsXUEwcAUy6W">◆ <code data-page-node-id="5mkdJYhvapb6bkAeoI3vl5">router.ts</code><em data-page-node-id="jjIcOFuoo3EfjjDYmLs9wU">214L</em></button><button class="tree-file" data-file="catalog.ts" data-page-node-id="2mR8CiRClNjLWC2nKdSOZP">◇ <code data-page-node-id="sxr9nhQTQS3RWJt1nfENTA">catalog.ts</code><em data-page-node-id="SncVleFJ1kBYFFSAFXX6tD">168L</em></button><button class="tree-file" data-file="checkout.ts" data-page-node-id="PxGr87nMTC8id30mqWCXfy">◇ <code data-page-node-id="XHNm4DfGd3TscH2bGoyETQ">checkout.ts</code><em data-page-node-id="P9lROxhfqbKTWuH7AKDygG">245L</em></button><button class="tree-file" data-file="adapters/stripe.ts" data-page-node-id="ozvIJVoDyZXejSFnvnQfi3">◇ <code data-page-node-id="pHYmWGYaESN13lZmRIhswz">adapters/stripe.ts</code><em data-page-node-id="fbWFjHBCr5zfUJA7Q8RD9p">96L</em></button></div><div class="tree-group" data-page-node-id="6JsldKRkWRxCjUuX8iniLJ"><div class="tree-label" data-page-node-id="8D5YseWOOm2UBIFGl1K1Q5">⌄ <b data-page-node-id="Wgj9jebDmtyabWovhMl80D">tests</b> <span data-page-node-id="L6CeBEZAEeKRgFF4rNFq53">行为证据</span></div><button class="tree-file" data-file="router.spec.ts" data-page-node-id="x7y30TzSpRKtGJx8VmGA1X">◇ <code data-page-node-id="vZMKquA073uXjZ3u9JlJpA">router.spec.ts</code><em data-page-node-id="gQ3OrcHcYfa0etDfiozm6F">87L</em></button><button class="tree-file" data-file="checkout.spec.ts" data-page-node-id="7pZbiUb9OwDZIpyLOgiy7S">◇ <code data-page-node-id="GOthPWJstt7YIT8ibCLcPu">checkout.spec.ts</code><em data-page-node-id="zvWW3gyAu5xiRzLrG1sMpx">112L</em></button></div><div class="tree-group" data-page-node-id="5YUXXWDK7uVq2bjTvCryUM"><div class="tree-label" data-page-node-id="dHbNAnNucc48aq8xAaVYT3">⌄ <b data-page-node-id="q7nBHdV2FhPRGymgOlIBhW">docs</b> <span data-page-node-id="dfS4zEBWA0iC8skPysBxLV">项目说明</span></div><button class="tree-file" data-file="architecture.md" data-page-node-id="Ou1d98B8WspEUm5wHmpnPA">◇ <code data-page-node-id="TA29jnFTtUWVo585QZjmEN">architecture.md</code><em data-page-node-id="fiQbX7v34HsZXoRZdi0JGO">54L</em></button><button class="tree-file" data-file="README.md" data-page-node-id="hBtDBTrazDF6CT6ZuK2pP6">◇ <code data-page-node-id="15yRm0tbiEZ9zFSDihhSyo">README.md</code><em data-page-node-id="Z66Ch2onkhcvy2kMtoLtL0">81L</em></button></div><button class="tree-file" data-page-node-id="ARsg8BTF32uZa6EhZwPHhp">… <code data-page-node-id="FXE9ObFPBKg4GaWYUH9mAg">显示其余 117 个文件</code></button></div></aside>
+            <section class="pane map-canvas" data-page-node-id="wUKBCsLbLzOITwVvq4lUlv"><div class="map-inner" data-page-node-id="0kIBPPYDxmY8HpNbirhXoa"><p class="map-title" data-page-node-id="IORUIaYTMlLZ2nYp0H4n6w">运行路径 · 从入口到反馈</p><button class="flow-node selected" data-node="root" data-page-node-id="5OWbKXTghugtqbfVMwIoKS"><span class="node-kind" data-page-node-id="ayZtfuX7p8SSJYfutNGfmw">repository</span><strong data-page-node-id="Dk5sF9ACSNKBKysjuhawFP">demo-storefront</strong><small data-page-node-id="zb8tk3WkQPzVLRBc4JnJD5">从真实仓库提炼的学习主线</small></button><button class="flow-node" data-node="ingest" data-page-node-id="SsBP7X9nARv8nWkDWBvhsc"><span class="node-kind" data-page-node-id="wUqtnVDXRsxV6HLtaHKANV">01 · ingest</span><strong data-page-node-id="UJeqt6oCbUAQ4Wn47NsQTn">读取请求</strong><small data-page-node-id="oy1plnPfZ9swzEDmzo352q">路由与输入校验</small></button><button class="flow-node" data-node="index" data-page-node-id="HBn0eoPQwQHShqXPA9v1YJ"><span class="node-kind" data-page-node-id="ZRxdvDirgE05oPJYKi7Tk0">02 · domain</span><strong data-page-node-id="J6qpXTc5GkIWlWr1OhlKkH">查找商品</strong><small data-page-node-id="ev0jXxurR37HAnilVOIv5q">目录、缓存与库存</small></button><button class="flow-node" data-node="teach" data-page-node-id="w1vGcCdHsczt5pqMidt7Uw"><span class="node-kind" data-page-node-id="YO5boYiAVBKwWsTcV7C3tF">03 · boundary</span><strong data-page-node-id="jiFrHCbL9Hp5farGsh0El5">创建订单</strong><small data-page-node-id="owLTPWuDWeXm1CsG7aQrLu">服务层编排</small></button><button class="flow-node" data-node="practice" data-page-node-id="bIrMZjDNfYjrBJoqxlPZny"><span class="node-kind" data-page-node-id="YHIXNH7Um3BXSaOw24U2rs">04 · adapter</span><strong data-page-node-id="K5hAdHBsE5mCkIrvorerCd">支付适配</strong><small data-page-node-id="EmNGsOEWKmV3lTZGaJI6Xd">外部 API 与重试</small></button><button class="flow-node" data-node="feedback" data-page-node-id="tXe9Hd84WMYdTya1P2C6ID"><span class="node-kind" data-page-node-id="JejMMQ0s8jV9edZUwU45Yd">05 · observe</span><strong data-page-node-id="WQDuLj4gQdq4TYGGdpkh8u">记录结果</strong><small data-page-node-id="WLvorvT2K9HxUTAEQH5NTf">日志、事件和断言</small></button><button class="flow-node" data-node="export" data-page-node-id="fzFj5Jzij1oUjD3yEmpnj9"><span class="node-kind" data-page-node-id="TB20zxgcH25sgXF9CicBYn">06 · reflect</span><strong data-page-node-id="EYSL3Rrch3ZJigqbuXMAEo">练习复盘</strong><small data-page-node-id="C9CzcApz0Ex6pH3IO5FICl">把疑问变成下一步</small></button><span class="flow-line l1" data-page-node-id="DNPSsuHxHho3BK0sd5mop4"></span><span class="flow-line l2" data-page-node-id="r4qRAObxNtjGbO5ohrFR8F"></span><span class="flow-line l3 v" data-page-node-id="RdHw399ce1RSOgvyoF4ZMq"></span><span class="flow-line l4 v" data-page-node-id="rymEokHyLdqMglaBYjcE1T"></span><span class="flow-line l5 v" data-page-node-id="PiGa748EQQ9Qxi9NFcDYqp"></span><span class="flow-line l6 v" data-page-node-id="HaZwm2bobAINVXoGGZMeV1"></span><span class="flow-line l7" data-page-node-id="v1ZhUPon2FBT8iULnMRwRc"></span><div class="flow-legend" data-page-node-id="24sEb2DI7WcYjoOPbl5Vr2"><span data-page-node-id="Yu8yOLOz05BJGFbqWH9YtF"><i class="green" data-page-node-id="2VrxvMkHeTSisHGKuPLNER"></i>当前学习路径</span><span data-page-node-id="xoF9bzR3xM1jSyjMNQIdbS"><i data-page-node-id="LEkzKc9tvbmQAY8cOTVgIK"></i>可探索模块</span><span data-page-node-id="6bt9h9R7B3xCTuyOuUOtib">点击节点查看代码锚点</span></div></div></section>
+          </section>
+
+          <section class="workspace teaching-workspace" data-panel="teaching">
+            <aside class="pane modules-pane">
+              <div class="pane-header"><h2>教学模块</h2><span id="module-progress">计算机网络 · 3 推荐</span></div>
+              <div class="module-body">
+                <div class="module-chips" id="teaching-module-chips"></div>
+                <div class="module-config" id="teaching-module-config" hidden></div>
+                <p class="module-hint" id="teaching-module-hint"></p>
+                <div class="module-section-label">推荐入口<span>来自当前模块 · 只是快捷方式</span></div>
+                <div class="entry-list" id="teaching-entry-list"></div>
+                <div class="module-section-label">仓库文件<span>主要入口 · 任意目录与文件</span></div>
+                <div class="repo-tree" id="teaching-tree"></div>
+              </div>
+            </aside>
+            <section class="pane source-pane">
+              <div class="pane-header"><h2>实时源码</h2><span id="source-path">src/router.ts</span></div>
+              <div class="source-tabs"><div class="source-tab-list" id="source-tab-list"></div></div>
+              <div class="source-meta"><span id="source-meta-left">只读 · 已定位第 3 行</span><span>⌘ P 搜索文件</span></div>
+              <pre class="code" id="teaching-code"></pre>
+            </section>
+          </section>
+
+          <section class="workspace practice-workspace" data-panel="practice" data-page-node-id="tVwoQLTe5knP9gyWlbEk2L">
+            <aside class="pane modules-pane">
+              <div class="pane-header"><h2>练习模块</h2><span id="practice-module-count">2 项</span></div>
+              <div class="module-body">
+                <div class="module-chips" id="practice-module-chips"></div>
+                <div class="module-config" id="practice-module-config" hidden></div>
+                <p class="module-hint" id="practice-module-hint"></p>
+                <div class="module-section-label">模块内的练习</div>
+                <div class="exercise-list" id="practice-exercise-list"></div>
+              </div>
+            </aside>
+            <section class="pane source-pane" data-page-node-id="IyMDaH6yqMIuyRbuPlDcs3"><div class="pane-header" data-page-node-id="51rgUbjG2mUH8RTuAACBJl"><h2 data-page-node-id="g1cosYHYLkHQ6sNZmbw236">练习上下文</h2><span id="practice-context" data-page-node-id="dLSFWiYx1pUGldsvdcHZwE">router.ts · 第 18 行</span></div><div class="source-meta" data-page-node-id="M2M1h8bD7THgMzNjkrqp1Z"><span data-page-node-id="YJZb3QVSrBv58Cm9aLK6lV">相关代码已高亮</span><span data-page-node-id="9FY68ADh0EFvzD1FciaxZf">实时同步</span></div><pre class="code" id="practice-code" data-page-node-id="v7eTzoE8J4KTZz3hHOpRUx"></pre><div class="answer" data-page-node-id="lPidbbyQaEuv3lNepjQrwm"><span class="answer-label" data-page-node-id="i1uZzz84k7bW1W6xU481DK">你的回答</span><textarea placeholder="写下你的推理，Agent 会根据代码证据反馈…"></textarea><div class="option-list" data-page-node-id="BU9rp2EPQBk7TfkKHbNEjE"><label class="option" data-page-node-id="gG5hKNOcjIwWQPnaGAXmtu"><input type="checkbox" data-page-node-id="HZcAGaeEs8Q6466SAlAdLH" /> <span data-page-node-id="tagbfO6e6pYoYyExow2lJV">请求 ID 会贯穿日志和领域事件</span></label><label class="option" data-page-node-id="eASLDA6Gr1NK9HkBDjszZJ"><input type="checkbox" data-page-node-id="QWrEI1AHZZ1W4BltvrGIUI" /> <span data-page-node-id="8ULntGarZEag4vY1SZjlc6">请求 ID 只用于前端展示</span></label><label class="option" data-page-node-id="Vf4v4pX68gG0wQDK5bfctW"><input type="checkbox" data-page-node-id="eNKzZkZjz87PKMrM37bU4q" /> <span data-page-node-id="a2zoe8LllAaPzUtCHzRtxS">请求 ID 用于区分重试与新请求</span></label></div><div class="answer-actions" data-page-node-id="RFupDlR4JYnYYxB2SgdUlv"><button class="primary" id="check-answer" data-page-node-id="mdaPzI7ZD6OZRNaztcokKk">提交回答</button><button class="secondary" data-page-node-id="er9E84zbMme87u4VNOmsBN">先看提示</button></div><div class="feedback" data-page-node-id="9LZsbZbtZceCMfY69gel1D"><strong data-page-node-id="Afsaq7bN0La7qAL1dnApZ1">反馈状态 · 尚未提交</strong><p data-page-node-id="tinLZovx0VHRCV2yWDZecL">完成回答后，这里会显示证据引用、掌握度变化和下一项推荐。</p></div></div></section>
+          </section>
+        </div>
+
+        <aside class="agent-rail" aria-label="Codebase Agent" data-page-node-id="1tv8xJJA01lEm3M7BmZnZ4">
+          <header class="agent-header" data-page-node-id="QzpkLbowaDBARC4IrpugQD">
+            <span class="agent-avatar" data-page-node-id="xJUP9ueOD0AM1jO6vgnKVQ">✦</span>
+            <div data-page-node-id="HN7fM8PEPpP6fZQ3W0mY4T"><strong data-page-node-id="E2MQRDp9bKAmGhtykAx6m1">Codebase Agent</strong><small data-page-node-id="tTJMwqEtZXjqK01nJCJM00">单 Agent · 三个作用域各自独立记录对话，互不追加</small></div>
+          </header>
+          <div class="scope-bar" id="scope-bar" data-page-node-id="tlKUExPS4OSxf0kH7pTE4h">
+            <button class="scope-chip active" data-scope="map" data-page-node-id="wOwCrIecNJHwyy7PfUd82b">宏观设计</button>
+            <button class="scope-chip" data-scope="teaching" data-page-node-id="0UN5nCJeU0awg8bMQjBHYl">代码教学</button>
+            <button class="scope-chip" data-scope="practice" data-page-node-id="DLlBPHMxQAvVvkUcZZlJaj">练习评估</button>
+          </div>
+          <div class="scope-context" id="scope-context" data-page-node-id="GNECl23Gz4ouN61H2ds808"></div>
+          <div class="thread-meta" id="thread-meta"></div><div class="agent-thread" id="agent-thread" data-page-node-id="NAzBaH2kAYvAQNXZSO5MTK"></div>
+          <form class="composer" id="agent-composer" data-page-node-id="NHZg9eMm5Z9BF0Cn23Wg6k"><textarea placeholder="讨论这个项目的宏观设计…" aria-label="与 Codebase Agent 对话"></textarea><button class="send" type="submit" title="发送" data-page-node-id="rv5BZTkqAeP8ilCFgKJaoK">↑</button></form>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" data-page-node-id="5557To3nuXEADKSRKGzum8"></div>
+  <script>
+    const GENERIC = [
+      '<span class="cm">// 原型中未展开的文件：真实实现会读取仓库原始内容，Agent 仍按行定位</span>',
+      '<span class="cm">// 这一段只用于示意「选中目录 / 文件 → 定位行 → 提问」的链路</span>'
+    ];
+    const files = {
+      'router.ts': [
+        '<span class="cm">// HTTP entry: normalize input, then hand off to the domain flow</span>',
+        '<span class="kw">export async function</span> <span class="fn">handleRequest</span>(request: Request) {',
+        '  <span class="kw">const</span> requestId = request.headers.get(<span class="str">"x-request-id"</span>) ?? crypto.randomUUID();',
+        '  <span class="kw">const</span> context = <span class="fn">createRequestContext</span>({ requestId, logger });',
+        '  <span class="kw">const</span> input = <span class="kw">await</span> <span class="fn">parseCheckoutInput</span>(request);',
+        '  <span class="kw">if</span> (!input.ok) <span class="kw">return</span> <span class="fn">badRequest</span>(input.error);',
+        '  <span class="kw">return</span> <span class="fn">checkoutFlow</span>(context, input.value);',
+        '}',
+        '',
+        '<span class="cm">// The same context travels through domain and adapter boundaries.</span>'
+      ],
+      'catalog.ts': [
+        '<span class="kw">export async function</span> <span class="fn">findProduct</span>(ctx: RequestContext, id: string) {',
+        '  ctx.logger.debug({ id }, <span class="str">"catalog.lookup"</span>);',
+        '  <span class="kw">const</span> product = <span class="kw">await</span> ctx.catalog.get(id);',
+        '  <span class="kw">if</span> (!product) <span class="kw">throw new</span> NotFoundError(id);',
+        '  <span class="kw">return</span> product;',
+        '}'
+      ],
+      'checkout.ts': [
+        '<span class="kw">export async function</span> <span class="fn">checkoutFlow</span>(ctx: RequestContext, input: CheckoutInput) {',
+        '  <span class="kw">const</span> product = <span class="kw">await</span> <span class="fn">findProduct</span>(ctx, input.productId);',
+        '  <span class="kw">const</span> payment = <span class="kw">await</span> ctx.payment.charge(input.amount);',
+        '  <span class="kw">return</span> <span class="fn">recordOrder</span>(ctx, product, payment);',
+        '}'
+      ],
+      'adapters/stripe.ts': [
+        '<span class="cm">// External adapter: keeps vendor retries out of the checkout flow</span>',
+        '<span class="kw">export async function</span> <span class="fn">charge</span>(ctx: RequestContext, amount: number) {',
+        '  <span class="kw">return</span> <span class="fn">withRetry</span>(() => stripe.charges.create({ amount, idempotencyKey: ctx.requestId }));',
+        '}',
+        '',
+        '<span class="cm">// ctx.requestId makes every retry idempotent at the vendor.</span>'
+      ],
+      'logger.ts': [
+        '<span class="cm">// Structured logs: every line carries the request context</span>',
+        '<span class="kw">export function</span> <span class="fn">createLogger</span>(requestId: string) {',
+        '  <span class="kw">return</span> { debug: (data, msg) => sink.write({ requestId, data, msg }) };',
+        '}'
+      ],
+      'router.spec.ts': [
+        '<span class="kw">it</span>(<span class="str">"reuses the incoming request id"</span>, <span class="kw">async</span> () => {',
+        '  <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">handleRequest</span>(withHeader(<span class="str">"x-request-id"</span>, <span class="str">"abc"</span>));',
+        '  <span class="fn">expect</span>(res.requestId).<span class="fn">toBe</span>(<span class="str">"abc"</span>);',
+        '});'
+      ],
+      'checkout.spec.ts': [
+        '<span class="kw">it</span>(<span class="str">"keeps vendor retries inside the adapter"</span>, <span class="kw">async</span> () => {',
+        '  <span class="kw">const</span> spy = <span class="fn">stubAdapter</span>({ fail: 1 });',
+        '  <span class="kw">await</span> <span class="fn">checkoutFlow</span>(ctx, input);',
+        '  <span class="fn">expect</span>(spy.attempts).<span class="fn">toBe</span>(2);',
+        '});'
+      ],
+      'architecture.md': [
+        '<span class="cm"># 运行路径</span>',
+        '',
+        '- <span class="str">router.ts</span> → 归一化输入并注入请求上下文',
+        '- <span class="str">checkout.ts</span> → 编排领域流程，不感知外部 SDK',
+        '- <span class="str">adapters/</span> → 承载重试、幂等与错误格式转换'
+      ],
+      'module-map.md': [
+        '<span class="cm"># 教学模块映射</span>',
+        '',
+        '- 计算机网络 → 入口、超时、重试、幂等',
+        '- 操作系统 → 进程内状态、IO 边界、并发',
+        '- 语言特性 → 类型收窄、异步编排、错误处理',
+        '- 其他计算机知识 → 分层架构、存储与一致性'
+      ]
+    };
+    const HIGHLIGHTS = {
+      'router.ts': [2, 3], 'catalog.ts': [1], 'checkout.ts': [2], 'adapters/stripe.ts': [2],
+      'logger.ts': [1], 'router.spec.ts': [1], 'checkout.spec.ts': [1],
+      'architecture.md': [2], 'module-map.md': [2]
+    };
+    const PATHS = {
+      'router.ts': 'src/router.ts', 'catalog.ts': 'src/catalog.ts', 'checkout.ts': 'src/checkout.ts',
+      'logger.ts': 'src/logger.ts', 'adapters/stripe.ts': 'src/adapters/stripe.ts',
+      'router.spec.ts': 'tests/router.spec.ts', 'checkout.spec.ts': 'tests/checkout.spec.ts',
+      'architecture.md': 'docs/architecture.md', 'module-map.md': 'docs/module-map.md',
+      'README.md': 'README.md'
+    };
+    const REPO_TREE = [
+      { dir: 'src', label: '核心代码', total: 112, files: [['router.ts', '214L'], ['catalog.ts', '168L'], ['checkout.ts', '245L'], ['logger.ts', '72L'], ['adapters/stripe.ts', '96L']] },
+      { dir: 'tests', label: '行为证据', total: 34, files: [['router.spec.ts', '87L'], ['checkout.spec.ts', '64L']] },
+      { dir: 'docs', label: '项目说明', total: 8, files: [['architecture.md', '54L'], ['module-map.md', '—'], ['README.md', '81L']] }
+    ];
+    const DEFAULT_MODULES = [
+      { id: 'network', label: '计算机网络', hint: 'HTTP 入口、超时、重试与幂等' },
+      { id: 'os', label: '操作系统', hint: '进程内状态、IO 边界与并发' },
+      { id: 'lang', label: '语言特性', hint: '类型收窄、异步编排与错误处理' },
+      { id: 'other', label: '其他计算机知识', hint: '分层架构、存储与一致性' }
+    ];
+    const NODES = {
+      network: [
+        { title: '请求入口与请求 ID', file: 'router.ts', line: 3 },
+        { title: 'HTTP 状态与错误映射', file: 'router.ts', line: 6 },
+        { title: '适配器里的超时与重试', file: 'adapters/stripe.ts', line: 3 }
+      ],
+      os: [
+        { title: '上下文在调用链中的传递', file: 'router.ts', line: 4 },
+        { title: 'IO 边界 · 目录查询', file: 'catalog.ts', line: 3 }
+      ],
+      lang: [
+        { title: '类型收窄与判空', file: 'router.ts', line: 5 },
+        { title: '异步编排与返回值', file: 'checkout.ts', line: 2 }
+      ],
+      other: [
+        { title: '适配器边界与依赖倒置', file: 'adapters/stripe.ts', line: 2 },
+        { title: '幂等键与一致性', file: 'adapters/stripe.ts', line: 3 }
+      ]
+    };
+    const EXERCISES = {
+      network: [
+        { kind: '理解', status: '进行中', title: '找出一次请求的可观测边界', file: 'router.ts', minutes: 8 },
+        { kind: '预测', status: '待开始', title: '支付超时会沿哪条路径返回？', file: 'checkout.ts', minutes: 10 }
+      ],
+      os: [
+        { kind: '理解', status: '待开始', title: '哪些状态该随请求走、哪些留在进程内？', file: 'router.ts', minutes: 9 }
+      ],
+      lang: [
+        { kind: '修改', status: '待开始', title: '为适配器补一条重试策略', file: 'adapters/stripe.ts', minutes: 15 }
+      ],
+      other: [
+        { kind: '复盘', status: '待开始', title: '用自己的话画出调用关系', file: 'architecture.md', minutes: 6 }
+      ]
+    };
+    const SCOPES = {
+      map: { label: '宏观设计', view: 'map', sees: ['依赖图', '流程节点', '文件树', '语义检索'], placeholder: '讨论这个项目的宏观设计…', reply: '我会停在宏观作用域：只引用结构、边界和调用关系，不展开单行实现。' },
+      teaching: { label: '代码教学', view: 'teaching', sees: ['仓库文件', '源码锚点', '调用图', '教学模块'], placeholder: '针对当前文件与行号提问…', reply: '我会围绕当前源码锚点推进，每一步都引用具体文件和行号。' },
+      practice: { label: '练习评估', view: 'practice', sees: ['练习模块', '实现单元', '证据', '评分标准'], placeholder: '对这道练习追问…', reply: '我只给线索、不代答，并引用证据和评分标准。' }
+    };
+    const pageHeading = {
+      map: ['课程地图', '把仓库的结构、运行路径和学习任务放在同一张地图上。'],
+      teaching: ['教学会话', '以仓库目录与文件为主要入口，知识模块只提供推荐入口。'],
+      practice: ['练习复习', '练习按知识模块分组，反馈会回写学习状态。']
+    };
+    const contextActions = { map: ['重新生成地图', '导出课程包'], teaching: ['重新生成课程', '保存学习记录'], practice: ['查看掌握度', '保存学习记录'] };
+    const paneLabels = { map: ['项目目录', '流程图'], teaching: ['教学模块', '实时源码'], practice: ['练习模块', '练习上下文'] };
+
+    const state = {
+      file: 'router.ts', line: 3, workspace: 'map', exercise: 0,
+      tabs: ['router.ts', 'catalog.ts', 'checkout.ts'],
+      module: { teaching: 'network', practice: 'network' },
+      modules: DEFAULT_MODULES.map((item) => ({ ...item }))
+    };
+    const binds = { map: '节点「读取请求」', teaching: 'src/router.ts:3', practice: '练习 #1 · src/router.ts' };
+    const threads = { map: [], teaching: [], practice: [] };
+    let activeScope = 'map';
+    let configWhere = null;
+    let customSeq = 0;
+
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+    const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+    const displayPath = (file) => PATHS[file] || file;
+    const basename = (file) => file.split('/').pop();
+    const moduleSpec = (id) => state.modules.find((item) => item.id === id) || state.modules[0];
+    const labelOf = (id) => { const item = state.modules.find((one) => one.id === id); return item ? item.label : '未命名模块'; };
+    const nodesOf = (id) => NODES[id] || [];
+    const exercisesOf = (id) => EXERCISES[id] || [];
+    const code = (name, focus) => {
+      const lines = files[name] || GENERIC;
+      const marks = new Set(focus === undefined ? (HIGHLIGHTS[name] || []) : [focus]);
+      return lines.map((line, i) => `<span class="code-line${marks.has(i) ? ' highlight' : ''}"><b>${String(i + 1).padStart(2, ' ')}</b>${line || ' '}</span>`).join('');
+    };
+    const scrollThread = () => { const box = $('#agent-thread'); box.scrollTop = box.scrollHeight; };
+    const messageHtml = (item) => {
+      if (item.role === 'divider') return `<div class="thread-divider"><span>${item.html}</span></div>`;
+      return `<div class="message${item.role === 'user' ? ' user' : ''}"><span>${item.role === 'user' ? '你' : 'Codebase Agent'}</span><p>${item.html}</p></div>`;
+    };
+    const emptyHtml = (scope) => {
+      const tip = scope === 'teaching' ? '在左栏挑一个仓库目录或文件，再用推荐入口开始提问。'
+        : scope === 'practice' ? '在左栏选一个模块与练习，再对这道题追问。'
+        : '点流程节点或目录文件，再开始提问。';
+      return `<div class="thread-empty">本作用域的对话还没有开始。<br>${tip}</div>`;
+    };
+    let toastTimer;
+    const toast = (message) => { const node = $('#toast'); node.textContent = message; node.classList.add('show'); window.clearTimeout(toastTimer); toastTimer = window.setTimeout(() => node.classList.remove('show'), 2400); };
+
+    function renderThread() {
+      const list = threads[activeScope];
+      $('#agent-thread').innerHTML = list.length ? list.map(messageHtml).join('') : emptyHtml(activeScope);
+      $('#thread-meta').innerHTML = `<span>作用域 · <b>${SCOPES[activeScope].label}</b></span><span>${list.length} 条 · 本作用域独立记录</span>`;
+      scrollThread();
+    }
+    function pushMessage(role, html, scope = activeScope) {
+      threads[scope].push({ role, html });
+      if (scope === activeScope) renderThread();
+    }
+    function pushDivider(text, scope = activeScope) {
+      threads[scope].push({ role: 'divider', html: text });
+      if (scope === activeScope) renderThread();
+    }
+
+    function currentNodeTitle() {
+      const node = $('.flow-node.selected strong');
+      return node ? node.textContent : '读取请求';
+    }
+    function renderContext(view) {
+      const text = {
+        map: `<strong>宏观设计讨论</strong> · 选中「${currentNodeTitle()}」`,
+        teaching: `<strong>代码教学</strong> · ${displayPath(state.file)}:${state.line} · 模块「${labelOf(state.module.teaching)}」`,
+        practice: `<strong>练习复习</strong> · 模块「${labelOf(state.module.practice)}」 · 证据与反馈会回写学习状态`
+      };
+      $('#context').innerHTML = `${text[view]}<div class="context-actions">${contextActions[view].map((label) => `<button class="ghost">${label}</button>`).join('')}</div>`;
+    }
+    const refreshContext = () => renderContext(state.workspace);
+
+    function renderScopeContext() {
+      const spec = SCOPES[activeScope];
+      const sees = spec.sees.map((item) => `<em>${item}</em>`).join('');
+      $('#scope-context').innerHTML = `<div><span>作用域</span><code>${spec.label}</code></div><div><span>绑定</span><code>${binds[activeScope]}</code></div><div><span>可见</span><div class="sees">${sees}</div></div><div><span>动作</span><div class="sees"><em>只读，不写入仓库</em></div></div>`;
+    }
+
+    // ---------- 知识模块（可配置） ----------
+    function ensureActiveModules() {
+      ['teaching', 'practice'].forEach((where) => {
+        if (!state.modules.some((item) => item.id === state.module[where])) state.module[where] = state.modules[0].id;
+      });
+    }
+    function renderModuleChips(where) {
+      const active = state.module[where];
+      const count = (id) => (where === 'teaching' ? nodesOf(id) : exercisesOf(id)).length;
+      $(`#${where}-module-chips`).innerHTML = state.modules.map((item) => `<button class="module-chip${item.id === active ? ' active' : ''}" data-module="${item.id}">${escapeHtml(item.label)}<em>${count(item.id)}</em></button>`).join('')
+        + `<button class="module-chip add${configWhere === where ? ' on' : ''}" data-config="${where}">＋ 配置</button>`;
+      $$(`#${where}-module-chips .module-chip[data-module]`).forEach((button) => button.addEventListener('click', () => switchModule(where, button.dataset.module)));
+      $(`#${where}-module-chips .module-chip[data-config]`).addEventListener('click', () => toggleConfig(where));
+    }
+    function renderModuleConfig() {
+      ['teaching', 'practice'].forEach((where) => {
+        const box = $(`#${where}-module-config`);
+        const open = configWhere === where;
+        box.hidden = !open;
+        if (!open) { box.innerHTML = ''; return; }
+        box.innerHTML = `<div class="cfg-head">自定义知识模块<span>缺省为四个计算机知识模块</span></div>`
+          + state.modules.map((item) => `<div class="cfg-row"><input data-rename="${item.id}" value="${escapeHtml(item.label)}" aria-label="模块名称" />${state.modules.length > 1 ? `<button class="cfg-del" data-remove="${item.id}" title="删除该模块">×</button>` : ''}</div>`).join('')
+          + `<div class="cfg-add"><input data-new="1" placeholder="新增模块名称…" /><button class="cfg-add-btn" data-add="1">添加</button></div>`
+          + `<div class="cfg-foot"><button class="cfg-reset" data-reset="1">恢复缺省四模块</button><span>改动即时生效，原型不落盘</span></div>`;
+        $$(`#${where}-module-config [data-rename]`).forEach((input) => input.addEventListener('input', () => {
+          const target = state.modules.find((item) => item.id === input.dataset.rename);
+          if (!target) return;
+          target.label = input.value || '未命名模块';
+          renderModuleChips('teaching'); renderModuleChips('practice');
+          renderTeachingLists(); renderPracticeLists();
+          refreshContext(); if (activeScope === 'teaching' || activeScope === 'practice') renderScopeContext();
+        }));
+        $$(`#${where}-module-config [data-remove]`).forEach((button) => button.addEventListener('click', () => {
+          state.modules = state.modules.filter((item) => item.id !== button.dataset.remove);
+          renderAll(); toast('已删除该模块（推荐入口与练习仍保留在本地数据里）');
+        }));
+        const newInput = $(`#${where}-module-config [data-new]`);
+        const doAdd = () => {
+          const name = newInput.value.trim();
+          if (!name) { toast('先给新模块起个名字'); return; }
+          const id = `custom-${++customSeq}`;
+          state.modules.push({ id, label: name, hint: '自定义模块 · 还没有推荐入口，先从仓库文件开始' });
+          NODES[id] = []; EXERCISES[id] = [];
+          renderAll(); toast(`已新增模块「${name}」`);
+        };
+        $(`#${where}-module-config [data-add]`).addEventListener('click', doAdd);
+        newInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); doAdd(); } });
+        $(`#${where}-module-config [data-reset]`).addEventListener('click', () => {
+          state.modules = DEFAULT_MODULES.map((item) => ({ ...item }));
+          state.module.teaching = 'network'; state.module.practice = 'network'; state.exercise = 0;
+          renderAll(); toast('已恢复缺省四模块');
+        });
+      });
+    }
+    function toggleConfig(where) {
+      configWhere = configWhere === where ? null : where;
+      renderModuleChips('teaching'); renderModuleChips('practice'); renderModuleConfig();
+    }
+    function switchModule(where, id) {
+      const from = state.module[where];
+      if (from === id) return;
+      state.module[where] = id;
+      if (where === 'practice') state.exercise = 0;
+      renderModuleChips('teaching'); renderModuleChips('practice');
+      renderTeachingLists(); renderPracticeLists();
+      if (where === 'practice') selectExercise(0, false);
+      refreshContext();
+      if (activeScope === where) renderScopeContext();
+      pushDivider(`模块 · ${labelOf(from)} → ${labelOf(id)}`, where);
+    }
+
+    // ---------- 源码面板 ----------
+    function renderTabs() {
+      $('#source-tab-list').innerHTML = state.tabs.map((file) => `<button class="${file === state.file ? 'active' : ''}" data-file="${file}">${basename(file)}</button>`).join('');
+      $$('#source-tab-list button').forEach((button) => button.addEventListener('click', () => {
+        const file = button.dataset.file;
+        setSource(file, HIGHLIGHTS[file] ? HIGHLIGHTS[file][0] + 1 : 1);
+      }));
+    }
+    function setSource(file, line) {
+      state.file = file;
+      state.line = line || state.line || 1;
+      $('#teaching-code').innerHTML = code(file, state.line - 1);
+      $('#source-path').textContent = displayPath(file);
+      $('#source-meta-left').textContent = `只读 · 已定位第 ${state.line} 行`;
+      renderTabs();
+      renderTeachingTree();
+      binds.teaching = `${displayPath(file)}:${state.line}`;
+      if (activeScope === 'teaching') renderScopeContext();
+      if (state.workspace === 'teaching') refreshContext();
+    }
+
+    // ---------- 教学：推荐入口 + 仓库文件 ----------
+    function renderTeachingLists() {
+      const id = state.module.teaching;
+      const spec = moduleSpec(id);
+      $('#teaching-module-hint').textContent = `${spec.hint} · 模块可在左栏「＋ 配置」里自定义`;
+      $('#module-progress').textContent = `${spec.label} · ${nodesOf(id).length} 推荐`;
+      const nodes = nodesOf(id);
+      $('#teaching-entry-list').innerHTML = nodes.length
+        ? nodes.map((node, index) => `<button class="entry-item${node.file === state.file && node.line === state.line ? ' selected' : ''}" data-index="${index}" title="${displayPath(node.file)}:${node.line}"><span class="entry-dot"></span><strong>${node.title}</strong><code>${basename(node.file)}:${node.line}</code></button>`).join('')
+        : '<p class="entry-empty">该模块还没有推荐入口。用下面的仓库文件或中栏源码标签挑一个文件，直接开始提问。</p>';
+      $$('#teaching-entry-list .entry-item').forEach((button) => button.addEventListener('click', () => selectTeachingNode(Number(button.dataset.index))));
+    }
+    function renderTeachingTree() {
+      $('#teaching-tree').innerHTML = REPO_TREE.map((group) => `<div class="tree-group"><div class="tree-label">⌄ ${group.dir}<span>${group.label}</span></div>${group.files.map(([name, size]) => `<button class="tree-file${name === state.file ? ' selected' : ''}" data-file="${name}">◇ <code>${name}</code><em>${size}</em></button>`).join('')}<button class="tree-file" data-more="${group.dir}">… <code>显示其余 ${group.total - group.files.length} 个文件</code></button></div>`).join('');
+      $$('#teaching-tree [data-file]').forEach((button) => button.addEventListener('click', () => selectTeachingFile(button.dataset.file)));
+      $$('#teaching-tree [data-more]').forEach((button) => button.addEventListener('click', () => toast('原型只展开示意文件；真实实现会按需加载该目录的其余文件')));
+    }
+    function selectTeachingFile(file) {
+      if (!state.tabs.includes(file)) { state.tabs.push(file); if (state.tabs.length > 5) state.tabs.shift(); }
+      setSource(file, HIGHLIGHTS[file] ? HIGHLIGHTS[file][0] + 1 : 1);
+      pushDivider(`已打开 · ${displayPath(file)}`, 'teaching');
+    }
+    function selectTeachingNode(index) {
+      const node = nodesOf(state.module.teaching)[index];
+      if (!node) return;
+      setSource(node.file, node.line);
+      renderTeachingLists();
+      pushDivider(`已定位 · ${displayPath(node.file)}:${node.line}（${node.title}）`, 'teaching');
+    }
+
+    // ---------- 练习 ----------
+    function renderPracticeLists() {
+      const id = state.module.practice;
+      const list = exercisesOf(id);
+      $('#practice-module-hint').textContent = `${moduleSpec(id).hint} · 模块可在左栏「＋ 配置」里自定义`;
+      $('#practice-module-count').textContent = `${list.length} 项`;
+      $('#practice-exercise-list').innerHTML = list.length
+        ? list.map((item, index) => `<button class="exercise-card${index === state.exercise ? ' selected' : ''}" data-index="${index}"><small>${item.kind} · ${item.status}</small><strong>${item.title}</strong><span>${displayPath(item.file)} · 预计 ${item.minutes} 分钟</span></button>`).join('')
+        : '<p class="entry-empty">该模块下暂时没有练习。换一个模块，或先用教学会话把这个模块讲通。</p>';
+      $$('#practice-exercise-list .exercise-card').forEach((button) => button.addEventListener('click', () => selectExercise(Number(button.dataset.index))));
+    }
+    function selectExercise(index, announce = true) {
+      const list = exercisesOf(state.module.practice);
+      if (!list.length) { $('#practice-code').innerHTML = ''; $('#practice-context').textContent = '该模块下暂无练习'; return; }
+      state.exercise = Math.min(index, list.length - 1);
+      const item = list[state.exercise];
+      $('#practice-code').innerHTML = code(item.file, HIGHLIGHTS[item.file] ? HIGHLIGHTS[item.file][0] : 0);
+      $('#practice-context').textContent = `${displayPath(item.file)} · 相关代码已高亮`;
+      binds.practice = `练习 #${state.exercise + 1} · ${displayPath(item.file)}`;
+      renderPracticeLists();
+      if (state.workspace === 'practice') refreshContext();
+      if (activeScope === 'practice') renderScopeContext();
+      if (announce) pushDivider(`练习 #${state.exercise + 1} · ${item.title} → ${displayPath(item.file)}`, 'practice');
+    }
+
+    // ---------- 作用域 / 视图 ----------
+    function setScope(scope, options = {}) {
+      activeScope = scope;
+      $$('.scope-chip').forEach((chip) => chip.classList.toggle('active', chip.dataset.scope === scope));
+      const input = $('#agent-composer').querySelector('textarea');
+      if (input) input.placeholder = SCOPES[scope].placeholder;
+      renderScopeContext();
+      renderThread();
+      if (options.navigate) activate(SCOPES[scope].view);
+    }
+    function activate(view) {
+      state.workspace = view;
+      $$('[data-workspace]').forEach((button) => button.classList.toggle('active', button.dataset.workspace === view));
+      $$('[data-panel]').forEach((panel) => { panel.classList.toggle('active', panel.dataset.panel === view); panel.querySelectorAll('.pane').forEach((pane) => { pane.style.display = ''; }); });
+      $$('[data-nav]').forEach((button) => button.classList.toggle('active', button.dataset.nav === view));
+      $('#page-title').textContent = pageHeading[view][0];
+      $('#page-subtitle').textContent = pageHeading[view][1];
+      refreshContext();
+      setScope(view);
+      buildMobileSwitcher();
+    }
+    function renderAll() {
+      ensureActiveModules();
+      renderModuleChips('teaching'); renderModuleChips('practice');
+      renderTeachingLists(); renderPracticeLists(); renderTeachingTree();
+      renderModuleConfig();
+      if (!exercisesOf(state.module.practice).length) { $('#practice-code').innerHTML = ''; $('#practice-context').textContent = '该模块下暂无练习'; }
+      else selectExercise(state.exercise, false);
+      refreshContext();
+      if (activeScope === 'teaching' || activeScope === 'practice') renderScopeContext();
+    }
+
+    $$('[data-workspace]').forEach((button) => button.addEventListener('click', () => activate(button.dataset.workspace)));
+    $$('[data-nav]').forEach((button) => button.addEventListener('click', () => {
+      const target = button.dataset.nav;
+      if (button.classList.contains('planned')) { toast(target === 'import' ? '导入流程沿用现有实现，本轮原型不重复设计' : '学习状态视图留到下一轮，与成本 / 实验面板一起设计'); return; }
+      if (target !== state.workspace) activate(target);
+    }));
+    $$('.scope-chip').forEach((chip) => chip.addEventListener('click', () => {
+      if (chip.dataset.scope === activeScope && SCOPES[activeScope].view === state.workspace) return;
+      setScope(chip.dataset.scope, { navigate: true });
+    }));
+    $$('.flow-node').forEach((node) => node.addEventListener('click', () => {
+      $$('.flow-node').forEach((item) => item.classList.remove('selected'));
+      node.classList.add('selected');
+      const title = node.querySelector('strong').textContent;
+      binds.map = `节点「${title}」`;
+      if (activeScope === 'map') renderScopeContext();
+      if (state.workspace === 'map') refreshContext();
+      pushDivider(`已切换到 · ${title}`, 'map');
+    }));
+    function selectFile(file) {
+      if (!file) return;
+      $$('.tree-file').forEach((item) => item.classList.toggle('selected', item.dataset.file === file));
+      if (!state.tabs.includes(file) && files[file]) { state.tabs.push(file); if (state.tabs.length > 5) state.tabs.shift(); }
+      state.file = file;
+      state.line = HIGHLIGHTS[file] ? HIGHLIGHTS[file][0] + 1 : 1;
+      if (files[file]) {
+        $('#teaching-code').innerHTML = code(file, state.line - 1);
+        $('#source-path').textContent = displayPath(file);
+        $('#source-meta-left').textContent = `只读 · 已定位第 ${state.line} 行`;
+        renderTabs();
+        renderTeachingTree();
+        binds.teaching = `${displayPath(file)}:${state.line}`;
+      }
+      binds.map = `节点「${currentNodeTitle()}」 · ${displayPath(file)}`;
+      if (activeScope === 'map') renderScopeContext();
+      if (state.workspace === 'map') refreshContext();
+      pushDivider(`已选中 · ${displayPath(file)}`, 'map');
+    }
+    $$('.tree-file').forEach((item) => item.addEventListener('click', () => selectFile(item.dataset.file)));
+
+    const composer = $('#agent-composer');
+    const composerInput = composer.querySelector('textarea');
+    composer.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = composerInput.value.trim();
+      if (!value) return;
+      pushMessage('user', escapeHtml(value));
+      pushMessage('agent', SCOPES[activeScope].reply);
+      composerInput.value = '';
+    });
+    composerInput.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composer.requestSubmit(); } });
+
+    $$('.option input').forEach((input) => input.addEventListener('change', () => input.closest('.option').classList.toggle('checked', input.checked)));
+    $('#check-answer').addEventListener('click', (event) => {
+      event.target.textContent = '已提交 · 查看反馈';
+      $('.feedback strong').textContent = '反馈状态 · 已记录';
+      $('.feedback p').textContent = '回答抓住了 requestId 的关联作用。下一步可以解释它如何帮助区分重试。';
+      pushMessage('agent', '判分完成：回答命中了 <code>requestId</code> 的关联作用。掌握度 +1，下一项建议「支付超时会沿哪条路径返回？」', 'practice');
+    });
+
+    function buildMobileSwitcher() {
+      const holder = $('#mobile-switcher'); holder.innerHTML = '';
+      paneLabels[state.workspace].forEach((label, index) => {
+        const button = document.createElement('button');
+        button.textContent = label;
+        if (index === 0) button.classList.add('active');
+        button.addEventListener('click', () => {
+          holder.querySelectorAll('button').forEach((item) => item.classList.remove('active'));
+          button.classList.add('active');
+          $(`[data-panel="${state.workspace}"]`).querySelectorAll('.pane').forEach((pane, i) => { pane.style.display = i === index ? 'grid' : 'none'; });
+        });
+        holder.appendChild(button);
+      });
+    }
+    window.addEventListener('resize', () => { if (window.innerWidth > 960) $$('[data-panel] .pane').forEach((pane) => { pane.style.display = ''; }); });
+
+    const seedThreads = {
+      map: [
+        { role: 'agent', html: '这是「宏观设计」作用域的独立对话，只讨论结构、边界与调用关系，不和教学、练习的记录混在一起。' },
+        { role: 'user', html: '为什么把支付适配单独拆出来？' },
+        { role: 'agent', html: '因为 <code>src/checkout.ts</code> 只负责编排，不应该知道 Stripe 的重试与错误格式。这样练习时可以替换适配器，而不改动主流程。' }
+      ],
+      teaching: [
+        { role: 'agent', html: '已绑定 <code>src/router.ts:3</code>。这一行为什么要先生成 <code>requestId</code>，而不是交给日志库自己造？先说说你的猜测。' },
+        { role: 'user', html: '为了让后续日志能关联同一次请求。' },
+        { role: 'agent', html: '对。再往前一步：如果没有它，重试支付时你会失去哪一类证据？' }
+      ],
+      practice: [
+        { role: 'agent', html: '本作用域只给线索、不代答。<br>练习 #1 已绑定 <code>src/router.ts</code>：先圈出创建 <code>RequestContext</code> 的位置，再判断它被哪些函数传递。' }
+      ]
+    };
+    Object.keys(seedThreads).forEach((scope) => { threads[scope] = seedThreads[scope].slice(); });
+
+    renderTabs();
+    setSource('router.ts', 3);
+    renderAll();
+    selectExercise(state.exercise, false);
+    activate('map');
+    renderThread();
+  </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Codebase Tutor analysis exclusions.
+# Supports comments, *, ?, **, directory suffixes and ! re-inclusion rules.
+
+# Engine and VCS metadata
+.git/
+.tutor/
+.DS_Store
+
+# Agent workspaces
+.claude/
+.workbuddy/
+.codex/
+.cursor/
+.aider/
+.continue/
+.roo/
+.windsurf/
+
+# Dependencies, builds and local caches
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+coverage/
+.cache/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+target/

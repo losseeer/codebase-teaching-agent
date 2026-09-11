@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────
+# Codebase Tutor · .gitignore
+# 个人探索项目：核心交付物（设计文档 / 开发计划 / 调研报告）只在本地维护，
+# 不入 git。仓库只跟踪代码与最小配置。
+# ─────────────────────────────────────────────────────────────
+
+# Dependencies & build artifacts
+node_modules/
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+.turbo/
+.cache/
+
+# Local runtime state (engine work dir + imported repos' .tutor/)
+.tutor/
+.tutor-*/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# ─────────────────────────────────────────────────────────────
+# Personal working documents（不入仓）
+# 设计文档 6MB 含 base64 字体/截图，diff 性能差；维护在本地文档系统
+# ─────────────────────────────────────────────────────────────
+codebase-teaching-agent.html
+开发计划.md
+调研报告.md
+docs/
+*.local.md
+CONTRIBUTING.md
+
+# ─────────────────────────────────────────────────────────────
+# Tooling configs not versioned（项目不发 npm / 不走 PR review）
+# ─────────────────────────────────────────────────────────────
+.changeset/
+.github/
+.npmrc
+.tutorignore.example
+.playwright-mcp/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.workbuddy/
+
+# Test artifacts
+playwright-report/
+test-results/
+coverage/
+
+# Visual-test capture scratch (Playwright MCP 调试)
+course-*.png
+practice-*.png
+tutor-*.png
