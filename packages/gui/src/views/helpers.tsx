@@ -54,6 +54,13 @@ export function stageIndex(stage?: TutorSession["stage"]): number {
   return ({ orient: 0, procedure: 1, concept: 2, verify: 3, confirmed: 4 })[stage ?? "orient"];
 }
 
+/** 苏格拉底教学五阶段文案（prototype 的「教学阶梯」），Agent 侧栏 scope-context 的「阶段」行使用。 */
+export const TEACHING_STAGES = ["L1 定向", "L2 程序", "L3 概念", "检验", "确认"] as const;
+
+export function stageLabel(stage?: TutorSession["stage"]): string {
+  return TEACHING_STAGES[stageIndex(stage)];
+}
+
 export function Segmented({ value, items, onChange }: { value: string; items: { value: Pedagogy | "macro" | "micro"; label: string }[]; onChange: (value: string) => void }): ReactElement {
   return <div className="segmented">{items.map((item) => <button key={item.value} className={value === item.value ? "selected" : ""} onClick={() => onChange(item.value)}>{item.label}</button>)}</div>;
 }

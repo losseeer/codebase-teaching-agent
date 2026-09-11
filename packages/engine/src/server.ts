@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -7,8 +9,8 @@ import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, ExerciseAnswe
 import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
+import { suggestModuleEntries } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
-import { createExperiment, exportExperimentCsv, getExperiment } from "./experiment/service.js";
 import { ExerciseService } from "./exercises/service.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
@@ -19,18 +21,53 @@ import { defaultTutorSettings, policyFor, validateSettings } from "./policy/poli
 import { TutorDatabase } from "./store/database.js";
 import { Journal, readJournal } from "./store/journal.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { createTeachingProvider, teachingProviderStatus } from "./llm/provider.js";
+import { createLightLlmProvider, createTeachingProvider, teachingProviderStatus } from "./llm/provider.js";
+
+/** engine version: 单源 = packages/engine/package.json. 读不到时回落到 0.0.0. */
+const engineVersion: string = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+/** 启动耗时分段计时：TUTOR_BOOT_TIMING=1 时打印，默认 no-op 保持日志干净。 */
+const T0 = _perf.now();
+const tboot = process.env.TUTOR_BOOT_TIMING === "1"
+  ? (label: string): void => console.log(`[boot] +${(_perf.now() - T0).toFixed(0).padStart(5)}ms ${label}`)
+  : (): void => {};
+
+tboot("imports resolved");
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "warn" } });
+tboot("Fastify constructed");
+
 const importer = new ImportService();
+tboot("ImportService");
+
 const exercises = new ExerciseService();
+tboot("ExerciseService");
+
 const companion = new CompanionService();
+tboot("CompanionService");
+
 const teachingProvider = createTeachingProvider();
+// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 课程地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档
+const lightLlmProvider = createLightLlmProvider() ?? teachingProvider;
+tboot("createTeachingProvider");
+
 const sessions = new Map<string, TutorSession>();
 const clients = new Set<{ send(data: string): void; readyState: number }>();
 
 await app.register(cors, { origin: true });
+tboot("cors registered");
+
 await app.register(websocket);
+tboot("websocket registered");
+
+tboot("before listen");
 
 function broadcast(event: ServerEvent): void {
   const serialized = JSON.stringify(event);
@@ -52,7 +89,13 @@ importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
   const teaching = teachingProviderStatus(teachingProvider);
-  return { status: "ok", service: "codebase-tutor-engine", version: "0.2.0", summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local", teachingProvider: teaching.provider, teachingModel: teaching.model, teachingMode: teaching.mode };
+  const light = teachingProviderStatus(lightLlmProvider);
+  return {
+    status: "ok", service: "codebase-tutor-engine", version: engineVersion,
+    summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local",
+    teachingProvider: teaching.provider, teachingModel: teaching.model, teachingMode: teaching.mode,
+    lightProvider: light.provider, lightModel: light.model, lightMode: light.mode
+  };
 });
 
 app.get("/ws", { websocket: true }, (socket) => {
@@ -134,11 +177,32 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   const kind = request.body?.kind;
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   if (kind && !["output_prediction", "change_localization", "impact_analysis", "decision_defense"].includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
+  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
+  const budgetExceeded = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
   try {
-    return reply.code(201).send(exercises.next(repository, { kind, targetUnitId: request.body?.targetUnitId }));
+    return reply.code(201).send(await exercises.next(repository, { kind, targetUnitId: request.body?.targetUnitId }, budgetExceeded ? undefined : lightLlmProvider));
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成练习" });
   }
+});
+
+// 教学模块「推荐入口」：LLM 从课程树候选节点中挑选（单轮调用）；未配置 LLM / 预算触顶时返回空列表，GUI 回落关键词分类
+app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint?: string } }>("/api/repositories/:repositoryId/module-entries", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const moduleLabel = (request.query.module ?? "").trim();
+  if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
+  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
+  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
+  if (!provider) return { entries: [], source: "heuristic" as const };
+  const suggestion = await suggestModuleEntries(repository.course, moduleLabel, (request.query.hint ?? "").trim(), provider);
+  if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+    input_tokens: suggestion.usage.inputTokens,
+    output_tokens: suggestion.usage.outputTokens,
+    provider: provider.modelVersion,
+    scene: "module_entries"
+  });
+  return { entries: suggestion.entries, source: "llm" as const };
 });
 
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {
@@ -228,37 +292,16 @@ app.post<{ Params: { repositoryId: string; suggestionId: string }; Body: { actio
   catch (error) { return reply.code(422).send({ error: error instanceof Error ? error.message : "无法处理建议" }); }
 });
 
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/experiment", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  return getExperiment(repository.path) ?? reply.code(404).send({ error: "尚未创建实验配置" });
-});
-
-app.post<{ Params: { repositoryId: string }; Body: { name?: string; participantId?: string } }>("/api/repositories/:repositoryId/experiment", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  return reply.code(201).send(createExperiment(repository.path, repository.index.repositoryId, request.body?.name ?? "M1 三组对照", request.body?.participantId));
-});
-
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/experiment/export.csv", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  return reply.header("content-type", "text/csv; charset=utf-8").send(exportExperimentCsv(repository.path));
-});
-
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
   const repository = repositoryOr404(request.body?.repositoryId ?? "");
   const node = repository && flatten(repository.course.root).find((item) => item.id === request.body?.courseNodeId);
   if (!repository || !node) return reply.code(404).send({ error: "课程节点不存在" });
-  const experiment = getExperiment(repository.path);
-  if (experiment?.assignedGroup === "C_no_assistant") return reply.code(403).send({ error: "当前实验组不提供教学辅助。" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : undefined);
   const hasExplicitSettings = Boolean(request.body?.settings && Object.keys(request.body.settings).length) || typeof request.body?.style === "number";
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   let settings = hasExplicitSettings
     ? validateSettings({ ...defaultTutorSettings, ...request.body?.settings, style: requestedStyle })
     : learnerProfile.recommended.settings;
-  if (experiment?.assignedGroup === "B_direct_answer") settings = { ...settings, pedagogy: "explanatory" };
   const session = createSession(repository.index.repositoryId, node.id, settings);
   sessions.set(session.id, session);
   new Journal(repository.path, repository.index.repositoryId).append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
@@ -304,3 +347,4 @@ function chunk(content: string, width: number): string[] { return content.match(
 
 const port = Number(process.env.ENGINE_PORT ?? 3001);
 await app.listen({ port, host: "127.0.0.1" });
+tboot("listening");

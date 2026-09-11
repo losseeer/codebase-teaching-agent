@@ -21,7 +21,9 @@
     "test:e2e": "playwright test",
     "test:all": "pnpm test && pnpm test:e2e",
     "phase0:prepare-study": "pnpm --filter @codebase-tutor/engine phase0:prepare-study",
-    "phase0:audit": "pnpm --filter @codebase-tutor/engine phase0:audit"
+    "phase0:audit": "pnpm --filter @codebase-tutor/engine phase0:audit",
+    "postinstall": "pnpm --filter @codebase-tutor/engine run setup:native",
+    "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",

@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { DecisionUnit, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
+import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
+import { refineExerciseWithLlm } from "./llm-generate.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
 import { deriveMastery, selectZpdTarget, type ZpdTarget } from "./learner.js";
@@ -45,7 +47,11 @@ export class ExerciseService {
     return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
   }
 
-  next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string } = {}): Exercise {
+  /**
+    生成练习：目标单元与标准答案始终由静态分析产出（可判分）；
+    传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
+    */
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
     try {
       if (!requested.kind && !requested.targetUnitId) {
@@ -62,7 +68,17 @@ export class ExerciseService {
       if (!target) throw new Error("当前分析结果没有可生成的练习。请先重新导入仓库。");
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, target.kind, target.id);
       if (cached) return cached.exercise;
-      const stored = this.createExercise(repository, target.kind, target.value, target.difficulty);
+      let stored = this.createExercise(repository, target.kind, target.value, target.difficulty);
+      if (provider) {
+        const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
+        stored = { ...stored, exercise: refined.exercise };
+        if (refined.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+          input_tokens: refined.usage.inputTokens,
+          output_tokens: refined.usage.outputTokens,
+          provider: provider.modelVersion,
+          scene: "exercise_generate"
+        });
+      }
       database.putExerciseCache(repository.index.repositoryId, repository.analysis.versionStamp, target.kind, target.id, stored);
       return stored.exercise;
     } finally {

@@ -1,44 +1,65 @@
-# `agent/` — Agent 侧栏
+# `agent/` — Agent 持久侧栏
 
-> 共享 Agent 侧栏（作用域 / 线程 / 上下文卡 / composer）。始终在右，与工作区无关。
+> 单 Agent · 三作用域（map / teaching / practice）独立线程 · 始终在右 · 与 4 路由共享。
 
-## 当前状态
+## 当前状态（v0.2）
 
-**v0.1（已部分实现）**：当前只有 `CompanionDock.tsx`（伴侣建议面板），由 App 在 workspace 存在时挂载。
+| 文件 | 职责 | 状态 |
+|------|------|------|
+| `AgentRail.tsx` | 持久右栏外壳：scope-bar + scope-context + agent-thread + composer | ✅ 已实现 |
+| `useTeachingSession.ts` | 单一状态源：scope / threads / course / selected / session / settings / liveAnswer / suggestions（被 AgentRail + TutorPage 共享） | ✅ 已实现 |
+| `CompanionDock.tsx` | 已删除（逻辑并入 AgentRail 的 agent-thread，teaching 作用域展示 CompanionSuggestion 卡片） | — |
 
-**未实现**：prototype 中核心的 Agent 侧栏（composer + thread + scope chips + scope context 卡）当前**只在 prototype 中可见**，GUI 路由切换模式让 composer 嵌入了 `views/TutorPage.tsx` 而非共享。
+## 设计依据
 
-## 与 prototype 的差异（关键缺口）
+- 开发计划 §1.5「界面基线」第 3 条：Agent 侧栏始终在右，与工作区无关
+- 设计文档 ch8「三条界面约束」：
+  - 位置/状态变化用分隔线（thread-divider）—— 已实现
+  - 教学反馈/提问/判分用气泡（message.user / message.agent）—— 已实现
+  - 「判分反馈」明确 in-place + 气泡双轨—— 待 v0.3 在 practice 作用域接入
 
-| 维度 | prototype（v5） | 当前 GUI |
-|---|---|---|
-| 工作区 | 三工作区共享主区（map / teaching / practice 互切）| 4 路由（course / tutor / practice / insights） |
-| Agent 侧栏 | **始终在右**，三作用域独立线程 | 仅 TutorPage 自带 composer；伴侣面板另起 aside |
-| 作用域 chips | Agent 侧栏顶部 | 没有 chip；作用域靠路由切换 |
-| 线程 | map/teaching/practice 三线程独立 | 仅 TutorPage 单线程 |
-| Composer | 共享主区右侧 Agent 栏 | TutorPage 内嵌 |
+## v0.2 实现的 4 段（与 prototype `design-prototype.html` 对照）
 
-## v0.2+ 抽离目标
+| 段 | prototype 选择器 | 当前实现 |
+|----|------------------|----------|
+| 头部 | `.agent-header` | avatar `✦` + 「Codebase Agent」+ 副标题 |
+| 作用域切换 | `.scope-bar` / `.scope-chip` | 3 个按钮（map/teaching/practice），active 态深底+亮绿字 |
+| 作用域上下文 | `.scope-context` | 「作用域 / 绑定 / 可见 / 动作」4 行；可见动态绑定 |
+| 线程 | `.agent-thread` + `.message` + `.thread-divider` | 滚动消息列表，按作用域渲染当前线程；teaching 追加伴侣建议卡 |
+| Composer | `.composer` | textarea + 发送；按作用域切换 placeholder + canSend + onSend |
 
-| 文件 | 职责 |
-|---|---|
-| `AgentRail.tsx` | 侧栏外壳（右侧 322px 宽，sticky） |
-| `ScopeChips.tsx` | 三个作用域 chips（宏观设计 / 代码教学 / 练习评估） |
-| `ScopeContext.tsx` | 作用域上下文卡（绑定 / 可见 / 动作） |
-| `Thread.tsx` | 三作用域独立线程渲染（prototype `renderThread()` 1:1） |
-| `Composer.tsx` | composer 文本框 + 发送 + 占位符按作用域切换 |
-| `pushMessage.ts` / `pushDivider.ts` | prototype 中同名函数抽离版；系统通知 / Agent 气泡 / 分隔线分发 |
-| `CompanionDock.tsx` | ✅ 已实现（伴侣建议，与三作用域独立线程解耦） |
+## 作用域语义
 
-## 设计文档
+| Scope | label | bound | visible | 动作 |
+|-------|-------|-------|---------|------|
+| `map` | 宏观设计 | 课程根节点 | 课程 / 文件树 / 模块关系 | 只读 |
+| `teaching` | 代码教学 | 当前选中节点 | 源码 / 锚点 / `stage <session.stage>` | 可写入 session（真发 LLM） |
+| `practice` | 练习评估 | 当前练习 | 题目 / 答案 / 进度 | v0.3 接入判分写入学习日志 |
 
-`codebase-teaching-agent.html` 第 8 章：
-- §三条界面约束："提示样式二选一"——位置/状态变化用分隔线，教学反馈/提问/判分用气泡
-- §作用域 × 可见范围 × 典型提示：每个作用域的默认可见 + 触发的分隔线 + 触发的 Agent 气泡
+## v0.2 已落地的 prototype 目标
 
-## 重构入口
+- ✅ Agent 侧栏始终在右（grid 第三列）
+- ✅ 三作用域独立线程（threads `Record<Scope, ThreadItem[]>`）
+- ✅ scope chips（map/teaching/practice）
+- ✅ 切换作用域 pushDivider「已切换到 · xxx」
+- ✅ 切换课程节点 pushDivider「已切换到 / 已打开」（teaching）
+- ✅ 伴侣建议合并入 teaching 作用域线程
+- ✅ 持久化（scope + threads via localStorage）
 
-`views/TutorPage.tsx` 第 90-110 行的 composer 当前内嵌；抽出后：
-- TutorPage 只保留会话控制（风格 / 教学法 / 拆解层次 / 阶梯 / 锚点 / 成本）
-- Chat 渲染与 composer 移到 `agent/Thread.tsx` + `agent/Composer.tsx`
-- App.tsx 把 AgentRail 挂到右侧（仿照 CompanionDock 的挂载方式）
+## v0.3+ 待办
+
+- 接入 map 作用域 LLM（当前 placeholder「v0.3 接入 LLM」）
+- 接入 practice 作用域判分气泡（in-place + 气泡双轨）
+- 把 CoursePage / PracticePage 的文件树 / 答题节点选择也并入 useTeachingSession，让宏观设计 / 练习评估线程真正能 pushDivider
+- companion.suggestion 接入 scope-aware（当前只入 teaching scope）
+
+## 重构对比 v0.1 → v0.2
+
+| 维度 | v0.1 | v0.2 |
+|------|------|------|
+| Chat 位置 | TutorPage 内嵌 | AgentRail（teaching 作用域） |
+| Composer | TutorPage 内嵌 | AgentRail（teaching 真发，其他作用域草稿） |
+| 流式订阅（session.delta）| TutorPage useEffect | AgentRail useEffect（共享 hook） |
+| 伴侣建议 | 独立 CompanionDock popup | AgentRail thread 内嵌 |
+| 跨工作区共享 Agent | ❌ | ✅（同一 workspace 下，所有路由共享 thread + scope） |
+| 持久化 | workspace | workspace + scope + threads |

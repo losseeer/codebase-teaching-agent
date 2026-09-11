@@ -1,7 +1,7 @@
-import type { ClaudePostToolUseEvent, CompanionAction, CompanionHookResult, CompanionSuggestion, CompanionSummary, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, ExperimentConfig, FadedState, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RepositoryOverview, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ClaudePostToolUseEvent, CompanionAction, CompanionHookResult, CompanionSuggestion, CompanionSummary, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
- * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（课程地图 / 教学会话 / 练习复习 / 成本与实验）
+ * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（课程地图 / 教学会话 / 练习复习 / 成本监控）
  * 都以这个 workspace 为锚点。Agent 侧栏、伴侣面板、localStorage 也按 repositoryId 持久化。
  *
  * 对应 prototype `design-prototype.html` 中的 `binds[scope]` 概念。
@@ -32,6 +32,7 @@ export const api = {
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getImpact: (repositoryId: string, changedPaths: string[]) => request<ImpactResult>(`/api/repositories/${repositoryId}/impact`, { method: "POST", body: JSON.stringify({ changedPaths }) }),
   getCompanionSuggestions: (repositoryId: string) => request<{ suggestions: CompanionSuggestion[]; summary: CompanionSummary }>(`/api/repositories/${repositoryId}/companion/suggestions`),
+  getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "heuristic" }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
   postToolUse: (repositoryId: string, event: ClaudePostToolUseEvent) => request<CompanionHookResult>(`/api/repositories/${repositoryId}/companion/hooks/post-tool-use`, { method: "POST", body: JSON.stringify(event) }),
   actOnSuggestion: (repositoryId: string, suggestionId: string, action: CompanionAction) => request<CompanionSuggestion>(`/api/repositories/${repositoryId}/companion/suggestions/${encodeURIComponent(suggestionId)}/actions`, { method: "POST", body: JSON.stringify({ action }) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
@@ -40,8 +41,6 @@ export const api = {
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => request<CostSummary>(`/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
-  getExperiment: (repositoryId: string) => request<ExperimentConfig>(`/api/repositories/${repositoryId}/experiment`),
-  createExperiment: (repositoryId: string, name: string, participantId: string) => request<ExperimentConfig>(`/api/repositories/${repositoryId}/experiment`, { method: "POST", body: JSON.stringify({ name, participantId }) }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) })
 };

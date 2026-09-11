@@ -1,9 +1,13 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree } from "../coursetree/build.js";
+import { refineCourseMap } from "../coursetree/llm-refine.js";
+import { createLightLlmProvider, createTeachingProvider } from "../llm/provider.js";
+import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { collectDecisionUnits } from "../decision/evidence.js";
 import { buildImplementationUnits } from "../implementation/units.js";
@@ -15,6 +19,7 @@ import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
+import { Journal } from "../store/journal.js";
 
 export interface ImportedRepository {
   path: string;
@@ -95,6 +100,20 @@ export class ImportService extends EventEmitter {
     }));
     let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, decisions, implementations: verifiedImplementations });
     course = attachQuality(course, quality);
+    // 课程地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
+    // 轻任务走轻量档（TUTOR_LIGHT_*），未配置回落主力档
+    const mapProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : (createLightLlmProvider() ?? createTeachingProvider());
+    if (mapProvider) {
+      progress("building_course", 85, "正在用 LLM 完善课程地图命名与摘要");
+      const refinement = await refineCourseMap(course, mapProvider);
+      course = refinement.course;
+      if (refinement.usage) new Journal(repositoryPath, index.repositoryId).append("token_usage", {
+        input_tokens: refinement.usage.inputTokens,
+        output_tokens: refinement.usage.outputTokens,
+        provider: mapProvider.modelVersion,
+        scene: "course_map"
+      });
+    }
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),
@@ -141,10 +160,54 @@ export class ImportService extends EventEmitter {
 }
 
 function validateRepositoryPath(inputPath: string): string {
-  if (!inputPath || typeof inputPath !== "string") throw new Error("请提供待学习仓库的绝对路径");
-  const path = realpathSync(inputPath);
-  if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error("导入路径必须是可访问的目录");
+  if (!inputPath || typeof inputPath !== "string" || !inputPath.trim()) throw new Error("请提供待学习仓库的绝对路径");
+  const raw = normalizeInput(inputPath);
+  if (!raw) throw new Error("请提供待学习仓库的绝对路径");
+  const expanded = expandHome(raw);
+  if (!isAbsolute(expanded)) {
+    throw new Error(`请提供绝对路径（或 ~/ 开头）："${raw}" 是相对路径，引擎无法确定你指的是哪个目录`);
+  }
+  let path: string;
+  try {
+    path = realpathSync(expanded);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error(`路径不存在：${expanded}`);
+    if (code === "EACCES") throw new Error(`路径无法访问（权限不足）：${expanded}`);
+    if (code === "ELOOP") throw new Error(`路径包含循环符号链接，无法解析：${expanded}`);
+    if (code === "ENOTDIR") throw new Error(`路径中有一段不是目录：${expanded}`);
+    throw new Error(`无法解析路径 ${expanded}：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!statSync(path).isDirectory()) throw new Error(`导入路径必须是目录，收到的是文件：${path}`);
   return path;
+}
+
+/**
+ * 归一化用户粘贴的路径：
+ * - 去掉首尾空白（含全角空格）
+ * - 去掉成对包裹的引号 / 反引号（从终端复制 `cd "~/my repo"` 时常见）
+ * - 去掉 `file://` 前缀（从浏览器地址栏拖拽 / 复制时常见）
+ */
+function normalizeInput(raw: string): string {
+  let value = raw.replace(/^[\s\u3000]+|[\s\u3000]+$/g, "");
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'") || (first === "`" && last === "`")) {
+      value = value.slice(1, -1).trim();
+    }
+  }
+  if (value.startsWith("file://")) {
+    try { value = decodeURIComponent(value.slice("file://".length)); } catch { value = value.slice("file://".length); }
+  }
+  return value;
+}
+
+/** 展开 `~` 与 `~/...` 为用户 home 目录；其他形式原样返回，交给 isAbsolute 校验。 */
+function expandHome(input: string): string {
+  if (input === "~") return homedir();
+  if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+  return input;
 }
 
 /** Exercise cache versioning follows source content, not an import timestamp. */

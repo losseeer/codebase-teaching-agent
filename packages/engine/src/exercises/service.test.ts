@@ -21,16 +21,16 @@ afterEach(() => {
 });
 
 describe("M2.1 exercise service", () => {
-  it("reuses a cached exercise until its content version changes", () => {
+  it("reuses a cached exercise until its content version changes", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
-    const first = service.next(repository, { kind: "output_prediction" });
-    const second = service.next(repository, { kind: "output_prediction" });
+    const first = await service.next(repository, { kind: "output_prediction" });
+    const second = await service.next(repository, { kind: "output_prediction" });
     expect(second.id).toBe(first.id);
     expect(second.createdAt).toBe(first.createdAt);
 
     const changedVersion = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
-    const regenerated = service.next(changedVersion, { kind: "output_prediction" });
+    const regenerated = await service.next(changedVersion, { kind: "output_prediction" });
     expect(regenerated.id).not.toBe(first.id);
     expect(regenerated.contentVersion).toBe("content-v2");
   });
@@ -38,16 +38,16 @@ describe("M2.1 exercise service", () => {
   it("executes a bounded output oracle and grades exact dependency sets", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
-    const output = service.next(repository, { kind: "output_prediction" });
+    const output = await service.next(repository, { kind: "output_prediction" });
     expect(output.gradingMode).toBe("execution");
     const outputResult = await service.answer(repository, output.id, { text: "practice" });
     expect(outputResult.passed).toBe(true);
     const database = new TutorDatabase(repository.path);
     database.saveReviewSchedule(repository.index.repositoryId, { ...outputResult.review, dueAt: "2020-01-01T00:00:00.000Z" });
     database.close();
-    expect(service.next(repository).id).toBe(output.id);
+    expect((await service.next(repository)).id).toBe(output.id);
 
-    const localization = service.next(repository, { kind: "change_localization" });
+    const localization = await service.next(repository, { kind: "change_localization" });
     const expectedPath = localization.anchors[0]?.path;
     expect(expectedPath).toBeTruthy();
     expect((await service.answer(repository, localization.id, { selectedIds: [expectedPath!] })).passed).toBe(true);
@@ -59,11 +59,11 @@ describe("M2.1 exercise service", () => {
   it("generates impact and evidence-defense questions with automatic grading", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
-    const impact = service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    const impact = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
     const passedImpact = await service.answer(repository, impact.id, { selectedIds: ["src/config.js", "src/main.js"] });
     expect(passedImpact.passed).toBe(true);
 
-    const defense = service.next(repository, { kind: "decision_defense" });
+    const defense = await service.next(repository, { kind: "decision_defense" });
     const evidence = defense.options?.[0];
     expect(evidence).toBeTruthy();
     const defenseResult = await service.answer(repository, defense.id, { selectedIds: [evidence!.id], rationale: `这是直接证据：${evidence!.label}` });
@@ -82,7 +82,7 @@ describe("M2.1 exercise service", () => {
       index: { ...repository.index, files },
       analysis: { ...repository.analysis, graph: { ...repository.analysis.graph, imports } }
     };
-    const exercise = new ExerciseService().next(largeRepository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    const exercise = await new ExerciseService().next(largeRepository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
     expect(exercise.prompt).toContain("第一批");
     expect(exercise.options).toHaveLength(8);
     const result = await new ExerciseService().answer(largeRepository, exercise.id, { selectedIds: ["src/config.js", "src/consumer-0.ts", "src/consumer-1.ts", "src/consumer-10.ts"] });
