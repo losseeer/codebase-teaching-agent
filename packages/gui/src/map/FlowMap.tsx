@@ -3,7 +3,7 @@ import type { CourseNode } from "@codebase-tutor/shared";
 import { kindLabel } from "../views/CoursePage";
 
 /**
-  课程地图的「运行路径」画布（对齐 prototype `.map-canvas` / `.map-inner` / `.flow-node`）。
+  代码地图的「运行路径」画布（对齐 prototype `.map-canvas` / `.map-inner` / `.flow-node`）。
   - 真实课程树按深度分层：列 = 深度，行 = 同层 DFS 出现顺序；各列垂直居中
   - 节点是绝对定位的 `.flow-node`（`node-kind` + 标题 + 摘要），连线是直角 SVG path
   - 画布自身滚动（`overflow: auto`），页面不产生滚动条 —— 见开发计划 §1.5

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompanionSuggestion, CostSummary, CourseNode, CourseTree, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CompanionSuggestion, CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 import { firstTeachNode } from "../views/helpers";
 
@@ -40,6 +40,9 @@ function loadInitialScope(): Scope {
   return "teaching";
 }
 
+/** 引擎启发式回落 provider 名：与 engine harness 的 local fallback 标识一致。 */
+export const HEURISTIC_SOURCE = "local-heuristic-v1";
+
 export interface TeachingSessionApi {
   scope: Scope;
   setScope: (next: Scope) => void;
@@ -59,7 +62,7 @@ export interface TeachingSessionApi {
   selected: CourseNode | null;
   setSelected: (node: CourseNode) => void;
 
-  /** 课程地图作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
+  /** 代码地图作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
   mapNode: CourseNode | null;
   setMapNode: (node: CourseNode | null) => void;
   mapFile: string;
@@ -80,6 +83,14 @@ export interface TeachingSessionApi {
   faded: FadedState | null;
   error: string;
   send: () => Promise<void>;
+  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
+  sendMap: () => Promise<void>;
+  sendPractice: () => Promise<void>;
+  /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复） */
+  replySource: Record<Scope, string>;
+  /** 当前练习对象（练习评估作用域的对话上下文；由 PracticePage 写入） */
+  practiceExercise: Exercise | null;
+  setPracticeExercise: (exercise: Exercise | null) => void;
 
   /** companion 推送（teaching 作用域 thread 渲染） */
   suggestions: CompanionSuggestion[];
@@ -132,7 +143,7 @@ const [selected, setSelected] = useState<CourseNode | null>(null);
 // 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
-// 课程地图 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
+// 代码地图 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
 const [mapNode, setMapNode] = useState<CourseNode | null>(null);
 const [mapFile, setMapFile] = useState("");
 const [practiceUnit, setPracticeUnit] = useState("");
@@ -171,6 +182,12 @@ useEffect(() => {
   const [sending, setSending] = useState(false);
   const [liveAnswer, setLiveAnswer] = useState("");
   const [error, setError] = useState("");
+  // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
+  const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
+  // 练习评估作用域的对话上下文（由 PracticePage 在生成练习时写入）
+  const [practiceExercise, setPracticeExerciseState] = useState<Exercise | null>(null);
+  const setPracticeExercise = (exercise: Exercise | null): void => setPracticeExerciseState(exercise);
+  useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
   const setSettings = (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)): void => {
     setSettingsState((prev) => (typeof next === "function" ? (next as (prev: TutorSettings) => TutorSettings)(prev) : next));
   };
@@ -229,6 +246,7 @@ useEffect(() => {
       setSession(reply.session);
       setSettingsState(reply.session.settings);
       setCost(reply.cost);
+      setReplySource((prev) => ({ ...prev, teaching: reply.provider ?? "" }));
       setLiveAnswer("");
       pushMessage("teaching", "agent", escapeHtml(reply.message.content));
     } catch (reason) {
@@ -238,6 +256,32 @@ useEffect(() => {
       setSending(false);
     }
   };
+
+  // 作用域对话（宏观设计 / 练习评估）：单轮 LLM，不走教学状态机
+  const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
+    if (!content.trim() || !repositoryId) return;
+    if (scope === "practice" && !practiceExercise) {
+      pushMessage("practice", "agent", "<em>先在练习页生成一道练习，再在这里追问。</em>");
+      return;
+    }
+    const message = content;
+    pushMessage(scope, "user", escapeHtml(message));
+    setSending(true); setError(""); setContent("");
+    try {
+      const reply = scope === "map"
+        ? await api.mapChat(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined })
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id });
+      pushMessage(scope, "agent", escapeHtml(reply.reply));
+      setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "发送失败");
+      pushMessage(scope, "agent", `<em style="color:#ae3f36">发送失败：${escapeHtml(reason instanceof Error ? reason.message : String(reason))}</em>`);
+    } finally {
+      setSending(false);
+    }
+  };
+  const sendMap = (): Promise<void> => sendScoped("map");
+  const sendPractice = (): Promise<void> => sendScoped("practice");
 
   // Companion suggestions（teaching 作用域展示）
   const [suggestions, setSuggestions] = useState<CompanionSuggestion[]>([]);
@@ -262,7 +306,8 @@ useEffect(() => {
     mapNode, setMapNode, mapFile, setMapFile,
     practiceUnit, setPracticeUnit,
     session, settings, setSettings, cost,
-    content, setContent, sending, liveAnswer, learner, faded, error, send,
+    content, setContent, sending, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
+    practiceExercise, setPracticeExercise,
     suggestions, actOnSuggestion, refreshSuggestions,
   };
 }

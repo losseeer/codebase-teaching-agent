@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, ListChecks, RefreshCw, Send, X } from "lucide-react";
 import { companionKindLabel } from "../views/helpers";
-import { SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi } from "./useTeachingSession";
+import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi } from "./useTeachingSession";
 
 /**
   持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
@@ -64,6 +64,11 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
 
       <div className="thread-meta">
         <span>作用域 · <b>{SCOPE_LABEL[scope]}</b></span>
+        {t.replySource[scope] ? (
+          <span title={t.replySource[scope] === HEURISTIC_SOURCE ? "本次回复由本地启发式模板生成，LLM 未参与（调用失败或未配置）" : `本次回复由 ${t.replySource[scope]} 生成`}>
+            来源 · <b>{t.replySource[scope] === HEURISTIC_SOURCE ? "本地启发式" : "LLM"}</b>
+          </span>
+        ) : null}
         <span>{items.length} 条 · 本作用域独立记录</span>
       </div>
 
@@ -152,15 +157,15 @@ function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: s
   }
   if (scope === "map") {
     return {
-      placeholder: "讨论这个项目的宏观设计…（记录为草稿笔记）",
+      placeholder: "讨论这个项目的宏观设计…",
       canSend: !t.sending && t.content.trim().length > 0,
-      onSend: async () => { t.pushMessage("map", "user", escapeHtml(t.content.trim())); t.setContent(""); },
+      onSend: t.sendMap,
     };
   }
   return {
-    placeholder: "对这道练习追问…（记录为草稿笔记）",
+    placeholder: "对这道练习追问…",
     canSend: !t.sending && t.content.trim().length > 0,
-    onSend: async () => { t.pushMessage("practice", "user", escapeHtml(t.content.trim())); t.setContent(""); },
+    onSend: t.sendPractice,
   };
 }
 

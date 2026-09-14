@@ -7,7 +7,7 @@ import { exerciseKindLabel } from "./helpers";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { showToast } from "../modules/toast";
-import { classifyModule, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule } from "../modules/store";
+import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/store";
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
@@ -21,12 +21,24 @@ import { SourceView, type SourcePayload } from "../source/SourceView";
 
 function gradingLabel(mode: ExerciseGradingMode): string {
   if (mode === "execution") return "受限执行验证";
+  if (mode === "rubric") return "rubric 细则判分（LLM 比对参考答案）";
   return "集合精确匹配";
 }
 
 function unitName(unitId: string): string {
+  // LLM 出题单元 id 形如 llm:<tagId>:<nonce>，展示为主题练习序号
+  if (unitId.startsWith("llm:")) {
+    const nonce = Number(unitId.split(":")[2] ?? 0);
+    return `主题练习 #${Number.isFinite(nonce) ? nonce + 1 : unitId}`;
+  }
   const tail = unitId.split(":").pop() ?? unitId;
   return tail.replace(/^[a-z]+-/, "") || tail;
+}
+
+/** LLM 出题单元的 variantNonce（换一题 = 旧 nonce + 1）。 */
+function llmNonce(unitId: string): number {
+  const nonce = Number(unitId.split(":")[2] ?? 0);
+  return Number.isFinite(nonce) ? nonce : 0;
 }
 
 function escapeHtml(input: string): string {
@@ -43,11 +55,11 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [source, setSource] = useState<SourcePayload | null>(null);
-  const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
+  const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
-  useEffect(() => { saveModules(modules); }, [modules]);
+  useEffect(() => { savePracticeModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("practice", activeModule); }, [activeModule]);
 
   const refreshSummary = (): void => {
@@ -63,18 +75,26 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
     previousModule.current = activeModule;
   }, [activeModule, modules]);
 
-  // 题型统一走引擎的自适应推荐（context-line 的题型下拉已按用户要求移除；
-  // 针对具体单元的重练由左栏练习卡片 targetUnitId 承担；出题范围限定在当前激活的知识模块内）
-  const generate = async (targetUnitId?: string): Promise<void> => {
+  // 出题分派：活动 chip = 程序理解题 → 规则出题族；自定义主题 chip → LLM 出题族（family 对用户不可见）。
+  // 「换一题」对 LLM 题走 variantNonce+1（出新题，旧题保留）；对规则题按 targetUnitId 重出。
+  const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
+    const isLlmFamily = activeModule !== COMPREHENSION_MODULE_ID;
     try {
-      const next = await api.createExercise(repositoryId, {
-        moduleId: activeModule,
-        moduleIds: modules.map((item) => item.id),
-        ...(targetUnitId ? { targetUnitId } : {})
-      });
+      const next = await api.createExercise(repositoryId, isLlmFamily
+        ? {
+            family: "llm",
+            tag: modules.find((item) => item.id === activeModule)?.label ?? activeModule,
+            tagId: activeModule,
+            ...(variantNonce !== undefined ? { variantNonce } : {})
+          }
+        : {
+            family: "comprehension",
+            ...(targetUnitId ? { targetUnitId } : {})
+          });
       setExercise(next);
       t.setPracticeUnit(next.title);
+      t.setPracticeExercise(next);
       const anchor = next.anchors[0];
       t.pushDivider("practice", `${exerciseKindLabel(next.kind)} · ${next.title}${anchor ? ` → ${anchor.path}:${anchor.line}` : ""}`);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
@@ -98,7 +118,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
     if (!exercise) return;
     setLoading(true); setError("");
     try {
-      const answer = exercise.inputMode === "text" ? { text } : { selectedIds };
+      const answer = exercise.inputMode === "multi_select" ? { selectedIds } : { text };
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
       setResult(next);
       refreshSummary();
@@ -110,8 +130,9 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
     }
   };
 
+  const isComprehensionChip = activeModule === COMPREHENSION_MODULE_ID;
   const moduleMastery = (summary?.mastery ?? [])
-    .filter((record) => classifyModule(record.unitId, modules) === activeModule)
+    .filter((record) => isComprehensionChip ? !record.unitId.startsWith("llm:") : record.unitId.startsWith(`llm:${activeModule}:`))
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
   const anchor = exercise?.anchors[0];
@@ -136,16 +157,21 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
             onSelectModule={setActiveModule}
             onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
           >
-            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 模块可在「＋ 配置」里自定义</p>
+            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 主题可在「＋ 配置」里自定义</p>
             <ModuleSectionLabel label="模块内的练习" note={`${moduleMastery.length} 项`} />
             {moduleMastery.length ? (
               <div className="exercise-list">
                 {moduleMastery.map((record) => (
-                  <ExerciseCard key={record.unitId} record={record} selected={exercise?.targetUnitId === record.unitId} onPick={() => void generate(record.unitId)} />
+                  <ExerciseCard
+                    key={record.unitId}
+                    record={record}
+                    selected={exercise?.targetUnitId === record.unitId}
+                    onPick={() => void(record.unitId.startsWith("llm:") ? generate(undefined, llmNonce(record.unitId)) : generate(record.unitId))}
+                  />
                 ))}
               </div>
             ) : (
-              <p className="entry-empty">该模块下暂时没有练习记录。用上方「生成练习」开始一次针对当前仓库的复习。</p>
+              <p className="entry-empty">{isComprehensionChip ? "该模块下暂时没有练习记录。用上方「生成练习」开始一次针对当前仓库的复习。" : "该主题下暂时没有练习记录。点「生成练习」，LLM 会围绕这个主题出题。"}</p>
             )}
           </ModulesPane>
         </div>
@@ -186,14 +212,14 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
                     onChange={(event) => setText(event.target.value)}
                     rows={4}
                     aria-label="练习答案"
-                    placeholder="只填写你预测的返回值"
+                    placeholder={exercise.gradingMode === "rubric" ? "用自己的话写出你的分析" : "只填写你预测的返回值"}
                   />
                 ) : null}
                 <div className="answer-actions">
                   <button className="primary" onClick={() => void submit()} disabled={!canSubmit}>
                     {loading ? <RefreshCw className="spin" size={15} /> : <CheckCircle2 size={15} />}提交回答
                   </button>
-                  <button className="secondary" onClick={() => void generate(exercise.targetUnitId)} disabled={loading}>换一题</button>
+                  <button className="secondary" onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))} disabled={loading}>换一题</button>
                 </div>
                 <div className={`feedback${result ? (result.passed ? " passed" : " needs-work") : ""}`}>
                   <strong>{result ? "反馈状态 · 已记录" : "反馈状态 · 尚未提交"}</strong>

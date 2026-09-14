@@ -223,11 +223,18 @@ export interface CostSummary {
   mode: "normal" | "degraded";
 }
 
-export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis";
-/** 全部受支持的题型（server 校验 / 缓存命中校验共用这一份）。 */
+export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis" | "llm_rubric";
+/** 规则出题族题型：题面/选项/标准答案全部由静态分析与受限执行产出（server 校验 / 缓存命中校验共用这一份）。 */
 export const EXERCISE_KINDS: ExerciseKind[] = ["output_prediction", "change_localization", "impact_analysis"];
-export type ExerciseInputMode = "text" | "multi_select";
-export type ExerciseGradingMode = "execution" | "set_match";
+/** 练习题族：comprehension=程序理解题（规则出题、确定性判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
+export type ExerciseFamily = "comprehension" | "llm";
+export type ExerciseInputMode = "text" | "multi_select" | "open";
+export type ExerciseGradingMode = "execution" | "set_match" | "rubric";
+/** rubric 判分的评分细则维度（LLM 出题时一并产出，存于引擎缓存，不下发 GUI）。 */
+export interface RubricCriterion {
+  dimension: string;
+  description: string;
+}
 export type MasteryLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
 export interface ExerciseOption {
@@ -251,6 +258,10 @@ export interface Exercise {
   inputMode: ExerciseInputMode;
   gradingMode: ExerciseGradingMode;
   options?: ExerciseOption[];
+  /** 练习题族；旧缓存记录无此字段视为 comprehension。 */
+  family?: ExerciseFamily;
+  /** llm 族：用户配置的出题主题标签（题面语义提示）。 */
+  tag?: string;
   createdAt: string;
 }
 
@@ -293,6 +304,8 @@ export interface ExerciseResult {
   automatic: boolean;
   gradingMode: ExerciseGradingMode;
   feedback: string;
+  /** 反馈来源：rule=规则判分原文；llm_polished=LLM 润色的解释；llm_judge=rubric 判分产出。 */
+  feedbackSource?: "rule" | "llm_polished" | "llm_judge";
   matchedIds?: string[];
   missingIds?: string[];
   unexpectedIds?: string[];
@@ -421,6 +434,7 @@ export type JournalEventType =
   | "teach_moment"
   | "unassisted_test"
   | "action_veto"
+  | "exercise_declined"
   | "token_usage";
 
 export interface JournalEvent {

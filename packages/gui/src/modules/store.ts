@@ -15,6 +15,8 @@ export interface KnowledgeModule {
   id: string;
   label: string;
   hint: string;
+  /** 用户自建模块（practice 侧 = LLM 出题主题标签；可删）。缺省模块无此字段。 */
+  custom?: boolean;
 }
 
 export type ModuleWhere = "teaching" | "practice";
@@ -23,10 +25,23 @@ export const DEFAULT_MODULES: KnowledgeModule[] = [
   { id: "network", label: "计算机网络", hint: "HTTP 入口、超时、重试与幂等" },
   { id: "os", label: "操作系统", hint: "进程内状态、IO 边界与并发" },
   { id: "lang", label: "语言特性", hint: "类型收窄、异步编排与错误处理" },
-  { id: "other", label: "其他计算机知识", hint: "分层架构、存储与一致性" },
+  { id: "other", label: "其他计算机知识", hint: "分层架构、存储与一致性" }
 ];
 
+/**
+  practice 侧缺省只有一个固定模块「程序理解题」（规则出题三题型，不可删除）；
+  用户自建模块 = LLM 出题主题标签（family 对用户不可见，出题时分派在引擎侧完成）。
+  与 teaching 的模块列表分开存储，互不影响。
+  */
+export const PRACTICE_DEFAULT_MODULES: KnowledgeModule[] = [
+  { id: "comprehension", label: "程序理解题", hint: "规则出题 · 预测输出 / 修改定位 / 影响分析，判分确定" }
+];
+
+/** 程序理解题固定模块 id（practice 出题分派与删除保护的判据）。 */
+export const COMPREHENSION_MODULE_ID = "comprehension";
+
 const MODULES_KEY = "codebase-tutor.modules";
+const PRACTICE_MODULES_KEY = "codebase-tutor.practice-modules";
 const ACTIVE_KEY_PREFIX = "codebase-tutor.module.";
 
 export function loadModules(): KnowledgeModule[] {
@@ -43,6 +58,22 @@ export function loadModules(): KnowledgeModule[] {
 
 export function saveModules(modules: KnowledgeModule[]): void {
   try { localStorage.setItem(MODULES_KEY, JSON.stringify(modules)); } catch { /* 持久化失败不回退 */ }
+}
+
+export function loadPracticeModules(): KnowledgeModule[] {
+  try {
+    const raw = localStorage.getItem(PRACTICE_MODULES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as KnowledgeModule[];
+      const custom = Array.isArray(parsed) ? parsed.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
+      return [...PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })), ...custom];
+    }
+  } catch { /* 读取失败回落缺省 */ }
+  return PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item }));
+}
+
+export function savePracticeModules(modules: KnowledgeModule[]): void {
+  try { localStorage.setItem(PRACTICE_MODULES_KEY, JSON.stringify(modules.filter((item) => item.custom === true))); } catch { /* 持久化失败不回退 */ }
 }
 
 export function loadActiveModule(where: ModuleWhere, modules: KnowledgeModule[]): string {

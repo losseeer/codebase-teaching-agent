@@ -9,7 +9,7 @@ import { FlowMap } from "../map/FlowMap";
 import { showToast } from "../modules/toast";
 
 /**
-  课程地图工作区（对齐 prototype `.map-workspace`，两栏）：
+  代码地图工作区（对齐 prototype `.map-workspace`，两栏）：
   - 左 「项目目录」：真实 `fileTree` 按顶层目录分组（目录给语义标签 + 文件行数 + 「显示其余 N 个文件」）
   - 右 「运行路径」画布（`FlowMap`）：课程树分层流程图，画布内部滚动，页面无滚动条
   - 节点详情作为画布内的抽屉（触发后才覆盖画布右侧），不再是独立第三栏；源码抽屉已移除（v0.5.3）

@@ -198,7 +198,7 @@ button.entry-item:hover { background: #eef6ef; }
 .practice-layout > div + div { border-left: 1px solid #d9e5dd; padding-left: 22px; }
 .practice-layout .practice-toolbar { margin-top: 22px; }
 
-/* ---- v0.4 课程地图：流程图画布（可拖拽平移 + 滚轮缩放）---- */
+/* ---- v0.4 代码地图：流程图画布（可拖拽平移 + 滚轮缩放）---- */
 .course-map-detail { display: grid; grid-template-rows: minmax(300px, 46%) minmax(0, 1fr); min-width: 0; min-height: 0; }
 .course-workspace { align-items: stretch; }
 .course-map-detail .lesson-detail { overflow: auto; }
@@ -247,7 +247,7 @@ button.entry-item:hover { background: #eef6ef; }
 .teaching-workspace > div, .practice-workspace > div { min-width: 0; min-height: 0; display: flex; }
 .teaching-workspace > div > .pane, .practice-workspace > div > .pane { flex: 1; min-height: 0; }
 
-/* ==== v0.5 课程地图（prototype `.map-workspace` / `.tree` / `.map-canvas` / `.flow-*`）==== */
+/* ==== v0.5 代码地图（prototype `.map-workspace` / `.tree` / `.map-canvas` / `.flow-*`）==== */
 .map-workspace { grid-template-columns: 242px minmax(0, 1fr); }
 .map-workspace > .pane { display: flex; flex-direction: column; overflow: hidden; }
 .map-workspace .tree { flex: 1; min-height: 0; padding: 13px 9px; overflow: auto; background: #fbfdfb; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
@@ -346,7 +346,11 @@ button.entry-item:hover { background: #eef6ef; }
 .practice-empty p { max-width: 300px; margin: 12px 0; }
 
 @media (max-width: 1180px) { .shell { grid-template-columns: 224px minmax(0, 1fr) 308px; } .agent-rail { font-size: 11px; } .teaching-workspace { grid-template-columns: 210px minmax(0, 1fr); } .practice-layout { grid-template-columns: 214px minmax(0, 1fr); } }
-@media (max-width: 960px) {
+/* 中间档（DevTools 停靠等场景）：三栏全保留，仅收窄左右栏 */
+@media (max-width: 960px) { .shell { grid-template-columns: 184px minmax(0, 1fr) 288px; } .agent-rail { font-size: 11px; } }
+/* 折叠为单列（隐藏 Agent 侧栏）的阈值定在 720px 而非 960px：
+   DevTools 停靠会把视口压到 960px 以下，若在此隐藏 .agent-rail，桌面调试时对话栏会消失。 */
+@media (max-width: 720px) {
   .shell { grid-template-columns: minmax(0, 1fr); }.agent-rail { display: none; }.sidebar { min-width: 0; min-height: auto; padding: 12px 16px; position: sticky; top: 0; z-index: 2; }.brand { min-width: 0; padding: 0 0 10px; }.sidebar nav { min-width: 0; max-width: 100%; display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: thin; }.nav-item { flex: 1 0 126px; justify-content: center; font-size: 12px; padding: 8px 4px; }.sidebar-bottom { display: none; }.course-workspace { grid-template-columns: 210px minmax(0, 1fr); }.hotspots { display: none; }.tutor-layout { grid-template-columns: 190px minmax(0, 1fr); }.practice-workspace { grid-template-columns: minmax(0, 1fr) 235px; }
   .teaching-workspace { grid-template-columns: 1fr; }
   .teaching-workspace > div + div { border-left: 0; border-top: 1px solid #d9e5dd; }

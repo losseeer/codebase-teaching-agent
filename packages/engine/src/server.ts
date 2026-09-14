@@ -6,7 +6,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, ExerciseAnswer, ExerciseKind, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { FastifyReply } from "fastify";
 import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
@@ -18,11 +19,16 @@ import { assembleContext } from "./harness/context.js";
 import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
 import { ImportService } from "./importer/service.js";
 import { isWithin } from "./lib.js";
+import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "./policy/policy.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, readJournal } from "./store/journal.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { createLightLlmProvider, createTeachingProvider, teachingProviderStatus } from "./llm/provider.js";
+import { createLightLlmProvider, createTeachingProvider, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { mapChat, practiceChat } from "./scopechat/service.js";
+
+// .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
+loadDotEnv();
 
 /** engine version: 单源 = packages/engine/package.json. 读不到时回落到 0.0.0. */
 const engineVersion: string = (() => {
@@ -55,7 +61,7 @@ const companion = new CompanionService();
 tboot("CompanionService");
 
 const teachingProvider = createTeachingProvider();
-// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 课程地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档
+// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 代码地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档
 const lightLlmProvider = createLightLlmProvider() ?? teachingProvider;
 // 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
 const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
@@ -175,15 +181,26 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/l
     : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[]; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   const kind = request.body?.kind;
+  const family = request.body?.family === "llm" ? "llm" as const : "comprehension" as const;
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "LLM 出题需要提供主题标签" });
   if (kind && !EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   const budgetExceeded = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
   try {
-    return reply.code(201).send(await exercises.next(repository, { kind, targetUnitId: request.body?.targetUnitId, moduleId: request.body?.moduleId, moduleIds: request.body?.moduleIds }, budgetExceeded ? undefined : lightLlmProvider));
+    return reply.code(201).send(await exercises.next(repository, {
+      kind,
+      targetUnitId: request.body?.targetUnitId,
+      moduleId: request.body?.moduleId,
+      moduleIds: request.body?.moduleIds,
+      family,
+      tag: request.body?.tag,
+      tagId: request.body?.tagId,
+      variantNonce: request.body?.variantNonce
+    }, budgetExceeded ? undefined : lightLlmProvider));
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成练习" });
   }
@@ -211,10 +228,69 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
+  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
   try {
-    return await exercises.answer(repository, request.params.exerciseId, request.body ?? {});
+    return await exercises.answer(repository, request.params.exerciseId, request.body ?? {}, provider);
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法判分" });
+  }
+});
+
+// 作用域对话（宏观设计 / 练习评估）：单轮 LLM 开放讨论，无教学状态机；预算触顶或未配置 LLM 时显式 422（不静默回落）
+function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string): LlmProvider | undefined {
+  const monthlyBudget = repositorySettings(repositoryPath, repositoryId).monthlyBudgetUsd;
+  if (summarizeCost(repositoryPath, monthlyBudget).mode === "degraded") {
+    void reply.code(422).send({ error: "本月预算已触顶，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
+    return undefined;
+  }
+  if (!teachingProvider) {
+    void reply.code(422).send({ error: "尚未配置 LLM（TUTOR_TEACHING_PROVIDER/MODEL），此作用域的 LLM 对话不可用。" });
+    return undefined;
+  }
+  return teachingProvider;
+}
+
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const content = request.body?.content?.trim();
+  if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
+  const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
+  if (!provider) return reply;
+  const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
+  try {
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider });
+    if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "map_chat"
+    });
+    return { reply: result.reply, provider: result.provider };
+  } catch (error) {
+    return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
+  }
+});
+
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const content = request.body?.content?.trim();
+  if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
+  if (!request.body?.exerciseId) return reply.code(400).send({ error: "缺少练习上下文；请先在练习页生成一道练习。" });
+  const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
+  if (!provider) return reply;
+  const database = new TutorDatabase(repository.path);
+  try {
+    const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
+    if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider });
+    if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "practice_chat"
+    });
+    return { reply: result.reply, provider: result.provider };
+  } catch (error) {
+    return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
+  } finally {
+    database.close();
   }
 });
 
@@ -343,7 +419,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   if (cost.mode === "degraded") journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
   for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });
   broadcast({ type: "session.complete", payload: { sessionId: session.id, message: outcome.assistant, stage: outcome.session.stage, cost, tokenEventId: tokenEvent.id } });
-  return { session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost };
+  return { session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" };
 });
 
 function flatten(root: CourseNode): CourseNode[] { return [root, ...root.children.flatMap(flatten)]; }
