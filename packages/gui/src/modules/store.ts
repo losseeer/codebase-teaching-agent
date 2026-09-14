@@ -1,3 +1,4 @@
+import { classifyModuleId } from "@codebase-tutor/shared";
 import type { CourseNode } from "@codebase-tutor/shared";
 
 /**
@@ -56,18 +57,9 @@ export function saveActiveModule(where: ModuleWhere, id: string): void {
   try { localStorage.setItem(ACTIVE_KEY_PREFIX + where, id); } catch { /* ignore */ }
 }
 
-const KEYWORDS: Record<string, RegExp> = {
-  network: /(router|route|http|api|请求|路由|网关|超时|重试|幂等|网络|接口|controller|server|client|endpoint|中间件)/i,
-  os: /(cache|缓存|并发|concurren|thread|线程|进程|队列|queue|锁|lock|内存|memory|调度|io\b|buffer|池)/i,
-  lang: /(type|类型|async|异步|await|error|错误|异常|exception|util|helper|parse|解析|闭包|回调|函数式|泛型)/i,
-};
-
-/** 关键词分类：返回命中的第一个模块 id；都不命中归「其他计算机知识」。 */
+/** 关键词分类：返回命中的第一个模块 id；都不命中归「其他计算机知识」。关键词表在 shared（与 engine 练习出题过滤共用）。 */
 export function classifyModule(text: string, modules: KnowledgeModule[]): string {
-  for (const [id, pattern] of Object.entries(KEYWORDS)) {
-    if (pattern.test(text) && modules.some((item) => item.id === id)) return id;
-  }
-  return "other";
+  return classifyModuleId(text, modules.map((item) => item.id));
 }
 
 export interface ModuleEntry {

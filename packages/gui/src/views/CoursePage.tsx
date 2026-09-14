@@ -34,7 +34,6 @@ function groupLabel(name: string): string {
 export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   if (kind === "workflow") return "执行路径";
   if (kind === "module") return "模块";
-  if (kind === "decision") return "选型";
   if (kind === "implementation") return "实现";
   return "概览";
 }
@@ -62,7 +61,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
     api.getIndex(repositoryId).then((next) => { if (current) setIndex(next); })
       .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法加载仓库索引"); });
     return () => { current = false; };
-  }, [repositoryId]);
+  }, [repositoryId, t.dataVersion]);
 
   const selected = t.mapNode;
   useEffect(() => {

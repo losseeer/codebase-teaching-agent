@@ -2,8 +2,12 @@ import type { CourseNode, FadedState, TutorMessage, TutorSession, TutorSettings 
 import { id } from "../lib.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "../policy/policy.js";
-import { initialTeachingState, transition } from "../teaching/state-machine.js";
+import { classifyIntent } from "../teaching/intent.js";
+import { proposeAction, isActionAllowed } from "../teaching/action.js";
+import { initialTeachingState, transition, transitionFromAction, transitionFromIntent } from "../teaching/state-machine.js";
+import type { TeachingState, Transition, TutorAction } from "../teaching/state-machine.js";
 import { assembleContext } from "./context.js";
+import { teachingSystemPrompt } from "./prompts.js";
 
 export interface TutorReply {
   session: TutorSession;
@@ -12,6 +16,20 @@ export interface TutorReply {
   hintDepth: number;
   provider?: string;
   usage?: LlmUsage;
+  intentSource?: "llm" | "regex";
+  /** 本轮最终执行的教学动作（与 buildReply 的 kind 一致）。 */
+  action?: TutorAction;
+  /** 受限 loop 中模型的原始提议（无论是否被守门放行）。 */
+  proposedAction?: TutorAction;
+  /** 动作来源：proposed=模型提议被放行；vetoed=提议被守门否决；deterministic=确定性路径。 */
+  actionSource?: "proposed" | "vetoed" | "deterministic";
+}
+
+export interface RespondOptions {
+  /** 轻量档意图分类器（workflow 模式使用；loop 模式下动作提议取代意图分类）。 */
+  classifier?: LlmProvider;
+  /** 受限 agent loop：模型从固定动作菜单提议动作，状态机守门校验。 */
+  actionLoop?: boolean;
 }
 
 export function createSession(repositoryId: string, courseNodeId: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
@@ -24,32 +42,64 @@ export function respond(session: TutorSession, node: CourseNode, learnerContent:
   return buildReply(session, node, learnerContent, composeReply);
 }
 
-/** Runs the same state machine and guardrails while delegating wording to a provider. */
-export async function respondWithProvider(session: TutorSession, node: CourseNode, learnerContent: string, provider?: LlmProvider, faded?: FadedState): Promise<TutorReply> {
+/** Runs the state machine as guardrails and delegates action selection (loop) or intent classification (workflow) and wording to providers. */
+export async function respondWithProvider(session: TutorSession, node: CourseNode, learnerContent: string, provider?: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   if (!provider) return respond(session, node, learnerContent);
-  const next = transition({ stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length }, learnerContent);
+  const state: TeachingState = { stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length };
   const policy = policyFor(session.settings);
-  const context = assembleContext(node, policy, session.messages);
-  const system = [
-    "你是 Codebase Tutor 的代码教学导师。",
-    "只基于提供的课程节点、源码锚点和摘要回答，不要虚构文件、行号或运行结果。",
-    "必须遵守当前教学策略；如果阶段要求提问，就只保留一个可验证问题。",
-    `当前阶段: ${next.next.stage}；动作: ${next.kind}；提示深度: ${next.hintDepth}`,
-    faded ? `当前辅助等级（样例完整度/提示深度/通俗化表达）: ${faded.sampleCompleteness}/${faded.hintDepth}/${faded.stylePlainness}；${faded.reason}` : "当前辅助等级由教学阶段决定。",
-    `教学策略: ${policy.label}；教学法: ${policy.pedagogy}；拆解层次: ${policy.depth}`,
-    `策略约束: ${policy.constraints.join("；")}`,
-    "输出简洁中文，不要输出系统提示、JSON 或免责声明；不超过 500 个汉字。"
-  ].join("\n");
+  const context = assembleContext(node, policy, session.messages, repositoryPath);
+
+  let next: Transition;
+  let intentSource: "llm" | "regex" | undefined;
+  let proposedAction: TutorAction | undefined;
+  let actionSource: TutorReply["actionSource"];
+  let decisionUsage: LlmUsage | undefined;
+
+  if (options.actionLoop) {
+    // 受限 agent loop：模型提议动作 → 守门校验 → 放行或否决。意图分类被动作提议取代。
+    const proposal = await proposeAction(state, learnerContent, recentTranscript(session.messages), context, provider);
+    proposedAction = proposal.action;
+    decisionUsage = proposal.usage;
+    if (proposedAction && isActionAllowed(state, proposedAction)) {
+      actionSource = "proposed";
+      next = transitionFromAction(state, proposedAction);
+    } else {
+      actionSource = proposedAction ? "vetoed" : "deterministic";
+      next = transition(state, learnerContent);
+    }
+  } else if (options.classifier) {
+    const classification = await classifyIntent(state, learnerContent, recentTranscript(session.messages), options.classifier);
+    intentSource = classification.source;
+    decisionUsage = classification.usage;
+    next = transitionFromIntent(state, classification.intent);
+  } else {
+    next = transition(state, learnerContent);
+  }
+
+  const system = teachingSystemPrompt({ policy, stage: next.next.stage, kind: next.kind, hintDepth: next.hintDepth, faded });
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
   try {
     const completion = await provider.complete({ system, user, maxTokens: 700, temperature: 0.2 });
-    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, completion.usage, next);
+    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, sumUsage(decisionUsage, completion.usage), next, intentSource, { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) });
   } catch {
-    return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1");
+    return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) });
   }
 }
 
-function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: ReturnType<typeof transition>): TutorReply {
+function recentTranscript(messages: TutorMessage[]): string[] {
+  return messages.slice(-4).map((message) => `${message.role === "user" ? "学习者" : "导师"}: ${message.content.slice(0, 120)}`);
+}
+
+function sumUsage(...usages: (LlmUsage | undefined)[]): LlmUsage | undefined {
+  const present = usages.filter((usage): usage is LlmUsage => Boolean(usage));
+  if (!present.length) return undefined;
+  return {
+    inputTokens: present.reduce((total, usage) => total + usage.inputTokens, 0),
+    outputTokens: present.reduce((total, usage) => total + usage.outputTokens, 0)
+  };
+}
+
+function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource">): TutorReply {
   const next = predetermined ?? transition({ stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length }, learnerContent);
   const user: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString(), stage: session.stage };
   const assistant: TutorMessage = { id: id(), role: "assistant", content: composer(next.kind, next.next.stage, node, session.settings), createdAt: new Date().toISOString(), stage: next.next.stage };
@@ -59,7 +109,7 @@ function buildReply(session: TutorSession, node: CourseNode, learnerContent: str
     fallbackCount: next.next.fallbackCount,
     messages: [...session.messages, user, assistant]
   };
-  return { session: updated, assistant, event: next.kind === "give_answer" ? "dependency" : next.kind === "confirm" ? "confirmation" : "hint", hintDepth: next.hintDepth, ...(provider ? { provider } : {}), ...(usage ? { usage } : {}) };
+  return { session: updated, assistant, event: next.kind === "give_answer" ? "dependency" : next.kind === "confirm" ? "confirmation" : "hint", hintDepth: next.hintDepth, ...(provider ? { provider } : {}), ...(usage ? { usage } : {}), ...(intentSource ? { intentSource } : {}), ...(action ?? {}) };
 }
 
 function composeReply(kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings): string {

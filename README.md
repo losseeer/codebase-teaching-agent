@@ -5,8 +5,8 @@
 ## 项目简介
 
 - **课程地图**：左侧「项目目录」按真实目录分组展示（可折叠、带语义标签），右侧「运行路径」画布由课程节点自动布局，支持拖拽平移、缩放与节点详情抽屉，每个节点可溯源到源码锚点。
-- **代码教学**：左侧「教学模块」由知识模块 chips + LLM 推荐入口 + 仓库文件树组成；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏经苏格拉底状态机驱动 LLM 进行源码问答式教学。
-- **练习复习**：按知识模块组织源码练习，由执行、断言与 Rubric 自动判分，并按 SM-2 算法调度复习。
+- **代码教学**：左侧「教学模块」由知识模块 chips + LLM 推荐入口 + 仓库文件树组成；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏以「受限 agent loop」驱动教学对话：每轮 LLM 从固定动作菜单（推进 / 降脚手架 / 给答案 / 确认）提议动作，状态机守门校验教学法不变量（熔断前置、verify 阶段确认门禁），否决后回落确定性路径；上下文注入锚点附近真实源码摘录与完整近史，全程 journal 可审计。
+- **练习复习**：练习围绕配置的知识模块（计算机网络 / 操作系统 / 语言特性等，可自定义）组织，按模块从当前仓库筛选出题目标，题型为输出预测 / 变更定位 / 影响分析，由受限执行与集合匹配自动判分，并按 SM-2 算法调度复习。
 - **成本监控**：Token 用量统计、月度预算设置，触顶后 LLM 调用自动降级为本地规则路径。
 
 ## 技术选型
@@ -16,7 +16,7 @@
 | **engine** | Fastify v5（REST + WebSocket 流式）、better-sqlite3（双 ABI 原生绑定）、typescript-language-server（LSP 语义增强）、tsx 开发运行时 |
 | **gui** | Vite 6 + React 19 + react-router-dom v7 + lucide-react |
 | **shared** | 前后端共享 TypeScript 类型（workspace 内直接引用源码） |
-| **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档 |
+| **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档；教学对话默认受限 agent loop（`TUTOR_AGENT_LOOP=off` 退回纯工作流） |
 | **工具链** | pnpm 10 workspace + turbo + changesets；vitest + Playwright（`e2e/`）；TypeScript 5.8；concurrently 双进程开发 |
 
 ## 仓库结构
@@ -28,17 +28,17 @@
 │   │   └── src/
 │   │       ├── server.ts        #   全部 REST 路由 + WebSocket 广播 + 启动计时
 │   │       ├── importer/        #   仓库导入：路径归一化、分析编排、增量重分析
-│   │       ├── indexer/         #   文件树 / Git 热点索引、.tutorignore 排除规则、文件变更监听
+│   │       ├── indexer/         #   文件树 / Git 热点索引（热点同样过滤 .tutorignore）、文件变更监听
 │   │       ├── summarizer/      #   分层文件摘要（LLM 或本地启发式 + 缓存）
 │   │       ├── coursetree/      #   课程树构建、LLM 命名完善（llm-refine）、
 │   │       │                    #   模块推荐入口（entry-suggest）、节点投影
 │   │       ├── depgraph/        #   依赖图构建 / 影响面分析
 │   │       ├── implementation/  #   微观实现单元抽取（函数级）
-│   │       ├── decision/        #   选型决策单元与证据收集
 │   │       ├── lsp/             #   typescript-language-server 语义增强
 │   │       ├── quality/         #   分析结果校验（verifyAnalysis）
-│   │       ├── harness/         #   教学回复编排（Socratic 状态机 + LLM + 降级）
-│   │       ├── teaching/        #   教学阶段状态机（orient→…→confirmed）
+│   │       ├── harness/         #   教学回复编排（上下文组装 + 动作守门 + LLM 措辞 + 降级）
+│   │       ├── teaching/        #   教学状态机：阶段转移（orient→…→confirmed）、意图分类
+│   │       │                    #   （正则 / LLM 单轮）、动作菜单提议 + 守门校验（agent loop）
 │   │       ├── policy/          #   教学设置（风格/教学法/层次）与校验
 │   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习
 │   │       ├── learner/         #   学习者画像 / 掌握度 / 渐隐提示
@@ -82,7 +82,9 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 打开 `http://localhost:3000`，在导入页填入待学习仓库的路径（支持 `~/xxx`）即可。分析结果保存在该仓库的 `.tutor/`。
 
-接入 LLM：复制 `.env.example` 为 `.env` 填写后 `set -a; source .env; set +a` 再启动。主力档（`TUTOR_TEACHING_PROVIDER` / `TUTOR_TEACHING_MODEL`）驱动教学对话；轻量档（`TUTOR_LIGHT_PROVIDER` / `TUTOR_LIGHT_MODEL`，可选）承担推荐入口、练习题面润色、课程地图命名三个单轮轻任务，未配置时自动回落主力档。
+接入 LLM：复制 `.env.example` 为 `.env` 填写后 `set -a; source .env; set +a` 再启动。主力档（`TUTOR_TEACHING_PROVIDER` / `TUTOR_TEACHING_MODEL`）驱动教学对话（动作提议 + 措辞，每轮两次调用）；轻量档（`TUTOR_LIGHT_PROVIDER` / `TUTOR_LIGHT_MODEL`，可选）承担推荐入口、练习题面润色、课程地图命名三个单轮轻任务，未配置时自动回落主力档。教学对话默认运行受限 agent loop（模型提议教学动作、状态机守门校验，无 LLM 配置或预算触顶时自动回落本地确定性路径），`TUTOR_AGENT_LOOP=off` 可退回纯工作流（意图识别走轻量档 LLM 分类）。
+
+教学对话的三层记忆：会话内存（引擎内，重启即失）→ `.tutor/` journal 结构化事件（意图/动作来源、提示深度、熔断、token 用量，跨重启）→ 前端 thread 内存态 + localStorage 作用域。
 
 常用命令：
 

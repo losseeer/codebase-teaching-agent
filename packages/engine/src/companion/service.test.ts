@@ -79,7 +79,6 @@ function testRepository(): CompanionRepository {
     repositoryId: index.repositoryId,
     generatedAt: "2026-01-01T00:00:00.000Z",
     graph: serializeGraph(graph),
-    decisions: [],
     implementations: [],
     quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
     versionStamp: "content-v1"

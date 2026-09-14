@@ -52,6 +52,10 @@ export interface TeachingSessionApi {
 
   /** 当前 teaching 教学状态（API + 流式） */
   course: CourseTree | null;
+  /** 课程数据代数：repositoryId 不变的重新导入 / 需要强制刷新课程请求时递增。 */
+  dataVersion: number;
+  /** 强制重发课程相关请求（导入完成后由 App 调用）。 */
+  reloadCourseData: () => void;
   selected: CourseNode | null;
   setSelected: (node: CourseNode) => void;
 
@@ -124,6 +128,10 @@ const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [t
 // 课程与节点
 const [course, setCourse] = useState<CourseTree | null>(null);
 const [selected, setSelected] = useState<CourseNode | null>(null);
+// 课程数据代数：同一仓库重新导入时 repositoryId 由内容 hash 派生、保持不变，
+// 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
+const [dataVersion, setDataVersion] = useState(0);
+const reloadCourseData = (): void => setDataVersion((version) => version + 1);
 // 课程地图 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
 const [mapNode, setMapNode] = useState<CourseNode | null>(null);
 const [mapFile, setMapFile] = useState("");
@@ -140,7 +148,7 @@ useEffect(() => {
     if (first) setSelected((prev) => prev ?? first);
   }).catch(() => { if (!cancelled) setCourse(null); });
   return () => { cancelled = true; };
-}, [repositoryId]);
+}, [repositoryId, dataVersion]);
 // prototype 语义：首次打开节点记「已打开」；之后每次切换记「已定位」+「已切换到」
 const initialSelectionDone = useRef(false);
 useEffect(() => {
@@ -250,7 +258,7 @@ useEffect(() => {
   return {
     scope, setScope,
     threads, pushMessage, pushDivider, clearThread,
-    course, selected, setSelected,
+    course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile,
     practiceUnit, setPracticeUnit,
     session, settings, setSettings, cost,

@@ -9,7 +9,6 @@ import { refineCourseMap } from "../coursetree/llm-refine.js";
 import { createLightLlmProvider, createTeachingProvider } from "../llm/provider.js";
 import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, impactRadius, serializeGraph } from "../depgraph/graph.js";
-import { collectDecisionUnits } from "../decision/evidence.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { hash, id, isWithin } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
@@ -88,17 +87,16 @@ export class ImportService extends EventEmitter {
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
     const provider = createSummaryProvider();
     const { summaries, estimate } = await summarizeFiles(repositoryPath, index.files, database, provider);
-    progress("building_course", 75, "正在生成微观单元、选型证据和影响图");
+    progress("building_course", 75, "正在生成微观单元和影响图");
     const graph = await enrichWithLsp(repositoryPath, buildDependencyGraph(repositoryPath, index.files));
-    const decisions = collectDecisionUnits(repositoryPath, index.files);
     const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
-    const draftCourse = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, decisions, implementations });
+    const draftCourse = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations });
     const quality = verifyAnalysis(repositoryPath, implementations, draftCourse.root, { timeoutMs: 2_500 });
     const verifiedImplementations = implementations.map((unit) => ({
       ...unit,
       verification: quality.micro.filter((check) => check.anchors[0]?.path === unit.symbol.path && check.anchors[0]?.line === unit.symbol.line)
     }));
-    let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, decisions, implementations: verifiedImplementations });
+    let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations: verifiedImplementations });
     course = attachQuality(course, quality);
     // 课程地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 轻任务走轻量档（TUTOR_LIGHT_*），未配置回落主力档
@@ -118,7 +116,6 @@ export class ImportService extends EventEmitter {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),
       graph: serializeGraph(graph),
-      decisions,
       implementations: verifiedImplementations,
       quality,
       versionStamp: contentVersion(repositoryPath, index)

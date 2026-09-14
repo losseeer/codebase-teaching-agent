@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import type { DecisionUnit, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
+import type { Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import { classifyModuleId, EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
@@ -9,13 +10,11 @@ import { refineExerciseWithLlm } from "./llm-generate.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
 import { deriveMastery, selectZpdTarget, type ZpdTarget } from "./learner.js";
-import { scoreGrounding } from "./rubric.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
 type ExpectedAnswer =
   | { type: "output"; expectedOutput: string; invocation: SafeInvocation }
-  | { type: "set"; expectedIds: string[] }
-  | { type: "decision"; expectedEvidenceIds: string[]; strength: DecisionUnit["confidence"]; excerpts: string[] };
+  | { type: "set"; expectedIds: string[] };
 
 interface StoredExercise {
   exercise: Exercise;
@@ -36,7 +35,7 @@ export interface PracticeRepository {
   analysis: RepositoryAnalysis;
 }
 
-const kinds: ExerciseKind[] = ["output_prediction", "change_localization", "impact_analysis", "decision_defense"];
+const kinds: ExerciseKind[] = EXERCISE_KINDS;
 
 export class ExerciseService {
   getSummary(repository: PracticeRepository): PracticeSummary {
@@ -51,7 +50,7 @@ export class ExerciseService {
     生成练习：目标单元与标准答案始终由静态分析产出（可判分）；
     传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
     */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string } = {}, provider?: LlmProvider): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
     try {
       if (!requested.kind && !requested.targetUnitId) {
@@ -60,12 +59,17 @@ export class ExerciseService {
           .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
         for (const schedule of due) {
           const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
-          if (stored?.exercise.contentVersion === repository.analysis.versionStamp) return stored.exercise;
+          // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）
+          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && stored.exercise.contentVersion === repository.analysis.versionStamp) return stored.exercise;
         }
       }
       const mastery = this.mastery(repository, database);
       const target = this.pickTarget(repository, requested, mastery);
-      if (!target) throw new Error("当前分析结果没有可生成的练习。请先重新导入仓库。");
+      if (!target) {
+        throw new Error(requested.moduleId
+          ? "当前知识模块下没有可出题的代码单元；换一个模块，或先导入更多相关代码。"
+          : "当前分析结果没有可生成的练习。请先重新导入仓库。");
+      }
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, target.kind, target.id);
       if (cached) return cached.exercise;
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty);
@@ -130,12 +134,12 @@ export class ExerciseService {
     return records;
   }
 
-  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {
+  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {
     const availableKinds = requested.kind ? [requested.kind] : kinds;
     const attemptCount = mastery.reduce((sum, record) => sum + record.attempts, 0);
     const orderedKinds = requested.kind ? availableKinds : [...availableKinds.slice(attemptCount % availableKinds.length), ...availableKinds.slice(0, attemptCount % availableKinds.length)];
     for (const kind of orderedKinds) {
-      const targets = this.targets(repository, kind);
+      const targets = this.targets(repository, kind, requested.moduleId, requested.moduleIds ?? []);
       const restricted = requested.targetUnitId ? targets.filter((target) => target.id === requested.targetUnitId) : targets;
       if (requested.targetUnitId && restricted.length) return restricted[0];
       const selected = selectZpdTarget(restricted, mastery) as PracticeTarget<unknown> | undefined;
@@ -144,24 +148,35 @@ export class ExerciseService {
     return undefined;
   }
 
-  private targets(repository: PracticeRepository, kind: ExerciseKind): PracticeTarget<unknown>[] {
-    if (kind === "output_prediction") return repository.analysis.implementations.flatMap((unit) => safeInvocationFor(repository.path, unit) ? [{ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }] : []);
-    if (kind === "change_localization") return repository.analysis.implementations.map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));
+  private targets(repository: PracticeRepository, kind: ExerciseKind, moduleId?: string, moduleIds: string[] = []): PracticeTarget<unknown>[] {
+    const inModule = (text: string): boolean => !moduleId || classifyModuleId(text, moduleIds) === moduleId;
+    if (kind === "output_prediction") {
+      return repository.analysis.implementations
+        .filter((unit) => inModule(`${unit.symbol.path} ${unit.symbol.name}`))
+        .flatMap((unit) => safeInvocationFor(repository.path, unit) ? [{ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }] : []);
+    }
+    if (kind === "change_localization") {
+      return repository.analysis.implementations
+        .filter((unit) => inModule(`${unit.symbol.path} ${unit.symbol.name}`))
+        .map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));
+    }
     if (kind === "impact_analysis") {
       const graph = graphFromData(repository.analysis.graph);
-      return Object.keys(repository.analysis.graph.imports).map((path) => {
-        const impact = impactRadius(graph, [path]);
-        return { id: `impact:${path}`, title: path, difficulty: Math.min(5, Math.max(1, impact.impactedPaths.length)) as MasteryLevel, value: path, kind };
-      });
+      return Object.keys(repository.analysis.graph.imports)
+        .filter((path) => inModule(path))
+        .map((path) => {
+          const impact = impactRadius(graph, [path]);
+          return { id: `impact:${path}`, title: path, difficulty: Math.min(5, Math.max(1, impact.impactedPaths.length)) as MasteryLevel, value: path, kind };
+        });
     }
-    return repository.analysis.decisions.map((decision) => ({ id: decision.id, title: decision.title, difficulty: decisionDifficulty(decision), value: decision, kind }));
+    return [];
   }
 
   private createExercise(repository: PracticeRepository, kind: ExerciseKind, value: unknown, difficulty: MasteryLevel): StoredExercise {
     if (kind === "output_prediction") return outputExercise(repository, value as ImplementationUnit, difficulty);
     if (kind === "change_localization") return localizationExercise(repository, value as ImplementationUnit, difficulty);
     if (kind === "impact_analysis") return impactExercise(repository, value as string, difficulty);
-    return decisionExercise(repository, value as DecisionUnit, difficulty);
+    throw new Error("不支持的练习题型");
   }
 }
 
@@ -209,34 +224,24 @@ function impactExercise(repository: PracticeRepository, changedPath: string, dif
   return { exercise, expected: { type: "set", expectedIds: reviewPaths } };
 }
 
-function decisionExercise(repository: PracticeRepository, decision: DecisionUnit, difficulty: MasteryLevel): StoredExercise {
-  const exercise = baseExercise(repository, "decision_defense", decision.id, decision.title, difficulty, {
-    title: "辩护一个选型结论",
-    prompt: `请为“${decision.claim}”写出简短辩护：选择能支撑该结论的证据，并明确它是直接证据、间接线索还是推测。不要把证据没有说明的动机当作事实。`,
-    anchors: decision.anchors,
-    inputMode: "evidence_and_text",
-    gradingMode: "rubric",
-    options: decision.evidence.map((evidence) => ({ id: evidence.id, label: evidence.excerpt, detail: evidence.strength }))
-  });
-  return { exercise, expected: { type: "decision", expectedEvidenceIds: decision.evidence.map((evidence) => evidence.id), strength: decision.confidence, excerpts: decision.evidence.map((evidence) => evidence.excerpt) } };
-}
-
 function baseExercise(repository: PracticeRepository, kind: ExerciseKind, targetUnitId: string, targetTitle: string, difficulty: MasteryLevel, input: Pick<Exercise, "title" | "prompt" | "anchors" | "inputMode" | "gradingMode" | "options">): Exercise {
   const id = `exercise:${hash(`${repository.index.repositoryId}:${repository.analysis.versionStamp}:${kind}:${targetUnitId}`).slice(0, 20)}`;
   return { id, repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, kind, targetUnitId, targetTitle, difficulty, createdAt: new Date().toISOString(), ...input };
 }
 
-async function grade(stored: StoredExercise, answer: ExerciseAnswer): Promise<Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">> {
+type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">;
+
+async function grade(stored: StoredExercise, answer: ExerciseAnswer): Promise<GradeOutcome> {
   if (stored.expected.type === "output") {
     const expected = executeSafeInvocation(stored.expected.invocation);
     const passed = normalizeOutput(answer.text) === normalizeOutput(expected);
     return { score: passed ? 1 : 0, passed, automatic: true, feedback: passed ? "执行验证通过：返回值与受限运行结果一致。" : "执行验证未通过：请沿着返回表达式重新检查输入如何流动。" };
   }
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
-  return gradeDecision(stored.expected, answer);
+  throw new Error("该练习类型已不再支持；请重新生成练习。");
 }
 
-function gradeSet(expected: string[], selected: string[]): Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review"> {
+function gradeSet(expected: string[], selected: string[]): GradeOutcome {
   const expectedSet = new Set(expected);
   const selectedSet = new Set(selected);
   const matchedIds = expected.filter((id) => selectedSet.has(id));
@@ -253,24 +258,6 @@ function gradeSet(expected: string[], selected: string[]): Omit<ExerciseResult, 
     missingIds,
     unexpectedIds
   };
-}
-
-async function gradeDecision(expected: Extract<ExpectedAnswer, { type: "decision" }>, answer: ExerciseAnswer): Promise<Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">> {
-  const selected = new Set(answer.selectedIds ?? []);
-  const evidenceMatches = expected.expectedEvidenceIds.filter((id) => selected.has(id));
-  const evidenceScore = expected.expectedEvidenceIds.length ? (evidenceMatches.length / expected.expectedEvidenceIds.length) * 0.6 : 0.6;
-  const rationale = answer.rationale?.trim() ?? answer.text?.trim() ?? "";
-  const strengthWords: Record<DecisionUnit["confidence"], string[]> = { direct: ["直接", "direct"], indirect: ["间接", "indirect"], speculative: ["推测", "speculative"] };
-  const strengthScore = strengthWords[expected.strength].some((word) => rationale.toLowerCase().includes(word)) ? 0.2 : 0;
-  const grounding = await scoreGrounding({ excerpts: expected.excerpts, rationale, hasSelectedEvidence: evidenceMatches.length > 0 });
-  const rubric: RubricCriterion[] = [
-    { id: "evidence", label: "选择可回溯的证据", score: evidenceScore, maxScore: 0.6, feedback: evidenceMatches.length ? "已选择源码或文档证据。" : "需要选择至少一条可回溯证据。" },
-    { id: "strength", label: "正确标注证据强度", score: strengthScore, maxScore: 0.2, feedback: strengthScore ? "证据强度标注正确。" : `请明确这是${strengthLabel(expected.strength)}。` },
-    { id: "grounding", label: "辩护与证据措辞一致", score: grounding.score, maxScore: 0.2, feedback: grounding.feedback }
-  ];
-  const score = rubric.reduce((total, criterion) => total + criterion.score, 0);
-  const passed = score >= 0.8;
-  return { score, passed, automatic: true, feedback: passed ? "Rubric 评分通过：论断、证据和置信度保持一致。" : "Rubric 评分尚未通过：把论断限定在所选证据能够支撑的范围内。", rubric };
 }
 
 function safeInvocationFor(repositoryPath: string, unit: ImplementationUnit): SafeInvocation | undefined {
@@ -345,10 +332,6 @@ function unitDifficulty(unit: ImplementationUnit): MasteryLevel {
   return Math.max(1, Math.min(5, 1 + Math.floor(complexity / 2))) as MasteryLevel;
 }
 
-function decisionDifficulty(decision: DecisionUnit): MasteryLevel {
-  return Math.max(1, Math.min(5, decision.evidence.length + (decision.confidence === "direct" ? 0 : 1))) as MasteryLevel;
-}
-
 function formatArguments(parameters: string[], args: unknown[]): string {
   return parameters.length ? parameters.map((parameter, index) => `${parameter} = ${JSON.stringify(args[index])}`).join("，") : "不传入参数";
 }
@@ -360,8 +343,4 @@ function normalizeOutput(value: string | undefined): string {
 
 function isLiteral(value: string): boolean {
   return /^(?:["'][^"']*["']|`[^`$]*`|true|false|null|undefined|-?\d+(?:\.\d+)?)$/.test(value);
-}
-
-function strengthLabel(strength: DecisionUnit["confidence"]): string {
-  return ({ direct: "直接证据", indirect: "间接线索", speculative: "推测" })[strength];
 }

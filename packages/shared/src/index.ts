@@ -49,16 +49,7 @@ export interface SourceAnchor {
   label: string;
 }
 
-export type EvidenceStrength = "direct" | "indirect" | "speculative";
 export type VerificationStatus = "verified" | "needs_review" | "skipped";
-
-export interface Evidence {
-  id: string;
-  strength: EvidenceStrength;
-  source: "package_manifest" | "config" | "readme" | "git_commit" | "source" | "heuristic";
-  excerpt: string;
-  anchor?: SourceAnchor;
-}
 
 export interface AssertionCheck {
   statement: string;
@@ -71,10 +62,9 @@ export interface CourseNode {
   id: string;
   title: string;
   summary: string;
-  kind: "overview" | "workflow" | "module" | "decision" | "implementation";
+  kind: "overview" | "workflow" | "module" | "implementation";
   anchors: SourceAnchor[];
   children: CourseNode[];
-  evidence?: Evidence[];
   verification?: AssertionCheck[];
   /** Present on overview and paged responses when descendants are not yet loaded. */
   childCount?: number;
@@ -107,7 +97,6 @@ export interface CourseNodePage {
 export interface CourseNodeDetail {
   nodeId: string;
   implementation?: ImplementationUnit;
-  decision?: DecisionUnit;
 }
 
 export interface ImportEstimate {
@@ -195,17 +184,6 @@ export interface ImpactResult {
   edges: { from: string; to: string; kind: "import" | "call" }[];
 }
 
-export interface DecisionUnit {
-  id: string;
-  title: string;
-  claim: string;
-  summary: string;
-  evidence: Evidence[];
-  confidence: EvidenceStrength;
-  anchors: SourceAnchor[];
-  verification: AssertionCheck[];
-}
-
 export interface ImplementationUnit {
   id: string;
   symbol: SymbolInfo;
@@ -229,7 +207,6 @@ export interface RepositoryAnalysis {
   repositoryId: string;
   generatedAt: string;
   graph: DependencyGraphData;
-  decisions: DecisionUnit[];
   implementations: ImplementationUnit[];
   quality: QualityReport;
   versionStamp: string;
@@ -246,9 +223,11 @@ export interface CostSummary {
   mode: "normal" | "degraded";
 }
 
-export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis" | "decision_defense";
-export type ExerciseInputMode = "text" | "multi_select" | "evidence_and_text";
-export type ExerciseGradingMode = "execution" | "set_match" | "rubric";
+export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis";
+/** 全部受支持的题型（server 校验 / 缓存命中校验共用这一份）。 */
+export const EXERCISE_KINDS: ExerciseKind[] = ["output_prediction", "change_localization", "impact_analysis"];
+export type ExerciseInputMode = "text" | "multi_select";
+export type ExerciseGradingMode = "execution" | "set_match";
 export type MasteryLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
 export interface ExerciseOption {
@@ -287,15 +266,21 @@ export interface SuggestedEntry {
 export interface ExerciseAnswer {
   text?: string;
   selectedIds?: string[];
-  rationale?: string;
 }
 
-export interface RubricCriterion {
-  id: string;
-  label: string;
-  score: number;
-  maxScore: number;
-  feedback: string;
+/** 知识模块分类关键词（GUI 模块 chips 与 engine 练习出题过滤共用的同一份口径）。 */
+export const MODULE_KEYWORDS: Record<string, RegExp> = {
+  network: /(router|route|http|api|请求|路由|网关|超时|重试|幂等|网络|接口|controller|server|client|endpoint|中间件)/i,
+  os: /(cache|缓存|并发|concurren|thread|线程|进程|队列|queue|锁|lock|内存|memory|调度|io\b|buffer|池)/i,
+  lang: /(type|类型|async|异步|await|error|错误|异常|exception|util|helper|parse|解析|闭包|回调|函数式|泛型)/i
+};
+
+/** 按关键词把文本归类到知识模块；默认 id 命中需在 moduleIds 内，都不命中归「other」。 */
+export function classifyModuleId(text: string, moduleIds: string[]): string {
+  for (const [id, pattern] of Object.entries(MODULE_KEYWORDS)) {
+    if (pattern.test(text) && moduleIds.includes(id)) return id;
+  }
+  return "other";
 }
 
 export interface ExerciseResult {
@@ -311,7 +296,6 @@ export interface ExerciseResult {
   matchedIds?: string[];
   missingIds?: string[];
   unexpectedIds?: string[];
-  rubric?: RubricCriterion[];
   reviewedAt: string;
   review: ReviewSchedule;
 }
@@ -436,6 +420,7 @@ export type JournalEventType =
   | "style_shift"
   | "teach_moment"
   | "unassisted_test"
+  | "action_veto"
   | "token_usage";
 
 export interface JournalEvent {

@@ -4,7 +4,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis } from "@codebase-tutor/shared";
-import { collectDecisionUnits } from "../decision/evidence.js";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
@@ -56,20 +55,18 @@ describe("M2.1 exercise service", () => {
     expect(mismatch.unexpectedIds).toContain("src/main.js");
   });
 
-  it("generates impact and evidence-defense questions with automatic grading", async () => {
+  it("generates impact questions with automatic grading and filters targets by knowledge module", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const impact = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
     const passedImpact = await service.answer(repository, impact.id, { selectedIds: ["src/config.js", "src/main.js"] });
     expect(passedImpact.passed).toBe(true);
 
-    const defense = await service.next(repository, { kind: "decision_defense" });
-    const evidence = defense.options?.[0];
-    expect(evidence).toBeTruthy();
-    const defenseResult = await service.answer(repository, defense.id, { selectedIds: [evidence!.id], rationale: `这是直接证据：${evidence!.label}` });
-    expect(defenseResult.gradingMode).toBe("rubric");
-    expect(defenseResult.rubric).toHaveLength(3);
-    expect(defenseResult.passed).toBe(true);
+    // fixture 单元不命中任何默认关键词 → 归「其他」模块；network 模块下无可出题单元
+    const moduleIds = ["network", "os", "lang", "other"];
+    const scoped = await service.next(repository, { kind: "output_prediction", moduleId: "other", moduleIds });
+    expect(scoped.kind).toBe("output_prediction");
+    await expect(service.next(repository, { kind: "output_prediction", moduleId: "network", moduleIds })).rejects.toThrow("当前知识模块下没有可出题的代码单元");
   });
 
   it("caps large impact exercises to a focused first review set", async () => {
@@ -124,7 +121,6 @@ function testRepository(): PracticeRepository {
     repositoryId: index.repositoryId,
     generatedAt: "2026-01-01T00:00:00.000Z",
     graph: serializeGraph(graph),
-    decisions: collectDecisionUnits(repositoryPath, index.files),
     implementations,
     quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
     versionStamp: "content-v1"

@@ -9,7 +9,7 @@ import type { CompanionSuggestion, CourseNode, ExerciseKind, ImportJob, Pedagogy
  * - stageIndex：Socratic 5 阶段 → 0..4 序号（教学阶梯 L1→L5）
  * - Segmented：分段控件（教学法 / 拆解层次）
  * - firstTeachNode / flatten / replaceCourseNode：课程树遍历
- * - MicroDetail：课程节点详情（微观拆解 / 选型证据）
+ * - MicroDetail：课程节点详情（微观拆解）
  *
  * 对应 prototype `design-prototype.html` 中散落的 helper 函数。
  */
@@ -37,8 +37,7 @@ export function exerciseKindLabel(kind: ExerciseKind): string {
   return ({
     output_prediction: "预测输出",
     change_localization: "修改定位",
-    impact_analysis: "影响分析",
-    decision_defense: "选型辩护"
+    impact_analysis: "影响分析"
   })[kind];
 }
 
@@ -78,10 +77,8 @@ export function replaceCourseNode(root: CourseNode, nodeId: string, update: (nod
   return { ...root, children: root.children.map((child) => replaceCourseNode(child, nodeId, update)) };
 }
 
-export function MicroDetail({ detail }: { detail: { implementation?: import("@codebase-tutor/shared").ImplementationUnit; decision?: import("@codebase-tutor/shared").DecisionUnit } | null }): ReactElement | null {
+export function MicroDetail({ detail }: { detail: { implementation?: import("@codebase-tutor/shared").ImplementationUnit } | null }): ReactElement | null {
   const implementation = detail?.implementation;
   if (implementation) return <div className="micro-detail"><div><span>输入</span><p>{implementation.inputs.join("、")}</p></div><div><span>输出</span><p>{implementation.output}</p></div><div><span>不变量</span><p>{implementation.invariants.join("；")}</p></div><div><span>边界与陷阱</span><p>{[...implementation.boundaries, ...implementation.traps].join("；") || "尚未检测到显式边界。"}</p></div></div>;
-  const decision = detail?.decision;
-  if (decision) return <div className="evidence-detail"><span>证据强度：{decision.confidence === "direct" ? "直接证据" : decision.confidence === "indirect" ? "间接线索" : "推测"}</span>{decision.evidence.map((evidence) => <p key={evidence.id}>{evidence.excerpt}</p>)}</div>;
   return null;
 }

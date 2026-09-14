@@ -5,6 +5,7 @@ import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
+import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, ExerciseAnswer, ExerciseKind, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
@@ -56,6 +57,8 @@ tboot("CompanionService");
 const teachingProvider = createTeachingProvider();
 // 轻量档：单轮轻任务（推荐入口 / 练习题面 / 课程地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档
 const lightLlmProvider = createLightLlmProvider() ?? teachingProvider;
+// 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
+const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
 tboot("createTeachingProvider");
 
 const sessions = new Map<string, TutorSession>();
@@ -94,7 +97,8 @@ app.get("/api/health", async () => {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
     summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local",
     teachingProvider: teaching.provider, teachingModel: teaching.model, teachingMode: teaching.mode,
-    lightProvider: light.provider, lightModel: light.model, lightMode: light.mode
+    lightProvider: light.provider, lightModel: light.model, lightMode: light.mode,
+    agentLoop: actionLoopEnabled
   };
 });
 
@@ -143,8 +147,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   if (!findCourseNode(repository.course.root, nodeId)) return reply.code(404).send({ error: "课程节点不存在" });
   return {
     nodeId,
-    implementation: repository.analysis.implementations.find((unit) => unit.id === nodeId),
-    decision: repository.analysis.decisions.find((unit) => unit.id === nodeId)
+    implementation: repository.analysis.implementations.find((unit) => unit.id === nodeId)
   };
 });
 
@@ -172,15 +175,15 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/l
     : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   const kind = request.body?.kind;
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  if (kind && !["output_prediction", "change_localization", "impact_analysis", "decision_defense"].includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
+  if (kind && !EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   const budgetExceeded = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
   try {
-    return reply.code(201).send(await exercises.next(repository, { kind, targetUnitId: request.body?.targetUnitId }, budgetExceeded ? undefined : lightLlmProvider));
+    return reply.code(201).send(await exercises.next(repository, { kind, targetUnitId: request.body?.targetUnitId, moduleId: request.body?.moduleId, moduleIds: request.body?.moduleIds }, budgetExceeded ? undefined : lightLlmProvider));
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成练习" });
   }
@@ -222,7 +225,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/r
     index: repository.index,
     estimate: repository.estimate,
     entrypoints: flatten(repository.course.root).filter((node) => node.kind === "workflow").map((node) => ({ title: node.title, anchors: node.anchors })),
-    analysis: { decisions: repository.analysis.decisions.length, implementations: repository.analysis.implementations.length, semanticBackend: repository.analysis.graph.semanticBackend, lspStatus: repository.analysis.graph.lspStatus }
+    analysis: { implementations: repository.analysis.implementations.length, semanticBackend: repository.analysis.graph.semanticBackend, lspStatus: repository.analysis.graph.lspStatus }
   };
 });
 
@@ -305,7 +308,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
   const session = createSession(repository.index.repositoryId, node.id, settings);
   sessions.set(session.id, session);
   new Journal(repository.path, repository.index.repositoryId).append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
-  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext(node, policyFor(session.settings), []) });
+  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext(node, policyFor(session.settings), [], repository.path) });
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
@@ -327,14 +330,15 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const currentCost = summarizeCost(repository.path, monthlyBudget);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded);
+  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, { classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider), actionLoop: actionLoopEnabled });
   sessions.set(outcome.session.id, outcome.session);
   const journal = new Journal(repository.path, repository.index.repositoryId);
   if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
+  if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
   journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), provider: outcome.provider ?? "local-heuristic-v1" }, session.id);
+  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), provider: outcome.provider ?? "local-heuristic-v1", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
   if (cost.mode === "degraded") journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
   for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });
