@@ -43,6 +43,44 @@ export const api = {
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
-  mapChat: (repositoryId: string, payload: { content: string; nodeId?: string; path?: string }) => request<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat`, { method: "POST", body: JSON.stringify(payload) }),
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。 */
+  mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; path?: string }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {
+    const response = await fetch(`/api/repositories/${repositoryId}/map-chat/stream`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (!response.ok || !response.body) {
+      const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
+      throw new Error(body.error ?? "请求失败");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let final: { reply: string; provider: string } | undefined;
+    const consume = (chunk: string): void => {
+      const line = chunk.startsWith("data: ") ? chunk.slice(6) : "";
+      if (!line) return;
+      const event = JSON.parse(line) as { type: string; round?: number; path?: string; reply?: string; provider?: string; error?: string };
+      if (event.type === "thinking") {
+        onProgress({ stage: "thinking", round: event.round ?? 1 });
+      } else if (event.type === "reading") {
+        onProgress({ stage: "reading", path: event.path ?? "" });
+      } else if (event.type === "done") {
+        final = { reply: event.reply ?? "", provider: event.provider ?? "" };
+      } else if (event.type === "error") {
+        throw new Error(event.error ?? "LLM 对话失败");
+      }
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        consume(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    if (!final) throw new Error("连接中断，未收到完整回复");
+    return final;
+  },
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string }) => request<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { method: "POST", body: JSON.stringify(payload) })
 };

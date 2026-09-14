@@ -6,7 +6,7 @@ import { id } from "../lib.js";
 const eventTypes = new Set<JournalEventType>([
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event",
   "style_shift", "teach_moment", "unassisted_test", "action_veto",
-  "exercise_declined", "token_usage"
+  "exercise_declined", "token_usage", "file_read"
 ]);
 
 export class Journal {

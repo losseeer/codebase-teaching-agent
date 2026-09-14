@@ -1,23 +1,47 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
-import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { LlmMessage, LlmProvider, LlmToolCall, LlmUsage } from "../llm/provider.js";
 import { isWithin } from "../lib.js";
+import { READ_FILE_TOOL, executeReadFile } from "./tools.js";
 
 /**
   作用域对话（宏观设计 map / 练习评估 practice）：
   单轮 LLM 开放讨论——不是教学状态机（无阶段/提示阶梯），判分权不涉及。
   上下文全部来自静态分析事实（依赖图、课程节点、练习题面 + 源码摘录）；
   练习的标准答案/锚点**不进入**上下文（防泄题：模型不该知道判分答案）。
+  宏观设计作用域额外注入项目结构全景（全量路径清单 + 二度依赖邻居）——
+  全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码仍只给锚点摘录。
   */
 
 const MAX_EXCERPT_LINES = 80;
-const MAX_CONTEXT_CHARS = 12_000;
+const PRACTICE_CONTEXT_CHARS = 12_000;
+const MAP_CONTEXT_CHARS = 20_000;
+const MAX_PANORAMA_ENTRIES = 20;
+
+/** mapChat 工具循环预算：最多 3 轮读文件、每次对话累计 4 个文件——控制推理模型的逐轮 reasoning 成本与延迟。 */
+const MAP_MAX_TOOL_ROUNDS = 3;
+const MAP_MAX_TOOL_CALLS = 4;
+
+export interface FileReadRecord {
+  path: string;
+  lines?: number;
+  truncated: boolean;
+  denied: boolean;
+  error?: string;
+}
+
+/** mapChat 过程事件：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
+export type MapChatProgress =
+  | { type: "thinking"; round: number }
+  | { type: "reading"; path: string };
 
 export interface ScopedChatResult {
   reply: string;
   provider: string;
   usage?: LlmUsage;
+  /** mapChat 专用：本次对话的 read_file 调用审计（供 server 逐条记 journal）。 */
+  fileReads?: FileReadRecord[];
 }
 
 /** 按锚点取带行号的源码摘录（锚点行前后展开，上限 MAX_EXCERPT_LINES 行）。路径越界或读不到时返回空串。 */
@@ -35,32 +59,86 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor): string {
   }
 }
 
-function clip(text: string): string {
-  return text.length > MAX_CONTEXT_CHARS ? `${text.slice(0, MAX_CONTEXT_CHARS)}\n…（上下文过长已截断）` : text;
+function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}\n…（上下文过长已截断）` : text;
 }
 
-/** 依赖图中某文件的直接邻居：它 import 的文件 + import 它的文件（反向可达一层）。 */
-function graphNeighbors(analysis: RepositoryAnalysis, path?: string): { importsOut: string[]; importedBy: string[] } {
-  if (!path) return { importsOut: [], importedBy: [] };
-  const importsOut = analysis.graph.imports[path] ?? [];
-  const importedBy = Object.entries(analysis.graph.imports)
+/** 全量路径清单：按目录分组（目录 → 文件名列表），根目录文件单列。来自依赖图已分析文件集。 */
+function structurePanorama(analysis: RepositoryAnalysis): string {
+  const paths = Object.keys(analysis.graph.imports).sort();
+  if (!paths.length) return "";
+  const directories = new Map<string, string[]>();
+  for (const path of paths) {
+    const directory = dirname(path);
+    const key = directory === "." ? "" : directory;
+    directories.set(key, [...(directories.get(key) ?? []), basename(path)]);
+  }
+  const lines = [...directories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([directory, names]) => {
+    const shown = names.length > MAX_PANORAMA_ENTRIES ? `${names.slice(0, MAX_PANORAMA_ENTRIES).join("、")}…等 ${names.length} 个` : names.join("、");
+    return directory ? `- ${directory}/（${names.length}）：${shown}` : `- （根目录）：${shown}`;
+  });
+  return `项目结构全景（${paths.length} 个已分析文件，按目录分组）：\n${lines.join("\n")}`;
+}
+
+/** 依赖图中某文件的邻域：一度（直接 import / 被 import）+ 二度（import 的 import / 被被 import），去重排序。 */
+function graphNeighborhood(analysis: RepositoryAnalysis, path?: string): {
+  importsOut: string[];
+  importedBy: string[];
+  outTwo: string[];
+  inTwo: string[];
+} {
+  if (!path) return { importsOut: [], importedBy: [], outTwo: [], inTwo: [] };
+  const imports = analysis.graph.imports;
+  const importsOut = imports[path] ?? [];
+  const importedBy = Object.entries(imports)
     .filter(([source]) => source !== path)
     .filter(([, targets]) => targets.includes(path))
-    .map(([source]) => source);
-  return { importsOut, importedBy };
+    .map(([source]) => source)
+    .sort();
+  const outTwo = [...new Set(importsOut.flatMap((target) => imports[target] ?? []))]
+    .filter((candidate) => candidate !== path && !importsOut.includes(candidate))
+    .sort();
+  const inTwo = Object.entries(imports)
+    .filter(([source, targets]) => source !== path && !importedBy.includes(source) && targets.some((target) => importedBy.includes(target)))
+    .map(([source]) => source)
+    .sort();
+  return { importsOut, importedBy, outTwo, inTwo };
+}
+
+function joinList(items: string[]): string {
+  return items.join("、") || "（无）";
 }
 
 const MAP_SYSTEM_PROMPT = `你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的代码地图，会围绕项目结构、模块边界、依赖关系提问。
 
 规则：
-- 只基于「代码上下文」里给出的事实讨论：文件路径、import 关系、源码摘录、节点摘要。
+- 「项目结构全景」是已分析文件的完整清单，「依赖关系」含一度与二度邻接——全局性问题优先依据这些回答。
+- 只基于「代码上下文」与 read_file 工具取回的内容讨论：文件路径、import 关系、源码、节点摘要。
+- 需要查看某个文件的实现细节时调用 read_file（给出仓库内相对路径，可用 offset/limit 取指定行窗口）；不要凭空推测未读过的代码。
 - 严格区分事实与推断：来自上下文的标明出处（文件路径:行号），推断要明说「这是推断」。
 - 上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。
 - 用简洁段落回答；可以提出 1 个值得学习者进一步验证的问题。`;
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider }): Promise<ScopedChatResult> {
+function addUsage(total: LlmUsage | undefined, addition?: LlmUsage): LlmUsage | undefined {
+  if (!addition) return total;
+  if (!total) return { inputTokens: addition.inputTokens, outputTokens: addition.outputTokens };
+  return { inputTokens: total.inputTokens + addition.inputTokens, outputTokens: total.outputTokens + addition.outputTokens };
+}
+
+function readPathHint(argumentsJson: string): string {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}") as { path?: unknown };
+    return typeof parsed.path === "string" ? parsed.path : "";
+  } catch {
+    return "";
+  }
+}
+
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
+  const panorama = structurePanorama(analysis);
+  if (panorama) sections.push(panorama);
   if (node) {
     const children = node.children.map((child) => `- ${child.title}（${child.kind}）`).join("\n");
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
@@ -68,22 +146,63 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   }
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
-    const { importsOut, importedBy } = graphNeighbors(analysis, target);
-    if (importsOut.length || importedBy.length) {
-      sections.push(`依赖关系（${target}）：\n它 import：${importsOut.join("、") || "（无）"}\n被这些文件 import：${importedBy.join("、") || "（无）"}`);
+    const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);
+    if (importsOut.length || importedBy.length || outTwo.length || inTwo.length) {
+      sections.push(`依赖关系（${target}，含二度邻接）：\n它 import：${joinList(importsOut)}\n被这些文件 import：${joinList(importedBy)}\n二度下游（它 import 的文件再 import）：${joinList(outTwo)}\n二度上游（import 它的文件再被 import）：${joinList(inTwo)}`);
     }
   }
   if (path && (!node || !node.anchors.some((anchor) => anchor.path === path))) {
     sections.push(excerptForAnchor(input.repoPath, { path, line: 1, label: "绑定文件" }));
   }
-  const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）");
-  const completion = await provider.complete({
+  const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
+  const userMessage = `代码上下文：\n${context}\n\n学习者的问题：${input.content}`;
+
+  /** 工具循环历史：messages[0] 恒为原始 user 消息（代码上下文 + 学习者的问题）。
+      后续轮次必须完整携带——provider 提供 messages 时会忽略 user 字段，
+      若首轮 user 不进 messages，工具调用后的轮次将同时丢失上下文与问题（模型只能靠读到的文件反推意图）。 */
+  const onProgress = input.onProgress;
+  const messages: LlmMessage[] = [{ role: "user", content: userMessage }];
+  onProgress?.({ type: "thinking", round: 1 });
+  let completion = await provider.complete({
     system: MAP_SYSTEM_PROMPT,
-    user: `代码上下文：\n${context}\n\n学习者的问题：${input.content}`,
+    user: userMessage,
+    tools: [READ_FILE_TOOL],
     maxTokens: 700,
     temperature: 0.3
   });
-  return { reply: completion.text, provider: provider.name, usage: completion.usage };
+  const fileReads: FileReadRecord[] = [];
+  let usage: LlmUsage | undefined = addUsage(undefined, completion.usage);
+  let rounds = 0;
+  while (completion.toolCalls?.length) {
+    if (rounds >= MAP_MAX_TOOL_ROUNDS || fileReads.length >= MAP_MAX_TOOL_CALLS) {
+      // 轮数/次数预算用尽：对每个未应答的 tool_call 给出拒绝结果，再做一轮不带工具的收尾回答。
+      messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
+      for (const call of completion.toolCalls) {
+        messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
+      }
+      onProgress?.({ type: "thinking", round: rounds + 2 });
+      completion = await provider.complete({ system: MAP_SYSTEM_PROMPT, messages, maxTokens: 700, temperature: 0.3 });
+      usage = addUsage(usage, completion.usage);
+      break;
+    }
+    rounds += 1;
+    messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
+    for (const call of completion.toolCalls) {
+      if (call.name !== READ_FILE_TOOL.name) {
+        messages.push({ role: "tool", toolCallId: call.id, content: `未知工具 ${call.name}；只支持 read_file。` });
+        continue;
+      }
+      onProgress?.({ type: "reading", path: readPathHint(call.argumentsJson) });
+      const outcome = executeReadFile(input.repoPath, call.argumentsJson);
+      fileReads.push(outcome.audit);
+      messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
+    }
+    onProgress?.({ type: "thinking", round: rounds + 1 });
+    completion = await provider.complete({ system: MAP_SYSTEM_PROMPT, messages, tools: [READ_FILE_TOOL], maxTokens: 700, temperature: 0.3 });
+    usage = addUsage(usage, completion.usage);
+  }
+  const reply = completion.text || "（模型未返回内容，请重试。）";
+  return { reply, provider: provider.name, usage, fileReads: fileReads.length ? fileReads : undefined };
 }
 
 const PRACTICE_SYSTEM_PROMPT = `你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。
@@ -101,7 +220,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     sections.push(`选项：\n${exercise.options.map((option) => `- ${option.id}. ${option.label}${option.detail ? `（${option.detail}）` : ""}`).join("\n")}`);
   }
   for (const anchor of exercise.anchors.slice(0, 3)) sections.push(excerptForAnchor(input.repoPath, anchor));
-  const context = clip(sections.filter(Boolean).join("\n\n"));
+  const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
   const completion = await input.provider.complete({
     system: PRACTICE_SYSTEM_PROMPT,
     user: `练习上下文：\n${context}\n\n学习者的追问：${input.content}`,

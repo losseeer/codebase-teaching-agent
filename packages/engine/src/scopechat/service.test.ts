@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Exercise, RepositoryAnalysis } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { mapChat, practiceChat } from "./service.js";
+import { mapChat, practiceChat, type MapChatProgress } from "./service.js";
 
 function fakeProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
   const calls: LlmCompletionInput[] = [];
@@ -20,7 +20,13 @@ const analysis = {
   repositoryId: "repo_test",
   generatedAt: new Date().toISOString(),
   graph: {
-    imports: { "src/app.ts": ["src/config.ts"], "src/utils/normalize.ts": ["src/config.ts"] },
+    imports: {
+      "src/app.ts": ["src/config.ts"],
+      "src/config.ts": ["src/paths.ts"],
+      "src/boot.ts": ["src/app.ts"],
+      "src/ui/theme.ts": ["src/boot.ts"],
+      "src/utils/normalize.ts": ["src/config.ts"]
+    },
     calls: [], symbols: [], entrypoints: [],
     semanticBackend: "static", lspStatus: []
   },
@@ -61,10 +67,60 @@ describe("mapChat", () => {
     expect(result.provider).toBe("fake-provider");
     expect(result.usage?.inputTokens).toBe(10);
     const user = calls[0].user;
+    expect(user).toContain("项目结构全景");
+    expect(user).toContain("src/utils/（1）：normalize.ts"); // 全景按目录分组列出已分析文件
     expect(user).toContain("启动流程");
     expect(user).toContain("src/app.ts");
-    expect(user).toContain("src/config.ts"); // imports 邻居
+    expect(user).toContain("src/config.ts"); // 一度邻居
+    expect(user).toContain("src/paths.ts"); // 二度下游：config.ts 的 import
+    expect(user).toContain("src/boot.ts"); // 一度上游
+    expect(user).toContain("src/ui/theme.ts"); // 二度上游：boot.ts 的被 import
     expect(user).toContain("为什么要分层？");
+  });
+
+  it("工具循环：模型请求 read_file → 引擎执行并回喂 → 汇总 usage 与 fileReads", async () => {
+    const script: LlmCompletion[] = [
+      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "service.ts" }) }], usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
+      { text: "读完文件后的回答。", usage: { inputTokens: 200, outputTokens: 30 }, finishReason: "stop" }
+    ];
+    const calls: LlmCompletionInput[] = [];
+    const progressEvents: MapChatProgress[] = [];
+    let index = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:model",
+      async complete(input) {
+        calls.push(input);
+        return script[index++] ?? script[script.length - 1];
+      }
+    };
+    const result = await mapChat({
+      repoPath: import.meta.dirname,
+      analysis,
+      path: "src/app.ts",
+      content: "service.ts 里定义了什么？",
+      provider,
+      onProgress: (progress) => progressEvents.push(progress)
+    });
+    expect(result.reply).toContain("读完文件后的回答");
+    expect(progressEvents).toEqual([
+      { type: "thinking", round: 1 },
+      { type: "reading", path: "service.ts" },
+      { type: "thinking", round: 2 }
+    ]);
+    expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
+    expect(result.fileReads).toEqual([{ path: "service.ts", lines: 150, bytes: expect.any(Number), truncated: true, denied: false }]); // 默认窗口 150 行 < 文件总行数 → truncated
+    // 第二轮请求携带完整历史：原始 user 消息（上下文+问题）+ assistant toolCalls + tool 结果（带行号的真实文件内容）
+    const second = calls[1];
+    expect(second.messages?.[0]).toMatchObject({ role: "user" });
+    expect(second.messages?.[0].content).toContain("项目结构全景"); // 回归：工具轮次后不得丢失代码上下文
+    expect(second.messages?.[0].content).toContain("service.ts 里定义了什么？"); // 回归：不得丢失原始提问
+    expect(second.messages?.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "read_file")).toBe(true);
+    const toolResult = second.messages?.find((m) => m.role === "tool");
+    expect(toolResult?.content).toContain("1| ");
+    expect(toolResult?.content).toContain("export");
+    // 首轮请求带 tools 定义
+    expect(calls[0].tools?.[0]?.name).toBe("read_file");
   });
 });
 

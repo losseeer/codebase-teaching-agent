@@ -75,4 +75,64 @@ describe("OpenAICompatibleProvider", () => {
     expect(completion.text).toBe("部分内容");
     expect(completion.finishReason).toBe("length");
   });
+
+  it("tools 进入请求体；tool_calls 被解析且空 content 不报错", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse({
+        choices: [{ message: { content: "", tool_calls: [{ id: "call_1", function: { name: "read_file", arguments: "{\"path\":\"src/app.ts\"}" } }] }, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 20, completion_tokens: 8 }
+      });
+    }) as typeof fetch;
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
+    const completion = await provider.complete({
+      system: "s", user: "u", maxTokens: 700,
+      tools: [{ name: "read_file", description: "读文件", parameters: { type: "object", properties: {} } }]
+    });
+    const tools = captured?.tools as { type: string; function: { name: string } }[];
+    expect(tools?.[0]?.function?.name).toBe("read_file");
+    expect(captured?.tool_choice).toBe("auto");
+    expect(completion.toolCalls).toEqual([{ id: "call_1", name: "read_file", argumentsJson: "{\"path\":\"src/app.ts\"}" }]);
+    expect(completion.finishReason).toBe("tool_calls");
+  });
+
+  it("工具循环历史映射：assistant toolCalls + reasoning_content 回传 + tool 结果", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse(chatBody("最终回答", "stop"));
+    }) as typeof fetch;
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
+    const completion = await provider.complete({
+      system: "s",
+      messages: [
+        { role: "user", content: "问题" },
+        { role: "assistant", content: "", reasoningContent: "思考链", toolCalls: [{ id: "call_9", name: "read_file", argumentsJson: "{}" }] },
+        { role: "tool", toolCallId: "call_9", content: "文件内容" }
+      ],
+      tools: [{ name: "read_file", description: "d", parameters: {} }]
+    });
+    const messages = captured?.messages as Record<string, unknown>[];
+    expect(messages[0]).toMatchObject({ role: "system", content: "s" });
+    expect(messages[1]).toMatchObject({ role: "user", content: "问题" });
+    expect(messages[2]).toMatchObject({ role: "assistant", reasoning_content: "思考链" });
+    expect((messages[2].tool_calls as { id: string }[])[0]?.id).toBe("call_9");
+    expect(messages[3]).toMatchObject({ role: "tool", tool_call_id: "call_9", content: "文件内容" });
+    expect(completion.text).toBe("最终回答");
+  });
+
+  it("响应无 reasoning_content 时回传字段不出现（对真实 OpenAI 无多余字段）", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse(chatBody("ok", "stop"));
+    }) as typeof fetch;
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
+    await provider.complete({
+      system: "s",
+      messages: [{ role: "assistant", content: "上轮", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{}" }] }, { role: "tool", toolCallId: "c1", content: "r" }]
+    });
+    expect(JSON.stringify(captured)).not.toContain("reasoning_content");
+  });
 });

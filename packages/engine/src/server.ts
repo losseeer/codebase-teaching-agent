@@ -25,7 +25,7 @@ import { TutorDatabase } from "./store/database.js";
 import { Journal, readJournal } from "./store/journal.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { createLightLlmProvider, createTeachingProvider, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
-import { mapChat, practiceChat } from "./scopechat/service.js";
+import { mapChat, practiceChat, type MapChatProgress } from "./scopechat/service.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
 loadDotEnv();
@@ -261,13 +261,54 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider });
-    if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "map_chat"
     });
+    for (const read of result.fileReads ?? []) {
+      journal.append("file_read", {
+        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
+      });
+    }
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
   }
+});
+
+/** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const content = request.body?.content?.trim();
+  if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
+  const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
+  if (!provider) return reply;
+  const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
+  reply.hijack();
+  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (event: unknown): void => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  try {
+    const result = await mapChat({
+      repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider,
+      onProgress: (progress: MapChatProgress) => send(progress)
+    });
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (result.usage) journal.append("token_usage", {
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "map_chat"
+    });
+    for (const read of result.fileReads ?? []) {
+      journal.append("file_read", {
+        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
+      });
+    }
+    send({ type: "done", reply: result.reply, provider: result.provider });
+  } catch (error) {
+    send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
+  }
+  reply.raw.end();
 });
 
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
