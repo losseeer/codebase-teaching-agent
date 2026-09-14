@@ -18,11 +18,12 @@ export const SCOPE_LABEL: Record<Scope, string> = {
   practice: "练习评估",
 };
 
-/** thread 一条消息的形态：用户/Agent/分隔线。`divider.html` 即分隔线文本（已通过 pushDivider 注入）。 */
+/** thread 一条消息的形态：用户/Agent/分隔线。`divider.text` 即分隔线文本（pushDivider 注入，纯文本）。
+  agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示）。 */
 export type ThreadItem =
-  | { kind: "user"; id: string; html: string }
-  | { kind: "agent"; id: string; html: string }
-  | { kind: "divider"; id: string; html: string };
+  | { kind: "user"; id: string; text: string }
+  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" }
+  | { kind: "divider"; id: string; text: string };
 
 const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
 
@@ -49,7 +50,8 @@ export interface TeachingSessionApi {
 
   /** Agent 侧栏 thread 状态：3 作用域各独立。`pushDivider/pushMessage/clearThread` 三个写入器封装为方法。 */
   threads: Record<Scope, ThreadItem[]>;
-  pushMessage: (scope: Scope, role: "user" | "agent", html: string) => void;
+  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
+  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint") => void;
   pushDivider: (scope: Scope, text: string) => void;
   clearThread: (scope: Scope) => void;
 
@@ -78,6 +80,8 @@ export interface TeachingSessionApi {
   content: string;
   setContent: (next: string) => void;
   sending: boolean;
+  /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务 */
+  progress: Record<Scope, string>;
   liveAnswer: string;
   learner: LearnerProfile | null;
   faded: FadedState | null;
@@ -121,17 +125,17 @@ export function useTeachingSession(repositoryId: string): TeachingSessionApi {
   - `pushMessage` / `clearThread` 不做去重
   */
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
-const pushMessage = (target: Scope, role: "user" | "agent", html: string): void => {
+const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint"): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, html }] }));
+  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
 };
 const pushDivider = (target: Scope, text: string): void => {
   const id = `${Date.now()}-div-${Math.random().toString(36).slice(2, 8)}`;
   setThreads((prev) => {
     const list = prev[target];
     const last = list[list.length - 1];
-    if (last && last.kind === "divider" && last.html === text) return prev;
-    return { ...prev, [target]: [...list, { kind: "divider", id, html: text }] };
+    if (last && last.kind === "divider" && last.text === text) return prev;
+    return { ...prev, [target]: [...list, { kind: "divider", id, text }] };
   });
 };
 const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [target]: [] }));
@@ -180,6 +184,11 @@ useEffect(() => {
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
+  // 回复生成过程指示（按作用域）：map 流式接收引擎事件；teaching/practice 为静态「回复生成中」
+  const [progress, setProgress] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
+  const setScopeProgress = (target: Scope, text: string): void => {
+    setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
+  };
   const [liveAnswer, setLiveAnswer] = useState("");
   const [error, setError] = useState("");
   // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
@@ -230,8 +239,8 @@ useEffect(() => {
   const send = async (): Promise<void> => {
     if (!content.trim() || !selected) return;
     const message = content;
-    pushMessage("teaching", "user", escapeHtml(message));
-    setSending(true); setError(""); setContent("");
+    pushMessage("teaching", "user", message);
+    setSending(true); setError(""); setContent(""); setScopeProgress("teaching", "回复生成中…");
     try {
       let active = session;
       if (!active) {
@@ -248,12 +257,13 @@ useEffect(() => {
       setCost(reply.cost);
       setReplySource((prev) => ({ ...prev, teaching: reply.provider ?? "" }));
       setLiveAnswer("");
-      pushMessage("teaching", "agent", escapeHtml(reply.message.content));
+      pushMessage("teaching", "agent", reply.message.content);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "发送失败");
-      pushMessage("teaching", "agent", `<em style="color:#ae3f36">发送失败：${escapeHtml(reason instanceof Error ? reason.message : String(reason))}</em>`);
+      pushMessage("teaching", "agent", `发送失败：${reason instanceof Error ? reason.message : String(reason)}`, "error");
     } finally {
       setSending(false);
+      setScopeProgress("teaching", "");
     }
   };
 
@@ -261,23 +271,28 @@ useEffect(() => {
   const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
     if (!content.trim() || !repositoryId) return;
     if (scope === "practice" && !practiceExercise) {
-      pushMessage("practice", "agent", "<em>先在练习页生成一道练习，再在这里追问。</em>");
+      pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
     }
     const message = content;
-    pushMessage(scope, "user", escapeHtml(message));
-    setSending(true); setError(""); setContent("");
+    pushMessage(scope, "user", message);
+    setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     try {
       const reply = scope === "map"
-        ? await api.mapChat(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined })
+        ? await api.mapChatStream(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined }, (event) => {
+            setScopeProgress("map", event.stage === "reading"
+              ? `正在读取 ${event.path || "文件"} …`
+              : "回复生成中…");
+          })
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id });
-      pushMessage(scope, "agent", escapeHtml(reply.reply));
+      pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "发送失败");
-      pushMessage(scope, "agent", `<em style="color:#ae3f36">发送失败：${escapeHtml(reason instanceof Error ? reason.message : String(reason))}</em>`);
+      pushMessage(scope, "agent", `发送失败：${reason instanceof Error ? reason.message : String(reason)}`, "error");
     } finally {
       setSending(false);
+      setScopeProgress(scope, "");
     }
   };
   const sendMap = (): Promise<void> => sendScoped("map");
@@ -306,18 +321,8 @@ useEffect(() => {
     mapNode, setMapNode, mapFile, setMapFile,
     practiceUnit, setPracticeUnit,
     session, settings, setSettings, cost,
-    content, setContent, sending, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
+    content, setContent, sending, progress, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
     suggestions, actOnSuggestion, refreshSuggestions,
   };
-}
-
-function escapeHtml(input: string): string {
-  return input.replace(/[&<>"']/g, (c) => {
-    if (c === "&") return "&amp;";
-    if (c === "<") return "&lt;";
-    if (c === ">") return "&gt;";
-    if (c === "\"") return "&quot;";
-    return "&#39;";
-  });
 }

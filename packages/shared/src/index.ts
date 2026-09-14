@@ -435,7 +435,8 @@ export type JournalEventType =
   | "unassisted_test"
   | "action_veto"
   | "exercise_declined"
-  | "token_usage";
+  | "token_usage"
+  | "file_read";
 
 export interface JournalEvent {
   id: string;

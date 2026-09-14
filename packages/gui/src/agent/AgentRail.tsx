@@ -1,7 +1,8 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, ListChecks, RefreshCw, Send, X } from "lucide-react";
 import { companionKindLabel } from "../views/helpers";
-import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi } from "./useTeachingSession";
+import { Markdown } from "./Markdown";
+import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi, type ThreadItem } from "./useTeachingSession";
 
 /**
   持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
@@ -20,7 +21,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
   const threadRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [items.length, scope, t.liveAnswer]);
+  }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
 
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
 
@@ -85,24 +86,24 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             <p>{scope === "map" ? "在文件树切换节点，会自动在此记录「已切换到 / 已选中」。" : "在练习页提交答案后，判分与下一步建议会出现在这里。"}</p>
           </div>
         ) : null}
-        {items.map((item) => item.kind === "divider" ? (
-          <div className="thread-divider" key={item.id}><span dangerouslySetInnerHTML={{ __html: item.html }} /></div>
-        ) : (
-          <div className={`message ${item.kind}`} key={item.id}>
-            <span>{item.kind === "user" ? "你" : "Codebase Agent"}</span>
-            <p dangerouslySetInnerHTML={{ __html: item.html }} />
-          </div>
-        ))}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
         {scope === "teaching" && t.liveAnswer && (
           <div className="message agent streaming">
             <span>Codebase Agent</span>
-            <p dangerouslySetInnerHTML={{ __html: escapeHtml(t.liveAnswer) }} /><i />
+            <Markdown content={t.liveAnswer} /><i />
+          </div>
+        )}
+        {/* 回复生成过程指示：teaching 有流式正文时让位（避免双重提示），其余作用域全程显示 */}
+        {t.sending && t.progress[scope] && !(scope === "teaching" && t.liveAnswer) && (
+          <div className="message agent streaming" key="agent-progress">
+            <span>Codebase Agent</span>
+            <p className="agent-progress">{t.progress[scope]}</p><i />
           </div>
         )}
         {scope === "teaching" && t.suggestions.map((s) => (
           <article className="companion-card thread-card" key={s.id}>
             <div className="companion-heading"><span>{companionKindLabel(s.kind)}</span><strong>{s.title}</strong></div>
-            <p dangerouslySetInnerHTML={{ __html: escapeHtml(s.body) }} />
+            <Markdown content={s.body} />
             {s.anchors.length ? (
               <div className="companion-anchors">
                 {s.anchors.slice(0, 2).map((a) => <span key={`${a.path}:${a.line}`}><Code2 size={12} />{a.path}:{a.line}</span>)}
@@ -194,12 +195,19 @@ function ScopeIcon({ scope }: { scope: Scope }): ReactElement {
   return <ListChecks size={12} />;
 }
 
-function escapeHtml(input: string): string {
-  return input.replace(/[&<>"']/g, (c) => {
-    if (c === "&") return "&amp;";
-    if (c === "<") return "&lt;";
-    if (c === ">") return "&gt;";
-    if (c === "\"") return "&quot;";
-    return "&#39;";
-  });
+/** thread 单条消息渲染：分隔线纯文本；用户消息纯文本（pre-wrap 由 .message p 提供）；
+  agent 正文走 Markdown；error/hint 变体用样式类标注，不进 Markdown。 */
+function ThreadEntry({ item }: { item: ThreadItem }): ReactElement {
+  if (item.kind === "divider") {
+    return <div className="thread-divider"><span>{item.text}</span></div>;
+  }
+  const body = item.kind === "agent" && !item.variant
+    ? <Markdown content={item.text} />
+    : <p className={item.kind === "agent" ? `plain-${item.variant}` : undefined}>{item.text}</p>;
+  return (
+    <div className={`message ${item.kind}`}>
+      <span>{item.kind === "user" ? "你" : "Codebase Agent"}</span>
+      {body}
+    </div>
+  );
 }

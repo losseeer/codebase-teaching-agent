@@ -41,6 +41,32 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .thread-divider { display: flex; align-items: center; gap: 8px; margin: 11px 0; color: #90a79b; font-size: 10px; }
 .thread-divider::before, .thread-divider::after { content: ""; flex: 1; height: 1px; background: #dfe9e2; }
 .thread-divider span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 回复生成过程指示（回复生成中 / 正在读取 xx …）：斜体淡色 + 省略号动画 */
+.agent-thread .message p.agent-progress { color: #587a68; font-style: italic; background: #f7faf7; }
+.agent-thread .message p.agent-progress::after { content: ""; display: inline-block; margin-left: 2px; animation: progress-dots 1.2s infinite; }
+@keyframes progress-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } 100% { content: ""; } }
+/* 错误 / 本地提示变体（不进 Markdown，复用 .message p 气泡底） */
+.agent-thread .message p.plain-error { color: #ae3f36; font-style: italic; }
+.agent-thread .message p.plain-hint { color: #6e877c; font-style: italic; }
+/* 对话消息 Markdown（react-markdown + remark-gfm）：外层 .md 承接气泡（.message p 的底色在子元素上会重复，
+  因此内层元素全部去气泡化，仅做排版）；代码块深绿反白，与项目主题一致 */
+.agent-thread .message .md > :first-child { margin-top: 0; }
+.agent-thread .message .md > :last-child { margin-bottom: 0; }
+.agent-thread .message .md p { background: none; padding: 0; margin: 0 0 8px; white-space: normal; }
+.agent-thread .message .md ul, .agent-thread .message .md ol { margin: 0 0 8px; padding-left: 20px; }
+.agent-thread .message .md li { margin: 2px 0; }
+.agent-thread .message .md li > p { margin: 0; }
+.agent-thread .message .md h1, .agent-thread .message .md h2, .agent-thread .message .md h3, .agent-thread .message .md h4 { margin: 10px 0 6px; font-size: 14px; line-height: 1.4; }
+.agent-thread .message .md blockquote { margin: 0 0 8px; padding: 2px 10px; border-left: 3px solid #b7d1c0; color: #587a68; }
+.agent-thread .message .md code { background: rgba(23, 55, 46, .08); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.agent-thread .message .md pre { background: #17372e; color: #e8f3ec; padding: 10px 12px; border-radius: 5px; overflow-x: auto; margin: 0 0 8px; }
+.agent-thread .message .md pre code { background: none; padding: 0; color: inherit; font-size: 12px; white-space: pre; }
+.agent-thread .message .md table { border-collapse: collapse; margin: 0 0 8px; font-size: 12.5px; max-width: 100%; display: block; overflow-x: auto; }
+.agent-thread .message .md th, .agent-thread .message .md td { border: 1px solid #cfe0d5; padding: 4px 8px; text-align: left; }
+.agent-thread .message .md th { background: #e9f2ec; }
+.agent-thread .message .md a { color: #2d6a4f; }
+.agent-thread .message .md hr { border: 0; border-top: 1px solid #dfe9e2; margin: 10px 0; }
+.agent-thread .message .md img { max-width: 100%; }
 .composer-section { border-top: 1px solid #e3ece6; padding: 10px 12px 12px; background: #fbfdfb; }
 .composer-section .error-message { margin: 0 0 8px; }
 .composer-section form.composer { border-top: 0; padding: 0; background: transparent; }

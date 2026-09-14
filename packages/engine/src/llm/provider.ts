@@ -3,15 +3,44 @@ export interface LlmUsage {
   outputTokens: number;
 }
 
+/** 工具定义（OpenAI function 形状的引擎侧简化版）。 */
+export interface LlmTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+/** 模型发起的一次工具调用。 */
+export interface LlmToolCall {
+  id: string;
+  name: string;
+  argumentsJson: string;
+}
+
+/** 多轮工具循环中的消息。reasoningContent 仅在模型响应里出现时才需要原样回传（DeepSeek thinking + tools 的 API 要求）。 */
+export interface LlmMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolCalls?: LlmToolCall[];
+  toolCallId?: string;
+  reasoningContent?: string;
+}
+
 export interface LlmCompletionInput {
   system: string;
-  user: string;
+  /** 单轮调用的用户消息；提供 messages 时可省略。 */
+  user?: string;
+  /** 工具循环的既有对话（assistant 带 toolCalls / tool 为结果）。提供时忽略 user。 */
+  messages?: LlmMessage[];
+  tools?: LlmTool[];
   maxTokens?: number;
   temperature?: number;
 }
 
 export interface LlmCompletion {
   text: string;
+  toolCalls?: LlmToolCall[];
+  reasoningContent?: string;
   usage?: LlmUsage;
   finishReason?: string;
 }
@@ -49,6 +78,24 @@ function contentText(value: unknown): string {
   return "";
 }
 
+function toOpenAiMessage(message: LlmMessage): Record<string, unknown> {
+  if (message.role === "tool") {
+    return { role: "tool", tool_call_id: message.toolCallId ?? "", content: message.content };
+  }
+  const payload: Record<string, unknown> = { role: message.role, content: message.content };
+  if (message.toolCalls?.length) {
+    payload.tool_calls = message.toolCalls.map((call) => ({
+      id: call.id,
+      type: "function",
+      function: { name: call.name, arguments: call.argumentsJson }
+    }));
+  }
+  // DeepSeek thinking 模式 + tools 的官方要求：reasoning_content 必须逐轮原样回传，否则 400。
+  // 该字段只在模型响应里出现时才被记录，因此真实 OpenAI 等不产生它的服务永远不会收到这个多余字段。
+  if (message.reasoningContent) payload.reasoning_content = message.reasoningContent;
+  return payload;
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   readonly name = "OpenAI-compatible teaching model";
   readonly modelVersion: string;
@@ -70,21 +117,48 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
     const budget = (input.maxTokens ?? 700) + this.reasoningHeadroom;
-    const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, {
+    const messages: Record<string, unknown>[] = [{ role: "system", content: input.system }];
+    if (input.messages?.length) {
+      messages.push(...input.messages.map(toOpenAiMessage));
+    } else {
+      messages.push({ role: "user", content: input.user });
+    }
+    const payload: Record<string, unknown> = {
       model: this.options.model,
       temperature: input.temperature ?? 0.2,
       max_tokens: budget,
-      messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }]
+      messages
+    };
+    if (input.tools?.length) {
+      payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
+      payload.tool_choice = "auto";
+    }
+    const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload);
+    const body = await response.json() as {
+      choices?: { message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const choice = body.choices?.[0];
+    const text = contentText(choice?.message?.content);
+    const toolCalls: LlmToolCall[] = (choice?.message?.tool_calls ?? []).flatMap((call) => {
+      const name = call.function?.name;
+      if (!name) return [];
+      return [{ id: call.id ?? `call_${Math.random().toString(36).slice(2, 10)}`, name, argumentsJson: call.function?.arguments ?? "{}" }];
     });
-    const body = await response.json() as { choices?: { message?: { content?: unknown }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
-    const text = contentText(body.choices?.[0]?.message?.content);
-    if (!text) {
-      if (body.choices?.[0]?.finish_reason === "length") {
+    if (!text && !toolCalls.length) {
+      if (choice?.finish_reason === "length") {
         throw new Error(`LLM 补全被 max_tokens=${budget} 截断且正文为空：推理模型的思考 token 计入该上限。可调大 TUTOR_LLM_REASONING_HEADROOM、放宽 TUTOR_LLM_TIMEOUT_MS，或改用非推理模型。`);
       }
       throw new Error("LLM returned an empty completion");
     }
-    return { text, usage: body.usage ? tokenUsage(body.usage) : undefined, finishReason: body.choices?.[0]?.finish_reason };
+    const reasoningRaw = choice?.message?.reasoning_content;
+    return {
+      text,
+      toolCalls: toolCalls.length ? toolCalls : undefined,
+      reasoningContent: typeof reasoningRaw === "string" && reasoningRaw ? reasoningRaw : undefined,
+      usage: body.usage ? tokenUsage(body.usage) : undefined,
+      finishReason: choice?.finish_reason
+    };
   }
 
   private async request(url: string, payload: unknown): Promise<Response> {
