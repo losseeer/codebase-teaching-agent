@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes, Link, useLocation, useSearchParams } from "react-router-dom";
-import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, Sparkles } from "lucide-react";
+import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import type { Workspace as _Workspace } from "./api/client";
+import { api } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
 import { useTeachingSession } from "./agent/useTeachingSession";
 import { ImportPage } from "./views/ImportPage";
@@ -10,6 +11,7 @@ import { TutorPage } from "./views/TutorPage";
 import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
+import { Loading } from "./views/helpers";
 import { ToastHost } from "./modules/toast";
 
 // Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
@@ -34,16 +36,41 @@ export function App(): ReactElement {
     const saved = localStorage.getItem("codebase-tutor.workspace");
     return saved ? JSON.parse(saved) as _Workspace : null;
   });
+  // engine 的仓库注册表是内存态，重启后 localStorage 里的 repositoryId 已失效——
+  // 恢复的 workspace 必须先经引擎验证：有效才默认进课程地图，否则清除并落到导入页。
+  const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
     if (value) localStorage.setItem("codebase-tutor.workspace", JSON.stringify(value));
     else localStorage.removeItem("codebase-tutor.workspace");
   };
+  useEffect(() => {
+    if (!workspace) return;
+    let current = true;
+    api.getIndex(workspace.repositoryId)
+      .then(() => { if (current) setWorkspaceReady(true); })
+      .catch(() => { if (current) { updateWorkspace(null); setWorkspaceReady(true); } });
+    return () => { current = false; };
+  }, []);
   const session = useTeachingSession(workspace?.repositoryId ?? "");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("codebase-tutor.sidebar-collapsed") === "1");
+  const toggleSidebar = (): void => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("codebase-tutor.sidebar-collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
   return (
-    <div className="shell">
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><Sparkles size={17} /></span><span>Codebase Tutor</span></div>
+        <div className="brand">
+          <span className="brand-mark"><Sparkles size={17} /></span>
+          <span className="nav-label">Codebase Tutor</span>
+          <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} onClick={toggleSidebar}>
+            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+          </button>
+        </div>
         <nav aria-label="主导航">
           <NavItem to="/import" icon={<FolderGit2 size={17} />} label="导入仓库" />
           <WorkspaceNavItem id="map" icon={<Network size={17} />} label="课程地图" disabled={!workspace} />
@@ -53,18 +80,18 @@ export function App(): ReactElement {
         </nav>
         <div className="sidebar-bottom">
           <span className={`status-dot ${workspace ? "online" : ""}`} />
-          <span>{workspace ? "本地引擎已连接" : "等待导入仓库"}</span>
+          <span className="nav-label">{workspace ? "本地引擎已连接" : "等待导入仓库"}</span>
         </div>
       </aside>
       <main className="main-content">
         <Routes>
-          <Route path="/import" element={<ImportPage onImported={updateWorkspace} workspace={workspace} />} />
-          <Route path="/insights" element={workspace ? <InsightsPage workspace={workspace} /> : <Navigate to="/import" replace />} />
-          <Route path="/app" element={workspace ? <Workbench workspace={workspace} session={session} /> : <Navigate to="/import" replace />} />
+          <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); session.reloadCourseData(); }} workspace={workspace} />} />
+          <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />)} />
+          <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} session={session} />)} />
           <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
           <Route path="/tutor" element={<Navigate to="/app?workspace=teaching" replace />} />
           <Route path="/practice" element={<Navigate to="/app?workspace=practice" replace />} />
-          <Route path="*" element={workspace ? <Navigate to="/app?workspace=map" replace /> : <Navigate to="/import" replace />} />
+          <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : <Loading />) : <Navigate to="/import" replace />} />
         </Routes>
       </main>
       {workspace ? <AgentRail session={session} /> : null}
@@ -73,10 +100,18 @@ export function App(): ReactElement {
   );
 }
 
+/** 路由守卫：workspace 恢复自 localStorage 时需等引擎验证完成（workspaceReady）再渲染，避免失效 id 先跳课程地图。 */
+function guard(workspace: _Workspace | null, ready: boolean, content: ReactElement): ReactElement {
+  if (!workspace) return <Navigate to="/import" replace />;
+  return ready ? content : <Loading />;
+}
+
 function NavItem({ to, icon, label, disabled }: { to: string; icon: ReactElement; label: string; disabled?: boolean }): ReactElement {
   const location = useLocation();
   const active = location.pathname === to;
-  return disabled ? <span className="nav-item disabled">{icon}{label}</span> : <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}{label}</Link>;
+  return disabled
+    ? <span className="nav-item disabled">{icon}<span className="nav-label">{label}</span></span>
+    : <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}<span className="nav-label">{label}</span></Link>;
 }
 
 /** 三个学习工作区的侧栏入口：active 判定 = /app + ?workspace= 参数。 */
@@ -84,8 +119,8 @@ function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon
   const [params] = useSearchParams();
   const location = useLocation();
   const active = location.pathname === "/app" && (params.get("workspace") ?? "map") === id;
-  if (disabled) return <span className="nav-item disabled">{icon}{label}</span>;
-  return <Link className={`nav-item ${active ? "active" : ""}`} to={`/app?workspace=${id}`}>{icon}{label}</Link>;
+  if (disabled) return <span className="nav-item disabled">{icon}<span className="nav-label">{label}</span></span>;
+  return <Link className={`nav-item ${active ? "active" : ""}`} to={`/app?workspace=${id}`}>{icon}<span className="nav-label">{label}</span></Link>;
 }
 
 /**

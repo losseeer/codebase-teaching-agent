@@ -21,8 +21,7 @@ import { SourceView, type SourcePayload } from "../source/SourceView";
 
 function gradingLabel(mode: ExerciseGradingMode): string {
   if (mode === "execution") return "受限执行验证";
-  if (mode === "set_match") return "集合精确匹配";
-  return "证据 Rubric";
+  return "集合精确匹配";
 }
 
 function unitName(unitId: string): string {
@@ -65,11 +64,15 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
   }, [activeModule, modules]);
 
   // 题型统一走引擎的自适应推荐（context-line 的题型下拉已按用户要求移除；
-  // 针对具体单元的重练由左栏练习卡片 targetUnitId 承担）
+  // 针对具体单元的重练由左栏练习卡片 targetUnitId 承担；出题范围限定在当前激活的知识模块内）
   const generate = async (targetUnitId?: string): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     try {
-      const next = await api.createExercise(repositoryId, targetUnitId ? { targetUnitId } : {});
+      const next = await api.createExercise(repositoryId, {
+        moduleId: activeModule,
+        moduleIds: modules.map((item) => item.id),
+        ...(targetUnitId ? { targetUnitId } : {})
+      });
       setExercise(next);
       t.setPracticeUnit(next.title);
       const anchor = next.anchors[0];
@@ -95,7 +98,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
     if (!exercise) return;
     setLoading(true); setError("");
     try {
-      const answer = exercise.inputMode === "text" ? { text } : exercise.inputMode === "multi_select" ? { selectedIds } : { selectedIds, rationale: text };
+      const answer = exercise.inputMode === "text" ? { text } : { selectedIds };
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
       setResult(next);
       refreshSummary();
@@ -121,7 +124,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
         <h1>源码练习</h1>
         <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>已练单元 {summary?.mastery.length ?? 0}</span></div>
       </header>
-      <ContextLine strong="练习复习" detail={`模块「${moduleLabel}」 · 证据与反馈会回写学习状态`} />
+      <ContextLine strong="练习复习" detail={`模块「${moduleLabel}」 · 反馈会回写学习状态`} />
       <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
       <div className="workspace practice-workspace">
         <div className={paneClass(0)}>
@@ -183,7 +186,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
                     onChange={(event) => setText(event.target.value)}
                     rows={4}
                     aria-label="练习答案"
-                    placeholder={exercise.inputMode === "evidence_and_text" ? "说明证据如何支撑结论，并标注证据强度" : "只填写你预测的返回值"}
+                    placeholder="只填写你预测的返回值"
                   />
                 ) : null}
                 <div className="answer-actions">
@@ -197,13 +200,10 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
                   {result ? (
                     <>
                       <p>{result.passed ? "已通过" : "继续完善"} · 得分 {Math.round(result.score * 100)}% · {result.feedback}</p>
-                      {result.rubric?.map((criterion) => (
-                        <p className="rubric-line" key={criterion.id}>{criterion.label} {Math.round(criterion.score * 100)}/{Math.round(criterion.maxScore * 100)} · {criterion.feedback}</p>
-                      ))}
                       <p>下次复习：{new Date(result.review.dueAt).toLocaleDateString()}（间隔 {result.review.intervalDays} 天）</p>
                     </>
                   ) : (
-                    <p>完成回答后，这里会显示证据引用、掌握度变化和下一项推荐。</p>
+                    <p>完成回答后，这里会显示判分反馈、掌握度变化和下次复习时间。</p>
                   )}
                 </div>
               </div>

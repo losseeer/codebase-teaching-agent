@@ -131,7 +131,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             placeholder={placeholder}
             aria-label="与 Codebase Agent 对话"
             rows={3}
-            disabled={!canSend && scope !== "teaching" && scope !== "map"}
+            disabled={t.sending}
           />
           <button className="primary icon-button" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
             {t.sending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}
@@ -152,15 +152,15 @@ function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: s
   }
   if (scope === "map") {
     return {
-      placeholder: "讨论这个项目的宏观设计…",
-      canSend: false,
-      onSend: async () => { t.pushDivider("map", "（草稿）" + escapeHtml(t.content)); t.setContent(""); },
+      placeholder: "讨论这个项目的宏观设计…（记录为草稿笔记）",
+      canSend: !t.sending && t.content.trim().length > 0,
+      onSend: async () => { t.pushMessage("map", "user", escapeHtml(t.content.trim())); t.setContent(""); },
     };
   }
   return {
-    placeholder: "对这道练习追问…",
-    canSend: false,
-    onSend: async () => { t.pushDivider("practice", "（草稿）" + escapeHtml(t.content)); t.setContent(""); },
+    placeholder: "对这道练习追问…（记录为草稿笔记）",
+    canSend: !t.sending && t.content.trim().length > 0,
+    onSend: async () => { t.pushMessage("practice", "user", escapeHtml(t.content.trim())); t.setContent(""); },
   };
 }
 

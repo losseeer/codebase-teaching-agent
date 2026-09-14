@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import type { CourseNode, CourseTree, DecisionUnit, FileEntry, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTree, FileEntry, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
 import type { DependencyGraph } from "../depgraph/graph.js";
 import type { FileSummary } from "../summarizer/summarizer.js";
 
@@ -9,7 +9,6 @@ export function buildCourseTree(input: {
   files: FileEntry[];
   summaries: FileSummary[];
   graph: DependencyGraph;
-  decisions?: DecisionUnit[];
   implementations?: ImplementationUnit[];
 }): CourseTree {
   const byPath = new Map(input.summaries.map((summary) => [summary.path, summary.summary]));
@@ -25,16 +24,6 @@ export function buildCourseTree(input: {
     kind: "module" as const,
     summary: `${moduleName} 包含 ${files.length} 个可分析文件。${files.slice(0, 2).map((file) => byPath.get(file.path)).filter(Boolean).join(" ")}`,
     anchors: files.slice(0, 3).map((file) => ({ path: file.path, line: 1, label: "模块入口" })),
-    children: []
-  }));
-  const decisions = (input.decisions ?? []).map((decision) => ({
-    id: decision.id,
-    title: decision.title,
-    kind: "decision" as const,
-    summary: decision.summary,
-    anchors: decision.anchors,
-    evidence: decision.evidence,
-    verification: decision.verification,
     children: []
   }));
   const implementations = (input.implementations ?? []).map((unit) => ({
@@ -59,8 +48,7 @@ export function buildCourseTree(input: {
       children: [
         { id: "workflows", title: "从入口理解执行路径", kind: "overview", summary: "从路由、CLI 和应用入口追踪主要执行路径。", anchors: [], children: workflows.length ? workflows : [fallbackWorkflow(input.files, byPath)] },
         { id: "modules", title: "模块地图", kind: "overview", summary: "按目录浏览职责边界；每个节点都附有源码锚点。", anchors: [], children: modules },
-        { id: "micro", title: "微观精读", kind: "overview", summary: "函数级输入、输出、不变量、边界和陷阱。", anchors: [], children: implementations },
-        { id: "decisions", title: "选型证据", kind: "overview", summary: "证据按直接、间接和推测分级；没有证据时明确保留待确认。", anchors: [], children: decisions }
+        { id: "micro", title: "微观精读", kind: "overview", summary: "函数级输入、输出、不变量、边界和陷阱。", anchors: [], children: implementations }
       ]
     }
   };

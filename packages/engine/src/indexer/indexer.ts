@@ -33,7 +33,7 @@ export function indexRepository(repositoryPath: string): RepositoryIndex {
     totalLines: files.reduce((sum, file) => sum + file.lines, 0),
     files,
     fileTree: toTree(files),
-    hotspots: gitHotspots(repositoryPath)
+    hotspots: gitHotspots(repositoryPath, ignore)
   };
 }
 
@@ -62,12 +62,14 @@ function toTree(files: FileEntry[]): FileTreeNode[] {
   return root.children!;
 }
 
-function gitHotspots(repositoryPath: string): Hotspot[] {
+/** Hotspot statistics follow the same exclusion rules as indexing; ignored paths must not surface. */
+function gitHotspots(repositoryPath: string, ignore: ReturnType<typeof createTutorIgnoreMatcher>): Hotspot[] {
   if (!existsSync(join(repositoryPath, ".git"))) return [];
   try {
     const output = execFileSync("git", ["-C", repositoryPath, "log", "--name-only", "--format="], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
     const changes = new Map<string, number>();
     for (const path of output.split("\n").map((value) => value.trim()).filter(Boolean)) {
+      if (ignore.ignores(path)) continue;
       changes.set(path, (changes.get(path) ?? 0) + 1);
     }
     return [...changes.entries()].map(([path, count]) => ({ path, changes: count }))

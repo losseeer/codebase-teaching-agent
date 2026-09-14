@@ -55,6 +55,18 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .nav-item.disabled { opacity: .43; }
 .sidebar-bottom { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid #355448; color: #acc1b4; font-size: 12px; display: flex; gap: 8px; align-items: center; }
 .status-dot { height: 8px; width: 8px; border-radius: 50%; background: #769087; }.status-dot.online { background: #d8ef58; }
+.sidebar-toggle { margin-left: auto; flex: 0 0 auto; border: 0; background: transparent; color: #bdcec3; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 5px; cursor: pointer; padding: 0; }
+.sidebar-toggle:hover { background: #21483d; color: #fff; }
+.shell { transition: grid-template-columns .18s ease; }
+.shell.sidebar-collapsed { grid-template-columns: 64px minmax(0, 1fr) 348px; }
+.shell.sidebar-collapsed .sidebar { padding: 22px 10px; }
+.shell.sidebar-collapsed .brand { padding: 0 0 26px; justify-content: center; gap: 0; }
+.shell.sidebar-collapsed .brand > .nav-label { display: none; }
+.shell.sidebar-collapsed .brand .sidebar-toggle { margin-left: 0; }
+.shell.sidebar-collapsed .nav-item { justify-content: center; padding-left: 0; padding-right: 0; gap: 0; }
+.shell.sidebar-collapsed .nav-item .nav-label { display: none; }
+.shell.sidebar-collapsed .sidebar-bottom { justify-content: center; padding-left: 0; padding-right: 0; }
+.shell.sidebar-collapsed .sidebar-bottom .nav-label { display: none; }
 .main-content { min-width: 0; height: 100%; overflow: hidden; }
 .page, .course-page, .tutor-page { max-width: 1440px; margin: 0 auto; padding: 44px clamp(20px, 4vw, 62px); height: 100%; overflow-y: auto; scrollbar-width: thin; }
 .page-heading { display: flex; justify-content: space-between; gap: 24px; align-items: start; }
@@ -306,7 +318,7 @@ button.entry-item:hover { background: #eef6ef; }
 .exercise-card strong { display: block; color: #22493a; font-size: 12px; }
 .exercise-card span { display: block; margin-top: 8px; color: #81958b; font-size: 10px; }
 
-.practice-context { flex: 1; min-height: 0; overflow: hidden; }
+.practice-context { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .practice-error { flex: 0 0 auto; margin: 10px 15px 0; }
 .practice-code { flex: 0 0 auto; max-height: 40%; min-height: 120px; overflow: auto; padding: 12px 15px 0; border-bottom: 1px solid #d9e5dd; scrollbar-width: thin; }
 .practice-code .source-view { margin: 0; max-height: none; }

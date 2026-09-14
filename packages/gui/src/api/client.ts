@@ -37,7 +37,7 @@ export const api = {
   actOnSuggestion: (repositoryId: string, suggestionId: string, action: CompanionAction) => request<CompanionSuggestion>(`/api/repositories/${repositoryId}/companion/suggestions/${encodeURIComponent(suggestionId)}/actions`, { method: "POST", body: JSON.stringify({ action }) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
-  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
+  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => request<CostSummary>(`/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
