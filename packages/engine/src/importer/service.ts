@@ -98,11 +98,11 @@ export class ImportService extends EventEmitter {
     }));
     let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations: verifiedImplementations });
     course = attachQuality(course, quality);
-    // 课程地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
+    // 代码地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 轻任务走轻量档（TUTOR_LIGHT_*），未配置回落主力档
     const mapProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : (createLightLlmProvider() ?? createTeachingProvider());
     if (mapProvider) {
-      progress("building_course", 85, "正在用 LLM 完善课程地图命名与摘要");
+      progress("building_course", 85, "正在用 LLM 完善代码地图命名与摘要");
       const refinement = await refineCourseMap(course, mapProvider);
       course = refinement.course;
       if (refinement.usage) new Journal(repositoryPath, index.repositoryId).append("token_usage", {

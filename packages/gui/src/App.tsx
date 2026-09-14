@@ -37,7 +37,7 @@ export function App(): ReactElement {
     return saved ? JSON.parse(saved) as _Workspace : null;
   });
   // engine 的仓库注册表是内存态，重启后 localStorage 里的 repositoryId 已失效——
-  // 恢复的 workspace 必须先经引擎验证：有效才默认进课程地图，否则清除并落到导入页。
+  // 恢复的 workspace 必须先经引擎验证：有效才默认进代码地图，否则清除并落到导入页。
   const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
@@ -73,7 +73,7 @@ export function App(): ReactElement {
         </div>
         <nav aria-label="主导航">
           <NavItem to="/import" icon={<FolderGit2 size={17} />} label="导入仓库" />
-          <WorkspaceNavItem id="map" icon={<Network size={17} />} label="课程地图" disabled={!workspace} />
+          <WorkspaceNavItem id="map" icon={<Network size={17} />} label="代码地图" disabled={!workspace} />
           <WorkspaceNavItem id="teaching" icon={<MessageCircleQuestion size={17} />} label="教学会话" disabled={!workspace} />
           <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习复习" disabled={!workspace} />
           <NavItem to="/insights" icon={<BarChart3 size={17} />} label="成本监控" disabled={!workspace} />
@@ -100,7 +100,7 @@ export function App(): ReactElement {
   );
 }
 
-/** 路由守卫：workspace 恢复自 localStorage 时需等引擎验证完成（workspaceReady）再渲染，避免失效 id 先跳课程地图。 */
+/** 路由守卫：workspace 恢复自 localStorage 时需等引擎验证完成（workspaceReady）再渲染，避免失效 id 先跳代码地图。 */
 function guard(workspace: _Workspace | null, ready: boolean, content: ReactElement): ReactElement {
   if (!workspace) return <Navigate to="/import" replace />;
   return ready ? content : <Loading />;

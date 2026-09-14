@@ -7,7 +7,9 @@ import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { TutorDatabase } from "../store/database.js";
+import { readJournal } from "../store/journal.js";
 import { selectZpdTarget } from "./learner.js";
 import { ExerciseService, type PracticeRepository } from "./service.js";
 import { scheduleSm2 } from "./sm2.js";
@@ -106,6 +108,91 @@ describe("M2.1 learner scheduling", () => {
     ], [{ unitId: "recent", level: 2, attempts: 3, successes: 2, lastPracticedAt: "2026-01-03T00:00:00.000Z" }]);
     expect(selected).toBeDefined();
     expect(Math.abs(selected!.difficulty - 2)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
+  const generationJson = JSON.stringify({
+    ok: true,
+    title: "分析 clamp 的输入处理",
+    prompt: "阅读下面摘录里第 1 行的 clamp 函数：传入一个值后它如何处理边界？结合代码说明这个设计的取舍。",
+    answerKey: "clamp 对传入值没有任何特殊处理，直接返回原值；边界职责完全交给调用方。",
+    criteria: [
+      { dimension: "正确性", description: "指出直接返回原值" },
+      { dimension: "解释性", description: "说明了边界职责在调用方" }
+    ],
+    anchors: [{ path: "src/config.js", line: 1 }],
+    targetTitle: "clamp"
+  });
+  const judgeJson = JSON.stringify({ score: 0.8, passed: true, feedback: "要点基本答到，缺少对调用方职责的说明。" });
+
+  function fakeProvider(responses: string[]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
+    const calls: LlmCompletionInput[] = [];
+    let index = 0;
+    return {
+      calls,
+      provider: {
+        name: "fake",
+        modelVersion: "fake-model",
+        async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+          calls.push(input);
+          const text = responses[Math.min(index, responses.length - 1)];
+          index += 1;
+          return { text };
+        }
+      }
+    };
+  }
+
+  it("一轮调用出题并落缓存；同 tag+nonce 复用，换 nonce 出新题", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider, calls } = fakeProvider([generationJson]);
+    const first = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    expect(first.kind).toBe("llm_rubric");
+    expect(first.family).toBe("llm");
+    expect(first.inputMode).toBe("open");
+    expect(first.gradingMode).toBe("rubric");
+    expect(first.tag).toBe("边界处理");
+    expect(first.anchors[0]?.path).toBe("src/config.js");
+    expect(calls).toHaveLength(1);
+    const reused = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    expect(reused.id).toBe(first.id);
+    expect(calls).toHaveLength(1);
+    const variant = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag", variantNonce: 1 }, provider);
+    expect(variant.id).not.toBe(first.id);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("LLM 拒绝出题时抛出理由并记 exercise_declined journal", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "当前仓库没有与该主题相关的代码素材。" })]);
+    await expect(service.next(repository, { family: "llm", tag: "不存在的主题", tagId: "custom-x" }, provider)).rejects.toThrow("当前仓库没有与该主题相关的代码素材。");
+    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined")).toBe(true);
+  });
+
+  it("LLM 返回幻觉锚点时被守门否决", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const hallucinated = JSON.parse(generationJson);
+    hallucinated.anchors = [{ path: "src/invented.ts", line: 1 }];
+    const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
+    await expect(service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-x" }, provider)).rejects.toThrow("守门校验");
+    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
+  });
+
+  it("rubric 判分走 LLM 比对，automatic=false；未配置 provider 时显式报错", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([generationJson, judgeJson]);
+    const exercise = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    const result = await service.answer(repository, exercise.id, { text: "返回原值，边界交给调用方。" }, provider);
+    expect(result.automatic).toBe(false);
+    expect(result.passed).toBe(true);
+    expect(result.score).toBe(0.8);
+    expect(result.feedbackSource).toBe("llm_judge");
+    await expect(service.answer(repository, exercise.id, { text: "再答一次" })).rejects.toThrow("rubric 判分需要 LLM");
   });
 });
 

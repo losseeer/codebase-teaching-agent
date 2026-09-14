@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import type { Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
 import { classifyModuleId, EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
-import { refineExerciseWithLlm } from "./llm-generate.js";
+import { buildTagCandidate, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
+import { guardLlmProposal, type GuardCandidate } from "./verify.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
 import { deriveMastery, selectZpdTarget, type ZpdTarget } from "./learner.js";
@@ -14,7 +15,8 @@ import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
 type ExpectedAnswer =
   | { type: "output"; expectedOutput: string; invocation: SafeInvocation }
-  | { type: "set"; expectedIds: string[] };
+  | { type: "set"; expectedIds: string[] }
+  | { type: "rubric"; answerKey: string; criteria: RubricCriterion[] };
 
 interface StoredExercise {
   exercise: Exercise;
@@ -49,10 +51,12 @@ export class ExerciseService {
   /**
     生成练习：目标单元与标准答案始终由静态分析产出（可判分）；
     传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
+    family="llm" 走 LLM 出题族（tag 主题出题，一轮调用可拒绝，rubric 判分）。
     */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] } = {}, provider?: LlmProvider): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[]; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
     try {
+      if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
       if (!requested.kind && !requested.targetUnitId) {
         const due = database.getReviewSchedules(repository.index.repositoryId)
           .filter((schedule) => schedule.dueAt <= new Date().toISOString())
@@ -90,27 +94,103 @@ export class ExerciseService {
     }
   }
 
-  async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer): Promise<ExerciseResult> {
+  /**
+    LLM 出题族：id = hash(repoId + tagId + variantNonce)，nonce=0 复用缓存题，
+    换一题传 variantNonce+1 生成新题（旧题保留在缓存/复习记录里）。
+    一轮调用内由 LLM 判定「能否出题」——拒绝理由与守门否决都记 journal（exercise_declined），不静默。
+    */
+  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, database: TutorDatabase): Promise<Exercise> {
+    const tag = (requested.tag ?? "").trim();
+    if (!tag) throw new Error("LLM 出题需要提供主题标签；请在「＋ 配置」里填写。");
+    if (!provider) throw new Error("LLM 出题不可用：未配置 LLM 或本月预算已触顶。");
+    const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
+    const tagKey = (requested.tagId ?? "").trim() || tag;
+    const targetUnitId = `llm:${tagKey}:${nonce}`;
+    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, "llm_rubric", targetUnitId);
+    if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
+
+    const candidates = selectTagCandidates(repository, tag);
+    if (!candidates.length) throw new Error("当前仓库没有可出题的源码文件；请先导入包含源码的仓库。");
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    const generation = await generateExerciseWithLlm({ tag, candidates, provider });
+    if (!generation.ok) {
+      journal.append("exercise_declined", { tag, reason: generation.reason, stage: "llm_generate" });
+      throw new Error(generation.reason);
+    }
+    if (generation.usage) journal.append("token_usage", {
+      input_tokens: generation.usage.inputTokens,
+      output_tokens: generation.usage.outputTokens,
+      provider: provider.modelVersion,
+      scene: "exercise_llm_generate"
+    });
+    const issues = guardLlmProposal(generation.proposal, candidates);
+    if (issues.length) {
+      const reason = `LLM 出题未通过守门校验：${issues.map((issue) => issue.message).join("；")}。`;
+      journal.append("exercise_declined", { tag, reason, stage: "guard" });
+      throw new Error(reason);
+    }
+    const proposal = generation.proposal;
+    const exercise: Exercise = {
+      id: `exercise:${hash(`${repository.index.repositoryId}:${repository.analysis.versionStamp}:llm_rubric:${targetUnitId}`).slice(0, 20)}`,
+      repositoryId: repository.index.repositoryId,
+      contentVersion: repository.analysis.versionStamp,
+      kind: "llm_rubric",
+      targetUnitId,
+      targetTitle: proposal.targetTitle || tag,
+      difficulty: 3,
+      title: proposal.title,
+      prompt: proposal.prompt,
+      anchors: proposal.anchors.map((anchor) => ({ path: anchor.path, line: anchor.line, endLine: anchor.endLine, label: "主题相关代码" })),
+      inputMode: "open",
+      gradingMode: "rubric",
+      family: "llm",
+      tag,
+      createdAt: new Date().toISOString()
+    };
+    const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
+    database.putExerciseCache(repository.index.repositoryId, repository.analysis.versionStamp, "llm_rubric", targetUnitId, stored);
+    return exercise;
+  }
+
+  async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {
     const database = new TutorDatabase(repository.path);
     try {
       const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
       if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
       if (stored.exercise.contentVersion !== repository.analysis.versionStamp) throw new Error("仓库内容已更新，请使用新版本生成的练习。");
-      const graded = await grade(stored, answer);
+      const journal = new Journal(repository.path, repository.index.repositoryId);
+      let graded = stored.expected.type === "rubric"
+        ? await gradeRubric(stored, answer, provider)
+        : await grade(stored, answer);
+      // 程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
+      if (provider && graded.automatic) {
+        const learnerAnswer = answer.text?.trim() || (answer.selectedIds ?? []).join(", ");
+        const polished = await polishFeedbackWithLlm({ repositoryPath: repository.path, exercise: stored.exercise, learnerAnswer, graded, provider });
+        if (polished) {
+          graded = { ...graded, feedback: polished.feedback, feedbackSource: "llm_polished" };
+          if (polished.usage) journal.append("token_usage", {
+            input_tokens: polished.usage.inputTokens,
+            output_tokens: polished.usage.outputTokens,
+            provider: provider.modelVersion,
+            scene: "exercise_feedback_polish"
+          });
+        }
+      }
       const now = new Date();
       const previous = database.getReviewSchedule(repository.index.repositoryId, exerciseId);
       const review = scheduleSm2(previous, qualityForScore(graded.score), now);
       review.exerciseId = exerciseId;
       review.unitId = stored.exercise.targetUnitId;
       database.saveReviewSchedule(repository.index.repositoryId, review);
-      const journal = new Journal(repository.path, repository.index.repositoryId);
       journal.append("exercise_result", {
         exercise_id: exerciseId,
         target_unit_id: stored.exercise.targetUnitId,
         kind: stored.exercise.kind,
         score: graded.score,
         passed: graded.passed,
-        grading_mode: stored.exercise.gradingMode
+        grading_mode: stored.exercise.gradingMode,
+        generation_source: stored.exercise.family === "llm" ? "llm_proposed" : "static",
+        feedback_source: graded.feedbackSource ?? "rule"
       });
       journal.append("unassisted_test", {
         unit_id: stored.exercise.targetUnitId,
@@ -235,10 +315,28 @@ async function grade(stored: StoredExercise, answer: ExerciseAnswer): Promise<Gr
   if (stored.expected.type === "output") {
     const expected = executeSafeInvocation(stored.expected.invocation);
     const passed = normalizeOutput(answer.text) === normalizeOutput(expected);
-    return { score: passed ? 1 : 0, passed, automatic: true, feedback: passed ? "执行验证通过：返回值与受限运行结果一致。" : "执行验证未通过：请沿着返回表达式重新检查输入如何流动。" };
+    return { score: passed ? 1 : 0, passed, automatic: true, feedbackSource: "rule", feedback: passed ? "执行验证通过：返回值与受限运行结果一致。" : "执行验证未通过：请沿着返回表达式重新检查输入如何流动。" };
   }
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
   throw new Error("该练习类型已不再支持；请重新生成练习。");
+}
+
+/** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不冒充确定性判分。 */
+async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<GradeOutcome> {
+  if (!provider) throw new Error("rubric 判分需要 LLM；当前未配置 LLM 或本月预算已触顶。");
+  const learnerAnswer = (answer.text ?? "").trim();
+  if (!learnerAnswer) {
+    return { score: 0, passed: false, automatic: false, feedbackSource: "llm_judge", feedback: "回答为空；请写下你的分析后再提交。" };
+  }
+  const expected = stored.expected as Extract<ExpectedAnswer, { type: "rubric" }>;
+  const judged = await judgeRubricWithLlm({
+    prompt: stored.exercise.prompt,
+    answerKey: expected.answerKey,
+    criteria: expected.criteria,
+    learnerAnswer,
+    provider
+  });
+  return { score: judged.score, passed: judged.passed, automatic: false, feedbackSource: "llm_judge", feedback: judged.feedback };
 }
 
 function gradeSet(expected: string[], selected: string[]): GradeOutcome {
@@ -253,11 +351,46 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
     score,
     passed,
     automatic: true,
+    feedbackSource: "rule",
     feedback: passed ? "集合匹配通过：选择与依赖/实现答案完全一致。" : "集合不完全匹配：补齐遗漏项，并排除不在当前证据范围内的文件。",
     matchedIds,
     missingIds,
     unexpectedIds
   };
+}
+
+/**
+  规则侧候选选择：按主题标签的词元对文件路径与文件内符号名打分（路径命中 30 / 符号命中 20 / 热点 ≤10），
+  取前 3 个文件构造带行号的摘录交给 LLM。相关性不足时 LLM 会在出题轮内拒绝——这里是「有素材可给」，不是「保证可出题」。
+  */
+function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3): GuardCandidate[] {
+  const lowered = tag.toLowerCase();
+  const tokens = [...new Set([lowered, ...lowered.split(/[\s,，、/·:：_-]+/).filter((token) => token.length >= 2)])];
+  const symbolsByPath = new Map<string, string[]>();
+  for (const unit of repository.analysis.implementations) {
+    const list = symbolsByPath.get(unit.symbol.path) ?? [];
+    list.push(unit.symbol.name);
+    symbolsByPath.set(unit.symbol.path, list);
+  }
+  const hotspots = new Map(repository.index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
+  const scored = repository.index.files
+    .filter((file) => /\.(?:[cm]?[jt]sx?|py)$/.test(file.path))
+    .map((file) => {
+      const path = file.path;
+      const symbols = (symbolsByPath.get(path) ?? []).join(" ").toLowerCase();
+      let score = Math.min(hotspots.get(path) ?? 0, 10);
+      for (const token of tokens) {
+        if (path.toLowerCase().includes(token)) score += 30;
+        if (symbols.includes(token)) score += 20;
+      }
+      return { path, score };
+    })
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, limit);
+  return scored.flatMap(({ path }) => {
+    const candidate = buildTagCandidate(repository.path, path);
+    return candidate ? [candidate] : [];
+  });
 }
 
 function safeInvocationFor(repositoryPath: string, unit: ImplementationUnit): SafeInvocation | undefined {

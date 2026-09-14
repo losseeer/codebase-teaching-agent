@@ -37,7 +37,8 @@ export function exerciseKindLabel(kind: ExerciseKind): string {
   return ({
     output_prediction: "预测输出",
     change_localization: "修改定位",
-    impact_analysis: "影响分析"
+    impact_analysis: "影响分析",
+    llm_rubric: "主题练习"
   })[kind];
 }
 

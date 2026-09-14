@@ -53,28 +53,44 @@ export class OpenAICompatibleProvider implements LlmProvider {
   readonly name = "OpenAI-compatible teaching model";
   readonly modelVersion: string;
   private readonly fetchImpl: typeof fetch;
+  /**
+    推理余量：推理模型（如 DeepSeek 系列）会把 reasoning token 计入 max_tokens 上限，
+    调用点按非推理模型设的小上限（12~1600）会被思考烧光导致 content 为空。
+    余量直接加在请求的 max_tokens 上——非推理模型不会为多余上限多花 token（用完即停），所以无条件加上是安全的。
+    可用 TUTOR_LLM_REASONING_HEADROOM 调整（0 表示关闭）。
+    */
+  private readonly reasoningHeadroom: number;
 
   constructor(private readonly options: FetchProviderOptions) {
     this.modelVersion = `openai:${options.model}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 1_500);
+    this.reasoningHeadroom = Number.isFinite(headroom) && headroom > 0 ? Math.floor(headroom) : 0;
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    const budget = (input.maxTokens ?? 700) + this.reasoningHeadroom;
     const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, {
       model: this.options.model,
       temperature: input.temperature ?? 0.2,
-      max_tokens: input.maxTokens ?? 700,
+      max_tokens: budget,
       messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }]
     });
     const body = await response.json() as { choices?: { message?: { content?: unknown }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     const text = contentText(body.choices?.[0]?.message?.content);
-    if (!text) throw new Error("LLM returned an empty completion");
+    if (!text) {
+      if (body.choices?.[0]?.finish_reason === "length") {
+        throw new Error(`LLM 补全被 max_tokens=${budget} 截断且正文为空：推理模型的思考 token 计入该上限。可调大 TUTOR_LLM_REASONING_HEADROOM、放宽 TUTOR_LLM_TIMEOUT_MS，或改用非推理模型。`);
+      }
+      throw new Error("LLM returned an empty completion");
+    }
     return { text, usage: body.usage ? tokenUsage(body.usage) : undefined, finishReason: body.choices?.[0]?.finish_reason };
   }
 
   private async request(url: string, payload: unknown): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 12_000);
+    const timeoutMs = this.options.timeoutMs ?? 12_000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.fetchImpl(url, {
         method: "POST",
@@ -84,6 +100,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
       });
       if (!response.ok) throw new Error(`LLM returned ${response.status}`);
       return response;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`LLM 请求超时（${timeoutMs}ms）：推理模型生成较慢时可调大 TUTOR_LLM_TIMEOUT_MS。`);
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -237,7 +258,7 @@ export function createTeachingProvider(): LlmProvider | undefined {
 }
 
 /**
-  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 课程地图命名完善）。
+  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 代码地图命名完善）。
   - `TUTOR_LIGHT_PROVIDER` + `TUTOR_LIGHT_MODEL` 显式配置（如 ollama 本地小模型 / gpt-4o-mini）
   - 未配置时由调用方回落主力档（createTeachingProvider），保证只填一套配置也能跑通全部接入点
   - 端点与密钥变量与主力档共用（同一厂商）；超时共用 TUTOR_LLM_TIMEOUT_MS
