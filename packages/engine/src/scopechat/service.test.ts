@@ -122,6 +122,44 @@ describe("mapChat", () => {
     // 首轮请求带 tools 定义
     expect(calls[0].tools?.[0]?.name).toBe("read_file");
   });
+
+  it("micro_compact：多轮读取时，更早轮次的 tool 结果替换为占位符、早期 reasoning 丢弃，最近一轮保留原文", async () => {
+    const script: LlmCompletion[] = [
+      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "service.ts" }) }], reasoningContent: "思考A1", usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "call_b", name: "read_file", argumentsJson: JSON.stringify({ path: "tools.ts" }) }], reasoningContent: "思考A2", usage: { inputTokens: 150, outputTokens: 25 }, finishReason: "tool_calls" },
+      { text: "三轮后的回答。", usage: { inputTokens: 200, outputTokens: 30 }, finishReason: "stop" }
+    ];
+    const calls: LlmCompletionInput[] = [];
+    let index = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:model",
+      async complete(input) {
+        calls.push(input);
+        return script[index++] ?? script[script.length - 1];
+      }
+    };
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider });
+    expect(result.reply).toContain("三轮后的回答");
+    const third = calls[2];
+    const toolResults = third.messages?.filter((m) => m.role === "tool") ?? [];
+    expect(toolResults).toHaveLength(2);
+    // 第一轮结果 → 占位符（内容可再生，不逐轮重付）
+    expect(toolResults[0].content).toContain("早期读取结果已省略");
+    expect(toolResults[0].content.length).toBeLessThan(400);
+    // 最近一轮结果 → 原文保留
+    expect(toolResults[1].content).toContain("1| ");
+    expect(toolResults[1].content.length).toBeGreaterThan(1000);
+    expect(toolResults[1].content).not.toContain("已省略");
+    // 早期 assistant 的 reasoningContent 丢弃；最近一轮保留（协议要求 tool 轮回传）
+    const assistants = third.messages?.filter((m) => m.role === "assistant") ?? [];
+    expect(assistants[0].reasoningContent).toBeUndefined();
+    expect(assistants[1].reasoningContent).toBe("思考A2");
+    // 第二轮请求（只有一轮历史）不受压缩影响
+    const second = calls[1];
+    const secondTool = second.messages?.find((m) => m.role === "tool");
+    expect(secondTool?.content).toContain("1| ");
+  });
 });
 
 describe("practiceChat", () => {

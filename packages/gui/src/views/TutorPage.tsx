@@ -4,6 +4,7 @@ import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { TeachingSessionApi } from "../agent/useTeachingSession";
 import { EmptyState, Loading, flatten } from "./helpers";
+import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { showToast } from "../modules/toast";
@@ -47,7 +48,9 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   }, [repositoryId]);
 
   const anchor = t.selected?.anchors[0];
-  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选往 teaching 线程推分隔线。 */
+  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选往 teaching 线程推分隔线。
+      依赖只取 t.pushDivider（模块级函数，引用稳定）——放整个 t 会让本回调每渲染换引用，
+      连带下方自动定位 effect 在 composer 每敲一个字符时重发一次 getSource（v0.6.1 修）。 */
   const loadSource = useCallback(async (path: string, line: number, note?: string, announce = true): Promise<void> => {
     try {
       const next = await api.getSource(repositoryId, path, line);
@@ -62,7 +65,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
       if (note) { t.pushDivider("teaching", note); showToast(note); }
       else showToast(`已打开 · ${path}`);
     } catch { showToast(`无法读取 ${path}`); }
-  }, [repositoryId, t]);
+  }, [repositoryId, t.pushDivider]);
   useEffect(() => {
     if (!anchor) { setSource(null); return; }
     // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
@@ -208,42 +211,3 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   );
 }
 
-/** 仓库文件树（prototype `.repo-tree`）：目录默认折叠、首层展开，每目录最多展示 8 项 + 「显示其余 N 项」。 */
-function RepoTree({ nodes, onOpenFile, activePath }: { nodes: FileTreeNode[]; onOpenFile: (path: string) => void; activePath?: string }): ReactElement {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [fullyShown, setFullyShown] = useState<Set<string>>(() => new Set());
-  if (!nodes.length) return <p className="entry-empty">仓库文件树加载中，或该仓库暂无文件索引。</p>;
-  const LIMIT = 8;
-  const render = (items: FileTreeNode[], depth: number): ReactElement[] => {
-    const rows: ReactElement[] = [];
-    items.forEach((node) => {
-      if (node.kind === "directory") {
-        const open = expanded.has(node.path);
-        rows.push(
-          <button key={node.path} className={`rt-dir ${open ? "open" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; })}>
-            {open ? "⌄" : "›"} {node.name}<span>{node.children?.length ?? 0} 项</span>
-          </button>,
-        );
-        if (open && node.children) {
-          const shown = fullyShown.has(node.path) ? node.children : node.children.slice(0, LIMIT);
-          rows.push(...render(shown, depth + 1));
-          if (!fullyShown.has(node.path) && node.children.length > LIMIT) {
-            rows.push(
-              <button key={`${node.path}:more`} className="rt-more" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }} onClick={() => setFullyShown((prev) => new Set(prev).add(node.path))}>
-                显示其余 {node.children.length - LIMIT} 项
-              </button>,
-            );
-          }
-        }
-      } else {
-        rows.push(
-          <button key={node.path} className={`rt-file ${activePath === node.path ? "selected" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => onOpenFile(node.path)}>
-            ◇ <code>{node.name}</code>
-          </button>,
-        );
-      }
-    });
-    return rows;
-  };
-  return <div className="repo-tree">{render(nodes, 0)}</div>;
-}

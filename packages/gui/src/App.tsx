@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes, Link, useLocation, useSearchParams } from "react-router-dom";
 import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import type { Workspace as _Workspace } from "./api/client";
@@ -37,21 +37,28 @@ export function App(): ReactElement {
     return saved ? JSON.parse(saved) as _Workspace : null;
   });
   // engine 的仓库注册表是内存态，重启后 localStorage 里的 repositoryId 已失效——
-  // 恢复的 workspace 必须先经引擎验证：有效才默认进代码地图，否则清除并落到导入页。
+  // workspace 指向变化时都经引擎验证，有效才放行工作区，否则清除并落到导入页。
+  // 验证响应迟到时若目标已变（如期间刚完成新导入），放弃过期结果，避免把新 workspace 误清。
   const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
+  const workspaceIdRef = useRef(workspace?.repositoryId);
+  useEffect(() => { workspaceIdRef.current = workspace?.repositoryId; }, [workspace?.repositoryId]);
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
     if (value) localStorage.setItem("codebase-tutor.workspace", JSON.stringify(value));
     else localStorage.removeItem("codebase-tutor.workspace");
   };
   useEffect(() => {
-    if (!workspace) return;
+    if (!workspace) { setWorkspaceReady(true); return; }
     let current = true;
-    api.getIndex(workspace.repositoryId)
+    const targetId = workspace.repositoryId;
+    setWorkspaceReady(false);
+    api.getIndex(targetId)
       .then(() => { if (current) setWorkspaceReady(true); })
-      .catch(() => { if (current) { updateWorkspace(null); setWorkspaceReady(true); } });
+      .catch(() => {
+        if (current && workspaceIdRef.current === targetId) { updateWorkspace(null); setWorkspaceReady(true); }
+      });
     return () => { current = false; };
-  }, []);
+  }, [workspace?.repositoryId]);
   const session = useTeachingSession(workspace?.repositoryId ?? "");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("codebase-tutor.sidebar-collapsed") === "1");
   const toggleSidebar = (): void => {

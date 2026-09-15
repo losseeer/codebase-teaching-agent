@@ -17,7 +17,7 @@ export function buildCourseTree(input: {
     const moduleName = dirname(file.path) === "." ? "根目录" : dirname(file.path);
     moduleFiles.set(moduleName, [...(moduleFiles.get(moduleName) ?? []), file]);
   }
-  const workflows = input.graph.entrypoints.map((anchor) => workflowNode(anchor, byPath, input.graph));
+  const workflows = input.graph.entrypoints.filter((anchor) => !isFixturePath(anchor.path)).map((anchor) => workflowNode(anchor, byPath, input.graph));
   const modules = [...moduleFiles.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([moduleName, files]) => ({
     id: `module:${moduleName}`,
     title: `${moduleName} 模块`,
@@ -62,6 +62,13 @@ export function attachQuality(tree: CourseTree, quality: QualityReport): CourseT
     return { ...node, verification: node.verification?.length ? node.verification : checks.get(key) ? [checks.get(key)!] : undefined, children: node.children.map(visit) };
   };
   return { ...tree, root: visit(tree.root) };
+}
+
+/** 仓内 fixture/demo 目录不是真实的执行入口（如 test-fixtures 里的示例仓库），不作为「执行路径」的讲述对象。 */
+const FIXTURE_SEGMENT = /(?:^|\/)(?:test-fixtures|fixtures?|demos?|examples?|__tests__|__mocks__|snapshots?)(?:\/|$)/i;
+
+function isFixturePath(path: string): boolean {
+  return FIXTURE_SEGMENT.test(path);
 }
 
 function workflowNode(anchor: { path: string; line: number; label: string }, summaries: Map<string, string>, graph: DependencyGraph): CourseNode {

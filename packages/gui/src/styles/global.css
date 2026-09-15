@@ -213,6 +213,9 @@ button.entry-item:hover { background: #eef6ef; }
 .rt-file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-more { color: #6f8d80; }
 .rt-more:hover { text-decoration: underline; }
+/* v0.5.4：RepoTree 提取共享后新增的可选元素 —— 目录语义徽标 + 文件行数 */
+.rt-badge { color: #81978d; font-size: 10px; font-style: normal; font-weight: 500; }
+.rt-lines { margin-left: auto; color: #8aa097; font-size: 10px; font-style: normal; flex: 0 0 auto; }
 
 /* ---- v0.3 Agent rail thread-meta（prototype .thread-meta）---- */
 .thread-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #e3ece6; color: #81978d; background: #f7faf7; font-size: 10px; }
@@ -241,8 +244,8 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-node:hover { border-color: #79a88a; }
 .flow-node.selected { border-color: #2d7356; box-shadow: 0 0 0 3px rgba(45, 115, 86, .13); }
 .flow-node .node-kind { display: block; margin-bottom: 4px; color: #729082; font-size: 9px; font-weight: 700; text-transform: uppercase; }
-.flow-node strong { display: block; color: #1e4b39; font-size: 12px; line-height: 1.35; }
-.flow-node small { display: block; margin-top: 4px; color: #71887d; font-size: 10px; }
+.flow-node strong { display: block; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: #1e4b39; font-size: 12px; line-height: 1.35; }
+.flow-node small { display: block; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; overflow-wrap: anywhere; margin-top: 4px; color: #71887d; font-size: 10px; }
 .flow-note { position: absolute; right: 10px; bottom: 8px; z-index: 2; border: 1px dashed #cfddd4; border-radius: 4px; padding: 4px 8px; color: #81978d; background: rgba(255, 255, 255, .88); font-size: 10px; }
 
 /* ---- v0.4 教学页：源码 tabs + ⌘P 文件搜索 ---- */
@@ -273,24 +276,12 @@ button.entry-item:hover { background: #eef6ef; }
 .teaching-workspace > div, .practice-workspace > div { min-width: 0; min-height: 0; display: flex; }
 .teaching-workspace > div > .pane, .practice-workspace > div > .pane { flex: 1; min-height: 0; }
 
-/* ==== v0.5 代码地图（prototype `.map-workspace` / `.tree` / `.map-canvas` / `.flow-*`）==== */
+/* ==== v0.5 代码地图（prototype `.map-workspace` / `.tree` / `.map-canvas` / `.flow-*`）====
+   v0.5.4：项目目录改用共享 RepoTree（.repo-tree / .rt-*，见 v0.3 段），
+   原 .tree-group/.tree-label/.tree-file 一组样式随平铺分组一并移除。 */
 .map-workspace { grid-template-columns: 242px minmax(0, 1fr); }
 .map-workspace > .pane { display: flex; flex-direction: column; overflow: hidden; }
 .map-workspace .tree { flex: 1; min-height: 0; padding: 13px 9px; overflow: auto; background: #fbfdfb; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
-.tree-group { margin-bottom: 12px; }
-.tree-label { display: flex; width: 100%; align-items: center; gap: 6px; border: 0; border-radius: 4px; padding: 7px 8px; color: #315b4b; background: transparent; text-align: left; font-size: 12px; font-weight: 700; }
-.tree-label:hover { background: #eef6ef; }
-.tree-label span { color: #81978d; font-size: 11px; font-weight: 500; }
-.tree-caret { width: 0; height: 0; border-left: 5px solid #6f8d80; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .15s ease; }
-.tree-label.collapsed .tree-caret { transform: rotate(-90deg); }
-.tree-count { margin-left: auto; color: #9db3a8; font-size: 10px; font-style: normal; font-weight: 500; }
-.tree-file { display: flex; width: 100%; align-items: center; gap: 7px; border: 0; border-radius: 4px; padding: 7px 9px 7px 25px; color: #4a665b; background: transparent; text-align: left; font-size: 12px; }
-.tree-file:hover { background: #eef6ef; }
-.tree-file.selected { color: #1c4c3a; background: #dfefc0; font-weight: 700; }
-.tree-file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-file em { margin-left: auto; color: #8aa097; font-size: 10px; font-style: normal; }
-.tree-file.tree-more { color: #6f8d80; }
-.tree-file.tree-more:hover { text-decoration: underline; }
 
 .map-canvas { flex: 1; min-height: 0; position: relative; display: flex; overflow: hidden; background: #f8fbf8; }
 .map-canvas::before { content: ""; position: absolute; inset: 0; opacity: .38; background-image: linear-gradient(#e4ede6 1px, transparent 1px), linear-gradient(90deg, #e4ede6 1px, transparent 1px); background-size: 28px 28px; pointer-events: none; }
@@ -304,6 +295,8 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-node:hover { border-color: #79a88a; }
 .flow-node.selected { border-color: #2d7356; box-shadow: 0 0 0 3px rgba(45, 115, 86, .13); }
 .flow-node.root { background: #eff7e4; }
+/* v0.6 模块依赖图：入口模块高亮（含 entrypoint 的目录聚合节点） */
+.flow-node.entry { border-color: #2d7356; background: #f3f9ec; }
 .flow-node .node-kind { display: block; margin-bottom: 5px; color: #729082; font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .flow-node strong { display: block; color: #1e4b39; font-size: 13px; line-height: 1.35; }
 .flow-node small { display: block; margin-top: 6px; color: #71887d; font-size: 10px; line-height: 1.35; }
@@ -326,6 +319,12 @@ button.entry-item:hover { background: #eef6ef; }
 .detail p { margin: 0 0 13px; color: #5e786d; font-size: 12px; line-height: 1.6; }
 .detail-section { margin-top: 13px; border-top: 1px solid #d9e5dd; padding-top: 13px; }
 .detail-section h4 { margin: 0 0 8px; color: #3c6552; font-size: 11px; }
+/* v0.5.4 节点详情抽屉「下级节点」清单：地图总览化后由抽屉承担下一层导航 */
+.node-children { display: grid; gap: 4px; }
+.node-child { display: flex; align-items: center; gap: 8px; border: 1px solid #d6e1da; border-radius: 4px; padding: 6px 8px; background: #fbfdfb; color: #3d584d; text-align: left; font-size: 12px; min-width: 0; }
+.node-child:hover { background: #eef6ef; }
+.node-child strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-child em { margin-left: auto; color: #8aa097; font-size: 10px; font-style: normal; flex: 0 0 auto; white-space: nowrap; }
 .kind-badge { display: inline-block; margin-bottom: 9px; border-radius: 3px; padding: 3px 6px; color: #35634f; background: #eaf3ec; font-size: 10px; font-weight: 700; }
 .anchors { display: flex; flex-wrap: wrap; gap: 5px; }
 .anchor { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 7px; color: #3d6b57; background: #fbfdfb; font-size: 10px; }
