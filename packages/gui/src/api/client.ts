@@ -11,6 +11,25 @@ export interface Workspace {
   repositoryPath: string;
 }
 
+/** LLM 运行时设置（引擎内存态，PUT 后立即生效，重启回落 .env）。 */
+export type ThinkingEffort = "auto" | "off" | "low" | "high" | "max";
+
+/** 模型思考能力声明（引擎按模型 slug 查表解析，见 engine llm/thinking.ts）。efforts 为该模型支持的显式档位（auto 恒可用）。 */
+export interface ThinkingCapabilityInfo {
+  model: string;
+  style: "deepseek" | "openai" | "anthropic" | "none" | "unknown";
+  efforts: Exclude<ThinkingEffort, "auto">[];
+}
+
+export interface LlmSettings {
+  teachingModel: string;
+  lightModel: string;
+  thinking: ThinkingEffort;
+  presets: string[];
+  teachingThinking?: ThinkingCapabilityInfo;
+  lightThinking?: ThinkingCapabilityInfo;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) }, ...init });
   const body = await response.json() as T & { error?: string };
@@ -20,6 +39,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>("/api/health"),
+  getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
+  updateLlmSettings: (partial: { teachingModel?: string; lightModel?: string; thinking?: ThinkingEffort }) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path }) }),
   getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),

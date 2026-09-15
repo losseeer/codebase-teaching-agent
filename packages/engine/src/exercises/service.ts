@@ -83,6 +83,7 @@ export class ExerciseService {
         if (refined.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
           input_tokens: refined.usage.inputTokens,
           output_tokens: refined.usage.outputTokens,
+          cache_hit_tokens: refined.usage.promptCacheHitTokens ?? null,
           provider: provider.modelVersion,
           scene: "exercise_generate"
         });
@@ -120,6 +121,7 @@ export class ExerciseService {
     if (generation.usage) journal.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
       output_tokens: generation.usage.outputTokens,
+      cache_hit_tokens: generation.usage.promptCacheHitTokens ?? null,
       provider: provider.modelVersion,
       scene: "exercise_llm_generate"
     });
@@ -171,6 +173,7 @@ export class ExerciseService {
           if (polished.usage) journal.append("token_usage", {
             input_tokens: polished.usage.inputTokens,
             output_tokens: polished.usage.outputTokens,
+            cache_hit_tokens: polished.usage.promptCacheHitTokens ?? null,
             provider: provider.modelVersion,
             scene: "exercise_feedback_polish"
           });

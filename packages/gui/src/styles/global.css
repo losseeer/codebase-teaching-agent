@@ -21,6 +21,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .tuning-head { display: flex; align-items: center; justify-content: space-between; color: #3c6552; font-size: 11px; font-weight: 700; }
 .tuning-head output { color: #27614c; font-size: 11px; }
 .agent-tuning .style-slider { margin-top: 7px; }
+/* 模型与思考（v0.6.2）：三行紧凑下拉；复用 .tuning-head 的标题样式 */
+.llm-tuning { display: grid; gap: 6px; }
+.tuning-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #5c756a; font-size: 11px; }
+.tuning-row select { flex: 1; max-width: 200px; border: 1px solid #cfded5; border-radius: 6px; background: #fff; color: #274c3e; font-size: 11px; padding: 3px 6px; }
+.tuning-row select:focus { outline: 1px solid #7aa893; }
+.tuning-row select:disabled { opacity: .55; }
+.tuning-row select option:disabled { color: #a3b6ac; }
+/* 思考能力提示行：显示当前教学模型解析出的样式与支持的档位（引擎 /api/llm/settings 下发） */
+.tuning-hint { margin: 0; color: #7d948a; font-size: 10px; line-height: 1.4; }
 .agent-header { display: flex; align-items: center; gap: 9px; min-height: 56px; padding: 0 16px; border-bottom: 1px solid #e3ece6; background: #fbfdfb; }
 .agent-avatar { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 5px; color: #17372e; background: #d8ef58; font-size: 13px; font-weight: 800; }
 .agent-header strong { font-size: 13px; display: block; }
