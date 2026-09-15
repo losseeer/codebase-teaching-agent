@@ -24,7 +24,9 @@ import { defaultTutorSettings, policyFor, validateSettings } from "./policy/poli
 import { TutorDatabase } from "./store/database.js";
 import { Journal, readJournal } from "./store/journal.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { createLightLlmProvider, createTeachingProvider, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { resolveLightModelSlug, resolveTeachingModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
+import { buildLightRuntimeProvider, buildTeachingRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress } from "./scopechat/service.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
@@ -60,9 +62,10 @@ tboot("ExerciseService");
 const companion = new CompanionService();
 tboot("CompanionService");
 
-const teachingProvider = createTeachingProvider();
-// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 代码地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档
-const lightLlmProvider = createLightLlmProvider() ?? teachingProvider;
+// LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）
+let teachingProvider = buildTeachingRuntimeProvider();
+// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 代码地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档（思考强制 off）
+let lightLlmProvider = buildLightRuntimeProvider();
 // 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
 const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
 tboot("createTeachingProvider");
@@ -104,7 +107,61 @@ app.get("/api/health", async () => {
     summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local",
     teachingProvider: teaching.provider, teachingModel: teaching.model, teachingMode: teaching.mode,
     lightProvider: light.provider, lightModel: light.model, lightMode: light.mode,
+    thinking: getLlmRuntimeSettings().thinking,
     agentLoop: actionLoopEnabled
+  };
+});
+
+/** 两档模型的思考能力声明（按实际生效 slug 解析，随 GET/PUT /api/llm/settings 返回给 GUI）。 */
+function describeThinking(model: string): { model: string; style: ReturnType<typeof resolveThinkingCapability>["style"]; efforts: string[] } {
+  const capability = resolveThinkingCapability(model);
+  return { model, style: capability.style, efforts: supportedThinkingEfforts(capability) };
+}
+
+/** GUI 运行时 LLM 设置：读取（含 .env 预设模型清单 + 两档模型的思考能力声明，供 GUI 禁用不支持的档位） */
+app.get("/api/llm/settings", async () => {
+  const settings = getLlmRuntimeSettings();
+  const presets = (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean);
+  return {
+    ...settings,
+    presets,
+    // 能力按「实际生效的模型 slug」解析（运行时覆盖优先，回落 .env），与 provider 工厂同一套解析
+    teachingThinking: describeThinking(resolveTeachingModelSlug({ model: settings.teachingModel })),
+    lightThinking: describeThinking(resolveLightModelSlug({ model: settings.lightModel }))
+  };
+});
+
+/** GUI 运行时 LLM 设置：更新模型覆盖与思考档位，立即重建两档 provider（不落盘，重启回落 .env） */
+app.put<{ Body: { teachingModel?: string; lightModel?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
+  const body = request.body ?? {};
+  if (body.thinking !== undefined && !["auto", "off", "low", "high", "max"].includes(body.thinking)) {
+    return reply.code(422).send({ error: "thinking 只支持 auto / off / low / high / max" });
+  }
+  // 思考档位与（新）教学模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
+  // off 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里 422 掉。
+  if (body.thinking && body.thinking !== "auto") {
+    const teachingModel = resolveTeachingModelSlug({ model: typeof body.teachingModel === "string" ? body.teachingModel : undefined });
+    if (!isThinkingEffortSupported(teachingModel, body.thinking as "auto" | "off" | "low" | "high" | "max")) {
+      const supported = supportedThinkingEfforts(resolveThinkingCapability(teachingModel));
+      return reply.code(422).send({ error: `模型 ${teachingModel} 不支持思考档位 "${body.thinking}"（支持：${supported.length ? supported.join("/") : "无"}）` });
+    }
+  }
+  const settings = setLlmRuntimeSettings({
+    teachingModel: typeof body.teachingModel === "string" ? body.teachingModel : undefined,
+    lightModel: typeof body.lightModel === "string" ? body.lightModel : undefined,
+    thinking: body.thinking as never
+  });
+  teachingProvider = buildTeachingRuntimeProvider();
+  lightLlmProvider = buildLightRuntimeProvider();
+  const teaching = teachingProviderStatus(teachingProvider);
+  const light = teachingProviderStatus(lightLlmProvider);
+  // 响应带上两档能力声明：GUI 换模型后无需再 GET 一次即可刷新思考档位的可用状态
+  return {
+    ...settings,
+    teachingProvider: teaching.model,
+    lightProvider: light.model,
+    teachingThinking: describeThinking(resolveTeachingModelSlug({ model: settings.teachingModel })),
+    lightThinking: describeThinking(resolveLightModelSlug({ model: settings.lightModel }))
   };
 });
 
@@ -222,6 +279,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
     input_tokens: suggestion.usage.inputTokens,
     output_tokens: suggestion.usage.outputTokens,
+    cache_hit_tokens: suggestion.usage.promptCacheHitTokens ?? null,
     provider: provider.modelVersion,
     scene: "module_entries"
   });
@@ -266,7 +324,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
-      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "map_chat"
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
+      cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
     });
     for (const read of result.fileReads ?? []) {
       journal.append("file_read", {
@@ -300,7 +359,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
-      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "map_chat"
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
+      cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
     });
     for (const read of result.fileReads ?? []) {
       journal.append("file_read", {
@@ -328,7 +388,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider });
     if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
-      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, provider: provider.modelVersion, scene: "practice_chat"
+      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
+      cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     });
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -458,7 +519,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), provider: outcome.provider ?? "local-heuristic-v1", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
   if (cost.mode === "degraded") journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
   for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });

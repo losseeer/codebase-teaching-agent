@@ -6,7 +6,7 @@ import { isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree } from "../coursetree/build.js";
 import { refineCourseMap } from "../coursetree/llm-refine.js";
-import { createLightLlmProvider, createTeachingProvider } from "../llm/provider.js";
+import { buildLightRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { buildImplementationUnits } from "../implementation/units.js";
@@ -99,8 +99,8 @@ export class ImportService extends EventEmitter {
     let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations: verifiedImplementations });
     course = attachQuality(course, quality);
     // 代码地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
-    // 轻任务走轻量档（TUTOR_LIGHT_*），未配置回落主力档
-    const mapProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : (createLightLlmProvider() ?? createTeachingProvider());
+    // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——地图润色是结构化重命名，不需要思考
+    const mapProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLightRuntimeProvider();
     if (mapProvider) {
       progress("building_course", 85, "正在用 LLM 完善代码地图命名与摘要");
       const refinement = await refineCourseMap(course, mapProvider);
@@ -108,6 +108,7 @@ export class ImportService extends EventEmitter {
       if (refinement.usage) new Journal(repositoryPath, index.repositoryId).append("token_usage", {
         input_tokens: refinement.usage.inputTokens,
         output_tokens: refinement.usage.outputTokens,
+        cache_hit_tokens: refinement.usage.promptCacheHitTokens ?? null,
         provider: mapProvider.modelVersion,
         scene: "course_map"
       });

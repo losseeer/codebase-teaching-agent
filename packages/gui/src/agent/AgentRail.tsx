@@ -1,7 +1,9 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, ListChecks, RefreshCw, Send, X } from "lucide-react";
 import { companionKindLabel } from "../views/helpers";
 import { Markdown } from "./Markdown";
+import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
+import { showToast } from "../modules/toast";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi, type ThreadItem } from "./useTeachingSession";
 
 /**
@@ -22,6 +24,26 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
+
+  // LLM 运行时设置：进侧栏时拉取，改动立即 PUT 引擎（乐观更新，失败回滚提示）
+  const [llm, setLlm] = useState<LlmSettings | null>(null);
+  useEffect(() => {
+    let current = true;
+    api.getLlmSettings().then((next) => { if (current) setLlm(next); }).catch(() => undefined);
+    return () => { current = false; };
+  }, []);
+  const updateLlm = (partial: { teachingModel?: string; lightModel?: string; thinking?: ThinkingEffort }): void => {
+    if (!llm) return;
+    const previous = llm;
+    setLlm({ ...llm, ...partial });
+    api.updateLlmSettings(partial)
+      .then((next) => setLlm(next))
+      .catch((error: unknown) => {
+        setLlm(previous);
+        // 引擎 422（如思考档位与新模型不兼容）会带具体原因，优先透传而不是笼统的「失败」
+        showToast(error instanceof Error && error.message ? error.message : "LLM 设置更新失败");
+      });
+  };
 
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
 
@@ -61,6 +83,62 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
           onChange={(event) => t.setSettings({ ...t.settings, style: Number(event.target.value) })}
         />
         <div className="range-labels"><span>严肃</span><span>通俗</span></div>
+      </div>
+
+      {/* 模型与思考：运行时设置（引擎内存态，PUT 即时生效，重启回落 .env；light 档思考引擎侧固定 off） */}
+      <div className="agent-tuning llm-tuning">
+        <div className="tuning-head"><span>模型与思考</span></div>
+        <label className="tuning-row">
+          <span>教学模型</span>
+          <select
+            value={llm?.teachingModel ?? ""}
+            disabled={!llm}
+            aria-label="教学档模型"
+            onChange={(event) => updateLlm({ teachingModel: event.target.value })}
+          >
+            <option value="">默认（.env）</option>
+            {modelOptions(llm, llm?.teachingModel ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
+          </select>
+        </label>
+        <label className="tuning-row">
+          <span>轻任务模型</span>
+          <select
+            value={llm?.lightModel ?? ""}
+            disabled={!llm}
+            aria-label="轻任务档模型"
+            title="推荐入口 / 题面润色 / 地图命名单轮任务（思考固定关闭）"
+            onChange={(event) => updateLlm({ lightModel: event.target.value })}
+          >
+            <option value="">默认（.env）</option>
+            {modelOptions(llm, llm?.lightModel ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
+          </select>
+        </label>
+        <label className="tuning-row">
+          <span>思考</span>
+          <select
+            value={llm?.thinking ?? "auto"}
+            disabled={!llm}
+            aria-label="思考模式与强度"
+            title={THINKING_STYLE_HINT[llm?.teachingThinking?.style ?? "unknown"]}
+            onChange={(event) => updateLlm({ thinking: event.target.value as ThinkingEffort })}
+          >
+            <option value="auto">自动（模型默认）</option>
+            {(["off", "low", "high", "max"] as const).map((effort) => (
+              <option
+                key={effort}
+                value={effort}
+                // 引擎按模型查表下发能力声明；老引擎没有该字段时全部可用（向后兼容）。
+                // off 对 none/unknown 样式恒可选（= 不发字段），与引擎 PUT 校验的豁免一致。
+                disabled={llm?.teachingThinking ? !effortSelectable(llm.teachingThinking, effort) : false}
+              >
+                {THINKING_EFFORT_LABEL[effort]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {llm?.teachingThinking ? (
+          <p className="tuning-hint">{teachingThinkingHint(llm.teachingThinking)}</p>
+        ) : null}
       </div>
 
       <div className="thread-meta">
@@ -148,8 +226,48 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
   );
 }
 
-function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {
-  if (scope === "teaching") {
+/** 下拉选项：.env 预设 + 当前已选的自定义 slug（不在预设里也要可见）。 */
+function modelOptions(settings: LlmSettings | null, current: string): string[] {
+  const presets = settings?.presets ?? [];
+  return current && !presets.includes(current) ? [...presets, current] : presets;
+}
+
+const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
+  off: "关闭",
+  low: "低",
+  high: "高",
+  max: "最大"
+};
+
+/** 各能力样式的下拉 title 提示（悬停可见）。 */
+const THINKING_STYLE_HINT: Record<string, string> = {
+  deepseek: "DeepSeek 格式：thinking 开关 + reasoning_effort（V4 默认开启思考）",
+  openai: "OpenAI 格式：顶层 reasoning_effort（GPT-5 / o 系 / Gemini 兼容层）",
+  anthropic: "Anthropic 兼容层：仅 thinking 开关，无强度档位",
+  none: "该模型没有思考参数",
+  unknown: "未识别的模型：auto/off 不发字段；强度档位会被引擎拒绝（可用 TUTOR_THINKING_STYLES 声明）"
+};
+
+/** 思考档位下方的常驻能力提示行。 */
+function teachingThinkingHint(capability: NonNullable<LlmSettings["teachingThinking"]>): string {
+  const styleLabel: Record<string, string> = {
+    deepseek: "DeepSeek 格式",
+    openai: "reasoning_effort",
+    anthropic: "仅开关（无强度）",
+    none: "无思考参数",
+    unknown: "未声明思考能力"
+  };
+  const supported = (["off", "low", "high", "max"] as const).filter((effort) => effortSelectable(capability, effort)).map((effort) => THINKING_EFFORT_LABEL[effort]);
+  return `${capability.model} · ${styleLabel[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
+}
+
+/** off 恒可表达：无思考参数/未声明模型选 off = 不发字段（与引擎 applyThinking 语义一致，不算「支持」也不禁用）。 */
+function effortSelectable(capability: NonNullable<LlmSettings["teachingThinking"]>, effort: "off" | "low" | "high" | "max"): boolean {
+  if (capability.efforts.includes(effort)) return true;
+  return effort === "off" && (capability.style === "none" || capability.style === "unknown");
+}
+
+function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
     return {
       placeholder: t.selected ? `围绕「${t.selected.title}」描述你的推理，或输入「不知道」请求下一层提示` : "描述你的推理，或输入「不知道」请求下一层提示",
       canSend: !t.sending && t.content.trim().length > 0,

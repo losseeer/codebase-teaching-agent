@@ -1,6 +1,11 @@
+import { applyThinking } from "./thinking.js";
+
 export interface LlmUsage {
   inputTokens: number;
   outputTokens: number;
+  /** DeepSeek 系返回：命中自动上下文缓存的 prompt token 数（命中部分约 1/10 价）。undefined = 端点未上报。 */
+  promptCacheHitTokens?: number;
+  promptCacheMissTokens?: number;
 }
 
 /** 工具定义（OpenAI function 形状的引擎侧简化版）。 */
@@ -35,7 +40,18 @@ export interface LlmCompletionInput {
   tools?: LlmTool[];
   maxTokens?: number;
   temperature?: number;
+  /** 思考模式控制（DeepSeek V4 官方参数，语义见 ThinkingEffort）。省略 = 不发任何思考字段（auto，模型默认行为）。 */
+  thinking?: ThinkingEffort;
 }
+
+/**
+  思考模式档位（跨家族统一语义，各家族的真实参数格式与取值见 llm/thinking.ts 能力表）：
+  - "off"：关闭思考（DeepSeek/Anthropic 发 thinking disabled；OpenAI 系发 reasoning_effort:none；
+    无思考参数的模型 = 不发字段）
+  - "low" / "high" / "max"：开启思考并指定强度（各家族映射到自家 API 取值，不支持即显式报错）
+  - "auto"：不发字段，模型默认行为
+  */
+export type ThinkingEffort = "off" | "low" | "high" | "max";
 
 export interface LlmCompletion {
   text: string;
@@ -65,11 +81,16 @@ interface FetchProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
-function tokenUsage(input: { prompt_tokens?: number; completion_tokens?: number; input_tokens?: number; output_tokens?: number }): LlmUsage | undefined {
+function tokenUsage(input: { prompt_tokens?: number; completion_tokens?: number; input_tokens?: number; output_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number }): LlmUsage | undefined {
   const inputTokens = input.prompt_tokens ?? input.input_tokens;
   const outputTokens = input.completion_tokens ?? input.output_tokens;
   if (typeof inputTokens !== "number" && typeof outputTokens !== "number") return undefined;
-  return { inputTokens: inputTokens ?? 0, outputTokens: outputTokens ?? 0 };
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    promptCacheHitTokens: typeof input.prompt_cache_hit_tokens === "number" ? input.prompt_cache_hit_tokens : undefined,
+    promptCacheMissTokens: typeof input.prompt_cache_miss_tokens === "number" ? input.prompt_cache_miss_tokens : undefined
+  };
 }
 
 function contentText(value: unknown): string {
@@ -105,13 +126,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
     调用点按非推理模型设的小上限（12~1600）会被思考烧光导致 content 为空。
     余量直接加在请求的 max_tokens 上——非推理模型不会为多余上限多花 token（用完即停），所以无条件加上是安全的。
     可用 TUTOR_LLM_REASONING_HEADROOM 调整（0 表示关闭）。
+    默认 3000：实测 deepseek-flash 推荐入口任务思考量可超 2300（旧默认 1500 + maxTokens 800 被烧光、正文为空）。
     */
   private readonly reasoningHeadroom: number;
 
   constructor(private readonly options: FetchProviderOptions) {
     this.modelVersion = `openai:${options.model}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 1_500);
+    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 3_000);
     this.reasoningHeadroom = Number.isFinite(headroom) && headroom > 0 ? Math.floor(headroom) : 0;
   }
 
@@ -129,6 +151,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
       max_tokens: budget,
       messages
     };
+    // 思考参数按模型能力声明组装（llm/thinking.ts 查表）：DeepSeek 走 thinking+reasoning_effort，
+    // OpenAI 系走顶层 reasoning_effort，其余样式/未知模型不发字段；显式下发不支持的档位直接抛错。
+    // 注意省略字段时不发任何思考字段，保持行为完全不变。
+    if (input.thinking) applyThinking(payload, this.options.model, input.thinking);
     if (input.tools?.length) {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
       payload.tool_choice = "auto";
@@ -136,7 +162,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload);
     const body = await response.json() as {
       choices?: { message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number };
     };
     const choice = body.choices?.[0];
     const text = contentText(choice?.message?.content);
@@ -196,6 +222,11 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    // 原生 Anthropic Messages API 的思考用 budget_tokens（预算制），与 effort 档位语义不同——未实现映射，
+    // 显式档位直接报错而不是静默忽略（不许把失败伪装成结果）。off/auto = 不发思考字段。
+    if (input.thinking && input.thinking !== "off") {
+      throw new Error(`Anthropic 原生协议暂不支持思考档位 "${input.thinking}"（思考为 budget_tokens 预算制）。请用 auto/off，或改走 OpenAI 兼容端点。`);
+    }
     const endpoint = this.options.endpoint.replace(/\/$/, "");
     const response = await this.request(`${endpoint}/v1/messages`, {
       model: this.options.model,
@@ -239,6 +270,11 @@ export class OllamaTeachingProvider implements LlmProvider {
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    // 各 Ollama 模型的思考控制不统一（qwen3 等走 options.think / 模板变量），未做映射——
+    // 显式档位直接报错而不是静默忽略。off/auto = 不发思考相关字段。
+    if (input.thinking && input.thinking !== "off") {
+      throw new Error(`Ollama provider 暂不支持思考档位 "${input.thinking}"。请用 auto/off。`);
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 12_000);
     try {
@@ -304,8 +340,7 @@ export class RetryLlmProvider implements LlmProvider {
 }
 
 /** 确定性 4xx（除 408 请求超时 / 429 限速）不做重试：同样的请求原样重发只会原样再败，
-    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */
-function isNonRetryable(error: unknown): boolean {
+    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */function isNonRetryable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const status = /(?:LLM|Anthropic|Ollama) returned (\d{3})/.exec(message)?.[1];
   if (!status) return false;
@@ -313,8 +348,22 @@ function isNonRetryable(error: unknown): boolean {
   return code >= 400 && code < 500 && code !== 408 && code !== 429;
 }
 
-function defaultModel(provider: string): string {
-  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
+/** 思考模式注入包装：把运行时档位附加到包装内 provider 的每一次调用上（"auto" = 原样透传不注入）。
+    档位是「部署/会话级」决定（GUI 设置），不该侵入各调用点——所以包在 provider 层而不是改每个 complete 调用。 */
+export class ThinkingOverrideLlmProvider implements LlmProvider {
+  readonly name: string;
+  readonly modelVersion: string;
+  constructor(private readonly inner: LlmProvider, private readonly effort: "auto" | ThinkingEffort) {
+    this.name = effort === "auto" ? inner.name : `${inner.name} (thinking:${effort})`;
+    this.modelVersion = inner.modelVersion;
+  }
+
+  async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    return this.inner.complete(this.effort === "auto" || input.thinking ? input : { ...input, thinking: this.effort });
+  }
+}
+
+function defaultModel(provider: string): string {  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
   if (provider === "ollama") return "llama3.2";
   return "gpt-4o-mini";
 }
@@ -342,12 +391,22 @@ function createProviderFromEnv(provider: string, model: string, timeoutMs: numbe
   return undefined;
 }
 
-/** 重量级（主力）档：驱动「代码教学」多轮对话。 */
-export function createTeachingProvider(): LlmProvider | undefined {
+/** 重量级（主力）档：驱动「代码教学」多轮对话。overrides.model 为 GUI 运行时设置覆盖（空串/省略 = 用 .env）。 */
+export function resolveTeachingModelSlug(overrides?: { model?: string }): string {
+  const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
+  return overrides?.model?.trim() || (process.env.TUTOR_TEACHING_MODEL ?? process.env.TUTOR_LLM_MODEL ?? defaultModel(provider));
+}
+
+export function createTeachingProvider(overrides?: { model?: string }): LlmProvider | undefined {
   const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
   if (!provider) return undefined;
-  const model = process.env.TUTOR_TEACHING_MODEL ?? process.env.TUTOR_LLM_MODEL ?? defaultModel(provider);
+  const model = resolveTeachingModelSlug(overrides);
   return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
+}
+
+/** light 档生效模型 slug（GUI 展示能力用，与 createLightLlmProvider 同一解析：未配置时回落主力档模型）。 */
+export function resolveLightModelSlug(overrides?: { model?: string }): string {
+  return overrides?.model?.trim() || (process.env.TUTOR_LIGHT_MODEL ?? "").trim() || resolveTeachingModelSlug();
 }
 
 /**
@@ -358,12 +417,12 @@ export function createTeachingProvider(): LlmProvider | undefined {
     未设置时回落主力档共用变量——支持两档使用不同厂商或不同协议端点（如 GLM 资源包走 OpenAI 协议、主力档走 DeepSeek）。
   - 超时可用独立变量 TUTOR_LIGHT_TIMEOUT_MS（推理模型单轮生成可达 30-60s），未设置时回落 TUTOR_LLM_TIMEOUT_MS。
   */
-export function createLightLlmProvider(): LlmProvider | undefined {
+export function createLightLlmProvider(overrides?: { model?: string }): LlmProvider | undefined {
   const provider = (process.env.TUTOR_LIGHT_PROVIDER ?? "").toLowerCase().trim();
   if (!provider) return undefined;
   // 模型留空（或全空白）视为 light 档未配置 → 返回 undefined，由调用方回落主力档。
   // 不能用空模型名创建 provider：请求必然失败后被各接入点静默吞掉，表现为「LLM 失效」。
-  const model = (process.env.TUTOR_LIGHT_MODEL ?? "").trim();
+  const model = (overrides?.model?.trim() || (process.env.TUTOR_LIGHT_MODEL ?? "").trim());
   if (!model) return undefined;
   const timeoutMs = Number(process.env.TUTOR_LIGHT_TIMEOUT_MS ?? process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
   return createProviderFromEnv(provider, model, timeoutMs, {

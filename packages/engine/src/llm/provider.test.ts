@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLightLlmProvider, OpenAICompatibleProvider, RetryLlmProvider } from "./provider.js";
+import { createLightLlmProvider, createTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
 /** 构造一个 OpenAI chat.completions 形状的响应。 */
 function jsonResponse(payload: unknown): Response {
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("OpenAICompatibleProvider", () => {
-  it("max_tokens 加上推理余量（默认 1500）", async () => {
+  it("max_tokens 加上推理余量（默认 3000）", async () => {
     let captured: Record<string, unknown> | undefined;
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -25,7 +25,7 @@ describe("OpenAICompatibleProvider", () => {
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await provider.complete({ system: "s", user: "u", maxTokens: 12 });
-    expect(captured?.max_tokens).toBe(12 + 1_500);
+    expect(captured?.max_tokens).toBe(12 + 3_000);
   });
 
   it("TUTOR_LLM_REASONING_HEADROOM=0 关闭余量", async () => {
@@ -44,7 +44,7 @@ describe("OpenAICompatibleProvider", () => {
     const fetchImpl = (async () => jsonResponse(chatBody("", "length"))) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await expect(provider.complete({ system: "s", user: "u", maxTokens: 300 }))
-      .rejects.toThrow(/max_tokens=1800.*推理模型/);
+      .rejects.toThrow(/max_tokens=3300.*推理模型/);
   });
 
   it("非 length 的空 content 保持通用错误", async () => {
@@ -196,6 +196,98 @@ describe("createLightLlmProvider", () => {
     expect(createLightLlmProvider()).toBeUndefined();
     process.env.TUTOR_LIGHT_MODEL = "   ";
     expect(createLightLlmProvider()).toBeUndefined();
+  });
+});
+
+describe("ThinkingOverrideLlmProvider + thinking 参数", () => {
+  function captureProvider(): { fetchImpl: typeof fetch; body: () => Record<string, unknown> | undefined } {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse(chatBody("ok", "stop"));
+    }) as typeof fetch;
+    return { fetchImpl, body: () => captured };
+  }
+
+  it("off → thinking disabled 且不带 reasoning_effort（DeepSeek V4 模型）", async () => {
+    const { fetchImpl, body } = captureProvider();
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, model: "deepseek-v4-flash", fetchImpl });
+    await provider.complete({ system: "s", user: "u", thinking: "off" });
+    expect(body()?.thinking).toEqual({ type: "disabled" });
+    expect(body()?.reasoning_effort).toBeUndefined();
+  });
+
+  it("high → thinking enabled + reasoning_effort=high（DeepSeek V4 模型）", async () => {
+    const { fetchImpl, body } = captureProvider();
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, model: "deepseek-v4-flash", fetchImpl });
+    await provider.complete({ system: "s", user: "u", thinking: "high" });
+    expect(body()?.thinking).toEqual({ type: "enabled" });
+    expect(body()?.reasoning_effort).toBe("high");
+  });
+
+  it("未指定 thinking → 不发任何思考字段（其他端点行为不变）", async () => {
+    const { fetchImpl, body } = captureProvider();
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
+    await provider.complete({ system: "s", user: "u" });
+    expect(body()?.thinking).toBeUndefined();
+    expect(body()?.reasoning_effort).toBeUndefined();
+  });
+
+  it("包装器注入档位；auto 透传；调用点显式指定时不覆盖", async () => {
+    const seen: Array<string | undefined> = [];
+    const inner: LlmProvider = {
+      name: "inner",
+      modelVersion: "inner:model",
+      async complete(input) {
+        seen.push(input.thinking);
+        return { text: "ok", finishReason: "stop" };
+      }
+    };
+    await new ThinkingOverrideLlmProvider(inner, "high").complete({ system: "s", user: "u" });
+    await new ThinkingOverrideLlmProvider(inner, "auto").complete({ system: "s", user: "u" });
+    await new ThinkingOverrideLlmProvider(inner, "off").complete({ system: "s", user: "u", thinking: "low" });
+    expect(seen).toEqual(["high", undefined, "low"]);
+  });
+
+  it("DeepSeek usage 的 prompt_cache_hit_tokens 透传进 LlmUsage；无该字段的端点保持 undefined", async () => {
+    const withCache = new OpenAICompatibleProvider({
+      ...OPTIONS,
+      fetchImpl: (async () => jsonResponse({
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 64, prompt_cache_miss_tokens: 36 }
+      })) as typeof fetch
+    });
+    const completion = await withCache.complete({ system: "s", user: "u" });
+    expect(completion.usage).toMatchObject({ inputTokens: 100, outputTokens: 20, promptCacheHitTokens: 64, promptCacheMissTokens: 36 });
+
+    const withoutCache = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl: (async () => jsonResponse(chatBody("ok", "stop"))) as typeof fetch });
+    const plain = await withoutCache.complete({ system: "s", user: "u" });
+    expect(plain.usage?.promptCacheHitTokens).toBeUndefined();
+    expect(plain.usage?.promptCacheMissTokens).toBeUndefined();
+  });
+});
+
+describe("createTeachingProvider / createLightLlmProvider 模型覆盖", () => {
+  const ENV = {
+    TUTOR_TEACHING_PROVIDER: "openai-compatible",
+    TUTOR_TEACHING_MODEL: "env-model",
+    TUTOR_LIGHT_PROVIDER: "openai-compatible",
+    TUTOR_OPENAI_URL: "https://llm.example.com/v1",
+    OPENAI_API_KEY: "test-key"
+  };
+
+  it("覆盖模型生效；空串回落 .env", () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, ENV);
+    try {
+      expect(createTeachingProvider({ model: "gui-model" })?.modelVersion).toContain("gui-model");
+      expect(createTeachingProvider({ model: "  " })?.modelVersion).toContain("env-model");
+      expect(createLightLlmProvider({ model: "gui-light" })?.modelVersion).toContain("gui-light");
+      // 覆盖模型给了 light 档一个模型 → 不再视为「未配置」
+      expect(createLightLlmProvider()).toBeUndefined();
+    } finally {
+      process.env = saved;
+    }
   });
 });
 
