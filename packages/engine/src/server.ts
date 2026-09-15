@@ -54,6 +54,9 @@ const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "warn" } });
 tboot("Fastify constructed");
 
 const importer = new ImportService();
+// 启动恢复：把注册表里各仓库 .tutor 持久化的分析结果重新挂进内存（GUI 旧 workspace 不再 404，无需重新导入重烧润色）
+const restoredRepositories = importer.restorePersisted();
+if (restoredRepositories) console.log(`[startup] 已从 .tutor 恢复 ${restoredRepositories} 个仓库，无需重新导入`);
 tboot("ImportService");
 
 const exercises = new ExerciseService();
@@ -489,7 +492,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
   const session = createSession(repository.index.repositoryId, node.id, settings);
   sessions.set(session.id, session);
   new Journal(repository.path, repository.index.repositoryId).append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
-  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext(node, policyFor(session.settings), [], repository.path) });
+  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext({ node, policy: policyFor(session.settings), history: [], repositoryPath: repository.path, analysis: repository.analysis }) });
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
@@ -511,7 +514,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const currentCost = summarizeCost(repository.path, monthlyBudget);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, { classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider), actionLoop: actionLoopEnabled });
+  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, { classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider), actionLoop: actionLoopEnabled, analysis: repository.analysis });
   sessions.set(outcome.session.id, outcome.session);
   const journal = new Journal(repository.path, repository.index.repositoryId);
   if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
@@ -520,6 +523,10 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
   const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+  // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型（含拒绝与失败）
+  for (const read of outcome.fileReads ?? []) {
+    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
+  }
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
   if (cost.mode === "degraded") journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
   for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });

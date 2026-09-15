@@ -1,8 +1,8 @@
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree } from "../coursetree/build.js";
 import { refineCourseMap } from "../coursetree/llm-refine.js";
@@ -10,7 +10,7 @@ import { buildLightRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { buildImplementationUnits } from "../implementation/units.js";
-import { hash, id, isWithin } from "../lib.js";
+import { hash, id, isWithin, repositoryId as deriveRepositoryId } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { RepositoryWatcher } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
@@ -27,6 +27,33 @@ export interface ImportedRepository {
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
   watcher?: RepositoryWatcher;
+}
+
+/** 已知仓库路径注册表：engine 重启后据此从各仓库的 .tutor/tutor.db 恢复注册，免重新导入。
+    默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖。 */
+function registryFile(): string {
+  return process.env.TUTOR_REGISTRY_FILE ?? join(homedir(), ".codebase-tutor", "repositories.json");
+}
+
+function readRegistry(): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(registryFile(), "utf8")) as { repositories?: unknown };
+    return Array.isArray(parsed.repositories) ? parsed.repositories.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRegistry(paths: string[]): void {
+  const file = registryFile();
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
+}
+
+function recordRepositoryPath(repositoryPath: string): void {
+  const paths = readRegistry().filter((item) => item !== repositoryPath);
+  paths.push(repositoryPath);
+  writeRegistry(paths);
 }
 
 export class ImportService extends EventEmitter {
@@ -54,6 +81,44 @@ export class ImportService extends EventEmitter {
     return [...this.repositories.values()].find((repository) => isWithin(repository.path, candidatePath));
   }
 
+  /**
+    启动恢复：按注册表把各仓库 .tutor/tutor.db 里持久化的 index/course/analysis 重新挂进内存注册表，
+    GUI 侧已有 workspace 在 engine 重启后不再 404、无需重新导入（也就不再触发 LLM 润色重跑）。
+    目录不存在或数据不全的条目从注册表剔除。返回恢复的仓库数。
+    */
+  restorePersisted(): number {
+    const paths = readRegistry();
+    if (!paths.length) return 0;
+    const alive: string[] = [];
+    let restored = 0;
+    for (const repositoryPath of paths) {
+      try {
+        if (!statSync(repositoryPath).isDirectory()) continue;
+        const repositoryId = deriveRepositoryId(repositoryPath);
+        const database = new TutorDatabase(repositoryPath);
+        const index = database.getIndex(repositoryId);
+        const course = database.getCourse(repositoryId);
+        const analysis = database.getAnalysis(repositoryId);
+        const estimate = database.getEstimate(repositoryId);
+        database.close();
+        if (!index || !course || !analysis || !estimate) continue;
+        const previous = this.repositories.get(repositoryId);
+        previous?.watcher?.close();
+        const repository: ImportedRepository = { path: repositoryPath, index, course, estimate, analysis };
+        repository.watcher = new RepositoryWatcher(repositoryPath, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths));
+        repository.watcher.start();
+        this.repositories.set(repositoryId, repository);
+        alive.push(repositoryPath);
+        restored += 1;
+      } catch {
+        continue; // 单个仓库恢复失败不影响其他仓库
+      }
+    }
+    // 注册表里已失效的路径（目录被删/移动）清掉，避免无限累积
+    if (alive.length !== paths.length) writeRegistry(alive);
+    return restored;
+  }
+
   private async run(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job) return;
@@ -69,6 +134,12 @@ export class ImportService extends EventEmitter {
       repository.watcher.start();
       this.repositories.set(index.repositoryId, repository);
       job.repositoryId = index.repositoryId;
+      try {
+        recordRepositoryPath(job.repositoryPath);
+      } catch (error) {
+        // 注册表写失败不影响导入结果（重启后大不了重新导入），只提示
+        console.warn(`[import] 仓库注册表写入失败：${error instanceof Error ? error.message : String(error)}`);
+      }
       this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区`);
       job.completedAt = new Date().toISOString();
     } catch (error) {
@@ -82,6 +153,8 @@ export class ImportService extends EventEmitter {
   private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void): Promise<ImportedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     const index = indexRepository(repositoryPath);
+    // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
+    const versionStamp = contentVersion(repositoryPath, index);
     const database = new TutorDatabase(repositoryPath);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
@@ -100,18 +173,33 @@ export class ImportService extends EventEmitter {
     course = attachQuality(course, quality);
     // 代码地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——地图润色是结构化重命名，不需要思考
-    const mapProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLightRuntimeProvider();
-    if (mapProvider) {
-      progress("building_course", 85, "正在用 LLM 完善代码地图命名与摘要");
-      const refinement = await refineCourseMap(course, mapProvider);
-      course = refinement.course;
-      if (refinement.usage) new Journal(repositoryPath, index.repositoryId).append("token_usage", {
-        input_tokens: refinement.usage.inputTokens,
-        output_tokens: refinement.usage.outputTokens,
-        cache_hit_tokens: refinement.usage.promptCacheHitTokens ?? null,
-        provider: mapProvider.modelVersion,
-        scene: "course_map"
-      });
+    // 润色缓存：内容未变（versionStamp 相同）且上次润色成功落库（settings.refinement 标记）→ 直接复用已润色 course。
+    // 这是「engine 重启 → GUI 重新导入」不重烧 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
+    const storedAnalysis = database.getAnalysis(index.repositoryId);
+    const storedCourse = database.getCourse(index.repositoryId);
+    const storedSettings = database.getSettings<{ refinement?: { versionStamp?: string }; monthlyBudgetUsd?: number }>(index.repositoryId);
+    const refinementCacheHit =
+      storedAnalysis?.versionStamp === versionStamp && Boolean(storedCourse) && storedSettings?.refinement?.versionStamp === versionStamp;
+    if (refinementCacheHit) {
+      course = storedCourse as CourseTree;
+    } else if (summarizeCost(repositoryPath).mode !== "degraded") {
+      const mapProvider = buildLightRuntimeProvider();
+      if (mapProvider) {
+        progress("building_course", 85, "正在用 LLM 完善代码地图命名与摘要");
+        const refinement = await refineCourseMap(course, mapProvider);
+        course = refinement.course;
+        if (refinement.usage) {
+          new Journal(repositoryPath, index.repositoryId).append("token_usage", {
+            input_tokens: refinement.usage.inputTokens,
+            output_tokens: refinement.usage.outputTokens,
+            cache_hit_tokens: refinement.usage.promptCacheHitTokens ?? null,
+            provider: mapProvider.modelVersion,
+            scene: "course_map"
+          });
+          // 读-合并-写：settings 里还存着 monthlyBudgetUsd 等其他键，不能整体覆盖
+          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp } });
+        }
+      }
     }
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
@@ -119,7 +207,7 @@ export class ImportService extends EventEmitter {
       graph: serializeGraph(graph),
       implementations: verifiedImplementations,
       quality,
-      versionStamp: contentVersion(repositoryPath, index)
+      versionStamp
     };
     database.saveCourse(course, estimate);
     database.saveAnalysis(analysis);

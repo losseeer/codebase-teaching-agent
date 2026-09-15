@@ -1,13 +1,13 @@
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import { Code2 } from "lucide-react";
+import { detectLanguage, highlightLines } from "./highlight";
 
 /**
- * 只读源码查看器：单文件 + 单行高亮 + 行号。
- * 对应 prototype `design-prototype.html` 中的 `.source-view`（含 tab + 行高亮）。
+ * 只读源码查看器：语法高亮 + 行号 + 单行定位高亮。
+ * 对应 prototype `design-prototype.html` 中的 `.code` / `.code-line`（含 token 配色）。
  *
- * v0.2+ 扩展：
- * - 多 tab：每个 tab 一个 SourceView 实例；当前 v0.1 只在 CoursePage 嵌一个
- * - 元信息条（只读 / 已定位第 N 行）由上层补
+ * 高亮由 `highlight.ts` 的逐行 tokenizer 完成（零依赖）；语言按文件扩展名判定，
+ * 识别不了则整行纯文本。渲染上限 500 行。
  */
 
 export interface SourcePayload {
@@ -16,16 +16,31 @@ export interface SourcePayload {
   content: string;
 }
 
+const MAX_RENDER_LINES = 500;
+
 export function SourceView({ source }: { source: SourcePayload | null }): ReactElement {
-  if (!source) return <div className="source-view empty-source">选择带源码锚点的课程节点以查看只读源码。</div>;
-  const lines = source.content.split("\n").slice(0, 500);
+  // tokenize 只随文件内容/路径变化：避免父组件每次渲染重扫 500 行
+  const view = useMemo(() => {
+    if (!source) return null;
+    const lines = source.content.split("\n").slice(0, MAX_RENDER_LINES);
+    return { lines, tokens: highlightLines(lines, detectLanguage(source.path)) };
+  }, [source]);
+
+  if (!source || !view) return <div className="source-view empty-source">选择带源码锚点的课程节点以查看只读源码。</div>;
+
   return (
     <div className="source-view">
       <div className="source-title"><Code2 size={15} />{source.path}</div>
       <pre>
-        {lines.map((line, index) => (
+        {view.tokens.map((tokens, index) => (
           <code className={index + 1 === source.line ? "source-line highlighted" : "source-line"} key={index}>
-            <span>{String(index + 1).padStart(4, " ")}</span>{line || " "}{"\n"}
+            <span className="line-number">{String(index + 1).padStart(4, " ")}</span>
+            {view.lines[index]
+              ? tokens.map((token, tokenIndex) => (token.kind === "plain"
+                ? token.text
+                : <span className={token.kind} key={tokenIndex}>{token.text}</span>))
+              : " "}
+            {"\n"}
           </code>
         ))}
       </pre>

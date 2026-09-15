@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { executeReadFile, READ_FILE_TOOL } from "./tools.js";
+import { executeReadFile, READ_FILE_TOOL } from "./read-file.js";
 
 let repoRoot = "";
 

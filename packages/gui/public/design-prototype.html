@@ -153,6 +153,8 @@
     .code-line b { display: inline-block; width: 43px; padding-right: 11px; color: #6e9785; font-weight: 400; text-align: right; user-select: none; }
     .code-line.highlight { border-left: 3px solid var(--accent); background: rgba(216,239,88,.13); }
     .kw { color: #d9ef79; }.fn { color: #9dd3b3; }.str { color: #e4b182; }.cm { color: #739486; }
+    /* 语法高亮其余类别（与 GUI global.css 的 `.source-view .*` 同色） */
+    .num { color: #c9a6f2; }.type { color: #86cfe0; }.prop { color: #a4dcc0; }.op { color: #93a9a0; }.tag { color: #8ed0c8; }
     .detail { padding: 15px; overflow: auto; }
     .detail h3 { margin: 0 0 12px; font-size: 13px; }
     .detail p { margin: 0 0 14px; color: #5e786d; font-size: 12px; line-height: 1.6; }
@@ -395,7 +397,7 @@
       ],
       'adapters/stripe.ts': [
         '<span class="cm">// External adapter: keeps vendor retries out of the checkout flow</span>',
-        '<span class="kw">export async function</span> <span class="fn">charge</span>(ctx: RequestContext, amount: number) {',
+        '<span class="kw">export async function</span> <span class="fn">charge</span>(ctx: <span class="type">RequestContext</span>, amount: <span class="type">number</span>) {',
         '  <span class="kw">return</span> <span class="fn">withRetry</span>(() => stripe.charges.create({ amount, idempotencyKey: ctx.requestId }));',
         '}',
         '',
@@ -415,7 +417,7 @@
       ],
       'checkout.spec.ts': [
         '<span class="kw">it</span>(<span class="str">"keeps vendor retries inside the adapter"</span>, <span class="kw">async</span> () => {',
-        '  <span class="kw">const</span> spy = <span class="fn">stubAdapter</span>({ fail: 1 });',
+        '  <span class="kw">const</span> spy = <span class="fn">stubAdapter</span>({ fail: <span class="num">1</span> });',
         '  <span class="kw">await</span> <span class="fn">checkoutFlow</span>(ctx, input);',
         '  <span class="fn">expect</span>(spy.attempts).<span class="fn">toBe</span>(2);',
         '});'
