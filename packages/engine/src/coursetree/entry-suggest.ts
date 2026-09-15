@@ -33,21 +33,7 @@ export async function suggestModuleEntries(
   provider: LlmProvider
 ): Promise<ModuleEntrySuggestion> {
   try {
-    const candidates: Candidate[] = [];
-    const collect = (node: CourseNode): void => {
-      if (candidates.length >= MAX_CANDIDATES) return;
-      if (node.anchors.length) {
-        candidates.push({
-          id: node.id,
-          title: node.title,
-          path: node.anchors[0].path,
-          line: node.anchors[0].line,
-          summary: node.summary.slice(0, MAX_SUMMARY)
-        });
-      }
-      node.children.forEach(collect);
-    };
-    collect(tree.root);
+    const candidates = collectCandidates(tree);
     if (!candidates.length) return { entries: [] };
 
     const system = [
@@ -65,9 +51,60 @@ export async function suggestModuleEntries(
     });
 
     return { entries: pickEntries(response.text, candidates), usage: response.usage };
-  } catch {
+  } catch (error) {
+    // 静默回落会伪装成「模型判定无入口」——至少在引擎日志里显式暴露失败原因
+    console.error("[entry-suggest] LLM 调用失败，返回空列表:", error instanceof Error ? error.message : error);
     return { entries: [] };
   }
+}
+
+function collectCandidates(tree: CourseTree): Candidate[] {
+  const candidates: Candidate[] = [];
+  const collect = (node: CourseNode): void => {
+    if (candidates.length >= MAX_CANDIDATES) return;
+    if (node.anchors.length) {
+      candidates.push({
+        id: node.id,
+        title: node.title,
+        path: node.anchors[0].path,
+        line: node.anchors[0].line,
+        summary: node.summary.slice(0, MAX_SUMMARY)
+      });
+    }
+    node.children.forEach(collect);
+  };
+  collect(tree.root);
+  return candidates;
+}
+
+/** 推荐入口结果缓存：同一（仓库分析版本, 模块, 说明）的重复请求不再重调 LLM。
+    GUI 每次进入教学页都会触发该请求，实测同一输入反复计费（8 次调用 2/3 输入完全相同）。
+    只缓存非空结果——空列表可能是 LLM 失败的静默回落，缓存会把失败固化。 */
+const entryCache = new Map<string, { entries: SuggestedEntry[]; at: number }>();
+const ENTRY_CACHE_TTL_MS = 10 * 60_000;
+const ENTRY_CACHE_MAX = 100;
+
+export function clearModuleEntryCache(): void {
+  entryCache.clear();
+}
+
+export async function suggestModuleEntriesCached(input: { tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; cacheKey: string }): Promise<ModuleEntrySuggestion> {
+  const key = `${input.cacheKey}:${input.moduleLabel}:${input.moduleHint}`;
+  const hit = entryCache.get(key);
+  if (hit && Date.now() - hit.at < ENTRY_CACHE_TTL_MS) {
+    entryCache.delete(key);
+    entryCache.set(key, hit); // 刷新 LRU 新近度
+    return { entries: hit.entries };
+  }
+  const suggestion = await suggestModuleEntries(input.tree, input.moduleLabel, input.moduleHint, input.provider);
+  if (suggestion.entries.length) {
+    entryCache.set(key, { entries: suggestion.entries, at: Date.now() });
+    if (entryCache.size > ENTRY_CACHE_MAX) {
+      const oldest = entryCache.keys().next().value;
+      if (oldest !== undefined) entryCache.delete(oldest);
+    }
+  }
+  return suggestion;
 }
 
 function pickEntries(text: string, candidates: Candidate[]): SuggestedEntry[] {

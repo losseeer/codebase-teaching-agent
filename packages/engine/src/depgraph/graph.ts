@@ -22,6 +22,7 @@ const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function
  */
 export function buildDependencyGraph(repositoryPath: string, files: FileEntry[]): DependencyGraph {
   const available = new Set(files.map((file) => file.path));
+  const packages = collectWorkspacePackages(repositoryPath, files);
   const imports = new Map<string, string[]>();
   const symbols: SymbolInfo[] = [];
   const contents = new Map<string, string>();
@@ -30,7 +31,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
     const content = readFileSync(join(repositoryPath, file.path), "utf8");
     contents.set(file.path, content);
     const matches = [...content.matchAll(/(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g)].map((match) => match[1]);
-    const resolved = matches.map((value) => resolveImport(file.path, value, available)).filter((value): value is string => Boolean(value));
+    const resolved = matches.map((value) => resolveImport(file.path, value, available, packages)).filter((value): value is string => Boolean(value));
     imports.set(file.path, [...new Set(resolved)]);
     symbols.push(...extractSymbols(file.path, content));
   }
@@ -147,11 +148,52 @@ function dedupeCalls(calls: CallEdge[]): CallEdge[] {
   });
 }
 
-function resolveImport(from: string, specifier: string, available: Set<string>): string | undefined {
-  if (!specifier.startsWith(".")) return undefined;
-  const candidate = normalize(join(dirname(from), specifier)).replaceAll("\\", "/");
-  const possibilities = [candidate, ...extensions.map((extension) => `${candidate}${extension}`), ...extensions.map((extension) => `${candidate}/index${extension}`)];
-  return possibilities.find((value) => available.has(value));
+interface WorkspacePackage {
+  dir: string;
+  main?: string;
+}
+
+/** 收集仓库内各 package.json 的 name → 包目录/入口（monorepo 工作区包，供裸说明符解析）。 */
+function collectWorkspacePackages(repositoryPath: string, files: FileEntry[]): Map<string, WorkspacePackage> {
+  const packages = new Map<string, WorkspacePackage>();
+  for (const file of files) {
+    if (basename(file.path) !== "package.json") continue;
+    try {
+      const pkg = JSON.parse(readFileSync(join(repositoryPath, file.path), "utf8")) as { name?: string; main?: string };
+      if (typeof pkg.name === "string" && pkg.name) {
+        packages.set(pkg.name, { dir: dirname(file.path), main: typeof pkg.main === "string" ? pkg.main.replace(/^\.\//, "") : undefined });
+      }
+    } catch { /* A malformed package file is not fatal to import. */ }
+  }
+  return packages;
+}
+
+function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>): string | undefined {
+  const tryResolve = (candidate: string): string | undefined => {
+    const normalized = normalize(candidate).replaceAll("\\", "/");
+    const direct = [normalized];
+    // TypeScript 的 NodeNext 约定：源码里写 .js/.mjs 等后缀，实际文件可能是 .ts/.tsx/.d.ts
+    const extension = extname(normalized);
+    if ([".js", ".mjs", ".cjs", ".jsx"].includes(extension)) {
+      const stripped = normalized.slice(0, -extension.length);
+      direct.push(`${stripped}.ts`, `${stripped}.tsx`, `${stripped}.d.ts`);
+    }
+    const possibilities = [...direct, ...extensions.map((item) => `${normalized}${item}`), ...extensions.map((item) => `${normalized}/index${item}`)];
+    return possibilities.find((value) => available.has(value));
+  };
+  if (specifier.startsWith(".")) return tryResolve(join(dirname(from), specifier));
+  // 裸说明符：只解析仓库内 package.json 声明的工作区包（外部依赖不入图）
+  const matched = [...packages.entries()].find(([name]) => specifier === name || specifier.startsWith(`${name}/`));
+  if (!matched) return undefined;
+  const [name, pkg] = matched;
+  if (specifier === name) {
+    if (pkg.main) {
+      const viaMain = tryResolve(join(pkg.dir, pkg.main));
+      if (viaMain) return viaMain;
+    }
+    return tryResolve(join(pkg.dir, "src/index")) ?? tryResolve(join(pkg.dir, "index"));
+  }
+  return tryResolve(join(pkg.dir, specifier.slice(name.length + 1)));
 }
 
 function detectEntrypoints(repositoryPath: string, files: FileEntry[]): SourceAnchor[] {

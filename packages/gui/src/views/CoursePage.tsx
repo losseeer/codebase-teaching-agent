@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Code2, Eye, X } from "lucide-react";
-import type { CourseNode, CourseNodeDetail, FileTreeNode, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseNode, CourseNodeDetail, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { TeachingSessionApi } from "../agent/useTeachingSession";
 import { EmptyState, Loading, MicroDetail } from "./helpers";
+import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
-import { FlowMap } from "../map/FlowMap";
+import { DepMap } from "../map/DepMap";
 import { showToast } from "../modules/toast";
 
 /**
-  代码地图工作区（对齐 prototype `.map-workspace`，两栏）：
-  - 左 「项目目录」：真实 `fileTree` 按顶层目录分组（目录给语义标签 + 文件行数 + 「显示其余 N 个文件」）
-  - 右 「运行路径」画布（`FlowMap`）：课程树分层流程图，画布内部滚动，页面无滚动条
+  代码地图工作区（两栏，源自 prototype `.map-workspace`）：
+  - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
+    早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
+  - 右 「运行路径」画布：v0.6 起为模块依赖图（`DepMap`）——节点 = 目录聚合模块，
+    边 = import 依赖，入口模块在最左列；课程树不再上图（层级交给左侧目录与教学页），
+    点击模块合成 CourseNode 走抽屉与地图线程。v0.5.4 曾为课程树总览层（总览化的中间态）。
   - 节点详情作为画布内的抽屉（触发后才覆盖画布右侧），不再是独立第三栏；源码抽屉已移除（v0.5.3）
   - 选中节点 → map 线程「已切换到 · 标题」；选中文件 → 「已选中 · path」
 
@@ -38,18 +42,10 @@ export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   return "概览";
 }
 
-interface TreeGroup {
-  id: string;
-  name: string;
-  label: string;
-  files: { path: string; name: string; lines: number }[];
-}
-
 export function CoursePage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [index, setIndex] = useState<RepositoryIndex | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [detail, setDetail] = useState<CourseNodeDetail | null>(null);
   const [drawer, setDrawer] = useState<"node" | null>(null);
   const [error, setError] = useState("");
@@ -58,8 +54,11 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   useEffect(() => {
     let current = true;
     setError("");
+    setAnalysis(null);
     api.getIndex(repositoryId).then((next) => { if (current) setIndex(next); })
       .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法加载仓库索引"); });
+    api.getAnalysis(repositoryId).then((next) => { if (current) setAnalysis(next); })
+      .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法加载依赖分析"); });
     return () => { current = false; };
   }, [repositoryId, t.dataVersion]);
 
@@ -78,27 +77,6 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
     return map;
   }, [index]);
 
-  const groups = useMemo<TreeGroup[]>(() => {
-    if (!index) return [];
-    const collect = (node: FileTreeNode, base: string, out: { path: string; name: string; lines: number }[]): void => {
-      if (node.kind === "directory") node.children?.forEach((child) => collect(child, base, out));
-      else out.push({ path: node.path, name: base ? `${base}/${node.name}` : node.name, lines: lineOf.get(node.path) ?? 0 });
-    };
-    const built: TreeGroup[] = [];
-    const rootFiles: TreeGroup = { id: "__root__", name: "", label: "入口与说明", files: [] };
-    index.fileTree.forEach((entry) => {
-      if (entry.kind === "file") {
-        rootFiles.files.push({ path: entry.path, name: entry.name, lines: lineOf.get(entry.path) ?? 0 });
-        return;
-      }
-      const files: { path: string; name: string; lines: number }[] = [];
-      entry.children?.forEach((child) => collect(child, "", files));
-      built.push({ id: entry.path, name: entry.name, label: groupLabel(entry.name), files });
-    });
-    built.sort((left, right) => right.files.length - left.files.length);
-    return rootFiles.files.length ? [...built, rootFiles] : built;
-  }, [index, lineOf]);
-
   const course = t.course;
   const pickNode = (node: CourseNode): void => {
     t.setMapNode(node);
@@ -114,7 +92,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   };
 
   if (error) return <EmptyState title="课程暂不可用" detail={error} />;
-  if (!course || !index) return <Loading />;
+  if (!course || !index || !analysis) return <Loading />;
 
   return (
     <section className="page course-page">
@@ -129,44 +107,18 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
         <aside className={`pane ${paneClass(0)}`}>
           <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} files</span></div>
           <div className="tree">
-            {groups.map((group) => {
-              const collapsed = collapsedGroups.has(group.id);
-              const open = expandedGroups.has(group.id);
-              const visible = collapsed ? [] : open ? group.files : group.files.slice(0, 6);
-              return (
-                <div className="tree-group" key={group.id}>
-                  <button
-                    type="button"
-                    className={`tree-label${collapsed ? " collapsed" : ""}`}
-                    aria-expanded={!collapsed}
-                    onClick={() => setCollapsedGroups((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(group.id)) next.delete(group.id); else next.add(group.id);
-                      return next;
-                    })}
-                  >
-                    <i className="tree-caret" aria-hidden /> <b>{group.name || "根目录"}</b> <span>{group.label}</span>
-                    <em className="tree-count">{group.files.length}</em>
-                  </button>
-                  {visible.map((file) => (
-                    <button key={file.path} className={`tree-file${t.mapFile === file.path ? " selected" : ""}`} title={file.path} onClick={() => openFile(file.path)}>
-                      ◇ <code>{file.name}</code><em>{file.lines ? `${file.lines}L` : "—"}</em>
-                    </button>
-                  ))}
-                  {!collapsed && !open && group.files.length > visible.length ? (
-                    <button className="tree-file tree-more" onClick={() => setExpandedGroups((prev) => new Set(prev).add(group.id))}>
-                      … <code>显示其余 {group.files.length - visible.length} 个文件</code><em />
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-            {!groups.length ? <p className="entry-empty">该仓库没有可展示的文件。</p> : null}
+            <RepoTree
+              nodes={index.fileTree}
+              onOpenFile={openFile}
+              activePath={t.mapFile}
+              lineOf={lineOf}
+              badge={(node, depth) => (depth === 0 ? groupLabel(node.name) : undefined)}
+            />
           </div>
         </aside>
 
         <section className={`pane map-canvas ${paneClass(1)}`}>
-          <FlowMap root={course.root} selectedId={selected?.id} onSelect={pickNode} />
+          <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
           {drawer ? (
             <aside className="map-detail" aria-label="节点详情">
               <div className="map-detail-head">
@@ -179,6 +131,24 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                 <h3>{selected?.title ?? "未选择节点"}</h3>
                 <span className="kind-badge">{kindLabel(selected?.kind)}</span>
                 <p>{selected?.summary}</p>
+                {selected?.children.length ? (
+                  <div className="detail-section">
+                    <h4>下级节点（{selected.children.length}）</h4>
+                    <div className="node-children">
+                      {selected.children.map((child) => (
+                        <button
+                          key={child.id}
+                          type="button"
+                          className="node-child"
+                          onClick={() => { t.setMapNode(child); t.pushDivider("map", `已切换到 · ${child.title}`); }}
+                        >
+                          <strong>{child.title}</strong>
+                          <em>{kindLabel(child.kind)}{child.children.length ? ` · ${child.children.length} 项` : ""}</em>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <MicroDetail detail={detail} />
                 {selected?.anchors.length ? (
                   <div className="detail-section">

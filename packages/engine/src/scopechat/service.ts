@@ -14,7 +14,10 @@ import { READ_FILE_TOOL, executeReadFile } from "./tools.js";
   全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码仍只给锚点摘录。
   */
 
-const MAX_EXCERPT_LINES = 80;
+const MAX_EXCERPT_LINES = 48;
+/** 锚点摘录总预算：摘录是「定位用的上下文」，不是全文阅读——更深的代码由模型经 read_file 按需拉取。
+    实测 3 锚点 × 80 行 ≈ 11k 字符，是 map_chat 单次输入的最大组成部分。 */
+const EXCERPTS_TOTAL_CHARS = 8_000;
 const PRACTICE_CONTEXT_CHARS = 12_000;
 const MAP_CONTEXT_CHARS = 20_000;
 const MAX_PANORAMA_ENTRIES = 20;
@@ -44,7 +47,7 @@ export interface ScopedChatResult {
   fileReads?: FileReadRecord[];
 }
 
-/** 按锚点取带行号的源码摘录（锚点行前后展开，上限 MAX_EXCERPT_LINES 行）。路径越界或读不到时返回空串。 */
+/** 按锚点取带行号的源码摘录（锚点行前后展开，受 MAX_EXCERPT_LINES 与总预算约束）。路径越界或读不到时返回空串。 */
 function excerptForAnchor(repoPath: string, anchor: SourceAnchor): string {
   try {
     const absolute = join(repoPath, anchor.path);
@@ -57,6 +60,23 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor): string {
   } catch {
     return "";
   }
+}
+
+/** 逐个拼接摘录直到总预算用尽；预算内放不下后续锚点时明示省略（不静默丢信息）。 */
+function excerptsWithinBudget(repoPath: string, anchors: SourceAnchor[]): string[] {
+  const blocks: string[] = [];
+  let used = 0;
+  for (const anchor of anchors) {
+    const block = excerptForAnchor(repoPath, anchor);
+    if (!block) continue;
+    if (used + block.length > EXCERPTS_TOTAL_CHARS) {
+      blocks.push(`（${anchor.path} 等其余锚点的摘录超出上下文预算已省略，需要时可用 read_file 查看。）`);
+      break;
+    }
+    blocks.push(block);
+    used += block.length;
+  }
+  return blocks;
 }
 
 function clip(text: string, limit: number): string {
@@ -134,6 +154,28 @@ function readPathHint(argumentsJson: string): string {
   }
 }
 
+/** micro_compact（借鉴 Claude Code s06 的分级压缩）：发给下一轮前，只保留最近一轮的 tool 结果原文，
+    更早轮次的 tool 内容替换为短占位符（模型忘了可再次调用 read_file 重取——结果可再生，不值得逐轮重付）；
+    早期 assistant 的 reasoningContent 一并丢弃（后续轮不需要重放思考，推理 token 是账单大头）。
+    最近一轮 assistant 的 reasoningContent 保留——部分协议要求 tool 调用轮回传 reasoning_content。 */
+function compactToolHistory(messages: LlmMessage[], placeholderChars = 240): void {
+  let lastAssistant = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant" && messages[index].toolCalls?.length) {
+      lastAssistant = index;
+      break;
+    }
+  }
+  if (lastAssistant <= 0) return;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (index < lastAssistant && message.role === "assistant") message.reasoningContent = undefined;
+    if (index < lastAssistant && message.role === "tool" && message.content.length > placeholderChars) {
+      message.content = `${message.content.slice(0, placeholderChars)}\n…（早期读取结果已省略以控制上下文，需要完整内容可再次调用 read_file。）`;
+    }
+  }
+}
+
 export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
@@ -142,7 +184,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   if (node) {
     const children = node.children.map((child) => `- ${child.title}（${child.kind}）`).join("\n");
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
-    for (const anchor of node.anchors.slice(0, 3)) sections.push(excerptForAnchor(input.repoPath, anchor));
+    excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3)).forEach((block) => sections.push(block));
   }
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
@@ -181,6 +223,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
         messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
       }
       onProgress?.({ type: "thinking", round: rounds + 2 });
+      compactToolHistory(messages);
       completion = await provider.complete({ system: MAP_SYSTEM_PROMPT, messages, maxTokens: 700, temperature: 0.3 });
       usage = addUsage(usage, completion.usage);
       break;
@@ -198,6 +241,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
       messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
     }
     onProgress?.({ type: "thinking", round: rounds + 1 });
+    compactToolHistory(messages);
     completion = await provider.complete({ system: MAP_SYSTEM_PROMPT, messages, tools: [READ_FILE_TOOL], maxTokens: 700, temperature: 0.3 });
     usage = addUsage(usage, completion.usage);
   }
@@ -219,7 +263,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   if (exercise.options?.length) {
     sections.push(`选项：\n${exercise.options.map((option) => `- ${option.id}. ${option.label}${option.detail ? `（${option.detail}）` : ""}`).join("\n")}`);
   }
-  for (const anchor of exercise.anchors.slice(0, 3)) sections.push(excerptForAnchor(input.repoPath, anchor));
+  excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3)).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
   const completion = await input.provider.complete({
     system: PRACTICE_SYSTEM_PROMPT,

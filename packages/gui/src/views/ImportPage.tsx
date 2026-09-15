@@ -24,14 +24,24 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   const navigate = useNavigate();
 
+  // 进度更新主通道 = /ws 广播（引擎每个进度事件都 publish import.progress）；
+  // 5s 轮询是兜底——WS 断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
+  const jobId = job?.id;
+  const jobActive = Boolean(job && !["completed", "failed"].includes(job.phase));
   useEffect(() => {
-    if (!job || ["completed", "failed"].includes(job.phase)) return;
+    if (!jobActive || !jobId) return;
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
+    socket.onmessage = (event: MessageEvent<string>) => {
+      const serverEvent = JSON.parse(event.data) as { type: string; payload: ImportJob };
+      if (serverEvent.type === "import.progress" && serverEvent.payload.id === jobId) setJob(serverEvent.payload);
+    };
     const interval = window.setInterval(
-      () => api.getImport(job.id).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),
-      700
+      () => api.getImport(jobId).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),
+      5000
     );
-    return () => window.clearInterval(interval);
-  }, [job]);
+    return () => { window.clearInterval(interval); socket.close(); };
+  }, [jobActive, jobId]);
   useEffect(() => {
     if (job?.phase !== "completed" || !job.repositoryId) return;
     onImported({ repositoryId: job.repositoryId, repositoryPath: job.repositoryPath });

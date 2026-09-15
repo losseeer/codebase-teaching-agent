@@ -11,7 +11,7 @@ import type { FastifyReply } from "fastify";
 import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
-import { suggestModuleEntries } from "./coursetree/entry-suggest.js";
+import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { ExerciseService } from "./exercises/service.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
@@ -215,7 +215,10 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
   if (!provider) return { entries: [], source: "heuristic" as const };
-  const suggestion = await suggestModuleEntries(repository.course, moduleLabel, (request.query.hint ?? "").trim(), provider);
+  const suggestion = await suggestModuleEntriesCached({
+    tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
+    cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
+  });
   if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
     input_tokens: suggestion.usage.inputTokens,
     output_tokens: suggestion.usage.outputTokens,

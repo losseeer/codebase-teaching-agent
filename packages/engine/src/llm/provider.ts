@@ -294,6 +294,7 @@ export class RetryLlmProvider implements LlmProvider {
       try {
         return await this.primary.complete(input);
       } catch (error) {
+        if (isNonRetryable(error)) throw error;
         lastError = error;
         if (attempt + 1 < this.attempts) await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
       }
@@ -302,23 +303,41 @@ export class RetryLlmProvider implements LlmProvider {
   }
 }
 
+/** 确定性 4xx（除 408 请求超时 / 429 限速）不做重试：同样的请求原样重发只会原样再败，
+    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */
+function isNonRetryable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = /(?:LLM|Anthropic|Ollama) returned (\d{3})/.exec(message)?.[1];
+  if (!status) return false;
+  const code = Number(status);
+  return code >= 400 && code < 500 && code !== 408 && code !== 429;
+}
+
 function defaultModel(provider: string): string {
   if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
   if (provider === "ollama") return "llama3.2";
   return "gpt-4o-mini";
 }
 
-function createProviderFromEnv(provider: string, model: string, timeoutMs: number): LlmProvider | undefined {
+/** 各协议端点/密钥的显式覆盖值（轻量档独立配置用；未提供的字段回落共用环境变量）。 */
+interface ProviderEnvOverrides {
+  openaiUrl?: string;
+  openaiApiKey?: string;
+  anthropicUrl?: string;
+  anthropicApiKey?: string;
+}
+
+function createProviderFromEnv(provider: string, model: string, timeoutMs: number, overrides: ProviderEnvOverrides = {}): LlmProvider | undefined {
   if (provider === "anthropic") {
-    const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.TUTOR_ANTHROPIC_API_KEY;
+    const apiKey = overrides.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? process.env.TUTOR_ANTHROPIC_API_KEY;
     if (!apiKey) return undefined;
-    return new RetryLlmProvider(new AnthropicProvider({ endpoint: process.env.TUTOR_ANTHROPIC_URL ?? "https://api.anthropic.com", apiKey, model, timeoutMs }));
+    return new RetryLlmProvider(new AnthropicProvider({ endpoint: overrides.anthropicUrl ?? process.env.TUTOR_ANTHROPIC_URL ?? "https://api.anthropic.com", apiKey, model, timeoutMs }));
   }
   if (provider === "ollama") return new RetryLlmProvider(new OllamaTeachingProvider({ endpoint: process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434", model, timeoutMs }));
   if (provider === "openai" || provider === "openai-compatible") {
-    const apiKey = process.env.OPENAI_API_KEY ?? process.env.TUTOR_OPENAI_API_KEY;
+    const apiKey = overrides.openaiApiKey ?? process.env.OPENAI_API_KEY ?? process.env.TUTOR_OPENAI_API_KEY;
     if (provider === "openai" && !apiKey) return undefined;
-    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: process.env.TUTOR_OPENAI_URL ?? "https://api.openai.com/v1", apiKey, model, timeoutMs }));
+    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: overrides.openaiUrl ?? process.env.TUTOR_OPENAI_URL ?? "https://api.openai.com/v1", apiKey, model, timeoutMs }));
   }
   return undefined;
 }
@@ -335,13 +354,24 @@ export function createTeachingProvider(): LlmProvider | undefined {
   轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 代码地图命名完善）。
   - `TUTOR_LIGHT_PROVIDER` + `TUTOR_LIGHT_MODEL` 显式配置（如 ollama 本地小模型 / gpt-4o-mini）
   - 未配置时由调用方回落主力档（createTeachingProvider），保证只填一套配置也能跑通全部接入点
-  - 端点与密钥变量与主力档共用（同一厂商）；超时共用 TUTOR_LLM_TIMEOUT_MS
+  - 端点/密钥可用独立变量（TUTOR_LIGHT_OPENAI_URL / TUTOR_LIGHT_API_KEY / TUTOR_LIGHT_ANTHROPIC_URL / TUTOR_LIGHT_ANTHROPIC_API_KEY），
+    未设置时回落主力档共用变量——支持两档使用不同厂商或不同协议端点（如 GLM 资源包走 OpenAI 协议、主力档走 DeepSeek）。
+  - 超时可用独立变量 TUTOR_LIGHT_TIMEOUT_MS（推理模型单轮生成可达 30-60s），未设置时回落 TUTOR_LLM_TIMEOUT_MS。
   */
 export function createLightLlmProvider(): LlmProvider | undefined {
-  const provider = (process.env.TUTOR_LIGHT_PROVIDER ?? "").toLowerCase();
+  const provider = (process.env.TUTOR_LIGHT_PROVIDER ?? "").toLowerCase().trim();
   if (!provider) return undefined;
-  const model = process.env.TUTOR_LIGHT_MODEL ?? defaultModel(provider);
-  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
+  // 模型留空（或全空白）视为 light 档未配置 → 返回 undefined，由调用方回落主力档。
+  // 不能用空模型名创建 provider：请求必然失败后被各接入点静默吞掉，表现为「LLM 失效」。
+  const model = (process.env.TUTOR_LIGHT_MODEL ?? "").trim();
+  if (!model) return undefined;
+  const timeoutMs = Number(process.env.TUTOR_LIGHT_TIMEOUT_MS ?? process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
+  return createProviderFromEnv(provider, model, timeoutMs, {
+    openaiUrl: process.env.TUTOR_LIGHT_OPENAI_URL,
+    openaiApiKey: process.env.TUTOR_LIGHT_API_KEY,
+    anthropicUrl: process.env.TUTOR_LIGHT_ANTHROPIC_URL,
+    anthropicApiKey: process.env.TUTOR_LIGHT_ANTHROPIC_API_KEY,
+  });
 }
 
 export function teachingProviderStatus(provider?: LlmProvider): TeachingProviderStatus {
