@@ -1,13 +1,19 @@
-import type { CourseNode, FadedState, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
-import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "../policy/policy.js";
+import type { FileReadRecord } from "../source/read-file.js";
+import { completeWithReadTool } from "../source/tool-loop.js";
 import { classifyIntent } from "../teaching/intent.js";
 import { proposeAction, isActionAllowed } from "../teaching/action.js";
 import { initialTeachingState, transition, transitionFromAction, transitionFromIntent } from "../teaching/state-machine.js";
 import type { TeachingState, Transition, TutorAction } from "../teaching/state-machine.js";
 import { assembleContext } from "./context.js";
 import { teachingSystemPrompt } from "./prompts.js";
+
+/** 教学回合的工具循环预算：比宏观设计更紧——教学要的是「看一眼那一行」，不是通读实现。 */
+const TEACHING_MAX_TOOL_ROUNDS = 2;
+const TEACHING_MAX_TOOL_CALLS = 3;
 
 export interface TutorReply {
   session: TutorSession;
@@ -23,6 +29,8 @@ export interface TutorReply {
   proposedAction?: TutorAction;
   /** 动作来源：proposed=模型提议被放行；vetoed=提议被守门否决；deterministic=确定性路径。 */
   actionSource?: "proposed" | "vetoed" | "deterministic";
+  /** 本轮 read_file 调用审计（供 server 逐条记 journal file_read）。 */
+  fileReads?: FileReadRecord[];
 }
 
 export interface RespondOptions {
@@ -30,6 +38,8 @@ export interface RespondOptions {
   classifier?: LlmProvider;
   /** 受限 agent loop：模型从固定动作菜单提议动作，状态机守门校验。 */
   actionLoop?: boolean;
+  /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */
+  analysis?: RepositoryAnalysis;
 }
 
 export function createSession(repositoryId: string, courseNodeId: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
@@ -47,7 +57,13 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   if (!provider) return respond(session, node, learnerContent);
   const state: TeachingState = { stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length };
   const policy = policyFor(session.settings);
-  const context = assembleContext(node, policy, session.messages, repositoryPath);
+  const context = assembleContext({
+    node,
+    policy,
+    history: session.messages,
+    ...(repositoryPath ? { repositoryPath } : {}),
+    ...(options.analysis ? { analysis: options.analysis } : {})
+  });
 
   let next: Transition;
   let intentSource: "llm" | "regex" | undefined;
@@ -76,14 +92,37 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
     next = transition(state, learnerContent);
   }
 
-  const system = teachingSystemPrompt({ policy, stage: next.next.stage, kind: next.kind, hintDepth: next.hintDepth, faded });
+  const readToolAvailable = Boolean(repositoryPath);
+  const system = teachingSystemPrompt({ policy, stage: next.next.stage, kind: next.kind, hintDepth: next.hintDepth, faded, readToolAvailable });
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
+  const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
-    const completion = await provider.complete({ system, user, maxTokens: 700, temperature: 0.2 });
-    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, sumUsage(decisionUsage, completion.usage), next, intentSource, { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) });
+    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}) });
+    const completion = outcome.completion;
+    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, sumUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}) });
   } catch {
-    return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) });
+    return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
+}
+
+/** 措辞调用：有仓库路径时走 read_file 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
+    没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[] }> {
+  if (!input.repositoryPath) {
+    const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2 });
+    return { completion, ...(completion.usage ? { usage: completion.usage } : {}), fileReads: [] };
+  }
+  const result = await completeWithReadTool({
+    provider: input.provider,
+    repoPath: input.repositoryPath,
+    system: input.system,
+    user: input.user,
+    maxTokens: 700,
+    temperature: 0.2,
+    maxRounds: TEACHING_MAX_TOOL_ROUNDS,
+    maxCalls: TEACHING_MAX_TOOL_CALLS
+  });
+  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), fileReads: result.fileReads };
 }
 
 function recentTranscript(messages: TutorMessage[]): string[] {
@@ -99,7 +138,7 @@ function sumUsage(...usages: (LlmUsage | undefined)[]): LlmUsage | undefined {
   };
 }
 
-function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource">): TutorReply {
+function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource" | "fileReads">): TutorReply {
   const next = predetermined ?? transition({ stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length }, learnerContent);
   const user: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString(), stage: session.stage };
   const assistant: TutorMessage = { id: id(), role: "assistant", content: composer(next.kind, next.next.stage, node, session.settings), createdAt: new Date().toISOString(), stage: next.next.stage };

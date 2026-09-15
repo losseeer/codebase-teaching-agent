@@ -1,0 +1,69 @@
+import { describe, expect, it } from "vitest";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { completeWithReadTool } from "./tool-loop.js";
+
+/** repoPath 指向本目录：目录内 read-file.ts 是稳定存在的真实文件 */
+const repoPath = import.meta.dirname;
+
+function scriptedProvider(script: LlmCompletion[]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
+  const calls: LlmCompletionInput[] = [];
+  let index = 0;
+  return {
+    calls,
+    provider: {
+      name: "scripted",
+      modelVersion: "scripted:v1",
+      async complete(input) {
+        calls.push(input);
+        return script[index++];
+      }
+    }
+  };
+}
+
+const readCall = (id: string, path: string): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "read_file", argumentsJson: JSON.stringify({ path }) }], usage: { inputTokens: 100, outputTokens: 10 }, finishReason: "tool_calls" });
+
+describe("completeWithReadTool", () => {
+  it("轮数预算用尽时明确回绝未应答的 tool_call，再做一轮不带工具的收尾", async () => {
+    const { provider, calls } = scriptedProvider([
+      readCall("c1", "read-file.ts"),
+      readCall("c2", "read-file.ts"),
+      { text: "基于已有上下文回答。", usage: { inputTokens: 50, outputTokens: 20 }, finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "问题原文", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 5 });
+    expect(result.completion.text).toContain("基于已有上下文回答");
+    expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
+    expect(result.usage).toEqual({ inputTokens: 250, outputTokens: 40 });
+    // 收尾轮不再带工具，并以回绝文本应答第二次调用
+    expect(calls[2].tools).toBeUndefined();
+    const refusal = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("读文件上限"));
+    expect(refusal).toBeDefined();
+    // 首轮 user 消息始终在 messages[0]（工具轮次后不丢上下文与提问）
+    expect(calls[1].messages?.[0]).toMatchObject({ role: "user" });
+    expect(calls[1].messages?.[0].content).toBe("问题原文");
+  });
+
+  it("累计文件数用尽时同样收尾；未知工具回喂明确提示", async () => {
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "write_file", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      readCall("c3", "read-file.ts"),
+      { text: "收尾。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 1 });
+    expect(result.completion.text).toBe("收尾。");
+    const unknown = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("未知工具"));
+    expect(unknown?.content).toContain("只支持 read_file");
+    expect(result.fileReads).toHaveLength(1); // 未知工具不计入读取审计
+  });
+
+  it("被护栏拒绝的读取计入审计（denied），不中断对话", async () => {
+    const { provider } = scriptedProvider([
+      readCall("c1", ".env"),
+      { text: "改看别的文件。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
+    expect(result.fileReads).toHaveLength(1);
+    expect(result.fileReads[0]).toMatchObject({ path: ".env", denied: true });
+    expect(result.completion.text).toContain("改看别的文件");
+  });
+});

@@ -4,7 +4,10 @@ import { isWithin } from "../lib.js";
 import type { LlmTool } from "../llm/provider.js";
 
 /**
-  mapChat 的 read_file 工具：让模型按需拉取源码，补足「结构全景 + 锚点摘录」之外的深度。
+  read_file 工具（宏观设计 map 与教学 teaching 两个作用域共用）：让模型按需拉取源码，
+  补足「结构全景/调用邻接 + 锚点摘录」之外的深度。练习答疑作用域**不提供**该工具——
+  它会绕过「判分答案与锚点不进上下文」的防泄题约束。
+
   护栏（全部强制，非可选项）：
   1. 路径必须落在仓库内（isWithin），绝对路径/穿越一律拒绝；
   2. 拒读名单——.env*（仓库根 .env 有真实 API key，读到即入 prompt 发往远端）、密钥后缀、
@@ -28,11 +31,21 @@ export const READ_FILE_TOOL: LlmTool = {
   }
 };
 
+/** read_file 审计记录（无论成败；由调用方逐条记 journal file_read）。 */
+export interface FileReadRecord {
+  path: string;
+  lines?: number;
+  bytes?: number;
+  truncated: boolean;
+  denied: boolean;
+  error?: string;
+}
+
 export interface ReadFileOutcome {
   /** 直接回喂给模型的内容（成功=带行号摘录，失败=拒绝/错误说明）。 */
   content: string;
   /** 审计信息；拒绝与失败时 path 仍尽量记录原始请求值。 */
-  audit: { path: string; lines?: number; bytes?: number; truncated: boolean; denied: boolean; error?: string };
+  audit: FileReadRecord;
 }
 
 const MAX_WINDOW_LINES = 400;

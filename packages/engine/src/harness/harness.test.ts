@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CourseNode } from "@codebase-tutor/shared";
+import type { CourseNode, RepositoryAnalysis } from "@codebase-tutor/shared";
 import { createSession, respondWithProvider } from "./harness.js";
-import type { LlmProvider } from "../llm/provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 
 const node: CourseNode = { id: "unit", title: "入口", summary: "入口读取配置。", kind: "workflow", anchors: [{ path: "src/main.ts", line: 1, label: "入口" }], children: [] };
 
@@ -151,5 +151,68 @@ describe("provider-backed teaching harness", () => {
     expect(result.action).toBe("give_answer");
     expect(result.event).toBe("dependency");
     expect(result.session.stage).toBe("verify");
+  });
+
+  it("模型可以要求 read_file 补足摘录之外的实现细节，并回报读取审计", async () => {
+    const repository = fixtureRepository();
+    const script: LlmCompletion[] = [
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "src/main.ts" }) }], usage: { inputTokens: 40, outputTokens: 8 }, finishReason: "tool_calls" },
+      { text: "入口先调用 readConfig 读取配置。", usage: { inputTokens: 60, outputTokens: 12 }, finishReason: "stop" }
+    ];
+    const calls: LlmCompletionInput[] = [];
+    let index = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted-v1",
+      complete: async (input) => {
+        calls.push(input);
+        return script[index++];
+      }
+    };
+    const result = await respondWithProvider(createSession("repo", "unit"), node, "入口的输入是什么？", provider, undefined, repository);
+    expect(result.assistant.content).toContain("readConfig");
+    expect(result.fileReads?.map((read) => read.path)).toEqual(["src/main.ts"]);
+    expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    // 首轮带工具定义，且 system 声明了 read_file 的用法与护栏
+    expect(calls[0].tools?.[0]?.name).toBe("read_file");
+    expect(calls[0].system).toContain("read_file 只能读仓库内的源码与配置");
+    // 第二轮完整携带首轮 user 消息（上下文 + 学习者提问）与 tool 结果
+    expect(calls[1].messages?.[0].content).toContain("课程节点: 入口");
+    expect(calls[1].messages?.[0].content).toContain("入口的输入是什么？");
+    expect(calls[1].messages?.some((message) => message.role === "tool")).toBe(true);
+  });
+
+  it("没有仓库路径时不提供 read_file（工具读不到文件就不给）", async () => {
+    let sawTools = true;
+    const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async (input) => { sawTools = Boolean(input.tools); return { text: "好" }; } };
+    await respondWithProvider(createSession("repo", "unit"), node, "继续", provider);
+    expect(sawTools).toBe(false);
+  });
+
+  it("把调用关系与同文件符号位置注入教学上下文", async () => {
+    let prompt = "";
+    const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async (input) => { prompt = `${input.system}\n${input.user}`; return { text: "好" }; } };
+    const analysis = {
+      graph: {
+        imports: {},
+        calls: [{ callerPath: "src/boot.ts", callerSymbol: "symbol:src/boot.ts:main:1", calleePath: "src/main.ts", calleeSymbol: "symbol:src/main.ts:main:1", line: 3 }],
+        symbols: [
+          { id: "symbol:src/boot.ts:main:1", name: "main", kind: "function", path: "src/boot.ts", line: 1, endLine: 5, parameters: [], language: "typescript" },
+          { id: "symbol:src/main.ts:main:1", name: "main", kind: "function", path: "src/main.ts", line: 1, endLine: 3, parameters: [], language: "typescript" }
+        ],
+        entrypoints: [],
+        semanticBackend: "static",
+        lspStatus: []
+      },
+      implementations: [],
+      quality: {},
+      versionStamp: "v1",
+      repositoryId: "repo",
+      generatedAt: new Date().toISOString()
+    } as unknown as RepositoryAnalysis;
+    await respondWithProvider(createSession("repo", "unit"), node, "它被谁调用？", provider, undefined, undefined, { analysis });
+    expect(prompt).toContain("调用关系（src/main.ts）");
+    expect(prompt).toContain("调用它的：src/boot.ts:main");
+    expect(prompt).toContain("同文件符号位置：main（function）:1-3");
   });
 });

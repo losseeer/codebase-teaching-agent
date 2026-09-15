@@ -16,6 +16,8 @@ export interface TeachingPromptInput {
   kind: "advance" | "step_down" | "give_answer" | "confirm";
   hintDepth: number;
   faded?: FadedState;
+  /** 上下文附带 read_file 工具时声明其用法与护栏（缺省不声明，模型不会以为能自己读文件） */
+  readToolAvailable?: boolean;
 }
 
 export function styleBrief(style: number): string {
@@ -48,7 +50,7 @@ const kindContract: Record<TeachingPromptInput["kind"], string> = {
 };
 
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
-  const { policy, stage, kind, hintDepth, faded } = input;
+  const { policy, stage, kind, hintDepth, faded, readToolAvailable } = input;
   return [
     "你是 Codebase Tutor 的代码教学导师，通过苏格拉底式对话带学习者读真实代码。",
     "",
@@ -56,6 +58,13 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "上下文附有锚点附近的真实源码摘录；引用代码时指明文件与行号；",
     "只基于课程节点、源码摘录和摘要回答；不虚构摘录之外的文件、行号或运行结果；",
     "摘录不足以回答时明确承认，并给出一个可执行的观察路径（先看哪个文件哪一段）。",
+    ...(readToolAvailable
+      ? [
+          "需要确认摘录之外的实现细节时调用 read_file（仓库内相对路径，可用 offset/limit 取行窗口）；",
+          "调用前先看上下文里的「调用关系」与「同文件符号位置」，那里给了跨文件调用方与被调方——相关代码常常不在锚点附近；",
+          "read_file 只能读仓库内的源码与配置；不要试图读 .env、密钥文件或仓库外路径。"
+        ]
+      : []),
     "",
     "【语言风格】",
     styleBrief(policy.level),
