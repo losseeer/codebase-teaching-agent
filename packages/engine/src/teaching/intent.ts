@@ -25,7 +25,7 @@ export async function classifyIntent(state: TeachingState, learnerMessage: strin
     `学习者本轮输入：${learnerMessage}`
   ].join("\n");
   try {
-    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0 });
+    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.intent" });
     const intent = parseLabel(completion.text);
     if (!intent) {
       return { intent: classifyIntentRegex(state, learnerMessage), source: "regex", usage: completion.usage };

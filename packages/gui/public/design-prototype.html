@@ -261,10 +261,6 @@
     .cfg-foot span { color: #8aa097; font-size: 9px; }
     .cfg-reset { border: 0; padding: 0; color: #4d7f9f; background: transparent; font-size: 10px; text-decoration: underline; }
 
-    .thread-divider { display: flex; align-items: center; gap: 8px; margin: 13px 0; color: #90a79b; font-size: 10px; }
-    .thread-divider::before, .thread-divider::after { content: ""; flex: 1; height: 1px; background: #dfe9e2; }
-    .thread-divider span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-
     .agent-thread, .module-body { scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
     .agent-thread { scrollbar-gutter: stable; }
     .agent-thread::-webkit-scrollbar, .module-body::-webkit-scrollbar { width: 9px; }
@@ -536,7 +532,6 @@
     };
     const scrollThread = () => { const box = $('#agent-thread'); box.scrollTop = box.scrollHeight; };
     const messageHtml = (item) => {
-      if (item.role === 'divider') return `<div class="thread-divider"><span>${item.html}</span></div>`;
       return `<div class="message${item.role === 'user' ? ' user' : ''}"><span>${item.role === 'user' ? '你' : 'Codebase Agent'}</span><p>${item.html}</p></div>`;
     };
     const emptyHtml = (scope) => {
@@ -558,11 +553,6 @@
       threads[scope].push({ role, html });
       if (scope === activeScope) renderThread();
     }
-    function pushDivider(text, scope = activeScope) {
-      threads[scope].push({ role: 'divider', html: text });
-      if (scope === activeScope) renderThread();
-    }
-
     function currentNodeTitle() {
       const node = $('.flow-node.selected strong');
       return node ? node.textContent : '读取请求';
@@ -651,7 +641,6 @@
       if (where === 'practice') selectExercise(0, false);
       refreshContext();
       if (activeScope === where) renderScopeContext();
-      pushDivider(`模块 · ${labelOf(from)} → ${labelOf(id)}`, where);
     }
 
     // ---------- 源码面板 ----------
@@ -695,14 +684,12 @@
     function selectTeachingFile(file) {
       if (!state.tabs.includes(file)) { state.tabs.push(file); if (state.tabs.length > 5) state.tabs.shift(); }
       setSource(file, HIGHLIGHTS[file] ? HIGHLIGHTS[file][0] + 1 : 1);
-      pushDivider(`已打开 · ${displayPath(file)}`, 'teaching');
     }
     function selectTeachingNode(index) {
       const node = nodesOf(state.module.teaching)[index];
       if (!node) return;
       setSource(node.file, node.line);
       renderTeachingLists();
-      pushDivider(`已定位 · ${displayPath(node.file)}:${node.line}（${node.title}）`, 'teaching');
     }
 
     // ---------- 练习 ----------
@@ -727,7 +714,6 @@
       renderPracticeLists();
       if (state.workspace === 'practice') refreshContext();
       if (activeScope === 'practice') renderScopeContext();
-      if (announce) pushDivider(`练习 #${state.exercise + 1} · ${item.title} → ${displayPath(item.file)}`, 'practice');
     }
 
     // ---------- 作用域 / 视图 ----------
@@ -779,7 +765,6 @@
       binds.map = `节点「${title}」`;
       if (activeScope === 'map') renderScopeContext();
       if (state.workspace === 'map') refreshContext();
-      pushDivider(`已切换到 · ${title}`, 'map');
     }));
     function selectFile(file) {
       if (!file) return;
@@ -798,7 +783,6 @@
       binds.map = `节点「${currentNodeTitle()}」 · ${displayPath(file)}`;
       if (activeScope === 'map') renderScopeContext();
       if (state.workspace === 'map') refreshContext();
-      pushDivider(`已选中 · ${displayPath(file)}`, 'map');
     }
     $$('.tree-file').forEach((item) => item.addEventListener('click', () => selectFile(item.dataset.file)));
 

@@ -17,7 +17,7 @@ import { showToast } from "../modules/toast";
     边 = import 依赖，入口模块在最左列；课程树不再上图（层级交给左侧目录与教学页），
     点击模块合成 CourseNode 走抽屉与地图线程。v0.5.4 曾为课程树总览层（总览化的中间态）。
   - 节点详情作为画布内的抽屉（触发后才覆盖画布右侧），不再是独立第三栏；源码抽屉已移除（v0.5.3）
-  - 选中节点 → map 线程「已切换到 · 标题」；选中文件 → 「已选中 · path」
+  - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
 
   对应 prototype `design-prototype.html` L63-67 / L304-307（map-workspace + map-canvas + flow-node）。
   */
@@ -80,14 +80,12 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   const course = t.course;
   const pickNode = (node: CourseNode): void => {
     t.setMapNode(node);
-    t.pushDivider("map", `已切换到 · ${node.title}`);
     setDrawer("node");
   };
-  // 源码抽屉已按需求移除（v0.5.3）：点文件只记录「已选中 · path」并同步到 Agent 绑定，
+  // 源码抽屉已按需求移除（v0.5.3）：点文件只同步到 Agent 绑定（绑定区展示），
   // 源码阅读在「代码教学」工作区的实时源码面板完成。
   const openFile = (path: string): void => {
     t.setMapFile(path);
-    t.pushDivider("map", `已选中 · ${path}`);
     showToast(`已选中 · ${path}`);
   };
 
@@ -140,7 +138,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                           key={child.id}
                           type="button"
                           className="node-child"
-                          onClick={() => { t.setMapNode(child); t.pushDivider("map", `已切换到 · ${child.title}`); }}
+                          onClick={() => t.setMapNode(child)}
                         >
                           <strong>{child.title}</strong>
                           <em>{kindLabel(child.kind)}{child.children.length ? ` · ${child.children.length} 项` : ""}</em>

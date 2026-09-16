@@ -47,9 +47,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .agent-thread { overflow-y: auto; padding: 14px 16px 8px; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
 .agent-thread .starter { display: grid; place-items: center; align-content: center; min-height: 220px; color: #709084; text-align: center; }
 .agent-thread .starter p { max-width: 280px; font-size: 12px; margin-top: 8px; }
-.thread-divider { display: flex; align-items: center; gap: 8px; margin: 11px 0; color: #90a79b; font-size: 10px; }
-.thread-divider::before, .thread-divider::after { content: ""; flex: 1; height: 1px; background: #dfe9e2; }
-.thread-divider span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* 回复生成过程指示（回复生成中 / 正在读取 xx …）：斜体淡色 + 省略号动画 */
 .agent-thread .message p.agent-progress { color: #587a68; font-style: italic; background: #f7faf7; }
 .agent-thread .message p.agent-progress::after { content: ""; display: inline-block; margin-left: 2px; animation: progress-dots 1.2s infinite; }

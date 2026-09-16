@@ -18,12 +18,24 @@ export const SCOPE_LABEL: Record<Scope, string> = {
   practice: "练习评估",
 };
 
-/** thread 一条消息的形态：用户/Agent/分隔线。`divider.text` 即分隔线文本（pushDivider 注入，纯文本）。
-  agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示）。 */
+/**
+  教学回合过程提示的文案。引擎按 `harness` 的 TeachingProgress 发结构化事件（stage 取值与 map-chat 的
+  SSE 过程事件同一套），文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
+  */
+export function teachingProgressText(payload: { stage?: string; round?: number; path?: string }): string {
+  if (payload.stage === "deciding") return "正在判断本轮教学动作…";
+  if (payload.stage === "reading") return `正在读取 ${payload.path || "代码文件"} …`;
+  if (payload.stage === "thinking") return payload.round && payload.round > 1 ? `正在思考（第 ${payload.round} 轮）…` : "正在思考…";
+  return "回复生成中…";
+}
+
+/** thread 一条消息的形态：用户/Agent。
+  agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示）。
+  位置/状态变化（切换作用域、切换节点、选中文件等）不再以分割线入线程——上下文变化由绑定区展示，
+  线程只留真实的对话内容（v0.8.1）。 */
 export type ThreadItem =
   | { kind: "user"; id: string; text: string }
-  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" }
-  | { kind: "divider"; id: string; text: string };
+  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" };
 
 const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
 
@@ -48,11 +60,10 @@ export interface TeachingSessionApi {
   scope: Scope;
   setScope: (next: Scope) => void;
 
-  /** Agent 侧栏 thread 状态：3 作用域各独立。`pushDivider/pushMessage/clearThread` 三个写入器封装为方法。 */
+  /** Agent 侧栏 thread 状态：3 作用域各独立。`pushMessage/clearThread` 两个写入器封装为方法。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
   pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint") => void;
-  pushDivider: (scope: Scope, text: string) => void;
   clearThread: (scope: Scope) => void;
 
   /** 当前 teaching 教学状态（API + 流式） */
@@ -106,37 +117,24 @@ export interface TeachingSessionApi {
   教学会话 + Agent 侧栏共享的单一状态源。
   - App.tsx 调用一次，把返回值 prop drill 给 TutorPage + AgentRail
   - TutorPage 只读 session.selected/settings/learner/faded/cost（用于渲染阶梯 + 锚点 + 成本 chip）
-  - AgentRail 写入 content / send / scope / pushDivider / pushMessage
+  - AgentRail 写入 content / send / scope / pushMessage
   */
 export function useTeachingSession(repositoryId: string): TeachingSessionApi {
   const [scope, setScopeRaw] = useState<Scope>(loadInitialScope);
   useEffect(() => {
     try { localStorage.setItem(SCOPE_STORAGE_KEY, scope); } catch { /* 持久化失败不回退 */ }
   }, [scope]);
-  const setScope = (next: Scope): void => {
-    setScopeRaw(next);
-    pushDivider(next, `已切换到 · ${SCOPE_LABEL[next]}`);
-  };
+  const setScope = (next: Scope): void => setScopeRaw(next);
 
   /**
   Agent 侧栏 thread 状态：3 作用域各独立。
   - 内存态（跨路由共享；刷新页面重置 —— 与 prototype 语义一致）
-  - `pushDivider` 对连续完全相同的文本去重（React StrictMode 双跑 effect 不产生重复分隔线）
-  - `pushMessage` / `clearThread` 不做去重
+  - 只有 `pushMessage` / `clearThread` 两个写入器：位置/状态变化不再入线程（v0.8.1 起）
   */
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
 const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint"): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
-};
-const pushDivider = (target: Scope, text: string): void => {
-  const id = `${Date.now()}-div-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => {
-    const list = prev[target];
-    const last = list[list.length - 1];
-    if (last && last.kind === "divider" && last.text === text) return prev;
-    return { ...prev, [target]: [...list, { kind: "divider", id, text }] };
-  });
 };
 const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [target]: [] }));
 
@@ -164,27 +162,13 @@ useEffect(() => {
   }).catch(() => { if (!cancelled) setCourse(null); });
   return () => { cancelled = true; };
 }, [repositoryId, dataVersion]);
-// prototype 语义：首次打开节点记「已打开」；之后每次切换记「已定位」+「已切换到」
-const initialSelectionDone = useRef(false);
-useEffect(() => {
-  if (!selected) { initialSelectionDone.current = false; return; }
-  const anchor = selected.anchors[0];
-  if (!initialSelectionDone.current) {
-    initialSelectionDone.current = true;
-    if (anchor) pushDivider("teaching", `已打开 · ${anchor.path}:${anchor.line}`);
-    return;
-  }
-  if (anchor) pushDivider("teaching", `已定位 · ${anchor.path}:${anchor.line}`);
-  pushDivider("teaching", `已切换到 · ${selected.title}`);
-}, [selected?.id]);
-
   // 教学会话 + settings + 流式
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
-  // 回复生成过程指示（按作用域）：map 流式接收引擎事件；teaching/practice 为静态「回复生成中」
+  // 回复生成过程指示（按作用域）：map 走 SSE、teaching 走 ws 广播（引擎的 session.progress），都是引擎发事件、GUI 定文案
   const [progress, setProgress] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const setScopeProgress = (target: Scope, text: string): void => {
     setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
@@ -222,9 +206,12 @@ useEffect(() => {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
     socket.onmessage = (event: MessageEvent<string>) => {
-      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string; repositoryId?: string; suggestion?: CompanionSuggestion } };
+      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string; repositoryId?: string; suggestion?: CompanionSuggestion; stage?: string; round?: number; path?: string } };
       if (serverEvent.type === "session.delta" && serverEvent.payload.sessionId === activeSessionId.current) {
         setLiveAnswer((current) => current + (serverEvent.payload.delta ?? ""));
+      } else if (serverEvent.type === "session.progress" && serverEvent.payload.sessionId === activeSessionId.current) {
+        // 教学回合的过程提示：引擎发的是「判断动作 / 读文件 / 思考」这类事件，文案由 GUI 决定
+        setScopeProgress("teaching", teachingProgressText(serverEvent.payload));
       } else if (serverEvent.type === "companion.suggestion" && serverEvent.payload.repositoryId === repositoryId && serverEvent.payload.suggestion) {
         const s = serverEvent.payload.suggestion;
         setSuggestions((curr) => {
@@ -240,7 +227,7 @@ useEffect(() => {
     if (!content.trim() || !selected) return;
     const message = content;
     pushMessage("teaching", "user", message);
-    setSending(true); setError(""); setContent(""); setScopeProgress("teaching", "回复生成中…");
+    setSending(true); setError(""); setContent(""); setScopeProgress("teaching", "正在准备教学上下文…");
     try {
       let active = session;
       if (!active) {
@@ -316,7 +303,7 @@ useEffect(() => {
 
   return {
     scope, setScope,
-    threads, pushMessage, pushDivider, clearThread,
+    threads, pushMessage, clearThread,
     course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile,
     practiceUnit, setPracticeUnit,

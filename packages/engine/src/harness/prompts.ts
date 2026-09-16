@@ -1,9 +1,10 @@
 import type { FadedState, TeachingPolicy } from "@codebase-tutor/shared";
-import { validateStyle } from "../policy/policy.js";
+import { styleBand, validateStyle } from "../policy/policy.js";
 
 /**
   集中式 LLM 提示词构建器。所有需要「遵循语言风格滑块」的对话提示词都从这里取，
-  保证 style → 风格指令的映射只有一处口径（与 policyFor 的三档阈值一致：≤33 严肃 / ≥67 通俗）。
+  保证 style → 风格指令的映射只有一处口径（三档判据由 policy.styleBand 提供：≤33 严肃 / ≥67 通俗，
+  档内再按 styleBrief 的渐进阈值细化，使 0~100 的每次明显拖动都会改变提示词）。
 
   - teachingSystemPrompt：代码教学对话（harness，已接线）
   - overviewSystemPrompt：仓库总览对话（map 作用域，预留——GUI 接线后启用）
@@ -20,25 +21,38 @@ export interface TeachingPromptInput {
   readToolAvailable?: boolean;
 }
 
+/**
+  通俗侧的渐进修饰：level 越高，附加的通俗化要求越多（`at` 为生效下限）。
+  严肃侧的渐进修饰：level 越低，附加的严谨化要求越多（`at` 为生效上限）。
+  两者叠加使 0~100 每一段都有可分辨的提示词——只有三档时，34~66 之间（以及各档内部）
+  拖动滑块在提示词层面毫无差别，用户感知就是「滑块没用」（v0.8.1 修）。
+  */
+const PLAIN_STEPS: ReadonlyArray<{ at: number; text: string }> = [
+  { at: 85, text: "优先给一个具体例子，再从例子抽象出结论；能用一段话说清就不要分点；" },
+  { at: 70, text: "可以使用生活类比，但必须明确标注「这是类比」；" },
+  { at: 55, text: "用短句，每句只含一个信息点；一次只引导一个观察点；" },
+  { at: 40, text: "术语第一次出现时先用一句话解释，再使用它；不使用自造词或不加解释的缩写。" }
+];
+
+const RIGOROUS_STEPS: ReadonlyArray<{ at: number; text: string }> = [
+  { at: 15, text: "表达可以密集，允许长句与并列结构，但不得含糊；" },
+  { at: 30, text: "主动区分直接证据、间接线索与推测三档；" },
+  { at: 45, text: "直接使用精确的工程术语，不为基础定义做铺垫；" },
+  { at: 60, text: "把每个论断绑定到具体源码位置（文件:行号），引导学习者关注数据流、控制流或不变量。" }
+];
+
 export function styleBrief(style: number): string {
   const level = validateStyle(style);
-  if (level >= 67) {
-    return [
-      "通俗讲解风格：",
-      "用短句，每句只含一个信息点；术语第一次出现时先用一句话解释再用；",
-      "一次只引导一个观察点；可以使用生活类比，但必须明确标注「这是类比」；",
-      "不使用自造词或不加解释的缩写。"
-    ].join("");
+  const band = styleBand(level);
+  const head = band === "plain" ? "通俗讲解风格：" : band === "rigorous" ? "工程评审式严谨风格：" : "中性风格：";
+  const steps = [
+    ...PLAIN_STEPS.filter((step) => level >= step.at).map((step) => step.text),
+    ...RIGOROUS_STEPS.filter((step) => level <= step.at).map((step) => step.text)
+  ];
+  if (band === "neutral") {
+    steps.unshift("准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。");
   }
-  if (level <= 33) {
-    return [
-      "工程评审式严谨风格：",
-      "直接使用精确的工程术语，不为基础定义做铺垫；",
-      "主动区分直接证据、间接线索与推测三档；",
-      "引导学习者关注数据流、控制流或不变量；表达可以密集，但不得含糊。"
-    ].join("");
-  }
-  return "中性风格：准确使用代码术语；把每个论断绑定到具体源码位置；事实与推测分开陈述；用简洁段落组织推理。";
+  return `${head}${steps.join("")}`;
 }
 
 /** 各 transition 动作对应的输出契约——提示词层面约束 LLM 不越出状态机决定的动作（静态结构校验仍待后续补强）。 */

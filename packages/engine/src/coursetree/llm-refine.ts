@@ -86,7 +86,8 @@ export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): 
         system: REFINE_SYSTEM_PROMPT,
         user: JSON.stringify(batch),
         maxTokens: BATCH_MAX_TOKENS,
-        temperature: 0.2
+        temperature: 0.2,
+        scene: "map.refine"
       });
       usage = addUsage(usage, response.usage);
       for (const [key, rename] of parseRenames(response.text)) renames.set(key, rename);

@@ -1,3 +1,4 @@
+import { LoggingLlmProvider } from "./call-log.js";
 import { createLightLlmProvider, createTeachingProvider, ThinkingOverrideLlmProvider, type LlmProvider, type ThinkingEffort } from "./provider.js";
 
 /**
@@ -30,15 +31,15 @@ export function setLlmRuntimeSettings(partial: { teachingModel?: string; lightMo
   return getLlmRuntimeSettings();
 }
 
-/** teaching 档：模型可被运行时覆盖，思考档位经包装器注入每次调用。 */
+/** teaching 档：模型可被运行时覆盖，思考档位经包装器注入每次调用，日志记在档位注入之内（记到的才是实际下发的档位）。 */
 export function buildTeachingRuntimeProvider(): LlmProvider | undefined {
   const raw = createTeachingProvider({ model: settings.teachingModel || undefined });
-  return raw ? new ThinkingOverrideLlmProvider(raw, settings.thinking) : undefined;
+  return raw ? new ThinkingOverrideLlmProvider(new LoggingLlmProvider(raw, "teaching"), settings.thinking) : undefined;
 }
 
 /** light 档：light 未配置时回落 teaching 模型（裸实例，避免双层思考包装），但思考强制 off。 */
 export function buildLightRuntimeProvider(): LlmProvider | undefined {
   const raw = createLightLlmProvider({ model: settings.lightModel || undefined })
     ?? createTeachingProvider({ model: settings.teachingModel || undefined });
-  return raw ? new ThinkingOverrideLlmProvider(raw, "off") : undefined;
+  return raw ? new ThinkingOverrideLlmProvider(new LoggingLlmProvider(raw, "light"), "off") : undefined;
 }

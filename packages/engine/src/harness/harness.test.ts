@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CourseNode, RepositoryAnalysis } from "@codebase-tutor/shared";
-import { createSession, respondWithProvider } from "./harness.js";
+import { createSession, respondWithProvider, type TeachingProgress } from "./harness.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 
 const node: CourseNode = { id: "unit", title: "入口", summary: "入口读取配置。", kind: "workflow", anchors: [{ path: "src/main.ts", line: 1, label: "入口" }], children: [] };
@@ -214,5 +214,26 @@ describe("provider-backed teaching harness", () => {
     expect(prompt).toContain("调用关系（src/main.ts）");
     expect(prompt).toContain("调用它的：src/boot.ts:main");
     expect(prompt).toContain("同文件符号位置：main（function）:1-3");
+  });
+
+  it("过程事件按真实顺序回报「判断动作 → 思考 → 读文件 → 再思考」（GUI 的过程提示来源）", async () => {
+    const repository = fixtureRepository();
+    const script: LlmCompletion[] = [
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "src/main.ts" }) }], finishReason: "tool_calls" },
+      { text: "入口先调用 readConfig 读取配置。", finishReason: "stop" }
+    ];
+    let index = 0;
+    const provider: LlmProvider = { name: "scripted", modelVersion: "scripted-v1", complete: async () => script[index++] };
+    const classifier: LlmProvider = { name: "fake-light", modelVersion: "fake-light-v1", complete: async () => ({ text: "needs_help" }) };
+
+    const progress: TeachingProgress[] = [];
+    await respondWithProvider(createSession("repo", "unit"), node, "入口的输入是什么？", provider, undefined, repository, { classifier, onProgress: (event) => progress.push(event) });
+
+    expect(progress).toEqual([
+      { stage: "deciding" },
+      { stage: "thinking", round: 1 },
+      { stage: "reading", path: "src/main.ts" },
+      { stage: "thinking", round: 2 }
+    ]);
   });
 });

@@ -47,7 +47,8 @@ export async function suggestModuleEntries(
       system,
       user: JSON.stringify({ module: { label: moduleLabel, hint: moduleHint }, candidates }),
       maxTokens: 800,
-      temperature: 0.2
+      temperature: 0.2,
+      scene: "map.entry-suggest"
     });
 
     return { entries: pickEntries(response.text, candidates), usage: response.usage };

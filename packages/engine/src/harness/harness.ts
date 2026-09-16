@@ -1,9 +1,9 @@
 import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
-import { defaultTutorSettings, policyFor, validateSettings } from "../policy/policy.js";
+import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
 import type { FileReadRecord } from "../source/read-file.js";
-import { completeWithReadTool } from "../source/tool-loop.js";
+import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { classifyIntent } from "../teaching/intent.js";
 import { proposeAction, isActionAllowed } from "../teaching/action.js";
 import { initialTeachingState, transition, transitionFromAction, transitionFromIntent } from "../teaching/state-machine.js";
@@ -33,6 +33,17 @@ export interface TutorReply {
   fileReads?: FileReadRecord[];
 }
 
+/**
+  教学回合的过程事件：一个回合里模型实际做的事（判断动作 / 读代码 / 组织回复）。
+  server 把它经 ws 广播为 `session.progress`，GUI 显示成 Agent 侧栏里的过程提示行——
+  回合可能持续数秒，只显示一句「回复中」等于把这段时间藏起来。
+  `stage` 字段名与 map-chat 的 SSE 过程事件保持一致（GUI 两侧同一套取值）。
+  */
+export type TeachingProgress =
+  | { stage: "deciding" }
+  | { stage: "thinking"; round: number }
+  | { stage: "reading"; path: string };
+
 export interface RespondOptions {
   /** 轻量档意图分类器（workflow 模式使用；loop 模式下动作提议取代意图分类）。 */
   classifier?: LlmProvider;
@@ -40,6 +51,8 @@ export interface RespondOptions {
   actionLoop?: boolean;
   /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */
   analysis?: RepositoryAnalysis;
+  /** 过程事件回调（可选；用于把「正在判断动作 / 正在读 xx 文件」推给 GUI）。 */
+  onProgress?: (progress: TeachingProgress) => void;
 }
 
 export function createSession(repositoryId: string, courseNodeId: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
@@ -71,6 +84,9 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   let actionSource: TutorReply["actionSource"];
   let decisionUsage: LlmUsage | undefined;
 
+  // 动作判断阶段（模型提议动作 / 轻量档意图分类）也要有过程提示：这一段没有读文件事件，否则界面会静默
+  if (options.actionLoop || options.classifier) options.onProgress?.({ stage: "deciding" });
+
   if (options.actionLoop) {
     // 受限 agent loop：模型提议动作 → 守门校验 → 放行或否决。意图分类被动作提议取代。
     const proposal = await proposeAction(state, learnerContent, recentTranscript(session.messages), context, provider);
@@ -97,7 +113,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
   const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
-    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}) });
+    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
     const completion = outcome.completion;
     return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, sumUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}) });
   } catch {
@@ -107,9 +123,13 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
 /** 措辞调用：有仓库路径时走 read_file 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[] }> {
+  const forwardProgress = (progress: ReadToolProgress): void => {
+    input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : { stage: "thinking", round: progress.round });
+  };
   if (!input.repositoryPath) {
-    const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2 });
+    input.onProgress?.({ stage: "thinking", round: 1 });
+    const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2, scene: "teaching.turn" });
     return { completion, ...(completion.usage ? { usage: completion.usage } : {}), fileReads: [] };
   }
   const result = await completeWithReadTool({
@@ -120,7 +140,9 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     maxTokens: 700,
     temperature: 0.2,
     maxRounds: TEACHING_MAX_TOOL_ROUNDS,
-    maxCalls: TEACHING_MAX_TOOL_CALLS
+    maxCalls: TEACHING_MAX_TOOL_CALLS,
+    scene: "teaching.turn",
+    ...(input.onProgress ? { onProgress: forwardProgress } : {})
   });
   return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), fileReads: result.fileReads };
 }
@@ -163,7 +185,8 @@ function composeReply(kind: "advance" | "step_down" | "give_answer" | "confirm",
     return `确认完成。你的解释已经连接了 ${location} 的证据和课程结论。接下来可以选择相邻模块，或继续追问这个节点的边界条件。`;
   }
   if (kind === "step_down") {
-    return `提示：先只看 ${location}。${settings.style >= 65 ? "找出它最先处理的输入或配置。" : "指出它读取的输入、调用的依赖或产生的输出之一。"} 然后说说这一步为什么需要存在。`;
+    // 档位判据走 styleBand（与 policyFor 同源），不在这里另写阈值
+    return `提示：先只看 ${location}。${styleBand(settings.style) === "plain" ? "找出它最先处理的输入或配置。" : "指出它读取的输入、调用的依赖或产生的输出之一。"} 然后说说这一步为什么需要存在。`;
   }
   const question = settings.pedagogy === "explanatory"
     ? `解释：${sourceFact} 请用 ${location} 的一处证据复述这条结论。`

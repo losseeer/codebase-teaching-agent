@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, ListChecks, RefreshCw, Send, X } from "lucide-react";
+import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { companionKindLabel } from "../views/helpers";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
@@ -9,9 +10,9 @@ import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSession
 /**
   持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
   对应 prototype `design-prototype.html` 中的 `.agent-rail`（第 113-142, 345-358 行）。
-  - `scope-bar` 3 个 chip（map / teaching / practice），点击切换并 pushDivider
+  - `scope-bar` 3 个 chip（map / teaching / practice），点击切换作用域
   - `scope-context` 当前作用域的「作用域 / 绑定 / 可见 / 动作」4 行元信息
-  - `thread` 滚动消息列表，含 pushDivider / pushMessage / 伴侣建议（teaching scope）
+  - `thread` 滚动消息列表，只含 pushMessage 的对话消息 / 伴侣建议（teaching scope）
   - `composer` 按作用域切换 placeholder + 行为；teaching scope 真发 LLM，其他仅做本地草稿
 
   v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
@@ -72,7 +73,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
 
       {/* 语言风格：会话级设置，三个作用域共用（v0.5.3 起不再仅 teaching 可见） */}
       <div className="agent-tuning">
-        <div className="tuning-head"><span>语言风格</span><output>{t.settings.style}</output></div>
+        <div className="tuning-head"><span>语言风格</span><output>{t.settings.style} · {STYLE_BAND_LABEL[styleBand(t.settings.style)]}</output></div>
         <input
           className="style-slider"
           type="range"
@@ -80,6 +81,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
           max={100}
           value={t.settings.style}
           aria-label="语言风格"
+          title="0=严肃 … 100=通俗；下一次提问时生效，档位由引擎按 styleBand 计算并回显"
           onChange={(event) => t.setSettings({ ...t.settings, style: Number(event.target.value) })}
         />
         <div className="range-labels"><span>严肃</span><span>通俗</span></div>
@@ -161,7 +163,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
         {items.length === 0 && scope !== "teaching" ? (
           <div className="starter">
             <Compass size={22} />
-            <p>{scope === "map" ? "在文件树切换节点，会自动在此记录「已切换到 / 已选中」。" : "在练习页提交答案后，判分与下一步建议会出现在这里。"}</p>
+            <p>{scope === "map" ? "点流程节点或目录文件，再开始提问。" : "在左栏选一个模块与练习，再对这道题追问。"}</p>
           </div>
         ) : null}
         {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
@@ -250,7 +252,7 @@ const THINKING_STYLE_HINT: Record<string, string> = {
 
 /** 思考档位下方的常驻能力提示行。 */
 function teachingThinkingHint(capability: NonNullable<LlmSettings["teachingThinking"]>): string {
-  const styleLabel: Record<string, string> = {
+  const styleName: Record<string, string> = {
     deepseek: "DeepSeek 格式",
     openai: "reasoning_effort",
     anthropic: "仅开关（无强度）",
@@ -258,7 +260,7 @@ function teachingThinkingHint(capability: NonNullable<LlmSettings["teachingThink
     unknown: "未声明思考能力"
   };
   const supported = (["off", "low", "high", "max"] as const).filter((effort) => effortSelectable(capability, effort)).map((effort) => THINKING_EFFORT_LABEL[effort]);
-  return `${capability.model} · ${styleLabel[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
+  return `${capability.model} · ${styleName[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
 }
 
 /** off 恒可表达：无思考参数/未声明模型选 off = 不发字段（与引擎 applyThinking 语义一致，不算「支持」也不禁用）。 */
@@ -297,14 +299,25 @@ function ScopeContext({ scope, t }: { scope: Scope; t: TeachingSessionApi }): Re
   );
 }
 
+/**
+  绑定行 = 当前作用域的**当前**位置（不是历史）。
+  切换作用域/节点/文件只改这一行的值——不再往线程里追加「已切换到 / 已定位」分隔线（v0.8.1）。
+  teaching 只显示当前文件的 `path:line`（与原型 `binds.teaching` 一致，不累积历史切换）。
+  */
 function boundFor(scope: Scope, t: TeachingSessionApi): string {
   if (scope === "map") {
     const node = t.mapNode ?? t.course?.root;
     if (!node) return "未加载课程";
     return `节点「${node.title}」${t.mapFile ? ` · ${t.mapFile}` : ""}`;
   }
-  if (scope === "teaching") return t.selected ? t.selected.title : "未选择节点";
-  return t.practiceUnit || "未开始练习";
+  if (scope === "teaching") {
+    if (!t.selected) return "未选择节点";
+    const anchor = t.selected.anchors[0];
+    return anchor ? `${anchor.path}:${anchor.line}` : t.selected.title;
+  }
+  if (!t.practiceUnit) return "未开始练习";
+  const anchor = t.practiceExercise?.anchors[0];
+  return anchor ? `${t.practiceUnit} · ${anchor.path}:${anchor.line}` : t.practiceUnit;
 }
 
 function ScopeIcon({ scope }: { scope: Scope }): ReactElement {
@@ -313,12 +326,9 @@ function ScopeIcon({ scope }: { scope: Scope }): ReactElement {
   return <ListChecks size={12} />;
 }
 
-/** thread 单条消息渲染：分隔线纯文本；用户消息纯文本（pre-wrap 由 .message p 提供）；
+/** thread 单条消息渲染：用户消息纯文本（pre-wrap 由 .message p 提供）；
   agent 正文走 Markdown；error/hint 变体用样式类标注，不进 Markdown。 */
 function ThreadEntry({ item }: { item: ThreadItem }): ReactElement {
-  if (item.kind === "divider") {
-    return <div className="thread-divider"><span>{item.text}</span></div>;
-  }
   const body = item.kind === "agent" && !item.variant
     ? <Markdown content={item.text} />
     : <p className={item.kind === "agent" ? `plain-${item.variant}` : undefined}>{item.text}</p>;

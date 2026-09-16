@@ -171,6 +171,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     temperature: 0.3,
     maxRounds: MAP_MAX_TOOL_ROUNDS,
     maxCalls: MAP_MAX_TOOL_CALLS,
+    scene: "map.chat",
     ...(input.onProgress ? { onProgress: input.onProgress } : {})
   });
   const reply = result.completion.text || "（模型未返回内容，请重试。）";
@@ -197,7 +198,8 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     system: PRACTICE_SYSTEM_PROMPT,
     user: `练习上下文：\n${context}\n\n学习者的追问：${input.content}`,
     maxTokens: 700,
-    temperature: 0.3
+    temperature: 0.3,
+    scene: "practice.chat"
   });
   return { reply: completion.text, provider: input.provider.name, usage: completion.usage };
 }

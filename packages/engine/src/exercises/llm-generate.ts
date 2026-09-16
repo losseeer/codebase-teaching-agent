@@ -58,7 +58,7 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
       sourceExcerpt: excerpt
     });
 
-    const response = await provider.complete({ system, user, maxTokens: 600, temperature: 0.3 });
+    const response = await provider.complete({ system, user, maxTokens: 600, temperature: 0.3, scene: "practice.polish" });
     const refined = parseRefinement(response.text, exercise);
     return { exercise: refined ?? exercise, usage: refined ? response.usage : undefined };
   } catch {
@@ -137,7 +137,7 @@ export async function generateExerciseWithLlm(input: { tag: string; candidates: 
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4 });
+  const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4, scene: "practice.generate" });
   const parsed = parseJsonObject(response.text);
   if (!parsed) return { ok: false, reason: "LLM 返回内容无法解析为出题结果；请重试。" };
   if (parsed.ok === false) {
@@ -163,7 +163,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
     criteria: input.criteria,
     learnerAnswer: input.learnerAnswer
   });
-  const response = await input.provider.complete({ system, user, maxTokens: 500, temperature: 0.1 });
+  const response = await input.provider.complete({ system, user, maxTokens: 500, temperature: 0.1, scene: "practice.judge" });
   const parsed = parseJsonObject(response.text);
   if (!parsed || typeof parsed.score !== "number" || !Number.isFinite(parsed.score)) {
     throw new Error("rubric 判分结果无法解析；请重试。");
@@ -191,7 +191,7 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
       verdict: { passed: input.graded.passed, score: input.graded.score, ruleFeedback: input.graded.feedback },
       sourceExcerpt: excerpt
     });
-    const response = await input.provider.complete({ system, user, maxTokens: 300, temperature: 0.3 });
+    const response = await input.provider.complete({ system, user, maxTokens: 300, temperature: 0.3, scene: "practice.feedback" });
     const parsed = parseJsonObject(response.text);
     const feedback = String(parsed?.feedback ?? "").trim();
     if (!feedback) return undefined;

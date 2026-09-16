@@ -32,14 +32,6 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   useEffect(() => { saveModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("teaching", activeModule); }, [activeModule]);
 
-  // 切换知识模块 → 往 teaching 线程记一条分隔线（prototype `switchModule` 同语义）
-  const previousModule = useRef<string | null>(null);
-  useEffect(() => {
-    const labelOf = (id: string): string => modules.find((item) => item.id === id)?.label ?? id;
-    if (previousModule.current && previousModule.current !== activeModule) t.pushDivider("teaching", `模块 · ${labelOf(previousModule.current)} → ${labelOf(activeModule)}`);
-    previousModule.current = activeModule;
-  }, [activeModule, modules]);
-
   useEffect(() => {
     let current = true;
     setFileTree([]);
@@ -48,8 +40,8 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   }, [repositoryId]);
 
   const anchor = t.selected?.anchors[0];
-  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选往 teaching 线程推分隔线。
-      依赖只取 t.pushDivider（模块级函数，引用稳定）——放整个 t 会让本回调每渲染换引用，
+  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选 toast 提示。
+      依赖只取 repositoryId——放整个 t（或任何每次渲染换引用的值）会让本回调每渲染换引用，
       连带下方自动定位 effect 在 composer 每敲一个字符时重发一次 getSource（v0.6.1 修）。 */
   const loadSource = useCallback(async (path: string, line: number, note?: string, announce = true): Promise<void> => {
     try {
@@ -62,10 +54,9 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
         return nextTabs.slice(-5);
       });
       if (!announce) return;
-      if (note) { t.pushDivider("teaching", note); showToast(note); }
-      else showToast(`已打开 · ${path}`);
+      showToast(note ?? `已打开 · ${path}`);
     } catch { showToast(`无法读取 ${path}`); }
-  }, [repositoryId, t.pushDivider]);
+  }, [repositoryId]);
   useEffect(() => {
     if (!anchor) { setSource(null); return; }
     // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
@@ -85,23 +76,50 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const entries = useMemo<ModuleEntry[]>(() => (t.course ? classifyCourseNodes(t.course.root, modules) : []), [t.course, modules]);
+  const heuristicEntries = useMemo<ModuleEntry[]>(() => (t.course ? classifyCourseNodes(t.course.root, modules) : []), [t.course, modules]);
 
-  // 推荐入口：优先用 engine 的 LLM 推荐（单轮调用，按模块缓存）；未配置 LLM / 失败时回落关键词分类
-  const [suggestedEntries, setSuggestedEntries] = useState<Record<string, SuggestedEntry[]>>({});
+  /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），
+      只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到关键词分类。
+      两个坑（都实测踩过）：
+      ① `heuristic` 也必须记录状态，否则失败的模块会反复重试同一请求（engine 只缓存非空结果）；
+      ② 去重必须用 ref 而不是 state —— 把 entryState 放进 effect 依赖的话，写入 loading 会让 effect 重跑，
+         cleanup 把 current 置 false，唯一那次请求的结果被丢弃，界面永久停在 loading。
+      ③ 因此 effect 里**不要**用 current/unmount 标志丢弃结果：StrictMode 下 mount→unmount→mount 会判死第一次的请求，
+         而第二次 mount 被 ref 去重挡住不再发，同样永久 loading。
+      key 带 repositoryId：换仓库后同一 moduleId 不会复用上一仓库的结果。 */
+  const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "heuristic"; entries: SuggestedEntry[] }>>({});
+  const requestedEntries = useRef<Set<string>>(new Set());
+  const entryKey = `${repositoryId}:${activeModule}`;
   useEffect(() => {
     if (!t.course) return;
     const mod = modules.find((item) => item.id === activeModule);
-    if (!mod || suggestedEntries[activeModule]) return;
-    let current = true;
+    if (!mod || requestedEntries.current.has(entryKey)) return;
+    requestedEntries.current.add(entryKey);
+    setEntryState((curr) => (curr[entryKey] ? curr : { ...curr, [entryKey]: { status: "loading", entries: [] } }));
+    // 刻意不用 current 标志丢弃结果：StrictMode 下 effect 会 mount→unmount→mount，
+    // 第一次发的请求会被第一次 cleanup 判死，而第二次 mount 又被 ref 去重挡住不再发 —— 结果是永久 loading。
+    // 去重已由 ref 保证（每个 key 只请求一次），卸载后 setState 是安全的 no-op。
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
-      .then((result) => { if (current && result.source === "llm" && result.entries.length) setSuggestedEntries((curr) => ({ ...curr, [activeModule]: result.entries })); })
-      .catch(() => undefined);
-    return () => { current = false; };
-  }, [t.course, repositoryId, activeModule, modules, suggestedEntries]);
-  const visibleEntries: ModuleEntry[] = suggestedEntries[activeModule]?.length
-    ? suggestedEntries[activeModule].map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line, moduleId: activeModule }))
-    : entries.filter((entry) => entry.moduleId === activeModule);
+      .then((result) => {
+        // engine 在未配置 LLM / 预算触顶（熔断）时直接回 source=heuristic；LLM 调用失败则回空列表 —— 都算熔断，一律回落
+        const entries = result.source === "llm" ? result.entries : [];
+        setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "heuristic", entries: [] } }));
+      })
+      .catch(() => {
+        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "heuristic", entries: [] } }));
+      });
+  }, [t.course, repositoryId, activeModule, entryKey, modules]);
+  const moduleEntries = entryState[entryKey];
+  const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
+    ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line, moduleId: activeModule }))
+    : moduleEntries?.status === "loading" || !t.course
+      ? []
+      : heuristicEntries.filter((entry) => entry.moduleId === activeModule);
+  const entryNote = moduleEntries?.status === "llm"
+    ? "LLM 从课程树推荐 · 可直接提问"
+    : moduleEntries?.status === "loading"
+      ? "正在从课程树挑选入口…"
+      : "按关键词归类 · 配置 LLM 后自动升级";
 
   const filePaths = useMemo(() => {
     const out: string[] = [];
@@ -143,7 +161,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
             onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
           >
             <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 模块可在「＋ 配置」里自定义</p>
-            <ModuleSectionLabel label="推荐入口" note={suggestedEntries[activeModule]?.length ? "LLM 从课程树推荐 · 可直接提问" : "按关键词归类 · 配置 LLM 后自动升级"} />
+            <ModuleSectionLabel label="推荐入口" note={entryNote} />
             {visibleEntries.length ? (
               <div className="entry-list">
                 {visibleEntries.map((entry) => (
@@ -159,6 +177,8 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                   </button>
                 ))}
               </div>
+            ) : moduleEntries?.status === "loading" ? (
+              <p className="entry-empty">正在从课程树挑选推荐入口…</p>
             ) : (
               <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或中栏源码挑一个文件，直接开始提问。</p>
             )}

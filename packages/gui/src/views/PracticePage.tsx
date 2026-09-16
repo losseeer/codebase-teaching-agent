@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { BrainCircuit, CheckCircle2, RefreshCw } from "lucide-react";
 import type { Exercise, ExerciseGradingMode, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
@@ -67,14 +67,6 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
   };
   useEffect(refreshSummary, [repositoryId]);
 
-  // 切换知识模块 → practice 线程分隔线（prototype `switchModule` 同语义）
-  const previousModule = useRef<string | null>(null);
-  useEffect(() => {
-    const labelOf = (id: string): string => modules.find((item) => item.id === id)?.label ?? id;
-    if (previousModule.current && previousModule.current !== activeModule) t.pushDivider("practice", `模块 · ${labelOf(previousModule.current)} → ${labelOf(activeModule)}`);
-    previousModule.current = activeModule;
-  }, [activeModule, modules]);
-
   // 出题分派：活动 chip = 程序理解题 → 规则出题族；自定义主题 chip → LLM 出题族（family 对用户不可见）。
   // 「换一题」对 LLM 题走 variantNonce+1（出新题，旧题保留）；对规则题按 targetUnitId 重出。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
@@ -95,8 +87,6 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
       setExercise(next);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
-      const anchor = next.anchors[0];
-      t.pushDivider("practice", `${exerciseKindLabel(next.kind)} · ${next.title}${anchor ? ` → ${anchor.path}:${anchor.line}` : ""}`);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法生成练习");

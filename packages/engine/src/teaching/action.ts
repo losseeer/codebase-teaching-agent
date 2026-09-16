@@ -45,7 +45,7 @@ export async function proposeAction(state: TeachingState, learnerMessage: string
     `学习者本轮输入：${learnerMessage}`
   ].join("\n");
   try {
-    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0 });
+    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.action" });
     return { action: parseAction(completion.text), usage: completion.usage };
   } catch {
     return { action: undefined };

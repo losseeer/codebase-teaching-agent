@@ -514,7 +514,13 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const currentCost = summarizeCost(repository.path, monthlyBudget);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, { classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider), actionLoop: actionLoopEnabled, analysis: repository.analysis });
+  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, {
+    classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
+    actionLoop: actionLoopEnabled,
+    analysis: repository.analysis,
+    // 过程提示：回合可能持续数秒，把「正在判断动作 / 正在读 xx 文件」实时推给 GUI（ws 广播，不占 HTTP 响应）
+    onProgress: (progress) => broadcast({ type: "session.progress", payload: { sessionId: session.id, ...progress } })
+  });
   sessions.set(outcome.session.id, outcome.session);
   const journal = new Journal(repository.path, repository.index.repositoryId);
   if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);

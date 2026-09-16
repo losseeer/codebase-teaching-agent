@@ -28,6 +28,8 @@ export interface ReadToolLoopInput {
   /** 本次对话累计最多读取几个文件 */
   maxCalls: number;
   onProgress?: (progress: ReadToolProgress) => void;
+  /** LLM 工作日志的场景标签（teaching.turn / map.chat），透传给每一轮调用 */
+  scene?: string;
 }
 
 export interface ReadToolLoopResult {
@@ -40,7 +42,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const { provider, system, maxTokens, temperature } = input;
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
   input.onProgress?.({ type: "thinking", round: 1 });
-  let completion = await provider.complete({ system, user: input.user, tools: [READ_FILE_TOOL], maxTokens, temperature });
+  let completion = await provider.complete({ system, user: input.user, tools: [READ_FILE_TOOL], maxTokens, temperature, scene: input.scene });
   const fileReads: FileReadRecord[] = [];
   let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
@@ -52,7 +54,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       input.onProgress?.({ type: "thinking", round: rounds + 2 });
       compactToolHistory(messages);
-      completion = await provider.complete({ system, messages, maxTokens, temperature });
+      completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene });
       usage = addUsage(usage, completion.usage);
       break;
     }
@@ -70,7 +72,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     input.onProgress?.({ type: "thinking", round: rounds + 1 });
     compactToolHistory(messages);
-    completion = await provider.complete({ system, messages, tools: [READ_FILE_TOOL], maxTokens, temperature });
+    completion = await provider.complete({ system, messages, tools: [READ_FILE_TOOL], maxTokens, temperature, scene: input.scene });
     usage = addUsage(usage, completion.usage);
   }
   return { completion, usage, fileReads };

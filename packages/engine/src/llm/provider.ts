@@ -42,6 +42,8 @@ export interface LlmCompletionInput {
   temperature?: number;
   /** 思考模式控制（DeepSeek V4 官方参数，语义见 ThinkingEffort）。省略 = 不发任何思考字段（auto，模型默认行为）。 */
   thinking?: ThinkingEffort;
+  /** 调用场景标签（如 "teaching.turn" / "practice.generate"），只用于 LLM 工作日志（llm/call-log.ts）。协议层不发送。 */
+  scene?: string;
 }
 
 /**

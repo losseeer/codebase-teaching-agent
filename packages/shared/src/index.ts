@@ -110,6 +110,26 @@ export interface ImportEstimate {
 
 /** M1 policy is a continuous 0-100 value; M0 presets remain 35, 50 and 65. */
 export type StyleLevel = number;
+
+/**
+  语言风格档位的判据与展示名 —— engine 与 GUI 的**唯一**来源（两侧都从这里取，不再各写阈值）。
+  历史坑：harness 的本地回落文案曾写死 `>= 65`，与 policy 里的 67 不一致，滑块 65/66 两处口径不同。
+  档位只决定基调和回显名；档**内**的逐步细化在 engine 的 harness/prompts.ts（那里的 `at` 阈值是叠加在档位之上的补充要求）。
+  */
+export const STYLE_BAND_THRESHOLDS = { rigorousMax: 33, plainMin: 67 } as const;
+
+export type StyleBand = "plain" | "neutral" | "rigorous";
+
+export const STYLE_BAND_LABEL: Record<StyleBand, string> = { rigorous: "严肃", neutral: "中性", plain: "通俗" };
+
+/** 非有限值（NaN / Infinity）按中性处理，与 engine `validateStyle` 的回落值 50 落在同一档。 */
+export function styleBand(style: number): StyleBand {
+  if (!Number.isFinite(style)) return "neutral";
+  if (style >= STYLE_BAND_THRESHOLDS.plainMin) return "plain";
+  if (style <= STYLE_BAND_THRESHOLDS.rigorousMax) return "rigorous";
+  return "neutral";
+}
+
 export type Pedagogy = "socratic" | "explanatory" | "practice";
 export type DecompositionDepth = "macro" | "micro";
 export type TeachingStage = "orient" | "procedure" | "concept" | "verify" | "confirmed";
@@ -448,6 +468,6 @@ export interface JournalEvent {
 }
 
 export interface ServerEvent {
-  type: "import.progress" | "repository.updated" | "session.delta" | "session.complete" | "companion.suggestion";
+  type: "import.progress" | "repository.updated" | "session.delta" | "session.complete" | "session.progress" | "companion.suggestion";
   payload: Record<string, unknown>;
 }
