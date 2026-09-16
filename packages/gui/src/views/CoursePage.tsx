@@ -10,7 +10,7 @@ import { DepMap } from "../map/DepMap";
 import { showToast } from "../modules/toast";
 
 /**
-  代码地图工作区（两栏，源自 prototype `.map-workspace`）：
+  宏观设计工作区（两栏，源自 prototype `.map-workspace`）：
   - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
     早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
   - 右 「运行路径」画布：v0.6 起为模块依赖图（`DepMap`）——节点 = 目录聚合模块，
@@ -99,7 +99,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
         <h1>{course.root.title}</h1>
         <div className="course-meta"><span>{index.totalFiles} 文件</span><span>{index.hotspots.length} 热点</span></div>
       </header>
-      <ContextLine strong="宏观设计讨论" detail={`选中「${selected?.title ?? "—"}」`} />
+      <ContextLine strong="宏观设计" detail={`选中「${selected?.title ?? "—"}」`} />
       <MobileSwitcher labels={["项目目录", "运行路径"]} active={paneActive} onSelect={setPaneActive} />
       <div className="workspace map-workspace">
         <aside className={`pane ${paneClass(0)}`}>

@@ -80,6 +80,10 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
         ]
       : []),
     "",
+    "【作用域边界】",
+    "你只讲文件与函数的代码实现：这段代码如何工作、为什么这样写、背后的技术原理与语言/框架机制；",
+    "项目的整体架构、模块划分、依赖方向、执行流程属于「宏观设计」作用域——学习者问到这些时，用一两句话给出最小必要的回答，并提示他到宏观设计作用域继续，不要在这里展开架构层面的讨论。",
+    "",
     "【语言风格】",
     styleBrief(policy.level),
     faded ? `当前渐隐辅助等级（样例完整度 ${faded.sampleCompleteness}/5、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/5）：${faded.reason}。` : "辅助深度由当前提示深度决定。",

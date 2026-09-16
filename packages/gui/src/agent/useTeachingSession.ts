@@ -75,7 +75,7 @@ export interface TeachingSessionApi {
   selected: CourseNode | null;
   setSelected: (node: CourseNode) => void;
 
-  /** 代码地图作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
+  /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
   mapNode: CourseNode | null;
   setMapNode: (node: CourseNode | null) => void;
   mapFile: string;
@@ -114,7 +114,7 @@ export interface TeachingSessionApi {
 }
 
 /**
-  教学会话 + Agent 侧栏共享的单一状态源。
+  代码教学 + Agent 侧栏共享的单一状态源。
   - App.tsx 调用一次，把返回值 prop drill 给 TutorPage + AgentRail
   - TutorPage 只读 session.selected/settings/learner/faded/cost（用于渲染阶梯 + 锚点 + 成本 chip）
   - AgentRail 写入 content / send / scope / pushMessage
@@ -145,7 +145,7 @@ const [selected, setSelected] = useState<CourseNode | null>(null);
 // 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
-// 代码地图 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
+// 宏观设计 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
 const [mapNode, setMapNode] = useState<CourseNode | null>(null);
 const [mapFile, setMapFile] = useState("");
 const [practiceUnit, setPracticeUnit] = useState("");
@@ -162,7 +162,7 @@ useEffect(() => {
   }).catch(() => { if (!cancelled) setCourse(null); });
   return () => { cancelled = true; };
 }, [repositoryId, dataVersion]);
-  // 教学会话 + settings + 流式
+  // 代码教学 + settings + 流式
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
   const [cost, setCost] = useState<CostSummary | null>(null);

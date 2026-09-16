@@ -7,7 +7,7 @@ import { phaseLabel } from "./helpers";
 
 /**
  * 导入仓库页：选择被学习的仓库 → 触发引擎异步导入 → 报告预估成本。
- * 完成后通过 `onImported` 把 workspace 抛给 App，再跳转代码地图。
+ * 完成后通过 `onImported` 把 workspace 抛给 App，再跳转宏观设计。
  *
  * 对应 prototype `design-prototype.html` 的「导入仓库」入口（原 v1 标签 `import`）。
  */
@@ -84,7 +84,7 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
           <div className="report-stat"><span>可分析文件</span><strong>{report.index.totalFiles}</strong><small>{report.index.totalLines.toLocaleString()} 行源码</small></div>
           <div className="report-stat"><span>摘要缓存</span><strong>{report.estimate.cachedFiles}</strong><small>本次新建 {report.estimate.summarizedFiles} 条</small></div>
           <div className="report-stat"><span>预估输入</span><strong>{report.estimate.estimatedInputTokens.toLocaleString()}</strong><small>{report.estimate.provider}</small></div>
-          <div className="report-actions"><button className="secondary" onClick={() => navigate("/course")}>查看代码地图 <ChevronRight size={16} /></button></div>
+          <div className="report-actions"><button className="secondary" onClick={() => navigate("/course")}>查看宏观设计 <ChevronRight size={16} /></button></div>
         </div>
       )}
     </section>

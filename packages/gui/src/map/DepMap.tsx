@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import type { CourseNode, FileEntry, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 
 /**
- * 代码地图 v0.6：模块依赖图（替代旧 FlowMap 课程树流程图）。
+ * 宏观设计 v0.6：模块依赖图（替代旧 FlowMap 课程树流程图）。
  *
  * 为什么改：旧地图把课程树（一棵层级树）画成图——层级用列表呈现更高效，
  * 图的存在价值在「边」承载列表给不了的关系信息。本组件画真正的依赖关系：

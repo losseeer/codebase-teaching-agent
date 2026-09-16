@@ -12,9 +12,9 @@
 
 | 工作区 | 读 | 写（journal 事件）| 不做 |
 |---|---|---|---|
-| 代码地图 | 依赖图、目录索引、流程节点 | `flow_node_selected` · `file_anchored` | 不写 LLM 调用 |
-| 教学会话 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` | 不直接改源码、不写 style_shift |
-| 练习复习 | 题目实例、评分标准、ZPD | `module_switched` · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
+| 宏观设计 | 依赖图、目录索引、流程节点 | `flow_node_selected` · `file_anchored` | 不写 LLM 调用 |
+| 代码教学 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` | 不直接改源码、不写 style_shift |
+| 练习评估 | 题目实例、评分标准、ZPD | `module_switched` · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 
 `开发计划.md` §9 事件 schema：周 3 冻结 v1（append-only 兼容）。
 

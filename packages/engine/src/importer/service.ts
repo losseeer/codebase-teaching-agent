@@ -171,8 +171,8 @@ export class ImportService extends EventEmitter {
     }));
     let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations: verifiedImplementations });
     course = attachQuality(course, quality);
-    // 代码地图 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
-    // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——地图润色是结构化重命名，不需要思考
+    // 宏观设计 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
+    // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
     // 润色缓存：内容未变（versionStamp 相同）且上次润色成功落库（settings.refinement 标记）→ 直接复用已润色 course。
     // 这是「engine 重启 → GUI 重新导入」不重烧 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
     const storedAnalysis = database.getAnalysis(index.repositoryId);
@@ -185,7 +185,7 @@ export class ImportService extends EventEmitter {
     } else if (summarizeCost(repositoryPath).mode !== "degraded") {
       const mapProvider = buildLightRuntimeProvider();
       if (mapProvider) {
-        progress("building_course", 85, "正在用 LLM 完善代码地图命名与摘要");
+        progress("building_course", 85, "正在用 LLM 完善宏观设计命名与摘要");
         const refinement = await refineCourseMap(course, mapProvider);
         course = refinement.course;
         if (refinement.usage) {

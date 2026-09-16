@@ -7,8 +7,8 @@
 **v0.1（已对齐 prototype，但未抽离）**：知识模块逻辑当前内嵌在 `views/TutorPage.tsx` 与 `views/PracticePage.tsx` 中——直接调 `api.getLearner(...)` 拿推荐档，未在前端维护 chips 状态。
 
 prototype `design-prototype.html` 是 v0.1 唯一可交互基线，其中：
-- 教学会话左栏：`教学模块 chips + 推荐入口（带 file:line）+ 仓库文件树`
-- 练习复习左栏：`模块 chips + 该模块下四类练习`
+- 代码教学左栏：`教学模块 chips + 推荐入口（带 file:line）+ 仓库文件树`
+- 练习评估左栏：`模块 chips + 该模块下四类练习`
 - 模块配置内联编辑器：`＋ 配置` chip 触发，逐行改名 / 删除 / 新增 / 恢复缺省
 - 模块切换只更新绑定行与线程归属：v0.8.1 起不再往线程插 `模块 · A → B` 分隔线（design doc §8 已同步）
 

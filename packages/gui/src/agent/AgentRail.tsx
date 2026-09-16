@@ -108,7 +108,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             value={llm?.lightModel ?? ""}
             disabled={!llm}
             aria-label="轻任务档模型"
-            title="推荐入口 / 题面润色 / 地图命名单轮任务（思考固定关闭）"
+            title="推荐入口 / 题面润色 / 宏观设计命名单轮任务（思考固定关闭）"
             onChange={(event) => updateLlm({ lightModel: event.target.value })}
           >
             <option value="">默认（.env）</option>

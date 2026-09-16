@@ -5,7 +5,7 @@ import { createLightLlmProvider, createTeachingProvider, ThinkingOverrideLlmProv
   LLM 运行时设置（GUI 可改，进程内存态）：
   - teachingModel / lightModel：模型 slug 覆盖，空串 = 用 .env 配置
   - thinking：teaching 档思考档位；"auto" = 不发思考字段（模型默认，DeepSeek V4 默认开启思考）
-  - light 档固定 "off"：三个单轮轻任务（推荐入口/题面润色/地图命名）不需要思考，
+  - light 档固定 "off"：三个单轮轻任务（推荐入口/题面润色/宏观设计命名）不需要思考，
     且 V4 默认开启思考导致这些任务白白烧 reasoning token（2026-09-15 实测教训）
   - 设置只存内存：重启回落 .env 行为（.env 是部署基线，GUI 是会话内调整）
   */

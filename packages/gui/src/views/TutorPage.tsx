@@ -12,7 +12,7 @@ import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, s
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
-  教学会话工作区（对齐 prototype `.teaching-workspace`，两栏）：
+  代码教学工作区（对齐 prototype `.teaching-workspace`，两栏）：
   - 左 「教学模块」（modules-pane）：模块 chips + 配置 + 推荐入口（课程节点按模块归类）+ 仓库文件（点击打开源码）
   - 右 「实时源码」（source-pane）：只读源码 + 行高亮 + 源码 tabs + ⌘P 文件搜索
   - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
@@ -133,7 +133,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     return pool.slice(0, 12);
   }, [filePaths, query]);
 
-  if (t.error && !t.course) return <EmptyState title="教学会话暂不可用" detail={t.error} />;
+  if (t.error && !t.course) return <EmptyState title="代码教学暂不可用" detail={t.error} />;
   if (!t.course || !t.selected) return <Loading />;
   const { selected, course } = t;
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";

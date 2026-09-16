@@ -412,7 +412,7 @@ export function resolveLightModelSlug(overrides?: { model?: string }): string {
 }
 
 /**
-  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 代码地图命名完善）。
+  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 宏观设计命名完善）。
   - `TUTOR_LIGHT_PROVIDER` + `TUTOR_LIGHT_MODEL` 显式配置（如 ollama 本地小模型 / gpt-4o-mini）
   - 未配置时由调用方回落主力档（createTeachingProvider），保证只填一套配置也能跑通全部接入点
   - 端点/密钥可用独立变量（TUTOR_LIGHT_OPENAI_URL / TUTOR_LIGHT_API_KEY / TUTOR_LIGHT_ANTHROPIC_URL / TUTOR_LIGHT_ANTHROPIC_API_KEY），

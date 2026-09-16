@@ -11,7 +11,7 @@ import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeMo
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
-  练习复习工作区（对齐 prototype `.practice-workspace`，两栏）：
+  练习评估工作区（对齐 prototype `.practice-workspace`，两栏）：
   - 左 「练习模块」（modules-pane）：模块 chips + 配置 + 「模块内的练习」卡片列表（真实掌握度记录，点击按 targetUnitId 重新出题）
   - 右 「练习上下文」（source-pane）：相关代码（高亮）→ 你的回答（文本 / 选项）→ 提交回答 / 换一题 → 反馈面板
   - 生成练习入口放在上下文行的 `.context-actions`（题型选择 + 生成），判分结果同时推送到 practice 线程
@@ -135,7 +135,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
         <h1>源码练习</h1>
         <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>已练单元 {summary?.mastery.length ?? 0}</span></div>
       </header>
-      <ContextLine strong="练习复习" detail={`模块「${moduleLabel}」 · 反馈会回写学习状态`} />
+      <ContextLine strong="练习评估" detail={`模块「${moduleLabel}」 · 反馈会回写学习状态`} />
       <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
       <div className="workspace practice-workspace">
         <div className={paneClass(0)}>

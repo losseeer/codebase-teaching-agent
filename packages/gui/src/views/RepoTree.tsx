@@ -4,11 +4,11 @@ import type { FileTreeNode } from "@codebase-tutor/shared";
 /**
   仓库文件树（prototype `.repo-tree`）：按真实目录层级渲染。
   - 目录可折叠，**首层目录默认展开**（与原始目录结构保持一致）；每目录最多展示 8 项 + 「显示其余 N 项」
-  - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示 `NL`（代码地图的项目目录用）
-  - `badge`：可选的目录徽标（代码地图用它给顶层目录标注语义分组）
+  - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示 `NL`（宏观设计的项目目录用）
+  - `badge`：可选的目录徽标（宏观设计用它给顶层目录标注语义分组）
   - `activePath`：高亮当前选中的文件
 
-  原为 TutorPage 内部组件（v0.3），v0.5.4 提取共享：代码地图「项目目录」改用真实目录树后两处复用。
+  原为 TutorPage 内部组件（v0.3），v0.5.4 提取共享：宏观设计「项目目录」改用真实目录树后两处复用。
   */
 export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
   nodes: FileTreeNode[];

@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 /**
   三工作区共享的外框（prototype `.workspace-tabs` + `.context-line` + `.mobile-switcher`）：
-  - `WorkspaceTabs`：代码地图 / 教学会话 / 练习复习 三个真 tab —— v0.4 起由 Workbench 挂载，
+  - `WorkspaceTabs`：宏观设计 / 代码教学 / 练习评估 三个真 tab —— v0.4 起由 Workbench 挂载，
     切换只改 `?workspace=` URL 参数，不再走路由（对齐 prototype `activate(view)`）
   - `ContextLine`：当前工作区的上下文行（如「代码教学 · src/router.ts:3 · 模块『计算机网络』」）
   - `MobileSwitcher` + `useMobilePanes`：<=960px 时显示 pane 切换按钮，非激活 pane 隐藏
@@ -14,9 +14,9 @@ import { useEffect } from "react";
 export type WorkspaceId = "map" | "teaching" | "practice";
 
 const TABS: { id: WorkspaceId; label: string }[] = [
-  { id: "map", label: "代码地图" },
-  { id: "teaching", label: "教学会话" },
-  { id: "practice", label: "练习复习" },
+  { id: "map", label: "宏观设计" },
+  { id: "teaching", label: "代码教学" },
+  { id: "practice", label: "练习评估" },
 ];
 
 export function WorkspaceTabs({ active, onChange }: { active: WorkspaceId; onChange: (id: WorkspaceId) => void }): ReactElement {

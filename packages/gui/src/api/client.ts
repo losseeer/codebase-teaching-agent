@@ -1,7 +1,7 @@
 import type { ClaudePostToolUseEvent, CompanionAction, CompanionHookResult, CompanionSuggestion, CompanionSummary, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
- * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（代码地图 / 教学会话 / 练习复习 / 成本监控）
+ * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
  * 都以这个 workspace 为锚点。Agent 侧栏、伴侣面板、localStorage 也按 repositoryId 持久化。
  *
  * 对应 prototype `design-prototype.html` 中的 `binds[scope]` 概念。

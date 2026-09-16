@@ -67,7 +67,7 @@ tboot("CompanionService");
 
 // LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）
 let teachingProvider = buildTeachingRuntimeProvider();
-// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 代码地图命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档（思考强制 off）
+// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 宏观设计命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档（思考强制 off）
 let lightLlmProvider = buildLightRuntimeProvider();
 // 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
 const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";

@@ -80,9 +80,9 @@ export function App(): ReactElement {
         </div>
         <nav aria-label="主导航">
           <NavItem to="/import" icon={<FolderGit2 size={17} />} label="导入仓库" />
-          <WorkspaceNavItem id="map" icon={<Network size={17} />} label="代码地图" disabled={!workspace} />
-          <WorkspaceNavItem id="teaching" icon={<MessageCircleQuestion size={17} />} label="教学会话" disabled={!workspace} />
-          <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习复习" disabled={!workspace} />
+          <WorkspaceNavItem id="map" icon={<Network size={17} />} label="宏观设计" disabled={!workspace} />
+          <WorkspaceNavItem id="teaching" icon={<MessageCircleQuestion size={17} />} label="代码教学" disabled={!workspace} />
+          <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习评估" disabled={!workspace} />
           <NavItem to="/insights" icon={<BarChart3 size={17} />} label="成本监控" disabled={!workspace} />
         </nav>
         <div className="sidebar-bottom">
@@ -107,7 +107,7 @@ export function App(): ReactElement {
   );
 }
 
-/** 路由守卫：workspace 恢复自 localStorage 时需等引擎验证完成（workspaceReady）再渲染，避免失效 id 先跳代码地图。 */
+/** 路由守卫：workspace 恢复自 localStorage 时需等引擎验证完成（workspaceReady）再渲染，避免失效 id 先跳宏观设计。 */
 function guard(workspace: _Workspace | null, ready: boolean, content: ReactElement): ReactElement {
   if (!workspace) return <Navigate to="/import" replace />;
   return ready ? content : <Loading />;

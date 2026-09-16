@@ -9,7 +9,7 @@ import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.
   - 落盘：JSONL 追加到 `TUTOR_LLM_LOG`（默认 `~/.codebase-tutor/llm.log`）；设为 `off`/`none`/`0` 只打控制台。
   - 控制台：一行摘要，与 engine 其它日志同风格（`[llm] …`）。
   - 失败**照记**并原样抛出：日志的存在不能把失败伪装成成功（静默降级是明令禁止的）。
-  - 覆盖范围：走 `LlmProvider` 的调用（教学回合、map/practice 对话、出题、判分、题面润色、推荐入口、地图命名）。
+  - 覆盖范围：走 `LlmProvider` 的调用（教学回合、map/practice 对话、出题、判分、题面润色、推荐入口、宏观设计命名）。
     导入期的文件摘要走独立的 `SummaryProvider`（默认本地启发式、不发请求；Ollama 档为本机服务）**不在此列**。
 
   包装位置见 LoggingLlmProvider 的注释（内层，档位注入之后）。
