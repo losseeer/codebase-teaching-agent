@@ -7,15 +7,17 @@ import { EmptyState, Loading, MicroDetail } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { DepMap } from "../map/DepMap";
+import { FlowMap } from "../map/FlowMap";
 import { showToast } from "../modules/toast";
 
 /**
   宏观设计工作区（两栏，源自 prototype `.map-workspace`）：
   - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
     早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
-  - 右 「运行路径」画布：v0.6 起为模块依赖图（`DepMap`）——节点 = 目录聚合模块，
-    边 = import 依赖，入口模块在最左列；课程树不再上图（层级交给左侧目录与教学页），
-    点击模块合成 CourseNode 走抽屉与地图线程。v0.5.4 曾为课程树总览层（总览化的中间态）。
+  - 右 「地图画布」：v0.9 起分两个视图（`map-viewbar` 切换）——
+    「架构视图」= 模块依赖图（`DepMap`）：节点 = 目录聚合模块，边 = import 依赖，入口模块在最左列；
+    「流程视图」= 从入口出发逐环节展开的调用链（`FlowMap`）：只走跨文件调用，标注分叉、环与复用。
+    课程树不上图（层级交给左侧目录与教学页），点击模块合成 CourseNode 走抽屉与地图线程。
   - 节点详情作为画布内的抽屉（触发后才覆盖画布右侧），不再是独立第三栏；源码抽屉已移除（v0.5.3）
   - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
 
@@ -50,6 +52,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   const [drawer, setDrawer] = useState<"node" | null>(null);
   const [error, setError] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  const [mapView, setMapView] = useState<"architecture" | "flow">("architecture");
 
   useEffect(() => {
     let current = true;
@@ -100,7 +103,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
         <div className="course-meta"><span>{index.totalFiles} 文件</span><span>{index.hotspots.length} 热点</span></div>
       </header>
       <ContextLine strong="宏观设计" detail={`选中「${selected?.title ?? "—"}」`} />
-      <MobileSwitcher labels={["项目目录", "运行路径"]} active={paneActive} onSelect={setPaneActive} />
+      <MobileSwitcher labels={["项目目录", "地图画布"]} active={paneActive} onSelect={setPaneActive} />
       <div className="workspace map-workspace">
         <aside className={`pane ${paneClass(0)}`}>
           <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} files</span></div>
@@ -116,7 +119,18 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
         </aside>
 
         <section className={`pane map-canvas ${paneClass(1)}`}>
-          <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
+          <div className="map-viewbar">
+            <div className="view-switch" role="tablist" aria-label="地图视图">
+              <button type="button" role="tab" aria-selected={mapView === "architecture"} className={mapView === "architecture" ? "active" : ""} onClick={() => setMapView("architecture")}>架构视图</button>
+              <button type="button" role="tab" aria-selected={mapView === "flow"} className={mapView === "flow" ? "active" : ""} onClick={() => setMapView("flow")}>流程视图</button>
+            </div>
+            <span className="map-viewbar-note">
+              {mapView === "architecture" ? "模块依赖图 · 从左到右按依赖方向分层" : "从入口出发逐环节展开 · 只走跨文件调用"}
+            </span>
+          </div>
+          {mapView === "architecture"
+            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
+            : <FlowMap analysis={analysis} lineOf={lineOf} selectedPath={t.mapFile ?? undefined} onOpenFile={openFile} />}
           {drawer ? (
             <aside className="map-detail" aria-label="节点详情">
               <div className="map-detail-head">

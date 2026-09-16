@@ -235,7 +235,6 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   return (
     <div className="map-scroll">
       <div className="map-inner" style={{ width: canvasW, minHeight: canvasH }}>
-        <p className="map-title">模块依赖图 · 从左到右按依赖方向分层，右侧是被依赖的基础模块</p>
         <svg className="flow-lines" width={canvasW} height={canvasH} aria-hidden>
           {paths.map((path) => <path key={path.key} d={path.d} strokeWidth={path.width} />)}
         </svg>

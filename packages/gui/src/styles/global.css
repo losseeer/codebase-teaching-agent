@@ -299,12 +299,11 @@ button.entry-item:hover { background: #eef6ef; }
 .map-workspace > .pane { display: flex; flex-direction: column; overflow: hidden; }
 .map-workspace .tree { flex: 1; min-height: 0; padding: 13px 9px; overflow: auto; background: #fbfdfb; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
 
-.map-canvas { flex: 1; min-height: 0; position: relative; display: flex; overflow: hidden; background: #f8fbf8; }
+.map-canvas { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; overflow: hidden; background: #f8fbf8; }
 .map-canvas::before { content: ""; position: absolute; inset: 0; opacity: .38; background-image: linear-gradient(#e4ede6 1px, transparent 1px), linear-gradient(90deg, #e4ede6 1px, transparent 1px); background-size: 28px 28px; pointer-events: none; }
 /* 画布内部滚动：抽屉（.map-detail）是 .map-canvas 的兄弟节点，不会被滚动带走 */
 .map-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
 .map-inner { position: relative; }
-.map-title { position: absolute; left: 36px; top: 8px; z-index: 1; margin: 0; color: #607b6f; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .flow-lines { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; }
 .flow-lines path { fill: none; stroke: #b4c9bb; stroke-width: 2; }
 .flow-node { position: absolute; z-index: 1; display: block; border: 1px solid #c9dcd0; border-radius: 5px; padding: 12px 12px 11px; background: #fff; box-shadow: 0 4px 10px rgba(30, 71, 54, .04); text-align: left; }
@@ -322,12 +321,52 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-legend i.green { border-color: #90af66; background: #eff7e4; }
 .flow-legend .legend-note { color: #8aa097; }
 
-.map-detail { position: absolute; top: 0; right: 0; bottom: 0; z-index: 3; width: min(330px, 48%); display: flex; flex-direction: column; border-left: 1px solid #d9e5dd; background: #fff; box-shadow: -10px 0 24px rgba(23, 55, 46, .07); }
+/* ==== v0.9 地图画布：视图切换条（架构 / 流程）+ 流程视图 ====
+   切换条是画布常驻 chrome：抽屉与「节点详情」按钮都从它下方开始，避免互相遮挡。 */
+.map-viewbar { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; min-height: 37px; padding: 0 12px; border-bottom: 1px solid #dde8e1; background: #fbfdfb; }
+.view-switch { display: inline-flex; flex: 0 0 auto; border: 1px solid #cbd9d1; border-radius: 4px; overflow: hidden; background: #fff; }
+.view-switch button { border: 0; padding: 5px 11px; color: #557568; background: transparent; font-size: 11px; }
+.view-switch button + button { border-left: 1px solid #d9e5dd; }
+.view-switch button.active { color: #224c3a; background: #e5f1d0; font-weight: 700; }
+.map-viewbar-note { min-width: 0; overflow: hidden; color: #7c9188; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.flow-inner { z-index: 1; padding: 14px 36px 26px; }
+.flow-entries { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.flow-entries button { max-width: 320px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 9px; color: #4d6f60; background: #fff; font-size: 11px; text-align: left; }
+.flow-entries button:hover { border-color: #79a88a; }
+.flow-entries button.active { border-color: #7ba889; color: #224c3a; background: #e5f1d0; font-weight: 700; }
+.flow-entries button strong { display: block; font-size: 11px; }
+.flow-entries button small { display: block; overflow: hidden; color: #86a094; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.flow-chain { position: relative; display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0 0 0 20px; list-style: none; }
+.flow-chain::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 1px; background: #cfe0d5; }
+.flow-chain li { display: block; }
+.flow-step { position: relative; display: flex; gap: 10px; width: min(560px, 100%); border: 1px solid #c9dcd0; border-radius: 5px; padding: 10px 12px; background: #fff; box-shadow: 0 4px 10px rgba(30, 71, 54, .04); text-align: left; }
+.flow-step::before { content: ""; position: absolute; left: -17px; top: 15px; width: 7px; height: 7px; border: 1px solid #9abca4; border-radius: 50%; background: #fff; }
+.flow-step:hover { border-color: #79a88a; }
+.flow-step.selected { border-color: #2d7356; box-shadow: 0 0 0 3px rgba(45, 115, 86, .13); }
+.flow-step.entry { border-color: #2d7356; background: #f3f9ec; }
+.flow-step.entry::before { border-color: #90af66; background: #eff7e4; }
+.flow-step-order { flex: 0 0 auto; color: #8aa097; font-size: 11px; font-weight: 700; }
+.flow-step-main { min-width: 0; }
+.flow-step-kind { display: block; margin-bottom: 4px; color: #729082; font-size: 10px; font-weight: 700; }
+.flow-step strong { display: block; color: #1e4b39; font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
+.flow-step-where, .flow-step-from { display: block; margin-top: 4px; color: #71887d; font-size: 10px; overflow-wrap: anywhere; }
+.flow-step-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.flow-step-flags em { border-radius: 3px; padding: 2px 6px; font-size: 9px; font-style: normal; font-weight: 700; }
+.flow-step-flags .flag-branch { color: #6b5a1f; background: #fdf3d8; }
+.flow-step-flags .flag-pending { color: #7a6a4a; background: #f4f0e6; }
+.flow-step-flags .flag-loop { color: #8a4a3a; background: #fbe6df; }
+.flow-step-flags .flag-reuse { color: #43606d; background: #e6eff3; }
+.flow-step-flags .flag-same { color: #557568; background: #eef4ef; }
+.flow-footnote { width: min(560px, 100%); margin: 16px 0 0; color: #8aa097; font-size: 10px; line-height: 1.7; }
+.flow-empty { width: min(560px, 100%); border: 1px dashed #c9dcd0; border-radius: 5px; padding: 14px; color: #6d8478; background: #fff; font-size: 11px; line-height: 1.7; }
+
+.map-detail { position: absolute; top: 37px; right: 0; bottom: 0; z-index: 3; width: min(330px, 48%); display: flex; flex-direction: column; border-left: 1px solid #d9e5dd; background: #fff; box-shadow: -10px 0 24px rgba(23, 55, 46, .07); }
 .map-detail-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid #d9e5dd; background: #fbfdfb; color: #315b4b; font-size: 11px; font-weight: 700; }
 .map-detail-toggle { display: grid; place-items: center; border: 1px solid #cbd9d1; border-radius: 4px; padding: 4px 6px; color: #6f8d80; background: #fff; }
 .map-detail-toggle:hover { background: #eef6ef; }
 .map-detail .detail { flex: 1; min-height: 0; }
-.map-detail-open { position: absolute; right: 12px; top: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 5px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 9px; color: #35634f; background: #fff; font-size: 11px; }
+.map-detail-open { position: absolute; right: 12px; top: 49px; z-index: 2; display: inline-flex; align-items: center; gap: 5px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 9px; color: #35634f; background: #fff; font-size: 11px; }
 .map-detail-open:hover { background: #edf5ef; }
 
 .detail { padding: 15px; overflow: auto; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
