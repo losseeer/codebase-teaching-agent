@@ -14,6 +14,7 @@ import { courseChildren, courseOverview, findCourseNode } from "./coursetree/pro
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { ExerciseService } from "./exercises/service.js";
+import { degradedFlow, generateRepositoryFlowCached } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
@@ -287,6 +288,37 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
     scene: "module_entries"
   });
   return { entries: suggestion.entries, source: "llm" as const };
+});
+
+// 宏观设计「流程视图」：按入口用 LLM 生成执行流程（静态调用链作为证据输入 + 降级视图）。
+// 缓存命中零成本；未配置 LLM / 预算触顶 / 调用失败都返回静态调用链并带 reason，不静默降级。
+app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("/api/repositories/:repositoryId/flow", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const entries = repository.analysis.graph.entrypoints;
+  if (!entries.length) return reply.code(404).send({ error: "该仓库没有识别到执行入口，流程视图无法生成。" });
+  const wanted = (request.query.entry ?? "").trim();
+  const entry = wanted ? entries.find((item) => item.path === wanted) : entries[0];
+  if (!entry) return reply.code(404).send({ error: "该路径不是本仓库识别到的执行入口。" });
+  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
+  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
+  if (!provider) return degradedFlow(repository.analysis, entry, "未配置轻量档 LLM 或本月预算已触顶");
+  const generated = await generateRepositoryFlowCached({
+    repositoryPath: repository.path,
+    index: repository.index,
+    analysis: repository.analysis,
+    entry,
+    provider,
+    cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
+  });
+  if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+    input_tokens: generated.usage.inputTokens,
+    output_tokens: generated.usage.outputTokens,
+    cache_hit_tokens: generated.usage.promptCacheHitTokens ?? null,
+    provider: provider.modelVersion,
+    scene: "flow_map"
+  });
+  return { flow: generated.flow, source: generated.source, ...(generated.reason ? { reason: generated.reason } : {}) };
 });
 
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {

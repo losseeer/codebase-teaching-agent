@@ -350,16 +350,35 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-step-main { min-width: 0; }
 .flow-step-kind { display: block; margin-bottom: 4px; color: #729082; font-size: 10px; font-weight: 700; }
 .flow-step strong { display: block; color: #1e4b39; font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
-.flow-step-where, .flow-step-from { display: block; margin-top: 4px; color: #71887d; font-size: 10px; overflow-wrap: anywhere; }
+.flow-step-detail { display: block; margin-top: 4px; color: #71887d; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .flow-step-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .flow-step-flags em { border-radius: 3px; padding: 2px 6px; font-size: 9px; font-style: normal; font-weight: 700; }
-.flow-step-flags .flag-branch { color: #6b5a1f; background: #fdf3d8; }
-.flow-step-flags .flag-pending { color: #7a6a4a; background: #f4f0e6; }
 .flow-step-flags .flag-loop { color: #8a4a3a; background: #fbe6df; }
-.flow-step-flags .flag-reuse { color: #43606d; background: #e6eff3; }
-.flow-step-flags .flag-same { color: #557568; background: #eef4ef; }
+.flow-step-flags .flag-files { color: #43606d; background: #e6eff3; }
+.flow-step-branches { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.flow-step-branches em { border-left: 2px solid #d9c9a0; padding: 1px 0 1px 6px; color: #7a6a4a; font-size: 10px; font-style: normal; }
+.flow-head { width: min(560px, 100%); margin: 0 0 14px; }
+.flow-head h3 { margin: 0 0 5px; color: #1e4b39; font-size: 15px; }
+.flow-head p { margin: 0; color: #5f7a6e; font-size: 11.5px; line-height: 1.6; }
+.flow-status { display: flex; align-items: center; gap: 6px; width: min(560px, 100%); margin: 0 0 14px; border: 1px dashed #c9dcd0; border-radius: 5px; padding: 12px; color: #5f7a6e; background: #fff; font-size: 11.5px; }
+.flow-status.error { border-color: #dcb0a4; color: #8b3e32; background: #fdf4f2; }
+/* 降级横幅：静态调用链不是模型结论，必须让人一眼看出这是另一回事 */
+.flow-degraded { width: min(560px, 100%); margin: 0 0 14px; border-left: 3px solid #dc8a66; border-radius: 0 4px 4px 0; padding: 10px 12px; color: #7a4a37; background: #fcf0eb; font-size: 11px; line-height: 1.7; }
+.flow-degraded strong { display: block; margin-bottom: 3px; }
 .flow-footnote { width: min(560px, 100%); margin: 16px 0 0; color: #8aa097; font-size: 10px; line-height: 1.7; }
 .flow-empty { width: min(560px, 100%); border: 1px dashed #c9dcd0; border-radius: 5px; padding: 14px; color: #6d8478; background: #fff; font-size: 11px; line-height: 1.7; }
+/* 节点详情展开时给流程让位：环节列表被抽屉压住就点不到靠右的环节。
+   用 min(350px, 46%) 而不是固定 350px —— 画布窄时固定值会把列表挤成一条缝。 */
+.map-canvas.detail-open .flow-inner { padding-right: min(350px, 46%); }
+/* 环节详情：关联文件列表（画布上不出现路径，只在这里） */
+.flow-files { display: grid; gap: 6px; }
+.flow-file { display: grid; gap: 2px; border: 1px solid #d3e0d7; border-radius: 4px; padding: 7px 9px; background: #fff; text-align: left; }
+.flow-file:hover { border-color: #79a88a; background: #f5faf6; }
+.flow-file-where { display: inline-flex; align-items: center; gap: 5px; color: #35634f; font-size: 11px; overflow-wrap: anywhere; }
+.flow-file small { color: #6f897d; font-size: 10px; }
+.flow-branch { border-left: 2px solid #e0cfa4; padding: 2px 0 2px 7px; color: #6b5a1f; font-size: 11px; }
+/* 必须写成 .detail p.detail-note：`.detail p` 的特异度高于单类名，否则这行说明文字会被正文样式吃掉 */
+.detail p.detail-note { margin: 10px 0 0; color: #7d9288; font-size: 10.5px; line-height: 1.6; }
 
 .map-detail { position: absolute; top: 37px; right: 0; bottom: 0; z-index: 3; width: min(330px, 48%); display: flex; flex-direction: column; border-left: 1px solid #d9e5dd; background: #fff; box-shadow: -10px 0 24px rgba(23, 55, 46, .07); }
 .map-detail-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid #d9e5dd; background: #fbfdfb; color: #315b4b; font-size: 11px; font-weight: 700; }

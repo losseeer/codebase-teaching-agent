@@ -1,21 +1,32 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { buildFlowPlan, FLOW_LIMITS } from "@codebase-tutor/shared";
-import type { RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
+import { useEffect, useState, type ReactElement } from "react";
+import { Sparkles } from "lucide-react";
+import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow } from "@codebase-tutor/shared";
+import { api } from "../api/client";
 
 /**
- * 宏观设计 v0.9：流程视图（与 `DepMap` 的架构视图并列）。
+ * 宏观设计 v0.10：流程视图（与 `DepMap` 的架构视图并列）。
+
+ * 两个视图的分工：
+ * - 架构视图由**文件**驱动：节点 = 目录聚合模块，边 = import 依赖。客观、稳定、可穷举。
+ * - 流程视图由**LLM 生成**：环节是一次执行经过的步骤，每个环节的关联文件**只出现在节点详情里**。
  *
- * 架构视图回答「有哪些模块、谁依赖谁」，流程视图回答「一次执行从入口出发经过哪些环节」。
- * 数据全部来自 `analysis.graph` 的静态分析结果：
- * - 环节 = 被调用函数（符号表里有定义就取其定义位置，否则回落到文件）；
- * - 只展开**跨文件**调用，同文件内部调用只计数——流程视图要表达的是模块之间的流转；
- * - 每步的分支按「该去向自己还能展开出多长的链」排序、连续编号，各自的下游紧随其后，
- *   避免入口文件里的收尾型调用（close 之类）挤掉主线；
- * - 环（回到自己的上游）与复用（共享下游）分别标注，不静默丢弃任何去向。
+ * 为什么流程不画静态调用链：`add_node("evaluate", evaluate)`、路由表、插件与依赖注入这类**编排**
+ * 不产生调用边，静态链在真正的主干处是断的。模型能从文件与符号语义里读出编排，这正是本视图的增量。
+ * 静态调用链仍在，它作为模型输入，并在 LLM 不可用时充当降级视图——降级会显式标注，不冒充模型结论。
  *
- * 上限由 `FLOW_LIMITS` 给定（5 跳 / 每步 6 条分支 / 共 24 步），超出部分在页脚明示数量。
- * 间接调用（回调注册、反射、依赖注入）不在静态调用边里，页脚一并说明，避免读者误以为流程就这些。
+ * 环节数、关联文件数都由 engine 侧校验（路径必须真实存在，行号必须落在文件范围内），
+ * 前端不再二次猜测；`caveats` 原样展示，包含被丢弃的环节与文件。
  */
+
+/** 环节性质的中文展示；详情抽屉与画布共用同一份，避免一处一个叫法。 */
+export const FLOW_KIND_LABEL: Record<FlowStageKind, string> = {
+  entry: "入口",
+  stage: "环节",
+  decision: "判断",
+  loop: "回环",
+  exit: "出口"
+};
+
 /**
   engine 的入口标签是英文短语（`detectEntrypoints`），界面上按项目惯例转中文；
   没收录的标签原样显示，不编造译名。
@@ -28,26 +39,53 @@ function entryLabel(label: string): string {
   return script ? `启动脚本 ${script[1]}` : label;
 }
 
-export function FlowMap({ analysis, lineOf, selectedPath, onOpenFile }: {
+interface FlowState {
+  flow: RepositoryFlow;
+  source: "llm" | "static";
+  reason?: string;
+}
+
+/** 选中的环节 + 它所属的流程（详情抽屉需要两者：环节给文件，流程给标题与边界）；null 表示未选。 */
+export interface FlowSelection {
+  stage: FlowStage;
+  flow: RepositoryFlow;
+}
+
+export function FlowMap({ repositoryId, analysis, selectedStageOrder, onSelectStage }: {
+  repositoryId: string;
   analysis: RepositoryAnalysis;
-  lineOf: Map<string, number>;
-  selectedPath?: string;
-  onOpenFile: (path: string) => void;
+  selectedStageOrder?: number;
+  onSelectStage: (selection: FlowSelection | null) => void;
 }): ReactElement {
-  const entries = useMemo(() => analysis.graph.entrypoints, [analysis]);
+  const entries = analysis.graph.entrypoints;
   const [entryPath, setEntryPath] = useState(() => entries[0]?.path ?? "");
+  const [state, setState] = useState<FlowState | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
   useEffect(() => {
     if (!entries.some((entry) => entry.path === entryPath)) setEntryPath(entries[0]?.path ?? "");
   }, [entries, entryPath]);
 
-  const entry: SourceAnchor | undefined = entries.find((item) => item.path === entryPath) ?? entries[0];
-  const plan = useMemo(() => (entry ? buildFlowPlan(analysis, entry) : null), [analysis, entry]);
+  useEffect(() => {
+    if (!entryPath) return;
+    let current = true;
+    setLoading(true);
+    setError("");
+    setState(null);
+    api.getRepositoryFlow(repositoryId, entryPath)
+      .then((result) => { if (current) setState(result); })
+      .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法生成流程"); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+    // analysis.versionStamp 变化（仓库重分析）后流程需要重新生成
+  }, [repositoryId, entryPath, analysis.versionStamp]);
 
-  if (!plan) {
+  if (!entries.length) {
     return (
       <div className="map-scroll">
         <div className="map-inner flow-inner">
-          <p className="flow-empty">该仓库没有识别到执行入口，流程视图无法展开。入口由 package.json 的 main/bin/scripts 与 main/server/app/index 等约定文件名推断（engine 侧 `detectEntrypoints`）。</p>
+          <p className="flow-empty">该仓库没有识别到执行入口，流程视图无法生成。入口由 package.json 的 main/bin/scripts 与 main/server/app/index 等约定文件名推断（engine 侧 `detectEntrypoints`）。</p>
         </div>
       </div>
     );
@@ -61,9 +99,9 @@ export function FlowMap({ analysis, lineOf, selectedPath, onOpenFile }: {
             <button
               key={item.path}
               type="button"
-              className={item.path === plan.entry.path ? "active" : ""}
+              className={item.path === entryPath ? "active" : ""}
               title={`${item.path}（${item.label}）`}
-              onClick={() => setEntryPath(item.path)}
+              onClick={() => { setEntryPath(item.path); onSelectStage(null); }}
             >
               <strong>{entryLabel(item.label)}</strong>
               <small>{item.path}</small>
@@ -71,47 +109,66 @@ export function FlowMap({ analysis, lineOf, selectedPath, onOpenFile }: {
           ))}
         </div>
 
-        <ol className="flow-chain">
-          {plan.steps.map((step) => {
-            const classes = [
-              "flow-step",
-              step.kind === "entry" ? "entry" : "",
-              selectedPath === step.path ? "selected" : ""
-            ].filter(Boolean).join(" ");
-            const lines = lineOf.get(step.path);
-            const pending = step.branches - step.expanded;
-            return (
-              <li key={`${step.order}:${step.path}:${step.line}`}>
-                <button type="button" className={classes} onClick={() => onOpenFile(step.path)}>
-                  <span className="flow-step-order">{String(step.order).padStart(2, "0")}</span>
-                  <span className="flow-step-main">
-                    <span className="flow-step-kind">
-                      {step.kind === "entry" ? `入口 · ${entryLabel(plan.entry.label)}` : `第 ${step.depth} 跳${step.language ? ` · ${step.language}` : ""}`}
-                    </span>
-                    <strong>{step.title}</strong>
-                    <small className="flow-step-where">{`${step.path}:${step.line}${lines ? ` · 共 ${lines} 行` : ""}`}</small>
-                    {step.from
-                      ? <small className="flow-step-from">{`← ${step.from.title} 调用（${step.from.path}:${step.from.line}）`}</small>
-                      : <small className="flow-step-from">流程起点</small>}
-                    <span className="flow-step-flags">
-                      {step.branches > 1 ? <em className="flag-branch">{`分叉 ×${step.branches}`}</em> : null}
-                      {pending > 0 ? <em className="flag-pending">{`未展开 ${pending}`}</em> : null}
-                      {step.loops.length ? <em className="flag-loop">{`↺ 回到 #${step.loops.join("、#")}`}</em> : null}
-                      {step.revisits.length ? <em className="flag-reuse">{`已展开于 #${step.revisits.join("、#")}`}</em> : null}
-                      {step.sameFileCalls ? <em className="flag-same">{`同文件 ${step.sameFileCalls} 处调用`}</em> : null}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
+        {loading ? (
+          <p className="flow-status"><Sparkles size={13} />正在生成流程…（首次生成由 LLM 完成，之后同一版本直接命中缓存）</p>
+        ) : null}
+        {error ? <p className="flow-status error">{error}</p> : null}
 
-        <p className="flow-footnote">
-          {`流程来自静态分析的跨文件调用（graph.calls）：同文件内部调用只计数不展开；按主线深度优先展开，上限 ${FLOW_LIMITS.maxDepth} 跳 / 每步 ${FLOW_LIMITS.maxBranchesPerStep} 条分支 / 共 ${FLOW_LIMITS.maxSteps} 步。`}
-          {plan.truncated ? `本次有 ${plan.omitted} 个去向未展开。` : "全部去向均已展开。"}
-          {"回调注册、反射、依赖注入等间接调用不在静态调用边里，属于本视图的已知边界。"}
-        </p>
+        {state ? (
+          <>
+            <div className="flow-head">
+              <h3>{state.flow.title}</h3>
+              <p>{state.flow.summary}</p>
+            </div>
+            {state.source === "static" ? (
+              <p className="flow-degraded">
+                <strong>以下不是模型生成，而是静态调用链降级视图。</strong>
+                {state.reason ? `原因：${state.reason}。` : ""}
+                它只反映代码里的跨文件调用，看不到回调注册、路由表与依赖注入等编排，环节可能比真实执行路径少。
+              </p>
+            ) : null}
+
+            <ol className="flow-chain">
+              {state.flow.stages.map((stage) => {
+                const classes = [
+                  "flow-step",
+                  stage.kind === "entry" ? "entry" : "",
+                  selectedStageOrder === stage.order ? "selected" : ""
+                ].filter(Boolean).join(" ");
+                return (
+                  <li key={stage.order}>
+                    <button
+                      type="button"
+                      className={classes}
+                      onClick={() => onSelectStage(selectedStageOrder === stage.order ? null : { stage, flow: state.flow })}
+                    >
+                      <span className="flow-step-order">{String(stage.order).padStart(2, "0")}</span>
+                      <span className="flow-step-main">
+                        <span className="flow-step-kind">{FLOW_KIND_LABEL[stage.kind]}</span>
+                        <strong>{stage.title}</strong>
+                        <small className="flow-step-detail">{stage.detail}</small>
+                        <span className="flow-step-flags">
+                          {stage.loopsTo !== undefined ? <em className="flag-loop">{`↺ 回到 #${stage.loopsTo}`}</em> : null}
+                          {stage.files.length ? <em className="flag-files">{`关联 ${stage.files.length} 个文件`}</em> : null}
+                        </span>
+                        {stage.branches.length ? (
+                          <span className="flow-step-branches">
+                            {stage.branches.map((branch) => <em key={branch}>{branch}</em>)}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+
+            <p className="flow-footnote">
+              {`共 ${state.flow.stages.length} 个环节。每个环节的关联文件在右侧「节点详情」里，点环节打开。`}
+              {state.flow.caveats ? `已知边界：${state.flow.caveats}` : ""}
+            </p>
+          </>
+        ) : null}
       </div>
     </div>
   );

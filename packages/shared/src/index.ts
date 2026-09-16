@@ -233,219 +233,60 @@ export interface RepositoryAnalysis {
   lastIncrementalUpdate?: { changedPaths: string[]; impactedPaths: string[]; at: string };
 }
 
-/** 流程视图的一步：从入口出发、按调用关系逐环节展开。 */
-export interface FlowStep {
-  /** 展示序号，1 起 */
-  order: number;
-  /** 距入口的跳数（入口本身为 0） */
-  depth: number;
-  kind: "entry" | "call";
-  /** 环节名 = 被调用函数/方法名；文件级回落时是文件名 */
-  title: string;
+/** 流程环节的性质；界面据此给不同的徽标（判断/回环与普通环节的读法不同）。 */
+export type FlowStageKind = "entry" | "stage" | "decision" | "loop" | "exit";
+
+/** 环节关联的一个文件。**只在节点详情里展示**——画布上不出现路径，避免流程视图退化成定位清单。 */
+export interface FlowStageFile {
   path: string;
   line: number;
-  endLine?: number;
-  /** 调用点：谁（函数）在哪一行发起了这次跳转 */
-  from?: { title: string; path: string; line: number };
-  /** 跨文件去重后的去向总数 */
-  branches: number;
-  /** 其中本次真正展开成新环节的数量（branches 大于它表示有去向未展开） */
-  expanded: number;
-  /** 回边：该环节调用的、正好是它自己上游环节的序号（真正的环） */
-  loops: number[];
-  /** 复用：该环节调用的、已在链上前文出现过的环节序号（不是环，只是共享下游） */
-  revisits: number[];
-  /** 同文件内部调用数（只计数、不展开） */
-  sameFileCalls: number;
-  language?: SymbolInfo["language"];
-  parameters?: number;
+  /** 该文件在这个环节里承担什么（≤20 字） */
+  note?: string;
 }
-
-export interface FlowPlan {
-  entry: SourceAnchor;
-  steps: FlowStep[];
-  /** 被深度/分支/步数上限截断：链上还有可达环节未展开 */
-  truncated: boolean;
-  /** 未展开的下游环节数 */
-  omitted: number;
-}
-
-/** 流程展开上限：默认 5 跳 / 每步最多 6 条分支 / 共 24 步，超出即停并在界面上明示。 */
-export const FLOW_LIMITS = { maxDepth: 5, maxBranchesPerStep: 6, maxSteps: 24 } as const;
 
 /**
- * 从入口按调用关系展开「流程」：沿 `analysis.graph.calls` 走**跨文件**跳
- * （同文件内部调用只计数、不展开——流程视图要表达的是模块之间的流转）。
- * 某一步的分支按「该去向自己还能展开出多长的链」排序、连续编号，各自的下游紧随其后，
- * 于是入口文件里那些收尾型调用（close、configure_logging 之类）不会把主线挤掉。
- * 逐步给出实现位置、调用点、分叉数、环（回到自己的上游）与复用（共享下游）。
- * 纯函数；数据不足时返回只有入口的骨架。
+ * 流程视图的一个环节：由 LLM 依据静态证据（依赖关系、符号、静态调用链）生成。
+ * 与静态调用链的区别正是它存在的理由——回调注册（`add_node("evaluate", evaluate)`）、
+ * 反射、依赖注入这类编排不会产生调用边，静态图看不见，而模型可以从文件与符号语义里读出来。
  */
-export function buildFlowPlan(
-  analysis: RepositoryAnalysis,
-  entry: SourceAnchor,
-  limits: { maxDepth: number; maxBranchesPerStep: number; maxSteps: number } = FLOW_LIMITS
-): FlowPlan {
-  const byId = new Map(analysis.graph.symbols.map((symbol) => [symbol.id, symbol]));
-  const byCallerSymbol = new Map<string, CallEdge[]>();
-  const byCallerPath = new Map<string, CallEdge[]>();
-  const add = (map: Map<string, CallEdge[]>, key: string, call: CallEdge): void => {
-    map.set(key, [...(map.get(key) ?? []), call]);
-  };
-  for (const call of analysis.graph.calls) {
-    if (call.callerSymbol) add(byCallerSymbol, call.callerSymbol, call);
-    add(byCallerPath, call.callerPath, call);
-  }
-
-  interface Cursor {
-    key: string;
-    title: string;
-    path: string;
-    line: number;
-    endLine?: number;
-    language?: SymbolInfo["language"];
-    parameters?: number;
-    calls: CallEdge[];
-  }
-  interface Branch {
-    cursor: Cursor;
-    /** 调用点所在行 */
-    line: number;
-    /** 发起这次调用的函数名 */
-    caller: string;
-  }
-  const cursorOfCall = (call: CallEdge): Cursor | undefined => {
-    const symbol = call.calleeSymbol ? byId.get(call.calleeSymbol) : undefined;
-    if (symbol) {
-      return {
-        key: `symbol:${symbol.id}`,
-        title: symbol.name,
-        path: symbol.path,
-        line: symbol.line,
-        endLine: symbol.endLine,
-        language: symbol.language,
-        parameters: symbol.parameters.length,
-        calls: byCallerSymbol.get(symbol.id) ?? []
-      };
-    }
-    // 符号表里没有：只在没有 calleeSymbol 时回落文件级；有 id 却查不到说明数据不全，不编造
-    if (call.calleeSymbol) return undefined;
-    return { key: `file:${call.calleePath}`, title: fileTitle(call.calleePath), path: call.calleePath, line: 1, calls: byCallerPath.get(call.calleePath) ?? [] };
-  };
-
-  /** 跨文件去向：同一目标只留首次调用，按 (路径, 行) 稳定排序保证同一份数据得到同一条链。 */
-  const branchesOf = (cursor: Cursor): Branch[] => {
-    const found = new Map<string, Branch>();
-    const calls = [...cursor.calls].sort((left, right) => left.calleePath.localeCompare(right.calleePath) || left.line - right.line);
-    for (const call of calls) {
-      if (call.calleePath === cursor.path) continue;
-      const target = cursorOfCall(call);
-      if (!target || found.has(target.key)) continue;
-      found.set(target.key, { cursor: target, line: call.line, caller: (call.callerSymbol ? byId.get(call.callerSymbol)?.name : undefined) ?? cursor.title });
-    }
-    return [...found.values()];
-  };
-  const sameFileCallsOf = (cursor: Cursor): number => cursor.calls.filter((call) => call.calleePath === cursor.path).length;
-
-  /** 从该去向出发还能走多长的链（记忆化；环上返回 0，避免深度发散）。 */
-  const depthCache = new Map<string, number>();
-  const depthOf = (cursor: Cursor, seen: Set<string>): number => {
-    const cached = depthCache.get(cursor.key);
-    if (cached !== undefined) return cached;
-    if (seen.has(cursor.key)) return 0;
-    seen.add(cursor.key);
-    const next = branchesOf(cursor);
-    const value = next.length ? 1 + Math.max(...next.map((branch) => depthOf(branch.cursor, seen))) : 0;
-    seen.delete(cursor.key);
-    depthCache.set(cursor.key, value);
-    return value;
-  };
-
-  // 入口按「文件」起步：一个入口文件里的每个函数都可能是流程的第一跳
-  const entryCursor: Cursor = { key: `file:${entry.path}`, title: fileTitle(entry.path), path: entry.path, line: entry.line, calls: byCallerPath.get(entry.path) ?? [] };
-  const steps: FlowStep[] = [{
-    order: 1,
-    depth: 0,
-    kind: "entry",
-    title: entryCursor.title,
-    path: entryCursor.path,
-    line: entryCursor.line,
-    branches: 0,
-    expanded: 0,
-    loops: [],
-    revisits: [],
-    sameFileCalls: 0
-  }];
-  const orderOf = new Map<string, number>([[entryCursor.key, 1]]);
-  let truncated = false;
-  let omitted = 0;
-  const stack: { cursor: Cursor; depth: number; stepIndex: number; chain: { key: string; order: number }[] }[] = [
-    { cursor: entryCursor, depth: 0, stepIndex: 0, chain: [] }
-  ];
-
-  while (stack.length) {
-    const item = stack.pop()!;
-    const step = steps[item.stepIndex];
-    const branches = branchesOf(item.cursor).sort((left, right) =>
-      depthOf(right.cursor, new Set()) - depthOf(left.cursor, new Set())
-      || left.cursor.path.localeCompare(right.cursor.path)
-      || left.cursor.line - right.cursor.line);
-    step.branches = branches.length;
-    step.sameFileCalls = sameFileCallsOf(item.cursor);
-    if (item.depth >= limits.maxDepth) {
-      if (branches.length) { truncated = true; omitted += branches.length; }
-      continue;
-    }
-    const chain = [...item.chain, { key: item.cursor.key, order: step.order }];
-    const descending: typeof stack = [];
-    for (const branch of branches) {
-      const ancestor = chain.find((link) => link.key === branch.cursor.key);
-      if (ancestor) {
-        step.loops = [...new Set([...step.loops, ancestor.order])].sort((left, right) => left - right);
-        continue;
-      }
-      const known = orderOf.get(branch.cursor.key);
-      if (known !== undefined) {
-        step.revisits = [...new Set([...step.revisits, known])].sort((left, right) => left - right);
-        continue;
-      }
-      if (step.expanded >= limits.maxBranchesPerStep || steps.length >= limits.maxSteps) {
-        truncated = true;
-        omitted += 1;
-        continue;
-      }
-      steps.push({
-        order: steps.length + 1,
-        depth: item.depth + 1,
-        kind: "call",
-        title: branch.cursor.title,
-        path: branch.cursor.path,
-        line: branch.cursor.line,
-        endLine: branch.cursor.endLine,
-        from: { title: branch.caller, path: item.cursor.path, line: branch.line },
-        branches: 0,
-        expanded: 0,
-        loops: [],
-        revisits: [],
-        sameFileCalls: 0,
-        language: branch.cursor.language,
-        parameters: branch.cursor.parameters
-      });
-      step.expanded += 1;
-      orderOf.set(branch.cursor.key, steps.length);
-      // 逆序入栈 → 优先级最高的分支先被展开
-      descending.push({ cursor: branch.cursor, depth: item.depth + 1, stepIndex: steps.length - 1, chain });
-    }
-    for (let index = descending.length - 1; index >= 0; index -= 1) stack.push(descending[index]);
-    if (step.expanded < step.branches) { truncated = true; omitted += step.branches - step.expanded; }
-  }
-  return { entry, steps, truncated, omitted };
+export interface FlowStage {
+  /** 展示序号，1 起 */
+  order: number;
+  kind: FlowStageKind;
+  /** 环节名（≤14 字） */
+  title: string;
+  /** 一句话说明该环节做什么（≤60 字） */
+  detail: string;
+  /** 关联文件；全部经仓库索引校验，不存在的路径不会出现在这里 */
+  files: FlowStageFile[];
+  /** 分叉说明：该环节的多条去向与判断依据（有一个以上去向时给出） */
+  branches: string[];
+  /** 回环目标序号：回到本流程内更靠前的某个环节（有回边时给出） */
+  loopsTo?: number;
 }
 
-/** 路径 → 展示用短名（去掉目录与扩展名）。 */
-function fileTitle(path: string): string {
-  const base = path.split("/").pop() ?? path;
-  return base.replace(/\.[^.]+$/, "") || base;
+/** 一条从入口出发的执行流程（流程视图的数据源）。 */
+export interface RepositoryFlow {
+  entry: SourceAnchor;
+  /** 整条流程的标题（≤18 字） */
+  title: string;
+  /** 流程总述（≤100 字） */
+  summary: string;
+  stages: FlowStage[];
+  /** 已知边界：模型自述的不确定处、被校验丢弃的内容、或降级说明。界面原样展示，不吞掉。 */
+  caveats?: string;
+  generatedAt: string;
+}
+
+/** 流程环节数上限；超出即截断，并在 `caveats` 里明示截断了多少。 */
+export const FLOW_MAX_STAGES = 12;
+
+/** 流程生成来源。`static` = 静态调用链降级（LLM 未配置、预算触顶或调用失败），必须显式告知用户。 */
+export interface RepositoryFlowResult {
+  flow: RepositoryFlow;
+  source: "llm" | "static";
+  /** source=static 时的原因 */
+  reason?: string;
 }
 
 export interface CostSummary {
