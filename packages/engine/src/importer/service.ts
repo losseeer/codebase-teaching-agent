@@ -29,8 +29,9 @@ export interface ImportedRepository {
   watcher?: RepositoryWatcher;
 }
 
-/** 已知仓库路径注册表：engine 重启后据此从各仓库的 .tutor/tutor.db 恢复注册，免重新导入。
-    默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖。 */
+/** 挂载注册表（单槽）：engine 重启后据此从该仓库的 .tutor/tutor.db 恢复挂载与监听，免重新导入。
+    默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖。
+    单槽 = 同一时刻只挂载/监听一个仓库；写文件时只留最后挂载的那一个（保留数组形状以兼容旧文件）。 */
 function registryFile(): string {
   return process.env.TUTOR_REGISTRY_FILE ?? join(homedir(), ".codebase-tutor", "repositories.json");
 }
@@ -44,16 +45,10 @@ function readRegistry(): string[] {
   }
 }
 
-function writeRegistry(paths: string[]): void {
+function writeMountedRepository(repositoryPath?: string): void {
   const file = registryFile();
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
-}
-
-function recordRepositoryPath(repositoryPath: string): void {
-  const paths = readRegistry().filter((item) => item !== repositoryPath);
-  paths.push(repositoryPath);
-  writeRegistry(paths);
+  writeFileSync(file, `${JSON.stringify({ repositories: repositoryPath ? [repositoryPath] : [] }, null, 2)}\n`, "utf8");
 }
 
 export class ImportService extends EventEmitter {
@@ -82,41 +77,47 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    启动恢复：按注册表把各仓库 .tutor/tutor.db 里持久化的 index/course/analysis 重新挂进内存注册表，
-    GUI 侧已有 workspace 在 engine 重启后不再 404、无需重新导入（也就不再触发 LLM 润色重跑）。
-    目录不存在或数据不全的条目从注册表剔除。返回恢复的仓库数。
+    启动恢复（单槽）：只恢复注册表里最后挂载的那一个仓库——把它的 .tutor/tutor.db 里持久化的
+    index/course/analysis 重新挂进内存并监听，GUI 侧已有 workspace 在 engine 重启后不再 404、
+    无需重新导入（也就不再触发 LLM 润色重跑）。目录不存在或数据不全 → 不恢复任何仓库并清空注册表，
+    避免失效条目在每次启动时被回挂、把该目录的任何写入都变成一次全量重分析。
+    返回恢复的仓库数（0 或 1）；同时卸载内存里其它仓库，保证「挂载集合 = 监听集合」恒为单槽。
     */
   restorePersisted(): number {
-    const paths = readRegistry();
-    if (!paths.length) return 0;
-    const alive: string[] = [];
-    let restored = 0;
-    for (const repositoryPath of paths) {
-      try {
-        if (!statSync(repositoryPath).isDirectory()) continue;
-        const repositoryId = deriveRepositoryId(repositoryPath);
-        const database = new TutorDatabase(repositoryPath);
-        const index = database.getIndex(repositoryId);
-        const course = database.getCourse(repositoryId);
-        const analysis = database.getAnalysis(repositoryId);
-        const estimate = database.getEstimate(repositoryId);
-        database.close();
-        if (!index || !course || !analysis || !estimate) continue;
-        const previous = this.repositories.get(repositoryId);
-        previous?.watcher?.close();
-        const repository: ImportedRepository = { path: repositoryPath, index, course, estimate, analysis };
-        repository.watcher = new RepositoryWatcher(repositoryPath, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths));
-        repository.watcher.start();
-        this.repositories.set(repositoryId, repository);
-        alive.push(repositoryPath);
-        restored += 1;
-      } catch {
-        continue; // 单个仓库恢复失败不影响其他仓库
-      }
+    const target = readRegistry().at(-1);
+    if (!target) { this.unmountAll(); return 0; }
+    try {
+      if (!statSync(target).isDirectory()) throw new Error("目录不存在");
+      const repositoryId = deriveRepositoryId(target);
+      const database = new TutorDatabase(target);
+      const index = database.getIndex(repositoryId);
+      const course = database.getCourse(repositoryId);
+      const analysis = database.getAnalysis(repositoryId);
+      const estimate = database.getEstimate(repositoryId);
+      database.close();
+      if (!index || !course || !analysis || !estimate) throw new Error(".tutor 数据不完整");
+      this.mount({ path: target, index, course, estimate, analysis });
+      writeMountedRepository(target);
+      return 1;
+    } catch {
+      this.unmountAll();
+      writeMountedRepository();
+      return 0;
     }
-    // 注册表里已失效的路径（目录被删/移动）清掉，避免无限累积
-    if (alive.length !== paths.length) writeRegistry(alive);
-    return restored;
+  }
+
+  /** 挂载一个仓库并监听：先卸载已有仓库（含同一 id 的旧实例，其 watcher 一并 close），保证单槽。 */
+  private mount(repository: ImportedRepository): void {
+    this.unmountAll();
+    repository.watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repository.index.repositoryId, changedPaths));
+    repository.watcher.start();
+    this.repositories.set(repository.index.repositoryId, repository);
+  }
+
+  /** 卸载全部仓库并停掉它们的 fs 监听；fs.FSWatcher.close() 幂等，重复关闭无害。 */
+  private unmountAll(): void {
+    for (const repository of this.repositories.values()) repository.watcher?.close();
+    this.repositories.clear();
   }
 
   private async run(jobId: string): Promise<void> {
@@ -127,15 +128,11 @@ export class ImportService extends EventEmitter {
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message));
       const { index, course, estimate, analysis } = imported;
 
-      const previous = this.repositories.get(index.repositoryId);
-      previous?.watcher?.close();
-      const repository: ImportedRepository = { path: job.repositoryPath, index, course, estimate, analysis };
-      repository.watcher = new RepositoryWatcher(job.repositoryPath, (changedPaths) => void this.reanalyzeIncrementally(index.repositoryId, changedPaths));
-      repository.watcher.start();
-      this.repositories.set(index.repositoryId, repository);
+      // 单槽：新导入的仓库成为唯一挂载项，旧仓库（含其 watcher）在此被卸载
+      this.mount({ path: job.repositoryPath, index, course, estimate, analysis });
       job.repositoryId = index.repositoryId;
       try {
-        recordRepositoryPath(job.repositoryPath);
+        writeMountedRepository(job.repositoryPath);
       } catch (error) {
         // 注册表写失败不影响导入结果（重启后大不了重新导入），只提示
         console.warn(`[import] 仓库注册表写入失败：${error instanceof Error ? error.message : String(error)}`);

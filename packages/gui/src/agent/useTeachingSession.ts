@@ -266,12 +266,12 @@ useEffect(() => {
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     try {
       const reply = scope === "map"
-        ? await api.mapChatStream(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined }, (event) => {
+        ? await api.mapChatStream(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined, style: settings.style }, (event) => {
             setScopeProgress("map", event.stage === "reading"
               ? `正在读取 ${event.path || "文件"} …`
               : "回复生成中…");
           })
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id });
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, style: settings.style });
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
     } catch (reason) {

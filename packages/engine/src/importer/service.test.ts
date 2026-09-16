@@ -72,21 +72,51 @@ describe("ImportService.restorePersisted（engine 重启恢复注册）", () => 
     repository?.watcher?.close(); // 测试收尾，停掉 fs.watch
   });
 
-  it("目录已删除的注册条目被剔除，不影响其他仓库恢复", () => {
-    const { repoDir, repositoryId } = makePersistedRepo(root, "beta");
+  it("单槽：注册表里只有最后挂载的那一条进内存，文件被规范化成单条", () => {
+    const alpha = makePersistedRepo(root, "alpha");
+    const beta = makePersistedRepo(root, "beta");
     mkdirSync(dirname(registryFile), { recursive: true });
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [join(root, "deleted-repo"), repoDir] })}\n`);
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: [alpha.repoDir, beta.repoDir] })}\n`);
 
     const service = new ImportService();
-    const restored = service.restorePersisted();
-    expect(restored).toBe(1);
-    expect(service.getRepository(repositoryId)).toBeDefined();
+    expect(service.restorePersisted()).toBe(1);
+    expect(service.getRepository(beta.repositoryId)).toBeDefined();
+    expect(service.getRepository(alpha.repositoryId)).toBeUndefined(); // 非最后挂载的那条不再被监听
 
-    // 失效条目被清出注册表
     const remaining = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
-    expect(remaining.repositories).toEqual([repoDir]);
+    expect(remaining.repositories).toEqual([beta.repoDir]);
 
-    service.getRepository(repositoryId)?.watcher?.close();
+    service.getRepository(beta.repositoryId)?.watcher?.close();
+  });
+
+  it("单槽：切换到另一个仓库时，旧仓库被卸载，不再留在内存注册表里", () => {
+    const alpha = makePersistedRepo(root, "alpha");
+    const beta = makePersistedRepo(root, "beta");
+    mkdirSync(dirname(registryFile), { recursive: true });
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: [alpha.repoDir] })}\n`);
+
+    const service = new ImportService();
+    expect(service.restorePersisted()).toBe(1);
+    expect(service.getRepository(alpha.repositoryId)).toBeDefined();
+
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: [beta.repoDir] })}\n`);
+    expect(service.restorePersisted()).toBe(1);
+    expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
+    expect(service.getRepository(beta.repositoryId)).toBeDefined();
+
+    service.getRepository(beta.repositoryId)?.watcher?.close();
+  });
+
+  it("最后一条目录已删除：不恢复任何仓库，注册表被清空（不留回挂条目）", () => {
+    const { repoDir } = makePersistedRepo(root, "beta");
+    mkdirSync(dirname(registryFile), { recursive: true });
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: [repoDir, join(root, "deleted-repo")] })}\n`);
+
+    const service = new ImportService();
+    expect(service.restorePersisted()).toBe(0);
+
+    const remaining = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
+    expect(remaining.repositories).toEqual([]);
   });
 
   it("空注册表直接返回 0，不做任何 IO", () => {

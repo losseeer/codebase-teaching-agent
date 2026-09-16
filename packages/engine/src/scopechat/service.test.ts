@@ -61,7 +61,8 @@ describe("mapChat", () => {
       node: { id: "n1", title: "启动流程", summary: "应用入口的装配顺序", kind: "workflow", anchors: [], children: [] },
       path: "src/app.ts",
       content: "为什么要分层？",
-      provider
+      provider,
+      style: 50
     });
     expect(result.reply).toContain("基于上下文");
     expect(result.provider).toBe("fake-provider");
@@ -100,6 +101,7 @@ describe("mapChat", () => {
       path: "src/app.ts",
       content: "service.ts 里定义了什么？",
       provider,
+      style: 50,
       onProgress: (progress) => progressEvents.push(progress)
     });
     expect(result.reply).toContain("读完文件后的回答");
@@ -139,7 +141,7 @@ describe("mapChat", () => {
         return script[index++] ?? script[script.length - 1];
       }
     };
-    const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider });
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider, style: 50 });
     expect(result.reply).toContain("三轮后的回答");
     const third = calls[2];
     const toolResults = third.messages?.filter((m) => m.role === "tool") ?? [];
@@ -169,7 +171,8 @@ describe("practiceChat", () => {
       repoPath: import.meta.dirname,
       exercise,
       content: "为什么不是 config.ts？",
-      provider
+      provider,
+      style: 50
     });
     const user = calls[0].user;
     expect(user).toContain("修改定位");
@@ -179,5 +182,23 @@ describe("practiceChat", () => {
     expect(user).not.toContain("expectedIds");
     expect(user).not.toContain("answerKey");
     expect(result.reply).toContain("基于上下文");
+  });
+});
+
+describe("作用域 prompt 单源（风格档位进入系统提示词）", () => {
+  it("map：风格档位进入 system prompt，与代码教学共用同一份 styleBrief", async () => {
+    const { provider, calls } = fakeProvider();
+    await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "一次请求怎么走？", provider, style: 90 });
+    expect(calls[0].system).toContain("通俗讲解风格");
+    expect(calls[0].system).toContain("生活类比");
+    expect(calls[0].system).toContain("宏观设计");
+  });
+
+  it("practice：低档位走严谨侧，且仍不透露判分标准", async () => {
+    const { provider, calls } = fakeProvider();
+    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "为什么？", provider, style: 10 });
+    expect(calls[0].system).toContain("工程评审式严谨风格");
+    expect(calls[0].system).toContain("直接证据");
+    expect(calls[0].system).toContain("判分标准没有提供给你");
   });
 });

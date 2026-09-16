@@ -20,7 +20,7 @@ import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
 import { ImportService } from "./importer/service.js";
 import { isWithin } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
-import { defaultTutorSettings, policyFor, validateSettings } from "./policy/policy.js";
+import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./policy/policy.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, readJournal } from "./store/journal.js";
 import { deriveLearnerProfile } from "./learner/model.js";
@@ -54,9 +54,9 @@ const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "warn" } });
 tboot("Fastify constructed");
 
 const importer = new ImportService();
-// 启动恢复：把注册表里各仓库 .tutor 持久化的分析结果重新挂进内存（GUI 旧 workspace 不再 404，无需重新导入重烧润色）
+// 启动恢复（单槽）：把注册表里那一个仓库的 .tutor 分析结果重新挂进内存并监听（GUI 旧 workspace 不再 404，无需重新导入重烧润色）
 const restoredRepositories = importer.restorePersisted();
-if (restoredRepositories) console.log(`[startup] 已从 .tutor 恢复 ${restoredRepositories} 个仓库，无需重新导入`);
+if (restoredRepositories) console.log("[startup] 已从 .tutor 恢复上次挂载的仓库，无需重新导入");
 tboot("ImportService");
 
 const exercises = new ExerciseService();
@@ -315,7 +315,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -324,7 +324,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider, style: validateStyle(request.body?.style) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -342,7 +342,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -358,6 +358,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   try {
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider,
+      style: validateStyle(request.body?.style),
       onProgress: (progress: MapChatProgress) => send(progress)
     });
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -377,7 +378,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -389,7 +390,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   try {
     const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
     if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider, style: validateStyle(request.body?.style) });
     if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"

@@ -65,7 +65,7 @@ export const api = {
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。 */
-  mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; path?: string }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {
+  mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; path?: string; style: number }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {
     const response = await fetch(`/api/repositories/${repositoryId}/map-chat/stream`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!response.ok || !response.body) {
       const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
@@ -103,5 +103,5 @@ export const api = {
     if (!final) throw new Error("连接中断，未收到完整回复");
     return final;
   },
-  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string }) => request<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { method: "POST", body: JSON.stringify(payload) })
+  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; style: number }) => request<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { method: "POST", body: JSON.stringify(payload) })
 };

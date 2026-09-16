@@ -14,6 +14,8 @@ export interface DependencyGraph {
 
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
+/** TS/JS 的说明符一律带引号；Python 的 import 语句没有引号，另走 extractPythonSpecifiers。 */
+const tsSpecifierPattern = /(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g;
 
 /**
  * Produces an import graph plus project-local call graph. The static analyzer is
@@ -30,8 +32,8 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
     if (!extensions.includes(file.extension)) continue;
     const content = readFileSync(join(repositoryPath, file.path), "utf8");
     contents.set(file.path, content);
-    const matches = [...content.matchAll(/(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g)].map((match) => match[1]);
-    const resolved = matches.map((value) => resolveImport(file.path, value, available, packages)).filter((value): value is string => Boolean(value));
+    const specifiers = file.extension === ".py" ? extractPythonSpecifiers(content) : [...content.matchAll(tsSpecifierPattern)].map((match) => match[1]);
+    const resolved = specifiers.map((value) => resolveImport(file.path, value, available, packages)).filter((value): value is string => Boolean(value));
     imports.set(file.path, [...new Set(resolved)]);
     symbols.push(...extractSymbols(file.path, content));
   }
@@ -148,6 +150,39 @@ function dedupeCalls(calls: CallEdge[]): CallEdge[] {
   });
 }
 
+/**
+ * Python 的 import 语句不带引号、模块名用点号分隔，需要单独提取：
+ * `import a.b as c`、`import a, b`、`from a.b import c`、`from . import c`（相对包）。
+ * 第三方模块（fastapi、langgraph）也会被提取出来，最终由 resolvePythonImport 按「仓库内是否存在」过滤。
+ */
+function extractPythonSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const fromMatch = trimmed.match(/^from\s+([.\w]+)\s+import\s+(.*)$/);
+    if (fromMatch) {
+      const module = fromMatch[1];
+      specifiers.push(module);
+      // `from a.b import c` 里的 c 可能是子模块，也可能是符号名 —— 两种都给出，交由可用性判定
+      for (const name of readImportedNames(fromMatch[2])) specifiers.push(module.endsWith(".") ? `${module}${name}` : `${module}.${name}`);
+      continue;
+    }
+    const importMatch = trimmed.match(/^import\s+(.*)$/);
+    if (importMatch) specifiers.push(...readImportedNames(importMatch[1]));
+  }
+  return specifiers;
+}
+
+/** 从 `a, b.c as d` 里取出模块名（剥掉别名、括号与行尾注释）。 */
+function readImportedNames(raw: string): string[] {
+  return raw
+    .split("#")[0]
+    .split(",")
+    .map((item) => item.split(/\s+as\s+/)[0].replace(/^\(+/, "").replace(/\)+$/, "").trim())
+    .filter((item) => /^[A-Za-z_][\w.]*$/.test(item));
+}
+
 interface WorkspacePackage {
   dir: string;
   main?: string;
@@ -168,7 +203,23 @@ function collectWorkspacePackages(repositoryPath: string, files: FileEntry[]): M
   return packages;
 }
 
+/**
+ * Python 模块名 → 仓库内文件：绝对导入从仓库根起算（`a.b.c` → `a/b/c.py` 或 `a/b/c/__init__.py`），
+ * 相对导入以当前文件所在包为基准（`.` = 当前包，`..` 再上溯一层）。
+ */
+function resolvePythonImport(from: string, specifier: string, available: Set<string>): string | undefined {
+  const level = specifier.match(/^\.+/)?.[0].length ?? 0;
+  const relative = specifier.slice(level);
+  let base = level > 0 ? dirname(from) : "";
+  for (let index = 1; index < level; index += 1) base = dirname(base);
+  const module = relative.replaceAll(".", "/");
+  const target = [base, module].filter(Boolean).join("/");
+  if (!target || target === ".") return undefined;
+  return [`${target}.py`, `${target}/__init__.py`].find((candidate) => available.has(candidate));
+}
+
 function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>): string | undefined {
+  if (from.endsWith(".py")) return resolvePythonImport(from, specifier, available);
   const tryResolve = (candidate: string): string | undefined => {
     const normalized = normalize(candidate).replaceAll("\\", "/");
     const direct = [normalized];

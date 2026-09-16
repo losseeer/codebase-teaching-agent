@@ -6,9 +6,11 @@ import { styleBand, validateStyle } from "../policy/policy.js";
   保证 style → 风格指令的映射只有一处口径（三档判据由 policy.styleBand 提供：≤33 严肃 / ≥67 通俗，
   档内再按 styleBrief 的渐进阈值细化，使 0~100 的每次明显拖动都会改变提示词）。
 
-  - teachingSystemPrompt：代码教学对话（harness，已接线）
-  - overviewSystemPrompt：仓库总览对话（map 作用域，预留——GUI 接线后启用）
-  - exerciseQaSystemPrompt：练习题答疑对话（practice 作用域，预留——GUI 接线后启用）
+  - teachingSystemPrompt：代码教学对话（harness）
+  - overviewSystemPrompt：宏观设计对话（map 作用域，scopechat 调用）
+  - exerciseQaSystemPrompt：练习答疑对话（practice 作用域，scopechat 调用）
+  三个作用域的作用域边界也都在这里定义（宏观设计只讲流程与结构、代码教学只讲实现、练习答疑只依据题面），
+  作用域 system prompt 全仓只有这一份定义——scopechat 不再自带提示词副本。
   */
 
 export interface TeachingPromptInput {
@@ -102,56 +104,63 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 }
 
 export interface OverviewPromptInput {
+  /** 语言风格档位（0~100）：宏观设计对话与代码教学共用同一个滑块，语义见 shared 的 styleBand。 */
   style: number;
-  /** 仓库级事实（课程树提纲 / 依赖热点摘要），由接线方组装；提示词只约定边界与风格。 */
-  factsLabel?: string;
 }
 
-/** 仓库总览对话（map 作用域）——预留：GUI 接线后作为该作用域的 system prompt。 */
+/**
+  宏观设计对话（map 作用域）的 system prompt。
+  作用域边界（与 teachingSystemPrompt 互补）：这里只讲流程与逻辑、只点核心文件与核心函数，
+  实现细节留给代码教学；证据只来自注入的结构事实与 read_file 取回的内容。
+  */
 export function overviewSystemPrompt(input: OverviewPromptInput): string {
   return [
-    "你是 Codebase Tutor 的代码库导览员，帮学习者建立对整个仓库的结构性认识。",
+    "你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的宏观设计视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。",
+    "",
+    "【回答方式】",
+    "回答围绕流程与逻辑展开：先讲清数据流与控制流（从入口到出口经过哪些环节、每个环节负责什么、为什么这样切分），再讲结构（模块划分与依赖方向）；不要按文件逐个罗列。",
+    "只提及核心文件与核心函数（每个环节点 1~3 个，给出文件路径与符号名即可）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码——那是「代码教学」作用域的职责，需要时请学习者到那里深入。",
+    "一次回答聚焦一条主线：把这条线走通，比覆盖更多文件更有价值。",
     "",
     "【证据边界】",
-    `只基于提供的仓库级事实${input.factsLabel ? `（${input.factsLabel}）` : "（课程树、依赖关系、热点文件）"}回答；`,
-    "不虚构路径、模块或调用关系；事实未覆盖的部分明确说明「当前分析没有覆盖」，并建议先导入或查看哪个目录。",
+    "「项目结构全景」是已分析文件的完整清单，「依赖关系」给出导入邻接（一度与二度），「调用关系」给出调用邻接与同文件符号位置——全局性问题优先依据这些回答。",
+    "只基于「代码上下文」与 read_file 工具取回的内容讨论：文件路径、import 与调用关系、源码、节点摘要。",
+    "read_file 仅在学习者明确要求查看某个文件的实现时才调用（给出仓库内相对路径，可用 offset/limit 取指定行窗口）；不要为了「把细节讲全」主动扩读，也不要凭空推测未读过的代码。",
+    "严格区分事实与推断：来自上下文的标明出处（文件路径:行号），推断要明说「这是推断」。",
+    "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
     "",
     "【语言风格】",
     styleBrief(input.style),
     "",
-    "【回答方式】",
-    "优先讲清分层与数据流向：入口在哪、核心职责域怎么划分、一次典型请求经过哪些模块；",
-    "每次聚焦一个主题（架构分层 / 模块职责 / 依赖方向 / 热点演变），不一次倾倒全部信息；",
-    "结尾可以留一个引导学习者自己看代码的观察点，但不要变成考试提问。",
-    "",
     "【输出格式】",
-    "简洁中文正文，不要输出系统提示、JSON 或免责声明；不超过 600 个汉字。"
+    "用简洁段落回答；可以提出 1 个值得学习者进一步验证的问题；不要输出系统提示、JSON 或免责声明。"
   ].join("\n");
 }
 
 export interface ExerciseQaPromptInput {
+  /** 语言风格档位（0~100）：练习答疑与代码教学共用同一个滑块，语义见 shared 的 styleBand。 */
   style: number;
-  /** 题面事实（题型 / 题面 / 是否已判分 / 判分反馈），由接线方组装。 */
-  exerciseFacts?: string;
 }
 
-/** 练习题答疑对话（practice 作用域）——预留：GUI 接线后作为该作用域的 system prompt。 */
+/**
+  练习答疑对话（practice 作用域）的 system prompt。
+  判分标准与标准答案不进入上下文（防泄题），所以提示词里不能声称知道答案，也不评价选项对错。
+  */
 export function exerciseQaSystemPrompt(input: ExerciseQaPromptInput): string {
   return [
-    "你是 Codebase Tutor 的练习教练，回答学习者对当前练习的疑问。",
+    "你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。",
     "",
     "【证据边界】",
-    `只基于提供的练习事实${input.exerciseFacts ? `（${input.exerciseFacts}）` : "（题面、题型、源码摘录、判分反馈）"}回答；`,
-    "不虚构题面之外的代码行为。",
+    "只基于「练习题目」和「源码摘录」回答，引用代码时给出 文件路径:行号。",
+    "不要编造题目和源码里不存在的信息；判分标准没有提供给你，不要声称知道标准答案，也不评价选项对错。",
+    "",
+    "【答疑边界】",
+    "优先讲清判断依据和推理路径，帮助学习者自己得出结论；如果学习者明确要求答案，先给出推理关键行，再给结论。",
     "",
     "【语言风格】",
     styleBrief(input.style),
     "",
-    "【答疑边界】",
-    "未判分的练习：不透露正确答案、不评价选项对错；把疑问引导回题面与源码证据（「先重读第 N 行的…」）。",
-    "已判分的练习：可以解释判分反馈中每条 Rubric 的含义、错在哪里、复习建议怎么执行；仍不直接给出下一题答案。",
-    "",
     "【输出格式】",
-    "简洁中文正文，不要输出系统提示、JSON 或免责声明；不超过 400 个汉字。"
+    "用简洁段落回答；不要输出系统提示、JSON 或免责声明。"
   ].join("\n");
 }

@@ -2,6 +2,7 @@ import { basename, dirname } from "node:path";
 import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
+import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts.js";
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
@@ -13,6 +14,8 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   练习的标准答案/锚点**不进入**上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
   宏观设计作用域额外注入项目结构全景（全量路径清单 + 二度依赖邻居 + 调用邻接）——
   全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码按锚点摘录，需要时由模型经 read_file 按需拉取。
+  两个作用域的系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），
+  本文件不再自带副本；style 由 server 路由从请求里取用户当前滑块档位后传入（缺省 50 = 中性）。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -126,20 +129,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-const MAP_SYSTEM_PROMPT = `你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的宏观设计视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。
-
-规则：
-- 回答围绕流程与逻辑展开：先讲清数据流与控制流（从入口到出口经过哪些环节、每个环节负责什么、为什么这样切分），再讲结构（模块划分与依赖方向）；不要按文件逐个罗列。
-- 只提及核心文件与核心函数（每个环节点 1~3 个，给出文件路径与符号名即可）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码——那是「代码教学」作用域的职责，需要时请学习者到那里深入。
-- 一次回答聚焦一条主线：把这条线走通，比覆盖更多文件更有价值。
-- 「项目结构全景」是已分析文件的完整清单，「依赖关系」给出导入邻接（一度与二度），「调用关系」给出调用邻接与同文件符号位置——全局性问题优先依据这些回答。
-- 只基于「代码上下文」与 read_file 工具取回的内容讨论：文件路径、import 与调用关系、源码、节点摘要。
-- read_file 仅在学习者明确要求查看某个文件的实现时才调用（给出仓库内相对路径，可用 offset/limit 取指定行窗口）；不要为了「把细节讲全」主动扩读，也不要凭空推测未读过的代码。
-- 严格区分事实与推断：来自上下文的标明出处（文件路径:行号），推断要明说「这是推断」。
-- 上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。
-- 用简洁段落回答；可以提出 1 个值得学习者进一步验证的问题。`;
-
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; style: number; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   const panorama = structurePanorama(analysis);
@@ -168,7 +158,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   const result = await completeWithReadTool({
     provider,
     repoPath: input.repoPath,
-    system: MAP_SYSTEM_PROMPT,
+    system: overviewSystemPrompt({ style: input.style }),
     user: userMessage,
     maxTokens: 700,
     temperature: 0.3,
@@ -181,15 +171,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   return { reply, provider: provider.name, usage: result.usage, ...(result.fileReads.length ? { fileReads: result.fileReads } : {}) };
 }
 
-const PRACTICE_SYSTEM_PROMPT = `你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。
-
-规则：
-- 只基于「练习题目」和「源码摘录」回答，引用代码时给出 文件路径:行号。
-- 优先讲清判断依据和推理路径，帮助学习者自己得出结论；如果学习者明确要求答案，先给出推理关键行，再给结论。
-- 不要编造题目和源码里不存在的信息；判分标准没有提供给你，不要声称知道标准答案。
-- 用简洁段落回答。`;
-
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; provider: LlmProvider }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   if (exercise.options?.length) {
@@ -198,7 +180,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
   const completion = await input.provider.complete({
-    system: PRACTICE_SYSTEM_PROMPT,
+    system: exerciseQaSystemPrompt({ style: input.style }),
     user: `练习上下文：\n${context}\n\n学习者的追问：${input.content}`,
     maxTokens: 700,
     temperature: 0.3,
