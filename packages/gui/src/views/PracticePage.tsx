@@ -6,6 +6,7 @@ import type { TeachingSessionApi } from "../agent/useTeachingSession";
 import { exerciseKindLabel } from "./helpers";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
+import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/store";
 import { SourceView, type SourcePayload } from "../source/SourceView";
@@ -104,9 +105,18 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
   }, [exercise?.id, repositoryId]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  /** 模块切换是设计文档第 8 章点名要可查的操作；id 未变（重复点同一 chip）不记，避免假轨迹。
+      `list` 供「新增/删除模块」路径传入尚未提交的新列表——否则 label 会取到旧值。 */
+  const switchModule = (id: string, list: KnowledgeModule[] = modules): void => {
+    if (id === activeModule) return;
+    setActiveModule(id);
+    emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? id).slice(0, 120) });
+  };
   const submit = async (): Promise<void> => {
     if (!exercise) return;
     setLoading(true); setError("");
+    // 提交动作先记（用户做了什么），判分结果是引擎侧的事，落在 journal 的 exercise_result
+    emit(repositoryId, "exercise_submitted", { exercise_id: exercise.id, kind: exercise.kind, module: activeModule, target_unit: exercise.targetUnitId });
     try {
       const answer = exercise.inputMode === "multi_select" ? { selectedIds } : { text };
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
@@ -144,8 +154,8 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
             header="练习模块"
             modules={modules}
             activeId={activeModule}
-            onSelectModule={setActiveModule}
-            onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
+            onSelectModule={switchModule}
+            onModulesChange={(next, nextActive) => { setModules(next); switchModule(nextActive, next); }}
           >
             <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 主题可在「＋ 配置」里自定义</p>
             <ModuleSectionLabel label="模块内的练习" note={`${moduleMastery.length} 项`} />

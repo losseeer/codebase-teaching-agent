@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
+import { currentTraceId } from "../trace/context.js";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。
@@ -9,6 +10,8 @@ import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.
   - 落盘：JSONL 追加到 `TUTOR_LLM_LOG`（默认 `~/.codebase-tutor/llm.log`）；设为 `off`/`none`/`0` 只打控制台。
   - 控制台：一行摘要，与 engine 其它日志同风格（`[llm] …`）。
   - 失败**照记**并原样抛出：日志的存在不能把失败伪装成成功（静默降级是明令禁止的）。
+  - `traceId` 来自请求上下文（`trace/context.ts`），与 `engine.jsonl` 的同类字段构成关联键：
+    「一次请求 → N 次 LLM 调用」靠它串起来，不再靠时间戳硬凑。
   - 覆盖范围：走 `LlmProvider` 的调用（教学回合、map/practice 对话、出题、判分、题面润色、推荐入口、宏观设计命名）。
     导入期的文件摘要走独立的 `SummaryProvider`（默认本地启发式、不发请求；Ollama 档为本机服务）**不在此列**。
 
@@ -29,6 +32,8 @@ export interface LlmCallRecord {
   /** 墙钟耗时（ms）——仅用于观察延迟，成本口径一律看 token */
   ms: number;
   thinking: string;
+  /** 触发本次调用的请求 traceId；后台任务（导入期润色）为 null。与 engine.jsonl 的关联键。 */
+  traceId: string | null;
   tools?: string[];
   inputTokens?: number;
   outputTokens?: number;
@@ -107,6 +112,7 @@ export class LoggingLlmProvider implements LlmProvider {
       provider: this.name,
       model: this.modelVersion,
       thinking: input.thinking ?? "auto",
+      traceId: currentTraceId(),
       ...(input.tools?.length ? { tools: input.tools.map((tool) => tool.name) } : {})
     };
     try {

@@ -501,7 +501,19 @@ export interface CompanionSummary {
   acceptanceRate: number | null;
 }
 
+/**
+  学习日志事件类型。分两类：
+
+  - 引擎侧（学习语义）：unit_mastered 起至 file_read；由引擎在状态机 / 工具循环 / 成本核算里写。
+  - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
+    这条契约来自设计文档第 8 章 PRINCIPLE 03「可观测」：每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
+
+  ⚠️ 改这里必须同步 `packages/engine/src/store/journal.ts` 的运行时 `eventTypes` Set——
+  它才是 `Journal.append` 的白名单，漏同步会在运行期抛 `Unknown journal event`。
+  append-only：只许新增，不许改名或删除既有取值。
+  */
 export type JournalEventType =
+  // 引擎侧
   | "unit_mastered"
   | "exercise_result"
   | "hint_depth"
@@ -512,7 +524,15 @@ export type JournalEventType =
   | "action_veto"
   | "exercise_declined"
   | "token_usage"
-  | "file_read";
+  | "file_read"
+  // UI 侧
+  | "flow_node_selected"
+  | "file_anchored"
+  | "file_opened"
+  | "line_located"
+  | "module_switched"
+  | "exercise_submitted"
+  | "repository_switched";
 
 export interface JournalEvent {
   id: string;
@@ -520,7 +540,32 @@ export interface JournalEvent {
   at: string;
   repositoryId: string;
   sessionId?: string;
+  /** 产生该事件的请求 traceId；后台任务（导入 / 监听刷新）无请求上下文时为 null。 */
+  traceId?: string | null;
   payload: Record<string, string | number | boolean | null>;
+}
+
+/** 引擎工作日志（trace）里允许出现的标量——与 journal payload 同口径，避免结构化对象随版本漂移。 */
+export type TraceScalar = string | number | boolean | null;
+
+/**
+  引擎工作日志的事件种类。只描述「引擎这个进程在干活」，不描述对话语义：
+  - http     一次 HTTP 请求（method / url / status / 耗时）
+  - import   导入任务（索引 → 摘要 → 建课 → LLM 润色的阶段推进与结果）
+  - reindex  挂载仓库被写入触发的重分析
+  - degrade  降级与预算熔断（不静默：降级必须留痕）
+  - boot     启动分段计时
+  LLM 调用明细不在此列——它落在 `~/.codebase-tutor/llm.log`，两处靠 traceId 关联（单一事实来源，不双写）。
+  */
+export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "boot";
+
+export interface EngineTraceEvent {
+  at: string;
+  kind: EngineTraceKind;
+  /** 关联键：同一请求产生的 http / llm / journal 事件共享它；后台任务为 null。 */
+  traceId: string | null;
+  durationMs?: number | null;
+  detail: Record<string, TraceScalar>;
 }
 
 export interface ServerEvent {

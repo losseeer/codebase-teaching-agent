@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, FolderGit2, RefreshCw } from "lucide-react";
 import type { ImportJob } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
+import { emit } from "../journal";
 import { phaseLabel } from "./helpers";
 
 /**
@@ -23,6 +24,8 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
   const [error, setError] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   const navigate = useNavigate();
+  /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
+  const switchLogged = useRef(false);
 
   // 进度更新主通道 = /ws 广播（引擎每个进度事件都 publish import.progress）；
   // 5s 轮询是兜底——WS 断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
@@ -46,6 +49,10 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
     if (job?.phase !== "completed" || !job.repositoryId) return;
     onImported({ repositoryId: job.repositoryId, repositoryPath: job.repositoryPath });
     api.getReport(job.repositoryId).then(setReport).catch(() => undefined);
+    if (!switchLogged.current) {
+      switchLogged.current = true;
+      emit(job.repositoryId, "repository_switched", { repository_path: job.repositoryPath, trigger: "import" });
+    }
   }, [job?.phase, job?.repositoryId]);
 
   const submit = async (): Promise<void> => {

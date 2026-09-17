@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
@@ -19,11 +19,13 @@ import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
 import { ImportService } from "./importer/service.js";
-import { isWithin } from "./lib.js";
+import { id, isWithin } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./policy/policy.js";
 import { TutorDatabase } from "./store/database.js";
-import { Journal, readJournal } from "./store/journal.js";
+import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
+import { runWithTrace } from "./trace/context.js";
+import { traceEngine } from "./trace/engine-log.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { resolveLightModelSlug, resolveTeachingModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
@@ -43,15 +45,27 @@ const engineVersion: string = (() => {
   }
 })();
 
-/** 启动耗时分段计时：TUTOR_BOOT_TIMING=1 时打印，默认 no-op 保持日志干净。 */
+/** 启动耗时分段计时：始终落引擎日志（kind: boot），控制台回显由 TUTOR_BOOT_TIMING=1 控制。 */
 const T0 = _perf.now();
-const tboot = process.env.TUTOR_BOOT_TIMING === "1"
-  ? (label: string): void => console.log(`[boot] +${(_perf.now() - T0).toFixed(0).padStart(5)}ms ${label}`)
-  : (): void => {};
+const tboot = (label: string): void => {
+  const durationMs = Math.round(_perf.now() - T0);
+  if (process.env.TUTOR_BOOT_TIMING === "1") console.log(`[boot] +${String(durationMs).padStart(5)}ms ${label}`);
+  traceEngine("boot", { phase: label }, { traceId: null, durationMs });
+};
 
 tboot("imports resolved");
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "warn" } });
+const app = Fastify({
+  // traceId 即 reqId：pino 的请求行、本进程记的 trace 事件、llm.log 与 journal 共享同一个 id
+  genReqId: () => id(),
+  logger: { level: process.env.LOG_LEVEL ?? "warn" }
+});
+// 请求级 trace 上下文：`run(id, done)` 让后续钩子与 handler 继承该 store（传播原理见 trace/context.ts）
+app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
+app.addHook("onResponse", (request, reply, done) => {
+  traceEngine("http", { method: request.method, url: request.url, status: reply.statusCode }, { traceId: request.id, durationMs: Math.round(reply.elapsedTime) });
+  done();
+});
 tboot("Fastify constructed");
 
 const importer = new ImportService();
@@ -567,10 +581,45 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
   }
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
-  if (cost.mode === "degraded") journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
+  if (cost.mode === "degraded") {
+    journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
+    // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
+    traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
+  }
   for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });
   broadcast({ type: "session.complete", payload: { sessionId: session.id, message: outcome.assistant, stage: outcome.session.stage, cost, tokenEventId: tokenEvent.id } });
   return { session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" };
+});
+
+/**
+  UI 动作事件出口（设计文档第 8 章 PRINCIPLE 03「可观测」）：
+  每一次切节点、打开文件、切换模块、提交练习都必须有 journal 事件可查——缺事件的 UI 操作是设计漏洞。
+
+  契约要点：
+  - 白名单与 `Journal.append` **共用**（`isJournalEventType`），不另立一份，避免两处漂移。
+  - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
+  - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
+    sessionId 是关联属性而非外键；且 `sessions` 是进程内存态，引擎一重启旧 id 就查不到，
+    若按外键拒绝，前端每次重启后都会写不进事件——那才是真的把可观测性弄丢。
+  */
+app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: unknown; sessionId?: unknown } }>("/api/repositories/:repositoryId/journal", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const { type, payload, sessionId } = request.body ?? {};
+  if (!isJournalEventType(type)) return reply.code(400).send({ error: "事件类型不在 journal 契约内。" });
+  if (payload !== undefined && (typeof payload !== "object" || payload === null || Array.isArray(payload))) {
+    return reply.code(400).send({ error: "payload 必须是对象。" });
+  }
+  const scalars = (payload ?? {}) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(scalars)) {
+    if (value === null || typeof value === "number" || typeof value === "boolean") continue;
+    if (typeof value !== "string") return reply.code(400).send({ error: `payload.${key} 仅允许 string | number | boolean | null。` });
+    if (value.length > 2000) return reply.code(400).send({ error: `payload.${key} 过长（上限 2000 字符）。` });
+  }
+  if (sessionId !== undefined && typeof sessionId !== "string") return reply.code(400).send({ error: "sessionId 必须是字符串。" });
+  const event = new Journal(repository.path, repository.index.repositoryId)
+    .append(type, scalars as JournalEvent["payload"], sessionId as string | undefined);
+  return reply.code(201).send(event);
 });
 
 function flatten(root: CourseNode): CourseNode[] { return [root, ...root.children.flatMap(flatten)]; }

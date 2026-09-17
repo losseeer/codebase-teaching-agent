@@ -7,6 +7,7 @@ import { EmptyState, Loading, flatten } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
+import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/store";
 import { SourceView, type SourcePayload } from "../source/SourceView";
@@ -28,6 +29,13 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  /** 当前打开的源码 tab 路径（与 tabs 同步镜像，含 slice(-5) 淘汰）：判定「新开文件」还是「就地定位」。 */
+  const openedPaths = useRef<string[]>([]);
+  /** 上一次自动定位过的锚点（`path:line`）。三视图常驻挂载 + StrictMode 下 effect 会在首挂载双跑，
+      没有这道闸就会对同一锚点重复拉源码、并把同一个 UI 动作记成两条 journal 事件
+      （`openedPaths` 在 setTabs 的 updater 里才更新，两次调用之间它还是空的，所以两边都会判成「新开文件」）。
+      只挡「同一锚点连发」，用户来回切节点仍会各记一条。 */
+  const lastAutoAnchor = useRef<string | null>(null);
 
   useEffect(() => { saveModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("teaching", activeModule); }, [activeModule]);
@@ -47,18 +55,30 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     try {
       const next = await api.getSource(repositoryId, path, line);
       setSource(next);
+      // 新文件 = file_opened；已开过的文件只是换行定位 = line_located。两件事不能混记成一条。
+      // 判定用 ref 而非 tabs state：连续两次 loadSource 之间可能还没提交渲染，用 state 会重复判成「新文件」。
+      const isNewFile = !openedPaths.current.includes(path);
       setTabs((current) => {
         const tab = { path, line };
         const existing = current.find((item) => item.path === path);
-        const nextTabs = existing ? current.map((item) => (item.path === path ? tab : item)) : [...current, tab];
-        return nextTabs.slice(-5);
+        const nextTabs = (existing ? current.map((item) => (item.path === path ? tab : item)) : [...current, tab]).slice(-5);
+        // 在 updater 里同步镜像（同一 current 重复执行是幂等的），含淘汰——被挤出窗口的文件再打开应重新算「新开」
+        openedPaths.current = nextTabs.map((item) => item.path);
+        return nextTabs;
       });
+      // trigger 区分「用户点的」与「切节点自动带过来的」：都属设计文档要求可查的操作，但下游要能分开统计
+      const trigger = announce ? "manual" : "auto";
+      if (isNewFile) emit(repositoryId, "file_opened", { path, line, trigger });
+      else emit(repositoryId, "line_located", { path, line, trigger });
       if (!announce) return;
       showToast(note ?? `已打开 · ${path}`);
     } catch { showToast(`无法读取 ${path}`); }
   }, [repositoryId]);
   useEffect(() => {
-    if (!anchor) { setSource(null); return; }
+    if (!anchor) { lastAutoAnchor.current = null; setSource(null); return; }
+    const key = `${anchor.path}:${anchor.line}`;
+    if (lastAutoAnchor.current === key) return;
+    lastAutoAnchor.current = key;
     // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
     void loadSource(anchor.path, anchor.line, undefined, false);
   }, [anchor?.path, anchor?.line, loadSource]);

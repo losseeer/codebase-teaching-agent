@@ -19,6 +19,7 @@ import { createSummaryProvider } from "../summarizer/provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal } from "../store/journal.js";
+import { traceEngine } from "../trace/engine-log.js";
 
 export interface ImportedRepository {
   path: string;
@@ -123,6 +124,7 @@ export class ImportService extends EventEmitter {
   private async run(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job) return;
+    const startedAt = Date.now();
     try {
       this.update(job, "indexing", 10, "正在建立文件树与 Git 热点索引");
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message));
@@ -139,11 +141,13 @@ export class ImportService extends EventEmitter {
       }
       this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区`);
       job.completedAt = new Date().toISOString();
+      traceEngine("import", { job: jobId, phase: "completed", repositoryId: index.repositoryId, files: index.totalFiles, cards: course.root.children.length }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       job.phase = "failed";
       job.error = error instanceof Error ? error.message : String(error);
       job.message = "导入失败";
       this.publish({ type: "import.progress", payload: job as unknown as Record<string, unknown> });
+      traceEngine("import", { job: jobId, phase: "failed", error: job.error }, { traceId: null, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -215,6 +219,7 @@ export class ImportService extends EventEmitter {
   private async reanalyzeIncrementally(repositoryId: string, changedPaths: string[]): Promise<void> {
     const current = this.repositories.get(repositoryId);
     if (!current) return;
+    const startedAt = Date.now();
     const impact = impactRadius({ imports: new Map(Object.entries(current.analysis.graph.imports)), calls: current.analysis.graph.calls, symbols: current.analysis.graph.symbols, entrypoints: current.analysis.graph.entrypoints, semanticBackend: current.analysis.graph.semanticBackend, lspStatus: current.analysis.graph.lspStatus }, changedPaths);
     try {
       const next = await this.analyze(current.path, () => undefined);
@@ -225,8 +230,12 @@ export class ImportService extends EventEmitter {
       next.watcher = current.watcher;
       this.repositories.set(repositoryId, next);
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths: impact.impactedPaths } });
+      // 只记条数与结果，不把路径数组塞进日志（payload 口径只允许标量）
+      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impact.impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
-      this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, error: error instanceof Error ? error.message : String(error) } });
+      const message = error instanceof Error ? error.message : String(error);
+      this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, error: message } });
+      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impact.impactedPaths.length, ok: false, error: message }, { traceId: null, durationMs: Date.now() - startedAt });
     }
   }
 

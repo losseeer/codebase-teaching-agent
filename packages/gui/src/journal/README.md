@@ -1,42 +1,76 @@
 # `journal/` — 事件发射（UI → journal.jsonl）
 
-> 所有 UI 操作必须有 `journal.jsonl` 事件可查——可观测性是设计文档第 8 章的三条界面约束之一（"可观测"）。
+> 所有 UI 操作必须有 `journal.jsonl` 事件可查——可观测性是设计文档第 8 章的三条界面约束之一（"可观测"）：
+> 「每一次切节点、打开文件、切换模块、提交练习，都必须有 `journal.jsonl` 事件可查——缺事件的 UI 操作是设计漏洞。」
 
 ## 当前状态
 
-**v0.1（未发射）**：前端所有交互（开文件 / 切模块 / 切 workspace / 判分 / 调节风格等）当前**不发射 journal 事件**。引擎端的 journal.jsonl 只记录学习事件（`unit_mastered` / `exercise_result` / `hint_depth` 等），不记录 UI 动作。
+**已落地**（2026-09-17）：本模块由 `emit.ts` / `events.ts` / `transport.ts` / `index.ts` 组成，
+四个工作区已接入，事件经 `POST /api/repositories/:id/journal` 写入该仓库的 `.tutor/journal.jsonl`。
 
-这是设计文档已固化但前端未落地的契约：
+此前（v0.1）前端不发射任何 journal 事件、引擎端只记学习事件；那段「契约已固化但未落地」的状态已经结束。
 
-`codebase-teaching-agent.html` 第 8 章 §界面 × 数据契约：
+## 事件 schema（就地冻结）
 
-| 工作区 | 读 | 写（journal 事件）| 不做 |
+对齐 `@codebase-tutor/shared` 的 `JournalEventType`。**append-only**：只许新增取值，不许改名或删除既有取值。
+
+| 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
 | 宏观设计 | 依赖图、目录索引、流程节点 | `flow_node_selected` · `file_anchored` | 不写 LLM 调用 |
-| 代码教学 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` | 不直接改源码、不写 style_shift |
+| 代码教学 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` | 不直接改源码、不写 `style_shift` |
 | 练习评估 | 题目实例、评分标准、ZPD | `module_switched` · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
+| 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |
 
-`开发计划.md` §9 事件 schema：周 3 冻结 v1（append-only 兼容）。
+### 两条边界（易混，写在这里免得再踩）
 
-## v0.2+ 实现目标
+1. **`style_shift` 由引擎写，前端不发射。** 契约表「不做」列已点名；引擎在两处写它
+   （`session_created` 与 `manual`），前端再写一遍就是同一事实双写、必然漂移。
+   此处与早前「接入点」清单里的 `TutorPage: 风格滑杆 → style_shift` 冲突，**以契约表为准**。
+2. **引擎侧事件前端不得发射**：`unit_mastered` / `hint_depth` / `dependency_event` / `action_veto` /
+   `token_usage` / `file_read` / `teach_moment` / `unassisted_test` / `exercise_result` / `exercise_declined`
+   都由引擎在状态机、工具循环与成本核算里写。前端只写「用户做了什么」，不写「引擎得出了什么」。
+   `exercise_submitted`（用户提交）与 `exercise_result`（判分结果）是两件事，各写各的。
 
-| 文件 | 职责 |
+### 字段与约束
+
+| 字段 | 约束 |
 |---|---|
-| `emit.ts` | 通用 emit 函数：`emit(eventType, payload)`，自动加 `at` / `repositoryId` / `sessionId` |
-| `events.ts` | 9 类 UI 事件类型常量：`flow_node_selected` / `file_anchored` / `file_opened` / `line_located` / `module_switched` / `exercise_submitted` / `exercise_result` / `hint_depth` / `style_shift` |
-| `transport.ts` | 传输通道：v0.2 走 POST `/api/.../journal`；v0.3+ 可改 WebSocket 批量 |
-| `index.ts` | 公共 API barrel |
+| `type` | 必须在 `JournalEventType` 白名单内；引擎侧 `Journal.append` 用**运行时** Set 校验，越界抛错 |
+| `at` | 引擎按 server 时间写成 ISO 8601；客户端时间只是参考，不参与排序 |
+| `repositoryId` | 由 URL 路径决定（引擎自己填），前端不传 |
+| `sessionId` | 可选。**不做存在性校验**——`sessions` 是引擎进程内存态，重启后旧 id 查不到；按外键拒绝会让前端每次重启后都写不进事件 |
+| `traceId` | 引擎从请求上下文自动填，前端不用管 |
+| `payload` | 仅允许 `string \| number \| boolean \| null`（避免结构化对象随版本漂移）；单个字符串 ≤ 2000 字符 |
 
-## 接入点（v0.2 任务）
+### 按工作区的接入点
 
-- `views/CoursePage.tsx`：节点选中 → `flow_node_selected`；锚点点击 → `file_anchored`
-- `views/TutorPage.tsx`：风格滑杆变化 → `style_shift`；课程节点切换 → `line_located`
-- `views/PracticePage.tsx`：模块切换 → `module_switched`；提交答案 → `exercise_submitted`（引擎端已发，前端可发 UI 端 `hint_depth`）
-- `views/ImportPage.tsx`：仓库导入完成 → `repository_switched`（新增）
+| 文件 | 触发 | 事件 |
+|---|---|---|
+| `views/CoursePage.tsx` | 点模块节点 / 流程环节 | `flow_node_selected`（`view` 区分 architecture / flow） |
+| `views/CoursePage.tsx` | 点目录文件 / 锚点 / 流程环节里的文件 | `file_anchored`（`source` 区分 tree / anchor / flow） |
+| `views/TutorPage.tsx` | 打开一个没开过的文件 | `file_opened` |
+| `views/TutorPage.tsx` | 已开过的文件换行定位（含切节点带过来的自动定位） | `line_located` |
+| `views/PracticePage.tsx` | 切换练习模块（id 未变不记） | `module_switched` |
+| `views/PracticePage.tsx` | 提交答案（判分结果由引擎记 `exercise_result`） | `exercise_submitted` |
+| `views/ImportPage.tsx` | 导入完成、工作区切换（只记一次） | `repository_switched` |
 
 ## 关键约束
 
-- **append-only**：事件发出后不修改、不删除；下游消费方做聚合
-- **at 时间戳**：客户端本地时间 + ISO 8601；引擎端按 server 时间为最终时间
-- **payload 类型**：仅允许 `string | number | boolean | null`（避免结构化对象随版本漂移）
-- **失败容错**：网络失败时入 localStorage 重试队列，避免 UI 操作不可观测
+- **append-only**：事件发出后不修改、不删除；下游消费方做聚合。
+- **失败容错**：网络失败或非 2xx 先 `console.warn`，再入 localStorage 重试队列
+  （`codebase-tutor.journal-retry`，上限 50 条）；`installJournalRetry()` 在 App 启动时补发并订阅 `online`。
+  丢了必须看得见——静默丢弃等于把「设计漏洞」藏起来。
+- **未挂载仓库时不静默丢弃**：`emit` 打 warning 说明事件未记录。
+- **重复渲染不等于重复操作**：完成态可能被轮询/广播反复渲染，因此工作区切换用 ref 只记一次。
+- **effect 触发的发射要去重**：`StrictMode` 下 effect 在首挂载会双跑（点击处理器不会），
+  同一个 UI 动作会被记成两条。`TutorPage` 的自动定位用 `lastAutoAnchor` ref 挡住同一锚点连发——
+  注意 `openedPaths` 是在 `setTabs` 的 updater 里更新的，两次调用之间它还是空的，
+  所以「新开文件 / 就地定位」的判定挡不住这条路，必须在 effect 层去重。
+
+## 相关
+
+- 引擎侧实现：`packages/engine/src/store/journal.ts`（白名单 + append）、
+  `packages/engine/src/server.ts` 里的 `POST /api/repositories/:repositoryId/journal`。
+- 引擎自身的工作日志在别处：`~/.codebase-tutor/engine.jsonl`（请求 / 导入 / 重分析 / 降级 / 启动）
+  与 `~/.codebase-tutor/llm.log`（LLM 调用明细），两者靠 `traceId` 与 journal 关联——
+  对话语义与引擎健康分开记，互不依赖。

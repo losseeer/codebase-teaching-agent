@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, type LlmCallRecord } from "./call-log.js";
 import type { LlmProvider } from "./provider.js";
 import { ThinkingOverrideLlmProvider } from "./provider.js";
+import { runWithTrace } from "../trace/context.js";
 
 /**
   LLM 工作日志：既要有可机读的落盘（JSONL），也要有控制台单行摘要；
@@ -24,6 +25,7 @@ const record = (overrides: Partial<LlmCallRecord> = {}): LlmCallRecord => ({
   ok: true,
   ms: 1200,
   thinking: "auto",
+  traceId: null,
   ...overrides
 });
 
@@ -139,5 +141,17 @@ describe("LLM 工作日志", () => {
     await provider.complete({ system: "s", user: "u" });
     await flushLlmLog();
     expect((JSON.parse(readFileSync(logFile, "utf8").trim()) as LlmCallRecord).thinking).toBe("off");
+  });
+
+  it("请求上下文里的调用记下 traceId；后台任务（无上下文）记为 null（不丢字段也不编造）", async () => {
+    const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "teaching");
+
+    await runWithTrace("req-42", () => provider.complete({ system: "s", user: "u", scene: "teaching.turn" }));
+    await provider.complete({ system: "s", user: "u", scene: "map.refine" });
+    await flushLlmLog();
+
+    const entries = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as LlmCallRecord);
+    expect(entries[0]).toMatchObject({ scene: "teaching.turn", traceId: "req-42" });
+    expect(entries[1]).toMatchObject({ scene: "map.refine", traceId: null });
   });
 });

@@ -8,6 +8,7 @@ import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { DepMap } from "../map/DepMap";
 import { FLOW_KIND_LABEL, FlowMap, type FlowSelection } from "../map/FlowMap";
+import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 
 /**
@@ -88,12 +89,14 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   const pickNode = (node: CourseNode): void => {
     t.setMapNode(node);
     setDrawer(true);
+    emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.title.slice(0, 120), view: mapView });
   };
   // 源码抽屉已按需求移除（v0.5.3）：点文件只同步到 Agent 绑定（绑定区展示），
   // 源码阅读在「代码教学」工作区的实时源码面板完成。
-  const openFile = (path: string): void => {
+  const openFile = (path: string, source: "tree" | "anchor" | "flow" = "tree"): void => {
     t.setMapFile(path);
     showToast(`已选中 · ${path}`);
+    emit(repositoryId, "file_anchored", { path, source });
   };
 
   if (error) return <EmptyState title="课程暂不可用" detail={error} />;
@@ -139,7 +142,11 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                 repositoryId={repositoryId}
                 analysis={analysis}
                 selectedStageOrder={flowSelection?.stage.order}
-                onSelectStage={(selection) => { setFlowSelection(selection); setDrawer(selection !== null); }}
+                onSelectStage={(selection) => {
+                  setFlowSelection(selection);
+                  setDrawer(selection !== null);
+                  if (selection) emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
+                }}
               />
             )}
           {drawer ? (
@@ -172,7 +179,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                         <h4>{`关联文件（${flowSelection.stage.files.length}）`}</h4>
                         <div className="flow-files">
                           {flowSelection.stage.files.map((file) => (
-                            <button key={file.path} type="button" className="flow-file" onClick={() => openFile(file.path)}>
+                            <button key={file.path} type="button" className="flow-file" onClick={() => openFile(file.path, "flow")}>
                               <span className="flow-file-where"><Code2 size={12} />{`${file.path}:${file.line}`}</span>
                               {file.note ? <small>{file.note}</small> : null}
                             </button>
@@ -215,7 +222,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                       <h4>源码锚点</h4>
                       <div className="anchors">
                         {selected.anchors.map((anchor) => (
-                          <button key={`${anchor.path}:${anchor.line}`} className="anchor" onClick={() => openFile(anchor.path)}>
+                          <button key={`${anchor.path}:${anchor.line}`} className="anchor" onClick={() => openFile(anchor.path, "anchor")}>
                             <Code2 size={13} />{anchor.path}:{anchor.line}
                           </button>
                         ))}

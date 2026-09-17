@@ -13,6 +13,7 @@ import { InsightsPage } from "./views/InsightsPage";
 import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
 import { ToastHost } from "./modules/toast";
+import { installJournalRetry } from "./journal";
 
 // Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
 export type Workspace = _Workspace;
@@ -42,6 +43,8 @@ export function App(): ReactElement {
   const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
   const workspaceIdRef = useRef(workspace?.repositoryId);
   useEffect(() => { workspaceIdRef.current = workspace?.repositoryId; }, [workspace?.repositoryId]);
+  // 补发上回积压的 UI 事件（网络失败时进了 localStorage 重试队列），并订阅 online 重连
+  useEffect(() => { installJournalRetry(); }, []);
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
     if (value) localStorage.setItem("codebase-tutor.workspace", JSON.stringify(value));
