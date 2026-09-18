@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, ListChecks, RefreshCw, Send, X } from "lucide-react";
+import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, RefreshCw, Send, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { companionKindLabel } from "../views/helpers";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
 import { showToast } from "../modules/toast";
-import { HEURISTIC_SOURCE, SCOPE_LABEL, SCOPES, type Scope, type TeachingSessionApi, type ThreadItem } from "./useTeachingSession";
+import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type TeachingSessionApi, type ThreadItem } from "./useTeachingSession";
 
 /**
   持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
@@ -55,20 +55,6 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
         <span className="agent-avatar" aria-hidden>✦</span>
         <strong>Codebase Agent</strong>
       </header>
-
-      <div className="scope-bar" role="tablist" aria-label="切换作用域">
-        {SCOPES.map((s) => (
-          <button
-            key={s}
-            role="tab"
-            aria-selected={scope === s}
-            className={`scope-chip ${scope === s ? "active" : ""}`}
-            onClick={() => t.setScope(s)}
-          >
-            <ScopeIcon scope={s} /> {SCOPE_LABEL[s]}
-          </button>
-        ))}
-      </div>
 
       <ScopeContext scope={scope} t={t} />
 
@@ -306,9 +292,13 @@ function ScopeContext({ scope, t }: { scope: Scope; t: TeachingSessionApi }): Re
   */
 function boundFor(scope: Scope, t: TeachingSessionApi): string {
   if (scope === "map") {
-    const node = t.mapNode ?? t.course?.root;
-    if (!node) return "未加载课程";
-    return `节点「${node.title}」${t.mapFile ? ` · ${t.mapFile}` : ""}`;
+    // 绑定只认三种情形（2026-09-18）：目录里选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。
+    // 不再把默认根节点拼进绑定——那会让「从目录随便打开一个文件」显示成节点「根目录文件」。
+    const binding = t.mapBinding;
+    if (!binding) return "未绑定";
+    if (binding.kind === "file") return `文件 · ${binding.path}`;
+    const label = binding.kind === "module" ? "模块" : "环节";
+    return binding.path ? `${label}「${binding.title}」 · ${binding.path}` : `${label}「${binding.title}」`;
   }
   if (scope === "teaching") {
     if (!t.selected) return "未选择节点";
@@ -318,12 +308,6 @@ function boundFor(scope: Scope, t: TeachingSessionApi): string {
   if (!t.practiceUnit) return "未开始练习";
   const anchor = t.practiceExercise?.anchors[0];
   return anchor ? `${t.practiceUnit} · ${anchor.path}:${anchor.line}` : t.practiceUnit;
-}
-
-function ScopeIcon({ scope }: { scope: Scope }): ReactElement {
-  if (scope === "map") return <Compass size={12} />;
-  if (scope === "teaching") return <GraduationCap size={12} />;
-  return <ListChecks size={12} />;
 }
 
 /** thread 单条消息渲染：用户消息纯文本（pre-wrap 由 .message p 提供）；

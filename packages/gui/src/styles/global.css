@@ -33,10 +33,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .agent-avatar { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 5px; color: #17372e; background: #d8ef58; font-size: 13px; font-weight: 800; }
 .agent-header strong { font-size: 13px; display: block; }
 .agent-header small { color: #678277; font-size: 10px; line-height: 1.3; }
-.scope-bar { display: flex; gap: 5px; padding: 10px 14px; border-bottom: 1px solid #e3ece6; background: #fbfdfb; }
-.scope-chip { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 4px; color: #557568; background: #fff; font-size: 11px; font-weight: 600; }
-.scope-chip:hover:not(.active) { background: #eef6ef; }
-.scope-chip.active { background: #17372e; color: #d8ef58; border-color: #17372e; }
 .scope-context { display: grid; gap: 6px; padding: 11px 14px; border-bottom: 1px solid #e3ece6; background: #f7faf7; font-size: 10px; }
 .scope-context > div { display: flex; align-items: flex-start; gap: 7px; }
 .scope-context > div > span { flex: 0 0 auto; width: 34px; padding-top: 2px; color: #81978d; font-weight: 700; white-space: nowrap; }
@@ -336,6 +332,9 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-entries button.active { border-color: #7ba889; color: #224c3a; background: #e5f1d0; font-weight: 700; }
 .flow-entries button strong { display: block; font-size: 11px; }
 .flow-entries button small { display: block; overflow: hidden; color: #86a094; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.flow-entry-manual { display: flex; align-items: center; gap: 6px; color: #7d948a; font-size: 11px; }
+.flow-entry-manual select { max-width: 260px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 4px 6px; background: #fff; color: #274c3e; font-size: 11px; }
+.flow-entry-manual select:focus { outline: 1px solid #7aa893; }
 .flow-chain { position: relative; display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0 0 0 20px; list-style: none; }
 .flow-chain::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 1px; background: #cfe0d5; }
 .flow-chain li { display: block; }
@@ -463,3 +462,10 @@ button.entry-item:hover { background: #eef6ef; }
 @media (max-width: 840px) { .practice-workspace { grid-template-columns: 1fr; }.practice-status { border-left: 0; border-top: 1px solid #dce6df; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }.practice-status h2, .practice-status .result-panel, .practice-status > p { grid-column: 1 / -1; }.practice-status .result-panel { max-width: 620px; } }
 @media (max-width: 760px) { .course-workspace { grid-template-columns: 1fr; }.course-tree { max-height: 200px; border-right: 0; border-bottom: 1px solid #dce6df; } }
 @media (max-width: 640px) { .page, .course-page, .tutor-page { padding: 25px 16px; }.path-row, .practice-toolbar { flex-direction: column; align-items: stretch; }.report-grid { grid-template-columns: 1fr 1fr; }.report-actions { grid-column: 1 / -1; }.tutor-header-compact, .course-header-compact, .practice-header-compact { flex-wrap: wrap; }.tutor-header-compact h1, .course-header-compact h1, .practice-header-compact h1 { white-space: normal; }.lesson-detail { padding: 19px; }.micro-detail, .insights-grid { grid-template-columns: 1fr; }.tutor-layout { grid-template-columns: 1fr; }.session-controls { border-right: 0; border-bottom: 1px solid #dce6df; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }.practice-status { display: block; }.exercise-surface { padding: 20px; }.exercise-heading { display: block; }.difficulty { display: inline-block; margin-top: 12px; }.ladder { margin-top: 0; }.source-chip, .cost-chip { display: none; }.chat-messages { padding: 20px 16px; }.nav-item { flex: 0 0 105px; min-width: 105px; }.nav-item svg { display: none; }.learner-summary { grid-template-columns: 1fr; }.mastery-row { grid-template-columns: minmax(100px, 1fr) minmax(80px, 1.4fr) 36px; }.mastery-row small { display: none; } }
+
+/* ---- 实时源码的多文件 tabs（含关闭）---- */
+.source-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; }
+.source-tabs button { display: inline-flex; align-items: center; gap: 6px; max-width: 200px; border: 1px solid #cbd9d1; border-radius: 4px 4px 0 0; padding: 4px 8px; color: #4d6f60; background: #fff; font-size: 11px; }
+.source-tabs button.active { border-color: #7ba889; background: #e5f1d0; color: #224c3a; font-weight: 700; }
+.source-tab-close { color: #86a094; font-size: 12px; line-height: 1; padding: 0 1px; }
+.source-tab-close:hover { color: #8b3e32; }

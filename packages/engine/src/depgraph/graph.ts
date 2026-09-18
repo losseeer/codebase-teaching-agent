@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, extname, join, normalize } from "node:path";
 import type { CallEdge, DependencyGraphData, FileEntry, ImpactResult, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
 import { extractSymbolsFromAst, parseBackendStatus, type ParseBackendStatus } from "./parser.js";
+import { isTestPath } from "./roles.js";
 
 export interface DependencyGraph {
   imports: Map<string, string[]>;
@@ -300,7 +301,12 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[]): SourceAn
     const name = basename(file.path, extname(file.path)).toLowerCase();
     if (["main", "server", "app", "index", "cli", "manage"].includes(name)) candidates.set(file.path, "conventional entrypoint");
   }
-  return [...candidates.entries()].filter(([path]) => files.some((file) => file.path === path)).slice(0, 12).map(([path, label]) => ({ path, line: 1, label }));
+  // 测试夹具里的 main.py / index.js 不是真入口（实测 fixture 仓的 package.json scripts 会指进去）——
+  // 与结构角色用同一套测试路径判定，把这类候选剔除。
+  return [...candidates.entries()]
+    .filter(([path]) => !isTestPath(path) && files.some((file) => file.path === path))
+    .slice(0, 12)
+    .map(([path, label]) => ({ path, line: 1, label }));
 }
 
 function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {

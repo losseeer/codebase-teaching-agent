@@ -1,5 +1,6 @@
 import {
   FLOW_MAX_STAGES,
+  type FileEntry,
   type FileRole,
   type FileTreeNode,
   type FlowEdge,
@@ -409,6 +410,22 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
     ...(notes.length ? { caveats: notes.join("；") } : {}),
     generatedAt: new Date().toISOString()
   };
+}
+
+/**
+  `/flow` 的入口解析：**推断入口优先，人工指定兜底**。
+  入口识别（`detectEntrypoints`）是启发式——package.json 清单 + 约定文件名——裸脚本、
+  非常规布局的仓会一无所获；这时允许把任意**已索引文件**当作流程起点（GUI 的「自定义入口」）。
+  指定的路径不在索引里返回 undefined（调用方 404），不猜。
+  */
+export function resolveFlowEntry(wanted: string, entrypoints: SourceAnchor[], files: FileEntry[]): SourceAnchor | undefined {
+  const path = wanted.trim();
+  if (path) {
+    const detected = entrypoints.find((item) => item.path === path);
+    if (detected) return detected;
+    return files.some((file) => file.path === path) ? { path, line: 1, label: "手动指定" } : undefined;
+  }
+  return entrypoints[0];
 }
 
 /**

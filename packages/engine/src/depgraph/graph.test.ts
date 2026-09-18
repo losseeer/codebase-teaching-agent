@@ -65,3 +65,28 @@ describe("dependency graph — Python 模块解析", () => {
     rmSync(join(pyFixture, ".tutor"), { recursive: true, force: true });
   });
 });
+
+describe("入口候选剔除测试路径", () => {
+  it("package.json scripts 指向 test-fixtures 内的文件不再成为入口；真实入口保留", async () => {
+    const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "tutor-entry-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({
+        scripts: { start: "tsx test-fixtures/demo/main.ts", dev: "tsx src/real-entry.ts" }
+      }));
+      mkdirSync(join(dir, "test-fixtures/demo"), { recursive: true });
+      writeFileSync(join(dir, "test-fixtures/demo/main.ts"), "export const x = 1;\n");
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src/real-entry.ts"), "import { y } from \"./util.ts\";\nconsole.log(y);\n");
+      writeFileSync(join(dir, "src/util.ts"), "export const y = 2;\n");
+      const index = indexRepository(dir);
+      const graph = buildDependencyGraph(dir, index.files);
+      const paths = graph.entrypoints.map((item) => item.path);
+      expect(paths).toContain("src/real-entry.ts");
+      expect(paths.some((path) => path.includes("test-fixtures"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

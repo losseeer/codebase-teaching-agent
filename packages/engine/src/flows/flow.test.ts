@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, type FlowDigestSummary } from "./flow.js";
+import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry, type FlowDigestSummary } from "./flow.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -541,5 +541,27 @@ describe("L1 摘要表进流程证据", () => {
     const digest = buildFlowDigest(dir, INDEX, analysisOf(), ENTRY, NO_SUMMARIES);
     expect(digest.files.every((file) => !("summary" in file))).toBe(true);
     expect(digest.withheldSummaries).toBe(0);
+  });
+});
+
+describe("resolveFlowEntry（人工指定入口兜底）", () => {
+  const files = INDEX.files;
+  const detected = [{ path: "main.py", line: 1, label: "script: dev" }];
+
+  it("推断入口命中时原样返回（保留 label）", () => {
+    expect(resolveFlowEntry("main.py", detected, files)).toEqual(detected[0]);
+  });
+
+  it("列表外的已索引文件视为人工指定入口", () => {
+    expect(resolveFlowEntry("graph/nodes.py", detected, files)).toEqual({ path: "graph/nodes.py", line: 1, label: "手动指定" });
+  });
+
+  it("不在索引里的路径返回 undefined（调用方 404，不猜）", () => {
+    expect(resolveFlowEntry("nope.py", detected, files)).toBeUndefined();
+  });
+
+  it("不带参数回落第一个推断入口；没有推断入口则 undefined", () => {
+    expect(resolveFlowEntry("", detected, files)).toEqual(detected[0]);
+    expect(resolveFlowEntry("  ", [], files)).toBeUndefined();
   });
 });

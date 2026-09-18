@@ -47,6 +47,20 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     return () => { current = false; };
   }, [repositoryId]);
 
+  /** 关闭一个源码 tab；关的是当前文件就把视图切到相邻 tab（没有就清空）。 */
+  const closeTab = (path: string): void => {
+    const remaining = tabs.filter((item) => item.path !== path);
+    setTabs((current) => {
+      const next = current.filter((item) => item.path !== path);
+      openedPaths.current = next.map((item) => item.path);
+      return next;
+    });
+    if (source?.path !== path) return;
+    const neighbor = remaining[remaining.length - 1];
+    if (neighbor) void loadSource(neighbor.path, neighbor.line);
+    else setSource(null);
+  };
+
   const anchor = t.selected?.anchors[0];
   /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选 toast 提示。
       依赖只取 repositoryId——放整个 t（或任何每次渲染换引用的值）会让本回调每渲染换引用，
@@ -223,6 +237,15 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                 {tabs.map((tab) => (
                   <button key={tab.path} role="tab" aria-selected={source?.path === tab.path} className={source?.path === tab.path ? "active" : ""} onClick={() => void loadSource(tab.path, tab.line)}>
                     {tab.path.split("/").pop()}
+                    <span
+                      className="source-tab-close"
+                      role="button"
+                      aria-label={`关闭 ${tab.path}`}
+                      title="关闭"
+                      onClick={(event) => { event.stopPropagation(); closeTab(tab.path); }}
+                    >
+                      ×
+                    </span>
                   </button>
                 ))}
               </div>

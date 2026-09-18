@@ -12,6 +12,9 @@ import { firstTeachNode } from "../views/helpers";
 export type Scope = "map" | "teaching" | "practice";
 export const SCOPES: ReadonlyArray<Scope> = ["map", "teaching", "practice"] as const;
 
+/** 宏观设计绑定的三种合法情形：项目目录选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。 */
+export type MapBinding = { kind: "file" | "module" | "flow"; title?: string; path?: string };
+
 export const SCOPE_LABEL: Record<Scope, string> = {
   map: "宏观设计",
   teaching: "代码教学",
@@ -78,6 +81,9 @@ export interface TeachingSessionApi {
   /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
   mapNode: CourseNode | null;
   setMapNode: (node: CourseNode | null) => void;
+  /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
+  mapBinding: MapBinding | null;
+  setMapBinding: (binding: MapBinding | null) => void;
   mapFile: string;
   setMapFile: (path: string) => void;
 
@@ -148,6 +154,7 @@ const reloadCourseData = (): void => setDataVersion((version) => version + 1);
 // 宏观设计 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
 const [mapNode, setMapNode] = useState<CourseNode | null>(null);
 const [mapFile, setMapFile] = useState("");
+  const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
 const [practiceUnit, setPracticeUnit] = useState("");
 useEffect(() => { setMapNode(null); setMapFile(""); setPracticeUnit(""); }, [repositoryId]);
 useEffect(() => {
@@ -305,7 +312,7 @@ useEffect(() => {
     scope, setScope,
     threads, pushMessage, clearThread,
     course, dataVersion, reloadCourseData, selected, setSelected,
-    mapNode, setMapNode, mapFile, setMapFile,
+    mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
     practiceUnit, setPracticeUnit,
     session, settings, setSettings, cost,
     content, setContent, sending, progress, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,

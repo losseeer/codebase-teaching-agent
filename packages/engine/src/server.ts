@@ -14,7 +14,7 @@ import { courseChildren, courseOverview, findCourseNode } from "./coursetree/pro
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { ExerciseService } from "./exercises/service.js";
-import { degradedFlow, generateRepositoryFlowCached } from "./flows/flow.js";
+import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
@@ -311,10 +311,15 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const entries = repository.analysis.graph.entrypoints;
-  if (!entries.length) return reply.code(404).send({ error: "该仓库没有识别到执行入口，流程视图无法生成。" });
   const wanted = (request.query.entry ?? "").trim();
-  const entry = wanted ? entries.find((item) => item.path === wanted) : entries[0];
-  if (!entry) return reply.code(404).send({ error: "该路径不是本仓库识别到的执行入口。" });
+  // 入口识别是启发式（package.json 清单 + 约定文件名），识别不到/识别错时允许人工指定任意已索引文件作为起点
+  const entry = resolveFlowEntry(wanted, entries, repository.index.files);
+  if (!entry) {
+    const reason = wanted
+      ? "该路径不在仓库索引里，无法作为流程入口。"
+      : "该仓库没有识别到执行入口，也未手动指定；请在流程视图里从文件清单中选择一个起点。";
+    return reply.code(404).send({ error: reason });
+  }
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   // 流程生成走**主力档**（2026-09-18 由轻量档改过来）：它是「看着整仓证据推断编排」的重任务，
   // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。

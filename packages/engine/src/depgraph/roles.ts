@@ -57,7 +57,7 @@ export function buildFileEdges(structure: Pick<FileStructure, "imports" | "calls
   return { dependencies, dependents };
 }
 
-const TEST_SEGMENTS = new Set(["test", "tests", "__tests__", "spec", "specs", "testing", "e2e"]);
+const TEST_SEGMENTS = new Set(["test", "tests", "__tests__", "test-fixtures", "fixtures", "spec", "specs", "testing", "e2e"]);
 
 /**
   设施类词：命中即认作「与外部世界或运行环境打交道」。

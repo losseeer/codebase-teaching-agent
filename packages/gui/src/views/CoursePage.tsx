@@ -88,6 +88,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   const course = t.course;
   const pickNode = (node: CourseNode): void => {
     t.setMapNode(node);
+    t.setMapBinding({ kind: "module", title: node.title });
     setDrawer(true);
     emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.title.slice(0, 120), view: mapView });
   };
@@ -95,6 +96,10 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   // 源码阅读在「代码教学」工作区的实时源码面板完成。
   const openFile = (path: string, source: "tree" | "anchor" | "flow" = "tree"): void => {
     t.setMapFile(path);
+    // 绑定行只认三种情形：目录选文件 / 架构模块(+其关联文件) / 流程环节(+其关联文件)
+    if (source === "tree") t.setMapBinding({ kind: "file", path });
+    else if (source === "flow") t.setMapBinding({ kind: "flow", title: flowSelection?.stage.title, path });
+    else t.setMapBinding({ kind: "module", title: t.mapNode?.title, path });
     showToast(`已选中 · ${path}`);
     emit(repositoryId, "file_anchored", { path, source });
   };
@@ -141,10 +146,12 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
               <FlowMap
                 repositoryId={repositoryId}
                 analysis={analysis}
+                index={index}
                 selectedStageOrder={flowSelection?.stage.order}
                 onSelectStage={(selection) => {
                   setFlowSelection(selection);
                   setDrawer(selection !== null);
+                  if (selection) t.setMapBinding({ kind: "flow", title: selection.stage.title });
                   if (selection) emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
                 }}
               />

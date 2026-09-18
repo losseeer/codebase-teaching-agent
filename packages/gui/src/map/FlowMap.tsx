@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Sparkles } from "lucide-react";
-import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow } from "@codebase-tutor/shared";
+import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 
 /**
@@ -51,9 +51,11 @@ export interface FlowSelection {
   flow: RepositoryFlow;
 }
 
-export function FlowMap({ repositoryId, analysis, selectedStageOrder, onSelectStage }: {
+export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onSelectStage }: {
   repositoryId: string;
   analysis: RepositoryAnalysis;
+  /** 全部已索引文件：入口识别是启发式，识别不到/识别错时由用户从这里手动指定流程起点 */
+  index: RepositoryIndex;
   selectedStageOrder?: number;
   onSelectStage: (selection: FlowSelection | null) => void;
 }): ReactElement {
@@ -63,9 +65,14 @@ export function FlowMap({ repositoryId, analysis, selectedStageOrder, onSelectSt
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const fileOptions = useMemo(
+    () => index.files.map((file) => file.path).sort((left, right) => left.localeCompare(right)),
+    [index]
+  );
+  const entryIsKnown = entries.some((entry) => entry.path === entryPath) || fileOptions.includes(entryPath);
   useEffect(() => {
-    if (!entries.some((entry) => entry.path === entryPath)) setEntryPath(entries[0]?.path ?? "");
-  }, [entries, entryPath]);
+    if (!entryIsKnown) setEntryPath(entries[0]?.path ?? "");
+  }, [entries, entryIsKnown]);
 
   useEffect(() => {
     if (!entryPath) return;
@@ -81,19 +88,15 @@ export function FlowMap({ repositoryId, analysis, selectedStageOrder, onSelectSt
     // analysis.versionStamp 变化（仓库重分析）后流程需要重新生成
   }, [repositoryId, entryPath, analysis.versionStamp]);
 
-  if (!entries.length) {
-    return (
-      <div className="map-scroll">
-        <div className="map-inner flow-inner">
-          <p className="flow-empty">该仓库没有识别到执行入口，流程视图无法生成。入口由 package.json 的 main/bin/scripts 与 main/server/app/index 等约定文件名推断（engine 侧 `detectEntrypoints`）。</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="map-scroll">
       <div className="map-inner flow-inner">
+        {!entries.length ? (
+          <p className="flow-empty">
+            该仓库没有识别到执行入口——入口由 package.json 的 main/bin/scripts 与 main/server/app/index
+            等约定文件名推断，裸脚本或非常规布局的仓会识别不到。从下方手动指定一个已索引文件作为流程起点即可。
+          </p>
+        ) : null}
         <div className="flow-entries" role="group" aria-label="选择执行入口">
           {entries.map((item) => (
             <button
@@ -107,6 +110,16 @@ export function FlowMap({ repositoryId, analysis, selectedStageOrder, onSelectSt
               <small>{item.path}</small>
             </button>
           ))}
+          <label className="flow-entry-manual" title="从全部已索引文件中手动指定流程起点（识别不到或识别错时的兜底）">
+            <span>{entries.length ? "自定义" : "手动指定入口"}</span>
+            <select
+              value={entries.some((entry) => entry.path === entryPath) ? "" : entryPath}
+              onChange={(event) => { if (event.target.value) { setEntryPath(event.target.value); onSelectStage(null); } }}
+            >
+              <option value="" disabled>{entries.length ? "从文件选择…" : "选择一个已索引文件…"}</option>
+              {fileOptions.map((path) => <option key={path} value={path}>{path}</option>)}
+            </select>
+          </label>
         </div>
 
         {loading ? (
