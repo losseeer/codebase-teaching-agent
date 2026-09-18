@@ -2,9 +2,9 @@ import type { FadedState, TeachingPolicy } from "@codebase-tutor/shared";
 import { styleBand, validateStyle } from "../policy/policy.js";
 
 /**
-  集中式 LLM 提示词构建器。所有需要「遵循语言风格滑块」的对话提示词都从这里取，
-  保证 style → 风格指令的映射只有一处口径（三档判据由 policy.styleBand 提供：≤33 严肃 / ≥67 通俗，
-  档内再按 styleBrief 的渐进阈值细化，使 0~100 的每次明显拖动都会改变提示词）。
+  集中式 LLM 提示词构建器。所有需要「遵循语言风格」的对话提示词都从这里取，
+  保证 style → 风格指令的映射只有一处口径。风格是**离散三档**（GUI 三选一：通俗/普通/严肃，
+  值 100/50/0，learner 推荐同）；0~100 的其他取值按 shared 的 styleBand 阈值归到最近一档（≤33 严肃 / ≥67 通俗）。
 
   - teachingSystemPrompt：代码教学对话（harness）
   - overviewSystemPrompt：宏观设计对话（map 作用域，scopechat 调用）
@@ -24,37 +24,24 @@ export interface TeachingPromptInput {
 }
 
 /**
-  通俗侧的渐进修饰：level 越高，附加的通俗化要求越多（`at` 为生效下限）。
-  严肃侧的渐进修饰：level 越低，附加的严谨化要求越多（`at` 为生效上限）。
-  两者叠加使 0~100 每一段都有可分辨的提示词——只有三档时，34~66 之间（以及各档内部）
-  拖动滑块在提示词层面毫无差别，用户感知就是「滑块没用」（v0.8.1 修）。
+  三档语言风格指令（2026-09-18 由 0~100 滑块改离散三档）：
+  - 通俗：允许并鼓励用类比、举例等手法把原理讲直观（不再要求给类比贴标注）；
+  - 普通：中性准确（默认档）；
+  - 严肃：工程评审式专业严谨，明确不用类比。
+  两端各留一句「不要做什么」，防止通俗变油滑、严肃变啰嗦。
   */
-const PLAIN_STEPS: ReadonlyArray<{ at: number; text: string }> = [
-  { at: 85, text: "优先给一个具体例子，再从例子抽象出结论；能用一段话说清就不要分点；" },
-  { at: 70, text: "可以使用生活类比，但必须明确标注「这是类比」；" },
-  { at: 55, text: "用短句，每句只含一个信息点；一次只引导一个观察点；" },
-  { at: 40, text: "术语第一次出现时先用一句话解释，再使用它；不使用自造词或不加解释的缩写。" }
-];
-
-const RIGOROUS_STEPS: ReadonlyArray<{ at: number; text: string }> = [
-  { at: 15, text: "表达可以密集，允许长句与并列结构，但不得含糊；" },
-  { at: 30, text: "主动区分直接证据、间接线索与推测三档；" },
-  { at: 45, text: "直接使用精确的工程术语，不为基础定义做铺垫；" },
-  { at: 60, text: "把每个论断绑定到具体源码位置（文件:行号），引导学习者关注数据流、控制流或不变量。" }
-];
-
 export function styleBrief(style: number): string {
-  const level = validateStyle(style);
-  const band = styleBand(level);
-  const head = band === "plain" ? "通俗讲解风格：" : band === "rigorous" ? "工程评审式严谨风格：" : "中性风格：";
-  const steps = [
-    ...PLAIN_STEPS.filter((step) => level >= step.at).map((step) => step.text),
-    ...RIGOROUS_STEPS.filter((step) => level <= step.at).map((step) => step.text)
-  ];
-  if (band === "neutral") {
-    steps.unshift("准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。");
+  const band = styleBand(validateStyle(style));
+  if (band === "plain") {
+    return "通俗讲解风格：多用类比、举例子、打比方等手法，把原理讲得直观易懂；"
+      + "术语第一次出现时先用一句话解释再用；用短句，一次只讲一个点；不用自造词或不加解释的缩写。";
   }
-  return `${head}${steps.join("")}`;
+  if (band === "rigorous") {
+    return "工程评审式严谨风格：使用精确的工程术语，不为基础定义做铺垫；"
+      + "主动区分直接证据、间接线索与推测；把论断落到具体源码位置（文件:行号），"
+      + "引导学习者关注数据流、控制流或不变量；表达可以密集，但不得含糊，不用类比和打比方。";
+  }
+  return "普通风格：准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。";
 }
 
 /** 各 transition 动作对应的输出契约——提示词层面约束 LLM 不越出状态机决定的动作（静态结构校验仍待后续补强）。 */
@@ -104,7 +91,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 }
 
 export interface OverviewPromptInput {
-  /** 语言风格档位（0~100）：宏观设计对话与代码教学共用同一个滑块，语义见 shared 的 styleBand。 */
+  /** 语言风格档位（0~100，GUI 只出 100/50/0 三档）：宏观设计对话与代码教学共用，语义见 shared 的 styleBand。 */
   style: number;
 }
 
@@ -118,15 +105,16 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
     "你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的宏观设计视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。",
     "",
     "【回答方式】",
-    "回答围绕流程与逻辑展开：先讲清数据流与控制流（从入口到出口经过哪些环节、每个环节负责什么、为什么这样切分），再讲结构（模块划分与依赖方向）；不要按文件逐个罗列。",
-    "只提及核心文件与核心函数（每个环节点 1~3 个，给出文件路径与符号名即可）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码——那是「代码教学」作用域的职责，需要时请学习者到那里深入。",
+    "回答围绕执行逻辑展开：先讲清这条功能怎么运转（从哪里进来、经过哪些环节、每个环节负责什么、为什么这样切分），再讲结构（模块职责与依赖方向）；不要按文件逐个罗列。",
+    "文件名、目录名、函数名**不是默认要给的东西**：学习者没有显式提到具体目录/文件/方法时，用职责来指代（如「负责校验请求参数的那一层」「承载重试与退避逻辑的环节」），回答重心放在执行逻辑、功能与流程上；学习者问「哪个目录/文件实现了 xxx」时同样如此——先讲清这个功能如何被执行、由哪类部分承担，而不是报一个路径清单。",
+    "只有学习者明确要看具体文件或函数、或需要指路到「代码教学」作用域时，才给出文件路径与符号名（每个环节至多 1~2 个）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码。",
     "一次回答聚焦一条主线：把这条线走通，比覆盖更多文件更有价值。",
     "",
     "【证据边界】",
     "「项目结构全景」是已分析文件的完整清单，「依赖关系」给出导入邻接（一度与二度），「调用关系」给出调用邻接与同文件符号位置——全局性问题优先依据这些回答。",
     "只基于「代码上下文」与 read_file 工具取回的内容讨论：文件路径、import 与调用关系、源码、节点摘要。",
     "read_file 仅在学习者明确要求查看某个文件的实现时才调用（给出仓库内相对路径，可用 offset/limit 取指定行窗口）；不要为了「把细节讲全」主动扩读，也不要凭空推测未读过的代码。",
-    "严格区分事实与推断：来自上下文的标明出处（文件路径:行号），推断要明说「这是推断」。",
+    "严格区分事实与推断：事实要能对上上下文，需要引用代码位置时才给出 文件:行；推断要明说「这是推断」。",
     "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
     "",
     "【语言风格】",
@@ -138,7 +126,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
 }
 
 export interface ExerciseQaPromptInput {
-  /** 语言风格档位（0~100）：练习答疑与代码教学共用同一个滑块，语义见 shared 的 styleBand。 */
+  /** 语言风格档位（0~100，GUI 只出 100/50/0 三档）：练习答疑与代码教学共用，语义见 shared 的 styleBand。 */
   style: number;
 }
 

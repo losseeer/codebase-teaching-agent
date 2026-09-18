@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree } from "../coursetree/build.js";
 import { refineCourseMap } from "../coursetree/llm-refine.js";
-import { buildLightRuntimeProvider } from "../llm/runtime.js";
+import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
@@ -161,9 +161,9 @@ export class ImportService extends EventEmitter {
     const database = new TutorDatabase(repositoryPath);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
-    // L1 走**轻量档**（2026-09-18）：文件级摘要是量大、单条简单的活，与流程生成用主力档分开。
+    // L1 走**轻任务角色**（同一套配置、思考强制 off）：文件级摘要是量大、单条简单的活，开思考只会白烧 token。
     // 预算已降级时不传 llm ⇒ 自动落到确定性档，不在超预算时继续花钱。
-    const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLightRuntimeProvider();
+    const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider });
     // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
     // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。

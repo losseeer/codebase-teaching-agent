@@ -62,7 +62,8 @@ const MAX_UNCOVERED_TEXT = 40;
 const MIN_STAGES = 3;
 const FALLBACK_UNPARSEABLE = "模型返回的内容无法解析成一条完整流程";
 
-const SYSTEM_PROMPT = [
+/** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
+export const SYSTEM_PROMPT = [
   "你是代码教学产品的架构讲解者。给定一个仓库的执行入口、文件清单（含符号名与依赖）与静态调用链证据，",
   "输出「一次执行从入口到结束经过哪些环节」。",
   "硬性要求：",
@@ -349,11 +350,14 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
   const record = raw as Record<string, unknown>;
 
   const droppedFiles = { count: 0 };
+  // 行号越界不再静默收缩：模型给的行号若不在文件范围内会被改到范围内，**并在这里记账**，
+  // 最终写进 caveats。这些行号只说明「大概在这个文件里」，不能当精确定位读。
+  const clampedLines = { count: 0 };
   // 序号以模型输出数组的位置为准（1 起）：提示词已要求「按真实执行顺序排列」，数组顺序比模型自填的
   // order 字段可靠——自填序号一旦跳号，回环目标就会整体错位。
   const kept = (Array.isArray(record.stages) ? record.stages : [])
     .slice(0, FLOW_MAX_STAGES)
-    .map((item, index) => normalizeStage(item, context, droppedFiles, index + 1))
+    .map((item, index) => normalizeStage(item, context, droppedFiles, clampedLines, index + 1))
     .filter((stage): stage is NormalizedStage => stage !== null);
   // 路径全部编造的环节直接丢弃：宁可少一个环节，也不给一个指不到代码的环节
   if (kept.length < MIN_STAGES) return null;
@@ -388,6 +392,7 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
     asText(record.caveats, MAX_CAVEATS),
     droppedStages > 0 ? `有 ${droppedStages} 个环节因未给出存在的文件路径被丢弃` : "",
     droppedFiles.count > 0 ? `有 ${droppedFiles.count} 个文件路径不在仓库中，已剔除` : "",
+    clampedLines.count > 0 ? `有 ${clampedLines.count} 个文件的行号超出该文件行数，已改到范围内；这些行号只说明位置在该文件内，不能当精确定位` : "",
     edgeStats.dropped > 0 ? `有 ${edgeStats.dropped} 条边因端点或依据不合格被丢弃` : "",
     edgeStats.downgradedStatic > 0 ? `有 ${edgeStats.downgradedStatic} 条边声称来自代码但与依赖图对不上，已改标为推断` : "",
     edgeStats.demotedCode > 0 ? `有 ${edgeStats.demotedCode} 条边声称「在源码里读到」，但本次并没有读过那些文件，已改标为推断` : "",
@@ -456,7 +461,13 @@ function normalizeEdges(
 
 type NormalizedStage = Omit<FlowStage, "order" | "loopsTo"> & { sourceOrder: number; loopsTo?: number };
 
-function normalizeStage(item: unknown, context: ParseContext, droppedFiles: { count: number }, sourceOrder: number): NormalizedStage | null {
+function normalizeStage(
+  item: unknown,
+  context: ParseContext,
+  droppedFiles: { count: number },
+  clampedLines: { count: number },
+  sourceOrder: number
+): NormalizedStage | null {
   if (!item || typeof item !== "object") return null;
   const record = item as Record<string, unknown>;
   const title = asText(record.title, MAX_STAGE_TITLE);
@@ -472,8 +483,13 @@ function normalizeStage(item: unknown, context: ParseContext, droppedFiles: { co
     if (!context.availablePaths.has(path)) { droppedFiles.count += 1; continue; }
     if (seen.has(path)) continue;
     seen.add(path);
-    const limit = context.linesOf.get(path) ?? 1;
-    const line = Math.min(Math.max(1, Math.floor(Number(file.line ?? 1) || 1)), Math.max(1, limit));
+    const limit = Math.max(1, context.linesOf.get(path) ?? 1);
+    // 越界的行号仍要落回文件范围内（指到文件外更没有意义），但**不再无声无息**：
+    // 改了几处由调用方记账并写进 caveats。缺行号（没给）不算越界——那是省略，不是错报。
+    const raw = Number(file.line);
+    const requested = Number.isFinite(raw) ? Math.floor(raw) : 1;
+    const line = Math.min(Math.max(1, requested), limit);
+    if (line !== requested) clampedLines.count += 1;
     const note = asText(file.note, MAX_FILE_NOTE);
     files.push(note ? { path, line, note } : { path, line });
   }

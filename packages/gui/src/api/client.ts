@@ -22,12 +22,13 @@ export interface ThinkingCapabilityInfo {
 }
 
 export interface LlmSettings {
-  teachingModel: string;
-  lightModel: string;
+  /** 运行时模型覆盖（空串 = 用 .env 配置）；轻任务/教学对话共用这一套配置 */
+  model: string;
   thinking: ThinkingEffort;
   presets: string[];
-  teachingThinking?: ThinkingCapabilityInfo;
-  lightThinking?: ThinkingCapabilityInfo;
+  thinkingCapability?: ThinkingCapabilityInfo;
+  /** PUT 响应里带：当前实际生效的模型 slug */
+  activeModel?: string;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -40,7 +41,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
-  updateLlmSettings: (partial: { teachingModel?: string; lightModel?: string; thinking?: ThinkingEffort }) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
+  updateLlmSettings: (partial: { model?: string; thinking?: ThinkingEffort }) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path }) }),
   getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),

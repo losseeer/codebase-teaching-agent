@@ -16,7 +16,7 @@ export interface CourseMapRefinement {
   - 禁用「工作流 N」这类模板命名（engine 侧已改用路径命名，LLM 层进一步语义化）
 
   Config（见根目录 .env.example）：
-  - 走 light 档（TUTOR_LIGHT_*），未配置回落主力档（TUTOR_TEACHING_*）
+  - 走轻任务角色（同一套 TUTOR_LLM_* 配置、思考强制 off；2026-09-18 前是 light/teaching 双档配置）
   */
 
 const MAX_DEPTH = 3;

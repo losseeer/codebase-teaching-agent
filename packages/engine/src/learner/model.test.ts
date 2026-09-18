@@ -17,11 +17,11 @@ describe("M2.3 learner model", () => {
       event("exercise_result", "2026-01-01T00:00:00.000Z", { target_unit_id: "unit", passed: false, score: 0 }, "s1"),
       event("dependency_event", "2026-01-01T00:01:00.000Z", { unit_id: "unit" }, "s1")
     ]);
-    expect(low.recommended.settings).toMatchObject({ style: 75, pedagogy: "socratic", depth: "macro" });
+    expect(low.recommended.settings).toMatchObject({ style: 100, pedagogy: "socratic", depth: "macro" });
 
     const highEvents = Array.from({ length: 5 }, (_, index) => event("exercise_result", `2026-01-0${index + 1}T00:00:00.000Z`, { target_unit_id: "unit", passed: true, score: 1 }, `s${index}`));
     const high = deriveLearnerProfile("repo", highEvents);
-    expect(high.recommended.settings).toMatchObject({ style: 25, pedagogy: "practice", depth: "micro" });
+    expect(high.recommended.settings).toMatchObject({ style: 0, pedagogy: "practice", depth: "micro" });
   });
 
   it("fades one clue after mastery and replenishes it after failure", () => {

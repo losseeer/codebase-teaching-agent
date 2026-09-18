@@ -33,7 +33,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
     api.getLlmSettings().then((next) => { if (current) setLlm(next); }).catch(() => undefined);
     return () => { current = false; };
   }, []);
-  const updateLlm = (partial: { teachingModel?: string; lightModel?: string; thinking?: ThinkingEffort }): void => {
+  const updateLlm = (partial: { model?: string; thinking?: ThinkingEffort }): void => {
     if (!llm) return;
     const previous = llm;
     setLlm({ ...llm, ...partial });
@@ -46,6 +46,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
       });
   };
 
+  const activeBand = styleBand(t.settings.style);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
 
   return (
@@ -71,48 +72,40 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
 
       <ScopeContext scope={scope} t={t} />
 
-      {/* 语言风格：会话级设置，三个作用域共用（v0.5.3 起不再仅 teaching 可见） */}
+      {/* 语言风格：会话级设置，三个作用域共用；离散三档（2026-09-18 起不再是 0~100 滑块） */}
       <div className="agent-tuning">
-        <div className="tuning-head"><span>语言风格</span><output>{t.settings.style} · {STYLE_BAND_LABEL[styleBand(t.settings.style)]}</output></div>
-        <input
-          className="style-slider"
-          type="range"
-          min={0}
-          max={100}
-          value={t.settings.style}
-          aria-label="语言风格"
-          title="0=严肃 … 100=通俗；下一次提问时生效，档位由引擎按 styleBand 计算并回显"
-          onChange={(event) => t.setSettings({ ...t.settings, style: Number(event.target.value) })}
-        />
-        <div className="range-labels"><span>严肃</span><span>通俗</span></div>
+        <div className="tuning-head"><span>语言风格</span><output>{STYLE_BAND_LABEL[activeBand]}</output></div>
+        <div className="segmented" role="radiogroup" aria-label="语言风格">
+          {STYLE_CHOICES.map((choice) => (
+            <button
+              key={choice.value}
+              type="button"
+              role="radio"
+              aria-checked={activeBand === choice.band}
+              className={activeBand === choice.band ? "selected" : ""}
+              title={choice.hint}
+              onClick={() => t.setSettings({ ...t.settings, style: choice.value })}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* 模型与思考：运行时设置（引擎内存态，PUT 即时生效，重启回落 .env；light 档思考引擎侧固定 off） */}
+      {/* 模型与思考：运行时设置（引擎内存态，PUT 即时生效，重启回落 .env）。
+          只有一套模型配置；轻任务（推荐入口/题面/命名/L1 摘要）走同一模型、思考固定 off，无需单独配置。 */}
       <div className="agent-tuning llm-tuning">
         <div className="tuning-head"><span>模型与思考</span></div>
         <label className="tuning-row">
-          <span>教学模型</span>
+          <span>模型</span>
           <select
-            value={llm?.teachingModel ?? ""}
+            value={llm?.model ?? ""}
             disabled={!llm}
-            aria-label="教学档模型"
-            onChange={(event) => updateLlm({ teachingModel: event.target.value })}
+            aria-label="LLM 模型"
+            onChange={(event) => updateLlm({ model: event.target.value })}
           >
             <option value="">默认（.env）</option>
-            {modelOptions(llm, llm?.teachingModel ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
-          </select>
-        </label>
-        <label className="tuning-row">
-          <span>轻任务模型</span>
-          <select
-            value={llm?.lightModel ?? ""}
-            disabled={!llm}
-            aria-label="轻任务档模型"
-            title="推荐入口 / 题面润色 / 宏观设计命名单轮任务（思考固定关闭）"
-            onChange={(event) => updateLlm({ lightModel: event.target.value })}
-          >
-            <option value="">默认（.env）</option>
-            {modelOptions(llm, llm?.lightModel ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
+            {modelOptions(llm, llm?.model ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
           </select>
         </label>
         <label className="tuning-row">
@@ -121,7 +114,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             value={llm?.thinking ?? "auto"}
             disabled={!llm}
             aria-label="思考模式与强度"
-            title={THINKING_STYLE_HINT[llm?.teachingThinking?.style ?? "unknown"]}
+            title={THINKING_STYLE_HINT[llm?.thinkingCapability?.style ?? "unknown"]}
             onChange={(event) => updateLlm({ thinking: event.target.value as ThinkingEffort })}
           >
             <option value="auto">自动（模型默认）</option>
@@ -131,15 +124,15 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
                 value={effort}
                 // 引擎按模型查表下发能力声明；老引擎没有该字段时全部可用（向后兼容）。
                 // off 对 none/unknown 样式恒可选（= 不发字段），与引擎 PUT 校验的豁免一致。
-                disabled={llm?.teachingThinking ? !effortSelectable(llm.teachingThinking, effort) : false}
+                disabled={llm?.thinkingCapability ? !effortSelectable(llm.thinkingCapability, effort) : false}
               >
                 {THINKING_EFFORT_LABEL[effort]}
               </option>
             ))}
           </select>
         </label>
-        {llm?.teachingThinking ? (
-          <p className="tuning-hint">{teachingThinkingHint(llm.teachingThinking)}</p>
+        {llm?.thinkingCapability ? (
+          <p className="tuning-hint">{thinkingHint(llm.thinkingCapability)}</p>
         ) : null}
       </div>
 
@@ -228,6 +221,13 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
   );
 }
 
+/** 离散三档语言风格：通俗=可用类比举例讲直观；普通=中性准确；严肃=工程严谨、不用类比。值对应 styleBand 阈值（100/50/0）。 */
+const STYLE_CHOICES = [
+  { value: 100, band: "plain" as const, label: "通俗", hint: "多用类比和例子，把原理讲得直观易懂" },
+  { value: 50, band: "neutral" as const, label: "普通", hint: "中性、准确，术语照常使用" },
+  { value: 0, band: "rigorous" as const, label: "严肃", hint: "工程术语、严谨论证，不用类比" }
+] as const;
+
 /** 下拉选项：.env 预设 + 当前已选的自定义 slug（不在预设里也要可见）。 */
 function modelOptions(settings: LlmSettings | null, current: string): string[] {
   const presets = settings?.presets ?? [];
@@ -251,7 +251,7 @@ const THINKING_STYLE_HINT: Record<string, string> = {
 };
 
 /** 思考档位下方的常驻能力提示行。 */
-function teachingThinkingHint(capability: NonNullable<LlmSettings["teachingThinking"]>): string {
+function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>): string {
   const styleName: Record<string, string> = {
     deepseek: "DeepSeek 格式",
     openai: "reasoning_effort",
@@ -264,7 +264,7 @@ function teachingThinkingHint(capability: NonNullable<LlmSettings["teachingThink
 }
 
 /** off 恒可表达：无思考参数/未声明模型选 off = 不发字段（与引擎 applyThinking 语义一致，不算「支持」也不禁用）。 */
-function effortSelectable(capability: NonNullable<LlmSettings["teachingThinking"]>, effort: "off" | "low" | "high" | "max"): boolean {
+function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapability"]>, effort: "off" | "low" | "high" | "max"): boolean {
   if (capability.efforts.includes(effort)) return true;
   return effort === "off" && (capability.style === "none" || capability.style === "unknown");
 }

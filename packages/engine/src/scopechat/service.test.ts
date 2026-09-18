@@ -191,7 +191,7 @@ describe("作用域 prompt 单源（风格档位进入系统提示词）", () =>
     const { provider, calls } = fakeProvider();
     await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "一次请求怎么走？", provider, style: 90 });
     expect(calls[0].system).toContain("通俗讲解风格");
-    expect(calls[0].system).toContain("生活类比");
+    expect(calls[0].system).toContain("类比");
     expect(calls[0].system).toContain("宏观设计");
   });
 

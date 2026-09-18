@@ -15,7 +15,7 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   宏观设计作用域额外注入项目结构全景（全量路径清单 + 二度依赖邻居 + 调用邻接）——
   全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码按锚点摘录，需要时由模型经 read_file 按需拉取。
   两个作用域的系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），
-  本文件不再自带副本；style 由 server 路由从请求里取用户当前滑块档位后传入（缺省 50 = 中性）。
+  本文件不再自带副本；style 由 server 路由从请求里取用户当前风格档位后传入（缺省 50 = 普通档）。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）

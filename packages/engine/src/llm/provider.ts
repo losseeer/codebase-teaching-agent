@@ -128,14 +128,15 @@ export class OpenAICompatibleProvider implements LlmProvider {
     调用点按非推理模型设的小上限（12~1600）会被思考烧光导致 content 为空。
     余量直接加在请求的 max_tokens 上——非推理模型不会为多余上限多花 token（用完即停），所以无条件加上是安全的。
     可用 TUTOR_LLM_REASONING_HEADROOM 调整（0 表示关闭）。
-    默认 3000：实测 deepseek-flash 推荐入口任务思考量可超 2300（旧默认 1500 + maxTokens 800 被烧光、正文为空）。
+    默认 6000（2026-09-18 实测校准）：map.flow 全流程生成在 thinking=auto 下的自然思考量 **2.4k~4.2k+ tok**（探针直测 reasoning 4,203 + 正文 1,849 = 6,445 outputTokens）；
+    旧默认 3000 + map.flow maxTokens 2400 = 5400，被 5 连败截断/空正文——思考余量必须按「最坏思考 + 满额正文」留。
     */
   private readonly reasoningHeadroom: number;
 
   constructor(private readonly options: FetchProviderOptions) {
     this.modelVersion = `openai:${options.model}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 3_000);
+    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 6_000);
     this.reasoningHeadroom = Number.isFinite(headroom) && headroom > 0 ? Math.floor(headroom) : 0;
   }
 
@@ -393,46 +394,22 @@ function createProviderFromEnv(provider: string, model: string, timeoutMs: numbe
   return undefined;
 }
 
-/** 重量级（主力）档：驱动「代码教学」多轮对话。overrides.model 为 GUI 运行时设置覆盖（空串/省略 = 用 .env）。 */
-export function resolveTeachingModelSlug(overrides?: { model?: string }): string {
-  const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
-  return overrides?.model?.trim() || (process.env.TUTOR_TEACHING_MODEL ?? process.env.TUTOR_LLM_MODEL ?? defaultModel(provider));
-}
-
-export function createTeachingProvider(overrides?: { model?: string }): LlmProvider | undefined {
-  const provider = (process.env.TUTOR_TEACHING_PROVIDER ?? process.env.TUTOR_LLM_PROVIDER ?? "").toLowerCase();
-  if (!provider) return undefined;
-  const model = resolveTeachingModelSlug(overrides);
-  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
-}
-
-/** light 档生效模型 slug（GUI 展示能力用，与 createLightLlmProvider 同一解析：未配置时回落主力档模型）。 */
-export function resolveLightModelSlug(overrides?: { model?: string }): string {
-  return overrides?.model?.trim() || (process.env.TUTOR_LIGHT_MODEL ?? "").trim() || resolveTeachingModelSlug();
+/** 生效模型 slug：GUI 运行时覆盖优先 → .env 的 TUTOR_LLM_MODEL → 该 provider 的默认模型。 */
+export function resolveModelSlug(overrides?: { model?: string }): string {
+  const provider = (process.env.TUTOR_LLM_PROVIDER ?? process.env.TUTOR_TEACHING_PROVIDER ?? "").toLowerCase();
+  return overrides?.model?.trim() || (process.env.TUTOR_LLM_MODEL ?? process.env.TUTOR_TEACHING_MODEL ?? defaultModel(provider));
 }
 
 /**
-  轻量档：供三个单轮轻任务使用（教学模块推荐入口 / 练习题面润色 / 宏观设计命名完善）。
-  - `TUTOR_LIGHT_PROVIDER` + `TUTOR_LIGHT_MODEL` 显式配置（如 ollama 本地小模型 / gpt-4o-mini）
-  - 未配置时由调用方回落主力档（createTeachingProvider），保证只填一套配置也能跑通全部接入点
-  - 端点/密钥可用独立变量（TUTOR_LIGHT_OPENAI_URL / TUTOR_LIGHT_API_KEY / TUTOR_LIGHT_ANTHROPIC_URL / TUTOR_LIGHT_ANTHROPIC_API_KEY），
-    未设置时回落主力档共用变量——支持两档使用不同厂商或不同协议端点（如 GLM 资源包走 OpenAI 协议、主力档走 DeepSeek）。
-  - 超时可用独立变量 TUTOR_LIGHT_TIMEOUT_MS（推理模型单轮生成可达 30-60s），未设置时回落 TUTOR_LLM_TIMEOUT_MS。
+  唯一的 LLM 工厂（2026-09-18 起不再有「轻量 / 主力」两套配置）：
+  .env 只有一套 `TUTOR_LLM_*`；「轻任务 / 教学对话」是**运行时角色**（差别只在思考开关，见 llm/runtime.ts），
+  不是两份配置。`TUTOR_TEACHING_*` 作为已废弃别名仍被读取（旧 .env 不至于静默失效），但不再写进 .env.example。
   */
-export function createLightLlmProvider(overrides?: { model?: string }): LlmProvider | undefined {
-  const provider = (process.env.TUTOR_LIGHT_PROVIDER ?? "").toLowerCase().trim();
+export function createLlmProvider(overrides?: { model?: string }): LlmProvider | undefined {
+  const provider = (process.env.TUTOR_LLM_PROVIDER ?? process.env.TUTOR_TEACHING_PROVIDER ?? "").toLowerCase();
   if (!provider) return undefined;
-  // 模型留空（或全空白）视为 light 档未配置 → 返回 undefined，由调用方回落主力档。
-  // 不能用空模型名创建 provider：请求必然失败后被各接入点静默吞掉，表现为「LLM 失效」。
-  const model = (overrides?.model?.trim() || (process.env.TUTOR_LIGHT_MODEL ?? "").trim());
-  if (!model) return undefined;
-  const timeoutMs = Number(process.env.TUTOR_LIGHT_TIMEOUT_MS ?? process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
-  return createProviderFromEnv(provider, model, timeoutMs, {
-    openaiUrl: process.env.TUTOR_LIGHT_OPENAI_URL,
-    openaiApiKey: process.env.TUTOR_LIGHT_API_KEY,
-    anthropicUrl: process.env.TUTOR_LIGHT_ANTHROPIC_URL,
-    anthropicApiKey: process.env.TUTOR_LIGHT_ANTHROPIC_API_KEY,
-  });
+  const model = resolveModelSlug(overrides);
+  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
 }
 
 export function teachingProviderStatus(provider?: LlmProvider): TeachingProviderStatus {

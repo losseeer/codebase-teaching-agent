@@ -27,9 +27,9 @@ import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { resolveLightModelSlug, resolveTeachingModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
-import { buildLightRuntimeProvider, buildTeachingRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
+import { buildLlmRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress } from "./scopechat/service.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
@@ -80,13 +80,13 @@ tboot("ExerciseService");
 const companion = new CompanionService();
 tboot("CompanionService");
 
-// LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）
-let teachingProvider = buildTeachingRuntimeProvider();
-// 轻量档：单轮轻任务（推荐入口 / 练习题面 / 宏观设计命名）；未显式配置 TUTOR_LIGHT_* 时回落主力档（思考强制 off）
-let lightLlmProvider = buildLightRuntimeProvider();
+// LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）。
+// 只有一套配置；teaching / light 是**运行时角色**（差别只在思考开关），不是两份配置。
+let teachingProvider = buildLlmRuntimeProvider("teaching");
+let lightLlmProvider = buildLlmRuntimeProvider("light");
 // 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
 const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
-tboot("createTeachingProvider");
+tboot("createLlmProvider");
 
 const sessions = new Map<string, TutorSession>();
 const clients = new Set<{ send(data: string): void; readyState: number }>();
@@ -126,25 +126,23 @@ function latestFileSummaries(repositoryPath: string): Map<string, { summary: str
 importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
-  const teaching = teachingProviderStatus(teachingProvider);
-  const light = teachingProviderStatus(lightLlmProvider);
+  const llm = teachingProviderStatus(teachingProvider);
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
     summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local",
-    teachingProvider: teaching.provider, teachingModel: teaching.model, teachingMode: teaching.mode,
-    lightProvider: light.provider, lightModel: light.model, lightMode: light.mode,
+    llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
     agentLoop: actionLoopEnabled
   };
 });
 
-/** 两档模型的思考能力声明（按实际生效 slug 解析，随 GET/PUT /api/llm/settings 返回给 GUI）。 */
+/** 生效模型的思考能力声明（按实际生效 slug 解析，随 GET/PUT /api/llm/settings 返回给 GUI）。 */
 function describeThinking(model: string): { model: string; style: ReturnType<typeof resolveThinkingCapability>["style"]; efforts: string[] } {
   const capability = resolveThinkingCapability(model);
   return { model, style: capability.style, efforts: supportedThinkingEfforts(capability) };
 }
 
-/** GUI 运行时 LLM 设置：读取（含 .env 预设模型清单 + 两档模型的思考能力声明，供 GUI 禁用不支持的档位） */
+/** GUI 运行时 LLM 设置：读取（含 .env 预设模型清单 + 生效模型的思考能力声明，供 GUI 禁用不支持的档位） */
 app.get("/api/llm/settings", async () => {
   const settings = getLlmRuntimeSettings();
   const presets = (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean);
@@ -152,42 +150,37 @@ app.get("/api/llm/settings", async () => {
     ...settings,
     presets,
     // 能力按「实际生效的模型 slug」解析（运行时覆盖优先，回落 .env），与 provider 工厂同一套解析
-    teachingThinking: describeThinking(resolveTeachingModelSlug({ model: settings.teachingModel })),
-    lightThinking: describeThinking(resolveLightModelSlug({ model: settings.lightModel }))
+    thinkingCapability: describeThinking(resolveModelSlug({ model: settings.model }))
   };
 });
 
-/** GUI 运行时 LLM 设置：更新模型覆盖与思考档位，立即重建两档 provider（不落盘，重启回落 .env） */
-app.put<{ Body: { teachingModel?: string; lightModel?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
+/** GUI 运行时 LLM 设置：更新模型覆盖与思考档位，立即重建 provider（不落盘，重启回落 .env） */
+app.put<{ Body: { model?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
   const body = request.body ?? {};
   if (body.thinking !== undefined && !["auto", "off", "low", "high", "max"].includes(body.thinking)) {
     return reply.code(422).send({ error: "thinking 只支持 auto / off / low / high / max" });
   }
-  // 思考档位与（新）教学模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
+  // 思考档位与（新）模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
   // off 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里 422 掉。
   if (body.thinking && body.thinking !== "auto") {
-    const teachingModel = resolveTeachingModelSlug({ model: typeof body.teachingModel === "string" ? body.teachingModel : undefined });
-    if (!isThinkingEffortSupported(teachingModel, body.thinking as "auto" | "off" | "low" | "high" | "max")) {
-      const supported = supportedThinkingEfforts(resolveThinkingCapability(teachingModel));
-      return reply.code(422).send({ error: `模型 ${teachingModel} 不支持思考档位 "${body.thinking}"（支持：${supported.length ? supported.join("/") : "无"}）` });
+    const model = resolveModelSlug({ model: typeof body.model === "string" ? body.model : undefined });
+    if (!isThinkingEffortSupported(model, body.thinking as "auto" | "off" | "low" | "high" | "max")) {
+      const supported = supportedThinkingEfforts(resolveThinkingCapability(model));
+      return reply.code(422).send({ error: `模型 ${model} 不支持思考档位 "${body.thinking}"（支持：${supported.length ? supported.join("/") : "无"}）` });
     }
   }
   const settings = setLlmRuntimeSettings({
-    teachingModel: typeof body.teachingModel === "string" ? body.teachingModel : undefined,
-    lightModel: typeof body.lightModel === "string" ? body.lightModel : undefined,
+    model: typeof body.model === "string" ? body.model : undefined,
     thinking: body.thinking as never
   });
-  teachingProvider = buildTeachingRuntimeProvider();
-  lightLlmProvider = buildLightRuntimeProvider();
-  const teaching = teachingProviderStatus(teachingProvider);
-  const light = teachingProviderStatus(lightLlmProvider);
-  // 响应带上两档能力声明：GUI 换模型后无需再 GET 一次即可刷新思考档位的可用状态
+  teachingProvider = buildLlmRuntimeProvider("teaching");
+  lightLlmProvider = buildLlmRuntimeProvider("light");
+  const active = teachingProviderStatus(teachingProvider);
+  // 响应带生效模型与能力声明：GUI 换模型后无需再 GET 一次即可刷新思考档位的可用状态
   return {
     ...settings,
-    teachingProvider: teaching.model,
-    lightProvider: light.model,
-    teachingThinking: describeThinking(resolveTeachingModelSlug({ model: settings.teachingModel })),
-    lightThinking: describeThinking(resolveLightModelSlug({ model: settings.lightModel }))
+    activeModel: active.model,
+    thinkingCapability: describeThinking(resolveModelSlug({ model: settings.model }))
   };
 });
 

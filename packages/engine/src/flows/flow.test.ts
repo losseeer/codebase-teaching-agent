@@ -133,7 +133,7 @@ describe("parseFlow（模型输出的硬校验）", () => {
     expect(parseFlow(text, context)).toBeNull();
   });
 
-  it("行号越界被夹到文件范围内，标题与说明超长被截断", () => {
+  it("行号越界被改到文件范围内，并在 caveats 里如实交代；标题与说明超长被截断", () => {
     const text = JSON.stringify({
       title: "很长的标题".repeat(20), summary: "s",
       stages: [
@@ -145,6 +145,8 @@ describe("parseFlow（模型输出的硬校验）", () => {
     const flow = parseFlow(text, context);
     expect(flow?.stages[0].files[0].line).toBe(40);
     expect(flow?.stages[1].files[0].line).toBe(1);
+    // 只有越界的两个被记账：第三处 line=5 是合法行号，不该被算进去；缺行号也不算
+    expect(flow?.caveats).toContain("有 2 个文件的行号超出该文件行数");
     expect([...(flow?.stages[0].title ?? "")].length).toBeLessThanOrEqual(14);
     expect([...(flow?.stages[0].detail ?? "")].length).toBeLessThanOrEqual(60);
     expect([...(flow?.title ?? "")].length).toBeLessThanOrEqual(18);

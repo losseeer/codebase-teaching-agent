@@ -130,9 +130,9 @@ export const STYLE_BAND_THRESHOLDS = { rigorousMax: 33, plainMin: 67 } as const;
 
 export type StyleBand = "plain" | "neutral" | "rigorous";
 
-export const STYLE_BAND_LABEL: Record<StyleBand, string> = { rigorous: "严肃", neutral: "中性", plain: "通俗" };
+export const STYLE_BAND_LABEL: Record<StyleBand, string> = { rigorous: "严肃", neutral: "普通", plain: "通俗" };
 
-/** 非有限值（NaN / Infinity）按中性处理，与 engine `validateStyle` 的回落值 50 落在同一档。 */
+/** 非有限值（NaN / Infinity）按中间档（普通）处理，与 engine `validateStyle` 的回落值 50 落在同一档。 */
 export function styleBand(style: number): StyleBand {
   if (!Number.isFinite(style)) return "neutral";
   if (style >= STYLE_BAND_THRESHOLDS.plainMin) return "plain";

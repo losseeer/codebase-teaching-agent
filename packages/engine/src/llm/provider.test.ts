@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLightLlmProvider, createTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
+import { createLlmProvider, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
 /** 构造一个 OpenAI chat.completions 形状的响应。 */
 function jsonResponse(payload: unknown): Response {
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("OpenAICompatibleProvider", () => {
-  it("max_tokens 加上推理余量（默认 3000）", async () => {
+  it("max_tokens 加上推理余量（默认 6000）", async () => {
     let captured: Record<string, unknown> | undefined;
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -25,7 +25,7 @@ describe("OpenAICompatibleProvider", () => {
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await provider.complete({ system: "s", user: "u", maxTokens: 12 });
-    expect(captured?.max_tokens).toBe(12 + 3_000);
+    expect(captured?.max_tokens).toBe(12 + 6_000);
   });
 
   it("TUTOR_LLM_REASONING_HEADROOM=0 关闭余量", async () => {
@@ -44,7 +44,7 @@ describe("OpenAICompatibleProvider", () => {
     const fetchImpl = (async () => jsonResponse(chatBody("", "length"))) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await expect(provider.complete({ system: "s", user: "u", maxTokens: 300 }))
-      .rejects.toThrow(/max_tokens=3300.*推理模型/);
+      .rejects.toThrow(/max_tokens=6300.*推理模型/);
   });
 
   it("非 length 的空 content 保持通用错误", async () => {
@@ -137,11 +137,11 @@ describe("OpenAICompatibleProvider", () => {
   });
 });
 
-describe("createLightLlmProvider", () => {
-  const LIGHT_ENV_KEYS = ["TUTOR_LIGHT_PROVIDER", "TUTOR_LIGHT_MODEL", "TUTOR_LIGHT_OPENAI_URL", "TUTOR_LIGHT_API_KEY", "TUTOR_OPENAI_URL", "OPENAI_API_KEY"];
+describe("createLlmProvider（单一配置）", () => {
+  const ENV_KEYS = ["TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "OPENAI_API_KEY"];
 
   afterEach(() => {
-    for (const key of LIGHT_ENV_KEYS) delete process.env[key];
+    for (const key of ENV_KEYS) delete process.env[key];
     vi.unstubAllGlobals();
   });
 
@@ -154,48 +154,42 @@ describe("createLightLlmProvider", () => {
     }) as typeof fetch);
   }
 
-  it("独立端点/密钥优先于主力档共用变量（两档不同厂商场景）", async () => {
-    process.env.TUTOR_LIGHT_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LIGHT_MODEL = "glm-4.7";
-    process.env.TUTOR_LIGHT_OPENAI_URL = "https://light.example.com/v1";
-    process.env.TUTOR_LIGHT_API_KEY = "light-key";
-    process.env.TUTOR_OPENAI_URL = "https://shared.example.com/v1";
+  it("TUTOR_LLM_* 单套配置生效；TUTOR_TEACHING_* 作为废弃别名仍被读取", async () => {
+    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
+    process.env.TUTOR_LLM_MODEL = "glm-4.7";
+    process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
     process.env.OPENAI_API_KEY = "shared-key";
     const captured = { url: "", auth: "", model: "" };
     captureStub(captured);
-    const provider = createLightLlmProvider();
+    const provider = createLlmProvider();
     expect(provider).toBeDefined();
     await provider!.complete({ system: "s", user: "u" });
-    expect(captured.url).toBe("https://light.example.com/v1/chat/completions");
-    expect(captured.auth).toBe("Bearer light-key");
+    expect(captured.url).toBe("https://llm.example.com/v1/chat/completions");
     expect(captured.model).toBe("glm-4.7");
+
+    // 旧 .env 只写了 TUTOR_TEACHING_* 时仍能工作（平滑过渡），但 TUTOR_LLM_* 优先
+    delete process.env.TUTOR_LLM_PROVIDER;
+    delete process.env.TUTOR_LLM_MODEL;
+    process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
+    process.env.TUTOR_TEACHING_MODEL = "legacy-model";
+    await createLlmProvider()!.complete({ system: "s", user: "u" });
+    expect(captured.model).toBe("legacy-model");
+    process.env.TUTOR_LLM_MODEL = "new-model";
+    await createLlmProvider()!.complete({ system: "s", user: "u" });
+    expect(captured.model).toBe("new-model");
   });
 
-  it("未设独立变量时回落主力档共用变量（只填一套配置仍可用）", async () => {
-    process.env.TUTOR_LIGHT_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LIGHT_MODEL = "glm-4.7";
-    process.env.TUTOR_OPENAI_URL = "https://shared.example.com/v1";
-    process.env.OPENAI_API_KEY = "shared-key";
-    const captured = { url: "", auth: "", model: "" };
-    captureStub(captured);
-    const provider = createLightLlmProvider();
-    await provider!.complete({ system: "s", user: "u" });
-    expect(captured.url).toBe("https://shared.example.com/v1/chat/completions");
-    expect(captured.auth).toBe("Bearer shared-key");
+  it("provider 未配置时返回 undefined（调用方回落本地启发式，不静默造空模型实例）", () => {
+    expect(createLlmProvider()).toBeUndefined();
   });
 
-  it("openai 协议无可用密钥时返回 undefined（由调用方回落主力档）", () => {
-    process.env.TUTOR_LIGHT_PROVIDER = "openai";
-    expect(createLightLlmProvider()).toBeUndefined();
-  });
-
-  it("模型名留空/空白视为 light 档未配置，返回 undefined（回落主力档）", () => {
-    process.env.TUTOR_LIGHT_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LIGHT_MODEL = "";
-    process.env.TUTOR_LIGHT_OPENAI_URL = "https://openrouter.ai/api/v1";
-    expect(createLightLlmProvider()).toBeUndefined();
-    process.env.TUTOR_LIGHT_MODEL = "   ";
-    expect(createLightLlmProvider()).toBeUndefined();
+  it("GUI 覆盖模型生效；空白覆盖回落 .env", () => {
+    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
+    process.env.TUTOR_LLM_MODEL = "env-model";
+    process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
+    process.env.OPENAI_API_KEY = "test-key";
+    expect(createLlmProvider({ model: "gui-model" })?.modelVersion).toContain("gui-model");
+    expect(createLlmProvider({ model: "  " })?.modelVersion).toContain("env-model");
   });
 });
 
@@ -264,30 +258,6 @@ describe("ThinkingOverrideLlmProvider + thinking 参数", () => {
     const plain = await withoutCache.complete({ system: "s", user: "u" });
     expect(plain.usage?.promptCacheHitTokens).toBeUndefined();
     expect(plain.usage?.promptCacheMissTokens).toBeUndefined();
-  });
-});
-
-describe("createTeachingProvider / createLightLlmProvider 模型覆盖", () => {
-  const ENV = {
-    TUTOR_TEACHING_PROVIDER: "openai-compatible",
-    TUTOR_TEACHING_MODEL: "env-model",
-    TUTOR_LIGHT_PROVIDER: "openai-compatible",
-    TUTOR_OPENAI_URL: "https://llm.example.com/v1",
-    OPENAI_API_KEY: "test-key"
-  };
-
-  it("覆盖模型生效；空串回落 .env", () => {
-    const saved = { ...process.env };
-    Object.assign(process.env, ENV);
-    try {
-      expect(createTeachingProvider({ model: "gui-model" })?.modelVersion).toContain("gui-model");
-      expect(createTeachingProvider({ model: "  " })?.modelVersion).toContain("env-model");
-      expect(createLightLlmProvider({ model: "gui-light" })?.modelVersion).toContain("gui-light");
-      // 覆盖模型给了 light 档一个模型 → 不再视为「未配置」
-      expect(createLightLlmProvider()).toBeUndefined();
-    } finally {
-      process.env = saved;
-    }
   });
 });
 
