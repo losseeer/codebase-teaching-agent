@@ -4,7 +4,8 @@ import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-fil
 /**
   read_file 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
 
-  - 预算硬上限（轮数 / 累计读取文件数）；用尽时对未应答的 tool_call 明确回绝，再做一轮不带工具的收尾回答；
+  - 预算硬上限（轮数 / 累计**读成功**的文件数）；用尽时对未应答的 tool_call 明确回绝，再做一轮不带工具的收尾回答。
+    被护栏拒绝或路径写错的调用**不占文件额度**（代价只有一行文本，且「反复乱试」已由轮数兜住），但仍逐条进 fileReads 审计；
   - messages[0] 恒为首轮 user 消息——provider 提供 messages 时忽略 user 字段，
     首轮 user 若不进 messages，工具调用后的轮次会同时丢失代码上下文与学习者提问（回归防线）；
   - 每轮调用前 micro_compact：更早轮次的 tool 结果压成占位符、早期 reasoningContent 丢弃
@@ -25,7 +26,7 @@ export interface ReadToolLoopInput {
   temperature: number;
   /** 最多几轮工具调用 */
   maxRounds: number;
-  /** 本次对话累计最多读取几个文件 */
+  /** 本次对话累计最多读取几个文件（只数读成功的；被拒绝/失败的仍进 fileReads 审计但不占额度） */
   maxCalls: number;
   onProgress?: (progress: ReadToolProgress) => void;
   /** LLM 工作日志的场景标签（teaching.turn / map.chat），透传给每一轮调用 */
@@ -46,8 +47,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const fileReads: FileReadRecord[] = [];
   let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
+  let succeededReads = 0;
   while (completion.toolCalls?.length) {
-    if (rounds >= input.maxRounds || fileReads.length >= input.maxCalls) {
+    if (rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
@@ -68,6 +70,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       input.onProgress?.({ type: "reading", path: readPathHint(call.argumentsJson) });
       const outcome = executeReadFile(input.repoPath, call.argumentsJson);
       fileReads.push(outcome.audit);
+      if (!outcome.audit.denied) succeededReads += 1;
       messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
     }
     input.onProgress?.({ type: "thinking", round: rounds + 1 });

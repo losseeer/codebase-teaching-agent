@@ -115,6 +115,14 @@ function repositorySettings(repositoryPath: string, repositoryId: string): { mon
   return { monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd };
 }
 
+/** L1 摘要表 → 流程证据需要的形状（只保留「一句话职责」与「它可不可信」）。 */
+function latestFileSummaries(repositoryPath: string): Map<string, { summary: string; coverageLow?: boolean }> {
+  const database = new TutorDatabase(repositoryPath);
+  const rows = database.getLatestFileSummaries();
+  database.close();
+  return new Map(rows.map((row) => [row.path, { summary: row.summary, ...(row.coverageLow === undefined ? {} : { coverageLow: row.coverageLow }) }]));
+}
+
 importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
@@ -315,14 +323,17 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   const entry = wanted ? entries.find((item) => item.path === wanted) : entries[0];
   if (!entry) return reply.code(404).send({ error: "该路径不是本仓库识别到的执行入口。" });
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
-  if (!provider) return degradedFlow(repository.analysis, entry, "未配置轻量档 LLM 或本月预算已触顶");
+  // 流程生成走**主力档**（2026-09-18 由轻量档改过来）：它是「看着整仓证据推断编排」的重任务，
+  // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。
+  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : teachingProvider;
+  if (!provider) return degradedFlow(repository.analysis, entry, "未配置主力档 LLM 或本月预算已触顶");
   const generated = await generateRepositoryFlowCached({
     repositoryPath: repository.path,
     index: repository.index,
     analysis: repository.analysis,
     entry,
     provider,
+    summaries: latestFileSummaries(repository.path),
     cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
   });
   if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {

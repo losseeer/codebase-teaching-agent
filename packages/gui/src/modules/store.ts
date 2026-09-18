@@ -24,8 +24,7 @@ export type ModuleWhere = "teaching" | "practice";
 export const DEFAULT_MODULES: KnowledgeModule[] = [
   { id: "network", label: "计算机网络", hint: "HTTP 入口、超时、重试与幂等" },
   { id: "os", label: "操作系统", hint: "进程内状态、IO 边界与并发" },
-  { id: "lang", label: "语言特性", hint: "类型收窄、异步编排与错误处理" },
-  { id: "other", label: "其他计算机知识", hint: "分层架构、存储与一致性" }
+  { id: "lang", label: "语言特性", hint: "类型收窄、异步编排与错误处理" }
 ];
 
 /**
@@ -81,14 +80,14 @@ export function loadActiveModule(where: ModuleWhere, modules: KnowledgeModule[])
     const saved = localStorage.getItem(ACTIVE_KEY_PREFIX + where);
     if (saved && modules.some((item) => item.id === saved)) return saved;
   } catch { /* ignore */ }
-  return modules[0]?.id ?? "other";
+  return modules[0]?.id ?? "";
 }
 
 export function saveActiveModule(where: ModuleWhere, id: string): void {
   try { localStorage.setItem(ACTIVE_KEY_PREFIX + where, id); } catch { /* ignore */ }
 }
 
-/** 关键词分类：返回命中的第一个模块 id；都不命中归「其他计算机知识」。关键词表在 shared（与 engine 练习出题过滤共用）。 */
+/** 关键词分类：返回命中的第一个模块 id；都不命中时不会归到任何模块下（shared 在候选里没有 `other` 时返回空串）。关键词表在 shared（与 engine 练习出题过滤共用）。 */
 export function classifyModule(text: string, modules: KnowledgeModule[]): string {
   return classifyModuleId(text, modules.map((item) => item.id));
 }

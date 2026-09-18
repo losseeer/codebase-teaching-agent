@@ -10,7 +10,7 @@ import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/store";
-import { SourceView, type SourcePayload } from "../source/SourceView";
+import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
   代码教学工作区（对齐 prototype `.teaching-workspace`，两栏）：
@@ -157,6 +157,15 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   if (!t.course || !t.selected) return <Loading />;
   const { selected, course } = t;
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
+  /** 面板只渲染前 MAX_RENDER_LINES 行：锚点行落在范围外时，源码区根本没有那一行，
+      文案不能再说「已定位」（渲染与滚动都在 SourceView 里，这里只负责说实话）。 */
+  const lineRenderable = source ? isLineRendered(source.line) : true;
+  const sourceMeta = !source
+    ? "选择左侧仓库文件或推荐入口"
+    : lineRenderable
+      ? `只读 · 已定位第 ${source.line} 行`
+      : `只读 · 第 ${source.line} 行超出预览上限`;
+  const sourceMetaNote = source && !lineRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
 
   return (
     <section className="page tutor-page">
@@ -218,7 +227,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                 ))}
               </div>
             ) : null}
-            <div className="source-meta"><span>{source ? `只读 · 已定位第 ${source.line} 行` : "选择左侧仓库文件或推荐入口"}</span><span>⌘ P 搜索文件</span></div>
+            <div className="source-meta"><span title={sourceMetaNote}>{sourceMeta}</span><span>⌘ P 搜索文件</span></div>
             <SourceView source={source} />
           </section>
         </div>

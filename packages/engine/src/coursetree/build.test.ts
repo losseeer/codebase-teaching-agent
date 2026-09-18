@@ -7,8 +7,8 @@ describe("course tree", () => {
       repositoryId: "repo_test",
       modelVersion: "fixture-v1",
       files: [{ path: "src/main.ts", extension: ".ts", bytes: 30, lines: 2 }],
-      summaries: [{ path: "src/main.ts", summary: "应用入口。", cached: false }],
-      graph: { imports: new Map([["src/main.ts", []]]), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }] }
+      summaries: [{ path: "src/main.ts", summary: "应用入口。", role: "core", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
+      graph: { imports: new Map([["src/main.ts", []]]), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" }
     });
     const workflow = tree.root.children[0].children[0];
     expect(workflow.anchors).toEqual([{ path: "src/main.ts", line: 1, label: "script: dev" }]);
@@ -23,7 +23,7 @@ describe("course tree", () => {
         { path: "src/main.ts", extension: ".ts", bytes: 30, lines: 2 },
         { path: "test-fixtures/frozen-demo-repo/src/main.js", extension: ".js", bytes: 30, lines: 2 }
       ],
-      summaries: [{ path: "src/main.ts", summary: "应用入口。", cached: false }],
+      summaries: [{ path: "src/main.ts", summary: "应用入口。", role: "core", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
       graph: {
         imports: new Map([["src/main.ts", ["test-fixtures/frozen-demo-repo/src/main.js"]]]),
         calls: [],
@@ -33,7 +33,8 @@ describe("course tree", () => {
         entrypoints: [
           { path: "src/main.ts", line: 1, label: "script: dev" },
           { path: "test-fixtures/frozen-demo-repo/src/main.js", line: 1, label: "script: start" }
-        ]
+        ],
+        parseBackend: "regex"
       }
     });
     const workflowPaths = tree.root.children[0].children.map((node) => node.anchors[0]?.path);

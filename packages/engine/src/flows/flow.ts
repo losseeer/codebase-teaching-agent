@@ -1,8 +1,12 @@
 import {
   FLOW_MAX_STAGES,
+  type FileRole,
+  type FileTreeNode,
+  type FlowEdge,
   type FlowStage,
   type FlowStageFile,
   type FlowStageKind,
+  type Hotspot,
   type RepositoryAnalysis,
   type RepositoryFlow,
   type RepositoryFlowResult,
@@ -10,7 +14,10 @@ import {
   type SourceAnchor
 } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
+import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
 import { executeReadFile } from "../source/read-file.js";
+import { deepenInferredEdges } from "./deepen.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
 
 /**
@@ -33,6 +40,10 @@ const MAX_SYMBOLS_PER_FILE = 8;
 const MAX_IMPORTS_PER_FILE = 8;
 const MAX_CALL_CHAIN = 24;
 const ENTRY_EXCERPT_LINES = 120;
+/** 目录骨架用的行数上限：全量文件的目录树在大型仓库会失控，超出即截断并显式告知模型。 */
+const MAX_TREE_LINES = 200;
+/** 热点只给最靠前的若干个：完整列表是索引内部数据，喂给模型的是「哪里最常被改动」这个信号。 */
+const MAX_HOTSPOTS = 15;
 const MAX_TITLE = 18;
 const MAX_SUMMARY = 100;
 const MAX_STAGE_TITLE = 14;
@@ -42,6 +53,11 @@ const MAX_FILE_NOTE = 20;
 const MAX_BRANCHES = 4;
 const MAX_BRANCH_TEXT = 30;
 const MAX_CAVEATS = 160;
+/** 环节数上限 12，边比环节多不了太多；给点余量，多出来的会在校验时丢弃并计数。 */
+const MAX_EDGES = 24;
+const MAX_EDGE_EVIDENCE = 60;
+const MAX_UNCOVERED = 6;
+const MAX_UNCOVERED_TEXT = 40;
 /** 环节被丢弃到低于该数量就不再算「一条流程」，回落静态视图。 */
 const MIN_STAGES = 3;
 const FALLBACK_UNPARSEABLE = "模型返回的内容无法解析成一条完整流程";
@@ -55,9 +71,15 @@ const SYSTEM_PROMPT = [
   `3. 环节数 ${MIN_STAGES}~${FLOW_MAX_STAGES} 个。第 1 个环节必须是入口。`,
   "4. kind 取值：entry（入口）、stage（普通环节）、decision（有条件分支，用 branches 写清判断依据与去向）、loop（回到更早环节，用 loopsTo 写目标序号）、exit（结束/产出）。",
   "5. 只描述代码能支持的内容，不编造模块名或函数名；把握不准的地方写进 caveats。",
+  `6. edges 是环节之间的去向，每条必须有 from/to（环节序号，1 起）、origin 与 evidence。origin=static 表示「依赖图上真的有这条路」（两个环节的文件之间存在 import 或跨文件调用），evidence 写「文件:行 → 文件:行」；origin=inferred 表示「代码里读不出、是你按编排语义推断的」（回调或节点注册、路由表、依赖注入、事件订阅），evidence 写一句依据。`,
+  `   注意：主调用**不会**给你那些文件的完整代码（只有入口前若干行），所以本次 origin 只能写 static 或 inferred——声称「在源码里读到」会被改标为推断；code 是后续核实环节读过正文之后才能给的标记。branches 仍用于分叉的文字说明，回环除了 loopsTo 也应在 edges 里有一条从后向前的回边。`,
+  `7. uncovered 必填：列出你这次没能确认的部分（怀疑参与但证据不足的文件、看不清的分支），每条 ≤${MAX_UNCOVERED_TEXT} 字；确实没有就填空数组。`,
+  "证据字段说明：files 是参与执行的文件详表（含符号名、依赖方向与角色 role，role 取值 core=执行主干 / infra=配置存储日志网络等设施接入 / support=支撑逻辑 / tool=末端工具 / test=测试）；带 summary 的文件有一条**已确认**的一句话职责，没有 summary 的文件即职责未确认——`withheldSummaries` 说明其中有多少条摘要因覆盖不足被隐去，别把它们当已知事实；directoryTree 是全部被索引文件的目录骨架，目录后的 (N) 是该目录下被索引的文件数，用来看详表之外还有什么；hotspots 是 git 改动次数最多的文件，改动频繁处通常承载主流程；callChain 是静态跨文件调用链（对回调注册这类编排是盲的，不要照抄）。",
   `严格输出 JSON：{"title":"≤${MAX_TITLE}字","summary":"≤${MAX_SUMMARY}字",`,
   `"stages":[{"title":"≤${MAX_STAGE_TITLE}字","detail":"≤${MAX_STAGE_DETAIL}字","kind":"entry|stage|decision|loop|exit",`,
   `"files":[{"path":"清单中的路径","line":1,"note":"≤${MAX_FILE_NOTE}字"}],"branches":["≤${MAX_BRANCH_TEXT}字"],"loopsTo":1}],`,
+  `"edges":[{"from":1,"to":2,"origin":"static|inferred","evidence":"≤${MAX_EDGE_EVIDENCE}字"}],`,
+  `"uncovered":["≤${MAX_UNCOVERED_TEXT}字"],`,
   `"caveats":"≤${MAX_CAVEATS}字，说明不确定处或已知遗漏"}。`,
   "不要输出 JSON 以外的任何文字。"
 ].join("");
@@ -68,6 +90,19 @@ export interface FlowDigestFile {
   symbols: string[];
   imports: string[];
   importedBy: number;
+  /** 结构角色（core 主干 / infra 设施 / support 支撑 / tool 末端 / test 测试），与摘要表同一套分类。 */
+  role: FileRole;
+  /**
+    该文件的**已确认**一句话职责（来自 L1 摘要表）。覆盖不足的摘要**不会**出现在这里——
+    摘要不可信就当没有，别把猜测喂进去当事实（有多少条被隐去由 `withheldSummaries` 说明）。
+  */
+  summary?: string;
+}
+
+/** L1 摘要表在流程证据里的投影：只需要「一句话职责」和「它可不可信」。 */
+export interface FlowDigestSummary {
+  summary: string;
+  coverageLow?: boolean;
 }
 
 export interface FlowDigest {
@@ -80,34 +115,61 @@ export interface FlowDigest {
   callChain: string[];
   /** 静态链是否被展开上限截断 */
   callChainTruncated: boolean;
+  /** 全部被索引文件的目录骨架；目录行为 `name/ (N)`，N 是该目录下被索引文件数 */
+  directoryTree: string[];
+  /** 目录骨架是否被行数上限截断 */
+  directoryTreeTruncated: boolean;
+  /** git 改动热点；**已过滤到被索引的文件**，避免模型引用一个不在索引里的路径 */
+  hotspots: Hotspot[];
+  /** 有多少个文件的摘要因**覆盖不足**被隐去（那些文件的职责未确认，别当已知事实用） */
+  withheldSummaries: number;
 }
 
 /**
   构造喂给模型的证据。证据只含「模型推不出、但必须知道」的事实：
   真实路径、符号名、依赖方向、静态调用顺序。刻意不放源码全文——那会把成本推高一个量级，
   而流程编排靠符号名与文件名已经能读出来。
+
+  ⚠️ 字段顺序即前缀缓存成本：`entry` 与 `entryExcerpt` 随入口变，所以**新增段一律追加在末尾**，
+  别往中间插（会让其后全部失效）；`files` 的排序是全仓维度、不随入口变，改动它同样会破缓存。
  */
-export function buildFlowDigest(repositoryPath: string, index: RepositoryIndex, analysis: RepositoryAnalysis, entry: SourceAnchor): FlowDigest {
+export function buildFlowDigest(
+  repositoryPath: string,
+  index: RepositoryIndex,
+  analysis: RepositoryAnalysis,
+  entry: SourceAnchor,
+  summaries: Map<string, FlowDigestSummary>
+): FlowDigest {
   const inDegree = new Map<string, number>();
   for (const targets of Object.values(analysis.graph.imports)) {
     for (const target of targets) inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
   }
-  const symbolsByPath = new Map<string, string[]>();
-  for (const symbol of analysis.graph.symbols) {
-    const list = symbolsByPath.get(symbol.path) ?? [];
-    if (list.length < MAX_SYMBOLS_PER_FILE) list.push(symbol.name);
-    symbolsByPath.set(symbol.path, list);
-  }
+  const ranked = rankSymbolsByCalls(analysis.graph.symbols, analysis.graph.calls, [entry.path], MAX_SYMBOLS_PER_FILE);
+  const symbolsByPath = new Map<string, string[]>([...ranked].map(([path, list]) => [path, list.map((symbol) => symbol.name)]));
+  // 角色按结构判（不依赖有没有配模型），因此同一份仓库任何时候算出的角色都一样
+  const roles = classifyFileRoles({
+    files: index.files,
+    symbols: analysis.graph.symbols,
+    calls: analysis.graph.calls,
+    imports: analysis.graph.imports,
+    entrypoints: analysis.graph.entrypoints
+  });
 
   // 有依赖边或有符号的文件才进清单：流程视图关心的是「谁参与执行」，不是全量文件清单
   const candidates = index.files
-    .map((file) => ({
-      path: file.path,
-      lines: file.lines,
-      symbols: symbolsByPath.get(file.path) ?? [],
-      imports: (analysis.graph.imports[file.path] ?? []).slice(0, MAX_IMPORTS_PER_FILE),
-      importedBy: inDegree.get(file.path) ?? 0
-    }))
+    .map((file) => {
+      const known = summaries.get(file.path);
+      return {
+        path: file.path,
+        lines: file.lines,
+        symbols: symbolsByPath.get(file.path) ?? [],
+        imports: (analysis.graph.imports[file.path] ?? []).slice(0, MAX_IMPORTS_PER_FILE),
+        importedBy: inDegree.get(file.path) ?? 0,
+        role: roleOf(roles, file.path),
+        // 摘要只放**已确认**的：覆盖不足等于这条摘要不可信，宁可缺字段也不把它当事实喂进去
+        ...(known && !known.coverageLow ? { summary: known.summary } : {})
+      };
+    })
     .filter((file) => file.path === entry.path || file.imports.length || file.importedBy > 0 || file.symbols.length)
     .sort((left, right) =>
       Number(right.path === entry.path) - Number(left.path === entry.path)
@@ -123,14 +185,47 @@ export function buildFlowDigest(repositoryPath: string, index: RepositoryIndex, 
   const read = executeReadFile(repositoryPath, JSON.stringify({ path: entry.path, offset: 1, limit: ENTRY_EXCERPT_LINES }));
   const entryExcerpt = read.audit.denied ? undefined : read.content;
 
+  const tree = renderDirectoryTree(index.fileTree, MAX_TREE_LINES);
+  // 热点可能落在未索引的文件上（gitHotspots 只按 .tutorignore 过滤、不看扩展名），
+  // 而 parseFlow 会把「不在索引里的路径」当编造丢弃——先把这类路径剔掉，免得模型白白踩坑。
+  const indexedPaths = new Set(index.files.map((file) => file.path));
+  const hotspots = index.hotspots.filter((hotspot) => indexedPaths.has(hotspot.path)).slice(0, MAX_HOTSPOTS);
+
   return {
     entry: { path: entry.path, label: entry.label },
     ...(entryExcerpt ? { entryExcerpt } : {}),
     files,
     omittedFiles: candidates.length - files.length,
     callChain: callChain.slice(0, MAX_CALL_CHAIN),
-    callChainTruncated: evidence.truncated || callChain.length > MAX_CALL_CHAIN
+    callChainTruncated: evidence.truncated || callChain.length > MAX_CALL_CHAIN,
+    directoryTree: tree.lines,
+    directoryTreeTruncated: tree.truncated,
+    hotspots,
+    withheldSummaries: files.filter((file) => summaries.get(file.path)?.coverageLow).length
   };
+}
+
+/** 目录骨架：只列目录与被索引文件，目录行附该目录下被索引文件数。超出 maxLines 即截断并标记。 */
+function renderDirectoryTree(nodes: FileTreeNode[], maxLines: number): { lines: string[]; truncated: boolean } {
+  const lines: string[] = [];
+  let truncated = false;
+  const walk = (list: FileTreeNode[], depth: number): void => {
+    for (const node of list) {
+      if (lines.length >= maxLines) {
+        truncated = true;
+        return;
+      }
+      lines.push(`${"  ".repeat(depth)}${node.name}${node.kind === "directory" ? `/ (${countIndexedFiles(node)})` : ""}`);
+      if (node.children?.length) walk(node.children, depth + 1);
+    }
+  };
+  walk(nodes, 0);
+  return { lines, truncated };
+}
+
+function countIndexedFiles(node: FileTreeNode): number {
+  if (node.kind === "file") return 1;
+  return (node.children ?? []).reduce((sum, child) => sum + countIndexedFiles(child), 0);
 }
 
 export interface GenerateFlowInput {
@@ -139,6 +234,8 @@ export interface GenerateFlowInput {
   analysis: RepositoryAnalysis;
   entry: SourceAnchor;
   provider: LlmProvider;
+  /** L1 摘要表（按路径索引）；缺某个文件就是「该文件职责未确认」。 */
+  summaries: Map<string, FlowDigestSummary>;
 }
 
 export interface GeneratedFlow extends RepositoryFlowResult {
@@ -149,7 +246,7 @@ export interface GeneratedFlow extends RepositoryFlowResult {
 export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<GeneratedFlow> {
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
-    const digest = buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry);
+    const digest = buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry, input.summaries);
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: JSON.stringify(digest),
@@ -160,10 +257,20 @@ export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<
     const parsed = parseFlow(response.text, {
       entry: input.entry,
       availablePaths: new Set(input.index.files.map((file) => file.path)),
-      linesOf: new Map(input.index.files.map((file) => [file.path, file.lines]))
+      linesOf: new Map(input.index.files.map((file) => [file.path, file.lines])),
+      areRelated: buildRelatedPairs(input.analysis)
     });
     if (!parsed) return { flow: staticFlow(evidence, FALLBACK_UNPARSEABLE), source: "static", reason: FALLBACK_UNPARSEABLE, usage: response.usage };
-    return { flow: parsed, source: "llm", usage: response.usage };
+    // 按需深入：只对模型自认是推断的去向、有界地读一次代码正文。
+    // 没有推断边就一条调用都不发生；这一步失败也只损失 caveats 一行，不会丢掉主调用的结果。
+    const deepened = await deepenInferredEdges({
+      repositoryPath: input.repositoryPath,
+      analysis: input.analysis,
+      index: input.index,
+      flow: parsed,
+      provider: input.provider
+    });
+    return { flow: deepened.flow, source: "llm", usage: addUsage(response.usage, deepened.usage) };
   } catch (error) {
     const reason = `流程生成调用失败（${error instanceof Error ? error.message : String(error)}）`;
     console.error("[flows] LLM 调用失败，回落静态调用链:", reason);
@@ -171,10 +278,59 @@ export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<
   }
 }
 
+/**
+  相加两段调用的用量（主调用 + 按需深入）。
+
+  ⚠️ **四个字段都要搬**：只搬 in/out 会把「前缀缓存命中」悄悄变成「未命中」——项目里已经吃过
+  一次这个亏（`harness/harness.ts` 的 `sumUsage()` 至今丢着 `promptCacheHitTokens`，导致教学线
+  的缓存指标不可信）。两边都没上报该字段时才不带它，别用 `?? 0` 把「没上报」说成「没命中」。
+*/
+export function addUsage(left: LlmUsage | undefined, right: LlmUsage | undefined): LlmUsage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  const sum = (key: "promptCacheHitTokens" | "promptCacheMissTokens"): { [k in typeof key]?: number } =>
+    left[key] === undefined && right[key] === undefined ? {} : { [key]: (left[key] ?? 0) + (right[key] ?? 0) };
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    ...sum("promptCacheHitTokens"),
+    ...sum("promptCacheMissTokens")
+  };
+}
+
 interface ParseContext {
   entry: SourceAnchor;
   availablePaths: Set<string>;
   linesOf: Map<string, number>;
+  /** 两个文件在依赖图上有没有真实关系（import 边或跨文件调用边，任一方向；同一文件视为有关系）。 */
+  areRelated: (leftPath: string, rightPath: string) => boolean;
+}
+
+/**
+  依赖图的「有关系」判据。边级校验靠它把「声称来自代码」的边验一遍——
+  双向都塞进集合，查起来才是 O(1)。
+*/
+export function buildRelatedPairs(analysis: RepositoryAnalysis): (leftPath: string, rightPath: string) => boolean {
+  const pairs = new Set<string>();
+  const link = (left: string, right: string): void => {
+    if (left !== right) pairs.add(`${left}\u0000${right}`);
+  };
+  for (const [from, targets] of Object.entries(analysis.graph.imports)) {
+    for (const to of targets) {
+      link(from, to);
+      link(to, from);
+    }
+  }
+  for (const call of analysis.graph.calls) {
+    link(call.callerPath, call.calleePath);
+    link(call.calleePath, call.callerPath);
+  }
+  return (left, right) => left === right || pairs.has(`${left}\u0000${right}`);
+}
+
+/** 两个环节之间是否存在真实的文件级依赖（任一文件对命中即可）。 */
+function stagesRelated(left: FlowStage, right: FlowStage, areRelated: ParseContext["areRelated"]): boolean {
+  return left.files.some((one) => right.files.some((other) => areRelated(one.path, other.path)));
 }
 
 /** 把模型输出校验成 `RepositoryFlow`：路径必须真实、行号必须落在文件范围内、序号与回环重排一致。 */
@@ -222,10 +378,20 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
   });
 
   const droppedStages = (Array.isArray(record.stages) ? record.stages.length : 0) - kept.length;
+  const edgeStats = { dropped: 0, downgradedStatic: 0, demotedCode: 0 };
+  const edges = normalizeEdges(record.edges, stages, context, edgeStats, orderMap);
+  const uncovered = (Array.isArray(record.uncovered) ? record.uncovered : [])
+    .map((item) => asText(item, MAX_UNCOVERED_TEXT))
+    .filter(Boolean)
+    .slice(0, MAX_UNCOVERED);
   const notes = [
     asText(record.caveats, MAX_CAVEATS),
     droppedStages > 0 ? `有 ${droppedStages} 个环节因未给出存在的文件路径被丢弃` : "",
-    droppedFiles.count > 0 ? `有 ${droppedFiles.count} 个文件路径不在仓库中，已剔除` : ""
+    droppedFiles.count > 0 ? `有 ${droppedFiles.count} 个文件路径不在仓库中，已剔除` : "",
+    edgeStats.dropped > 0 ? `有 ${edgeStats.dropped} 条边因端点或依据不合格被丢弃` : "",
+    edgeStats.downgradedStatic > 0 ? `有 ${edgeStats.downgradedStatic} 条边声称来自代码但与依赖图对不上，已改标为推断` : "",
+    edgeStats.demotedCode > 0 ? `有 ${edgeStats.demotedCode} 条边声称「在源码里读到」，但本次并没有读过那些文件，已改标为推断` : "",
+    Array.isArray(record.uncovered) ? "" : "模型没有给出未覆盖清单"
   ].filter(Boolean);
 
   return {
@@ -233,9 +399,59 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
     title: asText(record.title, MAX_TITLE) || `${context.entry.path} 的执行流程`,
     summary: asText(record.summary, MAX_SUMMARY),
     stages,
+    edges,
+    ...(uncovered.length ? { uncovered } : {}),
     ...(notes.length ? { caveats: notes.join("；") } : {}),
     generatedAt: new Date().toISOString()
   };
+}
+
+/**
+  边的校验。三件事：
+  1. 端点必须是**保留下来的**环节（模型给的是它自己的数组序号，被丢弃的环节会让序号整体前移，
+     因此要经 `orderMap` 换算）；依据与 origin 必填——空依据的边等于没有依据。
+  2. **声称 `static` 的边要由依赖图证明**：两个环节的文件之间必须真有 import 或跨文件调用。
+     证不出来就**降级为 `inferred`**，不删边：删边会篡改拓扑，降级保真度更高。
+  3. 去重、按上限截断，并如实记下丢了几条、降级了几条（进 caveats，不静默）。
+*/
+function normalizeEdges(
+  value: unknown,
+  stages: FlowStage[],
+  context: ParseContext,
+  stats: { dropped: number; downgradedStatic: number; demotedCode: number },
+  orderMap: Map<number, number>
+): FlowEdge[] {
+  const candidates = Array.isArray(value) ? value : [];
+  if (candidates.length > MAX_EDGES) stats.dropped += candidates.length - MAX_EDGES;
+  const edges: FlowEdge[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates.slice(0, MAX_EDGES)) {
+    if (!candidate || typeof candidate !== "object") {
+      stats.dropped += 1;
+      continue;
+    }
+    const record = candidate as Record<string, unknown>;
+    const from = Number.isInteger(record.from) ? orderMap.get(Number(record.from)) : undefined;
+    const to = Number.isInteger(record.to) ? orderMap.get(Number(record.to)) : undefined;
+    const evidence = asText(record.evidence, MAX_EDGE_EVIDENCE);
+    const origin = record.origin === "static" || record.origin === "code" || record.origin === "inferred" ? record.origin : undefined;
+    if (from === undefined || to === undefined || from === to || !evidence || !origin) {
+      stats.dropped += 1;
+      continue;
+    }
+    if (seen.has(`${from}\u0000${to}`)) continue;
+    seen.add(`${from}\u0000${to}`);
+    // 边级校验：**只降不升**。两种情况都降为 inferred，条数分别记账（进 caveats，不静默）：
+    // ① 声称 static 而依赖图证不出来；
+    // ② 声称 code ——这一步只读了入口前 120 行，「在源码里读到」不成立（真正的 code 边由按需深入给出）。
+    // 反过来永远不成立：模型自己说推断的边，就算图上恰有关系也不抬成「来自代码」。
+    const downgradedStatic = origin === "static" && !stagesRelated(stages[from - 1], stages[to - 1], context.areRelated);
+    const demotedCode = origin === "code";
+    if (downgradedStatic) stats.downgradedStatic += 1;
+    if (demotedCode) stats.demotedCode += 1;
+    edges.push({ from, to, origin: downgradedStatic || demotedCode ? "inferred" : origin, evidence });
+  }
+  return edges;
 }
 
 type NormalizedStage = Omit<FlowStage, "order" | "loopsTo"> & { sourceOrder: number; loopsTo?: number };
@@ -277,7 +493,12 @@ function asText(value: unknown, limit: number): string {
   return typeof value === "string" ? [...value.trim().replace(/\s+/g, " ")].slice(0, limit).join("") : "";
 }
 
-/** 流程缓存：同一（仓库分析版本, 入口）的重复请求不再重调 LLM。只缓存成功结果。 */
+/**
+  流程缓存：同一（仓库分析版本, 入口）的重复请求不再重调 LLM。只缓存成功结果。
+  TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下（命中即续期），
+  所以只要这个入口还在被访问，缓存就一直有效。
+  过期的正确性由缓存 key 里的 `versionStamp` 保证：仓库一被重新分析 key 就变，不存在「续期导致流程图过时」。
+  */
 const flowCache = new Map<string, { result: GeneratedFlow; at: number }>();
 const FLOW_CACHE_TTL_MS = 10 * 60_000;
 const FLOW_CACHE_MAX = 60;
@@ -289,9 +510,10 @@ export function clearRepositoryFlowCache(): void {
 export async function generateRepositoryFlowCached(input: GenerateFlowInput & { cacheKey: string }): Promise<GeneratedFlow> {
   const key = `${input.cacheKey}:${input.entry.path}`;
   const hit = flowCache.get(key);
-  if (hit && Date.now() - hit.at < FLOW_CACHE_TTL_MS) {
+  const now = Date.now();
+  if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
     flowCache.delete(key);
-    flowCache.set(key, hit); // 刷新 LRU 新近度
+    flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
     return { ...hit.result, usage: undefined };
   }
   const result = await generateRepositoryFlow(input);

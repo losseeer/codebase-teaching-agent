@@ -31,6 +31,14 @@ export interface Hotspot {
   changes: number;
 }
 
+/**
+  文件在仓库里扮演的角色（架构层的粗分类）。只在「文件」这一粒度上取值：
+  core = 执行主干；support = 支撑逻辑；infra = 外部设施接入（配置、存储、日志、网络客户端）；
+  tool = 末端工具（无依赖也不被依赖）；test = 测试。
+  口径由 `depgraph/roles.ts` 的结构规则给出（确定、可复现），不依赖模型。
+*/
+export type FileRole = "core" | "support" | "infra" | "tool" | "test";
+
 export interface RepositoryIndex {
   repositoryId: string;
   repositoryPath: string;
@@ -106,6 +114,8 @@ export interface ImportEstimate {
   estimatedCostUsd: number;
   provider: string;
   modelVersion: string;
+  /** 本次新算的摘要里，有多少条没拿到模型结果、由确定性档补齐（旧数据没有该字段）。 */
+  fallbackFiles?: number;
 }
 
 /** M1 policy is a continuous 0-100 value; M0 presets remain 35, 50 and 65. */
@@ -171,7 +181,8 @@ export interface TutorSession {
 export interface SymbolInfo {
   id: string;
   name: string;
-  kind: "function" | "class" | "method" | "variable";
+  /** `type` = 接口/类型别名/枚举这类只有声明没有可执行体的名字；`method` = 类或对象里的方法。 */
+  kind: "function" | "class" | "method" | "variable" | "type";
   path: string;
   line: number;
   endLine: number;
@@ -196,6 +207,12 @@ export interface DependencyGraphData {
   entrypoints: SourceAnchor[];
   semanticBackend: "lsp" | "static";
   lspStatus: { language: "typescript" | "python"; status: "available" | "fallback"; reason?: string }[];
+  /**
+    符号抽取走的哪条路：`ast` = 语法树（准确），`regex` = 逐行文本匹配（回落，只在
+    语法解析器加载失败时出现）。旧数据没有这两个字段，故可选；缺失即视为 `regex`。
+  */
+  parseBackend?: "ast" | "regex";
+  parseBackendReason?: string;
 }
 
 export interface ImpactResult {
@@ -265,6 +282,28 @@ export interface FlowStage {
   loopsTo?: number;
 }
 
+/**
+  流程里的一条边（环节之间的去向 + 它的依据）。
+
+  `origin` 必须显式区分三种来源，这是「读到的」与「推断的」的分界：
+  - `static`：依赖图能证明（两个环节的文件之间存在 import 或跨文件调用）
+  - `code`：在**源码正文**里读到的（回调或节点注册、路由表、依赖注入、事件订阅），
+    依赖图上看不见，但代码里写着；evidence 必须引到这条边自己的文件上
+  - `inferred`：模型的编排常识推断，没有可核对的行级依据
+
+  ⚠️ 边级校验**只降不升**：声称 `static` 但依赖图对不上的会降为 `inferred`（不删边——删边会篡改
+  拓扑，降级保真度更高）；`code` 只由「按需深入」那一步在真的读过正文之后给出。
+*/
+export interface FlowEdge {
+  /** 起点环节序号（1 起，对应 `FlowStage.order`） */
+  from: number;
+  /** 终点环节序号（1 起） */
+  to: number;
+  origin: "static" | "code" | "inferred";
+  /** 这条边的依据；静态边给「文件:行 → 文件:行」，代码边给「文件:行 + 是什么结构」。非空。 */
+  evidence: string;
+}
+
 /** 一条从入口出发的执行流程（流程视图的数据源）。 */
 export interface RepositoryFlow {
   entry: SourceAnchor;
@@ -273,6 +312,10 @@ export interface RepositoryFlow {
   /** 流程总述（≤100 字） */
   summary: string;
   stages: FlowStage[];
+  /** 环节之间的去向；**这是拓扑的真源**，`stages[].branches` 只是给人看的文字说明。 */
+  edges: FlowEdge[];
+  /** 自述没能确认的部分（例如怀疑参与但证据不足的文件、看不清的分支）。 */
+  uncovered?: string[];
   /** 已知边界：模型自述的不确定处、被校验丢弃的内容、或降级说明。界面原样展示，不吞掉。 */
   caveats?: string;
   generatedAt: string;
@@ -362,12 +405,14 @@ export const MODULE_KEYWORDS: Record<string, RegExp> = {
   lang: /(type|类型|async|异步|await|error|错误|异常|exception|util|helper|parse|解析|闭包|回调|函数式|泛型)/i
 };
 
-/** 按关键词把文本归类到知识模块；默认 id 命中需在 moduleIds 内，都不命中归「other」。 */
+/** 按关键词把文本归类到知识模块。命中的 id 必须在 moduleIds 内；都不命中时只在候选里确实有 `other`
+    才归 `other`，否则返回空串（未归类）—— 保证返回值要么是 moduleIds 里的 id，要么是空串，
+    不会凭空给出一个调用方模块列表里不存在的 id。 */
 export function classifyModuleId(text: string, moduleIds: string[]): string {
   for (const [id, pattern] of Object.entries(MODULE_KEYWORDS)) {
     if (pattern.test(text) && moduleIds.includes(id)) return id;
   }
-  return "other";
+  return moduleIds.includes("other") ? "other" : "";
 }
 
 export interface ExerciseResult {

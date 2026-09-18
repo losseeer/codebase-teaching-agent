@@ -8,7 +8,9 @@ import { attachQuality, buildCourseTree } from "../coursetree/build.js";
 import { refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLightRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
-import { buildDependencyGraph, impactRadius, serializeGraph } from "../depgraph/graph.js";
+import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
+import { loadSymbolParser } from "../depgraph/parser.js";
+import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { hash, id, isWithin, repositoryId as deriveRepositoryId } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
@@ -159,10 +161,22 @@ export class ImportService extends EventEmitter {
     const database = new TutorDatabase(repositoryPath);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
-    const provider = createSummaryProvider();
-    const { summaries, estimate } = await summarizeFiles(repositoryPath, index.files, database, provider);
+    // L1 走**轻量档**（2026-09-18）：文件级摘要是量大、单条简单的活，与流程生成用主力档分开。
+    // 预算已降级时不传 llm ⇒ 自动落到确定性档，不在超预算时继续花钱。
+    const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLightRuntimeProvider();
+    const provider = createSummaryProvider({ llm: lightProvider });
+    // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
+    // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。
+    // 语法解析器是异步加载的，必须在建图前就绪；加载失败不抛错，改由 graph 记录回落原因。
+    await loadSymbolParser();
+    const baseGraph = buildDependencyGraph(repositoryPath, index.files);
+    const { summaries, estimate } = await summarizeFiles({
+      structure: fileStructureOf(index.files, baseGraph),
+      database,
+      provider
+    });
     progress("building_course", 75, "正在生成微观单元和影响图");
-    const graph = await enrichWithLsp(repositoryPath, buildDependencyGraph(repositoryPath, index.files));
+    const graph = await enrichWithLsp(repositoryPath, baseGraph);
     const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
     const draftCourse = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations });
     const quality = verifyAnalysis(repositoryPath, implementations, draftCourse.root, { timeoutMs: 2_500 });
@@ -184,7 +198,9 @@ export class ImportService extends EventEmitter {
     if (refinementCacheHit) {
       course = storedCourse as CourseTree;
     } else if (summarizeCost(repositoryPath).mode !== "degraded") {
-      const mapProvider = buildLightRuntimeProvider();
+      // 复用导入开头建好的轻量档实例（运行期设置在一次导入内不会变）；预算另查一次——
+      // L1 摘要可能刚花掉一部分，所以不能沿用开头那个判断结果
+      const mapProvider = lightProvider;
       if (mapProvider) {
         progress("building_course", 85, "正在用 LLM 完善宏观设计命名与摘要");
         const refinement = await refineCourseMap(course, mapProvider);
@@ -220,7 +236,7 @@ export class ImportService extends EventEmitter {
     const current = this.repositories.get(repositoryId);
     if (!current) return;
     const startedAt = Date.now();
-    const impact = impactRadius({ imports: new Map(Object.entries(current.analysis.graph.imports)), calls: current.analysis.graph.calls, symbols: current.analysis.graph.symbols, entrypoints: current.analysis.graph.entrypoints, semanticBackend: current.analysis.graph.semanticBackend, lspStatus: current.analysis.graph.lspStatus }, changedPaths);
+    const impact = impactRadius(graphFromData(current.analysis.graph), changedPaths);
     try {
       const next = await this.analyze(current.path, () => undefined);
       next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths: impact.impactedPaths, at: new Date().toISOString() };

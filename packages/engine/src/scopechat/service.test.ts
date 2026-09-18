@@ -111,7 +111,7 @@ describe("mapChat", () => {
       { type: "thinking", round: 2 }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
-    expect(result.fileReads).toEqual([{ path: "service.ts", lines: 150, bytes: expect.any(Number), truncated: true, denied: false }]); // 默认窗口 150 行 < 文件总行数 → truncated
+    expect(result.fileReads).toEqual([{ path: "service.ts", lines: 150, bytes: expect.any(Number), truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
     // 第二轮请求携带完整历史：原始 user 消息（上下文+问题）+ assistant toolCalls + tool 结果（带行号的真实文件内容）
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });
@@ -152,7 +152,8 @@ describe("mapChat", () => {
     // 最近一轮结果 → 原文保留
     expect(toolResults[1].content).toContain("1| ");
     expect(toolResults[1].content.length).toBeGreaterThan(1000);
-    expect(toolResults[1].content).not.toContain("已省略");
+    // 用占位符独有的短语判定，而不是 "已省略"：本测试的夹具就是本文件，正文里本来就有「已省略」三个字
+    expect(toolResults[1].content).not.toContain("以控制上下文");
     // 早期 assistant 的 reasoningContent 丢弃；最近一轮保留（协议要求 tool 轮回传）
     const assistants = third.messages?.filter((m) => m.role === "assistant") ?? [];
     expect(assistants[0].reasoningContent).toBeUndefined();

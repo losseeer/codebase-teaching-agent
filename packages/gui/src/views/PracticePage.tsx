@@ -9,7 +9,7 @@ import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/store";
-import { SourceView, type SourcePayload } from "../source/SourceView";
+import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
   练习评估工作区（对齐 prototype `.practice-workspace`，两栏）：
@@ -136,6 +136,14 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
   const anchor = exercise?.anchors[0];
+  /** 与代码教学同一条规矩：面板只渲染前 MAX_RENDER_LINES 行，锚点行落在范围外就不能说「已高亮」。 */
+  const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
+  const codeNote = anchor
+    ? anchorRenderable
+      ? "相关代码已高亮"
+      : `相关代码超出预览上限（第 ${anchor.line} 行）`
+    : "生成练习后显示相关代码";
+  const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
   const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : text.trim().length > 0);
 
   return (
@@ -179,7 +187,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
         <section className={`pane practice-context ${paneClass(1)}`}>
           <div className="pane-header"><h2>练习上下文</h2><span>{anchor ? `${anchor.path} · 第 ${anchor.line} 行` : "尚未生成练习"}</span></div>
           <div className="source-meta">
-            <span>{anchor ? "相关代码已高亮" : "生成练习后显示相关代码"}</span>
+            <span title={codeNoteTitle}>{codeNote}</span>
             <span>{exercise ? `${gradingLabel(exercise.gradingMode)} · 内容版本 ${exercise.contentVersion.slice(0, 14)}` : "—"}</span>
           </div>
           {error ? <p className="error-message practice-error">{error}</p> : null}

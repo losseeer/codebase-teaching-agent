@@ -5,6 +5,8 @@ import { TutorDatabase } from "../store/database.js";
 import { LocalSummaryProvider } from "../summarizer/provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { buildDependencyGraph } from "../depgraph/graph.js";
+import { loadSymbolParser } from "../depgraph/parser.js";
+import { fileStructureOf } from "../depgraph/roles.js";
 import { buildCourseTree } from "../coursetree/build.js";
 
 const repositoryArgument = process.argv.slice(2).find((argument) => argument !== "--");
@@ -13,8 +15,10 @@ if (!repositoryPath) throw new Error("Usage: pnpm phase0:prepare-study -- /absol
 const index = indexRepository(repositoryPath);
 const database = new TutorDatabase(repositoryPath);
 const provider = new LocalSummaryProvider();
-const { summaries } = await summarizeFiles(repositoryPath, index.files, database, provider);
-const tree = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph: buildDependencyGraph(repositoryPath, index.files) });
+await loadSymbolParser();
+const graph = buildDependencyGraph(repositoryPath, index.files);
+const { summaries } = await summarizeFiles({ structure: fileStructureOf(index.files, graph), database, provider });
+const tree = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph });
 const node = tree.root.children[0]?.children[0] ?? tree.root;
 const prompts = [35, 50, 65].map((style, index) => ({
   blind_id: `S${String(index + 1).padStart(2, "0")}`,

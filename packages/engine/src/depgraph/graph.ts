@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, extname, join, normalize } from "node:path";
 import type { CallEdge, DependencyGraphData, FileEntry, ImpactResult, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
+import { extractSymbolsFromAst, parseBackendStatus, type ParseBackendStatus } from "./parser.js";
 
 export interface DependencyGraph {
   imports: Map<string, string[]>;
@@ -10,6 +11,9 @@ export interface DependencyGraph {
   entrypoints: SourceAnchor[];
   semanticBackend: "lsp" | "static";
   lspStatus: DependencyGraphData["lspStatus"];
+  /** 符号抽取走的哪条路（`ast` 准确 / `regex` 回落）；回落原因见 `parseBackendReason`。 */
+  parseBackend: ParseBackendStatus["backend"];
+  parseBackendReason?: string;
 }
 
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
@@ -39,7 +43,17 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   }
   const calls = extractCalls(contents, symbols, imports);
   const lspStatus = detectLspStatus(files);
-  return { imports, calls, symbols, entrypoints: detectEntrypoints(repositoryPath, files), semanticBackend: lspStatus.some((item) => item.status === "available") ? "lsp" : "static", lspStatus };
+  const parseStatus = parseBackendStatus();
+  return {
+    imports,
+    calls,
+    symbols,
+    entrypoints: detectEntrypoints(repositoryPath, files),
+    semanticBackend: lspStatus.some((item) => item.status === "available") ? "lsp" : "static",
+    lspStatus,
+    parseBackend: parseStatus.backend,
+    ...(parseStatus.reason ? { parseBackendReason: parseStatus.reason } : {})
+  };
 }
 
 export function serializeGraph(graph: DependencyGraph): DependencyGraphData {
@@ -49,7 +63,9 @@ export function serializeGraph(graph: DependencyGraph): DependencyGraphData {
     symbols: graph.symbols,
     entrypoints: graph.entrypoints,
     semanticBackend: graph.semanticBackend,
-    lspStatus: graph.lspStatus
+    lspStatus: graph.lspStatus,
+    parseBackend: graph.parseBackend,
+    ...(graph.parseBackendReason ? { parseBackendReason: graph.parseBackendReason } : {})
   };
 }
 
@@ -78,10 +94,28 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
 }
 
 export function graphFromData(data: DependencyGraphData): DependencyGraph {
-  return { imports: new Map(Object.entries(data.imports)), calls: data.calls, symbols: data.symbols, entrypoints: data.entrypoints, semanticBackend: data.semanticBackend, lspStatus: data.lspStatus };
+  return {
+    imports: new Map(Object.entries(data.imports)),
+    calls: data.calls,
+    symbols: data.symbols,
+    entrypoints: data.entrypoints,
+    semanticBackend: data.semanticBackend,
+    lspStatus: data.lspStatus,
+    // 旧数据没有该字段（那时只有逐行匹配一条路），按 regex 认，别假装是语法树结果
+    parseBackend: data.parseBackend ?? "regex",
+    ...(data.parseBackendReason ? { parseBackendReason: data.parseBackendReason } : {})
+  };
 }
 
+/**
+  符号抽取：优先语法树；解析器未就绪或该扩展名没有语法时回落逐行匹配。
+  两条路都给同一份 `SymbolInfo` 结构，`endLine` 都是「最后一行（含）」。
+*/
 function extractSymbols(path: string, content: string): SymbolInfo[] {
+  return extractSymbolsFromAst(path, content) ?? extractSymbolsWithRegex(path, content);
+}
+
+function extractSymbolsWithRegex(path: string, content: string): SymbolInfo[] {
   const language = path.endsWith(".py") ? "python" : /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path) ? "typescript" : "other";
   const symbols: SymbolInfo[] = [];
   const lines = content.split("\n");

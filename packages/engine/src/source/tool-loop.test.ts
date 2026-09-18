@@ -66,4 +66,19 @@ describe("completeWithReadTool", () => {
     expect(result.fileReads[0]).toMatchObject({ path: ".env", denied: true });
     expect(result.completion.text).toContain("改看别的文件");
   });
+
+  it("被拒绝的读取不占文件额度：额度 1 也能在被拒后继续读真文件", async () => {
+    const { provider, calls } = scriptedProvider([
+      readCall("c1", ".env"),
+      readCall("c2", "read-file.ts"),
+      { text: "看完了。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
+    expect(result.completion.text).toBe("看完了。");
+    // 两次都进审计（拒绝也要留痕），但只有成功那次占用额度
+    expect(result.fileReads.map((read) => read.denied)).toEqual([true, false]);
+    expect(calls[2].tools).toBeDefined();
+    const readBack = calls[2].messages?.find((message) => message.role === "tool" && message.content.startsWith("文件 "));
+    expect(readBack?.content).toContain("read-file.ts");
+  });
 });

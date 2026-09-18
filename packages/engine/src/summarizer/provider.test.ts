@@ -1,12 +1,85 @@
 import { describe, expect, it } from "vitest";
-import { FailoverSummaryProvider, LocalSummaryProvider, type SummaryProvider } from "./provider.js";
+import { LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./provider.js";
+import type { FileSlice } from "./slice.js";
+import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { AnthropicProvider, OllamaTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";
 
-describe("summary provider fallback", () => {
-  it("falls back locally when the configured provider fails", async () => {
-    const failing: SummaryProvider = { name: "failing", modelVersion: "failing-v1", summarize: async () => { throw new Error("offline"); } };
-    const provider = new FailoverSummaryProvider(failing, new LocalSummaryProvider());
-    await expect(provider.summarize({ path: "src/main.ts", content: "export function main() {}" })).resolves.toContain("main");
+/** L1 的输入是结构切片（不再是整份正文），桩数据按切片形状给。 */
+function sliceOf(path = "src/main.ts"): FileSlice {
+  return {
+    path,
+    lines: 12,
+    role: "core",
+    entries: [
+      { name: "main", kind: "function", line: 1, signature: "main()" },
+      { name: "helper", kind: "function", line: 5, signature: "helper(x)" }
+    ],
+    omittedSymbols: 0,
+    dependsOn: ["src/util.ts"],
+    dependedOnBy: []
+  };
+}
+
+function llmOf(reply: string | (() => Promise<never>), onCall?: (input: LlmCompletionInput) => void): LlmProvider {
+  return {
+    name: "stub",
+    modelVersion: "stub-1",
+    complete: async (input) => {
+      onCall?.(input);
+      if (typeof reply !== "string") return reply();
+      return { text: reply, usage: { inputTokens: 100, outputTokens: 50 } };
+    }
+  };
+}
+
+describe("摘要档", () => {
+  it("批量回复解析：按路径建索引、滤掉不合格的项，没回应的项自然留空", () => {
+    const reply = JSON.stringify([
+      { path: "a.ts", summary: "负责入口编排。", role: "core" },
+      { path: "b.ts", summary: "配置加载。", role: "不存在的角色" },
+      { summary: "缺路径会被丢掉" },
+      { path: "c.ts", summary: "" }
+    ]);
+    const parsed = parseBatchReply(reply);
+    expect(parsed.get("a.ts")).toEqual({ summary: "负责入口编排。", role: "core" });
+    expect(parsed.get("b.ts")).toEqual({ summary: "配置加载。" });
+    expect(parsed.has("c.ts")).toBe(false);
+    expect(parsed.size).toBe(2);
+    expect(parseBatchReply("模型没按格式给东西。").size).toBe(0);
+  });
+
+  it("轻量档：一次调用处理整批切片，按下标对齐，被模型漏掉的那条留成空位", async () => {
+    let calls = 0;
+    let sawSystem = "";
+    const slices = ["a.ts", "b.ts", "c.ts"].map((path) => sliceOf(path));
+    const provider = new LlmSummaryProvider(llmOf(
+      JSON.stringify([{ path: "a.ts", summary: "甲", role: "core" }, { path: "c.ts", summary: "丙" }]),
+      (input) => {
+        calls += 1;
+        sawSystem = input.system;
+      }
+    ));
+    const results = await provider.summarizeMany(slices);
+    expect(calls).toBe(1);
+    expect(results).toEqual([{ summary: "甲", role: "core" }, undefined, { summary: "丙" }]);
+    expect(sawSystem).toContain("严格输出 JSON 数组");
+    expect(provider.modelVersion).toBe("stub-1");
+  });
+
+  it("确定性兜底档：逐条都给结果，摘要是路径 + 结构角色 + 主要符号，且不覆盖结构角色", async () => {
+    const results = await new LocalSummaryProvider().summarizeMany([sliceOf(), sliceOf("src/empty.ts")]);
+    expect(results).toHaveLength(2);
+    expect(results[0].summary).toBe("src/main.ts：执行主干；定义 main、helper");
+    expect(results[0].role).toBeUndefined();
+  });
+
+  it("批量里整批失败时不在接口层吞异常（由调用方按条回落）", async () => {
+    const provider: SummaryProvider = { name: "boom", modelVersion: "boom-1", summarizeMany: async () => { throw new Error("offline"); } };
+    await expect(provider.summarizeMany([sliceOf()])).rejects.toThrow("offline");
+  });
+
+  it("批次大小是常量：改它要连着看导入耗时与单次失败的牵连面", () => {
+    expect(SUMMARY_BATCH_SIZE).toBeGreaterThan(1);
   });
 });
 

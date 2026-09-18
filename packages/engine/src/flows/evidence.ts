@@ -1,4 +1,4 @@
-import type { CallEdge, FlowStage, RepositoryAnalysis, RepositoryFlow, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
+import type { CallEdge, FlowEdge, FlowStage, RepositoryAnalysis, RepositoryFlow, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
 
 /**
   流程视图的「静态证据层」：从入口出发，沿 `analysis.graph.calls` 的**跨文件**跳展开一条调用链。
@@ -31,6 +31,8 @@ export interface EvidenceStage {
   endLine?: number;
   /** 调用点：谁（函数）在哪一行发起了这次跳转 */
   from?: { title: string; path: string; line: number };
+  /** 发起这次跳转的**环节序号**（边要按序号连，光有路径连不起来） */
+  fromOrder?: number;
   /** 跨文件去重后的去向总数 */
   branches: number;
   /** 其中本次真正展开成新环节的数量 */
@@ -205,6 +207,7 @@ export function buildFlowEvidence(
         line: branch.cursor.line,
         endLine: branch.cursor.endLine,
         from: { title: branch.caller, path: item.cursor.path, line: branch.line },
+        fromOrder: step.order,
         branches: 0,
         expanded: 0,
         loops: [],
@@ -229,7 +232,10 @@ const MAX_STAGE_TITLE = 14;
   把静态证据直接渲染成流程（LLM 不可用时的降级视图）。
   降级必须显式：`reason` 会写进 `caveats`，界面在页脚原样展示——静默降级等于把静态链
   冒充成模型结论，读者无从知道它看不到回调注册这类编排。
- */
+
+  边也在这里产出：每个环节的 `fromOrder` 就是它的入边，`loops`/`revisits` 是真实的回边与共享去向，
+  两者都是跨文件调用（`buildFlowEvidence` 只展开跨文件跳转），因此 `origin` 一律是 `static`。
+*/
 export function staticFlow(evidence: FlowEvidence, reason: string): RepositoryFlow {
   const stages: FlowStage[] = evidence.stages.map((step) => {
     const kind: FlowStage["kind"] = step.kind === "entry"
@@ -247,17 +253,40 @@ export function staticFlow(evidence: FlowEvidence, reason: string): RepositoryFl
       ...(step.loops.length ? { loopsTo: step.loops[0] } : {})
     };
   });
+  const byOrder = new Map(evidence.stages.map((step) => [step.order, step]));
+  const edgeOf = (from: number, to: number): FlowEdge | undefined => {
+    const source = byOrder.get(from);
+    const target = byOrder.get(to);
+    if (!source || !target || from === to) return undefined;
+    return { from, to, origin: "static", evidence: `${source.path}:${source.line} → ${target.path}:${target.line}` };
+  };
+  const edges: FlowEdge[] = [];
+  const pushEdge = (edge: FlowEdge | undefined): void => {
+    if (edge && !edges.some((item) => item.from === edge.from && item.to === edge.to)) edges.push(edge);
+  };
+  for (const step of evidence.stages) {
+    if (step.fromOrder !== undefined) pushEdge(edgeOf(step.fromOrder, step.order));
+    for (const loop of step.loops) pushEdge(edgeOf(step.order, loop));
+    for (const revisit of step.revisits) pushEdge(edgeOf(step.order, revisit));
+  }
   const caveats = [
     reason,
     `当前展示的是静态调用链（${evidence.stages.length} 个环节），同文件内部调用只计数不展开`,
     evidence.truncated ? `另有 ${evidence.omitted} 个去向未展开` : "",
     "回调注册、路由表、反射、依赖注入等编排不产生调用边，静态链看不到，因此环节可能比真实执行路径少"
   ].filter(Boolean).join("；");
+  const uncovered = [
+    "同文件内部调用未展开（只计数）",
+    evidence.truncated ? `${evidence.omitted} 个跨文件去向因深度/分支/步数上限未展开` : "",
+    "回调注册、路由表、依赖注入等编排在静态调用图上看不见"
+  ].filter(Boolean);
   return {
     entry: evidence.entry,
     title: `${fileTitle(evidence.entry.path)} 调用链`,
     summary: `从 ${evidence.entry.path} 出发、按跨文件调用展开的 ${evidence.stages.length} 个环节。`,
     stages,
+    edges,
+    uncovered,
     caveats: `${caveats}。`,
     generatedAt: new Date().toISOString()
   };

@@ -62,7 +62,7 @@ export function ModulesPane({
       return;
     }
     onModulesChange(DEFAULT_MODULES.map((item) => ({ ...item })), DEFAULT_MODULES[0].id);
-    showToast("已恢复缺省四模块");
+    showToast(`已恢复缺省 ${DEFAULT_MODULES.length} 个模块`);
   };
 
   return (
@@ -99,7 +99,7 @@ export function ModulesPane({
               <button className="cfg-add-btn" onClick={add}>添加</button>
             </div>
             <div className="cfg-foot">
-              <button className="cfg-reset" onClick={reset}>{isPractice ? "恢复缺省" : "恢复缺省四模块"}</button>
+              <button className="cfg-reset" onClick={reset}>{isPractice ? "恢复缺省" : `恢复缺省 ${DEFAULT_MODULES.length} 个模块`}</button>
               <span>改动即时生效并本地保存</span>
             </div>
           </div>

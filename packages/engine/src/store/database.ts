@@ -134,14 +134,55 @@ export class TutorDatabase {
     this.upsert(repositoryId, { settings: JSON.stringify(settings) });
   }
 
-  getSummary(cacheKey: string): string | undefined {
+  /**
+    文件摘要记录（L1）。
+
+    沿用 `summaries` 表与 `summary` 列，只是列内容自 2026-09-18 起是 **JSON**（摘要 + 角色 + 覆盖率）——
+    列本身是不透明 TEXT，不值得为改内容做一次表结构迁移。
+    旧行是纯文本摘要，且缓存键口径已变（现在含切片与输入口径版本），本来不会再被命中：
+    **读不出来就当未命中重算**，不猜、不补默认值。
+  */
+  getFileSummary<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
     const row = this.db.prepare("SELECT summary FROM summaries WHERE cache_key = ?").get(cacheKey) as { summary: string } | undefined;
-    return row?.summary;
+    if (!row) return undefined;
+    try {
+      const parsed = JSON.parse(row.summary) as T;
+      return parsed && typeof parsed === "object" && typeof parsed.path === "string" && typeof parsed.summary === "string" ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
-  putSummary(cacheKey: string, summary: string): void {
+  putFileSummary(cacheKey: string, value: { path: string; summary: string }): void {
     this.db.prepare("INSERT OR REPLACE INTO summaries(cache_key, summary, created_at) VALUES (?, ?, ?)")
-      .run(cacheKey, summary, new Date().toISOString());
+      .run(cacheKey, JSON.stringify(value), new Date().toISOString());
+  }
+
+  /**
+    每个文件**最新**的一条摘要（同一文件会有多行：缓存键里含切片与模型版本）。
+
+    按写入时间倒序扫一遍、按路径取首次出现即可，不必让调用方理解缓存键的构造。
+    带 `limit` 是因为这张表只会追加、长期累积后全表扫描会变慢；取不到的行不影响正确性
+    （缺摘要 = 该文件没有已确认的职责，调用方按「未知」处理）。
+  */
+  getLatestFileSummaries(limit = 2_000): { path: string; summary: string; role?: string; coverageLow?: boolean }[] {
+    const rows = this.db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ?").all(limit) as { summary: string }[];
+    const latest = new Map<string, { path: string; summary: string; role?: string; coverageLow?: boolean }>();
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.summary) as { path?: unknown; summary?: unknown; role?: unknown; coverage?: { low?: unknown } };
+        if (typeof parsed.path !== "string" || typeof parsed.summary !== "string" || latest.has(parsed.path)) continue;
+        latest.set(parsed.path, {
+          path: parsed.path,
+          summary: parsed.summary,
+          ...(typeof parsed.role === "string" ? { role: parsed.role } : {}),
+          ...(typeof parsed.coverage?.low === "boolean" ? { coverageLow: parsed.coverage.low } : {})
+        });
+      } catch {
+        // 旧行是纯文本、或半截 JSON：跳过，不猜内容
+      }
+    }
+    return [...latest.values()];
   }
 
   getExerciseCache<T>(repositoryId: string, contentVersion: string, kind: string, targetUnitId: string): T | undefined {

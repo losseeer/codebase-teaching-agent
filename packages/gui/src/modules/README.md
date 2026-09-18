@@ -1,6 +1,6 @@
 # `modules/` — 知识模块（Knowledge Modules）
 
-> 教学与练习共享同一组模块 chips。缺省四模块（计算机网络 / 操作系统 / 语言特性 / 其他计算机知识）由 `DEFAULT_MODULES` 提供；用户可逐行改名 / 新增 / 删除 / 恢复缺省。
+> 教学与练习**各有一套**模块 chips（教学 `DEFAULT_MODULES` / 练习 `PRACTICE_DEFAULT_MODULES`，分别落 `codebase-tutor.modules` 与 `codebase-tutor.practice-modules`）。教学缺省三模块（计算机网络 / 操作系统 / 语言特性）；用户可逐行改名 / 新增 / 删除 / 恢复缺省。
 
 ## 当前状态
 
@@ -18,7 +18,7 @@ prototype `design-prototype.html` 是 v0.1 唯一可交互基线，其中：
 
 | 文件 | 职责 |
 |---|---|
-| `defaults.ts` | 缺省四模块 `DEFAULT_MODULES = [network, os, lang, other]` 常量 |
+| `defaults.ts` | 教学缺省三模块 `DEFAULT_MODULES = [network, os, lang]` 常量 |
 | `useModuleConfig.ts` | 通用 hook：模块列表 + 当前选中 + 配置面板开关 |
 | `ModuleChips.tsx` | chips 渲染 + 点击切换 |
 | `ModuleConfig.tsx` | `＋ 配置` 触发的内联编辑器 |
@@ -26,7 +26,9 @@ prototype `design-prototype.html` 是 v0.1 唯一可交互基线，其中：
 
 ## 与 prototype 对齐
 
-prototype 的对应章节（`design-prototype.html` 第 313-340 行）：
+⚠️ **一处有意背离**（2026-09-18）：`DEFAULT_MODULES` 删掉了第四项 `{ id: 'other', label: '其他计算机知识' }`，教学缺省由四模块变三模块。相应地 `shared` 的 `classifyModuleId` 不再无条件兜底到 `other`——候选里没有 `other` 时返回空串（未归类），保证返回值要么在 `moduleIds` 内、要么是空串。prototype 与设计文档尚未同步（见下）。
+
+prototype 的对应章节（`design-prototype.html` 第 313-340 行，**仍是四模块**）：
 ```js
 const DEFAULT_MODULES = [
   { id: 'network', label: '计算机网络', hint: 'HTTP 入口、超时、重试与幂等' },
@@ -36,6 +38,6 @@ const DEFAULT_MODULES = [
 ];
 ```
 
-**设计文档** `codebase-teaching-agent.html` 第 8 章 §知识模块可配置：模块可配置 + 缺省四模块表 + 引导文案空态。
+**设计文档** `codebase-teaching-agent.html` 第 8 章 §知识模块可配置：模块可配置 + 缺省四模块表 + 引导文案空态（该表的第四行与「缺省四模块」字样同样待同步）。
 
 **校招叙事**：用户可配 + 缺省 = 「承认经验多样性」的设计姿态，比硬编码 4 模块更扛反例。
