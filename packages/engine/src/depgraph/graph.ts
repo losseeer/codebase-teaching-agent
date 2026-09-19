@@ -17,7 +17,7 @@ export interface DependencyGraph {
   parseBackendReason?: string;
 }
 
-const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
+const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java"];
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
 /** TS/JS 的说明符一律带引号；Python 的 import 语句没有引号，另走 extractPythonSpecifiers。 */
 const tsSpecifierPattern = /(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g;
@@ -161,6 +161,8 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       if (/^\s*(?:export\s+)?(?:async\s+)?function\b|^\s*(?:export\s+)?(?:const|let|var)\b.*=>|^\s*(?:async\s+)?def\b/.test(line)) continue;
+      // Java 方法/构造器声明行也含「名字(」——不跳过会产生自我调用边
+      if (/^\s*(?:@\w+\s*)?(?:(?:public|private|protected|static|final|abstract|synchronized|default|native)\s+)+[\w<>\[\],.?\s]+\(/.test(line)) continue;
       for (const match of line.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) {
         const name = match[1];
         if (ignoredCalls.has(name)) continue;
@@ -310,7 +312,8 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[]): SourceAn
 }
 
 function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {
-  const languages = new Set(files.map((file) => file.extension === ".py" ? "python" : extensions.includes(file.extension) ? "typescript" : undefined).filter((value): value is "typescript" | "python" => Boolean(value)));
+  // java 没有接入 LSP（符号来自 tree-sitter），不进探测列表
+  const languages = new Set(files.map((file) => file.extension === ".py" ? "python" : /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file.extension) ? "typescript" : undefined).filter((value): value is "typescript" | "python" => Boolean(value)));
   return [...languages].map((language) => {
     const command = language === "typescript" ? "typescript-language-server" : "pylsp";
     try {

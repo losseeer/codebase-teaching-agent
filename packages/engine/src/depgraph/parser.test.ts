@@ -127,3 +127,41 @@ describe("语法树符号抽取", () => {
     });
   });
 });
+
+describe("Java 符号抽取", () => {
+  it("抽到类/构造器/方法/接口，endLine 精确；language=java", async () => {
+    await loadSymbolParser();
+    const content = [
+      "package com.hmdp;",
+      "",
+      "public class Foo extends Base {",
+      "  private final int x;",
+      "",
+      "  public Foo(int x) {",
+      "    this.x = x;",
+      "  }",
+      "",
+      "  @Override",
+      "  public Result query(String key) {",
+      "    return helper(key);",
+      "  }",
+      "}",
+      "",
+      "interface Bar {",
+      "  Result doIt(String key);",
+      "}",
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("src/main/java/com/hmdp/Foo.java", content);
+    expect(symbols).toBeDefined();
+    const foo = symbols!.find((symbol) => symbol.name === "Foo");
+    expect(foo).toMatchObject({ kind: "class", line: 3, endLine: 14, language: "java" });
+    const ctor = symbols!.find((symbol) => symbol.name === "Foo" && symbol.kind === "method");
+    expect(ctor).toBeDefined();
+    expect(ctor?.endLine).toBe(8);
+    const query = symbols!.find((symbol) => symbol.name === "query");
+    expect(query).toMatchObject({ kind: "method", endLine: 13 });
+    const bar = symbols!.find((symbol) => symbol.name === "Bar");
+    expect(bar).toMatchObject({ kind: "type", line: 16, endLine: 18 });
+  });
+});

@@ -37,7 +37,7 @@ describe("LLM 出题守门", () => {
     const hallucinated = proposal({ anchors: [{ path: "src/invented.ts", line: 1 }] });
     expect(guardLlmProposal(hallucinated, candidates).some((issue) => issue.message.includes("不在出题候选摘录中"))).toBe(true);
     const outOfRange = proposal({ anchors: [{ path: "src/config.ts", line: 99 }] });
-    expect(guardLlmProposal(outOfRange, candidates).some((issue) => issue.message.includes("行号超出文件范围"))).toBe(true);
+    expect(guardLlmProposal(outOfRange, candidates).some((issue) => issue.message.includes("行号超出候选摘录范围"))).toBe(true);
   });
 
   it("泄漏检查：题面包含参考答案片段要否决；短答案不触发", () => {
@@ -45,5 +45,19 @@ describe("LLM 出题守门", () => {
     expect(guardLlmProposal(leaking, candidates).some((issue) => issue.check === "leak")).toBe(true);
     const shortKey = proposal({ answerKey: "是 0", prompt: "当传入 0 时它返回什么？" });
     expect(guardLlmProposal(shortKey, candidates).every((issue) => issue.check !== "leak")).toBe(true);
+  });
+});
+
+describe("候选摘录窗口（startLine）", () => {
+  const windowed: GuardCandidate[] = [{ path: "src/deep.ts", excerpt: "100| ...\n120| ...", lineCount: 200, startLine: 100 }];
+
+  it("锚点落在窗口内（>= startLine）不否决", () => {
+    const issues = guardLlmProposal(proposal({ anchors: [{ path: "src/deep.ts", line: 120 }] }), windowed);
+    expect(issues).toEqual([]);
+  });
+
+  it("锚点行号在文件范围内但低于窗口起点时否决", () => {
+    const issues = guardLlmProposal(proposal({ anchors: [{ path: "src/deep.ts", line: 10 }] }), windowed);
+    expect(issues.some((issue) => issue.check === "fact")).toBe(true);
   });
 });

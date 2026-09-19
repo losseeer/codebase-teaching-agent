@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
-import { classifyModuleId, EXERCISE_KINDS } from "@codebase-tutor/shared";
+import { classifyModuleId, EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
@@ -110,8 +110,9 @@ export class ExerciseService {
     const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
 
-    const candidates = selectTagCandidates(repository, tag);
-    if (!candidates.length) throw new Error("当前仓库没有可出题的源码文件；请先导入包含源码的仓库。");
+    const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
+    const candidates = selectTagCandidates(repository, tag, 3, summaries);
+    if (!candidates.length) throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     const generation = await generateExerciseWithLlm({ tag, candidates, provider });
     if (!generation.ok) {
@@ -366,34 +367,52 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
   规则侧候选选择：按主题标签的词元对文件路径与文件内符号名打分（路径命中 30 / 符号命中 20 / 热点 ≤10），
   取前 3 个文件构造带行号的摘录交给 LLM。相关性不足时 LLM 会在出题轮内拒绝——这里是「有素材可给」，不是「保证可出题」。
   */
-function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3): GuardCandidate[] {
+function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3, summaries: Map<string, string> = new Map()): GuardCandidate[] {
   const lowered = tag.toLowerCase();
   const tokens = [...new Set([lowered, ...lowered.split(/[\s,，、/·:：_-]+/).filter((token) => token.length >= 2)])];
-  const symbolsByPath = new Map<string, string[]>();
-  for (const unit of repository.analysis.implementations) {
-    const list = symbolsByPath.get(unit.symbol.path) ?? [];
-    list.push(unit.symbol.name);
-    symbolsByPath.set(unit.symbol.path, list);
+  const symbolsByPath = new Map<string, SymbolInfo[]>();
+  for (const symbol of repository.analysis.graph.symbols) {
+    const list = symbolsByPath.get(symbol.path) ?? [];
+    list.push(symbol);
+    symbolsByPath.set(symbol.path, list);
   }
   const hotspots = new Map(repository.index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
   const scored = repository.index.files
-    .filter((file) => /\.(?:[cm]?[jt]sx?|py)$/.test(file.path))
+    .filter((file) => /\.(?:[cm]?[jt]sx?|py|java)$/.test(file.path))
     .map((file) => {
       const path = file.path;
-      const symbols = (symbolsByPath.get(path) ?? []).join(" ").toLowerCase();
-      let score = Math.min(hotspots.get(path) ?? 0, 10);
+      const symbols = (symbolsByPath.get(path) ?? []).map((symbol) => symbol.name.toLowerCase()).join(" ");
+      const summary = (summaries.get(path) ?? "").toLowerCase();
+      // 相关性闸门：路径/符号/摘要任一命中才算候选——旧版零相关时按热点兜底塞文件，正是「候选与主题无关」的来源
+      let matches = 0;
+      let score = 0;
       for (const token of tokens) {
-        if (path.toLowerCase().includes(token)) score += 30;
-        if (symbols.includes(token)) score += 20;
+        if (path.toLowerCase().includes(token)) { score += 30; matches += 1; }
+        if (symbols.includes(token)) { score += 20; matches += 1; }
+        if (summary.includes(token)) { score += 15; matches += 1; }
       }
+      if (matches) score += Math.min(hotspots.get(path) ?? 0, 10);
       return { path, score };
     })
+    .filter((item) => item.score > 0)
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, limit);
   return scored.flatMap(({ path }) => {
-    const candidate = buildTagCandidate(repository.path, path);
+    const candidate = buildTagCandidate(repository.path, path, 80, windowOffset(symbolsByPath.get(path) ?? [], tokens));
     return candidate ? [candidate] : [];
   });
+}
+
+/** 摘录窗口起点：名字命中任一词元的符号里取分最高者（同分取更靠前的），从其起始行开窗；无命中回落第 1 行。 */
+function windowOffset(symbols: SymbolInfo[], tokens: string[]): number {
+  let best: { score: number; line: number } | undefined;
+  for (const symbol of symbols) {
+    const name = symbol.name.toLowerCase();
+    const score = tokens.reduce((total, token) => total + (name.includes(token) ? 1 : 0), 0);
+    if (!score) continue;
+    if (!best || score > best.score || (score === best.score && symbol.line < best.line)) best = { score, line: symbol.line };
+  }
+  return best ? Math.max(1, best.line) : 1;
 }
 
 function safeInvocationFor(repositoryPath: string, unit: ImplementationUnit): SafeInvocation | undefined {

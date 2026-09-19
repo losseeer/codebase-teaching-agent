@@ -12,6 +12,8 @@ export interface GuardCandidate {
   path: string;
   excerpt: string;
   lineCount: number;
+  /** 摘录的起始行号（符号定位窗口不从第 1 行开始时使用；缺省 1）。锚点必须落在 [startLine, lineCount] 内。 */
+  startLine?: number;
 }
 
 export interface LlmExerciseProposal {
@@ -63,8 +65,9 @@ export function guardLlmProposal(proposal: LlmExerciseProposal, candidates: Guar
       issues.push({ check: "fact", message: `锚点 ${anchor.path} 不在出题候选摘录中` });
       continue;
     }
-    if (!Number.isInteger(anchor.line) || anchor.line < 1 || anchor.line > candidate.lineCount) {
-      issues.push({ check: "fact", message: `锚点 ${anchor.path}:${anchor.line} 行号超出文件范围` });
+    const startLine = candidate.startLine ?? 1;
+    if (!Number.isInteger(anchor.line) || anchor.line < startLine || anchor.line > candidate.lineCount) {
+      issues.push({ check: "fact", message: `锚点 ${anchor.path}:${anchor.line} 行号超出候选摘录范围（${startLine}-${candidate.lineCount}）` });
       continue;
     }
     if (anchor.endLine !== undefined && (anchor.endLine < anchor.line || anchor.endLine > candidate.lineCount)) {

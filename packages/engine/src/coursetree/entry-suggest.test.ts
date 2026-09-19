@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { clearModuleEntryCache, suggestModuleEntriesCached } from "./entry-suggest.js";
+import { clearModuleEntryCache, rankEntryCandidates, suggestModuleEntriesCached } from "./entry-suggest.js";
 
 function fakeProvider(replyIds: string[][]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
   let call = 0;
@@ -65,5 +65,26 @@ describe("suggestModuleEntriesCached", () => {
     const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, cacheKey: "repo:v1" });
     expect(first.entries).toEqual([]);
     expect(second.entries).toEqual([]);
+  });
+});
+
+describe("rankEntryCandidates（语义排序 + 跨模块去重）", () => {
+  const mk = (id: string, path: string, summary: string) => ({ id, title: id, path, line: 1, summary });
+
+  it("锚点文件的 L1 摘要命中主题时排到最前（目录模板摘要无信号）", () => {
+    const candidates = [mk("a", "README.md", "根目录含 1 个可分析文件"), mk("b", "utils/CacheClient.java", "含 2 个可分析文件")];
+    const ranked = rankEntryCandidates(candidates, ["缓存"], new Map([["utils/CacheClient.java", "封装缓存读写相关操作。"]]));
+    expect(ranked[0].id).toBe("b");
+  });
+
+  it("其他模块已推荐的路径被降权（跨模块去重）", () => {
+    const candidates = [mk("a", "src/a.ts", "缓存工具类"), mk("b", "src/b.ts", "路由分发器")];
+    const ranked = rankEntryCandidates(candidates, ["缓存"], new Map(), new Set(["src/a.ts"]));
+    expect(ranked[0].id).toBe("b");
+  });
+
+  it("无命中候选保留在尾部，不丢（池子小时 LLM 仍可挑）", () => {
+    const candidates = [mk("a", "src/x.ts", "s")];
+    expect(rankEntryCandidates(candidates, ["完全不相关"], new Map())).toHaveLength(1);
   });
 });

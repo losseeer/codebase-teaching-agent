@@ -293,6 +293,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (!provider) return { entries: [], source: "heuristic" as const };
   const suggestion = await suggestModuleEntriesCached({
     tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
+    fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
     cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
   });
   if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {

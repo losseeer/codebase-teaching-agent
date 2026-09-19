@@ -148,27 +148,36 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    const first = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    const first = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
     expect(first.kind).toBe("llm_rubric");
     expect(first.family).toBe("llm");
     expect(first.inputMode).toBe("open");
     expect(first.gradingMode).toBe("rubric");
-    expect(first.tag).toBe("边界处理");
+    expect(first.tag).toBe("config");
     expect(first.anchors[0]?.path).toBe("src/config.js");
     expect(calls).toHaveLength(1);
-    const reused = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    const reused = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
     expect(reused.id).toBe(first.id);
     expect(calls).toHaveLength(1);
-    const variant = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag", variantNonce: 1 }, provider);
+    const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
+  });
+
+  it("主题与仓库零命中时不调用 LLM，直接抛出可换的标签提示", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider, calls } = fakeProvider([generationJson]);
+    await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("没有找到与「kubernetes」主题相关的源码文件");
+    expect(calls).toHaveLength(0);
+    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined")).toBe(false);
   });
 
   it("LLM 拒绝出题时抛出理由并记 exercise_declined journal", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "当前仓库没有与该主题相关的代码素材。" })]);
-    await expect(service.next(repository, { family: "llm", tag: "不存在的主题", tagId: "custom-x" }, provider)).rejects.toThrow("当前仓库没有与该主题相关的代码素材。");
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("当前仓库没有与该主题相关的代码素材。");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined")).toBe(true);
   });
 
@@ -178,7 +187,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const hallucinated = JSON.parse(generationJson);
     hallucinated.anchors = [{ path: "src/invented.ts", line: 1 }];
     const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
-    await expect(service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-x" }, provider)).rejects.toThrow("守门校验");
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("守门校验");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
   });
 
@@ -186,7 +195,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([generationJson, judgeJson]);
-    const exercise = await service.next(repository, { family: "llm", tag: "边界处理", tagId: "custom-tag" }, provider);
+    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
     const result = await service.answer(repository, exercise.id, { text: "返回原值，边界交给调用方。" }, provider);
     expect(result.automatic).toBe(false);
     expect(result.passed).toBe(true);

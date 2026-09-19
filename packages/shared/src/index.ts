@@ -187,7 +187,7 @@ export interface SymbolInfo {
   line: number;
   endLine: number;
   parameters: string[];
-  language: "typescript" | "python" | "other";
+  language: "typescript" | "python" | "java" | "other";
   type?: string;
   referenceCount?: number;
 }

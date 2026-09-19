@@ -29,6 +29,7 @@ export interface ParseBackendStatus {
 /** 只覆盖依赖图真正处理的扩展名（其余语言本来就走不进这里）。 */
 const GRAMMAR_FILES = {
   python: "tree-sitter-python.wasm",
+  java: "tree-sitter-java.wasm",
   typescript: "tree-sitter-typescript.wasm",
   tsx: "tree-sitter-tsx.wasm",
   javascript: "tree-sitter-javascript.wasm"
@@ -38,6 +39,7 @@ type GrammarName = keyof typeof GRAMMAR_FILES;
 
 /** 语法选择按扩展名：`.jsx` 用 tsx 语法（JSX 是它的子集，纯 JS 语法解析不了 JSX）。 */
 function grammarOf(path: string): GrammarName | undefined {
+  if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
   if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts")) return "typescript";
   if (path.endsWith(".tsx") || path.endsWith(".jsx")) return "tsx";
@@ -47,6 +49,7 @@ function grammarOf(path: string): GrammarName | undefined {
 
 /** `SymbolInfo.language` 的口径与索引层保持一致，与用哪种语法解析无关。 */
 function languageOf(path: string): SymbolInfo["language"] {
+  if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
   return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path) ? "typescript" : "other";
 }
@@ -99,7 +102,7 @@ export function resetSymbolParserForTest(): void {
 }
 
 const TS_FUNCTION_NODES = new Set(["function_declaration", "generator_function_declaration"]);
-const TS_CLASS_NODES = new Set(["class_declaration", "abstract_class_declaration"]);
+const TS_CLASS_NODES = new Set(["class_declaration", "abstract_class_declaration", "record_declaration"]);
 /** 接口/类型别名/枚举：不是可执行体，但是理解文件职责的重要名字（工程上常比函数名更能说明用途）。 */
 const TS_TYPE_NODES = new Set(["interface_declaration", "type_alias_declaration", "enum_declaration"]);
 const TS_VARIABLE_NODES = new Set(["lexical_declaration", "variable_declaration"]);
@@ -109,6 +112,8 @@ const TS_FUNCTION_VALUES = new Set(["arrow_function", "function_expression", "ge
 function kindOf(type: string, inClass: boolean): SymbolInfo["kind"] | undefined {
   if (TS_FUNCTION_NODES.has(type)) return "function";
   if (TS_CLASS_NODES.has(type)) return "class";
+  // Java：class/record/interface/enum 与 TS 同名节点共享上面的集合；方法与构造器是 Java 独有类型
+  if (type === "method_declaration" || type === "constructor_declaration") return "method";
   if (type === "method_definition") return "method";
   if (TS_TYPE_NODES.has(type)) return "type";
   if (type === "class_definition") return "class";

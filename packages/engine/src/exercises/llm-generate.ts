@@ -201,15 +201,18 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
   }
 }
 
-/** 规则侧候选摘录构造：带行号前缀，LLM 的锚点行号以此为基准，守门可校验。 */
-export function buildTagCandidate(repositoryPath: string, path: string, maxLines = 80): GuardCandidate | undefined {
+/** 规则侧候选摘录构造：带行号前缀，LLM 的锚点行号以此为基准，守门可校验。
+    offset 是摘录起始行（符号定位窗口：相关符号往往不在文件头部），行号仍用文件真实行号。 */
+export function buildTagCandidate(repositoryPath: string, path: string, maxLines = 80, offset = 1): GuardCandidate | undefined {
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
-    const shown = lines.slice(0, maxLines);
+    const start = Math.max(0, offset - 1);
+    const shown = lines.slice(start, start + maxLines);
     return {
       path,
       lineCount: lines.length,
-      excerpt: shown.map((line, index) => `${index + 1}| ${line}`).join("\n").slice(0, 4_000)
+      startLine: start + 1,
+      excerpt: shown.map((line, index) => `${start + index + 1}| ${line}`).join("\n").slice(0, 4_000)
     };
   } catch {
     return undefined;
