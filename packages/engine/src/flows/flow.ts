@@ -17,6 +17,7 @@ import {
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
+import { layerCacheKey } from "../lib.js";
 import { executeReadFile } from "../source/read-file.js";
 import { deepenInferredEdges } from "./deepen.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
@@ -62,6 +63,13 @@ const MAX_UNCOVERED_TEXT = 40;
 /** 环节被丢弃到低于该数量就不再算「一条流程」，回落静态视图。 */
 const MIN_STAGES = 3;
 const FALLBACK_UNPARSEABLE = "模型返回的内容无法解析成一条完整流程";
+const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用链";
+
+/**
+  流程层的输入口径版本，进缓存键。`buildFlowDigest` 的形状、上面各 `MAX_*` 裁剪阈值、或
+  `SYSTEM_PROMPT` 的文本改了，模型看到的输入可以一字不变——这类失效只有版本号管得了，改它们要同步 bump。
+  */
+const FLOW_INPUT_VERSION = "digest-v1";
 
 /** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
 export const SYSTEM_PROMPT = [
@@ -246,9 +254,25 @@ export interface GeneratedFlow extends RepositoryFlowResult {
 
 /** 生成一条流程。任何失败（调用异常 / JSON 不合法 / 校验后环节不足）都回落静态调用链，并带上原因。 */
 export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<GeneratedFlow> {
+  const digest = tryBuildFlowDigest(input);
+  if (!digest) return degradedFlow(input.analysis, input.entry, FALLBACK_DIGEST_FAILED);
+  return generateFromDigest(input, digest);
+}
+
+/** 组装本层输入（= 真正发给模型的 user 消息）。失败返回 undefined，由调用方降级——它不该抛给路由。 */
+function tryBuildFlowDigest(input: GenerateFlowInput): FlowDigest | undefined {
+  try {
+    return buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry, input.summaries);
+  } catch (error) {
+    console.error("[flows] 流程输入组装失败:", error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
+/** 用**已算好的**输入摘要生成一条流程：digest 既是发给模型的内容，也是缓存键的哈希对象。 */
+async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest): Promise<GeneratedFlow> {
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
-    const digest = buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry, input.summaries);
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: JSON.stringify(digest),
@@ -527,21 +551,37 @@ function asText(value: unknown, limit: number): string {
 }
 
 /**
-  流程缓存：同一（仓库分析版本, 入口）的重复请求不再重调 LLM。只缓存成功结果。
-  TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下（命中即续期），
+  流程缓存：键 = 层名 + 仓库 + 入口 + **本层实际输入的哈希**（即发给模型的 digest）。
+  只缓存成功结果；TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
   所以只要这个入口还在被访问，缓存就一直有效。
-  过期的正确性由缓存 key 里的 `versionStamp` 保证：仓库一被重新分析 key 就变，不存在「续期导致流程图过时」。
+
+  为什么续期是安全的（此处原先靠全仓 `versionStamp` 兜底）：digest 变了键就变，而 digest 涵盖
+  入口、文件清单与符号、跨文件依赖、静态调用链证据、已确认的 L1 摘要——仓库改到这些里的任何一处、
+  换了模型，都会翻键。反过来说，digest 一字不变时模型看到的问题就一字不变，缓存里那条流程正是它
+  当下会给出的答案；LSP 从降级恢复但结构事实没变，也落在这一类里（恢复会改 digest 时才需要重算）。
+  所以不需要再论证「哪些变更会作废流程」。
   */
 const flowCache = new Map<string, { result: GeneratedFlow; at: number }>();
 const FLOW_CACHE_TTL_MS = 10 * 60_000;
 const FLOW_CACHE_MAX = 60;
 
+/** 清空流程缓存：供测试隔离回合间状态。换仓/卸载路径**不**调它——键里已带 `repositoryId`，
+    跨仓库不会串味，且有 TTL + 条数上限，切回来还能继续命中。 */
 export function clearRepositoryFlowCache(): void {
   flowCache.clear();
 }
 
-export async function generateRepositoryFlowCached(input: GenerateFlowInput & { cacheKey: string }): Promise<GeneratedFlow> {
-  const key = `${input.cacheKey}:${input.entry.path}`;
+export async function generateRepositoryFlowCached(input: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
+  const digest = tryBuildFlowDigest(input);
+  if (!digest) return generateRepositoryFlow(input);
+  const key = layerCacheKey({
+    layer: "flow",
+    repositoryId: input.repositoryId,
+    contractVersion: FLOW_INPUT_VERSION,
+    modelVersion: input.provider.modelVersion,
+    payload: digest,
+    scope: input.entry.path
+  });
   const hit = flowCache.get(key);
   const now = Date.now();
   if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
@@ -549,7 +589,7 @@ export async function generateRepositoryFlowCached(input: GenerateFlowInput & { 
     flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
     return { ...hit.result, usage: undefined };
   }
-  const result = await generateRepositoryFlow(input);
+  const result = await generateFromDigest(input, digest);
   if (result.source === "llm") {
     flowCache.set(key, { result, at: Date.now() });
     if (flowCache.size > FLOW_CACHE_MAX) {

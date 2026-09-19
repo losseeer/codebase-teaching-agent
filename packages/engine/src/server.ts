@@ -294,7 +294,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   const suggestion = await suggestModuleEntriesCached({
     tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
     fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
-    cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
+    repositoryId: repository.index.repositoryId
   });
   if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
     input_tokens: suggestion.usage.inputTokens,
@@ -333,7 +333,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
     entry,
     provider,
     summaries: latestFileSummaries(repository.path),
-    cacheKey: `${repository.index.repositoryId}:${repository.analysis.versionStamp}`
+    repositoryId: repository.index.repositoryId
   });
   if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
     input_tokens: generated.usage.inputTokens,

@@ -36,6 +36,23 @@ describe("M2.1 exercise service", () => {
     expect(regenerated.contentVersion).toBe("content-v2");
   });
 
+  it("出题缓存按「模型 + 题面口径」分作用域：换模型会重跑一次，而不是复用旧题面", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    let polishAttempts = 0;
+    // 润色调用一律失败 → refineExerciseWithLlm 回落启发式题面；调用次数就是「这一层重算了几次」的读数
+    const provider = (modelVersion: string): LlmProvider => ({
+      name: "fake", modelVersion,
+      complete: async () => { polishAttempts += 1; throw new Error("unavailable"); }
+    });
+    await service.next(repository, { kind: "output_prediction" }, provider("model-a"));
+    await service.next(repository, { kind: "output_prediction" }, provider("model-a"));
+    expect(polishAttempts).toBe(1);
+    await service.next(repository, { kind: "output_prediction" }, provider("model-b"));
+    expect(polishAttempts).toBe(2);
+    // 静态题的答案与判分不出自模型，所以两档作用域共用同一个 id 是安全的
+  });
+
   it("executes a bounded output oracle and grades exact dependency sets", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -162,6 +179,20 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
+  });
+
+  it("换模型 = 换一道题：不共用缓存，也不共用 id（旧题仍可按 id 回查判分）", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider, calls } = fakeProvider([generationJson]);
+    const first = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
+    const second = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, { ...provider, modelVersion: "other-model" });
+    expect(calls).toHaveLength(2);
+    expect(second.id).not.toBe(first.id);
+    // 复习排期与答题都按 id 回查缓存行，所以两代题必须各自留痕
+    const database = new TutorDatabase(repository.path);
+    expect(database.getExerciseCacheById(repository.index.repositoryId, first.id)).toBeTruthy();
+    database.close();
   });
 
   it("主题与仓库零命中时不调用 LLM，直接抛出可换的标签提示", async () => {

@@ -17,6 +17,13 @@ const MAX_TITLE = 24;
 const MAX_PROMPT = 300;
 const MAX_EXCERPT_LINES = 60;
 
+/**
+  出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
+  题面提示词、`kindRules`、裁剪上限改了，喂给模型的代码可以一字不变——这类失效只有版本号管得了：
+  不 bump 就会一直复用旧题面。改上面这些要同步 bump。
+  */
+export const EXERCISE_INPUT_VERSION = "exercise-v1";
+
 export interface RefinedExercise {
   exercise: Exercise;
   usage?: LlmUsage;

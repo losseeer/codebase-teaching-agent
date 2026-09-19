@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree } from "../coursetree/build.js";
-import { refineCourseMap } from "../coursetree/llm-refine.js";
+import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
@@ -58,6 +58,8 @@ export class ImportService extends EventEmitter {
   private readonly jobs = new Map<string, ImportJob>();
   private readonly repositories = new Map<string, ImportedRepository>();
   private queue = Promise.resolve();
+  /** 每个仓库至多一轮重分析在途；running 期间新到的路径先累积，本轮结束后合并跑下一轮。 */
+  private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
 
   submit(inputPath: string): ImportJob {
     const repositoryPath = validateRepositoryPath(inputPath);
@@ -117,7 +119,10 @@ export class ImportService extends EventEmitter {
     this.repositories.set(repository.index.repositoryId, repository);
   }
 
-  /** 卸载全部仓库并停掉它们的 fs 监听；fs.FSWatcher.close() 幂等，重复关闭无害。 */
+  /** 卸载全部仓库并停掉它们的 fs 监听；fs.FSWatcher.close() 幂等，重复关闭无害。
+      刻意**不**清内存态 L2 缓存：键里已经带 `repositoryId` + 本层输入哈希，换仓后不可能误命中；
+      实测在切换仓库时清缓存会让下一个回合把完全相同的输入重烧一次（切换 → 重烧 ≈1.5k in / 200 out），
+      而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。 */
   private unmountAll(): void {
     for (const repository of this.repositories.values()) repository.watcher?.close();
     this.repositories.clear();
@@ -188,13 +193,22 @@ export class ImportService extends EventEmitter {
     course = attachQuality(course, quality);
     // 宏观设计 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
-    // 润色缓存：内容未变（versionStamp 相同）且上次润色成功落库（settings.refinement 标记）→ 直接复用已润色 course。
+    // 润色缓存：`settings.refinement` 标记里的四个维度（源码内容 / 模型 / 口径版本 / 图后端）全对上才复用已润色 course。
     // 这是「engine 重启 → GUI 重新导入」不重烧 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
     const storedAnalysis = database.getAnalysis(index.repositoryId);
     const storedCourse = database.getCourse(index.repositoryId);
-    const storedSettings = database.getSettings<{ refinement?: { versionStamp?: string }; monthlyBudgetUsd?: number }>(index.repositoryId);
-    const refinementCacheHit =
-      storedAnalysis?.versionStamp === versionStamp && Boolean(storedCourse) && storedSettings?.refinement?.versionStamp === versionStamp;
+    // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在**源码内容不变**的时候，只比 versionStamp 抓不到，
+    // 会把降级证据下算出的命名当成事实继续复用（同型坑见 docs/开发关键点问题与解决方案.md §3.6）。
+    const backendStamp = hash(`${graph.semanticBackend}:${graph.parseBackend}:${JSON.stringify(graph.lspStatus)}`);
+    const storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number }>(index.repositoryId);
+    const refinementCacheHit = Boolean(
+      storedAnalysis?.versionStamp === versionStamp && storedCourse && refinementIsFresh(storedSettings?.refinement, {
+        versionStamp,
+        contractVersion: REFINEMENT_CONTRACT_VERSION,
+        backendStamp,
+        ...(lightProvider ? { modelVersion: lightProvider.modelVersion } : {})
+      })
+    );
     if (refinementCacheHit) {
       course = storedCourse as CourseTree;
     } else if (summarizeCost(repositoryPath).mode !== "degraded") {
@@ -214,7 +228,7 @@ export class ImportService extends EventEmitter {
             scene: "course_map"
           });
           // 读-合并-写：settings 里还存着 monthlyBudgetUsd 等其他键，不能整体覆盖
-          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp } });
+          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINEMENT_CONTRACT_VERSION, backendStamp } });
         }
       }
     }
@@ -232,26 +246,64 @@ export class ImportService extends EventEmitter {
     return { path: repositoryPath, index, course, estimate, analysis };
   }
 
+  /**
+    在途守卫 + 变更合并：watcher 的 debounce 只有 450ms，而一轮全量重分析（含 LLM 润色）远长于此。
+    重叠回合会让「先启动、后完成」的那轮用旧快照回写内存与 SQLite，并且每轮都重烧一次全量润色。
+    在途时新到的路径只累积进 pending，本轮结束后合并成下一轮——路径不丢，轮次不重叠。
+    */
   private async reanalyzeIncrementally(repositoryId: string, changedPaths: string[]): Promise<void> {
+    const queue = this.reanalysisQueues.get(repositoryId);
+    if (queue) {
+      for (const path of changedPaths) queue.pending.add(path);
+      await queue.running;
+      return;
+    }
+    const pending = new Set(changedPaths);
+    const running = this.drainReanalysis(repositoryId, pending);
+    this.reanalysisQueues.set(repositoryId, { running, pending });
+    try {
+      await running;
+    } finally {
+      this.reanalysisQueues.delete(repositoryId);
+    }
+  }
+
+  private async drainReanalysis(repositoryId: string, pending: Set<string>): Promise<void> {
+    while (pending.size) {
+      const paths = [...pending];
+      pending.clear();
+      await this.reanalyzeOnce(repositoryId, paths);
+    }
+  }
+
+  /** 一轮重分析。本函数不 reject——它跑在在途队列里，抛出会让 watcher 的 fire-and-forget 变成未处理拒绝。 */
+  private async reanalyzeOnce(repositoryId: string, changedPaths: string[]): Promise<void> {
     const current = this.repositories.get(repositoryId);
     if (!current) return;
     const startedAt = Date.now();
-    const impact = impactRadius(graphFromData(current.analysis.graph), changedPaths);
+    let impactedPaths: string[] = [];
     try {
+      impactedPaths = impactRadius(graphFromData(current.analysis.graph), changedPaths).impactedPaths;
       const next = await this.analyze(current.path, () => undefined);
-      next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths: impact.impactedPaths, at: new Date().toISOString() };
+      // 回写前确认挂载项没被换掉：换仓 / 重新导入会让这一轮基于旧快照，写回即用脏数据覆盖内存与
+      // SQLite，甚至把刚卸载、watcher 已 close 的仓库复活进映射（破坏「挂载集合 = 监听集合」单槽不变量）。
+      if (this.repositories.get(repositoryId) !== current) {
+        traceEngine("reindex", { repositoryId, changed: changedPaths.length, ok: false, error: "unmounted-during-run" }, { traceId: null, durationMs: Date.now() - startedAt });
+        return;
+      }
+      next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths, at: new Date().toISOString() };
       const database = new TutorDatabase(current.path);
       database.saveAnalysis(next.analysis);
       database.close();
       next.watcher = current.watcher;
       this.repositories.set(repositoryId, next);
-      this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths: impact.impactedPaths } });
+      this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
       // 只记条数与结果，不把路径数组塞进日志（payload 口径只允许标量）
-      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impact.impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
+      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, error: message } });
-      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impact.impactedPaths.length, ok: false, error: message }, { traceId: null, durationMs: Date.now() - startedAt });
+      traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: false, error: message }, { traceId: null, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -325,4 +377,20 @@ function contentVersion(repositoryPath: string, index: RepositoryIndex): string 
     catch { return `${file.path}:unreadable`; }
   }).sort().join("\n");
   return `content:${hash(contents).slice(0, 24)}`;
+}
+
+/** 落在 settings 里的宏观润色标记：记录「这份已润色的课程树是在什么输入下算出来的」。 */
+export type RefinementMarker = { versionStamp?: string; modelVersion?: string; contractVersion?: string; backendStamp?: string };
+
+/**
+  润色缓存能否复用：标记里的四个维度全对上才算命中——源码内容、当时用哪个模型润的、本层提示词口径、图后端。
+  唯独 `modelVersion` 缺省（当前没有可用模型：未配置或预算触顶）时放行——复用上次成功的润色结果，
+  好于把它丢掉、退回未润色的裸命名。旧标记缺某个字段时该维度自然不等 → 未命中，重润一次属预期。
+ */
+export function refinementIsFresh(marker: RefinementMarker | undefined, current: { versionStamp: string; contractVersion: string; backendStamp: string; modelVersion?: string }): boolean {
+  if (!marker) return false;
+  if (marker.versionStamp !== current.versionStamp) return false;
+  if (marker.contractVersion !== current.contractVersion) return false;
+  if (marker.backendStamp !== current.backendStamp) return false;
+  return current.modelVersion === undefined || marker.modelVersion === current.modelVersion;
 }

@@ -1,6 +1,7 @@
 import type { CourseNode, CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { isTestPath } from "../depgraph/roles.js";
+import { layerCacheKey } from "../lib.js";
 
 /**
   教学模块「推荐入口」的 LLM 选择层（单轮调用，纯推荐，不改课程树结构）：
@@ -28,18 +29,10 @@ interface Candidate {
   summary: string;
 }
 
-export async function suggestModuleEntries(
-  tree: CourseTree,
-  moduleLabel: string,
-  moduleHint: string,
-  provider: LlmProvider,
-  fileSummaries: Map<string, string> = new Map(),
-  avoidPaths: Set<string> = new Set()
-): Promise<ModuleEntrySuggestion> {
+/** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。 */
+async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider }): Promise<ModuleEntrySuggestion> {
+  const { candidates, moduleLabel, moduleHint, provider } = input;
   try {
-    const candidates = rankEntryCandidates(collectCandidates(tree), themeTokens(moduleLabel, moduleHint), fileSummaries, avoidPaths);
-    if (!candidates.length) return { entries: [] };
-
     const system = [
       "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
       `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
@@ -126,15 +119,25 @@ export function rankEntryCandidates(
     .slice(0, MAX_LLM_CANDIDATES);
 }
 
-/** 推荐入口结果缓存：同一（仓库分析版本, 模块, 说明）的重复请求不再重调 LLM。
+/**
+  入口层的输入口径版本，进缓存键。候选收集与打分规则（`collectCandidates` / `rankEntryCandidates`
+  的权重、`MAX_LLM_CANDIDATES`）或 `selectFromCandidates` 里的系统提示词改了，送进模型的候选可以
+  一字不变——这类失效只有版本号管得了，改它们要同步 bump。
+  */
+const ENTRY_INPUT_VERSION = "candidate-v1";
+
+/** 推荐入口结果缓存：键 = 层名 + 仓库 + **本层实际输入**（模块主题 + 排好序的候选）。
     GUI 每次进入教学页都会触发该请求，实测同一输入反复计费（8 次调用 2/3 输入完全相同）。
-    只缓存非空结果——空列表可能是 LLM 失败的静默回落，缓存会把失败固化。 */
+    只缓存非空结果——空列表可能是 LLM 失败的静默回落，缓存会把失败固化。
+    键里带上候选清单本身（含跨模块去重的效果），所以「输入相同 ⇒ 模型看到的问题相同 ⇒ 可直接复用」
+    这一条不需要额外论证；代价是去重顺序变化会带来少量未命中。 */
 const entryCache = new Map<string, { entries: SuggestedEntry[]; at: number }>();
 const ENTRY_CACHE_TTL_MS = 10 * 60_000;
 const ENTRY_CACHE_MAX = 100;
 
-/** 跨模块去重的记录：cacheKey（仓库:版本）→ { path → 推荐它的模块 }。
-    与 entryCache 同一份 TTL，但上限独立——常驻进程里只增不减会积累路径。 */
+/** 跨模块去重的记录：repositoryId → { path → 推荐它的模块 }。
+    这是行为记录不是缓存，所以按仓库而不是按内容版本存——文件一改就忘掉「别的模块推过哪些路径」
+    会让重复推荐立刻回来。与 entryCache 同一份 TTL，但上限独立：常驻进程里只增不减会积累路径。 */
 const recentEntryPaths = new Map<string, { paths: Map<string, string>; at: number }>();
 const RECENT_ENTRY_PATHS_MAX_KEYS = 50;
 const RECENT_ENTRY_PATHS_MAX_PER_KEY = 40;
@@ -148,34 +151,46 @@ function trimToNewest<Key, Value>(map: Map<Key, Value>, max: number): void {
   }
 }
 
+/** 清空内存态缓存与去重记录：供测试隔离回合间状态。
+    换仓/卸载路径**不**调它——两者都已按 `repositoryId` 分键，跨仓库不会串味，且都有 TTL + 条数上限。 */
 export function clearModuleEntryCache(): void {
   entryCache.clear();
   recentEntryPaths.clear();
 }
 
-export async function suggestModuleEntriesCached(input: { tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; cacheKey: string; fileSummaries?: Map<string, string> }): Promise<ModuleEntrySuggestion> {
-  const key = `${input.cacheKey}:${input.moduleLabel}:${input.moduleHint}`;
+export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string> }): Promise<ModuleEntrySuggestion> {
+  // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
+  const existing = recentEntryPaths.get(input.repositoryId);
+  // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
+  const paths = existing && Date.now() - existing.at < ENTRY_CACHE_TTL_MS ? existing.paths : new Map<string, string>();
+  const avoidPaths = new Set<string>();
+  for (const [path, module] of paths) if (module !== input.moduleLabel) avoidPaths.add(path);
+
+  const candidates = rankEntryCandidates(collectCandidates(input.tree), themeTokens(input.moduleLabel, input.moduleHint), input.fileSummaries ?? new Map(), avoidPaths);
+  if (!candidates.length) return { entries: [] };
+
+  const key = layerCacheKey({
+    layer: "entry-suggest",
+    repositoryId: input.repositoryId,
+    contractVersion: ENTRY_INPUT_VERSION,
+    modelVersion: input.provider.modelVersion,
+    payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, candidates }
+  });
   const hit = entryCache.get(key);
   if (hit && Date.now() - hit.at < ENTRY_CACHE_TTL_MS) {
     entryCache.delete(key);
     entryCache.set(key, hit); // 刷新 LRU 新近度
     return { entries: hit.entries };
   }
-  // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
-  const existing = recentEntryPaths.get(input.cacheKey);
-  // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
-  const paths = existing && Date.now() - existing.at < ENTRY_CACHE_TTL_MS ? existing.paths : new Map<string, string>();
-  const avoidPaths = new Set<string>();
-  for (const [path, module] of paths) if (module !== input.moduleLabel) avoidPaths.add(path);
-  const suggestion = await suggestModuleEntries(input.tree, input.moduleLabel, input.moduleHint, input.provider, input.fileSummaries ?? new Map(), avoidPaths);
+  const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider });
   if (suggestion.entries.length) {
     for (const entry of suggestion.entries) {
       paths.delete(entry.path);
       paths.set(entry.path, input.moduleLabel); // 先删后设：刷新该路径的新近度
     }
     trimToNewest(paths, RECENT_ENTRY_PATHS_MAX_PER_KEY);
-    recentEntryPaths.delete(input.cacheKey); // set 不移动已有键的位置，删后重设才刷新 key 的新近度
-    recentEntryPaths.set(input.cacheKey, { paths, at: Date.now() });
+    recentEntryPaths.delete(input.repositoryId); // set 不移动已有键的位置，删后重设才刷新 key 的新近度
+    recentEntryPaths.set(input.repositoryId, { paths, at: Date.now() });
     trimToNewest(recentEntryPaths, RECENT_ENTRY_PATHS_MAX_KEYS);
     entryCache.set(key, { entries: suggestion.entries, at: Date.now() });
     if (entryCache.size > ENTRY_CACHE_MAX) {

@@ -27,6 +27,13 @@ const MAX_SUMMARY = 60;
 /** 每批输出预算：40 条 × (key+标题+摘要) ≈ 2800 token；推理模型的思考余量由 provider 层统一加。 */
 const BATCH_MAX_TOKENS = 3_200;
 
+/**
+  润色层的输入口径版本，写进 `settings.refinement` 标记（见 importer/service.ts）。
+  上面的批次/深度/长度阈值或 `REFINE_SYSTEM_PROMPT` 改了，课程树可以一字不变——这类失效只有版本号管得了，
+  改它们要同步 bump。首次带该版本的运行会让旧标记的仓库重润一次，属预期。
+  */
+export const REFINEMENT_CONTRACT_VERSION = "refine-v1";
+
 interface NodeRename {
   key: string;
   title: string;

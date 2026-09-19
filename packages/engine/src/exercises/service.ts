@@ -6,7 +6,7 @@ import { classifyModuleId, EXERCISE_KINDS, type SymbolInfo } from "@codebase-tut
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
-import { buildTagCandidate, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
+import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./verify.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
@@ -39,6 +39,20 @@ export interface PracticeRepository {
 
 const kinds: ExerciseKind[] = EXERCISE_KINDS;
 
+/**
+  出题缓存的作用域（填进 `exercise_cache.content_version` 那一列）。
+
+  原来只有全仓 `versionStamp`，漏掉两个失效轴：**换模型**（同一份代码在另一个模型上不是同一道题）、
+  **改题面提示词**（代码一字没变，题面口径已经不同）。补进作用域后，这两类变更都只让出题重跑一次，
+  代价极小；不补的话就是「一直复用旧题面」。
+  注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，答题时校验仓库是否已更新靠它。
+  静态题（output_prediction / change_localization / impact_analysis）的 id 不带作用域也无妨——
+  它们的标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
+ */
+function exerciseScope(versionStamp: string, modelVersion: string): string {
+  return `${versionStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+}
+
 export class ExerciseService {
   getSummary(repository: PracticeRepository): PracticeSummary {
     const database = new TutorDatabase(repository.path);
@@ -57,6 +71,8 @@ export class ExerciseService {
     const database = new TutorDatabase(repository.path);
     try {
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
+      // 题面口径/模型进缓存作用域（见 exerciseScope）；没配模型时是一档固定值，与「有模型」的产物不共用缓存
+      const scope = exerciseScope(repository.analysis.versionStamp, provider?.modelVersion ?? "deterministic");
       if (!requested.kind && !requested.targetUnitId) {
         const due = database.getReviewSchedules(repository.index.repositoryId)
           .filter((schedule) => schedule.dueAt <= new Date().toISOString())
@@ -74,7 +90,7 @@ export class ExerciseService {
           ? "当前知识模块下没有可出题的代码单元；换一个模块，或先导入更多相关代码。"
           : "当前分析结果没有可生成的练习。请先重新导入仓库。");
       }
-      const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, target.kind, target.id);
+      const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) return cached.exercise;
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty);
       if (provider) {
@@ -88,7 +104,7 @@ export class ExerciseService {
           scene: "exercise_generate"
         });
       }
-      database.putExerciseCache(repository.index.repositoryId, repository.analysis.versionStamp, target.kind, target.id, stored);
+      database.putExerciseCache(repository.index.repositoryId, scope, target.kind, target.id, stored);
       return stored.exercise;
     } finally {
       database.close();
@@ -96,7 +112,7 @@ export class ExerciseService {
   }
 
   /**
-    LLM 出题族：id = hash(repoId + tagId + variantNonce)，nonce=0 复用缓存题，
+    LLM 出题族：id = hash(repoId + 出题作用域 + tagId + variantNonce)，nonce=0 复用缓存题，
     换一题传 variantNonce+1 生成新题（旧题保留在缓存/复习记录里）。
     一轮调用内由 LLM 判定「能否出题」——拒绝理由与守门否决都记 journal（exercise_declined），不静默。
     */
@@ -107,7 +123,8 @@ export class ExerciseService {
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
-    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, repository.analysis.versionStamp, "llm_rubric", targetUnitId);
+    const scope = exerciseScope(repository.analysis.versionStamp, provider.modelVersion);
+    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
 
     const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
@@ -134,7 +151,9 @@ export class ExerciseService {
     }
     const proposal = generation.proposal;
     const exercise: Exercise = {
-      id: `exercise:${hash(`${repository.index.repositoryId}:${repository.analysis.versionStamp}:llm_rubric:${targetUnitId}`).slice(0, 20)}`,
+      // id 里用 scope 而不是裸 versionStamp：LLM 题的题面与答案全出自模型，换模型就是另一道题，
+      // 两者不能共用一个 id（判分与复习排期都按 id 回查缓存行）。
+      id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:llm_rubric:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
       contentVersion: repository.analysis.versionStamp,
       kind: "llm_rubric",
@@ -151,7 +170,7 @@ export class ExerciseService {
       createdAt: new Date().toISOString()
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
-    database.putExerciseCache(repository.index.repositoryId, repository.analysis.versionStamp, "llm_rubric", targetUnitId, stored);
+    database.putExerciseCache(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
     return exercise;
   }
 

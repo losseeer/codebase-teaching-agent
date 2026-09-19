@@ -49,6 +49,11 @@ export interface FileSummary {
 /** 落库形态：与 `FileSummary` 差一个 `cached`（那是本次运行的事实，不该进缓存）。 */
 type StoredSummary = Omit<FileSummary, "cached">;
 
+/**
+  L1 的键形状与 `layerCacheKey` 同构（口径版本 + 模型版本 + 本层实际输入），但**不换成**那个函数：
+  一是这张表按仓库分库（`TutorDatabase(repositoryPath)`），键里再放 repositoryId 是纯冗余；
+  二是换构造会让存量行整体失配，等于替每个用户重烧一遍全仓摘要——收益为零。
+ */
 function cacheKeyOf(slice: FileSlice, modelVersion: string): string {
   return hash(`${SUMMARY_INPUT_VERSION}:${modelVersion}:${JSON.stringify(slice)}`);
 }

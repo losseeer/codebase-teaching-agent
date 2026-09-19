@@ -32,25 +32,37 @@ function treeWithNodes(ids: string[]): CourseTree {
 describe("suggestModuleEntriesCached", () => {
   beforeEach(() => clearModuleEntryCache());
 
-  it("同一 cacheKey+模块+说明 命中缓存，不重调 LLM，命中不带 usage", async () => {
+  it("同一仓库+模块+说明 命中缓存，不重调 LLM，命中不带 usage", async () => {
     const { provider, calls } = fakeProvider([["n1", "n2"]]);
     const tree = treeWithNodes(["n1", "n2"]);
-    const first = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "加载", provider, cacheKey: "repo:v1" });
+    const first = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "加载", provider, repositoryId: "repo" });
     expect(first.entries.map((entry: SuggestedEntry) => entry.id)).toEqual(["n1", "n2"]);
     expect(first.usage).toBeDefined();
-    const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "加载", provider, cacheKey: "repo:v1" });
+    const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "加载", provider, repositoryId: "repo" });
     expect(second.entries).toEqual(first.entries);
     expect(second.usage).toBeUndefined();
     expect(calls).toHaveLength(1);
   });
 
-  it("不同模块名或不同 cacheKey 各自调用；分析版本变化后缓存失效", async () => {
+  it("不同模块名或不同仓库各自调用；换模型未命中（键里有 modelVersion）", async () => {
     const { provider, calls } = fakeProvider([["n1"]]);
     const tree = treeWithNodes(["n1"]);
-    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, cacheKey: "repo:v1" });
-    await suggestModuleEntriesCached({ tree, moduleLabel: "路由", moduleHint: "h", provider, cacheKey: "repo:v1" });
-    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, cacheKey: "repo:v2" });
-    expect(calls).toHaveLength(3);
+    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
+    await suggestModuleEntriesCached({ tree, moduleLabel: "路由", moduleHint: "h", provider, repositoryId: "repo" });
+    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "other" });
+    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider: { ...provider, modelVersion: "stub-2" }, repositoryId: "repo" });
+    expect(calls).toHaveLength(4);
+  });
+
+  it("键按本层实际输入：候选变了未命中，输入没变即使换 provider 实例也命中", async () => {
+    const { provider, calls } = fakeProvider([["n1"]]);
+    await suggestModuleEntriesCached({ tree: treeWithNodes(["n1"]), moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
+    // 课程树多出一个候选 → 送进模型的候选清单变了 → 必须重算，否则会复用「看不见新节点」的旧结果
+    await suggestModuleEntriesCached({ tree: treeWithNodes(["n1", "n2"]), moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
+    expect(calls).toHaveLength(2);
+    // 同一棵树换一个 provider 对象（同 name/modelVersion）：键只由实际输入构成，命中
+    await suggestModuleEntriesCached({ tree: treeWithNodes(["n1", "n2"]), moduleLabel: "配置", moduleHint: "h", provider: { ...provider }, repositoryId: "repo" });
+    expect(calls).toHaveLength(2);
   });
 
   it("空结果（LLM 失败回落）不缓存，下次仍会重试", async () => {
@@ -61,8 +73,8 @@ describe("suggestModuleEntriesCached", () => {
       }
     };
     const tree = treeWithNodes(["n1"]);
-    const first = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, cacheKey: "repo:v1" });
-    const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, cacheKey: "repo:v1" });
+    const first = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
+    const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
     expect(first.entries).toEqual([]);
     expect(second.entries).toEqual([]);
   });

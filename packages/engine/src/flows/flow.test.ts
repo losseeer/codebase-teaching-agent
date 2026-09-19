@@ -213,15 +213,50 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.reason).toContain("429");
   });
 
-  it("缓存：同一 cacheKey + 入口第二次请求不再调用模型；不同入口各自算一次", async () => {
+  it("缓存：同一仓库 + 同一入口的第二次请求不再调用模型；不同入口各自算一次", async () => {
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
-    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, cacheKey: "repo:v1" };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo" };
     await generateRepositoryFlowCached({ ...base, entry: ENTRY });
     await generateRepositoryFlowCached({ ...base, entry: ENTRY });
     expect(complete).toHaveBeenCalledTimes(1);
     await generateRepositoryFlowCached({ ...base, entry: { path: "graph/nodes.py", line: 1, label: "CLI command" } });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("缓存粒度按「本层实际输入」：全仓 versionStamp 翻转不重算，进到 digest 的变化才重算", async () => {
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo" };
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY });
+    expect(complete).toHaveBeenCalledTimes(1);
+    // versionStamp 是「全仓内容一把哈希」，它在 digest 里根本不出现：改任何一个文件都会翻它。
+    // 键按实际输入算，就不会因为一处无关改动把这条流程重烧一遍——结构没变，模型的问题也没变。
+    await generateRepositoryFlowCached({ ...base, analysis: { ...analysisOf(), versionStamp: "v2" }, entry: ENTRY });
+    expect(complete).toHaveBeenCalledTimes(1);
+    // 换模型必须重算：同一个问题在不同模型上不是同一个答案
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY, provider: { ...provider, modelVersion: "stub-2" } });
+    expect(complete).toHaveBeenCalledTimes(2);
+    // 补上一条已确认的 L1 摘要 → 清单里多了 summary 字段 → 输入确实变了，重算
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", { summary: "建图。" }]]) });
+    expect(complete).toHaveBeenCalledTimes(3);
+    // 摘要覆盖不足时正文被隐去，但 withheldSummaries 计数会进 digest——「有几份职责未确认」本身是告诉模型的信息
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", { summary: "建图。", coverageLow: true }]]) });
+    expect(complete).toHaveBeenCalledTimes(4);
+  });
+
+  it("缓存按仓库隔离：内容逐字相同的两个仓库各自算一次，不共用条目", async () => {
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const shared = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, entry: ENTRY };
+    await generateRepositoryFlowCached({ ...shared, repositoryId: "repo_a" });
+    await generateRepositoryFlowCached({ ...shared, repositoryId: "repo_a" });
+    expect(complete).toHaveBeenCalledTimes(1);
+    // 这条保证的是：卸载 / 换仓时不清缓存也安全——旧仓的结果不可能被新仓读到。
+    await generateRepositoryFlowCached({ ...shared, repositoryId: "repo_b" });
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
@@ -236,7 +271,7 @@ describe("generateRepositoryFlow（含降级）", () => {
         return { text: reply, usage: { inputTokens: 1, outputTokens: 1 } };
       }
     };
-    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, cacheKey: "repo:v2", summaries: NO_SUMMARIES };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, repositoryId: "repo", summaries: NO_SUMMARIES };
     const first = await generateRepositoryFlowCached({ ...base, entry: ENTRY });
     const second = await generateRepositoryFlowCached({ ...base, entry: ENTRY });
     expect(first.source).toBe("static");
@@ -248,7 +283,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
-    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, cacheKey: "repo:v3", summaries: NO_SUMMARIES };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, repositoryId: "repo", summaries: NO_SUMMARIES };
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-09-18T00:00:00.000Z"));
