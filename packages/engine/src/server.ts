@@ -296,6 +296,11 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
     const suggestion = await suggestModuleEntriesCached({
       tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
       fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
+      // 零分候选的补位信号（P3）：入口点在前、高频改动的热点文件其次——比路径字典序靠谱得多
+      boostPaths: [...new Set([
+        ...(repository.analysis.graph.entrypoints ?? []).map((entrypoint) => entrypoint.path),
+        ...repository.index.hotspots.slice(0, 20).map((hotspot) => hotspot.path)
+      ])],
       repositoryId: repository.index.repositoryId,
       database
     });
