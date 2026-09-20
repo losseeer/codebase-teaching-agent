@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildCourseTree } from "./build.js";
+import type { CourseNode, ImplementationUnit } from "@codebase-tutor/shared";
+import { buildCourseTree, groupImplementationsByModule } from "./build.js";
+
+function unit(path: string, name: string): ImplementationUnit {
+  const line = 3;
+  return {
+    id: `symbol:${path}:${name}:${line}`,
+    symbol: { id: `symbol:${path}:${name}:${line}`, name, kind: "function", path, line, endLine: 8, parameters: [], language: "typescript" },
+    summary: `${name} 的实现细节。`,
+    inputs: [], output: "无", invariants: [], boundaries: [], traps: [], verification: []
+  };
+}
+
+function microOf(tree: ReturnType<typeof buildCourseTree>): CourseNode {
+  return tree.root.children.find((node) => node.id === "micro")!;
+}
 
 describe("course tree", () => {
   it("binds generated workflow lessons to source anchors", () => {
@@ -56,5 +71,29 @@ describe("course tree", () => {
     expect(workflows.children[0].id).toBe("workflow:no-entry");
     expect(workflows.children[0].anchors).toEqual([]); // 无锚点 → 不进推荐入口候选池
     expect(tree.root.summary).toContain("未检测到可执行入口");
+  });
+
+  it("微观节点按锚点目录归组回模块，重复执行是幂等的", () => {
+    const tree = buildCourseTree({
+      repositoryId: "repo_test",
+      modelVersion: "fixture-v1",
+      files: [
+        { path: "src/main.ts", extension: ".ts", bytes: 30, lines: 10 },
+        { path: "src/db/store.ts", extension: ".ts", bytes: 30, lines: 10 }
+      ],
+      summaries: [],
+      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" },
+      implementations: [unit("src/main.ts", "boot"), unit("src/db/store.ts", "load"), unit("src/db/store.ts", "save")]
+    });
+    expect(microOf(tree).children).toHaveLength(3); // 归组前：三条平行清单
+    const grouped = groupImplementationsByModule(tree);
+    expect(microOf(grouped).children).toEqual([]);
+    expect(microOf(grouped).summary).toContain("已按其所在目录归入");
+    const modules = grouped.root.children.find((node) => node.id === "modules")!;
+    const mainModule = modules.children.find((node) => node.id === "module:src")!;
+    const dbModule = modules.children.find((node) => node.id === "module:src/db")!;
+    expect(mainModule.children.map((node) => node.id)).toEqual(["symbol:src/main.ts:boot:3"]);
+    expect(dbModule.children.map((node) => node.id)).toEqual(["symbol:src/db/store.ts:load:3", "symbol:src/db/store.ts:save:3"]);
+    expect(groupImplementationsByModule(grouped)).toBe(grouped); // 幂等：对已归组的树原样返回
   });
 });

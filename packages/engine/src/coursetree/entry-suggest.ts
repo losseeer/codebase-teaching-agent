@@ -148,11 +148,13 @@ export function rankEntryCandidates(
     if (avoidPaths.has(candidate.path)) score -= 50;
     return { candidate, score };
   });
+  // id 决胜：同一文件里多个函数节点的相对顺序不能依赖候选的进入顺序（树遍历序一改，
+  // 排序后 top15 就变、缓存键跟着变——微观归组这类纯结构改动会白白重烧选择层）。
   const compareScore = (left: Scored, right: Scored): number =>
-    right.score - left.score || left.candidate.path.localeCompare(right.candidate.path);
+    right.score - left.score || left.candidate.path.localeCompare(right.candidate.path) || left.candidate.id.localeCompare(right.candidate.id);
   const positives = scored.filter((item) => item.score > 0).sort(compareScore);
   const negatives = scored.filter((item) => item.score < 0).sort(compareScore);
-  const zeros = scored.filter((item) => item.score === 0).sort((left, right) => left.candidate.path.localeCompare(right.candidate.path));
+  const zeros = scored.filter((item) => item.score === 0).sort((left, right) => left.candidate.path.localeCompare(right.candidate.path) || left.candidate.id.localeCompare(right.candidate.id));
   const boostRank = new Map(boostPaths.slice(0, MAX_BOOST_PATHS).map((path, index) => [path, index]));
   const isBoosted = (item: Scored): boolean => boostRank.has(item.candidate.path);
   // 零分候选按 boost 优先排好队列后，**每路径限 2 个**再进池：真仓实测热点文件的十几个方法

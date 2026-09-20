@@ -6,7 +6,8 @@ import type { CourseNode, FileEntry, RepositoryAnalysis, RepositoryIndex } from 
  *
  * 为什么改：旧地图把课程树（一棵层级树）画成图——层级用列表呈现更高效，
  * 图的存在价值在「边」承载列表给不了的关系信息。本组件画真正的依赖关系：
- * - 节点 = 目录前缀聚合的模块（默认前 2 层目录；超过 MAX_GROUPS 回落 1 层，再超按行数并入「其他」）
+ * - 节点 = 目录前缀聚合的模块（聚合深度自适应：从浅往深钻到「最大分组占比」达标为止，见 chooseAggregation；
+ *   超过 MAX_GROUPS 按行数并入「其他」）
  * - 边 = 跨模块 import 引用（analysis.graph.imports 文件级聚合为模块级，粗细 = 引用次数）
  * - 布局 = 按依赖深度分层，入口模块（含 entrypoint 的模块）在最左列，复用 prototype
  *   flow-node / flow-lines 视觉语言与正交连线
@@ -25,6 +26,10 @@ const PAD_Y = 44;
 const MIN_W = 710;
 const MIN_H = 623;
 const MAX_GROUPS = 20;
+/** 结构塌陷判据：最大分组的文件占比。一个方块吞下过半仓库，说明这层深度太粗、边都成了自环。 */
+const MAX_LARGEST_SHARE = 0.5;
+/** 聚合下钻的最大目录层数：Maven 布局（src/main/java/com/x）要到第 6 层才露出模块边界。 */
+const MAX_AGGREGATION_DEPTH = 8;
 /** Git 变更次数达到该值的模块标记为热点。 */
 const HOTSPOT_CHANGES = 5;
 
@@ -59,6 +64,17 @@ function makeKeyOf(depth: number): (path: string) => string {
   };
 }
 
+/** 最大分组的文件占比——聚合深度的停止下钻判据。 */
+function largestFileShare(groups: Map<string, ModuleNode>): number {
+  let total = 0;
+  let largest = 0;
+  for (const group of groups.values()) {
+    total += group.files.length;
+    largest = Math.max(largest, group.files.length);
+  }
+  return total ? largest / total : 0;
+}
+
 export function buildModuleGraph(index: RepositoryIndex, analysis: RepositoryAnalysis): { nodes: ModuleNode[]; edges: ModuleEdge[] } {
   const entryPaths = new Set(analysis.graph.entrypoints.map((entry) => entry.path));
   const build = (keyOf: (path: string) => string): Map<string, ModuleNode> => {
@@ -83,18 +99,25 @@ export function buildModuleGraph(index: RepositoryIndex, analysis: RepositoryAna
     return groups;
   };
 
-  let keyOf = makeKeyOf(2);
-  let groups = build(keyOf);
-  if (groups.size > MAX_GROUPS) {
-    keyOf = makeKeyOf(1);
-    groups = build(keyOf);
-  }
-  if (groups.size > MAX_GROUPS) {
-    // 兜底：超大单层仓库按行数保留前 N-1 个模块，其余并入「其他」
-    const sorted = [...groups.values()].sort((left, right) => right.lines - left.lines);
+  // 自适应聚合深度：固定「前两层」会把 Maven 布局的 src/main/java/com/x 整个吞进一个方块
+  // （实测 Spring 仓 116/213 文件同组、边全折成自环）。从浅往深钻，取「最大分组文件占比」首次达标的层；
+  // 某层组数超上限先按行数收敛、余量并入「其他」再判——占比判定因此能穿过溢出层到达真正的模块边界。
+  const project = (depth: number): { keyOf: (path: string) => string; groups: Map<string, ModuleNode> } => {
+    const base = makeKeyOf(depth);
+    const direct = build(base);
+    if (direct.size <= MAX_GROUPS) return { keyOf: base, groups: direct };
+    // 收敛溢出：含入口的模块必留（地图失去了入口标注就失去了锚点），其余按行数取前 N-1，余量并入「其他」
+    const sorted = [...direct.values()].sort((a, b) => Number(b.isEntry) - Number(a.isEntry) || b.lines - a.lines);
     const keep = new Set(sorted.slice(0, MAX_GROUPS - 1).map((group) => group.key));
-    groups = build((path) => (keep.has(keyOf(path)) ? keyOf(path) : "其他"));
+    const keyOfCollapsed = (path: string): string => (keep.has(base(path)) ? base(path) : "其他");
+    return { keyOf: keyOfCollapsed, groups: build(keyOfCollapsed) };
+  };
+  let chosen = project(1);
+  for (let depth = 2; depth <= MAX_AGGREGATION_DEPTH && largestFileShare(chosen.groups) > MAX_LARGEST_SHARE; depth += 1) {
+    const deeper = project(depth);
+    if (largestFileShare(deeper.groups) < largestFileShare(chosen.groups)) chosen = deeper; // 占比不降的层只带来碎片，不采纳
   }
+  const { keyOf, groups } = chosen;
 
   const edgeMap = new Map<string, ModuleEdge>();
   for (const [from, targets] of Object.entries(analysis.graph.imports)) {

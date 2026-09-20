@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
-import { attachQuality, buildCourseTree } from "../coursetree/build.js";
+import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
 import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { summarizeCost } from "../cost/service.js";
@@ -232,6 +232,8 @@ export class ImportService extends EventEmitter {
         }
       }
     }
+    // 微观归组投影跑在润色（含其缓存命中路径）之后：润色的输入结构不变，归组只是重挂位置、可重复执行
+    course = groupImplementationsByModule(course);
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),

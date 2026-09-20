@@ -224,4 +224,14 @@ describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重
     const ranked = rankEntryCandidates(candidates, ["缓存"], new Map(), new Set(["src/b.ts"]), ["src/b.ts"]);
     expect(ranked.map((candidate) => candidate.id)).toEqual(["a", "b"]);
   });
+
+  it("同路径候选以 id 决胜定序：池子进入顺序（=树遍历序）变化不改变输出（护住缓存键）", () => {
+    const group = Array.from({ length: 6 }, (_, index) => mk(`f${index}`, "src/same.ts", "s"));
+    const others = Array.from({ length: 12 }, (_, index) => mk(`o${index}`, `src/other${String(index).padStart(2, "0")}.ts`, "s"));
+    const forward = rankEntryCandidates([...group, ...others], ["不相关主题"], new Map());
+    const backward = rankEntryCandidates([...[...group].reverse(), ...[...others].reverse()], ["不相关主题"], new Map());
+    expect(backward.map((candidate) => candidate.id)).toEqual(forward.map((candidate) => candidate.id));
+    // 顺带钉住字典序+id 的确定性输出本身
+    expect(forward.map((candidate) => candidate.id).slice(12)).toEqual(["f0", "f1", "f2"]);
+  });
 });

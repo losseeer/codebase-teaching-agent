@@ -56,6 +56,41 @@ export function buildCourseTree(input: {
   };
 }
 
+/**
+ * 微观归组投影：把函数级节点按锚点目录搬回所属模块的 children，让「树」不再是三条平行清单。
+ * 必须跑在润色**之后**——润色吃的仍是平坦结构，其缓存标记与产出都不受归组影响；
+ * 归组本身只改挂位置不改 id/摘要，对已归组的树重复执行是无操作（幂等）。
+ */
+export function groupImplementationsByModule(tree: CourseTree): CourseTree {
+  const micro = tree.root.children.find((node) => node.id === "micro");
+  const modules = tree.root.children.find((node) => node.id === "modules");
+  if (!micro || !modules) return tree;
+  const moduleIds = new Set(modules.children.map((node) => node.id));
+  const moved = new Map<string, CourseNode[]>();
+  const orphans: CourseNode[] = [];
+  for (const implementation of micro.children) {
+    const path = implementation.anchors[0]?.path;
+    const dir = path ? (dirname(path) === "." ? "根目录" : dirname(path)) : undefined;
+    const moduleId = dir ? `module:${dir}` : undefined;
+    if (moduleId && moduleIds.has(moduleId)) {
+      moved.set(moduleId, [...(moved.get(moduleId) ?? []), implementation]);
+    } else {
+      orphans.push(implementation);
+    }
+  }
+  if (!moved.size) return tree; // 幂等快路径：已归组（或无可搬节点）时原样返回
+  const children = tree.root.children.map((section) => {
+    if (section.id === "modules") {
+      return { ...section, children: section.children.map((module) => (moved.get(module.id) ? { ...module, children: [...module.children, ...moved.get(module.id)!] } : module)) };
+    }
+    if (section.id === "micro") {
+      return { ...section, children: orphans, summary: orphans.length ? section.summary : "函数级节点已按其所在目录归入对应模块，展开模块即可查看精读清单。" };
+    }
+    return section;
+  });
+  return { ...tree, root: { ...tree.root, children } };
+}
+
 export function attachQuality(tree: CourseTree, quality: QualityReport): CourseTree {
   const checks = new Map(quality.macro.map((check) => [check.anchors[0] ? `${check.anchors[0].path}:${check.anchors[0].line}` : check.statement, check]));
   const visit = (node: CourseNode): CourseNode => {
