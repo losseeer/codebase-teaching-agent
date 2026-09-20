@@ -42,4 +42,19 @@ describe("course tree", () => {
     // fixture 文件仍作为依赖子节点出现（它是被 import 的对象，只是不当入口讲）
     expect(tree.root.children[0].children[0].children.some((child) => child.title.includes("frozen-demo-repo"))).toBe(true);
   });
+
+  it("没有入口的仓库（库/轮子）明示事实，不拿首个文件伪造假入口", () => {
+    const tree = buildCourseTree({
+      repositoryId: "repo_test",
+      modelVersion: "fixture-v1",
+      files: [{ path: "src/lib.ts", extension: ".ts", bytes: 30, lines: 2 }],
+      summaries: [{ path: "src/lib.ts", summary: "工具函数。", role: "tool", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
+      graph: { imports: new Map([["src/lib.ts", []]]), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
+    });
+    const workflows = tree.root.children[0];
+    expect(workflows.children).toHaveLength(1);
+    expect(workflows.children[0].id).toBe("workflow:no-entry");
+    expect(workflows.children[0].anchors).toEqual([]); // 无锚点 → 不进推荐入口候选池
+    expect(tree.root.summary).toContain("未检测到可执行入口");
+  });
 });

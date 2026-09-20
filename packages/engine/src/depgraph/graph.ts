@@ -19,7 +19,7 @@ export interface DependencyGraph {
 
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java"];
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
-/** TS/JS 的说明符一律带引号；Python 的 import 语句没有引号，另走 extractPythonSpecifiers。 */
+/** TS/JS 的说明符一律带引号；Python 与 Java 的 import 没有引号，各走 extractPythonSpecifiers / extractJavaSpecifiers。 */
 const tsSpecifierPattern = /(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g;
 
 /**
@@ -30,17 +30,28 @@ const tsSpecifierPattern = /(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"'
 export function buildDependencyGraph(repositoryPath: string, files: FileEntry[]): DependencyGraph {
   const available = new Set(files.map((file) => file.path));
   const packages = collectWorkspacePackages(repositoryPath, files);
-  const imports = new Map<string, string[]>();
   const symbols: SymbolInfo[] = [];
   const contents = new Map<string, string>();
   for (const file of files) {
     if (!extensions.includes(file.extension)) continue;
     const content = readFileSync(join(repositoryPath, file.path), "utf8");
     contents.set(file.path, content);
-    const specifiers = file.extension === ".py" ? extractPythonSpecifiers(content) : [...content.matchAll(tsSpecifierPattern)].map((match) => match[1]);
-    const resolved = specifiers.map((value) => resolveImport(file.path, value, available, packages)).filter((value): value is string => Boolean(value));
-    imports.set(file.path, [...new Set(resolved)]);
     symbols.push(...extractSymbols(file.path, content));
+  }
+  // Java 的 import 指向「全限定类名」，要经全仓 类名→文件 索引才能落点，故内容先读全再解析依赖
+  const javaTypes = collectJavaTypes(contents);
+  const imports = new Map<string, string[]>();
+  for (const [path, content] of contents) {
+    const isJava = path.endsWith(".java");
+    const specifiers = path.endsWith(".py")
+      ? extractPythonSpecifiers(content)
+      : isJava
+        ? extractJavaSpecifiers(content)
+        : [...content.matchAll(tsSpecifierPattern)].map((match) => match[1]);
+    const resolved = specifiers
+      .map((value) => (isJava ? resolveJavaImport(value, javaTypes) : resolveImport(path, value, available, packages)))
+      .filter((value): value is string => Boolean(value));
+    imports.set(path, [...new Set(resolved)]);
   }
   const calls = extractCalls(contents, symbols, imports);
   const lspStatus = detectLspStatus(files);
@@ -49,7 +60,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
     imports,
     calls,
     symbols,
-    entrypoints: detectEntrypoints(repositoryPath, files),
+    entrypoints: detectEntrypoints(repositoryPath, files, contents),
     semanticBackend: lspStatus.some((item) => item.status === "available") ? "lsp" : "static",
     lspStatus,
     parseBackend: parseStatus.backend,
@@ -220,6 +231,45 @@ function readImportedNames(raw: string): string[] {
     .filter((item) => /^[A-Za-z_][\w.]*$/.test(item));
 }
 
+/**
+ * Java 的 import 语句：`import com.a.B;`、`import static com.a.B.C;`、`import com.a.*;`。
+ * 通配符只取到包名（`.*` 剥掉），静态导入取完整成员路径——两者都由 resolveJavaImport 逐级上溯落点。
+ */
+function extractJavaSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  for (const line of content.split("\n")) {
+    const match = line.trim().match(/^import\s+(?:static\s+)?([A-Za-z_]\w*(?:\.\w+)*)(?:\.\*)?\s*;/);
+    if (match) specifiers.push(match[1]);
+  }
+  return specifiers;
+}
+
+/** 全仓「全限定类名 → 文件路径」索引：Java 靠 package 声明 + 文件名（public 类名=文件名约定）建这个映射。 */
+function collectJavaTypes(contents: Map<string, string>): Map<string, string> {
+  const types = new Map<string, string>();
+  for (const [path, content] of contents) {
+    if (!path.endsWith(".java")) continue;
+    const pkg = content.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1];
+    if (pkg) types.set(`${pkg}.${basename(path, ".java")}`, path);
+  }
+  return types;
+}
+
+/**
+ * 类名精确命中即返回；未命中逐段去掉尾部再试——覆盖静态导入（`a.b.C.member`）与嵌套类（`a.b.C.D`）。
+ * 外部依赖（org.springframework、java.util）不会进索引，天然被过滤。
+ */
+function resolveJavaImport(specifier: string, javaTypes: Map<string, string>): string | undefined {
+  let current = specifier;
+  for (;;) {
+    const hit = javaTypes.get(current);
+    if (hit) return hit;
+    const cut = current.lastIndexOf(".");
+    if (cut < 0) return undefined;
+    current = current.slice(0, cut);
+  }
+}
+
 interface WorkspacePackage {
   dir: string;
   main?: string;
@@ -284,7 +334,10 @@ function resolveImport(from: string, specifier: string, available: Set<string>, 
   return tryResolve(join(pkg.dir, specifier.slice(name.length + 1)));
 }
 
-function detectEntrypoints(repositoryPath: string, files: FileEntry[]): SourceAnchor[] {
+function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents: Map<string, string>): SourceAnchor[] {
+  // Spring 仓的入口只写在注解里，常规规则（package.json、惯用文件名）一条都碰不到；注解命中优先入列
+  const java = detectJavaEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
+  const javaPaths = new Set(java.map((anchor) => anchor.path));
   const candidates = new Map<string, string>();
   const manifest = join(repositoryPath, "package.json");
   if (existsSync(manifest)) {
@@ -305,10 +358,51 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[]): SourceAn
   }
   // 测试夹具里的 main.py / index.js 不是真入口（实测 fixture 仓的 package.json scripts 会指进去）——
   // 与结构角色用同一套测试路径判定，把这类候选剔除。
-  return [...candidates.entries()]
-    .filter(([path]) => !isTestPath(path) && files.some((file) => file.path === path))
-    .slice(0, 12)
+  // 注解命中的入口是权威清单（每一个都对应真实的路由/启动点），不能沿用弱启发式的 12 截断——
+  // 实测 Spring 仓 15 个入口会在 12 处静默丢掉 UserController。给宽上限只为兜底极端仓。
+  const conventional = [...candidates.entries()]
+    .filter(([path]) => !isTestPath(path) && !javaPaths.has(path) && files.some((file) => file.path === path))
     .map(([path, label]) => ({ path, line: 1, label }));
+  return [...java.slice(0, 60), ...conventional.slice(0, 12)];
+}
+
+/**
+ * Java/Spring 入口识别：启动类看 @SpringBootApplication，HTTP 路由看 @Controller/@RestController。
+ * 锚点落在类声明行（跳过注解块），GUI 跳转直达正文；@ControllerAdvice 不算入口（词边界已排除）。
+ */
+function detectJavaEntrypoints(contents: Map<string, string>): SourceAnchor[] {
+  const classDecl = /^\s*(?:(?:public|private|protected|final|abstract|sealed|static)\s+)*(?:class|interface|enum|record)\s+\w+/;
+  const boot: SourceAnchor[] = [];
+  const controllers: SourceAnchor[] = [];
+  for (const [path, content] of contents) {
+    if (!path.endsWith(".java")) continue;
+    const lines = content.split("\n");
+    const classLineOf = (from: number): number => {
+      for (let index = from; index < lines.length; index += 1) {
+        if (classDecl.test(lines[index])) return index + 1;
+      }
+      return from + 1;
+    };
+    const bootIndex = lines.findIndex((line) => /^\s*@SpringBootApplication\b/.test(line));
+    if (bootIndex >= 0) {
+      boot.push({ path, line: classLineOf(bootIndex), label: "Spring Boot 启动类" });
+      continue;
+    }
+    const controllerIndex = lines.findIndex((line) => /^\s*@(?:Rest)?Controller\b/.test(line));
+    if (controllerIndex < 0) continue;
+    // 类级 @RequestMapping 前缀从注解行扫到类声明为止，路径即视图上可直接报的挂载点
+    let prefix = "";
+    for (let index = controllerIndex; index < lines.length; index += 1) {
+      if (classDecl.test(lines[index])) break;
+      const match = lines[index].match(/@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']+)["']/);
+      if (match) {
+        prefix = match[1];
+        break;
+      }
+    }
+    controllers.push({ path, line: classLineOf(controllerIndex), label: `HTTP 路由 (Spring MVC)${prefix ? `：${prefix}` : ""}` });
+  }
+  return [...boot, ...controllers];
 }
 
 function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {

@@ -43,10 +43,12 @@ export function buildCourseTree(input: {
       id: "overview",
       title: "代码库全景",
       kind: "overview",
-      summary: `本课程从 ${workflows.length || 1} 个入口和 ${modules.length} 个模块建立心智地图。先理解执行路径，再按需深入热点或模块。`,
+      summary: workflows.length
+        ? `本课程从 ${workflows.length} 个入口和 ${modules.length} 个模块建立心智地图。先理解执行路径，再按需深入热点或模块。`
+        : `本仓库未检测到可执行入口（库或工具项目的常见形态），从 ${modules.length} 个模块建立心智地图，按依赖与热度深入。`,
       anchors: workflows[0]?.anchors ?? modules[0]?.anchors ?? [],
       children: [
-        { id: "workflows", title: "从入口理解执行路径", kind: "overview", summary: "从路由、CLI 和应用入口追踪主要执行路径。", anchors: [], children: workflows.length ? workflows : [fallbackWorkflow(input.files, byPath)] },
+        { id: "workflows", title: "从入口理解执行路径", kind: "overview", summary: "从路由、CLI 和应用入口追踪主要执行路径。", anchors: [], children: workflows.length ? workflows : [noEntrypointNode()] },
         { id: "modules", title: "模块地图", kind: "overview", summary: "按目录浏览职责边界；每个节点都附有源码锚点。", anchors: [], children: modules },
         { id: "micro", title: "微观精读", kind: "overview", summary: "函数级输入、输出、不变量、边界和陷阱。", anchors: [], children: implementations }
       ]
@@ -90,14 +92,17 @@ function workflowNode(anchor: { path: string; line: number; label: string }, sum
   };
 }
 
-function fallbackWorkflow(files: FileEntry[], summaries: Map<string, string>): CourseNode {
-  const file = files[0];
+/**
+ * 未检测到入口是仓库的真实形态（库/轮子通常没有进程入口），不是解析失败：
+ * 不拿首个文件伪造假入口，分区明说事实，心智地图改从模块建立。
+ */
+function noEntrypointNode(): CourseNode {
   return {
-    id: "workflow:first-file",
-    title: file ? `从 ${file.path} 开始` : "仓库中没有可分析的源文件",
+    id: "workflow:no-entry",
+    title: "未检测到可执行入口",
     kind: "workflow",
-    summary: file ? summaries.get(file.path) ?? "该文件将作为课程入口。" : "请导入包含源文件的仓库。",
-    anchors: file ? [{ path: file.path, line: 1, label: "可用入口" }] : [],
+    summary: "本仓库没有以进程入口暴露的代码，很可能是库或工具项目。先从模块地图建立心智地图，再按依赖与热度深入实现。",
+    anchors: [],
     children: []
   };
 }

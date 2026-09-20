@@ -8,6 +8,7 @@ import { buildDependencyGraph, impactRadius } from "./graph.js";
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
 const tsFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/tsnext-demo-repo");
 const pyFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/pydemo-repo");
+const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/javademo-repo");
 
 describe("dependency graph v1", () => {
   it("returns callers in the impact radius of a changed imported file", () => {
@@ -63,6 +64,26 @@ describe("dependency graph — Python 模块解析", () => {
     expect(crossFile).toContainEqual(expect.objectContaining({ callerPath: "app/service.py", calleePath: "app/store.py" }));
     expect(crossFile).toContainEqual(expect.objectContaining({ callerPath: "app/rel.py", calleePath: "app/store.py" }));
     rmSync(join(pyFixture, ".tutor"), { recursive: true, force: true });
+  });
+});
+
+describe("dependency graph — Java/Spring", () => {
+  it("resolves import statements (含静态导入) to repository files; 外部包与通配符不入图", () => {
+    const index = indexRepository(javaFixture);
+    const graph = buildDependencyGraph(javaFixture, index.files);
+    expect(graph.imports.get("src/main/java/com/demo/DemoApplication.java")).toEqual(["src/main/java/com/demo/shop/ShopController.java"]);
+    expect(graph.imports.get("src/main/java/com/demo/shop/ShopService.java")).toEqual(["src/main/java/com/demo/util/Keys.java"]);
+    // 直接导入与静态导入指向同一文件 → 合并成一条；`com.demo.util.*` 只到包名、无落点
+    expect(graph.imports.get("src/main/java/com/demo/shop/ShopController.java")).toEqual(["src/main/java/com/demo/util/Keys.java"]);
+    rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("detects entrypoints from Spring annotations, boot class first with class-line anchors", () => {
+    const index = indexRepository(javaFixture);
+    const graph = buildDependencyGraph(javaFixture, index.files);
+    expect(graph.entrypoints[0]).toEqual({ path: "src/main/java/com/demo/DemoApplication.java", line: 7, label: "Spring Boot 启动类" });
+    expect(graph.entrypoints).toContainEqual({ path: "src/main/java/com/demo/shop/ShopController.java", line: 11, label: "HTTP 路由 (Spring MVC)：/shop" });
+    rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
   });
 });
 

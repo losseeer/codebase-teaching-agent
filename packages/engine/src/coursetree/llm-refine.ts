@@ -32,7 +32,7 @@ const BATCH_MAX_TOKENS = 3_200;
   上面的批次/深度/长度阈值或 `REFINE_SYSTEM_PROMPT` 改了，课程树可以一字不变——这类失效只有版本号管得了，
   改它们要同步 bump。首次带该版本的运行会让旧标记的仓库重润一次，属预期。
   */
-export const REFINEMENT_CONTRACT_VERSION = "refine-v1";
+export const REFINEMENT_CONTRACT_VERSION = "refine-v2";
 
 interface NodeRename {
   key: string;
