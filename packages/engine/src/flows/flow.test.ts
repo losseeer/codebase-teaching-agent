@@ -3,9 +3,10 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry, type FlowDigestSummary } from "./flow.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TutorDatabase } from "../store/database.js";
 
 /**
   流程视图的服务端：LLM 生成 + 严格校验 + 缓存 + 降级。
@@ -245,6 +246,41 @@ describe("generateRepositoryFlow（含降级）", () => {
     // 摘要覆盖不足时正文被隐去，但 withheldSummaries 计数会进 digest——「有几份职责未确认」本身是告诉模型的信息
     await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", { summary: "建图。", coverageLow: true }]]) });
     expect(complete).toHaveBeenCalledTimes(4);
+  });
+
+  it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；降级结果不落盘", async () => {
+    clearRepositoryFlowCache();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-persist-")));
+    const database = new TutorDatabase(dir);
+    try {
+      let attempts = 0;
+      const provider: LlmProvider = {
+        name: "stub", modelVersion: "stub-1",
+        complete: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("first fails");
+          return { text: reply, usage: { inputTokens: 1, outputTokens: 1 } };
+        }
+      };
+      const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY, database };
+      // 第 1 次：调用失败回落静态——静态结果不入任何一层缓存
+      expect((await generateRepositoryFlowCached(base)).source).toBe("static");
+      // 模拟 engine 重启：内存层被清空，SQLite 还在；降级没落盘，所以会重试并这次成功
+      clearRepositoryFlowCache();
+      const second = await generateRepositoryFlowCached(base);
+      expect(second.source).toBe("llm");
+      expect(attempts).toBe(2);
+      expect(second.usage).toBeDefined(); // 这次是真调用，带 usage 记账
+      // 成功的结果同时落在内存与持久层；此后每次重启都命中持久层，不再烧钱
+      clearRepositoryFlowCache();
+      const third = await generateRepositoryFlowCached(base);
+      expect(third.source).toBe("llm");
+      expect(third.usage).toBeUndefined(); // 命中不带 usage，上层不会重复记账
+      expect(attempts).toBe(2);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("缓存按仓库隔离：内容逐字相同的两个仓库各自算一次，不共用条目", async () => {

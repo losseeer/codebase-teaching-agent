@@ -17,6 +17,8 @@ export interface FileEntry {
   extension: string;
   bytes: number;
   lines: number;
+  /** 正文 SHA-256 前 16 位；升级前生成的旧索引没有此字段——出题键对缺值回落全仓 versionStamp 语义。 */
+  contentHash?: string;
 }
 
 export interface FileTreeNode {
@@ -381,6 +383,9 @@ export interface Exercise {
   family?: ExerciseFamily;
   /** llm 族：用户配置的出题主题标签（题面语义提示）。 */
   tag?: string;
+  /** 这道题的内容由哪些文件决定（题面 + 标准答案）；作答时逐文件核对哈希，无关文件的修改不打扰已有题目。
+      旧缓存记录无此字段，回落 `contentVersion` 全仓比对。 */
+  contentHashes?: { path: string; hash: string }[];
   createdAt: string;
 }
 

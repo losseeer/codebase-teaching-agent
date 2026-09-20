@@ -42,15 +42,49 @@ const kinds: ExerciseKind[] = EXERCISE_KINDS;
 /**
   出题缓存的作用域（填进 `exercise_cache.content_version` 那一列）。
 
-  原来只有全仓 `versionStamp`，漏掉两个失效轴：**换模型**（同一份代码在另一个模型上不是同一道题）、
-  **改题面提示词**（代码一字没变，题面口径已经不同）。补进作用域后，这两类变更都只让出题重跑一次，
-  代价极小；不补的话就是「一直复用旧题面」。
-  注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，答题时校验仓库是否已更新靠它。
-  静态题（output_prediction / change_localization / impact_analysis）的 id 不带作用域也无妨——
-  它们的标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
+  失效轴 = **决定这道题内容的输入**，分两档：
+  - 文件粒度（B1）：题面与标准答案只由目标文件决定时（output_prediction / change_localization / llm 族），
+    作用域带目标文件自己的 `contentHash`——改无关文件不再让整仓出题重烧；
+  - 全仓粒度：答案取决于整张依赖图的 impact_analysis，作用域仍用全仓 `versionStamp`
+    （任一文件的 imports 变化都可能改答案，文件粒度在这里是假粒度）。
+
+  两个轴对旧索引同样成立：文件没有 `contentHash`（升级前生成的索引）时以 `repo:<versionStamp>` 充当
+  该文件的哈希——自动退化回全仓语义，不会出现「该失效没失效」。
+
+  另外两个轴**换模型**（同一份代码在另一个模型上不是同一道题）、**改题面提示词**（口径版本）对两档都生效。
+  注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，展示与旧数据兼容靠它，
+  作答校验走 `contentHashes`（见 `exerciseIsCurrent`）。
+  静态题（output_prediction / change_localization / impact_analysis）的 id 只含**文件哈希部分**、
+  不含模型与口径版本——标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
  */
 function exerciseScope(versionStamp: string, modelVersion: string): string {
   return `${versionStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+}
+
+/** 文件粒度作用域的「文件部分」：path@hash 逗号串。id 与缓存作用域共用它，保证二者同生同灭。 */
+function depsFingerprint(deps: { path: string; hash: string }[]): string {
+  return deps.map((dep) => `${dep.path}@${dep.hash}`).join(",");
+}
+
+/** 一道题依赖的文件清单及其哈希。查不到 contentHash（旧索引）时以全仓 versionStamp 兜底。 */
+function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value: unknown): { path: string; hash: string }[] {
+  const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
+  if (kind === "impact_analysis") return [];
+  const unit = value as ImplementationUnit;
+  return [{ path: unit.symbol.path, hash: hashOf(unit.symbol.path) }];
+}
+
+/**
+  作答时效校验：带 `contentHashes` 的新题逐文件核对，返回**已过期**的依赖清单（空 = 仍可用）——
+  只有这道题依赖的文件变了才拒绝作答，无关文件的修改不打扰已有题目；
+  旧题（无此字段）维持全仓 versionStamp 比对，过期时返回一个非路径占位符。
+*/
+function staleDependencies(repository: PracticeRepository, exercise: Exercise): string[] {
+  if (exercise.contentHashes?.length) {
+    const byPath = new Map(repository.index.files.map((file) => [file.path, file.contentHash]));
+    return exercise.contentHashes.filter((dep) => byPath.get(dep.path) !== dep.hash).map((dep) => dep.path);
+  }
+  return exercise.contentVersion === repository.analysis.versionStamp ? [] : ["<仓库内容>"];
 }
 
 export class ExerciseService {
@@ -71,16 +105,15 @@ export class ExerciseService {
     const database = new TutorDatabase(repository.path);
     try {
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
-      // 题面口径/模型进缓存作用域（见 exerciseScope）；没配模型时是一档固定值，与「有模型」的产物不共用缓存
-      const scope = exerciseScope(repository.analysis.versionStamp, provider?.modelVersion ?? "deterministic");
+      const modelVersion = provider?.modelVersion ?? "deterministic";
       if (!requested.kind && !requested.targetUnitId) {
         const due = database.getReviewSchedules(repository.index.repositoryId)
           .filter((schedule) => schedule.dueAt <= new Date().toISOString())
           .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
         for (const schedule of due) {
           const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
-          // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）
-          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && stored.exercise.contentVersion === repository.analysis.versionStamp) return stored.exercise;
+          // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 exerciseIsCurrent
+          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) return stored.exercise;
         }
       }
       const mastery = this.mastery(repository, database);
@@ -90,9 +123,14 @@ export class ExerciseService {
           ? "当前知识模块下没有可出题的代码单元；换一个模块，或先导入更多相关代码。"
           : "当前分析结果没有可生成的练习。请先重新导入仓库。");
       }
+      // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
+      const deps = exerciseDeps(repository, target.kind, target.value);
+      const scope = deps.length
+        ? `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`
+        : exerciseScope(repository.analysis.versionStamp, modelVersion);
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) return cached.exercise;
-      let stored = this.createExercise(repository, target.kind, target.value, target.difficulty);
+      let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
       if (provider) {
         const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
         stored = { ...stored, exercise: refined.exercise };
@@ -123,13 +161,15 @@ export class ExerciseService {
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
-    const scope = exerciseScope(repository.analysis.versionStamp, provider.modelVersion);
-    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
-    if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
-
+    // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
     const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
     const candidates = selectTagCandidates(repository, tag, 3, summaries);
     if (!candidates.length) throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
+    const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
+    const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
+    const scope = `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${provider.modelVersion}`;
+    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
+    if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
     const journal = new Journal(repository.path, repository.index.repositoryId);
     const generation = await generateExerciseWithLlm({ tag, candidates, provider });
     if (!generation.ok) {
@@ -156,6 +196,7 @@ export class ExerciseService {
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:llm_rubric:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
       contentVersion: repository.analysis.versionStamp,
+      ...(deps.length ? { contentHashes: deps } : {}),
       kind: "llm_rubric",
       targetUnitId,
       targetTitle: proposal.targetTitle || tag,
@@ -179,7 +220,8 @@ export class ExerciseService {
     try {
       const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
       if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
-      if (stored.exercise.contentVersion !== repository.analysis.versionStamp) throw new Error("仓库内容已更新，请使用新版本生成的练习。");
+      const stale = staleDependencies(repository, stored.exercise);
+      if (stale.length) throw new Error(`这道题依赖的源码已更新（${stale.join("、")}）；请使用新版本重新生成练习。`);
       const journal = new Journal(repository.path, repository.index.repositoryId);
       let graded = stored.expected.type === "rubric"
         ? await gradeRubric(stored, answer, provider)
@@ -275,19 +317,19 @@ export class ExerciseService {
     return [];
   }
 
-  private createExercise(repository: PracticeRepository, kind: ExerciseKind, value: unknown, difficulty: MasteryLevel): StoredExercise {
-    if (kind === "output_prediction") return outputExercise(repository, value as ImplementationUnit, difficulty);
-    if (kind === "change_localization") return localizationExercise(repository, value as ImplementationUnit, difficulty);
+  private createExercise(repository: PracticeRepository, kind: ExerciseKind, value: unknown, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
+    if (kind === "output_prediction") return outputExercise(repository, value as ImplementationUnit, difficulty, deps);
+    if (kind === "change_localization") return localizationExercise(repository, value as ImplementationUnit, difficulty, deps);
     if (kind === "impact_analysis") return impactExercise(repository, value as string, difficulty);
     throw new Error("不支持的练习题型");
   }
 }
 
-function outputExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel): StoredExercise {
+function outputExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
   const invocation = safeInvocationFor(repository.path, unit);
   if (!invocation) throw new Error("该实现不满足受限执行验证条件。");
   const expectedOutput = executeSafeInvocation(invocation);
-  const exercise = baseExercise(repository, "output_prediction", unit.id, unit.symbol.name, difficulty, {
+  const exercise = baseExercise(repository, "output_prediction", unit.id, unit.symbol.name, difficulty, deps, {
     title: "预测函数输出",
     prompt: `阅读 ${unit.symbol.path}:${unit.symbol.line} 的 ${unit.symbol.name}。当 ${formatArguments(unit.symbol.parameters, invocation.args)} 时，它返回什么？只填写返回值。`,
     anchors: [{ path: unit.symbol.path, line: unit.symbol.line, endLine: unit.symbol.endLine, label: "函数实现" }],
@@ -297,9 +339,9 @@ function outputExercise(repository: PracticeRepository, unit: ImplementationUnit
   return { exercise, expected: { type: "output", expectedOutput, invocation } };
 }
 
-function localizationExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel): StoredExercise {
+function localizationExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
   const options = sourceOptions(repository, [unit.symbol.path]);
-  const exercise = baseExercise(repository, "change_localization", unit.id, unit.symbol.name, difficulty, {
+  const exercise = baseExercise(repository, "change_localization", unit.id, unit.symbol.name, difficulty, deps, {
     title: "定位行为修改",
     prompt: `需要修改 ${unit.symbol.name} 的局部行为，但不改变它的调用接口。请选择必须首先修改的源码文件。`,
     anchors: [{ path: unit.symbol.path, line: unit.symbol.line, endLine: unit.symbol.endLine, label: "实现定义" }],
@@ -314,7 +356,7 @@ function impactExercise(repository: PracticeRepository, changedPath: string, dif
   const result = impactRadius(graphFromData(repository.analysis.graph), [changedPath]);
   const reviewPaths = prioritizedImpactPaths(result, changedPath);
   const isLargeImpact = reviewPaths.length < result.impactedPaths.length;
-  const exercise = baseExercise(repository, "impact_analysis", `impact:${changedPath}`, changedPath, difficulty, {
+  const exercise = baseExercise(repository, "impact_analysis", `impact:${changedPath}`, changedPath, difficulty, [], {
     title: "分析变更影响",
     prompt: isLargeImpact
       ? `假设 ${changedPath} 的导出行为发生改变。影响范围较大；根据当前依赖图，选择应优先复查的第一批本地源码文件（包含变更文件本身）。`
@@ -327,9 +369,16 @@ function impactExercise(repository: PracticeRepository, changedPath: string, dif
   return { exercise, expected: { type: "set", expectedIds: reviewPaths } };
 }
 
-function baseExercise(repository: PracticeRepository, kind: ExerciseKind, targetUnitId: string, targetTitle: string, difficulty: MasteryLevel, input: Pick<Exercise, "title" | "prompt" | "anchors" | "inputMode" | "gradingMode" | "options">): Exercise {
-  const id = `exercise:${hash(`${repository.index.repositoryId}:${repository.analysis.versionStamp}:${kind}:${targetUnitId}`).slice(0, 20)}`;
-  return { id, repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, kind, targetUnitId, targetTitle, difficulty, createdAt: new Date().toISOString(), ...input };
+function baseExercise(repository: PracticeRepository, kind: ExerciseKind, targetUnitId: string, targetTitle: string, difficulty: MasteryLevel, deps: { path: string; hash: string }[], input: Pick<Exercise, "title" | "prompt" | "anchors" | "inputMode" | "gradingMode" | "options">): Exercise {
+  // id 只含文件哈希部分（不含模型/口径版本）：静态题的答案出自静态分析，换模型只换题面措辞，共用 id 不串答案；
+  // deps 为空（impact_analysis / 旧索引兜底）时沿用全仓 versionStamp 的旧 id 形状
+  const idBase = deps.length ? depsFingerprint(deps) : repository.analysis.versionStamp;
+  const id = `exercise:${hash(`${repository.index.repositoryId}:${idBase}:${kind}:${targetUnitId}`).slice(0, 20)}`;
+  return {
+    id, repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp,
+    ...(deps.length ? { contentHashes: deps } : {}),
+    kind, targetUnitId, targetTitle, difficulty, createdAt: new Date().toISOString(), ...input
+  };
 }
 
 type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">;

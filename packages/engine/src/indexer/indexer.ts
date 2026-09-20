@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex } from "@codebase-tutor/shared";
-import { repositoryId } from "../lib.js";
+import { repositoryId, hash } from "../lib.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".rb", ".php", ".vue", ".svelte", ".json", ".md", ".yml", ".yaml"]);
@@ -19,7 +19,7 @@ export function indexRepository(repositoryPath: string): RepositoryIndex {
       }
       else if (entry.isFile() && !ignore.ignores(path) && sourceExtensions.has(extname(entry.name).toLowerCase())) {
         const content = readFileSync(absolute, "utf8");
-        files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length });
+        files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length, contentHash: hash(content).slice(0, 16) });
       }
     }
   };

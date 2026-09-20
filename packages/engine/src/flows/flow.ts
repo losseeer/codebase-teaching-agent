@@ -15,6 +15,7 @@ import {
   type SourceAnchor
 } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
 import { layerCacheKey } from "../lib.js";
@@ -246,6 +247,8 @@ export interface GenerateFlowInput {
   provider: LlmProvider;
   /** L1 摘要表（按路径索引）；缺某个文件就是「该文件职责未确认」。 */
   summaries: Map<string, FlowDigestSummary>;
+  /** 持久层（`layer_cache` 表）。缺省时只走内存缓存——测试与降级路径不落盘。 */
+  database?: TutorDatabase;
 }
 
 export interface GeneratedFlow extends RepositoryFlowResult {
@@ -564,6 +567,9 @@ function asText(value: unknown, limit: number): string {
 const flowCache = new Map<string, { result: GeneratedFlow; at: number }>();
 const FLOW_CACHE_TTL_MS = 10 * 60_000;
 const FLOW_CACHE_MAX = 60;
+/** 持久层的闲置 TTL：键是输入精确哈希，「过期」条目只是不再被读到的垃圾，不存在可信性问题，
+    所以可以远长于内存层的 10 分钟——它防的是重启后重烧（dev 模式 tsx watch 每次改代码都重启）。 */
+const FLOW_PERSISTED_TTL_MS = 7 * 24 * 60 * 60_000;
 
 /** 清空流程缓存：供测试隔离回合间状态。换仓/卸载路径**不**调它——键里已带 `repositoryId`，
     跨仓库不会串味，且有 TTL + 条数上限，切回来还能继续命中。 */
@@ -582,22 +588,38 @@ export async function generateRepositoryFlowCached(input: GenerateFlowInput & { 
     payload: digest,
     scope: input.entry.path
   });
-  const hit = flowCache.get(key);
   const now = Date.now();
+  const hit = flowCache.get(key);
   if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
     flowCache.delete(key);
     flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
+    input.database?.touchLayerCache(key, now);
     return { ...hit.result, usage: undefined };
+  }
+  // 内存过期/缺失时先查 SQLite：engine 重启（tsx watch）会清空内存层，持久层让重启不重烧
+  const stored = input.database?.getLayerCache<GeneratedFlow>(key);
+  if (stored && now - stored.at < FLOW_PERSISTED_TTL_MS) {
+    flowCache.set(key, { result: stored.value, at: now });
+    trimToNewest(flowCache, FLOW_CACHE_MAX);
+    input.database?.touchLayerCache(key, now);
+    return { ...stored.value, usage: undefined };
   }
   const result = await generateFromDigest(input, digest);
   if (result.source === "llm") {
-    flowCache.set(key, { result, at: Date.now() });
-    if (flowCache.size > FLOW_CACHE_MAX) {
-      const oldest = flowCache.keys().next().value;
-      if (oldest !== undefined) flowCache.delete(oldest);
-    }
+    flowCache.set(key, { result, at: now });
+    trimToNewest(flowCache, FLOW_CACHE_MAX);
+    input.database?.putLayerCache(key, result); // 降级结果不入缓存（内存与持久层一致）
   }
   return result;
+}
+
+/** Map 的迭代序即插入序，配合「先 delete 再 set」即为新近度，从头裁掉最旧项。 */
+function trimToNewest<Key, Value>(map: Map<Key, Value>, max: number): void {
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
 }
 
 /** LLM 不可用或预算触顶时的入口：直接给静态调用链，并显式说明原因。 */

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("M2.1 exercise service", () => {
-  it("reuses a cached exercise until its content version changes", async () => {
+  it("reuses a cached exercise until its target file's content changes（B1：失效轴是依赖文件，不是全仓）", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const first = await service.next(repository, { kind: "output_prediction" });
@@ -30,10 +30,34 @@ describe("M2.1 exercise service", () => {
     expect(second.id).toBe(first.id);
     expect(second.createdAt).toBe(first.createdAt);
 
-    const changedVersion = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
-    const regenerated = await service.next(changedVersion, { kind: "output_prediction" });
+    // 无关文件的改动只会翻转全仓 versionStamp，不碰目标文件的 contentHash → 命中缓存，不重烧
+    const unrelatedChange = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
+    const reused = await service.next(unrelatedChange, { kind: "output_prediction" });
+    expect(reused.id).toBe(first.id);
+
+    // 目标文件自身变了 → 重算，新题带上自己的依赖哈希
+    const targetPath = first.anchors[0]!.path;
+    const bumpedFiles = repository.index.files.map((file) => file.path === targetPath ? { ...file, contentHash: "bumped" } : file);
+    const targetChange = { ...repository, index: { ...repository.index, files: bumpedFiles }, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
+    const regenerated = await service.next(targetChange, { kind: "output_prediction" });
     expect(regenerated.id).not.toBe(first.id);
     expect(regenerated.contentVersion).toBe("content-v2");
+    expect(regenerated.contentHashes).toContainEqual({ path: targetPath, hash: "bumped" });
+  });
+
+  it("作答时效按依赖文件判定：无关文件更新仍可作答，目标文件更新才拒绝", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const exercise = await service.next(repository, { kind: "output_prediction" });
+    const targetPath = exercise.anchors[0]!.path;
+    const bumpedFiles = repository.index.files.map((file) => file.path === targetPath ? { ...file, contentHash: "changed" } : file);
+
+    const unrelatedChange = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
+    const result = await service.answer(unrelatedChange, exercise.id, { text: "practice" });
+    expect(result.passed).toBe(true);
+
+    const targetChanged = { ...repository, index: { ...repository.index, files: bumpedFiles } };
+    await expect(service.answer(targetChanged, exercise.id, { text: "practice" })).rejects.toThrow("依赖的源码已更新");
   });
 
   it("出题缓存按「模型 + 题面口径」分作用域：换模型会重跑一次，而不是复用旧题面", async () => {

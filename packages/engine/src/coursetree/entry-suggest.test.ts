@@ -1,6 +1,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TutorDatabase } from "../store/database.js";
 import { clearModuleEntryCache, rankEntryCandidates, suggestModuleEntriesCached } from "./entry-suggest.js";
 
 function fakeProvider(replyIds: string[][]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
@@ -77,6 +81,33 @@ describe("suggestModuleEntriesCached", () => {
     const second = await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo" });
     expect(first.entries).toEqual([]);
     expect(second.entries).toEqual([]);
+  });
+
+  it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；空列表不落盘", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-entry-persist-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const { provider, calls } = fakeProvider([["n1"]]);
+      const input = { tree: treeWithNodes(["n1"]), moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", database };
+      expect((await suggestModuleEntriesCached(input)).entries).toHaveLength(1);
+      // 模拟 engine 重启：内存层被清空，SQLite 还在——同键直接命中，不再烧调用
+      clearModuleEntryCache();
+      const second = await suggestModuleEntriesCached(input);
+      expect(second.entries.map((entry: SuggestedEntry) => entry.id)).toEqual(["n1"]);
+      expect(second.usage).toBeUndefined();
+      expect(calls).toHaveLength(1);
+
+      // 空结果（可能是失败回落）在持久层同样不落盘：重启后重试而不是固化空列表
+      const bad = fakeProvider([[]]);
+      const emptyInput = { ...input, moduleLabel: "聊天", provider: bad.provider };
+      expect((await suggestModuleEntriesCached(emptyInput)).entries).toHaveLength(0);
+      clearModuleEntryCache();
+      await suggestModuleEntriesCached(emptyInput);
+      expect(bad.calls).toHaveLength(2);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

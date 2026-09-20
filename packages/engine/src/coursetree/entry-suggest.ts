@@ -1,5 +1,6 @@
 import type { CourseNode, CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { TutorDatabase } from "../store/database.js";
 import { isTestPath } from "../depgraph/roles.js";
 import { layerCacheKey } from "../lib.js";
 
@@ -134,6 +135,8 @@ const ENTRY_INPUT_VERSION = "candidate-v1";
 const entryCache = new Map<string, { entries: SuggestedEntry[]; at: number }>();
 const ENTRY_CACHE_TTL_MS = 10 * 60_000;
 const ENTRY_CACHE_MAX = 100;
+/** 持久层的闲置 TTL：键是输入精确哈希，过期只是垃圾回收，不是可信性防线（与流程层同一套机制）。 */
+const ENTRY_PERSISTED_TTL_MS = 7 * 24 * 60 * 60_000;
 
 /** 跨模块去重的记录：repositoryId → { path → 推荐它的模块 }。
     这是行为记录不是缓存，所以按仓库而不是按内容版本存——文件一改就忘掉「别的模块推过哪些路径」
@@ -158,7 +161,7 @@ export function clearModuleEntryCache(): void {
   recentEntryPaths.clear();
 }
 
-export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string> }): Promise<ModuleEntrySuggestion> {
+export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; database?: TutorDatabase }): Promise<ModuleEntrySuggestion> {
   // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
   const existing = recentEntryPaths.get(input.repositoryId);
   // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
@@ -176,11 +179,21 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     modelVersion: input.provider.modelVersion,
     payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, candidates }
   });
+  const now = Date.now();
   const hit = entryCache.get(key);
-  if (hit && Date.now() - hit.at < ENTRY_CACHE_TTL_MS) {
+  if (hit && now - hit.at < ENTRY_CACHE_TTL_MS) {
     entryCache.delete(key);
     entryCache.set(key, hit); // 刷新 LRU 新近度
+    input.database?.touchLayerCache(key, now);
     return { entries: hit.entries };
+  }
+  // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重烧（与流程层同一套机制）
+  const stored = input.database?.getLayerCache<SuggestedEntry[]>(key);
+  if (stored && now - stored.at < ENTRY_PERSISTED_TTL_MS && stored.value.length) {
+    entryCache.set(key, { entries: stored.value, at: now });
+    trimToNewest(entryCache, ENTRY_CACHE_MAX);
+    input.database?.touchLayerCache(key, now);
+    return { entries: stored.value };
   }
   const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider });
   if (suggestion.entries.length) {
@@ -190,13 +203,11 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     }
     trimToNewest(paths, RECENT_ENTRY_PATHS_MAX_PER_KEY);
     recentEntryPaths.delete(input.repositoryId); // set 不移动已有键的位置，删后重设才刷新 key 的新近度
-    recentEntryPaths.set(input.repositoryId, { paths, at: Date.now() });
+    recentEntryPaths.set(input.repositoryId, { paths, at: now });
     trimToNewest(recentEntryPaths, RECENT_ENTRY_PATHS_MAX_KEYS);
-    entryCache.set(key, { entries: suggestion.entries, at: Date.now() });
-    if (entryCache.size > ENTRY_CACHE_MAX) {
-      const oldest = entryCache.keys().next().value;
-      if (oldest !== undefined) entryCache.delete(oldest);
-    }
+    entryCache.set(key, { entries: suggestion.entries, at: now });
+    trimToNewest(entryCache, ENTRY_CACHE_MAX);
+    input.database?.putLayerCache(key, suggestion.entries); // 空列表不落盘（可能是 LLM 失败的静默回落）
   }
   return suggestion;
 }

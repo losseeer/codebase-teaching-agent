@@ -291,19 +291,25 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
   if (!provider) return { entries: [], source: "heuristic" as const };
-  const suggestion = await suggestModuleEntriesCached({
-    tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
-    fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
-    repositoryId: repository.index.repositoryId
-  });
-  if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
-    input_tokens: suggestion.usage.inputTokens,
-    output_tokens: suggestion.usage.outputTokens,
-    cache_hit_tokens: suggestion.usage.promptCacheHitTokens ?? null,
-    provider: provider.modelVersion,
-    scene: "module_entries"
-  });
-  return { entries: suggestion.entries, source: "llm" as const };
+  const database = new TutorDatabase(repository.path);
+  try {
+    const suggestion = await suggestModuleEntriesCached({
+      tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
+      fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
+      repositoryId: repository.index.repositoryId,
+      database
+    });
+    if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+      input_tokens: suggestion.usage.inputTokens,
+      output_tokens: suggestion.usage.outputTokens,
+      cache_hit_tokens: suggestion.usage.promptCacheHitTokens ?? null,
+      provider: provider.modelVersion,
+      scene: "module_entries"
+    });
+    return { entries: suggestion.entries, source: "llm" as const };
+  } finally {
+    database.close();
+  }
 });
 
 // 宏观设计「流程视图」：按入口用 LLM 生成执行流程（静态调用链作为证据输入 + 降级视图）。
@@ -326,23 +332,29 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。
   const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : teachingProvider;
   if (!provider) return degradedFlow(repository.analysis, entry, "未配置主力档 LLM 或本月预算已触顶");
-  const generated = await generateRepositoryFlowCached({
-    repositoryPath: repository.path,
-    index: repository.index,
-    analysis: repository.analysis,
-    entry,
-    provider,
-    summaries: latestFileSummaries(repository.path),
-    repositoryId: repository.index.repositoryId
-  });
-  if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
-    input_tokens: generated.usage.inputTokens,
-    output_tokens: generated.usage.outputTokens,
-    cache_hit_tokens: generated.usage.promptCacheHitTokens ?? null,
-    provider: provider.modelVersion,
-    scene: "flow_map"
-  });
-  return { flow: generated.flow, source: generated.source, ...(generated.reason ? { reason: generated.reason } : {}) };
+  const database = new TutorDatabase(repository.path);
+  try {
+    const generated = await generateRepositoryFlowCached({
+      repositoryPath: repository.path,
+      index: repository.index,
+      analysis: repository.analysis,
+      entry,
+      provider,
+      summaries: latestFileSummaries(repository.path),
+      repositoryId: repository.index.repositoryId,
+      database
+    });
+    if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+      input_tokens: generated.usage.inputTokens,
+      output_tokens: generated.usage.outputTokens,
+      cache_hit_tokens: generated.usage.promptCacheHitTokens ?? null,
+      provider: provider.modelVersion,
+      scene: "flow_map"
+    });
+    return { flow: generated.flow, source: generated.source, ...(generated.reason ? { reason: generated.reason } : {}) };
+  } finally {
+    database.close();
+  }
 });
 
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {

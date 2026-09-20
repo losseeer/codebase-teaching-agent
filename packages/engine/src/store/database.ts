@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { CompanionSuggestion, CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 // 一次性 pre-load：dlopen 对应当前 Node ABI 的 binding 路径，避免 better-sqlite3
 // 走默认 `bindings('better_sqlite3.node')` 触发 127↔147 mismatch。
@@ -12,6 +12,9 @@ const schemaVersion = 4;
 // 类型 cast 是因为 @types/better-sqlite3 只声明了 `nativeBinding: string`，但
 // runtime 接受 addon 对象（见 better-sqlite3/lib/database.js 注释 "string or addon object"）。
 const nativeBinding = loadAddon() as unknown as string;
+
+/** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
+const LAYER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 export class TutorDatabase {
   private readonly db: Database.Database;
@@ -74,6 +77,11 @@ export class TutorDatabase {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(repository_id, suggestion_id)
       );
+      CREATE TABLE IF NOT EXISTS layer_cache (
+        cache_key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        at INTEGER NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS companion_suggestions_status ON companion_suggestions(repository_id, status, created_at DESC);
     `);
     const current = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version: number } | undefined;
@@ -87,7 +95,8 @@ export class TutorDatabase {
       this.db.prepare("UPDATE schema_version SET version = ?").run(2);
     }
     if (current.version < 3) this.db.prepare("UPDATE schema_version SET version = ?").run(3);
-    if (current.version < 4) this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
+    if (current.version < 4) this.db.prepare("UPDATE schema_version SET version = ?").run(4);
+    if (current.version < 5) this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
     }
@@ -200,6 +209,34 @@ export class TutorDatabase {
   putExerciseCache(repositoryId: string, contentVersion: string, kind: string, targetUnitId: string, exercise: unknown): void {
     this.db.prepare("INSERT OR REPLACE INTO exercise_cache(repository_id, content_version, kind, target_unit_id, exercise_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(repositoryId, contentVersion, kind, targetUnitId, JSON.stringify(exercise), new Date().toISOString());
+  }
+
+  /**
+    通用 L2 产物缓存（流程 / 推荐入口等），键由 `layerCacheKey()` 构造——键里已含仓库、口径版本、
+    模型版本与本层输入哈希，所以读出来直接用，不需要任何失效判断。
+
+    `at` 是毫秒时间戳，语义是「最后一次被用到」：TTL 按闲置时长算，命中方应回写续期（`touchLayerCache`）。
+    每仓一个 DB 文件，所以这张表天然只装本仓的条目，不涉及跨仓清理；
+    旧键（输入变了）永远不会再被命中，靠 `putLayerCache` 顺手按龄修剪兜底，防止无限累积。
+  */
+  getLayerCache<T>(key: string): { value: T; at: number } | undefined {
+    const row = this.db.prepare("SELECT payload, at FROM layer_cache WHERE cache_key = ?").get(key) as { payload: string; at: number } | undefined;
+    if (!row) return undefined;
+    try {
+      return { value: JSON.parse(row.payload) as T, at: row.at };
+    } catch {
+      return undefined;
+    }
+  }
+
+  putLayerCache(key: string, value: unknown): void {
+    const now = Date.now();
+    this.db.prepare("INSERT OR REPLACE INTO layer_cache(cache_key, payload, at) VALUES (?, ?, ?)").run(key, JSON.stringify(value), now);
+    this.db.prepare("DELETE FROM layer_cache WHERE at < ?").run(now - LAYER_CACHE_MAX_AGE_MS);
+  }
+
+  touchLayerCache(key: string, at = Date.now()): void {
+    this.db.prepare("UPDATE layer_cache SET at = ? WHERE cache_key = ?").run(at, key);
   }
 
   getMastery(repositoryId: string): MasteryRecord[] {
