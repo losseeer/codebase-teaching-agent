@@ -325,7 +325,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   const entries = repository.analysis.graph.entrypoints;
   const wanted = (request.query.entry ?? "").trim();
   // 入口识别是启发式（package.json 清单 + 约定文件名），识别不到/识别错时允许人工指定任意已索引文件作为起点
-  const entry = resolveFlowEntry(wanted, entries, repository.index.files);
+  const entry = resolveFlowEntry(wanted, entries, repository.index.files, repository.analysis.graph);
   if (!entry) {
     const reason = wanted
       ? "该路径不在仓库索引里，无法作为流程入口。"

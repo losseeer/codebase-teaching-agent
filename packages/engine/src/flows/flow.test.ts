@@ -93,6 +93,16 @@ const reply = JSON.stringify({
   caveats: "evaluate 的具体判分逻辑未在证据里体现。"
 });
 
+/** 合法 JSON、stages 也给了，但落点全是仓外路径：确定性结论（实测 Spring 启动类入口的形态）。 */
+const ungroundedReply = JSON.stringify({
+  title: "应用启动",
+  summary: "从 main 进入。",
+  stages: [
+    { title: "入口", detail: "d", kind: "entry", files: [{ path: "Application.java", line: 7 }] },
+    { title: "容器刷新", detail: "d", kind: "stage", files: [{ path: "org/springframework/boot.java", line: 1 }] }
+  ]
+});
+
 describe("parseFlow（模型输出的硬校验）", () => {
   it("接受合法输出，序号按数组位置重排、回环指向重排后的序号", () => {
     const flow = parseFlow(reply, context);
@@ -204,7 +214,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.flow.caveats).toContain("回调注册");
   });
 
-  it("调用抛异常时回落静态调用链，异常信息进 reason", async () => {
+  it("调用抛异常时回落静态调用链并带上原因，异常信息进 reason", async () => {
     const result = await generateRepositoryFlow({
       repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY,
       provider: providerOf(async () => { throw new Error("429 too many requests"); }),
@@ -212,6 +222,41 @@ describe("generateRepositoryFlow（含降级）", () => {
     });
     expect(result.source).toBe("static");
     expect(result.reason).toContain("429");
+    expect(result.deterministic).toBeUndefined(); // 瞬时失败：调用方据此不缓存
+  });
+
+  it("合法 JSON 但环节落点不足 = 确定性降级：文案如实、带 deterministic 标记（可入缓存）", async () => {
+    const result = await generateRepositoryFlow({ repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY, provider: providerOf(ungroundedReply), summaries: NO_SUMMARIES });
+    expect(result.source).toBe("static");
+    expect(result.reason).toBe("模型给出的环节缺少仓内代码落点");
+    expect(result.deterministic).toBe(true);
+  });
+
+  it("响应连 stages 数组都没有 = 瞬时失败：文案维持「无法解析」、不带 deterministic", async () => {
+    const result = await generateRepositoryFlow({ repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY, provider: providerOf("{\"title\":\"t\"}"), summaries: NO_SUMMARIES });
+    expect(result.source).toBe("static");
+    expect(result.reason).toContain("无法解析");
+    expect(result.deterministic).toBeUndefined();
+  });
+
+  it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => ({ text: ungroundedReply, usage: { inputTokens: 6_872, outputTokens: 8_400 } }));
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
+    const first = await generateRepositoryFlowCached(base);
+    expect(first.deterministic).toBe(true);
+    const second = await generateRepositoryFlowCached(base);
+    expect(second.source).toBe("static");
+    expect(second.usage).toBeUndefined(); // 命中不带 usage，不会重复记账
+    expect(complete).toHaveBeenCalledTimes(1); // 关键点：启动类入口不再每次访问重烧 ~15k tok
+    // 对照：解析不出的响应不进缓存，每次访问都会重试（换个入口，避开上面确定性结果占用的键）
+    const flaky = vi.fn(async () => ({ text: "抱歉，我无法完成。", usage: { inputTokens: 1, outputTokens: 1 } }));
+    const flakyProvider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete: flaky };
+    const transient = { ...base, entry: { path: "graph/builder.py", line: 1, label: "CLI command" }, provider: flakyProvider };
+    await generateRepositoryFlowCached(transient);
+    await generateRepositoryFlowCached(transient);
+    expect(flaky).toHaveBeenCalledTimes(2);
   });
 
   it("缓存：同一仓库 + 同一入口的第二次请求不再调用模型；不同入口各自算一次", async () => {
@@ -248,7 +293,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(complete).toHaveBeenCalledTimes(4);
   });
 
-  it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；降级结果不落盘", async () => {
+  it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；瞬时失败不落盘", async () => {
     clearRepositoryFlowCache();
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-persist-")));
     const database = new TutorDatabase(dir);
@@ -277,6 +322,28 @@ describe("generateRepositoryFlow（含降级）", () => {
       expect(third.source).toBe("llm");
       expect(third.usage).toBeUndefined(); // 命中不带 usage，上层不会重复记账
       expect(attempts).toBe(2);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("确定性降级也落盘：模拟 engine 重启后仍不重烧", async () => {
+    clearRepositoryFlowCache();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-deterministic-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const complete = vi.fn(async () => ({ text: ungroundedReply, usage: { inputTokens: 6_872, outputTokens: 8_400 } }));
+      const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+      const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY, database };
+      expect((await generateRepositoryFlowCached(base)).deterministic).toBe(true);
+      // 模拟 engine 重启：内存层清空，确定性结论从 SQLite 回来，模型一次都不再被调
+      clearRepositoryFlowCache();
+      const afterRestart = await generateRepositoryFlowCached(base);
+      expect(afterRestart.source).toBe("static");
+      expect(afterRestart.reason).toBe("模型给出的环节缺少仓内代码落点");
+      expect(afterRestart.usage).toBeUndefined();
+      expect(complete).toHaveBeenCalledTimes(1);
     } finally {
       database.close();
       rmSync(dir, { recursive: true, force: true });
@@ -634,5 +701,20 @@ describe("resolveFlowEntry（人工指定入口兜底）", () => {
   it("不带参数回落第一个推断入口；没有推断入口则 undefined", () => {
     expect(resolveFlowEntry("", detected, files)).toEqual(detected[0]);
     expect(resolveFlowEntry("  ", [], files)).toBeUndefined();
+  });
+
+  it("传了依赖图：默认入口优先选有仓内边的那个（启动类没边，只兜底）", () => {
+    const boot = { path: "Application.java", line: 7, label: "Spring Boot 启动类" };
+    const controller = { path: "shop/ShopController.java", line: 11, label: "HTTP 路由 (Spring MVC)：/shop" };
+    // 只有 import 边
+    expect(resolveFlowEntry("", [boot, controller], files, { imports: { [controller.path]: ["shop/ShopService.java"] }, calls: [] })).toEqual(controller);
+    // 只有调用边（且方向反过来：控制器是被调方）也算有证据
+    expect(resolveFlowEntry("", [boot, controller], files, {
+      imports: {},
+      calls: [{ callerPath: "common/Interceptor.java", callerSymbol: "s", calleePath: controller.path, calleeSymbol: "c", line: 3 }]
+    })).toEqual(controller);
+    // 全体入口都没边：回落第一个；不传 graph 维持旧行为
+    expect(resolveFlowEntry("", [boot, controller], files, { imports: {}, calls: [] })).toEqual(boot);
+    expect(resolveFlowEntry("", [boot, controller], files)).toEqual(boot);
   });
 });

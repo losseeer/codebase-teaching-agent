@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Sparkles } from "lucide-react";
-import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex } from "@codebase-tutor/shared";
+import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex, SourceAnchor } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 
 /**
@@ -45,6 +45,25 @@ interface FlowState {
   reason?: string;
 }
 
+/**
+  默认入口：优先选有仓内 import/调用边的入口（与 engine 侧 `resolveFlowEntry` 同一口径，改一边要同步另一边）。
+  Spring 启动类这类文件看着是入口，import 却全指向框架，静态证据凑不出一条流程、首屏必然降级；
+  全体入口都没有边时才回落第一个。
+  */
+function preferredEntryPath(entries: SourceAnchor[], analysis: RepositoryAnalysis): string {
+  if (!entries.length) return "";
+  const linked = new Set<string>();
+  for (const [from, targets] of Object.entries(analysis.graph.imports)) {
+    linked.add(from);
+    for (const target of targets) linked.add(target);
+  }
+  for (const call of analysis.graph.calls) {
+    linked.add(call.callerPath);
+    linked.add(call.calleePath);
+  }
+  return entries.find((entry) => linked.has(entry.path))?.path ?? entries[0].path;
+}
+
 /** 选中的环节 + 它所属的流程（详情抽屉需要两者：环节给文件，流程给标题与边界）；null 表示未选。 */
 export interface FlowSelection {
   stage: FlowStage;
@@ -60,7 +79,7 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
   onSelectStage: (selection: FlowSelection | null) => void;
 }): ReactElement {
   const entries = analysis.graph.entrypoints;
-  const [entryPath, setEntryPath] = useState(() => entries[0]?.path ?? "");
+  const [entryPath, setEntryPath] = useState(() => preferredEntryPath(entries, analysis));
   const [state, setState] = useState<FlowState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -71,7 +90,7 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
   );
   const entryIsKnown = entries.some((entry) => entry.path === entryPath) || fileOptions.includes(entryPath);
   useEffect(() => {
-    if (!entryIsKnown) setEntryPath(entries[0]?.path ?? "");
+    if (!entryIsKnown) setEntryPath(preferredEntryPath(entries, analysis));
   }, [entries, entryIsKnown]);
 
   useEffect(() => {

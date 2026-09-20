@@ -1,5 +1,6 @@
 import {
   FLOW_MAX_STAGES,
+  type DependencyGraphData,
   type FileEntry,
   type FileRole,
   type FileTreeNode,
@@ -35,7 +36,8 @@ import { buildFlowEvidence, staticFlow } from "./evidence.js";
   以及 LLM 不可用时的降级视图（显式标注，不冒充模型结论）。
 
   与 `coursetree/entry-suggest.ts` 同一套约定：失败不抛给调用方，返回降级结果 + 原因；
-  缓存只存成功结果，避免把失败固化。
+  缓存只存**可信答案**——成功结果与确定性降级（模型给不出更多了，见 `GeneratedFlow.deterministic`），
+  瞬时失败（调用异常 / 内容解析不出）不固化，下次访问仍重试。
  */
 
 const MAX_DIGEST_FILES = 60;
@@ -64,6 +66,7 @@ const MAX_UNCOVERED_TEXT = 40;
 /** 环节被丢弃到低于该数量就不再算「一条流程」，回落静态视图。 */
 const MIN_STAGES = 3;
 const FALLBACK_UNPARSEABLE = "模型返回的内容无法解析成一条完整流程";
+const FALLBACK_UNGROUNDED = "模型给出的环节缺少仓内代码落点";
 const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用链";
 
 /**
@@ -253,9 +256,15 @@ export interface GenerateFlowInput {
 
 export interface GeneratedFlow extends RepositoryFlowResult {
   usage?: LlmUsage;
+  /**
+    降级是否为**确定性结论**：模型返回了合法 JSON、但环节在仓内没有代码落点——同一输入再跑一次
+    模型给的答案一样，所以与成功结果一样可入缓存（与推荐入口的 `declined` 同一套口径）；
+    调用异常、内容解析不出这类瞬时失败不带此标记，不入缓存。
+  */
+  deterministic?: boolean;
 }
 
-/** 生成一条流程。任何失败（调用异常 / JSON 不合法 / 校验后环节不足）都回落静态调用链，并带上原因。 */
+/** 生成一条流程。任何失败（调用异常 / JSON 不合法 / 校验后环节落点不足）都回落静态调用链，并带上原因。 */
 export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<GeneratedFlow> {
   const digest = tryBuildFlowDigest(input);
   if (!digest) return degradedFlow(input.analysis, input.entry, FALLBACK_DIGEST_FAILED);
@@ -283,20 +292,32 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
       temperature: 0.2,
       scene: "map.flow"
     });
-    const parsed = parseFlow(response.text, {
+    const parsed = parseFlowOutcome(response.text, {
       entry: input.entry,
       availablePaths: new Set(input.index.files.map((file) => file.path)),
       linesOf: new Map(input.index.files.map((file) => [file.path, file.lines])),
       areRelated: buildRelatedPairs(input.analysis)
     });
-    if (!parsed) return { flow: staticFlow(evidence, FALLBACK_UNPARSEABLE), source: "static", reason: FALLBACK_UNPARSEABLE, usage: response.usage };
+    if ("failure" in parsed) {
+      // 失败分两种（同推荐入口 declined 的口径）：合法 JSON 但环节没有落点 = 模型已经尽力了，是确定性结论，
+      // 带 deterministic 入缓存，别每次访问都重烧一遍钱；内容解析不出按瞬时异常处理，不缓存、下次重试。
+      const deterministic = parsed.failure === "ungrounded";
+      const reason = deterministic ? FALLBACK_UNGROUNDED : FALLBACK_UNPARSEABLE;
+      return {
+        flow: staticFlow(evidence, reason),
+        source: "static",
+        reason,
+        ...(deterministic ? { deterministic: true } : {}),
+        usage: response.usage
+      };
+    }
     // 按需深入：只对模型自认是推断的去向、有界地读一次代码正文。
     // 没有推断边就一条调用都不发生；这一步失败也只损失 caveats 一行，不会丢掉主调用的结果。
     const deepened = await deepenInferredEdges({
       repositoryPath: input.repositoryPath,
       analysis: input.analysis,
       index: input.index,
-      flow: parsed,
+      flow: parsed.flow,
       provider: input.provider
     });
     return { flow: deepened.flow, source: "llm", usage: addUsage(response.usage, deepened.usage) };
@@ -362,19 +383,34 @@ function stagesRelated(left: FlowStage, right: FlowStage, areRelated: ParseConte
   return left.files.some((one) => right.files.some((other) => areRelated(one.path, other.path)));
 }
 
+/**
+  校验失败的两种原因，口径与推荐入口的 `declined` 一致：
+  - `ungrounded`：响应是合法 JSON、`stages` 也是数组，但落到仓内代码的环节不足——模型对这份输入
+    能给的就是这些，是**确定性结论**，可以让降级结果进缓存。
+  - `unparseable`：连一个 JSON 对象都提不出来（或没有 stages 数组），按坏输出/瞬时异常处理，不缓存。
+*/
+type FlowParseFailure = "ungrounded" | "unparseable";
+
+type FlowParseOutcome = { flow: RepositoryFlow } | { failure: FlowParseFailure };
+
 /** 把模型输出校验成 `RepositoryFlow`：路径必须真实、行号必须落在文件范围内、序号与回环重排一致。 */
 export function parseFlow(text: string, context: ParseContext): RepositoryFlow | null {
+  const outcome = parseFlowOutcome(text, context);
+  return "flow" in outcome ? outcome.flow : null;
+}
+
+function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome {
   const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   const start = jsonText.indexOf("{");
   const end = jsonText.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
+  if (start < 0 || end <= start) return { failure: "unparseable" };
   let raw: unknown;
   try {
     raw = JSON.parse(jsonText.slice(start, end + 1));
   } catch {
-    return null;
+    return { failure: "unparseable" };
   }
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") return { failure: "unparseable" };
   const record = raw as Record<string, unknown>;
 
   const droppedFiles = { count: 0 };
@@ -387,8 +423,9 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
     .slice(0, FLOW_MAX_STAGES)
     .map((item, index) => normalizeStage(item, context, droppedFiles, clampedLines, index + 1))
     .filter((stage): stage is NormalizedStage => stage !== null);
-  // 路径全部编造的环节直接丢弃：宁可少一个环节，也不给一个指不到代码的环节
-  if (kept.length < MIN_STAGES) return null;
+  // 路径全部编造的环节直接丢弃：宁可少一个环节，也不给一个指不到代码的环节。
+  // 给过 stages 数组却落不到 3 个环节 = 模型的确定性结论（ungrounded）；压根没给数组 = 坏输出（unparseable）。
+  if (kept.length < MIN_STAGES) return { failure: Array.isArray(record.stages) ? "ungrounded" : "unparseable" };
 
   const orderMap = new Map<number, number>();
   kept.forEach((stage, index) => orderMap.set(stage.sourceOrder, index + 1));
@@ -428,14 +465,16 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
   ].filter(Boolean);
 
   return {
-    entry: context.entry,
-    title: asText(record.title, MAX_TITLE) || `${context.entry.path} 的执行流程`,
-    summary: asText(record.summary, MAX_SUMMARY),
-    stages,
-    edges,
-    ...(uncovered.length ? { uncovered } : {}),
-    ...(notes.length ? { caveats: notes.join("；") } : {}),
-    generatedAt: new Date().toISOString()
+    flow: {
+      entry: context.entry,
+      title: asText(record.title, MAX_TITLE) || `${context.entry.path} 的执行流程`,
+      summary: asText(record.summary, MAX_SUMMARY),
+      stages,
+      edges,
+      ...(uncovered.length ? { uncovered } : {}),
+      ...(notes.length ? { caveats: notes.join("；") } : {}),
+      generatedAt: new Date().toISOString()
+    }
   };
 }
 
@@ -444,15 +483,34 @@ export function parseFlow(text: string, context: ParseContext): RepositoryFlow |
   入口识别（`detectEntrypoints`）是启发式——package.json 清单 + 约定文件名——裸脚本、
   非常规布局的仓会一无所获；这时允许把任意**已索引文件**当作流程起点（GUI 的「自定义入口」）。
   指定的路径不在索引里返回 undefined（调用方 404），不猜。
+
+  不带路径时优先选**有仓内证据**的入口（传 `graph` 才启用，GUI 用同一口径）：
+  Spring 启动类排在他的识别清单最前，但它的 import 全指向框架，静态证据凑不出一条流程、
+  必然降级；控制器这类入口有真实依赖边，默认选它，全体都没边时才回落第一个。
   */
-export function resolveFlowEntry(wanted: string, entrypoints: SourceAnchor[], files: FileEntry[]): SourceAnchor | undefined {
+export function resolveFlowEntry(
+  wanted: string,
+  entrypoints: SourceAnchor[],
+  files: FileEntry[],
+  graph?: Pick<DependencyGraphData, "imports" | "calls">
+): SourceAnchor | undefined {
   const path = wanted.trim();
   if (path) {
     const detected = entrypoints.find((item) => item.path === path);
     if (detected) return detected;
     return files.some((file) => file.path === path) ? { path, line: 1, label: "手动指定" } : undefined;
   }
-  return entrypoints[0];
+  if (!graph) return entrypoints[0];
+  const linked = new Set<string>();
+  for (const [from, targets] of Object.entries(graph.imports)) {
+    linked.add(from);
+    for (const target of targets) linked.add(target);
+  }
+  for (const call of graph.calls) {
+    linked.add(call.callerPath);
+    linked.add(call.calleePath);
+  }
+  return entrypoints.find((item) => linked.has(item.path)) ?? entrypoints[0];
 }
 
 /**
@@ -555,7 +613,8 @@ function asText(value: unknown, limit: number): string {
 
 /**
   流程缓存：键 = 层名 + 仓库 + 入口 + **本层实际输入的哈希**（即发给模型的 digest）。
-  只缓存成功结果；TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
+  缓存成功结果与确定性降级（`deterministic`，见 `GeneratedFlow`）；瞬时失败（调用异常 / 内容解析不出）
+  不入缓存，下次访问重试。TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
   所以只要这个入口还在被访问，缓存就一直有效。
 
   为什么续期是安全的（此处原先靠全仓 `versionStamp` 兜底）：digest 变了键就变，而 digest 涵盖
@@ -605,10 +664,12 @@ export async function generateRepositoryFlowCached(input: GenerateFlowInput & { 
     return { ...stored.value, usage: undefined };
   }
   const result = await generateFromDigest(input, digest);
-  if (result.source === "llm") {
+  if (result.source === "llm" || result.deterministic) {
+    // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）；
+    // 只有瞬时失败（调用异常 / 解析不出）走到 else，下次访问重试。
     flowCache.set(key, { result, at: now });
     trimToNewest(flowCache, FLOW_CACHE_MAX);
-    input.database?.putLayerCache(key, result); // 降级结果不入缓存（内存与持久层一致）
+    input.database?.putLayerCache(key, result);
   }
   return result;
 }
