@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "phase0:prepare-study": "tsx src/scripts/prepare-study.ts",
     "phase0:audit": "tsx src/scripts/audit.ts",
-    "setup:native": "bash scripts/setup-native-bindings.sh"
+    "setup:native": "node scripts/setup-native-bindings.mjs"
   },
   "dependencies": {
     "@codebase-tutor/shared": "workspace:*",

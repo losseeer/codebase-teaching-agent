@@ -39,6 +39,7 @@ function tryDlopen(absPath) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (/NODE_MODULE_VERSION/.test(msg)) return null; // ABI 不匹配
+    if (e && e.code === "ERR_DLOPEN_FAILED") return null; // wrong platform/corrupt native binary; try next candidate
     throw e;
   }
 }
