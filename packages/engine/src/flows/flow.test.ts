@@ -716,5 +716,16 @@ describe("resolveFlowEntry（人工指定入口兜底）", () => {
     // 全体入口都没边：回落第一个；不传 graph 维持旧行为
     expect(resolveFlowEntry("", [boot, controller], files, { imports: {}, calls: [] })).toEqual(boot);
     expect(resolveFlowEntry("", [boot, controller], files)).toEqual(boot);
+    // 回归（2026-09-21 journal 实查）：序列化的 imports 把**每个**已分析文件都登记为键（真仓 172 键、89 个空数组）。
+    // 启动类顶着空数组键混进 linked 会让「证据优先」整个退化——空键不算边证据。
+    expect(resolveFlowEntry("", [boot, controller], files, {
+      imports: { [boot.path]: [], [controller.path]: ["shop/ShopService.java"], "entity/Shop.java": [] },
+      calls: []
+    })).toEqual(controller);
+    // 全体入口都只有空数组键（真没边）：仍回落第一个
+    expect(resolveFlowEntry("", [boot, controller], files, {
+      imports: { [boot.path]: [], [controller.path]: [] },
+      calls: []
+    })).toEqual(boot);
   });
 });

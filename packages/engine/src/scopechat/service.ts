@@ -18,6 +18,9 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   server 传入 search 语料时额外开放 search_code（词法定位文件，只回位置与职责，不占读文件额度）。
   两个作用域的系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），
   本文件不再自带副本；style 由 server 路由从请求里取用户当前风格档位后传入（缺省 50 = 普通档）。
+  作用域聚焦的兜底：架构视图的模块是 GUI 合成节点（`depmap:目录`，课程树里本就不存在），GUI 随请求上送
+  chip 文件清单 scopePaths，与已分析集求交后注入「当前作用域」段；nodeId 解析不到又没有清单时
+  明示「按全局视野作答」——静默降级会让模型以错误作用域自信作答（2026-09-21 用户实感 bug）。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -104,6 +107,35 @@ function structurePanorama(analysis: RepositoryAnalysis): string {
   return `项目结构全景（${paths.length} 个已分析文件，按目录分组）：\n${lines.join("\n")}`;
 }
 
+/** 架构图作用域段最多逐个列出的文件数：大仓模块可上百文件，超出部分明示总数而非全量灌进上下文。 */
+const MAX_SCOPE_LISTED = 60;
+
+/** 已分析文件全集：与目录全景同源（imports 的空数组键也算「被分析过」）。 */
+function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
+  const paths = new Set(Object.keys(analysis.graph.imports));
+  for (const symbol of analysis.graph.symbols) paths.add(symbol.path);
+  return paths;
+}
+
+/**
+  架构视图选中模块的作用域段。那些节点是 GUI 合成的（`depmap:目录`），课程树里查无此人——
+  改由 GUI 随请求上送 chip 内的文件清单，这里与已分析集求交后列「路径（行数）：L1 职责」。
+  与 search_code 同源同口径（复用其语料的 lines/summary 字段），交集为空返回空串（= 没解析到作用域）。
+*/
+function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undefined, scopePaths: string[]): string {
+  const analyzed = analyzedPathSet(analysis);
+  const files = [...new Set(scopePaths)].filter((candidate) => analyzed.has(candidate)).sort();
+  if (!files.length) return "";
+  const corpusOf = search ? new Map(search.entries.map((entry) => [entry.path, entry])) : undefined;
+  const lines = files.slice(0, MAX_SCOPE_LISTED).map((file) => {
+    const entry = corpusOf?.get(file);
+    const meta = entry?.lines === undefined ? "" : `（${entry.lines} 行）`;
+    return `- ${file}${meta}${entry?.summary ? `：${entry.summary}` : ""}`;
+  });
+  const tail = files.length > MAX_SCOPE_LISTED ? `\n…其余 ${files.length - MAX_SCOPE_LISTED} 个文件未列出，需要时可用 search_code 定位。` : "";
+  return `当前作用域：学习者在架构图选中的模块，含 ${files.length} 个已分析文件：\n${lines.join("\n")}${tail}`;
+}
+
 /** 依赖图中某文件的邻域：一度（直接 import / 被 import）+ 二度（import 的 import / 被被 import），去重排序。 */
 function graphNeighborhood(analysis: RepositoryAnalysis, path?: string): {
   importsOut: string[];
@@ -133,7 +165,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   const panorama = structurePanorama(analysis);
@@ -142,6 +174,11 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     const children = node.children.map((child) => `- ${child.title}（${child.kind}）`).join("\n");
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
     excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true).forEach((block) => sections.push(block));
+  } else if (input.nodeId) {
+    // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型按错误作用域作答。
+    // 先试架构图文件清单，仍解析不到就明示「全局视野」，让回复自己承认作用域。
+    const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
+    sections.push(scope || `作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
   }
   const target = path ?? node?.anchors[0]?.path;
   if (target) {

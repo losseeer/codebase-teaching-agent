@@ -54,7 +54,8 @@ function preferredEntryPath(entries: SourceAnchor[], analysis: RepositoryAnalysi
   if (!entries.length) return "";
   const linked = new Set<string>();
   for (const [from, targets] of Object.entries(analysis.graph.imports)) {
-    linked.add(from);
+    // 与 engine `resolveFlowEntry` 同口径：空数组键只是「被分析过」的登记，不是边证据（真仓 172 键里 89 个为空）
+    if (targets.length) linked.add(from);
     for (const target of targets) linked.add(target);
   }
   for (const call of analysis.graph.calls) {

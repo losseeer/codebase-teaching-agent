@@ -487,7 +487,9 @@ export function resolveFlowEntry(
   if (!graph) return entrypoints[0];
   const linked = new Set<string>();
   for (const [from, targets] of Object.entries(graph.imports)) {
-    linked.add(from);
+    // 只有出现在**边**上才算证据：序列化的 imports 里每个已分析文件都是键（真仓 172 键、89 个空数组），
+    // 无条件 `linked.add(from)` 会让全体入口入围，启动类以 entrypoints[0] 溜回默认——2026-09-21 journal 实查。
+    if (targets.length) linked.add(from);
     for (const target of targets) linked.add(target);
   }
   for (const call of graph.calls) {

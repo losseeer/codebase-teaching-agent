@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompanionSuggestion, CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api } from "../api/client";
-import { firstTeachNode } from "../views/helpers";
+import { firstTeachNode, flatten } from "../views/helpers";
 
 /**
   Agent 侧栏的 3 个作用域。对应 prototype 中 `SCOPES = { map, teaching, practice }`。
@@ -78,9 +78,11 @@ export interface TeachingSessionApi {
   selected: CourseNode | null;
   setSelected: (node: CourseNode) => void;
 
-  /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读 */
+  /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
+    `scopePaths`：仅架构图合成模块（id 以 `depmap:` 起，课程树里查无此节点）随请求上送 chip 内文件清单，
+    引擎据此解析作用域；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。 */
   mapNode: CourseNode | null;
-  setMapNode: (node: CourseNode | null) => void;
+  setMapNode: (node: CourseNode | null, scopePaths?: string[]) => void;
   /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
   mapBinding: MapBinding | null;
   setMapBinding: (binding: MapBinding | null) => void;
@@ -152,7 +154,11 @@ const [selected, setSelected] = useState<CourseNode | null>(null);
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
 // 宏观设计 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
-const [mapNode, setMapNode] = useState<CourseNode | null>(null);
+// 节点 + depmap 文件清单是一个绑定的两半，合成一个 state 原子更新——分开两个 setState 会让
+// 「换绑到非 depmap 节点却残留旧清单」成为可能（清单只随合成节点有意义）。
+const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[] }>({ node: null, scopePaths: [] });
+const mapNode = mapSelection.node;
+const setMapNode = (node: CourseNode | null, scopePaths: string[] = []): void => setMapSelection({ node, scopePaths });
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
 const [practiceUnit, setPracticeUnit] = useState("");
@@ -163,9 +169,19 @@ useEffect(() => {
   api.getCourse(repositoryId).then((tree) => {
     if (cancelled) return;
     setCourse(tree);
-    setMapNode((prev) => prev ?? tree.root);
+    // 重导入后按 id 把在绑选择挂回新树：`prev ?? …` 保旧对象会让上下文请求一直带着过期节点（children/anchors 都是旧的）
+    const nodes = flatten(tree.root);
+    setMapSelection((prev) => {
+      if (!prev.node) return { node: tree.root, scopePaths: [] };
+      if (prev.node.id.startsWith("depmap:")) return prev; // 合成节点不在课程树里，无处可挂，原样保留
+      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [] };
+    });
     const first = firstTeachNode(tree.root);
-    if (first) setSelected((prev) => prev ?? first);
+    setSelected((prev) => {
+      if (!prev) return first ?? null;
+      // id 失效 → 归位首个可教节点；id 一变，[selected?.id] 效应自动清掉过期教学 session
+      return nodes.find((item) => item.id === prev.id) ?? first ?? null;
+    });
   }).catch(() => { if (!cancelled) setCourse(null); });
   return () => { cancelled = true; };
 }, [repositoryId, dataVersion]);
@@ -273,7 +289,14 @@ useEffect(() => {
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     try {
       const reply = scope === "map"
-        ? await api.mapChatStream(repositoryId, { content: message, nodeId: mapNode?.id, path: mapFile || undefined, style: settings.style }, (event) => {
+        ? await api.mapChatStream(repositoryId, {
+            content: message,
+            nodeId: mapNode?.id,
+            // 架构图合成模块：课程树里没有这个节点，靠文件清单让引擎解析作用域（其余绑定不带）
+            ...(mapNode?.id.startsWith("depmap:") && mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
+            path: mapFile || undefined,
+            style: settings.style
+          }, (event) => {
             setScopeProgress("map", event.stage === "reading"
               ? `正在读取 ${event.path || "文件"} …`
               : "回复生成中…");

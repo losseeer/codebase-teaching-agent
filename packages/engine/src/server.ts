@@ -135,6 +135,13 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
   return buildSearchCorpus(repository.index, repository.analysis, summaries);
 }
 
+/** GUI 上送的 scopePaths（架构图 chip 的文件清单）：只留非空字符串、去重封顶。它是提示而非裁决——未知路径由引擎交集丢弃。 */
+function sanitizeScopePaths(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const paths = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 400))];
+  return paths.length ? paths.slice(0, 1_000) : undefined;
+}
+
 importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
@@ -400,7 +407,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -409,7 +416,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -432,7 +439,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -447,7 +454,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   };
   try {
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)

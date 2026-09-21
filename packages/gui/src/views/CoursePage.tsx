@@ -3,7 +3,7 @@ import { Code2, Eye, X } from "lucide-react";
 import type { CourseNode, CourseNodeDetail, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { TeachingSessionApi } from "../agent/useTeachingSession";
-import { EmptyState, Loading, MicroDetail } from "./helpers";
+import { EmptyState, flatten, Loading, MicroDetail } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { DepMap } from "../map/DepMap";
@@ -86,8 +86,8 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
   }, [index]);
 
   const course = t.course;
-  const pickNode = (node: CourseNode): void => {
-    t.setMapNode(node);
+  const pickNode = (node: CourseNode, scopePaths: string[] = []): void => {
+    t.setMapNode(node, scopePaths);
     t.setMapBinding({ kind: "module", title: node.title });
     setDrawer(true);
     emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.title.slice(0, 120), view: mapView });
@@ -151,8 +151,14 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                 onSelectStage={(selection) => {
                   setFlowSelection(selection);
                   setDrawer(selection !== null);
-                  if (selection) t.setMapBinding({ kind: "flow", title: selection.stage.title });
-                  if (selection) emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
+                  if (selection) {
+                    t.setMapBinding({ kind: "flow", title: selection.stage.title });
+                    // 对话作用域跟着所选环节走：课程树里有该流程入口对应的 workflow 节点就挂它；
+                    // 没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西
+                    const workflow = flatten(course.root).find((item) => item.id === `workflow:${selection.flow.entry.path}`);
+                    t.setMapNode(workflow ?? null);
+                    emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
+                  }
                 }}
               />
             )}

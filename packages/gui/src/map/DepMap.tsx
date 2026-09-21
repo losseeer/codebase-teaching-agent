@@ -211,7 +211,8 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
   selectedId?: string;
-  onSelect: (node: CourseNode) => void;
+  /** 合成节点 + 模块内文件清单：节点 id 在课程树里不存在，清单随对话请求上送给引擎解析作用域。 */
+  onSelect: (node: CourseNode, scopePaths: string[]) => void;
 }): ReactElement {
   const graph = useMemo(() => buildModuleGraph(index, analysis), [index, analysis]);
   // 依赖图只画关系：无 import 关系且不含入口的模块（docs/.changeset 等非代码目录）不上图，
@@ -271,7 +272,7 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
               className={`flow-node${node.isEntry ? " entry" : ""}${selectedId === id ? " selected" : ""}`}
               style={{ left: item.x, top: item.y, width: NODE_W, minHeight: NODE_MIN_H }}
               title={node.key === "." ? "根目录文件" : node.key}
-              onClick={() => onSelect(toCourseNode(node))}
+              onClick={() => onSelect(toCourseNode(node), node.files.map((file) => file.path))}
             >
               <span className="node-kind">
                 {`${String(item.index + 1).padStart(2, "0")} · ${node.isEntry ? "入口模块" : "模块"}${node.changes >= HOTSPOT_CHANGES ? " · 热点" : ""}`}

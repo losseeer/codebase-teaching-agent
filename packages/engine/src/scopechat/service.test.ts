@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Exercise, RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { buildSearchCorpus } from "../source/search-code.js";
 import { mapChat, practiceChat, type MapChatProgress } from "./service.js";
 
 function fakeProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
@@ -162,6 +163,35 @@ describe("mapChat", () => {
     const second = calls[1];
     const secondTool = second.messages?.find((m) => m.role === "tool");
     expect(secondTool?.content).toContain("1| ");
+  });
+
+  it("架构图合成节点：nodeId 未命中但带 scopePaths → 注入「当前作用域」清单（含 L1 职责），未分析路径被丢弃", async () => {
+    const { provider, calls } = fakeProvider();
+    const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;
+    const search = buildSearchCorpus(index, analysis, new Map([["src/app.ts", "装配应用入口"], ["src/config.ts", "读取并校验配置"]]));
+    await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "depmap:src", scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
+    const user = calls[0].user;
+    expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
+    expect(user).toContain("src/app.ts（120 行）：装配应用入口");
+    expect(user).not.toContain("README.md"); // 未分析的提示路径不参与交集
+    expect(user).not.toContain("不在当前课程树中"); // 作用域已解析成功，不再叠加降级声明
+  });
+
+  it("nodeId 未命中且作用域解析为空 → 明示降级为全局视野，不静默", async () => {
+    const { provider, calls } = fakeProvider();
+    await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "module:src/gone", scopePaths: ["nowhere/x.ts"], content: "问", provider, style: 50 });
+    expect(calls[0].user).toContain("「module:src/gone」不在当前课程树中");
+    expect(calls[0].user).toContain("按全局视野作答");
+  });
+
+  it("作用域文件数超上限 → 逐个列前 60 并明示余量与 search_code 出口", async () => {
+    const { provider, calls } = fakeProvider();
+    const files = Array.from({ length: 65 }, (_, i) => `src/mod/f${i}.ts`);
+    const wide = { ...analysis, graph: { ...analysis.graph, imports: Object.fromEntries(files.map((file) => [file, []])) } } as unknown as RepositoryAnalysis;
+    await mapChat({ repoPath: import.meta.dirname, analysis: wide, nodeId: "depmap:src/mod", scopePaths: files, content: "问", provider, style: 50 });
+    const user = calls[0].user;
+    expect(user).toContain("含 65 个已分析文件");
+    expect(user).toContain("其余 5 个文件未列出");
   });
 });
 
