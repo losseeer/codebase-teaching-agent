@@ -158,8 +158,11 @@ describe("parseFlow（模型输出的硬校验）", () => {
     expect(flow?.stages[1].files[0].line).toBe(1);
     // 只有越界的两个被记账：第三处 line=5 是合法行号，不该被算进去；缺行号也不算
     expect(flow?.caveats).toContain("有 2 个文件的行号超出该文件行数");
-    expect([...(flow?.stages[0].title ?? "")].length).toBeLessThanOrEqual(14);
-    expect([...(flow?.stages[0].detail ?? "")].length).toBeLessThanOrEqual(60);
+    // 截断要留痕：超长字段以「…」收尾（占一格，总长不超口径上限），半截句子不再伪装成完整结论
+    expect([...(flow?.stages[0].title ?? "")].length).toBe(14);
+    expect(flow?.stages[0].title.endsWith("…")).toBe(true);
+    expect([...(flow?.stages[0].detail ?? "")].length).toBe(160);
+    expect(flow?.stages[0].detail.endsWith("…")).toBe(true);
     expect([...(flow?.title ?? "")].length).toBeLessThanOrEqual(18);
   });
 

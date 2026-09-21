@@ -1,6 +1,7 @@
 import { basename, dirname } from "node:path";
 import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { flagTruncatedReply } from "../llm/provider.js";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts.js";
 import { sliceExcerpt } from "../source/excerpt.js";
@@ -201,7 +202,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     repoPath: input.repoPath,
     system: overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) }),
     user: userMessage,
-    maxTokens: 700,
+    maxTokens: 1_000,
     temperature: 0.3,
     maxRounds: MAP_MAX_TOOL_ROUNDS,
     maxCalls: MAP_MAX_TOOL_CALLS,
@@ -209,7 +210,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.search ? { search: input.search } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {})
   });
-  const reply = result.completion.text || "（模型未返回内容，请重试。）";
+  // token 触顶被掐断时明示边界（不静默半截句）
+  const reply = flagTruncatedReply(result.completion.text, result.completion.finishReason === "length") || "（模型未返回内容，请重试。）";
   return {
     reply,
     provider: provider.name,
@@ -234,5 +236,5 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     temperature: 0.3,
     scene: "practice.chat"
   });
-  return { reply: completion.text, provider: input.provider.name, usage: completion.usage };
+  return { reply: flagTruncatedReply(completion.text, completion.finishReason === "length"), provider: input.provider.name, usage: completion.usage };
 }

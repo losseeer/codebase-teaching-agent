@@ -173,6 +173,7 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
                     <button
                       type="button"
                       className={classes}
+                      title={`${stage.title}：${stage.detail}`} // 卡片上的 detail 被 CSS clamp，悬停给全文
                       onClick={() => onSelectStage(selectedStageOrder === stage.order ? null : { stage, flow: state.flow })}
                     >
                       <span className="flow-step-order">{String(stage.order).padStart(2, "0")}</span>

@@ -63,6 +63,14 @@ export interface LlmCompletion {
   finishReason?: string;
 }
 
+/** 给人类看的截断尾注：正文被 max_tokens 掐断时明示边界，别让半截句子伪装成完整结论。 */
+export const TRUNCATION_TAIL = "\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）";
+
+/** 可见回复被掐断（token 触顶，或被调用方的字符兜底切过）时加尾注；空文不加（由调用方走各自的兜底文案）。 */
+export function flagTruncatedReply(text: string, truncated: boolean): string {
+  return truncated && text && !text.endsWith(TRUNCATION_TAIL) ? `${text}${TRUNCATION_TAIL}` : text;
+}
+
 export interface LlmProvider {
   readonly name: string;
   readonly modelVersion: string;

@@ -259,7 +259,7 @@ export type FlowStageKind = "entry" | "stage" | "decision" | "loop" | "exit";
 export interface FlowStageFile {
   path: string;
   line: number;
-  /** 该文件在这个环节里承担什么（≤20 字） */
+  /** 该文件在这个环节里承担什么（≤40 字） */
   note?: string;
 }
 
@@ -274,7 +274,7 @@ export interface FlowStage {
   kind: FlowStageKind;
   /** 环节名（≤14 字） */
   title: string;
-  /** 一句话说明该环节做什么（≤60 字） */
+  /** 环节说明：一句简要描述（提示词约束，不展开实现细节；≤160 字为防御上限，超出引擎截断并以「…」收尾） */
   detail: string;
   /** 关联文件；全部经仓库索引校验，不存在的路径不会出现在这里 */
   files: FlowStageFile[];

@@ -53,12 +53,13 @@ const MAX_HOTSPOTS = 15;
 const MAX_TITLE = 18;
 const MAX_SUMMARY = 100;
 const MAX_STAGE_TITLE = 14;
-const MAX_STAGE_DETAIL = 60;
+/** 环节说明进的是详情抽屉（可滚动），不是画布卡片；提示词已要求一句话简要描述，这里是防御性硬上限。 */
+const MAX_STAGE_DETAIL = 160;
 const MAX_STAGE_FILES = 3;
-const MAX_FILE_NOTE = 20;
+const MAX_FILE_NOTE = 40;
 const MAX_BRANCHES = 4;
-const MAX_BRANCH_TEXT = 30;
-const MAX_CAVEATS = 160;
+const MAX_BRANCH_TEXT = 60;
+const MAX_CAVEATS = 240;
 /** 环节数上限 12，边比环节多不了太多；给点余量，多出来的会在校验时丢弃并计数。 */
 const MAX_EDGES = 24;
 const MAX_EDGE_EVIDENCE = 60;
@@ -74,7 +75,7 @@ const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用
   流程层的输入口径版本，进缓存键。`buildFlowDigest` 的形状、上面各 `MAX_*` 裁剪阈值、或
   `SYSTEM_PROMPT` 的文本改了，模型看到的输入可以一字不变——这类失效只有版本号管得了，改它们要同步 bump。
   */
-const FLOW_INPUT_VERSION = "digest-v1";
+const FLOW_INPUT_VERSION = "digest-v3";
 
 /** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
 export const SYSTEM_PROMPT = [
@@ -89,9 +90,10 @@ export const SYSTEM_PROMPT = [
   `6. edges 是环节之间的去向，每条必须有 from/to（环节序号，1 起）、origin 与 evidence。origin=static 表示「依赖图上真的有这条路」（两个环节的文件之间存在 import 或跨文件调用），evidence 写「文件:行 → 文件:行」；origin=inferred 表示「代码里读不出、是你按编排语义推断的」（回调或节点注册、路由表、依赖注入、事件订阅），evidence 写一句依据。`,
   `   注意：主调用**不会**给你那些文件的完整代码（只有入口前若干行），所以本次 origin 只能写 static 或 inferred——声称「在源码里读到」会被改标为推断；code 是后续核实环节读过正文之后才能给的标记。branches 仍用于分叉的文字说明，回环除了 loopsTo 也应在 edges 里有一条从后向前的回边。`,
   `7. uncovered 必填：列出你这次没能确认的部分（怀疑参与但证据不足的文件、看不清的分支），每条 ≤${MAX_UNCOVERED_TEXT} 字；确实没有就填空数组。`,
+  "8. detail 只做简要描述：一句话讲清该环节**做什么**即止，不要展开函数名、字段、参数或实现步骤——看细节是点开环节之后的事，展开只会把卡片和抽屉撑爆。",
   "证据字段说明：files 是参与执行的文件详表（含符号名、依赖方向与角色 role，role 取值 core=执行主干 / infra=配置存储日志网络等设施接入 / support=支撑逻辑 / tool=末端工具 / test=测试）；带 summary 的文件有一条**已确认**的一句话职责，没有 summary 的文件即职责未确认——`withheldSummaries` 说明其中有多少条摘要因覆盖不足被隐去，别把它们当已知事实；directoryTree 是全部被索引文件的目录骨架，目录后的 (N) 是该目录下被索引的文件数，用来看详表之外还有什么；hotspots 是 git 改动次数最多的文件，改动频繁处通常承载主流程；callChain 是静态跨文件调用链（对回调注册这类编排是盲的，不要照抄）。",
   `严格输出 JSON：{"title":"≤${MAX_TITLE}字","summary":"≤${MAX_SUMMARY}字",`,
-  `"stages":[{"title":"≤${MAX_STAGE_TITLE}字","detail":"≤${MAX_STAGE_DETAIL}字","kind":"entry|stage|decision|loop|exit",`,
+  `"stages":[{"title":"≤${MAX_STAGE_TITLE}字","detail":"一句话简要说明、≤${MAX_STAGE_DETAIL}字","kind":"entry|stage|decision|loop|exit",`,
   `"files":[{"path":"清单中的路径","line":1,"note":"≤${MAX_FILE_NOTE}字"}],"branches":["≤${MAX_BRANCH_TEXT}字"],"loopsTo":1}],`,
   `"edges":[{"from":1,"to":2,"origin":"static|inferred","evidence":"≤${MAX_EDGE_EVIDENCE}字"}],`,
   `"uncovered":["≤${MAX_UNCOVERED_TEXT}字"],`,
@@ -289,7 +291,7 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: JSON.stringify(digest),
-      maxTokens: 2_400,
+      maxTokens: 3_200,
       temperature: 0.2,
       scene: "map.flow"
     });
@@ -594,7 +596,11 @@ function normalizeStage(
 }
 
 function asText(value: unknown, limit: number): string {
-  return typeof value === "string" ? [...value.trim().replace(/\s+/g, " ")].slice(0, limit).join("") : "";
+  if (typeof value !== "string") return "";
+  const chars = [...value.trim().replace(/\s+/g, " ")];
+  // 截断要留痕：静默掐尾会让界面把半截句子当成模型的完整结论（省略号占一格，总长仍不超 limit）
+  if (chars.length <= limit) return chars.join("");
+  return `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
 /**

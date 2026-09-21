@@ -165,6 +165,18 @@ describe("mapChat", () => {
     expect(secondTool?.content).toContain("1| ");
   });
 
+  it("回复触顶：finishReason=length 时尾附截断声明，半截句子不裸奔", async () => {
+    const provider: LlmProvider = {
+      name: "capped",
+      modelVersion: "capped:model",
+      async complete(): Promise<LlmCompletion> {
+        return { text: "这句话说到一半就被", usage: { inputTokens: 10, outputTokens: 1_000 }, finishReason: "length" };
+      }
+    };
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "讲详细点", provider, style: 50 });
+    expect(result.reply).toBe("这句话说到一半就被\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）");
+  });
+
   it("架构图合成节点：nodeId 未命中但带 scopePaths → 注入「当前作用域」清单（含 L1 职责），未分析路径被丢弃", async () => {
     const { provider, calls } = fakeProvider();
     const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;

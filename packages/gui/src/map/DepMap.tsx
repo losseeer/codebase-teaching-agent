@@ -271,7 +271,7 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
               type="button"
               className={`flow-node${node.isEntry ? " entry" : ""}${selectedId === id ? " selected" : ""}`}
               style={{ left: item.x, top: item.y, width: NODE_W, minHeight: NODE_MIN_H }}
-              title={node.key === "." ? "根目录文件" : node.key}
+              title={`${node.key === "." ? "根目录文件" : node.key} · ${node.files.length} 个文件 · ${node.lines} 行 · 依赖 ${node.outDegree} 个模块 · 被 ${node.inDegree} 个模块依赖${node.isEntry ? " · 含执行入口" : ""}${node.changes > 0 ? ` · Git 热点约 ${node.changes} 次变更` : ""}`}
               onClick={() => onSelect(toCourseNode(node), node.files.map((file) => file.path))}
             >
               <span className="node-kind">

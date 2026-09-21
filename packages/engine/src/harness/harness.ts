@@ -1,6 +1,7 @@
 import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
+import { flagTruncatedReply } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
 import type { FileReadRecord } from "../source/read-file.js";
@@ -122,7 +123,8 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   try {
     const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
     const completion = outcome.completion;
-    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
+    // 可见回复的截断兜底：token 触顶（finishReason=length）或被这里 1,500 字符硬切，都要留痕
+    return buildReply(session, node, learnerContent, () => flagTruncatedReply(completion.text.slice(0, 1_500), completion.finishReason === "length" || completion.text.length > 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
   } catch {
     return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
