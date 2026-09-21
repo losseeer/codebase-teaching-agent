@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { executeReadFile, READ_FILE_TOOL } from "./read-file.js";
+import { dedupeFileReads, executeReadFile, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
 
 let repoRoot = "";
 
@@ -115,5 +115,19 @@ describe("executeReadFile 护栏", () => {
     expect(end).toBeLessThan(400);
     expect(header).toContain("共 700 行");
     expect(header).toContain(`offset=${end + 1}`);
+  });
+});
+
+describe("dedupeFileReads（journal 落盘归并：审计回答「看过哪些文件」）", () => {
+  const rec = (path: string, extra: Partial<FileReadRecord> = {}): FileReadRecord => ({ path, truncated: false, denied: false, ...extra });
+
+  it("同路径只留一条：成功条目里取实得行数最大的一条，顺序保持首次出现", () => {
+    const merged = dedupeFileReads([rec("a.ts", { lines: 60 }), rec("b.ts"), rec("a.ts", { lines: 100 }), rec("a.ts", { lines: 95 })]);
+    expect(merged).toEqual([rec("a.ts", { lines: 100 }), rec("b.ts")]);
+  });
+
+  it("成功优先于拒绝；全体被拒时保留首条（错误原因不丢）", () => {
+    expect(dedupeFileReads([rec("x.ts", { denied: true, error: "invalid_json" }), rec("x.ts", { lines: 5 })])).toEqual([rec("x.ts", { lines: 5 })]);
+    expect(dedupeFileReads([rec("x.ts", { denied: true, error: "first_reason" }), rec("x.ts", { denied: true, error: "second_reason", lines: 9 })])).toEqual([rec("x.ts", { denied: true, error: "first_reason" })]);
   });
 });

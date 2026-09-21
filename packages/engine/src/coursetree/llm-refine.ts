@@ -1,5 +1,6 @@
 import type { CourseNode, CourseTree } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { addUsage } from "../llm/usage.js";
 
 export interface CourseMapRefinement {
   course: CourseTree;
@@ -104,26 +105,6 @@ export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): 
   }
   if (!renames.size) return { course: tree };
   return { course: { ...tree, root: applyRenames(tree.root, renames, 0) }, usage };
-}
-
-function addUsage(total: LlmUsage | undefined, addition?: LlmUsage): LlmUsage | undefined {
-  if (!addition) return total;
-  const sum = (a: number | undefined, b: number | undefined): number | undefined =>
-    typeof a === "number" || typeof b === "number" ? (a ?? 0) + (b ?? 0) : undefined;
-  if (!total) {
-    return {
-      inputTokens: addition.inputTokens,
-      outputTokens: addition.outputTokens,
-      promptCacheHitTokens: sum(undefined, addition.promptCacheHitTokens),
-      promptCacheMissTokens: sum(undefined, addition.promptCacheMissTokens)
-    };
-  }
-  return {
-    inputTokens: total.inputTokens + addition.inputTokens,
-    outputTokens: total.outputTokens + addition.outputTokens,
-    promptCacheHitTokens: sum(total.promptCacheHitTokens, addition.promptCacheHitTokens),
-    promptCacheMissTokens: sum(total.promptCacheMissTokens, addition.promptCacheMissTokens)
-  };
 }
 
 function parseRenames(text: string): Map<string, NodeRename> {

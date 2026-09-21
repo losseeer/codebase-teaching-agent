@@ -1,4 +1,5 @@
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmUsage } from "../llm/provider.js";
+import { addUsage } from "../llm/usage.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 
 /**
@@ -79,12 +80,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     usage = addUsage(usage, completion.usage);
   }
   return { completion, usage, fileReads };
-}
-
-function addUsage(total: LlmUsage | undefined, addition?: LlmUsage): LlmUsage | undefined {
-  if (!addition) return total;
-  if (!total) return { inputTokens: addition.inputTokens, outputTokens: addition.outputTokens };
-  return { inputTokens: total.inputTokens + addition.inputTokens, outputTokens: total.outputTokens + addition.outputTokens };
 }
 
 /** 读取 read_file 参数里的 path（仅用于进度提示，不参与校验）。 */

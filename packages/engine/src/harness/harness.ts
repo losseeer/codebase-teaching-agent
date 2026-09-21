@@ -1,6 +1,7 @@
 import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
+import { addUsage } from "../llm/usage.js";
 import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
@@ -115,7 +116,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   try {
     const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
     const completion = outcome.completion;
-    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, sumUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}) });
+    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}) });
   } catch {
     return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
@@ -149,15 +150,6 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
 
 function recentTranscript(messages: TutorMessage[]): string[] {
   return messages.slice(-4).map((message) => `${message.role === "user" ? "学习者" : "导师"}: ${message.content.slice(0, 120)}`);
-}
-
-function sumUsage(...usages: (LlmUsage | undefined)[]): LlmUsage | undefined {
-  const present = usages.filter((usage): usage is LlmUsage => Boolean(usage));
-  if (!present.length) return undefined;
-  return {
-    inputTokens: present.reduce((total, usage) => total + usage.inputTokens, 0),
-    outputTokens: present.reduce((total, usage) => total + usage.outputTokens, 0)
-  };
 }
 
 function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource" | "fileReads">): TutorReply {

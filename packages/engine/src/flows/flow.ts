@@ -16,6 +16,7 @@ import {
   type SourceAnchor
 } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
@@ -328,25 +329,8 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
   }
 }
 
-/**
-  相加两段调用的用量（主调用 + 按需深入）。
-
-  ⚠️ **四个字段都要搬**：只搬 in/out 会把「前缀缓存命中」悄悄变成「未命中」——项目里已经吃过
-  一次这个亏（`harness/harness.ts` 的 `sumUsage()` 至今丢着 `promptCacheHitTokens`，导致教学线
-  的缓存指标不可信）。两边都没上报该字段时才不带它，别用 `?? 0` 把「没上报」说成「没命中」。
-*/
-export function addUsage(left: LlmUsage | undefined, right: LlmUsage | undefined): LlmUsage | undefined {
-  if (!left) return right;
-  if (!right) return left;
-  const sum = (key: "promptCacheHitTokens" | "promptCacheMissTokens"): { [k in typeof key]?: number } =>
-    left[key] === undefined && right[key] === undefined ? {} : { [key]: (left[key] ?? 0) + (right[key] ?? 0) };
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-    ...sum("promptCacheHitTokens"),
-    ...sum("promptCacheMissTokens")
-  };
-}
+/** 用量相加的唯一实现在 `llm/usage.ts`；此处转出是为兼容既有按本模块导入的探针与测试。 */
+export { addUsage };
 
 interface ParseContext {
   entry: SourceAnchor;

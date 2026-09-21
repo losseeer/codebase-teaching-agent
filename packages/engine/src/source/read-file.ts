@@ -82,6 +82,26 @@ export interface ReadFileOutcome {
   audit: FileReadRecord;
 }
 
+/**
+  journal 落盘前的归并：工具循环**逐次**审计是设计使然（重试/换窗口都会重复出现同一路径），
+  但 `file_read` 事件回答的问题是「这一轮看过哪些文件」——同 path 留一条：
+  成功优先于拒绝；同为成功取实得行数最大的一条；全为拒绝保留首条（错误原因不丢）；顺序保持首次出现。
+*/
+export function dedupeFileReads(records: FileReadRecord[]): FileReadRecord[] {
+  const best = new Map<string, FileReadRecord>();
+  for (const record of records) {
+    const current = best.get(record.path);
+    if (!current) {
+      best.set(record.path, record);
+      continue;
+    }
+    const better = (current.denied && !record.denied)
+      || (!record.denied && !current.denied && (record.lines ?? 0) > (current.lines ?? 0));
+    if (better) best.set(record.path, record); // Map 保留键的首次插入位序
+  }
+  return [...best.values()];
+}
+
 function extensionOf(path: string): string {
   const index = path.lastIndexOf(".");
   return index < 0 ? "" : path.slice(index).toLowerCase();

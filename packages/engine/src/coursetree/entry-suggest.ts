@@ -1,5 +1,6 @@
 import type { CourseNode, CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
 import { isTestPath } from "../depgraph/roles.js";
 import { layerCacheKey } from "../lib.js";
@@ -383,18 +384,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     input.database?.putLayerCache(key, record); // 失败回落的空列表（非 declined）不落盘
   }
   // 记账合并到一条：翻译层的选择层的用量都发生在这个请求里（缓存命中时两者都没有 usage）
-  return { ...suggestion, usage: sumUsage(expansion.usage, suggestion.usage) };
-}
-
-function sumUsage(left: LlmUsage | undefined, right: LlmUsage | undefined): LlmUsage | undefined {
-  if (!left) return right;
-  if (!right) return left;
-  const cacheHit = left.promptCacheHitTokens ?? right.promptCacheHitTokens;
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-    ...(cacheHit === undefined ? {} : { promptCacheHitTokens: cacheHit })
-  };
+  return { ...suggestion, usage: addUsage(expansion.usage, suggestion.usage) };
 }
 
 function pickEntries(text: string, candidates: Candidate[]): { entries: SuggestedEntry[]; declined: boolean } {

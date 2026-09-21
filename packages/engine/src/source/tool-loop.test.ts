@@ -82,3 +82,15 @@ describe("completeWithReadTool", () => {
     expect(readBack?.content).toContain("read-file.ts");
   });
 });
+
+describe("completeWithReadTool 的用量汇总", () => {
+  it("跨轮相加带上前缀缓存命中字段（教学线 journal 的 cache_hit 口径靠它）", async () => {
+    const { provider } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }], usage: { inputTokens: 8_000, outputTokens: 10, promptCacheHitTokens: 7_000 }, finishReason: "tool_calls" },
+      { text: "读完的回答。", usage: { inputTokens: 9_000, outputTokens: 20, promptCacheHitTokens: 8_000 }, finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
+    // miss 字段两边都没上报 → 整个缺席，而不是 0（「没上报」≠「没命中」）
+    expect(result.usage).toEqual({ inputTokens: 17_000, outputTokens: 30, promptCacheHitTokens: 15_000 });
+  });
+});

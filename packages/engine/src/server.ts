@@ -26,6 +26,7 @@ import { TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
+import { dedupeFileReads } from "./source/read-file.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
@@ -403,7 +404,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
     });
-    for (const read of result.fileReads ?? []) {
+    // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
+    for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
       });
@@ -439,7 +441,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
     });
-    for (const read of result.fileReads ?? []) {
+    for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
       });
@@ -602,14 +604,14 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
-  // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型（含拒绝与失败）
-  for (const read of outcome.fileReads ?? []) {
+  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+  // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
+  for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
     journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
   }
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
   if (cost.mode === "degraded") {
-    journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
+    journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
     // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
     traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
   }
