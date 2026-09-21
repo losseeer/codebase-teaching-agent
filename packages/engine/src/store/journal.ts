@@ -12,7 +12,7 @@ const eventTypes = new Set<JournalEventType>([
   // 引擎侧（学习语义）
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event",
   "style_shift", "teach_moment", "unassisted_test", "action_veto",
-  "exercise_declined", "token_usage", "file_read",
+  "exercise_declined", "token_usage", "file_read", "code_search",
   // UI 侧（交互动作）：由 GUI 经 POST /api/repositories/:id/journal 写入
   "flow_node_selected", "file_anchored", "file_opened", "line_located",
   "module_switched", "exercise_submitted", "repository_switched"

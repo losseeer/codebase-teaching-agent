@@ -575,6 +575,7 @@ export type JournalEventType =
   | "exercise_declined"
   | "token_usage"
   | "file_read"
+  | "code_search"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"

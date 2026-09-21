@@ -27,6 +27,7 @@ import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { dedupeFileReads } from "./source/read-file.js";
+import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
@@ -122,6 +123,16 @@ function latestFileSummaries(repositoryPath: string): Map<string, { summary: str
   const rows = database.getLatestFileSummaries();
   database.close();
   return new Map(rows.map((row) => [row.path, { summary: row.summary, ...(row.coverageLow === undefined ? {} : { coverageLow: row.coverageLow }) }]));
+}
+
+/** search_code 语料：已分析路径 + 图符号表 + L1 已确认职责（coverageLow 的不参与——低覆盖摘要会误导定位）。
+    每次请求现建：纯 CPU 毫秒级、且永远跟随最新一次导入的产物，不值得也没有失效语义可缓存。 */
+function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>): SearchCorpus {
+  const summaries = new Map<string, string>();
+  for (const [path, item] of latestFileSummaries(repository.path)) {
+    if (item.coverageLow !== true) summaries.set(path, item.summary);
+  }
+  return buildSearchCorpus(repository.index, repository.analysis, summaries);
 }
 
 importer.on("event", broadcast);
@@ -398,7 +409,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider, style: validateStyle(request.body?.style) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -409,6 +420,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
       });
+    }
+    // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
+    for (const search of result.codeSearches ?? []) {
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
     }
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -434,6 +449,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, path: request.body?.path, content, provider,
       style: validateStyle(request.body?.style),
+      search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)
     });
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -445,6 +461,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
       });
+    }
+    for (const search of result.codeSearches ?? []) {
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
     }
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
@@ -594,6 +613,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
     actionLoop: actionLoopEnabled,
     analysis: repository.analysis,
+    search: searchCorpusFor(repository),
     // 过程提示：回合可能持续数秒，把「正在判断动作 / 正在读 xx 文件」实时推给 GUI（ws 广播，不占 HTTP 响应）
     onProgress: (progress) => broadcast({ type: "session.progress", payload: { sessionId: session.id, ...progress } })
   });
@@ -608,6 +628,9 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
   for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
     journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
+  }
+  for (const search of outcome.codeSearches ?? []) {
+    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, session.id);
   }
   const cost = summarizeCost(repository.path, monthlyBudget, session.id);
   if (cost.mode === "degraded") {

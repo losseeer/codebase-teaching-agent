@@ -5,6 +5,7 @@ import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts.js";
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
+import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 
 /**
@@ -13,7 +14,8 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   上下文全部来自静态分析事实（依赖图、课程节点、练习题面 + 源码摘录）；
   练习的标准答案/锚点**不进入**上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
   宏观设计作用域额外注入项目结构全景（全量路径清单 + 二度依赖邻居 + 调用邻接）——
-  全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码按锚点摘录，需要时由模型经 read_file 按需拉取。
+  全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码按锚点摘录，需要时由模型经 read_file 按需拉取；
+  server 传入 search 语料时额外开放 search_code（词法定位文件，只回位置与职责，不占读文件额度）。
   两个作用域的系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），
   本文件不再自带副本；style 由 server 路由从请求里取用户当前风格档位后传入（缺省 50 = 普通档）。
   */
@@ -44,6 +46,8 @@ export interface ScopedChatResult {
   usage?: LlmUsage;
   /** mapChat 专用：本次对话的 read_file 调用审计（供 server 逐条记 journal）。 */
   fileReads?: FileReadRecord[];
+  /** mapChat 专用：本次对话的 search_code 调用审计（供 server 逐条记 journal code_search）。 */
+  codeSearches?: CodeSearchRecord[];
 }
 
 /** 按锚点取带行号的源码摘录：符号边界优先、窗口兜底（规则见 source/excerpt.ts）。路径越界或读不到返回空串。 */
@@ -129,7 +133,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; style: number; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; path?: string; content: string; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   const panorama = structurePanorama(analysis);
@@ -158,17 +162,24 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   const result = await completeWithReadTool({
     provider,
     repoPath: input.repoPath,
-    system: overviewSystemPrompt({ style: input.style }),
+    system: overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) }),
     user: userMessage,
     maxTokens: 700,
     temperature: 0.3,
     maxRounds: MAP_MAX_TOOL_ROUNDS,
     maxCalls: MAP_MAX_TOOL_CALLS,
     scene: "map.chat",
+    ...(input.search ? { search: input.search } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {})
   });
   const reply = result.completion.text || "（模型未返回内容，请重试。）";
-  return { reply, provider: provider.name, usage: result.usage, ...(result.fileReads.length ? { fileReads: result.fileReads } : {}) };
+  return {
+    reply,
+    provider: provider.name,
+    usage: result.usage,
+    ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
+    ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {})
+  };
 }
 
 export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {

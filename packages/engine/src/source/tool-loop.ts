@@ -1,12 +1,15 @@
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
+import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
 
 /**
-  read_file 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
+  read_file / search_code 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
 
   - 预算硬上限（轮数 / 累计**读成功**的文件数）；用尽时对未应答的 tool_call 明确回绝，再做一轮不带工具的收尾回答。
     被护栏拒绝或路径写错的调用**不占文件额度**（代价只有一行文本，且「反复乱试」已由轮数兜住），但仍逐条进 fileReads 审计；
+  - 传入 `search` 语料时额外提供 search_code（词法检索「文件在哪」，只回位置与职责）：
+    它不读任何文件，**不占文件额度也不记 file_read**，单独进 codeSearches 审计；轮数上限同样约束它；
   - messages[0] 恒为首轮 user 消息——provider 提供 messages 时忽略 user 字段，
     首轮 user 若不进 messages，工具调用后的轮次会同时丢失代码上下文与学习者提问（回归防线）；
   - 每轮调用前 micro_compact：更早轮次的 tool 结果压成占位符、早期 reasoningContent 丢弃
@@ -32,20 +35,26 @@ export interface ReadToolLoopInput {
   onProgress?: (progress: ReadToolProgress) => void;
   /** LLM 工作日志的场景标签（teaching.turn / map.chat），透传给每一轮调用 */
   scene?: string;
+  /** 提供时额外开放 search_code 工具（词法检索定位文件）；不提供则模型只有 read_file。 */
+  search?: SearchCorpus;
 }
 
 export interface ReadToolLoopResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
   fileReads: FileReadRecord[];
+  /** 本次对话的 search_code 调用审计（不合并去重——同一查询反复搜本身就是信号）。 */
+  codeSearches: CodeSearchRecord[];
 }
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
+  const tools = input.search ? [READ_FILE_TOOL, SEARCH_CODE_TOOL] : [READ_FILE_TOOL];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
   input.onProgress?.({ type: "thinking", round: 1 });
-  let completion = await provider.complete({ system, user: input.user, tools: [READ_FILE_TOOL], maxTokens, temperature, scene: input.scene });
+  let completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene });
   const fileReads: FileReadRecord[] = [];
+  const codeSearches: CodeSearchRecord[] = [];
   let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
   let succeededReads = 0;
@@ -64,8 +73,14 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     rounds += 1;
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
+      if (call.name === SEARCH_CODE_TOOL.name && input.search) {
+        const outcome = executeSearchCode(input.search, call.argumentsJson);
+        codeSearches.push(outcome.audit);
+        messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
+        continue;
+      }
       if (call.name !== READ_FILE_TOOL.name) {
-        messages.push({ role: "tool", toolCallId: call.id, content: `未知工具 ${call.name}；只支持 read_file。` });
+        messages.push({ role: "tool", toolCallId: call.id, content: `未知工具 ${call.name}；只支持 read_file${input.search ? " 与 search_code" : ""}。` });
         continue;
       }
       input.onProgress?.({ type: "reading", path: readPathHint(call.argumentsJson) });
@@ -76,10 +91,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     input.onProgress?.({ type: "thinking", round: rounds + 1 });
     compactToolHistory(messages);
-    completion = await provider.complete({ system, messages, tools: [READ_FILE_TOOL], maxTokens, temperature, scene: input.scene });
+    completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene });
     usage = addUsage(usage, completion.usage);
   }
-  return { completion, usage, fileReads };
+  return { completion, usage, fileReads, codeSearches };
 }
 
 /** 读取 read_file 参数里的 path（仅用于进度提示，不参与校验）。 */

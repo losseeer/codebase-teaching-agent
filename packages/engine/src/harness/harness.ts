@@ -4,6 +4,7 @@ import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
 import type { FileReadRecord } from "../source/read-file.js";
+import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { classifyIntent } from "../teaching/intent.js";
 import { proposeAction, isActionAllowed } from "../teaching/action.js";
@@ -32,6 +33,8 @@ export interface TutorReply {
   actionSource?: "proposed" | "vetoed" | "deterministic";
   /** 本轮 read_file 调用审计（供 server 逐条记 journal file_read）。 */
   fileReads?: FileReadRecord[];
+  /** 本轮 search_code 调用审计（供 server 逐条记 journal code_search）。 */
+  codeSearches?: CodeSearchRecord[];
 }
 
 /**
@@ -52,6 +55,8 @@ export interface RespondOptions {
   actionLoop?: boolean;
   /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */
   analysis?: RepositoryAnalysis;
+  /** search_code 语料（server 侧用 index+analysis+L1 摘要构建）：提供时教学回合开放检索工具。 */
+  search?: SearchCorpus;
   /** 过程事件回调（可选；用于把「正在判断动作 / 正在读 xx 文件」推给 GUI）。 */
   onProgress?: (progress: TeachingProgress) => void;
 }
@@ -110,28 +115,29 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   }
 
   const readToolAvailable = Boolean(repositoryPath);
-  const system = teachingSystemPrompt({ policy, stage: next.next.stage, kind: next.kind, hintDepth: next.hintDepth, faded, readToolAvailable });
+  const searchToolAvailable = readToolAvailable && Boolean(options.search);
+  const system = teachingSystemPrompt({ policy, stage: next.next.stage, kind: next.kind, hintDepth: next.hintDepth, faded, readToolAvailable, searchToolAvailable });
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
   const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
-    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
+    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
     const completion = outcome.completion;
-    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}) });
+    return buildReply(session, node, learnerContent, () => completion.text.slice(0, 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
   } catch {
     return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
 }
 
-/** 措辞调用：有仓库路径时走 read_file 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
+/** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
     input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : { stage: "thinking", round: progress.round });
   };
   if (!input.repositoryPath) {
     input.onProgress?.({ stage: "thinking", round: 1 });
     const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2, scene: "teaching.turn" });
-    return { completion, ...(completion.usage ? { usage: completion.usage } : {}), fileReads: [] };
+    return { completion, ...(completion.usage ? { usage: completion.usage } : {}), fileReads: [], codeSearches: [] };
   }
   const result = await completeWithReadTool({
     provider: input.provider,
@@ -143,9 +149,10 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     maxRounds: TEACHING_MAX_TOOL_ROUNDS,
     maxCalls: TEACHING_MAX_TOOL_CALLS,
     scene: "teaching.turn",
+    ...(input.search ? { search: input.search } : {}),
     ...(input.onProgress ? { onProgress: forwardProgress } : {})
   });
-  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), fileReads: result.fileReads };
+  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), fileReads: result.fileReads, codeSearches: result.codeSearches };
 }
 
 function recentTranscript(messages: TutorMessage[]): string[] {

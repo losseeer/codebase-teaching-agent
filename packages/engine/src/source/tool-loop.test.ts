@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { buildSearchCorpus } from "./search-code.js";
 import { completeWithReadTool } from "./tool-loop.js";
 
 /** repoPath 指向本目录：目录内 read-file.ts 是稳定存在的真实文件 */
@@ -92,5 +94,44 @@ describe("completeWithReadTool 的用量汇总", () => {
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
     // miss 字段两边都没上报 → 整个缺席，而不是 0（「没上报」≠「没命中」）
     expect(result.usage).toEqual({ inputTokens: 17_000, outputTokens: 30, promptCacheHitTokens: 15_000 });
+  });
+});
+
+describe("completeWithReadTool 的 search_code 集成", () => {
+  const corpus = buildSearchCorpus(
+    { files: [{ path: "read-file.ts", extension: ".ts", bytes: 1, lines: 100 }] } as unknown as RepositoryIndex,
+    { graph: { imports: { "read-file.ts": [] }, symbols: [{ id: "s1", name: "executeReadFile", kind: "function", path: "read-file.ts", line: 5 }] } } as unknown as RepositoryAnalysis,
+    new Map([["read-file.ts", "读取仓库内文件的行窗口"]])
+  );
+  const searchCall = (id: string, query: string): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "search_code", argumentsJson: JSON.stringify({ query }) }], finishReason: "tool_calls" });
+
+  it("传入语料时开放两个工具；检索结果回喂、不占文件额度、不记 file_read", async () => {
+    const { provider, calls } = scriptedProvider([
+      searchCall("c1", "read"),
+      readCall("c2", "read-file.ts"),
+      { text: "先搜后读的回答。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1, search: corpus });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "search_code"]);
+    const searchResult = calls[1].messages?.find((message) => message.role === "tool");
+    expect(searchResult?.content).toContain('search_code "read"');
+    expect(searchResult?.content).toContain("read-file.ts");
+    // maxCalls=1 只被那次成功的 read 用掉——检索没读任何文件
+    expect(result.codeSearches).toEqual([{ query: "read", hits: 1, topPaths: ["read-file.ts"] }]);
+    expect(result.fileReads).toHaveLength(1);
+    expect(result.completion.text).toBe("先搜后读的回答。");
+  });
+
+  it("未传语料时 search_code 是未知工具（工具清单与提示都只认 read_file）", async () => {
+    const { provider, calls } = scriptedProvider([
+      searchCall("c1", "read"),
+      { text: "收尾。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
+    const unknown = calls[1].messages?.find((message) => message.role === "tool");
+    expect(unknown?.content).toContain("未知工具 search_code");
+    expect(unknown?.content).toContain("只支持 read_file。");
+    expect(result.codeSearches).toEqual([]);
   });
 });

@@ -21,6 +21,8 @@ export interface TeachingPromptInput {
   faded?: FadedState;
   /** 上下文附带 read_file 工具时声明其用法与护栏（缺省不声明，模型不会以为能自己读文件） */
   readToolAvailable?: boolean;
+  /** 附带 search_code（词法定位文件）时声明「先搜后读」纪律；仅在 readToolAvailable 时有意义。 */
+  searchToolAvailable?: boolean;
 }
 
 /**
@@ -53,7 +55,7 @@ const kindContract: Record<TeachingPromptInput["kind"], string> = {
 };
 
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
-  const { policy, stage, kind, hintDepth, faded, readToolAvailable } = input;
+  const { policy, stage, kind, hintDepth, faded, readToolAvailable, searchToolAvailable } = input;
   return [
     "你是 Codebase Tutor 的代码教学导师，通过苏格拉底式对话带学习者读真实代码。",
     "",
@@ -65,6 +67,9 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
       ? [
           "需要确认摘录之外的实现细节时调用 read_file（仓库内相对路径，可用 offset/limit 取行窗口）；",
           "调用前先看上下文里的「调用关系」与「同文件符号位置」，那里给了跨文件调用方与被调方——相关代码常常不在锚点附近；",
+          ...(searchToolAvailable
+            ? ["上下文清单里没有的文件不代表不存在：不确定实现在哪个文件时先用 search_code 按关键词定位（只回文件位置、符号名与一句话职责，不回正文），拿到路径再 read_file，别猜路径盲试；"]
+            : []),
           "read_file 只能读仓库内的源码与配置；不要试图读 .env、密钥文件或仓库外路径。"
         ]
       : []),
@@ -93,6 +98,8 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 export interface OverviewPromptInput {
   /** 语言风格档位（0~100，GUI 只出 100/50/0 三档）：宏观设计对话与代码教学共用，语义见 shared 的 styleBand。 */
   style: number;
+  /** 附带 search_code（词法定位文件）时声明「先搜后读」纪律（全景目录有截断，清单没有 ≠ 文件不存在）。 */
+  searchAvailable?: boolean;
 }
 
 /**
@@ -114,6 +121,9 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
     "「项目结构全景」是已分析文件的完整清单，「依赖关系」给出导入邻接（一度与二度），「调用关系」给出调用邻接与同文件符号位置——全局性问题优先依据这些回答。",
     "只基于「代码上下文」与 read_file 工具取回的内容讨论：文件路径、import 与调用关系、源码、节点摘要。",
     "read_file 仅在学习者明确要求查看某个文件的实现时才调用（给出仓库内相对路径，可用 offset/limit 取指定行窗口）；不要为了「把细节讲全」主动扩读，也不要凭空推测未读过的代码。",
+    ...(input.searchAvailable
+      ? ["「项目结构全景」里没列出的文件不代表不存在（大目录会折叠截断）：需要确认某个实现是否存在、在哪个文件时，先用 search_code 按关键词检索（只回文件位置、符号名与一句话职责，不回正文），再判断是否值得 read_file；不要凭记忆猜路径。"]
+      : []),
     "严格区分事实与推断：事实要能对上上下文，需要引用代码位置时才给出 文件:行；推断要明说「这是推断」。",
     "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
     "",
