@@ -14,12 +14,20 @@ import { deepenInferredEdges, parseDeepenReply } from "./deepen.js";
 const FILES: Record<string, string> = {
   "main.py": ["def main():", "    build_graph()", "", "if __name__ == \"__main__\":", "    main()"].join("\n"),
   "graph/builder.py": ["import os", "", "def build_graph():", "    register_all()", "    return 1", "", "def other():", "    pass"].join("\n"),
-  "graph/nodes.py": ["def evaluate(state):", "    return state", "", "def register_all():", "    pass"].join("\n")
+  "graph/nodes.py": ["def evaluate(state):", "    return state", "", "def register_all():", "    pass"].join("\n"),
+  "utils/cache.py": ["def cache_get(key):", "    return None"].join("\n"),
+  "utils/holder.py": ["def save_user(user):", "    pass"].join("\n"),
+  "utils/trace.py": ["def clear_trace():", "    pass"].join("\n"),
+  "web/app.py": ["app = create_app()", "", "def serve():", "    main()"].join("\n"),
+  "graph/state.py": ["class State:", "    pass"].join("\n"),
+  "graph/hooks.py": ["def on_register(fn):", "    return fn"].join("\n")
 };
 
 function workspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "deepen-"));
   mkdirSync(join(dir, "graph"), { recursive: true });
+  mkdirSync(join(dir, "utils"), { recursive: true });
+  mkdirSync(join(dir, "web"), { recursive: true });
   for (const [path, content] of Object.entries(FILES)) writeFileSync(join(dir, path), `${content}\n`);
   return dir;
 }
@@ -207,17 +215,42 @@ describe("按需深入", () => {
     expect(result.usage).toBeUndefined();
   });
 
-  it("窗口都读不到时不下这次调用，并如实说明", async () => {
-    const empty = mkdtempSync(join(tmpdir(), "deepen-empty-"));
-    const complete = vi.fn(async () => ({ text: "[]" }));
+  it("端点全不在阅读窗口内的推断边不白问，并如实计入 caveats", async () => {
+    const dir = workspace();
+    let seen: LlmCompletionInput | undefined;
+    // 三条推断边共 8 个端点文件，窗口上限 5：builder.py 被两条边需要（权重 2），其余按流程出现序进窗口；
+    // 4→5 这条边的两端（holder/trace）谁都没被别的边需要且排最后，必然落在窗口外 → 不送核实。
     const result = await deepenInferredEdges({
-      repositoryPath: empty,
+      repositoryPath: dir,
       analysis: ANALYSIS,
       index: INDEX,
-      flow: flowOf([INFERRED]),
-      provider: { name: "stub", modelVersion: "stub-1", complete }
+      flow: {
+        entry: { path: "main.py", line: 1, label: "入口" },
+        title: "窗口外的边",
+        summary: "覆盖裁剪。",
+        stages: [
+          { order: 1, kind: "entry", title: "入口", detail: "d", files: [{ path: "main.py", line: 1 }, { path: "web/app.py", line: 1 }], branches: [] },
+          { order: 2, kind: "stage", title: "s2", detail: "d", files: [{ path: "graph/builder.py", line: 3 }, { path: "graph/state.py", line: 1 }], branches: [] },
+          { order: 3, kind: "stage", title: "s3", detail: "d", files: [{ path: "graph/nodes.py", line: 4 }, { path: "graph/hooks.py", line: 1 }], branches: [] },
+          { order: 4, kind: "stage", title: "s4", detail: "d", files: [{ path: "utils/holder.py", line: 1 }], branches: [] },
+          { order: 5, kind: "stage", title: "s5", detail: "d", files: [{ path: "utils/trace.py", line: 1 }], branches: [] }
+        ],
+        edges: [
+          { from: 1, to: 2, origin: "inferred", evidence: "e12" },
+          { from: 2, to: 3, origin: "inferred", evidence: "e23" },
+          { from: 4, to: 5, origin: "inferred", evidence: "e45" }
+        ],
+        generatedAt: "2026-09-22T00:00:00.000Z"
+      },
+      provider: providerOf("[]", (input) => { seen = input; })
     });
-    expect(complete).not.toHaveBeenCalled();
-    expect(result.flow.caveats).toContain("按需深入未执行");
+    // 1→2、2→3 有端点落窗口内被问；4→5 两端权重最低落窗口外 → 跳过
+    const payload = JSON.parse(seen!.user ?? "{}") as { edges: { from: number; to: number }[]; code: { path: string }[] };
+    expect(payload.code.map((item) => item.path).sort()).toEqual(["graph/builder.py", "graph/nodes.py", "graph/state.py", "main.py", "web/app.py"]);
+    expect(payload.edges.map((edge) => `${edge.from}:${edge.to}`)).toEqual(["1:2", "2:3"]);
+    expect(result.flow.caveats).toContain("1 条因端点文件不在本次阅读窗口内未送核实");
+    // 4→5 保持原样、依据不被空回复改写
+    const skippedEdge = result.flow.edges.find((edge) => edge.from === 4 && edge.to === 5);
+    expect(skippedEdge).toMatchObject({ origin: "inferred", evidence: "e45" });
   });
 });

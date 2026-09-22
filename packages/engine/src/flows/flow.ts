@@ -69,6 +69,7 @@ const MAX_UNCOVERED_TEXT = 40;
 const MIN_STAGES = 3;
 const FALLBACK_UNPARSEABLE = "模型返回的内容无法解析成一条完整流程";
 const FALLBACK_UNGROUNDED = "模型给出的环节缺少仓内代码落点";
+const FALLBACK_TRUNCATED = "模型输出在长度上限处被截断，未形成完整流程";
 const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用链";
 
 /**
@@ -282,7 +283,9 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: JSON.stringify(digest),
-      maxTokens: 3_200,
+      // 09-22：真仓大流程输出 ~6.5k tokens 才收住，3_200 会让个别入口（VoucherOrderController 两次实测）
+      // 在 JSON 中途触顶 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
+      maxTokens: 6_000,
       temperature: 0.2,
       scene: "map.flow"
     });
@@ -293,10 +296,12 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
       areRelated: buildRelatedPairs(input.analysis)
     });
     if ("failure" in parsed) {
-      // 失败分两种（同推荐入口 declined 的口径）：合法 JSON 但环节没有落点 = 模型已经尽力了，是确定性结论，
-      // 带 deterministic 入缓存，别每次访问都重烧一遍钱；内容解析不出按瞬时异常处理，不缓存、下次重试。
-      const deterministic = parsed.failure === "ungrounded";
-      const reason = deterministic ? FALLBACK_UNGROUNDED : FALLBACK_UNPARSEABLE;
+      // 失败分三种（同推荐入口 declined 的口径）：合法 JSON 但环节没有落点、或输出在长度上限处被截断
+      // （09-22 真仓两次 finishReason=length 实测：同输入必同结果，不是抖动）——都是确定性结论，
+      // 带 deterministic 入缓存，别每次访问都重烧一遍钱；真正解析不出的按瞬时异常处理，不缓存、下次重试。
+      const truncated = response.finishReason === "length";
+      const deterministic = truncated || parsed.failure === "ungrounded";
+      const reason = truncated ? FALLBACK_TRUNCATED : parsed.failure === "ungrounded" ? FALLBACK_UNGROUNDED : FALLBACK_UNPARSEABLE;
       return {
         flow: staticFlow(evidence, reason),
         source: "static",

@@ -5,21 +5,29 @@ import { executeReadFile } from "../source/read-file.js";
 /**
   按需深入：主调用之后，对**模型自认是推断的**那些去向做一次有界的核实。
 
-  为什么需要这一步：流程视图存在的理由就是静态调用图看不见编排（`add_node("evaluate", evaluate)`、
+ 为什么需要这一步：流程视图存在的理由就是静态调用图看不见编排（`add_node("evaluate", evaluate)`、
   路由表、依赖注入）。这类结构**在代码正文里看得见、在调用图上没有边**——所以「依赖图证不出来」
   并不等于「代码里没有」。主调用没读正文（只有入口前 120 行），只能猜；这一步把那些文件的
   **真实片段**给它看，让它要么给出可核对的依据（`origin: "code"` + 文件:行），要么承认仍不确定。
 
   三条硬边界：
   1. **只读被问到的文件的窗口，起点由符号表给出**（不是随机读文件、不是整份正文）；
-  2. 条数与文件数都有上限（`MAX_DEEP_EDGES` / `MAX_DEEP_FILES`）；
+  2. 条数与文件数都有上限（`MAX_DEEP_EDGES` / `MAX_DEEP_FILES`）；窗口是给定的，**问哪几条边**
+     按「文件被多少条推断边需要」加权选（09-22 修正：旧选择法按边迭代序拿前 3 个文件，一条流程的
+     6 条推断边常涉及十几个文件，多数边根本没读到正文——提示词又规定「没给片段一律判 inferred」，
+     等于注定白问）；窗口大小也按同一天的重放定：真仓 19 条 flow、136 条推断边，「端点全落窗口」
+     （唯一问得出来的边）在 3 文件窗口下只有 1 条，放宽到 5 是 13 条——字符预算 `MAX_DEEP_CHARS`
+     本来就只装得下 4~5 个 80 行窗口，3 是白留预算，5 是收在预算内；
   3. **核实失败不损失流程**：解析不出、调用失败、引用对不上，都保留原边并把情况写进 caveats。
 */
 
 /** 一次最多核实几条推断边。 */
 const MAX_DEEP_EDGES = 6;
-/** 一次最多读几个文件（读窗口才是这一步的成本大头）。 */
-const MAX_DEEP_FILES = 3;
+/**
+  一次最多读几个文件。读窗口才是这一步的成本大头，但真正的闸是下面的字符预算：
+  80 行窗口 × 5 文件已贴近 16k 上界，6 个只是被字符闸悄悄裁掉——这里放宽到 5 不增加最坏成本。
+*/
+const MAX_DEEP_FILES = 5;
 /** 每个窗口的行数：够看清一个函数与它周边十几行即可。 */
 const DEEP_EXCERPT_LINES = 80;
 /**
@@ -97,20 +105,35 @@ export async function deepenInferredEdges(input: {
 }): Promise<DeepenResult> {
   const { flow } = input;
   const stageOf = (order: number) => flow.stages.find((stage) => stage.order === order);
-  const pending = flow.edges.filter((edge) => edge.origin === "inferred" && stageOf(edge.from) && stageOf(edge.to)).slice(0, MAX_DEEP_EDGES);
-  if (!pending.length) return { flow, examined: 0, confirmed: 0, stillInferred: 0 };
+  const inferred = flow.edges.filter((edge) => edge.origin === "inferred" && stageOf(edge.from) && stageOf(edge.to));
+  if (!inferred.length) return { flow, examined: 0, confirmed: 0, stillInferred: 0 };
+  const pathsOf = (edge: FlowEdge): string[] =>
+    [...new Set([...stageOf(edge.from)!.files, ...stageOf(edge.to)!.files].map((file) => file.path))];
 
-  // 要读哪些文件：只读这条边两端环节关联的文件；起点用符号表定位
-  const wanted = new Map<string, number>();
-  for (const edge of pending) {
-    for (const stage of [stageOf(edge.from)!, stageOf(edge.to)!]) {
-      for (const file of stage.files) {
-        if (wanted.size >= MAX_DEEP_FILES && !wanted.has(file.path)) continue;
-        const anchor = anchorLine(input.analysis, file.path, file.line);
-        const existing = wanted.get(file.path);
-        if (existing === undefined || anchor < existing) wanted.set(file.path, anchor);
-      }
+  // 选文件：按「被几条推断边需要」加权取前 MAX_DEEP_FILES 个窗口，锚点用这些边里该文件的最小符号起始行。
+  // 同分按流程出现顺序（Map 插入序 + 稳定排序）。
+  const score = new Map<string, { edges: number; anchor: number }>();
+  for (const edge of inferred) {
+    const entries = [...stageOf(edge.from)!.files, ...stageOf(edge.to)!.files];
+    for (const path of new Set(entries.map((file) => file.path))) {
+      const anchor = anchorLine(input.analysis, path, entries.find((file) => file.path === path)!.line);
+      const row = score.get(path);
+      if (row) { row.edges += 1; row.anchor = Math.min(row.anchor, anchor); }
+      else score.set(path, { edges: 1, anchor });
     }
+  }
+  const wanted = new Map([...score].sort((a, b) => b[1].edges - a[1].edges).slice(0, MAX_DEEP_FILES).map(([path, row]) => [path, row.anchor]));
+  const window = new Set(wanted.keys());
+  // 问哪些边：端点在窗口里的才问得到（没读到的片段按提示词一律判 inferred，问了注定白问）；全覆盖优先，截到 MAX_DEEP_EDGES。
+  const askable = inferred.filter((edge) => pathsOf(edge).some((path) => window.has(path)));
+  const pending = askable
+    .map((edge) => ({ edge, full: pathsOf(edge).every((path) => window.has(path)) }))
+    .sort((a, b) => Number(b.full) - Number(a.full))
+    .slice(0, MAX_DEEP_EDGES)
+    .map((item) => item.edge);
+  const skipped = inferred.length - pending.length;
+  if (!pending.length) {
+    return { flow: { ...flow, caveats: joinCaveat(flow.caveats, `按需深入未执行：${inferred.length} 条推断边的端点文件都没落进 ${MAX_DEEP_FILES} 个阅读窗口`) }, examined: 0, confirmed: 0, stillInferred: 0 };
   }
   const excerpts: { path: string; from: number; to: number; content: string }[] = [];
   let usedChars = 0;
@@ -178,7 +201,8 @@ export async function deepenInferredEdges(input: {
     `按需深入：核对了 ${pending.length} 条推断边`,
     answered ? `其中 ${confirmed} 条在代码里找到依据（已标为 code）` : "模型没有给出结论",
     rejected ? `${rejected} 条因引用的文件不属于该边被驳回` : "",
-    answered && confirmed + rejected < answered ? `${answered - confirmed - rejected} 条仍不确定` : ""
+    answered && confirmed + rejected < answered ? `${answered - confirmed - rejected} 条仍不确定` : "",
+    skipped ? `${skipped} 条因端点文件不在本次阅读窗口内未送核实` : ""
   ].filter(Boolean);
   return {
     flow: { ...flow, edges, caveats: joinCaveat(flow.caveats, notes.join("，")) },

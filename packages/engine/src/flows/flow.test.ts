@@ -242,6 +242,26 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.deterministic).toBeUndefined();
   });
 
+  it("输出在长度上限处被截断（finishReason=length）= 确定性降级：单独文案、可入缓存，不再每次访问重烧", async () => {
+    let seen: LlmCompletionInput | undefined;
+    const result = await generateRepositoryFlow({
+      repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY,
+      provider: {
+        name: "stub", modelVersion: "stub-1",
+        complete: async (input) => {
+          seen = input;
+          // 真仓 VoucherOrderController 两次实测：~9.2k output tokens、JSON 中途断掉
+          return { text: '{"title":"截断", "stages": [{"order":1', usage: { inputTokens: 5_000, outputTokens: 9_200 }, finishReason: "length" };
+        }
+      },
+      summaries: NO_SUMMARIES
+    });
+    expect(result.source).toBe("static");
+    expect(result.reason).toBe("模型输出在长度上限处被截断，未形成完整流程");
+    expect(result.deterministic).toBe(true);
+    expect(seen?.maxTokens).toBe(6_000); // 主调用上限已放宽（3_200 时该入口必触顶）
+  });
+
   it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => ({ text: ungroundedReply, usage: { inputTokens: 6_872, outputTokens: 8_400 } }));

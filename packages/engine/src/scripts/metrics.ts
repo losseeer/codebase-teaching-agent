@@ -143,7 +143,9 @@ emit(`- 调用失败率（全局）：${pct(failedTotal, llmRows.length)}；llm.
 // ---------- 3. 接口延迟与引擎事件 ----------
 emit();
 emit("## 3. 接口延迟 p50/p95（engine.jsonl kind:http，按路由归一）");
-const http = engineRows.filter((row) => row.kind === "http" && typeof row.durationMs === "number");
+// companion 路由已随功能整体删除（09-22）；历史 engine.jsonl 行不再计入延迟曲线
+const http = engineRows.filter((row) => row.kind === "http" && typeof row.durationMs === "number"
+  && !(row.detail?.url ?? "").includes("/companion/"));
 const byRoute = new Map<string, number[]>();
 for (const row of http) {
   const key = `${row.detail?.method ?? "?"} ${normalizeUrl(row.detail?.url ?? "?")}`;
@@ -155,10 +157,6 @@ emit("|---|---|---|---|");
 for (const [route, values] of [...byRoute].sort((a, b) => b[1].length - a[1].length).slice(0, 12)) {
   emit(`| ${route} | ${values.length} | ${percentile(values, 0.5)} | ${percentile(values, 0.95)} |`);
 }
-const kinds = new Map<string, number>();
-for (const row of engineRows) kinds.set(row.kind ?? "（无 kind）", (kinds.get(row.kind ?? "（无 kind）") ?? 0) + 1);
-emit();
-emit(`- 引擎日志事件型分布：${[...kinds].map(([kind, count]) => `${kind}=${count}`).join("、")}`);
 
 // ---------- 4. 产品账本与行为读数（journal + tutor.db） ----------
 emit();
@@ -183,22 +181,10 @@ for (const repo of perRepo) {
   }
   emit(`- token_usage 账本：${[...ledger].map(([scene, row]) => `${scene} ${row.calls} 次 in=${row.input.toLocaleString()}/out=${row.output.toLocaleString()}（cache 未上报 ${row.cacheNull}/上报 ${row.cacheNum}）`).join("；") || "无"}`);
 
-  // search → read 漏斗：同 session 内 file_read 的路径是否被此前 code_search 的 top_paths 指到过
   const reads = of("file_read");
   const readOk = reads.filter((event) => event.payload.denied !== true);
-  const searched = of("code_search");
-  const followBySession = new Map<string, { follow: number; paths: number }>();
-  for (const search of searched) {
-    const top = String(search.payload.top_paths ?? "").split("、").filter(Boolean);
-    const session = search.sessionId ?? "";
-    const readPaths = new Set(reads.filter((event) => (event.sessionId ?? "") === session && new Date(event.at).getTime() >= new Date(search.at).getTime() && event.payload.denied !== true).map((event) => String(event.payload.path)));
-    const follow = top.filter((path) => readPaths.has(path)).length;
-    const bucket = followBySession.get(session) ?? { follow: 0, paths: 0 };
-    followBySession.set(session, { follow: follow + bucket.follow, paths: top.length + bucket.paths });
-  }
-  const followTotal = [...followBySession.values()].reduce((sum, row) => sum + row.follow, 0);
-  const followPaths = [...followBySession.values()].reduce((sum, row) => sum + row.paths, 0);
-  emit(`- code_search：${searched.length} 次；follow-read（此后同会话读过 top 路径）：${pct(followTotal, followPaths)}${followPaths ? "" : "（无检索 → 未测）"}`);
+  // search→read 的 follow-read 率已删（09-22 拍板：样本个位数时比率无判据，属装饰；机制价值走档 B 消融）
+  emit(`- code_search：${of("code_search").length} 次（原始计数）`);
   emit(`- file_read：${reads.length} 条（归并后），其中 denied ${pct(reads.length - readOk.length, reads.length)}`);
 
   // teach_moment 类型已随 companion 功能整体移除（2026-09-22），不再统计。
@@ -236,8 +222,6 @@ for (const repo of perRepo) {
   try {
     const origins = { static: 0, inferred: 0, code: 0, 其他: 0 };
     let flows = 0;
-    let truncatedDetails = 0;
-    let details = 0;
     let droppedStages = 0;
     let fakePaths = 0;
     // 按需深入（map.flow.deep）的战绩只能从 flow 的 caveats 文本里挖：09-22 曾靠它定位「19 条 code 判定被驳回 18 条」
@@ -252,7 +236,6 @@ for (const repo of perRepo) {
         if (!flow) continue;
         flows += 1;
         for (const edge of flow.edges ?? []) origins[edge.origin === "static" || edge.origin === "inferred" || edge.origin === "code" ? edge.origin : "其他"] += 1;
-        for (const stage of flow.stages ?? []) { details += 1; if (stage.detail?.endsWith("…")) truncatedDetails += 1; }
         droppedStages += Number(flow.caveats?.match(/(\d+) 个环节因未给出存在的文件路径被丢弃/)?.[1] ?? 0);
         fakePaths += Number(flow.caveats?.match(/(\d+) 个文件路径不在仓库中/)?.[1] ?? 0);
         const caveats = flow.caveats ?? "";
@@ -267,7 +250,8 @@ for (const repo of perRepo) {
     const edgeTotal = origins.static + origins.inferred + origins.code + origins.其他;
     emit(`- 流程 grounding（layer_cache ${flows} 条 flow 的边）：static=${origins.static}、inferred=${origins.inferred}、code=${origins.code}${origins.其他 ? `、其他=${origins.其他}` : ""}；grounding 率 ${pct(origins.static + origins.code, edgeTotal)}`);
     emit(`- 按需深入（从 flow caveats 回读，只反映「生成时未被缓存挡住」的行）：核对 ${deepExamined} 条推断边 → 升级 code ${deepConfirmed}、驳回 ${deepRejected}、模型未给结论 ${deepNoAnswer} 行`);
-    emit(`- 流程 caveat 计数：丢弃环节 ${droppedStages}、编造路径 ${fakePaths}；环节 detail 触顶留痕（以…结尾）${pct(truncatedDetails, details)}`);
+    // 环节 detail 触顶留痕率已删（09-22 拍板：它验收的是 digest-v3 放宽效果，验收完成后留原始计数无判据）
+    emit(`- 流程 caveat 计数：丢弃环节 ${droppedStages}、编造路径 ${fakePaths}`);
     const summaries = db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT 4000").all() as { summary: string }[];
     const latest = new Map<string, { coverageLow?: boolean; rule?: string }>();
     for (const row of summaries) {
