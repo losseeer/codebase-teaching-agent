@@ -42,7 +42,7 @@
 | `type` | 必须在 `JournalEventType` 白名单内；引擎侧 `Journal.append` 用**运行时** Set 校验，越界抛错 |
 | `at` | 引擎按 server 时间写成 ISO 8601；客户端时间只是参考，不参与排序 |
 | `repositoryId` | 由 URL 路径决定（引擎自己填），前端不传 |
-| `sessionId` | 可选。**不做存在性校验**——`sessions` 是引擎进程内存态，重启后旧 id 查不到；按外键拒绝会让前端每次重启后都写不进事件 |
+| `sessionId` | 可选。**不做存在性校验**——map/practice 对话无会话态、引擎重启的窗口期内也查不到教学 id（教学会话已可按 sessionId 从 journal 续命恢复，但契约不因它收紧）；按外键拒绝会让前端把能写的事件丢掉 |
 | `traceId` | 引擎从请求上下文自动填，前端不用管 |
 | `payload` | 仅允许 `string \| number \| boolean \| null`（避免结构化对象随版本漂移）；单个字符串 ≤ 2000 字符 |
 

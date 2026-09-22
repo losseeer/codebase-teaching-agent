@@ -77,6 +77,11 @@ export class ImportService extends EventEmitter {
     return this.repositories.get(repositoryId);
   }
 
+  /** 当前挂载的仓库清单（注册表是单槽现实，但接口留成数组、不逼调用方猜槽位语义）。 */
+  mountedRepositories(): ImportedRepository[] {
+    return [...this.repositories.values()];
+  }
+
   findRepositoryForPath(candidatePath: string): ImportedRepository | undefined {
     return [...this.repositories.values()].find((repository) => isWithin(repository.path, candidatePath));
   }

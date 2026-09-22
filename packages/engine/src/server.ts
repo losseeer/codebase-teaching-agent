@@ -16,6 +16,7 @@ import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/service.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
+import { restoreSessionFromJournal } from "./harness/restore.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/service.js";
 import { indexRepository } from "./indexer/indexer.js";
@@ -91,6 +92,24 @@ tboot("createLlmProvider");
 
 const sessions = new Map<string, TutorSession>();
 const clients = new Set<{ send(data: string): void; readyState: number }>();
+
+/**
+  会话解析：内存命中直接返回；未命中（引擎重启把内存 Map 清零）时，从当前挂载仓库的 journal
+  按 sessionId 重放回内存（`restoreSessionFromJournal`，见 harness/restore.ts 的诚实边界）。
+  恢复后仓库须仍在挂载态——否则会话引用的节点/文件已不在引擎里，宁可 404 让 GUI 走新建，不挂半截会话。
+  */
+function resolveSession(sessionId: string): TutorSession | undefined {
+  const live = sessions.get(sessionId);
+  if (live) return live;
+  for (const repository of importer.mountedRepositories()) {
+    const restored = restoreSessionFromJournal(readJournal(repository.path), sessionId);
+    if (restored && restored.repositoryId === repository.index.repositoryId) {
+      sessions.set(restored.id, restored);
+      return restored;
+    }
+  }
+  return undefined;
+}
 
 await app.register(cors, { origin: true });
 tboot("cors registered");
@@ -627,12 +646,12 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
-  const session = sessions.get(request.params.sessionId);
+  const session = resolveSession(request.params.sessionId);
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
-  const current = sessions.get(request.params.sessionId);
+  const current = resolveSession(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   const repository = repositoryOr404(current.repositoryId);
   const node = repository && flatten(repository.course.root).find((item) => item.id === current.courseNodeId);
@@ -657,7 +676,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const journal = new Journal(repository.path, repository.index.repositoryId);
   if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
   if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
-  journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
+  journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
   const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
@@ -689,8 +708,9 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   - 白名单与 `Journal.append` **共用**（`isJournalEventType`），不另立一份，避免两处漂移。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
-    sessionId 是关联属性而非外键；且 `sessions` 是进程内存态，引擎一重启旧 id 就查不到，
-    若按外键拒绝，前端每次重启后都会写不进事件——那才是真的把可观测性弄丢。
+    sessionId 是关联属性而非外键。教学会话虽已能按 sessionId 从 journal 续命恢复（`resolveSession`），
+    但 map/practice 对话本就没有会话态、重启窗口期内也查不到——若按外键拒绝，前端会把能写的事件丢掉，
+    那才是真的把可观测性弄丢。
   */
 app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: unknown; sessionId?: unknown } }>("/api/repositories/:repositoryId/journal", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
