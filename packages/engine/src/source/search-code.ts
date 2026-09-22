@@ -1,4 +1,5 @@
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import { isTestPath } from "../depgraph/roles.js";
 import type { LlmTool } from "../llm/provider.js";
 import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
 
@@ -121,7 +122,12 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
       if (tokenHits(token, entry.symbolText)) { score += 3; symbolHit = true; }
       if (tokenHits(token, summary)) { score += 2; summaryHit = true; }
     }
-    if (score > 0) scored.push({ entry, score, pathHit, symbolHit, summaryHit });
+    if (score > 0) {
+      // 09-22：测试文件重罚垫底但**不剔除**——真仓 B 档实测 CacheClientTest 这类顶着同名类前缀的
+      // 文件抢 top1；封顶 1 分压在一切真实命中之下（非测试最低 2 分），概念只有测试演示时仍能兜底
+      // 出现——硬剔除会把「仓里有」答成「没有」，那是事实性错误，比排名瑕疵严重。
+      scored.push({ entry, score: isTestPath(entry.path) ? Math.min(score, 1) : score, pathHit, symbolHit, summaryHit });
+    }
   }
   // 分数降序；同分按路径字典序——结果顺序必须与构建顺序无关（可复现）
   scored.sort((left, right) => right.score - left.score || left.entry.path.localeCompare(right.entry.path));
@@ -137,7 +143,9 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
     const more = item.entry.symbols.length > MAX_SYMBOLS_SHOWN ? `…共 ${item.entry.symbols.length} 个符号` : "";
     const lines = item.entry.lines === undefined ? "" : `，${item.entry.lines} 行`;
     const matched = [item.pathHit && "路径", item.symbolHit && "符号", item.summaryHit && "职责"].filter(Boolean).join("/");
-    const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
+    // 兜底进结果时明说是测试文件——模型拿着这个上下文自己决定要不要读，而不是被排名悄悄误导
+    const testTag = isTestPath(item.entry.path) ? "，测试文件" : "";
+    const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}${testTag}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
     if (used + block.length > MAX_RESULT_CHARS) {
       blocks.push(`…（其余 ${hits.length - blocks.length} 条超出结果预算已省略，可收窄 query 或调低 limit。）`);
       break;

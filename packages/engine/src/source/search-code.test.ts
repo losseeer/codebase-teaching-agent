@@ -92,6 +92,40 @@ describe("executeSearchCode 打分与词边界", () => {
     expect(audit.topPaths[0]).toBe("src/io/FileService.java");
   });
 
+  it("测试文件重罚垫底不抢排名；唯一演示者仍兜底进结果并带「测试文件」标注", () => {
+    const testIndex = {
+      files: [
+        { path: "src/io/FileService.java", extension: ".java", bytes: 1, lines: 10 },
+        { path: "src/test/java/io/FileServiceTest.java", extension: ".java", bytes: 1, lines: 8 }
+      ]
+    } as unknown as RepositoryIndex;
+    const testAnalysis = {
+      graph: {
+        imports: { "src/io/FileService.java": [], "src/test/java/io/FileServiceTest.java": [] },
+        symbols: [{ id: "t1", name: "FileServiceTest", kind: "class", path: "src/test/java/io/FileServiceTest.java", line: 1 }]
+      }
+    } as unknown as RepositoryAnalysis;
+    const corpus = buildSearchCorpus(testIndex, testAnalysis, new Map([
+      ["src/io/FileService.java", "负责缓存读写"],
+      ["src/test/java/io/FileServiceTest.java", "缓存读写测试，验证命中行为"]
+    ]));
+    // 原始分测试文件更高（缓存+2、测试+2 vs 缓存+2）——封顶 1 分后必须让位
+    const both = executeSearchCode(corpus, JSON.stringify({ query: "缓存 测试" }));
+    expect(both.audit.topPaths[0]).toBe("src/io/FileService.java");
+    // 只有测试演示过的概念：兜底给出、明说它是测试文件，而不是假零
+    const only = executeSearchCode(corpus, JSON.stringify({ query: "命中行为" }));
+    expect(only.audit.topPaths).toEqual(["src/test/java/io/FileServiceTest.java"]);
+    expect(only.content).toContain("测试文件");
+    // 兜底分与真实弱命中并列（都是 1）时，测试仍靠后——真仓 cache-penetration 用例就是被这条挤掉的
+    const tieCorpus = buildSearchCorpus(
+      { files: [{ path: "src/io/a/CacheService.java", extension: ".java", bytes: 1, lines: 10 }, { path: "src/test/java/io/ZzTest.java", extension: ".java", bytes: 1, lines: 8 }] } as unknown as RepositoryIndex,
+      { graph: { imports: { "src/io/a/CacheService.java": [], "src/test/java/io/ZzTest.java": [] }, symbols: [] } } as unknown as RepositoryAnalysis,
+      new Map([["src/io/a/CacheService.java", "缓存读写"], ["src/test/java/io/ZzTest.java", "测试缓存读写"]] as const)
+    );
+    const tie = executeSearchCode(tieCorpus, JSON.stringify({ query: "缓存" }));
+    expect(tie.audit.topPaths[0]).toBe("src/io/a/CacheService.java");
+  });
+
   it("结果只给位置与职责，不含源码正文；head 指明下一步用 read_file", () => {
     const { content } = run("service");
     expect(content).toContain("search_code");
