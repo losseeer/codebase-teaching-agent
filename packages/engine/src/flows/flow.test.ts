@@ -316,6 +316,33 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(complete).toHaveBeenCalledTimes(4);
   });
 
+  it("影响范围注入（A2）：新鲜的变更记录 → user 消息末尾附「近期仓库变更」段；过时记录不注入", async () => {
+    const calls: LlmCompletionInput[] = [];
+    const analysis = { ...analysisOf(), lastIncrementalUpdate: { changedPaths: ["graph/nodes.py"], impactedPaths: ["graph/nodes.py", "graph/builder.py", "main.py"], at: new Date().toISOString() } };
+    await generateRepositoryFlow({ repositoryPath: "/repo", index: INDEX, analysis, entry: ENTRY, provider: providerOf(reply, (input) => calls.push(input)), summaries: NO_SUMMARIES });
+    const user = calls[0]?.user ?? "";
+    expect(user).toContain("近期仓库变更");
+    expect(user).toContain("改动文件（1）：graph/nodes.py");
+    // 段追加在 digest 之后：主体仍是完整可解析的 JSON，前缀缓存不破
+    expect(JSON.parse(user.split("\n\n近期仓库变更")[0] ?? "{}").entry.path).toBe("main.py");
+    const stale = { ...analysisOf(), lastIncrementalUpdate: { changedPaths: ["graph/nodes.py"], impactedPaths: [], at: new Date(Date.now() - 80 * 3_600_000).toISOString() } };
+    const staleCalls: LlmCompletionInput[] = [];
+    await generateRepositoryFlow({ repositoryPath: "/repo", index: INDEX, analysis: stale, entry: ENTRY, provider: providerOf(reply, (input) => staleCalls.push(input)), summaries: NO_SUMMARIES });
+    expect(staleCalls[0]?.user ?? "").not.toContain("近期仓库变更");
+  });
+
+  it("变更段不进缓存键（A2 取舍）：结构输入一致时换一份变更记录，第二次访问仍命中缓存不重烧", async () => {
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const fresh = (path: string) => ({ ...analysisOf(), lastIncrementalUpdate: { changedPaths: [path], impactedPaths: [path], at: new Date().toISOString() } });
+    const base = { repositoryPath: "/repo", index: INDEX, provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
+    await generateRepositoryFlowCached({ ...base, analysis: fresh("graph/nodes.py") });
+    await generateRepositoryFlowCached({ ...base, analysis: fresh("graph/builder.py") });
+    await generateRepositoryFlowCached({ ...base, analysis: analysisOf() });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；瞬时失败不落盘", async () => {
     clearRepositoryFlowCache();
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-persist-")));

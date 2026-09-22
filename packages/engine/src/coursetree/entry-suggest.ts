@@ -2,6 +2,7 @@ import type { CourseNode, CourseTree, SuggestedEntry } from "@codebase-tutor/sha
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
+import { buildRecentChangesSection, type RecentChangesInput } from "../changes/recent-changes.js";
 import { isTestPath } from "../depgraph/roles.js";
 import { layerCacheKey } from "../lib.js";
 import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
@@ -40,21 +41,25 @@ interface Candidate {
   summary: string;
 }
 
-/** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。 */
-async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider }): Promise<ModuleEntrySuggestion> {
-  const { candidates, moduleLabel, moduleHint, provider } = input;
+/** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。
+    `recentChanges` 是可选的「近期仓库变更」参考段（A2，09-22）：随 user 消息进、**刻意不进缓存键**，
+    与流程层同一套取舍（变更清单每次保存都刷新，进键等于每次保存重烧推荐）。 */
+async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string }): Promise<ModuleEntrySuggestion> {
+  const { candidates, moduleLabel, moduleHint, provider, recentChanges } = input;
   try {
     const system = [
       "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
       `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
       "不要选测试文件或琐碎工具函数。",
       "候选列表可能整体与主题无关（排序只是关键词级别的近似）；如果没有任何候选真正适合作为该模块入口，输出空数组 []，不要硬凑。",
+      "用户消息末尾可能另附「近期仓库变更」段（本地文件监听检测到的改动与波及文件）：它不是证据来源，不得据此推荐候选之外的节点，只在证据相当的候选之间做取舍时倾向这些当前活跃文件。",
       "严格输出 JSON 数组：[{\"id\":\"候选 id 原样返回\",\"reason\":\"不超过 20 字的推荐理由\"}]，按推荐顺序排列，不要输出其他文字。"
     ].join("");
 
+    const payload = JSON.stringify({ module: { label: moduleLabel, hint: moduleHint }, candidates });
     const response = await provider.complete({
       system,
-      user: JSON.stringify({ module: { label: moduleLabel, hint: moduleHint }, candidates }),
+      user: recentChanges ? `${payload}\n\n${recentChanges}` : payload,
       maxTokens: 800,
       temperature: 0.2,
       scene: "map.entry-suggest"
@@ -178,8 +183,10 @@ function themeFingerprint(candidates: Candidate[]): string[] {
   - `expand-v2`（2026-09-20）：v1 实测模型把仓库词表照抄成 controller/service/utils 泛化词，池子被结构词灌满。
     提示词禁止泛化词后旧产出必须作废，故 bump。
   系统提示词、打分权重或 `MAX_*` 变了，送进模型的 payload 可以一字不变，这类失效只有版本号管得了。
+  - `candidate-v3`（2026-09-22，A2）：选择层 user 消息末尾新增可选「近期仓库变更」参考段 + 系统提示词加了对应
+    用法约束（该段本身不进键）。旧条目生成时模型看不到这一输入，翻一次键。
 */
-const ENTRY_INPUT_VERSION = "candidate-v2";
+const ENTRY_INPUT_VERSION = "candidate-v3";
 const EXPAND_INPUT_VERSION = "expand-v2";
 
 interface ExpansionRecord {
@@ -266,7 +273,9 @@ function parseExpansionTokens(text: string): string[] | undefined {
     GUI 每次进入教学页都会触发该请求，实测同一输入反复计费（8 次调用 2/3 输入完全相同）。
     非空结果与「模型主动判空」（declined）都缓存——后者是可信答案；只有失败回落的空列表不缓存，
     否则会把一次网络抖动固化成永久无推荐。键里带上候选清单本身（含去重与 boost 的效果），
-    「输入相同 ⇒ 模型看到的问题相同 ⇒ 可直接复用」这一条不需要额外论证。 */
+    「输入相同 ⇒ 模型看到的问题相同 ⇒ 可直接复用」这一条不需要额外论证。
+    唯一的例外是「近期仓库变更」参考段（A2，09-22）：随 user 消息进、不进键——变更清单每次保存都刷新，
+    进键等于每次保存把全仓推荐重烧一遍；它只影响证据相当的候选之间的取舍，命中的旧推荐不算错答。 */
 interface EntryRecord {
   entries: SuggestedEntry[];
   declined?: boolean;
@@ -302,7 +311,7 @@ export function clearModuleEntryCache(): void {
   recentEntryPaths.clear();
 }
 
-export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; boostPaths?: string[]; database?: TutorDatabase }): Promise<ModuleEntrySuggestion> {
+export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; boostPaths?: string[]; database?: TutorDatabase; analysis?: RecentChangesInput }): Promise<ModuleEntrySuggestion> {
   // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
   const existing = recentEntryPaths.get(input.repositoryId);
   // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
@@ -339,7 +348,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     input.database?.touchLayerCache(key, now);
     return { ...stored.value };
   }
-  const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider });
+  const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider, ...(input.analysis ? { recentChanges: buildRecentChangesSection(input.analysis) } : {}) });
   const usable = suggestion.entries.length > 0 || suggestion.declined === true;
   if (usable) {
     const record: EntryRecord = { entries: suggestion.entries, ...(suggestion.declined ? { declined: true } : {}) };

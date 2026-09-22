@@ -314,6 +314,8 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
         ...repository.index.hotspots.slice(0, 20).map((hotspot) => hotspot.path)
       ])],
       repositoryId: repository.index.repositoryId,
+      // 「近期仓库变更」参考段的数据源（A2）：只进选择层 user 消息，不进缓存键
+      analysis: repository.analysis,
       database
     });
     if (suggestion.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {

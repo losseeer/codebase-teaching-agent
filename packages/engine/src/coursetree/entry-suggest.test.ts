@@ -157,6 +157,20 @@ describe("suggestModuleEntriesCached", () => {
     expect(expandCalls[0].user).toContain("操作系统");
     expect(expandCalls[0].user).toContain("src");
   });
+
+  it("影响范围注入（A2）：新鲜变更记录在选择层 user 末尾附「近期仓库变更」段，且该段不进缓存键", async () => {
+    const { provider, selectCalls } = fakeProvider([["n1"]]);
+    const tree = treeWithNodes(["n1"]);
+    const update = (path: string) => ({ lastIncrementalUpdate: { changedPaths: [path], impactedPaths: [path], at: new Date().toISOString() } });
+    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", analysis: update("src/n1.ts") });
+    expect(selectCalls[0].user).toContain("近期仓库变更");
+    expect(selectCalls[0].user).toContain("改动文件（1）：src/n1.ts");
+    // 该段的使用纪律在系统提示词里：只作同分倾向，不是证据来源
+    expect(selectCalls[0].system).toContain("不得据此推荐候选之外的节点");
+    // 变更段不进键：同输入换一份变更记录仍命中缓存（与流程层同一套取舍）
+    await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", analysis: update("src/other.ts") });
+    expect(selectCalls).toHaveLength(1);
+  });
 });
 
 describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重）", () => {

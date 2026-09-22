@@ -18,6 +18,7 @@ import {
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
+import { buildRecentChangesSection } from "../changes/recent-changes.js";
 import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
 import { layerCacheKey } from "../lib.js";
@@ -75,8 +76,10 @@ const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用
 /**
   流程层的输入口径版本，进缓存键。`buildFlowDigest` 的形状、上面各 `MAX_*` 裁剪阈值、或
   `SYSTEM_PROMPT` 的文本改了，模型看到的输入可以一字不变——这类失效只有版本号管得了，改它们要同步 bump。
+  `digest-v4`（2026-09-22，A2）：user 消息末尾新增可选的「近期仓库变更」参考段（见 `changes/recent-changes.ts`），
+  系统提示词同步加了它的用法说明。旧条目没有这一输入，翻一次键让流程在有/无变更段的前提下重新生成。
   */
-const FLOW_INPUT_VERSION = "digest-v3";
+const FLOW_INPUT_VERSION = "digest-v4";
 
 /** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
 export const SYSTEM_PROMPT = [
@@ -93,6 +96,7 @@ export const SYSTEM_PROMPT = [
   `7. uncovered 必填：列出你这次没能确认的部分（怀疑参与但证据不足的文件、看不清的分支），每条 ≤${MAX_UNCOVERED_TEXT} 字；确实没有就填空数组。`,
   "8. detail 只做简要描述：一句话讲清该环节**做什么**即止，不要展开函数名、字段、参数或实现步骤——看细节是点开环节之后的事，展开只会把卡片和抽屉撑爆。",
   "证据字段说明：files 是参与执行的文件详表（含符号名、依赖方向与角色 role，role 取值 core=执行主干 / infra=配置存储日志网络等设施接入 / support=支撑逻辑 / tool=末端工具 / test=测试）；带 summary 的文件有一句由摘要器**基于该文件正文**写出的一句话职责，用它定位方向、细节以符号与代码为准，没有 summary 的文件没有职责描述；directoryTree 是全部被索引文件的目录骨架，目录后的 (N) 是该目录下被索引的文件数，用来看详表之外还有什么；hotspots 是 git 改动次数最多的文件，改动频繁处通常承载主流程；callChain 是静态跨文件调用链（对回调注册这类编排是盲的，不要照抄）。",
+  "user 消息末尾可能另附「近期仓库变更」段（本地文件监听检测到的改动文件与依赖图波及）：它不是证据来源，环节落点仍必须出自上面的 files 清单；唯一用途是在证据相当时把讲解重心倾向这些当前活跃文件。",
   `严格输出 JSON：{"title":"≤${MAX_TITLE}字","summary":"≤${MAX_SUMMARY}字",`,
   `"stages":[{"title":"≤${MAX_STAGE_TITLE}字","detail":"一句话简要说明、≤${MAX_STAGE_DETAIL}字","kind":"entry|stage|decision|loop|exit",`,
   `"files":[{"path":"清单中的路径","line":1,"note":"≤${MAX_FILE_NOTE}字"}],"branches":["≤${MAX_BRANCH_TEXT}字"],"loopsTo":1}],`,
@@ -276,13 +280,15 @@ function tryBuildFlowDigest(input: GenerateFlowInput): FlowDigest | undefined {
   }
 }
 
-/** 用**已算好的**输入摘要生成一条流程：digest 既是发给模型的内容，也是缓存键的哈希对象。 */
+/** 用**已算好的**输入摘要生成一条流程：digest 既是发给模型的内容主体，也是缓存键的哈希对象；
+    末尾可附加「近期仓库变更」参考段——它**刻意不进键**（进键=每次保存重烧全仓缓存，见 changes/recent-changes.ts）。 */
 async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest): Promise<GeneratedFlow> {
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
+    const recentChanges = buildRecentChangesSection(input.analysis);
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
-      user: JSON.stringify(digest),
+      user: recentChanges ? `${JSON.stringify(digest)}\n\n${recentChanges}` : JSON.stringify(digest),
       // 09-22：真仓大流程输出 ~6.5k tokens 才收住，3_200 会让个别入口（VoucherOrderController 两次实测）
       // 在 JSON 中途触顶 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
       maxTokens: 6_000,
@@ -610,6 +616,11 @@ function asText(value: unknown, limit: number): string {
   换了模型，都会翻键。反过来说，digest 一字不变时模型看到的问题就一字不变，缓存里那条流程正是它
   当下会给出的答案；LSP 从降级恢复但结构事实没变，也落在这一类里（恢复会改 digest 时才需要重算）。
   所以不需要再论证「哪些变更会作废流程」。
+
+  唯一的例外是「近期仓库变更」参考段（A2，09-22）：它跟着 user 消息进、不进 payload 哈希——
+  变更清单每次保存都会刷新，进键等于每次保存重烧这条流程的钱，而它只是讲解重心的倾向提示。
+  因此命中缓存的流程可能是变更检测前生成的：可接受，结构事实的变化本来就会翻 digest 重烧，
+  变更段只影响「同分时先讲谁」，不影响流程里任何一条落点的真伪。
   */
 const flowCache = new Map<string, { result: GeneratedFlow; at: number }>();
 const FLOW_CACHE_TTL_MS = 10 * 60_000;
