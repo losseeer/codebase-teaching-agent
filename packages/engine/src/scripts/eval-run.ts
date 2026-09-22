@@ -67,9 +67,13 @@ database.close();
 const caseDirectory = join(here, "..", "eval", "cases");
 const caseFiles = readdirSync(caseDirectory).filter((name) => name.endsWith(".json"));
 
+// 摘要含标识符率：slice-v2 口径（「至少点出一个真实英文标识符」）的直接读数；
+// 连续 ≥5 位字母数字串才算，泛化短词（get、api）不计——与判分器同为零 token。
+const withIdentifier = [...summaries.values()].filter((text) => /[A-Za-z][A-Za-z0-9]{4,}/.test(text)).length;
+
 emit(`# B 档评测报告（零 token 确定性判分）`);
 emit(`生成时间：${new Date().toISOString()}｜仓库：\`${repositoryPath}\`（索引 ${index.files.length} 文件）`);
-emit(`数据源：layer_cache flow ${flows.length} 条；L1 摘要 ${summaries.size} 个文件；用例文件 ${caseFiles.length} 份`);
+emit(`数据源：layer_cache flow ${flows.length} 条；L1 摘要 ${summaries.size} 个文件（含英文标识符 ${pct(withIdentifier, summaries.size)}）；用例文件 ${caseFiles.length} 份`);
 emit();
 
 // ---------- 1/2. 存量 flow 产物：引用落地 + 边证据可核对 ----------
@@ -106,14 +110,23 @@ const analysis: RepositoryAnalysis = {
 const corpusWith = buildSearchCorpus(index, analysis, summaries);
 const corpusWithout = buildSearchCorpus(index, analysis, new Map());
 let anyCaseRan = false;
-for (const name of caseFiles) {
-  const doc = JSON.parse(readFileSync(join(caseDirectory, name), "utf8")) as { repository: string; cases: SearchCase[] };
+// 用例集按「仓库路径包含 repository 名」匹配，但包含关系会串仓（dianping ⊂ dianping-agent2）：
+// 多个用例集都命中时只跑最长（最具体）的那个，其余显式标注接管关系，不静默跳过。
+const caseDocs = caseFiles.map((name) => ({ name, doc: JSON.parse(readFileSync(join(caseDirectory, name), "utf8")) as { repository: string; cases: SearchCase[] } }));
+const matched = caseDocs.filter((entry) => repositoryPath.toLowerCase().includes(entry.doc.repository.toLowerCase()));
+const winner = matched.length ? matched.reduce((best, entry) => (entry.doc.repository.length > best.doc.repository.length ? entry : best)) : undefined;
+for (const { name, doc } of caseDocs) {
   if (!repositoryPath.toLowerCase().includes(doc.repository.toLowerCase())) {
     emit(`- \`${name}\`（repository=${doc.repository}）：与当前仓库不匹配，未执行`);
     continue;
   }
+  if (winner && name !== winner.name) {
+    emit(`- \`${name}\`（repository=${doc.repository}）：被更具体的用例集 \`${winner.name}\`（repository=${winner.doc.repository}）接管，未执行`);
+    continue;
+  }
   anyCaseRan = true;
   const topOf = (corpus: typeof corpusWith) => (query: string) => executeSearchCode(corpus, JSON.stringify({ query, limit: 5 })).audit.topPaths;
+  const holdoutIds = new Set(doc.cases.filter((item) => item.holdout).map((item) => item.id));
   const withArm = scoreSearchArm(doc.cases, topOf(corpusWith));
   const withoutArm = scoreSearchArm(doc.cases, topOf(corpusWithout));
   emit();
@@ -125,14 +138,25 @@ for (const name of caseFiles) {
     const good = withArm.perCase[i];
     const bare = withoutArm.perCase[i];
     const show = (arm: typeof good) => `${arm.hit ? "✅" : "❌"} ${(arm.recall * 100).toFixed(0)}%｜${arm.top[0]?.split("/").pop() ?? "（零命中）"}`;
-    emit(`| ${good.id} | ${show(good)} | ${show(bare)} |`);
+    emit(`| ${holdoutIds.has(good.id) ? `${good.id}（留）` : good.id} | ${show(good)} | ${show(bare)} |`);
   }
   emit();
-  emit(`- 「摘要在上」：hit@5 ${pct(withArm.hitRate.numerator, withArm.hitRate.denominator)}，平均 recall ${((withArm.meanRecall || 0) * 100).toFixed(1)}%`);
-  emit(`- 「无摘要」：hit@5 ${pct(withoutArm.hitRate.numerator, withoutArm.hitRate.denominator)}，平均 recall ${((withoutArm.meanRecall || 0) * 100).toFixed(1)}%`);
-  const negatives = [...withArm.negatives, ...withoutArm.negatives];
-  const wrong = negatives.filter((item) => item.wrongHits.length > 0);
-  emit(`- 负例（仓内没有的概念）：${negatives.length / 2} 条，误命中 ${pct(wrong.length, negatives.length)}${wrong.length ? `（${wrong.map((item) => `${item.id}→${item.wrongHits[0]?.split("/").pop()}`).join("、")}）` : ""}`);
+  // 调优例与留出例分列报数：只有调优例涨 = 「对着考纲出题」的证据；两边同涨才是口径真的变好
+  const cohorts = [
+    { label: "调优", cases: doc.cases.filter((item) => !item.holdout) },
+    { label: "留出", cases: doc.cases.filter((item) => item.holdout) }
+  ].filter((cohort) => cohort.cases.length);
+  for (const cohort of cohorts) {
+    const withCohort = scoreSearchArm(cohort.cases, topOf(corpusWith));
+    const withoutCohort = scoreSearchArm(cohort.cases, topOf(corpusWithout));
+    emit(`- 「${cohort.label}」摘要在上：hit@5 ${pct(withCohort.hitRate.numerator, withCohort.hitRate.denominator)}，平均 recall ${((withCohort.meanRecall || 0) * 100).toFixed(1)}%`);
+    emit(`- 「${cohort.label}」无摘要：hit@5 ${pct(withoutCohort.hitRate.numerator, withoutCohort.hitRate.denominator)}，平均 recall ${((withoutCohort.meanRecall || 0) * 100).toFixed(1)}%`);
+    const negatives = [...withCohort.negatives, ...withoutCohort.negatives];
+    if (negatives.length) {
+      const wrong = negatives.filter((item) => item.wrongHits.length > 0);
+      emit(`- 「${cohort.label}」负例：${negatives.length / 2} 条，误命中 ${pct(wrong.length, negatives.length)}${wrong.length ? `（${wrong.map((item) => `${item.id}→${item.wrongHits[0]?.split("/").pop()}`).join("、")}）` : ""}`);
+    }
+  }
 }
 if (!anyCaseRan) emit("- **未执行**：没有匹配当前仓库的用例文件。");
 emit();

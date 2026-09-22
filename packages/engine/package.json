@@ -14,7 +14,8 @@
     "phase0:metrics": "tsx src/scripts/metrics.ts",
     "phase0:replay-coverage": "tsx src/scripts/replay-coverage.ts",
     "setup:native": "node scripts/setup-native-bindings.mjs",
-    "phaseB:eval": "tsx src/scripts/eval-run.ts"
+    "phaseB:eval": "tsx src/scripts/eval-run.ts",
+    "l1:reburn": "tsx src/scripts/reburn-l1.ts"
   },
   "dependencies": {
     "@codebase-tutor/shared": "workspace:*",

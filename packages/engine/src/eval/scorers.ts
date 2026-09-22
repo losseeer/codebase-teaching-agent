@@ -109,6 +109,9 @@ export interface SearchCase {
   query: string;
   /** 该查询的正确答案文件；负例为空数组（期望零命中）。 */
   goldPaths: string[];
+  /** 留出例（true）：建集时**没参照任何一代摘要**措辞，只按代码事实写 query 与 gold。
+      报告把它与调优例分列——口径变更后若只有调优例涨、留出例不涨，就是「对着考纲出题」的证据。 */
+  holdout?: boolean;
 }
 
 export interface CaseArmResult {

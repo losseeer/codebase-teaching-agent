@@ -12,14 +12,18 @@ import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
+import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/service.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/service.js";
+import { indexRepository } from "./indexer/indexer.js";
 import { id, isWithin } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./policy/policy.js";
+import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/provider.js";
+import { summarizeFiles } from "./summarizer/summarizer.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { runWithTrace } from "./trace/context.js";
@@ -106,10 +110,23 @@ function repositoryOr404(repositoryId: string) {
 }
 
 function repositorySettings(repositoryPath: string, repositoryId: string): { monthlyBudgetUsd: number } {
+  return readRepositorySettings(repositoryPath, repositoryId);
+}
+
+/** 每仓可持久化的设置形态（settings_json 里的一个子集；refinement 标记等内部键不在此列、读写都须保留）。 */
+interface RepositorySettingsPayload {
+  monthlyBudgetUsd: number;
+  summaryHeaderComments: boolean;
+}
+
+function readRepositorySettings(repositoryPath: string, repositoryId: string): RepositorySettingsPayload {
   const database = new TutorDatabase(repositoryPath);
-  const settings = database.getSettings<{ monthlyBudgetUsd?: number }>(repositoryId);
+  const settings = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(repositoryId);
   database.close();
-  return { monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd };
+  return {
+    monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd,
+    summaryHeaderComments: settings?.summaryHeaderComments === true
+  };
 }
 
 /** L1 摘要表 → `path → 一句话职责`（流程证据、search 语料、推荐入口共用）。 */
@@ -533,14 +550,60 @@ app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } 
   return summarizeCost(repository.path, repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd, request.query.sessionId);
 });
 
-app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
+app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  return readRepositorySettings(repository.path, repository.index.repositoryId);
+});
+
+app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number; summaryHeaderComments?: boolean } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const budget = request.body?.monthlyBudgetUsd;
-  if (!repository || typeof budget !== "number" || !Number.isFinite(budget) || budget < 0) return reply.code(400).send({ error: "预算必须是非负数字" });
+  const hasBudget = budget !== undefined;
+  const hasToggle = typeof request.body?.summaryHeaderComments === "boolean";
+  if (!hasBudget && !hasToggle) return reply.code(400).send({ error: "至少提供 monthlyBudgetUsd 或 summaryHeaderComments 之一" });
+  if (hasBudget && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) return reply.code(400).send({ error: "预算必须是非负数字" });
   const database = new TutorDatabase(repository.path);
-  database.saveSettings(repository.index.repositoryId, { monthlyBudgetUsd: budget });
+  // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们抹掉
+  const stored = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean; refinement?: unknown }>(repository.index.repositoryId) ?? {};
+  const merged = {
+    ...stored,
+    ...(hasBudget ? { monthlyBudgetUsd: budget } : {}),
+    ...(hasToggle ? { summaryHeaderComments: request.body.summaryHeaderComments } : {})
+  };
+  database.saveSettings(repository.index.repositoryId, merged);
   database.close();
-  return summarizeCost(repository.path, budget);
+  const next = { ...readRepositorySettings(repository.path, repository.index.repositoryId) };
+  return { ...summarizeCost(repository.path, next.monthlyBudgetUsd), settings: next };
+});
+
+/**
+  L1 摘要按当前「摘要参考注释」开关重烧（有意的产品写入，与 `l1:reburn` 脚本同一通道）。
+  切开关后必须调它，新档位才生效——键前缀分流（slice-v2 / slice-v2c）保证另一档的存量行原样保留。
+*/
+app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/summaries/rebuild", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const settings = readRepositorySettings(repository.path, repository.index.repositoryId);
+  // 预算降级或 light 未配置时不烧钱：与导入路径同口径，确定性档重烧会把 LLM 摘要整表覆盖成兜底
+  const lightProvider = summarizeCost(repository.path, settings.monthlyBudgetUsd).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
+  const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments: settings.summaryHeaderComments });
+  if (provider instanceof LocalSummaryProvider) {
+    return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重烧会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
+  }
+  const database = new TutorDatabase(repository.path);
+  try {
+    const { estimate } = await summarizeFiles({
+      structure: fileStructureOf(indexRepository(repository.path).files, graphFromData(repository.analysis.graph)),
+      database,
+      provider,
+      withHeaderComments: settings.summaryHeaderComments
+    });
+    return estimate;
+  } finally {
+    database.close();
+  }
 });
 
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {

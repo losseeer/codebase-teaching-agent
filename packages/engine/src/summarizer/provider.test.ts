@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./provider.js";
+import { batchSystemPrompt, LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./provider.js";
 import type { FileSlice } from "./slice.js";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { AnthropicProvider, OllamaTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";
@@ -64,6 +64,24 @@ describe("摘要档", () => {
     expect(results).toEqual([{ summary: "甲", role: "core" }, undefined, { summary: "丙" }]);
     expect(sawSystem).toContain("严格输出 JSON 数组");
     expect(provider.modelVersion).toBe("stub-1");
+  });
+
+  it("提示词分流（「摘要参考注释」开关）：关=旧提示词逐字节不变，开=只多一行 headerComment 用法", () => {
+    const off = batchSystemPrompt(false);
+    const on = batchSystemPrompt(true);
+    expect(off).not.toContain("headerComment");
+    expect(on).toContain("headerComment");
+    // 从「开」档里剔除新增行应精确还原「关」档——保证开关只增不改
+    expect(on.split("\n").filter((line) => !line.includes("headerComment")).join("\n")).toBe(off);
+  });
+
+  it("LlmSummaryProvider 默认关档；开档构造才发新提示词", async () => {
+    let sawDefault = "";
+    await new LlmSummaryProvider(llmOf("[]", (input) => { sawDefault = input.system; })).summarizeMany([sliceOf()]);
+    expect(sawDefault).toBe(batchSystemPrompt(false));
+    let sawOn = "";
+    await new LlmSummaryProvider(llmOf("[]", (input) => { sawOn = input.system; }), true).summarizeMany([sliceOf()]);
+    expect(sawOn).toBe(batchSystemPrompt(true));
   });
 
   it("确定性兜底档：逐条都给结果，摘要是路径 + 结构角色 + 主要符号，且不覆盖结构角色", async () => {

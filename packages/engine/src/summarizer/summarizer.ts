@@ -1,25 +1,33 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
 import { hash } from "../lib.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
-import { buildFileSlices, type FileSlice } from "./slice.js";
+import { buildFileSlices, extractHeaderComment, type FileSlice } from "./slice.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type SummaryResult } from "./provider.js";
 
 /**
   文件级摘要表（L1）：每文件一行「职责摘要 + 架构角色 + 覆盖率标记」，落 SQLite。
 
   与旧版的差别：
-  - 输入不再是整份正文，而是**结构切片**（`slice.ts`）——因此本模块**不再读磁盘**，
-    它只消费依赖图；「文件内容变了没」由切片内容（含符号与依赖）间接反映。
+  - 输入不再是整份正文，而是**结构切片**（`slice.ts`）——它只消费依赖图；
+    「文件内容变了没」由切片内容（含符号与依赖）间接反映。
+    唯一的读盘例外是「摘要参考注释」开关打开时取 headerComment（见 summarizeFiles）。
   - 输出多了角色与覆盖率。角色由结构规则给出，模型可以覆盖并标注来源。
   - 缓存键从「正文哈希 + 模型版本」变成「**切片 + 输入口径版本 + 模型版本**」的哈希：
     切片变了（文件改了、符号抽取规则改了、依赖变了）缓存即失效，不必再单独追踪文件内容。
   - 摘要档改成**批量**调用：先算缓存缺失的，再按 `SUMMARY_BATCH_SIZE` 分批，一条没结果就那一条回落。
 */
 
-/** 缓存键里带上输入口径版本：切片或角色规则的语义变了，旧缓存必须失效。 */
-const SUMMARY_INPUT_VERSION = "slice-v1";
+/** 缓存键里带上输入口径版本：切片或角色规则的语义变了，旧缓存必须失效。
+    `slice-v2`（2026-09-22）：摘要提示词新增「至少点出一个真实英文标识符」+「带学习者会说的中文概念词」
+    两条要求——旧产出按新口径不合格，且这两条正是检索消融（phaseB:eval 三臂）的处理变量，全仓重烧一次。
+    后缀 `c`（slice-v2c）：该仓打开了「摘要参考注释」开关（每仓设置，默认关）。开关同时切换提示词
+    （多一行 headerComment 用法说明）与切片字段，故键前缀必须分流——**不 bump 全局版本**：
+    关着的仓输入逐字节不变，今天烧好的 slice-v2 行继续命中。 */
+const SUMMARY_INPUT_VERSION = "slice-v2";
 
 /**
   覆盖率只查切片里最靠前的这几条——它们是最该被摘要提及的。
@@ -66,8 +74,8 @@ type StoredSummary = Omit<FileSummary, "cached">;
   一是这张表按仓库分库（`TutorDatabase(repositoryPath)`），键里再放 repositoryId 是纯冗余；
   二是换构造会让存量行整体失配，等于替每个用户重烧一遍全仓摘要——收益为零。
  */
-function cacheKeyOf(slice: FileSlice, modelVersion: string): string {
-  return hash(`${SUMMARY_INPUT_VERSION}:${modelVersion}:${JSON.stringify(slice)}`);
+function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: boolean): string {
+  return hash(`${withHeaderComments ? "slice-v2c" : SUMMARY_INPUT_VERSION}:${modelVersion}:${JSON.stringify(slice)}`);
 }
 
 /** 导出仅为测试可写入「旧判据时代的存量行」，验证缓存命中路径的就地重算。 */
@@ -77,10 +85,26 @@ export async function summarizeFiles(input: {
   structure: FileStructure;
   database: TutorDatabase;
   provider: SummaryProvider;
+  /** 「摘要参考注释」开关（每仓设置，默认关）。开=切片附 headerComment，键前缀走 slice-v2c。 */
+  withHeaderComments?: boolean;
 }): Promise<{ summaries: FileSummary[]; estimate: ImportEstimate }> {
   const { structure, database, provider } = input;
+  const withHeaderComments = input.withHeaderComments ?? false;
   const roles = classifyFileRoles(structure);
   const slices = buildFileSlices(structure, roles);
+  if (withHeaderComments) {
+    // 开关注册在磁盘上的注释——这是本模块唯一的读盘点：切片其余部分仍是纯结构产物。
+    // 读不到（文件刚被删/权限）就静默跳过该文件：缺一段注释不值得让整次导入失败。
+    for (const slice of slices.values()) {
+      try {
+        const text = readFileSync(join(database.repositoryPath, slice.path), "utf8");
+        const headerComment = extractHeaderComment(slice.path, text);
+        if (headerComment) slice.headerComment = headerComment;
+      } catch {
+        /* 文件不可读 ⇒ 该切片与关着时逐字节相同 */
+      }
+    }
+  }
   const ordered = [...slices.values()].sort((left, right) => left.path.localeCompare(right.path));
 
   const local = new LocalSummaryProvider();
@@ -93,20 +117,18 @@ export async function summarizeFiles(input: {
   // 先挑出缓存缺失的：批量调用的价值在于「只对需要重算的付费」，已经命中的不该再进批次
   const pending: FileSlice[] = [];
   for (const slice of ordered) {
-    const key = cacheKeyOf(slice, provider.modelVersion);
+    const key = cacheKeyOf(slice, provider.modelVersion, withHeaderComments);
     const cached = database.getFileSummary<StoredSummary>(key);
     if (cached) {
       cachedFiles += 1;
       // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对，零 token，
       // 也不属于 LLM 的输入口径——所以不需要 bump SUMMARY_INPUT_VERSION 让全仓重烧摘要。
       const coverage = coverageOf(slice, cached.summary);
-      if (JSON.stringify(coverage) !== JSON.stringify(cached.coverage)) {
-        const migrated: StoredSummary = { ...cached, coverage };
-        database.putFileSummary(key, migrated);
-        byPath.set(cached.path, { ...migrated, cached: true });
-      } else {
-        byPath.set(cached.path, { ...cached, cached: true });
-      }
+      const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
+      // 命中也回写（created_at 刷新）：下游语料取的是「每路径最新一行」，而双档键让开/关档各留一行——
+      // 不刷新的话「开档烧完再切回关」时，注释档旧行会一直冒充现行摘要。回写是纯本地写，零 token。
+      database.putFileSummary(key, migrated);
+      byPath.set(cached.path, { ...migrated, cached: true });
       continue;
     }
     pending.push(slice);
@@ -128,7 +150,7 @@ export async function summarizeFiles(input: {
         roleSource: result.role ? "provider" : "structure",
         coverage: coverageOf(slice, result.summary)
       };
-      database.putFileSummary(cacheKeyOf(slice, provider.modelVersion), stored);
+      database.putFileSummary(cacheKeyOf(slice, provider.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
       inputCharacters += JSON.stringify(slice).length;
       byPath.set(slice.path, { ...stored, cached: false });

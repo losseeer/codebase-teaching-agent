@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import type { SymbolInfo } from "@codebase-tutor/shared";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./provider.js";
-import { buildFileSlices, MAX_SLICE_ENTRIES } from "./slice.js";
+import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./slice.js";
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
 
 /** main.py → svc.py（调用 run）→ util.py；另外 business.py 只依赖 util.py，不挨着入口。 */
@@ -222,7 +222,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
       roleSource: "structure",
       coverage: { checked: 2, mentioned: 0, low: true }
     };
-    database.putFileSummary(summaryCacheKey(slice, provider.modelVersion), legacyRow);
+    database.putFileSummary(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
     const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
     const svc = summaries.find((summary) => summary.path === "svc.py")!;
     // 确定性摘要本来就以符号名开头，新判据下两条都锚上
@@ -230,8 +230,94 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     expect(svc.cached).toBe(true);
     expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
     // 修正后的行真的落库了：再跑一次不需要任何迁移
-    expect(database.getFileSummary<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion))?.coverage?.rule).toBe("anchor-v2");
+    expect(database.getFileSummary<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
     const second = await summarizeFiles({ structure: STRUCTURE, database, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
+  });
+});
+
+describe("extractHeaderComment（「摘要参考注释」开时取文件首段正经注释）", () => {
+  it("Java：跳过 license 块注释，取类 Javadoc，并剔除 @author/@version 标签行", () => {
+    const text = [
+      "/*",
+      " * Copyright 2020 dianping.com. All rights reserved.",
+      " */",
+      "package com.dianping;",
+      "/**",
+      " * 库存扣减服务：处理秒杀场景下的并发扣减与回滚。",
+      " * @author tom",
+      " * @version 1.0",
+      " */",
+      "public class StockService {}"
+    ].join("\n");
+    expect(extractHeaderComment("StockService.java", text)).toBe("库存扣减服务：处理秒杀场景下的并发扣减与回滚。");
+  });
+
+  it("纯标签块（@author/@since）没有概念，整段跳过后无可取 ⇒ undefined", () => {
+    expect(extractHeaderComment("A.java", "/**\n * @author tom\n * @since 1.0\n */\npublic class A {}")).toBeUndefined();
+  });
+
+  it("Python：模块 docstring 优先；`=` 后的三引号是字符串赋值，不算 docstring", () => {
+    expect(extractHeaderComment("nodes.py", '"""意图理解节点：解析用户查询，抽取结构化意图。"""\nimport x')).toBe("意图理解节点：解析用户查询，抽取结构化意图。");
+    expect(extractHeaderComment("b.py", 'TEXT = """这段三引号是赋值内容不该被当成注释摘录"""\n# 真正的模块自述在这一组注释里\ny = 1')).toBe("真正的模块自述在这一组注释里");
+  });
+
+  it("连续整行注释合并成一段；清洗后不足 8 字的碎语不算自述", () => {
+    expect(extractHeaderComment("X.java", "// 分布式锁：看门狗自动续期\n// 解决误删他人锁的问题\nclass X {}")).toBe("分布式锁：看门狗自动续期 解决误删他人锁的问题");
+    expect(extractHeaderComment("Y.java", "// 短\nclass Y {}")).toBeUndefined();
+  });
+
+  it("合格首段折叠空白并截断到预算字符数", () => {
+    const long = "概".repeat(MAX_HEADER_COMMENT_CHARS + 40);
+    expect(extractHeaderComment("Z.java", `/** ${long.slice(0, 60)}\n\n${long.slice(60)} */\nclass Z {}`)).toHaveLength(MAX_HEADER_COMMENT_CHARS);
+  });
+
+  it("无任何注释的文件 ⇒ undefined", () => {
+    expect(extractHeaderComment("plain.py", "def main():\n    return 1\n")).toBeUndefined();
+  });
+});
+
+describe("「摘要参考注释」开关：双档键分流与读盘附着", () => {
+  /** 落一个真实 main.py（其余结构里的文件不在盘上：读盘失败须静默跳过而不是抛错）。 */
+  function tempRepoWithSource(): TutorDatabase {
+    const dir = mkdtempSync(join(tmpdir(), "summarize-h-"));
+    writeFileSync(join(dir, "main.py"), '# 入口装配：加载配置并启动服务\n\nimport svc\n\ndef main():\n    svc.run(1)\n');
+    return new TutorDatabase(dir);
+  }
+
+  it("同一切片的开/关档键必然不同；关档键与改造前的构造逐字节同构（存量行不失效）", () => {
+    const slice = buildFileSlices(STRUCTURE, classifyFileRoles(STRUCTURE)).get("main.py")!;
+    expect(summaryCacheKey(slice, "m-1", true)).not.toBe(summaryCacheKey(slice, "m-1", false));
+  });
+
+  it("开档读盘附着 headerComment 进切片；盘上没有的文件静默跳过", async () => {
+    const database = tempRepoWithSource();
+    const captured: FileSlice[] = [];
+    const spy: SummaryProvider = {
+      name: "stub",
+      modelVersion: "stub-1",
+      summarizeMany: async (slices) => {
+        captured.push(...slices);
+        return slices.map(() => ({ summary: "main 负责入口。" }));
+      }
+    };
+    await summarizeFiles({ structure: STRUCTURE, database, provider: spy, withHeaderComments: true });
+    const main = captured.find((slice) => slice.path === "main.py")!;
+    expect(main.headerComment).toBe("入口装配：加载配置并启动服务");
+    expect(captured.find((slice) => slice.path === "svc.py")!.headerComment).toBeUndefined();
+  });
+
+  it("两档各占各的键空间：互不污染，切回原档仍全量命中", async () => {
+    const database = tempRepoWithSource();
+    const provider = new LocalSummaryProvider();
+    const off = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(off.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
+    const on = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    // 开档全是新键：一条都不该命中关档刚写的行
+    expect(on.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
+    const onAgain = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    expect(onAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
+    const offAgain = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(offAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
   });
 });

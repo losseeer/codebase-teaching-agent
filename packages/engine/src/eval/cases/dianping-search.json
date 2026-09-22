@@ -1,5 +1,5 @@
 {
-  "$comment": "检索 gold 用例（B 档）。query 一律**关键词式**——与模型在 tool-loop 里实际会写的 search_code 查询同型（词法检索把整句中文当一个子串，整句注定零命中，那不是被测对象）。goldPaths 只列「答案所在」的最小集合，建集时逐例 grep 核实概念确在该文件；负例 goldPaths=[]，期望零命中。",
+  "$comment": "检索 gold 用例（B 档）。query 一律**关键词式**——与模型在 tool-loop 里实际会写的 search_code 查询同型（词法检索把整句中文当一个子串，整句注定零命中，那不是被测对象）。goldPaths 只列「答案所在」的最小集合，建集时逐例 grep 核实概念确在该文件；负例 goldPaths=[]，期望零命中。holdout:true = 留出例（09-22 随 slice-v2 消融加入）——query 措辞只参照代码事实（逐例 grep 过），**没对照过任何一代 L1 摘要**；报告与调优例分列：口径变更后两边同涨才是真变好，只有调优例涨是对着考纲出题。c-* 四条为「注释独占概念」翻转例（slice-v2c 验证轮，09-22）：词只存在于文件头注释，SQL 核实关档 cohort 0 行、开档 cohort 恰 1 行——关档注定 miss、开档应命中，是开关的处理变量本身（建词参照了开档产出，故只作机制判据、不计泛化证据）。",
   "repository": "dianping",
   "cases": [
     {
@@ -96,6 +96,99 @@
         "src/main/java/com/hmdp/utils/SmsRateLimiter.java",
         "src/main/java/com/hmdp/service/impl/UserServiceImpl.java"
       ]
+    },
+    {
+      "id": "h-follow",
+      "query": "关注 取关 粉丝",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/FollowServiceImpl.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-shop-nearby",
+      "query": "附近 距离 商家",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/ShopServiceImpl.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-id-worker",
+      "query": "唯一 ID 生成 时间戳",
+      "goldPaths": [
+        "src/main/java/com/hmdp/utils/RedisIdWorker.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-circuit-breaker",
+      "query": "熔断 降级 异常",
+      "goldPaths": [
+        "src/main/java/com/hmdp/aspect/CircuitBreakerAspect.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-upload",
+      "query": "上传 文件 本地",
+      "goldPaths": [
+        "src/main/java/com/hmdp/controller/UploadController.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-tx-outbox",
+      "query": "事务 消息 一致性",
+      "goldPaths": [
+        "src/main/java/com/hmdp/listener/TransactionOutboxWriter.java",
+        "src/main/java/com/hmdp/listener/TransactionOutboxPublisher.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "h-negative-websocket",
+      "query": "websocket 长连接",
+      "goldPaths": [],
+      "holdout": true
+    },
+    {
+      "id": "h-negative-live-transcode",
+      "query": "直播 转码",
+      "goldPaths": [],
+      "holdout": true
+    },
+    {
+      "id": "c-breaker-pattern",
+      "query": "断路器 模式",
+      "goldPaths": [
+        "src/main/java/com/hmdp/annotation/CircuitBreaker.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "c-burst-token-bucket",
+      "query": "令牌桶 突发",
+      "goldPaths": [
+        "src/main/java/com/hmdp/annotation/RateLimit.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "c-search-highlight",
+      "query": "高亮 耗时",
+      "goldPaths": [
+        "src/main/java/com/hmdp/dto/ShopSearchResult.java"
+      ],
+      "holdout": true
+    },
+    {
+      "id": "c-pay-attempt",
+      "query": "支付尝试 对账",
+      "goldPaths": [
+        "src/main/java/com/hmdp/entity/PayLog.java"
+      ],
+      "holdout": true
     }
   ]
 }

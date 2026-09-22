@@ -31,12 +31,73 @@ export interface FileSlice {
   /** 它依赖谁 / 谁依赖它（各取前若干个，按依赖方的路径排序保证稳定）。 */
   dependsOn: string[];
   dependedOnBy: string[];
+  /** 仅「摘要参考注释」开关打开时附带：文件首个非 license 注释段（≤120 字），见 extractHeaderComment。 */
+  headerComment?: string;
 }
 
 /** 每文件进切片的符号条目上限（与「每文件最多展示几个符号」的预算同量级）。 */
 export const MAX_SLICE_ENTRIES = 8;
 /** 依赖方向各给几条：再多也只是重复「它在图里」这个事实。 */
 export const MAX_SLICE_EDGES = 6;
+
+/** headerComment 的字符预算：够一段文件/类自述，不够抄整页注释。 */
+export const MAX_HEADER_COMMENT_CHARS = 120;
+
+/** 出现即整段跳过的样板注释特征（license/@author 块没有概念）。 */
+const BOILERPLATE_PATTERN = /copyright|licen[cs]e|spdx|©/i;
+
+/**
+  「摘要参考注释」开关打开时附进切片的文件自述：**源码顺序上第一段正经注释**。
+
+  取材规则（宁缺毋滥，抽不到就 undefined，绝不捞行内碎语）：
+  - 块注释 / Javadoc / Python 三引号 docstring，或连续 ≥1 行的整行注释组；
+  - 跳过 license/SPDX/纯 @author 样板段；正文里的 @param/@return 标签行剔除；
+  - 清洗后不足 8 字的（如 `// getter`）不算自述，继续找下一段；
+  - 首个合格段折叠空白、截 120 字。
+  注意 Python 三引号只认「前面不是 `=`」的——字符串赋值不是 docstring。
+*/
+export function extractHeaderComment(path: string, text: string): string | undefined {
+  const isPython = path.endsWith(".py");
+  const spans: { start: number; body: string }[] = [];
+  for (const match of text.matchAll(/\/\*[\s\S]*?\*\/|"""[\s\S]*?"""/g)) {
+    const before = text.slice(Math.max(0, match.index - 4), match.index);
+    if (match[0].startsWith('"""') && before.includes("=")) continue;
+    spans.push({ start: match.index, body: match[0].replace(/^\/\*+|^\s*"""/, "").replace(/\*\/$|"""$/, "") });
+  }
+  const lines = text.split("\n");
+  let offset = 0;
+  let group: { start: number; parts: string[] } | undefined;
+  const flush = (): void => {
+    if (group && group.parts.length && group.parts.join(" ").trim().length >= 8) spans.push({ start: group.start, body: group.parts.join("\n") });
+    group = undefined;
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const marker = trimmed.startsWith("//") && !isPython ? "//" : trimmed.startsWith("#") && isPython ? "#" : undefined;
+    if (marker && trimmed.length > marker.length + 1) {
+      group ??= { start: offset, parts: [] };
+      group.parts.push(trimmed.slice(marker.length).trim());
+    } else {
+      flush();
+    }
+    offset += line.length + 1;
+  }
+  flush();
+  spans.sort((left, right) => left.start - right.start);
+  for (const span of spans) {
+    if (BOILERPLATE_PATTERN.test(span.body)) continue;
+    const cleaned = span.body
+      .split("\n")
+      .map((line) => line.replace(/^\s*\*+\s?/, "").replace(/^@param\b.*$/, "").replace(/^@(return|author|version|since|date)\b.*$/, "").trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ");
+    if (cleaned.length < 8) continue;
+    return cleaned.slice(0, MAX_HEADER_COMMENT_CHARS);
+  }
+  return undefined;
+}
 
 function signatureOf(symbol: SymbolInfo): string {
   if (symbol.kind === "class" || symbol.kind === "type") return symbol.name;

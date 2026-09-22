@@ -1,0 +1,28 @@
+{
+  "$comment": "第二仓泛化验证用例（B 档，Python/LangGraph 智能体仓 dianping-agent2）。整集按留出纪律建集：查询措辞只按代码事实（35 个 .py 逐词 grep 锚定），不参照任何一代摘要产出；与 dianping 集不同，本仓从未参与 slice-v2 提示词调优，故整集即泛化读数。query 一律关键词式；goldPaths 只列概念真实所在的最小文件集；负例经全仓 grep 确认概念不存在。c-* 四条为「注释独占概念」翻转例（slice-v2c 验证轮，09-22）：概念词只存在于文件头注释（grep 全仓 .py 确认），slice-v2 存量摘要 0 命中（SQL 逐词核过）——关档注定 miss、开档应命中，是「摘要参考注释」开关的处理变量本身。",
+  "repository": "dianping-agent2",
+  "cases": [
+    { "id": "hitl-interrupt", "query": "人工介入 中断 恢复", "goldPaths": ["graph/hitl.py"] },
+    { "id": "intent-node", "query": "意图理解", "goldPaths": ["graph/nodes.py"] },
+    { "id": "react-loop", "query": "ReAct 工具 循环", "goldPaths": ["graph/nodes.py", "graph/state.py"] },
+    { "id": "routing", "query": "条件 路由", "goldPaths": ["graph/routing.py"] },
+    { "id": "graph-state", "query": "状态图 状态 定义", "goldPaths": ["graph/state.py"] },
+    { "id": "preferences", "query": "用户 偏好 记忆", "goldPaths": ["memory/preferences.py"] },
+    { "id": "playbook-vector", "query": "Playbook 向量 检索", "goldPaths": ["memory/playbook.py"] },
+    { "id": "chroma", "query": "chroma collection", "goldPaths": ["memory/playbook.py"] },
+    { "id": "distill", "query": "蒸馏 规则", "goldPaths": ["improve/distill.py"] },
+    { "id": "signals", "query": "失败 信号 队列", "goldPaths": ["improve/signals.py"] },
+    { "id": "worker", "query": "worker 守护 消费", "goldPaths": ["improve/worker.py"] },
+    { "id": "ablation", "query": "消融 实验", "goldPaths": ["eval/runner.py", "eval/run_all_experiments.py"] },
+    { "id": "retry-fallback", "query": "重试 降级", "goldPaths": ["core/llm.py"] },
+    { "id": "token-budget", "query": "token 预算 超限", "goldPaths": ["core/guard.py"] },
+    { "id": "mysql-store", "query": "MySQL 持久化", "goldPaths": ["core/mysql_store.py"] },
+    { "id": "redis-client", "query": "Redis 连接 客户端", "goldPaths": ["core/redis.py"] },
+    { "id": "c-state-machine", "query": "状态机 死循环", "goldPaths": ["graph/builder.py"] },
+    { "id": "c-idempotent", "query": "幂等 标记", "goldPaths": ["improve/signals.py"] },
+    { "id": "c-prompt-hardening", "query": "加固 清洗", "goldPaths": ["core/guard.py"] },
+    { "id": "c-bullet-compress", "query": "压缩 bullet", "goldPaths": ["memory/conversation.py"] },
+    { "id": "negative-websocket", "query": "websocket 长连接 推送", "goldPaths": [] },
+    { "id": "negative-payment", "query": "支付 回调 验签", "goldPaths": [] }
+  ]
+}

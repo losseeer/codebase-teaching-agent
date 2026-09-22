@@ -166,10 +166,14 @@ export class ImportService extends EventEmitter {
     const database = new TutorDatabase(repositoryPath);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
+    // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
+    // `refinement`/`monthlyBudgetUsd` 后面润色缓存与预算还要用同一份。
+    const storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
+    const withHeaderComments = storedSettings?.summaryHeaderComments === true;
     // L1 走**轻任务角色**（同一套配置、思考强制 off）：文件级摘要是量大、单条简单的活，开思考只会白烧 token。
     // 预算已降级时不传 llm ⇒ 自动落到确定性档，不在超预算时继续花钱。
     const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
-    const provider = createSummaryProvider({ llm: lightProvider });
+    const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
     // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
     // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。
     // 语法解析器是异步加载的，必须在建图前就绪；加载失败不抛错，改由 graph 记录回落原因。
@@ -178,7 +182,8 @@ export class ImportService extends EventEmitter {
     const { summaries, estimate } = await summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
       database,
-      provider
+      provider,
+      withHeaderComments
     });
     progress("building_course", 75, "正在生成微观单元和影响图");
     const graph = await enrichWithLsp(repositoryPath, baseGraph);
@@ -200,7 +205,6 @@ export class ImportService extends EventEmitter {
     // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在**源码内容不变**的时候，只比 versionStamp 抓不到，
     // 会把降级证据下算出的命名当成事实继续复用（同型坑见 docs/开发关键点问题与解决方案.md §3.6）。
     const backendStamp = hash(`${graph.semanticBackend}:${graph.parseBackend}:${JSON.stringify(graph.lspStatus)}`);
-    const storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number }>(index.repositoryId);
     const refinementCacheHit = Boolean(
       storedAnalysis?.versionStamp === versionStamp && storedCourse && refinementIsFresh(storedSettings?.refinement, {
         versionStamp,

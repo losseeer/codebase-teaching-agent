@@ -1,4 +1,4 @@
-import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -62,6 +62,11 @@ export const api = {
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => request<CostSummary>(`/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
+  /** 每仓设置视图：预算 + 「摘要参考注释」开关（默认关，见 engine summarizer）。 */
+  getRepositorySettings: (repositoryId: string) => request<{ monthlyBudgetUsd: number; summaryHeaderComments: boolean }>(`/api/repositories/${repositoryId}/settings`),
+  setSummaryHeaderComments: (repositoryId: string, enabled: boolean) => request<CostSummary & { settings: { monthlyBudgetUsd: number; summaryHeaderComments: boolean } }>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ summaryHeaderComments: enabled }) }),
+  /** 按当前开关状态重烧 L1 摘要（切开关后必须调用才生效；409=确定性档，会拒绝覆盖）。 */
+  rebuildSummaries: (repositoryId: string) => request<ImportEstimate>(`/api/repositories/${repositoryId}/summaries/rebuild`, { method: "POST", body: "{}" }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。 */

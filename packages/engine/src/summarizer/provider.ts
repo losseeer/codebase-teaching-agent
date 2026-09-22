@@ -46,13 +46,27 @@ const ROLE_LABEL: Record<FileRole, string> = {
   test: "测试"
 };
 
-const BATCH_SYSTEM_PROMPT = [
+const BATCH_SYSTEM_PROMPT_LINES = [
   "下面是一个代码仓库里若干源码文件的**结构切片**：每项含路径、行数、结构角色 role、按重要性排序的符号签名、以及依赖方向。",
   "请为每个文件写一句中文职责摘要（≤60 字），并判断它属于哪一层。",
+  "摘要必须至少点出一个切片里**真实出现**的英文标识符（类名、函数名或关键注解即可，不要求默写全部）——只写泛化中文（「负责相关业务处理」）等于没写。",
+  "同时尽量带上学习者会用来提问的中文概念词（如 缓存穿透、分布式锁、库存扣减、登录态校验），让「中文问题 ↔ 英文代码」在摘要这一层就对上；概念词以切片事实能支持为限。",
   "只陈述给定信息能支持的事实：不猜测实现细节、不评价代码质量、不编造没出现过的符号名。",
   "role 取值：core（执行主干）、support（支撑逻辑）、infra（配置/存储/日志/网络客户端等设施接入）、tool（末端工具）、test（测试）。切片里已有一个结构规则给出的 role，若你的判断不同，以你的判断为准并写进 role 字段。",
   '严格输出 JSON 数组，长度与输入一致，每项：{"path":"原样返回路径","summary":"…","role":"core|support|infra|tool|test"}。不要输出 JSON 以外的任何文字。'
-].join("\n");
+];
+
+/** 「摘要参考注释」开时追加的一行（只在开着的仓出现——关着的仓提示词逐字节不变）。 */
+const HEADER_COMMENT_PROMPT_LINE = "部分切片可能带 headerComment 字段（文件头注释摘录）：中文概念词可以从中取，但英文标识符仍以符号名为准；注释与符号冲突时以符号为准，勿抄注释里的样板话。";
+
+/** 导出便于测试断言「关=逐字节旧提示词」，以及 Ollama 档共用同一基础提示。 */
+export function batchSystemPrompt(withHeaderComments: boolean): string {
+  const lines = [...BATCH_SYSTEM_PROMPT_LINES];
+  if (withHeaderComments) lines.splice(4, 0, HEADER_COMMENT_PROMPT_LINE);
+  return lines.join("\n");
+}
+
+const BATCH_SYSTEM_PROMPT = batchSystemPrompt(false);
 
 /**
   解析批量回复：按路径建索引（不按下标硬对，模型偶尔会漏项或换序）。
@@ -112,7 +126,7 @@ export class LocalSummaryProvider implements SummaryProvider {
 export class LlmSummaryProvider implements SummaryProvider {
   readonly name = "light tier LLM";
 
-  constructor(private readonly llm: LlmProvider) {}
+  constructor(private readonly llm: LlmProvider, private readonly withHeaderComments = false) {}
 
   get modelVersion(): string {
     return this.llm.modelVersion;
@@ -121,7 +135,7 @@ export class LlmSummaryProvider implements SummaryProvider {
   async summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]> {
     if (!slices.length) return [];
     const response = await this.llm.complete({
-      system: BATCH_SYSTEM_PROMPT,
+      system: batchSystemPrompt(this.withHeaderComments),
       user: JSON.stringify(slices),
       maxTokens: BATCH_MAX_TOKENS,
       temperature: 0,
@@ -178,9 +192,9 @@ export class OllamaSummaryProvider implements SummaryProvider {
   默认值是有意选的：L1 的价值就在「语义摘要」，默认不烧 token 等于这个能力永远不生效。
   但要能一键关掉，所以留了 `off`；费用闸门在调用方（预算降级时传不进 llm）。
 */
-export function createSummaryProvider(input: { llm?: LlmProvider } = {}): SummaryProvider {
+export function createSummaryProvider(input: { llm?: LlmProvider; withHeaderComments?: boolean } = {}): SummaryProvider {
   const mode = (process.env.TUTOR_SUMMARY_PROVIDER ?? "").trim().toLowerCase();
   if (mode === "ollama") return new OllamaSummaryProvider();
   if (mode === "off" || mode === "none" || mode === "local") return new LocalSummaryProvider();
-  return input.llm ? new LlmSummaryProvider(input.llm) : new LocalSummaryProvider();
+  return input.llm ? new LlmSummaryProvider(input.llm, input.withHeaderComments ?? false) : new LocalSummaryProvider();
 }
