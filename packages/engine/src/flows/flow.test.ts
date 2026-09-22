@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry, type FlowDigestSummary } from "./flow.js";
+import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry } from "./flow.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
 import { mkdtempSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,7 @@ import { TutorDatabase } from "../store/database.js";
 const ENTRY = { path: "main.py", line: 1, label: "package main" };
 
 /** 大多数用例只关心结构与角色，不关心 L1 摘要，用空表。 */
-const NO_SUMMARIES = new Map<string, FlowDigestSummary>();
+const NO_SUMMARIES = new Map<string, string>();
 
 function indexOf(paths: { path: string; lines: number }[]): RepositoryIndex {
   return {
@@ -288,11 +288,11 @@ describe("generateRepositoryFlow（含降级）", () => {
     // 换模型必须重算：同一个问题在不同模型上不是同一个答案
     await generateRepositoryFlowCached({ ...base, entry: ENTRY, provider: { ...provider, modelVersion: "stub-2" } });
     expect(complete).toHaveBeenCalledTimes(2);
-    // 补上一条已确认的 L1 摘要 → 清单里多了 summary 字段 → 输入确实变了，重算
-    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", { summary: "建图。" }]]) });
+    // 补上一条 L1 摘要 → 清单里多了 summary 字段 → 输入确实变了，重算
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", "建图。"]]) });
     expect(complete).toHaveBeenCalledTimes(3);
-    // 摘要覆盖不足时正文被隐去，但 withheldSummaries 计数会进 digest——「有几份职责未确认」本身是告诉模型的信息
-    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", { summary: "建图。", coverageLow: true }]]) });
+    // 摘要文本换一份 → digest 变 → 键也变（digest 哈希就是键的一部分）
+    await generateRepositoryFlowCached({ ...base, entry: ENTRY, summaries: new Map([["graph/builder.py", "构建执行图。"]]) });
     expect(complete).toHaveBeenCalledTimes(4);
   });
 
@@ -659,29 +659,28 @@ describe("边级校验（L0 监督 L2）", () => {
 });
 
 describe("L1 摘要表进流程证据", () => {
-  it("已确认的摘要随文件一起给出；覆盖不足的摘要被隐去并在 withheldSummaries 里计数", () => {
+  it("摘要一律随文件给出（09-22 取消 coverageLow 扣用；低判只是没复述符号名，职责描述仍是线索）", () => {
     const dir = mkdtempSync(join(tmpdir(), "flow-digest-"));
     writeFileSync(join(dir, "main.py"), "def main():\n    pass\n");
-    const summaries = new Map<string, FlowDigestSummary>([
-      ["main.py", { summary: "CLI 入口，解析参数后构建执行图。" }],
-      ["graph/nodes.py", { summary: "节点实现。", coverageLow: true }], // 覆盖不足 ⇒ 不可信
-      ["graph/builder.py", { summary: "把节点注册成可执行图。" }]
+    const summaries = new Map<string, string>([
+      ["main.py", "CLI 入口，解析参数后构建执行图。"],
+      ["graph/nodes.py", "节点实现。"],
+      ["graph/builder.py", "把节点注册成可执行图。"]
     ]);
     const digest = buildFlowDigest(dir, INDEX, analysisOf(), ENTRY, summaries);
     const byPath = new Map(digest.files.map((file) => [file.path, file]));
     expect(byPath.get("main.py")?.summary).toBe("CLI 入口，解析参数后构建执行图。");
     expect(byPath.get("graph/builder.py")?.summary).toBe("把节点注册成可执行图。");
-    // 覆盖不足的摘要不出现，但要在计数里如实说明，不能假装「这个文件没摘要」
-    expect(byPath.get("graph/nodes.py")?.summary).toBeUndefined();
-    expect(digest.withheldSummaries).toBe(1);
+    expect(byPath.get("graph/nodes.py")?.summary).toBe("节点实现。");
+    // 字段整体出清：digest 上不再有 withheldSummaries 这个读数
+    expect("withheldSummaries" in digest).toBe(false);
   });
 
-  it("没有摘要表时字段整体缺席、计数为 0（不是空字符串这种假值）", () => {
+  it("没有摘要表时字段整体缺席（不是空字符串这种假值）", () => {
     const dir = mkdtempSync(join(tmpdir(), "flow-digest-"));
     writeFileSync(join(dir, "main.py"), "def main():\n    pass\n");
     const digest = buildFlowDigest(dir, INDEX, analysisOf(), ENTRY, NO_SUMMARIES);
     expect(digest.files.every((file) => !("summary" in file))).toBe(true);
-    expect(digest.withheldSummaries).toBe(0);
   });
 });
 

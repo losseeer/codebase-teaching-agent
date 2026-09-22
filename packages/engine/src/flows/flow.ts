@@ -91,7 +91,7 @@ export const SYSTEM_PROMPT = [
   `   注意：主调用**不会**给你那些文件的完整代码（只有入口前若干行），所以本次 origin 只能写 static 或 inferred——声称「在源码里读到」会被改标为推断；code 是后续核实环节读过正文之后才能给的标记。branches 仍用于分叉的文字说明，回环除了 loopsTo 也应在 edges 里有一条从后向前的回边。`,
   `7. uncovered 必填：列出你这次没能确认的部分（怀疑参与但证据不足的文件、看不清的分支），每条 ≤${MAX_UNCOVERED_TEXT} 字；确实没有就填空数组。`,
   "8. detail 只做简要描述：一句话讲清该环节**做什么**即止，不要展开函数名、字段、参数或实现步骤——看细节是点开环节之后的事，展开只会把卡片和抽屉撑爆。",
-  "证据字段说明：files 是参与执行的文件详表（含符号名、依赖方向与角色 role，role 取值 core=执行主干 / infra=配置存储日志网络等设施接入 / support=支撑逻辑 / tool=末端工具 / test=测试）；带 summary 的文件有一条**已确认**的一句话职责，没有 summary 的文件即职责未确认——`withheldSummaries` 说明其中有多少条摘要因覆盖不足被隐去，别把它们当已知事实；directoryTree 是全部被索引文件的目录骨架，目录后的 (N) 是该目录下被索引的文件数，用来看详表之外还有什么；hotspots 是 git 改动次数最多的文件，改动频繁处通常承载主流程；callChain 是静态跨文件调用链（对回调注册这类编排是盲的，不要照抄）。",
+  "证据字段说明：files 是参与执行的文件详表（含符号名、依赖方向与角色 role，role 取值 core=执行主干 / infra=配置存储日志网络等设施接入 / support=支撑逻辑 / tool=末端工具 / test=测试）；带 summary 的文件有一句由摘要器**基于该文件正文**写出的一句话职责，用它定位方向、细节以符号与代码为准，没有 summary 的文件没有职责描述；directoryTree 是全部被索引文件的目录骨架，目录后的 (N) 是该目录下被索引的文件数，用来看详表之外还有什么；hotspots 是 git 改动次数最多的文件，改动频繁处通常承载主流程；callChain 是静态跨文件调用链（对回调注册这类编排是盲的，不要照抄）。",
   `严格输出 JSON：{"title":"≤${MAX_TITLE}字","summary":"≤${MAX_SUMMARY}字",`,
   `"stages":[{"title":"≤${MAX_STAGE_TITLE}字","detail":"一句话简要说明、≤${MAX_STAGE_DETAIL}字","kind":"entry|stage|decision|loop|exit",`,
   `"files":[{"path":"清单中的路径","line":1,"note":"≤${MAX_FILE_NOTE}字"}],"branches":["≤${MAX_BRANCH_TEXT}字"],"loopsTo":1}],`,
@@ -110,16 +110,10 @@ export interface FlowDigestFile {
   /** 结构角色（core 主干 / infra 设施 / support 支撑 / tool 末端 / test 测试），与摘要表同一套分类。 */
   role: FileRole;
   /**
-    该文件的**已确认**一句话职责（来自 L1 摘要表）。覆盖不足的摘要**不会**出现在这里——
-    摘要不可信就当没有，别把猜测喂进去当事实（有多少条被隐去由 `withheldSummaries` 说明）。
+    该文件的一句话职责（来自 L1 摘要表，基于正文生成）。
+    09-22 起不再按 coverageLow 扣用——低判行只是没复述符号名，职责描述本身仍是定位线索。
   */
   summary?: string;
-}
-
-/** L1 摘要表在流程证据里的投影：只需要「一句话职责」和「它可不可信」。 */
-export interface FlowDigestSummary {
-  summary: string;
-  coverageLow?: boolean;
 }
 
 export interface FlowDigest {
@@ -138,8 +132,6 @@ export interface FlowDigest {
   directoryTreeTruncated: boolean;
   /** git 改动热点；**已过滤到被索引的文件**，避免模型引用一个不在索引里的路径 */
   hotspots: Hotspot[];
-  /** 有多少个文件的摘要因**覆盖不足**被隐去（那些文件的职责未确认，别当已知事实用） */
-  withheldSummaries: number;
 }
 
 /**
@@ -155,7 +147,7 @@ export function buildFlowDigest(
   index: RepositoryIndex,
   analysis: RepositoryAnalysis,
   entry: SourceAnchor,
-  summaries: Map<string, FlowDigestSummary>
+  summaries: Map<string, string>
 ): FlowDigest {
   const inDegree = new Map<string, number>();
   for (const targets of Object.values(analysis.graph.imports)) {
@@ -183,8 +175,8 @@ export function buildFlowDigest(
         imports: (analysis.graph.imports[file.path] ?? []).slice(0, MAX_IMPORTS_PER_FILE),
         importedBy: inDegree.get(file.path) ?? 0,
         role: roleOf(roles, file.path),
-        // 摘要只放**已确认**的：覆盖不足等于这条摘要不可信，宁可缺字段也不把它当事实喂进去
-        ...(known && !known.coverageLow ? { summary: known.summary } : {})
+        // 摘要不再按覆盖度扣用（09-22 拍板）：anchor-v2 判低的残余是「纯中文行为描述」，扣掉等于把职责线索也丢了
+        ...(known ? { summary: known } : {})
       };
     })
     .filter((file) => file.path === entry.path || file.imports.length || file.importedBy > 0 || file.symbols.length)
@@ -217,8 +209,7 @@ export function buildFlowDigest(
     callChainTruncated: evidence.truncated || callChain.length > MAX_CALL_CHAIN,
     directoryTree: tree.lines,
     directoryTreeTruncated: tree.truncated,
-    hotspots,
-    withheldSummaries: files.filter((file) => summaries.get(file.path)?.coverageLow).length
+    hotspots
   };
 }
 
@@ -252,7 +243,7 @@ export interface GenerateFlowInput {
   entry: SourceAnchor;
   provider: LlmProvider;
   /** L1 摘要表（按路径索引）；缺某个文件就是「该文件职责未确认」。 */
-  summaries: Map<string, FlowDigestSummary>;
+  summaries: Map<string, string>;
   /** 持久层（`layer_cache` 表）。缺省时只走内存缓存——测试与降级路径不落盘。 */
   database?: TutorDatabase;
 }
@@ -610,7 +601,7 @@ function asText(value: unknown, limit: number): string {
   所以只要这个入口还在被访问，缓存就一直有效。
 
   为什么续期是安全的（此处原先靠全仓 `versionStamp` 兜底）：digest 变了键就变，而 digest 涵盖
-  入口、文件清单与符号、跨文件依赖、静态调用链证据、已确认的 L1 摘要——仓库改到这些里的任何一处、
+  入口、文件清单与符号、跨文件依赖、静态调用链证据、L1 摘要——仓库改到这些里的任何一处、
   换了模型，都会翻键。反过来说，digest 一字不变时模型看到的问题就一字不变，缓存里那条流程正是它
   当下会给出的答案；LSP 从降级恢复但结构事实没变，也落在这一类里（恢复会改 digest 时才需要重算）。
   所以不需要再论证「哪些变更会作废流程」。

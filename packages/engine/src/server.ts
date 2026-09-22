@@ -112,22 +112,20 @@ function repositorySettings(repositoryPath: string, repositoryId: string): { mon
   return { monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd };
 }
 
-/** L1 摘要表 → 流程证据需要的形状（只保留「一句话职责」与「它可不可信」）。 */
-function latestFileSummaries(repositoryPath: string): Map<string, { summary: string; coverageLow?: boolean }> {
+/** L1 摘要表 → `path → 一句话职责`（流程证据、search 语料、推荐入口共用）。 */
+function latestFileSummaries(repositoryPath: string): Map<string, string> {
   const database = new TutorDatabase(repositoryPath);
   const rows = database.getLatestFileSummaries();
   database.close();
-  return new Map(rows.map((row) => [row.path, { summary: row.summary, ...(row.coverageLow === undefined ? {} : { coverageLow: row.coverageLow }) }]));
+  return new Map(rows.map((row) => [row.path, row.summary]));
 }
 
-/** search_code 语料：已分析路径 + 图符号表 + L1 已确认职责（coverageLow 的不参与——低覆盖摘要会误导定位）。
+/** search_code 语料：已分析路径 + 图符号表 + L1 一句话职责。
+    coverageLow 不再扣用（09-22 拍板）：anchor-v2 判低的残余只是「纯中文行为描述、没复述符号名」，
+    扣掉等于把职责线索也丢出语料；判据保留为 metrics 读数。
     每次请求现建：纯 CPU 毫秒级、且永远跟随最新一次导入的产物，不值得也没有失效语义可缓存。 */
 function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>): SearchCorpus {
-  const summaries = new Map<string, string>();
-  for (const [path, item] of latestFileSummaries(repository.path)) {
-    if (item.coverageLow !== true) summaries.set(path, item.summary);
-  }
-  return buildSearchCorpus(repository.index, repository.analysis, summaries);
+  return buildSearchCorpus(repository.index, repository.analysis, latestFileSummaries(repository.path));
 }
 
 /** GUI 上送的 scopePaths（架构图 chip 的文件清单）：只留非空字符串、去重封顶。它是提示而非裁决——未知路径由引擎交集丢弃。 */
@@ -309,7 +307,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   try {
     const suggestion = await suggestModuleEntriesCached({
       tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
-      fileSummaries: new Map([...latestFileSummaries(repository.path)].map(([path, item]) => [path, item.summary])),
+      fileSummaries: latestFileSummaries(repository.path),
       // 零分候选的补位信号（P3）：入口点在前、高频改动的热点文件其次——比路径字典序靠谱得多
       boostPaths: [...new Set([
         ...(repository.analysis.graph.entrypoints ?? []).map((entrypoint) => entrypoint.path),

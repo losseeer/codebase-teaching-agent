@@ -280,7 +280,7 @@ for (const repo of perRepo) {
     // anchor-v2（09-22 判据换尺子）：命中缓存的行会被就地重算并打上 rule 标记；新旧混杂期间分开报
     const v2 = [...latest.values()].filter((row) => row.rule === "anchor-v2");
     const lowV2 = v2.filter((row) => row.coverageLow === true).length;
-    emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，这部分职责不进 search 语料/作用域段）；其中 anchor-v2 新判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);
+    emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，09-22 起仅作读数、不再扣下游用途）；其中 anchor-v2 新判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);
   } finally {
     db.close();
   }
