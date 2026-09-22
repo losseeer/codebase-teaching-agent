@@ -19,7 +19,7 @@ import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/service.js";
 import { indexRepository } from "./indexer/indexer.js";
-import { id, isWithin } from "./lib.js";
+import { id, isWithin, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./policy/policy.js";
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/provider.js";
@@ -448,6 +448,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (result.scopeDegraded) {
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
+    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -491,6 +492,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (result.scopeDegraded) {
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
+    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
     send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -511,10 +513,12 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
     if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider, style: validateStyle(request.body?.style) });
-    if (result.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     });
+    journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply));
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -657,6 +661,8 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
   if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
   const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+  // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕；降级轮也记（裁判要看到「这一轮没走 LLM」的成品）
+  journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
   // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
   for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
     journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);

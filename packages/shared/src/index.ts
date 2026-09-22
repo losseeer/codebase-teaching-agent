@@ -526,6 +526,10 @@ export type JournalEventType =
   | "file_read"
   | "code_search"
   | "scope_degraded"
+  /** 回合文本落盘（2026-09-22 拍板口径）：payload = scene(teach|map_chat|practice_chat) + question/answer
+    双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
+    表达质量裁判）的被测输入源。 */
+  | "turn_text"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"

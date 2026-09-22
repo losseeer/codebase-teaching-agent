@@ -12,7 +12,7 @@ const eventTypes = new Set<JournalEventType>([
   // 引擎侧（学习语义）。teach_moment 已随 companion 功能移除（2026-09-22）；读侧不校验类型，历史事件仍可读。
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event",
   "style_shift", "unassisted_test", "action_veto",
-  "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search", "scope_degraded",
+  "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search", "scope_degraded", "turn_text",
   // UI 侧（交互动作）：由 GUI 经 POST /api/repositories/:id/journal 写入
   "flow_node_selected", "file_anchored", "file_opened", "line_located",
   "module_switched", "exercise_submitted", "repository_switched",

@@ -28,9 +28,12 @@
    此处与早前「接入点」清单里的 `TutorPage: 风格滑杆 → style_shift` 冲突，**以契约表为准**。
 2. **引擎侧事件前端不得发射**：`unit_mastered` / `hint_depth` / `dependency_event` / `action_veto` /
    `token_usage` / `file_read` / `unassisted_test` / `exercise_result` / `exercise_declined` /
-   `exercise_generated`
+   `exercise_generated` / `turn_text`
    都由引擎在状态机、工具循环与成本核算里写。前端只写「用户做了什么」，不写「引擎得出了什么」。
    `exercise_submitted`（用户提交）与 `exercise_result`（判分结果）是两件事，各写各的。
+   `turn_text`（2026-09-22 口径）是「消息全文不落盘」红线的重新谈判结果：三种对话（teach / map_chat /
+   practice_chat）的问题+回复双边进 journal，各截 2000 字带 `*_truncated` 留痕，永久追加、无 TTL 无开关——
+   它是 B 档第 2/3 刀（教学法不变量机检、表达质量裁判）的被测输入源，只能由引擎写。
 
 ### 字段与约束
 
