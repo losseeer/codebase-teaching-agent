@@ -1,4 +1,5 @@
 import type { RepositoryFlow } from "@codebase-tutor/shared";
+import { styleBand } from "@codebase-tutor/shared";
 import { citesOwnedFile } from "../flows/deepen.js";
 
 /**
@@ -155,4 +156,78 @@ export function scoreSearchArm(cases: SearchCase[], search: (query: string) => s
     meanRecall: perCase.length ? recallSum / perCase.length : 0,
     negatives
   };
+}
+
+// ---------- 第 2 刀：教学法不变量机检（数据源 = journal 的 turn_text + hint_depth + style_shift） ----------
+
+/** 一个教学回合的机检视图：由 runner 从 journal 装配，判分器保持纯函数。 */
+export interface TeachTurn {
+  sessionId: string;
+  at: string;
+  question: string;
+  answer: string;
+  /** 回合后状态机阶段（hint_depth.payload.stage）。 */
+  stage: string;
+  /** 该回合生效的教学法/风格（回合前最近一次 style_shift 快照）。 */
+  pedagogy: string;
+  style: number;
+  /** 回复落盘时被 2000 字截断——引用核对会看到半截引用，这条不参与引用判分。 */
+  answerTruncated: boolean;
+}
+
+export interface InvariantCheck {
+  id: string;
+  label: string;
+  /** 适用回合数（不适用 ≠ 通过，分母如实缩）。 */
+  applicable: number;
+  pass: number;
+  misses: { at: string; sessionId: string; excerpt: string }[];
+  /** 该条不变量的设计出处，报告里可核对。 */
+  source: string;
+}
+
+export interface TeachInvariantScore {
+  turns: number;
+  skippedTruncated: number;
+  checks: InvariantCheck[];
+}
+
+const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
+
+/**
+  只判**设计上写了保证、且文本层可核对**的三条不变量（出处见 source 字段）；
+  「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给第 3 刀裁判。
+  判「通过」的口径刻意保守：如问号检查只抓「整条回复一个问句都没有」，
+  代码示例里的三元 `?` 可能造成极个别假通过——读数只用于回归对比，不当绝对分。
+  */
+export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
+  const socratic: InvariantCheck = { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", applicable: 0, pass: 0, misses: [], source: "policy.ts「每轮保留一个可验证的问题」" };
+  const refs: InvariantCheck = { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", applicable: 0, pass: 0, misses: [], source: "锚点可靠性纪律（第 1 刀同一口径）" };
+  const binding: InvariantCheck = { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", applicable: 0, pass: 0, misses: [], source: "policy.ts「将问题绑定到当前源码锚点」" };
+  let skippedTruncated = 0;
+
+  for (const turn of turns) {
+    if (turn.pedagogy === "socratic" && turn.stage !== "confirmed") {
+      socratic.applicable += 1;
+      if (/[?？]/.test(turn.answer)) socratic.pass += 1;
+      else socratic.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: excerpt(turn.answer) });
+    }
+    if (turn.answerTruncated) {
+      // 截断行的末尾可能悬着半截引用，判它等于误判——缩出分母，报告里单独计数
+      skippedTruncated += 1;
+    } else {
+      const check = scoreReferences([turn.answer], files);
+      if (check.total > 0) {
+        refs.applicable += 1;
+        if (check.ok === check.total) refs.pass += 1;
+        else refs.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: check.problems.map((problem) => `${problem.raw}（${problem.why}）`).join("、") });
+      }
+    }
+    if (styleBand(turn.style) !== "plain") {
+      binding.applicable += 1;
+      if (/[A-Za-z][A-Za-z0-9]{4,}/.test(turn.answer)) binding.pass += 1;
+      else binding.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: excerpt(turn.answer) });
+    }
+  }
+  return { turns: turns.length, skippedTruncated, checks: [socratic, refs, binding] };
 }

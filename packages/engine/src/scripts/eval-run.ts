@@ -8,7 +8,8 @@ import { indexRepository } from "../indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { buildSearchCorpus, executeSearchCode } from "../source/search-code.js";
-import { scoreFlowArtifacts, scoreSearchArm, type SearchCase } from "../eval/scorers.js";
+import { readJournal } from "../store/journal.js";
+import { scoreFlowArtifacts, scoreSearchArm, scoreTeachInvariants, type SearchCase, type TeachTurn } from "../eval/scorers.js";
 
 /**
   B 档评测 runner（第 1 刀：零 token 确定性判分，设计方案 §10 第 2 档的机器检查部分）。
@@ -160,4 +161,55 @@ for (const { name, doc } of caseDocs) {
 }
 if (!anyCaseRan) emit("- **未执行**：没有匹配当前仓库的用例文件。");
 emit();
+
+// ---------- 4. 教学法不变量机检（第 2 刀；数据源 = journal turn_text，零 token 只读） ----------
+emit("## 4. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类留第 3 刀裁判）");
+const journalEvents = readJournal(repositoryPath);
+const teachTurns = assembleTeachTurns(journalEvents);
+if (!teachTurns.length) {
+  emit("- **未执行**：journal 里没有 teach 回合（`turn_text` 上线后尚未产生真实教学对话，先攒样本）。");
+} else {
+  const score = scoreTeachInvariants(teachTurns, files);
+  emit(`- 数据源：journal ${journalEvents.length} 事件 → ${score.turns} 个 teach 回合（回复截断致引用核对跳过 ${score.skippedTruncated} 条）`);
+  for (const check of score.checks) {
+    emit(`- ${check.label}：**${pct(check.pass, check.applicable)}**｜适用 ${check.applicable} 回合｜出处：${check.source}`);
+    for (const miss of check.misses.slice(0, 8)) emit(`  - ⚠️ ${miss.at} 会话 ${miss.sessionId.slice(0, 8)}：${miss.excerpt}`);
+    if (check.misses.length > 8) emit(`  - …另有 ${check.misses.length - 8} 条未过`);
+  }
+}
+emit();
 console.log(out.join("\n"));
+
+/** 从 journal 事件流装配 teach 回合的机检视图：stage 取本回合最近的 hint_depth，pedagogy/style 取回合前最后一次 style_shift。 */
+function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[] {
+  const bySession = new Map<string, typeof events>();
+  for (const event of events) {
+    if (!event.sessionId) continue;
+    const list = bySession.get(event.sessionId) ?? [];
+    list.push(event);
+    bySession.set(event.sessionId, list);
+  }
+  const turns: TeachTurn[] = [];
+  for (const [sessionId, list] of bySession) {
+    const chrono = [...list].sort((a, b) => a.at.localeCompare(b.at));
+    const hints = chrono.filter((e) => e.type === "hint_depth");
+    const shifts = chrono.filter((e) => e.type === "style_shift");
+    for (const event of chrono) {
+      if (event.type !== "turn_text" || event.payload.scene !== "teach") continue;
+      const at = event.at;
+      const hint = hints.find((h) => h.at >= at) ?? hints.at(-1);
+      const shift = [...shifts].reverse().find((s) => s.at <= at) ?? shifts[0];
+      turns.push({
+        sessionId,
+        at,
+        question: String(event.payload.question ?? ""),
+        answer: String(event.payload.answer ?? ""),
+        stage: typeof hint?.payload.stage === "string" ? hint.payload.stage : "",
+        pedagogy: typeof shift?.payload.pedagogy === "string" ? shift.payload.pedagogy : "socratic",
+        style: typeof shift?.payload.style === "number" ? shift.payload.style : 50,
+        answerTruncated: event.payload.answer_truncated === true
+      });
+    }
+  }
+  return turns.sort((a, b) => a.at.localeCompare(b.at));
+}

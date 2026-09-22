@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryFlow } from "@codebase-tutor/shared";
-import { scoreFlowArtifacts, scoreReferences, scoreSearchArm } from "./scorers.js";
+import { scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, type TeachTurn } from "./scorers.js";
 
 /**
   B 档判分器：全部零 token、纯函数。这里守的是判分口径本身——
@@ -86,5 +86,49 @@ describe("检索 gold 命中", () => {
     expect(arm.perCase[1].hit).toBe(false);
     expect(arm.hitRate).toEqual({ numerator: 1, denominator: 2 });
     expect(arm.negatives).toEqual([{ id: "neg", wrongHits: ["x/one.py"] }]);
+  });
+});
+
+describe("教学法不变量机检（第 2 刀）", () => {
+  const files = new Map([["src/graph/nodes.py", 20]]);
+  const turn = (over: Partial<TeachTurn>): TeachTurn =>
+    ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", stage: "orient", pedagogy: "socratic", style: 50, answerTruncated: false, ...over });
+
+  it("苏格拉底未确认轮必须留问句；confirmed 与 explanatory 缩出分母", () => {
+    const score = scoreTeachInvariants([
+      turn({ answer: "先看 builder.py 的注册顺序，你觉得哪一步会先执行？" }),
+      turn({ answer: "这里没有问句，直接讲结论。" }),
+      turn({ answer: "很好，这一节到此掌握。", stage: "confirmed" }),
+      turn({ answer: "直接解释：状态机在此汇聚。", pedagogy: "explanatory" })
+    ], files);
+    const socratic = score.checks.find((check) => check.id === "socratic-question");
+    expect(socratic?.applicable).toBe(2);
+    expect(socratic?.pass).toBe(1);
+    expect(socratic?.misses[0]?.excerpt).toContain("没有问句");
+  });
+
+  it("引用核落地：假路径回合进 misses；无引用的回合不适用；截断行只计数", () => {
+    const score = scoreTeachInvariants([
+      turn({ answer: "见 src/graph/nodes.py:8，这一步为什么放锁？" }),
+      turn({ answer: "见 src/graph/ghost.py:8，下一步看哪里？" }),
+      turn({ answer: "纯概念，无引用。这一步对吗？" }),
+      turn({ answer: "后半截引用被切 in src/grap", answerTruncated: true })
+    ], files);
+    const refs = score.checks.find((check) => check.id === "reference-grounding");
+    expect(refs?.applicable).toBe(2);
+    expect(refs?.pass).toBe(1);
+    expect(refs?.misses[0]?.excerpt).toContain("ghost.py");
+    expect(score.skippedTruncated).toBe(1);
+  });
+
+  it("点名标识符只判非通俗档；短标识符（<5 字符）不算点名", () => {
+    const score = scoreTeachInvariants([
+      turn({ style: 50, answer: "RedisKey 这里为什么加前缀？" }),
+      turn({ style: 50, answer: "为什么要加前缀？" }),
+      turn({ style: 90, answer: "咱们打个比方，锁就像门闩，你说呢？" })
+    ], files);
+    const binding = score.checks.find((check) => check.id === "anchor-binding");
+    expect(binding?.applicable).toBe(2);
+    expect(binding?.pass).toBe(1);
   });
 });
