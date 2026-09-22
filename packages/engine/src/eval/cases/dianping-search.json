@@ -1,0 +1,101 @@
+{
+  "$comment": "检索 gold 用例（B 档）。query 一律**关键词式**——与模型在 tool-loop 里实际会写的 search_code 查询同型（词法检索把整句中文当一个子串，整句注定零命中，那不是被测对象）。goldPaths 只列「答案所在」的最小集合，建集时逐例 grep 核实概念确在该文件；负例 goldPaths=[]，期望零命中。",
+  "repository": "dianping",
+  "cases": [
+    {
+      "id": "login-password",
+      "query": "登录 密码 校验",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/UserServiceImpl.java"
+      ]
+    },
+    {
+      "id": "sms-rate-limit",
+      "query": "短信 验证码 频率",
+      "goldPaths": [
+        "src/main/java/com/hmdp/utils/SmsRateLimiter.java"
+      ]
+    },
+    {
+      "id": "cache-penetration",
+      "query": "缓存穿透 空值",
+      "goldPaths": [
+        "src/main/java/com/hmdp/utils/CacheClient.java"
+      ]
+    },
+    {
+      "id": "seckill-lua-stock",
+      "query": "秒杀 库存 扣减",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/VoucherOrderServiceImpl.java"
+      ]
+    },
+    {
+      "id": "order-delay-cancel",
+      "query": "延迟队列 订单 取消",
+      "goldPaths": [
+        "src/main/java/com/hmdp/listener/OrderDelayListener.java"
+      ]
+    },
+    {
+      "id": "token-refresh",
+      "query": "token 刷新 拦截器",
+      "goldPaths": [
+        "src/main/java/com/hmdp/interceptor/RefreshTokenInterceptor.java"
+      ]
+    },
+    {
+      "id": "blog-feed-push",
+      "query": "点赞 滚动分页 推送",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/BlogServiceImpl.java"
+      ]
+    },
+    {
+      "id": "shop-search",
+      "query": "搜索 店铺 关键字",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/ShopSearchServiceImpl.java"
+      ]
+    },
+    {
+      "id": "pay-callback",
+      "query": "支付 回调 验签",
+      "goldPaths": [
+        "src/main/java/com/hmdp/utils/PaymentCallbackVerifier.java"
+      ]
+    },
+    {
+      "id": "rate-limit-aspect",
+      "query": "限流 切面",
+      "goldPaths": [
+        "src/main/java/com/hmdp/aspect/RateLimitAspect.java"
+      ]
+    },
+    {
+      "id": "negative-invoice",
+      "query": "发票 税号",
+      "goldPaths": []
+    },
+    {
+      "id": "negative-kafka",
+      "query": "kafka 分区 再均衡",
+      "goldPaths": []
+    },
+    {
+      "id": "en-password",
+      "query": "encode password login",
+      "goldPaths": [
+        "src/main/java/com/hmdp/service/impl/UserServiceImpl.java"
+      ]
+    },
+    {
+      "id": "en-send-code",
+      "query": "send code sms",
+      "goldPaths": [
+        "src/main/java/com/hmdp/utils/SmsRateLimiter.java",
+        "src/main/java/com/hmdp/service/impl/UserServiceImpl.java"
+      ]
+    }
+  ]
+}

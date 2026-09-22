@@ -221,7 +221,7 @@ export async function deepenInferredEdges(input: {
   现在允许「完整路径 / 目录后缀 / 裸文件名」，但必须**整段相等**：`IShopServiceImpl.java`
   不能冒充 `ShopServiceImpl.java`，`core/redis.py` 依然对不上任何一端。
 */
-function citesOwnedFile(evidence: string, ownedPaths: string[]): boolean {
+export function citesOwnedFile(evidence: string, ownedPaths: string[]): boolean {
   for (const match of evidence.matchAll(/[\w./\\-]+\.[A-Za-z0-9]+/g)) {
     const token = match[0].replace(/\\/g, "/");
     if (ownedPaths.some((path) => path === token || path.endsWith(`/${token}`))) return true;
