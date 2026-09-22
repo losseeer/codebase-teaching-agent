@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { CompanionSuggestion, CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 5;
@@ -68,21 +68,11 @@ export class TutorDatabase {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(repository_id, exercise_id)
       );
-      CREATE TABLE IF NOT EXISTS companion_suggestions (
-        repository_id TEXT NOT NULL,
-        suggestion_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        suggestion_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(repository_id, suggestion_id)
-      );
       CREATE TABLE IF NOT EXISTS layer_cache (
         cache_key TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
         at INTEGER NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS companion_suggestions_status ON companion_suggestions(repository_id, status, created_at DESC);
     `);
     const current = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version: number } | undefined;
     if (!current) {
@@ -262,25 +252,6 @@ export class TutorDatabase {
   saveReviewSchedule(repositoryId: string, schedule: ReviewSchedule): void {
     this.db.prepare("INSERT OR REPLACE INTO review_schedule(repository_id, exercise_id, unit_id, schedule_json, updated_at) VALUES (?, ?, ?, ?, ?)")
       .run(repositoryId, schedule.exerciseId, schedule.unitId, JSON.stringify(schedule), new Date().toISOString());
-  }
-
-  getCompanionSuggestion(repositoryId: string, suggestionId: string): CompanionSuggestion | undefined {
-    const row = this.db.prepare("SELECT suggestion_json FROM companion_suggestions WHERE repository_id = ? AND suggestion_id = ?")
-      .get(repositoryId, suggestionId) as { suggestion_json: string } | undefined;
-    return row ? JSON.parse(row.suggestion_json) as CompanionSuggestion : undefined;
-  }
-
-  getCompanionSuggestions(repositoryId: string, statuses: CompanionSuggestion["status"][] = ["pending"]): CompanionSuggestion[] {
-    if (!statuses.length) return [];
-    const placeholders = statuses.map(() => "?").join(", ");
-    const rows = this.db.prepare(`SELECT suggestion_json FROM companion_suggestions WHERE repository_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC`).all(repositoryId, ...statuses) as { suggestion_json: string }[];
-    return rows.map((row) => JSON.parse(row.suggestion_json) as CompanionSuggestion);
-  }
-
-  saveCompanionSuggestion(repositoryId: string, suggestion: CompanionSuggestion): void {
-    const now = new Date().toISOString();
-    this.db.prepare("INSERT OR REPLACE INTO companion_suggestions(repository_id, suggestion_id, status, suggestion_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(repositoryId, suggestion.id, suggestion.status, JSON.stringify(suggestion), suggestion.createdAt, now);
   }
 
   close(): void {

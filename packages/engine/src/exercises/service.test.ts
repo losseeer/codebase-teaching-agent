@@ -203,6 +203,8 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
+    // 每次「送达」都留痕：漏斗分母要分得清 llm 新生成与缓存复用
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source)).toEqual(["llm", "cache", "llm"]);
   });
 
   it("换模型 = 换一道题：不共用缓存，也不共用 id（旧题仍可按 id 回查判分）", async () => {
@@ -219,13 +221,14 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     database.close();
   });
 
-  it("主题与仓库零命中时不调用 LLM，直接抛出可换的标签提示", async () => {
+  it("主题与仓库零命中时不调用 LLM，抛出可换的标签提示并记 no_candidates 拒绝", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
     await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("没有找到与「kubernetes」主题相关的源码文件");
     expect(calls).toHaveLength(0);
-    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined")).toBe(false);
+    // 09-22 改口径：零候选也要留痕——漏斗必须分得清「没走到模型」与「被模型拒绝」
+    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "no_candidates")).toBe(true);
   });
 
   it("LLM 拒绝出题时抛出理由并记 exercise_declined journal", async () => {

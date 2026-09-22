@@ -6,9 +6,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ClaudePostToolUseEvent, CompanionAction, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
-import { CompanionService } from "./companion/service.js";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
@@ -17,7 +16,6 @@ import { ExerciseService } from "./exercises/service.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
-import { filterTeachMoment, type HookEvent } from "./hooks/filter.js";
 import { ImportService } from "./importer/service.js";
 import { id, isWithin } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
@@ -78,9 +76,6 @@ tboot("ImportService");
 
 const exercises = new ExerciseService();
 tboot("ExerciseService");
-
-const companion = new CompanionService();
-tboot("CompanionService");
 
 // LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）。
 // 只有一套配置；teaching / light 是**运行时角色**（差别只在思考开关），不是两份配置。
@@ -432,6 +427,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     for (const search of result.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
     }
+    // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
+    if (result.scopeDegraded) {
+      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
+    }
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -471,6 +470,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     }
     for (const search of result.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
+    }
+    if (result.scopeDegraded) {
+      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
@@ -539,46 +541,6 @@ app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number } 
   database.saveSettings(repository.index.repositoryId, { monthlyBudgetUsd: budget });
   database.close();
   return summarizeCost(repository.path, budget);
-});
-
-app.post<{ Params: { repositoryId: string }; Body: HookEvent }>("/api/repositories/:repositoryId/hooks/filter", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  const result = filterTeachMoment(request.body ?? {});
-  new Journal(repository.path, repository.index.repositoryId).append("teach_moment", { accepted: result.accepted, reason: result.reason, latency_ms: result.latencyMs });
-  return result;
-});
-
-app.get<{ Params: { repositoryId: string }; Querystring: { includeLater?: string } }>("/api/repositories/:repositoryId/companion/suggestions", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  return { suggestions: companion.list(repository, request.query.includeLater === "true"), summary: companion.summary(repository) };
-});
-
-app.post<{ Params: { repositoryId: string }; Body: ClaudePostToolUseEvent }>("/api/repositories/:repositoryId/companion/hooks/post-tool-use", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  const result = await companion.receivePostToolUse(repository, request.body ?? {});
-  if (result.suggestion) broadcast({ type: "companion.suggestion", payload: { repositoryId: repository.index.repositoryId, suggestion: result.suggestion } });
-  return reply.code(202).send(result);
-});
-
-app.post<{ Body: ClaudePostToolUseEvent }>("/api/companion/hooks/post-tool-use", async (request, reply) => {
-  const cwd = request.body?.cwd;
-  const repository = typeof cwd === "string" ? importer.findRepositoryForPath(cwd) : undefined;
-  if (!repository) return reply.code(404).send({ error: "未找到与 hook cwd 对应的已导入仓库" });
-  const result = await companion.receivePostToolUse(repository, request.body ?? {});
-  if (result.suggestion) broadcast({ type: "companion.suggestion", payload: { repositoryId: repository.index.repositoryId, suggestion: result.suggestion } });
-  return reply.code(202).send(result);
-});
-
-app.post<{ Params: { repositoryId: string; suggestionId: string }; Body: { action?: CompanionAction } }>("/api/repositories/:repositoryId/companion/suggestions/:suggestionId/actions", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  const action = request.body?.action;
-  if (!repository) return reply.code(404).send({ error: "仓库不存在" });
-  if (action !== "accepted" && action !== "dismissed" && action !== "later") return reply.code(400).send({ error: "不支持的建议动作" });
-  try { return companion.act(repository, request.params.suggestionId, action); }
-  catch (error) { return reply.code(422).send({ error: error instanceof Error ? error.message : "无法处理建议" }); }
 });
 
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {

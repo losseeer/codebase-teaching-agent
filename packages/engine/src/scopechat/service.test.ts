@@ -181,7 +181,8 @@ describe("mapChat", () => {
     const { provider, calls } = fakeProvider();
     const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;
     const search = buildSearchCorpus(index, analysis, new Map([["src/app.ts", "装配应用入口"], ["src/config.ts", "读取并校验配置"]]));
-    await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "depmap:src", scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "depmap:src", scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
+    expect(result.scopeDegraded).toBeUndefined(); // 解析成功不留痕，降级率分母才可信
     const user = calls[0].user;
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
     expect(user).toContain("src/app.ts（120 行）：装配应用入口");
@@ -189,11 +190,12 @@ describe("mapChat", () => {
     expect(user).not.toContain("不在当前课程树中"); // 作用域已解析成功，不再叠加降级声明
   });
 
-  it("nodeId 未命中且作用域解析为空 → 明示降级为全局视野，不静默", async () => {
+  it("nodeId 未命中且作用域解析为空 → 明示降级为全局视野，不静默，并给出 journal 留痕（scope_paths=上送清单去重数）", async () => {
     const { provider, calls } = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "module:src/gone", scopePaths: ["nowhere/x.ts"], content: "问", provider, style: 50 });
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "module:src/gone", scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, style: 50 });
     expect(calls[0].user).toContain("「module:src/gone」不在当前课程树中");
     expect(calls[0].user).toContain("按全局视野作答");
+    expect(result.scopeDegraded).toEqual({ nodeId: "module:src/gone", scopePathsCount: 2 });
   });
 
   it("作用域文件数超上限 → 逐个列前 60 并明示余量与 search_code 出口", async () => {

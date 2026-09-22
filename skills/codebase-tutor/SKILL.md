@@ -14,12 +14,6 @@ description: Start source-grounded lessons for a local code repository using the
 5. For implementation or rationale questions, read `GET /api/repositories/:repositoryId/analysis`. State evidence strength exactly: direct, indirect, or speculative.
 6. For tutoring, create a session with explicit `style`, `pedagogy`, and `depth`. Prefer Socratic prompts unless the user selects explanatory mode.
 
-## Companion Mode
-
-The included `hooks/post-tool-use.mjs` forwards Claude Code `PostToolUse` events to the local engine. Its matching hook configuration is in `hooks/claude-settings.example.json`.
-
-Companion suggestions are delivered on the engine's independent WebSocket channel. They must not be inserted into a teaching session or treated as an instruction to change code.
-
 ## Guardrails
 
 - Do not invent design rationale. If the decision unit has no direct evidence, say that the reason is unconfirmed.

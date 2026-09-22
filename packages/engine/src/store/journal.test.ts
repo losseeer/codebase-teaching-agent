@@ -21,7 +21,8 @@ describe("学习日志", () => {
   it("UI 侧事件（设计文档第 8 章契约）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
     const uiTypes: JournalEventType[] = [
-      "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched", "exercise_submitted", "repository_switched"
+      "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched", "exercise_submitted", "repository_switched",
+      "entry_adopted", "entry_overridden"
     ];
     for (const type of uiTypes) journal.append(type, { where: "/api/x" });
 
@@ -33,6 +34,8 @@ describe("学习日志", () => {
   it("白名单外的类型直接抛错（不静默丢弃，也不写坏日志）", () => {
     const journal = new Journal(repository, "repo_1");
     expect(isJournalEventType("flow_node_selected")).toBe(true);
+    expect(isJournalEventType("scope_degraded")).toBe(true); // 引擎侧新事件同样吃这条同步——漏了就只会运行期抛
+    expect(isJournalEventType("exercise_generated")).toBe(true);
     expect(isJournalEventType("not_a_real_event")).toBe(false);
     expect(() => journal.append("not_a_real_event" as JournalEventType, {})).toThrow("Unknown journal event: not_a_real_event");
     expect(readJournal(repository)).toHaveLength(0);

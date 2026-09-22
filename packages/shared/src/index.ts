@@ -498,59 +498,6 @@ export interface PracticeSummary {
   mastery: MasteryRecord[];
 }
 
-export type CompanionFlowState = "focused" | "transition" | "stuck";
-export type CompanionSuggestionKind = "failure_recovery" | "impact_review" | "source_trace";
-export type CompanionSuggestionStatus = "pending" | "accepted" | "dismissed" | "later";
-export type CompanionAction = "accepted" | "dismissed" | "later";
-
-/** Normalized shape accepted from a Claude Code PostToolUse hook. */
-export interface ClaudePostToolUseEvent {
-  hookEventName?: "PostToolUse";
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  toolResponse?: string;
-  cwd?: string;
-  path?: string;
-  command?: string;
-  exitCode?: number;
-  durationMs?: number;
-  output?: string;
-  sessionId?: string;
-}
-
-export interface CompanionSuggestion {
-  id: string;
-  repositoryId: string;
-  eventId: string;
-  kind: CompanionSuggestionKind;
-  status: CompanionSuggestionStatus;
-  title: string;
-  body: string;
-  reason: string;
-  flow: CompanionFlowState;
-  relevance: number;
-  path?: string;
-  anchors: SourceAnchor[];
-  createdAt: string;
-  actedAt?: string;
-}
-
-export interface CompanionHookResult {
-  accepted: boolean;
-  discarded: boolean;
-  reason: string;
-  flow: CompanionFlowState;
-  relevance: number;
-  latencyMs: number;
-  suggestion?: CompanionSuggestion;
-}
-
-export interface CompanionSummary {
-  pendingCount: number;
-  actionCount: number;
-  acceptanceRate: number | null;
-}
-
 /**
   学习日志事件类型。分两类：
 
@@ -560,7 +507,8 @@ export interface CompanionSummary {
 
   ⚠️ 改这里必须同步 `packages/engine/src/store/journal.ts` 的运行时 `eventTypes` Set——
   它才是 `Journal.append` 的白名单，漏同步会在运行期抛 `Unknown journal event`。
-  append-only：只许新增，不许改名或删除既有取值。
+  append-only：只许新增，不许改名既有取值；删除只发生过一次例外——teach_moment 随 companion 功能于 2026-09-22 整体移除
+  （readJournal 读侧不校验类型，历史仓里的旧 teach_moment 事件仍可读，只是不再接受新写入）。
   */
 export type JournalEventType =
   // 引擎侧
@@ -569,13 +517,15 @@ export type JournalEventType =
   | "hint_depth"
   | "dependency_event"
   | "style_shift"
-  | "teach_moment"
   | "unassisted_test"
   | "action_veto"
   | "exercise_declined"
+  /** 练习**送达**事件（漏斗分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
+  | "exercise_generated"
   | "token_usage"
   | "file_read"
   | "code_search"
+  | "scope_degraded"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"
@@ -583,7 +533,9 @@ export type JournalEventType =
   | "line_located"
   | "module_switched"
   | "exercise_submitted"
-  | "repository_switched";
+  | "repository_switched"
+  | "entry_adopted"
+  | "entry_overridden";
 
 export interface JournalEvent {
   id: string;
@@ -620,6 +572,6 @@ export interface EngineTraceEvent {
 }
 
 export interface ServerEvent {
-  type: "import.progress" | "repository.updated" | "session.delta" | "session.complete" | "session.progress" | "companion.suggestion";
+  type: "import.progress" | "repository.updated" | "session.delta" | "session.complete" | "session.progress";
   payload: Record<string, unknown>;
 }

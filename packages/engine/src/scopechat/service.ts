@@ -52,6 +52,8 @@ export interface ScopedChatResult {
   fileReads?: FileReadRecord[];
   /** mapChat 专用：本次对话的 search_code 调用审计（供 server 逐条记 journal code_search）。 */
   codeSearches?: CodeSearchRecord[];
+  /** mapChat 专用：作用域解析失败、按全局视野作答的留痕（供 server 记 journal scope_degraded）。 */
+  scopeDegraded?: { nodeId: string; scopePathsCount: number };
 }
 
 /** 按锚点取带行号的源码摘录：符号边界优先、窗口兜底（规则见 source/excerpt.ts）。路径越界或读不到返回空串。 */
@@ -169,6 +171,7 @@ function joinList(items: string[]): string {
 export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
+  let scopeDegraded: ScopedChatResult["scopeDegraded"];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
   if (node) {
@@ -177,9 +180,14 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true).forEach((block) => sections.push(block));
   } else if (input.nodeId) {
     // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型按错误作用域作答。
-    // 先试架构图文件清单，仍解析不到就明示「全局视野」，让回复自己承认作用域。
+    // 先试架构图文件清单，仍解析不到就明示「全局视野」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
     const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
-    sections.push(scope || `作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
+    if (scope) {
+      sections.push(scope);
+    } else {
+      sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
+      scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
+    }
   }
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
@@ -217,7 +225,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     provider: provider.name,
     usage: result.usage,
     ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
-    ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {})
+    ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {}),
+    ...(scopeDegraded ? { scopeDegraded } : {})
   };
 }
 

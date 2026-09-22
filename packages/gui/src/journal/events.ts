@@ -16,7 +16,9 @@ export const UI_JOURNAL_EVENTS = [
   "line_located",
   "module_switched",
   "exercise_submitted",
-  "repository_switched"
+  "repository_switched",
+  "entry_adopted",
+  "entry_overridden"
 ] as const satisfies readonly JournalEventType[];
 
 export type UiJournalEventType = (typeof UI_JOURNAL_EVENTS)[number];

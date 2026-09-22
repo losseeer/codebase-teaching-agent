@@ -36,7 +36,7 @@ const DEEP_SCENE = "map.flow.deep";
 const DEEP_SYSTEM_PROMPT = [
   "下面是一个代码仓库执行流程里若干条**待核实的去向**，以及这些去向涉及文件的真实源码片段（带行号）。",
   "请只依据给出的代码判断每一条：这条去向在代码里是否真的有依据（例如回调或节点注册、路由表、依赖注入、事件订阅、显式调用）。",
-  '有依据写 verdict="code"，evidence 必须写清「文件名:行」并说明是什么结构（如 graph/builder.py:112 注册 evaluate 节点）。',
+  '有依据写 verdict="code"，evidence 必须写清「文件路径:行」（路径照抄片段里给出的 path，至少写到能认出是哪个文件的后缀）并说明是什么结构（如 graph/builder.py:112 注册 evaluate 节点）。',
   '看不出来就写 verdict="inferred"，evidence 写一句为什么仍不确定。',
   "不要因为「通常这么写」就判有依据；只认代码里看得见的东西。没给出代码片段的文件，一律判 inferred。",
   '严格输出 JSON 数组：[{"from":1,"to":9,"verdict":"code|inferred","evidence":"…"}]，长度不超过输入条数。不要输出其他文字。'
@@ -165,8 +165,8 @@ export async function deepenInferredEdges(input: {
     answered += 1;
     if (verdict.verdict === "inferred") return { ...edge, evidence: verdict.evidence };
     // 「在代码里读到」必须引到这条边自己的文件上：引一个不相干的文件不算依据
-    const owned = new Set([...(stageOf(edge.from)?.files ?? []), ...(stageOf(edge.to)?.files ?? [])].map((file) => file.path));
-    if (![...owned].some((path) => verdict.evidence.includes(path))) {
+    const owned = [...new Set([...(stageOf(edge.from)?.files ?? []), ...(stageOf(edge.to)?.files ?? [])].map((file) => file.path))];
+    if (!citesOwnedFile(verdict.evidence, owned)) {
       rejected += 1;
       return edge;
     }
@@ -187,6 +187,22 @@ export async function deepenInferredEdges(input: {
     confirmed,
     stillInferred: answered - confirmed
   };
+}
+
+/**
+  依据文本里是否引用了这条边自己的文件。
+
+  真仓重放（09-22）：19 条 code 判定被驳回 18 条——全因旧匹配要求 evidence 里出现**完整路径**，
+  而模型按提示只写了裸文件名（`nodes.py:4` 而非 `src/main/java/com/hmdp/graph/nodes.py:4`）。
+  现在允许「完整路径 / 目录后缀 / 裸文件名」，但必须**整段相等**：`IShopServiceImpl.java`
+  不能冒充 `ShopServiceImpl.java`，`core/redis.py` 依然对不上任何一端。
+*/
+function citesOwnedFile(evidence: string, ownedPaths: string[]): boolean {
+  for (const match of evidence.matchAll(/[\w./\\-]+\.[A-Za-z0-9]+/g)) {
+    const token = match[0].replace(/\\/g, "/");
+    if (ownedPaths.some((path) => path === token || path.endsWith(`/${token}`))) return true;
+  }
+  return false;
 }
 
 function joinCaveat(current: string | undefined, extra: string): string {

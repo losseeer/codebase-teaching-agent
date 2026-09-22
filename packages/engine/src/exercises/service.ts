@@ -103,6 +103,7 @@ export class ExerciseService {
     */
   async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[]; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
+    const journal = new Journal(repository.path, repository.index.repositoryId);
     try {
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
       const modelVersion = provider?.modelVersion ?? "deterministic";
@@ -113,15 +114,20 @@ export class ExerciseService {
         for (const schedule of due) {
           const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
           // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 exerciseIsCurrent
-          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) return stored.exercise;
+          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
+            journal.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
+            return stored.exercise;
+          }
         }
       }
       const mastery = this.mastery(repository, database);
       const target = this.pickTarget(repository, requested, mastery);
       if (!target) {
-        throw new Error(requested.moduleId
+        const reason = requested.moduleId
           ? "当前知识模块下没有可出题的代码单元；换一个模块，或先导入更多相关代码。"
-          : "当前分析结果没有可生成的练习。请先重新导入仓库。");
+          : "当前分析结果没有可生成的练习。请先重新导入仓库。";
+        journal.append("exercise_declined", { tag: requested.moduleId ?? "", reason, stage: "no_target" });
+        throw new Error(reason);
       }
       // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
       const deps = exerciseDeps(repository, target.kind, target.value);
@@ -129,12 +135,15 @@ export class ExerciseService {
         ? `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`
         : exerciseScope(repository.analysis.versionStamp, modelVersion);
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
-      if (cached) return cached.exercise;
+      if (cached) {
+        journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId });
+        return cached.exercise;
+      }
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
       if (provider) {
         const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
         stored = { ...stored, exercise: refined.exercise };
-        if (refined.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
+        if (refined.usage) journal.append("token_usage", {
           input_tokens: refined.usage.inputTokens,
           output_tokens: refined.usage.outputTokens,
           cache_hit_tokens: refined.usage.promptCacheHitTokens ?? null,
@@ -143,6 +152,7 @@ export class ExerciseService {
         });
       }
       database.putExerciseCache(repository.index.repositoryId, scope, target.kind, target.id, stored);
+      journal.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
       return stored.exercise;
     } finally {
       database.close();
@@ -161,16 +171,23 @@ export class ExerciseService {
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
+    const journal = new Journal(repository.path, repository.index.repositoryId);
     // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
     const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
     const candidates = selectTagCandidates(repository, tag, 3, summaries);
-    if (!candidates.length) throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
+    if (!candidates.length) {
+      // 零候选也要留痕：漏斗必须分得清「没走到模型」与「被模型拒绝」，才知道该修选稿还是修提示词
+      journal.append("exercise_declined", { tag, reason: `词法候选选择没有命中任何与「${tag}」相关的源码文件。`, stage: "no_candidates" });
+      throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
+    }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
     const scope = `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${provider.modelVersion}`;
     const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
-    if (cached && cached.exercise.kind === "llm_rubric") return cached.exercise;
-    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (cached && cached.exercise.kind === "llm_rubric") {
+      journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag });
+      return cached.exercise;
+    }
     const generation = await generateExerciseWithLlm({ tag, candidates, provider });
     if (!generation.ok) {
       journal.append("exercise_declined", { tag, reason: generation.reason, stage: "llm_generate" });
@@ -212,6 +229,7 @@ export class ExerciseService {
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
     database.putExerciseCache(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
+    journal.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag });
     return exercise;
   }
 

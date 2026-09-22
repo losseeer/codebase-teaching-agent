@@ -42,8 +42,6 @@
 │   │       ├── policy/          #   教学设置（风格/教学法/层次）与校验
 │   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习
 │   │       ├── learner/         #   学习者画像 / 掌握度 / 渐隐提示
-│   │       ├── companion/       #   IDE 伴侣建议（Claude Code post-tool-use hook）
-│   │       ├── hooks/           #   teach-moment 事件过滤
 │   │       ├── cost/            #   token 用量汇总与月度预算
 │   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移）
 │   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）

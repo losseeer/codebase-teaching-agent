@@ -24,6 +24,7 @@ const defaultTutorIgnoreContents = `# Codebase Tutor analysis exclusions.
 
 # Dependencies, builds and local caches
 node_modules/
+bower_components/
 dist/
 build/
 .next/

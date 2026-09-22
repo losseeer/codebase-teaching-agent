@@ -155,6 +155,21 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
       ? "正在从课程树挑选入口…"
       : "按关键词归类 · 配置 LLM 后自动升级";
 
+  /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
+      点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
+      loading（列表还没出现）或空列表不发改选事件；adopted 只在真的换绑了选中节点时发（断链点击不充分子）。 */
+  const entrySource = moduleEntries?.status === "llm" ? "llm" : "heuristic";
+  const suggestedPaths = useMemo(() => new Set(visibleEntries.map((entry) => entry.path)), [visibleEntries]);
+  const maybeEmitOverride = (path: string): void => {
+    if (!visibleEntries.length || suggestedPaths.has(path)) return;
+    emit(repositoryId, "entry_overridden", {
+      module: activeModule,
+      picked_path: path,
+      suggested_source: entrySource,
+      suggested: visibleEntries.map((entry) => entry.path).join("、").slice(0, 1_800)
+    });
+  };
+
   const filePaths = useMemo(() => {
     const out: string[] = [];
     const walk = (nodes: FileTreeNode[]): void => { nodes.forEach((node) => { if (node.kind === "directory") walk(node.children ?? []); else out.push(node.path); }); };
@@ -212,7 +227,12 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                     key={entry.id}
                     className={`entry-item ${t.selected?.id === entry.id ? "selected" : ""}`}
                     title={`${entry.path}:${entry.line}`}
-                    onClick={() => { const found = flatten(course.root).find((node) => node.id === entry.id); if (found) t.setSelected(found); }}
+                    onClick={() => {
+                      const found = flatten(course.root).find((node) => node.id === entry.id);
+                      if (!found) return;
+                      t.setSelected(found);
+                      emit(repositoryId, "entry_adopted", { module: activeModule, entry_id: entry.id, path: entry.path, source: entrySource });
+                    }}
                   >
                     <span className="entry-dot" />
                     <strong>{entry.title}</strong>
@@ -226,7 +246,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
               <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或中栏源码挑一个文件，直接开始提问。</p>
             )}
             <ModuleSectionLabel label="仓库文件" note="主要入口 · 任意目录与文件" />
-            <RepoTree nodes={fileTree} onOpenFile={(path) => void loadSource(path, 1, `已打开 · ${path}`)} activePath={source?.path} />
+            <RepoTree nodes={fileTree} onOpenFile={(path) => { maybeEmitOverride(path); void loadSource(path, 1, `已打开 · ${path}`); }} activePath={source?.path} />
           </ModulesPane>
         </div>
         <div className={paneClass(1)}>
@@ -266,13 +286,13 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                 placeholder="搜索仓库文件（回车打开第一个）"
                 aria-label="搜索仓库文件"
                 onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter" && paletteMatches[0]) { void loadSource(paletteMatches[0], 1, `已打开 · ${paletteMatches[0]}`); setPaletteOpen(false); } }}
+                onKeyDown={(event) => { if (event.key === "Enter" && paletteMatches[0]) { maybeEmitOverride(paletteMatches[0]); void loadSource(paletteMatches[0], 1, `已打开 · ${paletteMatches[0]}`); setPaletteOpen(false); } }}
               />
               <button className="palette-close" aria-label="关闭" onClick={() => setPaletteOpen(false)}><X size={13} /></button>
             </div>
             <div className="palette-list">
               {paletteMatches.map((path) => (
-                <button key={path} onClick={() => { void loadSource(path, 1, `已打开 · ${path}`); setPaletteOpen(false); }}>{path}</button>
+                <button key={path} onClick={() => { maybeEmitOverride(path); void loadSource(path, 1, `已打开 · ${path}`); setPaletteOpen(false); }}>{path}</button>
               ))}
               {!paletteMatches.length && <p className="palette-empty">没有匹配的文件</p>}
             </div>

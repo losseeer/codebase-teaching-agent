@@ -7,7 +7,7 @@ import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./provider.js";
 import { buildFileSlices, MAX_SLICE_ENTRIES } from "./slice.js";
-import { summarizeFiles } from "./summarizer.js";
+import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
 
 /** main.py → svc.py（调用 run）→ util.py；另外 business.py 只依赖 util.py，不挨着入口。 */
 const STRUCTURE: FileStructure = {
@@ -71,7 +71,7 @@ describe("文件摘要表（L1）", () => {
     const main = first.summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("core");
     expect(main.roleSource).toBe("structure");
-    expect(main.coverage).toEqual({ checked: 1, mentioned: 1, low: false });
+    expect(main.coverage).toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
     expect(main.cached).toBe(false);
     // 兜底档的摘要格式：路径 + 结构角色 + 主要符号名（简短，因为它会进课程树再被润色）
     expect(main.summary).toBe("main.py：执行主干；定义 main");
@@ -94,8 +94,8 @@ describe("文件摘要表（L1）", () => {
     const main = summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("infra");
     expect(main.roleSource).toBe("provider");
-    // 切片里最靠前的一条是 main，摘要没提它 → 低覆盖
-    expect(main.coverage).toEqual({ checked: 1, mentioned: 0, low: true });
+    // 切片里最靠前的一条是 main，摘要没提它（路径剥掉后连 "main" 都找不到）→ 低覆盖
+    expect(main.coverage).toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
   });
 
   it("输入的切片变了（依赖或符号变）缓存即失效，不必再单独追踪文件内容", async () => {
@@ -159,5 +159,79 @@ describe("文件摘要表（L1）", () => {
     };
     await summarizeFiles({ structure, database, provider });
     expect(batches).toEqual([8, 2]);
+  });
+});
+
+/** 单文件结构：符号按声明序进切片前 3 条，专门用来喂自定义摘要测覆盖率判据。 */
+function singleFileStructure(names: string[]): FileStructure {
+  return {
+    files: [{ path: "src/billing.ts", lines: 10 }],
+    symbols: names.map((name, index) => ({
+      id: `symbol:src/billing.ts:${name}:${index + 1}`,
+      name,
+      kind: "function" as const,
+      path: "src/billing.ts",
+      line: index + 1,
+      endLine: index + 2,
+      parameters: [],
+      language: "typescript"
+    })),
+    calls: [],
+    imports: {},
+    entrypoints: []
+  };
+}
+
+describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
+  async function coverageFor(names: string[], summary: string) {
+    const database = tempDatabase();
+    const provider: SummaryProvider = { name: "stub", modelVersion: "stub-1", summarizeMany: async () => [{ summary }] };
+    const { summaries } = await summarizeFiles({ structure: singleFileStructure(names), database, provider });
+    return summaries[0].coverage;
+  }
+
+  it("中文行为描述里出现英文特征词即算锚上——旧判据整名对不上造成的假低覆盖被救回", async () => {
+    expect(await coverageFor(["RedisTemplate"], "负责 redis 连接池维护与断线重连。"))
+      .toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
+  });
+
+  it("结构词不算锚：摘要通篇只说「service」，等于没提任何符号", async () => {
+    expect(await coverageFor(["UserService"], "通用的 Service 层封装。"))
+      .toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
+  });
+
+  it("前 3 条里锚上任一条就不算低（any-of 取代过半）", async () => {
+    expect(await coverageFor(["PaymentGateway", "notifyConfig", "index"], "负责 payment 通道的对账与金额核算，不涉及通知发送与配置下发。"))
+      .toEqual({ checked: 3, mentioned: 1, low: false, rule: "anchor-v2" });
+  });
+
+  it("路径剥离仍然生效：含糊摘要不能靠路径里的名字混过去", async () => {
+    expect(await coverageFor(["billing"], "src/billing.ts：负责一些事情。"))
+      .toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
+  });
+
+  it("命中旧判据写的存量行：就地重算并回写，不重新调用任何摘要档", async () => {
+    const database = tempDatabase();
+    const provider = new LocalSummaryProvider();
+    const slice = buildFileSlices(STRUCTURE, classifyFileRoles(STRUCTURE)).get("svc.py")!;
+    // 手写一条旧口径记录：coverage 没有 rule 字段，且「mentioned=0 → low」是按整名默写判的
+    const legacyRow = {
+      path: "svc.py",
+      summary: "svc.py：支撑逻辑；定义 run、Helper 等 2 个符号",
+      role: "support",
+      roleSource: "structure",
+      coverage: { checked: 2, mentioned: 0, low: true }
+    };
+    database.putFileSummary(summaryCacheKey(slice, provider.modelVersion), legacyRow);
+    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const svc = summaries.find((summary) => summary.path === "svc.py")!;
+    // 确定性摘要本来就以符号名开头，新判据下两条都锚上
+    expect(svc.coverage).toEqual({ checked: 2, mentioned: 2, low: false, rule: "anchor-v2" });
+    expect(svc.cached).toBe(true);
+    expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
+    // 修正后的行真的落库了：再跑一次不需要任何迁移
+    expect(database.getFileSummary<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion))?.coverage?.rule).toBe("anchor-v2");
+    const second = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
   });
 });

@@ -138,6 +138,32 @@ describe("按需深入", () => {
     expect(result).toMatchObject({ confirmed: 0, stillInferred: 1 });
   });
 
+  it("裸文件名/后缀引用也算数——真仓 19 条 code 判定曾被整路径匹配驳回 18 条", async () => {
+    const dir = workspace();
+    const result = await deepenInferredEdges({
+      repositoryPath: dir,
+      analysis: ANALYSIS,
+      index: INDEX,
+      flow: flowOf([INFERRED]),
+      provider: providerOf(JSON.stringify([{ from: 2, to: 3, verdict: "code", evidence: "nodes.py:4 的注册被 builder 触发" }]))
+    });
+    expect(result.flow.edges[0].origin).toBe("code");
+    expect(result).toMatchObject({ confirmed: 1, stillInferred: 0 });
+  });
+
+  it("相似文件名不能冒充：引 IShopServiceImpl 式的近似名照样驳回（后缀匹配必须整段相等）", async () => {
+    const dir = workspace();
+    const result = await deepenInferredEdges({
+      repositoryPath: dir,
+      analysis: ANALYSIS,
+      index: INDEX,
+      flow: flowOf([INFERRED]),
+      provider: providerOf(JSON.stringify([{ from: 2, to: 3, verdict: "code", evidence: "graph/xnodes.py:4 有注册" }]))
+    });
+    expect(result.flow.edges[0].origin).toBe("inferred");
+    expect(result).toMatchObject({ confirmed: 0 });
+  });
+
   it("模型认了「仍不确定」时换掉依据、保留推断标记", async () => {
     const dir = workspace();
     const result = await deepenInferredEdges({

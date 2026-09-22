@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { CheckCircle2, Clock3, Code2, Compass, GraduationCap, RefreshCw, Send, X } from "lucide-react";
+import { Compass, GraduationCap, RefreshCw, Send } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
-import { companionKindLabel } from "../views/helpers";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
 import { showToast } from "../modules/toast";
@@ -12,7 +11,7 @@ import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type TeachingSessionApi, typ
   对应 prototype `design-prototype.html` 中的 `.agent-rail`（第 113-142, 345-358 行）。
   - `scope-bar` 3 个 chip（map / teaching / practice），点击切换作用域
   - `scope-context` 当前作用域的「作用域 / 绑定 / 可见 / 动作」4 行元信息
-  - `thread` 滚动消息列表，只含 pushMessage 的对话消息 / 伴侣建议（teaching scope）
+  - `thread` 滚动消息列表，只含 pushMessage 的对话消息
   - `composer` 按作用域切换 placeholder + 行为；teaching scope 真发 LLM，其他仅做本地草稿
 
   v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
@@ -133,7 +132,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
       </div>
 
       <div className="agent-thread" id="agent-thread" ref={threadRef} aria-live="polite">
-        {items.length === 0 && scope === "teaching" && !t.liveAnswer && !t.suggestions.length ? (
+        {items.length === 0 && scope === "teaching" && !t.liveAnswer ? (
           <div className="starter">
             <GraduationCap size={22} />
             <p>先写下你对这个节点的一个观察或假设，或输入「不知道」请求下一层提示。</p>
@@ -159,22 +158,6 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             <p className="agent-progress">{t.progress[scope]}</p><i />
           </div>
         )}
-        {scope === "teaching" && t.suggestions.map((s) => (
-          <article className="companion-card thread-card" key={s.id}>
-            <div className="companion-heading"><span>{companionKindLabel(s.kind)}</span><strong>{s.title}</strong></div>
-            <Markdown content={s.body} />
-            {s.anchors.length ? (
-              <div className="companion-anchors">
-                {s.anchors.slice(0, 2).map((a) => <span key={`${a.path}:${a.line}`}><Code2 size={12} />{a.path}:{a.line}</span>)}
-              </div>
-            ) : null}
-            <div className="companion-actions">
-              <button className="primary icon-button" aria-label="接受建议" title="接受建议" onClick={() => void t.actOnSuggestion(s, "accepted")}><CheckCircle2 size={17} /></button>
-              <button className="secondary icon-button" aria-label="稍后处理" title="稍后处理" onClick={() => void t.actOnSuggestion(s, "later")}><Clock3 size={17} /></button>
-              <button className="secondary icon-button" aria-label="忽略建议" title="忽略建议" onClick={() => void t.actOnSuggestion(s, "dismissed")}><X size={17} /></button>
-            </div>
-          </article>
-        ))}
       </div>
 
       <div className="composer-section">

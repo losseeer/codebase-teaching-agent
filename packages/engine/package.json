@@ -11,6 +11,8 @@
     "test:watch": "vitest",
     "phase0:prepare-study": "tsx src/scripts/prepare-study.ts",
     "phase0:audit": "tsx src/scripts/audit.ts",
+    "phase0:metrics": "tsx src/scripts/metrics.ts",
+    "phase0:replay-coverage": "tsx src/scripts/replay-coverage.ts",
     "setup:native": "node scripts/setup-native-bindings.mjs"
   },
   "dependencies": {

@@ -1,11 +1,11 @@
 import type { ReactElement } from "react";
 import { RefreshCw } from "lucide-react";
-import type { CompanionSuggestion, CourseNode, ExerciseKind, ImportJob, Pedagogy, TutorSession } from "@codebase-tutor/shared";
+import type { CourseNode, ExerciseKind, ImportJob, Pedagogy, TutorSession } from "@codebase-tutor/shared";
 
 /**
  * views/ 共享的小工具：
  * - Loading / EmptyState：通用占位 UI
- * - phaseLabel / exerciseKindLabel / companionKindLabel：枚举 → 中文文案
+ * - phaseLabel / exerciseKindLabel：枚举 → 中文文案
  * - stageIndex：Socratic 5 阶段 → 0..4 序号（教学阶梯 L1→L5）
  * - Segmented：分段控件（教学法 / 拆解层次）
  * - firstTeachNode / flatten / replaceCourseNode：课程树遍历
@@ -39,14 +39,6 @@ export function exerciseKindLabel(kind: ExerciseKind): string {
     change_localization: "修改定位",
     impact_analysis: "影响分析",
     llm_rubric: "主题练习"
-  })[kind];
-}
-
-export function companionKindLabel(kind: CompanionSuggestion["kind"]): string {
-  return ({
-    failure_recovery: "需要回看",
-    impact_review: "影响提醒",
-    source_trace: "源码提醒"
   })[kind];
 }
 

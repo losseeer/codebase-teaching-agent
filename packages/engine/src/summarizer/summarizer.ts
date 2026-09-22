@@ -1,5 +1,6 @@
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
 import { hash } from "../lib.js";
+import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { buildFileSlices, type FileSlice } from "./slice.js";
@@ -22,18 +23,29 @@ const SUMMARY_INPUT_VERSION = "slice-v1";
 
 /**
   覆盖率只查切片里最靠前的这几条——它们是最该被摘要提及的。
-  取 3 而不是切片上限 8：确定性档就只点前 3 个名字，用同一口径才能让「兜底档满分、含糊摘要掉分」
-  这个对比成立；查得越宽，越容易把「摘要短」误判成「摘要差」。
+  anchor-v2（2026-09-22）：旧判据要求「前 3 个符号名过半被原文默写」，真仓重放显示低覆盖
+  行 160/164 是 mentioned=0——模型用中文行为描述（「负责好友申请的校验」）而非英文符号名，
+  整名子串永远对不上。新判据允许**特征词锚定**（RedisTemplate → "redis"），只要 top-3 里
+  有任何一个锚上就不算低（any-of），因为「提到了一个核心符号」已是有效信号。
+  仍只查前 3 条（而非切片上限 8）：确定性档就只点前 3 个名字，同一口径下兜底档必然满分。
 */
 const COVERAGE_CHECKED = 3;
+
+/** 结构词：几乎每个类都叫 XxxService/XxxTest，出现它们不说明摘要认识了这个文件。 */
+const STRUCTURAL_WORDS = new Set(["test", "tests", "impl", "service", "controller", "utils", "util", "get", "set", "main"]);
+
+/** 特征词锚定的最短词长：3 及以下（"run"、"add"）噪声大于信号。 */
+const MIN_ANCHOR_WORD = 4;
 
 export interface SummaryCoverage {
   /** 参与检查的符号条目数 */
   checked: number;
-  /** 其中名字确实出现在摘要文本里的个数 */
+  /** 其中确实锚定到摘要文本里的个数（整名出现或特征词出现） */
   mentioned: number;
-  /** 覆盖不足：检查了条目，但提到的不到一半 */
+  /** 覆盖不足：查了条目，但一个都没锚上 */
   low: boolean;
+  /** 判据版本：旧存量行没这个字段，重放与指标脚本靠它分辨新旧口径 */
+  rule?: "anchor-v2";
 }
 
 export interface FileSummary {
@@ -58,6 +70,9 @@ function cacheKeyOf(slice: FileSlice, modelVersion: string): string {
   return hash(`${SUMMARY_INPUT_VERSION}:${modelVersion}:${JSON.stringify(slice)}`);
 }
 
+/** 导出仅为测试可写入「旧判据时代的存量行」，验证缓存命中路径的就地重算。 */
+export const summaryCacheKey = cacheKeyOf;
+
 export async function summarizeFiles(input: {
   structure: FileStructure;
   database: TutorDatabase;
@@ -78,10 +93,20 @@ export async function summarizeFiles(input: {
   // 先挑出缓存缺失的：批量调用的价值在于「只对需要重算的付费」，已经命中的不该再进批次
   const pending: FileSlice[] = [];
   for (const slice of ordered) {
-    const cached = database.getFileSummary<StoredSummary>(cacheKeyOf(slice, provider.modelVersion));
+    const key = cacheKeyOf(slice, provider.modelVersion);
+    const cached = database.getFileSummary<StoredSummary>(key);
     if (cached) {
       cachedFiles += 1;
-      byPath.set(cached.path, { ...cached, cached: true });
+      // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对，零 token，
+      // 也不属于 LLM 的输入口径——所以不需要 bump SUMMARY_INPUT_VERSION 让全仓重烧摘要。
+      const coverage = coverageOf(slice, cached.summary);
+      if (JSON.stringify(coverage) !== JSON.stringify(cached.coverage)) {
+        const migrated: StoredSummary = { ...cached, coverage };
+        database.putFileSummary(key, migrated);
+        byPath.set(cached.path, { ...migrated, cached: true });
+      } else {
+        byPath.set(cached.path, { ...cached, cached: true });
+      }
       continue;
     }
     pending.push(slice);
@@ -127,17 +152,28 @@ export async function summarizeFiles(input: {
 }
 
 /**
-  摘要是否覆盖了切片里最该提到的那些符号名（纯字符串比对，零成本）。
+  摘要是否锚定到了切片里最该提到的那些符号名（纯字符串比对，零成本）。
 
   ⚠️ 比对前必须**把文件路径从摘要文本里去掉**：摘要几乎总以路径开头，而路径里常含有符号名
   （`main.py` 里有 `main`、`config.py` 里有 `config`），不去掉的话「一个字没提符号」的含糊摘要
   会因为这层巧合被判成高覆盖——这个洞是写测试时才暴露出来的。
+
+  锚定 = 整名子串出现，或任一**特征词**整词出现（`user-service-impl` 归一后 "user" 命中
+  `UserService`）。结构词（service/test/main…）与短词不算特征词——它们谁都带，锚上不带来信息。
 */
-function coverageOf(slice: { path: string; entries: { name: string }[] }, summary: string): SummaryCoverage {
-  const names = slice.entries.slice(0, COVERAGE_CHECKED).map((entry) => entry.name.toLowerCase());
+/** 导出是为了判据重放脚本（scripts/replay-coverage）能走与生产完全同一份实现，不复刻规则。 */
+export function coverageOf(slice: { path: string; entries: { name: string }[] }, summary: string): SummaryCoverage {
+  const checked = slice.entries.slice(0, COVERAGE_CHECKED);
   const text = summary.toLowerCase().split(slice.path.toLowerCase()).join(" ");
-  const mentioned = names.filter((name) => text.includes(name)).length;
-  return { checked: names.length, mentioned, low: names.length > 0 && mentioned * 2 < names.length };
+  const mentioned = checked.filter((entry) => anchored(entry.name, text)).length;
+  return { checked: checked.length, mentioned, low: checked.length > 0 && mentioned === 0, rule: "anchor-v2" };
+}
+
+function anchored(name: string, text: string): boolean {
+  if (name && text.includes(name.toLowerCase())) return true;
+  // ⚠️ 分词必须吃**原始大小写**：camelCase 边界是 `wordsOf` 拆词的依据，先转小写会把
+  // `RedisTemplate` 拆成整块 "redistemplate"，特征词锚定随之失效。
+  return wordsOf(name).some((word) => word.length >= MIN_ANCHOR_WORD && !STRUCTURAL_WORDS.has(word) && tokenHits(word, text));
 }
 
 export function moduleSummaries(summaries: FileSummary[]): Map<string, string> {

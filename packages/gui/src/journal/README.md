@@ -17,8 +17,8 @@
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
 | 宏观设计 | 依赖图、目录索引、流程节点 | `flow_node_selected` · `file_anchored` | 不写 LLM 调用 |
-| 代码教学 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` | 不直接改源码、不写 `style_shift` |
-| 练习评估 | 题目实例、评分标准、ZPD | `module_switched` · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
+| 代码教学 | 源码 tab、课程树锚点、阶梯状态 | `file_opened` · `line_located` · `hint_depth` · `entry_adopted` · `entry_overridden` | 不直接改源码、不写 `style_shift` |
+| 练习评估 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 | 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |
 
 ### 两条边界（易混，写在这里免得再踩）
@@ -27,7 +27,8 @@
    （`session_created` 与 `manual`），前端再写一遍就是同一事实双写、必然漂移。
    此处与早前「接入点」清单里的 `TutorPage: 风格滑杆 → style_shift` 冲突，**以契约表为准**。
 2. **引擎侧事件前端不得发射**：`unit_mastered` / `hint_depth` / `dependency_event` / `action_veto` /
-   `token_usage` / `file_read` / `teach_moment` / `unassisted_test` / `exercise_result` / `exercise_declined`
+   `token_usage` / `file_read` / `unassisted_test` / `exercise_result` / `exercise_declined` /
+   `exercise_generated`
    都由引擎在状态机、工具循环与成本核算里写。前端只写「用户做了什么」，不写「引擎得出了什么」。
    `exercise_submitted`（用户提交）与 `exercise_result`（判分结果）是两件事，各写各的。
 
@@ -50,6 +51,8 @@
 | `views/CoursePage.tsx` | 点目录文件 / 锚点 / 流程环节里的文件 | `file_anchored`（`source` 区分 tree / anchor / flow） |
 | `views/TutorPage.tsx` | 打开一个没开过的文件 | `file_opened` |
 | `views/TutorPage.tsx` | 已开过的文件换行定位（含切节点带过来的自动定位） | `line_located` |
+| `views/TutorPage.tsx` | 点推荐入口且真的换绑选中节点（`source` 区分 llm/回落） | `entry_adopted` |
+| `views/TutorPage.tsx` | 推荐列表展示中手动打开不在清单里的文件（树/⌘P；口径「开文件即改选」） | `entry_overridden` |
 | `views/PracticePage.tsx` | 切换练习模块（id 未变不记） | `module_switched` |
 | `views/PracticePage.tsx` | 提交答案（判分结果由引擎记 `exercise_result`） | `exercise_submitted` |
 | `views/ImportPage.tsx` | 导入完成、工作区切换（只记一次） | `repository_switched` |

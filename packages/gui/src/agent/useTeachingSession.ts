@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompanionSuggestion, CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 
@@ -114,11 +114,6 @@ export interface TeachingSessionApi {
   /** 当前练习对象（练习评估作用域的对话上下文；由 PracticePage 写入） */
   practiceExercise: Exercise | null;
   setPracticeExercise: (exercise: Exercise | null) => void;
-
-  /** companion 推送（teaching 作用域 thread 渲染） */
-  suggestions: CompanionSuggestion[];
-  actOnSuggestion: (suggestion: CompanionSuggestion, action: "accepted" | "later" | "dismissed") => Promise<void>;
-  refreshSuggestions: () => void;
 }
 
 /**
@@ -229,18 +224,12 @@ useEffect(() => {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
     socket.onmessage = (event: MessageEvent<string>) => {
-      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string; repositoryId?: string; suggestion?: CompanionSuggestion; stage?: string; round?: number; path?: string } };
+      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string; repositoryId?: string; stage?: string; round?: number; path?: string } };
       if (serverEvent.type === "session.delta" && serverEvent.payload.sessionId === activeSessionId.current) {
         setLiveAnswer((current) => current + (serverEvent.payload.delta ?? ""));
       } else if (serverEvent.type === "session.progress" && serverEvent.payload.sessionId === activeSessionId.current) {
         // 教学回合的过程提示：引擎发的是「判断动作 / 读文件 / 思考」这类事件，文案由 GUI 决定
         setScopeProgress("teaching", teachingProgressText(serverEvent.payload));
-      } else if (serverEvent.type === "companion.suggestion" && serverEvent.payload.repositoryId === repositoryId && serverEvent.payload.suggestion) {
-        const s = serverEvent.payload.suggestion;
-        setSuggestions((curr) => {
-          if (curr.some((existing) => existing.id === s.id)) return curr;
-          return [s, ...curr];
-        });
       }
     };
     return () => socket.close();
@@ -315,22 +304,6 @@ useEffect(() => {
   const sendMap = (): Promise<void> => sendScoped("map");
   const sendPractice = (): Promise<void> => sendScoped("practice");
 
-  // Companion suggestions（teaching 作用域展示）
-  const [suggestions, setSuggestions] = useState<CompanionSuggestion[]>([]);
-  const refreshSuggestions = (): void => {
-    if (!repositoryId) { setSuggestions([]); return; }
-    api.getCompanionSuggestions(repositoryId).then((result) => setSuggestions(result.suggestions)).catch(() => setSuggestions([]));
-  };
-  useEffect(refreshSuggestions, [repositoryId]);
-  const actOnSuggestion = async (suggestion: CompanionSuggestion, action: "accepted" | "later" | "dismissed"): Promise<void> => {
-    try {
-      await api.actOnSuggestion(repositoryId, suggestion.id, action);
-      setSuggestions((curr) => curr.filter((item) => item.id !== suggestion.id));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
-    }
-  };
-
   return {
     scope, setScope,
     threads, pushMessage, clearThread,
@@ -340,6 +313,5 @@ useEffect(() => {
     session, settings, setSettings, cost,
     content, setContent, sending, progress, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
-    suggestions, actOnSuggestion, refreshSuggestions,
   };
 }
