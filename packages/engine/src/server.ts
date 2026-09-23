@@ -16,7 +16,7 @@ import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/service.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
-import { restoreSessionFromJournal } from "./harness/restore.js";
+import { findLatestSessionForNode, restoreSessionFromJournal } from "./harness/restore.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/service.js";
 import { indexRepository } from "./indexer/indexer.js";
@@ -648,6 +648,13 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
   const session = resolveSession(request.params.sessionId);
   return session ?? reply.code(404).send({ error: "会话不存在" });
+});
+
+/** 该课程节点最近一次教学会话的 id（从 journal 倒扫）：GUI 刷新后即使本地没存过 id，也能找回存量历史。 */
+app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>("/api/repositories/:repositoryId/latest-session", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库未挂载" });
+  return { sessionId: findLatestSessionForNode(readJournal(repository.path), request.query.nodeId ?? "") ?? null };
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {

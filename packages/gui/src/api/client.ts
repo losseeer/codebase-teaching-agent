@@ -68,6 +68,10 @@ export const api = {
   /** 按当前开关状态重烧 L1 摘要（切开关后必须调用才生效；409=确定性档，会拒绝覆盖）。 */
   rebuildSummaries: (repositoryId: string) => request<ImportEstimate>(`/api/repositories/${repositoryId}/summaries/rebuild`, { method: "POST", body: "{}" }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
+  /** 按 id 取教学会话（引擎内存未命中时会按 sessionId 从 journal 续命重建）。 */
+  getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
+  /** 该课程节点最近一次教学会话的 id（引擎从 journal 倒扫；GUI 没存过 id 的存量历史靠它找回）。 */
+  getLatestSession: (repositoryId: string, nodeId: string) => request<{ sessionId: string | null }>(`/api/repositories/${repositoryId}/latest-session?nodeId=${encodeURIComponent(nodeId)}`),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。 */
   mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; style: number }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {

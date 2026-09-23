@@ -49,3 +49,12 @@ export function restoreSessionFromJournal(events: JournalEvent[], sessionId: str
     createdAt: mine[0].at
   };
 }
+
+/**
+  按节点找 journal 里最近一次教学回合的 sessionId：GUI 从没存过 id 的**存量历史**也能找回
+  （hint_depth 每条都带 unit_id，是「这次会话属于哪个节点」的权威来源；倒扫取最新）。
+*/
+export function findLatestSessionForNode(events: JournalEvent[], courseNodeId: string): string | undefined {
+  if (!courseNodeId) return undefined;
+  return [...events].reverse().find((event) => event.type === "hint_depth" && event.sessionId && event.payload.unit_id === courseNodeId)?.sessionId;
+}

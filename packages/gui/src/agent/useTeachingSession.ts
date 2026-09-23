@@ -41,6 +41,29 @@ export type ThreadItem =
   | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" };
 
 const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
+/** 教学会话 id 的持久化表（键 = `仓库:节点`）：页面刷新后凭它向引擎取回历史（引擎侧有 journal 续命）。 */
+const SESSION_STORAGE_KEY = "codebase-tutor.teaching-sessions";
+
+function readSessionMap(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? "{}") as unknown;
+    return typeof parsed === "object" && parsed ? parsed as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberSession(repositoryId: string, nodeId: string, sessionId?: string): void {
+  try {
+    const map = readSessionMap();
+    const key = `${repositoryId}:${nodeId}`;
+    if (sessionId) map[key] = sessionId;
+    else delete map[key];
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    /* localStorage 不可用时续命只在当前页面内有效，不影响发送 */
+  }
+}
 
 function isScope(value: string): value is Scope {
   return value === "map" || value === "teaching" || value === "practice";
@@ -218,6 +241,44 @@ useEffect(() => {
     setLiveAnswer("");
   }, [selected?.id]);
 
+  // 对话历史续命：引擎早已支持「按 sessionId 从 journal 重建会话」，但 GUI 从不存 id 也不取回——
+  // 刷新页面后线程恒为空。找回顺序 = 本地存的 id → 引擎按节点倒扫 journal（存量历史没存过 id 也能救回）；
+  // 会话挂回后线程为空时用 session.messages 重建展示。查不到/对不上就忘掉 id，下次发送走新建。
+  useEffect(() => {
+    if (!repositoryId || !selected || session) return;
+    const nodeId = selected.id;
+    const key = `${repositoryId}:${nodeId}`;
+    let cancelled = false;
+    const restore = async (): Promise<void> => {
+      try {
+        let sessionId: string | undefined = readSessionMap()[key];
+        if (!sessionId) sessionId = (await api.getLatestSession(repositoryId, nodeId)).sessionId ?? undefined;
+        if (!sessionId || cancelled) return;
+        const restored = await api.getSession(sessionId);
+        if (cancelled) return;
+        if (restored.repositoryId !== repositoryId || restored.courseNodeId !== nodeId) {
+          rememberSession(repositoryId, nodeId);
+          return;
+        }
+        rememberSession(repositoryId, nodeId, restored.id);
+        setSession(restored);
+        setSettingsState(restored.settings);
+        setThreads((prev) => (prev.teaching.length
+          ? prev
+          : {
+              ...prev,
+              teaching: restored.messages
+                .filter((message) => message.role !== "system" && message.content)
+                .map((message) => ({ kind: message.role === "user" ? "user" as const : "agent" as const, id: message.id, text: message.content }))
+            }));
+      } catch {
+        if (!cancelled) rememberSession(repositoryId, nodeId);
+      }
+    };
+    void restore();
+    return () => { cancelled = true; };
+  }, [repositoryId, selected, session]);
+
   const activeSessionId = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!repositoryId) return;
@@ -246,6 +307,7 @@ useEffect(() => {
         const created = await api.createSession(repositoryId, selected.id, settings);
         active = created.session;
         setFaded(created.faded);
+        rememberSession(repositoryId, selected.id, active.id);
       }
       if (!active) return;
       activeSessionId.current = active.id;

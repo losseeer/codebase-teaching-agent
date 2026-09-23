@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/shared";
-import { restoreSessionFromJournal } from "./restore.js";
+import { findLatestSessionForNode, restoreSessionFromJournal } from "./restore.js";
 
 /**
   会话续命的读侧重放：输入是 journal 里同一 sessionId 的事件序列，输出是可直接续聊的 TutorSession。
@@ -64,5 +64,21 @@ describe("restoreSessionFromJournal", () => {
     expect(session?.style).toBe(100); // validateStyle 夹到 0-100
     expect(session?.settings.pedagogy).toBe("socratic");
     expect(session?.settings.depth).toBe("macro");
+  });
+});
+
+describe("findLatestSessionForNode", () => {
+  it("倒扫 journal 取该节点最近一次教学的 sessionId；别的节点/无 id 的行不算", () => {
+    const events: JournalEvent[] = [
+      event("hint_depth", { unit_id: "workflow:src/A.java", depth: 1, stage: "orient", resolved_by: "learner_attempt" }, "s-old", "2026-09-22T10:00:00.000Z"),
+      event("hint_depth", { unit_id: "workflow:src/B.java", depth: 1, stage: "orient", resolved_by: "learner_attempt" }, "s-other", "2026-09-22T10:01:00.000Z"),
+      event("hint_depth", { unit_id: "workflow:src/A.java", depth: 2, stage: "procedure", resolved_by: "learner_attempt" }, "s-new", "2026-09-22T10:02:00.000Z"),
+      // 无 sessionId 的 hint_depth（引擎自写但会话外的边角）不能成为找回目标
+      event("hint_depth", { unit_id: "workflow:src/A.java", depth: 1, stage: "orient", resolved_by: "learner_attempt" }, undefined, "2026-09-22T10:03:00.000Z")
+    ];
+    expect(findLatestSessionForNode(events, "workflow:src/A.java")).toBe("s-new");
+    expect(findLatestSessionForNode(events, "workflow:src/B.java")).toBe("s-other");
+    expect(findLatestSessionForNode(events, "workflow:src/C.java")).toBeUndefined();
+    expect(findLatestSessionForNode(events, "")).toBeUndefined();
   });
 });
