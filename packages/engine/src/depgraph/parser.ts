@@ -26,13 +26,17 @@ export interface ParseBackendStatus {
   reason?: string;
 }
 
-/** 只覆盖依赖图真正处理的扩展名（其余语言本来就走不进这里）。 */
+/** 只覆盖依赖图真正处理的扩展名（其余语言本来就走不进这里）。wasm 全部来自 `@vscode/tree-sitter-wasm`，零新增依赖。 */
 const GRAMMAR_FILES = {
   python: "tree-sitter-python.wasm",
   java: "tree-sitter-java.wasm",
   typescript: "tree-sitter-typescript.wasm",
   tsx: "tree-sitter-tsx.wasm",
-  javascript: "tree-sitter-javascript.wasm"
+  javascript: "tree-sitter-javascript.wasm",
+  go: "tree-sitter-go.wasm",
+  rust: "tree-sitter-rust.wasm",
+  csharp: "tree-sitter-c-sharp.wasm",
+  cpp: "tree-sitter-cpp.wasm"
 } as const;
 
 type GrammarName = keyof typeof GRAMMAR_FILES;
@@ -41,6 +45,10 @@ type GrammarName = keyof typeof GRAMMAR_FILES;
 function grammarOf(path: string): GrammarName | undefined {
   if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
+  if (path.endsWith(".go")) return "go";
+  if (path.endsWith(".rs")) return "rust";
+  if (path.endsWith(".cs")) return "csharp";
+  if (/\.(c|h|cc|cpp|cxx|hpp|hh)$/.test(path)) return "cpp";
   if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts")) return "typescript";
   if (path.endsWith(".tsx") || path.endsWith(".jsx")) return "tsx";
   if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs")) return "javascript";
@@ -51,6 +59,10 @@ function grammarOf(path: string): GrammarName | undefined {
 function languageOf(path: string): SymbolInfo["language"] {
   if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
+  if (path.endsWith(".go")) return "go";
+  if (path.endsWith(".rs")) return "rust";
+  if (path.endsWith(".cs")) return "csharp";
+  if (/\.(c|h|cc|cpp|cxx|hpp|hh)$/.test(path)) return "cpp";
   return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path) ? "typescript" : "other";
 }
 
@@ -118,8 +130,37 @@ function kindOf(type: string, inClass: boolean): SymbolInfo["kind"] | undefined 
   if (TS_TYPE_NODES.has(type)) return "type";
   if (type === "class_definition") return "class";
   if (type === "function_definition") return inClass ? "method" : "function";
+  // Go：function_declaration/method_declaration 与前序语言共享；type_declaration 的名字在 type_spec 里，单独展开
+  // C#：struct 与类同权重（可执行体、有成员）；接口/枚举/记录已共享 TS 集合
+  if (type === "struct_declaration") return "class";
+  // Rust：fn/struct/trait/enum/mod；impl 无名（体成员由递归收进来，inClass 让其升为 method）
+  if (type === "function_item") return inClass ? "method" : "function";
+  if (type === "struct_item" || type === "union_item") return "class";
+  if (type === "trait_item" || type === "enum_item" || type === "mod_item") return "type";
+  // C/C++：class/struct 是值类型家族（class_specifier 有 name 字段），enum 只有声明价值
+  if (type === "class_specifier" || type === "struct_specifier") return "class";
+  if (type === "enum_specifier") return "type";
   return undefined;
 }
+
+/** C 系 function_definition 没有 name 字段，名字藏在 declarator 链的末端（`int *foo(void)` → declarator(pointer_declarator(function_declarator(identifier)))）。 */
+function declaratorName(node: SyntaxNode): string | undefined {
+  // C 的函数名节点就叫 identifier；C++ 才有 qualified_identifier/destructor_name 这些带后缀的变体
+  const isNameNode = (type: string): boolean => type === "identifier" || type === "destructor_name" || type.endsWith("_identifier");
+  let current: SyntaxNode | null | undefined = node.childForFieldName("declarator");
+  const seen = new Set<number>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (isNameNode(current.type)) {
+      return current.type === "qualified_identifier" ? (current.text.split("::").pop() ?? current.text) : current.text;
+    }
+    current = current.childForFieldName("declarator") ?? current.namedChildren.find((child) => child.type.endsWith("_declarator") || isNameNode(child.type));
+  }
+  return undefined;
+}
+
+/** 「进入这些节点后，体内的函数定义算成员方法」：TS/Java/Python 类 + C++ 的 class/struct + Rust 的 impl/trait。 */
+const CONTAINER_BODIES = new Set<string>([...TS_CLASS_NODES, "class_definition", "class", "class_specifier", "struct_specifier", "impl_item", "trait_item"]);
 
 /** 参数原文列表：取参数节点的具名子节点，带类型标注/默认值/可见性修饰都原样保留。 */
 function parameterTexts(node: SyntaxNode): string[] {
@@ -136,7 +177,8 @@ function unwrap(node: SyntaxNode): SyntaxNode | undefined {
 }
 
 function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): SymbolInfo | undefined {
-  const name = node.childForFieldName("name")?.text.trim();
+  // C/C++ 的 function_definition 没有 name 字段，名字要从 declarator 链取
+  const name = node.childForFieldName("name")?.text.trim() || declaratorName(node);
   if (!name) return undefined;
   const line = node.startPosition.row + 1;
   return {
@@ -183,14 +225,35 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
     collectSymbols(inner, path, inClass, out);
     return;
   }
+  // Go 的 type_declaration 只是外壳：名字在各自 type_spec 里，kind 按类型本体区分（struct/interface 是可执行体家族）
+  if (node.type === "type_declaration") {
+    for (const spec of node.namedChildren) {
+      if (spec.type !== "type_spec") continue;
+      const specName = spec.childForFieldName("name")?.text.trim();
+      if (!specName) continue;
+      const specType = spec.childForFieldName("type")?.type;
+      const kind: SymbolInfo["kind"] = specType === "struct_type" || specType === "interface_type" ? "class" : "type";
+      out.push({
+        id: `symbol:${path}:${specName}:${spec.startPosition.row + 1}`,
+        name: specName,
+        kind,
+        path,
+        line: spec.startPosition.row + 1,
+        endLine: spec.endPosition.row + 1,
+        parameters: [],
+        language: languageOf(path)
+      });
+    }
+    return;
+  }
   const kind = kindOf(node.type, inClass);
   if (kind) {
     const symbol = symbolOf(node, path, kind);
     if (symbol) out.push(symbol);
   }
   if (TS_VARIABLE_NODES.has(node.type)) collectVariableDeclarators(node, path, out);
-  // 进到类体之后，Python 的 def 就是方法；TS 的方法由节点类型直接判定，不依赖这个标志
-  const childInClass = inClass || TS_CLASS_NODES.has(node.type) || node.type === "class_definition" || node.type === "class";
+  // 进到类体之后，Python 的 def、Rust 的 fn、C/C++ 的成员函数就是方法；TS 的方法由节点类型直接判定，不依赖这个标志
+  const childInClass = inClass || CONTAINER_BODIES.has(node.type);
   for (const child of node.namedChildren) collectSymbols(child, path, childInClass, out);
 }
 

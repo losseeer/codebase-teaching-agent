@@ -17,7 +17,9 @@ export interface DependencyGraph {
   parseBackendReason?: string;
 }
 
-const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java"];
+const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"];
+/** C/C++ 一族的扩展名（cpp 语法同时覆盖纯 C）。 */
+const cppExtensionPattern = /\.(c|h|cc|cpp|cxx|hpp|hh)$/;
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
 /** TS/JS 的说明符一律带引号；Python 与 Java 的 import 没有引号，各走 extractPythonSpecifiers / extractJavaSpecifiers。 */
 const tsSpecifierPattern = /(?:from\s+|import\s*\(?\s*|require\s*\()\s*["']([^"']+)["']/g;
@@ -38,20 +40,15 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
     contents.set(file.path, content);
     symbols.push(...extractSymbols(file.path, content));
   }
-  // Java 的 import 指向「全限定类名」，要经全仓 类名→文件 索引才能落点，故内容先读全再解析依赖
+  // Java 的 import 指向「全限定类名」、Go 的 import 指向「包目录」、C# 的 using 指向「命名空间」，
+  // 都要先建全仓索引才能落点，故内容先读全再解析依赖
   const javaTypes = collectJavaTypes(contents);
+  const goModules = collectGoModules(repositoryPath, files);
+  const goFilesByDir = collectGoFiles(files);
+  const csNamespaces = collectCSharpNamespaces(contents);
   const imports = new Map<string, string[]>();
   for (const [path, content] of contents) {
-    const isJava = path.endsWith(".java");
-    const specifiers = path.endsWith(".py")
-      ? extractPythonSpecifiers(content)
-      : isJava
-        ? extractJavaSpecifiers(content)
-        : [...content.matchAll(tsSpecifierPattern)].map((match) => match[1]);
-    const resolved = specifiers
-      .map((value) => (isJava ? resolveJavaImport(value, javaTypes) : resolveImport(path, value, available, packages)))
-      .filter((value): value is string => Boolean(value));
-    imports.set(path, [...new Set(resolved)]);
+    imports.set(path, resolveFileImports(path, content, { available, packages, javaTypes, goModules, goFilesByDir, csNamespaces }));
   }
   const calls = extractCalls(contents, symbols, imports);
   const lspStatus = detectLspStatus(files);
@@ -171,7 +168,7 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
     const lines = content.split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
-      if (/^\s*(?:export\s+)?(?:async\s+)?function\b|^\s*(?:export\s+)?(?:const|let|var)\b.*=>|^\s*(?:async\s+)?def\b/.test(line)) continue;
+      if (/^\s*(?:export\s+)?(?:async\s+)?function\b|^\s*(?:export\s+)?(?:const|let|var)\b.*=>|^\s*(?:async\s+)?def\b|^\s*func\b|^\s*(?:pub(?:\([^)]*\))?\s+)?(?:default\s+)?(?:unsafe\s+)?(?:async\s+)?fn\b/.test(line)) continue;
       // Java 方法/构造器声明行也含「名字(」——不跳过会产生自我调用边
       if (/^\s*(?:@\w+\s*)?(?:(?:public|private|protected|static|final|abstract|synchronized|default|native)\s+)+[\w<>\[\],.?\s]+\(/.test(line)) continue;
       for (const match of line.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) {
@@ -270,6 +267,177 @@ function resolveJavaImport(specifier: string, javaTypes: Map<string, string>): s
   }
 }
 
+/** join/normalize 的结果统一成仓库口径的正斜杠路径（win32 下返回反斜杠）。 */
+function slash(candidate: string): string {
+  return candidate.replaceAll("\\", "/");
+}
+
+interface ImportIndex {
+  available: Set<string>;
+  packages: Map<string, WorkspacePackage>;
+  javaTypes: Map<string, string>;
+  goModules: Map<string, string>;
+  goFilesByDir: Map<string, string[]>;
+  csNamespaces: Map<string, string[]>;
+}
+
+/** 按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）一律丢弃，图里只留仓内依赖。 */
+function resolveFileImports(path: string, content: string, index: ImportIndex): string[] {
+  const dedupe = (values: Iterable<string>): string[] => [...new Set(values)];
+  const kept = (values: (string | undefined)[]): string[] => dedupe(values.filter((value): value is string => Boolean(value)));
+  if (path.endsWith(".py")) return kept(extractPythonSpecifiers(content).map((value) => resolvePythonImport(path, value, index.available)));
+  if (path.endsWith(".java")) return kept(extractJavaSpecifiers(content).map((value) => resolveJavaImport(value, index.javaTypes)));
+  if (path.endsWith(".go")) return dedupe(extractGoSpecifiers(content).flatMap((value) => resolveGoImport(value, index.goModules, index.goFilesByDir)));
+  if (path.endsWith(".rs")) return kept(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)));
+  if (path.endsWith(".cs")) return kept(extractCSharpSpecifiers(content).flatMap((value) => resolveCSharpImport(value, index.csNamespaces)).filter((value) => value !== path));
+  if (cppExtensionPattern.test(path)) return dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available)).filter((value) => value !== path));
+  return kept([...content.matchAll(tsSpecifierPattern)].map((match) => resolveImport(path, match[1], index.available, index.packages)));
+}
+
+/**
+ * Go 的 import 路径指向「包」（目录）而非文件：go.mod 的 `module X` 前缀决定仓内边界，
+ * 命中后落点为该目录下全部非测试 .go —— 依赖粒度本来就是整个包。
+ */
+function collectGoModules(repositoryPath: string, files: FileEntry[]): Map<string, string> {
+  const modules = new Map<string, string>();
+  for (const file of files) {
+    if (basename(file.path) !== "go.mod") continue;
+    try {
+      const match = readFileSync(join(repositoryPath, file.path), "utf8").match(/^module\s+(\S+)/m);
+      if (match) modules.set(match[1], dirname(file.path));
+    } catch { /* A malformed go.mod is not fatal to import. */ }
+  }
+  return modules;
+}
+
+function collectGoFiles(files: FileEntry[]): Map<string, string[]> {
+  const byDir = new Map<string, string[]>();
+  for (const file of files) {
+    if (file.extension !== ".go" || file.path.endsWith("_test.go")) continue;
+    const dir = dirname(file.path);
+    byDir.set(dir, [...(byDir.get(dir) ?? []), file.path]);
+  }
+  return byDir;
+}
+
+/** Go 的 import 两种形态：`import "x"`（可带别名）与 `import ( … )` 分组块。 */
+function extractGoSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  let inBlock = false;
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!inBlock) {
+      const single = trimmed.match(/^import\s+(?:[\w.]+\s+)?"([^"]+)"$/);
+      if (single) specifiers.push(single[1]);
+      if (/^import\s*\($/.test(trimmed)) inBlock = true;
+      continue;
+    }
+    if (trimmed === ")") {
+      inBlock = false;
+      continue;
+    }
+    const item = trimmed.match(/^(?:[\w.]+\s+)?"([^"]+)"$/);
+    if (item) specifiers.push(item[1]);
+  }
+  return specifiers;
+}
+
+function resolveGoImport(specifier: string, goModules: Map<string, string>, goFilesByDir: Map<string, string[]>): string[] {
+  for (const [name, dir] of goModules) {
+    if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
+    const rest = specifier.slice(name.length).replace(/^\//, "");
+    return goFilesByDir.get(slash(normalize(join(dir, rest)))) ?? [];
+  }
+  return [];
+}
+
+/**
+ * Rust 的仓内依赖两种：`mod x;`（声明子模块，对应 x.rs 或 x/mod.rs）与 `use crate::a::b;`。
+ * `use x::{c, d}` 取路径前缀即可；外部 crate（`use serde::…`）不经 crate/self/super 打头，天然不落点。
+ */
+function extractRustSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    const modMatch = trimmed.match(/^(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/);
+    if (modMatch) specifiers.push(`mod:${modMatch[1]}`);
+    const useMatch = trimmed.match(/^use\s+(crate|self|super)::([\w:]+)/);
+    if (useMatch) specifiers.push(`use:${useMatch[1]}:${useMatch[2]}`);
+  }
+  return specifiers;
+}
+
+function resolveRustImport(from: string, specifier: string, available: Set<string>): string | undefined {
+  const dir = dirname(from);
+  if (specifier.startsWith("mod:")) {
+    const name = specifier.slice(4);
+    return [slash(join(dir, `${name}.rs`)), slash(join(dir, name, "mod.rs"))].find((candidate) => available.has(candidate));
+  }
+  const rest = specifier.slice(4); // `crate:a::b`
+  const originEnd = rest.indexOf(":");
+  const origin = rest.slice(0, originEnd);
+  const chain = rest.slice(originEnd + 1).replace(/:$/, "").replaceAll("::", "/");
+  const base = origin === "crate" ? "src" : origin === "self" ? dir : dirname(dir);
+  let current = slash(normalize(join(base, chain)));
+  for (;;) {
+    const hit = [`${current}.rs`, `${current}/mod.rs`].find((candidate) => available.has(candidate));
+    if (hit) return hit;
+    const cut = current.lastIndexOf("/");
+    if (cut <= 0) return undefined;
+    current = current.slice(0, cut);
+  }
+}
+
+/**
+ * C# 的 `using A.B.C;` 指向命名空间而非文件：全仓建「命名空间 → 声明它的文件」索引
+ * （块式与文件式 `namespace X;` 都收），逐级去尾命中后连到该命名空间下的全部文件。
+ */
+function extractCSharpSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  for (const line of content.split("\n")) {
+    const match = line.trim().match(/^using\s+(?:static\s+)?(?:[\w]+\s*=\s*)?([A-Za-z_][\w.]*);/);
+    if (match) specifiers.push(match[1]);
+  }
+  return specifiers;
+}
+
+function collectCSharpNamespaces(contents: Map<string, string>): Map<string, string[]> {
+  const byNamespace = new Map<string, string[]>();
+  for (const [path, content] of contents) {
+    if (!path.endsWith(".cs")) continue;
+    for (const match of content.matchAll(/^\s*namespace\s+([A-Za-z_][\w.]*)/gm)) {
+      const list = byNamespace.get(match[1]) ?? [];
+      if (!list.includes(path)) list.push(path);
+      byNamespace.set(match[1], list);
+    }
+  }
+  return byNamespace;
+}
+
+function resolveCSharpImport(specifier: string, namespaces: Map<string, string[]>): string[] {
+  let current = specifier;
+  for (;;) {
+    const hit = namespaces.get(current);
+    if (hit) return hit;
+    const cut = current.lastIndexOf(".");
+    if (cut < 0) return [];
+    current = current.slice(0, cut);
+  }
+}
+
+/** 只认 `#include "x.h"`（引号形，项目内头文件）；尖括号是系统/第三方头，直接不收。 */
+function extractCppIncludes(content: string): string[] {
+  return [...content.matchAll(/^[ \t]*#[ \t]*include[ \t]*"([^"]+)"/gm)].map((match) => match[1]);
+}
+
+/** 先按当前文件相对解析（编译器首要规则）；未命中再按全仓路径后缀匹配——include 目录各异，多个命中就全连。 */
+function resolveCppInclude(from: string, specifier: string, available: Set<string>): string[] {
+  const relative = slash(normalize(join(dirname(from), specifier)));
+  if (available.has(relative)) return [relative];
+  const suffix = `/${specifier.replaceAll("\\", "/")}`;
+  return [...available].filter((candidate) => candidate.endsWith(suffix) && candidate !== from);
+}
+
 interface WorkspacePackage {
   dir: string;
   main?: string;
@@ -337,7 +505,9 @@ function resolveImport(from: string, specifier: string, available: Set<string>, 
 function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents: Map<string, string>): SourceAnchor[] {
   // Spring 仓的入口只写在注解里，常规规则（package.json、惯用文件名）一条都碰不到；注解命中优先入列
   const java = detectJavaEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
-  const javaPaths = new Set(java.map((anchor) => anchor.path));
+  // Go/Rust/C/C# 的 main 函数与 Java 注解同级：确定的启动点，不是文件名猜测
+  const mains = detectMainFunctionEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
+  const javaPaths = new Set([...java, ...mains].map((anchor) => anchor.path));
   const candidates = new Map<string, string>();
   const manifest = join(repositoryPath, "package.json");
   if (existsSync(manifest)) {
@@ -363,7 +533,29 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents:
   const conventional = [...candidates.entries()]
     .filter(([path]) => !isTestPath(path) && !javaPaths.has(path) && files.some((file) => file.path === path))
     .map(([path, label]) => ({ path, line: 1, label }));
-  return [...java.slice(0, 60), ...conventional.slice(0, 12)];
+  return [...java.slice(0, 60), ...mains.slice(0, 60), ...conventional.slice(0, 12)];
+}
+
+/**
+ * Go/Rust/C/C# 的主函数约定：每个文件只取首个命中，锚点落在声明行。
+ * 与 Java 注解同按「权威入口」对待——这是启动点的确定性证据，不是文件名猜测。
+ */
+function detectMainFunctionEntrypoints(contents: Map<string, string>): SourceAnchor[] {
+  const rules: { extension: RegExp; pattern: RegExp; label: string }[] = [
+    { extension: /\.go$/, pattern: /^[ \t]*func main\(\)/m, label: "Go 主函数" },
+    { extension: /\.rs$/, pattern: /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?fn main\(\)/m, label: "Rust 主函数" },
+    { extension: cppExtensionPattern, pattern: /^[ \t]*(?:signed\s+)?int main\s*\(/m, label: "C/C++ 主函数" },
+    { extension: /\.cs$/, pattern: /^[ \t]*(?:(?:public|private|internal|protected|static|unsafe|partial|async)\s+)*(?:void|int|Task)\s+Main(?:Async)?\s*\(/m, label: "C# 主函数" }
+  ];
+  const anchors: SourceAnchor[] = [];
+  for (const [path, content] of contents) {
+    const rule = rules.find((item) => item.extension.test(path));
+    if (!rule) continue;
+    const match = content.match(rule.pattern);
+    if (!match) continue;
+    anchors.push({ path, line: content.slice(0, match.index ?? 0).split("\n").length, label: rule.label });
+  }
+  return anchors;
 }
 
 /**

@@ -5,7 +5,7 @@ import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex } from "@codebas
 import { repositoryId, hash } from "../lib.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
 
-const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".rb", ".php", ".vue", ".svelte", ".json", ".md", ".yml", ".yaml"]);
+const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".rb", ".php", ".vue", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"]);
 
 export function indexRepository(repositoryPath: string): RepositoryIndex {
   const files: FileEntry[] = [];

@@ -10,6 +10,9 @@ export interface ImportJob {
   createdAt: string;
   completedAt?: string;
   error?: string;
+  /** 导入时选择的摘要口径：true=「参考注释导入」（slice-v2c 档），false=普通导入；undefined=不改该仓既有设置。
+      导入开始时会把显式值写进该仓 settings（读-合并-写），之后成本监控页的开关继续作为唯一事实源。 */
+  summaryHeaderComments?: boolean;
 }
 
 export interface FileEntry {
@@ -189,7 +192,7 @@ export interface SymbolInfo {
   line: number;
   endLine: number;
   parameters: string[];
-  language: "typescript" | "python" | "java" | "other";
+  language: "typescript" | "python" | "java" | "go" | "rust" | "csharp" | "cpp" | "other";
   type?: string;
   referenceCount?: number;
 }

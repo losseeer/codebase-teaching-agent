@@ -113,7 +113,7 @@ describe("语法树符号抽取", () => {
   });
 
   it("没有对应语法的扩展名返回 undefined，交给逐行匹配", () => {
-    expect(extractSymbolsFromAst("main.go", "func main() {}")).toBeUndefined();
+    expect(extractSymbolsFromAst("App.vue", "<template><div/></template>")).toBeUndefined();
   });
 
   it("解析器未加载时状态是 regex 并带原因（守回落路径）", () => {
@@ -125,6 +125,80 @@ describe("语法树符号抽取", () => {
       expect(parseBackendStatus().backend).toBe("ast");
       expect(parseBackendStatus().reason).toBeUndefined();
     });
+  });
+});
+
+describe("新增语言符号抽取（Go/Rust/C）", () => {
+  it("Go：type_declaration 展开到 type_spec（struct/interface 记 class、别名记 type），方法升为 method", async () => {
+    await loadSymbolParser();
+    const source = [
+      "package main", // 1
+      "", // 2
+      "type Config struct {", // 3
+      "\tName string", // 4
+      "}", // 5
+      "", // 6
+      "type Handler interface {", // 7
+      "\tHandle()", // 8
+      "}", // 9
+      "", // 10
+      "type Alias int", // 11
+      "", // 12
+      "func (c *Config) Name() string {", // 13
+      "\treturn c.Name", // 14
+      "}", // 15
+      "", // 16
+      "func main() {}", // 17
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("main.go", source);
+    expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}-${symbol.endLine}`)).toEqual([
+      "Config:class:3-5",
+      "Handler:class:7-9",
+      "Alias:type:11-11",
+      "Name:method:13-15",
+      "main:function:17-17"
+    ]);
+    expect(symbols?.[0]?.language).toBe("go");
+  });
+
+  it("Rust：impl 体内的 fn 升为 method；struct/trait 有位置", async () => {
+    await loadSymbolParser();
+    const source = [
+      "pub struct Point { x: i32 }", // 1
+      "", // 2
+      "impl Point {", // 3
+      "\tpub fn zero() -> Point { Point { x: 0 } }", // 4
+      "}", // 5
+      "", // 6
+      "fn helper() {}", // 7
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("src/geom.rs", source);
+    expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}`)).toEqual([
+      "Point:class",
+      "zero:method",
+      "helper:function"
+    ]);
+    expect(symbols?.find((symbol) => symbol.name === "helper")?.language).toBe("rust");
+  });
+
+  it("C：function_definition 没有 name 字段，名字从 declarator 链取", async () => {
+    await loadSymbolParser();
+    const source = [
+      "int add(int a, int b) {", // 1
+      "\treturn a + b;", // 2
+      "}", // 3
+      "", // 4
+      "int *make(int v) { return 0; }", // 5
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("calc.c", source);
+    expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}`)).toEqual([
+      "add:function:1",
+      "make:function:5"
+    ]);
+    expect(symbols?.[0]?.language).toBe("cpp");
   });
 });
 

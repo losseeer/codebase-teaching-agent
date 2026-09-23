@@ -95,6 +95,8 @@ export function App(): ReactElement {
       </aside>
       <main className="main-content">
         <Routes>
+          {/* 根路径固定落导入页（用户口径 09-23）：不带 workspace 记忆直通 /app——导入是每次打开的起点 */}
+          <Route path="/" element={<Navigate to="/import" replace />} />
           <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); session.reloadCourseData(); }} workspace={workspace} />} />
           <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />)} />
           <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} session={session} />)} />

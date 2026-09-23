@@ -42,7 +42,7 @@ export const api = {
   health: () => request<{ status: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: { model?: string; thinking?: ThinkingEffort }) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
-  submitImport: (path: string) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path }) }),
+  submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
   getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   getCourse: (repositoryId: string) => request<CourseTree>(`/api/repositories/${repositoryId}/course`),

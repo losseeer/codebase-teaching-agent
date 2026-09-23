@@ -237,8 +237,8 @@ app.get("/ws", { websocket: true }, (socket) => {
   socket.on("close", () => clients.delete(socket));
 });
 
-app.post<{ Body: { path?: string } }>("/api/imports", async (request, reply) => {
-  try { return reply.code(202).send(importer.submit(request.body?.path ?? "")); }
+app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
+  try { return reply.code(202).send(importer.submit(request.body?.path ?? "", typeof request.body?.summaryHeaderComments === "boolean" ? request.body.summaryHeaderComments : undefined)); }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "无法提交导入任务" }); }
 });
 

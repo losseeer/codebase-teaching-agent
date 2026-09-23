@@ -20,6 +20,7 @@ interface Props {
 
 export function ImportPage({ onImported, workspace }: Props): ReactElement {
   const [path, setPath] = useState(workspace?.repositoryPath ?? "");
+  const [commentMode, setCommentMode] = useState(false);
   const [job, setJob] = useState<ImportJob | null>(null);
   const [error, setError] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
@@ -57,7 +58,7 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
 
   const submit = async (): Promise<void> => {
     setError(""); setReport(null);
-    try { setJob(await api.submitImport(path)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
+    try { setJob(await api.submitImport(path.trim(), commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
   };
   return (
     <section className="page import-page">
@@ -76,6 +77,14 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
             <FolderGit2 size={17} />导入
           </button>
         </div>
+        <div className="import-mode-row" role="radiogroup" aria-label="摘要口径">
+          <span>摘要口径</span>
+          <button type="button" role="radio" aria-checked={!commentMode} className={commentMode ? "" : "selected"} onClick={() => setCommentMode(false)}>普通导入</button>
+          <button type="button" role="radio" aria-checked={commentMode} className={commentMode ? "selected" : ""} onClick={() => setCommentMode(true)}>参考注释导入</button>
+        </div>
+        <p className="import-mode-note">{commentMode
+          ? "摘要生成时参考代码注释：注释写得多的仓库（面试讲解、课程作业类）中文概念词更容易被摘要带上、进而被搜到，成本略高。"
+          : "摘要只看代码结构，更省；注释里独有的概念可由导入后在成本监控页开启「摘要参考注释」并重新生成摘要补齐。"}</p>
         {error && <p className="error-message">{error}</p>}
       </div>
       {job && (

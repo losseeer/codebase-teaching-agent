@@ -61,9 +61,9 @@ export class ImportService extends EventEmitter {
   /** 每个仓库至多一轮重分析在途；running 期间新到的路径先累积，本轮结束后合并跑下一轮。 */
   private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
 
-  submit(inputPath: string): ImportJob {
+  submit(inputPath: string, summaryHeaderComments?: boolean): ImportJob {
     const repositoryPath = validateRepositoryPath(inputPath);
-    const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString() };
+    const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString(), ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) };
     this.jobs.set(job.id, job);
     this.queue = this.queue.then(() => this.run(job.id)).catch(() => undefined);
     return job;
@@ -139,7 +139,7 @@ export class ImportService extends EventEmitter {
     const startedAt = Date.now();
     try {
       this.update(job, "indexing", 10, "正在建立文件树与 Git 热点索引");
-      const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message));
+      const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
       const { index, course, estimate, analysis } = imported;
 
       // 单槽：新导入的仓库成为唯一挂载项，旧仓库（含其 watcher）在此被卸载
@@ -163,7 +163,7 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void): Promise<ImportedRepository> {
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<ImportedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     const index = indexRepository(repositoryPath);
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
@@ -173,8 +173,15 @@ export class ImportService extends EventEmitter {
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
     // `refinement`/`monthlyBudgetUsd` 后面润色缓存与预算还要用同一份。
-    const storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
-    const withHeaderComments = storedSettings?.summaryHeaderComments === true;
+    let storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
+    // 导入页的显式选择是**该仓摘要口径唯一的写入时点之一**（另一个是成本监控页开关）：读-合并-写保住其它键，
+    // 之后的增量重分析/重导入不再带选择，只读这份落库值。本地副本同步更新——
+    // 后面润色标记的读-合并-写展开的就是这份，不更新会把刚写的开关冲掉（真仓实测抓到的丢失更新）。
+    if (summaryHeaderComments !== undefined) {
+      storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
+      database.saveSettings(index.repositoryId, storedSettings);
+    }
+    const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     // L1 走**轻任务角色**（同一套配置、思考强制 off）：文件级摘要是量大、单条简单的活，开思考只会白烧 token。
     // 预算已降级时不传 llm ⇒ 自动落到确定性档，不在超预算时继续花钱。
     const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
