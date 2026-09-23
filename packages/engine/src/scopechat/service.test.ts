@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { buildSearchCorpus } from "../source/search-code.js";
-import { mapChat, practiceChat, type MapChatProgress } from "./service.js";
+import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./service.js";
 
 function fakeProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
   const calls: LlmCompletionInput[] = [];
@@ -207,6 +207,39 @@ describe("mapChat", () => {
     expect(user).toContain("含 65 个已分析文件");
     expect(user).toContain("其余 5 个文件未列出");
   });
+
+  it("最近对话窗口：按时间序注入在代码上下文与问题之间，超长轮次逐轮截断，空内容不生成行", async () => {
+    const { provider, calls } = fakeProvider();
+    await mapChat({
+      repoPath: import.meta.dirname, analysis, content: "第二点再展开讲", provider, style: 50,
+      history: [
+        { role: "user", content: "这个模块的分层有哪些？" },
+        { role: "assistant", content: "长".repeat(500) },
+        { role: "user", content: "   \n  " }
+      ]
+    });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("最近对话（此前轮次，按时间序");
+    expect(user).toContain("学习者: 这个模块的分层有哪些？");
+    expect(user).toContain("长".repeat(400));
+    expect(user).not.toContain("长".repeat(401));
+    expect(user.indexOf("最近对话")).toBeLessThan(user.indexOf("学习者的问题：第二点再展开讲"));
+    expect(user.indexOf("最近对话")).toBeGreaterThan(user.indexOf("项目结构全景"));
+    // 空内容轮不生成行：整块只有 学习者/助手 两行
+    expect(user.match(/(学习者|助手): /g)?.filter((line) => line === "助手: ").length).toBe(1);
+  });
+
+  it("最近对话只取最后 6 轮；无历史时不注入空段", async () => {
+    const { provider, calls } = fakeProvider();
+    const turns = Array.from({ length: 8 }, (_, i): ScopedChatTurn => ({ role: i % 2 ? "assistant" : "user", content: `轮次${i}` }));
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", history: turns, provider, style: 50 });
+    expect(calls[0].user).toContain("轮次2");
+    expect(calls[0].user).not.toContain("轮次1");
+    expect(calls[0].user).not.toContain("轮次0");
+    const fresh = fakeProvider();
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: fresh.provider, style: 50 });
+    expect(fresh.calls[0].user).not.toContain("最近对话");
+  });
 });
 
 describe("practiceChat", () => {
@@ -227,6 +260,22 @@ describe("practiceChat", () => {
     expect(user).not.toContain("expectedIds");
     expect(user).not.toContain("answerKey");
     expect(result.reply).toContain("基于上下文");
+  });
+
+  it("最近对话注入在题面上下文与追问之间；无历史不注入空段", async () => {
+    const { provider, calls } = fakeProvider();
+    await practiceChat({
+      repoPath: import.meta.dirname, exercise, content: "为什么不是 app.ts？", provider, style: 50,
+      history: [{ role: "user", content: "这题选什么？" }, { role: "assistant", content: "建议选 config.ts，因为装配从它读起。" }]
+    });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("学习者: 这题选什么？");
+    expect(user).toContain("助手: 建议选 config.ts");
+    expect(user.indexOf("最近对话")).toBeGreaterThan(user.indexOf("练习上下文："));
+    expect(user.indexOf("最近对话")).toBeLessThan(user.indexOf("学习者的追问："));
+    const fresh = fakeProvider();
+    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "问", provider: fresh.provider, style: 50 });
+    expect(fresh.calls[0].user).not.toContain("最近对话");
   });
 });
 

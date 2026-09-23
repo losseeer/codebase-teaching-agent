@@ -35,7 +35,7 @@ import { deriveLearnerProfile } from "./learner/model.js";
 import { resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
-import { mapChat, practiceChat, type MapChatProgress } from "./scopechat/service.js";
+import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/service.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
 loadDotEnv();
@@ -169,6 +169,18 @@ function sanitizeScopePaths(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const paths = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 400))];
   return paths.length ? paths.slice(0, 1_000) : undefined;
+}
+
+/** 作用域对话上送的最近历史回合（入参守卫）：角色白名单 + 内容非空截长，只留最后 6 条；窗口渲染口径在 scopechat/service.ts。 */
+function sanitizeChatHistory(value: unknown): ScopedChatTurn[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): ScopedChatTurn[] => {
+    if (typeof item !== "object" || item === null) return [];
+    const turn = item as { role?: unknown; content?: unknown };
+    if (turn.role !== "user" && turn.role !== "assistant") return [];
+    if (typeof turn.content !== "string" || !turn.content.trim()) return [];
+    return [{ role: turn.role, content: turn.content.trim().slice(0, 2_000) }];
+  }).slice(-6);
 }
 
 importer.on("event", broadcast);
@@ -438,7 +450,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -447,7 +459,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -475,7 +487,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -490,7 +502,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   };
   try {
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)
@@ -519,7 +531,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -531,7 +543,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   try {
     const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
     if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, provider, style: validateStyle(request.body?.style) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history: sanitizeChatHistory(request.body?.history), provider, style: validateStyle(request.body?.style) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { api } from "../api/client";
+import { api, type ScopedChatHistoryTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 
 /**
@@ -163,6 +163,11 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
 };
 const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [target]: [] }));
+// threads 的渲染期镜像：换题等事件发生时要同步读到「当前线程长度」来推进历史游标（setState 的异步值不可用）
+const threadsRef = useRef(threads);
+threadsRef.current = threads;
+/** practice 历史上界：此下标之前的线程消息属于更早的练习，不随追问上送（线程仍完整展示）。 */
+const practiceHistoryStart = useRef(0);
 
 // 课程与节点
 const [course, setCourse] = useState<CourseTree | null>(null);
@@ -220,8 +225,12 @@ useEffect(() => {
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   // 练习评估作用域的对话上下文（由 PracticePage 在生成练习时写入）
   const [practiceExercise, setPracticeExerciseState] = useState<Exercise | null>(null);
-  const setPracticeExercise = (exercise: Exercise | null): void => setPracticeExerciseState(exercise);
-  useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
+  const setPracticeExercise = (exercise: Exercise | null): void => {
+    // 换题即推进游标：旧题的问答不再进新题的上下文（「为什么选A」串题会误导模型），线程本身不清空
+    practiceHistoryStart.current = threadsRef.current.practice.length;
+    setPracticeExerciseState(exercise);
+  };
+  useEffect(() => { setPracticeExerciseState(null); practiceHistoryStart.current = 0; }, [repositoryId]);
   const setSettings = (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)): void => {
     setSettingsState((prev) => (typeof next === "function" ? (next as (prev: TutorSettings) => TutorSettings)(prev) : next));
   };
@@ -328,7 +337,7 @@ useEffect(() => {
     }
   };
 
-  // 作用域对话（宏观设计 / 练习评估）：单轮 LLM，不走教学状态机
+  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；随请求上送线程最近若干轮作历史窗口
   const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
     if (!content.trim() || !repositoryId) return;
     if (scope === "practice" && !practiceExercise) {
@@ -336,6 +345,12 @@ useEffect(() => {
       return;
     }
     const message = content;
+    // 最近对话历史随请求上送（闭包里的 threads 尚未含本条）：practice 只送当前练习产生后的片段
+    const scopeHistory: ScopedChatHistoryTurn[] = threads[scope]
+      .slice(scope === "practice" ? practiceHistoryStart.current : 0)
+      .filter((item) => item.kind === "user" || !item.variant)
+      .slice(-6)
+      .map((item) => ({ role: item.kind === "user" ? "user" as const : "assistant" as const, content: item.text }));
     pushMessage(scope, "user", message);
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     try {
@@ -346,13 +361,14 @@ useEffect(() => {
             // 架构图合成模块：课程树里没有这个节点，靠文件清单让引擎解析作用域（其余绑定不带）
             ...(mapNode?.id.startsWith("depmap:") && mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
             path: mapFile || undefined,
+            history: scopeHistory,
             style: settings.style
           }, (event) => {
             setScopeProgress("map", event.stage === "reading"
               ? `正在读取 ${event.path || "文件"} …`
               : "回复生成中…");
           })
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, style: settings.style });
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, style: settings.style });
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
     } catch (reason) {

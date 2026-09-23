@@ -22,6 +22,8 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   作用域聚焦的兜底：架构视图的模块是 GUI 合成节点（`depmap:目录`，课程树里本就不存在），GUI 随请求上送
   chip 文件清单 scopePaths，与已分析集求交后注入「当前作用域」段；nodeId 解析不到又没有清单时
   明示「按全局视野作答」——静默降级会让模型以错误作用域自信作答（2026-09-21 用户实感 bug）。
+  最近对话历史：GUI 随请求上送同线程此前轮次（scoped history），经窗口（最近 6 条、每条截 400 字）
+  注入「最近对话」块——单轮无历史时追问指代（「这一点展开讲」）无从解析。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -40,6 +42,26 @@ const MAX_PANORAMA_ENTRIES = 20;
 /** mapChat 工具循环预算：最多 3 轮读文件、每次对话累计 4 个文件——控制推理模型的逐轮 reasoning 成本与延迟。 */
 const MAP_MAX_TOOL_ROUNDS = 3;
 const MAP_MAX_TOOL_CALLS = 4;
+
+/** GUI 上送的最近对话回合（同线程此前轮次的原文）：作用域对话本是单轮，追问的指代（「这一点展开讲」）没有历史就无法解析。 */
+export interface ScopedChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** 历史窗口：口径对齐教学 harness 的 context.ts（有限轮次 + 每轮压缩截断），不是整段线程重放。 */
+const HISTORY_TURNS = 6;
+const HISTORY_TURN_CHARS = 400;
+
+/** 「最近对话」块：取最后若干轮、压空白并逐轮截断；无有效内容返回空串（不注入空段）。 */
+function recentConversationSection(history: ScopedChatTurn[] | undefined): string {
+  const lines = (history ?? []).slice(-HISTORY_TURNS).flatMap((turn) => {
+    const text = turn.content.replaceAll(/\s+/g, " ").trim().slice(0, HISTORY_TURN_CHARS);
+    return text ? [`${turn.role === "user" ? "学习者" : "助手"}: ${text}`] : [];
+  });
+  if (!lines.length) return "";
+  return `最近对话（此前轮次，按时间序，用于理解追问的指代；当时的聚焦范围可能与当前不同）:\n${lines.join("\n")}\n\n`;
+}
 
 /** mapChat 过程事件（对外契约名保持不变）：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
 export type MapChatProgress = ReadToolProgress;
@@ -168,7 +190,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
@@ -203,7 +225,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (bound) sections.push(bound);
   }
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
-  const userMessage = `代码上下文：\n${context}\n\n学习者的问题：${input.content}`;
+  const userMessage = `代码上下文：\n${context}\n\n${recentConversationSection(input.history)}学习者的问题：${input.content}`;
 
   const result = await completeWithReadTool({
     provider,
@@ -230,7 +252,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   if (exercise.options?.length) {
@@ -240,7 +262,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
   const completion = await input.provider.complete({
     system: exerciseQaSystemPrompt({ style: input.style }),
-    user: `练习上下文：\n${context}\n\n学习者的追问：${input.content}`,
+    user: `练习上下文：\n${context}\n\n${recentConversationSection(input.history)}学习者的追问：${input.content}`,
     maxTokens: 700,
     temperature: 0.3,
     scene: "practice.chat"
