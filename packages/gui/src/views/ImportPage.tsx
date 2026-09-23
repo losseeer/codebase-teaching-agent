@@ -77,14 +77,16 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
             <FolderGit2 size={17} />导入
           </button>
         </div>
-        <div className="import-mode-row" role="radiogroup" aria-label="摘要口径">
-          <span>摘要口径</span>
-          <button type="button" role="radio" aria-checked={!commentMode} className={commentMode ? "" : "selected"} onClick={() => setCommentMode(false)}>普通导入</button>
-          <button type="button" role="radio" aria-checked={commentMode} className={commentMode ? "selected" : ""} onClick={() => setCommentMode(true)}>参考注释导入</button>
+        <div className="import-mode-row">
+          <button type="button" role="switch" aria-checked={commentMode} aria-label="详细导入" className={`mode-switch${commentMode ? " on" : ""}`} onClick={() => setCommentMode((value) => !value)}>
+            <i aria-hidden="true" />
+          </button>
+          <span className="mode-switch-label">详细导入</span>
+          {commentMode && <span className="mode-token-hint">会消耗更多 token</span>}
         </div>
         <p className="import-mode-note">{commentMode
-          ? "摘要生成时参考代码注释：注释写得多的仓库（面试讲解、课程作业类）中文概念词更容易被摘要带上、进而被搜到，成本略高。"
-          : "摘要只看代码结构，更省；注释里独有的概念可由导入后在成本监控页开启「摘要参考注释」并重新生成摘要补齐。"}</p>
+          ? "摘要生成时参考代码注释：注释写得多的仓库（面试讲解、课程作业类）中文概念词更容易被摘要带上、进而被搜到；代价是消耗更多 token。"
+          : "摘要只看代码结构，更省 token。需要更细的口径可打开「详细导入」重新导入，也可导入后在成本监控页开启「摘要参考注释」并重新生成摘要。"}</p>
         {error && <p className="error-message">{error}</p>}
       </div>
       {job && (
