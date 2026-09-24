@@ -240,6 +240,34 @@ describe("mapChat", () => {
     await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: fresh.provider, style: 50 });
     expect(fresh.calls[0].user).not.toContain("最近对话");
   });
+
+  it("此前问题脉络：窗口外提问逐行渲染（160 字截断、空项丢弃、封顶 8 条），排在最近对话之前", async () => {
+    const { provider, calls } = fakeProvider();
+    await mapChat({
+      repoPath: import.meta.dirname, analysis, content: "再总结下", provider, style: 50,
+      history: [{ role: "user", content: "窗口内的问题" }],
+      earlierQuestions: ["项目结构是什么？", `Q${"尾".repeat(200)}`, "   "]
+    });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("此前问题脉络（更早轮次的学习者提问，按时间序）");
+    expect(user).toContain("- 项目结构是什么？");
+    expect(user).toContain("Q".concat("尾".repeat(159)));
+    expect(user).not.toContain("尾".repeat(160));
+    expect(user.indexOf("此前问题脉络")).toBeLessThan(user.indexOf("最近对话"));
+    expect(user).toContain("学习者: 窗口内的问题"); // 窗口内轮次走「最近对话」块
+
+    const many = Array.from({ length: 10 }, (_, i) => `问${i}`);
+    const second = fakeProvider();
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", earlierQuestions: many, provider: second.provider, style: 50 });
+    expect(second.calls[0].user).toContain("- 问2");
+    expect(second.calls[0].user).toContain("- 问9");
+    expect(second.calls[0].user).not.toContain("- 问1");
+    expect(second.calls[0].user).not.toContain("- 问0");
+
+    const bare = fakeProvider();
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: bare.provider, style: 50 });
+    expect(bare.calls[0].user).not.toContain("此前问题脉络");
+  });
 });
 
 describe("practiceChat", () => {
@@ -276,6 +304,15 @@ describe("practiceChat", () => {
     const fresh = fakeProvider();
     await practiceChat({ repoPath: import.meta.dirname, exercise, content: "问", provider: fresh.provider, style: 50 });
     expect(fresh.calls[0].user).not.toContain("最近对话");
+  });
+
+  it("此前问题脉络同样注入 practice：位于题面上下文之后、追问之前", async () => {
+    const { provider, calls } = fakeProvider();
+    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "为什么？", earlierQuestions: ["这题选什么？"], provider, style: 50 });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("- 这题选什么？");
+    expect(user.indexOf("此前问题脉络")).toBeGreaterThan(user.indexOf("练习上下文："));
+    expect(user.indexOf("此前问题脉络")).toBeLessThan(user.indexOf("学习者的追问："));
   });
 });
 

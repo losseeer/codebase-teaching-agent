@@ -23,7 +23,8 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   chip 文件清单 scopePaths，与已分析集求交后注入「当前作用域」段；nodeId 解析不到又没有清单时
   明示「按全局视野作答」——静默降级会让模型以错误作用域自信作答（2026-09-21 用户实感 bug）。
   最近对话历史：GUI 随请求上送同线程此前轮次（scoped history），经窗口（最近 6 条、每条截 400 字）
-  注入「最近对话」块——单轮无历史时追问指代（「这一点展开讲」）无从解析。
+  注入「最近对话」块——单轮无历史时追问指代（「这一点展开讲」）无从解析；更早轮次只保留学习者
+  提问做抽取式压缩（「此前问题脉络」，零 LLM 成本）。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -61,6 +62,19 @@ function recentConversationSection(history: ScopedChatTurn[] | undefined): strin
   });
   if (!lines.length) return "";
   return `最近对话（此前轮次，按时间序，用于理解追问的指代；当时的聚焦范围可能与当前不同）:\n${lines.join("\n")}\n\n`;
+}
+
+/** 窗口外的抽取式压缩（零 LLM 成本）：更早轮次只保留学习者提问——问题承载话题锚点，助手长答出窗即弃。 */
+const EARLIER_QUESTION_CHARS = 160;
+const EARLIER_QUESTIONS_MAX = 8;
+
+function earlierQuestionsSection(questions: string[] | undefined): string {
+  const lines = (questions ?? []).slice(-EARLIER_QUESTIONS_MAX).flatMap((question) => {
+    const text = question.replaceAll(/\s+/g, " ").trim().slice(0, EARLIER_QUESTION_CHARS);
+    return text ? [`- ${text}`] : [];
+  });
+  if (!lines.length) return "";
+  return `此前问题脉络（更早轮次的学习者提问，按时间序）:\n${lines.join("\n")}\n\n`;
 }
 
 /** mapChat 过程事件（对外契约名保持不变）：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
@@ -190,7 +204,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
@@ -225,7 +239,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (bound) sections.push(bound);
   }
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
-  const userMessage = `代码上下文：\n${context}\n\n${recentConversationSection(input.history)}学习者的问题：${input.content}`;
+  const userMessage = `代码上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的问题：${input.content}`;
 
   const result = await completeWithReadTool({
     provider,
@@ -252,7 +266,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   if (exercise.options?.length) {
@@ -262,7 +276,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
   const completion = await input.provider.complete({
     system: exerciseQaSystemPrompt({ style: input.style }),
-    user: `练习上下文：\n${context}\n\n${recentConversationSection(input.history)}学习者的追问：${input.content}`,
+    user: `练习上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的追问：${input.content}`,
     maxTokens: 700,
     temperature: 0.3,
     scene: "practice.chat"

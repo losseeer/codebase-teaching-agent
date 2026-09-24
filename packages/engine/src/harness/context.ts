@@ -11,12 +11,14 @@ const MAX_SYMBOL_LINES = 80;
 const MAX_EXCERPT_BLOCK_CHARS = 2_000;
 const TRANSCRIPT_WINDOW = 8;
 const TRANSCRIPT_LINE_CHARS = 160;
+/** 窗口外的抽取式压缩（零 LLM 成本）：更早轮次只保留学习者提问——问题承载话题锚点，导师长答出窗即弃 */
+const EARLIER_QUESTIONS = 8;
 const DEFAULT_MAXIMUM_CHARACTERS = 9_000;
 /** 预算分配留白：避免拼接后正好越界触发尾部截断 */
 const BUDGET_MARGIN = 200;
 
 /**
- * 有界教学上下文：节点事实 + 调用邻接 + 锚点附近的真实源码摘录 + 含学习者发言的近期对话。
+ * 有界教学上下文：节点事实 + 调用邻接 + 锚点附近的真实源码摘录 + 含学习者发言的近期对话 + 更早轮次的问题脉络（抽取式）。
  *
  * 两点与「锚点可靠性」直接相关：
  * 1. 源码摘录走 source/excerpt.ts 的规则——符号边界优先、窗口兜底（不再是无条件 ±N 行）；
@@ -40,6 +42,12 @@ export function assembleContext(input: TeachingContextInput): string {
     const role = message.role === "user" ? "学习者" : "导师";
     return `${role}: ${message.content.replaceAll(/\s+/g, " ").slice(0, TRANSCRIPT_LINE_CHARS)}`;
   }).join("\n");
+  // 更早轮次的提问脉络与最近对话同属「不可再生」信息，进受保护尾部（摘录预算让位于它们）
+  const earlier = input.history.slice(0, Math.max(0, input.history.length - TRANSCRIPT_WINDOW))
+    .filter((message) => message.role === "user" && message.content.trim())
+    .slice(-EARLIER_QUESTIONS)
+    .map((message) => `- ${message.content.replaceAll(/\s+/g, " ").trim().slice(0, TRANSCRIPT_LINE_CHARS)}`)
+    .join("\n");
   const head = [
     `课程节点: ${node.title}`,
     `源码锚点: ${node.anchors.map((anchor) => `${anchor.path}:${anchor.line}`).join(", ") || "无"}`,
@@ -47,7 +55,10 @@ export function assembleContext(input: TeachingContextInput): string {
     `风格约束: ${policy.constraints.join("；")}`,
     input.analysis ? callNeighborhoodSection(input.analysis, node.anchors[0]?.path ?? "") : ""
   ].filter(Boolean);
-  const tail = transcript ? [`最近对话（按时间序，含学习者发言）:\n${transcript}`] : [];
+  const tail = [
+    earlier ? [`此前问题脉络（更早轮次的学习者提问，按时间序）:\n${earlier}`] : [],
+    transcript ? [`最近对话（按时间序，含学习者发言）:\n${transcript}`] : []
+  ].flat();
   const excerptBudget = Math.max(0, maximumCharacters - [...head, ...tail].join("\n\n").length - BUDGET_MARGIN);
   const excerpts = input.repositoryPath ? sourceExcerpts(input.repositoryPath, node, excerptBudget) : "";
   const joined = [...head, excerpts, ...tail].filter(Boolean).join("\n\n");

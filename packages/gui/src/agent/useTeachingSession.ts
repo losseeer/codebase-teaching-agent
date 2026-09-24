@@ -346,11 +346,16 @@ useEffect(() => {
     }
     const message = content;
     // 最近对话历史随请求上送（闭包里的 threads 尚未含本条）：practice 只送当前练习产生后的片段
-    const scopeHistory: ScopedChatHistoryTurn[] = threads[scope]
+    const inScopeThread = threads[scope]
       .slice(scope === "practice" ? practiceHistoryStart.current : 0)
-      .filter((item) => item.kind === "user" || !item.variant)
-      .slice(-6)
+      .filter((item) => item.kind === "user" || !item.variant);
+    const scopeHistory: ScopedChatHistoryTurn[] = inScopeThread.slice(-6)
       .map((item) => ({ role: item.kind === "user" ? "user" as const : "assistant" as const, content: item.text }));
+    // 窗口外的抽取式脉络：更早轮次只留学习者提问（引擎渲染时每行截断），零 LLM 成本
+    const earlierQuestions = inScopeThread.slice(0, Math.max(0, inScopeThread.length - 6))
+      .filter((item) => item.kind === "user")
+      .slice(-8)
+      .map((item) => item.text);
     pushMessage(scope, "user", message);
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     try {
@@ -362,13 +367,14 @@ useEffect(() => {
             ...(mapNode?.id.startsWith("depmap:") && mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
             path: mapFile || undefined,
             history: scopeHistory,
+            earlierQuestions,
             style: settings.style
           }, (event) => {
             setScopeProgress("map", event.stage === "reading"
               ? `正在读取 ${event.path || "文件"} …`
               : "回复生成中…");
           })
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, style: settings.style });
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, earlierQuestions, style: settings.style });
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
     } catch (reason) {

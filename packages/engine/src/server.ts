@@ -183,6 +183,12 @@ function sanitizeChatHistory(value: unknown): ScopedChatTurn[] {
   }).slice(-6);
 }
 
+/** 作用域对话上送的窗口外问题脉络（入参守卫）：只留非空字符串并截长，封顶 8 条；渲染口径在 scopechat/service.ts。 */
+function sanitizeEarlierQuestions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): string[] => (typeof item === "string" && item.trim() ? [item.trim().slice(0, 400)] : [])).slice(-8);
+}
+
 importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
@@ -450,7 +456,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -459,7 +465,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -487,7 +493,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -502,7 +508,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   };
   try {
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)
@@ -531,7 +537,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; history?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -543,7 +549,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   try {
     const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
     if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history: sanitizeChatHistory(request.body?.history), provider, style: validateStyle(request.body?.style) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
