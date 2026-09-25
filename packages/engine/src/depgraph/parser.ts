@@ -257,19 +257,55 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
   for (const child of node.namedChildren) collectSymbols(child, path, childInClass, out);
 }
 
-/**
-  用语法树抽符号。**解析器未就绪或该扩展名没有语法时返回 undefined**（调用方据此回落逐行匹配），
-  而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
-*/
-export function extractSymbolsFromAst(path: string, content: string): SymbolInfo[] | undefined {
-  const grammar = grammarOf(path);
-  if (!parser || !grammar) return undefined;
+function parseAndCollect(path: string, content: string, grammar: GrammarName): SymbolInfo[] | undefined {
   const language = grammars.get(grammar);
-  if (!language) return undefined;
+  if (!parser || !language) return undefined;
   parser.setLanguage(language);
   const tree = parser.parse(content);
   if (!tree) return undefined;
   const symbols: SymbolInfo[] = [];
   collectSymbols(tree.rootNode, path, false, symbols);
   return symbols;
+}
+
+/**
+  Vue 单文件组件没有专属语法，但 `<script>` 块本体就是 JS/TS：把块外的行换成空行原地垫出来
+  （模板/样式不会误进语法树，块内节点的 `startPosition.row` 天然就是全文件行号），
+  再走现有 tsx/js 语法。无语法树可用时返回 undefined，交调用方回落逐行匹配。
+*/
+function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefined {
+  const lines = content.split("\n");
+  const blocks: { start: number; end: number; ts: boolean }[] = [];
+  let start: number | undefined;
+  let ts = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const open = start === undefined ? lines[index].match(/^<script\b([^>]*)>$/) : undefined;
+    if (open) { start = index + 1; ts = /lang=["']ts["']/.test(open[1]); continue; }
+    if (start !== undefined && /^<\/script>$/.test(lines[index])) {
+      blocks.push({ start, end: index, ts });
+      start = undefined;
+    }
+  }
+  if (!blocks.length) return [];
+  const out: SymbolInfo[] = [];
+  for (const block of blocks) {
+    // split 出的每行自带换行符，故块前只垫 start-1 个空行；块后补到文件末尾行数，行号全程对齐
+    const padded = ["\n".repeat(Math.max(0, block.start - 1)), ...lines.slice(block.start, block.end), "\n".repeat(lines.length - block.end)].join("\n");
+    const symbols = parseAndCollect(path, padded, block.ts ? "tsx" : "javascript");
+    if (!symbols) return undefined;
+    out.push(...symbols);
+  }
+  return out;
+}
+
+/**
+  用语法树抽符号。**解析器未就绪或该扩展名没有语法时返回 undefined**（调用方据此回落逐行匹配），
+  而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
+*/
+export function extractSymbolsFromAst(path: string, content: string): SymbolInfo[] | undefined {
+  if (!parser) return undefined;
+  if (path.endsWith(".vue")) return vueScriptSymbols(path, content);
+  const grammar = grammarOf(path);
+  if (!grammar) return undefined;
+  return parseAndCollect(path, content, grammar);
 }

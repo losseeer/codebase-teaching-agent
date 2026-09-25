@@ -17,7 +17,7 @@ export interface DependencyGraph {
   parseBackendReason?: string;
 }
 
-const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"];
+const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".vue"];
 /** C/C++ 一族的扩展名（cpp 语法同时覆盖纯 C）。 */
 const cppExtensionPattern = /\.(c|h|cc|cpp|cxx|hpp|hh)$/;
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
@@ -46,9 +46,10 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   const goModules = collectGoModules(repositoryPath, files);
   const goFilesByDir = collectGoFiles(files);
   const csNamespaces = collectCSharpNamespaces(contents);
+  const aliases = collectPathAliases(repositoryPath);
   const imports = new Map<string, string[]>();
   for (const [path, content] of contents) {
-    imports.set(path, resolveFileImports(path, content, { available, packages, javaTypes, goModules, goFilesByDir, csNamespaces }));
+    imports.set(path, resolveFileImports(path, content, { available, packages, javaTypes, goModules, goFilesByDir, csNamespaces, aliases }));
   }
   const calls = extractCalls(contents, symbols, imports);
   const lspStatus = detectLspStatus(files);
@@ -279,6 +280,7 @@ interface ImportIndex {
   goModules: Map<string, string>;
   goFilesByDir: Map<string, string[]>;
   csNamespaces: Map<string, string[]>;
+  aliases: PathAlias[];
 }
 
 /** 按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）一律丢弃，图里只留仓内依赖。 */
@@ -291,7 +293,7 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
   if (path.endsWith(".rs")) return kept(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)));
   if (path.endsWith(".cs")) return kept(extractCSharpSpecifiers(content).flatMap((value) => resolveCSharpImport(value, index.csNamespaces)).filter((value) => value !== path));
   if (cppExtensionPattern.test(path)) return dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available)).filter((value) => value !== path));
-  return kept([...content.matchAll(tsSpecifierPattern)].map((match) => resolveImport(path, match[1], index.available, index.packages)));
+  return kept([...content.matchAll(tsSpecifierPattern)].map((match) => resolveImport(path, match[1], index.available, index.packages, index.aliases)));
 }
 
 /**
@@ -443,6 +445,70 @@ interface WorkspacePackage {
   main?: string;
 }
 
+/** tsconfig `paths` 的一条通配别名：`"@/*": ["src/*"]` → `{ prefix: "@/", dirs: ["src"] }`。 */
+interface PathAlias {
+  prefix: string;
+  dirs: string[];
+}
+
+/** 去掉 JSON 里的注释与尾逗号：tsconfig 惯例是带注释的 JSONC，状态机走字符是为了不误伤字符串内的 `//`（如 `http://`）。 */
+function stripJsonComments(source: string): string {
+  let out = "";
+  let inString = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      out += char;
+      if (char === "\\") { out += source[index + 1] ?? ""; index += 1; }
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; out += char; continue; }
+    const next = source[index + 1];
+    if (char === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      out += "\n";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end < 0 ? source.length : end + 1;
+      continue;
+    }
+    if (char === ",") {
+      let ahead = index + 1;
+      while (ahead < source.length && /\s/.test(source[ahead])) ahead += 1;
+      if (source[ahead] === "}" || source[ahead] === "]") continue;
+    }
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * 仓库根 tsconfig 的 `compilerOptions.baseUrl + paths` → 别名前缀表（Vue/TS 项目 `@/x` 这类导入的唯一仓内依据）。
+ * 只读根 tsconfig、只收通配条目（`"x/*"`）；exact 别名与 extends 继承的 paths 不在此列，解析不到就照旧丢弃。
+ */
+function collectPathAliases(repositoryPath: string): PathAlias[] {
+  const manifest = join(repositoryPath, "tsconfig.json");
+  if (!existsSync(manifest)) return [];
+  try {
+    const raw = JSON.parse(stripJsonComments(readFileSync(manifest, "utf8"))) as { compilerOptions?: { baseUrl?: string; paths?: Record<string, unknown> } };
+    const paths = raw.compilerOptions?.paths;
+    if (!paths) return [];
+    const base = typeof raw.compilerOptions?.baseUrl === "string" ? raw.compilerOptions.baseUrl : ".";
+    const aliases: PathAlias[] = [];
+    for (const [key, value] of Object.entries(paths)) {
+      if (!key.endsWith("*") || !Array.isArray(value)) continue;
+      const prefix = key.slice(0, -1);
+      const dirs = (value as unknown[]).flatMap((item): string[] => (typeof item === "string" ? [slash(normalize(join(base, item.slice(0, -1))))] : []));
+      if (prefix && dirs.length) aliases.push({ prefix, dirs });
+    }
+    return aliases;
+  } catch { /* A malformed tsconfig is not fatal to import. */ }
+  return [];
+}
+
 /** 收集仓库内各 package.json 的 name → 包目录/入口（monorepo 工作区包，供裸说明符解析）。 */
 function collectWorkspacePackages(repositoryPath: string, files: FileEntry[]): Map<string, WorkspacePackage> {
   const packages = new Map<string, WorkspacePackage>();
@@ -473,7 +539,7 @@ function resolvePythonImport(from: string, specifier: string, available: Set<str
   return [`${target}.py`, `${target}/__init__.py`].find((candidate) => available.has(candidate));
 }
 
-function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>): string | undefined {
+function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>, aliases: PathAlias[]): string | undefined {
   if (from.endsWith(".py")) return resolvePythonImport(from, specifier, available);
   const tryResolve = (candidate: string): string | undefined => {
     const normalized = normalize(candidate).replaceAll("\\", "/");
@@ -490,16 +556,22 @@ function resolveImport(from: string, specifier: string, available: Set<string>, 
   if (specifier.startsWith(".")) return tryResolve(join(dirname(from), specifier));
   // 裸说明符：只解析仓库内 package.json 声明的工作区包（外部依赖不入图）
   const matched = [...packages.entries()].find(([name]) => specifier === name || specifier.startsWith(`${name}/`));
-  if (!matched) return undefined;
-  const [name, pkg] = matched;
-  if (specifier === name) {
-    if (pkg.main) {
-      const viaMain = tryResolve(join(pkg.dir, pkg.main));
-      if (viaMain) return viaMain;
+  if (matched) {
+    const [name, pkg] = matched;
+    if (specifier === name) {
+      if (pkg.main) {
+        const viaMain = tryResolve(join(pkg.dir, pkg.main));
+        if (viaMain) return viaMain;
+      }
+      return tryResolve(join(pkg.dir, "src/index")) ?? tryResolve(join(pkg.dir, "index"));
     }
-    return tryResolve(join(pkg.dir, "src/index")) ?? tryResolve(join(pkg.dir, "index"));
+    return tryResolve(join(pkg.dir, specifier.slice(name.length + 1)));
   }
-  return tryResolve(join(pkg.dir, specifier.slice(name.length + 1)));
+  // 工作区包没命中再试 tsconfig paths 别名（`@/stores/user` → `src/stores/user`）；仍未命中就丢弃
+  const alias = aliases.find((item) => specifier.startsWith(item.prefix));
+  if (!alias) return undefined;
+  const rest = specifier.slice(alias.prefix.length);
+  return alias.dirs.map((dir) => tryResolve(join(dir, rest))).find((hit) => hit !== undefined);
 }
 
 function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents: Map<string, string>): SourceAnchor[] {

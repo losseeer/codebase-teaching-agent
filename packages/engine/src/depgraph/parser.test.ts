@@ -113,7 +113,7 @@ describe("语法树符号抽取", () => {
   });
 
   it("没有对应语法的扩展名返回 undefined，交给逐行匹配", () => {
-    expect(extractSymbolsFromAst("App.vue", "<template><div/></template>")).toBeUndefined();
+    expect(extractSymbolsFromAst("legacy.x10", "<template><div/></template>")).toBeUndefined();
   });
 
   it("解析器未加载时状态是 regex 并带原因（守回落路径）", () => {
@@ -199,6 +199,52 @@ describe("新增语言符号抽取（Go/Rust/C）", () => {
       "make:function:5"
     ]);
     expect(symbols?.[0]?.language).toBe("cpp");
+  });
+});
+
+describe("Vue SFC 符号抽取", () => {
+  it("script setup 块的符号带全文件行号，模板与样式不进语法树", async () => {
+    await loadSymbolParser();
+    const source = [
+      "<template>", // 1
+      "  <div>{{ user.name }}</div>", // 2
+      "</template>", // 3
+      "", // 4
+      "<script setup>", // 5
+      "const load = async () => {", // 6
+      "  return fetchUser();", // 7
+      "};", // 8
+      "</script>", // 9
+      "", // 10
+      "<style scoped>", // 11
+      ".box { class function weird( }", // 12 — 样式里的花括号/伪代码不得干扰
+      "</style>", // 13
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("src/App.vue", source);
+    expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}-${symbol.endLine}`)).toEqual(["load:function:6-8"]);
+    expect(symbols?.[0]?.language).toBe("other");
+  });
+
+  it("lang=\"ts\" 走 TS 语法：接口成 type；多块各自定位", async () => {
+    await loadSymbolParser();
+    const source = [
+      "<script lang=\"ts\">", // 1
+      "export interface Row { id: number }", // 2
+      "</script>", // 3
+      "", // 4
+      "<script setup lang=\"ts\">", // 5
+      "export default function boot() {}", // 6
+      "</script>", // 7
+      ""
+    ].join("\n");
+    const symbols = extractSymbolsFromAst("src/Grid.vue", source);
+    expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}`)).toEqual(["Row:type:2", "boot:function:6"]);
+  });
+
+  it("无 script 块的 SFC 是空数组（真没符号），不是 undefined", async () => {
+    await loadSymbolParser();
+    expect(extractSymbolsFromAst("src/Static.vue", "<template><p>hi</p></template>\n")).toEqual([]);
   });
 });
 
