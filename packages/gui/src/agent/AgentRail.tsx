@@ -132,7 +132,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
       </div>
 
       <div className="agent-thread" id="agent-thread" ref={threadRef} aria-live="polite">
-        {items.length === 0 && scope === "teaching" && !t.liveAnswer ? (
+        {scope === "teaching" && items.length === 0 && !t.liveAnswer ? (
           <div className="starter">
             <GraduationCap size={22} />
             <p>先写下你对这个节点的一个观察或假设，或输入「不知道」请求下一层提示。</p>
@@ -145,14 +145,15 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
           </div>
         ) : null}
         {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
-        {scope === "teaching" && t.liveAnswer && (
+        {/* 流式正文气泡：三作用域共用——teaching 走 ws session.delta，map/practice 走 SSE delta（均为 72 字分块回放） */}
+        {t.liveAnswer && (
           <div className="message agent streaming">
             <span>Codebase Agent</span>
             <Markdown content={t.liveAnswer} /><i />
           </div>
         )}
-        {/* 回复生成过程指示：teaching 有流式正文时让位（避免双重提示），其余作用域全程显示 */}
-        {t.sending && t.progress[scope] && !(scope === "teaching" && t.liveAnswer) && (
+        {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时顶替 */}
+        {t.sending && t.progress[scope] && !t.liveAnswer && (
           <div className="message agent streaming" key="agent-progress">
             <span>Codebase Agent</span>
             <p className="agent-progress">{t.progress[scope]}</p><i />

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { api, type ScopedChatHistoryTurn } from "../api/client";
+import { api, type ScopedChatEvent, type ScopedChatHistoryTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 
 /**
@@ -360,6 +360,12 @@ useEffect(() => {
       .map((item) => item.text);
     pushMessage(scope, "user", message);
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
+    // 流式正文的落点：map/practice 的 SSE delta 事件写这里，done 后清空并固化为正式消息
+    setLiveAnswer("");
+    const onScopedEvent = (event: ScopedChatEvent): void => {
+      if (event.type === "delta") setLiveAnswer((current) => current + event.delta);
+      else if (scope === "map" && event.type === "reading") setScopeProgress("map", `正在读取 ${event.path || "文件"} …`);
+    };
     try {
       const reply = scope === "map"
         ? await api.mapChatStream(repositoryId, {
@@ -373,15 +379,13 @@ useEffect(() => {
             history: scopeHistory,
             earlierQuestions,
             style: settings.style
-          }, (event) => {
-            setScopeProgress("map", event.stage === "reading"
-              ? `正在读取 ${event.path || "文件"} …`
-              : "回复生成中…");
-          })
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, earlierQuestions, style: settings.style });
+          }, onScopedEvent)
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, earlierQuestions, style: settings.style }, onScopedEvent);
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
+      setLiveAnswer("");
     } catch (reason) {
+      setLiveAnswer("");
       setError(reason instanceof Error ? reason.message : "发送失败");
       pushMessage(scope, "agent", `发送失败：${reason instanceof Error ? reason.message : String(reason)}`, "error");
     } finally {

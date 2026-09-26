@@ -561,6 +561,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
     journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
+    // 打字机回放（与教学 session.delta 同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
+    for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
     send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -576,10 +578,22 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   if (!request.body?.exerciseId) return reply.code(400).send({ error: "缺少练习上下文；请先在练习页生成一道练习。" });
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
+  // 练习查询留在 hijack 前：404 还是干净的 JSON，只有确定要开火了才切 SSE
   const database = new TutorDatabase(repository.path);
+  let stored: { exercise: Exercise } | undefined;
   try {
-    const stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
-    if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
+    stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, request.body.exerciseId);
+  } finally {
+    database.close();
+  }
+  if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
+  // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
+  reply.hijack();
+  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (event: unknown): void => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
@@ -587,12 +601,12 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     });
     journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply));
-    return { reply: result.reply, provider: result.provider };
+    for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
+    send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
-  } finally {
-    database.close();
+    send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
   }
+  reply.raw.end();
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/report", async (request, reply) => {
@@ -789,7 +803,8 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
 });
 
 function flatten(root: CourseNode): CourseNode[] { return [root, ...root.children.flatMap(flatten)]; }
-function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "g")) ?? [content]; }
+// s 标志：`.` 默认不匹配换行，回放会把多行回复的 `\n` 全丢掉（打字机预览塌成一行）；加上后逐块保留换行
+function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
 
 const port = Number(process.env.ENGINE_PORT ?? 3001);
 await app.listen({ port, host: "127.0.0.1" });
