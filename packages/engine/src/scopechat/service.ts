@@ -1,5 +1,5 @@
 import { basename, dirname } from "node:path";
-import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
+import type { CourseNode, Exercise, FlowStage, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
@@ -22,6 +22,8 @@ import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop
   作用域聚焦的兜底：架构视图的模块是 GUI 合成节点（`depmap:目录`，课程树里本就不存在），GUI 随请求上送
   chip 文件清单 scopePaths，与已分析集求交后注入「当前作用域」段；nodeId 解析不到又没有清单时
   明示「按全局视野作答」——静默降级会让模型以错误作用域自信作答（2026-09-21 用户实感 bug）。
+  流程视图选中环节：环节只存在于流程产物里（课程树节点只到入口粒度），GUI 随请求上送选中环节 focus，
+  注入「当前聚焦环节」段（环节名/说明/关联文件带行号与职责/分叉回环）（2026-09-25 用户实感 bug：上下文只有入口信息）。
   最近对话历史：GUI 随请求上送同线程此前轮次（scoped history），经窗口（最近 6 条、每条截 400 字）
   注入「最近对话」块——单轮无历史时追问指代（「这一点展开讲」）无从解析；更早轮次只保留学习者
   提问做抽取式压缩（「此前问题脉络」，零 LLM 成本）。
@@ -175,6 +177,27 @@ function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undef
   return `当前作用域：学习者在架构图选中的模块，含 ${files.length} 个已分析文件：\n${lines.join("\n")}${tail}`;
 }
 
+/** 流程视图环节类型的中文名（与 GUI FlowMap 的 FLOW_KIND_LABEL 同口径）。 */
+const FLOW_KIND_LABEL: Record<FlowStage["kind"], string> = { entry: "入口", stage: "环节", decision: "分叉判断", loop: "回环", exit: "出口" };
+
+/**
+  流程视图选中环节的作用域段。环节只存在于流程产物里（课程树节点只到「入口」一层），
+  不上送的话模型只看得见入口信息，「这个环节具体做什么」必然答偏——
+  这里注入环节名/说明/关联文件（带行号与职责）/分叉与回环，聚焦口径与架构图模块段一致。
+*/
+function flowStageSection(focus: FlowStage): string {
+  const files = focus.files.slice(0, MAX_SCOPE_LISTED).map((file) => `- ${file.path}${file.line > 0 ? `:${file.line}` : ""}${file.note ? `：${file.note}` : ""}`);
+  const tail = focus.files.length > MAX_SCOPE_LISTED ? `\n…其余 ${focus.files.length - MAX_SCOPE_LISTED} 个关联文件未列出。` : "";
+  const lines = [
+    `当前聚焦环节：学习者在流程视图选中「${focus.title}」（第 ${focus.order} 环节 · ${FLOW_KIND_LABEL[focus.kind]}），流程讲解只到入口粒度，本环节的展开以下面这些信息为准。`,
+    `环节说明：${focus.detail}`,
+    files.length ? `关联文件（${focus.files.length}）：\n${files.join("\n")}${tail}` : "关联文件：（无）"
+  ];
+  if (focus.branches.length) lines.push(`分叉去向：${focus.branches.join("；")}`);
+  if (focus.loopsTo !== undefined) lines.push(`回环：回到第 ${focus.loopsTo} 环节继续`);
+  return lines.join("\n");
+}
+
 /** 依赖图中某文件的邻域：一度（直接 import / 被 import）+ 二度（import 的 import / 被被 import），去重排序。 */
 function graphNeighborhood(analysis: RepositoryAnalysis, path?: string): {
   importsOut: string[];
@@ -204,7 +227,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
@@ -221,10 +244,14 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (scope) {
       sections.push(scope);
     } else {
-      sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
-      scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
+      // 有环节段兜着时作用域并未真正丢失，不发「全局视野」声明、不记降级
+      if (!input.focus) {
+        sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
+        scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
+      }
     }
   }
+  if (input.focus) sections.push(flowStageSection(input.focus));
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
     const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api, type ScopedChatHistoryTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 
@@ -103,9 +103,10 @@ export interface TeachingSessionApi {
 
   /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
     `scopePaths`：仅架构图合成模块（id 以 `depmap:` 起，课程树里查无此节点）随请求上送 chip 内文件清单，
-    引擎据此解析作用域；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。 */
+    引擎据此解析作用域；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
+    `focus`：仅流程视图选中环节时给出——课程树节点只到入口粒度，环节自身的说明与关联文件要随请求上送。 */
   mapNode: CourseNode | null;
-  setMapNode: (node: CourseNode | null, scopePaths?: string[]) => void;
+  setMapNode: (node: CourseNode | null, scopePaths?: string[], focus?: FlowStage | null) => void;
   /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
   mapBinding: MapBinding | null;
   setMapBinding: (binding: MapBinding | null) => void;
@@ -177,11 +178,11 @@ const [selected, setSelected] = useState<CourseNode | null>(null);
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
 // 宏观设计 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
-// 节点 + depmap 文件清单是一个绑定的两半，合成一个 state 原子更新——分开两个 setState 会让
-// 「换绑到非 depmap 节点却残留旧清单」成为可能（清单只随合成节点有意义）。
-const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[] }>({ node: null, scopePaths: [] });
+// 节点 + depmap 文件清单 + 流程环节 focus 是一个绑定的三半，合成一个 state 原子更新——分开两个 setState 会让
+// 「换绑到其他节点却残留旧清单/旧环节」成为可能（它们只对特定选中项有意义）。
+const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[]; focus: FlowStage | null }>({ node: null, scopePaths: [], focus: null });
 const mapNode = mapSelection.node;
-const setMapNode = (node: CourseNode | null, scopePaths: string[] = []): void => setMapSelection({ node, scopePaths });
+const setMapNode = (node: CourseNode | null, scopePaths: string[] = [], focus: FlowStage | null = null): void => setMapSelection({ node, scopePaths, focus });
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
 const [practiceUnit, setPracticeUnit] = useState("");
@@ -195,9 +196,10 @@ useEffect(() => {
     // 重导入后按 id 把在绑选择挂回新树：`prev ?? …` 保旧对象会让上下文请求一直带着过期节点（children/anchors 都是旧的）
     const nodes = flatten(tree.root);
     setMapSelection((prev) => {
-      if (!prev.node) return { node: tree.root, scopePaths: [] };
-      if (prev.node.id.startsWith("depmap:")) return prev; // 合成节点不在课程树里，无处可挂，原样保留
-      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [] };
+      // 课程重烧后流程快照也可能更新，环节 focus 一并清空（旧对象不再上送；重选环节即可）
+      if (!prev.node) return { node: tree.root, scopePaths: [], focus: null };
+      if (prev.node.id.startsWith("depmap:")) return { ...prev, focus: null }; // 合成节点不在课程树里，无处可挂，原样保留
+      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [], focus: null };
     });
     const first = firstTeachNode(tree.root);
     setSelected((prev) => {
@@ -365,6 +367,8 @@ useEffect(() => {
             nodeId: mapNode?.id,
             // 架构图合成模块：课程树里没有这个节点，靠文件清单让引擎解析作用域（其余绑定不带）
             ...(mapNode?.id.startsWith("depmap:") && mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
+            // 流程视图选中环节：节点只到入口粒度，环节信息靠这一并上送
+            ...(mapSelection.focus ? { focus: mapSelection.focus } : {}),
             path: mapFile || undefined,
             history: scopeHistory,
             earlierQuestions,

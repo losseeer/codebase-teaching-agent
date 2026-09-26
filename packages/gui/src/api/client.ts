@@ -1,4 +1,4 @@
-import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -79,8 +79,8 @@ export const api = {
   /** 该课程节点最近一次教学会话的 id（引擎从 journal 倒扫；GUI 没存过 id 的存量历史靠它找回）。 */
   getLatestSession: (repositoryId: string, nodeId: string) => request<{ sessionId: string | null }>(`/api/repositories/${repositoryId}/latest-session?nodeId=${encodeURIComponent(nodeId)}`),
   sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）。 */
-  mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
+  mapChatStream: async (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onProgress: (progress: { stage: "thinking"; round: number } | { stage: "reading"; path: string }) => void): Promise<{ reply: string; provider: string }> => {
     const response = await fetch(`/api/repositories/${repositoryId}/map-chat/stream`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!response.ok || !response.body) {
       const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };

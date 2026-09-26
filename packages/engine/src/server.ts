@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
@@ -187,6 +187,37 @@ function sanitizeChatHistory(value: unknown): ScopedChatTurn[] {
 function sanitizeEarlierQuestions(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item): string[] => (typeof item === "string" && item.trim() ? [item.trim().slice(0, 400)] : [])).slice(-8);
+}
+
+/** 流程视图选中环节（入参守卫）：逐字段核类型并截长后重建——请求体是外部输入，形状不可信；字段不齐即视为没选环节。 */
+function sanitizeChatFocus(value: unknown): FlowStage | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const stage = value as { order?: unknown; kind?: unknown; title?: unknown; detail?: unknown; files?: unknown; branches?: unknown; loopsTo?: unknown };
+  if (typeof stage.order !== "number" || !Number.isFinite(stage.order)) return undefined;
+  if (typeof stage.title !== "string" || !stage.title.trim()) return undefined;
+  const kinds = ["entry", "stage", "decision", "loop", "exit"] as const;
+  const kind = kinds.find((item) => item === stage.kind) ?? "stage";
+  const files = Array.isArray(stage.files)
+    ? stage.files.flatMap((item): { path: string; line: number; note?: string }[] => {
+        if (typeof item !== "object" || item === null) return [];
+        const file = item as { path?: unknown; line?: unknown; note?: unknown };
+        if (typeof file.path !== "string" || !file.path.trim() || file.path.length > 400) return [];
+        const line = typeof file.line === "number" && Number.isFinite(file.line) ? Math.max(0, Math.trunc(file.line)) : 1;
+        return [{ path: file.path.trim(), line, ...(typeof file.note === "string" && file.note.trim() ? { note: file.note.trim().slice(0, 120) } : {}) }];
+      }).slice(0, 200)
+    : [];
+  const branches = Array.isArray(stage.branches)
+    ? stage.branches.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim().slice(0, 160)).slice(0, 20)
+    : [];
+  return {
+    order: Math.trunc(stage.order),
+    kind,
+    title: stage.title.trim().slice(0, 120),
+    detail: typeof stage.detail === "string" ? stage.detail.trim().slice(0, 600) : "",
+    files,
+    branches,
+    ...(typeof stage.loopsTo === "number" && Number.isFinite(stage.loopsTo) ? { loopsTo: Math.trunc(stage.loopsTo) } : {})
+  };
 }
 
 importer.on("event", broadcast);
@@ -456,7 +487,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -465,7 +496,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -493,7 +524,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -508,7 +539,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   };
   try {
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)

@@ -154,10 +154,13 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                   if (selection) {
                     t.setMapBinding({ kind: "flow", title: selection.stage.title });
                     // 对话作用域跟着所选环节走：课程树里有该流程入口对应的 workflow 节点就挂它；
-                    // 没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西
+                    // 没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西。
+                    // 环节本身（说明/关联文件/分叉回环）作为 focus 一并上送：课程树节点只到入口粒度，不带它就答不了「这个环节具体做什么」
                     const workflow = flatten(course.root).find((item) => item.id === `workflow:${selection.flow.entry.path}`);
-                    t.setMapNode(workflow ?? null);
+                    t.setMapNode(workflow ?? null, [], selection.stage);
                     emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
+                  } else {
+                    t.setMapNode(null);
                   }
                 }}
               />

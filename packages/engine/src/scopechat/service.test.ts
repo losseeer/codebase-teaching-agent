@@ -80,6 +80,43 @@ describe("mapChat", () => {
     expect(user).toContain("为什么要分层？");
   });
 
+  it("流程环节 focus：注入「当前聚焦环节」段（说明/关联文件带行号与职责/分叉回环），不再只有入口信息", async () => {
+    const { provider, calls } = fakeProvider();
+    await mapChat({
+      repoPath: import.meta.dirname,
+      analysis,
+      node: { id: "n1", title: "启动流程", summary: "应用入口的装配顺序", kind: "workflow", anchors: [], children: [] },
+      focus: { order: 3, kind: "decision", title: "缓存判定", detail: "按 key 决定走缓存还是回源。", files: [{ path: "src/config.ts", line: 8, note: "读取缓存开关" }], branches: ["命中 → 直接返回", "未命中 → 回源"], loopsTo: 2 },
+      content: "这一步具体做什么？",
+      provider,
+      style: 50
+    });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("选中「缓存判定」（第 3 环节 · 分叉判断）");
+    expect(user).toContain("按 key 决定走缓存还是回源。");
+    expect(user).toContain("- src/config.ts:8：读取缓存开关");
+    expect(user).toContain("分叉去向：命中 → 直接返回；未命中 → 回源");
+    expect(user).toContain("回环：回到第 2 环节继续");
+    expect(user).toContain("启动流程"); // 入口节点信息保留，环节段补充而非替换
+  });
+
+  it("环节所在入口解析不到但带了 focus：按环节段兜住，不发「全局视野」声明、不记降级", async () => {
+    const { provider, calls } = fakeProvider();
+    const result = await mapChat({
+      repoPath: import.meta.dirname,
+      analysis,
+      nodeId: "workflow:src/missing.ts",
+      focus: { order: 1, kind: "entry", title: "接单入口", detail: "从接口收单。", files: [], branches: [] },
+      content: "这个环节从哪进？",
+      provider,
+      style: 50
+    });
+    const user = calls[0].user ?? "";
+    expect(user).toContain("选中「接单入口」（第 1 环节 · 入口）");
+    expect(user).not.toContain("按全局视野作答");
+    expect(result.scopeDegraded).toBeUndefined();
+  });
+
   it("工具循环：模型请求 read_file → 引擎执行并回喂 → 汇总 usage 与 fileReads", async () => {
     const script: LlmCompletion[] = [
       { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "service.ts" }) }], usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
