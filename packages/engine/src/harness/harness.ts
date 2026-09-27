@@ -36,6 +36,8 @@ export interface TutorReply {
   fileReads?: FileReadRecord[];
   /** 本轮 search_code 调用审计（供 server 逐条记 journal code_search）。 */
   codeSearches?: CodeSearchRecord[];
+  /** 工具循环实际轮数（无仓库路径的单轮措辞调用为 0）。 */
+  toolRounds?: number;
 }
 
 /**
@@ -47,7 +49,8 @@ export interface TutorReply {
 export type TeachingProgress =
   | { stage: "deciding" }
   | { stage: "thinking"; round: number }
-  | { stage: "reading"; path: string };
+  | { stage: "reading"; path: string }
+  | { stage: "searching"; query: string };
 
 export interface RespondOptions {
   /** 轻量档意图分类器（workflow 模式使用；loop 模式下动作提议取代意图分类）。 */
@@ -124,7 +127,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
     const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
     const completion = outcome.completion;
     // 可见回复的截断兜底：token 触顶（finishReason=length）或被这里 1,500 字符硬切，都要留痕
-    return buildReply(session, node, learnerContent, () => flagTruncatedReply(completion.text.slice(0, 1_500), completion.finishReason === "length" || completion.text.length > 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
+    return buildReply(session, node, learnerContent, () => flagTruncatedReply(completion.text.slice(0, 1_500), completion.finishReason === "length" || completion.text.length > 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, toolRounds: outcome.toolRounds, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
   } catch {
     return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
@@ -132,14 +135,14 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
 /** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
-    input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : { stage: "thinking", round: progress.round });
+    input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round });
   };
   if (!input.repositoryPath) {
     input.onProgress?.({ stage: "thinking", round: 1 });
     const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2, scene: "teaching.turn" });
-    return { completion, ...(completion.usage ? { usage: completion.usage } : {}), fileReads: [], codeSearches: [] };
+    return { completion, ...(completion.usage ? { usage: completion.usage } : {}), toolRounds: 0, fileReads: [], codeSearches: [] };
   }
   const result = await completeWithReadTool({
     provider: input.provider,
@@ -154,14 +157,14 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     ...(input.search ? { search: input.search } : {}),
     ...(input.onProgress ? { onProgress: forwardProgress } : {})
   });
-  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), fileReads: result.fileReads, codeSearches: result.codeSearches };
+  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), toolRounds: result.rounds, fileReads: result.fileReads, codeSearches: result.codeSearches };
 }
 
 function recentTranscript(messages: TutorMessage[]): string[] {
   return messages.slice(-4).map((message) => `${message.role === "user" ? "学习者" : "导师"}: ${message.content.slice(0, 120)}`);
 }
 
-function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource" | "fileReads">): TutorReply {
+function buildReply(session: TutorSession, node: CourseNode, learnerContent: string, composer: (kind: "advance" | "step_down" | "give_answer" | "confirm", stage: TutorSession["stage"], node: CourseNode, settings: TutorSettings) => string, provider?: string, usage?: LlmUsage, predetermined?: Transition, intentSource?: "llm" | "regex", action?: Pick<TutorReply, "action" | "proposedAction" | "actionSource" | "fileReads" | "codeSearches" | "toolRounds">): TutorReply {
   const next = predetermined ?? transition({ stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length }, learnerContent);
   const user: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString(), stage: session.stage };
   const assistant: TutorMessage = { id: id(), role: "assistant", content: composer(next.kind, next.next.stage, node, session.settings), createdAt: new Date().toISOString(), stage: next.next.stage };

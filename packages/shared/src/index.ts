@@ -533,6 +533,9 @@ export type JournalEventType =
     双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
     表达质量裁判）的被测输入源。 */
   | "turn_text"
+  /** agent 回合的循环决策摘要（2026-09-27）：一回合一条，记「提议动作 → 守门裁决 → 实际执行」与工具循环轮次。
+    practice 对话无 agent loop，不记本事件；veto 侧另有更早的 action_veto（学习语义口径，保留不并入）。 */
+  | "loop_round"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"

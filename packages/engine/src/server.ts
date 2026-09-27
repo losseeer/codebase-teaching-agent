@@ -519,6 +519,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (result.scopeDegraded) {
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
+    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length });
     journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -526,7 +527,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   }
 });
 
-/** map-chat 流式版：SSE 推送过程事件（thinking / reading），GUI 借此显示「回复生成中 / 正在读取 xx」。 */
+/** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -563,6 +564,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (result.scopeDegraded) {
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
+    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length });
     journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
@@ -749,7 +751,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
-      onProgress: (progress) => send({ type: "progress", ...progress })
+      onProgress: (progress) => send({ type: "progress", payload: progress })
     });
     sessions.set(outcome.session.id, outcome.session);
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -768,6 +770,8 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     for (const search of outcome.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, session.id);
     }
+    // 回合决策摘要：提议动作 → 守门裁决 → 实际执行 + 工具轮次（run-trace 按 traceId 串起整回合的原始素材）
+    journal.append("loop_round", { scene: "teach", decision: outcome.actionSource ?? "deterministic", proposed: outcome.proposedAction ?? null, executed: outcome.action ?? null, tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);
     const cost = summarizeCost(repository.path, monthlyBudget, session.id);
     if (cost.mode === "degraded") {
       journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);

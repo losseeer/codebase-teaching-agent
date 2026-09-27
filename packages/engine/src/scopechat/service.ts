@@ -90,6 +90,8 @@ export interface ScopedChatResult {
   fileReads?: FileReadRecord[];
   /** mapChat 专用：本次对话的 search_code 调用审计（供 server 逐条记 journal code_search）。 */
   codeSearches?: CodeSearchRecord[];
+  /** mapChat 专用：工具循环实际轮数（供 server 记 journal loop_round）。 */
+  toolRounds: number;
   /** mapChat 专用：作用域解析失败、按全局视野作答的留痕（供 server 记 journal scope_degraded）。 */
   scopeDegraded?: { nodeId: string; scopePathsCount: number };
 }
@@ -287,6 +289,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     reply,
     provider: provider.name,
     usage: result.usage,
+    toolRounds: result.rounds,
     ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
     ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {}),
     ...(scopeDegraded ? { scopeDegraded } : {})
@@ -308,5 +311,5 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     temperature: 0.3,
     scene: "practice.chat"
   });
-  return { reply: flagTruncatedReply(completion.text, completion.finishReason === "length"), provider: input.provider.name, usage: completion.usage };
+  return { reply: flagTruncatedReply(completion.text, completion.finishReason === "length"), provider: input.provider.name, usage: completion.usage, toolRounds: 0 };
 }

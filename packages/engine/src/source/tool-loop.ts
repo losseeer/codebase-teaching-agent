@@ -17,7 +17,7 @@ import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type Search
   - 每次 read_file（含拒绝与失败）返回审计记录，由调用方记 journal file_read。
   */
 
-export type ReadToolProgress = { type: "thinking"; round: number } | { type: "reading"; path: string };
+export type ReadToolProgress = { type: "thinking"; round: number } | { type: "reading"; path: string } | { type: "searching"; query: string };
 
 export interface ReadToolLoopInput {
   provider: LlmProvider;
@@ -42,6 +42,8 @@ export interface ReadToolLoopInput {
 export interface ReadToolLoopResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
+  /** 实际发生的工具调用轮数（预算上限打满提前收尾的轮也算）。 */
+  rounds: number;
   fileReads: FileReadRecord[];
   /** 本次对话的 search_code 调用审计（不合并去重——同一查询反复搜本身就是信号）。 */
   codeSearches: CodeSearchRecord[];
@@ -74,6 +76,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
       if (call.name === SEARCH_CODE_TOOL.name && input.search) {
+        input.onProgress?.({ type: "searching", query: readQueryHint(call.argumentsJson) });
         const outcome = executeSearchCode(input.search, call.argumentsJson);
         codeSearches.push(outcome.audit);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
@@ -94,7 +97,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene });
     usage = addUsage(usage, completion.usage);
   }
-  return { completion, usage, fileReads, codeSearches };
+  return { completion, usage, rounds, fileReads, codeSearches };
 }
 
 /** 读取 read_file 参数里的 path（仅用于进度提示，不参与校验）。 */
@@ -102,6 +105,16 @@ function readPathHint(argumentsJson: string): string {
   try {
     const parsed = JSON.parse(argumentsJson || "{}") as { path?: unknown };
     return typeof parsed.path === "string" ? parsed.path : "";
+  } catch {
+    return "";
+  }
+}
+
+/** 读取 search_code 参数里的 query（仅用于进度提示，不参与校验）。 */
+function readQueryHint(argumentsJson: string): string {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}") as { query?: unknown };
+    return typeof parsed.query === "string" ? parsed.query : "";
   } catch {
     return "";
   }

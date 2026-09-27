@@ -17,15 +17,16 @@ export interface ScopedChatHistoryTurn {
   content: string;
 }
 
-/** 作用域对话 SSE 事件：thinking / reading 是过程指示，delta 是正文增量（打字机回放），done/error 收尾。 */
+/** 作用域对话 SSE 事件：thinking / reading / searching 是过程指示，delta 是正文增量（打字机回放），done/error 收尾。 */
 export type ScopedChatEvent =
   | { type: "thinking"; round: number }
   | { type: "reading"; path: string }
+  | { type: "searching"; query: string }
   | { type: "delta"; delta: string };
 
-/** 教学回合 SSE 事件：progress 是过程提示（判断动作 / 读文件），delta 是正文增量；done 由 sendMessageStream 的返回值固化。 */
+/** 教学回合 SSE 事件：progress 是过程提示（判断动作 / 读文件 / 检索代码），delta 是正文增量；done 由 sendMessageStream 的返回值固化。 */
 export type TeachingStreamEvent =
-  | { type: "progress"; payload: { stage?: string; round?: number; path?: string } }
+  | { type: "progress"; payload: { stage?: string; round?: number; path?: string; query?: string } }
   | { type: "delta"; delta: string };
 
 /** 全站通用 SSE 读取：POST → 逐事件回调 → done 事件固化为返回值；error 事件与普通 HTTP 错误统一抛 Error。 */
@@ -132,15 +133,16 @@ export const api = {
       `/api/sessions/${sessionId}/messages`,
       { content, settings },
       (event) => {
-        if (event.type === "progress") onEvent({ type: "progress", payload: (event.payload ?? {}) as { stage?: string; round?: number; path?: string } });
+        if (event.type === "progress") onEvent({ type: "progress", payload: (event.payload ?? {}) as { stage?: string; round?: number; path?: string; query?: string } });
         else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
       }
     ),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading）与正文增量（delta），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
   mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
     sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, payload, (event) => {
       if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
       else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
+      else if (event.type === "searching") onEvent({ type: "searching", query: String(event.query ?? "") });
       else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
     }),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；练习或仓库失效的 404 仍是普通 JSON。 */

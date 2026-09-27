@@ -25,9 +25,10 @@ export const SCOPE_LABEL: Record<Scope, string> = {
   教学回合过程提示的文案。引擎按 `harness` 的 TeachingProgress 发结构化事件（stage 取值与 map-chat 的
   SSE 过程事件同一套），文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
   */
-export function teachingProgressText(payload: { stage?: string; round?: number; path?: string }): string {
+export function teachingProgressText(payload: { stage?: string; round?: number; path?: string; query?: string }): string {
   if (payload.stage === "deciding") return "正在判断本轮教学动作…";
   if (payload.stage === "reading") return `正在读取 ${payload.path || "代码文件"} …`;
+  if (payload.stage === "searching") return `正在检索代码：${payload.query || "关键词"} …`;
   if (payload.stage === "thinking") return payload.round && payload.round > 1 ? `正在思考（第 ${payload.round} 轮）…` : "正在思考…";
   return "回复生成中…";
 }
@@ -381,6 +382,7 @@ useEffect(() => {
     const onScopedEvent = (event: ScopedChatEvent): void => {
       if (event.type === "delta") typeQueue.current += event.delta;
       else if (scope === "map" && event.type === "reading") setScopeProgress("map", `正在读取 ${event.path || "文件"} …`);
+      else if (scope === "map" && event.type === "searching") setScopeProgress("map", `正在检索代码：${event.query || "关键词"} …`);
     };
     try {
       const reply = scope === "map"
