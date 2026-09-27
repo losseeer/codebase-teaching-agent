@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import websocket from "@fastify/websocket";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
@@ -91,7 +90,6 @@ const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !
 tboot("createLlmProvider");
 
 const sessions = new Map<string, TutorSession>();
-const clients = new Set<{ send(data: string): void; readyState: number }>();
 
 /**
   会话解析：内存命中直接返回；未命中（引擎重启把内存 Map 清零）时，从当前挂载仓库的 journal
@@ -114,14 +112,13 @@ function resolveSession(sessionId: string): TutorSession | undefined {
 await app.register(cors, { origin: true });
 tboot("cors registered");
 
-await app.register(websocket);
-tboot("websocket registered");
-
 tboot("before listen");
 
+/** 全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。 */
+const subscribers = new Set<(event: ServerEvent) => void>();
+
 function broadcast(event: ServerEvent): void {
-  const serialized = JSON.stringify(event);
-  for (const client of clients) if (client.readyState === 1) client.send(serialized);
+  for (const subscriber of subscribers) subscriber(event);
 }
 
 function repositoryOr404(repositoryId: string) {
@@ -281,9 +278,15 @@ app.put<{ Body: { model?: string; thinking?: string } }>("/api/llm/settings", as
   };
 });
 
-app.get("/ws", { websocket: true }, (socket) => {
-  clients.add(socket);
-  socket.on("close", () => clients.delete(socket));
+app.get("/api/events", async (_request, reply) => {
+  // SSE 替代原 /ws：EventSource 自带断线自动重连，浏览器兼容面与普通 HTTP 一致
+  reply.hijack();
+  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const subscriber = (event: ServerEvent): void => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  subscribers.add(subscriber);
+  reply.raw.on("close", () => subscribers.delete(subscriber));
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
@@ -561,7 +564,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
     }
     journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
-    // 打字机回放（与教学 session.delta 同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
+    // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
@@ -734,40 +737,49 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const currentCost = summarizeCost(repository.path, monthlyBudget);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, {
-    classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
-    actionLoop: actionLoopEnabled,
-    analysis: repository.analysis,
-    search: searchCorpusFor(repository),
-    // 过程提示：回合可能持续数秒，把「正在判断动作 / 正在读 xx 文件」实时推给 GUI（ws 广播，不占 HTTP 响应）
-    onProgress: (progress) => broadcast({ type: "session.progress", payload: { sessionId: session.id, ...progress } })
-  });
-  sessions.set(outcome.session.id, outcome.session);
-  const journal = new Journal(repository.path, repository.index.repositoryId);
-  if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
-  if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
-  journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
-  if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
-  if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-  const tokenEvent = journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
-  // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕；降级轮也记（裁判要看到「这一轮没走 LLM」的成品）
-  journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
-  // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
-  for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
+  // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流，不再走全局广播（事件天然按请求隔离，连接断开自动清理）
+  reply.hijack();
+  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (event: unknown): void => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  try {
+    const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, {
+      classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
+      actionLoop: actionLoopEnabled,
+      analysis: repository.analysis,
+      search: searchCorpusFor(repository),
+      onProgress: (progress) => send({ type: "progress", ...progress })
+    });
+    sessions.set(outcome.session.id, outcome.session);
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
+    if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
+    journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
+    if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
+    if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
+    journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+    // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕；降级轮也记（裁判要看到「这一轮没走 LLM」的成品）
+    journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
+    // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
+    for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
+      journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
+    }
+    for (const search of outcome.codeSearches ?? []) {
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, session.id);
+    }
+    const cost = summarizeCost(repository.path, monthlyBudget, session.id);
+    if (cost.mode === "degraded") {
+      journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
+      // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
+      traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
+    }
+    for (const delta of chunk(outcome.assistant.content, 72)) send({ type: "delta", delta });
+    send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" });
+  } catch (error) {
+    send({ type: "error", error: error instanceof Error ? error.message : "教学回合失败" });
   }
-  for (const search of outcome.codeSearches ?? []) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, session.id);
-  }
-  const cost = summarizeCost(repository.path, monthlyBudget, session.id);
-  if (cost.mode === "degraded") {
-    journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
-    // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
-    traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
-  }
-  for (const delta of chunk(outcome.assistant.content, 72)) broadcast({ type: "session.delta", payload: { sessionId: session.id, messageId: outcome.assistant.id, delta } });
-  broadcast({ type: "session.complete", payload: { sessionId: session.id, message: outcome.assistant, stage: outcome.session.stage, cost, tokenEventId: tokenEvent.id } });
-  return { session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" };
+  reply.raw.end();
 });
 
 /**

@@ -40,7 +40,7 @@ export interface TutorReply {
 
 /**
   教学回合的过程事件：一个回合里模型实际做的事（判断动作 / 读代码 / 组织回复）。
-  server 把它经 ws 广播为 `session.progress`，GUI 显示成 Agent 侧栏里的过程提示行——
+  server 把它经本请求的 SSE 响应流发为 `progress` 事件，GUI 显示成 Agent 侧栏里的过程提示行——
   回合可能持续数秒，只显示一句「回复中」等于把这段时间藏起来。
   `stage` 字段名与 map-chat 的 SSE 过程事件保持一致（GUI 两侧同一套取值）。
   */

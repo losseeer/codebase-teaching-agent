@@ -21,11 +21,15 @@ export interface ScopedChatHistoryTurn {
 export type ScopedChatEvent =
   | { type: "thinking"; round: number }
   | { type: "reading"; path: string }
-  | { type: "delta"; delta: string }
-  | { type: "done"; reply: string; provider: string };
+  | { type: "delta"; delta: string };
 
-/** map / practice 共用的 SSE 读取：POST → 逐事件回调 → done 固化；error 事件与普通 HTTP 错误统一抛 Error。 */
-async function streamScopedChat(url: string, payload: unknown, onEvent: (event: ScopedChatEvent) => void): Promise<{ reply: string; provider: string }> {
+/** 教学回合 SSE 事件：progress 是过程提示（判断动作 / 读文件），delta 是正文增量；done 由 sendMessageStream 的返回值固化。 */
+export type TeachingStreamEvent =
+  | { type: "progress"; payload: { stage?: string; round?: number; path?: string } }
+  | { type: "delta"; delta: string };
+
+/** 全站通用 SSE 读取：POST → 逐事件回调 → done 事件固化为返回值；error 事件与普通 HTTP 错误统一抛 Error。 */
+async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: Record<string, unknown> & { type: string }) => void): Promise<TDone> {
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
@@ -34,22 +38,17 @@ async function streamScopedChat(url: string, payload: unknown, onEvent: (event: 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let final: { reply: string; provider: string } | undefined;
+  let final: TDone | undefined;
   const consume = (chunk: string): void => {
     const line = chunk.startsWith("data: ") ? chunk.slice(6) : "";
     if (!line) return;
-    const event = JSON.parse(line) as { type: string; round?: number; path?: string; delta?: string; reply?: string; provider?: string; error?: string };
-    if (event.type === "thinking") {
-      onEvent({ type: "thinking", round: event.round ?? 1 });
-    } else if (event.type === "reading") {
-      onEvent({ type: "reading", path: event.path ?? "" });
-    } else if (event.type === "delta") {
-      onEvent({ type: "delta", delta: event.delta ?? "" });
-    } else if (event.type === "done") {
-      final = { reply: event.reply ?? "", provider: event.provider ?? "" };
-    } else if (event.type === "error") {
-      throw new Error(event.error ?? "LLM 对话失败");
+    const event = JSON.parse(line) as Record<string, unknown> & { type: string };
+    if (event.type === "error") throw new Error(String(event.error ?? "LLM 对话失败"));
+    if (event.type === "done") {
+      final = event as TDone;
+      return;
     }
+    onEvent(event);
   };
   for (;;) {
     const { done, value } = await reader.read();
@@ -127,11 +126,28 @@ export const api = {
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   /** 该课程节点最近一次教学会话的 id（引擎从 journal 倒扫；GUI 没存过 id 的存量历史靠它找回）。 */
   getLatestSession: (repositoryId: string, nodeId: string) => request<{ sessionId: string | null }>(`/api/repositories/${repositoryId}/latest-session?nodeId=${encodeURIComponent(nodeId)}`),
-  sendMessage: (sessionId: string, content: string, settings: TutorSettings) => request<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, settings }) }),
+  /** 教学回合流式版：SSE 逐事件回调过程提示（progress）与正文增量（delta），resolve 于 done（session/message/cost/provider）。会话或节点失效仍是普通 JSON。 */
+  sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: TeachingStreamEvent) => void) =>
+    sseStream<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(
+      `/api/sessions/${sessionId}/messages`,
+      { content, settings },
+      (event) => {
+        if (event.type === "progress") onEvent({ type: "progress", payload: (event.payload ?? {}) as { stage?: string; round?: number; path?: string } });
+        else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
+      }
+    ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading）与正文增量（delta），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
   mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
-    streamScopedChat(`/api/repositories/${repositoryId}/map-chat/stream`, payload, onEvent),
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, payload, (event) => {
+      if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
+      else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
+      else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
+    }),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；练习或仓库失效的 404 仍是普通 JSON。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
-    streamScopedChat(`/api/repositories/${repositoryId}/practice-chat`, payload, onEvent)
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, payload, (event) => {
+      if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
+      else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
+      else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
+    })
 };

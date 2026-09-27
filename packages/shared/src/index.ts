@@ -578,7 +578,8 @@ export interface EngineTraceEvent {
   detail: Record<string, TraceScalar>;
 }
 
+/** 全局事件流（GET /api/events，SSE）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——它们在各自请求的响应流里。 */
 export interface ServerEvent {
-  type: "import.progress" | "repository.updated" | "session.delta" | "session.complete" | "session.progress";
+  type: "import.progress" | "repository.updated";
   payload: Record<string, unknown>;
 }

@@ -28,15 +28,14 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
   /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
   const switchLogged = useRef(false);
 
-  // 进度更新主通道 = /ws 广播（引擎每个进度事件都 publish import.progress）；
-  // 5s 轮询是兜底——WS 断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
+  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress；EventSource 自带断线自动重连）；
+  // 5s 轮询是兜底——事件流断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
   const jobId = job?.id;
   const jobActive = Boolean(job && !["completed", "failed"].includes(job.phase));
   useEffect(() => {
     if (!jobActive || !jobId) return;
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
-    socket.onmessage = (event: MessageEvent<string>) => {
+    const source = new EventSource("/api/events");
+    source.onmessage = (event: MessageEvent<string>) => {
       const serverEvent = JSON.parse(event.data) as { type: string; payload: ImportJob };
       if (serverEvent.type === "import.progress" && serverEvent.payload.id === jobId) setJob(serverEvent.payload);
     };
@@ -44,7 +43,7 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),
       5000
     );
-    return () => { window.clearInterval(interval); socket.close(); };
+    return () => { window.clearInterval(interval); source.close(); };
   }, [jobActive, jobId]);
   useEffect(() => {
     if (job?.phase !== "completed" || !job.repositoryId) return;

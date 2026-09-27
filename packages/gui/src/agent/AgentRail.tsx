@@ -145,7 +145,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
           </div>
         ) : null}
         {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
-        {/* 流式正文气泡：三作用域共用——teaching 走 ws session.delta，map/practice 走 SSE delta（均为 72 字分块回放） */}
+        {/* 流式正文气泡：三作用域共用——各自请求的 SSE delta（72 字分块回放） */}
         {t.liveAnswer && (
           <div className="message agent streaming">
             <span>Codebase Agent</span>

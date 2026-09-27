@@ -216,12 +216,38 @@ useEffect(() => {
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
-  // 回复生成过程指示（按作用域）：map 走 SSE、teaching 走 ws 广播（引擎的 session.progress），都是引擎发事件、GUI 定文案
+  // 回复生成过程指示（按作用域）：三作用域都走各自请求的 SSE 事件（teaching 是 progress、map 是 thinking/reading），都是引擎发事件、GUI 定文案
   const [progress, setProgress] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const setScopeProgress = (target: Scope, text: string): void => {
     setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
   };
   const [liveAnswer, setLiveAnswer] = useState("");
+  // 打字机节奏：SSE 回放是「LLM 生成完一次性 flush」，delta 直写 liveAnswer 会在一帧内全部渲染、观感仍是整段落下。
+  // 收到的 delta 进队列，由定时器按自适应步长吐字（队列越长步长越大，任意长度约 1.5s 追平）；done 后等队列排空再固化正式消息。
+  const typeQueue = useRef("");
+  const typeTimer = useRef<number | null>(null);
+  const startTypewriter = (): void => {
+    if (typeTimer.current !== null) return;
+    typeTimer.current = window.setInterval(() => {
+      const queue = typeQueue.current;
+      if (!queue) return;
+      // 三段式步长：长回复粗步追进度、中段匀速、尾部细步收尾——任意长度约 2s 排空，观感是恒速打字而非几何拖尾
+      const step = queue.length > 240 ? Math.ceil(queue.length / 40) : queue.length > 40 ? 6 : 2;
+      typeQueue.current = queue.slice(step);
+      setLiveAnswer((current) => current + queue.slice(0, step));
+    }, 24);
+  };
+  const stopTypewriter = (): void => {
+    if (typeTimer.current !== null) {
+      window.clearInterval(typeTimer.current);
+      typeTimer.current = null;
+    }
+  };
+  const drainTypewriter = async (): Promise<void> => {
+    const started = Date.now();
+    while (typeQueue.current && Date.now() - started < 6000) await new Promise((resolve) => setTimeout(resolve, 24));
+    stopTypewriter();
+  };
   const [error, setError] = useState("");
   // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
@@ -290,23 +316,6 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [repositoryId, selected, session]);
 
-  const activeSessionId = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!repositoryId) return;
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
-    socket.onmessage = (event: MessageEvent<string>) => {
-      const serverEvent = JSON.parse(event.data) as { type: string; payload: { sessionId?: string; delta?: string; repositoryId?: string; stage?: string; round?: number; path?: string } };
-      if (serverEvent.type === "session.delta" && serverEvent.payload.sessionId === activeSessionId.current) {
-        setLiveAnswer((current) => current + (serverEvent.payload.delta ?? ""));
-      } else if (serverEvent.type === "session.progress" && serverEvent.payload.sessionId === activeSessionId.current) {
-        // 教学回合的过程提示：引擎发的是「判断动作 / 读文件 / 思考」这类事件，文案由 GUI 决定
-        setScopeProgress("teaching", teachingProgressText(serverEvent.payload));
-      }
-    };
-    return () => socket.close();
-  }, [repositoryId]);
-
   const send = async (): Promise<void> => {
     if (!content.trim() || !selected) return;
     const message = content;
@@ -321,9 +330,14 @@ useEffect(() => {
         rememberSession(repositoryId, selected.id, active.id);
       }
       if (!active) return;
-      activeSessionId.current = active.id;
       setLiveAnswer("");
-      const reply = await api.sendMessage(active.id, message, settings);
+      typeQueue.current = ""; startTypewriter();
+      // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流（替代原 /ws 全局广播 + sessionId 过滤）
+      const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
+        if (event.type === "delta") typeQueue.current += event.delta;
+        else if (event.type === "progress") setScopeProgress("teaching", teachingProgressText(event.payload));
+      });
+      await drainTypewriter();
       setSession(reply.session);
       setSettingsState(reply.session.settings);
       setCost(reply.cost);
@@ -331,6 +345,7 @@ useEffect(() => {
       setLiveAnswer("");
       pushMessage("teaching", "agent", reply.message.content);
     } catch (reason) {
+      typeQueue.current = ""; stopTypewriter(); setLiveAnswer("");
       setError(reason instanceof Error ? reason.message : "发送失败");
       pushMessage("teaching", "agent", `发送失败：${reason instanceof Error ? reason.message : String(reason)}`, "error");
     } finally {
@@ -360,10 +375,11 @@ useEffect(() => {
       .map((item) => item.text);
     pushMessage(scope, "user", message);
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
-    // 流式正文的落点：map/practice 的 SSE delta 事件写这里，done 后清空并固化为正式消息
+    // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
     setLiveAnswer("");
+    typeQueue.current = ""; startTypewriter();
     const onScopedEvent = (event: ScopedChatEvent): void => {
-      if (event.type === "delta") setLiveAnswer((current) => current + event.delta);
+      if (event.type === "delta") typeQueue.current += event.delta;
       else if (scope === "map" && event.type === "reading") setScopeProgress("map", `正在读取 ${event.path || "文件"} …`);
     };
     try {
@@ -381,14 +397,16 @@ useEffect(() => {
             style: settings.style
           }, onScopedEvent)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, earlierQuestions, style: settings.style }, onScopedEvent);
+      await drainTypewriter();
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
       setLiveAnswer("");
     } catch (reason) {
-      setLiveAnswer("");
+      typeQueue.current = ""; stopTypewriter(); setLiveAnswer("");
       setError(reason instanceof Error ? reason.message : "发送失败");
       pushMessage(scope, "agent", `发送失败：${reason instanceof Error ? reason.message : String(reason)}`, "error");
     } finally {
+      stopTypewriter();
       setSending(false);
       setScopeProgress(scope, "");
     }
