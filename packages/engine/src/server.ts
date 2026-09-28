@@ -5,7 +5,7 @@ import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TeachingStage, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
@@ -15,7 +15,6 @@ import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/service.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
-import { findLatestSessionForNode, restoreSessionFromJournal } from "./harness/restore.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/service.js";
 import { indexRepository } from "./indexer/indexer.js";
@@ -26,6 +25,7 @@ import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/provid
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
+import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { dedupeFileReads } from "./source/read-file.js";
@@ -92,21 +92,57 @@ tboot("createLlmProvider");
 const sessions = new Map<string, TutorSession>();
 
 /**
-  会话解析：内存命中直接返回；未命中（引擎重启把内存 Map 清零）时，从当前挂载仓库的 journal
-  按 sessionId 重放回内存（`restoreSessionFromJournal`，见 harness/restore.ts 的诚实边界）。
-  恢复后仓库须仍在挂载态——否则会话引用的节点/文件已不在引擎里，宁可 404 让 GUI 走新建，不挂半截会话。
+  会话解析：内存命中直接返回；未命中（引擎重启把内存 Map 清零）时按 sessionId 从**该仓的 chat_session /
+  chat_message** 装配回内存。缺最低证据（线程不在、已软删、或状态快照字段不齐）就返回 undefined——
+  调用方照旧 404/400 让 GUI 走新建，绝不编造半截会话。
+
+  09-27 起真源是这两张表，journal 重放（旧 harness/restore.ts）退役：审计线继续按自己的口径记截断摘要，
+  但「接着聊」不该依赖审计摘要的 2000 字截断。
   */
 function resolveSession(sessionId: string): TutorSession | undefined {
   const live = sessions.get(sessionId);
   if (live) return live;
   for (const repository of importer.mountedRepositories()) {
-    const restored = restoreSessionFromJournal(readJournal(repository.path), sessionId);
-    if (restored && restored.repositoryId === repository.index.repositoryId) {
+    const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
+    if (restored) {
       sessions.set(restored.id, restored);
       return restored;
     }
   }
   return undefined;
+}
+
+/** 教学线程 → TutorSession：正文取原文（不截断），状态取回合收尾写的快照。 */
+function restoreThreadAsSession(repositoryPath: string, repositoryId: string, sessionId: string): TutorSession | undefined {
+  const thread = getThread(repositoryPath, sessionId);
+  if (!thread || thread.repositoryId !== repositoryId || thread.scope !== "teach" || !thread.courseNodeId) return undefined;
+  const state = readThreadState(repositoryPath, sessionId);
+  if (!state) return undefined;
+  const settings = validateSettings(state.settings);
+  return {
+    id: thread.id,
+    repositoryId: thread.repositoryId,
+    courseNodeId: thread.courseNodeId,
+    style: settings.style,
+    settings,
+    stage: state.stage,
+    fallbackCount: state.fallbackCount,
+    messages: readMessages(repositoryPath, sessionId) as TutorMessage[],
+    createdAt: thread.createdAt
+  };
+}
+
+/**
+  教学回合落库：正文（user + assistant 全文，不截断）+ 回合结束后的状态快照。
+  线程行不在就按同一个 id 补建再写——回合正文是产品数据，丢了比多一行严重得多；
+  反过来如果静默跳过写入，GUI 重启后就会看到「聊过但没记录」的空会话。
+  */
+function persistTeachingTurn(repositoryPath: string, repositoryId: string, courseNodeId: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
+  if (!appendMessages(repositoryPath, sessionId, messages)) {
+    createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, courseNodeId, title });
+    appendMessages(repositoryPath, sessionId, messages);
+  }
+  saveThreadState(repositoryPath, sessionId, state);
 }
 
 await app.register(cors, { origin: true });
@@ -168,22 +204,37 @@ function sanitizeScopePaths(value: unknown): string[] | undefined {
   return paths.length ? paths.slice(0, 1_000) : undefined;
 }
 
-/** 作用域对话上送的最近历史回合（入参守卫）：角色白名单 + 内容非空截长，只留最后 6 条；窗口渲染口径在 scopechat/service.ts。 */
-function sanitizeChatHistory(value: unknown): ScopedChatTurn[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item): ScopedChatTurn[] => {
-    if (typeof item !== "object" || item === null) return [];
-    const turn = item as { role?: unknown; content?: unknown };
-    if (turn.role !== "user" && turn.role !== "assistant") return [];
-    if (typeof turn.content !== "string" || !turn.content.trim()) return [];
-    return [{ role: turn.role, content: turn.content.trim().slice(0, 2_000) }];
-  }).slice(-6);
+/** 线程 id 入参守卫：非空字符串、截长；没给就是「无会话线程」（单次提问，不带历史也不落库）。 */
+function sanitizeThreadId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
 }
 
-/** 作用域对话上送的窗口外问题脉络（入参守卫）：只留非空字符串并截长，封顶 8 条；渲染口径在 scopechat/service.ts。 */
-function sanitizeEarlierQuestions(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item): string[] => (typeof item === "string" && item.trim() ? [item.trim().slice(0, 400)] : [])).slice(-8);
+/**
+  线程正文 → 模型上下文：最近 6 条进「最近对话」窗口，窗口外只留学习者提问作问题脉络。
+  两条口径（6 条 / 8 条、逐行截断）住在 scopechat/service.ts 的渲染常量里，这里只负责选行。
+
+  它替换掉的是「客户端回传 history + earlierQuestions」那条通路（09-27 会话持久化）：
+  进模型上下文的东西必须能在库里考据到——客户端临时拼的窗口正文既可能是旧的、也可能被改，
+  与「上下文≠选中项」是同一类事故。
+  */
+function threadScopedHistory(repositoryPath: string, threadId: string | undefined): { history: ScopedChatTurn[]; earlierQuestions: string[] } {
+  const messages = threadId ? readMessages(repositoryPath, threadId) : [];
+  const boundary = Math.max(0, messages.length - 6);
+  return {
+    history: messages.slice(boundary).map((message) => ({ role: message.role, content: message.content })),
+    earlierQuestions: messages.slice(0, boundary).filter((message) => message.role === "user").slice(-8).map((message) => message.content)
+  };
+}
+
+/**
+  取线程并核归属：不在库里 / 已软删 / 属于别的仓库 / 属于别的作用域一律 `undefined`（调用方据此拒绝本轮）。
+  跨作用域复用线程会把教学问答喂进宏观设计的上下文，这种串味比一个 409 难查得多。
+  */
+function scopedThread(repository: NonNullable<ReturnType<typeof repositoryOr404>>, threadId: string | undefined, scope: ChatScope) {
+  if (!threadId) return undefined;
+  const thread = getThread(repository.path, threadId);
+  if (!thread || thread.repositoryId !== repository.index.repositoryId || thread.scope !== scope) return undefined;
+  return thread;
 }
 
 /** 流程视图选中环节（入参守卫）：逐字段核类型并截长后重建——请求体是外部输入，形状不可信；字段不齐即视为没选环节。 */
@@ -490,37 +541,59 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
   return teachingProvider;
 }
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
+/** 作用域回合的线程上下文三件套：解析 threadId → 核归属 → 从库里取历史。`threadId` 缺席即「单次提问」（不带历史、不落库）。 */
+function scopedThreadTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, value: unknown, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[]; earlierQuestions: string[] } | undefined {
+  const threadId = sanitizeThreadId(value);
+  if (!threadId) return { threadId: undefined, history: [], earlierQuestions: [] };
+  const thread = scopedThread(repository, threadId, scope);
+  if (!thread) return undefined;
+  return { threadId: thread.id, ...threadScopedHistory(repository.path, thread.id) };
+}
+
+/**
+  回合正文落库（用户问 + 助手答，全文不截断）：这是产品线，与 journal 的 `turn_text`（审计线，2000 字截断）
+  是**有意的双写**——一份供模型下一轮读，一份供指标与裁判读。软删线程不会动这里的行，只让它查不到。
+  */
+function persistScopedTurn(repositoryPath: string, threadId: string | undefined, question: string, answer: string): void {
+  if (!threadId) return;
+  appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }]);
+}
+
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
+  const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
+  // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝：一个干净的 409 比「模型拿错上下文自信作答」便宜得多
+  if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
-    });
+    }, turn.threadId);
     // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
     for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
-      });
+      }, turn.threadId);
     }
     // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
     for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, turn.threadId);
     }
     // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
     if (result.scopeDegraded) {
-      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
+      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, turn.threadId);
     }
-    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length });
-    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
+    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, turn.threadId);
+    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply), turn.threadId);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -528,11 +601,13 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
+  const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
+  if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
@@ -543,29 +618,30 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   };
   try {
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress)
     });
+    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
-    });
+    }, turn.threadId);
     for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
         path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
-      });
+      }, turn.threadId);
     }
     for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") });
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, turn.threadId);
     }
     if (result.scopeDegraded) {
-      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount });
+      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, turn.threadId);
     }
-    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length });
-    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply));
+    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, turn.threadId);
+    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply), turn.threadId);
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
@@ -575,12 +651,18 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; history?: unknown; earlierQuestions?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
   if (!request.body?.exerciseId) return reply.code(400).send({ error: "缺少练习上下文；请先在练习页生成一道练习。" });
+  const threadId = sanitizeThreadId(request.body?.threadId);
+  const thread = threadId ? scopedThread(repository, threadId, "practice") : undefined;
+  if (threadId && !thread) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的练习作用域；请新建会话后再问。" });
+  // 线程绑题（exercise_id 由 GUI 建线程时给出）：换题走新建线程，这里兜住「拿着 A 题的会话问 B 题」——
+  // 上一题的解答混进本轮上下文，模型会把两道题的条件揉在一起作答
+  if (thread?.exerciseId && thread.exerciseId !== request.body.exerciseId) return reply.code(409).send({ error: "该会话属于另一道练习；请新建会话后再追问。" });
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   // 练习查询留在 hijack 前：404 还是干净的 JSON，只有确定要开火了才切 SSE
@@ -592,6 +674,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     database.close();
   }
   if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
+  const { history, earlierQuestions } = threadScopedHistory(repository.path, thread?.id);
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -599,13 +682,14 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
   };
   try {
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history: sanitizeChatHistory(request.body?.history), earlierQuestions: sanitizeEarlierQuestions(request.body?.earlierQuestions), provider, style: validateStyle(request.body?.style) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style) });
+    persistScopedTurn(repository.path, thread?.id, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
-    });
-    journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply));
+    }, thread?.id);
+    journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply), thread?.id);
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
@@ -708,8 +792,13 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
     ? validateSettings({ ...defaultTutorSettings, ...request.body?.settings, style: requestedStyle })
     : learnerProfile.recommended.settings;
   const session = createSession(repository.index.repositoryId, node.id, settings);
+  // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
+  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, courseNodeId: node.id, title: node.title });
+  saveThreadState(repository.path, session.id, { stage: session.stage, fallbackCount: session.fallbackCount, settings: session.settings });
   sessions.set(session.id, session);
-  new Journal(repository.path, repository.index.repositoryId).append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
+  const journal = new Journal(repository.path, repository.index.repositoryId);
+  journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
+  journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
   return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext({ node, policy: policyFor(session.settings), history: [], repositoryPath: repository.path, analysis: repository.analysis }) });
 });
 
@@ -718,11 +807,81 @@ app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (re
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
-/** 该课程节点最近一次教学会话的 id（从 journal 倒扫）：GUI 刷新后即使本地没存过 id，也能找回存量历史。 */
+/** 该课程节点最近一次教学会话的 id（查 chat_session）：GUI 刷新后即使本地没存过 id，也能找回存量历史。 */
 app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>("/api/repositories/:repositoryId/latest-session", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库未挂载" });
-  return { sessionId: findLatestSessionForNode(readJournal(repository.path), request.query.nodeId ?? "") ?? null };
+  const nodeId = request.query.nodeId ?? "";
+  return { sessionId: nodeId ? latestThreadForNode(repository.path, repository.index.repositoryId, nodeId)?.id ?? null : null };
+});
+
+/**
+  会话线程管理（三作用域共用，作用域是 `teach | map | practice`）。
+
+  线程 id 由**引擎**发（`createThread` 里的 UUID），GUI 只持有与回传——这是「上下文≠选中项」那一轮的同一条纪律：
+  凡是要进模型上下文的东西都得能在库里考据到，客户端临时拼的窗口正文不算。
+  `map` / `practice` 的对话正文靠这些线程累积，服务端在流式回合里自己取历史、自己落正文。
+  */
+function locateThread(threadId: string): { repository: NonNullable<ReturnType<typeof repositoryOr404>>; thread: ChatThread } | undefined {
+  for (const repository of importer.mountedRepositories()) {
+    const thread = getThread(repository.path, threadId);
+    if (thread) return { repository, thread };
+  }
+  return undefined;
+}
+
+function threadJournalPayload(thread: ChatThread, reason: string): Record<string, string | null> {
+  return { scope: thread.scope, thread_id: thread.id, node_id: thread.courseNodeId ?? null, exercise_id: thread.exerciseId ?? null, reason };
+}
+
+app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string } }>("/api/repositories/:repositoryId/threads", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!isChatScope(request.query.scope)) return reply.code(400).send({ error: "scope 只能是 teach / map / practice" });
+  return { threads: listThreads(repository.path, repository.index.repositoryId, request.query.scope) };
+});
+
+app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; nodeId?: unknown; exerciseId?: unknown; title?: unknown } }>("/api/repositories/:repositoryId/threads", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!isChatScope(request.body?.scope)) return reply.code(400).send({ error: "scope 只能是 teach / map / practice" });
+  const scope = request.body.scope;
+  // 归属对象（节点 / 练习题）由调用方给出，服务端只截长不校验存在性：节点树会重烧、练习会重生成，
+  // 拿「此刻查得到」当写入闸门会把会话管理变成又一次上下文同步事故
+  const courseNodeId = typeof request.body?.nodeId === "string" && request.body.nodeId.trim() ? request.body.nodeId.trim().slice(0, 200) : undefined;
+  const exerciseId = typeof request.body?.exerciseId === "string" && request.body.exerciseId.trim() ? request.body.exerciseId.trim().slice(0, 200) : undefined;
+  const title = typeof request.body?.title === "string" ? request.body.title : undefined;
+  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope, ...(courseNodeId ? { courseNodeId } : {}), ...(exerciseId ? { exerciseId } : {}), ...(title ? { title } : {}) });
+  new Journal(repository.path, repository.index.repositoryId).append("session_created", threadJournalPayload(thread, "created"), thread.id);
+  return reply.code(201).send({ thread });
+});
+
+/** 线程正文（产品线）：GUI 刷新或引擎重启后按 threadId 取回对话展示。软删线程一律 404（读侧恒带 `deleted_at IS NULL`）。 */
+app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
+  const located = locateThread(request.params.threadId);
+  if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
+  return { thread: located.thread, messages: readMessages(located.repository.path, located.thread.id) };
+});
+
+app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/threads/:threadId", async (request, reply) => {
+  const located = locateThread(request.params.threadId);
+  if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
+  const title = typeof request.body?.title === "string" ? request.body.title : "";
+  if (!title.trim()) return reply.code(400).send({ error: "标题不能为空" });
+  const thread = renameThread(located.repository.path, located.thread.id, title);
+  return thread ? { thread } : reply.code(404).send({ error: "会话不存在或已删除。" });
+});
+
+/**
+  软删：chat_session 打时间戳，chat_message 原文一行不动，journal 追加一条 session_deleted（不删任何既有事件行）。
+  同时从内存 Map 摘掉教学会话——否则删掉的会话还能被同进程继续聊，重启后又消失，行为会分成两段。
+  */
+app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
+  const located = locateThread(request.params.threadId);
+  if (!located || !softDeleteThread(located.repository.path, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
+  sessions.delete(located.thread.id);
+  new Journal(located.repository.path, located.repository.index.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
+  return { deleted: true, threadId: located.thread.id };
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
@@ -754,6 +913,11 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       onProgress: (progress) => send({ type: "progress", payload: progress })
     });
     sessions.set(outcome.session.id, outcome.session);
+    // 回合正文 + 状态快照落库：GUI 重启后接着聊、以及 run-trace 之外的「这一轮停在哪」都从这里取
+    persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
+      { role: "user", content: request.body.content.trim() },
+      { role: "assistant", content: outcome.assistant.content, ...(outcome.assistant.stage ? { stage: outcome.assistant.stage } : {}) }
+    ], { stage: outcome.session.stage, fallbackCount: outcome.session.fallbackCount, settings: outcome.session.settings });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
     if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);

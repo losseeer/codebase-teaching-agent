@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { api, type ScopedChatEvent, type ScopedChatHistoryTurn } from "../api/client";
+import type { ChatScope, ChatThread, CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import { api, type ScopedChatEvent } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 
 /**
@@ -42,28 +42,60 @@ export type ThreadItem =
   | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" };
 
 const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
-/** 教学会话 id 的持久化表（键 = `仓库:节点`）：页面刷新后凭它向引擎取回历史（引擎侧有 journal 续命）。 */
+/**
+  会话线程的记忆（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。
+  真源在引擎的 chat_session / chat_message，这里只记「这个浏览器上次停在哪个线程」：
+  - `currentId` 不在最新清单里就丢弃——会话可能在别处（或另一次会话管理动作里）被软删，拿它去请求只会 404；
+  - `ids` 是上一次成功拉到的清单，用于清单请求暂时失败时（引擎重启后仓库要先重新导入）不把选择清空。
+  旧形状 `仓库:节点 → sessionId` 一律当空表处理：它没有作用域维度，猜错比丢掉坏。
+  */
 const SESSION_STORAGE_KEY = "codebase-tutor.teaching-sessions";
 
-function readSessionMap(): Record<string, string> {
+/** GUI 作用域（teaching）→ 引擎作用域取值（teach）：两套口径的对应关系只在这一处表里换算。 */
+const CHAT_SCOPE: Record<Scope, ChatScope> = { map: "map", teaching: "teach", practice: "practice" };
+
+interface ThreadMemory { currentId: string | null; ids: string[] }
+type ThreadMemoryMap = Record<string, Partial<Record<ChatScope, ThreadMemory>>>;
+
+function readThreadMemory(): ThreadMemoryMap {
   try {
     const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? "{}") as unknown;
-    return typeof parsed === "object" && parsed ? parsed as Record<string, string> : {};
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: ThreadMemoryMap = {};
+    for (const [repositoryId, scopes] of Object.entries(parsed)) {
+      if (typeof scopes !== "object" || scopes === null) continue; // 旧形状在这一层露馅：值是字符串
+      const entry: Partial<Record<ChatScope, ThreadMemory>> = {};
+      for (const scope of ["teach", "map", "practice"] as const) {
+        const value = (scopes as Record<string, unknown>)[scope];
+        if (typeof value !== "object" || value === null) continue;
+        const { currentId, ids } = value as { currentId?: unknown; ids?: unknown };
+        entry[scope] = {
+          currentId: typeof currentId === "string" ? currentId : null,
+          ids: Array.isArray(ids) ? ids.filter((item): item is string => typeof item === "string") : []
+        };
+      }
+      out[repositoryId] = entry;
+    }
+    return out;
   } catch {
     return {};
   }
 }
 
-function rememberSession(repositoryId: string, nodeId: string, sessionId?: string): void {
+function writeThreadMemory(repositoryId: string, scope: ChatScope, next: ThreadMemory): void {
   try {
-    const map = readSessionMap();
-    const key = `${repositoryId}:${nodeId}`;
-    if (sessionId) map[key] = sessionId;
-    else delete map[key];
+    const map = readThreadMemory();
+    map[repositoryId] = { ...map[repositoryId], [scope]: next };
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map));
   } catch {
-    /* localStorage 不可用时续命只在当前页面内有效，不影响发送 */
+    /* localStorage 不可用时记忆只在当前页面内有效，不影响发送 */
   }
+}
+
+/** 线程正文 → 侧栏展示项：库里只有 user/assistant 两种角色，hint/error 这类本地提示不落库、也读不回来。 */function threadItemsFrom(messages: readonly { id: string; role: string; content: string }[]): ThreadItem[] {
+  return messages
+    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)
+    .map((message) => ({ kind: message.role === "user" ? "user" as const : "agent" as const, id: message.id, text: message.content }));
 }
 
 function isScope(value: string): value is Scope {
@@ -92,6 +124,20 @@ export interface TeachingSessionApi {
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
   pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint") => void;
   clearThread: (scope: Scope) => void;
+
+  /**
+    会话线程（三作用域各一份独立列表，真源在引擎库里）：
+    `chatThreads` 按 updated_at 倒序，`currentThreadId` 是当前打开的线程。
+    新建 / 切换 / 重命名 / 删除四个动作都在这里，删除是软删（列表与正文从此看不见，库里的行与审计日志不动）。
+    */
+  chatThreads: Record<Scope, ChatThread[]>;
+  currentThreadId: Record<Scope, string | null>;
+  /** 新建线程并切过去；`firstQuestion` 用来给线程起个认得出的标题。teaching 走 createSession（它才装配策略与学习者画像）。 */
+  newThread: (scope: Scope, firstQuestion?: string) => Promise<string | null>;
+  switchThread: (scope: Scope, threadId: string | null) => void;
+  renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
+  /** 软删线程：GUI 侧二次确认在 AgentRail（文案要让用户看见「审计日志仍保留脱敏摘要」）。 */
+  removeThread: (scope: Scope, threadId: string) => Promise<void>;
 
   /** 当前 teaching 教学状态（API + 流式） */
   course: CourseTree | null;
@@ -165,11 +211,6 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
 };
 const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [target]: [] }));
-// threads 的渲染期镜像：换题等事件发生时要同步读到「当前线程长度」来推进历史游标（setState 的异步值不可用）
-const threadsRef = useRef(threads);
-threadsRef.current = threads;
-/** practice 历史上界：此下标之前的线程消息属于更早的练习，不随追问上送（线程仍完整展示）。 */
-const practiceHistoryStart = useRef(0);
 
 // 课程与节点
 const [course, setCourse] = useState<CourseTree | null>(null);
@@ -252,14 +293,23 @@ useEffect(() => {
   const [error, setError] = useState("");
   // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
+  // 会话线程（三作用域各一份独立列表，真源在引擎库）：清单 + 当前打开的线程
+  const [chatThreads, setChatThreads] = useState<Record<Scope, ChatThread[]>>({ map: [], teaching: [], practice: [] });
+  const [currentThreadId, setCurrentThreadId] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
+  // 渲染期镜像：切线程、清选择这些动作要读「此刻的当前线程」，setState 的异步值不可用
+  const currentThreadRef = useRef(currentThreadId);
+  currentThreadRef.current = currentThreadId;
+  const chatThreadsRef = useRef(chatThreads);
+  chatThreadsRef.current = chatThreads;
   // 练习评估作用域的对话上下文（由 PracticePage 在生成练习时写入）
   const [practiceExercise, setPracticeExerciseState] = useState<Exercise | null>(null);
   const setPracticeExercise = (exercise: Exercise | null): void => {
-    // 换题即推进游标：旧题的问答不再进新题的上下文（「为什么选A」串题会误导模型），线程本身不清空
-    practiceHistoryStart.current = threadsRef.current.practice.length;
     setPracticeExerciseState(exercise);
+    // 换题即换线程：旧题的问答留在旧线程里（列表可切回），当前线程清空、下次追问时新建并绑到新题。
+    // 这替掉的是 09-25 的「历史游标」——同一份「旧题问答不许进新题上下文」的语义，改由线程边界来保证。
+    if (currentThreadRef.current.practice) switchThread("practice", null);
   };
-  useEffect(() => { setPracticeExerciseState(null); practiceHistoryStart.current = 0; }, [repositoryId]);
+  useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
   const setSettings = (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)): void => {
     setSettingsState((prev) => (typeof next === "function" ? (next as (prev: TutorSettings) => TutorSettings)(prev) : next));
   };
@@ -279,43 +329,189 @@ useEffect(() => {
     setLiveAnswer("");
   }, [selected?.id]);
 
-  // 对话历史续命：引擎早已支持「按 sessionId 从 journal 重建会话」，但 GUI 从不存 id 也不取回——
-  // 刷新页面后线程恒为空。找回顺序 = 本地存的 id → 引擎按节点倒扫 journal（存量历史没存过 id 也能救回）；
-  // 会话挂回后线程为空时用 session.messages 重建展示。查不到/对不上就忘掉 id，下次发送走新建。
-  useEffect(() => {
-    if (!repositoryId || !selected || session) return;
-    const nodeId = selected.id;
-    const key = `${repositoryId}:${nodeId}`;
-    let cancelled = false;
-    const restore = async (): Promise<void> => {
-      try {
-        let sessionId: string | undefined = readSessionMap()[key];
-        if (!sessionId) sessionId = (await api.getLatestSession(repositoryId, nodeId)).sessionId ?? undefined;
-        if (!sessionId || cancelled) return;
-        const restored = await api.getSession(sessionId);
-        if (cancelled) return;
-        if (restored.repositoryId !== repositoryId || restored.courseNodeId !== nodeId) {
-          rememberSession(repositoryId, nodeId);
-          return;
+  // ==== 会话线程：清单 / 当前线程 / 新建·切换·重命名·删除 ====
+
+  /** 写记忆（localStorage 不可用时静默跳过：记忆只是「上次停在哪」的便利，真源在引擎库里）。 */
+  const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
+    if (!repositoryId) return;
+    const chatScope = CHAT_SCOPE[scope];
+    const current = readThreadMemory()[repositoryId]?.[chatScope] ?? { currentId: null, ids: [] };
+    writeThreadMemory(repositoryId, chatScope, { ...current, ...patch });
+  };
+
+  /** 按 threadId 拉回正文并铺到侧栏：teaching 走 /api/sessions（连 stage/settings 一起回），map/practice 走线程正文。 */
+  const loadThread = async (scope: Scope, threadId: string): Promise<void> => {
+    const place = (messages: readonly { id: string; role: string; content: string }[]): void => {
+      if (currentThreadRef.current[scope] !== threadId) return; // 期间又切走了：迟到的旧响应不落进新线程
+      setThreads((prev) => ({ ...prev, [scope]: threadItemsFrom(messages) }));
+    };
+    try {
+      if (scope === "teaching") {
+        const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
+        // 教学线程绑节点：点开的线程若属于别的节点，先把左栏挪过去（节点效应接着把这个线程挂回来）
+        if (thread?.courseNodeId && thread.courseNodeId !== selected?.id) {
+          const node = course ? flatten(course.root).find((item) => item.id === thread.courseNodeId) : undefined;
+          if (node) { setSelected(node); return; }
         }
-        rememberSession(repositoryId, nodeId, restored.id);
+        const restored = await api.getSession(threadId);
+        if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
         setSession(restored);
         setSettingsState(restored.settings);
-        setThreads((prev) => (prev.teaching.length
-          ? prev
-          : {
-              ...prev,
-              teaching: restored.messages
-                .filter((message) => message.role !== "system" && message.content)
-                .map((message) => ({ kind: message.role === "user" ? "user" as const : "agent" as const, id: message.id, text: message.content }))
-            }));
-      } catch {
-        if (!cancelled) rememberSession(repositoryId, nodeId);
+        place(restored.messages);
+        return;
       }
+      place((await api.getThreadMessages(threadId)).messages);
+    } catch {
+      if (currentThreadRef.current[scope] !== threadId) return;
+      setThreads((prev) => ({ ...prev, [scope]: [] }));
+      pushMessage(scope, "agent", "这个会话的历史暂时读不到（引擎未挂载该仓库，或会话已被删除）。", "hint");
+    }
+  };
+
+  /** 只改「当前线程是哪条」，不动侧栏已展示的对话——发送时惰性新建线程走这条，免得抹掉刚敲进去的那句。 */
+  const markCurrentThread = (scope: Scope, threadId: string): void => {
+    setCurrentThreadId((prev) => ({ ...prev, [scope]: threadId }));
+    currentThreadRef.current = { ...currentThreadRef.current, [scope]: threadId };
+    patchMemory(scope, { currentId: threadId });
+  };
+
+  /** 切当前线程并回读正文；`load=false` 用于刚建好的空线程（没必要回读一遍空清单）。 */
+  const setCurrentThread = (scope: Scope, threadId: string | null, load = true): void => {
+    if (threadId) markCurrentThread(scope, threadId);
+    else {
+      setCurrentThreadId((prev) => ({ ...prev, [scope]: null }));
+      currentThreadRef.current = { ...currentThreadRef.current, [scope]: null };
+      patchMemory(scope, { currentId: null });
+    }
+    if (!threadId || !load) { setThreads((prev) => ({ ...prev, [scope]: [] })); if (scope === "teaching" && !threadId) setSession(null); return; }
+    void loadThread(scope, threadId);
+  };
+  const switchThread = (scope: Scope, threadId: string | null): void => setCurrentThread(scope, threadId);
+
+  /** 拉某作用域的线程清单（引擎为准，按更新时间倒序）：清单里没有的当前线程直接放弃——它可能在别处被删了。 */
+  const refreshThreads = async (scope: Scope): Promise<ChatThread[]> => {
+    if (!repositoryId) return [];
+    let list: ChatThread[];
+    try {
+      list = (await api.listThreads(repositoryId, CHAT_SCOPE[scope])).threads;
+    } catch {
+      // 引擎重启后仓库要先重新导入，清单暂时拿不到：保留上次所见，不清空选择
+      return chatThreadsRef.current[scope];
+    }
+    setChatThreads((prev) => ({ ...prev, [scope]: list }));
+    chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+    patchMemory(scope, { ids: list.map((item) => item.id) });
+    const current = currentThreadRef.current[scope];
+    if (current && !list.some((item) => item.id === current)) setCurrentThread(scope, null);
+    return list;
+  };
+
+  /** 建线程（引擎发 id）。teaching 走 createSession——只有它装配策略与学习者画像，同时落 chat_session 行。 */
+  const createThreadFor = async (scope: Scope, firstQuestion?: string): Promise<string | null> => {
+    if (!repositoryId) return null;
+    const title = firstQuestion?.trim().slice(0, 60) || undefined; // 首问当标题：列表里一眼认得出这条会话在聊什么
+    try {
+      if (scope === "teaching") {
+        if (!selected) return null;
+        const created = await api.createSession(repositoryId, selected.id, settings);
+        setSession(created.session);
+        setFaded(created.faded);
+        void refreshThreads(scope);
+        return created.session.id;
+      }
+      const { thread } = await api.createThread(repositoryId, {
+        scope: CHAT_SCOPE[scope],
+        ...(scope === "map" && mapNode ? { nodeId: mapNode.id } : {}),
+        ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
+        ...(title ? { title } : {})
+      });
+      const list = [thread, ...chatThreadsRef.current[scope]];
+      setChatThreads((prev) => ({ ...prev, [scope]: list }));
+      chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+      patchMemory(scope, { ids: list.map((item) => item.id) });
+      return thread.id;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "新建会话失败");
+      return null;
+    }
+  };
+
+  /** 「新建会话」按钮：建完切过去，侧栏清空成一段新对话。 */
+  const newThread = async (scope: Scope, firstQuestion?: string): Promise<string | null> => {
+    const threadId = await createThreadFor(scope, firstQuestion);
+    if (threadId) setCurrentThread(scope, threadId, false);
+    return threadId;
+  };
+
+  const renameThread = async (scope: Scope, threadId: string, title: string): Promise<void> => {
+    try {
+      const { thread } = await api.renameThread(threadId, title);
+      const list = chatThreadsRef.current[scope].map((item) => (item.id === threadId ? thread : item));
+      setChatThreads((prev) => ({ ...prev, [scope]: list }));
+      chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "重命名失败");
+      void refreshThreads(scope);
+    }
+  };
+
+  /** 软删：库里的正文与审计日志都留着，只是从列表消失；删的正是当前线程时回到「还没有线程」。 */
+  const removeThread = async (scope: Scope, threadId: string): Promise<void> => {
+    try {
+      await api.deleteThread(threadId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除会话失败");
+      return;
+    }
+    const list = chatThreadsRef.current[scope].filter((item) => item.id !== threadId);
+    setChatThreads((prev) => ({ ...prev, [scope]: list }));
+    chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+    patchMemory(scope, { ids: list.map((item) => item.id) });
+    if (currentThreadRef.current[scope] === threadId) setCurrentThread(scope, null);
+  };
+
+  // 仓库切换 / 首次挂载：三个作用域各拉一次清单；map 与 practice 按记忆（或清单最新一条）落到当前线程，
+  // teaching 的当前线程由下面的节点效应按「该节点最近一次会话」决定。
+  useEffect(() => {
+    if (!repositoryId) {
+      setChatThreads({ map: [], teaching: [], practice: [] });
+      setCurrentThread("map", null);
+      setCurrentThread("practice", null);
+      setCurrentThread("teaching", null);
+      return;
+    }
+    let cancelled = false;
+    const boot = async (): Promise<void> => {
+      for (const scope of ["map", "practice"] as const) {
+        const list = await refreshThreads(scope);
+        if (cancelled) return;
+        const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId;
+        setCurrentThread(scope, list.find((item) => item.id === remembered)?.id ?? list[0]?.id ?? null);
+      }
+      void refreshThreads("teaching");
     };
-    void restore();
+    void boot();
     return () => { cancelled = true; };
-  }, [repositoryId, selected, session]);
+  }, [repositoryId]);
+
+  // 切作用域顺带刷一次该作用域的清单：另一个作用域里新建的线程要立刻可见，删除了的也不该再显示
+  useEffect(() => {
+    if (repositoryId) void refreshThreads(scope);
+  }, [repositoryId, scope]);
+
+  // 换节点 = 挂回该节点最近一次教学线程（GUI 从没存过 id 的存量会话也在清单里）；该节点没有会话时留空，
+  // 下一次发送经 createSession 新建。清单可能比本地状态滞后一拍（新建后还没回表），这时**什么都不做**：
+  // 中途清掉当前线程会抹掉正在进行的回合，也会把 session 一起清空。真被别处删掉的线程由 refreshThreads 剪枝。
+  useEffect(() => {
+    if (!repositoryId || !selected) return;
+    const list = chatThreadsRef.current.teaching;
+    const current = currentThreadRef.current.teaching;
+    const currentThread = current ? list.find((item) => item.id === current) : undefined;
+    if (current && !currentThread) return; // 清单还没回表（刚新建 / 刚刷新）：这一拍什么都不做
+    if (currentThread && currentThread.courseNodeId !== selected.id) { setCurrentThread("teaching", null); return; }
+    const target = list.find((item) => item.courseNodeId === selected.id);
+    if (target) setCurrentThread("teaching", target.id);
+  }, [repositoryId, selected, chatThreads.teaching, session?.id]);
 
   const send = async (): Promise<void> => {
     if (!content.trim() || !selected) return;
@@ -328,7 +524,9 @@ useEffect(() => {
         const created = await api.createSession(repositoryId, selected.id, settings);
         active = created.session;
         setFaded(created.faded);
-        rememberSession(repositoryId, selected.id, active.id);
+        // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
+        markCurrentThread("teaching", active.id);
+        void refreshThreads("teaching");
       }
       if (!active) return;
       setLiveAnswer("");
@@ -355,7 +553,7 @@ useEffect(() => {
     }
   };
 
-  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；随请求上送线程最近若干轮作历史窗口
+  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
   const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
     if (!content.trim() || !repositoryId) return;
     if (scope === "practice" && !practiceExercise) {
@@ -363,17 +561,10 @@ useEffect(() => {
       return;
     }
     const message = content;
-    // 最近对话历史随请求上送（闭包里的 threads 尚未含本条）：practice 只送当前练习产生后的片段
-    const inScopeThread = threads[scope]
-      .slice(scope === "practice" ? practiceHistoryStart.current : 0)
-      .filter((item) => item.kind === "user" || !item.variant);
-    const scopeHistory: ScopedChatHistoryTurn[] = inScopeThread.slice(-6)
-      .map((item) => ({ role: item.kind === "user" ? "user" as const : "assistant" as const, content: item.text }));
-    // 窗口外的抽取式脉络：更早轮次只留学习者提问（引擎渲染时每行截断），零 LLM 成本
-    const earlierQuestions = inScopeThread.slice(0, Math.max(0, inScopeThread.length - 6))
-      .filter((item) => item.kind === "user")
-      .slice(-8)
-      .map((item) => item.text);
+    // 线程保障：没有当前线程就惰性新建（标题取首问）。没有线程等于没有历史——上一轮会被静默丢掉。
+    const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
+    if (!threadId) return;
+    if (!currentThreadRef.current[scope]) markCurrentThread(scope, threadId);
     pushMessage(scope, "user", message);
     setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
     // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
@@ -394,11 +585,10 @@ useEffect(() => {
             // 流程视图选中环节：节点只到入口粒度，环节信息靠这一并上送
             ...(mapSelection.focus ? { focus: mapSelection.focus } : {}),
             path: mapFile || undefined,
-            history: scopeHistory,
-            earlierQuestions,
+            threadId,
             style: settings.style
           }, onScopedEvent)
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, history: scopeHistory, earlierQuestions, style: settings.style }, onScopedEvent);
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent);
       await drainTypewriter();
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
@@ -411,6 +601,8 @@ useEffect(() => {
       stopTypewriter();
       setSending(false);
       setScopeProgress(scope, "");
+      // 回合结束刷新清单：新线程进了列表，当前线程也排到最前（引擎按更新时间倒序）
+      void refreshThreads(scope);
     }
   };
   const sendMap = (): Promise<void> => sendScoped("map");
@@ -419,6 +611,7 @@ useEffect(() => {
   return {
     scope, setScope,
     threads, pushMessage, clearThread,
+    chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread,
     course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
     practiceUnit, setPracticeUnit,

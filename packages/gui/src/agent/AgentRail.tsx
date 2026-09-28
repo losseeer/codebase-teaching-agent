@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Compass, GraduationCap, RefreshCw, Send } from "lucide-react";
+import { Check, Compass, GraduationCap, Pencil, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
@@ -120,6 +120,8 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
           <p className="tuning-hint">{thinkingHint(llm.thinkingCapability)}</p>
         ) : null}
       </div>
+
+      <SessionBar scope={scope} t={t} />
 
       <div className="thread-meta">
         <span>作用域 · <b>{SCOPE_LABEL[scope]}</b></span>
@@ -292,6 +294,61 @@ function boundFor(scope: Scope, t: TeachingSessionApi): string {
   if (!t.practiceUnit) return "未开始练习";
   const anchor = t.practiceExercise?.anchors[0];
   return anchor ? `${t.practiceUnit} · ${anchor.path}:${anchor.line}` : t.practiceUnit;
+}
+
+/**
+  会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
+  线程正文的真源在引擎库（chat_session + chat_message），这里只是入口——切哪条就按 threadId 回读哪条的历史。
+  删除是软删：列表与正文从此看不见，库里的行与 journal 的审计事件都还在，所以二次确认把这话说明白。
+  */
+function SessionBar({ scope, t }: { scope: Scope; t: TeachingSessionApi }): ReactElement {
+  const list = t.chatThreads[scope];
+  const currentId = t.currentThreadId[scope];
+  const current = list.find((thread) => thread.id === currentId);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
+  if (renaming) {
+    return (
+      <div className="session-bar renaming">
+        <input
+          value={draft}
+          autoFocus
+          aria-label="会话名称"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") { event.preventDefault(); setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }
+            else if (event.key === "Escape") setRenaming(false);
+          }}
+        />
+        <button type="button" onClick={() => { setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }}><Check size={14} /></button>
+        <button type="button" onClick={() => setRenaming(false)}><X size={14} /></button>
+      </div>
+    );
+  }
+  return (
+    <div className="session-bar">
+      <select
+        value={currentId ?? ""}
+        aria-label={`切换会话（${SCOPE_LABEL[scope]}）`}
+        onChange={(event) => t.switchThread(scope, event.target.value || null)}
+      >
+        {currentId || list.length ? <option value="">（新会话）</option> : <option value="">还没有会话，直接提问即可新建</option>}
+        {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
+      </select>
+      <button type="button" title="新建会话" onClick={() => void t.newThread(scope)}><Plus size={14} /></button>
+      <button type="button" title="重命名当前会话" disabled={!currentId} onClick={() => { setDraft(current?.title ?? ""); setRenaming(true); }}><Pencil size={14} /></button>
+      <button
+        type="button"
+        title="删除当前会话"
+        disabled={!currentId}
+        onClick={() => {
+          if (!currentId) return;
+          if (!window.confirm(`删除会话「${current?.title ?? ""}」？删除后不可恢复；审计日志仍保留脱敏摘要。`)) return;
+          void t.removeThread(scope, currentId);
+        }}
+      ><Trash2 size={14} /></button>
+    </div>
+  );
 }
 
 /** thread 单条消息渲染：用户消息纯文本（pre-wrap 由 .message p 提供）；

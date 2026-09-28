@@ -6,8 +6,10 @@ import type { JournalEvent } from "@codebase-tutor/shared";
   journal 是 append-only 事件流，逐行看是散的；复盘某次对话的完整执行轨迹
   （用户问了什么 → 模型提议/守门裁决 → 读了哪些文件 → 回了什么）要靠 traceId 分组重放。
 
-  用法：pnpm run-trace -- <被学习仓路径> [--last 20] [--trace <traceId>] [--json]
+  用法：pnpm run-trace -- <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]
   - 不带 --trace 时按时间倒序列出最近 N 次请求（traceId 为 null 的后台事件归入「后台」组）；
+  - --session 只看一个会话线程（chat_session.id = journal 的 sessionId）经历过的事件，仍按 traceId 分段——
+    一个会话跨多次请求，按线程过滤才看得到「新建 → 每轮读了什么 → 软删」的完整生命周期；
   - --json 输出分组后的原始事件，供进一步机检。
 
   口径纪律与 metrics.ts 一致：缺字段落「未记」，不用默认值伪装；本脚本纯只读，不写任何文件。
@@ -38,6 +40,9 @@ function eventLine(event: JournalEvent): string {
       return `深度=${p.depth ?? "未记"} stage=${p.stage ?? "未记"}（unit=${clip(p.unit_id, 24)}）`;
     case "scope_degraded":
       return `node=${clip(p.node_id, 40)} scopePaths=${p.scope_paths ?? "未记"}`;
+    case "session_created":
+    case "session_deleted":
+      return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} node=${clip(p.node_id, 24)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;
     default: {
       const detail = Object.entries(p).slice(0, 5).map(([key, value]) => `${key}=${clip(value, 30)}`).join(" ");
       return detail || "（无字段）";
@@ -49,19 +54,26 @@ function main(): void {
   const args = process.argv.slice(2);
   const repoPath = args.find((arg) => !arg.startsWith("--"));
   if (!repoPath) {
-    console.error("用法：tsx src/scripts/run-trace.ts <被学习仓路径> [--last 20] [--trace <traceId>] [--json]");
+    console.error("用法：tsx src/scripts/run-trace.ts <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]");
     process.exit(2);
   }
   const lastFlag = args.indexOf("--last");
   const last = lastFlag >= 0 ? Number(args[lastFlag + 1]) || 20 : 20;
   const traceFlag = args.indexOf("--trace");
   const traceId = traceFlag >= 0 ? args[traceFlag + 1] : undefined;
+  const sessionFlag = args.indexOf("--session");
+  const threadId = sessionFlag >= 0 ? args[sessionFlag + 1] : undefined;
   const asJson = args.includes("--json");
 
-  const events = readJournal(repoPath);
-  if (!events.length) {
+  const allEvents = readJournal(repoPath);
+  const events = threadId ? allEvents.filter((event) => event.sessionId === threadId) : allEvents;
+  if (!allEvents.length) {
     console.log(`（${repoPath}/.tutor/journal.jsonl 为空或不存在——该仓还没有任何教学/对话事件。）`);
     return;
+  }
+  if (!events.length) {
+    console.log(`（journal 里没有 sessionId=${threadId} 的事件——该线程或许已被软删？删除只动标记，但从未记过 sessionId 的老事件也不会出现在这里。）`);
+    process.exit(1);
   }
 
   const groups = new Map<string, JournalEvent[]>();

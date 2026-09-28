@@ -1,4 +1,4 @@
-import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -9,12 +9,6 @@ import type { CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercis
 export interface Workspace {
   repositoryId: string;
   repositoryPath: string;
-}
-
-/** 作用域对话（map / practice）随请求上送的最近历史回合；窗口截断与渲染由引擎 scopechat 负责。 */
-export interface ScopedChatHistoryTurn {
-  role: "user" | "assistant";
-  content: string;
 }
 
 /** 作用域对话 SSE 事件：thinking / reading / searching 是过程指示，delta 是正文增量（打字机回放），done/error 收尾。 */
@@ -87,7 +81,8 @@ export interface LlmSettings {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) }, ...init });
+  // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
+  const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
   const body = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(body.error ?? "请求失败");
   return body;
@@ -123,10 +118,17 @@ export const api = {
   /** 按当前开关状态重烧 L1 摘要（切开关后必须调用才生效；409=确定性档，会拒绝覆盖）。 */
   rebuildSummaries: (repositoryId: string) => request<ImportEstimate>(`/api/repositories/${repositoryId}/summaries/rebuild`, { method: "POST", body: "{}" }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
-  /** 按 id 取教学会话（引擎内存未命中时会按 sessionId 从 journal 续命重建）。 */
+  /** 按 id 取教学会话：内存未命中时引擎从 chat_session（含状态快照）+ chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
-  /** 该课程节点最近一次教学会话的 id（引擎从 journal 倒扫；GUI 没存过 id 的存量历史靠它找回）。 */
-  getLatestSession: (repositoryId: string, nodeId: string) => request<{ sessionId: string | null }>(`/api/repositories/${repositoryId}/latest-session?nodeId=${encodeURIComponent(nodeId)}`),
+  /**
+    会话线程（产品线真源在引擎的 chat_session / chat_message）：三作用域各一份独立列表。
+    删除是软删——列表与正文从此看不见，行仍在库里；journal 另记一条 session_deleted。
+    */
+  listThreads: (repositoryId: string, scope: ChatScope) => request<{ threads: ChatThread[] }>(`/api/repositories/${repositoryId}/threads?scope=${scope}`),
+  createThread: (repositoryId: string, payload: { scope: ChatScope; nodeId?: string; exerciseId?: string; title?: string }) => request<{ thread: ChatThread }>(`/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
+  getThreadMessages: (threadId: string) => request<{ thread: ChatThread; messages: ChatThreadMessage[] }>(`/api/threads/${encodeURIComponent(threadId)}/messages`),
+  renameThread: (threadId: string, title: string) => request<{ thread: ChatThread }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteThread: (threadId: string) => request<{ deleted: boolean; threadId: string }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** 教学回合流式版：SSE 逐事件回调过程提示（progress）与正文增量（delta），resolve 于 done（session/message/cost/provider）。会话或节点失效仍是普通 JSON。 */
   sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: TeachingStreamEvent) => void) =>
     sseStream<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(
@@ -137,16 +139,16 @@ export const api = {
         else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
       }
     ),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。history = 线程最近若干轮（引擎侧窗口截断）；earlierQuestions = 更早轮次的学习者提问（抽取式脉络）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。threadId = 当前会话线程，引擎据此自取历史并落回合正文（GUI 不再回传窗口正文）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
+  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
     sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, payload, (event) => {
       if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
       else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
       else if (event.type === "searching") onEvent({ type: "searching", query: String(event.query ?? "") });
       else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
     }),
-  /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；练习或仓库失效的 404 仍是普通 JSON。 */
-  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; history?: ScopedChatHistoryTurn[]; earlierQuestions?: string[]; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
+  /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。 */
+  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
     sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, payload, (event) => {
       if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
       else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });

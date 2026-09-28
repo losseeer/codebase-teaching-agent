@@ -230,6 +230,14 @@ button.entry-item:hover { background: #eef6ef; }
 .rt-badge { color: #81978d; font-size: 10px; font-style: normal; font-weight: 500; }
 .rt-lines { margin-left: auto; color: #8aa097; font-size: 10px; font-style: normal; flex: 0 0 auto; }
 
+/* ---- 会话条（2026-09-27 会话持久化）：当前作用域的线程清单 + 新建/重命名/删除；正文真源在引擎库 ---- */
+.session-bar { display: flex; align-items: center; gap: 4px; padding: 7px 10px; border-bottom: 1px solid #e3ece6; background: #fff; }
+.session-bar select { flex: 1; min-width: 0; border: 1px solid #cfded5; border-radius: 6px; padding: 3px 6px; background: #fff; color: #274c3e; font-size: 11px; }
+.session-bar input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 11px; }
+.session-bar button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; border: 1px solid #cfded5; border-radius: 6px; background: #fbfdfb; color: #3f6a56; cursor: pointer; }
+.session-bar button:hover:not(:disabled) { background: #eef6ef; }
+.session-bar button:disabled { color: #a3b6ac; cursor: default; }
+
 /* ---- v0.3 Agent rail thread-meta（prototype .thread-meta）---- */
 .thread-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #e3ece6; color: #81978d; background: #f7faf7; font-size: 10px; }
 .thread-meta b { color: #3f6a56; }

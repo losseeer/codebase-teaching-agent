@@ -37,6 +37,10 @@ describe("学习日志", () => {
     expect(isJournalEventType("flow_node_selected")).toBe(true);
     expect(isJournalEventType("scope_degraded")).toBe(true); // 引擎侧新事件同样吃这条同步——漏了就只会运行期抛
     expect(isJournalEventType("exercise_generated")).toBe(true);
+    // 会话持久化上线后新增的两个引擎侧事件：shared 的联合类型与这里的运行时 Set 必须同源
+    expect(isJournalEventType("loop_round")).toBe(true);
+    expect(isJournalEventType("session_created")).toBe(true);
+    expect(isJournalEventType("session_deleted")).toBe(true);
     expect(isJournalEventType("not_a_real_event")).toBe(false);
     expect(() => journal.append("not_a_real_event" as JournalEventType, {})).toThrow("Unknown journal event: not_a_real_event");
     expect(readJournal(repository)).toHaveLength(0);

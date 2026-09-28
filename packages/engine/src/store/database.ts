@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
-const schemaVersion = 5;
+const schemaVersion = 7;
 
 // 一次性 pre-load：dlopen 对应当前 Node ABI 的 binding 路径，避免 better-sqlite3
 // 走默认 `bindings('better_sqlite3.node')` 触发 127↔147 mismatch。
@@ -15,6 +15,30 @@ const nativeBinding = loadAddon() as unknown as string;
 
 /** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
 const LAYER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+/** chat_session 的行形状（snake_case 贴着表；域类型转换在 store/chat-store.ts）。 */
+export interface ChatSessionRow {
+  id: string;
+  repository_id: string;
+  scope: string;
+  course_node_id: string | null;
+  exercise_id: string | null;
+  title: string;
+  state_json: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface ChatMessageRow {
+  id: string;
+  session_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+  stage: string | null;
+  error: string | null;
+}
 
 export class TutorDatabase {
   private readonly db: Database.Database;
@@ -73,6 +97,32 @@ export class TutorDatabase {
         payload TEXT NOT NULL,
         at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS chat_session (
+        id TEXT PRIMARY KEY,
+        repository_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        course_node_id TEXT,
+        exercise_id TEXT,
+        title TEXT NOT NULL,
+        -- 教学回合的状态快照 {settings, stage, fallbackCount}（map/practice 为 NULL）。
+        -- 会话续命要的不只是消息原文：状态机得知道上一轮停在哪个 stage、fallback 了几次、用的哪套 settings。
+        -- 这些值过去靠 journal 的 hint_depth/style_shift 重放推出（restore.ts），现在直接住在产品数据线里。
+        state_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS chat_message (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES chat_session(id),
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        stage TEXT,
+        error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, created_at);
+      CREATE INDEX IF NOT EXISTS chat_session_repo ON chat_session(repository_id, scope, deleted_at);
     `);
     const current = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version: number } | undefined;
     if (!current) {
@@ -86,7 +136,16 @@ export class TutorDatabase {
     }
     if (current.version < 3) this.db.prepare("UPDATE schema_version SET version = ?").run(3);
     if (current.version < 4) this.db.prepare("UPDATE schema_version SET version = ?").run(4);
-    if (current.version < 5) this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
+    if (current.version < 5) this.db.prepare("UPDATE schema_version SET version = ?").run(5);
+    // v6：会话持久化两表（上面 CREATE IF NOT EXISTS 幂等建好，这里只推版本号）
+    if (current.version < 6) this.db.prepare("UPDATE schema_version SET version = ?").run(6);
+    if (current.version < 7) {
+      // v7：chat_session 加 state_json。守卫是必需的而不是保险——
+      // 老库（v5/v6 之前）走上面的 CREATE 时已经带了这一列，无脑 ALTER 会抛 duplicate column。
+      const hasState = (this.db.prepare("PRAGMA table_info(chat_session)").all() as { name: string }[]).some((column) => column.name === "state_json");
+      if (!hasState) this.db.exec("ALTER TABLE chat_session ADD COLUMN state_json TEXT;");
+      this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
+    }
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
     }
@@ -227,6 +286,79 @@ export class TutorDatabase {
 
   touchLayerCache(key: string, at = Date.now()): void {
     this.db.prepare("UPDATE layer_cache SET at = ? WHERE cache_key = ?").run(at, key);
+  }
+
+  /**
+    会话持久化（chat_session / chat_message）的语句层。
+    业务出入口是 `store/chat-store.ts`——那里负责 id/时间戳生成、入参守卫与领域类型，
+    这一层只把 SQL 收在一处。软删语义在此层就要落实：**所有读侧带 `deleted_at IS NULL`**，
+    所以「列表看不见」与「消息行仍在」可以同时成立（产品删除不动审计线，也不动消息原文）。
+    */
+  insertChatSession(session: { id: string; repositoryId: string; scope: string; courseNodeId: string | null; exerciseId: string | null; title: string; at: string }): void {
+    this.db.prepare(`INSERT INTO chat_session(id, repository_id, scope, course_node_id, exercise_id, title, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(session.id, session.repositoryId, session.scope, session.courseNodeId, session.exerciseId, session.title, session.at, session.at);
+  }
+
+  getChatSession(sessionId: string): ChatSessionRow | undefined {
+    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE id = ?").get(sessionId) as ChatSessionRow | undefined;
+  }
+
+  /** 未删会话列表：最近更新在前（GUI 的会话列表口径）。`limit` 兜住长期累积。 */
+  listChatSessions(repositoryId: string, scope: string, limit = 100): ChatSessionRow[] {
+    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?")
+      .all(repositoryId, scope, limit) as ChatSessionRow[];
+  }
+
+  /** 按节点找回最近一次教学会话（GUI 本地没存过 id 时用）：未删、最近更新在前。 */
+  getLatestChatSessionByNode(repositoryId: string, courseNodeId: string): ChatSessionRow | undefined {
+    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = 'teach' AND course_node_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1")
+      .get(repositoryId, courseNodeId) as ChatSessionRow | undefined;
+  }
+
+  touchChatSession(sessionId: string, at: string): void {
+    this.db.prepare("UPDATE chat_session SET updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(at, sessionId);
+  }
+
+  /** 教学回合状态快照（settings/stage/fallbackCount）——会话续命靠它把状态机接回上一轮停下的位置。 */
+  updateChatSessionState(sessionId: string, stateJson: string): void {
+    this.db.prepare("UPDATE chat_session SET state_json = ? WHERE id = ? AND deleted_at IS NULL").run(stateJson, sessionId);
+  }
+
+  renameChatSession(sessionId: string, title: string, at: string): number {
+    const result = this.db.prepare("UPDATE chat_session SET title = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(title, at, sessionId);
+    return result.changes;
+  }
+
+  /** 软删：只打时间戳，消息行与会话行都留在库里。已删的再删返回 0 行（幂等判据由调用方看 changes）。 */
+  softDeleteChatSession(sessionId: string, at: string): number {
+    const result = this.db.prepare("UPDATE chat_session SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(at, sessionId);
+    return result.changes;
+  }
+
+  insertChatMessage(message: { id: string; sessionId: string; role: string; content: string; createdAt: string; stage: string | null; error: string | null }): void {
+    this.db.prepare("INSERT INTO chat_message(id, session_id, role, content, created_at, stage, error) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(message.id, message.sessionId, message.role, message.content, message.createdAt, message.stage, message.error);
+  }
+
+  /** 取会话正文：未删会话才有内容（会话已删时调用方拿到空数组，等于「这个会话不存在」）。
+      给了 `limit` 就是尾窗语义——先倒序取最近 limit 条再反转回升序，调用方拿到的永远是时间正序。
+      定序用 `rowid`（SQLite 插入序）而不是 `id`：id 是随机 UUID，按它排会把同一回合的 user/assistant 排反。 */
+  listChatMessages(sessionId: string, limit?: number): ChatMessageRow[] {
+    const base = `SELECT m.id, m.session_id, m.role, m.content, m.created_at, m.stage, m.error
+      FROM chat_message m JOIN chat_session s ON s.id = m.session_id
+      WHERE m.session_id = ? AND s.deleted_at IS NULL`;
+    if (!limit) {
+      return this.db.prepare(`${base} ORDER BY m.rowid ASC`).all(sessionId) as ChatMessageRow[];
+    }
+    const tail = this.db.prepare(`${base} ORDER BY m.rowid DESC LIMIT ?`).all(sessionId, limit) as ChatMessageRow[];
+    return tail.reverse();
+  }
+
+  /** 某会话的消息条数（含已软删会话的行——用于机检「删除只动标记，不动原文」）。 */
+  countChatMessages(sessionId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM chat_message WHERE session_id = ?").get(sessionId) as { count: number };
+    return row.count;
   }
 
   getMastery(repositoryId: string): MasteryRecord[] {
