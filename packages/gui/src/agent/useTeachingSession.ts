@@ -502,22 +502,33 @@ useEffect(() => {
   // 换节点 = 挂回该节点最近一次教学线程（GUI 从没存过 id 的存量会话也在清单里）；该节点没有会话时留空，
   // 下一次发送经 createSession 新建。清单可能比本地状态滞后一拍（新建后还没回表），这时**什么都不做**：
   // 中途清掉当前线程会抹掉正在进行的回合，也会把 session 一起清空。真被别处删掉的线程由 refreshThreads 剪枝。
+  // 已经停在这条线程上时也**不再回读**：清单每次刷新都是新数组，本效应都会重跑，而 loadThread 会用库里的
+  // 旧正文覆盖侧栏——新会话的第一问此刻还没落库，覆盖过去就把用户气泡抹掉了（只剩 agent 回复）。
   useEffect(() => {
     if (!repositoryId || !selected) return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
     const currentThread = current ? list.find((item) => item.id === current) : undefined;
     if (current && !currentThread) return; // 清单还没回表（刚新建 / 刚刷新）：这一拍什么都不做
-    if (currentThread && currentThread.courseNodeId !== selected.id) { setCurrentThread("teaching", null); return; }
+    if (currentThread) {
+      if (currentThread.courseNodeId !== selected.id) setCurrentThread("teaching", null);
+      return;
+    }
     const target = list.find((item) => item.courseNodeId === selected.id);
     if (target) setCurrentThread("teaching", target.id);
   }, [repositoryId, selected, chatThreads.teaching, session?.id]);
 
   const send = async (): Promise<void> => {
-    if (!content.trim() || !selected) return;
+    if (!content.trim()) return;
+    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不再把这一句吞掉。
     const message = content;
     pushMessage("teaching", "user", message);
-    setSending(true); setError(""); setContent(""); setScopeProgress("teaching", "正在准备教学上下文…");
+    setContent("");
+    if (!selected) {
+      pushMessage("teaching", "agent", "先在左栏选一个可教节点，再回到这里对话。", "hint");
+      return;
+    }
+    setSending(true); setError(""); setScopeProgress("teaching", "正在准备教学上下文…");
     try {
       let active = session;
       if (!active) {
@@ -556,17 +567,19 @@ useEffect(() => {
   // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
   const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
     if (!content.trim() || !repositoryId) return;
+    const message = content;
+    // 同 teaching：先上屏再守卫——原来「没题就 return」会让用户输入凭空消失。
+    pushMessage(scope, "user", message);
+    setContent("");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
     }
-    const message = content;
     // 线程保障：没有当前线程就惰性新建（标题取首问）。没有线程等于没有历史——上一轮会被静默丢掉。
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) markCurrentThread(scope, threadId);
-    pushMessage(scope, "user", message);
-    setSending(true); setError(""); setContent(""); setScopeProgress(scope, "回复生成中…");
+    setSending(true); setError(""); setScopeProgress(scope, "回复生成中…");
     // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
     setLiveAnswer("");
     typeQueue.current = ""; startTypewriter();
