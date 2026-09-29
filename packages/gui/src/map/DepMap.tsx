@@ -26,6 +26,8 @@ const PAD_Y = 44;
 const MIN_W = 710;
 const MIN_H = 623;
 const MAX_GROUPS = 20;
+/** 详情抽屉展开时给画布右侧留出的宽度（`.map-detail` 是 min(330px, 48%)，这里取其上限再加余量）。 */
+const DETAIL_RESERVE = 346;
 /** 结构塌陷判据：最大分组的文件占比。一个方块吞下过半仓库，说明这层深度太粗、边都成了自环。 */
 const MAX_LARGEST_SHARE = 0.5;
 /** 聚合下钻的最大目录层数：Maven 布局（src/main/java/com/x）要到第 6 层才露出模块边界。 */
@@ -207,10 +209,12 @@ function toCourseNode(node: ModuleNode): CourseNode {
   };
 }
 
-export function DepMap({ index, analysis, selectedId, onSelect }: {
+export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
   selectedId?: string;
+  /** 节点详情抽屉是否展开：展开时右侧被抽屉盖住，画布留出可滚开的余量 */
+  detailOpen?: boolean;
   /** 合成节点 + 模块内文件清单：节点 id 在课程树里不存在，清单随对话请求上送给引擎解析作用域。 */
   onSelect: (node: CourseNode, scopePaths: string[]) => void;
 }): ReactElement {
@@ -253,14 +257,21 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   }).filter((path): path is NonNullable<typeof path> => path !== null);
 
   const lastLayer = Math.max(columns.length - 1, 0);
-  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X);
+  // 抽屉盖住画布右侧：这里是绝对定位布局（节点坐标写死），CSS 加 padding 挪不动节点，
+  // 只能在画布尾部加出等宽空白——滚到底时最右一列正好停在抽屉左边界外。
+  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X + (detailOpen ? DETAIL_RESERVE : 0));
   const canvasH = Math.max(MIN_H, PAD_Y + Math.max(...columns.map((column) => column.length), 0) * ROW_STRIDE + 92);
 
   return (
     <div className="map-scroll">
       <div className="map-inner" style={{ width: canvasW, minHeight: canvasH }}>
         <svg className="flow-lines" width={canvasW} height={canvasH} aria-hidden>
-          {paths.map((path) => <path key={path.key} d={path.d} strokeWidth={path.width} />)}
+          <defs>
+            <marker id="dep-arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto">
+              <path d="M 0 0 L 8 4 L 0 8 z" />
+            </marker>
+          </defs>
+          {paths.map((path) => <path key={path.key} d={path.d} strokeWidth={path.width} markerEnd="url(#dep-arrow)" />)}
         </svg>
         {placed.map((item) => {
           const node = item.node;
@@ -286,7 +297,7 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
           <span><i className="green" />入口模块</span>
           <span><i />普通模块</span>
           <span className="legend-note">
-            {`边 = import 依赖 · 越粗引用越多 · 点击模块在抽屉中看文件清单${hiddenModules ? ` · ${hiddenModules} 个无依赖且非入口的模块未显示（完整清单在左侧项目目录）` : ""}`}
+            {`边 = import 依赖，箭头指向被依赖方 · 越粗引用越多 · 点击模块在抽屉中看文件清单${hiddenModules ? ` · ${hiddenModules} 个无依赖且非入口的模块未显示（完整清单在左侧项目目录）` : ""}`}
           </span>
         </div>
       </div>

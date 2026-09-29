@@ -21,8 +21,21 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
   const { scope, threads } = t;
   const items = threads[scope];
   const threadRef = useRef<HTMLDivElement | null>(null);
+  /** 「贴底跟随」开关：用户手动往上翻回看历史时置 false，新内容就不再把他拽回底部（流式期间尤其恼人）。
+      离底 80px 以内视为「仍在看最新一条」，翻回底部即恢复跟随。 */
+  const stickToBottom = useRef(true);
   useEffect(() => {
-    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
+    const el = threadRef.current;
+    if (!el) return;
+    const onScroll = (): void => { stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
+    el.addEventListener("scroll", onScroll);
+    return () => { el.removeEventListener("scroll", onScroll); };
+  }, []);
+  // 切作用域是「跳到另一条对话」，不是用户往上翻——恢复跟随
+  useEffect(() => { stickToBottom.current = true; }, [scope]);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
 
   // LLM 运行时设置：进侧栏时拉取，改动立即 PUT 引擎（乐观更新，失败回滚提示）
@@ -182,7 +195,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             placeholder={placeholder}
             aria-label="与 Codebase Agent 对话"
             rows={3}
-            disabled={t.sending}
+            // 生成期间不锁输入框：下一条问题可以预先打进去（发送按钮与 Enter 仍由 canSend 挡住，不会并发发请求）
           />
           <button className="primary icon-button" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
             {t.sending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}

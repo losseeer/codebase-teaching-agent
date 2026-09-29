@@ -139,9 +139,13 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
             <span className="map-viewbar-note">
               {mapView === "architecture" ? "模块依赖图 · 从左到右按依赖方向分层" : "LLM 按入口生成执行流程 · 每个环节关联的文件见节点详情"}
             </span>
+            {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
+            {drawer ? null : (
+              <button className="map-detail-open" onClick={() => setDrawer(true)}><Eye size={13} />{mapView === "flow" ? "环节详情" : "节点详情"}</button>
+            )}
           </div>
           {mapView === "architecture"
-            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
+            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
             : (
               <FlowMap
                 repositoryId={repositoryId}
@@ -248,9 +252,7 @@ export function CoursePage({ workspace, session: t }: { workspace: Workspace; se
                 </div>
               )}
             </aside>
-          ) : (
-            <button className="map-detail-open" onClick={() => setDrawer(true)}><Eye size={13} />{mapView === "flow" ? "环节详情" : "节点详情"}</button>
-          )}
+          ) : null}
         </section>
       </div>
     </section>

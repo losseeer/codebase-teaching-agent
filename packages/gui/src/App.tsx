@@ -12,7 +12,7 @@ import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
-import { ToastHost } from "./modules/toast";
+import { showToast, ToastHost } from "./modules/toast";
 import { installJournalRetry } from "./journal";
 
 // Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
@@ -58,7 +58,12 @@ export function App(): ReactElement {
     api.getIndex(targetId)
       .then(() => { if (current) setWorkspaceReady(true); })
       .catch(() => {
-        if (current && workspaceIdRef.current === targetId) { updateWorkspace(null); setWorkspaceReady(true); }
+        if (current && workspaceIdRef.current === targetId) {
+          updateWorkspace(null);
+          setWorkspaceReady(true);
+          // 失效必须说出来：原来静默清 localStorage 并把用户甩到导入页，看起来像「软件自己把我的仓库弄丢了」
+          showToast("上次打开的仓库已不在引擎里（引擎重启会清空注册表），请重新导入。");
+        }
       });
     return () => { current = false; };
   }, [workspace?.repositoryId]);
@@ -118,11 +123,14 @@ function guard(workspace: _Workspace | null, ready: boolean, content: ReactEleme
   return ready ? content : <Loading />;
 }
 
+/** 禁用态导航项必须有话可说：灰掉却不解释，看起来像坏了。 */
+const DISABLED_NAV_HINT = "先导入仓库：还没有可操作的工作区";
+
 function NavItem({ to, icon, label, disabled }: { to: string; icon: ReactElement; label: string; disabled?: boolean }): ReactElement {
   const location = useLocation();
   const active = location.pathname === to;
   return disabled
-    ? <span className="nav-item disabled">{icon}<span className="nav-label">{label}</span></span>
+    ? <span className="nav-item disabled" title={DISABLED_NAV_HINT}>{icon}<span className="nav-label">{label}</span></span>
     : <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}<span className="nav-label">{label}</span></Link>;
 }
 
@@ -131,7 +139,7 @@ function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon
   const [params] = useSearchParams();
   const location = useLocation();
   const active = location.pathname === "/app" && (params.get("workspace") ?? "map") === id;
-  if (disabled) return <span className="nav-item disabled">{icon}<span className="nav-label">{label}</span></span>;
+  if (disabled) return <span className="nav-item disabled" title={DISABLED_NAV_HINT}>{icon}<span className="nav-label">{label}</span></span>;
   return <Link className={`nav-item ${active ? "active" : ""}`} to={`/app?workspace=${id}`}>{icon}<span className="nav-label">{label}</span></Link>;
 }
 

@@ -42,6 +42,8 @@ export function ModulesPane({
     if (isPractice && id === COMPREHENSION_MODULE_ID) return;
     if (modules.length <= 1) return;
     const removed = modules.find((item) => item.id === id);
+    // 破坏性动作先确认，口径与「删会话」一致：模块清单只存浏览器 localStorage，删掉找不回来
+    if (!window.confirm(`删除模块「${removed?.label ?? id}」？它的名称与自定义配置会一并丢失，不可恢复。`)) return;
     const next = modules.filter((item) => item.id !== id);
     onModulesChange(next, activeId === id ? next[0].id : activeId);
     showToast(`已删除模块「${removed?.label ?? id}」`);
@@ -56,6 +58,12 @@ export function ModulesPane({
     showToast(`已新增模块「${label}」`);
   };
   const reset = (): void => {
+    const customLabels = modules.filter((item) => item.custom).map((item) => item.label);
+    // 这一键会把全部自定义项清掉（模块清单只存浏览器本地，删了找不回来）——原来无任何确认，防护弱于删会话
+    const lost = customLabels.length
+      ? `会删掉 ${customLabels.length} 个自定义项（${customLabels.slice(0, 3).join("、")}${customLabels.length > 3 ? "…" : ""}）`
+      : "会撤销全部改名";
+    if (!window.confirm(`恢复缺省${isPractice ? "主题" : "模块"}：${lost}，不可恢复。继续吗？`)) return;
     if (isPractice) {
       onModulesChange(PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })), COMPREHENSION_MODULE_ID);
       showToast("已恢复缺省模块");

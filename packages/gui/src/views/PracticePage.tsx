@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { BrainCircuit, CheckCircle2, RefreshCw } from "lucide-react";
-import type { Exercise, ExerciseGradingMode, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
+import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { TeachingSessionApi } from "../agent/useTeachingSession";
 import { exerciseKindLabel } from "./helpers";
@@ -15,7 +15,7 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
   练习评估工作区（对齐 prototype `.practice-workspace`，两栏）：
   - 左 「练习模块」（modules-pane）：模块 chips + 配置 + 「模块内的练习」卡片列表（真实掌握度记录，点击按 targetUnitId 重新出题）
   - 右 「练习上下文」（source-pane）：相关代码（高亮）→ 你的回答（文本 / 选项）→ 提交回答 / 换一题 → 反馈面板
-  - 生成练习入口放在上下文行的 `.context-actions`（题型选择 + 生成），判分结果同时推送到 practice 线程
+  - 生成练习入口 = 右栏空态里的「生成练习」按钮（没有独立的 `.context-actions`）；左栏已练卡片点一下就是「针对这个单元重新出题」；判分结果同时推送到 practice 线程
 
   对应 prototype `design-prototype.html` L67 / L330-342（practice-workspace + 练习上下文 + answer + feedback）。
   */
@@ -42,8 +42,13 @@ function llmNonce(unitId: string): number {
   return Number.isFinite(nonce) ? nonce : 0;
 }
 
-function escapeHtml(input: string): string {
-  return input.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] as string));
+/** 回答框的提示随题型走：原来非 rubric 题一律写「只填写你预测的返回值」，
+    可修改定位要的是位置、影响分析要的是调用点——按返回值的口径会把人带偏。 */
+function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
+  if (mode === "rubric") return "用自己的话写出你的分析";
+  if (kind === "change_localization") return "写出要改的文件与位置（行号或函数名）";
+  if (kind === "impact_analysis") return "列出会受影响的调用点，并说明依据";
+  return "只填写你预测的返回值";
 }
 
 export function PracticePage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
@@ -63,8 +68,9 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
   useEffect(() => { savePracticeModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("practice", activeModule); }, [activeModule]);
 
+  /** 进度读取：成功也要把旧的错误清掉——原来错误一旦挂上就一直留在面板里，重新拉好之后还在「无法读取练习进度」。 */
   const refreshSummary = (): void => {
-    api.getPractice(repositoryId).then(setSummary).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
+    api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
   };
   useEffect(refreshSummary, [repositoryId]);
 
@@ -122,7 +128,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
       setResult(next);
       refreshSummary();
-      t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${escapeHtml(next.feedback)}`);
+      t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${next.feedback}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法提交答案");
     } finally {
@@ -153,7 +159,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
         <h1>源码练习</h1>
         <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>已练单元 {summary?.mastery.length ?? 0}</span></div>
       </header>
-      <ContextLine strong="练习评估" detail={`模块「${moduleLabel}」 · 反馈会回写学习状态`} />
+      <ContextLine strong="练习评估" detail={`模块「${moduleLabel}」`} hint="判分结果会回写学习状态（掌握度与下次复习时间）" />
       <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
       <div className="workspace practice-workspace">
         <div className={paneClass(0)}>
@@ -165,7 +171,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
             onSelectModule={switchModule}
             onModulesChange={(next, nextActive) => { setModules(next); switchModule(nextActive, next); }}
           >
-            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 主题可在「＋ 配置」里自定义</p>
+            <p className="module-hint" title="主题可在「＋ 配置」里自定义">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
             <ModuleSectionLabel label="模块内的练习" note={`${moduleMastery.length} 项`} />
             {moduleMastery.length ? (
               <div className="exercise-list">
@@ -179,7 +185,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
                 ))}
               </div>
             ) : (
-              <p className="entry-empty">{isComprehensionChip ? "该模块下暂时没有练习记录。用上方「生成练习」开始一次针对当前仓库的复习。" : "该主题下暂时没有练习记录。点「生成练习」，LLM 会围绕这个主题出题。"}</p>
+              <p className="entry-empty">{isComprehensionChip ? "该模块下暂时没有练习记录。切到右侧「练习上下文」点「生成练习」，开始一次针对当前仓库的复习。" : "该主题下暂时没有练习记录。切到右侧「练习上下文」点「生成练习」，LLM 会围绕这个主题出题。"}</p>
             )}
           </ModulesPane>
         </div>
@@ -220,7 +226,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
                     onChange={(event) => setText(event.target.value)}
                     rows={4}
                     aria-label="练习答案"
-                    placeholder={exercise.gradingMode === "rubric" ? "用自己的话写出你的分析" : "只填写你预测的返回值"}
+                    placeholder={answerPlaceholder(exercise.kind, exercise.gradingMode)}
                   />
                 ) : null}
                 <div className="answer-actions">
@@ -245,7 +251,7 @@ export function PracticePage({ workspace, session: t }: { workspace: Workspace; 
           ) : (
             <div className="practice-empty">
               <BrainCircuit size={26} />
-              <p>从左栏选一个已练单元，或用上方「生成练习」针对当前仓库出一道新题。</p>
+              <p>从左栏选一个已练单元，或点下面的「生成练习」针对当前仓库出一道新题。</p>
               <button className="primary" onClick={() => void generate()} disabled={loading}>{loading ? <RefreshCw className="spin" size={15} /> : <BrainCircuit size={15} />}生成练习</button>
             </div>
           )}

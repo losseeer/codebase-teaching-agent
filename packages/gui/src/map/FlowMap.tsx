@@ -94,6 +94,9 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
     if (!entryIsKnown) setEntryPath(preferredEntryPath(entries, analysis));
   }, [entries, entryIsKnown]);
 
+  /** 重试计数：值一变就重跑取数 effect——失败前这里只有一条虚线文案，用户只能切视图重挂载。 */
+  const [attempt, setAttempt] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (!entryPath) return;
     let current = true;
@@ -106,7 +109,14 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
     // analysis.versionStamp 变化（仓库重分析）后流程需要重新生成
-  }, [repositoryId, entryPath, analysis.versionStamp]);
+  }, [repositoryId, entryPath, analysis.versionStamp, attempt]);
+
+  // 首次生成是几十秒量级的 LLM 调用，只有一行文案看不出「还在动」——计时 + 骨架给出进度感
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return; }
+    const timer = setInterval(() => setElapsed((seconds) => seconds + 1), 1000);
+    return () => { clearInterval(timer); };
+  }, [loading]);
 
   return (
     <div className="map-scroll">
@@ -143,9 +153,19 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
         </div>
 
         {loading ? (
-          <p className="flow-status"><Sparkles size={13} />正在生成流程…（首次生成由 LLM 完成，之后同一版本直接命中缓存）</p>
+          <div className="flow-loading">
+            <p className="flow-status"><Sparkles size={13} />{`正在生成流程…已等待 ${elapsed}s（首次由 LLM 生成，可能要几十秒；之后同一版本直接命中缓存）`}</p>
+            <div className="flow-skeleton" aria-hidden>
+              {[62, 78, 54, 70].map((w, i) => <span key={i} style={{ width: `${w}%` }} />)}
+            </div>
+          </div>
         ) : null}
-        {error ? <p className="flow-status error">{error}</p> : null}
+        {error ? (
+          <p className="flow-status error">
+            {error}
+            <button type="button" className="flow-retry" onClick={() => setAttempt((a) => a + 1)}>重试</button>
+          </p>
+        ) : null}
 
         {state ? (
           <>

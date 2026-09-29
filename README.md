@@ -1,10 +1,10 @@
 # Codebase Tutor
 
-本地优先的代码库教学 Agent。导入一个真实仓库后，引擎会建立文件与 Git 热点索引、生成带源码锚点的课程树与运行路径地图，并围绕「宏观设计 / 代码教学 / 练习评估」三作用域提供常驻 Agent 侧栏。所有分析结果、SQLite 数据库和不可变学习日志（journal）都保存在被导入仓库的 `.tutor/` 目录——你的代码不出本机。
+本地优先的代码库教学 Agent。导入一个真实仓库后，引擎会建立文件与 Git 热点索引、生成带源码锚点的课程树与宏观设计画布（架构视图 + 流程视图），并围绕「宏观设计 / 代码教学 / 练习评估」三作用域提供常驻 Agent 侧栏。所有分析结果、SQLite 数据库和不可变学习日志（journal）都保存在被导入仓库的 `.tutor/` 目录——你的代码不出本机。
 
 ## 项目简介
 
-- **宏观设计**：左侧「项目目录」按真实目录分组展示（可折叠、带语义标签），右侧「运行路径」画布由课程节点自动布局，支持拖拽平移、缩放与节点详情抽屉，每个节点可溯源到源码锚点。
+- **宏观设计**：左侧「项目目录」按真实目录分组展示（可折叠、带语义标签），右侧画布分两个视图切换——「架构视图」由文件驱动，节点是目录聚合模块、边是 import 依赖（箭头指向被依赖方，越粗引用越多）；「流程视图」由 LLM 生成执行环节，可重试、结果按版本缓存。两视图共用节点详情抽屉，抽屉展开时画布自动让位。
 - **代码教学**：左侧「教学模块」由知识模块 chips + LLM 推荐入口 + 仓库文件树组成；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏以「受限 agent loop」驱动教学对话：每轮 LLM 从固定动作菜单（推进 / 降脚手架 / 给答案 / 确认）提议动作，状态机守门校验教学法不变量（熔断前置、verify 阶段确认门禁），否决后回落确定性路径；上下文注入锚点附近真实源码摘录与完整近史，全程 journal 可审计。
 - **练习评估**：练习围绕配置的知识模块（计算机网络 / 操作系统 / 语言特性等，可自定义）组织，按模块从当前仓库筛选出题目标，题型为输出预测 / 变更定位 / 影响分析，由受限执行与集合匹配自动判分，并按 SM-2 算法调度复习。
 - **成本监控**：Token 用量统计、月度预算设置，触顶后 LLM 调用自动降级为本地规则路径。
@@ -13,7 +13,7 @@
 
 | 层 | 选型 |
 |---|---|
-| **engine** | Fastify v5（REST + WebSocket 流式）、better-sqlite3（双 ABI 原生绑定）、typescript-language-server（LSP 语义增强）、tsx 开发运行时 |
+| **engine** | Fastify v5（REST + SSE 流式）、better-sqlite3（双 ABI 原生绑定）、typescript-language-server（LSP 语义增强）、tsx 开发运行时 |
 | **gui** | Vite 6 + React 19 + react-router-dom v7 + lucide-react |
 | **shared** | 前后端共享 TypeScript 类型（workspace 内直接引用源码） |
 | **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档；教学对话默认受限 agent loop（`TUTOR_AGENT_LOOP=off` 退回纯工作流） |
@@ -26,7 +26,7 @@
 ├── packages/
 │   ├── engine/                  # 分析与教学引擎（Fastify API，:3001）
 │   │   └── src/
-│   │       ├── server.ts        #   全部 REST 路由 + WebSocket 广播 + 启动计时
+│   │       ├── server.ts        #   全部 REST 路由 + SSE 流式接口 + 启动计时
 │   │       ├── importer/        #   仓库导入：路径归一化、分析编排、增量重分析
 │   │       ├── indexer/         #   文件树 / Git 热点索引（热点同样过滤 .tutorignore）、文件变更监听
 │   │       ├── summarizer/      #   分层文件摘要（LLM 或本地启发式 + 缓存）
@@ -53,7 +53,7 @@
 │   │       ├── App.tsx          #   shell + 侧栏导航 + 单主区 Workbench
 │   │       ├── views/           #   宏观设计 / 代码教学 / 练习评估 / 导入 / 成本监控
 │   │       ├── agent/           #   持久 Agent 侧栏 + useTeachingSession 状态源
-│   │       ├── map/             #   FlowMap 运行路径画布（自动布局 / 拖拽 / 缩放）
+│   │       ├── map/             #   DepMap 架构视图（分层自动布局 + 依赖箭头）/ FlowMap 流程视图（LLM 环节 + 重试）
 │   │       ├── modules/         #   知识模块面板（localStorage 持久化）+ toast
 │   │       ├── source/          #   只读源码查看器（行高亮）
 │   │       ├── api/             #   REST 客户端

@@ -21,13 +21,15 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   const [summaryComments, setSummaryComments] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildNote, setRebuildNote] = useState("");
+  /** 每次拉取都先清掉上一回合的错误：原来一次失败就把红字永久挂在页面上，数据明明已经刷成功了。 */
   const refresh = (): void => {
+    setError("");
     api.getCost(workspace.repositoryId).then((summary) => { setCost(summary); setBudget(String(summary.monthlyBudgetUsd)); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取成本"));
     api.getLearner(workspace.repositoryId).then(setLearner).catch(() => setLearner(null));
     api.getRepositorySettings(workspace.repositoryId).then((settings) => setSummaryComments(settings.summaryHeaderComments)).catch(() => setSummaryComments(false));
   };
   useEffect(refresh, [workspace.repositoryId]);
-  const saveBudget = async (): Promise<void> => { try { setCost(await api.setBudget(workspace.repositoryId, Number(budget))); } catch (reason) { setError(reason instanceof Error ? reason.message : "无法保存预算"); } };
+  const saveBudget = async (): Promise<void> => { try { setCost(await api.setBudget(workspace.repositoryId, Number(budget))); setError(""); } catch (reason) { setError(reason instanceof Error ? reason.message : "无法保存预算"); } };
   const saveSummaryComments = async (enabled: boolean): Promise<void> => {
     setSummaryComments(enabled);
     try { await api.setSummaryHeaderComments(workspace.repositoryId, enabled); }
@@ -57,6 +59,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           <p>Token 用量与月度预算实时监测，预算触顶自动降级为本地后备。</p>
         </div>
       </header>
+      {/* 错误紧跟标题：原来挂在整页最底部，读数失败时页面照常显示 0.0000，红字要滚到底才看得见 */}
+      {error && <p className="error-message insights-error">{error}</p>}
       <div className="insights-grid">
         <section className="insight-panel">
           <div className="panel-title"><BarChart3 size={18} /><h2>本月成本</h2></div>
@@ -111,7 +115,6 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           </div>
         ) : <p className="muted">完成练习或教学确认后，这里会显示按单元聚合的掌握度。</p>}
       </section>
-      {error && <p className="error-message">{error}</p>}
     </section>
   );
 }

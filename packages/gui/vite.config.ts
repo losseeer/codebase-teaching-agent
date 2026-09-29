@@ -6,8 +6,7 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      "/api": "http://127.0.0.1:3001",
-      "/ws": { target: "ws://127.0.0.1:3001", ws: true }
+      "/api": "http://127.0.0.1:3001"
     }
   }
 });

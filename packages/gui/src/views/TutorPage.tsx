@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FileSearch, X } from "lucide-react";
 import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
@@ -28,6 +29,8 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
   const [tabs, setTabs] = useState<{ path: string; line: number }[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
+  /** palette 的键盘选中行（↑↓ 移动，Enter 打开这一行而不是第一条）。 */
+  const [paletteIndex, setPaletteIndex] = useState(0);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
   /** 当前打开的源码 tab 路径（与 tabs 同步镜像，含 slice(-5) 淘汰）：判定「新开文件」还是「就地定位」。 */
   const openedPaths = useRef<string[]>([]);
@@ -36,6 +39,8 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
       （`openedPaths` 在 setTabs 的 updater 里才更新，两次调用之间它还是空的，所以两边都会判成「新开文件」）。
       只挡「同一锚点连发」，用户来回切节点仍会各记一条。 */
   const lastAutoAnchor = useRef<string | null>(null);
+  /** palette 结果列表容器（键盘 ↑↓ 时手动把它滚进可视区）。 */
+  const paletteRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { saveModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("teaching", activeModule); }, [activeModule]);
@@ -63,9 +68,11 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
 
   const anchor = t.selected?.anchors[0];
   /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选 toast 提示。
+      `open.toast` 控制是否弹提示（切 tab、自动定位都不该弹——用户已经看见视图变了，再 toast 是噪音），
+      `open.trigger` 把「手动打开 / 切节点自动带过来 / 点已开的 tab」三种来源分开记进 journal。
       依赖只取 repositoryId——放整个 t（或任何每次渲染换引用的值）会让本回调每渲染换引用，
       连带下方自动定位 effect 在 composer 每敲一个字符时重发一次 getSource（v0.6.1 修）。 */
-  const loadSource = useCallback(async (path: string, line: number, note?: string, announce = true): Promise<void> => {
+  const loadSource = useCallback(async (path: string, line: number, open: { note?: string; toast?: boolean; trigger?: "manual" | "auto" | "tab" } = {}): Promise<void> => {
     try {
       const next = await api.getSource(repositoryId, path, line);
       setSource(next);
@@ -80,12 +87,12 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
         openedPaths.current = nextTabs.map((item) => item.path);
         return nextTabs;
       });
-      // trigger 区分「用户点的」与「切节点自动带过来的」：都属设计文档要求可查的操作，但下游要能分开统计
-      const trigger = announce ? "manual" : "auto";
+      const toast = open.toast ?? true;
+      const trigger = open.trigger ?? (toast ? "manual" : "auto");
       if (isNewFile) emit(repositoryId, "file_opened", { path, line, trigger });
       else emit(repositoryId, "line_located", { path, line, trigger });
-      if (!announce) return;
-      showToast(note ?? `已打开 · ${path}`);
+      if (!toast) return;
+      showToast(open.note ?? `已打开 · ${path}`);
     } catch { showToast(`无法读取 ${path}`); }
   }, [repositoryId]);
   useEffect(() => {
@@ -94,11 +101,16 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     if (lastAutoAnchor.current === key) return;
     lastAutoAnchor.current = key;
     // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
-    void loadSource(anchor.path, anchor.line, undefined, false);
+    void loadSource(anchor.path, anchor.line, { toast: false, trigger: "auto" });
   }, [anchor?.path, anchor?.line, loadSource]);
 
-  // ⌘P / Ctrl+P 文件搜索（prototype 源码面板的「⌘ P 搜索文件」）
+  // ⌘P / Ctrl+P 文件搜索（prototype 源码面板的「⌘ P 搜索文件」）。
+  // 三视图常驻挂载：本组件在非教学工作区也活着，监听器必须按当前视图开关——
+  // 否则在宏观设计/练习页按 ⌘P 会被这里 preventDefault 吞掉，还打开一个看不见的面板（切回教学页才发现它开着）。
+  const [searchParams] = useSearchParams();
+  const isActiveWorkspace = (searchParams.get("workspace") ?? "map") === "teaching";
   useEffect(() => {
+    if (!isActiveWorkspace) { setPaletteOpen(false); return; }
     const onKey = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
         event.preventDefault();
@@ -108,7 +120,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isActiveWorkspace]);
 
   const heuristicEntries = useMemo<ModuleEntry[]>(() => (t.course ? classifyCourseNodes(t.course.root, modules) : []), [t.course, modules]);
 
@@ -181,6 +193,37 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
     const pool = needle ? filePaths.filter((path) => path.toLowerCase().includes(needle)) : filePaths;
     return pool.slice(0, 12);
   }, [filePaths, query]);
+  useEffect(() => { setPaletteIndex(0); }, [query]);
+  /** 选中行变化时把它滚进可视区：`.palette-list` 自己有 max-height + overflow，是真正的滚动容器。
+      用 rect 差值而不是 `scrollIntoView`——后者会连带滚动祖先，在零视口的应用内浏览器里会把整页滚到底（§6.1 同族坑）。 */
+  useEffect(() => {
+    const list = paletteRef.current;
+    const item = list?.children[paletteIndex] as HTMLElement | undefined;
+    if (!list || !item) return;
+    const listBox = list.getBoundingClientRect();
+    const itemBox = item.getBoundingClientRect();
+    if (itemBox.top < listBox.top) list.scrollTop += itemBox.top - listBox.top;
+    else if (itemBox.bottom > listBox.bottom) list.scrollTop += itemBox.bottom - listBox.bottom;
+  }, [paletteIndex]);
+  const openFile = (path: string): void => {
+    maybeEmitOverride(path);
+    void loadSource(path, 1, { note: `已打开 · ${path}` });
+    setPaletteOpen(false);
+  };
+  /** palette 键盘动线：↑↓ 移动选中行（首尾环绕），Enter 打开选中的那一行——不再只能「回车 = 第一条」。 */
+  const onPaletteKey = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!paletteMatches.length) return;
+      setPaletteIndex((index) => (index + (event.key === "ArrowDown" ? 1 : paletteMatches.length - 1)) % paletteMatches.length);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const picked = paletteMatches[paletteIndex] ?? paletteMatches[0];
+      if (picked) openFile(picked);
+    }
+  };
 
   if (t.error && !t.course) return <EmptyState title="代码教学暂不可用" detail={t.error} />;
   if (!t.course || !t.selected) return <Loading />;
@@ -218,7 +261,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
             onSelectModule={setActiveModule}
             onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
           >
-            <p className="module-hint">{modules.find((item) => item.id === activeModule)?.hint ?? ""} · 模块可在「＋ 配置」里自定义</p>
+            <p className="module-hint" title="模块可在「＋ 配置」里自定义">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
             <ModuleSectionLabel label="推荐入口" note={entryNote} />
             {visibleEntries.length ? (
               <div className="entry-list">
@@ -243,25 +286,25 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
             ) : moduleEntries?.status === "loading" ? (
               <p className="entry-empty">正在从课程树挑选推荐入口…</p>
             ) : (
-              <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或中栏源码挑一个文件，直接开始提问。</p>
+              <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或右侧源码挑一个文件，直接开始提问。</p>
             )}
             <ModuleSectionLabel label="仓库文件" note="主要入口 · 任意目录与文件" />
-            <RepoTree nodes={fileTree} onOpenFile={(path) => { maybeEmitOverride(path); void loadSource(path, 1, `已打开 · ${path}`); }} activePath={source?.path} />
+            <RepoTree nodes={fileTree} onOpenFile={openFile} activePath={source?.path} />
           </ModulesPane>
         </div>
         <div className={paneClass(1)}>
           <section className="pane source-pane">
-            <div className="pane-header"><h2>实时源码</h2><span>{source?.path ?? "未选择文件"}{filePaths.length ? ` · ${filePaths.length} 文件 · ⌘P 搜索` : ""}</span></div>
+            <div className="pane-header"><h2>实时源码</h2><span>{source?.path ?? "未选择文件"}{filePaths.length ? ` · ${filePaths.length} 文件` : ""}</span></div>
             {tabs.length ? (
               <div className="source-tabs" role="tablist" aria-label="打开的文件">
                 {tabs.map((tab) => (
-                  <button key={tab.path} role="tab" aria-selected={source?.path === tab.path} className={source?.path === tab.path ? "active" : ""} onClick={() => void loadSource(tab.path, tab.line)}>
+                  <button key={tab.path} role="tab" aria-selected={source?.path === tab.path} className={source?.path === tab.path ? "active" : ""} onClick={() => void loadSource(tab.path, tab.line, { toast: false, trigger: "tab" })}>
                     {tab.path.split("/").pop()}
                     <span
                       className="source-tab-close"
                       role="button"
                       aria-label={`关闭 ${tab.path}`}
-                      title="关闭"
+                      title={`关闭 ${tab.path}`}
                       onClick={(event) => { event.stopPropagation(); closeTab(tab.path); }}
                     >
                       ×
@@ -270,7 +313,7 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
                 ))}
               </div>
             ) : null}
-            <div className="source-meta"><span title={sourceMetaNote}>{sourceMeta}</span><span>⌘ P 搜索文件</span></div>
+            <div className="source-meta"><span title={sourceMetaNote}>{sourceMeta}</span><span title="按 ⌘P（Windows/Linux 为 Ctrl+P）打开文件搜索面板">⌘ P 搜索文件</span></div>
             <SourceView source={source} />
           </section>
         </div>
@@ -283,16 +326,17 @@ export function TutorPage({ workspace, session: t }: { workspace: Workspace; ses
               <input
                 autoFocus
                 value={query}
-                placeholder="搜索仓库文件（回车打开第一个）"
+                placeholder="搜索仓库文件（↑↓ 选择 · 回车打开）"
                 aria-label="搜索仓库文件"
                 onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter" && paletteMatches[0]) { maybeEmitOverride(paletteMatches[0]); void loadSource(paletteMatches[0], 1, `已打开 · ${paletteMatches[0]}`); setPaletteOpen(false); } }}
+                onKeyDown={onPaletteKey}
               />
+              <span className="palette-count">{paletteMatches.length ? `${paletteIndex + 1}/${paletteMatches.length}` : "0 匹配"}</span>
               <button className="palette-close" aria-label="关闭" onClick={() => setPaletteOpen(false)}><X size={13} /></button>
             </div>
-            <div className="palette-list">
-              {paletteMatches.map((path) => (
-                <button key={path} onClick={() => { maybeEmitOverride(path); void loadSource(path, 1, `已打开 · ${path}`); setPaletteOpen(false); }}>{path}</button>
+            <div className="palette-list" ref={paletteRef} role="listbox" aria-label="匹配的文件">
+              {paletteMatches.map((path, index) => (
+                <button key={path} role="option" aria-selected={index === paletteIndex} className={index === paletteIndex ? "active" : ""} onClick={() => openFile(path)}>{path}</button>
               ))}
               {!paletteMatches.length && <p className="palette-empty">没有匹配的文件</p>}
             </div>

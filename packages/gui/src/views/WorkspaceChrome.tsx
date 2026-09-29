@@ -31,11 +31,12 @@ export function WorkspaceTabs({ active, onChange }: { active: WorkspaceId; onCha
   );
 }
 
-/** 上下文行（prototype `.context-line`）：左侧当前绑定，右侧 `.context-actions` 放该工作区的真实动作。 */
-export function ContextLine({ strong, detail, actions }: { strong: string; detail: string; actions?: ReactNode }): ReactElement {
+/** 上下文行（prototype `.context-line`）：左侧当前绑定，右侧 `.context-actions` 放该工作区的真实动作。
+    `hint` 是「不常驻、悬停才看」的解释性文字（如「反馈会回写学习状态」）——挂在同一行的 title 上，不占版面。 */
+export function ContextLine({ strong, detail, actions, hint }: { strong: string; detail: string; actions?: ReactNode; hint?: string }): ReactElement {
   return (
     <div className="context-line">
-      <span><strong>{strong}</strong> · {detail}</span>
+      <span title={hint}><strong>{strong}</strong> · {detail}</span>
       {actions ? <div className="context-actions">{actions}</div> : null}
     </div>
   );
