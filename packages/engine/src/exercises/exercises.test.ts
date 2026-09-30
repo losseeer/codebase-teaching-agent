@@ -10,8 +10,8 @@ import { indexRepository } from "../indexer/indexer.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { TutorDatabase } from "../store/database.js";
 import { readJournal } from "../store/journal.js";
-import { selectZpdTarget } from "./learner.js";
-import { ExerciseService, type PracticeRepository } from "./service.js";
+import { selectZpdTarget } from "./zpd.js";
+import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");

@@ -7,10 +7,11 @@ import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
-import { guardLlmProposal, type GuardCandidate } from "./verify.js";
+import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
-import { deriveMastery, selectZpdTarget, type ZpdTarget } from "./learner.js";
+import { deriveMastery } from "../learner/mastery.js";
+import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
 type ExpectedAnswer =

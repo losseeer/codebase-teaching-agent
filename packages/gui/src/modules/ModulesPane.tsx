@@ -1,7 +1,7 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { Settings2, X } from "lucide-react";
 import { showToast } from "./toast";
-import { COMPREHENSION_MODULE_ID, DEFAULT_MODULES, PRACTICE_DEFAULT_MODULES, type KnowledgeModule, type ModuleWhere } from "./store";
+import { COMPREHENSION_MODULE_ID, DEFAULT_MODULES, PRACTICE_DEFAULT_MODULES, type KnowledgeModule, type ModuleWhere } from "./local-state";
 
 /**
   知识模块面板（prototype `.modules-pane` 的 GUI 实现）：

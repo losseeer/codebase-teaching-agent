@@ -3,14 +3,14 @@ import { useSearchParams } from "react-router-dom";
 import { FileSearch, X } from "lucide-react";
 import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
-import type { TeachingSessionApi } from "../agent/useTeachingSession";
+import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, Loading, flatten } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
-import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/store";
+import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
@@ -18,9 +18,9 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
   - 左 「教学模块」（modules-pane）：模块 chips + 配置 + 推荐入口（课程节点按模块归类）+ 仓库文件（点击打开源码）
   - 右 「实时源码」（source-pane）：只读源码 + 行高亮 + 源码 tabs + ⌘P 文件搜索
   - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
-  - chat / composer / 流式订阅由 AgentRail 拥有（共享 useTeachingSession）
+  - chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
   */
-export function TutorPage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
+export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("teaching", modules));

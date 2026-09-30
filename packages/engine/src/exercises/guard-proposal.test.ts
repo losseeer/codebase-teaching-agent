@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guardLlmProposal, type GuardCandidate, type LlmExerciseProposal } from "./verify.js";
+import { guardLlmProposal, type GuardCandidate, type LlmExerciseProposal } from "./guard-proposal.js";
 
 const candidates: GuardCandidate[] = [
   { path: "src/config.ts", excerpt: "1| export function clamp(value: number) {\n2|   return value;", lineCount: 2 },

@@ -6,7 +6,7 @@ import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "./slice.js";
-import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type SummaryResult } from "./provider.js";
+import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**
   文件级摘要表（L1）：每文件一行「职责摘要 + 架构角色 + 覆盖率标记」，落 SQLite。

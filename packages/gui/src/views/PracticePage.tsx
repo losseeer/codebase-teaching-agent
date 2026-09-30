@@ -2,13 +2,13 @@ import { useEffect, useState, type ReactElement } from "react";
 import { BrainCircuit, CheckCircle2, RefreshCw } from "lucide-react";
 import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
-import type { TeachingSessionApi } from "../agent/useTeachingSession";
+import type { ScopedChatApi } from "../agent/useScopedChat";
 import { exerciseKindLabel } from "./helpers";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
-import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/store";
+import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
@@ -51,7 +51,7 @@ function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): strin
   return "只填写你预测的返回值";
 }
 
-export function PracticePage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
+export function PracticePage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [summary, setSummary] = useState<PracticeSummary | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);

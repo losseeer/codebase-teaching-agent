@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { batchSystemPrompt, LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./provider.js";
+import { batchSystemPrompt, LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./summary-provider.js";
 import type { FileSlice } from "./slice.js";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { AnthropicProvider, OllamaTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";

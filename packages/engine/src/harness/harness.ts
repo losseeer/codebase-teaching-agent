@@ -3,7 +3,7 @@ import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
-import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
+import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../tutor-settings/tutor-settings.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";

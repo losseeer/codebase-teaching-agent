@@ -29,7 +29,7 @@ const MAX_SUMMARY = 60;
 const BATCH_MAX_TOKENS = 3_200;
 
 /**
-  润色层的输入口径版本，写进 `settings.refinement` 标记（见 importer/service.ts）。
+  润色层的输入口径版本，写进 `settings.refinement` 标记（见 importer/importer.ts）。
   上面的批次/深度/长度阈值或 `REFINE_SYSTEM_PROMPT` 改了，课程树可以一字不变——这类失效只有版本号管得了，
   改它们要同步 bump。首次带该版本的运行会让旧标记的仓库重润一次，属预期。
   */

@@ -87,11 +87,21 @@ export interface LlmSettings {
   activeModel?: string;
 }
 
+/** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。 */
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export const isNotFound = (error: unknown): boolean => error instanceof ApiError && error.status === 404;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
   const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "请求失败");
+  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败");
   return body;
 }
 

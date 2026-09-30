@@ -1,5 +1,5 @@
 import type { FadedState, TeachingPolicy } from "@codebase-tutor/shared";
-import { styleBand, validateStyle } from "../policy/policy.js";
+import { styleBand, validateStyle } from "../tutor-settings/tutor-settings.js";
 
 /**
   集中式 LLM 提示词构建器。所有需要「遵循语言风格」的对话提示词都从这里取，

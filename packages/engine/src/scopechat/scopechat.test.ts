@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { buildSearchCorpus } from "../source/search-code.js";
-import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./service.js";
+import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat.js";
 
 function fakeProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
   const calls: LlmCompletionInput[] = [];
@@ -119,7 +119,7 @@ describe("mapChat", () => {
 
   it("工具循环：模型请求 read_file → 引擎执行并回喂 → 汇总 usage 与 fileReads", async () => {
     const script: LlmCompletion[] = [
-      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "service.ts" }) }], usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.ts" }) }], usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
       { text: "读完文件后的回答。", usage: { inputTokens: 200, outputTokens: 30 }, finishReason: "stop" }
     ];
     const calls: LlmCompletionInput[] = [];
@@ -137,7 +137,7 @@ describe("mapChat", () => {
       repoPath: import.meta.dirname,
       analysis,
       path: "src/app.ts",
-      content: "service.ts 里定义了什么？",
+      content: "scopechat.ts 里定义了什么？",
       provider,
       style: 50,
       onProgress: (progress) => progressEvents.push(progress)
@@ -145,16 +145,16 @@ describe("mapChat", () => {
     expect(result.reply).toContain("读完文件后的回答");
     expect(progressEvents).toEqual([
       { type: "thinking", round: 1 },
-      { type: "reading", path: "service.ts" },
+      { type: "reading", path: "scopechat.ts" },
       { type: "thinking", round: 2 }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
-    expect(result.fileReads).toEqual([{ path: "service.ts", lines: 150, bytes: expect.any(Number), truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
+    expect(result.fileReads).toEqual([{ path: "scopechat.ts", lines: 150, bytes: expect.any(Number), truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
     // 第二轮请求携带完整历史：原始 user 消息（上下文+问题）+ assistant toolCalls + tool 结果（带行号的真实文件内容）
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });
     expect(second.messages?.[0].content).toContain("项目结构全景"); // 回归：工具轮次后不得丢失代码上下文
-    expect(second.messages?.[0].content).toContain("service.ts 里定义了什么？"); // 回归：不得丢失原始提问
+    expect(second.messages?.[0].content).toContain("scopechat.ts 里定义了什么？"); // 回归：不得丢失原始提问
     expect(second.messages?.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "read_file")).toBe(true);
     const toolResult = second.messages?.find((m) => m.role === "tool");
     expect(toolResult?.content).toContain("1| ");
@@ -165,8 +165,8 @@ describe("mapChat", () => {
 
   it("micro_compact：多轮读取时，更早轮次的 tool 结果替换为占位符、早期 reasoning 丢弃，最近一轮保留原文", async () => {
     const script: LlmCompletion[] = [
-      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "service.ts" }) }], reasoningContent: "思考A1", usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
-      { text: "", toolCalls: [{ id: "call_b", name: "read_file", argumentsJson: JSON.stringify({ path: "service.test.ts" }) }], reasoningContent: "思考A2", usage: { inputTokens: 150, outputTokens: 25 }, finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.ts" }) }], reasoningContent: "思考A1", usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "call_b", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.test.ts" }) }], reasoningContent: "思考A2", usage: { inputTokens: 150, outputTokens: 25 }, finishReason: "tool_calls" },
       { text: "三轮后的回答。", usage: { inputTokens: 200, outputTokens: 30 }, finishReason: "stop" }
     ];
     const calls: LlmCompletionInput[] = [];

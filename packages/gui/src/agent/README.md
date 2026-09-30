@@ -7,7 +7,7 @@
 | 文件 | 职责 | 状态 |
 |------|------|------|
 | `AgentRail.tsx` | 持久右栏外壳：scope-bar + scope-context + agent-thread + composer | ✅ 已实现 |
-| `useTeachingSession.ts` | 单一状态源：scope / threads / course / selected / session / settings / liveAnswer（被 AgentRail + TutorPage 共享） | ✅ 已实现 |
+| `useScopedChat.ts` | 单一状态源：scope / threads / course / selected / session / settings / liveAnswer（被 AgentRail + TutorPage 共享） | ✅ 已实现 |
 
 ## 设计依据
 
@@ -76,7 +76,7 @@
 - 过程提示接入 practice 作用域（需要在单轮调用前后补事件，否则该作用域仍只有静态文案）
 
 （原「接入 map 作用域 LLM」「把 CoursePage / PracticePage 的选择并入 hook」两条已落地：map 对话走 `map-chat/stream`，
-三页共用 `useTeachingSession` 的 `setMapNode / setMapFile / setPracticeUnit`。）
+三页共用 `useScopedChat` 的 `setMapNode / setMapFile / setPracticeUnit`。）
 
 ## 重构对比 v0.1 → v0.2
 

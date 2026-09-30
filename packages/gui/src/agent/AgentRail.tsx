@@ -4,7 +4,7 @@ import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
 import { showToast } from "../modules/toast";
-import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type TeachingSessionApi, type ThreadItem } from "./useTeachingSession";
+import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
   持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
@@ -17,7 +17,7 @@ import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type TeachingSessionApi, typ
   v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
   v0.2 不变项：TutorPage 仅渲染 session-controls + ladder + 锚点 / 成本 chip，所有 chat / composer / 流式订阅均由 AgentRail 拥有。
   */
-export function AgentRail({ session: t }: { session: TeachingSessionApi }): ReactElement {
+export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
   const { scope, threads } = t;
   const items = threads[scope];
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -134,7 +134,7 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
         ) : null}
       </div>
 
-      <SessionBar scope={scope} t={t} />
+      <ThreadBar scope={scope} t={t} />
 
       <div className="thread-meta">
         <span>作用域 · <b>{SCOPE_LABEL[scope]}</b></span>
@@ -261,7 +261,7 @@ function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapabilit
   return effort === "off" && (capability.style === "none" || capability.style === "unknown");
 }
 
-function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
+function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
     return {
       placeholder: t.selected ? `围绕「${t.selected.title}」描述你的推理，或输入「不知道」请求下一层提示` : "描述你的推理，或输入「不知道」请求下一层提示",
       canSend: !t.sending && t.content.trim().length > 0,
@@ -282,7 +282,7 @@ function composerForScope(scope: Scope, t: TeachingSessionApi): { placeholder: s
   };
 }
 
-function ScopeContext({ scope, t }: { scope: Scope; t: TeachingSessionApi }): ReactElement {
+function ScopeContext({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
   const bound = boundFor(scope, t);
   return (
     <div className="scope-context" id="scope-context">
@@ -296,7 +296,7 @@ function ScopeContext({ scope, t }: { scope: Scope; t: TeachingSessionApi }): Re
   切换作用域/节点/文件只改这一行的值——不再往线程里追加「已切换到 / 已定位」分隔线（v0.8.1）。
   teaching 只显示当前文件的 `path:line`（与原型 `binds.teaching` 一致，不累积历史切换）。
   */
-function boundFor(scope: Scope, t: TeachingSessionApi): string {
+function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
     // 绑定只认三种情形（2026-09-18）：目录里选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。
     // 不再把默认根节点拼进绑定——那会让「从目录随便打开一个文件」显示成节点「根目录文件」。
@@ -321,7 +321,7 @@ function boundFor(scope: Scope, t: TeachingSessionApi): string {
   线程正文的真源在引擎库（chat_session + chat_message），这里只是入口——切哪条就按 threadId 回读哪条的历史。
   删除是软删：列表与正文从此看不见，库里的行与 journal 的审计事件都还在，所以二次确认把这话说明白。
   */
-function SessionBar({ scope, t }: { scope: Scope; t: TeachingSessionApi }): ReactElement {
+function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
   const list = t.chatThreads[scope];
   const currentId = t.currentThreadId[scope];
   const current = list.find((thread) => thread.id === currentId);

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
-import type { GuardCandidate } from "./verify.js";
+import type { GuardCandidate } from "./guard-proposal.js";
 
 /**
   练习题生成的 LLM 润色层（单轮调用）：
@@ -107,7 +107,7 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
 /**
   LLM 出题（llm 族，单轮调用）：规则侧只提供候选源码摘录与用户主题标签，
   「能否出题」的判定与出题合并在同一轮——无意义标签 / 素材不足时模型拒绝并给出面向学习者的理由。
-  返回的 proposal 仍需过 exercises/verify.ts 的确定性守门才允许落库。
+  返回的 proposal 仍需过 exercises/guard-proposal.ts 的确定性守门才允许落库。
   */
 export type LlmGeneration =
   | { ok: false; reason: string }

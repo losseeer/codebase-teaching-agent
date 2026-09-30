@@ -7,7 +7,7 @@ import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, Reposit
 import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
 import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
-import { summarizeCost } from "../cost/service.js";
+import { summarizeCost } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
@@ -17,7 +17,7 @@ import { indexRepository } from "../indexer/indexer.js";
 import { RepositoryWatcher } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
 import { verifyAnalysis } from "../quality/checker.js";
-import { createSummaryProvider } from "../summarizer/provider.js";
+import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal } from "../store/journal.js";

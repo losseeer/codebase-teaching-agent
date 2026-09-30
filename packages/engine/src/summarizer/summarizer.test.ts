@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { SymbolInfo } from "@codebase-tutor/shared";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
-import { LocalSummaryProvider, type SummaryProvider } from "./provider.js";
+import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./slice.js";
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
 

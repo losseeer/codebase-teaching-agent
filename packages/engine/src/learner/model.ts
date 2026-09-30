@@ -1,5 +1,5 @@
 import type { JournalEvent, LearnerProfile, MasteryMapEntry, RecommendedTutorSettings, TutorSettings } from "@codebase-tutor/shared";
-import { deriveMastery } from "../exercises/learner.js";
+import { deriveMasteryMap } from "./mastery.js";
 import { deriveFaded } from "./faded.js";
 
 function average(values: number[]): number | null {
@@ -21,23 +21,6 @@ function recommend(entries: MasteryMapEntry[]): RecommendedTutorSettings {
     return { settings: { style: 0, pedagogy: "practice", depth: "micro" }, confidence: attempts >= 4 ? "high" : "medium", reason: "连续通过且依赖事件为零，逐步减少解释并切换到微观练习。" };
   }
   return { settings: { style: 50, pedagogy: "socratic", depth: "macro" }, confidence: attempts ? "medium" : "low", reason: "证据处于过渡区间，保持中性风格和苏格拉底式引导。" };
-}
-
-export function deriveMasteryMap(events: JournalEvent[]): MasteryMapEntry[] {
-  const records = deriveMastery(events);
-  return records.map((record) => {
-    const unitEvents = events.filter((event) => event.payload.unit_id === record.unitId || event.payload.target_unit_id === record.unitId);
-    const hints = unitEvents.filter((event) => event.type === "hint_depth").map((event) => Number(event.payload.depth)).filter(Number.isFinite);
-    const dependencies = unitEvents.filter((event) => event.type === "dependency_event").length;
-    const stage = [...unitEvents].reverse().find((event) => typeof event.payload.stage === "string")?.payload.stage;
-    return {
-      ...record,
-      successRate: record.attempts ? record.successes / record.attempts : 0,
-      dependencyEvents: dependencies,
-      averageHintDepth: average(hints),
-      ...(stage ? { lastStage: stage as MasteryMapEntry["lastStage"] } : {})
-    };
-  });
 }
 
 export function deriveLearnerProfile(repositoryId: string, events: JournalEvent[], now = new Date()): LearnerProfile {

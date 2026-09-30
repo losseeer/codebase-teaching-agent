@@ -201,9 +201,9 @@ const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 
   代码示例里的三元 `?` 可能造成极个别假通过——读数只用于回归对比，不当绝对分。
   */
 export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
-  const socratic: InvariantCheck = { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", applicable: 0, pass: 0, misses: [], source: "policy.ts「每轮保留一个可验证的问题」" };
+  const socratic: InvariantCheck = { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", applicable: 0, pass: 0, misses: [], source: "tutor-settings.ts「每轮保留一个可验证的问题」" };
   const refs: InvariantCheck = { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", applicable: 0, pass: 0, misses: [], source: "锚点可靠性纪律（第 1 刀同一口径）" };
-  const binding: InvariantCheck = { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", applicable: 0, pass: 0, misses: [], source: "policy.ts「将问题绑定到当前源码锚点」" };
+  const binding: InvariantCheck = { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", applicable: 0, pass: 0, misses: [], source: "tutor-settings.ts「将问题绑定到当前源码锚点」" };
   let skippedTruncated = 0;
 
   for (const turn of turns) {

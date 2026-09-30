@@ -168,7 +168,7 @@ function lostInTransit(reason: unknown): boolean {
   return text.includes("连接中断") || text.includes("Failed to fetch") || text.includes("Load failed") || text.includes("NetworkError");
 }
 
-export interface TeachingSessionApi {
+export interface ScopedChatApi {
   scope: Scope;
   setScope: (next: Scope) => void;
 
@@ -243,12 +243,14 @@ export interface TeachingSessionApi {
 }
 
 /**
-  代码教学 + Agent 侧栏共享的单一状态源。
-  - App.tsx 调用一次，把返回值 prop drill 给 TutorPage + AgentRail
-  - TutorPage 只读 session.selected/settings/learner/faded/cost（用于渲染阶梯 + 锚点 + 成本 chip）
+  三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）。
+  命名口径：本对象管的是**线程**（threadId / ThreadItem / chatThreads）；`session` 字段是引擎的 TutorSession
+  （教学作用域的在途状态：stage / fallbackCount / settings）。同一条教学会话三个名字——库里 `chat_session` 行
+  = GUI 的 threadId = 引擎的 sessionId，id 一致，只是各层叫法不同。
+  - TutorPage 只读 chat.selected/settings/learner/faded/cost（阶梯 + 锚点 + 成本 chip）
   - AgentRail 写入 content / send / scope / pushMessage
   */
-export function useTeachingSession(repositoryId: string): TeachingSessionApi {
+export function useScopedChat(repositoryId: string): ScopedChatApi {
   const [scope, setScopeRaw] = useState<Scope>(loadInitialScope);
   useEffect(() => {
     try { localStorage.setItem(SCOPE_STORAGE_KEY, scope); } catch { /* 持久化失败不回退 */ }

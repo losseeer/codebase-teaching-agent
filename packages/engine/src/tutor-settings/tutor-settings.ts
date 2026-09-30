@@ -5,7 +5,7 @@ export const defaultTutorSettings: TutorSettings = { style: 50, pedagogy: "socra
 
 /**
   style → 三档的判据与展示名定义在 `@codebase-tutor/shared`（STYLE_BAND_THRESHOLDS / styleBand / STYLE_BAND_LABEL），
-  这里只做转发，让 engine 内部按老路径 `policy.js` 取用，同时 GUI 能与 engine 用同一份阈值。
+  这里只做转发（本模块曾用名 policy/），同时 GUI 与 engine 共用同一份阈值。
   */
 export { STYLE_BAND_LABEL, styleBand };
 

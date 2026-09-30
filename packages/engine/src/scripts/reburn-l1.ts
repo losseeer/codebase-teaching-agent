@@ -6,7 +6,7 @@ import { indexRepository } from "../indexer/indexer.js";
 import { graphFromData } from "../depgraph/graph.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
-import { createSummaryProvider, LocalSummaryProvider } from "../summarizer/provider.js";
+import { createSummaryProvider, LocalSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 

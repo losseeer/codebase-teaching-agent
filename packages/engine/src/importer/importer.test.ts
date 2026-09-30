@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "../lib.js";
 import { TutorDatabase } from "../store/database.js";
-import { ImportService, refinementIsFresh, type ImportedRepository } from "./service.js";
+import { ImportService, refinementIsFresh, type ImportedRepository } from "./importer.js";
 
 /** 构造一个带完整 .tutor 持久化数据的最小仓库目录（走 TutorDatabase 真实写库）。 */
 function makePersistedRepo(root: string, name: string): { repoDir: string; repositoryId: string } {

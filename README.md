@@ -39,26 +39,31 @@
 │   │       ├── harness/         #   教学回复编排（上下文组装 + 动作守门 + LLM 措辞 + 降级）
 │   │       ├── teaching/        #   教学状态机：阶段转移（orient→…→confirmed）、意图分类
 │   │       │                    #   （正则 / LLM 单轮）、动作菜单提议 + 守门校验（agent loop）
-│   │       ├── policy/          #   教学设置（风格/教学法/层次）与校验
-│   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习
-│   │       ├── learner/         #   学习者画像 / 掌握度 / 渐隐提示
+│   │       ├── tutor-settings/  #   教学设置（风格/教学法/层次）与校验、由设置推导 TeachingPolicy
+│   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习、ZPD 选题
+│   │       ├── learner/         #   学习者画像 / 掌握度推导（mastery.ts）/ 渐隐提示
+│   │       ├── scopechat/       #   宏观设计与练习两作用域的对话（上下文 + 受限读码工具循环）
+│   │       ├── source/          #   只读源码工具：read_file / search_code / 摘录 / tool-loop
 │   │       ├── cost/            #   token 用量汇总与月度预算
-│   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移）
+│   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移 / 中止归因）
 │   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）
 │   │       ├── turns/           #   在途回合注册表（「停止生成」的带外落点，按 turnId 掐断 signal）
-│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit）
+│   │       ├── eval/            #   离线评测：零 token 判分器（scorers）+ LLM 裁判（judge）
+│   │       ├── trace/           #   请求 traceId 上下文 + 引擎自身 JSONL 日志
+│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace）
 │   │       └── lib.ts           #   hash / id / 路径工具
 │   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
 │   │   ├── public/              #   design-prototype.html（界面基线）+ 截图
 │   │   └── src/
 │   │       ├── App.tsx          #   shell + 侧栏导航 + 单主区 Workbench
 │   │       ├── views/           #   宏观设计 / 代码教学 / 练习评估 / 导入 / 成本监控
-│   │       ├── agent/           #   持久 Agent 侧栏 + useTeachingSession 状态源
+│   │       ├── agent/           #   持久 Agent 侧栏 + useScopedChat 状态源
 │   │       ├── map/             #   DepMap 架构视图（分层自动布局 + 依赖箭头）/ FlowMap 流程视图（LLM 环节 + 重试）
 │   │       ├── modules/         #   知识模块面板（localStorage 持久化）+ toast
 │   │       ├── source/          #   只读源码查看器（行高亮）
 │   │       ├── api/             #   REST 客户端
-│   │       ├── journal/ scope/  #   预留目录（UI 事件 / 作用域可见范围，仅 README）
+│   │       ├── journal/         #   UI 事件埋点：POST 进引擎同一条 .tutor journal（localStorage 重试队列）
+│   │       ├── scope/           #   仅设计说明（作用域可见范围），实现未抽离
 │   │       └── styles/          #   全局样式（页面不滚动，组件内滚动）
 │   └── shared/                  # 前后端共享类型定义
 ├── e2e/                         # Playwright 端到端测试
@@ -67,6 +72,14 @@
 ├── .env.example                 # LLM Provider 配置模板
 └── turbo.json / pnpm-workspace.yaml
 ```
+
+## 命名口径
+
+文件名是唯一的注释入口，所以口径写死在这里（2026-09-30 按此收敛了一轮）：
+
+- **模块主入口与目录同名**：`harness/harness.ts`、`importer/importer.ts`、`cost/cost.ts`、`scopechat/scopechat.ts`；其余文件按内容命名（`exercises/sm2.ts`、`coursetree/entry-suggest.ts`）。不再新增 `service.ts` 这类零信息名。
+- **一个词只指一件事**：`provider` 只指 LLM 提供方（`llm/provider.ts`，摘要侧改叫 `summarizer/summary-provider.ts`）；`verify` 只指分析结果体检（`quality/checker.ts` 的 `verifyAnalysis`），LLM 出题的确定性否决归到 `exercises/guard-proposal.ts`；掌握度推导统一在 `learner/mastery.ts`，练习侧只留 ZPD 选题 `exercises/zpd.ts`；教学设置与 `TeachingPolicy` 推导从 `policy/` 移到 `tutor-settings/`。
+- **同一条教学会话有三个名字，但只有一个 id**：库里 `chat_session` 的行 id = GUI 的 `threadId` = 引擎的 `sessionId`。GUI 侧一律讲"线程"（`useScopedChat` / `chatThreads` / `ThreadItem`），`TutorSession` 专指引擎那份在途教学状态（stage / fallbackCount / settings）。DB 表名与 `sessionId` 字段刻意不改：它们已写进存量库和 journal，改名等于要求所有已导入仓库做迁移。
 
 ## 分析排除规则
 

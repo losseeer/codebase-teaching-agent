@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { indexRepository } from "../indexer/indexer.js";
 import { TutorDatabase } from "../store/database.js";
-import { LocalSummaryProvider } from "../summarizer/provider.js";
+import { LocalSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { buildDependencyGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";

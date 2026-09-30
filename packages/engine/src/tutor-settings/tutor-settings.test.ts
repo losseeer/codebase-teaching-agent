@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { policyFor, validateSettings } from "./policy.js";
+import { policyFor, validateSettings } from "./tutor-settings.js";
 
 describe("continuous tutor policy", () => {
   it("keeps pedagogy and depth independent from the style spectrum", () => {

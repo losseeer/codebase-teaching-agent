@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Code2, Eye, X } from "lucide-react";
 import type { CourseNode, CourseNodeDetail, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
-import type { TeachingSessionApi } from "../agent/useTeachingSession";
+import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, flatten, Loading, MicroDetail } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
@@ -46,7 +46,7 @@ export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   return "概览";
 }
 
-export function CoursePage({ workspace, session: t }: { workspace: Workspace; session: TeachingSessionApi }): ReactElement {
+export function CoursePage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [index, setIndex] = useState<RepositoryIndex | null>(null);
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);

@@ -7,21 +7,21 @@ import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TeachingStage, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
-import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/service.js";
+import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { fileStructureOf } from "./depgraph/roles.js";
-import { ExerciseService } from "./exercises/service.js";
+import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
-import { ImportService } from "./importer/service.js";
+import { ImportService } from "./importer/importer.js";
 import { indexRepository } from "./indexer/indexer.js";
 import { id, isWithin, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
-import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./policy/policy.js";
-import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/provider.js";
+import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./tutor-settings/tutor-settings.js";
+import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
@@ -35,7 +35,7 @@ import { deriveLearnerProfile } from "./learner/model.js";
 import { LlmAbortedError, resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
-import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/service.js";
+import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/scopechat.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
 loadDotEnv();
@@ -90,23 +90,26 @@ let lightLlmProvider = buildLlmRuntimeProvider("light");
 const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
 tboot("createLlmProvider");
 
-const sessions = new Map<string, TutorSession>();
+const teachingStates = new Map<string, TutorSession>();
 
 /**
-  会话解析：内存命中直接返回；未命中（引擎重启把内存 Map 清零）时按 sessionId 从**该仓的 chat_session /
-  chat_message** 装配回内存。缺最低证据（线程不在、已软删、或状态快照字段不齐）就返回 undefined——
+  在途教学状态的缓存：key 是 sessionId（= chat_session 的线程 id = GUI 的 threadId，同一个 id 三个名字）。
+  库里那份才是真源，本 Map 只是省掉每回合重装配；引擎重启必然清零，所以「未命中」是常态而非异常。
+
+  会话解析：内存命中直接返回；未命中时按 sessionId 从**该仓的 chat_session / chat_message** 装配回内存。
+  缺最低证据（线程不在、已软删、或状态快照字段不齐）就返回 undefined——
   调用方照旧 404/400 让 GUI 走新建，绝不编造半截会话。
 
   09-27 起真源是这两张表，journal 重放（旧 harness/restore.ts）退役：审计线继续按自己的口径记截断摘要，
   但「接着聊」不该依赖审计摘要的 2000 字截断。
   */
-function resolveSession(sessionId: string): TutorSession | undefined {
-  const live = sessions.get(sessionId);
+function resolveTeachingState(sessionId: string): TutorSession | undefined {
+  const live = teachingStates.get(sessionId);
   if (live) return live;
   for (const repository of importer.mountedRepositories()) {
     const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
     if (restored) {
-      sessions.set(restored.id, restored);
+      teachingStates.set(restored.id, restored);
       return restored;
     }
   }
@@ -212,7 +215,7 @@ function sanitizeThreadId(value: unknown): string | undefined {
 
 /**
   线程正文 → 模型上下文：最近 6 条进「最近对话」窗口，窗口外只留学习者提问作问题脉络。
-  两条口径（6 条 / 8 条、逐行截断）住在 scopechat/service.ts 的渲染常量里，这里只负责选行。
+  两条口径（6 条 / 8 条、逐行截断）住在 scopechat/scopechat.ts 的渲染常量里，这里只负责选行。
 
   它替换掉的是「客户端回传 history + earlierQuestions」那条通路（09-27 会话持久化）：
   进模型上下文的东西必须能在库里考据到——客户端临时拼的窗口正文既可能是旧的、也可能被改，
@@ -828,7 +831,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
   // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
   const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, courseNodeId: node.id, title: node.title });
   saveThreadState(repository.path, session.id, { stage: session.stage, fallbackCount: session.fallbackCount, settings: session.settings });
-  sessions.set(session.id, session);
+  teachingStates.set(session.id, session);
   const journal = new Journal(repository.path, repository.index.repositoryId);
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
   journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
@@ -836,7 +839,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
-  const session = resolveSession(request.params.sessionId);
+  const session = resolveTeachingState(request.params.sessionId);
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
@@ -912,13 +915,13 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
   const located = locateThread(request.params.threadId);
   if (!located || !softDeleteThread(located.repository.path, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
-  sessions.delete(located.thread.id);
+  teachingStates.delete(located.thread.id);
   new Journal(located.repository.path, located.repository.index.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
   return { deleted: true, threadId: located.thread.id };
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
-  const current = resolveSession(request.params.sessionId);
+  const current = resolveTeachingState(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   const repository = repositoryOr404(current.repositoryId);
   const node = repository && flatten(repository.course.root).find((item) => item.id === current.courseNodeId);
@@ -951,7 +954,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     // 用户点了停止就按「作废」收尾——不落库、不回放，否则 GUI 那句「这一轮没有落库」成了假话，
     // 下次进会话还会冒出一条自己掐掉的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
-    sessions.set(outcome.session.id, outcome.session);
+    teachingStates.set(outcome.session.id, outcome.session);
     // 回合正文 + 状态快照落库：GUI 重启后接着聊、以及 run-trace 之外的「这一轮停在哪」都从这里取
     persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
       { role: "user", content: request.body.content.trim() },
@@ -1005,7 +1008,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   - 白名单与 `Journal.append` **共用**（`isJournalEventType`），不另立一份，避免两处漂移。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
-    sessionId 是关联属性而非外键。教学会话虽已能按 sessionId 从 journal 续命恢复（`resolveSession`），
+    sessionId 是关联属性而非外键。教学会话虽已能按 sessionId 从 journal 续命恢复（`resolveTeachingState`），
     但 map/practice 对话本就没有会话态、重启窗口期内也查不到——若按外键拒绝，前端会把能写的事件丢掉，
     那才是真的把可观测性弄丢。
   */

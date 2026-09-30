@@ -1,7 +1,7 @@
 import type { RubricCriterion } from "@codebase-tutor/shared";
 
 /**
-  LLM 出题守门（propose + verify 中的 verify 端）：全部确定性检查，任一不过即否决整道题。
+  LLM 出题守门（propose 之后的确定性一端）：全部确定性检查，任一不过即否决整道题。
   ① 契约检查——字段齐全、长度受控；
   ② 事实检查——锚点必须落在出题时提供的候选摘录集合内（防幻觉，拦「该拒不拒、硬编无关题」）；
   ③ 泄漏检查——题面不得包含参考答案片段。
