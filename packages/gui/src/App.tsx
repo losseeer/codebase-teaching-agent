@@ -118,8 +118,11 @@ export function App(): ReactElement {
   const pending = engineUnreachable && workspace
     ? <EngineOffline repositoryPath={workspace.repositoryPath} onRetry={() => { setProbeNonce((value) => value + 1); }} />
     : <Loading />;
+  // Agent 侧栏只属于有对话可谈的路由：导入页还没有工作区语义，挂着它既没绑定对象又挤扁导入表单
+  const location = useLocation();
+  const showRail = !!workspace && location.pathname !== "/import";
   return (
-    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " no-rail"}`}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark"><Sparkles size={17} /></span>
@@ -153,7 +156,7 @@ export function App(): ReactElement {
           <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
         </Routes>
       </main>
-      {workspace ? <AgentRail chat={chat} /> : null}
+      {showRail ? <AgentRail chat={chat} /> : null}
       <ToastHost />
     </div>
   );

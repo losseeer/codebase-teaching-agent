@@ -366,14 +366,55 @@ export interface RepositoryFlowResult {
   reason?: string;
 }
 
+/** 一个计费档位：输入拆「未命中 / 缓存命中」两档价，输出单独一档。 */
+export interface CostComponent {
+  label: "未命中输入" | "命中输入（缓存）" | "输出";
+  tokens: number;
+  ratePerMillionUsd: number;
+  /** true = 命中价没单独配置，按输入价计（不打折：宁可高估，也不要把花掉的钱说少） */
+  rateFallback: boolean;
+  estimatedCostUsd: number;
+}
+
+/** 成本聚合的一个分桶（按场景或按 provider），一条 `token_usage` 记一个回合。 */
+export interface CostBucket {
+  label: string;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** 按自然日（本地时区无关，取 journal `at` 的前 10 位）聚合的用量，画近期条形用。 */
+export interface CostDay {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface CostSummary {
   sessionId?: string;
+  /** 输入总用量（含命中那部分，与 provider 的 prompt_tokens 同口径） */
   inputTokens: number;
+  /** 按未命中价计费的那部分输入 = inputTokens − cacheHitTokens（逐条相减后求和，不为负） */
+  billedInputTokens: number;
+  /** 命中前缀缓存、按命中价计费的那部分输入；provider 没上报时为 0 */
+  cacheHitTokens: number;
   outputTokens: number;
   estimatedCostUsd: number;
   monthlyBudgetUsd: number;
   remainingBudgetUsd: number;
   mode: "normal" | "degraded";
+  /** 本月计入的回合数 */
+  turns: number;
+  /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
+  costComponents: CostComponent[];
+  /** 三档单价是否全未配置（`TUTOR_INPUT_USD_PER_MILLION` / `TUTOR_CACHE_HIT_USD_PER_MILLION` / `TUTOR_OUTPUT_USD_PER_MILLION`）；false 时金额恒为 0 */
+  pricingConfigured: boolean;
+  /** 因预算触顶而走本地规则（不付 token）的回合数 */
+  degradedTurns: number;
+  byScene: CostBucket[];
+  byProvider: CostBucket[];
+  byDay: CostDay[];
 }
 
 export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis" | "llm_rubric";

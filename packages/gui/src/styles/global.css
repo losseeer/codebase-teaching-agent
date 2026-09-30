@@ -12,6 +12,9 @@ button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 .shell { height: 100%; display: grid; grid-template-columns: 224px minmax(0, 1fr) 348px; overflow: hidden; }
+/* 没有 Agent 侧栏的路由（导入页）要把第三列一起收掉，否则留一条 348px 空缝 */
+.shell.no-rail { grid-template-columns: 224px minmax(0, 1fr); }
+.shell.sidebar-collapsed.no-rail { grid-template-columns: 64px minmax(0, 1fr); }
 .agent-rail { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: 1px solid #d3e0d7; background: #fff; overflow: hidden; }
 .agent-rail > * { flex: 0 0 auto; }
 /* thread 是唯一弹性段：无论前面有几段（教学作用域多一段语言风格），composer 始终沉底 */
@@ -134,22 +137,43 @@ input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { displ
 .tutor-header-compact h1, .course-header-compact h1, .practice-header-compact h1 { margin: 0; font-size: 16px; font-weight: 700; color: #17352c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .course-header-compact .course-meta, .practice-header-compact .practice-meta { margin-left: auto; }
 .course-header-compact .course-meta, .practice-header-compact .practice-meta { flex: 0 0 auto; }
-.insights-grid { display: grid; grid-template-columns: minmax(0, 430px); gap: 18px; margin-top: 38px; }
-.insights-error { margin: 16px 0 -20px; }.insight-panel { padding: 22px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; }.panel-title { display: flex; align-items: center; gap: 8px; color: #27614c; }.panel-title h2 { margin: 0; }.metric { display: block; font-size: 32px; margin: 24px 0 4px; }.mode-label { display: inline-block; padding: 4px 7px; border-radius: 4px; background: #e5f2df; color: #2e644a; font-size: 12px; font-weight: 700; }.mode-label.degraded { background: #f9e5e1; color: #963f34; }.budget-field { display: grid; gap: 7px; margin-top: 23px; color: #527164; font-size: 12px; font-weight: 700; }.budget-field > span { display: flex; gap: 8px; }.budget-field input { width: 100%; padding: 8px; }.insight-panel > .primary { margin-top: 18px; }
+/* 成本监控页：一屏读数（金额 + 预算 + 明细分桶 + 逐日用量），原「仓库设置 / 学习者模型」两栏已下线 */
+.cost-toolbar { display: flex; align-items: center; gap: 10px; }
+.panel-title { display: flex; align-items: center; gap: 8px; color: #27614c; }
+.panel-title h2 { margin: 0; }
+.mode-label { display: inline-block; padding: 4px 7px; border-radius: 4px; background: #e5f2df; color: #2e644a; font-size: 12px; font-weight: 700; }
+.mode-label.degraded { background: #f9e5e1; color: #963f34; }
+.budget-field { display: grid; gap: 7px; margin-top: 18px; color: #527164; font-size: 12px; font-weight: 700; }
+.budget-field > span { display: flex; gap: 8px; }
+.budget-field input { width: 100%; padding: 8px; }
+.cost-stamp { color: #678277; font-size: 12px; white-space: nowrap; }
+.cost-error { margin: -6px 0 0; }
+.cost-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 18px; margin-top: 30px; }
+.cost-amount-block, .cost-budget-block, .cost-table, .cost-days { padding: 20px; border: 1px solid #d8e3dc; border-radius: 7px; background: #fff; }
+.cost-amount { display: block; margin: 14px 0 6px; font-size: 40px; line-height: 1.1; color: #17372e; font-variant-numeric: tabular-nums; }
+.cost-amount-note { margin: 0 0 14px; color: #527164; font-size: 13px; }
+.cost-budget-head { display: flex; justify-content: space-between; gap: 10px; color: #527164; font-size: 12px; font-weight: 700; }
+.cost-bar { height: 10px; margin: 10px 0 12px; border-radius: 6px; background: #e3ece5; overflow: hidden; }
+.cost-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #84ab5d, #4f8a68); }
+.cost-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(158px, 100%), 1fr)); gap: 12px; }
+.readout { display: grid; gap: 6px; padding: 13px 14px; border: 1px solid #dce6df; border-radius: 7px; background: #fff; }
+.readout span { color: #678277; font-size: 12px; }
+.readout strong { color: #214a3a; font-size: 19px; font-variant-numeric: tabular-nums; }
+.cost-notice, .cost-empty { margin: 0; padding: 12px 14px; border-left: 3px solid #d9b45b; border-radius: 0 6px 6px 0; background: #fdf7e8; color: #6b5320; font-size: 13px; }
+.cost-notice code { color: #6b5320; }
+.cost-empty { border-left-color: #a9c97d; background: #f7faf7; color: #527164; }
+.cost-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 18px; }
+.cost-table table { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 13px; }
+.cost-table th { padding: 0 0 6px; border-bottom: 1px solid #e3ece5; color: #678277; font-size: 11px; font-weight: 700; text-align: right; }
+.cost-table td { padding: 7px 0; border-bottom: 1px solid #f0f5f1; color: #29473b; text-align: right; font-variant-numeric: tabular-nums; }
+.cost-table th:first-child, .cost-table td:first-child { text-align: left; }
+.cost-table tr:last-child td { border-bottom: 0; }
+.cost-table td code { display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #29473b; }
+.cost-days-track { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; margin-top: 14px; }
+.cost-day { display: grid; justify-items: center; gap: 4px; }
+.cost-day i { width: min(100%, 26px); border-radius: 3px 3px 0 0; background: #84ab5d; }
+.cost-day span { color: #678277; font-size: 10px; }
 .practice-meta { display: flex; gap: 8px; flex-wrap: wrap; }.practice-meta span, .difficulty { color: #285b48; background: #e2efdf; border-radius: 4px; padding: 5px 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }.practice-empty { min-height: 330px; display: grid; place-content: center; justify-items: center; text-align: center; color: #6f897d; border-top: 1px solid #dbe5df; }.practice-empty p { max-width: 280px; margin-top: 12px; }.practice-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 285px; border: 1px solid #d6e1da; border-radius: 7px; overflow: hidden; background: #fff; min-height: 500px; }.exercise-prompt { color: #29483c; font-size: 15px; max-width: 780px; margin: 24px 0 16px; }.starter { display: grid; place-items: center; align-content: center; min-height: 380px; color: #709084; text-align: center; }.starter p { max-width: 270px; font-size: 14px; }.message { max-width: min(760px, 92%); margin-bottom: 21px; }.message span { display: block; color: #6e877c; font-size: 11px; font-weight: 700; margin-bottom: 5px; }.message p { margin: 0; padding: 11px 13px; border-radius: 5px; background: #f1f6f2; color: #29473b; font-size: 14px; white-space: pre-wrap; }.message.user { margin-left: auto; }.message.user p { background: #17372e; color: #fff; }.message.user span { text-align: right; }.message.streaming i { display: inline-block; width: 6px; height: 14px; margin-left: 3px; vertical-align: -2px; background: #477261; animation: cursor 1s steps(2, start) infinite; }.composer { border-top: 1px solid #dce6df; padding: 13px 16px; display: flex; gap: 10px; align-items: end; }.composer textarea { resize: none; padding: 9px; flex: 1; line-height: 1.45; font-size: 14px; }.icon-button { height: 39px; width: 39px; padding: 0; }.spin { animation: spin .9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes cursor { to { visibility: hidden; } }.loading, .empty-state { min-height: 60vh; display: grid; place-content: center; gap: 10px; color: #618073; }.loading { grid-auto-flow: column; } .empty-state { justify-items: center; text-align: center; }
-.learner-panel { margin-top: 18px; border: 1px solid #d6e1da; border-radius: 7px; padding: 20px; background: #fff; }
-.learner-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.learner-summary > div { display: grid; gap: 6px; padding: 12px; background: #f7faf7; border-left: 3px solid #a9c97d; }
-.learner-summary span { color: #678277; font-size: 12px; }
-.learner-summary strong { color: #214a3a; font-size: 18px; }
-.learner-summary small { color: #527164; line-height: 1.5; }
-.mastery-map { display: grid; gap: 9px; margin-top: 18px; }
-.mastery-row { display: grid; grid-template-columns: minmax(120px, 1.3fr) minmax(100px, 2fr) 42px 76px; gap: 10px; align-items: center; font-size: 12px; }
-.mastery-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mastery-row strong { color: #245940; }
-.mastery-row small { color: #678277; text-align: right; }
-.mastery-track { height: 8px; border-radius: 5px; background: #e3ece5; overflow: hidden; }
-.mastery-track i { display: block; height: 100%; border-radius: inherit; background: #84ab5d; }
 .muted { color: #678277; font-size: 13px; }
 
 /* ---- v0.3 工作区共享外框（对齐 prototype .workspace-tabs / .context-line / .mobile-switcher）---- */
@@ -445,7 +469,10 @@ button.entry-item:hover { background: #eef6ef; }
 /* 折叠为单列（隐藏 Agent 侧栏）的阈值定在 720px 而非 960px：
    DevTools 停靠会把视口压到 960px 以下，若在此隐藏 .agent-rail，桌面调试时对话栏会消失。 */
 @media (max-width: 720px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }.agent-rail { display: none; }.sidebar { min-width: 0; min-height: auto; padding: 12px 16px; position: sticky; top: 0; z-index: 2; }.brand { min-width: 0; padding: 0 0 10px; }.sidebar nav { min-width: 0; max-width: 100%; display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: thin; }.nav-item { flex: 1 0 126px; justify-content: center; font-size: 12px; padding: 8px 4px; }.sidebar-bottom { display: none; }.practice-workspace { grid-template-columns: minmax(0, 1fr) 235px; }
+  .shell { grid-template-columns: minmax(0, 1fr); }.agent-rail { display: none; }
+  /* 单列档下 no-rail 不能反过来把左右两栏抢回来（两位类名特异度高于媒体查询里的 .shell） */
+  .shell.no-rail, .shell.sidebar-collapsed.no-rail { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { min-width: 0; min-height: auto; padding: 12px 16px; position: sticky; top: 0; z-index: 2; }.brand { min-width: 0; padding: 0 0 10px; }.sidebar nav { min-width: 0; max-width: 100%; display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: thin; }.nav-item { flex: 1 0 126px; justify-content: center; font-size: 12px; padding: 8px 4px; }.sidebar-bottom { display: none; }.practice-workspace { grid-template-columns: minmax(0, 1fr) 235px; }
   .teaching-workspace { grid-template-columns: 1fr; }
   .teaching-workspace > div + div { border-left: 0; border-top: 1px solid #d9e5dd; }
   .pane-hidden-mobile { display: none; }
@@ -455,7 +482,7 @@ button.entry-item:hover { background: #eef6ef; }
   .module-body { max-height: 420px; }
 }
 @media (max-width: 840px) { .practice-workspace { grid-template-columns: 1fr; } }
-@media (max-width: 640px) { .page, .course-page, .tutor-page { padding: 25px 16px; }.path-row { flex-direction: column; align-items: stretch; }.report-grid { grid-template-columns: 1fr 1fr; }.report-actions { grid-column: 1 / -1; }.tutor-header-compact, .course-header-compact, .practice-header-compact { flex-wrap: wrap; }.tutor-header-compact h1, .course-header-compact h1, .practice-header-compact h1 { white-space: normal; }.micro-detail, .insights-grid { grid-template-columns: 1fr; }.difficulty { display: inline-block; margin-top: 12px; }.nav-item { flex: 0 0 105px; min-width: 105px; }.nav-item svg { display: none; }.learner-summary { grid-template-columns: 1fr; }.mastery-row { grid-template-columns: minmax(100px, 1fr) minmax(80px, 1.4fr) 36px; }.mastery-row small { display: none; } }
+@media (max-width: 640px) { .page, .course-page, .tutor-page { padding: 25px 16px; }.path-row { flex-direction: column; align-items: stretch; }.report-grid { grid-template-columns: 1fr 1fr; }.report-actions { grid-column: 1 / -1; }.tutor-header-compact, .course-header-compact, .practice-header-compact { flex-wrap: wrap; }.tutor-header-compact h1, .course-header-compact h1, .practice-header-compact h1 { white-space: normal; }.micro-detail, .cost-hero, .cost-columns { grid-template-columns: 1fr; }.difficulty { display: inline-block; margin-top: 12px; }.nav-item { flex: 0 0 105px; min-width: 105px; }.nav-item svg { display: none; }.cost-amount { font-size: 32px; } }
 
 /* ---- 实时源码的多文件 tabs（含关闭）---- */
 .source-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; }

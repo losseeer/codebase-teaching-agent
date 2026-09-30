@@ -129,11 +129,6 @@ export const api = {
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => request<CostSummary>(`/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
-  /** 每仓设置视图：预算 + 「摘要参考注释」开关（默认关，见 engine summarizer）。 */
-  getRepositorySettings: (repositoryId: string) => request<{ monthlyBudgetUsd: number; summaryHeaderComments: boolean }>(`/api/repositories/${repositoryId}/settings`),
-  setSummaryHeaderComments: (repositoryId: string, enabled: boolean) => request<CostSummary & { settings: { monthlyBudgetUsd: number; summaryHeaderComments: boolean } }>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ summaryHeaderComments: enabled }) }),
-  /** 按当前开关状态重烧 L1 摘要（切开关后必须调用才生效；409=确定性档，会拒绝覆盖）。 */
-  rebuildSummaries: (repositoryId: string) => request<ImportEstimate>(`/api/repositories/${repositoryId}/summaries/rebuild`, { method: "POST", body: "{}" }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   /** 按 id 取教学会话：内存未命中时引擎从 chat_session（含状态快照）+ chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),

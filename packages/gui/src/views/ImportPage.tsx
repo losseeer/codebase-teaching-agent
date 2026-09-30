@@ -85,7 +85,7 @@ export function ImportPage({ onImported, workspace }: Props): ReactElement {
         </div>
         <p className="import-mode-note">{commentMode
           ? "摘要生成时参考代码注释：注释写得多的仓库（面试讲解、课程作业类）中文概念词更容易被摘要带上、进而被搜到；代价是消耗更多 token。"
-          : "摘要只看代码结构，更省 token。需要更细的口径可打开「详细导入」重新导入，也可导入后在成本监控页开启「摘要参考注释」并重新生成摘要。"}</p>
+          : "摘要只看代码结构，更省 token。需要注释里的中文概念词也被摘要带上（面试讲解、课程作业类仓库），请在导入前打开「详细导入」——导入完成后不再提供该开关的修改入口，换口径需要重新导入。"}</p>
         {error && <p className="error-message">{error}</p>}
       </div>
       {job && (
