@@ -1,4 +1,5 @@
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { isLlmAborted } from "../llm/provider.js";
 import { classifyIntentRegex } from "./state-machine.js";
 import type { LearnerIntent, TeachingState } from "./state-machine.js";
 
@@ -16,8 +17,9 @@ const SYSTEM_PROMPT = [
   "输出契约：只输出一个标签（needs_help / confirmation / progress），不要解释、不要标点。"
 ].join("\n");
 
-/** LLM 单轮意图分类；任何失败（网络、空输出、非法标签）都回落正则分类，不阻塞教学回合。降级通过 source 字段显式暴露。 */
-export async function classifyIntent(state: TeachingState, learnerMessage: string, transcript: string[], provider: LlmProvider): Promise<IntentClassification> {
+/** LLM 单轮意图分类；任何失败（网络、空输出、非法标签）都回落正则分类，不阻塞教学回合。降级通过 source 字段显式暴露。
+    例外：外部中止（用户点停止）直接上抛，不伪装成「正则分类」这一层降级结论。 */
+export async function classifyIntent(state: TeachingState, learnerMessage: string, transcript: string[], provider: LlmProvider, signal?: AbortSignal): Promise<IntentClassification> {
   const user = [
     `教学阶段：${state.stage}`,
     "最近对话：",
@@ -25,13 +27,14 @@ export async function classifyIntent(state: TeachingState, learnerMessage: strin
     `学习者本轮输入：${learnerMessage}`
   ].join("\n");
   try {
-    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.intent" });
+    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.intent", ...(signal ? { signal } : {}) });
     const intent = parseLabel(completion.text);
     if (!intent) {
       return { intent: classifyIntentRegex(state, learnerMessage), source: "regex", usage: completion.usage };
     }
     return { intent, source: "llm", usage: completion.usage };
-  } catch {
+  } catch (error) {
+    if (isLlmAborted(error, signal)) throw error;
     return { intent: classifyIntentRegex(state, learnerMessage), source: "regex" };
   }
 }

@@ -1,4 +1,5 @@
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmUsage } from "../llm/provider.js";
+import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
@@ -15,6 +16,8 @@ import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type Search
   - 每轮调用前 micro_compact：更早轮次的 tool 结果压成占位符、早期 reasoningContent 丢弃
     （读取结果可再生，推理 token 是账单大头）；最近一轮 assistant 的 reasoningContent 保留（部分协议要求回传）；
   - 每次 read_file（含拒绝与失败）返回审计记录，由调用方记 journal file_read。
+  - `signal` 透传到每一轮 LLM 调用，并在开新一轮前检查：中止一律抛 LlmAbortedError 原样上抛，
+    不吞成「基于已有上下文直接回答」的收尾结论（那会把用户主动停止伪装成模型答完）。
   */
 
 export type ReadToolProgress = { type: "thinking"; round: number } | { type: "reading"; path: string } | { type: "searching"; query: string };
@@ -37,6 +40,8 @@ export interface ReadToolLoopInput {
   scene?: string;
   /** 提供时额外开放 search_code 工具（词法检索定位文件）；不提供则模型只有 read_file。 */
   search?: SearchCorpus;
+  /** 外部中止信号：透传给每一轮 LLM 调用，并在进入下一轮前检查（读文件是本地操作，不在此列）。 */
+  signal?: AbortSignal;
 }
 
 export interface ReadToolLoopResult {
@@ -54,13 +59,15 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const tools = input.search ? [READ_FILE_TOOL, SEARCH_CODE_TOOL] : [READ_FILE_TOOL];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
   input.onProgress?.({ type: "thinking", round: 1 });
-  let completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene });
+  let completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
   const fileReads: FileReadRecord[] = [];
   const codeSearches: CodeSearchRecord[] = [];
   let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
   let succeededReads = 0;
   while (completion.toolCalls?.length) {
+    // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
+    if (input.signal?.aborted) throw new LlmAbortedError();
     if (rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
       for (const call of completion.toolCalls) {
@@ -68,7 +75,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       input.onProgress?.({ type: "thinking", round: rounds + 2 });
       compactToolHistory(messages);
-      completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene });
+      completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene, signal: input.signal });
       usage = addUsage(usage, completion.usage);
       break;
     }
@@ -94,7 +101,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     input.onProgress?.({ type: "thinking", round: rounds + 1 });
     compactToolHistory(messages);
-    completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene });
+    completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     usage = addUsage(usage, completion.usage);
   }
   return { completion, usage, rounds, fileReads, codeSearches };

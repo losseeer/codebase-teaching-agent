@@ -230,7 +230,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
@@ -282,7 +282,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     maxCalls: MAP_MAX_TOOL_CALLS,
     scene: "map.chat",
     ...(input.search ? { search: input.search } : {}),
-    ...(input.onProgress ? { onProgress: input.onProgress } : {})
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    ...(input.signal ? { signal: input.signal } : {})
   });
   // token 触顶被掐断时明示边界（不静默半截句）
   const reply = flagTruncatedReply(result.completion.text, result.completion.finishReason === "length") || "（模型未返回内容，请重试。）";
@@ -297,7 +298,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   if (exercise.options?.length) {
@@ -310,7 +311,8 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     user: `练习上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的追问：${input.content}`,
     maxTokens: 700,
     temperature: 0.3,
-    scene: "practice.chat"
+    scene: "practice.chat",
+    ...(input.signal ? { signal: input.signal } : {})
   });
   return { reply: flagTruncatedReply(completion.text, completion.finishReason === "length"), provider: input.provider.name, usage: completion.usage, toolRounds: 0 };
 }

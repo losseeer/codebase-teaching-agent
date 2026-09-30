@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLlmProvider, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
+import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
 /** 构造一个 OpenAI chat.completions 形状的响应。 */
 function jsonResponse(payload: unknown): Response {
@@ -134,6 +134,25 @@ describe("OpenAICompatibleProvider", () => {
       messages: [{ role: "assistant", content: "上轮", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{}" }] }, { role: "tool", toolCallId: "c1", content: "r" }]
     });
     expect(JSON.stringify(captured)).not.toContain("reasoning_content");
+  });
+
+  it("外部 signal 挂到 fetch 的 signal 上，中止抛 LlmAbortedError 而不是超时文案", async () => {
+    const controller = new AbortController();
+    let handedSignal: AbortSignal | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      handedSignal = init?.signal ?? undefined;
+      handedSignal?.addEventListener("abort", () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    })) as typeof fetch;
+    // timeoutMs 故意给足：这里要证明的是「外部中止 ≠ 超时」，不是竞态
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl, timeoutMs: 5_000 });
+    const pending = provider.complete({ system: "s", user: "u", signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toBeInstanceOf(LlmAbortedError);
+    expect(handedSignal?.aborted).toBe(true);
   });
 });
 
@@ -303,5 +322,39 @@ describe("RetryLlmProvider", () => {
     const result = await provider.complete(INPUT);
     expect(result.text).toBe("late");
     expect(calls()).toBe(3);
+  });
+
+  it("中止不重试：哨兵错误立即上抛，只调一次", async () => {
+    const controller = new AbortController();
+    let count = 0;
+    const provider = new RetryLlmProvider({
+      name: "scripted",
+      modelVersion: "scripted:model",
+      async complete() {
+        count += 1;
+        controller.abort();
+        throw new LlmAbortedError();
+      }
+    }, 3);
+    await expect(provider.complete({ ...INPUT, signal: controller.signal })).rejects.toBeInstanceOf(LlmAbortedError);
+    expect(count).toBe(1);
+  });
+
+  it("裸 AbortError（响应体读取阶段被打断）也不重试，并归一成 LlmAbortedError", async () => {
+    const controller = new AbortController();
+    let count = 0;
+    const provider = new RetryLlmProvider({
+      name: "scripted",
+      modelVersion: "scripted:model",
+      async complete() {
+        count += 1;
+        controller.abort();
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+    }, 3);
+    await expect(provider.complete({ ...INPUT, signal: controller.signal })).rejects.toBeInstanceOf(LlmAbortedError);
+    expect(count).toBe(1);
   });
 });

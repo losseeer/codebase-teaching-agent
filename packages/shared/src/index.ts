@@ -570,6 +570,10 @@ export type JournalEventType =
   /** agent 回合的循环决策摘要（2026-09-27）：一回合一条，记「提议动作 → 守门裁决 → 实际执行」与工具循环轮次。
     practice 对话无 agent loop，不记本事件；veto 侧另有更早的 action_veto（学习语义口径，保留不并入）。 */
   | "loop_round"
+  /** 回合被用户主动停止（2026-09-30「停止生成」）：payload = scene(teach|map_chat|practice_chat) + turn_id +
+      aborted_by(恒为 user_stop)。与「客户端断开」刻意区分——后者引擎照常算完落库，不记本事件。
+      中止的一轮没有成品：不写 turn_text，也不伪造 assistant 正文。 */
+  | "turn_aborted"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"
@@ -601,10 +605,11 @@ export type TraceScalar = string | number | boolean | null;
   - import   导入任务（索引 → 摘要 → 建课 → LLM 润色的阶段推进与结果）
   - reindex  挂载仓库被写入触发的重分析
   - degrade  降级与预算熔断（不静默：降级必须留痕）
+  - turn_stop 用户点「停止生成」命中在途回合（对话语义本身在 journal 的 turn_aborted）
   - boot     启动分段计时
   LLM 调用明细不在此列——它落在 `~/.codebase-tutor/llm.log`，两处靠 traceId 关联（单一事实来源，不双写）。
   */
-export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "boot";
+export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "turn_stop" | "boot";
 
 export interface EngineTraceEvent {
   at: string;

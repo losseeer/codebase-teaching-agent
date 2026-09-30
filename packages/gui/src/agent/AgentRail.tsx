@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Check, Compass, GraduationCap, Pencil, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { Check, Compass, GraduationCap, Pencil, Plus, Send, Square, Trash2, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
 import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
@@ -197,9 +197,16 @@ export function AgentRail({ session: t }: { session: TeachingSessionApi }): Reac
             rows={3}
             // 生成期间不锁输入框：下一条问题可以预先打进去（发送按钮与 Enter 仍由 canSend 挡住，不会并发发请求）
           />
-          <button className="primary icon-button" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
-            {t.sending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}
-          </button>
+          {/* 生成中这颗按钮换成「停止」：整轮请求带 turnId，点了引擎就停手（省 token）、连接同时掐掉 */}
+          {t.sending ? (
+            <button className="primary icon-button" aria-label="停止生成" title="停止生成" type="button" onClick={t.stopTurn}>
+              <Square size={16} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="primary icon-button" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
+              <Send size={18} />
+            </button>
+          )}
         </form>
       </div>
     </aside>

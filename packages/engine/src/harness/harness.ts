@@ -1,7 +1,7 @@
 import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
-import { flagTruncatedReply } from "../llm/provider.js";
+import { flagTruncatedReply, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../policy/policy.js";
 import type { FileReadRecord } from "../source/read-file.js";
@@ -63,6 +63,9 @@ export interface RespondOptions {
   search?: SearchCorpus;
   /** 过程事件回调（可选；用于把「正在判断动作 / 正在读 xx 文件」推给 GUI）。 */
   onProgress?: (progress: TeachingProgress) => void;
+  /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）：贯穿动作提议/意图分类与措辞工具循环。
+      触发时 respondWithProvider 抛 LlmAbortedError 而**不**落确定性降级回复。 */
+  signal?: AbortSignal;
 }
 
 export function createSession(repositoryId: string, courseNodeId: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
@@ -99,7 +102,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
   if (options.actionLoop) {
     // 受限 agent loop：模型提议动作 → 守门校验 → 放行或否决。意图分类被动作提议取代。
-    const proposal = await proposeAction(state, learnerContent, recentTranscript(session.messages), context, provider);
+    const proposal = await proposeAction(state, learnerContent, recentTranscript(session.messages), context, provider, options.signal);
     proposedAction = proposal.action;
     decisionUsage = proposal.usage;
     if (proposedAction && isActionAllowed(state, proposedAction)) {
@@ -110,7 +113,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
       next = transition(state, learnerContent);
     }
   } else if (options.classifier) {
-    const classification = await classifyIntent(state, learnerContent, recentTranscript(session.messages), options.classifier);
+    const classification = await classifyIntent(state, learnerContent, recentTranscript(session.messages), options.classifier, options.signal);
     intentSource = classification.source;
     decisionUsage = classification.usage;
     next = transitionFromIntent(state, classification.intent);
@@ -124,24 +127,26 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
   const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
-    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) });
+    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     const completion = outcome.completion;
     // 可见回复的截断兜底：token 触顶（finishReason=length）或被这里 1,500 字符硬切，都要留痕
     return buildReply(session, node, learnerContent, () => flagTruncatedReply(completion.text.slice(0, 1_500), completion.finishReason === "length" || completion.text.length > 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, toolRounds: outcome.toolRounds, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });
-  } catch {
+  } catch (error) {
+    // 中止必须原样上抛：本地兜底文案看起来像答完了，会把「用户停了」伪装成一轮正常回复并落库
+    if (isLlmAborted(error, options.signal)) throw error;
     return buildReply(session, node, learnerContent, composeReply, "local-heuristic-v1", decisionUsage, undefined, intentSource, actions);
   }
 }
 
 /** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
     input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round });
   };
   if (!input.repositoryPath) {
     input.onProgress?.({ stage: "thinking", round: 1 });
-    const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2, scene: "teaching.turn" });
+    const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: 700, temperature: 0.2, scene: "teaching.turn", ...(input.signal ? { signal: input.signal } : {}) });
     return { completion, ...(completion.usage ? { usage: completion.usage } : {}), toolRounds: 0, fileReads: [], codeSearches: [] };
   }
   const result = await completeWithReadTool({
@@ -155,7 +160,8 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     maxCalls: TEACHING_MAX_TOOL_CALLS,
     scene: "teaching.turn",
     ...(input.search ? { search: input.search } : {}),
-    ...(input.onProgress ? { onProgress: forwardProgress } : {})
+    ...(input.onProgress ? { onProgress: forwardProgress } : {}),
+    ...(input.signal ? { signal: input.signal } : {})
   });
   return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), toolRounds: result.rounds, fileReads: result.fileReads, codeSearches: result.codeSearches };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { LlmAbortedError } from "../llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";
 import { completeWithReadTool } from "./tool-loop.js";
 
@@ -94,6 +95,34 @@ describe("completeWithReadTool 的用量汇总", () => {
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
     // miss 字段两边都没上报 → 整个缺席，而不是 0（「没上报」≠「没命中」）
     expect(result.usage).toEqual({ inputTokens: 17_000, outputTokens: 30, promptCacheHitTokens: 15_000 });
+  });
+});
+
+describe("completeWithReadTool 的中止", () => {
+  it("signal 透传到每一轮调用", async () => {
+    const controller = new AbortController();
+    const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "答完。", finishReason: "stop" }]);
+    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.signal === controller.signal)).toBe(true);
+  });
+
+  it("轮次之间被中止 → 抛 LlmAbortedError，不再开新一轮（也不落收尾调用）", async () => {
+    const controller = new AbortController();
+    const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
+    const pending = completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toBeInstanceOf(LlmAbortedError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("预算打满的收尾轮同样被中止拦下：错误上抛而不是伪装成答完", async () => {
+    const controller = new AbortController();
+    const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
+    controller.abort();
+    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal }))
+      .rejects.toBeInstanceOf(LlmAbortedError);
+    expect(calls).toHaveLength(1);
   });
 });
 

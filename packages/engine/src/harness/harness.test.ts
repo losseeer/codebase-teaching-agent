@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CourseNode, RepositoryAnalysis } from "@codebase-tutor/shared";
 import { createSession, respondWithProvider, type TeachingProgress } from "./harness.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import { LlmAbortedError } from "../llm/provider.js";
 
 const node: CourseNode = { id: "unit", title: "入口", summary: "入口读取配置。", kind: "workflow", anchors: [{ path: "src/main.ts", line: 1, label: "入口" }], children: [] };
 
@@ -52,6 +53,31 @@ describe("provider-backed teaching harness", () => {
     const result = await respondWithProvider(createSession("repo", "unit"), node, "不知道", provider);
     expect(result.assistant.content).toContain("提示：先只看 src/main.ts:1");
     expect(result.provider).toBe("local-heuristic-v1");
+  });
+
+  it("用户中止不落成降级回复：错误原样上抛，不伪造一轮成品", async () => {
+    const repository = fixtureRepository();
+    const controller = new AbortController();
+    const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async () => { controller.abort(); throw new LlmAbortedError(); } };
+    await expect(respondWithProvider(createSession("repo", "unit"), node, "不知道", provider, undefined, repository, { signal: controller.signal }))
+      .rejects.toBeInstanceOf(LlmAbortedError);
+  });
+
+  it("动作提议阶段的中止同样上抛（不被当成「模型没提议」的确定性路径）", async () => {
+    const repository = fixtureRepository();
+    const controller = new AbortController();
+    const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async () => { controller.abort(); throw new LlmAbortedError(); } };
+    await expect(respondWithProvider(createSession("repo", "unit"), node, "不知道", provider, undefined, repository, { actionLoop: true, signal: controller.signal }))
+      .rejects.toBeInstanceOf(LlmAbortedError);
+  });
+
+  it("意图分类阶段的中止同样上抛（不被当成「正则分类」这一层降级结论）", async () => {
+    const repository = fixtureRepository();
+    const controller = new AbortController();
+    const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async () => ({ text: "请先定位入口。" }) };
+    const classifier: LlmProvider = { name: "fake-light", modelVersion: "fake-light-v1", complete: async () => { controller.abort(); throw new LlmAbortedError(); } };
+    await expect(respondWithProvider(createSession("repo", "unit"), node, "不知道", provider, undefined, repository, { classifier, signal: controller.signal }))
+      .rejects.toBeInstanceOf(LlmAbortedError);
   });
 
   it("keeps assembling context when source files are unreadable", async () => {

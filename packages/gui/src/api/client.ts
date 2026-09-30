@@ -23,9 +23,16 @@ export type TeachingStreamEvent =
   | { type: "progress"; payload: { stage?: string; round?: number; path?: string; query?: string } }
   | { type: "delta"; delta: string };
 
+/** 一次流式回合的客户端句柄：`turnId` 让引擎能按 id 中止在途的那一轮，`signal` 掐掉自己的连接。
+    两者要分开用——只断连接引擎分不清「用户点停止」和「网络波动」，它会照常把这一轮算完并落库（断线补账靠这个）。 */
+export interface StreamTurn {
+  turnId?: string;
+  signal?: AbortSignal;
+}
+
 /** 全站通用 SSE 读取：POST → 逐事件回调 → done 事件固化为返回值；error 事件与普通 HTTP 错误统一抛 Error。 */
-async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: Record<string, unknown> & { type: string }) => void): Promise<TDone> {
-  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: Record<string, unknown> & { type: string }) => void, signal?: AbortSignal): Promise<TDone> {
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), ...(signal ? { signal } : {}) });
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
     throw new Error(body.error ?? "请求失败");
@@ -130,28 +137,31 @@ export const api = {
   renameThread: (threadId: string, title: string) => request<{ thread: ChatThread }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteThread: (threadId: string) => request<{ deleted: boolean; threadId: string }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** 教学回合流式版：SSE 逐事件回调过程提示（progress）与正文增量（delta），resolve 于 done（session/message/cost/provider）。会话或节点失效仍是普通 JSON。 */
-  sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: TeachingStreamEvent) => void) =>
+  sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: TeachingStreamEvent) => void, turn: StreamTurn = {}) =>
     sseStream<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(
       `/api/sessions/${sessionId}/messages`,
-      { content, settings },
+      { content, settings, ...(turn.turnId ? { turnId: turn.turnId } : {}) },
       (event) => {
         if (event.type === "progress") onEvent({ type: "progress", payload: (event.payload ?? {}) as { stage?: string; round?: number; path?: string; query?: string } });
         else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
-      }
+      },
+      turn.signal
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。threadId = 当前会话线程，引擎据此自取历史并落回合正文（GUI 不再回传窗口正文）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, payload, (event) => {
+  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => {
       if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
       else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
       else if (event.type === "searching") onEvent({ type: "searching", query: String(event.query ?? "") });
       else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
-    }),
+    }, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。 */
-  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, payload, (event) => {
+  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => {
       if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
       else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
       else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
-    })
+    }, turn.signal),
+  /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方吞掉错误即可。 */
+  stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };

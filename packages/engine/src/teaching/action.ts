@@ -1,4 +1,5 @@
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { isLlmAborted } from "../llm/provider.js";
 import type { TeachingState, TutorAction } from "./state-machine.js";
 
 export interface ActionProposal {
@@ -30,8 +31,9 @@ export function isActionAllowed(state: TeachingState, action: TutorAction): bool
   return true;
 }
 
-/** LLM 单轮动作提议；解析失败或调用失败返回 undefined，由调用方走确定性路径，不阻塞教学回合。 */
-export async function proposeAction(state: TeachingState, learnerMessage: string, transcript: string[], context: string, provider: LlmProvider): Promise<ActionProposal> {
+/** LLM 单轮动作提议；解析失败或调用失败返回 undefined，由调用方走确定性路径，不阻塞教学回合。
+    中止（用户点停止）除外——它不能被伪装成「模型没提议」的确定性结论，原样上抛。 */
+export async function proposeAction(state: TeachingState, learnerMessage: string, transcript: string[], context: string, provider: LlmProvider, signal?: AbortSignal): Promise<ActionProposal> {
   const user = [
     `教学阶段：${state.stage}`,
     `本阶段已给提示次数：${state.fallbackCount}`,
@@ -45,9 +47,10 @@ export async function proposeAction(state: TeachingState, learnerMessage: string
     `学习者本轮输入：${learnerMessage}`
   ].join("\n");
   try {
-    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.action" });
+    const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.action", ...(signal ? { signal } : {}) });
     return { action: parseAction(completion.text), usage: completion.usage };
-  } catch {
+  } catch (error) {
+    if (isLlmAborted(error, signal)) throw error;
     return { action: undefined };
   }
 }

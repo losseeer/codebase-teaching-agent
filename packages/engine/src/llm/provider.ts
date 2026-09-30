@@ -44,6 +44,51 @@ export interface LlmCompletionInput {
   thinking?: ThinkingEffort;
   /** 调用场景标签（如 "teaching.turn" / "practice.generate"），只用于 LLM 工作日志（llm/call-log.ts）。协议层不发送。 */
   scene?: string;
+  /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）。触发后 fetch 立即断开并抛 LlmAbortedError。 */
+  signal?: AbortSignal;
+}
+
+/**
+  外部中止专用错误：必须与「超时」区分开。两件事原来会撞在一起——
+  OpenAI 兼容层把任何 AbortError 都改写成「LLM 请求超时」文案，
+  而 RetryLlmProvider 只按 `returned 4xx` 判可重试，于是**用户刚点停止，引擎又把同一轮重发一遍**。
+  带 llmAborted 标记后重试层与 harness 的降级 catch 都能把中止原样上抛，不伪装成失败或降级结论。
+  */
+export class LlmAbortedError extends Error {
+  readonly llmAborted = true;
+  constructor() {
+    super("LLM 调用已被中止（用户停止或客户端断开）");
+    this.name = "LlmAbortedError";
+  }
+}
+
+/** 是否属于「不该再试、也不该降级」的中止：本层抛的哨兵，或调用方信号已置位。 */
+export function isLlmAborted(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  return typeof error === "object" && error !== null && (error as { llmAborted?: boolean }).llmAborted === true;
+}
+
+/** 超时与外部中止共用一个 fetch signal；dispose 必须调用，否则长生命周期 signal 上会堆积监听器。 */
+interface LinkedFetchSignal {
+  signal: AbortSignal;
+  dispose(): void;
+}
+
+function linkFetchSignal(timeoutMs: number, external?: AbortSignal): LinkedFetchSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const relay = (): void => controller.abort();
+  if (external && !external.aborted) external.addEventListener("abort", relay, { once: true });
+  if (external?.aborted) controller.abort();
+  return { signal: controller.signal, dispose: () => { clearTimeout(timer); external?.removeEventListener("abort", relay); } };
+}
+
+/** AbortError 归因：fetch 抛的 AbortError 对「超时」和「用户点停止」完全同形，
+    外部信号已置位时换成哨兵，其余原样返回（各 provider 自己的超时文案保持不变）。 */
+function attributeAbort(error: unknown, signal?: AbortSignal): unknown {
+  if (error instanceof LlmAbortedError) return error;
+  if (signal?.aborted && error instanceof Error && error.name === "AbortError") return new LlmAbortedError();
+  return error;
 }
 
 /**
@@ -170,7 +215,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
       payload.tool_choice = "auto";
     }
-    const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload);
+    const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload, input.signal);
     const body = await response.json() as {
       choices?: { message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number };
@@ -198,26 +243,28 @@ export class OpenAICompatibleProvider implements LlmProvider {
     };
   }
 
-  private async request(url: string, payload: unknown): Promise<Response> {
-    const controller = new AbortController();
+  private async request(url: string, payload: unknown, signal?: AbortSignal): Promise<Response> {
     const timeoutMs = this.options.timeoutMs ?? 12_000;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const linked = linkFetchSignal(timeoutMs, signal);
     try {
       const response = await this.fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json", ...(this.options.apiKey ? { authorization: `Bearer ${this.options.apiKey}` } : {}) },
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: linked.signal
       });
       if (!response.ok) throw new Error(`LLM returned ${response.status}`);
       return response;
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
+      const attributed = attributeAbort(error, signal);
+      // 顺序是刻意的：先归因外部中止，再判超时——否则用户点停止会被写成「请求超时」并被重试层重发。
+      if (attributed instanceof LlmAbortedError) throw attributed;
+      if (attributed instanceof Error && attributed.name === "AbortError") {
         throw new Error(`LLM 请求超时（${timeoutMs}ms）：推理模型生成较慢时可调大 TUTOR_LLM_TIMEOUT_MS。`);
       }
-      throw error;
+      throw attributed;
     } finally {
-      clearTimeout(timer);
+      linked.dispose();
     }
   }
 }
@@ -245,27 +292,30 @@ export class AnthropicProvider implements LlmProvider {
       temperature: input.temperature ?? 0.2,
       system: input.system,
       messages: [{ role: "user", content: input.user }]
-    });
+    }, input.signal);
     const body = await response.json() as { content?: unknown; stop_reason?: string; usage?: { input_tokens?: number; output_tokens?: number } };
     const text = contentText(body.content);
     if (!text) throw new Error("LLM returned an empty completion");
     return { text, usage: body.usage ? tokenUsage(body.usage) : undefined, finishReason: body.stop_reason };
   }
 
-  private async request(url: string, payload: unknown): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 12_000);
+  private async request(url: string, payload: unknown, signal?: AbortSignal): Promise<Response> {
+    const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, signal);
     try {
       const response = await this.fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": this.options.apiKey ?? "", "anthropic-version": "2023-06-01" },
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: linked.signal
       });
       if (!response.ok) throw new Error(`Anthropic returned ${response.status}`);
       return response;
+    } catch (error) {
+      const attributed = attributeAbort(error, signal);
+      if (attributed instanceof LlmAbortedError) throw attributed;
+      throw attributed;
     } finally {
-      clearTimeout(timer);
+      linked.dispose();
     }
   }
 }
@@ -286,13 +336,12 @@ export class OllamaTeachingProvider implements LlmProvider {
     if (input.thinking && input.thinking !== "off") {
       throw new Error(`Ollama provider 暂不支持思考档位 "${input.thinking}"。请用 auto/off。`);
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 12_000);
+    const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, input.signal);
     try {
       const response = await this.fetchImpl(`${this.options.endpoint.replace(/\/$/, "")}/api/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        signal: controller.signal,
+        signal: linked.signal,
         body: JSON.stringify({ model: this.options.model, stream: false, options: { temperature: input.temperature ?? 0.2, num_predict: input.maxTokens ?? 700 }, messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }] })
       });
       if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
@@ -300,8 +349,12 @@ export class OllamaTeachingProvider implements LlmProvider {
       const text = contentText(body.message?.content);
       if (!text) throw new Error("LLM returned an empty completion");
       return { text, usage: tokenUsage({ input_tokens: body.prompt_eval_count, output_tokens: body.eval_count }), finishReason: body.done_reason };
+    } catch (error) {
+      const attributed = attributeAbort(error, input.signal);
+      if (attributed instanceof LlmAbortedError) throw attributed;
+      throw attributed;
     } finally {
-      clearTimeout(timer);
+      linked.dispose();
     }
   }
 }
@@ -341,6 +394,9 @@ export class RetryLlmProvider implements LlmProvider {
       try {
         return await this.primary.complete(input);
       } catch (error) {
+        // 中止优先于「可重试」判定：用户已经停了，重发同一轮只会再烧一遍 token；
+        // 判据带 signal 而不只看错误——response.json() 阶段的 AbortError 不带哨兵标记。
+        if (isLlmAborted(error, input.signal)) throw error instanceof LlmAbortedError ? error : new LlmAbortedError();
         if (isNonRetryable(error)) throw error;
         lastError = error;
         if (attempt + 1 < this.attempts) await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));

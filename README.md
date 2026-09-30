@@ -45,6 +45,7 @@
 │   │       ├── cost/            #   token 用量汇总与月度预算
 │   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移）
 │   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）
+│   │       ├── turns/           #   在途回合注册表（「停止生成」的带外落点，按 turnId 掐断 signal）
 │   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit）
 │   │       └── lib.ts           #   hash / id / 路径工具
 │   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
@@ -82,7 +83,9 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 接入 LLM：复制 `.env.example` 为 `.env` 填写后 `set -a; source .env; set +a` 再启动。主力档（`TUTOR_TEACHING_PROVIDER` / `TUTOR_TEACHING_MODEL`）驱动教学对话（动作提议 + 措辞，每轮两次调用）；轻量档（`TUTOR_LIGHT_PROVIDER` / `TUTOR_LIGHT_MODEL`，可选）承担推荐入口、练习题面润色、宏观设计命名三个单轮轻任务，未配置时自动回落主力档。教学对话默认运行受限 agent loop（模型提议教学动作、状态机守门校验，无 LLM 配置或预算触顶时自动回落本地确定性路径），`TUTOR_AGENT_LOOP=off` 可退回纯工作流（意图识别走轻量档 LLM 分类）。
 
-教学对话的三层记忆：会话内存（引擎内，重启即失）→ `.tutor/` journal 结构化事件（意图/动作来源、提示深度、熔断、token 用量，跨重启）→ 前端 thread 内存态 + localStorage 作用域。
+教学对话的三层记忆：正文真源在引擎的 `chat_session` / `chat_message`（一问一答原子落库）→ `.tutor/` journal 结构化事件（意图/动作来源、提示深度、熔断、token 用量、回合文本，跨重启）→ 前端只攥 threadId，加上 localStorage 里的「上次停在哪个作用域/哪条线程」。
+
+流式与中止：三处对话（宏观设计 / 代码教学 / 练习评估）统一走 SSE，事件为 `progress` / `delta` / `done` / `error` / `aborted`，回合节奏是「算完 → 落库 → 72 字分块回放」。每次发送带一个客户端生成的 `turnId`，「停止生成」按钮先打 `POST /api/turns/stop` 让引擎掐掉这一轮（点了停止 = 这一轮作废，不落库也不回放），再断自己的连接。连接因刷新页面或网络波动断开时**不算停止**——引擎照常把这一轮算完并落库，GUI 在 sessionStorage 记一笔「欠账」，回到会话时按 12s/30s/60s 退避回读正文，补上回复并明说发生了什么。细节见 [开发关键点问题与解决方案](docs/开发关键点问题与解决方案.md) 第十三节。
 
 常用命令：
 

@@ -28,10 +28,11 @@ import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
+import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { LlmAbortedError, resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/service.js";
@@ -600,8 +601,19 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   }
 });
 
+/** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
+    为什么单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动/刷新页面——
+    后者引擎必须把这一轮**算完并落库**，用户回来才有账可补（见 turns/registry.ts）。
+    未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。 */
+app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
+  const stopped = abortTurn(request.body?.turnId);
+  if (!stopped.aborted) return reply.code(404).send({ stopped: false });
+  traceEngine("turn_stop", { scene: stopped.scene, turn_id: stopped.turnId, waited_ms: stopped.waitedMs });
+  return { stopped: true, scene: stopped.scene };
+});
+
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; turnId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -614,15 +626,19 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
   };
+  const turnHandle = beginTurn(request.body?.turnId, "map_chat");
   try {
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
-      onProgress: (progress: MapChatProgress) => send(progress)
+      onProgress: (progress: MapChatProgress) => send(progress),
+      ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
+    // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
+    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
@@ -646,12 +662,19 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
+    if (turnHandle.signal?.aborted) {
+      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "map_chat", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, turn.threadId);
+      send({ type: "aborted", scene: "map_chat" });
+    } else {
+      send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
+    }
+  } finally {
+    turnHandle.dispose();
   }
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; style?: unknown; turnId?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -679,10 +702,13 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
   };
+  const turnHandle = beginTurn(request.body?.turnId, "practice_chat");
   try {
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
+    // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
+    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     persistScopedTurn(repository.path, thread?.id, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     if (result.usage) journal.append("token_usage", {
@@ -693,7 +719,14 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
+    if (turnHandle.signal?.aborted) {
+      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "practice_chat", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, thread?.id);
+      send({ type: "aborted", scene: "practice_chat" });
+    } else {
+      send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
+    }
+  } finally {
+    turnHandle.dispose();
   }
   reply.raw.end();
 });
@@ -884,7 +917,7 @@ app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (re
   return { deleted: true, threadId: located.thread.id };
 });
 
-app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
+app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const current = resolveSession(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   const repository = repositoryOr404(current.repositoryId);
@@ -902,16 +935,22 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
   };
+  const turnHandle = beginTurn(request.body?.turnId, "teach");
   try {
     const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, {
       classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
-      onProgress: (progress) => send({ type: "progress", payload: progress })
+      onProgress: (progress) => send({ type: "progress", payload: progress }),
+      ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
+    // 中止可能赶在最后一趟 LLM 返回之后才到：那时没人抛错，这一轮会照常走到落库。
+    // 用户点了停止就按「作废」收尾——不落库、不回放，否则 GUI 那句「这一轮没有落库」成了假话，
+    // 下次进会话还会冒出一条自己掐掉的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
+    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     sessions.set(outcome.session.id, outcome.session);
     // 回合正文 + 状态快照落库：GUI 重启后接着聊、以及 run-trace 之外的「这一轮停在哪」都从这里取
     persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
@@ -945,7 +984,15 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     for (const delta of chunk(outcome.assistant.content, 72)) send({ type: "delta", delta });
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" });
   } catch (error) {
-    send({ type: "error", error: error instanceof Error ? error.message : "教学回合失败" });
+    if (turnHandle.signal?.aborted) {
+      // 用户点了停止：这一轮没有成品。不伪造 assistant 正文、不写 turn_text，只留一条中止痕迹
+      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "teach", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, session.id);
+      send({ type: "aborted", scene: "teach" });
+    } else {
+      send({ type: "error", error: error instanceof Error ? error.message : "教学回合失败" });
+    }
+  } finally {
+    turnHandle.dispose();
   }
   reply.raw.end();
 });
