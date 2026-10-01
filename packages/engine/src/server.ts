@@ -474,8 +474,11 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   const moduleLabel = (request.query.module ?? "").trim();
   if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
-  if (!provider) return { entries: [], source: "heuristic" as const };
+  const budgetExhausted = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
+  const provider = budgetExhausted ? undefined : lightLlmProvider;
+  // 落到规则归类的原因由引擎说，不让界面替用户猜「配置 LLM 后自动升级」（未配置/触顶/判空/失败四件事不一样，
+  // 尤其「模型主动判空」是可信答案，被写成「还没配 LLM」会把人引去配密钥——与流程层 reason 同一套口径）
+  if (!provider) return { entries: [], source: "heuristic" as const, reason: budgetExhausted ? "本月预算已触顶，未调用 LLM；以下入口按关键词归类。" : "未配置 LLM；以下入口按关键词归类。" };
   const database = new TutorDatabase(repository.path);
   try {
     const suggestion = await suggestModuleEntriesCached({
@@ -498,6 +501,10 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
       provider: provider.modelVersion,
       scene: "module_entries"
     });
+    // 空列表分两种，必须说清：主动判空（declined）是可信答案、会进缓存；没调成或返回不合法不是。
+    if (!suggestion.entries.length) {
+      return { entries: [], source: "llm" as const, reason: suggestion.declined ? "LLM 判断这些候选里没有真正合格的入口（不硬凑）；以下按关键词归类。" : "LLM 未给出可用入口（候选池为空或调用未成功）；以下按关键词归类。" };
+    }
     return { entries: suggestion.entries, source: "llm" as const };
   } finally {
     database.close();

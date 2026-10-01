@@ -133,7 +133,7 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
       ③ 因此 effect 里**不要**用 current/unmount 标志丢弃结果：StrictMode 下 mount→unmount→mount 会判死第一次的请求，
          而第二次 mount 被 ref 去重挡住不再发，同样永久 loading。
       key 带 repositoryId：换仓库后同一 moduleId 不会复用上一仓库的结果。 */
-  const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "heuristic"; entries: SuggestedEntry[] }>>({});
+  const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "heuristic"; entries: SuggestedEntry[]; reason?: string }>>({});
   const requestedEntries = useRef<Set<string>>(new Set());
   const entryKey = `${repositoryId}:${activeModule}`;
   useEffect(() => {
@@ -147,12 +147,13 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
     // 去重已由 ref 保证（每个 key 只请求一次），卸载后 setState 是安全的 no-op。
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
       .then((result) => {
-        // engine 在未配置 LLM / 预算触顶（熔断）时直接回 source=heuristic；LLM 调用失败则回空列表 —— 都算熔断，一律回落
+        // engine 在未配置 LLM / 预算触顶 / 主动判空 / 调用失败时都回空列表 —— 一律回落到关键词归类，
+        // 但**为什么**回落由引擎的 reason 说明（四种情况的用户处置完全不同）
         const entries = result.source === "llm" ? result.entries : [];
-        setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "heuristic", entries: [] } }));
+        setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "heuristic", entries: [], reason: result.reason } }));
       })
       .catch(() => {
-        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "heuristic", entries: [] } }));
+        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "heuristic", entries: [], reason: "推荐入口请求失败；以下按关键词归类。" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules]);
   const moduleEntries = entryState[entryKey];
@@ -165,7 +166,7 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
     ? "LLM 从课程树推荐 · 可直接提问"
     : moduleEntries?.status === "loading"
       ? "正在从课程树挑选入口…"
-      : "按关键词归类 · 配置 LLM 后自动升级";
+      : moduleEntries?.reason ?? "按关键词归类 · 配置 LLM 后自动升级";
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
       点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。

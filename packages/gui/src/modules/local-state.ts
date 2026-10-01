@@ -100,19 +100,30 @@ export interface ModuleEntry {
   moduleId: string;
 }
 
-/** 把课程树拍平并按模块归类 → teaching「推荐入口」数据。 */
+/**
+  把课程树拍平并按模块归类 → teaching「推荐入口」数据。
+  **按文件去重**：同一个文件在树里会出现很多次（每条经过它的流程都挂一个节点、文件节点下还挂着符号节点——
+  真仓 dianping 实测 1209 个带锚点节点只对应 168 个文件），逐节点输出会让清单里同一个文件重复十几遍。
+  保留树里第一条（DFS 前序 ≈ 最浅层），但**真正归到某模块的那条优先于未归类的**——
+  否则先遇到的未归类节点会把能命中的那条顶掉，模块下反而什么都不剩。
+  */
 export function classifyCourseNodes(root: CourseNode, modules: KnowledgeModule[]): ModuleEntry[] {
-  const walk = (node: CourseNode): ModuleEntry[] => {
-    const own = node.anchors.length
-      ? [{
-          id: node.id,
-          title: node.title,
-          path: node.anchors[0].path,
-          line: node.anchors[0].line,
-          moduleId: classifyModule(`${node.title} ${node.summary} ${node.anchors[0].path}`, modules),
-        }]
-      : [];
-    return [...own, ...node.children.flatMap(walk)];
+  const byPath = new Map<string, ModuleEntry>();
+  const walk = (node: CourseNode): void => {
+    const anchor = node.anchors[0];
+    if (anchor) {
+      const entry: ModuleEntry = {
+        id: node.id,
+        title: node.title,
+        path: anchor.path,
+        line: anchor.line,
+        moduleId: classifyModule(`${node.title} ${node.summary} ${anchor.path}`, modules),
+      };
+      const kept = byPath.get(anchor.path);
+      if (!kept || (!kept.moduleId && entry.moduleId)) byPath.set(anchor.path, entry);
+    }
+    node.children.forEach(walk);
   };
-  return walk(root);
+  walk(root);
+  return [...byPath.values()];
 }
