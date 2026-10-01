@@ -435,33 +435,57 @@ function defaultModel(provider: string): string {  if (provider === "anthropic")
   return "gpt-4o-mini";
 }
 
-/** 各协议端点/密钥的显式覆盖值（轻量档独立配置用；未提供的字段回落共用环境变量）。 */
-interface ProviderEnvOverrides {
-  openaiUrl?: string;
-  openaiApiKey?: string;
-  anthropicUrl?: string;
-  anthropicApiKey?: string;
+/** GUI 运行时可改的 LLM 配置覆盖（持久化与掩码见 llm/runtime.ts）：省略或空串 = 该字段回落 .env。 */
+export interface LlmConfigOverrides {
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
-function createProviderFromEnv(provider: string, model: string, timeoutMs: number, overrides: ProviderEnvOverrides = {}): LlmProvider | undefined {
+const trimmed = (value?: string): string => value?.trim() ?? "";
+
+/**
+  一份配置的三层回落：GUI 运行时覆盖 → `.env`（`TUTOR_LLM_*`，废弃别名 `TUTOR_TEACHING_*` 仍读）→ 该协议默认。
+  provider 没配时返回 `provider: ""`，由 createLlmProvider 判成「未配置」。
+  */
+export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLlmConfig {
+  const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || process.env.TUTOR_TEACHING_PROVIDER || "").toLowerCase();
+  const baseUrl = trimmed(overrides.baseUrl);
+  const apiKey = trimmed(overrides.apiKey);
+  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || process.env.TUTOR_TEACHING_MODEL || defaultModel(provider);
+  const timeoutMs = Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
+  if (provider === "anthropic") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_ANTHROPIC_URL || "https://api.anthropic.com", apiKey: apiKey || process.env.ANTHROPIC_API_KEY || process.env.TUTOR_ANTHROPIC_API_KEY, timeoutMs };
+  if (provider === "ollama") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OLLAMA_URL || "http://127.0.0.1:11434", timeoutMs };
+  return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY || process.env.TUTOR_OPENAI_API_KEY, timeoutMs };
+}
+
+/**
+  一份 LLM 配置的最终生效值：每个字段都是「GUI 运行时覆盖 → .env → 该协议默认」三层回落后的结果，
+  所以这个结构本身不带来源信息——GUI 要知道哪些是回落值，由路由另外下发 .env 预设。
+  */
+export interface ResolvedLlmConfig {
+  /** 空串 = 一个都没配（此时 createLlmProvider 返回 undefined，调用方走本地启发式） */
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKey?: string;
+  timeoutMs: number;
+}
+
+function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
+  const { provider, model, baseUrl, apiKey, timeoutMs } = config;
   if (provider === "anthropic") {
-    const apiKey = overrides.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? process.env.TUTOR_ANTHROPIC_API_KEY;
     if (!apiKey) return undefined;
-    return new RetryLlmProvider(new AnthropicProvider({ endpoint: overrides.anthropicUrl ?? process.env.TUTOR_ANTHROPIC_URL ?? "https://api.anthropic.com", apiKey, model, timeoutMs }));
+    return new RetryLlmProvider(new AnthropicProvider({ endpoint: baseUrl, apiKey, model, timeoutMs }));
   }
-  if (provider === "ollama") return new RetryLlmProvider(new OllamaTeachingProvider({ endpoint: process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434", model, timeoutMs }));
+  if (provider === "ollama") return new RetryLlmProvider(new OllamaTeachingProvider({ endpoint: baseUrl, model, timeoutMs }));
   if (provider === "openai" || provider === "openai-compatible") {
-    const apiKey = overrides.openaiApiKey ?? process.env.OPENAI_API_KEY ?? process.env.TUTOR_OPENAI_API_KEY;
+    // 官方 openai 协议没有 key 必然 401，直接不建实例；兼容端点（Ollama/LM Studio 的 OpenAI 层）允许无 key 本地跑
     if (provider === "openai" && !apiKey) return undefined;
-    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: overrides.openaiUrl ?? process.env.TUTOR_OPENAI_URL ?? "https://api.openai.com/v1", apiKey, model, timeoutMs }));
+    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: baseUrl, apiKey, model, timeoutMs }));
   }
   return undefined;
-}
-
-/** 生效模型 slug：GUI 运行时覆盖优先 → .env 的 TUTOR_LLM_MODEL → 该 provider 的默认模型。 */
-export function resolveModelSlug(overrides?: { model?: string }): string {
-  const provider = (process.env.TUTOR_LLM_PROVIDER ?? process.env.TUTOR_TEACHING_PROVIDER ?? "").toLowerCase();
-  return overrides?.model?.trim() || (process.env.TUTOR_LLM_MODEL ?? process.env.TUTOR_TEACHING_MODEL ?? defaultModel(provider));
 }
 
 /**
@@ -469,11 +493,9 @@ export function resolveModelSlug(overrides?: { model?: string }): string {
   .env 只有一套 `TUTOR_LLM_*`；「轻任务 / 教学对话」是**运行时角色**（差别只在思考开关，见 llm/runtime.ts），
   不是两份配置。`TUTOR_TEACHING_*` 作为已废弃别名仍被读取（旧 .env 不至于静默失效），但不再写进 .env.example。
   */
-export function createLlmProvider(overrides?: { model?: string }): LlmProvider | undefined {
-  const provider = (process.env.TUTOR_LLM_PROVIDER ?? process.env.TUTOR_TEACHING_PROVIDER ?? "").toLowerCase();
-  if (!provider) return undefined;
-  const model = resolveModelSlug(overrides);
-  return createProviderFromEnv(provider, model, Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000));
+export function createLlmProvider(overrides?: LlmConfigOverrides): LlmProvider | undefined {
+  const config = resolveLlmConfig(overrides);
+  return config.provider ? createProvider(config) : undefined;
 }
 
 export function teachingProviderStatus(provider?: LlmProvider): TeachingProviderStatus {

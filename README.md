@@ -45,7 +45,7 @@
 │   │       ├── scopechat/       #   宏观设计与练习两作用域的对话（上下文 + 受限读码工具循环）
 │   │       ├── source/          #   只读源码工具：read_file / search_code / 摘录 / tool-loop
 │   │       ├── cost/            #   token 用量汇总与月度预算
-│   │       ├── llm/             #   多 Provider LLM 抽象（重试 / 故障转移 / 中止归因）
+│   │       ├── llm/             #   多 Provider LLM 抽象（运行时配置与密钥掩码 / 重试 / 故障转移 / 中止归因）
 │   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）
 │   │       ├── turns/           #   在途回合注册表（「停止生成」的带外落点，按 turnId 掐断 signal）
 │   │       ├── eval/            #   离线评测：零 token 判分器（scorers）+ LLM 裁判（judge）
@@ -94,7 +94,7 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 打开 `http://localhost:3000`，在导入页填入待学习仓库的路径（支持 `~/xxx`）即可。分析结果保存在该仓库的 `.tutor/`。
 
-接入 LLM：复制 `.env.example` 为 `.env` 填写后 `set -a; source .env; set +a` 再启动。主力档（`TUTOR_TEACHING_PROVIDER` / `TUTOR_TEACHING_MODEL`）驱动教学对话（动作提议 + 措辞，每轮两次调用）；轻量档（`TUTOR_LIGHT_PROVIDER` / `TUTOR_LIGHT_MODEL`，可选）承担推荐入口、练习题面润色、宏观设计命名三个单轮轻任务，未配置时自动回落主力档。教学对话默认运行受限 agent loop（模型提议教学动作、状态机守门校验，无 LLM 配置或预算触顶时自动回落本地确定性路径），`TUTOR_AGENT_LOOP=off` 可退回纯工作流（意图识别走轻量档 LLM 分类）。
+接入 LLM：**不必先配 `.env`**。GUI 侧栏输入框上方那颗模型胶囊就是唯一入口——点开通弹窗配服务商协议、模型 slug、接口地址、API Key 与思考档位，改完立即生效并保存到 `~/.codebase-tutor/llm-settings.json`（权限 0600，重启仍在；接口只回显掩码，明文密钥从不出库；胶囊上直接显示当前生效的模型与档位，没配齐时转「本地兜底」警示态）。`.env`（复制 `.env.example` 填写后 `set -a; source .env; set +a`）是降级策略：GUI 里留空的项沿用这里的 `TUTOR_LLM_PROVIDER` / `TUTOR_LLM_MODEL` / `TUTOR_OPENAI_URL` / `OPENAI_API_KEY` 等，`TUTOR_MODEL_PRESETS` 给模型输入框提供候选。两边都没配齐时引擎全本地可用（本地启发式摘要 + 规则教学）。只有一套模型配置，「轻任务」（推荐入口、题面润色、命名、L1 摘要）是**运行时角色**而非第二档，思考固定关闭。教学对话默认运行受限 agent loop（模型提议教学动作、状态机守门校验，无 LLM 配置或预算触顶时自动回落本地确定性路径），`TUTOR_AGENT_LOOP=off` 可退回纯工作流（意图识别走轻任务角色）。
 
 教学对话的三层记忆：正文真源在引擎的 `chat_session` / `chat_message`（一问一答原子落库）→ `.tutor/` journal 结构化事件（意图/动作来源、提示深度、熔断、token 用量、回合文本，跨重启）→ 前端只攥 threadId，加上 localStorage 里的「上次停在哪个作用域/哪条线程」。
 

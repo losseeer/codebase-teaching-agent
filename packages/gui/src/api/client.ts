@@ -67,8 +67,11 @@ async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: 
   return final;
 }
 
-/** LLM 运行时设置（引擎内存态，PUT 后立即生效，重启回落 .env）。 */
+/** LLM 运行时设置（GUI 可改，引擎落盘持久，重启后仍在；留空项回落 .env）。 */
 export type ThinkingEffort = "auto" | "off" | "low" | "high" | "max";
+
+/** 服务商协议，与引擎 llm/runtime.ts 的 LLM_PROVIDERS 一致；空串 = 用 .env 的 TUTOR_LLM_PROVIDER。 */
+export type LlmProviderKind = "openai-compatible" | "openai" | "anthropic" | "ollama";
 
 /** 模型思考能力声明（引擎按模型 slug 查表解析，见 engine llm/thinking.ts）。efforts 为该模型支持的显式档位（auto 恒可用）。 */
 export interface ThinkingCapabilityInfo {
@@ -77,15 +80,35 @@ export interface ThinkingCapabilityInfo {
   efforts: Exclude<ThinkingEffort, "auto">[];
 }
 
+/** .env 侧的回落口径（引擎解析一次下发）：GUI 用它把空字段说明成「留空 = 用 .env 的 xxx」。 */
+export interface LlmEnvFallback {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+}
+
 export interface LlmSettings {
+  /** 运行时服务商覆盖（空串 = 用 .env；取值为 LlmProviderKind 之一） */
+  provider: string;
   /** 运行时模型覆盖（空串 = 用 .env 配置）；轻任务/教学对话共用这一套配置 */
   model: string;
+  baseUrl: string;
   thinking: ThinkingEffort;
+  /** 运行时密钥只以掩码出现——引擎从不回显明文 */
+  apiKeyMasked: string;
+  hasApiKey: boolean;
   presets: string[];
+  envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
-  /** PUT 响应里带：当前实际生效的模型 slug */
+  /** 当前实际生效的 provider/模型/模式（local = 没配齐或密钥缺失，走本地启发式） */
   activeModel?: string;
+  activeProvider?: string;
+  activeMode?: "remote" | "local";
 }
+
+/** PUT 的部分更新：省略 = 保持不变，空串 = 清除该项并回落 .env（apiKey 为空串即删除已存密钥）。 */
+export type LlmSettingsPatch = Partial<{ provider: LlmProviderKind | ""; model: string; baseUrl: string; apiKey: string; thinking: ThinkingEffort }>;
 
 /** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。 */
 export class ApiError extends Error {
@@ -108,7 +131,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
-  updateLlmSettings: (partial: { model?: string; thinking?: ThinkingEffort }) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
+  updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
   getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),

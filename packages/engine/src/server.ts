@@ -32,9 +32,9 @@ import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { LlmAbortedError, resolveModelSlug, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
+import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
-import { buildLlmRuntimeProvider, getLlmRuntimeSettings, setLlmRuntimeSettings } from "./llm/runtime.js";
+import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/scopechat.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
@@ -82,8 +82,12 @@ tboot("ImportService");
 const exercises = new ExerciseService();
 tboot("ExerciseService");
 
-// LLM 走运行时构建器：模型覆盖与思考档位来自内存态设置（GUI PUT /api/llm/settings 可改，重启回落 .env）。
+// LLM 走运行时构建器：服务商/模型/端点/密钥/思考档位来自运行时设置（GUI PUT /api/llm/settings 可改，
+// 落盘持久，重启后仍在；空项回落 .env——.env 是降级策略而非唯一入口）。
 // 只有一套配置；teaching / light 是**运行时角色**（差别只在思考开关），不是两份配置。
+restoreLlmRuntimeSettings();
+const restoredLlmSettings = getLlmRuntimeSettings();
+if (restoredLlmSettings.provider || restoredLlmSettings.model || restoredLlmSettings.baseUrl || restoredLlmSettings.apiKey) console.log(`[startup] 已恢复 GUI 的 LLM 设置（${restoredLlmSettings.provider || "服务商回落 .env"} · ${restoredLlmSettings.model || "模型回落 .env"}）`);
 let teachingProvider = buildLlmRuntimeProvider("teaching");
 let lightLlmProvider = buildLlmRuntimeProvider("light");
 // 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
@@ -291,46 +295,72 @@ function describeThinking(model: string): { model: string; style: ReturnType<typ
   return { model, style: capability.style, efforts: supportedThinkingEfforts(capability) };
 }
 
-/** GUI 运行时 LLM 设置：读取（含 .env 预设模型清单 + 生效模型的思考能力声明，供 GUI 禁用不支持的档位） */
-app.get("/api/llm/settings", async () => {
-  const settings = getLlmRuntimeSettings();
-  const presets = (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean);
+/** GET/PUT 共用的响应装配：运行时设置（**密钥只以掩码出现**）+ .env 回落值 + 生效状态 + 思考能力声明。 */
+function llmSettingsPayload(): Record<string, unknown> {
+  // envFallback 用「无任何覆盖」解析一次，得到纯 .env（+ 协议默认）的口径，GUI 才能把空字段说明成「留空 = 用 .env 的 xxx」
+  const fallback = resolveLlmConfig({});
+  const active = teachingProviderStatus(teachingProvider);
   return {
-    ...settings,
-    presets,
+    ...publicLlmSettings(),
+    presets: (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean),
+    envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey) },
+    activeModel: active.model,
+    activeProvider: active.provider,
+    activeMode: active.mode,
     // 能力按「实际生效的模型 slug」解析（运行时覆盖优先，回落 .env），与 provider 工厂同一套解析
-    thinkingCapability: describeThinking(resolveModelSlug({ model: settings.model }))
+    thinkingCapability: describeThinking(effectiveLlmConfig().model)
   };
-});
+}
 
-/** GUI 运行时 LLM 设置：更新模型覆盖与思考档位，立即重建 provider（不落盘，重启回落 .env） */
-app.put<{ Body: { model?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
+/** GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明） */
+app.get("/api/llm/settings", async () => llmSettingsPayload());
+
+/** GUI 运行时 LLM 设置：更新服务商/模型/端点/密钥/思考档位，立即重建 provider 并落盘（留空 = 回落 .env） */
+app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
   const body = request.body ?? {};
-  if (body.thinking !== undefined && !["auto", "off", "low", "high", "max"].includes(body.thinking)) {
-    return reply.code(422).send({ error: "thinking 只支持 auto / off / low / high / max" });
+  if (body.thinking !== undefined && !(THINKING_EFFORTS as readonly string[]).includes(body.thinking)) {
+    return reply.code(422).send({ error: `thinking 只支持 ${THINKING_EFFORTS.join(" / ")}` });
   }
-  // 思考档位与（新）模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
+  const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : undefined;
+  if (provider !== undefined && provider !== "" && !(LLM_PROVIDERS as readonly string[]).includes(provider)) {
+    return reply.code(422).send({ error: `服务商只支持 ${LLM_PROVIDERS.join(" / ")}（留空 = 用 .env）` });
+  }
+  const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : undefined;
+  if (baseUrl) {
+    // 只认 http(s)：填了 file:// 之类的协议会在 fetch 时以晦涩错误失败，不如在保存时就拒绝
+    let protocol = "";
+    try {
+      protocol = new URL(baseUrl).protocol;
+    } catch {
+      return reply.code(422).send({ error: "接口地址不是合法 URL（需带 http:// 或 https:// 前缀）" });
+    }
+    if (protocol !== "http:" && protocol !== "https:") return reply.code(422).send({ error: "接口地址只接受 http:// 或 https://" });
+  }
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : undefined;
+  // 密钥里的空白几乎总是粘贴带进来的换行，存下来只会变成「401 但看不出为什么」的排查黑洞
+  if (apiKey !== undefined && /\s/.test(apiKey)) return reply.code(422).send({ error: "API Key 不能含空格或换行" });
+
+  // 思考档位与（新）服务商/模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
   // off 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里 422 掉。
   if (body.thinking && body.thinking !== "auto") {
-    const model = resolveModelSlug({ model: typeof body.model === "string" ? body.model : undefined });
+    const model = resolveLlmConfig({ ...getLlmRuntimeSettings(), ...(provider === undefined ? {} : { provider }), ...(typeof body.model === "string" ? { model: body.model } : {}) }).model;
     if (!isThinkingEffortSupported(model, body.thinking as "auto" | "off" | "low" | "high" | "max")) {
       const supported = supportedThinkingEfforts(resolveThinkingCapability(model));
       return reply.code(422).send({ error: `模型 ${model} 不支持思考档位 "${body.thinking}"（支持：${supported.length ? supported.join("/") : "无"}）` });
     }
   }
-  const settings = setLlmRuntimeSettings({
-    model: typeof body.model === "string" ? body.model : undefined,
+  setLlmRuntimeSettings({
+    ...(provider === undefined ? {} : { provider }),
+    ...(typeof body.model === "string" ? { model: body.model } : {}),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(apiKey === undefined ? {} : { apiKey }),
     thinking: body.thinking as never
   });
   teachingProvider = buildLlmRuntimeProvider("teaching");
   lightLlmProvider = buildLlmRuntimeProvider("light");
-  const active = teachingProviderStatus(teachingProvider);
-  // 响应带生效模型与能力声明：GUI 换模型后无需再 GET 一次即可刷新思考档位的可用状态
-  return {
-    ...settings,
-    activeModel: active.model,
-    thinkingCapability: describeThinking(resolveModelSlug({ model: settings.model }))
-  };
+  // 响应带生效状态与能力声明：GUI 换模型/换服务商后无需再 GET 一次即可刷新思考档位的可用状态。
+  // 换到「缺密钥」的组合时建不出 provider（activeMode=local），这不算请求失败——把状态如实回给 GUI。
+  return llmSettingsPayload();
 });
 
 app.get("/api/events", async (_request, reply) => {

@@ -2,8 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Check, Compass, GraduationCap, Pencil, Plus, Send, Square, Trash2, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
-import { api, type LlmSettings, type ThinkingEffort } from "../api/client";
-import { showToast } from "../modules/toast";
+import { LlmSettingsControl } from "./LlmSettings";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
@@ -38,26 +37,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
 
-  // LLM 运行时设置：进侧栏时拉取，改动立即 PUT 引擎（乐观更新，失败回滚提示）
-  const [llm, setLlm] = useState<LlmSettings | null>(null);
-  useEffect(() => {
-    let current = true;
-    api.getLlmSettings().then((next) => { if (current) setLlm(next); }).catch(() => undefined);
-    return () => { current = false; };
-  }, []);
-  const updateLlm = (partial: { model?: string; thinking?: ThinkingEffort }): void => {
-    if (!llm) return;
-    const previous = llm;
-    setLlm({ ...llm, ...partial });
-    api.updateLlmSettings(partial)
-      .then((next) => setLlm(next))
-      .catch((error: unknown) => {
-        setLlm(previous);
-        // 引擎 422（如思考档位与新模型不兼容）会带具体原因，优先透传而不是笼统的「失败」
-        showToast(error instanceof Error && error.message ? error.message : "LLM 设置更新失败");
-      });
-  };
-
   const activeBand = styleBand(t.settings.style);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
 
@@ -88,50 +67,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
             </button>
           ))}
         </div>
-      </div>
-
-      {/* 模型与思考：运行时设置（引擎内存态，PUT 即时生效，重启回落 .env）。
-          只有一套模型配置；轻任务（推荐入口/题面/命名/L1 摘要）走同一模型、思考固定 off，无需单独配置。 */}
-      <div className="agent-tuning llm-tuning">
-        <div className="tuning-head"><span>模型与思考</span></div>
-        <label className="tuning-row">
-          <span>模型</span>
-          <select
-            value={llm?.model ?? ""}
-            disabled={!llm}
-            aria-label="LLM 模型"
-            onChange={(event) => updateLlm({ model: event.target.value })}
-          >
-            <option value="">默认（.env）</option>
-            {modelOptions(llm, llm?.model ?? "").map((slug) => <option key={slug} value={slug}>{slug}</option>)}
-          </select>
-        </label>
-        <label className="tuning-row">
-          <span>思考</span>
-          <select
-            value={llm?.thinking ?? "auto"}
-            disabled={!llm}
-            aria-label="思考模式与强度"
-            title={THINKING_STYLE_HINT[llm?.thinkingCapability?.style ?? "unknown"]}
-            onChange={(event) => updateLlm({ thinking: event.target.value as ThinkingEffort })}
-          >
-            <option value="auto">自动（模型默认）</option>
-            {(["off", "low", "high", "max"] as const).map((effort) => (
-              <option
-                key={effort}
-                value={effort}
-                // 引擎按模型查表下发能力声明；老引擎没有该字段时全部可用（向后兼容）。
-                // off 对 none/unknown 样式恒可选（= 不发字段），与引擎 PUT 校验的豁免一致。
-                disabled={llm?.thinkingCapability ? !effortSelectable(llm.thinkingCapability, effort) : false}
-              >
-                {THINKING_EFFORT_LABEL[effort]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {llm?.thinkingCapability ? (
-          <p className="tuning-hint">{thinkingHint(llm.thinkingCapability)}</p>
-        ) : null}
       </div>
 
       <ThreadBar scope={scope} t={t} />
@@ -177,6 +112,8 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
 
       <div className="composer-section">
+        {/* 模型入口：一颗胶囊显示「当前模型 · 思考档」，点开弹窗做全部配置（对齐 workbuddy / trae 的位置与形态） */}
+        <LlmSettingsControl />
         {t.error && <p className="error-message">{t.error}</p>}
         <form
           className="composer"
@@ -219,47 +156,6 @@ const STYLE_CHOICES = [
   { value: 50, band: "neutral" as const, label: "普通", hint: "中性、准确，术语照常使用" },
   { value: 0, band: "rigorous" as const, label: "严肃", hint: "工程术语、严谨论证，不用类比" }
 ] as const;
-
-/** 下拉选项：.env 预设 + 当前已选的自定义 slug（不在预设里也要可见）。 */
-function modelOptions(settings: LlmSettings | null, current: string): string[] {
-  const presets = settings?.presets ?? [];
-  return current && !presets.includes(current) ? [...presets, current] : presets;
-}
-
-const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
-  off: "关闭",
-  low: "低",
-  high: "高",
-  max: "最大"
-};
-
-/** 各能力样式的下拉 title 提示（悬停可见）。 */
-const THINKING_STYLE_HINT: Record<string, string> = {
-  deepseek: "DeepSeek 格式：thinking 开关 + reasoning_effort（V4 默认开启思考）",
-  openai: "OpenAI 格式：顶层 reasoning_effort（GPT-5 / o 系 / Gemini 兼容层）",
-  anthropic: "Anthropic 兼容层：仅 thinking 开关，无强度档位",
-  none: "该模型没有思考参数",
-  unknown: "未识别的模型：auto/off 不发字段；强度档位会被引擎拒绝（可用 TUTOR_THINKING_STYLES 声明）"
-};
-
-/** 思考档位下方的常驻能力提示行。 */
-function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>): string {
-  const styleName: Record<string, string> = {
-    deepseek: "DeepSeek 格式",
-    openai: "reasoning_effort",
-    anthropic: "仅开关（无强度）",
-    none: "无思考参数",
-    unknown: "未声明思考能力"
-  };
-  const supported = (["off", "low", "high", "max"] as const).filter((effort) => effortSelectable(capability, effort)).map((effort) => THINKING_EFFORT_LABEL[effort]);
-  return `${capability.model} · ${styleName[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
-}
-
-/** off 恒可表达：无思考参数/未声明模型选 off = 不发字段（与引擎 applyThinking 语义一致，不算「支持」也不禁用）。 */
-function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapability"]>, effort: "off" | "low" | "high" | "max"): boolean {
-  if (capability.efforts.includes(effort)) return true;
-  return effort === "off" && (capability.style === "none" || capability.style === "unknown");
-}
 
 function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
     return {
