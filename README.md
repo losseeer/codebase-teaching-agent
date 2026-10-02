@@ -32,6 +32,7 @@
 │   │       ├── summarizer/      #   分层文件摘要（LLM 或本地启发式 + 缓存）
 │   │       ├── coursetree/      #   课程树构建、LLM 命名完善（llm-refine）、
 │   │       │                    #   模块推荐入口（entry-suggest）、节点投影
+│   │       ├── discipline/      #   学科模块的工程证据表（计算机网络/操作系统/语言特性 → 标识符与依赖锚点）
 │   │       ├── depgraph/        #   依赖图构建 / 影响面分析
 │   │       ├── implementation/  #   微观实现单元抽取（函数级）
 │   │       ├── lsp/             #   typescript-language-server 语义增强

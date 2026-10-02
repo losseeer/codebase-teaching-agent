@@ -6,6 +6,7 @@ import { buildRecentChangesSection, type RecentChangesInput } from "../changes/r
 import { isTestPath } from "../depgraph/roles.js";
 import { layerCacheKey } from "../lib.js";
 import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
+import { hintHits, manifestEvidence, signatureHits, type Discipline } from "../discipline/anchors.js";
 
 /**
   教学模块「推荐入口」的 LLM 选择层（纯推荐，不改课程树结构）。两段调用：
@@ -31,6 +32,8 @@ export interface ModuleEntrySuggestion {
   usage?: LlmUsage;
   /** LLM 成功解析且明确返回空数组：模型判断池子里没有合格入口。与「调用失败的静默空」不同，可信、可缓存。 */
   declined?: boolean;
+  /** 学科模块零证据（候选侧强证据与依赖清单都没命中）：连 LLM 都不必调，直接如实说「本仓没有这个主题」。 */
+  noEvidence?: boolean;
 }
 
 interface Candidate {
@@ -43,14 +46,18 @@ interface Candidate {
 
 /** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。
     `recentChanges` 是可选的「近期仓库变更」参考段（A2，09-22）：随 user 消息进、**刻意不进缓存键**，
-    与流程层同一套取舍（变更清单每次保存都刷新，进键等于每次保存重烧推荐）。 */
-async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string }): Promise<ModuleEntrySuggestion> {
-  const { candidates, moduleLabel, moduleHint, provider, recentChanges } = input;
+    与流程层同一套取舍（变更清单每次保存都刷新，进键等于每次保存重烧推荐）。
+    `discipline`（方案 A，10-01）：学科主题时随候选一起进系统提示——模型需要知道「操作系统」在这个仓里
+    指的是线程池/锁/IO 边界这些**机制**，而不是一堆业务 controller，否则它会照旧判空。 */
+async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string; discipline?: Discipline }): Promise<ModuleEntrySuggestion> {
+  const { candidates, moduleLabel, moduleHint, provider, recentChanges, discipline } = input;
   try {
     const system = [
       "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
       `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
       "不要选测试文件或琐碎工具函数。",
+      ...(discipline ? [`本模块是计算机学科主题「${discipline.label}」，它在真实工程里的形态是：${discipline.brief}`,
+        "候选已按上述机制的标识符与依赖筛过并排在前面，但池子也可能只有一部分相关：优先选**能讲清该机制**的文件（机制比业务名字更重要），只有当一个都不沾边时才输出空数组。"] : []),
       "候选列表可能整体与主题无关（排序只是关键词级别的近似）；如果没有任何候选真正适合作为该模块入口，输出空数组 []，不要硬凑。",
       "用户消息末尾可能另附「近期仓库变更」段（本地文件监听检测到的改动与波及文件）：它不是证据来源，不得据此推荐候选之外的节点，只在证据相当的候选之间做取舍时倾向这些当前活跃文件。",
       "严格输出 JSON 数组：[{\"id\":\"候选 id 原样返回\",\"reason\":\"不超过 20 字的推荐理由\"}]，按推荐顺序排列，不要输出其他文字。"
@@ -110,7 +117,8 @@ export function rankEntryCandidates(
   tokens: string[],
   fileSummaries: Map<string, string>,
   avoidPaths: Set<string> = new Set(),
-  boostPaths: readonly string[] = []
+  boostPaths: readonly string[] = [],
+  discipline?: Discipline
 ): Candidate[] {
   type Scored = { candidate: Candidate; score: number };
   const scored: Scored[] = candidates.map((candidate) => {
@@ -122,6 +130,15 @@ export function rankEntryCandidates(
       if (tokenHits(token, path)) score += 20;
       if (tokenHits(token, summary)) score += 10;
       if (tokenHits(token, fileSummary)) score += 15;
+    }
+    if (discipline) {
+      // 学科模块的证据加权（方案 A）：签名锚点（`ThreadPoolExecutor` / `lettuce` / `@interface` 这种
+      // 几乎不会偶然出现的标识符）压倒中文关键词命中，泛化锚点只小幅加成。
+      // 没有这一步，「操作系统」的候选池里躺的还是那一排业务 controller——中文主题名在业务仓里
+      // 词法命中≈0，模型只能判空（真仓实测就是这样）。
+      const evidence = `${path} ${candidate.title.toLowerCase()} ${summary} ${fileSummary}`;
+      if (signatureHits(discipline, evidence).length) score += 40;
+      score += hintHits(discipline, evidence).length * 6;
     }
     if (avoidPaths.has(candidate.path)) score -= 50;
     return { candidate, score };
@@ -141,22 +158,44 @@ export function rankEntryCandidates(
     ...zeros.filter(isBoosted).sort((left, right) => boostRank.get(left.candidate.path)! - boostRank.get(right.candidate.path)!),
     ...zeros.filter((item) => !isBoosted(item))
   ];
-  const perPath = new Map<string, number>();
-  const cappedZeros: Scored[] = [];
-  const overflowZeros: Scored[] = [];
-  for (const item of zeroQueue) {
-    const seen = perPath.get(item.candidate.path) ?? 0;
-    if (seen < 2) {
-      perPath.set(item.candidate.path, seen + 1);
-      cappedZeros.push(item);
-    } else {
-      overflowZeros.push(item);
+  const capPerPath = (items: Scored[], limit: number): { kept: Scored[]; overflow: Scored[] } => {
+    const perPath = new Map<string, number>();
+    const kept: Scored[] = [];
+    const overflow: Scored[] = [];
+    for (const item of items) {
+      const seen = perPath.get(item.candidate.path) ?? 0;
+      if (seen < limit) {
+        perPath.set(item.candidate.path, seen + 1);
+        kept.push(item);
+      } else {
+        overflow.push(item);
+      }
     }
-  }
-  // 正分 → 限流零分（boost 在前）→ 破例放回的溢出零分 → 被去重惩罚的负分候选垫底
-  return [...positives, ...cappedZeros, ...overflowZeros, ...negatives]
+    return { kept, overflow };
+  };
+  // 正分候选也限流（每路径 3 个），溢出的排到零分候选之后再补位（不设限就全丢）：
+  // 真仓实测「操作系统」的证据加权把 CacheClient / QueueConfig / UserHolder 的 5~6 个方法全顶进 top15，
+  // 模型看到的是 getUser() / removeUser() / orderDelayQueueBinding() 这种切片，按提示词
+  // 「不要琐碎工具函数」整池判空。**池子要的是覆盖面，不是同一文件的多张切片。**
+  const positiveCap = capPerPath(positives, 3);
+  const zeroCap = capPerPath(zeroQueue, 2);
+  // 正分（限流）→ 限流零分（boost 在前）→ 放开设限的溢出（正分优先）→ 被去重惩罚的负分候选垫底
+  return [...positiveCap.kept, ...zeroCap.kept, ...positiveCap.overflow, ...zeroCap.overflow, ...negatives]
     .slice(0, MAX_LLM_CANDIDATES)
     .map((item) => item.candidate);
+}
+
+/**
+  学科主题在本仓的**证据读数**（零 LLM）：候选侧的强证据文件 + 依赖清单命中的库名。
+  两路都要，因为「有没有这个主题」和「有没有好入口」是两件事：
+  依赖里有 `lettuce-core` 就证明这个仓有 Redis 协议客户端（主题存在），
+  但承载它的文件可能摘要写得很含糊（入口质量另说）。
+  */
+export function disciplineEvidence(pool: Candidate[], fileSummaries: Map<string, string>, discipline: Discipline, repositoryPath?: string): { paths: string[]; manifest: string[] } {
+  const paths = pool
+    .filter((candidate) => signatureHits(discipline, `${candidate.path} ${candidate.title} ${candidate.summary} ${fileSummaries.get(candidate.path) ?? ""}`).length > 0)
+    .map((candidate) => candidate.path);
+  return { paths, manifest: repositoryPath ? manifestEvidence(discipline, repositoryPath) : [] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -185,8 +224,13 @@ function themeFingerprint(candidates: Candidate[]): string[] {
   系统提示词、打分权重或 `MAX_*` 变了，送进模型的 payload 可以一字不变，这类失效只有版本号管得了。
   - `candidate-v3`（2026-09-22，A2）：选择层 user 消息末尾新增可选「近期仓库变更」参考段 + 系统提示词加了对应
     用法约束（该段本身不进键）。旧条目生成时模型看不到这一输入，翻一次键。
+  - `candidate-v4`（2026-10-01，方案 A）：学科模块（计算机网络/操作系统/语言特性）按**工程证据锚点**加权，
+    证据口径进 payload。业务主题不受影响（`discipline: null`），但同一份 payload 的解释变了，一律翻键。
+  - `candidate-v5`（2026-10-02）：学科那段系统提示词从「宁可少选」改成「一个都不沾边才输出空数组」——
+    前一版把 os/lang 整池判空收紧了（真仓实测：同一份候选，措辞一改就从 5 条变 0 条）。提示词不在缓存键里，
+    这类收紧只能靠版本号翻键。
 */
-const ENTRY_INPUT_VERSION = "candidate-v3";
+const ENTRY_INPUT_VERSION = "candidate-v5";
 const EXPAND_INPUT_VERSION = "expand-v2";
 
 interface ExpansionRecord {
@@ -311,7 +355,7 @@ export function clearModuleEntryCache(): void {
   recentEntryPaths.clear();
 }
 
-export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; boostPaths?: string[]; database?: TutorDatabase; analysis?: RecentChangesInput }): Promise<ModuleEntrySuggestion> {
+export async function suggestModuleEntriesCached(input: { repositoryId: string; repositoryPath?: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; boostPaths?: string[]; database?: TutorDatabase; analysis?: RecentChangesInput; discipline?: Discipline }): Promise<ModuleEntrySuggestion> {
   // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
   const existing = recentEntryPaths.get(input.repositoryId);
   // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
@@ -320,9 +364,17 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
   for (const [path, module] of paths) if (module !== input.moduleLabel) avoidPaths.add(path);
 
   const pool = collectCandidates(input.tree);
+  const fileSummaries = input.fileSummaries ?? new Map<string, string>();
+  // 学科模块的零证据短路（方案 A）：候选侧强证据与依赖清单都没命中，说明这个仓真的不含该机制。
+  // 此时**两段 LLM 调用都不发**（翻译层也省了）——把「本仓没有操作系统主题」如实讲出来，
+  // 比花 token 换回一个空数组再让界面显示「按关键词归类」有用得多。
+  if (input.discipline) {
+    const evidence = disciplineEvidence(pool, fileSummaries, input.discipline, input.repositoryPath);
+    if (!evidence.paths.length && !evidence.manifest.length) return { entries: [], noEvidence: true };
+  }
   const expansion = await expandThemeTokensCached({ repositoryId: input.repositoryId, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, fingerprint: themeFingerprint(pool), provider: input.provider, database: input.database });
   const tokens = [...themeTokens(input.moduleLabel, input.moduleHint), ...expansion.tokens];
-  const candidates = rankEntryCandidates(pool, tokens, input.fileSummaries ?? new Map(), avoidPaths, input.boostPaths ?? []);
+  const candidates = rankEntryCandidates(pool, tokens, fileSummaries, avoidPaths, input.boostPaths ?? [], input.discipline);
   if (!candidates.length) return { entries: [] };
 
   const key = layerCacheKey({
@@ -330,7 +382,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     repositoryId: input.repositoryId,
     contractVersion: ENTRY_INPUT_VERSION,
     modelVersion: input.provider.modelVersion,
-    payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, candidates }
+    payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, discipline: input.discipline?.id ?? null, candidates }
   });
   const now = Date.now();
   const hit = entryCache.get(key);
@@ -348,7 +400,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     input.database?.touchLayerCache(key, now);
     return { ...stored.value };
   }
-  const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider, ...(input.analysis ? { recentChanges: buildRecentChangesSection(input.analysis) } : {}) });
+  const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider, ...(input.analysis ? { recentChanges: buildRecentChangesSection(input.analysis) } : {}), ...(input.discipline ? { discipline: input.discipline } : {}) });
   const usable = suggestion.entries.length > 0 || suggestion.declined === true;
   if (usable) {
     const record: EntryRecord = { entries: suggestion.entries, ...(suggestion.declined ? { declined: true } : {}) };

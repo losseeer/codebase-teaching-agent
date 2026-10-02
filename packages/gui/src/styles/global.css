@@ -249,6 +249,9 @@ button.entry-item:hover { background: #eef6ef; }
 .entry-item strong { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .entry-item code { flex: 0 0 auto; margin-left: auto; color: #81978d; font-size: 10px; }
 .entry-empty { margin: 0; border: 1px dashed #cfddd4; border-radius: 4px; padding: 10px; color: #81978d; font-size: 10px; line-height: 1.6; }
+/* 「显示更多」用虚线框与入口行区分开——它不是又一个入口，别被误点 */
+.entry-more { border: 1px dashed #cfddd4; border-radius: 4px; padding: 6px 8px; background: #fbfdfb; color: #3c6552; text-align: center; font-size: 10px; cursor: pointer; }
+.entry-more:hover { border-color: #7aa893; background: #f1f7f2; }
 
 .module-config { margin: 9px 0 2px; border: 1px solid #cbd9d1; border-radius: 5px; padding: 9px; background: #fff; }
 .cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 8px; color: #315b4b; font-size: 11px; font-weight: 700; }

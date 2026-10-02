@@ -20,6 +20,9 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
   - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
   - chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
   */
+/** 推荐入口一屏先露这么多条，其余收进「显示更多」（规则归类常有几十条，全铺会把「仓库文件」挤出视野）。 */
+const ENTRY_PAGE = 8;
+
 export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
@@ -156,12 +159,18 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
         setEntryState((curr) => ({ ...curr, [entryKey]: { status: "heuristic", entries: [], reason: "推荐入口请求失败；以下按关键词归类。" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules]);
+  /** 推荐入口默认只露前若干条：规则归类一个模块能给到几十条（按文件去重后仍有 40+），
+      整屏铺开会把「仓库文件」挤出视野。展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
+  const [expandedEntryLists, setExpandedEntryLists] = useState<Set<string>>(new Set());
   const moduleEntries = entryState[entryKey];
   const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
     ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line, moduleId: activeModule }))
     : moduleEntries?.status === "loading" || !t.course
       ? []
       : heuristicEntries.filter((entry) => entry.moduleId === activeModule);
+  /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
+      否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
+  const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNote = moduleEntries?.status === "llm"
     ? "LLM 从课程树推荐 · 可直接提问"
     : moduleEntries?.status === "loading"
@@ -266,7 +275,7 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
             <ModuleSectionLabel label="推荐入口" note={entryNote} />
             {visibleEntries.length ? (
               <div className="entry-list">
-                {visibleEntries.map((entry) => (
+                {shownEntries.map((entry) => (
                   <button
                     key={entry.id}
                     className={`entry-item ${t.selected?.id === entry.id ? "selected" : ""}`}
@@ -283,6 +292,15 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
                     <code>{entry.path.split("/").pop()}:{entry.line}</code>
                   </button>
                 ))}
+                {shownEntries.length < visibleEntries.length ? (
+                  <button
+                    type="button"
+                    className="entry-more"
+                    onClick={() => setExpandedEntryLists((curr) => new Set(curr).add(entryKey))}
+                  >
+                    显示更多（还有 {visibleEntries.length - shownEntries.length} 条）
+                  </button>
+                ) : null}
               </div>
             ) : moduleEntries?.status === "loading" ? (
               <p className="entry-empty">正在从课程树挑选推荐入口…</p>
