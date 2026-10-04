@@ -46,7 +46,7 @@ export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   return "概览";
 }
 
-export function CoursePage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
+export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [index, setIndex] = useState<RepositoryIndex | null>(null);
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
@@ -151,6 +151,7 @@ export function CoursePage({ workspace, chat: t }: { workspace: Workspace; chat:
                 repositoryId={repositoryId}
                 analysis={analysis}
                 index={index}
+                visible={visible}
                 selectedStageOrder={flowSelection?.stage.order}
                 onSelectStage={(selection) => {
                   setFlowSelection(selection);

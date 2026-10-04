@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Sparkles } from "lucide-react";
 import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex, SourceAnchor } from "@codebase-tutor/shared";
 import { api } from "../api/client";
+import { useEverVisible } from "../ui/useEverVisible";
 import { OptionDropdown, type DropdownOption } from "../ui/OptionDropdown";
 
 /**
@@ -81,15 +82,21 @@ export interface FlowSelection {
   flow: RepositoryFlow;
 }
 
-export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onSelectStage }: {
+export function FlowMap({ repositoryId, analysis, index, visible, selectedStageOrder, onSelectStage }: {
   repositoryId: string;
   analysis: RepositoryAnalysis;
   /** 全部已索引文件：入口识别是启发式，识别不到/识别错时由用户从这里手动指定流程起点 */
   index: RepositoryIndex;
+  /** 宏观设计是不是当前 tab。流程生成是这条路径上最贵的一次 LLM 调用，而三视图常驻挂载 ⇒
+      停在别的 tab 时不该由隐藏的宏观设计面板替用户点它。 */
+  visible: boolean;
   selectedStageOrder?: number;
   onSelectStage: (selection: FlowSelection | null) => void;
 }): ReactElement {
   const entries = analysis.graph.entrypoints;
+  /** 闸门是单向的：没打开过宏观设计就一次都不生成流程；打开过之后照旧按输入变化重取，
+      来回切 tab 不重发（`visible` 直接进依赖会让每次切回来都清空结果、重跑一次并闪骨架）。 */
+  const everVisible = useEverVisible(visible);
   const [entryPath, setEntryPath] = useState(() => preferredEntryPath(entries, analysis));
   const [state, setState] = useState<FlowState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -136,19 +143,25 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
   /** 重试计数：值一变就重跑取数 effect——失败前这里只有一条虚线文案，用户只能切视图重挂载。 */
   const [attempt, setAttempt] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  /** 一次取流程的唯一键。StrictMode 会把 effect 跑两遍（mount → cleanup → mount），而流程生成**冷缓存时是真金白银**：
+      两个并发请求都判未命中，同一份输入烧两次（今天实测两条各 9,621 in）。所以按 key 去重——
+      同一个 key 只发一次；换入口 / 重分析 / 点重试都会换 key，照常再发。 */
+  const flowKey = `${repositoryId}:${entryPath}:${analysis.versionStamp}:${attempt}`;
+  const requestedFlow = useRef("");
   useEffect(() => {
-    if (!entryPath) return;
-    let current = true;
+    if (!entryPath || !everVisible || requestedFlow.current === flowKey) return;
+    requestedFlow.current = flowKey;
     setLoading(true);
     setError("");
     setState(null);
+    // 过期响应按 key 判死，**不用**卸载标志：StrictMode 的 cleanup 会把第一次的好结果丢掉，
+    // 第二次 mount 又被 key 去重挡住不再发 —— 界面就永久停在 loading（教学面板踩过同一个坑）。
     api.getRepositoryFlow(repositoryId, entryPath)
-      .then((result) => { if (current) setState(result); })
-      .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法生成流程"); })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
+      .then((result) => { if (requestedFlow.current === flowKey) setState(result); })
+      .catch((reason: unknown) => { if (requestedFlow.current === flowKey) setError(reason instanceof Error ? reason.message : "无法生成流程"); })
+      .finally(() => { if (requestedFlow.current === flowKey) setLoading(false); });
     // analysis.versionStamp 变化（仓库重分析）后流程需要重新生成
-  }, [repositoryId, entryPath, analysis.versionStamp, attempt]);
+  }, [repositoryId, entryPath, analysis.versionStamp, attempt, everVisible, flowKey]);
 
   // 首次生成是几十秒量级的 LLM 调用，只有一行文案看不出「还在动」——计时 + 骨架给出进度感
   useEffect(() => {

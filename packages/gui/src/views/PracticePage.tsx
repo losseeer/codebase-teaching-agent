@@ -8,6 +8,7 @@ import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
+import { useEverVisible } from "../ui/useEverVisible";
 import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, PRACTICE_DEFAULT_MODULES, type KnowledgeModule } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
@@ -51,7 +52,7 @@ function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): strin
   return "只填写你预测的返回值";
 }
 
-export function PracticePage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
+export function PracticePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [summary, setSummary] = useState<PracticeSummary | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
@@ -68,11 +69,14 @@ export function PracticePage({ workspace, chat: t }: { workspace: Workspace; cha
   useEffect(() => { savePracticeModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("practice", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
-  /** 进度读取：成功也要把旧的错误清掉——原来错误一旦挂上就一直留在面板里，重新拉好之后还在「无法读取练习进度」。 */
+  /** 进度读取：成功也要把旧的错误清掉——原来错误一旦挂上就一直留在面板里，重新拉好之后还在「无法读取练习进度」。
+      只在「这个 tab 被打开过」之后读一次（常驻挂载的隐藏面板不必替用户查库）；
+      生成与提交后仍按原路 `refreshSummary()` 主动刷新。 */
+  const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
     api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
   };
-  useEffect(refreshSummary, [repositoryId]);
+  useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
   // 出题分派：活动 chip = 程序理解题 → 规则出题族；自定义主题 chip → LLM 出题族（family 对用户不可见）。
   // 「换一题」对 LLM 题走 variantNonce+1（出新题，旧题保留）；对规则题按 targetUnitId 重出。

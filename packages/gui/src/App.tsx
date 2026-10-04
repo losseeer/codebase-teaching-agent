@@ -382,9 +382,11 @@ function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnTyp
   return (
     <div className="workbench-root">
       <WorkspaceTabs active={active} onChange={(id) => setParams(id === "map" ? { workspace: "map" } : { workspace: id })} />
-      <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} /></div>
-      <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} /></div>
-      <div className="workbench-view" hidden={active !== "practice"}><PracticePage workspace={workspace} chat={chat} /></div>
+      {/* 三个视图常驻挂载（切 tab 不丢状态），所以「可见性」必须传进去：
+          推荐入口与流程生成都是花钱的 LLM 调用，用户停在宏观设计时不该由隐藏面板替他点一次。 */}
+      <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} visible={active === "map"} /></div>
+      <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} visible={active === "teaching"} /></div>
+      <div className="workbench-view" hidden={active !== "practice"}><PracticePage workspace={workspace} chat={chat} visible={active === "practice"} /></div>
     </div>
   );
 }

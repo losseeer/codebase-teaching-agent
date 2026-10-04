@@ -10,6 +10,7 @@ import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
+import { useEverVisible } from "../ui/useEverVisible";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
@@ -23,7 +24,7 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
 /** 推荐入口一屏先露这么多条，其余收进「显示更多」（规则归类常有几十条，全铺会把「仓库文件」挤出视野）。 */
 const ENTRY_PAGE = 8;
 
-export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
+export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   /** 教学模块 = 课程树「模块地图」的节点（业务模块跟着仓库走），这里只存覆盖层：改名 / 隐藏 / 自建。 */
   const [overrides, setOverrides] = useState<ModuleOverrides>(() => loadModuleOverrides(repositoryId));
@@ -57,12 +58,16 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
   }, [modules, repositoryId]);
   useEffect(() => { if (activeModule) saveActiveModule("teaching", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
+  /** 文件树与推荐入口都只在「这个 tab 被打开过之后」才取：常驻挂载的隐藏面板不该替用户查库、更不该替他点 LLM。
+      `useEverVisible` 是一次性闸门（打开过就永久为真），所以来回切 tab 不会重复发。 */
+  const everVisible = useEverVisible(visible);
   useEffect(() => {
+    if (!everVisible) return;
     let current = true;
     setFileTree([]);
     api.getIndex(repositoryId).then((index) => { if (current) setFileTree(index.fileTree); }).catch(() => undefined);
     return () => { current = false; };
-  }, [repositoryId]);
+  }, [repositoryId, everVisible]);
 
   /** 关闭一个源码 tab；关的是当前文件就把视图切到相邻 tab（没有就清空）。 */
   const closeTab = (path: string): void => {
@@ -156,7 +161,10 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
     requestedEntries.current.clear();
   }, [repositoryId]);
   useEffect(() => {
-    if (!t.course) return;
+    // 推荐入口是**花 token 的请求**，三视图常驻挂载 ⇒ 用户停在宏观设计时，隐藏的教学面板也会替他点一次 LLM
+    // （实测切一次仓就白烧两轮 map.entry-suggest）。闸门是单向的：没打开过这个 tab 就一次都不发，
+    // 打开过之后按原依赖走，来回切 tab 不重发（去重另有 ref 兜着）。
+    if (!everVisible || !t.course) return;
     const mod = modules.find((item) => item.id === activeModule);
     if (!mod || requestedEntries.current.has(entryKey)) return;
     requestedEntries.current.add(entryKey);
@@ -174,14 +182,16 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
       .catch(() => {
         setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "推荐入口请求失败；以下按模块结构列出文件。" } }));
       });
-  }, [t.course, repositoryId, activeModule, entryKey, modules]);
+  }, [t.course, repositoryId, activeModule, entryKey, modules, everVisible]);
   /** 推荐入口默认只露前若干条：大模块的文件清单能有几十条，整屏铺开会把「仓库文件」挤出视野。
       展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
   const [expandedEntryLists, setExpandedEntryLists] = useState<Set<string>>(new Set());
   const moduleEntries = entryState[entryKey];
+  /** 「打开过这个 tab、但请求还没落地」的那一帧也按等待渲染：否则先闪一下兜底文件清单再转 loading，看着像结果被换掉了。 */
+  const entryPending = everVisible && !moduleEntries && Boolean(t.course);
   const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
     ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line }))
-    : moduleEntries?.status === "loading" || !t.course
+    : moduleEntries?.status === "loading" || entryPending || !t.course
       ? []
       : moduleFiles;
   /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
@@ -189,7 +199,7 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNote = moduleEntries?.status === "llm"
     ? "LLM 从模块文件里推荐 · 可直接提问"
-    : moduleEntries?.status === "loading"
+    : moduleEntries?.status === "loading" || entryPending
       ? "正在从模块文件里挑阅读顺序…"
       : moduleEntries?.reason ?? `模块地图给出 ${moduleFiles.length} 个文件 · 配置 LLM 后排阅读顺序`;
 
