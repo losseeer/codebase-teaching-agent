@@ -31,6 +31,7 @@ import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
+import { checkTurnInvariants, invariantTailNotice } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
@@ -636,6 +637,48 @@ function persistScopedTurn(repositoryPath: string, threadId: string | undefined,
   appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }]);
 }
 
+/**
+  运行期不变量复检（B 档第 2 刀的那三条，零 token / 纯函数 / 微秒级）。
+  外部批评说「回合一旦生成就不再被复核」——这一刀把话收回来：合格也记一条 `turn_invariant`，
+  分母因此在环成立；引用没能核实时在正文尾部补一行明示，学习者读到的是被核过的文本。
+
+  能在尾部补话而不打断体验，靠的是一个实现事实：三种作用域都是**模型算完之后分块回放**
+  （`chunk(..., 72)`），不是真 token 流。哪天真流式了，这行提示就得改成独立事件（记在这里防忘）。
+
+  判据与 `phaseB:eval` 第 4 节共用 `checkTurnInvariants` 同一个函数，不分两份实现。
+  */
+function recheckTurn(input: {
+  repository: NonNullable<ReturnType<typeof repositoryOr404>>;
+  journal: Journal;
+  sessionId?: string;
+  scene: "teach" | "map_chat" | "practice_chat";
+  question: string;
+  answer: string;
+  stage?: string;
+  pedagogy?: string;
+  style?: number;
+}): { answer: string; failed: string[] } {
+  const verdict = checkTurnInvariants({
+    sessionId: input.sessionId ?? "unscoped",
+    at: new Date().toISOString(),
+    question: input.question,
+    answer: input.answer,
+    stage: input.stage ?? "",
+    pedagogy: input.pedagogy ?? "",
+    style: input.style ?? 0,
+    answerTruncated: false,
+    scene: input.scene
+  }, new Map(input.repository.index.files.map((file) => [file.path, file.lines])));
+  input.journal.append("turn_invariant", {
+    scene: input.scene,
+    applicable: verdict.applicable.join("、") || null,
+    failed: verdict.failed.join("、") || null,
+    evidence: Object.entries(verdict.evidence).map(([id, text]) => `${id}=${text}`).join(" ｜ ") || null
+  }, input.sessionId);
+  const notice = invariantTailNotice(verdict);
+  return { answer: notice ? `${input.answer}${notice}` : input.answer, failed: verdict.failed };
+}
+
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -649,8 +692,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
-    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
+    // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
+    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
+    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
@@ -715,8 +760,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
-    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
+    // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
+    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
+    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
@@ -785,8 +832,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
-    persistScopedTurn(repository.path, thread?.id, content, result.reply);
     const journal = new Journal(repository.path, repository.index.repositoryId);
+    // 运行期复检（零 token）：练习答疑也在环内——它同样会引用仓库里的代码位置
+    result.reply = recheckTurn({ repository, journal, sessionId: thread?.id, scene: "practice_chat", question: content, answer: result.reply }).answer;
+    persistScopedTurn(repository.path, thread?.id, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
@@ -1028,12 +1077,26 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     // 下次进会话还会冒出一条自己掐掉的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     teachingStates.set(outcome.session.id, outcome.session);
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    // 运行期复检（零 token）：三条不变量在回合收尾跑一次；引用核不上就补一行明示，
+    // 让「落库的正文 / 回放的正文 / journal 的 turn_text」三者都是学习者真看到的那一份。
+    // 状态机用的 stage/pedagogy/style 取**本回合生效值**，与离线判分同一口径。
+    outcome.assistant.content = recheckTurn({
+      repository,
+      journal,
+      sessionId: outcome.session.id,
+      scene: "teach",
+      question: request.body.content.trim(),
+      answer: outcome.assistant.content,
+      stage: outcome.session.stage,
+      pedagogy: outcome.session.settings.pedagogy,
+      style: outcome.session.settings.style
+    }).answer;
     // 回合正文 + 状态快照落库：GUI 重启后接着聊、以及 run-trace 之外的「这一轮停在哪」都从这里取
     persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
       { role: "user", content: request.body.content.trim() },
       { role: "assistant", content: outcome.assistant.content, ...(outcome.assistant.stage ? { stage: outcome.assistant.stage } : {}) }
     ], { stage: outcome.session.stage, fallbackCount: outcome.session.fallbackCount, settings: outcome.session.settings });
-    const journal = new Journal(repository.path, repository.index.repositoryId);
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
     if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
     journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);

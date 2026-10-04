@@ -18,6 +18,7 @@
     "phaseB:eval": "tsx src/scripts/eval-run.ts",
     "phaseB:judge": "tsx src/scripts/judge-turns.ts",
     "search:embed": "tsx src/scripts/embed-repo.ts",
+    "cache:probe": "tsx src/scripts/probe-prefix-cache.ts",
     "l1:reburn": "tsx src/scripts/reburn-l1.ts"
   },
   "dependencies": {

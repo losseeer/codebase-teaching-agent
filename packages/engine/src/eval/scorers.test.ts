@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryFlow } from "@codebase-tutor/shared";
-import { scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, type TeachTurn } from "./scorers.js";
+import { checkTurnInvariants, invariantTailNotice, scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, type TeachTurn } from "./scorers.js";
 
 /**
   B 档判分器：全部零 token、纯函数。这里守的是判分口径本身——
@@ -130,5 +130,59 @@ describe("教学法不变量机检（第 2 刀）", () => {
     const binding = score.checks.find((check) => check.id === "anchor-binding");
     expect(binding?.applicable).toBe(2);
     expect(binding?.pass).toBe(1);
+  });
+});
+
+describe("运行期在环复检（第 2 刀的那三条搬到回合收尾）", () => {
+  const files = new Map([["src/graph/nodes.py", 20]]);
+  const turn = (over: Partial<TeachTurn>): TeachTurn =>
+    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", stage: "orient", pedagogy: "socratic", style: 50, answerTruncated: false, ...over });
+
+  it("单回合结论：该判几条 / 哪条失守 / 证据只挂失守那条", () => {
+    const verdict = checkTurnInvariants(turn({ answer: "见 src/graph/ghost.py:8，为什么？" }), files);
+    expect(verdict.applicable).toEqual(["socratic-question", "reference-grounding", "anchor-binding"]);
+    expect(verdict.failed).toEqual(["reference-grounding"]);
+    expect(verdict.evidence["reference-grounding"]).toContain("ghost.py");
+    expect(verdict.evidence["anchor-binding"]).toBeUndefined();
+  });
+
+  it("map/practice 只判引用那条：留问句与点名标识符是 teach 的设计承诺，别拿它们去缩别的场景的分母", () => {
+    for (const scene of ["map_chat", "practice_chat"] as const) {
+      // 没引用就没有可判条目：不适用 ≠ 通过，分母如实缩到 0
+      expect(checkTurnInvariants(turn({ scene, answer: "这一段没有任何问句也没有标识符" }), files).applicable).toEqual([]);
+      const verdict = checkTurnInvariants(turn({ scene, answer: "见 src/graph/ghost.py:8 这一行" }), files);
+      expect(verdict.applicable).toEqual(["reference-grounding"]);
+      expect(verdict.failed).toEqual(["reference-grounding"]);
+    }
+  });
+
+  it("尾部明示只在引用失守时出现，且它自己不含任何引用形态的串（否则回放同一份文本会被二次判分）", () => {
+    const failing = checkTurnInvariants(turn({ answer: "见 src/graph/ghost.py:8，为什么？" }), files);
+    const notice = invariantTailNotice(failing);
+    expect(notice).toContain("自动复检");
+    expect(notice).toContain("未能");
+    expect(scoreReferences([notice ?? ""], files).total).toBe(0);
+    // 幂等：把加了明示的文本再判一遍，结论不变、也不会新长出问题
+    const again = checkTurnInvariants(turn({ answer: `${"见 src/graph/ghost.py:8，为什么？"}${notice}` }), files);
+    expect(again.failed).toEqual(["reference-grounding"]);
+    const styleOnly = checkTurnInvariants(turn({ answer: "这里没有问句" }), files);
+    expect(invariantTailNotice(styleOnly)).toBeUndefined();
+  });
+
+  it("离线聚合与在环单回合判分同源：分母之和必须逐条相等（两份实现迟早漂移，这条钉住）", () => {
+    const turns = [
+      turn({ answer: "先看 src/graph/nodes.py:8 的顺序，你觉得哪步先跑？" }),
+      turn({ answer: "这里没有问句，直接讲结论。" }),
+      turn({ answer: "见 src/graph/ghost.py:8，下一步看哪里？" }),
+      turn({ scene: "map_chat", answer: "地图问答里的 src/graph/ghost.py:3 引用" }),
+      turn({ answer: "半截引用 src/grap", answerTruncated: true })
+    ];
+    const score = scoreTeachInvariants(turns, files);
+    const perTurn = turns.map((item) => checkTurnInvariants(item, files));
+    for (const check of score.checks) {
+      const applicable = perTurn.filter((verdict) => verdict.applicable.includes(check.id)).length;
+      const failed = perTurn.filter((verdict) => verdict.failed.includes(check.id)).length;
+      expect([check.id, check.applicable, check.pass]).toEqual([check.id, applicable, applicable - failed]);
+    }
   });
 });

@@ -636,6 +636,10 @@ export type JournalEventType =
     双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
     表达质量裁判）的被测输入源。 */
   | "turn_text"
+  /** 运行期不变量复检（2026-10-04，B 档第 2 刀的在环那一半）：一回合一条，**合格也记**（分母要在环成立）。
+    payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
+    判据与离线 `phaseB:eval` 第 4 节共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
+  | "turn_invariant"
   /** 会话线程的生命周期事件（2026-09-27 会话持久化）：`session_created` 在引擎发 id 建线程时写，
     `session_deleted` 只在**软删**时写。payload = scope(teach|map|practice) + thread_id + node_id/exercise_id + reason。
     删除是产品线的动作，journal 这条线只留「发生过删除」这一事实，不删任何既有事件行。 */

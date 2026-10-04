@@ -24,7 +24,8 @@
     "phase0:audit": "pnpm --filter @codebase-tutor/engine phase0:audit",
     "postinstall": "pnpm --filter @codebase-tutor/engine run setup:native",
     "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native",
-    "search:embed": "pnpm --filter @codebase-tutor/engine search:embed"
+    "search:embed": "pnpm --filter @codebase-tutor/engine search:embed",
+    "cache:probe": "pnpm --filter @codebase-tutor/engine cache:probe"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",

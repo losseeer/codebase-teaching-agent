@@ -173,10 +173,86 @@ export interface TeachTurn {
   style: number;
   /** 回复落盘时被 2000 字截断——引用核对会看到半截引用，这条不参与引用判分。 */
   answerTruncated: boolean;
+  /**
+    缺省 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
+    「留问句」与「绑定锚点」两条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。
+    */
+  scene?: "teach" | "map_chat" | "practice_chat";
+}
+
+export type InvariantId = "socratic-question" | "reference-grounding" | "anchor-binding";
+
+/** 三条不变量的定义表：离线报告与运行期提示共用同一份措辞与出处，改一处就两边一起变。 */
+export const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
+  { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", source: "tutor-settings.ts「每轮保留一个可验证的问题」" },
+  { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", source: "锚点可靠性纪律（第 1 刀同一口径）" },
+  { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", source: "tutor-settings.ts「将问题绑定到当前源码锚点」" }
+];
+
+/** 单回合复检结论。`applicable` 是该回合该判的条目，`failed` 是其中的失守项。 */
+export interface TurnInvariantVerdict {
+  applicable: InvariantId[];
+  failed: InvariantId[];
+  /** 每条失守的证据摘录（≤60 字或问题引用清单），journal 埋点与排查用。 */
+  evidence: Partial<Record<InvariantId, string>>;
+}
+
+const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
+
+/**
+  单回合的三条不变量机检——**离线判分器与运行期在环复检共用这一个实现**。
+  分成两份实现的后果是「线上说合格、离线算不合格」，那比没有复检更糟。
+
+  判「通过」的口径刻意保守：如问号检查只抓「整条回复一个问句都没有」，
+  代码示例里的三元 `?` 可能造成极个别假通过——读数只用于回归对比，不当绝对分。
+  */
+export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>): TurnInvariantVerdict {
+  const teach = (turn.scene ?? "teach") === "teach";
+  const applicable: InvariantId[] = [];
+  const failed: InvariantId[] = [];
+  const evidence: TurnInvariantVerdict["evidence"] = {};
+
+  if (teach && turn.pedagogy === "socratic" && turn.stage !== "confirmed") {
+    applicable.push("socratic-question");
+    if (!/[?？]/.test(turn.answer)) {
+      failed.push("socratic-question");
+      evidence["socratic-question"] = excerpt(turn.answer);
+    }
+  }
+  // 截断行的末尾可能悬着半截引用，判它等于误判——缩出分母，报告里单独计数
+  if (!turn.answerTruncated) {
+    const refs = scoreReferences([turn.answer], files);
+    if (refs.total > 0) {
+      applicable.push("reference-grounding");
+      if (refs.ok !== refs.total) {
+        failed.push("reference-grounding");
+        evidence["reference-grounding"] = refs.problems.map((problem) => `${problem.raw}（${problem.why}）`).join("、");
+      }
+    }
+  }
+  if (teach && styleBand(turn.style) !== "plain") {
+    applicable.push("anchor-binding");
+    if (!/[A-Za-z][A-Za-z0-9]{4,}/.test(turn.answer)) {
+      failed.push("anchor-binding");
+      evidence["anchor-binding"] = excerpt(turn.answer);
+    }
+  }
+  return { applicable, failed, evidence };
+}
+
+/**
+  运行期给学习者看的那一行明示。**只在引用失守时出现**：风格类失守是教学侧的读数问题，
+  不是学习者能据以行动的事实，把它显示出来只是噪音。
+  这句话里刻意不含任何 `文件.扩展名:行号` 形态的串，也不含 `read_file` 这类工具名——
+  否则它自己会变成下一条被检的引用（journal 记的是用户真看到的文本，回放同一条时会二次判分）。
+  */
+export function invariantTailNotice(verdict: TurnInvariantVerdict): string | undefined {
+  if (!verdict.failed.includes("reference-grounding")) return undefined;
+  return "\n\n⚠️ 自动复检：本轮有代码位置引用未能在当前仓库核实，请以仓库实际内容为准。";
 }
 
 export interface InvariantCheck {
-  id: string;
+  id: InvariantId;
   label: string;
   /** 适用回合数（不适用 ≠ 通过，分母如实缩）。 */
   applicable: number;
@@ -192,42 +268,24 @@ export interface TeachInvariantScore {
   checks: InvariantCheck[];
 }
 
-const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
-
 /**
-  只判**设计上写了保证、且文本层可核对**的三条不变量（出处见 source 字段）；
+  只判**设计上写了保证、且文本层可核对**的三条不变量（出处见 INVARIANTS 表）；
   「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给第 3 刀裁判。
-  判「通过」的口径刻意保守：如问号检查只抓「整条回复一个问句都没有」，
-  代码示例里的三元 `?` 可能造成极个别假通过——读数只用于回归对比，不当绝对分。
+  逐条判定在 `checkTurnInvariants`——运行期在环复检也走它，这里只负责按条目聚合。
   */
 export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
-  const socratic: InvariantCheck = { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", applicable: 0, pass: 0, misses: [], source: "tutor-settings.ts「每轮保留一个可验证的问题」" };
-  const refs: InvariantCheck = { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", applicable: 0, pass: 0, misses: [], source: "锚点可靠性纪律（第 1 刀同一口径）" };
-  const binding: InvariantCheck = { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", applicable: 0, pass: 0, misses: [], source: "tutor-settings.ts「将问题绑定到当前源码锚点」" };
+  const checks = new Map<string, InvariantCheck>(INVARIANTS.map((item) => [item.id, { ...item, applicable: 0, pass: 0, misses: [] }]));
   let skippedTruncated = 0;
 
   for (const turn of turns) {
-    if (turn.pedagogy === "socratic" && turn.stage !== "confirmed") {
-      socratic.applicable += 1;
-      if (/[?？]/.test(turn.answer)) socratic.pass += 1;
-      else socratic.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: excerpt(turn.answer) });
-    }
-    if (turn.answerTruncated) {
-      // 截断行的末尾可能悬着半截引用，判它等于误判——缩出分母，报告里单独计数
-      skippedTruncated += 1;
-    } else {
-      const check = scoreReferences([turn.answer], files);
-      if (check.total > 0) {
-        refs.applicable += 1;
-        if (check.ok === check.total) refs.pass += 1;
-        else refs.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: check.problems.map((problem) => `${problem.raw}（${problem.why}）`).join("、") });
-      }
-    }
-    if (styleBand(turn.style) !== "plain") {
-      binding.applicable += 1;
-      if (/[A-Za-z][A-Za-z0-9]{4,}/.test(turn.answer)) binding.pass += 1;
-      else binding.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: excerpt(turn.answer) });
+    if (turn.answerTruncated) skippedTruncated += 1;
+    const verdict = checkTurnInvariants(turn, files);
+    for (const id of verdict.applicable) {
+      const check = checks.get(id)!;
+      check.applicable += 1;
+      if (verdict.failed.includes(id)) check.misses.push({ at: turn.at, sessionId: turn.sessionId, excerpt: verdict.evidence[id] ?? "" });
+      else check.pass += 1;
     }
   }
-  return { turns: turns.length, skippedTruncated, checks: [socratic, refs, binding] };
+  return { turns: turns.length, skippedTruncated, checks: [...checks.values()] };
 }

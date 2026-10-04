@@ -26,6 +26,9 @@ function eventLine(event: JournalEvent): string {
   switch (event.type) {
     case "turn_text":
       return `问「${clip(p.question, 60)}」答「${clip(p.answer, 80)}」${p.answer_truncated ? "（答截断）" : ""}${p.question_truncated ? "（问截断）" : ""}`;
+    case "turn_invariant":
+      // 在环复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
+      return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "loop_round":
       return `决策=${p.decision ?? "未记"} 提议=${p.proposed ?? "—"}→执行=${p.executed ?? "—"} 工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}`;
     case "token_usage":

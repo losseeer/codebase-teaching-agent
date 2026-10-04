@@ -246,3 +246,44 @@ describe("整句中文：兜底最后一级与它的两道闸（§26 读数换�
     expect(result.content).not.toContain("Pair.java");
   });
 });
+describe("符号级位置回报（就近函数 + 行号）", () => {
+  const paths = ["src/pay/VerifyCallback.java", "src/pay/Receipt.java"];
+  const index = {
+    repositoryId: "r11", repositoryPath: "/h", scannedAt: "2026-10-04T00:00:00.000Z", totalFiles: 2, totalLines: 90,
+    files: paths.map((path) => ({ path, extension: ".java", bytes: 1, lines: 45 }))
+  } as unknown as RepositoryIndex;
+  const symbols = [
+    { id: "u1", name: "verifyCallback", kind: "method", path: paths[0], line: 41, parameters: ["tokenValue"] },
+    { id: "u2", name: "sum", kind: "method", path: paths[1], line: 9, parameters: ["id"] }
+  ];
+  const analysis = {
+    repositoryId: "r11",
+    graph: { imports: { [paths[0]]: [], [paths[1]]: [] }, calls: [], symbols, entrypoints: [], semanticBackend: "static", lspStatus: [] }
+  } as unknown as RepositoryAnalysis;
+  const local = buildSearchCorpus(index, analysis, new Map<string, string>([[paths[0], "支付回调验签"], [paths[1], "收据金额实体"]]));
+  const ask = (query: string) => executeSearchCode(local, JSON.stringify({ query }));
+
+  it("命中的符号连行号一起给出：模型拿着 verifyCallback:41 直接读文件，不用再猜位置", () => {
+    const result = ask("verifyCallback 支付");
+    expect(result.audit.topPaths[0]).toBe(paths[0]);
+    expect(result.content).toContain("就近: verifyCallback:41");
+  });
+
+  it("形参与种类不参与打分（三仓实测：加了这个面 hit@5 一格不涨，还把干净负例撞成误命中）", () => {
+    expect(ask("tokenvalue 无关词").audit.hits).toBe(0);
+    expect(ask("id 无关词").audit.hits).toBe(0);
+  });
+
+  it("同名符号重载：打分用的名字去重，定位用的行号逐条保留", () => {
+    const overloads = buildSearchCorpus(index, {
+      ...analysis,
+      graph: { ...analysis.graph, symbols: [
+        { id: "u1", name: "verifyCallback", kind: "method", path: paths[0], line: 41 },
+        { id: "u2", name: "verifyCallback", kind: "method", path: paths[0], line: 63 }
+      ] }
+    } as unknown as RepositoryAnalysis, new Map());
+    const entry = overloads.entries.find((item) => item.path === paths[0]);
+    expect(entry?.symbols).toEqual(["verifyCallback"]);
+    expect(entry?.units.map((unit) => unit.line)).toEqual([41, 63]);
+  });
+});

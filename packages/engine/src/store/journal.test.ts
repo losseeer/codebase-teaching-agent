@@ -78,6 +78,7 @@ describe("回合文本落盘（turn_text）", () => {
 
   it("turn_text 在运行时白名单内，能写入并读回", () => {
     expect(isJournalEventType("turn_text")).toBe(true);
+    expect(isJournalEventType("turn_invariant")).toBe(true);   // 运行期复检事件也在白名单内（shared 的联合类型与此必须同步）
     const journal = new Journal(repository, "repo_1");
     journal.append("turn_text", turnTextPayload("map_chat", "这门工程的分层是怎样的？", "分三层：接口、服务、存储。"), "s-1");
     const [event] = readJournal(repository);

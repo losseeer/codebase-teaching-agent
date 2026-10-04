@@ -23,6 +23,8 @@ const MAX_LIMIT = 15;
 const MAX_QUERY_TOKENS = 12;
 /** 每条结果最多列几个命中符号。 */
 const MAX_SYMBOLS_SHOWN = 6;
+/** 每条结果最多报几个「撞上的函数」——行号是给 read_file 的落点，不是让模型猜的。 */
+const MAX_UNITS_SHOWN = 2;
 /** 摘要进语料/结果的长度上限：L1 承诺 ≤60 字，这里防御脏行——超长摘要会挤掉别的命中条目。 */
 const MAX_SUMMARY_CHARS = 160;
 /** 兜底臂的文档频率闸：词元出现在超过这个比例的语料文件里就当通用词丢掉（下限见 FALLBACK_DF_FLOOR）。 */
@@ -34,7 +36,7 @@ const FALLBACK_MIN_HITS = 2;
 
 export const SEARCH_CODE_TOOL: LlmTool = {
   name: "search_code",
-  description: "按关键词检索仓库内已分析的文件（匹配文件路径、符号名、文件一句话职责），返回候选文件的位置与职责清单——**不返回源码正文**。不确定实现在哪个文件时先调用它缩小范围，再用 read_file 读命中的路径。禁止用它替代 read_file 获取代码内容。",
+  description: "按关键词检索仓库内已分析的文件（匹配文件路径、符号名、文件一句话职责），返回候选文件的位置（含撞上的函数与行号）与职责清单——**不返回源码正文**。不确定实现在哪个文件时先调用它缩小范围，再用 read_file 读命中的路径。禁止用它替代 read_file 获取代码内容。",
   parameters: {
     type: "object",
     properties: {
@@ -63,6 +65,13 @@ interface CorpusEntry {
   symbols: string[];
   /** 符号名拼成的检索文本（小写）。 */
   symbolText: string;
+  /**
+    文件内符号连定义行。**不参与打分**，只用来把「撞上的到底是哪个函数、在第几行」回报给模型。
+    为什么不给它一个命中面：2026-10-04 试过把 `种类(形参)` 加成第四个面，三仓 hit@5 一格没涨
+    （83.3 / 70.0 / 7.7 / 75.0 / 6.3 / 87.5 / 15.8 全部一字不动），反倒把 `avro schema registry`
+    那条干净负例撞成误命中——通用参数名满地都是。实验读数见开发日志 §30，代码留这条注释防重犯。
+    */
+  units: { name: string; line?: number }[];
   summary: string;
 }
 
@@ -74,22 +83,26 @@ export interface SearchCorpus {
 export function buildSearchCorpus(index: RepositoryIndex, analysis: RepositoryAnalysis, summaries: Map<string, string>): SearchCorpus {
   const analyzed = new Set(Object.keys(analysis.graph.imports));
   for (const symbol of analysis.graph.symbols) analyzed.add(symbol.path);
-  const symbolsByPath = new Map<string, string[]>();
+  const unitsByPath = new Map<string, { name: string; line?: number }[]>();
   for (const symbol of analysis.graph.symbols) {
-    const list = symbolsByPath.get(symbol.path);
-    if (list) list.push(symbol.name);
-    else symbolsByPath.set(symbol.path, [symbol.name]);
+    const unit = { name: symbol.name, ...(symbol.line === undefined ? {} : { line: symbol.line }) };
+    const list = unitsByPath.get(symbol.path);
+    if (list) list.push(unit);
+    else unitsByPath.set(symbol.path, [unit]);
   }
   const linesOf = new Map(index.files.map((file) => [file.path, file.lines]));
   const entries: CorpusEntry[] = [];
   for (const path of [...analyzed].sort()) {
-    const names = [...new Set(symbolsByPath.get(path) ?? [])];
+    const units = unitsByPath.get(path) ?? [];
+    // 同名符号可能有多个（重载、内部类）：打分用的名字去重，定位用的行号逐条留着
+    const names = [...new Set(units.map((unit) => unit.name))];
     entries.push({
       path,
       pathWords: path.toLowerCase(),
       lines: linesOf.get(path),
       symbols: names,
       symbolText: names.join(" ").toLowerCase(),
+      units,
       summary: (summaries.get(path) ?? "").slice(0, MAX_SUMMARY_CHARS)
     });
   }
@@ -111,6 +124,8 @@ interface Scored {
   pathHit: boolean;
   symbolHit: boolean;
   summaryHit: boolean;
+  /** 被符号名词元撞上的具体符号：不改排名，只多给一个落点。 */
+  hitUnits: { name: string; line?: number }[];
 }
 
 /** 一枚词元在某个命中面里的首个出现区间（`tokenHits` 认可命中 ⇒ `indexOf` 必然找得到一处出现）。 */
@@ -160,7 +175,14 @@ function scoreCorpus(corpus: SearchCorpus, tokens: string[], minHits: number): S
       // 09-22：测试文件重罚垫底但**不剔除**——真仓 B 档实测 CacheClientTest 这类顶着同名类前缀的
       // 文件抢 top1；封顶 1 分压在一切真实命中之下（非测试最低 2 分），概念只有测试演示时仍能兜底
       // 出现——硬剔除会把「仓里有」答成「没有」，那是事实性错误，比排名瑕疵严重。
-      scored.push({ entry, score: isTestPath(entry.path) ? Math.min(score, 1) : score, pathHit: pathTokens.length > 0, symbolHit: symbolTokens.length > 0, summaryHit: summaryTokens.length > 0 });
+      scored.push({
+        entry,
+        score: isTestPath(entry.path) ? Math.min(score, 1) : score,
+        pathHit: pathTokens.length > 0,
+        symbolHit: symbolTokens.length > 0,
+        summaryHit: summaryTokens.length > 0,
+        hitUnits: entry.units.filter((unit) => symbolTokens.some((token) => tokenHits(token, unit.name.toLowerCase()))).slice(0, MAX_UNITS_SHOWN)
+      });
     }
   }
   // 分数降序；同分按路径字典序——结果顺序必须与构建顺序无关（可复现）
@@ -219,7 +241,9 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
     const matched = [item.pathHit && "路径", item.symbolHit && "符号", item.summaryHit && "职责"].filter(Boolean).join("/");
     // 兜底进结果时明说是测试文件——模型拿着这个上下文自己决定要不要读，而不是被排名悄悄误导
     const testTag = isTestPath(item.entry.path) ? "，测试文件" : "";
-    const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}${testTag}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
+    // 「就近」= 这条查询真的撞在哪个函数、第几行；把符号级位置交给模型，省一次「搜到文件再猜位置」的读取
+    const nearest = item.hitUnits.map((unit) => (unit.line === undefined ? unit.name : `${unit.name}:${unit.line}`)).join("、");
+    const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}${testTag}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${nearest ? `\n  就近: ${nearest}` : ""}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
     if (used + block.length > MAX_RESULT_CHARS) {
       blocks.push(`…（其余 ${hits.length - blocks.length} 条超出结果预算已省略，可收窄 query 或调低 limit。）`);
       break;
