@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "../lib.js";
 import { TutorDatabase } from "../store/database.js";
 import { ImportService, refinementIsFresh, type ImportedRepository } from "./importer.js";
@@ -48,9 +49,32 @@ afterEach(() => {
   delete process.env.TUTOR_ENGINE_LOG;
 });
 
-describe("ImportService.restorePersisted（engine 重启恢复注册）", () => {
+/** 测试用 git 仓：新鲜度判定的 HEAD 轴需要真提交，非 git 仓只能验到 unknown/stale。 */
+function gitInitAndCommit(repository: string): string {
+  const run = (...args: string[]): string => execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
+  run("init", "-q");
+  run("add", "-A");
+  run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fixture");
+  return run("rev-parse", "HEAD");
+}
+
+/** 把 db 里的 analysis 换成指定 stamp / HEAD（模拟「产物是在这个状态下算出来的」）。 */
+function rewriteAnalysis(repoDir: string, repositoryId: string, patch: Partial<RepositoryAnalysis>): void {
+  const database = new TutorDatabase(repoDir);
+  const stored = database.getAnalysis(repositoryId)!;
+  database.saveAnalysis({ ...stored, ...patch });
+  database.close();
+}
+
+describe("ImportService 地址簿与懒挂载", () => {
   let root: string;
   let registryFile: string;
+  const mounted: ImportedRepository[] = [];
+
+  function writeRegistry(paths: string[]): void {
+    mkdirSync(dirname(registryFile), { recursive: true });
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: paths })}\n`);
+  }
 
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-import-test-")));
@@ -59,81 +83,150 @@ describe("ImportService.restorePersisted（engine 重启恢复注册）", () => 
   });
 
   afterEach(() => {
+    for (const repository of mounted.splice(0)) repository.watcher?.close();
     delete process.env.TUTOR_REGISTRY_FILE;
+    delete process.env.TUTOR_MAX_MOUNTED;
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("注册表里的仓库从 .tutor 恢复注册，可被 getRepository/findRepositoryForPath 命中", () => {
-    const { repoDir, repositoryId } = makePersistedRepo(root, "alpha");
-    mkdirSync(dirname(registryFile), { recursive: true });
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [repoDir] })}\n`);
+  /** 记下 watcher 好收尾；测试里不让真实文件事件驱动重分析。 */
+  function quiet(service: ImportService, repositoryId: string): ImportedRepository {
+    const repository = service.getRepository(repositoryId)!;
+    repository.watcher?.close();
+    mounted.push(repository);
+    return repository;
+  }
 
-    const service = new ImportService();
-    expect(service.getRepository(repositoryId)).toBeUndefined(); // 恢复前内存为空（模拟重启后）
-    const restored = service.restorePersisted();
-    expect(restored).toBe(1);
-
-    const repository = service.getRepository(repositoryId);
-    expect(repository).toBeDefined();
-    expect(repository?.course.root.title).toBe("alpha 课程树");
-    expect(repository?.analysis.versionStamp).toBe("content:fixture");
-    expect(service.findRepositoryForPath(join(repoDir, "src", "main.ts"))).toBeDefined();
-
-    repository?.watcher?.close(); // 测试收尾，停掉 fs.watch
-  });
-
-  it("单槽：注册表里只有最后挂载的那一条进内存，文件被规范化成单条", () => {
+  it("启动只登记：catalog 列全地址簿，但一条都不挂、不读产物", () => {
     const alpha = makePersistedRepo(root, "alpha");
     const beta = makePersistedRepo(root, "beta");
-    mkdirSync(dirname(registryFile), { recursive: true });
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [alpha.repoDir, beta.repoDir] })}\n`);
+    writeRegistry([alpha.repoDir, beta.repoDir, beta.repoDir, join(root, "gone")]);
 
     const service = new ImportService();
-    expect(service.restorePersisted()).toBe(1);
-    expect(service.getRepository(beta.repositoryId)).toBeDefined();
-    expect(service.getRepository(alpha.repositoryId)).toBeUndefined(); // 非最后挂载的那条不再被监听
-
-    const remaining = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
-    expect(remaining.repositories).toEqual([beta.repoDir]);
-
-    service.getRepository(beta.repositoryId)?.watcher?.close();
+    const catalog = service.catalog();
+    // 重复条目去重；目录不存在的条目保留并如实标注（由用户决定移除，不悄悄丢）
+    expect(catalog.map((item) => item.name.split("-")[0])).toEqual(["alpha", "beta", "gone"]);
+    expect(catalog.map((item) => item.exists)).toEqual([true, true, false]);
+    expect(catalog.every((item) => !item.mounted)).toBe(true);
+    // 未挂载的条目不探产物——探它就得读它的 db
+    expect(catalog.every((item) => item.artifactsReady === undefined)).toBe(true);
+    expect(service.mountedRepositories()).toHaveLength(0);
   });
 
-  it("单槽：切换到另一个仓库时，旧仓库被卸载，不再留在内存注册表里", () => {
-    const alpha = makePersistedRepo(root, "alpha");
-    const beta = makePersistedRepo(root, "beta");
-    mkdirSync(dirname(registryFile), { recursive: true });
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [alpha.repoDir] })}\n`);
+  it("懒挂载：不在地址簿 / 目录没了 / 产物不全，三种失败各有 reason，且都不触发重分析", () => {
+    const ok = makePersistedRepo(root, "ok");
+    const missing = makePersistedRepo(root, "missing");
+    // 有目录、有文件，但从来没被分析过（没有 .tutor 产物）
+    const bare = realpathSync(mkdtempSync(join(root, "bare-")));
+    mkdirSync(join(bare, "src"), { recursive: true });
+    writeFileSync(join(bare, "src", "main.ts"), "export const main = () => 1;\n");
+    rmSync(missing.repoDir, { recursive: true, force: true });
+    writeRegistry([ok.repoDir, missing.repoDir, bare]);
 
     const service = new ImportService();
-    expect(service.restorePersisted()).toBe(1);
+    // 目录真实存在、但从来没入簿：GUI 拿到的 workspace 指向它时必须说清「不在地址簿」，而不是假装能挂
+    const outside = service.ensureMounted(deriveRepositoryId(root));
+    expect(!outside.ok && outside.reason).toBe("not_in_catalog");
+
+    const gone = service.ensureMounted(missing.repositoryId);
+    expect(!gone.ok && gone.reason).toBe("directory_missing");
+
+    const broken = service.ensureMounted(deriveRepositoryId(bare));
+    expect(!broken.ok && broken.reason).toBe("artifacts_incomplete");
+
+    const good = service.ensureMounted(ok.repositoryId);
+    expect(good.ok).toBe(true);
+    expect(service.getRepository(ok.repositoryId)?.course.root.title).toBe("ok 课程树");
+    quiet(service, ok.repositoryId);
+  });
+
+  it("新鲜度只报告不重算：stale → 补上真 stamp 变 unknown（非 git 仓）→ git 仓里对得上才 fresh，HEAD 移动而内容不变是 drifted", () => {
+    const repo = makePersistedRepo(root, "alpha");
+    writeRegistry([repo.repoDir]);
+    /** 每个阶段都新起一个 service：模拟「进程重启后第一次访问」，判定只在挂载时发生一次，不需要 unmount 原语 */
+    const judge = (): RepositoryFreshness => {
+      const service = new ImportService();
+      const result = service.ensureMounted(repo.repositoryId);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      const freshness = result.repository.freshness;
+      quiet(service, repo.repositoryId);
+      return freshness;
+    };
+
+    // db 里是假的 "content:fixture"，磁盘内容对不上 → 判过期，并给出当前真 stamp
+    const first = judge();
+    expect(first.verdict).toBe("stale");
+    expect(first.contentChanged).toBe(true);
+    // 只报告：产物里写的还是那个旧 stamp，引擎没顺手替用户重算
+    const database = new TutorDatabase(repo.repoDir);
+    expect(database.getAnalysis(repo.repositoryId)?.versionStamp).toBe("content:fixture");
+    database.close();
+
+    // 把产物「假装」是在当前内容下算的：非 git 仓没有 HEAD 可比，只能退化成 unknown
+    rewriteAnalysis(repo.repoDir, repo.repositoryId, { versionStamp: first.versionStamp });
+    expect(judge().verdict).toBe("unknown");
+    expect(judge().contentChanged).toBe(false);
+
+    // git 仓 + 产物记了当时的 HEAD：对上才是 fresh
+    const head = gitInitAndCommit(repo.repoDir);
+    rewriteAnalysis(repo.repoDir, repo.repositoryId, { gitHead: head });
+    expect(judge().verdict).toBe("fresh");
+
+    // 挪动 HEAD 但工作树内容不变（空提交）：产物仍可用，只是要知道分析点在别的提交上
+    execFileSync("git", ["-C", repo.repoDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "moved"], { encoding: "utf8" });
+    const drifted = judge();
+    expect(drifted.verdict).toBe("drifted");
+    expect(drifted.contentChanged).toBe(false);
+    expect(drifted.headNow).not.toBe(drifted.headAtAnalysis);
+  });
+
+  it("LRU：超出 maxMounted 的最久未用项被驱逐（关监听、摘内存），但仍在地址簿里、可再挂回来", () => {
+    process.env.TUTOR_MAX_MOUNTED = "2";
+    const alpha = makePersistedRepo(root, "alpha");
+    const beta = makePersistedRepo(root, "beta");
+    const gamma = makePersistedRepo(root, "gamma");
+    writeRegistry([alpha.repoDir, beta.repoDir, gamma.repoDir]);
+
+    const service = new ImportService();
+    service.ensureMounted(alpha.repositoryId);
+    service.ensureMounted(beta.repositoryId);
+    quiet(service, beta.repositoryId);
+    // 先用一次 alpha，让它比 beta 更新鲜 → 挂 gamma 时该驱逐的是 beta
+    service.ensureMounted(alpha.repositoryId);
+    service.ensureMounted(gamma.repositoryId);
+    quiet(service, alpha.repositoryId);
+    quiet(service, gamma.repositoryId);
+
     expect(service.getRepository(alpha.repositoryId)).toBeDefined();
-
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [beta.repoDir] })}\n`);
-    expect(service.restorePersisted()).toBe(1);
-    expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
-    expect(service.getRepository(beta.repositoryId)).toBeDefined();
-
-    service.getRepository(beta.repositoryId)?.watcher?.close();
+    expect(service.getRepository(gamma.repositoryId)).toBeDefined();
+    expect(service.getRepository(beta.repositoryId)).toBeUndefined();
+    // 驱逐不等于遗忘：地址簿照旧列它，再访问就重新挂
+    expect(service.catalog().find((item) => item.repositoryId === beta.repositoryId)?.mounted).toBe(false);
+    expect(service.ensureMounted(beta.repositoryId).ok).toBe(true);
+    quiet(service, beta.repositoryId);
+    // 上限仍然守住：挂回 beta 把它挤出去的是最久未用的 alpha
+    expect(service.mountedRepositories().length).toBe(2);
+    // 挂载/驱逐都不改写地址簿——它是用户资产，不是进程状态
+    const book = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
+    expect(book.repositories).toEqual([alpha.repoDir, beta.repoDir, gamma.repoDir]);
   });
 
-  it("最后一条目录已删除：不恢复任何仓库，注册表被清空（不留回挂条目）", () => {
-    const { repoDir } = makePersistedRepo(root, "beta");
-    mkdirSync(dirname(registryFile), { recursive: true });
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [repoDir, join(root, "deleted-repo")] })}\n`);
-
+  it("forget 出簿并就地卸载；不动仓库自己的 .tutor 产物", () => {
+    const repo = makePersistedRepo(root, "alpha");
+    writeRegistry([repo.repoDir]);
     const service = new ImportService();
-    expect(service.restorePersisted()).toBe(0);
+    service.ensureMounted(repo.repositoryId);
+    service.forget(repo.repositoryId);
 
-    const remaining = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
-    expect(remaining.repositories).toEqual([]);
-  });
-
-  it("空注册表直接返回 0，不做任何 IO", () => {
-    const service = new ImportService();
-    expect(service.restorePersisted()).toBe(0);
+    expect(service.getRepository(repo.repositoryId)).toBeUndefined();
+    expect(service.catalog()).toHaveLength(0);
+    const database = new TutorDatabase(repo.repoDir);
+    expect(database.getAnalysis(repo.repositoryId)?.repositoryId).toBe(repo.repositoryId);
+    database.close();
   });
 });
+
 
 /** 私有成员的可访问形状（只用于测试注入在途回合与断言轮次）。 */
 type ImportServiceProbe = {
@@ -156,13 +249,15 @@ describe("ImportService 重分析在途守卫（A1）", () => {
 
   afterEach(() => {
     delete process.env.TUTOR_REGISTRY_FILE;
+    delete process.env.TUTOR_MAX_MOUNTED;
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** 把仓库写进注册表并挂进指定 service；调用方自行 close watcher——回合由测试显式驱动，不靠真实文件事件。 */
+  /** 把仓库写进地址簿并逐个懒挂载；调用方自行 close watcher——回合由测试显式驱动，不靠真实文件事件。 */
   function mountInto(service: ImportService, ...repoDirs: string[]): number {
     writeFileSync(registryFile, `${JSON.stringify({ repositories: repoDirs })}\n`);
-    return service.restorePersisted();
+    for (const path of repoDirs) service.ensureMounted(deriveRepositoryId(path));
+    return service.mountedRepositories().length;
   }
 
   it("一轮在途时新变更只累积，本轮结束后合并成下一轮（不重叠、不丢路径）", async () => {
@@ -201,11 +296,13 @@ describe("ImportService 重分析在途守卫（A1）", () => {
     database.close();
   });
 
-  it("在途回合不回写已卸载的仓库：单槽不变量不被破坏", async () => {
+  it("在途回合不回写已被驱逐的仓库：旧回合不得把它复活进内存、也不得覆盖它的产物", async () => {
+    process.env.TUTOR_MAX_MOUNTED = "1";
     const alpha = makePersistedRepo(root, "alpha");
     const beta = makePersistedRepo(root, "beta");
     const service = new ImportService();
-    expect(mountInto(service, alpha.repoDir)).toBe(1);
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: [alpha.repoDir, beta.repoDir] })}\n`);
+    service.ensureMounted(alpha.repositoryId);
     const alphaCurrent = service.getRepository(alpha.repositoryId)!;
     alphaCurrent.watcher?.close();
 
@@ -219,9 +316,8 @@ describe("ImportService 重分析在途守卫（A1）", () => {
     const inFlight = (service as unknown as ImportServiceProbe).reanalyzeIncrementally(alpha.repositoryId, ["src/a.ts"]);
     await tick();
 
-    // 切换到 beta：单槽语义下 alpha 被卸载（watcher 已 close）
-    writeFileSync(registryFile, `${JSON.stringify({ repositories: [beta.repoDir] })}\n`);
-    service.restorePersisted();
+    // 挂 beta：上限 1 → alpha 被 LRU 驱逐（watcher 已 close、内存里没了）
+    service.ensureMounted(beta.repositoryId);
     expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
 
     release();

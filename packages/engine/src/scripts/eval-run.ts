@@ -16,7 +16,7 @@ import { scoreFlowArtifacts, scoreSearchArm, scoreTeachInvariants, type SearchCa
   全程只读：产物取自 <repo>/.tutor/tutor.db，索引/依赖图在本地重算，不碰引擎、不写任何文件。
   LLM 真跑与表达质量裁判不在这一刀里（回合落盘是其前置）。
 
-  用法：pnpm phaseB:eval [仓库路径]（缺省取 repositories.json 唯一/首个仓库）
+  用法：pnpm phaseB:eval [仓库路径]（缺省取 repositories.json 里最近使用的那条）
 */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,7 +28,7 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list[0];
+  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后；取最后一条才是「你现在在弄的那个仓」
 })();
 
 function pct(numerator: number, denominator: number): string {

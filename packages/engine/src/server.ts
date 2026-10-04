@@ -74,10 +74,9 @@ app.addHook("onResponse", (request, reply, done) => {
 tboot("Fastify constructed");
 
 const importer = new ImportService();
-// 启动恢复（单槽）：把注册表里那一个仓库的 .tutor 分析结果重新挂进内存并监听（GUI 旧 workspace 不再 404，无需重新导入重烧润色）
-const restoredRepositories = importer.restorePersisted();
-if (restoredRepositories) console.log("[startup] 已从 .tutor 恢复上次挂载的仓库，无需重新导入");
-tboot("ImportService");
+// 启动**只读地址簿**（一串路径），一条产物都不读、一个 fs 监听都不开：
+// 挂载推迟到 GUI 真的访问某个仓库时（见 preHandler 懒挂载），超出的按 LRU 驱逐。
+tboot(`ImportService（地址簿 ${importer.catalog().length} 条，挂载 0 条）`);
 
 const exercises = new ExerciseService();
 tboot("ExerciseService");
@@ -168,6 +167,41 @@ function broadcast(event: ServerEvent): void {
 function repositoryOr404(repositoryId: string) {
   return importer.getRepository(repositoryId);
 }
+
+/**
+  懒挂载钩子：`/api/repositories/:repositoryId/*` 的每个请求先确保该仓已挂进内存。
+  引擎启动时不读任何产物，所以「GUI 切回上周那个仓」的第一次请求才去读它的 `.tutor`、开它的监听——
+  用户感知是一次稍慢的点击，换来的是 boot 零 IO、零 watcher，以及地址簿里剩下的几十条完全不占资源。
+
+  挂载失败按原因回 404 + `reason`：GUI 要靠它分清「工作区确实失效（清掉）」与
+  「目录挪走了/产物不全（留着让用户处置）」。**任何一支都不会触发重新分析**——重跑是花钱动作，只由用户点头。
+
+  唯一豁免是移出地址簿那条 DELETE：它要处理的恰恰是「挂不起来的仓」，钩子若先拦它，用户就被锁在自己的地址簿外面。
+  */
+app.addHook("preHandler", async (request, reply) => {
+  const repositoryId = (request.params as { repositoryId?: unknown })?.repositoryId;
+  if (typeof repositoryId !== "string" || !repositoryId) return;
+  if (request.method === "DELETE" && request.routeOptions?.url === "/api/repositories/:repositoryId") return;
+  const result = importer.ensureMounted(repositoryId);
+  if (result.ok) return;
+  return reply.code(404).send({ error: result.message, reason: result.reason });
+});
+
+/** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。 */
+app.get("/api/repositories", async () => ({ repositories: importer.catalog() }));
+
+/** 显式挂载一个仓库并回报新鲜度：GUI 切换仓库时调它，好把「这是三天前的分析」说在打开之前。 */
+app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/mount", async (request, reply) => {
+  const result = importer.ensureMounted(request.params.repositoryId);
+  if (!result.ok) return reply.code(404).send({ error: result.message, reason: result.reason });
+  return { repositoryId: result.repository.index.repositoryId, repositoryPath: result.repository.path, freshness: result.repository.freshness };
+});
+
+/** 把某仓移出地址簿（并就地卸载）。只动引擎的注册表，不碰仓库里的 `.tutor/`。 */
+app.delete<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId", async (request) => {
+  importer.forget(request.params.repositoryId);
+  return { repositories: importer.catalog() };
+});
 
 function repositorySettings(repositoryPath: string, repositoryId: string): { monthlyBudgetUsd: number } {
   return readRepositorySettings(repositoryPath, repositoryId);

@@ -1,4 +1,4 @@
-import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryFlowResult, RepositoryIndex, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -10,6 +10,9 @@ export interface Workspace {
   repositoryId: string;
   repositoryPath: string;
 }
+
+// 地址簿与新鲜度的形状来自 shared，这里转发一次，视图层统一从 api/client 取类型（与 Workspace 同例）。
+export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tutor/shared";
 
 /** 作用域对话 SSE 事件：thinking / reading / searching 是过程指示，delta 是正文增量（打字机回放），done/error 收尾。 */
 export type ScopedChatEvent =
@@ -110,9 +113,10 @@ export interface LlmSettings {
 /** PUT 的部分更新：省略 = 保持不变，空串 = 清除该项并回落 .env（apiKey 为空串即删除已存密钥）。 */
 export type LlmSettingsPatch = Partial<{ provider: LlmProviderKind | ""; model: string; baseUrl: string; apiKey: string; thinking: ThinkingEffort }>;
 
-/** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。 */
+/** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。
+    仓库类 404 还带 `reason`（不在地址簿 / 目录没了 / 产物不全）——只有第一种该清掉本地工作区，另两种要留着让用户处置。 */
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly reason?: RepositoryMountReason) {
     super(message);
     this.name = "ApiError";
   }
@@ -123,8 +127,8 @@ export const isNotFound = (error: unknown): boolean => error instanceof ApiError
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
-  const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败");
+  const body = await response.json() as T & { error?: string; reason?: RepositoryMountReason };
+  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
   return body;
 }
 
@@ -134,6 +138,12 @@ export const api = {
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
   getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
+  /** 引擎的地址簿（用户导过的仓）：只列不读产物，所以打开切换器很便宜。 */
+  listRepositories: () => request<{ repositories: RepositoryCatalogEntry[] }>("/api/repositories"),
+  /** 显式挂载一个仓库并拿到新鲜度判定；不在地址簿/目录没了/产物不全都按 reason 抛错。 */
+  mountRepository: (repositoryId: string) => request<{ repositoryId: string; repositoryPath: string; freshness: RepositoryFreshness }>(`/api/repositories/${repositoryId}/mount`, { method: "POST" }),
+  /** 把仓库移出地址簿（只动引擎的登记，不碰仓库里的 .tutor/）。 */
+  forgetRepository: (repositoryId: string) => request<{ repositories: RepositoryCatalogEntry[] }>(`/api/repositories/${repositoryId}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   getCourse: (repositoryId: string) => request<CourseTree>(`/api/repositories/${repositoryId}/course`),
   getOverview: (repositoryId: string) => request<RepositoryOverview>(`/api/repositories/${repositoryId}/overview`),

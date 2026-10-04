@@ -292,8 +292,47 @@ export interface RepositoryAnalysis {
   implementations: ImplementationUnit[];
   quality: QualityReport;
   versionStamp: string;
+  /** 分析那一刻的 git HEAD（`git rev-parse HEAD`）。非 git 仓或取不到时缺省；懒挂载用它与当前 HEAD 比对新鲜度。 */
+  gitHead?: string;
   lastIncrementalUpdate?: { changedPaths: string[]; impactedPaths: string[]; at: string };
 }
+
+/**
+  挂载在引擎内存里的仓库的新鲜度判定（**只报告，不触发任何重分析**）：
+  - `contentChanged` = 磁盘内容与产物记录的 `versionStamp` 不一致（真的过期了）；
+  - `changedFiles` = 与落库 `contentHash` 不一致的文件数（告诉用户「改动集中在哪几处」，比只说「脏了」有用）；
+  - HEAD 变了但内容哈希没变（切分支回到同一份内容、或提交移动但工作树相同）判 `drifted`——产物仍可用，只是要知道分析点在别的提交上；
+  - 老仓库没记 HEAD 时判 `unknown`，界面明说「只比对了文件内容」。
+  */
+export type RepositoryFreshnessVerdict = "fresh" | "drifted" | "stale" | "unknown";
+
+export interface RepositoryFreshness {
+  verdict: RepositoryFreshnessVerdict;
+  /** 产物生成时间（`analysis.generatedAt`），界面据此说「这是几天前的分析」 */
+  analyzedAt: string;
+  versionStamp: string;
+  contentChanged: boolean;
+  changedFiles: number;
+  headAtAnalysis?: string;
+  headNow?: string;
+}
+
+/** 地址簿里的一条（引擎**不读产物**就能列出；`mounted` 才带新鲜度）。 */
+export interface RepositoryCatalogEntry {
+  repositoryId: string;
+  repositoryPath: string;
+  /** 目录名，界面显示用 */
+  name: string;
+  mounted: boolean;
+  /** 目录还在吗（不存在时保留条目并如实标注，由用户决定移除） */
+  exists: boolean;
+  /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测，缺省 */
+  artifactsReady?: boolean;
+  freshness?: RepositoryFreshness;
+}
+
+/** 懒挂载失败的原因：GUI 要靠它分清「清掉工作区」还是「留着让用户处置」。 */
+export type RepositoryMountReason = "not_in_catalog" | "directory_missing" | "artifacts_incomplete";
 
 /** 流程环节的性质；界面据此给不同的徽标（判断/回环与普通环节的读法不同）。 */
 export type FlowStageKind = "entry" | "stage" | "decision" | "loop" | "exit";
@@ -644,7 +683,7 @@ export type TraceScalar = string | number | boolean | null;
   - boot     启动分段计时
   LLM 调用明细不在此列——它落在 `~/.codebase-tutor/llm.log`，两处靠 traceId 关联（单一事实来源，不双写）。
   */
-export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "turn_stop" | "boot";
+export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "turn_stop" | "boot" | "mount";
 
 export interface EngineTraceEvent {
   at: string;

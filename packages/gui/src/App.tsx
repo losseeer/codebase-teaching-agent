@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Navigate, Route, Routes, Link, useLocation, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { Navigate, Route, Routes, Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
-import type { Workspace as _Workspace } from "./api/client";
-import { api, isNotFound } from "./api/client";
+import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspace } from "./api/client";
+import { ApiError, api, isNotFound } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
@@ -12,8 +12,9 @@ import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
+import { OptionDropdown } from "./ui/OptionDropdown";
 import { showToast, ToastHost } from "./modules/toast";
-import { installJournalRetry } from "./journal";
+import { emit, installJournalRetry } from "./journal";
 
 // Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
 export type Workspace = _Workspace;
@@ -43,16 +44,21 @@ export function App(): ReactElement {
     const saved = localStorage.getItem("codebase-tutor.workspace");
     return saved ? JSON.parse(saved) as _Workspace : null;
   });
-  // engine 的仓库注册表**是持久的**：启动时 `restorePersisted()` 会把最后一次导入的仓重新挂回来（单槽），
-  // 所以引擎重启正常情况下不需要重新导入。这里仍然要校验，因为有两种真失效：
-  // ① 引擎后来挂了别的仓（单槽被顶掉）；② 该仓的 `.tutor` 数据不完整，启动恢复直接放弃。
-  // 校验失败要分两类处置：**404 才是「仓库真不在」**（清掉本地选择、引到导入页），
-  // 连不上 / 5xx 多半是引擎正在重启（tsx watch 改一下文件就重启），只能退避重试，绝不能顺手清 localStorage。
-  // 校验响应迟到时若目标已变（如期间刚完成新导入），放弃过期结果，避免把新 workspace 误清。
+  // 引擎的**地址簿**是持久的（N 条路径），但启动一条都不挂载：GUI 恢复 workspace 后第一次访问该仓，
+  // 引擎才读它的 `.tutor` 产物挂进内存（超上限的最久未用项被驱逐）。所以这里的校验 = 一次挂载请求，
+  // 顺带把新鲜度判定带回来，好在横幅上如实说「这是 X 天前的分析」。
+  // 失败分三类处置：**not_in_catalog 才是「本地选择真失效」**（清掉、引到导入页）；
+  // directory_missing / artifacts_incomplete 要**留着 workspace**——仓库没丢，是引擎挂不起来，
+  // 静默清掉等于把用户的路径弄丢。连不上 / 5xx 多半是引擎正在重启，只退避重试，绝不清 localStorage。
   const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
   /** 校验放弃（连不上 / 5xx 重试耗尽）：本地选择不删，改说「引擎没连上」，并允许手动或 online 后重验。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
+  /** 挂载失败（目录挪走 / 产物不全）：workspace 保留，但要说清原因并给出「移出地址簿」这条路。 */
+  const [mountBlocked, setMountBlocked] = useState<string | null>(null);
+  const [freshness, setFreshness] = useState<RepositoryFreshness | null>(null);
+  const [catalog, setCatalog] = useState<RepositoryCatalogEntry[]>([]);
   const [probeNonce, setProbeNonce] = useState(0);
+  const navigate = useNavigate();
   const workspaceIdRef = useRef(workspace?.repositoryId);
   useEffect(() => { workspaceIdRef.current = workspace?.repositoryId; }, [workspace?.repositoryId]);
   // 补发上回积压的 UI 事件（网络失败时进了 localStorage 重试队列），并订阅 online 重连
@@ -62,27 +68,43 @@ export function App(): ReactElement {
     if (value) localStorage.setItem("codebase-tutor.workspace", JSON.stringify(value));
     else localStorage.removeItem("codebase-tutor.workspace");
   };
+  const refreshCatalog = useCallback(async (): Promise<void> => {
+    try {
+      setCatalog((await api.listRepositories()).repositories);
+    } catch {
+      // 引擎没连上就空着：拿旧清单冒充「你的地址簿就这些」是假话
+      setCatalog([]);
+    }
+  }, []);
+  useEffect(() => { void refreshCatalog(); }, [refreshCatalog, probeNonce, workspace?.repositoryId]);
   useEffect(() => {
-    if (!workspace) { setWorkspaceReady(true); setEngineUnreachable(false); return; }
+    if (!workspace) { setWorkspaceReady(true); setEngineUnreachable(false); setMountBlocked(null); setFreshness(null); return; }
     let current = true;
     const targetId = workspace.repositoryId;
     setWorkspaceReady(false);
     setEngineUnreachable(false);
+    setMountBlocked(null);
     const stale = (): boolean => !current || workspaceIdRef.current !== targetId;
     const probe = async (): Promise<void> => {
       for (let attempt = 0; !stale(); attempt += 1) {
         try {
-          await api.getIndex(targetId);
-          if (!stale()) setWorkspaceReady(true);
+          const mounted = await api.mountRepository(targetId);
+          if (!stale()) { setFreshness(mounted.freshness); setWorkspaceReady(true); }
           return;
         } catch (error) {
           if (stale()) return;
           if (isNotFound(error)) {
-            // 引擎明说「没这个仓」：本地选择确实失效。失效必须说出来——静默清 localStorage 再把用户甩到
-            // 导入页，看起来像「软件自己把我的仓库弄丢了」。
-            updateWorkspace(null);
-            setWorkspaceReady(true);
-            showToast("上次打开的仓库不在引擎的注册表里（只保留最后一次导入的那个仓），请重新导入。");
+            if (error instanceof ApiError && error.reason === "not_in_catalog") {
+              // 引擎明说「地址簿里没这个仓」：本地选择确实失效。失效必须说出来——静默清 localStorage 再把用户甩到
+              // 导入页，看起来像「软件自己把我的仓库弄丢了」。
+              updateWorkspace(null);
+              setWorkspaceReady(true);
+              showToast("上次打开的仓库不在引擎的地址簿里（地址簿只记你导入过的仓），请重新导入。");
+              return;
+            }
+            // 目录挪走 / 产物不全：仓库没丢，是挂不起来。留着 workspace 说清原因（pending 会渲染 MountBlocked），
+            // 让用户选「放回原处再来」还是「移出地址簿」——绝不静默清掉，也绝不自动重新导入。
+            setMountBlocked(error instanceof Error ? error.message : "该仓库暂时挂不起来");
             return;
           }
           // 其余失败（连不上 / 5xx）多半是引擎正在重启，而不是仓库没了：退避重试，绝不清 localStorage。
@@ -107,6 +129,7 @@ export function App(): ReactElement {
   }, [engineUnreachable]);
   const chat = useScopedChat(workspace?.repositoryId ?? "");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("codebase-tutor.sidebar-collapsed") === "1");
+  const [repoOpen, setRepoOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -114,10 +137,53 @@ export function App(): ReactElement {
       return next;
     });
   };
-  // 校验期间的占位：还在退避=转圈；已放弃=说明「引擎没连上」而绝不是「仓库丢了」
-  const pending = engineUnreachable && workspace
-    ? <EngineOffline repositoryPath={workspace.repositoryPath} onRetry={() => { setProbeNonce((value) => value + 1); }} />
-    : <Loading />;
+  /** 切到地址簿里的另一个仓：先让引擎挂载（顺带拿新鲜度），成功才换 workspace。
+      挂载失败不改本地选择——上一个仓不该因为这次点错而被弄丢。 */
+  const switchRepository = (repositoryId: string): void => {
+    const entry = catalog.find((item) => item.repositoryId === repositoryId);
+    if (!entry || repositoryId === workspace?.repositoryId) return;
+    void (async () => {
+      try {
+        const mounted = await api.mountRepository(repositoryId);
+        updateWorkspace({ repositoryId, repositoryPath: mounted.repositoryPath });
+        setFreshness(mounted.freshness);
+        setMountBlocked(null);
+        // 切仓后课程树必须重取：它按 repositoryId 拉，但首次 404 后不会自己重试（同导入完成后的处理）
+        chat.reloadCourseData();
+        emit(repositoryId, "repository_switched", { repository_path: mounted.repositoryPath, trigger: "catalog" });
+        await refreshCatalog();
+        navigate("/app?workspace=map");
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "挂载失败");
+        await refreshCatalog();
+      }
+    })();
+  };
+
+  /** 移出地址簿是破坏性动作（产物还在仓库自己的 .tutor 里，但引擎不再记得这个仓），先确认。 */
+  const forgetRepository = (repositoryId: string, name: string): void => {
+    if (!window.confirm(`把「${name}」移出地址簿？引擎会停掉它的监听并忘掉这个路径，仓库里的 .tutor/ 产物原样不动；要再用它得重新导入。`)) return;
+    void (async () => {
+      try {
+        await api.forgetRepository(repositoryId);
+        if (repositoryId === workspace?.repositoryId) updateWorkspace(null);
+        await refreshCatalog();
+        showToast(`已把「${name}」移出地址簿`);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "移出失败");
+      }
+    })();
+  };
+
+  // 校验期间的占位：还在退避=转圈；挂不起来=MountBlocked（说清原因，绝不显示成「仓库丢了」）；连不上=EngineOffline
+  const pending = mountBlocked && workspace
+    ? <MountBlocked message={mountBlocked} repositoryPath={workspace.repositoryPath} onRetry={() => { setProbeNonce((value) => value + 1); }} onForget={() => forgetRepository(workspace.repositoryId, workspace.repositoryPath.split("/").pop() ?? workspace.repositoryPath)} />
+    : engineUnreachable && workspace
+      ? <EngineOffline repositoryPath={workspace.repositoryPath} onRetry={() => { setProbeNonce((value) => value + 1); }} />
+      : <Loading />;
+  const banner = workspace && freshness && (freshness.verdict === "stale" || freshness.verdict === "drifted") && !acknowledged(freshness, workspace.repositoryId)
+    ? <FreshnessBanner repositoryPath={workspace.repositoryPath} freshness={freshness} onAcknowledge={() => { acknowledge(freshness, workspace.repositoryId); setFreshness(null); }} onReanalyze={() => navigate("/import")} />
+    : null;
   // Agent 侧栏只属于有对话可谈的路由：导入页还没有工作区语义，挂着它既没绑定对象又挤扁导入表单
   const location = useLocation();
   const showRail = !!workspace && location.pathname !== "/import";
@@ -138,23 +204,46 @@ export function App(): ReactElement {
           <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习评估" disabled={!workspace} />
           <NavItem to="/insights" icon={<BarChart3 size={17} />} label="成本监控" disabled={!workspace} />
         </nav>
+        {!sidebarCollapsed && workspace ? (
+          <div className="sidebar-repo">
+            <OptionDropdown
+              label="仓库"
+              tone="custom"
+              placeholder={catalog.length > 1 ? `地址簿里还有 ${catalog.length - 1} 个仓` : "地址簿里只有这一个仓"}
+              ariaLabel="切换引擎地址簿里的仓库"
+              value={workspace.repositoryId}
+              open={repoOpen}
+              onOpenChange={setRepoOpen}
+              onSelect={switchRepository}
+              options={catalog.map((item) => ({
+                value: item.repositoryId,
+                label: item.exists ? item.name : `${item.name}（目录不存在）`,
+                detail: item.repositoryPath,
+                note: `${item.repositoryPath}\n${item.mounted ? "已挂载在引擎里" : "未挂载：点开才读它的 .tutor 产物"}${item.freshness ? ` · 产物${item.freshness.verdict === "stale" ? "已过期" : item.freshness.verdict === "drifted" ? "提交已移动、内容一致" : item.freshness.verdict === "fresh" ? "对得上" : "内容对得上（没有 HEAD 可比）"}` : ""}`
+              }))}
+            />
+          </div>
+        ) : null}
         <div className="sidebar-bottom">
           <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
           <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
         </div>
       </aside>
       <main className="main-content">
-        <Routes>
-          {/* 根路径固定落导入页（用户口径 09-23）：不带 workspace 记忆直通 /app——导入是每次打开的起点 */}
-          <Route path="/" element={<Navigate to="/import" replace />} />
-          <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} />} />
-          <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
-          <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
-          <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
-          <Route path="/tutor" element={<Navigate to="/app?workspace=teaching" replace />} />
-          <Route path="/practice" element={<Navigate to="/app?workspace=practice" replace />} />
-          <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
-        </Routes>
+        {banner}
+        <div className="route-content">
+          <Routes>
+            {/* 根路径固定落导入页（用户口径 09-23）：不带 workspace 记忆直通 /app——导入是每次打开的起点 */}
+            <Route path="/" element={<Navigate to="/import" replace />} />
+            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} />} />
+            <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
+            <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
+            <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
+            <Route path="/tutor" element={<Navigate to="/app?workspace=teaching" replace />} />
+            <Route path="/practice" element={<Navigate to="/app?workspace=practice" replace />} />
+            <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
+          </Routes>
+        </div>
       </main>
       {showRail ? <AgentRail chat={chat} /> : null}
       <ToastHost />
@@ -177,6 +266,86 @@ function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; on
       <p><button type="button" className="primary" onClick={onRetry}>重新校验</button></p>
     </div>
   );
+}
+
+/**
+  地址簿里有这条、但引擎挂不起来（目录被挪走 / `.tutor` 产物不全）。
+  这与「不在地址簿」不同：仓库没丢，用户把目录放回原处就能继续用，所以两条路都摆出来，
+  也**绝不自动重新导入**——重跑是花钱的动作。
+  */
+function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message: string; repositoryPath: string; onRetry: () => void; onForget: () => void }): ReactElement {
+  return (
+    <div className="page empty-state">
+      <h1>这个仓库暂时挂不起来</h1>
+      <p>{message}</p>
+      <p>路径：{repositoryPath}。把目录放回原处再试一次即可；引擎不会替你重新导入——重新分析要花钱。</p>
+      <p>
+        <button type="button" className="primary" onClick={onRetry}>再试一次</button>{" "}
+        <button type="button" onClick={onForget}>移出地址簿</button>
+      </p>
+    </div>
+  );
+}
+
+/**
+  过期产物横幅：引擎在挂载时算出「当前文件内容哈希 vs 产物记录的哈希」「当前 HEAD vs 分析时 HEAD」，
+  这里只负责把结论说人话，并把两个动作交回用户——**没有第三条自动路径**。
+  - stale：内容真的变了，明说几天前的分析、多少个文件对不上；
+  - drifted：内容一模一样只是提交挪了（切分支/空提交），产物照常可用，也照样告知，避免「它是不是最新的」被猜。
+  */
+function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze }: { repositoryPath: string; freshness: RepositoryFreshness; onAcknowledge: () => void; onReanalyze: () => void }): ReactElement {
+  const stale = freshness.verdict === "stale";
+  return (
+    <div className="freshness-banner" role="status">
+      <strong>{stale ? "产物已过期" : "提交已移动，内容与分析时一致"}</strong>
+      <span>
+        {stale
+          ? `${repositoryPath} 这份分析是 ${ageOf(freshness.analyzedAt)}跑的，期间有 ${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个` : "一些"}文件的内容和它记录的哈希对不上。继续看的是旧结论。`
+          : `${repositoryPath} 的文件内容跟 ${ageOf(freshness.analyzedAt)}那次分析完全对得上，只是 HEAD 从 ${short(freshness.headAtAnalysis)} 挪到了 ${short(freshness.headNow)}，产物照常可用。`}
+        {!stale && !freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容。）" : ""}
+      </span>
+      <button type="button" onClick={onReanalyze}>去重新分析</button>
+      <button type="button" className="ghost" onClick={onAcknowledge}>知道，先用旧的</button>
+    </div>
+  );
+}
+
+/** 相对时间（带「前」）：横幅要说「这是 3 天前跑的」，只给 ISO 串等于没说话。 */
+function ageOf(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "不知何时";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
+
+const short = (sha: string | undefined): string => (sha ? sha.slice(0, 7) : "未知");
+
+/** 「知道，先用旧的」按仓 + 判定状态存：内容又变了、或 HEAD 又动了，就重新提醒一次。 */
+function ackKey(repositoryId: string): string {
+  return `codebase-tutor.stale-ack.${repositoryId}`;
+}
+
+function ackToken(freshness: RepositoryFreshness): string {
+  return `${freshness.verdict}:${freshness.headNow ?? freshness.versionStamp}`;
+}
+
+function acknowledged(freshness: RepositoryFreshness, repositoryId: string): boolean {
+  try {
+    return localStorage.getItem(ackKey(repositoryId)) === ackToken(freshness);
+  } catch {
+    return false;
+  }
+}
+
+function acknowledge(freshness: RepositoryFreshness, repositoryId: string): void {
+  try {
+    localStorage.setItem(ackKey(repositoryId), ackToken(freshness));
+  } catch {
+    /* 存不下就下次再提醒，不值得为此打断用户 */
+  }
 }
 
 /** 禁用态导航项必须有话可说：灰掉却不解释，看起来像坏了。 */

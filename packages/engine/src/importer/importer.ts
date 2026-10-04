@@ -1,9 +1,20 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
-import type { CourseTree, ImportJob, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import type {
+  CourseTree,
+  ImportEstimate,
+  ImportJob,
+  RepositoryAnalysis,
+  RepositoryCatalogEntry,
+  RepositoryFreshness,
+  RepositoryIndex,
+  RepositoryMountReason,
+  ServerEvent
+} from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
 import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
@@ -30,11 +41,16 @@ export interface ImportedRepository {
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
   watcher?: RepositoryWatcher;
+  /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
+  freshness: RepositoryFreshness;
 }
 
-/** 挂载注册表（单槽）：engine 重启后据此从该仓库的 .tutor/tutor.db 恢复挂载与监听，免重新导入。
-    默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖。
-    单槽 = 同一时刻只挂载/监听一个仓库；写文件时只留最后挂载的那一个（保留数组形状以兼容旧文件）。 */
+/**
+  挂载注册表（**N 条地址簿**）：engine 重启后据此把用户用过的仓库找回来，但**启动时一条都不读产物、不开监听**。
+  默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖；顺序 = 最近使用在后。
+  为什么不再单槽：产物本来就分仓存在各自的 `.tutor/` 里，内存态也是 `Map<repositoryId, …>`——
+  单槽只是这份注册表写死了一条，代价是「切回上一个仓必须重新导入」。
+  */
 function registryFile(): string {
   return process.env.TUTOR_REGISTRY_FILE ?? join(homedir(), ".codebase-tutor", "repositories.json");
 }
@@ -42,24 +58,128 @@ function registryFile(): string {
 function readRegistry(): string[] {
   try {
     const parsed = JSON.parse(readFileSync(registryFile(), "utf8")) as { repositories?: unknown };
-    return Array.isArray(parsed.repositories) ? parsed.repositories.filter((item): item is string => typeof item === "string") : [];
+    if (!Array.isArray(parsed.repositories)) return [];
+    const seen = new Set<string>();
+    return parsed.repositories.filter((item): item is string => typeof item === "string" && item.length > 0 && !seen.has(item) && !!seen.add(item));
   } catch {
     return [];
   }
 }
 
-function writeMountedRepository(repositoryPath?: string): void {
+function writeRegistry(paths: string[]): void {
   const file = registryFile();
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ repositories: repositoryPath ? [repositoryPath] : [] }, null, 2)}\n`, "utf8");
+  writeFileSync(file, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
+}
+
+/** 记进地址簿并挪到末尾（最近使用在后）。 */
+function rememberRepository(repositoryPath: string): void {
+  writeRegistry([...readRegistry().filter((item) => item !== repositoryPath), repositoryPath]);
+}
+
+/** 从地址簿里摘掉一条（用户显式动作；不动仓库自己的 .tutor 产物）。 */
+function dropFromRegistry(repositoryId: string): void {
+  writeRegistry(readRegistry().filter((item) => catalogRepositoryId(item) !== repositoryId));
+}
+
+/**
+  地址簿条目的 id：目录在就按 `lib.repositoryId` 的口径（realpath 后哈希）；目录不在时 realpath 会抛，
+  退化成按字面路径哈希——等它回到原路径时 `realpath(path) === path`（入簿时存的就是 realpath），
+  两种算法给出同一个 id，条目不会漂。列清单这一步绝不能因为某个目录被挪走就整页 500。
+  */
+function catalogRepositoryId(path: string): string {
+  try {
+    return deriveRepositoryId(path);
+  } catch {
+    return `repo_${hash(path).slice(0, 16)}`;
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+  同时挂载（每个挂载项 = 一个 fs 监听 + 一份完整产物内存态）的上限。
+  地址簿可以有几十条，但只有最近用过的这几个真的占 watcher 与内存；LRU 超出的被驱逐，产物仍在各自 .tutor 里。
+  每次读取（`TUTOR_MAX_MOUNTED`），测试要能换档——同 `engineLogPath()` 的理由。
+  */
+function maxMounted(): number {
+  return Math.max(1, Number(process.env.TUTOR_MAX_MOUNTED ?? 3) || 3);
+}
+
+/** 分析那一刻的 git HEAD；非 git 仓、git 不在 PATH、或仓库没有一次提交都返回 undefined（新鲜度退化成「只比对了内容」）。 */
+function gitHeadOf(repositoryPath: string): string | undefined {
+  try {
+    const head = execFileSync("git", ["-C", repositoryPath, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1_500, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return head || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+  一次遍历算出「当前内容哈希 + 与落库 contentHash 不符的文件数」。
+  口径与 `contentVersion` / 索引器完全一致（utf8 读、同一段 path:hash 拼法），否则新鲜度永远比不中。
+  代价是读一遍被索引的文件：只发生在**挂载时**（每仓每进程一次），启动不付这个钱。
+  */
+function stampAndDiff(repositoryPath: string, index: RepositoryIndex): { versionStamp: string; changedFiles: number } {
+  let changedFiles = 0;
+  const contents = index.files.map((file) => {
+    let digest = "unreadable";
+    try {
+      digest = hash(readFileSync(join(repositoryPath, file.path), "utf8"));
+    } catch {
+      changedFiles += 1; // 读不到＝被删/被移走，本身就是改动
+      return `${file.path}:${digest}`;
+    }
+    if (file.contentHash && !digest.startsWith(file.contentHash)) changedFiles += 1;
+    return `${file.path}:${digest}`;
+  });
+  contents.sort();
+  return { versionStamp: `content:${hash(contents.join("\n")).slice(0, 24)}`, changedFiles };
+}
+
+/**
+  新鲜度判定（**只报告**）：内容哈希不等 = 过期（stale）；内容对得上但 HEAD 移动了 = drifted（产物仍可用，
+  只是分析点在别的提交上）；老仓库没记 HEAD 时退化成 unknown，界面明说「只比对了文件内容」。
+  刻意不由引擎自动重分析：重跑是花钱的动作，谁脏了、要不要重跑，交给用户点头。
+  */
+function judgeFreshness(repositoryPath: string, index: RepositoryIndex, analysis: RepositoryAnalysis): RepositoryFreshness {
+  const { versionStamp, changedFiles } = stampAndDiff(repositoryPath, index);
+  const headNow = gitHeadOf(repositoryPath);
+  const contentChanged = versionStamp !== analysis.versionStamp;
+  const verdict: RepositoryFreshness["verdict"] = contentChanged
+    ? "stale"
+    : !analysis.gitHead || !headNow
+      ? "unknown"
+      : headNow === analysis.gitHead
+        ? "fresh"
+        : "drifted";
+  return {
+    verdict,
+    analyzedAt: analysis.generatedAt,
+    versionStamp,
+    contentChanged,
+    changedFiles,
+    ...(analysis.gitHead ? { headAtAnalysis: analysis.gitHead } : {}),
+    ...(headNow ? { headNow } : {})
+  };
 }
 
 export class ImportService extends EventEmitter {
   private readonly jobs = new Map<string, ImportJob>();
   private readonly repositories = new Map<string, ImportedRepository>();
+  /** 已挂载仓库的 LRU 序（最近使用在后）；地址簿的顺序单独存在注册表文件里。 */
+  private readonly lru: string[] = [];
   private queue = Promise.resolve();
   /** 每个仓库至多一轮重分析在途；running 期间新到的路径先累积，本轮结束后合并跑下一轮。 */
   private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
+
 
   submit(inputPath: string, summaryHeaderComments?: boolean): ImportJob {
     const repositoryPath = validateRepositoryPath(inputPath);
@@ -77,7 +197,7 @@ export class ImportService extends EventEmitter {
     return this.repositories.get(repositoryId);
   }
 
-  /** 当前挂载的仓库清单（注册表是单槽现实，但接口留成数组、不逼调用方猜槽位语义）。 */
+  /** 当前**挂在内存里**的仓库（≤ `maxMounted()`）；地址簿全量看 `catalog()`。 */
   mountedRepositories(): ImportedRepository[] {
     return [...this.repositories.values()];
   }
@@ -87,50 +207,122 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    启动恢复（单槽）：只恢复注册表里最后挂载的那一个仓库——把它的 .tutor/tutor.db 里持久化的
-    index/course/analysis 重新挂进内存并监听，GUI 侧已有 workspace 在 engine 重启后不再 404、
-    无需重新导入（也就不再触发 LLM 润色重跑）。目录不存在或数据不全 → 不恢复任何仓库并清空注册表，
-    避免失效条目在每次启动时被回挂、把该目录的任何写入都变成一次全量重分析。
-    返回恢复的仓库数（0 或 1）；同时卸载内存里其它仓库，保证「挂载集合 = 监听集合」恒为单槽。
+    地址簿清单：**不读任何产物**（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
+    `mounted` 的条目带上挂载时算好的新鲜度；未挂载的条目 `artifactsReady` 留空——探它就得读它的 db，
+    而「用户没点它」正是懒挂载要省掉的那笔。
     */
-  restorePersisted(): number {
-    const target = readRegistry().at(-1);
-    if (!target) { this.unmountAll(); return 0; }
+  catalog(): RepositoryCatalogEntry[] {
+    const paths = readRegistry();
+    for (const repository of this.repositories.values()) if (!paths.includes(repository.path)) paths.push(repository.path);
+    return paths.map((path) => {
+      const repositoryId = catalogRepositoryId(path);
+      const mounted = this.repositories.get(repositoryId);
+      return {
+        repositoryId,
+        repositoryPath: path,
+        name: basename(path) || path,
+        mounted: Boolean(mounted),
+        exists: isDirectory(path),
+        ...(mounted ? { artifactsReady: true, freshness: mounted.freshness } : {})
+      };
+    });
+  }
+
+  /**
+    懒挂载：已挂着就只更新 LRU；没挂着才从地址簿找到那条路径、读它的 `.tutor` 产物挂进内存并开监听。
+    失败分三种原因（GUI 要靠它决定「清掉工作区」还是「留着让用户处置」），且**任何一种都不会触发重分析**。
+    */
+  ensureMounted(repositoryId: string): { ok: true; repository: ImportedRepository } | { ok: false; reason: RepositoryMountReason; message: string } {
+    const live = this.repositories.get(repositoryId);
+    if (live) {
+      this.touch(live.index.repositoryId);
+      return { ok: true, repository: live };
+    }
+    const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
+    if (!path) return { ok: false, reason: "not_in_catalog", message: "这个仓库不在引擎的地址簿里；请重新导入以恢复它。" };
+    if (!isDirectory(path)) return { ok: false, reason: "directory_missing", message: `地址簿记的目录已经不存在：${path}。产物在它原来的 .tutor/ 里，把仓库放回该路径或重新导入即可。` };
+    let index: RepositoryIndex | undefined;
+    let course: CourseTree | undefined;
+    let analysis: RepositoryAnalysis | undefined;
+    let estimate: ImportEstimate | undefined;
     try {
-      if (!statSync(target).isDirectory()) throw new Error("目录不存在");
-      const repositoryId = deriveRepositoryId(target);
-      const database = new TutorDatabase(target);
-      const index = database.getIndex(repositoryId);
-      const course = database.getCourse(repositoryId);
-      const analysis = database.getAnalysis(repositoryId);
-      const estimate = database.getEstimate(repositoryId);
+      const database = new TutorDatabase(path);
+      index = database.getIndex(repositoryId);
+      course = database.getCourse(repositoryId);
+      analysis = database.getAnalysis(repositoryId);
+      estimate = database.getEstimate(repositoryId);
       database.close();
-      if (!index || !course || !analysis || !estimate) throw new Error(".tutor 数据不完整");
-      this.mount({ path: target, index, course, estimate, analysis });
-      writeMountedRepository(target);
-      return 1;
     } catch {
-      this.unmountAll();
-      writeMountedRepository();
-      return 0;
+      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor/tutor.db 读不出来（文件损坏或权限不足），需要重新导入。` };
+    }
+    if (!index || !course || !analysis || !estimate) {
+      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、课程树、分析结果或估算），需要重新导入才能继续。` };
+    }
+    const startedAt = Date.now();
+    const repository = this.attach({ path, index, course, estimate, analysis });
+    traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size }, { traceId: null, durationMs: Date.now() - startedAt });
+    return { ok: true, repository };
+  }
+
+  /** 用户显式把某仓移出地址簿（并就地卸载）；不动仓库里的产物。 */
+  forget(repositoryId: string): void {
+    this.unmountOne(repositoryId);
+    dropFromRegistry(repositoryId);
+  }
+
+  /**
+    挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代的 `unmountAll()` 是切仓必须重导入的根因），
+    改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存摘掉，磁盘产物一字不动。
+    */
+  private attach(repository: Omit<ImportedRepository, "watcher" | "freshness">): ImportedRepository {
+    const repositoryId = repository.index.repositoryId;
+    this.repositories.get(repositoryId)?.watcher?.close();
+    const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths));
+    watcher.start();
+    const mounted: ImportedRepository = {
+      ...repository,
+      watcher,
+      freshness: judgeFreshness(repository.path, repository.index, repository.analysis)
+    };
+    this.repositories.set(repositoryId, mounted);
+    this.touch(repositoryId);
+    this.evictBeyondLru();
+    return mounted;
+  }
+
+  /** 记一次「刚用过」：把它挪到 LRU 末尾。顺序数组很短（≤ `maxMounted()`），不做链表。 */
+  private touch(repositoryId: string): void {
+    const position = this.lru.indexOf(repositoryId);
+    if (position >= 0) this.lru.splice(position, 1);
+    this.lru.push(repositoryId);
+  }
+
+  private evictBeyondLru(): void {
+    while (this.lru.length > maxMounted()) {
+      const oldest = this.lru.shift();
+      if (!oldest) break;
+      const repository = this.repositories.get(oldest);
+      this.unmountOne(oldest);
+      if (repository) traceEngine("mount", { repositoryId: oldest, phase: "evicted", mounted: this.repositories.size }, { traceId: null });
     }
   }
 
-  /** 挂载一个仓库并监听：先卸载已有仓库（含同一 id 的旧实例，其 watcher 一并 close），保证单槽。 */
-  private mount(repository: ImportedRepository): void {
-    this.unmountAll();
-    repository.watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repository.index.repositoryId, changedPaths));
-    repository.watcher.start();
-    this.repositories.set(repository.index.repositoryId, repository);
+  private unmountOne(repositoryId: string): void {
+    const repository = this.repositories.get(repositoryId);
+    repository?.watcher?.close();
+    this.repositories.delete(repositoryId);
+    const position = this.lru.indexOf(repositoryId);
+    if (position >= 0) this.lru.splice(position, 1);
   }
 
-  /** 卸载全部仓库并停掉它们的 fs 监听；fs.FSWatcher.close() 幂等，重复关闭无害。
+  /** 卸载全部仓库并停掉它们的 fs 监听（测试收尾与关停用）。fs.FSWatcher.close() 幂等，重复关闭无害。
       刻意**不**清内存态 L2 缓存：键里已经带 `repositoryId` + 本层输入哈希，换仓后不可能误命中；
       实测在切换仓库时清缓存会让下一个回合把完全相同的输入重烧一次（切换 → 重烧 ≈1.5k in / 200 out），
       而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。 */
   private unmountAll(): void {
     for (const repository of this.repositories.values()) repository.watcher?.close();
     this.repositories.clear();
+    this.lru.length = 0;
   }
 
   private async run(jobId: string): Promise<void> {
@@ -142,14 +334,14 @@ export class ImportService extends EventEmitter {
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
       const { index, course, estimate, analysis } = imported;
 
-      // 单槽：新导入的仓库成为唯一挂载项，旧仓库（含其 watcher）在此被卸载
-      this.mount({ path: job.repositoryPath, index, course, estimate, analysis });
+      // 新导入的仓库进地址簿（最近使用在后）并就地挂载；其它已挂载仓库不再被卸载
+      this.attach({ path: job.repositoryPath, index, course, estimate, analysis });
       job.repositoryId = index.repositoryId;
       try {
-        writeMountedRepository(job.repositoryPath);
+        rememberRepository(job.repositoryPath);
       } catch (error) {
-        // 注册表写失败不影响导入结果（重启后大不了重新导入），只提示
-        console.warn(`[import] 仓库注册表写入失败：${error instanceof Error ? error.message : String(error)}`);
+        // 地址簿写失败不影响导入结果（重启后大不了重新导入），只提示
+        console.warn(`[import] 仓库地址簿写入失败：${error instanceof Error ? error.message : String(error)}`);
       }
       this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区`);
       job.completedAt = new Date().toISOString();
@@ -163,7 +355,7 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<ImportedRepository> {
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<Omit<ImportedRepository, "watcher" | "freshness">> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     const index = indexRepository(repositoryPath);
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
@@ -250,13 +442,16 @@ export class ImportService extends EventEmitter {
     }
     // 微观归组投影跑在润色（含其缓存命中路径）之后：润色的输入结构不变，归组只是重挂位置、可重复执行
     course = groupImplementationsByModule(course);
+    const analysisHead = gitHeadOf(repositoryPath);
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),
       graph: serializeGraph(graph),
       implementations: verifiedImplementations,
       quality,
-      versionStamp
+      versionStamp,
+      // 记下分析时的 HEAD：懒挂载要靠它区分「内容没变但分析点在另一个提交上」与真的过期
+      ...(analysisHead ? { gitHead: analysisHead } : {})
     };
     database.saveCourse(course, estimate);
     database.saveAnalysis(analysis);
@@ -313,8 +508,9 @@ export class ImportService extends EventEmitter {
       const database = new TutorDatabase(current.path);
       database.saveAnalysis(next.analysis);
       database.close();
-      next.watcher = current.watcher;
-      this.repositories.set(repositoryId, next);
+      // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
+      // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
+      this.repositories.set(repositoryId, { ...next, watcher: current.watcher, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
       // 只记条数与结果，不把路径数组塞进日志（payload 口径只允许标量）
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
@@ -390,11 +586,8 @@ function expandHome(input: string): string {
 
 /** Exercise cache versioning follows source content, not an import timestamp. */
 function contentVersion(repositoryPath: string, index: RepositoryIndex): string {
-  const contents = index.files.map((file) => {
-    try { return `${file.path}:${hash(readFileSync(join(repositoryPath, file.path), "utf8"))}`; }
-    catch { return `${file.path}:unreadable`; }
-  }).sort().join("\n");
-  return `content:${hash(contents).slice(0, 24)}`;
+  // 与新鲜度判定共用同一次实现：两边口径必须逐字相同，否则挂载时永远比不中、每次访问都报过期
+  return stampAndDiff(repositoryPath, index).versionStamp;
 }
 
 /** 落在 settings 里的宏观润色标记：记录「这份已润色的课程树是在什么输入下算出来的」。 */

@@ -106,6 +106,21 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 26px; font-weight: 750; letter-spacing: 0; }
 .brand-mark { background: #d8ef58; color: #18372f; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; }
 .sidebar nav { display: grid; gap: 4px; }
+/* 仓库切换器（地址簿）：共用下拉的深底变体，配色跟着 sidebar 走 */
+.sidebar-repo { margin: 14px 0 0; }
+.sidebar-repo .picker-trigger { border-color: #35544a; background: #21483d; color: #cfe0d5; }
+.sidebar-repo .picker-trigger:hover { border-color: #4f7a68; background: #26524a; }
+.sidebar-repo.picker-open > .picker-trigger { border-color: #d8ef58; background: #26524a; }
+.sidebar-repo .picker-trigger.has-active { border-color: #4f7a68; }
+.sidebar-repo .picker-label { color: #eaf3ec; }
+.sidebar-repo .picker-trigger.has-active .picker-current { color: #fff; }
+.sidebar-repo .picker-trigger b, .sidebar-repo .picker-trigger svg, .sidebar-repo .picker-option b { color: #9cb7a8; }
+.sidebar-repo .picker-panel { border-color: #35544a; background: #1d4137; box-shadow: 0 14px 30px rgba(6, 26, 20, .45); }
+.sidebar-repo .picker-option { color: #cfe0d5; }
+.sidebar-repo .picker-option small { color: #93b0a1; }
+.sidebar-repo .picker-option:hover, .sidebar-repo .picker-option.cursor { background: #26524a; }
+.sidebar-repo .picker-option.active { background: #2f6b58; color: #fff; }
+.sidebar-repo .picker-empty { color: #9cb7a8; }
 .nav-item { display: flex; gap: 10px; align-items: center; color: #bdcec3; border-radius: 5px; padding: 10px 11px; text-decoration: none; font-size: 14px; }
 .nav-item:hover { background: #21483d; color: #fff; }
 .nav-item.active { color: #17372e; background: #d8ef58; font-weight: 700; }
@@ -124,7 +139,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .shell.sidebar-collapsed .nav-item .nav-label { display: none; }
 .shell.sidebar-collapsed .sidebar-bottom { justify-content: center; padding-left: 0; padding-right: 0; }
 .shell.sidebar-collapsed .sidebar-bottom .nav-label { display: none; }
-.main-content { min-width: 0; height: 100%; overflow: hidden; }
+/* 主区两行：顶部横幅（过期产物）+ 路由内容。banner 占一行而不是叠在内容上，页面高度算术才不变。 */
+.main-content { min-width: 0; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.route-content { grid-row: 2; min-height: 0; }
+/* 过期产物横幅（App.tsx FreshnessBanner）：只报告，重不重跑由用户点头 */
+.freshness-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 16px; border-bottom: 1px solid #e3d3ac; background: #fbf3dd; color: #6b4f1d; font-size: 12px; }
+.freshness-banner strong { flex: 0 0 auto; color: #7a5a1c; }
+.freshness-banner span { flex: 1 1 320px; min-width: 0; color: #6b5527; line-height: 1.45; }
+.freshness-banner button { flex: 0 0 auto; border: 1px solid #cbb98a; border-radius: 4px; padding: 4px 9px; color: #6b4f1d; background: #fff; font-size: 11px; }
+.freshness-banner button:hover { border-color: #a8925c; background: #fffaf0; }
+.freshness-banner button.ghost { border-style: dashed; color: #7d6a3e; background: transparent; }
 .page, .course-page, .tutor-page { max-width: 1440px; margin: 0 auto; padding: 44px clamp(20px, 4vw, 62px); height: 100%; overflow-y: auto; scrollbar-width: thin; }
 .page-heading { display: flex; justify-content: space-between; gap: 24px; align-items: start; }
 .eyebrow { color: #587166; font-size: 12px; font-weight: 700; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0; }

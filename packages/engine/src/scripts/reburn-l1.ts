@@ -16,7 +16,7 @@ import { TutorDatabase } from "../store/database.js";
   与 phase0:prepare-study 的差别：那个脚本走确定性档且会改写课程树、往仓库里写调研材料；
   本脚本只重烧摘要，烧前先断言 provider 是模型档（确定性档重烧毫无意义，且会把 LLM 摘要整表覆盖）。
 
-  用法：pnpm l1:reburn [仓库路径]（缺省取 repositories.json 唯一/首个仓库）
+  用法：pnpm l1:reburn [仓库路径]（缺省取 repositories.json 里最近使用的那条）
 */
 
 loadDotEnv();
@@ -29,7 +29,7 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list[0];
+  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后；取最后一条才是「你现在在弄的那个仓」
 })();
 
 const index = indexRepository(repositoryPath);
