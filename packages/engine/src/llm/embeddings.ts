@@ -61,7 +61,7 @@ export function createEmbeddingProvider(config: EmbeddingConfig): EmbeddingProvi
 
 async function embedBatch(config: EmbeddingConfig, batch: string[]): Promise<Float32Array[]> {
   const startedAt = Date.now();
-  const base = { at: new Date().toISOString(), tier: "light" as const, scene: "embed", provider: "openai-compatible", model: config.model, thinking: "off", traceId: null as string | null };
+  const base = { at: new Date().toISOString(), tier: "light" as const, scene: "embed", provider: "openai-compatible", model: config.model, thinking: "off", traceId: null as string | null, threadId: null as string | null };
   let response: Response;
   try {
     response = await fetch(`${config.baseUrl}/embeddings`, {

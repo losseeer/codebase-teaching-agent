@@ -18,6 +18,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 interface TraceContext {
   traceId: string;
+  /**
+    本轮所属的会话线程 id（教学侧 = sessionId，同一个 id 三个名字）。
+    为什么放这里而不是穿参数：`provider.complete` 埋在 tool-loop / 状态机下面四五层，
+    为日志字段改签名会把「观测」变成主流程的依赖。改由路由在确定线程后 `markThread()` 就地标注，
+    深层只读不写——和 traceId 同一套传播机制、同一条纪律（见上方「传播方式」）。
+    */
+  threadId?: string;
 }
 
 const storage = new AsyncLocalStorage<TraceContext>();
@@ -30,4 +37,15 @@ export function runWithTrace<T>(traceId: string, fn: () => T): T {
 /** 当前请求的 traceId；不在请求上下文（后台任务 / 测试）时为 null。 */
 export function currentTraceId(): string | null {
   return storage.getStore()?.traceId ?? null;
+}
+
+/** 标注本轮所属会话线程（路由解析出线程之后调用；后台任务没有线程可标）。 */
+export function markThread(threadId: string | undefined): void {
+  const store = storage.getStore();
+  if (store && threadId) store.threadId = threadId;
+}
+
+/** 当前请求的会话线程 id；未标注（后台任务、单次提问、无 LLM 的路径）时为 null。 */
+export function currentThreadId(): string | null {
+  return storage.getStore()?.threadId ?? null;
 }

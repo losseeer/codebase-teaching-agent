@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
-import { currentTraceId } from "../trace/context.js";
+import { currentThreadId, currentTraceId } from "../trace/context.js";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。
@@ -34,6 +34,12 @@ export interface LlmCallRecord {
   thinking: string;
   /** 触发本次调用的请求 traceId；后台任务（导入期润色）为 null。与 engine.jsonl 的关联键。 */
   traceId: string | null;
+  /**
+    本轮所属的会话线程 id（教学侧 = sessionId）；无线程的单次提问与后台任务为 null。
+    有了它才能把「同一线程相邻两轮」的间隔与前缀缓存命中率对上——scene 只能给同场景相邻调用的代理值。
+    数据源是 trace 上下文（`trace/context.ts` 的 markThread），不在 provider 层新增参数。
+    */
+  threadId: string | null;
   tools?: string[];
   inputTokens?: number;
   outputTokens?: number;
@@ -113,6 +119,7 @@ export class LoggingLlmProvider implements LlmProvider {
       model: this.modelVersion,
       thinking: input.thinking ?? "auto",
       traceId: currentTraceId(),
+      threadId: currentThreadId(),
       ...(input.tools?.length ? { tools: input.tools.map((tool) => tool.name) } : {})
     };
     try {

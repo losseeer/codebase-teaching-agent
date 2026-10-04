@@ -26,7 +26,7 @@ import { summarizeFiles } from "./summarizer/summarizer.js";
 import { TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
-import { runWithTrace } from "./trace/context.js";
+import { markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
@@ -61,7 +61,8 @@ const tboot = (label: string): void => {
 
 tboot("imports resolved");
 
-const app = Fastify({
+/** 导出只为给路由级测试用 `app.inject()`（见 server-routes.test.ts）；产品路径仍然是本文件自己 listen。 */
+export const app = Fastify({
   // traceId 即 reqId：pino 的请求行、本进程记的 trace 事件、llm.log 与 journal 共享同一个 id
   genReqId: () => id(),
   logger: { level: process.env.LOG_LEVEL ?? "warn" }
@@ -687,6 +688,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
   // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝：一个干净的 409 比「模型拿错上下文自信作答」便宜得多
   if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
+  // 线程就地标注：llm.log 的每条 provider 调用都带上它，前缀缓存才能按「同一线程相邻两轮」算间隔
+  markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
@@ -741,6 +744,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
   const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
   if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
+  markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
@@ -809,6 +813,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   // 线程绑题（exercise_id 由 GUI 建线程时给出）：换题走新建线程，这里兜住「拿着 A 题的会话问 B 题」——
   // 上一题的解答混进本轮上下文，模型会把两道题的条件揉在一起作答
   if (thread?.exerciseId && thread.exerciseId !== request.body.exerciseId) return reply.code(409).send({ error: "该会话属于另一道练习；请新建会话后再追问。" });
+  markThread(thread?.id);
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   // 练习查询留在 hijack 前：404 还是干净的 JSON，只有确定要开火了才切 SSE
@@ -1045,6 +1050,8 @@ app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (re
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const current = resolveTeachingState(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
+  // 教学侧的 sessionId 就是 chat_session 的线程 id（一个 id 三个名字），llm.log 直接沿用它做线程聚合
+  markThread(current.id);
   const repository = repositoryOr404(current.repositoryId);
   const node = repository && flatten(repository.course.root).find((item) => item.id === current.courseNodeId);
   if (!repository || !node) return reply.code(404).send({ error: "课程节点不可用" });
@@ -1172,6 +1179,10 @@ function flatten(root: CourseNode): CourseNode[] { return [root, ...root.childre
 // s 标志：`.` 默认不匹配换行，回放会把多行回复的 `\n` 全丢掉（打字机预览塌成一行）；加上后逐块保留换行
 function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
 
+// 测试里不占端口：vitest 会把 VITEST 置为 "true"，此时只用 app.inject() 打路由。
+// 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。
 const port = Number(process.env.ENGINE_PORT ?? 3001);
-await app.listen({ port, host: "127.0.0.1" });
-tboot("listening");
+if (!process.env.VITEST) {
+  await app.listen({ port, host: "127.0.0.1" });
+  tboot("listening");
+}

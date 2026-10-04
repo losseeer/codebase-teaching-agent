@@ -26,6 +26,7 @@ const record = (overrides: Partial<LlmCallRecord> = {}): LlmCallRecord => ({
   ms: 1200,
   thinking: "auto",
   traceId: null,
+  threadId: null,
   ...overrides
 });
 
