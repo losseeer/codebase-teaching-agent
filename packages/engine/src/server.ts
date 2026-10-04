@@ -8,10 +8,10 @@ import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TeachingStage, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
-import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
+import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
-import { fileStructureOf } from "./depgraph/roles.js";
+import { classifyFileRoles, fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
@@ -391,7 +391,10 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/i
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/course", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  return repository?.course ?? reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  // 模块分级现算（主干/设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
+  const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
+  return annotateModuleTiers(repository.course, roles);
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overview", async (request, reply) => {

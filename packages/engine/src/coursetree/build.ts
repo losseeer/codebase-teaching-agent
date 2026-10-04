@@ -3,6 +3,66 @@ import type { CourseNode, CourseTree, FileEntry, ImplementationUnit, QualityRepo
 import type { DependencyGraph } from "../depgraph/graph.js";
 import type { FileSummary } from "../summarizer/summarizer.js";
 
+/**
+  目录树的「源码根」：这些名字下面一个目录就是一个有语义的包/模块
+  （`entity` / `model` / `repository` 各是独立职责），**绝不跨它们合并**——否则会得到一个
+  `src/main` 大杂烩模块，比 20 个碎片 chip 更糟。
+  */
+const SOURCE_ROOTS = new Set(["src", "lib", "app", "apps", "packages", "cmd", "internal", "source"]);
+
+/** 低于这个文件数的目录单独成模块没有讲解空间（真仓 35 个模块里 20 个只有 1 个文件）。 */
+const MIN_MODULE_FILES = 2;
+
+/**
+  小目录归并（精炼模块列表，2026-10-02）：只在**顶层功能区**里合并，且只有当该区域确实有 ≥2 个碎片时才合。
+  真仓实测：`observability/` 下面五个子目录各 1 个文件 → 五个几乎同名的 chip（`Grafana 大盘定义`、
+  `Grafana 大盘 provisi`、`Prometheus 抓取配置`…），学习者既看不懂也没法取舍；合并成一个
+  `observability` 模块（5 个文件）后它才是一个完整的「可观测性配置」单元。
+  反过来 `src/**` 下的单子目录（`entity`、`annotation`…）保持独立——它们是真实的包边界。
+  */
+function groupModuleFiles(moduleFiles: Map<string, FileEntry[]>): Map<string, FileEntry[]> {
+  /** 可合并的顶层区域名；源码根、仓库根、本身就在一层的目录返回 undefined（不合并）。 */
+  const areaOf = (dir: string): string | undefined => {
+    const [first, second] = dir.split("/");
+    if (!second || first === "根目录" || SOURCE_ROOTS.has(first)) return undefined;
+    return first;
+  };
+  const merged = new Map<string, FileEntry[]>();
+  const pending = new Map<string, { dirs: string[]; files: FileEntry[] }>();
+  for (const [dir, files] of moduleFiles) {
+    const area = files.length < MIN_MODULE_FILES ? areaOf(dir) : undefined;
+    if (!area) {
+      merged.set(dir, files);
+      continue;
+    }
+    const bucket = pending.get(area) ?? { dirs: [], files: [] };
+    bucket.dirs.push(dir);
+    bucket.files.push(...files);
+    pending.set(area, bucket);
+  }
+  for (const [area, bucket] of pending) {
+    // 落单的小目录仍按原路径成模块：为了凑数把它挂到一个空泛的区域名下，等于把可定位性换成了整齐
+    if (bucket.dirs.length < 2) merged.set(bucket.dirs[0], bucket.files);
+    else merged.set(area, bucket.files);
+  }
+  return merged;
+}
+
+/**
+  实现节点该挂到哪个模块：先按精确目录匹配，匹配不到就**逐级上溯**。
+  上溯是小目录合并的必然配套——`observability/grafana/dashboards` 并进 `observability` 之后，
+  该目录下的函数节点仍要回到这个模块，否则它们会集体变成孤儿留在「微观精读」里。
+  */
+function nearestModuleId(path: string, moduleIds: Set<string>): string | undefined {
+  let dir = dirname(path);
+  for (;;) {
+    const candidate = `module:${dir === "." ? "根目录" : dir}`;
+    if (moduleIds.has(candidate)) return candidate;
+    if (dir === "." || !dir.includes("/")) return undefined;
+    dir = dirname(dir);
+  }
+}
+
 export function buildCourseTree(input: {
   repositoryId: string;
   modelVersion: string;
@@ -17,8 +77,9 @@ export function buildCourseTree(input: {
     const moduleName = dirname(file.path) === "." ? "根目录" : dirname(file.path);
     moduleFiles.set(moduleName, [...(moduleFiles.get(moduleName) ?? []), file]);
   }
+  const groupedModuleFiles = groupModuleFiles(moduleFiles);
   const workflows = input.graph.entrypoints.filter((anchor) => !isFixturePath(anchor.path)).map((anchor) => workflowNode(anchor, byPath, input.graph));
-  const modules = [...moduleFiles.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([moduleName, files]) => ({
+  const modules = [...groupedModuleFiles.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([moduleName, files]) => ({
     id: `module:${moduleName}`,
     title: `${moduleName} 模块`,
     kind: "module" as const,
@@ -70,9 +131,8 @@ export function groupImplementationsByModule(tree: CourseTree): CourseTree {
   const orphans: CourseNode[] = [];
   for (const implementation of micro.children) {
     const path = implementation.anchors[0]?.path;
-    const dir = path ? (dirname(path) === "." ? "根目录" : dirname(path)) : undefined;
-    const moduleId = dir ? `module:${dir}` : undefined;
-    if (moduleId && moduleIds.has(moduleId)) {
+    const moduleId = path ? nearestModuleId(path, moduleIds) : undefined;
+    if (moduleId) {
       moved.set(moduleId, [...(moved.get(moduleId) ?? []), implementation]);
     } else {
       orphans.push(implementation);

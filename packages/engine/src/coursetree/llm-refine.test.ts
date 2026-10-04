@@ -4,21 +4,23 @@ import type { LlmProvider } from "../llm/provider.js";
 import { refineCourseMap } from "./llm-refine.js";
 
 /** 可编程 fake provider：按调用序返回预设文本；元素为 Error 实例时该次调用抛错。 */
-function fakeProvider(responses: (string | Error)[]): { provider: LlmProvider; users: string[] } {
+function fakeProvider(responses: (string | Error)[]): { provider: LlmProvider; users: string[]; systems: string[] } {
   const users: string[] = [];
+  const systems: string[] = [];
   let index = 0;
   const provider = {
     name: "fake-provider",
     modelVersion: "fake-model",
     async complete(input: { system: string; user: string }) {
       users.push(input.user);
+      systems.push(input.system);
       const step = responses[index];
       index += 1;
       if (step instanceof Error) throw step;
       return { text: step, usage: { inputTokens: 10, outputTokens: 5 }, finishReason: "stop" };
     }
   } as unknown as LlmProvider;
-  return { provider, users };
+  return { provider, users, systems };
 }
 
 function leaf(id: string, title: string, kind: CourseNode["kind"] = "implementation"): CourseNode {
@@ -126,5 +128,29 @@ describe("refineCourseMap", () => {
     const tree = treeWith(leaf("implementation:u1", "doThing()"));
     const refinement = await refineCourseMap(tree, provider);
     expect(refinement.course).toBe(tree);
+  });
+
+  it("超长标题不再从中间切断：标识符原样保留，散文按边界收并加省略号", async () => {
+    const prose = "Grafana 大盘 provisioning/dashboards 定义与抓取配置总览";
+    const symbol = "buildIndexSettingsAndMappingForElasticsearch()";
+    const { provider } = fakeProvider([JSON.stringify([
+      { key: "implementation:u1", title: prose, summary: "s" },
+      { key: "implementation:u2", title: symbol, summary: "s" }
+    ])]);
+    const tree = treeWith(leaf("implementation:u1", "one()"), leaf("implementation:u2", "two()"));
+    const refinement = await refineCourseMap(tree, provider);
+    const children = refinement.course.root.children.find((node) => node.id === "micro")!.children;
+    // 旧口径 `.slice(0, 18)` 会切出 `Grafana 大盘 provisi` / `buildIndexSettingsA`——半截词比超长难读得多
+    expect(children[0].title).toBe("Grafana 大盘 provisioning…");
+    expect(children[1].title).toBe(symbol);
+  });
+
+  it("标题口径写给「不懂本仓库业务的学习者」，并禁止只写工具名", async () => {
+    const { provider, systems } = fakeProvider(["[]"]);
+    await refineCourseMap(treeWith(leaf("implementation:u1", "doThing()")), provider);
+    expect(systems[0]).toContain("对它做的业务一无所知");
+    expect(systems[0]).toContain("禁止只写产品名/工具名/目录名");
+    // 长度上限也写在提示词里，改了常量必须同步提示词，否则模型还在按旧上限产出
+    expect(systems[0]).toContain("≤24 字");
   });
 });

@@ -1,4 +1,4 @@
-import type { CourseNode, CourseTree } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTier, CourseTree } from "@codebase-tutor/shared";
 
 /**
   教学模块（业务模块）：模块 = 课程树「仓库模块地图」分支下的一个节点，
@@ -29,6 +29,8 @@ export interface KnowledgeModule {
   custom?: boolean;
   /** 业务模块的文件清单（按 path 去重、保留最浅层节点）；自建模块与练习主题为空 */
   entries?: ModuleEntry[];
+  /** 分级（引擎按模块可见文件的结构角色给出）；undefined = 引擎未给（旧响应或自建主题），界面按扁平渲染 */
+  tier?: CourseTier;
 }
 
 export type ModuleWhere = "teaching" | "practice";
@@ -112,7 +114,7 @@ function moduleEntries(node: CourseNode): ModuleEntry[] {
 export function courseModules(tree: CourseTree | null | undefined): KnowledgeModule[] {
   const branch = tree?.root?.children?.find((node) => node.id === MODULE_BRANCH_ID);
   if (!branch) return [];
-  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, entries: moduleEntries(node) }));
+  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, tier: node.tier, entries: moduleEntries(node) }));
 }
 
 /** 业务模块 + 覆盖层 → 界面看到的清单。改名只影响显示，id 仍是树节点 id（缓存与埋点按它走）。 */

@@ -71,6 +71,15 @@ export interface AssertionCheck {
   anchors: SourceAnchor[];
 }
 
+/**
+  模块分级（分级折叠用，引擎在 `/course` 响应前现算，不落树）：
+  - `core` 主干 = 模块里有执行主干文件；
+  - `facility` 设施 = 只有支撑逻辑或外部设施接入（配置、存储、网络客户端）；
+  - `periphery` 外围 = 只剩末端工具与测试（文档、监控看板、压测报表都在这里）。
+  判据来自 `depgraph/roles.ts` 的结构规则（确定、可复现），不依赖模型。
+  */
+export type CourseTier = "core" | "facility" | "periphery";
+
 export interface CourseNode {
   id: string;
   title: string;
@@ -81,6 +90,8 @@ export interface CourseNode {
   verification?: AssertionCheck[];
   /** Present on overview and paged responses when descendants are not yet loaded. */
   childCount?: number;
+  /** 仅 module 节点有值：界面据此把「外围」折起来，首屏只露主干与设施 */
+  tier?: CourseTier;
 }
 
 export interface CourseTree {

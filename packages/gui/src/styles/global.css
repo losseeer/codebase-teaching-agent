@@ -231,8 +231,41 @@ input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { displ
 /* ---- 教学/练习模块面板（prototype .modules-pane / .module-chips / .module-config）---- */
 .modules-pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; background: #fbfdfb; }
 .module-body { min-height: 0; padding: 13px 11px 16px; overflow: auto; background: #fbfdfb; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
-/* 业务模块可能有几十个（真仓 35 个）：chips 区限高滚动，别把「推荐入口 / 仓库文件」挤出视野 */
+/* ---- 共用下拉选择器（gui/src/ui/OptionDropdown.tsx：模块分级 + 流程入口）---- */
+/* 触发器一行写完「区名 + 当前选中项 + 数量」，长列表不平铺 */
+.picker { position: relative; }
+.picker-trigger { display: flex; align-items: center; gap: 6px; width: 100%; border: 1px solid #cbd9d1; border-radius: 5px; padding: 6px 8px; color: #557568; background: #fff; font-size: 11px; text-align: left; }
+.picker-trigger:hover { border-color: #a8c4b4; background: #f4f9f4; }
+.picker-open > .picker-trigger { border-color: #579172; background: #f4f9f4; }
+.picker-trigger.has-active { border-color: #7ba889; background: #f2f8ea; }
+.picker-label { flex: 0 0 auto; color: #315b4b; font-size: 10px; font-weight: 700; letter-spacing: .2px; }
+.picker-current { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.picker-trigger.has-active .picker-current { color: #1c4c3a; font-weight: 700; }
+.picker-trigger b, .picker-option b { flex: 0 0 auto; color: #8aa097; font-size: 9px; font-weight: 600; }
+.picker-trigger svg { flex: 0 0 auto; color: #8aa097; transition: transform .15s ease; }
+.picker-open .picker-trigger svg { transform: rotate(180deg); }
+/* 色点：一眼分清哪栏是业务代码、哪栏是看板与测试（tone-* 由调用方给） */
+.picker-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: #b9cdc1; }
+.tone-core .picker-dot { background: #3f8f5f; }
+.tone-facility .picker-dot { background: #c8a24a; }
+.tone-periphery .picker-dot { background: #8f9fae; }
+.tone-custom .picker-dot { background: #7d9bc4; }
+.picker-panel { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; display: grid; gap: 1px; padding: 3px; max-height: 216px; overflow-y: auto; border: 1px solid #b9cdc1; border-radius: 6px; background: #fff; box-shadow: 0 10px 22px rgba(23, 53, 44, .16); scrollbar-width: thin; }
+.picker-option { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; width: 100%; border: 0; border-radius: 4px; padding: 5px 7px; color: #4a665b; background: transparent; text-align: left; font-size: 11px; }
+.picker-option > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 选项次行：文件路径（流程入口要用它核对到底选了哪个类） */
+.picker-option small { flex: 1 1 100%; min-width: 0; order: 3; color: #86a094; font-size: 9.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.picker-option:hover, .picker-option.cursor { background: #eef6ef; }
+.picker-option.active { color: #1c4c3a; background: #e5f1d0; font-weight: 700; }
+.picker-option.active b { color: #4d8f6c; }
+.picker-empty { padding: 5px 7px; color: #8aa097; font-size: 10px; }
+/* 就地展开的匹配列表（正则匹配结果要一直看得见，不藏进下拉） */
+.picker-matches { display: grid; gap: 1px; padding: 3px; max-height: 168px; overflow-y: auto; border: 1px solid #b9cdc1; border-radius: 6px; background: #fff; scrollbar-width: thin; }
+
+/* 业务模块可能几十个：练习侧/未分级时 chips 区限高滚动，教学侧走分级下拉 */
 .module-chips { display: flex; flex-wrap: wrap; gap: 5px; max-height: 132px; overflow-y: auto; scrollbar-width: thin; }
+.module-tiers { display: grid; gap: 5px; }
+.module-tiers .module-chip.add { justify-self: start; }
 .module-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 8px; color: #557568; background: #fff; font-size: 11px; }
 .module-chip:hover { background: #eef6ef; }
 .module-chip.active { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; font-weight: 700; }
@@ -240,12 +273,6 @@ input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { displ
 .module-chip.add:hover, .module-chip.add.on { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; }
 .module-chip b { color: #8aa097; font-weight: 600; font-size: 9px; }
 .module-chip.active b { color: #4d8f6c; }
-.module-chips-empty { color: #8aa097; font-size: 10px; }
-/* 模块过滤框：模块数超过阈值才出现（ModulesPane 里判的数） */
-.module-filter { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 4px 7px; color: #81978d; background: #fff; }
-.module-filter:focus-within { border-color: #579172; }
-.module-filter input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #17352c; font-size: 11px; }
-.module-filter button { border: 0; padding: 2px; display: grid; place-items: center; color: #81978d; background: transparent; }
 .module-hint { margin: 9px 2px 0; color: #81978d; font-size: 10px; line-height: 1.5; }
 .module-section-label { margin: 15px 2px 8px; color: #315b4b; font-size: 11px; font-weight: 700; }
 .module-section-label span { margin-left: 7px; color: #8aa097; font-size: 10px; font-weight: 500; }
@@ -373,17 +400,21 @@ button.entry-item:hover { background: #eef6ef; }
 .map-viewbar-note { min-width: 0; overflow: hidden; color: #7c9188; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .flow-inner { z-index: 1; padding: 14px 36px 26px; }
-/* 入口选择区：Spring 这类仓一屏能有十几个入口，等宽网格 + 两行折行才不挤成一堵墙。
-   min(232px, 100%) 是窄画布下的溢出闸：不写 min() 时 232px 是硬下限，会把 `.map-scroll` 撑出横向滚动条。 */
-.flow-entries { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(232px, 100%), 1fr)); gap: 8px 10px; margin: 0 0 18px; }
-.flow-entries button { display: grid; gap: 3px; min-width: 0; border: 1px solid #cbd9d1; border-radius: 5px; padding: 8px 10px; color: #4d6f60; background: #fff; font-size: 11px; line-height: 1.35; text-align: left; transition: border-color .12s ease, box-shadow .12s ease; }
-.flow-entries button:hover { border-color: #79a88a; box-shadow: 0 2px 8px rgba(30, 71, 54, .07); }
-.flow-entries button.active { border-color: #7ba889; color: #224c3a; background: #e5f1d0; font-weight: 700; }
-.flow-entries button strong { display: block; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-.flow-entries button small { display: block; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: #86a094; font-weight: 400; font-size: 10px; }
-.flow-entry-manual { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 2px; padding-top: 10px; border-top: 1px dashed #dbe7de; color: #7d948a; font-size: 11px; }
-.flow-entry-manual select { flex: 1 1 auto; min-width: 0; max-width: 420px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 4px 6px; background: #fff; color: #274c3e; font-size: 11px; }
-.flow-entry-manual select:focus { outline: 1px solid #7aa893; }
+/* 入口选择区：核心入口走共用下拉，自定义入口是「路径正则 + 就地匹配清单」。
+   宽度跟着流程链条（560px）收，避免这一栏比下面的环节卡宽出一截。 */
+.flow-entries { display: grid; gap: 9px; max-width: min(560px, 100%); margin: 0 0 18px; }
+.flow-entry-custom { display: grid; gap: 6px; padding-top: 9px; border-top: 1px dashed #dbe7de; }
+.flow-entry-pattern { display: flex; align-items: center; gap: 8px; }
+.flow-entry-pattern > span { flex: 0 0 auto; color: #315b4b; font-size: 10px; font-weight: 700; letter-spacing: .2px; }
+.flow-entry-pattern input { flex: 1 1 auto; min-width: 0; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 7px; color: #274c3e; background: #fff; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.flow-entry-pattern input:focus { outline: 1px solid #7aa893; border-color: #579172; }
+.flow-entry-pattern em { flex: 0 0 auto; color: #8aa097; font-size: 9.5px; font-style: normal; }
+.flow-entry-hint { margin: 0; color: #9a6b34; font-size: 10px; line-height: 1.5; }
+.flow-entry-hint code { padding: 1px 3px; border-radius: 3px; background: #f0f5f1; color: #3f6b57; }
+.flow-entry-current { display: flex; align-items: center; gap: 7px; margin: 0; color: #7d948a; font-size: 10px; }
+.flow-entry-current code { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #224c3a; }
+.flow-entry-current button { flex: 0 0 auto; border: 1px solid #cbd9d1; border-radius: 4px; padding: 3px 6px; color: #4d6f60; background: #fff; font-size: 10px; }
+.flow-entry-current button:hover { border-color: #7ba889; background: #eef6ef; }
 .flow-chain { position: relative; display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0 0 0 20px; list-style: none; }
 .flow-chain::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 14px; width: 1px; background: #cfe0d5; }
 .flow-chain li { display: block; }

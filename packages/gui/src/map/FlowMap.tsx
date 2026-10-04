@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Sparkles } from "lucide-react";
 import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex, SourceAnchor } from "@codebase-tutor/shared";
 import { api } from "../api/client";
+import { OptionDropdown, type DropdownOption } from "../ui/OptionDropdown";
 
 /**
  * 宏观设计 v0.10：流程视图（与 `DepMap` 的架构视图并列）。
@@ -26,6 +27,15 @@ export const FLOW_KIND_LABEL: Record<FlowStageKind, string> = {
   loop: "回环",
   exit: "出口"
 };
+
+/** 正则匹配一次最多铺开这么多条：再多也读不过来，靠改正则收窄而不是滚动。 */
+const MATCH_LIMIT = 60;
+
+/** 路径末两段做主文案：整路径前缀几乎都一样（src/main/java/com/hmdp/…），能区分的是尾巴。 */
+function pathTail(path: string): string {
+  const segments = path.split("/");
+  return segments.length > 1 ? segments.slice(-2).join("/") : path;
+}
 
 /**
   engine 的入口标签是英文短语（`detectEntrypoints`），界面上按项目惯例转中文；
@@ -94,6 +104,35 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
     if (!entryIsKnown) setEntryPath(preferredEntryPath(entries, analysis));
   }, [entries, entryIsKnown]);
 
+  /** 核心入口按 path 去重：同一个类可能被认成两种入口（约定名 + 启动脚本），并列两条只会让人以为能选两件东西。 */
+  const coreOptions = useMemo<DropdownOption[]>(() => {
+    const byPath = new Map<string, string[]>();
+    for (const item of entries) byPath.set(item.path, [...(byPath.get(item.path) ?? []), entryLabel(item.label)]);
+    return [...byPath].map(([path, labels]) => ({ value: path, label: labels.join(" · "), detail: path, note: `${labels.join(" / ")}\n${path}` }));
+  }, [entries]);
+
+  /** 自定义入口＝路径正则：156~上千个文件不可能靠一个 select 翻找，正则既能「找某个类」也能「看全部」。 */
+  const [pattern, setPattern] = useState("");
+  const [coreOpen, setCoreOpen] = useState(false);
+  const matches = useMemo<{ paths: string[]; total: number; error: string }>(() => {
+    const needle = pattern.trim();
+    if (!needle) return { paths: [], total: fileOptions.length, error: "" };
+    try {
+      const re = new RegExp(needle, "i");
+      const paths = fileOptions.filter((path) => re.test(path));
+      return { paths, total: paths.length, error: "" };
+    } catch (error) {
+      return { paths: [], total: 0, error: error instanceof Error ? error.message : "正则不合法" };
+    }
+  }, [pattern, fileOptions]);
+  const shownMatches = matches.paths.slice(0, MATCH_LIMIT);
+  /** 换起点：收起下拉、清掉环节选中（旧流程的环节号对新流程没有意义）。 */
+  const choose = (path: string): void => {
+    setEntryPath(path);
+    setCoreOpen(false);
+    onSelectStage(null);
+  };
+
   /** 重试计数：值一变就重跑取数 effect——失败前这里只有一条虚线文案，用户只能切视图重挂载。 */
   const [attempt, setAttempt] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -124,32 +163,65 @@ export function FlowMap({ repositoryId, analysis, index, selectedStageOrder, onS
         {!entries.length ? (
           <p className="flow-empty">
             该仓库没有识别到执行入口——入口由 package.json 的 main/bin/scripts 与 main/server/app/index
-            等约定文件名推断，裸脚本或非常规布局的仓会识别不到。从下方手动指定一个已索引文件作为流程起点即可。
+            等约定文件名推断，裸脚本或非常规布局的仓会识别不到。在下方「自定义流程入口」输入路径正则，挑一个已索引文件作为流程起点即可。
           </p>
         ) : null}
         <div className="flow-entries" role="group" aria-label="选择执行入口">
-          {entries.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              className={item.path === entryPath ? "active" : ""}
-              title={`${item.path}（${item.label}）`}
-              onClick={() => { setEntryPath(item.path); onSelectStage(null); }}
-            >
-              <strong>{entryLabel(item.label)}</strong>
-              <small>{item.path}</small>
-            </button>
-          ))}
-          <label className="flow-entry-manual" title="从全部已索引文件中手动指定流程起点（识别不到或识别错时的兜底）">
-            <span>{entries.length ? "自定义" : "手动指定入口"}</span>
-            <select
-              value={entries.some((entry) => entry.path === entryPath) ? "" : entryPath}
-              onChange={(event) => { if (event.target.value) { setEntryPath(event.target.value); onSelectStage(null); } }}
-            >
-              <option value="" disabled>{entries.length ? "从文件选择…" : "选择一个已索引文件…"}</option>
-              {fileOptions.map((path) => <option key={path} value={path}>{path}</option>)}
-            </select>
-          </label>
+          <OptionDropdown
+            label="核心流程入口"
+            tone="core"
+            placeholder={coreOptions.length ? `${coreOptions.length} 个识别到的入口` : "未识别到入口"}
+            ariaLabel="选择核心流程入口"
+            options={coreOptions}
+            value={entryPath}
+            open={coreOpen}
+            onOpenChange={setCoreOpen}
+            onSelect={choose}
+          />
+          <div className="flow-entry-custom">
+            <label className="flow-entry-pattern">
+              <span>自定义流程入口</span>
+              <input
+                value={pattern}
+                placeholder={`路径正则，如 controller|Application；输入 . 匹配全部 ${fileOptions.length} 个文件`}
+                title="按路径正则匹配已索引文件，点匹配结果即把它设为流程起点（引擎识别不到入口时的兜底，也用来试非常规起点）"
+                spellCheck={false}
+                onChange={(event) => setPattern(event.target.value)}
+              />
+              <em>{matches.error ? "正则不合法" : pattern.trim() ? `匹配 ${matches.total} 个` : `${fileOptions.length} 个已索引文件`}</em>
+            </label>
+            {shownMatches.length ? (
+              <div className="picker-matches" role="listbox" aria-label="正则匹配到的文件">
+                {shownMatches.map((path) => (
+                  <button
+                    type="button"
+                    key={path}
+                    role="option"
+                    aria-selected={path === entryPath}
+                    className={`picker-option ${path === entryPath ? "active" : ""}`}
+                    title={path}
+                    onClick={() => choose(path)}
+                  >
+                    <span>{pathTail(path)}</span>
+                    {path === entryPath ? <b>当前</b> : null}
+                  </button>
+                ))}
+                {matches.total > shownMatches.length ? (
+                  <span className="picker-empty">{`只列前 ${MATCH_LIMIT} 条（共 ${matches.total} 条匹配）——把正则收紧些`}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {pattern.trim() && !matches.error && !matches.total ? (
+              <p className="flow-entry-hint">没有文件的 path 匹配这条正则：先试更短的词，或输入 <code>.</code> 看全部清单。</p>
+            ) : null}
+            {matches.error ? <p className="flow-entry-hint">正则不合法：{matches.error}</p> : null}
+          </div>
+          {entryPath && !entries.some((item) => item.path === entryPath) ? (
+            <p className="flow-entry-current">
+              当前起点（自定义）：<code>{entryPath}</code>
+              {coreOptions.length ? <button type="button" onClick={() => choose(preferredEntryPath(entries, analysis))}>回到核心入口</button> : null}
+            </p>
+          ) : null}
         </div>
 
         {loading ? (

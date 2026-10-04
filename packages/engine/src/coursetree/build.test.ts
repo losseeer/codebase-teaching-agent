@@ -96,4 +96,47 @@ describe("course tree", () => {
     expect(dbModule.children.map((node) => node.id)).toEqual(["symbol:src/db/store.ts:load:3", "symbol:src/db/store.ts:save:3"]);
     expect(groupImplementationsByModule(grouped)).toBe(grouped); // 幂等：对已归组的树原样返回
   });
+
+  it("小目录合并：顶层功能区的单文件子目录合成一个模块，源码根下的包各自保留", () => {
+    const file = (path: string) => ({ path, extension: path.slice(path.lastIndexOf(".")), bytes: 10, lines: 2 });
+    const tree = buildCourseTree({
+      repositoryId: "repo_test",
+      modelVersion: "fixture-v1",
+      files: [
+        file("observability/grafana/dashboards/board.json"),
+        file("observability/grafana/provisioning/dashboards/x.yaml"),
+        file("observability/prometheus/prometheus.yml"),
+        file("src/main/java/com/hmdp/entity/User.java"),
+        file("src/main/java/com/hmdp/repository/UserRepository.java"),
+        file("docs/design.md")
+      ],
+      summaries: [],
+      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
+    });
+    const ids = tree.root.children.find((node) => node.id === "modules")!.children.map((node) => node.id);
+    // 真仓就是这里碎掉的：observability 下三个子目录各 1 个文件 → 三个几乎同名的 chip
+    expect(ids).toContain("module:observability");
+    expect(ids.filter((id) => id.startsWith("module:observability/"))).toEqual([]);
+    // 源码根下面不跨包合并：entity / repository 是有语义的边界，合成 src/main 就是大杂烩
+    expect(ids).toContain("module:src/main/java/com/hmdp/entity");
+    expect(ids).toContain("module:src/main/java/com/hmdp/repository");
+    // 落单的小目录不为了整齐硬挂到区域名下
+    expect(ids).toContain("module:docs");
+  });
+
+  it("合并后的模块仍接得住子目录里的函数节点（逐级上溯，不产孤儿）", () => {
+    const file = (path: string) => ({ path, extension: ".ts", bytes: 10, lines: 2 });
+    const tree = buildCourseTree({
+      repositoryId: "repo_test",
+      modelVersion: "fixture-v1",
+      files: [file("observability/grafana/dashboards/render.ts"), file("observability/prometheus/rules.ts")],
+      summaries: [],
+      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" },
+      implementations: [unit("observability/grafana/dashboards/render.ts", "render"), unit("observability/prometheus/rules.ts", "evaluate")]
+    });
+    const grouped = groupImplementationsByModule(tree);
+    const merged = grouped.root.children.find((node) => node.id === "modules")!.children.find((node) => node.id === "module:observability")!;
+    expect(merged.children.map((node) => node.title)).toEqual(["render()", "evaluate()"]);
+    expect(microOf(grouped).children).toEqual([]);
+  });
 });
