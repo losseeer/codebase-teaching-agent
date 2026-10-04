@@ -1,11 +1,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TutorDatabase } from "../store/database.js";
-import { DISCIPLINES } from "../discipline/anchors.js";
 import { clearModuleEntryCache, rankEntryCandidates, suggestModuleEntriesCached } from "./entry-suggest.js";
 
 /**
@@ -172,42 +171,6 @@ describe("suggestModuleEntriesCached", () => {
     await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", analysis: update("src/other.ts") });
     expect(selectCalls).toHaveLength(1);
   });
-  it("学科主题零证据：两段 LLM 调用都不发，直接回 noEvidence（方案 A）", async () => {
-    const { provider, selectCalls, expandCalls } = fakeProvider([[]]);
-    const dir = mkdtempSync(join(tmpdir(), "codebase-tutor-discipline-")); // 空目录 = 没有任何依赖清单
-    try {
-      const result = await suggestModuleEntriesCached({
-        tree: treeWithNodes(["BlogCommentsController", "UserController"]), moduleLabel: "操作系统", moduleHint: "进程内状态、IO 边界与并发",
-        provider, repositoryId: "repo", repositoryPath: dir, discipline: DISCIPLINES.find((item) => item.id === "os")!
-      });
-      expect(result.noEvidence).toBe(true);
-      expect(result.entries).toHaveLength(0);
-      // 关键断言是「一次都没调」：省下的正是那两次注定判空的 token
-      expect(expandCalls).toHaveLength(0);
-      expect(selectCalls).toHaveLength(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("依赖清单能顶掉零证据判定：pom 里有 lettuce → 网络主题照常推荐（主题存在，入口质量另说）", async () => {
-    const { provider, selectCalls } = fakeProvider([["BlogCommentsController"]]);
-    const dir = mkdtempSync(join(tmpdir(), "codebase-tutor-discipline-"));
-    writeFileSync(join(dir, "pom.xml"), "<project><artifactId>lettuce-core</artifactId></project>", "utf8");
-    try {
-      const result = await suggestModuleEntriesCached({
-        tree: treeWithNodes(["BlogCommentsController"]), moduleLabel: "计算机网络", moduleHint: "HTTP 入口、超时与重试",
-        provider, repositoryId: "repo", repositoryPath: dir, discipline: DISCIPLINES.find((item) => item.id === "network")!
-      });
-      expect(result.noEvidence).toBeUndefined();
-      expect(selectCalls).toHaveLength(1);
-      // 学科 brief 进系统提示词：模型要知道「计算机网络」在这个仓里指的是机制，不是业务名字
-      expect(selectCalls[0].system).toContain("计算机学科主题「计算机网络」");
-      expect(result.entries.map((entry) => entry.id)).toEqual(["BlogCommentsController"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重）", () => {
@@ -217,15 +180,6 @@ describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重
     const candidates = [mk("a", "README.md", "根目录含 1 个可分析文件"), mk("b", "utils/CacheClient.java", "含 2 个可分析文件")];
     const ranked = rankEntryCandidates(candidates, ["缓存"], new Map([["utils/CacheClient.java", "封装缓存读写相关操作。"]]));
     expect(ranked[0].id).toBe("b");
-  });
-
-  it("学科锚点压倒中文主题名：签名证据文件排到最前（方案 A 的召回主因）", () => {
-    const os = DISCIPLINES.find((item) => item.id === "os")!;
-    const candidates = [mk("blog", "src/a/BlogCommentsController.java", "博客评论接口路由"), mk("pool", "src/z/ThreadPoolConfig.java", "配置类")];
-    const fileSummaries = new Map([["src/z/ThreadPoolConfig.java", "基于 ThreadPoolExecutor 的线程池与拒绝策略"]]);
-    // 不带学科证据时两个候选都是 0 分，只靠路径字典序 → 业务 controller 在前（真仓里送进模型的就是这个顺序）
-    expect(rankEntryCandidates(candidates, ["操作系统"], fileSummaries)[0].id).toBe("blog");
-    expect(rankEntryCandidates(candidates, ["操作系统"], fileSummaries, new Set(), [], os)[0].id).toBe("pool");
   });
 
   it("正分候选每路径限 3 个：同一文件的方法切片不挤掉别的候选（溢出仍在池子里）", () => {

@@ -8,7 +8,7 @@ import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
-import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, type KnowledgeModule } from "../modules/local-state";
+import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, PRACTICE_DEFAULT_MODULES, type KnowledgeModule } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
@@ -62,11 +62,11 @@ export function PracticePage({ workspace, chat: t }: { workspace: Workspace; cha
   const [error, setError] = useState("");
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
-  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", modules));
+  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", repositoryId, modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
   useEffect(() => { savePracticeModules(modules); }, [modules]);
-  useEffect(() => { saveActiveModule("practice", activeModule); }, [activeModule]);
+  useEffect(() => { saveActiveModule("practice", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
   /** 进度读取：成功也要把旧的错误清掉——原来错误一旦挂上就一直留在面板里，重新拉好之后还在「无法读取练习进度」。 */
   const refreshSummary = (): void => {
@@ -169,7 +169,15 @@ export function PracticePage({ workspace, chat: t }: { workspace: Workspace; cha
             modules={modules}
             activeId={activeModule}
             onSelectModule={switchModule}
-            onModulesChange={(next, nextActive) => { setModules(next); switchModule(nextActive, next); }}
+            onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
+            onAdd={(label) => {
+              const id = `custom-${Date.now().toString(36)}`;
+              const next = [...modules, { id, label, hint: "自定义主题 · 生成练习时由 LLM 出题", custom: true }];
+              setModules(next);
+              switchModule(id, next);
+            }}
+            onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
+            onReset={() => { const next = PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_MODULE_ID, next); }}
           >
             <p className="module-hint" title="主题可在「＋ 配置」里自定义">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
             <ModuleSectionLabel label="模块内的练习" note={`${moduleMastery.length} 项`} />

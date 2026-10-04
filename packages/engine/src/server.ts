@@ -10,7 +10,6 @@ import type { FastifyReply } from "fastify";
 import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
-import { resolveDiscipline } from "./discipline/anchors.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
@@ -443,7 +442,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/l
     : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[]; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   const kind = request.body?.kind;
   const family = request.body?.family === "llm" ? "llm" as const : "comprehension" as const;
@@ -456,8 +455,6 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
     return reply.code(201).send(await exercises.next(repository, {
       kind,
       targetUnitId: request.body?.targetUnitId,
-      moduleId: request.body?.moduleId,
-      moduleIds: request.body?.moduleIds,
       family,
       tag: request.body?.tag,
       tagId: request.body?.tagId,
@@ -477,13 +474,12 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   const budgetExhausted = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
   const provider = budgetExhausted ? undefined : lightLlmProvider;
-  // 落到规则归类的原因由引擎说，不让界面替用户猜「配置 LLM 后自动升级」（未配置/触顶/判空/失败四件事不一样，
+  // 落到「模块自己的文件清单」的原因由引擎说，不让界面替用户猜（未配置/触顶/判空/失败几件事的用户处置完全不同，
   // 尤其「模型主动判空」是可信答案，被写成「还没配 LLM」会把人引去配密钥——与流程层 reason 同一套口径）
-  if (!provider) return { entries: [], source: "heuristic" as const, reason: budgetExhausted ? "本月预算已触顶，未调用 LLM；以下入口按关键词归类。" : "未配置 LLM；以下入口按关键词归类。" };
+  const fallback = "以下按模块结构列出文件（模块地图给的清单，未排序）";
+  if (!provider) return { entries: [], source: "module_files" as const, reason: `${budgetExhausted ? "本月预算已触顶，未调用 LLM" : "未配置 LLM"}；${fallback}。` };
   const database = new TutorDatabase(repository.path);
   try {
-    // 学科模块（计算机网络/操作系统/语言特性）走工程证据锚点；业务主题返回 undefined，行为不变
-    const discipline = resolveDiscipline(moduleLabel, request.query.hint ?? "");
     const suggestion = await suggestModuleEntriesCached({
       tree: repository.course, moduleLabel, moduleHint: (request.query.hint ?? "").trim(), provider,
       fileSummaries: latestFileSummaries(repository.path),
@@ -493,8 +489,6 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
         ...repository.index.hotspots.slice(0, 20).map((hotspot) => hotspot.path)
       ])],
       repositoryId: repository.index.repositoryId,
-      repositoryPath: repository.path,
-      discipline,
       // 「近期仓库变更」参考段的数据源（A2）：只进选择层 user 消息，不进缓存键
       analysis: repository.analysis,
       database
@@ -506,11 +500,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
       provider: provider.modelVersion,
       scene: "module_entries"
     });
-    // 学科主题零证据：没调 LLM 就判定了「本仓不含这个机制」，这句话比「按关键词归类」有用得多
-    if (suggestion.noEvidence) return { entries: [], source: "heuristic" as const, reason: `本仓库没有「${moduleLabel}」主题的实现证据（代码标识符与依赖清单都没命中），不硬凑入口。` };
     // 空列表分两种，必须说清：主动判空（declined）是可信答案、会进缓存；没调成或返回不合法不是。
     if (!suggestion.entries.length) {
-      return { entries: [], source: "llm" as const, reason: suggestion.declined ? "LLM 判断这些候选里没有真正合格的入口（不硬凑）；以下按关键词归类。" : "LLM 未给出可用入口（候选池为空或调用未成功）；以下按关键词归类。" };
+      return { entries: [], source: "module_files" as const, reason: `${suggestion.declined ? "LLM 判断这些候选里没有真正合格的入口（不硬凑）" : "LLM 未给出可用入口（候选池为空或调用未成功）"}；${fallback}。` };
     }
     return { entries: suggestion.entries, source: "llm" as const };
   } finally {

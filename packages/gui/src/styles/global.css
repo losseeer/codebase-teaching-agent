@@ -228,15 +228,24 @@ input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { displ
 .source-pane > .source-view { margin: 14px 15px 0; max-height: 420px; }
 .source-meta { display: flex; justify-content: space-between; padding: 9px 15px 0; color: #81978d; font-size: 10px; }
 
-/* ---- v0.3 知识模块面板（prototype .modules-pane / .module-chips / .module-config）---- */
+/* ---- 教学/练习模块面板（prototype .modules-pane / .module-chips / .module-config）---- */
 .modules-pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; background: #fbfdfb; }
 .module-body { min-height: 0; padding: 13px 11px 16px; overflow: auto; background: #fbfdfb; scrollbar-width: thin; scrollbar-color: #b9cdc1 #f2f6f3; }
-.module-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+/* 业务模块可能有几十个（真仓 35 个）：chips 区限高滚动，别把「推荐入口 / 仓库文件」挤出视野 */
+.module-chips { display: flex; flex-wrap: wrap; gap: 5px; max-height: 132px; overflow-y: auto; scrollbar-width: thin; }
 .module-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 6px 8px; color: #557568; background: #fff; font-size: 11px; }
 .module-chip:hover { background: #eef6ef; }
 .module-chip.active { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; font-weight: 700; }
 .module-chip.add { border-style: dashed; color: #6f8d80; background: #fbfdfb; }
 .module-chip.add:hover, .module-chip.add.on { border-color: #7ba889; color: #1c4c3a; background: #e5f1d0; }
+.module-chip b { color: #8aa097; font-weight: 600; font-size: 9px; }
+.module-chip.active b { color: #4d8f6c; }
+.module-chips-empty { color: #8aa097; font-size: 10px; }
+/* 模块过滤框：模块数超过阈值才出现（ModulesPane 里判的数） */
+.module-filter { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; border: 1px solid #cbd9d1; border-radius: 4px; padding: 4px 7px; color: #81978d; background: #fff; }
+.module-filter:focus-within { border-color: #579172; }
+.module-filter input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #17352c; font-size: 11px; }
+.module-filter button { border: 0; padding: 2px; display: grid; place-items: center; color: #81978d; background: transparent; }
 .module-hint { margin: 9px 2px 0; color: #81978d; font-size: 10px; line-height: 1.5; }
 .module-section-label { margin: 15px 2px 8px; color: #315b4b; font-size: 11px; font-weight: 700; }
 .module-section-label span { margin-left: 7px; color: #8aa097; font-size: 10px; font-weight: 500; }

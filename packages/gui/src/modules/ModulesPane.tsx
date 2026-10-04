@@ -1,17 +1,22 @@
-import { useState, type ReactElement, type ReactNode } from "react";
-import { Settings2, X } from "lucide-react";
+import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { Search, Settings2, X } from "lucide-react";
 import { showToast } from "./toast";
-import { COMPREHENSION_MODULE_ID, DEFAULT_MODULES, PRACTICE_DEFAULT_MODULES, type KnowledgeModule, type ModuleWhere } from "./local-state";
+import { COMPREHENSION_MODULE_ID, type KnowledgeModule, type ModuleWhere } from "./local-state";
 
 /**
-  知识模块面板（prototype `.modules-pane` 的 GUI 实现）：
-  - 模块 chips（计数）+「＋ 配置」入口
-  - 配置面板：重命名 / 删除 / 新增 / 恢复缺省（prototype `.module-config` 的四类操作）
-  - teaching 侧 = 计算机知识模块（关键词分类 + 推荐入口）；practice 侧 = 固定「程序理解题」+ 用户自定义出题主题
-  - 面板主体（推荐入口 / 仓库文件 / 练习列表）由调用方以 children 注入
+  模块面板（prototype `.modules-pane` 的 GUI 实现）：
+  - 模块 chips（可切换）+「＋ 配置」入口（改名 / 隐藏或删除 / 自建 / 恢复）
+  - 面板主体（推荐入口 / 仓库文件 / 模块内的练习）由调用方以 children 注入
 
-  对应 prototype `design-prototype.html` L211-260（chips）+ L584-637（config）。
+  两侧语义不同，用 `treeDerived` 区分，**文案必须跟着变**：
+  - 教学侧模块来自课程树（`treeDerived`）——「删除」实际是**隐藏**（重新导入或点「恢复」就回来），
+    说「删除不可恢复」是假话；
+  - 练习侧的自建主题存在浏览器本地，删掉真找不回来。
+
+  模块数量可以很多（真仓 35 个业务模块），所以 chips 容器限高滚动、超过 10 个再给一个过滤框——
+  不然 chip 区会把整个左栏撑没。
   */
+const CHIP_FILTER_THRESHOLD = 10;
 
 export function ModulesPane({
   where,
@@ -19,87 +24,102 @@ export function ModulesPane({
   modules,
   activeId,
   onSelectModule,
-  onModulesChange,
+  onRename,
+  onAdd,
+  onRemove,
+  onReset,
   children,
+  treeDerived = false
 }: {
   where: ModuleWhere;
   header: string;
   modules: KnowledgeModule[];
   activeId: string;
   onSelectModule: (id: string) => void;
-  onModulesChange: (next: KnowledgeModule[], nextActiveId: string) => void;
+  onRename: (id: string, label: string) => void;
+  onAdd: (label: string) => void;
+  onRemove: (id: string) => void;
+  onReset: () => void;
   children: ReactNode;
+  treeDerived?: boolean;
 }): ReactElement {
   const [configOpen, setConfigOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [filter, setFilter] = useState("");
   const isPractice = where === "practice";
   const removable = (item: KnowledgeModule): boolean => (isPractice ? item.custom === true : modules.length > 1);
+  const shown = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return needle ? modules.filter((item) => item.label.toLowerCase().includes(needle)) : modules;
+  }, [modules, filter]);
 
-  const rename = (id: string, label: string): void => {
-    onModulesChange(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名模块" } : item)), activeId);
-  };
-  const remove = (id: string): void => {
-    if (isPractice && id === COMPREHENSION_MODULE_ID) return;
+  const remove = (item: KnowledgeModule): void => {
+    if (isPractice && item.id === COMPREHENSION_MODULE_ID) return;
     if (modules.length <= 1) return;
-    const removed = modules.find((item) => item.id === id);
-    // 破坏性动作先确认，口径与「删会话」一致：模块清单只存浏览器 localStorage，删掉找不回来
-    if (!window.confirm(`删除模块「${removed?.label ?? id}」？它的名称与自定义配置会一并丢失，不可恢复。`)) return;
-    const next = modules.filter((item) => item.id !== id);
-    onModulesChange(next, activeId === id ? next[0].id : activeId);
-    showToast(`已删除模块「${removed?.label ?? id}」`);
+    // 破坏性动作先确认。两种后果分开说：隐藏可恢复，删除自定义项不可恢复
+    const warning = treeDerived
+      ? `隐藏模块「${item.label}」？只是从 chips 里收起，点「恢复全部模块」或重新导入就会回来。`
+      : `删除模块「${item.label}」？模块清单只存浏览器本地，删掉找不回来。`;
+    if (!window.confirm(warning)) return;
+    onRemove(item.id);
+    showToast(treeDerived ? `已隐藏模块「${item.label}」` : `已删除模块「${item.label}」`);
   };
+
   const add = (): void => {
     const label = draftName.trim();
     if (!label) return;
-    const id = `custom-${Date.now().toString(36)}`;
-    const hint = isPractice ? "自定义主题 · 生成练习时由 LLM 出题" : "自定义模块 · 还没有推荐入口，先从仓库文件开始";
-    onModulesChange([...modules, { id, label, hint, custom: true }], id);
+    onAdd(label);
     setDraftName("");
     showToast(`已新增模块「${label}」`);
   };
+
   const reset = (): void => {
-    const customLabels = modules.filter((item) => item.custom).map((item) => item.label);
-    // 这一键会把全部自定义项清掉（模块清单只存浏览器本地，删了找不回来）——原来无任何确认，防护弱于删会话
-    const lost = customLabels.length
-      ? `会删掉 ${customLabels.length} 个自定义项（${customLabels.slice(0, 3).join("、")}${customLabels.length > 3 ? "…" : ""}）`
-      : "会撤销全部改名";
-    if (!window.confirm(`恢复缺省${isPractice ? "主题" : "模块"}：${lost}，不可恢复。继续吗？`)) return;
-    if (isPractice) {
-      onModulesChange(PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })), COMPREHENSION_MODULE_ID);
-      showToast("已恢复缺省模块");
-      return;
-    }
-    onModulesChange(DEFAULT_MODULES.map((item) => ({ ...item })), DEFAULT_MODULES[0].id);
-    showToast(`已恢复缺省 ${DEFAULT_MODULES.length} 个模块`);
+    const customCount = modules.filter((item) => item.custom).length;
+    const lost = treeDerived
+      ? `会撤销全部改名、恢复被隐藏的模块，并清掉 ${customCount} 个自建模块`
+      : customCount ? `会删掉 ${customCount} 个自定义项，并撤销全部改名` : "会撤销全部改名";
+    if (!window.confirm(`恢复缺省模块：${lost}。继续吗？`)) return;
+    onReset();
+    showToast(isPractice ? "已恢复缺省模块" : "已恢复仓库的模块清单");
   };
 
   return (
     <aside className={`pane modules-pane modules-pane-${where}`}>
       <div className="pane-header"><h2>{header}</h2><span>{modules.find((item) => item.id === activeId)?.label ?? ""}</span></div>
       <div className="module-body">
+        {modules.length > CHIP_FILTER_THRESHOLD && (
+          <label className="module-filter">
+            <Search size={11} aria-hidden />
+            <input value={filter} placeholder={`筛选 ${modules.length} 个模块…`} aria-label="筛选模块" onChange={(event) => setFilter(event.target.value)} />
+            {filter ? <button type="button" aria-label="清空筛选" onClick={() => setFilter("")}><X size={11} /></button> : null}
+          </label>
+        )}
         <div className="module-chips" role="tablist" aria-label={`${header}切换`}>
-          {modules.map((item) => (
+          {shown.map((item) => (
             <button
               key={item.id}
               role="tab"
               aria-selected={item.id === activeId}
               className={`module-chip ${item.id === activeId ? "active" : ""}`}
+              title={item.entries?.length ? `${item.entries.length} 个文件 · ${item.hint}` : item.hint}
               onClick={() => onSelectModule(item.id)}
             >
               {item.label}
+              {item.entries?.length ? <b>{item.entries.length}</b> : null}
             </button>
           ))}
+          {!shown.length && filter ? <span className="module-chips-empty">没有匹配的模块</span> : null}
           <button className={`module-chip add ${configOpen ? "on" : ""}`} aria-expanded={configOpen} onClick={() => setConfigOpen((open) => !open)}>
             <Settings2 size={11} /> 配置
           </button>
         </div>
         {configOpen && (
           <div className="module-config">
-            <div className="cfg-head">{isPractice ? "自定义出题主题" : "自定义知识模块"}<span>{isPractice ? "缺省为「程序理解题」；新增主题生成练习时由 LLM 出题" : "缺省为四个计算机知识模块"}</span></div>
+            <div className="cfg-head">{isPractice ? "自定义出题主题" : "模块配置"}<span>{isPractice ? "缺省为「程序理解题」；新增主题生成练习时由 LLM 出题" : "模块来自本仓库的模块地图；改名只影响显示，隐藏后可一键恢复"}</span></div>
             {modules.map((item) => (
               <div className="cfg-row" key={item.id}>
-                <input value={item.label} aria-label="模块名称" onChange={(event) => rename(item.id, event.target.value)} />
-                {removable(item) && <button className="cfg-del" aria-label={`删除 ${item.label}`} title={`删除 ${item.label}`} onClick={() => remove(item.id)}><X size={12} /></button>}
+                <input value={item.label} aria-label="模块名称" onChange={(event) => onRename(item.id, event.target.value)} />
+                {removable(item) && <button className="cfg-del" aria-label={`${treeDerived ? "隐藏" : "删除"} ${item.label}`} title={treeDerived ? `隐藏 ${item.label}` : `删除 ${item.label}`} onClick={() => remove(item)}><X size={12} /></button>}
               </div>
             ))}
             <div className="cfg-add">
@@ -107,7 +127,7 @@ export function ModulesPane({
               <button className="cfg-add-btn" onClick={add}>添加</button>
             </div>
             <div className="cfg-foot">
-              <button className="cfg-reset" onClick={reset}>{isPractice ? "恢复缺省" : `恢复缺省 ${DEFAULT_MODULES.length} 个模块`}</button>
+              <button className="cfg-reset" onClick={reset}>{isPractice ? "恢复缺省" : "恢复全部模块"}</button>
               <span>改动即时生效并本地保存</span>
             </div>
           </div>

@@ -476,23 +476,6 @@ export interface ExerciseAnswer {
   selectedIds?: string[];
 }
 
-/** 知识模块分类关键词（GUI 模块 chips 与 engine 练习出题过滤共用的同一份口径）。 */
-export const MODULE_KEYWORDS: Record<string, RegExp> = {
-  network: /(router|route|http|api|请求|路由|网关|超时|重试|幂等|网络|接口|controller|server|client|endpoint|中间件)/i,
-  os: /(cache|缓存|并发|concurren|thread|线程|进程|队列|queue|锁|lock|内存|memory|调度|io\b|buffer|池)/i,
-  lang: /(type|类型|async|异步|await|error|错误|异常|exception|util|helper|parse|解析|闭包|回调|函数式|泛型)/i
-};
-
-/** 按关键词把文本归类到知识模块。命中的 id 必须在 moduleIds 内；都不命中时只在候选里确实有 `other`
-    才归 `other`，否则返回空串（未归类）—— 保证返回值要么是 moduleIds 里的 id，要么是空串，
-    不会凭空给出一个调用方模块列表里不存在的 id。 */
-export function classifyModuleId(text: string, moduleIds: string[]): string {
-  for (const [id, pattern] of Object.entries(MODULE_KEYWORDS)) {
-    if (pattern.test(text) && moduleIds.includes(id)) return id;
-  }
-  return moduleIds.includes("other") ? "other" : "";
-}
-
 export interface ExerciseResult {
   exerciseId: string;
   repositoryId: string;

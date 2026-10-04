@@ -10,12 +10,12 @@ import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
-import { classifyCourseNodes, loadActiveModule, loadModules, saveActiveModule, saveModules, type KnowledgeModule, type ModuleEntry } from "../modules/local-state";
+import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
   代码教学工作区（对齐 prototype `.teaching-workspace`，两栏）：
-  - 左 「教学模块」（modules-pane）：模块 chips + 配置 + 推荐入口（课程节点按模块归类）+ 仓库文件（点击打开源码）
+  - 左 「教学模块」（modules-pane）：模块 chips（来自课程树模块地图）+ 配置 + 推荐入口 + 仓库文件（点击打开源码）
   - 右 「实时源码」（source-pane）：只读源码 + 行高亮 + 源码 tabs + ⌘P 文件搜索
   - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
   - chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
@@ -25,8 +25,10 @@ const ENTRY_PAGE = 8;
 
 export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: ScopedChatApi }): ReactElement {
   const repositoryId = workspace.repositoryId;
-  const [modules, setModules] = useState<KnowledgeModule[]>(loadModules);
-  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("teaching", modules));
+  /** 教学模块 = 课程树「模块地图」的节点（业务模块跟着仓库走），这里只存覆盖层：改名 / 隐藏 / 自建。 */
+  const [overrides, setOverrides] = useState<ModuleOverrides>(() => loadModuleOverrides(repositoryId));
+  const modules = useMemo(() => mergeModules(courseModules(t.course), overrides), [t.course, overrides]);
+  const [activeModule, setActiveModule] = useState("");
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [tabs, setTabs] = useState<{ path: string; line: number }[]>([]);
@@ -45,8 +47,15 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
   /** palette 结果列表容器（键盘 ↑↓ 时手动把它滚进可视区）。 */
   const paletteRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => { saveModules(modules); }, [modules]);
-  useEffect(() => { saveActiveModule("teaching", activeModule); }, [activeModule]);
+  useEffect(() => { saveModuleOverrides(repositoryId, overrides); }, [repositoryId, overrides]);
+  /** 选中项失效才回落：初次挂载取上次停的那个（按仓库记），模块被隐藏或树里没了也重选。
+      刻意不写 `activeModule || …`——空串既可能是「还没选」也可能是「刚切到一个空清单」，
+      后者被覆盖成第一项会让用户看到 chips 自己跳走。 */
+  useEffect(() => {
+    if (!modules.length) return;
+    setActiveModule((current) => (modules.some((item) => item.id === current) ? current : loadActiveModule("teaching", repositoryId, modules)));
+  }, [modules, repositoryId]);
+  useEffect(() => { if (activeModule) saveActiveModule("teaching", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
   useEffect(() => {
     let current = true;
@@ -125,20 +134,27 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
     return () => window.removeEventListener("keydown", onKey);
   }, [isActiveWorkspace]);
 
-  const heuristicEntries = useMemo<ModuleEntry[]>(() => (t.course ? classifyCourseNodes(t.course.root, modules) : []), [t.course, modules]);
+  /** 当前模块的文件清单（树结构事实，已按 path 去重）：LLM 不可用时直接列它，不再靠关键词猜。 */
+  const moduleFiles = useMemo<ModuleEntry[]>(() => modules.find((item) => item.id === activeModule)?.entries ?? [], [modules, activeModule]);
 
   /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），
-      只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到关键词分类。
+      只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到模块自己的文件清单。
       两个坑（都实测踩过）：
-      ① `heuristic` 也必须记录状态，否则失败的模块会反复重试同一请求（engine 只缓存非空结果）；
+      ① 回落态也必须记录状态，否则失败的模块会反复重试同一请求（engine 只缓存非空结果）；
       ② 去重必须用 ref 而不是 state —— 把 entryState 放进 effect 依赖的话，写入 loading 会让 effect 重跑，
          cleanup 把 current 置 false，唯一那次请求的结果被丢弃，界面永久停在 loading。
       ③ 因此 effect 里**不要**用 current/unmount 标志丢弃结果：StrictMode 下 mount→unmount→mount 会判死第一次的请求，
          而第二次 mount 被 ref 去重挡住不再发，同样永久 loading。
-      key 带 repositoryId：换仓库后同一 moduleId 不会复用上一仓库的结果。 */
-  const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "heuristic"; entries: SuggestedEntry[]; reason?: string }>>({});
+      key 带 repositoryId：换仓库后同一模块不会复用上一仓库的结果。 */
+  const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "files"; entries: SuggestedEntry[]; reason?: string }>>({});
   const requestedEntries = useRef<Set<string>>(new Set());
   const entryKey = `${repositoryId}:${activeModule}`;
+  /** 换仓：覆盖层按仓库分键要重读，推荐入口的记账也得清空（否则新仓沿用旧仓的 loading/结果）。 */
+  useEffect(() => {
+    setOverrides(loadModuleOverrides(repositoryId));
+    setEntryState({});
+    requestedEntries.current.clear();
+  }, [repositoryId]);
   useEffect(() => {
     if (!t.course) return;
     const mod = modules.find((item) => item.id === activeModule);
@@ -150,37 +166,40 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
     // 去重已由 ref 保证（每个 key 只请求一次），卸载后 setState 是安全的 no-op。
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
       .then((result) => {
-        // engine 在未配置 LLM / 预算触顶 / 主动判空 / 调用失败时都回空列表 —— 一律回落到关键词归类，
-        // 但**为什么**回落由引擎的 reason 说明（四种情况的用户处置完全不同）
+        // engine 在未配置 LLM / 预算触顶 / 主动判空 / 调用失败时都回空列表 —— 一律回落到模块自己的文件清单，
+        // 但**为什么**回落由引擎的 reason 说明（几种情况的用户处置完全不同）
         const entries = result.source === "llm" ? result.entries : [];
-        setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "heuristic", entries: [], reason: result.reason } }));
+        setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "files", entries: [], reason: result.reason } }));
       })
       .catch(() => {
-        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "heuristic", entries: [], reason: "推荐入口请求失败；以下按关键词归类。" } }));
+        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "推荐入口请求失败；以下按模块结构列出文件。" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules]);
-  /** 推荐入口默认只露前若干条：规则归类一个模块能给到几十条（按文件去重后仍有 40+），
-      整屏铺开会把「仓库文件」挤出视野。展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
+  /** 推荐入口默认只露前若干条：大模块的文件清单能有几十条，整屏铺开会把「仓库文件」挤出视野。
+      展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
   const [expandedEntryLists, setExpandedEntryLists] = useState<Set<string>>(new Set());
   const moduleEntries = entryState[entryKey];
   const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
-    ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line, moduleId: activeModule }))
+    ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line }))
     : moduleEntries?.status === "loading" || !t.course
       ? []
-      : heuristicEntries.filter((entry) => entry.moduleId === activeModule);
+      : moduleFiles;
   /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
       否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNote = moduleEntries?.status === "llm"
-    ? "LLM 从课程树推荐 · 可直接提问"
+    ? "LLM 从模块文件里推荐 · 可直接提问"
     : moduleEntries?.status === "loading"
-      ? "正在从课程树挑选入口…"
-      : moduleEntries?.reason ?? "按关键词归类 · 配置 LLM 后自动升级";
+      ? "正在从模块文件里挑阅读顺序…"
+      : moduleEntries?.reason ?? `模块地图给出 ${moduleFiles.length} 个文件 · 配置 LLM 后排阅读顺序`;
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
       点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
       loading（列表还没出现）或空列表不发改选事件；adopted 只在真的换绑了选中节点时发（断链点击不充分子）。 */
-  const entrySource = moduleEntries?.status === "llm" ? "llm" : "heuristic";
+  /** 埋点取值随兜底语义改名（2026-10-02 取消知识模块）：旧值 `heuristic` 说的是「关键词猜」，
+      现在兜底是模块地图给的文件清单 → `module_files`。journal 里 10-02 之前的历史值（含 `network`/`os`/`lang`
+      这类模块 id）不迁移，跨这段时间的模块维度读数不可比，分界记在开发日志。 */
+  const entrySource = moduleEntries?.status === "llm" ? "llm" : "module_files";
   const suggestedPaths = useMemo(() => new Set(visibleEntries.map((entry) => entry.path)), [visibleEntries]);
   const maybeEmitOverride = (path: string): void => {
     if (!visibleEntries.length || suggestedPaths.has(path)) return;
@@ -268,10 +287,20 @@ export function TutorPage({ workspace, chat: t }: { workspace: Workspace; chat: 
             header="教学模块"
             modules={modules}
             activeId={activeModule}
+            treeDerived
             onSelectModule={setActiveModule}
-            onModulesChange={(next, nextActive) => { setModules(next); setActiveModule(nextActive); }}
+            onRename={(id, label) => setOverrides((curr) => ({ ...curr, renamed: { ...curr.renamed, [id]: label } }))}
+            onAdd={(label) => {
+              const id = `custom-${Date.now().toString(36)}`;
+              setOverrides((curr) => ({ ...curr, custom: [...curr.custom, { id, label, hint: "自建模块 · 没有模块地图背书，先从仓库文件挑一个开始" }] }));
+              setActiveModule(id);
+            }}
+            onRemove={(id) => setOverrides((curr) => (curr.custom.some((item) => item.id === id)
+              ? { ...curr, custom: curr.custom.filter((item) => item.id !== id) }
+              : { ...curr, hidden: [...curr.hidden, id] }))}
+            onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [] })}
           >
-            <p className="module-hint" title="模块可在「＋ 配置」里自定义">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
+            <p className="module-hint" title="模块职责来自课程树节点摘要；名称与取舍可在「＋ 配置」里改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
             <ModuleSectionLabel label="推荐入口" note={entryNote} />
             {visibleEntries.length ? (
               <div className="entry-list">

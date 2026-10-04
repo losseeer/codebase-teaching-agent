@@ -1,36 +1,41 @@
-import { classifyModuleId } from "@codebase-tutor/shared";
-import type { CourseNode } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTree } from "@codebase-tutor/shared";
 
 /**
-  知识模块（prototype `DEFAULT_MODULES` / `state.modules` 的 GUI 实现）：
-  - 缺省四个计算机知识模块，可在「＋ 配置」里重命名 / 新增 / 删除 / 恢复缺省
-  - 持久化：localStorage `codebase-tutor.modules` + `codebase-tutor.module.<where>`
-  - `classify`：把课程节点 / 仓库文件按关键词归类到模块（teaching 推荐入口 / practice 列表的数据源）
+  教学模块（业务模块）：模块 = 课程树「仓库模块地图」分支下的一个节点，
+  它的**文件清单来自树结构本身**（节点自己的锚点 + 子孙节点的锚点），不再靠关键词猜。
 
-  对应 prototype `design-prototype.html` 中的 DEFAULT_MODULES / NODES / EXERCISES。
-  与 prototype 差异：prototype 的推荐入口是静态数据；GUI 用关键词分类从真实课程树推导。
+  2026-10-02 的口径变更：原先是三个缺省「知识模块」（计算机网络 / 操作系统 / 语言特性），
+  靠 `shared` 的关键词表把课程节点归类。那条路在业务仓里先天别扭——学科名不是仓库的原生结构，
+  关键词归类会产出整屏重复项，LLM 推荐也反复判空。现在模块跟着仓库走：
+  导入什么仓，就有什么模块。
+
+  持久化：只存**覆盖层**（改名 / 隐藏 / 自建），按仓库分键；模块本体每次从课程树现算，
+  所以重新导入后新增/消失的模块会自动跟上，不会留下一份和仓库脱节的旧清单。
   */
+
+export interface ModuleEntry {
+  /** 树节点 id：点击时按它回查节点并选中（断链的条目调用方要能跳过） */
+  id: string;
+  title: string;
+  path: string;
+  line: number;
+}
 
 export interface KnowledgeModule {
   id: string;
   label: string;
   hint: string;
-  /** 用户自建模块（practice 侧 = LLM 出题主题标签；可删）。缺省模块无此字段。 */
+  /** 用户自建模块（教学侧 = 自己圈的主题，没有树结构背书；练习侧 = LLM 出题主题标签） */
   custom?: boolean;
+  /** 业务模块的文件清单（按 path 去重、保留最浅层节点）；自建模块与练习主题为空 */
+  entries?: ModuleEntry[];
 }
 
 export type ModuleWhere = "teaching" | "practice";
 
-export const DEFAULT_MODULES: KnowledgeModule[] = [
-  { id: "network", label: "计算机网络", hint: "HTTP 入口、超时、重试与幂等" },
-  { id: "os", label: "操作系统", hint: "进程内状态、IO 边界与并发" },
-  { id: "lang", label: "语言特性", hint: "类型收窄、异步编排与错误处理" }
-];
-
 /**
-  practice 侧缺省只有一个固定模块「程序理解题」（规则出题三题型，不可删除）；
-  用户自建模块 = LLM 出题主题标签（family 对用户不可见，出题时分派在引擎侧完成）。
-  与 teaching 的模块列表分开存储，互不影响。
+  练习侧缺省只有一个固定模块「程序理解题」（规则出题三题型，不可删除）；
+  用户自建模块 = LLM 出题主题标签。练习侧的列表与教学侧分开存储，互不影响。
   */
 export const PRACTICE_DEFAULT_MODULES: KnowledgeModule[] = [
   { id: "comprehension", label: "程序理解题", hint: "规则出题 · 预测输出 / 修改定位 / 影响分析，判分确定" }
@@ -39,91 +44,102 @@ export const PRACTICE_DEFAULT_MODULES: KnowledgeModule[] = [
 /** 程序理解题固定模块 id（practice 出题分派与删除保护的判据）。 */
 export const COMPREHENSION_MODULE_ID = "comprehension";
 
-const MODULES_KEY = "codebase-tutor.modules";
-const PRACTICE_MODULES_KEY = "codebase-tutor.practice-modules";
+/** 课程树里业务模块所在分支的固定 id（见 engine `coursetree/build.ts`）。 */
+const MODULE_BRANCH_ID = "modules";
+
+const CUSTOM_KEY_PREFIX = "codebase-tutor.modules.";
+const HIDDEN_KEY_PREFIX = "codebase-tutor.hidden-modules.";
+const RENAMED_KEY_PREFIX = "codebase-tutor.renamed-modules.";
 const ACTIVE_KEY_PREFIX = "codebase-tutor.module.";
 
-export function loadModules(): KnowledgeModule[] {
+/** 自建模块的持久化形状（entries 是派生值，不落盘）。 */
+type StoredCustomModule = { id: string; label: string; hint: string };
+
+const readJson = <T>(key: string, fallback: T): T => {
   try {
-    const raw = localStorage.getItem(MODULES_KEY);
-    if (!raw) return DEFAULT_MODULES.map((item) => ({ ...item }));
-    const parsed = JSON.parse(raw) as KnowledgeModule[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_MODULES.map((item) => ({ ...item }));
-    return parsed.filter((item) => item && typeof item.id === "string" && typeof item.label === "string");
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
-    return DEFAULT_MODULES.map((item) => ({ ...item }));
+    return fallback;
   }
+};
+
+const writeJson = (key: string, value: unknown): void => {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 持久化失败不回退：本次会话内仍生效 */ }
+};
+
+/** 教学模块的覆盖层：改名、隐藏、自建。三者都按仓库分键，换仓不串味。 */
+export interface ModuleOverrides {
+  renamed: Record<string, string>;
+  hidden: string[];
+  custom: StoredCustomModule[];
 }
 
-export function saveModules(modules: KnowledgeModule[]): void {
-  try { localStorage.setItem(MODULES_KEY, JSON.stringify(modules)); } catch { /* 持久化失败不回退 */ }
+export function loadModuleOverrides(repositoryId: string): ModuleOverrides {
+  const renamed = readJson<Record<string, string>>(RENAMED_KEY_PREFIX + repositoryId, {});
+  const hidden = readJson<string[]>(HIDDEN_KEY_PREFIX + repositoryId, []);
+  const custom = readJson<StoredCustomModule[]>(CUSTOM_KEY_PREFIX + repositoryId, []);
+  return {
+    renamed: renamed && typeof renamed === "object" && !Array.isArray(renamed) ? renamed : {},
+    hidden: Array.isArray(hidden) ? hidden.filter((id): id is string => typeof id === "string") : [],
+    custom: Array.isArray(custom) ? custom.filter((item) => typeof item?.id === "string" && typeof item?.label === "string") : []
+  };
 }
 
-export function loadPracticeModules(): KnowledgeModule[] {
-  try {
-    const raw = localStorage.getItem(PRACTICE_MODULES_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as KnowledgeModule[];
-      const custom = Array.isArray(parsed) ? parsed.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
-      return [...PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })), ...custom];
-    }
-  } catch { /* 读取失败回落缺省 */ }
-  return PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item }));
-}
-
-export function savePracticeModules(modules: KnowledgeModule[]): void {
-  try { localStorage.setItem(PRACTICE_MODULES_KEY, JSON.stringify(modules.filter((item) => item.custom === true))); } catch { /* 持久化失败不回退 */ }
-}
-
-export function loadActiveModule(where: ModuleWhere, modules: KnowledgeModule[]): string {
-  try {
-    const saved = localStorage.getItem(ACTIVE_KEY_PREFIX + where);
-    if (saved && modules.some((item) => item.id === saved)) return saved;
-  } catch { /* ignore */ }
-  return modules[0]?.id ?? "";
-}
-
-export function saveActiveModule(where: ModuleWhere, id: string): void {
-  try { localStorage.setItem(ACTIVE_KEY_PREFIX + where, id); } catch { /* ignore */ }
-}
-
-/** 关键词分类：返回命中的第一个模块 id；都不命中时不会归到任何模块下（shared 在候选里没有 `other` 时返回空串）。关键词表在 shared（与 engine 练习出题过滤共用）。 */
-export function classifyModule(text: string, modules: KnowledgeModule[]): string {
-  return classifyModuleId(text, modules.map((item) => item.id));
-}
-
-export interface ModuleEntry {
-  id: string;
-  title: string;
-  path: string;
-  line: number;
-  moduleId: string;
+export function saveModuleOverrides(repositoryId: string, overrides: ModuleOverrides): void {
+  writeJson(RENAMED_KEY_PREFIX + repositoryId, overrides.renamed);
+  writeJson(HIDDEN_KEY_PREFIX + repositoryId, overrides.hidden);
+  writeJson(CUSTOM_KEY_PREFIX + repositoryId, overrides.custom);
 }
 
 /**
-  把课程树拍平并按模块归类 → teaching「推荐入口」数据。
-  **按文件去重**：同一个文件在树里会出现很多次（每条经过它的流程都挂一个节点、文件节点下还挂着符号节点——
-  真仓 dianping 实测 1209 个带锚点节点只对应 168 个文件），逐节点输出会让清单里同一个文件重复十几遍。
-  保留树里第一条（DFS 前序 ≈ 最浅层），但**真正归到某模块的那条优先于未归类的**——
-  否则先遇到的未归类节点会把能命中的那条顶掉，模块下反而什么都不剩。
+  一个模块节点的文件清单：本节点锚点 + 子孙锚点，**按 path 去重、保留最浅层那条**。
+  不去重就会出现「同一个 `Result.java` 在清单里重复十几遍」——共享文件被每个经过它的节点各挂一次，
+  这是树的结构事实，不是 bug；模块清单要的是「这个模块有哪些文件」。
   */
-export function classifyCourseNodes(root: CourseNode, modules: KnowledgeModule[]): ModuleEntry[] {
+function moduleEntries(node: CourseNode): ModuleEntry[] {
   const byPath = new Map<string, ModuleEntry>();
-  const walk = (node: CourseNode): void => {
-    const anchor = node.anchors[0];
-    if (anchor) {
-      const entry: ModuleEntry = {
-        id: node.id,
-        title: node.title,
-        path: anchor.path,
-        line: anchor.line,
-        moduleId: classifyModule(`${node.title} ${node.summary} ${anchor.path}`, modules),
-      };
-      const kept = byPath.get(anchor.path);
-      if (!kept || (!kept.moduleId && entry.moduleId)) byPath.set(anchor.path, entry);
-    }
-    node.children.forEach(walk);
+  const walk = (current: CourseNode): void => {
+    const anchor = current.anchors[0];
+    if (anchor && !byPath.has(anchor.path)) byPath.set(anchor.path, { id: current.id, title: current.title, path: anchor.path, line: anchor.line });
+    current.children.forEach(walk);
   };
-  walk(root);
+  walk(node);
   return [...byPath.values()];
+}
+
+/** 课程树 → 业务模块清单（未套覆盖层的原样）。分支缺失（空仓/未导入完）时给空数组。 */
+export function courseModules(tree: CourseTree | null | undefined): KnowledgeModule[] {
+  const branch = tree?.root?.children?.find((node) => node.id === MODULE_BRANCH_ID);
+  if (!branch) return [];
+  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, entries: moduleEntries(node) }));
+}
+
+/** 业务模块 + 覆盖层 → 界面看到的清单。改名只影响显示，id 仍是树节点 id（缓存与埋点按它走）。 */
+export function mergeModules(treeModules: KnowledgeModule[], overrides: ModuleOverrides): KnowledgeModule[] {
+  const visible = treeModules
+    .filter((item) => !overrides.hidden.includes(item.id))
+    .map((item) => ({ ...item, label: overrides.renamed[item.id] ?? item.label }));
+  return [...visible, ...overrides.custom.map((item) => ({ id: item.id, label: item.label, hint: item.hint, custom: true }))];
+}
+
+export function loadPracticeModules(): KnowledgeModule[] {
+  const stored = readJson<KnowledgeModule[]>("codebase-tutor.practice-modules", []);
+  const custom = Array.isArray(stored) ? stored.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
+  return [...PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })), ...custom];
+}
+
+export function savePracticeModules(modules: KnowledgeModule[]): void {
+  writeJson("codebase-tutor.practice-modules", modules.filter((item) => item.custom === true));
+}
+
+/** 上次停在哪个模块；模块已不存在（被隐藏/树里没了）时回落第一个。 */
+export function loadActiveModule(where: ModuleWhere, repositoryId: string, modules: KnowledgeModule[]): string {
+  const saved = readJson<string | null>(ACTIVE_KEY_PREFIX + where + "." + repositoryId, null);
+  if (saved && modules.some((item) => item.id === saved)) return saved;
+  return modules[0]?.id ?? "";
+}
+
+export function saveActiveModule(where: ModuleWhere, repositoryId: string, id: string): void {
+  writeJson(ACTIVE_KEY_PREFIX + where + "." + repositoryId, id);
 }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
-import { classifyModuleId, EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
+import { EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
@@ -102,7 +102,7 @@ export class ExerciseService {
     传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
     family="llm" 走 LLM 出题族（tag 主题出题，一轮调用可拒绝，rubric 判分）。
     */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[]; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     try {
@@ -124,10 +124,8 @@ export class ExerciseService {
       const mastery = this.mastery(repository, database);
       const target = this.pickTarget(repository, requested, mastery);
       if (!target) {
-        const reason = requested.moduleId
-          ? "当前知识模块下没有可出题的代码单元；换一个模块，或先导入更多相关代码。"
-          : "当前分析结果没有可生成的练习。请先重新导入仓库。";
-        journal.append("exercise_declined", { tag: requested.moduleId ?? "", reason, stage: "no_target" });
+        const reason = "当前分析结果没有可生成的练习。请先重新导入仓库。";
+        journal.append("exercise_declined", { tag: requested.tagId ?? "", reason, stage: "no_target" });
         throw new Error(reason);
       }
       // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
@@ -298,12 +296,12 @@ export class ExerciseService {
     return records;
   }
 
-  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; moduleId?: string; moduleIds?: string[] }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {
+  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {
     const availableKinds = requested.kind ? [requested.kind] : kinds;
     const attemptCount = mastery.reduce((sum, record) => sum + record.attempts, 0);
     const orderedKinds = requested.kind ? availableKinds : [...availableKinds.slice(attemptCount % availableKinds.length), ...availableKinds.slice(0, attemptCount % availableKinds.length)];
     for (const kind of orderedKinds) {
-      const targets = this.targets(repository, kind, requested.moduleId, requested.moduleIds ?? []);
+      const targets = this.targets(repository, kind);
       const restricted = requested.targetUnitId ? targets.filter((target) => target.id === requested.targetUnitId) : targets;
       if (requested.targetUnitId && restricted.length) return restricted[0];
       const selected = selectZpdTarget(restricted, mastery) as PracticeTarget<unknown> | undefined;
@@ -312,22 +310,18 @@ export class ExerciseService {
     return undefined;
   }
 
-  private targets(repository: PracticeRepository, kind: ExerciseKind, moduleId?: string, moduleIds: string[] = []): PracticeTarget<unknown>[] {
-    const inModule = (text: string): boolean => !moduleId || classifyModuleId(text, moduleIds) === moduleId;
+  private targets(repository: PracticeRepository, kind: ExerciseKind): PracticeTarget<unknown>[] {
     if (kind === "output_prediction") {
       return repository.analysis.implementations
-        .filter((unit) => inModule(`${unit.symbol.path} ${unit.symbol.name}`))
         .flatMap((unit) => safeInvocationFor(repository.path, unit) ? [{ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }] : []);
     }
     if (kind === "change_localization") {
       return repository.analysis.implementations
-        .filter((unit) => inModule(`${unit.symbol.path} ${unit.symbol.name}`))
         .map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));
     }
     if (kind === "impact_analysis") {
       const graph = graphFromData(repository.analysis.graph);
       return Object.keys(repository.analysis.graph.imports)
-        .filter((path) => inModule(path))
         .map((path) => {
           const impact = impactRadius(graph, [path]);
           return { id: `impact:${path}`, title: path, difficulty: Math.min(5, Math.max(1, impact.impactedPaths.length)) as MasteryLevel, value: path, kind };
