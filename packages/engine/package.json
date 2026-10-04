@@ -17,6 +17,7 @@
     "setup:native": "node scripts/setup-native-bindings.mjs",
     "phaseB:eval": "tsx src/scripts/eval-run.ts",
     "phaseB:judge": "tsx src/scripts/judge-turns.ts",
+    "search:embed": "tsx src/scripts/embed-repo.ts",
     "l1:reburn": "tsx src/scripts/reburn-l1.ts"
   },
   "dependencies": {

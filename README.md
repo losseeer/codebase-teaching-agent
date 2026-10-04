@@ -44,13 +44,14 @@
 │   │       ├── learner/         #   学习者画像 / 掌握度推导（mastery.ts）/ 渐隐提示
 │   │       ├── scopechat/       #   宏观设计与练习两作用域的对话（上下文 + 受限读码工具循环）
 │   │       ├── source/          #   只读源码工具：read_file / search_code / 摘录 / tool-loop
+│   │       ├── search/          #   检索第四臂的向量索引：文件级/函数级单元、增量哈希、余弦池化、RRF（当前只有评测台架在用）
 │   │       ├── cost/            #   token 用量汇总与月度预算
-│   │       ├── llm/             #   多 Provider LLM 抽象（运行时配置与密钥掩码 / 重试 / 故障转移 / 中止归因）
+│   │       ├── llm/             #   多 Provider LLM 抽象（运行时配置与密钥掩码 / 重试 / 故障转移 / 中止归因）+ embeddings 客户端
 │   │       ├── store/           #   better-sqlite3 封装 + journal（JSONL 日志）
 │   │       ├── turns/           #   在途回合注册表（「停止生成」的带外落点，按 turnId 掐断 signal）
-│   │       ├── eval/            #   离线评测：零 token 判分器（scorers）+ LLM 裁判（judge）
+│   │       ├── eval/            #   离线评测：零 token 判分器（scorers）+ LLM 裁判（judge）+ gold 用例（关键词集 / 整句中文集）
 │   │       ├── trace/           #   请求 traceId 上下文 + 引擎自身 JSONL 日志
-│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace）
+│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace）+ phaseB 评测 + search:embed
 │   │       └── lib.ts           #   hash / id / 路径工具
 │   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
 │   │   ├── public/              #   design-prototype.html（界面基线）+ 截图

@@ -1,0 +1,32 @@
+{
+  "$comment": "第二仓「整句中文」用例（B 档，Python/LangGraph 智能体仓 dianping-agent2）。与 dianping-agent2-search.json 的关键词形态相对：query 是一句没有空格没有标点的自然提问，直送词法检索整串是一个词元、注定零命中，只有兜底切词臂与向量臂有得比。建集方式如实记：正例的概念与 gold 沿用同一仓已逐词 grep 核实过的关键词集（不是独立建集，而是**同一批代码事实换一种措辞**），所以它的价值是「同一 gold、两种查询形态」的对照，不能当成第二份独立泛化样本。整集标 holdout。负例 10 条与关键词集同一口径：概念词中写英写都用 rg -il --no-ignore --hidden 全仓零命中，且排除近邻（faiss/milvus 有真向量检索、celery/quartz 有真 worker 循环、prometheus 有真 observability.py、neo4j/知识图谱 与满仓 graph 字样撞词、流式有真流式输出——这些一律不作负例）。",
+  "repository": "dianping-agent2",
+  "cases": [
+    { "id": "a2s-hitl-resume", "query": "人工介入被打断之后是怎么接着往下跑的", "goldPaths": ["graph/hitl.py"], "holdout": true },
+    { "id": "a2s-intent", "query": "用户这句话到底想干什么是在哪一步判断出来的", "goldPaths": ["graph/nodes.py"], "holdout": true },
+    { "id": "a2s-react-loop", "query": "模型想一步调个工具再想一步这套循环在哪里", "goldPaths": ["graph/nodes.py", "graph/state.py"], "holdout": true },
+    { "id": "a2s-branch-decide", "query": "下一步走哪条分支是根据什么决定的", "goldPaths": ["graph/routing.py"], "holdout": true },
+    { "id": "a2s-state-shape", "query": "整张流程要带着走的那些字段是在哪定义的", "goldPaths": ["graph/state.py"], "holdout": true },
+    { "id": "a2s-preference", "query": "用户喜欢吃什么这件事是怎么记住下次还认得的", "goldPaths": ["memory/preferences.py"], "holdout": true },
+    { "id": "a2s-similar-case", "query": "以前处理过的相似场景是靠什么找回来的", "goldPaths": ["memory/playbook.py"], "holdout": true },
+    { "id": "a2s-distill-rule", "query": "反复失败的经验是怎么变成一条规则的", "goldPaths": ["improve/distill.py"], "holdout": true },
+    { "id": "a2s-fail-signal", "query": "失败信号先堆在哪里等着被处理", "goldPaths": ["improve/signals.py"], "holdout": true },
+    { "id": "a2s-backgroud-worker", "query": "后台那个一直取活干完不退出的是哪个进程", "goldPaths": ["improve/worker.py"], "holdout": true },
+    { "id": "a2s-eval-run", "query": "这套评估实验一次性跑完的入口在哪", "goldPaths": ["eval/runner.py", "eval/run_all_experiments.py"], "holdout": true },
+    { "id": "a2s-retry-switch", "query": "调模型失败之后是怎么换一条路继续的", "goldPaths": ["core/llm.py"], "holdout": true },
+    { "id": "a2s-token-guard", "query": "一次对话花的额度快超了是在哪里拦住的", "goldPaths": ["core/guard.py"], "holdout": true },
+    { "id": "a2s-mysql-write", "query": "要长期留下来的业务数据是写进哪个库表的", "goldPaths": ["core/mysql_store.py"], "holdout": true },
+    { "id": "a2s-loop-guard", "query": "状态图一直转圈出不来这件事是怎么防的", "goldPaths": ["graph/builder.py"], "holdout": true },
+    { "id": "a2s-chat-history", "query": "聊天历史太长被压成要点的那一层在哪里", "goldPaths": ["memory/conversation.py"], "holdout": true },
+    { "id": "a2s-neg-private", "query": "用户和商家之间一对一聊天是怎么存的", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-groupbuy", "query": "几个人凑一单买同一个套餐人数不够自动退钱怎么实现", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-voice", "query": "用户语音说的话是怎么转成文字再理解的", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-ocr", "query": "菜单图片里的菜名是怎么认出来的", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-hash-ring", "query": "缓存机器变多之后已有的键怎么重新分到新节点", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-dubbo", "query": "服务之间用那种注册中心暴露的远程调用框架吗", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-seata", "query": "跨库写不一致的时候靠哪个框架往回滚", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-english-ui", "query": "整个界面能不能切换成英文显示", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-mail", "query": "处理完了给用户发一封提醒邮件在哪里", "goldPaths": [], "holdout": true },
+    { "id": "a2s-neg-favorite", "query": "用户把常点的店收藏起来的列表放在哪", "goldPaths": [], "holdout": true }
+  ]
+}

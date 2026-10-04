@@ -663,7 +663,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     }
     // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
     for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, turn.threadId);
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, turn.threadId);
     }
     // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
     if (result.scopeDegraded) {
@@ -727,7 +727,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       }, turn.threadId);
     }
     for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, turn.threadId);
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, turn.threadId);
     }
     if (result.scopeDegraded) {
       journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, turn.threadId);
@@ -1047,7 +1047,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
     }
     for (const search of outcome.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、") }, session.id);
+      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);
     }
     // 回合决策摘要：提议动作 → 守门裁决 → 实际执行 + 工具轮次（run-trace 按 traceId 串起整回合的原始素材）
     journal.append("loop_round", { scene: "teach", decision: outcome.actionSource ?? "deterministic", proposed: outcome.proposedAction ?? null, executed: outcome.action ?? null, tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);

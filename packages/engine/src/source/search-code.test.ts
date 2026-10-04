@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { SEARCH_CODE_TOOL, buildSearchCorpus, executeSearchCode } from "./search-code.js";
+import { segmentForLookup } from "../text/lexical.js";
 
 /** 小型假仓：3 个文件，分别提供路径/符号/职责三种命中面与一个 P2 假阳性诱饵。 */
 const INDEX = {
@@ -177,5 +178,71 @@ describe("executeSearchCode 边界行为", () => {
 
   it("工具定义要求 query 必填", () => {
     expect(SEARCH_CODE_TOOL.parameters.required).toEqual(["query"]);
+  });
+});
+
+describe("整句中文：兜底最后一级与它的两道闸（§26 读数换来的行为）", () => {
+  const sentence = "缓存读写这块是谁负责的";
+
+  it("原样查询零命中 ⇒ 自动用中文二分切词重试，并明说结果来自兜底臂", () => {
+    const { content, audit } = run(sentence);
+    expect(audit.segmented).toBe(true);
+    expect(audit.topPaths[0]).toBe("src/io/FileService.java");
+    expect(content).toContain("中文切词兜底");
+  });
+
+  it("关键词式查询第一遍就命中 ⇒ 根本不碰兜底臂（已验证的行为一分不动）", () => {
+    expect(run("缓存").audit.segmented).toBeUndefined();
+    expect(run("FileService").audit.segmented).toBeUndefined();
+    expect(run("io").audit.segmented).toBeUndefined();
+  });
+
+  it("DF 闸 + 一致性闸：只被通用双字撞上的文件不算命中，带两个片段的仍能捞到", () => {
+    const paths = ["src/a/Up.java", "src/a/Down.java", "src/a/Parse.java", "src/a/Keep.java"];
+    const index = {
+      repositoryId: "r9", repositoryPath: "/f", scannedAt: "2026-10-04T00:00:00.000Z", totalFiles: 4, totalLines: 40,
+      files: paths.map((path) => ({ path, extension: ".java", bytes: 1, lines: 10 }))
+    } as unknown as RepositoryIndex;
+    const analysis = {
+      repositoryId: "r9",
+      graph: { imports: Object.fromEntries(paths.map((path) => [path, []])), calls: [], symbols: [], entrypoints: [], semanticBackend: "static", lspStatus: [] }
+    } as unknown as RepositoryAnalysis;
+    // 四条摘要都含「文件」⇒ 文档频率 4/4 超上限（max(3, ⌊4×12%⌋)=3）被当通用词丢掉；其余片段无人命中
+    const summaries = new Map<string, string>([
+      ["src/a/Up.java", "文件上传"], ["src/a/Down.java", "文件下载"], ["src/a/Parse.java", "文件解析"], ["src/a/Keep.java", "文件缓存读写"]
+    ]);
+    const wide = buildSearchCorpus(index, analysis, summaries);
+    expect(executeSearchCode(wide, JSON.stringify({ query: "这些文件都是做什么的" })).audit.hits).toBe(0);
+    const better = executeSearchCode(wide, JSON.stringify({ query: "缓存读写在哪里做" }));
+    expect(better.audit.topPaths[0]).toBe("src/a/Keep.java");
+    expect(better.audit.segmented).toBe(true);
+  });
+
+  it("切词不误伤 ASCII 与关键词式查询（原样保留，不插空格拆坏整词判定）", () => {
+    expect(segmentForLookup("io")).toBe("io");
+    expect(segmentForLookup("seckill voucher listener")).toBe("seckill voucher listener");
+    expect(segmentForLookup("缓存")).toBe("缓存");
+    expect(segmentForLookup("缓存击穿")).toBe("缓存 存击 击穿");
+  });
+
+  it("一致性闸只认互不重叠的证据：「一对一」切出的 一对/对一 是一处文字不是两处（真仓负例实测的形状）", () => {
+    const paths = ["src/a/Pair.java", "src/a/Chat.java"];
+    const index = {
+      repositoryId: "r10", repositoryPath: "/g", scannedAt: "2026-10-04T00:00:00.000Z", totalFiles: 2, totalLines: 20,
+      files: paths.map((path) => ({ path, extension: ".java", bytes: 1, lines: 10 }))
+    } as unknown as RepositoryIndex;
+    const analysis = {
+      repositoryId: "r10",
+      graph: { imports: Object.fromEntries(paths.map((path) => [path, []])), calls: [], symbols: [], entrypoints: [], semanticBackend: "static", lspStatus: [] }
+    } as unknown as RepositoryAnalysis;
+    const twoFace = buildSearchCorpus(index, analysis, new Map<string, string>([
+      ["src/a/Pair.java", "秒杀券实体，与优惠券一对一绑定"],
+      ["src/a/Chat.java", "私信会话分页与验签"]
+    ]));
+    const result = executeSearchCode(twoFace, JSON.stringify({ query: "一对一的私信验签是怎么做" }));
+    expect(result.audit.segmented).toBe(true);
+    expect(result.audit.topPaths).toEqual(["src/a/Chat.java"]);   // 私信 + 验签 两处不重叠 ⇒ 进；一对 + 对一 同一处 ⇒ 不进
+    expect(result.content).toContain("私信");
+    expect(result.content).not.toContain("Pair.java");
   });
 });

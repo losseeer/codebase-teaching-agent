@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
-const schemaVersion = 7;
+const schemaVersion = 8;
 
 // 一次性 pre-load：dlopen 对应当前 Node ABI 的 binding 路径，避免 better-sqlite3
 // 走默认 `bindings('better_sqlite3.node')` 触发 127↔147 mismatch。
@@ -38,6 +38,12 @@ export interface ChatMessageRow {
   created_at: string;
   stage: string | null;
   error: string | null;
+}
+
+/** 检索向量的解码口径，与 `saveVectors` 的写入配方成对。评测台架自己开只读句柄取行，必须走这里同一个函数——两臂读两套坐标系就什么也没比。 */
+export function decodeVectorBlob(path: string, dim: number, bytes: Uint8Array): { path: string; dim: number; vec: Float32Array } {
+  const copy = new Uint8Array(bytes); // 驱动给的 Buffer 可能被复用，拷一份再视图化
+  return { path, dim, vec: new Float32Array(copy.buffer, copy.byteOffset, dim) };
 }
 
 export class TutorDatabase {
@@ -121,6 +127,19 @@ export class TutorDatabase {
         stage TEXT,
         error TEXT
       );
+      -- 检索第四臂的向量表（2026-10-04）。键是 (仓, 文件, embedding 模型)：
+      -- 换模型就是换一套坐标系，不能混用；content_hash 让「文件没改」直接等于「不用重嵌」。
+      -- 向量存 float32 小端 BLOB，相似度在 JS 里算（几百~几千条，扫一遍是毫秒级，不引 sqlite-vec 原生扩展）。
+      CREATE TABLE IF NOT EXISTS search_vector (
+        repository_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        vec BLOB NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY(repository_id, path, model)
+      );
       CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, created_at);
       CREATE INDEX IF NOT EXISTS chat_session_repo ON chat_session(repository_id, scope, deleted_at);
     `);
@@ -146,6 +165,8 @@ export class TutorDatabase {
       if (!hasState) this.db.exec("ALTER TABLE chat_session ADD COLUMN state_json TEXT;");
       this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
     }
+    // v8：检索向量表（上面 CREATE 幂等建好，这里只推版本号）
+    if (current.version < 8) this.db.prepare("UPDATE schema_version SET version = ?").run(8);
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
     }
@@ -384,6 +405,39 @@ export class TutorDatabase {
   saveReviewSchedule(repositoryId: string, schedule: ReviewSchedule): void {
     this.db.prepare("INSERT OR REPLACE INTO review_schedule(repository_id, exercise_id, unit_id, schedule_json, updated_at) VALUES (?, ?, ?, ?, ?)")
       .run(repositoryId, schedule.exerciseId, schedule.unitId, JSON.stringify(schedule), new Date().toISOString());
+  }
+
+  /** 检索向量：某模型下已存的 path → content_hash（决定哪些文件需要重嵌）。 */
+  getVectorHashes(repositoryId: string, model: string): Map<string, string> {
+    const rows = this.db.prepare("SELECT path, content_hash FROM search_vector WHERE repository_id = ? AND model = ?").all(repositoryId, model) as { path: string; content_hash: string }[];
+    return new Map(rows.map((row) => [row.path, row.content_hash]));
+  }
+
+  saveVectors(repositoryId: string, model: string, vectors: { path: string; dim: number; contentHash: string; vec: Float32Array }[]): void {
+    if (!vectors.length) return;
+    const insert = this.db.prepare("INSERT OR REPLACE INTO search_vector(repository_id, path, model, dim, content_hash, vec, at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    const at = new Date().toISOString();
+    const tx = this.db.transaction((rows: { path: string; dim: number; contentHash: string; vec: Float32Array }[]) => {
+      for (const row of rows) insert.run(repositoryId, row.path, model, row.dim, row.contentHash, Buffer.from(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength), at);
+    });
+    tx(vectors);
+  }
+
+  loadVectors(repositoryId: string, model: string): { path: string; dim: number; vec: Float32Array }[] {
+    // ORDER BY path：dense 臂的扫描顺序固定下来（同分排名本来按路径破平，但扫描顺序不定会让「两次跑同样输入」
+    // 在浮点边界上有理论差异的可能——可复现性不留这个口子）
+    const rows = this.db.prepare("SELECT path, dim, vec FROM search_vector WHERE repository_id = ? AND model = ? ORDER BY path").all(repositoryId, model) as { path: string; dim: number; vec: Uint8Array }[];
+    return rows.map((row) => decodeVectorBlob(row.path, row.dim, row.vec));
+  }
+
+  /** 文件已从索引里消失（或被改名）时删掉它的向量——留着只会让 dense 臂返回不存在的路径。 */
+  pruneVectors(repositoryId: string, model: string, keepPaths: string[]): number {
+    const keep = new Set(keepPaths);
+    const rows = this.db.prepare("SELECT path FROM search_vector WHERE repository_id = ? AND model = ?").all(repositoryId, model) as { path: string }[];
+    const del = this.db.prepare("DELETE FROM search_vector WHERE repository_id = ? AND model = ? AND path = ?");
+    let removed = 0;
+    for (const row of rows) if (!keep.has(row.path)) { del.run(repositoryId, model, row.path); removed += 1; }
+    return removed;
   }
 
   close(): void {

@@ -1,0 +1,29 @@
+{
+  "$comment": "整句中文检索用例（B 档，第四臂靶子）。与 dianping-search.json 的关键词式查询刻意相对：这里的 query 是一句自然提问，**没有空格也没有标点断句**，直送词法检索时整串是一个词元、只能靠 includes 命中——注定零命中。建集纪律：goldPaths 逐例 grep 核实概念确在该文件（注释或代码），只列答案所在的最小文件集；负例经全仓 grep 确认概念不存在。全部标 holdout：措辞只按代码事实写，没参照任何一代 L1 摘要。刻意排除 .lua：索引器不收 .lua，Lua 脚本类概念的正确答案不在语料里，放进来的话任何臂都必输。负例于 10-04 从 2 条扩到 10 条（判「余弦下限存不存在」需要 n≥10）：每个概念词都用 `rg -il --no-ignore --hidden` 全仓核实零命中（被 gitignore 的文件与隐藏文件也算），并确认 218 条现行 L1 摘要里同样不含这些词——语料只有 .java/.py，docs/*.md 里出现过 Kafka 不算存在，因为设计文档根本不在语料内。读数与臂的定义见 docs/开发关键点问题与解决方案.md。",
+  "repository": "dianping",
+  "cases": [
+    { "id": "s-cache-breach", "query": "缓存里的热点数据到期的那一瞬间怎么避免一大堆请求同时打到数据库", "goldPaths": ["src/main/java/com/hmdp/utils/CacheClient.java"], "holdout": true },
+    { "id": "s-feed-scroll", "query": "用户刷关注动态往下滑的时候下一页是怎么接着加载出来的", "goldPaths": ["src/main/java/com/hmdp/service/impl/BlogServiceImpl.java"], "holdout": true },
+    { "id": "s-like-rank", "query": "一篇文章下面谁点赞了按先后顺序展示这份数据存在哪里", "goldPaths": ["src/main/java/com/hmdp/service/impl/BlogServiceImpl.java"], "holdout": true },
+    { "id": "s-delay-double-delete", "query": "更新完数据库把缓存删了可回填那几百毫秒里旧值又被写回去怎么处理", "goldPaths": ["src/main/java/com/hmdp/service/impl/ShopServiceImpl.java"], "holdout": true },
+    { "id": "s-cache-warmup", "query": "用逻辑过期这套办法流量到来之前必须提前做什么", "goldPaths": ["src/main/java/com/hmdp/service/impl/ShopServiceImpl.java"], "holdout": true },
+    { "id": "s-seckill-lock", "query": "多个线程同时抢同一份优惠券库存怎么保证只成交一次不会超卖", "goldPaths": ["src/main/java/com/hmdp/service/impl/VoucherOrderServiceImpl.java"], "holdout": true },
+    { "id": "s-stock-setnx", "query": "把库存提前塞进redis的时候为什么不能用普通赋值把已经存在的值盖掉", "goldPaths": ["src/main/java/com/hmdp/service/impl/VoucherServiceImpl.java"], "holdout": true },
+    { "id": "s-pay-notify", "query": "第三方支付异步通知回来以后服务端在哪里接单并处理", "goldPaths": ["src/main/java/com/hmdp/listener/PayNotifyListener.java"], "holdout": true },
+    { "id": "s-order-timeout", "query": "下单之后一直没有付款超时自动取消这件事实现在哪", "goldPaths": ["src/main/java/com/hmdp/listener/OrderDelayListener.java"], "holdout": true },
+    { "id": "s-outbox", "query": "先写库再发消息这两步不在一个事务里丢消息的问题怎么解掉", "goldPaths": ["src/main/java/com/hmdp/listener/TransactionOutboxPublisher.java"], "holdout": true },
+    { "id": "s-hot-shop-rank", "query": "首页想先展示卖得最好的那几家店这份排序数据放在哪什么时候更新", "goldPaths": ["src/main/java/com/hmdp/service/impl/RecommendServiceImpl.java"], "holdout": true },
+    { "id": "s-pending-reconcile", "query": "预扣了库存但用户没有最终下单靠什么把没核销的预订单捞回来", "goldPaths": ["src/main/java/com/hmdp/listener/SeckillReservationReconciler.java"], "holdout": true },
+    { "id": "s-sms-bombing", "query": "防止有人拿一堆手机号轰炸短信接口这一层限制写在哪", "goldPaths": ["src/main/java/com/hmdp/utils/SmsRateLimiter.java"], "holdout": true },
+    { "id": "s-neg-graphql", "query": "graphql订阅是怎么把增量数据实时推给客户端的", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-kafka", "query": "kafka事务生产者如何保证恰好一次投递语义", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-private-message", "query": "用户之间一对一发私信的会话记录是怎么存和分页的", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-group-buy", "query": "几个人凑一单买同一个套餐人数不够就自动退钱是怎么实现的", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-bargain-cut", "query": "让好友点链接帮忙把价格砍到最低再下单后端要怎么配合", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-affiliate-commission", "query": "老用户拉新用户成交之后返佣的比例和结算记录放在哪里", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-sensitive-filter", "query": "用户写点评时命中的违禁词库是怎么加载和过滤的", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-multi-tenant", "query": "同一套服务给不同商家把数据隔开那一层是按什么路由的", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-doc-store", "query": "结构不固定的订单明细什么时候会存进文档型数据库", "goldPaths": [], "holdout": true },
+    { "id": "s-neg-consistent-hash", "query": "缓存集群加机器之后已有的键是怎么重新分配到新节点的", "goldPaths": [], "holdout": true }
+  ]
+}

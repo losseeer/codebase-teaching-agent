@@ -15,6 +15,29 @@ export function themeTokens(...texts: string[]): string[] {
   return [...tokens];
 }
 
+/**
+  把连续中文段切成二分词（滑动窗口），ASCII 段原样保留：`缓存击穿` → `缓存 存击 击穿`。
+
+  为什么要它：`themeTokens` 只按空白与标点断句，一句自然的中文提问（「缓存到期的那一瞬间怎么防止打爆数据库」）
+  整串是一个词元，`tokenHits` 拿它去 `includes` 语料 ⇒ 注定零命中。也就是说**词法臂在中文整句上的失败，
+  一部分不是「没有语义」，而是查询侧根本没切词**。买 embedding 之前必须先量掉这一格，否则会把切词的收益记到向量头上。
+  本函数目前只被评测台架用作「第三臂」的查询预处理；要不要进产品路径，看四臂读数再决定。
+  */
+export function segmentForLookup(text: string): string {
+  const out: string[] = [];
+  for (const chunk of text.split(/([一-龥]+)/)) {
+    if (!/^[一-龥]+$/.test(chunk)) {
+      if (chunk.trim()) out.push(chunk.trim());
+      continue;
+    }
+    if (chunk.length <= 2) {
+      out.push(chunk);
+      continue;
+    }
+    for (let at = 0; at + 2 <= chunk.length; at += 1) out.push(chunk.slice(at, at + 2));
+  }
+  return out.join(" ");
+}
 /** 把任意文本切成「词」：非字母数字断开 + camelCase 边界（IOService → io/service 归一为整词）。 */
 export function wordsOf(text: string): string[] {
   return text.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
