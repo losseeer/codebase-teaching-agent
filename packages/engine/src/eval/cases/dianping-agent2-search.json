@@ -1,5 +1,5 @@
 {
-  "$comment": "第二仓泛化验证用例（B 档，Python/LangGraph 智能体仓 dianping-agent2）。整集按留出纪律建集：查询措辞只按代码事实（35 个 .py 逐词 grep 锚定），不参照任何一代摘要产出；与 dianping 集不同，本仓从未参与 slice-v2 提示词调优，故整集即泛化读数。query 一律关键词式；goldPaths 只列概念真实所在的最小文件集；负例经全仓 grep 确认概念不存在。c-* 四条为「注释独占概念」翻转例（slice-v2c 验证轮，09-22）：概念词只存在于文件头注释（grep 全仓 .py 确认），slice-v2 存量摘要 0 命中（SQL 逐词核过）——关档注定 miss、开档应命中，是「摘要参考注释」开关的处理变量本身。 10-04 负例补厚：新增 10 条（累计 12），每个概念词的中写与英写都用 rg -il --no-ignore --hidden 全仓核实零命中；刻意排除的近邻=faiss/milvus（本仓 playbook.py 真有向量检索）、celery/quartz（improve/worker.py 就是守护消费循环）、prometheus（core/observability.py 真有指标）、知识图谱/neo4j（本仓到处是 graph 字样，负例会变成考卷错题）、流式（LLM 侧真有流式输出）。c-* 四条仍按注释独占概念处理。",
+  "$comment": "第二仓泛化验证用例（B 档，Python/LangGraph 智能体仓 dianping-agent2）。整集按留出纪律建集：查询措辞只按代码事实（35 个 .py 逐词 grep 锚定），不参照任何一代摘要产出；与 dianping 集不同，本仓从未参与 slice-v2 提示词调优，故整集即泛化读数。query 一律关键词式；goldPaths 只列概念真实所在的最小文件集；负例经全仓 grep 确认概念不存在。c-* 四条为「注释独占概念」翻转例（slice-v2c 验证轮，09-22）：概念词只存在于文件头注释（grep 全仓 .py 确认），slice-v2 存量摘要 0 命中（SQL 逐词核过）——关档注定 miss、开档应命中，是「摘要参考注释」开关的处理变量本身。 10-04 负例补厚：新增 10 条（累计 12），每个概念词的中写与英写都用 rg -il --no-ignore --hidden 全仓核实零命中；刻意排除的近邻=faiss/milvus（本仓 playbook.py 真有向量检索）、celery/quartz（improve/worker.py 就是守护消费循环）、prometheus（core/observability.py 真有指标）、知识图谱/neo4j（本仓到处是 graph 字样，负例会变成考卷错题）、流式（LLM 侧真有流式输出）。c-* 四条仍按注释独占概念处理。 10-04 负例卫生修正：关键词式负例的**每一枚词元都必须三面（路径/符号名/摘要）全缺**——命中一个本仓真实存在的内容词（入口/编排/队列/上报/stub）不算误命中，那是考卷错题。整句负例不适用此规则（自然提问必然带真实词），它测的是「句子级否定」，词法与向量都做不到。",
   "repository": "dianping-agent2",
   "cases": [
     {
@@ -162,7 +162,7 @@
     },
     {
       "id": "a2-neg-grpc",
-      "query": "grpc 服务 定义 stub",
+      "query": "grpc protobuf",
       "goldPaths": [],
       "holdout": false
     },
@@ -174,7 +174,7 @@
     },
     {
       "id": "a2-neg-k8s",
-      "query": "kubernetes helm 编排",
+      "query": "kubernetes helm chart",
       "goldPaths": [],
       "holdout": false
     },
