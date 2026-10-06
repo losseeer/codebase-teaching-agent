@@ -245,15 +245,19 @@ export class ImportService extends EventEmitter {
     let course: CourseTree | undefined;
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
+    // close 放 finally：这一带任何一行抛错（`getIndex` 里就是 JSON.parse）都会把 SQLite 句柄漏在外面，
+    // 而懒挂载挂在 preHandler 上——坏库每次请求都漏一个 FD（2026-10-06 复审指出）
+    let database: TutorDatabase | undefined;
     try {
-      const database = new TutorDatabase(path);
+      database = new TutorDatabase(path);
       index = database.getIndex(repositoryId);
       course = database.getCourse(repositoryId);
       analysis = database.getAnalysis(repositoryId);
       estimate = database.getEstimate(repositoryId);
-      database.close();
     } catch {
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor/tutor.db 读不出来（文件损坏或权限不足），需要重新导入。` };
+    } finally {
+      database?.close();
     }
     if (!index || !course || !analysis || !estimate) {
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、课程树、分析结果或估算），需要重新导入才能继续。` };

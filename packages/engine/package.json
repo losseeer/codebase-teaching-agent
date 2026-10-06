@@ -19,7 +19,12 @@
     "phaseB:judge": "tsx src/scripts/judge-turns.ts",
     "search:embed": "tsx src/scripts/embed-repo.ts",
     "cache:probe": "tsx src/scripts/probe-prefix-cache.ts",
-    "l1:reburn": "tsx src/scripts/reburn-l1.ts"
+    "graph:diff": "tsx src/scripts/precise-graph-diff.ts",
+    "calls:diff": "tsx src/scripts/precise-call-diff.ts",
+    "tier:diag": "tsx src/scripts/tier-diag.ts",
+    "reanalyze": "tsx src/scripts/reanalyze.ts",
+    "l1:reburn": "tsx src/scripts/reburn-l1.ts",
+    "flow:reburn": "tsx src/scripts/reburn-flows.ts"
   },
   "dependencies": {
     "@codebase-tutor/shared": "workspace:*",

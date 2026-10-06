@@ -1,6 +1,6 @@
 import type { TraceScalar } from "@codebase-tutor/shared";
 import type { UiJournalEventType } from "./events";
-import { flushJournalQueue, postJournalEvent } from "./transport";
+import { flushJournalQueue, queueJournalEvent } from "./transport";
 
 /**
   唯一的 UI 事件发射入口：`emit(repositoryId, type, payload, { sessionId })`。
@@ -22,8 +22,8 @@ export function emit(
     return;
   }
   const post = { repositoryId, type, payload, ...(options.sessionId ? { sessionId: options.sessionId } : {}) };
-  // 有积压就先补发，再发新事件——顺序即 append 顺序
-  void flushJournalQueue().then(() => postJournalEvent(post));
+  // 排在串行队列末尾：先补发积压、再发本条，「顺序即 append 顺序」由 transport.ts 的单条链保证
+  void queueJournalEvent(post);
 }
 
 /** 网络恢复时补发积压事件（在 App 启动时注册一次即可）。 */

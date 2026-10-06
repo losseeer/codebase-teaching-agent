@@ -18,7 +18,11 @@ const eventTypes = new Set<JournalEventType>([
   // UI 侧（交互动作）：由 GUI 经 POST /api/repositories/:id/journal 写入
   "flow_node_selected", "file_anchored", "file_opened", "line_located",
   "module_switched", "exercise_submitted", "repository_switched",
-  "entry_adopted", "entry_overridden"
+  "entry_adopted", "entry_overridden",
+  // 用户手动改模块档位（主干/设施/外围）：结构判据没有真值，这条就是攒真值的读数
+  "module_tier_overridden",
+  // 跨仓 HTTP 接缝配对（引擎侧写，见 shared 的 `repository_paired` 注释）
+  "repository_paired"
 ]);
 
 /** 供 HTTP 出口做入参校验：不接受白名单外的类型（走同一份白名单，不另立一份）。 */

@@ -23,7 +23,7 @@ describe("course tree", () => {
       modelVersion: "fixture-v1",
       files: [{ path: "src/main.ts", extension: ".ts", bytes: 30, lines: 2 }],
       summaries: [{ path: "src/main.ts", summary: "应用入口。", role: "core", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
-      graph: { imports: new Map([["src/main.ts", []]]), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" }
+      graph: { imports: new Map([["src/main.ts", []]]), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" }
     });
     const workflow = tree.root.children[0].children[0];
     expect(workflow.anchors).toEqual([{ path: "src/main.ts", line: 1, label: "script: dev" }]);
@@ -41,7 +41,7 @@ describe("course tree", () => {
       summaries: [{ path: "src/main.ts", summary: "应用入口。", role: "core", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
       graph: {
         imports: new Map([["src/main.ts", ["test-fixtures/frozen-demo-repo/src/main.js"]]]),
-        calls: [],
+        calls: [], dispatch: [],
         symbols: [],
         semanticBackend: "static",
         lspStatus: [],
@@ -64,7 +64,7 @@ describe("course tree", () => {
       modelVersion: "fixture-v1",
       files: [{ path: "src/lib.ts", extension: ".ts", bytes: 30, lines: 2 }],
       summaries: [{ path: "src/lib.ts", summary: "工具函数。", role: "tool", roleSource: "structure", coverage: { checked: 0, mentioned: 0, low: false }, cached: false }],
-      graph: { imports: new Map([["src/lib.ts", []]]), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
+      graph: { imports: new Map([["src/lib.ts", []]]), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
     });
     const workflows = tree.root.children[0];
     expect(workflows.children).toHaveLength(1);
@@ -82,7 +82,7 @@ describe("course tree", () => {
         { path: "src/db/store.ts", extension: ".ts", bytes: 30, lines: 10 }
       ],
       summaries: [],
-      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" },
+      graph: { imports: new Map(), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [{ path: "src/main.ts", line: 1, label: "script: dev" }], parseBackend: "regex" },
       implementations: [unit("src/main.ts", "boot"), unit("src/db/store.ts", "load"), unit("src/db/store.ts", "save")]
     });
     expect(microOf(tree).children).toHaveLength(3); // 归组前：三条平行清单
@@ -111,7 +111,7 @@ describe("course tree", () => {
         file("docs/design.md")
       ],
       summaries: [],
-      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
+      graph: { imports: new Map(), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
     });
     const ids = tree.root.children.find((node) => node.id === "modules")!.children.map((node) => node.id);
     // 真仓就是这里碎掉的：observability 下三个子目录各 1 个文件 → 三个几乎同名的 chip
@@ -131,7 +131,7 @@ describe("course tree", () => {
       modelVersion: "fixture-v1",
       files: [file("observability/grafana/dashboards/render.ts"), file("observability/prometheus/rules.ts")],
       summaries: [],
-      graph: { imports: new Map(), calls: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" },
+      graph: { imports: new Map(), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" },
       implementations: [unit("observability/grafana/dashboards/render.ts", "render"), unit("observability/prometheus/rules.ts", "evaluate")]
     });
     const grouped = groupImplementationsByModule(tree);

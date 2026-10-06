@@ -339,6 +339,35 @@ describe("教学作用域（SSE）", () => {
   });
 });
 
+/** 语言画像：架构视图要能说清「这条边有多硬」，而这份口径只能读侧现算。 */
+describe("GET /analysis 附带的语言画像", () => {
+  it("响应带本仓语言分布与能力档，但落库产物一字未改（不进缓存键）", async () => {
+    const callsBefore = fetchCalls;
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/analysis` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as RepositoryAnalysis & { languageProfile?: NonNullable<RepositoryAnalysis["languageProfile"]> };
+
+    const row = body.languageProfile?.languages.find((item) => item.language === "typescript");
+    expect(row, "只有一个 .ts 文件的仓，语言分布应当只有 TypeScript 一行").toBeDefined();
+    expect(row!.files).toBe(1);
+    expect(row!.inDependencyGraph).toBe(true);
+    // 档直接从共享表来：界面不许自己判语言
+    expect(row!.capabilities.cells.dependencyEdge).toBe("exact");
+    // 旧产物的图没有 parseBackend → 按 regex 认，符号抽取那一格不能因此被说成语法树结果
+    expect(body.languageProfile!.parseBackend).toBe("regex");
+
+    // 关键一条：响应里多了字段，库里那份 analysis 不能有——它是缓存键的输入，写回去就等于给全仓重烧开票
+    const database = new TutorDatabase(repoDir);
+    const stored = database.getAnalysis(repositoryId);
+    database.close();
+    expect(stored, "落库产物读不出来就没法比对").toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(stored!, "languageProfile")).toBe(false);
+    expect(stored!.versionStamp).toBe("content:fixture");
+    // 零 token：拿语言画像不该付出任何模型调用
+    expect(fetchCalls).toBe(callsBefore);
+  });
+});
+
 /** llm.log 落点：每次 provider 调用都要有一行；线程归属必须跟着进来（前缀缓存按线程算间隔靠它）。 */
 describe("LLM 工作日志落点", () => {
   it("每次 provider 调用追加一行，scene 覆盖三作用域，threadId 与用过的线程全等", async () => {

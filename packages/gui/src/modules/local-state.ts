@@ -1,4 +1,4 @@
-import type { CourseNode, CourseTier, CourseTree } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTier, CourseTierEvidence, CourseTree } from "@codebase-tutor/shared";
 
 /**
   教学模块（业务模块）：模块 = 课程树「仓库模块地图」分支下的一个节点，
@@ -31,6 +31,10 @@ export interface KnowledgeModule {
   entries?: ModuleEntry[];
   /** 分级（引擎按模块可见文件的结构角色给出）；undefined = 引擎未给（旧响应或自建主题），界面按扁平渲染 */
   tier?: CourseTier;
+  /** 引擎原判：用户手动改过档后仍留着它，界面才能显示「引擎判：设施」并给「恢复引擎判据」 */
+  tierGiven?: CourseTier;
+  /** 这一档是按哪些数判出来的（悬停可见）：分不准时先要看得见为什么 */
+  tierEvidence?: CourseTierEvidence;
 }
 
 export type ModuleWhere = "teaching" | "practice";
@@ -52,7 +56,10 @@ const MODULE_BRANCH_ID = "modules";
 const CUSTOM_KEY_PREFIX = "codebase-tutor.modules.";
 const HIDDEN_KEY_PREFIX = "codebase-tutor.hidden-modules.";
 const RENAMED_KEY_PREFIX = "codebase-tutor.renamed-modules.";
+const TIER_KEY_PREFIX = "codebase-tutor.module-tiers.";
 const ACTIVE_KEY_PREFIX = "codebase-tutor.module.";
+
+const TIERS: CourseTier[] = ["core", "facility", "periphery"];
 
 /** 自建模块的持久化形状（entries 是派生值，不落盘）。 */
 type StoredCustomModule = { id: string; label: string; hint: string };
@@ -70,21 +77,30 @@ const writeJson = (key: string, value: unknown): void => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 持久化失败不回退：本次会话内仍生效 */ }
 };
 
-/** 教学模块的覆盖层：改名、隐藏、自建。三者都按仓库分键，换仓不串味。 */
+/** 教学模块的覆盖层：改名、隐藏、自建、手动改档。四者都按仓库分键，换仓不串味。 */
 export interface ModuleOverrides {
   renamed: Record<string, string>;
   hidden: string[];
   custom: StoredCustomModule[];
+  /** 用户手动改的档位（模块 id → 档）。引擎原判不落地，读的时候现比。 */
+  tier: Record<string, CourseTier>;
 }
 
 export function loadModuleOverrides(repositoryId: string): ModuleOverrides {
   const renamed = readJson<Record<string, string>>(RENAMED_KEY_PREFIX + repositoryId, {});
   const hidden = readJson<string[]>(HIDDEN_KEY_PREFIX + repositoryId, []);
   const custom = readJson<StoredCustomModule[]>(CUSTOM_KEY_PREFIX + repositoryId, []);
+  const storedTier = readJson<Record<string, CourseTier>>(TIER_KEY_PREFIX + repositoryId, {});
+  // 档位是会被旧版本或手改 localStorage 塞进任意字符串的地方：只认三档取值，其余丢掉
+  const tier: Record<string, CourseTier> = {};
+  if (storedTier && typeof storedTier === "object" && !Array.isArray(storedTier)) {
+    for (const [id, value] of Object.entries(storedTier)) if (TIERS.includes(value)) tier[id] = value;
+  }
   return {
     renamed: renamed && typeof renamed === "object" && !Array.isArray(renamed) ? renamed : {},
     hidden: Array.isArray(hidden) ? hidden.filter((id): id is string => typeof id === "string") : [],
-    custom: Array.isArray(custom) ? custom.filter((item) => typeof item?.id === "string" && typeof item?.label === "string") : []
+    custom: Array.isArray(custom) ? custom.filter((item) => typeof item?.id === "string" && typeof item?.label === "string") : [],
+    tier
   };
 }
 
@@ -92,6 +108,7 @@ export function saveModuleOverrides(repositoryId: string, overrides: ModuleOverr
   writeJson(RENAMED_KEY_PREFIX + repositoryId, overrides.renamed);
   writeJson(HIDDEN_KEY_PREFIX + repositoryId, overrides.hidden);
   writeJson(CUSTOM_KEY_PREFIX + repositoryId, overrides.custom);
+  writeJson(TIER_KEY_PREFIX + repositoryId, overrides.tier);
 }
 
 /**
@@ -114,14 +131,23 @@ function moduleEntries(node: CourseNode): ModuleEntry[] {
 export function courseModules(tree: CourseTree | null | undefined): KnowledgeModule[] {
   const branch = tree?.root?.children?.find((node) => node.id === MODULE_BRANCH_ID);
   if (!branch) return [];
-  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, tier: node.tier, entries: moduleEntries(node) }));
+  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, tier: node.tier, tierEvidence: node.tierEvidence, entries: moduleEntries(node) }));
 }
 
 /** 业务模块 + 覆盖层 → 界面看到的清单。改名只影响显示，id 仍是树节点 id（缓存与埋点按它走）。 */
 export function mergeModules(treeModules: KnowledgeModule[], overrides: ModuleOverrides): KnowledgeModule[] {
   const visible = treeModules
     .filter((item) => !overrides.hidden.includes(item.id))
-    .map((item) => ({ ...item, label: overrides.renamed[item.id] ?? item.label }));
+    .map((item) => {
+      const overridden = overrides.tier[item.id];
+      return {
+        ...item,
+        label: overrides.renamed[item.id] ?? item.label,
+        // 引擎原判留着（tierGiven），界面才能说清「这是你改的」并给恢复入口
+        tierGiven: item.tier,
+        tier: overridden ?? item.tier
+      };
+    });
   return [...visible, ...overrides.custom.map((item) => ({ id: item.id, label: item.label, hint: item.hint, custom: true }))];
 }
 

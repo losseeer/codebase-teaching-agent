@@ -166,7 +166,8 @@ export function buildFlowDigest(
     symbols: analysis.graph.symbols,
     calls: analysis.graph.calls,
     imports: analysis.graph.imports,
-    entrypoints: analysis.graph.entrypoints
+    entrypoints: analysis.graph.entrypoints,
+    dispatch: analysis.graph.dispatch ?? []
   });
 
   // 有依赖边或有符号的文件才进清单：流程视图关心的是「谁参与执行」，不是全量文件清单
@@ -291,7 +292,11 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
       user: recentChanges ? `${JSON.stringify(digest)}\n\n${recentChanges}` : JSON.stringify(digest),
       // 09-22：真仓大流程输出 ~6.5k tokens 才收住，3_200 会让个别入口（VoucherOrderController 两次实测）
       // 在 JSON 中途触顶 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
-      maxTokens: 6_000,
+      // 10-06 再放宽到 8_000：thinking=auto 下 6,000+6,000(余量)=12,000 的上限当天被 13 条里的 2 条
+      // 正好撞满（PaymentController、ShopSearchController 输出都是整 12,000），
+      // 结果是这两条流程被记成「确定性降级」并进了缓存——**上限是我们自己设的，不该算成模型给不出更多**。
+      // 这只是上限不是配额：模型用不到就不多花钱。
+      maxTokens: 8_000,
       temperature: 0.2,
       scene: "map.flow"
     });

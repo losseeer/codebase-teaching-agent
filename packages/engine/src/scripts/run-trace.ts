@@ -37,6 +37,10 @@ function eventLine(event: JournalEvent): string {
       return `${p.path ?? "未记"}${p.denied ? " 【拒绝】" : ""}${p.error ? ` 【错误:${clip(p.error, 40)}】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "code_search":
       return `搜「${clip(p.query, 60)}」命中=${p.hits ?? "未记"} 前几落点：${clip(p.top_paths, 60)}`;
+    case "repository_paired":
+      return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
+    case "module_tier_overridden":
+      return `手动改档 ${clip(p.module_label, 24)}：${p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主干占比=${p.core_share ?? "未记"}）`;
     case "action_veto":
       return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
     case "hint_depth":

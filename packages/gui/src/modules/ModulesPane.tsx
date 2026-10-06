@@ -34,6 +34,17 @@ interface ModuleSection {
   items: KnowledgeModule[];
 }
 
+/** 悬停文案：模块职责 + 分级依据。判据露出来，用户才知道该不该手动改。 */
+function hoverText(item: KnowledgeModule): string {
+  const parts = [
+    item.entries?.length ? `${item.entries.length} 个文件` : "",
+    item.hint,
+    item.tierEvidence ? `${TIER_GROUPS.find((group) => group.tier === item.tier)?.label ?? "未分级"}：${item.tierEvidence.reason}` : "",
+    item.tier && item.tierGiven && item.tier !== item.tierGiven ? `（已手动改档，引擎判：${TIER_GROUPS.find((group) => group.tier === item.tierGiven)?.label}）` : ""
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
 export function ModulesPane({
   where,
   header,
@@ -44,6 +55,7 @@ export function ModulesPane({
   onAdd,
   onRemove,
   onReset,
+  onTierChange,
   children,
   treeDerived = false
 }: {
@@ -56,6 +68,8 @@ export function ModulesPane({
   onAdd: (label: string) => void;
   onRemove: (id: string) => void;
   onReset: () => void;
+  /** 手动改档（null = 恢复引擎判据）。只有课程树派生的模块才有档位可改，练习侧不传。 */
+  onTierChange?: (id: string, tier: CourseTier | null) => void;
   children: ReactNode;
   treeDerived?: boolean;
 }): ReactElement {
@@ -115,7 +129,7 @@ export function ModulesPane({
       role="tab"
       aria-selected={item.id === activeId}
       className={`module-chip ${item.id === activeId ? "active" : ""}`}
-      title={item.entries?.length ? `${item.entries.length} 个文件 · ${item.hint}` : item.hint}
+      title={hoverText(item)}
       onClick={() => onSelectModule(item.id)}
     >
       {item.label}
@@ -136,7 +150,7 @@ export function ModulesPane({
                 tone={section.key}
                 placeholder={`${section.items.length} 个模块`}
                 ariaLabel={`${section.label}模块（${section.note}）`}
-                options={section.items.map((item) => ({ value: item.id, label: item.label, count: item.entries?.length ?? 0, note: item.hint }))}
+                options={section.items.map((item) => ({ value: item.id, label: item.label, count: item.entries?.length ?? 0, note: hoverText(item) }))}
                 value={activeId}
                 open={openTier === section.key && !configOpen}
                 onOpenChange={(next) => setOpenTier(next ? section.key : null)}
@@ -164,6 +178,29 @@ export function ModulesPane({
                 {removable(item) && <button className="cfg-del" aria-label={`${treeDerived ? "隐藏" : "删除"} ${item.label}`} title={treeDerived ? `隐藏 ${item.label}` : `删除 ${item.label}`} onClick={() => remove(item)}><X size={12} /></button>}
               </div>
             ))}
+            {treeDerived && onTierChange && modules.some((item) => item.tier) && (
+              <div className="cfg-tiers">
+                <div className="cfg-head">分级依据<span>档位由引擎按文件的结构角色算（确定、可复现）。改档只影响这个界面怎么分组，并会给审计线留一条记录，攒起来就是判据的真值。</span></div>
+                {modules.filter((item) => item.tier).map((item) => (
+                  <div className="cfg-tier-row" key={item.id}>
+                    <span className="cfg-tier-name" title={hoverText(item)}>{item.label}</span>
+                    <span className="cfg-tier-given">{item.tierEvidence?.reason ?? ""}</span>
+                    <span className="cfg-tier-buttons" role="group" aria-label={`${item.label} 的档位`}>
+                      {TIER_GROUPS.map((group) => (
+                        <button
+                          key={group.tier}
+                          type="button"
+                          className={item.tier === group.tier ? "on" : ""}
+                          aria-pressed={item.tier === group.tier}
+                          title={group.note}
+                          onClick={() => onTierChange(item.id, item.tier === group.tier ? null : group.tier)}
+                        >{group.label}</button>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="cfg-add">
               <input value={draftName} placeholder={isPractice ? "新增出题主题…" : "新增模块名称…"} aria-label="新增模块名称" onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }} />
               <button className="cfg-add-btn" onClick={add}>添加</button>

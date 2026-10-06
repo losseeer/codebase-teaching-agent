@@ -11,6 +11,8 @@ import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
+import { languageProfileOf } from "./depgraph/language-profile.js";
+import { seamReportFor } from "./depgraph/seams.js";
 import { classifyFileRoles, fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
@@ -216,21 +218,32 @@ interface RepositorySettingsPayload {
 }
 
 function readRepositorySettings(repositoryPath: string, repositoryId: string): RepositorySettingsPayload {
+  // close 走 finally：这两个 helper 挂在每个请求的读路径上，中途抛错就是每请求漏一个 SQLite 句柄
   const database = new TutorDatabase(repositoryPath);
-  const settings = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(repositoryId);
-  database.close();
-  return {
-    monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd,
-    summaryHeaderComments: settings?.summaryHeaderComments === true
-  };
+  try {
+    const settings = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(repositoryId);
+    return {
+      monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd,
+      summaryHeaderComments: settings?.summaryHeaderComments === true
+    };
+  } finally {
+    database.close();
+  }
 }
+
+/** 摘要表一次读多少行：与 `store/database.ts` 的缺省一致，触顶时要在日志里说出来，不能静默少文件。 */
+const LATEST_SUMMARY_LIMIT = 2_000;
 
 /** L1 摘要表 → `path → 一句话职责`（流程证据、search 语料、推荐入口共用）。 */
 function latestFileSummaries(repositoryPath: string): Map<string, string> {
   const database = new TutorDatabase(repositoryPath);
-  const rows = database.getLatestFileSummaries();
-  database.close();
-  return new Map(rows.map((row) => [row.path, row.summary]));
+  try {
+    const rows = database.getLatestFileSummaries(LATEST_SUMMARY_LIMIT);
+    if (rows.length >= LATEST_SUMMARY_LIMIT) console.warn(`[engine] ${repositoryPath} 的摘要行数达到读取上限 ${LATEST_SUMMARY_LIMIT}，超出的旧路径本次没有摘要可用（流程证据与检索语料会缺这些文件）`);
+    return new Map(rows.map((row) => [row.path, row.summary]));
+  } finally {
+    database.close();
+  }
 }
 
 /** search_code 语料：已分析路径 + 图符号表 + L1 一句话职责。
@@ -430,7 +443,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/c
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   // 模块分级现算（主干/设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
   const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
-  return annotateModuleTiers(repository.course, roles);
+  return annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints);
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overview", async (request, reply) => {
@@ -457,9 +470,56 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   };
 });
 
+/**
+  仓库分析（架构视图与流程视图的共同数据源）。响应里额外挂一份 `languageProfile`：
+  本仓语言分布 + 每语言能力档，来自 shared 的 `LANGUAGE_CAPABILITIES`（引擎自报口径）。
+
+  为什么挂在这条**已存在**的只读路由上，而不是新开一条：
+  - 架构视图本来就要取这条路由（`DepMap` 的边来自 `analysis.graph.imports`），「这条边有多硬」
+    必须和边本身同时到达，另开一条就会有两份时序与两处加载态；
+  - 它是读侧现算的元数据：不进 `repository.analysis`（那是落库产物，也是 `backendStamp` 等缓存键的输入），
+    只在响应里浅拷贝一次 —— 因此不会引发任何摘要/流程重烧；
+  - 语言分布的输入是 `index.files`（内存里已挂载的索引），不读磁盘、不调模型。
+
+  ⚠️ 一条被实测暴露的缺口（10-05）：**引擎没有「重新分析」这条路由**。挂载只读落库产物并报告新鲜度，
+  所以依赖边/调用边/入口这三处规则改了之后，已导入的仓仍然用旧图回答（当时 dianping 落库的还是改前的 316 条边、
+  UserServiceImpl 7 条出边），且**没有任何读数会提示这件事**——流程 grounding 的前后对比因此一度不可比。
+  现在生效的方式只有两条：重新导入（会重走 L1/润色的缓存判定，理论上命中即零 token，但路径更长）或等文件变动触发 watcher 重分析。
+ */
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/analysis", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  return repository?.analysis ?? reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  return { ...repository.analysis, languageProfile: languageProfileOf(repository.index.files, repository.analysis.graph) };
+});
+
+/**
+  跨仓 HTTP 接缝（用户拍板的形态：每仓只认自己的路由，配对在显式选了「相关仓」时现算）。
+  动因：用户手上的语料每仓单语言（后端 Java、前端 Vue），同仓配对配不出东西，而「点了按钮之后代码在哪」
+  正是教学要答的问题；可行性已实测（dianping 前端 14 条调用串 12 条配上控制器、0 歧义，见开发日志 §34）。
+
+  三条口径值得写在脸上：
+  - **零重烧**：清单不落库、不进任何缓存键（只在内存 memo 里按 `versionStamp` 存着），
+    所以既不动摘要也不动流程的输入；哪天要把接缝当流程证据进 digest，得先重算那笔钱。
+  - **两个方向分开给**：本仓调它（outbound）与它调本仓（inbound）是两种不同的问题，界面不该合成一个数。
+  - **配对要留痕**：这是一次读两个仓源码的动作，配上几条、跟谁配的必须可查——所以引擎侧写
+    `repository_paired`，不指望 GUI 替我们记（直接打 API 的调用也算数）。
+  */
+app.get<{ Params: { repositoryId: string }; Querystring: { with?: string } }>("/api/repositories/:repositoryId/seams", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const otherId = (request.query.with ?? "").trim();
+  if (!otherId) return reply.code(400).send({ error: "请用 with=<仓库id> 指定要配对的相关仓。" });
+  if (otherId === repository.index.repositoryId) return reply.code(400).send({ error: "不能与本仓自己配对。" });
+  const mounted = importer.ensureMounted(otherId);
+  if (!mounted.ok) return reply.code(404).send({ error: `相关仓挂不起来：${mounted.message}`, reason: mounted.reason });
+  const seamView = (item: typeof mounted.repository) => ({ repositoryId: item.index.repositoryId, path: item.path, files: item.index.files, versionStamp: item.analysis.versionStamp });
+  const report = seamReportFor(seamView(repository), seamView(mounted.repository));
+  new Journal(repository.path, repository.index.repositoryId).append("repository_paired", {
+    other_repository_id: mounted.repository.index.repositoryId,
+    outbound: report.outbound.matched,
+    inbound: report.inbound.matched
+  });
+  return report;
 });
 
 app.post<{ Params: { repositoryId: string }; Body: { changedPaths?: string[] } }>("/api/repositories/:repositoryId/impact", async (request, reply) => {

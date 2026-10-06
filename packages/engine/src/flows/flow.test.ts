@@ -259,7 +259,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.source).toBe("static");
     expect(result.reason).toBe("模型输出在长度上限处被截断，未形成完整流程");
     expect(result.deterministic).toBe(true);
-    expect(seen?.maxTokens).toBe(6_000); // 主调用上限已放宽（3_200 时该入口必触顶）
+    expect(seen?.maxTokens).toBe(8_000); // 主调用上限：3_200 时该入口必触顶 → 6_000 → 10-06 实测 13 条里 2 条撞满 12,000（含 6,000 思考余量）后再放宽到 8_000
   });
 
   it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {

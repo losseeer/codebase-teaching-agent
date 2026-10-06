@@ -108,6 +108,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .sidebar nav { display: grid; gap: 4px; }
 /* 仓库切换器（地址簿）：共用下拉的深底变体，配色跟着 sidebar 走 */
 .sidebar-repo { margin: 14px 0 0; }
+/* 收起态留的切仓入口：64px 图标栏里放不下一整个下拉，所以只留一枚仓名徽标，点了展开并打开切换器 */
+.sidebar-repo-mini { margin: 14px auto 0; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid #35544a; border-radius: 6px; background: #21483d; color: #cfe0d5; font-size: 13px; font-weight: 700; text-transform: uppercase; cursor: pointer; }
+.sidebar-repo-mini:hover { border-color: #d8ef58; color: #fff; }
 .sidebar-repo .picker-trigger { border-color: #35544a; background: #21483d; color: #cfe0d5; }
 .sidebar-repo .picker-trigger:hover { border-color: #4f7a68; background: #26524a; }
 .sidebar-repo.picker-open > .picker-trigger { border-color: #d8ef58; background: #26524a; }
@@ -160,6 +163,18 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .mode-switch { position: relative; flex: 0 0 40px; width: 40px; height: 22px; border-radius: 11px; border: 1px solid #bed1c4; background: #eef3ef; padding: 0; cursor: pointer; transition: background .15s ease, border-color .15s ease; }.mode-switch i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(25, 54, 44, .25); transition: left .15s ease; }.mode-switch.on { background: #a4c335; border-color: #8faf27; }.mode-switch.on i { left: 20px; }
 .mode-switch-label { font-size: 13px; color: #3d584d; font-weight: 700; }.mode-token-hint { font-size: 11px; font-weight: 700; color: #8a5a12; background: #fdeeda; border-radius: 4px; padding: 3px 7px; white-space: nowrap; }
 .import-mode-note { margin: 8px 0 0; font-size: 12px; color: #6f8d80; line-height: 1.5; }
+/* 地址簿：导入页自带的切仓入口（侧栏收起时这是唯一能看到其它仓的地方） */
+.import-catalog { max-width: 760px; margin-top: 22px; display: grid; gap: 7px; }
+.import-catalog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 700; color: #315b4b; }
+.import-catalog-head span { font-size: 11px; font-weight: 500; color: #8aa097; }
+.import-catalog-row { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid #dbe4de; border-radius: 6px; background: #fff; color: #17352c; cursor: pointer; text-align: left; }
+.import-catalog-row:hover { border-color: #579172; background: #f6faf6; }
+.import-catalog-row.current { border-color: #b9d6c6; background: #eef6ef; cursor: default; }
+.import-catalog-name { font-size: 13px; font-weight: 700; flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-catalog-path { flex: 1; min-width: 0; font-size: 11px; color: #6f8d80; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+.import-catalog-state { flex: 0 0 auto; font-size: 11px; color: #8aa097; }
+.import-catalog-state.bad { color: #b0553f; }
+.import-catalog-state.stale { color: #a8792f; }
 input, textarea, select { border: 1px solid #c9d6ce; border-radius: 5px; color: #18372f; background: #fff; outline: none; } input:focus, textarea:focus, select:focus { border-color: #4c856e; box-shadow: 0 0 0 3px rgba(76,133,110,.14); }
 input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 5px; min-height: 39px; padding: 0 14px; border: 1px solid transparent; font-weight: 700; font-size: 13px; white-space: nowrap; }
 .primary { background: #1a6b52; color: white; }.primary:hover:not(:disabled) { background: #12513f; }.secondary { background: #fff; border-color: #b9cbc0; color: #1a513f; }.secondary:hover { background: #edf5ef; }
@@ -322,6 +337,14 @@ button.entry-item:hover { background: #eef6ef; }
 .cfg-del, .cfg-add-btn { flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #cbd9d1; border-radius: 4px; padding: 5px 8px; color: #6f8d80; background: #fff; font-size: 11px; }
 .cfg-del:hover { border-color: #c98b7a; color: #b0553f; }
 .cfg-add-btn { color: #35634f; background: #eef6ef; }
+/* 手动改档区：先把「这一档是按哪些数判的」摊出来，再给三个档的按钮 */
+.cfg-tiers { margin-top: 8px; border-top: 1px dashed #d9e5dd; padding-top: 7px; }
+.cfg-tier-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 6px; align-items: center; margin-bottom: 5px; }
+.cfg-tier-name { color: #17352c; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfg-tier-given { grid-column: 1 / 2; color: #8aa097; font-size: 9px; }
+.cfg-tier-buttons { grid-row: 1 / 3; display: flex; gap: 3px; }
+.cfg-tier-buttons button { border: 1px solid #cbd9d1; border-radius: 4px; padding: 3px 6px; color: #6f8d80; background: #fff; font-size: 10px; }
+.cfg-tier-buttons button.on { color: #17352c; border-color: #579172; background: #eef6ef; font-weight: 700; }
 .cfg-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; border-top: 1px solid #d9e5dd; padding-top: 8px; }
 .cfg-foot span { color: #8aa097; font-size: 9px; }
 .cfg-reset { border: 0; padding: 0; color: #4d7f9f; background: transparent; font-size: 10px; text-decoration: underline; }
@@ -408,11 +431,15 @@ button.entry-item:hover { background: #eef6ef; }
 .flow-node .node-kind { display: block; margin-bottom: 5px; color: #729082; font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .flow-node strong { display: block; color: #1e4b39; font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .flow-node small { display: block; margin-top: 6px; color: #71887d; font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
-.flow-legend { position: absolute; left: 36px; bottom: 12px; z-index: 1; display: flex; align-items: center; gap: 15px; color: #789086; font-size: 10px; }
+/* 图例条：多了一枚「依赖边强度」徽标后要能折行并收在画布宽度内（绝对定位不设 max-width 会撑出横向滚动条） */
+.flow-legend { position: absolute; left: 36px; bottom: 12px; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 15px; max-width: calc(100% - 72px); color: #789086; font-size: 10px; }
 .flow-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .flow-legend i { width: 9px; height: 9px; border: 1px solid #9abca4; border-radius: 2px; background: #fff; }
 .flow-legend i.green { border-color: #90af66; background: #eff7e4; }
 .flow-legend .legend-note { color: #8aa097; }
+/* 依赖边强度徽标：只在仓内主要语言的那一档不是「可信」时出现，口径来自引擎的语言能力表（见 map/DepMap.tsx）。
+   用琥珀而不是红色：这是「这读数该怎么信」的提示，不是「分析失败了」。 */
+.flow-legend .legend-caveat { border: 1px solid #e3c98b; border-radius: 4px; background: #fdf7e8; color: #6b5320; padding: 3px 7px; font-weight: 700; cursor: help; }
 
 /* ==== v0.9 地图画布：视图切换条（架构 / 流程）+ 流程视图 ====
    切换条是画布常驻 chrome：抽屉与「节点详情」按钮都从它下方开始，避免互相遮挡。 */
@@ -581,3 +608,18 @@ button.entry-item:hover { background: #eef6ef; }
 /* 关闭 × 的热区：原来只是 padding 0 1px 的文字，点偏 2px 就变成「切换 tab」。撑成 18×18 的方块。 */
 .source-tab-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: #86a094; font-size: 13px; line-height: 1; }
 .source-tab-close:hover { color: #8b3e32; background: #f4e3e0; }
+
+/* 跨仓 HTTP 接缝面板：架构视图下方的一条辅助读数，字号与图例同级，不抢画布 */
+.seam-panel { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 12px; }
+.seam-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.seam-head h3 { margin: 0; font-size: 13px; }
+.seam-head label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.seam-head select { background: var(--surface-2); color: inherit; border: 1px solid var(--border); border-radius: 7px; padding: 3px 6px; font: inherit; }
+.seam-group { margin-top: 8px; }
+.seam-group h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
+.seam-group ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.seam-row { display: flex; align-items: baseline; gap: 8px; }
+.seam-row code { font-family: var(--mono); font-size: 11px; color: var(--text); word-break: break-all; }
+.seam-via { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); }
+.seam-end { color: var(--muted); font-size: 11px; }
+.seam-error { margin: 6px 0 0; color: var(--warn, #e0a33a); }

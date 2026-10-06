@@ -137,6 +137,13 @@ export function App(): ReactElement {
       return next;
     });
   };
+  /** 界面上显示用的仓名：地址簿里有就用目录名，没有（还没刷出来）就用路径末段。 */
+  const repositoryNameOf = (current: Workspace): string =>
+    catalog.find((item) => item.repositoryId === current.repositoryId)?.name ?? current.repositoryPath.split("/").filter(Boolean).pop() ?? current.repositoryId;
+
+  /** 地址簿里点的正是当前这个仓：不重挂（懒挂载会自己处理），只是离开导入页。 */
+  const openRepository = (): void => { navigate("/app?workspace=map"); };
+
   /** 切到地址簿里的另一个仓：先让引擎挂载（顺带拿新鲜度），成功才换 workspace。
       挂载失败不改本地选择——上一个仓不该因为这次点错而被弄丢。 */
   const switchRepository = (repositoryId: string): void => {
@@ -204,7 +211,24 @@ export function App(): ReactElement {
           <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习评估" disabled={!workspace} />
           <NavItem to="/insights" icon={<BarChart3 size={17} />} label="成本监控" disabled={!workspace} />
         </nav>
-        {!sidebarCollapsed && workspace ? (
+        {workspace ? (sidebarCollapsed ? (
+          /**
+            收起态也要留一个切仓入口：这个下拉原先整块随侧栏收起消失，
+            而「导入页 + 收起侧栏」这个组合下界面上就没有任何切仓的地方了（用户实测问到）。
+            点它 = 展开侧栏并直接打开切换器，不在 64px 图标栏里另摆一个残缺下拉。
+           */
+          <button
+            type="button"
+            className="sidebar-repo-mini"
+            aria-label={`切换仓库，当前 ${repositoryNameOf(workspace)}`}
+            title={`${repositoryNameOf(workspace)}\n${workspace.repositoryPath}\n点击展开侧栏并打开仓库切换`}
+            onClick={() => {
+              setSidebarCollapsed(false);
+              localStorage.setItem("codebase-tutor.sidebar-collapsed", "0");
+              setRepoOpen(true);
+            }}
+          >{repositoryNameOf(workspace).slice(0, 2)}</button>
+        ) : (
           <div className="sidebar-repo">
             <OptionDropdown
               label="仓库"
@@ -223,7 +247,7 @@ export function App(): ReactElement {
               }))}
             />
           </div>
-        ) : null}
+        )) : null}
         <div className="sidebar-bottom">
           <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
           <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
@@ -235,7 +259,7 @@ export function App(): ReactElement {
           <Routes>
             {/* 根路径固定落导入页（用户口径 09-23）：不带 workspace 记忆直通 /app——导入是每次打开的起点 */}
             <Route path="/" element={<Navigate to="/import" replace />} />
-            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} />} />
+            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} />} />
             <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
             <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
             <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />

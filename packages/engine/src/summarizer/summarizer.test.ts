@@ -142,6 +142,40 @@ describe("文件摘要表（L1）", () => {
     expect(summaries.every((summary) => summary.summary.length > 0)).toBe(true);
   });
 
+  it("整批抛错不掀掉导入：这一批逐条走确定性补齐，并计入 fallbackFiles", async () => {
+    const database = tempDatabase();
+    const provider: SummaryProvider = {
+      name: "stub",
+      modelVersion: "stub-throw",
+      summarizeMany: async () => { throw new Error("端点 429"); }
+    };
+    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(estimate).toMatchObject({ summarizedFiles: 4, fallbackFiles: 4 });
+    expect(summaries.every((summary) => summary.summary.length > 0)).toBe(true);
+  });
+
+  it("兜底文本不写模型档的缓存键：下次同输入仍会重试模型，不拿结构文本冒充 LLM 摘要", async () => {
+    const database = tempDatabase();
+    const partial: SummaryProvider = {
+      name: "stub",
+      modelVersion: "stub-1",
+      summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
+    };
+    await summarizeFiles({ structure: STRUCTURE, database, provider: partial });
+    // 第二次同输入：模型档的键必须还是不命中，否则那条兜底文本会永久冒充模型产物，
+    // 而 fallbackFiles 归零——账面与读数上看不出任何降级发生过（2026-10-06 复审确证）
+    const calls: number[] = [];
+    const second: SummaryProvider = {
+      name: "stub",
+      modelVersion: "stub-1",
+      summarizeMany: async (slices) => { calls.push(slices.length); return slices.map((slice) => ({ summary: `${slice.path} 模型重写。` })); }
+    };
+    const again = await summarizeFiles({ structure: STRUCTURE, database, provider: second });
+    expect(again.estimate.fallbackFiles).toBe(0);
+    expect(calls).toEqual([3]); // 上次兜底的那三条重新问了模型；只有真拿到模型结果的那条命中缓存
+    expect(again.summaries.map((item) => item.summary)).toContain("svc.py 模型重写。");
+  });
+
   it("超过批次上限时分多次调用", async () => {
     const database = tempDatabase();
     const batches: number[] = [];

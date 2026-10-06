@@ -4,11 +4,13 @@ import { dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildDependencyGraph, impactRadius } from "./graph.js";
+import { classifyFileRoles, fileStructureOf } from "./roles.js";
 import { loadSymbolParser } from "./parser.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
 const tsFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/tsnext-demo-repo");
 const pyFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/pydemo-repo");
+const pyFrameworkFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/pyframeworkdemo-repo");
 const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/javademo-repo");
 
 describe("dependency graph v1", () => {
@@ -47,6 +49,8 @@ describe("dependency graph — Python 模块解析", () => {
     // `from app.store import load`：只解析到模块，函数名不入图
     expect(graph.imports.get("app/service.py")).toEqual(["app/store.py"]);
     expect(graph.entrypoints.map((item) => item.path)).toContain("main.py");
+    // 只有脚本守卫的普通脚本：锚点从第 1 行挪到 `if __name__ == "__main__":` 那一行
+    expect(graph.entrypoints).toContainEqual({ path: "main.py", line: 12, label: "脚本主入口" });
     rmSync(join(pyFixture, ".tutor"), { recursive: true, force: true });
   });
 
@@ -68,14 +72,101 @@ describe("dependency graph — Python 模块解析", () => {
   });
 });
 
+describe("Python 框架入口（fixture 先于规则）", () => {
+  it("Flask：入口锚在 app 构造行；同文件的路由与启动语句不再各出一条", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    expect(graph.entrypoints).toContainEqual({ path: "flaskshop/shop.py", line: 10, label: "HTTP 应用 (Flask)" });
+    // 一个文件只有一条锚点：真仓一个 main.py 挂着十几条路由，逐条标会把入口清单变成路由清单
+    expect(graph.entrypoints.filter((item) => item.path === "flaskshop/shop.py")).toHaveLength(1);
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("FastAPI：应用对象与路由写在同一文件时锚在构造行", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    expect(graph.entrypoints).toContainEqual({ path: "fastapiapp/orders.py", line: 10, label: "HTTP 应用 (FastAPI)" });
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("路由模块：只有装饰器（Flask 蓝图的 .route、FastAPI APIRouter 的 .get）也入围，锚在第一条装饰器", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    expect(graph.entrypoints).toContainEqual({ path: "flaskshop/reviews.py", line: 12, label: "HTTP 路由 (Flask)" });
+    expect(graph.entrypoints).toContainEqual({ path: "fastapiapp/shipments.py", line: 12, label: "HTTP 路由 (FastAPI)" });
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("启动文件：app.run / uvicorn.run 优先于同文件的脚本守卫；认不出框架名就不带框架名", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    // serve.py 的守卫在 11 行、启动在 12 行；标签不写框架，因为 `from flaskshop.shop` 是仓内包名而不是 flask
+    expect(graph.entrypoints).toContainEqual({ path: "flaskshop/serve.py", line: 12, label: "HTTP 服务启动" });
+    expect(graph.entrypoints).toContainEqual({ path: "fastapiapp/run.py", line: 14, label: "HTTP 服务启动" });
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("Django：urlpatterns 是路由表入口，manage.py 从文件名猜测升成权威锚点", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    expect(graph.entrypoints).toContainEqual({ path: "djangoshop/shop/urls.py", line: 12, label: "HTTP 路由表 (Django)" });
+    expect(graph.entrypoints).toContainEqual({ path: "djangoshop/manage.py", line: 21, label: "脚本主入口 (Django)" });
+    // manage 本来就在文件名约定里：同一个文件不能既报「脚本主入口」又报「conventional entrypoint」
+    expect(graph.entrypoints.filter((item) => item.path === "djangoshop/manage.py")).toHaveLength(1);
+    // 路由表指向的视图靠相对导入落点：入口与它要讲的正文之间得有一条边
+    expect(graph.imports.get("djangoshop/shop/urls.py")).toContain("djangoshop/shop/views.py");
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("普通脚本：只有 if __name__ 守卫的，锚点落在那一行且不带框架名", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    expect(graph.entrypoints).toContainEqual({ path: "tools/export_csv.py", line: 16, label: "脚本主入口" });
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("负例：Django 视图与纯库文件不是入口；整仓入口就是框架证据那九条", () => {
+    const index = indexRepository(pyFrameworkFixture);
+    const graph = buildDependencyGraph(pyFrameworkFixture, index.files);
+    const paths = graph.entrypoints.map((item) => item.path);
+    // 视图由 urls.py 那张表决定谁来调；库文件只有函数定义与非路由装饰器（property/lru_cache）
+    expect(paths).not.toContain("djangoshop/shop/views.py");
+    expect(paths).not.toContain("library/prices.py");
+    expect([...paths].sort()).toEqual([
+      "djangoshop/manage.py",
+      "djangoshop/shop/urls.py",
+      "fastapiapp/orders.py",
+      "fastapiapp/run.py",
+      "fastapiapp/shipments.py",
+      "flaskshop/reviews.py",
+      "flaskshop/serve.py",
+      "flaskshop/shop.py",
+      "tools/export_csv.py"
+    ]);
+    rmSync(join(pyFrameworkFixture, ".tutor"), { recursive: true, force: true });
+  });
+});
+
 describe("dependency graph — Java/Spring", () => {
-  it("resolves import statements (含静态导入) to repository files; 外部包与通配符不入图", () => {
+  // Java 的符号只来自语法树（回落档不认 Java），不加载解析器就没有任何调用边
+  beforeAll(async () => {
+    await loadSymbolParser();
+  });
+
+  it("resolves import statements (含静态导入) to repository files; 通配符按正文引用落点", () => {
     const index = indexRepository(javaFixture);
     const graph = buildDependencyGraph(javaFixture, index.files);
     expect(graph.imports.get("src/main/java/com/demo/DemoApplication.java")).toEqual(["src/main/java/com/demo/shop/ShopController.java"]);
     expect(graph.imports.get("src/main/java/com/demo/shop/ShopService.java")).toEqual(["src/main/java/com/demo/util/Keys.java"]);
-    // 直接导入与静态导入指向同一文件 → 合并成一条；`com.demo.util.*` 只到包名、无落点
-    expect(graph.imports.get("src/main/java/com/demo/shop/ShopController.java")).toEqual(["src/main/java/com/demo/util/Keys.java"]);
+    // 直接导入与静态导入同一文件 → 合并成一条；`com.demo.util.*` 只带来**正文真引用过**的 Metrics，
+    // 不引 Counters（整包展开会让同包文件两两连边，影响范围虚胖）
+    expect(graph.imports.get("src/main/java/com/demo/shop/ShopController.java")).toEqual([
+      "src/main/java/com/demo/order/IOrderFacade.java",
+      "src/main/java/com/demo/util/Keys.java",
+      "src/main/java/com/demo/util/Metrics.java"
+    ]);
+    // 没人引用的同包类不会因为别人写了通配 import 就被连进来
+    expect([...graph.imports.values()].flat()).not.toContain("src/main/java/com/demo/util/Counters.java");
     rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
   });
 
@@ -83,7 +174,45 @@ describe("dependency graph — Java/Spring", () => {
     const index = indexRepository(javaFixture);
     const graph = buildDependencyGraph(javaFixture, index.files);
     expect(graph.entrypoints[0]).toEqual({ path: "src/main/java/com/demo/DemoApplication.java", line: 7, label: "Spring Boot 启动类" });
-    expect(graph.entrypoints).toContainEqual({ path: "src/main/java/com/demo/shop/ShopController.java", line: 11, label: "HTTP 路由 (Spring MVC)：/shop" });
+    expect(graph.entrypoints).toContainEqual({ path: "src/main/java/com/demo/shop/ShopController.java", line: 12, label: "HTTP 路由 (Spring MVC)：/shop" });
+    rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("类头的 implements/extends 落成类型派发边；落点只认 import 过或同包的类", () => {
+    const index = indexRepository(javaFixture);
+    const graph = buildDependencyGraph(javaFixture, index.files);
+    expect(graph.dispatch).toContainEqual({
+      subtypePath: "src/main/java/com/demo/order/OrderFacadeImpl.java",
+      supertypePath: "src/main/java/com/demo/order/IOrderFacade.java",
+      kind: "implements",
+      line: expect.any(Number)
+    });
+    // 实现类自己 import 的 Mapper 是普通依赖边，不该被重复记成派发边
+    expect(graph.dispatch.map((edge) => edge.subtypePath)).not.toContain("src/main/java/com/demo/order/OrderMapper.java");
+    // 框架类型（不在仓里）不落边：`implements Serializable` 这类只会指向空
+    expect([...graph.dispatch.map((edge) => edge.supertypePath), ...graph.dispatch.map((edge) => edge.subtypePath)]
+      .every((path) => index.files.some((file) => file.path === path))).toBe(true);
+    rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("变量接收者按声明类型落点：字段、参数、局部变量三种形状", () => {
+    const index = indexRepository(javaFixture);
+    const graph = buildDependencyGraph(javaFixture, index.files);
+    const implToMapper = graph.calls.find((call) => call.callerPath.endsWith("OrderFacadeImpl.java") && call.calleePath.endsWith("OrderMapper.java"));
+    expect(implToMapper?.calleeSymbol).toContain(":insert:");
+    // 局部变量声明的类型也要认得到：只解字段的话这条边会凭空消失
+    const validatorToMapper = graph.calls.find((call) => call.callerPath.endsWith("OrderValidator.java") && call.calleePath.endsWith("OrderMapper.java"));
+    expect(validatorToMapper?.calleeSymbol).toContain(":insert:");
+    rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
+  });
+
+  it("接口在入口一跳内时，实现类经派发透传也算主干；实现下面的 Mapper 仍算二跳", () => {
+    const index = indexRepository(javaFixture);
+    const graph = buildDependencyGraph(javaFixture, index.files);
+    const roles = classifyFileRoles(fileStructureOf(index.files, graph));
+    expect(roles.get("src/main/java/com/demo/order/IOrderFacade.java")).toBe("core");
+    expect(roles.get("src/main/java/com/demo/order/OrderFacadeImpl.java")).toBe("core");
+    expect(roles.get("src/main/java/com/demo/order/OrderMapper.java")).toBe("support");
     rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
   });
 });

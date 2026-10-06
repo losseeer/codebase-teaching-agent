@@ -7,6 +7,7 @@ import { EmptyState, flatten, Loading, MicroDetail } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
 import { DepMap } from "../map/DepMap";
+import { SeamPanel } from "../map/SeamPanel";
 import { FLOW_KIND_LABEL, FlowMap, type FlowSelection } from "../map/FlowMap";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
@@ -145,7 +146,13 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             )}
           </div>
           {mapView === "architecture"
-            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
+            ? (
+              <>
+                <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
+                {/* 跨仓 HTTP 接缝：只有地址簿里还有第二个仓时才有意义（组件自己会隐藏） */}
+                <SeamPanel repositoryId={repositoryId} />
+              </>
+            )
             : (
               <FlowMap
                 repositoryId={repositoryId}

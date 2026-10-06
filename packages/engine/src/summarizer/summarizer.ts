@@ -136,7 +136,16 @@ export async function summarizeFiles(input: {
 
   for (let offset = 0; offset < pending.length; offset += SUMMARY_BATCH_SIZE) {
     const batch = pending.slice(offset, offset + SUMMARY_BATCH_SIZE);
-    const results = await provider.summarizeMany(batch);
+    let results: (SummaryResult | undefined)[];
+    try {
+      results = await provider.summarizeMany(batch);
+    } catch (error) {
+      // 整批抛错（网络、429、端点抖动）不等于导入失败：这一批全按「没拿到结果」处理，逐条走确定性补齐。
+      // provider 的契约注释早就写了「单次失败由调用方按条回落」，但回落只有缺项时才触发，
+      // 抛出去过就是整次导入判失败——两种失败形态在这里合流成同一条兜底路径。
+      console.warn(`[summarizer] 第 ${Math.floor(offset / SUMMARY_BATCH_SIZE) + 1} 批调用失败，本批 ${batch.length} 条走确定性档：${error instanceof Error ? error.message : String(error)}`);
+      results = [];
+    }
     for (let index = 0; index < batch.length; index += 1) {
       const slice = batch[index];
       // 这一条没拿到结果（整批失败、回复漏项、或本来就没配模型）→ 用确定性档补齐，不留空行
@@ -150,7 +159,10 @@ export async function summarizeFiles(input: {
         roleSource: result.role ? "provider" : "structure",
         coverage: coverageOf(slice, result.summary)
       };
-      database.putFileSummary(cacheKeyOf(slice, provider.modelVersion, withHeaderComments), stored);
+      // 兜底出来的文本**不写模型档的键**：它不是模型产物，写进去下次同输入就直接命中，
+      // 一句结构文本会永久冒充 LLM 摘要，而 `fallbackFiles` 下次归零——读数上看不出有任何降级发生过。
+      // 落在确定性档的键上，下次同输入仍会重试模型。
+      database.putFileSummary(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
       inputCharacters += JSON.stringify(slice).length;
       byPath.set(slice.path, { ...stored, cached: false });

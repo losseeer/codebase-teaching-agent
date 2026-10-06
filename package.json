@@ -25,7 +25,9 @@
     "postinstall": "pnpm --filter @codebase-tutor/engine run setup:native",
     "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native",
     "search:embed": "pnpm --filter @codebase-tutor/engine search:embed",
-    "cache:probe": "pnpm --filter @codebase-tutor/engine cache:probe"
+    "cache:probe": "pnpm --filter @codebase-tutor/engine cache:probe",
+    "graph:diff": "pnpm --filter @codebase-tutor/engine graph:diff",
+    "calls:diff": "pnpm --filter @codebase-tutor/engine calls:diff"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.4",

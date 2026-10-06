@@ -38,7 +38,14 @@ const DEEP_EXCERPT_LINES = 80;
 const MAX_DEEP_CHARS = 16_000;
 /** 窗口从符号起始行往上多带几行，便于看到装饰器/注册语句。 */
 const DEEP_LEAD_LINES = 5;
-const DEEP_MAX_TOKENS = 900;
+/**
+  核实环节的正文上限。900 是在非推理模型时代定的，DeepSeek 这类模型会把思考 token 也算进
+  `max_tokens`（provider 再加 `TUTOR_LLM_REASONING_HEADROOM`），2026-10-06 实测：
+  17 条流程里 3 条的核实趟被 6900 上限截断成正文为空，整条流程降级成静态调用链——
+  **钱照扣、产物不能用、而且降级不入缓存，下次打开还要再烧一遍**。
+  按「最坏思考 + 满额正文」留到 2400：这只是上限，模型用不到就不花钱。
+*/
+const DEEP_MAX_TOKENS = 2_400;
 const DEEP_SCENE = "map.flow.deep";
 
 const DEEP_SYSTEM_PROMPT = [

@@ -308,7 +308,28 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
             onRemove={(id) => setOverrides((curr) => (curr.custom.some((item) => item.id === id)
               ? { ...curr, custom: curr.custom.filter((item) => item.id !== id) }
               : { ...curr, hidden: [...curr.hidden, id] }))}
-            onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [] })}
+            onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [], tier: {} })}
+            onTierChange={(id, tier) => {
+              const target = modules.find((item) => item.id === id);
+              if (!target?.tier) return;
+              setOverrides((curr) => {
+                const next = { ...curr.tier };
+                if (tier) next[id] = tier;
+                else delete next[id];
+                return { ...curr, tier: next };
+              });
+              // 手动改档是判据的**真值线索**：不改审计线，就永远只能说「用户嫌它不准」而拿不出个数
+              emit(repositoryId, "module_tier_overridden", {
+                module_id: id,
+                module_label: target.label,
+                from: target.tier,
+                to: tier ?? target.tierGiven ?? target.tier,
+                core_share: target.tierEvidence?.coreShare ?? "",
+                visible_files: target.tierEvidence?.visibleFiles ?? "",
+                restored: tier === null
+              });
+              showToast(tier ? `已把「${target.label}」改到${tier === "core" ? "主干" : tier === "facility" ? "设施" : "外围"}` : `已恢复「${target.label}」的引擎判据`);
+            }}
           >
             <p className="module-hint" title="模块职责来自课程树节点摘要；名称与取舍可在「＋ 配置」里改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
             <ModuleSectionLabel label="推荐入口" note={entryNote} />

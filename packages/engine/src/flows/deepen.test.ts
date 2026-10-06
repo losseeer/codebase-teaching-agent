@@ -120,6 +120,9 @@ describe("按需深入", () => {
     expect(payload.code.map((item) => item.path).sort()).toEqual(["graph/builder.py", "graph/nodes.py"]);
     expect(payload.code.find((item) => item.path === "graph/builder.py")?.from).toBe(1);
     expect(seen!.scene).toBe("map.flow.deep");
+    // 正文上限 2,400（10-06 前是 900）：推理模型把思考 token 也算进 max_tokens，900+6,000 余量当天被 13 条里的 2 条撞满，
+    // 核实趟正文为空 → 整条流程退成静态视图。上限不是配额，用不到不多花钱。
+    expect(seen!.maxTokens).toBe(2_400);
     expect(seen!.temperature).toBe(0);
     // main.py 与这条边无关，没被读
     expect(payload.code.some((item) => item.path === "main.py")).toBe(false);

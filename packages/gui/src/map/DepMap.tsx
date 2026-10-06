@@ -1,5 +1,5 @@
 import { useMemo, type ReactElement } from "react";
-import type { CourseNode, FileEntry, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import { CAPABILITY_CELL_LABEL, CAPABILITY_LEVEL_LABEL, type CapabilityLevel, type CourseNode, type FileEntry, type RepositoryAnalysis, type RepositoryIndex, type RepositoryLanguageRow } from "@codebase-tutor/shared";
 
 /**
  * 宏观设计 v0.6：模块依赖图（替代旧 FlowMap 课程树流程图）。
@@ -209,6 +209,50 @@ function toCourseNode(node: ModuleNode): CourseNode {
   };
 }
 
+/** 「占多少」的白话写法：小于 1% 也不说 0%，免得看起来像「一个文件都没有」。 */
+function percent(value: number): string {
+  if (value <= 0) return "0%";
+  return `${Math.max(1, Math.round(value * 100))}%`;
+}
+
+/**
+  画布上的读数提示：仓内**主要语言**的「依赖边」这一档不是「可信」时，给一枚小徽标 + 悬停说明。
+
+  为什么值得占一格图例：各语言的依赖解析强度本来就不均（Java 的整包导入、Go 的整包落点、
+  C/C++ 的头文件名回退……），但过去这件事只写在引擎注释里——用户拿到图没法判断
+  「这条边是编译器级的、还是按文件名猜的」。近似必须显式。
+
+  数据只取引擎随分析响应下发的 `languageProfile`（共享能力表的自报口径）：
+  界面**不自己判语言、也不自己判档**，缺这个字段（旧引擎）就整块不显示。
+*/
+function edgeCaveatOf(profile: RepositoryAnalysis["languageProfile"]): { label: string; detail: string } | undefined {
+  if (!profile?.languages.length) return undefined;
+  const edge = (row: RepositoryLanguageRow): CapabilityLevel => row.capabilities.cells.dependencyEdge;
+  const inGraph = profile.languages.filter((row) => row.inDependencyGraph);
+  const primary = inGraph[0] ?? profile.languages[0];
+  // 一门口规则都没有的语言占大头：这时图上那些边与它无关，得直说
+  if (!primary.inDependencyGraph) {
+    return {
+      label: `${primary.displayName}：未进依赖图`,
+      detail: `本仓最多的文件是 ${primary.displayName}（${primary.files} 个，占 ${percent(primary.fileShare)}），但引擎没有这门语言的依赖解析规则——它既不出符号也不出边。图上剩下的边只覆盖 ${percent(profile.graphFileShare)} 的文件。`
+    };
+  }
+  const level = edge(primary);
+  if (level === "exact") return undefined;
+  const others = inGraph
+    .slice(1)
+    .filter((row) => row.fileShare >= 0.05 && edge(row) !== "exact")
+    .slice(0, 3)
+    .map((row) => `${row.displayName}（${percent(row.fileShare)}）：${CAPABILITY_CELL_LABEL.dependencyEdge}=${CAPABILITY_LEVEL_LABEL[edge(row)]}`);
+  const lines = [
+    `${primary.displayName} 在本仓有 ${primary.files} 个文件，占 ${percent(primary.fileShare)}。`,
+    `${CAPABILITY_CELL_LABEL.dependencyEdge}=${CAPABILITY_LEVEL_LABEL[level]}：${primary.capabilities.notes.dependencyEdge}`,
+    ...(others.length ? [`同仓其他语言 —— ${others.join("；")}`] : []),
+    ...(profile.parseBackend === "regex" ? [`提醒：本次分析的符号抽取没能用上语法树（${profile.parseBackendReason ?? "原因未记录"}），文件里有哪些函数也要按近似读。`] : [])
+  ];
+  return { label: `${primary.displayName}：${CAPABILITY_CELL_LABEL.dependencyEdge}=${CAPABILITY_LEVEL_LABEL[level]}`, detail: lines.join("\n") };
+}
+
 export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
@@ -219,6 +263,8 @@ export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
   onSelect: (node: CourseNode, scopePaths: string[]) => void;
 }): ReactElement {
   const graph = useMemo(() => buildModuleGraph(index, analysis), [index, analysis]);
+  /** 主要语言的「依赖边」读数提示（不需要提示时 undefined，图例保持原样） */
+  const caveat = useMemo(() => edgeCaveatOf(analysis.languageProfile), [analysis.languageProfile]);
   // 依赖图只画关系：无 import 关系且不含入口的模块（docs/.changeset 等非代码目录）不上图，
   // 数量在图例中明示；全部被过滤时回退全量，避免空画布。
   const { nodes, edges, hiddenModules } = useMemo(() => {
@@ -296,6 +342,8 @@ export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
         <div className="flow-legend">
           <span><i className="green" />入口模块</span>
           <span><i />普通模块</span>
+          {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现，说明直接引引擎自报口径（见 edgeCaveatOf） */}
+          {caveat ? <span className="legend-caveat" title={caveat.detail}>{caveat.label}</span> : null}
           <span className="legend-note">
             {`边 = import 依赖，箭头指向被依赖方 · 越粗引用越多 · 点击模块在抽屉中看文件清单${hiddenModules ? ` · ${hiddenModules} 个无依赖且非入口的模块未显示（完整清单在左侧项目目录）` : ""}`}
           </span>

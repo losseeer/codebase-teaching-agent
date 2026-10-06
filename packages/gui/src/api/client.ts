@@ -1,4 +1,4 @@
-import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, SeamReport, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -150,6 +150,11 @@ export const api = {
   getCourseNodes: (repositoryId: string, parentId: string, offset = 0, limit = 30) => request<CourseNodePage>(`/api/repositories/${repositoryId}/course/nodes?parentId=${encodeURIComponent(parentId)}&offset=${offset}&limit=${limit}`),
   getCourseNodeDetail: (repositoryId: string, nodeId: string) => request<CourseNodeDetail>(`/api/repositories/${repositoryId}/analysis/node?nodeId=${encodeURIComponent(nodeId)}`),
   getAnalysis: (repositoryId: string) => request<RepositoryAnalysis>(`/api/repositories/${repositoryId}/analysis`),
+  /**
+   * 跨仓 HTTP 接缝：把本仓与地址簿里另一个仓的路由字符串配成边（引擎按需算，零模型调用）。
+   * 相关仓挂不起来时按 reason 抛错，界面要能分清「目录挪走了」与「没配对上」。
+   */
+  getSeams: (repositoryId: string, otherRepositoryId: string) => request<SeamReport>(`/api/repositories/${repositoryId}/seams?with=${encodeURIComponent(otherRepositoryId)}`),
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string }; entrypoints: { title: string; anchors: { path: string; line: number }[] }[] }>(`/api/repositories/${repositoryId}/report`),
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getImpact: (repositoryId: string, changedPaths: string[]) => request<ImpactResult>(`/api/repositories/${repositoryId}/impact`, { method: "POST", body: JSON.stringify({ changedPaths }) }),
