@@ -26,7 +26,15 @@ export const EXERCISE_INPUT_VERSION = "exercise-v1";
 
 export interface RefinedExercise {
   exercise: Exercise;
+  /** 只有模型真的改写了题面时才有；回落那几条一律不给，免得账面把降级读成花钱成功 */
   usage?: LlmUsage;
+  /**
+    题面到底是不是模型写的。**没有这一格就分不开**：润色失败时回落的是启发式题面，
+    而调用方过去一律记 `source: "rule"`——润色成功也记同一条，于是漏斗里「LLM 出的题」永远比真相少，
+    而模型端点抽风的那几天看起来像「没人用润色」。回落的原因一并交出去，才知道该修端点还是修解析。
+    */
+  polished: boolean;
+  polishFailure?: "no_excerpt" | "unparsable" | "provider_error";
 }
 
 /** 各题型的题面任务描述与防泄漏约束——标准答案/判分锚点永远是静态分析产出，题面不得暗示它们。 */
@@ -40,7 +48,8 @@ const kindRules: Record<ExerciseKind, string> = {
 export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider): Promise<RefinedExercise> {
   try {
     const excerpt = sourceExcerpt(repositoryPath, exercise);
-    if (!excerpt) return { exercise };
+    // 摘录读不出来＝这道题连源码都没给模型看，题面必然是规则拼的——不记一笔就没人知道润色没跑
+    if (!excerpt) return { exercise, polished: false, polishFailure: "no_excerpt" };
 
     const system = [
       "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
@@ -67,9 +76,10 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
 
     const response = await provider.complete({ system, user, maxTokens: 600, temperature: 0.3, scene: "practice.polish" });
     const refined = parseRefinement(response.text, exercise);
-    return { exercise: refined ?? exercise, usage: refined ? response.usage : undefined };
+    if (!refined) return { exercise, polished: false, polishFailure: "unparsable" };
+    return { exercise: refined, usage: response.usage, polished: true };
   } catch {
-    return { exercise };
+    return { exercise, polished: false, polishFailure: "provider_error" };
   }
 }
 

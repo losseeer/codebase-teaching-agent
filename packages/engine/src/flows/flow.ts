@@ -640,17 +640,31 @@ export function clearRepositoryFlowCache(): void {
   flowCache.clear();
 }
 
-export async function generateRepositoryFlowCached(input: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
+/**
+  流程产物的缓存键（连带算出的 digest）。**只这一处构造**：
+  `generateRepositoryFlowCached` 与 `pnpm flow:reburn --check` 共用它，
+  不然「脚本说要不要重烧」与「产品实际命不命中」就是两套判据，那还查它干什么。
+*/
+export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string }): { key: string; digest: FlowDigest } | undefined {
   const digest = tryBuildFlowDigest(input);
-  if (!digest) return generateRepositoryFlow(input);
-  const key = layerCacheKey({
-    layer: "flow",
-    repositoryId: input.repositoryId,
-    contractVersion: FLOW_INPUT_VERSION,
-    modelVersion: input.provider.modelVersion,
-    payload: digest,
-    scope: input.entry.path
-  });
+  if (!digest) return undefined;
+  return {
+    digest,
+    key: layerCacheKey({
+      layer: "flow",
+      repositoryId: input.repositoryId,
+      contractVersion: FLOW_INPUT_VERSION,
+      modelVersion: input.provider.modelVersion,
+      payload: digest,
+      scope: input.entry.path
+    })
+  };
+}
+
+export async function generateRepositoryFlowCached(input: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
+  const cacheKey = flowCacheKeyOf(input);
+  if (!cacheKey) return generateRepositoryFlow(input);
+  const key = cacheKey.key;
   const now = Date.now();
   const hit = flowCache.get(key);
   if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
@@ -667,7 +681,7 @@ export async function generateRepositoryFlowCached(input: GenerateFlowInput & { 
     input.database?.touchLayerCache(key, now);
     return { ...stored.value, usage: undefined };
   }
-  const result = await generateFromDigest(input, digest);
+  const result = await generateFromDigest(input, cacheKey.digest);
   if (result.source === "llm" || result.deterministic) {
     // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）；
     // 只有瞬时失败（调用异常 / 解析不出）走到 else，下次访问重试。

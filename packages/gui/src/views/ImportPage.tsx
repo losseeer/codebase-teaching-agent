@@ -34,6 +34,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [error, setError] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   const navigate = useNavigate();
+  /** 预算闸门是否失效（引擎按进程环境给出，地址簿每条都带同一句）——取一条代表即可，与具体仓库无关 */
+  const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
   /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
   const switchLogged = useRef(false);
 
@@ -100,10 +102,20 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
       {catalog.length > 0 && (
         <div className="import-catalog" aria-label="地址簿里已导入的仓库">
           <div className="import-catalog-head">地址簿里已导入的 {catalog.length} 个仓<span>点一下就切过去，不用重填路径，也不会重新烧 token</span></div>
+          {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
+              成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
+          {gateNotice && <p className="cost-notice">{gateNotice}</p>}
           {catalog.map((item) => {
             const isCurrent = item.repositoryId === workspace?.repositoryId;
             const verdict = item.freshness?.verdict;
-            const note = !item.exists ? "目录已不在这里" : item.mounted ? "引擎已挂载" : "未挂载：点开才读它的产物";
+            // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会
+            const note = !item.exists
+              ? "目录已不在这里"
+              : item.mounted
+                ? item.watching === false
+                  ? `引擎已挂载，但增量监听没起来：${item.watchError ?? "原因未知"}。改完代码不会自动重分析，新鲜度停在挂载那一刻`
+                  : "引擎已挂载"
+                : "未挂载：点开才读它的产物";
             return (
               <button
                 key={item.repositoryId}
@@ -114,8 +126,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
               >
                 <span className="import-catalog-name">{item.name}</span>
                 <span className="import-catalog-path">{item.repositoryPath}</span>
-                <span className={`import-catalog-state${item.exists ? "" : " bad"}${verdict === "stale" ? " stale" : ""}`}>
-                  {isCurrent ? "当前" : !item.exists ? "目录不存在" : verdict === "stale" ? "产物已过期" : note}
+                <span className={`import-catalog-state${item.exists ? "" : " bad"}${verdict === "stale" ? " stale" : ""}${item.mounted && item.watching === false ? " stale" : ""}`}>
+                  {isCurrent ? "当前" : !item.exists ? "目录不存在" : item.mounted && item.watching === false ? "无增量监听" : verdict === "stale" ? "产物已过期" : note}
                 </span>
                 <ChevronRight size={15} />
               </button>

@@ -6,7 +6,9 @@
   （§34.7 记的缺口），改图判据后必须有个通道把新图落到流程产物里。
 
   用法：
-    pnpm flow:reburn [仓库路径] [--limit N] [--entry 关键词] [--repeat N] [--nocache]
+    pnpm flow:reburn [仓库路径] [--limit N] [--entry 关键词] [--repeat N] [--nocache] [--check]
+  - `--check`：只算缓存键、报「命中 / 待烧」，一个请求都不发也不写库。
+    问「还有哪些产物不是当前判据算出来的」就用它——键的构造与产品共用 `flowCacheKeyOf`，两套判据才是一条心。
   - `--limit`：按入口清单顺序只烧前 N 个入口（默认全部）。
   - `--entry`：只烧路径或标签里含这个子串的入口（多样本量方差就靠它 + `--repeat`）。
   - `--repeat N` / `--nocache`：绕开缓存真发 N 次请求。**同一条流程的两次读数能差 16 个百分点**
@@ -19,7 +21,7 @@ import type { SourceAnchor } from "@codebase-tutor/shared";
 import { loadDotEnv } from "../config/dotenv.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";
-import { generateRepositoryFlow, generateRepositoryFlowCached } from "../flows/flow.js";
+import { flowCacheKeyOf, generateRepositoryFlow, generateRepositoryFlowCached } from "../flows/flow.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal } from "../store/journal.js";
 
@@ -59,6 +61,22 @@ const entries = matched.slice(0, Number.isFinite(limit) && limit > 0 ? limit : m
 const repeat = Math.max(1, Number(valueOf("repeat") ?? 1));
 const nocache = flags.has("--nocache") || repeat > 1;
 if (!entries.length) throw new Error(wanted ? `没有入口匹配「${wanted}」` : "该仓库没有入口清单");
+
+const check = flags.has("--check");
+if (check) {
+  console.log("只算键、不发请求：命中=这行产物就是当前判据算出来的；待烧=下次打开会重烧（或现在批量烧掉）");
+  let stale = 0;
+  for (const entry of entries) {
+    const cacheKey = flowCacheKeyOf({ repositoryPath, index, analysis, entry, provider, summaries, repositoryId: index.repositoryId });
+    if (!cacheKey) { console.log(`  算不出键 ${entry.path.split("/").pop()}（入口不在证据里，产品侧本来就走直降路径）`); continue; }
+    const hit = store.getLayerCache<unknown>(cacheKey.key);
+    if (!hit) stale += 1;
+    console.log(`  ${hit ? "命中" : "待烧"} ${entry.path.split("/").pop()}｜键 ${cacheKey.key.slice(-12)}｜${hit ? `${Math.round((Date.now() - hit.at) / 3_600_000)} 小时前生成` : "没有对应缓存行"}`);
+  }
+  console.log(`\n合计：${entries.length} 个入口里 ${stale} 个待烧（按实测 ≈¥0.17/条 ⇒ ≈¥${(stale * 0.17).toFixed(2)} 峰时口径）`);
+  store.close();
+  process.exit(0);
+}
 
 const journal = new Journal(repositoryPath, index.repositoryId);
 console.log(`仓库 ${repositoryPath}｜入口 ${entries.length} 个（全仓 ${analysis.graph.entrypoints.length}）｜摘要 ${summaries.size} 条｜${nocache ? `绕缓存，每入口 ${repeat} 次` : "走缓存（命中即零成本）"}`);

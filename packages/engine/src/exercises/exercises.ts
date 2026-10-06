@@ -22,6 +22,13 @@ type ExpectedAnswer =
 interface StoredExercise {
   exercise: Exercise;
   expected: ExpectedAnswer;
+  /**
+    题面来源：`llm` 模型改写成功 / `failed` 试了但回落启发式 / `not_configured` 没配模型。
+    缺省（旧行）= 当时没记，读作 unknown，不事后猜。
+    */
+  polish?: "llm" | "failed" | "not_configured";
+  /** 失败形状（`no_excerpt` / `unparsable` / `provider_error`）；跟着缓存行走，命中时才知道当时坏在哪 */
+  polishFailure?: string | null;
 }
 
 interface SafeInvocation {
@@ -53,13 +60,34 @@ const kinds: ExerciseKind[] = EXERCISE_KINDS;
   该文件的哈希——自动退化回全仓语义，不会出现「该失效没失效」。
 
   另外两个轴**换模型**（同一份代码在另一个模型上不是同一道题）、**改题面提示词**（口径版本）对两档都生效。
+  第三个必要轴是**图本身**（只对全仓那一档）：impact 题的标准答案出自 `impactRadius`，而图可以在源码一字不动时
+  被引擎判据换掉——10-06 补上「接口→实现」与「变量接收者」两类边就是这样，`versionStamp` 没动、答案却变了。
+  所以作用域里带 `graphStampOf` 的图指纹：**图一变，旧那行自动失效**，不会一直拿旧图答人。
   注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，展示与旧数据兼容靠它，
   作答校验走 `contentHashes`（见 `exerciseIsCurrent`）。
   静态题（output_prediction / change_localization / impact_analysis）的 id 只含**文件哈希部分**、
   不含模型与口径版本——标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
  */
-function exerciseScope(versionStamp: string, modelVersion: string): string {
-  return `${versionStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
+  return `${versionStamp}#${graphStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+}
+
+/**
+  图的指纹：入口清单 + import 边 + 跨文件调用边 + 类型派发边各取「参与判据的部分」排序后哈希。
+  不数行号、不数符号：那两类信息不影响 impact 答案，把它们进键会让每次无关改动都重烧一次出题。
+  按 `analysis` 对象记忆化：一个请求里多处算键时不重复遍历整张图。
+*/
+const graphStamps = new WeakMap<RepositoryAnalysis, string>();
+function graphStampOf(analysis: RepositoryAnalysis): string {
+  const memo = graphStamps.get(analysis);
+  if (memo) return memo;
+  const graph = analysis.graph;
+  const imports = Object.keys(graph.imports).sort().map((path) => `${path}>{${[...(graph.imports[path] ?? [])].sort().join(",")}}`);
+  const calls = (graph.calls ?? []).map((call) => `${call.callerPath}>${call.calleePath}`).sort();
+  const dispatch = (graph.dispatch ?? []).map((edge) => `${edge.subtypePath}=${edge.kind}=>${edge.supertypePath}`).sort();
+  const stamp = hash(`${imports.join(";")}|${calls.join(";")}|${dispatch.join(";")}`).slice(0, 16);
+  graphStamps.set(analysis, stamp);
+  return stamp;
 }
 
 /** 文件粒度作用域的「文件部分」：path@hash 逗号串。id 与缓存作用域共用它，保证二者同生同灭。 */
@@ -91,10 +119,13 @@ function staleDependencies(repository: PracticeRepository, exercise: Exercise): 
 export class ExerciseService {
   getSummary(repository: PracticeRepository): PracticeSummary {
     const database = new TutorDatabase(repository.path);
-    const mastery = this.mastery(repository, database);
-    const dueReviews = database.getReviewSchedules(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
-    database.close();
-    return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
+    try {
+      const mastery = this.mastery(repository, database);
+      const dueReviews = database.getReviewSchedules(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
+      return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
+    } finally {
+      database.close();
+    }
   }
 
   /**
@@ -132,16 +163,26 @@ export class ExerciseService {
       const deps = exerciseDeps(repository, target.kind, target.value);
       const scope = deps.length
         ? `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`
-        : exerciseScope(repository.analysis.versionStamp, modelVersion);
+        : exerciseScope(repository.analysis.versionStamp, modelVersion, graphStampOf(repository.analysis));
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) {
-        journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId });
+        // 缓存命中也要报当时润色过没有：旧行没这个字段就是 unknown（null），不替它编
+        journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
         return cached.exercise;
       }
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
+      /**
+        题面到底出自谁。**过去这一格是缺的**：润色失败静默回落启发式题面，而 journal 一律记 `source: "rule"`
+        ——润色成功也记同一条，于是漏斗里「模型写的题面」永远比真相少，端点抽风的那几天看着像「没人用润色」。
+        三种成因分开记（模型改写成功 / 试了但失败 / 压根没配模型），失败时把失败形状一起写。
+        */
+      let polish: StoredExercise["polish"] = "not_configured";
+      let polishFailure: string | null = null;
       if (provider) {
         const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
-        stored = { ...stored, exercise: refined.exercise };
+        polish = refined.polished ? "llm" : "failed";
+        polishFailure = refined.polishFailure ?? null;
+        stored = { ...stored, exercise: refined.exercise, polish, polishFailure };
         if (refined.usage) journal.append("token_usage", {
           input_tokens: refined.usage.inputTokens,
           output_tokens: refined.usage.outputTokens,
@@ -151,7 +192,7 @@ export class ExerciseService {
         });
       }
       database.putExerciseCache(repository.index.repositoryId, scope, target.kind, target.id, stored);
-      journal.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
+      journal.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, polish, polish_failure: polishFailure });
       return stored.exercise;
     } finally {
       database.close();

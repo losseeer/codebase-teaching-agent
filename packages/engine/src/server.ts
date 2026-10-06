@@ -7,7 +7,7 @@ import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TeachingStage, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
-import { summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
+import { budgetGateNotice, summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
@@ -631,13 +631,31 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   if (!provider) return degradedFlow(repository.analysis, entry, "未配置主力档 LLM 或本月预算已触顶");
   const database = new TutorDatabase(repository.path);
   try {
+    const summaries = latestFileSummaries(repository.path);
+    /**
+      L1 摘要是「每文件最新一条」的**有界**读取（上限见 `LATEST_SUMMARY_LIMIT`），所以大仓上部分路径会静默缺席；
+      从未摘要的文件也一样缺席。流程模型只看得到剩下的那批，这必须是一条**读数**而不是只有一次性的 console 行。
+      ⚠️ 刻意不进 flow 的 digest：进键就等于每改一次读取上限、每多一个文件没摘要，全仓流程缓存一起翻
+      （≈¥0.17/条），而「证据少了几个文件」并不改变这条流程该说什么。
+      */
+    const missingSummaries = repository.index.files.filter((file) => !summaries.has(file.path));
+    if (missingSummaries.length) {
+      traceEngine("degrade", {
+        what: "flow_evidence_gap",
+        repositoryId: repository.index.repositoryId,
+        entry: entry.path.split("/").pop() ?? entry.path,
+        indexed: repository.index.files.length,
+        missing: missingSummaries.length,
+        sample: missingSummaries.slice(0, 5).map((file) => file.path).join("、")
+      }, { traceId: null });
+    }
     const generated = await generateRepositoryFlowCached({
       repositoryPath: repository.path,
       index: repository.index,
       analysis: repository.analysis,
       entry,
       provider,
-      summaries: latestFileSummaries(repository.path),
+      summaries,
       repositoryId: repository.index.repositoryId,
       database
     });
@@ -963,15 +981,18 @@ app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number; s
   if (!hasBudget && !hasToggle) return reply.code(400).send({ error: "至少提供 monthlyBudgetUsd 或 summaryHeaderComments 之一" });
   if (hasBudget && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) return reply.code(400).send({ error: "预算必须是非负数字" });
   const database = new TutorDatabase(repository.path);
-  // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们抹掉
-  const stored = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean; refinement?: unknown }>(repository.index.repositoryId) ?? {};
-  const merged = {
-    ...stored,
-    ...(hasBudget ? { monthlyBudgetUsd: budget } : {}),
-    ...(hasToggle ? { summaryHeaderComments: request.body.summaryHeaderComments } : {})
-  };
-  database.saveSettings(repository.index.repositoryId, merged);
-  database.close();
+  try {
+    // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们抹掉
+    const stored = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean; refinement?: unknown }>(repository.index.repositoryId) ?? {};
+    const merged = {
+      ...stored,
+      ...(hasBudget ? { monthlyBudgetUsd: budget } : {}),
+      ...(hasToggle ? { summaryHeaderComments: request.body.summaryHeaderComments } : {})
+    };
+    database.saveSettings(repository.index.repositoryId, merged);
+  } finally {
+    database.close();
+  }
   const next = { ...readRepositorySettings(repository.path, repository.index.repositoryId) };
   return { ...summarizeCost(repository.path, next.monthlyBudgetUsd), settings: next };
 });
@@ -1245,4 +1266,11 @@ const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
+  // 预算闸门的开关是「三档单价配了没有」：一个都没配时所有付费分支照常放行、一声不吭。
+  // 这属于运行期降级（有闸门名没有闸门），必须落在账面上看得见，而不是等人自己发现账单。
+  const gateNotice = budgetGateNotice();
+  if (gateNotice) {
+    console.warn(`[engine] ${gateNotice}`);
+    traceEngine("degrade", { what: "budget_gate", reason: "pricing_unset" }, { traceId: null });
+  }
 }

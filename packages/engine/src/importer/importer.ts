@@ -18,14 +18,14 @@ import type {
 import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
 import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
-import { summarizeCost } from "../cost/cost.js";
+import { budgetGateNotice, defaultMonthlyBudgetUsd, summarizeCost } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { hash, id, isWithin, repositoryId as deriveRepositoryId } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
-import { RepositoryWatcher } from "../indexer/watcher.js";
+import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
 import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
@@ -33,6 +33,9 @@ import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal } from "../store/journal.js";
 import { traceEngine } from "../trace/engine-log.js";
+
+/** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
+type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch">;
 
 export interface ImportedRepository {
   path: string;
@@ -43,6 +46,11 @@ export interface ImportedRepository {
   watcher?: RepositoryWatcher;
   /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
   freshness: RepositoryFreshness;
+  /**
+    fs 监听的死活。**必须跟着挂载结果一起交出去**：增量重分析是产物变新的唯一自动通道，
+    监听没起来时那次 `freshness` 就只到挂载那一刻为止——界面继续报「产物是新的」是在替引擎撒谎。
+    */
+  watch: WatchStatus;
 }
 
 /**
@@ -210,10 +218,13 @@ export class ImportService extends EventEmitter {
     地址簿清单：**不读任何产物**（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
     `mounted` 的条目带上挂载时算好的新鲜度；未挂载的条目 `artifactsReady` 留空——探它就得读它的 db，
     而「用户没点它」正是懒挂载要省掉的那笔。
+    `budgetGateNotice` 是唯一的例外：它只看进程自己的环境变量（单价配没配），既不读库也不发请求，
+    却必须出现在这里——地址簿是「还没有工作区」的人唯一能看到的页面，而闸门失效正发生在下一次导入。
     */
   catalog(): RepositoryCatalogEntry[] {
     const paths = readRegistry();
     for (const repository of this.repositories.values()) if (!paths.includes(repository.path)) paths.push(repository.path);
+    const gateNotice = budgetGateNotice();
     return paths.map((path) => {
       const repositoryId = catalogRepositoryId(path);
       const mounted = this.repositories.get(repositoryId);
@@ -223,7 +234,16 @@ export class ImportService extends EventEmitter {
         name: basename(path) || path,
         mounted: Boolean(mounted),
         exists: isDirectory(path),
-        ...(mounted ? { artifactsReady: true, freshness: mounted.freshness } : {})
+        ...(gateNotice ? { budgetGateNotice: gateNotice } : {}),
+        ...(mounted
+          ? {
+              artifactsReady: true,
+              freshness: mounted.freshness,
+              // 监听死活跟着挂载项走：它决定「这次新鲜度读数是会自己更新的，还是停在挂载那一刻」
+              watching: mounted.watch.started && !mounted.watch.dead,
+              ...(mounted.watch.error ? { watchError: mounted.watch.error.slice(0, 160) } : {})
+            }
+          : {})
       };
     });
   }
@@ -278,14 +298,23 @@ export class ImportService extends EventEmitter {
     挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代的 `unmountAll()` 是切仓必须重导入的根因），
     改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存摘掉，磁盘产物一字不动。
     */
-  private attach(repository: Omit<ImportedRepository, "watcher" | "freshness">): ImportedRepository {
+  private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
     this.repositories.get(repositoryId)?.watcher?.close();
-    const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths));
-    watcher.start();
+    const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
+      // 运行中途才炸的监听（inotify 额度、网络盘断开）比起不来更阴：它先报 successful start，之后再也不给事件
+      traceEngine("mount", { repositoryId, phase: "watch_died", error: message.slice(0, 200) }, { traceId: null });
+      console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
+    });
+    const watch = watcher.start();
+    if (!watch.started) {
+      traceEngine("mount", { repositoryId, phase: "watch_failed", error: (watch.error ?? "").slice(0, 200) }, { traceId: null });
+      console.warn(`[engine] ${repository.path} 起不了文件监听：${watch.error}。导入产物照样能用，但改动不会自动重分析，界面会把「新鲜度」按挂载那一刻报。`);
+    }
     const mounted: ImportedRepository = {
       ...repository,
       watcher,
+      watch,
       freshness: judgeFreshness(repository.path, repository.index, repository.analysis)
     };
     this.repositories.set(repositoryId, mounted);
@@ -347,9 +376,11 @@ export class ImportService extends EventEmitter {
         // 地址簿写失败不影响导入结果（重启后大不了重新导入），只提示
         console.warn(`[import] 仓库地址簿写入失败：${error instanceof Error ? error.message : String(error)}`);
       }
-      this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区`);
+      // 读不到的文件只让它们自己缺席，但要在完成消息里点名：否则「导入成功」会把少索引这件事盖住
+      const unreadableNote = imported.index.unreadable?.length ? `（${imported.index.unreadable.length} 个文件读不到，已跳过：${imported.index.unreadable.slice(0, 3).map((file) => file.path).join("、")}${imported.index.unreadable.length > 3 ? " 等" : ""}）` : "";
+      this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区${unreadableNote}`);
       job.completedAt = new Date().toISOString();
-      traceEngine("import", { job: jobId, phase: "completed", repositoryId: index.repositoryId, files: index.totalFiles, cards: course.root.children.length }, { traceId: null, durationMs: Date.now() - startedAt });
+      traceEngine("import", { job: jobId, phase: "completed", repositoryId: index.repositoryId, files: index.totalFiles, cards: course.root.children.length, unreadable: index.unreadable?.length ?? 0 }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       job.phase = "failed";
       job.error = error instanceof Error ? error.message : String(error);
@@ -359,12 +390,25 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<Omit<ImportedRepository, "watcher" | "freshness">> {
+  /**
+    句柄生命周期只认这一层：`analyzeWith` 中途抛错（读文件失败、LLM 解析不出、磁盘写不进）
+    也会把库连接关掉。连接挂在 `TutorDatabase` 构造函数上，漏一次就漏一个 FD，
+    而懒挂载是「每请求可能新建一个」——坏库反复重试能把进程拖到 EMFILE。
+    */
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<AnalyzedRepository> {
+    const database = new TutorDatabase(repositoryPath);
+    try {
+      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments);
+    } finally {
+      database.close();
+    }
+  }
+
+  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     const index = indexRepository(repositoryPath);
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
     const versionStamp = contentVersion(repositoryPath, index);
-    const database = new TutorDatabase(repositoryPath);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
@@ -378,9 +422,14 @@ export class ImportService extends EventEmitter {
       database.saveSettings(index.repositoryId, storedSettings);
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
-    // L1 走**轻任务角色**（同一套配置、思考强制 off）：文件级摘要是量大、单条简单的活，开思考只会白烧 token。
-    // 预算已降级时不传 llm ⇒ 自动落到确定性档，不在超预算时继续花钱。
-    const lightProvider = summarizeCost(repositoryPath).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
+    /**
+      该仓预算：取落库值，取不到才用缺省。这里**必须**用同一份，否则「把预算改成 $1」的人
+      在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要 + 宏观润色）。
+      */
+    const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
+    // 闸门只认 `mode === "degraded"`，而它由「算出的钱 ≥ 预算」决定：单价没配时钱恒算 0，
+    // 于是闸门一路放行且不报错。这一格必须作为读数交出去（`/cost` 与成本页、启动日志同一口径）。
+    const lightProvider = summarizeCost(repositoryPath, budgetUsd).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
     // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
     // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。
@@ -423,7 +472,7 @@ export class ImportService extends EventEmitter {
     );
     if (refinementCacheHit) {
       course = storedCourse as CourseTree;
-    } else if (summarizeCost(repositoryPath).mode !== "degraded") {
+    } else if (summarizeCost(repositoryPath, budgetUsd).mode !== "degraded") {
       // 复用导入开头建好的轻量档实例（运行期设置在一次导入内不会变）；预算另查一次——
       // L1 摘要可能刚花掉一部分，所以不能沿用开头那个判断结果
       const mapProvider = lightProvider;
@@ -459,7 +508,6 @@ export class ImportService extends EventEmitter {
     };
     database.saveCourse(course, estimate);
     database.saveAnalysis(analysis);
-    database.close();
     return { path: repositoryPath, index, course, estimate, analysis };
   }
 
@@ -510,11 +558,14 @@ export class ImportService extends EventEmitter {
       }
       next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths, at: new Date().toISOString() };
       const database = new TutorDatabase(current.path);
-      database.saveAnalysis(next.analysis);
-      database.close();
+      try {
+        database.saveAnalysis(next.analysis);
+      } finally {
+        database.close();
+      }
       // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
-      this.repositories.set(repositoryId, { ...next, watcher: current.watcher, freshness: judgeFreshness(current.path, next.index, next.analysis) });
+      this.repositories.set(repositoryId, { ...next, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
       // 只记条数与结果，不把路径数组塞进日志（payload 口径只允许标量）
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });

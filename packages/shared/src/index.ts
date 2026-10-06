@@ -53,6 +53,19 @@ export interface RepositoryIndex {
   files: FileEntry[];
   fileTree: FileTreeNode[];
   hotspots: Hotspot[];
+  /**
+    扫描期**读不出来**的文件（读到一半被删、权限不对、被换成特殊节点）。缺省 = 一个都没有。
+    这些文件被跳过而不算失败（一个坏文件不该掀掉整次导入），但必须记名：
+    `totalFiles` 与后面所有「这个仓有多少代码、哪些文件没摘要」的读数都建立在「缺席是知道的」之上。
+    上限 50 条，超出只按前 50 条报（真出到几百条时，前 50 条足够定位问题目录）。
+    */
+  unreadable?: UnreadableFile[];
+}
+
+/** 扫描期读不到的一个文件与其报错首行（原因要说得出口，不能只给「少了」）。 */
+export interface UnreadableFile {
+  path: string;
+  reason: string;
 }
 
 export interface SourceAnchor {
@@ -689,6 +702,18 @@ export interface RepositoryCatalogEntry {
   /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测，缺省 */
   artifactsReady?: boolean;
   freshness?: RepositoryFreshness;
+  /**
+    增量监听此刻活着吗（只挂着的仓有值）。false = 这个仓**不会**自动跟上磁盘改动，
+    上面那份 `freshness` 只到挂载那一刻为止——不报这条，界面就会一直拿一次旧判定说「产物是新的」。
+    */
+  watching?: boolean;
+  /** 监听起不来或中途死掉的报错原文，配合 `watching: false` 看 */
+  watchError?: string;
+  /**
+    预算闸门此刻是否失效（只在失效时有值）。挂在地址簿而不是等用户进了仓才在成本页说：
+    单价没配 ⇒ 闸门判不出超支 ⇒ 下一次导入就是在无上限花钱，这句话必须出现在花钱**之前**那页。
+    */
+  budgetGateNotice?: string;
 }
 
 /** 懒挂载失败的原因：GUI 要靠它分清「清掉工作区」还是「留着让用户处置」。 */
@@ -818,7 +843,12 @@ export interface CostSummary {
   turns: number;
   /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
   costComponents: CostComponent[];
-  /** 三档单价是否全未配置（`TUTOR_INPUT_USD_PER_MILLION` / `TUTOR_CACHE_HIT_USD_PER_MILLION` / `TUTOR_OUTPUT_USD_PER_MILLION`）；false 时金额恒为 0 */
+  /**
+    三档单价是否全未配置（`TUTOR_INPUT_USD_PER_MILLION` / `TUTOR_CACHE_HIT_USD_PER_MILLION` / `TUTOR_OUTPUT_USD_PER_MILLION`）。
+    ⚠️ false 的连带后果比「金额不好看」严重：`mode` 由「算出的钱 ≥ 预算」决定，钱算不出来就恒为 0、
+    永远判 "normal"，于是**所有**「超预算回落本地规则」的闸门一起静默放行——不是没超预算，是根本没比过。
+    界面必须把这一格说成「预算闸门未生效」，不能只报 $0.0000。
+    */
   pricingConfigured: boolean;
   /** 因预算触顶而走本地规则（不付 token）的回合数 */
   degradedTurns: number;

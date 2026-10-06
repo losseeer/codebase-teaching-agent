@@ -75,6 +75,24 @@ describe("M2.1 exercise service", () => {
     await service.next(repository, { kind: "output_prediction" }, provider("model-b"));
     expect(polishAttempts).toBe(2);
     // 静态题的答案与判分不出自模型，所以两档作用域共用同一个 id 是安全的
+    //
+    // 润色失败必须自己站出来：这三条在过去全记成同一副样子（只有 source:"rule"），
+    // 于是漏斗里「模型写过的题面」永远比真相少，端点抽风的那几天看着像「没人用润色」。
+    const generated = readJournal(repository.path).filter((event) => event.type === "exercise_generated");
+    expect(generated.map((event) => event.payload.polish)).toEqual(["failed", "failed", "failed"]);
+    expect(generated.map((event) => event.payload.polish_failure)).toEqual(["provider_error", "provider_error", "provider_error"]);
+    // 第二条走的是缓存命中：失败形状跟着那一行走，命中时照样知道当时坏在哪
+    expect(generated[1].payload.source).toBe("cache");
+
+    // 另一头也要能看出来：模型真的改写过的题，记的是 polish:"llm"，而不是同样一句「rule」
+    const working: LlmProvider = {
+      name: "fake", modelVersion: "model-c",
+      complete: async () => ({ text: JSON.stringify({ title: "模型改写的题面", prompt: "模型改写的题干" }), usage: { inputTokens: 800, outputTokens: 120 } })
+    };
+    const polished = await service.next(repository, { kind: "change_localization" }, working);
+    expect(polished.title).toBe("模型改写的题面");
+    const last = readJournal(repository.path).filter((event) => event.type === "exercise_generated").at(-1)!;
+    expect(last.payload).toMatchObject({ source: "rule", polish: "llm", polish_failure: null });
   });
 
   it("executes a bounded output oracle and grades exact dependency sets", async () => {
@@ -121,6 +139,25 @@ describe("M2.1 exercise service", () => {
     expect(exercise.options).toHaveLength(8);
     const result = await new ExerciseService().answer(largeRepository, exercise.id, { selectedIds: ["src/config.js", "src/consumer-0.ts", "src/consumer-1.ts", "src/consumer-10.ts"] });
     expect(result.passed).toBe(true);
+  });
+
+  it("图变了而源码版本一字不动：impact 题的旧缓存行不再冒充当前答案（键里带图指纹）", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const small = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    // 模拟 10-06 那种改图：源代码内容没动（versionStamp 不变），只是引擎多认出一条依赖边
+    const widenedGraph: RepositoryAnalysis["graph"] = {
+      ...repository.analysis.graph,
+      imports: { ...repository.analysis.graph.imports, "src/widened-consumer.js": ["src/config.js"] }
+    };
+    const widened: PracticeRepository = { ...repository, analysis: { ...repository.analysis, graph: widenedGraph } };
+    expect(widened.analysis.versionStamp).toBe(repository.analysis.versionStamp);
+    const large = await service.next(widened, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    // 没有图指纹的话这一条会直接命中上一行（createdAt 一字不差），拿旧图的答案出新题
+    expect(large.createdAt).not.toBe(small.createdAt);
+    // 原图那一行必须还在自己的作用域里：回到旧图要能命中它，而不是被新行覆盖掉
+    const back = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    expect(back.createdAt).toBe(small.createdAt);
   });
 });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Journal } from "../store/journal.js";
-import { defaultMonthlyBudgetUsd, priceComponents, summarizeCost, type Pricing } from "./cost.js";
+import { budgetGateNotice, defaultMonthlyBudgetUsd, priceComponents, summarizeCost, type Pricing } from "./cost.js";
 
 /**
   成本读数全部来自本月 `token_usage` 事件的分桶聚合，金额是三档单价之和。
@@ -87,5 +87,22 @@ describe("summarizeCost", () => {
     expect(scoped.turns).toBe(1);
     expect(scoped.inputTokens).toBe(10);
     expect(scoped.byDay).toHaveLength(1);
+  });
+});
+
+/**
+  闸门告警：`mode` 由「算出的钱 ≥ 预算」决定，单价全零时钱恒为 0，
+  于是「超预算回落本地规则」的每一条分支都静默放行。这句告警是那一整族失效唯一的出口，
+  所以它的触发条件本身要有测试：配了任一档就该闭嘴，全没配才说话。
+  */
+describe("budgetGateNotice", () => {
+  it("三档全没配 → 说清闸门未生效与花钱无上限", () => {
+    const notice = budgetGateNotice({ inputPerMillionUsd: 0, outputPerMillionUsd: 0 });
+    expect(notice).toContain("未生效");
+    expect(notice).toContain("无上限");
+  });
+
+  it("只配了输出价也算闸门在管事 → 不再告警", () => {
+    expect(budgetGateNotice({ inputPerMillionUsd: 0, outputPerMillionUsd: 1.1 })).toBeUndefined();
   });
 });

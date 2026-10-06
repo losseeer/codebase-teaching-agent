@@ -26,6 +26,26 @@ export const envPricing: Pricing = {
   outputPerMillionUsd: rateOf(process.env.TUTOR_OUTPUT_USD_PER_MILLION) ?? 0
 };
 
+/**
+  三档单价里是否**至少有一档**可用。这是预算闸门的开关：`mode` 由「算出的钱 ≥ 预算」决定，
+  全零单价 ⇒ 钱恒为 0 ⇒ 永远判 "normal" ⇒ 所有「超预算回落本地规则」的分支一起静默放行。
+  判据只留这一处：`summarizeCost` 的读数、启动告警与界面文案都从这里出发，不各写一遍。
+  */
+export function pricingIsConfigured(pricing: Pricing = envPricing): boolean {
+  return pricing.inputPerMillionUsd > 0 || (pricing.cacheHitPerMillionUsd ?? 0) > 0 || pricing.outputPerMillionUsd > 0;
+}
+
+/**
+  闸门失效时该说的那句话；闸门在管事时返回 `undefined`。
+  措辞刻意点破「$0.0000 不是没花钱」——只报金额会把人引向「这月很省」，而实际是无上限花钱。
+  句子里**不带预算数字**：这句话会在地址簿（不读每仓 settings）与启动日志（没有仓上下文）两处出现，
+  写死一个数就等于对配过预算的仓撒谎。数字让 `monthlyBudgetUsd` 自己在成本页显示。
+  */
+export function budgetGateNotice(pricing: Pricing = envPricing): string | undefined {
+  if (pricingIsConfigured(pricing)) return undefined;
+  return "预算闸门未生效：三档单价一个都没配（TUTOR_INPUT/CACHE_HIT/OUTPUT_USD_PER_MILLION），花费算不出来 ⇒ 闸门永远判为未超支 ⇒ 实际是无上限调用。配上任一单价即可恢复上限。";
+}
+
 /** 把用量切成三个计费档位。输入口径与 provider 的 `prompt_tokens` 一致：命中那部分**含在**输入里。 */
 export function priceComponents(usage: { inputTokens: number; cacheHitTokens: number; outputTokens: number }, pricing: Pricing): CostComponent[] {
   const hit = Math.max(0, Math.min(usage.inputTokens, usage.cacheHitTokens));
@@ -64,7 +84,7 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
     turns: events.length,
     costComponents,
     // 三档单价全没配时金额恒为 0——这个事实要一起交出去，否则页面一句「本月 $0.0000」看着像真的没花钱
-    pricingConfigured: pricing.inputPerMillionUsd > 0 || (pricing.cacheHitPerMillionUsd ?? 0) > 0 || pricing.outputPerMillionUsd > 0,
+    pricingConfigured: pricingIsConfigured(pricing),
     degradedTurns: events.filter((event) => event.payload.mode === "degraded").length,
     byScene: bucket(events, (event) => typeof event.payload.scene === "string" ? event.payload.scene : "unknown"),
     byProvider: bucket(events, (event) => typeof event.payload.provider === "string" ? event.payload.provider : "unknown"),

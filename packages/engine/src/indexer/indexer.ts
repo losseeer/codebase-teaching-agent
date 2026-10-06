@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
-import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex } from "@codebase-tutor/shared";
+import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/shared";
 import { repositoryId, hash } from "../lib.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
 
@@ -9,6 +9,11 @@ const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", 
 
 export function indexRepository(repositoryPath: string): RepositoryIndex {
   const files: FileEntry[] = [];
+  /**
+    扫描期逐个文件兜底：一个文件读不出来（读到一半被删、权限不对、被换成特殊节点）只该让它自己缺席，
+    不该掀掉整次导入。但缺席必须**记名**——静默少索引一批文件，后面「这个仓有多少代码」的读数会跟着说谎。
+    */
+  const unreadable: UnreadableFile[] = [];
   const ignore = createTutorIgnoreMatcher(repositoryPath);
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -18,7 +23,14 @@ export function indexRepository(repositoryPath: string): RepositoryIndex {
         if (ignore.shouldTraverse(path)) visit(absolute);
       }
       else if (entry.isFile() && !ignore.ignores(path) && sourceExtensions.has(extname(entry.name).toLowerCase())) {
-        const content = readFileSync(absolute, "utf8");
+        let content: string;
+        try {
+          content = readFileSync(absolute, "utf8");
+        } catch (error) {
+          // 读到一半文件被删 / 权限不对 / 被换成特殊节点：只让这一个文件缺席，不掀掉整次导入
+          if (unreadable.length < 50) unreadable.push({ path, reason: error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error) });
+          continue;
+        }
         files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length, contentHash: hash(content).slice(0, 16) });
       }
     }
@@ -33,7 +45,8 @@ export function indexRepository(repositoryPath: string): RepositoryIndex {
     totalLines: files.reduce((sum, file) => sum + file.lines, 0),
     files,
     fileTree: toTree(files),
-    hotspots: gitHotspots(repositoryPath, ignore)
+    hotspots: gitHotspots(repositoryPath, ignore),
+    ...(unreadable.length ? { unreadable } : {})
   };
 }
 

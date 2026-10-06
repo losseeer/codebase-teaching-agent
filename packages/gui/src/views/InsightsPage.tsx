@@ -76,8 +76,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           <p className="cost-amount-note">
             {cost ? `${tokensText(cost.billedInputTokens)} 输入未命中 · ${tokensText(cost.cacheHitTokens)} 缓存命中 · ${tokensText(cost.outputTokens)} 输出 · ${cost.turns} 个回合` : "读取中"}
           </p>
-          <div className={`mode-label ${cost?.mode ?? "normal"}`}>
-            {cost?.mode === "degraded" ? "已触顶，降级为本地规则" : "正常运行"}
+          <div className={`mode-label ${cost?.mode ?? "normal"}`} title={pricingConfigured ? undefined : "单价未配置 ⇒ 花费算不出来 ⇒ 「超预算降级」这道闸没在管事，这个 normal 不是读数"}>
+            {!pricingConfigured ? "无上限运行（闸门未生效）" : cost?.mode === "degraded" ? "已触顶，降级为本地规则" : "正常运行"}
           </div>
         </div>
         <div className="cost-budget-block">
@@ -88,7 +88,9 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           <div className="cost-bar" role="img" aria-label={`预算已用 ${Math.round(usedRatio * 100)}%`}>
             <i style={{ width: `${usedRatio * 100}%` }} />
           </div>
-          <p className="muted">剩余 {usd(cost?.remainingBudgetUsd ?? 0)}；触顶后教学与对话改走本地规则，不再付 token。</p>
+          <p className="muted">{pricingConfigured
+            ? <>剩余 {usd(cost?.remainingBudgetUsd ?? 0)}；触顶后教学与对话改走本地规则，不再付 token。</>
+            : <>这里的剩余金额（{usd(cost?.remainingBudgetUsd ?? 0)}）不构成上限：没有单价就算不出已花金额，「触顶后改走本地规则」那条分支永远走不到。</>}</p>
           <label className="budget-field">调整月度预算（USD）
             <span>
               <input type="number" min="0" step="0.01" value={budget} onChange={(event) => setBudget(event.target.value)} />
@@ -107,10 +109,11 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             <div className="readout"><span>输出 tokens</span><strong>{tokensText(cost.outputTokens)}</strong></div>
             <div className="readout"><span>计费回合</span><strong>{cost.turns - cost.degradedTurns}</strong></div>
             <div className="readout" title="预算触顶后走本地规则、未付 token 的回合数"><span>降级回合</span><strong>{cost.degradedTurns}</strong></div>
+            <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 $0 ⇒ 闸门永远判为未超支，等于无上限调用"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
           </div>
           {!pricingConfigured && (
             <p className="cost-notice">
-              还没配单价（环境变量 <code>TUTOR_INPUT_USD_PER_MILLION</code> / <code>TUTOR_CACHE_HIT_USD_PER_MILLION</code> / <code>TUTOR_OUTPUT_USD_PER_MILLION</code>），所以金额恒为 $0.0000——上面的 token 用量是真实读数，不受影响。
+              还没配单价（环境变量 <code>TUTOR_INPUT_USD_PER_MILLION</code> / <code>TUTOR_CACHE_HIT_USD_PER_MILLION</code> / <code>TUTOR_OUTPUT_USD_PER_MILLION</code>），所以金额恒为 $0.0000——上面的 token 用量是真实读数，不受影响。<strong>更要紧的是这同时也意味着预算闸门没在管事</strong>：引擎里每一处「超预算就回落本地规则」的判断拿到的都是 $0，永远判为没超支，于是月预算形同虚设。配上任一档单价（DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万，约 $0.28 / $1.1）再重启引擎，上限才真的存在。
             </p>
           )}
 
