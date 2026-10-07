@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CAPABILITY_CELLS,
@@ -14,6 +11,7 @@ import {
   type FileEntry
 } from "@codebase-tutor/shared";
 import { languageProfileOf } from "./language-profile.js";
+import { graphExtensions } from "./graph.js";
 
 /**
   语言能力表的回归。要拦的事故有三个：
@@ -21,18 +19,18 @@ import { languageProfileOf } from "./language-profile.js";
   2. **空档**：某门语言某一格没填（或填了个自造的档），界面就会把「没说」显示成「没问题」。
   3. **抬高**：把没规则的格子写成 `approximate` 装「大概能行」，等于回到「假装支持」的老毛病。
 
-  基准是 `graph.ts` 里那条 `extensions` 清单。测试**读它的源码**而不是让它导出：
-  那张清单是建图输入，动一行就要重跑图（正有人在那儿改 Java 入口规则），读侧拿不到就别碰实现。
+  基准是 `graph.ts` 导出的 `graphExtensions`——它**由本表派生**（复审 #121②）。
+  过去这条清单在 graph.ts 里是手写的，而测试不许 import 实现细节，于是测试用正则去**读源码文本**比对，
+  两处判据各活一次：加一门语言要改两处，还得指望那条正则一直跟得上数组的写法。
+  现在清单只有一个来源，这里的检查退化成两件事：派生没漏项（有人又把清单写回硬编码就会红），
+  以及索引范围不因派生而缩小。
 */
 
 const LEVELS: CapabilityLevel[] = ["exact", "approximate", "unsupported"];
-const graphSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "graph.ts"), "utf8");
 
-/** `DependencyGraph` 实际处理的扩展名（graph.ts 顶部那条私有清单）。 */
+/** `DependencyGraph` 实际处理的扩展名 = 表派生出来的那一份（不再有第二处清单）。 */
 function extensionsHandledByGraph(): string[] {
-  const declaration = graphSource.match(/^const extensions = \[([^\]]*)\];/m);
-  expect(declaration, "graph.ts 的扩展名清单形状变了，这里的比对口径要跟着改").toBeTruthy();
-  return [...declaration![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  return [...graphExtensions];
 }
 
 function file(path: string, lines = 1): FileEntry {

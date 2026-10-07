@@ -353,3 +353,41 @@ describe("依赖边 — Vue SFC 与 tsconfig paths 别名", () => {
       expect(graph.imports.get("src/App.vue")).toEqual(["src/stores/user.ts"]);
     }));
 });
+
+describe("说明符落点按发起文件的语言收口（复审 #121①）", () => {
+  it("TS 的 `./util` 不再连到同目录的 util.py / util.go / util.java", async () =>
+    await withRepo("no-cross-language", {
+      "src/a.ts": "import { x } from \"./util\";\nexport const a = x;\n",
+      "src/util.py": "x = 1\n",
+      "src/util.go": "package util\n",
+      "src/util.java": "public class Util {}\n"
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      // 旧写法拿全表 19 个扩展名挨个试，这一条会连到 util.py（同名不同语言优先命中）。
+      // 能力表 typescript 那格自称 dependencyEdge=exact（「落点逐个验证、不是连错」），跨语言猜边正好把它戳穿。
+      expect(graph.imports.get("src/a.ts") ?? []).toEqual([]);
+    }));
+
+  it("同族互连照旧：`.vue` 里 `./panel` 落的还是 `.ts`", async () =>
+    await withRepo("script-family", {
+      "src/comp.vue": "<script setup>\nimport { p } from \"./panel\";\n</script>\n",
+      "src/panel.ts": "export const p = 1;\n"
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      expect(graph.imports.get("src/comp.vue")).toEqual(["src/panel.ts"]);
+    }));
+
+  it(".mts / .cts 进图（能力表补上之前，parser 认它、图不认，符号被标成 other）", async () =>
+    await withRepo("mts-in-graph", {
+      "src/a.mts": "import { u } from \"./util.mjs\";\nexport const a = u;\n",
+      "src/util.mts": "export const u = 1;\n",
+      "src/legacy.cts": "export const legacy = 2;\n"
+    }, (dir) => {
+      const files = indexRepository(dir).files;
+      expect(files.map((file) => file.path), "索引要收 .mts/.cts，否则谈不上进图").toEqual(expect.arrayContaining(["src/a.mts", "src/util.mts", "src/legacy.cts"]));
+      const graph = buildDependencyGraph(dir, files);
+      // `./util.mjs` 按 NodeNext 约定回落到 .ts 家族 → 命中 src/util.mts
+      expect(graph.imports.get("src/a.mts")).toEqual(["src/util.mts"]);
+      expect(graph.symbols.filter((symbol) => symbol.path === "src/legacy.cts").every((symbol) => symbol.language === "typescript"), "带 .cts 后缀的文件不该再被标成 other").toBe(true);
+    }));
+});

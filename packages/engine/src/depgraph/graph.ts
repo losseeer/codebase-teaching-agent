@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, extname, join, normalize } from "node:path";
 import type { CallEdge, DependencyGraphData, FileEntry, ImpactResult, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/shared";
+import { LANGUAGE_CAPABILITIES, languageOfExtension } from "@codebase-tutor/shared";
 import { extractSymbolsFromAst, parseBackendStatus, type ParseBackendStatus } from "./parser.js";
 import { isTestPath } from "./roles.js";
 
@@ -19,7 +20,48 @@ export interface DependencyGraph {
   parseBackendReason?: string;
 }
 
-const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".vue"];
+/**
+  图认哪些扩展名 = **能力表各条目的 `extensions` 汇总**，不在这里再抄一份清单（复审 #121②）。
+  过去这里是一条手写的 19 项数组，而 `capabilities.test.ts` 只能用正则去读源码来核对两者有没有漂移
+  ——判据同源之后，那份测试改成直接 import 这个值。
+  */
+export const graphExtensions: readonly string[] = [...new Set(Object.values(LANGUAGE_CAPABILITIES).flatMap((entry) => entry.extensions))];
+const handledExtensions = new Set(graphExtensions);
+
+/**
+  裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：**按发起文件的语言收口**。
+  旧写法是拿全表 19 个扩展名挨个试，于是同一个目录里 TS 的 `./util` 能连到 `util.py`、`util.go`——
+  而能力表 typescript 那格自称 `dependencyEdge: exact`（「落点逐个验证过」），这条跨语言的猜让那句话不成立。
+  按语言收口后：`typescript` / `vue` 一族互连（SFC 的 `<script>` 里 `./util` 落的就是 `.ts`），
+  其余语言各自只试自己的扩展名。实测两仓（dianping 156 文件 / Xingyan 126）本来就没有跨语言边、
+  也没有同目录同名碰撞，所以这一改**不翻任何已有的边、不引发重烧**，它挡的是混语言仓里的假依赖。
+  */
+const SCRIPT_FAMILY = ["typescript", "vue"] as const;
+
+/** ES/CJS/JSX 的后缀各对应哪份 TS 源文件（NodeNext 的固定对子）。 */
+const nodeNextTargets: Record<string, string[]> = {
+  ".js": [".ts", ".tsx", ".d.ts"],
+  ".jsx": [".tsx"],
+  ".mjs": [".mts", ".d.mts"],
+  ".cjs": [".cts", ".d.cts"]
+};
+
+/**
+  「按 TypeScript 那一族的写法处理」的判据：取自能力表，不再手写正则。
+  两处旧写法（`extractSymbolsWithRegex` 的语言判定、`detectLspStatus` 的探测清单）都漏 `.mts`/`.cts`——
+  回落正则时这类文件的符号会被标成 `other`，LSP 探测也压根不考虑它。
+  ⚠️ 这一族**不含 `.vue`**：SFC 的正文有 `<template>` 包裹，正则回落按 TS 写法扫它会抽出不存在的符号，
+  所以 `.vue` 只参与上面的说明符解析（那里互引是真的），不参与这两处。
+  */
+const tsFamilyExtensions = new Set(LANGUAGE_CAPABILITIES.typescript.extensions);
+
+function specifierExtensions(fromPath: string): readonly string[] {
+  const language = languageOfExtension(extname(fromPath));
+  if (!language) return [];
+  if (language === "typescript" || language === "vue") return SCRIPT_FAMILY.flatMap((entry) => LANGUAGE_CAPABILITIES[entry].extensions);
+  return LANGUAGE_CAPABILITIES[language].extensions;
+}
+
 /** C/C++ 一族的扩展名（cpp 语法同时覆盖纯 C）。 */
 const cppExtensionPattern = /\.(c|h|cc|cpp|cxx|hpp|hh)$/;
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);
@@ -37,7 +79,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   const symbols: SymbolInfo[] = [];
   const contents = new Map<string, string>();
   for (const file of files) {
-    if (!extensions.includes(file.extension)) continue;
+    if (!handledExtensions.has(file.extension)) continue;
     const content = readFileSync(join(repositoryPath, file.path), "utf8");
     contents.set(file.path, content);
     symbols.push(...extractSymbols(file.path, content));
@@ -136,7 +178,8 @@ function extractSymbols(path: string, content: string): SymbolInfo[] {
 }
 
 function extractSymbolsWithRegex(path: string, content: string): SymbolInfo[] {
-  const language = path.endsWith(".py") ? "python" : /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path) ? "typescript" : "other";
+  const extension = extname(path);
+  const language = extension === ".py" ? "python" : tsFamilyExtensions.has(extension) ? "typescript" : "other";
   const symbols: SymbolInfo[] = [];
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
@@ -757,16 +800,21 @@ function resolvePythonImport(from: string, specifier: string, available: Set<str
 
 function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>, aliases: PathAlias[]): string | undefined {
   if (from.endsWith(".py")) return resolvePythonImport(from, specifier, available);
+  // 落点候选只试发起文件那门语言的扩展名，理由见 `specifierExtensions`
+  const candidates = specifierExtensions(from);
   const tryResolve = (candidate: string): string | undefined => {
     const normalized = normalize(candidate).replaceAll("\\", "/");
     const direct = [normalized];
-    // TypeScript 的 NodeNext 约定：源码里写 .js/.mjs 等后缀，实际文件可能是 .ts/.tsx/.d.ts
+    // TypeScript 的 NodeNext 约定：源码里写的是运行时的后缀，实际文件是 TS 的那一个。
+    // 后缀对子是固定的（.js↔.ts、.mjs↔.mts、.cjs↔.cts），所以按表逐项映射，
+    // 不再只写 `.js` 那一支——`.mts/.cts` 这次才第一次进得了图。
     const extension = extname(normalized);
-    if ([".js", ".mjs", ".cjs", ".jsx"].includes(extension)) {
+    const rewritten = nodeNextTargets[extension];
+    if (rewritten) {
       const stripped = normalized.slice(0, -extension.length);
-      direct.push(`${stripped}.ts`, `${stripped}.tsx`, `${stripped}.d.ts`);
+      direct.push(...rewritten.map((target) => `${stripped}${target}`));
     }
-    const possibilities = [...direct, ...extensions.map((item) => `${normalized}${item}`), ...extensions.map((item) => `${normalized}/index${item}`)];
+    const possibilities = [...direct, ...candidates.map((item) => `${normalized}${item}`), ...candidates.map((item) => `${normalized}/index${item}`)];
     return possibilities.find((value) => available.has(value));
   };
   if (specifier.startsWith(".")) return tryResolve(join(dirname(from), specifier));
@@ -962,7 +1010,7 @@ function detectJavaEntrypoints(contents: Map<string, string>): SourceAnchor[] {
 
 function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {
   // java 没有接入 LSP（符号来自 tree-sitter），不进探测列表
-  const languages = new Set(files.map((file) => file.extension === ".py" ? "python" : /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file.extension) ? "typescript" : undefined).filter((value): value is "typescript" | "python" => Boolean(value)));
+  const languages = new Set(files.map((file) => file.extension === ".py" ? "python" as const : tsFamilyExtensions.has(file.extension) ? "typescript" as const : undefined).filter((value): value is "typescript" | "python" => Boolean(value)));
   return [...languages].map((language) => {
     const command = language === "typescript" ? "typescript-language-server" : "pylsp";
     try {

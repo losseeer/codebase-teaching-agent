@@ -1,6 +1,6 @@
-import type { FileEntry, RouteConsumer, RouteLink, RouteProvider } from "@codebase-tutor/shared";
+import { LANGUAGE_CAPABILITIES, type FileEntry, type RouteConsumer, type RouteLink, type RouteProvider } from "@codebase-tutor/shared";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 
 /**
   跨语言接缝（route seam）：**HTTP 路由字符串**是前端与后端之间唯一共享的标识符——它不产生任何语法级依赖边，
@@ -118,14 +118,28 @@ function jsConsumers(path: string, content: string): RouteConsumer[] {
   return found;
 }
 
+/**
+  哪些扩展名参与接缝判定——**只列一次**，提供方/消费方的分派与读文件的闸门都从这两组派生。
+  复审 #121② 点的是这里过去的写法：`extractRouteEndpoints` 里一条 if 链、`routeEndpointsOfFiles` 里另一条正则，
+  同一个问题两份清单；加了 Go 的规则却忘了改正则，Go 的路由就永远读不出来，而且没有任何读数会报这件事。
+  扩展名本身取自共享能力表（`vue` 也算消费方：SFC 的 `<script>` 里就是 fetch/axios）。
+  ⚠️ 这一改顺带把 `.mjs`/`.cjs` 纳进消费方（旧正则漏了）——两仓实测没有这类文件，接缝读数不变。
+*/
+const providerExtensions = new Set([...LANGUAGE_CAPABILITIES.java.extensions, ...LANGUAGE_CAPABILITIES.python.extensions]);
+const consumerExtensions = new Set([...LANGUAGE_CAPABILITIES.typescript.extensions, ...LANGUAGE_CAPABILITIES.vue.extensions]);
+/** 值得为接缝打开的文件（其余连读都不读）。 */
+export const routeFileExtensions: readonly string[] = [...providerExtensions, ...consumerExtensions];
+
 /** 从一批文件内容里抽出提供方（Java + Python）与消费方（JS 家族）。 */
 export function extractRouteEndpoints(contents: Map<string, string>): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
   const providers: RouteProvider[] = [];
   const consumers: RouteConsumer[] = [];
   for (const [path, content] of contents) {
-    if (path.endsWith(".java")) providers.push(...springProviders(path, content));
-    else if (path.endsWith(".py")) providers.push(...pythonProviders(path, content));
-    else if (/\.(ts|tsx|js|jsx|vue)$/.test(path)) consumers.push(...jsConsumers(path, content));
+    // 后缀比较与上面闸门同一份集合：路径没后缀时 extname 给空串，两个集合都不含它，自然跳过
+    const extension = extname(path).toLowerCase();
+    if (extension === ".java") providers.push(...springProviders(path, content));
+    else if (extension === ".py") providers.push(...pythonProviders(path, content));
+    else if (consumerExtensions.has(extension)) consumers.push(...jsConsumers(path, content));
   }
   return { providers, consumers };
 }
@@ -155,9 +169,10 @@ export function matchRouteSeams(providers: RouteProvider[], consumers: RouteCons
 
 /** 读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。 */
 export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
+  const handled = new Set(routeFileExtensions);
   const contents = new Map<string, string>();
   for (const file of files) {
-    if (!/\.(java|py|ts|tsx|js|jsx|vue)$/.test(file.extension)) continue;
+    if (!handled.has(file.extension)) continue;
     try {
       contents.set(file.path, readFileSync(join(repositoryPath, file.path), "utf8"));
     } catch {

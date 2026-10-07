@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { Language, Parser } from "web-tree-sitter";
-import type { SymbolInfo } from "@codebase-tutor/shared";
+import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/shared";
 import { traceEngine } from "../trace/engine-log.js";
 
 /**
@@ -55,15 +55,17 @@ function grammarOf(path: string): GrammarName | undefined {
   return undefined;
 }
 
-/** `SymbolInfo.language` 的口径与索引层保持一致，与用哪种语法解析无关。 */
+/**
+  `SymbolInfo.language` 的口径与索引层保持一致，与用哪种语法解析无关：
+  「扩展名 → 语言」这一步**用共享能力表**（复审 #121）。上面 `grammarOf` 认 `.mts`/`.cts`，
+  而这一条过去自己手写一份正则、把它们漏在外面——同一个文件用 TypeScript 语法解析、却被标成 `other`，
+  于是「这门语言有几个符号」的读数按扩展名分堆时漏算。两处判据同源之后不会再各走各的。
+  表里的 `vue` 不在这个联合类型里（SFC 的符号取自 `<script>` 块，历史上按 other 记），显式映射而不是默默漏。
+  */
 function languageOf(path: string): SymbolInfo["language"] {
-  if (path.endsWith(".java")) return "java";
-  if (path.endsWith(".py")) return "python";
-  if (path.endsWith(".go")) return "go";
-  if (path.endsWith(".rs")) return "rust";
-  if (path.endsWith(".cs")) return "csharp";
-  if (/\.(c|h|cc|cpp|cxx|hpp|hh)$/.test(path)) return "cpp";
-  return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path) ? "typescript" : "other";
+  const language = languageOfExtension(extname(path));
+  if (!language || language === "vue") return "other";
+  return language as SymbolInfo["language"];
 }
 
 type SyntaxNode = NonNullable<ReturnType<Parser["parse"]>>["rootNode"];

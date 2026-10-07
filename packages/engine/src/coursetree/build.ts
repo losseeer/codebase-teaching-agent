@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import type { CourseNode, CourseTree, FileEntry, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
 import type { DependencyGraph } from "../depgraph/graph.js";
+import { isTestPath } from "../depgraph/roles.js";
 import type { FileSummary } from "../summarizer/summarizer.js";
 
 /**
@@ -161,11 +162,17 @@ export function attachQuality(tree: CourseTree, quality: QualityReport): CourseT
   return { ...tree, root: visit(tree.root) };
 }
 
-/** 仓内 fixture/demo 目录不是真实的执行入口（如 test-fixtures 里的示例仓库），不作为「执行路径」的讲述对象。 */
-const FIXTURE_SEGMENT = /(?:^|\/)(?:test-fixtures|fixtures?|demos?|examples?|__tests__|__mocks__|snapshots?)(?:\/|$)/i;
+/**
+  「不作为执行路径讲述」= 测试文件 ∪ 示例/快照目录。
+  测试那一半**不在这儿重写**：判据只有 `roles.ts` 的 `isTestPath` 一份（复审 #121——过去这两处
+  各维护一份段落清单，roles 那份有 spec/testing/e2e，这份有 demos/examples/mocks/snapshot，
+  谁改了谁不知道，同一个 `src/e2e/login.spec.ts` 在角色层算测试、在课程树里却当执行入口讲）。
+  下面这条正则只补「不是测试、但也不会被执行」的目录。
+*/
+const NON_EXECUTABLE_SEGMENT = /(?:^|\/)(?:demos?|examples?|__mocks__|snapshots?)(?:\/|$)/i;
 
 function isFixturePath(path: string): boolean {
-  return FIXTURE_SEGMENT.test(path);
+  return isTestPath(path) || NON_EXECUTABLE_SEGMENT.test(path);
 }
 
 function workflowNode(anchor: { path: string; line: number; label: string }, summaries: Map<string, string>, graph: DependencyGraph): CourseNode {

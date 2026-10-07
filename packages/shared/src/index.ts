@@ -393,11 +393,11 @@ export const LANGUAGE_CAPABILITIES = {
   typescript: {
     language: "typescript",
     displayName: "TypeScript / JavaScript",
-    extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+    extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
     cells: { symbolExtraction: "exact", dependencyEdge: "exact", entrypoint: "approximate", packageResolution: "approximate", buildVisibility: "approximate" },
     notes: {
       symbolExtraction: "按真实语法树抽取函数、类、方法、接口与类型别名，起止行是解析出来的而不是按大括号数出来的。语法树整体加载失败时引擎会回落逐行匹配，并在图数据里写明回落原因。",
-      dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
+      dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证，而且**只试这一门语言（含 Vue 与 TS 互引这一族）的扩展名**——TS 里写 `./util` 不会连到同目录的 `util.py`（2026-10-06 复审 #121 之前是全表挨个试，那种跨语言猜边会把这句话戳穿）。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
       entrypoint: "package.json 里 main / bin / scripts 指到的文件可信；其余入口按文件名（main、index、app、server、cli）认，同名但并非入口的文件会被误标。",
       packageResolution: "只读仓库根那一份 tsconfig.json 的 paths，且只认带星号的通配别名（如 `@/*` → `src/*`）；精确别名、通过 extends 继承来的配置、包内的导出映射都不读，这类别名导入会画不出边。",
       buildVisibility: "读过根 package.json 与 tsconfig.json，但没有应用 include / exclude，也不看子包配置，所以图里的文件集合来自目录扫描，不受构建范围约束。"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RouteProvider } from "@codebase-tutor/shared";
-import { extractRouteEndpoints, matchRouteSeams, normalizeRoute } from "./routes.js";
+import { extractRouteEndpoints, matchRouteSeams, normalizeRoute, routeFileExtensions } from "./routes.js";
 
 /**
   接缝判据的单测：真值来自**写死的文本样例**，不靠跑真仓看效果（这条纪律是 §32/§33 反复用过的）。
@@ -93,5 +93,17 @@ describe("route seam — 配对", () => {
     const links = matchRouteSeams(duplicated, consumers);
     expect(links).toHaveLength(2);
     expect(links.every((link) => link.ambiguousWith === 2)).toBe(true);
+  });
+});
+
+describe("route seam — 读文件的闸门与分派同源（复审 #121②）", () => {
+  it("`.mjs` / `.cjs` 也是消费方：过去闸门那条正则只写了 ts|tsx|js|jsx|vue，这两类文件连读都不读", () => {
+    expect(routeFileExtensions, "闸门清单必须认得 ES/CJS 后缀").toEqual(expect.arrayContaining([".mjs", ".cjs", ".java", ".py", ".vue"]));
+    const { consumers } = extractRouteEndpoints(new Map([
+      ["src/api.mjs", "request.get('/probe/ping');\n"],
+      ["src/legacy.cjs", "fetch('/probe/pong');\n"]
+    ]));
+    expect(consumers.map((consumer) => consumer.path)).toEqual(["src/api.mjs", "src/legacy.cjs"]);
+    expect(consumers.map((consumer) => consumer.route)).toEqual(["/probe/ping", "/probe/pong"]);
   });
 });

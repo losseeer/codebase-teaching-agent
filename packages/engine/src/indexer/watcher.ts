@@ -9,11 +9,32 @@ export interface WatchStatus {
 }
 
 /**
+  引擎产物目录**在这一层恒定不回声**，且刻意**不走** `.tutorignore`：
+  那份配置是用户拥有的，`ignore.test.ts` 里钉着一条「写了 `!.tutor/**` 就该把产物当源码索引」的支持用例
+  ——那是个自洽但奇怪的选择，索引层照办。但监听层不能照办：产物是引擎自己写的，
+  一旦喂回事件就是「写产物 → 触发重分析 → 又写产物」的自激循环，代价为整仓反复重扫（更糟时反复重烧钱）。
+  所以这一条住在这里而不是共用判据里：**「把产物当源码读」可以，「被自己的产物叫醒」不行。**
+  */
+export function isArtifactEcho(path: string): boolean {
+  return path === ".tutor" || path.startsWith(".tutor/");
+}
+
+/**
+  一个监听事件该不该上报成「源码改动」。**抽成纯函数是有原因的**：
+  真 fs 事件在整包并行跑测试时不守时（几十路 fs.watch 同时投递，几秒都可能等不到一个 change），
+  判据留在类里就只能靠时序测；而这条判据一旦破是烧钱级的（自激重分析），所以它必须能确定性测。
+  */
+export function changeWanted(path: string, matcher: { ignores(path: string): boolean }): boolean {
+  if (isTutorIgnoreFile(path)) return true;
+  return !isArtifactEcho(path) && !matcher.ignores(path);
+}
+
+/**
   文件监听是**增强**，不是主流程：不支持 recursive watch 的文件系统（网络盘、只读挂载、inotify 额度用尽）
   上导入照样要能用。但「增强没起来」绝不能等于「没人知道」：
   增量重分析是这仓产物保持新鲜的唯一自动通道，它一停，界面上那个「产物是新的」就会一直停在挂载那一刻。
-  所以 start 把死活如实交出去，并且给 FSWatcher 挂了 `error` 监听——
-  ⚠️ 那条监听是**必需品不是装饰**：`fs.FSWatcher` 是 EventEmitter，运行中抛 error 而没人听，
+  所以 `start()` 把死活如实交出去，并且给 FSWatcher 挂了 `error` 监听——
+  ⚠️ 那条监听是**必需品不是装饰**：`fs.FSWatcher` 是 EventEmitter，运行中报错而没人听，
   Node 会把这次 emit 变成未捕获异常，一整台引擎跟着掉。
   */
 export class RepositoryWatcher {
@@ -24,25 +45,15 @@ export class RepositoryWatcher {
 
   constructor(private readonly repositoryPath: string, private readonly onChange: (paths: string[]) => void, private readonly debounceMs = 450, private readonly onError?: (message: string) => void) {}
 
-  /**
-    引擎产物目录**在这一层恒定不回声**，且刻意**不走** `.tutorignore`：
-    那份配置是用户拥有的，`ignore.test.ts` 里钉着一条「写了 `!.tutor/**` 就该把产物当源码索引」的支持用例
-    ——那是个自洽但奇怪的选择，索引层照办。但监听层不能照办：产物是引擎自己写的，
-    一旦喂回事件就是「写产物 → 触发重分析 → 又写产物」的自激循环，代价为整仓反复重扫（更糟时反复重烧钱）。
-    所以这一条住在这里而不是共用判据里：**「把产物当源码读」可以，「被自己的产物叫醒」不行。**
-    */
-  private echoesOwnArtifacts(path: string): boolean {
-    return path === ".tutor" || path.startsWith(".tutor/");
-  }
-
   start(): WatchStatus {
     try {
       let ignore = createTutorIgnoreMatcher(this.repositoryPath);
       this.watcher = watch(this.repositoryPath, { recursive: true }, (_event, filename) => {
         if (!filename) return;
         const path = String(filename).replaceAll("\\", "/");
+        // 改配置本身要立刻生效，所以它不参与上面的「要不要上报」判断
         if (isTutorIgnoreFile(path)) ignore = createTutorIgnoreMatcher(this.repositoryPath);
-        if (!isTutorIgnoreFile(path) && (this.echoesOwnArtifacts(path) || ignore.ignores(path))) return;
+        if (!changeWanted(path, ignore)) return;
         this.pending.add(path);
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => {

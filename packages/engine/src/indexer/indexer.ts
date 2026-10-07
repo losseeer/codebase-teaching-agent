@@ -3,9 +3,19 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/shared";
 import { repositoryId, hash } from "../lib.js";
+import { graphExtensions } from "../depgraph/graph.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
 
-const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".rb", ".php", ".vue", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"]);
+/**
+  索引只收「扩展名白名单」：全量收会一路收进 .png/.mp4/锁文件，白烧字节、也毁掉热点计数。
+
+  ⚠️ 这份名单刻意**不是「引擎支持的源码语言」**——能力表（`LANGUAGE_CAPABILITIES`）才是那个答案。
+  图内扩展名从表派生（`graphExtensions`，加一门语言只改表这一处，索引自动跟上），
+  表外那一组是「进索引但不进依赖图」的配置 / 文档 / 构建输入，各自写清为什么不进图。
+  单测钉住：两组不重叠、并集等于实际名单、且旧的名单里每一项都还在（别让派生悄悄缩小索引范围）。
+  */
+const nonGraphExtensions = [".rb", ".php", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"];
+const sourceExtensions = new Set([...graphExtensions, ...nonGraphExtensions]);
 
 export function indexRepository(repositoryPath: string): RepositoryIndex {
   const files: FileEntry[] = [];
