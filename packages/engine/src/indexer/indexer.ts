@@ -17,6 +17,10 @@ import { createTutorIgnoreMatcher } from "./ignore.js";
 const nonGraphExtensions = [".rb", ".php", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"];
 const sourceExtensions = new Set([...graphExtensions, ...nonGraphExtensions]);
 
+// 导出这两份清单给单测钉住上面那段口径（两组不重叠、并集即实际名单、索引范围不因派生而缩小）；
+// graphExtensions 由 capabilities.test 直接从 graph.js 取，这里不转发。
+export { nonGraphExtensions, sourceExtensions };
+
 export function indexRepository(repositoryPath: string): RepositoryIndex {
   const files: FileEntry[] = [];
   /**

@@ -1,13 +1,16 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dedupeFileReads, executeReadFile, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
 
 let repoRoot = "";
+/** 仓库之外的一个目录：给「链接指向仓外」那条用例当真目标 */
+let outsideRoot = "";
 
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "tutor-readfile-"));
+  outsideRoot = mkdtempSync(join(tmpdir(), "tutor-readfile-out-"));
   writeFileSync(join(repoRoot, ".env"), "TUTOR_OPENAI_API_KEY=sk-secret\n");
   writeFileSync(join(repoRoot, ".env.example"), "TUTOR_OPENAI_API_KEY=sk-replace-me\n");
   mkdirSync(join(repoRoot, "config"));
@@ -29,10 +32,15 @@ beforeAll(() => {
   writeFileSync(join(repoRoot, "node_modules/pkg/index.js"), "module.exports = 1;");
   mkdirSync(join(repoRoot, ".git"));
   writeFileSync(join(repoRoot, ".git/config"), "[core]");
+  // 绕过面：链接名无害、目标是仓内密钥或仓外文件——字面路径那两道闸都会放行，只有实测目标才拦得住
+  writeFileSync(join(outsideRoot, "secret.txt"), "OUTSIDE-SECRET\n");
+  symlinkSync(join(repoRoot, ".env"), join(repoRoot, "notes.md"));
+  symlinkSync(join(outsideRoot, "secret.txt"), join(repoRoot, "escape.ts"));
 });
 
 afterAll(() => {
   rmSync(repoRoot, { recursive: true, force: true });
+  rmSync(outsideRoot, { recursive: true, force: true });
 });
 
 describe("executeReadFile 护栏", () => {
@@ -77,6 +85,15 @@ describe("executeReadFile 护栏", () => {
   it("拒绝路径穿越与绝对路径", () => {
     expect(executeReadFile(repoRoot, JSON.stringify({ path: "../outside.ts" })).audit.denied).toBe(true);
     expect(executeReadFile(repoRoot, JSON.stringify({ path: "/etc/passwd" })).audit.denied).toBe(true);
+  });
+
+  it("软链接不能绕过边界与名单：目标是仓内 .env 或仓外文件时一律拒绝，正文一个字都不给", () => {
+    for (const path of ["notes.md", "escape.ts"]) {
+      const outcome = executeReadFile(repoRoot, JSON.stringify({ path }));
+      expect(outcome.audit.denied, path).toBe(true);
+      expect(outcome.content, path).not.toContain("sk-secret");
+      expect(outcome.content, path).not.toContain("OUTSIDE-SECRET");
+    }
   });
 
   it("拒绝非法 JSON 与缺 path", () => {

@@ -183,7 +183,7 @@ export interface TeachTurn {
 export type InvariantId = "socratic-question" | "reference-grounding" | "anchor-binding";
 
 /** 三条不变量的定义表：离线报告与运行期提示共用同一份措辞与出处，改一处就两边一起变。 */
-export const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
+const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
   { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", source: "tutor-settings.ts「每轮保留一个可验证的问题」" },
   { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", source: "锚点可靠性纪律（第 1 刀同一口径）" },
   { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", source: "tutor-settings.ts「将问题绑定到当前源码锚点」" }

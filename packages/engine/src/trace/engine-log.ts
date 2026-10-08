@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/shared";
+import { logTargetFromEnv } from "../lib.js";
 import { currentTraceId } from "./context.js";
 
 /**
@@ -15,16 +16,13 @@ import { currentTraceId } from "./context.js";
   */
 
 const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "engine.jsonl");
-const DISABLED = new Set(["off", "none", "0", "false"]);
 
 /** 不回显控制台的种类：http 已被 pino 覆盖（且 reqId 就是 traceId），boot 已有 `TUTOR_BOOT_TIMING=1` 的 `[boot]` 行。 */
 const CONSOLE_SILENT = new Set<EngineTraceKind>(["http", "boot"]);
 
 /** 当前日志目标文件；null = 只打控制台（`TUTOR_ENGINE_LOG=off`）。每次读取，便于测试用 env 切换。 */
 export function engineLogPath(): string | null {
-  const raw = (process.env.TUTOR_ENGINE_LOG ?? "").trim();
-  if (!raw) return DEFAULT_LOG_FILE;
-  return DISABLED.has(raw.toLowerCase()) ? null : raw;
+  return logTargetFromEnv(process.env.TUTOR_ENGINE_LOG, DEFAULT_LOG_FILE);
 }
 
 /** 串行写入队列：并发事件不交错，单次写失败不污染后续写入。 */

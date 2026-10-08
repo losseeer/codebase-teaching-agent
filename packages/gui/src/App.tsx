@@ -25,6 +25,62 @@ export type Workspace = _Workspace;
   */
 const WORKSPACE_RETRY_DELAYS = [500, 1500, 3000] as const;
 
+const WORKSPACE_STORAGE_KEY = "codebase-tutor.workspace";
+const SIDEBAR_STORAGE_KEY = "codebase-tutor.sidebar-collapsed";
+
+/**
+  侧栏折叠态的读写。读**必须**包 try/catch 并走 useState 初始化器：这里原来直接 `localStorage.getItem`，
+  而存储不可用（隐私模式 / 被禁）正是上面 readStoredWorkspace 专门兜住的场景——初始化器里一抛就白屏，
+  与上一轮修掉的「读 workspace 炸掉整棵树」是同一类。写也兜住：它挂在事件处理器里，抛错会连累同一处理器
+  里紧随其后的状态更新（updateWorkspace 里 setWorkspace 之后那句 setItem 若抛，reloadCourseData 就跑不到）。
+  */
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsed(value: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, value ? "1" : "0");
+  } catch {
+    /* 存不下只是下次进来不记得折叠态，不影响本次会话 */
+  }
+}
+
+/**
+  读回上次的仓库选择。**这条路径上原来没有 try**：那一个值坏掉（手改过、被截断、别的版本写过别的形状）
+  就等于整棵应用抛在 useState 初始化器里——实测 `/app` 与 `/import` 都是 `#root` 空白 + `SyntaxError`，
+  用户只能自己开 DevTools 删键。坏数据按「没有选择」处理并清掉，让他回到导入页那条活路（地址簿还在，点一下就能选回来）。
+  */
+function readStoredWorkspace(): _Workspace | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+  } catch {
+    return null; // 存储本身不可用（隐私模式 / 被禁）：本次会话内不落 workspace，功能照常
+  }
+  if (!raw) return null;
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+  const { repositoryId, repositoryPath } = (parsed ?? {}) as { repositoryId?: unknown; repositoryPath?: unknown };
+  if (typeof repositoryId === "string" && typeof repositoryPath === "string" && repositoryId && repositoryPath) {
+    return { repositoryId, repositoryPath };
+  }
+  try {
+    localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+  } catch {
+    /* 删不掉也只是每次进来都判一趟 */
+  }
+  return null;
+}
+
 /**
   顶层 Shell（v0.4）：
   - 侧栏：5 项主导航 + 状态指示
@@ -40,17 +96,14 @@ const WORKSPACE_RETRY_DELAYS = [500, 1500, 3000] as const;
   对应 prototype `design-prototype.html` 中的「主导航 + 工作区主区 + Agent 侧栏」。
   */
 export function App(): ReactElement {
-  const [workspace, setWorkspace] = useState<_Workspace | null>(() => {
-    const saved = localStorage.getItem("codebase-tutor.workspace");
-    return saved ? JSON.parse(saved) as _Workspace : null;
-  });
+  const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
   // 引擎的**地址簿**是持久的（N 条路径），但启动一条都不挂载：GUI 恢复 workspace 后第一次访问该仓，
   // 引擎才读它的 `.tutor` 产物挂进内存（超上限的最久未用项被驱逐）。所以这里的校验 = 一次挂载请求，
   // 顺带把新鲜度判定带回来，好在横幅上如实说「这是 X 天前的分析」。
   // 失败分三类处置：**not_in_catalog 才是「本地选择真失效」**（清掉、引到导入页）；
   // directory_missing / artifacts_incomplete 要**留着 workspace**——仓库没丢，是引擎挂不起来，
   // 静默清掉等于把用户的路径弄丢。连不上 / 5xx 多半是引擎正在重启，只退避重试，绝不清 localStorage。
-  const [workspaceReady, setWorkspaceReady] = useState(() => !localStorage.getItem("codebase-tutor.workspace"));
+  const [workspaceReady, setWorkspaceReady] = useState(() => workspace === null);
   /** 校验放弃（连不上 / 5xx 重试耗尽）：本地选择不删，改说「引擎没连上」，并允许手动或 online 后重验。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
   /** 挂载失败（目录挪走 / 产物不全）：workspace 保留，但要说清原因并给出「移出地址簿」这条路。 */
@@ -65,8 +118,11 @@ export function App(): ReactElement {
   useEffect(() => { installJournalRetry(); }, []);
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
-    if (value) localStorage.setItem("codebase-tutor.workspace", JSON.stringify(value));
-    else localStorage.removeItem("codebase-tutor.workspace");
+    // 存储不可用时（隐私模式 / 被禁）本次会话照常工作：见 readSidebarCollapsed 的同款兜底
+    try {
+      if (value) localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(value));
+      else localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+    } catch { /* 落不下盘，下次进来重新选 */ }
   };
   const refreshCatalog = useCallback(async (): Promise<void> => {
     try {
@@ -128,12 +184,12 @@ export function App(): ReactElement {
     return () => { window.removeEventListener("online", retry); };
   }, [engineUnreachable]);
   const chat = useScopedChat(workspace?.repositoryId ?? "");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("codebase-tutor.sidebar-collapsed") === "1");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
   const [repoOpen, setRepoOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem("codebase-tutor.sidebar-collapsed", next ? "1" : "0");
+      writeSidebarCollapsed(next);
       return next;
     });
   };
@@ -224,7 +280,7 @@ export function App(): ReactElement {
             title={`${repositoryNameOf(workspace)}\n${workspace.repositoryPath}\n点击展开侧栏并打开仓库切换`}
             onClick={() => {
               setSidebarCollapsed(false);
-              localStorage.setItem("codebase-tutor.sidebar-collapsed", "0");
+              writeSidebarCollapsed(false);
               setRepoOpen(true);
             }}
           >{repositoryNameOf(workspace).slice(0, 2)}</button>

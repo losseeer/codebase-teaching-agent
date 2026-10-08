@@ -38,7 +38,7 @@ export interface FileSlice {
 /** 每文件进切片的符号条目上限（与「每文件最多展示几个符号」的预算同量级）。 */
 export const MAX_SLICE_ENTRIES = 8;
 /** 依赖方向各给几条：再多也只是重复「它在图里」这个事实。 */
-export const MAX_SLICE_EDGES = 6;
+const MAX_SLICE_EDGES = 6;
 
 /** headerComment 的字符预算：够一段文件/类自述，不够抄整页注释。 */
 export const MAX_HEADER_COMMENT_CHARS = 120;

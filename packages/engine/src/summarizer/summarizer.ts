@@ -209,15 +209,3 @@ function anchored(name: string, text: string): boolean {
   // `RedisTemplate` 拆成整块 "redistemplate"，特征词锚定随之失效。
   return wordsOf(name).some((word) => word.length >= MIN_ANCHOR_WORD && !STRUCTURAL_WORDS.has(word) && tokenHits(word, text));
 }
-
-export function moduleSummaries(summaries: FileSummary[]): Map<string, string> {
-  const modules = new Map<string, FileSummary[]>();
-  for (const summary of summaries) {
-    const directory = summary.path.includes("/") ? summary.path.slice(0, summary.path.lastIndexOf("/")) : "root";
-    modules.set(directory, [...(modules.get(directory) ?? []), summary]);
-  }
-  return new Map([...modules.entries()].map(([directory, values]) => [
-    directory,
-    `${directory} 模块包含 ${values.length} 个文件：${values.slice(0, 3).map((value) => value.path).join("、")}。`
-  ]));
-}

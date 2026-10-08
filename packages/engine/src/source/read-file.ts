@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isWithin } from "../lib.js";
 import type { LlmTool } from "../llm/provider.js";
@@ -9,7 +9,8 @@ import type { LlmTool } from "../llm/provider.js";
   它会绕过「判分答案与锚点不进上下文」的防泄题约束。
 
   护栏（全部强制，非可选项）：
-  1. 路径必须落在仓库内（isWithin），绝对路径/穿越一律拒绝；
+  1. 路径必须落在仓库内（isWithin），绝对路径/穿越一律拒绝；链接目标再按 realpath 复核一次
+     （isWithin 比的是字面路径，仓库内一个名字无害的软链接能把边界与下面两份名单一起绕过去）；
   2. 拒读名单——.env*（仓库根 .env 有真实 API key，读到即入 prompt 发往远端；但 .env.example/.sample/
      .template 这类**模板**只列键名、不含密钥，放行）、密钥与凭据载体（私钥 id_rsa 类、.npmrc/.netrc/
      credentials.json 等）、.git / node_modules / .tutor 目录、二进制文件后缀；
@@ -68,7 +69,6 @@ export interface FileReadRecord {
   path: string;
   /** 本次**实际返回**的行数（不是请求的行数）。 */
   lines?: number;
-  bytes?: number;
   /** 请求的行没给全（被字符预算截住，或某一行本身就超预算被切）。首行会说明实得区间与续读 offset。 */
   truncated: boolean;
   denied: boolean;
@@ -107,6 +107,21 @@ function extensionOf(path: string): string {
   return index < 0 ? "" : path.slice(index).toLowerCase();
 }
 
+/**
+  名字层面的拒绝判据（.env 两头查、无扩展名的凭据载体、密钥/二进制后缀）；返回拒绝理由，`undefined` = 放行。
+  字面路径与软链接的**目标**共用这一份：链接名干净不代表内容干净（`docs/note.md -> ../../.env`）。
+  */
+function deniedNameReason(base: string): string | undefined {
+  const extension = extensionOf(base);
+  // .env 要两头都查：前缀挡住 .env/.env.local，后缀挡住 prod.env/local.env 这类写法；
+  // 模板（.env.example 等）只列键名，放行。
+  const isEnvTemplate = ENV_TEMPLATE_SUFFIXES.some((suffix) => base.toLowerCase().endsWith(suffix));
+  if ((base.startsWith(".env") || extension === ".env") && !isEnvTemplate) return "环境变量文件可能包含密钥，禁止读取";
+  if (DENIED_BASENAMES.has(base.toLowerCase())) return "该文件通常是密钥/凭据载体，不开放读取";
+  if (DENIED_EXTENSIONS.has(extension)) return "该文件类型不开放读取";
+  return undefined;
+}
+
 export function executeReadFile(repoPath: string, argumentsJson: string): ReadFileOutcome {
   let args: { path?: unknown; offset?: unknown; limit?: unknown };
   try {
@@ -129,14 +144,22 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
   const segments = relative.split("/");
   if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return deny("该目录不开放读取");
   const base = segments[segments.length - 1];
-  const extension = extensionOf(base);
-  // .env 要两头都查：前缀挡住 .env/.env.local，后缀挡住 prod.env/local.env 这类写法；
-  // 模板（.env.example 等）只列键名，放行。
-  const isEnvTemplate = ENV_TEMPLATE_SUFFIXES.some((suffix) => base.toLowerCase().endsWith(suffix));
-  if ((base.startsWith(".env") || extension === ".env") && !isEnvTemplate) return deny("环境变量文件可能包含密钥，禁止读取");
-  if (DENIED_BASENAMES.has(base.toLowerCase())) return deny("该文件通常是密钥/凭据载体，不开放读取");
-  if (DENIED_EXTENSIONS.has(extension)) return deny("该文件类型不开放读取");
+  const nameReason = deniedNameReason(base);
+  if (nameReason) return deny(nameReason);
   try {
+    /**
+      软链接复核：上面两道闸（边界、名单）判的都是**字面路径**，而 `fs` 读的是解析后的目标。
+      仓库里放一个名字无害的链接（`docs/note.md -> ../../.env`、`a.ts -> /home/user/.ssh/id_rsa`）
+      就能同时绕过两条护栏，把密钥原文送进发往远端的 prompt——所以目标要实测再判一次，
+      并且复用同一份判据（不另立一套，否则两条口径迟早漂移）。
+      */
+    const realRoot = realpathSync(repoPath);
+    const real = realpathSync(absolute);
+    if (!isWithin(realRoot, real)) return deny("符号链接指向仓库之外");
+    const realSegments = real.slice(realRoot.length + 1).split("/");
+    if (realSegments.some((segment) => DENIED_DIRECTORIES.has(segment))) return deny("符号链接指向不开放的目录");
+    const targetReason = deniedNameReason(realSegments[realSegments.length - 1] ?? "");
+    if (targetReason) return deny(`符号链接指向禁读文件：${targetReason}`);
     const bytes = statSync(absolute).size;
     if (bytes > MAX_FILE_BYTES) return deny(`文件过大（${bytes} 字节）`);
     const lines = readFileSync(absolute, "utf8").split(/\r?\n/);
@@ -161,9 +184,14 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
     const end = start + kept.length - 1;
     const truncated = end < requestedEnd || cutMidLine;
     const total = end < lines.length ? `，共 ${lines.length} 行` : "";
-    const hint = truncated ? `，已达单次字符上限，继续读请用 offset=${cutMidLine ? end : end + 1}` : "";
+    /**
+      续读建议一律指向 `end + 1`：单行被字符上限切开时，那一行的后半段**永远给不出来**
+      （下一次同样只拿到前半段），把 offset 指回它自己等于建议模型原地转圈。
+      这种情况能做的只有说清楚「这行只给了开头」，然后让它往前走。
+      */
+    const hint = truncated ? `，已达单次字符上限${cutMidLine ? `（第 ${end} 行本身超长，只给到开头，整行读不全）` : ""}，继续读请用 offset=${end + 1}` : "";
     const header = `文件 ${relative}（第 ${start}-${end} 行${total}${hint}）`;
-    return { content: `${header}：\n${numbered}`, audit: { path: relative, lines: kept.length, bytes, truncated, denied: false } };
+    return { content: `${header}：\n${numbered}`, audit: { path: relative, lines: kept.length, truncated, denied: false } };
   } catch (error) {
     const message = error instanceof Error ? error.message : "读取失败";
     const hint = message.includes("ENOENT") ? "路径不存在；请对照「项目结构全景」里的真实路径拼写重试。" : "";

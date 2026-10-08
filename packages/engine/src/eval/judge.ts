@@ -33,13 +33,13 @@ export interface JudgeAxis {
   rubric: string;
 }
 
-export const BASE_AXES: JudgeAxis[] = [
+const BASE_AXES: JudgeAxis[] = [
   { key: "接续", rubric: "回复是否接住本轮问题与前情（同会话更早回合）：2=明确回应本轮问题且与前情连贯；1=回应了本轮但明显断裂、重复或答非所问的一部分；0=与前情或本轮问题脱节。" },
   { key: "接地", rubric: "回复的表述是否锚定到具体事物：2=点名到具体文件/符号/行号或本轮上下文里出现过的实体；1=一半泛泛一半有锚；0=全是可平移到任何仓库的泛化表述。注意：只判具体性，不判事实真伪（事实核对由机检负责）。" },
   { key: "易读", rubric: "学习者能否直接消化：2=结构清楚、句子通顺、长度与问题相称；1=能读懂但绕、冗长或结构混乱；0=难以读懂（乱码、半截话、堆术语不解释）。被截断的回复按 1 封顶。" },
 ];
 
-export const TEACH_AXIS: JudgeAxis = { key: "教学法契合", rubric: "回复是否符合给出的教学策略约束（如苏格拉底式应先请学习者推理、留可核对的问题）：2=每条适用约束都有可见动作；1=部分符合；0=与约束相反或完全无视。" };
+const TEACH_AXIS: JudgeAxis = { key: "教学法契合", rubric: "回复是否符合给出的教学策略约束（如苏格拉底式应先请学习者推理、留可核对的问题）：2=每条适用约束都有可见动作；1=部分符合；0=与约束相反或完全无视。" };
 
 export function axesFor(scene: JudgeScene): JudgeAxis[] {
   return scene === "teach" ? [...BASE_AXES, TEACH_AXIS] : BASE_AXES;

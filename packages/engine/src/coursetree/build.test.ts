@@ -124,6 +124,30 @@ describe("course tree", () => {
     expect(ids).toContain("module:docs");
   });
 
+  it("区域名本身也是模块时，合并桶不许吃掉它自己的文件", () => {
+    const file = (path: string) => ({ path, extension: path.slice(path.lastIndexOf(".")), bytes: 10, lines: 2 });
+    const files = [
+      file("observability/check-queries.py"),
+      file("observability/docker-compose.yml"),
+      file("observability/README.md"),
+      file("observability/grafana/dashboards/board.json"),
+      file("observability/prometheus/alerts.yml")
+    ];
+    const tree = buildCourseTree({
+      repositoryId: "repo_test",
+      modelVersion: "fixture-v1",
+      files,
+      summaries: [],
+      graph: { imports: new Map(), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
+    });
+    const modules = tree.root.children.find((node) => node.id === "modules")!.children;
+    const observability = modules.find((node) => node.id === "module:observability")!;
+    expect(observability.summary, "区域名与目录名同名时，原写法用合并结果覆盖了整个模块").toContain("包含 5 个可分析文件");
+    // 这条是「文件不会凭空消失」的总闸：dianping 实测丢了 observability 的三个直属文件（156 个索引文件只剩 153 有归属）
+    const claimed = modules.reduce((sum, node) => sum + Number(/包含 (\d+) 个可分析文件/.exec(node.summary)?.[1] ?? 0), 0);
+    expect(claimed, "每个索引文件都必须有模块归属").toBe(files.length);
+  });
+
   it("合并后的模块仍接得住子目录里的函数节点（逐级上溯，不产孤儿）", () => {
     const file = (path: string) => ({ path, extension: ".ts", bytes: 10, lines: 2 });
     const tree = buildCourseTree({

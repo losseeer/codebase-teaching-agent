@@ -291,7 +291,8 @@ function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefin
   if (!blocks.length) return [];
   const out: SymbolInfo[] = [];
   for (const block of blocks) {
-    // split 出的每行自带换行符，故块前只垫 start-1 个空行；块后补到文件末尾行数，行号全程对齐
+    // 垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行**不带**换行符，`join("\n")` 会在垫子与正文之间
+    // 再补一个，合起来正好 `start` 个换行 ⇒ 块内第一行仍落在原文件的第 start 行，节点行号不用二次换算
     const padded = ["\n".repeat(Math.max(0, block.start - 1)), ...lines.slice(block.start, block.end), "\n".repeat(lines.length - block.end)].join("\n");
     const symbols = parseAndCollect(path, padded, block.ts ? "tsx" : "javascript");
     if (!symbols) return undefined;

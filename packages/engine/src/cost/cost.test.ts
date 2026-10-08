@@ -32,6 +32,9 @@ describe("summarizeCost", () => {
     expect(summary.billedInputTokens).toBe(700);
     expect(summary.outputTokens).toBe(150);
     expect(summary.degradedTurns).toBe(1);
+    // 界面那两格就是这一对差：降级那一行有 mode 标记、又被算进 turns，所以减一次；
+    // 一个回合若留两行（正常行 + 降级行），没付钱的 teach 回合就会混进「计费回合」里。
+    expect(summary.turns - summary.degradedTurns).toBe(2);
     expect(summary.byScene).toEqual([
       { label: "teach", turns: 2, inputTokens: 900, outputTokens: 100 },
       { label: "map_chat", turns: 1, inputTokens: 200, outputTokens: 50 }

@@ -43,8 +43,18 @@ function groupModuleFiles(moduleFiles: Map<string, FileEntry[]>): Map<string, Fi
   }
   for (const [area, bucket] of pending) {
     // 落单的小目录仍按原路径成模块：为了凑数把它挂到一个空泛的区域名下，等于把可定位性换成了整齐
-    if (bucket.dirs.length < 2) merged.set(bucket.dirs[0], bucket.files);
-    else merged.set(area, bucket.files);
+    if (bucket.dirs.length < 2) {
+      merged.set(bucket.dirs[0], bucket.files);
+      continue;
+    }
+    /**
+      区域名本身也可能已经是一个模块（`observability/` 下既有散文件又有若干单子目录），
+      这时必须**并进来**而不是覆盖——原写法 `merged.set(area, bucket.files)` 直接顶掉那个模块，
+      它自己的文件就从模块地图里凭空消失了（dianping 实测：`observability` 的三个直属文件
+      `check-queries.py` / `docker-compose.yml` / `README.md` 整批不见，156 个索引文件只剩 153 个有归属，
+      而 `check-queries.py` 还是这仓识别出来的脚本入口之一）。
+      */
+    merged.set(area, [...(merged.get(area) ?? []), ...bucket.files]);
   }
   return merged;
 }

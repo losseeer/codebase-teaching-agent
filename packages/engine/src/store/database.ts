@@ -13,6 +13,12 @@ const schemaVersion = 8;
 // runtime 接受 addon 对象（见 better-sqlite3/lib/database.js 注释 "string or addon object"）。
 const nativeBinding = loadAddon() as unknown as string;
 
+/**
+  `getLatestFileSummaries` 的缺省行数上限，**同时导出给调用方做触顶判据**——
+  两处各写一个 2000 的话，改一处就会让「读到上限」的告警永远不响（§37.6 那条「一份清单改了两处」的同型坑）。
+*/
+export const LATEST_SUMMARY_LIMIT = 2_000;
+
 /** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
 const LAYER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
@@ -244,7 +250,7 @@ export class TutorDatabase {
     带 `limit` 是因为这张表只会追加、长期累积后全表扫描会变慢；取不到的行不影响正确性
     （缺摘要 = 该文件没有已确认的职责，调用方按「未知」处理）。
   */
-  getLatestFileSummaries(limit = 2_000): { path: string; summary: string; role?: string; coverageLow?: boolean }[] {
+  getLatestFileSummaries(limit = LATEST_SUMMARY_LIMIT): { path: string; summary: string; role?: string; coverageLow?: boolean }[] {
     const rows = this.db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ?").all(limit) as { summary: string }[];
     const latest = new Map<string, { path: string; summary: string; role?: string; coverageLow?: boolean }>();
     for (const row of rows) {

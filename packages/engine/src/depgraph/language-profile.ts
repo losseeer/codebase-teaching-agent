@@ -1,4 +1,5 @@
 import { LANGUAGE_BY_EXTENSION, UNKNOWN_LANGUAGE_CAPABILITIES, languageCapabilitiesOf, type DependencyGraphData, type FileEntry, type RepositoryLanguageProfile, type RepositoryLanguageRow } from "@codebase-tutor/shared";
+import { handledExtensions } from "./graph.js";
 
 /**
   本仓语言画像 = 索引到的文件按扩展名归堆 × 共享语言能力表（`LANGUAGE_CAPABILITIES`）。
@@ -34,7 +35,13 @@ export function languageProfileOf(files: FileEntry[], graph: Pick<DependencyGrap
     if (language) {
       const capabilities = languageCapabilitiesOf(language);
       add(`language:${language}`, { language, displayName: capabilities.displayName, extensions: [...capabilities.extensions], inDependencyGraph: true, capabilities }, file);
-      graphFiles += 1;
+      /**
+        「这门语言进不进图」是行级事实（`inDependencyGraph`），「这个文件进没进图」得按建图那一句判据算——
+        两者不一样：索引器的闸门先 lowercase 再比，`App.TS` 因此在索引里；图层是大小写敏感的，它不在图里
+        （大写后缀整链排除是记录在案的已知局限）。这里若也按小写数，画像会把「进了索引、没进图」
+        报成图内文件数，`graphFileShare` 跟着虚高。
+        */
+      if (handledExtensions.has(file.extension)) graphFiles += 1;
       continue;
     }
     // 未知语言按扩展名各占一行：并成一行会把「300 个文档」说成「一门语言没有规则」，读数就废了

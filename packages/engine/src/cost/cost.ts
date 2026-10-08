@@ -61,6 +61,8 @@ export function priceComponents(usage: { inputTokens: number; cacheHitTokens: nu
 }
 
 export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = defaultMonthlyBudgetUsd, sessionId?: string, pricing: Pricing = envPricing): CostSummary {
+  // 月份边界按 UTC 取（journal 的 `at` 就是 ISO UTC 串，两侧同一口径）：这里若换成本地时区，
+  // 跨月那几天「本月」就跟写入侧对不上，预算会在月初被清零或延后。
   const month = new Date().toISOString().slice(0, 7);
   const events = readJournal(repositoryPath).filter((event) => event.type === "token_usage" && event.at.startsWith(month) && (!sessionId || event.sessionId === sessionId));
   const inputTokens = sum(events, "input_tokens");

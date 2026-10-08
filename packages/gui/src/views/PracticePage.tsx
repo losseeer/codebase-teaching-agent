@@ -161,7 +161,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       <header className="practice-header-compact">
         <p className="eyebrow">间隔复习</p>
         <h1>源码练习</h1>
-        <div className="practice-meta"><span>待复习 {summary?.dueReviews ?? 0}</span><span>已练单元 {summary?.mastery.length ?? 0}</span></div>
+        <div className="practice-meta"><span>待复习 {summary ? summary.dueReviews : "读数未到"}</span><span>已练单元 {summary ? summary.mastery.length : "读数未到"}</span></div>
       </header>
       <ContextLine strong="练习评估" detail={`模块「${moduleLabel}」`} hint="判分结果会回写学习状态（掌握度与下次复习时间）" />
       <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />

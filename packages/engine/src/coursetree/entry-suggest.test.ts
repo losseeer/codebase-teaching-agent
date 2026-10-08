@@ -98,6 +98,17 @@ describe("suggestModuleEntriesCached", () => {
     expect(expandCalls).toHaveLength(2);
   });
 
+  it("候选池为空时翻译层的钱也要入账：usage 不能跟着空列表一起丢", async () => {
+    // 翻译层在选择层之前跑，所以「本轮没问选择层」的三条出口（候选为空 / 内存命中 / 持久层命中）都得把它带回去。
+    // 少带一条，server 侧 `if (suggestion.usage)` 就一条 token_usage 都不记 ⇒ 花了钱而账面看不出来。
+    const { provider, expandCalls, selectCalls } = fakeProvider([["n1"]]);
+    const result = await suggestModuleEntriesCached({ tree: treeWithNodes([]), moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo-empty" });
+    expect(expandCalls).toHaveLength(1);
+    expect(selectCalls).toHaveLength(0);
+    expect(result.entries).toEqual([]);
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+  });
+
   it("模型主动判空（declined）是可信答案：缓存复用，不逐次重试", async () => {
     const { provider, selectCalls } = fakeProvider(["[]"]);
     const tree = treeWithNodes(["n1"]);

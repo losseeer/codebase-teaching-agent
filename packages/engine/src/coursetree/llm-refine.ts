@@ -102,6 +102,15 @@ export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): 
 
   const renames = new Map<string, NodeRename>();
   let usage: LlmUsage | undefined;
+  /**
+    至少有一批**解析成功**（哪怕是模型主动交来空数组）：这一次润色真的跑完了，
+    调用方据此写 `settings.refinement` 标记、并把 usage 记进 token_usage。
+    全批都是「抛错」或「读不出 JSON」时不算跑完：那时 usage 照旧不交，下次导入继续重试
+    （同 §2.8「确定性结论入缓存、瞬时失败重试」，也同本函数「失败原样返回输入树」的既有承诺）。
+    为什么不能只看 `renames.size`：模型按提示词把推断不出的节点全部省略时会交来空数组——
+    钱已经花了，既不记账也不写标记，于是每次导入都重付一遍，而账面看不见。
+    */
+  let parsed = false;
   const batches: OutlineEntry[][] = [];
   for (let offset = 0; offset < outline.length; offset += BATCH_SIZE) {
     batches.push(outline.slice(offset, offset + BATCH_SIZE));
@@ -116,28 +125,32 @@ export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): 
         scene: "map.refine"
       });
       usage = addUsage(usage, response.usage);
-      for (const [key, rename] of parseRenames(response.text)) renames.set(key, rename);
+      const batchRenames = parseRenames(response.text);
+      if (!batchRenames) continue; // 解析不出=坏输出，与「解析出但整批省略」不是一回事
+      parsed = true;
+      for (const [key, rename] of batchRenames) renames.set(key, rename);
     } catch {
       continue; // 单批失败只丢该批，不拖垮整棵地图
     }
   }
-  if (!renames.size) return { course: tree };
+  if (!parsed) return { course: tree };
   return { course: { ...tree, root: applyRenames(tree.root, renames, 0) }, usage };
 }
 
-function parseRenames(text: string): Map<string, NodeRename> {
+/** 解析不出数组时返回 `undefined`（调用方据此区分「坏输出」与「模型真的没改任何名字」）。 */
+function parseRenames(text: string): Map<string, NodeRename> | undefined {
   const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   const start = jsonText.indexOf("[");
   const end = jsonText.lastIndexOf("]");
-  if (start < 0 || end <= start) return new Map();
+  if (start < 0 || end <= start) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText.slice(start, end + 1));
   } catch {
-    return new Map();
+    return undefined;
   }
   const renames = new Map<string, NodeRename>();
-  if (!Array.isArray(parsed)) return renames;
+  if (!Array.isArray(parsed)) return undefined;
   for (const item of parsed) {
     if (!item || typeof item !== "object") continue;
     const key = String((item as { key?: unknown }).key ?? "");

@@ -205,6 +205,8 @@ input { flex: 1; min-width: 0; padding: 10px 11px; }.primary, .secondary { displ
 .panel-title h2 { margin: 0; }
 .mode-label { display: inline-block; padding: 4px 7px; border-radius: 4px; background: #e5f2df; color: #2e644a; font-size: 12px; font-weight: 700; }
 .mode-label.degraded { background: #f9e5e1; color: #963f34; }
+/* 绿色＝正常，所以读数没到时不许沿用绿色：状态未知长得像正常就是撒谎。中性灰是「没读到」的专用色。 */
+.mode-label.unknown { background: #efeae2; color: #6d6455; }
 .budget-field { display: grid; gap: 7px; margin-top: 18px; color: #527164; font-size: 12px; font-weight: 700; }
 .budget-field > span { display: flex; gap: 8px; }
 .budget-field input { width: 100%; padding: 8px; }
@@ -576,7 +578,6 @@ button.entry-item:hover { background: #eef6ef; }
 .feedback strong { display: block; color: #245940; font-size: 12px; }
 .feedback.needs-work strong { color: #8d4635; }
 .feedback p { margin: 6px 0 0; color: #5c7568; font-size: 11px; line-height: 1.5; }
-.feedback .rubric-line { border-top: 1px solid rgba(57, 91, 71, .15); padding-top: 7px; }
 .practice-empty { flex: 1; min-height: 0; display: grid; place-content: center; justify-items: center; text-align: center; color: #6f897d; border-top: 0; }
 .practice-empty p { max-width: 300px; margin: 12px 0; }
 
@@ -609,17 +610,20 @@ button.entry-item:hover { background: #eef6ef; }
 .source-tab-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: #86a094; font-size: 13px; line-height: 1; }
 .source-tab-close:hover { color: #8b3e32; background: #f4e3e0; }
 
-/* 跨仓 HTTP 接缝面板：架构视图下方的一条辅助读数，字号与图例同级，不抢画布 */
-.seam-panel { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 12px; }
+/* 跨仓 HTTP 接缝面板：架构视图下方的一条辅助读数，字号与图例同级，不抢画布。
+   配色用字面量而非 var(--)：这一段当初照 design-prototype.html 的 --border/--surface/--muted 令牌写的，
+   但那套变量只在原型单文件里定义，app 加载的 global.css 从不声明它们——运行时 border 退化成 0px none、
+   background 变透明。改回全站一致的令牌（#d6e1da / #fff / #678277 …），别再造半套变量。 */
+.seam-panel { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid #d6e1da; border-radius: 10px; background: #fff; font-size: 12px; }
 .seam-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .seam-head h3 { margin: 0; font-size: 13px; }
-.seam-head label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-.seam-head select { background: var(--surface-2); color: inherit; border: 1px solid var(--border); border-radius: 7px; padding: 3px 6px; font: inherit; }
+.seam-head label { display: inline-flex; align-items: center; gap: 6px; color: #678277; }
+.seam-head select { background: #fbfdfb; color: inherit; border: 1px solid #cbd9d1; border-radius: 7px; padding: 3px 6px; font: inherit; }
 .seam-group { margin-top: 8px; }
 .seam-group h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
 .seam-group ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
 .seam-row { display: flex; align-items: baseline; gap: 8px; }
-.seam-row code { font-family: var(--mono); font-size: 11px; color: var(--text); word-break: break-all; }
-.seam-via { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); }
-.seam-end { color: var(--muted); font-size: 11px; }
-.seam-error { margin: 6px 0 0; color: var(--warn, #e0a33a); }
+.seam-row code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11px; color: #29473b; word-break: break-all; }
+.seam-via { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; color: #678277; border: 1px solid #cbd9d1; }
+.seam-end { color: #678277; font-size: 11px; }
+.seam-error { margin: 6px 0 0; color: #ae3f36; }

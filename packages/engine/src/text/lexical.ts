@@ -21,7 +21,9 @@ export function themeTokens(...texts: string[]): string[] {
   为什么要它：`themeTokens` 只按空白与标点断句，一句自然的中文提问（「缓存到期的那一瞬间怎么防止打爆数据库」）
   整串是一个词元，`tokenHits` 拿它去 `includes` 语料 ⇒ 注定零命中。也就是说**词法臂在中文整句上的失败，
   一部分不是「没有语义」，而是查询侧根本没切词**。买 embedding 之前必须先量掉这一格，否则会把切词的收益记到向量头上。
-  本函数目前只被评测台架用作「第三臂」的查询预处理；要不要进产品路径，看四臂读数再决定。
+  现在的落点（2026-10-04 拍板，开发日志 §27）：`source/search-code.ts` 的**最后一级兜底**——
+  只有原样查询零命中才切词，且要过 DF 闸与「同一文件 ≥2 枚互不重叠词元」闸；评测台架（`scripts/eval-run.ts`）
+  拿它当「第三臂」量值不值得。整句查询与关键词查询的第一遍行为一字未动。
   */
 export function segmentForLookup(text: string): string {
   const out: string[] = [];

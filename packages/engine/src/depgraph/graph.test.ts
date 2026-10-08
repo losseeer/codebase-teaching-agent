@@ -391,3 +391,53 @@ describe("说明符落点按发起文件的语言收口（复审 #121①）", ()
       expect(graph.symbols.filter((symbol) => symbol.path === "src/legacy.cts").every((symbol) => symbol.language === "typescript"), "带 .cts 后缀的文件不该再被标成 other").toBe(true);
     }));
 });
+
+describe("整仓自环与「每个文件一个源码根」两刀（复审取图层）", () => {
+  beforeAll(async () => {
+    await loadSymbolParser();
+  });
+
+  it("Java 扁平布局（没有 src/main|test）：同包可见与包通配都还在工作", async () =>
+    await withRepo("java-flat-layout", {
+      "App.java": "package com.demo;\n\nimport com.demo.util.*;\n\npublic class App {\n  void run() {\n    Service.ping();\n    Keys.check();\n  }\n}\n",
+      "Service.java": "package com.demo;\n\npublic class Service {\n  public static void ping() {}\n}\n",
+      "util/Keys.java": "package com.demo.util;\n\npublic class Keys {\n  public static void check() {}\n}\n"
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      // 源码根兜底曾返回「文件自身」：于是扁平布局里每个文件都是一个编译范围，
+      // `requireSameRoot` 恒不成立 ⇒ 同包可见与通配展开整条静默失效（边数看上去只是「这仓边少」）。
+      expect(graph.imports.get("App.java"), "包通配要在扁平布局里按正文引用落点").toEqual(["util/Keys.java"]);
+      expect(graph.calls.some((call) => call.callerPath === "App.java" && call.calleePath === "Service.java"), "Java 同包不 import 也互相可见").toBe(true);
+    }));
+
+  it("自环不落依赖边：Go 导自己的包目录、Rust 的 crate 自引用、Python 的绝对自导入", async () =>
+    await withRepo("no-self-loop", {
+      "go.mod": "module example.com/shop\n\ngo 1.21\n",
+      "util/sum.go": "package util\n\nimport \"example.com/shop/util\"\n\nfunc Sum() int {\n\treturn Helper()\n}\n\nfunc Helper() int {\n\treturn 1\n}\n",
+      "src/a.rs": "use crate::a::helper;\n\npub fn run() -> i32 {\n\thelper()\n}\n",
+      "app/store.py": "import app.store\n\ndef load():\n    return app.store\n",
+      "app/__init__.py": ""
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      expect([...graph.imports.entries()].filter(([from, targets]) => targets.includes(from)), "图里不许有 X→X").toEqual([]);
+      expect(graph.imports.get("util/sum.go"), "go 的包目录落点含自己").toEqual([]);
+      expect(graph.imports.get("src/a.rs"), "use crate::<本模块>::X 指回自己").toEqual([]);
+      expect(graph.imports.get("app/store.py"), "import app.store 写在 store.py 里").toEqual([]);
+      // 影响范围也不许把「改它影响它自己」当证据
+      expect(impactRadius(graph, ["util/sum.go"]).edges).toEqual([]);
+    }));
+
+  it("约定名只认代码文件：docs/index.md 与 config/app.json 不是执行入口", async () =>
+    await withRepo("doc-not-entry", {
+      "docs/index.md": "# 说明\n",
+      "config/app.json": "{}\n",
+      "observability/main.yml": "a: 1\n",
+      "src/main.ts": "export const m = 1;\n"
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      // 入口清单会进 `classifyFileRoles`（入口文件直接算 core）与流程 digest：
+      // 把一份 Markdown 当执行起点，流程就从一条不会自己跑的链路讲起
+      expect(graph.entrypoints.map((anchor) => anchor.path)).toEqual(["src/main.ts"]);
+      expect(indexRepository(dir).files.map((file) => file.path), "这三个文件确实进了索引").toEqual(expect.arrayContaining(["docs/index.md", "config/app.json", "observability/main.yml"]));
+    }));
+});

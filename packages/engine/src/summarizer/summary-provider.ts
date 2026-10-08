@@ -147,7 +147,7 @@ export class LlmSummaryProvider implements SummaryProvider {
 }
 
 /** 本地 Ollama（`TUTOR_SUMMARY_PROVIDER=ollama` 时启用）：逐条调用，与批量档共用同一套提示与解析。 */
-export class OllamaSummaryProvider implements SummaryProvider {
+class OllamaSummaryProvider implements SummaryProvider {
   readonly name = "Ollama local model";
 
   constructor(private readonly model = process.env.TUTOR_OLLAMA_MODEL ?? "llama3.2", private readonly endpoint = process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434") {}

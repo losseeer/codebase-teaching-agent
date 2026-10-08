@@ -167,7 +167,11 @@ export function matchRouteSeams(providers: RouteProvider[], consumers: RouteCons
   return links;
 }
 
-/** 读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。 */
+/**
+  读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。
+  ⚠️ 只读这些扩展名的文件，闸门由上面两组分派集合派生——接缝的提供方/消费方判据与「读不读这个文件」
+  必须是同一份清单，否则会出现「规则写了、文件从来没被打开」那种在读数上看不见的漏读（复审 #121②）。
+*/
 export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
   const handled = new Set(routeFileExtensions);
   const contents = new Map<string, string>();
@@ -180,8 +184,4 @@ export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]
     }
   }
   return extractRouteEndpoints(contents);
-}
-
-export function linkRouteSeams(endpoints: { providers: RouteProvider[]; consumers: RouteConsumer[] }): RouteLink[] {
-  return matchRouteSeams(endpoints.providers, endpoints.consumers);
 }

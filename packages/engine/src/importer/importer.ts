@@ -23,7 +23,7 @@ import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } fro
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
-import { hash, id, isWithin, repositoryId as deriveRepositoryId } from "../lib.js";
+import { hash, id, repositoryId as deriveRepositoryId } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
@@ -210,10 +210,6 @@ export class ImportService extends EventEmitter {
     return [...this.repositories.values()];
   }
 
-  findRepositoryForPath(candidatePath: string): ImportedRepository | undefined {
-    return [...this.repositories.values()].find((repository) => isWithin(repository.path, candidatePath));
-  }
-
   /**
     地址簿清单：**不读任何产物**（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
     `mounted` 的条目带上挂载时算好的新鲜度；未挂载的条目 `artifactsReady` 留空——探它就得读它的 db，
@@ -295,7 +291,7 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代的 `unmountAll()` 是切仓必须重导入的根因），
+    挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代「挂载即全卸」是切仓必须重导入的根因），
     改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存摘掉，磁盘产物一字不动。
     */
   private attach(repository: AnalyzedRepository): ImportedRepository {
@@ -330,6 +326,12 @@ export class ImportService extends EventEmitter {
     this.lru.push(repositoryId);
   }
 
+  /**
+    驱逐 = 关它的 fs 监听 + 从内存摘掉（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
+    刻意**不**清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
+    换仓后不可能误命中；实测切仓时清缓存会让下一个回合把完全相同的输入重烧一次
+    （切换 → 重烧 ≈1.5k in / 200 out），而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。
+    */
   private evictBeyondLru(): void {
     while (this.lru.length > maxMounted()) {
       const oldest = this.lru.shift();
@@ -346,16 +348,6 @@ export class ImportService extends EventEmitter {
     this.repositories.delete(repositoryId);
     const position = this.lru.indexOf(repositoryId);
     if (position >= 0) this.lru.splice(position, 1);
-  }
-
-  /** 卸载全部仓库并停掉它们的 fs 监听（测试收尾与关停用）。fs.FSWatcher.close() 幂等，重复关闭无害。
-      刻意**不**清内存态 L2 缓存：键里已经带 `repositoryId` + 本层输入哈希，换仓后不可能误命中；
-      实测在切换仓库时清缓存会让下一个回合把完全相同的输入重烧一次（切换 → 重烧 ≈1.5k in / 200 out），
-      而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。 */
-  private unmountAll(): void {
-    for (const repository of this.repositories.values()) repository.watcher?.close();
-    this.repositories.clear();
-    this.lru.length = 0;
   }
 
   private async run(jobId: string): Promise<void> {

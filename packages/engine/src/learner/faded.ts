@@ -66,5 +66,3 @@ export function deriveFaded(events: JournalEvent[], unitId?: string): FadedState
   }
   return state;
 }
-
-export const defaultFadedState: FadedState = { ...initial };

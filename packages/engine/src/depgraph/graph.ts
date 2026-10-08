@@ -26,7 +26,14 @@ export interface DependencyGraph {
   ——判据同源之后，那份测试改成直接 import 这个值。
   */
 export const graphExtensions: readonly string[] = [...new Set(Object.values(LANGUAGE_CAPABILITIES).flatMap((entry) => entry.extensions))];
-const handledExtensions = new Set(graphExtensions);
+/**
+  建图时真正的那道后缀闸门（`buildDependencyGraph` 与语言画像共用）。
+  ⚠️ **区分大小写**，这是复审里确认过、刻意不收紧的已知局限：`.TS` 这类大写后缀在图这一层一致排除，
+  单点改成小写匹配只会造出「符号按 TS 语法解析、边却连不出来」的半状态。
+  注意它和索引层的闸门不是一条：索引器先 lowercase 再比，所以 `App.TS` 进得了索引清单、进不了图。
+  语言画像必须按**这一句**判据报数，否则它会把「进了索引、没进图」说成「都在图里」。
+  */
+export const handledExtensions = new Set(graphExtensions);
 
 /**
   裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：**按发起文件的语言收口**。
@@ -50,8 +57,11 @@ const nodeNextTargets: Record<string, string[]> = {
   「按 TypeScript 那一族的写法处理」的判据：取自能力表，不再手写正则。
   两处旧写法（`extractSymbolsWithRegex` 的语言判定、`detectLspStatus` 的探测清单）都漏 `.mts`/`.cts`——
   回落正则时这类文件的符号会被标成 `other`，LSP 探测也压根不考虑它。
-  ⚠️ 这一族**不含 `.vue`**：SFC 的正文有 `<template>` 包裹，正则回落按 TS 写法扫它会抽出不存在的符号，
-  所以 `.vue` 只参与上面的说明符解析（那里互引是真的），不参与这两处。
+  ⚠️ 这一族**不含 `.vue`**：它换来的是两件事——回落抽出的符号标成 `other` 而不是冒充 typescript，
+  以及不给 `.vue` 探 TS 语言服务。⚠️ 它**不**意味着回落时 `.vue` 不被那条 JS/TS 正则扫：
+  回落分支只有「python 一条、其余一条」两条正则，SFC 的 `<script>` 块按那一条扫得出的都是真符号
+  （模板里的 `{{ }}` 撞不上 `function`/`const … =>`/`class` 三种形状）。刻意不收紧成「非本族就不抽符号」：
+  那样 wasm 一挂，`.vue`/`.java` 这些文件连回落符号都没了，比标错语言更糟。
   */
 const tsFamilyExtensions = new Set(LANGUAGE_CAPABILITIES.typescript.extensions);
 
@@ -129,12 +139,22 @@ export function serializeGraph(graph: DependencyGraph): DependencyGraphData {
   };
 }
 
+/**
+  改这些文件会波及谁：沿 import 边与跨文件调用边反向往上走。
+  ⚠️ 同文件内的调用**不算**波及关系——图里同文件调用边是常态（dianping 1294 条里 741 条是同一文件内部），
+  不过滤的话每个改动文件都会给自己贡献一条「X 影响 X」的边，影响范围的箭头清单被自环灌满。
+  这与 `roles.ts` 的 `buildFileEdges` 同一条口径（那里是 `key === value` 直接不建）。
+*/
 export function impactRadius(graph: DependencyGraph, changedPaths: string[]): ImpactResult {
   const reverse = new Map<string, { from: string; kind: "import" | "call" }[]>();
   for (const [from, targets] of graph.imports) {
-    for (const to of targets) reverse.set(to, [...(reverse.get(to) ?? []), { from, kind: "import" }]);
+    for (const to of targets) {
+      if (to === from) continue;
+      reverse.set(to, [...(reverse.get(to) ?? []), { from, kind: "import" }]);
+    }
   }
   for (const call of graph.calls) {
+    if (call.callerPath === call.calleePath) continue;
     reverse.set(call.calleePath, [...(reverse.get(call.calleePath) ?? []), { from: call.callerPath, kind: "call" }]);
   }
   const impacted = new Set(changedPaths);
@@ -462,10 +482,15 @@ function extractJavaSpecifiers(content: string): { specifier: string; wildcard: 
   Java 的源码根：`src/main` 与 `src/test`（Maven/Gradle 布局）是两个编译范围，主源码看不见测试源码里的类。
   这条收窄是在参考档踩过「测试类被当成主源码可 import 的目标、凭空造出十条假边」之后补的，
   通配展开与接收者可见表共用它，两处口径必须一致，否则文件级边和调用级边会互相打脸。
+  ⚠️ 认不出 `src/main|test` 的仓返回**空串**（整个仓算一个编译范围），不是文件自身：
+  扁平布局（`com/demo/App.java`、Eclipse 式无 src 的仓）里同包的类本来就互相可见，
+  按「每个文件一个根」判会让 `javaSourceRootOf(a) !== javaSourceRootOf(b)` 恒成立，
+  于是同包可见与包通配展开**整条静默失效**（2026-10-07 复审实测：扁平仓同包调用零边）。
+  真正的收窄靠包名，这里只负责把 main/test 分开。
 */
 function javaSourceRootOf(path: string): string {
   const match = /(^|\/)src\/(main|test)\//.exec(path);
-  return match ? `${path.slice(0, match.index)}src/${match[2]}` : path;
+  return match ? `${path.slice(0, match.index)}src/${match[2]}` : "";
 }
 
 /**
@@ -536,7 +561,15 @@ interface ImportIndex {
 
 /** 按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）一律丢弃，图里只留仓内依赖。 */
 function resolveFileImports(path: string, content: string, index: ImportIndex): string[] {
-  const dedupe = (values: Iterable<string>): string[] => [...new Set(values)];
+  /**
+    收口去重 + **去自环**。自环以前是三个分支各自 `filter(value !== path)`、另三个分支漏写：
+    Go 导入自己所在的包目录、Rust 在 `src/a.rs` 里写 `use crate::a::X`、Python 的绝对自导入
+    （`import app.store` 写在 store.py 里）都能指回自己（2026-10-07 复审实测三种都造出自环）。
+    角色层靠 `buildFileEdges` 的 key===value 挡了一下，但 `impactRadius` 没挡——
+    自环进了影响范围就变成「改它影响它自己」这种废话证据，还会进流程与出题的图指纹。
+    判据只留这一处：以后加语言不会再漏。
+    */
+  const dedupe = (values: Iterable<string>): string[] => [...new Set(values)].filter((value) => value !== path);
   const kept = (values: (string | undefined)[]): string[] => dedupe(values.filter((value): value is string => Boolean(value)));
   if (path.endsWith(".py")) return kept(extractPythonSpecifiers(content).map((value) => resolvePythonImport(path, value, index.available)));
   if (path.endsWith(".java")) {
@@ -546,12 +579,12 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
       if (item.wildcard) resolved.push(...expandJavaWildcard(path, item.specifier, body, index.javaTypes));
       else resolved.push(resolveJavaImport(item.specifier, index.javaTypes));
     }
-    return kept(resolved).filter((value) => value !== path);
+    return kept(resolved);
   }
   if (path.endsWith(".go")) return dedupe(extractGoSpecifiers(content).flatMap((value) => resolveGoImport(value, index.goModules, index.goFilesByDir)));
   if (path.endsWith(".rs")) return kept(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)));
-  if (path.endsWith(".cs")) return kept(extractCSharpSpecifiers(content).flatMap((value) => resolveCSharpImport(value, index.csNamespaces)).filter((value) => value !== path));
-  if (cppExtensionPattern.test(path)) return dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available)).filter((value) => value !== path));
+  if (path.endsWith(".cs")) return kept(extractCSharpSpecifiers(content).flatMap((value) => resolveCSharpImport(value, index.csNamespaces)));
+  if (cppExtensionPattern.test(path)) return dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available)));
   return kept([...content.matchAll(tsSpecifierPattern)].map((match) => resolveImport(path, match[1], index.available, index.packages, index.aliases)));
 }
 
@@ -691,12 +724,12 @@ function extractCppIncludes(content: string): string[] {
   return [...content.matchAll(/^[ \t]*#[ \t]*include[ \t]*"([^"]+)"/gm)].map((match) => match[1]);
 }
 
-/** 先按当前文件相对解析（编译器首要规则）；未命中再按全仓路径后缀匹配——include 目录各异，多个命中就全连。 */
+/** 先按当前文件相对解析（编译器首要规则）；未命中再按全仓路径后缀匹配——include 目录各异，多个命中就全连（自环由 `resolveFileImports` 统一去掉）。 */
 function resolveCppInclude(from: string, specifier: string, available: Set<string>): string[] {
   const relative = slash(normalize(join(dirname(from), specifier)));
   if (available.has(relative)) return [relative];
   const suffix = `/${specifier.replaceAll("\\", "/")}`;
-  return [...available].filter((candidate) => candidate.endsWith(suffix) && candidate !== from);
+  return [...available].filter((candidate) => candidate.endsWith(suffix));
 }
 
 interface WorkspacePackage {
@@ -798,8 +831,8 @@ function resolvePythonImport(from: string, specifier: string, available: Set<str
   return [`${target}.py`, `${target}/__init__.py`].find((candidate) => available.has(candidate));
 }
 
+/** 通用说明符解析：只服务走到这里的脚本家族（TS / Vue）。py/java/go/rs/cs/cpp 都在 `resolveFileImports` 里被各自的分派截走，不会到这里。 */
 function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>, aliases: PathAlias[]): string | undefined {
-  if (from.endsWith(".py")) return resolvePythonImport(from, specifier, available);
   // 落点候选只试发起文件那门语言的扩展名，理由见 `specifierExtensions`
   const candidates = specifierExtensions(from);
   const tryResolve = (candidate: string): string | undefined => {
@@ -861,6 +894,11 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents:
     } catch { /* A malformed package file is not fatal to import. */ }
   }
   for (const file of files) {
+    // 只在这文件**进得了依赖图**的语言里认约定名：`files` 是索引清单，里面还有 .md/.json/.yml。
+    // 以前不筛，于是 `docs/index.md`、`config/app.json` 会顶着「conventional entrypoint」进入口清单——
+    // 入口清单进 `classifyFileRoles`（它把文件抬成 core）又进流程 digest，等于让流程从一份 Markdown 讲起。
+    // 实测 dianping / Xingyan 的索引里 0 个非代码文件命中这批约定名，所以这一刀不翻已有键。
+    if (!handledExtensions.has(file.extension)) continue;
     const name = basename(file.path, extname(file.path)).toLowerCase();
     if (["main", "server", "app", "index", "cli", "manage"].includes(name)) candidates.set(file.path, "conventional entrypoint");
   }

@@ -359,25 +359,6 @@ export class OllamaTeachingProvider implements LlmProvider {
   }
 }
 
-export class FailoverLlmProvider implements LlmProvider {
-  readonly name: string;
-  readonly modelVersion: string;
-  constructor(private readonly primary: LlmProvider, private readonly fallback?: LlmProvider) {
-    this.name = this.fallback ? `${primary.name} with fallback` : primary.name;
-    this.modelVersion = this.fallback ? `${primary.modelVersion}|${fallback!.modelVersion}` : primary.modelVersion;
-  }
-
-  async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
-    try {
-      return await this.primary.complete(input);
-    } catch (error) {
-      if (!this.fallback) throw error;
-      const result = await this.fallback.complete(input);
-      return { ...result, finishReason: result.finishReason ?? "fallback" };
-    }
-  }
-}
-
 /** Retries transient provider failures before the harness takes its local path. */
 export class RetryLlmProvider implements LlmProvider {
   readonly name: string;
@@ -430,7 +411,8 @@ export class ThinkingOverrideLlmProvider implements LlmProvider {
   }
 }
 
-function defaultModel(provider: string): string {  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
+function defaultModel(provider: string): string {
+  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
   if (provider === "ollama") return "llama3.2";
   return "gpt-4o-mini";
 }

@@ -21,8 +21,14 @@ const MAX_EXCERPT_LINES = 60;
   出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
   题面提示词、`kindRules`、裁剪上限改了，喂给模型的代码可以一字不变——这类失效只有版本号管得了：
   不 bump 就会一直复用旧题面。改上面这些要同步 bump。
+
+  v1 → v2（2026-10-07 复审）：选项池过去被一条手写扩展名白名单（ts/js/py）筛过，
+  **Java / Go 仓的正确答案根本进不了选项**，「定位改动」这类题在那些仓里是怎么选都过不了。
+  生成逻辑已改（正解只按「在不在索引里」认，干扰项池由能力表派生），但已经冻结进缓存的坏题
+  不会自愈——它的作用域里不含「选项怎么来的」这一轴，所以只能整体作废重来。
+  代价：两仓 3 行缓存全废（含 2 条已付费的 llm_rubric，重做合计 <¥0.05），用户拍板选这条路而不是手删坏行。
   */
-export const EXERCISE_INPUT_VERSION = "exercise-v1";
+export const EXERCISE_INPUT_VERSION = "exercise-v2";
 
 export interface RefinedExercise {
   exercise: Exercise;

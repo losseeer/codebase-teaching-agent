@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { logTargetFromEnv } from "../lib.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
 import { currentThreadId, currentTraceId } from "../trace/context.js";
 
@@ -12,8 +13,11 @@ import { currentThreadId, currentTraceId } from "../trace/context.js";
   - 失败**照记**并原样抛出：日志的存在不能把失败伪装成成功（静默降级是明令禁止的）。
   - `traceId` 来自请求上下文（`trace/context.ts`），与 `engine.jsonl` 的同类字段构成关联键：
     「一次请求 → N 次 LLM 调用」靠它串起来，不再靠时间戳硬凑。
-  - 覆盖范围：走 `LlmProvider` 的调用（教学回合、map/practice 对话、出题、判分、题面润色、推荐入口、宏观设计命名）。
-    导入期的文件摘要走独立的 `SummaryProvider`（默认本地启发式、不发请求；Ollama 档为本机服务）**不在此列**。
+  - 覆盖范围：**凡是走 `LlmProvider` 的调用**——教学回合、map/practice 对话、出题、判分、题面润色、
+    推荐入口、宏观设计命名，以及导入期的 L1 文件摘要（`LlmSummaryProvider` 包的就是轻量档，scene `map.summary`）。
+    不进这条线的只有两种：确定性摘要档（轻量档没配 / 预算触顶 / `TUTOR_SUMMARY_PROVIDER=off|local`，本来就不发请求），
+    和 `OllamaSummaryProvider`（自己 fetch 本机服务，不经 `LlmProvider`）。别按「摘要不算 LLM 调用」的老口径来对账
+    （10-06 复审改掉的就是这句话）。
 
   包装位置见 LoggingLlmProvider 的注释（内层，档位注入之后）。
   */
@@ -49,13 +53,10 @@ export interface LlmCallRecord {
 }
 
 const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "llm.log");
-const DISABLED = new Set(["off", "none", "0", "false"]);
 
 /** 当前日志目标文件；null = 只打控制台（`TUTOR_LLM_LOG=off`）。每次读取，便于测试用 env 切换。 */
 export function llmLogPath(): string | null {
-  const raw = (process.env.TUTOR_LLM_LOG ?? "").trim();
-  if (!raw) return DEFAULT_LOG_FILE;
-  return DISABLED.has(raw.toLowerCase()) ? null : raw;
+  return logTargetFromEnv(process.env.TUTOR_LLM_LOG, DEFAULT_LOG_FILE);
 }
 
 /** 串行写入队列：并发调用不交错，单次写失败不污染后续写入。 */

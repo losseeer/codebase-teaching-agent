@@ -24,7 +24,7 @@ import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
 import { layerCacheKey } from "../lib.js";
 import { executeReadFile } from "../source/read-file.js";
 import { deepenInferredEdges } from "./deepen.js";
-import { buildFlowEvidence, staticFlow } from "./evidence.js";
+import { buildFlowEvidence, MAX_STAGE_TITLE, staticFlow } from "./evidence.js";
 
 /**
   流程视图的服务端（宏观设计 · 流程视图）：
@@ -53,7 +53,6 @@ const MAX_TREE_LINES = 200;
 const MAX_HOTSPOTS = 15;
 const MAX_TITLE = 18;
 const MAX_SUMMARY = 100;
-const MAX_STAGE_TITLE = 14;
 /** 环节说明进的是详情抽屉（可滚动），不是画布卡片；提示词已要求一句话简要描述，这里是防御性硬上限。 */
 const MAX_STAGE_DETAIL = 160;
 const MAX_STAGE_FILES = 3;
@@ -260,8 +259,17 @@ export interface GeneratedFlow extends RepositoryFlowResult {
     降级是否为**确定性结论**：模型返回了合法 JSON、但环节在仓内没有代码落点——同一输入再跑一次
     模型给的答案一样，所以与成功结果一样可入缓存（与推荐入口的 `declined` 同一套口径）；
     调用异常、内容解析不出这类瞬时失败不带此标记，不入缓存。
+    ⚠️ 「输出被我们自己的上限截断」**不算**这一格，见 `capHit`（同一个坑的两半，§35.6）。
   */
   deterministic?: boolean;
+  /**
+    降级是因为**我们设的输出上限被撞满**（`finishReason === "length"`），不是模型答不出。
+    这种结果可以留在内存层（本进程内不重复烧钱），但**绝不进 SQLite 持久层**：
+    持久化等于把一次容量误判永久钉成「这条流程讲不动」的静态视图，而且读起来与「模型给不出更多」
+    一模一样，再也没人去修那个上限。代价算过：撞上限时重问一条 ≈¥0.17，比一条流程被永久降级便宜得多。
+    2026-10-06 §35.6 定下这条，代码当时只抬了上限、没改规则；这次补齐。
+  */
+  capHit?: boolean;
 }
 
 /** 生成一条流程。任何失败（调用异常 / JSON 不合法 / 校验后环节落点不足）都回落静态调用链，并带上原因。 */
@@ -311,13 +319,13 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
       // （09-22 真仓两次 finishReason=length 实测：同输入必同结果，不是抖动）——都是确定性结论，
       // 带 deterministic 入缓存，别每次访问都重烧一遍钱；真正解析不出的按瞬时异常处理，不缓存、下次重试。
       const truncated = response.finishReason === "length";
-      const deterministic = truncated || parsed.failure === "ungrounded";
       const reason = truncated ? FALLBACK_TRUNCATED : parsed.failure === "ungrounded" ? FALLBACK_UNGROUNDED : FALLBACK_UNPARSEABLE;
       return {
         flow: staticFlow(evidence, reason),
         source: "static",
         reason,
-        ...(deterministic ? { deterministic: true } : {}),
+        ...(truncated ? { capHit: true } : {}),
+        ...(parsed.failure === "ungrounded" ? { deterministic: true } : {}),
         usage: response.usage
       };
     }
@@ -439,7 +447,11 @@ function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome
     };
   });
 
-  const droppedStages = (Array.isArray(record.stages) ? record.stages.length : 0) - kept.length;
+  const declaredStages = Array.isArray(record.stages) ? record.stages.length : 0;
+  // 两种「少了」原因不同，不能合并成同一句「路径不存在」：超出环节上限的是我们自己截的，
+  // 落不到仓内文件才是模型的锅（caveats 是直接给读者看的）。
+  const stagesBeyondCap = Math.max(0, declaredStages - FLOW_MAX_STAGES);
+  const stagesDroppedAsUngrounded = Math.min(declaredStages, FLOW_MAX_STAGES) - kept.length;
   const edgeStats = { dropped: 0, downgradedStatic: 0, demotedCode: 0 };
   const edges = normalizeEdges(record.edges, stages, context, edgeStats, orderMap);
   const uncovered = (Array.isArray(record.uncovered) ? record.uncovered : [])
@@ -448,7 +460,8 @@ function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome
     .slice(0, MAX_UNCOVERED);
   const notes = [
     asText(record.caveats, MAX_CAVEATS),
-    droppedStages > 0 ? `有 ${droppedStages} 个环节因未给出存在的文件路径被丢弃` : "",
+    stagesDroppedAsUngrounded > 0 ? `有 ${stagesDroppedAsUngrounded} 个环节因未给出存在的文件路径被丢弃` : "",
+    stagesBeyondCap > 0 ? `模型给了 ${declaredStages} 个环节，超出 ${FLOW_MAX_STAGES} 个上限的 ${stagesBeyondCap} 个未纳入` : "",
     droppedFiles.count > 0 ? `有 ${droppedFiles.count} 个文件路径不在仓库中，已剔除` : "",
     clampedLines.count > 0 ? `有 ${clampedLines.count} 个文件的行号超出该文件行数，已改到范围内；这些行号只说明位置在该文件内，不能当精确定位` : "",
     edgeStats.dropped > 0 ? `有 ${edgeStats.dropped} 条边因端点或依据不合格被丢弃` : "",
@@ -661,6 +674,14 @@ export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string
   };
 }
 
+/**
+  同键**在途**去重：内存层要等生成结束才写，所以两个请求同时打开一个冷入口时，
+  各自都判定「未命中」→ 同一份输入烧两遍钱（§25.3 记的缺口：「两个标签页同时开流程视图仍可能
+  并发双烧（引擎侧没有在途去重），本刀不做」——GUI 那侧只挡住了 StrictMode 的双发）。
+  后来者复用同一个回合的结果，`usage` 抹掉：与命中缓存同一口径，同一笔钱不被计两次。
+*/
+const flowInFlight = new Map<string, Promise<GeneratedFlow>>();
+
 export async function generateRepositoryFlowCached(input: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
   const cacheKey = flowCacheKeyOf(input);
   if (!cacheKey) return generateRepositoryFlow(input);
@@ -681,13 +702,23 @@ export async function generateRepositoryFlowCached(input: GenerateFlowInput & { 
     input.database?.touchLayerCache(key, now);
     return { ...stored.value, usage: undefined };
   }
-  const result = await generateFromDigest(input, cacheKey.digest);
-  if (result.source === "llm" || result.deterministic) {
+  const running = flowInFlight.get(key);
+  if (running) return { ...(await running), usage: undefined };
+  const generation = generateFromDigest(input, cacheKey.digest);
+  flowInFlight.set(key, generation);
+  let result: GeneratedFlow;
+  try {
+    result = await generation;
+  } finally {
+    flowInFlight.delete(key);
+  }
+  if (result.source === "llm" || result.deterministic || result.capHit) {
     // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）；
     // 只有瞬时失败（调用异常 / 解析不出）走到 else，下次访问重试。
     flowCache.set(key, { result, at: now });
     trimToNewest(flowCache, FLOW_CACHE_MAX);
-    input.database?.putLayerCache(key, result);
+    // 撞自己上限那一格只活在内存里：重启后可以重问，不被永久钉成静态视图（`GeneratedFlow.capHit`）
+    if (!result.capHit) input.database?.putLayerCache(key, result);
   }
   return result;
 }

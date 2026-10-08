@@ -5,13 +5,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
+import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { flushLlmLog } from "./llm/call-log.js";
 import { TutorDatabase } from "./store/database.js";
 import { readJournal } from "./store/journal.js";
-import { readMessages } from "./store/chat-store.js";
+import { appendMessages, createThread, readMessages } from "./store/chat-store.js";
 
 /**
-  四条「回合收尾」路径的路由级回归（宏观设计 JSON / 宏观设计 SSE / 练习答疑 SSE / 教学 SSE）。
+  路由级回归。两块内容共用这套临时仓库与地址簿：
+
+  一、四条「回合收尾」路径（宏观设计 JSON / 宏观设计 SSE / 练习答疑 SSE / 教学 SSE）。
   要拦的事故：复检改成「先 recheckTurn → 再落库 → 再回放」之后，谁把顺序换回去，
   落库正文和学习者看到的正文就会差那行尾注——`recheckTurn` 的单测查不出来，只有打路由才看得见。
 
@@ -19,6 +22,9 @@ import { readMessages } from "./store/chat-store.js";
   1. 不抛错：HTTP 200，且 SSE 流里没有 `error` 事件；
   2. `turn_invariant` 一定落 journal（合格也记，分母才在环内成立）；
   3. 三处文本同一份：响应/回放正文 == chat_message 正文 == journal 的 `turn_text.answer`。
+
+  二、`GET /source` 的取文件边界与 `POST /journal` 的入参守卫：这两件事的判据都跨在**挂载态**上
+  （索引里有没有这个文件、事件能不能落进这条审计线），单测只能凭想象，只有带着真库打路由才算验过。
 
   零 token：LLM 走 stub 掉的 `fetch`（服务商指向 127.0.0.1:9，真端点打不到），
   仓库、地址簿、llm.log、llm-settings 全在临时目录——`~/.codebase-tutor` 里的产品数据一条都不碰。
@@ -380,5 +386,155 @@ describe("LLM 工作日志落点", () => {
     const threads = new Set(lines.map((line) => line.threadId));
     expect(threads).toEqual(usedThreads);
     expect([...threads].every((threadId) => typeof threadId === "string" && threadId.length > 0)).toBe(true);
+  });
+});
+
+/**
+  源码查看的取文件边界。这条路由是裸 `readFileSync`，**不经** `source/read-file.ts` 那道
+  「.env / 私钥 / 凭据载体禁读」的闸门，所以它必须只放索引里的文件（索引扩展名白名单本身就不收 `.env`）。
+  单元测不出这件事——只有带着真实挂载态打路由，才知道「仓库里躺着一份 .env」时它到底给不给。
+  */
+describe("GET /source 的取文件边界", () => {
+  it("索引里的文件照给；越界 400，未收录（含 .env）404", async () => {
+    writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-never-serve-me\n", "utf8");
+
+    const served = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(MAIN_FILE)}&line=3` });
+    expect(served.statusCode).toBe(200);
+    const body = served.json() as { path: string; line: number; content: string };
+    expect(body.path).toBe(MAIN_FILE);
+    expect(body.line).toBe(3);
+    expect(body.content).toContain("// line 1");
+
+    const escaped = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent("../outside.env")}` });
+    expect(escaped.statusCode).toBe(400);
+
+    for (const path of [".env", "src/../.env", `${MAIN_FILE}.bak`]) {
+      const refused = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}` });
+      expect(refused.statusCode, `${path} 不该被这条路由读出来`).toBe(404);
+      expect(refused.payload).not.toContain("sk-never-serve-me");
+    }
+  });
+
+  it("line 不是数字时按 1 回，不把 NaN 序列化成的 null 发给界面", async () => {
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(MAIN_FILE)}&line=abc` });
+    expect((response.json() as { line: number }).line).toBe(1);
+  });
+});
+
+/** UI 动作事件出口：契约里写的「sessionId 有长度上限」得有实现钉住（超长会永久占进 append-only 的审计线）。 */
+describe("POST /journal 的入参守卫", () => {
+  it("正常 UI 事件带线程 id 能落盘", async () => {
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type: "file_opened", payload: { path: MAIN_FILE }, sessionId: "thread-1" } });
+    expect(response.statusCode).toBe(201);
+    expect(lastEvent("file_opened").sessionId).toBe("thread-1");
+  });
+
+  it("sessionId 超长 / 非字符串一律 400，不落盘", async () => {
+    const before = eventsOf("file_opened").length;
+    for (const sessionId of ["x".repeat(201), 123]) {
+      const refused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type: "file_opened", payload: { path: MAIN_FILE }, sessionId } });
+      expect(refused.statusCode, `sessionId 长度 ${String(sessionId).length} 不该被收下`).toBe(400);
+    }
+    expect(eventsOf("file_opened").length).toBe(before);
+  });
+});
+
+/**
+  线程定位**不看挂载集**（LRU 驱逐后仍能取回历史）。
+  要拦的事故：内存里只装 `maxMounted()` 个仓，其余被驱逐的仓只是没挂上，它的库一字未动；
+  而三条线程路由过去只扫内存，于是「切够几次仓再点开旧对话」会得到一句 会话不存在或已删除 ——
+  把还在的历史判没了，改名和删除也一起 404。全程零 token：这几条路由压根不打模型。
+  */
+describe("未挂载仓库的线程仍可定位", () => {
+  it("GET/PATCH/DELETE 三条线程路由不该把被驱逐的会话判成已删除", async () => {
+    const registryFile = process.env.TUTOR_REGISTRY_FILE;
+    expect(registryFile, "地址簿要指向临时文件").toBeTruthy();
+    const original = readFileSync(registryFile!, "utf8");
+
+    // 第二个仓：只建目录并写它自己的库——它**不进挂载路径**（这几条路由只需要库路径，产物在不在都一样读）
+    const archivedDir = join(root, "archived");
+    mkdirSync(archivedDir, { recursive: true });
+    const archivedId = deriveRepositoryId(archivedDir);
+    writeFileSync(registryFile!, `${JSON.stringify({ repositories: [repoDir, archivedDir] }, null, 2)}\n`, "utf8");
+    const thread = createThread({ repositoryPath: archivedDir, repositoryId: archivedId, scope: "map", title: "旧对话" });
+    expect(appendMessages(archivedDir, thread.id, [{ role: "user", content: "上次问到哪了？" }])).toBe(true);
+
+    try {
+      // 前提要钉住：它确实没挂在内存里，否则测的还是老那条路
+      const catalog = await app.inject({ method: "GET", url: "/api/repositories" });
+      const entry = (catalog.json() as { repositories: { repositoryPath: string; mounted: boolean }[] }).repositories
+        .find((item) => item.repositoryPath === archivedDir);
+      expect(entry?.mounted, "这条用例要跑在「仓未挂载」的前提下").toBe(false);
+
+      const messages = await app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` });
+      expect(messages.statusCode, "被驱逐不等于已删除").toBe(200);
+      expect((messages.json() as { messages: { content: string }[] }).messages[0]?.content).toBe("上次问到哪了？");
+
+      expect((await app.inject({ method: "PATCH", url: `/api/threads/${thread.id}`, payload: { title: "改了名" } })).statusCode).toBe(200);
+      expect((await app.inject({ method: "DELETE", url: `/api/threads/${thread.id}` })).statusCode).toBe(200);
+      // 删掉之后才该是 404：软删的线程读侧恒带 `deleted_at IS NULL`
+      expect((await app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` })).statusCode).toBe(404);
+    } finally {
+      writeFileSync(registryFile!, original, "utf8");
+      rmSync(archivedDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+  预算闸门对**付费分支**的放行口径：`monthlyBudgetUsd` 是这产品唯一的省钱开关，调小却不拦就是
+  账单照着「没预算」的样子继续走（同族事故：闸门判据散在几处、各写各的，改一处漏一处）。
+  这条放在文件末尾，因为它改的是**落库预算**——前面的用例都按缺省预算跑；
+  全程零 token：被拒的那一支根本不该打到模型上，靠 `fetchCalls` 不增加来钉死。
+  */
+describe("预算触顶时不放行付费分支", () => {
+  it("预算 0 ⇒ LLM 出题被拒且一次模型调用都没发生；把预算调回去闸门就翻回放行", async () => {
+    const closed = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
+    expect(closed.statusCode).toBe(200);
+    const closedBody = closed.json() as { mode: string; settings: { monthlyBudgetUsd: number } };
+    expect(closedBody.settings.monthlyBudgetUsd, "预算 0 要如实回读，不能被当成「没给」而回落缺省").toBe(0);
+    // 0 预算、一分钱没花仍是 degraded：闸门判的是「已花 ≥ 预算」，不是「还剩很多」
+    expect(closedBody.mode).toBe("degraded");
+
+    const callsBefore = fetchCalls;
+    const refused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/exercises`, payload: { family: "llm", tag: "依赖注入" } });
+    expect(refused.statusCode).toBe(422);
+    expect(String((refused.json() as { error: string }).error)).toContain("预算");
+    expect(fetchCalls, "触顶后不该把请求打到模型上").toBe(callsBefore);
+
+    // 对照组：同一套运行时设置、只是预算不是 0 ⇒ 闸门翻回放行（证明上面那句 422 来自闸门，不是「没配模型」）
+    const reopened = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
+    expect((reopened.json() as { mode: string }).mode).toBe("normal");
+  });
+
+  /**
+    降级那一轮的账面：`token_usage` 必须**只**在真调用过模型时才有 token，而「这一轮走了本地规则」
+    得有一条 `mode: "degraded"` 的记录。两条口径曾经都错——正文按字数÷4 造一份不存在的 token（免费回合
+    吃掉预算，反过来把付费分支关掉），而记账处又改看「本会话累计成本」，于是闸门放行了却没人知道。
+    这条同时是那个事故的回归网。
+    */
+  it("teach 降级回合：一条模型调用都不打，token 记 0，且降级留痕确实落进 journal", async () => {
+    await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
+    const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
+    const sessionId = (created.json() as { session: { id: string } }).session.id;
+
+    const callsBefore = fetchCalls;
+    const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "这一节我没看懂" } });
+    const events = sseEvents(response.payload);
+    expect(events.some((event) => event.type === "error" || event.type === "aborted"), "降级回合照样要走完收尾").toBe(false);
+    expect(events.some((event) => event.type === "done")).toBe(true);
+    expect(fetchCalls, "预算触顶后这一轮不该打到模型上").toBe(callsBefore);
+
+    const usage = eventsOf("token_usage").filter((event) => event.sessionId === sessionId);
+    // 一个回合**只留一行**：成本页的「计费回合」= token_usage 行数 − `mode:"degraded"` 行数，
+    // 降级回合若另留一条 0 token 的正常行，就同时进了两个分子——免费那一轮会被算成付过钱。
+    expect(usage.length, "降级回合只留那条降级记录").toBe(1);
+    // 没有真 usage 就是 0：字数换算的估算进账本会被当成花掉的钱
+    expect(usage.every((event) => Number(event.payload.input_tokens ?? 0) === 0 && Number(event.payload.output_tokens ?? 0) === 0), "本地回合不能记下没花过的 token").toBe(true);
+    // 闸门确实留了痕：降级不是静默回落
+    expect(usage[0].payload.mode, "触顶回合要有可查的降级记录").toBe("degraded");
+    expect(usage[0].payload.cause).toBe("monthly_budget_reached");
+
+    await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
   });
 });

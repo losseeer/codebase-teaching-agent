@@ -337,10 +337,16 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
 
   const pool = collectCandidates(input.tree);
   const fileSummaries = input.fileSummaries ?? new Map<string, string>();
+  /**
+    翻译层在选择层之前，所以它这一轮花掉的钱必须在**所有**出口都带出去（含下面两处缓存命中）。
+    两层的命中率并不绑在一起：选择层的行还在内存里、翻译层的行已经过期的形状是真实存在的。
+    以前命中缓存就只回列表，server 侧 `if (suggestion.usage)` 一条 token_usage 都不记 ⇒ 花了钱而账面看不见
+    （同 §36.6、§37.4 那条纪律）。两层都命中时 `expansion.usage` 本来就是 undefined，带出去也是 undefined，不会凭空多出读数。
+    */
   const expansion = await expandThemeTokensCached({ repositoryId: input.repositoryId, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, fingerprint: themeFingerprint(pool), provider: input.provider, database: input.database });
   const tokens = [...themeTokens(input.moduleLabel, input.moduleHint), ...expansion.tokens];
   const candidates = rankEntryCandidates(pool, tokens, fileSummaries, avoidPaths, input.boostPaths ?? []);
-  if (!candidates.length) return { entries: [] };
+  if (!candidates.length) return { entries: [], ...(expansion.usage ? { usage: expansion.usage } : {}) };
 
   const key = layerCacheKey({
     layer: "entry-suggest",
@@ -355,7 +361,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     entryCache.delete(key);
     entryCache.set(key, hit); // 刷新 LRU 新近度
     input.database?.touchLayerCache(key, now);
-    return { ...hit.value };
+    return { ...hit.value, ...(expansion.usage ? { usage: expansion.usage } : {}) };
   }
   // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重烧（与流程层同一套机制）
   const stored = input.database?.getLayerCache<EntryRecord>(key);
@@ -363,7 +369,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     entryCache.set(key, { value: stored.value, at: now });
     trimToNewest(entryCache, ENTRY_CACHE_MAX);
     input.database?.touchLayerCache(key, now);
-    return { ...stored.value };
+    return { ...stored.value, ...(expansion.usage ? { usage: expansion.usage } : {}) };
   }
   const suggestion = await selectFromCandidates({ candidates, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, provider: input.provider, ...(input.analysis ? { recentChanges: buildRecentChangesSection(input.analysis) } : {}) });
   const usable = suggestion.entries.length > 0 || suggestion.declined === true;
@@ -381,7 +387,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     trimToNewest(entryCache, ENTRY_CACHE_MAX);
     input.database?.putLayerCache(key, record); // 失败回落的空列表（非 declined）不落盘
   }
-  // 记账合并到一条：翻译层的选择层的用量都发生在这个请求里（缓存命中时两者都没有 usage）
+  // 记账合并到一条：翻译层与选择层的用量都发生在这个请求里（两层各自命中缓存时各自没有 usage）
   return { ...suggestion, usage: addUsage(expansion.usage, suggestion.usage) };
 }
 

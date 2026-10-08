@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
 import { EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
-import { graphFromData, impactRadius } from "../depgraph/graph.js";
+import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
@@ -15,7 +15,7 @@ import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
 type ExpectedAnswer =
-  | { type: "output"; expectedOutput: string; invocation: SafeInvocation }
+  | { type: "output"; expectedOutput: string }
   | { type: "set"; expectedIds: string[] }
   | { type: "rubric"; answerKey: string; criteria: RubricCriterion[] };
 
@@ -95,6 +95,11 @@ function depsFingerprint(deps: { path: string; hash: string }[]): string {
   return deps.map((dep) => `${dep.path}@${dep.hash}`).join(",");
 }
 
+/** 文件粒度作用域：依赖文件指纹 + 题面口径 + 模型档。两条出题路径（规则题与 LLM 题）共用同一个构造，别再各写一遍。 */
+function fileScope(deps: { path: string; hash: string }[], modelVersion: string): string {
+  return `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+}
+
 /** 一道题依赖的文件清单及其哈希。查不到 contentHash（旧索引）时以全仓 versionStamp 兜底。 */
 function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value: unknown): { path: string; hash: string }[] {
   const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
@@ -135,8 +140,10 @@ export class ExerciseService {
     */
   async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
     const database = new TutorDatabase(repository.path);
-    const journal = new Journal(repository.path, repository.index.repositoryId);
     try {
+      // journal 的开必须在 try 内：`new Journal` 要 mkdir/append `.tutor/`，只读盘上它会抛，
+      // 而构造在外面的话 finally 根本还没接管 ⇒ 每次请求漏一个 SQLite 句柄（§36.6 那一类的同一个洞）。
+      const journal = new Journal(repository.path, repository.index.repositoryId);
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
       const modelVersion = provider?.modelVersion ?? "deterministic";
       if (!requested.kind && !requested.targetUnitId) {
@@ -162,7 +169,7 @@ export class ExerciseService {
       // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
       const deps = exerciseDeps(repository, target.kind, target.value);
       const scope = deps.length
-        ? `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`
+        ? fileScope(deps, modelVersion)
         : exerciseScope(repository.analysis.versionStamp, modelVersion, graphStampOf(repository.analysis));
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) {
@@ -222,7 +229,7 @@ export class ExerciseService {
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
-    const scope = `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${provider.modelVersion}`;
+    const scope = fileScope(deps, provider.modelVersion);
     const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") {
       journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag });
@@ -390,7 +397,7 @@ function outputExercise(repository: PracticeRepository, unit: ImplementationUnit
     inputMode: "text",
     gradingMode: "execution"
   });
-  return { exercise, expected: { type: "output", expectedOutput, invocation } };
+  return { exercise, expected: { type: "output", expectedOutput } };
 }
 
 function localizationExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
@@ -439,8 +446,13 @@ type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "target
 
 async function grade(stored: StoredExercise, answer: ExerciseAnswer): Promise<GradeOutcome> {
   if (stored.expected.type === "output") {
-    const expected = executeSafeInvocation(stored.expected.invocation);
-    const passed = normalizeOutput(answer.text) === normalizeOutput(expected);
+    /**
+      判分吃**生成时冻结的那一份**标准答案，不再在判分这一侧重跑子进程。
+      受限执行跑的是缓存行里冻住的表达式与实参（根本不重读源码），重跑必然同结果，
+      代价却是在请求线程里 `spawnSync` 一个 node（超时上限 1.5s，把整台引擎的 loop 卡住）；
+      而源码若真变了，`staleDependencies` 已经在作答之前拦掉了。
+      */
+    const passed = normalizeOutput(answer.text) === normalizeOutput(stored.expected.expectedOutput);
     return { score: passed ? 1 : 0, passed, automatic: true, feedbackSource: "rule", feedback: passed ? "执行验证通过：返回值与受限运行结果一致。" : "执行验证未通过：请沿着返回表达式重新检查输入如何流动。" };
   }
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
@@ -472,7 +484,11 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
   const missingIds = expected.filter((id) => !selectedSet.has(id));
   const unexpectedIds = [...selectedSet].filter((id) => !expectedSet.has(id)).sort();
   const passed = missingIds.length === 0 && unexpectedIds.length === 0;
-  const score = expected.length ? matchedIds.length / (matchedIds.length + missingIds.length + unexpectedIds.length) : 1;
+  // 分母取两边的并集（答对 + 答漏 + 答多），不是「只有期望项时才算得出分」：
+  // 旧写法在期望为空却多选了的情况下给出 score=1 / passed=false，排期按满分推进、界面却显示没过——
+  // 判分与答案口径必须在同一条式子里，不能各说各话。
+  const union = expectedSet.size + unexpectedIds.length;
+  const score = union ? matchedIds.length / union : 1;
   return {
     score,
     passed,
@@ -500,7 +516,9 @@ function selectTagCandidates(repository: PracticeRepository, tag: string, limit 
   }
   const hotspots = new Map(repository.index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
   const scored = repository.index.files
-    .filter((file) => /\.(?:[cm]?[jt]sx?|py|java)$/.test(file.path))
+    // 能出题的素材 = 进了依赖图的源码，扩展名同样由能力表派生（与 `sourceOptions` 一份判据；
+    // 两仓实测这一改动不增减任何文件，见 §37.6 的扩展名普查）
+    .filter((file) => handledExtensions.has(file.extension))
     .map((file) => {
       const path = file.path;
       const symbols = (symbolsByPath.get(path) ?? []).map((symbol) => symbol.name.toLowerCase()).join(" ");
@@ -571,9 +589,17 @@ function prioritizedImpactPaths(result: ReturnType<typeof impactRadius>, changed
 }
 
 function sourceOptions(repository: PracticeRepository, preferredPaths: string[], limit = 8) {
-  const sourcePaths = repository.index.files.filter((file) => /\.(?:[cm]?[jt]sx?|py)$/.test(file.path)).map((file) => file.path);
-  const available = new Set(sourcePaths);
-  const preferred = [...new Set(preferredPaths)].filter((path) => available.has(path)).slice(0, limit);
+  /**
+    正解必须出现在选项里。旧写法先按**手写的**扩展名白名单（ts/js/py）筛一遍再取正解，
+    于是非 JS 仓的答案路径被当成「非源码」筛掉：dianping 那条 `CircuitBreakerAspect.java` 的
+    `change_localization` 实测选项全是 `stress/report/content/js/*.js`，正解压根不在里面——
+    学习者怎么选都不过，`missingIds` 永远非空。所以正解只按「在不在索引里」认，
+    扩展名闸门只管**干扰项**从哪儿捞。
+    */
+  const indexed = new Set(repository.index.files.map((file) => file.path));
+  const preferred = [...new Set(preferredPaths)].filter((path) => indexed.has(path)).slice(0, limit);
+  // 干扰项池的扩展名由共享能力表派生（`handledExtensions` 就是建图那一句判据，见 §37.6），不再在这里手写一份
+  const sourcePaths = repository.index.files.filter((file) => handledExtensions.has(file.extension)).map((file) => file.path);
   const preferredSet = new Set(preferred);
   const related = relatedPaths(repository, preferred);
   const preferredDirectories = preferred.map((path) => dirname(path));

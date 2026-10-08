@@ -73,11 +73,16 @@ describe("语言能力表：每格都要有明确取值", () => {
 });
 
 describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
-  it("表里声明的扩展名 == graph.ts 实际处理的扩展名（双向全等）", () => {
-    const handled = new Set(extensionsHandledByGraph());
-    const declared = new Set(Object.keys(LANGUAGE_BY_EXTENSION));
-    expect([...declared].sort(), "语言表多了引擎其实不处理的扩展名（等于假装支持）").toEqual([...handled].sort());
-    expect([...handled].sort(), "引擎支持但语言表漏了一门——补语言时要一起改表").toEqual([...declared].sort());
+  it("派生自表的 graphExtensions 不得因改表而缩小：收口前那份手写清单的每一项都还得在", () => {
+    // 不再把 graphExtensions 与 LANGUAGE_BY_EXTENSION 互相比对——两者都由 LANGUAGE_CAPABILITIES 派生，
+    // 恒等，永远绿，是一条同义反复（复审 #121 收口之后它才退化成这样）。这里对着「收口前手写清单」这个
+    // 独立快照核对：有人从表里删了一门语言、或漏写一个扩展名，依赖图就静默失去它的覆盖，这条会红。
+    // 新增语言不必动这里；只有「缩小」才该红。
+    const handled = [...extensionsHandledByGraph()];
+    const baselineBeforeDerivation = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".vue"];
+    for (const extension of baselineBeforeDerivation) {
+      expect(handled, `依赖图不再处理 ${extension}：能力表被改小了，图会静默少掉这门语言的边`).toContain(extension);
+    }
   });
 
   it("每个扩展名都查得到它所属的那门语言（汇总口径与逐语言声明一致）", () => {
@@ -128,6 +133,15 @@ describe("语言画像（只读现算，不参与任何缓存键）", () => {
     expect(go.capabilities.cells.dependencyEdge).toBe("approximate");
     expect(go.capabilities.cells.entrypoint).toBe("exact");
     expect(profile.graphFileShare).toBe(1);
+  });
+
+  it("大写后缀「进了索引但没进图」这一格要如实报，图内文件数不许按小写归堆后虚高", () => {
+    // 索引器的闸门先 lowercase 再比（`App.TS` 收得进来），图层是大小写敏感的（它进不去），
+    // 语言画像必须跟着图层那句判据走，否则 graphFileShare 会把没建过边的文件说成在图里。
+    const profile = languageProfileOf([file("src/App.TS", 10), file("src/util.ts", 5)], graph);
+    const typescript = profile.languages.find((row) => row.language === "typescript")!;
+    expect(typescript.files, "两个文件按名字都算 TypeScript").toBe(2);
+    expect(profile.graphFileShare, "只有 src/util.ts 真进了依赖图").toBe(0.5);
   });
 
   it("旧产物没有 parseBackend 时按 regex 认，与 graphFromData 同口径（不假装是语法树结果）", () => {

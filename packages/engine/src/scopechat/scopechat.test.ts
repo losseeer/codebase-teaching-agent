@@ -149,7 +149,7 @@ describe("mapChat", () => {
       { type: "thinking", round: 2 }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
-    expect(result.fileReads).toEqual([{ path: "scopechat.ts", lines: 150, bytes: expect.any(Number), truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
+    expect(result.fileReads).toEqual([{ path: "scopechat.ts", lines: 150, truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
     // 第二轮请求携带完整历史：原始 user 消息（上下文+问题）+ assistant toolCalls + tool 结果（带行号的真实文件内容）
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });

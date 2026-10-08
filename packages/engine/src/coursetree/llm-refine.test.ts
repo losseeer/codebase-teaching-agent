@@ -123,11 +123,23 @@ describe("refineCourseMap", () => {
     expect(refinement.usage).toBeUndefined();
   });
 
-  it("LLM 返回不合法 JSON 时原样返回输入树", async () => {
+  it("LLM 返回不合法 JSON 时原样返回输入树，usage 也不交（下次导入继续重试）", async () => {
     const { provider } = fakeProvider(["这不是 JSON"]);
     const tree = treeWith(leaf("implementation:u1", "doThing()"));
     const refinement = await refineCourseMap(tree, provider);
     expect(refinement.course).toBe(tree);
+    expect(refinement.usage).toBeUndefined();
+  });
+
+  it("模型解析成功但一个名字都不改（提示词允许省略）：树不变，usage 必须交出", async () => {
+    // 这一格过去被 `renames.size` 一锅端掉：钱已经花了，既不记账也写不下 settings.refinement 标记，
+    // 于是每次导入都重付一遍而账面看不出来（同 §37.4「降级要如实入账」那条纪律）。
+    const { provider, users } = fakeProvider(["[]"]);
+    const tree = treeWith(leaf("implementation:u1", "doThing()"));
+    const refinement = await refineCourseMap(tree, provider);
+    expect(users).toHaveLength(1);
+    expect(refinement.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(refinement.course.root.children[1].children[0].title).toBe("doThing()");
   });
 
   it("超长标题不再从中间切断：标识符原样保留，散文按边界收并加省略号", async () => {

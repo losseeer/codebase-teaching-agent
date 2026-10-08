@@ -39,9 +39,16 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取成本"));
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
+  /**
+    引擎只收「有限非负数」。空串在 JS 里 `Number("") === 0`，直接发过去就等于把月预算改成 $0
+    ——那一档是「从此所有付费分支都判为触顶」，一次误输就能把整个产品静音掉，所以在这里先判住。
+    */
+  const budgetNumber = Number(budget);
+  const budgetValid = budget.trim() !== "" && Number.isFinite(budgetNumber) && budgetNumber >= 0;
   const saveBudget = async (): Promise<void> => {
+    if (!budgetValid) return;
     try {
-      setCost(await api.setBudget(workspace.repositoryId, Number(budget)));
+      setCost(await api.setBudget(workspace.repositoryId, budgetNumber));
       setSavedAt(new Date().toLocaleTimeString());
       setError("");
     } catch (reason) {
@@ -50,6 +57,10 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   };
 
   const pricingConfigured = cost?.pricingConfigured ?? true;
+  /** 读数没拿到（首帧 / 拉取失败）时 `cost` 是 null——这时任何「正常」字样都是替引擎编的：
+      闸门生效与否、金额、剩余都来自那一次读取。实测把 `/cost` 打成 500，页面会同时说
+      「正常运行」和「剩余 $0.0000；触顶后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
+  const readoutReady = cost !== null;
   const usedRatio = cost && cost.monthlyBudgetUsd > 0 ? Math.min(1, cost.estimatedCostUsd / cost.monthlyBudgetUsd) : 0;
   const dayPeak = cost?.byDay.reduce((peak, day) => Math.max(peak, day.inputTokens + day.outputTokens), 0) ?? 0;
 
@@ -72,29 +83,39 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       <section className="cost-hero">
         <div className="cost-amount-block">
           <div className="panel-title"><BarChart3 size={18} /><h2>本月成本</h2></div>
-          <strong className="cost-amount">{usd(cost?.estimatedCostUsd ?? 0)}</strong>
+          <strong className="cost-amount">{readoutReady ? usd(cost.estimatedCostUsd) : "—（读数未到）"}</strong>
           <p className="cost-amount-note">
             {cost ? `${tokensText(cost.billedInputTokens)} 输入未命中 · ${tokensText(cost.cacheHitTokens)} 缓存命中 · ${tokensText(cost.outputTokens)} 输出 · ${cost.turns} 个回合` : "读取中"}
           </p>
-          <div className={`mode-label ${cost?.mode ?? "normal"}`} title={pricingConfigured ? undefined : "单价未配置 ⇒ 花费算不出来 ⇒ 「超预算降级」这道闸没在管事，这个 normal 不是读数"}>
-            {!pricingConfigured ? "无上限运行（闸门未生效）" : cost?.mode === "degraded" ? "已触顶，降级为本地规则" : "正常运行"}
+          <div className={`mode-label ${!readoutReady ? "unknown" : cost?.mode ?? "normal"}`} title={!readoutReady ? "闸门管不管事来自那一次成本读取；读不到就不能替它说「正常」" : pricingConfigured ? undefined : "单价未配置 ⇒ 花费算不出来 ⇒ 「超预算降级」这道闸没在管事，这个 normal 不是读数"}>
+            {!readoutReady ? "闸门状态：读数未到" : !pricingConfigured ? "无上限运行（闸门未生效）" : cost?.mode === "degraded" ? "已触顶，降级为本地规则" : "正常运行"}
           </div>
         </div>
         <div className="cost-budget-block">
           <div className="cost-budget-head">
-            <span>月度预算 {usd(cost?.monthlyBudgetUsd ?? 0)}</span>
-            <span>{Math.round(usedRatio * 100)}% 已用</span>
+            <span>月度预算 {cost ? usd(cost.monthlyBudgetUsd) : "—"}</span>
+            <span>{cost ? `${Math.round(usedRatio * 100)}% 已用` : "已用未知"}</span>
           </div>
-          <div className="cost-bar" role="img" aria-label={`预算已用 ${Math.round(usedRatio * 100)}%`}>
+          <div className="cost-bar" role="img" aria-label={cost ? `预算已用 ${Math.round(usedRatio * 100)}%` : "预算已用比例：读数未到"}>
             <i style={{ width: `${usedRatio * 100}%` }} />
           </div>
-          <p className="muted">{pricingConfigured
-            ? <>剩余 {usd(cost?.remainingBudgetUsd ?? 0)}；触顶后教学与对话改走本地规则，不再付 token。</>
-            : <>这里的剩余金额（{usd(cost?.remainingBudgetUsd ?? 0)}）不构成上限：没有单价就算不出已花金额，「触顶后改走本地规则」那条分支永远走不到。</>}</p>
+          <p className="muted">{!readoutReady
+            ? <>这条读数没拿到（失败原因在标题下方），所以既不说「闸门生效」也不说「无上限」——刷新一次再判。</>
+            : pricingConfigured
+              ? <>剩余 {usd(cost.remainingBudgetUsd)}；触顶后教学与对话改走本地规则，不再付 token。</>
+              : <>这里的剩余金额（{usd(cost.remainingBudgetUsd)}）不构成上限：没有单价就算不出已花金额，「触顶后改走本地规则」那条分支永远走不到。</>}</p>
           <label className="budget-field">调整月度预算（USD）
             <span>
-              <input type="number" min="0" step="0.01" value={budget} onChange={(event) => setBudget(event.target.value)} />
-              <button className="primary" onClick={() => void saveBudget()}>更新</button>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={budget}
+                aria-invalid={!budgetValid}
+                title={budgetValid ? "改成非负数即可；$0 表示此后所有付费分支一律走本地规则" : "要一个有限的非负数字；留空不算 0"}
+                onChange={(event) => setBudget(event.target.value)}
+              />
+              <button className="primary" disabled={!budgetValid} title={budgetValid ? undefined : "先填一个有限的非负数字"} onClick={() => void saveBudget()}>更新</button>
             </span>
           </label>
         </div>

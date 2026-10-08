@@ -15,13 +15,23 @@ export function verifyAnalysis(repositoryPath: string, implementations: Implemen
 
 function verifyUnit(repositoryPath: string, unit: ImplementationUnit): AssertionCheck {
   const { symbol } = unit;
-  const content = readFileSync(join(repositoryPath, symbol.path), "utf8").split("\n").slice(symbol.line - 1, symbol.endLine).join("\n");
+  const anchors = [{ path: symbol.path, line: symbol.line, endLine: symbol.endLine, label: "实现定义" }];
+  /**
+    读不到就按「待确认」交出去，不抛：`verifyAnalysis` 跑在导入的中途，一个索引之后被删/权限不对的文件
+    不该掀掉整次导入（与 `verifyNode` 的抽样兜底、扫描层 §37.3 同一条口径）。
+    */
+  let content: string;
+  try {
+    content = readFileSync(join(repositoryPath, symbol.path), "utf8").split("\n").slice(symbol.line - 1, symbol.endLine).join("\n");
+  } catch {
+    return { statement: `${symbol.name} 的微观解释可回溯到其定义区间。`, status: "needs_review", reason: "定义所在文件读不出来。", anchors };
+  }
   const matched = content.includes(symbol.name);
   return {
     statement: `${symbol.name} 的微观解释可回溯到其定义区间。`,
     status: matched ? "verified" : "needs_review",
     reason: matched ? "定义名称在锚点区间内存在。" : "锚点区间未找到定义名称。",
-    anchors: [{ path: symbol.path, line: symbol.line, endLine: symbol.endLine, label: "实现定义" }]
+    anchors
   };
 }
 

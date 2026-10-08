@@ -116,6 +116,63 @@ describe("M2.1 exercise service", () => {
     expect(mismatch.unexpectedIds).toContain("src/main.js");
   });
 
+  it("非 JS 仓的 set_match 题：正解必须在选项里，干扰项也得是同族源码", async () => {
+    /**
+      旧 `sourceOptions` 先按**手写的**扩展名白名单（ts/js/py）筛一遍再取正解，非 JS 仓的
+      `change_localization` / `impact_analysis` 于是给出「怎么选都不过」的题——dianping 库里那条
+      `CircuitBreakerAspect.java` 的缓存行实测选项全是 `stress/report/content/js/*.js`。
+      夹具把正解排在字典序末尾、同包塞满竞争者，是为了让这条测试咬得住：只换宽干扰项池过不了它，
+      必须有「正解不被扩展名筛掉」这条不变量在才选得出答案。
+      */
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const answer = "src/main/java/com/demo/ZebraOrderService.java";
+    const dependee = "src/main/java/com/demo/A0Component.java";
+    // 同包再放 17 个 Java 文件当竞争者：选项上限 8，正解按字典序排在末尾，靠干扰项池「顺带捞到」是捞不回来的
+    const neighbours = Array.from({ length: 17 }, (_, index) => `src/main/java/com/demo/B${index}Component.java`);
+    const javaFiles = [answer, dependee, ...neighbours].map((path) => ({ path, extension: ".java", bytes: 40, lines: 12, contentHash: `h-${path}` }));
+    const javaRepository: PracticeRepository = {
+      ...repository,
+      index: { ...repository.index, files: [...repository.index.files, ...javaFiles] },
+      analysis: {
+        ...repository.analysis,
+        graph: {
+          ...repository.analysis.graph,
+          imports: { ...repository.analysis.graph.imports, [answer]: [], [dependee]: [answer] }
+        }
+      }
+    };
+    const optionIdsOf = (exercise: { options?: { id: string }[] }) => (exercise.options ?? []).map((option) => option.id);
+
+    const impact = await service.next(javaRepository, { kind: "impact_analysis", targetUnitId: `impact:${answer}` });
+    expect(optionIdsOf(impact)).toContain(answer);
+    // 照着依赖图真答一次必须能过——「选项里没有正解」的题在这一条上会直接现形
+    expect((await service.answer(javaRepository, impact.id, { selectedIds: [answer, dependee] })).passed).toBe(true);
+
+    const source = repository.analysis.implementations[0]!;
+    const javaUnit = { ...source, symbol: { ...source.symbol, path: answer, language: "java" as const } };
+    const localizationRepository: PracticeRepository = { ...javaRepository, analysis: { ...javaRepository.analysis, implementations: [javaUnit] } };
+    const localization = await service.next(localizationRepository, { kind: "change_localization", targetUnitId: javaUnit.id });
+    const localizationIds = optionIdsOf(localization);
+    expect(localizationIds).toContain(answer);
+    // 干扰项来自依赖图那套扩展名（能力表派生），不再是「本模块手写的一份 JS 清单」
+    expect(localizationIds.every((id) => id.endsWith(".java"))).toBe(true);
+    expect((await service.answer(localizationRepository, localization.id, { selectedIds: [answer] })).passed).toBe(true);
+  });
+
+  it("判分吃缓存行里冻结的那一份标准答案，不再把可执行表达式冻进缓存、每次作答重跑一个子进程", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const output = await service.next(repository, { kind: "output_prediction" });
+    // 判分结论仍然对（冻结值 == 当时重跑的值，源码变了由 staleDependencies 先拦）
+    expect((await service.answer(repository, output.id, { text: "practice" })).passed).toBe(true);
+    const database = new TutorDatabase(repository.path);
+    const row = database.getExerciseCacheById<{ expected: { expectedOutput?: string; invocation?: unknown } }>(repository.index.repositoryId, output.id);
+    database.close();
+    expect(row?.expected.expectedOutput).toBeTruthy();
+    expect(row?.expected.invocation).toBeUndefined();
+  });
+
   it("generates impact questions with automatic grading", async () => {
     const repository = testRepository();
     const service = new ExerciseService();

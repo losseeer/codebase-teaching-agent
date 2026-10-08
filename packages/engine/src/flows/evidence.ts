@@ -226,7 +226,11 @@ export function buildFlowEvidence(
   return { entry, stages, truncated, omitted };
 }
 
-const MAX_STAGE_TITLE = 14;
+/**
+  环节标题的字数上限。**模型流程与静态降级视图共用这一份**（`flow.ts` 的提示词与校验都读它）：
+  两处各写一个 14 的话，改一处就会出现「降级视图比模型产物宽」的两种卡片。
+*/
+export const MAX_STAGE_TITLE = 14;
 
 /**
   把静态证据直接渲染成流程（LLM 不可用时的降级视图）。

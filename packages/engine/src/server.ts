@@ -5,7 +5,7 @@ import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TeachingStage, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { budgetGateNotice, summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
@@ -25,7 +25,7 @@ import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./tutor-settings/tutor-settings.js";
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
-import { TutorDatabase } from "./store/database.js";
+import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markThread, runWithTrace } from "./trace/context.js";
@@ -35,6 +35,7 @@ import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import { checkTurnInvariants, invariantTailNotice } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
+import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
@@ -81,6 +82,13 @@ const importer = new ImportService();
 // 启动**只读地址簿**（一串路径），一条产物都不读、一个 fs 监听都不开：
 // 挂载推迟到 GUI 真的访问某个仓库时（见 preHandler 懒挂载），超出的按 LRU 驱逐。
 tboot(`ImportService（地址簿 ${importer.catalog().length} 条，挂载 0 条）`);
+
+/**
+  关停钩子只管 fs 监听这一件事：LRU 驱逐与 `forget` 各自会关自己那条，但 `app.close()` 不会。
+  `fs.FSWatcher` 是活跃 handle——不摘掉就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
+  路由级测试收尾删掉临时仓后正是这种状态（handle 指向一个已不存在的目录）。
+  */
+app.addHook("onClose", async () => { for (const repository of importer.mountedRepositories()) repository.watcher?.close(); });
 
 const exercises = new ExerciseService();
 tboot("ExerciseService");
@@ -159,13 +167,36 @@ function persistTeachingTurn(repositoryPath: string, repositoryId: string, cours
 await app.register(cors, { origin: true });
 tboot("cors registered");
 
-tboot("before listen");
-
 /** 全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。 */
 const subscribers = new Set<(event: ServerEvent) => void>();
 
+/**
+  广播：某一路订阅者写不进去（它的连接刚被掐掉）是它自己那一路的事，摘掉就好。
+  这里必须兜住异常——`broadcast` 挂在 `importer.emit("event")` 的**同步链**上，
+  一路死订阅者抛出的 write 异常会一路冒到 `ImportService.run` 的 catch，把一次已经算完的导入判成 failed。
+  删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
+  */
 function broadcast(event: ServerEvent): void {
-  for (const subscriber of subscribers) subscriber(event);
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(event);
+    } catch {
+      subscribers.delete(subscriber);
+      traceEngine("degrade", { what: "sse_subscriber_dropped" });
+    }
+  }
+}
+
+/**
+  SSE 单帧写出器：`/api/events` 与三条对话流式路由共用。
+  判 `destroyed` 不只看 `writableEnded`：客户端硬断（关页面、切走）时 `writableEnded` 仍是 false，
+  这时 write 会抛——四条出口是一条判据，分开写迟早只改一处（10-06 复审就是这么发现广播会崩导入的）。
+  */
+function sseWriter(reply: FastifyReply): (event: unknown) => void {
+  return (event) => {
+    if (reply.raw.writableEnded || reply.raw.destroyed) return;
+    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
 }
 
 function repositoryOr404(repositoryId: string) {
@@ -207,10 +238,6 @@ app.delete<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryI
   return { repositories: importer.catalog() };
 });
 
-function repositorySettings(repositoryPath: string, repositoryId: string): { monthlyBudgetUsd: number } {
-  return readRepositorySettings(repositoryPath, repositoryId);
-}
-
 /** 每仓可持久化的设置形态（settings_json 里的一个子集；refinement 标记等内部键不在此列、读写都须保留）。 */
 interface RepositorySettingsPayload {
   monthlyBudgetUsd: number;
@@ -218,7 +245,7 @@ interface RepositorySettingsPayload {
 }
 
 function readRepositorySettings(repositoryPath: string, repositoryId: string): RepositorySettingsPayload {
-  // close 走 finally：这两个 helper 挂在每个请求的读路径上，中途抛错就是每请求漏一个 SQLite 句柄
+  // close 走 finally：这个 helper 挂在每个请求的读路径上，中途抛错就是每请求漏一个 SQLite 句柄
   const database = new TutorDatabase(repositoryPath);
   try {
     const settings = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(repositoryId);
@@ -231,13 +258,25 @@ function readRepositorySettings(repositoryPath: string, repositoryId: string): R
   }
 }
 
-/** 摘要表一次读多少行：与 `store/database.ts` 的缺省一致，触顶时要在日志里说出来，不能静默少文件。 */
-const LATEST_SUMMARY_LIMIT = 2_000;
+/**
+  付费分支的统一闸门口径：`mode === "degraded"` 就传 `undefined` provider（八处消费方同一判据，别各写一遍）。
+  单价没配时这里恒为 false——那是闸门失效，不是「还剩很多额度」，读数见 `budgetGateNotice` 与启动那条 degrade。
+  `monthlyBudgetUsd` 一起交出去：教学回合收尾还要按**同一份**预算算本会话成本，再读一次设置就是第二份口径。
+  */
+function budgetGate(repositoryPath: string, repositoryId: string): { monthlyBudgetUsd: number; degraded: boolean } {
+  const monthlyBudgetUsd = readRepositorySettings(repositoryPath, repositoryId).monthlyBudgetUsd;
+  return { monthlyBudgetUsd, degraded: summarizeCost(repositoryPath, monthlyBudgetUsd).mode === "degraded" };
+}
+
+function budgetDegraded(repositoryPath: string, repositoryId: string): boolean {
+  return budgetGate(repositoryPath, repositoryId).degraded;
+}
 
 /** L1 摘要表 → `path → 一句话职责`（流程证据、search 语料、推荐入口共用）。 */
 function latestFileSummaries(repositoryPath: string): Map<string, string> {
   const database = new TutorDatabase(repositoryPath);
   try {
+    // 触顶不是静默少文件：缺口要在日志里点名（上限本身只有一份定义，在 store/database.ts）
     const rows = database.getLatestFileSummaries(LATEST_SUMMARY_LIMIT);
     if (rows.length >= LATEST_SUMMARY_LIMIT) console.warn(`[engine] ${repositoryPath} 的摘要行数达到读取上限 ${LATEST_SUMMARY_LIMIT}，超出的旧路径本次没有摘要可用（流程证据与检索语料会缺这些文件）`);
     return new Map(rows.map((row) => [row.path, row.summary]));
@@ -268,7 +307,9 @@ function sanitizeThreadId(value: unknown): string | undefined {
 
 /**
   线程正文 → 模型上下文：最近 6 条进「最近对话」窗口，窗口外只留学习者提问作问题脉络。
-  两条口径（6 条 / 8 条、逐行截断）住在 scopechat/scopechat.ts 的渲染常量里，这里只负责选行。
+  窗口大小就是下面这两个字面量（6 / 8）——**这里才是选行的地方**。scopechat 的
+  `HISTORY_TURNS` / `EARLIER_QUESTIONS_MAX` 只在那一侧做渲染期再裁剪，对这里交出去的条数是恒等操作，
+  所以调窗口要改本函数，只改那边不会跟着变（逐行截断确实只在那边）。
 
   它替换掉的是「客户端回传 history + earlierQuestions」那条通路（09-27 会话持久化）：
   进模型上下文的东西必须能在库里考据到——客户端临时拼的窗口正文既可能是旧的、也可能被改，
@@ -331,7 +372,9 @@ app.get("/api/health", async () => {
   const llm = teachingProviderStatus(teachingProvider);
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
-    summaryProvider: process.env.TUTOR_SUMMARY_PROVIDER ?? "local",
+    // 摘要档由真源工厂报出：直接读 TUTOR_SUMMARY_PROVIDER 会把「没设环境变量 = 走轻量档」说成 "local"，
+    // 而 .env 里那行空值会让这个字段回成空串——健康页的读数不能反过来骗人
+    summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
     agentLoop: actionLoopEnabled
@@ -416,9 +459,7 @@ app.get("/api/events", async (_request, reply) => {
   // SSE 替代原 /ws：EventSource 自带断线自动重连，浏览器兼容面与普通 HTTP 一致
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const subscriber = (event: ServerEvent): void => {
-    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  const subscriber = sseWriter(reply);
   subscribers.add(subscriber);
   reply.raw.on("close", () => subscribers.delete(subscriber));
 });
@@ -548,8 +589,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "LLM 出题需要提供主题标签" });
   if (kind && !EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
-  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const budgetExceeded = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
+  const budgetExceeded = budgetDegraded(repository.path, repository.index.repositoryId);
   try {
     return reply.code(201).send(await exercises.next(repository, {
       kind,
@@ -570,8 +610,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const moduleLabel = (request.query.module ?? "").trim();
   if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
-  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const budgetExhausted = summarizeCost(repository.path, monthlyBudget).mode === "degraded";
+  const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : lightLlmProvider;
   // 落到「模块自己的文件清单」的原因由引擎说，不让界面替用户猜（未配置/触顶/判空/失败几件事的用户处置完全不同，
   // 尤其「模型主动判空」是可信答案，被写成「还没配 LLM」会把人引去配密钥——与流程层 reason 同一套口径）
@@ -624,11 +663,13 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
       : "该仓库没有识别到执行入口，也未手动指定；请在流程视图里从文件清单中选择一个起点。";
     return reply.code(404).send({ error: reason });
   }
-  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
   // 流程生成走**主力档**（2026-09-18 由轻量档改过来）：它是「看着整仓证据推断编排」的重任务，
   // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。
-  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : teachingProvider;
-  if (!provider) return degradedFlow(repository.analysis, entry, "未配置主力档 LLM 或本月预算已触顶");
+  const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
+  const provider = budgetExhausted ? undefined : teachingProvider;
+  // 「触顶」与「没配模型」分开说：前者的处置是调预算、后者是配密钥，合成一句就把人往错的方向支
+  // （推荐入口那条路由已经分开报，这里补上同一口径——它的注释也承诺了「与流程层同一套」）
+  if (!provider) return degradedFlow(repository.analysis, entry, budgetExhausted ? "本月预算已触顶，未调用主力档 LLM" : "未配置主力档 LLM");
   const database = new TutorDatabase(repository.path);
   try {
     const summaries = latestFileSummaries(repository.path);
@@ -647,7 +688,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
         indexed: repository.index.files.length,
         missing: missingSummaries.length,
         sample: missingSummaries.slice(0, 5).map((file) => file.path).join("、")
-      }, { traceId: null });
+      });
     }
     const generated = await generateRepositoryFlowCached({
       repositoryPath: repository.path,
@@ -675,8 +716,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const provider = summarizeCost(repository.path, monthlyBudget).mode === "degraded" ? undefined : lightLlmProvider;
+  const provider = budgetDegraded(repository.path, repository.index.repositoryId) ? undefined : lightLlmProvider;
   try {
     return await exercises.answer(repository, request.params.exerciseId, request.body ?? {}, provider);
   } catch (error) {
@@ -686,13 +726,13 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
 
 // 作用域对话（宏观设计 / 练习评估）：单轮 LLM 开放讨论，无教学状态机；预算触顶或未配置 LLM 时显式 422（不静默回落）
 function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string): LlmProvider | undefined {
-  const monthlyBudget = repositorySettings(repositoryPath, repositoryId).monthlyBudgetUsd;
-  if (summarizeCost(repositoryPath, monthlyBudget).mode === "degraded") {
+  if (budgetDegraded(repositoryPath, repositoryId)) {
     void reply.code(422).send({ error: "本月预算已触顶，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
     return undefined;
   }
   if (!teachingProvider) {
-    void reply.code(422).send({ error: "尚未配置 LLM（TUTOR_TEACHING_PROVIDER/MODEL），此作用域的 LLM 对话不可用。" });
+    // 指路要指当前的入口：GUI 的 LLM 设置优先，`TUTOR_TEACHING_*` 只是仍在读的废弃别名（写进 .env 也不再是主路径）
+    void reply.code(422).send({ error: "尚未配置 LLM（在设置里选服务商与模型，或在 .env 写 TUTOR_LLM_PROVIDER / TUTOR_LLM_MODEL），此作用域的 LLM 对话不可用。" });
     return undefined;
   }
   return teachingProvider;
@@ -710,10 +750,16 @@ function scopedThreadTurn(repository: NonNullable<ReturnType<typeof repositoryOr
 /**
   回合正文落库（用户问 + 助手答，全文不截断）：这是产品线，与 journal 的 `turn_text`（审计线，2000 字截断）
   是**有意的双写**——一份供模型下一轮读，一份供指标与裁判读。软删线程不会动这里的行，只让它查不到。
+
+  `threadId` 缺席 = 单次提问，按设计不落库；**线程在但写不进去**（这一轮期间被软删、库写不动）是真丢正文：
+  GUI 已经拿到回放，库里却查无此人，下次进会话就是「聊过但没记录」。静默跳过等于把失败说成成功，
+  所以这里必须留下一条能在 engine.jsonl 查到的读数（`chat-store.appendMessages` 的契约也是这么写的）。
   */
-function persistScopedTurn(repositoryPath: string, threadId: string | undefined, question: string, answer: string): void {
+function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "practice_chat", threadId: string | undefined, question: string, answer: string): void {
   if (!threadId) return;
-  appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }]);
+  if (appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }])) return;
+  traceEngine("degrade", { what: "turn_body_dropped", scene, thread_id: threadId });
+  console.warn(`[engine] ${scene} 这一轮的正文没能写进线程 ${threadId}（线程已被删除或库写不动）；journal 的 turn_text 仍在，产品线缺这一行`);
 }
 
 /**
@@ -776,7 +822,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
     result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
-    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
+    persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
@@ -828,9 +874,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "map_chat");
   try {
     const result = await mapChat({
@@ -845,7 +889,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
     result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
-    persistScopedTurn(repository.path, turn.threadId, content, result.reply);
+    persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
@@ -907,9 +951,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "practice_chat");
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
@@ -918,7 +960,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：练习答疑也在环内——它同样会引用仓库里的代码位置
     result.reply = recheckTurn({ repository, journal, sessionId: thread?.id, scene: "practice_chat", question: content, answer: result.reply }).answer;
-    persistScopedTurn(repository.path, thread?.id, content, result.reply);
+    persistScopedTurn(repository.path, "practice_chat", thread?.id, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
@@ -950,20 +992,33 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/r
   };
 });
 
+/**
+  源码查看（GUI 的源码面板与练习锚点用）。
+
+  ⚠️ 只放**已索引的文件**，不是「仓库里的任何文件」：`source/read-file.ts` 那条「.env / 私钥 / 凭据载体禁读」
+  的名单在索引扩展名白名单里天然不存在（`.env`、`id_rsa` 都没有被收进索引），所以按索引集合放行就等于
+  借用了同一份边界；裸 `readFileSync` 则是给引擎开了一条绕过名单的口子——本机任意进程、
+  乃至任意打开的网页（CORS 是全放开的）都能拿它把被学习仓库里的密钥读出来。
+  GUI 的取参来源本来就全是锚点 / 文件树（都在索引里），收紧不改变正常动线。
+  */
 app.get<{ Params: { repositoryId: string }; Querystring: { path?: string; line?: string } }>("/api/repositories/:repositoryId/source", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  const requestedPath = request.query.path;
+  const requestedPath = request.query.path?.replaceAll("\\", "/");
   if (!repository || !requestedPath) return reply.code(404).send({ error: "未找到源码" });
+  // 先判边界、再判收录：越界是「请求本身不合法」(400)，未收录是「这个文件我不给」(404)，两种失败界面要能分开
   const absolute = join(repository.path, requestedPath);
   if (!isWithin(repository.path, absolute)) return reply.code(400).send({ error: "源码路径越出仓库边界" });
-  try { return { path: requestedPath, line: Math.max(1, Number(request.query.line ?? 1)), content: readFileSync(absolute, "utf8") }; }
+  if (!repository.index.files.some((file) => file.path === requestedPath)) return reply.code(404).send({ error: "该文件不在本仓索引里（未收录的类型与密钥/凭据文件不提供源码）" });
+  // line 是给界面定位用的：非数字/负数按 1，不能把 NaN 回出去（JSON 里会变成 null）
+  const line = Number(request.query.line ?? 1);
+  try { return { path: requestedPath, line: Number.isFinite(line) ? Math.max(1, Math.trunc(line)) : 1, content: readFileSync(absolute, "utf8") }; }
   catch { return reply.code(404).send({ error: "无法读取该源码文件" }); }
 });
 
 app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } }>("/api/repositories/:repositoryId/cost", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  return summarizeCost(repository.path, repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd, request.query.sessionId);
+  return summarizeCost(repository.path, readRepositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd, request.query.sessionId);
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
@@ -993,7 +1048,7 @@ app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number; s
   } finally {
     database.close();
   }
-  const next = { ...readRepositorySettings(repository.path, repository.index.repositoryId) };
+  const next = readRepositorySettings(repository.path, repository.index.repositoryId);
   return { ...summarizeCost(repository.path, next.monthlyBudgetUsd), settings: next };
 });
 
@@ -1006,7 +1061,7 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const settings = readRepositorySettings(repository.path, repository.index.repositoryId);
   // 预算降级或 light 未配置时不烧钱：与导入路径同口径，确定性档重烧会把 LLM 摘要整表覆盖成兜底
-  const lightProvider = summarizeCost(repository.path, settings.monthlyBudgetUsd).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
+  const lightProvider = budgetDegraded(repository.path, repository.index.repositoryId) ? undefined : buildLlmRuntimeProvider("light");
   const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments: settings.summaryHeaderComments });
   if (provider instanceof LocalSummaryProvider) {
     return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重烧会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
@@ -1026,9 +1081,12 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
 });
 
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
-  const repository = repositoryOr404(request.body?.repositoryId ?? "");
-  const node = repository && flatten(repository.course.root).find((item) => item.id === request.body?.courseNodeId);
-  if (!repository || !node) return reply.code(404).send({ error: "课程节点不存在" });
+  // 这两条会话路由的 URL 里没有 `:repositoryId`，懒挂载钩子覆盖不到，所以按钩子同一口径自己挂一次
+  const mounted = importer.ensureMounted(request.body?.repositoryId ?? "");
+  if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
+  const repository = mounted.repository;
+  const node = flatten(repository.course.root).find((item) => item.id === request.body?.courseNodeId);
+  if (!node) return reply.code(404).send({ error: "课程节点不存在" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : undefined);
   const hasExplicitSettings = Boolean(request.body?.settings && Object.keys(request.body.settings).length) || typeof request.body?.style === "number";
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
@@ -1066,10 +1124,23 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   凡是要进模型上下文的东西都得能在库里考据到，客户端临时拼的窗口正文不算。
   `map` / `practice` 的对话正文靠这些线程累积，服务端在流式回合里自己取历史、自己落正文。
   */
-function locateThread(threadId: string): { repository: NonNullable<ReturnType<typeof repositoryOr404>>; thread: ChatThread } | undefined {
+/**
+  线程住在**哪个仓的库**里，就读那个库——不能只看挂在内存里的那几个。
+  挂载集有上限（`maxMounted()`，其余按 LRU 驱逐），而被驱逐的仓只是不在内存，它的 `.tutor/tutor.db` 一字未动。
+  过去这三条线程路由只扫挂载集，于是切够几次仓再点开旧对话，就得到一句「会话不存在或已删除」，
+  改名和删除也跟着 404——库里明明还在。兜法是把地址簿逐仓核一趟：每条只开一次 SQLite（读完即关）、纯本地读，零 token。
+  ⚠️ 这里**刻意不挂回该仓**：三条路由要的只是库路径与仓 id（id 就写在线程行上），
+  挂回来反而会把「产物读不动」误报成「会话没了」，还为一次读历史付一趟挂载的代价。
+  */
+function locateThread(threadId: string): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
   for (const repository of importer.mountedRepositories()) {
     const thread = getThread(repository.path, threadId);
-    if (thread) return { repository, thread };
+    if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
+  }
+  for (const entry of importer.catalog()) {
+    if (entry.mounted || !entry.exists) continue;
+    const thread = getThread(entry.repositoryPath, threadId);
+    if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
   }
   return undefined;
 }
@@ -1104,7 +1175,7 @@ app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; nodeId?: u
 app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
   const located = locateThread(request.params.threadId);
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
-  return { thread: located.thread, messages: readMessages(located.repository.path, located.thread.id) };
+  return { thread: located.thread, messages: readMessages(located.repositoryPath, located.thread.id) };
 });
 
 app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/threads/:threadId", async (request, reply) => {
@@ -1112,7 +1183,7 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
   const title = typeof request.body?.title === "string" ? request.body.title : "";
   if (!title.trim()) return reply.code(400).send({ error: "标题不能为空" });
-  const thread = renameThread(located.repository.path, located.thread.id, title);
+  const thread = renameThread(located.repositoryPath, located.thread.id, title);
   return thread ? { thread } : reply.code(404).send({ error: "会话不存在或已删除。" });
 });
 
@@ -1122,9 +1193,9 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
   */
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
   const located = locateThread(request.params.threadId);
-  if (!located || !softDeleteThread(located.repository.path, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
+  if (!located || !softDeleteThread(located.repositoryPath, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
   teachingStates.delete(located.thread.id);
-  new Journal(located.repository.path, located.repository.index.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
+  new Journal(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
   return { deleted: true, threadId: located.thread.id };
 });
 
@@ -1133,27 +1204,33 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   // 教学侧的 sessionId 就是 chat_session 的线程 id（一个 id 三个名字），llm.log 直接沿用它做线程聚合
   markThread(current.id);
-  const repository = repositoryOr404(current.repositoryId);
-  const node = repository && flatten(repository.course.root).find((item) => item.id === current.courseNodeId);
-  if (!repository || !node) return reply.code(404).send({ error: "课程节点不可用" });
+  /**
+    同上：URL 里没有 `:repositoryId`，钩子够不到，这里补挂一次。
+    会话还活在内存里、它的仓却已被 LRU 驱逐时，继续聊该像别的仓路由那样把它挂回来，
+    而不是回一句「课程节点不可用」——那会把一次正常追问判成产物丢失，用户只会去重新导入（花钱）。
+    */
+  const mounted = importer.ensureMounted(current.repositoryId);
+  if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
+  const repository = mounted.repository;
+  const node = flatten(repository.course.root).find((item) => item.id === current.courseNodeId);
+  if (!node) return reply.code(404).send({ error: "课程节点不可用" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : current.settings.style);
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
   const session = { ...current, style: settings.style, settings };
-  const monthlyBudget = repositorySettings(repository.path, repository.index.repositoryId).monthlyBudgetUsd;
-  const currentCost = summarizeCost(repository.path, monthlyBudget);
+  // 闸门状态在**开火前**一次定死（判据只有 `budgetGate` 这一处），收尾记账复用同一个值：
+  // 事后按「本会话累计成本」重算，会把花了钱的那一轮记成降级回合，或反过来让闸门放行/拦下而账面上看不出来。
+  const gate = budgetGate(repository.path, repository.index.repositoryId);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
   // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流，不再走全局广播（事件天然按请求隔离，连接断开自动清理）
   reply.hijack();
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = (event: unknown): void => {
-    if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "teach");
   try {
-    const outcome = await respondWithProvider(session, node, request.body.content.trim(), currentCost.mode === "degraded" ? undefined : teachingProvider, faded, repository.path, {
-      classifier: actionLoopEnabled ? undefined : (currentCost.mode === "degraded" ? undefined : lightLlmProvider),
+    const outcome = await respondWithProvider(session, node, request.body.content.trim(), gate.degraded ? undefined : teachingProvider, faded, repository.path, {
+      classifier: actionLoopEnabled ? undefined : (gate.degraded ? undefined : lightLlmProvider),
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
@@ -1188,9 +1265,13 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
     if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
     journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
-    if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: 2, reason: "two_consecutive_step_downs" }, session.id);
+    if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: ANSWER_CIRCUIT_BREAKER_ATTEMPTS, reason: "two_consecutive_step_downs" }, session.id);
     if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-    journal.append("token_usage", { input_tokens: outcome.usage?.inputTokens ?? Math.ceil(request.body.content.length / 4), output_tokens: outcome.usage?.outputTokens ?? Math.ceil(outcome.assistant.content.length / 4), cache_hit_tokens: outcome.usage?.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
+    // 没有 `usage` 就是这一轮一分没花（未配模型 / 预算触顶走本地规则），**这一轮不进 token_usage**：
+    // 拿字数÷4 造一份估算进账本，等于让免费回合吃掉预算——金额「到顶」后付费分支会被这些不存在的钱关掉。
+    // 写成「有 usage 才记」还与 map/practice 三处同一口径；成本页的「计费回合」= 行数 − 降级行数，
+    // 免费回合若也留一行（哪怕全 0）就被计入计费回合，触顶那一月的账面会反过来夸大有花过的钱。
+    if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
     // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕；降级轮也记（裁判要看到「这一轮没走 LLM」的成品）
     journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
     // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
@@ -1202,8 +1283,11 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     }
     // 回合决策摘要：提议动作 → 守门裁决 → 实际执行 + 工具轮次（run-trace 按 traceId 串起整回合的原始素材）
     journal.append("loop_round", { scene: "teach", decision: outcome.actionSource ?? "deterministic", proposed: outcome.proposedAction ?? null, executed: outcome.action ?? null, tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);
-    const cost = summarizeCost(repository.path, monthlyBudget, session.id);
-    if (cost.mode === "degraded") {
+    const cost = summarizeCost(repository.path, gate.monthlyBudgetUsd, session.id);
+    // 降级留痕认的是**开火前那个闸门值**（正是同一个 `gate.degraded` 决定了上面给不给 provider），
+    // 不是「本会话累计成本」：后者会在这一轮其实花了钱、但刚好把预算跨过线时补一条假的降级记录，
+    // 也会在预算被别的会话/导入吃满时让真正降级的这一轮一声不吭——两种都是把账记反。
+    if (gate.degraded) {
       journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
       // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
       traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
@@ -1232,9 +1316,8 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   - 白名单与 `Journal.append` **共用**（`isJournalEventType`），不另立一份，避免两处漂移。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
-    sessionId 是关联属性而非外键。教学会话虽已能按 sessionId 从 journal 续命恢复（`resolveTeachingState`），
-    但 map/practice 对话本就没有会话态、重启窗口期内也查不到——若按外键拒绝，前端会把能写的事件丢掉，
-    那才是真的把可观测性弄丢。
+    sessionId 是关联属性而非外键。三作用域的会话续命都走 `chat_session`/`chat_message`（见 resolveTeachingState），
+    不依赖这里的关联值——若按外键拒绝，前端会把能写的事件丢掉，那才是真的把可观测性弄丢。
   */
 app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: unknown; sessionId?: unknown } }>("/api/repositories/:repositoryId/journal", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
@@ -1250,7 +1333,10 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
     if (typeof value !== "string") return reply.code(400).send({ error: `payload.${key} 仅允许 string | number | boolean | null。` });
     if (value.length > 2000) return reply.code(400).send({ error: `payload.${key} 过长（上限 2000 字符）。` });
   }
-  if (sessionId !== undefined && typeof sessionId !== "string") return reply.code(400).send({ error: "sessionId 必须是字符串。" });
+  if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.length > 200)) {
+    // 上面那段契约承诺了「有长度上限」：一个超长 sessionId 会永久占进 append-only 的审计线，而它只是关联属性，截不动不如拒掉
+    return reply.code(400).send({ error: "sessionId 必须是不超过 200 字符的字符串。" });
+  }
   const event = new Journal(repository.path, repository.index.repositoryId)
     .append(type, scalars as JournalEvent["payload"], sessionId as string | undefined);
   return reply.code(201).send(event);

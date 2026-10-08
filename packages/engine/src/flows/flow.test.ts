@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import { FLOW_MAX_STAGES, type RepositoryAnalysis, type RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry } from "./flow.js";
+import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, flowCacheKeyOf, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry } from "./flow.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
 import { mkdtempSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -242,7 +242,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.deterministic).toBeUndefined();
   });
 
-  it("输出在长度上限处被截断（finishReason=length）= 确定性降级：单独文案、可入缓存，不再每次访问重烧", async () => {
+  it("输出被我们自己的上限截断 = 单独文案 + capHit，**不算**确定性结论（同输入再问结果一样这件事不成立）", async () => {
     let seen: LlmCompletionInput | undefined;
     const result = await generateRepositoryFlow({
       repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY,
@@ -258,7 +258,9 @@ describe("generateRepositoryFlow（含降级）", () => {
     });
     expect(result.source).toBe("static");
     expect(result.reason).toBe("模型输出在长度上限处被截断，未形成完整流程");
-    expect(result.deterministic).toBe(true);
+    // 撞上限是我们给的容量不够，不是模型对这份代码给不出更多：标 capHit，别混进 deterministic 那一格
+    expect(result.capHit).toBe(true);
+    expect(result.deterministic).toBeUndefined();
     expect(seen?.maxTokens).toBe(8_000); // 主调用上限：3_200 时该入口必触顶 → 6_000 → 10-06 实测 13 条里 2 条撞满 12,000（含 6,000 思考余量）后再放宽到 8_000
   });
 
@@ -372,6 +374,67 @@ describe("generateRepositoryFlow（含降级）", () => {
       expect(third.source).toBe("llm");
       expect(third.usage).toBeUndefined(); // 命中不带 usage，上层不会重复记账
       expect(attempts).toBe(2);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("同键在途去重：两个并发请求只烧一次模型，后来者不带 usage", async () => {
+    // 内存层要等生成结束才写，所以冷入口上的两个并发（两个标签页 / GUI 重试 + 首屏）过去各烧一次
+    // ——§25.3 记的缺口「引擎侧没有在途去重」。§35.7 实测一条流程 ≈¥0.17，双烧就是白付一份。
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { text: reply, usage: { inputTokens: 9_000, outputTokens: 5_000 } };
+    });
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
+    const [owner, joiner] = await Promise.all([generateRepositoryFlowCached(base), generateRepositoryFlowCached(base)]);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(owner.flow.stages).toHaveLength(joiner.flow.stages.length);
+    expect(owner.usage).toBeDefined();
+    expect(joiner.usage).toBeUndefined(); // 同一笔钱不被计两次（与命中缓存同一口径）
+    // 生成结束后照常落缓存：第三次访问连模型都不用问
+    const third = await generateRepositoryFlowCached(base);
+    expect(third.usage).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("环节超出上限与落点不存在分开记账：caveat 不把我们的截断说成模型的锅", () => {
+    const stages = Array.from({ length: FLOW_MAX_STAGES + 2 }, (_, index) => ({
+      title: `环节${index}`,
+      kind: "stage",
+      // 第一个环节的路径是编的（模型的锅），其余都落在真实文件上（被我们的上限截掉）
+      files: [{ path: index === 0 ? "nope/invented.py" : "main.py", line: 1 }]
+    }));
+    const flow = parseFlow(JSON.stringify({ title: "t", summary: "s", stages }), context);
+    expect(flow?.stages).toHaveLength(FLOW_MAX_STAGES - 1);
+    expect(flow?.caveats).toContain("有 1 个环节因未给出存在的文件路径被丢弃");
+    expect(flow?.caveats).toContain(`模型给了 ${FLOW_MAX_STAGES + 2} 个环节，超出 ${FLOW_MAX_STAGES} 个上限的 2 个未纳入`);
+    expect(flow?.caveats).not.toContain(`有 3 个环节因未给出存在的文件路径被丢弃`);
+  });
+
+  it("撞上限的降级只活在内存层：模拟 engine 重启后会重问，且没往 SQLite 写那一行", async () => {
+    clearRepositoryFlowCache();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-caphit-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const complete = vi.fn(async () => ({ text: '{"title":"截断", "stages": [{"order":1', usage: { inputTokens: 5_000, outputTokens: 9_200 }, finishReason: "length" }));
+      const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+      const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY, database };
+      expect((await generateRepositoryFlowCached(base)).capHit).toBe(true);
+      expect(complete).toHaveBeenCalledTimes(1);
+      // 同一进程内再开一次：内存层挡住，不重复烧钱（这条是保留内存复用的理由）
+      await generateRepositoryFlowCached(base);
+      expect(complete).toHaveBeenCalledTimes(1);
+      // 但持久层不能有它：否则一次容量误判被永久钉成静态视图，读起来还像「模型讲不动」
+      const key = flowCacheKeyOf(base)!.key;
+      expect(database.getLayerCache(key), "capHit 的结果不许落 SQLite").toBeUndefined();
+      clearRepositoryFlowCache();
+      const afterRestart = await generateRepositoryFlowCached(base);
+      expect(afterRestart.capHit).toBe(true);
+      expect(complete).toHaveBeenCalledTimes(2); // 重启后可以重问——上限修好了就能拿到真流程
     } finally {
       database.close();
       rmSync(dir, { recursive: true, force: true });

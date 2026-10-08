@@ -47,7 +47,14 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     if (!jobActive || !jobId) return;
     const source = new EventSource("/api/events");
     source.onmessage = (event: MessageEvent<string>) => {
-      const serverEvent = JSON.parse(event.data) as { type: string; payload: ImportJob };
+      // 同一条事件流也广播 repository.updated 等其它类型；畸形/非 JSON 帧不能让 onmessage 抛（抛了这一帧就丢，
+      // 且与 readStoredWorkspace 兜 JSON.parse 的口径一致）。解析不了的直接跳过，交给 5s 轮询兜终态。
+      let serverEvent: { type: string; payload: ImportJob };
+      try {
+        serverEvent = JSON.parse(event.data) as { type: string; payload: ImportJob };
+      } catch {
+        return;
+      }
       if (serverEvent.type === "import.progress" && serverEvent.payload.id === jobId) setJob(serverEvent.payload);
     };
     const interval = window.setInterval(

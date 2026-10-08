@@ -35,11 +35,14 @@ export function classifyIntentRegex(state: TeachingState, learnerMessage: string
  * is the Phase 0 circuit breaker: give the answer, record dependency, then verify.
  * 确认只有在 verify 阶段才生效——意图本身不带阶段语义，门禁留在这里。
  */
+/** 熔断阈值：连着第 2 次「要帮助」就直接给答案。journal 的 `dependency.after_attempts` 记的是同一个数，别各写一份 2。 */
+export const ANSWER_CIRCUIT_BREAKER_ATTEMPTS = 2;
+
 export function transitionFromIntent(state: TeachingState, intent: LearnerIntent): Transition {
   const attempts = state.attempts + 1;
   if (intent === "needs_help") {
     const fallbackCount = state.fallbackCount + 1;
-    if (fallbackCount >= 2) {
+    if (fallbackCount >= ANSWER_CIRCUIT_BREAKER_ATTEMPTS) {
       return { next: { stage: "verify", fallbackCount, attempts }, kind: "give_answer", hintDepth: 3 };
     }
     return { next: { stage: state.stage, fallbackCount, attempts }, kind: "step_down", hintDepth: Math.min(2, attempts) };
@@ -63,11 +66,3 @@ export function transitionFromAction(state: TeachingState, action: TutorAction):
   const intent: LearnerIntent = action === "advance" ? "progress" : action === "confirm" ? "confirmation" : "needs_help";
   return transitionFromIntent(state, intent);
 }
-
-export const stageLabel: Record<TeachingStage, string> = {
-  orient: "L1 定向",
-  procedure: "L2 程序",
-  concept: "L3 概念",
-  verify: "检验",
-  confirmed: "确认"
-};
