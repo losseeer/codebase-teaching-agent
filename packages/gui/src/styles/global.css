@@ -111,12 +111,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 /* 收起态留的切仓入口：64px 图标栏里放不下一整个下拉，所以只留一枚仓名徽标，点了展开并打开切换器 */
 .sidebar-repo-mini { margin: 14px auto 0; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid #35544a; border-radius: 6px; background: #21483d; color: #cfe0d5; font-size: 13px; font-weight: 700; text-transform: uppercase; cursor: pointer; }
 .sidebar-repo-mini:hover { border-color: #d8ef58; color: #fff; }
-.sidebar-repo .picker-trigger { border-color: #35544a; background: #21483d; color: #cfe0d5; }
-.sidebar-repo .picker-trigger:hover { border-color: #4f7a68; background: #26524a; }
-.sidebar-repo.picker-open > .picker-trigger { border-color: #d8ef58; background: #26524a; }
-.sidebar-repo .picker-trigger.has-active { border-color: #4f7a68; }
+/* 侧栏这几条**必须比基础样式多一层类**：`.picker-open > .picker-trigger` 与 `.picker-trigger.has-active`
+   住在下面（各是 0,2,0），只写 `.sidebar-repo .picker-trigger` 是平手——平手时后写的赢，
+   于是选中仓库（恒有 `has-active`）或展开的那一刻，浅底规则盖掉这里的深底，白字落在白底上＝读不见。
+   顺带：`picker-open` 挂在下拉自己的根节点（`.picker`）上，不在 `.sidebar-repo` 上。 */
+.sidebar-repo .picker > .picker-trigger { border-color: #35544a; background: #21483d; color: #cfe0d5; }
+.sidebar-repo .picker > .picker-trigger:hover { border-color: #4f7a68; background: #26524a; }
+.sidebar-repo .picker.picker-open > .picker-trigger { border-color: #d8ef58; background: #26524a; }
+.sidebar-repo .picker > .picker-trigger.has-active { border-color: #4f7a68; background: #21483d; }
+.sidebar-repo .picker.picker-open > .picker-trigger.has-active { border-color: #d8ef58; background: #26524a; }
 .sidebar-repo .picker-label { color: #eaf3ec; }
-.sidebar-repo .picker-trigger.has-active .picker-current { color: #fff; }
+.sidebar-repo .picker > .picker-trigger.has-active .picker-current { color: #fff; }
 .sidebar-repo .picker-trigger b, .sidebar-repo .picker-trigger svg, .sidebar-repo .picker-option b { color: #9cb7a8; }
 .sidebar-repo .picker-panel { border-color: #35544a; background: #1d4137; box-shadow: 0 14px 30px rgba(6, 26, 20, .45); }
 .sidebar-repo .picker-option { color: #cfe0d5; }
