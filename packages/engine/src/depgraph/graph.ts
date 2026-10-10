@@ -226,8 +226,14 @@ function findEndLine(lines: string[], start: number, language: SymbolInfo["langu
   }
   let balance = 0;
   for (let index = start; index < Math.min(lines.length, start + 200); index += 1) {
-    balance += (lines[index].match(/{/g) ?? []).length - (lines[index].match(/}/g) ?? []).length;
-    if (index > start && balance <= 0) return index + 1;
+    const opens = (lines[index].match(/{/g) ?? []).length;
+    balance += opens - (lines[index].match(/}/g) ?? []).length;
+    if (balance > 0) continue; // 还在函数体里
+    // 花括号已归零：要么这行闭合了函数体（签名行开了括号，或已经走到签名行之后），要么是「无花括号」的声明
+    if (index > start || opens > 0) return index + 1;
+    // 无花括号的声明行（表达式体箭头函数 `const f = (a) => a + b`、单行 `function f(){return 1}`）就到本行为止；
+    // 但若本行以 `=>` 收尾，函数体还在下一行（`const f = (a) =>\n  { … }`），不能在此收口
+    if (!/=>\s*$/.test(lines[index])) return start + 1;
   }
   return Math.min(lines.length, start + 1);
 }

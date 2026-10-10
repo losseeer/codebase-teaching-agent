@@ -112,6 +112,28 @@ describe("语法树符号抽取", () => {
     expect(call?.callerSymbol).toContain("main");
   });
 
+  it("逐行匹配回落的能力上限：findEndLine 在四种声明形态下的边界", async () => {
+    resetSymbolParserForTest(); // 强制走逐行匹配，专门验证 findEndLine 的边界
+    const dir = mkdtempSync(join(tmpdir(), "regex-endline-"));
+    const source = [
+      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行（修复前会向后吞掉后续声明）
+      "const b = (x) => {", // 常规花括号多行箭头
+      "  return x + 2;",
+      "};",
+      "const c = (x) =>", // `=>` 收尾、块在下一行：区间要覆盖到块
+      "  { return x + 3; };",
+      "function d(x) { return x; }" // 单行花括号函数：区间止于本行
+    ].join("\n");
+    writeFileSync(join(dir, "m.ts"), source);
+    const index = indexRepository(dir);
+    const graph = buildDependencyGraph(dir, index.files);
+    expect(graph.parseBackend).toBe("regex"); // 确认真走了回落路径，否则本例测不到 findEndLine
+    expect(graph.symbols.map((symbol) => `${symbol.name}:${symbol.line}-${symbol.endLine}`)).toEqual([
+      "a:1-1", "b:2-4", "c:5-6", "d:7-7"
+    ]);
+    await loadSymbolParser(); // 还原全局解析器状态，避免影响后续用例
+  });
+
   it("没有对应语法的扩展名返回 undefined，交给逐行匹配", () => {
     expect(extractSymbolsFromAst("legacy.x10", "<template><div/></template>")).toBeUndefined();
   });
