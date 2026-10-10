@@ -1,11 +1,10 @@
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
 import { EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
-import { hash } from "../lib.js";
+import { hash, readFileLines, symbolBodyLines } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { TutorDatabase } from "../store/database.js";
@@ -559,7 +558,9 @@ function safeInvocationFor(repositoryPath: string, unit: ImplementationUnit): Sa
   if (unit.symbol.language !== "typescript") return undefined;
   const parameters = unit.symbol.parameters;
   if (parameters.some((parameter) => !/^[A-Za-z_$][\w$]*$/.test(parameter))) return undefined;
-  const source = readFileSync(join(repositoryPath, unit.symbol.path), "utf8").split("\n").slice(unit.symbol.line - 1, unit.symbol.endLine).join("\n");
+  const lines = readFileLines(repositoryPath, unit.symbol.path);
+  if (!lines) return undefined;
+  const source = symbolBodyLines(lines, unit.symbol).join("\n");
   const opening = source.indexOf("{");
   const closing = source.lastIndexOf("}");
   const body = opening >= 0 && closing > opening ? source.slice(opening + 1, closing).trim() : "";

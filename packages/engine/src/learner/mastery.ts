@@ -41,8 +41,22 @@ function average(values: number[]): number | null {
 /** `deriveMastery` 的按单元加料版：补上提示深度、依赖事件、成功率——学习画像与设置推荐吃这一份。 */
 export function deriveMasteryMap(events: JournalEvent[]): MasteryMapEntry[] {
   const records = deriveMastery(events);
+  // 先按单元把事件分桶（O(事件数)），每条记录直接查桶，避免逐条重扫全量事件（原为 O(记录×事件)）。
+  // 命中口径与原先 `events.filter(…)` 逐字一致：`unit_id` 或 `target_unit_id` 命中即计入该单元；
+  // 事件按入参顺序入桶，下游 `[...unitEvents].reverse()` 取「最近 stage」才不受影响。
+  const eventsByUnit = new Map<string, JournalEvent[]>();
+  for (const event of events) {
+    const keys = new Set<string>();
+    if (typeof event.payload.unit_id === "string") keys.add(event.payload.unit_id);
+    if (typeof event.payload.target_unit_id === "string") keys.add(event.payload.target_unit_id);
+    for (const unitId of keys) {
+      const bucket = eventsByUnit.get(unitId);
+      if (bucket) bucket.push(event);
+      else eventsByUnit.set(unitId, [event]);
+    }
+  }
   return records.map((record) => {
-    const unitEvents = events.filter((event) => event.payload.unit_id === record.unitId || event.payload.target_unit_id === record.unitId);
+    const unitEvents = eventsByUnit.get(record.unitId) ?? [];
     const hints = unitEvents.filter((event) => event.type === "hint_depth").map((event) => Number(event.payload.depth)).filter(Number.isFinite);
     const dependencies = unitEvents.filter((event) => event.type === "dependency_event").length;
     const stage = [...unitEvents].reverse().find((event) => typeof event.payload.stage === "string")?.payload.stage;

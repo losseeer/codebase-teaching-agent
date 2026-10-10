@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatScope, ChatThread, CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api, type ScopedChatEvent, type StreamTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
+import { useTypewriter } from "./useTypewriter";
+import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 
 /**
   Agent 侧栏的 3 个作用域。对应 prototype 中 `SCOPES = { map, teaching, practice }`。
@@ -45,93 +47,9 @@ export type ThreadItem =
 type ThreadRow = { id: string; role: string; content: string };
 
 const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
-/**
-  会话线程的记忆（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。
-  真源在引擎的 chat_session / chat_message，这里只记「这个浏览器上次停在哪个线程」：
-  - `currentId` 不在最新清单里就丢弃——会话可能在别处（或另一次会话管理动作里）被软删，拿它去请求只会 404；
-  - `ids` 是上一次成功拉到的清单，用于清单请求暂时失败时（引擎重启后仓库要先重新导入）不把选择清空。
-  旧形状 `仓库:节点 → sessionId` 一律当空表处理：它没有作用域维度，猜错比丢掉坏。
-  */
-const SESSION_STORAGE_KEY = "codebase-tutor.teaching-sessions";
 
 /** GUI 作用域（teaching）→ 引擎作用域取值（teach）：两套口径的对应关系只在这一处表里换算。 */
 const CHAT_SCOPE: Record<Scope, ChatScope> = { map: "map", teaching: "teach", practice: "practice" };
-
-/**
-  断线补账的欠账（sessionStorage）：`repositoryId → 作用域 → { threadId, count }`。
-  发送前记下「这一轮的线程 + 当时库里已有几条正文」，回合正常结束就清掉；剩下的就是欠账——
-  线程重新载入时正文变多了，说明引擎在客户端断线后仍把那一轮算完落了库（回合是一问一答原子写入的）。
-  放 sessionStorage 而不是内存：整页刷新同样是断线回来，内存态那时一律归零。
-  */
-const DEBT_STORAGE_KEY = "codebase-tutor.turn-debt";
-
-interface TurnDebt { threadId: string; count: number }
-
-/**
-  补账的回读节奏（毫秒）：断线那一刻引擎多半还在算，第一次回读「正文没多」是常态，不能据此宣布失败。
-  12s / 30s / 60s 三趟仍没等到才说明白——那一轮确实没落库。总等待约 100s，够一轮教学回合算完。
-  */
-const RECHECK_DELAYS = [12_000, 30_000, 60_000] as const;
-
-function readDebtMap(): Record<string, Partial<Record<ChatScope, TurnDebt>>> {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(DEBT_STORAGE_KEY) ?? "{}") as unknown;
-    if (typeof parsed !== "object" || parsed === null) return {};
-    const out: Record<string, Partial<Record<ChatScope, TurnDebt>>> = {};
-    for (const [repositoryId, scopes] of Object.entries(parsed)) {
-      if (typeof scopes !== "object" || scopes === null) continue;
-      const entry: Partial<Record<ChatScope, TurnDebt>> = {};
-      for (const scope of ["teach", "map", "practice"] as const) {
-        const value = (scopes as Record<string, unknown>)[scope];
-        if (typeof value !== "object" || value === null) continue;
-        const { threadId, count } = value as { threadId?: unknown; count?: unknown };
-        if (typeof threadId === "string" && typeof count === "number") entry[scope] = { threadId, count };
-      }
-      out[repositoryId] = entry;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-interface ThreadMemory { currentId: string | null; ids: string[] }
-type ThreadMemoryMap = Record<string, Partial<Record<ChatScope, ThreadMemory>>>;
-
-function readThreadMemory(): ThreadMemoryMap {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? "{}") as unknown;
-    if (typeof parsed !== "object" || parsed === null) return {};
-    const out: ThreadMemoryMap = {};
-    for (const [repositoryId, scopes] of Object.entries(parsed)) {
-      if (typeof scopes !== "object" || scopes === null) continue; // 旧形状在这一层露馅：值是字符串
-      const entry: Partial<Record<ChatScope, ThreadMemory>> = {};
-      for (const scope of ["teach", "map", "practice"] as const) {
-        const value = (scopes as Record<string, unknown>)[scope];
-        if (typeof value !== "object" || value === null) continue;
-        const { currentId, ids } = value as { currentId?: unknown; ids?: unknown };
-        entry[scope] = {
-          currentId: typeof currentId === "string" ? currentId : null,
-          ids: Array.isArray(ids) ? ids.filter((item): item is string => typeof item === "string") : []
-        };
-      }
-      out[repositoryId] = entry;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function writeThreadMemory(repositoryId: string, scope: ChatScope, next: ThreadMemory): void {
-  try {
-    const map = readThreadMemory();
-    map[repositoryId] = { ...map[repositoryId], [scope]: next };
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* localStorage 不可用时记忆只在当前页面内有效，不影响发送 */
-  }
-}
 
 /** 线程正文 → 侧栏展示项：库里只有 user/assistant 两种角色，hint/error 这类本地提示不落库、也读不回来。 */function threadItemsFrom(messages: readonly ThreadRow[]): ThreadItem[] {
   return messages
@@ -342,33 +260,7 @@ useEffect(() => {
   const setScopeProgress = (target: Scope, text: string): void => {
     setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
   };
-  const [liveAnswer, setLiveAnswer] = useState("");
-  // 打字机节奏：SSE 回放是「LLM 生成完一次性 flush」，delta 直写 liveAnswer 会在一帧内全部渲染、观感仍是整段落下。
-  // 收到的 delta 进队列，由定时器按自适应步长吐字（队列越长步长越大，任意长度约 1.5s 追平）；done 后等队列排空再固化正式消息。
-  const typeQueue = useRef("");
-  const typeTimer = useRef<number | null>(null);
-  const startTypewriter = (): void => {
-    if (typeTimer.current !== null) return;
-    typeTimer.current = window.setInterval(() => {
-      const queue = typeQueue.current;
-      if (!queue) return;
-      // 三段式步长：长回复粗步追进度、中段匀速、尾部细步收尾——任意长度约 2s 排空，观感是恒速打字而非几何拖尾
-      const step = queue.length > 240 ? Math.ceil(queue.length / 40) : queue.length > 40 ? 6 : 2;
-      typeQueue.current = queue.slice(step);
-      setLiveAnswer((current) => current + queue.slice(0, step));
-    }, 24);
-  };
-  const stopTypewriter = (): void => {
-    if (typeTimer.current !== null) {
-      window.clearInterval(typeTimer.current);
-      typeTimer.current = null;
-    }
-  };
-  const drainTypewriter = async (): Promise<void> => {
-    const started = Date.now();
-    while (typeQueue.current && Date.now() - started < 6000) await new Promise((resolve) => setTimeout(resolve, 24));
-    stopTypewriter();
-  };
+  const { liveAnswer, begin, enqueue, finish, clear, abort, stop } = useTypewriter();
   const [error, setError] = useState("");
   // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
@@ -397,15 +289,19 @@ useEffect(() => {
   const [faded, setFaded] = useState<FadedState | null>(null);
   useEffect(() => {
     if (!repositoryId) { setLearner(null); setFaded(null); return; }
+    // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态（与下方 getCourse 效应同一套口径）
+    let cancelled = false;
     api.getLearner(repositoryId).then((profile) => {
+      if (cancelled) return;
       setLearner(profile);
       setSettingsState((curr) => curr.style === 50 && curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
-    }).catch(() => setLearner(null));
+    }).catch(() => { if (!cancelled) setLearner(null); });
+    return () => { cancelled = true; };
   }, [repositoryId]);
   useEffect(() => {
     setSession(null);
     setFaded(null);
-    setLiveAnswer("");
+    clear();
   }, [selected?.id]);
 
   // ==== 会话线程：清单 / 当前线程 / 新建·切换·重命名·删除 ====
@@ -439,13 +335,9 @@ useEffect(() => {
     resetRecheck(target);
     if (debt) backfillNotice.current[target] = null; // 新一轮开始：上一轮的补账结论不再相关
     if (!repositoryId) return;
-    try {
-      const map = readDebtMap();
-      map[repositoryId] = { ...map[repositoryId], [CHAT_SCOPE[target]]: debt ?? undefined };
-      sessionStorage.setItem(DEBT_STORAGE_KEY, JSON.stringify(map));
-    } catch {
-      /* 存不下（禁用存储或格式坏）就退回「本轮不补账」，发送本身不受影响 */
-    }
+    const map = readDebtMap();
+    map[repositoryId] = { ...map[repositoryId], [CHAT_SCOPE[target]]: debt ?? undefined };
+    writeDebtMap(map);
   };
   /** 有没有等着补的账：欠的必须正是当前线程，否则切回来的那条不该被旧事打扰。 */
   const hasDebt = (target: Scope): boolean => {
@@ -750,26 +642,25 @@ useEffect(() => {
         void refreshThreads("teaching");
       }
       if (!active) return;
-      setLiveAnswer("");
-      typeQueue.current = ""; startTypewriter();
+      begin();
       // 记下欠账再发请求：这一轮若因断线没送达，回来时按这条记录判断引擎有没有替我们算完
       patchDebt("teaching", { threadId: active.id, count: knownRowCount.current.teaching });
       // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流（替代原 /ws 全局广播 + sessionId 过滤）
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
-        if (event.type === "delta") { sawDelta = true; typeQueue.current += event.delta; }
+        if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
         else if (event.type === "progress") setScopeProgress("teaching", teachingProgressText(event.payload));
       }, turn);
-      await drainTypewriter();
+      await finish();
       setSession(reply.session);
       setSettingsState(reply.session.settings);
       setCost(reply.cost);
       setReplySource((prev) => ({ ...prev, teaching: reply.provider ?? "" }));
-      setLiveAnswer("");
+      clear();
       pushMessage("teaching", "agent", reply.message.content);
       knownRowCount.current.teaching += 2; // 一问一答原子落库
       patchDebt("teaching", null);          // 这一轮送到了：欠账销掉
     } catch (reason) {
-      typeQueue.current = ""; stopTypewriter(); setLiveAnswer("");
+      abort();
       triageTurnFailure("teaching", reason, sawDelta);
     } finally {
       endTurn();
@@ -796,14 +687,13 @@ useEffect(() => {
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
     setSending(true); setError(""); setScopeProgress(scope, "回复生成中…");
     // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
-    setLiveAnswer("");
-    typeQueue.current = ""; startTypewriter();
+    begin();
     const turn = beginTurn(scope);
     patchDebt(scope, { threadId, count: knownRowCount.current[scope] }); // 同 teaching：发请求前先记下欠账
     // 同 teaching：收到过 delta 说明引擎那一轮已算完落库，停止只掐掉了回放
     let sawDelta = false;
     const onScopedEvent = (event: ScopedChatEvent): void => {
-      if (event.type === "delta") { sawDelta = true; typeQueue.current += event.delta; }
+      if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
       else if (scope === "map" && event.type === "reading") setScopeProgress("map", `正在读取 ${event.path || "文件"} …`);
       else if (scope === "map" && event.type === "searching") setScopeProgress("map", `正在检索代码：${event.query || "关键词"} …`);
     };
@@ -821,17 +711,17 @@ useEffect(() => {
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
-      await drainTypewriter();
+      await finish();
       pushMessage(scope, "agent", reply.reply);
       setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
-      setLiveAnswer("");
+      clear();
       knownRowCount.current[scope] += 2;
       patchDebt(scope, null); // 这一轮送到了：欠账销掉
     } catch (reason) {
-      typeQueue.current = ""; stopTypewriter(); setLiveAnswer("");
+      abort();
       triageTurnFailure(scope, reason, sawDelta);
     } finally {
-      stopTypewriter();
+      stop();
       endTurn();
       setSending(false);
       setScopeProgress(scope, "");

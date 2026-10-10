@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { AssertionCheck, CourseNode, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
+import { readFileLines, symbolBodyLines } from "../lib.js";
 
 export function verifyAnalysis(repositoryPath: string, implementations: ImplementationUnit[], root: CourseNode, options: { timeoutMs?: number; forceTimeout?: boolean } = {}): QualityReport {
   if (options.forceTimeout || (options.timeoutMs !== undefined && options.timeoutMs < 1)) {
@@ -20,12 +19,11 @@ function verifyUnit(repositoryPath: string, unit: ImplementationUnit): Assertion
     读不到就按「待确认」交出去，不抛：`verifyAnalysis` 跑在导入的中途，一个索引之后被删/权限不对的文件
     不该掀掉整次导入（与 `verifyNode` 的抽样兜底、扫描层 §37.3 同一条口径）。
     */
-  let content: string;
-  try {
-    content = readFileSync(join(repositoryPath, symbol.path), "utf8").split("\n").slice(symbol.line - 1, symbol.endLine).join("\n");
-  } catch {
+  const lines = readFileLines(repositoryPath, symbol.path);
+  if (!lines) {
     return { statement: `${symbol.name} 的微观解释可回溯到其定义区间。`, status: "needs_review", reason: "定义所在文件读不出来。", anchors };
   }
+  const content = symbolBodyLines(lines, symbol).join("\n");
   const matched = content.includes(symbol.name);
   return {
     statement: `${symbol.name} 的微观解释可回溯到其定义区间。`,
@@ -38,12 +36,10 @@ function verifyUnit(repositoryPath: string, unit: ImplementationUnit): Assertion
 function verifyNode(repositoryPath: string, node: CourseNode): AssertionCheck {
   const anchor = node.anchors[0];
   if (!anchor) return { statement: node.summary, status: "skipped", reason: "节点没有源码锚点。", anchors: [] };
-  try {
-    const line = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n")[anchor.line - 1] ?? "";
-    return { statement: node.summary, status: line.trim() ? "verified" : "needs_review", reason: line.trim() ? "抽样锚点可读取。" : "抽样锚点为空。", anchors: [anchor] };
-  } catch {
-    return { statement: node.summary, status: "needs_review", reason: "抽样锚点不可读取。", anchors: [anchor] };
-  }
+  const lines = readFileLines(repositoryPath, anchor.path);
+  if (!lines) return { statement: node.summary, status: "needs_review", reason: "抽样锚点不可读取。", anchors: [anchor] };
+  const line = lines[anchor.line - 1] ?? "";
+  return { statement: node.summary, status: line.trim() ? "verified" : "needs_review", reason: line.trim() ? "抽样锚点可读取。" : "抽样锚点为空。", anchors: [anchor] };
 }
 
 function flatten(root: CourseNode): CourseNode[] {

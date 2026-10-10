@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ImplementationUnit, SymbolInfo } from "@codebase-tutor/shared";
+import { readFileLines, symbolBodyLines } from "../lib.js";
 
 export function buildImplementationUnits(repositoryPath: string, symbols: SymbolInfo[]): ImplementationUnit[] {
   /**
@@ -11,17 +10,14 @@ export function buildImplementationUnits(repositoryPath: string, symbols: Symbol
     */
   const linesOf = new Map<string, string[] | undefined>();
   const read = (path: string): string[] | undefined => {
-    if (!linesOf.has(path)) {
-      try { linesOf.set(path, readFileSync(join(repositoryPath, path), "utf8").split("\n")); }
-      catch { linesOf.set(path, undefined); }
-    }
+    if (!linesOf.has(path)) linesOf.set(path, readFileLines(repositoryPath, path));
     return linesOf.get(path);
   };
   const units: ImplementationUnit[] = [];
   for (const symbol of symbols.filter((item) => item.kind === "function" || item.kind === "method")) {
     const lines = read(symbol.path);
     if (!lines) continue;
-    const window = lines.slice(symbol.line - 1, symbol.endLine);
+    const window = symbolBodyLines(lines, symbol);
     const body = window.join("\n");
     const returns = [...body.matchAll(/\breturn\s+([^;\n]+)/g)].map((match) => match[1].trim()).slice(0, 3);
     const throws = [...body.matchAll(/\b(?:throw|raise)\s+([^;\n]+)/g)].map((match) => match[1].trim()).slice(0, 3);

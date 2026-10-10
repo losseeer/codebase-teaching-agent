@@ -8,14 +8,15 @@ import { TutorDatabase } from "../store/database.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./slice.js";
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
+import { makeSymbol } from "../test-utils.js";
 
 /** main.py → svc.py（调用 run）→ util.py；另外 business.py 只依赖 util.py，不挨着入口。 */
 const STRUCTURE: FileStructure = {
   files: [{ path: "main.py", lines: 10 }, { path: "svc.py", lines: 20 }, { path: "util.py", lines: 6 }, { path: "business.py", lines: 4 }],
   symbols: [
-    { id: "symbol:main.py:main:1", name: "main", kind: "function", path: "main.py", line: 1, endLine: 3, parameters: [], language: "python" },
-    { id: "symbol:svc.py:run:1", name: "run", kind: "function", path: "svc.py", line: 1, endLine: 9, parameters: ["x"], language: "python" },
-    { id: "symbol:svc.py:Helper:12", name: "Helper", kind: "class", path: "svc.py", line: 12, endLine: 18, parameters: [], language: "python" }
+    makeSymbol("main.py", "main", { line: 1, endLine: 3, language: "python" }),
+    makeSymbol("svc.py", "run", { line: 1, endLine: 9, parameters: ["x"], language: "python" }),
+    makeSymbol("svc.py", "Helper", { line: 12, endLine: 18, kind: "class", language: "python" })
   ],
   calls: [{ callerPath: "main.py", callerSymbol: "symbol:main.py:main:1", calleePath: "svc.py", calleeSymbol: "symbol:svc.py:run:1", line: 2 }],
   imports: { "main.py": ["svc.py"], "svc.py": ["util.py"], "business.py": ["util.py"] },

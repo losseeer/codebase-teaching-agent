@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SymbolInfo } from "@codebase-tutor/shared";
 import { buildImplementationUnits } from "./units.js";
+import { makeSymbol } from "../test-utils.js";
 
 function symbol(path: string, name: string, line = 1, endLine = 3): SymbolInfo {
-  return { id: `symbol:${path}:${name}:${line}`, name, kind: "function", path, line, endLine, parameters: [], language: "typescript" };
+  return makeSymbol(path, name, { line, endLine, language: "typescript" });
 }
 
 describe("buildImplementationUnits", () => {

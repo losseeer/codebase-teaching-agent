@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ImplementationUnit } from "@codebase-tutor/shared";
 import { verifyAnalysis } from "./checker.js";
+import { makeSymbol } from "../test-utils.js";
 
 function unit(path: string, name: string): ImplementationUnit {
-  const symbol = { id: `symbol:${path}:${name}:1`, name, kind: "function" as const, path, line: 1, endLine: 3, parameters: [], language: "typescript" as const };
+  const symbol = makeSymbol(path, name, { line: 1, endLine: 3, language: "typescript" });
   return { id: `implementation:${symbol.id}`, symbol, summary: `${name} 的实现细节。`, inputs: [], output: "无", invariants: [], boundaries: [], traps: [], verification: [] };
 }
 

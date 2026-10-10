@@ -30,12 +30,12 @@ export async function classifyIntent(state: TeachingState, learnerMessage: strin
     const completion = await provider.complete({ system: SYSTEM_PROMPT, user, maxTokens: 12, temperature: 0, scene: "teaching.intent", ...(signal ? { signal } : {}) });
     const intent = parseLabel(completion.text);
     if (!intent) {
-      return { intent: classifyIntentRegex(state, learnerMessage), source: "regex", usage: completion.usage };
+      return { intent: classifyIntentRegex(learnerMessage), source: "regex", usage: completion.usage };
     }
     return { intent, source: "llm", usage: completion.usage };
   } catch (error) {
     if (isLlmAborted(error, signal)) throw error;
-    return { intent: classifyIntentRegex(state, learnerMessage), source: "regex" };
+    return { intent: classifyIntentRegex(learnerMessage), source: "regex" };
   }
 }
 

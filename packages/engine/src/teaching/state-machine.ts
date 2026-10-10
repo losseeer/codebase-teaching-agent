@@ -23,8 +23,8 @@ export function initialTeachingState(): TeachingState {
   return { stage: "orient", fallbackCount: 0, attempts: 0 };
 }
 
-/** 正则意图分类——LLM 分类器不可用时的回落路径。 */
-export function classifyIntentRegex(state: TeachingState, learnerMessage: string): LearnerIntent {
+/** 正则意图分类——LLM 分类器不可用时的回落路径。意图本身不带阶段语义，只看消息文本。 */
+export function classifyIntentRegex(learnerMessage: string): LearnerIntent {
   if (uncertain.test(learnerMessage.trim())) return "needs_help";
   if (confirmation.test(learnerMessage)) return "confirmation";
   return "progress";
@@ -58,7 +58,7 @@ export function transitionFromIntent(state: TeachingState, intent: LearnerIntent
 
 /** 正则路径：意图分类 + 确定性计数转移，行为与拆分前逐字节一致。 */
 export function transition(state: TeachingState, learnerMessage: string): Transition {
-  return transitionFromIntent(state, classifyIntentRegex(state, learnerMessage));
+  return transitionFromIntent(state, classifyIntentRegex(learnerMessage));
 }
 
 /** 动作 → 意图的唯一映射：give_answer 必然走 needs_help 的熔断分支（前提是守门已放行）。 */
