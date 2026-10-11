@@ -11,6 +11,7 @@ import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { useEverVisible } from "../ui/useEverVisible";
+import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
@@ -38,6 +39,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   /** palette 的键盘选中行（↑↓ 移动，Enter 打开这一行而不是第一条）。 */
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  const layout = useLayout();
   /** 当前打开的源码 tab 路径（与 tabs 同步镜像，含 slice(-5) 淘汰）：判定「新开文件」还是「就地定位」。 */
   const openedPaths = useRef<string[]>([]);
   /** 上一次自动定位过的锚点（`path:line`）。三视图常驻挂载 + StrictMode 下 effect 会在首挂载双跑，
@@ -290,7 +292,9 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       </header>
       <ContextLine strong="代码教学" detail={`${anchor ? `${anchor.path}:${anchor.line}` : "未定位"} · 模块「${moduleLabel}」`} />
       <MobileSwitcher labels={["教学模块", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="workspace teaching-workspace">
+      <div className="workspace teaching-workspace" style={layoutVars(layout)}>
+        {/* 压在「文件栏 / 实时源码」边界上的拖宽条：文件栏给了宽度，源码栏就是剩下的那一块（grid 的 minmax(0,1fr)） */}
+        <ColumnResizer field="filePaneWidth" label="文件栏" growOn="right" />
         <div className={paneClass(0)}>
           <ModulesPane
             where="teaching"

@@ -3,7 +3,7 @@ import { Navigate, Route, Routes, Link, useLocation, useNavigate, useSearchParam
 import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspace } from "./api/client";
 import { ApiError, api, isNotFound } from "./api/client";
-import { AgentRail } from "./agent/AgentRail";
+import { AgentRail, AgentRailCollapsed } from "./agent/AgentRail";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
 import { CoursePage } from "./views/CoursePage";
@@ -13,6 +13,7 @@ import { InsightsPage } from "./views/InsightsPage";
 import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
 import { OptionDropdown } from "./ui/OptionDropdown";
+import { patchLayout, shellVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
 
@@ -250,8 +251,11 @@ export function App(): ReactElement {
   // Agent 侧栏只属于有对话可谈的路由：导入页还没有工作区语义，挂着它既没绑定对象又挤扁导入表单
   const location = useLocation();
   const showRail = !!workspace && location.pathname !== "/import";
+  // 栏宽与「对话栏收起」是用户偏好（localStorage）：收起时那一栏只留一条 44px 的边，宽度值本身不动，
+  // 所以下面交出去的是**当前该占多宽**，而不是「用户拖到多宽」。
+  const layout = useLayout();
   return (
-    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " no-rail"}`}>
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " no-rail"}`} style={shellVars(layout, showRail)}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark"><Sparkles size={17} /></span>
@@ -325,7 +329,9 @@ export function App(): ReactElement {
           </Routes>
         </div>
       </main>
-      {showRail ? <AgentRail chat={chat} /> : null}
+      {showRail ? (layout.railCollapsed
+        ? <AgentRailCollapsed busy={chat.sending} onExpand={() => patchLayout({ railCollapsed: false })} />
+        : <AgentRail chat={chat} onCollapse={() => patchLayout({ railCollapsed: true })} />) : null}
       <ToastHost />
     </div>
   );

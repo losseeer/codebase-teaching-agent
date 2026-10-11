@@ -6,6 +6,7 @@ import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, flatten, Loading, MicroDetail } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
+import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { DepMap } from "../map/DepMap";
 import { SeamPanel } from "../map/SeamPanel";
 import { FLOW_KIND_LABEL, FlowMap, type FlowSelection } from "../map/FlowMap";
@@ -58,6 +59,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
   const [error, setError] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  const layout = useLayout();
   const [mapView, setMapView] = useState<"architecture" | "flow">("architecture");
 
   useEffect(() => {
@@ -117,7 +119,9 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
       </header>
       <ContextLine strong="宏观设计" detail={`选中「${selected?.title ?? "—"}」`} />
       <MobileSwitcher labels={["项目目录", "地图画布"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="workspace map-workspace">
+      <div className="workspace map-workspace" style={layoutVars(layout)}>
+        {/* 与教学页同一条列表栏宽度：拖一次，三个工作区的左栏一起跟 */}
+        <ColumnResizer field="filePaneWidth" label="项目目录栏" growOn="right" />
         <aside className={`pane ${paneClass(0)}`}>
           <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} files</span></div>
           <div className="tree">

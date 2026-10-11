@@ -5,6 +5,7 @@ import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
 import { exerciseKindLabel } from "./helpers";
 import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
+import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
@@ -65,6 +66,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", repositoryId, modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  const layout = useLayout();
 
   useEffect(() => { savePracticeModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("practice", repositoryId, activeModule); }, [repositoryId, activeModule]);
@@ -165,7 +167,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       </header>
       <ContextLine strong="练习评估" detail={`模块「${moduleLabel}」`} hint="判分结果会回写学习状态（掌握度与下次复习时间）" />
       <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="workspace practice-workspace">
+      <div className="workspace practice-workspace" style={layoutVars(layout)}>
+        <ColumnResizer field="filePaneWidth" label="练习模块栏" growOn="right" />
         <div className={paneClass(0)}>
           <ModulesPane
             where="practice"

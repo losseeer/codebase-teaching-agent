@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Check, Compass, GraduationCap, Pencil, Plus, Send, Square, Trash2, X } from "lucide-react";
+import { Check, Compass, GraduationCap, PanelRightClose, PanelRightOpen, Pencil, Plus, Send, Square, Trash2, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
 import { LlmSettingsControl } from "./LlmSettings";
+import { ColumnResizer } from "../ui/ColumnResizer";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
@@ -16,7 +17,7 @@ import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type Thr
   v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
   v0.2 不变项：TutorPage 仅渲染 session-controls + ladder + 锚点 / 成本 chip，所有 chat / composer / 流式订阅均由 AgentRail 拥有。
   */
-export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
+export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onCollapse: () => void }): ReactElement {
   const { scope, threads } = t;
   const items = threads[scope];
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -42,9 +43,14 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
   return (
     <aside className="agent-rail" aria-label="Codebase Agent">
+      {/* 压在左边界上的拖宽条（绝对定位，不占栅格列）：整栏高度都是它的拖动手势 */}
+      <ColumnResizer field="railWidth" label="Agent 对话栏" growOn="left" />
       <header className="agent-header">
         <span className="agent-avatar" aria-hidden>✦</span>
         <strong>Codebase Agent</strong>
+        <button type="button" className="rail-toggle" aria-label="收起 Agent 对话栏" title="收起对话栏（在中间留一条边，点它或按 ← 键回来）" onClick={onCollapse}>
+          <PanelRightClose size={15} />
+        </button>
       </header>
 
       <ScopeContext scope={scope} t={t} />
@@ -146,6 +152,29 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
           )}
         </form>
       </div>
+    </aside>
+  );
+}
+
+/**
+  收起态的对话栏：只留一条 44px 的边，但**不是一根没人知道的隐形柱**——留了图标、竖排「对话」二字，
+  以及「里面正在出字」的指示点在途回合时亮着（收起不打断请求：流式订阅住在 App 的 useScopedChat 里，
+  跟这一栏在不在屏上无关，所以用户收起后回来的第一眼就该是「它还在算」或「算完了」）。
+  */
+export function AgentRailCollapsed({ busy, onExpand }: { busy: boolean; onExpand: () => void }): ReactElement {
+  return (
+    <aside className="agent-rail collapsed" aria-label="Codebase Agent（已收起）">
+      <button
+        type="button"
+        className="rail-mini"
+        aria-label={busy ? "展开 Agent 对话栏：有一轮回复正在生成" : "展开 Agent 对话栏"}
+        title={busy ? "回复生成中 · 点击展开" : "点击展开对话栏"}
+        onClick={onExpand}
+      >
+        <PanelRightOpen size={15} />
+        <span className="rail-mini-text">对话</span>
+        {busy ? <i className="rail-mini-dot" aria-hidden /> : null}
+      </button>
     </aside>
   );
 }
