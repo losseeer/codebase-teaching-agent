@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logTargetFromEnv } from "../lib.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
-import { currentThreadId, currentTraceId } from "../trace/context.js";
+import { currentActor, currentThreadId, currentTraceId } from "../trace/context.js";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。
@@ -44,6 +44,11 @@ export interface LlmCallRecord {
     数据源是 trace 上下文（`trace/context.ts` 的 markThread），不在 provider 层新增参数。
     */
   threadId: string | null;
+  /**
+    调用方身份（API key 的名字，见 `security/api-keys.ts`）；本机模式没配 key 文件时为 null。
+    企业形态的账要能分到「哪个调用方烧了多少钱」，靠的就是这一列与 traceId 的组合。
+    */
+  actor: string | null;
   tools?: string[];
   inputTokens?: number;
   outputTokens?: number;
@@ -121,6 +126,7 @@ export class LoggingLlmProvider implements LlmProvider {
       thinking: input.thinking ?? "auto",
       traceId: currentTraceId(),
       threadId: currentThreadId(),
+      actor: currentActor(),
       ...(input.tools?.length ? { tools: input.tools.map((tool) => tool.name) } : {})
     };
     try {

@@ -25,6 +25,12 @@ interface TraceContext {
     深层只读不写——和 traceId 同一套传播机制、同一条纪律（见上方「传播方式」）。
     */
   threadId?: string;
+  /**
+    谁在调用（API key 的名字；本机模式没有 key 文件时为 undefined）。
+    与 threadId 同一套传播机制、同一条纪律：不为观测字段改签名。
+    将来接真用户体系时这里换成用户 id，日志字段仍是字符串，历史行不用重刷。
+    */
+  actor?: string;
 }
 
 const storage = new AsyncLocalStorage<TraceContext>();
@@ -48,4 +54,15 @@ export function markThread(threadId: string | undefined): void {
 /** 当前请求的会话线程 id；未标注（后台任务、单次提问、无 LLM 的路径）时为 null。 */
 export function currentThreadId(): string | null {
   return storage.getStore()?.threadId ?? null;
+}
+
+/** 标注调用方身份（认证钩子解析出 key 之后调用；本机模式不标）。 */
+export function markActor(actor: string | undefined): void {
+  const store = storage.getStore();
+  if (store && actor) store.actor = actor;
+}
+
+/** 当前请求的调用方；不在请求上下文或未认证时为 null。 */
+export function currentActor(): string | null {
+  return storage.getStore()?.actor ?? null;
 }

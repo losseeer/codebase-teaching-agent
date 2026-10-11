@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { budgetGateNotice, summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
@@ -27,8 +27,9 @@ import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summar
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
+import { allowsRepository, authEnabled, authenticate, loadApiKeys, presentedKey, type AuthResult } from "./security/api-keys.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
-import { markThread, runWithTrace } from "./trace/context.js";
+import { markActor, markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
@@ -73,8 +74,67 @@ export const app = Fastify({
 });
 // 请求级 trace 上下文：`run(id, done)` 让后续钩子与 handler 继承该 store（传播原理见 trace/context.ts）
 app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
+
+/**
+  认证与按仓授权（企业形态的第一道闸；key 的读法与三条口径见 `security/api-keys.ts`）。
+
+  - **没配 key 文件 = 完全没有闸**（本机默认形态）。这条在开机时必须喊出来：
+    「有一层认证」和「有一层名字写着认证但恒放行」是两回事，预算闸门没配单价就是后者的事故（§36.6）。
+  - 豁免两条：`/api/health`（进程管理器只问活没活，不该为它发 key）、
+    `OPTIONS` 预检（按 CORS 规范预检不带凭据，拦它等于让 GUI 所有写请求一起瘫）。
+  - **按仓 ACL 就放在 `onRequest`**：`request.params` 在路由阶段就已填好
+    （fastify 的 `lib/route.js` 里 `new Request(id, params, …)` 早于 onRequest 链），
+    所以不在名单里的仓连懒挂载都不会发生——不读它的 `.tutor`、不开它的 fs 监听。
+  - 越权回 **403 而不是 404**：这是自托管的学习工具，不是多租户公共服务，
+    「这张 key 没有这个仓」是用户能自己处置的读数；伪装成不存在只会挡住配 key 的那个人。
+  - URL 里没有 `:repositoryId` 的路由（会话 / 线程 / 导入）在各自 handler 里用同一个 `granted()` 判，
+    判定口径只有一处，别在路由里各写一份 `includes`。
+  */
+declare module "fastify" {
+  interface FastifyRequest {
+    /** 认证通过后的身份；本机模式（没配 key 文件）与预检请求恒为 undefined。 */
+    auth?: AuthResult;
+  }
+}
+
+const AUTH_EXEMPT_PATHS = new Set(["/api/health"]);
+
+app.addHook("onRequest", async (request, reply) => {
+  if (!authEnabled()) return;
+  if (request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
+  const auth = authenticate(presentedKey(request.headers["x-api-key"], request.headers.authorization));
+  if (!auth) return reply.code(401).send({ error: "缺少或无效的 API key：请求头带 x-api-key 或 Authorization: Bearer <key>。", reason: "unauthorized" });
+  request.auth = auth;
+  markActor(auth.name);
+  const repositoryId = (request.params as { repositoryId?: unknown }).repositoryId;
+  if (typeof repositoryId === "string" && !allowsRepository(auth, repositoryId)) {
+    return reply.code(403).send({ error: `这张 key（${auth.name}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
+  }
+});
+
+/** 授权判定：本机模式（无身份）放行；有身份时按这张 key 的 `repositories` 名单。 */
+function granted(request: FastifyRequest, repositoryId: string | undefined): boolean {
+  return !request.auth || !repositoryId || allowsRepository(request.auth, repositoryId);
+}
+
+/**
+  越权就回 403，否则回 undefined 让调用方继续。给「URL 里没有 `:repositoryId`」的路由用
+  （会话 / 线程是按 id 自己定位到仓的，onRequest 那道按名判的钩子够不到它们）。
+  错误体与钩子那条同形状：GUI 只需要认 `reason: "repository_not_granted"` 一个口径。
+  */
+function forbidden(request: FastifyRequest, reply: FastifyReply, repositoryId: string | undefined) {
+  if (granted(request, repositoryId)) return undefined;
+  return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
+}
+
+/** 导入会读任意磁盘路径、并造出一个此前无法授权的仓 id，所以只放行未受限的 key。 */
+function mayImport(request: FastifyRequest): boolean {
+  return !request.auth || request.auth.repositories.includes("*");
+}
+
 app.addHook("onResponse", (request, reply, done) => {
-  traceEngine("http", { method: request.method, url: request.url, status: reply.statusCode }, { traceId: request.id, durationMs: Math.round(reply.elapsedTime) });
+  // actor 显式取自请求（钩子链之外能否继承 AsyncLocalStorage 是实现细节，身份不能靠运气）
+  traceEngine("http", { method: request.method, url: request.url, status: reply.statusCode }, { traceId: request.id, actor: request.auth?.name ?? null, durationMs: Math.round(reply.elapsedTime) });
   done();
 });
 tboot("Fastify constructed");
@@ -223,8 +283,8 @@ app.addHook("preHandler", async (request, reply) => {
   return reply.code(404).send({ error: result.message, reason: result.reason });
 });
 
-/** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。 */
-app.get("/api/repositories", async () => ({ repositories: importer.catalog() }));
+/** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。有身份时只列这张 key 有权的仓——名单外的一条都不出现。 */
+app.get("/api/repositories", async (request) => ({ repositories: importer.catalog().filter((entry) => granted(request, entry.repositoryId)) }));
 
 /** 显式挂载一个仓库并回报新鲜度：GUI 切换仓库时调它，好把「这是三天前的分析」说在打开之前。 */
 app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/mount", async (request, reply) => {
@@ -304,11 +364,14 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
     挂载会占 LRU 名额（可能把当前仓挤出去），但当前这一回合握的是内存引用，不受影响。
   - **守卫不另起一套**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
     在对端仓上一样成立——这一条是这套能力唯一的安全边界。
+  - **按仓 ACL 同样管这里**：名单外的对端连名字都不出现在工具提示里（`auth` 由路由把请求上的身份传进来）。
+    少了这一道，「A 仓的对话把没授权的 B 仓源码读进 prompt」就是一个绕过闸门的现成通道。
   */
-function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>): CrossRepoContext | undefined {
+function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>, auth: AuthResult | undefined): CrossRepoContext | undefined {
   const targets = new Map<string, { id: string; path: string }>();
   for (const entry of importer.catalog()) {
     if (entry.repositoryId === repository.index.repositoryId || !entry.exists) continue;
+    if (auth && !allowsRepository(auth, entry.repositoryId)) continue;
     // 两个仓可能同名（都叫 backend）：撞名就给 id 前缀，否则模型报了名字我们不知道选哪个
     const name = targets.has(entry.name) ? `${entry.name}#${entry.repositoryId.slice(0, 6)}` : entry.name;
     targets.set(name, { id: entry.repositoryId, path: entry.repositoryPath });
@@ -425,7 +488,9 @@ app.get("/api/health", async () => {
     summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
-    agentLoop: actionLoopEnabled
+    agentLoop: actionLoopEnabled,
+    // 闸到底是开着还是只是「有这层代码」：`off` = 没配 key 文件，本机默认形态
+    auth: authEnabled() ? "api-key" : "off"
   };
 });
 
@@ -513,6 +578,8 @@ app.get("/api/events", async (_request, reply) => {
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
+  // 导入的授权时机早于它自己造出的仓 id，所以受限 key 一律不开这个口子（口径见 mayImport）
+  if (!mayImport(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，不能导入新仓：导入会读任意磁盘路径，事先无从授权。`, reason: "import_not_granted" });
   try { return reply.code(202).send(importer.submit(request.body?.path ?? "", typeof request.body?.summaryHeaderComments === "boolean" ? request.body.summaryHeaderComments : undefined)); }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "无法提交导入任务" }); }
 });
@@ -849,7 +916,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
     const crossFiles = new Map<string, number>();
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles, request.auth) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
     result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
@@ -861,7 +928,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
     for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
-        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
+        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null
       }, turn.threadId);
     }
     // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
@@ -913,7 +980,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository, crossFiles),
+      cross: crossRepoFor(repository, crossFiles, request.auth),
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -929,7 +996,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     }, turn.threadId);
     for (const read of dedupeFileReads(result.fileReads ?? [])) {
       journal.append("file_read", {
-        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null
+        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null
       }, turn.threadId);
     }
     for (const search of result.codeSearches ?? []) {
@@ -1114,7 +1181,10 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
 });
 
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
-  // 这两条会话路由的 URL 里没有 `:repositoryId`，懒挂载钩子覆盖不到，所以按钩子同一口径自己挂一次
+  // 这几条会话/线程路由的 URL 里没有 `:repositoryId`，onRequest 与懒挂载两道钩子都覆盖不到，
+  // 所以按钩子同一口径先判授权，再自己挂一次
+  const denied = forbidden(request, reply, request.body?.repositoryId);
+  if (denied) return denied;
   const mounted = importer.ensureMounted(request.body?.repositoryId ?? "");
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
@@ -1139,6 +1209,8 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
   const session = resolveTeachingState(request.params.sessionId);
+  const denied = forbidden(request, reply, session?.repositoryId);
+  if (denied) return denied;
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
@@ -1207,12 +1279,16 @@ app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; nodeId?: u
 /** 线程正文（产品线）：GUI 刷新或引擎重启后按 threadId 取回对话展示。软删线程一律 404（读侧恒带 `deleted_at IS NULL`）。 */
 app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
   const located = locateThread(request.params.threadId);
+  const denied = forbidden(request, reply, located?.repositoryId);
+  if (denied) return denied;
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
   return { thread: located.thread, messages: readMessages(located.repositoryPath, located.thread.id) };
 });
 
 app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/threads/:threadId", async (request, reply) => {
   const located = locateThread(request.params.threadId);
+  const denied = forbidden(request, reply, located?.repositoryId);
+  if (denied) return denied;
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
   const title = typeof request.body?.title === "string" ? request.body.title : "";
   if (!title.trim()) return reply.code(400).send({ error: "标题不能为空" });
@@ -1226,6 +1302,8 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
   */
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
   const located = locateThread(request.params.threadId);
+  const denied = forbidden(request, reply, located?.repositoryId);
+  if (denied) return denied;
   if (!located || !softDeleteThread(located.repositoryPath, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
   teachingStates.delete(located.thread.id);
   new Journal(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
@@ -1234,6 +1312,9 @@ app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (re
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const current = resolveTeachingState(request.params.sessionId);
+  // 判在 markThread 与任何 LLM 调用之前：越权的一回合 token 都不该烧出去
+  const denied = forbidden(request, reply, current?.repositoryId);
+  if (denied) return denied;
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   // 教学侧的 sessionId 就是 chat_session 的线程 id（一个 id 三个名字），llm.log 直接沿用它做线程聚合
   markThread(current.id);
@@ -1268,7 +1349,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository, crossFiles),
+      cross: crossRepoFor(repository, crossFiles, request.auth),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -1312,7 +1393,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
     // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
     for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
-      journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, error: read.error ?? null }, session.id);
+      journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, session.id);
     }
     for (const search of outcome.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);
@@ -1388,6 +1469,11 @@ const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
+  // 认证闸的开关是「key 文件里有没有可用 key」：没有就是**完全没有闸**，任何本机进程都能读写这些仓。
+  // 这一句和下面预算闸门那条同一条纪律——有闸门的名字就必须让闸门的状态看得见（§36.6）。
+  const keyCount = loadApiKeys().length;
+  console.log(`[engine] 认证：${keyCount ? `已启用（${keyCount} 张 key，${process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json"}）` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
+  traceEngine("boot", { what: "auth_gate", state: keyCount ? "on" : "off", keys: keyCount }, { traceId: null });
   // 预算闸门的开关是「三档单价配了没有」：一个都没配时所有付费分支照常放行、一声不吭。
   // 这属于运行期降级（有闸门名没有闸门），必须落在账面上看得见，而不是等人自己发现账单。
   const gateNotice = budgetGateNotice();

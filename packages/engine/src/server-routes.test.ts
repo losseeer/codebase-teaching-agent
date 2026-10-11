@@ -1,12 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { flushLlmLog } from "./llm/call-log.js";
+import { flushEngineLog } from "./trace/engine-log.js";
 import { TutorDatabase } from "./store/database.js";
 import { readJournal } from "./store/journal.js";
 import { appendMessages, createThread, readMessages } from "./store/chat-store.js";
@@ -605,6 +606,146 @@ describe("跨仓工具面随地址簿变", () => {
     } finally {
       writeFileSync(registryFile!, original, "utf8");
       rmSync(peerDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+  API key 认证 + 按仓授权（`security/api-keys.ts` 与 server.ts 的 onRequest 钩子）。
+  要拦的四件事：
+  1. **没配 key 文件就是没有闸**——本机默认形态必须照常能用（否则这次改造直接把产品锁死）；
+  2. 有闸时缺 key/错 key 一律 401，而且**对话路由被拦下时一次 LLM 调用都不发生**（越权的 token 不能烧）；
+  3. 名单外的仓连懒挂载都到不了（403 而不是 404），地址簿清单里也不出现；
+  4. **跨仓走同一份 ACL**：对端仓不在名单时，模型连 `cross_repo_link` 这个工具都看不到——
+     这是「A 仓的对话把没授权的 B 仓源码读进 prompt」那个口子的唯一封法。
+  导入单独一条：它读任意目录、造出此前无从授权的仓 id，所以只放行 `*`。
+
+  key 文件写在临时 root 里（`TUTOR_API_KEYS_FILE`），每条用例后删掉——闸门退回关闭，后面的用例不受影响。
+  */
+describe("API key 认证与按仓授权", () => {
+  const keysFile = join(root, "api-keys.json");
+  const FULL_KEY = "sk-tutor-routes-full-key-000001";
+  const LOCKED_KEY = "sk-tutor-routes-locked-key-00002";
+  const peerDir = join(root, "auth-peer-repo");
+
+  /** 写入后把 mtime 往前推：装载按 mtime 失效缓存，同一毫秒内的两次写会被当成同一次。 */
+  let bump = 1_000;
+  function writeKeys(entries: { key: string; name: string; repositories: string[] }[]): void {
+    writeFileSync(keysFile, `${JSON.stringify({ keys: entries }, null, 2)}\n`, "utf8");
+    const stamp = new Date(Date.now() + (bump += 1_000));
+    utimesSync(keysFile, stamp, stamp);
+  }
+
+  const call = (method: "GET" | "POST", url: string, key?: string, payload?: unknown) =>
+    app.inject({ method, url, ...(key ? { headers: { "x-api-key": key } } : {}), ...(payload ? { payload } : {}) });
+
+  afterEach(() => {
+    rmSync(keysFile, { force: true });
+    rmSync(peerDir, { recursive: true, force: true });
+    delete process.env.TUTOR_API_KEYS_FILE;
+  });
+
+  it("没配 key 文件：闸门不存在，不带 key 也读得到（本机默认形态没被这次改造锁死）", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile; // 文件不存在
+    expect((await call("GET", "/api/repositories")).statusCode).toBe(200);
+    expect((await call("GET", `/api/repositories/${repositoryId}/index`)).statusCode).toBe(200);
+  });
+
+  it("配了 key 之后：缺 key 与错 key 都 401，对 key 200；/api/health 仍然免鉴权", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+
+    expect((await call("GET", "/api/repositories")).statusCode).toBe(401);
+    const wrong = await call("GET", "/api/repositories", "sk-tutor-this-key-is-wrong-000");
+    expect(wrong.statusCode).toBe(401);
+    expect((wrong.json() as { reason?: string }).reason).toBe("unauthorized");
+    expect((await call("GET", "/api/repositories", FULL_KEY)).statusCode).toBe(200);
+    expect((await call("GET", "/api/health")).statusCode).toBe(200);
+    // Bearer 写法同样收：同一个闸，两种头部格式（GUI 与 curl 都可能用后者）
+    const bearer = await app.inject({ method: "GET", url: "/api/repositories", headers: { authorization: `Bearer ${FULL_KEY}` } });
+    expect(bearer.statusCode).toBe(200);
+  });
+
+  it("被 401 拦下的对话回合一次 LLM 调用都不发出（越权的那笔 token 不能烧）", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    const threadId = await newThread("map", "闸门外线程"); // 线程在闸门合上前建：newThread 自己不带 key
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+    const before = fetchCalls;
+    expect((await call("POST", `/api/repositories/${repositoryId}/map-chat`, undefined, { content: "这一节先看哪里？", threadId })).statusCode).toBe(401);
+    expect(fetchCalls).toBe(before);
+  });
+
+  it("受限 key：名单外的仓 403（懒挂载都轮不到它），清单里也不出现；名单内的照常 200", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    mkdirSync(peerDir, { recursive: true }); // 磁盘上真实存在的第二个仓：403 必须是「不授权」而非「不存在」
+    const peerId = deriveRepositoryId(peerDir);
+    writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
+
+    const blocked = await call("GET", `/api/repositories/${peerId}/index`, LOCKED_KEY);
+    expect(blocked.statusCode).toBe(403);
+    expect((blocked.json() as { reason?: string }).reason).toBe("repository_not_granted");
+
+    const listed = (await call("GET", "/api/repositories", LOCKED_KEY)).json() as { repositories: { repositoryId: string }[] };
+    expect(listed.repositories.map((entry) => entry.repositoryId)).toEqual([repositoryId]);
+    expect((await call("GET", `/api/repositories/${repositoryId}/index`, LOCKED_KEY)).statusCode).toBe(200);
+  });
+
+  it("导入是「读任意目录 + 造新仓 id」，受限 key 一律 403", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
+    const refused = await call("POST", "/api/imports", LOCKED_KEY, { path: peerDir });
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { reason?: string }).reason).toBe("import_not_granted");
+  });
+
+  it("跨仓工具面同样受 ACL 约束：对端不在名单时模型看不到 cross_repo_link，仓名也不下发", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    const registryFile = process.env.TUTOR_REGISTRY_FILE;
+    const original = readFileSync(registryFile!, "utf8");
+    mkdirSync(peerDir, { recursive: true });
+    writeFileSync(registryFile!, `${JSON.stringify({ repositories: [repoDir, peerDir] }, null, 2)}\n`, "utf8");
+    const threadId = await newThread("map", "跨仓授权");
+    const ask = (key: string) => app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, headers: { "x-api-key": key }, payload: { content: "这个请求打到哪个仓去了？", threadId } });
+
+    try {
+      writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
+      sentTools.length = 0;
+      expect((await ask(LOCKED_KEY)).statusCode).toBe(200);
+      const locked = sentTools[sentTools.length - 1];
+      expect(locked.names).toContain("search_code");
+      expect(locked.names).not.toContain("cross_repo_link");
+      expect(locked.raw).not.toContain("auth-peer-repo"); // 仓名不进 schema：不知道就无从尝试
+
+      writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+      sentTools.length = 0;
+      expect((await ask(FULL_KEY)).statusCode).toBe(200);
+      expect(sentTools[sentTools.length - 1].names).toContain("cross_repo_link");
+    } finally {
+      writeFileSync(registryFile!, original, "utf8");
+    }
+  });
+
+  it("身份进账：带 key 的回合里两条日志线都记到 actor（企业侧按人对账的抓手）", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    process.env.TUTOR_ENGINE_LOG = join(root, "engine-auth.jsonl"); // 本文件其余用例都是 "off"，这条要真落盘才验得到
+    const threadId = await newThread("map", "身份入账线程");
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+    try {
+      expect((await call("POST", `/api/repositories/${repositoryId}/map-chat`, FULL_KEY, { content: "这一节先看哪里？", threadId })).statusCode).toBe(200);
+      await Promise.all([flushLlmLog(), flushEngineLog()]);
+
+      const lines = readFileSync(process.env.TUTOR_LLM_LOG!, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { threadId: string | null; actor: string | null });
+      const mine = lines.filter((line) => line.threadId === threadId);
+      expect(mine.length).toBeGreaterThan(0);
+      expect(mine.every((line) => line.actor === "本机全量")).toBe(true);
+      // 同一个仓、同一批调用，无身份的调用（本文件早先那几轮）必须还能与有身份的分开——不然「按人对账」只是个字段名
+      expect(lines.some((line) => line.actor === null)).toBe(true);
+
+      const http = readFileSync(process.env.TUTOR_ENGINE_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { kind: string; actor: string | null })
+        .filter((row) => row.kind === "http");
+      expect(http.some((row) => row.actor === "本机全量")).toBe(true);
+    } finally {
+      process.env.TUTOR_ENGINE_LOG = "off";
     }
   });
 });

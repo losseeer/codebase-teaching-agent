@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -354,5 +354,38 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
     expect(onAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
     const offAgain = await summarizeFiles({ structure: STRUCTURE, database, provider });
     expect(offAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
+  });
+});
+
+/**
+  L1 的密钥隐去：只筛「发出去的那份」与「存回来的摘要」，**缓存键不动**——
+  键是 `hash(切片本身)`，一旦让隐去参与键计算，全仓摘要会整体失配、等于替每个用户重烧一遍。
+  所以这条用例同时钉两件事：出门的正文里没有原 key；第二次跑仍然全命中缓存。
+ */
+describe("L1 的密钥隐去", () => {
+  it("切片发出去前被隐去、摘要回存前也被隐去，且缓存键不受影响", async () => {
+    const database = tempDatabase();
+    writeFileSync(join(database.repositoryPath, "main.py"), `# 启动脚本，凭据是 sk-abcdefghijklmnop1234\nprint("hi")\n`, "utf8");
+    const seen: string[] = [];
+    const provider: SummaryProvider = {
+      name: "stub",
+      modelVersion: "stub-secret-1",
+      summarizeMany: async (slices) => {
+        seen.push(JSON.stringify(slices));
+        // 模型把看到的字面量原样抄回来——回存这一侧也得挡
+        return slices.map((slice) => ({ summary: `${slice.path} 用了 sk-abcdefghijklmnop1234 这个凭据。` }));
+      }
+    };
+    const first = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    const sent = seen.join("");
+    expect(sent).toContain("[疑似密钥，已隐去]");
+    expect(sent).not.toContain("sk-abcdefghijklmnop");
+    const stored = first.summaries.find((summary) => summary.path === "main.py")!;
+    expect(stored.summary).not.toContain("sk-abcdefghijklmnop");
+    // 键没翻：同输入再跑一趟必须全命中（翻掉就是重烧，这里 4 个文件都会变成未命中）
+    const second = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    expect(second.estimate.cachedFiles).toBe(4);
+    // 过筛只发生在发出去的副本上：学习者仓库里的文件一个字节都不该被我们改过
+    expect(readFileSync(join(database.repositoryPath, "main.py"), "utf8")).toContain("sk-abcdefghijklmnop1234");
   });
 });

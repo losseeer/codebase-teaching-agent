@@ -1,6 +1,7 @@
 import type { RepositoryFlow } from "@codebase-tutor/shared";
 import { styleBand } from "@codebase-tutor/shared";
 import { citesOwnedFile } from "../flows/deepen.js";
+import { maskSecrets } from "../security/secrets.js";
 
 /**
   B 档（离线评测）的**确定性判分器**——一条 LLM 调用都不发起，判的是「产出的形态与可定位性」。
@@ -206,42 +207,22 @@ export interface ScreenedReply {
   samples: string[];
 }
 
-const SECRET_PATTERNS: RegExp[] = [
-  /\bsk-[A-Za-z0-9_-]{16,}/g, // OpenAI / DeepSeek 一类的 key 形态
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bAKIA[0-9A-Z]{16}/g, // 云厂商临时凭据
-  /\bAIza[0-9A-Za-z_-]{30,}/g,
-  /\bxox[baprs]-[0-9A-Za-z-]{10,}/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
-  /\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}/g, // JWT 两段连写（header 段解出来就是 eyJ 开头的固定形态）
-  /\b(?:api[_-]?key|access[_-]?key|secret[_-]?key|password|token)\s*[:=]\s*["']?[A-Za-z0-9+/_-]{20,}/gi
-];
-
 /** 仓库外的绝对路径：本机目录结构不是代码证据，出现在正文里既误导学习者又泄露机器信息。 */
 const OUTSIDE_PATH = /(?:[A-Za-z]:\\|\/?(?:etc|var|usr|private|home|root|Users)\/|~\/|\.\.[/\\])[^\s`"'，。；)）]*\b/g;
 
-const MASK_SECRET = "[疑似密钥，已隐去]";
 const MASK_PATH = "[仓库外路径，已隐去]";
 
 export function screenReply(answer: string): ScreenedReply {
-  let text = answer;
-  let secrets = 0;
+  const secrets = maskSecrets(answer);
   let paths = 0;
   const samples: string[] = [];
-  for (const pattern of SECRET_PATTERNS) {
-    text = text.replaceAll(pattern, () => {
-      secrets += 1;
-      if (samples.length < 3) samples.push("密钥形态");
-      return MASK_SECRET;
-    });
-  }
-  text = text.replaceAll(OUTSIDE_PATH, (match) => {
+  if (secrets.masked) samples.push("密钥形态");
+  const text = secrets.text.replaceAll(OUTSIDE_PATH, (match) => {
     paths += 1;
     if (samples.length < 3) samples.push(`${match.slice(0, 24)}…`);
     return MASK_PATH;
   });
-  return { text, secrets, paths, samples };
+  return { text, secrets: secrets.masked, paths, samples };
 }
 
 /** 过筛后的说明：改过字就要让用户知道改了什么，否则「落库正文＝用户所见」这条对齐成了暗改。 */

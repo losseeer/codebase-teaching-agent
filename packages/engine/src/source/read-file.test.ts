@@ -148,3 +148,18 @@ describe("dedupeFileReads（journal 落盘归并：审计回答「看过哪些�
     expect(dedupeFileReads([rec("x.ts", { denied: true, error: "first_reason" }), rec("x.ts", { denied: true, error: "second_reason", lines: 9 })])).toEqual([rec("x.ts", { denied: true, error: "first_reason" })]);
   });
 });
+
+/** 入口过筛：文件名干净但内容里带真 key 时，隐去发生在交给模型之前，且首行要说明。 */
+describe("read_file 的密钥隐去", () => {
+  it("硬编码在普通源文件里的 key 被隐去、数量进审计，正常代码一字不动", () => {
+    writeFileSync(join(repoRoot, "src/config.ts"), `export const key = "sk-abcdefghijklmnop1234";\nexport const placeholder = "YOUR_KEY";\n`, "utf8");
+    const withSecret = executeReadFile(repoRoot, JSON.stringify({ path: "src/config.ts" }));
+    expect(withSecret.audit.masked).toBe(1);
+    expect(withSecret.content).toContain("[疑似密钥，已隐去]");
+    expect(withSecret.content).toContain("另有 1 处疑似密钥已隐去（不要尝试补全）");
+    expect(withSecret.content).not.toContain("sk-abcdefghijklmnop");
+    expect(withSecret.content).toContain("YOUR_KEY"); // 占位符不是密钥，改了才毁掉教学正文
+    writeFileSync(join(repoRoot, "src/clean.ts"), "export const a = 1;\n", "utf8");
+    expect(executeReadFile(repoRoot, JSON.stringify({ path: "src/clean.ts" })).audit.masked).toBeUndefined();
+  });
+});

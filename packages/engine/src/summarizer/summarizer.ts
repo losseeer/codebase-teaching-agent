@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
 import { hash } from "../lib.js";
+import { maskSecrets } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
@@ -81,6 +82,28 @@ function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: 
 /** 导出仅为测试可写入「旧判据时代的存量行」，验证缓存命中路径的就地重算。 */
 export const summaryCacheKey = cacheKeyOf;
 
+/**
+  出门前的隐去：**只作用于发给模型的那份副本**，切片原样保留、缓存键不动。
+  这条边界是拍过板的：L1 的键是 `hash(切片本身)`（见 `cacheKeyOf`），若在切片阶段就地隐去，
+  全仓摘要键会整体翻掉＝替每个用户重烧一遍。所以这里筛的是「发出去的内容」与「存回来的摘要」，
+  代价是缓存里存的切片仍含原文（它只在本机磁盘上，不出门）。
+  逐字段列举式写法会随 `FileSlice` 长新字段而漏掉，所以整份递归走字符串。
+ */
+function maskSliceForSend(slice: FileSlice): { copy: FileSlice; masked: number } {
+  let masked = 0;
+  const walk = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      const result = maskSecrets(value);
+      masked += result.masked;
+      return result.text;
+    }
+    if (Array.isArray(value)) return value.map(walk);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, walk(inner)]));
+    return value;
+  };
+  return { copy: walk(slice) as FileSlice, masked };
+}
+
 export async function summarizeFiles(input: {
   structure: FileStructure;
   database: TutorDatabase;
@@ -137,8 +160,12 @@ export async function summarizeFiles(input: {
   for (let offset = 0; offset < pending.length; offset += SUMMARY_BATCH_SIZE) {
     const batch = pending.slice(offset, offset + SUMMARY_BATCH_SIZE);
     let results: (SummaryResult | undefined)[];
+    // 声明在 try 之外：下面的落库循环要用它算「实际发出去的字符数」
+    const sending = batch.map((slice) => maskSliceForSend(slice));
     try {
-      results = await provider.summarizeMany(batch);
+      const sendMasked = sending.reduce((total, item) => total + item.masked, 0);
+      if (sendMasked) console.warn(`[summarizer] 本批有 ${sendMasked} 处疑似密钥在发给 ${provider.name} 之前被隐去（切片与缓存键未改动）`);
+      results = await provider.summarizeMany(sending.map((item) => item.copy));
     } catch (error) {
       // 整批抛错（网络、429、端点抖动）不等于导入失败：这一批全按「没拿到结果」处理，逐条走确定性补齐。
       // provider 的契约注释早就写了「单次失败由调用方按条回落」，但回落只有缺项时才触发，
@@ -154,7 +181,8 @@ export async function summarizeFiles(input: {
       if (!fromModel) fallbackFiles += 1;
       const stored: StoredSummary = {
         path: slice.path,
-        summary: result.summary,
+        // 回存也筛一遍：模型可能把看到过的字面量原样抄进摘要，那行之后会被当上下文反复重放
+        summary: maskSecrets(result.summary).text,
         role: result.role ?? slice.role,
         roleSource: result.role ? "provider" : "structure",
         coverage: coverageOf(slice, result.summary)
@@ -164,7 +192,8 @@ export async function summarizeFiles(input: {
       // 落在确定性档的键上，下次同输入仍会重试模型。
       database.putFileSummary(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
-      inputCharacters += JSON.stringify(slice).length;
+      // 估算口径按**实际发出去的那份**算，隐去过就该比切片原文短
+      inputCharacters += JSON.stringify(sending[index].copy).length;
       byPath.set(slice.path, { ...stored, cached: false });
     }
   }

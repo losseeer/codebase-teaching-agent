@@ -1096,6 +1096,11 @@ export interface EngineTraceEvent {
   kind: EngineTraceKind;
   /** 关联键：同一请求产生的 http / llm / journal 事件共享它；后台任务为 null。 */
   traceId: string | null;
+  /**
+    调用方身份（API key 的名字）。本机模式没配 key 文件时为 null，后台任务同样为 null。
+    与 `llm.log` 的同名字段同源，所以「谁发起了哪些请求 → 谁花了哪些 token」可以直接按这个字段对账。
+    */
+  actor?: string | null;
   durationMs?: number | null;
   detail: Record<string, TraceScalar>;
 }

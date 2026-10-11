@@ -1,6 +1,7 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isWithin } from "../lib.js";
+import { maskSecrets } from "../security/secrets.js";
 import type { LlmTool } from "../llm/provider.js";
 
 /**
@@ -69,6 +70,12 @@ export interface FileReadRecord {
   path: string;
   /** 本次**实际返回**的行数（不是请求的行数）。 */
   lines?: number;
+  /**
+    本次返回里被隐去的密钥形态命中数（0 = 扫过且干净）。
+    入口这道闸判的是「正文进 prompt 之前」：文件名/后缀名单挡不住硬编码在 `config.ts` 里的真 key，
+    而这一句一旦跟着请求出门就收不回来。只记数量，原文不进任何日志。
+   */
+  masked?: number;
   /** 请求的行没给全（被字符预算截住，或某一行本身就超预算被切）。首行会说明实得区间与续读 offset。 */
   truncated: boolean;
   denied: boolean;
@@ -190,8 +197,15 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
       这种情况能做的只有说清楚「这行只给了开头」，然后让它往前走。
       */
     const hint = truncated ? `，已达单次字符上限${cutMidLine ? `（第 ${end} 行本身超长，只给到开头，整行读不全）` : ""}，继续读请用 offset=${end + 1}` : "";
-    const header = `文件 ${relative}（第 ${start}-${end} 行${total}${hint}）`;
-    return { content: `${header}：\n${numbered}`, audit: { path: relative, lines: kept.length, truncated, denied: false } };
+    /**
+      入口这道过筛：正文要进发往远端的 prompt，硬编码在普通源文件里的真 key 是名单挡不住的（它叫 `config.ts`）。
+      首行必须说明「这里被隐去了 N 处」——不写的话模型会以为文件本来就少了几段，
+      于是去猜那段密钥、或者对用户说「输出被截断」（§41 实测到的那类假解释）。
+    */
+    const screened = maskSecrets(numbered);
+    const maskedNote = screened.masked ? `，另有 ${screened.masked} 处疑似密钥已隐去（不要尝试补全）` : "";
+    const header = `文件 ${relative}（第 ${start}-${end} 行${total}${hint}${maskedNote}）`;
+    return { content: `${header}：\n${screened.text}`, audit: { path: relative, lines: kept.length, truncated, denied: false, masked: screened.masked || undefined } };
   } catch (error) {
     const message = error instanceof Error ? error.message : "读取失败";
     const hint = message.includes("ENOENT") ? "路径不存在；请对照「项目结构全景」里的真实路径拼写重试。" : "";
