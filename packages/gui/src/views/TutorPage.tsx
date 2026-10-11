@@ -200,10 +200,10 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNote = moduleEntries?.status === "llm"
-    ? "LLM 从模块文件里推荐 · 可直接提问"
+    ? "LLM 推荐 · 点开即问"
     : moduleEntries?.status === "loading" || entryPending
-      ? "正在从模块文件里挑阅读顺序…"
-      : moduleEntries?.reason ?? `模块地图给出 ${moduleFiles.length} 个文件 · 配置 LLM 后排阅读顺序`;
+      ? "正在挑阅读顺序…"
+      : moduleEntries?.reason ?? `按模块结构列出 ${moduleFiles.length} 个文件`;
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
       点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
@@ -274,11 +274,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       文案不能再说「已定位」（渲染与滚动都在 SourceView 里，这里只负责说实话）。 */
   const lineRenderable = source ? isLineRendered(source.line) : true;
   const sourceMeta = !source
-    ? "选择左侧仓库文件或推荐入口"
+    ? "选一个文件开始"
     : lineRenderable
-      ? `只读 · 已定位第 ${source.line} 行`
-      : `只读 · 第 ${source.line} 行超出预览上限`;
-  const sourceMetaNote = source && !lineRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
+      ? `已定位第 ${source.line} 行`
+      : `锚点在第 ${source.line} 行，超出预览`;
+  const sourceMetaNote = source && !lineRenderable ? `面板只渲染前 ${MAX_RENDER_LINES} 行，这一行在范围之外（源码没截，往下翻或搜关键词）` : "源码只读，不会写回你的仓库";
 
   return (
     <section className="page tutor-page">
@@ -306,7 +306,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
             onRename={(id, label) => setOverrides((curr) => ({ ...curr, renamed: { ...curr.renamed, [id]: label } }))}
             onAdd={(label) => {
               const id = `custom-${Date.now().toString(36)}`;
-              setOverrides((curr) => ({ ...curr, custom: [...curr.custom, { id, label, hint: "自建模块 · 没有模块地图背书，先从仓库文件挑一个开始" }] }));
+              setOverrides((curr) => ({ ...curr, custom: [...curr.custom, { id, label, hint: "自建模块 · 自己挑文件开始" }] }));
               setActiveModule(id);
             }}
             onRemove={(id) => setOverrides((curr) => (curr.custom.some((item) => item.id === id)
@@ -367,11 +367,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
                 ) : null}
               </div>
             ) : moduleEntries?.status === "loading" ? (
-              <p className="entry-empty">正在从课程树挑选推荐入口…</p>
+              <p className="entry-empty">正在挑推荐入口…</p>
             ) : (
-              <p className="entry-empty">该模块还没有推荐入口。用下面的仓库文件或右侧源码挑一个文件，直接开始提问。</p>
+              <p className="entry-empty">这个模块没有推荐入口，从下面的文件里挑一个开始。</p>
             )}
-            <ModuleSectionLabel label="仓库文件" note="主要入口 · 任意目录与文件" />
+            <ModuleSectionLabel label="仓库文件" note="任意文件都能点开" tip="上面是推荐入口，这里是全仓文件树" />
             <RepoTree nodes={fileTree} onOpenFile={openFile} activePath={source?.path} />
           </ModulesPane>
         </div>

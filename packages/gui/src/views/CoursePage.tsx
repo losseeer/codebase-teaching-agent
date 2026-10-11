@@ -123,7 +123,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
         {/* 与教学页同一条列表栏宽度：拖一次，三个工作区的左栏一起跟 */}
         <ColumnResizer field="filePaneWidth" label="项目目录栏" growOn="right" />
         <aside className={`pane ${paneClass(0)}`}>
-          <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} files</span></div>
+          <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} 个文件</span></div>
           <div className="tree">
             <RepoTree
               nodes={index.fileTree}
@@ -142,7 +142,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
               <button type="button" role="tab" aria-selected={mapView === "flow"} className={mapView === "flow" ? "active" : ""} onClick={() => setMapView("flow")}>流程视图</button>
             </div>
             <span className="map-viewbar-note">
-              {mapView === "architecture" ? "模块依赖图 · 从左到右按依赖方向分层" : "LLM 按入口生成执行流程 · 每个环节关联的文件见节点详情"}
+              {mapView === "architecture" ? "按依赖方向从左到右分层" : "点环节看它关联的文件"}
             </span>
             {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
             {drawer ? null : (

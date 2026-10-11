@@ -171,7 +171,7 @@ export function ModulesPane({
         )}
         {configOpen && (
           <div className="module-config">
-            <div className="cfg-head">{isPractice ? "自定义出题主题" : "模块配置"}<span>{isPractice ? "缺省为「程序理解题」；新增主题生成练习时由 LLM 出题" : "模块来自本仓库的模块地图；改名只影响显示，隐藏后可一键恢复"}</span></div>
+            <div className="cfg-head">{isPractice ? "自定义出题主题" : "模块配置"}<span title={isPractice ? "缺省是「程序理解题」；自定义主题由 LLM 出题" : "模块来自本仓库的模块地图；改名只影响显示，隐藏后可一键恢复"}>{isPractice ? "新主题由 LLM 出题" : "改名只影响显示"}</span></div>
             {modules.map((item) => (
               <div className="cfg-row" key={item.id}>
                 <input value={item.label} aria-label="模块名称" onChange={(event) => onRename(item.id, event.target.value)} />
@@ -180,7 +180,7 @@ export function ModulesPane({
             ))}
             {treeDerived && onTierChange && modules.some((item) => item.tier) && (
               <div className="cfg-tiers">
-                <div className="cfg-head">分级依据<span>档位由引擎按文件的结构角色算（确定、可复现）。改档只影响这个界面怎么分组，并会给审计线留一条记录，攒起来就是判据的真值。</span></div>
+                <div className="cfg-head">分级依据<span title="档位由引擎按文件的结构角色算出（确定、可复现）。改档只影响这里的分组，并给审计线留一条记录——攒起来就是判据的真值。">改档只影响这里的分组</span></div>
                 {modules.filter((item) => item.tier).map((item) => (
                   <div className="cfg-tier-row" key={item.id}>
                     <span className="cfg-tier-name" title={hoverText(item)}>{item.label}</span>
@@ -219,6 +219,7 @@ export function ModulesPane({
 
 
 /** 「推荐入口 / 仓库文件 / 模块内的练习」共用的小节标题（prototype `.module-section-label`）。 */
-export function ModuleSectionLabel({ label, note }: { label: string; note?: string }): ReactElement {
-  return <div className="module-section-label">{label}{note ? <span>{note}</span> : null}</div>;
+/** 分区标题：`note` 是跟在标题后的小字（能删就删），`tip` 是「机制/口径」那类解释——只在悬停时出现，不占版面。 */
+export function ModuleSectionLabel({ label, note, tip }: { label: string; note?: string; tip?: string }): ReactElement {
+  return <div className="module-section-label">{label}{note ? <span title={tip}>{note}</span> : null}</div>;
 }

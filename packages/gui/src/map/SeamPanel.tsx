@@ -31,7 +31,7 @@ function Direction({ title, links, direction, otherLabel }: { title: string; lin
       <h4>{title} <span className="muted">{direction.matched}/{direction.scanned} 配上{direction.ambiguous ? `｜${direction.ambiguous} 条有多落点` : ""}</span></h4>
       {links.length
         ? <ul>{links.slice(0, 20).map((link, index) => <LinkRow key={`${link.consumer.path}:${link.consumer.line}:${link.provider.path}:${index}`} link={link} otherLabel={otherLabel} />)}</ul>
-        : <p className="muted">一条也没配上：这一侧有 {direction.scanned} 条可读的地址，但两边字符串没有交集——常见原因是地址拼在变量里、走过配置文件，或两个仓本来就没有调用关系。</p>}
+        : <p className="muted" title={`这一侧读到 ${direction.scanned} 条地址，但两边没有交集。常见原因：地址拼在变量里、走过配置文件，或两个仓本来就没有调用关系。`}>一条也没配上：两边没有相同的地址</p>}
     </div>
   );
 }
@@ -84,7 +84,7 @@ export function SeamPanel({ repositoryId }: { repositoryId: string }): ReactElem
         </label>
         <button type="button" disabled={!otherId || loading} onClick={() => void load()}>{loading ? "配对中…" : "看这条链"}</button>
       </div>
-      <p className="muted">两边不共享任何代码依赖，只共享 URL 字符串；这里按归一化后的路由把两端连起来（不花模型 token）。</p>
+      <p className="muted" title="两边不共享代码依赖，只共享 URL 字符串；这里按归一化后的路由配对，不花模型 token。">只按 URL 配对，不看代码依赖</p>
       {error ? <p className="seam-error">{error}</p> : null}
       {report ? (
         <>

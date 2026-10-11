@@ -101,17 +101,20 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
           <span className="mode-switch-label">详细导入</span>
           {commentMode && <span className="mode-token-hint">会消耗更多 token</span>}
         </div>
-        <p className="import-mode-note">{commentMode
-          ? "摘要生成时参考代码注释：注释写得多的仓库（面试讲解、课程作业类）中文概念词更容易被摘要带上、进而被搜到；代价是消耗更多 token。"
-          : "摘要只看代码结构，更省 token。需要注释里的中文概念词也被摘要带上（面试讲解、课程作业类仓库），请在导入前打开「详细导入」——导入完成后不再提供该开关的修改入口，换口径需要重新导入。"}</p>
+        {/* 一句给结论、一句给「为什么/怎么改」：后者挪进 title，第一屏不该读两段说明书 */}
+        <p className="import-mode-note" title={commentMode
+          ? "注释写得多的仓库（面试讲解、课程作业类）里的中文概念词会一起进摘要，也因此更费 token。"
+          : "想连注释一起摘要，请在导入前切到「详细导入」；换口径需要重新导入。"}>{commentMode
+          ? "连注释一起摘要：中文概念词更容易被搜到，也更费 token。"
+          : "只看代码结构，最省 token。要连注释一起摘要请切「详细导入」，导入后不可再改。"}</p>
         {error && <p className="error-message">{error}</p>}
       </div>
       {catalog.length > 0 && (
         <div className="import-catalog" aria-label="地址簿里已导入的仓库">
-          <div className="import-catalog-head">地址簿里已导入的 {catalog.length} 个仓<span>点一下就切过去，不用重填路径，也不会重新烧 token</span></div>
+          <div className="import-catalog-head">地址簿里已导入的 {catalog.length} 个仓<span title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span></div>
           {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
               成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
-          {gateNotice && <p className="cost-notice">{gateNotice}</p>}
+          {gateNotice && <p className="cost-notice" title={`要配的环境变量：TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION（任一档即可，配完重启引擎）`}>{gateNotice}</p>}
           {catalog.map((item) => {
             const isCurrent = item.repositoryId === workspace?.repositoryId;
             const verdict = item.freshness?.verdict;

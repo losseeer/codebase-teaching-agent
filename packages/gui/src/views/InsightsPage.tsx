@@ -70,7 +70,6 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
         <div>
           <p className="eyebrow">运行控制</p>
           <h1>成本监控</h1>
-          <p>本月 Token 用量与三档单价（输入未命中 / 输入缓存命中 / 输出）的计价明细，另有按场景、按模型的分布与降级情况。</p>
         </div>
         <div className="cost-toolbar">
           <span className="cost-stamp">{savedAt ? `读数 ${savedAt}` : "正在读取…"}</span>
@@ -100,10 +99,10 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             <i style={{ width: `${usedRatio * 100}%` }} />
           </div>
           <p className="muted">{!readoutReady
-            ? <>这条读数没拿到（失败原因在标题下方），所以既不说「闸门生效」也不说「无上限」——刷新一次再判。</>
+            ? <>读数没拿到，刷新一次再看。</>
             : pricingConfigured
-              ? <>剩余 {usd(cost.remainingBudgetUsd)}；触顶后教学与对话改走本地规则，不再付 token。</>
-              : <>这里的剩余金额（{usd(cost.remainingBudgetUsd)}）不构成上限：没有单价就算不出已花金额，「触顶后改走本地规则」那条分支永远走不到。</>}</p>
+              ? <>剩余 {usd(cost.remainingBudgetUsd)} · 触顶后改走本地规则</>
+              : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额，「触顶改走本地规则」这条分支走不到。</>}</p>
           <label className="budget-field">调整月度预算（USD）
             <span>
               <input
@@ -133,8 +132,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 $0 ⇒ 闸门永远判为未超支，等于无上限调用"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
           </div>
           {!pricingConfigured && (
-            <p className="cost-notice">
-              还没配单价（环境变量 <code>TUTOR_INPUT_USD_PER_MILLION</code> / <code>TUTOR_CACHE_HIT_USD_PER_MILLION</code> / <code>TUTOR_OUTPUT_USD_PER_MILLION</code>），所以金额恒为 $0.0000——上面的 token 用量是真实读数，不受影响。<strong>更要紧的是这同时也意味着预算闸门没在管事</strong>：引擎里每一处「超预算就回落本地规则」的判断拿到的都是 $0，永远判为没超支，于是月预算形同虚设。配上任一档单价（DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万，约 $0.28 / $1.1）再重启引擎，上限才真的存在。
+            <p className="cost-notice" title="要配的环境变量：TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万（约 $0.28 / $1.1），配好重启引擎。">
+              没配单价 ⇒ 金额恒为 $0.0000（上面的 token 用量是真实读数）。<strong>更要紧的是预算闸门也因此不管事</strong>：引擎里「超预算就回落本地规则」的判断拿到的永远是 $0，月预算形同虚设。
             </p>
           )}
 
@@ -154,7 +153,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                   ))}
                 </tbody>
               </table>
-              <p className="muted">金额=三档之和；命中那档若标了「未打折」，说明只配了输入价，实际账单通常比这里低。</p>
+              <p className="muted" title="命中那档标「未打折」= 只配了输入价，实际账单通常比这里低">金额 = 三档之和</p>
             </section>
             <section className="cost-table">
               <div className="panel-title"><h2>按场景</h2></div>
@@ -208,12 +207,12 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 );
               })}
             </div>
-            <p className="muted">只显示本月近 14 个有用量的日子，条形高度按其中峰值归一；悬停看每天的输入/输出用量。</p>
+            <p className="muted" title="只列本月近 14 个有用量的日子，高度按其中峰值归一">悬停看每天的用量</p>
           </section>
         </>
       )}
 
-      {cost && cost.turns === 0 && <p className="cost-empty">本月还没有 token 开销记录——去代码教学问一句，或生成一道练习，读数就会进来。</p>}
+      {cost && cost.turns === 0 && <p className="cost-empty">本月还没有开销记录。去代码教学问一句，或生成一道练习。</p>}
     </section>
   );
 }

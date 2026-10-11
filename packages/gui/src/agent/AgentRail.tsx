@@ -84,14 +84,14 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
             来源 · <b>{t.replySource[scope] === HEURISTIC_SOURCE ? "本地启发式" : "LLM"}</b>
           </span>
         ) : null}
-        <span>{items.length} 条 · 本作用域独立记录</span>
+        <span title="三个作用域各记各的对话，互不混在一起">{items.length} 条 · 仅此作用域</span>
       </div>
 
       <div className="agent-thread" id="agent-thread" ref={threadRef} aria-live="polite">
         {scope === "teaching" && items.length === 0 && !t.liveAnswer ? (
           <div className="starter">
             <GraduationCap size={22} />
-            <p>先写下你对这个节点的一个观察或假设，或输入「不知道」请求下一层提示。</p>
+            <p>写下你的观察或疑问；不知道就输入「不知道」。</p>
           </div>
         ) : null}
         {items.length === 0 && scope !== "teaching" ? (
@@ -188,7 +188,7 @@ const STYLE_CHOICES = [
 
 function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
     return {
-      placeholder: t.selected ? `围绕「${t.selected.title}」描述你的推理，或输入「不知道」请求下一层提示` : "描述你的推理，或输入「不知道」请求下一层提示",
+      placeholder: t.selected ? `围绕「${t.selected.title}」说说你的推理；不知道就输入「不知道」` : "说说你的推理；不知道就输入「不知道」",
       canSend: !t.sending && t.content.trim().length > 0,
       onSend: t.send,
     };

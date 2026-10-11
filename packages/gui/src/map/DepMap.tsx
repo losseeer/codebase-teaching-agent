@@ -344,8 +344,8 @@ export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
           <span><i />普通模块</span>
           {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现，说明直接引引擎自报口径（见 edgeCaveatOf） */}
           {caveat ? <span className="legend-caveat" title={caveat.detail}>{caveat.label}</span> : null}
-          <span className="legend-note">
-            {`边 = import 依赖，箭头指向被依赖方 · 越粗引用越多 · 点击模块在抽屉中看文件清单${hiddenModules ? ` · ${hiddenModules} 个无依赖且非入口的模块未显示（完整清单在左侧项目目录）` : ""}`}
+          <span className="legend-note" title={`边 = import 依赖（箭头指向被依赖方），线越粗引用越多。点模块在抽屉里看文件清单。${hiddenModules ? `另有 ${hiddenModules} 个既无依赖也不是入口的模块没画进来，完整清单在左侧项目目录。` : ""}`}>
+            箭头指向被依赖方 · 越粗引用越多 · 点模块看文件清单{hiddenModules ? ` · 未显示 ${hiddenModules} 个孤立模块` : ""}
           </span>
         </div>
       </div>

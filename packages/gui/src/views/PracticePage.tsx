@@ -200,7 +200,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 ))}
               </div>
             ) : (
-              <p className="entry-empty">{isComprehensionChip ? "该模块下暂时没有练习记录。切到右侧「练习上下文」点「生成练习」，开始一次针对当前仓库的复习。" : "该主题下暂时没有练习记录。切到右侧「练习上下文」点「生成练习」，LLM 会围绕这个主题出题。"}</p>
+              <p className="entry-empty">{isComprehensionChip ? "还没有练习记录。在右侧点「生成练习」。" : "这个主题还没有题。在右侧点「生成练习」让 LLM 出题。"}</p>
             )}
           </ModulesPane>
         </div>
@@ -209,7 +209,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           <div className="pane-header"><h2>练习上下文</h2><span>{anchor ? `${anchor.path} · 第 ${anchor.line} 行` : "尚未生成练习"}</span></div>
           <div className="source-meta">
             <span title={codeNoteTitle}>{codeNote}</span>
-            <span>{exercise ? `${gradingLabel(exercise.gradingMode)} · 内容版本 ${exercise.contentVersion.slice(0, 14)}` : "—"}</span>
+            <span title={exercise ? `判分方式 ${gradingLabel(exercise.gradingMode)}｜题目对应的代码版本 ${exercise.contentVersion.slice(0, 14)}（代码改过就会重出题）` : undefined}>{exercise ? gradingLabel(exercise.gradingMode) : "—"}</span>
           </div>
           {error ? <p className="error-message practice-error">{error}</p> : null}
           {exercise ? (
@@ -258,7 +258,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                       <p>下次复习：{new Date(result.review.dueAt).toLocaleDateString()}（间隔 {result.review.intervalDays} 天）</p>
                     </>
                   ) : (
-                    <p>完成回答后，这里会显示判分反馈、掌握度变化和下次复习时间。</p>
+                    <p title="判分会回写学习状态：掌握度与下次复习时间">答完这里出反馈和下次复习时间。</p>
                   )}
                 </div>
               </div>
@@ -266,7 +266,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           ) : (
             <div className="practice-empty">
               <BrainCircuit size={26} />
-              <p>从左栏选一个已练单元，或点下面的「生成练习」针对当前仓库出一道新题。</p>
+              <p>选一个已练单元回看，或直接生成新题。</p>
               <button className="primary" onClick={() => void generate()} disabled={loading}>{loading ? <RefreshCw className="spin" size={15} /> : <BrainCircuit size={15} />}生成练习</button>
             </div>
           )}

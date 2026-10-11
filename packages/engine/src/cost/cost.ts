@@ -43,7 +43,8 @@ export function pricingIsConfigured(pricing: Pricing = envPricing): boolean {
   */
 export function budgetGateNotice(pricing: Pricing = envPricing): string | undefined {
   if (pricingIsConfigured(pricing)) return undefined;
-  return "预算闸门未生效：三档单价一个都没配（TUTOR_INPUT/CACHE_HIT/OUTPUT_USD_PER_MILLION），花费算不出来 ⇒ 闸门永远判为未超支 ⇒ 实际是无上限调用。配上任一单价即可恢复上限。";
+  // 一句因果链读完即可；环境变量名交给界面的悬停说明（这句话会出现在导入页第一屏，读者是刚打开产品的人）
+  return "预算闸门未生效：没配单价 ⇒ 花费算不出 ⇒ 闸门永远判为没超支，实际是无上限调用。配上任一单价即恢复上限。";
 }
 
 /** 把用量切成三个计费档位。输入口径与 provider 的 `prompt_tokens` 一致：命中那部分**含在**输入里。 */

@@ -156,7 +156,7 @@ export function App(): ReactElement {
               // 导入页，看起来像「软件自己把我的仓库弄丢了」。
               updateWorkspace(null);
               setWorkspaceReady(true);
-              showToast("上次打开的仓库不在引擎的地址簿里（地址簿只记你导入过的仓），请重新导入。");
+              showToast("上次打开的仓库不在地址簿里了，请重新导入。");
               return;
             }
             // 目录挪走 / 产物不全：仓库没丢，是挂不起来。留着 workspace 说清原因（pending 会渲染 MountBlocked），
@@ -384,11 +384,13 @@ function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze
   return (
     <div className="freshness-banner" role="status">
       <strong>{stale ? "产物已过期" : "提交已移动，内容与分析时一致"}</strong>
-      <span>
+      {/* 横幅只留「变了没有 / 能不能继续用」这一句；路径、哈希口径、HEAD 记录缺失这些细节进悬停 */}
+      <span title={`${repositoryPath}｜${stale
+        ? `有 ${freshness.changedFiles > 0 ? freshness.changedFiles : "若干"} 个文件的当前内容与产物记录的哈希对不上`
+        : `HEAD 从 ${short(freshness.headAtAnalysis)} 挪到 ${short(freshness.headNow)}${!freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容）" : ""}`}`}>
         {stale
-          ? `${repositoryPath} 这份分析是 ${ageOf(freshness.analyzedAt)}跑的，期间有 ${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个` : "一些"}文件的内容和它记录的哈希对不上。继续看的是旧结论。`
-          : `${repositoryPath} 的文件内容跟 ${ageOf(freshness.analyzedAt)}那次分析完全对得上，只是 HEAD 从 ${short(freshness.headAtAnalysis)} 挪到了 ${short(freshness.headNow)}，产物照常可用。`}
-        {!stale && !freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容。）" : ""}
+          ? `${ageOf(freshness.analyzedAt)}跑的分析，${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个文件` : "有些文件"}已经变了 · 看到的是旧结论`
+          : `代码内容没变，产物照常可用`}
       </span>
       <button type="button" onClick={onReanalyze}>去重新分析</button>
       <button type="button" className="ghost" onClick={onAcknowledge}>知道，先用旧的</button>

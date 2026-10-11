@@ -196,7 +196,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
               <span>自定义流程入口</span>
               <input
                 value={pattern}
-                placeholder={`路径正则，如 controller|Application；输入 . 匹配全部 ${fileOptions.length} 个文件`}
+                placeholder={`路径正则，如 controller|Application（. 看全部 ${fileOptions.length} 个）`}
                 title="按路径正则匹配已索引文件，点匹配结果即把它设为流程起点（引擎识别不到入口时的兜底，也用来试非常规起点）"
                 spellCheck={false}
                 onChange={(event) => setPattern(event.target.value)}
@@ -220,12 +220,12 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
                   </button>
                 ))}
                 {matches.total > shownMatches.length ? (
-                  <span className="picker-empty">{`只列前 ${MATCH_LIMIT} 条（共 ${matches.total} 条匹配）——把正则收紧些`}</span>
+                  <span className="picker-empty">{`只列前 ${MATCH_LIMIT} 条（共 ${matches.total} 条）· 正则收紧些`}</span>
                 ) : null}
               </div>
             ) : null}
             {pattern.trim() && !matches.error && !matches.total ? (
-              <p className="flow-entry-hint">没有文件的 path 匹配这条正则：先试更短的词，或输入 <code>.</code> 看全部清单。</p>
+              <p className="flow-entry-hint">没有文件匹配：换个短点的词，或输入 <code>.</code> 看全部。</p>
             ) : null}
             {matches.error ? <p className="flow-entry-hint">正则不合法：{matches.error}</p> : null}
           </div>
