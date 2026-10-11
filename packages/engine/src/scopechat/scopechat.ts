@@ -7,6 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
+import type { CrossRepoContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 
 /**
@@ -230,7 +231,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
@@ -282,6 +283,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     maxCalls: MAP_MAX_TOOL_CALLS,
     scene: "map.chat",
     ...(input.search ? { search: input.search } : {}),
+    ...(input.cross ? { cross: input.cross } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });

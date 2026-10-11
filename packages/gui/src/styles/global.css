@@ -642,20 +642,3 @@ button.entry-item:hover { background: #eef6ef; }
 .source-tab-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: #86a094; font-size: 13px; line-height: 1; }
 .source-tab-close:hover { color: #8b3e32; background: #f4e3e0; }
 
-/* 跨仓 HTTP 接缝面板：架构视图下方的一条辅助读数，字号与图例同级，不抢画布。
-   配色用字面量而非 var(--)：这一段当初照 design-prototype.html 的 --border/--surface/--muted 令牌写的，
-   但那套变量只在原型单文件里定义，app 加载的 global.css 从不声明它们——运行时 border 退化成 0px none、
-   background 变透明。改回全站一致的令牌（#d6e1da / #fff / #678277 …），别再造半套变量。 */
-.seam-panel { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid #d6e1da; border-radius: 10px; background: #fff; font-size: 12px; }
-.seam-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.seam-head h3 { margin: 0; font-size: 13px; }
-.seam-head label { display: inline-flex; align-items: center; gap: 6px; color: #678277; }
-.seam-head select { background: #fbfdfb; color: inherit; border: 1px solid #cbd9d1; border-radius: 7px; padding: 3px 6px; font: inherit; }
-.seam-group { margin-top: 8px; }
-.seam-group h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
-.seam-group ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
-.seam-row { display: flex; align-items: baseline; gap: 8px; }
-.seam-row code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11px; color: #29473b; word-break: break-all; }
-.seam-via { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; color: #678277; border: 1px solid #cbd9d1; }
-.seam-end { color: #678277; font-size: 11px; }
-.seam-error { margin: 6px 0 0; color: #ae3f36; }

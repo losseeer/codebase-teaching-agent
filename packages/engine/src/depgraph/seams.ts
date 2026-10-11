@@ -70,3 +70,27 @@ export function seamReportFor(repository: SeamRepository, other: SeamRepository)
 export function clearSeamMemo(): void {
   memo.clear();
 }
+
+/** 一次回给模型的行数上限：再多模型也只是把清单抄进答案，不如让它用 search_code 缩小范围。 */
+const MODEL_ROWS = 12;
+
+/**
+  把配对结果压成给模型看的清单（`cross_repo_link` 的返回值）。
+  每行都必须带「文件:行」——模型下一步就是拿它去 read_file，给个模块名等于没给。
+  证据强度也照实写：后缀配上的（网关前缀那一类）与一条串配到多个落点的，都不能混在「配上了」里。
+  */
+export function formatSeamReport(otherName: string, report: SeamReport, filter = ""): string {
+  const needle = filter.trim().toLowerCase();
+  const rows = (direction: SeamReport["outbound"], caption: string): string => {
+    const hits = direction.links.filter((link) => !needle || `${link.route} ${link.consumer.path} ${link.provider.path}`.toLowerCase().includes(needle));
+    if (!hits.length) return `${caption}：没有${needle ? "匹配该片段的" : ""}配对（这一侧读到 ${direction.scanned} 条地址）。`;
+    const body = hits.slice(0, MODEL_ROWS).map((link) => `- ${link.route} → ${link.provider.path}:${link.provider.line}｜发起方 ${link.consumer.path}:${link.consumer.line}${link.via === "suffix" ? "（按后缀配上，对端可能有网关前缀）" : ""}${link.ambiguousWith > 1 ? `（这条串在对端有 ${link.ambiguousWith} 个落点，需自行确认）` : ""}`);
+    const rest = hits.length > MODEL_ROWS ? `\n（另有 ${hits.length - MODEL_ROWS} 条未列，可用 filter 缩小范围）` : "";
+    return `${caption}：配上 ${direction.matched} 处\n${body.join("\n")}${rest}`;
+  };
+  return [
+    `与仓「${otherName}」的 HTTP 接缝（按归一化 URL 现算，不消耗 token）：`,
+    rows(report.outbound, `本仓调用「${otherName}」`),
+    rows(report.inbound, `「${otherName}」调用本仓`)
+  ].join("\n");
+}

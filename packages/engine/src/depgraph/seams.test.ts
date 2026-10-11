@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import type { FileEntry } from "@codebase-tutor/shared";
+import type { FileEntry, SeamReport } from "@codebase-tutor/shared";
 import { clearSeamMemo, seamReportFor, type SeamRepository } from "./seams.js";
 
 /**
@@ -78,5 +78,27 @@ describe("跨仓 HTTP 接缝", () => {
     expect(seamReportFor(consumer, provider).outbound.matched).toBe(2);
     // 换了戳（等于重新分析过一次）：立刻按新内容重算，一条也配不上
     expect(seamReportFor(consumer, { ...provider, versionStamp: "v2" }).outbound.matched).toBe(0);
+  });
+});
+
+/** `cross_repo_link` 回给模型的清单：每行都要带「文件:行」，证据强度也要照实标。 */
+describe("formatSeamReport", () => {
+  it("列出双向落点、后缀匹配与歧义，filter 能收窄", async () => {
+    const { formatSeamReport } = await import("./seams.js");
+    const report: SeamReport = {
+      repositoryId: "a", otherRepositoryId: "b",
+      outbound: { scanned: 2, matched: 2, ambiguous: 1, links: [
+        { route: "/api/shop/save", via: "exact", ambiguousWith: 1, consumer: { route: "/api/shop/save", path: "src/api.ts", line: 12, raw: "/api/shop/save" }, provider: { route: "/api/shop/save", path: "ShopController.java", line: 24, framework: "spring" } },
+        { route: "/api/user/{*}", via: "suffix", ambiguousWith: 2, consumer: { route: "/api/user/{*}", path: "src/user.ts", line: 8, raw: "/user/{id}" }, provider: { route: "/user/{*}", path: "UserController.java", line: 31, framework: "spring" } }
+      ] },
+      inbound: { scanned: 0, matched: 0, ambiguous: 0, links: [] }
+    };
+    const text = formatSeamReport("backend", report);
+    expect(text).toContain("ShopController.java:24");
+    expect(text).toContain("发起方 src/api.ts:12");
+    expect(text).toContain("按后缀配上");
+    expect(text).toContain("2 个落点");
+    expect(text).toContain("「backend」调用本仓：没有配对");
+    expect(formatSeamReport("backend", report, "shop").split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
   });
 });

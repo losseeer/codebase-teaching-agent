@@ -6,6 +6,7 @@ import { addUsage } from "../llm/usage.js";
 import { defaultTutorSettings, policyFor, styleBand, validateSettings } from "../tutor-settings/tutor-settings.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
+import type { CrossRepoContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { classifyIntent } from "../teaching/intent.js";
 import { proposeAction, isActionAllowed } from "../teaching/action.js";
@@ -61,6 +62,8 @@ export interface RespondOptions {
   analysis?: RepositoryAnalysis;
   /** search_code 语料（server 侧用 index+analysis+L1 摘要构建）：提供时教学回合开放检索工具。 */
   search?: SearchCorpus;
+  /** 跨仓上下文（地址簿里还有别的仓时由 server 装配）：给 read_file/search_code 的 repo 参数与 cross_repo_link。 */
+  cross?: CrossRepoContext;
   /** 过程事件回调（可选；用于把「正在判断动作 / 正在读 xx 文件」推给 GUI）。 */
   onProgress?: (progress: TeachingProgress) => void;
   /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）：贯穿动作提议/意图分类与措辞工具循环。
@@ -140,7 +143,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
 /** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; cross?: CrossRepoContext; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[] }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
     input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round });
   };
@@ -160,6 +163,7 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     maxCalls: TEACHING_MAX_TOOL_CALLS,
     scene: "teaching.turn",
     ...(input.search ? { search: input.search } : {}),
+    ...(input.cross ? { cross: input.cross } : {}),
     ...(input.onProgress ? { onProgress: forwardProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });

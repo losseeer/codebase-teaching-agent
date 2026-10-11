@@ -12,7 +12,7 @@ import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } f
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
-import { seamReportFor } from "./depgraph/seams.js";
+import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
 import { classifyFileRoles, fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
@@ -33,6 +33,7 @@ import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
+import type { CrossRepoContext } from "./source/tool-loop.js";
 import { checkTurnInvariants, invariantTailNotice } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
@@ -293,6 +294,48 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
   return buildSearchCorpus(repository.index, repository.analysis, latestFileSummaries(repository.path));
 }
 
+/**
+  跨仓访问上下文——**界面上没有「跨仓」这个入口了**（原来那条接缝面板删了），跨仓只经由 agent 的
+  `read_file(repo=)` / `search_code(repo=)` / `cross_repo_link` 三个工具发生：用户问「点了这个按钮之后代码在哪」，
+  由模型自己去对端拿证据。三条口径：
+  - **只有地址簿里真有第二个仓时才回东西**。没有对端时工具清单逐字不变（多一个 schema 字段就是每轮白付 token，
+    还会诱使模型去猜不存在的对端）。
+  - **对端按需挂载**：`corpusOf` / `links` 里才 `ensureMounted`，模型不开口就不读第二个仓的产物。
+    挂载会占 LRU 名额（可能把当前仓挤出去），但当前这一回合握的是内存引用，不受影响。
+  - **守卫不另起一套**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
+    在对端仓上一样成立——这一条是这套能力唯一的安全边界。
+  */
+function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>): CrossRepoContext | undefined {
+  const targets = new Map<string, { id: string; path: string }>();
+  for (const entry of importer.catalog()) {
+    if (entry.repositoryId === repository.index.repositoryId || !entry.exists) continue;
+    // 两个仓可能同名（都叫 backend）：撞名就给 id 前缀，否则模型报了名字我们不知道选哪个
+    const name = targets.has(entry.name) ? `${entry.name}#${entry.repositoryId.slice(0, 6)}` : entry.name;
+    targets.set(name, { id: entry.repositoryId, path: entry.repositoryPath });
+  }
+  if (!targets.size) return undefined;
+  const mount = (name: string) => {
+    const target = targets.get(name);
+    if (!target) return undefined;
+    const mounted = importer.ensureMounted(target.id);
+    return mounted.ok ? mounted.repository : undefined;
+  };
+  const view = (item: NonNullable<ReturnType<typeof repositoryOr404>>) => ({ repositoryId: item.index.repositoryId, path: item.path, files: item.index.files, versionStamp: item.analysis.versionStamp });
+  return {
+    roots: Object.fromEntries([...targets].map(([name, target]) => [name, target.path])),
+    corpusOf: (name) => { const other = mount(name); return other ? searchCorpusFor(other) : undefined; },
+    links: (name, filter) => {
+      const other = mount(name);
+      if (!other) return targets.has(name) ? `仓「${name}」挂不起来（目录被挪走或 .tutor 产物不全），这次给不出跨仓落点。` : `未知仓库「${name}」；可配对的其他仓：${[...targets.keys()].join(" / ")}。`;
+      const report = seamReportFor(view(repository), view(other));
+      // 这是一次读了两个仓源码的动作：配上几条、跟谁配的必须可查（面板时代靠这条路由留痕，现在由工具留）
+      new Journal(repository.path, repository.index.repositoryId).append("repository_paired", { other_repository_id: other.index.repositoryId, outbound: report.outbound.matched, inbound: report.inbound.matched, via: "tool" });
+      return formatSeamReport(name, report, filter);
+    },
+    maxCrossReads: 2
+  };
+}
+
 /** GUI 上送的 scopePaths（架构图 chip 的文件清单）：只留非空字符串、去重封顶。它是提示而非裁决——未知路径由引擎交集丢弃。 */
 function sanitizeScopePaths(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -531,36 +574,6 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/a
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   return { ...repository.analysis, languageProfile: languageProfileOf(repository.index.files, repository.analysis.graph) };
-});
-
-/**
-  跨仓 HTTP 接缝（用户拍板的形态：每仓只认自己的路由，配对在显式选了「相关仓」时现算）。
-  动因：用户手上的语料每仓单语言（后端 Java、前端 Vue），同仓配对配不出东西，而「点了按钮之后代码在哪」
-  正是教学要答的问题；可行性已实测（dianping 前端 14 条调用串 12 条配上控制器、0 歧义，见开发日志 §34）。
-
-  三条口径值得写在脸上：
-  - **零重烧**：清单不落库、不进任何缓存键（只在内存 memo 里按 `versionStamp` 存着），
-    所以既不动摘要也不动流程的输入；哪天要把接缝当流程证据进 digest，得先重算那笔钱。
-  - **两个方向分开给**：本仓调它（outbound）与它调本仓（inbound）是两种不同的问题，界面不该合成一个数。
-  - **配对要留痕**：这是一次读两个仓源码的动作，配上几条、跟谁配的必须可查——所以引擎侧写
-    `repository_paired`，不指望 GUI 替我们记（直接打 API 的调用也算数）。
-  */
-app.get<{ Params: { repositoryId: string }; Querystring: { with?: string } }>("/api/repositories/:repositoryId/seams", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const otherId = (request.query.with ?? "").trim();
-  if (!otherId) return reply.code(400).send({ error: "请用 with=<仓库id> 指定要配对的相关仓。" });
-  if (otherId === repository.index.repositoryId) return reply.code(400).send({ error: "不能与本仓自己配对。" });
-  const mounted = importer.ensureMounted(otherId);
-  if (!mounted.ok) return reply.code(404).send({ error: `相关仓挂不起来：${mounted.message}`, reason: mounted.reason });
-  const seamView = (item: typeof mounted.repository) => ({ repositoryId: item.index.repositoryId, path: item.path, files: item.index.files, versionStamp: item.analysis.versionStamp });
-  const report = seamReportFor(seamView(repository), seamView(mounted.repository));
-  new Journal(repository.path, repository.index.repositoryId).append("repository_paired", {
-    other_repository_id: mounted.repository.index.repositoryId,
-    outbound: report.outbound.matched,
-    inbound: report.inbound.matched
-  });
-  return report;
 });
 
 app.post<{ Params: { repositoryId: string }; Body: { changedPaths?: string[] } }>("/api/repositories/:repositoryId/impact", async (request, reply) => {
@@ -818,7 +831,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
     result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
@@ -881,6 +894,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
+      cross: crossRepoFor(repository),
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -1234,6 +1248,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
+      cross: crossRepoFor(repository),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });

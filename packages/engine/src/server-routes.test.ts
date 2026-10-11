@@ -61,9 +61,16 @@ function replyFor(raw: string): string {
   return spoken;
 }
 
+/** 每次请求实际带上的工具清单（跨仓那档要验的就是它随不随地址簿变长）。 */
+const sentTools: { names: string[]; raw: string }[] = [];
+
 async function fakeFetch(_url: unknown, init?: { body?: string }): Promise<Response> {
   fetchCalls += 1;
   const raw = String(init?.body ?? "{}");
+  try {
+    const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
+    sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
+  } catch { /* 非 JSON 的请求体不进这份清单 */ }
   const payload = {
     choices: [{ message: { content: replyFor(raw) }, finish_reason: "stop" }],
     usage: { prompt_tokens: 120, completion_tokens: 40 }
@@ -536,5 +543,42 @@ describe("预算触顶时不放行付费分支", () => {
     expect(usage[0].payload.cause).toBe("monthly_budget_reached");
 
     await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
+  });
+});
+
+/**
+  跨仓能力现在**只在工具面上发生**（界面上那条接缝面板删了）。
+  要钉的是两件事：地址簿里有第二个仓时模型才看得见 `cross_repo_link` 与仓名，
+  只剩一个仓时工具清单逐字回到从前——多给一个用不上的 schema 字段，就是每轮白付 token，
+  还会诱使模型去猜一个不存在的对端仓。全程零 token（fetch 被 stub 到 127.0.0.1:9）。
+  */
+describe("跨仓工具面随地址簿变", () => {
+  it("有第二个仓才给 cross_repo_link 与 repo 参数；没有时清单不变", async () => {
+    const registryFile = process.env.TUTOR_REGISTRY_FILE;
+    expect(registryFile).toBeTruthy();
+    const original = readFileSync(registryFile!, "utf8");
+    const peerDir = join(root, "peer-repo");
+    mkdirSync(peerDir, { recursive: true });
+    const threadId = await newThread("map", "跨仓工具面");
+    const ask = () => app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这个请求打到哪个仓去了？", threadId } });
+
+    try {
+      sentTools.length = 0;
+      expect((await ask()).statusCode).toBe(200);
+      const alone = sentTools[sentTools.length - 1];
+      expect(alone.names).toContain("search_code");
+      expect(alone.names).not.toContain("cross_repo_link");
+      expect(alone.raw).not.toContain("peer-repo");
+
+      writeFileSync(registryFile!, `${JSON.stringify({ repositories: [repoDir, peerDir] }, null, 2)}\n`, "utf8");
+      sentTools.length = 0;
+      expect((await ask()).statusCode).toBe(200);
+      const withPeer = sentTools[sentTools.length - 1];
+      expect(withPeer.names).toContain("cross_repo_link");
+      expect(withPeer.raw).toContain("peer-repo"); // 仓名进了 read_file/search_code 的 schema，模型才知道该填什么
+    } finally {
+      writeFileSync(registryFile!, original, "utf8");
+      rmSync(peerDir, { recursive: true, force: true });
+    }
   });
 });

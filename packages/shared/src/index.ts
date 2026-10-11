@@ -660,7 +660,7 @@ export interface SeamDirection {
   ambiguous: number;
 }
 
-/** `GET /api/repositories/:id/seams?with=<另一个仓>` 的响应：本仓↔相关仓的双向接缝。 */
+/** 本仓↔相关仓的双向接缝清单。界面上不再有这条入口，它是 agent 的 `cross_repo_link` 工具背后的数据。 */
 export interface SeamReport {
   repositoryId: string;
   otherRepositoryId: string;
@@ -1053,8 +1053,8 @@ export type JournalEventType =
   | "entry_adopted"
   | "entry_overridden"
   /**
-    架构视图里把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。**引擎侧写**：
-    这条读的是两个仓的源码，成本与「配得上几条」都是要能查的数，交给 GUI 写就会漏掉直接打 API 的调用。
+    把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。**引擎侧写**：这条读的是两个仓的源码，
+    配上几条是要能查的数。原来由界面面板点一次写一条，现在只有 agent 调 `cross_repo_link` 时才会发生（`via: "tool"`）。
     payload：`other_repository_id` / `outbound` / `inbound`（两个方向各自配上的条数）。
     */
   | "repository_paired"
