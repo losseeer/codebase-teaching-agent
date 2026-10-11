@@ -118,5 +118,7 @@ describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
       ctx.skip();
     }
     expect(batches.flat().filter((path) => isArtifactEcho(path))).toEqual([]);
-  });
+    // ⚠️ 这条的超时必须大于上面 20 秒的等待：vitest 默认 5 秒会先把测试判红，
+    // 于是「慢就自跳过」这条路根本走不到（并行全量跑实测红过一次，就是这个原因）。
+  }, 25_000);
 });

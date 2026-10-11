@@ -547,6 +547,32 @@ describe("预算触顶时不放行付费分支", () => {
 });
 
 /**
+  本地过筛（零 token）要验的是**位置**：隐去必须发生在下发与落库之前，
+  否则用户已经看见了、库里也已经存下了，再改就是事后修饰。
+  全程零 token：正文由 stub 的 fetch 给定。
+  */
+describe("出字前的本地过筛", () => {
+  it("疑似密钥与仓库外路径在 reply、chat_message、turn_text 三处都已隐去", async () => {
+    scripted = ["凭据写在 sk-abcdefghijklmnop1234 这里，本机路径 /Users/someone/.ssh/id_rsa 也提一下。你觉得该先看哪一处？"];
+    const threadId = await newThread("map", "过筛线程");
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这段配置安全吗？", threadId } });
+    expect(response.statusCode).toBe(200);
+    const reply = (response.json() as { reply: string }).reply;
+    expect(reply).toContain("[疑似密钥，已隐去]");
+    expect(reply).toContain("[仓库外路径，已隐去]");
+    expect(reply).toContain("本地过筛"); // 改过字要说明，不能暗改
+    expect(reply).not.toContain("sk-abcdefghijklmnop");
+    expect(reply).not.toContain("someone");
+    expect(assistantMessage(threadId).content).toContain("[疑似密钥，已隐去]");
+    const text = lastEvent("turn_text");
+    expect(text.payload.answer).not.toContain("sk-abcdefghijklmnop");
+    const invariant = lastEvent("turn_invariant");
+    expect(invariant.payload.masked_secrets).toBe(1);
+    expect(invariant.payload.masked_paths).toBe(1);
+  });
+});
+
+/**
   跨仓能力现在**只在工具面上发生**（界面上那条接缝面板删了）。
   要钉的是两件事：地址簿里有第二个仓时模型才看得见 `cross_repo_link` 与仓名，
   只剩一个仓时工具清单逐字回到从前——多给一个用不上的 schema 字段，就是每轮白付 token，

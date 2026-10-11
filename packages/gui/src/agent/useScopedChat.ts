@@ -27,11 +27,17 @@ export const SCOPE_LABEL: Record<Scope, string> = {
   教学回合过程提示的文案。引擎按 `harness` 的 TeachingProgress 发结构化事件（stage 取值与 map-chat 的
   SSE 过程事件同一套），文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
   */
-export function teachingProgressText(payload: { stage?: string; round?: number; path?: string; query?: string }): string {
-  if (payload.stage === "deciding") return "正在判断本轮教学动作…";
-  if (payload.stage === "reading") return `正在读取 ${payload.path || "代码文件"} …`;
-  if (payload.stage === "searching") return `正在检索代码：${payload.query || "关键词"} …`;
-  if (payload.stage === "thinking") return payload.round && payload.round > 1 ? `正在思考（第 ${payload.round} 轮）…` : "正在思考…";
+/**
+  过程提示的中文文案，**两个作用域共用一份**：教学发的是 `{stage}`（多一个 deciding），
+  宏观/练习的工具循环发的是 `{type}`（thinking / reading / searching）。
+  原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——引擎在思考第三轮，界面一直挂着「回复生成中…」。
+  */
+export function progressText(event: { type?: string; stage?: string; round?: number; path?: string; query?: string }): string {
+  const kind = event.stage ?? event.type;
+  if (kind === "deciding") return "正在判断本轮教学动作…";
+  if (kind === "reading") return `正在读取 ${event.path || "代码文件"} …`;
+  if (kind === "searching") return `正在检索代码：${event.query || "关键词"} …`;
+  if (kind === "thinking") return event.round && event.round > 1 ? `正在思考（第 ${event.round} 轮）…` : "正在思考…";
   return "回复生成中…";
 }
 
@@ -648,7 +654,7 @@ useEffect(() => {
       // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流（替代原 /ws 全局广播 + sessionId 过滤）
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
         if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
-        else if (event.type === "progress") setScopeProgress("teaching", teachingProgressText(event.payload));
+        else if (event.type === "progress") setScopeProgress("teaching", progressText(event.payload));
       }, turn);
       await finish();
       setSession(reply.session);
@@ -694,8 +700,9 @@ useEffect(() => {
     let sawDelta = false;
     const onScopedEvent = (event: ScopedChatEvent): void => {
       if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
-      else if (scope === "map" && event.type === "reading") setScopeProgress("map", `正在读取 ${event.path || "文件"} …`);
-      else if (scope === "map" && event.type === "searching") setScopeProgress("map", `正在检索代码：${event.query || "关键词"} …`);
+      // 剩下只有过程提示三种（thinking / reading / searching），三条都接：
+      // 漏掉 thinking 时，多轮工具循环里那行字会一直停在「回复生成中…」
+      else setScopeProgress(scope, progressText(event));
     };
     try {
       const reply = scope === "map"

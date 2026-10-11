@@ -34,7 +34,7 @@ import { abortTurn, beginTurn } from "./turns/registry.js";
 import { dedupeFileReads } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
-import { checkTurnInvariants, invariantTailNotice } from "./eval/scorers.js";
+import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
@@ -807,11 +807,13 @@ function recheckTurn(input: {
   pedagogy?: string;
   style?: number;
 }): { answer: string; failed: string[] } {
+  // 先过筛再复检：判的必须是「用户将会看到的那一份」，且密钥不能等到下发之后才挡
+  const screened = screenReply(input.answer);
   const verdict = checkTurnInvariants({
     sessionId: input.sessionId ?? "unscoped",
     at: new Date().toISOString(),
     question: input.question,
-    answer: input.answer,
+    answer: screened.text,
     stage: input.stage ?? "",
     pedagogy: input.pedagogy ?? "",
     style: input.style ?? 0,
@@ -822,10 +824,14 @@ function recheckTurn(input: {
     scene: input.scene,
     applicable: verdict.applicable.join("、") || null,
     failed: verdict.failed.join("、") || null,
-    evidence: Object.entries(verdict.evidence).map(([id, text]) => `${id}=${text}`).join(" ｜ ") || null
+    evidence: Object.entries(verdict.evidence).map(([id, text]) => `${id}=${text}`).join(" ｜ ") || null,
+    // 过筛只记数量与首个样例（不记原文——那正是不能外泄的东西）：审计线要能回答「这轮被改过没有」
+    masked_secrets: screened.secrets || null,
+    masked_paths: screened.paths || null,
+    masked_samples: screened.samples.join("、") || null
   }, input.sessionId);
-  const notice = invariantTailNotice(verdict);
-  return { answer: notice ? `${input.answer}${notice}` : input.answer, failed: verdict.failed };
+  const notice = `${screenNotice(screened) ?? ""}${invariantTailNotice(verdict) ?? ""}`;
+  return { answer: notice ? `${screened.text}${notice}` : screened.text, failed: verdict.failed };
 }
 
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {

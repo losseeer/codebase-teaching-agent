@@ -36,7 +36,7 @@
   | `map` | SSE（`map-chat/stream`） | `{stage:"thinking",round}` / `{stage:"reading",path}` |
   | `teaching` | SSE（`sessions/:id/messages`） | `{stage:"deciding"}` / `{stage:"thinking",round}` / `{stage:"reading",path}` |
   | `practice` | 无（单轮调用，只有出题前的静态文案） | — |
-  引擎发结构化事件（`harness` 的 `TeachingProgress`），中文文案由 `teachingProgressText()` 决定——两侧不互相猜。
+  引擎发结构化事件（`harness` 的 `TeachingProgress`），中文文案由 `progressText()` 决定——两侧不互相猜。
 - **语言风格回显**：滑块值 + 档位名（严肃/中性/通俗）实时显示；档位判据是 `@codebase-tutor/shared` 的 `styleBand`，
   engine 的 `policyFor` 与 GUI 回显共用同一份阈值（历史坑：harness 曾写死 `>= 65` 与 policy 的 67 不一致）。
 

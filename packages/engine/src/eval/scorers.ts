@@ -189,6 +189,68 @@ const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
   { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", source: "tutor-settings.ts「将问题绑定到当前源码锚点」" }
 ];
 
+/**
+  出字前的本地过筛（零 token）：只查**机器能判的两件事**——疑似密钥外泄、仓库外绝对路径被当证据引用。
+  与三条不变量的区别很要紧：不变量是「这轮该做到而没做到」，进分母；这两条是**改写**（隐掉再下发），
+  不进分母——把「模型偶然贴了个 key」算进教学法得分，只会让那条尺子失去意义。
+
+  为什么值得做：`read_file` 已经在源头挡住密钥文件（拒读名单 + 软链接复核），但那挡的是**这一轮读进来的东西**；
+  学习者自己贴过一段带 token 的报错、或者上一轮的正文里带着它，就会顺着对话历史被模型复述出来。
+  正文一旦下发就收不回，所以这一步放在复检最前面、流式之前。
+ */
+export interface ScreenedReply {
+  text: string;
+  /** 各隐去了几处（journal 埋点用；只记数量与首个样例，绝不记原文——那正是要挡住外泄的东西）。 */
+  secrets: number;
+  paths: number;
+  samples: string[];
+}
+
+const SECRET_PATTERNS: RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{16,}/g, // OpenAI / DeepSeek 一类的 key 形态
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bAKIA[0-9A-Z]{16}/g, // 云厂商临时凭据
+  /\bAIza[0-9A-Za-z_-]{30,}/g,
+  /\bxox[baprs]-[0-9A-Za-z-]{10,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
+  /\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}/g, // JWT 两段连写（header 段解出来就是 eyJ 开头的固定形态）
+  /\b(?:api[_-]?key|access[_-]?key|secret[_-]?key|password|token)\s*[:=]\s*["']?[A-Za-z0-9+/_-]{20,}/gi
+];
+
+/** 仓库外的绝对路径：本机目录结构不是代码证据，出现在正文里既误导学习者又泄露机器信息。 */
+const OUTSIDE_PATH = /(?:[A-Za-z]:\\|\/?(?:etc|var|usr|private|home|root|Users)\/|~\/|\.\.[/\\])[^\s`"'，。；)）]*\b/g;
+
+const MASK_SECRET = "[疑似密钥，已隐去]";
+const MASK_PATH = "[仓库外路径，已隐去]";
+
+export function screenReply(answer: string): ScreenedReply {
+  let text = answer;
+  let secrets = 0;
+  let paths = 0;
+  const samples: string[] = [];
+  for (const pattern of SECRET_PATTERNS) {
+    text = text.replaceAll(pattern, () => {
+      secrets += 1;
+      if (samples.length < 3) samples.push("密钥形态");
+      return MASK_SECRET;
+    });
+  }
+  text = text.replaceAll(OUTSIDE_PATH, (match) => {
+    paths += 1;
+    if (samples.length < 3) samples.push(`${match.slice(0, 24)}…`);
+    return MASK_PATH;
+  });
+  return { text, secrets, paths, samples };
+}
+
+/** 过筛后的说明：改过字就要让用户知道改了什么，否则「落库正文＝用户所见」这条对齐成了暗改。 */
+export function screenNotice(screened: ScreenedReply): string | undefined {
+  if (!screened.secrets && !screened.paths) return undefined;
+  const parts = [screened.secrets ? `${screened.secrets} 处疑似密钥` : "", screened.paths ? `${screened.paths} 处仓库外路径` : ""].filter(Boolean);
+  return `\n\n⚠️ 本地过筛：本轮回复中的 ${parts.join(" 与 ")} 已被隐去（不落库、不发给模型对端）。`;
+}
+
 /** 单回合复检结论。`applicable` 是该回合该判的条目，`failed` 是其中的失守项。 */
 export interface TurnInvariantVerdict {
   applicable: InvariantId[];

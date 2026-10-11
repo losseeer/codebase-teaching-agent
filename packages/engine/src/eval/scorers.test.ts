@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepositoryFlow } from "@codebase-tutor/shared";
-import { checkTurnInvariants, invariantTailNotice, scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, type TeachTurn } from "./scorers.js";
+import { checkTurnInvariants, invariantTailNotice, scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, screenNotice, screenReply, type TeachTurn } from "./scorers.js";
 
 /**
   B 档判分器：全部零 token、纯函数。这里守的是判分口径本身——
@@ -184,5 +184,37 @@ describe("运行期在环复检（第 2 刀的那三条搬到回合收尾）", (
       const failed = perTurn.filter((verdict) => verdict.failed.includes(check.id)).length;
       expect([check.id, check.applicable, check.pass]).toEqual([check.id, applicable, applicable - failed]);
     }
+  });
+});
+
+/**
+  出字前的本地过筛。两头的事故都要钉住：漏了＝密钥随正文下发/入库；误伤＝把正常讲代码的回复改得没法读。
+ */
+describe("screenReply", () => {
+  it("隐去密钥形态与仓库外绝对路径，并只记数量与样例", () => {
+    const screened = screenReply("配置里的 sk-abcdefghijklmnop1234 就是凭据；它读的是 /Users/devsecczk/.ssh/id_rsa 那份文件。");
+    expect(screened.secrets).toBe(1);
+    expect(screened.paths).toBe(1);
+    expect(screened.text).toContain("[疑似密钥，已隐去]");
+    expect(screened.text).toContain("[仓库外路径，已隐去]");
+    expect(screened.text).not.toContain("sk-abcdefghijklmnop");
+    expect(screened.text).not.toContain("devsecczk");
+    expect(screened.samples.join(" ")).not.toContain("abcdefghijklmnop");
+    expect(screenNotice(screened)).toContain("本地过筛");
+  });
+
+  it("正常讲代码的回复一个字都不该被改（仓库内路径、占位符、普通赋值句）", () => {
+    const plain = '看 src/main/java/com/hmdp/controller/PayController.java:42：这里注入的是占位符 YOUR_KEY，`token = config.get("x")` 之后走缓存。密钥在环境变量里，别写进代码。';
+    const screened = screenReply(plain);
+    expect(screened.text).toBe(plain);
+    expect(screened.secrets).toBe(0);
+    expect(screened.paths).toBe(0);
+    expect(screenNotice(screened)).toBeUndefined();
+  });
+
+  it("JWT 与 key=value 长值都算命中；短值不算", () => {
+    expect(screenReply("请求头带 eyJhbGciOiJIUzI1Ni5z.eyJzdWIiOiIxMjM0NTY3ODkwIn0").secrets).toBeGreaterThan(0);
+    expect(screenReply("api_key = " + "a".repeat(24)).secrets).toBe(1);
+    expect(screenReply("api_key = short").secrets).toBe(0);
   });
 });
