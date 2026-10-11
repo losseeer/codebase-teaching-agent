@@ -213,6 +213,19 @@ describe("completeWithReadTool 的跨仓访问", () => {
     expect(capped?.some((message) => message.content.includes("跨仓读取最多 1 个文件"))).toBe(true);
   });
 
+  it("跨仓读成功才回报递出去的路径（供复检认账）；本仓读与拒读都不回报", async () => {
+    const handed: string[] = [];
+    const { provider } = scriptedProvider([
+      crossRead("c1", "ShopController.java", "other"),
+      crossRead("c2", ".env", "other"),
+      readCall("c3", "read-file.ts"),
+      { text: "收尾。", finishReason: "stop" }
+    ]);
+    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 4, maxCalls: 5, cross: { ...cross, onHandedOut: (repo, path) => handed.push(`${repo}/${path}`) } });
+    // 只有真读到的对端文件算「递给过模型」；被拒的 .env 与本仓文件都不进这份登记
+    expect(handed).toEqual(["other/ShopController.java"]);
+  });
+
   it("cross_repo_link 回清单文本；没给 links 就不开放这个工具", async () => {
     const { provider, calls } = scriptedProvider([
       { text: "", toolCalls: [{ id: "c1", name: "cross_repo_link", argumentsJson: JSON.stringify({ repo: "other" }) }], finishReason: "tool_calls" },

@@ -305,7 +305,7 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
   - **守卫不另起一套**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
     在对端仓上一样成立——这一条是这套能力唯一的安全边界。
   */
-function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>): CrossRepoContext | undefined {
+function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>): CrossRepoContext | undefined {
   const targets = new Map<string, { id: string; path: string }>();
   for (const entry of importer.catalog()) {
     if (entry.repositoryId === repository.index.repositoryId || !entry.exists) continue;
@@ -321,6 +321,7 @@ function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>
     return mounted.ok ? mounted.repository : undefined;
   };
   const view = (item: NonNullable<ReturnType<typeof repositoryOr404>>) => ({ repositoryId: item.index.repositoryId, path: item.path, files: item.index.files, versionStamp: item.analysis.versionStamp });
+  const register = (item: NonNullable<ReturnType<typeof repositoryOr404>>, path: string) => { handedOut.set(path, item.index.files.find((file) => file.path === path)?.lines ?? 1); };
   return {
     roots: Object.fromEntries([...targets].map(([name, target]) => [name, target.path])),
     corpusOf: (name) => { const other = mount(name); return other ? searchCorpusFor(other) : undefined; },
@@ -328,11 +329,15 @@ function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>
       const other = mount(name);
       if (!other) return targets.has(name) ? `仓「${name}」挂不起来（目录被挪走或 .tutor 产物不全），这次给不出跨仓落点。` : `未知仓库「${name}」；可配对的其他仓：${[...targets.keys()].join(" / ")}。`;
       const report = seamReportFor(view(repository), view(other));
+      // 递给模型的每一行落点都登记下来：回合收尾的复检要认它，否则「引擎自己给的对端行号」会被判成编造
+      for (const link of report.outbound.links) register(other, link.provider.path);
+      for (const link of report.inbound.links) register(other, link.consumer.path);
       // 这是一次读了两个仓源码的动作：配上几条、跟谁配的必须可查（面板时代靠这条路由留痕，现在由工具留）
       new Journal(repository.path, repository.index.repositoryId).append("repository_paired", { other_repository_id: other.index.repositoryId, outbound: report.outbound.matched, inbound: report.inbound.matched, via: "tool" });
       return formatSeamReport(name, report, filter);
     },
-    maxCrossReads: 2
+    maxCrossReads: 2,
+    onHandedOut: (name, path) => { const other = mount(name); if (other) register(other, path); }
   };
 }
 
@@ -790,6 +795,12 @@ function recheckTurn(input: {
   journal: Journal;
   sessionId?: string;
   scene: "teach" | "map_chat" | "practice_chat";
+  /**
+    本回合经 `cross_repo_link` / 跨仓 read_file **由引擎亲手递给模型**的对端路径（裸路径 → 总行数）。
+    没有这份登记，模型引用后端 controller 的行号会被判成「未在当前仓库核实」——那是引擎给它的证据，
+    判它编造是假阳性；但只有登记过的路径算数，模型自己凭空写一个后端文件照样过不去。
+   */
+  crossFiles?: Map<string, number>;
   question: string;
   answer: string;
   stage?: string;
@@ -806,7 +817,7 @@ function recheckTurn(input: {
     style: input.style ?? 0,
     answerTruncated: false,
     scene: input.scene
-  }, new Map(input.repository.index.files.map((file) => [file.path, file.lines])));
+  }, new Map<string, number>([...input.repository.index.files.map((file) => [file.path, file.lines] as [string, number]), ...(input.crossFiles ?? [])]));
   input.journal.append("turn_invariant", {
     scene: input.scene,
     applicable: verdict.applicable.join("、") || null,
@@ -831,10 +842,11 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository) });
+    const crossFiles = new Map<string, number>();
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles) });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
-    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
+    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
     persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -889,12 +901,13 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "map_chat");
+  const crossFiles = new Map<string, number>();
   try {
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository),
+      cross: crossRepoFor(repository, crossFiles),
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -902,7 +915,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
-    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply }).answer;
+    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
     persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
     if (result.usage) journal.append("token_usage", {
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
@@ -1242,13 +1255,14 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "teach");
+  const crossFiles = new Map<string, number>();
   try {
     const outcome = await respondWithProvider(session, node, request.body.content.trim(), gate.degraded ? undefined : teachingProvider, faded, repository.path, {
       classifier: actionLoopEnabled ? undefined : (gate.degraded ? undefined : lightLlmProvider),
       actionLoop: actionLoopEnabled,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository),
+      cross: crossRepoFor(repository, crossFiles),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -1266,6 +1280,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       journal,
       sessionId: outcome.session.id,
       scene: "teach",
+      crossFiles,
       question: request.body.content.trim(),
       answer: outcome.assistant.content,
       stage: outcome.session.stage,

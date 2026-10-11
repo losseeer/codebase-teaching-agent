@@ -61,6 +61,8 @@ export interface CrossRepoContext {
   links?: (repoName: string, filter: string) => string;
   /** 跨仓读取的独立上限：总额度之外再掐一道，防止模型把两个仓都翻一遍。 */
   maxCrossReads?: number;
+  /** 每递出一份对端内容就回报一次（仓名 + 该仓内的裸路径）。回合收尾的引用复检靠它认账：见 `server.ts` 的 `recheckTurn`。 */
+  onHandedOut?: (repoName: string, path: string) => void;
 }
 
 /** 跨仓接缝查询工具：把「点这个按钮之后代码在哪个仓的哪一行」这条零 token 的证据交给模型。 */
@@ -190,7 +192,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       fileReads.push(repo ? { ...outcome.audit, path: `${repo}/${outcome.audit.path}` } : outcome.audit);
       if (!outcome.audit.denied) {
         succeededReads += 1;
-        if (repo) crossReads += 1;
+        if (repo) {
+          crossReads += 1;
+          input.cross?.onHandedOut?.(repo, outcome.audit.path);
+        }
       }
       messages.push({ role: "tool", toolCallId: call.id, content: repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content });
     }
