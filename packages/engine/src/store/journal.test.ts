@@ -2,15 +2,16 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Journal, isJournalEventType, readJournal } from "./journal.js";
+import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./journal.js";
 import { turnTextPayload, TURN_TEXT_LIMIT } from "../lib.js";
 import { runWithTrace } from "../trace/context.js";
-import type { JournalEventType } from "@codebase-tutor/shared";
+import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/shared";
 
 /**
   学习日志：append-only、白名单在**运行时**（`eventTypes`），不是只靠编译期类型。
-  这组用例守的就是「往 shared 的 JournalEventType 加取值却忘了同步运行时 Set」——
-  那种漏同步在编译期看不出来，只会在用户点下按钮时抛 `Unknown journal event`。
+  现在这张白名单由 shared 的两张「写入权表」并起来生成，所以老那条评论担心的事（往 union 加取值却忘了
+  同步运行期 Set）已经结构性消失；剩下要守的是**谁有资格写**：
+  审计线的引擎侧类型不能从界面接口进来（§46），否则「哪些代码出过门」这条账谁都能填。
   */
 
 describe("学习日志", () => {
@@ -21,29 +22,30 @@ describe("学习日志", () => {
 
   it("UI 侧事件（设计文档第 8 章契约）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
-    const uiTypes: JournalEventType[] = [
-      "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched", "exercise_submitted", "repository_switched",
-      "entry_adopted", "entry_overridden"
-    ];
-    for (const type of uiTypes) journal.append(type, { where: "/api/x" });
+    // 清单取 shared 那张表，不在测试里另抄一份：以前抄的那份漏了 module_tier_overridden
+    for (const type of UI_JOURNAL_EVENTS) journal.append(type, { where: "/api/x" });
 
     const events = readJournal(repository);
-    expect(events.map((event) => event.type)).toEqual(uiTypes);
+    expect(events.map((event) => event.type)).toEqual([...UI_JOURNAL_EVENTS]);
     expect(events.every((event) => event.repositoryId === "repo_1")).toBe(true);
   });
 
-  it("白名单外的类型直接抛错（不静默丢弃，也不写坏日志）", () => {
+  it("白名单由两张表并起来；接口只收界面侧那一份，引擎侧类型只能由引擎自己 append", () => {
     const journal = new Journal(repository, "repo_1");
-    expect(isJournalEventType("flow_node_selected")).toBe(true);
-    expect(isJournalEventType("scope_degraded")).toBe(true); // 引擎侧新事件同样吃这条同步——漏了就只会运行期抛
-    expect(isJournalEventType("exercise_generated")).toBe(true);
-    // 会话持久化上线后新增的两个引擎侧事件：shared 的联合类型与这里的运行时 Set 必须同源
-    expect(isJournalEventType("loop_round")).toBe(true);
-    expect(isJournalEventType("session_created")).toBe(true);
-    expect(isJournalEventType("session_deleted")).toBe(true);
-    expect(isJournalEventType("not_a_real_event")).toBe(false);
+    // 引擎侧类型照旧能写（那是内部路径），但**不在这条接口的受理范围**里
+    journal.append("code_egress", { scene: "map.chat", kind: "anchor-excerpt", path: "a.ts", lines: "1-2", chars: 2, hash: "abcdef123456" });
+    journal.append("token_usage", { scene: "teach", input_tokens: 10 });
+    expect(readJournal(repository)).toHaveLength(2);
+
+    expect(isUiJournalEventType("file_opened")).toBe(true);
+    expect(isUiJournalEventType("code_egress")).toBe(false);   // 被审计的一方不能自己填「哪些代码出过门」
+    expect(isUiJournalEventType("token_usage")).toBe(false);
+    expect(isUiJournalEventType("not_a_real_event")).toBe(false);
+    expect(isEngineOwnedEventType("code_egress")).toBe(true);
+    expect(isEngineOwnedEventType("not_a_real_event")).toBe(false); // 未知 ≠ 引擎专属，拒绝理由要分得清
+    // 两张表并起来就是 append 的全集：漏归表的话这里直接抛
+    for (const type of [...ENGINE_JOURNAL_EVENTS, ...UI_JOURNAL_EVENTS]) expect(() => journal.append(type, {})).not.toThrow();
     expect(() => journal.append("not_a_real_event" as JournalEventType, {})).toThrow("Unknown journal event: not_a_real_event");
-    expect(readJournal(repository)).toHaveLength(0);
   });
 
   it("traceId 默认取请求上下文；后台任务与显式传 null 都记 null", () => {
@@ -77,8 +79,6 @@ describe("回合文本落盘（turn_text）", () => {
   afterEach(() => { rmSync(repository, { recursive: true, force: true }); });
 
   it("turn_text 在运行时白名单内，能写入并读回", () => {
-    expect(isJournalEventType("turn_text")).toBe(true);
-    expect(isJournalEventType("turn_invariant")).toBe(true);   // 运行期复检事件也在白名单内（shared 的联合类型与此必须同步）
     const journal = new Journal(repository, "repo_1");
     journal.append("turn_text", turnTextPayload("map_chat", "这门工程的分层是怎样的？", "分三层：接口、服务、存储。"), "s-1");
     const [event] = readJournal(repository);

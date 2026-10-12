@@ -26,7 +26,7 @@ import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
-import { Journal, isJournalEventType, readJournal } from "./store/journal.js";
+import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { allowsRepository, authEnabled, authenticate, loadApiKeys, presentedKey, type AuthResult } from "./security/api-keys.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
@@ -1431,7 +1431,9 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   每一次切节点、打开文件、切换模块、提交练习都必须有 journal 事件可查——缺事件的 UI 操作是设计漏洞。
 
   契约要点：
-  - 白名单与 `Journal.append` **共用**（`isJournalEventType`），不另立一份，避免两处漂移。
+  - **只收界面侧那张表**（`UI_JOURNAL_EVENTS`，10 类）。以前这条走的是 `Journal.append` 的全集合白名单，
+    于是本机任何进程都能往审计线塞一行 `file_read`、`token_usage`、`code_egress`——被审计的一方自己能填账，
+    这条线就没有证据价值了（2026-10-12 补，见 §46）。两张表的划分在 shared 里有编译期对账，漏归类编不过。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
     sessionId 是关联属性而非外键。三作用域的会话续命都走 `chat_session`/`chat_message`（见 resolveTeachingState），
@@ -1441,7 +1443,14 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const { type, payload, sessionId } = request.body ?? {};
-  if (!isJournalEventType(type)) return reply.code(400).send({ error: "事件类型不在 journal 契约内。" });
+  // 只收界面侧那 10 类：审计线里 `file_read` / `code_egress` / `token_usage` 是「哪些代码出过门」的证据，
+  // 而这条接口本机任何进程都调得到——照全集合放行，等于让被审计的一方自己填账（§46）。
+  if (!isUiJournalEventType(type)) {
+    const owned = isEngineOwnedEventType(type);
+    return reply.code(400).send(owned
+      ? { error: "这类事件由引擎在状态机、工具循环与装配里写，界面接口不收（同一事实只写一处）。", reason: "engine_owned_event" }
+      : { error: "事件类型不在 journal 契约内。", reason: "unknown_event" });
+  }
   if (payload !== undefined && (typeof payload !== "object" || payload === null || Array.isArray(payload))) {
     return reply.code(400).send({ error: "payload 必须是对象。" });
   }

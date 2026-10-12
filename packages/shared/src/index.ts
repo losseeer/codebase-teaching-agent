@@ -1073,6 +1073,38 @@ export type JournalEventType =
     */
   | "code_egress";
 
+/**
+  同一份事件的**写入权分两张表**（2026-10-12，接 §45）。
+  上面那张联合类型说的是「有哪些事件」，这两张说的是「谁有资格写」：
+  `POST /api/repositories/:id/journal` 只认 UI 侧那张。理由是证据价值本身——
+  `.tutor/journal.jsonl` 现在承担着「哪些代码出过门」这类账（`file_read` / `code_egress` / `token_usage`），
+  而这条接口是本机任何进程都能调的：能塞一行就能编一段账，能编账的审计线就不是审计线。
+  引擎侧那张由引擎在状态机、工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
+  */
+export const ENGINE_JOURNAL_EVENTS = [
+  "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
+  "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
+  "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted",
+  "session_created", "session_deleted", "repository_paired", "code_egress"
+] as const satisfies readonly JournalEventType[];
+
+export const UI_JOURNAL_EVENTS = [
+  "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched",
+  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden", "module_tier_overridden"
+] as const satisfies readonly JournalEventType[];
+
+export type EngineJournalEventType = (typeof ENGINE_JOURNAL_EVENTS)[number];
+export type UiJournalEventType = (typeof UI_JOURNAL_EVENTS)[number];
+
+/** 约束到 `never` 的断言别名：参数不是 never 就在编译期报错（下面拿它当对账闸）。 */
+type AssertNever<T extends never> = T;
+
+/**
+  编译期对账：两张表并起来必须**正好等于** `JournalEventType`。
+  往 union 加了新事件却忘了归进某一张表 ⇒ 这里直接报错，不用等运行期，也不用靠人审。
+  */
+type _JournalPartitionGuard = AssertNever<Exclude<JournalEventType, EngineJournalEventType | UiJournalEventType>>;
+
 export interface JournalEvent {
   id: string;
   type: JournalEventType;

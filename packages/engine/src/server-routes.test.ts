@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { flushLlmLog } from "./llm/call-log.js";
@@ -444,6 +445,31 @@ describe("POST /journal 的入参守卫", () => {
       expect(refused.statusCode, `sessionId 长度 ${String(sessionId).length} 不该被收下`).toBe(400);
     }
     expect(eventsOf("file_opened").length).toBe(before);
+  });
+
+  /**
+    审计线不能由被审计的一方填。这条接口本机任何进程都调得到，
+    若照旧按「全部事件类型」放行，一行 `code_egress`（哪些代码出过门）或 `token_usage`（花了多少钱）
+    就可以被伪造进去——报表再怎么算，算的都是别人想让你看的数。
+    */
+  it("引擎侧类型从这条接口写不进来：400 且区分「越权」与「未知」", async () => {
+    for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted", "repository_paired"]) {
+      const before = eventsOf(type).length;
+      const refused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type, payload: { path: MAIN_FILE } } });
+      expect(refused.statusCode, `${type} 是引擎侧类型`).toBe(400);
+      expect((refused.json() as { reason?: string }).reason, `${type} 要给出越权而非「不认识」`).toBe("engine_owned_event");
+      expect(eventsOf(type).length, `${type} 不该被写进审计线`).toBe(before);
+    }
+    const unknown = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type: "not_a_real_event", payload: {} } });
+    expect(unknown.statusCode).toBe(400);
+    expect((unknown.json() as { reason?: string }).reason).toBe("unknown_event");
+  });
+
+  it("界面侧那 10 类照常能写（收紧审计线不能顺手把可观测性弄丢）", async () => {
+    for (const type of UI_JOURNAL_EVENTS) {
+      const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type, payload: { where: "/api/x" } } });
+      expect(response.statusCode, `${type} 是界面侧类型`).toBe(201);
+    }
   });
 });
 

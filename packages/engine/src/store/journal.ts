@@ -1,35 +1,33 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/shared";
+import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import { currentTraceId } from "../trace/context.js";
 
 /**
   `Journal.append` 的白名单，且是**运行时**判据——`JournalEventType` 只是编译期类型。
-  ⚠️ 往 shared 的 `JournalEventType` 加取值时必须同步这里，否则运行期抛 `Unknown journal event`。
+  两张表并起来就是全集（shared 里有一道编译期对账，漏归类会在那里报错），
+  所以这里不再手写清单：以前 shared 加一个取值就要记得同步这一行，漏了只会在用户点下按钮时抛。
+  历史取值 `teach_moment` 已随 companion 功能移除（2026-09-22），**读侧不校验类型**，老仓里的旧事件仍可读，只是不再接受新写入。
   */
-const eventTypes = new Set<JournalEventType>([
-  // 引擎侧（学习语义）。teach_moment 已随 companion 功能移除（2026-09-22）；读侧不校验类型，历史事件仍可读。
-  "unit_mastered", "exercise_result", "hint_depth", "dependency_event",
-  "style_shift", "unassisted_test", "action_veto",
-  "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search", "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted",
-  // 会话线程生命周期（产品线的删除是软删，审计线只记「发生过创建/删除」这件事）
-  "session_created", "session_deleted",
-  // 源码出境清单（引擎侧写，见 shared 的 `code_egress` 注释）：企业化第 3 条的数据源
-  "code_egress",
-  // UI 侧（交互动作）：由 GUI 经 POST /api/repositories/:id/journal 写入
-  "flow_node_selected", "file_anchored", "file_opened", "line_located",
-  "module_switched", "exercise_submitted", "repository_switched",
-  "entry_adopted", "entry_overridden",
-  // 用户手动改模块档位（主干/设施/外围）：结构判据没有真值，这条就是攒真值的读数
-  "module_tier_overridden",
-  // 跨仓 HTTP 接缝配对（引擎侧写，见 shared 的 `repository_paired` 注释）
-  "repository_paired"
-]);
+const eventTypes = new Set<JournalEventType>([...ENGINE_JOURNAL_EVENTS, ...UI_JOURNAL_EVENTS]);
 
-/** 供 HTTP 出口做入参校验：不接受白名单外的类型（走同一份白名单，不另立一份）。 */
-export function isJournalEventType(value: unknown): value is JournalEventType {
-  return typeof value === "string" && eventTypes.has(value as JournalEventType);
+/**
+  界面侧可发射的那一半。`POST /api/repositories/:id/journal` 用它，**不用**上面那个全集：
+  审计线里 `file_read` / `code_egress` / `token_usage` 这些行是「哪些代码出过门」的证据，
+  而这条接口本机任何进程都调得到——照旧收引擎侧类型，等于让被审计方自己填账。
+  引擎自己写还是走 `Journal.append`（全集合），不受这条限制。
+  */
+const uiEventTypes = new Set<string>(UI_JOURNAL_EVENTS);
+
+export function isUiJournalEventType(value: unknown): value is JournalEventType {
+  return typeof value === "string" && uiEventTypes.has(value);
+}
+
+/** 这个类型是不是「引擎专属」——只为把拒绝理由说准（未知类型与越权类型是两件事）。 */
+export function isEngineOwnedEventType(value: unknown): boolean {
+  return typeof value === "string" && (ENGINE_JOURNAL_EVENTS as readonly string[]).includes(value);
 }
 
 export class Journal {
