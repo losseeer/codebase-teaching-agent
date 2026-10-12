@@ -34,8 +34,6 @@ const FIXED_LEFT_PX = 224 + 32; // 文件栏那一侧还吃掉的固定列与留
 
 type WidthField = "railWidth" | "filePaneWidth";
 
-
-
 function rangeClamp(field: WidthField, value: number): number {
   const range = RANGES[field];
   const fallback = LAYOUT_DEFAULTS[field];

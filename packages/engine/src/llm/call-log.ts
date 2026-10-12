@@ -51,9 +51,7 @@ export interface LlmCallRecord {
   actor: string | null;
   /**
     出境载荷指纹：这一次调用**实际发出去**的那份文本（system + user 或整条 messages + 工具清单）的
-    字符数与 sha256 前 12 位。正文一个字都不进日志——但有了指纹就能事后核对：
-    重新装配一次那段 prompt、比哈希，就知道「出去的是不是这份」；相邻两行哈希相同，
-    就说明前缀逐字一致（前缀缓存那档的判据也落在这里）。
+    字符数与 sha256 前 12 位。为什么是指纹而非正文、事后怎么用它核对，见 `outboundFingerprint` 的注释。
     */
   outbound: { chars: number; hash: string };
   tools?: string[];

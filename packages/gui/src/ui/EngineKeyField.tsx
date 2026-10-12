@@ -11,11 +11,9 @@ import { clearEngineKey, getEngineAuth, setEngineKey, subscribeEngineAuth } from
   所以能在第一次失败之前就问出闸门状态。真被 401 拒过时（口令错了或引擎换了 key），
   `unauthorized` 也会把它亮出来，不用刷新页面。
 
-  闸门有三档，第三档必须单独说话：`broken` = 引擎那份 key 文件读不出来，此时它按「拒绝全部」在跑（503）。
-  这一档**不是**「闸没开」，让用户去改口令是误导——要修的是引擎侧那个文件。
-
-  存储与暴露面写在这里免得以后当惊喜：口令进 `localStorage`，同源任意脚本可读，
-  这是「本机/内网工具」的取舍，真边界在引擎侧那份 0600 的 key 文件与按仓授权（开发日志 §44）。
+  `broken` 这一档要单独说话（三档口径见 `api.health` 的注释）：它**不是**「闸没开」，
+  让用户去改口令是误导——要修的是引擎侧那个文件。
+  存储口径与取舍（localStorage、§44）见 `api/engine-key.ts`，不在这里重复。
   */
 export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; onExpand: () => void }): ReactElement | null {
   const auth = useSyncExternalStore(subscribeEngineAuth, getEngineAuth, getEngineAuth);

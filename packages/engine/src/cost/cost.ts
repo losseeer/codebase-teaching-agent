@@ -5,7 +5,9 @@ import { readJournal } from "../store/journal.js";
 export const defaultMonthlyBudgetUsd = 5;
 
 /**
-  三档单价：输入按「未命中 / 缓存命中」分别计价，输出单独一档。
+  三档单价：输入按「未命中 / 缓存命中」分别计价，输出单独一档。**币种不参与算术**——
+  tokens × 单价 ÷ 一百万，填的是哪种币就算出哪种币的钱，显示层统一按人民币（¥）标出来。
+  字段名里的 `Usd` 是历史遗留（改名会牵动落盘的设置与库里的字段）。
   命中价没单独配置时**按输入价计**——不打折宁可高估，也不能把真花掉的钱说少了。
   （DeepSeek 这类端点命中价通常是输入价的 1/10，想要准确账面就显式配上。）
   */
@@ -21,6 +23,9 @@ function rateOf(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+/** 三档各自对应的 `.env` 名：`currentPricing` 与 `pricingSourceOf` 共用这一份映射，回落链不在本文件写两遍。 */
+const ENV_RATE_KEYS = { input: "TUTOR_INPUT_USD_PER_MILLION", cacheHit: "TUTOR_CACHE_HIT_USD_PER_MILLION", output: "TUTOR_OUTPUT_USD_PER_MILLION" } as const;
+
 /**
   现在生效的三档单价：**运行时设置（LLM 配置框里的单价）→ `.env` → 未配（0）**。
   空串 = 该项没在界面上配过，回落到环境变量。
@@ -32,18 +37,18 @@ function rateOf(value: string | undefined): number | undefined {
 export function currentPricing(): Pricing {
   const live = getLlmRuntimeSettings();
   return {
-    inputPerMillionUsd: rateOf(live.inputUsdPerMillion) ?? rateOf(process.env.TUTOR_INPUT_USD_PER_MILLION) ?? 0,
-    cacheHitPerMillionUsd: rateOf(live.cacheHitUsdPerMillion) ?? rateOf(process.env.TUTOR_CACHE_HIT_USD_PER_MILLION),
-    outputPerMillionUsd: rateOf(live.outputUsdPerMillion) ?? rateOf(process.env.TUTOR_OUTPUT_USD_PER_MILLION) ?? 0
+    inputPerMillionUsd: rateOf(live.inputUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.input]) ?? 0,
+    cacheHitPerMillionUsd: rateOf(live.cacheHitUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.cacheHit]),
+    outputPerMillionUsd: rateOf(live.outputUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.output]) ?? 0
   };
 }
 
 /** 某一档现在由谁给出（界面 / .env / 未配）：成本页要说清「这数是从哪来的」，不然改了界面却看见 .env 的值会以为没生效。 */
 export function pricingSourceOf(key: "input" | "output" | "cacheHit"): "runtime" | "env" | "unset" {
   const live = getLlmRuntimeSettings();
-  const env = key === "input" ? process.env.TUTOR_INPUT_USD_PER_MILLION : key === "output" ? process.env.TUTOR_OUTPUT_USD_PER_MILLION : process.env.TUTOR_CACHE_HIT_USD_PER_MILLION;
-  if (rateOf(key === "input" ? live.inputUsdPerMillion : key === "output" ? live.outputUsdPerMillion : live.cacheHitUsdPerMillion) !== undefined) return "runtime";
-  return rateOf(env) !== undefined ? "env" : "unset";
+  const field = key === "input" ? live.inputUsdPerMillion : key === "output" ? live.outputUsdPerMillion : live.cacheHitUsdPerMillion;
+  if (rateOf(field) !== undefined) return "runtime";
+  return rateOf(process.env[ENV_RATE_KEYS[key]]) !== undefined ? "env" : "unset";
 }
 
 /**
@@ -57,7 +62,7 @@ export function pricingIsConfigured(pricing: Pricing = currentPricing()): boolea
 
 /**
   闸门失效时该说的那句话；闸门在管事时返回 `undefined`。
-  措辞刻意点破「$0.0000 不是没花钱」——只报金额会把人引向「这月很省」，而实际是无上限花钱。
+  措辞刻意点破「¥0.0000 不是没花钱」——只报金额会把人引向「这月很省」，而实际是无上限花钱。
   句子里**不带预算数字**：这句话会在地址簿（不读每仓 settings）与启动日志（没有仓上下文）两处出现，
   写死一个数就等于对配过预算的仓撒谎。数字让 `monthlyBudgetUsd` 自己在成本页显示。
   */
@@ -106,7 +111,7 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
     mode: estimatedCostUsd >= monthlyBudgetUsd ? "degraded" : "normal",
     turns: events.length,
     costComponents,
-    // 三档单价全没配时金额恒为 0——这个事实要一起交出去，否则页面一句「本月 $0.0000」看着像真的没花钱
+    // 三档单价全没配时金额恒为 0——这个事实要一起交出去，否则页面一句「本月 ¥0.0000」看着像真的没花钱
     pricingConfigured: pricingIsConfigured(pricing),
     degradedTurns: events.filter((event) => event.payload.mode === "degraded").length,
     byScene: bucket(events, (event) => typeof event.payload.scene === "string" ? event.payload.scene : "unknown"),

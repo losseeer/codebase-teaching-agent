@@ -3,7 +3,7 @@ import { engineKeyHeaders, reportUnauthorized } from "./engine-key";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
- * 都以这个 workspace 为锚点。Agent 侧栏、伴侣面板、localStorage 也按 repositoryId 持久化。
+ * 都以这个 workspace 为锚点。Agent 侧栏与各视图的 localStorage 偏好也按 repositoryId 持久化。
  *
  * 对应 prototype `design-prototype.html` 中的 `binds[scope]` 概念。
  */
@@ -113,13 +113,14 @@ export interface LlmSettings {
   envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
   /**
-    单价三档的**填写值**（空串 = 这一档交给 .env）。单位是美元 / 百万 token，与 `.env` 的
-    `TUTOR_*_USD_PER_MILLION` 同一口径——界面上填的不是人民币，这点在弹窗的说明行里也写着。
+    单价三档的**填写值**（空串 = 这一档交给 .env）。数值口径是**人民币 / 百万 token**，
+    与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一格——变量名里的 USD 是历史遗留（改名会牵动已落盘的配置），
+    引擎侧不做任何汇率换算，填什么币就显示什么币。
     */
   inputUsdPerMillion?: string;
   outputUsdPerMillion?: string;
   cacheHitUsdPerMillion?: string;
-  /** 现在真在用的三档（引擎每次算账现读，改完不用重启） */
+  /** 现在真在用的三档（人民币 / 百万 token；引擎每次算账现读，改完不用重启） */
   pricing?: { inputPerMillionUsd: number; cacheHitPerMillionUsd?: number; outputPerMillionUsd: number };
   /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset（闸门不管事） */
   pricingSources?: { input: PricingSource; output: PricingSource; cacheHit: PricingSource };
@@ -186,10 +187,7 @@ export const api = {
   getCourseNodes: (repositoryId: string, parentId: string, offset = 0, limit = 30) => request<CourseNodePage>(`/api/repositories/${repositoryId}/course/nodes?parentId=${encodeURIComponent(parentId)}&offset=${offset}&limit=${limit}`),
   getCourseNodeDetail: (repositoryId: string, nodeId: string) => request<CourseNodeDetail>(`/api/repositories/${repositoryId}/analysis/node?nodeId=${encodeURIComponent(nodeId)}`),
   getAnalysis: (repositoryId: string) => request<RepositoryAnalysis>(`/api/repositories/${repositoryId}/analysis`),
-  /**
-   * 跨仓 HTTP 接缝：把本仓与地址簿里另一个仓的路由字符串配成边（引擎按需算，零模型调用）。
-   * 相关仓挂不起来时按 reason 抛错，界面要能分清「目录挪走了」与「没配对上」。
-   */
+  /** 导入前报告：索引概况 + 预估 token/金额 + 建议入口（ImportPage 在「花大钱之前」展示用）。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string }; entrypoints: { title: string; anchors: { path: string; line: number }[] }[] }>(`/api/repositories/${repositoryId}/report`),
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getImpact: (repositoryId: string, changedPaths: string[]) => request<ImpactResult>(`/api/repositories/${repositoryId}/impact`, { method: "POST", body: JSON.stringify({ changedPaths }) }),
@@ -311,7 +309,7 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
               try {
                 onEvent(JSON.parse(line.slice(6)) as ServerEvent);
               } catch {
-                /* 畸形帧跳过：一条坏帧不该断掉整条流（与导入页原有用同一口径） */
+                /* 畸形帧跳过：一条坏帧不该断掉整条流 */
               }
             }
             boundary = buffer.indexOf("\n\n");

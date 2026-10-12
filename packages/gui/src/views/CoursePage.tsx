@@ -149,12 +149,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             )}
           </div>
           {mapView === "architecture"
-            ? (
-              <>
-                <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
-                {/* 跨仓 HTTP 接缝：只有地址簿里还有第二个仓时才有意义（组件自己会隐藏） */}
-              </>
-            )
+            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
             : (
               <FlowMap
                 repositoryId={repositoryId}

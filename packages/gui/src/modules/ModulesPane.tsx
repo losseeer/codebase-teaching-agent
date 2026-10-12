@@ -218,8 +218,8 @@ export function ModulesPane({
 }
 
 
-/** 「推荐入口 / 仓库文件 / 模块内的练习」共用的小节标题（prototype `.module-section-label`）。 */
-/** 分区标题：`note` 是跟在标题后的小字（能删就删），`tip` 是「机制/口径」那类解释——只在悬停时出现，不占版面。 */
+/** 「推荐入口 / 仓库文件 / 模块内的练习」共用的小节标题：`note` 是跟在标题后的小字（能删就删），
+  `tip` 是「机制/口径」那类解释——只在悬停时出现，不占版面。 */
 export function ModuleSectionLabel({ label, note, tip }: { label: string; note?: string; tip?: string }): ReactElement {
   return <div className="module-section-label">{label}{note ? <span title={tip}>{note}</span> : null}</div>;
 }

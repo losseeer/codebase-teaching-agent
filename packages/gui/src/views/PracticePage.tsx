@@ -28,20 +28,25 @@ function gradingLabel(mode: ExerciseGradingMode): string {
   return "集合精确匹配";
 }
 
+/** LLM 出题单元 id 的版本号段（`llm:<tagId>:<nonce>`）；解析不出返回 null，两处判据共用。 */
+function llmUnitNonce(unitId: string): number | null {
+  const nonce = Number(unitId.split(":")[2] ?? 0);
+  return Number.isFinite(nonce) ? nonce : null;
+}
+
 function unitName(unitId: string): string {
   // LLM 出题单元 id 形如 llm:<tagId>:<nonce>，展示为主题练习序号
   if (unitId.startsWith("llm:")) {
-    const nonce = Number(unitId.split(":")[2] ?? 0);
-    return `主题练习 #${Number.isFinite(nonce) ? nonce + 1 : unitId}`;
+    const nonce = llmUnitNonce(unitId);
+    return `主题练习 #${nonce !== null ? nonce + 1 : unitId}`;
   }
   const tail = unitId.split(":").pop() ?? unitId;
   return tail.replace(/^[a-z]+-/, "") || tail;
 }
 
-/** LLM 出题单元的 variantNonce（换一题 = 旧 nonce + 1）。 */
+/** 换一题 = 旧 nonce + 1；解析不出按 0 起算。 */
 function llmNonce(unitId: string): number {
-  const nonce = Number(unitId.split(":")[2] ?? 0);
-  return Number.isFinite(nonce) ? nonce : 0;
+  return llmUnitNonce(unitId) ?? 0;
 }
 
 /** 回答框的提示随题型走：原来非 rubric 题一律写「只填写你预测的返回值」，

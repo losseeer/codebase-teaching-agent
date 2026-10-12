@@ -24,13 +24,10 @@ export const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 /**
-  教学回合过程提示的文案。引擎按 `harness` 的 TeachingProgress 发结构化事件（stage 取值与 map-chat 的
-  SSE 过程事件同一套），文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
-  */
-/**
   过程提示的中文文案，**两个作用域共用一份**：教学发的是 `{stage}`（多一个 deciding），
-  宏观/练习的工具循环发的是 `{type}`（thinking / reading / searching）。
-  原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——引擎在思考第三轮，界面一直挂着「回复生成中…」。
+  宏观/练习的工具循环发的是 `{type}`（thinking / reading / searching）。文案在这一层定——引擎不该关心中文措辞，
+  GUI 不该猜阶段语义。原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——
+  引擎在思考第三轮，界面一直挂着「回复生成中…」。
   */
 export function progressText(event: { type?: string; stage?: string; round?: number; path?: string; query?: string }): string {
   const kind = event.stage ?? event.type;
@@ -57,7 +54,8 @@ const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
 /** GUI 作用域（teaching）→ 引擎作用域取值（teach）：两套口径的对应关系只在这一处表里换算。 */
 const CHAT_SCOPE: Record<Scope, ChatScope> = { map: "map", teaching: "teach", practice: "practice" };
 
-/** 线程正文 → 侧栏展示项：库里只有 user/assistant 两种角色，hint/error 这类本地提示不落库、也读不回来。 */function threadItemsFrom(messages: readonly ThreadRow[]): ThreadItem[] {
+/** 线程正文 → 侧栏展示项：库里只有 user/assistant 两种角色，hint/error 这类本地提示不落库、也读不回来。 */
+function threadItemsFrom(messages: readonly ThreadRow[]): ThreadItem[] {
   return messages
     .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)
     .map((message) => ({ kind: message.role === "user" ? "user" as const : "agent" as const, id: message.id, text: message.content }));
@@ -105,7 +103,7 @@ export interface ScopedChatApi {
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：
     `chatThreads` 按 updated_at 倒序，`currentThreadId` 是当前打开的线程。
-    新建 / 切换 / 重命名 / 删除四个动作都在这里，删除是软删（列表与正文从此看不见，库里的行与审计日志不动）。
+    新建 / 切换 / 重命名 / 删除四个动作都在这里；软删口径见 api/client.ts 的 `listThreads` 注释。
     */
   chatThreads: Record<Scope, ChatThread[]>;
   currentThreadId: Record<Scope, string | null>;
@@ -116,7 +114,7 @@ export interface ScopedChatApi {
   /** 软删线程：GUI 侧二次确认在 AgentRail（文案要让用户看见「审计日志仍保留脱敏摘要」）。 */
   removeThread: (scope: Scope, threadId: string) => Promise<void>;
 
-  /** 当前 teaching 教学状态（API + 流式） */
+  /** 课程树（teaching 作用的节点数据；在途教学状态是下面的 `session`） */
   course: CourseTree | null;
   /** 课程数据代数：repositoryId 不变的重新导入 / 需要强制刷新课程请求时递增。 */
   dataVersion: number;
@@ -175,16 +173,14 @@ export interface ScopedChatApi {
   - AgentRail 写入 content / send / scope / pushMessage
   */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
-  const [scope, setScopeRaw] = useState<Scope>(loadInitialScope);
+  const [scope, setScope] = useState<Scope>(loadInitialScope);
   useEffect(() => {
     try { localStorage.setItem(SCOPE_STORAGE_KEY, scope); } catch { /* 持久化失败不回退 */ }
   }, [scope]);
-  const setScope = (next: Scope): void => setScopeRaw(next);
 
   /**
-  Agent 侧栏 thread 状态：3 作用域各独立。
-  - 内存态（跨路由共享；刷新页面重置 —— 与 prototype 语义一致）
-  - 只有 `pushMessage` / `clearThread` 两个写入器：位置/状态变化不再入线程（v0.8.1 起）
+  Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。
+  只有 `pushMessage` / `clearThread` 两个写入器——渲染口径见上方 `ThreadItem` 注释。
   */
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
 const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint"): void => {
@@ -239,8 +235,7 @@ useEffect(() => {
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
-  // 在途回合：`turnId` 让引擎按 id 停下来（省 token），`controller` 掐自己的连接。两者刻意分开——
-  // 只断连接时引擎分不清「用户点停止」和「网络波动」，会照常把这一轮算完落库（断线补账正靠这个）。
+  // 在途回合：turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。
   const activeTurn = useRef<{ scope: Scope; turnId: string; controller: AbortController } | null>(null);
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
@@ -287,9 +282,6 @@ useEffect(() => {
     if (currentThreadRef.current.practice) switchThread("practice", null);
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
-  const setSettings = (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)): void => {
-    setSettingsState((prev) => (typeof next === "function" ? (next as (prev: TutorSettings) => TutorSettings)(prev) : next));
-  };
 
   const [learner, setLearner] = useState<LearnerProfile | null>(null);
   const [faded, setFaded] = useState<FadedState | null>(null);
@@ -312,7 +304,7 @@ useEffect(() => {
 
   // ==== 会话线程：清单 / 当前线程 / 新建·切换·重命名·删除 ====
 
-  /** 写记忆（localStorage 不可用时静默跳过：记忆只是「上次停在哪」的便利，真源在引擎库里）。 */
+  /** 写记忆：静默兜底与取舍见 chatMemory.ts 的 `writeThreadMemory`。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
     if (!repositoryId) return;
     const chatScope = CHAT_SCOPE[scope];
@@ -634,7 +626,6 @@ useEffect(() => {
     }
     setSending(true); setError(""); setScopeProgress("teaching", "正在准备教学上下文…");
     const turn = beginTurn("teaching");
-    // 收到过 delta = 引擎那一轮已算完并落库，掐掉的只是回放（停止分诊据此区分两种情形）
     let sawDelta = false;
     try {
       let active = session;
@@ -696,7 +687,6 @@ useEffect(() => {
     begin();
     const turn = beginTurn(scope);
     patchDebt(scope, { threadId, count: knownRowCount.current[scope] }); // 同 teaching：发请求前先记下欠账
-    // 同 teaching：收到过 delta 说明引擎那一轮已算完落库，停止只掐掉了回放
     let sawDelta = false;
     const onScopedEvent = (event: ScopedChatEvent): void => {
       if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
@@ -746,7 +736,7 @@ useEffect(() => {
     course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
     practiceUnit, setPracticeUnit,
-    session, settings, setSettings, cost,
+    session, settings, setSettings: setSettingsState, cost,
     content, setContent, sending, stopTurn, progress, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
   };

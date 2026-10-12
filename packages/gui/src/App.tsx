@@ -31,10 +31,9 @@ const WORKSPACE_STORAGE_KEY = "codebase-tutor.workspace";
 const SIDEBAR_STORAGE_KEY = "codebase-tutor.sidebar-collapsed";
 
 /**
-  侧栏折叠态的读写。读**必须**包 try/catch 并走 useState 初始化器：这里原来直接 `localStorage.getItem`，
-  而存储不可用（隐私模式 / 被禁）正是上面 readStoredWorkspace 专门兜住的场景——初始化器里一抛就白屏，
-  与上一轮修掉的「读 workspace 炸掉整棵树」是同一类。写也兜住：它挂在事件处理器里，抛错会连累同一处理器
-  里紧随其后的状态更新（updateWorkspace 里 setWorkspace 之后那句 setItem 若抛，reloadCourseData 就跑不到）。
+  侧栏折叠态的读写。读**必须**包 try/catch 并走 useState 初始化器：存储不可用（隐私模式 / 被禁）时
+  初始化器里一抛就白屏（与 readStoredWorkspace 同一类事故）。写也兜住：它挂在事件处理器里，
+  抛错会连累同一处理器里紧随其后的状态更新。
   */
 function readSidebarCollapsed(): boolean {
   try {
@@ -93,7 +92,7 @@ function readStoredWorkspace(): _Workspace | null {
   - 右侧栏：持久 Agent 侧栏（AgentRail），三工作区共享单 Agent
 
   持久化：workspace（localStorage `codebase-tutor.workspace`）；scope（`codebase-tutor.scope`）。
-  thread 为内存态（刷新重置 —— 与 prototype `renderThread()` 语义一致）。
+  线程正文与清单的真源在引擎库（chat_session / chat_message），GUI 只记「当前停在哪条」。
 
   对应 prototype `design-prototype.html` 中的「主导航 + 工作区主区 + Agent 侧栏」。
   */

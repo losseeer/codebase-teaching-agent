@@ -60,8 +60,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   }, [modules, repositoryId]);
   useEffect(() => { if (activeModule) saveActiveModule("teaching", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
-  /** 文件树与推荐入口都只在「这个 tab 被打开过之后」才取：常驻挂载的隐藏面板不该替用户查库、更不该替他点 LLM。
-      `useEverVisible` 是一次性闸门（打开过就永久为真），所以来回切 tab 不会重复发。 */
+  /** 文件树与推荐入口都只在「这个 tab 被打开过之后」才取（单向门判据见 ui/useEverVisible.ts）。 */
   const everVisible = useEverVisible(visible);
   useEffect(() => {
     if (!everVisible) return;
@@ -146,12 +145,10 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
 
   /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），
       只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到模块自己的文件清单。
-      两个坑（都实测踩过）：
+      两个坑（都实测踩过，下面 effect 里的注释别在这里复述）：
       ① 回落态也必须记录状态，否则失败的模块会反复重试同一请求（engine 只缓存非空结果）；
-      ② 去重必须用 ref 而不是 state —— 把 entryState 放进 effect 依赖的话，写入 loading 会让 effect 重跑，
-         cleanup 把 current 置 false，唯一那次请求的结果被丢弃，界面永久停在 loading。
-      ③ 因此 effect 里**不要**用 current/unmount 标志丢弃结果：StrictMode 下 mount→unmount→mount 会判死第一次的请求，
-         而第二次 mount 被 ref 去重挡住不再发，同样永久 loading。
+      ② 去重必须用 ref 而不是 state——把 entryState 放进依赖会让写入 loading 触发重跑、cleanup 判死唯一那次请求，永久 loading；
+      ③ 因此 effect 里不用 current/unmount 标志丢弃结果（StrictMode 双跑同理）。
       key 带 repositoryId：换仓库后同一模块不会复用上一仓库的结果。 */
   const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "files"; entries: SuggestedEntry[]; reason?: string }>>({});
   const requestedEntries = useRef<Set<string>>(new Set());
@@ -163,17 +160,14 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     requestedEntries.current.clear();
   }, [repositoryId]);
   useEffect(() => {
-    // 推荐入口是**花 token 的请求**，三视图常驻挂载 ⇒ 用户停在宏观设计时，隐藏的教学面板也会替他点一次 LLM
-    // （实测切一次仓就白烧两轮 map.entry-suggest）。闸门是单向的：没打开过这个 tab 就一次都不发，
-    // 打开过之后按原依赖走，来回切 tab 不重发（去重另有 ref 兜着）。
+    // 推荐入口是**花 token 的请求**：用户停在宏观设计时，隐藏的教学面板也曾替他点过一次 LLM
+    // （实测切一次仓就白烧两轮 map.entry-suggest）——闸门由 everVisible 把住，去重另有 ref 兜着。
     if (!everVisible || !t.course) return;
     const mod = modules.find((item) => item.id === activeModule);
     if (!mod || requestedEntries.current.has(entryKey)) return;
     requestedEntries.current.add(entryKey);
     setEntryState((curr) => (curr[entryKey] ? curr : { ...curr, [entryKey]: { status: "loading", entries: [] } }));
-    // 刻意不用 current 标志丢弃结果：StrictMode 下 effect 会 mount→unmount→mount，
-    // 第一次发的请求会被第一次 cleanup 判死，而第二次 mount 又被 ref 去重挡住不再发 —— 结果是永久 loading。
-    // 去重已由 ref 保证（每个 key 只请求一次），卸载后 setState 是安全的 no-op。
+    // 这里刻意不加 current 卸载标志——判据见上方 entryState 注释的 ②③
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
       .then((result) => {
         // engine 在未配置 LLM / 预算触顶 / 主动判空 / 调用失败时都回空列表 —— 一律回落到模块自己的文件清单，
@@ -185,15 +179,17 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "推荐入口请求失败；以下按模块结构列出文件。" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules, everVisible]);
-  /** 推荐入口默认只露前若干条：大模块的文件清单能有几十条，整屏铺开会把「仓库文件」挤出视野。
+  /** 推荐入口默认只露前若干条（判据见文件头 ENTRY_PAGE）。
       展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
   const [expandedEntryLists, setExpandedEntryLists] = useState<Set<string>>(new Set());
   const moduleEntries = entryState[entryKey];
   /** 「打开过这个 tab、但请求还没落地」的那一帧也按等待渲染：否则先闪一下兜底文件清单再转 loading，看着像结果被换掉了。 */
   const entryPending = everVisible && !moduleEntries && Boolean(t.course);
+  /** 等待态 = 已有 loading 记录，或还没落账的那一帧（判据两处共用，别再各写一遍） */
+  const entryWaiting = moduleEntries?.status === "loading" || entryPending;
   const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
     ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line }))
-    : moduleEntries?.status === "loading" || entryPending || !t.course
+    : entryWaiting || !t.course
       ? []
       : moduleFiles;
   /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
@@ -201,7 +197,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNote = moduleEntries?.status === "llm"
     ? "LLM 推荐 · 点开即问"
-    : moduleEntries?.status === "loading" || entryPending
+    : entryWaiting
       ? "正在挑阅读顺序…"
       : moduleEntries?.reason ?? `按模块结构列出 ${moduleFiles.length} 个文件`;
 
@@ -248,7 +244,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   }, [paletteIndex]);
   const openFile = (path: string): void => {
     maybeEmitOverride(path);
-    void loadSource(path, 1, { note: `已打开 · ${path}` });
+    void loadSource(path, 1);
     setPaletteOpen(false);
   };
   /** palette 键盘动线：↑↓ 移动选中行（首尾环绕），Enter 打开选中的那一行——不再只能「回车 = 第一条」。 */

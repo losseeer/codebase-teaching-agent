@@ -85,8 +85,10 @@ class JournalSendError extends Error {
 let chain: Promise<unknown> = Promise.resolve();
 function schedule(task: () => Promise<unknown>): Promise<void> {
   const result = chain.then(task, task);
-  chain = result.then(() => undefined, () => undefined);
-  return result.then(() => undefined, () => undefined);
+  // 链上只挂吞掉结局的那一份，调用方拿到同一份（成功/失败都不让链断掉）
+  const settled = result.then(() => undefined, () => undefined);
+  chain = settled;
+  return settled;
 }
 
 /** 发送一条事件；网络失败入队重试，引擎明确拒收（4xx）就丢掉并说清为什么。 */

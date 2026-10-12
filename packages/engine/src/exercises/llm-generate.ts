@@ -12,7 +12,7 @@ import type { GuardCandidate } from "./guard-proposal.js";
   - 输出：仅重写 title（题面标题）与 prompt（题面描述），让题目更贴近真实代码细节
   - **不改** kind / anchors / inputMode / gradingMode / options —— 判分锚点与标准答案保持静态，
     保证 execution / set_match / rubric 三种判分路径不受 LLM 输出影响
-  - 任何失败都原样返回输入练习；与 refineCourseMap 共用 TUTOR_TEACHING_PROVIDER 配置
+  - 任何失败都原样返回输入练习；与其余调用点共用同一套 `TUTOR_LLM_*` 配置（见 llm/provider.ts）
   */
 
 const MAX_TITLE = 24;
@@ -134,19 +134,10 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
 }
 
 function parseRefinement(text: string, exercise: Exercise): Exercise | undefined {
-  const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  const start = jsonText.indexOf("{");
-  const end = jsonText.lastIndexOf("}");
-  if (start < 0 || end <= start) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText.slice(start, end + 1));
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== "object") return undefined;
-  const title = String((parsed as { title?: unknown }).title ?? "").trim().slice(0, MAX_TITLE);
-  const prompt = String((parsed as { prompt?: unknown }).prompt ?? "").trim().slice(0, MAX_PROMPT);
+  const parsed = parseJsonObject(text);
+  if (!parsed) return undefined;
+  const title = String(parsed.title ?? "").trim().slice(0, MAX_TITLE);
+  const prompt = String(parsed.prompt ?? "").trim().slice(0, MAX_PROMPT);
   if (!title || !prompt) return undefined;
   return { ...exercise, title, prompt };
 }

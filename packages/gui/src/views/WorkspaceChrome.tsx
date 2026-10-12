@@ -1,5 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 /**
   三工作区共享的外框（prototype `.workspace-tabs` + `.context-line` + `.mobile-switcher`）：

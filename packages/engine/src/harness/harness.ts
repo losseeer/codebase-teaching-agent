@@ -88,9 +88,8 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const state: TeachingState = { stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length };
   const policy = policyFor(session.settings);
   /**
-    上下文里放了哪几段仓内源码——由 `assembleContext` 顺手登记，**发一次记一次**（见 `security/dataflow.ts`）。
-    落账点刻意放在这两个调用之前而不是装配里：同一个装配结果也被「新建会话回给界面看」那条路径用，
-    那一趟没发请求，记成出境就是虚报。
+    上下文里放了哪几段仓内源码——由 `assembleContext` 顺手登记，**发一次记一次**：
+    落账点贴在发送前、不放在装配里（理由见 `harness/context.ts` 的 egress 注释）。
     */
   const egress: EgressCollector = [];
   const context = assembleContext({

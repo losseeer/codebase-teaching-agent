@@ -14,8 +14,8 @@ import { join } from "node:path";
     这条必须开机就喊出来：一个"有名字但没有闸"的守卫，和预算闸门没配单价是同一类事故（见 §36.6）。
   - key 只存**哈希**在内存里比对？不——文件里存的就是明文 key（本机 0600），比对用哈希后定长比较，
     目的是**不让 timing 差异泄露前缀**，不是防文件泄露（文件泄露就已经是终局）。
-  - `repositories` 是这张 key 能开哪些仓（id 或 `*`）。**跨仓工具也必须走同一份 ACL**，
-    否则「A 仓的对话把 B 仓的源码读进 prompt」就成了越权口子。
+  - `repositories` 是这张 key 能开哪些仓（id 或 `*`）。**跨仓工具也必须走同一份 ACL**——
+    判据与「为什么这是唯一安全边界」写在 server.ts 的 `crossRepoFor`，那里离检查最近。
  */
 export interface ApiKey {
   /** 谁发的、给谁用的名字：进日志的 actor 字段 */
@@ -127,7 +127,8 @@ export function authenticate(presented: string | undefined): AuthResult | undefi
   if (!presented) return undefined;
   const candidate = digest(presented);
   for (const entry of loadApiKeys()) {
-    if (candidate.length === digest(entry.key).length && timingSafeEqual(candidate, digest(entry.key))) {
+    // 两边都是 sha256 定长摘要，timingSafeEqual 的长度前提天然成立——这正是「哈希后比较」的目的
+    if (timingSafeEqual(candidate, digest(entry.key))) {
       return { name: entry.name, repositories: entry.repositories };
     }
   }

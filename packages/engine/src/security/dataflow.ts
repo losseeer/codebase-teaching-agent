@@ -42,7 +42,7 @@ export interface EgressSource {
   to: number;
   /** 真正进请求的那段文本：只用来算 `chars` 与 `hash`，本身不落盘 */
   text: string;
-  /** 隐去了几处疑似密钥（§43 那两道入口/出口筛）；0 或不填 = 没命中 */
+  /** 隐去了几处疑似密钥（§43 那两道入口/出口筛）。`0`（扫过、零命中）与不填（没记这个数）是两个读数，不可混写——见 `recordEgress` 的落账注释 */
   masked?: number;
   /** 被我们自己的字符/行上限切短了（读到的不止这些行） */
   truncated?: boolean;
@@ -57,8 +57,8 @@ export type EgressCollector = EgressSource[];
   所以装配侧不必把 id 一路传下来——少一条参数就少一处会漏同步的地方。
 
   `sent` 是待发的那份完整文本。**给了就只登记其中确实还存在的那些段**：
-  外层上下文预算（教学 9,000 字、宏观设计/练习各自的上限）会把尾部整段裁掉，
-  那一段其实没出门——虚报出境比漏报更糟，它会把「我们没读过这个文件」洗成「读过」。
+  外层上下文预算（教学 9,000 字、宏观设计/练习各自的上限）会把尾部整段裁掉，那一段其实没出门——
+  不登记（判据同文件头第 2 条：报了没发生的出境，比漏报更糟）。
   */
 export function recordEgress(input: { repositoryPath: string; scene: string; sessionId?: string; sources: EgressSource[]; sent?: string }): void {
   const sent = input.sent;

@@ -806,7 +806,7 @@ export interface CostComponent {
   label: "未命中输入" | "命中输入（缓存）" | "输出";
   tokens: number;
   ratePerMillionUsd: number;
-  /** true = 命中价没单独配置，按输入价计（不打折：宁可高估，也不要把花掉的钱说少） */
+  /** true = 命中价没单独配置，按输入价计（不打折的理由见 engine `cost/cost.ts` 的 `Pricing` 注释，不在此复述） */
   rateFallback: boolean;
   estimatedCostUsd: number;
 }
@@ -844,10 +844,8 @@ export interface CostSummary {
   /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
   costComponents: CostComponent[];
   /**
-    三档单价是否全未配置（`TUTOR_INPUT_USD_PER_MILLION` / `TUTOR_CACHE_HIT_USD_PER_MILLION` / `TUTOR_OUTPUT_USD_PER_MILLION`）。
-    ⚠️ false 的连带后果比「金额不好看」严重：`mode` 由「算出的钱 ≥ 预算」决定，钱算不出来就恒为 0、
-    永远判 "normal"，于是**所有**「超预算回落本地规则」的闸门一起静默放行——不是没超预算，是根本没比过。
-    界面必须把这一格说成「预算闸门未生效」，不能只报 $0.0000。
+    ⚠️ false = 三档单价全未配置 ⇒ 金额恒 0、`mode` 恒为 "normal"——预算闸门根本没在管事，不是「没超预算」。
+    界面必须把这一格说成「预算闸门未生效」，不能只报 ¥0.0000。判据与完整因果链在 engine `cost/cost.ts`（`pricingIsConfigured`）。
     */
   pricingConfigured: boolean;
   /** 因预算触顶而走本地规则（不付 token）的回合数 */
@@ -997,7 +995,8 @@ export interface PracticeSummary {
 /**
   学习日志事件类型。分两类：
 
-  - 引擎侧（学习语义）：unit_mastered 起至 file_read；由引擎在状态机 / 工具循环 / 成本核算里写。
+  - 引擎侧（学习语义）：`ENGINE_JOURNAL_EVENTS`（含 turn_text / turn_invariant / code_egress 等后加的审计事件）；
+    由引擎在状态机 / 工具循环 / 成本核算里写。
   - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
     这条契约来自设计文档第 8 章 PRINCIPLE 03「可观测」：每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
 
@@ -1066,10 +1065,8 @@ export type JournalEventType =
   | "module_tier_overridden"
   /**
     源码出境清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
-    记的是指针与指纹，不是正文：`scene` / `kind` / `path` / `lines` / `chars` / `hash`（发出去那段文本的 sha256 前 12 位），
-    命中过密钥隐去时另带 `masked`，被我们自己的上限切短时带 `truncated`。
-    与 `~/.codebase-tutor/llm.log` 靠 `traceId + scene` 关联——那一行才有 provider、model、token 与调用方 `actor`，
-    同一事实只写一处，不双写。工具循环的 `read_file` 不重复记：它已经有 `file_read` 那一行（内容在下一轮出门）。
+    记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
+    与 llm.log 靠 `traceId + scene` 关联。两条设计口径与字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
     */
   | "code_egress";
 

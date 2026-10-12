@@ -41,7 +41,7 @@ import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
-import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/scopechat.js";
+import { mapChat, practiceChat, type MapChatProgress, type ScopedChatResult, type ScopedChatTurn } from "./scopechat/scopechat.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
 loadDotEnv();
@@ -81,10 +81,9 @@ tboot("cors registered");
 app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
 
 /**
-  认证与按仓授权（企业形态的第一道闸；key 的读法与三条口径见 `security/api-keys.ts`）。
+  认证与按仓授权（企业形态的第一道闸；key 的三条口径——没配 key = 没闸、坏文件 = fail-closed、
+  按仓名单——判据都在 `security/api-keys.ts`，这里不重述）。
 
-  - **没配 key 文件 = 完全没有闸**（本机默认形态）。这条在开机时必须喊出来：
-    「有一层认证」和「有一层名字写着认证但恒放行」是两回事，预算闸门没配单价就是后者的事故（§36.6）。
   - 豁免两条：`/api/health`（进程管理器只问活没活，不该为它发 key）、
     `OPTIONS` 预检（按 CORS 规范预检不带凭据，拦它等于让 GUI 所有写请求一起瘫）。
   - **按仓 ACL 就放在 `onRequest`**：`request.params` 在路由阶段就已填好
@@ -92,8 +91,7 @@ app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, d
     所以不在名单里的仓连懒挂载都不会发生——不读它的 `.tutor`、不开它的 fs 监听。
   - 越权回 **403 而不是 404**：这是自托管的学习工具，不是多租户公共服务，
     「这张 key 没有这个仓」是用户能自己处置的读数；伪装成不存在只会挡住配 key 的那个人。
-  - **口令文件读不出来 = 闸关死（503），不是退回免鉴权**。这一档以前按「没配 key」放行，
-    等于「把 api-keys.json 编辑到一半」这几秒钟里整机对所有本机进程摊开；修文件是几秒钟的事，源码泄出去收不回来。
+  - 口令文件坏掉按 fail-closed 走 503，判据与理由见下方钩子与 `api-keys.ts` 的 `AuthState`。
   - URL 里没有 `:repositoryId` 的路由在各自 handler 里补判，口径仍只有一处（`granted` / `grantedTo`）：
     会话与线程按 id 定位到所属仓后判（越权 403）；`/api/imports/:jobId` 判的是**任务自己带的归属**
     （`targetOf(job)`——id 还没算出来时按路径算同一个，算不出就只给不受限的 key）。
@@ -152,8 +150,12 @@ function unrestricted(request: FastifyRequest): boolean {
 }
 
 /** 授权判定：本机模式（无身份）放行；有身份时按这张 key 的 `repositories` 名单。 */
+function permittedBy(auth: AuthResult | undefined, repositoryId: string): boolean {
+  return !auth || allowsRepository(auth, repositoryId);
+}
+
 function granted(request: FastifyRequest, repositoryId: string | undefined): boolean {
-  return !request.auth || !repositoryId || allowsRepository(request.auth, repositoryId);
+  return !repositoryId || permittedBy(request.auth, repositoryId);
 }
 
 /**
@@ -164,11 +166,6 @@ function granted(request: FastifyRequest, repositoryId: string | undefined): boo
 function forbidden(request: FastifyRequest, reply: FastifyReply, repositoryId: string | undefined) {
   if (granted(request, repositoryId)) return undefined;
   return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
-}
-
-/** 导入会读任意磁盘路径、并造出一个此前无法授权的仓 id，所以只放行未受限的 key。 */
-function mayImport(request: FastifyRequest): boolean {
-  return unrestricted(request);
 }
 
 app.addHook("onResponse", (request, reply, done) => {
@@ -222,11 +219,11 @@ function resolveTeachingState(sessionId: string, auth?: AuthResult): TutorSessio
   const live = teachingStates.get(sessionId);
   // 内存命中也要过同一道名单：缓存里躺着的可能正是别人的会话（上一回合由另一张 key 装配进来），
   // 直接返回就等于绕过了下面那句「先看名单再开库」。
-  if (live && (!auth || allowsRepository(auth, live.repositoryId))) return live;
+  if (live && permittedBy(auth, live.repositoryId)) return live;
   for (const repository of importer.mountedRepositories()) {
     // 授权判定在 IO 之前：不这样排，一张只授权 A 仓的 key 拿别人的 sessionId 来试，
     // 就能依次打开每个仓的 chat_session 并把命中与否从 403/404 的差异里读出来（存在性 oracle）。
-    if (auth && !allowsRepository(auth, repository.index.repositoryId)) continue;
+    if (!permittedBy(auth, repository.index.repositoryId)) continue;
     const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
     if (restored) {
       teachingStates.set(restored.id, restored);
@@ -466,7 +463,7 @@ function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>
   const targets = new Map<string, { id: string; path: string }>();
   for (const entry of importer.catalog()) {
     if (entry.repositoryId === repository.index.repositoryId || !entry.exists) continue;
-    if (auth && !allowsRepository(auth, entry.repositoryId)) continue;
+    if (!permittedBy(auth, entry.repositoryId)) continue;
     // 两个仓可能同名（都叫 backend）：撞名就给 id 前缀，否则模型报了名字我们不知道选哪个
     const name = targets.has(entry.name) ? `${entry.name}#${entry.repositoryId.slice(0, 6)}` : entry.name;
     targets.set(name, { id: entry.repositoryId, path: entry.repositoryPath });
@@ -674,7 +671,7 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
     const raw = body[key];
     if (raw === undefined) continue;
     const normalized = normalizeRate(raw);
-    if (normalized === undefined) return reply.code(422).send({ error: `${PRICING_LABELS[key]}得是不小于 0 的数字（美元 / 百万 token），留空表示用 .env 的值`, reason: "pricing_invalid" });
+    if (normalized === undefined) return reply.code(422).send({ error: `${PRICING_LABELS[key]}得是不小于 0 的数字（人民币 / 百万 token），留空表示用 .env 的值`, reason: "pricing_invalid" });
     pricingPatch[key] = normalized;
   }
 
@@ -731,8 +728,8 @@ app.get("/api/events", async (request, reply) => {
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
-  // 导入的授权时机早于它自己造出的仓 id，所以受限 key 一律不开这个口子（口径见 mayImport）
-  if (!mayImport(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，不能导入新仓：导入会读任意磁盘路径，事先无从授权。`, reason: "import_not_granted" });
+  // 导入的授权时机早于它自己造出的仓 id，所以受限 key 一律不开这个口子（口径见 `unrestricted`）
+  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，不能导入新仓：导入会读任意磁盘路径，事先无从授权。`, reason: "import_not_granted" });
   try { return reply.code(202).send(importer.submit(request.body?.path ?? "", typeof request.body?.summaryHeaderComments === "boolean" ? request.body.summaryHeaderComments : undefined)); }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "无法提交导入任务" }); }
 });
@@ -853,8 +850,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
   const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : lightLlmProvider;
-  // 落到「模块自己的文件清单」的原因由引擎说，不让界面替用户猜（未配置/触顶/判空/失败几件事的用户处置完全不同，
-  // 尤其「模型主动判空」是可信答案，被写成「还没配 LLM」会把人引去配密钥——与流程层 reason 同一套口径）
+  // 「触顶 vs 未配置」分开说的口径与理由见下面 flow 路由；未配置/触顶/判空/失败的用户处置完全不同，不让界面猜
   const fallback = "以下按模块结构列出文件（模块地图给的清单，未排序）";
   if (!provider) return { entries: [], source: "module_files" as const, reason: `${budgetExhausted ? "本月预算已触顶，未调用 LLM" : "未配置 LLM"}；${fallback}。` };
   const database = new TutorDatabase(repository.path);
@@ -908,8 +904,8 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。
   const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : teachingProvider;
-  // 「触顶」与「没配模型」分开说：前者的处置是调预算、后者是配密钥，合成一句就把人往错的方向支
-  // （推荐入口那条路由已经分开报，这里补上同一口径——它的注释也承诺了「与流程层同一套」）
+  // 「触顶」与「没配模型」分开说：处置分别是调预算、配密钥，合成一句就把人往错的方向支
+  // （尤其「模型主动判空/降级」被写成「还没配 LLM」会把人引去配密钥；推荐入口路由沿用同一口径）
   if (!provider) return degradedFlow(repository.analysis, entry, budgetExhausted ? "本月预算已触顶，未调用主力档 LLM" : "未配置主力档 LLM");
   const database = new TutorDatabase(repository.path);
   try {
@@ -1057,6 +1053,34 @@ function recheckTurn(input: {
   return { answer: notice ? `${screened.text}${notice}` : screened.text, failed: verdict.failed };
 }
 
+/**
+  map_chat 回合的统一收尾（非流式与流式两条路由共用这一份）：运行期复检（零 token）→ 线程正文落库 → 审计线。
+  引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本。
+*/
+function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
+  const journal = new Journal(repository.path, repository.index.repositoryId);
+  result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
+  persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
+  if (result.usage) journal.append("token_usage", {
+    input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
+    cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
+  }, threadId);
+  // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
+  for (const read of dedupeFileReads(result.fileReads ?? [])) {
+    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, threadId);
+  }
+  // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
+  for (const search of result.codeSearches ?? []) {
+    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, threadId);
+  }
+  // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
+  if (result.scopeDegraded) {
+    journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, threadId);
+  }
+  journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, threadId);
+  journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
+}
+
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1073,30 +1097,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   try {
     const crossFiles = new Map<string, number>();
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles, request.auth), threadId: turn.threadId });
-    const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
-    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
-    persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
-    if (result.usage) journal.append("token_usage", {
-      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
-      cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
-    }, turn.threadId);
-    // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
-    for (const read of dedupeFileReads(result.fileReads ?? [])) {
-      journal.append("file_read", {
-        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null
-      }, turn.threadId);
-    }
-    // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
-    for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, turn.threadId);
-    }
-    // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
-    if (result.scopeDegraded) {
-      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, turn.threadId);
-    }
-    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, turn.threadId);
-    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply), turn.threadId);
+    finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
@@ -1148,27 +1149,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
-    const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
-    result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
-    persistScopedTurn(repository.path, "map_chat", turn.threadId, content, result.reply);
-    if (result.usage) journal.append("token_usage", {
-      input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
-      cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
-    }, turn.threadId);
-    for (const read of dedupeFileReads(result.fileReads ?? [])) {
-      journal.append("file_read", {
-        path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null
-      }, turn.threadId);
-    }
-    for (const search of result.codeSearches ?? []) {
-      journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, turn.threadId);
-    }
-    if (result.scopeDegraded) {
-      journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, turn.threadId);
-    }
-    journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, turn.threadId);
-    journal.append("turn_text", turnTextPayload("map_chat", content, result.reply), turn.threadId);
+    finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
     send({ type: "done", reply: result.reply, provider: result.provider });
@@ -1404,14 +1385,13 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
 function locateThread(threadId: string, auth?: AuthResult): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
   // 与 `resolveTeachingState` 同一口径：**先看名单再开库**，越权的探测不该在磁盘上留下「开过哪个仓」的痕迹，
   // 也不该从 403/404 的差异里回读出「这个线程 id 属于你家某个仓」。
-  const permitted = (repositoryId: string): boolean => !auth || allowsRepository(auth, repositoryId);
   for (const repository of importer.mountedRepositories()) {
-    if (!permitted(repository.index.repositoryId)) continue;
+    if (!permittedBy(auth, repository.index.repositoryId)) continue;
     const thread = getThread(repository.path, threadId);
     if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
   }
   for (const entry of importer.catalog()) {
-    if (entry.mounted || !entry.exists || !permitted(entry.repositoryId)) continue;
+    if (entry.mounted || !entry.exists || !permittedBy(auth, entry.repositoryId)) continue;
     const thread = getThread(entry.repositoryPath, threadId);
     if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
   }
@@ -1597,9 +1577,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   每一次切节点、打开文件、切换模块、提交练习都必须有 journal 事件可查——缺事件的 UI 操作是设计漏洞。
 
   契约要点：
-  - **只收界面侧那张表**（`UI_JOURNAL_EVENTS`，10 类）。以前这条走的是 `Journal.append` 的全集合白名单，
-    于是本机任何进程都能往审计线塞一行 `file_read`、`token_usage`、`code_egress`——被审计的一方自己能填账，
-    这条线就没有证据价值了（2026-10-12 补，见 §46）。两张表的划分在 shared 里有编译期对账，漏归类编不过。
+  - **只收界面侧那张表**（`UI_JOURNAL_EVENTS`，10 类）；两张表怎么分、为什么必须分，见 shared 里两张表的注释与下面的行内判据（§46）。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
     sessionId 是关联属性而非外键。三作用域的会话续命都走 `chat_session`/`chat_message`（见 resolveTeachingState），
@@ -1645,16 +1623,13 @@ const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
-  // 认证闸的开关是「key 文件里有没有可用 key」：没有就是**完全没有闸**，任何本机进程都能读写这些仓。
-  // 这一句和下面预算闸门那条同一条纪律——有闸门的名字就必须让闸门的状态看得见（§36.6）。
-  // 三档都得看得见，尤其 `broken`：那不等于「没闸」，而是「闸现在拦所有人」。
+  // 认证闸三档都必须在开机时看得见（口径与理由见 `security/api-keys.ts` 的 `AuthState`，§36.6）。
   const gate = authStateOf();
   const keyCount = loadApiKeys().length;
   const file = process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json";
   console.log(`[engine] 认证：${gate === "on" ? `已启用（${keyCount} 张 key，${file}）` : gate === "broken" ? `**口令文件读不出来（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503，请把这份文件修好` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
   announceGate(gate, keyCount);
-  // 预算闸门的开关是「三档单价配了没有」：一个都没配时所有付费分支照常放行、一声不吭。
-  // 这属于运行期降级（有闸门名没有闸门），必须落在账面上看得见，而不是等人自己发现账单。
+  // 单价全没配 = 预算闸门失效（有闸门名没有闸门），与认证闸那条同纪律（§36.6）：必须开机就在账面上看得见。
   const gateNotice = budgetGateNotice();
   if (gateNotice) {
     console.warn(`[engine] ${gateNotice}`);

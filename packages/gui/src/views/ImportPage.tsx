@@ -43,7 +43,9 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   // 读流与重连在 `subscribeServerEvents` 里（原来用 EventSource，但它带不了认证头，闸门一开这条就静默断流）。
   // 5s 轮询是兜底——事件流断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
   const jobId = job?.id;
-  const jobActive = Boolean(job && !["completed", "failed"].includes(job.phase));
+  /** 终态判定一处收口：轮询/按钮禁用都用它，不再各写一份 ["completed","failed"] */
+  const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
+  const jobActive = Boolean(job && !isSettled(job.phase));
   useEffect(() => {
     if (!jobActive || !jobId) return;
     const stop = subscribeServerEvents((event) => {
@@ -84,7 +86,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         <label htmlFor="repo-path">仓库绝对路径</label>
         <div className="path-row">
           <input id="repo-path" value={path} onChange={(event) => setPath(event.target.value)} placeholder="/Users/name/Projects/example" />
-          <button className="primary" onClick={submit} disabled={!path.trim() || Boolean(job && !["completed", "failed"].includes(job.phase))}>
+          <button className="primary" onClick={submit} disabled={!path.trim() || jobActive}>
             <FolderGit2 size={17} />导入
           </button>
         </div>
@@ -108,7 +110,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
           <div className="import-catalog-head">地址簿里已导入的 {catalog.length} 个仓<span title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span></div>
           {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
               成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
-          {gateNotice && <p className="cost-notice" title={`要配的环境变量：TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION（任一档即可，配完重启引擎）`}>{gateNotice}</p>}
+          {gateNotice && <p className="cost-notice" title="对话栏那排「模型与推理」弹窗 → 单价，三档里配上任一格就恢复（不用重启引擎）；也可以改 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION，那条路要重启。">{gateNotice}</p>}
           {catalog.map((item) => {
             const isCurrent = item.repositoryId === workspace?.repositoryId;
             const verdict = item.freshness?.verdict;

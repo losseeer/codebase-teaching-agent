@@ -160,10 +160,8 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
   const absolute = join(repoPath, rawPath);
   if (!isWithin(repoPath, absolute)) return deny("路径越出仓库范围");
   const relative = rawPath.replaceAll("\\", "/");
-  const segments = relative.split("/");
-  if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return deny("该目录不开放读取");
-  const base = segments[segments.length - 1];
-  const nameReason = deniedNameReason(base);
+  // 目录 + 名字两道名单与 HTTP 侧同源（deniedPathReason），不在这里再抄一遍判据
+  const nameReason = deniedPathReason(relative);
   if (nameReason) return deny(nameReason);
   try {
     /**

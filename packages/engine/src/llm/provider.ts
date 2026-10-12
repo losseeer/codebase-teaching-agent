@@ -106,8 +106,11 @@ function linkFetchSignal(timeoutMs: number, external?: AbortSignal): LinkedFetch
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const relay = (): void => controller.abort();
-  if (external && !external.aborted) external.addEventListener("abort", relay, { once: true });
-  if (external?.aborted) controller.abort();
+  if (external) {
+    // 已置位的 signal 加监听器不会回调，必须直接 abort
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", relay, { once: true });
+  }
   return { signal: controller.signal, dispose: () => { clearTimeout(timer); external?.removeEventListener("abort", relay); } };
 }
 
@@ -341,9 +344,8 @@ export class AnthropicProvider implements LlmProvider {
       if (!response.ok) throw new Error(`Anthropic returned ${response.status}`);
       return response;
     } catch (error) {
-      const attributed = attributeAbort(error, signal);
-      if (attributed instanceof LlmAbortedError) throw attributed;
-      throw attributed;
+      // 外部中止归因成哨兵后原样上抛；其余错误也一律原样（Anthropic 无超时改写）
+      throw attributeAbort(error, signal);
     } finally {
       linked.dispose();
     }
@@ -381,9 +383,8 @@ export class OllamaTeachingProvider implements LlmProvider {
       if (!text) throw new Error("LLM returned an empty completion");
       return { text, usage: tokenUsage({ input_tokens: body.prompt_eval_count, output_tokens: body.eval_count }), finishReason: body.done_reason };
     } catch (error) {
-      const attributed = attributeAbort(error, input.signal);
-      if (attributed instanceof LlmAbortedError) throw attributed;
-      throw attributed;
+      // 同 Anthropic：只归因外部中止，其余原样上抛
+      throw attributeAbort(error, input.signal);
     } finally {
       linked.dispose();
     }
@@ -419,7 +420,8 @@ export class RetryLlmProvider implements LlmProvider {
 }
 
 /** 确定性 4xx（除 408 请求超时 / 429 限速）不做重试：同样的请求原样重发只会原样再败，
-    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */function isNonRetryable(error: unknown): boolean {
+    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */
+function isNonRetryable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const status = /(?:LLM|Anthropic|Ollama) returned (\d{3})/.exec(message)?.[1];
   if (!status) return false;

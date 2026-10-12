@@ -22,10 +22,9 @@ export interface LlmRuntimeSettings {
   apiKey: string;
   thinking: "auto" | ThinkingEffort;
   /**
-    三档单价，单位**美元 / 百万 token**（与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一口径）。
+    三档单价的数值口径（币种不参与算术、键名 `Usd` 为历史遗留、命中价缺省按输入价计）以 `cost/cost.ts` 的 `Pricing` 为准，这里不复述。
     放进这份配置而不是只留环境变量，是为了「改完立刻生效」：`cost.ts` 每次算账都现读这里，
     而环境变量那条路是模块加载时算一次的常量，非重启不可。空串 = 该项回落 `.env`（与 baseUrl 同一条规则）。
-    缓存命中价留空时按输入价计——宁可高估，也不把真花掉的钱说少了。
     */
   inputUsdPerMillion: string;
   outputUsdPerMillion: string;
@@ -41,13 +40,16 @@ export const THINKING_EFFORTS = ["auto", "off", "low", "high", "max"] as const;
 /** 单价那几项的键名（PUT 逐键校验、落盘恢复与界面都按这份清单走，不各写一遍字面量）。 */
 export const PRICING_KEYS = ["inputUsdPerMillion", "outputUsdPerMillion", "cacheHitUsdPerMillion"] as const;
 
+/** 回落 .env 的文本字段（provider/model/baseUrl/apiKey）：部分更新与磁盘恢复共用这份清单。 */
+const TEXT_KEYS = ["provider", "model", "baseUrl", "apiKey"] as const;
+
 const DEFAULT_SETTINGS: LlmRuntimeSettings = {
   provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto",
   inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: ""
 };
 
 /**
-  单价输入框的判据：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
+  单价输入框的判据（只管形状、不管币种）：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
   收数字也收字符串——界面传的是文本框，而老配置文件里可能写的是数字。
   */
 export function normalizeRate(value: unknown): string | undefined {
@@ -88,7 +90,7 @@ export function maskSecret(secret: string): string {
 
 /** 部分更新（未提供的字段保持不变，空串 = 清除该项并回落 .env）；文本字段 trim，thinking 合法性由路由层先校验。 */
 export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, "thinking">> & { thinking?: LlmRuntimeSettings["thinking"] }): LlmRuntimeSettings {
-  for (const key of ["provider", "model", "baseUrl", "apiKey"] as const) {
+  for (const key of TEXT_KEYS) {
     const value = partial[key];
     if (typeof value === "string") settings[key] = value.trim();
   }
@@ -110,7 +112,7 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     const next = { ...DEFAULT_SETTINGS };
-    for (const key of ["provider", "model", "baseUrl", "apiKey"] as const) {
+    for (const key of TEXT_KEYS) {
       if (typeof parsed[key] === "string") next[key] = (parsed[key] as string).trim();
     }
     const thinking = parsed.thinking;

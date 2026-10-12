@@ -12,10 +12,10 @@ import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type Thr
   - `scope-bar` 3 个 chip（map / teaching / practice），点击切换作用域
   - `scope-context` 当前作用域的「作用域 / 绑定 / 可见 / 动作」4 行元信息
   - `thread` 滚动消息列表，只含 pushMessage 的对话消息
-  - `composer` 按作用域切换 placeholder + 行为；teaching scope 真发 LLM，其他仅做本地草稿
+  - `composer` 按作用域切换 placeholder 与发送动作；三个作用域都经引擎流式发送（打字机回放）
 
   v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
-  v0.2 不变项：TutorPage 仅渲染 session-controls + ladder + 锚点 / 成本 chip，所有 chat / composer / 流式订阅均由 AgentRail 拥有。
+  分工不变项：所有 chat / composer / 流式订阅由 AgentRail 拥有（状态在 useScopedChat），工作区页面只呈现内容。
   */
 export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onCollapse: () => void }): ReactElement {
   const { scope, threads } = t;
@@ -186,25 +186,20 @@ const STYLE_CHOICES = [
   { value: 0, band: "rigorous" as const, label: "严肃", hint: "工程术语、严谨论证，不用类比" }
 ] as const;
 
-function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {  if (scope === "teaching") {
+function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {
+  // 三个作用域的发送条件一致：生成中或空输入都不发
+  const canSend = !t.sending && t.content.trim().length > 0;
+  if (scope === "teaching") {
     return {
       placeholder: t.selected ? `围绕「${t.selected.title}」说说你的推理；不知道就输入「不知道」` : "说说你的推理；不知道就输入「不知道」",
-      canSend: !t.sending && t.content.trim().length > 0,
+      canSend,
       onSend: t.send,
     };
   }
   if (scope === "map") {
-    return {
-      placeholder: "讨论这个项目的宏观设计…",
-      canSend: !t.sending && t.content.trim().length > 0,
-      onSend: t.sendMap,
-    };
+    return { placeholder: "讨论这个项目的宏观设计…", canSend, onSend: t.sendMap };
   }
-  return {
-    placeholder: "对这道练习追问…",
-    canSend: !t.sending && t.content.trim().length > 0,
-    onSend: t.sendPractice,
-  };
+  return { placeholder: "对这道练习追问…", canSend, onSend: t.sendPractice };
 }
 
 function ScopeContext({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
@@ -217,8 +212,7 @@ function ScopeContext({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEl
 }
 
 /**
-  绑定行 = 当前作用域的**当前**位置（不是历史）。
-  切换作用域/节点/文件只改这一行的值——不再往线程里追加「已切换到 / 已定位」分隔线（v0.8.1）。
+  绑定行 = 当前作用域的**当前**位置（不是历史）：切换作用域/节点/文件只改这一行的值。
   teaching 只显示当前文件的 `path:line`（与原型 `binds.teaching` 一致，不累积历史切换）。
   */
 function boundFor(scope: Scope, t: ScopedChatApi): string {

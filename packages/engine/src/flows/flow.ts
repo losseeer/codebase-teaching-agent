@@ -643,8 +643,7 @@ function asText(value: unknown, limit: number): string {
 
 /**
   流程缓存：键 = 层名 + 仓库 + 入口 + **本层实际输入的哈希**（即发给模型的 digest）。
-  缓存成功结果与确定性降级（`deterministic`，见 `GeneratedFlow`）；瞬时失败（调用异常 / 内容解析不出）
-  不入缓存，下次访问重试。TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
+  入不入缓存的口径见模块头（只存可信答案）。TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
   所以只要这个入口还在被访问，缓存就一直有效。
 
   为什么续期是安全的（此处原先靠全仓 `versionStamp` 兜底）：digest 变了键就变，而 digest 涵盖
@@ -733,8 +732,7 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
     flowInFlight.delete(key);
   }
   if (result.source === "llm" || result.deterministic || result.capHit) {
-    // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）；
-    // 只有瞬时失败（调用异常 / 解析不出）走到 else，下次访问重试。
+    // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）
     flowCache.set(key, { result, at: now });
     trimToNewest(flowCache, FLOW_CACHE_MAX);
     // 撞自己上限那一格只活在内存里：重启后可以重问，不被永久钉成静态视图（`GeneratedFlow.capHit`）

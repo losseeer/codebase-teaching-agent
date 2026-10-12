@@ -131,14 +131,14 @@ export function LlmSettingsControl(): ReactElement {
               onClear={() => updateLlm({ apiKey: "" })}
             />
 
-            <div className="llm-dialog-group">单价（美元 / 百万 token）</div>
+            <div className="llm-dialog-group">单价（人民币 / 百万 token）</div>
             <TextSetting
               label="输入"
               numeric
               value={llm?.inputUsdPerMillion ?? ""}
               placeholder={ratePlaceholder(llm, "input")}
               disabled={!llm}
-              hint="每百万个输入 token 的价格，填美元。留空 = 这一档用 .env 的 TUTOR_INPUT_USD_PER_MILLION；两层都空则不计价。DeepSeek 峰时约 0.28（¥2 / 百万）。"
+              hint="每百万个输入 token 的价格，填人民币。留空 = 这一档用 .env 的 TUTOR_INPUT_USD_PER_MILLION；两层都空则不计价。DeepSeek 峰时约 ¥2 / 百万。"
               onCommit={(inputUsdPerMillion) => updateLlm({ inputUsdPerMillion })}
             />
             <TextSetting
@@ -156,7 +156,7 @@ export function LlmSettingsControl(): ReactElement {
               value={llm?.outputUsdPerMillion ?? ""}
               placeholder={ratePlaceholder(llm, "output")}
               disabled={!llm}
-              hint="每百万个输出 token 的价格，填美元。留空 = 用 .env 的 TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时约 1.1（¥8 / 百万）。"
+              hint="每百万个输出 token 的价格，填人民币。留空 = 用 .env 的 TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时约 ¥8 / 百万。"
               onCommit={(outputUsdPerMillion) => updateLlm({ outputUsdPerMillion })}
             />
             {llm?.pricing ? <p className={`llm-dialog-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
@@ -172,7 +172,7 @@ export function LlmSettingsControl(): ReactElement {
   );
 }
 
-/** 服务商协议选项（与引擎 llm/runtime.ts 的 LLM_PROVIDERS 对齐）；空值另意为「沿用 .env」。 */
+/** 服务商候选：与引擎对齐的口径见 `LlmProviderKind`（api/client.ts）；「默认（沿用 .env）」的空选项由调用处拼。 */
 const PROVIDER_CHOICES = [
   { value: "openai-compatible", label: "OpenAI 兼容" },
   { value: "openai", label: "OpenAI 官方" },
@@ -199,7 +199,7 @@ const THINKING_STYLE_HINT: Record<string, string> = {
 /** 单价一格的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
-  const value = llm?.pricing ? usdOf(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
+  const value = llm?.pricing ? money(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
   return fromEnv ? `.env ${value}` : "未配置";
 }
 
@@ -218,23 +218,14 @@ function pricingLive(llm: LlmSettings): boolean {
 function pricingReadout(llm: LlmSettings): string {
   const p = llm.pricing;
   if (!p) return "单价读数未返回";
-  if (!pricingLive(llm)) return "三档都没配 ⇒ 金额恒 $0.0000，「超预算改走本地规则」这道闸没在管事";
+  if (!pricingLive(llm)) return "三档都没配 ⇒ 金额恒 ¥0.0000，「超预算改走本地规则」这道闸没在管事";
   const source = (key: "input" | "output" | "cacheHit"): string => ({ runtime: "界面", env: ".env", unset: "未配" })[llm.pricingSources?.[key] ?? "unset"];
-  return `按 输入 ${usdOf(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${usdOf(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${usdOf(p.outputPerMillionUsd)}（${source("output")}）计价${looksLikeYuan(p) ? " · 这个量级像人民币价，金额会放大约 7 倍" : ""}`;
+  return `按 输入 ${money(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${money(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${money(p.outputPerMillionUsd)}（${source("output")}）计价`;
 }
 
-/**
-  便宜的口径提醒：这三格要的是**美元 / 百万 token**，而国产端点的牌价常写人民币，
-  「把 ¥2 直接填成 2」几乎必然发生（本仓的 `.env` 就正是 2 / 0.04 / 8）。
-  只提示不拦停：真正的价口径只有用户自己知道，猜错一次的成本远低于拦错一次的烦。
-  */
-function looksLikeYuan(pricing: NonNullable<LlmSettings["pricing"]>): boolean {
-  return pricing.inputPerMillionUsd >= 1.4 || pricing.outputPerMillionUsd >= 1.4;
-}
-
-/** $0.280 这种写法；命中价没配时明说是「按输入价计」，不留一个空白让人以为算错了。 */
-function usdOf(value: number | undefined): string {
-  return value === undefined ? "按输入价" : `$${value.toFixed(3)}`;
+/** ¥2.000 这种写法；命中价没配时明说是「按输入价计」，不留一个空白让人以为算错了。 */
+function money(value: number | undefined): string {
+  return value === undefined ? "按输入价" : `¥${value.toFixed(3)}`;
 }
 
 /**

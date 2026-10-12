@@ -6,7 +6,7 @@ import type { CourseNode, ExerciseKind, ImportJob } from "@codebase-tutor/shared
  * views/ 共享的小工具：
  * - Loading / EmptyState：通用占位 UI
  * - phaseLabel / exerciseKindLabel：枚举 → 中文文案
- * - firstTeachNode / flatten / replaceCourseNode：课程树遍历
+ * - firstTeachNode / flatten：课程树遍历
  * - MicroDetail：课程节点详情（微观拆解）
  *
  * 对应 prototype `design-prototype.html` 中散落的 helper 函数。
@@ -46,11 +46,6 @@ export function firstTeachNode(root: CourseNode): CourseNode {
 
 export function flatten(root: CourseNode): CourseNode[] {
   return [root, ...root.children.flatMap(flatten)];
-}
-
-export function replaceCourseNode(root: CourseNode, nodeId: string, update: (node: CourseNode) => CourseNode): CourseNode {
-  if (root.id === nodeId) return update(root);
-  return { ...root, children: root.children.map((child) => replaceCourseNode(child, nodeId, update)) };
 }
 
 export function MicroDetail({ detail }: { detail: { implementation?: import("@codebase-tutor/shared").ImplementationUnit } | null }): ReactElement | null {

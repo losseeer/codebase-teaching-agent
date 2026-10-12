@@ -17,8 +17,7 @@ import { recordEgress } from "../security/dataflow.js";
      按「文件被多少条推断边需要」加权选（09-22 修正：旧选择法按边迭代序拿前 3 个文件，一条流程的
      6 条推断边常涉及十几个文件，多数边根本没读到正文——提示词又规定「没给片段一律判 inferred」，
      等于注定白问）；窗口大小也按同一天的重放定：真仓 19 条 flow、136 条推断边，「端点全落窗口」
-     （唯一问得出来的边）在 3 文件窗口下只有 1 条，放宽到 5 是 13 条——字符预算 `MAX_DEEP_CHARS`
-     本来就只装得下 4~5 个 80 行窗口，3 是白留预算，5 是收在预算内；
+     （唯一问得出来的边）在 3 文件窗口下只有 1 条，放宽到 5 是 13 条（成本口径见 `MAX_DEEP_FILES` 注释）；
   3. **核实失败不损失流程**：解析不出、调用失败、引用对不上，都保留原边并把情况写进 caveats。
 */
 
@@ -131,11 +130,10 @@ export async function deepenInferredEdges(input: {
     }
   }
   const wanted = new Map([...score].sort((a, b) => b[1].edges - a[1].edges).slice(0, MAX_DEEP_FILES).map(([path, row]) => [path, row.anchor]));
-  const window = new Set(wanted.keys());
-  // 问哪些边：端点在窗口里的才问得到（没读到的片段按提示词一律判 inferred，问了注定白问）；全覆盖优先，截到 MAX_DEEP_EDGES。
-  const askable = inferred.filter((edge) => pathsOf(edge).some((path) => window.has(path)));
+  // 问哪些边：端点在窗口（wanted）里的才问得到（没读到的片段按提示词一律判 inferred，问了注定白问）；全覆盖优先，截到 MAX_DEEP_EDGES。
+  const askable = inferred.filter((edge) => pathsOf(edge).some((path) => wanted.has(path)));
   const pending = askable
-    .map((edge) => ({ edge, full: pathsOf(edge).every((path) => window.has(path)) }))
+    .map((edge) => ({ edge, full: pathsOf(edge).every((path) => wanted.has(path)) }))
     .sort((a, b) => Number(b.full) - Number(a.full))
     .slice(0, MAX_DEEP_EDGES)
     .map((item) => item.edge);
@@ -173,7 +171,7 @@ export async function deepenInferredEdges(input: {
   let usage: LlmUsage | undefined;
   let revised: Map<string, { verdict: "code" | "inferred"; evidence: string }>;
   try {
-    // 出境落账：这些代码窗口是 deepen 自己调 executeReadFile 读的（不经工具循环，没有 `file_read` 那行可查）
+    // 出境落账：deepen 自读的窗口同样要记（口径见 `GenerateFlowInput.egress` 注释，flows/flow.ts）
     recordEgress({
       repositoryPath: input.repositoryPath,
       scene: DEEP_SCENE,

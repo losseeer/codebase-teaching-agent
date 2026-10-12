@@ -32,7 +32,7 @@ interface EgressRow {
   /** 这一段自己的哈希前 12 位（`--json` 带出来，供本地重跑同一次装配逐段比）；tool-read 那档没有 = 无从比 */
   hash: string | undefined;
   masked: number;
-  /** 这一段有没有「隐去」这个读数可说：`false` = 那行写于 §43 上线之前，缺字段不等于扫过且干净 */
+  /** 这一段有没有「隐去」读数可说：`false` = 没扫或写于 §43 之前，缺字段不等于扫过且干净（口径见 `MASKED_SINCE`） */
   maskedRecorded: boolean;
   truncated: boolean;
   traceId: string | null;
@@ -72,8 +72,10 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
     if (event.type === "code_egress") {
       const chars = Number(scalarOf(event, "chars") ?? 0);
       // `masked` 这一格现在由落账方**总是**写（0 = 扫过且干净）；缺字段就是「那一路没扫」或写于今天之前，
-      // 二者都不能读成干净——这正是 `maskedRecorded` 存在的全部理由。
+      // 二者都不能读成干净。落账方算的是**这一段文本**的哈希；`llm.log` 的 `outbound.hash` 是整串请求体的哈希，
+      // 两者没有包含关系，只能「本地重跑同一次装配、比那一段自己」——报表末尾那句核对就是这么写的。
       const maskedValue = scalarOf(event, "masked");
+      const hashValue = scalarOf(event, "hash");
       rows.push({
         at: event.at,
         scene: String(scalarOf(event, "scene") ?? "未记"),
@@ -81,9 +83,7 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
         path: String(scalarOf(event, "path") ?? "未记"),
         lines: String(scalarOf(event, "lines") ?? "未记"),
         chars: Number.isFinite(chars) ? chars : 0,
-        // 落账方算的是**这一段文本**的哈希；`llm.log` 的 `outbound.hash` 是整串请求体的哈希，
-        // 两者没有包含关系，只能「本地重跑同一次装配、比那一段自己」——报表末尾那句核对就是这么写的
-        hash: typeof scalarOf(event, "hash") === "string" ? String(scalarOf(event, "hash")) : undefined,
+        hash: typeof hashValue === "string" ? hashValue : undefined,
         masked: Number(maskedValue ?? 0) || 0,
         maskedRecorded: typeof maskedValue === "number",
         truncated: event.payload.truncated === true,

@@ -6,7 +6,7 @@ import { api, type Workspace } from "../api/client";
 /**
  * 成本监控页：本月 token 用量的仪表读数 + 月度预算设置。
  * 读数全部来自引擎对本月 `token_usage` 事件的聚合（`cost/cost.ts`），这里只做呈现与分桶明细，
- * 不二次估算——所以「未配单价」这种会让金额恒为 0 的事实必须显式说出来，而不是留一句 $0.0000 让人误读。
+ * 不二次估算——所以「未配单价」这种会让金额恒为 0 的事实必须显式说出来，而不是留一句 ¥0.0000 让人误读。
  */
 
 /** 场景取值 → 界面叫法。取值清单是引擎 `JournalEventType["token_usage"]` 的 scene 白名单，两边要同步。 */
@@ -46,7 +46,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
   /**
-    引擎只收「有限非负数」。空串在 JS 里 `Number("") === 0`，直接发过去就等于把月预算改成 $0
+    引擎只收「有限非负数」。空串在 JS 里 `Number("") === 0`，直接发过去就等于把月预算改成 0
     ——那一档是「从此所有付费分支都判为触顶」，一次误输就能把整个产品静音掉，所以在这里先判住。
     */
   const budgetNumber = Number(budget);
@@ -65,7 +65,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   const pricingConfigured = cost?.pricingConfigured ?? true;
   /** 读数没拿到（首帧 / 拉取失败）时 `cost` 是 null——这时任何「正常」字样都是替引擎编的：
       闸门生效与否、金额、剩余都来自那一次读取。实测把 `/cost` 打成 500，页面会同时说
-      「正常运行」和「剩余 $0.0000；触顶后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
+      「正常运行」和「剩余 ¥0.0000；触顶后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
   const readoutReady = cost !== null;
   const usedRatio = cost && cost.monthlyBudgetUsd > 0 ? Math.min(1, cost.estimatedCostUsd / cost.monthlyBudgetUsd) : 0;
   const dayPeak = cost?.byDay.reduce((peak, day) => Math.max(peak, day.inputTokens + day.outputTokens), 0) ?? 0;
@@ -109,7 +109,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             : pricingConfigured
               ? <>剩余 {usd(cost.remainingBudgetUsd)} · 触顶后改走本地规则</>
               : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额，「触顶改走本地规则」这条分支走不到。</>}</p>
-          <label className="budget-field">调整月度预算（USD）
+          <label className="budget-field">调整月度预算（人民币）
             <span>
               <input
                 type="number"
@@ -117,7 +117,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 step="0.01"
                 value={budget}
                 aria-invalid={!budgetValid}
-                title={budgetValid ? "改成非负数即可；$0 表示此后所有付费分支一律走本地规则" : "要一个有限的非负数字；留空不算 0"}
+                title={budgetValid ? "改成非负数即可；¥0 表示此后所有付费分支一律走本地规则" : "要一个有限的非负数字；留空不算 0"}
                 onChange={(event) => setBudget(event.target.value)}
               />
               <button className="primary" disabled={!budgetValid} title={budgetValid ? undefined : "先填一个有限的非负数字"} onClick={() => void saveBudget()}>更新</button>
@@ -135,11 +135,11 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             <div className="readout"><span>输出 tokens</span><strong>{tokensText(cost.outputTokens)}</strong></div>
             <div className="readout"><span>计费回合</span><strong>{cost.turns - cost.degradedTurns}</strong></div>
             <div className="readout" title="预算触顶后走本地规则、未付 token 的回合数"><span>降级回合</span><strong>{cost.degradedTurns}</strong></div>
-            <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 $0 ⇒ 闸门永远判为未超支，等于无上限调用。单价在对话栏那排「模型与推理」弹窗里填，改完即生效"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
+            <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 ¥0 ⇒ 闸门永远判为未超支，等于无上限调用。单价在对话栏那排「模型与推理」弹窗里填，改完即生效"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
           </div>
           {!pricingConfigured && (
-            <p className="cost-notice" title="填的地方：对话栏那排参数齿轮 → 模型与推理 → 单价（美元 / 百万 token），填完立即生效，不用重启引擎。留空的档位回落 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万（约 $0.28 / $1.1）。">
-              没配单价 ⇒ 金额恒为 $0.0000（上面的 token 用量是真实读数）。<strong>更要紧的是预算闸门也因此不管事</strong>：引擎里「超预算就回落本地规则」的判断拿到的永远是 $0，月预算形同虚设。
+            <p className="cost-notice" title="填的地方：对话栏那排参数齿轮 → 模型与推理 → 单价（人民币 / 百万 token），填完立即生效，不用重启引擎。留空的档位回落 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION（键名里的 USD 是历史遗留，引擎不做汇率换算）。DeepSeek 峰时约 ¥2 / ¥0.2 / ¥8 每百万。">
+              没配单价 ⇒ 金额恒为 ¥0.0000（上面的 token 用量是真实读数）。<strong>更要紧的是预算闸门也因此不管事</strong>：引擎里「超预算就回落本地规则」的判断拿到的永远是 0，月预算形同虚设。
             </p>
           )}
 
@@ -153,7 +153,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                     <tr key={component.label} title={component.rateFallback ? "命中价未单独配置，按输入价计（未打折）" : undefined}>
                       <td>{component.label}</td>
                       <td>{tokensText(component.tokens)}</td>
-                      <td>{pricingConfigured ? `$${component.ratePerMillionUsd}` : "未配置"}</td>
+                      <td>{pricingConfigured ? `¥${component.ratePerMillionUsd}` : "未配置"}</td>
                       <td>{usd(component.estimatedCostUsd)}</td>
                     </tr>
                   ))}
