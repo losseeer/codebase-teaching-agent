@@ -142,7 +142,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
     bookEgress("teaching.turn");
-    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+    const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.cross ? { cross: options.cross } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     const completion = outcome.completion;
     // 可见回复的截断兜底：token 触顶（finishReason=length）或被这里 1,500 字符硬切，都要留痕
     return buildReply(session, node, learnerContent, () => flagTruncatedReply(completion.text.slice(0, 1_500), completion.finishReason === "length" || completion.text.length > 1_500), provider.name, addUsage(decisionUsage, outcome.usage), next, intentSource, { ...actions, toolRounds: outcome.toolRounds, ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}), ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}) });

@@ -139,8 +139,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  /** `auth` 是闸门状态：`"off"` = 没配 key 文件（本机默认），`"api-key"` = 已开闸，所有接口都要带口令。 */
-  health: () => request<{ status: string; auth?: "off" | "api-key"; llmMode?: string }>("/api/health"),
+  /**
+    闸门状态三档：`"off"` = 没配 key 文件（本机默认）；`"api-key"` = 已开闸，所有接口都要带口令；
+    `"broken"` = 引擎那份 key 文件读不出来，此时它按「拒绝全部」在跑（除健康检查外一律 503）。
+    */
+  health: () => request<{ status: string; auth?: "off" | "api-key" | "broken"; llmMode?: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
@@ -220,9 +223,19 @@ export const api = {
 
   **为什么不用 `EventSource`**：那个 API 带不了自定义请求头，引擎一开认证这条流就整条断掉——
   而断得最难看的恰恰是导入进度（界面停在 0%，任务其实跑完了）。换成 fetch 读流之后，
-  口令与其余接口同一套（`engineKeyHeaders`），重连自己管：指数退避 1s→2s→5s→10s→20s 封顶，
-  一旦成功收到帧就清零。`AbortSignal` 用来在依赖变化/卸载时彻底停下（含正在退避的那一次等待）。
+  口令与其余接口同一套（`engineKeyHeaders`），重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，
+  一旦成功建立连接就清零。`AbortSignal` 用来在依赖变化/卸载时彻底停下（含正在退避的那一次等待）。
+  注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎现在开局就发一帧把响应头推到网路上，
+  所以 `fetch` 立刻 resolve，连接状态是实测的而不是等第一个事件才知道。
+
+  **空闲看门狗**（10-12 实测补的）：引擎死了但中间的代理/反代还替它挂着这条连接时，
+  `reader.read()` 既不 resolve 也不 reject，退避重连这条码路永远不会被触发——
+  表现为「界面停在 40% 不动，而引擎其实早就没了」。`EventSource` 时代由浏览器管这件事，
+  换成 fetch 之后必须自己管。阈值取 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧），
+  超时是**掐掉这一次尝试**再按退避重连，不是整条订阅作废。
   */
+const STREAM_IDLE_MS = 75_000;
+
 export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, signal?: AbortSignal): () => void {
   const controller = new AbortController();
   let stopped = false;
@@ -237,8 +250,12 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
   void (async () => {
     let failures = 0;
     while (!stopped && !controller.signal.aborted) {
+      // 每一次尝试单独一个 controller：空闲超时只掐这一条连接，长命的那个留给真正的「别再订阅了」
+      const attempt = new AbortController();
+      const relayAbort = (): void => attempt.abort();
+      controller.signal.addEventListener("abort", relayAbort);
       try {
-        const response = await fetch("/api/events", { headers: engineKeyHeaders(), signal: controller.signal });
+        const response = await fetch("/api/events", { headers: engineKeyHeaders(), signal: attempt.signal });
         if (!response.ok || !response.body) {
           if (response.status === 401) reportUnauthorized();
           throw new Error(`事件流建立失败（HTTP ${String(response.status)}）`);
@@ -248,14 +265,22 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
         const decoder = new TextDecoder();
         let buffer = "";
         for (;;) {
-          const { done, value } = await reader.read();
+          let idleTimer = 0;
+          const idle = new Promise<never>((_, reject) => { idleTimer = window.setTimeout(() => reject(new Error("事件流空闲超时")), STREAM_IDLE_MS); });
+          let chunk;
+          try {
+            chunk = await Promise.race([reader.read(), idle]);
+          } finally {
+            window.clearTimeout(idleTimer);
+          }
+          const { done, value } = chunk;
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let boundary = buffer.indexOf("\n\n");
           while (boundary >= 0) {
-            const chunk = buffer.slice(0, boundary);
+            const frame = buffer.slice(0, boundary);
             buffer = buffer.slice(boundary + 2);
-            const line = chunk.split("\n").find((entry) => entry.startsWith("data: "));
+            const line = frame.split("\n").find((entry) => entry.startsWith("data: "));
             if (line) {
               try {
                 onEvent(JSON.parse(line.slice(6)) as ServerEvent);
@@ -267,7 +292,11 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
           }
         }
       } catch {
+        // 空闲超时走的就是这一支：掐掉这一次尝试，下面按同一份退避重连
+        attempt.abort();
         if (stopped || controller.signal.aborted) break;
+      } finally {
+        controller.signal.removeEventListener("abort", relayAbort);
       }
       if (stopped || controller.signal.aborted) break;
       // 服务端正常收尾也会走到这里（连接被关）：按同一份退避重来，不留「看着连着其实没订阅」的状态

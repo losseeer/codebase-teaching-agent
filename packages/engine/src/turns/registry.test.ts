@@ -42,6 +42,22 @@ describe("在途回合注册表", () => {
     first.dispose();
   });
 
+  it("归属：A 发起的回合 B 停不了（共享部署下这是一条能掐掉别人 token 的动作）", () => {
+    const handle = beginTurn(TURN_ID, "teach", "甲的 key");
+    expect(abortTurn(TURN_ID, "乙的 key")).toEqual({ aborted: false, reason: "forbidden", scene: "teach" });
+    // 被别人试过不等于中止：这一轮还在跑，登记也还在
+    expect(handle.signal?.aborted).toBe(false);
+    expect(abortTurn(TURN_ID, "甲的 key")).toMatchObject({ aborted: true, scene: "teach" });
+    expect(handle.signal?.aborted).toBe(true);
+    handle.dispose();
+  });
+
+  it("登记时没有身份（闸门没开）就不判归属，否则本机模式的「停止生成」会莫名失效", () => {
+    const handle = beginTurn(TURN_ID, "map_chat");
+    expect(abortTurn(TURN_ID, "随便谁")).toMatchObject({ aborted: true, scene: "map_chat" });
+    handle.dispose();
+  });
+
   it("没传 turnId 的调用照常执行，只是不可中止", () => {
     const handle = beginTurn(undefined, "teach");
     expect(handle.signal).toBeUndefined();

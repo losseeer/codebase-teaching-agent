@@ -1,4 +1,32 @@
+import { maskSecrets } from "../security/secrets.js";
 import { applyThinking } from "./thinking.js";
+
+/**
+  出境前的**最后一道筛**（企业化第 2 条的总闸口）：三个真发请求的 provider 在 `complete` 第一行各调一次。
+
+  为什么贴在发送边而不是只靠装配点：10-12 的审计查出四条漏网——出题的源码摘录、符号形参原文、
+  L2 聚合上下文、向量批量——它们全是**后来新增的装配路径**，不是谁把旧代码改坏了。
+  「每个新调用点都记得过筛」是指望不住的纪律，防线得长在出口上。
+
+  判据与那几处装配点完全同一份（`security/secrets.ts`），掩码串不会被二次命中，
+  所以已经筛过的文本再过一次是原样返回；没人命中密钥时也**不会重拼消息**（缓存前缀逐字节不变）。
+  */
+export function screenOutbound(input: LlmCompletionInput): LlmCompletionInput {
+  const system = maskSecrets(input.system);
+  const user = typeof input.user === "string" ? maskSecrets(input.user) : { text: input.user, masked: 0 };
+  const messages = input.messages?.map((message) => {
+    const screened = typeof message.content === "string" ? maskSecrets(message.content) : undefined;
+    return screened && screened.masked ? { ...message, content: screened.text } : message;
+  });
+  const masked = system.masked + user.masked + (messages?.filter((message, index) => message !== input.messages?.[index]).length ?? 0);
+  if (!masked) return input;
+  return {
+    ...input,
+    system: system.text,
+    ...(user.text !== input.user ? { user: user.text } : {}),
+    ...(messages ? { messages } : {})
+  };
+}
 
 export interface LlmUsage {
   inputTokens: number;
@@ -194,6 +222,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
+    input = screenOutbound(input);
     const budget = (input.maxTokens ?? 700) + this.reasoningHeadroom;
     const messages: Record<string, unknown>[] = [{ role: "system", content: input.system }];
     if (input.messages?.length) {
@@ -285,6 +314,7 @@ export class AnthropicProvider implements LlmProvider {
     if (input.thinking && input.thinking !== "off") {
       throw new Error(`Anthropic 原生协议暂不支持思考档位 "${input.thinking}"（思考为 budget_tokens 预算制）。请用 auto/off，或改走 OpenAI 兼容端点。`);
     }
+    input = screenOutbound(input);
     const endpoint = this.options.endpoint.replace(/\/$/, "");
     const response = await this.request(`${endpoint}/v1/messages`, {
       model: this.options.model,
@@ -336,6 +366,7 @@ export class OllamaTeachingProvider implements LlmProvider {
     if (input.thinking && input.thinking !== "off") {
       throw new Error(`Ollama provider 暂不支持思考档位 "${input.thinking}"。请用 auto/off。`);
     }
+    input = screenOutbound(input);
     const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, input.signal);
     try {
       const response = await this.fetchImpl(`${this.options.endpoint.replace(/\/$/, "")}/api/chat`, {

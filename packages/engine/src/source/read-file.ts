@@ -129,6 +129,18 @@ function deniedNameReason(base: string): string | undefined {
   return undefined;
 }
 
+/**
+  名单判据的**对外一份**：HTTP 侧（`GET /source`）与工具侧（`read_file`）必须同一口径。
+  以前这条路由只问「在不在索引里」，而 `.json` 属于收录类型——仓里一个 `credentials.json`
+  走界面能读出原文、走 agent 工具反而给不出，等于「模型看不到的密钥，人一点就抄得到」。
+  这里只判目录与名字；软链接复核仍归 `executeReadFile` 那条路（界面给不出链接目标的路径）。
+  */
+export function deniedPathReason(relativePath: string): string | undefined {
+  const segments = relativePath.split("/");
+  if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return "该目录不开放读取";
+  return deniedNameReason(segments[segments.length - 1] ?? "");
+}
+
 export function executeReadFile(repoPath: string, argumentsJson: string): ReadFileOutcome {
   let args: { path?: unknown; offset?: unknown; limit?: unknown };
   try {

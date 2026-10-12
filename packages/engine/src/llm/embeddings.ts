@@ -1,4 +1,5 @@
 import { logLlmCall, outboundFingerprint } from "./call-log.js";
+import { maskSecrets } from "../security/secrets.js";
 
 /**
   检索第四臂用的文本向量化（OpenAI 兼容 `/v1/embeddings`，当前按阿里云百炼 Qwen 通义向量配置）。
@@ -50,7 +51,9 @@ export function createEmbeddingProvider(config: EmbeddingConfig): EmbeddingProvi
     async embed(texts: string[]): Promise<Float32Array[]> {
       const out: Float32Array[] = [];
       for (let offset = 0; offset < texts.length; offset += BATCH_SIZE) {
-        const batch = texts.slice(offset, offset + BATCH_SIZE).map((text) => text.slice(0, MAX_CHARS_PER_ITEM));
+        // 与其余出境路径同一道筛：这批文本里混着 path + 符号名 + 摘要，摘要可能带进疑似密钥。
+        // 产品里的 search_code 不走向量，但 `search:embed` 与评测台架会把整仓切片送出去，那也算出境。
+        const batch = texts.slice(offset, offset + BATCH_SIZE).map((text) => maskSecrets(text.slice(0, MAX_CHARS_PER_ITEM)).text);
         const vectors = await embedBatch(config, batch);
         out.push(...vectors);
       }
@@ -79,7 +82,9 @@ async function embedBatch(config: EmbeddingConfig, batch: string[]): Promise<Flo
   }
   const text = await response.text();
   if (!response.ok) {
-    const message = `embedding 请求失败 ${response.status}：${text.slice(0, 200)}`;
+    // 响应体要留（不然排障只能猜），但**过一遍筛再留**：有些端点会把收到的 input 原样回显在 400 里，
+    // 而 llm.log 是一条会长期留在本机的账——明文密钥进日志和出境一样糟。
+    const message = `embedding 请求失败 ${response.status}：${maskSecrets(text.slice(0, 200)).text}`;
     logLlmCall({ ...base, ok: false, ms: Date.now() - startedAt, error: message });
     throw new Error(message);
   }

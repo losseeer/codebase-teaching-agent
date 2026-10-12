@@ -53,14 +53,24 @@ describe("源码出境清单落账", () => {
     for (const event of list) expect(JSON.stringify(event)).not.toContain(CLEAN_TEXT);
   });
 
-  it("隐去与截断只在发生时报数（缺字段＝扫过且干净，不是没扫）", () => {
+  it("「扫过且干净」与「这道路没扫」是两个读数：masked=0 照样写，缺字段才是不写", () => {
     const repository = fixtureRepository();
-    recordEgress({ repositoryPath: repository, scene: "practice.polish", sources: [source(), source({ path: "src/dirty.ts", text: SECRET_TEXT, masked: 2, truncated: true })] });
+    recordEgress({
+      repositoryPath: repository,
+      scene: "practice.polish",
+      sources: [
+        source({ path: "src/unswept.ts" }), // 装配方没给读数 = 这道路压根没过筛
+        source({ path: "src/clean.ts", masked: 0 }), // 过了筛、零命中——必须留得下这个 0
+        source({ path: "src/dirty.ts", text: SECRET_TEXT, masked: 2, truncated: true })
+      ]
+    });
 
-    const [clean, dirty] = rows(repository);
-    expect(clean?.payload.masked).toBeUndefined();
+    const [unswept, clean, dirty] = rows(repository);
+    expect(unswept?.payload.masked).toBeUndefined();
+    expect(clean?.payload.masked).toBe(0);
     expect(clean?.payload.truncated).toBeUndefined();
     expect(dirty?.payload).toMatchObject({ masked: 2, truncated: true });
+    // 以前 `masked: 0` 会被压成缺字段，报表就只能把「没扫」印成「扫过且干净」（§45：虚报比漏报糟）
     // 被隐去过的段，其正文（含密钥原样）绝不落进审计线
     expect(JSON.stringify(dirty)).not.toContain("sk-abcdefghijklmnop");
   });

@@ -110,12 +110,17 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 数据流审计（企业化第 3 条）：`pnpm dataflow:report -- <被学习仓>` 回答「哪些代码片段流向了哪个 provider」。两条线各答一半，靠 `traceId + scene` 关联——仓内 `.tutor/journal.jsonl` 的 `code_egress` 记**装了哪几段**（路径、行区间、字符数、sha256 前 12 位、隐去处数；**正文一个字都不落**，`.tutor/` 是可随仓带走的东西），`~/.codebase-tutor/llm.log` 每行的 `outbound:{chars,hash}` 记**实际发出的那份载荷指纹**（在 `LoggingLlmProvider` 这个唯一收口算，工具 schema 与描述都算进载荷），外加 provider/model/token/调用方 `actor`。落账点一律贴着「真要发请求」那一侧：本地兜底与预算降级不发（`SummaryProvider.sendsCodeToEndpoint` 表态，漏写编译不过）、缓存命中虽装配一次但不发（装配用出参攒、只有发送处 booking）、外层字符预算裁掉的尾段不发（`recordEgress` 拿待发文本比一遍，不在其中的段不落账）——**虚报出境比漏报更难查**。工具循环 `read_file` 读到的内容不重复登记，报表按「同一 traceId 内的 file_read 也算出境」合并。**这条审计线谁都能读、但只有引擎能写自己的那部分**：`POST /api/repositories/:id/journal` 只受理界面侧那 10 类事件，其余（`file_read` / `code_egress` / `token_usage` / `turn_text` …）一律 400 + `reason: "engine_owned_event"`——否则被审计的一方可以自己填账，报表就白做了。两张写入权表在 shared 里并集即全集，并有编译期对账（加事件却漏归类 ⇒ 报错）。它**不防删改**（`.tutor/journal.jsonl` 是仓内普通文件），防篡改要外部投递或哈希链，那是另一件事。两条读数口径写在报表里：导入与监听刷新没有 traceId，那部分调用的 provider/token 不能按仓归属；只送派生内容（路径/标题/摘要）的场景按设计没有清单，报表末尾点名，「没有清单」与「漏了清单」分得开。
 
 认证层（企业形态才需要，本机默认关）：`~/.codebase-tutor/api-keys.json`（`TUTOR_API_KEYS_FILE` 可改路径）写几张 key 就开闸——
-
 ```json
 { "keys": [{ "name": "CI", "key": "至少 16 字符的随机串", "repositories": ["*"] }] }
 ```
 
-开闸后除 `/api/health` 与 CORS 预检以外，所有 `/api/*` 都要带 `x-api-key` 或 `Authorization: Bearer`，否则 401；`repositories` 是这张 key 能开哪些仓（仓 id 或 `*`），名单外的仓 403、在 `GET /api/repositories` 清单里不出现、懒挂载也轮不到它，跨仓工具（`read_file(repo=)` / `search_code(repo=)` / `cross_repo_link`）对它也不可见——对端仓名连工具 schema 都不进。改 key 不需要重启引擎（按文件 mtime 重读）。**没配文件 = 完全没有闸**，启动日志会明写「认证：未启用」，`/api/health` 的 `auth` 字段同理——这一句是刻意加的：闸门状态不该靠读代码才知道（同 §36.6 那条预算闸门的教训）。带 key 的调用，`actor`（= key 的 `name`）会进 `llm.log` 与 `engine.jsonl` 两条线，按人对账就有抓手。**GUI 带着口令能用**（2026-10-12，§47）：闸门开着时侧栏出现「引擎访问口令」一行（先问一次免鉴权的 `/api/health` 判断闸门状态，真被 401 拒过时也亮出来），存进本浏览器后所有请求——含三处对话流与导入进度事件流——自动带上；导入进度那条已从 `EventSource` 换成 `fetch` 读流 + 自己重连（指数退避），因为那个 API 带不了自定义请求头。⚠️ 存在 localStorage 的口令对同源脚本可读：这是便利性取舍，不是安全存储，真边界仍是引擎侧那份 0600 文件与按仓授权。验证另一台引擎时用 `VITE_ENGINE_ORIGIN` 换 dev 代理目标，不必停手上那个引擎。
+开闸后除 `/api/health` 与 CORS 预检以外，所有 `/api/*` 都要带 `x-api-key` 或 `Authorization: Bearer`，否则 401；`repositories` 是这张 key 能开哪些仓（仓 id 或 `*`），名单外的仓 403、在 `GET /api/repositories` 清单里不出现、懒挂载也轮不到它，跨仓工具（`read_file(repo=)` / `search_code(repo=)` / `cross_repo_link`）对它也不可见——对端仓名连工具 schema 都不进。改 key 不需要重启引擎（按文件 mtime 重读）。
+
+闸门有三档，都从免鉴权的 `/api/health` 的 `auth` 字段读得出（这一句是刻意的：闸门状态不该靠读代码才知道，同 §36.6 那条预算闸门的教训）：`off` = 没有 key 文件，**完全没有闸**，启动日志明写「认证：未启用」；`api-key` = 闸开着；`broken` = 文件在但读不出来（JSON 坏、权限被改、写了口令却全都太短），此时引擎按**拒绝全部**在跑（除健康检查外一律 503），因为「把文件编辑到一半」这几秒钟整机摊开不该是免鉴权。**不受限的 key**（名单是 `*`）才管得了全局的事：改模型配置（`baseUrl`/`apiKey` 一改，别人下一轮的源码就出境到新端点）、发起导入、收算不出归属的推送帧；受限 key 做这些一律 403。「停止生成」按**归属**判：那一轮由哪张 key 发起就只有它停得了（`turn_not_owned`）。`GET /api/events` 的广播**逐帧按 ACL 过滤**——导入进度载荷里带着目标仓的绝对路径，长连接不能因为建立时认证过就整条往外推。带 key 的调用，`actor`（= key 的 `name`）会进 `llm.log` 与 `engine.jsonl` 两条线，按人对账就有抓手。已知边界两条：长连接只在建立时认证一次，撤 key 的生效延迟最多一个心跳（25s，引擎在心跳里复查这张 key 还在不在册，不在就把流关掉）；`scripts/*`（reanalyze / reburn / run-trace）绕过 HTTP 直读 `.tutor`，按设计是本机动作。
+
+**GUI 带着口令能用**（2026-10-12，§47 + §48）：闸门开着时侧栏出现「引擎访问口令」一行（先问一次免鉴权的 `/api/health` 判断闸门状态，真被 401 拒过时也亮出来；`broken` 那一档只报状态不给输入框——填什么都没用，要修的是引擎侧那份文件），存进本浏览器后所有请求——含三处对话流与导入进度事件流——自动带上；导入进度那条已从 `EventSource` 换成 `fetch` 读流（那个 API 带不了自定义请求头），重连自己管：指数退避 1s→2s→4s→8s→16s、20s 封顶，外加一条 75s 空闲看门狗（引擎死了而中间代理还替它挂着连接时，读流永远不报错，只能靠「该有帧却没帧」判死）。GUI 走的全是相对路径（`/api/...`），所以本机的默认部署形态就是**同源**（dev 由 vite 代理转发）；同源下浏览器根本不做跨来源检查，
+「响应带 `access-control-allow-origin`」只在真把界面和引擎拆成两个来源时才有意义——那种形态现在没有入口（要加一个引擎地址开关才行），
+本轮只用一次性探针页验过机制，不声称 GUI 可以直接跨来源跑。⚠️ 存在 localStorage 的口令对同源脚本可读：这是便利性取舍，不是安全存储，真边界仍是引擎侧那份 0600 文件与按仓授权。验证另一台引擎时用 `VITE_ENGINE_ORIGIN` 换 dev 代理目标，不必停手上那个引擎。
 
 常用命令：
 

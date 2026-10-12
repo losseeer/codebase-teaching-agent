@@ -762,6 +762,81 @@ describe("API key 认证与按仓授权", () => {
     expect((refused.json() as { reason?: string }).reason).toBe("unauthorized");
   });
 
+  it("口令文件坏掉 = 闸门关死（503），不是退回免鉴权；/api/health 照样能报出这一档", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    writeFileSync(keysFile, '{ "keys": [ 少个括号\n', "utf8");
+    const stamp = new Date(Date.now() + 3_000);
+    utimesSync(keysFile, stamp, stamp);
+
+    // 这一档以前按「没配 key」放行：把文件编辑到一半这几秒钟，地址簿里所有仓对任何本机进程摊开
+    const refused = await call("GET", `/api/repositories/${repositoryId}/index`);
+    expect(refused.statusCode).toBe(503);
+    expect((refused.json() as { reason?: string }).reason).toBe("auth_store_unreadable");
+    expect((await call("POST", "/api/imports", undefined, { path: peerDir })).statusCode).toBe(503);
+    const health = await call("GET", "/api/health");
+    expect(health.statusCode).toBe(200); // 探活不能被闸拦住，否则进程管理器只会把它当死进程重启
+    expect((health.json() as { auth?: string }).auth).toBe("broken");
+
+    // 修好就自动恢复（按 mtime 重读，不必重启）
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+    expect((await call("GET", "/api/repositories", FULL_KEY)).statusCode).toBe(200);
+  });
+
+  it("全局模型配置只归不受限的 key：受限 key 连读都读不到，更改不了别人的出境端点", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    mkdirSync(peerDir, { recursive: true });
+    writeKeys([
+      { key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] },
+      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
+    ]);
+    const put = (key?: string) => app.inject({
+      method: "PUT",
+      url: "/api/llm/settings",
+      ...(key ? { headers: { "x-api-key": key } } : {}),
+      payload: { baseUrl: "http://127.0.0.1:9/v1" }
+    });
+
+    // `baseUrl` 一改，别人接下来那一轮的源码就发到了新端点——按仓授权表达不了这个能力
+    const lockedGet = await call("GET", "/api/llm/settings", LOCKED_KEY);
+    expect(lockedGet.statusCode).toBe(403);
+    expect((lockedGet.json() as { reason?: string }).reason).toBe("settings_not_granted");
+    expect((await put(LOCKED_KEY)).statusCode).toBe(403);
+    expect((await put()).statusCode).toBe(401);
+    expect((await call("GET", "/api/llm/settings", FULL_KEY)).statusCode).toBe(200);
+    expect((await put(FULL_KEY)).statusCode).toBe(200);
+  });
+
+  it("源码路由与 read_file 同一份拒读名单：仓里的凭据文件走界面也给不出原文", async () => {
+    // 以前这条只问「在不在索引里」，而 `.json` 属于收录类型——模型看不到的密钥，人一点就抄得到
+    process.env.TUTOR_API_KEYS_FILE = keysFile; // 闸门关着，判的是名单不是授权
+    writeFileSync(join(repoDir, "credentials.json"), '{"aws_access_key_id":"AKIAEXAMPLESECRET"}\n', "utf8");
+    writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-this-secret-must-not-be-served\n", "utf8");
+    for (const path of ["credentials.json", ".env"]) {
+      const response = await call("GET", `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=1`);
+      expect(response.statusCode, path).toBe(404);
+      expect((response.json() as { error?: string }).error, path).toContain("不开放读取");
+      expect(response.payload, path).not.toContain("must-not-be-served");
+    }
+  });
+
+  it("按 id 定位会话/线程：名单外的仓连库都不开，错误体也不报别人的仓 id", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    // 线程真的存在（就建在本仓），但这张 key 只授权一个与此无关的 id
+    const threadId = await newThread("map", "别人的线程");
+    writeKeys([
+      { key: LOCKED_KEY, name: "只读别处", repositories: ["repo_not_this_one"] },
+      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
+    ]);
+
+    const messages = await call("GET", `/api/threads/${threadId}/messages`, LOCKED_KEY);
+    expect(messages.statusCode).toBe(404);
+    // 以前这里回 403 并把「这张 key 没有仓库 <id> 的访问权」写进错误体——那等于替探测者确认了线程存在、还报出它属于谁家
+    expect(messages.payload).not.toContain(repositoryId);
+    expect((messages.json() as { reason?: string }).reason).not.toBe("repository_not_granted");
+    // 同一条线程在授权 key 那里照常读得到（404 不是「线程真没了」）
+    expect((await call("GET", `/api/threads/${threadId}/messages`, FULL_KEY)).statusCode).toBe(200);
+  });
+
   it("身份进账：带 key 的回合里两条日志线都记到 actor（企业侧按人对账的抓手）", async () => {
     process.env.TUTOR_API_KEYS_FILE = keysFile;
     process.env.TUTOR_ENGINE_LOG = join(root, "engine-auth.jsonl"); // 本文件其余用例都是 "off"，这条要真落盘才验得到

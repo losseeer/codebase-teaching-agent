@@ -11,18 +11,21 @@ import { clearEngineKey, getEngineAuth, setEngineKey, subscribeEngineAuth } from
   所以能在第一次失败之前就问出闸门状态。真被 401 拒过时（口令错了或引擎换了 key），
   `unauthorized` 也会把它亮出来，不用刷新页面。
 
+  闸门有三档，第三档必须单独说话：`broken` = 引擎那份 key 文件读不出来，此时它按「拒绝全部」在跑（503）。
+  这一档**不是**「闸没开」，让用户去改口令是误导——要修的是引擎侧那个文件。
+
   存储与暴露面写在这里免得以后当惊喜：口令进 `localStorage`，同源任意脚本可读，
   这是「本机/内网工具」的取舍，真边界在引擎侧那份 0600 的 key 文件与按仓授权（开发日志 §44）。
   */
 export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; onExpand: () => void }): ReactElement | null {
   const auth = useSyncExternalStore(subscribeEngineAuth, getEngineAuth, getEngineAuth);
-  const [gateOn, setGateOn] = useState(false);
+  const [gate, setGate] = useState<"off" | "api-key" | "broken">("off");
   const [draft, setDraft] = useState("");
 
   useEffect(() => {
     let alive = true;
     const probe = (): void => {
-      void api.health().then((health) => { if (alive) setGateOn(health.auth === "api-key"); }).catch(() => { /* 连不上引擎时不猜闸门状态，保持原样 */ });
+      void api.health().then((health) => { if (alive) setGate(health.auth ?? "off"); }).catch(() => { /* 连不上引擎时不猜闸门状态，保持原样 */ });
     };
     probe();
     window.addEventListener("online", probe);
@@ -30,6 +33,7 @@ export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; on
   }, []);
 
   const explain = "这台引擎开了认证闸门：除健康检查外，所有接口都要带访问口令（引擎侧 ~/.codebase-tutor/api-keys.json 里配）。口令存在本浏览器的 localStorage，同源脚本可读——真边界在引擎那份文件与按仓授权，不在这里。";
+  const brokenExplain = "引擎读不出自己的口令文件（api-keys.json：格式坏了、权限被改，或写了口令却全都太短），现在按「拒绝全部」在跑。这边填什么都没用，要修的是引擎侧那份文件。";
 
   /** 换口令 = 整页重载一次：界面各处数据都是在挂载时取的，不重载就会停在「刚才那批 401」上。 */
   const commit = (value: string): void => {
@@ -38,6 +42,17 @@ export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; on
     window.location.reload();
   };
 
+  if (gate === "broken") {
+    // 只报状态、不给输入框：递一个注定无效的框，比不递更糟（用户会反复改口令）
+    return (
+      <div className="engine-key">
+        <span className="nav-label">引擎口令文件坏了</span>
+        <span className="nav-label" title={brokenExplain}>现在谁都不放行</span>
+      </div>
+    );
+  }
+
+  const gateOn = gate === "api-key";
   if (!gateOn && !auth.unauthorized && !auth.key) return null;
   if (collapsed) {
     // 收起态只留一枚钥匙：点它展开侧栏去填，而不是把输入框挤成 44px

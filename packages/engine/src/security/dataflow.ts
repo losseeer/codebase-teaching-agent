@@ -76,7 +76,9 @@ export function recordEgress(input: { repositoryPath: string; scene: string; ses
       lines: `${source.from}-${source.to}`,
       chars: source.text.length,
       hash: hash(source.text).slice(0, 12),
-      ...(source.masked ? { masked: source.masked } : {}),
+      // `masked: 0` 必须照样写下去：**「扫过、零命中」和「这道路压根没扫」是两个读数**，
+      // 把它们压成同一个缺省值，报表就会把没扫过的说成干净的（§45：虚报比漏报糟）。
+      ...(source.masked === undefined ? {} : { masked: source.masked }),
       ...(source.truncated ? { truncated: true } : {})
     }, input.sessionId);
   }

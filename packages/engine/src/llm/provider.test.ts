@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
+import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, screenOutbound, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
 /** 构造一个 OpenAI chat.completions 形状的响应。 */
 function jsonResponse(payload: unknown): Response {
@@ -17,6 +17,34 @@ afterEach(() => {
 });
 
 describe("OpenAICompatibleProvider", () => {
+  it("出境前的总闸口：装配点漏筛的密钥在发送边被隐去，请求体里不留明文", async () => {
+    let raw = "";
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      raw = String(init?.body);
+      return jsonResponse(chatBody("ok", "stop"));
+    }) as typeof fetch;
+    const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
+    // 出题那条路以前就是裸 readFileSync 拼原文；这道闸防的正是「新增装配路径忘了过筛」
+    await provider.complete({
+      system: "你是代码教学产品",
+      messages: [{ role: "user", content: "const awsKey = \"AKIAIOSFODNN7EXAMPLE\";" }]
+    });
+    expect(raw).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(raw).toContain("已隐去");
+  });
+
+  it("screenOutbound：没命中密钥时原样返回同一个对象（缓存前缀不能因为过筛而逐次变）", () => {
+    const clean = { system: "系统", user: "这一段没有任何密钥形态的串" };
+    expect(screenOutbound(clean)).toBe(clean);
+    const dirty = { system: "系统", user: "token = sk-abcdefghijklmnopqrstuvwxyz0123456789" };
+    const screened = screenOutbound(dirty);
+    expect(screened).not.toBe(dirty);
+    expect(screened.user).not.toContain("sk-abcdefghijklmnopqrstuvwxyz0123456789");
+    // 已经筛过的再过一次必须完全不动：掩码串不会被二次命中
+    expect(screenOutbound(screened)).toBe(screened);
+  });
+
+
   it("max_tokens 加上推理余量（默认 6000）", async () => {
     let captured: Record<string, unknown> | undefined;
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {

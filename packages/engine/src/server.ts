@@ -20,19 +20,19 @@ import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/importer.js";
 import { indexRepository } from "./indexer/indexer.js";
-import { id, isWithin, turnTextPayload } from "./lib.js";
+import { id, isWithin, repositoryId as deriveRepositoryId, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./tutor-settings/tutor-settings.js";
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
-import { allowsRepository, authEnabled, authenticate, loadApiKeys, presentedKey, type AuthResult } from "./security/api-keys.js";
+import { allowsRepository, authenticate, authStateOf, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn } from "./turns/registry.js";
-import { dedupeFileReads } from "./source/read-file.js";
+import { dedupeFileReads, deniedPathReason } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
 import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } from "./eval/scorers.js";
@@ -92,8 +92,12 @@ app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, d
     所以不在名单里的仓连懒挂载都不会发生——不读它的 `.tutor`、不开它的 fs 监听。
   - 越权回 **403 而不是 404**：这是自托管的学习工具，不是多租户公共服务，
     「这张 key 没有这个仓」是用户能自己处置的读数；伪装成不存在只会挡住配 key 的那个人。
-  - URL 里没有 `:repositoryId` 的路由（会话 / 线程 / 导入）在各自 handler 里用同一个 `granted()` 判，
-    判定口径只有一处，别在路由里各写一份 `includes`。
+  - **口令文件读不出来 = 闸关死（503），不是退回免鉴权**。这一档以前按「没配 key」放行，
+    等于「把 api-keys.json 编辑到一半」这几秒钟里整机对所有本机进程摊开；修文件是几秒钟的事，源码泄出去收不回来。
+  - URL 里没有 `:repositoryId` 的路由在各自 handler 里补判，口径仍只有一处（`granted` / `grantedTo`）：
+    会话与线程按 id 定位到所属仓后判（越权 403）；`/api/imports/:jobId` 判的是**任务自己带的归属**
+    （`targetOf(job)`——id 还没算出来时按路径算同一个，算不出就只给不受限的 key）。
+  - 「停止生成」按**归属**判而不是按仓：那一轮由哪张 key 发起的，只有它停得了（`turn_not_owned`）。
   */
 declare module "fastify" {
   interface FastifyRequest {
@@ -104,9 +108,28 @@ declare module "fastify" {
 
 const AUTH_EXEMPT_PATHS = new Set(["/api/health"]);
 
+/**
+  闸门状态入账：开机报一次，运行期**只在状态变化时**再报。
+  坏文件期间每个请求都 503，逐条记会把 engine.jsonl 淹掉；但「闸从哪一刻开始拦所有人」必须有一条查得着的线。
+  */
+let gateAnnounced: AuthState | undefined;
+function announceGate(state: AuthState, keys = 0): void {
+  if (gateAnnounced === state) return;
+  gateAnnounced = state;
+  traceEngine(state === "broken" ? "degrade" : "boot", { what: "auth_gate", state, keys }, { traceId: null });
+}
+
 app.addHook("onRequest", async (request, reply) => {
-  if (!authEnabled()) return;
+  const state = authStateOf();
+  // `broken` 走的是 fail-closed：口令文件在场却读不出来（JSON 编辑到一半、权限被改、写了 key 却全是短 key），
+  // 一律按「闸是关着的、谁都不放行」处理，而不是退回免鉴权。这条路上除了健康检查全是 503，
+  // 因为把闸静默打开等于把地址簿里所有仓的源码对任何本机进程摊开——修文件是几秒钟的事，泄出去收不回来。
+  if (state === "off") return;
   if (request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
+  if (state === "broken") {
+    announceGate("broken");
+    return reply.code(503).send({ error: `口令文件（${process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json"}）读不出来：闸门按「拒绝全部」处理，请修好这份文件。`, reason: "auth_store_unreadable" });
+  }
   const auth = authenticate(presentedKey(request.headers["x-api-key"], request.headers.authorization));
   if (!auth) return reply.code(401).send({ error: "缺少或无效的 API key：请求头带 x-api-key 或 Authorization: Bearer <key>。", reason: "unauthorized" });
   request.auth = auth;
@@ -116,6 +139,17 @@ app.addHook("onRequest", async (request, reply) => {
     return reply.code(403).send({ error: `这张 key（${auth.name}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
   }
 });
+
+/**
+  不受限的 key（名单是 `*`，或闸门没开 = 没有身份）。
+  三件事都归它，而且是同一个理由——**这些能力的效果落在所有仓之外**：
+  - 导入：读任意磁盘路径、造出一个此前无从授权的仓 id；
+  - 改 LLM 设置：`baseUrl`/`apiKey` 是**全局**的，受限 key 把它一改，别人这一轮发的源码就出境到了新端点；
+  - 收无归属的推送帧：算不出属于哪个仓的那一帧，发给谁都是赌。
+  */
+function unrestricted(request: FastifyRequest): boolean {
+  return !request.auth || request.auth.repositories.includes("*");
+}
 
 /** 授权判定：本机模式（无身份）放行；有身份时按这张 key 的 `repositories` 名单。 */
 function granted(request: FastifyRequest, repositoryId: string | undefined): boolean {
@@ -134,7 +168,7 @@ function forbidden(request: FastifyRequest, reply: FastifyReply, repositoryId: s
 
 /** 导入会读任意磁盘路径、并造出一个此前无法授权的仓 id，所以只放行未受限的 key。 */
 function mayImport(request: FastifyRequest): boolean {
-  return !request.auth || request.auth.repositories.includes("*");
+  return unrestricted(request);
 }
 
 app.addHook("onResponse", (request, reply, done) => {
@@ -184,10 +218,15 @@ const teachingStates = new Map<string, TutorSession>();
   09-27 起真源是这两张表，journal 重放（旧 harness/restore.ts）退役：审计线继续按自己的口径记截断摘要，
   但「接着聊」不该依赖审计摘要的 2000 字截断。
   */
-function resolveTeachingState(sessionId: string): TutorSession | undefined {
+function resolveTeachingState(sessionId: string, auth?: AuthResult): TutorSession | undefined {
   const live = teachingStates.get(sessionId);
-  if (live) return live;
+  // 内存命中也要过同一道名单：缓存里躺着的可能正是别人的会话（上一回合由另一张 key 装配进来），
+  // 直接返回就等于绕过了下面那句「先看名单再开库」。
+  if (live && (!auth || allowsRepository(auth, live.repositoryId))) return live;
   for (const repository of importer.mountedRepositories()) {
+    // 授权判定在 IO 之前：不这样排，一张只授权 A 仓的 key 拿别人的 sessionId 来试，
+    // 就能依次打开每个仓的 chat_session 并把命中与否从 403/404 的差异里读出来（存在性 oracle）。
+    if (auth && !allowsRepository(auth, repository.index.repositoryId)) continue;
     const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
     if (restored) {
       teachingStates.set(restored.id, restored);
@@ -231,8 +270,35 @@ function persistTeachingTurn(repositoryPath: string, repositoryId: string, cours
 }
 
 
-/** 全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。 */
-const subscribers = new Set<(event: ServerEvent) => void>();
+/**
+  全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。
+  一路订阅连着它的**身份**一起存：这条流是常开连接，onRequest 那道按 URL 判的 ACL 够不到后来的每一帧。
+  */
+const subscribers = new Set<{ send: (event: ServerEvent) => void; request: FastifyRequest }>();
+
+/** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
+const EVENT_STREAM_PING_MS = 25_000;
+
+/** 这一帧/这个任务归哪个仓：job 刚建出来时 id 还没算，回落用路径算同一个 id。 */
+function targetOf(payload: { repositoryId?: unknown; repositoryPath?: unknown }): string | undefined {
+  return typeof payload.repositoryId === "string" ? payload.repositoryId
+    : typeof payload.repositoryPath === "string" ? deriveRepositoryId(payload.repositoryPath) : undefined;
+}
+
+/** 归属算不出来时的门槛：只给不受限的 key（与「它能不能开导入」是同一条线）。 */
+function grantedTo(request: FastifyRequest, target: string | undefined): boolean {
+  return target ? granted(request, target) : unrestricted(request);
+}
+
+/**
+  这一帧能不能发给这个连接。
+  被拦下的事故很具体：`import.progress` 的载荷是整个 job，里面带着目标仓的**绝对路径**；
+  `repository.updated` 带着**被改动的文件名**。HTTP 侧每个 `:repositoryId` 都过了 `granted`，
+  这条长连接要是整条广播出去，受限 key 就从推送里读到了名单外仓的存在与结构。
+  */
+function visibleTo(request: FastifyRequest, event: ServerEvent): boolean {
+  return grantedTo(request, targetOf(event.payload));
+}
 
 /**
   广播：某一路订阅者写不进去（它的连接刚被掐掉）是它自己那一路的事，摘掉就好。
@@ -241,26 +307,52 @@ const subscribers = new Set<(event: ServerEvent) => void>();
   删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
   */
 function broadcast(event: ServerEvent): void {
-  for (const subscriber of subscribers) {
+  for (const client of subscribers) {
+    if (!visibleTo(client.request, event)) continue;
     try {
-      subscriber(event);
+      client.send(event);
     } catch {
-      subscribers.delete(subscriber);
+      subscribers.delete(client);
       traceEngine("degrade", { what: "sse_subscriber_dropped" });
     }
   }
 }
 
 /**
-  SSE 单帧写出器：`/api/events` 与三条对话流式路由共用。
+  SSE 单帧写出（四处出口共用的一条判据）。
   判 `destroyed` 不只看 `writableEnded`：客户端硬断（关页面、切走）时 `writableEnded` 仍是 false，
   这时 write 会抛——四条出口是一条判据，分开写迟早只改一处（10-06 复审就是这么发现广播会崩导入的）。
   */
+function sseFrame(reply: FastifyReply, frame: string): void {
+  if (reply.raw.writableEnded || reply.raw.destroyed) return;
+  reply.raw.write(frame);
+}
+
 function sseWriter(reply: FastifyReply): (event: unknown) => void {
-  return (event) => {
-    if (reply.raw.writableEnded || reply.raw.destroyed) return;
-    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
+  return (event) => sseFrame(reply, `data: ${JSON.stringify(event)}\n\n`);
+}
+
+/**
+  建立 SSE：写头 + **立刻发一帧注释把响应头推到网路上**。
+  只调 `writeHead` 时 Node 把头部留在缓冲区，客户端要等到第一个 `data:` 帧才拿得到响应。
+  10-12 实测：空转的 `/api/events` 三秒收到 0 字节——本机直连只是「看起来连着」，
+  而共享部署那层反向代理（nginx 默认 `proxy_read_timeout` 60s）会把这种「有连接、零字节」的上游直接掐掉，
+  界面就退回「导入进度停在 0%，任务其实跑完了」那一档。
+  `:` 开头在 SSE 规范里是注释，任何解析器都跳过；读流循环只认 `data: ` 行，所以这一帧不带语义。
+
+  头里还必须自己带上 CORS：`hijack()` 之后响应不再经 `@fastify/cors` 收尾，
+  跨来源部署的浏览器一帧都读不到（与 §47 那个钩子顺序是同一类事故）。
+  */
+function openSseStream(request: FastifyRequest, reply: FastifyReply): (event: unknown) => void {
+  const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
+  reply.raw.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {})
+  });
+  sseFrame(reply, ": open\n\n");
+  return sseWriter(reply);
 }
 
 function repositoryOr404(repositoryId: string) {
@@ -484,6 +576,9 @@ importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
   const llm = teachingProviderStatus(teachingProvider);
+  // 三档如实报：`off` = 没配 key 文件（本机默认形态）；`api-key` = 闸开着；
+  // `broken` = 文件在但读不出来，此时引擎按「拒绝全部」处理——界面与进程管理器都要能分清这三档。
+  const gate = authStateOf();
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
     // 摘要档由真源工厂报出：直接读 TUTOR_SUMMARY_PROVIDER 会把「没设环境变量 = 走轻量档」说成 "local"，
@@ -492,8 +587,7 @@ app.get("/api/health", async () => {
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
     agentLoop: actionLoopEnabled,
-    // 闸到底是开着还是只是「有这层代码」：`off` = 没配 key 文件，本机默认形态
-    auth: authEnabled() ? "api-key" : "off"
+    auth: gate === "on" ? "api-key" : gate
   };
 });
 
@@ -520,11 +614,21 @@ function llmSettingsPayload(): Record<string, unknown> {
   };
 }
 
-/** GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明） */
-app.get("/api/llm/settings", async () => llmSettingsPayload());
+/**
+  GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明）。
+  这一份配置是**全局**的（服务商/端点/密钥影响每一次出境），所以只给不受限的 key；
+  受限 key 拿到它没有用处，但它是「别人这一轮的源码发去哪儿」的读数——共享部署下这算管理面。
+  */
+app.get("/api/llm/settings", async (request, reply) => {
+  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，模型配置由不受限的 key 管理。`, reason: "settings_not_granted" });
+  return llmSettingsPayload();
+});
 
 /** GUI 运行时 LLM 设置：更新服务商/模型/端点/密钥/思考档位，立即重建 provider 并落盘（留空 = 回落 .env） */
 app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
+  // 写在读之前同一道闸：`baseUrl` 一改，**所有人**接下来那一轮的源码就出境到新端点了。
+  // 按仓授权天然表达不了这个能力，所以它不属于任何单仓 key（口径见 `unrestricted`）。
+  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，改不了全局模型配置：改端点等于替别人的回合决定源码发到哪儿。`, reason: "settings_not_granted" });
   const body = request.body ?? {};
   if (body.thinking !== undefined && !(THINKING_EFFORTS as readonly string[]).includes(body.thinking)) {
     return reply.code(422).send({ error: `thinking 只支持 ${THINKING_EFFORTS.join(" / ")}` });
@@ -571,13 +675,32 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
   return llmSettingsPayload();
 });
 
-app.get("/api/events", async (_request, reply) => {
-  // SSE 替代原 /ws：EventSource 自带断线自动重连，浏览器兼容面与普通 HTTP 一致
+app.get("/api/events", async (request, reply) => {
+  // 全局推送流（导入进度这类无请求边界的推送）；对话回放走各自请求的 SSE 响应流。
+  // 断线重连由前端 `subscribeServerEvents` 自己管（fetch 读流才能带口令头，见 §47）。
   reply.hijack();
-  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const subscriber = sseWriter(reply);
-  subscribers.add(subscriber);
-  reply.raw.on("close", () => subscribers.delete(subscriber));
+  const client = { send: openSseStream(request, reply), request };
+  subscribers.add(client);
+  // 心跳：这条例外是「订阅之后可能永远没有第一个事件」——没人导入、没人改仓时连接整天空着。
+  // 注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前就从写入失败里察觉连接已死。
+  const ping = setInterval(() => {
+    // 心跳顺带办第二件事：**撤掉的 key 不能靠已建起来的连接继续收帧**。
+    // 长连接只在建立时认证过一次，口令按 mtime 热更新（改了文件就立刻生效）——
+    // 没有这一条，「把这张 key 收回」对已经打开的界面是完全无效的，直到用户自己刷新。
+    // 名字是唯一还能对上的东西（连接里不留口令明文），所以按名字判。
+    const name = request.auth?.name;
+    if (name && !stillIssued(name)) {
+      clearInterval(ping);
+      subscribers.delete(client);
+      if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.end();
+      return;
+    }
+    sseFrame(reply, ": ping\n\n");
+  }, EVENT_STREAM_PING_MS);
+  reply.raw.on("close", () => {
+    clearInterval(ping);
+    subscribers.delete(client);
+  });
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
@@ -589,7 +712,10 @@ app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imp
 
 app.get<{ Params: { jobId: string } }>("/api/imports/:jobId", async (request, reply) => {
   const job = importer.getJob(request.params.jobId);
-  return job ?? reply.code(404).send({ error: "导入任务不存在" });
+  if (!job) return reply.code(404).send({ error: "导入任务不存在" });
+  // 任务体带着目标仓的绝对路径与逐阶段文案——导入本身只由不受限的 key 发起，查询也按同一道门槛收
+  if (!grantedTo(request, targetOf(job))) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）没有这个导入任务所属仓库的访问权。`, reason: "repository_not_granted" });
+  return job;
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/index", async (request, reply) => {
@@ -953,10 +1079,16 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
     为什么单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动/刷新页面——
     后者引擎必须把这一轮**算完并落库**，用户回来才有账可补（见 turns/registry.ts）。
-    未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。 */
+    未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。
+    这一轮是别人的 = 回 403：它能掐掉他人正在烧的 token，共享部署下不能谁有 key 都能按。 */
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
-  const stopped = abortTurn(request.body?.turnId);
-  if (!stopped.aborted) return reply.code(404).send({ stopped: false });
+  const stopped = abortTurn(request.body?.turnId, request.auth?.name);
+  if (!stopped.aborted) {
+    if (stopped.reason === "forbidden") {
+      return reply.code(403).send({ stopped: false, error: `这一轮（${stopped.scene}）不是这张 key 发起的，停不了。`, reason: "turn_not_owned" });
+    }
+    return reply.code(404).send({ stopped: false });
+  }
   traceEngine("turn_stop", { scene: stopped.scene, turn_id: stopped.turnId, waited_ms: stopped.waitedMs });
   return { stopped: true, scene: stopped.scene };
 });
@@ -974,9 +1106,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   reply.hijack();
-  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = sseWriter(reply);
-  const turnHandle = beginTurn(request.body?.turnId, "map_chat");
+  const send = openSseStream(request, reply);
+  const turnHandle = beginTurn(request.body?.turnId, "map_chat", request.auth?.name);
   const crossFiles = new Map<string, number>();
   try {
     const result = await mapChat({
@@ -1054,9 +1185,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   const { history, earlierQuestions } = threadScopedHistory(repository.path, thread?.id);
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
   reply.hijack();
-  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = sseWriter(reply);
-  const turnHandle = beginTurn(request.body?.turnId, "practice_chat");
+  const send = openSseStream(request, reply);
+  const turnHandle = beginTurn(request.body?.turnId, "practice_chat", request.auth?.name);
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
@@ -1112,6 +1242,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { path?: string; line?:
   // 先判边界、再判收录：越界是「请求本身不合法」(400)，未收录是「这个文件我不给」(404)，两种失败界面要能分开
   const absolute = join(repository.path, requestedPath);
   if (!isWithin(repository.path, absolute)) return reply.code(400).send({ error: "源码路径越出仓库边界" });
+  // 名单闸与 `read_file` 共用一份判据：`credentials.json`、`.env`、`*.pem` 这些即便被索引收录也不给原文。
+  const denied = deniedPathReason(requestedPath);
+  if (denied) return reply.code(404).send({ error: `该文件不开放读取：${denied}` });
   if (!repository.index.files.some((file) => file.path === requestedPath)) return reply.code(404).send({ error: "该文件不在本仓索引里（未收录的类型与密钥/凭据文件不提供源码）" });
   // line 是给界面定位用的：非数字/负数按 1，不能把 NaN 回出去（JSON 里会变成 null）
   const line = Number(request.query.line ?? 1);
@@ -1212,7 +1345,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
-  const session = resolveTeachingState(request.params.sessionId);
+  const session = resolveTeachingState(request.params.sessionId, request.auth);
   const denied = forbidden(request, reply, session?.repositoryId);
   if (denied) return denied;
   return session ?? reply.code(404).send({ error: "会话不存在" });
@@ -1241,13 +1374,17 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   ⚠️ 这里**刻意不挂回该仓**：三条路由要的只是库路径与仓 id（id 就写在线程行上），
   挂回来反而会把「产物读不动」误报成「会话没了」，还为一次读历史付一趟挂载的代价。
   */
-function locateThread(threadId: string): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
+function locateThread(threadId: string, auth?: AuthResult): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
+  // 与 `resolveTeachingState` 同一口径：**先看名单再开库**，越权的探测不该在磁盘上留下「开过哪个仓」的痕迹，
+  // 也不该从 403/404 的差异里回读出「这个线程 id 属于你家某个仓」。
+  const permitted = (repositoryId: string): boolean => !auth || allowsRepository(auth, repositoryId);
   for (const repository of importer.mountedRepositories()) {
+    if (!permitted(repository.index.repositoryId)) continue;
     const thread = getThread(repository.path, threadId);
     if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
   }
   for (const entry of importer.catalog()) {
-    if (entry.mounted || !entry.exists) continue;
+    if (entry.mounted || !entry.exists || !permitted(entry.repositoryId)) continue;
     const thread = getThread(entry.repositoryPath, threadId);
     if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
   }
@@ -1282,7 +1419,7 @@ app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; nodeId?: u
 
 /** 线程正文（产品线）：GUI 刷新或引擎重启后按 threadId 取回对话展示。软删线程一律 404（读侧恒带 `deleted_at IS NULL`）。 */
 app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
-  const located = locateThread(request.params.threadId);
+  const located = locateThread(request.params.threadId, request.auth);
   const denied = forbidden(request, reply, located?.repositoryId);
   if (denied) return denied;
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
@@ -1290,7 +1427,7 @@ app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", asy
 });
 
 app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/threads/:threadId", async (request, reply) => {
-  const located = locateThread(request.params.threadId);
+  const located = locateThread(request.params.threadId, request.auth);
   const denied = forbidden(request, reply, located?.repositoryId);
   if (denied) return denied;
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
@@ -1305,7 +1442,7 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
   同时从内存 Map 摘掉教学会话——否则删掉的会话还能被同进程继续聊，重启后又消失，行为会分成两段。
   */
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
-  const located = locateThread(request.params.threadId);
+  const located = locateThread(request.params.threadId, request.auth);
   const denied = forbidden(request, reply, located?.repositoryId);
   if (denied) return denied;
   if (!located || !softDeleteThread(located.repositoryPath, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
@@ -1315,7 +1452,7 @@ app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (re
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
-  const current = resolveTeachingState(request.params.sessionId);
+  const current = resolveTeachingState(request.params.sessionId, request.auth);
   // 判在 markThread 与任何 LLM 调用之前：越权的一回合 token 都不该烧出去
   const denied = forbidden(request, reply, current?.repositoryId);
   if (denied) return denied;
@@ -1343,9 +1480,8 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
   // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流，不再走全局广播（事件天然按请求隔离，连接断开自动清理）
   reply.hijack();
-  reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const send = sseWriter(reply);
-  const turnHandle = beginTurn(request.body?.turnId, "teach");
+  const send = openSseStream(request, reply);
+  const turnHandle = beginTurn(request.body?.turnId, "teach", request.auth?.name);
   const crossFiles = new Map<string, number>();
   try {
     const outcome = await respondWithProvider(session, node, request.body.content.trim(), gate.degraded ? undefined : teachingProvider, faded, repository.path, {
@@ -1484,9 +1620,12 @@ if (!process.env.VITEST) {
   tboot("listening");
   // 认证闸的开关是「key 文件里有没有可用 key」：没有就是**完全没有闸**，任何本机进程都能读写这些仓。
   // 这一句和下面预算闸门那条同一条纪律——有闸门的名字就必须让闸门的状态看得见（§36.6）。
+  // 三档都得看得见，尤其 `broken`：那不等于「没闸」，而是「闸现在拦所有人」。
+  const gate = authStateOf();
   const keyCount = loadApiKeys().length;
-  console.log(`[engine] 认证：${keyCount ? `已启用（${keyCount} 张 key，${process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json"}）` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
-  traceEngine("boot", { what: "auth_gate", state: keyCount ? "on" : "off", keys: keyCount }, { traceId: null });
+  const file = process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json";
+  console.log(`[engine] 认证：${gate === "on" ? `已启用（${keyCount} 张 key，${file}）` : gate === "broken" ? `**口令文件读不出来（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503，请把这份文件修好` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
+  announceGate(gate, keyCount);
   // 预算闸门的开关是「三档单价配了没有」：一个都没配时所有付费分支照常放行、一声不吭。
   // 这属于运行期降级（有闸门名没有闸门），必须落在账面上看得见，而不是等人自己发现账单。
   const gateNotice = budgetGateNotice();

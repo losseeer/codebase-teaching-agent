@@ -29,6 +29,8 @@ interface EgressRow {
   path: string;
   lines: string;
   chars: number;
+  /** 这一段自己的哈希前 12 位（`--json` 带出来，供本地重跑同一次装配逐段比）；tool-read 那档没有 = 无从比 */
+  hash: string | undefined;
   masked: number;
   /** 这一段有没有「隐去」这个读数可说：`false` = 那行写于 §43 上线之前，缺字段不等于扫过且干净 */
   maskedRecorded: boolean;
@@ -69,6 +71,9 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
   for (const event of events) {
     if (event.type === "code_egress") {
       const chars = Number(scalarOf(event, "chars") ?? 0);
+      // `masked` 这一格现在由落账方**总是**写（0 = 扫过且干净）；缺字段就是「那一路没扫」或写于今天之前，
+      // 二者都不能读成干净——这正是 `maskedRecorded` 存在的全部理由。
+      const maskedValue = scalarOf(event, "masked");
       rows.push({
         at: event.at,
         scene: String(scalarOf(event, "scene") ?? "未记"),
@@ -76,8 +81,11 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
         path: String(scalarOf(event, "path") ?? "未记"),
         lines: String(scalarOf(event, "lines") ?? "未记"),
         chars: Number.isFinite(chars) ? chars : 0,
-        masked: Number(scalarOf(event, "masked") ?? 0) || 0,
-        maskedRecorded: true,
+        // 落账方算的是**这一段文本**的哈希；`llm.log` 的 `outbound.hash` 是整串请求体的哈希，
+        // 两者没有包含关系，只能「本地重跑同一次装配、比那一段自己」——报表末尾那句核对就是这么写的
+        hash: typeof scalarOf(event, "hash") === "string" ? String(scalarOf(event, "hash")) : undefined,
+        masked: Number(maskedValue ?? 0) || 0,
+        maskedRecorded: typeof maskedValue === "number",
         truncated: event.payload.truncated === true,
         traceId: event.traceId ?? null,
         sessionId: event.sessionId ?? null,
@@ -98,6 +106,9 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
       lines: `${lines} 行`,
       // file_read 那行记的是行数不是字符数：这一格留 0（报表里显示为「未量」），不编一个字符数
       chars: 0,
+      // 工具循环那一档没有「这一段文本」的哈希可记（内容当时就进了下一轮请求，不在 journal 里），
+      // 所以它不参与「比哈希」的核对——只有 code_egress 那段能逐段重跑比对
+      hash: undefined,
       masked: Number(scalarOf(event, "masked") ?? 0) || 0,
       maskedRecorded: event.at >= MASKED_SINCE,
       truncated: event.payload.truncated === true,
@@ -174,12 +185,21 @@ function main(): void {
     console.log(`（${repoPath}/.tutor/journal.jsonl 为空或不存在——这个仓还没有任何出境记录可查。）`);
     return;
   }
-  const rows = egressRowsOf(events);
+  const allRows = egressRowsOf(events);
   const traceIds = new Set(events.map((event) => event.traceId).filter((traceId): traceId is string => Boolean(traceId)));
   const allLlm = loadLlmRows(since);
   const attributable = allLlm.filter((row) => row.traceId && traceIds.has(row.traceId));
   const background = allLlm.filter((row) => !row.traceId);
   const scoped = actorFilter ? attributable.filter((row) => row.actor === actorFilter) : attributable;
+  /**
+    窗口与调用方**同时**掐清单。以前 `--since` 只过滤 `llm.log`，文件清单和「源码出境 N 段」
+    永远是全时全人的数，却印在写着「样本窗口」的那一行上——那是把假数报成真数。
+    journal 行没有调用方字段，按人筛只能靠 traceId 归属；
+    没有 traceId 的行（后台导入那批）在 `--actor` 下会掉出去，掉多少如实写在表头。
+    */
+  const scopedTraces = new Set(scoped.map((row) => row.traceId).filter((traceId): traceId is string => Boolean(traceId)));
+  const rows = allRows.filter((row) => (!since || row.at >= since) && (!actorFilter || (row.traceId !== null && scopedTraces.has(row.traceId))));
+  const rowsDroppedByActor = actorFilter ? allRows.filter((row) => (!since || row.at >= since) && !row.traceId).length : 0;
 
   const files = [...byFile(rows).values()].sort((a, b) => b.hits - a.hits || b.totalChars - a.totalChars || a.path.localeCompare(b.path));
   const providers = new Map<string, { calls: number; input: number; output: number; cache: number; actors: Set<string> }>();
@@ -220,13 +240,14 @@ function main(): void {
   }
 
   console.log(`数据流审计 · ${repoPath}`);
-  console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
+  console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""}${actorFilter ? ` · --actor ${actorFilter}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
+  if (actorFilter) console.log(`   （按人筛：清单只留 traceId 能归到这张 key 的段；${rowsDroppedByActor} 段属于不带 traceId 的后台任务，归不了人，已排除。）`);
   console.log(`源码出境 ${num(rows.length)} 段，覆盖 ${num(files.length)} 个文件；` + (maskedTotal
     ? `其中 ${maskedTotal} 处疑似密钥在发出前被隐去。`
-    : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段写于该读数上线之前，那一格无从判定，不等于「扫过且干净」）` : ""}。\n`));
+    : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段那一路压根没过这道筛——登记时没带「隐去」读数，不等于扫过且干净）` : ""}。\n`));
 
   console.log("── 出境去向（按 provider · 只算能归属到本仓的调用）");
-  if (!providers.size) console.log("   （这个窗口里没有可归属的模型调用——后台任务的调用不带 traceId，见下方说明）");
+  if (!providers.size) console.log(`   （这个窗口里没有可归属的模型调用。${llmLogPath() && existsSync(llmLogPath() ?? "") ? "后台任务的调用不带 traceId，见下方说明。" : `llm.log 不存在或为空：${llmLogPath() ?? "未配落盘"}——去向表无从算起，这不等于「没有调用」。`}）`);
   for (const [name, bucket] of [...providers.entries()].sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(`   ${clip(name, 46).padEnd(46)} 调用 ${String(bucket.calls).padStart(4)} 次 · 输入 ${num(bucket.input)}（命中 ${num(bucket.cache)}）· 输出 ${num(bucket.output)} · 调用方 ${[...bucket.actors].join("、")}`);
   }
@@ -239,13 +260,13 @@ function main(): void {
     const masked = file.masked ? String(file.masked) : file.maskedUnknown ? "—" : "-";
     console.log(`   ${clip(file.path, 44).padEnd(44)} ${String(file.hits).padStart(5)} ${chars.padStart(9)} ${masked.padStart(5)}  ${clip([...file.kinds].join("/"), 24).padEnd(24)} ${[...file.scenes].join(",").slice(0, 46)}`);
   }
-  console.log("   （「隐去」列：数字＝隐去处数；-＝扫过且干净；—＝这些段写于该读数上线前，无从判定。「未量」＝工具循环只记了行数，没记字符数。）");
+  console.log("   （「隐去」列：数字＝隐去处数；0＝那一路扫过且没命中；-＝登记方没带这个读数（工具循环那档或未扫的路径），不能读成「干净」。「未量」＝工具循环只记了行数，没记字符数。）");
 
   const paired = events.filter((event) => event.type === "repository_paired");
   if (paired.length) {
     const partners = new Set(paired.map((event) => String(event.payload.other_repository_id ?? "未记")));
-    console.log(`\n── 跨仓配对 ${paired.length} 次（配一次读两个仓），对端：${[...partners].join(" / ")}`);
-    console.log("   跨仓读到的文件在上面的清单里带「对端仓名/」前缀；按仓授权生效时，名单外的对端连仓名都不下发（§44）。");
+    console.log(`\n── 跨仓配对 ${paired.length} 次（配一次读两个仓），对端仓 id：${[...partners].join(" / ")}`);
+    console.log("   跨仓读到的文件在上面的清单里带「模型用的仓名/」前缀（配对记录里的 other_repository_id 是仓 id，两者不同名）；按仓授权生效时，名单外的对端连仓名都不下发（§44）。");
   }
 
   if (background.length) {
@@ -256,11 +277,13 @@ function main(): void {
     console.log("   这一档的**文件清单仍然逐文件准确**（来自本仓 journal 的 code_egress），只有 provider/token 是全局数。");
   }
 
-  console.log(`\n── 有调用但没有任何源码出境的场景（${noInventory.length ? "按设计：这些调用送的是派生内容——路径、标题、摘要，不是源码原文" : "无——每个有调用的场景都有源码清单（装配期摘录或工具读取）"}）`);
+  console.log(`\n── 有调用但没有源码出境清单的场景（${noInventory.length ? "下面这些送的是派生内容（路径、符号名、摘要、题面、判分要点），不是逐行源码原文——派生内容同样可能带出命名与结构，只是不在「段」这一档记账" : "无——每个有调用的场景都有源码清单（装配期摘录或工具读取）"}）`);
   if (noInventory.length) console.log(`   ${noInventory.join("  ")}`);
 
-  const traced = rows.find((row) => row.traceId);
-  if (traced?.traceId) console.log(`\n核对：任取一段在本地重跑同一次装配、比 payload 的 hash 与 llm.log 的 outbound.hash；整回合过程看 pnpm run-trace ${repoPath} --trace ${traced.traceId}`);
+  const traced = rows.find((row) => row.hash);
+  if (traced) console.log(`\n核对（两步，各自的能兑现的部分）：\n   1) 逐段——任取一行 code_egress，本地重跑**同一次装配**，比对那一段文本自己的 hash（journal.hash）与 chars；`+
+    `\n   2) 整次——llm.log 的 outbound.hash 是「system+消息+工具定义」整串的哈希，与单段哈希没有包含关系；只有单轮装配（L1 摘要、出题、宏观设计首轮）能整串复现，工具循环第 2 轮起载荷里含模型自己的 tool_call，本地无从重放。`+
+    `\n   整回合过程看 pnpm run-trace ${repoPath} --trace ${traced.traceId ?? "（这一段没带 traceId）"}`);
 }
 
 main();

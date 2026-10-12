@@ -14,6 +14,8 @@ export interface GuardCandidate {
   lineCount: number;
   /** 摘录的起始行号（符号定位窗口不从第 1 行开始时使用；缺省 1）。锚点必须落在 [startLine, lineCount] 内。 */
   startLine?: number;
+  /** 摘录里隐去了几处疑似密钥（出境前的同一道筛，见 `security/secrets.ts`）。报表要拿它分清「扫过且干净」与「没扫」。 */
+  masked?: number;
 }
 
 export interface LlmExerciseProposal {

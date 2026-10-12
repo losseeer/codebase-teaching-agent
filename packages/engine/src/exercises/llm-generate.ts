@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { recordEgress, type EgressSource } from "../security/dataflow.js";
+import { maskSecrets } from "../security/secrets.js";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**
@@ -97,12 +98,14 @@ interface ExerciseExcerpt {
   from: number;
   to: number;
   text: string;
+  /** 这段摘录隐去了几处疑似密钥（0 = 扫过且干净）。报表要靠它区分「扫过」与「压根没扫」（§45：虚报比漏报糟） */
+  masked: number;
   truncated?: boolean;
 }
 
 /** 摘录 → 出境清单的一条（润色与反馈两处共用）。 */
 function excerptSource(excerpt: ExerciseExcerpt): EgressSource {
-  return { kind: "exercise-excerpt", path: excerpt.path, from: excerpt.from, to: excerpt.to, text: excerpt.text, truncated: excerpt.truncated };
+  return { kind: "exercise-excerpt", path: excerpt.path, from: excerpt.from, to: excerpt.to, text: excerpt.text, masked: excerpt.masked, truncated: excerpt.truncated };
 }
 
 function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExcerpt | undefined {
@@ -112,12 +115,19 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES));
+    // 与锚点摘录、L1、read_file 同一道出境前筛（`security/secrets.ts`）：这段是**源码原文**，
+    // 出题路径以前是裸 readFileSync，等于「模型能看到的源码」在这一条路上绕过了筛子。
+    let masked = 0;
+    const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => {
+      const screened = maskSecrets(line);
+      masked += screened.masked;
+      return screened.text;
+    });
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
     // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间掐断，那最后几行没出门就不能算进去
     const sentLines = text.split("\n").length;
-    return { path: anchor.path, from: from + 1, to: from + sentLines, text, truncated: sentLines < shown.length || joined.length > text.length || undefined };
+    return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
     return undefined;
   }
@@ -187,7 +197,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     scene: "practice.generate",
     sources: input.candidates.map((candidate) => {
       const from = candidate.startLine ?? 1;
-      return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt };
+      return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt, masked: candidate.masked };
     })
   });
   const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4, scene: "practice.generate" });
@@ -261,12 +271,18 @@ export function buildTagCandidate(repositoryPath: string, path: string, maxLines
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
     const start = Math.max(0, offset - 1);
-    const shown = lines.slice(start, start + maxLines);
+    let masked = 0;
     return {
       path,
       lineCount: lines.length,
       startLine: start + 1,
-      excerpt: shown.map((line, index) => `${start + index + 1}| ${line}`).join("\n").slice(0, 4_000)
+      // 行号前缀是产品要的（LLM 的锚点行号以此为基准），筛的是**行内容**：整段源码在这一条路上同样是原文出境
+      excerpt: lines.slice(start, start + maxLines).map((line, index) => {
+        const screened = maskSecrets(line);
+        masked += screened.masked;
+        return `${start + index + 1}| ${screened.text}`;
+      }).join("\n").slice(0, 4_000),
+      masked
     };
   } catch {
     return undefined;

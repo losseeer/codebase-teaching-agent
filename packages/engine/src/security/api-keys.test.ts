@@ -2,11 +2,13 @@ import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { allowsRepository, authEnabled, authenticate, loadApiKeys, presentedKey } from "./api-keys.js";
+import { allowsRepository, authEnabled, authStateOf, authenticate, loadApiKeys, presentedKey, stillIssued } from "./api-keys.js";
 
 /**
-  key 文件的读法与比对。这里要钉住的是三条「闸门会不会形同虚设」的判据：
-  - 没文件 / 坏文件 / 全是短 key ⇒ **认证关闭**（不是「开启且全拒绝」，也不是把引擎锁死）；
+  key 文件的读法与比对。这里要钉住的是四条「闸门会不会形同虚设」的判据：
+  - 没文件 / 清单本来就是空的 ⇒ **认证关闭**（本机默认形态，不是「开启且全拒绝」）；
+  - 文件坏到读不出来、或写了条目却一张都用不了 ⇒ **broken = 按拒绝全部处理**（10-12 改的：
+    以前这一档也退回免鉴权，等于「把文件编辑到一半」这几秒钟整机摊开）；
   - 短 key（<16 字符）一律不收——它挡不住任何东西，收下只会让人以为自己有闸；
   - 改文件不需要重启引擎（按 mtime 失效缓存），否则换 key 这件事会变成「先猜哪台机器要重启」。
   */
@@ -69,6 +71,51 @@ describe("API key 装载", () => {
     utimesSync(file, stamp, stamp);
     expect(authenticate(GOOD)).toBeUndefined();
     expect(authenticate(other)?.name).toBe("第二张");
+  });
+});
+
+describe("闸门三档状态（off / on / broken）", () => {
+  /** 装载按 mtime 失效缓存：同毫秒内的两次写会被当成同一次，所以这里显式往前推（与上面那条 mtime 用例同一手法）。 */
+  let bump = 1_000;
+  function writeState(value: unknown): void {
+    writeKeys(value);
+    const stamp = new Date(Date.now() + (bump += 1_000));
+    utimesSync(file, stamp, stamp);
+  }
+
+  it("没文件 = off；合法空清单 = off（用户自己关的闸）", () => {
+    expect(authStateOf()).toBe("off");
+    writeState({ keys: [] });
+    expect(authStateOf()).toBe("off");
+    expect(authEnabled()).toBe(false);
+  });
+
+  it("坏 JSON / 形状不对 = broken：不是「没闸」，而且一张 key 都不给用", () => {
+    writeState("{ keys 少个引号");
+    expect(authStateOf()).toBe("broken");
+    expect(authEnabled()).toBe(false);
+    expect(loadApiKeys()).toEqual([]);
+    writeState({ keys: "not-an-array" });
+    expect(authStateOf()).toBe("broken");
+    writeState({ notKeys: [] });
+    expect(authStateOf()).toBe("broken");
+  });
+
+  it("写了条目却一张都用不了（全是短 key）= broken；同批里有一张有效就照常是 on", () => {
+    writeState({ keys: [{ key: "shorty", name: "太短" }] });
+    expect(authStateOf()).toBe("broken");
+    writeState({ keys: [{ key: "shorty" }, { key: GOOD }] });
+    expect(authStateOf()).toBe("on");
+    expect(loadApiKeys()).toHaveLength(1);
+  });
+
+  it("撤掉的 key 立刻不算在册（长连接靠这条自摘），闸门没开时不作判", () => {
+    writeState({ keys: [{ key: GOOD, name: "在册的" }] });
+    expect(stillIssued("在册的")).toBe(true);
+    expect(stillIssued("已撤的")).toBe(false);
+    rmSync(file, { force: true });
+    // 闸门关着（没有身份体系）时恒为真：否则本机模式下每条流都会被自己掐掉
+    expect(stillIssued("任意名字")).toBe(true);
   });
 });
 
