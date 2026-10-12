@@ -72,6 +72,11 @@ export const app = Fastify({
   genReqId: () => id(),
   logger: { level: process.env.LOG_LEVEL ?? "warn" }
 });
+// CORS 必须先于认证钩子注册：钩子按注册顺序跑，认证若是第一个，401 就会被它短路——
+// 跨来源部署时那个响应**没有 access-control-allow-origin**，浏览器里只剩一句「网络错误」，
+// 用户看不到引擎说的那句中文原因（本机 vite 代理下同源，才看不出这个顺序问题）。
+await app.register(cors, { origin: true });
+tboot("cors registered");
 // 请求级 trace 上下文：`run(id, done)` 让后续钩子与 handler 继承该 store（传播原理见 trace/context.ts）
 app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
 
@@ -225,8 +230,6 @@ function persistTeachingTurn(repositoryPath: string, repositoryId: string, cours
   saveThreadState(repositoryPath, sessionId, state);
 }
 
-await app.register(cors, { origin: true });
-tboot("cors registered");
 
 /** 全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。 */
 const subscribers = new Set<(event: ServerEvent) => void>();

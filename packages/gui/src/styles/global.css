@@ -153,6 +153,18 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .nav-item.disabled { opacity: .43; }
 .sidebar-bottom { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid #355448; color: #acc1b4; font-size: 12px; display: flex; gap: 8px; align-items: center; }
 .status-dot { height: 8px; width: 8px; border-radius: 50%; background: #769087; }.status-dot.online { background: #d8ef58; }
+/* 引擎访问口令（只在引擎开了认证闸门时渲染，见 ui/EngineKeyField.tsx）：深色侧栏里自成一小块，不借主区按钮样式 */
+.engine-key { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.engine-key .nav-label { color: #acc1b4; font-size: 11px; }
+.engine-key-row { display: flex; gap: 5px; align-items: stretch; }
+.engine-key input { flex: 1 1 auto; min-width: 0; padding: 5px 7px; border: 1px solid #2f5548; border-radius: 5px; background: #12291f; color: #eaf3ec; font-size: 12px; }
+.engine-key input:focus-visible { outline: 2px solid #7aa893; outline-offset: -1px; }
+.engine-key button { flex: 0 0 auto; padding: 4px 8px; border: 1px solid #4d7a68; border-radius: 5px; background: #1d4437; color: #dceadf; font-size: 11px; }
+.engine-key button:hover:not(:disabled) { background: #26523f; border-color: #6a9b86; }
+.engine-key button.ghost { border-style: dashed; background: transparent; color: #9db6a8; }
+.engine-key-mini { margin: 8px auto 0; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid #2f5548; border-radius: 5px; background: #12291f; color: #acc1b4; }
+.engine-key-mini.blocked { border-color: #c8791f; color: #f0c489; }
+.shell.sidebar-collapsed .engine-key { display: none; }
 .sidebar-toggle { margin-left: auto; flex: 0 0 auto; border: 0; background: transparent; color: #bdcec3; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 5px; cursor: pointer; padding: 0; }
 .sidebar-toggle:hover { background: #21483d; color: #fff; }
 .shell { transition: grid-template-columns .18s ease; }

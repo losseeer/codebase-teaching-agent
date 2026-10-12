@@ -1,4 +1,5 @@
 import type { TraceScalar } from "@codebase-tutor/shared";
+import { engineKeyHeaders, reportUnauthorized } from "../api/engine-key";
 import type { UiJournalEventType } from "./events";
 
 /**
@@ -50,13 +51,23 @@ function enqueue(post: JournalPost): void {
 async function send(post: JournalPost): Promise<void> {
   const response = await fetch(`/api/repositories/${encodeURIComponent(post.repositoryId)}/journal`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...engineKeyHeaders() },
     body: JSON.stringify({ type: post.type, payload: post.payload, ...(post.sessionId ? { sessionId: post.sessionId } : {}) })
   });
   if (!response.ok) {
+    if (response.status === 401) reportUnauthorized(); // 口令没配/不对 ⇒ 侧栏亮出来，别让人以为「点了没记」
     const body = await response.json().catch(() => ({ error: "" })) as { error?: string };
     throw new JournalSendError(response.status, body.error ?? `HTTP ${response.status}`);
   }
+}
+
+/**
+  「这条事件本身不被接受」的判定。**401 刻意排除在外**：那是「还没给口令」，
+  不是「引擎不收这个类型」——按 4xx 丢弃会把配口令这段时间里的所有交互动作永久丢掉，
+  留在重试队列里等用户补上口令，下一轮补发就能过。
+  */
+function rejected(event: JournalSendError): boolean {
+  return event.status !== 401 && event.status >= 400 && event.status < 500;
 }
 
 /** 带上状态码：4xx 是「引擎明确不收」，与「网络不通」必须区别对待（前者重试一万次也不会成功）。 */
@@ -84,7 +95,7 @@ export async function postJournalEvent(post: JournalPost): Promise<void> {
     await send(post);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (error instanceof JournalSendError && error.status >= 400 && error.status < 500) {
+    if (error instanceof JournalSendError && rejected(error)) {
       // 4xx = 这条事件本身不被接受（类型不在白名单、仓库没挂载）。留在队列里只会每轮重放、
       // 挤掉真正能补发的事件，所以丢弃，但要把丢弃说得查得回来。
       console.error(`[journal] 事件 ${post.type} 被引擎拒收（HTTP ${error.status}：${reason}），已丢弃，不进重试队列`);
@@ -106,7 +117,7 @@ export async function flushJournalQueue(): Promise<void> {
         await send(post);
       } catch (error) {
         // 积压里也可能混着永远不会成功的 4xx：同样只丢这一条，别让它占着队列
-        if (error instanceof JournalSendError && error.status >= 400 && error.status < 500) {
+        if (error instanceof JournalSendError && rejected(error)) {
           console.error(`[journal] 补发 ${post.type} 被拒收（HTTP ${error.status}），丢弃这一条`);
           continue;
         }

@@ -115,7 +115,7 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 { "keys": [{ "name": "CI", "key": "至少 16 字符的随机串", "repositories": ["*"] }] }
 ```
 
-开闸后除 `/api/health` 与 CORS 预检以外，所有 `/api/*` 都要带 `x-api-key` 或 `Authorization: Bearer`，否则 401；`repositories` 是这张 key 能开哪些仓（仓 id 或 `*`），名单外的仓 403、在 `GET /api/repositories` 清单里不出现、懒挂载也轮不到它，跨仓工具（`read_file(repo=)` / `search_code(repo=)` / `cross_repo_link`）对它也不可见——对端仓名连工具 schema 都不进。改 key 不需要重启引擎（按文件 mtime 重读）。**没配文件 = 完全没有闸**，启动日志会明写「认证：未启用」，`/api/health` 的 `auth` 字段同理——这一句是刻意加的：闸门状态不该靠读代码才知道（同 §36.6 那条预算闸门的教训）。带 key 的调用，`actor`（= key 的 `name`）会进 `llm.log` 与 `engine.jsonl` 两条线，按人对账就有抓手。⚠️ 开闸后 GUI 自己还不能用的：它的请求不带凭据，而导入页的实时进度用的 `EventSource` 也带不了自定义头——闸门目前面向程序化访问（curl / CI / 另一个服务）。
+开闸后除 `/api/health` 与 CORS 预检以外，所有 `/api/*` 都要带 `x-api-key` 或 `Authorization: Bearer`，否则 401；`repositories` 是这张 key 能开哪些仓（仓 id 或 `*`），名单外的仓 403、在 `GET /api/repositories` 清单里不出现、懒挂载也轮不到它，跨仓工具（`read_file(repo=)` / `search_code(repo=)` / `cross_repo_link`）对它也不可见——对端仓名连工具 schema 都不进。改 key 不需要重启引擎（按文件 mtime 重读）。**没配文件 = 完全没有闸**，启动日志会明写「认证：未启用」，`/api/health` 的 `auth` 字段同理——这一句是刻意加的：闸门状态不该靠读代码才知道（同 §36.6 那条预算闸门的教训）。带 key 的调用，`actor`（= key 的 `name`）会进 `llm.log` 与 `engine.jsonl` 两条线，按人对账就有抓手。**GUI 带着口令能用**（2026-10-12，§47）：闸门开着时侧栏出现「引擎访问口令」一行（先问一次免鉴权的 `/api/health` 判断闸门状态，真被 401 拒过时也亮出来），存进本浏览器后所有请求——含三处对话流与导入进度事件流——自动带上；导入进度那条已从 `EventSource` 换成 `fetch` 读流 + 自己重连（指数退避），因为那个 API 带不了自定义请求头。⚠️ 存在 localStorage 的口令对同源脚本可读：这是便利性取舍，不是安全存储，真边界仍是引擎侧那份 0600 文件与按仓授权。验证另一台引擎时用 `VITE_ENGINE_ORIGIN` 换 dev 代理目标，不必停手上那个引擎。
 
 常用命令：
 

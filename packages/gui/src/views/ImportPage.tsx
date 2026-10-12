@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, FolderGit2, RefreshCw } from "lucide-react";
 import type { ImportJob, RepositoryCatalogEntry } from "@codebase-tutor/shared";
-import { api, type Workspace } from "../api/client";
+import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { phaseLabel } from "./helpers";
 
@@ -39,29 +39,23 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
   const switchLogged = useRef(false);
 
-  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress；EventSource 自带断线自动重连）；
+  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress）；
+  // 读流与重连在 `subscribeServerEvents` 里（原来用 EventSource，但它带不了认证头，闸门一开这条就静默断流）。
   // 5s 轮询是兜底——事件流断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
   const jobId = job?.id;
   const jobActive = Boolean(job && !["completed", "failed"].includes(job.phase));
   useEffect(() => {
     if (!jobActive || !jobId) return;
-    const source = new EventSource("/api/events");
-    source.onmessage = (event: MessageEvent<string>) => {
-      // 同一条事件流也广播 repository.updated 等其它类型；畸形/非 JSON 帧不能让 onmessage 抛（抛了这一帧就丢，
-      // 且与 readStoredWorkspace 兜 JSON.parse 的口径一致）。解析不了的直接跳过，交给 5s 轮询兜终态。
-      let serverEvent: { type: string; payload: ImportJob };
-      try {
-        serverEvent = JSON.parse(event.data) as { type: string; payload: ImportJob };
-      } catch {
-        return;
-      }
-      if (serverEvent.type === "import.progress" && serverEvent.payload.id === jobId) setJob(serverEvent.payload);
-    };
+    const stop = subscribeServerEvents((event) => {
+      if (event.type !== "import.progress") return;
+      const progress = event.payload as unknown as ImportJob;
+      if (progress.id === jobId) setJob(progress);
+    });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),
       5000
     );
-    return () => { window.clearInterval(interval); source.close(); };
+    return () => { window.clearInterval(interval); stop(); };
   }, [jobActive, jobId]);
   useEffect(() => {
     if (job?.phase !== "completed" || !job.repositoryId) return;

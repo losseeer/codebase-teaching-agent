@@ -1,4 +1,5 @@
-import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import { engineKeyHeaders, reportUnauthorized } from "./engine-key";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -35,8 +36,9 @@ export interface StreamTurn {
 
 /** 全站通用 SSE 读取：POST → 逐事件回调 → done 事件固化为返回值；error 事件与普通 HTTP 错误统一抛 Error。 */
 async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: Record<string, unknown> & { type: string }) => void, signal?: AbortSignal): Promise<TDone> {
-  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), ...(signal ? { signal } : {}) });
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...engineKeyHeaders() }, body: JSON.stringify(payload), ...(signal ? { signal } : {}) });
   if (!response.ok || !response.body) {
+    if (response.status === 401) reportUnauthorized();
     const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
     throw new Error(body.error ?? "请求失败");
   }
@@ -126,14 +128,19 @@ export const isNotFound = (error: unknown): boolean => error instanceof ApiError
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
-  const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
+  // 口令只在这一处拼（`engineKeyHeaders`），journal 那条自己 fetch 的通道另有一次——别在调用点各写一遍头。
+  const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...engineKeyHeaders(), ...(init?.headers ?? {}) } });
   const body = await response.json() as T & { error?: string; reason?: RepositoryMountReason };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
+  if (!response.ok) {
+    if (response.status === 401) reportUnauthorized();
+    throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
+  }
   return body;
 }
 
 export const api = {
-  health: () => request<{ status: string }>("/api/health"),
+  /** `auth` 是闸门状态：`"off"` = 没配 key 文件（本机默认），`"api-key"` = 已开闸，所有接口都要带口令。 */
+  health: () => request<{ status: string; auth?: "off" | "api-key"; llmMode?: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
@@ -207,3 +214,66 @@ export const api = {
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方吞掉错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };
+
+/**
+  全局事件流（`GET /api/events`，导入进度与仓库更新）。
+
+  **为什么不用 `EventSource`**：那个 API 带不了自定义请求头，引擎一开认证这条流就整条断掉——
+  而断得最难看的恰恰是导入进度（界面停在 0%，任务其实跑完了）。换成 fetch 读流之后，
+  口令与其余接口同一套（`engineKeyHeaders`），重连自己管：指数退避 1s→2s→5s→10s→20s 封顶，
+  一旦成功收到帧就清零。`AbortSignal` 用来在依赖变化/卸载时彻底停下（含正在退避的那一次等待）。
+  */
+export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, signal?: AbortSignal): () => void {
+  const controller = new AbortController();
+  let stopped = false;
+  const abortBoth = (): void => { stopped = true; controller.abort(); };
+  signal?.addEventListener("abort", abortBoth, { once: true });
+
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => {
+    const timer = window.setTimeout(resolve, ms);
+    controller.signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
+  });
+
+  void (async () => {
+    let failures = 0;
+    while (!stopped && !controller.signal.aborted) {
+      try {
+        const response = await fetch("/api/events", { headers: engineKeyHeaders(), signal: controller.signal });
+        if (!response.ok || !response.body) {
+          if (response.status === 401) reportUnauthorized();
+          throw new Error(`事件流建立失败（HTTP ${String(response.status)}）`);
+        }
+        failures = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary >= 0) {
+            const chunk = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const line = chunk.split("\n").find((entry) => entry.startsWith("data: "));
+            if (line) {
+              try {
+                onEvent(JSON.parse(line.slice(6)) as ServerEvent);
+              } catch {
+                /* 畸形帧跳过：一条坏帧不该断掉整条流（与导入页原有用同一口径） */
+              }
+            }
+            boundary = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        if (stopped || controller.signal.aborted) break;
+      }
+      if (stopped || controller.signal.aborted) break;
+      // 服务端正常收尾也会走到这里（连接被关）：按同一份退避重来，不留「看着连着其实没订阅」的状态
+      await delay(Math.min(1_000 * 2 ** failures++, 20_000));
+    }
+  })();
+
+  return abortBoth;
+}

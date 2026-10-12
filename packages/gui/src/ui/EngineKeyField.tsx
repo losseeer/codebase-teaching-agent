@@ -1,0 +1,71 @@
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
+import { KeyRound } from "lucide-react";
+import { api } from "../api/client";
+import { clearEngineKey, getEngineAuth, setEngineKey, subscribeEngineAuth } from "../api/engine-key";
+
+/**
+  引擎访问口令（认证闸门）。**闸门没开就整个不渲染**——本机默认形态不该多一行看不懂的输入框。
+
+  为什么是「启动先问一次 `/api/health`」而不是「等 401 再弹」：闸门一开，界面所有请求都 401，
+  那时用户看到的是一堆「加载失败」，而不是「请先给口令」。健康检查这条免鉴权（它就是为探活存在的），
+  所以能在第一次失败之前就问出闸门状态。真被 401 拒过时（口令错了或引擎换了 key），
+  `unauthorized` 也会把它亮出来，不用刷新页面。
+
+  存储与暴露面写在这里免得以后当惊喜：口令进 `localStorage`，同源任意脚本可读，
+  这是「本机/内网工具」的取舍，真边界在引擎侧那份 0600 的 key 文件与按仓授权（开发日志 §44）。
+  */
+export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; onExpand: () => void }): ReactElement | null {
+  const auth = useSyncExternalStore(subscribeEngineAuth, getEngineAuth, getEngineAuth);
+  const [gateOn, setGateOn] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    const probe = (): void => {
+      void api.health().then((health) => { if (alive) setGateOn(health.auth === "api-key"); }).catch(() => { /* 连不上引擎时不猜闸门状态，保持原样 */ });
+    };
+    probe();
+    window.addEventListener("online", probe);
+    return () => { alive = false; window.removeEventListener("online", probe); };
+  }, []);
+
+  const explain = "这台引擎开了认证闸门：除健康检查外，所有接口都要带访问口令（引擎侧 ~/.codebase-tutor/api-keys.json 里配）。口令存在本浏览器的 localStorage，同源脚本可读——真边界在引擎那份文件与按仓授权，不在这里。";
+
+  /** 换口令 = 整页重载一次：界面各处数据都是在挂载时取的，不重载就会停在「刚才那批 401」上。 */
+  const commit = (value: string): void => {
+    if (value.trim()) setEngineKey(value.trim());
+    else clearEngineKey();
+    window.location.reload();
+  };
+
+  if (!gateOn && !auth.unauthorized && !auth.key) return null;
+  if (collapsed) {
+    // 收起态只留一枚钥匙：点它展开侧栏去填，而不是把输入框挤成 44px
+    return (
+      <button type="button" className={`engine-key-mini${auth.unauthorized ? " blocked" : ""}`} title={auth.unauthorized ? `口令不对或缺失 · ${explain}` : `引擎口令${auth.key ? "已配置" : "待填写"} · ${explain}`} onClick={onExpand} aria-label="引擎访问口令">
+        <KeyRound size={14} />
+      </button>
+    );
+  }
+
+  return (
+    <div className="engine-key">
+      <span className="nav-label">{auth.unauthorized ? "口令被拒，请重填" : auth.key ? "引擎口令已配置" : "引擎需要口令"}</span>
+      <div className="engine-key-row">
+        <input
+          type="password"
+          value={draft}
+          placeholder={auth.key ? "留空不改" : "访问口令"}
+          aria-label="引擎访问口令"
+          title={explain}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && draft.trim()) commit(draft.trim());
+          }}
+        />
+        <button type="button" disabled={!draft.trim()} title="只存这台浏览器，不发给任何第三方；保存后页面会重载一次" onClick={() => commit(draft.trim())}>保存</button>
+        {auth.key ? <button type="button" className="ghost" title="清掉后界面回到未鉴权状态（闸门开着就会全部 401）" onClick={() => commit("")}>清除</button> : null}
+      </div>
+    </div>
+  );
+}

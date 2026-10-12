@@ -751,6 +751,17 @@ describe("API key 认证与按仓授权", () => {
     }
   });
 
+  it("被 401 拒掉的跨来源请求也能读到原因：CORS 头不能被认证钩子短路", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+    // 钩子顺序是 cors → trace → 认证。反过来（认证在前）时 401 直接结束生命周期，
+    // 响应上没有 access-control-allow-origin，跨来源部署的浏览器就只能报「网络错误」。
+    const refused = await app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "http://localhost:3000" } });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    expect((refused.json() as { reason?: string }).reason).toBe("unauthorized");
+  });
+
   it("身份进账：带 key 的回合里两条日志线都记到 actor（企业侧按人对账的抓手）", async () => {
     process.env.TUTOR_API_KEYS_FILE = keysFile;
     process.env.TUTOR_ENGINE_LOG = join(root, "engine-auth.jsonl"); // 本文件其余用例都是 "off"，这条要真落盘才验得到
