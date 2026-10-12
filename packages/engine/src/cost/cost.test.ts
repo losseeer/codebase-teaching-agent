@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Journal } from "../store/journal.js";
-import { budgetGateNotice, defaultMonthlyBudgetUsd, priceComponents, summarizeCost, type Pricing } from "./cost.js";
+import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, priceComponents, pricingIsConfigured, pricingSourceOf, summarizeCost, type Pricing } from "./cost.js";
+import { setLlmRuntimeSettings } from "../llm/runtime.js";
 
 /**
   成本读数全部来自本月 `token_usage` 事件的分桶聚合，金额是三档单价之和。
@@ -107,5 +108,61 @@ describe("budgetGateNotice", () => {
 
   it("只配了输出价也算闸门在管事 → 不再告警", () => {
     expect(budgetGateNotice({ inputPerMillionUsd: 0, outputPerMillionUsd: 1.1 })).toBeUndefined();
+  });
+});
+
+/**
+  单价是**每次现读**的：界面上填完不必重启引擎。优先级只有两层——运行时设置（LLM 配置框）→ `.env` → 未配。
+  这几条钉的是「填了却不算」那一类事故：以前 `envPricing` 是模块加载时算一次的常量，
+  界面改了价、成本读数与预算闸门还按老数走，正是 §36.6 那个「有闸门的名字、闸门不在管事」的形状。
+  */
+describe("currentPricing（现读两层回落）", () => {
+  const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
+  let pricingDir = "";
+
+  beforeEach(() => {
+    // 单价随 llm-settings.json 落盘：必须把它指到临时目录，否则测试会写用户那份 ~/.codebase-tutor/
+    pricingDir = mkdtempSync(join(tmpdir(), "tutor-pricing-"));
+    process.env.TUTOR_LLM_SETTINGS_FILE = join(pricingDir, "llm-settings.json");
+    setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
+    for (const key of RATE_ENV) delete process.env[key];
+  });
+
+  afterEach(() => {
+    // 顺序要紧：先清内存态（它会落盘到临时文件），再撤掉 TUTOR_LLM_SETTINGS_FILE，否则这次清理写到默认落点
+    setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
+    for (const key of RATE_ENV) delete process.env[key];
+    delete process.env.TUTOR_LLM_SETTINGS_FILE;
+    rmSync(pricingDir, { recursive: true, force: true });
+  });
+
+  it("界面留空用 .env 的值，界面填了就用界面的，两种都不需要重启", () => {
+    process.env.TUTOR_INPUT_USD_PER_MILLION = "0.4";
+    expect(currentPricing().inputPerMillionUsd).toBe(0.4);
+    expect(pricingSourceOf("input")).toBe("env");
+    setLlmRuntimeSettings({ inputUsdPerMillion: "0.28" });
+    expect(currentPricing().inputPerMillionUsd).toBe(0.28);
+    expect(pricingSourceOf("input")).toBe("runtime");
+  });
+
+  it("两层都没配 → 输入/输出记 0、命中价留空（按输入价计），来源说得出 unset", () => {
+    expect(currentPricing()).toEqual({ inputPerMillionUsd: 0, cacheHitPerMillionUsd: undefined, outputPerMillionUsd: 0 });
+    expect(pricingIsConfigured()).toBe(false);
+    expect(pricingSourceOf("cacheHit")).toBe("unset");
+  });
+
+  it("界面上把输入价填上，闸门告警当场消失（这条以前只能改 .env 再重启引擎）", () => {
+    expect(budgetGateNotice()).toContain("未生效");
+    setLlmRuntimeSettings({ inputUsdPerMillion: "0.28" });
+    expect(budgetGateNotice()).toBeUndefined();
+    expect(pricingIsConfigured()).toBe(true);
+  });
+
+  it("命中价留空时按输入价计：宁可高估也不把真花掉的钱说少", () => {
+    setLlmRuntimeSettings({ inputUsdPerMillion: "0.28" });
+    const rows = priceComponents({ inputTokens: 1_000_000, outputTokens: 0, cacheHitTokens: 500_000 }, currentPricing());
+    // 未命中 50 万 + 命中 50 万都按输入价 0.28 计 ⇒ 合计 0.28，且命中那一行带着「按输入价计」的回落标记
+    expect(rows.reduce((total, one) => total + one.estimatedCostUsd, 0)).toBeCloseTo(0.28, 6);
+    expect(rows.find((one) => one.label === "命中输入（缓存）")?.rateFallback).toBe(true);
   });
 });

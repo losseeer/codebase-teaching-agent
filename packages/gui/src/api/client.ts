@@ -93,6 +93,12 @@ export interface LlmEnvFallback {
   hasApiKey: boolean;
 }
 
+/**
+  单价某一档的来源：`runtime` = LLM 配置框里填的，`env` = `.env` 的值，`unset` = 两层都没配。
+  界面上必须说清来源——留空那格显示的是 .env 的数，不写来源就会变成「我明明填了怎么没变」。
+  */
+export type PricingSource = "runtime" | "env" | "unset";
+
 export interface LlmSettings {
   /** 运行时服务商覆盖（空串 = 用 .env；取值为 LlmProviderKind 之一） */
   provider: string;
@@ -106,6 +112,17 @@ export interface LlmSettings {
   presets: string[];
   envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
+  /**
+    单价三档的**填写值**（空串 = 这一档交给 .env）。单位是美元 / 百万 token，与 `.env` 的
+    `TUTOR_*_USD_PER_MILLION` 同一口径——界面上填的不是人民币，这点在弹窗的说明行里也写着。
+    */
+  inputUsdPerMillion?: string;
+  outputUsdPerMillion?: string;
+  cacheHitUsdPerMillion?: string;
+  /** 现在真在用的三档（引擎每次算账现读，改完不用重启） */
+  pricing?: { inputPerMillionUsd: number; cacheHitPerMillionUsd?: number; outputPerMillionUsd: number };
+  /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset（闸门不管事） */
+  pricingSources?: { input: PricingSource; output: PricingSource; cacheHit: PricingSource };
   /** 当前实际生效的 provider/模型/模式（local = 没配齐或密钥缺失，走本地启发式） */
   activeModel?: string;
   activeProvider?: string;
@@ -113,7 +130,16 @@ export interface LlmSettings {
 }
 
 /** PUT 的部分更新：省略 = 保持不变，空串 = 清除该项并回落 .env（apiKey 为空串即删除已存密钥）。 */
-export type LlmSettingsPatch = Partial<{ provider: LlmProviderKind | ""; model: string; baseUrl: string; apiKey: string; thinking: ThinkingEffort }>;
+export type LlmSettingsPatch = Partial<{
+  provider: LlmProviderKind | "";
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  thinking: ThinkingEffort;
+  inputUsdPerMillion: string;
+  outputUsdPerMillion: string;
+  cacheHitUsdPerMillion: string;
+}>;
 
 /** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。
     仓库类 404 还带 `reason`（不在地址簿 / 目录没了 / 产物不全）——只有第一种该清掉本地工作区，另两种要留着让用户处置。 */

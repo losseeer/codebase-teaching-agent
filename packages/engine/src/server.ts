@@ -7,7 +7,7 @@ import cors from "@fastify/cors";
 import { EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { budgetGateNotice, summarizeCost, defaultMonthlyBudgetUsd } from "./cost/cost.js";
+import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
@@ -40,7 +40,7 @@ import { deriveLearnerProfile } from "./learner/model.js";
 import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
-import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
+import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./scopechat/scopechat.js";
 
 // .env 必须在任何 provider 创建之前加载（teachingProvider/lightLlmProvider 在下方立即读环境变量）
@@ -606,6 +606,12 @@ function llmSettingsPayload(): Record<string, unknown> {
     ...publicLlmSettings(),
     presets: (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean),
     envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey) },
+    /**
+      单价的「现在生效值 + 每一档从哪来」：界面上留空那格显示的是 .env 的数，
+      不说清来源就会变成「我明明填了 0.28 怎么还显示 0」这类无从自查的读数。
+      */
+    pricing: currentPricing(),
+    pricingSources: { input: pricingSourceOf("input"), output: pricingSourceOf("output"), cacheHit: pricingSourceOf("cacheHit") },
     activeModel: active.model,
     activeProvider: active.provider,
     activeMode: active.mode,
@@ -624,8 +630,8 @@ app.get("/api/llm/settings", async (request, reply) => {
   return llmSettingsPayload();
 });
 
-/** GUI 运行时 LLM 设置：更新服务商/模型/端点/密钥/思考档位，立即重建 provider 并落盘（留空 = 回落 .env） */
-app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string } }>("/api/llm/settings", async (request, reply) => {
+/** GUI 运行时 LLM 设置：更新服务商/模型/端点/密钥/思考档位/单价，立即重建 provider 并落盘（留空 = 回落 .env） */
+app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string } }>("/api/llm/settings", async (request, reply) => {
   // 写在读之前同一道闸：`baseUrl` 一改，**所有人**接下来那一轮的源码就出境到新端点了。
   // 按仓授权天然表达不了这个能力，所以它不属于任何单仓 key（口径见 `unrestricted`）。
   if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，改不了全局模型配置：改端点等于替别人的回合决定源码发到哪儿。`, reason: "settings_not_granted" });
@@ -652,6 +658,26 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
   // 密钥里的空白几乎总是粘贴带进来的换行，存下来只会变成「401 但看不出为什么」的排查黑洞
   if (apiKey !== undefined && /\s/.test(apiKey)) return reply.code(422).send({ error: "API Key 不能含空格或换行" });
 
+  /**
+    单价三档：留空 = 该项回落 .env，非负数才收。这里必须当场拒绝而不是「存下来再说」——
+    这两个值会一路流进成本读数**和预算闸门**（`currentPricing()`），一个 "-3" 或 "abc" 存进去，
+    算出的就是负钱或 NaN，而闸门按「钱 ≥ 预算」判断，NaN 恒为 false ⇒ 静默变成「永不超支」。
+    判据与落盘恢复共用 `normalizeRate`，不各写一份。
+    */
+  const PRICING_LABELS: Record<(typeof PRICING_KEYS)[number], string> = {
+    inputUsdPerMillion: "输入单价",
+    outputUsdPerMillion: "输出单价",
+    cacheHitUsdPerMillion: "缓存命中单价"
+  };
+  const pricingPatch: Partial<Record<(typeof PRICING_KEYS)[number], string>> = {};
+  for (const key of PRICING_KEYS) {
+    const raw = body[key];
+    if (raw === undefined) continue;
+    const normalized = normalizeRate(raw);
+    if (normalized === undefined) return reply.code(422).send({ error: `${PRICING_LABELS[key]}得是不小于 0 的数字（美元 / 百万 token），留空表示用 .env 的值`, reason: "pricing_invalid" });
+    pricingPatch[key] = normalized;
+  }
+
   // 思考档位与（新）服务商/模型的兼容性提前校验：不支持的组合在保存时就拒绝，而不是等每次对话调用时报错。
   // off 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里 422 掉。
   if (body.thinking && body.thinking !== "auto") {
@@ -666,6 +692,7 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
     ...(typeof body.model === "string" ? { model: body.model } : {}),
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(apiKey === undefined ? {} : { apiKey }),
+    ...pricingPatch,
     thinking: body.thinking as never
   });
   teachingProvider = buildLlmRuntimeProvider("teaching");

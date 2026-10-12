@@ -23,7 +23,13 @@ const SCENE_LABEL: Record<string, string> = {
   unknown: "未标注"
 };
 
-const usd = (value: number): string => `$${value.toFixed(4)}`;
+/**
+  金额一律按**人民币**显示（¥）。三档单价与月度预算填的就是每百万 token 的人民币价，
+  字段名与变量名里的 `Usd` / `USD_PER_MILLION` 是历史遗留——没跟着改是因为这些键已经落进
+  `llm-settings.json`、库里的 `repository_state.settings_json` 与接口契约里，改名会把存量数据一起牵动。
+  换算逻辑没有两种口径：引擎算出来的数原样带上 ¥，不做任何汇率乘除。
+  */
+const usd = (value: number): string => `¥${value.toFixed(4)}`;
 const tokensText = (value: number): string => value.toLocaleString();
 
 export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElement {
@@ -129,10 +135,10 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
             <div className="readout"><span>输出 tokens</span><strong>{tokensText(cost.outputTokens)}</strong></div>
             <div className="readout"><span>计费回合</span><strong>{cost.turns - cost.degradedTurns}</strong></div>
             <div className="readout" title="预算触顶后走本地规则、未付 token 的回合数"><span>降级回合</span><strong>{cost.degradedTurns}</strong></div>
-            <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 $0 ⇒ 闸门永远判为未超支，等于无上限调用"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
+            <div className="readout" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 $0 ⇒ 闸门永远判为未超支，等于无上限调用。单价在对话栏那排「模型与推理」弹窗里填，改完即生效"><span>预算闸门</span><strong>{pricingConfigured ? "生效中" : "未生效"}</strong></div>
           </div>
           {!pricingConfigured && (
-            <p className="cost-notice" title="要配的环境变量：TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万（约 $0.28 / $1.1），配好重启引擎。">
+            <p className="cost-notice" title="填的地方：对话栏那排参数齿轮 → 模型与推理 → 单价（美元 / 百万 token），填完立即生效，不用重启引擎。留空的档位回落 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时输入 ¥2/百万、输出 ¥8/百万（约 $0.28 / $1.1）。">
               没配单价 ⇒ 金额恒为 $0.0000（上面的 token 用量是真实读数）。<strong>更要紧的是预算闸门也因此不管事</strong>：引擎里「超预算就回落本地规则」的判断拿到的永远是 $0，月预算形同虚设。
             </p>
           )}

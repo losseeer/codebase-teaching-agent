@@ -249,9 +249,10 @@ export function App(): ReactElement {
   const banner = workspace && freshness && (freshness.verdict === "stale" || freshness.verdict === "drifted") && !acknowledged(freshness, workspace.repositoryId)
     ? <FreshnessBanner repositoryPath={workspace.repositoryPath} freshness={freshness} onAcknowledge={() => { acknowledge(freshness, workspace.repositoryId); setFreshness(null); }} onReanalyze={() => navigate("/import")} />
     : null;
-  // Agent 侧栏只属于有对话可谈的路由：导入页还没有工作区语义，挂着它既没绑定对象又挤扁导入表单
+  // Agent 侧栏只属于「有对话可谈」的路由：导入页还没有工作区语义，成本监控页问的不是代码——
+  // 两页挂着它都只会占宽并让人以为能问点什么（成本页此前就因此串进来一条对话框）。
   const location = useLocation();
-  const showRail = !!workspace && location.pathname !== "/import";
+  const showRail = !!workspace && !["/import", "/insights"].includes(location.pathname);
   // 栏宽与「对话栏收起」是用户偏好（localStorage）：收起时那一栏只留一条 44px 的边，宽度值本身不动，
   // 所以下面交出去的是**当前该占多宽**，而不是「用户拖到多宽」。
   const layout = useLayout();

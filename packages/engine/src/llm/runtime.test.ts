@@ -2,13 +2,16 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, maskSecret, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings } from "./runtime.js";
+import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, maskSecret, normalizeRate, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings } from "./runtime.js";
 
 /**
   运行时 LLM 设置的三件事：部分更新语义（留空 = 清除并回落 .env）、落盘/重启恢复、密钥只在对外视图里以掩码出现。
+  外加单价那三格：它同样「界面上改、立即生效」，但判据更硬——脏值会一路流进预算闸门（见 cost.test.ts）。
   设置文件按 TUTOR_LLM_SETTINGS_FILE 指向临时目录——默认落点是 ~/.codebase-tutor/，那是**用户的产品数据**，测试不许碰。
   */
-const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL"];
+const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL", "TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
+
+const BLANK = { provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" as const, inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" };
 
 let directory = "";
 let settingsFile = "";
@@ -17,13 +20,13 @@ beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "codebase-tutor-llm-settings-"));
   settingsFile = join(directory, "llm-settings.json");
   process.env.TUTOR_LLM_SETTINGS_FILE = settingsFile;
-  setLlmRuntimeSettings({ provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" });
+  setLlmRuntimeSettings(BLANK);
 });
 
 afterEach(() => {
   // 先把内存态清干净再删 TUTOR_LLM_SETTINGS_FILE：反过来的话这次清理会写到默认落点 ~/.codebase-tutor/，
   // 等于测试在用户机上凭空造了一份 LLM 设置文件（写出来的第一轮就踩过这个）
-  setLlmRuntimeSettings({ provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" });
+  setLlmRuntimeSettings(BLANK);
   for (const key of ENV_KEYS) delete process.env[key];
 });
 
@@ -119,5 +122,56 @@ describe("对外视图与生效配置", () => {
     setLlmRuntimeSettings({ provider: "openai-compatible", model: "deepseek-chat", thinking: "high" });
     expect(buildLlmRuntimeProvider("light")?.name).toContain("thinking:off");
     expect(buildLlmRuntimeProvider("teaching")?.name).toContain("thinking:high");
+  });
+});
+
+describe("单价三档（界面上配、立即生效）", () => {
+  it("normalizeRate：空串=回落 .env，数字串与数字都收，负数/乱码/布尔一律拒", () => {
+    expect(normalizeRate("")).toBe("");
+    expect(normalizeRate("  0.28 ")).toBe("0.28");
+    expect(normalizeRate(1.1)).toBe("1.1");
+    expect(normalizeRate("0")).toBe("0");
+    expect(normalizeRate("-3")).toBeUndefined();
+    expect(normalizeRate("abc")).toBeUndefined();
+    expect(normalizeRate("1e999")).toBeUndefined(); // Infinity 不是单价，是 NaN 的前身
+    expect(normalizeRate(undefined)).toBeUndefined();
+    expect(normalizeRate(true)).toBeUndefined();
+  });
+
+  it("部分更新：只改输出单价时，输入单价与服务商字段都不被清掉", () => {
+    setLlmRuntimeSettings({ provider: "openai-compatible", inputUsdPerMillion: "0.28" });
+    setLlmRuntimeSettings({ outputUsdPerMillion: "1.1" });
+    expect(getLlmRuntimeSettings()).toMatchObject({ provider: "openai-compatible", inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1" });
+  });
+
+  it("填进去的单价落盘，重启后从磁盘读回来（界面上配完不该只活这一次会话）", () => {
+    setLlmRuntimeSettings({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1", cacheHitUsdPerMillion: "0.028" });
+    const saved = readFileSync(settingsFile, "utf8");
+    expect(JSON.parse(saved) as Record<string, unknown>).toMatchObject({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1", cacheHitUsdPerMillion: "0.028" });
+
+    // 模拟重启：清空内存态（注意这会把文件一起覆盖，所以先把上面那份内容写回去充当「上次保存的配置」），
+    // 再走 boot 里那一步 restore——验的是「磁盘上的单价能不能活到下一个进程」
+    setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
+    writeFileSync(settingsFile, saved, "utf8");
+    expect(restoreLlmRuntimeSettings()).toMatchObject({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1", cacheHitUsdPerMillion: "0.028" });
+  });
+
+  it("配置文件被别的工具写脏时丢掉该项（回落 .env），而不是把负数带进内存", () => {
+    process.env.TUTOR_INPUT_USD_PER_MILLION = "0.4";
+    writeFileSync(settingsFile, JSON.stringify({ inputUsdPerMillion: "-3", outputUsdPerMillion: "abc", cacheHitUsdPerMillion: 0.028 }), "utf8");
+    const restored = restoreLlmRuntimeSettings();
+    expect(restored.inputUsdPerMillion).toBe("");
+    expect(restored.outputUsdPerMillion).toBe("");
+    expect(restored.cacheHitUsdPerMillion).toBe("0.028");
+    // 丢掉之后 .env 那条回落链还在（单价的优先级只有两层，别在内存里再造第三层）
+    expect(process.env.TUTOR_INPUT_USD_PER_MILLION).toBe("0.4");
+  });
+
+  it("对外视图带得出单价：它不是密钥，掩码只给 apiKey 那一格", () => {
+    setLlmRuntimeSettings({ apiKey: "sk-super-secret-value", inputUsdPerMillion: "0.28" });
+    const view = publicLlmSettings() as Record<string, unknown>;
+    expect(view.inputUsdPerMillion).toBe("0.28");
+    expect(view.apiKey).toBeUndefined();
+    expect(view.apiKeyMasked).toContain("*");
   });
 });

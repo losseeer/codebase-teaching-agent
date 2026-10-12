@@ -11,6 +11,7 @@ import { flushLlmLog } from "./llm/call-log.js";
 import { flushEngineLog } from "./trace/engine-log.js";
 import { TutorDatabase } from "./store/database.js";
 import { readJournal } from "./store/journal.js";
+import { setLlmRuntimeSettings as setLlmRuntimeSettingsForTest } from "./llm/runtime.js";
 import { appendMessages, createThread, readMessages } from "./store/chat-store.js";
 
 /**
@@ -819,6 +820,24 @@ describe("API key 认证与按仓授权", () => {
     }
   });
 
+  it("按 sessionId 取会话：名单外的 key 连内存缓存都不给命中", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    // 趁闸门还没开先建会话：它此刻就躺在引擎的内存缓存里，正是「命中即 return、以前不看名单」那条路
+    const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
+    const sessionId = (created.json() as { session: { id: string } }).session.id;
+    writeKeys([
+      { key: LOCKED_KEY, name: "只读别处", repositories: ["repo_not_this_one"] },
+      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
+    ]);
+
+    const stolen = await call("GET", `/api/sessions/${sessionId}`, LOCKED_KEY);
+    // 以前这里 200：缓存命中直接交整份会话（含别人的仓 id 与节点），下面那句「先看名单再开库」根本轮不到跑
+    expect(stolen.statusCode).toBe(404);
+    expect(stolen.payload).not.toContain(repositoryId);
+    // 授权 key 那边照样读得到（404 不是「会话真没了」）
+    expect((await call("GET", `/api/sessions/${sessionId}`, FULL_KEY)).statusCode).toBe(200);
+  });
+
   it("按 id 定位会话/线程：名单外的仓连库都不开，错误体也不报别人的仓 id", async () => {
     process.env.TUTOR_API_KEYS_FILE = keysFile;
     // 线程真的存在（就建在本仓），但这张 key 只授权一个与此无关的 id
@@ -835,6 +854,50 @@ describe("API key 认证与按仓授权", () => {
     expect((messages.json() as { reason?: string }).reason).not.toBe("repository_not_granted");
     // 同一条线程在授权 key 那里照常读得到（404 不是「线程真没了」）
     expect((await call("GET", `/api/threads/${threadId}/messages`, FULL_KEY)).statusCode).toBe(200);
+  });
+
+  it("界面上填的单价立即进成本读数：留空回落 .env，脏值当场拒收", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
+    const put = (payload: Record<string, unknown>) => app.inject({ method: "PUT", url: "/api/llm/settings", headers: { "x-api-key": FULL_KEY }, payload });
+    const readout = async () => (await call("GET", `/api/repositories/${repositoryId}/cost`, FULL_KEY).then((r) => r.json() as { pricingConfigured: boolean; totalCostUsd: number })).pricingConfigured;
+
+    // 三档全空 ⇒ 闸门不管事（这条读数在界面上要看得见，不能只留一个 $0.0000）。
+    // 两层都要清：`.env` 里那三行是用户真在用的配置（dotenv 在 import 时就灌进 process.env），
+    // 漏清一档就会把前置条件弄假——本仓的命中价就是这么把「未生效」顶成「生效」的。
+    const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
+    const savedEnv = RATE_ENV.map((key) => [key, process.env[key]] as const);
+    for (const key of RATE_ENV) delete process.env[key];
+    setLlmRuntimeSettingsForTest({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
+    try {
+      expect(await readout()).toBe(false);
+
+    const saved = await put({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1" });
+    expect(saved.statusCode).toBe(200);
+    expect((saved.json() as { inputUsdPerMillion?: string }).inputUsdPerMillion).toBe("0.28");
+    // 现读，不重启：同一份成本读数下一发就变成「闸门在管事」
+    expect(await readout()).toBe(true);
+    expect(((await call("GET", "/api/llm/settings", FULL_KEY)).json() as { pricingSources?: Record<string, string> }).pricingSources).toMatchObject({ input: "runtime", output: "runtime", cacheHit: "unset" });
+
+    // 留空 = 把这格交还给 .env，不是「填了 0」
+    process.env.TUTOR_INPUT_USD_PER_MILLION = "0.4";
+    expect(((await put({ inputUsdPerMillion: "" })).json() as { pricing?: { inputPerMillionUsd?: number } }).pricing?.inputPerMillionUsd).toBe(0.4);
+
+    for (const bad of ["-3", "abc", "1e999", true]) {
+      const refused = await put({ outputUsdPerMillion: bad as unknown as string });
+      expect(refused.statusCode, String(bad)).toBe(422);
+      expect((refused.json() as { reason?: string }).reason, String(bad)).toBe("pricing_invalid");
+    }
+    // 拒过一次就不能把脏值留在内存里（NaN 会让预算闸门恒判「未超支」）
+    expect(((await call("GET", "/api/llm/settings", FULL_KEY)).json() as { pricing?: { outputPerMillionUsd?: number } }).pricing?.outputPerMillionUsd).toBe(1.1);
+    } finally {
+      // 用户那份 `.env` 的值要还回去，否则后面所有用例跑在没有单价的环境里（读数会变）
+      for (const [key, value] of savedEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      setLlmRuntimeSettingsForTest({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
+    }
   });
 
   it("身份进账：带 key 的回合里两条日志线都记到 actor（企业侧按人对账的抓手）", async () => {

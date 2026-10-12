@@ -131,6 +131,36 @@ export function LlmSettingsControl(): ReactElement {
               onClear={() => updateLlm({ apiKey: "" })}
             />
 
+            <div className="llm-dialog-group">单价（美元 / 百万 token）</div>
+            <TextSetting
+              label="输入"
+              numeric
+              value={llm?.inputUsdPerMillion ?? ""}
+              placeholder={ratePlaceholder(llm, "input")}
+              disabled={!llm}
+              hint="每百万个输入 token 的价格，填美元。留空 = 这一档用 .env 的 TUTOR_INPUT_USD_PER_MILLION；两层都空则不计价。DeepSeek 峰时约 0.28（¥2 / 百万）。"
+              onCommit={(inputUsdPerMillion) => updateLlm({ inputUsdPerMillion })}
+            />
+            <TextSetting
+              label="命中"
+              numeric
+              value={llm?.cacheHitUsdPerMillion ?? ""}
+              placeholder={ratePlaceholder(llm, "cacheHit")}
+              disabled={!llm}
+              hint="缓存命中那部分输入的价格，通常约为输入价的 1/10（DeepSeek 峰时 ¥0.2 / 百万 ≈ 0.028）。留空 = 按输入价计，宁可高估也不把真花掉的钱说少。"
+              onCommit={(cacheHitUsdPerMillion) => updateLlm({ cacheHitUsdPerMillion })}
+            />
+            <TextSetting
+              label="输出"
+              numeric
+              value={llm?.outputUsdPerMillion ?? ""}
+              placeholder={ratePlaceholder(llm, "output")}
+              disabled={!llm}
+              hint="每百万个输出 token 的价格，填美元。留空 = 用 .env 的 TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时约 1.1（¥8 / 百万）。"
+              onCommit={(outputUsdPerMillion) => updateLlm({ outputUsdPerMillion })}
+            />
+            {llm?.pricing ? <p className={`llm-dialog-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
+
             <footer>
               <span>改完即生效并保存到 <code>~/.codebase-tutor/llm-settings.json</code>；留空的项回落 <code>.env</code>。</span>
               <button type="button" className="primary" onClick={() => setOpen(false)}>完成</button>
@@ -165,6 +195,47 @@ const THINKING_STYLE_HINT: Record<string, string> = {
   none: "该模型没有思考参数",
   unknown: "未识别的模型：auto/off 不发字段；强度档位会被引擎拒绝（可用 TUTOR_THINKING_STYLES 声明）"
 };
+
+/** 单价一格的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
+function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
+  const fromEnv = llm?.pricingSources?.[key] === "env";
+  const value = llm?.pricing ? usdOf(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
+  return fromEnv ? `.env ${value}` : "未配置";
+}
+
+/** 三档里是不是至少有一档真的在计价（判据与引擎 `pricingIsConfigured` 同一口径：全空 ⇒ 钱恒为 0）。 */
+function pricingLive(llm: LlmSettings): boolean {
+  const p = llm.pricing;
+  if (!p) return false;
+  return p.inputPerMillionUsd > 0 || (p.cacheHitPerMillionUsd ?? 0) > 0 || p.outputPerMillionUsd > 0;
+}
+
+/**
+  计价读数一行：现在按哪三个数算、每一档来自界面还是 .env。
+  来源必须写出来——留空那格显示的是 .env 的数，不标来源就成了「我明明填了怎么没变」。
+  更要紧的是后半句：三档全空时**预算闸门也不管事**（引擎拿到的金额恒为 0，永远判未超支）。
+  */
+function pricingReadout(llm: LlmSettings): string {
+  const p = llm.pricing;
+  if (!p) return "单价读数未返回";
+  if (!pricingLive(llm)) return "三档都没配 ⇒ 金额恒 $0.0000，「超预算改走本地规则」这道闸没在管事";
+  const source = (key: "input" | "output" | "cacheHit"): string => ({ runtime: "界面", env: ".env", unset: "未配" })[llm.pricingSources?.[key] ?? "unset"];
+  return `按 输入 ${usdOf(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${usdOf(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${usdOf(p.outputPerMillionUsd)}（${source("output")}）计价${looksLikeYuan(p) ? " · 这个量级像人民币价，金额会放大约 7 倍" : ""}`;
+}
+
+/**
+  便宜的口径提醒：这三格要的是**美元 / 百万 token**，而国产端点的牌价常写人民币，
+  「把 ¥2 直接填成 2」几乎必然发生（本仓的 `.env` 就正是 2 / 0.04 / 8）。
+  只提示不拦停：真正的价口径只有用户自己知道，猜错一次的成本远低于拦错一次的烦。
+  */
+function looksLikeYuan(pricing: NonNullable<LlmSettings["pricing"]>): boolean {
+  return pricing.inputPerMillionUsd >= 1.4 || pricing.outputPerMillionUsd >= 1.4;
+}
+
+/** $0.280 这种写法；命中价没配时明说是「按输入价计」，不留一个空白让人以为算错了。 */
+function usdOf(value: number | undefined): string {
+  return value === undefined ? "按输入价" : `$${value.toFixed(3)}`;
+}
 
 /**
   胶囊与弹窗标题共用的生效状态。`pill` 是窄位用的短名（去掉 `openai:` 这类协议前缀），
@@ -206,19 +277,20 @@ function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapabilit
   return effort === "off" && (capability.style === "none" || capability.style === "unknown");
 }
 
-/** 文本型设置项（模型 slug / 接口地址）：本地草稿 + 失焦或回车提交，不每敲一个字就打一次 PUT。 */
-function TextSetting({ label, value, placeholder, list, disabled, onCommit }: { label: string; value: string; placeholder: string; list?: string; disabled: boolean; onCommit: (next: string) => void }): ReactElement {
+/** 文本型设置项（模型 slug / 接口地址 / 单价）：本地草稿 + 失焦或回车提交，不每敲一个字就打一次 PUT。 */
+function TextSetting({ label, value, placeholder, list, hint, numeric, disabled, onCommit }: { label: string; value: string; placeholder: string; list?: string; hint?: string; numeric?: boolean; disabled: boolean; onCommit: (next: string) => void }): ReactElement {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
   const commit = (): void => { const next = draft.trim(); if (next !== value) onCommit(next); };
   return (
-    <label className="llm-dialog-row">
+    <label className="llm-dialog-row" title={hint}>
       <span>{label}</span>
       <input
         value={draft}
         placeholder={placeholder}
         list={list}
         disabled={disabled}
+        inputMode={numeric ? "decimal" : undefined}
         spellCheck={false}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}

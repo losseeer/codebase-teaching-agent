@@ -21,6 +21,15 @@ export interface LlmRuntimeSettings {
   baseUrl: string;
   apiKey: string;
   thinking: "auto" | ThinkingEffort;
+  /**
+    三档单价，单位**美元 / 百万 token**（与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一口径）。
+    放进这份配置而不是只留环境变量，是为了「改完立刻生效」：`cost.ts` 每次算账都现读这里，
+    而环境变量那条路是模块加载时算一次的常量，非重启不可。空串 = 该项回落 `.env`（与 baseUrl 同一条规则）。
+    缓存命中价留空时按输入价计——宁可高估，也不把真花掉的钱说少了。
+    */
+  inputUsdPerMillion: string;
+  outputUsdPerMillion: string;
+  cacheHitUsdPerMillion: string;
 }
 
 /** GUI 可选的服务商协议（与 provider.ts 的工厂分支一一对应）；空串另意为「回落 .env」。 */
@@ -29,7 +38,26 @@ export const LLM_PROVIDERS = ["openai-compatible", "openai", "anthropic", "ollam
 /** 可选思考档位（"auto" = 不发字段）；PUT 校验与磁盘恢复都按这份清单，错误文案不会再和判据走散。 */
 export const THINKING_EFFORTS = ["auto", "off", "low", "high", "max"] as const;
 
-const DEFAULT_SETTINGS: LlmRuntimeSettings = { provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" };
+/** 单价那几项的键名（PUT 逐键校验、落盘恢复与界面都按这份清单走，不各写一遍字面量）。 */
+export const PRICING_KEYS = ["inputUsdPerMillion", "outputUsdPerMillion", "cacheHitUsdPerMillion"] as const;
+
+const DEFAULT_SETTINGS: LlmRuntimeSettings = {
+  provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto",
+  inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: ""
+};
+
+/**
+  单价输入框的判据：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
+  收数字也收字符串——界面传的是文本框，而老配置文件里可能写的是数字。
+  */
+export function normalizeRate(value: unknown): string | undefined {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? String(value) : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? trimmed : undefined;
+}
 
 /** 默认 ~/.codebase-tutor/llm-settings.json，测试用 TUTOR_LLM_SETTINGS_FILE 指向临时文件。 */
 function settingsFile(): string {
@@ -64,6 +92,12 @@ export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, 
     const value = partial[key];
     if (typeof value === "string") settings[key] = value.trim();
   }
+  // 单价走 `normalizeRate` 而不是直接 trim：路由层已经先验过一遍，这里是第二道，
+  // 免得将来有新的调用点（脚本/内部装配）绕过路由把 "-3" 或 "abc" 写进配置
+  for (const key of PRICING_KEYS) {
+    const normalized = partial[key] === undefined ? undefined : normalizeRate(partial[key]);
+    if (normalized !== undefined) settings[key] = normalized;
+  }
   if (partial.thinking !== undefined) settings.thinking = partial.thinking;
   persist();
   return getLlmRuntimeSettings();
@@ -81,6 +115,11 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
     }
     const thinking = parsed.thinking;
     if (typeof thinking === "string" && (THINKING_EFFORTS as readonly string[]).includes(thinking)) next.thinking = thinking as LlmRuntimeSettings["thinking"];
+    // 单价按同一份判据收：文件里被别的工具写成 "-3"/"abc" 时**丢掉该项**（回落 .env）而不是把脏串带进内存
+    for (const key of PRICING_KEYS) {
+      const normalized = normalizeRate(parsed[key]);
+      if (normalized !== undefined) next[key] = normalized;
+    }
     settings = next;
   } catch {
     // 损坏的设置文件按未配置处理：保留内存态，下次保存会整体覆盖
