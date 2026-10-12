@@ -749,3 +749,61 @@ describe("API key 认证与按仓授权", () => {
     }
   });
 });
+
+/**
+  源码出境清单（`code_egress`，企业化第 3 条）。这条线只有打真路由才算验过——
+  它要同时证明三件事，缺一件就是报表上看不出来的错：
+  1. **装配里真放了源码的那次调用才落账**，且一一对得上形态（锚点摘录 / 整文件切片 / 流程窗口 / 出题摘录）；
+  2. **行里有指纹而没有正文**——审计线自己不能变成第二个泄露面（`.tutor/` 是随仓可带走的东西）；
+  3. 同一段代码在**动作提议与措辞两次调用里各出一次门**，就记两条，不合并成一条好看的数。
+  零 token：fetch 仍被 stub 到 127.0.0.1:9。
+  */
+describe("源码出境清单", () => {
+  const egress = () => eventsOf("code_egress");
+  const sentFields = (row: JournalEvent) => Object.keys(row.payload).sort();
+
+  it("宏观设计回合：锚点摘录逐段落账，带线程 id，且不含源码正文", async () => {
+    const before = egress().length;
+    const threadId = await newThread("map", "出境线程");
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这一节先看哪里？", threadId, nodeId: "unit-1" } });
+    expect(response.statusCode).toBe(200);
+
+    const rows = egress().slice(before);
+    expect(rows.length, "锚点附近的源码摘录应逐段入账").toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.payload).toMatchObject({ scene: "map.chat", kind: "anchor-excerpt", path: MAIN_FILE });
+      expect(String(row.payload.hash)).toMatch(/^[0-9a-f]{12}$/);
+      expect(Number(row.payload.chars)).toBeGreaterThan(0);
+      expect(row.sessionId).toBe(threadId);
+      // fixture 里锚点第 3 行的真实内容是 `// line 3`：出现在任何一行里都说明正文被抄进了审计线
+      expect(JSON.stringify(row)).not.toContain("// line 3");
+    }
+    expect(sentFields(rows[0])).toEqual(["chars", "hash", "kind", "lines", "path", "scene"]);
+  });
+
+  it("装配里没有源码时一行都不落（文件清单是派生产物，不算源码出境）", async () => {
+    const before = egress().length;
+    const threadId = await newThread("map", "无源码出境线程");
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这个项目整体是做什么的？", threadId } });
+    expect(response.statusCode).toBe(200);
+    expect(egress().slice(before)).toEqual([]);
+  });
+
+  it("教学回合：动作提议与措辞各发一次上下文，就记两次（同一段代码确实出了两次门）", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
+    const sessionId = (created.json() as { session: { id: string } }).session.id;
+    usedThreads.add(sessionId);
+    const before = egress().length;
+    scripted = [`registerOrder 在 ${MAIN_FILE}:3 先跑，你觉得少了哪一步会先炸？`];
+    const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "这一节我没看懂" } });
+    expect(response.statusCode).toBe(200);
+
+    const rows = egress().slice(before);
+    const scenes = new Set(rows.map((row) => row.payload.scene));
+    expect([...scenes].sort()).toEqual(["teaching.action", "teaching.turn"]);
+    // 两个 scene 都真的带着同一段摘录出门：不是只记了一条「本轮看过 src/main.ts」
+    for (const scene of scenes) expect(rows.filter((row) => row.payload.scene === scene).map((row) => row.payload.path)).toContain(MAIN_FILE);
+    expect(rows.every((row) => row.sessionId === sessionId)).toBe(true);
+    expect(rows.some((row) => JSON.stringify(row).includes("// line 3"))).toBe(false);
+  });
+});

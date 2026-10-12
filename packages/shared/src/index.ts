@@ -1063,7 +1063,15 @@ export type JournalEventType =
     payload：`module_id` / `module_label` / `from` / `to` / `core_share`（改的时候引擎算的占比，用来看判据离真值有多远）。
     结构判据没有真值可比，这条就是攒真值的读数——攒够了才谈「判据改对了没」。
     */
-  | "module_tier_overridden";
+  | "module_tier_overridden"
+  /**
+    源码出境清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
+    记的是指针与指纹，不是正文：`scene` / `kind` / `path` / `lines` / `chars` / `hash`（发出去那段文本的 sha256 前 12 位），
+    命中过密钥隐去时另带 `masked`，被我们自己的上限切短时带 `truncated`。
+    与 `~/.codebase-tutor/llm.log` 靠 `traceId + scene` 关联——那一行才有 provider、model、token 与调用方 `actor`，
+    同一事实只写一处，不双写。工具循环的 `read_file` 不重复记：它已经有 `file_read` 那一行（内容在下一轮出门）。
+    */
+  | "code_egress";
 
 export interface JournalEvent {
   id: string;

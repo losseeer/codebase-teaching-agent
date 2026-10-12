@@ -1,6 +1,7 @@
 import type { FlowEdge, RepositoryAnalysis, RepositoryFlow, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { executeReadFile } from "../source/read-file.js";
+import { recordEgress } from "../security/dataflow.js";
 
 /**
   按需深入：主调用之后，对**模型自认是推断的**那些去向做一次有界的核实。
@@ -142,7 +143,7 @@ export async function deepenInferredEdges(input: {
   if (!pending.length) {
     return { flow: { ...flow, caveats: joinCaveat(flow.caveats, `按需深入未执行：${inferred.length} 条推断边的端点文件都没落进 ${MAX_DEEP_FILES} 个阅读窗口`) }, examined: 0, confirmed: 0, stillInferred: 0 };
   }
-  const excerpts: { path: string; from: number; to: number; content: string }[] = [];
+  const excerpts: { path: string; from: number; to: number; content: string; masked?: number }[] = [];
   let usedChars = 0;
   for (const [path, anchor] of wanted) {
     const offset = Math.max(1, anchor - DEEP_LEAD_LINES);
@@ -151,7 +152,7 @@ export async function deepenInferredEdges(input: {
     // 预算之外就不再读：宁可少核实一条，也不让这一步变成没上限的调用
     if (excerpts.length && usedChars + read.content.length > MAX_DEEP_CHARS) continue;
     usedChars += read.content.length;
-    excerpts.push({ path, from: offset, to: offset + (read.audit.lines ?? 0) - 1, content: read.content });
+    excerpts.push({ path, from: offset, to: offset + (read.audit.lines ?? 0) - 1, content: read.content, masked: read.audit.masked });
   }
 
   const requested = pending.map((edge) => {
@@ -172,6 +173,12 @@ export async function deepenInferredEdges(input: {
   let usage: LlmUsage | undefined;
   let revised: Map<string, { verdict: "code" | "inferred"; evidence: string }>;
   try {
+    // 出境落账：这些代码窗口是 deepen 自己调 executeReadFile 读的（不经工具循环，没有 `file_read` 那行可查）
+    recordEgress({
+      repositoryPath: input.repositoryPath,
+      scene: DEEP_SCENE,
+      sources: excerpts.map((item) => ({ kind: "flow-window" as const, path: item.path, from: item.from, to: item.to, text: item.content, masked: item.masked }))
+    });
     const response = await input.provider.complete({
       system: DEEP_SYSTEM_PROMPT,
       user: JSON.stringify({ edges: requested, code: excerpts }),

@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { logTargetFromEnv } from "../lib.js";
+import { hash, logTargetFromEnv } from "../lib.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
 import { currentActor, currentThreadId, currentTraceId } from "../trace/context.js";
 
@@ -49,6 +49,13 @@ export interface LlmCallRecord {
     企业形态的账要能分到「哪个调用方烧了多少钱」，靠的就是这一列与 traceId 的组合。
     */
   actor: string | null;
+  /**
+    出境载荷指纹：这一次调用**实际发出去**的那份文本（system + user 或整条 messages + 工具清单）的
+    字符数与 sha256 前 12 位。正文一个字都不进日志——但有了指纹就能事后核对：
+    重新装配一次那段 prompt、比哈希，就知道「出去的是不是这份」；相邻两行哈希相同，
+    就说明前缀逐字一致（前缀缓存那档的判据也落在这里）。
+    */
+  outbound: { chars: number; hash: string };
   tools?: string[];
   inputTokens?: number;
   outputTokens?: number;
@@ -62,6 +69,29 @@ const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "llm.log");
 /** 当前日志目标文件；null = 只打控制台（`TUTOR_LLM_LOG=off`）。每次读取，便于测试用 env 切换。 */
 export function llmLogPath(): string | null {
   return logTargetFromEnv(process.env.TUTOR_LLM_LOG, DEFAULT_LOG_FILE);
+}
+
+/**
+  出境载荷指纹：把这一次真正要发出去的每一段文本（system、user 或整条 messages 含工具提议与工具结果、
+  回传的 reasoning、以及工具 schema）拼成一个串，取字符数与哈希前 12 位。
+
+  **为什么记指纹而不记正文**：企业侧要回答的是「那段代码有没有出门、出门的是哪一版」，
+  而不是把源码再抄一份进另一台机器的日志——那等于又开一条泄露面。有了指纹，审计者可以
+  在本地把同一次装配重跑一遍、比哈希，逐字确认「就是这个」；两份记录哈希相同也直接说明
+  载荷一字不差（前缀缓存那档的判据就是这么来的）。
+  工具 schema 也进串：它同样占输入 token，跨仓那档变长是要看得见的（§40）。
+  */
+export function outboundFingerprint(input: LlmCompletionInput): { chars: number; hash: string } {
+  const blocks: string[] = [`system\u0000${input.system}`];
+  const messages = input.messages ?? (input.user === undefined ? [] : [{ role: "user" as const, content: input.user }]);
+  for (const message of messages) {
+    blocks.push(`${message.role}\u0000${message.content}`);
+    for (const call of message.toolCalls ?? []) blocks.push(`tool_call\u0000${call.name}\u0000${call.argumentsJson}`);
+    if (message.reasoningContent) blocks.push(`reasoning\u0000${message.reasoningContent}`);
+  }
+  for (const tool of input.tools ?? []) blocks.push(`tool_def\u0000${tool.name}\u0000${tool.description}\u0000${JSON.stringify(tool.parameters)}`);
+  const text = blocks.join("\n");
+  return { chars: text.length, hash: hash(text).slice(0, 12) };
 }
 
 /** 串行写入队列：并发调用不交错，单次写失败不污染后续写入。 */
@@ -127,6 +157,7 @@ export class LoggingLlmProvider implements LlmProvider {
       traceId: currentTraceId(),
       threadId: currentThreadId(),
       actor: currentActor(),
+      outbound: outboundFingerprint(input),
       ...(input.tools?.length ? { tools: input.tools.map((tool) => tool.name) } : {})
     };
     try {

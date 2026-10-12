@@ -37,6 +37,9 @@ function eventLine(event: JournalEvent): string {
       return `${p.path ?? "未记"}${p.denied ? " 【拒绝】" : ""}${p.error ? ` 【错误:${clip(p.error, 40)}】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "code_search":
       return `搜「${clip(p.query, 60)}」命中=${p.hits ?? "未记"} 前几落点：${clip(p.top_paths, 60)}`;
+    case "code_egress":
+      // 出境清单：与 token_usage 那行成对看——这条说「哪几行源码进了请求」，那条说「这次调用付了多少钱」
+      return `出境 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
     case "module_tier_overridden":

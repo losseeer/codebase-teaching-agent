@@ -7,6 +7,7 @@ import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "./slice.js";
+import { recordEgress } from "../security/dataflow.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**
@@ -162,6 +163,21 @@ export async function summarizeFiles(input: {
     let results: (SummaryResult | undefined)[];
     // 声明在 try 之外：下面的落库循环要用它算「实际发出去的字符数」
     const sending = batch.map((slice) => maskSliceForSend(slice));
+    // 出境清单（企业化第 3 条）：这一批每个文件一条，记的是**实际发出去的那份**（隐去密钥之后的切片）。
+    // 放在 try 之前：端点失败也是真发出去了，`llm.log` 里那行 `ok=false` 会说明有没有拿到结果。
+    // 确定性档不记：它一个字都不发出去（口径见 SummaryProvider.sendsCodeToEndpoint）。
+    if (provider.sendsCodeToEndpoint) recordEgress({
+      repositoryPath: database.repositoryPath,
+      scene: "map.summary",
+      sources: sending.map((item, index) => ({
+        kind: "l1-slice" as const,
+        path: batch[index].path,
+        from: 1,
+        to: batch[index].lines,
+        text: JSON.stringify(item.copy),
+        masked: item.masked
+      }))
+    });
     try {
       const sendMasked = sending.reduce((total, item) => total + item.masked, 0);
       if (sendMasked) console.warn(`[summarizer] 本批有 ${sendMasked} 处疑似密钥在发给 ${provider.name} 之前被隐去（切片与缓存键未改动）`);

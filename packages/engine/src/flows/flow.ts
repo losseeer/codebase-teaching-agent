@@ -23,6 +23,7 @@ import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
 import { layerCacheKey } from "../lib.js";
 import { executeReadFile } from "../source/read-file.js";
+import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 import { deepenInferredEdges } from "./deepen.js";
 import { buildFlowEvidence, MAX_STAGE_TITLE, staticFlow } from "./evidence.js";
 
@@ -151,7 +152,8 @@ export function buildFlowDigest(
   index: RepositoryIndex,
   analysis: RepositoryAnalysis,
   entry: SourceAnchor,
-  summaries: Map<string, string>
+  summaries: Map<string, string>,
+  egress?: EgressCollector
 ): FlowDigest {
   const inDegree = new Map<string, number>();
   for (const targets of Object.values(analysis.graph.imports)) {
@@ -198,6 +200,7 @@ export function buildFlowDigest(
   // 入口文件的真实内容：让模型知道入口到底做了什么，而不是从文件名猜
   const read = executeReadFile(repositoryPath, JSON.stringify({ path: entry.path, offset: 1, limit: ENTRY_EXCERPT_LINES }));
   const entryExcerpt = read.audit.denied ? undefined : read.content;
+  if (entryExcerpt) egress?.push({ kind: "flow-window", path: read.audit.path || entry.path, from: 1, to: read.audit.lines ?? 0, text: entryExcerpt, masked: read.audit.masked, truncated: read.audit.truncated || undefined });
 
   const tree = renderDirectoryTree(index.fileTree, MAX_TREE_LINES);
   // 热点可能落在未索引的文件上（gitHotspots 只按 .tutorignore 过滤、不看扩展名），
@@ -251,6 +254,13 @@ export interface GenerateFlowInput {
   summaries: Map<string, string>;
   /** 持久层（`layer_cache` 表）。缺省时只走内存缓存——测试与降级路径不落盘。 */
   database?: TutorDatabase;
+  /**
+    出境登记（见 `security/dataflow.ts`）：`buildFlowDigest` 把入口文件的真实正文放进 digest，
+    而 digest 就是发给模型的那份 user 消息——这一段不经工具循环，没有 `file_read` 那行可查，所以单独登记。
+    **只有真发请求的那条路会落账**：算缓存键（`flowCacheKeyOf`，含 `flow:reburn --check` 那条零 token 探针）
+    也会装配一次 digest，那一趟可能命中缓存、一个字都没发出去，所以它攒的清单没人 booking。
+    */
+  egress?: EgressCollector;
 }
 
 export interface GeneratedFlow extends RepositoryFlowResult {
@@ -274,15 +284,21 @@ export interface GeneratedFlow extends RepositoryFlowResult {
 
 /** 生成一条流程。任何失败（调用异常 / JSON 不合法 / 校验后环节落点不足）都回落静态调用链，并带上原因。 */
 export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<GeneratedFlow> {
-  const digest = tryBuildFlowDigest(input);
+  const scoped = withEgressCollector(input);
+  const digest = tryBuildFlowDigest(scoped);
   if (!digest) return degradedFlow(input.analysis, input.entry, FALLBACK_DIGEST_FAILED);
-  return generateFromDigest(input, digest);
+  return generateFromDigest(scoped, digest);
+}
+
+/** 入口统一补一个出境收集数组（调用方没给时）：装配往里推，**只有真发请求的那条路**才落账。 */
+function withEgressCollector<T extends GenerateFlowInput>(input: T): T {
+  return input.egress ? input : { ...input, egress: [] };
 }
 
 /** 组装本层输入（= 真正发给模型的 user 消息）。失败返回 undefined，由调用方降级——它不该抛给路由。 */
 function tryBuildFlowDigest(input: GenerateFlowInput): FlowDigest | undefined {
   try {
-    return buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry, input.summaries);
+    return buildFlowDigest(input.repositoryPath, input.index, input.analysis, input.entry, input.summaries, input.egress);
   } catch (error) {
     console.error("[flows] 流程输入组装失败:", error instanceof Error ? error.message : String(error));
     return undefined;
@@ -295,6 +311,8 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
     const recentChanges = buildRecentChangesSection(input.analysis);
+    // 出境落账：digest 就是发给模型的 user 消息本体，这一段入口正文确实跟着出门了
+    recordEgress({ repositoryPath: input.repositoryPath, scene: "map.flow", sources: input.egress ?? [] });
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: recentChanges ? `${JSON.stringify(digest)}\n\n${recentChanges}` : JSON.stringify(digest),
@@ -682,7 +700,9 @@ export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string
 */
 const flowInFlight = new Map<string, Promise<GeneratedFlow>>();
 
-export async function generateRepositoryFlowCached(input: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
+export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
+  // 出境清单在装配阶段攒下来，但**命中缓存的那条路不 booking**——那一次一个字都没发出去
+  const input = withEgressCollector(raw);
   const cacheKey = flowCacheKeyOf(input);
   if (!cacheKey) return generateRepositoryFlow(input);
   const key = cacheKey.key;

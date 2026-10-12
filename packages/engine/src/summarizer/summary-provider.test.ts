@@ -92,7 +92,7 @@ describe("摘要档", () => {
   });
 
   it("批量里整批失败时不在接口层吞异常（由调用方按条回落）", async () => {
-    const provider: SummaryProvider = { name: "boom", modelVersion: "boom-1", summarizeMany: async () => { throw new Error("offline"); } };
+    const provider: SummaryProvider = { sendsCodeToEndpoint: true, name: "boom", modelVersion: "boom-1", summarizeMany: async () => { throw new Error("offline"); } };
     await expect(provider.summarizeMany([sliceOf()])).rejects.toThrow("offline");
   });
 

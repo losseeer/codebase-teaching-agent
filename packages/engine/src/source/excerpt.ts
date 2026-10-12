@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isWithin } from "../lib.js";
+import { maskSecrets } from "../security/secrets.js";
 
 /**
   锚点取码：把「锚点」解析成一段可嵌入 prompt 的源码窗口。
@@ -14,6 +15,10 @@ import { isWithin } from "../lib.js";
   4. 单块字符上限——无论哪种模式都截断到 maxChars，防止一个超大符号吃掉整个上下文预算。
 
   截断与省略由调用方在文本里明示（不静默丢信息）；路径越界或读不到返回 undefined，由调用方决定如何提示。
+
+  **这里是「仓内源码原文进请求」的最后一个共用收口**（教学上下文与两处对话都用它），
+  所以 §43 那道密钥隐去也落在这里：`read_file` 有筛而锚点摘录没筛，等于绕开闸门——
+  硬编码凭据只要出现在某个锚点上下 7 行内就会出门。隐去后的文本变短，不影响字符预算（预算按原文算，是上界）。
   */
 
 export interface ExcerptAnchor {
@@ -47,6 +52,8 @@ export interface ExcerptSlice {
   mode: "symbol" | "window";
   /** 符号模式下的真实符号末尾行（调用方可据此提示「符号共 N 行」） */
   symbolEnd?: number;
+  /** 本窗口里被隐去的疑似密钥处数（§43 的入口这道；没命中就没有这个字段，出境清单也不报数） */
+  masked?: number;
 }
 
 export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, options: ExcerptOptions): ExcerptSlice | undefined {
@@ -83,14 +90,17 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
 
   const lines: { line: number; text: string }[] = [];
   let used = 0;
+  let masked = 0;
   for (let current = from; current <= to; current += 1) {
-    const text = all[current - 1] ?? "";
-    if (lines.length && used + text.length + 1 > options.maxChars) {
+    const raw = all[current - 1] ?? "";
+    if (lines.length && used + raw.length + 1 > options.maxChars) {
       truncated = true;
       break;
     }
-    lines.push({ line: current, text });
-    used += text.length + 1;
+    const screened = maskSecrets(raw);
+    masked += screened.masked;
+    lines.push({ line: current, text: screened.text });
+    used += raw.length + 1;
   }
   const last = lines.length ? lines[lines.length - 1].line : from;
   return {
@@ -101,6 +111,7 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
     lines,
     truncated: truncated || last < to,
     mode,
+    ...(masked ? { masked } : {}),
     ...(symbolEnd !== undefined ? { symbolEnd } : {})
   };
 }

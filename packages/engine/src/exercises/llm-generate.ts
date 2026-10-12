@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { recordEgress, type EgressSource } from "../security/dataflow.js";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**
@@ -77,9 +78,10 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
       anchor: anchor ? `${anchor.path}:${anchor.line}${anchor.endLine ? `-${anchor.endLine}` : ""}` : undefined,
       currentTitle: exercise.title,
       currentPrompt: exercise.prompt,
-      sourceExcerpt: excerpt
+      sourceExcerpt: excerpt.text
     });
 
+    recordEgress({ repositoryPath, scene: "practice.polish", sources: [excerptSource(excerpt)] });
     const response = await provider.complete({ system, user, maxTokens: 600, temperature: 0.3, scene: "practice.polish" });
     const refined = parseRefinement(response.text, exercise);
     if (!refined) return { exercise, polished: false, polishFailure: "unparsable" };
@@ -89,14 +91,33 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
   }
 }
 
-function sourceExcerpt(repositoryPath: string, exercise: Exercise): string | undefined {
+/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出境清单登记（`security/dataflow.ts`）。 */
+interface ExerciseExcerpt {
+  path: string;
+  from: number;
+  to: number;
+  text: string;
+  truncated?: boolean;
+}
+
+/** 摘录 → 出境清单的一条（润色与反馈两处共用）。 */
+function excerptSource(excerpt: ExerciseExcerpt): EgressSource {
+  return { kind: "exercise-excerpt", path: excerpt.path, from: excerpt.from, to: excerpt.to, text: excerpt.text, truncated: excerpt.truncated };
+}
+
+function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExcerpt | undefined {
   const anchor = exercise.anchors[0];
   if (!anchor) return undefined;
   try {
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    return lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).join("\n").slice(0, 4_000);
+    const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES));
+    const joined = shown.join("\n");
+    const text = joined.slice(0, 4_000);
+    // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间掐断，那最后几行没出门就不能算进去
+    const sentLines = text.split("\n").length;
+    return { path: anchor.path, from: from + 1, to: from + sentLines, text, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
     return undefined;
   }
@@ -153,13 +174,22 @@ const GENERATION_SYSTEM_PROMPT = [
   "- criteria 给 2-4 条可操作的评分维度；answerKey 要具体到能让另一位评分者据此判分。"
 ].join("\n");
 
-export async function generateExerciseWithLlm(input: { tag: string; candidates: GuardCandidate[]; provider: LlmProvider }): Promise<LlmGeneration> {
+export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider }): Promise<LlmGeneration> {
   const excerpts = input.candidates.map((candidate) => ({
     path: candidate.path,
     lineCount: candidate.lineCount,
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
+  // 出境清单：候选摘录是带行号的整段源码。`to` 按摘录里**真的有几行**算（4,000 字符上限可能在中间掐断）
+  recordEgress({
+    repositoryPath: input.repositoryPath,
+    scene: "practice.generate",
+    sources: input.candidates.map((candidate) => {
+      const from = candidate.startLine ?? 1;
+      return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt };
+    })
+  });
   const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4, scene: "practice.generate" });
   const parsed = parseJsonObject(response.text);
   if (!parsed) return { ok: false, reason: "LLM 返回内容无法解析为出题结果；请重试。" };
@@ -212,8 +242,9 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
       exercisePrompt: input.exercise.prompt,
       learnerAnswer: input.learnerAnswer,
       verdict: { passed: input.graded.passed, score: input.graded.score, ruleFeedback: input.graded.feedback },
-      sourceExcerpt: excerpt
+      sourceExcerpt: excerpt.text
     });
+    recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.feedback", sources: [excerptSource(excerpt)] });
     const response = await input.provider.complete({ system, user, maxTokens: 300, temperature: 0.3, scene: "practice.feedback" });
     const parsed = parseJsonObject(response.text);
     const feedback = String(parsed?.feedback ?? "").trim();

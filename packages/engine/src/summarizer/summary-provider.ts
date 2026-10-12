@@ -25,6 +25,12 @@ export interface SummaryResult {
 export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
+  /**
+    这份摘要档会不会把**切片内容发到端点**。出境清单（`security/dataflow.ts`）只有 `true` 才落账：
+    确定性档一个字都不发出去，把它的逐文件装配记成「源码出境」就是虚报——
+    而虚报的账面比漏报更难查，它会把「这台机器没读过这个文件」洗成「读过」。
+    */
+  readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
 }
 
@@ -108,6 +114,7 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
 export class LocalSummaryProvider implements SummaryProvider {
   readonly modelVersion = "local-heuristic-v1";
   readonly name = "local deterministic fallback";
+  readonly sendsCodeToEndpoint = false;
 
   /** 契约比接口更紧：确定性档对**每一条**都给结果（调用方据此把它当补齐手段）。 */
   async summarizeMany(slices: FileSlice[]): Promise<SummaryResult[]> {
@@ -125,6 +132,7 @@ export class LocalSummaryProvider implements SummaryProvider {
 /** 走项目自己的**轻量档**（L1 的语义来源）。批量调用，单次失败由调用方按条回落。 */
 export class LlmSummaryProvider implements SummaryProvider {
   readonly name = "light tier LLM";
+  readonly sendsCodeToEndpoint = true;
 
   constructor(private readonly llm: LlmProvider, private readonly withHeaderComments = false) {}
 
@@ -149,6 +157,8 @@ export class LlmSummaryProvider implements SummaryProvider {
 /** 本地 Ollama（`TUTOR_SUMMARY_PROVIDER=ollama` 时启用）：逐条调用，与批量档共用同一套提示与解析。 */
 class OllamaSummaryProvider implements SummaryProvider {
   readonly name = "Ollama local model";
+  /** 端点在本机也算「发到模型」：出境清单记的是「源码进过某 provider 的请求」，报表靠 provider 名分辨是哪一档。 */
+  readonly sendsCodeToEndpoint = true;
 
   constructor(private readonly model = process.env.TUTOR_OLLAMA_MODEL ?? "llama3.2", private readonly endpoint = process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434") {}
 

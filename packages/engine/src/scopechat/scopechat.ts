@@ -9,6 +9,7 @@ import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
+import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
 /**
   作用域对话（宏观设计 map / 练习评估 practice）：
@@ -99,7 +100,7 @@ export interface ScopedChatResult {
 }
 
 /** 按锚点取带行号的源码摘录：符号边界优先、窗口兜底（规则见 source/excerpt.ts）。路径越界或读不到返回空串。 */
-function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: boolean): string {
+function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: boolean, egress?: EgressCollector): string {
   const slice = sliceExcerpt(
     repoPath,
     { path: anchor.path, line: anchor.line, endLine: anchor.endLine },
@@ -107,6 +108,8 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: bool
   );
   if (!slice) return "";
   const numbered = slice.lines.map((item) => `${item.line}| ${item.text}`).join("\n");
+  // 这段就是马上要进请求的源码原文：登记给出境清单（发出去之前落账，见 security/dataflow.ts）
+  egress?.push({ kind: "anchor-excerpt", path: slice.path, from: slice.from, to: slice.to, text: numbered, masked: slice.masked, truncated: slice.truncated || undefined });
   const total = slice.to < slice.totalLines || slice.truncated ? `，共 ${slice.totalLines} 行` : "";
   const symbol = slice.mode === "symbol" && slice.symbolEnd !== undefined && slice.symbolEnd !== slice.to ? `，符号结束于第 ${slice.symbolEnd} 行` : "";
   const tail = slice.truncated ? `\n…（摘录已截断${readHint ? "，其余部分可用 read_file 查看" : ""}）` : "";
@@ -114,11 +117,11 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: bool
 }
 
 /** 逐个拼接摘录直到总预算用尽；预算内放不下后续锚点时明示省略（不静默丢信息）。 */
-function excerptsWithinBudget(repoPath: string, anchors: SourceAnchor[], readHint: boolean): string[] {
+function excerptsWithinBudget(repoPath: string, anchors: SourceAnchor[], readHint: boolean, egress?: EgressCollector): string[] {
   const blocks: string[] = [];
   let used = 0;
   for (const anchor of anchors) {
-    const block = excerptForAnchor(repoPath, anchor, readHint);
+    const block = excerptForAnchor(repoPath, anchor, readHint, egress);
     if (!block) continue;
     if (used + block.length > EXCERPTS_TOTAL_CHARS) {
       const suggest = readHint ? "，需要时可用 read_file 查看" : "";
@@ -231,16 +234,18 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
+  /** 本回合放进上下文的源码原文，发出前落进出境清单（见 security/dataflow.ts） */
+  const egress: EgressCollector = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
   if (node) {
     const children = node.children.map((child) => `- ${child.title}（${child.kind}）`).join("\n");
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
-    excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true).forEach((block) => sections.push(block));
+    excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true, egress).forEach((block) => sections.push(block));
   } else if (input.nodeId) {
     // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型按错误作用域作答。
     // 先试架构图文件清单，仍解析不到就明示「全局视野」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
@@ -266,12 +271,13 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (calls) sections.push(calls);
   }
   if (path && (!node || !node.anchors.some((anchor) => anchor.path === path))) {
-    const bound = excerptForAnchor(input.repoPath, { path, line: 1, label: "绑定文件" }, true);
+    const bound = excerptForAnchor(input.repoPath, { path, line: 1, label: "绑定文件" }, true, egress);
     if (bound) sections.push(bound);
   }
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
   const userMessage = `代码上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的问题：${input.content}`;
 
+  recordEgress({ repositoryPath: input.repoPath, scene: "map.chat", sessionId: input.threadId, sources: egress, sent: userMessage });
   const result = await completeWithReadTool({
     provider,
     repoPath: input.repoPath,
@@ -300,17 +306,20 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
+  const egress: EgressCollector = [];
   if (exercise.options?.length) {
     sections.push(`选项：\n${exercise.options.map((option) => `- ${option.id}. ${option.label}${option.detail ? `（${option.detail}）` : ""}`).join("\n")}`);
   }
-  excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false).forEach((block) => sections.push(block));
+  excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false, egress).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
+  const user = `练习上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的追问：${input.content}`;
+  recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
   const completion = await input.provider.complete({
     system: exerciseQaSystemPrompt({ style: input.style }),
-    user: `练习上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的追问：${input.content}`,
+    user,
     maxTokens: 700,
     temperature: 0.3,
     scene: "practice.chat",

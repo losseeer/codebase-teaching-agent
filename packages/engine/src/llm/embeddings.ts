@@ -1,4 +1,4 @@
-import { logLlmCall } from "./call-log.js";
+import { logLlmCall, outboundFingerprint } from "./call-log.js";
 
 /**
   检索第四臂用的文本向量化（OpenAI 兼容 `/v1/embeddings`，当前按阿里云百炼 Qwen 通义向量配置）。
@@ -61,7 +61,10 @@ export function createEmbeddingProvider(config: EmbeddingConfig): EmbeddingProvi
 
 async function embedBatch(config: EmbeddingConfig, batch: string[]): Promise<Float32Array[]> {
   const startedAt = Date.now();
-  const base = { at: new Date().toISOString(), tier: "light" as const, scene: "embed", provider: "openai-compatible", model: config.model, thinking: "off", traceId: null as string | null, threadId: null as string | null, actor: null as string | null };
+  // 出境指纹记的是**送进向量端点的那批文本**（不是 HTTP 请求体）：这条路不经 LlmProvider，
+  // 但「哪些代码片段进了第三方端点」同样得有一笔可对账的账（企业化第 3 条，见 §45）。
+  const outbound = outboundFingerprint({ system: "", user: batch.join("\n") });
+  const base = { at: new Date().toISOString(), tier: "light" as const, scene: "embed", provider: "openai-compatible", model: config.model, thinking: "off", traceId: null as string | null, threadId: null as string | null, actor: null as string | null, outbound };
   let response: Response;
   try {
     response = await fetch(`${config.baseUrl}/embeddings`, {

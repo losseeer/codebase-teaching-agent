@@ -62,4 +62,17 @@ describe("sliceExcerpt", () => {
     expect(sliceExcerpt(repository, { path: "../outside.ts", line: 1 }, options)).toBeUndefined();
     expect(sliceExcerpt(repository, { path: "src/missing.ts", line: 1 }, options)).toBeUndefined();
   });
+
+  it("锚点窗口里的疑似密钥在出门前被隐去，并报告处数（§43 的入口这道铺到摘录）", () => {
+    const repository = mkdtempSync(join(tmpdir(), "codebase-tutor-excerpt-secret-"));
+    repositories.push(repository);
+    writeFileSync(join(repository, "config.ts"), ['export const endpoint = "https://api.internal";', 'export const token = "sk-abcdefghijklmnopqrstuvwx";', "export const region = 1;"].join("\n"), "utf8");
+    const slice = sliceExcerpt(repository, { path: "config.ts", line: 2 }, options);
+    const sent = slice?.lines.map((item) => item.text).join("\n") ?? "";
+    expect(sent).toContain("[疑似密钥，已隐去]");
+    expect(sent).not.toContain("sk-abcdefghijklmnop");
+    expect(slice?.masked).toBe(1);
+    // 窗口里没密钥时不该凭空缺字段——出境清单按「有隐去才报数」口径
+    expect(sliceExcerpt(fixtureRepository(), { path: "src/a.ts", line: 3, endLine: 6 }, options)?.masked).toBeUndefined();
+  });
 });

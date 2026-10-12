@@ -234,7 +234,7 @@ export class ExerciseService {
       journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag });
       return cached.exercise;
     }
-    const generation = await generateExerciseWithLlm({ tag, candidates, provider });
+    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider });
     if (!generation.ok) {
       journal.append("exercise_declined", { tag, reason: generation.reason, stage: "llm_generate" });
       throw new Error(generation.reason);

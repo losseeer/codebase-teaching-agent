@@ -1,6 +1,7 @@
 import type { CourseNode, RepositoryAnalysis, TeachingPolicy, TutorMessage } from "@codebase-tutor/shared";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import { sliceExcerpt } from "../source/excerpt.js";
+import type { EgressCollector } from "../security/dataflow.js";
 
 const EXCERPT_BEFORE = 7;
 const EXCERPT_AFTER = 10;
@@ -33,6 +34,12 @@ export interface TeachingContextInput {
   /** 依赖图：提供时注入「调用关系」（跨文件调用方/被调方 + 同文件符号位置）——只给路径清单，不给源码 */
   analysis?: RepositoryAnalysis;
   maximumCharacters?: number;
+  /**
+    出境登记（见 `security/dataflow.ts`）：本函数把哪几段源码放进了上下文，就往后推几条。
+    **不在这里落账**——同一个 `assembleContext` 也被「新建会话时回给界面看」那条路径调用（server.ts 的
+    `POST /api/sessions`），那一趟根本没发请求，记了就是虚报。由真要发请求的调用方在发出前落账。
+    */
+  egress?: EgressCollector;
 }
 
 export function assembleContext(input: TeachingContextInput): string {
@@ -60,14 +67,14 @@ export function assembleContext(input: TeachingContextInput): string {
     transcript ? [`最近对话（按时间序，含学习者发言）:\n${transcript}`] : []
   ].flat();
   const excerptBudget = Math.max(0, maximumCharacters - [...head, ...tail].join("\n\n").length - BUDGET_MARGIN);
-  const excerpts = input.repositoryPath ? sourceExcerpts(input.repositoryPath, node, excerptBudget) : "";
+  const excerpts = input.repositoryPath ? sourceExcerpts(input.repositoryPath, node, excerptBudget, input.egress) : "";
   const joined = [...head, excerpts, ...tail].filter(Boolean).join("\n\n");
   return joined.length > maximumCharacters
     ? `${joined.slice(0, maximumCharacters)}\n…（上下文超出 ${maximumCharacters} 字符上限已截断）`
     : joined;
 }
 
-function sourceExcerpts(repositoryPath: string, node: CourseNode, budget: number): string {
+function sourceExcerpts(repositoryPath: string, node: CourseNode, budget: number, egress?: EgressCollector): string {
   const anchors = node.anchors.slice(0, MAX_EXCERPTS);
   if (!anchors.length) return "";
   if (budget < BUDGET_MARGIN) {
@@ -81,6 +88,7 @@ function sourceExcerpts(repositoryPath: string, node: CourseNode, budget: number
     if (!slice) continue;
     const numbered = slice.lines.map((item) => `${item.line}: ${item.text}`).join("\n");
     const note = slice.truncated ? `\n…（摘录已截断，符号到第 ${slice.symbolEnd ?? slice.to} 行；需要其余部分用 read_file 查看）` : "";
+    egress?.push({ kind: "anchor-excerpt", path: slice.path, from: slice.from, to: slice.to, text: numbered, masked: slice.masked, truncated: slice.truncated || undefined });
     blocks.push(`--- ${slice.path}:${slice.from}-${slice.to} ---\n${numbered}${note}`);
   }
   return blocks.length ? `源码摘录（锚点附近的真实代码）:\n${blocks.join("\n")}` : "";

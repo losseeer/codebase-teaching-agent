@@ -916,7 +916,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
     const crossFiles = new Map<string, number>();
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles, request.auth) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles, request.auth), threadId: turn.threadId });
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本
     result.reply = recheckTurn({ repository, journal, sessionId: turn.threadId, scene: "map_chat", question: content, answer: result.reply, crossFiles }).answer;
@@ -981,6 +981,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles, request.auth),
+      threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -1054,7 +1055,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   const send = sseWriter(reply);
   const turnHandle = beginTurn(request.body?.turnId, "practice_chat");
   try {
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     const journal = new Journal(repository.path, repository.index.repositoryId);

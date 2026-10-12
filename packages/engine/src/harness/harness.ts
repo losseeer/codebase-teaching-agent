@@ -8,6 +8,7 @@ import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
+import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 import { classifyIntent } from "../teaching/intent.js";
 import { proposeAction, isActionAllowed } from "../teaching/action.js";
 import { initialTeachingState, transition, transitionFromAction, transitionFromIntent } from "../teaching/state-machine.js";
@@ -86,13 +87,22 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   if (!provider) return respond(session, node, learnerContent);
   const state: TeachingState = { stage: session.stage, fallbackCount: session.fallbackCount, attempts: session.messages.filter((message) => message.role === "user").length };
   const policy = policyFor(session.settings);
+  /**
+    上下文里放了哪几段仓内源码——由 `assembleContext` 顺手登记，**发一次记一次**（见 `security/dataflow.ts`）。
+    落账点刻意放在这两个调用之前而不是装配里：同一个装配结果也被「新建会话回给界面看」那条路径用，
+    那一趟没发请求，记成出境就是虚报。
+    */
+  const egress: EgressCollector = [];
   const context = assembleContext({
     node,
     policy,
     history: session.messages,
-    ...(repositoryPath ? { repositoryPath } : {}),
+    ...(repositoryPath ? { repositoryPath, egress } : {}),
     ...(options.analysis ? { analysis: options.analysis } : {})
   });
+  const bookEgress = (scene: string): void => {
+    if (repositoryPath) recordEgress({ repositoryPath, scene, sessionId: session.id, sources: egress, sent: context });
+  };
 
   let next: Transition;
   let intentSource: "llm" | "regex" | undefined;
@@ -105,6 +115,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
   if (options.actionLoop) {
     // 受限 agent loop：模型提议动作 → 守门校验 → 放行或否决。意图分类被动作提议取代。
+    bookEgress("teaching.action");
     const proposal = await proposeAction(state, learnerContent, recentTranscript(session.messages), context, provider, options.signal);
     proposedAction = proposal.action;
     decisionUsage = proposal.usage;
@@ -130,6 +141,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}`;
   const actions: Pick<TutorReply, "action" | "proposedAction" | "actionSource"> = { action: next.kind, ...(proposedAction ? { proposedAction } : {}), ...(actionSource ? { actionSource } : {}) };
   try {
+    bookEgress("teaching.turn");
     const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.search ? { search: options.search } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     const completion = outcome.completion;
     // 可见回复的截断兜底：token 触顶（finishReason=length）或被这里 1,500 字符硬切，都要留痕

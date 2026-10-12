@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { SymbolInfo } from "@codebase-tutor/shared";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
+import { readJournal } from "../store/journal.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./slice.js";
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
@@ -87,6 +88,7 @@ describe("文件摘要表（L1）", () => {
   it("模型给的角色覆盖结构结论，并把来源标成 provider；摘要不提符号则判低覆盖", async () => {
     const database = tempDatabase();
     const provider: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => slices.map((slice) => ({ summary: `${slice.path} 负责一些事情。`, role: "infra" as const }))
@@ -127,6 +129,7 @@ describe("文件摘要表（L1）", () => {
     const database = tempDatabase();
     const batches: number[] = [];
     const provider: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => {
@@ -146,6 +149,7 @@ describe("文件摘要表（L1）", () => {
   it("整批抛错不掀掉导入：这一批逐条走确定性补齐，并计入 fallbackFiles", async () => {
     const database = tempDatabase();
     const provider: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-throw",
       summarizeMany: async () => { throw new Error("端点 429"); }
@@ -158,6 +162,7 @@ describe("文件摘要表（L1）", () => {
   it("兜底文本不写模型档的缓存键：下次同输入仍会重试模型，不拿结构文本冒充 LLM 摘要", async () => {
     const database = tempDatabase();
     const partial: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
@@ -167,6 +172,7 @@ describe("文件摘要表（L1）", () => {
     // 而 fallbackFiles 归零——账面与读数上看不出任何降级发生过（2026-10-06 复审确证）
     const calls: number[] = [];
     const second: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => { calls.push(slices.length); return slices.map((slice) => ({ summary: `${slice.path} 模型重写。` })); }
@@ -181,6 +187,7 @@ describe("文件摘要表（L1）", () => {
     const database = tempDatabase();
     const batches: number[] = [];
     const provider: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => {
@@ -220,7 +227,7 @@ function singleFileStructure(names: string[]): FileStructure {
 describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
   async function coverageFor(names: string[], summary: string) {
     const database = tempDatabase();
-    const provider: SummaryProvider = { name: "stub", modelVersion: "stub-1", summarizeMany: async () => [{ summary }] };
+    const provider: SummaryProvider = { sendsCodeToEndpoint: true, name: "stub", modelVersion: "stub-1", summarizeMany: async () => [{ summary }] };
     const { summaries } = await summarizeFiles({ structure: singleFileStructure(names), database, provider });
     return summaries[0].coverage;
   }
@@ -329,6 +336,7 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
     const database = tempRepoWithSource();
     const captured: FileSlice[] = [];
     const spy: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-1",
       summarizeMany: async (slices) => {
@@ -368,6 +376,7 @@ describe("L1 的密钥隐去", () => {
     writeFileSync(join(database.repositoryPath, "main.py"), `# 启动脚本，凭据是 sk-abcdefghijklmnop1234\nprint("hi")\n`, "utf8");
     const seen: string[] = [];
     const provider: SummaryProvider = {
+      sendsCodeToEndpoint: true,
       name: "stub",
       modelVersion: "stub-secret-1",
       summarizeMany: async (slices) => {
@@ -387,5 +396,45 @@ describe("L1 的密钥隐去", () => {
     expect(second.estimate.cachedFiles).toBe(4);
     // 过筛只发生在发出去的副本上：学习者仓库里的文件一个字节都不该被我们改过
     expect(readFileSync(join(database.repositoryPath, "main.py"), "utf8")).toContain("sk-abcdefghijklmnop1234");
+  });
+});
+
+/**
+  L1 这一档的出境清单。它值得单独验一遍是因为覆盖面：**全仓每个文件**都有一份结构切片发给模型，
+  「哪些文件被外部模型看过」在这条线上必须是逐文件可查的；反过来，缓存命中与确定性档根本没发请求，
+  把它们也记进去就是把本地计算说成出境（企业侧最难查的那种错）。
+  */
+describe("L1 出境清单", () => {
+  const modelProvider = (): SummaryProvider => ({
+    sendsCodeToEndpoint: true,
+    name: "stub",
+    modelVersion: "stub-1",
+    summarizeMany: async (slices) => slices.map((slice) => ({ summary: `${slice.path} 负责一些事情。` }))
+  });
+  const rowsOf = (repositoryPath: string) => readJournal(repositoryPath).filter((event) => event.type === "code_egress");
+
+  it("真发出去的那批逐文件一条：指针与指纹齐全，切片的符号名不进审计线", async () => {
+    const database = tempDatabase();
+    await summarizeFiles({ structure: STRUCTURE, database, provider: modelProvider() });
+
+    const rows = rowsOf(database.repositoryPath);
+    expect(rows.map((row) => row.payload.path)).toEqual(["business.py", "main.py", "svc.py", "util.py"]);
+    expect(rows[1]?.payload).toMatchObject({ scene: "map.summary", kind: "l1-slice", lines: "1-10" });
+    expect(String(rows[0]?.payload.hash)).toMatch(/^[0-9a-f]{12}$/);
+    expect(Number(rows[0]?.payload.chars)).toBeGreaterThan(0);
+    expect(JSON.stringify(rows)).not.toContain("main()");
+  });
+
+  it("缓存命中不再落账；确定性档（不发请求）一条都不记", async () => {
+    const database = tempDatabase();
+    const provider = modelProvider();
+    await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(rowsOf(database.repositoryPath)).toHaveLength(4);
+    await summarizeFiles({ structure: STRUCTURE, database, provider });
+    expect(rowsOf(database.repositoryPath), "四个文件全命中缓存，没有新的出境").toHaveLength(4);
+
+    const local = tempDatabase();
+    await summarizeFiles({ structure: STRUCTURE, database: local, provider: new LocalSummaryProvider() });
+    expect(rowsOf(local.repositoryPath)).toEqual([]);
   });
 });

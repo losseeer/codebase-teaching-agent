@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, type LlmCallRecord } from "./call-log.js";
+import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, outboundFingerprint, type LlmCallRecord } from "./call-log.js";
 import type { LlmProvider } from "./provider.js";
 import { ThinkingOverrideLlmProvider } from "./provider.js";
 import { markActor, runWithTrace } from "../trace/context.js";
@@ -28,6 +28,7 @@ const record = (overrides: Partial<LlmCallRecord> = {}): LlmCallRecord => ({
   traceId: null,
   threadId: null,
   actor: null,
+  outbound: { chars: 120, hash: "aaaaaaaaaaaa" },
   ...overrides
 });
 
@@ -155,5 +156,28 @@ describe("LLM 工作日志", () => {
     const entries = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as LlmCallRecord);
     expect(entries[0]).toMatchObject({ scene: "teaching.turn", traceId: "req-42", actor: "ci-bot" });
     expect(entries[1]).toMatchObject({ scene: "map.refine", traceId: null, actor: null });
+    // 指纹落进行里：审计者要在本地重跑一次装配、比这一列才知道「出去的是不是这份」
+    expect(entries[0].outbound).toMatchObject({ chars: expect.any(Number) });
+    expect(entries[0].outbound.hash).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("出境载荷指纹：正文差一个字就换哈希，工具结果与工具清单都算进去", () => {
+    const base = { system: "提示词", user: "问题" };
+    const first = outboundFingerprint(base);
+    expect(outboundFingerprint(base)).toEqual(first); // 同一次装配重跑两次必须给同一个指纹，否则没法核对
+    expect(outboundFingerprint({ ...base, user: "问题？" })).not.toEqual(first);
+
+    // read_file 的内容是在**下一轮**出门的：它作为 tool 消息进 messages，指纹必须认得到
+    const withTool = { system: "提示词", messages: [{ role: "user" as const, content: "问题" }, { role: "tool" as const, content: "文件 src/main.ts（第 1-20 行）：\nsecret" }] };
+    expect(outboundFingerprint(withTool).chars).toBeGreaterThan(first.chars);
+    expect(outboundFingerprint({ ...withTool, messages: withTool.messages.slice(0, 1) }).hash).not.toBe(outboundFingerprint(withTool).hash);
+
+    // 工具清单也占输入：跨仓那档多一个 cross_repo_link，文本一字不变也得算成不同载荷
+    const tool = { name: "read_file", description: "读文件", parameters: { path: { type: "string" } } };
+    const withoutTools = outboundFingerprint({ ...base, tools: [] });
+    const withTools = outboundFingerprint({ ...base, tools: [tool] });
+    expect(withTools.hash).not.toBe(withoutTools.hash);
+    // 工具描述确实进请求体（provider.ts:215 把 name+description+parameters 一起发），所以改描述就是改载荷
+    expect(outboundFingerprint({ ...base, tools: [{ ...tool, description: "读文件（带行号）" }] }).hash).not.toBe(withTools.hash);
   });
 });

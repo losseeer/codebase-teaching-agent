@@ -45,7 +45,7 @@
 │   │       ├── learner/         #   学习者画像 / 掌握度推导（mastery.ts）/ 渐隐提示
 │   │       ├── scopechat/       #   宏观设计与练习两作用域的对话（上下文 + 受限读码工具循环）
 │   │       ├── source/          #   只读源码工具：read_file / search_code / 摘录 / tool-loop
-│   │       ├── security/        #   密钥形态判据与隐去（secrets，入口出口共用一份）+ API key 装载与按仓授权（api-keys）
+│   │       ├── security/        #   密钥形态判据与隐去（secrets，入口出口共用一份）+ API key 装载与按仓授权（api-keys）+ 源码出境清单（dataflow）
 │   │       ├── search/          #   检索第四臂的向量索引：文件级/函数级单元、增量哈希、余弦池化、RRF（当前只有评测台架在用）
 │   │       ├── cost/            #   token 用量汇总与月度预算
 │   │       ├── llm/             #   多 Provider LLM 抽象（运行时配置与密钥掩码 / 重试 / 故障转移 / 中止归因）+ embeddings 客户端
@@ -53,7 +53,7 @@
 │   │       ├── turns/           #   在途回合注册表（「停止生成」的带外落点，按 turnId 掐断 signal）
 │   │       ├── eval/            #   离线评测：零 token 判分器（scorers）+ LLM 裁判（judge）+ gold 用例（关键词集 / 整句中文集）
 │   │       ├── trace/           #   请求 traceId 上下文 + 引擎自身 JSONL 日志
-│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace）+ phaseB 评测 + search:embed
+│   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace / dataflow-report）+ phaseB 评测 + search:embed
 │   │       └── lib.ts           #   hash / id / 路径工具
 │   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
 │   │   ├── public/              #   design-prototype.html（界面基线）+ 截图
@@ -105,7 +105,9 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 流式与中止：三处对话（宏观设计 / 代码教学 / 练习评估）统一走 SSE，事件为 `progress` / `delta` / `done` / `error` / `aborted`，回合节奏是「算完 → 落库 → 72 字分块回放」。每次发送带一个客户端生成的 `turnId`，「停止生成」按钮先打 `POST /api/turns/stop` 让引擎掐掉这一轮（点了停止 = 这一轮作废，不落库也不回放），再断自己的连接。连接因刷新页面或网络波动断开时**不算停止**——引擎照常把这一轮算完并落库，GUI 在 sessionStorage 记一笔「欠账」，回到会话时按 12s/30s/60s 退避回读正文，补上回复并明说发生了什么。细节见 [开发关键点问题与解决方案](docs/开发关键点问题与解决方案.md) 第十三节。
 
-密钥不进模型、不进日志：`read_file` 取回源码时先按形态判据（`security/secrets.ts`）把疑似硬编码凭据换成占位文本，首行明写「另有 N 处疑似密钥已隐去（不要尝试补全）」；模型回复在下发与落库前过同一份判据（连仓库外路径一起），改过字就在尾注当面说明，journal 只记数量与首个样例、**原文不进任何日志**。L1 摘要筛的是「发给模型的那份」与「回存的那份」，切片本身不动——摘要缓存键是 `hash(切片)`，动切片等于替每个用户重烧一遍全仓摘要。
+密钥不进模型、不进日志：`read_file` 取回源码时先按形态判据（`security/secrets.ts`）把疑似硬编码凭据换成占位文本，首行明写「另有 N 处疑似密钥已隐去（不要尝试补全）」；锚点摘录（教学/宏观设计/练习答疑共用的 `source/excerpt.ts`）与模型回复（下发与落库前）过同一份判据，改过字就在尾注当面说明，journal 只记数量与首个样例、**原文不进任何日志**。L1 摘要筛的是「发给模型的那份」与「回存的那份」，切片本身不动——摘要缓存键是 `hash(切片)`，动切片等于替每个用户重烧一遍全仓摘要。
+
+数据流审计（企业化第 3 条）：`pnpm dataflow:report -- <被学习仓>` 回答「哪些代码片段流向了哪个 provider」。两条线各答一半，靠 `traceId + scene` 关联——仓内 `.tutor/journal.jsonl` 的 `code_egress` 记**装了哪几段**（路径、行区间、字符数、sha256 前 12 位、隐去处数；**正文一个字都不落**，`.tutor/` 是可随仓带走的东西），`~/.codebase-tutor/llm.log` 每行的 `outbound:{chars,hash}` 记**实际发出的那份载荷指纹**（在 `LoggingLlmProvider` 这个唯一收口算，工具 schema 与描述都算进载荷），外加 provider/model/token/调用方 `actor`。落账点一律贴着「真要发请求」那一侧：本地兜底与预算降级不发（`SummaryProvider.sendsCodeToEndpoint` 表态，漏写编译不过）、缓存命中虽装配一次但不发（装配用出参攒、只有发送处 booking）、外层字符预算裁掉的尾段不发（`recordEgress` 拿待发文本比一遍，不在其中的段不落账）——**虚报出境比漏报更难查**。工具循环 `read_file` 读到的内容不重复登记，报表按「同一 traceId 内的 file_read 也算出境」合并。两条读数口径写在报表里：导入与监听刷新没有 traceId，那部分调用的 provider/token 不能按仓归属；只送派生内容（路径/标题/摘要）的场景按设计没有清单，报表末尾点名，「没有清单」与「漏了清单」分得开。
 
 认证层（企业形态才需要，本机默认关）：`~/.codebase-tutor/api-keys.json`（`TUTOR_API_KEYS_FILE` 可改路径）写几张 key 就开闸——
 
