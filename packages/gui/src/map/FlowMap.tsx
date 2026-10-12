@@ -109,7 +109,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
   const entryIsKnown = entries.some((entry) => entry.path === entryPath) || fileOptions.includes(entryPath);
   useEffect(() => {
     if (!entryIsKnown) setEntryPath(preferredEntryPath(entries, analysis));
-  }, [entries, entryIsKnown]);
+  }, [entries, entryIsKnown, analysis]);
 
   /** 核心入口按 path 去重：同一个类可能被认成两种入口（约定名 + 启动脚本），并列两条只会让人以为能选两件东西。 */
   const coreOptions = useMemo<DropdownOption[]>(() => {

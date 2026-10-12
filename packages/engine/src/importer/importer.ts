@@ -23,7 +23,7 @@ import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } fro
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
-import { hash, id, repositoryId as deriveRepositoryId } from "../lib.js";
+import { catalogRepositoryId, hash, id } from "../lib.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
@@ -88,19 +88,6 @@ function rememberRepository(repositoryPath: string): void {
 /** 从地址簿里摘掉一条（用户显式动作；不动仓库自己的 .tutor 产物）。 */
 function dropFromRegistry(repositoryId: string): void {
   writeRegistry(readRegistry().filter((item) => catalogRepositoryId(item) !== repositoryId));
-}
-
-/**
-  地址簿条目的 id：目录在就按 `lib.repositoryId` 的口径（realpath 后哈希）；目录不在时 realpath 会抛，
-  退化成按字面路径哈希——等它回到原路径时 `realpath(path) === path`（入簿时存的就是 realpath），
-  两种算法给出同一个 id，条目不会漂。列清单这一步绝不能因为某个目录被挪走就整页 500。
-  */
-function catalogRepositoryId(path: string): string {
-  try {
-    return deriveRepositoryId(path);
-  } catch {
-    return `repo_${hash(path).slice(0, 16)}`;
-  }
 }
 
 function isDirectory(path: string): boolean {

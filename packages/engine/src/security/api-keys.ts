@@ -147,9 +147,15 @@ export function stillIssued(name: string): boolean {
 }
 
 
+/** 名单里有没有 `*`：「这张 key 不受仓名约束」这个含义只在这一处定义——按仓判据与「不受限能力」判据都读它，
+    免得两处对 `*` 的理解漂开（`unrestricted` 与 `allowsRepository` 以前各写一份 `includes("*")`）。 */
+export function hasWildcard(auth: AuthResult): boolean {
+  return auth.repositories.includes("*");
+}
+
 /** 这张 key 能不能碰这个仓。`*` = 全部。 */
 export function allowsRepository(auth: AuthResult, repositoryId: string): boolean {
-  return auth.repositories.includes("*") || auth.repositories.includes(repositoryId);
+  return hasWildcard(auth) || auth.repositories.includes(repositoryId);
 }
 
 /** 从请求头取 key：`x-api-key` 或 `Authorization: Bearer …` 两种写法都收。 */

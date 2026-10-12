@@ -52,6 +52,8 @@ const TAIL = "自动复检";
 let scripted: string[] = [];
 let spoken = OK_REPLY;
 let fetchCalls = 0;
+/** 让假 provider 在途一会儿：「停止生成」的路由级测试得赶在 LLM 返回之前打进 `/api/turns/stop`。 */
+let holdMs = 0;
 
 function decisionCall(raw: string): boolean {
   return raw.includes("动作决策器") || raw.includes("意图分类");
@@ -69,6 +71,7 @@ const sentTools: { names: string[]; raw: string }[] = [];
 
 async function fakeFetch(_url: unknown, init?: { body?: string }): Promise<Response> {
   fetchCalls += 1;
+  if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
   const raw = String(init?.body ?? "{}");
   try {
     const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
@@ -199,6 +202,7 @@ afterAll(async () => {
 beforeEach(() => {
   scripted = [];
   spoken = OK_REPLY;
+  holdMs = 0;
 });
 
 /** 宏观设计作用域：JSON 与 SSE 两条出口共用同一次收尾，两边的文本一致性各验一遍。 */
@@ -249,6 +253,33 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(assistantMessage(threadId).content).toBe(reply);
     expect(lastEvent("turn_invariant").payload.scene).toBe("map_chat");
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
+  });
+
+  it("停止生成：aborted 帧顶掉 done、正文不落库，journal 只留一行 turn_aborted", async () => {
+    // 让 LLM 在途 300ms，好赶在它回来之前打「停止」——这一条测的是路由收尾的分诊，不是 registry 的中止本身
+    scripted = [OK_REPLY];
+    holdMs = 300;
+    const threadId = await newThread("map", "中止线程");
+    const turnId = "abort-test-turn"; // 8~64 位 URL-safe，与 GUI 的 crypto.randomUUID 同一档
+    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "这句话会被掐掉", threadId, turnId } });
+    await new Promise((resolve) => setTimeout(resolve, 60)); // 让回合登记上再打停止
+    const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
+    expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
+
+    const events = sseEvents((await pending).payload);
+    expect(events.some((event) => event.type === "done"), "中止的回合不该回放 done").toBe(false);
+    expect(events.some((event) => event.type === "error"), "中止不是错误").toBe(false);
+    expect(events.filter((event) => event.type === "delta"), "中止后一帧正文都不该回放").toHaveLength(0);
+    const abortedFrame = events.find((event) => event.type === "aborted");
+    expect(abortedFrame, "没收到 aborted 帧").toBeDefined();
+    expect(abortedFrame).toMatchObject({ type: "aborted", scene: "map_chat" });
+
+    const aborted = lastEvent("turn_aborted");
+    expect(aborted.payload).toMatchObject({ scene: "map_chat", turn_id: turnId, aborted_by: "user_stop" });
+    expect(aborted.sessionId).toBe(threadId);
+    // 作废的回合没有成品：库里既没有助手正文，也不该有这一轮的 turn_text（否则 GUI 回来会看到一条自己掐掉的回复）
+    expect(readMessages(repoDir, threadId).some((message) => message.role === "assistant")).toBe(false);
+    expect(eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
   });
 });
 

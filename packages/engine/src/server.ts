@@ -20,18 +20,18 @@ import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/importer.js";
 import { indexRepository } from "./indexer/indexer.js";
-import { id, isWithin, repositoryId as deriveRepositoryId, turnTextPayload } from "./lib.js";
+import { catalogRepositoryId, id, isWithin, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./tutor-settings/tutor-settings.js";
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
-import { allowsRepository, authenticate, authStateOf, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
+import { allowsRepository, authenticate, authStateOf, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
-import { abortTurn, beginTurn } from "./turns/registry.js";
+import { abortTurn, beginTurn, type TurnHandle, type TurnScene } from "./turns/registry.js";
 import { dedupeFileReads, deniedPathReason } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
@@ -146,7 +146,7 @@ app.addHook("onRequest", async (request, reply) => {
   - 收无归属的推送帧：算不出属于哪个仓的那一帧，发给谁都是赌。
   */
 function unrestricted(request: FastifyRequest): boolean {
-  return !request.auth || request.auth.repositories.includes("*");
+  return !request.auth || hasWildcard(request.auth);
 }
 
 /** 授权判定：本机模式（无身份）放行；有身份时按这张 key 的 `repositories` 名单。 */
@@ -276,10 +276,11 @@ const subscribers = new Set<{ send: (event: ServerEvent) => void; request: Fasti
 /** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
 const EVENT_STREAM_PING_MS = 25_000;
 
-/** 这一帧/这个任务归哪个仓：job 刚建出来时 id 还没算，回落用路径算同一个 id。 */
+/** 这一帧/这个任务归哪个仓：job 刚建出来时 id 还没算，回落用路径算同一个 id。
+    用 `catalogRepositoryId` 而不是 `repositoryId`：目录被挪走时后者会抛，而这里是 `broadcast` 的同步链。 */
 function targetOf(payload: { repositoryId?: unknown; repositoryPath?: unknown }): string | undefined {
   return typeof payload.repositoryId === "string" ? payload.repositoryId
-    : typeof payload.repositoryPath === "string" ? deriveRepositoryId(payload.repositoryPath) : undefined;
+    : typeof payload.repositoryPath === "string" ? catalogRepositoryId(payload.repositoryPath) : undefined;
 }
 
 /** 归属算不出来时的门槛：只给不受限的 key（与「它能不能开导入」是同一条线）。 */
@@ -350,6 +351,44 @@ function openSseStream(request: FastifyRequest, reply: FastifyReply): (event: un
   });
   sseFrame(reply, ": open\n\n");
   return sseWriter(reply);
+}
+
+/** 打字机回放的块长：三作用域同款，改一处就全改（真 token 流式要 provider 层改造，这里先消除「整段落下」）。 */
+const TYPEWRITER_CHUNK = 72;
+
+function replayTypewriter(send: (event: unknown) => void, text: string): void {
+  for (const delta of chunk(text, TYPEWRITER_CHUNK)) send({ type: "delta", delta });
+}
+
+/**
+  开一轮作用域对话流：hijack → 首帧落网 → 登记回合。三处顺序一致，且 `dispose()` 必须留在调用方的 finally 里——
+  漏一处就是往回合登记表里塞一个永不摘除的在途条目，之后「停止生成」按名字也掐不到它。
+*/
+function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: unknown) => void; turnHandle: TurnHandle } {
+  reply.hijack();
+  return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene, request.auth?.name) };
+}
+
+/**
+  回合失败的收尾（三作用域同一口径）：中止与出错是两件事，先判中止——只有它带着登记过的 turnId，
+  出错分支什么都不知道。用户点了停止就按「作废」收：journal 留一条 `turn_aborted`、不伪造正文也不写 `turn_text`。
+*/
+function failScopedTurn(input: {
+  send: (event: unknown) => void;
+  repositoryPath: string;
+  repositoryId: string;
+  scene: TurnScene;
+  turnHandle: TurnHandle;
+  threadId?: string;
+  error: unknown;
+  fallbackError: string;
+}): void {
+  if (!input.turnHandle.signal?.aborted) {
+    input.send({ type: "error", error: input.error instanceof Error ? input.error.message : input.fallbackError });
+    return;
+  }
+  new Journal(input.repositoryPath, input.repositoryId).append("turn_aborted", { scene: input.scene, turn_id: input.turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, input.threadId);
+  input.send({ type: "aborted", scene: input.scene });
 }
 
 function repositoryOr404(repositoryId: string) {
@@ -1005,7 +1044,7 @@ function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "practice
   分母因此在环成立；引用没能核实时在正文尾部补一行明示，学习者读到的是被核过的文本。
 
   能在尾部补话而不打断体验，靠的是一个实现事实：三种作用域都是**模型算完之后分块回放**
-  （`chunk(..., 72)`），不是真 token 流。哪天真流式了，这行提示就得改成独立事件（记在这里防忘）。
+  （`replayTypewriter`，块长 `TYPEWRITER_CHUNK`），不是真 token 流。哪天真流式了，这行提示就得改成独立事件（记在这里防忘）。
 
   判据与 `phaseB:eval` 第 4 节共用 `checkTurnInvariants` 同一个函数，不分两份实现。
   */
@@ -1133,9 +1172,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
-  reply.hijack();
-  const send = openSseStream(request, reply);
-  const turnHandle = beginTurn(request.body?.turnId, "map_chat", request.auth?.name);
+  const { send, turnHandle } = beginScopedStream(request, reply, "map_chat", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   try {
     const result = await mapChat({
@@ -1151,15 +1188,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
-    for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
+    replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    if (turnHandle.signal?.aborted) {
-      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "map_chat", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, turn.threadId);
-      send({ type: "aborted", scene: "map_chat" });
-    } else {
-      send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
-    }
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
   }
@@ -1192,9 +1224,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
   const { history, earlierQuestions } = threadScopedHistory(repository.path, thread?.id);
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
-  reply.hijack();
-  const send = openSseStream(request, reply);
-  const turnHandle = beginTurn(request.body?.turnId, "practice_chat", request.auth?.name);
+  const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
@@ -1208,15 +1238,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     }, thread?.id);
     journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply), thread?.id);
-    for (const delta of chunk(result.reply, 72)) send({ type: "delta", delta });
+    replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    if (turnHandle.signal?.aborted) {
-      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "practice_chat", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, thread?.id);
-      send({ type: "aborted", scene: "practice_chat" });
-    } else {
-      send({ type: "error", error: error instanceof Error ? error.message : "LLM 对话失败" });
-    }
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", turnHandle, ...(thread?.id ? { threadId: thread.id } : {}), error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
   }
@@ -1486,9 +1511,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
   // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流，不再走全局广播（事件天然按请求隔离，连接断开自动清理）
-  reply.hijack();
-  const send = openSseStream(request, reply);
-  const turnHandle = beginTurn(request.body?.turnId, "teach", request.auth?.name);
+  const { send, turnHandle } = beginScopedStream(request, reply, "teach", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   try {
     const outcome = await respondWithProvider(session, node, request.body.content.trim(), gate.degraded ? undefined : teachingProvider, faded, repository.path, {
@@ -1556,16 +1579,11 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
       traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
     }
-    for (const delta of chunk(outcome.assistant.content, 72)) send({ type: "delta", delta });
+    replayTypewriter(send, outcome.assistant.content);
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" });
   } catch (error) {
-    if (turnHandle.signal?.aborted) {
-      // 用户点了停止：这一轮没有成品。不伪造 assistant 正文、不写 turn_text，只留一条中止痕迹
-      new Journal(repository.path, repository.index.repositoryId).append("turn_aborted", { scene: "teach", turn_id: turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, session.id);
-      send({ type: "aborted", scene: "teach" });
-    } else {
-      send({ type: "error", error: error instanceof Error ? error.message : "教学回合失败" });
-    }
+    // 用户点了停止：这一轮没有成品。不伪造 assistant 正文、不写 turn_text，只留一条中止痕迹
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", turnHandle, threadId: session.id, error, fallbackError: "教学回合失败" });
   } finally {
     turnHandle.dispose();
   }

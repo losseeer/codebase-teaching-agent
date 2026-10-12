@@ -9,6 +9,20 @@ export function repositoryId(path: string): string {
   return `repo_${hash(realpathSync(path)).slice(0, 16)}`;
 }
 
+/**
+  地址簿条目的 id：目录在就按 `repositoryId` 的口径（realpath 后哈希）；目录不在时 realpath 会抛，
+  退化成按字面路径哈希——等它回到原路径时 `realpath(path) === path`（入簿时存的就是 realpath），
+  两种算法给出同一个 id，条目不会漂。列清单与按帧归属仓 id 都不能因为某个目录被挪走就抛：
+  前者整页 500，后者会把异常顺着 `emit("event")` 的同步链捅进已经算完的导入（见 server.ts 的 `broadcast`）。
+  */
+export function catalogRepositoryId(path: string): string {
+  try {
+    return repositoryId(path);
+  } catch {
+    return `repo_${hash(path).slice(0, 16)}`;
+  }
+}
+
 export function isWithin(root: string, candidate: string): boolean {
   const base = resolve(root);
   const target = resolve(candidate);

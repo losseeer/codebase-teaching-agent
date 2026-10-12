@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isWithin } from "../lib.js";
-import { maskSecrets } from "../security/secrets.js";
+import { secretMasker } from "../security/secrets.js";
 
 /**
   锚点取码：把「锚点」解析成一段可嵌入 prompt 的源码窗口。
@@ -90,16 +90,14 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
 
   const lines: { line: number; text: string }[] = [];
   let used = 0;
-  let masked = 0;
+  const masker = secretMasker();
   for (let current = from; current <= to; current += 1) {
     const raw = all[current - 1] ?? "";
     if (lines.length && used + raw.length + 1 > options.maxChars) {
       truncated = true;
       break;
     }
-    const screened = maskSecrets(raw);
-    masked += screened.masked;
-    lines.push({ line: current, text: screened.text });
+    lines.push({ line: current, text: masker.take(raw) });
     used += raw.length + 1;
   }
   const last = lines.length ? lines[lines.length - 1].line : from;
@@ -111,7 +109,7 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
     lines,
     truncated: truncated || last < to,
     mode,
-    ...(masked ? { masked } : {}),
+    ...(masker.masked ? { masked: masker.masked } : {}),
     ...(symbolEnd !== undefined ? { symbolEnd } : {})
   };
 }

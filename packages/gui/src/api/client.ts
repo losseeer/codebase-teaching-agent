@@ -72,6 +72,18 @@ async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: 
   return final;
 }
 
+/**
+  宏观设计与练习追问共用的过程帧映射（四条对话流里这两条同形）。
+  练习作用域压根不发 `searching`（它没有检索工具），这张表照旧认它——多认一类不会凭空生出事件，
+  少认一类就会让「正在检索…」在界面上永远停在「回复生成中…」（10-06 就是这么发现 thinking 漏接的）。
+*/
+function mapScopedEvent(event: Record<string, unknown> & { type: string }, onEvent: (event: ScopedChatEvent) => void): void {
+  if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
+  else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
+  else if (event.type === "searching") onEvent({ type: "searching", query: String(event.query ?? "") });
+  else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
+}
+
 /** LLM 运行时设置（GUI 可改，引擎落盘持久，重启后仍在；留空项回落 .env）。 */
 export type ThinkingEffort = "auto" | "off" | "low" | "high" | "max";
 
@@ -225,19 +237,10 @@ export const api = {
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。threadId = 当前会话线程，引擎据此自取历史并落回合正文（GUI 不再回传窗口正文）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
   mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => {
-      if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
-      else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
-      else if (event.type === "searching") onEvent({ type: "searching", query: String(event.query ?? "") });
-      else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
-    }, turn.signal),
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => {
-      if (event.type === "thinking") onEvent({ type: "thinking", round: Number(event.round ?? 1) });
-      else if (event.type === "reading") onEvent({ type: "reading", path: String(event.path ?? "") });
-      else if (event.type === "delta") onEvent({ type: "delta", delta: String(event.delta ?? "") });
-    }, turn.signal),
+    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方吞掉错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };

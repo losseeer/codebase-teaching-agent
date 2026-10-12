@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
 import { hash } from "../lib.js";
-import { maskSecrets } from "../security/secrets.js";
+import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
@@ -91,18 +91,14 @@ export const summaryCacheKey = cacheKeyOf;
   逐字段列举式写法会随 `FileSlice` 长新字段而漏掉，所以整份递归走字符串。
  */
 function maskSliceForSend(slice: FileSlice): { copy: FileSlice; masked: number } {
-  let masked = 0;
+  const masker = secretMasker();
   const walk = (value: unknown): unknown => {
-    if (typeof value === "string") {
-      const result = maskSecrets(value);
-      masked += result.masked;
-      return result.text;
-    }
+    if (typeof value === "string") return masker.take(value);
     if (Array.isArray(value)) return value.map(walk);
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, walk(inner)]));
     return value;
   };
-  return { copy: walk(slice) as FileSlice, masked };
+  return { copy: walk(slice) as FileSlice, masked: masker.masked };
 }
 
 export async function summarizeFiles(input: {

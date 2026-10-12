@@ -33,3 +33,22 @@ export function maskSecrets(text: string): { text: string; masked: number } {
   }
   return { text: out, masked };
 }
+
+/**
+  逐段（一行或一个字段）过筛并把命中数累加进同一份计数。四处装配点是这个形状——锚点摘录、
+  出题摘录、带行号前缀的候选原文、摘要切片的递归过筛，各自拼外壳（行号、join、对象重建），
+  而计数只有这一处：`masked` 会进 journal 的 `code_egress`，多算少算都是虚报。
+  做成可反复调用的累加器而不是一次性 `map`，是因为摘录那处要在字符预算耗尽时中断循环：
+  多筛一行就是多报一次出境。
+*/
+export function secretMasker(): { take: (text: string) => string; masked: number } {
+  const state = {
+    masked: 0,
+    take(text: string): string {
+      const screened = maskSecrets(text);
+      state.masked += screened.masked;
+      return screened.text;
+    }
+  };
+  return state;
+}

@@ -337,6 +337,10 @@ useEffect(() => {
     map[repositoryId] = { ...map[repositoryId], [CHAT_SCOPE[target]]: debt ?? undefined };
     writeDebtMap(map);
   };
+  /** 发请求前记下欠账，基准是「此刻已知的库里正文条数」——回来时按它判断引擎有没有替我们算完。 */
+  const recordDebt = (target: Scope, threadId: string): void => {
+    patchDebt(target, { threadId, count: knownRowCount.current[target] });
+  };
   /** 有没有等着补的账：欠的必须正是当前线程，否则切回来的那条不该被旧事打扰。 */
   const hasDebt = (target: Scope): boolean => {
     const debt = readDebt(target);
@@ -409,8 +413,10 @@ useEffect(() => {
   }, []);
 
   /** 回合失败的分诊：用户停止（清账——这一轮不该落库）／断线（欠账原样留着，等引擎算完补回）／引擎明说失败（清账，没有可补的）／其余按原因报错。
-      `replayStarted` 由调用方的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被掐掉的那一轮正文其实已经在库里。 */
+      `replayStarted` 由 `turnSink` 的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被掐掉的那一轮正文其实已经在库里。
+      分诊前先放弃打字机队列：半途的 delta 不该继续往 `liveAnswer` 里吐。 */
   const triageTurnFailure = (target: Scope, reason: unknown, replayStarted: boolean): void => {
+    abort();
     const detail = reason instanceof Error ? reason.message : String(reason);
     if (stoppedByUser(target)) {
       patchDebt(target, null);
@@ -427,6 +433,27 @@ useEffect(() => {
     patchDebt(target, null);
     setError(detail);
     pushMessage(target, "agent", `发送失败：${detail}`, "error");
+  };
+
+  /**
+    一次流式回合的共用三动作（三作用域同一份）：delta 落点、成功结账、失败分诊。
+    「回放是否已开始」只活在这个闭包里：分诊发生在 catch 里，而那一个布尔决定提示文案说不说「引擎其实算完了」。
+    结账顺序是拍过板的：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
+  */
+  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined) => Promise<void>; fail: (reason: unknown) => void } => {
+    let replayStarted = false;
+    return {
+      onDelta: (delta) => { replayStarted = true; enqueue(delta); },
+      settle: async (text, provider) => {
+        await finish();
+        pushMessage(target, "agent", text);
+        setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
+        clear();
+        knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
+        patchDebt(target, null);
+      },
+      fail: (reason) => triageTurnFailure(target, reason, replayStarted)
+    };
   };
 
   /** 按 threadId 拉回正文并铺到侧栏：teaching 走 /api/sessions（连 stage/settings 一起回），map/practice 走线程正文。 */
@@ -626,7 +653,7 @@ useEffect(() => {
     }
     setSending(true); setError(""); setScopeProgress("teaching", "正在准备教学上下文…");
     const turn = beginTurn("teaching");
-    let sawDelta = false;
+    const sink = turnSink("teaching");
     try {
       let active = session;
       if (!active) {
@@ -640,25 +667,18 @@ useEffect(() => {
       }
       if (!active) return;
       begin();
-      // 记下欠账再发请求：这一轮若因断线没送达，回来时按这条记录判断引擎有没有替我们算完
-      patchDebt("teaching", { threadId: active.id, count: knownRowCount.current.teaching });
+      recordDebt("teaching", active.id);
       // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流（替代原 /ws 全局广播 + sessionId 过滤）
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
-        if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
+        if (event.type === "delta") sink.onDelta(event.delta);
         else if (event.type === "progress") setScopeProgress("teaching", progressText(event.payload));
       }, turn);
-      await finish();
       setSession(reply.session);
       setSettingsState(reply.session.settings);
       setCost(reply.cost);
-      setReplySource((prev) => ({ ...prev, teaching: reply.provider ?? "" }));
-      clear();
-      pushMessage("teaching", "agent", reply.message.content);
-      knownRowCount.current.teaching += 2; // 一问一答原子落库
-      patchDebt("teaching", null);          // 这一轮送到了：欠账销掉
+      await sink.settle(reply.message.content, reply.provider);
     } catch (reason) {
-      abort();
-      triageTurnFailure("teaching", reason, sawDelta);
+      sink.fail(reason);
     } finally {
       endTurn();
       setSending(false);
@@ -686,12 +706,11 @@ useEffect(() => {
     // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
     begin();
     const turn = beginTurn(scope);
-    patchDebt(scope, { threadId, count: knownRowCount.current[scope] }); // 同 teaching：发请求前先记下欠账
-    let sawDelta = false;
+    recordDebt(scope, threadId);
+    const sink = turnSink(scope);
     const onScopedEvent = (event: ScopedChatEvent): void => {
-      if (event.type === "delta") { sawDelta = true; enqueue(event.delta); }
-      // 剩下只有过程提示三种（thinking / reading / searching），三条都接：
-      // 漏掉 thinking 时，多轮工具循环里那行字会一直停在「回复生成中…」
+      // delta 进打字机队列，剩下三类过程提示（thinking / reading / searching）全部走 progressText——漏接一类，那行字就停在「回复生成中…」
+      if (event.type === "delta") sink.onDelta(event.delta);
       else setScopeProgress(scope, progressText(event));
     };
     try {
@@ -708,15 +727,9 @@ useEffect(() => {
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
-      await finish();
-      pushMessage(scope, "agent", reply.reply);
-      setReplySource((prev) => ({ ...prev, [scope]: reply.provider ?? "" }));
-      clear();
-      knownRowCount.current[scope] += 2;
-      patchDebt(scope, null); // 这一轮送到了：欠账销掉
+      await sink.settle(reply.reply, reply.provider);
     } catch (reason) {
-      abort();
-      triageTurnFailure(scope, reason, sawDelta);
+      sink.fail(reason);
     } finally {
       stop();
       endTurn();

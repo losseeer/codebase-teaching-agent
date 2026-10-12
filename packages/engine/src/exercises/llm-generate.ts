@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { recordEgress, type EgressSource } from "../security/dataflow.js";
-import { maskSecrets } from "../security/secrets.js";
+import { secretMasker } from "../security/secrets.js";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**
@@ -117,17 +117,13 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
     // 与锚点摘录、L1、read_file 同一道出境前筛（`security/secrets.ts`）：这段是**源码原文**，
     // 出题路径以前是裸 readFileSync，等于「模型能看到的源码」在这一条路上绕过了筛子。
-    let masked = 0;
-    const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => {
-      const screened = maskSecrets(line);
-      masked += screened.masked;
-      return screened.text;
-    });
+    const masker = secretMasker();
+    const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
     // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间掐断，那最后几行没出门就不能算进去
     const sentLines = text.split("\n").length;
-    return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
+    return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
     return undefined;
   }
@@ -262,18 +258,14 @@ export function buildTagCandidate(repositoryPath: string, path: string, maxLines
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
     const start = Math.max(0, offset - 1);
-    let masked = 0;
+    const masker = secretMasker();
     return {
       path,
       lineCount: lines.length,
       startLine: start + 1,
       // 行号前缀是产品要的（LLM 的锚点行号以此为基准），筛的是**行内容**：整段源码在这一条路上同样是原文出境
-      excerpt: lines.slice(start, start + maxLines).map((line, index) => {
-        const screened = maskSecrets(line);
-        masked += screened.masked;
-        return `${start + index + 1}| ${screened.text}`;
-      }).join("\n").slice(0, 4_000),
-      masked
+      excerpt: lines.slice(start, start + maxLines).map((line, index) => `${start + index + 1}| ${masker.take(line)}`).join("\n").slice(0, 4_000),
+      masked: masker.masked
     };
   } catch {
     return undefined;
