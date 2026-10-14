@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTutorIgnoreMatcher } from "./ignore.js";
-import { changeWanted, isArtifactEcho, RepositoryWatcher } from "./watcher.js";
+import { changeWanted, ingestSetDiffers, isArtifactEcho, RepositoryWatcher } from "./watcher.js";
+import { listIngestedPaths } from "./indexer.js";
 
 /**
   监听这一层的三条口径（2026-10-06 复审 #123）：
@@ -70,6 +71,45 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     expect(changeWanted(".tutorignore", matcher)).toBe(true);
     expect(changeWanted("src/keep.ts", matcher)).toBe(true);
   });
+
+  /**
+    #163 的判据位。以前「非忽略、非产物」就算源码改动，于是往仓里放一张图片、一份 `.env`
+    都会排一整轮重分析：产物被真实扫描换掉（测试里那两条出境用例因此在并行负载下偶发拿到 0 行），
+    真仓里则是缓存键重算 + 润色可能重烧。现在只有「可能改变收录集」的改动才叫醒。
+    */
+  it("文件那一档按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {
+    const dir = repository();
+    const matcher = createTutorIgnoreMatcher(dir);
+    expect(changeWanted("src/keep.ts", matcher, "file"), "收录进来的源码照样叫醒").toBe(true);
+    expect(changeWanted(".env", matcher, "file"), "`.env` 从来不在扩展名白名单里").toBe(false);
+    expect(changeWanted("assets/logo.png", matcher, "file")).toBe(false);
+    expect(changeWanted("credentials.json", matcher, "file"), "读层判它「不开放读取」，索引不收它，写入也就不该叫醒重分析").toBe(false);
+    // 目录与「判不出来」两档不能照这个筛：批量删除时系统常常只报父目录那一条
+    expect(changeWanted("src", matcher, "directory")).toBe(true);
+    expect(changeWanted("src/gone.md", matcher, "gone")).toBe(true);
+    expect(changeWanted("node_modules", matcher, "directory"), "忽略目录整片不叫醒").toBe(false);
+    // 建流那一刻倒还回来的目录历史：不是本轮发生的事
+    expect(changeWanted("src/keep.ts", matcher, "predates-watch"), "监听起点之前就存在的文件不算改动").toBe(false);
+    expect(changeWanted(".tutorignore", matcher, "predates-watch"), "引擎自己播种的那份配置也不算改动").toBe(false);
+  });
+
+  it("收录集快照比对只认路径集合（模糊事件的最后一道筛）", () => {
+    expect(ingestSetDiffers(["src/a.ts"], ["src/a.ts"])).toBe(false);
+    expect(ingestSetDiffers(["src/a.ts"], ["src/a.ts", "src/b.ts"])).toBe(true);
+    expect(ingestSetDiffers(["src/a.ts", "src/b.ts"], ["src/a.ts"]), "删掉一个收录文件同样是变").toBe(true);
+    expect(ingestSetDiffers(["src/a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"]), "顺序不算变化").toBe(false);
+  });
+
+  it("listIngestedPaths 只列收录进来的路径，且不读文件内容", () => {
+    const dir = repository();
+    writeFileSync(join(dir, "src/skip.png"), "not-text", "utf8");
+    writeFileSync(join(dir, "credentials.json"), '{"token":"denied-by-name"}\n', "utf8");
+    writeFileSync(join(dir, "src/config.json"), "{}\n", "utf8");
+    mkdirSync(join(dir, "node_modules/pkg"), { recursive: true });
+    writeFileSync(join(dir, "node_modules/pkg/index.ts"), "export const nope = 1;\n", "utf8");
+    expect(listIngestedPaths(dir, createTutorIgnoreMatcher(dir)).sort(), "readdir 顺序不参与判定，断言前排好")
+      .toEqual(["src/config.json", "src/keep.ts"]);
+  });
 });
 
 describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
@@ -120,5 +160,25 @@ describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
     expect(batches.flat().filter((path) => isArtifactEcho(path))).toEqual([]);
     // ⚠️ 这条的超时必须大于上面 20 秒的等待：vitest 默认 5 秒会先把测试判红，
     // 于是「慢就自跳过」这条路根本走不到（并行全量跑实测红过一次，就是这个原因）。
+  }, 25_000);
+
+  it("端到端：非收录文件的写入（含它顶一下的仓根目录 mtime）一路都不叫醒", async (ctx) => {
+    const dir = repository();
+    const batches: string[][] = [];
+    const watcher = new RepositoryWatcher(dir, (paths) => batches.push(paths), 60);
+    expect(watcher.start().started).toBe(true);
+    writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=not-source\n", "utf8");
+    writeFileSync(join(dir, "credentials.json"), "{}\n", "utf8");
+    writeFileSync(join(dir, "logo.png"), "not-text", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(batches, "这三份都不在收录集里，一轮重分析都不该排").toEqual([]);
+    // 同一台机器上接着验「真改动照样醒」：上一句的「没事件」只有这一句成立才不是监听根本没起来
+    writeFileSync(join(dir, "src/added.ts"), "export const added = 1;\n", "utf8");
+    const arrived = await waitFor(() => batches.flat().includes("src/added.ts"), 20_000);
+    watcher.close();
+    if (!arrived) {
+      console.warn("[watcher] 20 秒内没收到真 fs 事件，这条端到端自我跳过（判据见上面那组纯函数用例）");
+      ctx.skip();
+    }
   }, 25_000);
 });

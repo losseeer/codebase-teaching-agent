@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "../lib.js";
 import { TutorDatabase } from "../store/database.js";
 import { ImportService, refinementIsFresh, type ImportedRepository } from "./importer.js";
@@ -313,8 +313,7 @@ describe("ImportService 重分析在途守卫（A1）", () => {
       return { ...alphaCurrent, analysis: { ...alphaCurrent.analysis, versionStamp: "content:stale" } };
     });
 
-    const inFlight = (service as unknown as ImportServiceProbe).reanalyzeIncrementally(alpha.repositoryId, ["src/a.ts"]);
-    await tick();
+    const inFlight = (service as unknown as ImportServiceProbe).reanalyzeIncrementally(alpha.repositoryId, ["src/a.ts"]);    await tick();
 
     // 挂 beta：上限 1 → alpha 被 LRU 驱逐（watcher 已 close、内存里没了）
     service.ensureMounted(beta.repositoryId);
@@ -330,6 +329,41 @@ describe("ImportService 重分析在途守卫（A1）", () => {
     expect(database.getAnalysis(alpha.repositoryId)?.versionStamp).toBe("content:fixture"); // 脏结果也没写库
     database.close();
     service.getRepository(beta.repositoryId)?.watcher?.close();
+  });
+
+  /**
+    #163 的服务层那半边。监听被「非内容事件」叫醒是常态（往仓根放一张图片会顶一下仓根的 mtime；
+    macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完、跑完就回写：
+    产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过。
+    现在按内容哈希判：这一轮扫出来的 `versionStamp` 与挂载中那份相同，就什么都没发生（只留一行 noop 读数）。
+    */
+  it("内容没变的一轮不回写产物、不换内存那份分析、也不广播", async () => {
+    const { repoDir, repositoryId } = makePersistedRepo(root, "alpha");
+    const service = new ImportService();
+    expect(mountInto(service, repoDir)).toBe(1);
+    service.getRepository(repositoryId)!.watcher?.close();
+    const updates: unknown[] = [];
+    service.on("event", (event: ServerEvent) => {
+      if (event.type === "repository.updated") updates.push(event.payload);
+    });
+
+    const probe = service as unknown as ImportServiceProbe;
+    // 第一轮：手工造的 `content:fixture` 与磁盘真值不同 ⇒ 该回写、该广播
+    await probe.reanalyzeIncrementally(repositoryId, ["src/main.ts"]);
+    const afterFirst = service.getRepository(repositoryId)!;
+    expect(afterFirst.analysis.versionStamp, "真内容变了那一轮照旧换产物").not.toBe("content:fixture");
+    expect(updates).toHaveLength(1);
+    const database = new TutorDatabase(repoDir);
+    const storedFirst = database.getAnalysis(repositoryId)!.lastIncrementalUpdate;
+    database.close();
+
+    // 第二轮：磁盘一字未动
+    await probe.reanalyzeIncrementally(repositoryId, ["README.md"]);
+    expect(service.getRepository(repositoryId)!.analysis, "内容没变就不该换掉挂载中那份分析").toBe(afterFirst.analysis);
+    expect(updates, "没变化就不该再广播一次「仓更新了」").toHaveLength(1);
+    const reopened = new TutorDatabase(repoDir);
+    expect(reopened.getAnalysis(repositoryId)!.lastIncrementalUpdate, "库里那份也不该被 noop 轮改写").toEqual(storedFirst);
+    reopened.close();
   });
 });
 

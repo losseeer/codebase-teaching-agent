@@ -436,6 +436,8 @@ describe("LLM 工作日志落点", () => {
   单元测不出这件事——只有带着真实挂载态打路由，才知道「仓库里躺着一份 .env」时它到底给不给。
   */
 describe("GET /source 的取文件边界", () => {
+  // ⚠️ 本文件后面的用例靠 beforeAll 手工造的产物（锚点在 src/main.ts:3）跑。往 repoDir 写文件这件事本身
+  // 不该惊动重分析（收录判据见 indexer 的 isIngestedPath，#163 那条用例钉着），但挪动用例顺序前先想清楚这一条。
   it("索引里的文件照给；越界 400，未收录（含 .env）404", async () => {
     writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-never-serve-me\n", "utf8");
 
@@ -1024,5 +1026,27 @@ describe("源码出境清单", () => {
     for (const scene of scenes) expect(rows.filter((row) => row.payload.scene === scene).map((row) => row.payload.path)).toContain(MAIN_FILE);
     expect(rows.every((row) => row.sessionId === sessionId)).toBe(true);
     expect(rows.some((row) => JSON.stringify(row).includes("// line 3"))).toBe(false);
+  });
+});
+
+/**
+  上面那两条出境用例在整包并行时偶发拿到 0 行（#163）。差别不在出境代码，而在**挂载中的产物被换掉了**：
+  本文件的密钥用例往仓里写过 `.env` 与 `credentials.json`，而监听层当时的判据是「非忽略、非产物路径的改动就算源码改动」，
+  于是那两次写入各自排了一轮全量重分析（450ms 防抖 + 扫描重算），产物里的 `unit-1` 锚点被真实扫描结果顶掉——
+  出境装配读不到摘录，回合作 200 但一行账都没有。快慢机器上「重分析落到出境用例之前还是之后」不同 ⇒ 同一条用例两种结果。
+  收口后的口径：**只有「可能改变收录集」的改动才叫醒重分析**（收录判据见 indexer 的 isIngestedPath）。
+*/
+describe("非收录文件的写入不该换掉挂载中的产物", () => {
+  it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
+    writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-still-not-a-source-change\n", "utf8");
+    writeFileSync(join(repoDir, "credentials.json"), '{"aws_access_key_id":"AKIA-STILL-NOT-A-SOURCE-CHANGE"}\n', "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/analysis` });
+    expect(response.statusCode).toBe(200);
+    const analysis = response.json() as { versionStamp: string; graph: { symbols: { path: string }[] }; lastIncrementalUpdate?: { changedPaths: string[] } };
+    // 重分析一跑，versionStamp 就从「手工造的 content:fixture」翻成真实内容哈希，锚点同时消失
+    expect(analysis.versionStamp, `非收录文件的写入不该触发重分析；这轮被 ${JSON.stringify(analysis.lastIncrementalUpdate?.changedPaths ?? null)} 叫醒`).toBe("content:fixture");
+    expect(analysis.graph.symbols.map((symbol) => symbol.path), "符号表不该被换成真实扫描的空结果").toContain(MAIN_FILE);
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { graphExtensions } from "../depgraph/graph.js";
-import { indexRepository, nonGraphExtensions, sourceExtensions } from "./indexer.js";
+import { indexRepository, isIngestedPath, nonGraphExtensions, sourceExtensions } from "./indexer.js";
 
 /**
   扫描期的兜底口径（2026-10-06 复审 #123③）：**一个文件读不出来，只让它自己缺席**。
@@ -79,5 +79,28 @@ describe("indexRepository 的扩展名白名单构成", () => {
     for (const extension of baselineBeforeDerivation) {
       expect(sourceExtensions.has(extension), `${extension} 不再进索引：派生把扫描范围改小了`).toBe(true);
     }
+  });
+
+  /**
+    白名单之外还有第二道：读层判「不开放读取」的密钥载体名不该进收录集。
+    口径漂移的实际代价——`credentials.json` 的扩展名 `.json` 属于收录类型，
+    于是它的路径与行数进了产物、界面文件树里点得到，而 `GET /source` 早就拒读它；
+    「摘要参考注释」开关一开，`summarizer` 会照着 slice 的路径把正文读出来（只剩 maskSecrets 兜底）。
+    同一份名单两处判，收口成 `isIngestedPath` 一处。
+    */
+  it("密钥载体名不进收录集，普通配置文件照收（`.json` 这一类的两种命运）", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tutor-indexer-denied-"));
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "credentials.json"), '{"aws_access_key_id":"AKIAEXAMPLESECRET"}\n', "utf8");
+    writeFileSync(join(dir, "src/package.json"), '{"name":"demo"}\n', "utf8");
+    writeFileSync(join(dir, "src/env.example"), "OPENAI_API_KEY=\n", "utf8");
+    writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=sk-not-indexed\n", "utf8");
+    expect(indexRepository(dir).files.map((file) => file.path)).toEqual(["src/package.json"]);
+    // 判据本身：模板类 env 只列键名，属于「可读」那一边，所以也不被名字闸挡住
+    expect(isIngestedPath("src/env.example"), ".example 是模板，扩展名本来就不收录").toBe(false);
+    expect(isIngestedPath("credentials.json")).toBe(false);
+    expect(isIngestedPath("deploy/credentials.json")).toBe(false);
+    expect(isIngestedPath("src/app.ts")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

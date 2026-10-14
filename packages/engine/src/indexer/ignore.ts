@@ -52,11 +52,17 @@ interface IgnoreRule {
 export interface TutorIgnoreMatcher {
   ignores(relativePath: string, isDirectory?: boolean): boolean;
   shouldTraverse(relativeDirectory: string): boolean;
+  /**
+    那份文件**读到的内容**。监听层靠它区分「用户真改了配置」与「引擎自己播种了缺省那一份」：
+    播种也是写文件，也会给 `fs.watch` 一条事件，而按 mtime 判先后在这条路上不稳（同一毫秒内既播种又改文件是常态）。
+    */
+  signature: string;
 }
 
 export function createTutorIgnoreMatcher(repositoryPath: string): TutorIgnoreMatcher {
   ensureTutorIgnore(repositoryPath);
-  const rules = readTutorIgnore(repositoryPath).flatMap(parseRule);
+  const lines = readTutorIgnore(repositoryPath);
+  const rules = lines.flatMap(parseRule);
   const ignored = (relativePath: string, isDirectory = false): boolean => {
     const normalized = normalize(relativePath);
     if (!normalized) return true;
@@ -74,7 +80,8 @@ export function createTutorIgnoreMatcher(repositoryPath: string): TutorIgnoreMat
       if (!normalized) return false;
       if (!ignored(normalized, true)) return true;
       return rules.some((rule) => rule.negate && canMatchDescendant(rule, normalized));
-    }
+    },
+    signature: lines.join("\n")
   };
 }
 

@@ -87,6 +87,10 @@
 
 首次导入时会在被导入仓库根目录生成可编辑的 `.tutorignore`（`.gitignore` 风格语法：注释、`*`、`?`、`**`、目录后缀与 `!` 重新包含规则），默认排除 `.git/`、`.tutor/`、各类 Agent 工作目录（`.claude/`、`.cursor/` 等）、`node_modules/`、构建产物与本地缓存；保存后自动触发重新分析。初始模板见 [.tutorignore.example](.tutorignore.example)，匹配实现见 `packages/engine/src/indexer/ignore.ts`。
 
+`.tutorignore` 之外还有两道：**扩展名白名单**（`.png`、`.mp4`、锁文件这类不进收录集，白烧字节也毁热点计数）与**密钥载体名**（`credentials.json`、`id_rsa`、`.env` 这类读层判「不开放读取」的文件也不进收录集——界面上点不到原文，索引里却收着它，两边迟早漂移）。三份判据合在一处：`isIngestedPath`（`packages/engine/src/indexer/indexer.ts`）。
+
+文件监听**只被「可能改变收录集」的改动**叫醒：往仓里放图片、改 `.env`、监听建流时 macOS 倒还的目录历史、引擎自己播种的那份 `.tutorignore`，都不排重分析；就算叫醒了，重扫出来收录集与每文件哈希一模一样也判为 noop（不回写、不换内存产物、不广播，只在引擎日志留一行 `reindex{noop:true}`）。成因与实测读数见 docs/开发关键点问题与解决方案.md §58。
+
 ## 快速开始
 
 ```sh

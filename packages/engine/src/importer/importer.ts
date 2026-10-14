@@ -140,6 +140,21 @@ function stampAndDiff(repositoryPath: string, index: RepositoryIndex): { version
 }
 
 /**
+  两次扫描的「收录集 + 每文件内容哈希」是否完全一致。一致就说明这一轮算不出任何新东西。
+  ⚠️ 任一侧缺 `contentHash`（B1 之前的老索引、或扫描期读不出来的文件）就当**不一致**：
+  判不出来不等于没变，宁可重扫一遍，也不要把一个没验证过的状态当成事实。
+  */
+export function sameIngestedContent(previous: RepositoryIndex, next: RepositoryIndex): boolean {
+  if (previous.files.length !== next.files.length) return false;
+  const incoming = new Map(next.files.map((file) => [file.path, file.contentHash]));
+  return previous.files.every((file) => {
+    const before = file.contentHash;
+    const after = incoming.get(file.path);
+    return Boolean(before) && before === after;
+  });
+}
+
+/**
   新鲜度判定（**只报告**）：内容哈希不等 = 过期（stale）；内容对得上但 HEAD 移动了 = drifted（产物仍可用，
   只是分析点在别的提交上）；老仓库没记 HEAD 时退化成 unknown，界面明说「只比对了文件内容」。
   刻意不由引擎自动重分析：重跑是花钱的动作，谁脏了、要不要重跑，交给用户点头。
@@ -374,18 +389,19 @@ export class ImportService extends EventEmitter {
     也会把库连接关掉。连接挂在 `TutorDatabase` 构造函数上，漏一次就漏一个 FD，
     而懒挂载是「每请求可能新建一个」——坏库反复重试能把进程拖到 EMFILE。
     */
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<AnalyzedRepository> {
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScannedIndex?: RepositoryIndex): Promise<AnalyzedRepository> {
     const database = new TutorDatabase(repositoryPath);
     try {
-      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments);
+      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments, preScannedIndex);
     } finally {
       database.close();
     }
   }
 
-  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean): Promise<AnalyzedRepository> {
+  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScannedIndex?: RepositoryIndex): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
-    const index = indexRepository(repositoryPath);
+    // 增量重分析先扫过一次再决定要不要跑整轮（`reanalyzeOnce`），那份结果直接接手，别把同一个仓扫两遍
+    const index = preScannedIndex ?? indexRepository(repositoryPath);
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
     const versionStamp = contentVersion(repositoryPath, index);
     database.saveIndex(index);
@@ -527,8 +543,20 @@ export class ImportService extends EventEmitter {
     const startedAt = Date.now();
     let impactedPaths: string[] = [];
     try {
+      /**
+        先重扫一遍「收录集 + 每文件内容哈希」，再决定要不要跑整轮。
+        监听报上来的改动经常不落在收录集里（往仓根放一张 `.png` 会顶一下仓根的 mtime；
+        macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完就回写：
+        产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过——
+        测试里那份手工造的 fixture 产物也是这样被真扫描顶掉的（#163）。
+        */
+      const rescan = indexRepository(current.path);
+      if (sameIngestedContent(current.index, rescan)) {
+        traceEngine("reindex", { repositoryId, changed: changedPaths.length, ok: true, noop: true }, { traceId: null, durationMs: Date.now() - startedAt });
+        return;
+      }
       impactedPaths = impactRadius(graphFromData(current.analysis.graph), changedPaths).impactedPaths;
-      const next = await this.analyze(current.path, () => undefined);
+      const next = await this.analyze(current.path, () => undefined, undefined, rescan);
       // 回写前确认挂载项没被换掉：换仓 / 重新导入会让这一轮基于旧快照，写回即用脏数据覆盖内存与
       // SQLite，甚至把刚卸载、watcher 已 close 的仓库复活进映射（破坏「挂载集合 = 监听集合」单槽不变量）。
       if (this.repositories.get(repositoryId) !== current) {

@@ -141,6 +141,15 @@ export function deniedPathReason(relativePath: string): string | undefined {
   return deniedNameReason(segments[segments.length - 1] ?? "");
 }
 
+/**
+  只要**名字**那一半（不带目录规则）的对外读数，给索引层用：「读层拒读的文件不该进收录集」。
+  目录那一半刻意留在外面——`.tutorignore` 已经管住 `.git/`、`node_modules/`，
+  而用户显式写 `!.tutor/**` 时索引层照办是既有设计（`ignore.test.ts` 钉着），不该在这里改口。
+  */
+export function deniedSecretNameReason(relativePath: string): string | undefined {
+  return deniedNameReason(relativePath.replaceAll("\\", "/").split("/").at(-1) ?? "");
+}
+
 export function executeReadFile(repoPath: string, argumentsJson: string): ReadFileOutcome {
   let args: { path?: unknown; offset?: unknown; limit?: unknown };
   try {
