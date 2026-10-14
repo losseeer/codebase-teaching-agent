@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -461,6 +461,26 @@ describe("GET /source 的取文件边界", () => {
   it("line 不是数字时按 1 回，不把 NaN 序列化成的 null 发给界面", async () => {
     const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(MAIN_FILE)}&line=abc` });
     expect((response.json() as { line: number }).line).toBe(1);
+  });
+
+  /**
+    路由这一侧也做**链接目标实测**（`pathReadBlock`，与 `read_file` 同一份判据）。
+    以前只有工具侧查，HTTP 侧停在「字面路径在不在仓里 + 在不在索引里」：仓里放一个名字无害的链接
+    就能只绕过界面那道闸。
+    ⚠️ 链接取名 `evidence.txt` 是算过的两难：`.png` 会先被**名字**那道闸拦下（「该文件类型不开放读取」），
+    根本走不到链接判定；而 `.ts`/`.md` 这类**收录**扩展名一进仓就是真改动，会排一轮重分析换掉挂载中的产物
+    （#163 守的正是这件事）。`.txt` 既不在拒读名单、也不在收录集，才只验链接这一关。
+    */
+  it("仓里的符号链接指向仓外时，这条路由也给不出原文", async () => {
+    const sentinel = "OUTSIDE-SENTINEL-must-not-be-served";
+    writeFileSync(join(root, "outside-target.txt"), `${sentinel}\n`, "utf8");
+    symlinkSync(join(root, "outside-target.txt"), join(repoDir, "evidence.txt"));
+
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/source?path=${encodeURIComponent("evidence.txt")}` });
+    expect(response.statusCode).toBe(404);
+    expect((response.json() as { error?: string }).error).toContain("符号链接指向仓库之外");
+    expect(response.payload).not.toContain(sentinel);
+    rmSync(join(repoDir, "evidence.txt"), { force: true }); // 只摘链接，仓外那份真目标不动
   });
 });
 
@@ -1036,8 +1056,7 @@ describe("源码出境清单", () => {
   出境装配读不到摘录，回合作 200 但一行账都没有。快慢机器上「重分析落到出境用例之前还是之后」不同 ⇒ 同一条用例两种结果。
   收口后的口径：**只有「可能改变收录集」的改动才叫醒重分析**（收录判据见 indexer 的 isIngestedPath）。
 */
-describe("非收录文件的写入不该换掉挂载中的产物", () => {
-  it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
+describe("非收录文件的写入不该换掉挂载中的产物", () => {  it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
     writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-still-not-a-source-change\n", "utf8");
     writeFileSync(join(repoDir, "credentials.json"), '{"aws_access_key_id":"AKIA-STILL-NOT-A-SOURCE-CHANGE"}\n', "utf8");
     await new Promise((resolve) => setTimeout(resolve, 3_000));

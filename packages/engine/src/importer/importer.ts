@@ -24,7 +24,7 @@ import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { catalogRepositoryId, hash, id } from "../lib.js";
-import { indexRepository } from "../indexer/indexer.js";
+import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";
 import { verifyAnalysis } from "../quality/checker.js";
@@ -121,11 +121,18 @@ function gitHeadOf(repositoryPath: string): string | undefined {
   一次遍历算出「当前内容哈希 + 与落库 contentHash 不符的文件数」。
   口径与 `contentVersion` / 索引器完全一致（utf8 读、同一段 path:hash 拼法），否则新鲜度永远比不中。
   代价是读一遍被索引的文件：只发生在**挂载时**（每仓每进程一次），启动不付这个钱。
+  `digests` 给的时候（同一轮里 `scanRepositoryWithDigests` 刚算出来的那份）就不重读——
+  拼进 stamp 的是**完整**64 位哈希，不是索引里那 16 位前缀，所以这一份不能省、也不能拿前缀代替。
   */
-function stampAndDiff(repositoryPath: string, index: RepositoryIndex): { versionStamp: string; changedFiles: number } {
+function stampAndDiff(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): { versionStamp: string; changedFiles: number } {
   let changedFiles = 0;
   const contents = index.files.map((file) => {
     let digest = "unreadable";
+    const scanned = digests?.get(file.path);
+    if (scanned !== undefined) {
+      if (file.contentHash && !scanned.startsWith(file.contentHash)) changedFiles += 1;
+      return `${file.path}:${scanned}`;
+    }
     try {
       digest = hash(readFileSync(join(repositoryPath, file.path), "utf8"));
     } catch {
@@ -389,21 +396,22 @@ export class ImportService extends EventEmitter {
     也会把库连接关掉。连接挂在 `TutorDatabase` 构造函数上，漏一次就漏一个 FD，
     而懒挂载是「每请求可能新建一个」——坏库反复重试能把进程拖到 EMFILE。
     */
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScannedIndex?: RepositoryIndex): Promise<AnalyzedRepository> {
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
     const database = new TutorDatabase(repositoryPath);
     try {
-      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments, preScannedIndex);
+      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments, preScanned);
     } finally {
       database.close();
     }
   }
 
-  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScannedIndex?: RepositoryIndex): Promise<AnalyzedRepository> {
+  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     // 增量重分析先扫过一次再决定要不要跑整轮（`reanalyzeOnce`），那份结果直接接手，别把同一个仓扫两遍
-    const index = preScannedIndex ?? indexRepository(repositoryPath);
+    const scan = preScanned ?? scanRepositoryWithDigests(repositoryPath);
+    const index = scan.index;
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
-    const versionStamp = contentVersion(repositoryPath, index);
+    const versionStamp = contentVersion(repositoryPath, index, scan.digests);
     database.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
@@ -550,8 +558,8 @@ export class ImportService extends EventEmitter {
         产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过——
         测试里那份手工造的 fixture 产物也是这样被真扫描顶掉的（#163）。
         */
-      const rescan = indexRepository(current.path);
-      if (sameIngestedContent(current.index, rescan)) {
+      const rescan = scanRepositoryWithDigests(current.path);
+      if (sameIngestedContent(current.index, rescan.index)) {
         traceEngine("reindex", { repositoryId, changed: changedPaths.length, ok: true, noop: true }, { traceId: null, durationMs: Date.now() - startedAt });
         return;
       }
@@ -647,9 +655,9 @@ function expandHome(input: string): string {
 }
 
 /** Exercise cache versioning follows source content, not an import timestamp. */
-function contentVersion(repositoryPath: string, index: RepositoryIndex): string {
+function contentVersion(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): string {
   // 与新鲜度判定共用同一次实现：两边口径必须逐字相同，否则挂载时永远比不中、每次访问都报过期
-  return stampAndDiff(repositoryPath, index).versionStamp;
+  return stampAndDiff(repositoryPath, index, digests).versionStamp;
 }
 
 /** 落在 settings 里的宏观润色标记：记录「这份已润色的课程树是在什么输入下算出来的」。 */

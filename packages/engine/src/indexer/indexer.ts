@@ -64,8 +64,18 @@ export function listIngestedPaths(repositoryPath: string, matcher: { ignores(pat
   return found;
 }
 
-export function indexRepository(repositoryPath: string): RepositoryIndex {
+/** 一次扫描的两样产出：索引本体，以及算 `versionStamp` 要用的完整内容哈希（按仓内相对路径）。 */
+export type RepositoryScan = { index: RepositoryIndex; digests: Map<string, string> };
+
+/**
+  扫一遍仓，除了索引还交出**每个文件的完整内容哈希**。
+  多交这一份是有原因的：紧接着 `analyzeWith` 要算 `versionStamp`，吃的就是这些哈希；
+  以前它照着刚生成的名单把全仓 `readFileSync` 再来一遍（同一轮里第三次读同一批文件，实测约占这轮磁盘读的三分之一）。
+  哈希算一次就够，别让它算三遍。
+  */
+export function scanRepositoryWithDigests(repositoryPath: string): RepositoryScan {
   const files: FileEntry[] = [];
+  const digests = new Map<string, string>();
   /**
     扫描期逐个文件兜底：一个文件读不出来（读到一半被删、权限不对、被换成特殊节点）只该让它自己缺席，
     不该掀掉整次导入。但缺席必须**记名**——静默少索引一批文件，后面「这个仓有多少代码」的读数会跟着说谎。
@@ -88,23 +98,34 @@ export function indexRepository(repositoryPath: string): RepositoryIndex {
           if (unreadable.length < 50) unreadable.push({ path, reason: error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error) });
           continue;
         }
-        files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length, contentHash: hash(content).slice(0, 16) });
+        const digest = hash(content);
+        digests.set(path, digest);
+        // 落库的那份只留 16 位前缀：出题作用域与缓存键吃的都是它，改长度等于把所有旧题判过期
+        files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length, contentHash: digest.slice(0, 16) });
       }
     }
   };
   visit(repositoryPath);
   files.sort((a, b) => a.path.localeCompare(b.path));
   return {
-    repositoryId: repositoryId(repositoryPath),
-    repositoryPath,
-    scannedAt: new Date().toISOString(),
-    totalFiles: files.length,
-    totalLines: files.reduce((sum, file) => sum + file.lines, 0),
-    files,
-    fileTree: toTree(files),
-    hotspots: gitHotspots(repositoryPath, ignore),
-    ...(unreadable.length ? { unreadable } : {})
+    index: {
+      repositoryId: repositoryId(repositoryPath),
+      repositoryPath,
+      scannedAt: new Date().toISOString(),
+      totalFiles: files.length,
+      totalLines: files.reduce((sum, file) => sum + file.lines, 0),
+      files,
+      fileTree: toTree(files),
+      hotspots: gitHotspots(repositoryPath, ignore),
+      ...(unreadable.length ? { unreadable } : {})
+    },
+    digests
   };
+}
+
+/** 只要索引的那一层包装（扫描脚本、评测台架、监听层的收录集比对都用它，别为了拿哈希去改它们的返回形状）。 */
+export function indexRepository(repositoryPath: string): RepositoryIndex {
+  return scanRepositoryWithDigests(repositoryPath).index;
 }
 
 function toTree(files: FileEntry[]): FileTreeNode[] {

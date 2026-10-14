@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { dedupeFileReads, executeReadFile, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
+import { dedupeFileReads, executeReadFile, pathReadBlock, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
 
 let repoRoot = "";
 /** 仓库之外的一个目录：给「链接指向仓外」那条用例当真目标 */
@@ -94,6 +94,21 @@ describe("executeReadFile 护栏", () => {
       expect(outcome.content, path).not.toContain("sk-secret");
       expect(outcome.content, path).not.toContain("OUTSIDE-SECRET");
     }
+  });
+
+  /**
+    同一份判据的**对外那层**（`GET /source` 也走它）。界面侧原先只判「字面路径在不在仓里 + 在不在索引里」，
+    而 `read_file` 多做一次链接目标实测——两条口径不一致，仓里一个名字无害的链接就能只绕过界面那道闸。
+    */
+  it("pathReadBlock 与 read_file 同一判据：链接目标也过边界与名单，存在性交给调用方", () => {
+    expect(pathReadBlock(repoRoot, "src/app.ts"), "正常源码放行").toBeUndefined();
+    expect(pathReadBlock(repoRoot, "../outside.ts")).toContain("越出仓库范围");
+    expect(pathReadBlock(repoRoot, "/etc/passwd")).toContain("只允许仓库内相对路径");
+    expect(pathReadBlock(repoRoot, "credentials.json")).toContain("不开放读取");
+    expect(pathReadBlock(repoRoot, "notes.md"), "链接指向仓内 .env 也算绕过名单").toContain("符号链接指向禁读文件");
+    expect(pathReadBlock(repoRoot, "escape.ts"), "链接指向仓外文件").toContain("符号链接指向仓库之外");
+    // 文件不存在**不是**这一层判的事：否则界面会把「没了」说成「我不给读」
+    expect(pathReadBlock(repoRoot, "src/gone.ts")).toBeUndefined();
   });
 
   it("拒绝非法 JSON 与缺 path", () => {

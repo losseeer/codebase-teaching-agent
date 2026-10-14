@@ -1042,6 +1042,11 @@ export type JournalEventType =
   | "style_shift"
   | "unassisted_test"
   | "action_veto"
+  /**
+    练习**未送达**事件。payload 必带 `family`（comprehension|code|llm）与 `stage`：
+    `no_target` 这一档是共用的选题路径写出的，两族都可能命中，没有族别就没法把「代码题被沙箱拒了」
+    和「这个仓里挑不出单元」分在一个数里读。2026-10-15 之前落的历史行没这个键，报表按「未标族别」单列。
+    */
   | "exercise_declined"
   /** 练习**送达**事件（漏斗分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
   | "exercise_generated"

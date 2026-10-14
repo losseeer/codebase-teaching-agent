@@ -33,7 +33,7 @@ import { appendMessages, createThread, getThread, isChatScope, latestThreadForNo
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn, type TurnHandle, type TurnScene } from "./turns/registry.js";
-import { dedupeFileReads, deniedPathReason } from "./source/read-file.js";
+import { dedupeFileReads, pathReadBlock } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
 import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } from "./eval/scorers.js";
@@ -1284,9 +1284,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { path?: string; line?:
   // 先判边界、再判收录：越界是「请求本身不合法」(400)，未收录是「这个文件我不给」(404)，两种失败界面要能分开
   const absolute = join(repository.path, requestedPath);
   if (!isWithin(repository.path, absolute)) return reply.code(400).send({ error: "源码路径越出仓库边界" });
-  // 名单闸与 `read_file` 共用一份判据：`credentials.json`、`.env`、`*.pem` 这些即便被索引收录也不给原文。
-  const denied = deniedPathReason(requestedPath);
-  if (denied) return reply.code(404).send({ error: `该文件不开放读取：${denied}` });
+  // 名单 + 软链接那一关与 `read_file` 共用一份判据（`pathReadBlock`）：字面路径过了闸不代表链接目标过了闸
+  const blocked = pathReadBlock(repository.path, requestedPath);
+  if (blocked) return reply.code(404).send({ error: `该文件不开放读取：${blocked}` });
   if (!repository.index.files.some((file) => file.path === requestedPath)) return reply.code(404).send({ error: "该文件不在本仓索引里（未收录的类型与密钥/凭据文件不提供源码）" });
   // line 是给界面定位用的：非数字/负数按 1，不能把 NaN 回出去（JSON 里会变成 null）
   const line = Number(request.query.line ?? 1);

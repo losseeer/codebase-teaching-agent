@@ -150,6 +150,36 @@ export function deniedSecretNameReason(relativePath: string): string | undefined
   return deniedNameReason(relativePath.replaceAll("\\", "/").split("/").at(-1) ?? "");
 }
 
+/**
+  「这个仓内路径到底能不能给原文」——边界、名字名单、软链接三关一次判完的**对外一份**：
+  工具侧（`read_file`）与 HTTP 侧（`GET /source`）共用，两条口径不许各抄一遍。
+  软链接那一关是必需的：前两道判的都是**字面路径**，而 `fs` 读的是解析后的目标，
+  仓里一个名字无害的链接（`docs/note.md -> ../../.ssh/id_rsa`）就能同时绕过两道闸。
+  返回 `undefined` 表示放行；返回的那一句直接给调用方（界面 / 模型）看。
+  */
+export function pathReadBlock(repositoryPath: string, relativePath: string): string | undefined {
+  if (isAbsolute(relativePath) || relativePath.startsWith("~")) return "只允许仓库内相对路径";
+  const relative = relativePath.replaceAll("\\", "/");
+  const absolute = join(repositoryPath, relative);
+  if (!isWithin(repositoryPath, absolute)) return "路径越出仓库范围";
+  const nameReason = deniedPathReason(relative);
+  if (nameReason) return nameReason;
+  try {
+    const realRoot = realpathSync(repositoryPath);
+    const real = realpathSync(absolute);
+    if (!isWithin(realRoot, real)) return "符号链接指向仓库之外";
+    const segments = real.slice(realRoot.length + 1).split("/");
+    if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return "符号链接指向不开放的目录";
+    // 链接目标的名字再过一遍同一份判据（指到 `.env`、指到 `credentials.json` 都算绕过）
+    const targetReason = deniedNameReason(segments[segments.length - 1] ?? "");
+    return targetReason ? `符号链接指向禁读文件：${targetReason}` : undefined;
+  } catch {
+    // 链接目标解析不出来（文件已删、链接断了、权限不够）不在这里判：这一层只管政策，
+    // 「读不出来」交给调用方那层的 try 如实说，免得把「文件不存在」说成「我不给读」
+    return undefined;
+  }
+}
+
 export function executeReadFile(repoPath: string, argumentsJson: string): ReadFileOutcome {
   let args: { path?: unknown; offset?: unknown; limit?: unknown };
   try {
@@ -167,25 +197,12 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
   });
   if (isAbsolute(rawPath) || rawPath.startsWith("~")) return deny("只允许仓库内相对路径");
   const absolute = join(repoPath, rawPath);
-  if (!isWithin(repoPath, absolute)) return deny("路径越出仓库范围");
+  // 下面那句抬头与审计行都用归一化后的路径（`\` 换成 `/`），审计线才与索引里的 path 同形
   const relative = rawPath.replaceAll("\\", "/");
-  // 目录 + 名字两道名单与 HTTP 侧同源（deniedPathReason），不在这里再抄一遍判据
-  const nameReason = deniedPathReason(relative);
-  if (nameReason) return deny(nameReason);
+  // 三关（边界、名单、软链接）与 HTTP 侧共用 `pathReadBlock`，不在这里再抄一遍判据
+  const blocked = pathReadBlock(repoPath, rawPath);
+  if (blocked) return deny(blocked);
   try {
-    /**
-      软链接复核：上面两道闸（边界、名单）判的都是**字面路径**，而 `fs` 读的是解析后的目标。
-      仓库里放一个名字无害的链接（`docs/note.md -> ../../.env`、`a.ts -> /home/user/.ssh/id_rsa`）
-      就能同时绕过两条护栏，把密钥原文送进发往远端的 prompt——所以目标要实测再判一次，
-      并且复用同一份判据（不另立一套，否则两条口径迟早漂移）。
-      */
-    const realRoot = realpathSync(repoPath);
-    const real = realpathSync(absolute);
-    if (!isWithin(realRoot, real)) return deny("符号链接指向仓库之外");
-    const realSegments = real.slice(realRoot.length + 1).split("/");
-    if (realSegments.some((segment) => DENIED_DIRECTORIES.has(segment))) return deny("符号链接指向不开放的目录");
-    const targetReason = deniedNameReason(realSegments[realSegments.length - 1] ?? "");
-    if (targetReason) return deny(`符号链接指向禁读文件：${targetReason}`);
     const bytes = statSync(absolute).size;
     if (bytes > MAX_FILE_BYTES) return deny(`文件过大（${bytes} 字节）`);
     const lines = readFileSync(absolute, "utf8").split(/\r?\n/);

@@ -204,11 +204,18 @@ for (const repo of perRepo) {
     // 拒题阶段九档（2026-10-14 沙箱改造加的）：no_provider / provider_error / proposal_shape / sandbox_unavailable / harness_validation。
     // 沙箱那两档必须单列：「模型没出成题」和「出成题但沙箱证不出这题可解」是两件不同的事，混成一列会误导去修提示词。
     const byStage = ["no_candidates", "no_target", "llm_generate", "guard", "no_provider", "provider_error", "proposal_shape", "sandbox_unavailable", "harness_validation"].map((stage) => `${stage} ${count(declined, "stage", stage)}`).join("、");
+    /**
+      同一档可能出自两族：`no_target` 是共用的选题路径写出的，理解题与代码族都会命中它。
+      所以只看上面那行会把两件事加成一个数，这一行按族拆开；`family` 是 2026-10-15 才补进 payload 的，
+      旧行没这个键——**单独列成「未标族别」**，不把它悄悄算进任何一族（缺读数与读数为 0 是两件事）。
+      */
+    const unlabelled = declined.filter((event) => typeof event.payload.family !== "string").length;
+    const byFamily = ["comprehension", "code", "llm"].map((family) => `${family} ${count(declined, "family", family)}`).join("、") + `、未标族别 ${unlabelled}`;
     // 沙箱真跑了几趟（自证两趟 + 每次判分一趟）：这行是「判分确实执行过代码」的证据，没有它「跑测试」只是口号
     const runs = of("exercise_run");
     const runOutcome = ["accepted", "passed", "failed", "no-verdict"].map((outcome) => `${outcome} ${count(runs, "outcome", outcome)}`).join("、");
     emit(`- 沙箱运行：${runs.length} 趟（自证 ${count(runs, "stage", "validate-proposal")}、判分 ${count(runs, "stage", "grade")}）；结论 ${runOutcome}；超时 ${runs.filter((event) => event.payload.timed_out === true).length}、没印 TESTS 结论 ${runs.filter((event) => event.payload.verdict_passed === null).length}`);
-    emit(`- 练习漏斗：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（${byStage}）`);
+    emit(`- 练习漏斗：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（按族 ${byFamily}；按档 ${byStage}）`);
   }
 
   // 作用域降级（层 2 负向代理）：分母 = map_chat 轮次（token_usage scene 记账）；scope_paths=0 是 GUI 没上送清单，>0 是上送了但交集为空——成因不同要分列

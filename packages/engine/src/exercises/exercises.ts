@@ -179,7 +179,7 @@ export class ExerciseService {
       const target = this.pickTarget(repository, requested, mastery);
       if (!target) {
         const reason = "当前分析结果没有可生成的练习。请先重新导入仓库。";
-        journal.append("exercise_declined", { tag: requested.tagId ?? "", reason, stage: "no_target" });
+        journal.append("exercise_declined", { family: requested.family ?? "comprehension", tag: requested.tagId ?? "", reason, stage: "no_target" });
         throw new Error(reason);
       }
       // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
@@ -233,7 +233,7 @@ export class ExerciseService {
     const targetUnitId = target.id;
     if (!provider) {
       const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已触顶。";
-      journal.append("exercise_declined", { tag: "", reason, stage: "no_provider" });
+      journal.append("exercise_declined", { family: "code", tag: "", reason, stage: "no_provider" });
       throw new Error(reason);
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
@@ -253,7 +253,7 @@ export class ExerciseService {
       });
     }
     if (!generation.ok) {
-      journal.append("exercise_declined", { tag: "", reason: generation.reason, stage: generation.stage });
+      journal.append("exercise_declined", { family: "code", tag: "", reason: generation.reason, stage: generation.stage });
       throw new Error(generation.reason);
     }
     if (generation.usage) journal.append("token_usage", {
@@ -313,7 +313,7 @@ export class ExerciseService {
     const candidates = selectTagCandidates(repository, tag, 3, summaries);
     if (!candidates.length) {
       // 零候选也要留痕：漏斗必须分得清「没走到模型」与「被模型拒绝」，才知道该修选稿还是修提示词
-      journal.append("exercise_declined", { tag, reason: `词法候选选择没有命中任何与「${tag}」相关的源码文件。`, stage: "no_candidates" });
+      journal.append("exercise_declined", { family: "llm", tag, reason: `词法候选选择没有命中任何与「${tag}」相关的源码文件。`, stage: "no_candidates" });
       throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
@@ -326,7 +326,7 @@ export class ExerciseService {
     }
     const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider });
     if (!generation.ok) {
-      journal.append("exercise_declined", { tag, reason: generation.reason, stage: "llm_generate" });
+      journal.append("exercise_declined", { family: "llm", tag, reason: generation.reason, stage: "llm_generate" });
       throw new Error(generation.reason);
     }
     if (generation.usage) journal.append("token_usage", {
@@ -339,7 +339,7 @@ export class ExerciseService {
     const issues = guardLlmProposal(generation.proposal, candidates);
     if (issues.length) {
       const reason = `LLM 出题未通过守门校验：${issues.map((issue) => issue.message).join("；")}。`;
-      journal.append("exercise_declined", { tag, reason, stage: "guard" });
+      journal.append("exercise_declined", { family: "llm", tag, reason, stage: "guard" });
       throw new Error(reason);
     }
     const proposal = generation.proposal;

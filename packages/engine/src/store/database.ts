@@ -192,28 +192,28 @@ export class TutorDatabase {
   }
 
   getIndex(repositoryId: string): RepositoryIndex | undefined {
-    const state = this.getState(repositoryId);
-    return state?.index_json ? JSON.parse(state.index_json) as RepositoryIndex : undefined;
+    const value = this.getJsonColumn(repositoryId, "index_json");
+    return value ? JSON.parse(value) as RepositoryIndex : undefined;
   }
 
   getCourse(repositoryId: string): CourseTree | undefined {
-    const state = this.getState(repositoryId);
-    return state?.course_json ? JSON.parse(state.course_json) as CourseTree : undefined;
+    const value = this.getJsonColumn(repositoryId, "course_json");
+    return value ? JSON.parse(value) as CourseTree : undefined;
   }
 
   getEstimate(repositoryId: string): ImportEstimate | undefined {
-    const state = this.getState(repositoryId);
-    return state?.estimate_json ? JSON.parse(state.estimate_json) as ImportEstimate : undefined;
+    const value = this.getJsonColumn(repositoryId, "estimate_json");
+    return value ? JSON.parse(value) as ImportEstimate : undefined;
   }
 
   getAnalysis(repositoryId: string): RepositoryAnalysis | undefined {
-    const state = this.getState(repositoryId);
-    return state?.analysis_json ? JSON.parse(state.analysis_json) as RepositoryAnalysis : undefined;
+    const value = this.getJsonColumn(repositoryId, "analysis_json");
+    return value ? JSON.parse(value) as RepositoryAnalysis : undefined;
   }
 
   getSettings<T extends Record<string, unknown>>(repositoryId: string): T | undefined {
-    const state = this.getState(repositoryId);
-    return state?.settings_json ? JSON.parse(state.settings_json) as T : undefined;
+    const value = this.getJsonColumn(repositoryId, "settings_json");
+    return value ? JSON.parse(value) as T : undefined;
   }
 
   saveSettings(repositoryId: string, settings: Record<string, unknown>): void {
@@ -452,14 +452,31 @@ export class TutorDatabase {
     this.db.close();
   }
 
-  private getState(repositoryId: string): { index_json: string | null; course_json: string | null; estimate_json: string | null; analysis_json: string | null; settings_json: string | null } | undefined {
-    return this.db.prepare("SELECT index_json, course_json, estimate_json, analysis_json, settings_json FROM repository_state WHERE repository_id = ?").get(repositoryId) as { index_json: string | null; course_json: string | null; estimate_json: string | null; analysis_json: string | null; settings_json: string | null } | undefined;
+  /**
+    一次只取要的**那一列**。以前五个 getter 全走「SELECT 全部五列」，而 `analysis_json` 是大仓里最重的一块
+    （依赖图 + 符号表 + 质量报告，整仓序列化），于是「只想读 settings 里那个月预算」也要把它几十 MB 捞一遍。
+    列名取自这张表的固定五个，不接受任何外部字符串，拼进 SQL 不构成注入面。
+    */
+  private getJsonColumn(repositoryId: string, column: "index_json" | "course_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
+    const row = this.db.prepare(`SELECT ${column} AS value FROM repository_state WHERE repository_id = ?`).get(repositoryId) as { value: string | null } | undefined;
+    return row?.value;
   }
 
+  /**
+    只写这次给出来的那几列。旧写法是「SELECT 全部五列 → 拼回七列 INSERT OR REPLACE」，
+    所以「存一份 settings」也要把最重的 `analysis_json` 读出来再原样写回去；
+    `ON CONFLICT DO UPDATE` 只碰给了值的列，其余留在原地不动。
+    列名从这张表固定的五个键里查，外部字符串进不了 SQL。
+    */
   private upsert(repositoryId: string, patch: { index?: string; course?: string; estimate?: string; analysis?: string; settings?: string }): void {
-    const existing = this.getState(repositoryId);
-    this.db.prepare(`INSERT OR REPLACE INTO repository_state(repository_id, updated_at, index_json, course_json, estimate_json, analysis_json, settings_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(repositoryId, new Date().toISOString(), patch.index ?? existing?.index_json ?? null, patch.course ?? existing?.course_json ?? null, patch.estimate ?? existing?.estimate_json ?? null, patch.analysis ?? existing?.analysis_json ?? null, patch.settings ?? existing?.settings_json ?? null);
+    const columnOf = { index: "index_json", course: "course_json", estimate: "estimate_json", analysis: "analysis_json", settings: "settings_json" } as const;
+    const keys = (Object.keys(columnOf) as (keyof typeof columnOf)[]).filter((key) => patch[key] !== undefined);
+    if (!keys.length) return;
+    const columns = keys.map((key) => columnOf[key]).join(", ");
+    const assignments = keys.map((key) => `${columnOf[key]} = excluded.${columnOf[key]}`).join(", ");
+    this.db.prepare(`INSERT INTO repository_state(repository_id, updated_at, ${columns})
+      VALUES (?, ?, ${keys.map(() => "?").join(", ")})
+      ON CONFLICT(repository_id) DO UPDATE SET updated_at = excluded.updated_at, ${assignments}`)
+      .run(repositoryId, new Date().toISOString(), ...keys.map((key) => patch[key]));
   }
 }
