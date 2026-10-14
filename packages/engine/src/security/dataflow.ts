@@ -31,7 +31,13 @@ export type EgressKind =
   /** 流程层读的入口文件与推断边窗口（flows 自己调 executeReadFile，不经工具循环，所以必须单独记） */
   | "flow-window"
   /** 出题与题面润色用的源码摘录 */
-  | "exercise-excerpt";
+  | "exercise-excerpt"
+  /**
+    沙箱跑出来的东西出门（2026-10-14 刀 1 建类型、刀 4 才真用）：学习者写的代码 + stdout/stderr 摘要，
+    随「按需讲评」一起进模型。它不是仓库源码，但**是模型输出与用户输入的混合物**，
+    而且运行输出里完全可能出现学习者粘进去的密钥——出境账上必须单列一档，不能混进 anchor-excerpt。
+    */
+  | "sandbox-output";
 
 export interface EgressSource {
   kind: EgressKind;

@@ -200,8 +200,14 @@ for (const repo of perRepo) {
     const passed = results.filter((event) => event.payload.passed === true).length;
     const declined = of("exercise_declined");
     const count = (list: { payload: Record<string, unknown> }[], key: string, value: string) => list.filter((event) => String(event.payload[key]) === value).length;
-    const bySource = ["llm", "cache", "rule", "review"].map((source) => `${source} ${count(generated, "source", source)}`).join("、");
-    const byStage = ["no_candidates", "no_target", "llm_generate", "guard"].map((stage) => `${stage} ${count(declined, "stage", stage)}`).join("、");
+    const bySource = ["llm", "cache", "rule", "review", "code"].map((source) => `${source} ${count(generated, "source", source)}`).join("、");
+    // 拒题阶段九档（2026-10-14 沙箱改造加的）：no_provider / provider_error / proposal_shape / sandbox_unavailable / harness_validation。
+    // 沙箱那两档必须单列：「模型没出成题」和「出成题但沙箱证不出这题可解」是两件不同的事，混成一列会误导去修提示词。
+    const byStage = ["no_candidates", "no_target", "llm_generate", "guard", "no_provider", "provider_error", "proposal_shape", "sandbox_unavailable", "harness_validation"].map((stage) => `${stage} ${count(declined, "stage", stage)}`).join("、");
+    // 沙箱真跑了几趟（自证两趟 + 每次判分一趟）：这行是「判分确实执行过代码」的证据，没有它「跑测试」只是口号
+    const runs = of("exercise_run");
+    const runOutcome = ["accepted", "passed", "failed", "no-verdict"].map((outcome) => `${outcome} ${count(runs, "outcome", outcome)}`).join("、");
+    emit(`- 沙箱运行：${runs.length} 趟（自证 ${count(runs, "stage", "validate-proposal")}、判分 ${count(runs, "stage", "grade")}）；结论 ${runOutcome}；超时 ${runs.filter((event) => event.payload.timed_out === true).length}、没印 TESTS 结论 ${runs.filter((event) => event.payload.verdict_passed === null).length}`);
     emit(`- 练习漏斗：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（${byStage}）`);
   }
 

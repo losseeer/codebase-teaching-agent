@@ -1,0 +1,263 @@
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import type { RepositoryAnalysis } from "@codebase-tutor/shared";
+import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
+import { buildImplementationUnits } from "../implementation/units.js";
+import { indexRepository } from "../indexer/indexer.js";
+import type { LlmProvider } from "../llm/provider.js";
+import { readJournal } from "../store/journal.js";
+import { TutorDatabase } from "../store/database.js";
+import { ExerciseService, type PracticeRepository } from "./exercises.js";
+
+/**
+  代码题（刀 2）：出题由假 provider 交一份**手工构造的 harness**，自证与判分全部走真沙箱。
+  零模型调用、真执行——「跑测试判分」这句话只能用跑过来自证，用例里不接受任何 mock 掉的沙箱。
+*/
+
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+function testRepository(): PracticeRepository {
+  const directory = mkdtempSync(join(tmpdir(), "tutor-code-ex-"));
+  temporaryDirectories.push(directory);
+  const repositoryPath = join(directory, "fixture");
+  cpSync(fixture, repositoryPath, { recursive: true, filter: (source) => !source.includes("/.tutor") });
+  const index = indexRepository(repositoryPath);
+  const graph = buildDependencyGraph(repositoryPath, index.files);
+  const analysis: RepositoryAnalysis = {
+    repositoryId: index.repositoryId,
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    graph: serializeGraph(graph),
+    implementations: buildImplementationUnits(repositoryPath, graph.symbols),
+    quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
+    versionStamp: "content-v1"
+  };
+  return { path: repositoryPath, index, analysis };
+}
+
+/** 真源码那一份：patch_edit 的 solution 必须逐字含它，否则被判「把原码改花了还自称原样」。 */
+const REAL_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || "hello";\n}\n';
+const DEFECTIVE_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || "hallo";\n}\n';
+/** 语法就坏了：跑不出 TESTS 结论。它「退出非 0」看着像缺陷版该做的事，但那是编译器在报错，不是行为有缺陷。 */
+const UNPARSABLE_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || ;\n}\n';
+
+const TESTS = `import { loadGreeting } from "./target.ts";
+let pass = 0;
+let fail = 0;
+const check = (name: string, ok: boolean): void => { if (ok) pass += 1; else { fail += 1; console.error(name); } };
+check("没给问候时用默认值", loadGreeting({}) === "hello");
+check("给了问候时用传入值", loadGreeting({ GREETING: "hi" }) === "hi");
+console.log(\`TESTS \${pass} \${fail}\`);
+if (fail > 0) process.exitCode = 1;
+`;
+
+interface HarnessInput { given: string; solution: string }
+function proposalJson(input: HarnessInput): string {
+  return JSON.stringify({
+    ok: true,
+    language: "typescript",
+    title: "把默认问候改回来",
+    prompt: "下面这个函数在没给 GREETING 时返回了错的字串，改到测试全过。",
+    defect: "默认值拼错了：应当是 hello，写成了 hallo。",
+    given: [{ path: "target.ts", contents: input.given }],
+    solution: [{ path: "target.ts", contents: input.solution }],
+    hidden: [{ path: "tests.ts", contents: TESTS }],
+    entry: "tests.ts"
+  }, 60_000);
+}
+
+function fakeProvider(reply: () => string): LlmProvider & { calls: { count: number } } {
+  const handle = { count: 0 };
+  const provider: LlmProvider & { calls: typeof handle } = {
+    name: "fake", modelVersion: "model-fake",
+    calls: handle,
+    complete: async () => { handle.count += 1; return { text: reply(), usage: { inputTokens: 900, outputTokens: 300 } }; }
+  };
+  return provider;
+}
+
+function targetUnit(repository: PracticeRepository): string {
+  const unit = repository.analysis.implementations.find((item) => item.symbol.name === "loadGreeting");
+  if (!unit) throw new Error("夹具里找不到 loadGreeting 这个单元");
+  return unit.id;
+}
+
+describe("代码题出题自证链", () => {
+  it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+
+    const exercise = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider);
+    expect(exercise.kind).toBe("patch_edit");
+    expect(exercise.inputMode).toBe("code");
+    expect(exercise.gradingMode).toBe("execution");
+    expect(exercise.family).toBe("code");
+    // 下发件就是缺陷版；测试与参考解一律不在 exercise 上（判分口径不能出现在学习者能拿到的东西里）
+    expect(exercise.code?.files).toEqual([{ path: "target.ts", contents: DEFECTIVE_SOURCE }]);
+    expect(exercise.code?.entry).toBe("tests.ts");
+    expect(JSON.stringify(exercise)).not.toContain("TESTS");
+
+    const runs = readJournal(repository.path).filter((event) => event.type === "exercise_run");
+    expect(runs.map((event) => [event.payload.label, event.payload.outcome])).toEqual([["solution", "accepted"], ["given", "accepted"]]);
+    expect(runs.map((event) => event.payload.verdict_failed)).toEqual([0, 1]);
+    expect(readJournal(repository.path).some((event) => event.type === "code_egress" && event.payload.scene === "practice.generate-code")).toBe(true);
+
+    const database = new TutorDatabase(repository.path);
+    const stored = database.getExerciseCacheById<{ expected: { type: string; hidden: unknown[]; solution: { contents: string }[] } }>(repository.index.repositoryId, exercise.id);
+    database.close();
+    expect(stored?.expected.type).toBe("harness");
+    expect(stored?.expected.hidden).toEqual([{ path: "tests.ts", contents: TESTS }]);
+    expect(stored?.expected.solution[0]?.contents).toBe(REAL_SOURCE);
+  }, 60_000);
+
+  it("下发件本身就全过 ⇒ 这道题是白送的，拒掉且两趟运行都留痕", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: REAL_SOURCE, solution: REAL_SOURCE }));
+    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
+      .rejects.toThrow(/白送/);
+    const runs = readJournal(repository.path).filter((event) => event.type === "exercise_run");
+    expect(runs).toHaveLength(2);
+    expect(runs.every((event) => event.payload.verdict_failed === 0)).toBe(true);
+    const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
+    expect(declined?.payload.stage).toBe("harness_validation");
+  }, 60_000);
+
+  it("下发件靠语法错误「失败」不算自证通过：没印 TESTS 结论就拒，不把编译挂当行为缺陷", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: UNPARSABLE_SOURCE, solution: REAL_SOURCE }));
+    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
+      .rejects.toThrow(/没收到代码文件|没跑完|跑不出|语法/);
+    const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
+    expect(declined?.payload.stage).toBe("harness_validation");
+  }, 60_000);
+
+  it("参考解与仓库真源码逐字对不上 ⇒ 拒（patch_edit 不许把原码改花了还自称原样）", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const drifted = 'export function loadGreeting(environment) {\n  return environment.GREETING ?? "hello";\n}\n';
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: drifted }));
+    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
+      .rejects.toThrow(/逐字对不上/);
+    // 压根没跑到沙箱：一行 exercise_run 都不该有
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_run")).toHaveLength(0);
+  }, 60_000);
+
+  it("没配模型时直接拒，不回落本地题面", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) })).rejects.toThrow(/需要配置模型/);
+    expect(readJournal(repository.path).find((event) => event.type === "exercise_declined")?.payload.stage).toBe("no_provider");
+  }, 60_000);
+
+  it("同一作用域第二次不再打模型；换 runner 指纹会重出（判分承诺属于那个 runner）", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const first = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider);
+    const second = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider);
+    expect(second.id).toBe(first.id);
+    expect(provider.calls.count).toBe(1);
+    // 目标文件内容变了 → 作用域里的文件哈希翻了 → 旧题不复用
+    const bumpedFiles = repository.index.files.map((file) => file.path === "src/config.js" ? { ...file, contentHash: "bumped" } : file);
+    const changed = { ...repository, index: { ...repository.index, files: bumpedFiles } };
+    const regenerated = await service.next(changed, { kind: "patch_edit", targetUnitId: targetUnit(changed) }, provider);
+    expect(regenerated.id).not.toBe(first.id);
+    expect(provider.calls.count).toBe(2);
+  }, 60_000);
+});
+
+describe("代码题判分", () => {
+  async function generatedExercise(): Promise<{ repository: PracticeRepository; service: ExerciseService; exerciseId: string }> {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const exercise = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider);
+    return { repository, service, exerciseId: exercise.id };
+  }
+
+  it("交回正确实现 ⇒ 全过、automatic=true、反馈来源标 sandbox（不是 llm_judge）", async () => {
+    const { repository, service, exerciseId } = await generatedExercise();
+    const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
+    expect(result.passed).toBe(true);
+    expect(result.score).toBe(1);
+    expect(result.automatic).toBe(true);
+    expect(result.feedbackSource).toBe("sandbox");
+    expect(result.feedback).toContain("测试全过");
+    // 判分这一侧一趟模型调用都不该有：provider 没传、也不该自发去找
+    expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_feedback_polish")).toHaveLength(0);
+    const run = readJournal(repository.path).filter((event) => event.type === "exercise_run").at(-1);
+    expect(run?.payload.stage).toBe("grade");
+    expect(run?.payload.verdict_passed).toBe(2);
+    expect(run?.payload.verdict_failed).toBe(0);
+  }, 60_000);
+
+  it("只改对一半 ⇒ 分数是通过数除以总断言数，不是「没过就 0 分」", async () => {
+    const { repository, service, exerciseId } = await generatedExercise();
+    const halfRight = 'export function loadGreeting(environment) {\n  return environment.GREETING ? environment.GREETING : "hallo";\n}\n';
+    const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: halfRight }] });
+    expect(result.passed).toBe(false);
+    expect(result.score).toBeCloseTo(0.5, 2);
+    expect(result.feedback).toContain("1 过 1 挂");
+    // 排期按半对推进，不是按零分重置：这条是 SM-2 的输入，判分与排期必须同口径
+    const database = new TutorDatabase(repository.path);
+    const schedule = database.getReviewSchedule(repository.index.repositoryId, exerciseId);
+    database.close();
+    expect(schedule?.exerciseId).toBe(exerciseId);
+  }, 60_000);
+
+  it("学习者交的文件名不在下发清单里 ⇒ 当没收到，不拿冻结的缺陷版冒充他的代码判分", async () => {
+    const { repository, service, exerciseId } = await generatedExercise();
+    const result = await service.answer(repository, exerciseId, { files: [{ path: "别的.ts", contents: REAL_SOURCE }] });
+    expect(result.passed).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.feedback).toContain("没收到代码文件");
+  }, 60_000);
+
+  it("学习者写坏到没法运行 ⇒ 判未过但如实说「没跑完」，并留一行 no-verdict 的沙箱账", async () => {
+    const { repository, service, exerciseId } = await generatedExercise();
+    const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: UNPARSABLE_SOURCE }] });
+    expect(result.passed).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.feedback).toContain("测试没能跑完");
+    const run = readJournal(repository.path).filter((event) => event.type === "exercise_run").at(-1);
+    expect(run?.payload.outcome).toBe("no-verdict");
+    expect(run?.payload.verdict_passed).toBe(null);
+  }, 60_000);
+
+  it("判分不读仓库源码：把被考文件从盘上删掉，同一份回答照样判得出同样的结论", async () => {
+    const { repository, service, exerciseId } = await generatedExercise();
+    rmSync(join(repository.path, "src/config.js"));
+    const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
+    expect(result.passed).toBe(true);
+    expect(result.feedbackSource).toBe("sandbox");
+  }, 60_000);
+
+  it("老索引出的题，索引后来长出逐文件哈希也不该被永远判过期：兜底档只按全仓比", async () => {
+    /**
+      `exerciseDeps` 在文件没有 `contentHash` 时记的是兜底串 `repo:<versionStamp>`，而 `staleDependencies`
+      早先是拿「当前逐文件哈希」去比那条串——重索引一次（内容一字没动）就开始次次不等，
+      这道题此后**再也答不了**。写侧有兜底、读侧没有，是成对出现的 bug（路由级夹具先撞到的，这里把它钉在服务层）。
+    */
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const bare = { ...repository, index: { ...repository.index, files: repository.index.files.map((file) => ({ path: file.path, extension: file.extension, bytes: file.bytes, lines: file.lines })) } };
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const exercise = await service.next(bare, { kind: "patch_edit", targetUnitId: targetUnit(bare) }, provider);
+    expect(exercise.contentHashes?.[0]?.hash, "无逐文件哈希时应落兜底档").toMatch(/^repo:/);
+
+    // 同一份内容、同一个 versionStamp，只是索引现在带上了逐文件哈希
+    expect(repository.analysis.versionStamp).toBe(bare.analysis.versionStamp);
+    const result = await service.answer(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
+    expect(result.passed, JSON.stringify(result.feedback)).toBe(true);
+  }, 60_000);
+});

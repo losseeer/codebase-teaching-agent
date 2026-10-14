@@ -33,9 +33,10 @@ export function phaseLabel(phase: ImportJob["phase"]): string {
 
 export function exerciseKindLabel(kind: ExerciseKind): string {
   return ({
-    output_prediction: "预测输出",
     change_localization: "修改定位",
     impact_analysis: "影响分析",
+    patch_edit: "修改实现",
+    author_function: "从零实现",
     llm_rubric: "主题练习"
   })[kind];
 }

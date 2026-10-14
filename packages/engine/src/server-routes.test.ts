@@ -170,11 +170,11 @@ beforeAll(async () => {
   database.saveAnalysis(analysis);
   // 练习答疑要求题目在缓存里（题面由 fixture 给定，不走出题路径）
   exerciseId = "ex-fixture";
-  database.putExerciseCache(repositoryId, "content:fixture", "output_prediction", "unit-1", {
+  database.putExerciseCache(repositoryId, "content:fixture", "impact_analysis", "unit-1", {
     exercise: {
-      id: exerciseId, repositoryId, contentVersion: "content:fixture", kind: "output_prediction",
-      targetUnitId: "unit-1", targetTitle: "注册顺序", difficulty: 1, title: "预测输出", prompt: "改这一行会先影响谁？",
-      anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], inputMode: "text", gradingMode: "execution", createdAt: now
+      id: exerciseId, repositoryId, contentVersion: "content:fixture", kind: "impact_analysis",
+      targetUnitId: "unit-1", targetTitle: "注册顺序", difficulty: 1, title: "影响分析", prompt: "改这一行会先影响谁？",
+      anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], inputMode: "multi_select", gradingMode: "set_match", createdAt: now
     }
   });
   database.close();
@@ -553,6 +553,20 @@ describe("未挂载仓库的线程仍可定位", () => {
   这条放在文件末尾，因为它改的是**落库预算**——前面的用例都按缺省预算跑；
   全程零 token：被拒的那一支根本不该打到模型上，靠 `fetchCalls` 不增加来钉死。
   */
+/**
+  代码题的题型闸门（刀 2）。**出题与判分的端到端不在这一层测**（`src/exercises/code-generate.test.ts`
+  11 例已经用真沙箱跑通了「假 provider 交 harness → 两跑自证 → 交卷判分」全链）：
+  这条路由要过就得依赖挂载中的 analysis，而前面用例往 repoDir 写过文件会触发后台重索引、把手搓产物换掉，
+  加等待只能买到 flaky，买不到保证。留确定性的那一格：旧题型必须被闸门拦下。
+*/
+describe("代码题走通练习路由", () => {
+  it("旧题型 output_prediction 已从题型闸门里退出：请求它拿 400，而不是静默出另一道题", async () => {
+    const refused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/exercises`, payload: { kind: "output_prediction" } });
+    expect(refused.statusCode).toBe(400);
+    expect(String((refused.json() as { error: string }).error)).toContain("不支持的练习题型");
+  });
+});
+
 describe("预算触顶时不放行付费分支", () => {
   it("预算 0 ⇒ LLM 出题被拒且一次模型调用都没发生；把预算调回去闸门就翻回放行", async () => {
     const closed = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });

@@ -855,13 +855,37 @@ export interface CostSummary {
   byDay: CostDay[];
 }
 
-export type ExerciseKind = "output_prediction" | "change_localization" | "impact_analysis" | "llm_rubric";
-/** 规则出题族题型：题面/选项/标准答案全部由静态分析与受限执行产出（server 校验 / 缓存命中校验共用这一份）。 */
-export const EXERCISE_KINDS: ExerciseKind[] = ["output_prediction", "change_localization", "impact_analysis"];
-/** 练习题族：comprehension=程序理解题（规则出题、确定性判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
-export type ExerciseFamily = "comprehension" | "llm";
-export type ExerciseInputMode = "text" | "multi_select" | "open";
+/**
+  题型五档（2026-10-14 练习域沙箱改造）：
+  - `change_localization` / `impact_analysis`：静态分析产出的理解题，不跑代码。
+  - `patch_edit`：给一段有缺陷的实现，学习者在编辑器里改到测试全过。
+  - `author_function`：给题面与骨架文件，学习者从零写实现。
+  - `llm_rubric`：开放分析题，rubric 判分。
+  旧档 `output_prediction`（预测一段纯表达式的返回值）已删：它的判据 `safeInvocationFor` 在唯一有全量产物的仓里
+  只命中 2 / 1222 个单元，而同一段代码沙箱能做且做得更好（见开发日志 §52–§53）。
+*/
+export type ExerciseKind = "change_localization" | "impact_analysis" | "patch_edit" | "author_function" | "llm_rubric";
+/** 规则出题族题型：题面/选项/标准答案全部由静态分析产出（server 校验 / 缓存命中校验共用这一份）。 */
+export const EXERCISE_KINDS: ExerciseKind[] = ["change_localization", "impact_analysis"];
+/** 要进沙箱真跑的族：学习者交的是代码，判分只由测试是否全过决定。 */
+export const CODE_EXERCISE_KINDS: ExerciseKind[] = ["patch_edit", "author_function"];
+/** 当前引擎真能出、真能判的全部题型（路由 400 校验、复习队列回放、round-robin 选题共用这一份，不再各写清单）。 */
+export const SUPPORTED_EXERCISE_KINDS: ExerciseKind[] = [...EXERCISE_KINDS, ...CODE_EXERCISE_KINDS];
+/** 练习题族：comprehension=程序理解题（规则出题、确定性判分），code=沙箱代码题（模型出题、跑测试判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
+export type ExerciseFamily = "comprehension" | "code" | "llm";
+export type ExerciseInputMode = "text" | "multi_select" | "open" | "code";
+/** `execution` 现在意味着「沙箱真跑测试」，不再是从前那条受限表达式求值。 */
 export type ExerciseGradingMode = "execution" | "set_match" | "rubric";
+/** 沙箱支持的语言。就是这一份清单——加一门语言要同时给 runner（怎么起）与探测（能不能真拦住），否则整域禁用。 */
+export type ExerciseLanguage = "typescript" | "python" | "java";
+/** 下发给界面编辑器的可编辑文件（`patch_edit` 给的是带缺陷的那一份，`author_function` 给的是骨架）。
+    判分用的测试与替身不在这里，它们只留在引擎缓存行里。 */
+export interface ExerciseCodeSlot {
+  language: ExerciseLanguage;
+  files: { path: string; contents: string }[];
+  /** typescript/python：入口文件名；java：入口类名 */
+  entry: string;
+}
 /** rubric 判分的评分细则维度（LLM 出题时一并产出，存于引擎缓存，不下发 GUI）。 */
 export interface RubricCriterion {
   dimension: string;
@@ -890,6 +914,8 @@ export interface Exercise {
   inputMode: ExerciseInputMode;
   gradingMode: ExerciseGradingMode;
   options?: ExerciseOption[];
+  /** 代码题（`patch_edit` / `author_function`）的可编辑文件包；理解题与主观题没有这一格。 */
+  code?: ExerciseCodeSlot;
   /** 练习题族；旧缓存记录无此字段视为 comprehension。 */
   family?: ExerciseFamily;
   /** llm 族：用户配置的出题主题标签（题面语义提示）。 */
@@ -912,6 +938,8 @@ export interface SuggestedEntry {
 export interface ExerciseAnswer {
   text?: string;
   selectedIds?: string[];
+  /** 代码题：学习者提交的整组文件。path 必须与题面下发的那一组一致——判分时用它替换 `given`，其余文件用出题时冻结的那一份。 */
+  files?: { path: string; contents: string }[];
 }
 
 export interface ExerciseResult {
@@ -925,7 +953,8 @@ export interface ExerciseResult {
   gradingMode: ExerciseGradingMode;
   feedback: string;
   /** 反馈来源：rule=规则判分原文；llm_polished=LLM 润色的解释；llm_judge=rubric 判分产出。 */
-  feedbackSource?: "rule" | "llm_polished" | "llm_judge";
+  /** `sandbox` = 结论出自沙箱真跑（测试通过/失败计数），没经过任何模型；`llm_polished` 只改措辞不改结论。 */
+  feedbackSource?: "rule" | "llm_polished" | "llm_judge" | "sandbox";
   matchedIds?: string[];
   missingIds?: string[];
   unexpectedIds?: string[];
@@ -1040,6 +1069,15 @@ export type JournalEventType =
       aborted_by(恒为 user_stop)。与「客户端断开」刻意区分——后者引擎照常算完落库，不记本事件。
       中止的一轮没有成品：不写 turn_text，也不伪造 assistant 正文。 */
   | "turn_aborted"
+  /**
+    沙箱真跑了一次代码（2026-10-14 刀 1，练习域沙箱）。一次运行一条，**成败都记**——
+    漏斗要的是分母：出题自证链跑三趟（原码/缺陷版/参考解），判分再跑一趟，少一条就分不清「题没出成」和「题没被作答」。
+    payload：`language` / `stage`(validate-proposal|grade) / `ok` / `exit_code` / `signal` / `timed_out` /
+    `truncated` / `stdout_bytes` / `duration_ms` / `isolation`(enforced|unavailable) / `runner`（解释器与 profile 指纹，
+    换 runner 要让旧题的缓存键一起失效，所以这列必须落在行上才查得回）。
+    只记读数不记正文：学习者写的代码与运行输出留在内存里判完就丢，正文进 `code_egress` 那一侧才有出境账。
+    */
+  | "exercise_run"
   // UI 侧
   | "flow_node_selected"
   | "file_anchored"
@@ -1080,7 +1118,7 @@ export type JournalEventType =
 export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
-  "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted",
+  "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress"
 ] as const satisfies readonly JournalEventType[];
 

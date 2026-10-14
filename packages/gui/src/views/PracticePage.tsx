@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { CodeEditor, type CodeEditorFile } from "./CodeEditor";
 import { BrainCircuit, CheckCircle2, RefreshCw } from "lucide-react";
 import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
@@ -23,7 +24,8 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
   */
 
 function gradingLabel(mode: ExerciseGradingMode): string {
-  if (mode === "execution") return "受限执行验证";
+  // 2026-10-14 起 `execution` 指的是「沙箱真跑那组冻结测试」，不再是旧的受限表达式求值
+  if (mode === "execution") return "沙箱跑测试判分";
   if (mode === "rubric") return "rubric 细则判分（LLM 比对参考答案）";
   return "集合精确匹配";
 }
@@ -49,13 +51,12 @@ function llmNonce(unitId: string): number {
   return llmUnitNonce(unitId) ?? 0;
 }
 
-/** 回答框的提示随题型走：原来非 rubric 题一律写「只填写你预测的返回值」，
-    可修改定位要的是位置、影响分析要的是调用点——按返回值的口径会把人带偏。 */
+/** 回答框的提示随题型走：按题型给口径，不能给一个「预测返回值」那种已经把题型删掉的旧说法。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
   if (kind === "change_localization") return "写出要改的文件与位置（行号或函数名）";
   if (kind === "impact_analysis") return "列出会受影响的调用点，并说明依据";
-  return "只填写你预测的返回值";
+  return "写下你的回答";
 }
 
 export function PracticePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
@@ -64,6 +65,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [text, setText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  /** 代码题的工作副本：练习一换就整份重置成引擎下发的那一组文件（`exercise.code.files`） */
+  const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
+  const [activeCodePath, setActiveCodePath] = useState("");
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -121,6 +125,12 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     return () => { current = false; };
   }, [exercise?.id, repositoryId]);
 
+  useEffect(() => {
+    const slot = exercise?.code;
+    setCodeFiles(slot ? slot.files.map((file) => ({ ...file })) : []);
+    setActiveCodePath(slot?.files[0]?.path ?? "");
+  }, [exercise?.id]);
+
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   /** 模块切换是设计文档第 8 章点名要可查的操作；id 未变（重复点同一 chip）不记，避免假轨迹。
       `list` 供「新增/删除模块」路径传入尚未提交的新列表——否则 label 会取到旧值。 */
@@ -135,7 +145,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     // 提交动作先记（用户做了什么），判分结果是引擎侧的事，落在 journal 的 exercise_result
     emit(repositoryId, "exercise_submitted", { exercise_id: exercise.id, kind: exercise.kind, module: activeModule, target_unit: exercise.targetUnitId });
     try {
-      const answer = exercise.inputMode === "multi_select" ? { selectedIds } : { text };
+      const answer = exercise.inputMode === "multi_select" ? { selectedIds } : exercise.inputMode === "code" ? { files: codeFiles } : { text };
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
       setResult(next);
       refreshSummary();
@@ -161,7 +171,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       : `相关代码超出预览上限（第 ${anchor.line} 行）`
     : "生成练习后显示相关代码";
   const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
-  const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : text.trim().length > 0);
+  const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : exercise?.inputMode === "code" ? codeFiles.length > 0 : text.trim().length > 0);
 
   return (
     <section className="page practice-page">
@@ -229,7 +239,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                   <span className="difficulty">难度 {exercise.difficulty}/5</span>
                 </div>
                 <p className="exercise-prompt">{exercise.prompt}</p>
-                <span className="answer-label">你的回答</span>
+                <span className="answer-label">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
                 {exercise.inputMode === "multi_select" ? (
                   <div className="option-list">
                     {exercise.options?.map((option) => (
@@ -240,7 +250,29 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     ))}
                   </div>
                 ) : null}
-                {exercise.inputMode !== "multi_select" ? (
+                {exercise.inputMode === "code" && exercise.code ? (
+                  <>
+                    {codeFiles.length > 1 ? (
+                      <div className="code-tabs" role="tablist">
+                        {codeFiles.map((file) => (
+                          <button key={file.path} role="tab" aria-selected={file.path === activeCodePath} className={file.path === activeCodePath ? "code-tab active" : "code-tab"} onClick={() => setActiveCodePath(file.path)}>
+                            <code>{file.path}</code>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {codeFiles.find((file) => file.path === activeCodePath) ? (
+                      <CodeEditor
+                        file={codeFiles.find((file) => file.path === activeCodePath)!}
+                        language={exercise.code.language}
+                        resetKey={`${exercise.id}:${activeCodePath}`}
+                        ariaLabel={exercise.code.files.length > 1 ? "练习代码编辑器" : `编辑 ${activeCodePath}`}
+                        onChange={(contents) => setCodeFiles((current) => current.map((file) => (file.path === activeCodePath ? { ...file, contents } : file)))}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+                {exercise.inputMode !== "multi_select" && exercise.inputMode !== "code" ? (
                   <textarea
                     value={text}
                     onChange={(event) => setText(event.target.value)}

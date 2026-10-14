@@ -603,6 +603,16 @@ button.entry-item:hover { background: #eef6ef; }
 .answer-prompt { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .answer-prompt h2 { margin: 7px 0 0; font-size: 17px; }
 .answer-label { display: block; margin-bottom: 7px; color: #527364; font-size: 11px; font-weight: 700; }
+/** 代码题的编辑器（刀 3）：CodeMirror 自带排版，这里只把它框进本仓的视觉——
+    字号与行高跟 `.answer textarea` 对齐，免得同一块区域两种字宽看起来像两个产品。 */
+.code-editor { border: 1px solid #cbd9d1; border-radius: 4px; overflow: hidden; background: #fbfdfb; }
+.code-editor .cm-editor { font-size: 12px; }
+.code-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.55; }
+.code-editor .cm-editor.cm-focused { outline: none; }
+.code-editor .cm-gutters { background: #f2f6f3; border-right: 1px solid #dbe7de; }
+.code-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.code-tab { border: 1px solid #cbd9d1; border-bottom: 0; border-radius: 4px 4px 0 0; padding: 5px 9px; background: #eef4ef; color: #527364; font-size: 11px; cursor: pointer; }
+.code-tab.active { background: #fbfdfb; color: #17352c; font-weight: 700; }
 .answer textarea { width: 100%; min-height: 105px; resize: vertical; border: 1px solid #cbd9d1; border-radius: 4px; padding: 10px; color: #335548; font-size: 12px; line-height: 1.55; outline: none; }
 .answer-actions { display: flex; gap: 7px; margin-top: 13px; }
 .option-list { display: grid; gap: 7px; margin-top: 13px; }

@@ -44,7 +44,7 @@ export type ModuleWhere = "teaching" | "practice";
   用户自建模块 = LLM 出题主题标签。练习侧的列表与教学侧分开存储，互不影响。
   */
 export const PRACTICE_DEFAULT_MODULES: KnowledgeModule[] = [
-  { id: "comprehension", label: "程序理解题", hint: "规则出题 · 预测输出 / 修改定位 / 影响分析，判分确定" }
+  { id: "comprehension", label: "程序理解题", hint: "规则出题 · 改代码 / 修改定位 / 影响分析，判分确定" }
 ];
 
 /** 程序理解题固定模块 id（practice 出题分派与删除保护的判据）。 */

@@ -1,0 +1,276 @@
+/**
+  代码题出题与自证链（刀 2）。
+
+  形状来自 2026-10-14 的拍板：**一律把目标函数连替身一起摘出来跑**，沙箱不看仓库；
+  所以这道题的全部可执行内容都由模型交出（题面 + 下发件 + 测试 + 替身），
+  而「这道题值不值得出」只能由**真跑**证明，不能由提示词承诺。
+
+  自证就两跑（不是三跑）：
+  - `solution` 必须全过——对 patch_edit 这就是仓库里那段真实现，所以「原码全过」与「参考解全过」是同一件事，
+    不必再花一趟；
+  - `given`（下发给学习者的那一版：缺陷版 / 空骨架）**必须至少挂一条测试**。
+  两跑同时成立才说明：题不是白送的、测试不是空的、而且确实存在一个能过的答案。
+
+  测试结论只认一行 `TESTS <通过数> <失败数>`（契约见下面的提示词），**不认异常**：
+  下发件如果是因为编译挂 / 语法挂而退出非 0，那一行根本不会印出来，于是被判成「harness 坏了」而不是「题做对了」。
+  这一格区分不能省——把「跑不起来」当「跑出问题」，出一批需要学习者先修语法环境的题，是这套机制最坏的死法。
+*/
+import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/shared";
+import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { readFileLines, symbolBodyLines } from "../lib.js";
+import { recordEgress } from "../security/dataflow.js";
+import { secretMasker } from "../security/secrets.js";
+import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
+import { assertSafePath, type SandboxFile, type SandboxRun } from "../sandbox/runner.js";
+
+export interface CodeFile {
+  path: string;
+  contents: string;
+}
+
+export interface CodeProposal {
+  kind: "patch_edit" | "author_function";
+  title: string;
+  prompt: string;
+  language: ExerciseLanguage;
+  /** 下发给学习者编辑的那一组文件（patch_edit = 带缺陷的实现；author_function = 骨架） */
+  given: CodeFile[];
+  /** 应该全过的那一组文件（patch_edit = 仓库真源码摘出的那一版；author_function = 参考解） */
+  solution: CodeFile[];
+  /** 测试与替身：判分用，**不下发** */
+  hidden: CodeFile[];
+  entry: string;
+  /** 缺陷一句话说清「现在哪里不对」；引擎留档，讲评与排查用，不出现在题面 */
+  defect: string;
+}
+
+/**
+  拒题的四档，按「断在哪一段」分：`provider_error` 是**端点没给东西**（没钱了、超时、被拒），
+  `proposal_shape` 是给了但形状不合，`harness_validation` 是形状合但沙箱证不出这题可解，
+  `sandbox_unavailable` 是压根没有可用隔离。
+  这四档混成一条就等于把「充值」说成「改提示词」——同 §45「虚报比漏报糟」、§36.6 闸门失效要看得见。
+*/
+export type DeclineStage = "provider_error" | "proposal_shape" | "sandbox_unavailable" | "harness_validation";
+
+export interface HarnessRun {
+  label: "solution" | "given";
+  verdict?: { passed: number; failed: number };
+  exitCode: number | null;
+  timedOut: boolean;
+  /** 沙箱本身跑完了（编译成功、没超时）；与「测试全过」是两件事 */
+  ran: boolean;
+}
+
+export type CodeGeneration =
+  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[] }
+  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage };
+
+const MAX_TITLE = 40;
+const MAX_PROMPT = 700;
+const MAX_FILE_BYTES = 24_000;
+const MAX_FILES_PER_SLOT = 3;
+
+/** 三语言各自的「测试怎么报结论」模板：契约由引擎定死，不让模型自由发挥，否则读数没法统一判。 */
+const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
+  typescript: "测试文件（例如 `tests.ts`，入口就是它）自己依次调用各条断言，每条**通过就 pass+1、抛异常就 fail+1 并把原因打到 stderr**；结尾必须打印一行 `TESTS <pass> <fail>`，且 fail>0 时设 `process.exitCode = 1`。跨文件 import **必须写真实扩展名 `.ts`**（沙箱里的 node 不做 `.js`→`.ts` 的重写）。",
+  python: '测试文件（例如 `tests.py`，入口就是它）自己依次跑各条断言，每条**用 try/except 包住：过了 pass+1，抛了 fail+1**；结尾 `print(f"TESTS {pass} {fail}")`，fail>0 时 `sys.exit(1)`。只用标准库。',
+  java: '入口是一个带 `public static void main` 的类（例如 `Tests`，文件名必须与类名同名且不带包目录）。每条断言用 try/catch 包住计数，结尾 `System.out.println("TESTS " + pass + " " + fail);` 并在 fail>0 时 `System.exit(1)`。只用 JDK。'
+};
+
+function systemPrompt(kind: "patch_edit" | "author_function", language: ExerciseLanguage): string {
+  return [
+    `你是代码练习的出题人。要出一道**学习者真在编辑器里写代码、由沙箱真跑测试判分**的题：${kind === "patch_edit" ? "给一段有真实缺陷的实现，让他改到测试全过" : "给签名与示例，让他从零写出实现"}。`,
+    "",
+    "铁律：",
+    "- 沙箱里**没有任何第三方依赖**：只用该语言标准库；被测代码需要的仓内符号，由你写成最小替身（stub）放进 `hidden`。",
+    "- 判分只由测试是否全过决定，所以测试必须**逐条断言、逐条计数**，最后印一行结论。",
+    `- 本语言的测试形状：${TEST_CONTRACT[language]}`,
+    "- 测试要打在行为上（给定输入 → 期望输出/副作用），不要打在实现细节上（不要断言源码文本、不要断言调用次数这类脆弱项）。",
+    kind === "patch_edit"
+      ? "- 缺陷必须是**行为级**的真实错误（边界、比较符、单位、分支漏一条），一处即可；禁止用语法错误、拼错的标识符、删掉整个函数来「制造缺陷」——那会让学习者在改编译器而不是改逻辑。"
+      : "- 骨架里只留签名与 `TODO`，不留任何可用实现；题面要给足输入输出形状与至少两个示例。",
+    "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
+    "",
+    "严格输出 JSON（不要任何其他文字）：",
+    `{"ok":true,"language":"${language}","title":"≤${MAX_TITLE}字","prompt":"≤${MAX_PROMPT}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
+    `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
+    `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
+    "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个单元为什么出不了代码题>\"}",
+    "",
+    "约束：`given` 与 `solution` 的 **path 集合必须完全一致**；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。"
+  ].join("\n");
+}
+
+/** 出题侧读源码：文件头部的 import 段 + 符号体，两边都过密钥筛，并如实登记出境。 */
+export function unitSource(repositoryPath: string, unit: ImplementationUnit): { imports: string; body: string; sources: { path: string; from: number; to: number; text: string; masked: number }[] } | undefined {
+  const lines = readFileLines(repositoryPath, unit.symbol.path);
+  if (!lines) return undefined;
+  const importLines: string[] = [];
+  const maskerForImports = secretMasker();
+  lines.forEach((line, index) => {
+    if (index + 1 >= unit.symbol.line) return;
+    if (/^\s*(?:import\s|from\s|use\s|using\s|#include|package\s|require\s)/.test(line)) importLines.push(maskerForImports.take(line));
+  });
+  const maskerForBody = secretMasker();
+  const body = symbolBodyLines(lines, unit.symbol).map((line) => maskerForBody.take(line)).join("\n");
+  if (!body.trim()) return undefined;
+  return {
+    imports: importLines.join("\n"),
+    body,
+    sources: [
+      ...(importLines.length ? [{ path: unit.symbol.path, from: 1, to: Math.min(unit.symbol.line - 1, lines.length), text: importLines.join("\n"), masked: maskerForImports.masked }] : []),
+      { path: unit.symbol.path, from: unit.symbol.line, to: unit.symbol.endLine, text: body, masked: maskerForBody.masked }
+    ]
+  };
+}
+
+function shapeFiles(files: unknown, language: ExerciseLanguage): CodeFile[] | undefined {
+  if (!Array.isArray(files) || !files.length || files.length > MAX_FILES_PER_SLOT) return undefined;
+  const out: CodeFile[] = [];
+  for (const item of files) {
+    const record = (item ?? {}) as Record<string, unknown>;
+    const path = String(record.path ?? "").trim();
+    const contents = typeof record.contents === "string" ? record.contents : "";
+    try { out.push({ path: assertSafePath(path, language), contents }); } catch { return undefined; }
+    if (!contents.trim() || contents.length > MAX_FILE_BYTES) return undefined;
+  }
+  return out;
+}
+
+function samePathSet(left: CodeFile[], right: CodeFile[]): boolean {
+  const key = (files: CodeFile[]): string => files.map((file) => file.path).sort().join(",");
+  return key(left) === key(right);
+}
+
+function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodeProposal; issue?: string } {
+  const language = String(parsed.language ?? "").trim() as ExerciseLanguage;
+  if (!["typescript", "python", "java"].includes(language)) return { issue: `语言不在沙箱支持范围内：${language || "（空）"}` };
+  const kind = String(parsed.kind ?? "").trim();
+  if (kind !== "patch_edit" && kind !== "author_function") return { issue: `题型字段不对：${kind || "（空）"}` };
+  const title = String(parsed.title ?? "").trim().slice(0, MAX_TITLE);
+  const prompt = String(parsed.prompt ?? "").trim().slice(0, MAX_PROMPT);
+  const defect = String(parsed.defect ?? "").trim().slice(0, 200);
+  if (!title || !prompt) return { issue: "题面标题或描述为空" };
+  const given = shapeFiles(parsed.given, language);
+  const solution = shapeFiles(parsed.solution, language);
+  const hidden = shapeFiles(parsed.hidden, language);
+  if (!given || !solution || !hidden) return { issue: "given/solution/hidden 三组文件形状不合法（空、超限、或文件名不合该语言形状）" };
+  if (!samePathSet(given, solution)) return { issue: "given 与 solution 的文件集合必须完全一致（学习者改的就是这一组）" };
+  const entry = String(parsed.entry ?? "").trim();
+  if (!hidden.some((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry)) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
+  if (hidden.some((file) => given.some((slot) => slot.path === file.path))) return { issue: "hidden 与 given 有同名文件：下发件会被测试盖掉" };
+  return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect } };
+}
+
+/** 只认这一行：`TESTS <通过> <失败>`。没有它 = 测试压根没跑完，不拿「非 0 退出」冒充「测出问题」。 */
+export function verdictOf(run: SandboxRun): { passed: number; failed: number } | undefined {
+  const lines = run.stdout.trimEnd().split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = /^TESTS (\d+) (\d+)$/.exec(lines[index].trim());
+    if (match) return { passed: Number(match[1]), failed: Number(match[2]) };
+  }
+  return undefined;
+}
+
+function overlay(hidden: CodeFile[], variant: CodeFile[]): SandboxFile[] {
+  const byPath = new Map<string, SandboxFile>();
+  for (const file of [...hidden, ...variant]) byPath.set(file.path, file);
+  return [...byPath.values()];
+}
+
+async function harnessRun(proposal: CodeProposal, label: "solution" | "given"): Promise<HarnessRun> {
+  const variant = label === "solution" ? proposal.solution : proposal.given;
+  const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant) });
+  return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok };
+}
+
+/**
+  两跑自证。这里**不吞异常**：沙箱不可用（隔离探测没过）要原样上抛，由调用方记成 `sandbox_unavailable`
+  并把代码题域整域关掉——把它折进「出题失败」的普通原因里，就等于把闸门失效说成模型不争气。
+*/
+export async function validateHarness(proposal: CodeProposal): Promise<{ ok: boolean; reason?: string; runs: HarnessRun[] }> {
+  const runs: HarnessRun[] = [];
+  const solution = await harnessRun(proposal, "solution");
+  runs.push(solution);
+  if (!solution.verdict) return { ok: false, reason: "参考解没印出 TESTS 结论（多半没编译过或测试文件自己崩了）", runs };
+  if (solution.verdict.passed < 1) return { ok: false, reason: `参考解一条测试都没过（TESTS ${solution.verdict.passed} ${solution.verdict.failed}）`, runs };
+  if (solution.verdict.failed > 0 || solution.exitCode !== 0) return { ok: false, reason: `参考解没过：TESTS ${solution.verdict.passed} ${solution.verdict.failed}`, runs };
+
+  const given = await harnessRun(proposal, "given");
+  runs.push(given);
+  if (!given.verdict) return { ok: false, reason: "下发件没印出 TESTS 结论——它可能是靠语法错误「失败」的，这种题不能出", runs };
+  if (given.verdict.failed < 1) return { ok: false, reason: `下发件本身就全过（TESTS ${given.verdict.passed} ${given.verdict.failed}），这道题是白送的`, runs };
+  return { ok: true, runs };
+}
+
+/** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现，防止模型把原码改花了还自称「原样」。 */
+function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
+  const needle = body.trim().replace(/\s+/g, " ");
+  if (!needle) return false;
+  return proposal.solution.some((file) => file.contents.replace(/\s+/g, " ").includes(needle));
+}
+
+export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider }): Promise<CodeGeneration> {
+  const source = unitSource(input.repositoryPath, input.unit);
+  if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [] };
+  const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
+  if (!language) return { ok: false, stage: "proposal_shape", reason: `单元语言 ${input.unit.symbol.language} 不在沙箱首发三档里。`, runs: [] };
+
+  recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
+  let response: { text: string; usage?: LlmUsage };
+  try {
+    response = await input.provider.complete({
+      system: systemPrompt(input.kind, language),
+      user: JSON.stringify({
+        kind: input.kind,
+        language,
+        target: { path: input.unit.symbol.path, symbol: input.unit.symbol.name, line: input.unit.symbol.line, parameters: input.unit.symbol.parameters },
+        imports: source.imports,
+        source: source.body.slice(0, MAX_FILE_BYTES)
+      }),
+      // 出题要的正文比聊天重得多（下发件 + 参考解 + 测试 + 替身，四份源码），上限按这个给。
+      // 推理模型的思考 token 也计在这格里（provider 再加 6000 余量）：
+      // 3000 那一档实测被思考吃光、正文为空（95 秒一趟），见开发日志 §55。
+      maxTokens: 6_000,
+      scene: "practice.generate-code"
+    });
+  } catch (error) {
+    // 端点失败单列一档：402/超时/被拒都不是「模型交出来的题不对」，混进形状档就会把人引去修提示词
+    return { ok: false, stage: "provider_error", reason: `出题调用没走通：${(error as Error).message}`, runs: [] };
+  }
+  const parsed = parseJsonObject(response.text);
+  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [] };
+  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [] };
+
+  const normalized = normalizeProposal({ ...parsed, kind: input.kind, language });
+  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [] };
+  const proposal = normalized.proposal;
+  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [] };
+  if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
+    return { ok: false, stage: "proposal_shape", reason: "参考解与仓库里那段实现逐字对不上：patch_edit 的 solution 必须是原样摘出的那一份。", runs: [] };
+  }
+
+  let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
+  try {
+    validation = await validateHarness(proposal);
+  } catch (error) {
+    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [] };
+    throw error;
+  }
+  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs };
+  return { ok: true, proposal, runs: validation.runs, usage: response.usage };
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const start = jsonText.indexOf("{");
+  const end = jsonText.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    const parsed = JSON.parse(jsonText.slice(start, end + 1)) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}

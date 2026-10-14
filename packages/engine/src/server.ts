@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { EXERCISE_KINDS } from "@codebase-tutor/shared";
+import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
@@ -28,6 +28,7 @@ import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { allowsRepository, authenticate, authStateOf, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
+import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
@@ -617,7 +618,9 @@ app.get("/api/health", async () => {
     summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
-    auth: gate === "on" ? "api-key" : gate
+    auth: gate === "on" ? "api-key" : gate,
+    // 沙箱闸门状态原样给出（含逐项 canary 读数）：代码题能不能出，看这一格，不看界面自己猜
+    sandbox: isolationStatus()
   };
 });
 
@@ -859,7 +862,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   const family = request.body?.family === "llm" ? "llm" as const : "comprehension" as const;
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "LLM 出题需要提供主题标签" });
-  if (kind && !EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
+  if (kind && !SUPPORTED_EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
   const budgetExceeded = budgetDegraded(repository.path, repository.index.repositoryId);
   try {
     return reply.code(201).send(await exercises.next(repository, {
@@ -1622,6 +1625,17 @@ if (!process.env.VITEST) {
   const file = process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json";
   console.log(`[engine] 认证：${gate === "on" ? `已启用（${keyCount} 张 key，${file}）` : gate === "broken" ? `**口令文件读不出来（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503，请把这份文件修好` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
   announceGate(gate, keyCount);
+  /**
+    沙箱隔离探测：九项 canary 要起九个进程，放后台跑（不拖监听），但结果必须开机就看得见。
+    没过的话代码题域整域禁用（2026-10-14 拍板：不降级成「弱隔离照跑」），这条与认证闸、预算闸同一纪律——
+    闸门失效不能等到用户点下按钮才知道（§36.6、§44）。
+    */
+  void reprobeIsolation().then((sandbox) => {
+    console.log(`[engine] 沙箱：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `**未通过——代码题域禁用**：${sandbox.reason}`}`);
+    if (sandbox.level !== "enforced") {
+      traceEngine("degrade", { what: "sandbox_isolation", reason: sandbox.reason }, { traceId: null });
+    }
+  });
   // 单价全没配 = 预算闸门失效（有闸门名没有闸门），与认证闸那条同纪律（§36.6）：必须开机就在账面上看得见。
   const gateNotice = budgetGateNotice();
   if (gateNotice) {

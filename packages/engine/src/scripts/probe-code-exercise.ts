@@ -1,0 +1,86 @@
+/**
+  真模型出题探针（一次性、付费、可复跑）：回答「模型到底交不交得出能在沙箱里跑的两跑自证」。
+  刀 2 的 12 例全用假 provider，那只能证明**引擎这一侧**的判据对；「能不能出成题」是模型那一侧的事，
+  只有真打一次端点才知道。
+
+  只读产品数据（`tutor.db` 以 readOnly 开），**不落练习缓存**——探针出的题不进复习排期，
+  但源码确实出过门，所以 `code_egress` 那一行照写（审计线不能因为来源是探针就少记）。
+
+  用法：pnpm probe:code-exercise /absolute/path/to/repository [patch_edit|author_function]
+  跑之前先看一眼模型档：没配 provider 时脚本直接退出，一分钱不花。
+*/
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/shared";
+import { loadDotEnv } from "../config/dotenv.js";
+import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";
+import { generateCodeExercise } from "../exercises/code-generate.js";
+import { isolationStatus } from "../sandbox/isolation.js";
+import { resolve } from "node:path";
+
+const repositoryPath = resolve(process.argv[2] ?? "");
+const kind = (process.argv[3] === "author_function" ? "author_function" : "patch_edit") as ExerciseKind;
+if (!repositoryPath) {
+  console.log("用法：pnpm probe:code-exercise /absolute/path/to/repository [patch_edit|author_function]");
+  process.exit(0); // 这一支一次调用都没发生，没有账要落，可以直接退
+}
+
+// 与 server.ts 开机同一个顺序：先 .env、再 GUI 存下来的运行时覆盖。缺这一步脚本会以为「没配模型」，
+// 报一条假的零支出，把「探针没跑」说成「这台机器不能跑」（§36.6 那一类读数骗人）。
+//
+// **角色必须是 light，和练习路由拿到的那一份同一个**（server.ts 的 `lightLlmProvider`）。
+// 第一版这里用的是 `createLlmProvider()`，那是不带角色的裸配置：deepseek 默认思考开着，
+// 12,000 的 max_tokens 被 reasoning 吃光、正文空返回，115 秒白跑一趟——探针测出来的是**另一套配置**的失败，
+// 而产品路径（light 角色强制 thinking=off）根本没被检验过。探针必须与产品同角色，否则读数全是废的。
+loadDotEnv();
+restoreLlmRuntimeSettings();
+const provider = buildLlmRuntimeProvider("light");
+if (!provider) {
+  console.log(`# 真模型出题探针\n\n- **未执行**：没有解析出模型档（未配置或本月预算触顶）。零调用、零支出。`);
+  process.exit(0); // 同上：零调用，没有账要落
+}
+
+const databaseFile = join(repositoryPath, ".tutor", "tutor.db");
+if (!existsSync(databaseFile)) { console.log(`- 没有 ${databaseFile}`); process.exit(0); } // 未发请求，无账可丢
+const database = new DatabaseSync(databaseFile, { readOnly: true });
+const row = database.prepare("SELECT analysis_json FROM repository_state WHERE analysis_json IS NOT NULL ORDER BY updated_at DESC").get() as { analysis_json: string } | undefined;
+database.close();
+if (!row) { console.log("- 产物里没有 analysis_json"); process.exit(0); } // 同上
+const analysis = JSON.parse(row.analysis_json) as RepositoryAnalysis;
+
+const supported = new Set(["typescript", "python", "java"]);
+const candidates = analysis.implementations.filter((unit) => supported.has(unit.symbol.language));
+// 挑一个「有参数、体量适中」的函数：太短的表达式没缺陷可放，太长的模型容易把原码改花（逐字核对会拦下来）
+const chosen = candidates
+  .filter((unit) => unit.symbol.kind === "function" || unit.symbol.kind === "method")
+  .sort((left, right) => Math.abs((left.symbol.endLine - left.symbol.line) - 8) - Math.abs((right.symbol.endLine - right.symbol.line) - 8))
+  .slice(0, 1);
+if (!chosen.length) { console.log("- 这门仓里没有合适的候选单元"); process.exit(0); } // 同上
+const unit = chosen[0]!;
+console.log(`# 真模型出题探针 · ${repositoryPath.split("/").pop()}`);
+console.log(`\n- 模型：${provider.modelVersion}｜候选单元 ${candidates.length} 个｜本次挑的是 ${unit.symbol.name}（${unit.symbol.path}:${unit.symbol.line}-${unit.symbol.endLine}，${unit.symbol.language}，${unit.symbol.parameters.length} 个参数）`);
+console.log(`- 隔离：${isolationStatus().level}（${isolationStatus().reason}）`);
+console.log(`- 题型：${kind}\n`);
+
+const started = Date.now();
+const generation = await generateCodeExercise({ repositoryPath, unit, kind: kind === "author_function" ? "author_function" : "patch_edit", provider });
+const elapsed = Date.now() - started;
+for (const run of generation.runs) {
+  console.log(`- 自证 ${run.label}：TESTS ${run.verdict ? `${run.verdict.passed} 过 ${run.verdict.failed} 挂` : "**没印出结论**"}｜exit=${run.exitCode ?? "null"}${run.timedOut ? "｜超时" : ""}`);
+}
+if (!generation.ok) {
+  console.log(`\n**拒题**（stage=${generation.stage}，${elapsed}ms）：${generation.reason}`);
+  // 这里**不能** process.exit：调用已经发生，`call-log` 用的是异步 appendFile，
+  // 立刻退会把这一笔（含失败那次的思考 token）从 llm.log 里截掉——钱花了、账上没有。
+  // 通则同 §51：必须发生的收尾不能排在退出之后。
+} else {
+const proposal = generation.proposal;
+console.log(`\n**过了两跑自证**（${elapsed}ms）：${proposal.title}`);
+console.log(`- 题面：${proposal.prompt.slice(0, 160)}`);
+console.log(`- 缺陷（留档不下发）：${proposal.defect}`);
+console.log(`- 文件：下发 ${proposal.given.length} 个 / 判分 ${proposal.hidden.length} 个｜入口 ${proposal.entry}`);
+for (const file of [...proposal.given, ...proposal.hidden]) console.log(`  · ${file.path}（${file.contents.split("\n").length} 行）`);
+console.log(`- token：${generation.usage ? `输入 ${generation.usage.inputTokens} / 输出 ${generation.usage.outputTokens}（缓存命中 ${generation.usage.promptCacheHitTokens ?? 0}）` : "没带回用量"}`);
+console.log(`\n> 探针不落练习缓存；源码出境那一行 \`code_egress\` 照写（scene=practice.generate-code），实耗以 ~/.codebase-tutor/llm.log 为准。`);
+}

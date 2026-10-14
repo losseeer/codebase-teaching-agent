@@ -29,8 +29,14 @@ const MAX_EXCERPT_LINES = 60;
   生成逻辑已改（正解只按「在不在索引里」认，干扰项池由能力表派生），但已经冻结进缓存的坏题
   不会自愈——它的作用域里不含「选项怎么来的」这一轴，所以只能整体作废重来。
   代价：两仓 3 行缓存全废（含 2 条已付费的 llm_rubric，重做合计 <¥0.05），用户拍板选这条路而不是手删坏行。
+
+  v2 → v3（2026-10-14 练习域沙箱改造）：`output_prediction` 连同它的受限执行判据一起退役，新增
+  `patch_edit` / `author_function` 两型（判分由沙箱跑测试决定，缓存行里冻结的是测试与替身而不是一个表达式）。
+  旧行里的 `{type:"output"}` 期望已不在 `ExpectedAnswer` 联合里，作答时会命中「该练习类型已不再支持」——
+  与其写一段兼容分支去猜旧行的形状，不如让版本作废它：存量只有 4 行，且没有一行被提交过。
+  代码族另外挂 `#runner=<指纹>`（见 `exercises.ts` 的 `fileScope`），那一轴不在本版本号里。
   */
-export const EXERCISE_INPUT_VERSION = "exercise-v2";
+export const EXERCISE_INPUT_VERSION = "exercise-v3";
 
 export interface RefinedExercise {
   exercise: Exercise;
@@ -45,11 +51,12 @@ export interface RefinedExercise {
   polishFailure?: "no_excerpt" | "unparsable" | "provider_error";
 }
 
-/** 各题型的题面任务描述与防泄漏约束——标准答案/判分锚点永远是静态分析产出，题面不得暗示它们。 */
+/** 各题型的题面任务描述与防泄漏约束——理解题与主观题的判分锚点永远是静态分析产出，题面不得暗示它们。 */
 const kindRules: Record<ExerciseKind, string> = {
-  output_prediction: "题面描述目标函数的输入值与运行场景，要求学习者预测这段代码的输出；题面中不得出现真实返回值，也不得复述可直接读出答案的表达式求值结果。",
   change_localization: "题面描述一次假设的修改需求（改行为/修缺陷/换实现），要求学习者从候选项中定位应改动的位置；题面不得暗示哪些候选文件或目录是正确答案。",
   impact_analysis: "题面描述一次假设的修改，要求学习者列出会受影响的调用方或用户路径；题面不得点名任何受影响文件。",
+  patch_edit: "题面说明这段实现现在哪里不对、应当改成什么行为，要求学习者改代码让测试通过；题面不得点出缺陷所在的那一行，也不得出现测试断言的内容。",
+  author_function: "题面给出函数签名、输入输出的形状与若干示例，要求学习者从零写出实现；题面不得复述参考解的算法步骤。",
   llm_rubric: "题面围绕给定主题描述一个开放的分析任务，要求学习者用自己的话作答；题面不得包含或暗示参考答案。"
 };
 

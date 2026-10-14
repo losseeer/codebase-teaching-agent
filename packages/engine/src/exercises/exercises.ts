@@ -1,22 +1,31 @@
-import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
-import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
-import { EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
-import type { LlmProvider } from "../llm/provider.js";
+import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLanguage, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
+import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
+import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
-import { hash, readFileLines, symbolBodyLines } from "../lib.js";
+import { hash } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
+import { generateCodeExercise, verdictOf, type CodeFile, type CodeProposal, type HarnessRun } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
+import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
+import { runnerFingerprint } from "../sandbox/profile.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
 import { deriveMastery } from "../learner/mastery.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
+const isCodeKind = (kind: ExerciseKind): boolean => CODE_EXERCISE_KINDS.includes(kind);
+
 type ExpectedAnswer =
-  | { type: "output"; expectedOutput: string }
   | { type: "set"; expectedIds: string[] }
-  | { type: "rubric"; answerKey: string; criteria: RubricCriterion[] };
+  | { type: "rubric"; answerKey: string; criteria: RubricCriterion[] }
+  /**
+    代码题：**出题时冻结的那一组判分文件**。`hidden`（测试 + 替身）与 `solution`（参考解）都不下发；
+    学习者交上来的只替换 `exercise.code.files` 那几个路径。判分因此不读仓库源码，也不依赖模型——
+    这条不变量（判分路径永不读仓库）是 2026-10-14 立下的，理由见开发日志 §53。
+    */
+  | { type: "harness"; language: ExerciseLanguage; entry: string; hidden: CodeFile[]; solution: CodeFile[]; defect: string };
 
 interface StoredExercise {
   exercise: Exercise;
@@ -30,12 +39,6 @@ interface StoredExercise {
   polishFailure?: string | null;
 }
 
-interface SafeInvocation {
-  parameters: string[];
-  expression: string;
-  args: unknown[];
-}
-
 type PracticeTarget<T> = ZpdTarget<T> & { kind: ExerciseKind };
 
 export interface PracticeRepository {
@@ -44,13 +47,13 @@ export interface PracticeRepository {
   analysis: RepositoryAnalysis;
 }
 
-const kinds: ExerciseKind[] = EXERCISE_KINDS;
+const kinds: ExerciseKind[] = SUPPORTED_EXERCISE_KINDS;
 
 /**
   出题缓存的作用域（填进 `exercise_cache.content_version` 那一列）。
 
   失效轴 = **决定这道题内容的输入**，分两档：
-  - 文件粒度（B1）：题面与标准答案只由目标文件决定时（output_prediction / change_localization / llm 族），
+  - 文件粒度（B1）：题面与标准答案只由目标文件决定时（change_localization / 代码题族 / llm 族），
     作用域带目标文件自己的 `contentHash`——改无关文件不再让整仓出题重烧；
   - 全仓粒度：答案取决于整张依赖图的 impact_analysis，作用域仍用全仓 `versionStamp`
     （任一文件的 imports 变化都可能改答案，文件粒度在这里是假粒度）。
@@ -64,7 +67,7 @@ const kinds: ExerciseKind[] = EXERCISE_KINDS;
   所以作用域里带 `graphStampOf` 的图指纹：**图一变，旧那行自动失效**，不会一直拿旧图答人。
   注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，展示与旧数据兼容靠它，
   作答校验走 `contentHashes`（见 `exerciseIsCurrent`）。
-  静态题（output_prediction / change_localization / impact_analysis）的 id 只含**文件哈希部分**、
+  静态题（change_localization / impact_analysis）的 id 只含**文件哈希部分**、
   不含模型与口径版本——标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
  */
 function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
@@ -94,9 +97,14 @@ function depsFingerprint(deps: { path: string; hash: string }[]): string {
   return deps.map((dep) => `${dep.path}@${dep.hash}`).join(",");
 }
 
-/** 文件粒度作用域：依赖文件指纹 + 题面口径 + 模型档。两条出题路径（规则题与 LLM 题）共用同一个构造，别再各写一遍。 */
-function fileScope(deps: { path: string; hash: string }[], modelVersion: string): string {
-  return `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+/**
+  文件粒度作用域：依赖文件指纹 + 题面口径 + 模型档（+ 代码题再挂 runner 指纹）。
+  三条出题路径（规则题、代码题、LLM 题）共用同一个构造，别再各写一遍。
+  runner 指纹**只对代码族加**：理解题与主观题的答案不出自沙箱，换 node 版本不该把它们的旧题作废；
+  代码题正解相反——「缺陷版必挂」这条承诺是在某个具体 runner 上验出来的，解释器一升级就得重验。
+*/
+function fileScope(deps: { path: string; hash: string }[], modelVersion: string, runner?: string): string {
+  return `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}${runner ? `#runner=${runner}` : ""}`;
 }
 
 /** 一道题依赖的文件清单及其哈希。查不到 contentHash（旧索引）时以全仓 versionStamp 兜底。 */
@@ -114,8 +122,17 @@ function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value:
 */
 function staleDependencies(repository: PracticeRepository, exercise: Exercise): string[] {
   if (exercise.contentHashes?.length) {
+    /**
+      **出题时记的是哪一档，就按哪一档比**。老索引没有逐文件 `contentHash`，那几格记的是兜底串
+      `repo:<versionStamp>`；索引一旦重生成、开始带逐文件哈希，拿逐文件哈希去比那条兜底串就永远不等
+      ⇒ 这道题此后再也答不了。反过来也一样：兜底档只该问「全仓动过没有」。
+      「写入侧有兜底、读取侧没有」是成对出现的 bug，路由级用例（手搓的 index 不带 contentHash）第一次把它撞出来。
+    */
+    const wholeRepo = `repo:${repository.analysis.versionStamp}`;
     const byPath = new Map(repository.index.files.map((file) => [file.path, file.contentHash]));
-    return exercise.contentHashes.filter((dep) => byPath.get(dep.path) !== dep.hash).map((dep) => dep.path);
+    return exercise.contentHashes
+      .filter((dep) => (dep.hash.startsWith("repo:") ? dep.hash !== wholeRepo : byPath.get(dep.path) !== dep.hash))
+      .map((dep) => dep.path);
   }
   return exercise.contentVersion === repository.analysis.versionStamp ? [] : ["<仓库内容>"];
 }
@@ -152,7 +169,7 @@ export class ExerciseService {
         for (const schedule of due) {
           const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
           // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 exerciseIsCurrent
-          if (stored && EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
+          if (stored && SUPPORTED_EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
             journal.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
             return stored.exercise;
           }
@@ -168,7 +185,7 @@ export class ExerciseService {
       // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
       const deps = exerciseDeps(repository, target.kind, target.value);
       const scope = deps.length
-        ? fileScope(deps, modelVersion)
+        ? fileScope(deps, modelVersion, isCodeKind(target.kind) ? runnerFingerprint() : undefined)
         : exerciseScope(repository.analysis.versionStamp, modelVersion, graphStampOf(repository.analysis));
       const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) {
@@ -176,6 +193,7 @@ export class ExerciseService {
         journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
         return cached.exercise;
       }
+      if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, database, journal, scope, deps);
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
       /**
         题面到底出自谁。**过去这一格是缺的**：润色失败静默回落启发式题面，而 journal 一律记 `source: "rule"`
@@ -203,6 +221,78 @@ export class ExerciseService {
     } finally {
       database.close();
     }
+  }
+
+  /**
+    代码族出题（`patch_edit` / `author_function`）：模型交「题面 + 下发件 + 参考解 + 测试 + 替身」，
+    引擎在沙箱里跑两趟自证（参考解必过、下发件必挂）才允许落库——**没自证过的题一道都不出**。
+    每次真跑都写一行 `exercise_run`，被拒的也算：漏斗要分得开「没走到沙箱」与「沙箱说这题不行」。
+    没配模型/预算触顶时直接拒（与三条对话作用域同一纪律，不回落本地题面）。
+    */
+  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, database: TutorDatabase, journal: Journal, scope: string, deps: { path: string; hash: string }[]): Promise<Exercise> {
+    const targetUnitId = target.id;
+    if (!provider) {
+      const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已触顶。";
+      journal.append("exercise_declined", { tag: "", reason, stage: "no_provider" });
+      throw new Error(reason);
+    }
+    const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
+    const unit = target.value as ImplementationUnit;
+    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider });
+    /**
+      自证两跑逐条留痕，**没自证过的那几趟也要有行**：`exercise_run` 是「沙箱真跑了」的唯一证据，
+      只在成功时写就会让「沙箱挂了」和「模型没出题」在漏斗里长成同一个样子（§45 那条「虚报比漏报糟」的同型）。
+    */
+    const language = generation.ok ? generation.proposal.language : unit.symbol.language;
+    for (const run of generation.runs) {
+      journal.append("exercise_run", {
+        stage: "validate-proposal", label: run.label, language,
+        verdict_passed: run.verdict?.passed ?? null, verdict_failed: run.verdict?.failed ?? null,
+        exit_code: run.exitCode, timed_out: run.timedOut,
+        outcome: generation.ok ? "accepted" : generation.stage
+      });
+    }
+    if (!generation.ok) {
+      journal.append("exercise_declined", { tag: "", reason: generation.reason, stage: generation.stage });
+      throw new Error(generation.reason);
+    }
+    if (generation.usage) journal.append("token_usage", {
+      input_tokens: generation.usage.inputTokens,
+      output_tokens: generation.usage.outputTokens,
+      cache_hit_tokens: generation.usage.promptCacheHitTokens ?? null,
+      provider: provider.modelVersion,
+      scene: "exercise_generate_code"
+    });
+    const proposal = generation.proposal;
+    const exercise: Exercise = {
+      // 与 LLM 族同理：答案（那组测试）出自模型，换模型/换 runner 就是另一道题，id 必须含 scope
+      id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
+      repositoryId: repository.index.repositoryId,
+      contentVersion: repository.analysis.versionStamp,
+      ...(deps.length ? { contentHashes: deps } : {}),
+      kind: proposal.kind,
+      targetUnitId,
+      targetTitle: proposal.defect || target.title,
+      difficulty: target.difficulty,
+      title: proposal.title,
+      prompt: proposal.prompt,
+      anchors: [{ path: (target.value as ImplementationUnit).symbol.path, line: (target.value as ImplementationUnit).symbol.line, endLine: (target.value as ImplementationUnit).symbol.endLine, label: "被测代码出处" }],
+      inputMode: "code",
+      gradingMode: "execution",
+      family: "code",
+      code: { language: proposal.language, files: proposal.given, entry: proposal.entry },
+      createdAt: new Date().toISOString()
+    };
+    const stored: StoredExercise = {
+      exercise,
+      expected: { type: "harness", language: proposal.language, entry: proposal.entry, hidden: proposal.hidden, solution: proposal.solution, defect: proposal.defect },
+      // 代码题的题面**整份出自模型**，这里记 llm 不是「润色过」而是「没有规则版可回落」
+      polish: "llm",
+      polishFailure: null
+    };
+    database.putExerciseCache(repository.index.repositoryId, scope, proposal.kind, targetUnitId, stored);
+    journal.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, polish: "llm", polish_failure: null });
+    return exercise;
   }
 
   /**
@@ -289,9 +379,13 @@ export class ExerciseService {
       const journal = new Journal(repository.path, repository.index.repositoryId);
       let graded = stored.expected.type === "rubric"
         ? await gradeRubric(stored, answer, provider)
-        : await grade(stored, answer);
-      // 程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
-      if (provider && graded.automatic) {
+        : await grade(stored, answer, journal);
+      /**
+        程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
+        代码题**不在这里花钱**——它的反馈就是测试计数，而「讲一遍」按需由界面点一次才发一趟（刀 4），
+        每次提交都自动润色等于把「按需」写回「默认」。
+      */
+      if (provider && graded.automatic && stored.exercise.gradingMode !== "execution") {
         const learnerAnswer = answer.text?.trim() || (answer.selectedIds ?? []).join(", ");
         const polished = await polishFeedbackWithLlm({ repositoryPath: repository.path, exercise: stored.exercise, learnerAnswer, graded, provider });
         if (polished) {
@@ -358,9 +452,13 @@ export class ExerciseService {
   }
 
   private targets(repository: PracticeRepository, kind: ExerciseKind): PracticeTarget<unknown>[] {
-    if (kind === "output_prediction") {
+    if (isCodeKind(kind)) {
+      // 代码族两型共用同一批候选：patch_edit 拿它的真实现改缺陷，author_function 照它的签名重写一份等价实现。
+      // 语言闸门在这里（首发三档），沙箱不支持的语言不在候选里，而不是出题时才报「跑不起来」。
+      const supported = new Set(["typescript", "python", "java"]);
       return repository.analysis.implementations
-        .flatMap((unit) => safeInvocationFor(repository.path, unit) ? [{ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }] : []);
+        .filter((unit) => supported.has(unit.symbol.language))
+        .map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));
     }
     if (kind === "change_localization") {
       return repository.analysis.implementations
@@ -378,25 +476,10 @@ export class ExerciseService {
   }
 
   private createExercise(repository: PracticeRepository, kind: ExerciseKind, value: unknown, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
-    if (kind === "output_prediction") return outputExercise(repository, value as ImplementationUnit, difficulty, deps);
     if (kind === "change_localization") return localizationExercise(repository, value as ImplementationUnit, difficulty, deps);
     if (kind === "impact_analysis") return impactExercise(repository, value as string, difficulty);
     throw new Error("不支持的练习题型");
   }
-}
-
-function outputExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
-  const invocation = safeInvocationFor(repository.path, unit);
-  if (!invocation) throw new Error("该实现不满足受限执行验证条件。");
-  const expectedOutput = executeSafeInvocation(invocation);
-  const exercise = baseExercise(repository, "output_prediction", unit.id, unit.symbol.name, difficulty, deps, {
-    title: "预测函数输出",
-    prompt: `阅读 ${unit.symbol.path}:${unit.symbol.line} 的 ${unit.symbol.name}。当 ${formatArguments(unit.symbol.parameters, invocation.args)} 时，它返回什么？只填写返回值。`,
-    anchors: [{ path: unit.symbol.path, line: unit.symbol.line, endLine: unit.symbol.endLine, label: "函数实现" }],
-    inputMode: "text",
-    gradingMode: "execution"
-  });
-  return { exercise, expected: { type: "output", expectedOutput } };
 }
 
 function localizationExercise(repository: PracticeRepository, unit: ImplementationUnit, difficulty: MasteryLevel, deps: { path: string; hash: string }[]): StoredExercise {
@@ -443,19 +526,52 @@ function baseExercise(repository: PracticeRepository, kind: ExerciseKind, target
 
 type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">;
 
-async function grade(stored: StoredExercise, answer: ExerciseAnswer): Promise<GradeOutcome> {
-  if (stored.expected.type === "output") {
-    /**
-      判分吃**生成时冻结的那一份**标准答案，不再在判分这一侧重跑子进程。
-      受限执行跑的是缓存行里冻住的表达式与实参（根本不重读源码），重跑必然同结果，
-      代价却是在请求线程里 `spawnSync` 一个 node（超时上限 1.5s，把整台引擎的 loop 卡住）；
-      而源码若真变了，`staleDependencies` 已经在作答之前拦掉了。
-      */
-    const passed = normalizeOutput(answer.text) === normalizeOutput(stored.expected.expectedOutput);
-    return { score: passed ? 1 : 0, passed, automatic: true, feedbackSource: "rule", feedback: passed ? "执行验证通过：返回值与受限运行结果一致。" : "执行验证未通过：请沿着返回表达式重新检查输入如何流动。" };
-  }
+async function grade(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal): Promise<GradeOutcome> {
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
+  if (stored.expected.type === "harness") return gradeHarness(stored, answer, journal);
+  // 旧缓存行（`{ type: "output" }`，2026-10-14 随 output_prediction 一起退役）落在这里：
+  // 出题口径版本已 bump 到 v3，正常路径不会再读到它们；真读到了要明说「重新生成」，不能默默判错。
   throw new Error("该练习类型已不再支持；请重新生成练习。");
+}
+
+/**
+  代码题判分：**只由沙箱里那组冻结测试决定**，模型一律不参与（`automatic: true` 的语义就在这里成立）。
+  - 学习者交的文件只替换下发时那几个 path，测试与替身仍是出题时冻结的那一份 ⇒ 判分路径不读仓库源码；
+  - 认「TESTS 通过 失败」那一行，不认异常：跑不出结论（没编译过、测试自己崩了）判 0 分并把 stderr 摘要如实交出去，
+    这跟「测试挂了」是两件事，混起来学习者会去改一个根本不存在的断言；
+  - 分数 = 通过数 / 总断言数，与 `gradeSet` 同一个口径（分母是两边的并集，不是只数答对的）。
+*/
+async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal): Promise<GradeOutcome> {
+  const expected = stored.expected as Extract<ExpectedAnswer, { type: "harness" }>;
+  const slotPaths = new Set((stored.exercise.code?.files ?? []).map((file) => file.path));
+  const submitted = (answer.files ?? []).filter((file) => slotPaths.has(file.path) && file.contents.trim());
+  if (!slotPaths.size || !submitted.length) {
+    return { score: 0, passed: false, automatic: true, feedbackSource: "sandbox", feedback: "没收到代码文件；请在编辑器里写下实现再提交。" };
+  }
+  const files = [...expected.hidden.map((file) => ({ ...file })), ...submitted.map((file) => ({ path: file.path, contents: file.contents }))];
+  const run = await runSandbox({ language: expected.language, entry: expected.entry, files });
+  const verdict = verdictOf(run);
+  journal.append("exercise_run", {
+    stage: "grade", label: "learner", language: expected.language, exercise_id: stored.exercise.id,
+    verdict_passed: verdict?.passed ?? null, verdict_failed: verdict?.failed ?? null,
+    exit_code: run.steps.at(-1)?.exitCode ?? null, timed_out: run.timedOut, truncated: run.truncated,
+    outcome: verdict ? (verdict.failed === 0 && run.ok ? "passed" : "failed") : "no-verdict"
+  });
+  if (!verdict) {
+    const detail = (run.stderr || (run.timedOut ? "运行超时被终止" : "没有输出")).trim().split("\n").slice(0, 3).join(" / ").slice(0, 400);
+    return { score: 0, passed: false, automatic: true, feedbackSource: "sandbox", feedback: `测试没能跑完，所以这一份还没有被判分。沙箱报：${detail}。` };
+  }
+  const total = verdict.passed + verdict.failed;
+  const passed = verdict.failed === 0 && verdict.passed >= 1 && run.ok;
+  return {
+    score: total ? verdict.passed / total : 0,
+    passed,
+    automatic: true,
+    feedbackSource: "sandbox",
+    feedback: passed
+      ? `测试全过：${verdict.passed} 条断言逐条通过。`
+      : `测试 ${verdict.passed} 过 ${verdict.failed} 挂${run.timedOut ? "（并且运行超时被终止）" : ""}。${stored.exercise.kind === "patch_edit" && expected.defect ? `要修的是：${expected.defect}` : ""}`
+  };
 }
 
 /** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不冒充确定性判分。 */
@@ -554,35 +670,6 @@ function windowOffset(symbols: SymbolInfo[], tokens: string[]): number {
   return best ? Math.max(1, best.line) : 1;
 }
 
-function safeInvocationFor(repositoryPath: string, unit: ImplementationUnit): SafeInvocation | undefined {
-  if (unit.symbol.language !== "typescript") return undefined;
-  const parameters = unit.symbol.parameters;
-  if (parameters.some((parameter) => !/^[A-Za-z_$][\w$]*$/.test(parameter))) return undefined;
-  const lines = readFileLines(repositoryPath, unit.symbol.path);
-  if (!lines) return undefined;
-  const source = symbolBodyLines(lines, unit.symbol).join("\n");
-  const opening = source.indexOf("{");
-  const closing = source.lastIndexOf("}");
-  const body = opening >= 0 && closing > opening ? source.slice(opening + 1, closing).trim() : "";
-  const match = body.match(/^return\s+(.+?);?\s*$/s);
-  if (!match || !safeExpression(match[1], parameters)) return undefined;
-  return { parameters, expression: match[1].replace(/;\s*$/, "").trim(), args: parameters.map((parameter) => parameter === "environment" ? { GREETING: "practice" } : "practice") };
-}
-
-function safeExpression(expression: string, parameters: string[]): boolean {
-  if (expression.length > 240 || /(?:\b(?:process|globalThis|require|import|eval|Function|constructor|prototype|__proto__|new|await|throw|while|for|fetch|setTimeout)\b|[;{}])/i.test(expression)) return false;
-  if (/\b[A-Za-z_$][\w$]*\s*\(/.test(expression)) return false;
-  const terms = expression.split(/\s*(?:\|\||\?\?)\s*/);
-  return terms.every((term) => /^(["'][^"']*["']|`[^`$]*`|true|false|null|undefined|-?\d+(?:\.\d+)?|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)$/.test(term.trim()) && (isLiteral(term.trim()) || parameters.some((parameter) => term.trim() === parameter || term.trim().startsWith(`${parameter}.`))));
-}
-
-function executeSafeInvocation(invocation: SafeInvocation): string {
-  const parameters = invocation.parameters.join(", ");
-  const program = `const args = ${JSON.stringify(invocation.args)}; const exerciseTarget = (${parameters}) => (${invocation.expression}); const result = exerciseTarget(...args); process.stdout.write(typeof result === "string" ? result : JSON.stringify(result));`;
-  const execution = spawnSync(process.execPath, ["--max-old-space-size=32", "--input-type=module", "--eval", program], { encoding: "utf8", timeout: 1_500, maxBuffer: 4_096, env: { PATH: process.env.PATH ?? "" } });
-  if (execution.status !== 0 || execution.error || execution.signal) throw new Error("受限输出验证未能完成");
-  return execution.stdout.trim();
-}
 
 function prioritizedImpactPaths(result: ReturnType<typeof impactRadius>, changedPath: string, limit = 4): string[] {
   const directDependents = result.edges.filter((edge) => edge.to === changedPath).map((edge) => edge.from).sort();
@@ -634,17 +721,4 @@ function unitDifficulty(unit: ImplementationUnit): MasteryLevel {
   const explicitBoundaries = unit.boundaries.filter((item) => !item.startsWith("未检测")).length;
   const complexity = unit.symbol.parameters.length + explicitGuards + explicitBoundaries + unit.traps.length + Math.ceil((unit.symbol.referenceCount ?? 0) / 4);
   return Math.max(1, Math.min(5, 1 + Math.floor(complexity / 2))) as MasteryLevel;
-}
-
-function formatArguments(parameters: string[], args: unknown[]): string {
-  return parameters.length ? parameters.map((parameter, index) => `${parameter} = ${JSON.stringify(args[index])}`).join("，") : "不传入参数";
-}
-
-function normalizeOutput(value: string | undefined): string {
-  const trimmed = (value ?? "").trim().replace(/\r\n/g, "\n");
-  return /^(["'])(.*)\1$/.test(trimmed) ? trimmed.slice(1, -1) : trimmed;
-}
-
-function isLiteral(value: string): boolean {
-  return /^(?:["'][^"']*["']|`[^`$]*`|true|false|null|undefined|-?\d+(?:\.\d+)?)$/.test(value);
 }
