@@ -70,7 +70,7 @@ function proposalJson(input: HarnessInput): string {
     solution: [{ path: "target.ts", contents: input.solution }],
     hidden: [{ path: "tests.ts", contents: TESTS }],
     entry: "tests.ts"
-  }, 60_000);
+  });
 }
 
 function fakeProvider(reply: () => string): LlmProvider & { calls: { count: number } } {
@@ -89,7 +89,7 @@ function targetUnit(repository: PracticeRepository): string {
   return unit.id;
 }
 
-describe("代码题出题自证链", () => {
+describe("代码题出题自证链", { timeout: 60_000 }, () => {
   it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -116,7 +116,7 @@ describe("代码题出题自证链", () => {
     expect(stored?.expected.type).toBe("harness");
     expect(stored?.expected.hidden).toEqual([{ path: "tests.ts", contents: TESTS }]);
     expect(stored?.expected.solution[0]?.contents).toBe(REAL_SOURCE);
-  }, 60_000);
+  });
 
   it("下发件本身就全过 ⇒ 这道题是白送的，拒掉且两趟运行都留痕", async () => {
     const repository = testRepository();
@@ -129,7 +129,7 @@ describe("代码题出题自证链", () => {
     expect(runs.every((event) => event.payload.verdict_failed === 0)).toBe(true);
     const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
     expect(declined?.payload.stage).toBe("harness_validation");
-  }, 60_000);
+  });
 
   it("下发件靠语法错误「失败」不算自证通过：没印 TESTS 结论就拒，不把编译挂当行为缺陷", async () => {
     const repository = testRepository();
@@ -139,7 +139,7 @@ describe("代码题出题自证链", () => {
       .rejects.toThrow(/没收到代码文件|没跑完|跑不出|语法/);
     const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
     expect(declined?.payload.stage).toBe("harness_validation");
-  }, 60_000);
+  });
 
   it("参考解与仓库真源码逐字对不上 ⇒ 拒（patch_edit 不许把原码改花了还自称原样）", async () => {
     const repository = testRepository();
@@ -150,14 +150,14 @@ describe("代码题出题自证链", () => {
       .rejects.toThrow(/逐字对不上/);
     // 压根没跑到沙箱：一行 exercise_run 都不该有
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_run")).toHaveLength(0);
-  }, 60_000);
+  });
 
   it("没配模型时直接拒，不回落本地题面", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) })).rejects.toThrow(/需要配置模型/);
     expect(readJournal(repository.path).find((event) => event.type === "exercise_declined")?.payload.stage).toBe("no_provider");
-  }, 60_000);
+  });
 
   it("同一作用域第二次不再打模型；换 runner 指纹会重出（判分承诺属于那个 runner）", async () => {
     const repository = testRepository();
@@ -173,10 +173,10 @@ describe("代码题出题自证链", () => {
     const regenerated = await service.next(changed, { kind: "patch_edit", targetUnitId: targetUnit(changed) }, provider);
     expect(regenerated.id).not.toBe(first.id);
     expect(provider.calls.count).toBe(2);
-  }, 60_000);
+  });
 });
 
-describe("代码题判分", () => {
+describe("代码题判分", { timeout: 60_000 }, () => {
   async function generatedExercise(): Promise<{ repository: PracticeRepository; service: ExerciseService; exerciseId: string }> {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -199,7 +199,7 @@ describe("代码题判分", () => {
     expect(run?.payload.stage).toBe("grade");
     expect(run?.payload.verdict_passed).toBe(2);
     expect(run?.payload.verdict_failed).toBe(0);
-  }, 60_000);
+  });
 
   it("只改对一半 ⇒ 分数是通过数除以总断言数，不是「没过就 0 分」", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
@@ -213,7 +213,7 @@ describe("代码题判分", () => {
     const schedule = database.getReviewSchedule(repository.index.repositoryId, exerciseId);
     database.close();
     expect(schedule?.exerciseId).toBe(exerciseId);
-  }, 60_000);
+  });
 
   it("学习者交的文件名不在下发清单里 ⇒ 当没收到，不拿冻结的缺陷版冒充他的代码判分", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
@@ -221,7 +221,7 @@ describe("代码题判分", () => {
     expect(result.passed).toBe(false);
     expect(result.score).toBe(0);
     expect(result.feedback).toContain("没收到代码文件");
-  }, 60_000);
+  });
 
   it("学习者写坏到没法运行 ⇒ 判未过但如实说「没跑完」，并留一行 no-verdict 的沙箱账", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
@@ -232,7 +232,7 @@ describe("代码题判分", () => {
     const run = readJournal(repository.path).filter((event) => event.type === "exercise_run").at(-1);
     expect(run?.payload.outcome).toBe("no-verdict");
     expect(run?.payload.verdict_passed).toBe(null);
-  }, 60_000);
+  });
 
   it("判分不读仓库源码：把被考文件从盘上删掉，同一份回答照样判得出同样的结论", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
@@ -240,7 +240,7 @@ describe("代码题判分", () => {
     const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
     expect(result.passed).toBe(true);
     expect(result.feedbackSource).toBe("sandbox");
-  }, 60_000);
+  });
 
   it("老索引出的题，索引后来长出逐文件哈希也不该被永远判过期：兜底档只按全仓比", async () => {
     /**
@@ -259,5 +259,54 @@ describe("代码题判分", () => {
     expect(repository.analysis.versionStamp).toBe(bare.analysis.versionStamp);
     const result = await service.answer(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
     expect(result.passed, JSON.stringify(result.feedback)).toBe(true);
-  }, 60_000);
+  });
+});
+
+describe("代码题按需讲评", { timeout: 60_000 }, () => {
+  async function prepared(explainReply: string) {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const generate = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const exercise = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, generate);
+    const explain = fakeProvider(() => explainReply);
+    return { repository, service, exercise, explain };
+  }
+
+  it("点一次才发这一趟：出境登记走 sandbox-output，账上多一条 exercise_explain", async () => {
+    const { repository, service, exercise, explain } = await prepared("空字符串那支断言挂在没走默认值上。");
+    expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_explain")).toHaveLength(0);
+
+    const before = readJournal(repository.path).filter((event) => event.type === "exercise_result").length;
+    const result = await service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: DEFECTIVE_SOURCE }] }, explain);
+    expect(result.explanation).toContain("默认值");
+
+    const egress = readJournal(repository.path).filter((event) => event.type === "code_egress" && event.payload.scene === "practice.explain");
+    expect(egress.map((event) => [event.payload.kind, event.payload.path])).toEqual([["sandbox-output", "target.ts"]]);
+    expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_explain")).toHaveLength(1);
+    // 讲评不改判分：既不多一条 exercise_result，也不回传任何判分字段
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_result").length).toBe(before);
+    expect(Object.keys(result).sort()).toEqual(["explanation"]);
+  });
+
+  it("没配模型就 422 一句话，不回落本地模板", async () => {
+    const { repository, service, exercise } = await prepared("不该被用到");
+    await expect(service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] }, undefined)).rejects.toThrow("需要配置模型");
+  });
+
+  it("没收到代码就拒：讲评无从说起；非代码题也没有这一趟", async () => {
+    const { repository, service, exercise, explain } = await prepared("不该被用到");
+    await expect(service.explain(repository, exercise.id, { files: [] }, explain)).rejects.toThrow("没有收到代码");
+    const localized = await service.next(repository, { kind: "change_localization" }, explain);
+    await expect(service.explain(repository, localized.id, { selectedIds: ["src/config.js"] }, explain)).rejects.toThrow("只有代码题");
+  });
+
+  it("学习者粘进口令：出境前被隐去，masked 如实带上（0 与没扫是两个读数）", async () => {
+    const { repository, service, exercise, explain } = await prepared("看了就好");
+    const withSecret = 'export function loadKey(): string {\n  return "sk-abcdefghijklmnopqrstuvwxyz012345";\n}\n';
+    await service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: withSecret }] }, explain);
+    const row = readJournal(repository.path).filter((event) => event.type === "code_egress").at(-1);
+    expect(Number(row?.payload.masked)).toBeGreaterThan(0);
+    // 文本本身不落盘，但出境行里的 chars 必须是隐去之后那段
+    expect(JSON.stringify(row)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz012345");
+  });
 });

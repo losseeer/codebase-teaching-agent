@@ -615,6 +615,8 @@ button.entry-item:hover { background: #eef6ef; }
 .code-tab.active { background: #fbfdfb; color: #17352c; font-weight: 700; }
 .answer textarea { width: 100%; min-height: 105px; resize: vertical; border: 1px solid #cbd9d1; border-radius: 4px; padding: 10px; color: #335548; font-size: 12px; line-height: 1.55; outline: none; }
 .answer-actions { display: flex; gap: 7px; margin-top: 13px; }
+.explain-button { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; }
+.explain-line { margin: 8px 0 0; padding: 9px 11px; border-left: 2px solid #7ea28d; background: #f2f7f3; color: #2c4a3f; font-size: 12.5px; line-height: 1.6; }
 .option-list { display: grid; gap: 7px; margin-top: 13px; }
 .option { display: flex; align-items: flex-start; gap: 9px; border: 1px solid #d3e0d7; border-radius: 5px; padding: 10px; color: #385549; font-size: 13px; cursor: pointer; }
 .option:hover { background: #f4f9f3; }

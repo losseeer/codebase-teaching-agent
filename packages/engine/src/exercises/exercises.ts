@@ -5,7 +5,7 @@ import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
-import { generateCodeExercise, verdictOf, type CodeFile, type CodeProposal, type HarnessRun } from "./code-generate.js";
+import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile, type HarnessRun } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
 import { runnerFingerprint } from "../sandbox/profile.js";
@@ -367,6 +367,44 @@ export class ExerciseService {
     database.putExerciseCache(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
     journal.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag });
     return exercise;
+  }
+
+  /**
+    按需讲评（刀 4 后半）：**默认不花钱**，判完之后由学习者点一次才发这一趟。
+    只对代码题开放，且只回一段话——`passed`/`score` 归沙箱，这里一个字都不改（同 §51 那条「LLM 永不改判分结论」）。
+    不做时效校验是有意的：讲评吃的是冻结在缓存行里的那组测试与这次运行的输出，跟仓库现在长什么样无关。
+    */
+  async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
+    if (!provider) throw new Error("讲评需要配置模型；当前未配 LLM 或本月预算已触顶。");
+    const database = new TutorDatabase(repository.path);
+    let stored: StoredExercise | undefined;
+    try {
+      stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
+    } finally {
+      database.close();
+    }
+    if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
+    if (stored.expected.type !== "harness") throw new Error("只有代码题有这一趟讲评：其余题型的反馈本来就出自规则或 rubric。");
+    const slotPaths = new Set((stored.exercise.code?.files ?? []).map((file) => file.path));
+    const learnerFiles = (answer.files ?? []).filter((file) => slotPaths.has(file.path) && file.contents.trim());
+    if (!learnerFiles.length) throw new Error("没有收到代码，讲评无从说起。");
+    const explained = await explainCodeAttempt({
+      repositoryPath: repository.path,
+      title: stored.exercise.title,
+      prompt: stored.exercise.prompt,
+      harness: stored.expected,
+      learnerFiles,
+      provider
+    });
+    const journal = new Journal(repository.path, repository.index.repositoryId);
+    if (explained.usage) journal.append("token_usage", {
+      input_tokens: explained.usage.inputTokens,
+      output_tokens: explained.usage.outputTokens,
+      cache_hit_tokens: explained.usage.promptCacheHitTokens ?? null,
+      provider: provider.modelVersion,
+      scene: "exercise_explain"
+    });
+    return { explanation: explained.explanation };
   }
 
   async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {

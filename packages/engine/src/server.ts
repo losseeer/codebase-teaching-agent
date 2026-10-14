@@ -997,6 +997,21 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
   }
 });
 
+/**
+  按需讲评（代码题）：判分已经落库，这一趟只补一段解释；未配模型或预算触顶时**照旧 422**，
+  不回落成本地拼一句模板话——那是 §51 里撤掉的那类「看起来答完了、其实没走模型」。
+*/
+app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/explain", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const provider = budgetDegraded(repository.path, repository.index.repositoryId) ? undefined : lightLlmProvider;
+  try {
+    return await exercises.explain(repository, request.params.exerciseId, request.body ?? {}, provider);
+  } catch (error) {
+    return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成讲评" });
+  }
+});
+
 // 三条作用域对话（宏观设计 / 代码问答 / 练习评估）共用的闸门：单轮 LLM 讨论，无阶梯无本地兜底；
 // 预算触顶或未配置 LLM 时显式 422（不静默回落）。`gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
 function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string, gate?: { monthlyBudgetUsd: number; degraded: boolean }): LlmProvider | undefined {

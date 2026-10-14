@@ -19,7 +19,7 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/share
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { readFileLines, symbolBodyLines } from "../lib.js";
 import { recordEgress } from "../security/dataflow.js";
-import { secretMasker } from "../security/secrets.js";
+import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
 import { assertSafePath, type SandboxFile, type SandboxRun } from "../sandbox/runner.js";
 
@@ -260,6 +260,51 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   }
   if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs };
   return { ok: true, proposal, runs: validation.runs, usage: response.usage };
+}
+
+/**
+  按需讲评（刀 4 后半）：**默认不花钱**——只有学习者在判完之后主动点一次才发这一趟。
+  - 先重跑一次沙箱拿失败原因（测试文件的 stderr 是模型自己写的 `FAIL <标签>`，那是唯一具体的证据），
+    重跑不花钱也不碰仓库；讲评因此是**对着这份代码的这一次运行**说的，不是对着缓存里的题面猜的。
+  - 出境登记用 `sandbox-output`：这一段出门的是学习者写的代码与运行输出，不是仓内源码，
+    但同样可能带着学习者粘进去的密钥，所以照过密钥筛、照记 `code_egress`。
+  - **不返回任何判分字段**：passed/score 归沙箱，这里只出一段话。
+*/
+export async function explainCodeAttempt(input: {
+  repositoryPath: string;
+  title: string;
+  prompt: string;
+  harness: { language: ExerciseLanguage; entry: string; hidden: CodeFile[]; defect: string };
+  learnerFiles: CodeFile[];
+  provider: LlmProvider;
+}): Promise<{ explanation: string; usage?: LlmUsage; verdict: { passed: number; failed: number } | undefined }> {
+  const files = [...input.harness.hidden.map((file) => ({ ...file })), ...input.learnerFiles.map((file) => ({ ...file }))];
+  const run = await runSandbox({ language: input.harness.language, entry: input.harness.entry, files });
+  const verdict = verdictOf(run);
+  const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
+  const sources = input.learnerFiles.map((file) => {
+    // 逐文件各自计数：`masked` 是「这一段扫过、隐了几处」，一份累加器摊不到多段上（0 与「没扫」是两个读数，见 dataflow.ts）
+    const screened = maskSecrets(file.contents);
+    return { kind: "sandbox-output" as const, path: file.path, from: 1, to: screened.text.split("\n").length, text: screened.text, masked: screened.masked };
+  });
+  recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.explain", sources });
+  const system = [
+    "你是代码练习的讲评者。学习者刚交了一版代码，沙箱已经跑完并给出结论；你的活儿是把**这次运行说明白**：哪里对了、哪几条断言挂在什么上面、下一步该往哪看。",
+    "",
+    "- 只依据给定的题面、学习者代码与测试输出说话；不要引入它们之外的代码事实。",
+    "- 不得改动判分结论（通过与否、得分都不在你手里），也不要替学习者重写整份实现——点方向，不代写。",
+    "- ≤160 字中文，纯文本，不要 Markdown、不要 JSON、不要复述代码原文。"
+  ].join("\n");
+  const user = JSON.stringify({
+    exercise: input.title,
+    prompt: input.prompt,
+    defectHint: input.harness.defect || undefined,
+    learnerCode: sources.map((source) => ({ path: source.path, contents: source.text })),
+    verdict: verdict ? `${verdict.passed} 条通过 / ${verdict.failed} 条失败${run.timedOut ? "，且运行超时被终止" : ""}` : "测试没跑完（没印出 TESTS 结论）",
+    testOutput: failing || "（无输出）"
+  });
+  const response = await input.provider.complete({ system, user, maxTokens: 400, temperature: 0.3, scene: "practice.explain" });
+  return { explanation: response.text.trim().slice(0, 400), usage: response.usage, verdict };
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {

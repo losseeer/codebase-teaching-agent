@@ -68,6 +68,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 代码题的工作副本：练习一换就整份重置成引擎下发的那一组文件（`exercise.code.files`） */
   const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
   const [activeCodePath, setActiveCodePath] = useState("");
+  /** 讲评是按需的第二趟：只在**点过一次之后**才出现，且发的仍是被判的那一版代码（不是当前编辑器里的草稿） */
+  const [submittedFiles, setSubmittedFiles] = useState<{ path: string; contents: string }[]>([]);
+  const [explanation, setExplanation] = useState("");
+  const [explaining, setExplaining] = useState(false);
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -147,6 +151,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     try {
       const answer = exercise.inputMode === "multi_select" ? { selectedIds } : exercise.inputMode === "code" ? { files: codeFiles } : { text };
       const next = await api.submitExercise(repositoryId, exercise.id, answer);
+      if (exercise.inputMode === "code") { setSubmittedFiles(codeFiles); setExplanation(""); }
       setResult(next);
       refreshSummary();
       t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${next.feedback}`);
@@ -154,6 +159,19 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       setError(reason instanceof Error ? reason.message : "无法提交答案");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const explain = async (): Promise<void> => {
+    if (!exercise || !submittedFiles.length) return;
+    setExplaining(true); setError("");
+    try {
+      const next = await api.explainExercise(repositoryId, exercise.id, { files: submittedFiles });
+      setExplanation(next.explanation);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "讲评没走通");
+    } finally {
+      setExplaining(false);
     }
   };
 
@@ -293,6 +311,14 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     <>
                       <p>{result.passed ? "已通过" : "继续完善"} · 得分 {Math.round(result.score * 100)}% · {result.feedback}</p>
                       <p>下次复习：{new Date(result.review.dueAt).toLocaleDateString()}（间隔 {result.review.intervalDays} 天）</p>
+                      {exercise.inputMode === "code" ? (
+                        <>
+                          <button className="secondary explain-button" onClick={() => void explain()} disabled={explaining} title="判分只跑测试、不解释原因；点一次才发一趟模型调用，讲这一版差在哪">
+                            {explaining ? <RefreshCw className="spin" size={14} /> : <BrainCircuit size={14} />}讲这版差在哪
+                          </button>
+                          {explanation ? <p className="explain-line">讲评 · {explanation}</p> : null}
+                        </>
+                      ) : null}
                     </>
                   ) : (
                     <p title="判分会回写学习状态：掌握度与下次复习时间">答完这里出反馈和下次复习时间。</p>
