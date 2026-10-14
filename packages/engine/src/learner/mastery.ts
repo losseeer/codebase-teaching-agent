@@ -13,6 +13,8 @@ export function deriveMastery(events: JournalEvent[]): MasteryRecord[] {
       ? event.payload.unit_id
       : typeof event.payload.target_unit_id === "string" ? event.payload.target_unit_id : undefined;
     if (!unitId || (event.type !== "exercise_result" && event.type !== "unit_mastered")) continue;
+    // `unit_mastered` 的生产者（教学状态机的确认档）已于 2026-10-14 撤掉：这里仍读它，
+    // 是为了让「历史上学通过」继续算数——它是一次真实通过，不是会过期的信号。
     const current = records.get(unitId) ?? { unitId, level: 0 as MasteryLevel, attempts: 0, successes: 0 };
     const passed = event.type === "unit_mastered" || event.payload.passed === true;
     const level = event.type === "unit_mastered"
@@ -34,38 +36,14 @@ export function currentMastery(records: MasteryRecord[]): MasteryLevel {
   return mostRecent?.level ?? 1;
 }
 
-function average(values: number[]): number | null {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-}
+/**
+  `deriveMastery` 的加料版：补一个成功率——学习画像的设置推荐吃这一份。
 
-/** `deriveMastery` 的按单元加料版：补上提示深度、依赖事件、成功率——学习画像与设置推荐吃这一份。 */
+  2026-10-14 撤掉教学状态机时，这里原本还从 `hint_depth` / `dependency_event` 捞「平均提示深度」与
+  「依赖事件数」两项。那两个生产者已经不写了，留着会让画像**永久卡在历史某次的熔断上**
+  （画像回放的是整本 journal，没有新行去稀释它），所以一并删掉。
+  历史行仍在 journal 里，要回看走 `pnpm run-trace`。
+  */
 export function deriveMasteryMap(events: JournalEvent[]): MasteryMapEntry[] {
-  const records = deriveMastery(events);
-  // 先按单元把事件分桶（O(事件数)），每条记录直接查桶，避免逐条重扫全量事件（原为 O(记录×事件)）。
-  // 命中口径与原先 `events.filter(…)` 逐字一致：`unit_id` 或 `target_unit_id` 命中即计入该单元；
-  // 事件按入参顺序入桶，下游 `[...unitEvents].reverse()` 取「最近 stage」才不受影响。
-  const eventsByUnit = new Map<string, JournalEvent[]>();
-  for (const event of events) {
-    const keys = new Set<string>();
-    if (typeof event.payload.unit_id === "string") keys.add(event.payload.unit_id);
-    if (typeof event.payload.target_unit_id === "string") keys.add(event.payload.target_unit_id);
-    for (const unitId of keys) {
-      const bucket = eventsByUnit.get(unitId);
-      if (bucket) bucket.push(event);
-      else eventsByUnit.set(unitId, [event]);
-    }
-  }
-  return records.map((record) => {
-    const unitEvents = eventsByUnit.get(record.unitId) ?? [];
-    const hints = unitEvents.filter((event) => event.type === "hint_depth").map((event) => Number(event.payload.depth)).filter(Number.isFinite);
-    const dependencies = unitEvents.filter((event) => event.type === "dependency_event").length;
-    const stage = [...unitEvents].reverse().find((event) => typeof event.payload.stage === "string")?.payload.stage;
-    return {
-      ...record,
-      successRate: record.attempts ? record.successes / record.attempts : 0,
-      dependencyEvents: dependencies,
-      averageHintDepth: average(hints),
-      ...(stage ? { lastStage: stage as MasteryMapEntry["lastStage"] } : {})
-    };
-  });
+  return deriveMastery(events).map((record) => ({ ...record, successRate: record.attempts ? record.successes / record.attempts : 0 }));
 }

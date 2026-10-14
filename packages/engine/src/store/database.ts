@@ -42,7 +42,6 @@ export interface ChatMessageRow {
   role: string;
   content: string;
   created_at: string;
-  stage: string | null;
   error: string | null;
 }
 
@@ -116,8 +115,8 @@ export class TutorDatabase {
         course_node_id TEXT,
         exercise_id TEXT,
         title TEXT NOT NULL,
-        -- 教学回合的状态快照 {settings, stage, fallbackCount}（map/practice 为 NULL）。
-        -- 会话续命要的不只是消息原文：状态机得知道上一轮停在哪个 stage、fallback 了几次、用的哪套 settings。
+        -- 问答线程的设置快照 {settings}（map/practice 为 NULL）。
+        -- 2026-10-14 撤掉教学状态机后这里不再存 stage/fallbackCount，只剩「下一轮接着用哪套设置」。
         -- 这些值过去靠 journal 的 hint_depth/style_shift 重放推出（restore.ts），现在直接住在产品数据线里。
         state_json TEXT,
         created_at TEXT NOT NULL,
@@ -130,6 +129,8 @@ export class TutorDatabase {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        -- 教学阶段戳：状态机时代的遗留列，2026-10-14 起不再写入也不再读；
+        -- 列留着不删——tutor.db 是随仓可带走的东西，历史行里的值得在，删列要迁移而收益是零。
         stage TEXT,
         error TEXT
       );
@@ -347,7 +348,7 @@ export class TutorDatabase {
     this.db.prepare("UPDATE chat_session SET updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(at, sessionId);
   }
 
-  /** 教学回合状态快照（settings/stage/fallbackCount）——会话续命靠它把状态机接回上一轮停下的位置。 */
+  /** 问答线程的设置快照（settings）——会话续命靠它把下一轮的档位接回上一轮用的那一套。 */
   updateChatSessionState(sessionId: string, stateJson: string): void {
     this.db.prepare("UPDATE chat_session SET state_json = ? WHERE id = ? AND deleted_at IS NULL").run(stateJson, sessionId);
   }
@@ -363,16 +364,17 @@ export class TutorDatabase {
     return result.changes;
   }
 
-  insertChatMessage(message: { id: string; sessionId: string; role: string; content: string; createdAt: string; stage: string | null; error: string | null }): void {
-    this.db.prepare("INSERT INTO chat_message(id, session_id, role, content, created_at, stage, error) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(message.id, message.sessionId, message.role, message.content, message.createdAt, message.stage, message.error);
+  /** 正文行入库。`stage` 列一律写 NULL（教学状态机已于 2026-10-14 撤掉，列留着不迁移）。 */
+  insertChatMessage(message: { id: string; sessionId: string; role: string; content: string; createdAt: string; error: string | null }): void {
+    this.db.prepare("INSERT INTO chat_message(id, session_id, role, content, created_at, error) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(message.id, message.sessionId, message.role, message.content, message.createdAt, message.error);
   }
 
   /** 取会话正文：未删会话才有内容（会话已删时调用方拿到空数组，等于「这个会话不存在」）。
       给了 `limit` 就是尾窗语义——先倒序取最近 limit 条再反转回升序，调用方拿到的永远是时间正序。
       定序用 `rowid`（SQLite 插入序）而不是 `id`：id 是随机 UUID，按它排会把同一回合的 user/assistant 排反。 */
   listChatMessages(sessionId: string, limit?: number): ChatMessageRow[] {
-    const base = `SELECT m.id, m.session_id, m.role, m.content, m.created_at, m.stage, m.error
+    const base = `SELECT m.id, m.session_id, m.role, m.content, m.created_at, m.error
       FROM chat_message m JOIN chat_session s ON s.id = m.session_id
       WHERE m.session_id = ? AND s.deleted_at IS NULL`;
     if (!limit) {

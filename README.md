@@ -5,7 +5,7 @@
 ## 项目简介
 
 - **宏观设计**：左侧「项目目录」按真实目录分组展示（可折叠、带语义标签），右侧画布分两个视图切换——「架构视图」由文件驱动，节点是目录聚合模块、边是 import 依赖（箭头指向被依赖方，越粗引用越多）；「流程视图」由 LLM 生成执行环节，可重试、结果按版本缓存，起点分**核心流程入口**（引擎识别到的入口，走共用下拉、按 path 去重）与**自定义流程入口**（输入路径正则匹配已索引文件，就地列前 60 条命中）。两视图共用节点详情抽屉，抽屉展开时画布自动让位。
-- **代码教学**：左侧「教学模块」的 chips 来自课程树的模块地图（模块跟着仓库走），按**主干 / 设施 / 外围**分成三个下拉（判据是模块可见文件的结构角色，零 LLM）+ LLM 推荐入口 + 仓库文件树；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏以「受限 agent loop」驱动教学对话：每轮 LLM 从固定动作菜单（推进 / 降脚手架 / 给答案 / 确认）提议动作，状态机守门校验教学法不变量（熔断前置、verify 阶段确认门禁），否决后回落确定性路径；上下文注入锚点附近真实源码摘录与完整近史，全程 journal 可审计。
+- **代码教学**（问答形状；2026-10-14 撤掉教学状态机，域内不再推进阶段、不再有提示阶梯）：左侧「教学模块」的 chips 来自课程树的模块地图（模块跟着仓库走），按**主干 / 设施 / 外围**分成三个下拉（判据是模块可见文件的结构角色，零 LLM）+ LLM 推荐入口 + 仓库文件树；右侧为实时源码（多 tab、⌘P 快速搜索）。Agent 侧栏在这个作用域里做**一轮问答**：装配锚点附近真实源码摘录与完整近史 → 模型可按需 `read_file` / `search_code` 补看（2 轮 / 3 次上限）→ 直接回答，一回合一趟措辞调用，全程 journal 可审计。
 - **练习评估**：固定模块「程序理解题」按全仓筛选出题目标，题型为输出预测 / 变更定位 / 影响分析，由受限执行与集合匹配自动判分，并按 SM-2 算法调度复习；另可自建出题主题走 LLM 出题族（一轮调用可拒绝，rubric 判分）。
 - **界面自己可调**：右侧 Agent 侧栏可整栏收起（收成一条 44px 的边，上面留图标、竖排「对话」和一个「还在出字」的指示点——收起不打断在途回合，流式订阅住在 App 里）；三个工作区（宏观 / 教学 / 练习）里「左侧列表栏 ↔ 右栏」的分隔条、以及「主区 ↔ 对话栏」的分隔条都能拖——左侧列表栏三个工作区**共用一条宽度**，拖一次三页都跟（也可用 ←/→ 方向键，Shift 加速，双击回到缺省宽度）。这些是**用户偏好**，存 `localStorage`，跟产品数据无关；窗口窄到挤不下时按视口现算上限，但**不改你存的那份宽度**，放大窗口就回到原样。
 - **成本监控**：本月 Token 用量仪表（金额、预算进度、逐日用量、按场景与按模型的分桶明细）+ 月度预算设置。金额按**三档单价**算——输入未命中 / 输入命中前缀缓存 / 输出，页面直接列出「计价明细」逐项 `tokens × 单价 = 金额`。单价有两个填法：对话栏那排「模型与推理」弹窗里的**输入 / 命中 / 输出**三格（存 `~/.codebase-tutor/llm-settings.json`，改完**立即生效**，成本读数与预算闸门下一发就认），或 `.env` 的 `TUTOR_INPUT_USD_PER_MILLION` / `TUTOR_CACHE_HIT_USD_PER_MILLION` / `TUTOR_OUTPUT_USD_PER_MILLION`（弹窗里留空的那格回落到它，改 .env 仍需重启）。**币种口径：算术里没有币种**——`tokens × 单价 ÷ 一百万`，单价填哪种币就算出哪种币的钱，界面与引擎**不做任何汇率换算**。本项目按**人民币 / 百万 token** 填与显示（DeepSeek 峰时约 ¥2 / ¥0.2 / ¥8），金额读数一律带 `¥`。变量名里的 `USD`（`TUTOR_*_USD_PER_MILLION`）与字段名里的 `Usd`（`inputPerMillionUsd`、`monthlyBudgetUsd`）是历史遗留：改名会同时牵动已落盘的 `llm-settings.json`、库里的 `repository_state.settings_json` 与接口契约，所以留着，别按名字把数值当美元读。命中价没单独配时按输入价计（不打折，宁可高估也不说少），三档都没配时页面明说「金额恒为 ¥0.0000」而不让 ¥0.0000 被误读成没花钱。预算触顶后 LLM 调用自动降级为本地规则路径，页面同时显示降级回合数。
@@ -17,7 +17,7 @@
 | **engine** | Fastify v5（REST + SSE 流式）、better-sqlite3（双 ABI 原生绑定）、typescript-language-server（LSP 语义增强）、tsx 开发运行时 |
 | **gui** | Vite 6 + React 19 + react-router-dom v7 + lucide-react |
 | **shared** | 前后端共享 TypeScript 类型（workspace 内直接引用源码） |
-| **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档；教学对话默认受限 agent loop（`TUTOR_AGENT_LOOP=off` 退回纯工作流） |
+| **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；重量级 / 轻量级两档配置，轻量档未配置时回落主力档 |
 | **工具链** | pnpm 10 workspace + turbo + changesets；vitest + Playwright（`e2e/`）；TypeScript 5.8；concurrently 双进程开发 |
 
 ## 仓库结构
@@ -37,9 +37,7 @@
 │   │       ├── implementation/  #   微观实现单元抽取（函数级）
 │   │       ├── lsp/             #   typescript-language-server 语义增强
 │   │       ├── quality/         #   分析结果校验（verifyAnalysis）
-│   │       ├── harness/         #   教学回复编排（上下文组装 + 动作守门 + LLM 措辞 + 降级）
-│   │       ├── teaching/        #   教学状态机：阶段转移（orient→…→confirmed）、意图分类
-│   │       │                    #   （正则 / LLM 单轮）、动作菜单提议 + 守门校验（agent loop）
+│   │       ├── harness/         #   问答回合编排（上下文组装 + 工具循环 + LLM 一次回答）
 │   │       ├── tutor-settings/  #   教学设置（风格/教学法/层次）与校验、由设置推导 TeachingPolicy
 │   │       ├── exercises/       #   练习生成、判分、LLM 题面润色、SM-2 复习、ZPD 选题
 │   │       ├── learner/         #   学习者画像 / 掌握度推导（mastery.ts）/ 渐隐提示
@@ -82,7 +80,7 @@
 
 - **模块主入口与目录同名**：`harness/harness.ts`、`importer/importer.ts`、`cost/cost.ts`、`scopechat/scopechat.ts`；其余文件按内容命名（`exercises/sm2.ts`、`coursetree/entry-suggest.ts`）。不再新增 `service.ts` 这类零信息名。
 - **一个词只指一件事**：`provider` 只指 LLM 提供方（`llm/provider.ts`，摘要侧改叫 `summarizer/summary-provider.ts`）；`verify` 只指分析结果体检（`quality/checker.ts` 的 `verifyAnalysis`），LLM 出题的确定性否决归到 `exercises/guard-proposal.ts`；掌握度推导统一在 `learner/mastery.ts`，练习侧只留 ZPD 选题 `exercises/zpd.ts`；教学设置与 `TeachingPolicy` 推导从 `policy/` 移到 `tutor-settings/`。
-- **同一条教学会话有三个名字，但只有一个 id**：库里 `chat_session` 的行 id = GUI 的 `threadId` = 引擎的 `sessionId`。GUI 侧一律讲"线程"（`useScopedChat` / `chatThreads` / `ThreadItem`），`TutorSession` 专指引擎那份在途教学状态（stage / fallbackCount / settings）。DB 表名与 `sessionId` 字段刻意不改：它们已写进存量库和 journal，改名等于要求所有已导入仓库做迁移。
+- **同一条教学会话有三个名字，但只有一个 id**：库里 `chat_session` 的行 id = GUI 的 `threadId` = 引擎的 `sessionId`。GUI 侧一律讲"线程"（`useScopedChat` / `chatThreads` / `ThreadItem`），`TutorSession` 专指引擎那份在途会话状态（settings + 正文；2026-10-14 撤掉状态机后不再有 stage / fallbackCount）。DB 表名与 `sessionId` 字段刻意不改：它们已写进存量库和 journal，改名等于要求所有已导入仓库做迁移。
 
 ## 分析排除规则
 
@@ -99,9 +97,9 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 多仓：引擎记一张**地址簿**（`~/.codebase-tutor/repositories.json`，你导入过的仓都在里面，最近使用的排在最后），启动时一条都不读产物、一个 fs 监听都不开；侧栏「仓库」下拉切到哪个仓，才把那个仓的 `.tutor` 产物挂进内存（同时只保留最近用过的 3 个，`TUTOR_MAX_MOUNTED` 可调，超出的按 LRU 驱逐——只关它的监听、从内存摘掉，磁盘产物一字不动，下次访问再挂回来）。三个学习视图是常驻挂载的（切 tab 不丢状态），所以花钱的取数（推荐入口、流程生成）都挂在**单向可见性闸门**上：没打开过的 tab 一次都不发，打开过之后按输入变化走，来回切 tab 不重发。挂载时顺手做一次**新鲜度判定**：把当前文件内容哈希与产物记录的 `versionStamp` 比、把当前 git HEAD 与分析时记的 HEAD 比。脏了就在页面顶部横幅**如实说明**（几天前跑的、多少个文件对不上、HEAD 从哪挪到哪），给你「去重新分析」（跳导入页、路径已填好，要你亲手点导入）或「知道，先用旧的」两条路——**引擎绝不自动重新分析，也不静默清掉你选过的仓**。目录被挪走 / `.tutor` 产物不全时同样只说原因，并给「移出地址簿」。
 
-接入 LLM：**不必先配 `.env`**。GUI 侧栏输入框上方那颗模型胶囊就是唯一入口——点开通弹窗配服务商协议、模型 slug、接口地址、API Key 与思考档位，改完立即生效并保存到 `~/.codebase-tutor/llm-settings.json`（权限 0600，重启仍在；接口只回显掩码，明文密钥从不出库；胶囊上直接显示当前生效的模型与档位，没配齐时转「本地兜底」警示态）。`.env`（复制 `.env.example` 填写后 `set -a; source .env; set +a`）是降级策略：GUI 里留空的项沿用这里的 `TUTOR_LLM_PROVIDER` / `TUTOR_LLM_MODEL` / `TUTOR_OPENAI_URL` / `OPENAI_API_KEY` 等，`TUTOR_MODEL_PRESETS` 给模型输入框提供候选。两边都没配齐时引擎全本地可用（本地启发式摘要 + 规则教学）。只有一套模型配置，「轻任务」（推荐入口、题面润色、命名、L1 摘要）是**运行时角色**而非第二档，思考固定关闭。教学对话默认运行受限 agent loop（模型提议教学动作、状态机守门校验，无 LLM 配置或预算触顶时自动回落本地确定性路径），`TUTOR_AGENT_LOOP=off` 可退回纯工作流（意图识别走轻任务角色）。
+接入 LLM：**不必先配 `.env`**。GUI 侧栏输入框上方那颗模型胶囊就是唯一入口——点开通弹窗配服务商协议、模型 slug、接口地址、API Key 与思考档位，改完立即生效并保存到 `~/.codebase-tutor/llm-settings.json`（权限 0600，重启仍在；接口只回显掩码，明文密钥从不出库；胶囊上直接显示当前生效的模型与档位，没配齐时转「本地兜底」警示态）。`.env`（复制 `.env.example` 填写后 `set -a; source .env; set +a`）是降级策略：GUI 里留空的项沿用这里的 `TUTOR_LLM_PROVIDER` / `TUTOR_LLM_MODEL` / `TUTOR_OPENAI_URL` / `OPENAI_API_KEY` 等，`TUTOR_MODEL_PRESETS` 给模型输入框提供候选。两边都没配齐时引擎仍能本地用（本地启发式摘要与流程降级），但**三条对话作用域（宏观设计 / 代码教学 / 练习答疑）都是真调模型**：没配齐或本月预算触顶就 422 明说，不再回一段看着像答案的本地文案。只有一套模型配置，「轻任务」（推荐入口、题面润色、命名、L1 摘要）是**运行时角色**而非第二档，思考固定关闭。
 
-教学对话的三层记忆：正文真源在引擎的 `chat_session` / `chat_message`（一问一答原子落库）→ `.tutor/` journal 结构化事件（意图/动作来源、提示深度、熔断、token 用量、回合文本，跨重启）→ 前端只攥 threadId，加上 localStorage 里的「上次停在哪个作用域/哪条线程」。
+教学对话的三层记忆：正文真源在引擎的 `chat_session` / `chat_message`（一问一答原子落库）→ `.tutor/` journal 结构化事件（token 用量、回合文本、工具循环轮次、文件读取与出境清单，跨重启）→ 前端只攥 threadId，加上 localStorage 里的「上次停在哪个作用域/哪条线程」。
 
 流式与中止：三处对话（宏观设计 / 代码教学 / 练习评估）统一走 SSE，事件为 `progress` / `delta` / `done` / `error` / `aborted`，回合节奏是「算完 → 落库 → 72 字分块回放」。每次发送带一个客户端生成的 `turnId`，「停止生成」按钮先打 `POST /api/turns/stop` 让引擎掐掉这一轮（点了停止 = 这一轮作废，不落库也不回放），再断自己的连接。连接因刷新页面或网络波动断开时**不算停止**——引擎照常把这一轮算完并落库，GUI 在 sessionStorage 记一笔「欠账」，回到会话时按 12s/30s/60s 退避回读正文，补上回复并明说发生了什么。细节见 [开发关键点问题与解决方案](docs/开发关键点问题与解决方案.md) 第十三节。
 

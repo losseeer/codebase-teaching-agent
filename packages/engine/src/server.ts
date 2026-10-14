@@ -37,7 +37,6 @@ import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
 import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
-import { ANSWER_CIRCUIT_BREAKER_ATTEMPTS } from "./teaching/state-machine.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
@@ -198,8 +197,6 @@ const restoredLlmSettings = getLlmRuntimeSettings();
 if (restoredLlmSettings.provider || restoredLlmSettings.model || restoredLlmSettings.baseUrl || restoredLlmSettings.apiKey) console.log(`[startup] 已恢复 GUI 的 LLM 设置（${restoredLlmSettings.provider || "服务商回落 .env"} · ${restoredLlmSettings.model || "模型回落 .env"}）`);
 let teachingProvider = buildLlmRuntimeProvider("teaching");
 let lightLlmProvider = buildLlmRuntimeProvider("light");
-// 受限 agent loop：模型从固定动作菜单提议教学动作，状态机降级为守门校验层；TUTOR_AGENT_LOOP=off 退回纯 workflow
-const actionLoopEnabled = (process.env.TUTOR_AGENT_LOOP ?? "on").toLowerCase() !== "off";
 tboot("createLlmProvider");
 
 const teachingStates = new Map<string, TutorSession>();
@@ -246,8 +243,6 @@ function restoreThreadAsSession(repositoryPath: string, repositoryId: string, se
     courseNodeId: thread.courseNodeId,
     style: settings.style,
     settings,
-    stage: state.stage,
-    fallbackCount: state.fallbackCount,
     messages: readMessages(repositoryPath, sessionId) as TutorMessage[],
     createdAt: thread.createdAt
   };
@@ -622,7 +617,6 @@ app.get("/api/health", async () => {
     summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
-    agentLoop: actionLoopEnabled,
     auth: gate === "on" ? "api-key" : gate
   };
 });
@@ -1000,9 +994,10 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
   }
 });
 
-// 作用域对话（宏观设计 / 练习评估）：单轮 LLM 开放讨论，无教学状态机；预算触顶或未配置 LLM 时显式 422（不静默回落）
-function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string): LlmProvider | undefined {
-  if (budgetDegraded(repositoryPath, repositoryId)) {
+// 三条作用域对话（宏观设计 / 代码问答 / 练习评估）共用的闸门：单轮 LLM 讨论，无阶梯无本地兜底；
+// 预算触顶或未配置 LLM 时显式 422（不静默回落）。`gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
+function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string, gate?: { monthlyBudgetUsd: number; degraded: boolean }): LlmProvider | undefined {
+  if ((gate ?? budgetGate(repositoryPath, repositoryId)).degraded) {
     void reply.code(422).send({ error: "本月预算已触顶，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
     return undefined;
   }
@@ -1061,8 +1056,6 @@ function recheckTurn(input: {
   crossFiles?: Map<string, number>;
   question: string;
   answer: string;
-  stage?: string;
-  pedagogy?: string;
   style?: number;
 }): { answer: string; failed: string[] } {
   // 先过筛再复检：判的必须是「用户将会看到的那一份」，且密钥不能等到下发之后才挡
@@ -1072,8 +1065,6 @@ function recheckTurn(input: {
     at: new Date().toISOString(),
     question: input.question,
     answer: screened.text,
-    stage: input.stage ?? "",
-    pedagogy: input.pedagogy ?? "",
     style: input.style ?? 0,
     answerTruncated: false,
     scene: input.scene
@@ -1369,7 +1360,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
   const session = createSession(repository.index.repositoryId, node.id, settings);
   // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
   const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, courseNodeId: node.id, title: node.title });
-  saveThreadState(repository.path, session.id, { stage: session.stage, fallbackCount: session.fallbackCount, settings: session.settings });
+  saveThreadState(repository.path, session.id, { settings: session.settings });
   teachingStates.set(session.id, session);
   const journal = new Journal(repository.path, repository.index.repositoryId);
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
@@ -1505,18 +1496,18 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
   const session = { ...current, style: settings.style, settings };
-  // 闸门状态在**开火前**一次定死（判据只有 `budgetGate` 这一处），收尾记账复用同一个值：
-  // 事后按「本会话累计成本」重算，会把花了钱的那一轮记成降级回合，或反过来让闸门放行/拦下而账面上看不出来。
+  // 闸门与 map/practice 同一条：没配模型、或本月预算已触顶，就在开火前 422。
+  // 教学状态机撤掉之后这一域**不再有本地兜底那一档**——「看起来答完了、其实没走模型」是这条线上最难查的事故形状。
   const gate = budgetGate(repository.path, repository.index.repositoryId);
+  const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId, gate);
+  if (!provider) return reply;
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流，不再走全局广播（事件天然按请求隔离，连接断开自动清理）
+  // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流（事件天然按请求隔离，连接断开自动清理）
   const { send, turnHandle } = beginScopedStream(request, reply, "teach", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   try {
-    const outcome = await respondWithProvider(session, node, request.body.content.trim(), gate.degraded ? undefined : teachingProvider, faded, repository.path, {
-      classifier: actionLoopEnabled ? undefined : (gate.degraded ? undefined : lightLlmProvider),
-      actionLoop: actionLoopEnabled,
+    const outcome = await respondWithProvider(session, node, request.body.content.trim(), provider, faded, repository.path, {
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles, request.auth),
@@ -1529,9 +1520,8 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     teachingStates.set(outcome.session.id, outcome.session);
     const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：三条不变量在回合收尾跑一次；引用核不上就补一行明示，
-    // 让「落库的正文 / 回放的正文 / journal 的 turn_text」三者都是学习者真看到的那一份。
-    // 状态机用的 stage/pedagogy/style 取**本回合生效值**，与离线判分同一口径。
+    // 运行期复检（零 token）：撤掉阶梯后教学回合也只剩「引用能不能落地」这一条有对象（另两条吃 stage/问句），
+    // 引用核不上就在正文尾部补一行明示，让「落库的正文 / 回放的正文 / journal 的 turn_text」是同一份。
     outcome.assistant.content = recheckTurn({
       repository,
       journal,
@@ -1540,47 +1530,32 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       crossFiles,
       question: request.body.content.trim(),
       answer: outcome.assistant.content,
-      stage: outcome.session.stage,
-      pedagogy: outcome.session.settings.pedagogy,
       style: outcome.session.settings.style
     }).answer;
-    // 回合正文 + 状态快照落库：GUI 重启后接着聊、以及 run-trace 之外的「这一轮停在哪」都从这里取
+    // 回合正文 + 设置快照落库：GUI 重启后接着聊、以及「这一轮用的是哪档设置」都从这里取
     persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
       { role: "user", content: request.body.content.trim() },
-      { role: "assistant", content: outcome.assistant.content, ...(outcome.assistant.stage ? { stage: outcome.assistant.stage } : {}) }
-    ], { stage: outcome.session.stage, fallbackCount: outcome.session.fallbackCount, settings: outcome.session.settings });
+      { role: "assistant", content: outcome.assistant.content }
+    ], { settings: outcome.session.settings });
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
-    if (outcome.actionSource === "vetoed") journal.append("action_veto", { unit_id: node.id, proposed: outcome.proposedAction ?? "unknown", enforced: outcome.action ?? "unknown", stage: outcome.session.stage }, session.id);
-    journal.append("hint_depth", { unit_id: node.id, depth: outcome.hintDepth, stage: outcome.session.stage, fallback_count: outcome.session.fallbackCount, resolved_by: outcome.event === "dependency" ? "answer_circuit_breaker" : "learner_attempt" }, session.id);
-    if (outcome.event === "dependency") journal.append("dependency_event", { unit_id: node.id, after_attempts: ANSWER_CIRCUIT_BREAKER_ATTEMPTS, reason: "two_consecutive_step_downs" }, session.id);
-    if (outcome.event === "confirmation") journal.append("unit_mastered", { unit_id: node.id, method: "source_backed_explanation" }, session.id);
-    // 没有 `usage` 就是这一轮一分没花（未配模型 / 预算触顶走本地规则），**这一轮不进 token_usage**：
-    // 拿字数÷4 造一份估算进账本，等于让免费回合吃掉预算——金额「到顶」后付费分支会被这些不存在的钱关掉。
-    // 写成「有 usage 才记」还与 map/practice 三处同一口径；成本页的「计费回合」= 行数 − 降级行数，
-    // 免费回合若也留一行（哪怕全 0）就被计入计费回合，触顶那一月的账面会反过来夸大有花过的钱。
-    if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", intent_source: outcome.intentSource ?? "regex", action_source: outcome.actionSource ?? "deterministic" }, session.id);
-    // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕；降级轮也记（裁判要看到「这一轮没走 LLM」的成品）
+    // 没有 `usage` 就是端点这趟没回报用量，**这一轮不进 token_usage**：
+    // 拿字数÷4 造一份估算进账本，等于让不存在的钱吃掉预算——触顶后付费分支会被这些假账反过来关掉。
+    // 写成「有 usage 才记」还与 map/practice 三处同一口径；成本页的「计费回合」= token_usage 行数。
+    if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
+    // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕
     journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
-    // 教学回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
+    // 问答回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
     for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
       journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, session.id);
     }
     for (const search of outcome.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);
     }
-    // 回合决策摘要：提议动作 → 守门裁决 → 实际执行 + 工具轮次（run-trace 按 traceId 串起整回合的原始素材）
-    journal.append("loop_round", { scene: "teach", decision: outcome.actionSource ?? "deterministic", proposed: outcome.proposedAction ?? null, executed: outcome.action ?? null, tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);
+    // 回合摘要：状态机那三列（decision/proposed/executed）随阶梯一起停写，这里只留工具循环的轮次与次数
+    journal.append("loop_round", { scene: "teach", tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);
     const cost = summarizeCost(repository.path, gate.monthlyBudgetUsd, session.id);
-    // 降级留痕认的是**开火前那个闸门值**（正是同一个 `gate.degraded` 决定了上面给不给 provider），
-    // 不是「本会话累计成本」：后者会在这一轮其实花了钱、但刚好把预算跨过线时补一条假的降级记录，
-    // 也会在预算被别的会话/导入吃满时让真正降级的这一轮一声不吭——两种都是把账记反。
-    if (gate.degraded) {
-      journal.append("token_usage", { input_tokens: 0, output_tokens: 0, provider: outcome.provider ?? "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, session.id);
-      // 降级必须显式留痕：日志里也要能查到「这一轮为什么没走 LLM」
-      traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached", session: session.id });
-    }
     replayTypewriter(send, outcome.assistant.content);
-    send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider ?? "local-heuristic-v1" });
+    send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider });
   } catch (error) {
     // 用户点了停止：这一轮没有成品。不伪造 assistant 正文、不写 turn_text，只留一条中止痕迹
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", turnHandle, threadId: session.id, error, fallbackError: "教学回合失败" });

@@ -34,7 +34,7 @@
   | 作用域 | 通道 | 事件 |
   |--------|------|------|
   | `map` | SSE（`map-chat/stream`） | `{stage:"thinking",round}` / `{stage:"reading",path}` |
-  | `teaching` | SSE（`sessions/:id/messages`） | `{stage:"deciding"}` / `{stage:"thinking",round}` / `{stage:"reading",path}` |
+  | `teaching` | SSE（`sessions/:id/messages`） | `{stage:"thinking",round}` / `{stage:"reading",path}` |
   | `practice` | 无（单轮调用，只有出题前的静态文案） | — |
   引擎发结构化事件（`harness` 的 `TeachingProgress`），中文文案由 `progressText()` 决定——两侧不互相猜。
 - **语言风格回显**：滑块值 + 档位名（严肃/中性/通俗）实时显示；档位判据是 `@codebase-tutor/shared` 的 `styleBand`，

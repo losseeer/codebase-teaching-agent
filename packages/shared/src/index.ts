@@ -189,8 +189,12 @@ export function styleBand(style: number): StyleBand {
 
 export type Pedagogy = "socratic" | "explanatory" | "practice";
 export type DecompositionDepth = "macro" | "micro";
-export type TeachingStage = "orient" | "procedure" | "concept" | "verify" | "confirmed";
 
+/**
+  教学阶段（orient→…→confirmed）与提示阶梯**已于 2026-10-14 整条撤掉**：教学回合变成纯问答，
+  不再推进阶段、不再记 fallbackCount，也不再产生 `hint_depth` / `unit_mastered` / `dependency_event` / `action_veto` 四类事件。
+  库里与 journal 里 10-12 之前的历史行仍带着这些取值，读侧不再解释它们（类型已删，字段留在 SQLite 列里不迁移）。
+  */
 export interface TeachingPolicy {
   level: StyleLevel;
   label: string;
@@ -210,7 +214,6 @@ export interface TutorMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
-  stage?: TeachingStage;
 }
 
 export interface TutorSession {
@@ -219,8 +222,6 @@ export interface TutorSession {
   courseNodeId: string;
   style: StyleLevel;
   settings: TutorSettings;
-  stage: TeachingStage;
-  fallbackCount: number;
   messages: TutorMessage[];
   createdAt: string;
 }
@@ -250,7 +251,6 @@ export interface ChatThreadMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  stage?: TeachingStage;
   error?: string;
 }
 
@@ -943,9 +943,6 @@ export interface MasteryRecord {
 
 export interface MasteryMapEntry extends MasteryRecord {
   successRate: number;
-  dependencyEvents: number;
-  averageHintDepth: number | null;
-  lastStage?: TeachingStage;
 }
 
 export type FadedTransition = "fade" | "replenish" | "steady";
@@ -996,7 +993,7 @@ export interface PracticeSummary {
   学习日志事件类型。分两类：
 
   - 引擎侧（学习语义）：`ENGINE_JOURNAL_EVENTS`（含 turn_text / turn_invariant / code_egress 等后加的审计事件）；
-    由引擎在状态机 / 工具循环 / 成本核算里写。
+    由引擎在工具循环 / 判分 / 成本核算里写。
   - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
     这条契约来自设计文档第 8 章 PRINCIPLE 03「可观测」：每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
 
@@ -1007,6 +1004,8 @@ export interface PracticeSummary {
   */
 export type JournalEventType =
   // 引擎侧
+  /** ⚠️ 下面四项随「教学状态机」于 2026-10-14 停写（回合变纯问答，不再有阶梯、掌握判定与动作守门）。
+      类型**保留不删**——append-only 那条纪律，且历史仓里的这些行仍要能被归类型；新行不再产生。 */
   | "unit_mastered"
   | "exercise_result"
   | "hint_depth"

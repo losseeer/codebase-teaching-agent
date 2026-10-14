@@ -89,23 +89,10 @@ describe("检索 gold 命中", () => {
   });
 });
 
-describe("教学法不变量机检（第 2 刀）", () => {
+describe("不变量机检（第 2 刀剩下的两条）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
-    ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", stage: "orient", pedagogy: "socratic", style: 50, answerTruncated: false, ...over });
-
-  it("苏格拉底未确认轮必须留问句；confirmed 与 explanatory 缩出分母", () => {
-    const score = scoreTeachInvariants([
-      turn({ answer: "先看 builder.py 的注册顺序，你觉得哪一步会先执行？" }),
-      turn({ answer: "这里没有问句，直接讲结论。" }),
-      turn({ answer: "很好，这一节到此掌握。", stage: "confirmed" }),
-      turn({ answer: "直接解释：状态机在此汇聚。", pedagogy: "explanatory" })
-    ], files);
-    const socratic = score.checks.find((check) => check.id === "socratic-question");
-    expect(socratic?.applicable).toBe(2);
-    expect(socratic?.pass).toBe(1);
-    expect(socratic?.misses[0]?.excerpt).toContain("没有问句");
-  });
+    ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
 
   it("引用核落地：假路径回合进 misses；无引用的回合不适用；截断行只计数", () => {
     const score = scoreTeachInvariants([
@@ -131,25 +118,29 @@ describe("教学法不变量机检（第 2 刀）", () => {
     expect(binding?.applicable).toBe(2);
     expect(binding?.pass).toBe(1);
   });
+
+  it("socratic-question 这条尺子已随教学状态机删除（判据吃 stage 与本轮动作）", () => {
+    expect(scoreTeachInvariants([turn({ answer: "这一节到此掌握。" })], files).checks.map((check) => check.id)).toEqual(["reference-grounding", "anchor-binding"]);
+  });
 });
 
-describe("运行期在环复检（第 2 刀的那三条搬到回合收尾）", () => {
+describe("运行期在环复检（第 2 刀的那两条搬到回合收尾）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
-    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", stage: "orient", pedagogy: "socratic", style: 50, answerTruncated: false, ...over });
+    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
 
   it("单回合结论：该判几条 / 哪条失守 / 证据只挂失守那条", () => {
     const verdict = checkTurnInvariants(turn({ answer: "见 src/graph/ghost.py:8，为什么？" }), files);
-    expect(verdict.applicable).toEqual(["socratic-question", "reference-grounding", "anchor-binding"]);
+    expect(verdict.applicable).toEqual(["reference-grounding", "anchor-binding"]);
     expect(verdict.failed).toEqual(["reference-grounding"]);
     expect(verdict.evidence["reference-grounding"]).toContain("ghost.py");
     expect(verdict.evidence["anchor-binding"]).toBeUndefined();
   });
 
-  it("map/practice 只判引用那条：留问句与点名标识符是 teach 的设计承诺，别拿它们去缩别的场景的分母", () => {
+  it("map/practice 只判引用那条：点名标识符是问答域的设计承诺，别拿它去缩别的场景的分母", () => {
     for (const scene of ["map_chat", "practice_chat"] as const) {
       // 没引用就没有可判条目：不适用 ≠ 通过，分母如实缩到 0
-      expect(checkTurnInvariants(turn({ scene, answer: "这一段没有任何问句也没有标识符" }), files).applicable).toEqual([]);
+      expect(checkTurnInvariants(turn({ scene, answer: "这一段没有任何引用也没有标识符" }), files).applicable).toEqual([]);
       const verdict = checkTurnInvariants(turn({ scene, answer: "见 src/graph/ghost.py:8 这一行" }), files);
       expect(verdict.applicable).toEqual(["reference-grounding"]);
       expect(verdict.failed).toEqual(["reference-grounding"]);

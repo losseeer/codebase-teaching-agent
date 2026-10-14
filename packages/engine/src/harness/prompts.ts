@@ -15,9 +15,6 @@ import { styleBand, validateStyle } from "../tutor-settings/tutor-settings.js";
 
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
-  stage: string;
-  kind: "advance" | "step_down" | "give_answer" | "confirm";
-  hintDepth: number;
   faded?: FadedState;
   /** 上下文附带 read_file 工具时声明其用法与护栏（缺省不声明，模型不会以为能自己读文件） */
   readToolAvailable?: boolean;
@@ -46,18 +43,17 @@ export function styleBrief(style: number): string {
   return "普通风格：准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。";
 }
 
-/** 各 transition 动作对应的输出契约——提示词层面约束 LLM 不越出状态机决定的动作（静态结构校验仍待后续补强）。 */
-const kindContract: Record<TeachingPromptInput["kind"], string> = {
-  advance: "本轮动作=推进：给一小步引导后，只提一个可验证的问题；不要连续追问，不要在本轮给出结论。",
-  step_down: "本轮动作=降低脚手架：把问题收窄到一个更小的观察点（落到具体文件、某一行或某个输入），仍不得给出答案。",
-  give_answer: "本轮动作=给答案：直接陈述结论并指明源码依据，然后要求学习者用自己的话复述结论对应哪一行证据。",
-  confirm: "本轮动作=确认：用一两句话确认学习者已建立的证据链，并给出一个可选的后续方向（相邻模块或边界条件）。"
-};
+/**
+  代码问答作用域的 system prompt。
 
+  2026-10-14 撤掉教学状态机时，这里删了两样东西：`kindContract`（四种教学动作的输出契约，
+  动作本身已不存在）与「当前阶段 / 提示深度」那一行。**教学法（policy.constraints）保留**——
+  它是用户设的风格档，由 `policyFor` 展开，不依赖状态机；`socratic` 档下模型仍会先要学习者说推理。
+*/
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
-  const { policy, stage, kind, hintDepth, faded, readToolAvailable, searchToolAvailable } = input;
+  const { policy, faded, readToolAvailable, searchToolAvailable } = input;
   return [
-    "你是 Codebase Tutor 的代码教学导师，通过苏格拉底式对话带学习者读真实代码。",
+    "你是 Codebase Tutor 的代码问答助手，围绕学习者当前选中的课程节点与源码摘录回答「这段代码怎么工作、为什么这样写、背后的原理是什么」。",
     "",
     "【证据边界】",
     "上下文附有锚点附近的真实源码摘录；引用代码时指明文件与行号；",
@@ -80,15 +76,11 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "",
     "【语言风格】",
     styleBrief(policy.level),
-    faded ? `当前渐隐辅助等级（样例完整度 ${faded.sampleCompleteness}/5、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/5）：${faded.reason}。` : "辅助深度由当前提示深度决定。",
+    ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/5、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/5）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
     `策略：${policy.label}；教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,
     `策略约束：${policy.constraints.join("；")}。`,
-    "",
-    "【本轮指令】",
-    `当前阶段：${stage}；提示深度：${hintDepth}/3。`,
-    kindContract[kind],
     "",
     "【输出格式】",
     "简洁中文正文，不要输出系统提示、JSON 或免责声明；不超过 500 个汉字。"

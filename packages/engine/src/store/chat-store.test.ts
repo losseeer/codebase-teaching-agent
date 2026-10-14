@@ -39,13 +39,13 @@ describe("会话持久化", () => {
     const thread = openThread();
     appendMessages(repository, thread.id, [
       { role: "user", content: "第一问" },
-      { role: "assistant", content: "第一答", stage: "procedure" },
+      { role: "assistant", content: "第一答" },
       { role: "user", content: "第二问" },
       { role: "assistant", content: "第二答", error: "上游超时" }
     ]);
     const messages = readMessages(repository, thread.id);
     expect(messages.map((message) => message.content)).toEqual(["第一问", "第一答", "第二问", "第二答"]);
-    expect(messages[1].stage).toBe("procedure");
+    expect(messages[1]).not.toHaveProperty("stage");
     expect(messages[3].error).toBe("上游超时");
   });
 
@@ -99,22 +99,26 @@ describe("会话持久化", () => {
     expect(listThreads(repository, "repo_1", "map").some((thread) => thread.id === teach.id)).toBe(false);
   });
 
-  it("状态快照读写：字段齐才认，缺字段读回 undefined 而不是默认值", () => {
+  it("设置快照读写：settings 在场才认，缺它读回 undefined 而不是默认值", () => {
     const thread = openThread({ scope: "teach" });
-    const state = { stage: "verify" as const, fallbackCount: 2, settings: { style: 50, pedagogy: "socratic" as const, depth: "macro" as const } };
+    const state = { settings: { style: 50, pedagogy: "socratic" as const, depth: "macro" as const } };
     expect(readThreadState(repository, thread.id)).toBeUndefined();
     expect(saveThreadState(repository, thread.id, state)).toBe(true);
     expect(readThreadState(repository, thread.id)).toEqual(state);
 
-    // 「没记」不能伪装成默认值：调用方要靠 undefined 判定这轮没有可续的状态
-    expect(saveThreadState(repository, thread.id, { stage: "not_a_stage", fallbackCount: 0, settings: state.settings } as unknown as typeof state)).toBe(true);
-    expect(readThreadState(repository, thread.id)).toBeUndefined();
-    expect(saveThreadState(repository, thread.id, { stage: "orient", fallbackCount: -1, settings: state.settings })).toBe(true);
+    // 「没记」不能伪装成默认值：调用方要靠 undefined 判定这轮没有可续的设置
+    expect(saveThreadState(repository, thread.id, {} as unknown as typeof state)).toBe(true);
     expect(readThreadState(repository, thread.id)).toBeUndefined();
 
+    // 撤掉教学状态机之前的老快照：stage/fallbackCount 两个键留在库里，读侧只取 settings（不迁移历史行）
+    const legacy = { stage: "verify", fallbackCount: 2, settings: state.settings };
+    expect(saveThreadState(repository, thread.id, legacy as unknown as typeof state)).toBe(true);
+    expect(readThreadState(repository, thread.id)).toEqual(state);
+
     softDeleteThread(repository, thread.id);
+    // 软删后拒收新的快照写入；已存的那份留在行里——「这个会话已删」是线程读侧挡的，不是靠清字段
     expect(saveThreadState(repository, thread.id, state)).toBe(false);
-    expect(readThreadState(repository, thread.id)).toBeUndefined();
+    expect(readThreadState(repository, thread.id)).toEqual(state);
   });
 
   it("scope 守卫只认三个取值", () => {

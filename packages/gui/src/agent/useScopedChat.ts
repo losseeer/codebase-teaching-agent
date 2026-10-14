@@ -24,14 +24,13 @@ export const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 /**
-  过程提示的中文文案，**两个作用域共用一份**：教学发的是 `{stage}`（多一个 deciding），
-  宏观/练习的工具循环发的是 `{type}`（thinking / reading / searching）。文案在这一层定——引擎不该关心中文措辞，
-  GUI 不该猜阶段语义。原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——
+  过程提示的中文文案，**三个作用域共用一份**：三条流发的都是 `{stage}` 形状的过程事件
+  （thinking / reading / searching）。文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
+  原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——
   引擎在思考第三轮，界面一直挂着「回复生成中…」。
   */
 export function progressText(event: { type?: string; stage?: string; round?: number; path?: string; query?: string }): string {
   const kind = event.stage ?? event.type;
-  if (kind === "deciding") return "正在判断本轮教学动作…";
   if (kind === "reading") return `正在读取 ${event.path || "代码文件"} …`;
   if (kind === "searching") return `正在检索代码：${event.query || "关键词"} …`;
   if (kind === "thinking") return event.round && event.round > 1 ? `正在思考（第 ${event.round} 轮）…` : "正在思考…";

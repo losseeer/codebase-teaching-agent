@@ -331,7 +331,7 @@ describe("教学作用域（SSE）", () => {
     return { reply: done.message.content, events };
   }
 
-  it("teach：合格回合 applicable 含三条不变量、无尾注，done.message 与库里正文一致", async () => {
+  it("teach：合格回合 applicable 含两条不变量、无尾注，done.message 与库里正文一致", async () => {
     const sessionId = await openSession();
     scripted = [`registerOrder 在 ${MAIN_FILE}:3 先跑，你觉得少了哪一步会先炸？`];
     const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "这一节我没看懂" } });
@@ -341,8 +341,9 @@ describe("教学作用域（SSE）", () => {
     expect(invariant.payload.scene).toBe("teach");
     const applicable = String(invariant.payload.applicable);
     expect(applicable).toContain("reference-grounding");
-    expect(applicable).toContain("socratic-question");
     expect(applicable).toContain("anchor-binding");
+    // socratic-question 这条尺子随教学状态机于 2026-10-14 删除（判据吃 stage 与本轮动作）
+    expect(applicable).not.toContain("socratic-question");
     expect(invariant.payload.failed ?? null).toBe(null);
     expect(invariant.sessionId).toBe(sessionId);
 
@@ -352,7 +353,7 @@ describe("教学作用域（SSE）", () => {
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("teach：没问句 + 假引用双双失守，尾注只由引用触发但仍进正文与库里", async () => {
+  it("teach：假引用失守，尾注进正文也进库里那一份", async () => {
     const sessionId = await openSession();
     scripted = ["直接讲结论，registerOrder 的作用与 src/missing.ts:1 无关。"];
     const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "再讲一遍" } });
@@ -360,7 +361,6 @@ describe("教学作用域（SSE）", () => {
 
     const failed = String(lastEvent("turn_invariant").payload.failed);
     expect(failed).toContain("reference-grounding");
-    expect(failed).toContain("socratic-question");
 
     expect(reply).toContain(TAIL);
     expect(deltasOf(events)).toBe(reply);
@@ -368,19 +368,17 @@ describe("教学作用域（SSE）", () => {
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("teach：通俗档不再判「点名标识符」，但引用与问句照判（档位只在环内生效才算数）", async () => {
+  it("teach：通俗档不再判「点名标识符」，引用照判（档位只在环内生效才算数）", async () => {
     const sessionId = await openSession({ style: 80 });
-    const answer = "这一步就是把请求交给注册表，你说先看哪个文件？";
+    const answer = `这一步就是把请求交给注册表，你先看 ${MAIN_FILE}:3 那一行？`;
     scripted = [answer];
     const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "换个通俗点的说法" } });
     const { reply } = replyOf(response.payload);
 
     const invariant = lastEvent("turn_invariant");
     const applicable = String(invariant.payload.applicable);
-    expect(applicable).toContain("socratic-question");
+    expect(applicable).toContain("reference-grounding");
     expect(applicable).not.toContain("anchor-binding");
-    // 没有引用形态的串 → 引用这条缩出分母，分母如实记
-    expect(applicable).not.toContain("reference-grounding");
     expect(invariant.payload.failed ?? null).toBe(null);
     expect(reply).toBe(answer);
   });
@@ -421,7 +419,9 @@ describe("LLM 工作日志落点", () => {
     await flushLlmLog();
     const lines = readFileSync(join(root, "llm.log"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(lines.length).toBe(fetchCalls);
-    expect(lines.map((line) => line.scene)).toEqual(expect.arrayContaining(["map.chat", "practice.chat", "teaching.turn", "teaching.action"]));
+    // `teaching.action` 这一档随教学状态机一起没了：问答回合每个回合只发一趟措辞调用
+    expect(lines.map((line) => line.scene)).toEqual(expect.arrayContaining(["map.chat", "practice.chat", "teaching.turn"]));
+    expect(new Set(lines.map((line) => line.scene))).not.toContain("teaching.action");
     expect(lines.every((line) => line.ok === true)).toBe(true);
     // 四条路径都标了线程：日志里出现的线程集合 == 本文件真正问过的线程集合
     const threads = new Set(lines.map((line) => line.threadId));
@@ -574,33 +574,31 @@ describe("预算触顶时不放行付费分支", () => {
   });
 
   /**
-    降级那一轮的账面：`token_usage` 必须**只**在真调用过模型时才有 token，而「这一轮走了本地规则」
-    得有一条 `mode: "degraded"` 的记录。两条口径曾经都错——正文按字数÷4 造一份不存在的 token（免费回合
-    吃掉预算，反过来把付费分支关掉），而记账处又改看「本会话累计成本」，于是闸门放行了却没人知道。
-    这条同时是那个事故的回归网。
+    问答回合与 map/practice 共用同一条闸门：触顶时**开火前就 422**，不再回一段本地文案
+    （那段文案是教学状态机造的，阶梯已于 2026-10-14 撤掉）。所以这一轮的账面是「什么都没发生」。
     */
-  it("teach 降级回合：一条模型调用都不打，token 记 0，且降级留痕确实落进 journal", async () => {
-    await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
+  it("teach 触顶回合：拒在开火前，一次模型调用都不打、一行账都不记", async () => {
+    const closed = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
+    expect((closed.json() as { mode: string }).mode).toBe("degraded");
     const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
     const sessionId = (created.json() as { session: { id: string } }).session.id;
 
     const callsBefore = fetchCalls;
     const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "这一节我没看懂" } });
-    const events = sseEvents(response.payload);
-    expect(events.some((event) => event.type === "error" || event.type === "aborted"), "降级回合照样要走完收尾").toBe(false);
-    expect(events.some((event) => event.type === "done")).toBe(true);
-    expect(fetchCalls, "预算触顶后这一轮不该打到模型上").toBe(callsBefore);
+    expect(response.statusCode).toBe(422);
+    expect(String((response.json() as { error: string }).error)).toContain("预算");
+    expect(fetchCalls, "触顶后这一轮不该打到模型上").toBe(callsBefore);
+    // 没开火就没有账：这一轮既不进 token_usage 也不进 turn_text，成本页的「计费回合」不必再减降级行
+    expect(eventsOf("token_usage").filter((event) => event.sessionId === sessionId)).toEqual([]);
+    expect(eventsOf("turn_text").filter((event) => event.sessionId === sessionId)).toEqual([]);
+  });
 
-    const usage = eventsOf("token_usage").filter((event) => event.sessionId === sessionId);
-    // 一个回合**只留一行**：成本页的「计费回合」= token_usage 行数 − `mode:"degraded"` 行数，
-    // 降级回合若另留一条 0 token 的正常行，就同时进了两个分子——免费那一轮会被算成付过钱。
-    expect(usage.length, "降级回合只留那条降级记录").toBe(1);
-    // 没有真 usage 就是 0：字数换算的估算进账本会被当成花掉的钱
-    expect(usage.every((event) => Number(event.payload.input_tokens ?? 0) === 0 && Number(event.payload.output_tokens ?? 0) === 0), "本地回合不能记下没花过的 token").toBe(true);
-    // 闸门确实留了痕：降级不是静默回落
-    expect(usage[0].payload.mode, "触顶回合要有可查的降级记录").toBe("degraded");
-    expect(usage[0].payload.cause).toBe("monthly_budget_reached");
-
+  /**
+    闸门值是这个 describe 唯一的共享状态：每条用例跑完都还回默认预算。
+    以前只在用例末尾手抖一句还原——一旦中间某条断言先红，还原就跳不过去，
+    后面的 teach/map 用例会整片变成 422（撤掉本地兜底之后，这种泄露再也藏不住）。
+    */
+  afterEach(async () => {
     await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
   });
 });
@@ -995,7 +993,7 @@ describe("源码出境清单", () => {
     expect(egress().slice(before)).toEqual([]);
   });
 
-  it("教学回合：动作提议与措辞各发一次上下文，就记两次（同一段代码确实出了两次门）", async () => {
+  it("教学回合：只剩措辞那一趟调用，同一段摘录就只记一次（撤掉动作提议前的两次出境已成历史）", async () => {
     const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
     const sessionId = (created.json() as { session: { id: string } }).session.id;
     usedThreads.add(sessionId);
@@ -1006,8 +1004,9 @@ describe("源码出境清单", () => {
 
     const rows = egress().slice(before);
     const scenes = new Set(rows.map((row) => row.payload.scene));
-    expect([...scenes].sort()).toEqual(["teaching.action", "teaching.turn"]);
-    // 两个 scene 都真的带着同一段摘录出门：不是只记了一条「本轮看过 src/main.ts」
+    // 以前这里是两档（teaching.action + teaching.turn）：动作提议那一趟随状态机一起撤了，只剩措辞那一趟
+    expect([...scenes].sort()).toEqual(["teaching.turn"]);
+    // 真的带着那段摘录出门：不是只记了一条「本轮看过 src/main.ts」
     for (const scene of scenes) expect(rows.filter((row) => row.payload.scene === scene).map((row) => row.payload.path)).toContain(MAIN_FILE);
     expect(rows.every((row) => row.sessionId === sessionId)).toBe(true);
     expect(rows.some((row) => JSON.stringify(row).includes("// line 3"))).toBe(false);

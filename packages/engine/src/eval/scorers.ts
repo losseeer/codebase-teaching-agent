@@ -159,33 +159,32 @@ export function scoreSearchArm(cases: SearchCase[], search: (query: string) => s
   };
 }
 
-// ---------- 第 2 刀：教学法不变量机检（数据源 = journal 的 turn_text + hint_depth + style_shift） ----------
+// ---------- 第 2 刀：教学法不变量机检（数据源 = journal 的 turn_text + style_shift） ----------
 
-/** 一个教学回合的机检视图：由 runner 从 journal 装配，判分器保持纯函数。 */
+/** 一个回合的机检视图：由 runner 从 journal 装配，判分器保持纯函数。 */
 export interface TeachTurn {
   sessionId: string;
   at: string;
   question: string;
   answer: string;
-  /** 回合后状态机阶段（hint_depth.payload.stage）。 */
-  stage: string;
-  /** 该回合生效的教学法/风格（回合前最近一次 style_shift 快照）。 */
-  pedagogy: string;
+  /** 该回合生效的风格档（回合前最近一次 style_shift 快照）。 */
   style: number;
   /** 回复落盘时被 2000 字截断——引用核对会看到半截引用，这条不参与引用判分。 */
   answerTruncated: boolean;
   /**
     缺省 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
-    「留问句」与「绑定锚点」两条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。
+    「绑定锚点」这条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。
+
+    2026-10-14 撤掉教学状态机时，第三条 `socratic-question`（每轮留一个可核对的问题）整条删掉：
+    它的判据吃 `stage` 与「本轮动作」，而动作由状态机决定——生产者没了，这条尺子量的东西已经不存在了。
     */
   scene?: "teach" | "map_chat" | "practice_chat";
 }
 
-export type InvariantId = "socratic-question" | "reference-grounding" | "anchor-binding";
+export type InvariantId = "reference-grounding" | "anchor-binding";
 
-/** 三条不变量的定义表：离线报告与运行期提示共用同一份措辞与出处，改一处就两边一起变。 */
+/** 不变量的定义表：离线报告与运行期提示共用同一份措辞与出处，改一处就两边一起变。 */
 const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
-  { id: "socratic-question", label: "苏格拉底每轮留一个可核对的问题（回复含问句）", source: "tutor-settings.ts「每轮保留一个可验证的问题」" },
   { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", source: "锚点可靠性纪律（第 1 刀同一口径）" },
   { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", source: "tutor-settings.ts「将问题绑定到当前源码锚点」" }
 ];
@@ -243,11 +242,11 @@ export interface TurnInvariantVerdict {
 const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
 
 /**
-  单回合的三条不变量机检——**离线判分器与运行期在环复检共用这一个实现**。
+  单回合的不变量机检——**离线判分器与运行期在环复检共用这一个实现**。
   分成两份实现的后果是「线上说合格、离线算不合格」，那比没有复检更糟。
 
-  判「通过」的口径刻意保守：如问号检查只抓「整条回复一个问句都没有」，
-  代码示例里的三元 `?` 可能造成极个别假通过——读数只用于回归对比，不当绝对分。
+  判「通过」的口径刻意保守：引用核对只看「文件在不在索引、行号越不越界」，
+  代码示例里的三元 `?` 之类可能造成极个别假通过——读数只用于回归对比，不当绝对分。
   */
 export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>): TurnInvariantVerdict {
   const teach = (turn.scene ?? "teach") === "teach";
@@ -255,13 +254,6 @@ export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>)
   const failed: InvariantId[] = [];
   const evidence: TurnInvariantVerdict["evidence"] = {};
 
-  if (teach && turn.pedagogy === "socratic" && turn.stage !== "confirmed") {
-    applicable.push("socratic-question");
-    if (!/[?？]/.test(turn.answer)) {
-      failed.push("socratic-question");
-      evidence["socratic-question"] = excerpt(turn.answer);
-    }
-  }
   // 截断行的末尾可能悬着半截引用，判它等于误判——缩出分母，报告里单独计数
   if (!turn.answerTruncated) {
     const refs = scoreReferences([turn.answer], files);

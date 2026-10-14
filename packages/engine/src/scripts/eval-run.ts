@@ -340,7 +340,8 @@ if (!teachTurns.length) {
 emit();
 console.log(out.join("\n"));
 
-/** 从 journal 事件流装配 teach 回合的机检视图：stage 取本回合最近的 hint_depth，pedagogy/style 取回合前最后一次 style_shift。 */
+/** 从 journal 事件流装配问答回合的机检视图：style 取回合前最后一次 style_shift。
+    2026-10-14 撤掉教学状态机后这里不再捞 `hint_depth` 的 stage——那条不变量（每轮留问句）也一并从判分表里删了。 */
 function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[] {
   const bySession = new Map<string, typeof events>();
   for (const event of events) {
@@ -352,20 +353,16 @@ function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[]
   const turns: TeachTurn[] = [];
   for (const [sessionId, list] of bySession) {
     const chrono = [...list].sort((a, b) => a.at.localeCompare(b.at));
-    const hints = chrono.filter((e) => e.type === "hint_depth");
     const shifts = chrono.filter((e) => e.type === "style_shift");
     for (const event of chrono) {
       if (event.type !== "turn_text" || event.payload.scene !== "teach") continue;
       const at = event.at;
-      const hint = hints.find((h) => h.at >= at) ?? hints.at(-1);
       const shift = [...shifts].reverse().find((s) => s.at <= at) ?? shifts[0];
       turns.push({
         sessionId,
         at,
         question: String(event.payload.question ?? ""),
         answer: String(event.payload.answer ?? ""),
-        stage: typeof hint?.payload.stage === "string" ? hint.payload.stage : "",
-        pedagogy: typeof shift?.payload.pedagogy === "string" ? shift.payload.pedagogy : "socratic",
         style: typeof shift?.payload.style === "number" ? shift.payload.style : 50,
         answerTruncated: event.payload.answer_truncated === true
       });

@@ -188,6 +188,8 @@ for (const repo of perRepo) {
   emit(`- file_read：${reads.length} 条（归并后），其中 denied ${pct(reads.length - readOk.length, reads.length)}`);
 
   // teach_moment 类型已随 companion 功能整体移除（2026-09-22），不再统计。
+  // hint_depth / action_veto / unit_mastered 自 2026-10-14 起**不再有生产者**（教学状态机撤除），
+  // 下面的计数会停在历史值上——那是「没有新行」，不是「事件掉了」。
   emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "hint_depth", "action_veto", "unit_mastered", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);
 
   // 练习漏斗（09-22 补口径）：送达(exercise_generated)→提交(exercise_submitted, UI 侧)→判分通过(exercise_result)；断在哪一步看拒绝的阶段分布
@@ -275,7 +277,7 @@ emit();
 emit("## 5. 本轮明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
 emit("- 作用域降级：已埋 `scope_degraded`（见 §4 读数）；埋点前发生的降级无法回补，基线从本次起算；");
 emit("- 推荐入口采纳/改选：已埋 `entry_adopted`/`entry_overridden`（见 §4 读数，口径=开文件即改选）；埋点前的点击无法回补；");
-emit("- 每教会一个节点的平均成本：unit_mastered 样本 ≈ 0（见上面完整度行），分母不成立 → 先补事件再算；");
+emit("- 每教会一个节点的平均成本：分母是 `unit_mastered`，而它随教学状态机于 2026-10-14 停止产生 → 这条指标**不再有口径**，要问「一次问答多少成本」看 §2 的 teach 场景行；");
 emit("- 表达质量归因（文件:行号 落点核验）：回合文本不落盘（教条），走离线评测档。");
 emit();
 console.log(out.join("\n"));

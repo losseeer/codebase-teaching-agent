@@ -1,4 +1,4 @@
-import type { ChatScope, ChatThread, ChatThreadMessage, TeachingStage, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, ChatThreadMessage, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import { TutorDatabase, type ChatMessageRow, type ChatSessionRow } from "./database.js";
 
@@ -57,7 +57,6 @@ function messageOf(row: ChatMessageRow): ChatThreadMessage {
     role: row.role as "user" | "assistant",
     content: row.content,
     createdAt: row.created_at,
-    ...(row.stage ? { stage: row.stage as TeachingStage } : {}),
     ...(row.error ? { error: row.error } : {})
   };
 }
@@ -113,7 +112,6 @@ export function latestThreadForNode(repositoryPath: string, repositoryId: string
 export interface NewMessage {
   role: "user" | "assistant";
   content: string;
-  stage?: TeachingStage;
   error?: string;
 }
 
@@ -133,7 +131,6 @@ export function appendMessages(repositoryPath: string, threadId: string, message
         role: message.role,
         content: message.content,
         createdAt: now,
-        stage: message.stage ?? null,
         error: message.error ?? null
       });
     }
@@ -143,21 +140,18 @@ export function appendMessages(repositoryPath: string, threadId: string, message
 }
 
 /**
-  教学回合的状态快照：状态机接着走需要的三样（档位设置 / stage / fallback 计数）。
-  map/practice 没有状态机，这两函数只对 scope='teach' 有意义。
+  问答线程的状态快照：**只剩设置那一格**。2026-10-14 撤掉教学状态机后 `stage` / `fallbackCount`
+  既不再推进也不再读——历史行的 `state_json` 里那两个键还在，读侧忽略即可，不做迁移。
+  map/practice 没有这个快照，只有 scope='teach' 的线程写。
 
-  读侧**不做兜底**：缺字段就返回 `undefined`，调用方按「这轮没有可续的状态」处理——
-  把「没记」伪装成默认值，等于让会话从 orient 假装重来一遍。
+  读侧**不做兜底**：`settings` 不齐就返回 `undefined`，调用方按「这轮没有可续的状态」处理——
+  把「没记」伪装成默认值，等于让会话从默认档假装重来一遍。
   */
 export interface TeachingThreadState {
-  stage: TeachingStage;
-  fallbackCount: number;
   settings: TutorSettings;
 }
 
-const STAGES: TeachingStage[] = ["orient", "procedure", "concept", "verify", "confirmed"];
-
-/** 宽松读：只保证形状对（字段齐、枚举合法、计数非负整数）；settings 的逐字段归型留给 validateSettings。 */
+/** 宽松读：只保证形状对（settings 在场）；逐字段归型留给 validateSettings。 */
 export function readThreadState(repositoryPath: string, threadId: string): TeachingThreadState | undefined {
   const row = withDatabase(repositoryPath, (database) => database.getChatSession(threadId));
   if (!row?.state_json) return undefined;
@@ -169,10 +163,8 @@ export function readThreadState(repositoryPath: string, threadId: string): Teach
   }
   const state = parsed as Partial<TeachingThreadState> | null;
   if (!state || typeof state !== "object") return undefined;
-  if (typeof state.stage !== "string" || !(STAGES as string[]).includes(state.stage)) return undefined;
-  if (typeof state.fallbackCount !== "number" || !Number.isInteger(state.fallbackCount) || state.fallbackCount < 0) return undefined;
   if (!state.settings || typeof state.settings !== "object") return undefined;
-  return { stage: state.stage as TeachingStage, fallbackCount: state.fallbackCount, settings: state.settings };
+  return { settings: state.settings };
 }
 
 /** 全量覆盖状态快照（回合收尾时写；不改 `updated_at`，那由 appendMessages 负责）。已软删线程返回 false。 */
