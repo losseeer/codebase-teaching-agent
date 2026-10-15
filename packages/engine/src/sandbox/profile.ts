@@ -7,6 +7,9 @@
     而它需要的读也在被拒之列。可用形状是「默认放行 + 点名拒读敏感子树」，
     即 `(deny file-read* (subpath "$HOME"))` 把家目录整片拒掉，**再把解释器自己的根后置放行**——
     SBPL 是同操作下后写的规则覆盖先写的，所以「先拒家目录、再放 `/Users/…/miniconda3`」是真生效的（已验）。
+    ⚠️ 2026-10-15 又试了一次并留了读数：白名单里连 `/usr`、`/System/Library`、`/private/etc`、`/dev`、
+    TMPDIR、node/python/javac/java 各自的根全都放行之后，三语言与 `node -e` **一律 SIGABRT（exit=null）**。
+    所以「默认拒绝」这条路在本机 macOS 上走不通，别再用它当方案；要护住什么就往名单里点名。
   - **`deny network*` 与 `deny process-fork` 放在 profile 层是安全的**，不会杀掉 launcher（已验：
     echo/node/python3/javac/java 全部照常跑，而 fork 与 connect 在沙箱内拿到 EPERM）。
     这一条顺带解决了 fork 炸弹：连一次 `fork()` 都出不去，不需要 rlimit。
@@ -19,8 +22,17 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { hash } from "../lib.js";
 
-/** 沙箱拒读到哪为止：家目录整片（引擎口令、被学习仓、`.ssh` 都在里面）加上可移动盘。 */
-const DENY_READ_SUBTREES = () => [homedir(), "/Volumes", "/Network"];
+/**
+  恒定拒读的子树：家目录整片（引擎口令、`.ssh`、多数仓都在这里）加上可移动盘与网络挂载。
+  ⚠️ 这一份**不够**：`POST /imports` 收任意绝对路径，仓完全可以住在 `/opt`、`/srv`、`/Volumes` 之外——
+  2026-10-15 实测确认，一个放在家目录之外的「仓」（里面有 `.tutor/tutor.db`＝标准答案与 hidden 测试）
+  在旧名单下照读不误。所以被学习仓的根必须由调用方**逐次点名**（`seatbeltProfile` 的 `options.denyRead`，
+  产品侧三个入口都从 `runSandbox` 强制带 `repositoryPath`）。
+  为什么不改成「默认拒读 + 白名单放行」：试过，且在这台 macOS 上不可行——见本文件顶部那条 SIGABRT。
+*/
+function deniedReadRoots(): string[] {
+  return [homedir(), "/Volumes", "/Network"];
+}
 
 /**
   系统级只读根：解释器要用的 dyld/时区/框架都在这里。`/usr` 是宽的，但它不含用户数据，
@@ -92,16 +104,25 @@ const quote = (value: string): string => `"${value.replaceAll("\\", "\\\\").repl
 /**
   生成一份 Seatbelt profile。
   @param workdir 本次运行的沙箱目录（必须是 realpath 后的绝对路径，`/tmp` 会解析成 `/private/tmp`）
+  @param options.denyRead 额外点名拒读的子树——**被学习仓的根就走这里**（见 `deniedReadRoots`）
 */
-export function seatbeltProfile(workdir: string, toolchain: Partial<SandboxToolchain>, options: { allowNetwork?: boolean; allowFork?: boolean } = {}): string {
+export function seatbeltProfile(workdir: string, toolchain: Partial<SandboxToolchain>, options: { allowNetwork?: boolean; allowFork?: boolean; denyRead?: string[] } = {}): string {
   const writable = [workdir, realpathSafe(tmpdir()), "/dev"];
+  // 家目录那一档在前、系统根在后：SBPL 是同操作下**后写的覆盖先写的**，
+  // 所以「先拒家目录、再放 `~/miniconda3` 的解释器根」是真生效的（§53 实测形状）。
+  const blanket = deniedReadRoots().filter((root) => existsSync(root));
+  // 点名要护住的仓放在所有 allow **之后**：优先级反过来变成「系统根赢」，
+  // 一个恰好住在 `/usr/local/...` 里的仓就白护了。沙箱本来就不该读仓（判分不读仓库源码是不变量），
+  // 所以这一档压在所有放行上面没有副作用。
+  const named = (options.denyRead ?? []).map((root) => realpathSafe(root)).filter((root) => root && existsSync(root));
   const rules: string[] = [
     "(version 1)",
     "(allow default)",
     options.allowNetwork ? "; (network allowed: 仅隔离探测用来证明默认是拒的)" : "(deny network*)",
     options.allowFork ? "; (fork allowed: 仅隔离探测用)" : "(deny process-fork)",
-    ...DENY_READ_SUBTREES().filter((root) => root && existsSync(root)).map((root) => `(deny file-read* (subpath ${quote(root)}))`),
+    ...blanket.map((root) => `(deny file-read* (subpath ${quote(root)}))`),
     ...[...SYSTEM_READ_ROOTS, ...interpreterReadRoots(toolchain)].filter((root) => existsSync(root)).map((root) => `(allow file-read* (subpath ${quote(root)}))`),
+    ...[...new Set(named)].map((root) => `(deny file-read* (subpath ${quote(root)}))`),
     "(deny file-write*)",
     ...writable.map((root) => `(allow file-write* (subpath ${quote(root)}))`)
   ];

@@ -28,6 +28,7 @@ import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { allowsRepository, authenticate, authStateOf, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
+import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
 import { markActor, markThread, runWithTrace } from "./trace/context.js";
@@ -75,10 +76,28 @@ export const app = Fastify({
 // CORS 必须先于认证钩子注册：钩子按注册顺序跑，认证若是第一个，401 就会被它短路——
 // 跨来源部署时那个响应**没有 access-control-allow-origin**，浏览器里只剩一句「网络错误」，
 // 用户看不到引擎说的那句中文原因（本机 vite 代理下同源，才看不出这个顺序问题）。
-await app.register(cors, { origin: true });
+// 来源不再反射任意值：只有可信来源才给 `access-control-allow-origin`（判据一处：`security/origins.ts`）。
+// 旧写法 `{ origin: true }` 等于对浏览器说「谁来的都给你读」，而引擎只听 127.0.0.1——
+// 本机任意网页照样能把请求打过来，缺的只是读响应这一步，而它正好被这行补上。
+await app.register(cors, { origin: (origin, callback) => callback(null, Boolean(origin && isTrustedOrigin(origin))) });
 tboot("cors registered");
 // 请求级 trace 上下文：`run(id, done)` 让后续钩子与 handler 继承该 store（传播原理见 trace/context.ts）
 app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
+
+/**
+  来源闸：不可信的 `Origin` 当场拒掉，**不执行**任何 handler——光靠不给 CORS 头只是让浏览器读不到响应，
+  服务端该做的事还是做了（对 GET 是白干活，对写类路由是已经把状态改了）。
+  预检交给 CORS 插件（它不给非可信来源回头，实际请求就到不了这儿）；`/api/health` 豁免：
+  进程管理器与监控页只问活没活，不该为它配来源。
+  顺序在认证钩子**之前**：来源不可信时连「这张 key 行不行」都不必问，也就不给探测者区分
+  「有口令」与「口令不对」这一格读数。
+  */
+app.addHook("onRequest", async (request, reply) => {
+  const origin = request.headers.origin;
+  if (!origin || request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
+  if (isTrustedOrigin(origin)) return;
+  return reply.code(403).send({ error: `来源「${origin}」不在可信清单里：引擎默认只服务本机浏览器（回环来源）。跨来源部署请用 TUTOR_ALLOWED_ORIGINS 把这个来源加进清单。`, reason: "origin_not_trusted" });
+});
 
 /**
   认证与按仓授权（企业形态的第一道闸；key 的三条口径——没配 key = 没闸、坏文件 = fail-closed、
@@ -116,6 +135,22 @@ function announceGate(state: AuthState, keys = 0): void {
   gateAnnounced = state;
   traceEngine(state === "broken" ? "degrade" : "boot", { what: "auth_gate", state, keys }, { traceId: null });
 }
+
+/**
+  来源闸：不可信的 `Origin` 当场 403，**handler 一行都不执行**。
+  光靠 CORS 不给回头只挡住「浏览器读到响应」，服务端该干的活照样干了（写类路由会把状态改掉）；
+  这一道把它挪到执行之前。预检交给 CORS 插件——非可信来源拿不到回头的预检响应，实际请求根本到不了这儿。
+  顺序刻意在认证钩子**之前**：来源都不信了，不必再回答「有没有口令、口令对不对」，
+  免得给探测者一格免费的可信度读数。
+  ⚠️ 这一道**不豁免 `/api/health`**：那条路由免的是**认证**（进程管理器只问活没活，它们不带 Origin，
+  照样走得通），不是免来源。健康读数里有服务商、模型名、沙箱闸门状态——那是给下一步攻击踩点用的，
+  别让任意网页白拿。
+  */
+app.addHook("onRequest", async (request, reply) => {
+  const origin = request.headers.origin;
+  if (!origin || request.method === "OPTIONS" || isTrustedOrigin(origin)) return;
+  return reply.code(403).send({ error: `来源「${origin}」不在可信清单里：引擎默认只服务本机浏览器（回环来源）。跨来源部署请把该来源写进 TUTOR_ALLOWED_ORIGINS。`, reason: "origin_not_trusted" });
+});
 
 app.addHook("onRequest", async (request, reply) => {
   const state = authStateOf();
@@ -1641,7 +1676,7 @@ if (!process.env.VITEST) {
   console.log(`[engine] 认证：${gate === "on" ? `已启用（${keyCount} 张 key，${file}）` : gate === "broken" ? `**口令文件读不出来（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503，请把这份文件修好` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
   announceGate(gate, keyCount);
   /**
-    沙箱隔离探测：九项 canary 要起九个进程，放后台跑（不拖监听），但结果必须开机就看得见。
+    沙箱隔离探测：逐项 canary 要起十来个进程，放后台跑（不拖监听），但结果必须开机就看得见。
     没过的话代码题域整域禁用（2026-10-14 拍板：不降级成「弱隔离照跑」），这条与认证闸、预算闸同一纪律——
     闸门失效不能等到用户点下按钮才知道（§36.6、§44）。
     */

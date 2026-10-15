@@ -417,7 +417,7 @@ export class ExerciseService {
       const journal = new Journal(repository.path, repository.index.repositoryId);
       let graded = stored.expected.type === "rubric"
         ? await gradeRubric(stored, answer, provider)
-        : await grade(stored, answer, journal);
+        : await grade(stored, answer, journal, repository.path);
       /**
         程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
         代码题**不在这里花钱**——它的反馈就是测试计数，而「讲一遍」按需由界面点一次才发一趟（刀 4），
@@ -564,9 +564,9 @@ function baseExercise(repository: PracticeRepository, kind: ExerciseKind, target
 
 type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">;
 
-async function grade(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal): Promise<GradeOutcome> {
+async function grade(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal, repositoryPath: string): Promise<GradeOutcome> {
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
-  if (stored.expected.type === "harness") return gradeHarness(stored, answer, journal);
+  if (stored.expected.type === "harness") return gradeHarness(stored, answer, journal, repositoryPath);
   // 旧缓存行（`{ type: "output" }`，2026-10-14 随 output_prediction 一起退役）落在这里：
   // 出题口径版本已 bump 到 v3，正常路径不会再读到它们；真读到了要明说「重新生成」，不能默默判错。
   throw new Error("该练习类型已不再支持；请重新生成练习。");
@@ -579,7 +579,7 @@ async function grade(stored: StoredExercise, answer: ExerciseAnswer, journal: Jo
     这跟「测试挂了」是两件事，混起来学习者会去改一个根本不存在的断言；
   - 分数 = 通过数 / 总断言数，与 `gradeSet` 同一个口径（分母是两边的并集，不是只数答对的）。
 */
-async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal): Promise<GradeOutcome> {
+async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, journal: Journal, repositoryPath: string): Promise<GradeOutcome> {
   const expected = stored.expected as Extract<ExpectedAnswer, { type: "harness" }>;
   const slotPaths = new Set((stored.exercise.code?.files ?? []).map((file) => file.path));
   const submitted = (answer.files ?? []).filter((file) => slotPaths.has(file.path) && file.contents.trim());
@@ -587,7 +587,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, jour
     return { score: 0, passed: false, automatic: true, feedbackSource: "sandbox", feedback: "没收到代码文件；请在编辑器里写下实现再提交。" };
   }
   const files = [...expected.hidden.map((file) => ({ ...file })), ...submitted.map((file) => ({ path: file.path, contents: file.contents }))];
-  const run = await runSandbox({ language: expected.language, entry: expected.entry, files });
+  const run = await runSandbox({ language: expected.language, entry: expected.entry, files, repositoryPath });
   const verdict = verdictOf(run);
   journal.append("exercise_run", {
     stage: "grade", label: "learner", language: expected.language, exercise_id: stored.exercise.id,

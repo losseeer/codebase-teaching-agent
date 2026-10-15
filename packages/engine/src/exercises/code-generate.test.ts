@@ -10,6 +10,7 @@ import { indexRepository } from "../indexer/indexer.js";
 import type { LlmProvider } from "../llm/provider.js";
 import { readJournal } from "../store/journal.js";
 import { TutorDatabase } from "../store/database.js";
+import { nestedSandboxUsable } from "../sandbox/capability.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
 /**
@@ -17,6 +18,13 @@ import { ExerciseService, type PracticeRepository } from "./exercises.js";
   零模型调用、真执行——「跑测试判分」这句话只能用跑过来自证，用例里不接受任何 mock 掉的沙箱。
 */
 
+/**
+  这一份整体是**集成**用例：自证两跑、判分、讲评前的重跑都要真起沙箱（假沙箱就等于没验「跑测试判分」这句话）。
+  环境起不了嵌套 `sandbox-exec` 时整片按「环境不支持」跳过并在输出里点名——跳过不是通过（#168 同一条），
+  而「探测没过 ⇒ 代码题域整域禁用」那半条保证由 `sandbox.test.ts` 里不依赖真跑的几条钉住。
+*/
+const capability = nestedSandboxUsable();
+if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
 const temporaryDirectories: string[] = [];
 
@@ -89,7 +97,7 @@ function targetUnit(repository: PracticeRepository): string {
   return unit.id;
 }
 
-describe("代码题出题自证链", { timeout: 60_000 }, () => {
+describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_000 }, () => {
   it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -176,7 +184,7 @@ describe("代码题出题自证链", { timeout: 60_000 }, () => {
   });
 });
 
-describe("代码题判分", { timeout: 60_000 }, () => {
+describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () => {
   async function generatedExercise(): Promise<{ repository: PracticeRepository; service: ExerciseService; exerciseId: string }> {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -262,7 +270,7 @@ describe("代码题判分", { timeout: 60_000 }, () => {
   });
 });
 
-describe("代码题按需讲评", { timeout: 60_000 }, () => {
+describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }, () => {
   async function prepared(explainReply: string) {
     const repository = testRepository();
     const service = new ExerciseService();

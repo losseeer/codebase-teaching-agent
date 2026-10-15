@@ -4,7 +4,7 @@
   为什么不能省这一层：profile 写错了**不会报错**，它只会让沙箱里的代码照常读你的家目录。
   所以判定只能来自「真跑一遍恶意样本、看它是不是真被挡」，而不是「sandbox-exec 存在且 profile 语法过」。
 
-  九项 checks 全过才叫 `enforced`；任何一个不过就是 `unavailable`，**整个代码题域禁用**
+  每一项 checks 全过才叫 `enforced`；任何一个不过就是 `unavailable`，**整个代码题域禁用**
   （2026-10-14 拍板：不降级成「弱隔离照跑」）。`runSandbox` 是唯一对外入口，它先过这道闸。
 
   对照组（`baseline`）是刻意只给三条做的：读家目录、外连、fork。
@@ -13,9 +13,11 @@
   它记在 `control` 字段上如实显示「这一条没证成」。
 */
 import { createServer } from "node:net";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { runRaw, type SandboxRun } from "./runner.js";
+import { realpathSync } from "node:fs";
+import { runRaw, type SandboxRun, type SandboxRunOptions } from "./runner.js";
 import { isolationBackend } from "./profile.js";
 
 export type IsolationLevel = "unknown" | "enforced" | "unavailable";
@@ -85,11 +87,18 @@ export function stubIsolationForTest(status: IsolationStatus): void {
   inFlight = undefined;
 }
 
-/** 判分/出题的唯一入口：先把闸门过一遍，再交给 runner。 */
-export async function runSandbox(...args: Parameters<typeof runRaw>): Promise<SandboxRun> {
+/**
+  判分/出题的唯一入口：先把闸门过一遍，再交给 runner。
+  ⚠️ `repositoryPath` 是**必填**的：它不是为了定位源码（判分路径永不读仓库源码，那是不变量），
+  而是为了把这一次跑的仓点名拒读。地址簿收的是任意绝对路径，「仓在家目录里」根本不成立，
+  只靠家目录那份恒定名单会漏掉 `/opt`、`/srv` 这类位置——那里的 `.tutor/tutor.db` 装着标准答案与 hidden 测试。
+  把它定成必填而不是可选项，是为了让「忘了护仓」变成编译错误，不是一条要靠 review 才发现的漏口。
+*/
+export async function runSandbox(options: SandboxRunOptions & { repositoryPath: string }): Promise<SandboxRun> {
   const status = await ensureIsolation();
   if (status.level !== "enforced") throw new SandboxUnavailableError(status);
-  return runRaw(...args);
+  const { repositoryPath, ...rest } = options;
+  return runRaw({ ...rest, denyRead: [...(rest.denyRead ?? []), repositoryPath] });
 }
 
 const readHomeCanary = (home: string): string => `import { readdirSync } from "node:fs";
@@ -102,6 +111,24 @@ socket.on("error", (error) => { console.log("BLOCKED", error.code ?? error.name)
 setTimeout(() => { console.log("BLOCKED", "timeout"); process.exit(0); }, 1500);
 `;
 
+/**
+  读「被点名拒读的仓」。`/opt`、`/srv` 这类位置的仓不在家目录那份恒定名单里，
+  靠调用方每次把仓的根塞进 `denyRead` 才护得住——这一项就是证明确实塞了、也确实生效。
+*/
+const readSentinelCanary = (target: string): string => `import { readFileSync } from "node:fs";
+try { console.log("LEAK", readFileSync(${JSON.stringify(target)}, "utf8").trim()); } catch (error) { console.log("BLOCKED", error.code ?? error.name); }
+`;
+
+/**
+  沙箱内自己建一条指向仓的符号链接再读：Seatbelt 判的是解析后的目标，链接不该成为绕行口。
+  ⚠️ 链接必须建在**工作目录里**（用相对名；cwd 就是 workdir）。写到 /tmp 会被写侧规则先拒一次，
+  于是读到的是 ENOENT 而不是 EPERM——那条用例就会「因为别的原因」变绿，等于没验。
+*/
+const readSymlinkCanary = (target: string): string => `import { symlinkSync, readFileSync } from "node:fs";
+symlinkSync(${JSON.stringify(target)}, "link-to-repo");
+try { console.log("LEAK", readFileSync("link-to-repo", "utf8").trim()); } catch (error) { console.log("BLOCKED", error.code ?? error.name); }
+`;
+
 const forkCanary = `import { spawnSync } from "node:child_process";
 const result = spawnSync("/usr/bin/true", { encoding: "utf8" });
 console.log(result.error ? \`BLOCKED \${result.error.code ?? result.error.name}\` : "LEAK");
@@ -112,6 +139,14 @@ function outcome(run: SandboxRun): string {
 }
 
 /** 真跑 canary。只在探测里用，别拿它当出题/判分路径。 */
+function realpathSafeDir(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 export async function probeIsolation(): Promise<IsolationStatus> {
   const started = Date.now();
   const backend = isolationBackend();
@@ -136,6 +171,25 @@ export async function probeIsolation(): Promise<IsolationStatus> {
   const homeRun = await runRaw({ language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readHomeCanary(home) }] });
   const homeControl = await runRaw({ baseline: true, language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readHomeCanary(home) }] });
   push("read-home", homeRun.stdout.includes("BLOCKED"), homeControl.stdout.includes("LEAK") ? "leaked" : "also-blocked", `${outcome(homeRun)} / 对照 ${outcome(homeControl)}`);
+
+  // 2b) 仓不在家目录里也要读不到：拿一个家目录之外的临时目录当「装在 /opt 的仓」，里面放 `.tutor/tutor.db`
+  //     （判分与自证本来就不读仓库源码——读到了就是读到标准答案）
+  const standIn = mkdtempSync(join(realpathSafeDir(tmpdir()), "tutor-sandbox-repo-"));
+  mkdirSync(join(standIn, ".tutor"), { recursive: true });
+  writeFileSync(join(standIn, ".tutor", "tutor.db"), "SENTINEL-STANDARD-ANSWERS\n", "utf8");
+  try {
+    const repoRun = await runRaw({ denyRead: [standIn], language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readSentinelCanary(join(standIn, ".tutor", "tutor.db")) }] });
+    const repoControl = await runRaw({ baseline: true, language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readSentinelCanary(join(standIn, ".tutor", "tutor.db")) }] });
+    push("read-repo", repoRun.stdout.includes("BLOCKED"), repoControl.stdout.includes("LEAK") ? "leaked" : "also-blocked", `${outcome(repoRun)} / 对照 ${outcome(repoControl)}`);
+
+    const linkTarget = join(standIn, ".tutor", "tutor.db");
+    const linkRun = await runRaw({ denyRead: [standIn], language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readSymlinkCanary(linkTarget) }] });
+    // 对照组同一条链接在沙箱外必须真读得到：否则「BLOCKED」可能只是链接没建起来
+    const linkControl = await runRaw({ baseline: true, language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readSymlinkCanary(linkTarget) }] });
+    push("read-repo-via-symlink", linkRun.stdout.includes("BLOCKED"), linkControl.stdout.includes("LEAK") ? "leaked" : "also-blocked", `${outcome(linkRun)} / 对照 ${outcome(linkControl)}`);
+  } finally {
+    rmSync(standIn, { recursive: true, force: true });
+  }
 
   // 3) 外连：打的是探测进程自己起的回环监听，零对外流量
   const server = createServer((socket) => socket.destroy());
@@ -166,6 +220,6 @@ export async function probeIsolation(): Promise<IsolationStatus> {
   const failed = checks.filter((check) => !check.passed).map((check) => check.name);
   const unproven = checks.filter((check) => check.control === "also-blocked").map((check) => check.name);
   const level: IsolationLevel = failed.length ? "unavailable" : "enforced";
-  const reason = failed.length ? `以下隔离检查未通过：${failed.join("、")}` : `九项检查全过${unproven.length ? `（${unproven.join("、")} 的对照组也没漏，这一条本机证不了，按沙箱内读数放行）` : ""}`;
+  const reason = failed.length ? `以下隔离检查未通过：${failed.join("、")}` : `${checks.length} 项检查全过${unproven.length ? `（${unproven.join("、")} 的对照组也没漏，这一条本机证不了，按沙箱内读数放行）` : ""}`;
   return { level, backend: backend.reason, checks, probedAt: new Date().toISOString(), durationMs: Date.now() - started, reason };
 }

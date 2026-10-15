@@ -1056,7 +1056,8 @@ describe("源码出境清单", () => {
   出境装配读不到摘录，回合作 200 但一行账都没有。快慢机器上「重分析落到出境用例之前还是之后」不同 ⇒ 同一条用例两种结果。
   收口后的口径：**只有「可能改变收录集」的改动才叫醒重分析**（收录判据见 indexer 的 isIngestedPath）。
 */
-describe("非收录文件的写入不该换掉挂载中的产物", () => {  it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
+describe("非收录文件的写入不该换掉挂载中的产物", () => {
+  it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
     writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-still-not-a-source-change\n", "utf8");
     writeFileSync(join(repoDir, "credentials.json"), '{"aws_access_key_id":"AKIA-STILL-NOT-A-SOURCE-CHANGE"}\n', "utf8");
     await new Promise((resolve) => setTimeout(resolve, 3_000));
@@ -1067,5 +1068,76 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {  it("
     // 重分析一跑，versionStamp 就从「手工造的 content:fixture」翻成真实内容哈希，锚点同时消失
     expect(analysis.versionStamp, `非收录文件的写入不该触发重分析；这轮被 ${JSON.stringify(analysis.lastIncrementalUpdate?.changedPaths ?? null)} 叫醒`).toBe("content:fixture");
     expect(analysis.graph.symbols.map((symbol) => symbol.path), "符号表不该被换成真实扫描的空结果").toContain(MAIN_FILE);
+  });
+});
+
+/**
+  来源闸（#166 第一层）。这台机器的默认形态是「没配 API key」（§44 之后口令文件一直没建），
+  而 CORS 原先写的是 `{ origin: true }` ——反射任意来源。两者叠起来的意思是：
+  你开着引擎时，浏览器里**任意网页**都能读本机所有已导入仓的源码、触发导入，
+  甚至把出境端点改成它自己的服务器（那才是整仓源码的外传通道）。
+  引擎只听 127.0.0.1 挡不住这件事：发请求不需要跨域权限，只有读响应才需要。
+
+  这一组用例把三件事分开钉住：① 非可信来源被拒在**执行之前**；② 回环来源与不带 Origin 的本机调用方照常能用
+  （产品形态不能被锁死）；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
+*/
+describe("来源闸：默认只服务本机浏览器", () => {
+  const EVIL = "http://evil.example";
+  const fromEvil = (method: "GET" | "POST" | "PUT", url: string, payload?: unknown) =>
+    app.inject({ method, url, headers: { origin: EVIL, ...(payload ? { "content-type": "application/json" } : {}) }, ...(payload ? { payload } : {}) });
+
+  it("非可信来源读不到源码，响应也不带 access-control-allow-origin", async () => {
+    const refused = await fromEvil("GET", `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(MAIN_FILE)}`);
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { reason?: string }).reason).toBe("origin_not_trusted");
+    expect(refused.headers["access-control-allow-origin"], "不给回头：浏览器连读响应的资格都没有").toBeUndefined();
+    expect(refused.payload).not.toContain("// line 1");
+  });
+
+  it("非可信来源改不动出境端点：403 之外更要紧的是**没执行**", async () => {
+    const before = (await app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { baseUrl?: string };
+    const refused = await fromEvil("PUT", "/api/llm/settings", { baseUrl: "http://evil.example:9/v1" });
+    expect(refused.statusCode).toBe(403);
+    const after = (await app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { baseUrl?: string };
+    expect(after.baseUrl, "闸拦的是这一次改配置，不是只挡响应可见性").toBe(before.baseUrl);
+  });
+
+  it("非可信来源触发不了导入：地址簿与挂载集合一条都没多", async () => {
+    const before = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: unknown[] };
+    const refused = await fromEvil("POST", "/api/imports", { path: join(root, "not-a-repo-from-evil") });
+    expect(refused.statusCode).toBe(403);
+    const after = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: unknown[] };
+    expect(after.repositories.length).toBe(before.repositories.length);
+  });
+
+  it("连 /api/health 也不白给：那条路由免的是认证，不是来源", async () => {
+    // 免鉴权是给进程管理器的（它们不带 Origin，照样走得通）；健康读数里有服务商、模型名、沙箱闸门状态，
+    // 那是给下一步攻击踩点用的，不该让任意网页白拿
+    const refused = await fromEvil("GET", "/api/health");
+    expect(refused.statusCode).toBe(403);
+    expect(refused.payload).not.toContain("fixture-model");
+    expect((await app.inject({ method: "GET", url: "/api/health" })).statusCode, "本机 curl（无 Origin）照常用").toBe(200);
+  });
+
+  it("回环来源任何端口都放行——GUI 的正常形态没被这次收紧锁死", async () => {
+    for (const origin of ["http://localhost:3000", "http://127.0.0.1:5199", "http://[::1]:3001"]) {
+      const response = await app.inject({ method: "GET", url: "/api/repositories", headers: { origin } });
+      expect(response.statusCode, origin).toBe(200);
+      expect(response.headers["access-control-allow-origin"], origin).toBe(origin);
+    }
+  });
+
+  it("唯一的放宽口子是清单本身：写进 TUTOR_ALLOWED_ORIGINS 才认，且按精确来源匹配", async () => {
+    process.env.TUTOR_ALLOWED_ORIGINS = `${EVIL}, https://Tutor.Corp.dev:8443/`;
+    try {
+      expect((await fromEvil("GET", "/api/repositories")).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "https://tutor.corp.dev:8443" } })).statusCode).toBe(200);
+      // 端口是来源的一部分：清单里那条带 8443，不带端口的同一个主机名不算命中（别把精确匹配读成前缀匹配）
+      expect((await app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "https://tutor.corp.dev" } })).statusCode).toBe(403);
+      expect((await app.inject({ method: "GET", url: "/api/repositories", headers: { origin: `${EVIL}.evil.example` } })).statusCode).toBe(403);
+    } finally {
+      delete process.env.TUTOR_ALLOWED_ORIGINS;
+    }
+    expect((await fromEvil("GET", "/api/repositories")).statusCode, "清单一撤就恢复默认关").toBe(403);
   });
 });

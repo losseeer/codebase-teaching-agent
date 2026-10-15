@@ -37,6 +37,13 @@ export interface SandboxRunOptions {
   maxOutputBytes?: number;
   /** 故意放宽 profile 的某一项（隔离探测用它做「这条规则真的在管」的对照） */
   profileOverride?: { allowNetwork?: boolean; allowFork?: boolean };
+  /**
+    这一次要额外点名拒读的子树。**被学习仓的根走这里**：判分与自证只吃传进来的文件字符串，
+    沙箱里的代码本来就不该读得到仓（`.tutor/tutor.db` 里躺着标准答案与 hidden 测试），
+    而「仓一定在家目录里」这一假设不成立（`POST /imports` 收任意绝对路径）。
+    产品入口是 `runSandbox`，它把 `repositoryPath` 定成必填并转到这里——漏传编译不过。
+  */
+  denyRead?: string[];
   /** 完全不进沙箱地跑一遍，只给隔离探测当对照组 */
   baseline?: boolean;
 }
@@ -207,7 +214,7 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
     }
 
     const env = baseline ? { ...process.env, TMPDIR: workdir } : sandboxEnv(workdir, toolchain);
-    const context: LaunchContext = { workdir, profile: seatbeltProfile(workdir, toolchain, options.profileOverride), timeoutMs, maxOutputBytes, env, isolated: !baseline };
+    const context: LaunchContext = { workdir, profile: seatbeltProfile(workdir, toolchain, { ...options.profileOverride, denyRead: options.denyRead }), timeoutMs, maxOutputBytes, env, isolated: !baseline };
 
     const steps: SandboxStep[] = [];
     let stdout = "";

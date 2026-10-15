@@ -179,9 +179,10 @@ function overlay(hidden: CodeFile[], variant: CodeFile[]): SandboxFile[] {
   return [...byPath.values()];
 }
 
-async function harnessRun(proposal: CodeProposal, label: "solution" | "given"): Promise<HarnessRun> {
+async function harnessRun(proposal: CodeProposal, label: "solution" | "given", repositoryPath: string): Promise<HarnessRun> {
   const variant = label === "solution" ? proposal.solution : proposal.given;
-  const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant) });
+  // 仓的根必须点名拒读：判分与自证只吃这些字符串，沙箱里的代码读到 `.tutor/tutor.db` 就是读到标准答案
+  const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant), repositoryPath });
   return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok };
 }
 
@@ -189,15 +190,15 @@ async function harnessRun(proposal: CodeProposal, label: "solution" | "given"): 
   两跑自证。这里**不吞异常**：沙箱不可用（隔离探测没过）要原样上抛，由调用方记成 `sandbox_unavailable`
   并把代码题域整域关掉——把它折进「出题失败」的普通原因里，就等于把闸门失效说成模型不争气。
 */
-export async function validateHarness(proposal: CodeProposal): Promise<{ ok: boolean; reason?: string; runs: HarnessRun[] }> {
+export async function validateHarness(proposal: CodeProposal, repositoryPath: string): Promise<{ ok: boolean; reason?: string; runs: HarnessRun[] }> {
   const runs: HarnessRun[] = [];
-  const solution = await harnessRun(proposal, "solution");
+  const solution = await harnessRun(proposal, "solution", repositoryPath);
   runs.push(solution);
   if (!solution.verdict) return { ok: false, reason: "参考解没印出 TESTS 结论（多半没编译过或测试文件自己崩了）", runs };
   if (solution.verdict.passed < 1) return { ok: false, reason: `参考解一条测试都没过（TESTS ${solution.verdict.passed} ${solution.verdict.failed}）`, runs };
   if (solution.verdict.failed > 0 || solution.exitCode !== 0) return { ok: false, reason: `参考解没过：TESTS ${solution.verdict.passed} ${solution.verdict.failed}`, runs };
 
-  const given = await harnessRun(proposal, "given");
+  const given = await harnessRun(proposal, "given", repositoryPath);
   runs.push(given);
   if (!given.verdict) return { ok: false, reason: "下发件没印出 TESTS 结论——它可能是靠语法错误「失败」的，这种题不能出", runs };
   if (given.verdict.failed < 1) return { ok: false, reason: `下发件本身就全过（TESTS ${given.verdict.passed} ${given.verdict.failed}），这道题是白送的`, runs };
@@ -253,7 +254,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
-    validation = await validateHarness(proposal);
+    validation = await validateHarness(proposal, input.repositoryPath);
   } catch (error) {
     if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [] };
     throw error;
@@ -279,7 +280,7 @@ export async function explainCodeAttempt(input: {
   provider: LlmProvider;
 }): Promise<{ explanation: string; usage?: LlmUsage; verdict: { passed: number; failed: number } | undefined }> {
   const files = [...input.harness.hidden.map((file) => ({ ...file })), ...input.learnerFiles.map((file) => ({ ...file }))];
-  const run = await runSandbox({ language: input.harness.language, entry: input.harness.entry, files });
+  const run = await runSandbox({ language: input.harness.language, entry: input.harness.entry, files, repositoryPath: input.repositoryPath });
   const verdict = verdictOf(run);
   const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
   const sources = input.learnerFiles.map((file) => {
