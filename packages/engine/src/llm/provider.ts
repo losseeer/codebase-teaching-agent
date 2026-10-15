@@ -137,6 +137,13 @@ export interface LlmCompletion {
   reasoningContent?: string;
   usage?: LlmUsage;
   finishReason?: string;
+  /**
+    第几次尝试拿到的这个结果（1 = 一次就成）。只有 `RetryLlmProvider` 会填——
+    日志包在重试层**外面**，一次逻辑调用只落一行，「试了几次」不带出来就永远测不到（第三阶段点名的指标）。
+    */
+  attempts?: number;
+  /** 每次尝试各自的墙钟（ms），按发生顺序。`[60000, 15000]` 这种形状就是「被超时掐掉一次再发一遍并成了」。 */
+  attemptMs?: number[];
 }
 
 /** 给用户看的截断尾注：正文被 max_tokens 掐断时明示边界，别让半截句子伪装成完整结论。 */
@@ -403,20 +410,39 @@ export class RetryLlmProvider implements LlmProvider {
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
     let lastError: unknown;
+    const attemptMs: number[] = [];
     for (let attempt = 0; attempt < Math.max(1, this.attempts); attempt += 1) {
+      const started = Date.now();
       try {
-        return await this.primary.complete(input);
+        const completion = await this.primary.complete(input);
+        attemptMs.push(Date.now() - started);
+        // 「第几次成的」必须带出去：外层日志一次逻辑调用只落一行，不带上就读不出重试发生过
+        return { ...completion, attempts: attempt + 1, attemptMs };
       } catch (error) {
+        attemptMs.push(Date.now() - started);
         // 中止优先于「可重试」判定：用户已经停了，重发同一轮只会再烧一遍 token；
         // 判据带 signal 而不只看错误——response.json() 阶段的 AbortError 不带哨兵标记。
-        if (isLlmAborted(error, input.signal)) throw error instanceof LlmAbortedError ? error : new LlmAbortedError();
-        if (isNonRetryable(error)) throw error;
-        lastError = error;
+        if (isLlmAborted(error, input.signal)) throw markAttempts(error instanceof LlmAbortedError ? error : new LlmAbortedError(), attempt + 1, attemptMs);
+        if (isNonRetryable(error)) throw markAttempts(error, attempt + 1, attemptMs);
+        lastError = markAttempts(error, attempt + 1, attemptMs);
         if (attempt + 1 < this.attempts) await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
       }
     }
-    throw lastError instanceof Error ? lastError : new Error("LLM request failed");
+    throw lastError instanceof Error ? lastError : markAttempts(new Error("LLM request failed"), attemptMs.length, attemptMs);
   }
+}
+
+/**
+  把「试了几次、每次多久」挂到错误对象上，供外层日志落账。
+  用 `defineProperty` 而不是直接赋值：`Error` 上的 enumerable 属性会被 `JSON.stringify(err)` 之类带出去，
+  而这里要的只是一条读数，不该改变错误对象的对外形状。
+  */
+function markAttempts(error: unknown, attempts: number, attemptMs: number[]): unknown {
+  if (error instanceof Error) {
+    Object.defineProperty(error, "attempts", { value: attempts, configurable: true });
+    Object.defineProperty(error, "attemptMs", { value: attemptMs, configurable: true });
+  }
+  return error;
 }
 
 /** 确定性 4xx（除 408 请求超时 / 429 限速）不做重试：同样的请求原样重发只会原样再败，

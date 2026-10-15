@@ -395,6 +395,39 @@ describe("RetryLlmProvider", () => {
     expect(calls()).toBe(3);
   });
 
+  it("重试过的读数带得出来：attempts=2，attemptMs 一条一次（这就是超时率的真读数来源）", async () => {
+    const { provider, calls } = scripted([
+      () => Promise.reject(new Error("LLM 请求超时（60000ms）")),
+      () => Promise.resolve({ text: "ok", finishReason: "stop" })
+    ]);
+    const result = await provider.complete(INPUT);
+    expect(result.text).toBe("ok");
+    expect(calls()).toBe(2);
+    expect(result.attempts).toBe(2);
+    expect(result.attemptMs).toHaveLength(2);
+  });
+
+  it("一次成的也要写 attempts=1：缺这一格的是历史行，不能把「没记」读成 1", async () => {
+    const { provider } = scripted([() => Promise.resolve({ text: "first try", finishReason: "stop" })]);
+    const result = await provider.complete(INPUT);
+    expect(result.attempts).toBe(1);
+    expect(result.attemptMs).toHaveLength(1);
+  });
+
+  it("最终失败也带次数，且挂在错误上的两格不可枚举（不改错误对象的对外形状）", async () => {
+    const { provider, calls } = scripted([
+      () => Promise.reject(new Error("LLM returned 500")),
+      () => Promise.reject(new Error("LLM returned 503")),
+      () => Promise.reject(new Error("LLM returned 503"))
+    ]);
+    const caught = await provider.complete(INPUT).catch((error: Error) => error);
+    expect(calls()).toBe(3);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as unknown as { attempts?: number }).attempts).toBe(3);
+    expect(JSON.stringify({ e: caught })).toBe('{"e":{}}'); // 只有 message/stack 是惯例可枚举的：两格读数不该混进去
+    expect(Object.keys(caught)).toEqual([]);
+  });
+
   it("中止不重试：哨兵错误立即上抛，只调一次", async () => {
     const controller = new AbortController();
     let count = 0;

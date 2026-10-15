@@ -14,8 +14,9 @@ export function configuredOrigins(env: NodeJS.ProcessEnv = process.env): string[
   ② **回环来源**——`http(s)://localhost|127.0.0.1|::1:<任意端口>`（vite dev 在 :3000、引擎在 :3001 属这类）。
   其余一律不信。理由：引擎只监听 127.0.0.1，但**浏览器里任意网页照样能把请求打到这个地址**——
   发请求不需要跨域权限，只需要读得到响应；而旧写法 `origin: true` 正好把响应递给它。
-  ⚠️ 这一道是**来源**闸，不是认证：本机进程、别的本机用户、任何不带 Origin 的客户端都走得通。
-  按人按仓授权仍然是 API key（判据在 `api-keys.ts`），两者不互相顶替。
+  ⚠️ 这一道是**来源**闸，只管浏览器里的页面能不能碰这台引擎，不是认证：本机进程、别的本机用户、
+  任何不带 Origin 的客户端都走得通这一道——但他们仍然过不了口令那道（`api-keys.ts`：真实监听的进程开机就配发一张，
+  2026-10-15 拍板「本机调用也得带 token」）。按人按仓授权也仍然在那张 key 上，三者不互相顶替。
   */
 export function isTrustedOrigin(origin: string | undefined, configured: string[] = configuredOrigins()): boolean {
   if (!origin) return true;

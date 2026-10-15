@@ -45,7 +45,7 @@ export interface LlmCallRecord {
     */
   threadId: string | null;
   /**
-    调用方身份（API key 的名字，见 `security/api-keys.ts`）；本机模式没配 key 文件时为 null。
+    调用方身份（API key 的名字，见 `security/api-keys.ts`）；不是从 HTTP 进来的动作（后台任务）没有身份，为 null。
     企业形态的账要能分到「哪个调用方烧了多少钱」，靠的就是这一列与 traceId 的组合。
     */
   actor: string | null;
@@ -60,6 +60,22 @@ export interface LlmCallRecord {
   cacheHitTokens?: number;
   finishReason?: string;
   error?: string;
+  /**
+    第几次尝试给出这个结论（1 = 一次就成/败）。由 `RetryLlmProvider` 带出来（装配是 Logging → Retry，
+    重试在里面，一次逻辑调用只落一行，所以这一格必须靠返回值/错误对象传出来）。
+    **10-15 之前的历史行没有这一格**：读数以「有Attempts」与「无Attempts」两段分开，不能把缺的当 1。
+    */
+  attempts?: number;
+  /** 每次尝试各自的墙钟（ms）。`[60000, 15000]` = 第一发撞满超时、第二发成了——这正是超时率的真读数所在 */
+  attemptMs?: number[];
+}
+
+/** 从 provider 的结果或错误上取重试计数（`RetryLlmProvider.markAttempts` 挂的那两格）。 */
+function attemptStats(value: unknown): { attempts?: number; attemptMs?: number[] } {
+  const record = value as { attempts?: unknown; attemptMs?: unknown } | undefined;
+  const attempts = typeof record?.attempts === "number" && record.attempts >= 1 ? Math.trunc(record.attempts) : undefined;
+  const attemptMs = Array.isArray(record?.attemptMs) ? record.attemptMs.filter((ms): ms is number => typeof ms === "number") : undefined;
+  return { ...(attempts === undefined ? {} : { attempts }), ...(attemptMs?.length ? { attemptMs } : {}) };
 }
 
 const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "llm.log");
@@ -118,8 +134,10 @@ export function formatLlmCallLine(record: LlmCallRecord): string {
     ? "tokens n/a"
     : `in ${record.inputTokens ?? 0}${record.cacheHitTokens ? `(cache ${record.cacheHitTokens})` : ""} out ${record.outputTokens ?? 0}`;
   const tools = record.tools?.length ? ` · tools ${record.tools.join(",")}` : "";
+  // 重试次数只在真发生过时上屏：一次就成的行不该多一格噪音，而撞过超时的那行必须一眼看得见
+  const retry = record.attempts && record.attempts > 1 ? ` · retry ${record.attempts}` : "";
   const detail = record.ok ? (record.finishReason && record.finishReason !== "stop" ? ` · finish ${record.finishReason}` : "") : ` · ${record.error ?? "未知错误"}`;
-  return `[llm] ${record.tier} · ${record.scene} · ${record.model} · ${record.ok ? "ok" : "fail"} · ${record.ms}ms · ${tokens} · think ${record.thinking}${tools}${detail}`;
+  return `[llm] ${record.tier} · ${record.scene} · ${record.model} · ${record.ok ? "ok" : "fail"} · ${record.ms}ms${retry} · ${tokens} · think ${record.thinking}${tools}${detail}`;
 }
 
 /** 记录一次调用（控制台 + 落盘）。 */
@@ -164,6 +182,7 @@ export class LoggingLlmProvider implements LlmProvider {
         ...base,
         ok: true,
         ms: Date.now() - started,
+        ...attemptStats(completion),
         ...(completion.usage ? {
           inputTokens: completion.usage.inputTokens,
           outputTokens: completion.usage.outputTokens,
@@ -173,7 +192,7 @@ export class LoggingLlmProvider implements LlmProvider {
       });
       return completion;
     } catch (error) {
-      logLlmCall({ ...base, ok: false, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
+      logLlmCall({ ...base, ok: false, ms: Date.now() - started, ...attemptStats(error), error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }

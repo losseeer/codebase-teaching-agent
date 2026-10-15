@@ -16,7 +16,7 @@
 const STORAGE_KEY = "codebase-tutor.engine-key";
 
 interface EngineAuthState {
-  /** null = 没配口令（本机默认形态，也是闸门未开时的正常状态） */
+  /** null = 这台浏览器还没填过口令；生产默认形态下引擎开机就配发了一张，所以第一次连上会 401 直到填一次 */
   key: string | null;
   /** 最近一次请求被 401 拒过：侧栏据此把状态行换成输入框 */
   unauthorized: boolean;

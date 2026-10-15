@@ -4,7 +4,9 @@ import { api } from "../api/client";
 import { clearEngineKey, getEngineAuth, setEngineKey, subscribeEngineAuth } from "../api/engine-key";
 
 /**
-  引擎访问口令（认证闸门）。**闸门没开就整个不渲染**——本机默认形态不该多一行看不懂的输入框。
+  引擎访问口令（认证闸门）。闸门关着时整个不渲染，不多一行看不懂的输入框——
+  但**真实开机的引擎会先配发一张本机口令再开门**（`security/api-keys.ts` 的 `ensureLocalKey`，2026-10-15 拍板
+  「本机调用也得带 token」），所以本机默认形态是「渲染」的：第一次连上要来这里粘一次口令。
 
   为什么是「启动先问一次 `/api/health`」而不是「等 401 再弹」：闸门一开，界面所有请求都 401，
   那时用户看到的是一堆「加载失败」，而不是「请先给口令」。健康检查这条免鉴权（它就是为探活存在的），
@@ -30,8 +32,8 @@ export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; on
     return () => { alive = false; window.removeEventListener("online", probe); };
   }, []);
 
-  const explain = "这台引擎开了认证闸门：除健康检查外，所有接口都要带访问口令（引擎侧 ~/.codebase-tutor/api-keys.json 里配）。口令存在本浏览器的 localStorage，同源脚本可读——真边界在引擎那份文件与按仓授权，不在这里。";
-  const brokenExplain = "引擎读不出自己的口令文件（api-keys.json：格式坏了、权限被改，或写了口令却全都太短），现在按「拒绝全部」在跑。这边填什么都没用，要修的是引擎侧那份文件。";
+  const explain = "这台引擎开了认证闸门：除健康检查外，所有接口都要带访问口令。本机那份是引擎首次开机自动配发的，取 ~/.codebase-tutor/api-keys.json 里 keys[0].key（文件 0600，日志与接口都不回显明文）。口令存在本浏览器的 localStorage，同源脚本可读——真边界在引擎那份文件与按仓授权，不在这里。";
+  const brokenExplain = "引擎读不出或写不出自己的口令文件（api-keys.json：格式坏了、权限被改、写了口令却全都太短），现在按「拒绝全部」在跑。这边填什么都没用，要修的是引擎侧那份文件。";
 
   /** 换口令 = 整页重载一次：界面各处数据都是在挂载时取的，不重载就会停在「刚才那批 401」上。 */
   const commit = (value: string): void => {

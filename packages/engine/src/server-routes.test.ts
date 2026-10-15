@@ -7,6 +7,7 @@ import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, Repos
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
+import { ensureLocalKey, resetProvisionFailureForTest } from "./security/api-keys.js";
 import { flushLlmLog } from "./llm/call-log.js";
 import { flushEngineLog } from "./trace/engine-log.js";
 import { TutorDatabase } from "./store/database.js";
@@ -196,13 +197,19 @@ afterAll(async () => {
   await app?.close();
   vi.unstubAllGlobals();
   rmSync(root, { recursive: true, force: true });
-  for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG"]) delete process.env[key];
+  for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG", "TUTOR_API_KEYS_FILE"]) delete process.env[key];
 });
 
 beforeEach(() => {
   scripted = [];
   spoken = OK_REPLY;
   holdMs = 0;
+  /**
+    整套用例都按「这台测试进程没跑过配发」跑：口令文件指到临时目录里一个不存在的名字。
+    不钉这一格的话，一旦操作者真开过引擎（开机配发会在 ~/.codebase-tutor 建出 api-keys.json），
+    下面每条不带口令的 inject 都会集体变成 401——那是一条只有别人机器上才红的线。
+    */
+  process.env.TUTOR_API_KEYS_FILE = join(root, "no-keys-file-in-this-suite.json");
 });
 
 /** 宏观设计作用域：JSON 与 SSE 两条出口共用同一次收尾，两边的文本一致性各验一遍。 */
@@ -704,13 +711,14 @@ describe("跨仓工具面随地址簿变", () => {
 
 /**
   API key 认证 + 按仓授权（`security/api-keys.ts` 与 server.ts 的 onRequest 钩子）。
-  要拦的四件事：
-  1. **没配 key 文件就是没有闸**——本机默认形态必须照常能用（否则这次改造直接把产品锁死）；
+  要拦的五件事：
+  1. **本机调用也得带 token**（2026-10-15 拍板）：真实监听的进程开机先 `ensureLocalKey()` 再 listen，
+     所以「没有口令文件」在生产里不再是默认形态；钩子本身仍按文件状态判，`off` 只留给 app.inject 这类测试进程。
   2. 有闸时缺 key/错 key 一律 401，而且**对话路由被拦下时一次 LLM 调用都不发生**（越权的 token 不能烧）；
   3. 名单外的仓连懒挂载都到不了（403 而不是 404），地址簿清单里也不出现；
   4. **跨仓走同一份 ACL**：对端仓不在名单时，模型连 `cross_repo_link` 这个工具都看不到——
      这是「A 仓的对话把没授权的 B 仓源码读进 prompt」那个口子的唯一封法。
-  导入单独一条：它读任意目录、造出此前无从授权的仓 id，所以只放行 `*`。
+  5. 导入单独一条：它读任意目录、造出此前无从授权的仓 id，所以只放行 `*`。
 
   key 文件写在临时 root 里（`TUTOR_API_KEYS_FILE`），每条用例后删掉——闸门退回关闭，后面的用例不受影响。
   */
@@ -735,12 +743,32 @@ describe("API key 认证与按仓授权", () => {
     rmSync(keysFile, { force: true });
     rmSync(peerDir, { recursive: true, force: true });
     delete process.env.TUTOR_API_KEYS_FILE;
+    resetProvisionFailureForTest(); // 配发失败会一路把闸门判成 broken，不留给下一组用例
   });
 
-  it("没配 key 文件：闸门不存在，不带 key 也读得到（本机默认形态没被这次改造锁死）", async () => {
+  it("闸门没配上（只有没跑过配发的进程会到这个形态）：不带 key 也读得到，但生产默认不是这一档", async () => {
     process.env.TUTOR_API_KEYS_FILE = keysFile; // 文件不存在
     expect((await call("GET", "/api/repositories")).statusCode).toBe(200);
     expect((await call("GET", `/api/repositories/${repositoryId}/index`)).statusCode).toBe(200);
+  });
+
+  /**
+    这条钉的是用户 2026-10-15 那句「本机调用也得带 token」。旧默认形态是「不建文件就没有闸」，
+    而默认装机没人建过——于是本机任意进程都能不带凭据读走源码。现在按真实开机的顺序验一遍：
+    配发（server.ts 在 listen 之前跑的那一步）→ 不带口令 401 → 带配发出来的口令 200。
+    口令从文件里读，不从日志里读：值本来就不该出现在任何回显上。
+    */
+  it("按真实开机的顺序走一遍：配发之后，不带口令的本机调用（连 Origin 都没有）也 401", async () => {
+    process.env.TUTOR_API_KEYS_FILE = keysFile;
+    expect((await call("GET", "/api/repositories")).statusCode).toBe(200); // 配发之前确实敞开：正因如此，listen 之前必须先补闸
+    expect(ensureLocalKey().created).toBe(true);
+    expect((await call("GET", "/api/repositories")).statusCode).toBe(401);
+    const key = ((JSON.parse(readFileSync(keysFile, "utf8")) as { keys: { key: string }[] }).keys[0] ?? { key: "" }).key;
+    expect(key.length).toBeGreaterThanOrEqual(16);
+    expect((await call("GET", "/api/repositories", key)).statusCode).toBe(200);
+    const health = await call("GET", "/api/health");
+    expect(health.statusCode).toBe(200); // 探活那条仍免口令，但它不再报「本机默认没闸」
+    expect((health.json() as { auth: string }).auth).toBe("api-key");
   });
 
   it("配了 key 之后：缺 key 与错 key 都 401，对 key 200；/api/health 仍然免鉴权", async () => {

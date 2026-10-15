@@ -27,7 +27,7 @@ import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summar
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
-import { allowsRepository, authenticate, authStateOf, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
+import { allowsRepository, authenticate, authStateOf, ensureLocalKey, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
@@ -118,7 +118,7 @@ app.addHook("onRequest", async (request, reply) => {
   */
 declare module "fastify" {
   interface FastifyRequest {
-    /** 认证通过后的身份；本机模式（没配 key 文件）与预检请求恒为 undefined。 */
+    /** 认证通过后的身份；预检请求，以及没配发的测试进程（闸门 `off`）恒为 undefined。 */
     auth?: AuthResult;
   }
 }
@@ -157,7 +157,7 @@ app.addHook("onRequest", async (request, reply) => {
   // `broken` 走的是 fail-closed：口令文件在场却读不出来（JSON 编辑到一半、权限被改、写了 key 却全是短 key），
   // 一律按「闸是关着的、谁都不放行」处理，而不是退回免鉴权。这条路上除了健康检查全是 503，
   // 因为把闸静默打开等于把地址簿里所有仓的源码对任何本机进程摊开——修文件是几秒钟的事，泄出去收不回来。
-  if (state === "off") return;
+  if (state === "off") return; // 真实监听的进程到不了这一档（开机先 `ensureLocalKey()` 再 listen）；走到这里说明配发没跑成，开机那行已经在喊了
   if (request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
   if (state === "broken") {
     announceGate("broken");
@@ -643,8 +643,9 @@ importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
   const llm = teachingProviderStatus(teachingProvider);
-  // 三档如实报：`off` = 没配 key 文件（本机默认形态）；`api-key` = 闸开着；
-  // `broken` = 文件在但读不出来，此时引擎按「拒绝全部」处理——界面与进程管理器都要能分清这三档。
+  // 三档如实报：`api-key` = 闸开着（本机默认形态：开机配发一张口令）；`off` = 闸门没配上，
+  // 真实监听的进程不该走到这里，走到了就是配发没跑成、界面与进程管理器都得看得见；
+  // `broken` = 文件在但读不出来或配不出来，此时引擎按「拒绝全部」处理。
   const gate = authStateOf();
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
@@ -1667,13 +1668,22 @@ function chunk(content: string, width: number): string[] { return content.match(
 // 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。
 const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
+  /**
+    口令配发必须**在开监听之前**：钩子按文件状态判闸，listen 之后到配发之间那几毫秒闸门还是 `off`，
+    任何本机进程都能趁这道门缝读走地址簿里所有仓的源码。先补闸，再开门。
+    */
+  const issued = ensureLocalKey();
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
   // 认证闸三档都必须在开机时看得见（口径与理由见 `security/api-keys.ts` 的 `AuthState`，§36.6）。
   const gate = authStateOf();
   const keyCount = loadApiKeys().length;
-  const file = process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json";
-  console.log(`[engine] 认证：${gate === "on" ? `已启用（${keyCount} 张 key，${file}）` : gate === "broken" ? `**口令文件读不出来（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503，请把这份文件修好` : "未启用（没有 key 文件，任何本机请求都放行）"}`);
+  const file = issued.file; // 报实际读到的那份路径（env 覆盖过也不会报错位置对不上）
+  console.log(`[engine] 认证：${gate === "on"
+    ? `已启用（${keyCount} 张 key，${file}${issued.created ? "｜本机口令是首次开机自动配发的，取文件里 keys[0].key 填进界面；值不进日志，文件 0600" : ""}）`
+    : gate === "broken"
+      ? `**口令文件不可用（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503：${issued.reason ?? "文件读不出来，请把这份文件修好（配发不会覆盖它）"}`
+      : `**闸门没配上（${file}）——任何本机请求都放行**：真实监听的进程本来不该走到这一档，配发那一步为什么没跑要看上面那条`}`);
   announceGate(gate, keyCount);
   /**
     沙箱隔离探测：逐项 canary 要起十来个进程，放后台跑（不拖监听），但结果必须开机就看得见。

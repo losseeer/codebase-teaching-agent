@@ -60,7 +60,8 @@ export type AbortResult = { aborted: false; reason: "not_found" } | { aborted: f
   中止指定回合。两种「没中止」要分得开：
   - `not_found` = 这一轮已经结束或本来就没登记，调用方回 404（GUI 照常收尾，不报错）；
   - `forbidden` = 这一轮是**别人**的，路由回 403——它还在跑，token 还在烧，中止不了这件事必须看得见。
-  登记时没身份（闸门没开）的回合不做归属校验，否则本机模式下「停止生成」会莫名失效。
+  登记时没身份的回合不做归属校验（后台任务没有身份；HTTP 请求在本机默认形态下总是带着配发出来的那张 key），
+  否则「停止生成」会莫名失效。
   */
 export function abortTurn(turnId: unknown, actor?: string): AbortResult {
   const id = sanitizeTurnId(turnId);

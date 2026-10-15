@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, outboundFingerprint, type LlmCallRecord } from "./call-log.js";
-import type { LlmProvider } from "./provider.js";
-import { ThinkingOverrideLlmProvider } from "./provider.js";
+import type { LlmCompletion, LlmProvider } from "./provider.js";
+import { RetryLlmProvider, ThinkingOverrideLlmProvider } from "./provider.js";
 import { markActor, runWithTrace } from "../trace/context.js";
 
 /**
@@ -12,7 +12,7 @@ import { markActor, runWithTrace } from "../trace/context.js";
   失败必须照记并原样抛出——日志不允许把失败伪装成成功。
   */
 
-function fakeProvider(handler: (input: unknown) => Promise<{ text: string }>): LlmProvider {
+function fakeProvider(handler: (input: unknown) => Promise<LlmCompletion>): LlmProvider {
   return { name: "test provider", modelVersion: "openai:test-model", complete: handler as LlmProvider["complete"] };
 }
 
@@ -120,8 +120,71 @@ describe("LLM 工作日志", () => {
     expect(logged.some((line) => line.includes("fail") && line.includes("LLM returned 500"))).toBe(true);
   });
 
-  it("并发调用串行落盘：行数与条数一致且每行可解析", async () => {
-    const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "light");
+  /**
+    重试读数（第三阶段刀 1 的前置）。日志包在重试层外面，一次逻辑调用只落一行，
+    「第几次成的、每次跑了多久」只能由 `RetryLlmProvider` 挂在结果/错误上带出来——
+    没有这两格，「超时率」这个指标结构上就读不出来（§62）。
+    */
+  it("重试层带出来的 attempts 与 attemptMs 原样落行，并在控制台单行上屏", async () => {
+    const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 2, attemptMs: [60_000, 1_500] })), "light");
+    await provider.complete({ system: "s", user: "u", scene: "map.refine" });
+    await flushLlmLog();
+    const entry = JSON.parse(readFileSync(logFile, "utf8").trim()) as LlmCallRecord;
+    expect(entry).toMatchObject({ ok: true, attempts: 2, attemptMs: [60_000, 1_500] });
+    expect(entry.ms).toBeGreaterThanOrEqual(0);
+    expect(logged.some((line) => line.includes("retry 2"))).toBe(true);
+  });
+
+  it("一次就的行不带 retry 字样（不制造噪音），但 attempts=1 仍如实落盘", async () => {
+    const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 1, attemptMs: [800] })), "light");
+    await provider.complete({ system: "s", user: "u", scene: "map.summary" });
+    await flushLlmLog();
+    expect((JSON.parse(readFileSync(logFile, "utf8").trim()) as LlmCallRecord).attempts).toBe(1);
+    expect(logged.some((line) => line.includes("retry"))).toBe(false);
+  });
+
+  it("最终失败也带次数；老形状的内层错误（没挂这两格）不硬造数字，缺就是缺", async () => {
+    const retried = new LoggingLlmProvider(fakeProvider(async () => {
+      const error = new Error("LLM 请求超时（60000ms）");
+      Object.defineProperty(error, "attempts", { value: 2, configurable: true });
+      Object.defineProperty(error, "attemptMs", { value: [60_000, 60_000], configurable: true });
+      throw error;
+    }), "teaching");
+    await expect(retried.complete({ system: "s", user: "u", scene: "map.flow" })).rejects.toThrow("请求超时");
+    const plain = new LoggingLlmProvider(fakeProvider(async () => { throw new Error("fetch failed"); }), "teaching");
+    await expect(plain.complete({ system: "s", user: "u", scene: "map.flow" })).rejects.toThrow("fetch failed");
+    await flushLlmLog();
+    const [first, second] = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as LlmCallRecord);
+    expect(first).toMatchObject({ ok: false, attempts: 2, attemptMs: [60_000, 60_000] });
+    expect(second.attempts, "「没记」不能伪装成 1——历史行与新行分得开才有意义").toBeUndefined();
+  });
+
+  it("按生产装配顺序（Logging 在 Retry 外面）走一遍：重试发生过，行里就读得出来", async () => {
+    // 单独测 Retry 或单独测 Logging 都证不了这一格能穿过去——生产装配是 Logging → Retry，
+    // 读数要靠返回值/错误对象跨出那一层边界，所以这里按同一顺序组一次真的。
+    let count = 0;
+    const flaky: LlmProvider = {
+      name: "flaky",
+      modelVersion: "openai:flaky-model",
+      complete: async () => {
+        count += 1;
+        if (count === 1) throw new Error("LLM 请求超时（60000ms）：推理模型生成较慢时可调大 TUTOR_LLM_TIMEOUT_MS。");
+        return { text: "第二次成的", usage: { inputTokens: 900, outputTokens: 40, promptCacheHitTokens: 0 }, finishReason: "stop" };
+      }
+    };
+    const provider = new LoggingLlmProvider(new RetryLlmProvider(flaky, 2), "light");
+    const completion = await provider.complete({ system: "s", user: "u", scene: "map.refine" });
+    await flushLlmLog();
+    expect(completion.attempts).toBe(2);
+    const entry = JSON.parse(readFileSync(logFile, "utf8").trim()) as LlmCallRecord;
+    expect(entry).toMatchObject({ ok: true, scene: "map.refine", attempts: 2 });
+    expect(entry.attemptMs).toHaveLength(2);
+    // 总墙钟不等于任何单次：这一行同时给出「一共多久」与「每次多久」
+    expect(entry.ms).toBeGreaterThanOrEqual(0);
+    expect(logged.some((line) => line.includes("retry 2"))).toBe(true);
+  });
+
+  it("并发调用串行落盘：行数与条数一致且每行可解析", async () => {    const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "light");
     await Promise.all(Array.from({ length: 12 }, (_, index) => provider.complete({ system: "s", user: `u${index}`, scene: "map.refine" })));
     await flushLlmLog();
     const lines = readFileSync(logFile, "utf8").trim().split("\n");

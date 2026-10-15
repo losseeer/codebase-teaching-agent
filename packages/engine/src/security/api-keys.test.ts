@@ -1,16 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { allowsRepository, authEnabled, authStateOf, authenticate, loadApiKeys, presentedKey, stillIssued } from "./api-keys.js";
+import { allowsRepository, authEnabled, authStateOf, authenticate, ensureLocalKey, loadApiKeys, presentedKey, resetProvisionFailureForTest, stillIssued } from "./api-keys.js";
 
 /**
-  key 文件的读法与比对。这里要钉住的是四条「闸门会不会形同虚设」的判据：
-  - 没文件 / 清单本来就是空的 ⇒ **认证关闭**（本机默认形态，不是「开启且全拒绝」）；
-  - 文件坏到读不出来、或写了条目却一张都用不了 ⇒ **broken = 按拒绝全部处理**（10-12 改的：
+  key 文件的读法与比对。这里要钉住的是五条「闸门会不会形同虚设」的判据：
+  - **本机默认形态必须有口令**（`ensureLocalKey`，2026-10-15 拍板「本机调用也得带 token」）：
+    没文件就配发一张，配发失败按 broken 拦死，绝不退回「所以免鉴权」；
+  - 坏 JSON、或写了条目却一张都用不了 ⇒ **broken = 按拒绝全部处理**（10-12 改的：
     以前这一档也退回免鉴权，等于「把文件编辑到一半」这几秒钟整机摊开）；
   - 短 key（<16 字符）一律不收——它挡不住任何东西，收下只会让人以为自己有闸；
-  - 改文件不需要重启引擎（按 mtime 失效缓存），否则换 key 这件事会变成「先猜哪台机器要重启」。
+  - 改文件不需要重启引擎（按 mtime 失效缓存），否则换 key 这件事会变成「先猜哪台机器要重启」；
+  - 装载与比对**都不改写**用户的文件（只有 `ensureLocalKey` 会写，且只补缺不覆盖）。
   */
 
 const root = mkdtempSync(join(tmpdir(), "tutor-api-keys-"));
@@ -24,6 +26,7 @@ function writeKeys(value: unknown): void {
 beforeEach(() => {
   process.env.TUTOR_API_KEYS_FILE = file;
   rmSync(file, { force: true });
+  resetProvisionFailureForTest(); // 上一条用例故意把配发搞砸过：不清零会把后面的 `off` 断言全判成 broken
 });
 
 afterEach(() => {
@@ -31,7 +34,7 @@ afterEach(() => {
 });
 
 describe("API key 装载", () => {
-  it("没有 key 文件 = 认证关闭（authEnabled 为 false，不是恒拒绝）", () => {
+  it("没有 key 文件 = 认证关闭（authEnabled 为 false，不是恒拒绝）；这一档只属于没跑过配发的进程", () => {
     expect(loadApiKeys()).toEqual([]);
     expect(authEnabled()).toBe(false);
     expect(authenticate(GOOD)).toBeUndefined();
@@ -152,5 +155,81 @@ describe("key 比对与按仓授权", () => {
     authenticate(GOOD);
     authenticate("错的 key");
     expect(readFileSync(file, "utf8")).toBe(before);
+  });
+});
+
+/**
+  开机配发本机口令（2026-10-15 拍板：「本机调用也得带 token」）。
+  这一组钉的是「默认形态到底有没有闸」——以前答案是「没人手动建文件就没有闸」，
+  而默认装机根本不会有人建，等于闸门这个名字挂着、整机对本机任意进程摊开。
+  要钉住的四件事：缺就补、有就不动、补不成不许退回免鉴权、补出来的文件不许可读。
+  */
+describe("ensureLocalKey：本机默认形态也必须有一张口令", () => {
+  const issuedKey = (): string => ((JSON.parse(readFileSync(file, "utf8")) as { keys: { key: string }[] }).keys[0]?.key ?? "");
+
+  it("没文件：配发一张全量 key，闸门转 on，权限 0600", () => {
+    expect(authStateOf()).toBe("off");
+    const issued = ensureLocalKey();
+    expect(issued.created).toBe(true);
+    expect(issued.file).toBe(file);
+    expect(authStateOf()).toBe("on");
+    expect(authEnabled()).toBe(true);
+    expect(issuedKey().length).toBeGreaterThanOrEqual(16);
+    expect(authenticate(issuedKey())?.repositories).toEqual(["*"]);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("第二次开机不换口令：已有可用 key 时一个字都不写（否则界面里存的那份每次都 401）", () => {
+    const first = ensureLocalKey();
+    expect(first.created).toBe(true);
+    const before = readFileSync(file, "utf8");
+    utimesSync(file, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000)); // 强制缓存失效，测的就是「读到 on 就不写」而不是「缓存没变」
+    const again = ensureLocalKey();
+    expect(again.created).toBe(false);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("手写的清单不被覆盖：只补缺，已有的 key 原样在册", () => {
+    writeKeys({ keys: [{ key: GOOD, name: "只读 A 仓", repositories: ["repo-a"] }] });
+    expect(ensureLocalKey().created).toBe(false);
+    expect(loadApiKeys().map((entry) => entry.name)).toEqual(["只读 A 仓"]);
+    expect(allowsRepository(authenticate(GOOD)!, "repo-b")).toBe(false);
+  });
+
+  it("空清单不再是「用户把闸关了」：照样配发一张，默认形态里没有免鉴权这一档", () => {
+    writeKeys({ keys: [] });
+    expect(authStateOf()).toBe("off");
+    expect(ensureLocalKey().created).toBe(true);
+    expect(authStateOf()).toBe("on");
+    expect(statSync(file).mode & 0o777).toBe(0o600); // 文件本来就在，mode 得靠显式一次 chmod
+  });
+
+  it("文件坏到读不出来时不覆盖：配发不动它，闸门保持 broken（要修的不是冲掉）", () => {
+    writeKeys("{ keys 少个引号");
+    const before = readFileSync(file, "utf8");
+    const issued = ensureLocalKey();
+    expect(issued.created).toBe(false);
+    expect(issued.reason).toContain("读不出来");
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(authStateOf()).toBe("broken");
+  });
+
+  it("写不出口令文件时按「拒绝全部」跑，不退回免鉴权——路径修好后重试就能恢复", () => {
+    const blocked = join(root, "a-file-blocks-the-dir");
+    writeFileSync(blocked, "挡路用", "utf8"); // 父路径是个普通文件：mkdir 必然失败
+    process.env.TUTOR_API_KEYS_FILE = join(blocked, "api-keys.json");
+    expect(ensureLocalKey().created).toBe(false);
+    expect(authStateOf()).toBe("broken"); // 「配不出来」≠「没配所以放行」
+    expect(authEnabled()).toBe(false);
+    expect(loadApiKeys()).toEqual([]);
+    expect(authenticate(GOOD)).toBeUndefined();
+    const dir = join(root, "recovered-dir");
+    mkdirSync(dir, { recursive: true });
+    process.env.TUTOR_API_KEYS_FILE = join(dir, "api-keys.json");
+    expect(ensureLocalKey().created).toBe(true);
+    expect(authStateOf()).toBe("on");
+    rmSync(join(dir, "api-keys.json"), { force: true });
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(blocked, { force: true });
   });
 });

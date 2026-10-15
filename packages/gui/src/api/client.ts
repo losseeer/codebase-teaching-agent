@@ -179,8 +179,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-    闸门状态三档：`"off"` = 没配 key 文件（本机默认）；`"api-key"` = 已开闸，所有接口都要带口令；
-    `"broken"` = 引擎那份 key 文件读不出来，此时它按「拒绝全部」在跑（除健康检查外一律 503）。
+    闸门状态三档：`"api-key"` = 已开闸，所有接口都要带口令（**本机默认就是这一档**：引擎开机先配发一张再开监听）；
+    `"broken"` = 引擎那份 key 文件读不出来或写不出来，此时它按「拒绝全部」在跑（除健康检查外一律 503）；
+    `"off"` = 闸门没配上，只有没跑过配发的进程才会报这一档，界面上把它当成「今天不用填口令」就行。
     */
   health: () => request<{ status: string; auth?: "off" | "api-key" | "broken"; llmMode?: string }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),

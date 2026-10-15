@@ -52,7 +52,7 @@ describe("在途回合注册表", () => {
     handle.dispose();
   });
 
-  it("登记时没有身份（闸门没开）就不判归属，否则本机模式的「停止生成」会莫名失效", () => {
+  it("登记时没有身份就不判归属（后台任务那条路），否则「停止生成」会莫名失效", () => {
     const handle = beginTurn(TURN_ID, "map_chat");
     expect(abortTurn(TURN_ID, "随便谁")).toMatchObject({ aborted: true, scene: "map_chat" });
     handle.dispose();
