@@ -710,6 +710,14 @@ export interface RepositoryCatalogEntry {
   /** 监听起不来或中途死掉的报错原文，配合 `watching: false` 看 */
   watchError?: string;
   /**
+    监听是不是**被人为挂起**的（编辑期免打扰，`POST /api/repositories/:id/watch`）。
+    这一格必须与 `watching: false` 分开：同为「不会自动跟上磁盘」，
+    但一个是引擎坏了要修，另一个是用户按下的、到点会自己恢复的开关。
+    */
+  watchPaused?: boolean;
+  /** 挂起到什么时候（ISO 串）；到点自动恢复并重算一次新鲜度 */
+  watchPausedUntil?: string;
+  /**
     预算闸门此刻是否失效（只在失效时有值）。挂在地址簿而不是等用户进了仓才在成本页说：
     单价没配 ⇒ 闸门判不出超支 ⇒ 下一次导入就是在无上限花钱，这句话必须出现在花钱**之前**那页。
     */

@@ -177,12 +177,14 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 {catalog.map((item) => {
                   const isCurrent = item.repositoryId === workspace?.repositoryId;
                   const verdict = item.freshness?.verdict;
-                  // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会
-                  const watching = item.mounted && item.watching === false;
+                  // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会。
+                  // 「被人为挂起」（编辑期免打扰）是另一件事：同为不自动跟上，一个是坏了要修、一个是自己按下的开关。
+                  const paused = item.mounted && item.watchPaused === true;
+                  const watching = item.mounted && item.watching === false && !paused;
                   const meta = [
                     item.repositoryPath,
                     item.artifactsReady === false ? "没有 .tutor 产物" : "产物在 .tutor/",
-                    watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "",
+                    paused ? `监听挂起中，${item.watchPausedUntil ? `到 ${new Date(item.watchPausedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 自动恢复` : "到点自动恢复"}` : watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "",
                     item.freshness?.analyzedAt ? `上次分析 ${dateText(item.freshness.analyzedAt)}` : ""
                   ].filter(Boolean).join(" · ");
                   return (
@@ -200,7 +202,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                       </span>
                       <span className="addr-badges">
                         {!item.exists ? <span className="badge badge-danger">目录不存在</span>
-                          : watching ? <span className="badge badge-warn">无增量监听</span>
+                          : paused ? <span className="badge badge-info">监听挂起中</span>
+                            : watching ? <span className="badge badge-warn">无增量监听</span>
                             : item.mounted ? <span className="badge badge-ok">已挂载</span>
                               : <span className="badge badge-neutral">未挂载</span>}
                         {verdict === "stale" ? <span className="badge badge-warn">产物已过期</span>

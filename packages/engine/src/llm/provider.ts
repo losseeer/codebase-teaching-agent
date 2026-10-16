@@ -144,6 +144,11 @@ export interface LlmCompletion {
   attempts?: number;
   /** 每次尝试各自的墙钟（ms），按发生顺序。`[60000, 15000]` 这种形状就是「被超时掐掉一次再发一遍并成了」。 */
   attemptMs?: number[];
+  /**
+    这一发的 `max_tokens` 是**加过一档推理余量**之后才成的：说明上一发是被思考量挤空的。
+    没有这一格，日志里只看得见「一次成功、耗时略长」，看不出预算其实动过。
+    */
+  headroomEscalated?: boolean;
 }
 
 /** 给用户看的截断尾注：正文被 max_tokens 掐断时明示边界，别让半截句子伪装成完整结论。 */
@@ -233,7 +238,27 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
     input = screenOutbound(input);
-    const budget = (input.maxTokens ?? 700) + this.reasoningHeadroom;
+    const base = input.maxTokens ?? 700;
+    const first = await this.attemptOnce(input, base + this.reasoningHeadroom);
+    if (!first.truncated) return first.completion;
+    /**
+      只有一种败法值得**当场换一档预算重发**：被 `max_tokens` 截断且正文为空。实测（§62）这一族的同载荷
+      重发后来 12/12 都成功了，说明多半是那一发的思考量瞬时超预算，不是请求本身坏。
+      这与「原样重发同一份载荷」是两件事——那样赌的是运气，这次带的是信息。
+      余量被关成 0 时不重发（再发一次同样的预算没有意义），直接把话说清让用户调。
+    */
+    if (!this.reasoningHeadroom) throw OpenAICompatibleProvider.truncatedError(base, 0, false);
+    const second = await this.attemptOnce(input, base + this.reasoningHeadroom * 2);
+    if (second.truncated) throw OpenAICompatibleProvider.truncatedError(base + this.reasoningHeadroom * 2, this.reasoningHeadroom, true);
+    return { ...second.completion, headroomEscalated: true };
+  }
+
+  private static truncatedError(budget: number, headroom: number, escalated: boolean): Error {
+    return new Error(`LLM 补全${escalated ? "两发都" : ""}被 max_tokens=${String(budget)} 截断且正文为空：推理模型的思考 token 计入这个上限。当前余量 TUTOR_LLM_REASONING_HEADROOM=${String(headroom)}——再调大它，或改用非推理模型。`);
+  }
+
+  /** 发一发并解析。返回 `truncated` 而不是抛，是为了让调用方能区分「换一档还有救」与「真的没内容」。 */
+  private async attemptOnce(input: LlmCompletionInput, budget: number): Promise<{ truncated: true } | { truncated: false; completion: LlmCompletion }> {
     const messages: Record<string, unknown>[] = [{ role: "system", content: input.system }];
     if (input.messages?.length) {
       messages.push(...input.messages.map(toOpenAiMessage));
@@ -267,18 +292,19 @@ export class OpenAICompatibleProvider implements LlmProvider {
       return [{ id: call.id ?? `call_${Math.random().toString(36).slice(2, 10)}`, name, argumentsJson: call.function?.arguments ?? "{}" }];
     });
     if (!text && !toolCalls.length) {
-      if (choice?.finish_reason === "length") {
-        throw new Error(`LLM 补全被 max_tokens=${budget} 截断且正文为空：推理模型的思考 token 计入该上限。可调大 TUTOR_LLM_REASONING_HEADROOM、放宽 TUTOR_LLM_TIMEOUT_MS，或改用非推理模型。`);
-      }
+      if (choice?.finish_reason === "length") return { truncated: true };
       throw new Error("LLM returned an empty completion");
     }
     const reasoningRaw = choice?.message?.reasoning_content;
     return {
-      text,
-      toolCalls: toolCalls.length ? toolCalls : undefined,
-      reasoningContent: typeof reasoningRaw === "string" && reasoningRaw ? reasoningRaw : undefined,
-      usage: body.usage ? tokenUsage(body.usage) : undefined,
-      finishReason: choice?.finish_reason
+      truncated: false,
+      completion: {
+        text,
+        toolCalls: toolCalls.length ? toolCalls : undefined,
+        reasoningContent: typeof reasoningRaw === "string" && reasoningRaw ? reasoningRaw : undefined,
+        usage: body.usage ? tokenUsage(body.usage) : undefined,
+        finishReason: choice?.finish_reason
+      }
     };
   }
 

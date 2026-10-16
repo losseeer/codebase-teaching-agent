@@ -68,6 +68,8 @@ export interface LlmCallRecord {
   attempts?: number;
   /** 每次尝试各自的墙钟（ms）。`[60000, 15000]` = 第一发撞满超时、第二发成了——这正是超时率的真读数所在 */
   attemptMs?: number[];
+  /** 这一发是先被思考量挤空、又把 `max_tokens` 抬高一档才成的（`provider.ts` 的推理预算升档，§62） */
+  headroomEscalated?: true;
 }
 
 /** 从 provider 的结果或错误上取重试计数（`RetryLlmProvider.markAttempts` 挂的那两格）。 */
@@ -183,6 +185,7 @@ export class LoggingLlmProvider implements LlmProvider {
         ok: true,
         ms: Date.now() - started,
         ...attemptStats(completion),
+        ...(completion.headroomEscalated ? { headroomEscalated: true as const } : {}),
         ...(completion.usage ? {
           inputTokens: completion.usage.inputTokens,
           outputTokens: completion.usage.outputTokens,

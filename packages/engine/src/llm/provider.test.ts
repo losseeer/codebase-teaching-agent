@@ -68,11 +68,16 @@ describe("OpenAICompatibleProvider", () => {
     expect(captured?.max_tokens).toBe(700);
   });
 
-  it("finish=length 且 content 为空时抛显式错误（推理预算耗尽）", async () => {
-    const fetchImpl = (async () => jsonResponse(chatBody("", "length"))) as typeof fetch;
+  it("finish=length 且 content 为空：先抬一档重发，两发都空才抛，报的是最后一发的预算", async () => {
+    const sent: number[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      sent.push((JSON.parse(String((init as RequestInit).body)) as { max_tokens: number }).max_tokens);
+      return jsonResponse(chatBody("", "length"));
+    }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await expect(provider.complete({ system: "s", user: "u", maxTokens: 300 }))
-      .rejects.toThrow(/max_tokens=6300.*推理模型/);
+      .rejects.toThrow(/两发都被 max_tokens=12300 截断.*推理模型/);
+    expect(sent, "6300 与 12300：第一次撞空之后余量翻倍再发一次，不是原样重发").toEqual([6300, 12300]);
   });
 
   it("非 length 的空 content 保持通用错误", async () => {
@@ -460,5 +465,57 @@ describe("RetryLlmProvider", () => {
     }, 3);
     await expect(provider.complete({ ...INPUT, signal: controller.signal })).rejects.toBeInstanceOf(LlmAbortedError);
     expect(count).toBe(1);
+  });
+});
+
+/**
+  推理预算升档（#169）。§62 的读数把话说清了：这一族失败不是超时，是**思考量把输出预算挤空**；
+  而且同载荷重发后来 12/12 都成功——所以值得做的是「换一档预算再发一次」，不是原样重发赌运气。
+  Response 的 body 只能读一次，所以这里给的是工厂函数而不是现成响应。
+  */
+describe("OpenAICompatibleProvider 的推理预算升档", () => {
+  function scripted(bodies: Array<() => Response>) {
+    const sent: number[] = [];
+    let call = 0;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const payload = JSON.parse(String((init as RequestInit).body)) as { max_tokens: number };
+      sent.push(payload.max_tokens);
+      const factory = bodies[Math.min(call, bodies.length - 1)];
+      call += 1;
+      return factory();
+    }) as unknown as typeof fetch;
+    return { fetchImpl, sent };
+  }
+
+  it("第一发被思考挤空 ⇒ 第二发把 max_tokens 抬高一档再发，并在结果上留痕", async () => {
+    process.env.TUTOR_LLM_REASONING_HEADROOM = "6000";
+    const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("", "length")), () => jsonResponse(chatBody("这次有正文", "stop"))]);
+    const done = await new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u", maxTokens: 700 });
+    expect(sent, "第一发 700+6000，第二发 700+2×6000：抬的是余量那一档，不是随便加码").toEqual([6700, 12700]);
+    expect(done.text).toBe("这次有正文");
+    expect(done.headroomEscalated).toBe(true);
+  });
+
+  it("两发都被截断才抛：话说清最后一发的预算与当前余量", async () => {
+    process.env.TUTOR_LLM_REASONING_HEADROOM = "6000";
+    const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("", "length"))]);
+    await expect(new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u", maxTokens: 700 }))
+      .rejects.toThrow(/两发都被 max_tokens=12700 截断.*TUTOR_LLM_REASONING_HEADROOM=6000/);
+    expect(sent).toEqual([6700, 12700]);
+  });
+
+  it("余量关成 0 ⇒ 只发一发就抛：原样重发同一份预算只是赌运气，不做", async () => {
+    process.env.TUTOR_LLM_REASONING_HEADROOM = "0";
+    const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("", "length"))]);
+    await expect(new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u" })).rejects.toThrow("max_tokens=700");
+    expect(sent).toEqual([700]);
+  });
+
+  it("正文没被截断时行为一字不变：单发、不升档、不留痕", async () => {
+    process.env.TUTOR_LLM_REASONING_HEADROOM = "6000";
+    const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("正常正文", "stop"))]);
+    const done = await new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u", maxTokens: 700 });
+    expect(sent).toEqual([6700]);
+    expect(done.headroomEscalated).toBeUndefined();
   });
 });

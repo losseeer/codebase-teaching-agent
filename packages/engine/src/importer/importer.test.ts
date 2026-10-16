@@ -394,3 +394,93 @@ describe("refinementIsFresh（宏观润色缓存的失效维度）", () => {
     expect(refinementIsFresh({ versionStamp: "content:v1" }, current)).toBe(false);
   });
 });
+
+/**
+  编辑期免打扰（#173）。存在的理由很具体：引擎在学它自己的仓，**改代码的人与正在烧钱的学习者是同一台机器上的同一批文件**
+  ——10-15 实测一轮编辑叫醒一次重分析、落 8 条付费 light 调用。这一组不测「文件事件到底来没来」（那是 watcher.test.ts 的活，
+  而且真实事件在并行负载下本来就飘），只钉这个开关的三条可判定性质：关掉的就是那条监听、状态看得见、挂起活过驱逐。
+  */
+describe("ImportService 编辑期免打扰：按仓挂起 fs 监听", () => {
+  let root: string;
+  let registryFile: string;
+  const live: ImportedRepository[] = [];
+
+  function writeRegistry(paths: string[]): void {
+    mkdirSync(dirname(registryFile), { recursive: true });
+    writeFileSync(registryFile, `${JSON.stringify({ repositories: paths })}\n`);
+  }
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-import-pause-")));
+    registryFile = join(root, "registry", "repositories.json");
+    process.env.TUTOR_REGISTRY_FILE = registryFile;
+  });
+
+  afterEach(() => {
+    for (const repository of live.splice(0)) repository.watcher?.close();
+    delete process.env.TUTOR_REGISTRY_FILE;
+    delete process.env.TUTOR_MAX_MOUNTED;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function track(repositoryId: string, service: ImportService): ImportedRepository {
+    const repository = service.getRepository(repositoryId)!;
+    live.push(repository);
+    return repository;
+  }
+
+  it("挂起 = 那条 fs 监听被关掉；恢复 = 重新起一条并交回状态", () => {
+    const repo = makePersistedRepo(root, "pausable");
+    writeRegistry([repo.repoDir]);
+    const service = new ImportService();
+    expect(service.ensureMounted(repo.repositoryId).ok).toBe(true);
+    const mounted = track(repo.repositoryId, service);
+    expect(mounted.watch.started).toBe(true); // 前提：常规挂载确实起了监听
+
+    const paused = service.pauseWatching(repo.repositoryId);
+    expect(mounted.watch.started).toBe(false);
+    expect(mounted.watcher, "挂起要把握着 fs.watch 的那个对象交出去，只改状态不算关").toBeUndefined();
+    expect(service.catalog().find((item) => item.repositoryId === repo.repositoryId)?.watchPaused).toBe(true);
+
+    const resumed = service.resumeWatching(repo.repositoryId);
+    expect(resumed).toEqual({ paused: false, woken: true });
+    expect(mounted.watch.started).toBe(true);
+    expect(mounted.watcher).toBeDefined();
+    expect(service.catalog().find((item) => item.repositoryId === repo.repositoryId)?.watchPaused, "恢复后读数要跟着回来").toBeUndefined();
+    expect(new Date(paused.until).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("挂起活过 LRU 驱逐：挤出去再点回来，仍然不起监听（用户按下的开关不能悄悄失效）", () => {
+    process.env.TUTOR_MAX_MOUNTED = "1"; // 挂第二条就必然把第一条挤出去
+    const alpha = makePersistedRepo(root, "paused-alpha");
+    const beta = makePersistedRepo(root, "ejected-beta");
+    writeRegistry([alpha.repoDir, beta.repoDir]);
+    const service = new ImportService();
+    service.ensureMounted(alpha.repositoryId);
+    service.pauseWatching(alpha.repositoryId);
+    service.ensureMounted(beta.repositoryId);
+    track(beta.repositoryId, service);
+    expect(service.getRepository(alpha.repositoryId), "前提：alpha 已被驱逐").toBeUndefined();
+
+    service.ensureMounted(alpha.repositoryId);
+    const remounted = track(alpha.repositoryId, service);
+    expect(remounted.watch.started).toBe(false);
+    expect(remounted.watcher).toBeUndefined();
+    expect(service.catalog().find((item) => item.repositoryId === alpha.repositoryId)?.watchPaused).toBe(true);
+  });
+
+  it("挂起窗口夹在 1 分钟~6 小时：太短没意义，太长等于忘了它存在", () => {
+    const repo = makePersistedRepo(root, "bounded-pause");
+    writeRegistry([repo.repoDir]);
+    const service = new ImportService();
+    service.ensureMounted(repo.repositoryId);
+    track(repo.repositoryId, service);
+
+    const now = Date.now();
+    expect(service.pauseWatching(repo.repositoryId, 1).until - now).toBeGreaterThanOrEqual(59_000);
+    expect(service.pauseWatching(repo.repositoryId, 9_999_999_999).until - now).toBeLessThanOrEqual(6 * 60 * 60_000 + 1_000);
+    expect(service.pauseWatching(repo.repositoryId, Number.NaN).until - now).toBeGreaterThanOrEqual(29 * 60_000); // 缺省 30 分钟
+    service.resumeWatching(repo.repositoryId);
+    expect(service.watchPauseOf(repo.repositoryId)).toEqual({ paused: false });
+  });
+});

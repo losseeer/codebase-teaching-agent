@@ -330,6 +330,40 @@ app.delete<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryI
   return { repositories: importer.catalog() };
 });
 
+/**
+  编辑期免打扰：按仓挂起 / 恢复 fs 增量监听。存在的理由很具体——**引擎在学它自己的仓**，
+  改代码的人与被打扰的学习者是同一个进程里的两件事：一轮编辑会叫醒一次重分析并烧 light 调用
+  （10-15 实测一次 8 条，金额按当天单价约 ¥0.4）。
+
+  三条口径：
+  - 挂起**不丢东西**：产物与内存照用，只是磁盘改动不再自动重分析；恢复时重算一次新鲜度，
+    脏了由界面横幅如实说，要不要重烧仍由人点（引擎绝不自动重分析这条纪律不变）。
+  - 挂起活过驱逐与重新挂载：登记在 `ImportService` 里，LRU 把仓挤出去再点回来时开关仍然有效。
+  - 到点自动恢复（缺省 30 分钟，限死在 1 分钟~6 小时）：一个忘在手上的开关不该永久关掉增量更新。
+  */
+app.post<{ Params: { repositoryId: string }; Body: { paused?: unknown; ttlMs?: unknown } }>("/api/repositories/:repositoryId/watch", async (request) => {
+  // 不需要在这里再判一次「仓在不在」：URL 带 `:repositoryId` 的路由都由懒挂载钩子先把仓挂上，
+  // 地址簿里没有 / 目录没了 / 产物不全在那一步就已经 404 了（reason=not_in_catalog 等）。
+  const repositoryId = request.params.repositoryId;
+  const paused = request.body?.paused !== false; // 缺省 = 挂起（这条路由是来关监听的，不是来问状态的）
+  const ttlMs = typeof request.body?.ttlMs === "number" ? request.body.ttlMs : undefined;
+  if (!paused) return { repositoryId, paused: false, woken: importer.resumeWatching(repositoryId).woken, watching: importer.getRepository(repositoryId)?.watch ?? null };
+  const result = importer.pauseWatching(repositoryId, ttlMs);
+  return { repositoryId, paused: true, until: new Date(result.until).toISOString(), watching: false };
+});
+
+/**
+  重跑一次沙箱隔离探测。存在的理由：探测失败会把代码题整域禁用（fail-closed，这是对的），
+  但**恢复不能只有「重启引擎」这一条路**——换完 Xcode 命令行工具、补好 `sandbox-exec`、
+  或者从受限 CI 回到本机之后，人应该能当场让它再验一遍（§64 之前记的 #164）。
+  这项能力不降级：`level !== "enforced"` 时代码题域照旧禁用，这里只负责给出新的实测读数。
+  */
+app.post("/api/sandbox/reprobe", async () => {
+  const sandbox = await reprobeIsolation();
+  console.log(`[engine] 沙箱重探：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `**未通过——代码题域继续禁用**：${sandbox.reason}`}`);
+  return { sandbox };
+});
+
 /** 每仓可持久化的设置形态（settings_json 里的一个子集；refinement 标记等内部键不在此列、读写都须保留）。 */
 interface RepositorySettingsPayload {
   monthlyBudgetUsd: number;

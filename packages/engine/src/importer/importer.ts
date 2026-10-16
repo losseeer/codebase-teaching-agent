@@ -188,6 +188,12 @@ function judgeFreshness(repositoryPath: string, index: RepositoryIndex, analysis
   };
 }
 
+/** 编辑期免打扰的默认窗口与上下限：太短没意义，太长等于忘了它存在（到点自动恢复）。 */
+const WATCH_PAUSE_DEFAULT_MS = 30 * 60_000;
+const WATCH_PAUSE_MIN_MS = 60_000;
+const WATCH_PAUSE_MAX_MS = 6 * 60 * 60_000;
+const pauseWindow = (ms: number): number => (Number.isFinite(ms) && ms > 0 ? Math.round(ms) : WATCH_PAUSE_DEFAULT_MS) || WATCH_PAUSE_DEFAULT_MS;
+
 export class ImportService extends EventEmitter {
   private readonly jobs = new Map<string, ImportJob>();
   private readonly repositories = new Map<string, ImportedRepository>();
@@ -196,6 +202,11 @@ export class ImportService extends EventEmitter {
   private queue = Promise.resolve();
   /** 每个仓库至多一轮重分析在途；running 期间新到的路径先累积，本轮结束后合并跑下一轮。 */
   private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
+  /**
+    监听被人为挂起的仓（编辑期免打扰）：`until` 之后自动恢复。放在这里而不是挂载态里，
+    因为**挂起要活过驱逐与重新挂载**——LRU 把这个仓挤出去再点回来时，用户按下的开关不能悄悄失效。
+    */
+  private readonly watchPaused = new Map<string, { until: number; timer?: ReturnType<typeof setTimeout> }>();
 
 
   submit(inputPath: string, summaryHeaderComments?: boolean): ImportJob {
@@ -246,6 +257,7 @@ export class ImportService extends EventEmitter {
               freshness: mounted.freshness,
               // 监听死活跟着挂载项走：它决定「这次新鲜度读数是会自己更新的，还是停在挂载那一刻」
               watching: mounted.watch.started && !mounted.watch.dead,
+              ...(this.watchPauseOf(repositoryId).paused ? { watchPaused: true, watchPausedUntil: new Date(this.watchPauseOf(repositoryId).until ?? 0).toISOString() } : {}),
               ...(mounted.watch.error ? { watchError: mounted.watch.error.slice(0, 160) } : {})
             }
           : {})
@@ -306,16 +318,10 @@ export class ImportService extends EventEmitter {
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
     this.repositories.get(repositoryId)?.watcher?.close();
-    const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
-      // 运行中途才炸的监听（inotify 额度、网络盘断开）比起不来更阴：它先报 successful start，之后再也不给事件
-      traceEngine("mount", { repositoryId, phase: "watch_died", error: message.slice(0, 200) }, { traceId: null });
-      console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
-    });
-    const watch = watcher.start();
-    if (!watch.started) {
-      traceEngine("mount", { repositoryId, phase: "watch_failed", error: (watch.error ?? "").slice(0, 200) }, { traceId: null });
-      console.warn(`[engine] ${repository.path} 起不了文件监听：${watch.error}。导入产物照样能用，但改动不会自动重分析，界面会把「新鲜度」按挂载那一刻报。`);
-    }
+    // 挂起中：不重新开监听。产物与内存照用，只是磁盘改动不会再叫醒重分析——这正是这个开关存在的理由。
+    const paused = this.watchPaused.has(repositoryId);
+    if (paused) traceEngine("mount", { repositoryId, phase: "watch_skipped_paused" }, { traceId: null });
+    const { watcher, watch } = paused ? { watcher: undefined, watch: { started: false, dead: false } } : this.startWatcher(repository);
     const mounted: ImportedRepository = {
       ...repository,
       watcher,
@@ -335,8 +341,72 @@ export class ImportService extends EventEmitter {
     this.lru.push(repositoryId);
   }
 
+  /** 起一条 fs 监听并交回它的初始终态（attach 与恢复共用这一份，别让两处对「起不来怎么办」各写一遍）。 */
+  private startWatcher(repository: AnalyzedRepository): { watcher: RepositoryWatcher; watch: WatchStatus } {
+    const repositoryId = repository.index.repositoryId;
+    const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
+      // 运行中途才炸的监听（inotify 额度、网络盘断开）比起不来更阴：它先报 successful start，之后再也不给事件
+      traceEngine("mount", { repositoryId, phase: "watch_died", error: message.slice(0, 200) }, { traceId: null });
+      console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
+    });
+    const watch = watcher.start();
+    if (!watch.started) {
+      traceEngine("mount", { repositoryId, phase: "watch_failed", error: (watch.error ?? "").slice(0, 200) }, { traceId: null });
+      console.warn(`[engine] ${repository.path} 起不了文件监听：${watch.error}。导入产物照样能用，但改动不会自动重分析，界面会把「新鲜度」按挂载那一刻报。`);
+    }
+    return { watcher, watch };
+  }
+
   /**
-    驱逐 = 关它的 fs 监听 + 从内存摘掉（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
+    编辑期免打扰：**关掉这个仓的 fs 监听**，到点自己恢复。给它的理由是这台机器上改代码的人
+    与正在被学习的仓常常是同一个（引擎在学它自己的仓），一轮编辑就会叫醒一次重分析并烧 light 调用（§62 实测 8 条）。
+    挂起不丢东西：恢复时重算一次新鲜度，脏了由界面横幅如实说，要不要重烧仍由人点。
+  */
+  pauseWatching(repositoryId: string, ttlMs = WATCH_PAUSE_DEFAULT_MS): { paused: boolean; until: number } {
+    const until = Date.now() + Math.min(WATCH_PAUSE_MAX_MS, Math.max(WATCH_PAUSE_MIN_MS, pauseWindow(ttlMs)));
+    const previous = this.watchPaused.get(repositoryId);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const timer = setTimeout(() => this.resumeWatching(repositoryId), until - Date.now());
+    timer.unref?.(); // 一个挂起不该把进程钉住
+    this.watchPaused.set(repositoryId, { until, timer });
+    const mounted = this.repositories.get(repositoryId);
+    mounted?.watcher?.close();
+    if (mounted) {
+      mounted.watcher = undefined;
+      mounted.watch = { started: false, dead: false };
+    }
+    traceEngine("mount", { repositoryId, phase: "watch_paused", until: new Date(until).toISOString() }, { traceId: null });
+    return { paused: true, until };
+  }
+
+  /** 恢复监听（手动或到点自动）。没挂载的仓只清登记——下次 attach 会按常规自己起。 */
+  resumeWatching(repositoryId: string): { paused: boolean; woken: boolean } {
+    const previous = this.watchPaused.get(repositoryId);
+    if (previous?.timer) clearTimeout(previous.timer);
+    this.watchPaused.delete(repositoryId);
+    const mounted = this.repositories.get(repositoryId);
+    if (!mounted) return { paused: false, woken: false };
+    const started = this.startWatcher(mounted);
+    mounted.watcher = started.watcher;
+    mounted.watch = started.watch;
+    // 挂起这段时间磁盘可能已经变了：新鲜度必须重算，否则界面拿着挂起前那一刻的判定说「产物是新的」
+    mounted.freshness = judgeFreshness(mounted.path, mounted.index, mounted.analysis);
+    traceEngine("mount", { repositoryId, phase: "watch_resumed", freshness: mounted.freshness.verdict, changedWhilePaused: mounted.freshness.changedFiles }, { traceId: null });
+    return { paused: false, woken: true };
+  }
+
+  /** 此刻的挂起读数（到点即视为已恢复，顺手清登记）。 */
+  watchPauseOf(repositoryId: string): { paused: boolean; until?: number } {
+    const entry = this.watchPaused.get(repositoryId);
+    if (!entry) return { paused: false };
+    if (entry.until <= Date.now()) {
+      this.resumeWatching(repositoryId);
+      return { paused: false };
+    }
+    return { paused: true, until: entry.until };
+  }
+
+  /** 驱逐 = 关它的 fs 监听 + 从内存摘掉（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
     刻意**不**清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
     换仓后不可能误命中；实测切仓时清缓存会让下一个回合把完全相同的输入重烧一次
     （切换 → 重烧 ≈1.5k in / 200 out），而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。

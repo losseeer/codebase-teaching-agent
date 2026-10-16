@@ -851,3 +851,59 @@ describe("来源闸：默认只服务本机浏览器", () => {
     expect((await fromEvil("GET", "/api/repositories")).statusCode, "清单一撤就恢复默认关").toBe(403);
   });
 });
+
+/**
+  两个控制口的路由级验收（#173 与 #164）。它们测的都是「人能不能当场改变引擎的状态并看见结果」：
+  挂起监听是「我接下来要改这个仓，别在此期间重烧」，重探沙箱是「环境修好了，别逼我重启进程」。
+  两条都不花钱：前者不触发任何调用，后者打的是探测进程自己起的回环监听。
+  */
+describe("编辑期免打扰与沙箱重探", () => {
+  afterEach(() => {
+    // 挂起态不能留给后面的用例：它会让这个仓的增量监听在别的用例里静默缺席
+    app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/watch`, payload: { paused: false } });
+  });
+
+  it("挂起 → 地址簿读数跟着变 → 恢复；这条路由不会顺手重分析", async () => {
+    const before = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: { repositoryId: string; watchPaused?: boolean }[] };
+    expect(before.repositories.find((item) => item.repositoryId === repositoryId)?.watchPaused, "前提：默认没有挂起").toBeUndefined();
+
+    const paused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/watch`, payload: { ttlMs: 5 * 60_000 } });
+    expect(paused.statusCode).toBe(200);
+    expect((paused.json() as { paused: boolean; watching: boolean }).paused).toBe(true);
+
+    const catalog = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: { repositoryId: string; watchPaused?: boolean; watchPausedUntil?: string }[] };
+    const entry = catalog.repositories.find((item) => item.repositoryId === repositoryId);
+    expect(entry?.watchPaused).toBe(true);
+    expect(new Date(entry?.watchPausedUntil ?? 0).getTime()).toBeGreaterThan(Date.now());
+
+    const resumed = (await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/watch`, payload: { paused: false } })).json() as { paused: boolean; woken: boolean };
+    expect(resumed).toMatchObject({ paused: false, woken: true });
+    const after = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: { repositoryId: string; watchPaused?: boolean }[] };
+    expect(after.repositories.find((item) => item.repositoryId === repositoryId)?.watchPaused, "恢复后读数要跟着回来").toBeUndefined();
+  });
+
+  it("地址簿里没有的仓连挂起都谈不上：懒挂载钩子先 404，原因如实给出", async () => {
+    const missing = await app.inject({ method: "POST", url: "/api/repositories/repo_not_in_the_book/watch", payload: { paused: true } });
+    expect(missing.statusCode).toBe(404);
+    expect((missing.json() as { reason?: string }).reason, "这条路由不重复实现「仓在不在」的判断，口径与其余带 :repositoryId 的路由同一处").toBe("not_in_catalog");
+  });
+
+  /**
+    重探的断言刻意与环境无关：能跑嵌套 `sandbox-exec` 的机器上是 enforced，受限 CI 上是 unavailable——
+    **两者都是合法读数**，要钉住的是「这条路当场给出新的实测结果」而不是「它一定过」
+    （用户 10-15 那句：环境不支持不能伪装成通过）。
+    */
+  it("POST /api/sandbox/reprobe 返回新的实测读数，字段形状与开机那份一致", async () => {
+    const response = await app.inject({ method: "POST", url: "/api/sandbox/reprobe" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { sandbox: { level: string; checks: { name: string; passed: boolean }[]; reason: string; probedAt: string } };
+    expect(["enforced", "unavailable"]).toContain(body.sandbox.level);
+    expect(body.sandbox.checks.length, "一次重探必须给出逐项 canary，而不是一个总判断").toBeGreaterThan(3);
+    expect(body.sandbox.checks.every((check) => typeof check.passed === "boolean")).toBe(true);
+    expect(body.sandbox.reason.length).toBeGreaterThan(0);
+    expect(new Date(body.sandbox.probedAt).getTime()).toBeGreaterThanOrEqual(Date.now() - 60_000);
+    // 与开机那份同源：/api/health 的 sandbox 必须已经是重探之后的读数
+    const health = (await app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
+    expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
+  });
+});
