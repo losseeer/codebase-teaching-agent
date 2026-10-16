@@ -14,6 +14,7 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { Icon } from "../ui/icons";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
+import { applyOverride, migrateLegacyTierOverrides } from "../modules/server-overlays";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
@@ -167,6 +168,8 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     setOverrides(loadModuleOverrides(repositoryId));
     setEntryState({});
     requestedEntries.current.clear();
+    // 旧版本把改档存在浏览器里，引擎完全不知道：第一次连上这个仓就搬一次家（幂等，搬完清本地键）
+    void migrateLegacyTierOverrides(repositoryId);
   }, [repositoryId]);
   useEffect(() => {
     // 推荐入口是**花 token 的请求**：用户停在宏观设计时，隐藏的教学面板也曾替他点过一次 LLM
@@ -341,27 +344,18 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
             onRemove={(id) => setOverrides((curr) => (curr.custom.some((item) => item.id === id)
               ? { ...curr, custom: curr.custom.filter((item) => item.id !== id) }
               : { ...curr, hidden: [...curr.hidden, id] }))}
-            onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [], tier: {} })}
+            onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [] })}
             onTierChange={(id, tier) => {
               const target = modules.find((item) => item.id === id);
               if (!target?.tier) return;
-              setOverrides((curr) => {
-                const next = { ...curr.tier };
-                if (tier) next[id] = tier;
-                else delete next[id];
-                return { ...curr, tier: next };
+              void applyOverride(repositoryId, tier
+                // 原判一起送：引擎写审计时要落「按哪些数判的」那一档，只记改后值就问不出错在哪
+                ? { kind: "set_tier", module: id, tier, given: target.tierGiven ?? target.tier }
+                : { kind: "reset", module: id }).then((outcome) => {
+                showToast(outcome.ok ? (tier ? `已把「${target.label}」改到${tier === "core" ? "主干" : tier === "facility" ? "设施" : "外围"}` : `已恢复「${target.label}」的引擎判据`) : outcome.text);
+                // 档位由 /course 现算后叠覆盖层给回，重取一次才知道改成没改成（不在本地假更新）
+                if (outcome.ok) t.reloadCourseData();
               });
-              // 手动改档是判据的**真值线索**：不改审计线，就永远只能说「用户嫌它不准」而拿不出个数
-              emit(repositoryId, "module_tier_overridden", {
-                module_id: id,
-                module_label: target.label,
-                from: target.tier,
-                to: tier ?? target.tierGiven ?? target.tier,
-                core_share: target.tierEvidence?.coreShare ?? "",
-                visible_files: target.tierEvidence?.visibleFiles ?? "",
-                restored: tier === null
-              });
-              showToast(tier ? `已把「${target.label}」改到${tier === "core" ? "主干" : tier === "facility" ? "设施" : "外围"}` : `已恢复「${target.label}」的引擎判据`);
             }}
           >
             <p className="field-note" title="模块职责来自课程树节点摘要；名称与取舍可在齿轮里的「模块配置」改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>

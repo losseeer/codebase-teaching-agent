@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TutorDatabase } from "../store/database.js";
-import type { CourseTree, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { generateArchitectureCached, aggregateModuleEdges } from "./architecture.js";
+import { architectureInputOf, generateArchitectureCached, peekCachedArchitecture, aggregateModuleEdges } from "./architecture.js";
 
 /**
   分层产物这层的测试全围着一条线打转：**模型只许动判断题**。
@@ -154,14 +154,84 @@ describe("generateArchitectureCached", () => {
     expect(legacy.source).toBe("llm");
   });
 
-  it("覆盖层进缓存键：同一次判层，改档之后必须重问（人的意见要影响下一次的判断）", async () => {
+  it("人工修正不进键也不花钱：拖动后仍读同一份原判，修正只在真判时进请求", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-key-")));
     const database = new TutorDatabase(dir);
     try {
-      const { provider, complete } = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api", "module:src/core", "module:src/db"] }] }));
-      await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database });
-      await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database, overrides: { moduleLayer: { "module:src/db": "接入" } } });
+      const { provider, complete } = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api", "module:src/core"] }, { name: "数据", duty: "d", modules: ["module:src/db"] }] }));
+      const input = { ...base, analysis: analysisOf(), provider, database };
+      await generateArchitectureCached(input);
+      expect(complete).toHaveBeenCalledTimes(1);
+      const overrides = { moduleLayer: { "module:src/core": "数据" }, layerRenames: { 接入: "入口层" } };
+      // ① 拖动换层 + 改层名之后：读侧命中的还是那份原判，一發都不许多发
+      //   （这条形状本来不是这样：覆盖层进键 ⇒ 拖一次翻一次键，而读侧无缓存就自发调用 = 每次拖动一笔没人确认的钱）
+      const moved = await generateArchitectureCached({ ...input, overrides });
+      expect(complete, "人工修正是覆盖，不是新证据：不许因此重问").toHaveBeenCalledTimes(1);
+      expect(moved.source).toBe("llm");
+      expect(moved.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["入口层", ["module:src/api"]], ["数据", ["module:src/db", "module:src/core"]]]);
+      // ② 落盘的必须是**未叠修正的原判**：把修正烤进缓存，下一次读会再叠第二遍，改名那类修正当场就对不上号了
+      const bare = await generateArchitectureCached(input);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(bare.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src/api", "module:src/core"]], ["数据", ["module:src/db"]]]);
+      // ③ 显式重问时用户的意见在请求里：下一次判断要看得见
+      await generateArchitectureCached({ ...input, overrides, force: true });
       expect(complete).toHaveBeenCalledTimes(2);
+      const sent = JSON.stringify(complete.mock.calls[1]?.[0] ?? {});
+      expect(sent).toContain("userOverrides");
+      expect(sent).toContain("接口层");
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("读侧（allowCall: false）没有缓存行也不发请求：给静态三层并说清那一发怎么花", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-peek-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const { provider, complete } = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api", "module:src/core", "module:src/db"] }] }));
+      const peeked = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database, allowCall: false });
+      expect(complete, "打开画布是读取动作，不能顺手产生一笔无人确认的调用").not.toHaveBeenCalled();
+      expect(peeked.source).toBe("static");
+      expect(peeked.usage, "没发请求就不该有用量入账").toBeUndefined();
+      expect(peeked.reason).toContain("还没判过层");
+      expect(peeked.layers.map((layer) => layer.name)).toEqual(["主干", "设施"]);
+      // 点了「重新分层」之后，同一份原判进缓存，读侧立刻恢复成模型判的那几层
+      await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database });
+      expect(complete).toHaveBeenCalledTimes(1);
+      const after = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database, allowCall: false });
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(after.source).toBe("llm");
+      expect(after.layers.map((layer) => layer.name)).toEqual(["接入"]);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("输入构造收成一处：存的课程树没带 tier 也要现算，读侧与写侧算的是同一个键", async () => {
+    /**
+      这条是 2026-10-16 浏览器实测留下的回归位。`/overlays/apply` 以前自己拼了一遍输入、少叠 `annotateModuleTiers`，
+      于是 payload 里每个模块的 tier 都成 periphery ⇒ 算出的键和读侧不是同一个 ⇒ peek 读不到判好的那份 ⇒
+      校验层名时只认得「外围」，真仓上每一次拖动都被自己的校验拒成 422。
+      现在四个入口共用 `architectureInputOf`，就按「存的树不带 tier」这个真实形状验两边同键。
+      */
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-input-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const raw = courseOf();
+      raw.root.children.find((node) => node.id === "modules")!.children.forEach((node) => { delete node.tier; });
+      const args = { repositoryId: "repo", repositoryPath: "/repo", course: raw, analysis: analysisOf(), index: INDEX, database, overlays: {} as RepositoryOverlays };
+      const { provider, complete } = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api", "module:src/core"] }, { name: "数据", duty: "d", modules: ["module:src/db"] }] }));
+      const generated = await generateArchitectureCached({ ...architectureInputOf(args), provider });
+      expect(generated.source).toBe("llm");
+      expect(complete).toHaveBeenCalledTimes(1);
+      const modules = architectureInputOf(args).course.root.children.find((node) => node.id === "modules")!.children;
+      expect(modules.find((node) => node.id === "module:src/api")?.tier, "含对外服务入口 ⇒ core：这一格由构造函数补上，不靠存的树带").toBe("core");
+      expect(architectureInputOf(args).overrides, "没有架构覆盖层就不给空对象：空对象也是一种「有人改过」的读数").toBeUndefined();
+      const peek = peekCachedArchitecture({ ...architectureInputOf(args), provider });
+      expect(peek.layers, "写侧 peek 读得到判好的那几层，不是静态的「外围」").toEqual(["接入", "数据"]);
+      expect(complete, "peek 绝不发请求：为校验层名烧一发重判是把「挪一下模块」变成一笔钱").toHaveBeenCalledTimes(1);
     } finally {
       database.close();
       rmSync(dir, { recursive: true, force: true });

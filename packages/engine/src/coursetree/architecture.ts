@@ -1,8 +1,11 @@
-import type { ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTree, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
 import { groupExternals, isBoundaryMember } from "../depgraph/external-catalog.js";
-import { isServedEntrypoint } from "../depgraph/graph.js";
+import { graphFromData, isServedEntrypoint } from "../depgraph/graph.js";
+import { classifyFileRoles, fileStructureOf } from "../depgraph/roles.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import type { TutorDatabase } from "../store/database.js";
+import { applyRepositoryOverlays } from "../store/overlays.js";
+import { annotateModuleTiers } from "./projection.js";
 import { layerCacheKey } from "../lib.js";
 
 /**
@@ -54,6 +57,12 @@ export interface ArchitectureInput {
   overrides?: ArchitectureOverrides;
   /** regenerate 路由用：跳过缓存与「命中即返回」，真问一次。 */
   force?: boolean;
+  /**
+    读侧（`GET /architecture`）传 false：**没有缓存行就回静态三层，绝不自己发请求**。
+    这是「不静默触发花钱动作」在架构视图上的落点——打开画布是个读取动作，
+    「这个仓还没判过层」不能顺手变成一笔没人确认的调用；要判，界面上有明确的「重新分层」那一下。
+    */
+  allowCall?: boolean;
 }
 
 export interface ArchitectureResult extends ArchitecturePlan {
@@ -278,15 +287,47 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
     .map((edge) => ({ from: edge.from, to: edge.to, weight: edge.weight }));
   const boundary = boundaryRows(analysis.graph.externals);
   const externalsMissing = analysis.graph.externals === undefined;
-  const payload = {
+  /**
+    人工修正（改层名 / 挪模块）**不进键**，只进请求。
+    为什么单独钉这件事：拖动是这个视图的主交互，而修正本来就是读的时候现叠上去的一层——
+    让它翻键等于把「拖一下」变成一次重判请求，模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
+    判层的**证据**（模块 id、名字、摘要、结构角色、规模、入口、热度、模块间往来）照样进键：
+    模块增删、摘要重烧这些真变化必须重问，人工改名归到证据那一档（改一次翻一次键，但读侧不发请求，要花必须点「重新分层」）。
+    */
+  const keyPayload = {
     modules: truncated.map((fact) => ({ id: fact.id, title: fact.title, summary: fact.summary, tier: fact.tier, files: fact.files, entry: fact.hasServedEntry, hot: fact.hotCommits })),
     edges: moduleEdges,
-    // 人工覆盖层进 payload 也进键：用户改过的归属要影响下一次的判断，且一改就自然翻键重判
+    ...(omittedModules ? { omittedModules } : {})
+  };
+  const payload = {
+    modules: keyPayload.modules,
+    edges: moduleEdges,
     ...(overrides ? { userOverrides: overrides } : {}),
     ...(omittedModules ? { omittedModules } : {})
   };
-  const key = layerCacheKey({ layer: "architecture", repositoryId, contractVersion: ARCH_INPUT_VERSION, modelVersion, payload });
+  const key = layerCacheKey({ layer: "architecture", repositoryId, contractVersion: ARCH_INPUT_VERSION, modelVersion, payload: keyPayload });
   return { truncated, facts, filesByModule, moduleEdges, boundary, externalsMissing, omittedModules, payload, key };
+}
+
+/**
+  模块地图那条出口的共同形态：**先现算 tier，再叠人工覆盖层**。`/course` 与架构四个入口都走这里，
+  所以「界面看到的分组」和「架构图上谁在哪层」不会各算一套。
+  幂等靠 id：覆盖层按模块 id 改名/隐藏/改档，叠两次还是同一份。
+  */
+export function moduleCourseOf(course: CourseTree, analysis: RepositoryAnalysis, index: RepositoryIndex, overlays: RepositoryOverlays): CourseTree {
+  const roles = classifyFileRoles(fileStructureOf(index.files, graphFromData(analysis.graph)));
+  return applyRepositoryOverlays(annotateModuleTiers(course, roles, analysis.graph.entrypoints), overlays);
+}
+
+/**
+  架构这条链上四个入口（读、重新分层、覆盖层校验、Agent 写工具）共用的一份输入。
+  为什么收成一处：`/overlays/apply` 以前自己拼了一遍、少叠 `annotateModuleTiers` ⇒ payload 里每个模块的 tier 都成 periphery ⇒
+  算出的缓存键和读侧不是同一个 ⇒ peek 找不到判好的那份 ⇒ 校验层名时只认得「外围」，真仓上每一次拖动都被 422 拒掉
+  （2026-10-16 浏览器实测 dianping）。这类漂移不靠「记得照抄」防，靠只有一处能构造。
+  */
+export function architectureInputOf(input: { repositoryId: string; repositoryPath: string; course: CourseTree; analysis: RepositoryAnalysis; index: RepositoryIndex; database?: TutorDatabase; overlays: RepositoryOverlays }): ArchitectureInput {
+  const { repositoryId, repositoryPath, analysis, index, database, overlays } = input;
+  return { repositoryId, repositoryPath, analysis, index, database, course: moduleCourseOf(input.course, analysis, index, overlays), overrides: overlays.architecture };
 }
 
 /**
@@ -339,6 +380,11 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
       return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByModule, analysis.graph.imports), overriddenLayers: layered.overriddenLayers, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
     }
   }
+  /** 读侧（`allowCall: false`）没缓存行就到此为止：给静态三层，不发请求、不落盘。 */
+  if (input.allowCall === false) {
+    const untouched = applyOverrides(staticLayers(truncated), overrides);
+    return { ...buildStatic(untouched.layers, `还没判过层：打开画布不会调用模型，点「重新分层」才花这一发。${tierReason(externalsMissing)}`), overriddenLayers: untouched.overriddenLayers };
+  }
   try {
     const response = await provider.complete({
       system: [
@@ -355,16 +401,21 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
       scene: "map.architecture"
     });
     const parsed = parseLayers(response.text, truncated);
-    const layered = parsed.layers ? applyOverrides(parsed.layers, overrides) : undefined;
-    if (!layered) {
+    if (!parsed.layers) {
       // 判不出来就回落静态三层并说清原因；**不落盘**——同一份输入下次还要再问
       const fallback = applyOverrides(staticLayers(truncated), overrides);
       return { ...buildStatic(fallback.layers, `分层判断没采信（${parsed.reason ?? "输出不合法"}），退回${tierReason(externalsMissing)}`), overriddenLayers: fallback.overriddenLayers, usage: response.usage };
     }
+    const layered = applyOverrides(parsed.layers, overrides);
+    /**
+      落盘的是模型的**原判**（没叠人工修正）：修正每次读的时候现叠一次。
+      键里不含修正，所以同一份原判会被反复读到——把修正烤进缓存等于下一次读叠第二遍，
+      那时「接入→入口层」这类改名已经不成立，界面上的层会开始对不上号。
+      */
     const plan: ArchitecturePlan = {
       repositoryId,
-      layers: layered.layers,
-      edges: layerEdges(layered.layers, filesByModule, analysis.graph.imports),
+      layers: parsed.layers,
+      edges: layerEdges(parsed.layers, filesByModule, analysis.graph.imports),
       externals: boundary.rows,
       source: "llm",
       ...(parsed.droppedFacts ? { reason: "模型额外给了边或文件字段，已丢弃（层归属仍按它判的结果）" } : {}),
@@ -376,7 +427,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     };
     // 模型自己说「边/文件字段被我丢掉了」的那一次不落盘：payload 与产出不同构，留着下次重问才收敛
     if (!parsed.droppedFacts) database?.putLayerCache(key, plan);
-    return { ...plan, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
+    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByModule, analysis.graph.imports), omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
   } catch (error) {
     const fallback = applyOverrides(staticLayers(truncated), overrides);
     return { ...buildStatic(fallback.layers, `分层调用没成功（${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}），退回${tierReason(externalsMissing)}`), overriddenLayers: fallback.overriddenLayers };

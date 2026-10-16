@@ -8,16 +8,16 @@ import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
 import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
-import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
+import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import type { ImportedRepository } from "./importer/importer.js";
-import { generateArchitectureCached, peekCachedArchitecture } from "./coursetree/architecture.js";
+import { architectureInputOf, generateArchitectureCached, moduleCourseOf, peekCachedArchitecture } from "./coursetree/architecture.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
 import type { ArchitectureToolContext } from "./source/tool-loop.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
-import { classifyFileRoles, fileStructureOf } from "./depgraph/roles.js";
+import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
@@ -30,7 +30,7 @@ import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
-import { applyRepositoryOverlays, overlayCounts, patchOverlays, readOverlays, removeOverlayKeys, type OverlaysPatch } from "./store/overlays.js";
+import { overlayCounts, patchOverlays, readOverlays, removeOverlayKeys, type OverlaysPatch } from "./store/overlays.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
@@ -704,12 +704,9 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/c
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   // 模块分级现算（主干/设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
-  const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
-  // 覆盖层叠在现算的档之后（2026-10-16 上收服务端）：人工改过的档必须与引擎判的档走同一条出口，
-  // 否则 GUI 看到的是一套、Agent 装配证据看到的是另一套，用户改完档再问一句就被推翻。
   const courseDatabase = new TutorDatabase(repository.path);
   try {
-    return applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), readOverlays(courseDatabase, repository.index.repositoryId));
+    return moduleCourseOf(repository.course, repository.analysis, repository.index, readOverlays(courseDatabase, repository.index.repositoryId));
   } finally {
     courseDatabase.close();
   }
@@ -850,15 +847,16 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
-  const provider = budgetExhausted ? undefined : lightLlmProvider;
+  /**
+    读侧两件事：**provider 照给**（缓存键里有 modelVersion，不给就退成 "none" ⇒ 判好的那份读不回来，
+    画布会静默换成静态三层），但 `allowCall: false` 让它没有缓存行时也不发请求。
+    所以这条路由不看预算：预算只管「重新分层」那一下，不管打开画布。
+    */
   const database = new TutorDatabase(repository.path);
   try {
-    const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
     const overlays = readOverlays(database, repository.index.repositoryId);
-    const course = applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), overlays);
-    const plan = await generateArchitectureCached({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider, database, overrides: overlays.architecture });
-    if (plan.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", { input_tokens: plan.usage.inputTokens, output_tokens: plan.usage.outputTokens, cache_hit_tokens: plan.usage.promptCacheHitTokens ?? null, provider: provider?.modelVersion ?? "none", scene: "architecture_map" });
+    const plan = await generateArchitectureCached({ ...architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays }), provider: lightLlmProvider, allowCall: false });
+    // 读侧不可能有用量（allowCall: false 那条分支不发请求），所以这里不写 token_usage：钱只在 regenerate 那一下入账
     return plan;
   } finally {
     database.close();
@@ -874,10 +872,8 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：重新分层需要模型判层名与归属。" });
   const database = new TutorDatabase(repository.path);
   try {
-    const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
     const overlays = readOverlays(database, repository.index.repositoryId);
-    const course = applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), overlays);
-    const plan = await generateArchitectureCached({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider: lightLlmProvider, database, force: true, overrides: overlays.architecture });
+    const plan = await generateArchitectureCached({ ...architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays }), provider: lightLlmProvider, force: true });
     if (plan.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", { input_tokens: plan.usage.inputTokens, output_tokens: plan.usage.outputTokens, cache_hit_tokens: plan.usage.promptCacheHitTokens ?? null, provider: lightLlmProvider.modelVersion, scene: "architecture_map" });
     return plan;
   } finally {
@@ -909,7 +905,9 @@ app.post<{ Params: { repositoryId: string }; Body: { intent?: OverrideIntent; vi
   const database = new TutorDatabase(repository.path);
   try {
     const outcome = applyOverrideIntent(repository, database, intent, request.body?.via === "agent" ? "agent" : "gui");
-    return reply.code(outcome.ok ? 200 : 422).send(outcome);
+    // 拒写时把引擎那句原话同时放进 `error`：GUI 的 fetch 封装只认非 2xx 的 `error` 字段，
+    // 不在这里镜像一份就会给用户看一句通用的「没送达」——而它其实送到了、还被讲清了为什么不行
+    return reply.code(outcome.ok ? 200 : 422).send(outcome.ok ? outcome : { ...outcome, error: outcome.text });
   } finally {
     database.close();
   }
@@ -1149,13 +1147,14 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
 /** 一次人工修正的落地：校验 → 写盘 → 审计 → 通知。GUI 的拖动与 Agent 的工具都走这一个函数。 */
 function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
   const overlays = readOverlays(database, repository.index.repositoryId);
-  const course = applyRepositoryOverlays(repository.course, overlays);
   if (!lightLlmProvider) return { ok: false, text: "没改：这份产物还没配模型，图上没有可改的层。", overlays };
-  const peek = peekCachedArchitecture({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider: lightLlmProvider, database, overrides: overlays.architecture });
+  /** 与两条读出口同一份输入构造（tier 现算 + 覆盖层）——这里曾经少叠一档，结果真仓上每次拖动都被自己的层名校验拒掉 */
+  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
+  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
   const outcome = commitOverride({
     database,
     repositoryId: repository.index.repositoryId,
-    course,
+    course: input.course,
     layers: peek.layers,
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
     onApplied: (event) => broadcast({ type: "architecture_updated", payload: { repositoryId: event.repositoryId, module: event.module ?? null, via: event.via } })

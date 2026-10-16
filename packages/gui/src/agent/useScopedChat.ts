@@ -123,8 +123,8 @@ export interface ScopedChatApi {
   setSelected: (node: CourseNode) => void;
 
   /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
-    `scopePaths`：仅架构图合成模块（id 以 `depmap:` 起，课程树里查无此节点）随请求上送 chip 内文件清单，
-    引擎据此解析作用域；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
+    `scopePaths`：从架构图拖住一个**模块**时随请求上送它的可见文件清单（10-16 起都是真课程树节点，
+    不再是目录合成块），引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
     `focus`：仅流程视图选中环节时给出——课程树节点只到入口粒度，环节自身的说明与关联文件要随请求上送。 */
   mapNode: CourseNode | null;
   setMapNode: (node: CourseNode | null, scopePaths?: string[], focus?: FlowStage | null) => void;
@@ -216,7 +216,6 @@ useEffect(() => {
     setMapSelection((prev) => {
       // 课程重烧后流程快照也可能更新，环节 focus 一并清空（旧对象不再上送；重选环节即可）
       if (!prev.node) return { node: tree.root, scopePaths: [], focus: null };
-      if (prev.node.id.startsWith("depmap:")) return { ...prev, focus: null }; // 合成节点不在课程树里，无处可挂，原样保留
       return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [], focus: null };
     });
     const first = firstTeachNode(tree.root);
@@ -717,8 +716,8 @@ useEffect(() => {
         ? await api.mapChatStream(repositoryId, {
             content: message,
             nodeId: mapNode?.id,
-            // 架构图合成模块：课程树里没有这个节点，靠文件清单让引擎解析作用域（其余绑定不带）
-            ...(mapNode?.id.startsWith("depmap:") && mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
+            // 架构图选中模块：带上它的可见文件清单，引擎按这份清单解析作用域（节点本身也照旧上送）
+            ...(mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
             // 流程视图选中环节：节点只到入口粒度，环节信息靠这一并上送
             ...(mapSelection.focus ? { focus: mapSelection.focus } : {}),
             path: mapFile || undefined,

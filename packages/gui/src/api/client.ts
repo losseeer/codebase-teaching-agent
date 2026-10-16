@@ -1,4 +1,4 @@
-import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ArchitectureOverrideIntent, ArchitecturePlan, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -197,6 +197,18 @@ export const api = {
   getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "module_files"; reason?: string }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
   /** 流程视图：按入口取一条 LLM 生成的执行流程；source=static 表示降级为静态调用链（reason 说明原因）。 */
   getRepositoryFlow: (repositoryId: string, entryPath: string) => request<RepositoryFlowResult>(`/api/repositories/${repositoryId}/flow?entry=${encodeURIComponent(entryPath)}`),
+  /**
+    架构视图的分层产物：层名与模块归层是模型判的（可人工改），箭头与「边界之外」由引擎算。
+    `source` 与 `reason` 说清这份是谁算的；`ArchitecturePlan` 之外引擎多带两个读数。
+  */
+  getArchitecture: (repositoryId: string) => request<ArchitecturePlan & { omittedModules: number; collapsedExternals: number }>(`/api/repositories/${repositoryId}/architecture`),
+  /** 显式重问一次分层：**花 token**，没配模型或预算触顶回 422（不静默给一张静态图）。 */
+  regenerateArchitecture: (repositoryId: string) => request<ArchitecturePlan & { omittedModules: number; collapsedExternals: number }>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
+  getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
+  /** 单条人工修正（拖动换层 / 改层名 / 改档 / 撤销）。引擎回一句实话，拒写也是同一句（422）。 */
+  applyOverlay: (repositoryId: string, intent: ArchitectureOverrideIntent, via: "gui" = "gui") => request<{ ok: boolean; text: string }>(`/api/repositories/${repositoryId}/overlays/apply`, { method: "POST", body: JSON.stringify({ intent, via }) }),
+  /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
+  mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
   createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),

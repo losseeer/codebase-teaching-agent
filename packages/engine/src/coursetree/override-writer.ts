@@ -1,4 +1,4 @@
-import type { CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
+import type { ArchitectureOverrideIntent, CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
 import { clearOverlays, patchOverlays, readOverlays, removeOverlayKeys } from "../store/overlays.js";
 import type { TutorDatabase } from "../store/database.js";
 import { id } from "../lib.js";
@@ -17,15 +17,8 @@ import { id } from "../lib.js";
 export const TIER_VALUES = ["core", "facility", "periphery"] as const;
 export type TierValue = (typeof TIER_VALUES)[number];
 
-export type OverrideIntent =
-  /** 把模块挪到另一层（按层名）。`from` 是引擎/模型当时给的层名，只为把审计写清楚，不做校验依据。 */
-  | { kind: "move_module"; module: string; layer: string; from?: string }
-  /** 改层名：连带把归层表里指旧名的模块一起换掉（合并逻辑在 `patchOverlays`）。 */
-  | { kind: "rename_layer"; from: string; to: string }
-  /** 改模块的结构档。 */
-  | { kind: "set_tier"; module: string; tier: TierValue; given?: string }
-  /** 撤掉人工修正，回到引擎/模型判的样子。不给 target 就撤这一仓的全部修正。 */
-  | { kind: "reset"; module?: string; layerRename?: string };
+/** 形状的权威在 shared（GUI 的拖动与工具走同一个线上形状），这里只是别名。 */
+export type OverrideIntent = ArchitectureOverrideIntent;
 
 export interface OverrideContext {
   database: TutorDatabase;
@@ -53,9 +46,13 @@ function moduleIdsOf(course: CourseTree): Set<string> {
   return new Set((branch?.children ?? []).map((node) => node.id));
 }
 
-function moduleTitle(course: CourseTree, moduleId: string): string {
+function moduleNode(course: CourseTree, moduleId: string) {
   const branch = course.root.children.find((node) => node.id === "modules");
-  return branch?.children.find((node) => node.id === moduleId)?.title ?? moduleId;
+  return branch?.children.find((node) => node.id === moduleId);
+}
+
+function moduleTitle(course: CourseTree, moduleId: string): string {
+  return moduleNode(course, moduleId)?.title ?? moduleId;
 }
 
 /** 从覆盖层与树里找某模块当前所在的层名（写审计的 `from` 用；找不到就如实留空）。 */
@@ -101,10 +98,13 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
     if (!TIER_VALUES.includes(intent.tier)) return refuse(`档只有三档：${TIER_VALUES.join(" / ")}`);
     const given = intent.given ?? overlays.modules?.tier?.[intent.module];
     const next = patchOverlays(context.database, context.repositoryId, { modules: { tier: { [intent.module]: intent.tier } } });
+    const evidence = moduleNode(context.course, intent.module)?.tierEvidence;
     context.journal.append("module_tier_overridden", {
       correction_id: id(), module: intent.module, module_title: moduleTitle(context.course, intent.module), to: intent.tier,
       // 原判必带：没有它，改档读数就只剩「改成了什么」，问不出「引擎错在哪」
-      given: given ?? null, via
+      given: given ?? null, via,
+      // 判据摘要一起落：这条线是分级层唯一的真值来源，只留「谁被改过」就永远问不出为什么错
+      core_share: evidence?.coreShare ?? "", visible_files: evidence?.visibleFiles ?? "", restored: false
     });
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
     return { ok: true, text: `「${moduleTitle(context.course, intent.module)}」的档已改成 ${intent.tier}（引擎原判：${given ?? "未记录"}）。`, overlays: next };
@@ -114,7 +114,17 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
     const next = intent.module
       ? removeOverlayKeys(context.database, context.repositoryId, { modules: { tier: [intent.module] }, architecture: { moduleLayer: [intent.module] } })
       : clearOverlays(context.database, context.repositoryId);
-context.journal.append("architecture_layer_overridden", { correction_id: id(), action: "reset", module: intent.module ?? null, layer_rename: intent.layerRename ?? null, via });
+    context.journal.append("architecture_layer_overridden", { correction_id: id(), action: "reset", module: intent.module ?? null, layer_rename: intent.layerRename ?? null, via });
+    // 撤销顺带撤掉的可能不止归层：旧读数以 `restored:true` 分「改档」与「恢复」，这里只在**真有一处档位被撤掉**时补一行——
+    // 没撤也记会让恢复数虚高。
+    const clearedTiers = intent.module ? (overlays.modules?.tier?.[intent.module] ? [intent.module] : []) : Object.keys(overlays.modules?.tier ?? {});
+    for (const moduleId of clearedTiers) {
+      const evidence = moduleNode(context.course, moduleId)?.tierEvidence;
+      context.journal.append("module_tier_overridden", {
+        correction_id: id(), module: moduleId, module_title: moduleTitle(context.course, moduleId), to: "", given: overlays.modules?.tier?.[moduleId] ?? null,
+        via, restored: true, core_share: evidence?.coreShare ?? "", visible_files: evidence?.visibleFiles ?? ""
+      });
+    }
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
     return { ok: true, text: intent.module ? `已撤销「${moduleTitle(context.course, intent.module)}」的人工修正，回到引擎与模型的判据。` : "已撤销这份产物上的人工修正。", overlays: next };
   }

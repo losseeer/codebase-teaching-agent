@@ -930,22 +930,68 @@ describe("编辑期免打扰与沙箱重探", () => {
   而这种事各测各的单测永远发现不了。零 token：假 provider 仍指向 127.0.0.1:9。
 */
 describe("架构视图：分层产物与人工覆盖层", () => {
-  it("GET /architecture：模型只许分层，箭头由引擎算；外部包名没采过时如实标出来", async () => {
+  it("读侧一发不发，只有 regenerate 花钱；模型给的箭头一个字都不进产物", async () => {
+    type Plan = { layers: { name: string; moduleIds: string[] }[]; edges: unknown[]; externals: unknown[]; source: string; reason?: string; externalsNote?: string; usage?: unknown };
+    // ① 打开画布（GET）：这个仓还没判过层，路由必须只给静态三层，一次请求都不发
+    const coldCalls = sentTools.length;
+    const cold = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
+    expect(sentTools.length, "读侧不许自己发一发：否则「打开画布」这个动作就静默产生一笔没人确认的钱").toBe(coldCalls);
+    expect(cold.source).toBe("static");
+    expect(cold.reason).toContain("还没判过层");
+    expect(cold.usage).toBeUndefined();
+
+    // ② 显式重问：这一发才是付费路径
     scripted = [JSON.stringify({ layers: [
       { name: "接入", duty: "把请求收进来", modules: ["module:src"] },
       { name: "说明", duty: "设计记录", modules: ["module:docs"] },
       { name: "存储", duty: "落库", modules: [] }
     ], edges: [{ from: "接入", to: "存储", weight: 12 }] })];
-    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` });
-    expect(response.statusCode).toBe(200);
-    const plan = response.json() as { layers: { name: string; moduleIds: string[] }[]; edges: unknown[]; externals: unknown[]; source: string; externalsNote?: string; reason?: string };
+    const regen = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/architecture/regenerate` });
+    expect(regen.statusCode).toBe(200);
+    expect(sentTools.length, "付费那一下要真发出去").toBe(coldCalls + 1);
+    const plan = regen.json() as Plan;
     expect(plan.layers.map((layer) => [layer.name, layer.moduleIds]), "模块为空的层不占一栏").toEqual([["接入", ["module:src"]], ["说明", ["module:docs"]]]);
     expect(plan.edges, "fixture 的图里没有跨模块 import 边，就该一条箭头都没有").toEqual([]);
     expect(JSON.stringify(plan.edges), "模型给的 12 权重箭头一个字都不许进产物").not.toContain("12");
     expect(plan.reason, "模型试图发明箭头这件事要留下读数").toContain("已丢弃");
-    expect(["llm", "static"]).toContain(plan.source);
+    expect(plan.source).toBe("llm");
     expect(plan.externals).toEqual([]);
     expect(`${plan.externalsNote ?? ""}${plan.reason ?? ""}`, "旧产物没采过外部包名 ⇒ 那一栏为空必须给原因").toContain("还没采外部");
+
+    // ③ 发明过边的那一份不落盘（payload 与产出不同构），所以下一次读还是静态——不发第二发
+    const afterBad = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
+    expect(sentTools.length, "读侧仍然一发不发").toBe(coldCalls + 1);
+    expect(afterBad.source).toBe("static");
+
+    // ④ 干净的一份判层落盘后，读侧命中缓存：同一笔钱不被计两次
+    scripted = [JSON.stringify({ layers: [
+      { name: "接入", duty: "把请求收进来", modules: ["module:src"] },
+      { name: "说明", duty: "设计记录", modules: ["module:docs"] }
+    ] })];
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/architecture/regenerate` });
+    expect(sentTools.length).toBe(coldCalls + 2);
+    const hit = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
+    expect(sentTools.length, "命中缓存不许再发").toBe(coldCalls + 2);
+    expect(hit.source).toBe("llm");
+    expect(hit.usage, "命中缓存不报用量").toBeUndefined();
+    expect(hit.layers.map((layer) => layer.name)).toEqual(["接入", "说明"]);
+
+    // ⑤ 拖动换层走的是这条产品路径（apply → 重取）：修正不进键，所以重取命中同一份原判，仍然一发不发
+    const applied = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:docs", layer: "接入" }, via: "gui" } });
+    expect(applied.statusCode, "把模块挪进现有层要写成功（失败原因看 response）").toBe(200);
+    const rejected = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:src", layer: "图上没有的这一层" }, via: "gui" } });
+    expect(rejected.statusCode).toBe(422);
+    const body = rejected.json() as { text: string; error?: string };
+    expect(body.error, "拒写理由要同时进 `error`：GUI 的 fetch 封装只认这一格，不然用户只看到一句通用的「没送达」").toBe(body.text);
+    const dragged = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
+    expect(sentTools.length, "拖一下不是重判的理由：这一格翻键就等于每次修正 ¥0.02").toBe(coldCalls + 2);
+    expect(dragged.source).toBe("llm");
+    expect(dragged.layers.map((layer) => [layer.name, layer.moduleIds]), "空层不占栏：说明层被挪空之后不该留在图上").toEqual([["接入", ["module:src", "module:docs"]]]);
+    // 撤掉修正：读侧回到原判，同样不发请求
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "reset", module: "module:docs" }, via: "gui" } });
+    const restored = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
+    expect(sentTools.length).toBe(coldCalls + 2);
+    expect(restored.layers.map((layer) => layer.name)).toEqual(["接入", "说明"]);
   });
 
   it("覆盖层写进去后 /course 看得见，撤掉之后回到引擎原判那一格", async () => {

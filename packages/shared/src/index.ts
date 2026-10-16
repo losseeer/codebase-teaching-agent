@@ -236,6 +236,17 @@ export interface ArchitectureOverrides {
   layerRenames?: Record<string, string>;
 }
 
+/**
+  一次人工修正的意图（GUI 的拖动与 Agent 的 `set_architecture` 共用这一个形状，POST 到引擎）。
+  ⚠️ 四条分支之外没有第五种写法：**这里没有能表达「一条边」的字段**——边由 import 聚合，
+  谁都不许增删改。类型层面写不出这个动作，比运行时拦一道更可靠。
+*/
+export type ArchitectureOverrideIntent =
+  | { kind: "move_module"; module: string; layer: string; from?: string }
+  | { kind: "rename_layer"; from: string; to: string }
+  | { kind: "set_tier"; module: string; tier: CourseTier; given?: string }
+  | { kind: "reset"; module?: string; layerRename?: string };
+
 export interface ModuleOverlayRecord {
   renamed?: Record<string, string>;
   hidden?: string[];
@@ -1280,17 +1291,14 @@ export const ENGINE_JOURNAL_EVENTS = [
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
-  // 2026-10-16：挪层/改层名是「分层判断被人工推翻」的读数，只能由引擎写（写盘的就是引擎）
-  "architecture_layer_overridden"
+  // 2026-10-16：挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写——
+  // 落盘的那条路（`POST .../overlays/apply`）在引擎里，审计与写入同处才不漏；界面自己 emit 的旧日子已随覆盖层上收结束
+  "architecture_layer_overridden", "module_tier_overridden"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [
   "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched",
-  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden",
-  // 改档暂时仍由界面写这一行：GUI 的左栏改档还在写本地覆盖层（P3a 的尾巴）。
-  // 等它改走 `POST .../overlays/apply`（引擎写盘 + 引擎落审计，payload 带引擎原判的 `given`）再搬进引擎侧那半，
-  // 提前搬走只会让这条读数当场断掉——界面发的会是 400 engine_owned_event。
-  "module_tier_overridden"
+  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden"
 ] as const satisfies readonly JournalEventType[];
 
 export type EngineJournalEventType = (typeof ENGINE_JOURNAL_EVENTS)[number];

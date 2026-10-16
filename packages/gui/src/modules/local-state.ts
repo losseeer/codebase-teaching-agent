@@ -33,6 +33,8 @@ export interface KnowledgeModule {
   tier?: CourseTier;
   /** 引擎原判：用户手动改过档后仍留着它，界面才能显示「引擎判：设施」并给「恢复引擎判据」 */
   tierGiven?: CourseTier;
+  /** 这一档是人工改过的（由 /course 告知）：界面只露一枚「已人工调整」的点，不写解释 */
+  tierOverridden?: boolean;
   /** 这一档是按哪些数判出来的（悬停可见）：分不准时先要看得见为什么 */
   tierEvidence?: CourseTierEvidence;
 }
@@ -77,30 +79,26 @@ const writeJson = (key: string, value: unknown): void => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 持久化失败不回退：本次会话内仍生效 */ }
 };
 
-/** 教学模块的覆盖层：改名、隐藏、自建、手动改档。四者都按仓库分键，换仓不串味。 */
+/**
+  界面的本地覆盖层：改名、隐藏、自建。三样都是**显示偏好**，换浏览器丢了也不影响结论。
+  ⚠️ 手动改档不在这里了（2026-10-16 上收服务端）：那是「引擎判断被推翻」的证据，
+  存在浏览器里时引擎完全不知道——下次重分析按原判再判一遍，用户的修正当场蒸发，
+  而且换个浏览器就看不见。旧键只留着读一次做迁移（`readLegacyTierOverrides`）。
+*/
 export interface ModuleOverrides {
   renamed: Record<string, string>;
   hidden: string[];
   custom: StoredCustomModule[];
-  /** 用户手动改的档位（模块 id → 档）。引擎原判不落地，读的时候现比。 */
-  tier: Record<string, CourseTier>;
 }
 
 export function loadModuleOverrides(repositoryId: string): ModuleOverrides {
   const renamed = readJson<Record<string, string>>(RENAMED_KEY_PREFIX + repositoryId, {});
   const hidden = readJson<string[]>(HIDDEN_KEY_PREFIX + repositoryId, []);
   const custom = readJson<StoredCustomModule[]>(CUSTOM_KEY_PREFIX + repositoryId, []);
-  const storedTier = readJson<Record<string, CourseTier>>(TIER_KEY_PREFIX + repositoryId, {});
-  // 档位是会被旧版本或手改 localStorage 塞进任意字符串的地方：只认三档取值，其余丢掉
-  const tier: Record<string, CourseTier> = {};
-  if (storedTier && typeof storedTier === "object" && !Array.isArray(storedTier)) {
-    for (const [id, value] of Object.entries(storedTier)) if (TIERS.includes(value)) tier[id] = value;
-  }
   return {
     renamed: renamed && typeof renamed === "object" && !Array.isArray(renamed) ? renamed : {},
     hidden: Array.isArray(hidden) ? hidden.filter((id): id is string => typeof id === "string") : [],
-    custom: Array.isArray(custom) ? custom.filter((item) => typeof item?.id === "string" && typeof item?.label === "string") : [],
-    tier
+    custom: Array.isArray(custom) ? custom.filter((item) => typeof item?.id === "string" && typeof item?.label === "string") : []
   };
 }
 
@@ -108,7 +106,19 @@ export function saveModuleOverrides(repositoryId: string, overrides: ModuleOverr
   writeJson(RENAMED_KEY_PREFIX + repositoryId, overrides.renamed);
   writeJson(HIDDEN_KEY_PREFIX + repositoryId, overrides.hidden);
   writeJson(CUSTOM_KEY_PREFIX + repositoryId, overrides.custom);
-  writeJson(TIER_KEY_PREFIX + repositoryId, overrides.tier);
+}
+
+/** 旧版留在浏览器里的手动改档：只读一次，交给服务端后就删本地键（不留双写）。 */
+export function readLegacyTierOverrides(repositoryId: string): Record<string, CourseTier> {
+  const storedTier = readJson<Record<string, CourseTier>>(TIER_KEY_PREFIX + repositoryId, {});
+  if (!storedTier || typeof storedTier !== "object" || Array.isArray(storedTier)) return {};
+  const tier: Record<string, CourseTier> = {};
+  for (const [id, value] of Object.entries(storedTier)) if (TIERS.includes(value)) tier[id] = value;
+  return tier;
+}
+
+export function clearLegacyTierOverrides(repositoryId: string): void {
+  try { localStorage.removeItem(TIER_KEY_PREFIX + repositoryId); } catch { /* 清不掉也不阻塞：下次还会再迁一次，服务端合并是幂等的 */ }
 }
 
 /**
@@ -131,23 +141,16 @@ function moduleEntries(node: CourseNode): ModuleEntry[] {
 export function courseModules(tree: CourseTree | null | undefined): KnowledgeModule[] {
   const branch = tree?.root?.children?.find((node) => node.id === MODULE_BRANCH_ID);
   if (!branch) return [];
-  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, tier: node.tier, tierEvidence: node.tierEvidence, entries: moduleEntries(node) }));
+  // 档位与「引擎原判」都由 /course 给（覆盖层已在服务端叠好），界面不再自己判谁改过
+  return branch.children.map((node) => ({ id: node.id, label: node.title, hint: node.summary, tier: node.tier, tierGiven: node.tierGiven ?? node.tier, tierOverridden: node.tierOverridden, tierEvidence: node.tierEvidence, entries: moduleEntries(node) }));
 }
 
 /** 业务模块 + 覆盖层 → 界面看到的清单。改名只影响显示，id 仍是树节点 id（缓存与埋点按它走）。 */
 export function mergeModules(treeModules: KnowledgeModule[], overrides: ModuleOverrides): KnowledgeModule[] {
   const visible = treeModules
     .filter((item) => !overrides.hidden.includes(item.id))
-    .map((item) => {
-      const overridden = overrides.tier[item.id];
-      return {
-        ...item,
-        label: overrides.renamed[item.id] ?? item.label,
-        // 引擎原判留着（tierGiven），界面才能说清「这是你改的」并给恢复入口
-        tierGiven: item.tier,
-        tier: overridden ?? item.tier
-      };
-    });
+    // 档位不在这里合：/course 已经把服务端覆盖层叠好了再交出来（引擎那条出口与 Agent 看到的是同一份）
+    .map((item) => ({ ...item, label: overrides.renamed[item.id] ?? item.label }));
   return [...visible, ...overrides.custom.map((item) => ({ id: item.id, label: item.label, hint: item.hint, custom: true }))];
 }
 

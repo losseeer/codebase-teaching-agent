@@ -6,8 +6,9 @@ import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, flatten, Loading } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
+import { subscribeServerEvents } from "../api/client";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { DepMap } from "../map/DepMap";
+import { ArchOverview, NO_ARCH_STATUS, type ArchStatus } from "../map/ArchOverview";
 import { FLOW_KIND_LABEL, FlowMap, type FlowSelection, type FlowStatus } from "../map/FlowMap";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
@@ -76,6 +77,20 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [moduleScopePaths, setModuleScopePaths] = useState<string[]>([]);
   /** 流程取数状态由 `FlowMap` 回告：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
   const [flowStatus, setFlowStatus] = useState<FlowStatus>(NO_FLOW_STATUS);
+  /** 架构视图的取数状态同上，由 `ArchOverview` 回告（来源、层数、边数、外部栏折叠数）。 */
+  const [archStatus, setArchStatus] = useState<ArchStatus>(NO_ARCH_STATUS);
+  /** 人工修正落盘后要重取产物：这里只出一个自增号，取数住在子组件里。 */
+  const [archNonce, setArchNonce] = useState(0);
+  /** Agent 在对话里改了分层（`set_architecture`）时引擎会广播一帧；这边只认自己这个仓。 */
+  useEffect(() => {
+    const controller = new AbortController();
+    subscribeServerEvents((event) => {
+      if (event.type !== "architecture_updated") return;
+      if (event.payload.repositoryId !== repositoryId) return;
+      setArchNonce((value) => value + 1);
+    }, controller.signal);
+    return () => controller.abort();
+  }, [repositoryId]);
   const [regenNonce, setRegenNonce] = useState(0);
   const [error, setError] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
@@ -152,8 +167,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
     t.setMapBinding({ kind: "flow", title: selection.stage.title });
     t.setMapNode(workflowOf(selection.flow), [], selection.stage);
   };
-  /** 抽屉里跳代码教学。只有真实课程树节点才挪教学选择器——`depmap:` 合成节点树里查无此人，
-      带着它建教学会话会被引擎拒；那种情况就只换工作区。 */
+  /** 抽屉里跳代码教学：只认真实课程树节点（架构图现在画的就是树里的模块），查不到就只换工作区。 */
   const gotoTeach = (node: CourseNode | null): void => {
     const real = node ? flatten(course.root).find((item) => item.id === node.id) : undefined;
     if (real) t.setSelected(real);
@@ -161,7 +175,6 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   };
 
   const implementation = detail?.implementation;
-  const isSyntheticModule = !!selected?.id.startsWith("depmap:");
   const outgoingEdges = flowSelection ? flowSelection.flow.edges.filter((edge) => edge.from === flowSelection.stage.order) : [];
 
   const drawerBody = mapView === "flow"
@@ -234,11 +247,11 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <span className="kv-k">摘要</span>
           <span className="kv-v">{selected?.summary ?? "点画布上的模块，或左侧目录里的文件"}</span>
         </div>
-        {isSyntheticModule ? (
+        {moduleScopePaths.length ? (
           <>
             <div className="kv">
               <span className="kv-k">规模</span>
-              <span className="kv-v mono" title="目录聚合出的模块，课程树里没有这个节点：提问时随请求上送文件清单，引擎按它解析作用域">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
+              <span className="kv-v mono" title="模块的可见文件清单（节点锚点 + 子孙锚点）：点模块进对话时随请求上送，引擎按它解析作用域">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
             </div>
             <div className="kv">
               <span className="kv-k">Git 热点</span>
@@ -331,7 +344,11 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
               </>
             ) : (
               <>
-                <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
+                <span
+                  className={`badge ${archStatus.source === "llm" ? "badge-info" : archStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
+                  title={`${archStatus.source === "static" ? "没配模型、预算触顶或分层判断没采信：三档结构角色兜底，不是模型判的职责层次" : "层名与模块归层由模型判（可人工改）；箭头与边界外那一栏由 import 与词典算，模型参与不了"}${archStatus.reason ? ` · ${archStatus.reason}` : ""}`}
+                >{`${archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "static" ? "静态兜底" : "未取到"} · ${archStatus.layers} 层`}</span>
+                <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
               </>
             )}
             <div className="grow" />
@@ -356,7 +373,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <div className="map-canvas-wrap">
             <div className="map-canvas">
               {mapView === "architecture"
-                ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
+                ? <ArchOverview repositoryId={repositoryId} course={course} index={index} analysis={analysis} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} onSelect={pickNode} onStatus={setArchStatus} />
                 : (
                   <FlowMap
                     repositoryId={repositoryId}

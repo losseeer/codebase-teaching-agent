@@ -135,6 +135,23 @@ describe("commitOverride（写盘、审计与通知）", () => {
   });
 });
 
+describe("撤销的审计分寸", () => {
+  it("撤掉档位时才补一行 restored；只撤归层不碰档的，不混进「恢复」计数", () => {
+    const tierEvents = () => readJournal(dir).filter((event) => event.type === "module_tier_overridden");
+    const before = tierEvents().length;
+    commitOverride(contextFor().context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
+    commitOverride(contextFor().context, { kind: "reset", module: "module:api" }, "gui");
+    expect(tierEvents().length, "这个模块当时没有档位覆盖，不该补 restored 行").toBe(before);
+
+    commitOverride(contextFor().context, { kind: "set_tier", module: "module:db", tier: "core", given: "facility" }, "gui");
+    const afterSet = tierEvents().length;
+    commitOverride(contextFor().context, { kind: "reset", module: "module:db" }, "gui");
+    const restored = tierEvents()[tierEvents().length - 1];
+    expect(tierEvents().length).toBe(afterSet + 1);
+    expect(restored.payload).toMatchObject({ module: "module:db", restored: true, given: "core" });
+  });
+});
+
 describe("意图到工具的翻译（写工具只能表达这四件事）", () => {
   it("OverrideIntent 的四条分支之外没有第五种写法：改边在类型层面就没有落点", () => {
     const kinds = ["move_module", "rename_layer", "set_tier", "reset"];

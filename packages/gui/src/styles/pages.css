@@ -105,42 +105,49 @@
 .map-canvas-wrap { flex: 1; position: relative; overflow: auto; min-height: 0; }
 .map-stage:has(.drawer) .map-canvas-wrap { padding-right: min(var(--drawer-w), 48%); }
 .map-canvas { position: relative; min-height: 560px; }
-/* 860 的下限只为架构视图（节点绝对定位，窄了会叠在一起）；流程列是居中的单列，
+/* 860 的下限只为架构视图（层带里的方块会挤），流程列是居中的单列，
    跟着视口收就好——否则卡片会跑到看不见的右侧去。 */
-.map-canvas:has(.arch-svg) { min-width: 860px; }
+.map-canvas:has(.arch-arrows) { min-width: 760px; }
 /* 画布网格底：让节点/环节的绝对定位关系读得出来 */
 .map-canvas::before { content: ""; position: absolute; inset: 0; opacity: 0.38; background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 28px 28px; pointer-events: none; }
 
-/* 架构视图 */
-.arch-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.arch-svg path { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
-.arch-svg marker path { fill: var(--border-strong); stroke: none; }
-/* 架构画布：空白处拖动 = 平移，方块拖动 = 摆放（touch-action 关掉，触屏才不会一边拖一边滚） */
-.arch-canvas { user-select: none; touch-action: none; }
-.arch-node {
-  position: absolute;
-  /* 宽度由 DepMap 按图布局算法现写（NODE_W），CSS 只对齐同一个数——两边不一致时连接线会短一截 */
-  width: 168px;
-  cursor: grab;
-  background: var(--surface);
-  border: 1.5px solid var(--border-strong);
-  border-radius: var(--r-md);
-  padding: 10px 12px;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition: border var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
-  text-align: left;
+/* 架构视图 = 分层全景：一条系统边界（框内是自己写的代码）+ 框外的存储与外部服务 */
+.arch-root { display: flex; flex-direction: column; gap: var(--sp-3); }
+.arch-canvas { position: relative; user-select: none; touch-action: none; padding: var(--sp-5) 0 var(--sp-4); }
+/* 箭头按实测位置画，铺满画布且不接事件（不然方块点不动） */
+.arch-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.arch-arrows path { fill: none; stroke: var(--border-strong); stroke-linecap: round; }
+.arch-arrows marker path { fill: var(--border-strong); stroke: none; }
+.arch-boundary { position: relative; display: flex; flex-direction: column; gap: var(--sp-3); border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); padding: var(--sp-6) var(--sp-4) var(--sp-4); }
+.arch-boundary-label { position: absolute; top: -9px; left: var(--sp-4); padding: 0 6px; background: var(--surface); font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 0.04em; }
+.arch-layer { display: flex; flex-direction: column; gap: var(--sp-2); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); background: var(--surface-2); border: 1px solid var(--border); }
+/* 拖拽悬停时那层亮一下：告诉用户「松手会落在这里」，落点判据是引擎的层名，不是位置猜的 */
+.arch-layer.drop-hint { border-color: var(--brand-600); background: var(--brand-050); }
+.arch-layer-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.arch-layer-name { position: relative; font-weight: 700; font-size: var(--fs-12); letter-spacing: 0.02em; }
+.arch-layer-duty { font-size: var(--fs-11); color: var(--ink-3); }
+.arch-layer-blocks { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.arch-module {
+  display: flex; flex-direction: column; gap: 2px; min-width: 150px; max-width: 220px; padding: 8px 10px; text-align: left;
+  background: var(--surface); border: 1.5px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-sm);
+  transition: border var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); cursor: grab;
 }
-.arch-node:hover { border-color: var(--brand-600); transform: translateY(-1px); }
-.arch-node:active { cursor: grabbing; transform: none; }
-/* 手动摆过的方块右上角一个小圆点：跟自动布局摆出来的区分开 */
-.arch-node.placed::after { content: ""; position: absolute; top: 6px; right: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
-.arch-node.selected { border-color: var(--brand-700); box-shadow: 0 0 0 3px var(--ring-strong); }
-.arch-node.entry-node { border-color: var(--brand-700); background: var(--brand-050); }
-.arch-node .n-role { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: var(--ink-3); }
-.arch-node .n-name { font-weight: 650; font-size: var(--fs-12); margin: 2px 0; word-break: break-all; }
-.arch-node .n-meta { font-size: 10px; color: var(--ink-3); display: flex; gap: 8px; }
-.arch-node .hot-dot { color: var(--danger); font-weight: 700; }
+.arch-module:hover { border-color: var(--brand-600); transform: translateY(-1px); }
+.arch-module.selected { border-color: var(--brand-700); box-shadow: 0 0 0 3px var(--ring-strong); }
+.arch-module.dragging { opacity: 0.45; cursor: grabbing; }
+/* 被人工挪过层的小方块：右上角一枚点，与「这层的名字也是人改的」区分开 */
+.arch-module.moved::after { content: ""; position: absolute; margin-left: 46px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
+.arch-module-name { font-size: var(--fs-12); font-weight: 650; word-break: break-all; }
+.arch-module-meta { display: flex; gap: 8px; font-size: 10px; color: var(--ink-3); }
+.arch-module-meta .hot-dot { color: var(--danger); font-weight: 700; }
+.arch-override-dot { display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
+.arch-ghost { position: fixed; z-index: 30; transform: translate(-50%, -50%); padding: 6px 9px; border-radius: var(--r-md); background: var(--surface); border: 1.5px solid var(--brand-600); font-size: var(--fs-11); pointer-events: none; box-shadow: var(--shadow-md); }
+/* 框外那一栏：按类别分组，只列词典认出来的东西 */
+.arch-outside { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-5); align-items: flex-start; padding: 0 var(--sp-2); }
+.arch-outside-group { display: flex; flex-direction: column; gap: 3px; }
+.arch-outside-label { font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 0.03em; }
+.arch-outside-rows { display: flex; flex-wrap: wrap; gap: 4px; }
+.arch-external { font-size: var(--fs-11); font-family: var(--mono); padding: 2px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); cursor: help; }
 
 /* 流程视图 */
 .flow-col { position: relative; display: flex; flex-direction: column; align-items: center; padding: var(--sp-5) 0 var(--sp-8); gap: 0; }
