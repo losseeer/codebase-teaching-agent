@@ -332,6 +332,8 @@
 .done-card { cursor: pointer; text-align: left; width: 100%; transition: border var(--t-fast); }
 .done-card:hover { border-color: var(--brand-600); }
 .done-card.selected { border-color: var(--brand-700); background: var(--brand-050); }
+.done-card.failed { border-color: var(--warn-border); background: var(--warn-bg); }
+.done-card.failed .d-due { color: var(--warn-ink); }
 
 .practice-main { overflow-y: auto; min-width: 0; }
 .practice-wrap { max-width: 720px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }

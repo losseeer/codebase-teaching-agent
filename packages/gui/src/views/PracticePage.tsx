@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "./CodeEditor";
 import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
@@ -56,16 +57,21 @@ function llmUnitNonce(unitId: string): number | null {
   return Number.isFinite(nonce) ? nonce : null;
 }
 
+/** 规则题单元 id 的族别段 → 中文短名（单元 id 第一段是 `impact` / `workflow` / `implementation` 或 `change-localization`）。 */
+const FAMILY_WORD: Record<string, string> = { impact: "影响面", workflow: "流程", implementation: "实现", change: "定位" };
+
 function unitName(unitId: string): string {
   // LLM 出题单元 id 形如 llm:<tagId>:<nonce>，展示为主题练习序号
   if (unitId.startsWith("llm:")) {
     const nonce = llmUnitNonce(unitId);
     return `主题练习 #${nonce !== null ? nonce + 1 : unitId}`;
   }
-  // 规则题单元 id 形如 `<族别>-<模块>`（change-localization:task-service）：
-  // 只取尾段会把「task-service」这类语义段吞成一个数字，所以留最后两段
-  const parts = unitId.split(":").flatMap((segment) => segment.split("-")).filter(Boolean);
-  return parts.slice(-2).join(" ") || unitId;
+  const [head, ...rest] = unitId.split(":");
+  const word = FAMILY_WORD[head] ?? FAMILY_WORD[head.split("-")[0] ?? head] ?? "";
+  // 单元 id 里最像路径的那一段取文件名；没有路径就取最后一段非纯数字（否则整卡只剩一个「233」）
+  const pathLike = rest.find((segment) => segment.includes("/"));
+  const tail = pathLike ? pathLike.split("/").pop() ?? "" : rest.filter((segment) => segment && !/^\d+$/.test(segment)).pop() ?? head;
+  return word ? `${tail} · ${word}` : tail || unitId;
 }
 
 /** 换一题 = 旧 nonce + 1；解析不出按 0 起算。 */
@@ -83,6 +89,7 @@ function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): strin
 
 export function PracticePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
+  const navigate = useNavigate();
   const [summary, setSummary] = useState<PracticeSummary | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [text, setText] = useState("");
@@ -97,6 +104,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  /** 刚才哪一格出题失败了（单元 id + 引擎原话）：那一格转警示态，别让人反复撞同一堵墙。 */
+  const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", repositoryId, modules));
@@ -119,6 +128,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     const isLlmFamily = activeModule !== COMPREHENSION_MODULE_ID;
+    // 失败时把「刚才点的那一格」记下来：卡片转成警示态并带上原因，用户不必再撞第二次
+    const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
       const next = await api.createExercise(repositoryId, isLlmFamily
         ? {
@@ -132,11 +143,14 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             ...(targetUnitId ? { targetUnitId } : {})
           });
       setExercise(next);
+      setFailedUnit(null);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法生成练习");
+      const message = reason instanceof Error ? reason.message : "无法生成练习";
+      setError(message);
+      if (failingUnit) setFailedUnit({ unitId: failingUnit, reason: message });
     } finally {
       setLoading(false);
     }
@@ -269,6 +283,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     record={record}
                     selected={exercise?.targetUnitId === record.unitId}
                     dueAt={result && result.targetUnitId === record.unitId ? result.review.dueAt : undefined}
+                    failed={failedUnit?.unitId === record.unitId ? failedUnit.reason : null}
                     onPick={() => void(record.unitId.startsWith("llm:") ? generate(undefined, llmNonce(record.unitId)) : generate(record.unitId))}
                   />
                 ))}
@@ -282,7 +297,16 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
         <div className={`practice-main ${paneClass(1)}`}>
           <div className="practice-wrap">
-            {error ? <div className="banner banner-danger"><Icon name="alert" size={14} /><span className="banner-text">{error}</span></div> : null}
+            {error ? (
+              <div className="banner banner-danger">
+                <Icon name="alert" size={14} />
+                <span className="banner-text">{error}</span>
+                {/* 「重新导入 / 源码已更新」这两类原因是产物与实文件脱节，出路只有一条：去导入页重跑 */}
+                {/重新导入|已更新/.test(error) ? (
+                  <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
+                ) : null}
+              </div>
+            ) : null}
 
             {!exercise && loading ? (
               <div className="card card-pad col">
@@ -502,20 +526,20 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
   下次复习时间（`dueAt`）只有刚判过的那一题拿得到——排期住在 `ExerciseResult.review` 里，
   `PracticeSummary.mastery` 没有这一格，所以其余卡片如实显示上次练习时间，不替它们编日期。
   */
-function DoneCard({ record, selected, dueAt, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; onPick: () => void }): ReactElement {
+function DoneCard({ record, selected, dueAt, failed, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; failed: string | null; onPick: () => void }): ReactElement {
   const last = record.lastPracticedAt ? dateText(record.lastPracticedAt) : "";
   return (
     <button
       type="button"
-      className={`done-card${selected ? " selected" : ""}`}
-      title={`${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
+      className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
+      title={failed ? `刚才这一格出题失败：${failed}` : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
       onClick={onPick}
     >
       <div className="d-head">
         <span className="grow">{unitName(record.unitId)}</span>
         <span className={`d-score ${record.successes > 0 ? "pass" : "fail"}`}>{record.level}/5</span>
       </div>
-      <div className="d-due">{dueAt ? `下次复习 ${new Date(dueAt).toLocaleDateString()}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
+      <div className="d-due">{failed ? "刚才出题没成功 · 悬停看原因" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
     </button>
   );
 }
