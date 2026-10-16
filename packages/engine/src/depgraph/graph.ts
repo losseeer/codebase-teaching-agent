@@ -8,6 +8,12 @@ import { isTestPath } from "./roles.js";
 
 export interface DependencyGraph {
   imports: Map<string, string[]>;
+  /**
+    文件 → 它 import 了但**仓内解析不到**的裸包名（架构视图的「边界之外」那一栏）。
+    刻意与 `imports` 分家：这里没有一个字是边，`impactRadius`、角色分层、流程证据都不看它。
+    没采到外部名的语言（Rust 的 `use serde::` 与 C/C++ 的 `<...>` 头）不写键，读侧按「未采集」处理。
+  */
+  externals: Map<string, string[]>;
   calls: CallEdge[];
   /** 类型派发边（Java/C# 的 extends/implements 落点）；详见 shared 的 `TypeDispatchEdge` 注释。 */
   dispatch: TypeDispatchEdge[];
@@ -102,8 +108,12 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   const csNamespaces = collectCSharpNamespaces(contents);
   const aliases = collectPathAliases(repositoryPath);
   const imports = new Map<string, string[]>();
+  const externals = new Map<string, string[]>();
   for (const [path, content] of contents) {
-    imports.set(path, resolveFileImports(path, content, { available, packages, javaTypes, goModules, goFilesByDir, csNamespaces, aliases }));
+    const resolved = resolveFileImports(path, content, { available, packages, javaTypes, javaRoots: packageRoots(javaTypes.keys()), goModules, goFilesByDir, csNamespaces, csRoots: packageRoots(csNamespaces.keys()), aliases });
+    imports.set(path, resolved.paths);
+    // 没有外部名的文件不写键：Map 里少一条 = 「这个文件不 import 任何仓外的东西」，是真结论
+    if (resolved.externals.length) externals.set(path, resolved.externals);
   }
   const calls = extractCalls(contents, symbols, imports, javaTypes);
   const dispatch: TypeDispatchEdge[] = [];
@@ -114,6 +124,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   const parseStatus = parseBackendStatus();
   return {
     imports,
+    externals,
     calls,
     dispatch,
     symbols,
@@ -128,6 +139,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
 export function serializeGraph(graph: DependencyGraph): DependencyGraphData {
   return {
     imports: Object.fromEntries([...graph.imports.entries()]),
+    externals: Object.fromEntries([...graph.externals.entries()]),
     calls: graph.calls,
     dispatch: graph.dispatch,
     symbols: graph.symbols,
@@ -176,6 +188,9 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
 export function graphFromData(data: DependencyGraphData): DependencyGraph {
   return {
     imports: new Map(Object.entries(data.imports)),
+    // 旧产物的图里没有这一格（那时外部名直接被丢弃、没留名）：按「未采集」处理成空表，
+    // 架构视图读到空表要说「这份产物还没采外部依赖」，不能说「这个仓不碰任何外部服务」
+    externals: new Map(Object.entries(data.externals ?? {})),
     calls: data.calls,
     // 旧产物的图里没有这一类关系（那时只有 import 与 call 两条路），按空表处理，别硬造
     dispatch: data.dispatch ?? [],
@@ -440,24 +455,29 @@ function dedupeCalls(calls: CallEdge[]): CallEdge[] {
  * Python 的 import 语句不带引号、模块名用点号分隔，需要单独提取：
  * `import a.b as c`、`import a, b`、`from a.b import c`、`from . import c`（相对包）。
  * 第三方模块（fastapi、langgraph）也会被提取出来，最终由 resolvePythonImport 按「仓库内是否存在」过滤。
+ *
+ * 返回的是**一条 import 语句一组**（`primary` = 语句写的那个模块，`candidates` = 所有可能的落点），
+ * 不是一个平铺的说明符数组：`from a.b import c` 会同时给出 `a.b` 与 `a.b.c`（c 可能是子模块也可能是符号名），
+ * 平铺之后「这条语句落不到」就判不出来了——而外部包名这一栏要的正是语句级的失败。
  */
-function extractPythonSpecifiers(content: string): string[] {
-  const specifiers: string[] = [];
+function extractPythonSpecifiers(content: string): { primary: string; candidates: string[] }[] {
+  const groups: { primary: string; candidates: string[] }[] = [];
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const fromMatch = trimmed.match(/^from\s+([.\w]+)\s+import\s+(.*)$/);
     if (fromMatch) {
       const module = fromMatch[1];
-      specifiers.push(module);
+      const candidates = [module];
       // `from a.b import c` 里的 c 可能是子模块，也可能是符号名 —— 两种都给出，交由可用性判定
-      for (const name of readImportedNames(fromMatch[2])) specifiers.push(module.endsWith(".") ? `${module}${name}` : `${module}.${name}`);
+      for (const name of readImportedNames(fromMatch[2])) candidates.push(module.endsWith(".") ? `${module}${name}` : `${module}.${name}`);
+      groups.push({ primary: module, candidates });
       continue;
     }
     const importMatch = trimmed.match(/^import\s+(.*)$/);
-    if (importMatch) specifiers.push(...readImportedNames(importMatch[1]));
+    if (importMatch) for (const name of readImportedNames(importMatch[1])) groups.push({ primary: name, candidates: [name] });
   }
-  return specifiers;
+  return groups;
 }
 
 /** 从 `a, b.c as d` 里取出模块名（剥掉别名、括号与行尾注释）。 */
@@ -559,14 +579,28 @@ interface ImportIndex {
   available: Set<string>;
   packages: Map<string, WorkspacePackage>;
   javaTypes: Map<string, string>;
+  /** javaTypes 的包根前缀（见 `packageRoots`）：判「这是本项目自己的包」用，一次建表反复查。 */
+  javaRoots: Set<string>;
   goModules: Map<string, string>;
   goFilesByDir: Map<string, string[]>;
   csNamespaces: Map<string, string[]>;
+  csRoots: Set<string>;
   aliases: PathAlias[];
 }
 
-/** 按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）一律丢弃，图里只留仓内依赖。 */
-function resolveFileImports(path: string, content: string, index: ImportIndex): string[] {
+/** 一条 import 语句的两类结果：仓内落点（进图的边）与仓外裸包名（进架构视图「边界之外」那一栏）。 */
+interface ResolvedImports {
+  paths: string[];
+  externals: string[];
+}
+
+/**
+  按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）**不进图**——图里只留仓内依赖，
+  这条既定设计一字未动。这里多做的一件事是把落不到的**包名身份**记进 `externals`：
+  「这个系统边界之外碰了什么」这个问题从前没有确定性数据可答（名字直接丢在地上），现在有了。
+  失败按**一条 import 语句**判，不按单个候选说明符判——`from a.b import c` 落不到才算这条语句用了外部包。
+*/
+function resolveFileImports(path: string, content: string, index: ImportIndex): ResolvedImports {
   /**
     收口去重 + **去自环**。自环以前是三个分支各自 `filter(value !== path)`、另三个分支漏写：
     Go 导入自己所在的包目录、Rust 在 `src/a.rs` 里写 `use crate::a::X`、Python 的绝对自导入
@@ -576,22 +610,145 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
     判据只留这一处：以后加语言不会再漏。
     */
   const dedupe = (values: Iterable<string>): string[] => [...new Set(values)].filter((value) => value !== path);
-  const kept = (values: (string | undefined)[]): string[] => dedupe(values.filter((value): value is string => Boolean(value)));
-  if (path.endsWith(".py")) return kept(extractPythonSpecifiers(content).map((value) => resolvePythonImport(path, value, index.available)));
+  const finish = (paths: (string | undefined)[], externals: string[]): ResolvedImports => ({
+    paths: dedupe(paths.filter((value): value is string => Boolean(value))),
+    externals: [...new Set(externals)].sort()
+  });
+
+  if (path.endsWith(".py")) {
+    const paths: (string | undefined)[] = [];
+    const externals: string[] = [];
+    for (const group of extractPythonSpecifiers(content)) {
+      const hits = group.candidates.map((value) => resolvePythonImport(path, value, index.available));
+      if (hits.some(Boolean)) paths.push(...hits);
+      // 相对导入（`from . import x`）落不到是「仓内断链」，不是「用了包」
+      else if (!group.primary.startsWith(".")) externals.push(packageIdentity("python", group.primary));
+    }
+    return finish(paths, externals);
+  }
   if (path.endsWith(".java")) {
     const body = javaBodyOf(content);
-    const resolved: (string | undefined)[] = [];
+    const paths: (string | undefined)[] = [];
+    const externals: string[] = [];
     for (const item of extractJavaSpecifiers(content)) {
-      if (item.wildcard) resolved.push(...expandJavaWildcard(path, item.specifier, body, index.javaTypes));
-      else resolved.push(resolveJavaImport(item.specifier, index.javaTypes));
+      const hits = item.wildcard ? expandJavaWildcard(path, item.specifier, body, index.javaTypes) : [resolveJavaImport(item.specifier, index.javaTypes)];
+      if (hits.some(Boolean)) paths.push(...hits);
+      // 仓内类型表盖得上的名字不是外部包：`import com.xingyan.dao.X` 落不到只说明 X 没被收录，
+      // 把它记成「边界之外的服务」是当场说谎（Xingyan 实测 5 个文件就是这样）。
+      else if (!coveredByPackageRoot(index.javaRoots, item.specifier)) externals.push(packageIdentity("java", item.specifier));
     }
-    return kept(resolved);
+    return finish(paths, externals);
   }
-  if (path.endsWith(".go")) return dedupe(extractGoSpecifiers(content).flatMap((value) => resolveGoImport(value, index.goModules, index.goFilesByDir)));
-  if (path.endsWith(".rs")) return kept(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)));
-  if (path.endsWith(".cs")) return kept(extractCSharpSpecifiers(content).flatMap((value) => resolveCSharpImport(value, index.csNamespaces)));
-  if (cppExtensionPattern.test(path)) return dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available)));
-  return kept([...content.matchAll(tsSpecifierPattern)].map((match) => resolveImport(path, match[1], index.available, index.packages, index.aliases)));
+  if (path.endsWith(".go")) {
+    const paths: string[] = [];
+    const externals: string[] = [];
+    for (const specifier of extractGoSpecifiers(content)) {
+      const hits = resolveGoImport(specifier, index.goModules, index.goFilesByDir);
+      if (hits.length) paths.push(...hits);
+      // 仓内 go.mod 前缀盖得上、只是目录下没解析到文件：那也是仓内断链，不算外部
+      else if (!coveredByGoModule(specifier, index.goModules)) externals.push(packageIdentity("go", specifier));
+    }
+    return finish(paths, externals);
+  }
+  if (path.endsWith(".rs")) {
+    // Rust 的外部 crate 名这次仍采不到：extractRustSpecifiers 只认 `use (crate|self|super)::`，
+    // `use serde::Serialize` 压根没进候选。要采得改那条正则——那是「给一门语言加采集面」，不在这一刀里。
+    return finish(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)), []);
+  }
+  if (path.endsWith(".cs")) {
+    const paths: string[] = [];
+    const externals: string[] = [];
+    for (const specifier of extractCSharpSpecifiers(content)) {
+      const hits = resolveCSharpImport(specifier, index.csNamespaces);
+      if (hits.length) paths.push(...hits);
+      else if (!coveredByPackageRoot(index.csRoots, specifier)) externals.push(packageIdentity("csharp", specifier));
+    }
+    return finish(paths, externals);
+  }
+  if (cppExtensionPattern.test(path)) {
+    // C/C++ 同理：extractCppIncludes 只取引号形式，`<vector>` 这类系统头从来没进过候选。
+    return finish(dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available))), []);
+  }
+  const paths: (string | undefined)[] = [];
+  const externals: string[] = [];
+  for (const match of [...content.matchAll(tsSpecifierPattern)]) {
+    const hit = resolveImport(path, match[1], index.available, index.packages, index.aliases);
+    if (hit) paths.push(hit);
+    else if (isBarePackageName(match[1], index)) externals.push(packageIdentity("node", match[1]));
+  }
+  return finish(paths, externals);
+}
+
+/**
+  「仓内解析不到」的说明符 → 边界栏用的**包名身份**。每种语言按「这个生态里一个包叫什么」来切：
+  - python `redis.clients.Redis` → `redis`（PyPI 发行名就是第一段）；
+  - java / csharp → **前四段**：`org.springframework.data.redis`、`StackExchange.Redis`。
+    只切两段会把整个 spring 挤成同一个东西——`spring-data-redis`（数据库）与 `spring-web`（HTTP）
+    该不该同栏，差别就在中间这两段；切到类名那一段又会一个类一个身份，四段是实测够分开的最浅一层；
+  - go `github.com/gin-gonic/gin` → `github.com/gin-gonic`（域名式取前三段）；`fmt` → `fmt`：标准库照实记名，
+    要不要算「外部」由词典那一层判，别在这里替它做主；
+  - node `@fastify/cors/register` → `@fastify/cors`、`axios/lib/x` → `axios`（npm 包名是第一段，scope 例外要两段）。
+  ⚠️ 只切名字、不判类别、更不猜语义：判类别在 `external-catalog.ts`，而「猜」是模型的事——边界这一栏不许它碰。
+*/
+export function packageIdentity(language: "python" | "java" | "go" | "csharp" | "node", specifier: string): string {
+  if (language === "go") {
+    const segments = specifier.split("/").filter(Boolean);
+    return (segments[0]?.includes(".") ? segments.slice(0, 3) : segments.slice(0, 1)).join("/");
+  }
+  if (language === "node") {
+    const head = specifier.split("/")[0] ?? specifier;
+    return head.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : head;
+  }
+  const segments = specifier.split(".").filter(Boolean);
+  if (language === "python") return segments[0] ?? specifier;
+  return segments.slice(0, 4).join(".");
+}
+
+/** 合法包名的字形：npm / PyPI 的名字里没有空格、尖括号、竖线。脏捕获靠这一条挡掉。 */
+const packageNameShape = /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/**
+  「解析不到」不等于「是外部包」，这一关挡掉三类东西：
+  - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是**仓内意图**，只是断链，记成外部服务就是说谎；
+  - 同一个仓里的工作区包（`@codebase-tutor/shared`）：落点算不出是解析能力问题，不是「用了个三方包」；
+  - 字形根本不是包名的脏捕获。`tsSpecifierPattern` 是真会吃到脏东西的——本仓的 `.tsx` 里实测抓出过
+    `<div className=` 与 ` | ` 这种串。以前它只让 `resolveImport` 返回 undefined、无声无息，
+    现在要把名字留下来当产物，就必须先验形。
+*/
+function isBarePackageName(specifier: string, index: ImportIndex): boolean {
+  if (!specifier || specifier.startsWith(".") || specifier.startsWith("/")) return false;
+  if (!packageNameShape.test(specifier)) return false;
+  if (index.aliases.some((alias) => specifier.startsWith(alias.prefix))) return false;
+  return ![...index.packages.keys()].some((name) => specifier === name || specifier.startsWith(`${name}/`));
+}
+
+/** Go 的「仓内」判据与 `resolveGoImport` 用同一份 go.mod 前缀，两边口径不能各写一遍。 */
+function coveredByGoModule(specifier: string, goModules: Map<string, string>): boolean {
+  return [...goModules.keys()].some((name) => specifier === name || specifier.startsWith(`${name}/`));
+}
+
+/**
+  Java / C# 这一档的「仓内包根」集合：把已知类型全限定名（Java）或已知命名空间（C#）的前 **2~3** 段收下。
+  为什么不含第 1 段：`com` / `org` / `io` / `cn` 是顶级域，不是项目根——收进来会让
+  「这个仓的类型在 `org.foo.app` 下」顺带把所有 `org.springframework.*` 都说成仓内代码。
+  判据为什么不能是「这条 import 能不能落到某个类」：Xingyan 实测 `import com.xingyan.shortlink.jump.AccessCounter;`
+  当时落不到（那个类不在索引里），但 `com.xingyan.shortlink` 明明是项目自己的根——
+  把它报成「边界之外的依赖」是当场说谎。命中项目自己的包根 = 仓内断链，不记外部名。
+*/
+function packageRoots(names: Iterable<string>, separator = "."): Set<string> {
+  const roots = new Set<string>();
+  for (const name of names) {
+    const segments = name.split(separator).filter(Boolean);
+    for (let depth = 2; depth <= Math.min(3, segments.length); depth += 1) roots.add(segments.slice(0, depth).join(separator));
+  }
+  return roots;
+}
+
+/** 说明符的前 2~3 段里有任何一个落在仓内包根集合里 = 这是本项目自己的包。 */
+function coveredByPackageRoot(roots: Set<string>, specifier: string): boolean {
+  const segments = specifier.split(".").filter(Boolean);
+  for (let depth = 2; depth <= Math.min(3, segments.length); depth += 1) if (roots.has(segments.slice(0, depth).join("."))) return true;
+  return false;
 }
 
 /**

@@ -7,7 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { CrossRepoContext } from "../source/tool-loop.js";
+import type { CrossRepoContext , ArchitectureToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
@@ -234,7 +234,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（全仓唯一的有副作用工具）：只在 map_chat 且这一轮绑到模块节点时由路由给。 */ architecture?: ArchitectureToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出境清单（见 security/dataflow.ts） */
@@ -290,6 +290,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     scene: "map.chat",
     ...(input.search ? { search: input.search } : {}),
     ...(input.cross ? { cross: input.cross } : {}),
+    ...(input.architecture ? { architecture: input.architecture } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });

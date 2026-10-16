@@ -441,6 +441,25 @@ describe("generateRepositoryFlow（含降级）", () => {
     }
   });
 
+  /**
+    红线（P1 加外部包名那次改动留下的守卫）：`externals` 是图里新增的一格，
+    流程证据**一个字都不许吃它**——吃了就等于每加一个 import 都翻全仓流程键，
+    而一条流程实测 ≈¥0.17、一个仓十几个入口就是几块钱，且翻完在日志里长得像「正常重烧」，没人会察觉。
+    `pnpm arch:keyprobe` 拿真仓比，这条拿 fixture 钉住判据本身。
+  */
+  it("图的 externals 不进流程证据也不进键：同一份图加不加这一格，键与 digest 逐字相同", () => {
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete: async () => ({ text: "", usage: { inputTokens: 0, outputTokens: 0 }, finishReason: "stop" }) };
+    const plain = analysisOf();
+    const withExternals = analysisOf();
+    withExternals.graph.externals = { "main.py": ["langgraph", "fastapi"], "graph/nodes.py": ["redis"] };
+    const base = { repositoryPath: "/repo", index: INDEX, provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
+    const left = flowCacheKeyOf({ ...base, analysis: plain });
+    const right = flowCacheKeyOf({ ...base, analysis: withExternals });
+    expect(right?.key).toBe(left?.key);
+    expect(JSON.stringify(right?.digest)).not.toContain("langgraph");
+    expect(JSON.stringify(buildFlowDigest("/repo", INDEX, withExternals, ENTRY, NO_SUMMARIES))).not.toContain("externals");
+  });
+
   it("确定性降级也落盘：模拟 engine 重启后仍不重烧", async () => {
     clearRepositoryFlowCache();
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-deterministic-")));

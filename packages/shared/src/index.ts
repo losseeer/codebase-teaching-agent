@@ -123,6 +123,13 @@ export interface CourseNode {
   tier?: CourseTier;
   /** 仅 module 节点有值，与 `tier` 同时现算：这一档是按哪些数判出来的 */
   tierEvidence?: CourseTierEvidence;
+  /**
+    仅 module 节点有值：`tier` 被人工改过时为 true，并带上引擎自己判的那一档。
+    为什么要回带给界面（2026-10-16 覆盖层上收服务端）：用户改档后，界面得知道现在这个档**是谁说的**，
+    否则「恢复引擎判据」这个动作没有依据，「分得准不准」的读数也只剩一个孤零零的改后值。
+  */
+  tierOverridden?: boolean;
+  tierGiven?: CourseTier;
 }
 
 export interface CourseTree {
@@ -130,6 +137,115 @@ export interface CourseTree {
   modelVersion: string;
   generatedAt: string;
   root: CourseNode;
+}
+
+/**
+  外部包的分类档。类型放在 shared（它是 `ArchitectureExternal` 的一格，是线上传输形状），
+  具体词典在引擎侧 `depgraph/external-catalog.ts`（那是数据，且只覆盖真实遇到的包）。
+  `stdlib` 单列：语言自带的东西不算「系统之外」，混进 `other` 会把那一栏灌满噪声。
+  `other` 的界面档名叫「未识别」而不是「外部依赖」——没认出来就别说自己知道它是什么。
+*/
+export type ExternalCategory = "database" | "cache" | "queue" | "model" | "http-client" | "framework" | "testing" | "stdlib" | "other";
+
+export const EXTERNAL_CATEGORY_LABEL: Record<ExternalCategory, string> = {
+  database: "数据存储",
+  cache: "缓存",
+  queue: "队列",
+  model: "模型服务",
+  "http-client": "外部接口",
+  framework: "框架与库",
+  testing: "测试框架",
+  stdlib: "语言自带",
+  other: "未识别"
+};
+
+/**
+  ==== 架构视图的分层产物（2026-10-16 改造）====
+
+  一句话：一条系统边界，边界内按职责分 3~5 层，边界外是数据存储与外部服务，
+  跨层箭头由**真实 import 聚合**得出。读者先看大结构，再逐层下钻到模块→文件→代码锚点。
+
+  ⚠️ 这里有三类东西，来源完全不同，混淆就等于让模型编造事实：
+  - `layers` 的层名/职责/归属是**判断题**，可以来自模型，也可以人工改；
+  - `edges`（跨层箭头）与 `externals`（边界之外）是**事实题**，只由静态 import 与外部包名词典聚合，
+    模型给了这一类的任何字段一律丢弃（见 engine 侧 architecture.ts 的校验）；
+  - `source` 与 `reason` 说清这份产物是谁算的，降级不许静默。
+*/
+export interface ArchitectureLayer {
+  /** 引擎按顺序生成的稳定 id（`layer-1`…），改名不改 id。 */
+  id: string;
+  name: string;
+  /** 一句话职责（≤40 字）；来源可以是模型或人工覆盖。 */
+  duty: string;
+  /** 归到这层的模块节点 id（课程树 `modules` 分支下的模块）。 */
+  moduleIds: string[];
+  /** 这一层的名字被人工改过——界面要点出来，不能装作它是模型起的。 */
+  overridden?: boolean;
+}
+
+/** 跨层箭头：粗细看 `weight`，`samplePaths` 是「凭什么说这两层有往来」的依据（进抽屉，不进正文）。 */
+export interface ArchitectureEdge {
+  fromLayer: string;
+  toLayer: string;
+  /** 文件级 import 边的条数（同一对模块的多个文件各算一条）。 */
+  weight: number;
+  samplePaths: string[];
+}
+
+/** 边界之外的一个东西：由外部包名 + 确定性词典得出，不经模型。 */
+export interface ArchitectureExternal {
+  display: string;
+  category: ExternalCategory;
+  /** 用到它的文件数（界面上的数字，也是悬停「依据」）。 */
+  usedBy: number;
+  /** 归到这一行的包名身份（`lombok.Data` 等），最多留几条当依据。 */
+  identities: string[];
+}
+
+export interface ArchitecturePlan {
+  repositoryId: string;
+  layers: ArchitectureLayer[];
+  edges: ArchitectureEdge[];
+  externals: ArchitectureExternal[];
+  /**
+    这份产物怎么来的：
+    - `llm` = 模型判的层（层名/归属），边与外部栏仍是算出来的；
+    - `static` = 没配模型、调用失败或输出不合法时回落 tier 三档（主干/设施/外围），`reason` 说清哪一种。
+  */
+  source: "llm" | "static";
+  reason?: string;
+  /** 人工改过层名的层 id：界面标出来，别让人以为还是模型给的名字。 */
+  overriddenLayers: string[];
+  generatedAt: string;
+  /** 产物吃的是哪一份课程树/图：与 `versionStamp` 同源，用来如实说明「这是按哪次分析算的」。 */
+  basedOnVersionStamp: string;
+  /** 边界那一栏为空时**为什么**空：「这份产物还没采外部包名」与「这个系统真不碰外部服务」是两条不同读数。 */
+  externalsNote?: string;
+}
+
+/**
+  人工修正通道（2026-10-16 上收到服务端）。存 `repository_state.settings_json` 的 `overlays` 子键。
+  为什么必须上收：这三类改动从前只活在浏览器本地存储里，引擎完全不知道——
+  下次重分析按原判据再判一遍，用户的修正就**当场蒸发**，而且换个浏览器看不到。
+  分层判断是可错的，所以这条通道与图同期落地，不许后补。
+*/
+export interface ArchitectureOverrides {
+  /** 模块 id → 人工指定的层名（图上拖动换层写的就是这一格）。按名字不按序号：序号会随重生成漂。 */
+  moduleLayer?: Record<string, string>;
+  /** 原层名 → 改后的层名。写侧负责把 `moduleLayer` 里的旧名一起换掉，不留两套。 */
+  layerRenames?: Record<string, string>;
+}
+
+export interface ModuleOverlayRecord {
+  renamed?: Record<string, string>;
+  hidden?: string[];
+  custom?: { id: string; label: string; hint?: string }[];
+  tier?: Record<string, CourseTier>;
+}
+
+export interface RepositoryOverlays {
+  modules?: ModuleOverlayRecord;
+  architecture?: ArchitectureOverrides;
 }
 
 /** Lightweight first response for a large repository's course map. */
@@ -296,6 +412,16 @@ export interface TypeDispatchEdge {
 
 export interface DependencyGraphData {
   imports: Record<string, string[]>;
+  /**
+    每个文件「仓内解析不到的裸包名」（`redis`、`@fastify/cors`、`org.springframework`、`github.com/gin-gonic`）。
+    它是架构视图「系统边界之外那一栏」的唯一数据源，且**与 `imports` 严格分家**：
+    `imports` 只连仓内文件、外部一律丢弃（这是既定设计，见上面 `languageOfExtension` 那段与 §33），
+    这里只是把被丢掉的名字留个名，不新增任何一条边。
+    ⚠️ 流程层与出题的缓存键**不吃这一格**：`buildFlowDigest` 逐字段挑证据，`graphStampOf` 只数三类边。
+    把它塞进任何一份 payload = 全部已缓存流程与题目翻键 = 每仓重烧付费调用（红线探针 `pnpm arch:keyprobe` 钉这条）。
+    旧产物没有该字段（缺失即按「未采集」处理，与 `dispatch` 同一口径——不是「这个仓没有外部依赖」）。
+  */
+  externals?: Record<string, string[]>;
   calls: CallEdge[];
   /** 类型派发边；旧产物没有该字段（那时只有 import 与 call 两类关系），缺失即按空表处理。 */
   dispatch?: TypeDispatchEdge[];
@@ -1129,6 +1255,12 @@ export type JournalEventType =
     */
   | "module_tier_overridden"
   /**
+    人工把模块挪到另一层 / 改了层名（2026-10-16 架构视图）。与 `module_tier_overridden` 同一类：
+    分层判断是可错的，**改档次数就是本次唯一能拿到的错误率读数**，所以 payload 必须带引擎当时判的原值。
+    写入权在引擎侧（改的落点是服务端覆盖层，GUI 与 Agent 工具都经同一条写路径）。
+  */
+  | "architecture_layer_overridden"
+  /**
     源码出境清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
     与 llm.log 靠 `traceId + scene` 关联。两条设计口径与字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
@@ -1147,12 +1279,18 @@ export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
-  "session_created", "session_deleted", "repository_paired", "code_egress"
+  "session_created", "session_deleted", "repository_paired", "code_egress",
+  // 2026-10-16：挪层/改层名是「分层判断被人工推翻」的读数，只能由引擎写（写盘的就是引擎）
+  "architecture_layer_overridden"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [
   "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched",
-  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden", "module_tier_overridden"
+  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden",
+  // 改档暂时仍由界面写这一行：GUI 的左栏改档还在写本地覆盖层（P3a 的尾巴）。
+  // 等它改走 `POST .../overlays/apply`（引擎写盘 + 引擎落审计，payload 带引擎原判的 `given`）再搬进引擎侧那半，
+  // 提前搬走只会让这条读数当场断掉——界面发的会是 400 engine_owned_event。
+  "module_tier_overridden"
 ] as const satisfies readonly JournalEventType[];
 
 export type EngineJournalEventType = (typeof ENGINE_JOURNAL_EVENTS)[number];
@@ -1209,6 +1347,10 @@ export interface EngineTraceEvent {
 
 /** 全局事件流（GET /api/events，SSE）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——它们在各自请求的响应流里。 */
 export interface ServerEvent {
-  type: "import.progress" | "repository.updated";
+  /**
+    `repository.updated`：产物或覆盖层变了，界面该重取的那一格（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
+    `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
+  */
+  type: "import.progress" | "repository.updated" | "architecture_updated";
   payload: Record<string, unknown>;
 }

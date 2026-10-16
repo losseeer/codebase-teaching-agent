@@ -10,6 +10,10 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { annotateModuleTiers, courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
+import type { ImportedRepository } from "./importer/importer.js";
+import { generateArchitectureCached, peekCachedArchitecture } from "./coursetree/architecture.js";
+import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
+import type { ArchitectureToolContext } from "./source/tool-loop.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
@@ -26,6 +30,7 @@ import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
+import { applyRepositoryOverlays, overlayCounts, patchOverlays, readOverlays, removeOverlayKeys, type OverlaysPatch } from "./store/overlays.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
@@ -700,7 +705,14 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/c
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   // 模块分级现算（主干/设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
   const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
-  return annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints);
+  // 覆盖层叠在现算的档之后（2026-10-16 上收服务端）：人工改过的档必须与引擎判的档走同一条出口，
+  // 否则 GUI 看到的是一套、Agent 装配证据看到的是另一套，用户改完档再问一句就被推翻。
+  const courseDatabase = new TutorDatabase(repository.path);
+  try {
+    return applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), readOverlays(courseDatabase, repository.index.repositoryId));
+  } finally {
+    courseDatabase.close();
+  }
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overview", async (request, reply) => {
@@ -828,6 +840,92 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
       return { entries: [], source: "module_files" as const, reason: `${suggestion.declined ? "LLM 判断这些候选里没有真正合格的入口（不硬凑）" : "LLM 未给出可用入口（候选池为空或调用未成功）"}；${fallback}。` };
     }
     return { entries: suggestion.entries, source: "llm" as const };
+  } finally {
+    database.close();
+  }
+});
+
+// 架构视图的分层产物（2026-10-16）：层名与模块归层是判断题（light 档，可人工改），
+// 跨层箭头与「边界之外」那一栏是事实题（只由静态 import 与外部包名词典算，模型参与不了一格）。
+app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
+  const provider = budgetExhausted ? undefined : lightLlmProvider;
+  const database = new TutorDatabase(repository.path);
+  try {
+    const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
+    const overlays = readOverlays(database, repository.index.repositoryId);
+    const course = applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), overlays);
+    const plan = await generateArchitectureCached({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider, database, overrides: overlays.architecture });
+    if (plan.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", { input_tokens: plan.usage.inputTokens, output_tokens: plan.usage.outputTokens, cache_hit_tokens: plan.usage.promptCacheHitTokens ?? null, provider: provider?.modelVersion ?? "none", scene: "architecture_map" });
+    return plan;
+  } finally {
+    database.close();
+  }
+});
+
+// 显式重问一次分层（**花钱**，走预算闸门）。没配模型或触顶就 422 明说：
+// 这条路由的语义是「按模型的判断重来」，静默给一份静态三层等于收了钱不办事还指着图说这是分层架构。
+app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture/regenerate", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (budgetDegraded(repository.path, repository.index.repositoryId)) return reply.code(422).send({ error: "本月预算已触顶，未调用模型；重新分层这条路由不降级。" });
+  if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：重新分层需要模型判层名与归属。" });
+  const database = new TutorDatabase(repository.path);
+  try {
+    const roles = classifyFileRoles(fileStructureOf(repository.index.files, graphFromData(repository.analysis.graph)));
+    const overlays = readOverlays(database, repository.index.repositoryId);
+    const course = applyRepositoryOverlays(annotateModuleTiers(repository.course, roles, repository.analysis.graph.entrypoints), overlays);
+    const plan = await generateArchitectureCached({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider: lightLlmProvider, database, force: true, overrides: overlays.architecture });
+    if (plan.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", { input_tokens: plan.usage.inputTokens, output_tokens: plan.usage.outputTokens, cache_hit_tokens: plan.usage.promptCacheHitTokens ?? null, provider: lightLlmProvider.modelVersion, scene: "architecture_map" });
+    return plan;
+  } finally {
+    database.close();
+  }
+});
+
+// 人工修正通道（覆盖层）。GUI 的拖动、Agent 的 `set_architecture`、浏览器旧值的一次性迁移，三条写路径共用这一处：
+// 各写一套合并逻辑，迟早有一处把用户的修正抹掉。数组整份替换、字典按键合并、`remove` 按 key 显式撤。
+app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overlays", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = new TutorDatabase(repository.path);
+  try {
+    const overlays = readOverlays(database, repository.index.repositoryId);
+    return { repositoryId: repository.index.repositoryId, overlays, counts: overlayCounts(overlays) };
+  } finally {
+    database.close();
+  }
+});
+
+// 单条修正的落地（GUI 拖动换层 / 改层名 / 改档 / 撤销）。
+// 与 Agent 工具共用 `applyOverrideIntent`：两条路都写同一份覆盖层、同一条审计、同一个通知。
+app.post<{ Params: { repositoryId: string }; Body: { intent?: OverrideIntent; via?: OverrideVia } }>("/api/repositories/:repositoryId/overlays/apply", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const intent = request.body?.intent;
+  if (!intent || typeof intent !== "object" || !("kind" in intent)) return reply.code(400).send({ error: "intent 缺失：要 move_module / rename_layer / set_tier / reset 之一（形状见 override-writer）" });
+  const database = new TutorDatabase(repository.path);
+  try {
+    const outcome = applyOverrideIntent(repository, database, intent, request.body?.via === "agent" ? "agent" : "gui");
+    return reply.code(outcome.ok ? 200 : 422).send(outcome);
+  } finally {
+    database.close();
+  }
+});
+
+app.post<{ Params: { repositoryId: string }; Body: OverlaysPatch & { remove?: { modules?: { tier?: string[]; renamed?: string[] }; architecture?: { moduleLayer?: string[] } } } }>("/api/repositories/:repositoryId/overlays", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = new TutorDatabase(repository.path);
+  try {
+    const body = request.body ?? {};
+    let overlays = body.remove ? removeOverlayKeys(database, repository.index.repositoryId, body.remove) : readOverlays(database, repository.index.repositoryId);
+    if (body.modules || body.architecture) overlays = patchOverlays(database, repository.index.repositoryId, { modules: body.modules, architecture: body.architecture });
+    // 回读一次再交出去：调用方要看到的是**落盘之后**的覆盖层，而不是自己发出去的那份意图
+    const after = readOverlays(database, repository.index.repositoryId);
+    return { repositoryId: repository.index.repositoryId, overlays: after ?? overlays, counts: overlayCounts(after ?? overlays) };
   } finally {
     database.close();
   }
@@ -1041,6 +1139,44 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 
+/**
+  架构修正工具的装配（**只在 map_chat 且这一轮绑到了模块地图里的节点**时才有；practice_chat 永远不给）。
+  两条纪律：
+  - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
+    用户说一句「把它挪到编排层」不该变成一笔重判的钱；
+  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完。
+*/
+/** 一次人工修正的落地：校验 → 写盘 → 审计 → 通知。GUI 的拖动与 Agent 的工具都走这一个函数。 */
+function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
+  const overlays = readOverlays(database, repository.index.repositoryId);
+  const course = applyRepositoryOverlays(repository.course, overlays);
+  if (!lightLlmProvider) return { ok: false, text: "没改：这份产物还没配模型，图上没有可改的层。", overlays };
+  const peek = peekCachedArchitecture({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course, analysis: repository.analysis, index: repository.index, provider: lightLlmProvider, database, overrides: overlays.architecture });
+  const outcome = commitOverride({
+    database,
+    repositoryId: repository.index.repositoryId,
+    course,
+    layers: peek.layers,
+    journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
+    onApplied: (event) => broadcast({ type: "architecture_updated", payload: { repositoryId: event.repositoryId, module: event.module ?? null, via: event.via } })
+  }, intent, via);
+  return { ...outcome, layers: peek.layers };
+}
+
+function architectureToolFor(repository: ImportedRepository, nodeId: string | undefined, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
+  const branch = repository.course.root.children.find((node: CourseNode) => node.id === "modules");
+  if (!(branch?.children ?? []).some((node: CourseNode) => node.id === nodeId)) return undefined;
+  if (!lightLlmProvider) return undefined;
+  return {
+    apply: (argumentsJson: string) => {
+      const parsed = parseOverrideArguments(argumentsJson);
+      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
+      if (parsed.error) return `没改：${parsed.error}。${note}`;
+      return `${applyOverrideIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
+    }
+  };
+}
+
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1054,13 +1190,18 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
+  // 覆盖层的读写要一条库连接；工具闭包与回合共用它，收尾统一 close（句柄泄漏的旧坑见 §37.4）
+  const overlayDatabase = new TutorDatabase(repository.path);
   try {
     const crossFiles = new Map<string, number>();
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId });
+    const toolContext = architectureToolFor(repository, request.body?.nodeId, overlayDatabase, turn.threadId);
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
+  } finally {
+    overlayDatabase.close();
   }
 });
 
@@ -1092,7 +1233,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   const { send, turnHandle } = beginScopedStream(request, reply, "map_chat", request.body?.turnId);
   const crossFiles = new Map<string, number>();
+  const overlayDatabase = new TutorDatabase(repository.path);
   try {
+    const toolContext = architectureToolFor(repository, request.body?.nodeId, overlayDatabase, turn.threadId);
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
@@ -1100,6 +1243,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       cross: crossRepoFor(repository, crossFiles),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
+      ...(toolContext ? { architecture: toolContext } : {}),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放

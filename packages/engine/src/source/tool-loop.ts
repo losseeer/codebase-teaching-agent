@@ -44,6 +44,11 @@ export interface ReadToolLoopInput {
   signal?: AbortSignal;
   /** 跨仓访问：见 `CrossRepoContext`。不传 = 只有当前仓，工具清单与从前逐字一致。 */
   cross?: CrossRepoContext;
+  /**
+    架构修正工具（唯一的有副作用工具）。不传 = 这个作用域没有写能力，
+    工具清单里连 `set_architecture` 这一格都不出现——practice_chat 与没绑定模块的回合就是这种。
+  */
+  architecture?: ArchitectureToolContext;
 }
 
 /**
@@ -79,8 +84,41 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
   }
 };
 
+/**
+  人工修正通道的工具面（全仓第一个**有副作用**的工具，2026-10-16）。
+  ⚠️ 参数表里没有边、没有文件、没有模块的增删——**不是忘了加，是刻意不给**：
+  跨层箭头由 import 聚合而来，任何「模型说有一条 A→B 的边」都不可能被证据支持。
+  写侧（scopechat 传进来的闭包）再做一次白名单校验，两层都要挡住改边这条路。
+*/
+export const SET_ARCHITECTURE_TOOL: LlmTool = {
+  name: "set_architecture",
+  description: "修正架构视图的分层判断：把某个模块移到另一层（move_module）、给层改名（rename_layer）、或改某个模块的结构档（set_tier），撤销人工修正用 reset。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "move_module / rename_layer / set_tier / reset" },
+      module: { type: "string", description: "模块 id（move_module / set_tier 必填，reset 可给一个模块 id 只撤它）" },
+      layer: { type: "string", description: "目标层名（move_module 必填）" },
+      from: { type: "string", description: "原层名（rename_layer 必填）" },
+      to: { type: "string", description: "新层名（rename_layer 必填）" },
+      tier: { type: "string", description: "core / facility / periphery（set_tier 必填）" }
+    },
+    required: ["action"]
+  }
+};
+
+/** 副作用工具的落地通道：由服务层给一个闭包，工具循环不认识数据库与 journal。 */
+export interface ArchitectureToolContext {
+  /**
+    执行一次修正并回一句给模型看的话（写成/写成什么、或拒写原因）。
+    返回文本会作为 `role:"tool"` 的结果回喂，模型下一轮就按它说——所以这里必须回**实际落盘后的状态**，
+    不能回「意图」：回错了模型会把没改成的说成改成了。
+  */
+  apply: (argumentsJson: string) => string;
+}
+
 /** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(withSearch: boolean, cross?: CrossRepoContext): LlmTool[] {
+function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext): LlmTool[] {
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -93,6 +131,8 @@ function toolsFor(withSearch: boolean, cross?: CrossRepoContext): LlmTool[] {
   const tools: LlmTool[] = [names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL];
   if (withSearch) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
+  // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
+  if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
   return tools;
 }
 
@@ -118,7 +158,7 @@ export interface ReadToolLoopResult {
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
-  const tools = toolsFor(Boolean(input.search), input.cross);
+  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
@@ -170,6 +210,15 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const outcome = executeSearchCode(corpus, call.argumentsJson);
         codeSearches.push(repo ? { ...outcome.audit, query: `${outcome.audit.query}（仓 ${repo}）` } : outcome.audit);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
+        continue;
+      }
+      if (call.name === SET_ARCHITECTURE_TOOL.name) {
+        if (!input.architecture) {
+          messages.push({ role: "tool", toolCallId: call.id, content: "当前作用域没开放架构修正。" });
+          continue;
+        }
+        // 副作用一次就回一句实话；不占读文件额度（它读的是产物，不是源码）
+        messages.push({ role: "tool", toolCallId: call.id, content: input.architecture.apply(call.argumentsJson) });
         continue;
       }
       if (call.name !== READ_FILE_TOOL.name) {

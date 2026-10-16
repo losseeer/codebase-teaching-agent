@@ -154,7 +154,15 @@ beforeAll(async () => {
         { id: "unit-1", title: "注册顺序", summary: "builder 先注册再分发。", kind: "implementation", anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], children: [] },
         // 真仓的文档节点确实挂在课程树上（dianping 的 README 与 backend-design.md 都是树里的模块），
         // 推荐入口这条路由要把它们挡在候选之外，所以 fixture 得先有它，否则下面的断言是空的。
-        { id: "unit-doc", title: "设计文档", summary: "秒杀方案记录。", kind: "module", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] }
+        { id: "unit-doc", title: "设计文档", summary: "秒杀方案记录。", kind: "module", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] },
+        // 架构视图这路的 fixture：`modules` 分支是它的模块清单来源（与 GUI 的模块地图同一个 id）
+        {
+          id: "modules", title: "模块地图", kind: "overview", summary: "两个模块，一个有代码、一个只有文档。", anchors: [],
+          children: [
+            { id: "module:src", title: "注册实现", kind: "module", summary: "builder 先注册再分发。", anchors: [{ path: MAIN_FILE, line: 3, label: "实现" }], children: [] },
+            { id: "module:docs", title: "设计说明", kind: "module", summary: "秒杀方案记录。", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] }
+          ]
+        }
       ]
     }
   };
@@ -913,6 +921,51 @@ describe("编辑期免打扰与沙箱重探", () => {
     const health = (await app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
     expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
   }, 30_000);
+});
+
+/**
+  架构视图这条新链路的路由级验收（分层产物 + 覆盖层）。为什么必须打到路由：
+  `/course` 与 `/architecture` 要在现算完 tier 之后叠**同一份**人工覆盖层——
+  两条出口的叠放顺序或来源差一点，用户拖完模块、切个 tab 就看到模块回到原位，
+  而这种事各测各的单测永远发现不了。零 token：假 provider 仍指向 127.0.0.1:9。
+*/
+describe("架构视图：分层产物与人工覆盖层", () => {
+  it("GET /architecture：模型只许分层，箭头由引擎算；外部包名没采过时如实标出来", async () => {
+    scripted = [JSON.stringify({ layers: [
+      { name: "接入", duty: "把请求收进来", modules: ["module:src"] },
+      { name: "说明", duty: "设计记录", modules: ["module:docs"] },
+      { name: "存储", duty: "落库", modules: [] }
+    ], edges: [{ from: "接入", to: "存储", weight: 12 }] })];
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` });
+    expect(response.statusCode).toBe(200);
+    const plan = response.json() as { layers: { name: string; moduleIds: string[] }[]; edges: unknown[]; externals: unknown[]; source: string; externalsNote?: string; reason?: string };
+    expect(plan.layers.map((layer) => [layer.name, layer.moduleIds]), "模块为空的层不占一栏").toEqual([["接入", ["module:src"]], ["说明", ["module:docs"]]]);
+    expect(plan.edges, "fixture 的图里没有跨模块 import 边，就该一条箭头都没有").toEqual([]);
+    expect(JSON.stringify(plan.edges), "模型给的 12 权重箭头一个字都不许进产物").not.toContain("12");
+    expect(plan.reason, "模型试图发明箭头这件事要留下读数").toContain("已丢弃");
+    expect(["llm", "static"]).toContain(plan.source);
+    expect(plan.externals).toEqual([]);
+    expect(`${plan.externalsNote ?? ""}${plan.reason ?? ""}`, "旧产物没采过外部包名 ⇒ 那一栏为空必须给原因").toContain("还没采外部");
+  });
+
+  it("覆盖层写进去后 /course 看得见，撤掉之后回到引擎原判那一格", async () => {
+    const patched = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays`, payload: { modules: { tier: { "module:src": "core" } }, architecture: { moduleLayer: { "module:docs": "接入" } } } });
+    expect(patched.statusCode).toBe(200);
+    const body = patched.json() as { overlays: { modules?: { tier?: Record<string, string> }; architecture?: { moduleLayer?: Record<string, string> } }; counts: { modules: number; layers: number } };
+    expect(body.overlays.modules?.tier?.["module:src"]).toBe("core");
+    expect(body.overlays.architecture?.moduleLayer?.["module:docs"]).toBe("接入");
+    expect(body.counts).toEqual({ modules: 1, layers: 1 });
+
+    const course = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/course` })).json() as { root: { children: { id: string; children: { id: string; tier?: string; tierGiven?: string; tierOverridden?: boolean }[] }[] } };
+    const src = course.root.children.find((node) => node.id === "modules")!.children.find((node) => node.id === "module:src")!;
+    expect(src.tier, "人工改的档要出现在这条出口上").toBe("core");
+
+    const removed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays`, payload: { remove: { modules: { tier: ["module:src"] }, architecture: { moduleLayer: ["module:docs"] } } } });
+    expect(removed.statusCode).toBe(200);
+    expect((removed.json() as { counts: unknown }).counts).toEqual({ modules: 0, layers: 0 });
+    const read = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/overlays` })).json() as { overlays: { modules?: { tier?: Record<string, string> } } };
+    expect(read.overlays.modules?.tier ?? {}, "撤档要真删掉那一格，不能留个空值").not.toHaveProperty("module:src");
+  });
 });
 
 /**
