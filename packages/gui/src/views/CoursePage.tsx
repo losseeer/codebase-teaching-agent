@@ -122,6 +122,30 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
     index?.files.forEach((file) => map.set(file.path, file.lines));
     return map;
   }, [index]);
+  /** 引擎在图里标的入口文件（HTTP 路由 / 框架启动）：抽屉里那份文件清单排序的第一档。 */
+  const entryPaths = useMemo(() => new Set((analysis?.graph.entrypoints ?? []).map((anchor) => anchor.path)), [analysis]);
+  const hotOf = useMemo(() => {
+    const map = new Map<string, number>();
+    index?.hotspots.forEach((spot) => map.set(spot.path, spot.changes));
+    return map;
+  }, [index]);
+  /**
+    节点的可见文件（本节点锚点 + 子孙锚点，按 path 去重、留第一次出现的锚点行号），
+    按「是入口 → 变更最多 → 行数最大」排。这一格取代了原先的两格：`下级节点（15）` 把同一文件里的
+    函数铺成 15 个平行条目，`源码锚点` 又按锚点重复列同一个文件——读者要的只是「这个模块先看哪几个文件」。
+    */
+  const coreFiles = useMemo(() => {
+    if (!selected) return [];
+    const rows = new Map<string, { path: string; line: number; label: string; hot: number }>();
+    for (const node of flatten(selected)) for (const anchor of node.anchors) {
+      if (rows.has(anchor.path)) continue;
+      rows.set(anchor.path, { path: anchor.path, line: anchor.line, label: anchor.label ?? "", hot: hotOf.get(anchor.path) ?? 0 });
+    }
+    return [...rows.values()].sort((left, right) =>
+      Number(entryPaths.has(right.path)) - Number(entryPaths.has(left.path))
+      || right.hot - left.hot
+      || (lineOf.get(right.path) ?? 0) - (lineOf.get(left.path) ?? 0));
+  }, [selected, entryPaths, hotOf, lineOf]);
 
   const course = t.course;
   const pickNode = (node: CourseNode, scopePaths: string[] = []): void => {
@@ -259,17 +283,20 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             </div>
           </>
         ) : null}
-        {selected?.children.length ? (
+        {coreFiles.length ? (
           <div className="kv">
-            <span className="kv-k">{`下级节点（${selected.children.length}）`}</span>
+            <span className="kv-k">{`核心相关文件（${coreFiles.length}）`}</span>
             <div className="col">
-              {selected.children.map((child) => (
-                <button key={child.id} type="button" className="tier-node" title={`${kindLabel(child.kind)}：${child.summary}`} onClick={() => t.setMapNode(child)}>
+              {coreFiles.slice(0, 6).map((file) => (
+                <button key={file.path} type="button" className="tier-node" title={`${file.path}:${file.line}${file.label ? ` · ${file.label}` : ""}`} onClick={() => openFile(file.path, "anchor")}>
                   <Icon name="file" size={13} />
-                  <span className="tier-name">{child.title}</span>
-                  <span className="tier-count">{`${kindLabel(child.kind)}${child.children.length ? ` · ${child.children.length} 项` : ""}`}</span>
+                  <span className="tier-name mono">{`${fileTail(file.path)}:${file.line}`}</span>
+                  <span className="tier-count">{`${entryPaths.has(file.path) ? "入口 · " : ""}${(lineOf.get(file.path) ?? 0).toLocaleString()} 行${file.hot ? ` · ${file.hot} 次变更` : ""}`}</span>
                 </button>
               ))}
+              {coreFiles.length > 6 ? (
+                <span className="fs-11 faint mono" title={coreFiles.slice(6).map((file) => file.path).join("\n")}>{`另有 ${coreFiles.length - 6} 个文件`}</span>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -280,19 +307,6 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             <div className="kv"><span className="kv-k">不变量</span><span className="kv-v">{implementation.invariants.join("；")}</span></div>
             <div className="kv"><span className="kv-k">边界与陷阱</span><span className="kv-v">{[...implementation.boundaries, ...implementation.traps].join("；") || "尚未检测到显式边界。"}</span></div>
           </>
-        ) : null}
-        {selected?.anchors.length ? (
-          <div className="kv">
-            <span className="kv-k">{`源码锚点（${selected.anchors.length}）`}</span>
-            <div className="row-wrap">
-              {selected.anchors.map((anchor) => (
-                <button key={`${anchor.path}:${anchor.line}`} type="button" className="anchor-chip" title={`${anchor.path}:${anchor.line}${anchor.label ? ` · ${anchor.label}` : ""}`} onClick={() => openFile(anchor.path, "anchor")}>
-                  <Icon name="file" size={12} />
-                  <span>{`${fileTail(anchor.path)}:${anchor.line}`}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         ) : null}
         <div className="row">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(selected ?? null)}><Icon name="book" size={13} />去代码教学</button>
@@ -346,7 +360,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
               <>
                 <span
                   className={`badge ${archStatus.source === "llm" ? "badge-info" : archStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
-                  title={`${archStatus.source === "static" ? "没配模型、预算触顶或分层判断没采信：三档结构角色兜底，不是模型判的职责层次" : "层名与模块归层由模型判（可人工改）；箭头与边界外那一栏由 import 与词典算，模型参与不了"}${archStatus.reason ? ` · ${archStatus.reason}` : ""}`}
+                  title={`${archStatus.source === "static" ? "没配模型、预算触顶或分层判断没采信：三档结构角色兜底，不是模型判的职责层次" : "层名与模块归层由模型判（可人工改）；边界外那一栏由 import 的外部包名经词典认出，模型参与不了"}${archStatus.reason ? ` · ${archStatus.reason}` : ""}`}
                 >{`${archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "static" ? "静态兜底" : "未取到"} · ${archStatus.layers} 层`}</span>
                 <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
               </>

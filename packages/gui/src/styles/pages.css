@@ -105,19 +105,12 @@
 .map-canvas-wrap { flex: 1; position: relative; overflow: auto; min-height: 0; }
 .map-stage:has(.drawer) .map-canvas-wrap { padding-right: min(var(--drawer-w), 48%); }
 .map-canvas { position: relative; min-height: 560px; }
-/* 860 的下限只为架构视图（层带里的方块会挤），流程列是居中的单列，
-   跟着视口收就好——否则卡片会跑到看不见的右侧去。 */
-.map-canvas:has(.arch-arrows) { min-width: 760px; }
 /* 画布网格底：让节点/环节的绝对定位关系读得出来 */
 .map-canvas::before { content: ""; position: absolute; inset: 0; opacity: 0.38; background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 28px 28px; pointer-events: none; }
 
 /* 架构视图 = 分层全景：一条系统边界（框内是自己写的代码）+ 框外的存储与外部服务 */
 .arch-root { display: flex; flex-direction: column; gap: var(--sp-3); }
 .arch-canvas { position: relative; user-select: none; touch-action: none; padding: var(--sp-5) 0 var(--sp-4); }
-/* 箭头按实测位置画，铺满画布且不接事件（不然方块点不动） */
-.arch-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-.arch-arrows path { fill: none; stroke: var(--border-strong); stroke-linecap: round; }
-.arch-arrows marker path { fill: var(--border-strong); stroke: none; }
 .arch-boundary { position: relative; display: flex; flex-direction: column; gap: var(--sp-3); border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); padding: var(--sp-6) var(--sp-4) var(--sp-4); }
 .arch-boundary-label { position: absolute; top: -9px; left: var(--sp-4); padding: 0 6px; background: var(--surface); font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 0.04em; }
 .arch-layer { display: flex; flex-direction: column; gap: var(--sp-2); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); background: var(--surface-2); border: 1px solid var(--border); }
