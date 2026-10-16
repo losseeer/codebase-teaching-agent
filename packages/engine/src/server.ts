@@ -807,8 +807,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
   const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : lightLlmProvider;
-  // 「触顶 vs 未配置」分开说的口径与理由见下面 flow 路由；未配置/触顶/判空/失败的用户处置完全不同，不让界面猜
-  const fallback = "以下按模块结构列出文件（模块地图给的清单，未排序）";
+  // 「触顶 vs 未配置」分开说的口径与理由见下面 flow 路由；未配置/触顶/判空/失败的用户处置完全不同，不让界面猜。
+  // 措辞按文案纪律压过：正文只留第一句，「清单从哪来、排没排序」这类机制交给悬停说明（GUI 侧拼）
+  const fallback = "按模块结构列出文件";
   if (!provider) return { entries: [], source: "module_files" as const, reason: `${budgetExhausted ? "本月预算已触顶，未调用 LLM" : "未配置 LLM"}；${fallback}。` };
   const database = new TutorDatabase(repository.path);
   try {
@@ -834,7 +835,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
     });
     // 空列表分两种，必须说清：主动判空（declined）是可信答案、会进缓存；没调成或返回不合法不是。
     if (!suggestion.entries.length) {
-      return { entries: [], source: "module_files" as const, reason: `${suggestion.declined ? "LLM 判断这些候选里没有真正合格的入口（不硬凑）" : "LLM 未给出可用入口（候选池为空或调用未成功）"}；${fallback}。` };
+      return { entries: [], source: "module_files" as const, reason: `${suggestion.declined ? "没有合格入口，不硬凑" : "模型没给出可用入口"}；${fallback}。` };
     }
     return { entries: suggestion.entries, source: "llm" as const };
   } finally {
@@ -895,7 +896,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/o
   }
 });
 
-// 单条修正的落地（GUI 拖动换层 / 改层名 / 改档 / 撤销）。
+// 单条修正的落地（agent 的 `set_architecture` 与这条路由；GUI 只剩「模块档位」下拉还在用它，画布已只读）。
 // 与 Agent 工具共用 `applyOverrideIntent`：两条路都写同一份覆盖层、同一条审计、同一个通知。
 app.post<{ Params: { repositoryId: string }; Body: { intent?: OverrideIntent; via?: OverrideVia } }>("/api/repositories/:repositoryId/overlays/apply", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
@@ -1156,6 +1157,7 @@ function applyOverrideIntent(repository: ImportedRepository, database: TutorData
     repositoryId: repository.index.repositoryId,
     course: input.course,
     layers: peek.layers,
+    blocks: peek.blocks,
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
     onApplied: (event) => broadcast({ type: "architecture_updated", payload: { repositoryId: event.repositoryId, module: event.module ?? null, via: event.via } })
   }, intent, via);

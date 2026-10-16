@@ -205,8 +205,6 @@ export const api = {
   /** 显式重问一次分层：**花 token**，没配模型或预算触顶回 422（不静默给一张静态图）。 */
   regenerateArchitecture: (repositoryId: string) => request<ArchitecturePlan & { omittedModules: number; collapsedExternals: number }>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
   getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
-  /** 单条人工修正（拖动换层 / 改层名 / 改档 / 撤销）。引擎回一句实话，拒写也是同一句（422）。 */
-  applyOverlay: (repositoryId: string, intent: ArchitectureOverrideIntent, via: "gui" = "gui") => request<{ ok: boolean; text: string }>(`/api/repositories/${repositoryId}/overlays/apply`, { method: "POST", body: JSON.stringify({ intent, via }) }),
   /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
   mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),

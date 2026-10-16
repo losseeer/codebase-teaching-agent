@@ -14,12 +14,12 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { Icon } from "../ui/icons";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
-import { applyOverride, migrateLegacyTierOverrides } from "../modules/server-overlays";
+import { migrateLegacyTierOverrides } from "../modules/server-overlays";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
   代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
-  - 左 `.teach-side`：教学模块（主干 / 设施 / 外围三组 + 手动改档）+ 推荐入口 + 仓库文件树
+  - 左 `.teach-side`：教学模块（主干 / 设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
   - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位
   - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
 
@@ -188,7 +188,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "files", entries: [], reason: result.reason } }));
       })
       .catch(() => {
-        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "推荐入口请求失败；以下按模块结构列出文件。" } }));
+        setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "请求失败，按模块结构列出文件" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules, everVisible]);
   /** 推荐入口默认只露前若干条（判据见文件头 ENTRY_PAGE）。
@@ -207,11 +207,13 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
       否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
-  const entryNote = moduleEntries?.status === "llm"
+  const entryNoteFull = moduleEntries?.status === "llm"
     ? "LLM 推荐 · 点开即问"
     : entryWaiting
       ? "正在挑阅读顺序…"
       : moduleEntries?.reason ?? `按模块结构列出 ${moduleEntryFiles.length} 个文件`;
+  /** 正文只留「为什么是这份清单」的第一句；完整理由（触顶 / 未配置 / 判空 / 失败）进悬停——四种处置不同，不能糊成一个词。 */
+  const entryNote = entryNoteFull.split(/[；，。(（]/)[0].slice(0, 14);
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
       点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
@@ -317,8 +319,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
           <span className="faint">/</span>
           <span>代码教学</span>
           <span className="faint">·</span>
-          <span className="muted">Agent 绑定：<b className="mono fs-12">{anchor ? `${anchor.path}:${anchor.line}` : "未定位"}</b> · 模块「{moduleLabel}」</span>
-          {located ? <span className="faint">· 本页已定位第 {located} 行</span> : null}
+          {/* 正文只放「绑到哪个文件的哪一行 + 哪个模块」，整条路径与完整模块名进悬停：路径的目录上下文左边树里就有 */}
+          <span className="muted" title={`Agent 绑定：${anchor ? `${anchor.path}:${anchor.line}` : "未定位"} · 模块「${moduleLabel}」`}>
+            <b className="mono fs-12">{anchor ? `${anchor.path.split("/").pop() ?? anchor.path}:${anchor.line}` : "未定位"}</b> · {moduleLabel.length > 12 ? `${moduleLabel.slice(0, 12)}…` : moduleLabel}
+          </span>
+          {located ? <span className="faint">· 本页第 {located} 行</span> : null}
         </>}
         actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点源码行可就地定位">⌘P 快速打开</span>}
         showRailToggle
@@ -345,23 +350,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
               ? { ...curr, custom: curr.custom.filter((item) => item.id !== id) }
               : { ...curr, hidden: [...curr.hidden, id] }))}
             onReset={() => setOverrides({ renamed: {}, hidden: [], custom: [] })}
-            onTierChange={(id, tier) => {
-              const target = modules.find((item) => item.id === id);
-              if (!target?.tier) return;
-              void applyOverride(repositoryId, tier
-                // 原判一起送：引擎写审计时要落「按哪些数判的」那一档，只记改后值就问不出错在哪
-                ? { kind: "set_tier", module: id, tier, given: target.tierGiven ?? target.tier }
-                : { kind: "reset", module: id }).then((outcome) => {
-                showToast(outcome.ok ? (tier ? `已把「${target.label}」改到${tier === "core" ? "主干" : tier === "facility" ? "设施" : "外围"}` : `已恢复「${target.label}」的引擎判据`) : outcome.text);
-                // 档位由 /course 现算后叠覆盖层给回，重取一次才知道改成没改成（不在本地假更新）
-                if (outcome.ok) t.reloadCourseData();
-              });
-            }}
           >
             <p className="field-note" title="模块职责来自课程树节点摘要；名称与取舍可在齿轮里的「模块配置」改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
 
             <div className="tier-group">
-              <ModuleSectionLabel label="推荐入口" note={entryNote} tip="点一下即换阅读起点；清单由 LLM 按模块职责挑，token 花在第一次展开时" />
+              <ModuleSectionLabel label="推荐入口" note={entryNote} tip={`${entryNoteFull.replace(/。+$/, "")}。点一下即换阅读起点；清单由 LLM 按模块职责挑，token 花在第一次展开时`} />
               {visibleEntries.length ? (
                 <div className="col gap-2">
                   {shownEntries.map((entry) => (

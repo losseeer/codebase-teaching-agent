@@ -177,7 +177,7 @@ export interface ArchitectureLayer {
   name: string;
   /** 一句话职责（≤40 字）；来源可以是模型或人工覆盖。 */
   duty: string;
-  /** 归到这层的模块节点 id（课程树 `modules` 分支下的模块）。 */
+  /** 归到这层的方块 id（见 `blocks`）：原子块是模块 id，合并块是 `arch:...`。 */
   moduleIds: string[];
   /** 这一层的名字被人工改过——界面要点出来，不能装作它是模型起的。 */
   overridden?: boolean;
@@ -202,6 +202,26 @@ export interface ArchitectureExternal {
   identities: string[];
 }
 
+/**
+  方块在架构上的角色，全部由 import / 调用 / 接口实现三条边算出来，模型一格都不参与：
+  - `entry` 含对外服务入口（HTTP 路由、框架启动）；
+  - `core` 从入口走得到的主链路；
+  - `shared` 被 ≥4 个模块引用而自己最多引 3 个（工具、DTO、枚举这一档底座）；
+  - `support` 其余。
+  判不出来的那一档（没有入边、入口也走不到）不进这个联合：它压根不画，见 `ArchitectureBlockBrief`。
+*/
+export type ArchitectureBlockRole = "entry" | "core" | "shared" | "support";
+
+/** 画布上的一个方块：原子模块，或同父同角色的几个小模块合起来的中间块。 */
+export interface ArchitectureBlockBrief {
+  /** 原子块就是模块 id；合并块是 `arch:<目录>:<角色>`——它不在课程树里，点开要靠 `members` 回到原子模块。 */
+  id: string;
+  title: string;
+  /** 块里的原子模块 id：合并块给全，点开列成员用；`layers[].moduleIds` 里出现的就是这一格的 id。 */
+  members: string[];
+  role: ArchitectureBlockRole;
+}
+
 export interface ArchitecturePlan {
   repositoryId: string;
   layers: ArchitectureLayer[];
@@ -210,10 +230,15 @@ export interface ArchitecturePlan {
   /**
     这份产物怎么来的：
     - `llm` = 模型判的层（层名/归属），边与外部栏仍是算出来的；
-    - `static` = 没配模型、调用失败或输出不合法时回落 tier 三档（主干/设施/外围），`reason` 说清哪一种。
+    - `unavailable` = **分层这一格没有产物可画**。2026-10-16 用户定：原先这里会回落成 tier 三档
+      （主干/设施/外围）并自称一层「职责层」，那是把结构角色冒充成分层架构——读者照着它讲架构就讲错了，
+      不如直接说不可用。`layers` 给空数组，原因写在 `reason`，界面出不可用卡片与明码标价的按钮。
+    ⚠️ 边、方块清单、边界之外那一栏仍是算出来的事实：`unavailable` 只说明「层没判」，不说明这些也没了。
   */
-  source: "llm" | "static";
+  source: "llm" | "unavailable";
   reason?: string;
+  /** 不可用的哪一种：没判过 / 没配模型 / 输出没采信 / 调用失败。界面靠它决定按钮文案，不靠拆 `reason` 的中文。 */
+  unavailableReason?: "not_judged" | "no_model" | "rejected" | "call_failed";
   /** 人工改过层名的层 id：界面标出来，别让人以为还是模型给的名字。 */
   overriddenLayers: string[];
   generatedAt: string;
@@ -221,6 +246,20 @@ export interface ArchitecturePlan {
   basedOnVersionStamp: string;
   /** 边界那一栏为空时**为什么**空：「这份产物还没采外部包名」与「这个系统真不碰外部服务」是两条不同读数。 */
   externalsNote?: string;
+  /**
+    这次读的时候没能落地的人工修正（覆盖层按层名匹配，重判换了叫法就对不上）。**读时现算、不落盘**：
+    缓存里住的是模型原判，失效与否取决于「原判 + 当前覆盖层」这两样，写死进缓存反而会在下次读时说话。
+    界面上它是「你的 N 处修正这次没生效」那句提示的唯一依据。
+    */
+  lostOverrides?: ArchitectureOverrideLoss[];
+  /**
+    画布上的方块（原子块 + 合并块）：由课程树与图现算，**读时现算、不落盘**——
+    合并口径是判层输入的一部分（进了缓存键），把结果再写进产物等于冻结一份迟早和键对不上的副本。
+    界面靠它把合并块展开成成员，`layers[].moduleIds` 里的 id 就在这一格里找。
+  */
+  blocks?: ArchitectureBlockBrief[];
+  /** 被判「对理解架构没用」而不画的模块数（隐藏就是删除，但读数得留着问得出）。 */
+  sideModules?: number;
 }
 
 /**
@@ -234,6 +273,21 @@ export interface ArchitectureOverrides {
   moduleLayer?: Record<string, string>;
   /** 原层名 → 改后的层名。写侧负责把 `moduleLayer` 里的旧名一起换掉，不留两套。 */
   layerRenames?: Record<string, string>;
+}
+
+/**
+  这次读的时候**没能落地**的人工修正：覆盖层按层名字符串匹配，重判后模型换了叫法就找不到目标层。
+  不造假（找不到就不动那个模块）但要说出来——不然用户拖过几次、下次重判全落空而界面上看不出来。
+  它同时是「命名稳定性」唯一的读数：层名越通用，这一格越空。
+  */
+export interface ArchitectureOverrideLoss {
+  kind: "move_module" | "rename_layer";
+  /** `move_module`：那个模块 id */
+  module?: string;
+  /** `move_module`：找不到的人工指定层名 */
+  layer?: string;
+  /** `rename_layer`:旧名已经不在这份判层里 */
+  from?: string;
 }
 
 /**
@@ -535,7 +589,7 @@ export const LANGUAGE_CAPABILITIES = {
     notes: {
       symbolExtraction: "按真实语法树抽取函数、类、方法、接口与类型别名，起止行是解析出来的而不是按大括号数出来的。语法树整体加载失败时引擎会回落逐行匹配，并在图数据里写明回落原因。",
       dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证，而且**只试这一门语言（含 Vue 与 TS 互引这一族）的扩展名**——TS 里写 `./util` 不会连到同目录的 `util.py`（2026-10-06 复审 #121 之前是全表挨个试，那种跨语言猜边会把这句话戳穿）。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
-      entrypoint: "package.json 里 main / bin / scripts 指到的文件可信；其余入口按文件名（main、index、app、server、cli）认，同名但并非入口的文件会被误标。",
+      entrypoint: "框架入口是精确的：Fastify / Express / Koa / Nest 的实例构造、路由登记与 listen 都算服务入口；客户端调用（axios 那种 api.get 一个路径）刻意不算，它是打路由的一方。证据行落在注释或跨行模板字符串里的也不算——这一格判据取自语法树。剩下的靠 package.json 的 main / bin / scripts 与文件名（main、index、app、server、cli）猜：同名但并非入口的文件会被误标，实例从形参进来的子路由文件认不出来。",
       packageResolution: "只读仓库根那一份 tsconfig.json 的 paths，且只认带星号的通配别名（如 `@/*` → `src/*`）；精确别名、通过 extends 继承来的配置、包内的导出映射都不读，这类别名导入会画不出边。",
       buildVisibility: "读过根 package.json 与 tsconfig.json，但没有应用 include / exclude，也不看子包配置，所以图里的文件集合来自目录扫描，不受构建范围约束。"
     }

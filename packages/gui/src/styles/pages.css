@@ -18,8 +18,6 @@
 .side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: var(--fs-11); font-weight: 700; color: var(--brand-700); }
 .cfg-head span { color: var(--ink-3); font-size: 10px; font-weight: 400; }
-.cfg-tiers { margin-top: var(--sp-1); }
-.cfg-tier-given { color: var(--ink-3); font-size: 10px; }
 .cfg-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: var(--sp-1); }
 .cfg-reset { color: var(--info-ink); font-size: var(--fs-11); text-decoration: underline; }
 .entry-empty { margin: 0; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); padding: var(--sp-3); color: var(--ink-3); font-size: var(--fs-11); line-height: 1.6; }
@@ -114,27 +112,40 @@
 .arch-boundary { position: relative; display: flex; flex-direction: column; gap: var(--sp-3); border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); padding: var(--sp-6) var(--sp-4) var(--sp-4); }
 .arch-boundary-label { position: absolute; top: -9px; left: var(--sp-4); padding: 0 6px; background: var(--surface); font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 0.04em; }
 .arch-layer { display: flex; flex-direction: column; gap: var(--sp-2); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); background: var(--surface-2); border: 1px solid var(--border); }
-/* 拖拽悬停时那层亮一下：告诉用户「松手会落在这里」，落点判据是引擎的层名，不是位置猜的 */
-.arch-layer.drop-hint { border-color: var(--brand-600); background: var(--brand-050); }
 .arch-layer-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
 .arch-layer-name { position: relative; font-weight: 700; font-size: var(--fs-12); letter-spacing: 0.02em; }
 .arch-layer-duty { font-size: var(--fs-11); color: var(--ink-3); }
-.arch-layer-blocks { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.arch-layer-blocks { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: flex-start; }
 .arch-module {
   display: flex; flex-direction: column; gap: 2px; min-width: 150px; max-width: 220px; padding: 8px 10px; text-align: left;
   background: var(--surface); border: 1.5px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-sm);
-  transition: border var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); cursor: grab;
+  transition: border var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); cursor: pointer;
 }
 .arch-module:hover { border-color: var(--brand-600); transform: translateY(-1px); }
 .arch-module.selected { border-color: var(--brand-700); box-shadow: 0 0 0 3px var(--ring-strong); }
-.arch-module.dragging { opacity: 0.45; cursor: grabbing; }
 /* 被人工挪过层的小方块：右上角一枚点，与「这层的名字也是人改的」区分开 */
 .arch-module.moved::after { content: ""; position: absolute; margin-left: 46px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
 .arch-module-name { font-size: var(--fs-12); font-weight: 650; word-break: break-all; }
-.arch-module-meta { display: flex; gap: 8px; font-size: 10px; color: var(--ink-3); }
-.arch-module-meta .hot-dot { color: var(--danger); font-weight: 700; }
 .arch-override-dot { display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
-.arch-ghost { position: fixed; z-index: 30; transform: translate(-50%, -50%); padding: 6px 9px; border-radius: var(--r-md); background: var(--surface); border: 1.5px solid var(--brand-600); font-size: var(--fs-11); pointer-events: none; box-shadow: var(--shadow-md); }
+/* 合并块：名字里已经带几个成员，末尾一枚省略号点出「这一格还能点开」 */
+.arch-module.grouped .arch-module-name::after { content: "…"; color: var(--ink-3); }
+/* 合并块点开后的成员：一格里的次级列表，点成员才进节点详情 */
+.arch-cell { display: flex; flex-direction: column; gap: 4px; }
+.arch-members { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 2px; }
+.arch-member {
+  font-size: var(--fs-11); padding: 2px 7px; border-radius: 999px; background: var(--surface-2);
+  border: 1px solid var(--border); color: var(--ink-2); cursor: pointer;
+}
+.arch-member:hover { border-color: var(--brand-600); color: var(--ink-1); }
+.arch-member.selected { border-color: var(--brand-700); color: var(--brand-700); background: var(--brand-050); }
+/* 一层里的方块超过 6 格才折：折叠是这一层的读数，不是「还有多少文件」那种元数据 */
+.arch-more { font-size: var(--fs-11); padding: 3px 8px; border-radius: 999px; background: transparent; border: 1px dashed var(--border-strong); color: var(--ink-3); cursor: pointer; align-self: center; }
+.arch-more:hover { border-color: var(--brand-600); color: var(--ink-1); }
+/* 分层不可用：一句话说清是哪一种原因，加一颗明码标价的按钮；不画任何冒充分层的格子 */
+.arch-unavailable { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4); border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--surface-2); color: var(--ink-3); }
+.arch-unavailable > div { flex: 1; min-width: 0; }
+.arch-unavailable-title { margin: 0; font-size: var(--fs-13); font-weight: 700; color: var(--ink); }
+.arch-unavailable-note { margin: 2px 0 0; font-size: var(--fs-11); color: var(--ink-3); }
 /* 框外那一栏：按类别分组，只列词典认出来的东西 */
 .arch-outside { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-5); align-items: flex-start; padding: 0 var(--sp-2); }
 .arch-outside-group { display: flex; flex-direction: column; gap: 3px; }
@@ -248,15 +259,9 @@
 .entry-card .e-reason { font-size: var(--fs-11); color: var(--ink-2); line-height: 1.5; }
 .entry-card .e-path { font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 手动改档与模块配置：原型没画，收在侧栏一小块里 */
 .side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfg-row, .cfg-add { display: flex; align-items: center; gap: 5px; }
 .cfg-row .text-input, .cfg-add .text-input { padding: 5px 8px; font-size: var(--fs-11); border-radius: var(--r-sm); }
-.cfg-tier-row { display: flex; align-items: center; gap: 6px; font-size: var(--fs-11); }
-.cfg-tier-row .cfg-tier-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.cfg-tier-buttons { display: flex; gap: 3px; flex: 0 0 auto; }
-.cfg-tier-buttons button { border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 6px; color: var(--ink-3); background: var(--surface); font-size: 10px; }
-.cfg-tier-buttons button.on { color: var(--brand-700); border-color: var(--brand-600); background: var(--brand-100); font-weight: 700; }
 
 .teach-main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .source-tabs-bar {

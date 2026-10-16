@@ -16,10 +16,10 @@ import { Icon } from "../ui/icons";
  * 不产生调用边，静态链在真正的主干处是断的。模型能从文件与符号语义里读出编排，这正是本视图的增量。
  * 静态调用链仍在，它作为模型输入，并在 LLM 不可用时充当降级视图——降级会显式标注，不冒充模型结论。
  *
- * 环节数、关联文件数都由 engine 侧校验（路径必须真实存在，行号必须落在文件范围内），
- * 前端不再二次猜测；`caveats` 原样展示，包含被丢弃的环节与文件。
- * `flow.edges[]` 的 `origin`（static / code / inferred）是「这条边有多可核对」的分界，
- * 画布上给三档图例，具体依据进环节详情的抽屉。
+ * 环节数、关联文件数都由 engine 侧校验（路径必须真实存在，行号必须落在文件范围内），前端不再二次猜测。
+ * `caveats` 与 `uncovered` **不再上画布**（2026-10-16 用户判断：这类模型自述直接问 agent）——数据照旧留在产物里。
+ * `flow.edges[]` 的 `origin`（static / code / inferred）仍是「这条边有多可核对」的分界，只在环节详情的抽屉里
+ * 以徽标出现，读法写在徽标自己的悬停里。
  */
 
 /** 环节性质的中文展示；详情抽屉与画布共用同一份，避免一处一个叫法。 */
@@ -357,22 +357,10 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
             ))}
             <div className="flow-arrow" style={{ height: 8 }} aria-hidden />
 
-            {/* 边的可核对强度分三档，读法各不相同：绿=依赖图能证明，蓝=正文里读到，黄=模型推断 */}
-            <div className="flow-legend">
-              <span className="flow-origin origin-static">static · 依赖图可证明</span>
-              <span className="flow-origin origin-code">code · 源码正文读过</span>
-              <span className="flow-origin origin-inferred">inferred · 模型推断</span>
-            </div>
-
-            <p className="field-note">
-              {state.flow.caveats ? `已知边界：${state.flow.caveats}` : `共 ${state.flow.stages.length} 个环节`}
-            </p>
-            {state.flow.uncovered?.length ? (
-              <div className="flow-legend">
-                <span className="fs-11 faint">没能确认的部分</span>
-                {state.flow.uncovered.map((item) => <span className="badge badge-warn" key={item} title={item}>{item}</span>)}
-              </div>
-            ) : null}
+            {/* 画布下面这一整块（三档图例 / 已知边界 / 没能确认的部分）按用户判断撤掉：都是模型自述的不确定说明，
+                一句话问 agent 就有，不该占着主画面。数据仍在产物里（caveats、uncovered），抽屉里每条出边也还带着
+                origin 徽标与它的悬停说明——档位读法没有丢，只是不再同屏摊开。 */}
+            <p className="field-note">{`共 ${state.flow.stages.length} 个环节`}</p>
           </>
         ) : null}
 

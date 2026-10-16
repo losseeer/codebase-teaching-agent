@@ -1,4 +1,4 @@
-import type { ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
+import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrideLoss, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTier, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
 import { groupExternals, isBoundaryMember } from "../depgraph/external-catalog.js";
 import { graphFromData, isServedEntrypoint } from "../depgraph/graph.js";
 import { classifyFileRoles, fileStructureOf } from "../depgraph/roles.js";
@@ -18,8 +18,8 @@ import { layerCacheKey } from "../lib.js";
     否则这个产品就在画虚构的东西。
 
   缓存与降级口径照 `flows/flow.ts`、`coursetree/entry-suggest.ts` 那一套：
-  键 = 本层实际输入（模块清单 + 聚合边 + 人工覆盖层），命中不报 usage；
-  失败回落静态分层**不落盘**（一次网络抖动不能被永久钉成「这仓只有三层」）。
+  键 = 本层实际输入（方块清单 + 聚合边），**人工覆盖层只进请求不进键**，命中不报 usage；
+  判不出来就报不可用并**不落盘**（一次网络抖动不能被永久钉成「这仓判过了」）。
 */
 
 /** 模块上限：超过就把清单截到这么多并如实说明（一个 200 模块的仓不该指望模型一次读完）。 */
@@ -28,20 +28,35 @@ const MAX_MODULES = 80;
 const MAX_PAYLOAD_EDGES = 40;
 /** 边界栏最多画这么多行，其余折成「还有 N 类未列出」。 */
 const MAX_BOUNDARY_ROWS = 24;
+/** 模块压缩流水线的三条阈值（2026-10-16 用户定：架构图里没用的模块就是删除，能合的就合，剩下的才折叠）。 */
+const MERGE_MAX_FILES = 2;
+const MERGE_MIN_MEMBERS = 2;
+const MERGE_MAX_MEMBERS = 4;
+/** 父目录至少这么深才允许合并：本仓 `packages` 下十个包根并成一块是灾难，`.../src/depgraph` 的兄弟目录并起来才叫中间模块。 */
+const MERGE_MIN_PARENT_DEPTH = 2;
 
-/** 这一层输入的口径版本：提示词、层数约束或 payload 形状变了就翻它（同 `ENTRY_INPUT_VERSION` 的纪律）。 */
-const ARCH_INPUT_VERSION = "arch-v1";
+/**
+  这一层输入的口径版本：提示词、层数约束或 payload 形状变了就翻它（同 `ENTRY_INPUT_VERSION` 的纪律）。
+  `arch-v2`（2026-10-16）：判层单位从「课程树的原子模块」换成「压缩后的方块」，并新增 `role`/`parts` 两格证据。
+  ⚠️ 这一翻键是**有意的**：粒度变了，模型判的 70 个碎片和读者看到的 34 个方块不能各留一份。
+  已付费的 v1 判层仍留在库里但不再被读；三份仓的画布会显示「分层不可用」，要恢复模型分层得点一次「判一次分层」（≈¥0.02/仓）。
+  */
+const ARCH_INPUT_VERSION = "arch-v2";
 
 interface ModuleFact {
   id: string;
   title: string;
   summary: string;
-  /** 结构角色判的档（主干/设施/外围），静态分层直接用它。 */
-  tier: "core" | "facility" | "periphery";
+  /** 结构角色判的档（主干/设施/外围）：只作为**证据**送进模型，界面上不再拿它冒充分层。 */
+  tier: CourseTier;
   files: number;
   hasServedEntry: boolean;
   /** git 热点里这个仓给这个模块的最高提交数（模型排层时是「哪里在动」的信号）。 */
   hotCommits: number;
+  /** 图上这个方块承担的角色（确定性算出，模型只看不用）。 */
+  role: ArchitectureBlockRole;
+  /** 合并块里几个原子模块；原子块是 1。让模型知道这个方块是一组东西而不是一个目录。 */
+  parts: number;
 }
 
 export interface ArchitectureInput {
@@ -51,16 +66,16 @@ export interface ArchitectureInput {
   course: CourseTree;
   analysis: RepositoryAnalysis;
   index: RepositoryIndex;
-  /** 没配模型 / 预算触顶时传 undefined：直接静态分层并说明原因，不假装是模型判的。 */
+  /** 没配模型 / 预算触顶时传 undefined：分层直接判不可用，不编一份看着像答案的格子。 */
   provider?: LlmProvider;
   database?: TutorDatabase;
   overrides?: ArchitectureOverrides;
   /** regenerate 路由用：跳过缓存与「命中即返回」，真问一次。 */
   force?: boolean;
   /**
-    读侧（`GET /architecture`）传 false：**没有缓存行就回静态三层，绝不自己发请求**。
+    读侧（`GET /architecture`）传 false：**没有缓存行就回「分层不可用」，绝不自己发请求**。
     这是「不静默触发花钱动作」在架构视图上的落点——打开画布是个读取动作，
-    「这个仓还没判过层」不能顺手变成一笔没人确认的调用；要判，界面上有明确的「重新分层」那一下。
+    「这个仓还没判过层」不能顺手变成一笔没人确认的调用；要判，界面上有明确的「判一次分层」那一下。
     */
   allowCall?: boolean;
 }
@@ -72,6 +87,7 @@ export interface ArchitectureResult extends ArchitecturePlan {
   omittedModules: number;
   /** 边界栏没画出来的行数（含未识别与语言自带）。 */
   collapsedExternals: number;
+  // `lostOverrides` 声明在 shared 的 ArchitecturePlan 上：它是读时现算的失效读数，不写进缓存
 }
 
 /** 模块 → 它可见的文件（本节点锚点 + 子孙锚点，去重）：与分级层、GUI 模块清单同一条口径。 */
@@ -92,7 +108,7 @@ function moduleNodes(course: CourseTree): CourseNode[] {
 
 /**
   文件级 import 边 → 模块级聚合边。**边只能从这里来**：模型不参与这一步，
-  人工改层也不改边——改的是模块归哪层，箭头自然按新归属重算（这就是「拖动换层不烧钱」的根据）。
+  人工改层也不改边——改的是方块归哪层，箭头自然按新归属重算（这就是「挪一下不烧钱」的根据）。
   一个文件可能同时出现在多个模块的可见清单里（共享文件是树的结构事实），
   那条边会给每个模块对各算一条：宁可在依据里重复，也不悄悄丢一条真存在的往来。
 */
@@ -123,7 +139,7 @@ export function aggregateModuleEdges(filesByModule: Map<string, string[]>, impor
   return { pairs, totalEdges };
 }
 
-/** 模型/静态两条路共用的收尾：按归层结果算箭头。 */
+/** 归层结果定了之后才算箭头：模型不许发明边，边只能从这张表出来（画布虽不画，产物与审计仍要用）。 */
 function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, string[]>, imports: Record<string, string[]>): ArchitectureEdge[] {
   const layerOfModule = new Map<string, string>();
   for (const layer of layers) for (const moduleId of layer.moduleIds) layerOfModule.set(moduleId, layer.id);
@@ -142,18 +158,6 @@ function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, stri
   return [...byLayer.values()].sort((left, right) => right.weight - left.weight || left.fromLayer.localeCompare(right.fromLayer));
 }
 
-/** 静态兜底：直接用 tier 三档当三层。名字与分级层的显示名一致，切换来源时读者不至于看到两套词。 */
-function staticLayers(modules: ModuleFact[]): ArchitectureLayer[] {
-  const buckets: { id: string; name: string; duty: string; tier: ModuleFact["tier"] }[] = [
-    { id: "layer-1", name: "主干", duty: "对外提供服务与执行主链路的模块", tier: "core" },
-    { id: "layer-2", name: "设施", duty: "支撑主干的配置、存储与运行环境", tier: "facility" },
-    { id: "layer-3", name: "外围", duty: "末端工具、脚本与测试", tier: "periphery" }
-  ];
-  return buckets
-    .map((bucket) => ({ id: bucket.id, name: bucket.name, duty: bucket.duty, moduleIds: modules.filter((module) => module.tier === bucket.tier).map((module) => module.id) }))
-    .filter((layer) => layer.moduleIds.length > 0);
-}
-
 /** 模型给的层名可能重复：同名合一行，别画两条并列的「接入层」。 */
 function mergeSameName(layers: ArchitectureLayer[]): ArchitectureLayer[] {
   const byName = new Map<string, ArchitectureLayer>();
@@ -167,7 +171,7 @@ function mergeSameName(layers: ArchitectureLayer[]): ArchitectureLayer[] {
 }
 
 /**
-  校验模型输出。**只要有一处不成立就整份作废**（回落静态分层）：
+  校验模型输出。**只要有一处不成立就整份作废**（判不可用，不落盘）：
   - 层里出现清单外的模块 id = 模型在造模块（这是红线，不是小瑕疵）；
   - 有模块没归任何层 = 图上一块空白，读者会以为那部分不属于这个系统；
   - 同一模块被塞进两层 = 归属自相矛盾；
@@ -219,28 +223,6 @@ function parseLayers(text: string, modules: ModuleFact[]): { layers?: Architectu
   return { layers: mergeSameName(layers), droppedFacts };
 }
 
-/** 把人工覆盖层落到模型结果上：先改名、再按名字换层。两处都要幂等——同一份覆盖被读很多次不能越改越歪。 */
-function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined): { layers: ArchitectureLayer[]; overriddenLayers: string[] } {
-  // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——**没覆盖层时也要滤**，
-  // 否则同一次判层会因为「有没有人工改过」画出不同数量的层，读者会以为层是被人删掉的
-  if (!overrides) return { layers: layers.filter((layer) => layer.moduleIds.length > 0), overriddenLayers: [] };
-  const renames = overrides.layerRenames ?? {};
-  const renamed = layers.map((layer) => (renames[layer.name] ? { ...layer, name: renames[layer.name], overridden: true } : layer));
-  const overriddenLayers = renamed.filter((layer) => layer.overridden).map((layer) => layer.id);
-  const byName = new Map<string, ArchitectureLayer>();
-  for (const layer of renamed) byName.set(layer.name, layer);
-  const moved = overrides.moduleLayer ?? {};
-  for (const [moduleId, targetName] of Object.entries(moved)) {
-    const target = byName.get(targetName);
-    // 目标层不存在（重生成后模型没再给这个名字）就**不动**它：宁可留在模型判的层里，也不要凭空造一层或丢模块
-    if (!target) continue;
-    for (const layer of renamed) if (layer !== target && layer.moduleIds.includes(moduleId)) layer.moduleIds = layer.moduleIds.filter((id) => id !== moduleId);
-    if (!target.moduleIds.includes(moduleId)) target.moduleIds.push(moduleId);
-    if (!overriddenLayers.includes(target.id)) overriddenLayers.push(target.id);
-  }
-  return { layers: renamed.filter((layer) => layer.moduleIds.length > 0), overriddenLayers };
-}
-
 /** 边界之外那一栏：只放词典认出来的（存储/缓存/队列/模型/接口/框架/测试），`other` 与语言自带折成读数。 */
 function boundaryRows(externals: Record<string, string[]> | undefined): { rows: ArchitectureExternal[]; collapsed: number } {
   // 旧产物根本没采过这一格：这不是「这个仓不碰外部东西」，是「这份产物还没采」——由调用方在 reason 里说清
@@ -254,48 +236,251 @@ function boundaryRows(externals: Record<string, string[]> | undefined): { rows: 
   return { rows: rows.slice(0, MAX_BOUNDARY_ROWS), collapsed: groups.length - Math.min(rows.length, MAX_BOUNDARY_ROWS) };
 }
 
-/** 静态兜底的说明句：三档名字与分级层一致，切换来源时读者不至于看到两套词。 */
-function tierReason(externalsMissing: boolean): string {
-  return `按结构角色分的三层（主干/设施/外围），不是模型判的职责层次${externalsMissing ? "；这份产物还没采外部包名，边界外那一栏是空的" : ""}`;
+/** 模块在架构图里的角色：`side` 只在判据内部出现，它不进图、也不进 shared 的方块形状。 */
+type ModuleRole = ArchitectureBlockRole | "side";
+
+export interface ArchitectureBlock {
+  /** 原子块就是模块 id；合并块是 `arch:<目录>:<角色>`——它不在课程树里，点开要靠 members 回到原子模块。 */
+  id: string;
+  title: string;
+  summary: string;
+  tier: CourseTier;
+  files: string[];
+  members: string[];
+  role: ArchitectureBlockRole;
 }
 
-/** 这一层的全部确定性输入：模块清单、聚合边、外部栏、缓存键。判断题与 peek 共用它（两套键构造迟早漂移）。 */
+/**
+  合并块的标题：成员名**整段**拼到 24 字为止，装不下的用「等」收尾。
+  不用父目录末段（dianping 那一档的末段是包根 `hmdp`，读者看不出里面是什么），也不截半句话——
+  一格的名字读到一半断了，比它长一点更糟。
+  */
+function joinedTitle(members: CourseNode[]): string {
+  const parts: string[] = [];
+  for (const node of members) {
+    if (parts.length && parts.join("、").length + node.title.length + 1 > 24) break;
+    parts.push(node.title);
+  }
+  return parts.length === members.length ? parts.join("、") : `${parts.join("、")} 等`;
+}
+
+/**
+  架构图的模块集合 = 原子模块经「隐藏旁证 → 同父合并」压缩后的块集合。
+  为什么放在判层**之前**而不是画完再藏：旁证模块连进载荷都是白花 token，
+  而合并块的粒度必须先让模型看见，否则它判的是 70 个碎片、读者看到的是 34 个块，两套口径迟早打架。
+
+  可达性沿 **import ∪ 调用 ∪ 接口实现** 三条边算。最后那条不能省：Spring 的控制器只 import 接口，
+  `service/impl` 与 `mapper` 在纯 import 图上永远不可达，只按 import 判就会把全仓最核心的实现当旁证删掉。
+
+  ⚠️ 这份集合**不许读人工覆盖层**：读了就等于「挪一下模块」会改变方块清单，进而翻掉缓存键——
+  覆盖层不进键是这一层不花钱的前提（见 `archContext`）。修正怎么落见 `applyOverrides`。
+  */
+export function architectureBlocks(course: CourseTree, analysis: RepositoryAnalysis): { blocks: ArchitectureBlock[]; sideModules: number } {
+  const modules = moduleNodes(course);
+  const filesOf = new Map(modules.map((node) => [node.id, moduleFiles(node)]));
+  const servedEntryPaths = new Set((analysis.graph.entrypoints ?? []).filter(isServedEntrypoint).map((anchor) => anchor.path));
+  /**
+    可达性的种子用**全部**入口候选，不只词典认出来的服务入口：TS 侧的规则只产出「conventional entrypoint」
+    （`server.ts` / `main.tsx` 这一档），只拿 served 当种子会把整个仓判成走不到、把最该看的那格当旁证删掉。
+    `entry` 这一档角色仍只认 served——「含对外服务入口」这句话不能因为一个 index 文件就说出口。
+    */
+  const entrySeeds = new Set((analysis.graph.entrypoints ?? []).map((anchor) => anchor.path));
+  const ownerOf = new Map<string, string>();
+  for (const node of modules) for (const file of filesOf.get(node.id) ?? []) if (!ownerOf.has(file)) ownerOf.set(file, node.id);
+  const out = new Map<string, Set<string>>();
+  const inCount = new Map<string, Set<string>>();
+  const link = (from: string | undefined, to: string | undefined): void => {
+    if (!from || !to || from === to) return;
+    if (!out.has(from)) out.set(from, new Set());
+    if (!inCount.has(to)) inCount.set(to, new Set());
+    out.get(from)!.add(to);
+    inCount.get(to)!.add(from);
+  };
+  for (const [fromPath, targets] of Object.entries(analysis.graph.imports ?? {})) {
+    const from = ownerOf.get(fromPath);
+    if (!from) continue;
+    for (const target of targets) link(from, ownerOf.get(target));
+  }
+  for (const call of analysis.graph.calls ?? []) link(ownerOf.get(call.callerPath), ownerOf.get(call.calleePath));
+  // 接口 → 实现：运行时才接上的那条边，判「谁是主干」全靠它
+  for (const edge of analysis.graph.dispatch ?? []) if (edge.kind === "implements") link(ownerOf.get(edge.supertypePath), ownerOf.get(edge.subtypePath));
+  const seeds = modules.filter((node) => (filesOf.get(node.id) ?? []).some((path) => entrySeeds.has(path))).map((node) => node.id);
+  const reach = new Set(seeds);
+  const queue = [...seeds];
+  while (queue.length) {
+    for (const next of out.get(queue.shift()!) ?? []) if (!reach.has(next)) { reach.add(next); queue.push(next); }
+  }
+  /** 判据按顺序命中：入口 → 旁证（无入边且入口走不到）→ 底座（被 ≥4 处引用而自己最多引 3 处）→ 主干 → 支撑。 */
+  const roleOf = (node: CourseNode): ModuleRole => {
+    const files = filesOf.get(node.id) ?? [];
+    if (files.some((path) => servedEntryPaths.has(path))) return "entry";
+    if (!(inCount.get(node.id)?.size) && !reach.has(node.id)) return "side";
+    if ((inCount.get(node.id)?.size ?? 0) >= 4 && (out.get(node.id)?.size ?? 0) <= 3) return "shared";
+    return reach.has(node.id) ? "core" : "support";
+  };
+  const parentOf = (node: CourseNode): string => node.id.replace(/^module:/, "").split("/").slice(0, -1).join("/");
+  const make = (id: string, members: CourseNode[], role: ArchitectureBlockRole): ArchitectureBlock => ({
+    id,
+    title: members.length === 1 ? members[0].title : joinedTitle(members),
+    summary: members.map((node) => node.summary).join("；").slice(0, 80),
+    tier: (["core", "facility", "periphery"] as CourseTier[]).find((tier) => members.some((node) => (node.tier ?? "periphery") === tier)) ?? "periphery",
+    files: [...new Set(members.flatMap((node) => filesOf.get(node.id) ?? []))],
+    members: members.map((node) => node.id),
+    role
+  });
+  const kept = modules.filter((node) => roleOf(node) !== "side");
+  const groups = new Map<string, CourseNode[]>();
+  for (const node of kept) {
+    const parent = parentOf(node);
+    if (parent.split("/").filter(Boolean).length < MERGE_MIN_PARENT_DEPTH || (filesOf.get(node.id) ?? []).length > MERGE_MAX_FILES) continue;
+    const key = `${parent}|${roleOf(node)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(node);
+  }
+  /** 够格的组才真的合并：成员数不在 2~4 之间就不合（1 个是原地踏步，5 个以上会造出一个比原子模块还难读的巨型块）。 */
+  const eligible = new Map<string, { key: string; members: CourseNode[] }>();
+  for (const [key, members] of groups) {
+    if (members.length < MERGE_MIN_MEMBERS || members.length > MERGE_MAX_MEMBERS) continue;
+    for (const node of members) eligible.set(node.id, { key, members });
+  }
+  // 按树里的原顺序出块（合并块落在它第一个成员的位置）：MAX_MODULES 截断时这才是「前 80 个」而不是「先所有合并块」
+  const blocks: ArchitectureBlock[] = [];
+  const emitted = new Set<string>();
+  for (const node of kept) {
+    const group = eligible.get(node.id);
+    if (!group) {
+      blocks.push(make(node.id, [node], roleOf(node) as ArchitectureBlockRole));
+      continue;
+    }
+    if (emitted.has(group.key)) continue;
+    emitted.add(group.key);
+    const [parent, role] = group.key.split("|");
+    // id 带角色：同一父目录下不同角色的两组若都够合并条件，不带角色就会撞出两个同名块
+    blocks.push(make(`arch:${parent}:${role}`, group.members, role as ArchitectureBlockRole));
+  }
+  return { blocks, sideModules: modules.length - kept.length };
+}
+
+/** 方块与成员的对照表：`applyOverrides` 拆块、`layerEdges` 算往来都靠它，界面拿到的是同一份 id。 */
+interface ArchitectureUnits {
+  /** 方块 id → 成员模块 id（原子块就是只有自己一个）。 */
+  blocks: Map<string, string[]>;
+  /** 课程树里全部原子模块 id（含被藏起来的旁证）：用来分辨「这个修正指的模块只是被藏了」与「它已经不在这棵树里」。 */
+  members: Set<string>;
+}
+
+/**
+  把人工修正落到判层结果上，顺带处理**合并块被拆开**这一格。
+  覆盖层存的可能是方块 id（整块走），也可能是块里的某个原子模块 id（只走自己——dianping 现存的三条修正全是成员级），
+  所以先在**成员层面**定归属再重新聚块：挪走一个成员不该让兄弟跟着动，也不该让同一个文件在图上出现两次。
+
+  聚回来的规则只有一条：一个块的成员**全都在同一层**时它才继续是一块，否则拆成单个方块。
+  宁可在图上多几个小块，也不造一个「id 指向的成员和画出来的不是一回事」的假块。
+  被藏起来的旁证只要有人工修正点名，就作为单独方块回到图上——这是「agent 说这个不该藏」唯一的出口。
+
+  `lost` 是这次**没能落地**的修正：覆盖层按层名字符串匹配，重判之后模型换了叫法
+  （五层判成四层、"数据访问"并进"支撑"），目标名就找不到；id 不在树上也是找不到。
+  找不到仍然**不动它**（宁可留在模型判的层里，也不凭空造一层），但不能装作没事——
+  2026-10-16 之前这里是一条无声的 `continue`，用户改过几次、下次重判全落空而界面上看不出来。
+  */
+function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenLayers: string[]; lost: ArchitectureOverrideLoss[] } {
+  const clone = layers.map((layer) => ({ ...layer, moduleIds: [...layer.moduleIds] }));
+  // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——**没覆盖层时也要滤**，
+  // 否则同一次判层会因为「有没有人工改过」画出不同数量的层，读者会以为层是被人删掉的
+  if (!overrides) return { layers: clone.filter((layer) => layer.moduleIds.length > 0), overriddenLayers: [], lost: [] };
+  const renames = overrides.layerRenames ?? {};
+  const lost: ArchitectureOverrideLoss[] = [];
+  for (const from of Object.keys(renames)) if (!layers.some((layer) => layer.name === from)) lost.push({ kind: "rename_layer", from });
+  const renamed = clone.map((layer) => (renames[layer.name] ? { ...layer, name: renames[layer.name], overridden: true } : layer));
+  const hostOf = new Map<string, string>();
+  for (const [id, members] of units.blocks) for (const member of members) hostOf.set(member, id);
+  /** 块 id 先摊到成员上：这样「整块挪走」与「只挪一个成员」是同一套写法。 */
+  const layerOfMember = new Map<string, string>();
+  for (const layer of renamed) for (const id of layer.moduleIds) for (const member of units.blocks.get(id) ?? [id]) layerOfMember.set(member, layer.name);
+  const names = new Set(renamed.map((layer) => layer.name));
+  const overriddenLayers = renamed.filter((layer) => layer.overridden).map((layer) => layer.id);
+  for (const [id, target] of Object.entries(overrides.moduleLayer ?? {})) {
+    const members = units.blocks.get(id) ?? [id];
+    if (!names.has(target) || !members.some((member) => units.members.has(member))) { lost.push({ kind: "move_module", module: id, layer: target }); continue; }
+    for (const member of members) layerOfMember.set(member, target);
+    const layer = renamed.find((candidate) => candidate.name === target);
+    if (layer && !overriddenLayers.includes(layer.id)) overriddenLayers.push(layer.id);
+  }
+  const hostByName = new Map<string, ArchitectureLayer>();
+  for (const layer of renamed) if (!hostByName.has(layer.name)) hostByName.set(layer.name, layer);
+  const unitsByLayer = new Map<string, string[]>();
+  for (const [member, name] of layerOfMember) {
+    const host = hostOf.get(member);
+    const siblings = host ? units.blocks.get(host)! : [member];
+    // 整块同层 → 还是那块；被拆开 → 成员各自成块（id 就是模块 id，界面按课程树取名字）
+    const unit = siblings.length > 1 && siblings.every((sibling) => layerOfMember.get(sibling) === name) ? host! : member;
+    const list = unitsByLayer.get(name) ?? [];
+    if (!list.includes(unit)) list.push(unit);
+    unitsByLayer.set(name, list);
+  }
+  const layersOut = [...hostByName.values()].map((layer) => ({ ...layer, moduleIds: unitsByLayer.get(layer.name) ?? [] }));
+  return { layers: layersOut.filter((layer) => layer.moduleIds.length > 0), overriddenLayers, lost };
+}
+
+
+/** 这一层的全部确定性输入：方块清单、聚合边、外部栏、缓存键。判断题与 peek 共用它（两套键构造迟早漂移）。 */
+interface ArchitectureContext {
+  truncated: ModuleFact[];
+  filesByUnit: Map<string, string[]>;
+  briefs: ArchitectureBlockBrief[];
+  sideModules: number;
+  boundary: { rows: ArchitectureExternal[]; collapsed: number };
+  externalsMissing: boolean;
+  omittedModules: number;
+  payload: unknown;
+  key: string;
+  units: ArchitectureUnits;
+}
+
 function archContext(input: ArchitectureInput, modelVersion: string) {
   const { repositoryId, course, analysis, index, overrides } = input;
   const servedEntryPaths = new Set((analysis.graph.entrypoints ?? []).filter(isServedEntrypoint).map((anchor) => anchor.path));
   const hotChanges = new Map(index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
   const modules = moduleNodes(course);
-  const filesByModule = new Map(modules.map((node) => [node.id, moduleFiles(node)]));
-  const facts: ModuleFact[] = modules.map((node) => {
-    const files = filesByModule.get(node.id) ?? [];
-    return {
-      id: node.id,
-      title: node.title,
-      summary: node.summary.slice(0, 80),
-      tier: node.tier ?? "periphery",
-      files: files.length,
-      hasServedEntry: files.some((path) => servedEntryPaths.has(path)),
-      hotCommits: Math.max(0, ...files.map((path) => hotChanges.get(path) ?? 0))
-    };
-  });
+  const { blocks, sideModules } = architectureBlocks(course, analysis);
+  const facts: ModuleFact[] = blocks.map((block) => ({
+    id: block.id,
+    title: block.title,
+    summary: block.summary,
+    tier: block.tier,
+    files: block.files.length,
+    hasServedEntry: block.files.some((path) => servedEntryPaths.has(path)),
+    hotCommits: Math.max(0, ...block.files.map((path) => hotChanges.get(path) ?? 0)),
+    role: block.role,
+    parts: block.members.length
+  }));
   const truncated = facts.slice(0, MAX_MODULES);
   const omittedModules = Math.max(0, facts.length - truncated.length);
-  const { pairs } = aggregateModuleEdges(filesByModule, analysis.graph.imports);
+  /** 给模型的往来计数只按**方块**算：一个文件的原子模块 id 也在下面那张表里，两张一起送进 payload 会把同一条边数两遍。 */
+  const filesByBlock = new Map(blocks.map((block) => [block.id, block.files]));
+  const { pairs } = aggregateModuleEdges(filesByBlock, analysis.graph.imports);
   const moduleEdges = [...pairs.values()]
     .sort((left, right) => right.weight - left.weight || left.from.localeCompare(right.from))
     .slice(0, MAX_PAYLOAD_EDGES)
     .map((edge) => ({ from: edge.from, to: edge.to, weight: edge.weight }));
+  /**
+    画图上箭头的表多一层原子模块 id：人工修正能把合并块里的一个成员单独挪走，那时层里出现的是模块 id，
+    只有方块 id 的表就查不到它的文件。代价是同一条文件级边可能在块与成员两边各算一次——
+    只在「块被拆开」那一档让权重偏高，而箭头早已不上画布（依据仍在产物里可查）。
+    */
+  const filesByUnit = new Map<string, string[]>(modules.map((node) => [node.id, moduleFiles(node)]));
+  for (const block of blocks) filesByUnit.set(block.id, block.files);
   const boundary = boundaryRows(analysis.graph.externals);
   const externalsMissing = analysis.graph.externals === undefined;
   /**
     人工修正（改层名 / 挪模块）**不进键**，只进请求。
-    为什么单独钉这件事：拖动是这个视图的主交互，而修正本来就是读的时候现叠上去的一层——
-    让它翻键等于把「拖一下」变成一次重判请求，模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
-    判层的**证据**（模块 id、名字、摘要、结构角色、规模、入口、热度、模块间往来）照样进键：
+    为什么单独钉这件事：修正本来就是读的时候现叠上去的一层——
+    让它翻键等于把「挪一下」变成一次重判请求，模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
+    判层的**证据**（方块 id、名字、摘要、结构角色与档位、规模、入口、热度、方块间往来）照样进键：
     模块增删、摘要重烧这些真变化必须重问，人工改名归到证据那一档（改一次翻一次键，但读侧不发请求，要花必须点「重新分层」）。
     */
   const keyPayload = {
-    modules: truncated.map((fact) => ({ id: fact.id, title: fact.title, summary: fact.summary, tier: fact.tier, files: fact.files, entry: fact.hasServedEntry, hot: fact.hotCommits })),
+    modules: truncated.map((fact) => ({ id: fact.id, title: fact.title, summary: fact.summary, tier: fact.tier, role: fact.role, files: fact.files, parts: fact.parts, entry: fact.hasServedEntry, hot: fact.hotCommits })),
     edges: moduleEdges,
     ...(omittedModules ? { omittedModules } : {})
   };
@@ -306,7 +491,12 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
     ...(omittedModules ? { omittedModules } : {})
   };
   const key = layerCacheKey({ layer: "architecture", repositoryId, contractVersion: ARCH_INPUT_VERSION, modelVersion, payload: keyPayload });
-  return { truncated, facts, filesByModule, moduleEdges, boundary, externalsMissing, omittedModules, payload, key };
+  const units: ArchitectureUnits = {
+    blocks: new Map(blocks.map((block) => [block.id, block.members])),
+    members: new Set(modules.map((node) => node.id))
+  };
+  const briefs: ArchitectureBlockBrief[] = blocks.map((block) => ({ id: block.id, title: block.title, members: block.members, role: block.role }));
+  return { truncated, filesByUnit, moduleEdges, units, briefs, sideModules, boundary, externalsMissing, omittedModules, payload, key };
 }
 
 /**
@@ -333,67 +523,78 @@ export function architectureInputOf(input: { repositoryId: string; repositoryPat
 /**
   只查缓存、**绝不发请求**的读侧。副作用工具要先知道「图上现在有哪几层」才能校验层名，
   而为了校验去烧一发模型是不可接受的（用户问一句「把 X 挪到 Y 层」，代价不该是一笔重判的钱）。
-  没缓存行就回 undefined：调用方按「现在只有静态三层可改」处理，并如实告诉模型。
+  没缓存行就回空层名：调用方按「现在没有分层可改」处理，并如实告诉模型（以前这里塞结构角色三档，agent 会收到一句假的「已挪好」）。
 */
-export function peekCachedArchitecture(input: ArchitectureInput & { provider: LlmProvider }): { plan?: ArchitecturePlan; layers: string[] } {
+export function peekCachedArchitecture(input: ArchitectureInput & { provider: LlmProvider }): { plan?: ArchitecturePlan; layers: string[]; blocks: ArchitectureBlockBrief[] } {
   const context = archContext(input, input.provider.modelVersion);
   const stored = input.database?.getLayerCache<ArchitecturePlan>(context.key);
   const plan = stored?.value?.layers?.length ? stored.value : undefined;
-  const layered = plan ? applyOverrides(plan.layers, input.overrides) : { layers: staticLayers(context.truncated), overriddenLayers: [] };
-  return { ...(plan ? { plan } : {}), layers: layered.layers.map((layer) => layer.name) };
+  // 没有判好的那份就回**空层名**：以前这里塞的是 tier 三档（主干/设施/外围），
+  // 于是 agent 能「把模块挪进外围」并收到一句成功——它挪动的其实是结构角色分组，不是分层判断（2026-10-16 改）。
+  if (!plan) return { layers: [], blocks: context.briefs };
+  const layered = applyOverrides(plan.layers, input.overrides, context.units);
+  return { plan, layers: layered.layers.map((layer) => layer.name), blocks: context.briefs };
 }
 
 export async function generateArchitectureCached(input: ArchitectureInput): Promise<ArchitectureResult> {
   const { repositoryId, analysis, provider, database, overrides } = input;
-  if (!provider) {
-    const context = archContext(input, "none");
-    const layered = applyOverrides(staticLayers(context.truncated), overrides);
-    return {
-      repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, context.filesByModule, analysis.graph.imports),
-      externals: context.boundary.rows, source: "static",
-      reason: `未配置模型：${tierReason(context.externalsMissing)}`,
-      overriddenLayers: layered.overriddenLayers, generatedAt: new Date().toISOString(), basedOnVersionStamp: analysis.versionStamp,
-      omittedModules: context.omittedModules, collapsedExternals: context.boundary.collapsed,
-      ...(context.externalsMissing ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {})
-    };
-  }
-  const { truncated, filesByModule, boundary, externalsMissing, omittedModules, payload, key } = archContext(input, provider.modelVersion);
-  /** 静态兜底的一份产物（不落盘）：与成功路径同一个形状，只差 source/reason 两格。 */
-  const buildStatic = (layers: ArchitectureLayer[], reason: string): ArchitectureResult => ({
+  /**
+    分层不可用时的那一份（**不落盘**）：`layers` 给空数组、原因说清是哪一种，事实那几格（方块、外部栏）照算照给。
+    为什么不再退成 tier 三档（2026-10-16 用户定）：主干/设施/外围是**结构角色**，把它画成「职责分层」
+    等于递给大家一张假架构图——读者会照着它讲「这个系统的分层」，而那句话没有依据。
+    不可用就直说不可用，并留一个明码标价的出口。
+    */
+  const unavailable = (context: ArchitectureContext, kind: NonNullable<ArchitecturePlan["unavailableReason"]>, reason: string): ArchitectureResult => ({
     repositoryId,
-    layers,
-    edges: layerEdges(layers, filesByModule, analysis.graph.imports),
-    externals: boundary.rows,
-    source: "static",
+    layers: [],
+    edges: [],
+    externals: context.boundary.rows,
+    source: "unavailable",
+    unavailableReason: kind,
     reason,
     overriddenLayers: [],
     generatedAt: new Date().toISOString(),
     basedOnVersionStamp: analysis.versionStamp,
-    omittedModules,
-    collapsedExternals: boundary.collapsed,
-    ...(externalsMissing ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {})
+    blocks: context.briefs,
+    sideModules: context.sideModules,
+    omittedModules: context.omittedModules,
+    collapsedExternals: context.boundary.collapsed,
+    ...(context.externalsMissing ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {})
   });
+  if (!provider) {
+    return unavailable(archContext(input, "none"), "no_model", "未配置模型：分层判断得由模型给职责层名与归属。方块清单、跨层往来与边界之外那一栏仍是算出来的，问 agent 答得到。");
+  }
+  const context = archContext(input, provider.modelVersion);
+  const { truncated, filesByUnit, briefs, sideModules, boundary, externalsMissing, omittedModules, payload, key, units } = context;
   if (!input.force) {
     const stored = database?.getLayerCache<ArchitecturePlan>(key);
-    if (stored && stored.value.layers?.length && (stored.value.source === "llm" || stored.value.source === "static")) {
-      const layered = applyOverrides(stored.value.layers, overrides);
-      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByModule, analysis.graph.imports), overriddenLayers: layered.overriddenLayers, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
+    // 只认模型判过的那份：老口径里 `source:"static"` 的行装的是 tier 三档，读回来就又变成假架构图
+    if (stored && stored.value.layers?.length && stored.value.source === "llm") {
+      const layered = applyOverrides(stored.value.layers, overrides, units);
+      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenLayers: layered.overriddenLayers, ...(layered.lost.length ? { lostOverrides: layered.lost } : {}), blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
     }
   }
-  /** 读侧（`allowCall: false`）没缓存行就到此为止：给静态三层，不发请求、不落盘。 */
+  /** 读侧（`allowCall: false`）没缓存行就到此为止：不发请求、不落盘，画布交给不可用卡片。 */
   if (input.allowCall === false) {
-    const untouched = applyOverrides(staticLayers(truncated), overrides);
-    return { ...buildStatic(untouched.layers, `还没判过层：打开画布不会调用模型，点「重新分层」才花这一发。${tierReason(externalsMissing)}`), overriddenLayers: untouched.overriddenLayers };
+    return unavailable(context, "not_judged", "还没判过层：打开画布是读取动作，不会替用户点这一发。要判，点「重新分层」。");
   }
   try {
+    /**
+      定名口径（2026-10-16 改）：原先这里写着「别写成应用层/领域层这种模板话」，与上一句
+      「典型形态：接入 / 编排 / 核心能力 / 数据访问」自相矛盾——先递梯子再踩一脚。而且它管不到任何硬事实
+      （方块必须恰好归一层、造方块/漏归整份作废、边只能算不能编，这些都有校验兜着），管的只是措辞；
+      更糟的是覆盖层按层名匹配，名字越花、重判后对不上的概率越高，用户改过的修正就越是无声落空。
+      现在反过来要通用职责名：稳定、跨仓可比，教学信息交给每层那句 duty 与层内方块清单去承载。
+      */
     const response = await provider.complete({
       system: [
-        "你是代码教学产品的架构分层器。给定一个仓库的模块清单（含每个模块的结构角色、可见文件数、是否含对外服务入口、git 热度）",
-        "与模块之间的 import 往来计数，把它们分进 3~5 个**职责层次**（典型形态：接入 / 编排 / 核心能力 / 数据访问），自上而下排列。",
-        "只判这三件事：分几层、每层叫什么、每个模块归哪层。每个模块必须且只能出现一次。",
-        "层名用这个仓库自己的语言（业务名词优先，别一律写成「应用层/领域层」这种模板话）；每层给一句话职责，不超过 40 字。",
+        "你是代码教学产品的架构分层器。给定一个仓库的架构方块清单：每个方块带结构角色（entry=含对外服务入口、core=入口可达的主链路、shared=被多处引用的底座、support=其余）、",
+        "可见文件数、由几个模块合成（parts）、是否含对外服务入口与 git 热度，再带方块之间的 import 往来计数。",
+        "把它们分进 3~5 个**职责层次**（典型形态：接入 / 编排 / 核心能力 / 数据访问），自上而下排列。",
+        "只判这三件事：分几层、每层叫什么、每个方块归哪层。每个方块必须且只能出现一次，id 原样返回。",
+        "层名用软件工程里读得懂的职责名（接入 / 应用编排 / 核心能力 / 数据访问 / 支撑设施这一档），每层再给一句这个仓库自己的职责说明，不超过 40 字。",
         "箭头、文件路径、外部依赖由程序自己算：**不许输出这些字段**，输出了会被丢弃。",
-        "严格输出 JSON：{\"layers\":[{\"name\":\"层名\",\"duty\":\"一句话职责\",\"modules\":[\"模块 id 原样返回\"]}]}，不要输出其他文字。"
+        "严格输出 JSON：{\"layers\":[{\"name\":\"层名\",\"duty\":\"一句话职责\",\"modules\":[\"方块 id\"]}]}，不要输出其他文字。"
       ].join(""),
       user: JSON.stringify(payload),
       maxTokens: 1_200,
@@ -402,11 +603,10 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     });
     const parsed = parseLayers(response.text, truncated);
     if (!parsed.layers) {
-      // 判不出来就回落静态三层并说清原因；**不落盘**——同一份输入下次还要再问
-      const fallback = applyOverrides(staticLayers(truncated), overrides);
-      return { ...buildStatic(fallback.layers, `分层判断没采信（${parsed.reason ?? "输出不合法"}），退回${tierReason(externalsMissing)}`), overriddenLayers: fallback.overriddenLayers, usage: response.usage };
+      // 判不出来就报不可用并说清是哪一条不合格；**不落盘**——同一份输入下次还要再问
+      return { ...unavailable(context, "rejected", `分层判断没采信：${parsed.reason ?? "输出不合法"}。这次没落盘，再点一次「重新分层」会重问。`), usage: response.usage };
     }
-    const layered = applyOverrides(parsed.layers, overrides);
+    const layered = applyOverrides(parsed.layers, overrides, units);
     /**
       落盘的是模型的**原判**（没叠人工修正）：修正每次读的时候现叠一次。
       键里不含修正，所以同一份原判会被反复读到——把修正烤进缓存等于下一次读叠第二遍，
@@ -415,22 +615,21 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     const plan: ArchitecturePlan = {
       repositoryId,
       layers: parsed.layers,
-      edges: layerEdges(parsed.layers, filesByModule, analysis.graph.imports),
+      edges: layerEdges(parsed.layers, filesByUnit, analysis.graph.imports),
       externals: boundary.rows,
       source: "llm",
       ...(parsed.droppedFacts ? { reason: "模型额外给了边或文件字段，已丢弃（层归属仍按它判的结果）" } : {}),
       // 旧产物没采过外部包名：那一栏是空的，但**不等于**「这个系统不碰任何外部服务」，得说出来
       ...(externalsMissing && !boundary.rows.length ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {}),
       overriddenLayers: layered.overriddenLayers,
+      ...(layered.lost.length ? { lostOverrides: layered.lost } : {}),
       generatedAt: new Date().toISOString(),
       basedOnVersionStamp: analysis.versionStamp
     };
     // 模型自己说「边/文件字段被我丢掉了」的那一次不落盘：payload 与产出不同构，留着下次重问才收敛
     if (!parsed.droppedFacts) database?.putLayerCache(key, plan);
-    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByModule, analysis.graph.imports), omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
+    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
   } catch (error) {
-    const fallback = applyOverrides(staticLayers(truncated), overrides);
-    return { ...buildStatic(fallback.layers, `分层调用没成功（${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}），退回${tierReason(externalsMissing)}`), overriddenLayers: fallback.overriddenLayers };
+    return unavailable(context, "call_failed", `分层调用没成功：${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}。没落盘，可以再点一次「重新分层」。`);
   }
 }
-

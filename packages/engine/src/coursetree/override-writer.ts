@@ -1,4 +1,4 @@
-import type { ArchitectureOverrideIntent, CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
+import type { ArchitectureBlockBrief, ArchitectureOverrideIntent, CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
 import { clearOverlays, patchOverlays, readOverlays, removeOverlayKeys } from "../store/overlays.js";
 import type { TutorDatabase } from "../store/database.js";
 import { id } from "../lib.js";
@@ -27,6 +27,12 @@ export interface OverrideContext {
   course: CourseTree;
   /** 校验层名用：来自当前产物（缓存里那份或静态三层），**不会**为此发模型请求。 */
   layers: string[];
+  /**
+    校验方块 id 用：图上现在的方块清单（原子块 + 合并块）。
+    为什么要带上合并块：agent 读到的架构图就是这些块，`arch:...` 是它手里唯一的 id；
+    只认课程树的原子模块 id 会把「把这几个小目录整体挪走」当成非法输入。
+  */
+  blocks?: ArchitectureBlockBrief[];
   journal: { append: (type: "architecture_layer_overridden" | "module_tier_overridden", payload: Record<string, string | number | boolean | null>) => void };
   /** 落盘成功后通知（SSE 一帧）。 */
   onApplied?: (event: { repositoryId: string; module?: string; via: OverrideVia }) => void;
@@ -55,6 +61,11 @@ function moduleTitle(course: CourseTree, moduleId: string): string {
   return moduleNode(course, moduleId)?.title ?? moduleId;
 }
 
+/** 图上这块的名字：合并块用方块标题，原子块用课程树标题，都没有就原样报 id（不编名字）。 */
+function titleOf(course: CourseTree, blocks: ArchitectureBlockBrief[] | undefined, id: string): string {
+  return blocks?.find((block) => block.id === id)?.title ?? moduleTitle(course, id);
+}
+
 /** 从覆盖层与树里找某模块当前所在的层名（写审计的 `from` 用；找不到就如实留空）。 */
 function currentLayerOf(context: OverrideContext, overlays: RepositoryOverlays, moduleId: string): string | undefined {
   return overlays.architecture?.moduleLayer?.[moduleId];
@@ -66,21 +77,24 @@ function currentLayerOf(context: OverrideContext, overlays: RepositoryOverlays, 
 */
 export function commitOverride(context: OverrideContext, intent: OverrideIntent, via: OverrideVia): OverrideOutcome {
   const known = moduleIdsOf(context.course);
+  const blocksById = new Map((context.blocks ?? []).map((block) => [block.id, block]));
   const overlays = readOverlays(context.database, context.repositoryId);
   const refuse = (reason: string): OverrideOutcome => ({ ok: false, text: `没改：${reason}。只支持 move_module / rename_layer / set_tier / reset 四种动作，箭头、模块清单与文件路径由程序按 import 算，改不了。` });
 
   if (intent.kind === "move_module") {
-    if (!known.has(intent.module)) return refuse(`模块 id「${intent.module.slice(0, 60)}」不在当前课程树的模块地图里`);
+    // 方块 id 与原子模块 id 都收：前者是整块挪，后者由读侧按成员拆块（见 architecture.ts 的 applyOverrides）
+    if (!known.has(intent.module) && !blocksById.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」既不在模块地图里，也不是现在图上的方块`);
     if (!context.layers.includes(intent.layer)) return refuse(`层名「${intent.layer.slice(0, 40)}」不在现在的图上；现在是：${context.layers.join(" / ") || "（还没分层）"}`);
+    const title = titleOf(context.course, context.blocks, intent.module);
     const from = currentLayerOf(context, overlays, intent.module) ?? intent.from;
     const next = patchOverlays(context.database, context.repositoryId, { architecture: { moduleLayer: { [intent.module]: intent.layer } } });
     context.journal.append("architecture_layer_overridden", {
-      correction_id: id(), module: intent.module, module_title: moduleTitle(context.course, intent.module), from: from ?? null, to: intent.layer, via,
+      correction_id: id(), module: intent.module, module_title: title, from: from ?? null, to: intent.layer, via,
       // 引擎原判一并带上：这一格的差值就是「分层判断错了几次」的唯一读数
       layer_source: context.layers.length ? "plan" : "empty"
     });
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
-    return { ok: true, text: `已把「${moduleTitle(context.course, intent.module)}」从${from ? `「${from}」` : "原判层"}挪到「${intent.layer}」。箭头按新归属重算，没有增删。`, overlays: next };
+    return { ok: true, text: `已把「${title}」从${from ? `「${from}」` : "原判层"}挪到「${intent.layer}」。箭头按新归属重算，没有增删。`, overlays: next };
   }
 
   if (intent.kind === "rename_layer") {
@@ -94,6 +108,8 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   }
 
   if (intent.kind === "set_tier") {
+    // 档位是**原子模块**那一格的属性（分级层按模块的文件算），合并块没有档：这里不收 `arch:` id，报错要说出该改谁
+    if (blocksById.has(intent.module) && !known.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」是合并出来的方块，没有档位：请逐个模块 id 改`);
     if (!known.has(intent.module)) return refuse(`模块 id「${intent.module.slice(0, 60)}」不在当前课程树的模块地图里`);
     if (!TIER_VALUES.includes(intent.tier)) return refuse(`档只有三档：${TIER_VALUES.join(" / ")}`);
     const given = intent.given ?? overlays.modules?.tier?.[intent.module];
@@ -126,7 +142,7 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
       });
     }
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
-    return { ok: true, text: intent.module ? `已撤销「${moduleTitle(context.course, intent.module)}」的人工修正，回到引擎与模型的判据。` : "已撤销这份产物上的人工修正。", overlays: next };
+    return { ok: true, text: intent.module ? `已撤销「${titleOf(context.course, context.blocks, intent.module)}」的人工修正，回到引擎与模型的判据。` : "已撤销这份产物上的人工修正。", overlays: next };
   }
 
   return refuse("这个动作不在支持列表里");

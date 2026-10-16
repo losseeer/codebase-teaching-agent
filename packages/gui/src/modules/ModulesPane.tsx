@@ -10,7 +10,7 @@ import { Icon } from "../ui/icons";
     选中行 `.tier-node.active`；组标题右侧的 `.tier-tag` 是这组的判据摘要。
   - 练习侧：主题是少量自建项，没有分级，用 `.chip` 列表。
   - 引擎没给分级（旧响应）时退回平铺 chips，不凭空造分级标题。
-  - 改名 / 隐藏 / 新增 / 手动改档收在「模块配置」这一小块里（原型没画，但它是有埋点的真实能力，不能丢）
+  - 改名 / 隐藏 / 新增收在「模块配置」这一小块里；**档位在这里只读**（分组与悬停给判据），改档只剩 agent 的 `set_tier`
   - 面板主体（推荐入口 / 仓库文件 / 模块内的练习）由调用方以 children 注入
 
   两侧语义不同，用 `treeDerived` 区分，**文案必须跟着变**：
@@ -26,13 +26,15 @@ const TIER_GROUPS: { tier: CourseTier; label: string; note: string }[] = [
 const CUSTOM_SECTION = { key: "custom", label: "自建", note: "你自己圈的主题，没有仓库模块地图背书" };
 const GROUP_LIMIT = 6;
 
-/** 悬停文案：模块职责 + 分级依据。判据露出来，用户才知道该不该手动改。 */
+/**
+  悬停文案：规模 + 分级依据（判据露出来，用户才知道该不该手动改）。
+  这里**不放模块摘要**——摘要正文在节点详情里读，hover 里再摊一段职责说明就成了这屏最长的一块字。
+  */
 function hoverText(item: KnowledgeModule): string {
   const parts = [
     item.entries?.length ? `${item.entries.length} 个文件` : "",
-    item.hint,
     item.tierEvidence ? `${TIER_GROUPS.find((group) => group.tier === item.tier)?.label ?? "未分级"}：${item.tierEvidence.reason}` : "",
-    item.tier && item.tierGiven && item.tier !== item.tierGiven ? `（已手动改档，引擎判：${TIER_GROUPS.find((group) => group.tier === item.tierGiven)?.label}）` : ""
+    item.tier && item.tierGiven && item.tier !== item.tierGiven ? `（这一档被改过，引擎原判：${TIER_GROUPS.find((group) => group.tier === item.tierGiven)?.label}）` : ""
   ];
   return parts.filter(Boolean).join(" · ");
 }
@@ -55,7 +57,6 @@ export function ModulesPane({
   onAdd,
   onRemove,
   onReset,
-  onTierChange,
   children,
   treeDerived = false
 }: {
@@ -68,8 +69,6 @@ export function ModulesPane({
   onAdd: (label: string) => void;
   onRemove: (id: string) => void;
   onReset: () => void;
-  /** 手动改档（null = 恢复引擎判据）。只有课程树派生的模块才有档位可改，练习侧不传。 */
-  onTierChange?: (id: string, tier: CourseTier | null) => void;
   children: ReactNode;
   treeDerived?: boolean;
 }): ReactElement {
@@ -131,7 +130,7 @@ export function ModulesPane({
       <section className={tiered ? "tier-groups" : "chip-block"}>
         <div className="row between">
           <h3 className="section-title">{header}</h3>
-          <button type="button" className={`icon-btn${configOpen ? " on" : ""}`} aria-expanded={configOpen} aria-label="模块配置" title="模块配置：改名 / 隐藏 / 新增 / 手动改档" onClick={() => setConfigOpen((open) => !open)}>
+          <button type="button" className={`icon-btn${configOpen ? " on" : ""}`} aria-expanded={configOpen} aria-label="模块配置" title="模块配置：改名 / 隐藏 / 新增" onClick={() => setConfigOpen((open) => !open)}>
             <Icon name="settings" size={14} />
           </button>
         </div>
@@ -211,28 +210,6 @@ export function ModulesPane({
               {removable(item) && <button type="button" className="icon-btn" aria-label={`${treeDerived ? "隐藏" : "删除"} ${item.label}`} title={treeDerived ? `隐藏 ${item.label}` : `删除 ${item.label}`} onClick={() => remove(item)}><Icon name="x" size={13} /></button>}
             </div>
           ))}
-          {treeDerived && onTierChange && modules.some((item) => item.tier) && (
-            <div className="cfg-tiers">
-              <div className="cfg-head">分级依据<span title="档位由引擎按文件结构角色算出；改档会记进审计线，攒起来就是判据真值">改档只影响这里的分组</span></div>
-              {modules.filter((item) => item.tier).map((item) => (
-                <div className="cfg-tier-row" key={item.id}>
-                  <span className="cfg-tier-name" title={hoverText(item)}>{item.label}</span>
-                  <span className="cfg-tier-buttons" role="group" aria-label={`${item.label} 的档位`}>
-                    {TIER_GROUPS.map((group) => (
-                      <button
-                        key={group.tier}
-                        type="button"
-                        className={item.tier === group.tier ? "on" : ""}
-                        aria-pressed={item.tier === group.tier}
-                        title={`${group.note}${item.tierEvidence ? ` · 引擎判据：${item.tierEvidence.reason}` : ""}`}
-                        onClick={() => onTierChange(item.id, item.tier === group.tier ? null : group.tier)}
-                      >{group.label}</button>
-                    ))}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
           <div className="cfg-add">
             <input className="text-input" value={draftName} placeholder={isPractice ? "新增出题主题…" : "新增模块名称…"} aria-label="新增模块名称" onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }} />
             <button type="button" className="btn btn-ghost btn-sm" onClick={add}>添加</button>

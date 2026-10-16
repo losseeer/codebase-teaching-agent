@@ -49,6 +49,17 @@ export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   return "概览";
 }
 
+/**
+  出边依据的正文写法。`inferred` 那句是模型自述「我凭什么这么连」——动辄七八十字、夹一串文件名清单，
+  读者要的不是它的措辞，而是这条去向**没有行级依据**，所以正文只说这一档意味着什么，原话整段留在悬停里。
+  static / code 的依据是行级事实（路径:行号），照原样给，只按长度截一下。
+  */
+function edgePlain(edge: { origin: "static" | "code" | "inferred"; evidence: string }): string {
+  if (edge.origin === "inferred") return "没有行级依据：模型按编排推的";
+  const head = edge.evidence.split(/[；;]/)[0].trim();
+  return head.length > 46 ? `${head.slice(0, 46)}…` : head;
+}
+
 /** 锚点只露文件名：抽屉只有 `--drawer-w` 宽，整条路径读不完，全路径进 title。 */
 function fileTail(path: string): string {
   const segments = path.split("/");
@@ -77,7 +88,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [moduleScopePaths, setModuleScopePaths] = useState<string[]>([]);
   /** 流程取数状态由 `FlowMap` 回告：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
   const [flowStatus, setFlowStatus] = useState<FlowStatus>(NO_FLOW_STATUS);
-  /** 架构视图的取数状态同上，由 `ArchOverview` 回告（来源、层数、边数、外部栏折叠数）。 */
+  /** 架构视图的取数状态由 `ArchOverview` 回告：工具栏那枚徽标要说清「这几层是模型判的还是静态兜底」。 */
   const [archStatus, setArchStatus] = useState<ArchStatus>(NO_ARCH_STATUS);
   /** 人工修正落盘后要重取产物：这里只出一个自增号，取数住在子组件里。 */
   const [archNonce, setArchNonce] = useState(0);
@@ -227,7 +238,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
                   >{edge.origin}</span>
                   <span className="fs-11 faint">{`→ 第 ${edge.to} 环节`}</span>
                 </span>
-                <span className="kv-v mono" title={edge.evidence}>{edge.evidence}</span>
+                <span className={`kv-v${edge.origin === "inferred" ? "" : " mono"}`} title={edge.evidence}>{edgePlain(edge)}</span>
               </div>
             ))
           ) : <span className="kv-v muted">没有记出的去向边</span>}
@@ -252,12 +263,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(workflowOf(flowSelection.flow))}><Icon name="book" size={13} />去代码教学</button>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => bindStage(flowSelection)}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
-        {flowSelection.flow.caveats ? (
-          <div className="banner banner-warn">
-            <Icon name="alert" size={14} />
-            <div className="banner-text">{`已知边界：${flowSelection.flow.caveats}`}</div>
-          </div>
-        ) : null}
+        {/* 「已知边界」不在这里重复一遍：同一条 caveats 已经写在流程画布下方（抽屉压在画布旁边，两处并排就是同屏两遍） */}
       </>
     ) : (
       <div className="empty">
@@ -271,18 +277,6 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <span className="kv-k">摘要</span>
           <span className="kv-v">{selected?.summary ?? "点画布上的模块，或左侧目录里的文件"}</span>
         </div>
-        {moduleScopePaths.length ? (
-          <>
-            <div className="kv">
-              <span className="kv-k">规模</span>
-              <span className="kv-v mono" title="模块的可见文件清单（节点锚点 + 子孙锚点）：点模块进对话时随请求上送，引擎按它解析作用域">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
-            </div>
-            <div className="kv">
-              <span className="kv-k">Git 热点</span>
-              <span className="kv-v mono" title="模块内单个文件的最高变更次数，取仓库索引的 Git 历史">{`${index.hotspots.filter((spot) => moduleScopePaths.includes(spot.path)).reduce((max, spot) => Math.max(max, spot.changes), 0) || "无"} 次变更`}</span>
-            </div>
-          </>
-        ) : null}
         {coreFiles.length ? (
           <div className="kv">
             <span className="kv-k">{`核心相关文件（${coreFiles.length}）`}</span>
@@ -359,9 +353,9 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             ) : (
               <>
                 <span
-                  className={`badge ${archStatus.source === "llm" ? "badge-info" : archStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
-                  title={`${archStatus.source === "static" ? "没配模型、预算触顶或分层判断没采信：三档结构角色兜底，不是模型判的职责层次" : "层名与模块归层由模型判（可人工改）；边界外那一栏由 import 的外部包名经词典认出，模型参与不了"}${archStatus.reason ? ` · ${archStatus.reason}` : ""}`}
-                >{`${archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "static" ? "静态兜底" : "未取到"} · ${archStatus.layers} 层`}</span>
+                  className={`badge ${archStatus.source === "llm" ? "badge-info" : archStatus.source === "unavailable" ? "badge-warn" : "badge-neutral"}`}
+                  title={`层名与归层由模型判（要改在对话里让 agent 动）；方块怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.reason ?? ""}`}
+                >{`${archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${archStatus.source === "llm" ? ` · ${archStatus.layers} 层` : ""}`}</span>
                 <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
               </>
             )}
@@ -387,7 +381,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <div className="map-canvas-wrap">
             <div className="map-canvas">
               {mapView === "architecture"
-                ? <ArchOverview repositoryId={repositoryId} course={course} index={index} analysis={analysis} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} onSelect={pickNode} onStatus={setArchStatus} />
+                ? <ArchOverview repositoryId={repositoryId} course={course} analysis={analysis} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} onSelect={pickNode} onStatus={setArchStatus} />
                 : (
                   <FlowMap
                     repositoryId={repositoryId}

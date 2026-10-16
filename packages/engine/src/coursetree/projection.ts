@@ -43,13 +43,14 @@ export function annotateModuleTiers(tree: CourseTree, roles: Map<string, FileRol
       : known.some((role) => role === "support" || role === "infra")
         ? "facility"
         : "periphery";
+    /** 判据一句话：界面上它前面还会拼上档位名（「主干：…」），所以这里不再重复档名，只给数与理由。 */
     const reason = hasEntry
-      ? `含 ${entryFiles.length} 个对外服务入口（HTTP 路由 / 框架启动）`
+      ? `含 ${entryFiles.length} 个对外服务入口`
       : tier === "core"
-        ? `${trunkFiles.length}/${visible.length} 个可见文件是执行主干`
+        ? `${trunkFiles.length}/${visible.length} 个文件是主干`
         : tier === "facility"
-          ? `主干只 ${trunkFiles.length}/${visible.length} 个，够不上 1/4，只剩支撑与设施`
-          : "可见文件只剩末端工具与测试";
+          ? `主干 ${trunkFiles.length}/${visible.length}，不到 1/4`
+          : "只剩末端工具与测试";
     return { tier, evidence: { visibleFiles: visible.length, coreFiles: trunkFiles.length, entryFiles: entryFiles.length, coreShare: Number(coreShare.toFixed(4)), decidingPath: trunkFiles[0], reason } };
   };
   const children = branch.children.map((module) => {

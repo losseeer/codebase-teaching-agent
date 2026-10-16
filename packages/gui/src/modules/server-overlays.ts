@@ -27,18 +27,3 @@ export async function migrateLegacyTierOverrides(repositoryId: string): Promise<
     // 迁不动就不迁：本地值还在，下次再试。这条不弹错误——用户在用功能，不该被一条后台搬家打断
   }
 }
-
-/** 一次修正的发送与如实回报（引擎那句原话就是最终结论，界面不重述判断）。 */
-export async function applyOverride(repositoryId: string, intent: Parameters<typeof api.applyOverlay>[1]): Promise<{ ok: boolean; text: string }> {
-  try {
-    return await api.applyOverlay(repositoryId, intent);
-  } catch (reason) {
-    /**
-      拒写是 **422 带正文**回来的（`error` 就是引擎那句话），它和「引擎根本没起来」是两回事：
-      前者要给用户看理由（「层名 X 不在现在的图上」这种话只有引擎知道），后者才是一句连接失败。
-      一律报「没送达」等于把产品最该说清的那句话抹掉。
-      */
-    const message = reason instanceof Error ? reason.message : "";
-    return { ok: false, text: message && message !== "请求失败" ? message : "修正没送达引擎（本机引擎没起来？）" };
-  }
-}

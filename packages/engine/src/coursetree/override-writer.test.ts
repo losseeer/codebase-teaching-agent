@@ -135,6 +135,29 @@ describe("commitOverride（写盘、审计与通知）", () => {
   });
 });
 
+describe("合并块的 id 也是可写的（图上看到什么就能改什么）", () => {
+  const blocksContext = (): Parameters<typeof commitOverride>[0] => ({
+    ...contextFor().context,
+    blocks: [{ id: "arch:src/a/x:core", title: "一、二、三", members: ["module:a/x/one", "module:a/x/two", "module:a/x/three"], role: "core" }]
+  });
+
+  it("move_module 收方块 id：审计与回话里带的是方块标题，不是原 id", () => {
+    const outcome = commitOverride(blocksContext(), { kind: "move_module", module: "arch:src/a/x:core", layer: "数据" }, "agent");
+    expect(outcome.ok, "agent 读到的就是方块 id，拒收等于让它改不动这张图").toBe(true);
+    expect(outcome.text).toContain("一、二、三");
+    const layerEvents = readJournal(dir).filter((event) => event.type === "architecture_layer_overridden");
+    expect(layerEvents[layerEvents.length - 1].payload).toMatchObject({ module: "arch:src/a/x:core", module_title: "一、二、三", to: "数据", via: "agent" });
+    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["arch:src/a/x:core"]).toBe("数据");
+  });
+
+  it("set_tier 不收方块 id：档位是原子模块那一格的属性，报错要说清该改谁", () => {
+    const refused = commitOverride(blocksContext(), { kind: "set_tier", module: "arch:src/a/x:core", tier: "core" }, "agent");
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toContain("合并出来的方块");
+    expect(refused.text, "拒写要给出下一步：让 agent 直接换成成员 id").toContain("逐个模块");
+  });
+});
+
 describe("撤销的审计分寸", () => {
   it("撤掉档位时才补一行 restored；只撤归层不碰档的，不混进「恢复」计数", () => {
     const tierEvents = () => readJournal(dir).filter((event) => event.type === "module_tier_overridden");

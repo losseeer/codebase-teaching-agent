@@ -92,12 +92,12 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 */
 export const SET_ARCHITECTURE_TOOL: LlmTool = {
   name: "set_architecture",
-  description: "修正架构视图的分层判断：把某个模块移到另一层（move_module）、给层改名（rename_layer）、或改某个模块的结构档（set_tier），撤销人工修正用 reset。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+  description: "修正架构视图的分层判断：把某个方块或模块移到另一层（move_module）、给层改名（rename_layer）、或改某个模块的结构档（set_tier），撤销人工修正用 reset。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
   parameters: {
     type: "object",
     properties: {
       action: { type: "string", description: "move_module / rename_layer / set_tier / reset" },
-      module: { type: "string", description: "模块 id（move_module / set_tier 必填，reset 可给一个模块 id 只撤它）" },
+      module: { type: "string", description: "图上那一格的 id：合并方块是 arch: 开头（整块挪），原子模块是 module: 开头（set_tier 只认这一档，reset 可给）" },
       layer: { type: "string", description: "目标层名（move_module 必填）" },
       from: { type: "string", description: "原层名（rename_layer 必填）" },
       to: { type: "string", description: "新层名（rename_layer 必填）" },

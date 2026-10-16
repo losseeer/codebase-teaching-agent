@@ -302,6 +302,36 @@ function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefin
 }
 
 /**
+  跨行模板字符串占的行号（tree-sitter 认出来的，不是自己扫引号）。
+  存在的理由只有一件：入口规则得知道「这一行是代码还是展示内容」。真仓里把一份示例源码整段塞进
+  模板字符串当演示数据是常见写法（本仓 `docs/ui-prototype/js/data.js` 就是），逐行看那些
+  `const app = Fastify(...)`、`app.listen(...)` 与真代码一模一样，按行匹配的入口判据就会把演示数据
+  标成服务入口。自己再写一份字符串扫描器会和这里的语法树打架，所以判据只出树一份。
+  返回 undefined 的语义与 `extractSymbolsFromAst` 同一口径：解析器没就绪或这语言没有语法，调用方自己决定退路。
+*/
+export function extractMultilineTemplateLines(path: string, content: string): Set<number> | undefined {
+  if (!parser) return undefined;
+  const grammar = grammarOf(path);
+  if (!grammar) return undefined;
+  const language = grammars.get(grammar);
+  if (!language) return undefined;
+  parser.setLanguage(language);
+  const tree = parser.parse(content);
+  if (!tree) return undefined;
+  const lines = new Set<number>();
+  const walk = (node: SyntaxNode): void => {
+    // tree-sitter 的 TS/JS 语法里模板串是 template_string；`string` 是普通引号串（单行，不需要占行号）
+    if (node.type === "template_string" && node.startPosition.row !== node.endPosition.row) {
+      for (let line = node.startPosition.row + 1; line <= node.endPosition.row; line += 1) lines.add(line);
+    }
+    for (const child of node.namedChildren) walk(child);
+  };
+  walk(tree.rootNode);
+  tree.delete();
+  return lines;
+}
+
+/**
   用语法树抽符号。**解析器未就绪或该扩展名没有语法时返回 undefined**（调用方据此回落逐行匹配），
   而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
 */

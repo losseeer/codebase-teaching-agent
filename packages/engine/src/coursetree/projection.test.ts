@@ -91,7 +91,7 @@ describe("course projections", () => {
     ]);
     // 依据随档一起给出，界面才能把「为什么这么分」露出来
     expect(modules.children[0]?.tierEvidence).toMatchObject({ visibleFiles: 1, coreFiles: 1, coreShare: 1 });
-    expect(modules.children[1]?.tierEvidence?.reason).toContain("够不上 1/4");
+    expect(modules.children[1]?.tierEvidence?.reason).toContain("不到 1/4");
     // 只动 modules 分支：流程节点不该被挂上 tier，也不该被复制成新对象
     expect(tiered.root.children[0]).toBe(branches.root.children[0]);
     const branchless: CourseTree = { ...tree, root: { ...tree.root, children: [branches.root.children[0]!] } };
