@@ -1,43 +1,40 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { Icon } from "../ui/icons";
+import { patchLayout, useLayout } from "../ui/ColumnResizer";
 
 /**
-  三工作区共享的外框（prototype `.workspace-tabs` + `.context-line` + `.mobile-switcher`）：
-  - `WorkspaceTabs`：宏观设计 / 代码教学 / 练习评估 三个真 tab —— v0.4 起由 Workbench 挂载，
-    切换只改 `?workspace=` URL 参数，不再走路由（对齐 prototype `activate(view)`）
-  - `ContextLine`：当前工作区的上下文行（如「代码教学 · src/router.ts:3 · 模块『计算机网络』」）
-  - `MobileSwitcher` + `useMobilePanes`：<=960px 时显示 pane 切换按钮，非激活 pane 隐藏
+  页面外框（对齐原型 `pages.js` 的 `topbar()` + `.mobile-switcher`）：
+  - `PageTopbar`：每页顶部一行——左侧当前上下文（面包屑），右侧该页动作 + 对话栏开关
+  - `RailToggle`：直接读写布局偏好（模块级 store），所以不需要从 App 逐层传 props
+  - `MobileSwitcher` + `useMobilePanes`：窄屏（<=720px）时两栏折叠成一行 pane 切换
 
-  对应 prototype `design-prototype.html` L51-67（tabs）、L298-343（context）、L180-202（mobile switcher）。
-  */
+  三个工作区的切换由侧栏导航承担（原型形态），页内不再有 tab 条。
+ */
 
 export type WorkspaceId = "map" | "teaching" | "practice";
 
-const TABS: { id: WorkspaceId; label: string }[] = [
-  { id: "map", label: "宏观设计" },
-  { id: "teaching", label: "代码教学" },
-  { id: "practice", label: "练习评估" },
-];
-
-export function WorkspaceTabs({ active, onChange }: { active: WorkspaceId; onChange: (id: WorkspaceId) => void }): ReactElement {
+export function PageTopbar({ crumb, actions, showRailToggle }: { crumb: ReactNode; actions?: ReactNode; showRailToggle?: boolean }): ReactElement {
   return (
-    <div className="workspace-tabs" role="tablist" aria-label="工作区切换">
-      {TABS.map((tab) => (
-        <button key={tab.id} role="tab" aria-selected={active === tab.id} className={active === tab.id ? "active" : ""} onClick={() => onChange(tab.id)}>
-          {tab.label}
-        </button>
-      ))}
-    </div>
+    <header className="topbar">
+      <div className="crumb">{crumb}</div>
+      <div className="spacer" />
+      {actions}
+      {showRailToggle ? <RailToggle /> : null}
+    </header>
   );
 }
 
-/** 上下文行（prototype `.context-line`）：左侧当前绑定，右侧 `.context-actions` 放该工作区的真实动作。
-    `hint` 是「不常驻、悬停才看」的解释性文字（如「反馈会回写学习状态」）——挂在同一行的 title 上，不占版面。 */
-export function ContextLine({ strong, detail, actions, hint }: { strong: string; detail: string; actions?: ReactNode; hint?: string }): ReactElement {
+/** 收起 / 展开右侧 Agent 对话栏（原型 topbar 上那枚 panelRight）。 */
+export function RailToggle(): ReactElement {
+  const layout = useLayout();
   return (
-    <div className="context-line">
-      <span title={hint}><strong>{strong}</strong> · {detail}</span>
-      {actions ? <div className="context-actions">{actions}</div> : null}
-    </div>
+    <button
+      type="button"
+      className="icon-btn"
+      title={layout.railCollapsed ? "展开对话栏" : "收起对话栏"}
+      aria-label={layout.railCollapsed ? "展开对话栏" : "收起对话栏"}
+      onClick={() => patchLayout({ railCollapsed: !layout.railCollapsed })}
+    ><Icon name="panelRight" /></button>
   );
 }
 
@@ -55,8 +52,8 @@ export function MobileSwitcher({ labels, active, onSelect }: { labels: string[];
 
 /**
   移动端 pane 切换：返回 `[activeIndex, classNameFor]`。
-  桌面端（>960px）所有 pane 可见；`pane-hidden-mobile` 仅在移动端媒体查询里生效。
-  */
+  桌面端（>720px）所有 pane 可见；`pane-hidden-mobile` 仅在移动端媒体查询里生效。
+ */
 export function useMobilePanes(): [number, (index: number) => string, (index: number) => void] {
   const [active, setActive] = useState(0);
   useEffect(() => {

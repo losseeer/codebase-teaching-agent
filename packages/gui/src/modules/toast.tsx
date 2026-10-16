@@ -21,21 +21,27 @@ export function subscribeToast(fn: Listener): () => void {
   return () => { if (listener === fn) listener = null; };
 }
 
-/** 渲染 toast 的宿主组件：挂在 App 根部一次即可。 */
+/** 渲染 toast 的宿主组件：挂在 App 根部一次即可。淡出后再卸载，否则提示是「啪」地消失的。 */
 export function ToastHost(): ReactElement | null {
   const [message, setMessage] = useState('');
+  const [fading, setFading] = useState(false);
   useEffect(() => {
-    let timer: number | undefined;
+    let fadeTimer: number | undefined;
+    let hideTimer: number | undefined;
     const unsubscribe = subscribeToast((next) => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(hideTimer);
+      setFading(false);
       setMessage(next);
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => setMessage(''), 2400);
+      // 原型口径：2600ms 后开始 200ms 淡出，淡完再摘掉节点
+      fadeTimer = window.setTimeout(() => setFading(true), 2600);
+      hideTimer = window.setTimeout(() => setMessage(''), 2820);
     });
-    return () => { unsubscribe(); window.clearTimeout(timer); };
+    return () => { unsubscribe(); window.clearTimeout(fadeTimer); window.clearTimeout(hideTimer); };
   }, []);
   if (!message) return null;
   return createPortal(
-    <div className="toast" role="status" aria-live="polite">{message}</div>,
+    <div className="toast-host"><div className="toast" style={fading ? { opacity: 0 } : undefined} role="status" aria-live="polite">{message}</div></div>,
     document.body,
   );
 }

@@ -1,15 +1,16 @@
 import { useState, type ReactElement } from "react";
 import type { FileTreeNode } from "@codebase-tutor/shared";
+import { Icon } from "../ui/icons";
 
 /**
-  仓库文件树（prototype `.repo-tree`）：按真实目录层级渲染。
-  - 目录可折叠，**首层目录默认展开**（与原始目录结构保持一致）；每目录最多展示 8 项 + 「显示其余 N 项」
-  - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示 `NL`（宏观设计的项目目录用）
+  仓库文件树（对齐 docs/ui-prototype 的 `.tree` / `.tree-row`）：按真实目录层级渲染。
+  - 目录可折叠，**首层目录默认展开**；每目录最多展示 8 项 + 「显示其余 N 项」
+  - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示行数
   - `badge`：可选的目录徽标（宏观设计用它给顶层目录标注语义分组）
   - `activePath`：高亮当前选中的文件
 
-  原为 TutorPage 内部组件（v0.3），v0.5.4 提取共享：宏观设计「项目目录」改用真实目录树后两处复用。
-  */
+  原为 TutorPage 内部组件，提取共享后由宏观设计的「项目目录」与代码教学的「仓库文件」两处复用。
+ */
 export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
   nodes: FileTreeNode[];
   onOpenFile: (path: string) => void;
@@ -32,8 +33,10 @@ export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
         const open = expanded.has(node.path);
         const label = badge?.(node, depth);
         rows.push(
-          <button key={node.path} className={`rt-dir ${open ? "open" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; })}>
-            {open ? "⌄" : "›"} {node.name}{label ? <em className="rt-badge">{label}</em> : null}<span>{node.children?.length ?? 0} 项</span>
+          <button key={node.path} type="button" className="tree-row" style={{ paddingLeft: `${4 + depth * 12}px` }} onClick={() => setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; })} aria-expanded={open}>
+            <Icon name="folder" size={13} />
+            <span className="tree-name">{node.name}</span>
+            {label ? <span className="ext-badge">{label}</span> : <span className="ext-badge">{node.children?.length ?? 0} 项</span>}
           </button>,
         );
         if (open && node.children) {
@@ -41,7 +44,7 @@ export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
           rows.push(...render(shown, depth + 1));
           if (!fullyShown.has(node.path) && node.children.length > LIMIT) {
             rows.push(
-              <button key={`${node.path}:more`} className="rt-more" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }} onClick={() => setFullyShown((prev) => new Set(prev).add(node.path))}>
+              <button key={`${node.path}:more`} type="button" className="tree-row more" style={{ paddingLeft: `${4 + (depth + 1) * 12}px` }} onClick={() => setFullyShown((prev) => new Set(prev).add(node.path))}>
                 显示其余 {node.children.length - LIMIT} 项
               </button>,
             );
@@ -50,13 +53,15 @@ export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
       } else {
         const lines = lineOf?.get(node.path) ?? 0;
         rows.push(
-          <button key={node.path} className={`rt-file ${activePath === node.path ? "selected" : ""}`} style={{ paddingLeft: `${8 + depth * 12}px` }} onClick={() => onOpenFile(node.path)}>
-            ◇ <code>{node.name}</code>{lineOf ? <em className="rt-lines">{lines ? `${lines}L` : "—"}</em> : null}
+          <button key={node.path} type="button" className={`tree-row ${activePath === node.path ? "active" : ""}`} style={{ paddingLeft: `${4 + depth * 12}px` }} onClick={() => onOpenFile(node.path)} title={node.path}>
+            <Icon name="file" size={13} />
+            <span className="tree-name">{node.name}</span>
+            {lineOf ? <span className="ext-badge">{lines ? `${lines}L` : "—"}</span> : null}
           </button>,
         );
       }
     });
     return rows;
   };
-  return <div className="repo-tree">{render(nodes, 0)}</div>;
+  return <div className="tree">{render(nodes, 0)}</div>;
 }

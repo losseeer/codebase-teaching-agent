@@ -1,23 +1,22 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Check, Compass, GraduationCap, PanelRightClose, PanelRightOpen, Pencil, Plus, Send, Square, Trash2, X } from "lucide-react";
 import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
 import { Markdown } from "./Markdown";
 import { LlmSettingsControl } from "./LlmSettings";
 import { ColumnResizer } from "../ui/ColumnResizer";
+import { Icon } from "../ui/icons";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
-  持久 Agent 侧栏：4 段（scope-bar / scope-context / thread / composer）。
-  对应 prototype `design-prototype.html` 中的 `.agent-rail`（第 113-142, 345-358 行）。
-  - `scope-bar` 3 个 chip（map / teaching / practice），点击切换作用域
-  - `scope-context` 当前作用域的「作用域 / 绑定 / 可见 / 动作」4 行元信息
-  - `thread` 滚动消息列表，只含 pushMessage 的对话消息
-  - `composer` 按作用域切换 placeholder 与发送动作；三个作用域都经引擎流式发送（打字机回放）
+  持久 Agent 对话栏（对齐 docs/ui-prototype 的 `.rail` 五段）：
+  ① 绑定上下文行 → ② 语言风格三档 → ③ 线程条（切换 / 新建 / 重命名 / 软删）→ ④ 消息流 → ⑤ 模型胶囊 + composer。
+  - 绑定行 = 当前作用域的**当前**位置（不是历史）：切换作用域/节点/文件只改这一行的值
+  - 语言风格是会话级设置，三个作用域共用一份
+  - 线程正文的真源在引擎库（chat_session + chat_message），这里只是入口
+  - 分工不变：所有 chat / composer / 流式订阅由本栏拥有（状态在 useScopedChat），工作区页面只呈现内容
 
-  v0.2 设计依据：开发计划 §1.5「三界面基线」+ 原型 ch8「三条界面约束」（提示用分隔线、反馈用气泡）。
-  分工不变项：所有 chat / composer / 流式订阅由 AgentRail 拥有（状态在 useScopedChat），工作区页面只呈现内容。
-  */
-export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onCollapse: () => void }): ReactElement {
+  收起态由外壳（App）负责：`railCollapsed` 时整栏不渲染，页顶栏那枚 panelRight 是再开入口。
+ */
+export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
   const { scope, threads } = t;
   const items = threads[scope];
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -29,7 +28,7 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
     if (!el) return;
     const onScroll = (): void => { stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
     el.addEventListener("scroll", onScroll);
-    return () => { el.removeEventListener("scroll", onScroll); };
+    return () => el.removeEventListener("scroll", onScroll);
   }, []);
   // 切作用域是「跳到另一条对话」，不是用户往上翻——恢复跟随
   useEffect(() => { stickToBottom.current = true; }, [scope]);
@@ -40,24 +39,22 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
 
   const activeBand = styleBand(t.settings.style);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
+  const bound = boundFor(scope, t);
+  const unbound = bound.startsWith("未绑定") || bound === "未定位锚点" || bound === "未开始练习";
 
   return (
-    <aside className="agent-rail" aria-label="Codebase Agent">
+    <aside className="rail" aria-label="Codebase Agent">
       {/* 压在左边界上的拖宽条（绝对定位，不占栅格列）：整栏高度都是它的拖动手势 */}
       <ColumnResizer field="railWidth" label="Agent 对话栏" growOn="left" />
-      <header className="agent-header">
-        <span className="agent-avatar" aria-hidden>✦</span>
-        <strong>Codebase Agent</strong>
-        <button type="button" className="rail-toggle" aria-label="收起 Agent 对话栏" title="收起对话栏（在中间留一条边，点它或按 ← 键回来）" onClick={onCollapse}>
-          <PanelRightClose size={15} />
-        </button>
-      </header>
+      <div className="rail-head">
+        <div className="rail-scope">
+          <span className="scope-dot" aria-hidden />
+          <span className={`scope-text ${unbound ? "unbound" : ""}`}>
+            {SCOPE_LABEL[scope]} · <b>{bound}</b>
+          </span>
+        </div>
 
-      <ScopeContext scope={scope} t={t} />
-
-      {/* 语言风格：会话级设置，三个作用域共用；离散三档（2026-09-18 起不再是 0~100 滑块） */}
-      <div className="agent-tuning">
-        <div className="tuning-head"><span>语言风格</span><output>{STYLE_BAND_LABEL[activeBand]}</output></div>
+        {/* 语言风格：离散三档（2026-09-18 起不再是 0~100 滑块），三作用域共用 */}
         <div className="segmented" role="radiogroup" aria-label="语言风格">
           {STYLE_CHOICES.map((choice) => (
             <button
@@ -65,7 +62,7 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
               type="button"
               role="radio"
               aria-checked={activeBand === choice.band}
-              className={activeBand === choice.band ? "selected" : ""}
+              className={activeBand === choice.band ? "active" : ""}
               title={choice.hint}
               onClick={() => t.setSettings({ ...t.settings, style: choice.value })}
             >
@@ -73,54 +70,40 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
             </button>
           ))}
         </div>
+
+        <ThreadBar scope={scope} t={t} />
+
+        <div className="thread-meta">
+          <span title="三个作用域各记各的对话，互不混在一起">{items.length} 条 · 仅 {SCOPE_LABEL[scope]}</span>
+          {t.replySource[scope] ? (
+            <span title={t.replySource[scope] === HEURISTIC_SOURCE ? "本次回复由本地启发式模板生成，LLM 未参与（调用失败或未配置）" : `本次回复由 ${t.replySource[scope]} 生成`}>
+              来源 · <b>{t.replySource[scope] === HEURISTIC_SOURCE ? "本地启发式" : "LLM"}</b>
+            </span>
+          ) : null}
+        </div>
       </div>
 
-      <ThreadBar scope={scope} t={t} />
-
-      <div className="thread-meta">
-        <span>作用域 · <b>{SCOPE_LABEL[scope]}</b></span>
-        {t.replySource[scope] ? (
-          <span title={t.replySource[scope] === HEURISTIC_SOURCE ? "本次回复由本地启发式模板生成，LLM 未参与（调用失败或未配置）" : `本次回复由 ${t.replySource[scope]} 生成`}>
-            来源 · <b>{t.replySource[scope] === HEURISTIC_SOURCE ? "本地启发式" : "LLM"}</b>
-          </span>
-        ) : null}
-        <span title="三个作用域各记各的对话，互不混在一起">{items.length} 条 · 仅此作用域</span>
-      </div>
-
-      <div className="agent-thread" id="agent-thread" ref={threadRef} aria-live="polite">
-        {scope === "teaching" && items.length === 0 && !t.liveAnswer ? (
-          <div className="starter">
-            <GraduationCap size={22} />
-            <p>写下你的观察或疑问；不知道就输入「不知道」。</p>
-          </div>
-        ) : null}
-        {items.length === 0 && scope !== "teaching" ? (
-          <div className="starter">
-            <Compass size={22} />
-            <p>{scope === "map" ? "点流程节点或目录文件，再开始提问。" : "在左栏选一个模块与练习，再对这道题追问。"}</p>
-          </div>
-        ) : null}
+      <div className="rail-msgs" ref={threadRef} aria-live="polite">
+        {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
         {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
-        {/* 流式正文气泡：三作用域共用——各自请求的 SSE delta（72 字分块回放） */}
-        {t.liveAnswer && (
-          <div className="message agent streaming">
-            <span>Codebase Agent</span>
-            <Markdown content={t.liveAnswer} /><i />
-          </div>
-        )}
         {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时顶替 */}
-        {t.sending && t.progress[scope] && !t.liveAnswer && (
-          <div className="message agent streaming" key="agent-progress">
-            <span>Codebase Agent</span>
-            <p className="agent-progress">{t.progress[scope]}</p><i />
+        {t.sending && t.progress[scope] && !t.liveAnswer ? (
+          <div className="msg msg-agent">
+            <div className="msg-hint">{t.progress[scope]}</div>
           </div>
-        )}
+        ) : null}
+        {/* 流式正文气泡：三作用域共用——各自请求的 SSE delta（72 字分块回放） */}
+        {t.liveAnswer ? (
+          <div className="msg msg-agent">
+            <div className="msg-bubble msg-streaming"><Markdown content={t.liveAnswer} /></div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="composer-section">
-        {/* 模型入口：一颗胶囊显示「当前模型 · 思考档」，点开弹窗做全部配置（对齐 workbuddy / trae 的位置与形态） */}
-        <LlmSettingsControl />
-        {t.error && <p className="error-message">{t.error}</p>}
+      <div className="rail-foot">
+        {/* 模型入口：一颗胶囊显示「当前模型 · 思考档 · 风格」，点开弹窗做全部配置 */}
+        <LlmSettingsControl styleLabel={STYLE_BAND_LABEL[activeBand]} />
+        {t.error ? <p className="error-message">{t.error}</p> : null}
         <form
           className="composer"
           onSubmit={(event) => { event.preventDefault(); void onSend(); }}
@@ -137,44 +120,21 @@ export function AgentRail({ chat: t, onCollapse }: { chat: ScopedChatApi; onColl
             }}
             placeholder={placeholder}
             aria-label="与 Codebase Agent 对话"
-            rows={3}
+            rows={2}
             // 生成期间不锁输入框：下一条问题可以预先打进去（发送按钮与 Enter 仍由 canSend 挡住，不会并发发请求）
           />
           {/* 生成中这颗按钮换成「停止」：整轮请求带 turnId，点了引擎就停手（省 token）、连接同时掐掉 */}
           {t.sending ? (
-            <button className="primary icon-button" aria-label="停止生成" title="停止生成" type="button" onClick={t.stopTurn}>
-              <Square size={16} fill="currentColor" />
+            <button className="send-btn stop" aria-label="停止生成" title="停止生成" type="button" onClick={t.stopTurn}>
+              <Icon name="stop" />
             </button>
           ) : (
-            <button className="primary icon-button" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
-              <Send size={18} />
+            <button className="send-btn" aria-label="发送消息" title="发送消息" type="submit" disabled={!canSend}>
+              <Icon name="send" />
             </button>
           )}
         </form>
       </div>
-    </aside>
-  );
-}
-
-/**
-  收起态的对话栏：只留一条 44px 的边，但**不是一根没人知道的隐形柱**——留了图标、竖排「对话」二字，
-  以及「里面正在出字」的指示点在途回合时亮着（收起不打断请求：流式订阅住在 App 的 useScopedChat 里，
-  跟这一栏在不在屏上无关，所以用户收起后回来的第一眼就该是「它还在算」或「算完了」）。
-  */
-export function AgentRailCollapsed({ busy, onExpand }: { busy: boolean; onExpand: () => void }): ReactElement {
-  return (
-    <aside className="agent-rail collapsed" aria-label="Codebase Agent（已收起）">
-      <button
-        type="button"
-        className="rail-mini"
-        aria-label={busy ? "展开 Agent 对话栏：有一轮回复正在生成" : "展开 Agent 对话栏"}
-        title={busy ? "回复生成中 · 点击展开" : "点击展开对话栏"}
-        onClick={onExpand}
-      >
-        <PanelRightOpen size={15} />
-        <span className="rail-mini-text">对话</span>
-        {busy ? <i className="rail-mini-dot" aria-hidden /> : null}
-      </button>
     </aside>
   );
 }
@@ -202,33 +162,39 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
   return { placeholder: "对这道练习追问…", canSend, onSend: t.sendPractice };
 }
 
-function ScopeContext({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
-  const bound = boundFor(scope, t);
+/** 空线程时的一句话指引（原型 `.empty`）：每个作用域问法不同，别写成通用欢迎语。 */
+function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
+  const hint = scope === "map"
+    ? "点画布上的模块或流程环节，或在目录树里点一个文件，我就围绕它展开。"
+    : scope === "teaching"
+      ? "写下你的观察或疑问；不知道就输入「不知道」。点源码任意一行可以换锚点。"
+      : "在左栏选一个模块与练习，再对这道题追问。这里没有读文件工具——只讨论思路，不给标准答案。";
   return (
-    <div className="scope-context" id="scope-context">
-      <div><span>绑定</span><code>{bound}</code></div>
+    <div className="empty">
+      <span className="empty-icon"><Icon name={scope === "practice" ? "practice" : scope === "map" ? "map" : "book"} size={22} /></span>
+      {hint}
     </div>
   );
 }
 
 /**
   绑定行 = 当前作用域的**当前**位置（不是历史）：切换作用域/节点/文件只改这一行的值。
-  teaching 只显示当前文件的 `path:line`（与原型 `binds.teaching` 一致，不累积历史切换）。
-  */
+  teaching 只显示当前文件的 `path:line`（不累积历史切换）。
+ */
 function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
     // 绑定只认三种情形（2026-09-18）：目录里选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。
     // 不再把默认根节点拼进绑定——那会让「从目录随便打开一个文件」显示成节点「根目录文件」。
     const binding = t.mapBinding;
-    if (!binding) return "未绑定";
+    if (!binding) return "未绑定 —— 选中模块 / 环节 / 文件后提问";
     if (binding.kind === "file") return `文件 · ${binding.path}`;
     const label = binding.kind === "module" ? "模块" : "环节";
     return binding.path ? `${label}「${binding.title}」 · ${binding.path}` : `${label}「${binding.title}」`;
   }
   if (scope === "teaching") {
-    if (!t.selected) return "未选择节点";
+    if (!t.selected) return "未定位锚点";
     const anchor = t.selected.anchors[0];
-    return anchor ? `${anchor.path}:${anchor.line}` : t.selected.title;
+    return anchor ? `锚点 ${anchor.path}:${anchor.line}` : t.selected.title;
   }
   if (!t.practiceUnit) return "未开始练习";
   const anchor = t.practiceExercise?.anchors[0];
@@ -237,9 +203,9 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 
 /**
   会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
-  线程正文的真源在引擎库（chat_session + chat_message），这里只是入口——切哪条就按 threadId 回读哪条的历史。
-  删除是软删：列表与正文从此看不见，库里的行与 journal 的审计事件都还在，所以二次确认把这话说明白。
-  */
+  切哪条就按 threadId 回读哪条的历史。删除是软删：列表与正文从此看不见，
+  库里的行与 journal 的审计事件（session_deleted）都还在，所以二次确认把这话说明白。
+ */
 function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
   const list = t.chatThreads[scope];
   const currentId = t.currentThreadId[scope];
@@ -248,8 +214,9 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
   const [draft, setDraft] = useState("");
   if (renaming) {
     return (
-      <div className="session-bar renaming">
+      <div className="thread-bar">
         <input
+          className="text-input"
           value={draft}
           autoFocus
           aria-label="会话名称"
@@ -259,47 +226,51 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
             else if (event.key === "Escape") setRenaming(false);
           }}
         />
-        <button type="button" onClick={() => { setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }}><Check size={14} /></button>
-        <button type="button" onClick={() => setRenaming(false)}><X size={14} /></button>
+        <button type="button" className="icon-btn" aria-label="确认改名" onClick={() => { setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }}><Icon name="check" size={14} /></button>
+        <button type="button" className="icon-btn" aria-label="取消改名" onClick={() => setRenaming(false)}><Icon name="x" size={14} /></button>
       </div>
     );
   }
   return (
-    <div className="session-bar">
-      <select
-        value={currentId ?? ""}
-        aria-label={`切换会话（${SCOPE_LABEL[scope]}）`}
-        onChange={(event) => t.switchThread(scope, event.target.value || null)}
-      >
-        {currentId || list.length ? <option value="">（新会话）</option> : <option value="">还没有会话，直接提问即可新建</option>}
-        {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
-      </select>
-      <button type="button" title="新建会话" onClick={() => void t.newThread(scope)}><Plus size={14} /></button>
-      <button type="button" title="重命名当前会话" disabled={!currentId} onClick={() => { setDraft(current?.title ?? ""); setRenaming(true); }}><Pencil size={14} /></button>
+    <div className="thread-bar">
+      <div className="thread-select-wrap">
+        <select
+          className="select"
+          value={currentId ?? ""}
+          aria-label={`切换会话（${SCOPE_LABEL[scope]}）`}
+          onChange={(event) => t.switchThread(scope, event.target.value || null)}
+        >
+          {currentId || list.length ? <option value="">（新会话）</option> : <option value="">还没有会话，直接提问即可新建</option>}
+          {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
+        </select>
+      </div>
+      <button type="button" className="icon-btn" title="新建会话" aria-label="新建会话" onClick={() => void t.newThread(scope)}><Icon name="plus" size={14} /></button>
+      <button type="button" className="icon-btn" title="重命名当前会话" aria-label="重命名当前会话" disabled={!currentId} onClick={() => { setDraft(current?.title ?? ""); setRenaming(true); }}><Icon name="edit" size={14} /></button>
       <button
         type="button"
-        title="删除当前会话"
+        className="icon-btn"
+        title="删除当前会话（软删）"
+        aria-label="删除当前会话"
         disabled={!currentId}
         onClick={() => {
           if (!currentId) return;
           if (!window.confirm(`删除会话「${current?.title ?? ""}」？删除后不可恢复；审计日志仍保留脱敏摘要。`)) return;
           void t.removeThread(scope, currentId);
         }}
-      ><Trash2 size={14} /></button>
+      ><Icon name="trash" size={14} /></button>
     </div>
   );
 }
 
-/** thread 单条消息渲染：用户消息纯文本（pre-wrap 由 .message p 提供）；
-  agent 正文走 Markdown；error/hint 变体用样式类标注，不进 Markdown。 */
+/** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
 function ThreadEntry({ item }: { item: ThreadItem }): ReactElement {
-  const body = item.kind === "agent" && !item.variant
-    ? <Markdown content={item.text} />
-    : <p className={item.kind === "agent" ? `plain-${item.variant}` : undefined}>{item.text}</p>;
+  const agent = item.kind === "agent" ? item : null;
+  const variant = agent?.variant;
+  const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
+  const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : "";
   return (
-    <div className={`message ${item.kind}`}>
-      <span>{item.kind === "user" ? "你" : "Codebase Agent"}</span>
-      {body}
+    <div className={`msg msg-${agent ? "agent" : "user"}`}>
+      <div className={`msg-bubble${tone}`}>{body}</div>
     </div>
   );
 }

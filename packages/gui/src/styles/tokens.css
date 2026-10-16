@@ -1,0 +1,129 @@
+/* ============================================================
+   Design Tokens — 唯一样式来源（对齐 docs/ui-prototype/css/tokens.css）
+   颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效 / 布局宽度。
+   页面与组件代码只允许引用令牌，不允许写裸色值。
+   ============================================================ */
+
+:root {
+  /* ---- 品牌色 ---- */
+  --brand-900: #17372e;      /* 侧栏底 / 源码岛深绿 */
+  --brand-700: #1a6b52;      /* 主按钮 / 激活描边 */
+  --brand-600: #23876a;
+  --brand-100: #e4f0e9;      /* 选中底 */
+  --brand-050: #f0f6f2;
+
+  --accent: #d8ef58;         /* 荧光黄绿：激活态 / 进度 / 品牌标 */
+  --accent-ink: #35450f;     /* accent 之上的文字 */
+  --accent-soft: #eef7c8;
+
+  /* ---- 中性色 ---- */
+  --bg: #f5f7f6;             /* 页面底 */
+  --surface: #ffffff;        /* 卡片 */
+  --surface-2: #fafcfa;
+  --border: #e3ece6;
+  --border-strong: #d3e0d7;
+
+  --ink: #1d2b26;            /* 主文字 */
+  --ink-2: #5c6f67;          /* 次文字 */
+  --ink-3: #8ba39a;          /* 弱文字 / 占位 */
+
+  /* ---- 语义色 ---- */
+  --danger: #ae3f36;
+  --danger-bg: #f9ece9;
+  --danger-border: #ecc9c4;
+  --warn-ink: #6b4f1d;
+  --warn-bg: #fbf3dd;
+  --warn-border: #ecd9a8;
+  --info-ink: #2b5a8c;
+  --info-bg: #e9f1f8;
+  --ok: #2c7a52;
+  --ok-bg: #e7f3ec;
+
+  /* ---- 源码岛（深色） ---- */
+  --code-bg: #10271f;
+  --code-bg-2: #0c1f19;
+  --code-ink: #dceee1;
+  --code-ink-2: #7fa18f;
+  --code-line: #22453a;      /* 分隔线 */
+  --code-highlight: #2a5c47; /* 锚点行高亮底 */
+  --code-accent: #d8ef58;
+  --code-inline-ink: #cfe6d6;/* 气泡内 code/pre 的文字 */
+  --code-hover: rgba(255, 255, 255, 0.03);
+
+  /* ---- 语法高亮 token（深色源码岛：三类曾与正文/行号撞色，已拉开） ---- */
+  --hl-kw: #8ad8b2;
+  --hl-str: #d8ef58;
+  --hl-cm: #5f8471;
+  --hl-fn: #a5d8ff;
+  --hl-num: #f0c674;
+  --hl-type: #c9a6f2;
+  --hl-prop: #7fd1b9;
+  --hl-op: #a8bdb2;
+  --hl-tag: #8ed0c8;
+
+  /* ---- 深底侧栏（原型里是裸色值，这里收进令牌） ---- */
+  --sidebar-ink: #eaf3ec;
+  --sidebar-ink-2: #c4d6cb;
+  --sidebar-ink-3: #9db8ac;
+  --sidebar-hover: rgba(255, 255, 255, 0.07);
+  --hover-on-dark: rgba(255, 255, 255, 0.15);
+  --sidebar-active: rgba(216, 239, 88, 0.14);
+  --sidebar-divider: rgba(255, 255, 255, 0.08);
+  --sidebar-field-bg: #21483d;
+  --sidebar-field-border: #35544a;
+  --sidebar-field-bg-hover: #26524a;
+
+  /* ---- 主色之上的文字 / 焦点环 / 遮罩 ---- */
+  --on-primary: #ffffff;
+  --ring: rgba(35, 135, 106, 0.12);
+  --ring-strong: rgba(35, 135, 106, 0.14);
+  --mask: rgba(23, 55, 46, 0.42);
+  --mask-soft: rgba(23, 55, 46, 0.35);
+
+  /* ---- 判分反馈描边 ---- */
+  --pass-border: #bcdccb;
+  --fail-border: #e8c6c1;
+
+  /* ---- 字体 ---- */
+  --font-ui: "Inter", "PingFang SC", "Hiragino Sans GB", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", "JetBrains Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-26: 26px;
+
+  /* ---- 间距（4pt 栅格） ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* ---- 圆角 ---- */
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 14px;
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 1px 2px rgba(25, 54, 44, 0.06);
+  --shadow-md: 0 4px 14px rgba(25, 54, 44, 0.10);
+  --shadow-lg: 0 12px 32px rgba(25, 54, 44, 0.16);
+
+  /* ---- 动效 ---- */
+  --t-fast: 120ms ease;
+  --t-normal: 220ms ease;
+
+  /* ---- 布局 ---- */
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 64px;
+  --rail-w: 344px;
+  --topbar-h: 44px;
+  --drawer-w: 346px;
+}

@@ -17,7 +17,7 @@ export interface LayoutPrefs {
   filePaneWidth: number;
 }
 
-export const LAYOUT_DEFAULTS: LayoutPrefs = { railWidth: 348, railCollapsed: false, filePaneWidth: 240 };
+export const LAYOUT_DEFAULTS: LayoutPrefs = { railWidth: 348, railCollapsed: false, filePaneWidth: 264 };
 
 /** 下限取「内容还能不能用」：对话栏再窄气泡就换行成竖条，文件栏再窄路径全成省略号。 */
 const RANGES = { railWidth: { min: 268, max: 620 }, filePaneWidth: { min: 168, max: 520 } } as const;
@@ -30,7 +30,9 @@ const LAYOUT_KEY = "codebase-tutor.layout";
 */
 const MAIN_FLOOR_PX = 420; // 对话栏变宽时，主区至少留这么多
 const SOURCE_FLOOR_PX = 260; // 文件栏变宽时，源码栏至少留这么多
-const FIXED_LEFT_PX = 224 + 32; // 文件栏那一侧还吃掉的固定列与留白
+/** 主区左边固定要吃掉的宽度：展开态侧栏 232 + 工作区左右留白 32。对话栏夹算时必须扣掉它，
+    否则侧栏展开 + 对话栏拖到上限时中间主区会被挤到 200px 以下（原型是固定侧栏，没这个问题）。 */
+const FIXED_LEFT_PX = 232 + 32;
 
 type WidthField = "railWidth" | "filePaneWidth";
 
@@ -44,7 +46,7 @@ function rangeClamp(field: WidthField, value: number): number {
 function viewportClamp(field: WidthField, value: number, source: LayoutPrefs): number {
   const range = RANGES[field];
   const viewport = typeof window === "undefined" ? Number.POSITIVE_INFINITY : window.innerWidth;
-  const floor = field === "railWidth" ? MAIN_FLOOR_PX : FIXED_LEFT_PX + source.railWidth + SOURCE_FLOOR_PX;
+  const floor = field === "railWidth" ? FIXED_LEFT_PX + MAIN_FLOOR_PX : FIXED_LEFT_PX + source.railWidth + SOURCE_FLOOR_PX;
   return Math.min(value, Math.max(range.min, Math.min(range.max, viewport - floor)));
 }
 
@@ -129,16 +131,6 @@ export function useLayout(): LayoutPrefs {
 /** 给容器用的 CSS 变量表：栏宽只有 CSS 知道怎么落到 grid-template-columns 上。 */
 export function layoutVars(layout: LayoutPrefs): CSSProperties {
   return { "--rail-w": `${layout.railWidth}px`, "--file-pane-w": `${layout.filePaneWidth}px` } as CSSProperties;
-}
-
-/** 收起态那条边的宽度。用户拖出来的 `railWidth` 不动，所以展开后还是他习惯的宽度。 */
-export const RAIL_COLLAPSED_PX = 44;
-
-/** 整页外壳的变量：对话栏收起时那一列改占一条边（值写在这里而不是 CSS，免得两处各记一个 44）。 */
-export function shellVars(layout: LayoutPrefs, showRail: boolean): CSSProperties {
-  const vars = layoutVars(layout) as Record<string, string>;
-  if (showRail && layout.railCollapsed) vars["--rail-w"] = `${RAIL_COLLAPSED_PX}px`;
-  return vars as CSSProperties;
 }
 
 /**

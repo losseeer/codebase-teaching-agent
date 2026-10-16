@@ -2,32 +2,30 @@ import { useMemo, type ReactElement } from "react";
 import { CAPABILITY_CELL_LABEL, CAPABILITY_LEVEL_LABEL, type CapabilityLevel, type CourseNode, type FileEntry, type RepositoryAnalysis, type RepositoryIndex, type RepositoryLanguageRow } from "@codebase-tutor/shared";
 
 /**
- * 宏观设计 v0.6：模块依赖图（替代旧 FlowMap 课程树流程图）。
+ * 宏观设计 v0.6：架构视图 = 模块依赖图（与 `FlowMap` 的流程视图并列）。
  *
  * 为什么改：旧地图把课程树（一棵层级树）画成图——层级用列表呈现更高效，
  * 图的存在价值在「边」承载列表给不了的关系信息。本组件画真正的依赖关系：
  * - 节点 = 目录前缀聚合的模块（聚合深度自适应：从浅往深钻到「最大分组占比」达标为止，见 chooseAggregation；
  *   超过 MAX_GROUPS 按行数并入「其他」）
  * - 边 = 跨模块 import 引用（analysis.graph.imports 文件级聚合为模块级，粗细 = 引用次数）
- * - 布局 = 按依赖深度分层，入口模块（含 entrypoint 的模块）在最左列，复用 prototype
- *   flow-node / flow-lines 视觉语言与正交连线
+ * - 布局 = 按依赖深度分层，入口模块（含 entrypoint 的模块）在最左列；
+ *   节点/连线用 prototype 的 `.arch-node` / `.arch-svg`（贝塞尔曲线 + 箭头）
  * - 点击模块 → 合成 CourseNode（anchors = 模块内最大的文件），走既有的节点详情抽屉与地图线程
  *
  * 课程树本身不变：engine 侧 workflows/modules/micro 仍驱动教学、练习与推荐入口，
  * 只是地图画布不再渲染它。
  */
 
-const NODE_W = 196;
-const NODE_MIN_H = 104;
-const ROW_STRIDE = 158;
+const NODE_W = 168;
+const NODE_MIN_H = 76;
+const ROW_STRIDE = 112;
 const COL_GAP = 52;
 const PAD_X = 36;
 const PAD_Y = 44;
 const MIN_W = 710;
-const MIN_H = 623;
+const MIN_H = 420;
 const MAX_GROUPS = 20;
-/** 详情抽屉展开时给画布右侧留出的宽度（`.map-detail` 是 min(330px, 48%)，这里取其上限再加余量）。 */
-const DETAIL_RESERVE = 346;
 /** 结构塌陷判据：最大分组的文件占比。一个方块吞下过半仓库，说明这层深度太粗、边都成了自环。 */
 const MAX_LARGEST_SHARE = 0.5;
 /** 聚合下钻的最大目录层数：Maven 布局（src/main/java/com/x）要到第 6 层才露出模块边界。 */
@@ -253,12 +251,10 @@ function edgeCaveatOf(profile: RepositoryAnalysis["languageProfile"]): { label: 
   return { label: `${primary.displayName}：${CAPABILITY_CELL_LABEL.dependencyEdge}=${CAPABILITY_LEVEL_LABEL[level]}`, detail: lines.join("\n") };
 }
 
-export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
+export function DepMap({ index, analysis, selectedId, onSelect }: {
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
   selectedId?: string;
-  /** 节点详情抽屉是否展开：展开时右侧被抽屉盖住，画布留出可滚开的余量 */
-  detailOpen?: boolean;
   /** 合成节点 + 模块内文件清单：节点 id 在课程树里不存在，清单随对话请求上送给引擎解析作用域。 */
   onSelect: (node: CourseNode, scopePaths: string[]) => void;
 }): ReactElement {
@@ -296,22 +292,24 @@ export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
     if (!from || !to) return null;
     const startX = from.x + NODE_W;
     const midX = startX + (to.x - startX) / 2;
-    const startY = from.y + 46;
-    const endY = to.y + 46;
-    const width = 1 + Math.min(2, Math.floor(edge.weight / 6));
-    return { key: `${edge.from}->${edge.to}`, d: `M ${startX} ${startY} H ${midX} V ${endY} H ${to.x}`, width };
+    const startY = from.y + NODE_MIN_H / 2;
+    const endY = to.y + NODE_MIN_H / 2;
+    // 原型 `.arch-svg path` 是 1.5 粗：权重再加成，但下限就是 1.5，细过这条线在浅底上几乎看不见
+    const width = 1.5 + Math.min(2, Math.floor(edge.weight / 6));
+    // prototype `.arch-svg` 的连线是贝塞尔（控制点取两列正中）：同层并排时比正交折线少压节点
+    return { key: `${edge.from}->${edge.to}`, d: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${to.x} ${endY}`, width };
   }).filter((path): path is NonNullable<typeof path> => path !== null);
 
   const lastLayer = Math.max(columns.length - 1, 0);
-  // 抽屉盖住画布右侧：这里是绝对定位布局（节点坐标写死），CSS 加 padding 挪不动节点，
-  // 只能在画布尾部加出等宽空白——滚到底时最右一列正好停在抽屉左边界外。
-  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X + (detailOpen ? DETAIL_RESERVE : 0));
-  const canvasH = Math.max(MIN_H, PAD_Y + Math.max(...columns.map((column) => column.length), 0) * ROW_STRIDE + 92);
+  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X);
+  const canvasH = Math.max(MIN_H, PAD_Y + Math.max(...columns.map((column) => column.length), 0) * ROW_STRIDE + 40);
 
   return (
-    <div className="map-scroll">
-      <div className="map-inner" style={{ width: canvasW, minHeight: canvasH }}>
-        <svg className="flow-lines" width={canvasW} height={canvasH} aria-hidden>
+    <>
+      {/* 节点全是绝对定位、撑不开父级，所以画布尺寸由这一层 in-flow 的盒子交出去；
+          它同时是 `.arch-svg` 的定位基准（CSS 让 SVG inset:0 铺满），坐标才与节点一一对上。 */}
+      <div style={{ position: "relative", width: canvasW, minHeight: canvasH }}>
+        <svg className="arch-svg" width={canvasW} height={canvasH} aria-hidden>
           <defs>
             <marker id="dep-arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto">
               <path d="M 0 0 L 8 4 L 0 8 z" />
@@ -326,29 +324,34 @@ export function DepMap({ index, analysis, selectedId, detailOpen, onSelect }: {
             <button
               key={id}
               type="button"
-              className={`flow-node${node.isEntry ? " entry" : ""}${selectedId === id ? " selected" : ""}`}
+              className={`arch-node col${node.isEntry ? " entry-node" : ""}${selectedId === id ? " selected" : ""}`}
               style={{ left: item.x, top: item.y, width: NODE_W, minHeight: NODE_MIN_H }}
               title={`${node.key === "." ? "根目录文件" : node.key} · ${node.files.length} 个文件 · ${node.lines} 行 · 依赖 ${node.outDegree} 个模块 · 被 ${node.inDegree} 个模块依赖${node.isEntry ? " · 含执行入口" : ""}${node.changes > 0 ? ` · Git 热点约 ${node.changes} 次变更` : ""}`}
               onClick={() => onSelect(toCourseNode(node), node.files.map((file) => file.path))}
             >
-              <span className="node-kind">
-                {`${String(item.index + 1).padStart(2, "0")} · ${node.isEntry ? "入口模块" : "模块"}${node.changes >= HOTSPOT_CHANGES ? " · 热点" : ""}`}
+              <span className="n-role">{`${String(item.index + 1).padStart(2, "0")} · ${node.isEntry ? "入口模块" : "模块"}${node.changes >= HOTSPOT_CHANGES ? " · 热点" : ""}`}</span>
+              <span className="n-name">{node.key === "." ? "根目录文件" : `${node.key}/`}</span>
+              <span className="n-meta">
+                <span>{`${node.files.length} 文件 · ${node.lines} 行`}</span>
+                {node.changes > 0 ? <span className="hot-dot">{`● ${node.changes} 次变更`}</span> : null}
               </span>
-              <strong>{node.key === "." ? "根目录文件" : `${node.key}/`}</strong>
-              <small>{`${node.files.length} 个文件 · ${node.lines} 行 · 依赖 ${node.outDegree} · 被依赖 ${node.inDegree}`}</small>
             </button>
           );
         })}
-        <div className="flow-legend">
-          <span><i className="green" />入口模块</span>
-          <span><i />普通模块</span>
-          {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现，说明直接引引擎自报口径（见 edgeCaveatOf） */}
-          {caveat ? <span className="legend-caveat" title={caveat.detail}>{caveat.label}</span> : null}
-          <span className="legend-note" title={`边 = import 依赖（箭头指向被依赖方），线越粗引用越多。点模块在抽屉里看文件清单。${hiddenModules ? `另有 ${hiddenModules} 个既无依赖也不是入口的模块没画进来，完整清单在左侧项目目录。` : ""}`}>
-            箭头指向被依赖方 · 越粗引用越多 · 点模块看文件清单{hiddenModules ? ` · 未显示 ${hiddenModules} 个孤立模块` : ""}
-          </span>
-        </div>
       </div>
-    </div>
+      <div className="flow-legend">
+        {/* 图例只给「深底那一档」一枚徽标：它就是节点 `.entry-node` 的配色，其余方块都是普通模块 */}
+        <span className="badge badge-neutral">入口模块</span>
+        <span className="fs-11 faint">其余方块 = 普通模块</span>
+        {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现，说明直接引引擎自报口径（见 edgeCaveatOf） */}
+        {caveat ? <span className="badge badge-warn" title={caveat.detail}>{caveat.label}</span> : null}
+        <span
+          className="fs-11 faint"
+          title={`边 = import 依赖（箭头指向被依赖方），线越粗引用越多。点模块在右侧详情抽屉里看文件清单与源码锚点。${hiddenModules ? `另有 ${hiddenModules} 个既无依赖也不是入口的模块没画进来，完整清单在左侧项目目录。` : ""}`}
+        >
+          {`箭头指向被依赖方 · 越粗引用越多${hiddenModules ? ` · 未显示 ${hiddenModules} 个孤立模块` : ""}`}
+        </span>
+      </div>
+    </>
   );
 }

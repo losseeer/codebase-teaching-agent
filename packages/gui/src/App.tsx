@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes, Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { BarChart3, BrainCircuit, FolderGit2, MessageCircleQuestion, Network, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspace } from "./api/client";
 import { ApiError, api, isNotFound } from "./api/client";
-import { AgentRail, AgentRailCollapsed } from "./agent/AgentRail";
+import { AgentRail } from "./agent/AgentRail";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
 import { CoursePage } from "./views/CoursePage";
 import { TutorPage } from "./views/TutorPage";
 import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
-import { WorkspaceTabs, type WorkspaceId } from "./views/WorkspaceChrome";
+import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
-import { OptionDropdown } from "./ui/OptionDropdown";
 import { EngineKeyField } from "./ui/EngineKeyField";
-import { patchLayout, shellVars, useLayout } from "./ui/ColumnResizer";
+import { Icon, type IconName } from "./ui/icons";
+import { layoutVars, patchLayout, useLayout } from "./ui/ColumnResizer";
 import { showToast, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
 
@@ -83,13 +82,13 @@ function readStoredWorkspace(): _Workspace | null {
 }
 
 /**
-  顶层 Shell（v0.4）：
-  - 侧栏：5 项主导航 + 状态指示
+  顶层 Shell（对齐 docs/ui-prototype 的 .app 三栏栅格）：
+  - 侧栏：品牌行 + 五项主导航（图标 + 标签）+ 仓库切换器 + 页脚（收起侧栏 / 引擎状态 / 访问口令）
   - 主区：/import 与 /insights 保留独立路由；三个学习工作区（map / teaching / practice）合并为
-    单一主区组件树（`/app?workspace=`），对齐 prototype `.studio` —— 三个工作区同时挂载、
-    `hidden` 切换可见性（切换不丢状态，语义同 prototype 的 `.workspace.active`）
-  - URL：`?workspace=map|teaching|practice` 保深链接；旧路径 /course /tutor /practice 301 兼容跳转
-  - 右侧栏：持久 Agent 侧栏（AgentRail），三工作区共享单 Agent
+    单一主区组件树（`/app?workspace=`），三个工作区同时挂载、
+    `hidden` 切换可见性：切换不丢状态，隐藏时不发付费 LLM 请求（useEverVisible），SSE 续接也依赖这份常驻
+  - 工作区切换由侧栏导航承担（原型形态），页内不再有 tab 条；旧路径 /course /tutor /practice 仍兼容跳转
+  - 右侧栏：持久 Agent 对话栏，三工作区共享一套结构，作用域跟随工作区
 
   持久化：workspace（localStorage `codebase-tutor.workspace`）；scope（`codebase-tutor.scope`）。
   线程正文与清单的真源在引擎库（chat_session / chat_message），GUI 只记「当前停在哪条」。
@@ -186,7 +185,6 @@ export function App(): ReactElement {
   }, [engineUnreachable]);
   const chat = useScopedChat(workspace?.repositoryId ?? "");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
-  const [repoOpen, setRepoOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -194,10 +192,6 @@ export function App(): ReactElement {
       return next;
     });
   };
-  /** 界面上显示用的仓名：地址簿里有就用目录名，没有（还没刷出来）就用路径末段。 */
-  const repositoryNameOf = (current: Workspace): string =>
-    catalog.find((item) => item.repositoryId === current.repositoryId)?.name ?? current.repositoryPath.split("/").filter(Boolean).pop() ?? current.repositoryId;
-
   /** 地址簿里点的正是当前这个仓：不重挂（懒挂载会自己处理），只是离开导入页。 */
   const openRepository = (): void => { navigate("/app?workspace=map"); };
 
@@ -248,75 +242,46 @@ export function App(): ReactElement {
   const banner = workspace && freshness && (freshness.verdict === "stale" || freshness.verdict === "drifted") && !acknowledged(freshness, workspace.repositoryId)
     ? <FreshnessBanner repositoryPath={workspace.repositoryPath} freshness={freshness} onAcknowledge={() => { acknowledge(freshness, workspace.repositoryId); setFreshness(null); }} onReanalyze={() => navigate("/import")} />
     : null;
-  // Agent 侧栏只属于「有对话可谈」的路由：导入页还没有工作区语义，成本监控页问的不是代码——
-  // 两页挂着它都只会占宽并让人以为能问点什么（成本页此前就因此串进来一条对话框）。
+  // Agent 对话栏只属于「有对话可谈」的路由：导入页还没有工作区语义，成本监控页问的不是代码——
+  // 两页挂着它都只会占宽并让人以为能问点什么。收起态由用户偏好（layout.railCollapsed）决定，
+  // 页顶栏那枚 panelRight 是唯一的再开入口，所以收起时整栏不再占位（原型 `.rail-hidden`）。
   const location = useLocation();
-  const showRail = !!workspace && !["/import", "/insights"].includes(location.pathname);
-  // 栏宽与「对话栏收起」是用户偏好（localStorage）：收起时那一栏只留一条 44px 的边，宽度值本身不动，
-  // 所以下面交出去的是**当前该占多宽**，而不是「用户拖到多宽」。
+  const railRoute = !!workspace && !["/import", "/insights"].includes(location.pathname);
   const layout = useLayout();
+  const showRail = railRoute && !layout.railCollapsed;
   return (
-    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " no-rail"}`} style={shellVars(layout, showRail)}>
+    <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " rail-hidden"}`} style={layoutVars(layout)}>
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark"><Sparkles size={17} /></span>
-          <span className="nav-label">Codebase Tutor</span>
-          <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} onClick={toggleSidebar}>
-            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-          </button>
+        <div className="sidebar-brand">
+          <span className="brand-mark">码</span>
+          <span className="brand-titles">
+            <span className="brand-name">Codebase Tutor</span>
+            <span className="brand-sub">本地优先 · 代码教学 Agent</span>
+          </span>
         </div>
-        <nav aria-label="主导航">
-          <NavItem to="/import" icon={<FolderGit2 size={17} />} label="导入仓库" />
-          <WorkspaceNavItem id="map" icon={<Network size={17} />} label="宏观设计" disabled={!workspace} />
-          <WorkspaceNavItem id="teaching" icon={<MessageCircleQuestion size={17} />} label="代码教学" disabled={!workspace} />
-          <WorkspaceNavItem id="practice" icon={<BrainCircuit size={17} />} label="练习评估" disabled={!workspace} />
-          <NavItem to="/insights" icon={<BarChart3 size={17} />} label="成本监控" disabled={!workspace} />
+        <nav className="sidebar-nav" aria-label="主导航">
+          <NavItem to="/import" icon="import" label="导入仓库" />
+          <WorkspaceNavItem id="map" icon="map" label="宏观设计" disabled={!workspace} />
+          <WorkspaceNavItem id="teaching" icon="book" label="代码教学" disabled={!workspace} />
+          <WorkspaceNavItem id="practice" icon="practice" label="练习评估" disabled={!workspace} />
+          <NavItem to="/insights" icon="gauge" label="成本监控" disabled={!workspace} />
         </nav>
-        {workspace ? (sidebarCollapsed ? (
-          /**
-            收起态也要留一个切仓入口：这个下拉原先整块随侧栏收起消失，
-            而「导入页 + 收起侧栏」这个组合下界面上就没有任何切仓的地方了（用户实测问到）。
-            点它 = 展开侧栏并直接打开切换器，不在 64px 图标栏里另摆一个残缺下拉。
-           */
-          <button
-            type="button"
-            className="sidebar-repo-mini"
-            aria-label={`切换仓库，当前 ${repositoryNameOf(workspace)}`}
-            title={`${repositoryNameOf(workspace)}\n${workspace.repositoryPath}\n点击展开侧栏并打开仓库切换`}
-            onClick={() => {
-              setSidebarCollapsed(false);
-              writeSidebarCollapsed(false);
-              setRepoOpen(true);
-            }}
-          >{repositoryNameOf(workspace).slice(0, 2)}</button>
-        ) : (
-          <div className="sidebar-repo">
-            <OptionDropdown
-              label="仓库"
-              tone="custom"
-              placeholder={catalog.length > 1 ? `地址簿里还有 ${catalog.length - 1} 个仓` : "地址簿里只有这一个仓"}
-              ariaLabel="切换引擎地址簿里的仓库"
-              value={workspace.repositoryId}
-              open={repoOpen}
-              onOpenChange={setRepoOpen}
-              onSelect={switchRepository}
-              options={catalog.map((item) => ({
-                value: item.repositoryId,
-                label: item.exists ? item.name : `${item.name}（目录不存在）`,
-                detail: item.repositoryPath,
-                note: `${item.repositoryPath}\n${item.mounted ? "已挂载在引擎里" : "未挂载：点开才读它的 .tutor 产物"}${item.freshness ? ` · 产物${item.freshness.verdict === "stale" ? "已过期" : item.freshness.verdict === "drifted" ? "提交已移动、内容一致" : item.freshness.verdict === "fresh" ? "对得上" : "内容对得上（没有 HEAD 可比）"}` : ""}`
-              }))}
-            />
+        {/* 侧栏不放仓库切换器：切仓是导入页地址簿那一件事（同一个动作不在两处各摆一份入口），
+            当前在哪个仓写在每页顶栏的面包里。 */}
+        <div className="sidebar-footer">
+          <button type="button" className="nav-item" aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} onClick={toggleSidebar}>
+            <Icon name="panelLeft" />
+            <span className="nav-label">{sidebarCollapsed ? "展开侧栏" : "收起侧栏"}</span>
+          </button>
+          <div className="nav-item static">
+            <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
+            <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
           </div>
-        )) : null}
-        <div className="sidebar-bottom">
-          <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
-          <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
+          {/* 引擎开了认证闸门时才出现（闸门关着连这一行都不渲染）：口令不配，界面每个请求都是 401 */}
+          <EngineKeyField collapsed={sidebarCollapsed} onExpand={toggleSidebar} />
         </div>
-        {/* 引擎开了认证闸门时才出现（闸门关着连这一行都不渲染）：口令不配，界面每个请求都是 401 */}
-        <EngineKeyField collapsed={sidebarCollapsed} onExpand={toggleSidebar} />
       </aside>
-      <main className="main-content">
+      <main className="main">
         {banner}
         <div className="route-content">
           <Routes>
@@ -332,9 +297,7 @@ export function App(): ReactElement {
           </Routes>
         </div>
       </main>
-      {showRail ? (layout.railCollapsed
-        ? <AgentRailCollapsed busy={chat.sending} onExpand={() => patchLayout({ railCollapsed: false })} />
-        : <AgentRail chat={chat} onCollapse={() => patchLayout({ railCollapsed: true })} />) : null}
+      {railRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />
     </div>
   );
@@ -349,10 +312,14 @@ function guard(workspace: _Workspace | null, ready: boolean, content: ReactEleme
 /** 引擎连不上 ≠ 仓库没了：保留本地选择，说清原因并给一次手动重验。 */
 function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; onRetry: () => void }): ReactElement {
   return (
-    <div className="page empty-state">
-      <h1>连不上本地引擎</h1>
-      <p>仓库选择已保留（{repositoryPath}）。引擎没起来或正在重启——开发态改一下 engine 里的文件就会重启一次，这属于瞬时而不是仓库丢了。</p>
-      <p><button type="button" className="primary" onClick={onRetry}>重新校验</button></p>
+    <div className="page page-import">
+      <div className="import-wrap">
+        <div className="import-hero">
+          <h1>连不上本地引擎</h1>
+          <p>仓库选择已保留（{repositoryPath}）。引擎没起来或正在重启——开发态改一下 engine 里的文件就会重启一次，这属于瞬时而不是仓库丢了。</p>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={onRetry}>重新校验</button>
+      </div>
     </div>
   );
 }
@@ -364,14 +331,18 @@ function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; on
   */
 function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message: string; repositoryPath: string; onRetry: () => void; onForget: () => void }): ReactElement {
   return (
-    <div className="page empty-state">
-      <h1>这个仓库暂时挂不起来</h1>
-      <p>{message}</p>
-      <p>路径：{repositoryPath}。把目录放回原处再试一次即可；引擎不会替你重新导入——重新分析要花钱。</p>
-      <p>
-        <button type="button" className="primary" onClick={onRetry}>再试一次</button>{" "}
-        <button type="button" onClick={onForget}>移出地址簿</button>
-      </p>
+    <div className="page page-import">
+      <div className="import-wrap">
+        <div className="import-hero">
+          <h1>这个仓库暂时挂不起来</h1>
+          <p>{message}</p>
+          <p>路径：{repositoryPath}。把目录放回原处再试一次即可；引擎不会替你重新导入——重新分析要花钱。</p>
+        </div>
+        <div className="row">
+          <button type="button" className="btn btn-primary" onClick={onRetry}>再试一次</button>
+          <button type="button" className="btn btn-danger-ghost" onClick={onForget}>移出地址簿</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -385,18 +356,21 @@ function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message:
 function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze }: { repositoryPath: string; freshness: RepositoryFreshness; onAcknowledge: () => void; onReanalyze: () => void }): ReactElement {
   const stale = freshness.verdict === "stale";
   return (
-    <div className="freshness-banner" role="status">
-      <strong>{stale ? "产物已过期" : "提交已移动，内容与分析时一致"}</strong>
+    <div className="banner banner-warn" role="status">
+      <Icon name="alert" />
       {/* 横幅只留「变了没有 / 能不能继续用」这一句；路径、哈希口径、HEAD 记录缺失这些细节进悬停 */}
-      <span title={`${repositoryPath}｜${stale
+      <span className="banner-text" title={`${repositoryPath}｜${stale
         ? `有 ${freshness.changedFiles > 0 ? freshness.changedFiles : "若干"} 个文件的当前内容与产物记录的哈希对不上`
         : `HEAD 从 ${short(freshness.headAtAnalysis)} 挪到 ${short(freshness.headNow)}${!freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容）" : ""}`}`}>
+        <b>{stale ? "产物已过期" : "提交已移动，内容与分析时一致"}</b>{" "}
         {stale
           ? `${ageOf(freshness.analyzedAt)}跑的分析，${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个文件` : "有些文件"}已经变了 · 看到的是旧结论`
           : `代码内容没变，产物照常可用`}
       </span>
-      <button type="button" onClick={onReanalyze}>去重新分析</button>
-      <button type="button" className="ghost" onClick={onAcknowledge}>知道，先用旧的</button>
+      <span className="banner-actions">
+        <button type="button" onClick={onReanalyze}>去重新分析</button>
+        <button type="button" className="ghost" onClick={onAcknowledge}>知道，先用旧的</button>
+      </span>
     </div>
   );
 }
@@ -442,38 +416,37 @@ function acknowledge(freshness: RepositoryFreshness, repositoryId: string): void
 /** 禁用态导航项必须有话可说：灰掉却不解释，看起来像坏了。 */
 const DISABLED_NAV_HINT = "先导入仓库：还没有可操作的工作区";
 
-function NavItem({ to, icon, label, disabled }: { to: string; icon: ReactElement; label: string; disabled?: boolean }): ReactElement {
+function NavItem({ to, icon, label, disabled }: { to: string; icon: IconName; label: string; disabled?: boolean }): ReactElement {
   const location = useLocation();
   const active = location.pathname === to;
   return disabled
-    ? <span className="nav-item disabled" title={DISABLED_NAV_HINT}>{icon}<span className="nav-label">{label}</span></span>
-    : <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}<span className="nav-label">{label}</span></Link>;
+    ? <span className="nav-item disabled" title={DISABLED_NAV_HINT}><Icon name={icon} /><span className="nav-label">{label}</span></span>
+    : <Link className={`nav-item ${active ? "active" : ""}`} to={to}><Icon name={icon} /><span className="nav-label">{label}</span></Link>;
 }
 
 /** 三个学习工作区的侧栏入口：active 判定 = /app + ?workspace= 参数。 */
-function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon: ReactElement; label: string; disabled?: boolean }): ReactElement {
+function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon: IconName; label: string; disabled?: boolean }): ReactElement {
   const [params] = useSearchParams();
   const location = useLocation();
   const active = location.pathname === "/app" && (params.get("workspace") ?? "map") === id;
-  if (disabled) return <span className="nav-item disabled" title={DISABLED_NAV_HINT}>{icon}<span className="nav-label">{label}</span></span>;
-  return <Link className={`nav-item ${active ? "active" : ""}`} to={`/app?workspace=${id}`}>{icon}<span className="nav-label">{label}</span></Link>;
+  if (disabled) return <span className="nav-item disabled" title={DISABLED_NAV_HINT}><Icon name={icon} /><span className="nav-label">{label}</span></span>;
+  return <Link className={`nav-item ${active ? "active" : ""}`} to={`/app?workspace=${id}`}><Icon name={icon} /><span className="nav-label">{label}</span></Link>;
 }
 
 /**
-  单一学习主区（prototype `.workbench` + `.workspace`）：
-  - WorkspaceTabs 是真 tab（不再走路由），切换只改 `?workspace=`
-  - 三个工作区始终挂载，`hidden` 控制可见 —— 切换不重新请求数据（prototype 同语义）
-  - 作用域跟随工作区（prototype `activate(view) → setScope(view)`）
+  单一学习主区：
+  - 三个工作区始终挂载，`hidden` 控制可见 —— 切换不重新请求数据、不丢状态
+  - 工作区切换在侧栏导航（原型形态），切换只改 `?workspace=` 参数
+  - 作用域跟随工作区（对话栏的绑定上下文按 scope 取）
   */
 function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnType<typeof useScopedChat> }): ReactElement {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const raw = params.get("workspace");
   const active: WorkspaceId = raw === "teaching" || raw === "practice" ? raw : "map";
   useEffect(() => { chat.setScope(active); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [active]);
   return (
     <div className="workbench-root">
-      <WorkspaceTabs active={active} onChange={(id) => setParams(id === "map" ? { workspace: "map" } : { workspace: id })} />
-      {/* 三个视图常驻挂载（切 tab 不丢状态），所以「可见性」必须传进去：
+      {/* 三个视图常驻挂载（切换不丢状态），所以「可见性」必须传进去：
           推荐入口与流程生成都是花钱的 LLM 调用，用户停在宏观设计时不该由隐藏面板替他点一次。 */}
       <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} visible={active === "map"} /></div>
       <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} visible={active === "teaching"} /></div>

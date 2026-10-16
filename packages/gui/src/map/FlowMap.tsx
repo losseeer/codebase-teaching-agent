@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Sparkles } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { FlowStage, FlowStageKind, RepositoryAnalysis, RepositoryFlow, RepositoryIndex, SourceAnchor } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 import { useEverVisible } from "../ui/useEverVisible";
 import { OptionDropdown, type DropdownOption } from "../ui/OptionDropdown";
+import { Icon } from "../ui/icons";
 
 /**
- * 宏观设计 v0.10：流程视图（与 `DepMap` 的架构视图并列）。
+ * 宏观设计 v0.10：流程视图（与 `DepMap` 的架构视图并列，prototype `.flow-col` + `.flow-stage`）。
 
  * 两个视图的分工：
  * - 架构视图由**文件**驱动：节点 = 目录聚合模块，边 = import 依赖。客观、稳定、可穷举。
@@ -18,6 +18,8 @@ import { OptionDropdown, type DropdownOption } from "../ui/OptionDropdown";
  *
  * 环节数、关联文件数都由 engine 侧校验（路径必须真实存在，行号必须落在文件范围内），
  * 前端不再二次猜测；`caveats` 原样展示，包含被丢弃的环节与文件。
+ * `flow.edges[]` 的 `origin`（static / code / inferred）是「这条边有多可核对」的分界，
+ * 画布上给三档图例，具体依据进环节详情的抽屉。
  */
 
 /** 环节性质的中文展示；详情抽屉与画布共用同一份，避免一处一个叫法。 */
@@ -28,6 +30,9 @@ export const FLOW_KIND_LABEL: Record<FlowStageKind, string> = {
   loop: "回环",
   exit: "出口"
 };
+
+/** 生成中覆盖层上的步骤说明（引擎侧真实工序，见 engine `flows/flow.ts`）。 */
+const GEN_PHASES = ["装配 digest：目录骨架 + 符号 + 跨文件调用链", "LLM 生成环节与边", "parseFlow 硬校验 + 边级只降不升 + 按需深读"];
 
 /** 正则匹配一次最多铺开这么多条：再多也读不过来，靠改正则收窄而不是滚动。 */
 const MATCH_LIMIT = 60;
@@ -82,7 +87,20 @@ export interface FlowSelection {
   flow: RepositoryFlow;
 }
 
-export function FlowMap({ repositoryId, analysis, index, visible, selectedStageOrder, onSelectStage }: {
+/**
+  回告给页面的读数：来源徽标、生成时间与「重新生成」都长在 `.map-viewbar` 上，
+  而这一趟取数只住在这里（流程生成是最贵的一次 LLM 调用），所以状态往外报一次，不做第二份真源。
+  */
+export interface FlowStatus {
+  /** null = 这一趟还没有结果（未生成 / 在途 / 失败） */
+  source: "llm" | "static" | null;
+  generatedAt: string;
+  title: string;
+  summary: string;
+  loading: boolean;
+}
+
+export function FlowMap({ repositoryId, analysis, index, visible, selectedStageOrder, regenNonce, onStatus, onSelectStage }: {
   repositoryId: string;
   analysis: RepositoryAnalysis;
   /** 全部已索引文件：入口识别是启发式，识别不到/识别错时由用户从这里手动指定流程起点 */
@@ -91,6 +109,9 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
       停在别的 tab 时不该由隐藏的宏观设计面板替用户点它。 */
   visible: boolean;
   selectedStageOrder?: number;
+  /** 页面顶栏的「重新生成」：这个数一变就换 key 重取（与内部重试共用同一个键） */
+  regenNonce: number;
+  onStatus: (status: FlowStatus) => void;
   onSelectStage: (selection: FlowSelection | null) => void;
 }): ReactElement {
   const entries = analysis.graph.entrypoints;
@@ -146,7 +167,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
   /** 一次取流程的唯一键。StrictMode 会把 effect 跑两遍（mount → cleanup → mount），而流程生成**冷缓存时是真金白银**：
       两个并发请求都判未命中，同一份输入烧两次（今天实测两条各 9,621 in）。所以按 key 去重——
       同一个 key 只发一次；换入口 / 重分析 / 点重试都会换 key，照常再发。 */
-  const flowKey = `${repositoryId}:${entryPath}:${analysis.versionStamp}:${attempt}`;
+  const flowKey = `${repositoryId}:${entryPath}:${analysis.versionStamp}:${attempt}:${regenNonce}`;
   const requestedFlow = useRef("");
   useEffect(() => {
     if (!entryPath || !everVisible || requestedFlow.current === flowKey) return;
@@ -161,7 +182,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
       .catch((reason: unknown) => { if (requestedFlow.current === flowKey) setError(reason instanceof Error ? reason.message : "无法生成流程"); })
       .finally(() => { if (requestedFlow.current === flowKey) setLoading(false); });
     // analysis.versionStamp 变化（仓库重分析）后流程需要重新生成
-  }, [repositoryId, entryPath, analysis.versionStamp, attempt, everVisible, flowKey]);
+  }, [repositoryId, entryPath, analysis.versionStamp, attempt, regenNonce, everVisible, flowKey]);
 
   // 首次生成是几十秒量级的 LLM 调用，只有一行文案看不出「还在动」——计时 + 骨架给出进度感
   useEffect(() => {
@@ -170,16 +191,56 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
     return () => { clearInterval(timer); };
   }, [loading]);
 
+  // 顶栏徽标要跟着这趟取数走：只保留最新闭包，effect 依赖仍按取数状态来（否则每次渲染都回告一遍）
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  useEffect(() => {
+    onStatusRef.current({
+      source: state ? state.source : null,
+      generatedAt: state?.flow.generatedAt ?? "",
+      title: state?.flow.title ?? "",
+      summary: state?.flow.summary ?? "",
+      loading
+    });
+  }, [state, loading]);
+
+  const entryAnchor = entries.find((entry) => entry.path === entryPath);
+  const isCustomEntry = !!entryPath && !entries.some((entry) => entry.path === entryPath);
+
   return (
-    <div className="map-scroll">
-      <div className="map-inner flow-inner">
+    <>
+      {loading ? (
+        <div className="gen-overlay">
+          <div className="card card-pad col" style={{ width: 340, maxWidth: "80%" }}>
+            <div className="section-title">正在生成流程视图</div>
+            {/* 这三行是引擎侧的工序说明，不是进度条：接口不给逐相进度，所以只有文字与计时 */}
+            {GEN_PHASES.map((phase) => (
+              <div className="phase" key={phase}>
+                <span className="phase-dot" aria-hidden />
+                <span className="fs-12">{phase}</span>
+              </div>
+            ))}
+            <div className="row between">
+              <span className="fs-12" title="首次由 LLM 生成，可能要几十秒；同一版本的第二次访问直接命中缓存">首次生成可能要几十秒</span>
+              <span className="mono fs-12">{`已等待 ${elapsed}s`}</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flow-col">
         {!entries.length ? (
-          <p className="flow-empty">
-            该仓库没有识别到执行入口——入口由 package.json 的 main/bin/scripts 与 main/server/app/index
-            等约定文件名推断，裸脚本或非常规布局的仓会识别不到。在下方「自定义流程入口」输入路径正则，挑一个已索引文件作为流程起点即可。
-          </p>
+          <div className="empty">
+            <span className="empty-icon"><Icon name="info" size={18} /></span>
+            <p>该仓库没有识别到执行入口</p>
+            <span className="fs-11" title="入口由 package.json 的 main/bin/scripts 与 main/server/app/index 等约定文件名推断，裸脚本或非常规布局的仓会识别不到">
+              入口按约定文件名与 package.json 推断
+            </span>
+            <span className="fs-11">在下方输入路径正则，挑一个已索引文件当流程起点</span>
+          </div>
         ) : null}
-        <div className="flow-entries" role="group" aria-label="选择执行入口">
+
+        <div className="flow-entry-bar" role="group" aria-label="选择执行入口">
           <OptionDropdown
             label="核心流程入口"
             tone="core"
@@ -191,124 +252,144 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
             onOpenChange={setCoreOpen}
             onSelect={choose}
           />
-          <div className="flow-entry-custom">
-            <label className="flow-entry-pattern">
-              <span>自定义流程入口</span>
-              <input
-                value={pattern}
-                placeholder={`路径正则，如 controller|Application（. 看全部 ${fileOptions.length} 个）`}
-                title="按路径正则匹配已索引文件，点匹配结果即把它设为流程起点（引擎识别不到入口时的兜底，也用来试非常规起点）"
-                spellCheck={false}
-                onChange={(event) => setPattern(event.target.value)}
-              />
-              <em>{matches.error ? "正则不合法" : pattern.trim() ? `匹配 ${matches.total} 个` : `${fileOptions.length} 个已索引文件`}</em>
-            </label>
-            {shownMatches.length ? (
-              <div className="picker-matches" role="listbox" aria-label="正则匹配到的文件">
-                {shownMatches.map((path) => (
-                  <button
-                    type="button"
-                    key={path}
-                    role="option"
-                    aria-selected={path === entryPath}
-                    className={`picker-option ${path === entryPath ? "active" : ""}`}
-                    title={path}
-                    onClick={() => choose(path)}
-                  >
-                    <span>{pathTail(path)}</span>
-                    {path === entryPath ? <b>当前</b> : null}
-                  </button>
-                ))}
-                {matches.total > shownMatches.length ? (
-                  <span className="picker-empty">{`只列前 ${MATCH_LIMIT} 条（共 ${matches.total} 条）· 正则收紧些`}</span>
-                ) : null}
-              </div>
-            ) : null}
-            {pattern.trim() && !matches.error && !matches.total ? (
-              <p className="flow-entry-hint">没有文件匹配：换个短点的词，或输入 <code>.</code> 看全部。</p>
-            ) : null}
-            {matches.error ? <p className="flow-entry-hint">正则不合法：{matches.error}</p> : null}
-          </div>
-          {entryPath && !entries.some((item) => item.path === entryPath) ? (
-            <p className="flow-entry-current">
-              当前起点（自定义）：<code>{entryPath}</code>
-              {coreOptions.length ? <button type="button" onClick={() => choose(preferredEntryPath(entries, analysis))}>回到核心入口</button> : null}
-            </p>
+          {entryPath ? (
+            <span className="badge badge-neutral mono" title={`起点 ${entryPath}${entryAnchor ? `:${entryAnchor.line}` : ""}`}>
+              {`${pathTail(entryPath)}${entryAnchor ? `:${entryAnchor.line}` : ""}`}
+            </span>
           ) : null}
+          <input
+            className="text-input"
+            value={pattern}
+            placeholder={`自定义入口：路径正则，如 controller|Application（. 看全部 ${fileOptions.length} 个）`}
+            title="按路径正则匹配已索引文件，点匹配结果即把它设为流程起点（引擎识别不到入口时的兜底，也用来试非常规起点）"
+            aria-label="自定义流程入口：按路径正则匹配已索引文件"
+            spellCheck={false}
+            onChange={(event) => setPattern(event.target.value)}
+          />
+          <span className="fs-11 faint">
+            {matches.error ? "正则不合法" : pattern.trim() ? `匹配 ${matches.total} 个` : `${fileOptions.length} 个已索引文件`}
+          </span>
+          {shownMatches.length ? (
+            <div className="picker-matches" role="listbox" aria-label="正则匹配到的文件">
+              {shownMatches.map((path) => (
+                <button
+                  type="button"
+                  key={path}
+                  role="option"
+                  aria-selected={path === entryPath}
+                  className={`picker-option ${path === entryPath ? "active" : ""}`}
+                  title={path}
+                  onClick={() => choose(path)}
+                >
+                  <span>{pathTail(path)}</span>
+                  {path === entryPath ? <b>当前</b> : null}
+                </button>
+              ))}
+              {matches.total > shownMatches.length ? (
+                <span className="picker-empty">{`只列前 ${MATCH_LIMIT} 条（共 ${matches.total} 条）· 正则收紧些`}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {isCustomEntry ? (
+            <span className="row fs-11 faint">
+              <code title={entryPath}>{pathTail(entryPath)}</code>
+              <span>当前起点（自定义）</span>
+              {coreOptions.length ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => choose(preferredEntryPath(entries, analysis))}>回到核心入口</button> : null}
+            </span>
+          ) : null}
+          {pattern.trim() && !matches.error && !matches.total ? (
+            <span className="fs-11 faint">没有文件匹配：换个短点的词，或输入 <code>.</code> 看全部。</span>
+          ) : null}
+          {matches.error ? <span className="field-note warn">正则不合法：{matches.error}</span> : null}
         </div>
 
         {loading ? (
-          <div className="flow-loading">
-            <p className="flow-status"><Sparkles size={13} />{`正在生成流程…已等待 ${elapsed}s（首次由 LLM 生成，可能要几十秒；之后同一版本直接命中缓存）`}</p>
-            <div className="flow-skeleton" aria-hidden>
-              {[62, 78, 54, 70].map((w, i) => <span key={i} style={{ width: `${w}%` }} />)}
-            </div>
+          <div className="flow-skeleton" aria-hidden>
+            {[62, 78, 54, 70].map((w, i) => <span key={i} style={{ width: `${w}%` }} />)}
           </div>
         ) : null}
+
         {error ? (
-          <p className="flow-status error">
-            {error}
-            <button type="button" className="flow-retry" onClick={() => setAttempt((a) => a + 1)}>重试</button>
-          </p>
+          <div className="banner banner-danger" role="alert">
+            <Icon name="alert" size={14} />
+            <div className="banner-text">{error}</div>
+            <div className="banner-actions">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAttempt((a) => a + 1)}><Icon name="rotate" size={12} />重试</button>
+            </div>
+          </div>
         ) : null}
 
         {state ? (
           <>
-            <div className="flow-head">
-              <h3>{state.flow.title}</h3>
-              <p>{state.flow.summary}</p>
-            </div>
             {state.source === "static" ? (
-              <p className="flow-degraded">
-                <strong>以下不是模型生成，而是静态调用链降级视图。</strong>
-                {state.reason ? `原因：${state.reason}。` : ""}
-                它只反映代码里的跨文件调用，看不到回调注册、路由表与依赖注入等编排，环节可能比真实执行路径少。
-              </p>
+              <div className="banner banner-warn">
+                <Icon name="alert" size={14} />
+                <div className="banner-text">
+                  <strong>以下不是模型生成，而是静态调用链降级视图。</strong>
+                  {state.reason ? `原因：${state.reason}。` : ""}
+                  它只反映代码里的跨文件调用，看不到回调注册、路由表与依赖注入等编排，环节可能比真实执行路径少。
+                </div>
+              </div>
             ) : null}
 
-            <ol className="flow-chain">
-              {state.flow.stages.map((stage) => {
-                const classes = [
-                  "flow-step",
-                  stage.kind === "entry" ? "entry" : "",
-                  selectedStageOrder === stage.order ? "selected" : ""
-                ].filter(Boolean).join(" ");
-                return (
-                  <li key={stage.order}>
-                    <button
-                      type="button"
-                      className={classes}
-                      title={`${stage.title}：${stage.detail}`} // 卡片上的 detail 被 CSS clamp，悬停给全文
-                      onClick={() => onSelectStage(selectedStageOrder === stage.order ? null : { stage, flow: state.flow })}
-                    >
-                      <span className="flow-step-order">{String(stage.order).padStart(2, "0")}</span>
-                      <span className="flow-step-main">
-                        <span className="flow-step-kind">{FLOW_KIND_LABEL[stage.kind]}</span>
-                        <strong>{stage.title}</strong>
-                        <small className="flow-step-detail">{stage.detail}</small>
-                        <span className="flow-step-flags">
-                          {stage.loopsTo !== undefined ? <em className="flag-loop">{`↺ 回到 #${stage.loopsTo}`}</em> : null}
-                          {stage.files.length ? <em className="flag-files">{`关联 ${stage.files.length} 个文件`}</em> : null}
-                        </span>
-                        {stage.branches.length ? (
-                          <span className="flow-step-branches">
-                            {stage.branches.map((branch) => <em key={branch}>{branch}</em>)}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
+            {state.flow.stages.map((stage, position) => (
+              <Fragment key={stage.order}>
+                {position > 0 ? <div className="flow-arrow"><Icon name="arrowDown" size={15} /></div> : null}
+                <button
+                  type="button"
+                  className={`flow-stage col${stage.kind === "decision" ? " decision" : ""}${selectedStageOrder === stage.order ? " selected" : ""}`}
+                  title={`${stage.title}：${stage.detail}`} // 卡片上的 detail 被 CSS clamp，悬停给全文
+                  onClick={() => onSelectStage(selectedStageOrder === stage.order ? null : { stage, flow: state.flow })}
+                >
+                  <span className="fs-head">
+                    <span className="fs-order">{String(stage.order).padStart(2, "0")}</span>
+                    <span className="fs-title">{stage.title}</span>
+                    <span className="fs-kind">{`${FLOW_KIND_LABEL[stage.kind]} · ${stage.files.length} 文件`}</span>
+                  </span>
+                  <span className="fs-detail">{stage.detail}</span>
+                  {stage.branches.length ? (
+                    <span className="fs-branches">
+                      {stage.branches.map((branch) => <span key={branch} className="branch-chip">{branch}</span>)}
+                    </span>
+                  ) : null}
+                  {stage.loopsTo !== undefined ? <span className="flow-loop-note">{`回环指向第 ${stage.loopsTo} 环节`}</span> : null}
+                </button>
+              </Fragment>
+            ))}
+            <div className="flow-arrow" style={{ height: 8 }} aria-hidden />
 
-            <p className="flow-footnote">
+            {/* 边的可核对强度分三档，读法各不相同：绿=依赖图能证明，蓝=正文里读到，黄=模型推断 */}
+            <div className="flow-legend">
+              <span className="flow-origin origin-static">static · 依赖图可证明</span>
+              <span className="flow-origin origin-code">code · 源码正文读过</span>
+              <span className="flow-origin origin-inferred">inferred · 模型推断</span>
+              <span className="fs-11 faint" title="点任一环节，抽屉里列它的出边与这条边的依据">点环节看它的出边依据</span>
+            </div>
+
+            <p className="field-note">
               {`共 ${state.flow.stages.length} 个环节。每个环节的关联文件在右侧「节点详情」里，点环节打开。`}
               {state.flow.caveats ? `已知边界：${state.flow.caveats}` : ""}
             </p>
+            {state.flow.uncovered?.length ? (
+              <div className="flow-legend">
+                <span className="fs-11 faint">没能确认的部分</span>
+                {state.flow.uncovered.map((item) => <span className="badge badge-warn" key={item} title={item}>{item}</span>)}
+              </div>
+            ) : null}
           </>
         ) : null}
+
+        {/* 起点都在、却没出结果（不在宏观设计待过 / 引擎暂时没回）才补这一块；没有入口时上面那块空状态已经说清了 */}
+        {entryPath && !state && !loading && !error ? (
+          <div className="empty">
+            <span className="empty-icon"><Icon name="info" size={18} /></span>
+            <p>还没有流程结果</p>
+            <span className="fs-11" title="流程由 LLM 依据静态证据（依赖关系、符号、静态调用链）生成；选好起点后自动开始，失败可重试">
+              点「重新生成」或换一个起点
+            </span>
+          </div>
+        ) : null}
       </div>
-    </div>
+    </>
   );
 }

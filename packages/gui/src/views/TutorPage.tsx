@@ -1,27 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { FileSearch, X } from "lucide-react";
 import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, Loading, flatten } from "./helpers";
 import { RepoTree } from "./RepoTree";
-import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
+import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 import { useEverVisible } from "../ui/useEverVisible";
 import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
+import { Icon } from "../ui/icons";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
-  代码教学工作区（对齐 prototype `.teaching-workspace`，两栏）：
-  - 左 「教学模块」（modules-pane）：模块 chips（来自课程树模块地图）+ 配置 + 推荐入口 + 仓库文件（点击打开源码）
-  - 右 「实时源码」（source-pane）：只读源码 + 行高亮 + 源码 tabs + ⌘P 文件搜索
-  - 语言风格滑块与教学阶段已迁到右侧 Agent 侧栏（prototype 里对话 Agent 与作用域上下文是一体的）
-  - chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
-  */
+  代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
+  - 左 `.teach-side`：教学模块（主干 / 设施 / 外围三组 + 手动改档）+ 推荐入口 + 仓库文件树
+  - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位
+  - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
+
+  与原型的一处口径差：原型把「点一行」当成 Agent 绑定切换。这里能对上就照做——按 path + 行区间回查
+  最具体的课程节点，命中就换绑（会话按节点 id 建，换绑等于换线程，所以一定给一条 toast）；
+  那一行不属于任何节点时才退回「只改本地定位读数」，并在顶栏如实写出来。
+ */
 /** 推荐入口一屏先露这么多条，其余收进「显示更多」（规则归类常有几十条，全铺会把「仓库文件」挤出视野）。 */
 const ENTRY_PAGE = 8;
 
@@ -85,7 +88,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   };
 
   const anchor = t.selected?.anchors[0];
-  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，prototype 同规则）+ 可选 toast 提示。
+  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，原型同规则）+ 可选 toast 提示。
       `open.toast` 控制是否弹提示（切 tab、自动定位都不该弹——用户已经看见视图变了，再 toast 是噪音），
       `open.trigger` 把「手动打开 / 切节点自动带过来 / 点已开的 tab」三种来源分开记进 journal。
       依赖只取 repositoryId——放整个 t（或任何每次渲染换引用的值）会让本回调每渲染换引用，
@@ -122,7 +125,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     void loadSource(anchor.path, anchor.line, { toast: false, trigger: "auto" });
   }, [anchor?.path, anchor?.line, loadSource]);
 
-  // ⌘P / Ctrl+P 文件搜索（prototype 源码面板的「⌘ P 搜索文件」）。
+  // ⌘P / Ctrl+P 快速打开（原型源码面板的「⌘ P 搜索文件」）。
   // 三视图常驻挂载：本组件在非教学工作区也活着，监听器必须按当前视图开关——
   // 否则在宏观设计/练习页按 ⌘P 会被这里 preventDefault 吞掉，还打开一个看不见的面板（切回教学页才发现它开着）。
   const [searchParams] = useSearchParams();
@@ -187,8 +190,8 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   const entryPending = everVisible && !moduleEntries && Boolean(t.course);
   /** 等待态 = 已有 loading 记录，或还没落账的那一帧（判据两处共用，别再各写一遍） */
   const entryWaiting = moduleEntries?.status === "loading" || entryPending;
-  const visibleEntries: ModuleEntry[] = moduleEntries?.status === "llm"
-    ? moduleEntries.entries.map((entry) => ({ id: entry.id, title: entry.title, path: entry.path, line: entry.line }))
+  const visibleEntries: (ModuleEntry & { reason?: string })[] = moduleEntries?.status === "llm"
+    ? moduleEntries.entries
     : entryWaiting || !t.course
       ? []
       : moduleFiles;
@@ -231,7 +234,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     return pool.slice(0, 12);
   }, [filePaths, query]);
   useEffect(() => { setPaletteIndex(0); }, [query]);
-  /** 选中行变化时把它滚进可视区：`.palette-list` 自己有 max-height + overflow，是真正的滚动容器。
+  /** 选中行变化时把它滚进可视区：`.pal-list` 自己有 max-height + overflow，是真正的滚动容器。
       用 rect 差值而不是 `scrollIntoView`——后者会连带滚动祖先，在零视口的应用内浏览器里会把整页滚到底（§6.1 同族坑）。 */
   useEffect(() => {
     const list = paletteRef.current;
@@ -262,6 +265,28 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     }
   };
 
+  /** 本地定位读数：只有「这一行不属于任何课程节点」时才会与绑定行不一致，此时如实说「本页已定位」。 */
+  const located = source && source.line !== anchor?.line ? source.line : null;
+  /**
+    点源码一行 = 换阅读锚点。原型把这一行直接当成 Agent 绑定；教学的会话是按课程节点建的
+    （引擎按节点 id 装配上下文，不收任意 path:line），所以先按 path + 行区间回查最具体的节点：
+    查到就换绑（换绑会换线程，必须给一条 toast 让人看见），查不到就只改本地定位读数。
+   */
+  const pickLine = (line: number): void => {
+    if (!source || source.line === line) return;
+    emit(repositoryId, "line_located", { path: source.path, line, trigger: "manual" });
+    const tree = t.course ? flatten(t.course.root) : [];
+    const owner = tree.filter((node) => node.anchors.some((a) => a.path === source.path && a.line <= line && line <= (a.endLine ?? a.line))).pop();
+    if (owner && owner.id !== t.selected?.id) {
+      t.setSelected(owner);
+      showToast(`已换绑到「${owner.title}」`);
+      return;
+    }
+    setSource({ ...source, line });
+  };
+  /** 传给源码岛的读数：定位行随点行走，内容/路径不变（重扫高亮的代价已在 SourceView 里挡掉）。 */
+  const viewSource = source;
+
   if (t.error && !t.course) return <EmptyState title="代码教学暂不可用" detail={t.error} />;
   if (!t.course || !t.selected) return <Loading />;
   const { selected, course } = t;
@@ -269,29 +294,31 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   /** 面板只渲染前 MAX_RENDER_LINES 行：锚点行落在范围外时，源码区根本没有那一行，
       文案不能再说「已定位」（渲染与滚动都在 SourceView 里，这里只负责说实话）。 */
   const lineRenderable = source ? isLineRendered(source.line) : true;
-  const sourceMeta = !source
-    ? "选一个文件开始"
+  const locateReadout = !source
+    ? "未选文件"
     : lineRenderable
-      ? `已定位第 ${source.line} 行`
-      : `锚点在第 ${source.line} 行，超出预览`;
-  const sourceMetaNote = source && !lineRenderable ? `面板只渲染前 ${MAX_RENDER_LINES} 行，这一行在范围之外（源码没截，往下翻或搜关键词）` : "源码只读，不会写回你的仓库";
+      ? `${source.path}:${source.line}`
+      : `${source.path}（锚点第 ${source.line} 行超出预览）`;
 
   return (
-    <section className="page tutor-page">
-      {/*
-        紧凑单行 header：原型没有大标题区，节点选择已由左栏「推荐入口」承担
-        （v0.1 的 <select> 是模块面板出现前的遗留，已删除）。
-        */}
-      <header className="tutor-header-compact">
-        <p className="eyebrow">苏格拉底教学</p>
-        <h1>{selected.title}</h1>
-      </header>
-      <ContextLine strong="代码教学" detail={`${anchor ? `${anchor.path}:${anchor.line}` : "未定位"} · 模块「${moduleLabel}」`} />
+    <>
+      <PageTopbar
+        crumb={<>
+          <b>{workspace.repositoryPath.split("/").filter(Boolean).pop() ?? repositoryId}</b>
+          <span className="faint">/</span>
+          <span>代码教学</span>
+          <span className="faint">·</span>
+          <span className="muted">Agent 绑定：<b className="mono fs-12">{anchor ? `${anchor.path}:${anchor.line}` : "未定位"}</b> · 模块「{moduleLabel}」</span>
+          {located ? <span className="faint">· 本页已定位第 {located} 行</span> : null}
+        </>}
+        actions={<span className="fs-11 faint mono" title="点源码任意一行可就地定位；⌘P 搜文件">⌘P 快速打开</span>}
+        showRailToggle
+      />
       <MobileSwitcher labels={["教学模块", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="workspace teaching-workspace" style={layoutVars(layout)}>
-        {/* 压在「文件栏 / 实时源码」边界上的拖宽条：文件栏给了宽度，源码栏就是剩下的那一块（grid 的 minmax(0,1fr)） */}
+      <section className="page page-teach" style={layoutVars(layout)}>
+        {/* 压在「文件栏 / 源码岛」边界上的拖宽条：文件栏给了宽度，源码栏就是剩下的那一块 */}
         <ColumnResizer field="filePaneWidth" label="文件栏" growOn="right" />
-        <div className={paneClass(0)}>
+        <aside className={`teach-side ${paneClass(0)}`}>
           <ModulesPane
             where="teaching"
             header="教学模块"
@@ -331,98 +358,114 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
               showToast(tier ? `已把「${target.label}」改到${tier === "core" ? "主干" : tier === "facility" ? "设施" : "外围"}` : `已恢复「${target.label}」的引擎判据`);
             }}
           >
-            <p className="module-hint" title="模块职责来自课程树节点摘要；名称与取舍可在「＋ 配置」里改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
-            <ModuleSectionLabel label="推荐入口" note={entryNote} />
-            {visibleEntries.length ? (
-              <div className="entry-list">
-                {shownEntries.map((entry) => (
-                  <button
-                    key={entry.id}
-                    className={`entry-item ${t.selected?.id === entry.id ? "selected" : ""}`}
-                    title={`${entry.path}:${entry.line}`}
-                    onClick={() => {
-                      const found = flatten(course.root).find((node) => node.id === entry.id);
-                      if (!found) return;
-                      t.setSelected(found);
-                      emit(repositoryId, "entry_adopted", { module: activeModule, entry_id: entry.id, path: entry.path, source: entrySource });
-                    }}
-                  >
-                    <span className="entry-dot" />
-                    <strong>{entry.title}</strong>
-                    <code>{entry.path.split("/").pop()}:{entry.line}</code>
-                  </button>
-                ))}
-                {shownEntries.length < visibleEntries.length ? (
-                  <button
-                    type="button"
-                    className="entry-more"
-                    onClick={() => setExpandedEntryLists((curr) => new Set(curr).add(entryKey))}
-                  >
-                    显示更多（还有 {visibleEntries.length - shownEntries.length} 条）
-                  </button>
-                ) : null}
-              </div>
-            ) : moduleEntries?.status === "loading" ? (
-              <p className="entry-empty">正在挑推荐入口…</p>
-            ) : (
-              <p className="entry-empty">这个模块没有推荐入口，从下面的文件里挑一个开始。</p>
-            )}
-            <ModuleSectionLabel label="仓库文件" note="任意文件都能点开" tip="上面是推荐入口，这里是全仓文件树" />
-            <RepoTree nodes={fileTree} onOpenFile={openFile} activePath={source?.path} />
-          </ModulesPane>
-        </div>
-        <div className={paneClass(1)}>
-          <section className="pane source-pane">
-            <div className="pane-header"><h2>实时源码</h2><span>{source?.path ?? "未选择文件"}{filePaths.length ? ` · ${filePaths.length} 文件` : ""}</span></div>
-            {tabs.length ? (
-              <div className="source-tabs" role="tablist" aria-label="打开的文件">
-                {tabs.map((tab) => (
-                  <button key={tab.path} role="tab" aria-selected={source?.path === tab.path} className={source?.path === tab.path ? "active" : ""} onClick={() => void loadSource(tab.path, tab.line, { toast: false, trigger: "tab" })}>
-                    {tab.path.split("/").pop()}
-                    <span
-                      className="source-tab-close"
-                      role="button"
-                      aria-label={`关闭 ${tab.path}`}
-                      title={`关闭 ${tab.path}`}
-                      onClick={(event) => { event.stopPropagation(); closeTab(tab.path); }}
+            <p className="field-note" title="模块职责来自课程树节点摘要；名称与取舍可在齿轮里的「模块配置」改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
+
+            <div className="tier-group">
+              <ModuleSectionLabel label="推荐入口" note={entryNote} tip="点一下即换阅读起点；清单由 LLM 按模块职责挑，token 花在第一次展开时" />
+              {visibleEntries.length ? (
+                <div className="col gap-2">
+                  {shownEntries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      className={`entry-card ${selected.id === entry.id ? "selected" : ""}`}
+                      title={`${entry.path}:${entry.line}`}
+                      onClick={() => {
+                        const found = flatten(course.root).find((node) => node.id === entry.id);
+                        if (!found) return;
+                        t.setSelected(found);
+                        emit(repositoryId, "entry_adopted", { module: activeModule, entry_id: entry.id, path: entry.path, source: entrySource });
+                      }}
                     >
-                      ×
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className="source-meta"><span title={sourceMetaNote}>{sourceMeta}</span><span title="按 ⌘P（Windows/Linux 为 Ctrl+P）打开文件搜索面板">⌘ P 搜索文件</span></div>
-            <SourceView source={source} />
-          </section>
-        </div>
-      </div>
-      {paletteOpen && (
-        <div className="palette-overlay" onClick={() => setPaletteOpen(false)}>
-          <div className="palette" role="dialog" aria-label="搜索仓库文件" onClick={(event) => event.stopPropagation()}>
-            <div className="palette-head">
-              <FileSearch size={14} />
-              <input
-                autoFocus
-                value={query}
-                placeholder="搜索仓库文件（↑↓ 选择 · 回车打开）"
-                aria-label="搜索仓库文件"
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={onPaletteKey}
-              />
-              <span className="palette-count">{paletteMatches.length ? `${paletteIndex + 1}/${paletteMatches.length}` : "0 匹配"}</span>
-              <button className="palette-close" aria-label="关闭" onClick={() => setPaletteOpen(false)}><X size={13} /></button>
+                      <span className="e-title"><Icon name="zap" size={12} />{entry.title}</span>
+                      {entry.reason ? <span className="e-reason">{entry.reason}</span> : null}
+                      <span className="e-path">{entry.path}:{entry.line}</span>
+                    </button>
+                  ))}
+                  {shownEntries.length < visibleEntries.length ? (
+                    <button
+                      type="button"
+                      className="entry-more"
+                      onClick={() => setExpandedEntryLists((curr) => new Set(curr).add(entryKey))}
+                    >
+                      显示更多（还有 {visibleEntries.length - shownEntries.length} 条）
+                    </button>
+                  ) : null}
+                </div>
+              ) : moduleEntries?.status === "loading" ? (
+                <p className="entry-empty">正在挑推荐入口…</p>
+              ) : (
+                <p className="entry-empty">这个模块没有推荐入口，从下面的文件里挑一个开始。</p>
+              )}
             </div>
-            <div className="palette-list" ref={paletteRef} role="listbox" aria-label="匹配的文件">
-              {paletteMatches.map((path, index) => (
-                <button key={path} role="option" aria-selected={index === paletteIndex} className={index === paletteIndex ? "active" : ""} onClick={() => openFile(path)}>{path}</button>
+
+            <div className="tier-group grow">
+              <ModuleSectionLabel label="仓库文件" note={`${filePaths.length} 个`} tip="上面是推荐入口，这里是全仓文件树，任意文件都能点开" />
+              <RepoTree nodes={fileTree} onOpenFile={openFile} activePath={source?.path} />
+            </div>
+          </ModulesPane>
+        </aside>
+
+        <div className={`teach-main ${paneClass(1)}`}>
+          <div className="source-tabs-bar">
+            <div className="tabs" role="tablist" aria-label="打开的文件">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.path}
+                  type="button"
+                  role="tab"
+                  aria-selected={source?.path === tab.path}
+                  className={`tab ${source?.path === tab.path ? "active" : ""}`}
+                  title={tab.path}
+                  onClick={() => void loadSource(tab.path, tab.line, { toast: false, trigger: "tab" })}
+                >
+                  <span className="mono fs-11">{tab.path.split("/").pop()}</span>
+                  <span
+                    className="tab-close"
+                    role="button"
+                    aria-label={`关闭 ${tab.path}`}
+                    title={`关闭 ${tab.path}`}
+                    onClick={(event) => { event.stopPropagation(); closeTab(tab.path); }}
+                  >
+                    <Icon name="x" size={11} />
+                  </span>
+                </button>
               ))}
-              {!paletteMatches.length && <p className="palette-empty">没有匹配的文件</p>}
+            </div>
+            <span className="tab-count">{tabs.length}/5 个标签</span>
+          </div>
+          <SourceView
+            source={viewSource}
+            onLineClick={pickLine}
+            emptyHint="在左栏点推荐入口或仓库文件里的任意文件开始阅读（源码只读，不会写回你的仓库）"
+          />
+        </div>
+      </section>
+      {paletteOpen && (
+        <div className="palette-mask" onClick={() => setPaletteOpen(false)}>
+          <div className="palette" role="dialog" aria-label="搜索仓库文件" onClick={(event) => event.stopPropagation()}>
+            <input
+              autoFocus
+              value={query}
+              placeholder="输入文件名…（↑↓ 选择 · Enter 打开 · Esc 关闭）"
+              aria-label="搜索仓库文件"
+              spellCheck={false}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onPaletteKey}
+            />
+            <div className="pal-list" ref={paletteRef} role="listbox" aria-label={`匹配 ${paletteMatches.length} 个文件`}>
+              {paletteMatches.map((path, index) => (
+                <button key={path} type="button" role="option" aria-selected={index === paletteIndex} className={`pal-item ${index === paletteIndex ? "sel" : ""}`} onClick={() => openFile(path)}>
+                  <Icon name="file" size={14} />
+                  <span className="mono fs-12">{path.split("/").pop()}</span>
+                  <span className="pal-path">{path}</span>
+                </button>
+              ))}
+              {!paletteMatches.length ? <p className="empty">没有匹配的文件</p> : null}
             </div>
           </div>
         </div>
       )}
-    </section>
+    </>
   );
 }
-

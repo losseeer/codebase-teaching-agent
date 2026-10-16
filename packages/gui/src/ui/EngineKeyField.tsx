@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
-import { KeyRound } from "lucide-react";
+import { Icon } from "./icons";
 import { api } from "../api/client";
 import { clearEngineKey, getEngineAuth, setEngineKey, subscribeEngineAuth } from "../api/engine-key";
 
@@ -58,7 +58,7 @@ export function EngineKeyField({ collapsed, onExpand }: { collapsed: boolean; on
     // 收起态只留一枚钥匙：点它展开侧栏去填，而不是把输入框挤成 44px
     return (
       <button type="button" className={`engine-key-mini${auth.unauthorized ? " blocked" : ""}`} title={auth.unauthorized ? `口令不对或缺失 · ${explain}` : `引擎口令${auth.key ? "已配置" : "待填写"} · ${explain}`} onClick={onExpand} aria-label="引擎访问口令">
-        <KeyRound size={14} />
+        <Icon name="key" size={14} />
       </button>
     );
   }

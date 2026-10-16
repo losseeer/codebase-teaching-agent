@@ -12,6 +12,8 @@ import type { ExerciseLanguage } from "@codebase-tutor/shared";
   为什么不装：那几档要么需要一个跑在浏览器里的编译器（类型检查要整份项目图），要么会给出与判分不一致的
   「看起来对」——判分只认沙箱里那组测试（见 engine `exercises/code-generate.ts`）。界面里多一个绿色波浪线，
   学习者会以为那是判据。
+  外壳是 `.code-editor`（源码岛那套深底）叠 `.ans-editor`（原型答题框的最小高度与留白）——两档都取同一组
+  `--code-*` 令牌，所以不需要为「答题区」另写一份 CSS。
 */
 export interface CodeEditorFile {
   path: string;
@@ -55,5 +57,5 @@ export function CodeEditor({ file, language, resetKey, ariaLabel, onChange }: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- file.contents 是初始值，故意不跟手
   }, [resetKey, file.path, language]);
 
-  return <div className="code-editor" ref={host} data-testid="code-editor" aria-label={ariaLabel} />;
+  return <div className="code-editor ans-editor" ref={host} data-testid="code-editor" aria-label={ariaLabel} />;
 }

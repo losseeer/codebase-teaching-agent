@@ -1,19 +1,18 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, FolderGit2, RefreshCw } from "lucide-react";
 import type { ImportJob, RepositoryCatalogEntry } from "@codebase-tutor/shared";
 import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
-import { phaseLabel } from "./helpers";
+import { Icon } from "../ui/icons";
+import { dateText } from "./helpers";
+import { PageTopbar } from "./WorkspaceChrome";
 
 /**
- * 导入仓库页：选择被学习的仓库 → 触发引擎异步导入 → 报告预估成本。
- * 完成后通过 `onImported` 把 workspace 抛给 App，再跳转宏观设计。
- *
- * 对应 prototype `design-prototype.html` 的「导入仓库」入口（原 v1 标签 `import`）。
- *
- * 这里**必须**能直接切到地址簿里已导入的仓：侧栏收起时那个全局切换器不在视野内，
- * 而这一页是唯一还能改工作区的地方——只给一个路径输入框等于逼人重新填绝对路径。
+  导入仓库页（对齐 docs/ui-prototype 的 `importPage`）：绝对路径 → 分相进度 → 成本报告 → 仓库地址簿。
+  完成后通过 `onImported` 把 workspace 交给 App，再跳宏观设计。
+
+  这里**必须**能直接切到地址簿里已导入的仓：侧栏收起时那个全局切换器不在视野内，
+  而这一页是唯一还能改工作区的地方——只给一个路径输入框等于逼人重新填绝对路径。
  */
 
 interface Props {
@@ -26,6 +25,15 @@ interface Props {
   /** 点的就是当前仓：离开导入页即可 */
   onOpenRepository: () => void;
 }
+
+/** 导入的分相清单：与引擎 ImportJob.phase 同一口径，进度条只画「现在在哪一相」。 */
+const PHASES: { key: ImportJob["phase"]; label: string }[] = [
+  { key: "queued", label: "排队中" },
+  { key: "indexing", label: "索引文件与 Git 历史" },
+  { key: "summarizing", label: "摘要缓存与分层归纳" },
+  { key: "building_course", label: "构建入口课程树" },
+  { key: "completed", label: "写入 .tutor/ 产物" }
+];
 
 export function ImportPage({ onImported, workspace, catalog, onSwitchRepository, onOpenRepository }: Props): ReactElement {
   const [path, setPath] = useState(workspace?.repositoryPath ?? "");
@@ -73,90 +81,142 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     setError(""); setReport(null);
     try { setJob(await api.submitImport(path.trim(), commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
   };
+
+  const activeIndex = job ? PHASES.findIndex((phase) => phase.key === job.phase) : -1;
+  const failed = job?.phase === "failed";
+
   return (
-    <section className="page import-page">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">本地代码库</p>
-          <h1>从一个真实仓库开始</h1>
-          <p>索引、摘要、课程树和学习日志只写入所选仓库的 <code>.tutor/</code>。</p>
-        </div>
-      </div>
-      <div className="import-form" aria-label="导入仓库">
-        <label htmlFor="repo-path">仓库绝对路径</label>
-        <div className="path-row">
-          <input id="repo-path" value={path} onChange={(event) => setPath(event.target.value)} placeholder="/Users/name/Projects/example" />
-          <button className="primary" onClick={submit} disabled={!path.trim() || jobActive}>
-            <FolderGit2 size={17} />导入
-          </button>
-        </div>
-        <div className="import-mode-row">
-          <button type="button" role="switch" aria-checked={commentMode} aria-label="详细导入" className={`mode-switch${commentMode ? " on" : ""}`} onClick={() => setCommentMode((value) => !value)}>
-            <i aria-hidden="true" />
-          </button>
-          <span className="mode-switch-label">详细导入</span>
-          {commentMode && <span className="mode-token-hint">会消耗更多 token</span>}
-        </div>
-        {/* 一句给结论、一句给「为什么/怎么改」：后者挪进 title，第一屏不该读两段说明书 */}
-        <p className="import-mode-note" title={commentMode
-          ? "注释写得多的仓库（面试讲解、课程作业类）里的中文概念词会一起进摘要，也因此更费 token。"
-          : "想连注释一起摘要，请在导入前切到「详细导入」；换口径需要重新导入。"}>{commentMode
-          ? "连注释一起摘要：中文概念词更容易被搜到，也更费 token。"
-          : "只看代码结构，最省 token。要连注释一起摘要请切「详细导入」，导入后不可再改。"}</p>
-        {error && <p className="error-message">{error}</p>}
-      </div>
-      {catalog.length > 0 && (
-        <div className="import-catalog" aria-label="地址簿里已导入的仓库">
-          <div className="import-catalog-head">地址簿里已导入的 {catalog.length} 个仓<span title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span></div>
-          {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
-              成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
-          {gateNotice && <p className="cost-notice" title="对话栏那排「模型与推理」弹窗 → 单价，三档里配上任一格就恢复（不用重启引擎）；也可以改 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION，那条路要重启。">{gateNotice}</p>}
-          {catalog.map((item) => {
-            const isCurrent = item.repositoryId === workspace?.repositoryId;
-            const verdict = item.freshness?.verdict;
-            // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会
-            const note = !item.exists
-              ? "目录已不在这里"
-              : item.mounted
-                ? item.watching === false
-                  ? `引擎已挂载，但增量监听没起来：${item.watchError ?? "原因未知"}。改完代码不会自动重分析，新鲜度停在挂载那一刻`
-                  : "引擎已挂载"
-                : "未挂载：点开才读它的产物";
-            return (
-              <button
-                key={item.repositoryId}
-                type="button"
-                className={`import-catalog-row${isCurrent ? " current" : ""}`}
-                title={`${item.repositoryPath}\n${note}`}
-                onClick={() => (isCurrent ? onOpenRepository() : onSwitchRepository(item.repositoryId))}
-              >
-                <span className="import-catalog-name">{item.name}</span>
-                <span className="import-catalog-path">{item.repositoryPath}</span>
-                <span className={`import-catalog-state${item.exists ? "" : " bad"}${verdict === "stale" ? " stale" : ""}${item.mounted && item.watching === false ? " stale" : ""}`}>
-                  {isCurrent ? "当前" : !item.exists ? "目录不存在" : item.mounted && item.watching === false ? "无增量监听" : verdict === "stale" ? "产物已过期" : note}
+    <>
+      <PageTopbar crumb={<><b>导入仓库</b><span className="faint">本地优先 · 代码不出机器</span></>} />
+      <section className="page page-import">
+        <div className="import-wrap">
+          <div className="import-hero">
+            <h1>导入一个代码仓库</h1>
+            <p>输入本机仓库的绝对路径。索引、摘要、依赖图与课程树只写进仓库内的 <code className="mono">.tutor/</code>，随仓库走，随时可恢复。</p>
+          </div>
+
+          <div className="card card-pad col gap-4">
+            <div className="field">
+              <label htmlFor="repo-path">仓库绝对路径</label>
+              <div className="import-path-row">
+                <input id="repo-path" className="text-input" value={path} onChange={(event) => setPath(event.target.value)} placeholder="/absolute/path/to/repo" spellCheck={false} />
+                <button type="button" className="btn btn-primary" onClick={submit} disabled={!path.trim() || jobActive}>
+                  <Icon name="import" />{jobActive ? "导入中" : "开始导入"}
+                </button>
+              </div>
+            </div>
+
+            <div className="import-opts">
+              <label>
+                <span className="switch">
+                  <input type="checkbox" checked={commentMode} aria-label="详细导入" onChange={(event) => setCommentMode(event.target.checked)} />
+                  <span className="track" /><span className="thumb" />
                 </span>
-                <ChevronRight size={15} />
-              </button>
-            );
-          })}
+                详细导入
+                {commentMode ? <span className="badge badge-warn">更费 token</span> : null}
+              </label>
+            </div>
+            {/* 一句给结论、一句给「为什么/怎么改」：后者挪进 title，第一屏不该读两段说明书 */}
+            <p className="field-note" title={commentMode
+              ? "注释写得多的仓库（面试讲解、课程作业类）里的中文概念词会一起进摘要，也因此更费 token。"
+              : "想连注释一起摘要，请在导入前切到「详细导入」；换口径需要重新导入。"}>{commentMode
+              ? "连注释一起摘要：中文概念词更容易被搜到，也更费 token。"
+              : "只看代码结构，最省 token。要连注释一起摘要请切「详细导入」，导入后不可再改。"}</p>
+
+            {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
+
+            {job ? (
+              <div className="col gap-3" aria-live="polite">
+                <div className="row between fs-12 muted"><span>{job.message}</span><strong className="mono">{job.progress}%</strong></div>
+                <div className="progress"><div style={{ width: `${job.progress}%` }} /></div>
+                <div className="phase-list">
+                  {PHASES.map((phase, index) => {
+                    const state = failed && index === 0 ? "" : activeIndex < 0 ? "" : index < activeIndex ? "done" : index === activeIndex ? "active" : "";
+                    return (
+                      <div className={`phase ${state}`} key={phase.key}>
+                        <span className="phase-dot">
+                          {state === "done" ? <Icon name="check" size={14} /> : state === "active" ? <i className="spinner" aria-hidden /> : <i className="phase-idot" aria-hidden />}
+                        </span>
+                        <span>{phase.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {failed && job.error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">失败原因：{job.error}</span></div> : null}
+              </div>
+            ) : null}
+
+            {report ? (
+              <div className="col gap-3">
+                <div className="section-title">导入完成报告</div>
+                <div className="report-grid">
+                  <div className="card report-cell"><div className="num">{report.index.totalFiles}</div><div className="lbl">可分析文件</div></div>
+                  <div className="card report-cell"><div className="num">{report.estimate.cachedFiles}</div><div className="lbl">摘要已缓存</div></div>
+                  <div className="card report-cell"><div className="num">{(report.estimate.estimatedInputTokens / 1000).toFixed(1)}k</div><div className="lbl">预估输入 tokens</div></div>
+                  {/* 单价没配时金额恒为 0，这时候写 ¥0.00 是假读数 */}
+                  <div className="card report-cell"><div className="num">{report.estimate.estimatedCostUsd > 0 ? `¥${report.estimate.estimatedCostUsd.toFixed(2)}` : "未计价"}</div><div className="lbl">预估本次成本</div></div>
+                </div>
+                <div className="row">
+                  <button type="button" className="btn btn-accent" onClick={() => navigate("/app?workspace=map")}>进入宏观设计 <Icon name="arrowRight" /></button>
+                  <span className="fs-12 faint mono">{report.index.repositoryPath}/.tutor/</span>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {catalog.length > 0 ? (
+            <div className="col gap-3">
+              <div className="row between">
+                <div className="section-title">仓库地址簿 · {catalog.length} 个</div>
+                <span className="fs-11 faint" title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span>
+              </div>
+              {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
+                  成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
+              {gateNotice ? <div className="banner banner-warn"><Icon name="alert" /><span className="banner-text">{gateNotice}</span></div> : null}
+              <div className="addr-list">
+                {catalog.map((item) => {
+                  const isCurrent = item.repositoryId === workspace?.repositoryId;
+                  const verdict = item.freshness?.verdict;
+                  // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会
+                  const watching = item.mounted && item.watching === false;
+                  const meta = [
+                    item.repositoryPath,
+                    item.artifactsReady === false ? "没有 .tutor 产物" : "产物在 .tutor/",
+                    watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "",
+                    item.freshness?.analyzedAt ? `上次分析 ${dateText(item.freshness.analyzedAt)}` : ""
+                  ].filter(Boolean).join(" · ");
+                  return (
+                    <button
+                      key={item.repositoryId}
+                      type="button"
+                      className={`card addr-card${isCurrent ? " current" : ""}`}
+                      title={item.exists ? meta : `${item.repositoryPath}\n目录已不在这里`}
+                      onClick={() => (isCurrent ? onOpenRepository() : onSwitchRepository(item.repositoryId))}
+                    >
+                      <span className="addr-icon"><Icon name="book" /></span>
+                      <span className="col grow">
+                        <span className="addr-name">{item.name}</span>
+                        <span className="addr-meta">{meta}</span>
+                      </span>
+                      <span className="addr-badges">
+                        {!item.exists ? <span className="badge badge-danger">目录不存在</span>
+                          : watching ? <span className="badge badge-warn">无增量监听</span>
+                            : item.mounted ? <span className="badge badge-ok">已挂载</span>
+                              : <span className="badge badge-neutral">未挂载</span>}
+                        {verdict === "stale" ? <span className="badge badge-warn">产物已过期</span>
+                          : verdict === "drifted" ? <span className="badge badge-info">提交已移动</span>
+                            : verdict === "fresh" ? <span className="badge badge-ok">产物新鲜</span>
+                              : item.artifactsReady === false ? null : <span className="badge badge-neutral">产物在</span>}
+                        {isCurrent ? <span className="badge badge-neutral">当前</span> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </div>
-      )}
-      {job && (
-        <div className="import-progress" aria-live="polite">
-          <div className="progress-top"><span>{job.message}</span><strong>{job.progress}%</strong></div>
-          <div className="progress-track"><span style={{ width: `${job.progress}%` }} /></div>
-          <p>{phaseLabel(job.phase)}</p>
-          {job.error && <p className="error-message">失败原因：{job.error}</p>}
-        </div>
-      )}
-      {report && (
-        <div className="report-grid">
-          <div className="report-stat"><span>可分析文件</span><strong>{report.index.totalFiles}</strong><small>{report.index.totalLines.toLocaleString()} 行源码</small></div>
-          <div className="report-stat"><span>摘要缓存</span><strong>{report.estimate.cachedFiles}</strong><small>本次新建 {report.estimate.summarizedFiles} 条</small></div>
-          <div className="report-stat"><span>预估输入</span><strong>{report.estimate.estimatedInputTokens.toLocaleString()}</strong><small>{report.estimate.provider}</small></div>
-          <div className="report-actions"><button className="secondary" onClick={() => navigate("/course")}>查看宏观设计 <ChevronRight size={16} /></button></div>
-        </div>
-      )}
-    </section>
+      </section>
+    </>
   );
 }

@@ -1,30 +1,31 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { Code2, Eye, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import type { CourseNode, CourseNodeDetail, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
-import { EmptyState, flatten, Loading, MicroDetail } from "./helpers";
+import { EmptyState, flatten, Loading } from "./helpers";
 import { RepoTree } from "./RepoTree";
-import { ContextLine, MobileSwitcher, useMobilePanes } from "./WorkspaceChrome";
-import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
+import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
+import { ColumnResizer } from "../ui/ColumnResizer";
 import { DepMap } from "../map/DepMap";
-import { FLOW_KIND_LABEL, FlowMap, type FlowSelection } from "../map/FlowMap";
+import { FLOW_KIND_LABEL, FlowMap, type FlowSelection, type FlowStatus } from "../map/FlowMap";
+import { Icon } from "../ui/icons";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 
 /**
-  宏观设计工作区（两栏，源自 prototype `.map-workspace`）：
+  宏观设计工作区（两栏，prototype `.page-map` = `.map-side` + `.map-main`）：
   - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
     早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
-  - 右 「地图画布」：v0.9 起分两个视图（`map-viewbar` 切换）——
+  - 右 「地图画布」：`.map-viewbar` 切两个视图（`.view-toggle`）——
     「架构视图」由**文件**驱动 = 模块依赖图（`DepMap`）：节点 = 目录聚合模块，边 = import 依赖，入口模块在最左列；
     「流程视图」由 **LLM 生成**（`FlowMap`）：环节 = 一次执行经过的步骤，关联文件只在该环节的「节点详情」里展示，
     画布上不出现路径。课程树不上图（层级交给左侧目录与教学页），点击模块合成 CourseNode 走抽屉与地图线程。
-  - 节点详情作为画布内的抽屉（触发后才覆盖画布右侧），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
-    抽屉在架构视图里显示节点，在流程视图里显示环节及其关联文件。展开时给流程让位（`.map-canvas.detail-open`）。
+  - 节点详情是画布右侧的 `.drawer`（展开时 `.map-canvas.detail-open` 让位），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
+    抽屉在架构视图里显示节点，在流程视图里显示环节、它的出边依据与关联文件。
   - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
 
-  对应 prototype `design-prototype.html` L63-67 / L304-307（map-workspace + map-canvas + flow-node）。
+  对应 prototype `docs/ui-prototype/js/pages.js` 的 mapPage / archCanvas / flowCanvas / flowDrawer。
   */
 
 const GROUP_LABELS: { pattern: RegExp; label: string }[] = [
@@ -47,6 +48,21 @@ export function kindLabel(kind: CourseNode["kind"] | undefined): string {
   return "概览";
 }
 
+/** 锚点只露文件名：抽屉只有 `--drawer-w` 宽，整条路径读不完，全路径进 title。 */
+function fileTail(path: string): string {
+  const segments = path.split("/");
+  return segments[segments.length - 1] ?? path;
+}
+
+/** 时间戳只露到分钟（完整 ISO 串留在 title）——「产物是哪天生成的」要能一眼对上。 */
+function stamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+const NO_FLOW_STATUS: FlowStatus = { source: null, generatedAt: "", title: "", summary: "", loading: false };
+
 export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [index, setIndex] = useState<RepositoryIndex | null>(null);
@@ -56,10 +72,15 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [drawer, setDrawer] = useState(false);
   /** 流程视图里选中的环节：关联文件只在详情里展示，画布上不出现路径。 */
   const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
+  /** 架构视图那个合成模块的文件清单：抽屉里「绑定到对话」要按同一份清单再绑一次（见 useScopedChat 的 scopePaths） */
+  const [moduleScopePaths, setModuleScopePaths] = useState<string[]>([]);
+  /** 流程取数状态由 `FlowMap` 回告：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
+  const [flowStatus, setFlowStatus] = useState<FlowStatus>(NO_FLOW_STATUS);
+  const [regenNonce, setRegenNonce] = useState(0);
   const [error, setError] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
-  const layout = useLayout();
   const [mapView, setMapView] = useState<"architecture" | "flow">("architecture");
+  const navigate = useNavigate();
 
   useEffect(() => {
     let current = true;
@@ -91,6 +112,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const pickNode = (node: CourseNode, scopePaths: string[] = []): void => {
     t.setMapNode(node, scopePaths);
     t.setMapBinding({ kind: "module", title: node.title });
+    setModuleScopePaths(scopePaths);
     setDrawer(true);
     emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.title.slice(0, 120), view: mapView });
   };
@@ -106,24 +128,183 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
     emit(repositoryId, "file_anchored", { path, source });
   };
 
-  if (error) return <EmptyState title="课程暂不可用" detail={error} />;
-  if (!course || !index || !analysis) return <Loading />;
+  const repositoryName = (index?.repositoryPath ?? workspace.repositoryPath).split("/").filter(Boolean).pop() ?? repositoryId;
+  const crumbContext = mapView === "flow"
+    ? (flowSelection ? `第 ${flowSelection.stage.order} 环节 · ${flowSelection.stage.title}` : "未选中环节")
+    : (selected?.title ?? "未选中模块");
+  const topbar = (
+    <PageTopbar
+      crumb={<><b>{repositoryName}</b><span className="faint">/</span><span>宏观设计</span><span className="faint">·</span><span className="muted">{crumbContext}</span></>}
+      showRailToggle
+    />
+  );
+
+  if (error) return <>{topbar}<EmptyState title="课程暂不可用" detail={error} /></>;
+  if (!course || !index || !analysis) return <>{topbar}<Loading /></>;
+
+  /** 环节 → 对话作用域：课程树里有该流程入口对应的 workflow 节点就挂它；
+      没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西。
+      环节本身（说明/关联文件/分叉回环）作为 focus 一并上送：课程树节点只到入口粒度，不带它就答不了「这个环节具体做什么」 */
+  const workflowOf = (flow: FlowSelection["flow"]): CourseNode | null =>
+    flatten(course.root).find((item) => item.id === `workflow:${flow.entry.path}`) ?? null;
+  const bindStage = (selection: FlowSelection | null): void => {
+    if (!selection) { t.setMapNode(null); return; }
+    t.setMapBinding({ kind: "flow", title: selection.stage.title });
+    t.setMapNode(workflowOf(selection.flow), [], selection.stage);
+  };
+  /** 抽屉里跳代码教学。只有真实课程树节点才挪教学选择器——`depmap:` 合成节点树里查无此人，
+      带着它建教学会话会被引擎拒；那种情况就只换工作区。 */
+  const gotoTeach = (node: CourseNode | null): void => {
+    const real = node ? flatten(course.root).find((item) => item.id === node.id) : undefined;
+    if (real) t.setSelected(real);
+    navigate("/app?workspace=teaching");
+  };
+
+  const implementation = detail?.implementation;
+  const isSyntheticModule = !!selected?.id.startsWith("depmap:");
+  const outgoingEdges = flowSelection ? flowSelection.flow.edges.filter((edge) => edge.from === flowSelection.stage.order) : [];
+
+  const drawerBody = mapView === "flow"
+    ? (flowSelection ? (
+      <>
+        <div className="kv">
+          <span className="kv-k">环节说明</span>
+          <span className="kv-v">{flowSelection.stage.detail}</span>
+        </div>
+        {flowSelection.stage.branches.length ? (
+          <div className="kv">
+            <span className="kv-k">{`去向与判断依据（${flowSelection.stage.branches.length}）`}</span>
+            <div className="row-wrap">{flowSelection.stage.branches.map((branch) => <span key={branch} className="branch-chip">{branch}</span>)}</div>
+          </div>
+        ) : null}
+        {/* 出边 + 依据：`flow.edges` 才是拓扑真源，origin 三档说的是「这条去向有多可核对」 */}
+        <div className="kv">
+          <span className="kv-k">{`出边（${outgoingEdges.length}）`}</span>
+          {outgoingEdges.length ? (
+            outgoingEdges.map((edge) => (
+              <div className="col" key={`${edge.from}->${edge.to}`}>
+                <span className="row">
+                  <span
+                    className={`flow-origin origin-${edge.origin}`}
+                    title={edge.origin === "static" ? "依赖图能证明这条去向" : edge.origin === "code" ? "在源码正文里读到的编排（回调、路由、注入）" : "模型按编排常识推断，没有可核对的行级依据"}
+                  >{edge.origin}</span>
+                  <span className="fs-11 faint">{`→ 第 ${edge.to} 环节`}</span>
+                </span>
+                <span className="kv-v mono" title={edge.evidence}>{edge.evidence}</span>
+              </div>
+            ))
+          ) : <span className="kv-v muted">这条环节没有记出的去向边。</span>}
+        </div>
+        <div className="kv">
+          <span className="kv-k">{`关联文件（${flowSelection.stage.files.length}）`}</span>
+          <div className="col">
+            {flowSelection.stage.files.map((file) => (
+              <button key={`${file.path}:${file.line}`} type="button" className="anchor-chip" title={`${file.path}:${file.line}${file.note ? ` · ${file.note}` : ""}`} onClick={() => openFile(file.path, "flow")}>
+                <Icon name="file" size={12} />
+                <span>{`${fileTail(file.path)}:${file.line}`}</span>
+                {file.note ? <em className="fs-11 faint">{file.note}</em> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="kv">
+          <span className="kv-k">所属流程</span>
+          <span className="kv-v" title={`${flowSelection.flow.summary}（生成时间 ${flowSelection.flow.generatedAt}）`}>{flowSelection.flow.title}</span>
+        </div>
+        <div className="row">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(workflowOf(flowSelection.flow))}><Icon name="book" size={13} />去代码教学</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => bindStage(flowSelection)}><Icon name="zap" size={13} />绑定到对话</button>
+        </div>
+        {flowSelection.flow.caveats ? (
+          <div className="banner banner-warn">
+            <Icon name="alert" size={14} />
+            <div className="banner-text">{`已知边界：${flowSelection.flow.caveats}`}</div>
+          </div>
+        ) : null}
+      </>
+    ) : (
+      <div className="empty">
+        <span className="empty-icon"><Icon name="info" size={18} /></span>
+        <p>点流程里的任一环节</p>
+        <span className="fs-11">这里显示它的说明、出边依据与关联文件</span>
+      </div>
+    ))
+    : (
+      <>
+        <div className="kv">
+          <span className="kv-k">摘要</span>
+          <span className="kv-v">{selected?.summary ?? "未选择节点：点画布上的模块，或从左侧目录点一个文件"}</span>
+        </div>
+        {isSyntheticModule ? (
+          <>
+            <div className="kv">
+              <span className="kv-k">规模</span>
+              <span className="kv-v mono" title="清单来自架构视图的目录聚合，随对话请求上送，引擎按它解析作用域；行数取仓库索引">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
+            </div>
+            <div className="kv">
+              <span className="kv-k">Git 热点</span>
+              <span className="kv-v mono" title="取该模块内单个文件的最高变更次数，来自仓库索引的 Git 历史">{`${index.hotspots.filter((spot) => moduleScopePaths.includes(spot.path)).reduce((max, spot) => Math.max(max, spot.changes), 0) || "无"} 次变更`}</span>
+            </div>
+          </>
+        ) : null}
+        {selected?.children.length ? (
+          <div className="kv">
+            <span className="kv-k">{`下级节点（${selected.children.length}）`}</span>
+            <div className="col">
+              {selected.children.map((child) => (
+                <button key={child.id} type="button" className="tier-node" title={`${kindLabel(child.kind)}：${child.summary}`} onClick={() => t.setMapNode(child)}>
+                  <Icon name="file" size={13} />
+                  <span className="tier-name">{child.title}</span>
+                  <span className="tier-count">{`${kindLabel(child.kind)}${child.children.length ? ` · ${child.children.length} 项` : ""}`}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {implementation ? (
+          <>
+            <div className="kv"><span className="kv-k">输入</span><span className="kv-v">{implementation.inputs.join("、")}</span></div>
+            <div className="kv"><span className="kv-k">输出</span><span className="kv-v">{implementation.output}</span></div>
+            <div className="kv"><span className="kv-k">不变量</span><span className="kv-v">{implementation.invariants.join("；")}</span></div>
+            <div className="kv"><span className="kv-k">边界与陷阱</span><span className="kv-v">{[...implementation.boundaries, ...implementation.traps].join("；") || "尚未检测到显式边界。"}</span></div>
+          </>
+        ) : null}
+        {selected?.anchors.length ? (
+          <div className="kv">
+            <span className="kv-k">{`源码锚点（${selected.anchors.length}）`}</span>
+            <div className="row-wrap">
+              {selected.anchors.map((anchor) => (
+                <button key={`${anchor.path}:${anchor.line}`} type="button" className="anchor-chip" title={`${anchor.path}:${anchor.line}${anchor.label ? ` · ${anchor.label}` : ""}`} onClick={() => openFile(anchor.path, "anchor")}>
+                  <Icon name="file" size={12} />
+                  <span>{`${fileTail(anchor.path)}:${anchor.line}`}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className="row">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(selected ?? null)}><Icon name="book" size={13} />去代码教学</button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!selected} onClick={() => { if (selected) pickNode(selected, moduleScopePaths); }}><Icon name="zap" size={13} />绑定到对话</button>
+        </div>
+        <p className="field-note" title="模块由目录前缀聚合而成，课程树里没有这个节点：提问时随请求上送它的文件清单，引擎按这份清单解析作用域。行数取仓库索引，变更次数取 Git 历史。">
+          模块按目录前缀聚合，不在课程树里
+        </p>
+      </>
+    );
 
   return (
-    <section className="page course-page">
-      <header className="course-header-compact">
-        <p className="eyebrow">宏观课程树</p>
-        <h1>{course.root.title}</h1>
-        <div className="course-meta"><span>{index.totalFiles} 文件</span><span>{index.hotspots.length} 热点</span></div>
-      </header>
-      <ContextLine strong="宏观设计" detail={`选中「${selected?.title ?? "—"}」`} />
+    <>
+      {topbar}
       <MobileSwitcher labels={["项目目录", "地图画布"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="workspace map-workspace" style={layoutVars(layout)}>
+      <div className="page page-map">
         {/* 与教学页同一条列表栏宽度：拖一次，三个工作区的左栏一起跟 */}
-        <ColumnResizer field="filePaneWidth" label="项目目录栏" growOn="right" />
-        <aside className={`pane ${paneClass(0)}`}>
-          <div className="pane-header"><h2>项目目录</h2><span>{index.totalFiles} 个文件</span></div>
-          <div className="tree">
+        <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
+        <aside className={`map-side ${paneClass(0)}`}>
+          <div>
+            <div className="row between">
+              <span className="section-title">项目目录</span>
+              <span className="fs-11 faint">{index.totalFiles}</span>
+            </div>
             <RepoTree
               nodes={index.fileTree}
               onOpenFile={openFile}
@@ -134,132 +315,87 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           </div>
         </aside>
 
-        <section className={`pane map-canvas ${paneClass(1)}${drawer ? " detail-open" : ""}`}>
+        <div className={`map-main ${paneClass(1)}`}>
           <div className="map-viewbar">
-            <div className="view-switch" role="tablist" aria-label="地图视图">
-              <button type="button" role="tab" aria-selected={mapView === "architecture"} className={mapView === "architecture" ? "active" : ""} onClick={() => setMapView("architecture")}>架构视图</button>
-              <button type="button" role="tab" aria-selected={mapView === "flow"} className={mapView === "flow" ? "active" : ""} onClick={() => setMapView("flow")}>流程视图</button>
+            <div className="view-toggle" role="tablist" aria-label="地图视图">
+              <button type="button" role="tab" aria-selected={mapView === "architecture"} className={mapView === "architecture" ? "active" : ""} onClick={() => { setMapView("architecture"); setDrawer(false); }}>架构视图</button>
+              <button type="button" role="tab" aria-selected={mapView === "flow"} className={mapView === "flow" ? "active" : ""} onClick={() => { setMapView("flow"); setDrawer(false); }}>流程视图</button>
             </div>
-            <span className="map-viewbar-note">
-              {mapView === "architecture" ? "按依赖方向从左到右分层" : "点环节看它关联的文件"}
-            </span>
+            {mapView === "flow" ? (
+              <>
+                <span
+                  className={`badge ${flowStatus.source === "llm" ? "badge-info" : flowStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
+                  title={`${flowStatus.source === "static"
+                    ? "LLM 未配置、预算触顶或调用失败时退回静态调用链——它不冒充模型结论"
+                    : "环节与边由 LLM 依据静态证据生成；边级校验只降不升，声称 static 而对不上依赖图的降为 inferred"}${flowStatus.generatedAt ? ` · 生成时间 ${flowStatus.generatedAt}` : ""}`}
+                >
+                  {`${flowStatus.loading ? "生成中" : flowStatus.source === "llm" ? "LLM 生成" : flowStatus.source === "static" ? "静态降级" : "未生成"}${flowStatus.generatedAt ? ` · ${stamp(flowStatus.generatedAt)}` : ""}`}
+                </span>
+                {flowStatus.title ? <span className="fs-11 muted" title={flowStatus.summary}>{flowStatus.title}</span> : null}
+              </>
+            ) : (
+              <>
+                <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
+                <span className="fs-11 faint" title="节点 = 按目录前缀聚合的模块，边 = 跨模块 import 引用；点节点在右侧抽屉看文件清单与源码锚点">点模块看详情与源码锚点</span>
+              </>
+            )}
+            <div className="grow" />
+            {mapView === "flow" ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={flowStatus.loading}
+                title="重发这一趟取数：引擎侧若仍命中缓存，回来的还是同一条流程"
+                onClick={() => setRegenNonce((value) => value + 1)}
+              ><Icon name="rotate" size={13} />重新生成</button>
+            ) : null}
             {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
             {drawer ? null : (
-              <button className="map-detail-open" onClick={() => setDrawer(true)}><Eye size={13} />{mapView === "flow" ? "环节详情" : "节点详情"}</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawer(true)}>
+                <Icon name="panelRight" size={13} />{mapView === "flow" ? "环节详情" : "节点详情"}
+              </button>
             )}
           </div>
-          {mapView === "architecture"
-            ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} detailOpen={drawer} onSelect={pickNode} />
-            : (
-              <FlowMap
-                repositoryId={repositoryId}
-                analysis={analysis}
-                index={index}
-                visible={visible}
-                selectedStageOrder={flowSelection?.stage.order}
-                onSelectStage={(selection) => {
-                  setFlowSelection(selection);
-                  setDrawer(selection !== null);
-                  if (selection) {
-                    t.setMapBinding({ kind: "flow", title: selection.stage.title });
-                    // 对话作用域跟着所选环节走：课程树里有该流程入口对应的 workflow 节点就挂它；
-                    // 没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西。
-                    // 环节本身（说明/关联文件/分叉回环）作为 focus 一并上送：课程树节点只到入口粒度，不带它就答不了「这个环节具体做什么」
-                    const workflow = flatten(course.root).find((item) => item.id === `workflow:${selection.flow.entry.path}`);
-                    t.setMapNode(workflow ?? null, [], selection.stage);
-                    emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
-                  } else {
-                    t.setMapNode(null);
-                  }
-                }}
-              />
-            )}
+          {/* 抽屉与画布同处一层：抽屉绝对定位只盖画布，不盖上面那条视图切换栏 */}
+          <div className="map-stage">
+          <div className="map-canvas-wrap">
+            <div className="map-canvas">
+              {mapView === "architecture"
+                ? <DepMap index={index} analysis={analysis} selectedId={selected?.id} onSelect={pickNode} />
+                : (
+                  <FlowMap
+                    repositoryId={repositoryId}
+                    analysis={analysis}
+                    index={index}
+                    visible={visible}
+                    selectedStageOrder={flowSelection?.stage.order}
+                    regenNonce={regenNonce}
+                    onStatus={setFlowStatus}
+                    onSelectStage={(selection) => {
+                      setFlowSelection(selection);
+                      setDrawer(selection !== null);
+                      bindStage(selection);
+                      if (selection) {
+                        emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
+                      }
+                    }}
+                  />
+                )}
+            </div>
+          </div>
           {drawer ? (
-            <aside className="map-detail" aria-label="节点详情">
-              <div className="map-detail-head">
-                <span>{mapView === "flow" ? "环节详情" : "节点详情"}</span>
-                <button className="map-detail-toggle" aria-label="关闭详情" title="关闭详情" onClick={() => setDrawer(false)}>
-                  <X size={13} />
-                </button>
+            <aside className="drawer" aria-label="节点详情">
+              <div className="drawer-head">
+                <h3>{mapView === "flow" ? (flowSelection ? `第 ${flowSelection.stage.order} 环节 · ${flowSelection.stage.title}` : "环节详情") : (selected?.title ?? "节点详情")}</h3>
+                <span className="badge badge-neutral">{mapView === "flow" ? (flowSelection ? FLOW_KIND_LABEL[flowSelection.stage.kind] : "未选中") : kindLabel(selected?.kind)}</span>
+                <button type="button" className="icon-btn" aria-label="关闭详情" title="关闭详情" onClick={() => setDrawer(false)}><Icon name="x" size={14} /></button>
               </div>
-              {mapView === "flow" ? (
-                <div className="detail">
-                  {flowSelection ? (
-                    <>
-                      <h3>{flowSelection.stage.title}</h3>
-                      <span className="kind-badge">{`第 ${flowSelection.stage.order} 环节 · ${FLOW_KIND_LABEL[flowSelection.stage.kind]}`}</span>
-                      <p>{flowSelection.stage.detail}</p>
-                      {flowSelection.stage.loopsTo !== undefined ? (
-                        <p className="detail-note">{`这是一个回环：流程回到第 ${flowSelection.stage.loopsTo} 环节继续。`}</p>
-                      ) : null}
-                      {flowSelection.stage.branches.length ? (
-                        <div className="detail-section">
-                          <h4>去向与判断依据</h4>
-                          <div className="flow-files">
-                            {flowSelection.stage.branches.map((branch) => <span key={branch} className="flow-branch">{branch}</span>)}
-                          </div>
-                        </div>
-                      ) : null}
-                      <div className="detail-section">
-                        <h4>{`关联文件（${flowSelection.stage.files.length}）`}</h4>
-                        <div className="flow-files">
-                          {flowSelection.stage.files.map((file) => (
-                            <button key={file.path} type="button" className="flow-file" onClick={() => openFile(file.path, "flow")}>
-                              <span className="flow-file-where"><Code2 size={12} />{`${file.path}:${file.line}`}</span>
-                              {file.note ? <small>{file.note}</small> : null}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <p className="detail-note">{`所属流程：${flowSelection.flow.title}`}</p>
-                      {flowSelection.flow.caveats ? <p className="detail-note">{`已知边界：${flowSelection.flow.caveats}`}</p> : null}
-                    </>
-                  ) : (
-                    <p className="detail-note">点流程里的任一环节，这里显示它关联的文件。</p>
-                  )}
-                </div>
-              ) : (
-                <div className="detail">
-                  <h3>{selected?.title ?? "未选择节点"}</h3>
-                  <span className="kind-badge">{kindLabel(selected?.kind)}</span>
-                  <p>{selected?.summary}</p>
-                  {selected?.children.length ? (
-                    <div className="detail-section">
-                      <h4>下级节点（{selected.children.length}）</h4>
-                      <div className="node-children">
-                        {selected.children.map((child) => (
-                          <button
-                            key={child.id}
-                            type="button"
-                            className="node-child"
-                            onClick={() => t.setMapNode(child)}
-                          >
-                            <strong>{child.title}</strong>
-                            <em>{kindLabel(child.kind)}{child.children.length ? ` · ${child.children.length} 项` : ""}</em>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  <MicroDetail detail={detail} />
-                  {selected?.anchors.length ? (
-                    <div className="detail-section">
-                      <h4>源码锚点</h4>
-                      <div className="anchors">
-                        {selected.anchors.map((anchor) => (
-                          <button key={`${anchor.path}:${anchor.line}`} className="anchor" onClick={() => openFile(anchor.path, "anchor")}>
-                            <Code2 size={13} />{anchor.path}:{anchor.line}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              )}
+              <div className="drawer-body">{drawerBody}</div>
             </aside>
           ) : null}
-        </section>
+          </div>
+        </div>
       </div>
-    </section>
+    </>
   );
 }

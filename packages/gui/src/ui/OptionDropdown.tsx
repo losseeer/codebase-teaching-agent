@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { ChevronDown } from "lucide-react";
+import { Icon } from "./icons";
 
 /**
   共用的「下拉选择器」：触发器一行写完**区名 + 当前选中项 + 数量**，展开后是定高可滚的选项面板。
@@ -78,7 +78,7 @@ export function OptionDropdown({ label, options, value, placeholder, tone, open,
         <span className="picker-label">{label}</span>
         <span className="picker-current">{selected?.label ?? placeholder}</span>
         <b>{options.length}</b>
-        <ChevronDown size={11} aria-hidden />
+        <Icon name="chevronDown" size={12} />
       </button>
       {open && (
         <div className="picker-panel" role="listbox" aria-label={ariaLabel ?? label}>
