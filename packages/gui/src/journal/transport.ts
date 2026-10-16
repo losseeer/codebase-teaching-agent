@@ -1,5 +1,4 @@
 import type { TraceScalar } from "@codebase-tutor/shared";
-import { engineKeyHeaders, reportUnauthorized } from "../api/engine-key";
 import type { UiJournalEventType } from "./events";
 
 /**
@@ -51,23 +50,23 @@ function enqueue(post: JournalPost): void {
 async function send(post: JournalPost): Promise<void> {
   const response = await fetch(`/api/repositories/${encodeURIComponent(post.repositoryId)}/journal`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...engineKeyHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: post.type, payload: post.payload, ...(post.sessionId ? { sessionId: post.sessionId } : {}) })
   });
   if (!response.ok) {
-    if (response.status === 401) reportUnauthorized(); // 口令没配/不对 ⇒ 侧栏亮出来，别让人以为「点了没记」
     const body = await response.json().catch(() => ({ error: "" })) as { error?: string };
     throw new JournalSendError(response.status, body.error ?? `HTTP ${response.status}`);
   }
 }
 
 /**
-  「这条事件本身不被接受」的判定。**401 刻意排除在外**：那是「还没给口令」，
-  不是「引擎不收这个类型」——按 4xx 丢弃会把配口令这段时间里的所有交互动作永久丢掉，
-  留在重试队列里等用户补上口令，下一轮补发就能过。
+  「这条事件本身不被接受」的判定：4xx = 引擎不收这个类型（事件名越权、载荷不合形状），丢弃并点名；
+  5xx 与网络错留在队列里等下一轮补发。
+  （以前这里还排除 401——那是「还没给口令」，留着等用户补；认证闸已于 2026-10-15 撤除，§64，
+  再留着就是一格永远不为真的豁免。）
   */
 function rejected(event: JournalSendError): boolean {
-  return event.status !== 401 && event.status >= 400 && event.status < 500;
+  return event.status >= 400 && event.status < 500;
 }
 
 /** 带上状态码：4xx 是「引擎明确不收」，与「网络不通」必须区别对待（前者重试一万次也不会成功）。 */

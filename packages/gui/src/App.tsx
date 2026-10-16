@@ -11,7 +11,6 @@ import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
-import { EngineKeyField } from "./ui/EngineKeyField";
 import { Icon, type IconName } from "./ui/icons";
 import { layoutVars, patchLayout, useLayout } from "./ui/ColumnResizer";
 import { showToast, ToastHost } from "./modules/toast";
@@ -277,8 +276,6 @@ export function App(): ReactElement {
             <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
             <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
           </div>
-          {/* 引擎开了认证闸门时才出现（闸门关着连这一行都不渲染）：口令不配，界面每个请求都是 401 */}
-          <EngineKeyField collapsed={sidebarCollapsed} onExpand={toggleSidebar} />
         </div>
       </aside>
       <main className="main">

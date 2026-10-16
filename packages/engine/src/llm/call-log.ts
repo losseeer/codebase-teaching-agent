@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { hash, logTargetFromEnv } from "../lib.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
-import { currentActor, currentThreadId, currentTraceId } from "../trace/context.js";
+import { currentThreadId, currentTraceId } from "../trace/context.js";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。
@@ -45,8 +45,8 @@ export interface LlmCallRecord {
     */
   threadId: string | null;
   /**
-    调用方身份（API key 的名字，见 `security/api-keys.ts`）；不是从 HTTP 进来的动作（后台任务）没有身份，为 null。
-    企业形态的账要能分到「哪个调用方烧了多少钱」，靠的就是这一列与 traceId 的组合。
+    调用方身份：**认证闸撤了之后恒 null**（2026-10-15，§64）。字段留着是因为两份日志线的列形状不该变——
+    10-12 到 10-15 之间的历史行里有 key 名，删字段等于让那批行读不出这一列。
     */
   actor: string | null;
   /**
@@ -172,7 +172,7 @@ export class LoggingLlmProvider implements LlmProvider {
       thinking: input.thinking ?? "auto",
       traceId: currentTraceId(),
       threadId: currentThreadId(),
-      actor: currentActor(),
+      actor: null,
       outbound: outboundFingerprint(input),
       ...(input.tools?.length ? { tools: input.tools.map((tool) => tool.name) } : {})
     };

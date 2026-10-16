@@ -1,5 +1,4 @@
 import type { ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { engineKeyHeaders, reportUnauthorized } from "./engine-key";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -36,9 +35,8 @@ export interface StreamTurn {
 
 /** 全站通用 SSE 读取：POST → 逐事件回调 → done 事件固化为返回值；error 事件与普通 HTTP 错误统一抛 Error。 */
 async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: Record<string, unknown> & { type: string }) => void, signal?: AbortSignal): Promise<TDone> {
-  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...engineKeyHeaders() }, body: JSON.stringify(payload), ...(signal ? { signal } : {}) });
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), ...(signal ? { signal } : {}) });
   if (!response.ok || !response.body) {
-    if (response.status === 401) reportUnauthorized();
     const body = await response.json().catch(() => ({ error: "请求失败" })) as { error?: string };
     throw new Error(body.error ?? "请求失败");
   }
@@ -167,23 +165,15 @@ export const isNotFound = (error: unknown): boolean => error instanceof ApiError
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
-  // 口令只在这一处拼（`engineKeyHeaders`），journal 那条自己 fetch 的通道另有一次——别在调用点各写一遍头。
-  const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...engineKeyHeaders(), ...(init?.headers ?? {}) } });
+  const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
   const body = await response.json() as T & { error?: string; reason?: RepositoryMountReason };
-  if (!response.ok) {
-    if (response.status === 401) reportUnauthorized();
-    throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
-  }
+  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
   return body;
 }
 
 export const api = {
-  /**
-    闸门状态三档：`"api-key"` = 已开闸，所有接口都要带口令（**本机默认就是这一档**：引擎开机先配发一张再开监听）；
-    `"broken"` = 引擎那份 key 文件读不出来或写不出来，此时它按「拒绝全部」在跑（除健康检查外一律 503）；
-    `"off"` = 闸门没配上，只有没跑过配发的进程才会报这一档，界面上把它当成「今天不用填口令」就行。
-    */
-  health: () => request<{ status: string; auth?: "off" | "api-key" | "broken"; llmMode?: string }>("/api/health"),
+  /** 探活：认证闸已撤除（§64），这一格不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
+  health: () => request<{ status: string; llmMode?: string; sandbox?: { level: string } }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
@@ -251,9 +241,9 @@ export const api = {
 /**
   全局事件流（`GET /api/events`，导入进度与仓库更新）。
 
-  **为什么不用 `EventSource`**：那个 API 带不了自定义请求头，引擎一开认证这条流就整条断掉——
-  而断得最难看的恰恰是导入进度（界面停在 0%，任务其实跑完了）。换成 fetch 读流之后，
-  口令与其余接口同一套（`engineKeyHeaders`），重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，
+  **为什么不用 `EventSource`**（2026-10-15 改了理由）：原先是为了能带认证请求头，那条需求随认证闸一起撤了
+  （§64）。留下 fetch 读流是因为三条流共用同一套读流、退避与 abort 语义——
+  重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，
   一旦成功建立连接就清零。`AbortSignal` 用来在依赖变化/卸载时彻底停下（含正在退避的那一次等待）。
   注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎现在开局就发一帧把响应头推到网路上，
   所以 `fetch` 立刻 resolve，连接状态是实测的而不是等第一个事件才知道。
@@ -285,9 +275,8 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
       const relayAbort = (): void => attempt.abort();
       controller.signal.addEventListener("abort", relayAbort);
       try {
-        const response = await fetch("/api/events", { headers: engineKeyHeaders(), signal: attempt.signal });
+        const response = await fetch("/api/events", { signal: attempt.signal });
         if (!response.ok || !response.body) {
-          if (response.status === 401) reportUnauthorized();
           throw new Error(`事件流建立失败（HTTP ${String(response.status)}）`);
         }
         failures = 0;

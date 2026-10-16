@@ -99,17 +99,6 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .status-dot.online { background: var(--accent); }
 
 
-/* 引擎访问口令（只在引擎开了认证闸门时渲染，见 ui/EngineKeyField.tsx） */
-.engine-key { display: flex; flex-direction: column; gap: 5px; padding: var(--sp-1) var(--sp-1) 0; }
-.engine-key .nav-label { color: var(--sidebar-ink-3); font-size: var(--fs-11); }
-.engine-key-row { display: flex; gap: 5px; align-items: stretch; }
-.engine-key input { flex: 1 1 auto; min-width: 0; padding: 5px 7px; border: 1px solid var(--sidebar-field-border); border-radius: var(--r-sm); background: var(--code-bg-2); color: var(--sidebar-ink); font-size: var(--fs-12); }
-.engine-key button { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--brand-600); border-radius: var(--r-sm); background: var(--sidebar-field-bg); color: var(--code-ink); font-size: var(--fs-11); }
-.engine-key button:hover:not(:disabled) { background: var(--sidebar-field-bg-hover); }
-.engine-key button.ghost { border-style: dashed; background: transparent; color: var(--sidebar-ink-2); }
-.engine-key-mini { margin: var(--sp-1) auto 0; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--sidebar-field-border); border-radius: var(--r-sm); background: var(--code-bg-2); color: var(--sidebar-ink-3); }
-.engine-key-mini.blocked { border-color: var(--warn-border); color: var(--accent); }
-.app.sidebar-collapsed .engine-key { display: none; }
 
 /* 折叠态：只留图标 */
 .app.sidebar-collapsed .brand-name,

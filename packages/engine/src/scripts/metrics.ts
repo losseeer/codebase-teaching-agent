@@ -57,28 +57,13 @@ function normalizeUrl(url: string): string {
 
 async function getJson<T>(path: string): Promise<T | null> {
   try {
-    const response = await fetch(`${engineUrl}${path}`, apiKey ? { headers: { "x-api-key": apiKey } } : undefined);
+    const response = await fetch(`${engineUrl}${path}`);
     return response.ok ? (await response.json() as T) : null;
   } catch {
     return null;
   }
 }
 
-/**
-  本机口令（引擎开机配发在 api-keys.json）。探针不带它的话，每一个在线读数都会静默变成「未执行」——
-  那是「数据源缺失」那一档口径要防的事，所以这里补带头，并在报表抬头如实报带没带。
-  */
-function localKey(): string | undefined {
-  const file = process.env.TUTOR_API_KEYS_FILE ?? join(tutorHome, "api-keys.json");
-  try {
-    const listed = (JSON.parse(readFileSync(file, "utf8")) as { keys?: { key?: unknown }[] }).keys;
-    return Array.isArray(listed) ? listed.map((entry) => entry.key).find((entry): entry is string => typeof entry === "string" && entry.length >= 16) : undefined;
-  } catch {
-    return undefined; // 没文件、坏 JSON：让请求去 401，报表抬头那行会写「未配」
-  }
-}
-
-const apiKey = localKey();
 
 const out: string[] = [];
 const emit = (line = ""): void => { out.push(line); };
@@ -90,7 +75,7 @@ const llmRows = readJsonl<LlmLogRow>(join(tutorHome, "llm.log"));
 const engineRows = readJsonl<EngineLogRow>(join(tutorHome, "engine.jsonl"));
 
 emit(`# 指标基线报告（第 1 档 · 零 LLM 聚合）`);
-emit(`生成时间：${new Date().toISOString()}｜引擎探针：${engineUrl}｜口令：${apiKey ? "已带" : "未配（在线读数会是「未执行」，先去引擎开机日志找口令文件）"}`);
+emit(`生成时间：${new Date().toISOString()}｜引擎探针：${engineUrl}`);
 emit(`仓库：${registry.join("、") || "（repositories.json 为空）"}`);
 emit();
 

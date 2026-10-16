@@ -7,7 +7,6 @@ import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, Repos
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
-import { ensureLocalKey, resetProvisionFailureForTest } from "./security/api-keys.js";
 import { flushLlmLog } from "./llm/call-log.js";
 import { flushEngineLog } from "./trace/engine-log.js";
 import { TutorDatabase } from "./store/database.js";
@@ -197,19 +196,13 @@ afterAll(async () => {
   await app?.close();
   vi.unstubAllGlobals();
   rmSync(root, { recursive: true, force: true });
-  for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG", "TUTOR_API_KEYS_FILE"]) delete process.env[key];
+  for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG"]) delete process.env[key];
 });
 
 beforeEach(() => {
   scripted = [];
   spoken = OK_REPLY;
   holdMs = 0;
-  /**
-    整套用例都按「这台测试进程没跑过配发」跑：口令文件指到临时目录里一个不存在的名字。
-    不钉这一格的话，一旦操作者真开过引擎（开机配发会在 ~/.codebase-tutor 建出 api-keys.json），
-    下面每条不带口令的 inject 都会集体变成 401——那是一条只有别人机器上才红的线。
-    */
-  process.env.TUTOR_API_KEYS_FILE = join(root, "no-keys-file-in-this-suite.json");
 });
 
 /** 宏观设计作用域：JSON 与 SSE 两条出口共用同一次收尾，两边的文本一致性各验一遍。 */
@@ -708,316 +701,6 @@ describe("跨仓工具面随地址簿变", () => {
     }
   });
 });
-
-/**
-  API key 认证 + 按仓授权（`security/api-keys.ts` 与 server.ts 的 onRequest 钩子）。
-  要拦的五件事：
-  1. **本机调用也得带 token**（2026-10-15 拍板）：真实监听的进程开机先 `ensureLocalKey()` 再 listen，
-     所以「没有口令文件」在生产里不再是默认形态；钩子本身仍按文件状态判，`off` 只留给 app.inject 这类测试进程。
-  2. 有闸时缺 key/错 key 一律 401，而且**对话路由被拦下时一次 LLM 调用都不发生**（越权的 token 不能烧）；
-  3. 名单外的仓连懒挂载都到不了（403 而不是 404），地址簿清单里也不出现；
-  4. **跨仓走同一份 ACL**：对端仓不在名单时，模型连 `cross_repo_link` 这个工具都看不到——
-     这是「A 仓的对话把没授权的 B 仓源码读进 prompt」那个口子的唯一封法。
-  5. 导入单独一条：它读任意目录、造出此前无从授权的仓 id，所以只放行 `*`。
-
-  key 文件写在临时 root 里（`TUTOR_API_KEYS_FILE`），每条用例后删掉——闸门退回关闭，后面的用例不受影响。
-  */
-describe("API key 认证与按仓授权", () => {
-  const keysFile = join(root, "api-keys.json");
-  const FULL_KEY = "sk-tutor-routes-full-key-000001";
-  const LOCKED_KEY = "sk-tutor-routes-locked-key-00002";
-  const peerDir = join(root, "auth-peer-repo");
-
-  /** 写入后把 mtime 往前推：装载按 mtime 失效缓存，同一毫秒内的两次写会被当成同一次。 */
-  let bump = 1_000;
-  function writeKeys(entries: { key: string; name: string; repositories: string[] }[]): void {
-    writeFileSync(keysFile, `${JSON.stringify({ keys: entries }, null, 2)}\n`, "utf8");
-    const stamp = new Date(Date.now() + (bump += 1_000));
-    utimesSync(keysFile, stamp, stamp);
-  }
-
-  const call = (method: "GET" | "POST", url: string, key?: string, payload?: unknown) =>
-    app.inject({ method, url, ...(key ? { headers: { "x-api-key": key } } : {}), ...(payload ? { payload } : {}) });
-
-  afterEach(() => {
-    rmSync(keysFile, { force: true });
-    rmSync(peerDir, { recursive: true, force: true });
-    delete process.env.TUTOR_API_KEYS_FILE;
-    resetProvisionFailureForTest(); // 配发失败会一路把闸门判成 broken，不留给下一组用例
-  });
-
-  it("闸门没配上（只有没跑过配发的进程会到这个形态）：不带 key 也读得到，但生产默认不是这一档", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile; // 文件不存在
-    expect((await call("GET", "/api/repositories")).statusCode).toBe(200);
-    expect((await call("GET", `/api/repositories/${repositoryId}/index`)).statusCode).toBe(200);
-  });
-
-  /**
-    这条钉的是用户 2026-10-15 那句「本机调用也得带 token」。旧默认形态是「不建文件就没有闸」，
-    而默认装机没人建过——于是本机任意进程都能不带凭据读走源码。现在按真实开机的顺序验一遍：
-    配发（server.ts 在 listen 之前跑的那一步）→ 不带口令 401 → 带配发出来的口令 200。
-    口令从文件里读，不从日志里读：值本来就不该出现在任何回显上。
-    */
-  it("按真实开机的顺序走一遍：配发之后，不带口令的本机调用（连 Origin 都没有）也 401", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    expect((await call("GET", "/api/repositories")).statusCode).toBe(200); // 配发之前确实敞开：正因如此，listen 之前必须先补闸
-    expect(ensureLocalKey().created).toBe(true);
-    expect((await call("GET", "/api/repositories")).statusCode).toBe(401);
-    const key = ((JSON.parse(readFileSync(keysFile, "utf8")) as { keys: { key: string }[] }).keys[0] ?? { key: "" }).key;
-    expect(key.length).toBeGreaterThanOrEqual(16);
-    expect((await call("GET", "/api/repositories", key)).statusCode).toBe(200);
-    const health = await call("GET", "/api/health");
-    expect(health.statusCode).toBe(200); // 探活那条仍免口令，但它不再报「本机默认没闸」
-    expect((health.json() as { auth: string }).auth).toBe("api-key");
-  });
-
-  it("配了 key 之后：缺 key 与错 key 都 401，对 key 200；/api/health 仍然免鉴权", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-
-    expect((await call("GET", "/api/repositories")).statusCode).toBe(401);
-    const wrong = await call("GET", "/api/repositories", "sk-tutor-this-key-is-wrong-000");
-    expect(wrong.statusCode).toBe(401);
-    expect((wrong.json() as { reason?: string }).reason).toBe("unauthorized");
-    expect((await call("GET", "/api/repositories", FULL_KEY)).statusCode).toBe(200);
-    expect((await call("GET", "/api/health")).statusCode).toBe(200);
-    // Bearer 写法同样收：同一个闸，两种头部格式（GUI 与 curl 都可能用后者）
-    const bearer = await app.inject({ method: "GET", url: "/api/repositories", headers: { authorization: `Bearer ${FULL_KEY}` } });
-    expect(bearer.statusCode).toBe(200);
-  });
-
-  it("被 401 拦下的对话回合一次 LLM 调用都不发出（越权的那笔 token 不能烧）", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    const threadId = await newThread("map", "闸门外线程"); // 线程在闸门合上前建：newThread 自己不带 key
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-    const before = fetchCalls;
-    expect((await call("POST", `/api/repositories/${repositoryId}/map-chat`, undefined, { content: "这一节先看哪里？", threadId })).statusCode).toBe(401);
-    expect(fetchCalls).toBe(before);
-  });
-
-  it("受限 key：名单外的仓 403（懒挂载都轮不到它），清单里也不出现；名单内的照常 200", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    mkdirSync(peerDir, { recursive: true }); // 磁盘上真实存在的第二个仓：403 必须是「不授权」而非「不存在」
-    const peerId = deriveRepositoryId(peerDir);
-    writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
-
-    const blocked = await call("GET", `/api/repositories/${peerId}/index`, LOCKED_KEY);
-    expect(blocked.statusCode).toBe(403);
-    expect((blocked.json() as { reason?: string }).reason).toBe("repository_not_granted");
-
-    const listed = (await call("GET", "/api/repositories", LOCKED_KEY)).json() as { repositories: { repositoryId: string }[] };
-    expect(listed.repositories.map((entry) => entry.repositoryId)).toEqual([repositoryId]);
-    expect((await call("GET", `/api/repositories/${repositoryId}/index`, LOCKED_KEY)).statusCode).toBe(200);
-  });
-
-  it("导入是「读任意目录 + 造新仓 id」，受限 key 一律 403", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
-    const refused = await call("POST", "/api/imports", LOCKED_KEY, { path: peerDir });
-    expect(refused.statusCode).toBe(403);
-    expect((refused.json() as { reason?: string }).reason).toBe("import_not_granted");
-  });
-
-  it("跨仓工具面同样受 ACL 约束：对端不在名单时模型看不到 cross_repo_link，仓名也不下发", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    const registryFile = process.env.TUTOR_REGISTRY_FILE;
-    const original = readFileSync(registryFile!, "utf8");
-    mkdirSync(peerDir, { recursive: true });
-    writeFileSync(registryFile!, `${JSON.stringify({ repositories: [repoDir, peerDir] }, null, 2)}\n`, "utf8");
-    const threadId = await newThread("map", "跨仓授权");
-    const ask = (key: string) => app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, headers: { "x-api-key": key }, payload: { content: "这个请求打到哪个仓去了？", threadId } });
-
-    try {
-      writeKeys([{ key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] }]);
-      sentTools.length = 0;
-      expect((await ask(LOCKED_KEY)).statusCode).toBe(200);
-      const locked = sentTools[sentTools.length - 1];
-      expect(locked.names).toContain("search_code");
-      expect(locked.names).not.toContain("cross_repo_link");
-      expect(locked.raw).not.toContain("auth-peer-repo"); // 仓名不进 schema：不知道就无从尝试
-
-      writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-      sentTools.length = 0;
-      expect((await ask(FULL_KEY)).statusCode).toBe(200);
-      expect(sentTools[sentTools.length - 1].names).toContain("cross_repo_link");
-    } finally {
-      writeFileSync(registryFile!, original, "utf8");
-    }
-  });
-
-  it("被 401 拒掉的跨来源请求也能读到原因：CORS 头不能被认证钩子短路", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-    // 钩子顺序是 cors → trace → 认证。反过来（认证在前）时 401 直接结束生命周期，
-    // 响应上没有 access-control-allow-origin，跨来源部署的浏览器就只能报「网络错误」。
-    const refused = await app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "http://localhost:3000" } });
-    expect(refused.statusCode).toBe(401);
-    expect(refused.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
-    expect((refused.json() as { reason?: string }).reason).toBe("unauthorized");
-  });
-
-  it("口令文件坏掉 = 闸门关死（503），不是退回免鉴权；/api/health 照样能报出这一档", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    writeFileSync(keysFile, '{ "keys": [ 少个括号\n', "utf8");
-    const stamp = new Date(Date.now() + 3_000);
-    utimesSync(keysFile, stamp, stamp);
-
-    // 这一档以前按「没配 key」放行：把文件编辑到一半这几秒钟，地址簿里所有仓对任何本机进程摊开
-    const refused = await call("GET", `/api/repositories/${repositoryId}/index`);
-    expect(refused.statusCode).toBe(503);
-    expect((refused.json() as { reason?: string }).reason).toBe("auth_store_unreadable");
-    expect((await call("POST", "/api/imports", undefined, { path: peerDir })).statusCode).toBe(503);
-    const health = await call("GET", "/api/health");
-    expect(health.statusCode).toBe(200); // 探活不能被闸拦住，否则进程管理器只会把它当死进程重启
-    expect((health.json() as { auth?: string }).auth).toBe("broken");
-
-    // 修好就自动恢复（按 mtime 重读，不必重启）
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-    expect((await call("GET", "/api/repositories", FULL_KEY)).statusCode).toBe(200);
-  });
-
-  it("全局模型配置只归不受限的 key：受限 key 连读都读不到，更改不了别人的出境端点", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    mkdirSync(peerDir, { recursive: true });
-    writeKeys([
-      { key: LOCKED_KEY, name: "只读主仓", repositories: [repositoryId] },
-      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
-    ]);
-    const put = (key?: string) => app.inject({
-      method: "PUT",
-      url: "/api/llm/settings",
-      ...(key ? { headers: { "x-api-key": key } } : {}),
-      payload: { baseUrl: "http://127.0.0.1:9/v1" }
-    });
-
-    // `baseUrl` 一改，别人接下来那一轮的源码就发到了新端点——按仓授权表达不了这个能力
-    const lockedGet = await call("GET", "/api/llm/settings", LOCKED_KEY);
-    expect(lockedGet.statusCode).toBe(403);
-    expect((lockedGet.json() as { reason?: string }).reason).toBe("settings_not_granted");
-    expect((await put(LOCKED_KEY)).statusCode).toBe(403);
-    expect((await put()).statusCode).toBe(401);
-    expect((await call("GET", "/api/llm/settings", FULL_KEY)).statusCode).toBe(200);
-    expect((await put(FULL_KEY)).statusCode).toBe(200);
-  });
-
-  it("源码路由与 read_file 同一份拒读名单：仓里的凭据文件走界面也给不出原文", async () => {
-    // 以前这条只问「在不在索引里」，而 `.json` 属于收录类型——模型看不到的密钥，人一点就抄得到
-    process.env.TUTOR_API_KEYS_FILE = keysFile; // 闸门关着，判的是名单不是授权
-    writeFileSync(join(repoDir, "credentials.json"), '{"aws_access_key_id":"AKIAEXAMPLESECRET"}\n', "utf8");
-    writeFileSync(join(repoDir, ".env"), "OPENAI_API_KEY=sk-this-secret-must-not-be-served\n", "utf8");
-    for (const path of ["credentials.json", ".env"]) {
-      const response = await call("GET", `/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=1`);
-      expect(response.statusCode, path).toBe(404);
-      expect((response.json() as { error?: string }).error, path).toContain("不开放读取");
-      expect(response.payload, path).not.toContain("must-not-be-served");
-    }
-  });
-
-  it("按 sessionId 取会话：名单外的 key 连内存缓存都不给命中", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    // 趁闸门还没开先建会话：它此刻就躺在引擎的内存缓存里，正是「命中即 return、以前不看名单」那条路
-    const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
-    const sessionId = (created.json() as { session: { id: string } }).session.id;
-    writeKeys([
-      { key: LOCKED_KEY, name: "只读别处", repositories: ["repo_not_this_one"] },
-      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
-    ]);
-
-    const stolen = await call("GET", `/api/sessions/${sessionId}`, LOCKED_KEY);
-    // 以前这里 200：缓存命中直接交整份会话（含别人的仓 id 与节点），下面那句「先看名单再开库」根本轮不到跑
-    expect(stolen.statusCode).toBe(404);
-    expect(stolen.payload).not.toContain(repositoryId);
-    // 授权 key 那边照样读得到（404 不是「会话真没了」）
-    expect((await call("GET", `/api/sessions/${sessionId}`, FULL_KEY)).statusCode).toBe(200);
-  });
-
-  it("按 id 定位会话/线程：名单外的仓连库都不开，错误体也不报别人的仓 id", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    // 线程真的存在（就建在本仓），但这张 key 只授权一个与此无关的 id
-    const threadId = await newThread("map", "别人的线程");
-    writeKeys([
-      { key: LOCKED_KEY, name: "只读别处", repositories: ["repo_not_this_one"] },
-      { key: FULL_KEY, name: "本机全量", repositories: ["*"] }
-    ]);
-
-    const messages = await call("GET", `/api/threads/${threadId}/messages`, LOCKED_KEY);
-    expect(messages.statusCode).toBe(404);
-    // 以前这里回 403 并把「这张 key 没有仓库 <id> 的访问权」写进错误体——那等于替探测者确认了线程存在、还报出它属于谁家
-    expect(messages.payload).not.toContain(repositoryId);
-    expect((messages.json() as { reason?: string }).reason).not.toBe("repository_not_granted");
-    // 同一条线程在授权 key 那里照常读得到（404 不是「线程真没了」）
-    expect((await call("GET", `/api/threads/${threadId}/messages`, FULL_KEY)).statusCode).toBe(200);
-  });
-
-  it("界面上填的单价立即进成本读数：留空回落 .env，脏值当场拒收", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-    const put = (payload: Record<string, unknown>) => app.inject({ method: "PUT", url: "/api/llm/settings", headers: { "x-api-key": FULL_KEY }, payload });
-    const readout = async () => (await call("GET", `/api/repositories/${repositoryId}/cost`, FULL_KEY).then((r) => r.json() as { pricingConfigured: boolean; totalCostUsd: number })).pricingConfigured;
-
-    // 三档全空 ⇒ 闸门不管事（这条读数在界面上要看得见，不能只留一个 $0.0000）。
-    // 两层都要清：`.env` 里那三行是用户真在用的配置（dotenv 在 import 时就灌进 process.env），
-    // 漏清一档就会把前置条件弄假——本仓的命中价就是这么把「未生效」顶成「生效」的。
-    const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
-    const savedEnv = RATE_ENV.map((key) => [key, process.env[key]] as const);
-    for (const key of RATE_ENV) delete process.env[key];
-    setLlmRuntimeSettingsForTest({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
-    try {
-      expect(await readout()).toBe(false);
-
-    const saved = await put({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1" });
-    expect(saved.statusCode).toBe(200);
-    expect((saved.json() as { inputUsdPerMillion?: string }).inputUsdPerMillion).toBe("0.28");
-    // 现读，不重启：同一份成本读数下一发就变成「闸门在管事」
-    expect(await readout()).toBe(true);
-    expect(((await call("GET", "/api/llm/settings", FULL_KEY)).json() as { pricingSources?: Record<string, string> }).pricingSources).toMatchObject({ input: "runtime", output: "runtime", cacheHit: "unset" });
-
-    // 留空 = 把这格交还给 .env，不是「填了 0」
-    process.env.TUTOR_INPUT_USD_PER_MILLION = "0.4";
-    expect(((await put({ inputUsdPerMillion: "" })).json() as { pricing?: { inputPerMillionUsd?: number } }).pricing?.inputPerMillionUsd).toBe(0.4);
-
-    for (const bad of ["-3", "abc", "1e999", true]) {
-      const refused = await put({ outputUsdPerMillion: bad as unknown as string });
-      expect(refused.statusCode, String(bad)).toBe(422);
-      expect((refused.json() as { reason?: string }).reason, String(bad)).toBe("pricing_invalid");
-    }
-    // 拒过一次就不能把脏值留在内存里（NaN 会让预算闸门恒判「未超支」）
-    expect(((await call("GET", "/api/llm/settings", FULL_KEY)).json() as { pricing?: { outputPerMillionUsd?: number } }).pricing?.outputPerMillionUsd).toBe(1.1);
-    } finally {
-      // 用户那份 `.env` 的值要还回去，否则后面所有用例跑在没有单价的环境里（读数会变）
-      for (const [key, value] of savedEnv) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      setLlmRuntimeSettingsForTest({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
-    }
-  });
-
-  it("身份进账：带 key 的回合里两条日志线都记到 actor（企业侧按人对账的抓手）", async () => {
-    process.env.TUTOR_API_KEYS_FILE = keysFile;
-    process.env.TUTOR_ENGINE_LOG = join(root, "engine-auth.jsonl"); // 本文件其余用例都是 "off"，这条要真落盘才验得到
-    const threadId = await newThread("map", "身份入账线程");
-    writeKeys([{ key: FULL_KEY, name: "本机全量", repositories: ["*"] }]);
-    try {
-      expect((await call("POST", `/api/repositories/${repositoryId}/map-chat`, FULL_KEY, { content: "这一节先看哪里？", threadId })).statusCode).toBe(200);
-      await Promise.all([flushLlmLog(), flushEngineLog()]);
-
-      const lines = readFileSync(process.env.TUTOR_LLM_LOG!, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { threadId: string | null; actor: string | null });
-      const mine = lines.filter((line) => line.threadId === threadId);
-      expect(mine.length).toBeGreaterThan(0);
-      expect(mine.every((line) => line.actor === "本机全量")).toBe(true);
-      // 同一个仓、同一批调用，无身份的调用（本文件早先那几轮）必须还能与有身份的分开——不然「按人对账」只是个字段名
-      expect(lines.some((line) => line.actor === null)).toBe(true);
-
-      const http = readFileSync(process.env.TUTOR_ENGINE_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { kind: string; actor: string | null })
-        .filter((row) => row.kind === "http");
-      expect(http.some((row) => row.actor === "本机全量")).toBe(true);
-    } finally {
-      process.env.TUTOR_ENGINE_LOG = "off";
-    }
-  });
-});
-
 /**
   源码出境清单（`code_egress`，企业化第 3 条）。这条线只有打真路由才算验过——
   它要同时证明三件事，缺一件就是报表上看不出来的错：
@@ -1100,14 +783,13 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
 });
 
 /**
-  来源闸（#166 第一层）。这台机器的默认形态是「没配 API key」（§44 之后口令文件一直没建），
-  而 CORS 原先写的是 `{ origin: true }` ——反射任意来源。两者叠起来的意思是：
-  你开着引擎时，浏览器里**任意网页**都能读本机所有已导入仓的源码、触发导入，
-  甚至把出境端点改成它自己的服务器（那才是整仓源码的外传通道）。
-  引擎只听 127.0.0.1 挡不住这件事：发请求不需要跨域权限，只有读响应才需要。
+  来源闸（#166 第一层）。CORS 原先写的是 `{ origin: true }` ——反射任意来源，而只听 127.0.0.1 挡不住：
+  浏览器里任意网页都能把请求打到这个地址，发请求不需要跨域权限，只有读响应才需要。
+  2026-10-15 认证闸整体撤除（§64）之后**这一道就是唯一的 Web 闸**，而它只管「哪个页面能碰这台引擎」，
+  不管「本机哪个进程能碰」——后者从此没有判据。
 
-  这一组用例把三件事分开钉住：① 非可信来源被拒在**执行之前**；② 回环来源与不带 Origin 的本机调用方照常能用
-  （产品形态不能被锁死）；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
+  这一组用例把三件事分开钉住：① 非可信来源被拒在**执行之前**（不只是不给 CORS 头）；
+  ② 回环来源与不带 Origin 的本机调用方照常能用（产品形态不能被锁死）；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
 */
 describe("来源闸：默认只服务本机浏览器", () => {
   const EVIL = "http://evil.example";
@@ -1138,8 +820,8 @@ describe("来源闸：默认只服务本机浏览器", () => {
     expect(after.repositories.length).toBe(before.repositories.length);
   });
 
-  it("连 /api/health 也不白给：那条路由免的是认证，不是来源", async () => {
-    // 免鉴权是给进程管理器的（它们不带 Origin，照样走得通）；健康读数里有服务商、模型名、沙箱闸门状态，
+  it("连 /api/health 也不白给：这道闸免的是「不带 Origin 的本机调用」，不是「任意网页」", async () => {
+    // 进程管理器与本机 curl 不带 Origin，照样走得通；健康读数里有服务商、模型名、沙箱闸门状态，
     // 那是给下一步攻击踩点用的，不该让任意网页白拿
     const refused = await fromEvil("GET", "/api/health");
     expect(refused.statusCode).toBe(403);

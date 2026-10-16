@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, outboundFingerprint, type LlmCallRecord } from "./call-log.js";
 import type { LlmCompletion, LlmProvider } from "./provider.js";
 import { RetryLlmProvider, ThinkingOverrideLlmProvider } from "./provider.js";
-import { markActor, runWithTrace } from "../trace/context.js";
+import { runWithTrace } from "../trace/context.js";
 
 /**
   LLM 工作日志：既要有可机读的落盘（JSONL），也要有控制台单行摘要；
@@ -212,12 +212,12 @@ describe("LLM 工作日志", () => {
   it("请求上下文里的调用记下 traceId；后台任务（无上下文）记为 null（不丢字段也不编造）", async () => {
     const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "teaching");
 
-    await runWithTrace("req-42", () => { markActor("ci-bot"); return provider.complete({ system: "s", user: "u", scene: "teaching.turn" }); });
+    await runWithTrace("req-42", () => provider.complete({ system: "s", user: "u", scene: "teaching.turn" }));
     await provider.complete({ system: "s", user: "u", scene: "map.refine" });
     await flushLlmLog();
 
     const entries = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as LlmCallRecord);
-    expect(entries[0]).toMatchObject({ scene: "teaching.turn", traceId: "req-42", actor: "ci-bot" });
+    expect(entries[0]).toMatchObject({ scene: "teaching.turn", traceId: "req-42", actor: null });
     expect(entries[1]).toMatchObject({ scene: "map.refine", traceId: null, actor: null });
     // 指纹落进行里：审计者要在本地重跑一次装配、比这一列才知道「出去的是不是这份」
     expect(entries[0].outbound).toMatchObject({ chars: expect.any(Number) });

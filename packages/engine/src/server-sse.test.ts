@@ -85,8 +85,6 @@ beforeAll(async () => {
   writeFileSync(process.env.TUTOR_LLM_SETTINGS_FILE, JSON.stringify({ provider: "openai-compatible", model: "fixture-model", baseUrl: "http://127.0.0.1:9/v1", apiKey: "fixture-key", thinking: "auto" }), "utf8");
   process.env.TUTOR_LLM_LOG = join(root, "llm.log");
   process.env.TUTOR_ENGINE_LOG = "off";
-  // 闸门关着（文件不存在）：本文件测的是流的形状，鉴权面在 server-routes.test.ts 那套里测
-  process.env.TUTOR_API_KEYS_FILE = join(root, "no-such-keys.json");
 
   // 必须早于 import server：provider 在构造时就把 fetch 绑成了实例字段
   vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("测试环境不出网"); }));
@@ -101,7 +99,6 @@ afterAll(async () => {
   delete process.env.TUTOR_LLM_SETTINGS_FILE;
   delete process.env.TUTOR_LLM_LOG;
   delete process.env.TUTOR_ENGINE_LOG;
-  delete process.env.TUTOR_API_KEYS_FILE;
   rmSync(root, { recursive: true, force: true });
 });
 

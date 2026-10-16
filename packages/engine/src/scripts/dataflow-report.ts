@@ -9,17 +9,17 @@ import type { JournalEvent } from "@codebase-tutor/shared";
   回答一个问题：**这台机器把哪些代码交给了谁**。两条线各答一半，靠 `traceId + scene` 关联：
   - `<仓>/.tutor/journal.jsonl` 的 `code_egress`（哪些文件、哪几行、多少字符、指纹、隐去过几处）
     与 `file_read`（工具循环读到的内容在下一轮出门，同样算出境，带 `对端仓/` 前缀的就是跨仓）；
-  - `~/.codebase-tutor/llm.log`（provider、model、token、调用方 `actor`、载荷指纹）。
+  - `~/.codebase-tutor/llm.log`（provider、model、token、载荷指纹；`actor` 这列新行恒 null，§64）。
 
   两条口径必须说在前面，否则这张表会骗人：
   1. **后台任务（导入期的 L1 摘要、监听触发的重分析）没有 traceId**，两条线都记 null，
      所以那部分调用**不能按仓归属**——本仓的文件清单来自 journal（逐文件准确），
-     而那批调用的 provider/token 只能给全局数。要按人算账就配上 API key（见 §44 的 `actor`）。
+     而那批调用的 provider/token 只能给全局数。（按人对账那档随认证闸一起撤了，§64。）
   2. **只有装进请求的源码原文才落清单**。推荐入口、课程树润色、意图/动作分类这些 scene 送的是
      派生产物（路径、标题、摘要），按设计没有 `code_egress` 行；报表末尾把它们列出来，
      「没有清单」与「漏了清单」是两件事，得让人分得清。
 
-  用法：pnpm dataflow:report -- <被学习仓路径> [--since 2026-10-01] [--limit 20] [--actor <key 名>] [--json]
+  用法：pnpm dataflow:report -- <被学习仓路径> [--since 2026-10-01] [--limit 20] [--json]
   */
 
 interface EgressRow {
@@ -168,7 +168,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const repoPath = args.find((arg) => !arg.startsWith("--"));
   if (!repoPath) {
-    console.error("用法：tsx src/scripts/dataflow-report.ts <被学习仓路径> [--since 2026-10-01] [--limit 20] [--actor <key 名>] [--json]");
+    console.error("用法：tsx src/scripts/dataflow-report.ts <被学习仓路径> [--since 2026-10-01] [--limit 20] [--json]");
     process.exit(2);
   }
   const take = (flag: string): string | undefined => {
@@ -176,7 +176,6 @@ function main(): void {
     return index >= 0 ? args[index + 1] : undefined;
   };
   const since = take("--since");
-  const actorFilter = take("--actor");
   const limit = Number(take("--limit") ?? 20) || 20;
   const asJson = args.includes("--json");
 
@@ -190,27 +189,23 @@ function main(): void {
   const allLlm = loadLlmRows(since);
   const attributable = allLlm.filter((row) => row.traceId && traceIds.has(row.traceId));
   const background = allLlm.filter((row) => !row.traceId);
-  const scoped = actorFilter ? attributable.filter((row) => row.actor === actorFilter) : attributable;
+  const scoped = attributable;
   /**
-    窗口与调用方**同时**掐清单。以前 `--since` 只过滤 `llm.log`，文件清单和「源码出境 N 段」
-    永远是全时全人的数，却印在写着「样本窗口」的那一行上——那是把假数报成真数。
-    journal 行没有调用方字段，按人筛只能靠 traceId 归属；
-    没有 traceId 的行（后台导入那批）在 `--actor` 下会掉出去，掉多少如实写在表头。
+    窗口要**同时**掐清单。以前 `--since` 只过滤 `llm.log`，文件清单和「源码出境 N 段」
+    永远是全时的数，却印在写着「样本窗口」的那一行上——那是把假数报成真数。
+    （`--actor` 那一档随认证闸一起删了：新行的 `actor` 恒 null，留着就是一格永远为空的读数，§64。）
     */
-  const scopedTraces = new Set(scoped.map((row) => row.traceId).filter((traceId): traceId is string => Boolean(traceId)));
-  const rows = allRows.filter((row) => (!since || row.at >= since) && (!actorFilter || (row.traceId !== null && scopedTraces.has(row.traceId))));
-  const rowsDroppedByActor = actorFilter ? allRows.filter((row) => (!since || row.at >= since) && !row.traceId).length : 0;
+  const rows = allRows.filter((row) => !since || row.at >= since);
 
   const files = [...byFile(rows).values()].sort((a, b) => b.hits - a.hits || b.totalChars - a.totalChars || a.path.localeCompare(b.path));
-  const providers = new Map<string, { calls: number; input: number; output: number; cache: number; actors: Set<string> }>();
+  const providers = new Map<string, { calls: number; input: number; output: number; cache: number }>();
   for (const row of scoped) {
     const key = `${row.provider} · ${row.model}`;
-    const bucket = providers.get(key) ?? { calls: 0, input: 0, output: 0, cache: 0, actors: new Set<string>() };
+    const bucket = providers.get(key) ?? { calls: 0, input: 0, output: 0, cache: 0 };
     bucket.calls += 1;
     bucket.input += row.inputTokens ?? 0;
     bucket.output += row.outputTokens ?? 0;
     bucket.cache += row.cacheHitTokens ?? 0;
-    bucket.actors.add(row.actor ?? "（本机·未认证）");
     providers.set(key, bucket);
   }
   const scenesWithCalls = new Set(scoped.map((row) => row.scene));
@@ -233,15 +228,14 @@ function main(): void {
       byFile: files,
       // 逐段清单（不带 --limit）：机检与「拿一段去重跑装配比哈希」的核对都用它
       segments: rows,
-      calls: { attributable: scoped.length, providers: [...providers.entries()].map(([name, value]) => ({ name, ...value, input: value.input, actors: [...value.actors] })), backgroundUnattributed: background.length },
+      calls: { attributable: scoped.length, providers: [...providers.entries()].map(([name, value]) => ({ name, ...value })), backgroundUnattributed: background.length },
       scenesWithoutInventory: noInventory
     }, (_key, value) => (value instanceof Set ? [...value] : value), 2));
     return;
   }
 
   console.log(`数据流审计 · ${repoPath}`);
-  console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""}${actorFilter ? ` · --actor ${actorFilter}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
-  if (actorFilter) console.log(`   （按人筛：清单只留 traceId 能归到这张 key 的段；${rowsDroppedByActor} 段属于不带 traceId 的后台任务，归不了人，已排除。）`);
+  console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
   console.log(`源码出境 ${num(rows.length)} 段，覆盖 ${num(files.length)} 个文件；` + (maskedTotal
     ? `其中 ${maskedTotal} 处疑似密钥在发出前被隐去。`
     : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段那一路压根没过这道筛——登记时没带「隐去」读数，不等于扫过且干净）` : ""}。\n`));
@@ -249,7 +243,7 @@ function main(): void {
   console.log("── 出境去向（按 provider · 只算能归属到本仓的调用）");
   if (!providers.size) console.log(`   （这个窗口里没有可归属的模型调用。${llmLogPath() && existsSync(llmLogPath() ?? "") ? "后台任务的调用不带 traceId，见下方说明。" : `llm.log 不存在或为空：${llmLogPath() ?? "未配落盘"}——去向表无从算起，这不等于「没有调用」。`}）`);
   for (const [name, bucket] of [...providers.entries()].sort((a, b) => b[1].calls - a[1].calls)) {
-    console.log(`   ${clip(name, 46).padEnd(46)} 调用 ${String(bucket.calls).padStart(4)} 次 · 输入 ${num(bucket.input)}（命中 ${num(bucket.cache)}）· 输出 ${num(bucket.output)} · 调用方 ${[...bucket.actors].join("、")}`);
+    console.log(`   ${clip(name, 46).padEnd(46)} 调用 ${String(bucket.calls).padStart(4)} 次 · 输入 ${num(bucket.input)}（命中 ${num(bucket.cache)}）· 输出 ${num(bucket.output)}`);
   }
 
   console.log("\n── 被看过的文件（Top " + Math.min(limit, files.length) + "，次数＝出境段数）");

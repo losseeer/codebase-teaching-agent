@@ -1176,8 +1176,8 @@ export interface EngineTraceEvent {
   /** 关联键：同一请求产生的 http / llm / journal 事件共享它；后台任务为 null。 */
   traceId: string | null;
   /**
-    调用方身份（API key 的名字）。不是从 HTTP 进来的动作（后台任务）没有身份，为 null。
-    与 `llm.log` 的同名字段同源，所以「谁发起了哪些请求 → 谁花了哪些 token」可以直接按这个字段对账。
+    调用方身份（API key 的名字）：**认证闸撤了之后新行恒 null**（2026-10-15，§64），历史行里有值。
+    字段保留只为两份日志线（`llm.log` 与本文件）的列形状一致，别再按它做按人对账。
     */
   actor?: string | null;
   durationMs?: number | null;

@@ -27,11 +27,10 @@ import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summar
 import { summarizeFiles } from "./summarizer/summarizer.js";
 import { LATEST_SUMMARY_LIMIT, TutorDatabase } from "./store/database.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
-import { allowsRepository, authenticate, authStateOf, ensureLocalKey, hasWildcard, loadApiKeys, presentedKey, stillIssued, type AuthResult, type AuthState } from "./security/api-keys.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
 import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
-import { markActor, markThread, runWithTrace } from "./trace/context.js";
+import { markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn, beginTurn, type TurnHandle, type TurnScene } from "./turns/registry.js";
 import { dedupeFileReads, pathReadBlock } from "./source/read-file.js";
@@ -85,66 +84,14 @@ tboot("cors registered");
 app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
 
 /**
-  来源闸：不可信的 `Origin` 当场拒掉，**不执行**任何 handler——光靠不给 CORS 头只是让浏览器读不到响应，
-  服务端该做的事还是做了（对 GET 是白干活，对写类路由是已经把状态改了）。
-  预检交给 CORS 插件（它不给非可信来源回头，实际请求就到不了这儿）；`/api/health` 豁免：
-  进程管理器与监控页只问活没活，不该为它配来源。
-  顺序在认证钩子**之前**：来源不可信时连「这张 key 行不行」都不必问，也就不给探测者区分
-  「有口令」与「口令不对」这一格读数。
-  */
-app.addHook("onRequest", async (request, reply) => {
-  const origin = request.headers.origin;
-  if (!origin || request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
-  if (isTrustedOrigin(origin)) return;
-  return reply.code(403).send({ error: `来源「${origin}」不在可信清单里：引擎默认只服务本机浏览器（回环来源）。跨来源部署请用 TUTOR_ALLOWED_ORIGINS 把这个来源加进清单。`, reason: "origin_not_trusted" });
-});
-
-/**
-  认证与按仓授权（企业形态的第一道闸；key 的三条口径——没配 key = 没闸、坏文件 = fail-closed、
-  按仓名单——判据都在 `security/api-keys.ts`，这里不重述）。
-
-  - 豁免两条：`/api/health`（进程管理器只问活没活，不该为它发 key）、
-    `OPTIONS` 预检（按 CORS 规范预检不带凭据，拦它等于让 GUI 所有写请求一起瘫）。
-  - **按仓 ACL 就放在 `onRequest`**：`request.params` 在路由阶段就已填好
-    （fastify 的 `lib/route.js` 里 `new Request(id, params, …)` 早于 onRequest 链），
-    所以不在名单里的仓连懒挂载都不会发生——不读它的 `.tutor`、不开它的 fs 监听。
-  - 越权回 **403 而不是 404**：这是自托管的学习工具，不是多租户公共服务，
-    「这张 key 没有这个仓」是用户能自己处置的读数；伪装成不存在只会挡住配 key 的那个人。
-  - 口令文件坏掉按 fail-closed 走 503，判据与理由见下方钩子与 `api-keys.ts` 的 `AuthState`。
-  - URL 里没有 `:repositoryId` 的路由在各自 handler 里补判，口径仍只有一处（`granted` / `grantedTo`）：
-    会话与线程按 id 定位到所属仓后判（越权 403）；`/api/imports/:jobId` 判的是**任务自己带的归属**
-    （`targetOf(job)`——id 还没算出来时按路径算同一个，算不出就只给不受限的 key）。
-  - 「停止生成」按**归属**判而不是按仓：那一轮由哪张 key 发起的，只有它停得了（`turn_not_owned`）。
-  */
-declare module "fastify" {
-  interface FastifyRequest {
-    /** 认证通过后的身份；预检请求，以及没配发的测试进程（闸门 `off`）恒为 undefined。 */
-    auth?: AuthResult;
-  }
-}
-
-const AUTH_EXEMPT_PATHS = new Set(["/api/health"]);
-
-/**
-  闸门状态入账：开机报一次，运行期**只在状态变化时**再报。
-  坏文件期间每个请求都 503，逐条记会把 engine.jsonl 淹掉；但「闸从哪一刻开始拦所有人」必须有一条查得着的线。
-  */
-let gateAnnounced: AuthState | undefined;
-function announceGate(state: AuthState, keys = 0): void {
-  if (gateAnnounced === state) return;
-  gateAnnounced = state;
-  traceEngine(state === "broken" ? "degrade" : "boot", { what: "auth_gate", state, keys }, { traceId: null });
-}
-
-/**
   来源闸：不可信的 `Origin` 当场 403，**handler 一行都不执行**。
   光靠 CORS 不给回头只挡住「浏览器读到响应」，服务端该干的活照样干了（写类路由会把状态改掉）；
   这一道把它挪到执行之前。预检交给 CORS 插件——非可信来源拿不到回头的预检响应，实际请求根本到不了这儿。
-  顺序刻意在认证钩子**之前**：来源都不信了，不必再回答「有没有口令、口令对不对」，
-  免得给探测者一格免费的可信度读数。
-  ⚠️ 这一道**不豁免 `/api/health`**：那条路由免的是**认证**（进程管理器只问活没活，它们不带 Origin，
-  照样走得通），不是免来源。健康读数里有服务商、模型名、沙箱闸门状态——那是给下一步攻击踩点用的，
-  别让任意网页白拿。
+  ⚠️ 这一道**不豁免 `/api/health`**：健康读数里有服务商、模型名与沙箱闸门状态——那是给下一步攻击踩点用的，
+  别让任意网页白拿。（2026-10-15 之前这里有两条同义钩子，一条豁免 health、一条不豁免，
+  实际生效的是「不豁免」那条而文案来自另一条——同一条判据抄两遍迟早分叉，现收成一处。）
+  认证闸（API key / 按仓 ACL）同日整体撤除，理由与保留边界见开发日志 §64；
+  这一道只管「浏览器里哪个页面能碰这台引擎」，**本机进程不在它的管辖范围内**。
   */
 app.addHook("onRequest", async (request, reply) => {
   const origin = request.headers.origin;
@@ -152,60 +99,8 @@ app.addHook("onRequest", async (request, reply) => {
   return reply.code(403).send({ error: `来源「${origin}」不在可信清单里：引擎默认只服务本机浏览器（回环来源）。跨来源部署请把该来源写进 TUTOR_ALLOWED_ORIGINS。`, reason: "origin_not_trusted" });
 });
 
-app.addHook("onRequest", async (request, reply) => {
-  const state = authStateOf();
-  // `broken` 走的是 fail-closed：口令文件在场却读不出来（JSON 编辑到一半、权限被改、写了 key 却全是短 key），
-  // 一律按「闸是关着的、谁都不放行」处理，而不是退回免鉴权。这条路上除了健康检查全是 503，
-  // 因为把闸静默打开等于把地址簿里所有仓的源码对任何本机进程摊开——修文件是几秒钟的事，泄出去收不回来。
-  if (state === "off") return; // 真实监听的进程到不了这一档（开机先 `ensureLocalKey()` 再 listen）；走到这里说明配发没跑成，开机那行已经在喊了
-  if (request.method === "OPTIONS" || AUTH_EXEMPT_PATHS.has(request.url.split("?")[0] ?? request.url)) return;
-  if (state === "broken") {
-    announceGate("broken");
-    return reply.code(503).send({ error: `口令文件（${process.env.TUTOR_API_KEYS_FILE ?? "~/.codebase-tutor/api-keys.json"}）读不出来：闸门按「拒绝全部」处理，请修好这份文件。`, reason: "auth_store_unreadable" });
-  }
-  const auth = authenticate(presentedKey(request.headers["x-api-key"], request.headers.authorization));
-  if (!auth) return reply.code(401).send({ error: "缺少或无效的 API key：请求头带 x-api-key 或 Authorization: Bearer <key>。", reason: "unauthorized" });
-  request.auth = auth;
-  markActor(auth.name);
-  const repositoryId = (request.params as { repositoryId?: unknown }).repositoryId;
-  if (typeof repositoryId === "string" && !allowsRepository(auth, repositoryId)) {
-    return reply.code(403).send({ error: `这张 key（${auth.name}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
-  }
-});
-
-/**
-  不受限的 key（名单是 `*`，或闸门没开 = 没有身份）。
-  三件事都归它，而且是同一个理由——**这些能力的效果落在所有仓之外**：
-  - 导入：读任意磁盘路径、造出一个此前无从授权的仓 id；
-  - 改 LLM 设置：`baseUrl`/`apiKey` 是**全局**的，受限 key 把它一改，别人这一轮发的源码就出境到了新端点；
-  - 收无归属的推送帧：算不出属于哪个仓的那一帧，发给谁都是赌。
-  */
-function unrestricted(request: FastifyRequest): boolean {
-  return !request.auth || hasWildcard(request.auth);
-}
-
-/** 授权判定：本机模式（无身份）放行；有身份时按这张 key 的 `repositories` 名单。 */
-function permittedBy(auth: AuthResult | undefined, repositoryId: string): boolean {
-  return !auth || allowsRepository(auth, repositoryId);
-}
-
-function granted(request: FastifyRequest, repositoryId: string | undefined): boolean {
-  return !repositoryId || permittedBy(request.auth, repositoryId);
-}
-
-/**
-  越权就回 403，否则回 undefined 让调用方继续。给「URL 里没有 `:repositoryId`」的路由用
-  （会话 / 线程是按 id 自己定位到仓的，onRequest 那道按名判的钩子够不到它们）。
-  错误体与钩子那条同形状：GUI 只需要认 `reason: "repository_not_granted"` 一个口径。
-  */
-function forbidden(request: FastifyRequest, reply: FastifyReply, repositoryId: string | undefined) {
-  if (granted(request, repositoryId)) return undefined;
-  return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）没有仓库「${repositoryId}」的访问权。`, reason: "repository_not_granted" });
-}
-
 app.addHook("onResponse", (request, reply, done) => {
-  // actor 显式取自请求（钩子链之外能否继承 AsyncLocalStorage 是实现细节，身份不能靠运气）
-  traceEngine("http", { method: request.method, url: request.url, status: reply.statusCode }, { traceId: request.id, actor: request.auth?.name ?? null, durationMs: Math.round(reply.elapsedTime) });
+  traceEngine("http", { method: request.method, url: request.url, status: reply.statusCode }, { traceId: request.id, durationMs: Math.round(reply.elapsedTime) });
   done();
 });
 tboot("Fastify constructed");
@@ -248,15 +143,10 @@ const teachingStates = new Map<string, TutorSession>();
   09-27 起真源是这两张表，journal 重放（旧 harness/restore.ts）退役：审计线继续按自己的口径记截断摘要，
   但「接着聊」不该依赖审计摘要的 2000 字截断。
   */
-function resolveTeachingState(sessionId: string, auth?: AuthResult): TutorSession | undefined {
+function resolveTeachingState(sessionId: string): TutorSession | undefined {
   const live = teachingStates.get(sessionId);
-  // 内存命中也要过同一道名单：缓存里躺着的可能正是别人的会话（上一回合由另一张 key 装配进来），
-  // 直接返回就等于绕过了下面那句「先看名单再开库」。
-  if (live && permittedBy(auth, live.repositoryId)) return live;
+  if (live) return live;
   for (const repository of importer.mountedRepositories()) {
-    // 授权判定在 IO 之前：不这样排，一张只授权 A 仓的 key 拿别人的 sessionId 来试，
-    // 就能依次打开每个仓的 chat_session 并把命中与否从 403/404 的差异里读出来（存在性 oracle）。
-    if (!permittedBy(auth, repository.index.repositoryId)) continue;
     const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
     if (restored) {
       teachingStates.set(restored.id, restored);
@@ -307,37 +197,16 @@ const subscribers = new Set<{ send: (event: ServerEvent) => void; request: Fasti
 /** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
 const EVENT_STREAM_PING_MS = 25_000;
 
-/** 这一帧/这个任务归哪个仓：job 刚建出来时 id 还没算，回落用路径算同一个 id。
-    用 `catalogRepositoryId` 而不是 `repositoryId`：目录被挪走时后者会抛，而这里是 `broadcast` 的同步链。 */
-function targetOf(payload: { repositoryId?: unknown; repositoryPath?: unknown }): string | undefined {
-  return typeof payload.repositoryId === "string" ? payload.repositoryId
-    : typeof payload.repositoryPath === "string" ? catalogRepositoryId(payload.repositoryPath) : undefined;
-}
-
-/** 归属算不出来时的门槛：只给不受限的 key（与「它能不能开导入」是同一条线）。 */
-function grantedTo(request: FastifyRequest, target: string | undefined): boolean {
-  return target ? granted(request, target) : unrestricted(request);
-}
-
-/**
-  这一帧能不能发给这个连接。
-  被拦下的事故很具体：`import.progress` 的载荷是整个 job，里面带着目标仓的**绝对路径**；
-  `repository.updated` 带着**被改动的文件名**。HTTP 侧每个 `:repositoryId` 都过了 `granted`，
-  这条长连接要是整条广播出去，受限 key 就从推送里读到了名单外仓的存在与结构。
-  */
-function visibleTo(request: FastifyRequest, event: ServerEvent): boolean {
-  return grantedTo(request, targetOf(event.payload));
-}
-
 /**
   广播：某一路订阅者写不进去（它的连接刚被掐掉）是它自己那一路的事，摘掉就好。
   这里必须兜住异常——`broadcast` 挂在 `importer.emit("event")` 的**同步链**上，
   一路死订阅者抛出的 write 异常会一路冒到 `ImportService.run` 的 catch，把一次已经算完的导入判成 failed。
   删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
+  ⚠️ 帧**不按归属过滤**：认证闸撤了之后没有「谁的名单」这个东西可过滤（§64）。
+  载荷里带着目标仓的绝对路径与改动文件名，所以这条长连接的可见面等于本机的可见面。
   */
 function broadcast(event: ServerEvent): void {
   for (const client of subscribers) {
-    if (!visibleTo(client.request, event)) continue;
     try {
       client.send(event);
     } catch {
@@ -397,7 +266,7 @@ function replayTypewriter(send: (event: unknown) => void, text: string): void {
 */
 function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: unknown) => void; turnHandle: TurnHandle } {
   reply.hijack();
-  return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene, request.auth?.name) };
+  return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene) };
 }
 
 /**
@@ -445,8 +314,8 @@ app.addHook("preHandler", async (request, reply) => {
   return reply.code(404).send({ error: result.message, reason: result.reason });
 });
 
-/** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。有身份时只列这张 key 有权的仓——名单外的一条都不出现。 */
-app.get("/api/repositories", async (request) => ({ repositories: importer.catalog().filter((entry) => granted(request, entry.repositoryId)) }));
+/** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。 */
+app.get("/api/repositories", async () => ({ repositories: importer.catalog() }));
 
 /** 显式挂载一个仓库并回报新鲜度：GUI 切换仓库时调它，好把「这是三天前的分析」说在打开之前。 */
 app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/mount", async (request, reply) => {
@@ -526,14 +395,13 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
     挂载会占 LRU 名额（可能把当前仓挤出去），但当前这一回合握的是内存引用，不受影响。
   - **守卫不另起一套**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
     在对端仓上一样成立——这一条是这套能力唯一的安全边界。
-  - **按仓 ACL 同样管这里**：名单外的对端连名字都不出现在工具提示里（`auth` 由路由把请求上的身份传进来）。
-    少了这一道，「A 仓的对话把没授权的 B 仓源码读进 prompt」就是一个绕过闸门的现成通道。
+  - **边界只有一层，就是仓内边界**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
+    在对端仓上一样成立。地址簿里有的仓就对模型全部可见（认证闸撤了之后没有「名单外」这一档，§64）。
   */
-function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>, auth: AuthResult | undefined): CrossRepoContext | undefined {
+function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>): CrossRepoContext | undefined {
   const targets = new Map<string, { id: string; path: string }>();
   for (const entry of importer.catalog()) {
     if (entry.repositoryId === repository.index.repositoryId || !entry.exists) continue;
-    if (!permittedBy(auth, entry.repositoryId)) continue;
     // 两个仓可能同名（都叫 backend）：撞名就给 id 前缀，否则模型报了名字我们不知道选哪个
     const name = targets.has(entry.name) ? `${entry.name}#${entry.repositoryId.slice(0, 6)}` : entry.name;
     targets.set(name, { id: entry.repositoryId, path: entry.repositoryPath });
@@ -643,10 +511,6 @@ importer.on("event", broadcast);
 
 app.get("/api/health", async () => {
   const llm = teachingProviderStatus(teachingProvider);
-  // 三档如实报：`api-key` = 闸开着（本机默认形态：开机配发一张口令）；`off` = 闸门没配上，
-  // 真实监听的进程不该走到这里，走到了就是配发没跑成、界面与进程管理器都得看得见；
-  // `broken` = 文件在但读不出来或配不出来，此时引擎按「拒绝全部」处理。
-  const gate = authStateOf();
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
     // 摘要档由真源工厂报出：直接读 TUTOR_SUMMARY_PROVIDER 会把「没设环境变量 = 走轻量档」说成 "local"，
@@ -654,7 +518,6 @@ app.get("/api/health", async () => {
     summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
-    auth: gate === "on" ? "api-key" : gate,
     // 沙箱闸门状态原样给出（含逐项 canary 读数）：代码题能不能出，看这一格，不看界面自己猜
     sandbox: isolationStatus()
   };
@@ -691,19 +554,13 @@ function llmSettingsPayload(): Record<string, unknown> {
 
 /**
   GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明）。
-  这一份配置是**全局**的（服务商/端点/密钥影响每一次出境），所以只给不受限的 key；
-  受限 key 拿到它没有用处，但它是「别人这一轮的源码发去哪儿」的读数——共享部署下这算管理面。
+  这一份配置是**全局**的（服务商/端点/密钥影响每一次出境），所以它是管理面——
+  认证闸撤了之后，「谁能改端点」这件事完全落在来源闸与本机文件权限上（§64）。
   */
-app.get("/api/llm/settings", async (request, reply) => {
-  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，模型配置由不受限的 key 管理。`, reason: "settings_not_granted" });
-  return llmSettingsPayload();
-});
+app.get("/api/llm/settings", async () => llmSettingsPayload());
 
 /** GUI 运行时 LLM 设置：更新服务商/模型/端点/密钥/思考档位/单价，立即重建 provider 并落盘（留空 = 回落 .env） */
 app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string } }>("/api/llm/settings", async (request, reply) => {
-  // 写在读之前同一道闸：`baseUrl` 一改，**所有人**接下来那一轮的源码就出境到新端点了。
-  // 按仓授权天然表达不了这个能力，所以它不属于任何单仓 key（口径见 `unrestricted`）。
-  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，改不了全局模型配置：改端点等于替别人的回合决定源码发到哪儿。`, reason: "settings_not_granted" });
   const body = request.body ?? {};
   if (body.thinking !== undefined && !(THINKING_EFFORTS as readonly string[]).includes(body.thinking)) {
     return reply.code(422).send({ error: `thinking 只支持 ${THINKING_EFFORTS.join(" / ")}` });
@@ -780,17 +637,6 @@ app.get("/api/events", async (request, reply) => {
   // 心跳：这条例外是「订阅之后可能永远没有第一个事件」——没人导入、没人改仓时连接整天空着。
   // 注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前就从写入失败里察觉连接已死。
   const ping = setInterval(() => {
-    // 心跳顺带办第二件事：**撤掉的 key 不能靠已建起来的连接继续收帧**。
-    // 长连接只在建立时认证过一次，口令按 mtime 热更新（改了文件就立刻生效）——
-    // 没有这一条，「把这张 key 收回」对已经打开的界面是完全无效的，直到用户自己刷新。
-    // 名字是唯一还能对上的东西（连接里不留口令明文），所以按名字判。
-    const name = request.auth?.name;
-    if (name && !stillIssued(name)) {
-      clearInterval(ping);
-      subscribers.delete(client);
-      if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.end();
-      return;
-    }
     sseFrame(reply, ": ping\n\n");
   }, EVENT_STREAM_PING_MS);
   reply.raw.on("close", () => {
@@ -800,8 +646,6 @@ app.get("/api/events", async (request, reply) => {
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
-  // 导入的授权时机早于它自己造出的仓 id，所以受限 key 一律不开这个口子（口径见 `unrestricted`）
-  if (!unrestricted(request)) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）限定了具体仓库，不能导入新仓：导入会读任意磁盘路径，事先无从授权。`, reason: "import_not_granted" });
   try { return reply.code(202).send(importer.submit(request.body?.path ?? "", typeof request.body?.summaryHeaderComments === "boolean" ? request.body.summaryHeaderComments : undefined)); }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "无法提交导入任务" }); }
 });
@@ -809,8 +653,6 @@ app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imp
 app.get<{ Params: { jobId: string } }>("/api/imports/:jobId", async (request, reply) => {
   const job = importer.getJob(request.params.jobId);
   if (!job) return reply.code(404).send({ error: "导入任务不存在" });
-  // 任务体带着目标仓的绝对路径与逐阶段文案——导入本身只由不受限的 key 发起，查询也按同一道门槛收
-  if (!grantedTo(request, targetOf(job))) return reply.code(403).send({ error: `这张 key（${request.auth?.name ?? ""}）没有这个导入任务所属仓库的访问权。`, reason: "repository_not_granted" });
   return job;
 });
 
@@ -1180,7 +1022,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const node = request.body?.nodeId ? flatten(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   try {
     const crossFiles = new Map<string, number>();
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles, request.auth), threadId: turn.threadId });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -1192,13 +1034,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     为什么单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动/刷新页面——
     后者引擎必须把这一轮**算完并落库**，用户回来才有账可补（见 turns/registry.ts）。
     未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。
-    这一轮是别人的 = 回 403：它能掐掉他人正在烧的 token，共享部署下不能谁有 key 都能按。 */
+    认证闸撤了之后**这台机器上谁都能停任何回合**（原来按 key 归属判的那道 403 一起没了，§64）。 */
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
-  const stopped = abortTurn(request.body?.turnId, request.auth?.name);
+  const stopped = abortTurn(request.body?.turnId);
   if (!stopped.aborted) {
-    if (stopped.reason === "forbidden") {
-      return reply.code(403).send({ stopped: false, error: `这一轮（${stopped.scene}）不是这张 key 发起的，停不了。`, reason: "turn_not_owned" });
-    }
     return reply.code(404).send({ stopped: false });
   }
   traceEngine("turn_stop", { scene: stopped.scene, turn_id: stopped.turnId, waited_ms: stopped.waitedMs });
@@ -1224,7 +1063,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository, crossFiles, request.auth),
+      cross: crossRepoFor(repository, crossFiles),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
@@ -1396,10 +1235,6 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
 });
 
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
-  // 这几条会话/线程路由的 URL 里没有 `:repositoryId`，onRequest 与懒挂载两道钩子都覆盖不到，
-  // 所以按钩子同一口径先判授权，再自己挂一次
-  const denied = forbidden(request, reply, request.body?.repositoryId);
-  if (denied) return denied;
   const mounted = importer.ensureMounted(request.body?.repositoryId ?? "");
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
@@ -1423,9 +1258,7 @@ app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Part
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
-  const session = resolveTeachingState(request.params.sessionId, request.auth);
-  const denied = forbidden(request, reply, session?.repositoryId);
-  if (denied) return denied;
+  const session = resolveTeachingState(request.params.sessionId);
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
@@ -1452,16 +1285,13 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   ⚠️ 这里**刻意不挂回该仓**：三条路由要的只是库路径与仓 id（id 就写在线程行上），
   挂回来反而会把「产物读不动」误报成「会话没了」，还为一次读历史付一趟挂载的代价。
   */
-function locateThread(threadId: string, auth?: AuthResult): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
-  // 与 `resolveTeachingState` 同一口径：**先看名单再开库**，越权的探测不该在磁盘上留下「开过哪个仓」的痕迹，
-  // 也不该从 403/404 的差异里回读出「这个线程 id 属于你家某个仓」。
+function locateThread(threadId: string): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
   for (const repository of importer.mountedRepositories()) {
-    if (!permittedBy(auth, repository.index.repositoryId)) continue;
     const thread = getThread(repository.path, threadId);
     if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
   }
   for (const entry of importer.catalog()) {
-    if (entry.mounted || !entry.exists || !permittedBy(auth, entry.repositoryId)) continue;
+    if (entry.mounted || !entry.exists) continue;
     const thread = getThread(entry.repositoryPath, threadId);
     if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
   }
@@ -1496,17 +1326,13 @@ app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; nodeId?: u
 
 /** 线程正文（产品线）：GUI 刷新或引擎重启后按 threadId 取回对话展示。软删线程一律 404（读侧恒带 `deleted_at IS NULL`）。 */
 app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
-  const located = locateThread(request.params.threadId, request.auth);
-  const denied = forbidden(request, reply, located?.repositoryId);
-  if (denied) return denied;
+  const located = locateThread(request.params.threadId);
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
   return { thread: located.thread, messages: readMessages(located.repositoryPath, located.thread.id) };
 });
 
 app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/threads/:threadId", async (request, reply) => {
-  const located = locateThread(request.params.threadId, request.auth);
-  const denied = forbidden(request, reply, located?.repositoryId);
-  if (denied) return denied;
+  const located = locateThread(request.params.threadId);
   if (!located) return reply.code(404).send({ error: "会话不存在或已删除。" });
   const title = typeof request.body?.title === "string" ? request.body.title : "";
   if (!title.trim()) return reply.code(400).send({ error: "标题不能为空" });
@@ -1519,9 +1345,7 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
   同时从内存 Map 摘掉教学会话——否则删掉的会话还能被同进程继续聊，重启后又消失，行为会分成两段。
   */
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
-  const located = locateThread(request.params.threadId, request.auth);
-  const denied = forbidden(request, reply, located?.repositoryId);
-  if (denied) return denied;
+  const located = locateThread(request.params.threadId);
   if (!located || !softDeleteThread(located.repositoryPath, located.thread.id)) return reply.code(404).send({ error: "会话不存在或已删除。" });
   teachingStates.delete(located.thread.id);
   new Journal(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
@@ -1529,10 +1353,7 @@ app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (re
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
-  const current = resolveTeachingState(request.params.sessionId, request.auth);
-  // 判在 markThread 与任何 LLM 调用之前：越权的一回合 token 都不该烧出去
-  const denied = forbidden(request, reply, current?.repositoryId);
-  if (denied) return denied;
+  const current = resolveTeachingState(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
   // 教学侧的 sessionId 就是 chat_session 的线程 id（一个 id 三个名字），llm.log 直接沿用它做线程聚合
   markThread(current.id);
@@ -1564,7 +1385,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     const outcome = await respondWithProvider(session, node, request.body.content.trim(), provider, faded, repository.path, {
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository, crossFiles, request.auth),
+      cross: crossRepoFor(repository, crossFiles),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -1668,23 +1489,10 @@ function chunk(content: string, width: number): string[] { return content.match(
 // 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。
 const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
-  /**
-    口令配发必须**在开监听之前**：钩子按文件状态判闸，listen 之后到配发之间那几毫秒闸门还是 `off`，
-    任何本机进程都能趁这道门缝读走地址簿里所有仓的源码。先补闸，再开门。
-    */
-  const issued = ensureLocalKey();
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
-  // 认证闸三档都必须在开机时看得见（口径与理由见 `security/api-keys.ts` 的 `AuthState`，§36.6）。
-  const gate = authStateOf();
-  const keyCount = loadApiKeys().length;
-  const file = issued.file; // 报实际读到的那份路径（env 覆盖过也不会报错位置对不上）
-  console.log(`[engine] 认证：${gate === "on"
-    ? `已启用（${keyCount} 张 key，${file}${issued.created ? "｜本机口令是首次开机自动配发的，取文件里 keys[0].key 填进界面；值不进日志，文件 0600" : ""}）`
-    : gate === "broken"
-      ? `**口令文件不可用（${file}）——按「拒绝全部」在跑**，除 /api/health 外一律 503：${issued.reason ?? "文件读不出来，请把这份文件修好（配发不会覆盖它）"}`
-      : `**闸门没配上（${file}）——任何本机请求都放行**：真实监听的进程本来不该走到这一档，配发那一步为什么没跑要看上面那条`}`);
-  announceGate(gate, keyCount);
+  // 认证闸已于 2026-10-15 整体撤除（§64）：本机没有「谁在调用」这个概念，只剩来源闸管浏览器那一侧。
+  console.log("[engine] 访问控制：无认证闸（本机任意进程都能调）｜来源闸生效（只信回环与 TUTOR_ALLOWED_ORIGINS，非可信来源 403）");
   /**
     沙箱隔离探测：逐项 canary 要起十来个进程，放后台跑（不拖监听），但结果必须开机就看得见。
     没过的话代码题域整域禁用（2026-10-14 拍板：不降级成「弱隔离照跑」），这条与认证闸、预算闸同一纪律——

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/shared";
 import { logTargetFromEnv } from "../lib.js";
-import { currentActor, currentTraceId } from "./context.js";
+import { currentTraceId } from "./context.js";
 
 /**
   引擎工作日志：记录「引擎这个进程在干活」的事件（请求 / 导入 / 重分析 / 降级 / 启动），
@@ -60,19 +60,19 @@ export function formatEngineTraceLine(event: EngineTraceEvent): string {
 
   traceId 默认取当前请求上下文（`trace/context.ts`）；导入 / 监听刷新等后台任务显式传 null，
   并用 `detail` 里的 `job` 字段自带标识。
-  actor 同理默认取上下文，但 `onResponse` 那条 http 记录显式传请求上的身份——
-  钩子链外能不能继承 AsyncLocalStorage 是实现细节，「谁发的这个请求」不能靠运气。
+  `actor` 现在恒 null：认证闸（API key）已于 2026-10-15 整体撤除（§64），上下文里不再有身份可取。
+  **字段本身保留**——两份 JSONL 的列形状不能变，10-12 到 10-15 之间的历史行里这一列有值。
   */
 export function traceEngine(
   kind: EngineTraceKind,
   detail: Record<string, TraceScalar> = {},
-  options: { traceId?: string | null; actor?: string | null; durationMs?: number; at?: string } = {}
+  options: { traceId?: string | null; durationMs?: number; at?: string } = {}
 ): EngineTraceEvent {
   const event: EngineTraceEvent = {
     at: options.at ?? new Date().toISOString(),
     kind,
     traceId: options.traceId === undefined ? currentTraceId() : options.traceId,
-    actor: options.actor === undefined ? currentActor() : options.actor,
+    actor: null,
     detail
   };
   if (options.durationMs !== undefined) event.durationMs = options.durationMs;

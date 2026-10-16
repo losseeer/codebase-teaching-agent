@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { engineLogPath, flushEngineLog, formatEngineTraceLine, traceEngine } from "./engine-log.js";
-import { markActor, runWithTrace } from "./context.js";
+import { runWithTrace } from "./context.js";
 import type { EngineTraceEvent } from "@codebase-tutor/shared";
 
 /**
@@ -51,15 +51,15 @@ describe("引擎工作日志", () => {
   });
 
   it("请求上下文里的记录带上 traceId 并落盘", async () => {
-    runWithTrace("req-1", () => { markActor("本机全量"); traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached" }); });
+    runWithTrace("req-1", () => traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached" }));
     runWithTrace("req-2", () => traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached" }));
     await flushEngineLog();
-    // actor 与 traceId 同源不同值：第一条有身份，第二条是本机模式（无 key 文件），两条都必须把字段写清楚
+    // 认证闸撤了之后两条都必须把 actor 这列写成 null（列在，值没有——别让它整个消失）
     expect(readLines()).toEqual([{
       at: expect.any(String),
       kind: "degrade",
       traceId: "req-1",
-      actor: "本机全量",
+      actor: null,
       detail: { scope: "teaching", cause: "monthly_budget_reached" }
     }, {
       at: expect.any(String),

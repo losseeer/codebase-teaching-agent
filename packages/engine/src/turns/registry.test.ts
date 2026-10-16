@@ -42,19 +42,10 @@ describe("在途回合注册表", () => {
     first.dispose();
   });
 
-  it("归属：A 发起的回合 B 停不了（共享部署下这是一条能掐掉别人 token 的动作）", () => {
-    const handle = beginTurn(TURN_ID, "teach", "甲的 key");
-    expect(abortTurn(TURN_ID, "乙的 key")).toEqual({ aborted: false, reason: "forbidden", scene: "teach" });
-    // 被别人试过不等于中止：这一轮还在跑，登记也还在
-    expect(handle.signal?.aborted).toBe(false);
-    expect(abortTurn(TURN_ID, "甲的 key")).toMatchObject({ aborted: true, scene: "teach" });
-    expect(handle.signal?.aborted).toBe(true);
-    handle.dispose();
-  });
-
-  it("登记时没有身份就不判归属（后台任务那条路），否则「停止生成」会莫名失效", () => {
+  it("登记不带走任何身份：这台机器上谁都能停任何回合（按 key 归属判的那道随认证闸一起撤，§64）", () => {
     const handle = beginTurn(TURN_ID, "map_chat");
-    expect(abortTurn(TURN_ID, "随便谁")).toMatchObject({ aborted: true, scene: "map_chat" });
+    expect(abortTurn(TURN_ID)).toMatchObject({ aborted: true, scene: "map_chat" });
+    expect(handle.signal?.aborted).toBe(true);
     handle.dispose();
   });
 
