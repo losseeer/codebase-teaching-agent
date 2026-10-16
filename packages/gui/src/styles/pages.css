@@ -127,8 +127,8 @@
 .arch-module.moved::after { content: ""; position: absolute; margin-left: 46px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
 .arch-module-name { font-size: var(--fs-12); font-weight: 650; word-break: break-all; }
 .arch-override-dot { display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
-/* 合并块：名字里已经带几个成员，末尾一枚省略号点出「这一格还能点开」 */
-.arch-module.grouped .arch-module-name::after { content: "…"; color: var(--ink-3); }
+/* 合并块能点开看成员：用三角而不是省略号——名字里「等」已经说了「还有没写全的」，再来一个「…」读起来像标题被截断 */
+.arch-module.grouped .arch-module-name::after { content: " ▾"; color: var(--ink-3); font-size: 9px; }
 /* 合并块点开后的成员：一格里的次级列表，点成员才进节点详情 */
 .arch-cell { display: flex; flex-direction: column; gap: 4px; }
 .arch-members { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 2px; }

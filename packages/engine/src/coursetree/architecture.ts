@@ -383,11 +383,11 @@ interface ArchitectureUnits {
   找不到仍然**不动它**（宁可留在模型判的层里，也不凭空造一层），但不能装作没事——
   2026-10-16 之前这里是一条无声的 `continue`，用户改过几次、下次重判全落空而界面上看不出来。
   */
-function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenLayers: string[]; lost: ArchitectureOverrideLoss[] } {
+function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenUnits: string[]; lost: ArchitectureOverrideLoss[] } {
   const clone = layers.map((layer) => ({ ...layer, moduleIds: [...layer.moduleIds] }));
   // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——**没覆盖层时也要滤**，
   // 否则同一次判层会因为「有没有人工改过」画出不同数量的层，读者会以为层是被人删掉的
-  if (!overrides) return { layers: clone.filter((layer) => layer.moduleIds.length > 0), overriddenLayers: [], lost: [] };
+  if (!overrides) return { layers: clone.filter((layer) => layer.moduleIds.length > 0), overriddenUnits: [], lost: [] };
   const renames = overrides.layerRenames ?? {};
   const lost: ArchitectureOverrideLoss[] = [];
   for (const from of Object.keys(renames)) if (!layers.some((layer) => layer.name === from)) lost.push({ kind: "rename_layer", from });
@@ -398,17 +398,17 @@ function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOver
   const layerOfMember = new Map<string, string>();
   for (const layer of renamed) for (const id of layer.moduleIds) for (const member of units.blocks.get(id) ?? [id]) layerOfMember.set(member, layer.name);
   const names = new Set(renamed.map((layer) => layer.name));
-  const overriddenLayers = renamed.filter((layer) => layer.overridden).map((layer) => layer.id);
+  /** 人工**点名挪过**的成员：只有这些格子该带「动过」的标记，收留它们的那一层不算被改过。 */
+  const movedMembers = new Set<string>();
   for (const [id, target] of Object.entries(overrides.moduleLayer ?? {})) {
     const members = units.blocks.get(id) ?? [id];
     if (!names.has(target) || !members.some((member) => units.members.has(member))) { lost.push({ kind: "move_module", module: id, layer: target }); continue; }
-    for (const member of members) layerOfMember.set(member, target);
-    const layer = renamed.find((candidate) => candidate.name === target);
-    if (layer && !overriddenLayers.includes(layer.id)) overriddenLayers.push(layer.id);
+    for (const member of members) { layerOfMember.set(member, target); movedMembers.add(member); }
   }
   const hostByName = new Map<string, ArchitectureLayer>();
   for (const layer of renamed) if (!hostByName.has(layer.name)) hostByName.set(layer.name, layer);
   const unitsByLayer = new Map<string, string[]>();
+  const overriddenUnits: string[] = [];
   for (const [member, name] of layerOfMember) {
     const host = hostOf.get(member);
     const siblings = host ? units.blocks.get(host)! : [member];
@@ -417,9 +417,10 @@ function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOver
     const list = unitsByLayer.get(name) ?? [];
     if (!list.includes(unit)) list.push(unit);
     unitsByLayer.set(name, list);
+    if (movedMembers.has(member) && !overriddenUnits.includes(unit)) overriddenUnits.push(unit);
   }
   const layersOut = [...hostByName.values()].map((layer) => ({ ...layer, moduleIds: unitsByLayer.get(layer.name) ?? [] }));
-  return { layers: layersOut.filter((layer) => layer.moduleIds.length > 0), overriddenLayers, lost };
+  return { layers: layersOut.filter((layer) => layer.moduleIds.length > 0), overriddenUnits, lost };
 }
 
 
@@ -552,7 +553,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     source: "unavailable",
     unavailableReason: kind,
     reason,
-    overriddenLayers: [],
+    overriddenUnits: [],
     generatedAt: new Date().toISOString(),
     basedOnVersionStamp: analysis.versionStamp,
     blocks: context.briefs,
@@ -571,7 +572,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     // 只认模型判过的那份：老口径里 `source:"static"` 的行装的是 tier 三档，读回来就又变成假架构图
     if (stored && stored.value.layers?.length && stored.value.source === "llm") {
       const layered = applyOverrides(stored.value.layers, overrides, units);
-      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenLayers: layered.overriddenLayers, ...(layered.lost.length ? { lostOverrides: layered.lost } : {}), blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
+      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, ...(layered.lost.length ? { lostOverrides: layered.lost } : {}), blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
     }
   }
   /** 读侧（`allowCall: false`）没缓存行就到此为止：不发请求、不落盘，画布交给不可用卡片。 */
@@ -621,14 +622,15 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
       ...(parsed.droppedFacts ? { reason: "模型额外给了边或文件字段，已丢弃（层归属仍按它判的结果）" } : {}),
       // 旧产物没采过外部包名：那一栏是空的，但**不等于**「这个系统不碰任何外部服务」，得说出来
       ...(externalsMissing && !boundary.rows.length ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {}),
-      overriddenLayers: layered.overriddenLayers,
+      // 落盘这份是模型原判，人工挪过的格子属于「读时现叠」那一层，不进缓存
+      overriddenUnits: [],
       ...(layered.lost.length ? { lostOverrides: layered.lost } : {}),
       generatedAt: new Date().toISOString(),
       basedOnVersionStamp: analysis.versionStamp
     };
     // 模型自己说「边/文件字段被我丢掉了」的那一次不落盘：payload 与产出不同构，留着下次重问才收敛
     if (!parsed.droppedFacts) database?.putLayerCache(key, plan);
-    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
+    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
   } catch (error) {
     return unavailable(context, "call_failed", `分层调用没成功：${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}。没落盘，可以再点一次「判一次分层」。`);
   }

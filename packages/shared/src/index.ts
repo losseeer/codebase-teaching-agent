@@ -239,8 +239,13 @@ export interface ArchitecturePlan {
   reason?: string;
   /** 不可用的哪一种：没判过 / 没配模型 / 输出没采信 / 调用失败。界面靠它决定按钮文案，不靠拆 `reason` 的中文。 */
   unavailableReason?: "not_judged" | "no_model" | "rejected" | "call_failed";
-  /** 人工改过层名的层 id：界面标出来，别让人以为还是模型给的名字。 */
-  overriddenLayers: string[];
+  /**
+    人工**点名挪过层**的那些格子（`layers[].moduleIds` 里出现的那个 id：原子块是模块 id，合并块是 `arch:...`）。
+    界面只给这些格点「动过」的标记。原先这里给的是**层 id**，于是有人往一层挪进一个模块，
+    那一整层的方块就全带上标记——层是收留方，不是被改方（2026-10-16 改）。
+    层名是不是人工改过的，走 `ArchitectureLayer.overridden`，与这一格无关。
+  */
+  overriddenUnits: string[];
   generatedAt: string;
   /** 产物吃的是哪一份课程树/图：与 `versionStamp` 同源，用来如实说明「这是按哪次分析算的」。 */
   basedOnVersionStamp: string;

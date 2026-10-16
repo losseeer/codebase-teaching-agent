@@ -134,7 +134,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
         // 合并块的标题在产物里（像「枚举、文档」）；块被人工拆开或产物比树旧时退回成员名／原 id，不编一个看不出的名字
         title: brief?.title ?? members[0]?.title ?? blockId,
         members,
-        overridden: layer.overridden === true || (plan.overriddenLayers ?? []).includes(layer.id)
+        overridden: plan.overriddenUnits.includes(blockId)
       };
     }));
   }, [plan, nodesById]);
@@ -241,12 +241,13 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
                     const grouped = cell.members.length > 1;
                     // 选中的模块正好在被合起来的那格里时自动展开：从左栏点到哪儿，图上就得看得见那一格
                     const openedCell = openCells.includes(cell.id) || (grouped && cell.members.some((member) => member.node?.id === selectedId));
+                    const note = [grouped ? "这一格合起了几个小模块，点开看成员" : "", cell.overridden ? "这一格的归属是人工改过的，不是模型判的" : ""].filter(Boolean).join("；");
                     return (
                       <div key={cell.id} className="arch-cell">
                         <button
                           type="button"
                           className={`arch-module${grouped ? " grouped" : ""}${cell.overridden ? " moved" : ""}${!grouped && selectedId === cell.id ? " selected" : ""}`}
-                          title={grouped ? "这一格合起了几个小模块，点开看成员" : undefined}
+                          title={note || undefined}
                           onClick={() => (grouped ? toggle(openCells, setOpenCells, cell.id) : pick(cell.members[0]))}
                         >
                           <span className="arch-module-name">{cell.title}</span>

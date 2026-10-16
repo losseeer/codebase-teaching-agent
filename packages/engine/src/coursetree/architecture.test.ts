@@ -66,7 +66,7 @@ describe("generateArchitectureCached", () => {
     expect(plan.edges).toEqual([]);
     // 事实那几格照给：方块清单是算出来的，没模型也照样读得到
     expect(plan.blocks?.map((block) => block.id)).toEqual(["module:src/api", "module:src/core", "module:src/db"]);
-    expect(plan.overriddenLayers).toEqual([]);
+    expect(plan.overriddenUnits).toEqual([]);
   });
 
   it("模型分的层生效，但箭头仍由 import 算：模型给的 edges 一律不被采信", async () => {
@@ -145,7 +145,9 @@ describe("generateArchitectureCached", () => {
     expect(moved.layers.find((layer) => layer.name === "入口层")?.moduleIds).toEqual(["module:src/api"]);
     // 挪进来的那一格按**方块原有顺序**排，不是追加到末尾：顺序只影响读图，不做任何「谁在上谁在下」的宣称
     expect(moved.layers.find((layer) => layer.name === "数据")?.moduleIds).toEqual(["module:src/core", "module:src/db"]);
-    expect(moved.overriddenLayers).toContain("layer-1");
+    expect(moved.overriddenUnits, "标记只落在被点名挪走的那一格：收留它的「数据」层里其余方块没被动过").toEqual(["module:src/core"]);
+    expect(moved.layers.find((layer) => layer.name === "入口层")?.overridden, "改名落在层上").toBe(true);
+    expect(moved.layers.find((layer) => layer.name === "数据")?.overridden, "被挪进东西不等于这层被改过").toBeUndefined();
     // 模型原本把 api+core 放同一层；core 被人工挪到「数据」后 api→core 就成了跨层箭头（新冒出来的一条），
     // 而 core→db 变成同层内部关系，该消失。箭头跟着归属走，这条就是「拖动不花钱」的根据。
     expect(moved.edges).toEqual([{ fromLayer: "layer-1", toLayer: "layer-2", weight: 1, samplePaths: ["src/api.ts → src/core.ts"] }]);
@@ -377,6 +379,7 @@ describe("架构图的方块压缩", () => {
     const all = moved.layers.flatMap((layer) => layer.moduleIds);
     expect(new Set(all).size, "同一个方块不能同时出现在两层").toBe(all.length);
     expect(moved.lostOverrides, "成员 id 是合法修正：目标层在就该落地").toBeUndefined();
+    expect(moved.overriddenUnits, "拆开后的标记只跟着被点名的成员走，兄弟和同层的 tool 都不该亮").toEqual(["module:a/x/two"]);
     // 读两次仍是同一份：拆块发生在读的时候现算，修正不进键、也不会越叠越歪
     const again = await generateArchitectureCached({ ...deepBase, provider, overrides: { moduleLayer: { "module:a/x/two": "底座" } } });
     expect(again.layers).toEqual(moved.layers);
@@ -391,6 +394,7 @@ describe("架构图的方块压缩", () => {
       ["底座", ["arch:a/x:core", "module:a/y/tool"]]
     ]);
     expect(moved.lostOverrides).toBeUndefined();
+    expect(new Set(moved.overriddenUnits), "整块挪走标在块那一格、点名的旁证标在它自己那格；同层没被动过的方块不亮").toEqual(new Set(["arch:a/x:core", "module:z/ghost"]));
   });
 
   it("整块挪走与只挪一个成员同时存在：块解散成单格，谁都不被画两遍", async () => {
@@ -404,6 +408,7 @@ describe("架构图的方块压缩", () => {
       // 原判的「核心」被挪空 ⇒ 整层不占一栏；剩下的成员按原顺序落进各自的新层
       ["底座", ["module:a/x/one", "module:a/x/three", "module:a/y/tool"]]
     ]);
+    expect(new Set(moved.overriddenUnits), "整块那次把三个成员都算成动过：标记跟着成员走，不跟着层走").toEqual(new Set(["module:a/x/one", "module:a/x/three", "module:a/x/two"]));
   });
 
   it("修正点名的 id 已经不在树上：不落地、也不造假方块，但要报进 lostOverrides", async () => {
