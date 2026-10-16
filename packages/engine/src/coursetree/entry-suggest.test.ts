@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import type { CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
+import { isDocumentationPath, type CourseTree, type SuggestedEntry } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +42,16 @@ function treeWithNodes(ids: string[]): CourseTree {
     root: {
       id: "root", title: "root", kind: "overview", summary: "s",
       anchors: [], children: ids.map((id) => ({ id, title: id, kind: "module" as const, summary: "s", anchors: [{ path: `src/${id}.ts`, line: 1, label: "module" }], children: [] }))
+    }
+  } as unknown as CourseTree;
+}
+
+/** 锚点路径由用例显式给的树：文档/测试这类「文件形状」只能在这里显式构造。 */
+function treeAnchoredAt(nodes: { id: string; path: string }[]): CourseTree {
+  return {
+    root: {
+      id: "root", title: "root", kind: "overview", summary: "s",
+      anchors: [], children: nodes.map(({ id, path }) => ({ id, title: id, kind: "module" as const, summary: `${id} 的摘要`, anchors: [{ path, line: 1, label: "module" }], children: [] }))
     }
   } as unknown as CourseTree;
 }
@@ -182,9 +192,40 @@ describe("suggestModuleEntriesCached", () => {
     await suggestModuleEntriesCached({ tree, moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", analysis: update("src/other.ts") });
     expect(selectCalls).toHaveLength(1);
   });
+
+  it("文档不进候选池：模型看不见它，回推它的 id 也照样丢弃", async () => {
+    const { provider, selectCalls } = fakeProvider([["design"]]);
+    const tree = treeAnchoredAt([{ id: "design", path: "docs/backend-design.md" }, { id: "svc", path: "src/BlogService.java" }]);
+    const result = await suggestModuleEntriesCached({ tree, moduleLabel: "设计文档", moduleHint: "秒杀方案", provider, repositoryId: "repo-docs" });
+    expect(selectCalls).toHaveLength(1);
+    expect(selectCalls[0].user).not.toContain("docs/backend-design.md");
+    expect(selectCalls[0].user).toContain("src/BlogService.java");
+    // 上面那句「回推它的 id」是真的会发生的形状：缓存里存着旧记录时模型仍可能这么答
+    expect(result.entries).toEqual([]);
+    expect(result.declined).toBeFalsy();
+  });
+
+  it("整个模块只剩文档时连选择层都不发：池子为空直接回落，翻译层的钱照样入账", async () => {
+    const { provider, selectCalls, expandCalls } = fakeProvider([["readme"]]);
+    const result = await suggestModuleEntriesCached({ tree: treeAnchoredAt([{ id: "readme", path: "README.md" }]), moduleLabel: "根说明", moduleHint: "h", provider, repositoryId: "repo-doc-only" });
+    expect(expandCalls).toHaveLength(1);
+    expect(selectCalls).toHaveLength(0);
+    expect(result.entries).toEqual([]);
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  it("文档判据只看文件自己：docs/ 下的代码不是文档，配置也不是", () => {
+    expect(isDocumentationPath("docs/backend-design.md")).toBe(true);
+    expect(isDocumentationPath("README.MD")).toBe(true);
+    expect(isDocumentationPath("docs/snippets/App.tsx"), "按目录一刀切会把示例代码一起挡掉").toBe(false);
+    expect(isDocumentationPath("config/app.json"), "配置与构建输入不是散文").toBe(false);
+    expect(isDocumentationPath("notes"), "没有扩展名就没有性质").toBe(false);
+  });
 });
 
 describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重）", () => {
+  /** 这里的候选是手工造的，只为钉打分规则——所以下面出现 `README.md` 不代表文档能当入口：
+      文档与测试在进池前就被 `collectCandidates` 挡掉了（判据各一条，见上面那组用例）。 */
   const mk = (id: string, path: string, summary: string) => ({ id, title: id, path, line: 1, summary });
 
   it("锚点文件的 L1 摘要命中主题时排到最前（目录模板摘要无信号）", () => {

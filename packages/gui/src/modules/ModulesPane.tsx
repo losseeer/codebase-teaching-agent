@@ -213,7 +213,7 @@ export function ModulesPane({
           ))}
           {treeDerived && onTierChange && modules.some((item) => item.tier) && (
             <div className="cfg-tiers">
-              <div className="cfg-head">分级依据<span title="档位由引擎按文件的结构角色算出（确定、可复现）。改档只影响这里的分组，并给审计线留一条记录——攒起来就是判据的真值。">改档只影响这里的分组</span></div>
+              <div className="cfg-head">分级依据<span title="档位由引擎按文件结构角色算出；改档会记进审计线，攒起来就是判据真值">改档只影响这里的分组</span></div>
               {modules.filter((item) => item.tier).map((item) => (
                 <div className="cfg-tier-row" key={item.id}>
                   <span className="cfg-tier-name" title={hoverText(item)}>{item.label}</span>

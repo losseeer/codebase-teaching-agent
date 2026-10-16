@@ -79,7 +79,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
         crumb={<>
           <b>成本监控</b>
           <span className="faint">·</span>
-          <span className="muted">读 journal 的 token_usage 聚合</span>
+          <span className="muted" title="读数来自引擎对本月 token_usage 事件的聚合，界面不二次估算">journal token_usage 聚合</span>
           <span className="fs-11 faint mono">{savedAt ? `读数 ${savedAt}` : "正在读取…"}</span>
         </>}
         actions={<>
@@ -110,7 +110,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 ? "读数没拿到，刷新一次再看。"
                 : pricingConfigured
                   ? <>剩余 {usd(cost.remainingBudgetUsd)} · 触顶后改走本地规则（已用 {Math.round(usedRatio * 100)}%）</>
-                  : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额，「触顶改走本地规则」这条分支走不到。</>}
+                  : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额。</>}
             </p>
             <label className="field budget-field">
               <span className="lbl">调整月度预算（人民币）</span>
@@ -133,26 +133,26 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           {readoutReady && cost.turns > 0 ? (
             <>
               <div className="tiles">
-                <div className="card tile" title="含缓存命中那部分，与模型上报的 prompt_tokens 同口径"><div className="t-val">{tokensText(cost.inputTokens)}</div><div className="t-lbl">输入 tokens</div></div>
-                <div className="card tile" title="输入里按未命中价计费的那部分 = 输入 − 命中"><div className="t-val">{tokensText(cost.billedInputTokens)}</div><div className="t-lbl">未命中输入</div></div>
-                <div className="card tile" title="模型复用同一份前缀时省下的输入，按命中价计费；端点没上报则为 0"><div className="t-val">{tokensText(cost.cacheHitTokens)}</div><div className="t-lbl">命中输入（缓存）</div></div>
+                <div className="card tile" title="含缓存命中部分，与模型上报的 prompt_tokens 同口径"><div className="t-val">{tokensText(cost.inputTokens)}</div><div className="t-lbl">输入 tokens</div></div>
+                <div className="card tile" title="= 输入 − 命中"><div className="t-val">{tokensText(cost.billedInputTokens)}</div><div className="t-lbl">未命中输入</div></div>
+                <div className="card tile" title="复用同一份前缀省下的输入，按命中价计；端点没上报则为 0"><div className="t-val">{tokensText(cost.cacheHitTokens)}</div><div className="t-lbl">命中输入（缓存）</div></div>
                 <div className="card tile"><div className="t-val">{tokensText(cost.outputTokens)}</div><div className="t-lbl">输出 tokens</div></div>
                 <div className="card tile"><div className="t-val">{cost.turns - cost.degradedTurns}</div><div className="t-lbl">计费回合</div></div>
-                <div className="card tile" title="预算触顶后走本地规则、未付 token 的回合数"><div className="t-val">{cost.degradedTurns}</div><div className="t-lbl">降级回合</div></div>
-                <div className="card tile" title="「本月花到预算就改走本地规则」这道闸现在管不管事。单价没配 ⇒ 花费恒算 ¥0 ⇒ 闸门永远判为未超支，等于无上限调用。单价在「模型与计价」弹窗里填，改完即生效"><div className="t-val">{pricingConfigured ? "生效中" : "未生效"}</div><div className="t-lbl">预算闸门</div></div>
+                <div className="card tile" title="走本地规则、未付 token 的回合"><div className="t-val">{cost.degradedTurns}</div><div className="t-lbl">降级回合</div></div>
+                <div className="card tile" title="单价没配 ⇒ 金额恒 ¥0 ⇒ 这道闸永远判未超支。单价在「模型与计价」里填，改完即生效"><div className="t-val">{pricingConfigured ? "生效中" : "未生效"}</div><div className="t-lbl">预算闸门</div></div>
               </div>
 
               {!pricingConfigured ? (
                 <div className="banner banner-warn">
                   <Icon name="alert" />
-                  <span className="banner-text" title="填的地方：「模型与计价」弹窗 → 单价（人民币 / 百万 token），填完立即生效，不用重启引擎。留空的档位回落 .env 的 TUTOR_INPUT_USD_PER_MILLION / TUTOR_CACHE_HIT_USD_PER_MILLION / TUTOR_OUTPUT_USD_PER_MILLION（键名里的 USD 是历史遗留，引擎不做汇率换算）。DeepSeek 峰时约 ¥2 / ¥0.2 / ¥8 每百万。">
-                    没配单价 ⇒ 金额恒为 ¥0.0000（上面的 token 用量是真实读数）。<b>更要紧的是预算闸门也因此不管事</b>：引擎里「超预算就回落本地规则」的判断拿到的永远是 0，月预算形同虚设。
+                  <span className="banner-text" title="「模型与计价」→ 单价，填完即生效；留空回落 .env 的 TUTOR_*_USD_PER_MILLION">
+                    没配单价 ⇒ 金额恒 ¥0.0000，<b>预算闸门也因此不管事</b>。上面的 token 用量是真读数。
                   </span>
                 </div>
               ) : null}
 
               <section className="card card-pad col gap-3">
-                <div className="section-title">本月逐日（按 tokens 峰值归一）</div>
+                <div className="section-title" title="柱高按本月单日最大 tokens 归一，悬停看每天输入/输出">本月逐日</div>
                 <div className="bar-chart">
                   {cost.byDay.slice(-14).map((day) => {
                     const total = day.inputTokens + day.outputTokens;
@@ -217,14 +217,14 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                       ))}
                     </tbody>
                   </table>
-                  <span className="field-note" title="命中那档标「未打折」= 只配了输入价，实际账单通常比这里低">金额 = 三档之和</span>
+                  <span className="field-note" title="命中档标「未打折」= 只配了输入价，实际通常更低">金额 = 三档之和</span>
                 </section>
               </div>
             </>
           ) : null}
 
           {readoutReady && cost.turns === 0 ? (
-            <div className="empty"><span className="empty-icon"><Icon name="gauge" size={22} /></span>本月还没有开销记录。去代码教学问一句，或生成一道练习。</div>
+            <div className="empty"><span className="empty-icon"><Icon name="gauge" size={22} /></span>本月还没有开销记录</div>
           ) : null}
         </div>
       </section>

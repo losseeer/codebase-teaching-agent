@@ -943,6 +943,21 @@ export interface SuggestedEntry {
   reason?: string;
 }
 
+/**
+  「这条路径是文档，不是代码」——推荐入口的排除判据，引擎与界面共用这一份（判据两处各写一遍迟早漂移）。
+  只看文件自己的扩展名，**不看目录名**：`docs/` 下放的可能是示例代码，按目录一刀切会连代码一起挡掉。
+  `.json`/`.yml` 不算文档（它们是配置与构建输入，不是散文）。
+  今天只有 `.md` 真能走到这一层（收录层的扩展名白名单在前面把关），列全是为了这条判据本身说得通。
+*/
+export const DOCUMENTATION_EXTENSIONS: readonly string[] = [".md", ".markdown", ".rst", ".adoc", ".txt"];
+
+export function isDocumentationPath(path: string): boolean {
+  const base = (path ?? "").replaceAll("\\", "/").split("/").pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return DOCUMENTATION_EXTENSIONS.includes(base.slice(dot).toLowerCase());
+}
+
 export interface ExerciseAnswer {
   text?: string;
   selectedIds?: string[];

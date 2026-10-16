@@ -150,7 +150,12 @@ beforeAll(async () => {
     repositoryId, modelVersion: "fixture-v1", generatedAt: now,
     root: {
       id: "root", title: "测试课程", summary: "路由级测试用课程树", kind: "overview", anchors: [],
-      children: [{ id: "unit-1", title: "注册顺序", summary: "builder 先注册再分发。", kind: "implementation", anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], children: [] }]
+      children: [
+        { id: "unit-1", title: "注册顺序", summary: "builder 先注册再分发。", kind: "implementation", anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], children: [] },
+        // 真仓的文档节点确实挂在课程树上（dianping 的 README 与 backend-design.md 都是树里的模块），
+        // 推荐入口这条路由要把它们挡在候选之外，所以 fixture 得先有它，否则下面的断言是空的。
+        { id: "unit-doc", title: "设计文档", summary: "秒杀方案记录。", kind: "module", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] }
+      ]
     }
   };
   const analysis: RepositoryAnalysis = {
@@ -892,6 +897,8 @@ describe("编辑期免打扰与沙箱重探", () => {
     重探的断言刻意与环境无关：能跑嵌套 `sandbox-exec` 的机器上是 enforced，受限 CI 上是 unavailable——
     **两者都是合法读数**，要钉住的是「这条路当场给出新的实测结果」而不是「它一定过」
     （用户 10-15 那句：环境不支持不能伪装成通过）。
+    ⚠️ 超时给到 30 秒是实测逼出来的：这一发单独跑 2.7~4.5 秒，全量并行时**实测撞过 vitest 默认的 5 秒**（用例本身没红在断言上，红在没时间）。
+    它要起十来个沙箱子进程，不是能被别的用例挤一挤就该判失败的逻辑问题。
     */
   it("POST /api/sandbox/reprobe 返回新的实测读数，字段形状与开机那份一致", async () => {
     const response = await app.inject({ method: "POST", url: "/api/sandbox/reprobe" });
@@ -905,5 +912,32 @@ describe("编辑期免打扰与沙箱重探", () => {
     // 与开机那份同源：/api/health 的 sandbox 必须已经是重探之后的读数
     const health = (await app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
     expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
+  }, 30_000);
+});
+
+/**
+  「推荐入口」这条路由以前只有 entry-suggest 的单测兜着（判据住在那一层）。这次补路由级用例是因为
+  改的是**什么有资格当入口**：只有打一次路由才看得见送出去的候选载荷里真没有文档，而不只是本地算对了。
+  零 token：假 provider 照样指向 127.0.0.1:9，被 stub 的 fetch 接住。
+*/
+describe("推荐入口：文档不进候选清单", () => {
+  it("文档在课程树上、却不在出境载荷里；模型回推它的 id 也不会被路由复活", async () => {
+    const tree = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/course` })).payload;
+    expect(tree, "前提：fixture 里得有那个文档节点，否则下面的「不含」是空的通过").toContain("docs/design.md");
+
+    const outboundBefore = sentTools.length;
+    scripted = ['["design"]', '[{"id":"unit-doc","reason":"设计文档正是主题入口"},{"id":"unit-1","reason":"实现主干"}]'];
+    const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent("设计文档")}` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { entries: { id: string; path: string }[]; source: string };
+    // 模型按旧习惯先推文档：池子里没有这个 id，路由只交回代码那条，而不是替它把文档复活
+    expect(body.entries.map((entry) => entry.id)).toEqual(["unit-1"]);
+    expect(body.source).toBe("llm");
+
+    const outbound = sentTools.slice(outboundBefore).map((call) => call.raw).join("\n");
+    expect(outbound, "文档连候选都不是：不该进过一次出境载荷").not.toContain("docs/design.md");
+    expect(outbound).toContain(MAIN_FILE);
+    // 翻译层的词表同样来自池子：文档路径切出来的 design/md 不该进 repoVocabulary
+    expect(sentTools.slice(outboundBefore)[0].raw).not.toContain('"md"');
   });
 });

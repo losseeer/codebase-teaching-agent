@@ -88,7 +88,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 placeholder={llm?.envFallback.model || ".env 未配置"}
                 list="llm-model-presets"
                 disabled={!llm}
-                note="思考档位按模型能力声明生效：不支持的档位会报错，不会静默回落"
                 onCommit={(model) => updateLlm({ model })}
               />
               <datalist id="llm-model-presets">
@@ -100,7 +99,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 disabled={!llm}
                 hint={THINKING_STYLE_HINT[llm?.thinkingCapability?.style ?? "unknown"]}
                 ariaLabel="思考模式与强度"
-                note="轻任务（推荐入口 / L1 摘要 / 题面润色）强制关闭思考，与这里的设置无关"
+                note="按模型能力声明生效；轻任务恒关思考"
                 onChange={(thinking) => updateLlm({ thinking: thinking as ThinkingEffort })}
                 options={[
                   { value: "auto", label: "自动（模型默认）" },
@@ -123,7 +122,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 disabled={!llm}
                 ariaLabel="LLM 服务商协议"
                 hint="协议决定请求格式与默认接口地址；选「默认」即沿用 .env 的 TUTOR_LLM_PROVIDER"
-                note="协议决定请求格式与默认接口地址；选「默认」即沿用 .env"
                 onChange={(provider) => updateLlm({ provider: provider as LlmProviderKind | "" })}
                 options={[
                   { value: "", label: `默认（${llm?.envFallback.provider || ".env 未配置"}）` },
@@ -141,7 +139,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 saved={llm?.apiKeyMasked ?? ""}
                 placeholder={llm?.envFallback.hasApiKey ? ".env 已配置" : "未配置"}
                 disabled={!llm}
-                note="密钥只存本机文件（0600），界面与日志只显示掩码"
+                note="只存本机"
                 onSave={(apiKey) => updateLlm({ apiKey })}
                 onClear={() => updateLlm({ apiKey: "" })}
               />
@@ -153,7 +151,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 value={llm?.inputUsdPerMillion ?? ""}
                 placeholder={ratePlaceholder(llm, "input")}
                 disabled={!llm}
-                note="每百万个输入 token 的价格，填人民币。留空 = 这一档用 .env 的 TUTOR_INPUT_USD_PER_MILLION；两层都空则不计价。DeepSeek 峰时约 ¥2 / 百万。"
                 onCommit={(inputUsdPerMillion) => updateLlm({ inputUsdPerMillion })}
               />
               <TextSetting
@@ -162,7 +159,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 value={llm?.cacheHitUsdPerMillion ?? ""}
                 placeholder={ratePlaceholder(llm, "cacheHit")}
                 disabled={!llm}
-                note="缓存命中那部分输入的价格，通常约为输入价的 1/10（DeepSeek 峰时 ¥0.2 / 百万）。留空 = 按输入价计，宁可高估也不把真花掉的钱说少。"
                 onCommit={(cacheHitUsdPerMillion) => updateLlm({ cacheHitUsdPerMillion })}
               />
               <TextSetting
@@ -171,13 +167,12 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 value={llm?.outputUsdPerMillion ?? ""}
                 placeholder={ratePlaceholder(llm, "output")}
                 disabled={!llm}
-                note="每百万个输出 token 的价格，填人民币。留空 = 用 .env 的 TUTOR_OUTPUT_USD_PER_MILLION。DeepSeek 峰时约 ¥8 / 百万。"
                 onCommit={(outputUsdPerMillion) => updateLlm({ outputUsdPerMillion })}
               />
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
-              <span className="modal-note">改完即生效并保存到 <code>~/.codebase-tutor/llm-settings.json</code>；留空的项回落 <code>.env</code>。</span>
+              <span className="modal-note" title="持久化在 ~/.codebase-tutor/llm-settings.json">改完即生效；留空回落 .env</span>
               <button type="button" className="btn btn-primary" onClick={() => setOpen(false)}>完成</button>
             </div>
           </div>

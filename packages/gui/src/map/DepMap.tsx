@@ -1,5 +1,6 @@
-import { useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { CAPABILITY_CELL_LABEL, CAPABILITY_LEVEL_LABEL, type CapabilityLevel, type CourseNode, type FileEntry, type RepositoryAnalysis, type RepositoryIndex, type RepositoryLanguageRow } from "@codebase-tutor/shared";
+import { Icon } from "../ui/icons";
 
 /**
  * 宏观设计 v0.6：架构视图 = 模块依赖图（与 `FlowMap` 的流程视图并列）。
@@ -48,6 +49,46 @@ interface ModuleEdge {
   to: string;
   weight: number;
 }
+
+/** 手动拖过的节点坐标（按模块 key 存），空对象 = 全走自动分层布局。 */
+type ManualPositions = Record<string, { x: number; y: number}>;
+const manualKey = (repositoryId: string): string => `codebase-tutor.depmap-layout.${repositoryId}`;
+/** 读必须包 try/catch：这条键坏掉（手改过、别的版本写过别的形状）不该让整张图白屏。 */
+function readManualPositions(repositoryId: string): ManualPositions {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(manualKey(repositoryId));
+  } catch {
+    return {};
+  }
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: ManualPositions = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const point = value as { x?: unknown; y?: unknown };
+      if (typeof point?.x === "number" && typeof point.y === "number" && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+        out[key] = { x: point.x, y: point.y };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeManualPositions(repositoryId: string, positions: ManualPositions): void {
+  try {
+    localStorage.setItem(manualKey(repositoryId), JSON.stringify(positions));
+  } catch {
+    /* 存不下只是下次进来不记得你摆过的位子 */
+  }
+}
+
+/** 起手移动超过这个像素才算拖，否则还是「点一下选模块」。 */
+const DRAG_THRESHOLD = 4;
+const NUDGE_PX = 8;
 
 interface Placed {
   node: ModuleNode;
@@ -259,6 +300,16 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   onSelect: (node: CourseNode, scopePaths: string[]) => void;
 }): ReactElement {
   const graph = useMemo(() => buildModuleGraph(index, analysis), [index, analysis]);
+  /** 你手动摆过的位子（按仓库记）：没摆过的节点仍走自动分层布局。 */
+  const [manual, setManual] = useState<ManualPositions>(() => readManualPositions(index.repositoryId));
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ key: string; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
+  /** 拖完浏览器还会补一个 click，而那时 dragRef 已经清空：单独留个旗子供 click 里判。 */
+  const movedFlag = useRef(false);
+  const panRef = useRef<{ scroller: HTMLElement; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
+  // 换仓要重读位子，否则会拿上一个仓的坐标摆这个仓的模块
+  useEffect(() => { setManual(readManualPositions(index.repositoryId)); }, [index.repositoryId]);
+  useEffect(() => { writeManualPositions(index.repositoryId, manual); }, [index.repositoryId, manual]);
   /** 主要语言的「依赖边」读数提示（不需要提示时 undefined，图例保持原样） */
   const caveat = useMemo(() => edgeCaveatOf(analysis.languageProfile), [analysis.languageProfile]);
   // 依赖图只画关系：无 import 关系且不含入口的模块（docs/.changeset 等非代码目录）不上图，
@@ -281,7 +332,9 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   const placed: Placed[] = [];
   const positions = new Map<string, Placed>();
   columns.forEach((column, layer) => column.forEach((node, rowIndex) => {
-    const item: Placed = { node, index: rowIndex, x: PAD_X + layer * (NODE_W + COL_GAP), y: PAD_Y + rowIndex * ROW_STRIDE };
+    const auto = { x: PAD_X + layer * (NODE_W + COL_GAP), y: PAD_Y + rowIndex * ROW_STRIDE };
+    const at = manual[node.key] ?? auto;
+    const item: Placed = { node, index: rowIndex, x: at.x, y: at.y };
     placed.push(item);
     positions.set(node.key, item);
   }));
@@ -301,14 +354,85 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
   }).filter((path): path is NonNullable<typeof path> => path !== null);
 
   const lastLayer = Math.max(columns.length - 1, 0);
-  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X);
-  const canvasH = Math.max(MIN_H, PAD_Y + Math.max(...columns.map((column) => column.length), 0) * ROW_STRIDE + 40);
+  // 手动摆过之后内容可能超出自动布局的边界：画布尺寸跟着最远的节点走，才拖得出滚动条而不是把节点拖丢
+  const bounds = placed.reduce((acc, item) => ({ x: Math.max(acc.x, item.x + NODE_W), y: Math.max(acc.y, item.y + NODE_MIN_H) }), { x: 0, y: 0 });
+  const canvasW = Math.max(MIN_W, PAD_X + lastLayer * (NODE_W + COL_GAP) + NODE_W + PAD_X, bounds.x + PAD_X);
+  const canvasH = Math.max(MIN_H, PAD_Y + Math.max(...columns.map((column) => column.length), 0) * ROW_STRIDE + 40, bounds.y + PAD_Y);
+  const movedCount = Object.keys(manual).length;
+
+  const nudge = (key: string, from: Placed, dx: number, dy: number): void => {
+    setManual((curr) => ({ ...curr, [key]: { x: Math.max(0, from.x + dx), y: Math.max(0, from.y + dy) } }));
+  };
+
+  const onNodePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, item: Placed): void => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    movedFlag.current = false;
+    dragRef.current = { key: item.node.key, startX: event.clientX, startY: event.clientY, originX: item.x, originY: item.y, moved: false };
+  };
+  const onNodePointerMove = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    drag.moved = true;
+    movedFlag.current = true;
+    setManual((curr) => ({ ...curr, [drag.key]: { x: Math.max(0, drag.originX + dx), y: Math.max(0, drag.originY + dy) } }));
+  };
+  const onNodePointerUp = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (dragRef.current) event.currentTarget.releasePointerCapture(event.pointerId);
+    dragRef.current = null;
+  };
+  /** 拖完那一下浏览器仍会补一个 click：吞掉它，否则「拖动摆放」每次都顺手把模块选中并弹详情抽屉。 */
+  const onNodeClick = (item: Placed): void => {
+    if (dragRef.current?.moved || movedFlag.current) { movedFlag.current = false; return; }
+    onSelect(toCourseNode(item.node), item.node.files.map((file) => file.path));
+  };
+  const onNodeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, item: Placed): void => {
+    const step = event.shiftKey ? NUDGE_PX * 3 : NUDGE_PX;
+    const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    const move = moves[event.key];
+    if (!move) return;
+    event.preventDefault();
+    nudge(item.node.key, item, move[0], move[1]);
+  };
+
+  const onCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    // 只有按在空白处（画布本身或铺满的 SVG）才平移，按在节点上留给节点拖动
+    const target = event.target as HTMLElement;
+    if (target !== event.currentTarget && !target.classList.contains("arch-svg")) return;
+    const scroller = canvasRef.current?.closest<HTMLElement>(".map-canvas-wrap");
+    if (!scroller) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panRef.current = { scroller, startX: event.clientX, startY: event.clientY, scrollLeft: scroller.scrollLeft, scrollTop: scroller.scrollTop };
+  };
+  const onCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const pan = panRef.current;
+    if (!pan) return;
+    pan.scroller.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX);
+    pan.scroller.scrollTop = pan.scrollTop - (event.clientY - pan.startY);
+  };
+  const onCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (!panRef.current) return;
+    panRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
 
   return (
     <>
       {/* 节点全是绝对定位、撑不开父级，所以画布尺寸由这一层 in-flow 的盒子交出去；
           它同时是 `.arch-svg` 的定位基准（CSS 让 SVG inset:0 铺满），坐标才与节点一一对上。 */}
-      <div style={{ position: "relative", width: canvasW, minHeight: canvasH }}>
+      <div
+        ref={canvasRef}
+        className="arch-canvas"
+        style={{ position: "relative", width: canvasW, minHeight: canvasH }}
+        onPointerDown={onCanvasPointerDown}
+        onPointerMove={onCanvasPointerMove}
+        onPointerUp={onCanvasPointerUp}
+        onPointerCancel={onCanvasPointerUp}
+      >
         <svg className="arch-svg" width={canvasW} height={canvasH} aria-hidden>
           <defs>
             <marker id="dep-arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto">
@@ -324,10 +448,14 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
             <button
               key={id}
               type="button"
-              className={`arch-node col${node.isEntry ? " entry-node" : ""}${selectedId === id ? " selected" : ""}`}
+              className={`arch-node col${node.isEntry ? " entry-node" : ""}${selectedId === id ? " selected" : ""}${manual[node.key] ? " placed" : ""}`}
               style={{ left: item.x, top: item.y, width: NODE_W, minHeight: NODE_MIN_H }}
-              title={`${node.key === "." ? "根目录文件" : node.key} · ${node.files.length} 个文件 · ${node.lines} 行 · 依赖 ${node.outDegree} 个模块 · 被 ${node.inDegree} 个模块依赖${node.isEntry ? " · 含执行入口" : ""}${node.changes > 0 ? ` · Git 热点约 ${node.changes} 次变更` : ""}`}
-              onClick={() => onSelect(toCourseNode(node), node.files.map((file) => file.path))}
+              title={`${node.key === "." ? "根目录文件" : node.key} · ${node.files.length} 个文件 · ${node.lines} 行 · 依赖 ${node.outDegree} 个模块 · 被 ${node.inDegree} 个模块依赖${node.isEntry ? " · 含执行入口" : ""}${node.changes > 0 ? ` · Git 热点约 ${node.changes} 次变更` : ""}\n点一下看详情 · 拖动摆放 · 方向键微调（Shift 加速）`}
+              onPointerDown={(event) => onNodePointerDown(event, item)}
+              onPointerMove={onNodePointerMove}
+              onPointerUp={onNodePointerUp}
+              onKeyDown={(event) => onNodeKeyDown(event, item)}
+              onClick={() => onNodeClick(item)}
             >
               <span className="n-role">{`${String(item.index + 1).padStart(2, "0")} · ${node.isEntry ? "入口模块" : "模块"}${node.changes >= HOTSPOT_CHANGES ? " · 热点" : ""}`}</span>
               <span className="n-name">{node.key === "." ? "根目录文件" : `${node.key}/`}</span>
@@ -340,17 +468,16 @@ export function DepMap({ index, analysis, selectedId, onSelect }: {
         })}
       </div>
       <div className="flow-legend">
-        {/* 图例只给「深底那一档」一枚徽标：它就是节点 `.entry-node` 的配色，其余方块都是普通模块 */}
         <span className="badge badge-neutral">入口模块</span>
-        <span className="fs-11 faint">其余方块 = 普通模块</span>
-        {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现，说明直接引引擎自报口径（见 edgeCaveatOf） */}
+        {/* 主语言的依赖边强度：徽标只在「不是可信档」时出现（见 edgeCaveatOf） */}
         {caveat ? <span className="badge badge-warn" title={caveat.detail}>{caveat.label}</span> : null}
-        <span
-          className="fs-11 faint"
-          title={`边 = import 依赖（箭头指向被依赖方），线越粗引用越多。点模块在右侧详情抽屉里看文件清单与源码锚点。${hiddenModules ? `另有 ${hiddenModules} 个既无依赖也不是入口的模块没画进来，完整清单在左侧项目目录。` : ""}`}
-        >
-          {`箭头指向被依赖方 · 越粗引用越多${hiddenModules ? ` · 未显示 ${hiddenModules} 个孤立模块` : ""}`}
+        <span className="fs-11 faint" title={`边 = import 依赖，线粗 = 引用次数多。${hiddenModules ? `另有 ${hiddenModules} 个无依赖也非入口的模块没画进来，完整清单在左侧目录。` : ""}`}>
+          {`箭头指向被依赖方${hiddenModules ? ` · 未画 ${hiddenModules} 个孤立模块` : ""}`}
         </span>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={!movedCount} onClick={() => setManual({})} title={movedCount ? "清掉手动位子，回到按依赖深度分层的自动布局" : "还没拖动过，无需重置"}>
+          <Icon name="rotate" size={13} />回到自动布局
+        </button>
+        <span className="fs-11 faint">{movedCount ? `已摆 ${movedCount} 个` : ""}</span>
       </div>
     </>
   );

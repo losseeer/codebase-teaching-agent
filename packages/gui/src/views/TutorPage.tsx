@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
+import { isDocumentationPath } from "@codebase-tutor/shared";
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, Loading, flatten } from "./helpers";
@@ -143,8 +144,13 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     return () => window.removeEventListener("keydown", onKey);
   }, [isActiveWorkspace]);
 
-  /** 当前模块的文件清单（树结构事实，已按 path 去重）：LLM 不可用时直接列它，不再靠关键词猜。 */
-  const moduleFiles = useMemo<ModuleEntry[]>(() => modules.find((item) => item.id === activeModule)?.entries ?? [], [modules, activeModule]);
+  /** 当前模块能当「推荐入口」的文件：LLM 不可用时直接列这份，不再靠关键词猜。
+      树结构清单（已按 path 去重）在这里去掉文档——代码问答的入口必须是代码（同一判据引擎侧也有一条，§66）。
+      ⚠️ 左侧模块徽标那个「N 个文件」数的仍是完整清单：那是结构事实，不该跟着这条产品规则变。 */
+  const moduleEntryFiles = useMemo<ModuleEntry[]>(
+    () => (modules.find((item) => item.id === activeModule)?.entries ?? []).filter((entry) => !isDocumentationPath(entry.path)),
+    [modules, activeModule]
+  );
 
   /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），
       只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到模块自己的文件清单。
@@ -194,7 +200,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     ? moduleEntries.entries
     : entryWaiting || !t.course
       ? []
-      : moduleFiles;
+      : moduleEntryFiles;
   /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
       否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
@@ -202,7 +208,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     ? "LLM 推荐 · 点开即问"
     : entryWaiting
       ? "正在挑阅读顺序…"
-      : moduleEntries?.reason ?? `按模块结构列出 ${moduleFiles.length} 个文件`;
+      : moduleEntries?.reason ?? `按模块结构列出 ${moduleEntryFiles.length} 个文件`;
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
       点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
@@ -311,7 +317,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
           <span className="muted">Agent 绑定：<b className="mono fs-12">{anchor ? `${anchor.path}:${anchor.line}` : "未定位"}</b> · 模块「{moduleLabel}」</span>
           {located ? <span className="faint">· 本页已定位第 {located} 行</span> : null}
         </>}
-        actions={<span className="fs-11 faint mono" title="点源码任意一行可就地定位；⌘P 搜文件">⌘P 快速打开</span>}
+        actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点源码行可就地定位">⌘P 快速打开</span>}
         showRailToggle
       />
       <MobileSwitcher labels={["教学模块", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
@@ -395,7 +401,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
               ) : moduleEntries?.status === "loading" ? (
                 <p className="entry-empty">正在挑推荐入口…</p>
               ) : (
-                <p className="entry-empty">这个模块没有推荐入口，从下面的文件里挑一个开始。</p>
+                <p className="entry-empty">这个模块没有推荐入口</p>
               )}
             </div>
 
@@ -437,7 +443,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
           <SourceView
             source={viewSource}
             onLineClick={pickLine}
-            emptyHint="在左栏点推荐入口或仓库文件里的任意文件开始阅读（源码只读，不会写回你的仓库）"
+            emptyHint="点左侧推荐入口或文件开始阅读"
           />
         </div>
       </section>

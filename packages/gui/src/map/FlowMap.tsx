@@ -233,10 +233,10 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
           <div className="empty">
             <span className="empty-icon"><Icon name="info" size={18} /></span>
             <p>该仓库没有识别到执行入口</p>
-            <span className="fs-11" title="入口由 package.json 的 main/bin/scripts 与 main/server/app/index 等约定文件名推断，裸脚本或非常规布局的仓会识别不到">
+            <span className="fs-11" title="入口按 package.json 与 main/server/app/index 等约定文件名推断；非常规布局会漏">
               入口按约定文件名与 package.json 推断
             </span>
-            <span className="fs-11">在下方输入路径正则，挑一个已索引文件当流程起点</span>
+            <span className="fs-11">用下方正则挑一个起点</span>
           </div>
         ) : null}
 
@@ -298,7 +298,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
             </span>
           ) : null}
           {pattern.trim() && !matches.error && !matches.total ? (
-            <span className="fs-11 faint">没有文件匹配：换个短点的词，或输入 <code>.</code> 看全部。</span>
+            <span className="fs-11 faint">没有匹配的文件（输入 <code>.</code> 看全部）</span>
           ) : null}
           {matches.error ? <span className="field-note warn">正则不合法：{matches.error}</span> : null}
         </div>
@@ -324,10 +324,9 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
             {state.source === "static" ? (
               <div className="banner banner-warn">
                 <Icon name="alert" size={14} />
-                <div className="banner-text">
+                <div className="banner-text" title="静态调用链只反映跨文件调用，看不到回调注册、路由表与依赖注入等编排，环节可能比真实执行路径少">
                   <strong>以下不是模型生成，而是静态调用链降级视图。</strong>
                   {state.reason ? `原因：${state.reason}。` : ""}
-                  它只反映代码里的跨文件调用，看不到回调注册、路由表与依赖注入等编排，环节可能比真实执行路径少。
                 </div>
               </div>
             ) : null}
@@ -363,12 +362,10 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
               <span className="flow-origin origin-static">static · 依赖图可证明</span>
               <span className="flow-origin origin-code">code · 源码正文读过</span>
               <span className="flow-origin origin-inferred">inferred · 模型推断</span>
-              <span className="fs-11 faint" title="点任一环节，抽屉里列它的出边与这条边的依据">点环节看它的出边依据</span>
             </div>
 
             <p className="field-note">
-              {`共 ${state.flow.stages.length} 个环节。每个环节的关联文件在右侧「节点详情」里，点环节打开。`}
-              {state.flow.caveats ? `已知边界：${state.flow.caveats}` : ""}
+              {state.flow.caveats ? `已知边界：${state.flow.caveats}` : `共 ${state.flow.stages.length} 个环节`}
             </p>
             {state.flow.uncovered?.length ? (
               <div className="flow-legend">

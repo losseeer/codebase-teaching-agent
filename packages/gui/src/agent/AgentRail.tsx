@@ -165,10 +165,10 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
 /** 空线程时的一句话指引（原型 `.empty`）：每个作用域问法不同，别写成通用欢迎语。 */
 function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
   const hint = scope === "map"
-    ? "点画布上的模块或流程环节，或在目录树里点一个文件，我就围绕它展开。"
+    ? "点模块、环节或目录里的文件，我围绕它展开。"
     : scope === "teaching"
-      ? "写下你的观察或疑问；不知道就输入「不知道」。点源码任意一行可以换锚点。"
-      : "在左栏选一个模块与练习，再对这道题追问。这里没有读文件工具——只讨论思路，不给标准答案。";
+      ? "写下你的观察或疑问；不知道就输入「不知道」。"
+      : "只讨论思路，不给标准答案。";
   return (
     <div className="empty">
       <span className="empty-icon"><Icon name={scope === "practice" ? "practice" : scope === "map" ? "map" : "book"} size={22} /></span>

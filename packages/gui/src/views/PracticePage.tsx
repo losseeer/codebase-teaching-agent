@@ -274,7 +274,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             onReset={() => { const next = PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_MODULE_ID, next); }}
           >
             {moduleHint ? <p className="field-note" title="主题可在「＋ 配置」里自定义">{moduleHint}</p> : null}
-            <ModuleSectionLabel label="本模块已练" note={`${moduleMastery.length} 项`} tip="练习次数、掌握度与上次练习时间都由 journal 回读；点卡片就按这个单元重新出题" />
+            <ModuleSectionLabel label="本模块已练" note={`${moduleMastery.length} 项`} tip="读数由 journal 回读；点卡片按这个单元重新出题" />
             {moduleMastery.length ? (
               <div className="col">
                 {moduleMastery.map((record) => (
@@ -323,8 +323,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="empty">
                 <div className="empty-icon"><Icon name="practice" size={34} /></div>
                 <div>{isComprehensionChip ? "这个模块还没有练习" : `「${moduleLabel}」还没有题`}</div>
-                <div className="fs-11" title={isComprehensionChip ? "静态分析即时出题；命中代码单元时由模型出题并在沙箱两跑自证" : "LLM 按这个主题出题，模型可以拒题"}>点「生成练习」出题</div>
-                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading}><Icon name="play" size={14} /> 生成练习</button>
+                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading} title={isComprehensionChip ? "静态分析即时出题；命中代码单元时由模型出题并在沙箱两跑自证" : "LLM 按这个主题出题，模型可以拒题"}><Icon name="play" size={14} /> 生成练习</button>
               </div>
             ) : null}
 
@@ -363,7 +362,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 <div className="col">
                   <div className="row between">
                     <span className="section-title">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
-                    <span className="fs-11 faint" title={`判分口径：${gradingLabel(exercise.gradingMode)}｜题目对应的代码版本 ${exercise.contentVersion.slice(0, 14)}（代码改过就会重出题）`}>{gradingLabel(exercise.gradingMode)}</span>
+                    <span className="fs-11 faint" title={`判分口径：${gradingLabel(exercise.gradingMode)}｜代码版本 ${exercise.contentVersion.slice(0, 14)}，代码改过就重出题`}>{gradingLabel(exercise.gradingMode)}</span>
                   </div>
 
                   {exercise.inputMode === "multi_select" ? (
@@ -391,7 +390,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
                   {exercise.inputMode === "code" && exercise.code ? (
                     <div className="col">
-                      <p className="fs-11 faint" title="在编辑器里实现，提交后在沙箱跑那组冻结测试：automatic，只认测试结果，模型不参与判分">下发代码包 · 在编辑器里实现</p>
+                      <p className="fs-11 faint" title="提交后在沙箱跑冻结测试：automatic，模型不参与判分">下发代码包</p>
                       {codeFiles.length > 1 ? (
                         <div className="tabs light" role="tablist" aria-label="下发代码文件">
                           {codeFiles.map((file) => (
@@ -436,7 +435,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
                 <div className="row">
                   {result ? null : (
-                    <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={!canSubmit} title="提交会写一条 journal 埋点（exercise_submitted / exercise_result）">
+                    <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={!canSubmit} title="提交会记一条审计">
                       {loading ? <span className="spin"><Icon name="rotate" size={15} /></span> : <Icon name="check" size={15} />}提交判分
                     </button>
                   )}
@@ -445,7 +444,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     className="btn btn-ghost"
                     onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
                     disabled={loading}
-                    title={exercise.kind === "llm_rubric" ? "主题题换一道新题（variantNonce + 1），旧的题与判分记录都留着" : "按这个单元重新出题"}
+                    title={exercise.kind === "llm_rubric" ? "换一道新题，旧题与记录留着" : "按这个单元重新出题"}
                   ><Icon name="rotate" size={14} />换一题</button>
                 </div>
 
@@ -500,13 +499,13 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
       ) : null}
 
       <div className="due-note" title={sm2.join(" · ")}>
-        <Icon name="rotate" size={13} /> SM-2 调度：下次复习 <b>{dateText(result.review.dueAt)}</b> · 掌握度已更新
+        <Icon name="rotate" size={13} /> 下次复习 <b>{dateText(result.review.dueAt)}</b>
       </div>
 
       <div className="row">
-        {result.passed ? null : <button type="button" className="btn btn-ghost btn-sm" onClick={onRedo} title="收起判分结果，答案留着——改完可以直接再交一次">再试一次</button>}
+        {result.passed ? null : <button type="button" className="btn btn-ghost btn-sm" onClick={onRedo} title="收起判分结果，答案留着可再交">再试一次</button>}
         {exercise.inputMode === "code" && !explanation ? (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onExplain} disabled={explaining} title="判分只跑测试、不解释原因；点一次才发一趟模型调用，讲的是被判定那一版差在哪">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onExplain} disabled={explaining} title="点一次才发一趟模型：讲被判那一版差在哪">
             {explaining ? <span className="spin"><Icon name="rotate" size={14} /></span> : <Icon name="zap" size={14} />}讲这版差在哪
           </button>
         ) : null}

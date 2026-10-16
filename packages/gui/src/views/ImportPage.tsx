@@ -92,7 +92,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         <div className="import-wrap">
           <div className="import-hero">
             <h1>导入一个代码仓库</h1>
-            <p>输入本机仓库的绝对路径。索引、摘要、依赖图与课程树只写进仓库内的 <code className="mono">.tutor/</code>，随仓库走，随时可恢复。</p>
+            <p title="索引、摘要、依赖图与课程树都写进仓库内的 .tutor/，随仓库走，随时可恢复">输入本机仓库的绝对路径，产物只写进仓库内的 <code className="mono">.tutor/</code>。</p>
           </div>
 
           <div className="card card-pad col gap-4">
@@ -116,12 +116,12 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 {commentMode ? <span className="badge badge-warn">更费 token</span> : null}
               </label>
             </div>
-            {/* 一句给结论、一句给「为什么/怎么改」：后者挪进 title，第一屏不该读两段说明书 */}
+            {/* 一句给结论，「为什么/怎么改」进悬停：第一屏不该读两段说明书 */}
             <p className="field-note" title={commentMode
-              ? "注释写得多的仓库（面试讲解、课程作业类）里的中文概念词会一起进摘要，也因此更费 token。"
-              : "想连注释一起摘要，请在导入前切到「详细导入」；换口径需要重新导入。"}>{commentMode
-              ? "连注释一起摘要：中文概念词更容易被搜到，也更费 token。"
-              : "只看代码结构，最省 token。要连注释一起摘要请切「详细导入」，导入后不可再改。"}</p>
+              ? "注释写得多的仓库里的中文概念词会一起进摘要，也因此更费 token。"
+              : "想连注释一起摘要请在导入前切「详细导入」；导入后换口径需要重新导入。"}>{commentMode
+              ? "连注释一起摘要，更费 token。"
+              : "只看代码结构，最省 token。"}</p>
 
             {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
 
@@ -183,9 +183,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                   const watching = item.mounted && item.watching === false && !paused;
                   const meta = [
                     item.repositoryPath,
-                    item.artifactsReady === false ? "没有 .tutor 产物" : "产物在 .tutor/",
-                    paused ? `监听挂起中，${item.watchPausedUntil ? `到 ${new Date(item.watchPausedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 自动恢复` : "到点自动恢复"}` : watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "",
-                    item.freshness?.analyzedAt ? `上次分析 ${dateText(item.freshness.analyzedAt)}` : ""
+                    paused ? `监听挂起中${item.watchPausedUntil ? `至 ${new Date(item.watchPausedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : ""}` : watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "未挂载",
+                    item.freshness?.analyzedAt ? `分析于 ${dateText(item.freshness.analyzedAt)}` : item.artifactsReady === false ? "无产物" : ""
                   ].filter(Boolean).join(" · ");
                   return (
                     <button

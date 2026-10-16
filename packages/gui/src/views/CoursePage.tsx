@@ -193,7 +193,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
                 <span className="kv-v mono" title={edge.evidence}>{edge.evidence}</span>
               </div>
             ))
-          ) : <span className="kv-v muted">这条环节没有记出的去向边。</span>}
+          ) : <span className="kv-v muted">没有记出的去向边</span>}
         </div>
         <div className="kv">
           <span className="kv-k">{`关联文件（${flowSelection.stage.files.length}）`}</span>
@@ -226,24 +226,23 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
       <div className="empty">
         <span className="empty-icon"><Icon name="info" size={18} /></span>
         <p>点流程里的任一环节</p>
-        <span className="fs-11">这里显示它的说明、出边依据与关联文件</span>
       </div>
     ))
     : (
       <>
         <div className="kv">
           <span className="kv-k">摘要</span>
-          <span className="kv-v">{selected?.summary ?? "未选择节点：点画布上的模块，或从左侧目录点一个文件"}</span>
+          <span className="kv-v">{selected?.summary ?? "点画布上的模块，或左侧目录里的文件"}</span>
         </div>
         {isSyntheticModule ? (
           <>
             <div className="kv">
               <span className="kv-k">规模</span>
-              <span className="kv-v mono" title="清单来自架构视图的目录聚合，随对话请求上送，引擎按它解析作用域；行数取仓库索引">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
+              <span className="kv-v mono" title="目录聚合出的模块，课程树里没有这个节点：提问时随请求上送文件清单，引擎按它解析作用域">{`${moduleScopePaths.length} 个文件 · ${moduleScopePaths.reduce((sum, p) => sum + (lineOf.get(p) ?? 0), 0).toLocaleString()} 行`}</span>
             </div>
             <div className="kv">
               <span className="kv-k">Git 热点</span>
-              <span className="kv-v mono" title="取该模块内单个文件的最高变更次数，来自仓库索引的 Git 历史">{`${index.hotspots.filter((spot) => moduleScopePaths.includes(spot.path)).reduce((max, spot) => Math.max(max, spot.changes), 0) || "无"} 次变更`}</span>
+              <span className="kv-v mono" title="模块内单个文件的最高变更次数，取仓库索引的 Git 历史">{`${index.hotspots.filter((spot) => moduleScopePaths.includes(spot.path)).reduce((max, spot) => Math.max(max, spot.changes), 0) || "无"} 次变更`}</span>
             </div>
           </>
         ) : null}
@@ -286,9 +285,6 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(selected ?? null)}><Icon name="book" size={13} />去代码教学</button>
           <button type="button" className="btn btn-ghost btn-sm" disabled={!selected} onClick={() => { if (selected) pickNode(selected, moduleScopePaths); }}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
-        <p className="field-note" title="模块由目录前缀聚合而成，课程树里没有这个节点：提问时随请求上送它的文件清单，引擎按这份清单解析作用域。行数取仓库索引，变更次数取 Git 历史。">
-          模块按目录前缀聚合，不在课程树里
-        </p>
       </>
     );
 
@@ -336,7 +332,6 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             ) : (
               <>
                 <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
-                <span className="fs-11 faint" title="节点 = 按目录前缀聚合的模块，边 = 跨模块 import 引用；点节点在右侧抽屉看文件清单与源码锚点">点模块看详情与源码锚点</span>
               </>
             )}
             <div className="grow" />

@@ -1,4 +1,5 @@
 import type { CourseNode, CourseTree, SuggestedEntry } from "@codebase-tutor/shared";
+import { isDocumentationPath } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
@@ -12,6 +13,8 @@ import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
   - 主题翻译层（P1，2026-09-20）：中文模块主题 → 本仓库里对应的英文检索词（路径段/标识符），
     一次性、按主题+仓库指纹缓存——真仓实测证明中文概念词对英文业务仓的词法命中≈0（诊断见开发日志 §7.4）。
   - 选择层：模块主题 + 词元排序后的候选（含翻译词元）→ 最多 5 个入口；候选都不合适时允许输出空数组（P4）。
+  - 候选池不收的两种路径：测试（`isTestPath`，与结构角色同一份判据）与**任何文档**（`isDocumentationPath`）——
+    代码问答的入口必须是代码，实测 23 条选择层产出里 4 条把 README / 设计文档当成了入口（§66）。
   - 失败处理：翻译失败退化为「只有原始词元」；选择层任何失败（无 provider、超时、JSON 不合法）都返回空列表
     ——但「模型主动判空」（declined）是可信答案，与失败回落区分，可以进缓存。
   - 与 refineCourseMap 共用 TUTOR_TEACHING_PROVIDER 配置（见根目录 .env.example）
@@ -77,13 +80,14 @@ async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabe
 function collectCandidates(tree: CourseTree): Candidate[] {
   const candidates: Candidate[] = [];
   const collect = (node: CourseNode): void => {
-    // 测试路径不是学习入口（与结构角色同一套判定）
-    if (node.anchors.length && !isTestPath(node.anchors[0].path)) {
+    // 测试路径不是学习入口（与结构角色同一套判定）；文档一律不进这个池子（见 isDocumentationPath 那段）
+    const anchor = node.anchors[0];
+    if (anchor && !isTestPath(anchor.path) && !isDocumentationPath(anchor.path)) {
       candidates.push({
         id: node.id,
         title: node.title,
-        path: node.anchors[0].path,
-        line: node.anchors[0].line,
+        path: anchor.path,
+        line: anchor.line,
         summary: node.summary.slice(0, MAX_SUMMARY)
       });
     }
@@ -201,6 +205,9 @@ function themeFingerprint(candidates: Candidate[]): string[] {
     这类收紧只能靠版本号翻键。
   - `candidate-v6`（2026-10-02，取消知识模块）：学科证据锚点整套撤掉（模块改由课程树「模块地图」派生，
     业务名字本身就是最好的检索词）。payload 里去掉 `discipline` 字段，旧键全部作废。
+  「文档不当入口」（2026-10-16）**刻意不 bump 版本号**：文档节点是在组装候选池时被剔除的，只要一份旧记录真推过文档，
+  那个文档当时就在送进模型的 top-15 里 ⇒ 池子一变 payload 就变 ⇒ 键自己就失效，不需要版本号代劳。
+  翻版本反而会把从没沾过文档的模块也重烧一遍（那是花钱买一次已经免费的作废）。
 */
 const ENTRY_INPUT_VERSION = "candidate-v6";
 const EXPAND_INPUT_VERSION = "expand-v2";
