@@ -36,7 +36,7 @@ export interface ExternalClass {
 export const EXTERNAL_CATALOG: Record<string, { category: ExternalCategory; display: string }> = {
   // —— 存储与缓存（Java 侧大多经 Spring Data / 官方客户端出来）——
   "org.springframework.data.redis": { category: "cache", display: "Redis（spring-data-redis）" },
-  "org.springframework.data.elasticsearch": { category: "database", display: "Elasticsearch（spring-data）" },
+  "org.springframework.data.elasticsearch": { category: "database", display: "Elasticsearch" },
   "org.springframework.jdbc": { category: "database", display: "Spring JDBC" },
   "org.springframework.data": { category: "database", display: "Spring Data" },
   "com.baomidou.mybatisplus": { category: "database", display: "MyBatis-Plus" },
@@ -45,16 +45,16 @@ export const EXTERNAL_CATALOG: Record<string, { category: ExternalCategory; disp
   "com.zaxxer.hikari": { category: "database", display: "HikariCP（连接池）" },
   "org.redisson": { category: "cache", display: "Redisson（Redis 客户端）" },
   "com.github.benmanes.caffeine": { category: "cache", display: "Caffeine（进程内缓存）" },
-  "org.elasticsearch": { category: "database", display: "Elasticsearch 客户端" },
+  "org.elasticsearch": { category: "database", display: "Elasticsearch" },
   "redis": { category: "cache", display: "redis-py" },
   "ioredis": { category: "cache", display: "ioredis" },
   "better-sqlite3": { category: "database", display: "SQLite（better-sqlite3）" },
   "sqlite3": { category: "database", display: "SQLite（sqlite3）" },
   // —— 队列与消息 ——
   "org.springframework.kafka": { category: "queue", display: "Kafka（spring-kafka）" },
-  "org.springframework.amqp": { category: "queue", display: "RabbitMQ（spring-amqp）" },
+  "org.springframework.amqp": { category: "queue", display: "RabbitMQ" },
   "org.apache.kafka": { category: "queue", display: "Kafka 客户端" },
-  "com.rabbitmq": { category: "queue", display: "RabbitMQ 客户端" },
+  "com.rabbitmq": { category: "queue", display: "RabbitMQ" },
   "kafka": { category: "queue", display: "kafka" },
   "celery": { category: "queue", display: "Celery" },
   // —— 模型服务（这三仓里没有 SDK 形态的调用，键留着是给下一个仓的，不算瞎猜：只按整名命中）——
@@ -188,8 +188,13 @@ export function groupExternals(externals: Record<string, string[]>): ExternalGro
   for (const [file, identities] of Object.entries(externals)) {
     for (const identity of identities) {
       const info = classifyExternal(identity);
-      // 认出来的按词典键合行；没认出来的按原名各占一行
-      const key = info.matched ?? `other:${identity}`;
+      /**
+        行按**读者看到的那个名字**合，不按词典键合。实测的洞：dianping 的 `org.apache.ibatis.annotations`
+        与 `org.mybatis.spring.annotation` 是两条词典键、同一个显示名（MyBatis），于是边界栏里出现两枚一模一样的
+        chip——同一类错误还有一份：标准库以前按身份逐条建行，几十个 `java.*` 把「未列出」的计数灌满。
+        没认出来的（`other`）仍然一个名字一行：不知道是不是同一个东西就不硬合。
+      */
+      const key = info.category === "other" ? `other:${identity}` : `${info.category}|${info.display}`;
       const current = byKey.get(key);
       if (current) {
         if (!current.identities.includes(identity)) current.identities.push(identity);

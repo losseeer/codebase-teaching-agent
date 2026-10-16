@@ -54,7 +54,7 @@ console.log(`  方块角色 ${dist(blocks.map((block) => block.role))}`);
 console.log(`  隐藏这一刀有红线：被藏却含入口文件的模块 ${hiddenWithEntry.length} 个${hiddenWithEntry.length ? `（**判据错了**：${hiddenWithEntry.slice(0, 4).map((node) => node.title).join(" / ")}）` : ""}`);
 console.log(`  被藏的模块（前 6 个）${hidden.slice(0, 6).map((node) => `${node.title}(${visibleOf(node).length} 文件)`).join(" / ") || "无"}`);
 console.log(`  静态三层每层方块数 ${staticLayers.map((layer) => `${layer.tier}=${layer.blocks.length}`).join(" ")}｜超过 6 格的层 ${staticLayers.filter((layer) => layer.blocks.length > 6).length} 个（兜底折叠开不开得着就看这一格）`);
-console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换了键，这些旧行不再被读；要恢复模型分层每仓点一次「重新分层」）`);
+console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换了键，这些旧行不再被读；要恢复模型分层每仓点一次「判一次分层」）`);
 if (mergedBlocks.length) {
   console.log(`\n[合并块样本]`);
   for (const block of mergedBlocks.slice(0, 8)) console.log(`  ${block.id}｜「${block.title}」成员 ${block.members.length}｜${block.members.slice(0, 3).join(" , ")}`);

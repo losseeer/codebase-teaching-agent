@@ -477,7 +477,7 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
     为什么单独钉这件事：修正本来就是读的时候现叠上去的一层——
     让它翻键等于把「挪一下」变成一次重判请求，模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
     判层的**证据**（方块 id、名字、摘要、结构角色与档位、规模、入口、热度、方块间往来）照样进键：
-    模块增删、摘要重烧这些真变化必须重问，人工改名归到证据那一档（改一次翻一次键，但读侧不发请求，要花必须点「重新分层」）。
+    方块增删、摘要重烧这些真变化必须重问，人工改名归到证据那一档（改一次翻一次键，但读侧不发请求，要花必须点「判一次分层」）。
     */
   const keyPayload = {
     modules: truncated.map((fact) => ({ id: fact.id, title: fact.title, summary: fact.summary, tier: fact.tier, role: fact.role, files: fact.files, parts: fact.parts, entry: fact.hasServedEntry, hot: fact.hotCommits })),
@@ -510,7 +510,7 @@ export function moduleCourseOf(course: CourseTree, analysis: RepositoryAnalysis,
 }
 
 /**
-  架构这条链上四个入口（读、重新分层、覆盖层校验、Agent 写工具）共用的一份输入。
+  架构这条链上四个入口（读、判一次分层、覆盖层校验、Agent 写工具）共用的一份输入。
   为什么收成一处：`/overlays/apply` 以前自己拼了一遍、少叠 `annotateModuleTiers` ⇒ payload 里每个模块的 tier 都成 periphery ⇒
   算出的缓存键和读侧不是同一个 ⇒ peek 找不到判好的那份 ⇒ 校验层名时只认得「外围」，真仓上每一次拖动都被 422 拒掉
   （2026-10-16 浏览器实测 dianping）。这类漂移不靠「记得照抄」防，靠只有一处能构造。
@@ -576,7 +576,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
   }
   /** 读侧（`allowCall: false`）没缓存行就到此为止：不发请求、不落盘，画布交给不可用卡片。 */
   if (input.allowCall === false) {
-    return unavailable(context, "not_judged", "还没判过层：打开画布是读取动作，不会替用户点这一发。要判，点「重新分层」。");
+    return unavailable(context, "not_judged", "还没判过层：打开画布是读取动作，不会替用户点这一发。要判，点「判一次分层」。");
   }
   try {
     /**
@@ -604,7 +604,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     const parsed = parseLayers(response.text, truncated);
     if (!parsed.layers) {
       // 判不出来就报不可用并说清是哪一条不合格；**不落盘**——同一份输入下次还要再问
-      return { ...unavailable(context, "rejected", `分层判断没采信：${parsed.reason ?? "输出不合法"}。这次没落盘，再点一次「重新分层」会重问。`), usage: response.usage };
+      return { ...unavailable(context, "rejected", `分层判断没采信：${parsed.reason ?? "输出不合法"}。这次没落盘，再点一次「判一次分层」会重问。`), usage: response.usage };
     }
     const layered = applyOverrides(parsed.layers, overrides, units);
     /**
@@ -630,6 +630,6 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     if (!parsed.droppedFacts) database?.putLayerCache(key, plan);
     return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
   } catch (error) {
-    return unavailable(context, "call_failed", `分层调用没成功：${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}。没落盘，可以再点一次「重新分层」。`);
+    return unavailable(context, "call_failed", `分层调用没成功：${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}。没落盘，可以再点一次「判一次分层」。`);
   }
 }

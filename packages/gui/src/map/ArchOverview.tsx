@@ -25,7 +25,7 @@ import { showToast } from "../modules/toast";
   - 边界之外那一栏 = 词典认出来的外部包，认不出的一律「未识别」，不当服务画出来。
 */
 
-/** 「重新分层」是花 token 的动作，确认框里要把量说清（一发 light 分层实测 ≈¥0.01~0.02）。 */
+/** 「判一次分层」是花 token 的动作，确认框里要把量说清（一发 light 分层实测 ≈¥0.01~0.02）。 */
 const REGEN_PRICE_NOTE = "一发轻量档调用（实测 ≈¥0.02）";
 
 /**
@@ -170,11 +170,11 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
   };
 
   const regenerate = (): void => {
-    if (!window.confirm(`重新分层会花一次模型调用（${REGEN_PRICE_NOTE}）。变的只有层名与谁归哪层，外部依赖不变；你的人工修正会作为输入一起送进去。要继续吗？`)) return;
+    if (!window.confirm(`判一次分层会花一次模型调用（${REGEN_PRICE_NOTE}）。变的只有层名与谁归哪层，外部依赖不变；你的人工修正会作为输入一起送进去。要继续吗？`)) return;
     setLoading(true);
     api.regenerateArchitecture(repositoryId)
-      .then((next) => { setPlan(next); showToast(next.source === "llm" ? "已按模型判断重新分层" : `${UNAVAILABLE[next.unavailableReason ?? "not_judged"].title}：这次也没判成`); })
-      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "重新分层没成功"))
+      .then((next) => { setPlan(next); showToast(next.source === "llm" ? "已按模型判断分好层" : `${UNAVAILABLE[next.unavailableReason ?? "not_judged"].title}：这次也没判成`); })
+      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "判分层没成功"))
       .finally(() => setLoading(false));
   };
 
@@ -190,22 +190,10 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
           <Icon name="alert" size={18} />
           <div>
             <p className="arch-unavailable-title">{state.title}</p>
-            <p className="arch-unavailable-note" title={`${plan.reason ?? ""}${plan.blocks?.length ? ` · 方块清单、跨层往来与边界之外那一栏都由程序算出，仍在这份产物里` : ""}`}>{state.note}</p>
+            <p className="arch-unavailable-note" title={`${plan.reason ?? ""}· 方块清单与边界之外那一栏都由程序算出，仍在这份产物里，问 agent 就有；它们要对着系统边界才读得出意思，所以这里不单独摊开。`}>{state.note}</p>
           </div>
           <button type="button" className="btn btn-primary btn-sm" disabled={loading || !state.retryable} title={state.retryable ? `${REGEN_PRICE_NOTE}。分层是判断题：不判就没有层可画。` : "这条路由不降级：没配模型时点它只会白跑一次"} onClick={regenerate}><Icon name="rotate" size={13} />判一次分层</button>
         </div>
-        {plan.externals.length ? (
-          <div className="arch-outside">
-            {[...externalsByCategory.entries()].map(([category, rows]) => (
-              <div className="arch-outside-group" key={category}>
-                <span className="arch-outside-label">{EXTERNAL_CATEGORY_LABEL[category]}</span>
-                <div className="arch-outside-rows">
-                  {rows.map((row) => <span className="arch-external" key={row.display} title={row.identities.join("、")}>{row.display}</span>)}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
       </div>
     );
   }
@@ -317,7 +305,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
           disabled={loading}
           title={`重问一次模型怎么分层：${REGEN_PRICE_NOTE}。边界外那一栏不变——它从来不是模型算的。`}
             onClick={regenerate}
-        ><Icon name="rotate" size={13} />重新分层</button>
+        ><Icon name="rotate" size={13} />判一次分层</button>
       </div>
     </div>
   );

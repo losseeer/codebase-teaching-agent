@@ -206,7 +206,7 @@ describe("generateArchitectureCached", () => {
       expect(peeked.usage, "没发请求就不该有用量入账").toBeUndefined();
       expect(peeked.reason).toContain("还没判过层");
       expect(peeked.layers).toEqual([]);
-      // 点了「重新分层」之后，同一份原判进缓存，读侧立刻恢复成模型判的那几层
+      // 点了「判一次分层」之后，同一份原判进缓存，读侧立刻恢复成模型判的那几层
       await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database });
       expect(complete).toHaveBeenCalledTimes(1);
       const after = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, database, allowCall: false });

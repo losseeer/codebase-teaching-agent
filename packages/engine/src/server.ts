@@ -851,7 +851,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/a
   /**
     读侧两件事：**provider 照给**（缓存键里有 modelVersion，不给就退成 "none" ⇒ 判好的那份读不回来，
     画布会静默换成静态三层），但 `allowCall: false` 让它没有缓存行时也不发请求。
-    所以这条路由不看预算：预算只管「重新分层」那一下，不管打开画布。
+    所以这条路由不看预算：预算只管「判一次分层」那一下，不管打开画布。
     */
   const database = new TutorDatabase(repository.path);
   try {
@@ -869,8 +869,8 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/a
 app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture/regenerate", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  if (budgetDegraded(repository.path, repository.index.repositoryId)) return reply.code(422).send({ error: "本月预算已触顶，未调用模型；重新分层这条路由不降级。" });
-  if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：重新分层需要模型判层名与归属。" });
+  if (budgetDegraded(repository.path, repository.index.repositoryId)) return reply.code(422).send({ error: "本月预算已触顶，未调用模型；判一次分层这条路由不降级。" });
+  if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：判一次分层需要模型判层名与归属。" });
   const database = new TutorDatabase(repository.path);
   try {
     const overlays = readOverlays(database, repository.index.repositoryId);

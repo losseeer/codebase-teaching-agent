@@ -60,6 +60,19 @@ describe("外部包名词典（确定性，无模型）", () => {
     expect(groups[groups.length - 1].category).toBe("other");
   });
 
+  it("同一个东西的两条包名并成一栏：边界栏里不许出现两枚一模一样的 chip", () => {
+    const groups = groupExternals({
+      "ShopService.java": ["org.apache.ibatis.annotations.Mapper", "org.mybatis.spring.annotation.MapperScan"],
+      "Index.java": ["org.apache.ibatis.session.SqlSessionFactory", "java.util.List", "java.io.IOException"]
+    });
+    const mybatis = groups.filter((group) => group.display === "MyBatis");
+    expect(mybatis, "org.apache.ibatis.* 与 org.mybatis.* 都叫 MyBatis ⇒ 一行").toHaveLength(1);
+    expect(mybatis[0].identities.sort()).toEqual(["org.apache.ibatis.annotations.Mapper", "org.apache.ibatis.session.SqlSessionFactory", "org.mybatis.spring.annotation.MapperScan"]);
+    expect(mybatis[0].files).toEqual(["ShopService.java", "Index.java"]);
+    // 标准库按语言合一行：以前每个 java.* 各占一行，把「未列出」的计数灌满
+    expect(groups.filter((group) => group.category === "stdlib")).toHaveLength(1);
+  });
+
   /**
     词典只收真实遇到的包（文件头第 3 条纪律）。这条测试不查内容查**形状**：
     每个键都得是个能当包名前缀用的写法，别把中文、空格、通配符写进键里——那会让匹配静默失效。
