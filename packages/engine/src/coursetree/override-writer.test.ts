@@ -135,6 +135,65 @@ describe("commitOverride（写盘、审计与通知）", () => {
   });
 });
 
+describe("reset 的三种撤法（撤错一格比不撤贵得多）", () => {
+  const clear = (): void => { commitOverride(contextFor().context, { kind: "reset" }, "gui"); };
+
+  it("撤一条改名：按原判名或改后的名字都认，指着新名字的归层写回旧名字", () => {
+    clear();
+    const context = contextFor().context;
+    commitOverride(context, { kind: "move_module", module: "module:db", layer: "数据" }, "gui");
+    commitOverride(context, { kind: "rename_layer", from: "数据", to: "存储与枚举" }, "gui");
+    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:db"], "改名时归层跟着换成新名字（写侧那次正向合并）").toBe("存储与枚举");
+
+    const undone = commitOverride(contextFor().context, { kind: "reset", layerRename: "存储与枚举" }, "agent");
+    expect(undone.ok).toBe(true);
+    expect(undone.text).toContain("数据→存储与枚举");
+    const overlays = readOverlays(database, "repo");
+    expect(overlays.architecture?.layerRenames ?? {}, "那条改名没了").not.toHaveProperty("数据");
+    expect(overlays.architecture?.moduleLayer?.["module:db"], "撤名字不能把归层也弄丢：它得回到原判层名").toBe("数据");
+  });
+
+  it("点名的改名对不上：拒，绝不退成「全撤」", () => {
+    clear();
+    const context = contextFor().context;
+    commitOverride(context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
+    const refused = commitOverride(contextFor().context, { kind: "reset", layerRename: "没这一层" }, "agent");
+    expect(refused.ok, "认不出目标就动手＝把用户别的修正一起抹掉").toBe(false);
+    expect(refused.text).toContain("其他修正一条没动");
+    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:api"], "那条归层修正还在").toBe("编排");
+  });
+
+  it("模块本来就没被改过：拒，不去碰别的格", () => {
+    clear();
+    commitOverride(contextFor().context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
+    const refused = commitOverride(contextFor().context, { kind: "reset", module: "module:db" }, "agent");
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toContain("本来就没有人工修正");
+    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:api"], "另一格不受牵连").toBe("编排");
+  });
+
+  it("整份 reset 说清撤了几处，界面上不许多出任何边", () => {
+    clear();
+    const context = contextFor().context;
+    commitOverride(context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
+    commitOverride(context, { kind: "rename_layer", from: "数据", to: "存储" }, "gui");
+    commitOverride(context, { kind: "set_tier", module: "module:db", tier: "core" }, "gui");
+    const cleared = commitOverride(contextFor().context, { kind: "reset" }, "gui");
+    expect(cleared.text).toContain("1 条归层 / 1 条改名 / 1 处改档");
+    expect(readOverlays(database, "repo").architecture ?? {}, "覆盖层清空后回到引擎判据").toEqual({});
+    expect(JSON.stringify(readOverlays(database, "repo")), "覆盖层里任何时候都不该出现边").not.toMatch(/edges|weight|samplePaths/);
+  });
+});
+
+describe("工具入参里的 reset 三种写法", () => {
+  it("from 或 to 都翻成「撤这条改名」，都不给才是全撤", () => {
+    expect(parseOverrideArguments(JSON.stringify({ action: "reset", module: "module:api" })).intent).toEqual({ kind: "reset", module: "module:api" });
+    expect(parseOverrideArguments(JSON.stringify({ action: "reset", from: "数据" })).intent).toEqual({ kind: "reset", layerRename: "数据" });
+    expect(parseOverrideArguments(JSON.stringify({ action: "reset", to: "存储与枚举" })).intent).toEqual({ kind: "reset", layerRename: "存储与枚举" });
+    expect(parseOverrideArguments(JSON.stringify({ action: "reset" })).intent).toEqual({ kind: "reset" });
+  });
+});
+
 describe("合并块的 id 也是可写的（图上看到什么就能改什么）", () => {
   const blocksContext = (): Parameters<typeof commitOverride>[0] => ({
     ...contextFor().context,

@@ -78,8 +78,13 @@ export function patchOverlays(database: TutorDatabase, repositoryId: string, pat
   撤掉某几格的覆盖，让那几个模块/层回到引擎自己的判据。
   为什么要单独一条而不是让调用方发 `{ 模块 id: undefined }`：JSON 带不动 undefined，
   靠「值为空串」判删除会把空名字写进图里。这里按 key 显式删，语义只有一种。
+
+  `architecture.layerRenames` 收的是**层名**，原层名与新层名都认（`数据访问` 与它改成的 `存储与枚举` 指的是同一条）：
+  改名记录存的是「原判名 → 改成」，而模型与界面看得见的是改完的那个名字，两边都不该猜。
+  撤掉一条改名时，指着**新名字**的归层要写回旧名字——不写回的话这些模块下次读就「目标层不存在」，
+  撤个名字却把别的修正弄坏了（与 `patchOverlays` 里那次正向合并是同一件事的反向）。
 */
-export function removeOverlayKeys(database: TutorDatabase, repositoryId: string, target: { modules?: { tier?: string[]; renamed?: string[] }; architecture?: { moduleLayer?: string[] } }): RepositoryOverlays {
+export function removeOverlayKeys(database: TutorDatabase, repositoryId: string, target: { modules?: { tier?: string[]; renamed?: string[] }; architecture?: { moduleLayer?: string[]; layerRenames?: string[] } }): RepositoryOverlays {
   const settings = database.getSettings<Record<string, unknown>>(repositoryId) ?? {};
   const current = readOverlays(database, repositoryId);
   const next: RepositoryOverlays = { ...current };
@@ -89,8 +94,20 @@ export function removeOverlayKeys(database: TutorDatabase, repositoryId: string,
     if (target.modules.renamed) modules.renamed = Object.fromEntries(Object.entries(modules.renamed ?? {}).filter(([id]) => !target.modules?.renamed?.includes(id)));
     next.modules = modules;
   }
-  if (target.architecture?.moduleLayer?.length && current.architecture) {
-    next.architecture = { ...current.architecture, moduleLayer: Object.fromEntries(Object.entries(current.architecture.moduleLayer ?? {}).filter(([id]) => !target.architecture?.moduleLayer?.includes(id))) };
+  if (current.architecture && (target.architecture?.moduleLayer?.length || target.architecture?.layerRenames?.length)) {
+    let architecture: ArchitectureOverrides = current.architecture;
+    if (target.architecture.moduleLayer?.length) {
+      architecture = { ...architecture, moduleLayer: Object.fromEntries(Object.entries(architecture.moduleLayer ?? {}).filter(([id]) => !target.architecture?.moduleLayer?.includes(id))) };
+    }
+    if (target.architecture.layerRenames?.length) {
+      const wanted = target.architecture.layerRenames;
+      const entries = Object.entries(architecture.layerRenames ?? {});
+      const dropped = entries.filter(([from, to]) => wanted.includes(from) || wanted.includes(to));
+      const moduleLayer = { ...architecture.moduleLayer };
+      for (const [from, to] of dropped) for (const [moduleId, name] of Object.entries(moduleLayer)) if (name === to) moduleLayer[moduleId] = from;
+      architecture = { ...architecture, layerRenames: Object.fromEntries(entries.filter(([from, to]) => !dropped.some(([dFrom, dTo]) => dFrom === from && dTo === to))), moduleLayer };
+    }
+    next.architecture = architecture;
   }
   database.saveSettings(repositoryId, { ...settings, overlays: next });
   return next;

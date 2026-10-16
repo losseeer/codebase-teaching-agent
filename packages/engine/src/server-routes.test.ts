@@ -255,6 +255,26 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
+  it("map-chat 没绑定模块也带写工具，并把「架构现场＋现存修正」送进上下文", async () => {
+    scripted = [OK_REPLY];
+    const threadId = await newThread("map", "画布上直接说话");
+    sentTools.length = 0;
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "把刚才那条修正撤掉", threadId } });
+    expect(response.statusCode).toBe(200);
+    const call = sentTools[0];
+    expect(call?.names, "画布是只读的，改图只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_architecture");
+    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和格子 id，不然只能反问或编 id").toContain("架构现场");
+    expect(call?.raw).toContain("现存人工修正");
+    expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
+
+    // 反面对照：练习答疑没有画布，也就没有写能力——放宽不能顺着作用域漏出去
+    scripted = [OK_REPLY];
+    const practiceThread = await newThread("practice", "对照线程", exerciseId);
+    sentTools.length = 0;
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId, threadId: practiceThread } });
+    expect(sentTools[0]?.names, "practice_chat 永远不给有副作用的工具").not.toContain("set_architecture");
+  });
+
   it("map-chat SSE：delta 拼起来＝done.reply＝库里正文", async () => {
     scripted = [`看 ${MAIN_FILE}:5 的上游，谁先把请求交给它？`];
     const threadId = await newThread("map", "流式线程");

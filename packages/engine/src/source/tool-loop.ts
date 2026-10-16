@@ -46,7 +46,7 @@ export interface ReadToolLoopInput {
   cross?: CrossRepoContext;
   /**
     架构修正工具（唯一的有副作用工具）。不传 = 这个作用域没有写能力，
-    工具清单里连 `set_architecture` 这一格都不出现——practice_chat 与没绑定模块的回合就是这种。
+    工具清单里连 `set_architecture` 这一格都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
   */
   architecture?: ArchitectureToolContext;
 }
@@ -92,15 +92,15 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 */
 export const SET_ARCHITECTURE_TOOL: LlmTool = {
   name: "set_architecture",
-  description: "修正架构视图的分层判断：把某个方块或模块移到另一层（move_module）、给层改名（rename_layer）、或改某个模块的结构档（set_tier），撤销人工修正用 reset。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那一格挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那一格的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓**所有**修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张格子清单上的 id（arch: 开头是合并块，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
   parameters: {
     type: "object",
     properties: {
       action: { type: "string", description: "move_module / rename_layer / set_tier / reset" },
-      module: { type: "string", description: "图上那一格的 id：合并方块是 arch: 开头（整块挪），原子模块是 module: 开头（set_tier 只认这一档，reset 可给）" },
+      module: { type: "string", description: "图上那一格的 id：合并块 arch: 开头（整块挪），原子模块 module: 开头（set_tier 只认这一档；reset 给了它就只撤这一格）" },
       layer: { type: "string", description: "目标层名（move_module 必填）" },
-      from: { type: "string", description: "原层名（rename_layer 必填）" },
-      to: { type: "string", description: "新层名（rename_layer 必填）" },
+      from: { type: "string", description: "rename_layer 的原层名；reset 时给它就是「只撤这条改名」" },
+      to: { type: "string", description: "rename_layer 的新层名（1~24 字）；reset 时给它就是「只撤改成这个名字的那条改名」" },
       tier: { type: "string", description: "core / facility / periphery（set_tier 必填）" }
     },
     required: ["action"]
@@ -115,6 +115,12 @@ export interface ArchitectureToolContext {
     不能回「意图」：回错了模型会把没改成的说成改成了。
   */
   apply: (argumentsJson: string) => string;
+  /**
+    现在的分层现场 + 已存的人工修正清单（一段文本，由作用域层进上下文）。
+    为什么要有这一格：修正存在引擎里，横幅读得到、模型读不到——用户说「撤掉那条」时，
+    模型手上既没有「哪一条」的清单，也没有格子 id，只能猜或反问（2026-10-16 用户指出）。
+  */
+  inventory?: string;
 }
 
 /** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */

@@ -525,16 +525,31 @@ export function architectureInputOf(input: { repositoryId: string; repositoryPat
   只查缓存、**绝不发请求**的读侧。副作用工具要先知道「图上现在有哪几层」才能校验层名，
   而为了校验去烧一发模型是不可接受的（用户问一句「把 X 挪到 Y 层」，代价不该是一笔重判的钱）。
   没缓存行就回空层名：调用方按「现在没有分层可改」处理，并如实告诉模型（以前这里塞结构角色三档，agent 会收到一句假的「已挪好」）。
+
+  `layout` 与 `lost` 是给 agent 那份「架构现场」用的：现在每层里画了哪几格、哪几条人工修正这次没接上。
+  与界面横幅同源（都是 `applyOverrides` 一次算出来的），免得对话里说「这条修正还在」而图上没有。
 */
-export function peekCachedArchitecture(input: ArchitectureInput & { provider: LlmProvider }): { plan?: ArchitecturePlan; layers: string[]; blocks: ArchitectureBlockBrief[] } {
+export function peekCachedArchitecture(input: ArchitectureInput & { provider: LlmProvider }): {
+  plan?: ArchitecturePlan;
+  layers: string[];
+  blocks: ArchitectureBlockBrief[];
+  layout: { name: string; duty: string; moduleIds: string[] }[];
+  lost: ArchitectureOverrideLoss[];
+} {
   const context = archContext(input, input.provider.modelVersion);
   const stored = input.database?.getLayerCache<ArchitecturePlan>(context.key);
   const plan = stored?.value?.layers?.length ? stored.value : undefined;
   // 没有判好的那份就回**空层名**：以前这里塞的是 tier 三档（主干/设施/外围），
   // 于是 agent 能「把模块挪进外围」并收到一句成功——它挪动的其实是结构角色分组，不是分层判断（2026-10-16 改）。
-  if (!plan) return { layers: [], blocks: context.briefs };
+  if (!plan) return { layers: [], blocks: context.briefs, layout: [], lost: [] };
   const layered = applyOverrides(plan.layers, input.overrides, context.units);
-  return { plan, layers: layered.layers.map((layer) => layer.name), blocks: context.briefs };
+  return {
+    plan,
+    layers: layered.layers.map((layer) => layer.name),
+    blocks: context.briefs,
+    layout: layered.layers.map((layer) => ({ name: layer.name, duty: layer.duty, moduleIds: layer.moduleIds })),
+    lost: layered.lost
+  };
 }
 
 export async function generateArchitectureCached(input: ArchitectureInput): Promise<ArchitectureResult> {

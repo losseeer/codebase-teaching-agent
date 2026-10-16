@@ -1139,12 +1139,44 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
 }
 
 /**
-  架构修正工具的装配（**只在 map_chat 且这一轮绑到了模块地图里的节点**时才有；practice_chat 永远不给）。
-  两条纪律：
+  架构修正工具的装配（**map 作用域每一轮都给**；practice 与教学作用域永远不给）。
+  以前还要「这一轮绑到了模块地图里的节点」才给，于是用户在架构画布上直接说一句「把它挪到编排层」时
+  工具压根不在清单里，模型只能嘴上答（2026-10-16 用户指出：画布是只读的，改图只有 agent 这一条路，
+  那就不能要求说话前先在左栏点进某个模块）。
+  三条纪律：
   - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
     用户说一句「把它挪到编排层」不该变成一笔重判的钱；
-  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完。
+  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
+  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、格子叫什么 id」
+    就只会反问或编一个 id 撞在写侧白名单上。
 */
+function architectureToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
+  if (!lightLlmProvider) return undefined;
+  const overlays = readOverlays(database, repository.index.repositoryId);
+  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
+  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
+  const titleById = new Map(peek.blocks.map((block) => [block.id, block.title]));
+  const titleOf = (unitId: string): string => titleById.get(unitId) ?? findCourseNode(input.course.root, unitId)?.title ?? unitId;
+  const lost = new Set(peek.lost.map((loss) => (loss.kind === "move_module" ? `move:${loss.module}` : `rename:${loss.from}`)));
+  const corrections = [
+    ...Object.entries(overlays.architecture?.moduleLayer ?? {}).map(([unitId, layer]) => `- 把「${titleOf(unitId)}」挪进「${layer}」（id=${unitId}）${lost.has(`move:${unitId}`) ? "｜这条这次没接上：现在这份判层里没有这一层，或这个 id 已不在树上" : ""}`),
+    ...Object.entries(overlays.architecture?.layerRenames ?? {}).map(([from, to]) => `- 层名「${from}」改成了「${to}」${lost.has(`rename:${from}`) ? "｜这条这次没接上：原判层里没有这个旧层名" : ""}`),
+    ...Object.entries(overlays.modules?.tier ?? {}).map(([unitId, tier]) => `- 「${titleOf(unitId)}」的结构档改成 ${tier}（id=${unitId}）`)
+  ];
+  const layers = peek.layout.length
+    ? peek.layout.map((layer) => `${layer.name}：${layer.moduleIds.map((unitId) => `${titleOf(unitId)}（${unitId}）`).join("；") || "（空）"}`).join("\n")
+    : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「判一次分层」，这一发不由你代点。）";
+  return {
+    inventory: `架构现场（要动哪一格就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读现叠）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那一格；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
+    apply: (argumentsJson: string) => {
+      const parsed = parseOverrideArguments(argumentsJson);
+      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
+      if (parsed.error) return `没改：${parsed.error}。${note}`;
+      return `${applyOverrideIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
+    }
+  };
+}
+
 /** 一次人工修正的落地：校验 → 写盘 → 审计 → 通知。GUI 的拖动与 Agent 的工具都走这一个函数。 */
 function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
   const overlays = readOverlays(database, repository.index.repositoryId);
@@ -1164,20 +1196,6 @@ function applyOverrideIntent(repository: ImportedRepository, database: TutorData
   return { ...outcome, layers: peek.layers };
 }
 
-function architectureToolFor(repository: ImportedRepository, nodeId: string | undefined, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
-  const branch = repository.course.root.children.find((node: CourseNode) => node.id === "modules");
-  if (!(branch?.children ?? []).some((node: CourseNode) => node.id === nodeId)) return undefined;
-  if (!lightLlmProvider) return undefined;
-  return {
-    apply: (argumentsJson: string) => {
-      const parsed = parseOverrideArguments(argumentsJson);
-      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
-      if (parsed.error) return `没改：${parsed.error}。${note}`;
-      return `${applyOverrideIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
-    }
-  };
-}
-
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1195,7 +1213,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const overlayDatabase = new TutorDatabase(repository.path);
   try {
     const crossFiles = new Map<string, number>();
-    const toolContext = architectureToolFor(repository, request.body?.nodeId, overlayDatabase, turn.threadId);
+    const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
@@ -1236,7 +1254,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const crossFiles = new Map<string, number>();
   const overlayDatabase = new TutorDatabase(repository.path);
   try {
-    const toolContext = architectureToolFor(repository, request.body?.nodeId, overlayDatabase, turn.threadId);
+    const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),

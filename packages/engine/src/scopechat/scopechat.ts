@@ -234,7 +234,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（全仓唯一的有副作用工具）：只在 map_chat 且这一轮绑到模块节点时由路由给。 */ architecture?: ArchitectureToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（全仓唯一的有副作用工具）：只在 map_chat 由路由给，`inventory` 那格同时进上下文。 */ architecture?: ArchitectureToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出境清单（见 security/dataflow.ts） */
@@ -261,6 +261,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     }
   }
   if (input.focus) sections.push(flowStageSection(input.focus));
+  // 架构现场（层名、格子 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
+  if (input.architecture?.inventory) sections.push(input.architecture.inventory);
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
     const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);

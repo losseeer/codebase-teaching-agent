@@ -298,7 +298,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
         ) : null}
       </div>
       <div className="flow-legend">
-        <span className="fs-11 faint" title="图上这些方块只读：点一下看详情。要挪层或改层名，在右边对话里说一声，agent 走 set_architecture 写。">分层判错了？在对话里让 agent 挪</span>
+        <span className="fs-11 faint" title="图上这些方块只读：点一下看详情。要挪层、改层名，或撤掉某条人工修正，在右边对话里说一声——agent 走 set_architecture 写，它看得见现在有哪几条。">分层判错了？在对话里让 agent 挪</span>
         <div className="grow" />
         <button
           type="button"

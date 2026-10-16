@@ -1,5 +1,5 @@
 import type { ArchitectureBlockBrief, ArchitectureOverrideIntent, CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
-import { clearOverlays, patchOverlays, readOverlays, removeOverlayKeys } from "../store/overlays.js";
+import { clearOverlays, overlayCounts, patchOverlays, readOverlays, removeOverlayKeys } from "../store/overlays.js";
 import type { TutorDatabase } from "../store/database.js";
 import { id } from "../lib.js";
 
@@ -127,13 +127,32 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   }
 
   if (intent.kind === "reset") {
-    const next = intent.module
-      ? removeOverlayKeys(context.database, context.repositoryId, { modules: { tier: [intent.module] }, architecture: { moduleLayer: [intent.module] } })
+    /**
+      撤法只有三种，写侧必须各自有落点（2026-10-16 补第二种）：
+      - 给 `module`：只撤那一格的归层与改档；
+      - 给 `layerRename`（原层名或改成的名字都认）：只撤一条层名改名，指着新名字的归层写回旧名字；
+      - 两个都不给：把这个仓的修正一次清空。
+      以前只有第一与第三种，「带着改名来撤」会因为没有 module 而**掉进第三种**——用户想撤一条改名，结果全清。
+      这一格是全仓唯一会一次抹掉多处修正的动作，认不出目标就拒，不退成全清。
+      */
+    const rename = intent.layerRename?.trim();
+    const renames = overlays.architecture?.layerRenames ?? {};
+    const matched = rename ? Object.entries(renames).filter(([from, to]) => from === rename || to === rename) : [];
+    if (rename && !matched.length) return refuse(`没有「${rename.slice(0, 40)}」这条层名修正，其他修正一条没动；现在的改名是：${Object.entries(renames).map(([from, to]) => `${from}→${to}`).join(" / ") || "（没有）"}`);
+    const clearedMove = intent.module ? overlays.architecture?.moduleLayer?.[intent.module] : undefined;
+    const clearedTier = intent.module ? overlays.modules?.tier?.[intent.module] : undefined;
+    if (intent.module && !clearedMove && !clearedTier && !matched.length) return refuse(`「${(intent.module ?? "").slice(0, 60)}」本来就没有人工修正，其他修正一条没动`);
+    const partial = Boolean(intent.module || rename);
+    const next = partial
+      ? removeOverlayKeys(context.database, context.repositoryId, {
+        ...(intent.module ? { modules: { tier: [intent.module] } } : {}),
+        ...(intent.module || rename ? { architecture: { ...(intent.module ? { moduleLayer: [intent.module] } : {}), ...(rename ? { layerRenames: [rename!] } : {}) } } : {})
+      })
       : clearOverlays(context.database, context.repositoryId);
-    context.journal.append("architecture_layer_overridden", { correction_id: id(), action: "reset", module: intent.module ?? null, layer_rename: intent.layerRename ?? null, via });
+    context.journal.append("architecture_layer_overridden", { correction_id: id(), action: "reset", module: intent.module ?? null, layer_rename: rename ?? null, via });
     // 撤销顺带撤掉的可能不止归层：旧读数以 `restored:true` 分「改档」与「恢复」，这里只在**真有一处档位被撤掉**时补一行——
     // 没撤也记会让恢复数虚高。
-    const clearedTiers = intent.module ? (overlays.modules?.tier?.[intent.module] ? [intent.module] : []) : Object.keys(overlays.modules?.tier ?? {});
+    const clearedTiers = intent.module ? (clearedTier ? [intent.module] : []) : Object.keys(overlays.modules?.tier ?? {});
     for (const moduleId of clearedTiers) {
       const evidence = moduleNode(context.course, moduleId)?.tierEvidence;
       context.journal.append("module_tier_overridden", {
@@ -142,7 +161,15 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
       });
     }
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
-    return { ok: true, text: intent.module ? `已撤销「${titleOf(context.course, context.blocks, intent.module)}」的人工修正，回到引擎与模型的判据。` : "已撤销这份产物上的人工修正。", overlays: next };
+    if (!partial) {
+      const counts = overlayCounts(overlays);
+      return { ok: true, text: `已清空这个仓的全部人工修正（${Object.keys(overlays.architecture?.moduleLayer ?? {}).length} 条归层 / ${Object.keys(renames).length} 条改名 / ${Object.keys(overlays.modules?.tier ?? {}).length} 处改档${counts.modules + counts.layers - Object.keys(overlays.architecture?.moduleLayer ?? {}).length - Object.keys(renames).length - Object.keys(overlays.modules?.tier ?? {}).length ? "，另含模块标题改名与隐藏等界面覆盖" : ""}），图回到模型与引擎的判据。`, overlays: next };
+    }
+    const what = [
+      intent.module ? `「${titleOf(context.course, context.blocks, intent.module!)}」的${[clearedMove ? "归层" : "", clearedTier ? "改档" : ""].filter(Boolean).join("与")}` : "",
+      rename ? `改名「${matched[0]![0]}→${matched[0]![1]}」` : ""
+    ].filter(Boolean).join("、");
+    return { ok: true, text: `已撤销 ${what}，这些格回到模型与引擎的判据。这个仓还剩 ${overlayCounts(next).modules + overlayCounts(next).layers} 条人工修正。`, overlays: next };
   }
 
   return refuse("这个动作不在支持列表里");
@@ -176,6 +203,10 @@ export function parseOverrideArguments(raw: string): { intent?: OverrideIntent; 
     if (!text("module") || !TIER_VALUES.includes(text("tier") as TierValue)) return { ignored, error: `set_tier 需要 module 与 tier（${TIER_VALUES.join(" / ")}）` };
     return { intent: { kind: "set_tier", module: text("module"), tier: text("tier") as TierValue }, ignored };
   }
-  if (action === "reset") return { intent: { kind: "reset", ...(text("module") ? { module: text("module") } : {}), ...(text("to") ? { layerRename: text("to") } : {}) }, ignored };
+  // reset 的三种撤法：给 module（撤那一格）、给 from 或 to（撤一条改名，原判名与改后的名字都认）、都不给（全撤）
+  if (action === "reset") {
+    const rename = text("from") || text("to");
+    return { intent: { kind: "reset", ...(text("module") ? { module: text("module") } : {}), ...(rename ? { layerRename: rename } : {}) }, ignored };
+  }
   return { ignored, error: `未知 action「${action.slice(0, 40)}」` };
 }
