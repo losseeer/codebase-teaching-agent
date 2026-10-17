@@ -8,7 +8,7 @@ import { RepoTree } from "./RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { subscribeServerEvents } from "../api/client";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { ArchOverview, NO_ARCH_STATUS, type ArchStatus } from "../map/ArchOverview";
+import { ArchOverview, ARCH_REGEN_CONFIRM, ARCH_REGEN_PRICE_NOTE, archRegenToast, NO_ARCH_STATUS, type ArchStatus } from "../map/ArchOverview";
 import { FLOW_KIND_LABEL, FlowMap, type FlowSelection, type FlowStatus } from "../map/FlowMap";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
@@ -19,10 +19,12 @@ import { showToast } from "../modules/toast";
   - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
     早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
   - 右 「地图画布」：`.map-viewbar` 切两个视图（`.view-toggle`）——
-    「架构视图」由**文件**驱动 = 模块依赖图（`DepMap`）：节点 = 目录聚合模块，边 = import 依赖，入口模块在最左列；
+    「架构视图」= **分层全景**（`ArchOverview`）：一条系统边界 + 层序号导轨 + 只读方块，边不上画布；
     「流程视图」由 **LLM 生成**（`FlowMap`）：环节 = 一次执行经过的步骤，关联文件只在该环节的「节点详情」里展示，
     画布上不出现路径。课程树不上图（层级交给左侧目录与教学页），点击模块合成 CourseNode 走抽屉与地图线程。
-  - 节点详情是画布右侧的 `.drawer`（展开时 `.map-canvas.detail-open` 让位），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
+  - 花钱动作与流程「重新生成」同位：架构的「判一次分层」长在 viewbar 上，取数与产物却住在 `ArchOverview`，
+    所以确认、调用、回告都在这边（一次实现，不可用卡片那颗按钮也走它），完了 bump `archNonce` 让子组件重取。
+  - 节点详情是画布右侧的 `.drawer`（展开时 `.map-stage:has(.drawer)` 给画布让出宽度），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
     抽屉在架构视图里显示节点，在流程视图里显示环节、它的出边依据与关联文件。
   - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
 
@@ -92,6 +94,8 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [archStatus, setArchStatus] = useState<ArchStatus>(NO_ARCH_STATUS);
   /** 人工修正落盘后要重取产物：这里只出一个自增号，取数住在子组件里。 */
   const [archNonce, setArchNonce] = useState(0);
+  /** 「判一次分层」在途：确认框之后的这段时间也要让按钮和徽标说真话（子组件的 loading 只覆盖它自己取数那段）。 */
+  const [archRegening, setArchRegening] = useState(false);
   /** Agent 在对话里改了分层（`set_architecture`）时引擎会广播一帧；这边只认自己这个仓。 */
   useEffect(() => {
     const controller = new AbortController();
@@ -102,6 +106,15 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
     }, controller.signal);
     return () => controller.abort();
   }, [repositoryId]);
+  /** 判一次分层是花钱动作：确认、调用、回告只留这一处（viewbar 那颗与画布「分层不可用」卡片上的那颗走同一条）。 */
+  const regenerateArch = (): void => {
+    if (!window.confirm(ARCH_REGEN_CONFIRM)) return;
+    setArchRegening(true);
+    api.regenerateArchitecture(repositoryId)
+      .then((plan) => showToast(archRegenToast(plan)))
+      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "判分层没成功"))
+      .finally(() => { setArchRegening(false); setArchNonce((value) => value + 1); });
+  };
   const [regenNonce, setRegenNonce] = useState(0);
   const [error, setError] = useState("");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
@@ -368,7 +381,15 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
                 title="重发这一趟取数：引擎侧若仍命中缓存，回来的还是同一条流程"
                 onClick={() => setRegenNonce((value) => value + 1)}
               ><Icon name="rotate" size={13} />重新生成</button>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={archStatus.loading}
+                title={`重问一次模型怎么分层：${ARCH_REGEN_PRICE_NOTE}。边界外那一栏不变——它从来不是模型算的。`}
+                onClick={regenerateArch}
+              ><span className={archRegening ? "spin" : undefined} style={{ display: "inline-flex" }}><Icon name="rotate" size={13} /></span>{archRegening ? "分层中…" : "判一次分层"}</button>
+            )}
             {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
             {drawer ? null : (
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawer(true)}>
@@ -381,7 +402,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
           <div className="map-canvas-wrap">
             <div className="map-canvas">
               {mapView === "architecture"
-                ? <ArchOverview repositoryId={repositoryId} course={course} analysis={analysis} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} onSelect={pickNode} onStatus={setArchStatus} />
+                ? <ArchOverview repositoryId={repositoryId} course={course} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} regenerating={archRegening} onRegenerate={regenerateArch} onSelect={pickNode} onStatus={setArchStatus} />
                 : (
                   <FlowMap
                     repositoryId={repositoryId}

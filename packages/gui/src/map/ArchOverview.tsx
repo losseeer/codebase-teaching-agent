@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
-import { EXTERNAL_CATEGORY_LABEL, type ArchitecturePlan, type CourseNode, type CourseTree, type ExternalCategory, type RepositoryAnalysis } from "@codebase-tutor/shared";
+import { EXTERNAL_CATEGORY_LABEL, type ArchitecturePlan, type CourseNode, type CourseTree, type ExternalCategory } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 import { EmptyState, flatten, Loading } from "../views/helpers";
 import { Icon } from "../ui/icons";
@@ -15,7 +15,9 @@ import { showToast } from "../modules/toast";
     两边各写一套，用户的修正就可能只活在浏览器里；
   - **一格 = 一个方块**：引擎把原子模块压成方块（旁证不画、同父小目录合并），一格可能是几个模块。
     点合并块展开成员，点成员才进节点详情；一层超过 6 格先折起，其余就地展开。
-    文件数、占比这些元数据一律不上画布——要读就在对话里问 agent。
+    方块下面那一行只写两种读数：这一格的角色（引擎按 import/调用/接口实现算出，模型一格都不参与），
+    或「合并块 · N 个模块」。文件数、行数、占比那些元数据一律不上画布——要读就在对话里问 agent。
+    左侧那条序号导轨也只是排版的记号：它说「第几层」，不宣称上层调用下层。
 
   引擎侧的 `edges` 照旧算、照旧进产物：它是「模型不许发明边」这条红线的落点（模型输出里的边一律丢弃），
   只是不再上画布（全景图里那几团线读不出东西，看往来有流程视图与节点详情）。
@@ -26,7 +28,9 @@ import { showToast } from "../modules/toast";
 */
 
 /** 「判一次分层」是花 token 的动作，确认框里要把量说清（一发 light 分层实测 ≈¥0.01~0.02）。 */
-const REGEN_PRICE_NOTE = "一发轻量档调用（实测 ≈¥0.02）";
+export const ARCH_REGEN_PRICE_NOTE = "一发轻量档调用（实测 ≈¥0.02）";
+/** 花钱动作的确认文案只留一处：viewbar 那颗按钮与不可用卡片走同一段话。 */
+export const ARCH_REGEN_CONFIRM = `判一次分层会花一次模型调用（${ARCH_REGEN_PRICE_NOTE}）。变的只有层名与谁归哪层，外部依赖不变；你的人工修正会作为输入一起送进去。要继续吗？`;
 
 /**
   分层不可用的四种原因，各自一句正文与一句该怎么办。
@@ -71,22 +75,31 @@ interface Cell {
   overridden: boolean;
 }
 
-export function ArchOverview({ repositoryId, course, analysis, visible, selectedId, reloadNonce, onSelect, onStatus }: {
+/** 判完一次的口径：判成说「分好层」，没判成说清是哪一种不可用（花钱动作的结果不许含糊）。 */
+export function archRegenToast(plan: ArchitecturePlan): string {
+  return plan.source === "llm" ? "已按模型判断分好层" : `${UNAVAILABLE[plan.unavailableReason ?? "not_judged"].title}：这次也没判成`;
+}
+
+/** 方块角色在画布上的那一行小字：只说这一格在架构里干什么，不带文件数与占比。 */
+const ROLE_LABEL: Record<string, string> = { entry: "入口", core: "核心", shared: "共享", support: "支撑" };
+
+export function ArchOverview({ repositoryId, course, visible, selectedId, reloadNonce, regenerating, onRegenerate, onSelect, onStatus }: {
   repositoryId: string;
   course: CourseTree;
-  analysis: RepositoryAnalysis;
   /** 取数闸门：三视图常驻挂载，隐藏面板不该替用户点这次请求（同 FlowMap）。 */
   visible: boolean;
   selectedId?: string;
   /** 父级 bump 一下就更取一次（覆盖层落盘后、切仓后、产物刷新后）。 */
   reloadNonce: number;
+  /** 「判一次分层」的按钮长在 viewbar 上（原型口径：花钱动作与流程「重新生成」同位），调用与确认都在父级。 */
+  regenerating: boolean;
+  onRegenerate: () => void;
   onSelect: (node: CourseNode, scopePaths: string[]) => void;
   onStatus: (status: ArchStatus) => void;
 }): ReactElement {
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [regenNonce, setRegenNonce] = useState(0);
 
   useEffect(() => {
     if (!visible) return;
@@ -98,7 +111,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
       .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "架构产物取不到"); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [repositoryId, visible, reloadNonce, regenNonce]);
+  }, [repositoryId, visible, reloadNonce]);
 
   const nodesById = useMemo(() => {
     const map = new Map<string, CourseNode>();
@@ -130,6 +143,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
       return {
         id: blockId,
         layerId: layer.id,
+        // 产物比树旧时 `blocks` 里查不到这一格：宁可不写角色，也不替它编一个「支撑」冒充读数
         role: brief?.role ?? null,
         // 合并块的标题在产物里（像「枚举、文档」）；块被人工拆开或产物比树旧时退回成员名／原 id，不编一个看不出的名字
         title: brief?.title ?? members[0]?.title ?? blockId,
@@ -153,9 +167,9 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
   const emitStatus = onStatus;
   useEffect(() => {
     emitStatus(plan
-      ? { source: plan.source, reason: plan.reason ?? "", loading, generatedAt: plan.generatedAt, layers: plan.layers.length, externals: plan.externals.length, collapsedExternals: plan.collapsedExternals, omittedModules: plan.omittedModules }
-      : { ...NO_ARCH_STATUS, loading });
-  }, [plan, loading, emitStatus]);
+      ? { source: plan.source, reason: plan.reason ?? "", loading: loading || regenerating, generatedAt: plan.generatedAt, layers: plan.layers.length, externals: plan.externals.length, collapsedExternals: plan.collapsedExternals, omittedModules: plan.omittedModules }
+      : { ...NO_ARCH_STATUS, loading: loading || regenerating });
+  }, [plan, loading, regenerating, emitStatus]);
 
 
   const toggle = (list: string[], setList: (next: string[]) => void, key: string): void => setList(list.includes(key) ? list.filter((item) => item !== key) : [...list, key]);
@@ -169,15 +183,6 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
     onSelect(member.node, filesOf(member.node));
   };
 
-  const regenerate = (): void => {
-    if (!window.confirm(`判一次分层会花一次模型调用（${REGEN_PRICE_NOTE}）。变的只有层名与谁归哪层，外部依赖不变；你的人工修正会作为输入一起送进去。要继续吗？`)) return;
-    setLoading(true);
-    api.regenerateArchitecture(repositoryId)
-      .then((next) => { setPlan(next); showToast(next.source === "llm" ? "已按模型判断分好层" : `${UNAVAILABLE[next.unavailableReason ?? "not_judged"].title}：这次也没判成`); })
-      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "判分层没成功"))
-      .finally(() => setLoading(false));
-  };
-
   if (!visible) return <div className="empty" aria-hidden />;
   if (error && !plan) return <EmptyState title="架构视图暂时不可用" detail={error} />;
   if (!plan) return <Loading />;
@@ -185,14 +190,14 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
   if (plan.source === "unavailable") {
     const state = UNAVAILABLE[plan.unavailableReason ?? "not_judged"];
     return (
-      <div className="arch-root">
+      <div className="arch-pan">
         <div className="arch-unavailable">
           <Icon name="alert" size={18} />
           <div>
             <p className="arch-unavailable-title">{state.title}</p>
             <p className="arch-unavailable-note" title={`${plan.reason ?? ""}· 方块清单与边界之外那一栏都由程序算出，仍在这份产物里，问 agent 就有；它们要对着系统边界才读得出意思，所以这里不单独摊开。`}>{state.note}</p>
           </div>
-          <button type="button" className="btn btn-primary btn-sm" disabled={loading || !state.retryable} title={state.retryable ? `${REGEN_PRICE_NOTE}。分层是判断题：不判就没有层可画。` : "这条路由不降级：没配模型时点它只会白跑一次"} onClick={regenerate}><Icon name="rotate" size={13} />判一次分层</button>
+          <button type="button" className="btn btn-primary btn-sm" disabled={loading || regenerating || !state.retryable} title={state.retryable ? `${ARCH_REGEN_PRICE_NOTE}。分层是判断题：不判就没有层可画。` : "这条路由不降级：没配模型时点它只会白跑一次"} onClick={onRegenerate}><Icon name="rotate" size={13} />判一次分层</button>
         </div>
       </div>
     );
@@ -200,7 +205,7 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
 
 
   return (
-    <div className="arch-root">
+    <div className="arch-pan">
       {plan.lostOverrides?.length ? (
         <div className="banner banner-warn">
           <Icon name="alert" size={14} />
@@ -218,17 +223,21 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
           <div className="banner-text" title="方块数超过上限的仓只送前 80 格进分层，剩下这些没参与判断">{`只分层前 80 格，另 ${plan.omittedModules} 格没进来`}</div>
         </div>
       ) : null}
-      <div className="arch-canvas">
-        <div className="arch-boundary">
-          <span className="arch-boundary-label" title="框内是这个仓自己写的代码，框外它只用不实现">系统边界</span>
-          {plan.layers.map((layer) => {
-            const layerCells = cells.filter((cell) => cell.layerId === layer.id)
-              .sort((left, right) => (ROLE_ORDER[left.role ?? "support"] - ROLE_ORDER[right.role ?? "support"]) || left.title.localeCompare(right.title));
-            const opened = openLayers.includes(layer.id);
-            const shown = opened ? layerCells : layerCells.slice(0, LAYER_PREVIEW);
-            const folded = layerCells.length - shown.length;
-            return (
-              <div key={layer.id} className="arch-layer">
+      <div className="arch-boundary">
+        <span className="arch-boundary-label">系统边界 · 框内是自己写的代码</span>
+        {plan.layers.map((layer, index) => {
+          const layerCells = cells.filter((cell) => cell.layerId === layer.id)
+            .sort((left, right) => (ROLE_ORDER[left.role ?? "support"] - ROLE_ORDER[right.role ?? "support"]) || left.title.localeCompare(right.title));
+          const opened = openLayers.includes(layer.id);
+          const shown = opened ? layerCells : layerCells.slice(0, LAYER_PREVIEW);
+          const folded = layerCells.length - shown.length;
+          return (
+            <div key={layer.id} className="arch-layer">
+              <div className="arch-rail">
+                <span className="arch-rail-no">{index + 1}</span>
+                {index < plan.layers.length - 1 ? <span className="arch-rail-line" /> : null}
+              </div>
+              <div className="arch-layer-body">
                 <div className="arch-layer-head">
                   <span className="arch-layer-name" title={layer.duty}>
                     {layer.name}
@@ -246,11 +255,13 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
                       <div key={cell.id} className="arch-cell">
                         <button
                           type="button"
-                          className={`arch-module${grouped ? " grouped" : ""}${cell.overridden ? " moved" : ""}${!grouped && selectedId === cell.id ? " selected" : ""}`}
+                          className={`arch-module${grouped ? " grouped" : ""}${cell.role === "entry" ? " entry" : ""}${cell.overridden ? " moved" : ""}${!grouped && selectedId === cell.id ? " selected" : ""}`}
                           title={note || undefined}
                           onClick={() => (grouped ? toggle(openCells, setOpenCells, cell.id) : pick(cell.members[0]))}
                         >
                           <span className="arch-module-name">{cell.title}</span>
+                          {/* 副行只说这一格在架构里干什么：合并块报成员数，产物没记角色的那一格就留空，不补一个冒牌的「支撑」 */}
+                          {grouped ? <span className="arch-module-sub">{`合并块 · ${cell.members.length} 个模块`}</span> : cell.role ? <span className="arch-module-sub">{ROLE_LABEL[cell.role]}</span> : null}
                         </button>
                         {openedCell ? (
                           <div className="arch-members">
@@ -277,17 +288,20 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
                   ) : null}
                 </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="arch-outside-box">
+        <span className="arch-boundary-label">边界之外 · 只用不实现</span>
         {plan.externals.length ? (
-          <div className="arch-outside">
+          <div className="arch-outside-groups">
             {[...externalsByCategory.entries()].map(([category, rows]) => (
               <div className="arch-outside-group" key={category}>
-                <span className="arch-outside-label">{EXTERNAL_CATEGORY_LABEL[category]}</span>
+                <span className="arch-outside-cat">{EXTERNAL_CATEGORY_LABEL[category]}</span>
                 <div className="arch-outside-rows">
                   {rows.map((row) => (
-                    <span className="arch-external" key={row.display} title={row.identities.join("、")}>
+                    <span className="arch-external" key={row.display} title={`${row.identities.join("、")}${row.usedBy ? ` · ${row.usedBy} 个文件用到` : ""}`}>
                       {row.display}
                     </span>
                   ))}
@@ -295,19 +309,12 @@ export function ArchOverview({ repositoryId, course, analysis, visible, selected
               </div>
             ))}
           </div>
-        ) : null}
+        ) : (
+          <p className="arch-outside-empty">{plan.externalsNote ?? "这份产物里边界外是空的：静态图没采到外部包名，也不等于这个系统不碰外部服务。"}</p>
+        )}
+        {plan.collapsedExternals ? <p className="arch-outside-empty" title="同一类别里认出来的包按显示名合过，合了几组记在这里">{`另有 ${plan.collapsedExternals} 组同类的已经合进上面那些条`}</p> : null}
       </div>
-      <div className="flow-legend">
-        <span className="fs-11 faint" title="图上这些方块只读：点一下看详情。要挪层、改层名，或撤掉某条人工修正，在右边对话里说一声——agent 走 set_architecture 写，它看得见现在有哪几条。">分层判错了？在对话里让 agent 挪</span>
-        <div className="grow" />
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={loading}
-          title={`重问一次模型怎么分层：${REGEN_PRICE_NOTE}。边界外那一栏不变——它从来不是模型算的。`}
-            onClick={regenerate}
-        ><Icon name="rotate" size={13} />判一次分层</button>
-      </div>
+      <p className="arch-legend">分层判错了？在右侧对话里让 agent 挪（set_architecture）· 方块只读，没有第二个写入口</p>
     </div>
   );
 }
