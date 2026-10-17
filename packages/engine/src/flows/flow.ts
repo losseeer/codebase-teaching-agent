@@ -706,21 +706,8 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
   if (!cacheKey) return generateRepositoryFlow(input);
   const key = cacheKey.key;
   const now = Date.now();
-  const hit = flowCache.get(key);
-  if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
-    flowCache.delete(key);
-    flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
-    input.database?.touchLayerCache(key, now);
-    return { ...hit.result, usage: undefined };
-  }
-  // 内存过期/缺失时先查 SQLite：engine 重启（tsx watch）会清空内存层，持久层让重启不重烧
-  const stored = input.database?.getLayerCache<GeneratedFlow>(key);
-  if (stored && now - stored.at < FLOW_PERSISTED_TTL_MS) {
-    flowCache.set(key, { result: stored.value, at: now });
-    trimToNewest(flowCache, FLOW_CACHE_MAX);
-    input.database?.touchLayerCache(key, now);
-    return { ...stored.value, usage: undefined };
-  }
+  const cached = readFlowCache(input, key, now);
+  if (cached) return cached;
   const running = flowInFlight.get(key);
   if (running) return { ...(await running), usage: undefined };
   const generation = generateFromDigest(input, cacheKey.digest);
@@ -739,6 +726,37 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
     if (!result.capHit) input.database?.putLayerCache(key, result);
   }
   return result;
+}
+
+/** 内存层 → SQLite 两层只读查询：命中就续期（含 LRU 新近度），没命中返回 undefined。*/
+function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key: string, now: number): GeneratedFlow | undefined {
+  const hit = flowCache.get(key);
+  if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
+    flowCache.delete(key);
+    flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
+    input.database?.touchLayerCache(key, now);
+    return { ...hit.result, usage: undefined };
+  }
+  // 内存过期/缺失时查 SQLite：engine 重启（tsx watch）会清空内存层，持久层让重启不重烧
+  const stored = input.database?.getLayerCache<GeneratedFlow>(key);
+  if (stored && now - stored.at < FLOW_PERSISTED_TTL_MS) {
+    flowCache.set(key, { result: stored.value, at: now });
+    trimToNewest(flowCache, FLOW_CACHE_MAX);
+    input.database?.touchLayerCache(key, now);
+    return { ...stored.value, usage: undefined };
+  }
+  return undefined;
+}
+
+/**
+  只读出口（`GET .../flow?readonly=1`，MCP 用的就是它）：命中缓存就把产物交出去，没缓存也不生成。
+  为什么单独开一条：`generateRepositoryFlowCached` 冷缓存时会发一趟主力档（≈¥0.17），
+  而「外部 agent 问一句这条流程怎么走」不该让账单多一笔——与架构那条 `allowCall: false` 同一口径。
+*/
+export function peekCachedFlow(input: GenerateFlowInput & { repositoryId: string }): GeneratedFlow | undefined {
+  const cacheKey = flowCacheKeyOf(input);
+  if (!cacheKey) return undefined;
+  return readFlowCache(input, cacheKey.key, Date.now());
 }
 
 /** Map 的迭代序即插入序，配合「先 delete 再 set」即为新近度，从头裁掉最旧项。 */

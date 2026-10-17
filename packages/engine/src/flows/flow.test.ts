@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FLOW_MAX_STAGES, type RepositoryAnalysis, type RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, flowCacheKeyOf, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, resolveFlowEntry } from "./flow.js";
+import { addUsage, buildFlowDigest, buildRelatedPairs, clearRepositoryFlowCache, flowCacheKeyOf, generateRepositoryFlow, generateRepositoryFlowCached, parseFlow, peekCachedFlow, resolveFlowEntry } from "./flow.js";
 import { buildFlowEvidence, staticFlow } from "./evidence.js";
 import { mkdtempSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -294,6 +294,22 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(complete).toHaveBeenCalledTimes(1);
     await generateRepositoryFlowCached({ ...base, entry: { path: "graph/nodes.py", line: 1, label: "CLI command" } });
     expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("只读出口（MCP 的 `?readonly=1`）：没缓存不发模型，有缓存就把产物交出去", async () => {
+    clearRepositoryFlowCache();
+    const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
+    const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
+    const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
+    // 冷缓存：只读到空手，路由据此回静态调用链——外部问一句结构，账单不该多一发
+    expect(peekCachedFlow(base)).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(0);
+    const generated = await generateRepositoryFlowCached(base);
+    expect(generated.source).toBe("llm");
+    const peeked = peekCachedFlow(base);
+    expect(peeked?.flow.stages.map((stage) => stage.title)).toEqual(generated.flow.stages.map((stage) => stage.title));
+    expect(peeked?.usage).toBeUndefined(); // 与命中缓存同一口径：读数不带用量，不可能重复记账
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it("缓存粒度按「本层实际输入」：全仓 versionStamp 翻转不重算，进到 digest 的变化才重算", async () => {

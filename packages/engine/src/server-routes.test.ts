@@ -222,6 +222,83 @@ beforeEach(() => {
   holdMs = 0;
 });
 
+describe("外部能力面进回合：技能与 MCP（默认关，装了才给）", () => {
+  const skillsDir = join(root, "skills");
+  const fixture = join(import.meta.dirname, "mcp", "fixtures", "echo-server.mjs");
+
+  /** 装一份技能 + 一个 stdio 夹具 server（都指临时目录，`~/.codebase-tutor` 一个字都不碰）。 */
+  function install(): void {
+    mkdirSync(join(skillsDir, "tutor-fixture"), { recursive: true });
+    writeFileSync(join(skillsDir, "tutor-fixture", "SKILL.md"), `---
+name: tutor-fixture
+description: 测试用做法：先看 llm.log 再决定要不要花钱。
+---
+
+# 做法
+
+第一步：读 ~/.codebase-tutor/llm.log。
+`, "utf8");
+    const config = join(root, "mcp.json");
+    writeFileSync(config, JSON.stringify({ mcpServers: { fixture: { command: process.execPath, args: [fixture], allowedTools: ["echo"] } } }, null, 2), "utf8");
+    process.env.TUTOR_SKILLS_DIR = skillsDir;
+    process.env.TUTOR_MCP_SETTINGS_FILE = config;
+  }
+
+  afterEach(() => {
+    delete process.env.TUTOR_SKILLS_DIR;
+    delete process.env.TUTOR_MCP_SETTINGS_FILE;
+  });
+
+  it("没装时工具清单逐字不变——默认关是靠不加，不是靠开关", async () => {
+    scripted = [OK_REPLY];
+    const threadId = await newThread("map", "没装外部能力");
+    const before = sentTools.length;
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这仓分几层？", threadId } });
+    expect(sentTools[before].names).toEqual(["read_file", "search_code", "set_architecture", "redraw_diagram"]);
+  });
+
+  it("装了之后 read_skill 与 mcp__fixture__echo 真并进请求，清单进上下文，两条审计各落一行", async () => {
+    install();
+    scripted = ['@@tool read_skill {"name":"tutor-fixture"}', '@@tool mcp__fixture__echo {"text":"读到 nothing"}', `清单上的做法第一步是看日志。${MAIN_FILE}:3 有人问先改哪行？`];
+    const threadId = await newThread("map", "装了外部能力");
+    const before = sentTools.length;
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "按那份做法看一下", threadId } });
+    expect(response.statusCode).toBe(200);
+
+    // ① 清单真的进了请求（模型看得见名字与描述，不是只在界面里挂着）
+    expect(sentTools[before].names).toContain("read_skill");
+    expect(sentTools[before].names).toContain("mcp__fixture__echo");
+    expect(sentTools[before].raw).toContain("tutor-fixture：测试用做法");
+    expect(sentTools[before].raw).toContain("别凭名字猜内容");
+
+    // ② 工具真被执行：正文回喂进第二趟、外部正文回喂进第三趟
+    expect(sentTools[before + 1].raw).toContain("读 ~/.codebase-tutor/llm.log");
+    expect(sentTools[before + 2].raw).toContain("读到 nothing");
+
+    // ③ 两条审计各落一行，且 mcp_call 里只有指针没有正文
+    const skill = lastEvent("skill_read");
+    expect(skill.payload).toMatchObject({ skill: "tutor-fixture", found: true });
+    expect(String(skill.payload.chars)).not.toBe("0");
+    const call = lastEvent("mcp_call");
+    expect(call.payload).toMatchObject({ server: "fixture", tool: "echo", ok: true });
+    expect(JSON.stringify(call.payload)).not.toContain("读到 nothing");
+
+    const loop = lastEvent("loop_round");
+    expect(loop.payload).toMatchObject({ tool_external: 1, tool_skills: 1 });
+  });
+
+  it("GET /api/external 把装了什么、连不上的原因交出来（零 token，读侧不发模型）", async () => {
+    install();
+    const response = await app.inject({ method: "GET", url: "/api/external" });
+    expect(response.statusCode).toBe(200);
+    const readout = response.json() as { skills: { name: string }[]; tools: string[]; errors: unknown[]; skillDirectories: string[] };
+    expect(readout.skills.map((entry) => entry.name)).toEqual(["tutor-fixture"]);
+    expect(readout.tools).toEqual(["mcp__fixture__echo"]);
+    expect(readout.errors).toEqual([]);
+    expect(readout.skillDirectories).toEqual([skillsDir]);
+  });
+});
+
 /** 宏观设计作用域：JSON 与 SSE 两条出口共用同一次收尾，两边的文本一致性各验一遍。 */
 describe("宏观设计作用域（JSON + SSE）", () => {
   it("map-chat JSON：合格回合也写 turn_invariant，响应正文＝库里正文＝turn_text", async () => {
@@ -1056,6 +1133,25 @@ describe("架构视图：分层产物与人工覆盖层", () => {
   改的是**什么有资格当入口**：只有打一次路由才看得见送出去的候选载荷里真没有文档，而不只是本地算对了。
   零 token：假 provider 照样指向 127.0.0.1:9，被 stub 的 fetch 接住。
 */
+describe("流程视图的只读出口（MCP 的 repo_flow 打的是这一条）", () => {
+  type FlowResponse = { flow: { entry: { path: string }; title: string }; source: string; reason?: string };
+
+  it("readonly=1 冷缓存一发不发、回静态调用链并说明原因；不带它的默认路由才会发模型", async () => {
+    const before = sentTools.length;
+    const cold = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/flow?readonly=1&entry=${encodeURIComponent(MAIN_FILE)}` })).json() as FlowResponse;
+    expect(sentTools.length, "只读读数一发都不许发：外部 agent 问一句流程不该产生账单").toBe(before);
+    expect(cold.source).toBe("static");
+    expect(cold.reason).toContain("只读请求");
+    expect(cold.flow.entry.path).toBe(MAIN_FILE);
+
+    // 对照：同一个入口走默认那条路由，冷缓存确实会发一趟（这一发钱是界面上的流程视图点的）
+    scripted = ["这不是流程 JSON，解析不过——但请求已经发出去了"];
+    const open = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/flow?entry=${encodeURIComponent(MAIN_FILE)}` });
+    expect(open.statusCode).toBe(200);
+    expect(sentTools.length, "默认路由该发模型；否则这条对照测试什么都没说明").toBeGreaterThan(before);
+  });
+});
+
 describe("推荐入口：文档不进候选清单", () => {
   it("文档在课程树上、却不在出网载荷里；模型回推它的 id 也不会被路由复活", async () => {
     const tree = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/course` })).payload;

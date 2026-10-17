@@ -1,6 +1,7 @@
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
+import type { McpCallAudit } from "../mcp/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
 
@@ -51,7 +52,56 @@ export interface ReadToolLoopInput {
   architecture?: ArchitectureToolContext;
   /** 重绘这张图（只有提议、撤预览、恢复默认三个动作）：不传 = 这个作用域连提议的权力都没有。 */
   redraw?: RedrawToolContext;
+  /**
+    技能正文的取用通道（2026-10-17）。不传 = 工具清单里没有 `read_skill`，
+    系统提示词也不该出现技能清单——清单与通道必须同时给或同时不给，只给一半就是让模型找一个不存在的工具。
+  */
+  skills?: SkillsToolContext;
+  /**
+    外部 MCP 工具面（2026-10-17）。**默认不给**：每一条外部工具的 schema 都要进每一轮请求的 token，
+    还会改变请求前缀的形状（前缀缓存按请求头部算）。服务层只在配置文件里真有启用的 server 时才传。
+  */
+  external?: ExternalToolContext;
 }
+
+/** 技能通道：清单（`brief`）与取正文的通道必须同时给或同时不给——只给一半就是让模型找一个不存在的工具。 */
+export interface SkillsToolContext {
+  /** 进上下文的那段清单（名字 + 一句描述 + 「先取正文再照做」那句约束）。 */
+  brief: string;
+  /**
+    取正文（`file` 省略 = `SKILL.md`）或该技能目录里的附属文件（规格第三层：正文用相对路径引用它们）。
+    回 `undefined` = 没这个技能或没这个文件；工具把这句话照实回给模型，不编一段看着像正文的东西。
+  */
+  bodyOf: (name: string, file?: string) => string | undefined;
+}
+
+/**
+  外部 MCP 工具面。清单与调用都由服务层实现，本循环不认识 SDK、也不认识子进程。
+
+  ⚠️ `call` **不许抛**：外部 server 是别人写的程序，超时、崩了、回了错误都得变成一句给模型看的实话，
+  否则一个第三方故障会把整个回合掀掉（学习者只看到报错，还不知道是哪一环节掉的）。
+*/
+export interface ExternalToolContext {
+  /** 已带 `mcp__<server>__<tool>` 前缀的清单，直接并进本轮工具数组。 */
+  tools: LlmTool[];
+  call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
+  /** 一个回合最多打几次外部调用（默认 3）。读文件额度是本地事实的额度，外部的不算进去。 */
+  maxCalls?: number;
+}
+
+/** 技能正文的取用工具：清单常驻上下文，正文按需拉取，成本差一个数量级。 */
+export const READ_SKILL_TOOL: LlmTool = {
+  name: "read_skill",
+  description: "按名字取一份技能的完整正文（系统提示词里那张清单上的名字）。做法、命令与红线都在正文里——只凭名字猜内容会猜错。正文提到的附属文件（脚本、参照表之类）用 file 参数按相对该技能目录的路径取。",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "清单上的技能名字" },
+      file: { type: "string", description: "可选：技能目录内的相对路径，省略就取 SKILL.md 正文" }
+    },
+    required: ["name"]
+  }
+};
 
 /**
   跨仓访问上下文。**只在地址簿里还有别的仓时才传**——没有第二个仓时三个工具一个都不多给，
@@ -151,7 +201,7 @@ export interface RedrawToolContext {
 }
 
 /** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, redraw?: RedrawToolContext): LlmTool[] {
+function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, redraw?: RedrawToolContext, skills?: SkillsToolContext, external?: ExternalToolContext): LlmTool[] {
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -167,6 +217,9 @@ function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: 
   // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
   if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
   if (redraw) tools.push(REDRAW_DIAGRAM_TOOL);
+  if (skills) tools.push(READ_SKILL_TOOL);
+  // 外部工具原样并进清单：描述里已带「【外部 <server>】」前缀，模型分得清这是别人的程序
+  if (external?.tools.length) tools.push(...external.tools);
   return tools;
 }
 
@@ -188,11 +241,15 @@ export interface ReadToolLoopResult {
   fileReads: FileReadRecord[];
   /** 本次对话的 search_code 调用审计（不合并去重——同一查询反复搜本身就是信号）。 */
   codeSearches: CodeSearchRecord[];
+  /** 取过的技能正文。`found: false` 也记：模型在清单上找一个不存在的技能，是这份清单与提示词漂移的读数。 */
+  skillReads: { skill: string; chars: number; found: boolean }[];
+  /** 外部 MCP 工具的实际调用（一条一次，失败也记）。正文不在这里，只有字符数与指纹。 */
+  mcpCalls: McpCallAudit[];
 }
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
-  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.redraw);
+  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.redraw, input.skills, input.external);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
@@ -200,10 +257,13 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
   const fileReads: FileReadRecord[] = [];
   const codeSearches: CodeSearchRecord[] = [];
+  const skillReads: { skill: string; chars: number; found: boolean }[] = [];
+  const mcpCalls: McpCallAudit[] = [];
   let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
   let succeededReads = 0;
   let crossReads = 0;
+  let externalCalls = 0;
   while (completion.toolCalls?.length) {
     // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
     if (input.signal?.aborted) throw new LlmAbortedError();
@@ -259,6 +319,28 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         messages.push({ role: "tool", toolCallId: call.id, content: await (input.redraw?.apply(call.argumentsJson) ?? "这个作用域没有重绘这张图的权力。") });
         continue;
       }
+      if (call.name === READ_SKILL_TOOL.name && input.skills) {
+        const skill = readSkillHint(call.argumentsJson);
+        const file = readSkillFileHint(call.argumentsJson);
+        const body = input.skills.bodyOf(skill, file);
+        skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found: Boolean(body) });
+        messages.push({ role: "tool", toolCallId: call.id, content: body ?? `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
+        continue;
+      }
+      if (input.external?.tools.some((tool) => tool.name === call.name)) {
+        const cap = input.external.maxCalls ?? 3;
+        if (externalCalls >= cap) {
+          // 照实说上限，别让模型以为外部工具坏了而反复重试（与 corpusOf「这仓能读不能搜」同一条纪律）
+          messages.push({ role: "tool", toolCallId: call.id, content: `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。` });
+          continue;
+        }
+        externalCalls += 1;
+        // 外部 server 是别人写的程序：call 里任何失败都已转成一句实话，这里不允许抛出（抛出会掀掉整个回合）
+        const outcome = await input.external.call(call.name, call.argumentsJson);
+        mcpCalls.push(outcome.audit);
+        messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
+        continue;
+      }
       if (call.name !== READ_FILE_TOOL.name) {
         messages.push({ role: "tool", toolCallId: call.id, content: `未知工具 ${call.name}；只支持 ${available}。` });
         continue;
@@ -291,7 +373,28 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     usage = addUsage(usage, completion.usage);
   }
-  return { completion, usage, rounds, fileReads, codeSearches };
+  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls };
+}
+
+/** 读取 read_skill 参数里的 name（仅用于审计与回话；解析失败按空名走，工具会回「没有这份技能」）。 */
+function readSkillHint(argumentsJson: string): string {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}") as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/** 读取 read_skill 参数里的 file（附属文件相对路径；没给就取正文）。 */
+function readSkillFileHint(argumentsJson: string): string | undefined {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}") as { file?: unknown };
+    const file = typeof parsed.file === "string" ? parsed.file.trim() : "";
+    return file || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 读取 read_file 参数里的 path（仅用于进度提示，不参与校验）。 */

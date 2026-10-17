@@ -7,8 +7,9 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { ArchitectureToolContext, CrossRepoContext, RedrawToolContext } from "../source/tool-loop.js";
+import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, RedrawToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
+import type { McpCallAudit } from "../mcp/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
 /**
@@ -97,6 +98,10 @@ export interface ScopedChatResult {
   toolRounds: number;
   /** mapChat 专用：作用域解析失败、按全局视野作答的留痕（供 server 记 journal scope_degraded）。 */
   scopeDegraded?: { nodeId: string; scopePathsCount: number };
+  /** mapChat 专用：本回合打过的外部工具（供 server 逐条记 journal mcp_call，失败也在里面）。 */
+  mcpCalls?: McpCallAudit[];
+  /** mapChat 专用：本回合取过的技能正文（供 server 记 journal skill_read）。 */
+  skillReads?: { skill: string; chars: number; found: boolean }[];
 }
 
 /** 按锚点取带行号的源码摘录：符号边界优先、窗口兜底（规则见 source/excerpt.ts）。路径越界或读不到返回空串。 */
@@ -234,7 +239,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重绘这张图（只有提议/撤预览/恢复默认）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重绘这张图（只有提议/撤预览/恢复默认）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -277,7 +282,10 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (bound) sections.push(bound);
   }
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
-  const userMessage = `代码上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的问题：${input.content}`;
+  // 技能清单贴在上下文尾部而不是系统提示词里：系统提示词是前缀缓存的固定段，
+  // 每装/卸一份技能就改它等于把每仓的缓存全翻一遍（清单本来就在回合级现算）。
+  const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
+  const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的问题：${input.content}`;
 
   recordEgress({ repositoryPath: input.repoPath, scene: "map.chat", sessionId: input.threadId, sources: egress, sent: userMessage });
   const result = await completeWithReadTool({
@@ -294,6 +302,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.cross ? { cross: input.cross } : {}),
     ...(input.architecture ? { architecture: input.architecture } : {}),
     ...(input.redraw ? { redraw: input.redraw } : {}),
+    ...(input.skills ? { skills: input.skills } : {}),
+    ...(input.external ? { external: input.external } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
@@ -306,6 +316,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     toolRounds: result.rounds,
     ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
     ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {}),
+    ...(result.mcpCalls.length ? { mcpCalls: result.mcpCalls } : {}),
+    ...(result.skillReads.length ? { skillReads: result.skillReads } : {}),
     ...(scopeDegraded ? { scopeDegraded } : {})
   };
 }

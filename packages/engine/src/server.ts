@@ -15,13 +15,15 @@ import { architectureInputOf, generateArchitectureCached, moduleCourseOf, peekCa
 import { projectApprovedDraft, runArchitectureRedraft } from "./diagram/redraft.js";
 import { clearRedraft, commitPreview, readDiagram, requestRedraft, resetDiagram, storePreview } from "./store/diagram-artifacts.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
-import type { ArchitectureToolContext, RedrawToolContext } from "./source/tool-loop.js";
+import type { ArchitectureToolContext, ExternalToolContext, RedrawToolContext, SkillsToolContext } from "./source/tool-loop.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
 import { fileStructureOf } from "./depgraph/roles.js";
 import { ExerciseService } from "./exercises/exercises.js";
-import { degradedFlow, generateRepositoryFlowCached, resolveFlowEntry } from "./flows/flow.js";
+import { degradedFlow, generateRepositoryFlowCached, peekCachedFlow, resolveFlowEntry } from "./flows/flow.js";
+import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs, type McpCallAudit } from "./mcp/clients.js";
+import { listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills/skills.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/importer.js";
@@ -323,6 +325,25 @@ app.addHook("preHandler", async (request, reply) => {
 
 /** 地址簿清单（不读产物）：GUI 的仓库切换器数据源。 */
 app.get("/api/repositories", async () => ({ repositories: importer.catalog() }));
+
+/**
+  外部能力面的读数口（零 token）：装了哪些技能、配置文件里有哪些 server、这轮真并进请求的工具清单，
+  以及连不上的原因。**读它会顺带把没连上的 server 拉起一次**——「连不上」必须是实测的，不能是猜的。
+  界面没有这一格（能力优先做成工具），排查靠 curl 与 `pnpm run-trace`。
+*/
+app.get("/api/external", async () => {
+  const skills = listSkills();
+  const surface = await externalToolSurface();
+  return {
+    skillDirectories: skillDirectories(),
+    skills: skills.skills,
+    skillSkipped: skills.skipped,
+    mcpConfigFile: mcpConfigFile(),
+    mcpConfigSkipped: readMcpConfigs().skipped,
+    tools: (surface?.tools ?? []).map((tool) => tool.name),
+    errors: surface?.errors ?? []
+  };
+});
 
 /** 显式挂载一个仓库并回报新鲜度：GUI 切换仓库时调它，好把「这是三天前的分析」说在打开之前。 */
 app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/mount", async (request, reply) => {
@@ -1054,7 +1075,7 @@ app.post<{ Params: { repositoryId: string }; Body: OverlaysPatch & { remove?: { 
 
 // 宏观设计「流程视图」：按入口用 LLM 生成执行流程（静态调用链作为证据输入 + 降级视图）。
 // 缓存命中零成本；未配置 LLM / 预算已达上限 / 调用失败都返回静态调用链并带 reason，不静默降级。
-app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("/api/repositories/:repositoryId/flow", async (request, reply) => {
+app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string; readonly?: string } }>("/api/repositories/:repositoryId/flow", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const entries = repository.analysis.graph.entrypoints;
@@ -1094,7 +1115,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
         sample: missingSummaries.slice(0, 5).map((file) => file.path).join("、")
       });
     }
-    const generated = await generateRepositoryFlowCached({
+    const flowInput = {
       repositoryPath: repository.path,
       index: repository.index,
       analysis: repository.analysis,
@@ -1103,7 +1124,16 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
       summaries,
       repositoryId: repository.index.repositoryId,
       database
-    });
+    };
+    // 只读出口（MCP 的 `repo_flow` 走这条）：命中缓存就交出产物，没缓存给静态调用链并说明原因。
+    // 为什么单独开：`generateRepositoryFlowCached` 冷缓存会发一趟主力档（实测一条流程 ≈¥0.17），
+    // 而「外部 agent 问一句这条流程怎么走」不该让账单多一笔——与架构那条 `allowCall: false` 同一口径。
+    if (request.query.readonly === "1") {
+      const peeked = peekCachedFlow(flowInput);
+      const readonlyResult = peeked ?? degradedFlow(repository.analysis, entry, "只读请求：这条流程还没有已生成的产物。要拿到环节划分，得在界面里打开流程视图（那一下会发一趟主力档）。");
+      return { flow: readonlyResult.flow, source: readonlyResult.source, ...(readonlyResult.reason ? { reason: readonlyResult.reason } : {}) };
+    }
+    const generated = await generateRepositoryFlowCached(flowInput);
     if (generated.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", {
       input_tokens: generated.usage.inputTokens,
       output_tokens: generated.usage.outputTokens,
@@ -1252,11 +1282,14 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   for (const search of result.codeSearches ?? []) {
     journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, threadId);
   }
+  // 外部工具与技能：一条调用一行，**失败也记**（连不上 / 超时 / 参数不合法 / server 报错是四种不同处置）
+  for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
+  for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
   // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
   if (result.scopeDegraded) {
     journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, threadId);
   }
-  journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length }, threadId);
+  journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 
@@ -1277,6 +1310,43 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   这条界线写成代码而不是提示词：模型想一步做完时，描述拦不住它，缺动作拦得住。
   与写工具同一道作用域闸（map 作用域每轮都给），也共用同一个 `redrawStep`——校验、记账、通知只有一份实现。
 */
+/**
+  本轮的技能通道（2026-10-17 接入）。装了才给：**没装时工具清单与上下文逐字不变**，
+  不加一个「技能不可用」的占位节点——每轮白付一句没人用的说明，还会诱导模型去找不存在的工具。
+*/
+function skillsForTurn(): SkillsToolContext | undefined {
+  const load = listSkills();
+  const brief = skillsBriefing(load.skills);
+  if (!brief) return undefined;
+  if (load.skipped.length) traceEngine("degrade", { what: "skill_skipped", skipped: load.skipped.map((item) => `${item.dir}：${item.reason}`).join("、") });
+  return { brief, bodyOf: (name, file) => readSkill(name, file) };
+}
+
+/**
+  本轮的外部 MCP 工具面（2026-10-17 接入）。默认关：配置文件不存在就一个工具都不加。
+  连不上不报错、只是不给——原因由 `GET /api/external` 说清（读侧不静默降级，也不为「可能用得上」先付 token）。
+*/
+async function externalForTurn(): Promise<ExternalToolContext | undefined> {
+  const surface = await externalToolSurface();
+  if (!surface?.tools.length) return undefined;
+  return { tools: surface.tools, call: surface.call };
+}
+
+/**
+  两条外部能力一次取齐（map-chat JSON / map-chat SSE / 教学回合三个入口共用）。
+  都缺省时回空对象——展开进去等于**一个字都不变**，这是「默认关闭」的实现方式，不是一道开关。
+*/
+async function externalAndSkills(): Promise<{ skills?: SkillsToolContext; external?: ExternalToolContext }> {
+  const skills = skillsForTurn();
+  const external = await externalForTurn();
+  return { ...(skills ? { skills } : {}), ...(external ? { external } : {}) };
+}
+
+/** `mcp_call` 的 payload：参数正文一个都不落，只留字符数与 12 位指纹（与 code_egress 同一口径）。 */
+function mcpCallPayload(call: McpCallAudit): Record<string, string | number | boolean | null> {
+  return { server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars, masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {}) };
+}
+
 function redrawToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): RedrawToolContext | undefined {
   if (!lightLlmProvider) return undefined;
   return {
@@ -1370,7 +1440,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const crossFiles = new Map<string, number>();
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
     const redrawContext = redrawToolFor(repository, overlayDatabase, turn.threadId);
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext, redraw: redrawContext } : {}) });
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext, redraw: redrawContext } : {}), ...(await externalAndSkills()) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -1420,6 +1490,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(toolContext ? { architecture: toolContext, redraw: redrawContext } : {}),
+      ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
@@ -1741,6 +1812,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
+      ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
     // 中止可能赶在最后一趟 LLM 返回之后才到：那时没人抛错，这一轮会照常走到落库。
@@ -1780,8 +1852,10 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     for (const search of outcome.codeSearches ?? []) {
       journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);
     }
+    for (const call of outcome.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), session.id);
+    for (const skill of outcome.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, session.id);
     // 回合摘要：状态机那三列（decision/proposed/executed）随阶梯一起停写，这里只留工具循环的轮次与次数
-    journal.append("loop_round", { scene: "teach", tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length }, session.id);
+    journal.append("loop_round", { scene: "teach", tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length, tool_external: (outcome.mcpCalls ?? []).length, tool_skills: (outcome.skillReads ?? []).length }, session.id);
     const cost = summarizeCost(repository.path, gate.monthlyBudgetUsd, session.id);
     replayTypewriter(send, outcome.assistant.content);
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider });
@@ -1838,6 +1912,9 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
 function flatten(root: CourseNode): CourseNode[] { return [root, ...root.children.flatMap(flatten)]; }
 // s 标志：`.` 默认不匹配换行，回放会把多行回复的 `\n` 全丢掉（打字机预览塌成一行）；加上后逐块保留换行
 function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
+
+// 退出时关掉外部 MCP 子进程：它们是引擎起来的，不能留在机器上。
+app.addHook("onClose", async () => { await closeExternalTools(); });
 
 // 测试里不占端口：vitest 会把 VITEST 置为 "true"，此时只用 app.inject() 打路由。
 // 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。

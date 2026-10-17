@@ -1332,6 +1332,22 @@ export type JournalEventType =
   | "token_usage"
   | "file_read"
   | "code_search"
+  /**
+    产品 agent 调了一次**外部 MCP 工具**（2026-10-17 接入）。一次调用一条，失败也记——
+    漏斗要分母：连不上、超时、参数不合法、server 自己报错是四种不同处置（改配置 / 调上限 / 换提示词 / 收白名单）。
+    payload = `server` / `tool` / `args_chars` + `args_hash`（**参数正文不落盘**，与 `code_egress` 同一口径：
+    发出去的可能是仓内代码，另开一条日志线等于自己造一个泄露面）/ `result_chars` / `masked`（密钥筛隐去处数，
+    `0` 与不填是两个读数）/ `ok` / `ms` / `error`(unknown_tool|bad_arguments|timeout|no_tool|server_reported_error)。
+    ⚠️ 这一行**不能**当「源码出网」的证据：MCP server 是别人写的本机子进程，它拿到的内容会不会再往外走，引擎不知道，
+    所以这条线只是「我们把什么交给了哪个 server」的指针。数据流报表要单列，不许混进 `code_egress` 的总数。
+    */
+  | "mcp_call"
+  /**
+    产品 agent 取了一份技能正文（2026-10-17 接入）：`skill` + `chars` + `found`。
+    记「取过」而不是只记「装过」——一份写好的做法没人调用，是这份做法没被模型认出来的读数，
+    而清单里有名字、正文从没被取走这件事只能从这一行看出来。
+    */
+  | "skill_read"
   | "scope_degraded"
   /** 回合文本落盘（2026-09-22 拍板口径）：payload = scene(teach|map_chat|practice_chat) + question/answer
     双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
@@ -1419,6 +1435,7 @@ export type JournalEventType =
 export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
+  "mcp_call", "skill_read",
   "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
   // 2026-10-16：挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写——

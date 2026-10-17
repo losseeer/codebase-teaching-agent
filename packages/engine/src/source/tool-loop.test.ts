@@ -246,3 +246,80 @@ describe("completeWithReadTool 的跨仓访问", () => {
     expect(JSON.stringify(calls[0].tools)).toContain("可用值：other");
   });
 });
+
+describe("外部能力面（技能与 MCP），默认关闭", () => {
+  const externalTool = { name: "mcp__docs__lookup", description: "【外部 docs】查一份文档", parameters: { type: "object" as const, properties: {} } };
+
+  it("什么都不传时工具清单逐字不变（默认关闭不是靠开关，是靠不加）", async () => {
+    const { provider, calls } = scriptedProvider([{ text: "答。", finishReason: "stop" }]);
+    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2 });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
+  });
+
+  it("给了技能才有 read_skill；正文按名字取，取不到的也记进审计", async () => {
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "s1", name: "read_skill", argumentsJson: JSON.stringify({ name: "tutor-cost-audit" }) }, { id: "s2", name: "read_skill", argumentsJson: JSON.stringify({ name: "不存在的技能" }) }], finishReason: "tool_calls" },
+      { text: "照做法答。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2,
+      skills: { brief: "可用技能：\n- tutor-cost-audit：对账", bodyOf: (name) => (name === "tutor-cost-audit" ? "第一步：看 llm.log。" : undefined) }
+    });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "read_skill"]);
+    const messages = calls[1].messages ?? [];
+    expect(messages.find((message) => message.toolCallId === "s1")?.content).toContain("看 llm.log");
+    expect(messages.find((message) => message.toolCallId === "s2")?.content).toContain("没有「不存在的技能」这份技能");
+    // 「清单里有名字、正文从没被取走」只能从这一行看出来，所以 found:false 必须照样记
+    expect(result.skillReads).toEqual([
+      { skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true },
+      { skill: "不存在的技能", chars: 0, found: false }
+    ]);
+  });
+
+  it("外部调用并进清单、结果回喂，且**不吃读文件额度**（那一格管的是本地事实）", async () => {
+    const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 6, masked: 0, ok: true, ms: 3 };
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "r1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }], finishReason: "tool_calls" },
+      { text: "答。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 1,
+      external: { tools: [externalTool], call: async () => ({ text: "外部正文。", audit }) }
+    });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "mcp__docs__lookup"]);
+    expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toBe("外部正文。");
+    expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
+    expect(result.mcpCalls).toEqual([audit]);
+  });
+
+  it("外部调用另有每回合上限：用尽后不再打外部程序，回话照实说（免得模型以为工具坏了反复重试）", async () => {
+    let fired = 0;
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "e2", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "答。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
+      external: { tools: [externalTool], maxCalls: 1, call: async () => { fired += 1; return { text: "外部正文。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 6, masked: 0, ok: true, ms: 1 } }; } }
+    });
+    expect((calls[2].messages ?? []).find((message) => message.toolCallId === "e2")?.content).toContain("最多打 1 次");
+    expect(fired).toBe(1);
+    expect(result.mcpCalls).toHaveLength(1);
+  });
+
+  it("外部工具报错也不掀掉回合：回话照实进消息，审计留下 error", async () => {
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "带保留答。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 2,
+      external: { tools: [externalTool], call: async () => ({ text: "外部工具没连上。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 8, masked: 0, ok: false, ms: 1, error: "timeout" } }) }
+    });
+    expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toContain("没连上");
+    expect(result.completion.text).toBe("带保留答。");
+    expect(result.mcpCalls[0].ok).toBe(false);
+  });
+});
