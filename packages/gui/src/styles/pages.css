@@ -193,6 +193,11 @@
 .arch-outside-empty { margin: 0; font-size: var(--fs-11); color: var(--ink-3); }
 .arch-external { font-size: var(--fs-11); font-family: var(--font-mono); padding: 2px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); cursor: help; }
 .arch-legend { margin: 0; font-size: var(--fs-11); color: var(--ink-3); text-align: center; }
+/* 预览态：整框改用虚线 + warn 色，一眼能看出「这不是现在生效的那张」。淡一点点也不影响读层次。 */
+.arch-boundary.previewing { border-color: var(--warn); border-style: solid; opacity: 0.94; }
+/* 候选里与引擎算出的结构角色相反的那一格：一枚 warn 色的点，悬停给证据句。
+   与 `.moved`（人工挪过）同一位置、不同颜色——预览态里不会同时出现两者。 */
+.arch-module.conflict::after { content: ""; position: absolute; margin-left: 46px; width: 5px; height: 5px; border-radius: 50%; background: var(--warn); }
 
 /* 流程视图 */
 .flow-col { position: relative; display: flex; flex-direction: column; align-items: center; padding: var(--sp-5) 0 var(--sp-8); gap: 0; }

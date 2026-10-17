@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
-import { EXTERNAL_CATEGORY_LABEL, type ArchitecturePlan, type CourseNode, type CourseTree, type ExternalCategory } from "@codebase-tutor/shared";
+import { EXTERNAL_CATEGORY_LABEL, type ArchitectureDiagramDraft, type ArchitectureLayer, type ArchitecturePlan, type CourseNode, type DiagramReadout, type CourseTree, type ExternalCategory } from "@codebase-tutor/shared";
 import { api } from "../api/client";
 import { EmptyState, flatten, Loading } from "../views/helpers";
 import { Icon } from "../ui/icons";
@@ -53,11 +53,20 @@ export interface ArchStatus {
   externals: number;
   collapsedExternals: number;
   omittedModules: number;
+  /** 现在画的是缺省那份，还是被对话重画并经用户批准替换的那份。 */
+  origin: "default" | "agent";
+  /** 画布上正压着一张待裁决的预览：徽标得说「预览中」，不能报成现在生效的那张。 */
+  previewing: boolean;
+  /** 有一条重画提议等用户点横幅（这一发还没花钱）。 */
+  pending: boolean;
 }
 
-export const NO_ARCH_STATUS: ArchStatus = { source: null, reason: "", loading: false, generatedAt: "", layers: 0, externals: 0, collapsedExternals: 0, omittedModules: 0 };
+export const NO_ARCH_STATUS: ArchStatus = { source: null, reason: "", loading: false, generatedAt: "", layers: 0, externals: 0, collapsedExternals: 0, omittedModules: 0, origin: "default", previewing: false, pending: false };
 
-type PlanView = ArchitecturePlan & { omittedModules: number; collapsedExternals: number };
+type PlanView = ArchitecturePlan & { omittedModules: number; collapsedExternals: number; diagram?: DiagramReadout };
+
+/** 重画这一发要真读代码，确认框把量说清（与「判一次分层」同一口径：花钱那一下由人发起）。 */
+const REDRAFT_CONFIRM = "重画这张图会让模型真去读代码，粗估 ¥0.1~0.3（比判一次分层贵）。画好先进预览态，你不点「替换这张」就不换。要继续吗？";
 
 /** 一层里默认露几格：压缩后仍超过这个数的层（本仓三层实测还有 10 格上下的）才折，其余一律不折。 */
 const LAYER_PREVIEW = 6;
@@ -73,6 +82,8 @@ interface Cell {
   /** 块里的成员节点（合并块长度 >1）：点成员才进节点详情。 */
   members: { id: string; node: CourseNode | undefined; title: string }[];
   overridden: boolean;
+  /** 预览态里这一格与引擎算出的结构角色相反：一句证据进悬停，不拦替换。 */
+  conflict: string | null;
 }
 
 /** 判完一次的口径：判成说「分好层」，没判成说清是哪一种不可用（花钱动作的结果不许含糊）。 */
@@ -98,6 +109,8 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
   onStatus: (status: ArchStatus) => void;
 }): ReactElement {
   const [plan, setPlan] = useState<PlanView | null>(null);
+  /** 用户对预览的裁决与那一步重画都在本组件里发生：自己 bump 一下就重取（不等父级）。 */
+  const [reload, setReload] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -111,7 +124,7 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
       .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "架构产物取不到"); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [repositoryId, visible, reloadNonce]);
+  }, [repositoryId, visible, reloadNonce, reload]);
 
   const nodesById = useMemo(() => {
     const map = new Map<string, CourseNode>();
@@ -131,10 +144,28 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
     return [...new Set(paths)];
   }, []);
 
+  const diagram = plan?.diagram;
+  /** 预览态：候选那份摊成画布认得的层（id 用 preview-N，不与缺省的 layer-N 撞名）。 */
+  const previewDraft: ArchitectureDiagramDraft | undefined = diagram?.preview?.draft?.kind === "architecture" ? diagram.preview.draft : undefined;
+  const shownLayers = useMemo<ArchitectureLayer[]>(() => previewDraft
+    ? previewDraft.layers.map((layer, index) => ({ id: `preview-${index + 1}`, name: layer.name, duty: layer.duty, moduleIds: layer.nodes }))
+    : plan?.layers ?? [], [previewDraft, plan]);
+  const conflicts = useMemo(() => new Map((previewDraft?.conflicts ?? diagram?.conflicts ?? []).map((item) => [item.node, item.evidence])), [previewDraft, diagram]);
+  /** 重画那一步的状态：`run` 是唯一花钱的按钮，点了就得让画布说真话。 */
+  const [redrawing, setRedrawing] = useState(false);
+  const redraw = (action: "run" | "commit" | "keep" | "reset"): void => {
+    if (action === "run" && !window.confirm(REDRAFT_CONFIRM)) return;
+    setRedrawing(true);
+    api.redrawDiagram(repositoryId, action)
+      .then((outcome) => showToast(outcome.text || (outcome.ok ? "画布已更新" : "这一步没做成")))
+      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "重画这一步没成功"))
+      .finally(() => { setRedrawing(false); setReload((value) => value + 1); });
+  };
+
   const cells = useMemo<Cell[]>(() => {
     if (!plan) return [];
     const briefs = new Map((plan.blocks ?? []).map((block) => [block.id, block]));
-    return plan.layers.flatMap((layer) => layer.moduleIds.map((blockId) => {
+    return shownLayers.flatMap((layer) => layer.moduleIds.map((blockId) => {
       const brief = briefs.get(blockId);
       const members = (brief?.members ?? [blockId]).map((moduleId) => {
         const node = nodesById.get(moduleId);
@@ -148,10 +179,11 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
         // 合并块的标题在产物里（像「枚举、文档」）；块被人工拆开或产物比树旧时退回成员名／原 id，不编一个看不出的名字
         title: brief?.title ?? members[0]?.title ?? blockId,
         members,
-        overridden: plan.overriddenUnits.includes(blockId)
+        overridden: !previewDraft && plan.overriddenUnits.includes(blockId),
+        conflict: conflicts.get(blockId) ?? null
       };
     }));
-  }, [plan, nodesById]);
+  }, [plan, nodesById, shownLayers, conflicts, previewDraft]);
 
   /** 折起来的两处开关：整层剩下的方块、合并块的成员。都只活在这次读图里，不落盘也不进请求。 */
   const [openLayers, setOpenLayers] = useState<string[]>([]);
@@ -167,9 +199,9 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
   const emitStatus = onStatus;
   useEffect(() => {
     emitStatus(plan
-      ? { source: plan.source, reason: plan.reason ?? "", loading: loading || regenerating, generatedAt: plan.generatedAt, layers: plan.layers.length, externals: plan.externals.length, collapsedExternals: plan.collapsedExternals, omittedModules: plan.omittedModules }
+      ? { source: plan.source, reason: plan.reason ?? "", loading: loading || regenerating || redrawing, generatedAt: plan.generatedAt, layers: shownLayers.length, externals: plan.externals.length, collapsedExternals: plan.collapsedExternals, omittedModules: plan.omittedModules, origin: diagram?.origin ?? "default", previewing: Boolean(previewDraft), pending: Boolean(diagram?.pending) }
       : { ...NO_ARCH_STATUS, loading: loading || regenerating });
-  }, [plan, loading, regenerating, emitStatus]);
+  }, [plan, loading, regenerating, redrawing, shownLayers, previewDraft, diagram, emitStatus]);
 
 
   const toggle = (list: string[], setList: (next: string[]) => void, key: string): void => setList(list.includes(key) ? list.filter((item) => item !== key) : [...list, key]);
@@ -187,7 +219,8 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
   if (error && !plan) return <EmptyState title="架构视图暂时不可用" detail={error} />;
   if (!plan) return <Loading />;
 
-  if (plan.source === "unavailable") {
+  // 只有「缺省没判过」**且**没有被批准的重画图时才走不可用卡片：用户点过头的那张是生效产物，不是兜底
+  if (plan.source === "unavailable" && plan.diagram?.origin !== "agent") {
     const state = UNAVAILABLE[plan.unavailableReason ?? "not_judged"];
     return (
       <div className="arch-pan">
@@ -223,9 +256,56 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
           <div className="banner-text" title="方块数超过上限的仓只送前 80 格进分层，剩下这些没参与判断">{`只分层前 80 格，另 ${plan.omittedModules} 格没进来`}</div>
         </div>
       ) : null}
-      <div className="arch-boundary">
-        <span className="arch-boundary-label">系统边界 · 框内是自己写的代码</span>
-        {plan.layers.map((layer, index) => {
+      {diagram?.stale ? (
+        <div className="banner banner-warn">
+          <Icon name="alert" size={14} />
+          <div className="banner-text" title={`${diagram.stale}。那张替换图还在，等树上的模块接回来会自己出现；现在画的是缺省那份。`}>
+            <strong>替换图对不上现在的树</strong>
+            <span> · 画的是缺省</span>
+          </div>
+        </div>
+      ) : null}
+      {diagram?.pending ? (
+        <div className="banner banner-warn">
+          <Icon name="alert" size={14} />
+          <div className="banner-text" title={`目的：${diagram.pending.purpose}。这一发要让模型真去读代码再重排格子，粗估 ¥0.1~0.3；点「开始重画」才发请求——agent 自己按不了这个按钮。`}>
+            <strong>agent 提议重画这张</strong>
+            <span> · 约 ¥0.1~0.3</span>
+          </div>
+          <div className="banner-actions">
+            <button type="button" className="btn btn-primary btn-sm" disabled={redrawing} onClick={() => redraw("run")}><Icon name="rotate" size={13} />开始重画</button>
+            <button type="button" className="btn btn-sm ghost" disabled={redrawing} onClick={() => redraw("keep")}>算了</button>
+          </div>
+        </div>
+      ) : null}
+      {previewDraft ? (
+        <div className="banner banner-info">
+          <Icon name="info" size={14} />
+          <div className="banner-text" title={`目的：${diagram?.preview?.purpose ?? ""}。${previewDraft.layers.length} 层、${previewDraft.layers.reduce((total, layer) => total + layer.nodes.length, 0)} 格，另有 ${previewDraft.omitted.length} 格列了理由没画。箭头与「边界之外」仍是程序按 import 算的，这张图里一条都不来自模型。${previewDraft.conflicts.length ? `其中 ${previewDraft.conflicts.length} 格与引擎算出的结构角色相反，格子上标了点。` : ""}`}>
+            <strong>这是一张预览</strong>
+            <span> · 还没替换</span>
+          </div>
+          <div className="banner-actions">
+            <button type="button" className="btn btn-primary btn-sm" disabled={redrawing} onClick={() => redraw("commit")}>替换这张</button>
+            <button type="button" className="btn btn-sm ghost" disabled={redrawing} onClick={() => redraw("keep")}>保持现在的</button>
+          </div>
+        </div>
+      ) : null}
+      {!previewDraft && !diagram?.pending && diagram?.origin === "agent" ? (
+        <div className="banner banner-info">
+          <Icon name="info" size={14} />
+          <div className="banner-text" title={`这张是按对话重画、并经你批准替换的（目的：${diagram.purpose ?? "未记录"}）。缺省那份没删，一句话就能回去。`}>
+            <strong>这张是按对话重画的</strong>
+            <span> · 可回缺省</span>
+          </div>
+          <div className="banner-actions">
+            <button type="button" className="btn btn-sm ghost" disabled={redrawing} onClick={() => redraw("reset")}>恢复缺省图</button>
+          </div>
+        </div>
+      ) : null}
+      <div className={`arch-boundary${previewDraft ? " previewing" : ""}`}>
+        <span className="arch-boundary-label">{previewDraft ? "预览中的这张图 · 还没替换" : "系统边界 · 框内是自己写的代码"}</span>
+        {shownLayers.map((layer, index) => {
           const layerCells = cells.filter((cell) => cell.layerId === layer.id)
             .sort((left, right) => (ROLE_ORDER[left.role ?? "support"] - ROLE_ORDER[right.role ?? "support"]) || left.title.localeCompare(right.title));
           const opened = openLayers.includes(layer.id);
@@ -235,7 +315,7 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
             <div key={layer.id} className="arch-layer">
               <div className="arch-rail">
                 <span className="arch-rail-no">{index + 1}</span>
-                {index < plan.layers.length - 1 ? <span className="arch-rail-line" /> : null}
+                {index < shownLayers.length - 1 ? <span className="arch-rail-line" /> : null}
               </div>
               <div className="arch-layer-body">
                 <div className="arch-layer-head">
@@ -250,12 +330,12 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
                     const grouped = cell.members.length > 1;
                     // 选中的模块正好在被合起来的那格里时自动展开：从左栏点到哪儿，图上就得看得见那一格
                     const openedCell = openCells.includes(cell.id) || (grouped && cell.members.some((member) => member.node?.id === selectedId));
-                    const note = [grouped ? "这一格合起了几个小模块，点开看成员" : "", cell.overridden ? "这一格的归属是人工改过的，不是模型判的" : ""].filter(Boolean).join("；");
+                    const note = [grouped ? "这一格合起了几个小模块，点开看成员" : "", cell.overridden ? "这一格的归属是人工改过的，不是模型判的" : "", cell.conflict ? `与结构证据相反：${cell.conflict}` : ""].filter(Boolean).join("；");
                     return (
                       <div key={cell.id} className="arch-cell">
                         <button
                           type="button"
-                          className={`arch-module${grouped ? " grouped" : ""}${cell.role === "entry" ? " entry" : ""}${cell.overridden ? " moved" : ""}${!grouped && selectedId === cell.id ? " selected" : ""}`}
+                          className={`arch-module${grouped ? " grouped" : ""}${cell.role === "entry" ? " entry" : ""}${cell.overridden ? " moved" : ""}${cell.conflict ? " conflict" : ""}${!grouped && selectedId === cell.id ? " selected" : ""}`}
                           title={note || undefined}
                           onClick={() => (grouped ? toggle(openCells, setOpenCells, cell.id) : pick(cell.members[0]))}
                         >

@@ -7,7 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { CrossRepoContext , ArchitectureToolContext } from "../source/tool-loop.js";
+import type { ArchitectureToolContext, CrossRepoContext, RedrawToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
@@ -234,7 +234,7 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（全仓唯一的有副作用工具）：只在 map_chat 由路由给，`inventory` 那格同时进上下文。 */ architecture?: ArchitectureToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那格同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重画这张图（只有提议/撤预览/恢复缺省）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出境清单（见 security/dataflow.ts） */
@@ -293,6 +293,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.search ? { search: input.search } : {}),
     ...(input.cross ? { cross: input.cross } : {}),
     ...(input.architecture ? { architecture: input.architecture } : {}),
+    ...(input.redraw ? { redraw: input.redraw } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });

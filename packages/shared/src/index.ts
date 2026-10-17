@@ -222,6 +222,66 @@ export interface ArchitectureBlockBrief {
   role: ArchitectureBlockRole;
 }
 
+/**
+  两张教学图（架构全景、流程）都能被 agent 在对话里重画一份新的、经用户点头后替换现有那张。
+  这三态就是那条动线的全部状态机，`diagram_artifact` 表按 (仓, kind, status) 各存一行：
+
+  - `pending`：agent 提议重画。**这一发要花钱，所以引擎绝不自行动手**——画布出现「开始重画吗」的横幅，
+    用户按下才真发（与「判一次分层」那颗按钮同一条纪律：花钱的动作由人发起）；
+  - `preview`：新图画好了，叠在画布上待「替换 / 保持」；
+  - `committed`：用户批准，读侧拿它当这张图；删掉这一行缺省就回来。
+
+  替换只改「层的形状」这一件事：边、方块清单、边界之外那一栏仍旧由 import 与词典算出来，
+  agent 画的那份里没有任何一条边能作数（与缺省那条红线同一个口径）。
+*/
+export type DiagramKind = "architecture" | "flow";
+export type DiagramStatus = "pending" | "preview" | "committed";
+
+/** 候选图的一层：`nodes` 用画布上那一格的 id（模块 id 或 `arch:` 方块 id），同形态才谈得上替换。 */
+export interface DiagramLayerDraft {
+  name: string;
+  duty: string;
+  nodes: string[];
+}
+
+/**
+  架构图的候选（重画那一趟的产物）。三条清单都是给「核验」与「如实外露」用的：
+  - `omitted`：没画进去的可见方块必须逐条给理由，不许静默丢格（丢了格就等于图上的方块数在骗人）；
+  - `conflicts`：这趟读到的结构证据与主张相反的格（角色/可达 vs 目标层）——**落库但仍然标注**，
+    标签会随修正一起进下一次判层的输入，免得一条没根据的归层被下一轮当成事实；
+  - `readPaths`：这一趟真读了哪些文件。预览横幅要指得出证据在哪，不然「重画」与「换个说法」没区别。
+*/
+export interface ArchitectureDiagramDraft {
+  kind: "architecture";
+  layers: DiagramLayerDraft[];
+  omitted: { node: string; reason: string }[];
+  conflicts: { node: string; layer: string; evidence: string }[];
+  readPaths: string[];
+}
+
+/** 流程图的候选：过的就是缺省那条同一套确定性核验（路径在可用集合里、行号按文件长度 clip）。 */
+export interface FlowDiagramDraft {
+  kind: "flow";
+  flow: RepositoryFlow;
+  readPaths: string[];
+}
+
+export type DiagramDraft = ArchitectureDiagramDraft | FlowDiagramDraft;
+
+/** 读侧交给界面的一份「现在画的是哪张、还有没有待确认的」读数。 */
+export interface DiagramReadout {
+  origin: "default" | "agent";
+  /** origin=agent 时：当初为什么重画、什么时候批准的。 */
+  purpose?: string;
+  committedAt?: string;
+  /** 替换图引用的模块已经不在树上了（改名 / 删模块 / 课程树重生成）。这时**画的是缺省**，那行不删，只说出来。 */
+  stale?: string;
+  /** 画面上这些格与引擎算出的结构角色相反：落库、不拦，但要看得见（悬停给证据句）。 */
+  conflicts?: { node: string; layer: string; evidence: string }[];
+  pending?: { purpose: string; at: string };
+  preview?: { purpose: string; at: string; draft: DiagramDraft };
+}
+
 export interface ArchitecturePlan {
   repositoryId: string;
   layers: ArchitectureLayer[];
@@ -1335,7 +1395,18 @@ export type JournalEventType =
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
     与 llm.log 靠 `traceId + scene` 关联。两条设计口径与字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
     */
-  | "code_egress";
+  | "code_egress"
+  /**
+    一次「重画这张图」的账（2026-10-17）：payload = kind + purpose + layers + units + omitted
+    + findings(采信条数) + dropped_findings(证据路径核不上被丢的条数) + conflicts(与结构证据相反的格数)
+    + rounds/tool_reads + input_tokens/output_tokens。**记的是这一趟花了多少、信了多少、拒了多少**，
+    不记图内容本身（图在 diagram_artifact 表里）。
+  */
+  | "diagram_redrafted"
+  /** agent 提议重画（**这一条不花钱**，只是让界面出那条横幅）：payload = kind + purpose。 */
+  | "diagram_redraft_proposed"
+  /** 用户对那张预览的裁决：action = replace|keep|reset，kind = architecture|flow。 */
+  | "diagram_replaced";
 
 /**
   同一份事件的**写入权分两张表**（2026-10-12，接 §45）。
@@ -1352,7 +1423,7 @@ export const ENGINE_JOURNAL_EVENTS = [
   "session_created", "session_deleted", "repository_paired", "code_egress",
   // 2026-10-16：挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写——
   // 落盘的那条路（`POST .../overlays/apply`）在引擎里，审计与写入同处才不漏；界面自己 emit 的旧日子已随覆盖层上收结束
-  "architecture_layer_overridden", "module_tier_overridden"
+  "architecture_layer_overridden", "module_tier_overridden", "diagram_redraft_proposed", "diagram_redrafted", "diagram_replaced"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [
@@ -1418,6 +1489,11 @@ export interface ServerEvent {
     `repository.updated`：产物或覆盖层变了，界面该重取的那一格（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
     `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
   */
-  type: "import.progress" | "repository.updated" | "architecture_updated";
+  /**
+    `diagram_preview`：重画好的新图进了预览态，等用户点「替换 / 保持」。
+    `diagram_replaced`：用户裁决完了（replace|keep|reset），画布要重取一次。
+    `redraft_requested`：agent 提议重画（还没花钱），界面要出那条「开始重画吗」的横幅。
+  */
+  type: "import.progress" | "repository.updated" | "architecture_updated" | "redraft_requested" | "diagram_preview" | "diagram_replaced";
   payload: Record<string, unknown>;
 }

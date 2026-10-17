@@ -1,4 +1,4 @@
-import type { ArchitectureOverrideIntent, ArchitecturePlan, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ArchitectureOverrideIntent, ArchitectureDiagramDraft, ArchitecturePlan, DiagramKind, DiagramReadout, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseNodePage, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportEstimate, ImportJob, ImpactResult, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, RepositoryOverview, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -171,6 +171,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+/** 架构画布拿到的那份产物：`ArchitecturePlan` 之外，引擎多带两个读数与一份「这张图是谁画的」。 */
+export type ArchitectureView = ArchitecturePlan & { omittedModules: number; collapsedExternals: number; diagram?: DiagramReadout };
+
 export const api = {
   /** 探活：认证闸已撤除（§64），这一格不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
   health: () => request<{ status: string; llmMode?: string; sandbox?: { level: string } }>("/api/health"),
@@ -201,9 +204,15 @@ export const api = {
     架构视图的分层产物：层名与模块归层是模型判的（可人工改），箭头与「边界之外」由引擎算。
     `source` 与 `reason` 说清这份是谁算的；`ArchitecturePlan` 之外引擎多带两个读数。
   */
-  getArchitecture: (repositoryId: string) => request<ArchitecturePlan & { omittedModules: number; collapsedExternals: number }>(`/api/repositories/${repositoryId}/architecture`),
+  getArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture`),
+  /**
+    「重画这张图」的一步。界面上只有这四个动作能到这里：`run` 是画布上那条「开始重画」（**花钱那一下**）、
+    `commit` 是「替换这张」、`keep` 是「保持现在的」、`reset` 是「恢复缺省图」。
+    agent 手上只有 propose / keep / reset——run 与 commit 不给它，见 engine 的 `redrawToolFor`。
+  */
+  redrawDiagram: (repositoryId: string, action: "run" | "commit" | "keep" | "reset", kind: DiagramKind = "architecture") => request<{ ok: boolean; status: string; text: string; draft?: ArchitectureDiagramDraft }>(`/api/repositories/${repositoryId}/diagram/redraw`, { method: "POST", body: JSON.stringify({ kind, action }) }),
   /** 显式重问一次分层：**花 token**，没配模型或预算触顶回 422（不静默给一张静态图）。 */
-  regenerateArchitecture: (repositoryId: string) => request<ArchitecturePlan & { omittedModules: number; collapsedExternals: number }>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
+  regenerateArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
   getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
   /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
   mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),

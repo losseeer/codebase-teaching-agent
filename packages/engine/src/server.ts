@@ -5,15 +5,17 @@ import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, DiagramKind, DiagramReadout, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import type { ImportedRepository } from "./importer/importer.js";
-import { architectureInputOf, generateArchitectureCached, moduleCourseOf, peekCachedArchitecture } from "./coursetree/architecture.js";
+import { architectureInputOf, generateArchitectureCached, moduleCourseOf, peekCachedArchitecture, type ArchitectureResult } from "./coursetree/architecture.js";
+import { projectApprovedDraft, runArchitectureRedraft } from "./diagram/redraft.js";
+import { clearRedraft, commitPreview, readDiagram, requestRedraft, resetDiagram, storePreview } from "./store/diagram-artifacts.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
-import type { ArchitectureToolContext } from "./source/tool-loop.js";
+import type { ArchitectureToolContext, RedrawToolContext } from "./source/tool-loop.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
@@ -843,6 +845,29 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   }
 });
 
+/**
+  读侧的最后一层：有用户批准的替换图就画那张，没有就画缺省那份。
+  投影前先重新核一遍——课程树可能重生成过、模块可能改名或被删。核不过**不删那一行**（用户点头过的东西
+  不该被系统悄悄丢掉），只回落缺省并说明为什么；接回来时不用重画一次。
+*/
+function architectureWithDiagram(repository: ImportedRepository, database: TutorDatabase, plan: ArchitectureResult): ArchitectureResult {
+  const readout = readDiagram(database, repository.index.repositoryId, "architecture");
+  const diagram: DiagramReadout = {
+    origin: readout.origin,
+    ...(readout.purpose ? { purpose: readout.purpose, committedAt: readout.committedAt } : {}),
+    ...(readout.pending ? { pending: readout.pending } : {}),
+    ...(readout.preview ? { preview: readout.preview } : {})
+  };
+  const committed = readout.committed?.value;
+  if (!committed || committed.kind !== "architecture") return { ...plan, diagram };
+  const overlays = readOverlays(database, repository.index.repositoryId);
+  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
+  const projected = projectApprovedDraft(input, lightLlmProvider?.modelVersion ?? "none", committed);
+  if ("stale" in projected) return { ...plan, diagram: { ...diagram, origin: "default", stale: projected.stale } };
+  // 整张图都是这趟重画出来的，「哪几格被人工挪过」那一档标记就不再有意义；冲突格另走 diagram.conflicts
+  return { ...plan, layers: projected.layers, edges: projected.edges, overriddenUnits: [], diagram: { ...diagram, conflicts: projected.conflicts } };
+}
+
 // 架构视图的分层产物（2026-10-16）：层名与模块归层是判断题（light 档，可人工改），
 // 跨层箭头与「边界之外」那一栏是事实题（只由静态 import 与外部包名词典算，模型参与不了一格）。
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture", async (request, reply) => {
@@ -858,7 +883,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/a
     const overlays = readOverlays(database, repository.index.repositoryId);
     const plan = await generateArchitectureCached({ ...architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays }), provider: lightLlmProvider, allowCall: false });
     // 读侧不可能有用量（allowCall: false 那条分支不发请求），所以这里不写 token_usage：钱只在 regenerate 那一下入账
-    return plan;
+    return architectureWithDiagram(repository, database, plan);
   } finally {
     database.close();
   }
@@ -877,6 +902,103 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
     const plan = await generateArchitectureCached({ ...architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays }), provider: lightLlmProvider, force: true });
     if (plan.usage) new Journal(repository.path, repository.index.repositoryId).append("token_usage", { input_tokens: plan.usage.inputTokens, output_tokens: plan.usage.outputTokens, cache_hit_tokens: plan.usage.promptCacheHitTokens ?? null, provider: lightLlmProvider.modelVersion, scene: "architecture_map" });
     return plan;
+  } finally {
+    database.close();
+  }
+});
+
+/**
+  「重画这张图」的一步落地。**路由与 agent 工具共用这一个函数**——两条写路径各写一套校验与记账，
+  迟早有一处漏（覆盖层那条通道的同一课记在 §71）。
+  `actor` 是唯一的权限差：**agent 只有 propose / keep / reset**；`run` 要花钱、`commit` 是用户点头，
+  两个动作只有界面上的按钮能按——模型不能自己给自己批准替换，也不能替用户按下那一发。
+*/
+async function redrawStep(repository: ImportedRepository, database: TutorDatabase, actor: "user" | "agent", kind: DiagramKind, action: string, purpose: string, threadId?: string): Promise<{ statusCode: number; ok: boolean; text: string; body: Record<string, unknown> }> {
+  const repoId = repository.index.repositoryId;
+  const journal = new Journal(repository.path, repoId);
+  const refuse = (text: string, code = 422) => ({ statusCode: code, ok: false, text, body: { repositoryId: repoId, kind, action } });
+  /**
+    权限差只写这一处（工具与路由共用这一个函数；两条路各存一份动作清单迟早漂）：
+    `run` 要花钱、`commit` 是用户点头，**agent 只有 propose / keep / reset**。
+  */
+  if (actor === "agent" && !["propose", "keep", "reset"].includes(action)) {
+    return refuse(`没做：${action || "这个动作"}不由你按——你只有 propose / keep / reset，「开始重画」和「替换这张」都在画布上，要用户点。`);
+  }
+  if (kind === "flow") return refuse("流程视图的重画还没接上：这一期只做架构那张。流程那条复用 normalizeStage 的核验，接缝已留。");
+  if (action === "propose") {
+    if (!purpose) return refuse("重画得先说清这张图要回答什么问题（purpose）：没有目的的图只是换一种画法。");
+    if (!lightLlmProvider) return refuse("未配置模型：重画这张图需要模型真去读代码。");
+    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已触顶：重画不会偷偷发请求，先把预算调上去再让我重画。");
+    requestRedraft(database, repoId, kind, purpose);
+    journal.append("diagram_redraft_proposed", { kind, purpose, actor }, threadId);
+    broadcast({ type: "redraft_requested", payload: { repositoryId: repoId, kind, purpose } });
+    return { statusCode: 200, ok: true, text: `已把「${purpose}」这条重画提议挂到画布上，等用户点那条横幅。这一发还没花钱，也没开始读代码。`, body: { status: "pending", purpose } };
+  }
+  if (action === "run") {
+    if (actor === "agent") return refuse("run 不由你按：这一发要花钱，只能由用户点画布上那条横幅触发。你可以 propose，然后告诉用户去点。");
+    const pending = readDiagram(database, repoId, kind).pending;
+    if (!pending) return refuse("没有待确认的重画请求：这一发要用户点画布上那条横幅才开始。");
+    if (!lightLlmProvider) return refuse("未配置模型：重画这张图需要模型真去读代码。");
+    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已触顶，未调用模型：这一发没花出去。");
+    clearRedraft(database, repoId, kind, "pending");
+    const overlays = readOverlays(database, repoId);
+    const input = architectureInputOf({ repositoryId: repoId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
+    const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
+    const outcome = await runArchitectureRedraft({ architectureInput: input, provider: lightLlmProvider, purpose: pending.purpose, currentLayers: peek.layers, search: searchCorpusFor(repository) });
+    if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: lightLlmProvider.modelVersion, scene: "map.redraft" }, threadId);
+    for (const read of outcome.fileReads) journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, threadId);
+    journal.append("diagram_redrafted", {
+      kind, purpose: pending.purpose, ok: outcome.ok, layers: outcome.draft?.layers.length ?? 0,
+      units: outcome.draft?.layers.reduce((total, layer) => total + layer.nodes.length, 0) ?? 0,
+      omitted: outcome.draft?.omitted.length ?? 0, conflicts: outcome.draft?.conflicts.length ?? 0,
+      findings: outcome.findings.length, dropped_findings: outcome.droppedFindings,
+      tool_rounds: outcome.rounds, tool_reads: outcome.fileReads.length,
+      ...(outcome.usage ? { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens } : {})
+    }, threadId);
+    if (!outcome.ok || !outcome.draft) return refuse(`这一趟没画成：${outcome.reason ?? "模型没给出可用的层清单"}。钱已经花了（成本页看 map.redraft 那几行），可以换个说法再试。`);
+    storePreview(database, repoId, kind, pending.purpose, outcome.draft);
+    broadcast({ type: "diagram_preview", payload: { repositoryId: repoId, kind, purpose: pending.purpose } });
+    const conflictNote = outcome.draft.conflicts.length ? `其中 ${outcome.draft.conflicts.length} 格与结构证据相反，已在预览里标出。` : "";
+    const dropNote = outcome.droppedFindings ? `取证段有 ${outcome.droppedFindings} 条证据的路径核不上索引，已丢掉没带进图里。` : "";
+    return { statusCode: 200, ok: true, text: `新图已画好并进了预览态（${outcome.draft.layers.length} 层、${outcome.draft.omitted.length} 格列了理由没画；读了 ${outcome.fileReads.length} 个文件）。${conflictNote}${dropNote}等用户点「替换 / 保持」。`, body: { status: "preview", purpose: pending.purpose, draft: outcome.draft, droppedFindings: outcome.droppedFindings, findings: outcome.findings.length } };
+  }
+  if (action === "commit") {
+    if (actor === "agent") return refuse("commit 不由你按：替换那张图要用户点头。");
+    if (!commitPreview(database, repoId, kind)) return refuse("现在没有待确认的预览：先让我重画一张，画好才谈替换。");
+    const committed = readDiagram(database, repoId, kind);
+    journal.append("diagram_replaced", { kind, action: "replace", purpose: committed.purpose ?? "" }, threadId);
+    broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "replace" } });
+    return { statusCode: 200, ok: true, text: "已替换：画布现在画的是这张重画出来的图，缺省那份仍在，说「恢复缺省图」就回去。", body: { status: "committed" } };
+  }
+  if (action === "keep") {
+    const had = clearRedraft(database, repoId, kind, "preview") || clearRedraft(database, repoId, kind, "pending");
+    journal.append("diagram_replaced", { kind, action: "keep", purpose: "" }, threadId);
+    broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "keep" } });
+    return { statusCode: 200, ok: true, text: had ? "已撤掉那张预览，画布还是原来那张。" : "本来就没有待确认的预览，画布没动。", body: { status: had ? "discarded" : "none" } };
+  }
+  if (action === "reset") {
+    const had = resetDiagram(database, repoId, kind);
+    journal.append("diagram_replaced", { kind, action: "reset", purpose: "" }, threadId);
+    broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "reset" } });
+    return { statusCode: 200, ok: true, text: had ? "已恢复缺省图：删掉了替换那一行，现算现叠的那份回来了（模型的判层与你的修正都没动）。" : "现在画的就是缺省图，没有可恢复的替换。", body: { status: had ? "default" : "already-default" } };
+  }
+  return refuse(`未知动作「${action.slice(0, 24)}」：只认 propose / run / commit / keep / reset。`);
+}
+
+/**
+  对外那条路由（画布上三个按钮 + 对话里的提议都汇到这儿）。钱只在 `run` 那一下，而 `run` 只认用户：
+  `propose` 落一行 pending 不发消息，`commit` 是用户对预览的点头，`reset` 把替换那行删掉。
+*/
+app.post<{ Params: { repositoryId: string }; Body: { kind?: unknown; action?: unknown; purpose?: unknown } }>("/api/repositories/:repositoryId/diagram/redraw", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const kind: DiagramKind = request.body?.kind === "flow" ? "flow" : "architecture";
+  const action = typeof request.body?.action === "string" ? request.body.action : "";
+  const purpose = typeof request.body?.purpose === "string" ? request.body.purpose.trim().slice(0, 120) : "";
+  const database = new TutorDatabase(repository.path);
+  try {
+    const outcome = await redrawStep(repository, database, "user", kind, action, purpose);
+    return reply.code(outcome.statusCode).send(outcome.ok ? { ok: true, ...outcome.body, text: outcome.text } : { error: outcome.text, ...outcome.body });
   } finally {
     database.close();
   }
@@ -1150,6 +1272,30 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、格子叫什么 id」
     就只会反问或编一个 id 撞在写侧白名单上。
 */
+/**
+  重画那张图的工具面：**只有提议 / 撤预览 / 恢复缺省三个动作**，`run` 与 `commit` 在这里直接拒。
+  这条界线写成代码而不是提示词：模型想一步做完时，描述拦不住它，缺动作拦得住。
+  与写工具同一道作用域闸（map 作用域每轮都给），也共用同一个 `redrawStep`——校验、记账、通知只有一份实现。
+*/
+function redrawToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): RedrawToolContext | undefined {
+  if (!lightLlmProvider) return undefined;
+  return {
+    apply: async (argumentsJson: string) => {
+      let parsed: { action?: unknown; purpose?: unknown };
+      try {
+        parsed = JSON.parse(argumentsJson || "{}") as { action?: unknown; purpose?: unknown };
+      } catch {
+        return "没做：参数不是合法 JSON。";
+      }
+      const action = typeof parsed.action === "string" ? parsed.action.trim() : "";
+      const purpose = typeof parsed.purpose === "string" ? parsed.purpose.trim().slice(0, 120) : "";
+      // 动作白名单不在这判：redrawStep 按 actor 判，两条路共用同一份
+      const outcome = await redrawStep(repository, database, "agent", "architecture", action, purpose, sessionId);
+      return outcome.text;
+    }
+  };
+}
+
 function architectureToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
   if (!lightLlmProvider) return undefined;
   const overlays = readOverlays(database, repository.index.repositoryId);
@@ -1163,11 +1309,20 @@ function architectureToolFor(repository: ImportedRepository, database: TutorData
     ...Object.entries(overlays.architecture?.layerRenames ?? {}).map(([from, to]) => `- 层名「${from}」改成了「${to}」${lost.has(`rename:${from}`) ? "｜这条这次没接上：原判层里没有这个旧层名" : ""}`),
     ...Object.entries(overlays.modules?.tier ?? {}).map(([unitId, tier]) => `- 「${titleOf(unitId)}」的结构档改成 ${tier}（id=${unitId}）`)
   ];
+  const diagram = readDiagram(database, repository.index.repositoryId, "architecture");
+  const diagramState = diagram.origin === "agent"
+    ? `现在画布上这张是**重画并已被用户批准替换**的那张（目的：${diagram.purpose ?? "未记录"}）。要回到引擎与模型判的那张，说一声就能恢复缺省（reset）。`
+    : "现在画布上这张是缺省那份（缓存里模型的判层 + 你叠上去的修正）。";
+  const previewNote = diagram.preview
+    ? `另外：画布上正压着一张**待用户裁决的预览**（目的：${diagram.preview.purpose}）。用户点头才会替换，你既不能替他点、也不能自己替换。`
+    : diagram.pending
+      ? `另外：已经有一条**待用户确认的重画提议**（目的：${diagram.pending.purpose}）。等用户点横幅才会真去读代码，这期间别重复提议。`
+      : "";
   const layers = peek.layout.length
     ? peek.layout.map((layer) => `${layer.name}：${layer.moduleIds.map((unitId) => `${titleOf(unitId)}（${unitId}）`).join("；") || "（空）"}`).join("\n")
     : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「判一次分层」，这一发不由你代点。）";
   return {
-    inventory: `架构现场（要动哪一格就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读现叠）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那一格；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
+    inventory: `${diagramState}${previewNote ? `\n${previewNote}` : ""}\n\n架构现场（要动哪一格就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读现叠）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那一格；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
     apply: (argumentsJson: string) => {
       const parsed = parseOverrideArguments(argumentsJson);
       const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
@@ -1214,7 +1369,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   try {
     const crossFiles = new Map<string, number>();
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}) });
+    const redrawContext = redrawToolFor(repository, overlayDatabase, turn.threadId);
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext, redraw: redrawContext } : {}) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider };
   } catch (error) {
@@ -1255,6 +1411,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const overlayDatabase = new TutorDatabase(repository.path);
   try {
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
+    const redrawContext = redrawToolFor(repository, overlayDatabase, turn.threadId);
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
@@ -1262,7 +1419,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       cross: crossRepoFor(repository, crossFiles),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
-      ...(toolContext ? { architecture: toolContext } : {}),
+      ...(toolContext ? { architecture: toolContext, redraw: redrawContext } : {}),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放

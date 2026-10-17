@@ -1,4 +1,4 @@
-import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrideLoss, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTier, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
+import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrideLoss, ArchitectureOverrides, ArchitecturePlan, DiagramReadout, CourseNode, CourseTier, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
 import { groupExternals, isBoundaryMember } from "../depgraph/external-catalog.js";
 import { graphFromData, isServedEntrypoint } from "../depgraph/graph.js";
 import { classifyFileRoles, fileStructureOf } from "../depgraph/roles.js";
@@ -81,6 +81,8 @@ export interface ArchitectureInput {
 }
 
 export interface ArchitectureResult extends ArchitecturePlan {
+  /** 现在画的是缺省那张还是被替换过的那张，外加 pending/preview 两条过渡态（见 shared 的 DiagramReadout）。 */
+  diagram?: DiagramReadout;
   /** 只有真发了请求才带这一格；命中缓存不报用量（与流程层同一口径，同一笔钱不被计两次）。 */
   usage?: LlmUsage;
   /** 被截掉的模块数（>MAX_MODULES 时界面要能说清「这不是全部」）。 */
@@ -140,7 +142,7 @@ export function aggregateModuleEdges(filesByModule: Map<string, string[]>, impor
 }
 
 /** 归层结果定了之后才算箭头：模型不许发明边，边只能从这张表出来（画布虽不画，产物与审计仍要用）。 */
-function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, string[]>, imports: Record<string, string[]>): ArchitectureEdge[] {
+export function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, string[]>, imports: Record<string, string[]>): ArchitectureEdge[] {
   const layerOfModule = new Map<string, string>();
   for (const layer of layers) for (const moduleId of layer.moduleIds) layerOfModule.set(moduleId, layer.id);
   const { pairs } = aggregateModuleEdges(filesByModule, imports);
@@ -362,7 +364,7 @@ export function architectureBlocks(course: CourseTree, analysis: RepositoryAnaly
 }
 
 /** 方块与成员的对照表：`applyOverrides` 拆块、`layerEdges` 算往来都靠它，界面拿到的是同一份 id。 */
-interface ArchitectureUnits {
+export interface ArchitectureUnits {
   /** 方块 id → 成员模块 id（原子块就是只有自己一个）。 */
   blocks: Map<string, string[]>;
   /** 课程树里全部原子模块 id（含被藏起来的旁证）：用来分辨「这个修正指的模块只是被藏了」与「它已经不在这棵树里」。 */
@@ -383,7 +385,7 @@ interface ArchitectureUnits {
   找不到仍然**不动它**（宁可留在模型判的层里，也不凭空造一层），但不能装作没事——
   2026-10-16 之前这里是一条无声的 `continue`，用户改过几次、下次重判全落空而界面上看不出来。
   */
-function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenUnits: string[]; lost: ArchitectureOverrideLoss[] } {
+export function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenUnits: string[]; lost: ArchitectureOverrideLoss[] } {
   const clone = layers.map((layer) => ({ ...layer, moduleIds: [...layer.moduleIds] }));
   // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——**没覆盖层时也要滤**，
   // 否则同一次判层会因为「有没有人工改过」画出不同数量的层，读者会以为层是被人删掉的
@@ -425,7 +427,7 @@ function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOver
 
 
 /** 这一层的全部确定性输入：方块清单、聚合边、外部栏、缓存键。判断题与 peek 共用它（两套键构造迟早漂移）。 */
-interface ArchitectureContext {
+export interface ArchitectureContext {
   truncated: ModuleFact[];
   filesByUnit: Map<string, string[]>;
   briefs: ArchitectureBlockBrief[];
@@ -438,7 +440,7 @@ interface ArchitectureContext {
   units: ArchitectureUnits;
 }
 
-function archContext(input: ArchitectureInput, modelVersion: string) {
+export function archContext(input: ArchitectureInput, modelVersion: string) {
   const { repositoryId, course, analysis, index, overrides } = input;
   const servedEntryPaths = new Set((analysis.graph.entrypoints ?? []).filter(isServedEntrypoint).map((anchor) => anchor.path));
   const hotChanges = new Map(index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));

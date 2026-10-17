@@ -77,8 +77,12 @@ async function fakeFetch(_url: unknown, init?: { body?: string }): Promise<Respo
     const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
     sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
   } catch { /* 非 JSON 的请求体不进这份清单 */ }
+  const text = replyFor(raw);
+  // `@@tool 工具名 {json}` 这一格脚本让假 provider 回一次工具调用：副作用工具**实际被拒的是什么**从此能被端到端验，
+  // 不用只停在「清单里有这一格」
+  const call = /^@@tool (\S+) (.*)$/s.exec(text);
   const payload = {
-    choices: [{ message: { content: replyFor(raw) }, finish_reason: "stop" }],
+    choices: [{ message: call ? { content: "", tool_calls: [{ id: `call_${fetchCalls}`, type: "function", function: { name: call[1], arguments: call[2] } }] } : { content: text }, finish_reason: call ? "tool_calls" : "stop" }],
     usage: { prompt_tokens: 120, completion_tokens: 40 }
   };
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
@@ -1071,5 +1075,94 @@ describe("推荐入口：文档不进候选清单", () => {
     expect(outbound).toContain(MAIN_FILE);
     // 翻译层的词表同样来自池子：文档路径切出来的 design/md 不该进 repoVocabulary
     expect(sentTools.slice(outboundBefore)[0].raw).not.toContain('"md"');
+  });
+});
+
+/**
+  「重画这张图」这条动线（§72）。打到路由的原因很具体：这一条上**谁付钱、谁能批准**是产品红线，
+  而它只能从 HTTP 侧看出来——`propose` 必须一发不发，`run` 必须等用户点横幅，`commit` 必须只有用户能按。
+*/
+describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () => {
+  type DiagramView = {
+    origin: "default" | "agent";
+    purpose?: string;
+    stale?: string;
+    pending?: { purpose: string };
+    preview?: { purpose: string; draft: { kind: string; layers: { name: string; nodes: string[] }[]; omitted: unknown[]; conflicts: { node: string }[] } };
+    conflicts?: { node: string }[];
+  };
+  type ArchView = {
+    layers: { name: string; moduleIds: string[] }[];
+    source: string;
+    diagram?: DiagramView;
+  };
+  const read = async (): Promise<ArchView> => (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as ArchView;
+  const EXPLORE = '{"findings":[{"unit":"src","claim":"这里注册路由并把请求交给编排","evidence":"src/main.ts:3"}],"boundaries":"框内是仓里写的代码","notes":""}';
+  const DRAFT = JSON.stringify({ layers: [{ name: "接入", duty: "收请求", nodes: ["module:src"] }, { name: "说明", duty: "记录设计与约定", nodes: ["module:docs"] }], omitted: [] });
+
+  it("propose 一个 token 都不发；run 才发那两趟；替换与恢复缺省都不再花钱", async () => {
+    const before = sentTools.length;
+    const missing = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "propose" } });
+    expect(missing.statusCode, "没有目的的图只是换一种画法，得先问用户").toBe(422);
+
+    const proposed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "propose", purpose: "给第一次进这个仓的人讲模块边界" } });
+    expect(proposed.statusCode).toBe(200);
+    expect((proposed.json() as { status: string }).status).toBe("pending");
+    expect(sentTools.length, "挂一条提议不该发出任何一发请求").toBe(before);
+
+    const early = await read();
+    expect(early.diagram?.pending?.purpose).toContain("模块边界");
+    expect(early.diagram?.origin, "还没画，画的仍是缺省那份").toBe("default");
+
+    const tooEarly = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
+    expect(tooEarly.statusCode, "没有预览就替换是凭空造一张图").toBe(422);
+
+    scripted = [EXPLORE, DRAFT];
+    const drawn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "run" } });
+    expect(drawn.statusCode, (drawn.json() as { error?: string }).error ?? "").toBe(200);
+    expect(sentTools.length, "取证 + 出图：这一趟正好两发").toBe(before + 2);
+    const previewing = await read();
+    expect(previewing.diagram?.preview?.draft.layers.map((layer) => layer.name)).toEqual(["接入", "说明"]);
+    expect(previewing.diagram?.origin, "预览态不改变生效的那张").toBe("default");
+    expect(previewing.layers.map((layer) => layer.name), "画布取数的 layers 仍是缺省那份的层").not.toEqual(["接入", "说明"]);
+
+    const committed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
+    expect(committed.statusCode).toBe(200);
+    const replaced = await read();
+    expect(replaced.diagram?.origin).toBe("agent");
+    expect(replaced.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src"]], ["说明", ["module:docs"]]]);
+    expect(replaced.diagram?.preview, "替换完预览就没了").toBeUndefined();
+    expect(replaced.diagram?.conflicts ?? [], "这两格的角色与所在层并不相反（一格一层），不该硬造反证").toEqual([]);
+
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "reset" } });
+    const restored = await read();
+    expect(restored.diagram?.origin, "删掉替换那一行，缺省那份立刻回来（它一直现算现叠着）").toBe("default");
+    expect(sentTools.length, "四个动作里只有 run 发过请求").toBe(before + 2);
+  });
+
+  it("没有待确认的提议时 run 拒；agent 手上只有 propose / keep / reset", async () => {
+    const orphan = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "run" } });
+    expect(orphan.statusCode, "用户没点横幅就不该发这一发").toBe(422);
+
+    const before = sentTools.length;
+    const threadId = await newThread("map", "重画线程");
+    // 第一回合模型想一步做完：直接 commit。工具回执必须拒，且**图不能被它替换掉**
+    scripted = [`@@tool redraw_diagram {"action":"commit"}`, "这一步我没权限，得你在画布上点。"];
+    const turn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "把刚才那张直接换上", threadId } });
+    expect(turn.statusCode).toBe(200);
+    expect(sentTools[0]?.names, "map 作用域每一轮都该有这个工具（不要求先选中模块）").toContain("redraw_diagram");
+    const second = sentTools[sentTools.length - 1]?.raw ?? "";
+    expect(second, "工具回执要回实话：这一动作不由 agent 按").toContain("不由你按");
+    expect((await read()).diagram?.origin, "被拒之后生效的那张没变").toBe("default");
+
+    // 第二回合走正路：propose 仍然一发不发（除了对话本身那发）
+    const beforePropose = sentTools.length;
+    scripted = [`@@tool redraw_diagram {"action":"propose","purpose":"只看下单这条链路"}`, "已把提议挂到画布上，等你点开始重画。"];
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "换个角度看这张图", threadId } });
+    const pending = await read();
+    expect(pending.diagram?.pending?.purpose).toBe("只看下单这条链路");
+    expect(sentTools.length, "对话两发之外，propose 没多花任何一发").toBe(beforePropose + 2);
+    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "keep" } });
+    expect(sentTools.length - before, "整段对话只发了回合本身的请求：重画一步没花钱").toBe(4);
   });
 });

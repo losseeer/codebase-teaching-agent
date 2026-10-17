@@ -100,7 +100,8 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   useEffect(() => {
     const controller = new AbortController();
     subscribeServerEvents((event) => {
-      if (event.type !== "architecture_updated") return;
+      // 覆盖层落盘、重画提议、预览就绪、用户裁决——四类都只意味着一件事：这一格要重取
+      if (!["architecture_updated", "redraft_requested", "diagram_preview", "diagram_replaced"].includes(event.type)) return;
       if (event.payload.repositoryId !== repositoryId) return;
       setArchNonce((value) => value + 1);
     }, controller.signal);
@@ -366,9 +367,9 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
             ) : (
               <>
                 <span
-                  className={`badge ${archStatus.source === "llm" ? "badge-info" : archStatus.source === "unavailable" ? "badge-warn" : "badge-neutral"}`}
-                  title={`层名与归层由模型判（要改在对话里让 agent 动）；方块怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.reason ?? ""}`}
-                >{`${archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${archStatus.source === "llm" ? ` · ${archStatus.layers} 层` : ""}`}</span>
+                  className={`badge ${archStatus.previewing || archStatus.pending ? "badge-warn" : archStatus.origin === "agent" || archStatus.source === "llm" ? "badge-info" : archStatus.source === "unavailable" ? "badge-warn" : "badge-neutral"}`}
+                  title={`层名与归层由模型判（要改在对话里让 agent 动）；方块怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.origin === "agent" ? "现在画这张是按对话重画并经你批准的，点画布上方那条横幅可恢复缺省。" : ""}${archStatus.reason ?? ""}`}
+                >{`${archStatus.previewing ? "预览中" : archStatus.pending ? "待你确认重画" : archStatus.origin === "agent" ? "重画那张" : archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${!archStatus.previewing && archStatus.source !== "unavailable" ? ` · ${archStatus.layers} 层` : ""}`}</span>
                 <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
               </>
             )}

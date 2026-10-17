@@ -49,6 +49,8 @@ export interface ReadToolLoopInput {
     工具清单里连 `set_architecture` 这一格都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
   */
   architecture?: ArchitectureToolContext;
+  /** 重画这张图（只有提议、撤预览、恢复缺省三个动作）：不传 = 这个作用域连提议的权力都没有。 */
+  redraw?: RedrawToolContext;
 }
 
 /**
@@ -123,8 +125,33 @@ export interface ArchitectureToolContext {
   inventory?: string;
 }
 
+/**
+  「重画这张图」的工具面。**故意只开三个动作**：propose（提议，不花钱）、keep（撤掉那张预览）、
+  reset（恢复缺省图）。`run` 与 `commit` 不在这里——那一发要花钱、替换要用户点头，两个都只有画布上的按钮能按。
+  这条界线写进描述里，是因为模型会本能地想「一步做完」；把动作收掉比在提示词里劝它更有效。
+*/
+export const REDRAW_DIAGRAM_TOOL: LlmTool = {
+  name: "redraw_diagram",
+  description: "换一张架构图的画法。propose（提议按某个目的重画：给一句 purpose 说清这张图要回答什么问题，比如「给第一次进这个仓的人讲模块边界」「只顺着下单这条链路看」；这一步不发请求，画布上会出现一条横幅由用户点「开始重画」）、keep（用户说不要换，撤掉现在那张预览）、reset（用户说要恢复缺省图）。**你不能自己开始重画，也不能自己替换**：那两下由用户按。目的说不清就先问用户，别直接 propose。",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "propose / keep / reset" },
+      purpose: { type: "string", description: "propose 必填：这张图要回答什么问题，不超过 120 字" }
+    },
+    required: ["action"]
+  }
+};
+
+/** 重画那张图的落地通道：由服务层给闭包，工具循环不认识数据库与预算闸。 */
+export interface RedrawToolContext {
+  /** 执行一步并回一句给模型看的话（实际落盘后的状态，与 set_architecture 同一条纪律）。
+      允许异步：`propose` 那一步要过预算闸并广播，路由与工具共用同一个实现。 */
+  apply: (argumentsJson: string) => string | Promise<string>;
+}
+
 /** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext): LlmTool[] {
+function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, redraw?: RedrawToolContext): LlmTool[] {
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -139,6 +166,7 @@ function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: 
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
   // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
   if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
+  if (redraw) tools.push(REDRAW_DIAGRAM_TOOL);
   return tools;
 }
 
@@ -164,7 +192,7 @@ export interface ReadToolLoopResult {
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
-  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture);
+  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.redraw);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
@@ -225,6 +253,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         }
         // 副作用一次就回一句实话；不占读文件额度（它读的是产物，不是源码）
         messages.push({ role: "tool", toolCallId: call.id, content: input.architecture.apply(call.argumentsJson) });
+        continue;
+      }
+      if (call.name === REDRAW_DIAGRAM_TOOL.name) {
+        messages.push({ role: "tool", toolCallId: call.id, content: await (input.redraw?.apply(call.argumentsJson) ?? "这个作用域没有重画这张图的权力。") });
         continue;
       }
       if (call.name !== READ_FILE_TOOL.name) {
