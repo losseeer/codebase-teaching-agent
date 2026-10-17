@@ -32,7 +32,7 @@ const MAX_DEEP_FILES = 5;
 const DEEP_EXCERPT_LINES = 80;
 /**
   所有窗口加起来的字符预算。行数上限管不住成本——`read_file` 的单次字闸是 12,000 字符，
-  三个文件最坏能凑出三万多字符（≈9k token），比主调用还贵。这里按字符收口，保证这一步
+  三个文件最坏能凑出三万多字符（≈9k token），比主调用还贵。这里按字符收尾，保证这一步
   永远是「有界的小调用」。
 */
 const MAX_DEEP_CHARS = 16_000;
@@ -171,7 +171,7 @@ export async function deepenInferredEdges(input: {
   let usage: LlmUsage | undefined;
   let revised: Map<string, { verdict: "code" | "inferred"; evidence: string }>;
   try {
-    // 出境落账：deepen 自读的窗口同样要记（口径见 `GenerateFlowInput.egress` 注释，flows/flow.ts）
+    // 出网计入审计：deepen 自读的窗口同样要记（口径见 `GenerateFlowInput.egress` 注释，flows/flow.ts）
     recordEgress({
       repositoryPath: input.repositoryPath,
       scene: DEEP_SCENE,
@@ -231,7 +231,7 @@ export async function deepenInferredEdges(input: {
   真仓重放（09-22）：19 条 code 判定被驳回 18 条——全因旧匹配要求 evidence 里出现**完整路径**，
   而模型按提示只写了裸文件名（`nodes.py:4` 而非 `src/main/java/com/hmdp/graph/nodes.py:4`）。
   现在允许「完整路径 / 目录后缀 / 裸文件名」，但必须**整段相等**：`IShopServiceImpl.java`
-  不能冒充 `ShopServiceImpl.java`，`core/redis.py` 依然对不上任何一端。
+  不能伪装成 `ShopServiceImpl.java`，`core/redis.py` 依然对不上任何一端。
 */
 export function citesOwnedFile(evidence: string, ownedPaths: string[]): boolean {
   for (const match of evidence.matchAll(/[\w./\\-]+\.[A-Za-z0-9]+/g)) {

@@ -337,7 +337,7 @@ export function clearModuleEntryCache(): void {
 export async function suggestModuleEntriesCached(input: { repositoryId: string; tree: CourseTree; moduleLabel: string; moduleHint: string; provider: LlmProvider; fileSummaries?: Map<string, string>; boostPaths?: string[]; database?: TutorDatabase; analysis?: RecentChangesInput }): Promise<ModuleEntrySuggestion> {
   // 跨模块去重：其他模块最近推荐过的路径在排序时降权（同模块重进不降，避免「换着花样推同一个」被矫枉过正）
   const existing = recentEntryPaths.get(input.repositoryId);
-  // 过期的记录不读也不续用，直接由下面的新 Map 顶掉
+  // 过期的记录不读也不续用，直接由下面的新 Map 取代
   const paths = existing && Date.now() - existing.at < ENTRY_CACHE_TTL_MS ? existing.paths : new Map<string, string>();
   const avoidPaths = new Set<string>();
   for (const [path, module] of paths) if (module !== input.moduleLabel) avoidPaths.add(path);

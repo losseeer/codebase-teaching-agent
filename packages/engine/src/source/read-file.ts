@@ -31,7 +31,7 @@ const MAX_WINDOW_CHARS = 12_000;
 const MAX_FILE_BYTES = 2_000_000;
 
 const DENIED_DIRECTORIES = new Set([".git", "node_modules", ".tutor"]);
-/** 模板类 env 文件只列键名、不含密钥，而且是理解配置的入口 → 放行（不加区分地挡 .env* 是误伤）。 */
+/** 模板类 env 文件只列键名、不含密钥，而且是理解配置的入口 → 放行（不加区分地挡 .env* 是错误影响）。 */
 const ENV_TEMPLATE_SUFFIXES = [".example", ".sample", ".template", ".dist"];
 /** 这些载体要么没扩展名、要么扩展名太通用，只能按文件名挡：全小写比较。 */
 const DENIED_BASENAMES = new Set([
@@ -83,7 +83,7 @@ export interface FileReadRecord {
 }
 
 export interface ReadFileOutcome {
-  /** 直接回喂给模型的内容（成功=带行号摘录，失败=拒绝/错误说明）。 */
+  /** 直接回送入模型的内容（成功=带行号摘录，失败=拒绝/错误说明）。 */
   content: string;
   /** 审计信息；拒绝与失败时 path 仍尽量记录原始请求值。 */
   audit: FileReadRecord;

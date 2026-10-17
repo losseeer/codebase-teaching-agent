@@ -193,7 +193,7 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     return { repository, service, exerciseId: exercise.id };
   }
 
-  it("交回正确实现 ⇒ 全过、automatic=true、反馈来源标 sandbox（不是 llm_judge）", async () => {
+  it("返回正确实现 ⇒ 全过、automatic=true、反馈来源标 sandbox（不是 llm_judge）", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
     const result = await service.answer(repository, exerciseId, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
     expect(result.passed).toBe(true);
@@ -223,7 +223,7 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     expect(schedule?.exerciseId).toBe(exerciseId);
   });
 
-  it("学习者交的文件名不在下发清单里 ⇒ 当没收到，不拿冻结的缺陷版冒充他的代码判分", async () => {
+  it("学习者交的文件名不在下发清单里 ⇒ 当没收到，不拿冻结的缺陷版伪装成他的代码判分", async () => {
     const { repository, service, exerciseId } = await generatedExercise();
     const result = await service.answer(repository, exerciseId, { files: [{ path: "别的.ts", contents: REAL_SOURCE }] });
     expect(result.passed).toBe(false);
@@ -280,7 +280,7 @@ describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }
     return { repository, service, exercise, explain };
   }
 
-  it("点一次才发这一趟：出境登记走 sandbox-output，账上多一条 exercise_explain", async () => {
+  it("点一次才发这一趟：出网登记走 sandbox-output，账上多一条 exercise_explain", async () => {
     const { repository, service, exercise, explain } = await prepared("空字符串那支断言挂在没走默认值上。");
     expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_explain")).toHaveLength(0);
 
@@ -308,13 +308,13 @@ describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }
     await expect(service.explain(repository, localized.id, { selectedIds: ["src/config.js"] }, explain)).rejects.toThrow("只有代码题");
   });
 
-  it("学习者粘进口令：出境前被隐去，masked 如实带上（0 与没扫是两个读数）", async () => {
+  it("学习者粘进口令：出网前被隐去，masked 如实带上（0 与没扫是两个读数）", async () => {
     const { repository, service, exercise, explain } = await prepared("看了就好");
     const withSecret = 'export function loadKey(): string {\n  return "sk-abcdefghijklmnopqrstuvwxyz012345";\n}\n';
     await service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: withSecret }] }, explain);
     const row = readJournal(repository.path).filter((event) => event.type === "code_egress").at(-1);
     expect(Number(row?.payload.masked)).toBeGreaterThan(0);
-    // 文本本身不落盘，但出境行里的 chars 必须是隐去之后那段
+    // 文本本身不落盘，但出网行里的 chars 必须是隐去之后那段
     expect(JSON.stringify(row)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz012345");
   });
 });

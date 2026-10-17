@@ -116,7 +116,7 @@ describe("语法树符号抽取", () => {
     resetSymbolParserForTest(); // 强制走逐行匹配，专门验证 findEndLine 的边界
     const dir = mkdtempSync(join(tmpdir(), "regex-endline-"));
     const source = [
-      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行（修复前会向后吞掉后续声明）
+      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行（修复前会向后丢弃后续声明）
       "const b = (x) => {", // 常规花括号多行箭头
       "  return x + 2;",
       "};",

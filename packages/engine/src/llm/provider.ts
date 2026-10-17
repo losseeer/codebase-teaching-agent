@@ -2,7 +2,7 @@ import { maskSecrets } from "../security/secrets.js";
 import { applyThinking } from "./thinking.js";
 
 /**
-  出境前的**最后一道筛**（企业化第 2 条的总闸口）：三个真发请求的 provider 在 `complete` 第一行各调一次。
+  出网前的**最后一道筛**（企业化第 2 条的总闸口）：三个真发请求的 provider 在 `complete` 第一行各调一次。
 
   为什么贴在发送边而不是只靠装配点：10-12 的审计查出四条漏网——出题的源码摘录、符号形参原文、
   L2 聚合上下文、向量批量——它们全是**后来新增的装配路径**，不是谁把旧代码改坏了。
@@ -142,19 +142,19 @@ export interface LlmCompletion {
     日志包在重试层**外面**，一次逻辑调用只落一行，「试了几次」不带出来就永远测不到（第三阶段点名的指标）。
     */
   attempts?: number;
-  /** 每次尝试各自的墙钟（ms），按发生顺序。`[60000, 15000]` 这种形状就是「被超时掐掉一次再发一遍并成了」。 */
+  /** 每次尝试各自的墙钟（ms），按发生顺序。`[60000, 15000]` 这种形状就是「被超时中止一次再发一遍并成了」。 */
   attemptMs?: number[];
   /**
     这一发的 `max_tokens` 是**加过一档推理余量**之后才成的：说明上一发是被思考量挤空的。
-    没有这一格，日志里只看得见「一次成功、耗时略长」，看不出预算其实动过。
+    没有这个字段，日志里只看得见「一次成功、耗时略长」，看不出预算其实动过。
     */
   headroomEscalated?: boolean;
 }
 
-/** 给用户看的截断尾注：正文被 max_tokens 掐断时明示边界，别让半截句子伪装成完整结论。 */
+/** 给用户看的截断尾注：正文被 max_tokens 中止时明示边界，别让半截句子伪装成完整结论。 */
 export const TRUNCATION_TAIL = "\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）";
 
-/** 可见回复被掐断（token 触顶，或被调用方的字符兜底切过）时加尾注；空文不加（由调用方走各自的兜底文案）。 */
+/** 可见回复被中止（token 达到预算上限，或被调用方的字符兜底切过）时加尾注；空文不加（由调用方走各自的兜底文案）。 */
 export function flagTruncatedReply(text: string, truncated: boolean): string {
   return truncated && text && !text.endsWith(TRUNCATION_TAIL) ? `${text}${TRUNCATION_TAIL}` : text;
 }
@@ -459,7 +459,7 @@ export class RetryLlmProvider implements LlmProvider {
 }
 
 /**
-  把「试了几次、每次多久」挂到错误对象上，供外层日志落账。
+  把「试了几次、每次多久」挂到错误对象上，供外层日志计入审计。
   用 `defineProperty` 而不是直接赋值：`Error` 上的 enumerable 属性会被 `JSON.stringify(err)` 之类带出去，
   而这里要的只是一条读数，不该改变错误对象的对外形状。
   */

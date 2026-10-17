@@ -162,7 +162,7 @@ describe("按需深入", () => {
     expect(result).toMatchObject({ confirmed: 1, stillInferred: 0 });
   });
 
-  it("相似文件名不能冒充：引 IShopServiceImpl 式的近似名照样驳回（后缀匹配必须整段相等）", async () => {
+  it("相似文件名不能伪装成：引 IShopServiceImpl 式的近似名照样驳回（后缀匹配必须整段相等）", async () => {
     const dir = workspace();
     const result = await deepenInferredEdges({
       repositoryPath: dir,

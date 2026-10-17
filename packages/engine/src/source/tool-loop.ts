@@ -46,10 +46,10 @@ export interface ReadToolLoopInput {
   cross?: CrossRepoContext;
   /**
     架构修正工具（唯一的有副作用工具）。不传 = 这个作用域没有写能力，
-    工具清单里连 `set_architecture` 这一格都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
+    工具清单里连 `set_architecture` 这个节点都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
   */
   architecture?: ArchitectureToolContext;
-  /** 重画这张图（只有提议、撤预览、恢复缺省三个动作）：不传 = 这个作用域连提议的权力都没有。 */
+  /** 重绘这张图（只有提议、撤预览、恢复默认三个动作）：不传 = 这个作用域连提议的权力都没有。 */
   redraw?: RedrawToolContext;
 }
 
@@ -60,7 +60,7 @@ export interface ReadToolLoopInput {
   - `roots`：仓名 → 仓库根路径。`read_file` 靠它换根，**守卫整套复用**（仓内边界、拒读名单、软链接复核都在根路径这一层）；
   - `corpusOf`：仓名 → 检索语料，**模型真搜时才现取**（取一份对端语料意味着要把那个仓挂进内存，不该为「它可能问一句」先付）；
     回 `undefined` 表示这仓没产物、只能读不能搜，工具会照实回一句，不让模型以为工具坏了；
-  - `links`：当前仓 ↔ 对端仓按归一化 URL 配好的接缝清单（零 token 现算，代价是读两边源码，所以只在模型真调用时才算）。
+  - `links`：当前仓 ↔ 对端仓按归一化 URL 配好的接缝清单（零 token 实时计算，代价是读两边源码，所以只在模型真调用时才算）。
   */
 export interface CrossRepoContext {
   roots: Record<string, string>;
@@ -68,7 +68,7 @@ export interface CrossRepoContext {
   links?: (repoName: string, filter: string) => string;
   /** 跨仓读取的独立上限：总额度之外再掐一道，防止模型把两个仓都翻一遍。 */
   maxCrossReads?: number;
-  /** 每递出一份对端内容就回报一次（仓名 + 该仓内的裸路径）。回合收尾的引用复检靠它认账：见 `server.ts` 的 `recheckTurn`。 */
+  /** 每递出一份对端内容就回报一次（仓名 + 该仓内的裸路径）。回合收尾的引用复检靠它留痕：见 `server.ts` 的 `recheckTurn`。 */
   onHandedOut?: (repoName: string, path: string) => void;
 }
 
@@ -94,12 +94,12 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 */
 export const SET_ARCHITECTURE_TOOL: LlmTool = {
   name: "set_architecture",
-  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那一格挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那一格的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓**所有**修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张格子清单上的 id（arch: 开头是合并块，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那个节点挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那个节点的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓**所有**修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张节点清单上的 id（arch: 开头是组合节点，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
   parameters: {
     type: "object",
     properties: {
       action: { type: "string", description: "move_module / rename_layer / set_tier / reset" },
-      module: { type: "string", description: "图上那一格的 id：合并块 arch: 开头（整块挪），原子模块 module: 开头（set_tier 只认这一档；reset 给了它就只撤这一格）" },
+      module: { type: "string", description: "图上那个节点的 id：组合节点 arch: 开头（整块挪），原子模块 module: 开头（set_tier 只认这一档；reset 给了它就只撤这个节点）" },
       layer: { type: "string", description: "目标层名（move_module 必填）" },
       from: { type: "string", description: "rename_layer 的原层名；reset 时给它就是「只撤这条改名」" },
       to: { type: "string", description: "rename_layer 的新层名（1~24 字）；reset 时给它就是「只撤改成这个名字的那条改名」" },
@@ -119,20 +119,20 @@ export interface ArchitectureToolContext {
   apply: (argumentsJson: string) => string;
   /**
     现在的分层现场 + 已存的人工修正清单（一段文本，由作用域层进上下文）。
-    为什么要有这一格：修正存在引擎里，横幅读得到、模型读不到——用户说「撤掉那条」时，
-    模型手上既没有「哪一条」的清单，也没有格子 id，只能猜或反问（2026-10-16 用户指出）。
+    为什么要有这个节点：修正存在引擎里，横幅读得到、模型读不到——用户说「撤掉那条」时，
+    模型手上既没有「哪一条」的清单，也没有节点 id，只能猜或反问（2026-10-16 用户指出）。
   */
   inventory?: string;
 }
 
 /**
-  「重画这张图」的工具面。**故意只开三个动作**：propose（提议，不花钱）、keep（撤掉那张预览）、
-  reset（恢复缺省图）。`run` 与 `commit` 不在这里——那一发要花钱、替换要用户点头，两个都只有画布上的按钮能按。
+  「重绘这张图」的工具面。**故意只开三个动作**：propose（提议，不花钱）、keep（撤掉那张预览）、
+  reset（恢复默认图）。`run` 与 `commit` 不在这里——那一发要花钱、替换要用户点头，两个都只有画布上的按钮能按。
   这条界线写进描述里，是因为模型会本能地想「一步做完」；把动作收掉比在提示词里劝它更有效。
 */
 export const REDRAW_DIAGRAM_TOOL: LlmTool = {
   name: "redraw_diagram",
-  description: "换一张架构图的画法。propose（提议按某个目的重画：给一句 purpose 说清这张图要回答什么问题，比如「给第一次进这个仓的人讲模块边界」「只顺着下单这条链路看」；这一步不发请求，画布上会出现一条横幅由用户点「开始重画」）、keep（用户说不要换，撤掉现在那张预览）、reset（用户说要恢复缺省图）。**你不能自己开始重画，也不能自己替换**：那两下由用户按。目的说不清就先问用户，别直接 propose。",
+  description: "换一张架构图的画法。propose（提议按某个目的重绘：给一句 purpose 说清这张图要回答什么问题，比如「给第一次进这个仓的人讲模块边界」「只顺着下单这条链路看」；这一步不发请求，画布上会出现一条横幅由用户点「开始重绘」）、keep（用户说不要换，撤掉现在那张预览）、reset（用户说要恢复默认图）。**你不能自己开始重绘，也不能自己替换**：那两下由用户按。目的说不清就先问用户，别直接 propose。",
   parameters: {
     type: "object",
     properties: {
@@ -143,7 +143,7 @@ export const REDRAW_DIAGRAM_TOOL: LlmTool = {
   }
 };
 
-/** 重画那张图的落地通道：由服务层给闭包，工具循环不认识数据库与预算闸。 */
+/** 重绘那张图的落地通道：由服务层给闭包，工具循环不认识数据库与预算闸。 */
 export interface RedrawToolContext {
   /** 执行一步并回一句给模型看的话（实际落盘后的状态，与 set_architecture 同一条纪律）。
       允许异步：`propose` 那一步要过预算闸并广播，路由与工具共用同一个实现。 */
@@ -222,7 +222,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
       if (call.name === CROSS_REPO_LINK_TOOL.name) {
-        // 零 token 现算：代价是读两边源码（几十毫秒），所以只在模型真开口要跨仓落点时才算一次
+        // 零 token 实时计算：代价是读两边源码（几十毫秒），所以只在模型真开口要跨仓落点时才算一次
         const repo = readArg(call.argumentsJson, "repo");
         const content = !input.cross?.links ? "当前没有可配对的其他仓。"
           : !crossNames.includes(repo) ? `未知仓库「${repo}」；可配对的其他仓：${crossNames.join(" / ")}`
@@ -256,7 +256,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         continue;
       }
       if (call.name === REDRAW_DIAGRAM_TOOL.name) {
-        messages.push({ role: "tool", toolCallId: call.id, content: await (input.redraw?.apply(call.argumentsJson) ?? "这个作用域没有重画这张图的权力。") });
+        messages.push({ role: "tool", toolCallId: call.id, content: await (input.redraw?.apply(call.argumentsJson) ?? "这个作用域没有重绘这张图的权力。") });
         continue;
       }
       if (call.name !== READ_FILE_TOOL.name) {

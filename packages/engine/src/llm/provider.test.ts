@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("OpenAICompatibleProvider", () => {
-  it("出境前的总闸口：装配点漏筛的密钥在发送边被隐去，请求体里不留明文", async () => {
+  it("出网前的总闸口：装配点漏筛的密钥在发送边被隐去，请求体里不留明文", async () => {
     let raw = "";
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
       raw = String(init?.body);
@@ -412,14 +412,14 @@ describe("RetryLlmProvider", () => {
     expect(result.attemptMs).toHaveLength(2);
   });
 
-  it("一次成的也要写 attempts=1：缺这一格的是历史行，不能把「没记」读成 1", async () => {
+  it("一次成的也要写 attempts=1：缺这个字段的是历史行，不能把「没记」读成 1", async () => {
     const { provider } = scripted([() => Promise.resolve({ text: "first try", finishReason: "stop" })]);
     const result = await provider.complete(INPUT);
     expect(result.attempts).toBe(1);
     expect(result.attemptMs).toHaveLength(1);
   });
 
-  it("最终失败也带次数，且挂在错误上的两格不可枚举（不改错误对象的对外形状）", async () => {
+  it("最终失败也带次数，且挂在错误上的这两个字段不可枚举（不改错误对象的对外形状）", async () => {
     const { provider, calls } = scripted([
       () => Promise.reject(new Error("LLM returned 500")),
       () => Promise.reject(new Error("LLM returned 503")),
@@ -429,7 +429,7 @@ describe("RetryLlmProvider", () => {
     expect(calls()).toBe(3);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as unknown as { attempts?: number }).attempts).toBe(3);
-    expect(JSON.stringify({ e: caught })).toBe('{"e":{}}'); // 只有 message/stack 是惯例可枚举的：两格读数不该混进去
+    expect(JSON.stringify({ e: caught })).toBe('{"e":{}}'); // 只有 message/stack 是惯例可枚举的：这两个字段读数不该混进去
     expect(Object.keys(caught)).toEqual([]);
   });
 

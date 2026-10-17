@@ -18,13 +18,13 @@ import { loadSymbolParser } from "../depgraph/parser.js";
   - **TS/TSX**：直接调用 `typescript` 包自己的解析器 `resolveModuleName`（尊重 tsconfig 的 paths 别名与扩展名规则），
     这是 tsc 判定模块边的同一套代码。`typescript` 只是仓库自带的 devDependency，不新增依赖。
 
-  口径纪律（不然读数会骗人）：
+  口径纪律（不然读数会误导人）：
   - 只比**两侧都认识的仓内文件**，否则「引擎没索引 .vue」这类覆盖差会被算成边差；
   - 精确图按 JLS 的可见性把 `import a.b.*` 展成该包全部仓内类，这是**上界**（javac 只链接真正被用到的那几个），
     所以「精确有、引擎没有」的条数是差距上限，别当精确值引用；
   - 三方与 JDK 的 import 不构成仓内边，两侧都丢。
 
-  用法：pnpm graph:diff [仓库路径]（缺省 = 本引擎仓，跑 TS 档）
+  用法：pnpm graph:diff [仓库路径]（默认 = 本引擎仓，跑 TS 档）
 */
 
 const here = dirname(fileURLToPath(import.meta.url));

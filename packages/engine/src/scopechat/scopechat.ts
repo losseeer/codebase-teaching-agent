@@ -20,7 +20,7 @@ import { recordEgress, type EgressCollector } from "../security/dataflow.js";
   全局视野对全局问题必要，且路径/边清单成本远低于源码全文；源码按锚点摘录，需要时由模型经 read_file 按需拉取；
   server 传入 search 语料时额外开放 search_code（词法定位文件，只回位置与职责，不占读文件额度）。
   两个作用域的系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），
-  本文件不再自带副本；style 由 server 路由从请求里取用户当前风格档位后传入（缺省 50 = 普通档）。
+  本文件不再自带副本；style 由 server 路由从请求里取用户当前风格档位后传入（默认 50 = 普通档）。
   作用域聚焦的兜底：架构视图的模块是 GUI 合成节点（`depmap:目录`，课程树里本就不存在），GUI 随请求上送
   chip 文件清单 scopePaths，与已分析集求交后注入「当前作用域」段；nodeId 解析不到又没有清单时
   明示「按全局视野作答」——静默降级会让模型以错误作用域自信作答（2026-09-21 用户实感 bug）。
@@ -108,7 +108,7 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: bool
   );
   if (!slice) return "";
   const numbered = slice.lines.map((item) => `${item.line}| ${item.text}`).join("\n");
-  // 这段就是马上要进请求的源码原文：登记给出境清单（发出去之前落账，见 security/dataflow.ts）
+  // 这段就是马上要进请求的源码原文：登记给出网清单（发出去之前计入审计，见 security/dataflow.ts）
   egress?.push({ kind: "anchor-excerpt", path: slice.path, from: slice.from, to: slice.to, text: numbered, masked: slice.masked, truncated: slice.truncated || undefined });
   const total = slice.to < slice.totalLines || slice.truncated ? `，共 ${slice.totalLines} 行` : "";
   const symbol = slice.mode === "symbol" && slice.symbolEnd !== undefined && slice.symbolEnd !== slice.to ? `，符号结束于第 ${slice.symbolEnd} 行` : "";
@@ -234,10 +234,10 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那格同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重画这张图（只有提议/撤预览/恢复缺省）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重绘这张图（只有提议/撤预览/恢复默认）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
-  /** 本回合放进上下文的源码原文，发出前落进出境清单（见 security/dataflow.ts） */
+  /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
   const egress: EgressCollector = [];
   let scopeDegraded: ScopedChatResult["scopeDegraded"];
   const panorama = structurePanorama(analysis);
@@ -261,7 +261,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     }
   }
   if (input.focus) sections.push(flowStageSection(input.focus));
-  // 架构现场（层名、格子 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
+  // 架构现场（层名、节点 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
   if (input.architecture?.inventory) sections.push(input.architecture.inventory);
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
@@ -297,7 +297,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
-  // token 触顶被掐断时明示边界（不静默半截句）
+  // token 达到预算上限被中止时明示边界（不静默半截句）
   const reply = flagTruncatedReply(result.completion.text, result.completion.finishReason === "length") || "（模型未返回内容，请重试。）";
   return {
     reply,

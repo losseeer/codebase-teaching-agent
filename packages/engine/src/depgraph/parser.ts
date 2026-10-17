@@ -303,7 +303,7 @@ function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefin
 
 /**
   跨行模板字符串占的行号（tree-sitter 认出来的，不是自己扫引号）。
-  存在的理由只有一件：入口规则得知道「这一行是代码还是展示内容」。真仓里把一份示例源码整段塞进
+  存在的理由只有一件：入口规则得知道「这一行是代码还是展示内容」。真仓里把一份示例源码整段写入
   模板字符串当演示数据是常见写法（本仓 `docs/ui-prototype/js/data.js` 就是），逐行看那些
   `const app = Fastify(...)`、`app.listen(...)` 与真代码一模一样，按行匹配的入口判据就会把演示数据
   标成服务入口。自己再写一份字符串扫描器会和这里的语法树打架，所以判据只出树一份。

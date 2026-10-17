@@ -16,7 +16,7 @@ import { TutorDatabase } from "../store/database.js";
   与 phase0:prepare-study 的差别：那个脚本走确定性档且会改写课程树、往仓库里写调研材料；
   本脚本只重烧摘要，烧前先断言 provider 是模型档（确定性档重烧毫无意义，且会把 LLM 摘要整表覆盖）。
 
-  用法：pnpm l1:reburn [仓库路径]（缺省取 repositories.json 里最近使用的那条）
+  用法：pnpm l1:reburn [仓库路径]（默认取 repositories.json 里最近使用的那条）
 */
 
 loadDotEnv();

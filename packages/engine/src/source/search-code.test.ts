@@ -218,7 +218,7 @@ describe("整句中文：兜底最后一级与它的两道闸（§26 读数换�
     expect(better.audit.segmented).toBe(true);
   });
 
-  it("切词不误伤 ASCII 与关键词式查询（原样保留，不插空格拆坏整词判定）", () => {
+  it("切词不错误影响 ASCII 与关键词式查询（原样保留，不插空格拆坏整词判定）", () => {
     expect(segmentForLookup("io")).toBe("io");
     expect(segmentForLookup("seckill voucher listener")).toBe("seckill voucher listener");
     expect(segmentForLookup("缓存")).toBe("缓存");
@@ -269,7 +269,7 @@ describe("符号级位置回报（就近函数 + 行号）", () => {
     expect(result.content).toContain("就近: verifyCallback:41");
   });
 
-  it("形参与种类不参与打分（三仓实测：加了这个面 hit@5 一格不涨，还把干净负例撞成误命中）", () => {
+  it("形参与种类不参与打分（三仓实测：加了这个命中面 hit@5 一个节点不涨，还把干净负例撞成误命中）", () => {
     expect(ask("tokenvalue 无关词").audit.hits).toBe(0);
     expect(ask("id 无关词").audit.hits).toBe(0);
   });

@@ -140,7 +140,7 @@ export function appendMessages(repositoryPath: string, threadId: string, message
 }
 
 /**
-  问答线程的状态快照：**只剩设置那一格**。2026-10-14 撤掉教学状态机后 `stage` / `fallbackCount`
+  问答线程的状态快照：**只剩设置那个节点**。2026-10-14 撤掉教学状态机后 `stage` / `fallbackCount`
   既不再推进也不再读——历史行的 `state_json` 里那两个键还在，读侧忽略即可，不做迁移。
   map/practice 没有这个快照，只有 scope='teach' 的线程写。
 

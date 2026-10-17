@@ -12,7 +12,7 @@ import { currentPricing, priceComponents, pricingIsConfigured, pricingSourceOf }
   三条口径纪律：
   - 对账只认 `llm.log`（journal 的 teach 行在 10-08 之前含按字数造的估算 token，§37.9）；
   - 缺字段一律「未记」，不用默认值兜底——「没记」伪装成 0 会把口径问题读成产品结论；
-  - **本地兜底与预算降级根本不发请求**（§43 那条 `sendsCodeToEndpoint` 表态），所以「降级频率」这一格
+  - **本地兜底与预算降级根本不发请求**（§43 那条 `sendsCodeToEndpoint` 表态），所以「降级频率」这个字段
     在本表里天生读不到，只能看 journal 的 `exercise_declined` / `scope_degraded`（`pnpm phase0:metrics` 出那两栏）。
 */
 
@@ -33,10 +33,10 @@ interface SceneRow {
   /** 有 token 读数的行数——缺行的场景不能按 0 算钱，要按「未记」报 */
   billed: number;
   costUsd: number;
-  /** 同一 traceId + 同一出境指纹的重复行数：那是「一次逻辑调用被记成多行」的形状，不是重试（重试在行内，见 attempts） */
+  /** 同一 traceId + 同一出网指纹的重复行数：那是「一次逻辑调用被记成多行」的形状，不是重试（重试在行内，见 attempts） */
   outboundChars: number;
   longestOkMs: number;
-  /** 带 `attempts` 的行数（这一格 2026-10-15 才有）：分母不齐时不能把「没记」当「一次就成」 */
+  /** 带 `attempts` 的行数（这个字段 2026-10-15 才有）：分母不齐时不能把「没记」当「一次就成」 */
   withAttempts: number;
   retried: number;
   attemptsSum: number;
@@ -124,8 +124,8 @@ emit(`| 场景（档位） | 次数 | 成功 | 超时 | 其它失败 | 耗时 p5
 emit(`| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`);
 for (const bucket of [...byScene.values()].sort((a, b) => b.calls - a.calls)) {
   const other = bucket.failed - bucket.timedOut;
-  // 分母只算「带 attempts 读数的行」：10-15 之前的历史行没这一格，把缺的当 1 会把重试率读成 0
-  const attempts = bucket.withAttempts ? `${bucket.retried}/${bucket.withAttempts} · ${(bucket.attemptsSum / bucket.withAttempts).toFixed(2)}` : "这一格没记";
+  // 分母只算「带 attempts 读数的行」：10-15 之前的历史行没这个字段，把缺的当 1 会把重试率读成 0
+  const attempts = bucket.withAttempts ? `${bucket.retried}/${bucket.withAttempts} · ${(bucket.attemptsSum / bucket.withAttempts).toFixed(2)}` : "这个字段没记";
   emit(`| ${bucket.scene}（${bucket.tier}） | ${bucket.calls} | ${bucket.ok} | ${bucket.timedOut} | ${other} | ${percentile(bucket.ms, 0.5)} / ${percentile(bucket.ms, 0.9)} / ${percentile(bucket.ms, 0.95)} / ${percentile(bucket.ms, 1)} | ${bucket.longestOkMs || "—"} | ${attempts} | ${bucket.inputTokens} / ${bucket.outputTokens} / ${bucket.cacheHitTokens} | ${money(bucket.costUsd)} | ${bucket.calls - bucket.billed} |`);
 }
 emit();
@@ -142,17 +142,17 @@ emit(`## 这张表读不到的三件事（说清为什么，别用猜的数填�
 emit();
 emit(`1. **首次与重试次数（今天起读得到，历史行读不到）**：日志包装在重试层**外面**（\`runtime.ts\` 的装配是 ThinkingOverride → Logging → Retry → 真 provider），`);
 emit(`   一次逻辑调用只落一行，\`ms\` 是「含全部重试的总墙钟」。2026-10-15 起 \`RetryLlmProvider\` 把 \`attempts\` 与 \`attemptMs\` 挂在结果/错误上带出来，`);
-emit(`   所以新行才有这两格；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
-emit(`2. **降级频率**：本地兜底与预算降级按设计**不发请求**（§43），日志里根本没有这一格。`);
-emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算触顶）与 \`scope_degraded\`，`);
+emit(`   所以新行才有这两个节点；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
+emit(`2. **降级频率**：本地兜底与预算降级按设计**不发请求**（§43），日志里根本没有这个字段。`);
+emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算已达上限）与 \`scope_degraded\`，`);
 emit(`   \`pnpm phase0:metrics\` 已经把这两栏按场景聚合。`);
 emit(`3. **按仓归属的钱**：导入与监听刷新那批调用没有 traceId（带 trace 的 ${withTrace}/${rows.length} 行），`);
-emit(`   那部分 provider/model/token 归不到某个仓——与出境报表同一条读数口径（§48）。`);
+emit(`   那部分 provider/model/token 归不到某个仓——与出网报表同一条读数口径（§48）。`);
 emit();
-emit(`## 顺手给的两条准备读数`);
+emit(`## 顺带给的两条准备读数`);
 emit();
-emit(`- 同一 traceId + 同一场景 + 同一出境指纹**重复出现**的行：${duplicates} 条。这就是「同样的载荷原样重发」的下界——`);
-emit(`  重试层重发的是同一份输入，所以它会留下同样的指纹（上界要等 \`attempts\` 那格补上才说得准）。`);
-emit(`- 出境载荷合计 ${[...byScene.values()].reduce((sum, bucket) => sum + bucket.outboundChars, 0).toLocaleString()} 字符（含系统提示与工具清单），按场景分的平均字符可用来估「调大超时会不会让一次失败更贵」。`);
+emit(`- 同一 traceId + 同一场景 + 同一出网指纹**重复出现**的行：${duplicates} 条。这就是「同样的载荷原样重发」的下界——`);
+emit(`  重试层重发的是同一份输入，所以它会留下同样的指纹（上界要等 \`attempts\` 那个字段补上才说得准）。`);
+emit(`- 出网载荷合计 ${[...byScene.values()].reduce((sum, bucket) => sum + bucket.outboundChars, 0).toLocaleString()} 字符（含系统提示与工具清单），按场景分的平均字符可用来估「调大超时会不会让一次失败更贵」。`);
 
 console.log(out.join("\n"));

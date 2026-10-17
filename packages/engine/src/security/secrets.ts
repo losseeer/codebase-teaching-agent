@@ -4,7 +4,7 @@
   - `eval/scorers.ts` 的 `screenReply`：出口——模型回复进对话与落库之前再筛一遍
     （学习者自己贴进来的报错、上一轮正文里带回来的，只有这一道挡得住）。
 
-  只收**高信号**形态：宁可漏，不可误伤——把 `YOUR_KEY`、`token = config.get("x")` 这类正常讲代码的字样改掉，
+  只收**高信号**形态：宁可漏，不可错误影响——把 `YOUR_KEY`、`token = config.get("x")` 这类正常讲代码的字样改掉，
   等于毁掉教学正文的可读性。命中一律换成固定占位文本，**原文绝不落任何日志**。
  */
 export const SECRET_PATTERNS: RegExp[] = [
@@ -39,7 +39,7 @@ export function maskSecrets(text: string): { text: string; masked: number } {
   出题摘录、带行号前缀的候选原文、摘要切片的递归过筛，各自拼外壳（行号、join、对象重建），
   而计数只有这一处：`masked` 会进 journal 的 `code_egress`，多算少算都是虚报。
   做成可反复调用的累加器而不是一次性 `map`，是因为摘录那处要在字符预算耗尽时中断循环：
-  多筛一行就是多报一次出境。
+  多筛一行就是多报一次出网。
 */
 export function secretMasker(): { take: (text: string) => string; masked: number } {
   const state = {

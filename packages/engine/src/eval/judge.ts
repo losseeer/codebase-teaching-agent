@@ -29,7 +29,7 @@ export interface JudgeTurn {
 
 export interface JudgeAxis {
   key: string;
-  /** 0-2 分定义的全文——同时是喂给裁判的判据文本，预登记后不随跑批改动。 */
+  /** 0-2 分定义的全文——同时是交给裁判的判据文本，预登记后不随跑批改动。 */
   rubric: string;
 }
 

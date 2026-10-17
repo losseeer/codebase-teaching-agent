@@ -9,9 +9,9 @@ import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudge
 /**
   B 档第 3 刀：表达质量裁判（真发 LLM 调用、烧 token 的独立脚本——与零 token 的 phaseB:eval 严格分开）。
   判 rubric 已在 eval/judge.ts 预登记的四维：接续 / 接地 / 易读（全场景）+ 教学法契合（仅 teach）。
-  证据必须逐字来自被评回复，编证据即驳回记 0；light 档未配置时整场报「未执行」，绝不回落确定性档冒充 judged。
+  证据必须逐字来自被评回复，编证据即驳回记 0；light 档未配置时整场报「未执行」，绝不回落确定性档伪装成 judged。
 
-  用法：pnpm phaseB:judge [仓库路径]（缺省取 repositories.json 里最近使用的那条）
+  用法：pnpm phaseB:judge [仓库路径]（默认取 repositories.json 里最近使用的那条）
 */
 
 loadDotEnv();

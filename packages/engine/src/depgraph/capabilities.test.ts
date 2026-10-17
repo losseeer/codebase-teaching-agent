@@ -15,9 +15,9 @@ import { graphExtensions } from "./graph.js";
 
 /**
   语言能力表的回归。要拦的事故有三个：
-  1. **表漂移**：引擎加了/去了一个扩展名的支持，表没跟着改——读数以表为准，漂了就等于在骗人。
-  2. **空档**：某门语言某一格没填（或填了个自造的档），界面就会把「没说」显示成「没问题」。
-  3. **抬高**：把没规则的格子写成 `approximate` 装「大概能行」，等于回到「假装支持」的老毛病。
+  1. **表漂移**：引擎加了/去了一个扩展名的支持，表没跟着改——读数以表为准，漂了就等于在误导人。
+  2. **空档**：某门语言某一个节点没填（或填了个自造的档），界面就会把「没说」显示成「没问题」。
+  3. **抬高**：把没规则的节点写成 `approximate` 装「大概能行」，等于回到「假装支持」的老毛病。
 
   基准是 `graph.ts` 导出的 `graphExtensions`——它**由本表派生**（复审 #121②）。
   过去这条清单在 graph.ts 里是手写的，而测试不许 import 实现细节，于是测试用正则去**读源码文本**比对，
@@ -38,8 +38,8 @@ function file(path: string, lines = 1): FileEntry {
   return { path, extension, bytes: 10, lines };
 }
 
-describe("语言能力表：每格都要有明确取值", () => {
-  it("每门已支持语言的五格都取三档之一，且每格都配了一句白话说明", () => {
+describe("语言能力表：每个节点都要有明确取值", () => {
+  it("每门已支持语言的五个字段都取三档之一，且每个节点都配了一句白话说明", () => {
     for (const [language, entry] of Object.entries(LANGUAGE_CAPABILITIES)) {
       expect(entry.language, `${language}：language 要与表键一致`).toBe(language);
       expect(entry.displayName, `${language}：界面要中文名`).toBeTruthy();
@@ -73,9 +73,9 @@ describe("语言能力表：每格都要有明确取值", () => {
 });
 
 describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
-  it("派生自表的 graphExtensions 不得因改表而缩小：收口前那份手写清单的每一项都还得在", () => {
+  it("派生自表的 graphExtensions 不得因改表而缩小：收尾前那份手写清单的每一项都还得在", () => {
     // 不再把 graphExtensions 与 LANGUAGE_BY_EXTENSION 互相比对——两者都由 LANGUAGE_CAPABILITIES 派生，
-    // 恒等，永远绿，是一条同义反复（复审 #121 收口之后它才退化成这样）。这里对着「收口前手写清单」这个
+    // 恒等，永远绿，是一条同义反复（复审 #121 收尾之后它才退化成这样）。这里对着「收尾前手写清单」这个
     // 独立快照核对：有人从表里删了一门语言、或漏写一个扩展名，依赖图就静默失去它的覆盖，这条会红。
     // 新增语言不必动这里；只有「缩小」才该红。
     const handled = [...extensionsHandledByGraph()];
@@ -101,7 +101,7 @@ describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
   });
 });
 
-describe("语言画像（只读现算，不参与任何缓存键）", () => {
+describe("语言画像（只读实时计算，不参与任何缓存键）", () => {
   const graph = { parseBackend: "ast" as const };
 
   it("按语言归堆、给出占比，未进图的语言单独成行", () => {
@@ -135,7 +135,7 @@ describe("语言画像（只读现算，不参与任何缓存键）", () => {
     expect(profile.graphFileShare).toBe(1);
   });
 
-  it("大写后缀「进了索引但没进图」这一格要如实报，图内文件数不许按小写归堆后虚高", () => {
+  it("大写后缀「进了索引但没进图」这个节点要如实报，图内文件数不许按小写归堆后虚高", () => {
     // 索引器的闸门先 lowercase 再比（`App.TS` 收得进来），图层是大小写敏感的（它进不去），
     // 语言画像必须跟着图层那句判据走，否则 graphFileShare 会把没建过边的文件说成在图里。
     const profile = languageProfileOf([file("src/App.TS", 10), file("src/util.ts", 5)], graph);

@@ -72,7 +72,7 @@ describe("sliceExcerpt", () => {
     expect(sent).toContain("[疑似密钥，已隐去]");
     expect(sent).not.toContain("sk-abcdefghijklmnop");
     expect(slice?.masked).toBe(1);
-    // 窗口里没密钥时不该凭空缺字段——出境清单按「有隐去才报数」口径
+    // 窗口里没密钥时不该凭空缺字段——出网清单按「有隐去才报数」口径
     expect(sliceExcerpt(fixtureRepository(), { path: "src/a.ts", line: 3, endLine: 6 }, options)?.masked).toBeUndefined();
   });
 });

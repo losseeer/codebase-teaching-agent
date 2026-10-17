@@ -27,7 +27,7 @@ if (!repositoryPath) {
 }
 
 // 与 server.ts 开机同一个顺序：先 .env、再 GUI 存下来的运行时覆盖。缺这一步脚本会以为「没配模型」，
-// 报一条假的零支出，把「探针没跑」说成「这台机器不能跑」（§36.6 那一类读数骗人）。
+// 报一条假的零支出，把「探针没跑」说成「这台机器不能跑」（§36.6 那一类读数误导人）。
 //
 // **角色必须是 light，和练习路由拿到的那一份同一个**（server.ts 的 `lightLlmProvider`）。
 // 第一版这里用的是 `createLlmProvider()`，那是不带角色的裸配置：deepseek 默认思考开着，
@@ -37,7 +37,7 @@ loadDotEnv();
 restoreLlmRuntimeSettings();
 const provider = buildLlmRuntimeProvider("light");
 if (!provider) {
-  console.log(`# 真模型出题探针\n\n- **未执行**：没有解析出模型档（未配置或本月预算触顶）。零调用、零支出。`);
+  console.log(`# 真模型出题探针\n\n- **未执行**：没有解析出模型档（未配置或本月预算已达上限）。零调用、零支出。`);
   process.exit(0); // 同上：零调用，没有账要落
 }
 
@@ -82,5 +82,5 @@ console.log(`- 缺陷（留档不下发）：${proposal.defect}`);
 console.log(`- 文件：下发 ${proposal.given.length} 个 / 判分 ${proposal.hidden.length} 个｜入口 ${proposal.entry}`);
 for (const file of [...proposal.given, ...proposal.hidden]) console.log(`  · ${file.path}（${file.contents.split("\n").length} 行）`);
 console.log(`- token：${generation.usage ? `输入 ${generation.usage.inputTokens} / 输出 ${generation.usage.outputTokens}（缓存命中 ${generation.usage.promptCacheHitTokens ?? 0}）` : "没带回用量"}`);
-console.log(`\n> 探针不落练习缓存；源码出境那一行 \`code_egress\` 照写（scene=practice.generate-code），实耗以 ~/.codebase-tutor/llm.log 为准。`);
+console.log(`\n> 探针不落练习缓存；源码出网那一行 \`code_egress\` 照写（scene=practice.generate-code），实耗以 ~/.codebase-tutor/llm.log 为准。`);
 }

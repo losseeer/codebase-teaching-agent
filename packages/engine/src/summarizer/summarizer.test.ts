@@ -159,7 +159,7 @@ describe("文件摘要表（L1）", () => {
     expect(summaries.every((summary) => summary.summary.length > 0)).toBe(true);
   });
 
-  it("兜底文本不写模型档的缓存键：下次同输入仍会重试模型，不拿结构文本冒充 LLM 摘要", async () => {
+  it("兜底文本不写模型档的缓存键：下次同输入仍会重试模型，不拿结构文本伪装成 LLM 摘要", async () => {
     const database = tempDatabase();
     const partial: SummaryProvider = {
       sendsCodeToEndpoint: true,
@@ -168,7 +168,7 @@ describe("文件摘要表（L1）", () => {
       summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
     };
     await summarizeFiles({ structure: STRUCTURE, database, provider: partial });
-    // 第二次同输入：模型档的键必须还是不命中，否则那条兜底文本会永久冒充模型产物，
+    // 第二次同输入：模型档的键必须还是不命中，否则那条兜底文本会永久伪装成模型产物，
     // 而 fallbackFiles 归零——账面与读数上看不出任何降级发生过（2026-10-06 复审确证）
     const calls: number[] = [];
     const second: SummaryProvider = {
@@ -400,11 +400,11 @@ describe("L1 的密钥隐去", () => {
 });
 
 /**
-  L1 这一档的出境清单。它值得单独验一遍是因为覆盖面：**全仓每个文件**都有一份结构切片发给模型，
+  L1 这一档的出网清单。它值得单独验一遍是因为覆盖面：**全仓每个文件**都有一份结构切片发给模型，
   「哪些文件被外部模型看过」在这条线上必须是逐文件可查的；反过来，缓存命中与确定性档根本没发请求，
-  把它们也记进去就是把本地计算说成出境（企业侧最难查的那种错）。
+  把它们也记进去就是把本地计算说成出网（企业侧最难查的那种错）。
   */
-describe("L1 出境清单", () => {
+describe("L1 出网清单", () => {
   const modelProvider = (): SummaryProvider => ({
     sendsCodeToEndpoint: true,
     name: "stub",
@@ -425,13 +425,13 @@ describe("L1 出境清单", () => {
     expect(JSON.stringify(rows)).not.toContain("main()");
   });
 
-  it("缓存命中不再落账；确定性档（不发请求）一条都不记", async () => {
+  it("缓存命中不再计入审计；确定性档（不发请求）一条都不记", async () => {
     const database = tempDatabase();
     const provider = modelProvider();
     await summarizeFiles({ structure: STRUCTURE, database, provider });
     expect(rowsOf(database.repositoryPath)).toHaveLength(4);
     await summarizeFiles({ structure: STRUCTURE, database, provider });
-    expect(rowsOf(database.repositoryPath), "四个文件全命中缓存，没有新的出境").toHaveLength(4);
+    expect(rowsOf(database.repositoryPath), "四个文件全命中缓存，没有新的出网").toHaveLength(4);
 
     const local = tempDatabase();
     await summarizeFiles({ structure: STRUCTURE, database: local, provider: new LocalSummaryProvider() });

@@ -26,11 +26,11 @@ describe("沙箱隔离探测", () => {
   afterEach(() => resetIsolationForTest());
 
   /**
-    名单是「有哪几项」的读数，所以钉死顺序与个数：加一项减一项都要在这里显式改，
+    名单是「有哪几项」的读数，所以硬性约束顺序与个数：加一项减一项都要在这里显式改，
     免得哪天探测悄悄少跑一项而测试还绿着。（每项的真伪由下面几条分别读 stdout 断言，不看这里。）
     */
   it("逐项检查全过才算 enforced：三语言跑得起来、读家目录/仓/外连/fork 被拒、死循环与超量输出被兜住", (ctx) => {
-    // 名单与环境无关：探测每次都把这一套跑完，所以「有哪几项」在这里钉死
+    // 名单与环境无关：探测每次都把这一套跑完，所以「有哪几项」在这里硬性约束
     expect(status.checks.map((check) => check.name)).toEqual([
       "run-typescript", "run-python", "run-java",
       "read-home", "read-repo", "read-repo-via-symlink", "network", "fork", "timeout-kill", "output-cap", "memory-cap"
@@ -150,7 +150,7 @@ describe("沙箱运行", () => {
 });
 
 describe("profile 组装", () => {
-  it("解释器根按本机现算：家目录先整片拒读、再放行解释器所在子树，顺序反了就等于没拦", () => {
+  it("解释器根按本机实时计算：家目录先整片拒读、再放行解释器所在子树，顺序反了就等于没拦", () => {
     const toolchain = resolveToolchain();
     const profile = seatbeltProfile("/private/tmp/sbx-run-1", toolchain);
     const denyHome = profile.indexOf(`(deny file-read* (subpath "${homedir()}"))`);

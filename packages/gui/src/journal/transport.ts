@@ -63,7 +63,7 @@ async function send(post: JournalPost): Promise<void> {
   「这条事件本身不被接受」的判定：4xx = 引擎不收这个类型（事件名越权、载荷不合形状），丢弃并点名；
   5xx 与网络错留在队列里等下一轮补发。
   （以前这里还排除 401——那是「还没给口令」，留着等用户补；认证闸已于 2026-10-15 撤除，§64，
-  再留着就是一格永远不为真的豁免。）
+  再留着就是一个节点永远不为真的豁免。）
   */
 function rejected(event: JournalSendError): boolean {
   return event.status >= 400 && event.status < 500;
@@ -84,7 +84,7 @@ class JournalSendError extends Error {
 let chain: Promise<unknown> = Promise.resolve();
 function schedule(task: () => Promise<unknown>): Promise<void> {
   const result = chain.then(task, task);
-  // 链上只挂吞掉结局的那一份，调用方拿到同一份（成功/失败都不让链断掉）
+  // 链上只挂丢弃结局的那一份，调用方拿到同一份（成功/失败都不让链断掉）
   const settled = result.then(() => undefined, () => undefined);
   chain = settled;
   return settled;

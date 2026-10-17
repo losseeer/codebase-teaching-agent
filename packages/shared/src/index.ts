@@ -54,7 +54,7 @@ export interface RepositoryIndex {
   fileTree: FileTreeNode[];
   hotspots: Hotspot[];
   /**
-    扫描期**读不出来**的文件（读到一半被删、权限不对、被换成特殊节点）。缺省 = 一个都没有。
+    扫描期**读不出来**的文件（读到一半被删、权限不对、被换成特殊节点）。默认 = 一个都没有。
     这些文件被跳过而不算失败（一个坏文件不该掀掉整次导入），但必须记名：
     `totalFiles` 与后面所有「这个仓有多少代码、哪些文件没摘要」的读数都建立在「缺席是知道的」之上。
     上限 50 条，超出只按前 50 条报（真出到几百条时，前 50 条足够定位问题目录）。
@@ -85,9 +85,9 @@ export interface AssertionCheck {
 }
 
 /**
-  模块分级（分级折叠用，引擎在 `/course` 响应前现算，不落树）：
+  模块分级（分级折叠用，引擎在 `/course` 响应前实时计算，不落树）：
   - `core` 主干 = 模块里有入口，或执行主干文件占到可见文件的四分之一；
-  - `facility` 设施 = 只有支撑逻辑或外部设施接入（配置、存储、网络客户端）；
+  - `facility` 基础设施 = 只有支撑逻辑或外部设施接入（配置、存储、网络客户端）；
   - `periphery` 外围 = 只剩末端工具与测试（文档、监控看板、压测报表都在这里）。
   判据来自 `depgraph/roles.ts` 的结构规则（确定、可复现），不依赖模型。
   占比这一档 2026-10-06 实测：只「有一个主干文件就算主干」时，Xingyan 有个 66 个可见文件的模块全靠 1 个文件撑档。
@@ -95,7 +95,7 @@ export interface AssertionCheck {
 export type CourseTier = "core" | "facility" | "periphery";
 
 /**
-  分级依据（与 `tier` 一起现算，给界面把判据露出来）：分不准时先要看得见为什么这么分。
+  分级依据（与 `tier` 一起实时计算，给界面把判据露出来）：分不准时先要看得见为什么这么分。
   `decidingPath` 是把模块抬成主干的那个文件；`entryFiles`/`coreFiles`/`visibleFiles` 是数出来的量。
 */
 export interface CourseTierEvidence {
@@ -119,9 +119,9 @@ export interface CourseNode {
   verification?: AssertionCheck[];
   /** Present on overview and paged responses when descendants are not yet loaded. */
   childCount?: number;
-  /** 仅 module 节点有值：界面据此把「外围」折起来，首屏只露主干与设施 */
+  /** 仅 module 节点有值：界面据此把「外围」折起来，首屏只露主链路与基础设施 */
   tier?: CourseTier;
-  /** 仅 module 节点有值，与 `tier` 同时现算：这一档是按哪些数判出来的 */
+  /** 仅 module 节点有值，与 `tier` 同时实时计算：这一档是按哪些数判出来的 */
   tierEvidence?: CourseTierEvidence;
   /**
     仅 module 节点有值：`tier` 被人工改过时为 true，并带上引擎自己判的那一档。
@@ -140,7 +140,7 @@ export interface CourseTree {
 }
 
 /**
-  外部包的分类档。类型放在 shared（它是 `ArchitectureExternal` 的一格，是线上传输形状），
+  外部包的分类档。类型放在 shared（它是 `ArchitectureExternal` 的一个节点，是线上传输形状），
   具体词典在引擎侧 `depgraph/external-catalog.ts`（那是数据，且只覆盖真实遇到的包）。
   `stdlib` 单列：语言自带的东西不算「系统之外」，混进 `other` 会把那一栏灌满噪声。
   `other` 的界面档名叫「未识别」而不是「外部依赖」——没认出来就别说自己知道它是什么。
@@ -177,7 +177,7 @@ export interface ArchitectureLayer {
   name: string;
   /** 一句话职责（≤40 字）；来源可以是模型或人工覆盖。 */
   duty: string;
-  /** 归到这层的方块 id（见 `blocks`）：原子块是模块 id，合并块是 `arch:...`。 */
+  /** 归到这层的节点 id（见 `blocks`）：原子块是模块 id，组合节点是 `arch:...`。 */
   moduleIds: string[];
   /** 这一层的名字被人工改过——界面要点出来，不能装作它是模型起的。 */
   overridden?: boolean;
@@ -203,7 +203,7 @@ export interface ArchitectureExternal {
 }
 
 /**
-  方块在架构上的角色，全部由 import / 调用 / 接口实现三条边算出来，模型一格都不参与：
+  节点在架构上的角色，全部由 import / 调用 / 接口实现三条边算出来，模型一个节点都不参与：
   - `entry` 含对外服务入口（HTTP 路由、框架启动）；
   - `core` 从入口走得到的主链路；
   - `shared` 被 ≥4 个模块引用而自己最多引 3 个（工具、DTO、枚举这一档底座）；
@@ -212,32 +212,32 @@ export interface ArchitectureExternal {
 */
 export type ArchitectureBlockRole = "entry" | "core" | "shared" | "support";
 
-/** 画布上的一个方块：原子模块，或同父同角色的几个小模块合起来的中间块。 */
+/** 画布上的一个节点：原子模块，或同父同角色的几个小模块合起来的中间块。 */
 export interface ArchitectureBlockBrief {
-  /** 原子块就是模块 id；合并块是 `arch:<目录>:<角色>`——它不在课程树里，点开要靠 `members` 回到原子模块。 */
+  /** 原子块就是模块 id；组合节点是 `arch:<目录>:<角色>`——它不在课程树里，点开要靠 `members` 回到原子模块。 */
   id: string;
   title: string;
-  /** 块里的原子模块 id：合并块给全，点开列成员用；`layers[].moduleIds` 里出现的就是这一格的 id。 */
+  /** 块里的原子模块 id：组合节点给全，点开列成员用；`layers[].moduleIds` 里出现的就是这个节点的 id。 */
   members: string[];
   role: ArchitectureBlockRole;
 }
 
 /**
-  两张教学图（架构全景、流程）都能被 agent 在对话里重画一份新的、经用户点头后替换现有那张。
+  两张教学图（架构全景、流程）都能被 agent 在对话里重绘一份新的、经用户点头后替换现有那张。
   这三态就是那条动线的全部状态机，`diagram_artifact` 表按 (仓, kind, status) 各存一行：
 
-  - `pending`：agent 提议重画。**这一发要花钱，所以引擎绝不自行动手**——画布出现「开始重画吗」的横幅，
-    用户按下才真发（与「判一次分层」那颗按钮同一条纪律：花钱的动作由人发起）；
+  - `pending`：agent 提议重绘。**这一发要花钱，所以引擎绝不自行动手**——画布出现「开始重绘吗」的横幅，
+    用户按下才真发（与「重新生成分层」那颗按钮同一条纪律：花钱的动作由人发起）；
   - `preview`：新图画好了，叠在画布上待「替换 / 保持」；
-  - `committed`：用户批准，读侧拿它当这张图；删掉这一行缺省就回来。
+  - `committed`：用户批准，读侧拿它当这张图；删掉这一行默认就回来。
 
-  替换只改「层的形状」这一件事：边、方块清单、边界之外那一栏仍旧由 import 与词典算出来，
-  agent 画的那份里没有任何一条边能作数（与缺省那条红线同一个口径）。
+  替换只改「层的形状」这一件事：边、节点清单、边界之外那一栏仍旧由 import 与词典算出来，
+  agent 画的那份里没有任何一条边能作数（与默认那条红线同一个口径）。
 */
 export type DiagramKind = "architecture" | "flow";
 export type DiagramStatus = "pending" | "preview" | "committed";
 
-/** 候选图的一层：`nodes` 用画布上那一格的 id（模块 id 或 `arch:` 方块 id），同形态才谈得上替换。 */
+/** 候选图的一层：`nodes` 用画布上那个节点的 id（模块 id 或 `arch:` 节点 id），同形态才谈得上替换。 */
 export interface DiagramLayerDraft {
   name: string;
   duty: string;
@@ -245,11 +245,11 @@ export interface DiagramLayerDraft {
 }
 
 /**
-  架构图的候选（重画那一趟的产物）。三条清单都是给「核验」与「如实外露」用的：
-  - `omitted`：没画进去的可见方块必须逐条给理由，不许静默丢格（丢了格就等于图上的方块数在骗人）；
+  架构图的候选（重绘那一趟的产物）。三条清单都是给「核验」与「如实外露」用的：
+  - `omitted`：没画进去的可见节点必须逐条给理由，不许静默丢格（丢了格就等于图上的节点数在误导人）；
   - `conflicts`：这趟读到的结构证据与主张相反的格（角色/可达 vs 目标层）——**落库但仍然标注**，
     标签会随修正一起进下一次判层的输入，免得一条没根据的归层被下一轮当成事实；
-  - `readPaths`：这一趟真读了哪些文件。预览横幅要指得出证据在哪，不然「重画」与「换个说法」没区别。
+  - `readPaths`：这一趟真读了哪些文件。预览横幅要指得出证据在哪，不然「重绘」与「换个说法」没区别。
 */
 export interface ArchitectureDiagramDraft {
   kind: "architecture";
@@ -259,7 +259,7 @@ export interface ArchitectureDiagramDraft {
   readPaths: string[];
 }
 
-/** 流程图的候选：过的就是缺省那条同一套确定性核验（路径在可用集合里、行号按文件长度 clip）。 */
+/** 流程图的候选：过的就是默认那条同一套确定性核验（路径在可用集合里、行号按文件长度 clip）。 */
 export interface FlowDiagramDraft {
   kind: "flow";
   flow: RepositoryFlow;
@@ -271,10 +271,10 @@ export type DiagramDraft = ArchitectureDiagramDraft | FlowDiagramDraft;
 /** 读侧交给界面的一份「现在画的是哪张、还有没有待确认的」读数。 */
 export interface DiagramReadout {
   origin: "default" | "agent";
-  /** origin=agent 时：当初为什么重画、什么时候批准的。 */
+  /** origin=agent 时：当初为什么重绘、什么时候批准的。 */
   purpose?: string;
   committedAt?: string;
-  /** 替换图引用的模块已经不在树上了（改名 / 删模块 / 课程树重生成）。这时**画的是缺省**，那行不删，只说出来。 */
+  /** 替换图引用的模块已经不在树上了（改名 / 删模块 / 课程树重生成）。这时**画的是默认**，那行不删，只说出来。 */
   stale?: string;
   /** 画面上这些格与引擎算出的结构角色相反：落库、不拦，但要看得见（悬停给证据句）。 */
   conflicts?: { node: string; layer: string; evidence: string }[];
@@ -290,20 +290,20 @@ export interface ArchitecturePlan {
   /**
     这份产物怎么来的：
     - `llm` = 模型判的层（层名/归属），边与外部栏仍是算出来的；
-    - `unavailable` = **分层这一格没有产物可画**。2026-10-16 用户定：原先这里会回落成 tier 三档
-      （主干/设施/外围）并自称一层「职责层」，那是把结构角色冒充成分层架构——读者照着它讲架构就讲错了，
+    - `unavailable` = **分层这个节点没有产物可画**。2026-10-16 用户定：原先这里会回落成 tier 三档
+      （主链路/基础设施/外围）并自称一层「职责层」，那是把结构角色伪装成成分层架构——读者照着它讲架构就讲错了，
       不如直接说不可用。`layers` 给空数组，原因写在 `reason`，界面出不可用卡片与明码标价的按钮。
-    ⚠️ 边、方块清单、边界之外那一栏仍是算出来的事实：`unavailable` 只说明「层没判」，不说明这些也没了。
+    ⚠️ 边、节点清单、边界之外那一栏仍是算出来的事实：`unavailable` 只说明「层没判」，不说明这些也没了。
   */
   source: "llm" | "unavailable";
   reason?: string;
   /** 不可用的哪一种：没判过 / 没配模型 / 输出没采信 / 调用失败。界面靠它决定按钮文案，不靠拆 `reason` 的中文。 */
   unavailableReason?: "not_judged" | "no_model" | "rejected" | "call_failed";
   /**
-    人工**点名挪过层**的那些格子（`layers[].moduleIds` 里出现的那个 id：原子块是模块 id，合并块是 `arch:...`）。
+    人工**点名挪过层**的那些节点（`layers[].moduleIds` 里出现的那个 id：原子块是模块 id，组合节点是 `arch:...`）。
     界面只给这些格点「动过」的标记。原先这里给的是**层 id**，于是有人往一层挪进一个模块，
-    那一整层的方块就全带上标记——层是收留方，不是被改方（2026-10-16 改）。
-    层名是不是人工改过的，走 `ArchitectureLayer.overridden`，与这一格无关。
+    那一整层的节点就全带上标记——层是收留方，不是被改方（2026-10-16 改）。
+    层名是不是人工改过的，走 `ArchitectureLayer.overridden`，与这个节点无关。
   */
   overriddenUnits: string[];
   generatedAt: string;
@@ -312,15 +312,15 @@ export interface ArchitecturePlan {
   /** 边界那一栏为空时**为什么**空：「这份产物还没采外部包名」与「这个系统真不碰外部服务」是两条不同读数。 */
   externalsNote?: string;
   /**
-    这次读的时候没能落地的人工修正（覆盖层按层名匹配，重判换了叫法就对不上）。**读时现算、不落盘**：
+    这次读的时候没能落地的人工修正（覆盖层按层名匹配，重判换了叫法就对不上）。**读时实时计算、不落盘**：
     缓存里住的是模型原判，失效与否取决于「原判 + 当前覆盖层」这两样，写死进缓存反而会在下次读时说话。
     界面上它是「你的 N 处修正这次没生效」那句提示的唯一依据。
     */
   lostOverrides?: ArchitectureOverrideLoss[];
   /**
-    画布上的方块（原子块 + 合并块）：由课程树与图现算，**读时现算、不落盘**——
+    画布上的节点（原子块 + 组合节点）：由课程树与图实时计算，**读时实时计算、不落盘**——
     合并口径是判层输入的一部分（进了缓存键），把结果再写进产物等于冻结一份迟早和键对不上的副本。
-    界面靠它把合并块展开成成员，`layers[].moduleIds` 里的 id 就在这一格里找。
+    界面靠它把组合节点展开成成员，`layers[].moduleIds` 里的 id 就在这个节点里找。
   */
   blocks?: ArchitectureBlockBrief[];
   /** 被判「对理解架构没用」而不画的模块数（隐藏就是删除，但读数得留着问得出）。 */
@@ -334,7 +334,7 @@ export interface ArchitecturePlan {
   分层判断是可错的，所以这条通道与图同期落地，不许后补。
 */
 export interface ArchitectureOverrides {
-  /** 模块 id → 人工指定的层名（图上拖动换层写的就是这一格）。按名字不按序号：序号会随重生成漂。 */
+  /** 模块 id → 人工指定的层名（图上拖动换层写的就是这个节点）。按名字不按序号：序号会随重生成漂。 */
   moduleLayer?: Record<string, string>;
   /** 原层名 → 改后的层名。写侧负责把 `moduleLayer` 里的旧名一起换掉，不留两套。 */
   layerRenames?: Record<string, string>;
@@ -343,7 +343,7 @@ export interface ArchitectureOverrides {
 /**
   这次读的时候**没能落地**的人工修正：覆盖层按层名字符串匹配，重判后模型换了叫法就找不到目标层。
   不造假（找不到就不动那个模块）但要说出来——不然用户拖过几次、下次重判全落空而界面上看不出来。
-  它同时是「命名稳定性」唯一的读数：层名越通用，这一格越空。
+  它同时是「命名稳定性」唯一的读数：层名越通用，这个节点越空。
   */
 export interface ArchitectureOverrideLoss {
   kind: "move_module" | "rename_layer";
@@ -525,7 +525,7 @@ export interface CallEdge {
 /**
   类型派发边：`实现类/子类的文件 → 它 extends/implements 的那个类型所在的文件`。
 
-  为什么要单独一类边，而不是塞进 `imports`：Java/C# 的「控制器注入接口、运行时才绑到实现」这一拍
+  为什么要单独一类边，而不是写入 `imports`：Java/C# 的「控制器注入接口、运行时才绑到实现」这一拍
   **在源码里没有调用行**，import 边只到接口为止，于是实现类整片在图上失联（2026-10-05 实测：
   dianping 45 个 Controller/Service/Mapper 文件里 30 个从任何入口都走不到）。方向反过来是
   「接口 → 实现」的派发，这是执行流，不是依赖流，混进 import 边会把「谁依赖谁」说反。
@@ -547,8 +547,8 @@ export interface DependencyGraphData {
     它是架构视图「系统边界之外那一栏」的唯一数据源，且**与 `imports` 严格分家**：
     `imports` 只连仓内文件、外部一律丢弃（这是既定设计，见上面 `languageOfExtension` 那段与 §33），
     这里只是把被丢掉的名字留个名，不新增任何一条边。
-    ⚠️ 流程层与出题的缓存键**不吃这一格**：`buildFlowDigest` 逐字段挑证据，`graphStampOf` 只数三类边。
-    把它塞进任何一份 payload = 全部已缓存流程与题目翻键 = 每仓重烧付费调用（红线探针 `pnpm arch:keyprobe` 钉这条）。
+    ⚠️ 流程层与出题的缓存键**不吃这个节点**：`buildFlowDigest` 逐字段挑证据，`graphStampOf` 只数三类边。
+    把它写入任何一份 payload = 全部已缓存流程与题目翻键 = 每仓重烧付费调用（红线探针 `pnpm arch:keyprobe` 钉这条）。
     旧产物没有该字段（缺失即按「未采集」处理，与 `dispatch` 同一口径——不是「这个仓没有外部依赖」）。
   */
   externals?: Record<string, string[]>;
@@ -577,10 +577,10 @@ export interface DependencyGraphData {
   （package.json / tsconfig / go.mod）。这些差异过去只写在引擎代码的注释里，界面与读数都看不出来，
   用户拿到一张图没法判断「这条边是编译器级的、还是按文件名猜的」。
 
-  ⚠️ 四条纪律，违反任何一条就等于这张表在骗人：
+  ⚠️ 四条纪律，违反任何一条就等于这张表在误导人：
   1. 它是**引擎自报口径**，与 `packages/engine/src/depgraph/graph.ts` + `parser.ts` 的实现必须同步：
      新增一门语言、补了某条规则，就改这张表；**别在 GUI 或提示词里另写一份判断**。
-  2. 取值**照实填**，别因为「想让表好看」抬高某一格。判据见下面 `CapabilityLevel`。
+  2. 取值**照实填**，别因为「想让表好看」抬高某一个节点。判据见下面 `CapabilityLevel`。
   3. 纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关）——
      改这张表不会引发流程/摘要重烧。真要挪走这份口径，先确认没有键把它算进去。
   4. 它跟 `DependencyGraphData.lspStatus` 是两套口径，别混用：本表说「引擎自己的规则有多硬」，
@@ -632,15 +632,15 @@ export interface LanguageCapabilities {
   displayName: string;
   /** 依赖图里归到这门语言的扩展名。各条目的这一列汇总成 `LANGUAGE_BY_EXTENSION`，不在别处再列一份。 */
   extensions: string[];
-  /** 五格的取值；类型是必填的 `Record`，漏一格编译就过不去。 */
+  /** 五格的取值；类型是必填的 `Record`，漏一个节点编译就过不去。 */
   cells: Record<CapabilityCell, CapabilityLevel>;
-  /** 每格一句白话：说清「为什么是这一档」以及「看到这档该当怎么读」。界面提示条直接用它。 */
+  /** 每个节点一句白话：说清「为什么是这一档」以及「看到这档该当怎么读」。界面提示条直接用它。 */
   notes: Record<CapabilityCell, string>;
 }
 
 /**
   表体。取值依据 = 当前实现（graph.ts 的分派 + parser.ts 的语法覆盖 + roles.ts 的测试路径判定），
-  每一格都注了降级理由。改动实现后请同步这里，engine 侧有一份单测钉住「本表的扩展名清单
+  每一个节点都注了降级理由。改动实现后请同步这里，engine 侧有一份单测钉住「本表的扩展名清单
   与 `DependencyGraph` 实际处理的扩展名清单不漂移」。
   只用 `satisfies` 不用 `as const`：键的字面量类型留着（`SupportedLanguage` 靠它），
   但值里的 `extensions` 需要是可写数组，`as const` 会让它变成只读元组而通不过类型检查。
@@ -654,7 +654,7 @@ export const LANGUAGE_CAPABILITIES = {
     notes: {
       symbolExtraction: "按真实语法树抽取函数、类、方法、接口与类型别名，起止行是解析出来的而不是按大括号数出来的。语法树整体加载失败时引擎会回落逐行匹配，并在图数据里写明回落原因。",
       dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证，而且**只试这一门语言（含 Vue 与 TS 互引这一族）的扩展名**——TS 里写 `./util` 不会连到同目录的 `util.py`（2026-10-06 复审 #121 之前是全表挨个试，那种跨语言猜边会把这句话戳穿）。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
-      entrypoint: "框架入口是精确的：Fastify / Express / Koa / Nest 的实例构造、路由登记与 listen 都算服务入口；客户端调用（axios 那种 api.get 一个路径）刻意不算，它是打路由的一方。证据行落在注释或跨行模板字符串里的也不算——这一格判据取自语法树。剩下的靠 package.json 的 main / bin / scripts 与文件名（main、index、app、server、cli）猜：同名但并非入口的文件会被误标，实例从形参进来的子路由文件认不出来。",
+      entrypoint: "框架入口是精确的：Fastify / Express / Koa / Nest 的实例构造、路由登记与 listen 都算服务入口；客户端调用（axios 那种 api.get 一个路径）刻意不算，它是打路由的一方。证据行落在注释或跨行模板字符串里的也不算——这个节点判据取自语法树。剩下的靠 package.json 的 main / bin / scripts 与文件名（main、index、app、server、cli）猜：同名但并非入口的文件会被误标，实例从形参进来的子路由文件认不出来。",
       packageResolution: "只读仓库根那一份 tsconfig.json 的 paths，且只认带星号的通配别名（如 `@/*` → `src/*`）；精确别名、通过 extends 继承来的配置、包内的导出映射都不读，这类别名导入会画不出边。",
       buildVisibility: "读过根 package.json 与 tsconfig.json，但没有应用 include / exclude，也不看子包配置，所以图里的文件集合来自目录扫描，不受构建范围约束。"
     }
@@ -692,7 +692,7 @@ export const LANGUAGE_CAPABILITIES = {
     cells: { symbolExtraction: "exact", dependencyEdge: "approximate", entrypoint: "approximate", packageResolution: "approximate", buildVisibility: "unsupported" },
     notes: {
       symbolExtraction: "按真实语法树抽取类、方法、构造器、接口、枚举与记录，起止行是解析出来的。",
-      dependencyEdge: "三条路：① 直接 import（`import com.a.B;`）按「包名 + 文件名」定位，通常可信；② `import com.a.*;` 这种整包导入只在类名真的出现在正文（含注释）里时才补一条边，强度低于直接 import；③ 类型派发边——类头 `extends`/`implements` 的落点（接口与实现之间没有调用行，靠它把实现类接回执行流）。跨文件调用边认「类名.方法(」与**变量接收者**：`mapper.insert(` 靠字段、方法参数、局部变量三种声明形状换成类型，换不出就退回裸名匹配。注释与 import 行在扫描前抹掉（等长替换，行号不变），注释里写的 `xxxService.handle(...)` 不算调用证据。同名类型、继承来的方法、内部类的归属仍可能指错，所以整格是 approximate。",
+      dependencyEdge: "三条路：① 直接 import（`import com.a.B;`）按「包名 + 文件名」定位，通常可信；② `import com.a.*;` 这种整包导入只在类名真的出现在正文（含注释）里时才补一条边，强度低于直接 import；③ 类型派发边——类头 `extends`/`implements` 的落点（接口与实现之间没有调用行，靠它把实现类接回执行流）。跨文件调用边认「类名.方法(」与**变量接收者**：`mapper.insert(` 靠字段、方法参数、局部变量三种声明形状换成类型，换不出就退回裸名匹配。注释与 import 行在扫描前清除（等长替换，行号不变），注释里写的 `xxxService.handle(...)` 不算调用证据。同名类型、继承来的方法、内部类的归属仍可能指错，所以整格是 approximate。",
       entrypoint: "Spring 仓可信：启动类与控制器上的框架注解是权威标记，路由前缀能直接报出来。但非 Spring 的 Java 仓目前没有规则（连 `public static void main` 都还没进主函数清单），只剩文件名约定兜底。",
       packageResolution: "全限定类名靠每个文件自己的 package 声明来定，这条可信；但同名类型的取舍、内部类与静态成员的精确归属靠逐级去尾试探，不做模块级区分。",
       buildVisibility: "不读 Maven / Gradle 构建文件：分不清主代码目录与测试目录的构建范围，生成的源码目录也被当成普通源码进图。"
@@ -819,7 +819,7 @@ export interface RepositoryLanguageRow {
 }
 
 /**
-  随分析响应下发的语言画像（引擎**请求时现算**，不落库、不参与任何缓存键）。
+  随分析响应下发的语言画像（引擎**请求时实时计算**，不落库、不参与任何缓存键）。
   `parseBackend` 是全局回落位：它为 `regex` 时，上面各语言的「符号抽取」都要按近似读。
 */
 export interface RepositoryLanguageProfile {
@@ -863,11 +863,11 @@ export interface RepositoryAnalysis {
   implementations: ImplementationUnit[];
   quality: QualityReport;
   versionStamp: string;
-  /** 分析那一刻的 git HEAD（`git rev-parse HEAD`）。非 git 仓或取不到时缺省；懒挂载用它与当前 HEAD 比对新鲜度。 */
+  /** 分析那一刻的 git HEAD（`git rev-parse HEAD`）。非 git 仓或取不到时默认；懒挂载用它与当前 HEAD 比对新鲜度。 */
   gitHead?: string;
   lastIncrementalUpdate?: { changedPaths: string[]; impactedPaths: string[]; at: string };
   /**
-    本仓语言分布 + 每语言能力档。**只在 HTTP 响应里现算**（见 engine `GET /api/repositories/:id/analysis`）：
+    本仓语言分布 + 每语言能力档。**只在 HTTP 响应里实时计算**（见 engine `GET /api/repositories/:id/analysis`）：
     不落库、不进缓存键，所以已导入的仓不用重烧就能看到这份口径；旧产物/旧引擎读不到时就当没有，
     界面按「没有提示」处理，不自己另判一套语言规则。
    */
@@ -955,7 +955,7 @@ export interface RepositoryCatalogEntry {
   mounted: boolean;
   /** 目录还在吗（不存在时保留条目并如实标注，由用户决定移除） */
   exists: boolean;
-  /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测，缺省 */
+  /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测，默认 */
   artifactsReady?: boolean;
   freshness?: RepositoryFreshness;
   /**
@@ -967,7 +967,7 @@ export interface RepositoryCatalogEntry {
   watchError?: string;
   /**
     监听是不是**被人为挂起**的（编辑期免打扰，`POST /api/repositories/:id/watch`）。
-    这一格必须与 `watching: false` 分开：同为「不会自动跟上磁盘」，
+    这个节点必须与 `watching: false` 分开：同为「不会自动跟上磁盘」，
     但一个是引擎坏了要修，另一个是用户按下的、到点会自己恢复的开关。
     */
   watchPaused?: boolean;
@@ -1049,7 +1049,7 @@ export interface RepositoryFlow {
   edges: FlowEdge[];
   /** 自述没能确认的部分（例如怀疑参与但证据不足的文件、看不清的分支）。 */
   uncovered?: string[];
-  /** 已知边界：模型自述的不确定处、被校验丢弃的内容、或降级说明。界面原样展示，不吞掉。 */
+  /** 已知边界：模型自述的不确定处、被校验丢弃的内容、或降级说明。界面原样展示，不丢弃。 */
   caveats?: string;
   generatedAt: string;
 }
@@ -1057,7 +1057,7 @@ export interface RepositoryFlow {
 /** 流程环节数上限；超出即截断，并在 `caveats` 里明示截断了多少。 */
 export const FLOW_MAX_STAGES = 12;
 
-/** 流程生成来源。`static` = 静态调用链降级（LLM 未配置、预算触顶或调用失败），必须显式告知用户。 */
+/** 流程生成来源。`static` = 静态调用链降级（LLM 未配置、预算已达上限或调用失败），必须显式告知用户。 */
 export interface RepositoryFlowResult {
   flow: RepositoryFlow;
   source: "llm" | "static";
@@ -1109,10 +1109,10 @@ export interface CostSummary {
   costComponents: CostComponent[];
   /**
     ⚠️ false = 三档单价全未配置 ⇒ 金额恒 0、`mode` 恒为 "normal"——预算闸门根本没在管事，不是「没超预算」。
-    界面必须把这一格说成「预算闸门未生效」，不能只报 ¥0.0000。判据与完整因果链在 engine `cost/cost.ts`（`pricingIsConfigured`）。
+    界面必须把这个节点说成「预算闸门未生效」，不能只报 ¥0.0000。判据与完整因果链在 engine `cost/cost.ts`（`pricingIsConfigured`）。
     */
   pricingConfigured: boolean;
-  /** 因预算触顶而走本地规则（不付 token）的回合数 */
+  /** 因预算已达上限而走本地规则（不付 token）的回合数 */
   degradedTurns: number;
   byScene: CostBucket[];
   byProvider: CostBucket[];
@@ -1178,7 +1178,7 @@ export interface Exercise {
   inputMode: ExerciseInputMode;
   gradingMode: ExerciseGradingMode;
   options?: ExerciseOption[];
-  /** 代码题（`patch_edit` / `author_function`）的可编辑文件包；理解题与主观题没有这一格。 */
+  /** 代码题（`patch_edit` / `author_function`）的可编辑文件包；理解题与主观题没有这个节点。 */
   code?: ExerciseCodeSlot;
   /** 练习题族；旧缓存记录无此字段视为 comprehension。 */
   family?: ExerciseFamily;
@@ -1201,7 +1201,7 @@ export interface SuggestedEntry {
 
 /**
   「这条路径是文档，不是代码」——推荐入口的排除判据，引擎与界面共用这一份（判据两处各写一遍迟早漂移）。
-  只看文件自己的扩展名，**不看目录名**：`docs/` 下放的可能是示例代码，按目录一刀切会连代码一起挡掉。
+  只看文件自己的扩展名，**不看目录名**：`docs/` 下放的可能是示例代码，按目录一次改动切会连代码一起挡掉。
   `.json`/`.yml` 不算文档（它们是配置与构建输入，不是散文）。
   今天只有 `.md` 真能走到这一层（收录层的扩展名白名单在前面把关），列全是为了这条判据本身说得通。
 */
@@ -1337,7 +1337,7 @@ export type JournalEventType =
     双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
     表达质量裁判）的被测输入源。 */
   | "turn_text"
-  /** 运行期不变量复检（2026-10-04，B 档第 2 刀的在环那一半）：一回合一条，**合格也记**（分母要在环成立）。
+  /** 运行期不变量复检（2026-10-04，B 档第 2 刀的运行时那一半）：一回合一条，**合格也记**（分母要运行时成立）。
     payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
     判据与离线 `phaseB:eval` 第 4 节共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
@@ -1359,7 +1359,7 @@ export type JournalEventType =
     payload：`language` / `stage`(validate-proposal|grade) / `ok` / `exit_code` / `signal` / `timed_out` /
     `truncated` / `stdout_bytes` / `duration_ms` / `isolation`(enforced|unavailable) / `runner`（解释器与 profile 指纹，
     换 runner 要让旧题的缓存键一起失效，所以这列必须落在行上才查得回）。
-    只记读数不记正文：学习者写的代码与运行输出留在内存里判完就丢，正文进 `code_egress` 那一侧才有出境账。
+    只记读数不记正文：学习者写的代码与运行输出留在内存里判完就丢，正文进 `code_egress` 那一侧才有出网记录。
     */
   | "exercise_run"
   // UI 侧
@@ -1379,7 +1379,7 @@ export type JournalEventType =
     */
   | "repository_paired"
   /**
-    用户手动把某个模块改成另一档（主干 / 设施 / 外围）。GUI 侧写。
+    用户手动把某个模块改成另一档（主链路 / 基础设施 / 外围）。GUI 侧写。
     payload：`module_id` / `module_label` / `from` / `to` / `core_share`（改的时候引擎算的占比，用来看判据离真值有多远）。
     结构判据没有真值可比，这条就是攒真值的读数——攒够了才谈「判据改对了没」。
     */
@@ -1391,19 +1391,19 @@ export type JournalEventType =
   */
   | "architecture_layer_overridden"
   /**
-    源码出境清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
+    源码出网清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
     与 llm.log 靠 `traceId + scene` 关联。两条设计口径与字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
     */
   | "code_egress"
   /**
-    一次「重画这张图」的账（2026-10-17）：payload = kind + purpose + layers + units + omitted
+    一次「重绘这张图」的账（2026-10-17）：payload = kind + purpose + layers + units + omitted
     + findings(采信条数) + dropped_findings(证据路径核不上被丢的条数) + conflicts(与结构证据相反的格数)
     + rounds/tool_reads + input_tokens/output_tokens。**记的是这一趟花了多少、信了多少、拒了多少**，
     不记图内容本身（图在 diagram_artifact 表里）。
   */
   | "diagram_redrafted"
-  /** agent 提议重画（**这一条不花钱**，只是让界面出那条横幅）：payload = kind + purpose。 */
+  /** agent 提议重绘（**这一条不花钱**，只是让界面出那条横幅）：payload = kind + purpose。 */
   | "diagram_redraft_proposed"
   /** 用户对那张预览的裁决：action = replace|keep|reset，kind = architecture|flow。 */
   | "diagram_replaced";
@@ -1486,13 +1486,13 @@ export interface EngineTraceEvent {
 /** 全局事件流（GET /api/events，SSE）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——它们在各自请求的响应流里。 */
 export interface ServerEvent {
   /**
-    `repository.updated`：产物或覆盖层变了，界面该重取的那一格（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
+    `repository.updated`：产物或覆盖层变了，界面该重取的那个节点（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
     `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
   */
   /**
-    `diagram_preview`：重画好的新图进了预览态，等用户点「替换 / 保持」。
+    `diagram_preview`：重绘好的新图进了预览态，等用户点「替换 / 保持」。
     `diagram_replaced`：用户裁决完了（replace|keep|reset），画布要重取一次。
-    `redraft_requested`：agent 提议重画（还没花钱），界面要出那条「开始重画吗」的横幅。
+    `redraft_requested`：agent 提议重绘（还没花钱），界面要出那条「开始重绘吗」的横幅。
   */
   type: "import.progress" | "repository.updated" | "architecture_updated" | "redraft_requested" | "diagram_preview" | "diagram_replaced";
   payload: Record<string, unknown>;

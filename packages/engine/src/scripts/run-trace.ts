@@ -27,7 +27,7 @@ function eventLine(event: JournalEvent): string {
     case "turn_text":
       return `问「${clip(p.question, 60)}」答「${clip(p.answer, 80)}」${p.answer_truncated ? "（答截断）" : ""}${p.question_truncated ? "（问截断）" : ""}`;
     case "turn_invariant":
-      // 在环复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
+      // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "loop_round":
       return `决策=${p.decision ?? "未记"} 提议=${p.proposed ?? "—"}→执行=${p.executed ?? "—"} 工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}`;
@@ -38,12 +38,12 @@ function eventLine(event: JournalEvent): string {
     case "code_search":
       return `搜「${clip(p.query, 60)}」命中=${p.hits ?? "未记"} 前几落点：${clip(p.top_paths, 60)}`;
     case "code_egress":
-      // 出境清单：与 token_usage 那行成对看——这条说「哪几行源码进了请求」，那条说「这次调用付了多少钱」
-      return `出境 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
+      // 出网清单：与 token_usage 那行成对看——这条说「哪几行源码进了请求」，那条说「这次调用付了多少钱」
+      return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
     case "module_tier_overridden":
-      return `手动改档 ${clip(p.module_label, 24)}：${p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主干占比=${p.core_share ?? "未记"}）`;
+      return `手动改档 ${clip(p.module_label, 24)}：${p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主链路占比=${p.core_share ?? "未记"}）`;
     case "action_veto":
       return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
     case "hint_depth":

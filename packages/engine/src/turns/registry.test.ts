@@ -36,7 +36,7 @@ describe("在途回合注册表", () => {
     const first = beginTurn(TURN_ID, "practice_chat");
     const second = beginTurn(TURN_ID, "practice_chat");
     expect(second.signal).toBeUndefined();
-    second.dispose(); // 绝不能把 first 的登记摘掉
+    second.dispose(); // 绝不能把 first 的登记移除
     expect(abortTurn(TURN_ID)).toMatchObject({ aborted: true, scene: "practice_chat" });
     expect(first.signal?.aborted).toBe(true);
     first.dispose();

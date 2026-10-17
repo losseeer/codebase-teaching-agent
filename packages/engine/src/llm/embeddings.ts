@@ -4,7 +4,7 @@ import { maskSecrets } from "../security/secrets.js";
 /**
   检索第四臂用的文本向量化（OpenAI 兼容 `/v1/embeddings`，当前按阿里云百炼 Qwen 通义向量配置）。
 
-  为什么单独一个客户端而不塞进 `LlmProvider`：对话 provider 的接口是「消息进、文本出」，
+  为什么单独一个客户端而不写入 `LlmProvider`：对话 provider 的接口是「消息进、文本出」，
   带工具循环、思考档位、预算降级那一整套语义；embedding 只有「文本进、向量出」，
   混在一起会让两边都长出对方不需要的分支。共用的是配置口径与 llm.log 记账线。
 
@@ -51,8 +51,8 @@ export function createEmbeddingProvider(config: EmbeddingConfig): EmbeddingProvi
     async embed(texts: string[]): Promise<Float32Array[]> {
       const out: Float32Array[] = [];
       for (let offset = 0; offset < texts.length; offset += BATCH_SIZE) {
-        // 与其余出境路径同一道筛：这批文本里混着 path + 符号名 + 摘要，摘要可能带进疑似密钥。
-        // 产品里的 search_code 不走向量，但 `search:embed` 与评测台架会把整仓切片送出去，那也算出境。
+        // 与其余出网路径同一道筛：这批文本里混着 path + 符号名 + 摘要，摘要可能带进疑似密钥。
+        // 产品里的 search_code 不走向量，但 `search:embed` 与评测台架会把整仓切片送出去，那也算出网。
         const batch = texts.slice(offset, offset + BATCH_SIZE).map((text) => maskSecrets(text.slice(0, MAX_CHARS_PER_ITEM)).text);
         const vectors = await embedBatch(config, batch);
         out.push(...vectors);
@@ -64,7 +64,7 @@ export function createEmbeddingProvider(config: EmbeddingConfig): EmbeddingProvi
 
 async function embedBatch(config: EmbeddingConfig, batch: string[]): Promise<Float32Array[]> {
   const startedAt = Date.now();
-  // 出境指纹记的是**送进向量端点的那批文本**（不是 HTTP 请求体）：这条路不经 LlmProvider，
+  // 出网指纹记的是**送进向量端点的那批文本**（不是 HTTP 请求体）：这条路不经 LlmProvider，
   // 但「哪些代码片段进了第三方端点」同样得有一笔可对账的账（企业化第 3 条，见 §45）。
   const outbound = outboundFingerprint({ system: "", user: batch.join("\n") });
   const base = { at: new Date().toISOString(), tier: "light" as const, scene: "embed", provider: "openai-compatible", model: config.model, thinking: "off", traceId: null as string | null, threadId: null as string | null, actor: null as string | null, outbound };
@@ -83,7 +83,7 @@ async function embedBatch(config: EmbeddingConfig, batch: string[]): Promise<Flo
   const text = await response.text();
   if (!response.ok) {
     // 响应体要留（不然排障只能猜），但**过一遍筛再留**：有些端点会把收到的 input 原样回显在 400 里，
-    // 而 llm.log 是一条会长期留在本机的账——明文密钥进日志和出境一样糟。
+    // 而 llm.log 是一条会长期留在本机的账——明文密钥进日志和出网一样糟。
     const message = `embedding 请求失败 ${response.status}：${maskSecrets(text.slice(0, 200)).text}`;
     logLlmCall({ ...base, ok: false, ms: Date.now() - startedAt, error: message });
     throw new Error(message);

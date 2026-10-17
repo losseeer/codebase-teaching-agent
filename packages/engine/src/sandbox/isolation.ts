@@ -113,7 +113,7 @@ setTimeout(() => { console.log("BLOCKED", "timeout"); process.exit(0); }, 1500);
 
 /**
   读「被点名拒读的仓」。`/opt`、`/srv` 这类位置的仓不在家目录那份恒定名单里，
-  靠调用方每次把仓的根塞进 `denyRead` 才护得住——这一项就是证明确实塞了、也确实生效。
+  靠调用方每次把仓的根写入 `denyRead` 才护得住——这一项就是证明确实塞了、也确实生效。
 */
 const readSentinelCanary = (target: string): string => `import { readFileSync } from "node:fs";
 try { console.log("LEAK", readFileSync(${JSON.stringify(target)}, "utf8").trim()); } catch (error) { console.log("BLOCKED", error.code ?? error.name); }

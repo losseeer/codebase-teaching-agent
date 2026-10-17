@@ -33,7 +33,7 @@ export function ToastHost(): ReactElement | null {
       window.clearTimeout(hideTimer);
       setFading(false);
       setMessage(next);
-      // 原型口径：2600ms 后开始 200ms 淡出，淡完再摘掉节点
+      // 原型口径：2600ms 后开始 200ms 淡出，淡完再移除节点
       fadeTimer = window.setTimeout(() => setFading(true), 2600);
       hideTimer = window.setTimeout(() => setMessage(''), 2820);
     });

@@ -119,12 +119,12 @@ describe("不变量机检（第 2 刀剩下的两条）", () => {
     expect(binding?.pass).toBe(1);
   });
 
-  it("socratic-question 这条尺子已随教学状态机删除（判据吃 stage 与本轮动作）", () => {
+  it("socratic-question 这条度量已随教学状态机删除（判据吃 stage 与本轮动作）", () => {
     expect(scoreTeachInvariants([turn({ answer: "这一节到此掌握。" })], files).checks.map((check) => check.id)).toEqual(["reference-grounding", "anchor-binding"]);
   });
 });
 
-describe("运行期在环复检（第 2 刀的那两条搬到回合收尾）", () => {
+describe("运行期运行时复检（第 2 刀的那两条搬到回合收尾）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
     ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
@@ -160,7 +160,7 @@ describe("运行期在环复检（第 2 刀的那两条搬到回合收尾）", (
     expect(invariantTailNotice(styleOnly)).toBeUndefined();
   });
 
-  it("离线聚合与在环单回合判分同源：分母之和必须逐条相等（两份实现迟早漂移，这条钉住）", () => {
+  it("离线聚合与运行时单回合判分同源：分母之和必须逐条相等（两份实现迟早漂移，这条钉住）", () => {
     const turns = [
       turn({ answer: "先看 src/graph/nodes.py:8 的顺序，你觉得哪步先跑？" }),
       turn({ answer: "这里没有问句，直接讲结论。" }),
@@ -179,7 +179,7 @@ describe("运行期在环复检（第 2 刀的那两条搬到回合收尾）", (
 });
 
 /**
-  出字前的本地过筛。两头的事故都要钉住：漏了＝密钥随正文下发/入库；误伤＝把正常讲代码的回复改得没法读。
+  出字前的本地过筛。两头的事故都要钉住：漏了＝密钥随正文下发/入库；错误影响＝把正常讲代码的回复改得没法读。
  */
 describe("screenReply", () => {
   it("隐去密钥形态与仓库外绝对路径，并只记数量与样例", () => {
@@ -195,7 +195,7 @@ describe("screenReply", () => {
   });
 
   it("正常讲代码的回复一个字都不该被改（仓库内路径、占位符、普通赋值句）", () => {
-    const plain = '看 src/main/java/com/hmdp/controller/PayController.java:42：这里注入的是占位符 YOUR_KEY，`token = config.get("x")` 之后走缓存。密钥在环境变量里，别写进代码。';
+    const plain = '看 src/main/java/com/hmdp/controller/PayController.java:42：这里注入的是占位符 YOUR_KEY，`token = config.get("x")` 之后走缓存。密钥运行时境变量里，别写进代码。';
     const screened = screenReply(plain);
     expect(screened.text).toBe(plain);
     expect(screened.secrets).toBe(0);

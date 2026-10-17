@@ -64,7 +64,7 @@ export function pricingIsConfigured(pricing: Pricing = currentPricing()): boolea
   闸门失效时该说的那句话；闸门在管事时返回 `undefined`。
   措辞刻意点破「¥0.0000 不是没花钱」——只报金额会把人引向「这月很省」，而实际是无上限花钱。
   句子里**不带预算数字**：这句话会在地址簿（不读每仓 settings）与启动日志（没有仓上下文）两处出现，
-  写死一个数就等于对配过预算的仓撒谎。数字让 `monthlyBudgetUsd` 自己在成本页显示。
+  写死一个数就等于对配过预算的仓撒不实。数字让 `monthlyBudgetUsd` 自己在成本页显示。
   */
 export function budgetGateNotice(pricing: Pricing = currentPricing()): string | undefined {
   if (pricingIsConfigured(pricing)) return undefined;
@@ -113,8 +113,8 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
     costComponents,
     // 三档单价全没配时金额恒为 0——这个事实要一起交出去，否则页面一句「本月 ¥0.0000」看着像真的没花钱
     pricingConfigured: pricingIsConfigured(pricing),
-    // 历史口径：`mode:"degraded"` 的行只有教学状态机在写（触顶那一轮记 0 token），2026-10-14 起改成
-    // 触顶直接 422 拒在开火前、不再留这种行。减法照旧——存量行还在，去掉就会把那些免费回合算成付过钱。
+    // 历史口径：`mode:"degraded"` 的行只有教学状态机在写（达到预算上限那一轮记 0 token），2026-10-14 起改成
+    // 达到预算上限直接 422 拒在开火前、不再留这种行。减法照旧——存量行还在，去掉就会把那些免费回合算成付过钱。
     degradedTurns: events.filter((event) => event.payload.mode === "degraded").length,
     byScene: bucket(events, (event) => typeof event.payload.scene === "string" ? event.payload.scene : "unknown"),
     byProvider: bucket(events, (event) => typeof event.payload.provider === "string" ? event.payload.provider : "unknown"),
@@ -135,7 +135,7 @@ function bucket(events: JournalEvent[], labelOf: (event: JournalEvent) => string
   return [...map.values()].sort((left, right) => (right.inputTokens + right.outputTokens) - (left.inputTokens + left.outputTokens) || left.label.localeCompare(right.label));
 }
 
-/** 只列出有用量的日期，按日升序：近期条形图不需要把整月 31 格都占上。 */
+/** 只列出有用量的日期，按日升序：近期条形图不需要把整月 31 天都占上。 */
 function days(events: JournalEvent[]): CostDay[] {
   const map = new Map<string, CostDay>();
   for (const event of events) {

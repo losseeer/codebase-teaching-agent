@@ -2,7 +2,7 @@
   「P1 加外部包名」的红线探针（**零 token、只读、不写库**）。
 
   存在的理由：外部包名要进 `DependencyGraph`，而流程视图的缓存键直接哈希它读到的那份证据
-  （`flowCacheKeyOf` 的 payload 就是 `buildFlowDigest` 的产物）。externals 一旦被顺手塞进 digest
+  （`flowCacheKeyOf` 的 payload 就是 `buildFlowDigest` 的产物）。externals 一旦被顺带写入 digest
   或混进 `imports`，全部已缓存流程翻键 = 每个入口重烧一发 ≈¥0.17 的付费调用。
   「改完键没翻」不能靠读代码保证：先存基线，改完再对着基线逐条比。
 
@@ -10,7 +10,7 @@
     pnpm arch:keyprobe --save /tmp/arch-keys.json        算快照并落盘
     pnpm arch:keyprobe --compare /tmp/arch-keys.json     与基线逐条比，有任何差异就 exit 1
   键的构造与产品**共用同一个函数**（`flowCacheKeyOf` → `layerCacheKey`），两套判据才是一条心
-  （同 `pnpm flow:reburn --check` 的立场）。provider 用钉死的假 modelVersion：
+  （同 `pnpm flow:reburn --check` 的立场）。provider 用硬性约束的假 modelVersion：
   这里比的是「同一份输入在改动前后算出的键」，不是「能不能命中线上那一行」。
 */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -33,7 +33,7 @@ const valueOf = (name: string): string | undefined => {
 const saveTo = valueOf("save");
 const compareTo = valueOf("compare");
 
-/** 钉死的档：`modelVersion` 进键，两侧必须同一个字符串。探针不发任何请求。 */
+/** 硬性约束的档：`modelVersion` 进键，两侧必须同一个字符串。探针不发任何请求。 */
 const probeProvider: LlmProvider = {
   name: "arch-key-probe",
   modelVersion: "probe:fixed-model-version",
@@ -46,7 +46,7 @@ interface RepoSnapshot {
   repositoryPath: string;
   repositoryId: string;
   hasArtifacts: boolean;
-  /** 红线本身：有任何一个仓的这一格是 true，就说明 externals 漏进了流程证据——不用比键也已经踩线。 */
+  /** 红线本身：有任何一个仓的这个节点是 true，就说明 externals 漏进了流程证据——不用比键也已经踩线。 */
   digestMentionsExternals: boolean;
   /** 每个入口一条：键 + digest 体积（体积变了就是漏进证据里了） */
   flowKeys: { entryPath: string; key: string; digestSize: number }[];

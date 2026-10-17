@@ -49,7 +49,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   useEffect(refresh, [refresh]);
   /**
     引擎只收「有限非负数」。空串在 JS 里 `Number("") === 0`，直接发过去就等于把月预算改成 0
-    ——那一档是「从此所有付费分支都判为触顶」，一次误输就能把整个产品静音掉，所以在这里先判住。
+    ——那一档是「从此所有付费分支都判为达到预算上限」，一次误输就能把整个产品静音掉，所以在这里先判住。
     */
   const budgetNumber = Number(budget);
   const budgetValid = budget.trim() !== "" && Number.isFinite(budgetNumber) && budgetNumber >= 0;
@@ -67,7 +67,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   const pricingConfigured = cost?.pricingConfigured ?? true;
   /** 读数没拿到（首帧 / 拉取失败）时 `cost` 是 null——这时任何「正常」字样都是替引擎编的：
       闸门生效与否、金额、剩余都来自那一次读取。实测把 `/cost` 打成 500，页面会同时说
-      「正常运行」和「剩余 ¥0.0000；触顶后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
+      「正常运行」和「剩余 ¥0.0000；达到预算上限后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
   const readoutReady = cost !== null;
   const usedRatio = cost && cost.monthlyBudgetUsd > 0 ? Math.min(1, cost.estimatedCostUsd / cost.monthlyBudgetUsd) : 0;
   const overBudget = readoutReady && pricingConfigured && cost.mode === "degraded";
@@ -99,7 +99,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 <small> / 月度预算 {cost ? usd(cost.monthlyBudgetUsd) : "—"}</small>
               </div>
               <span className={`badge ${!readoutReady ? "badge-neutral" : overBudget ? "badge-danger" : pricingConfigured ? "badge-ok" : "badge-warn"}`} title={!readoutReady ? "闸门管不管事来自那一次成本读取；读不到就不能替它说「正常」" : pricingConfigured ? undefined : "单价未配置 ⇒ 花费算不出来 ⇒ 「超预算降级」这道闸没在管事，这个 normal 不是读数"}>
-                {!readoutReady ? "闸门状态：读数未到" : !pricingConfigured ? "无上限运行（闸门未生效）" : overBudget ? "已触顶，降级为本地规则" : "正常运行 · 无降级回合"}
+                {!readoutReady ? "闸门状态：读数未到" : !pricingConfigured ? "无上限运行（闸门未生效）" : overBudget ? "已达到预算上限，降级为本地规则" : "正常运行 · 无降级回合"}
               </span>
             </div>
             <div className="progress" role="img" aria-label={cost ? `预算已用 ${Math.round(usedRatio * 100)}%` : "预算已用比例：读数未到"}>
@@ -109,7 +109,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
               {!readoutReady
                 ? "读数没拿到，刷新一次再看。"
                 : pricingConfigured
-                  ? <>剩余 {usd(cost.remainingBudgetUsd)} · 触顶后改走本地规则（已用 {Math.round(usedRatio * 100)}%）</>
+                  ? <>剩余 {usd(cost.remainingBudgetUsd)} · 达到预算上限后改走本地规则（已用 {Math.round(usedRatio * 100)}%）</>
                   : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额。</>}
             </p>
             <label className="field budget-field">

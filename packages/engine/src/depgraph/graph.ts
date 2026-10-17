@@ -42,10 +42,10 @@ export const graphExtensions: readonly string[] = [...new Set(Object.values(LANG
 export const handledExtensions = new Set(graphExtensions);
 
 /**
-  裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：**按发起文件的语言收口**。
+  裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：**按发起文件的语言收尾**。
   旧写法是拿全表 19 个扩展名挨个试，于是同一个目录里 TS 的 `./util` 能连到 `util.py`、`util.go`——
-  而能力表 typescript 那格自称 `dependencyEdge: exact`（「落点逐个验证过」），这条跨语言的猜让那句话不成立。
-  按语言收口后：`typescript` / `vue` 一族互连（SFC 的 `<script>` 里 `./util` 落的就是 `.ts`），
+  而能力表 typescript 那个节点自称 `dependencyEdge: exact`（「落点逐个验证过」），这条跨语言的猜让那句话不成立。
+  按语言收尾后：`typescript` / `vue` 一族互连（SFC 的 `<script>` 里 `./util` 落的就是 `.ts`），
   其余语言各自只试自己的扩展名。实测两仓（dianping 156 文件 / Xingyan 126）本来就没有跨语言边、
   也没有同目录同名碰撞，所以这一改**不翻任何已有的边、不引发重烧**，它挡的是混语言仓里的假依赖。
   */
@@ -63,7 +63,7 @@ const nodeNextTargets: Record<string, string[]> = {
   「按 TypeScript 那一族的写法处理」的判据：取自能力表，不再手写正则。
   两处旧写法（`extractSymbolsWithRegex` 的语言判定、`detectLspStatus` 的探测清单）都漏 `.mts`/`.cts`——
   回落正则时这类文件的符号会被标成 `other`，LSP 探测也压根不考虑它。
-  ⚠️ 这一族**不含 `.vue`**：它换来的是两件事——回落抽出的符号标成 `other` 而不是冒充 typescript，
+  ⚠️ 这一族**不含 `.vue`**：它换来的是两件事——回落抽出的符号标成 `other` 而不是伪装成 typescript，
   以及不给 `.vue` 探 TS 语言服务。⚠️ 它**不**意味着回落时 `.vue` 不被那条 JS/TS 正则扫：
   回落分支只有「python 一条、其余一条」两条正则，SFC 的 `<script>` 块按那一条扫得出的都是真符号
   （模板里的 `{{ }}` 撞不上 `function`/`const … =>`/`class` 三种形状）。刻意不收紧成「非本族就不抽符号」：
@@ -188,7 +188,7 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
 export function graphFromData(data: DependencyGraphData): DependencyGraph {
   return {
     imports: new Map(Object.entries(data.imports)),
-    // 旧产物的图里没有这一格（那时外部名直接被丢弃、没留名）：按「未采集」处理成空表，
+    // 旧产物的图里没有这个节点（那时外部名直接被丢弃、没留名）：按「未采集」处理成空表，
     // 架构视图读到空表要说「这份产物还没采外部依赖」，不能说「这个仓不碰任何外部服务」
     externals: new Map(Object.entries(data.externals ?? {})),
     calls: data.calls,
@@ -247,7 +247,7 @@ function findEndLine(lines: string[], start: number, language: SymbolInfo["langu
     // 花括号已归零：要么这行闭合了函数体（签名行开了括号，或已经走到签名行之后），要么是「无花括号」的声明
     if (index > start || opens > 0) return index + 1;
     // 无花括号的声明行（表达式体箭头函数 `const f = (a) => a + b`、单行 `function f(){return 1}`）就到本行为止；
-    // 但若本行以 `=>` 收尾，函数体还在下一行（`const f = (a) =>\n  { … }`），不能在此收口
+    // 但若本行以 `=>` 收尾，函数体还在下一行（`const f = (a) =>\n  { … }`），不能在此收尾
     if (!/=>\s*$/.test(lines[index])) return start + 1;
   }
   return Math.min(lines.length, start + 1);
@@ -269,7 +269,7 @@ function javaVisibleTypes(path: string, content: string, javaTypes: Map<string, 
   /**
     `sameRootOnly` 只对「靠包名猜」的两条路成立（通配 import、同包可见）：多模块仓里
     `sl-common/src/main/java/com/x/util` 与 `sl-jump/src/main/java/com/x/util` 是**两个不同的编译单元**，
-    按包名把它们互相可见就会连出假边。而**显式 import 是确定的**，跨模块也照收——把它一起收窄会误伤
+    按包名把它们互相可见就会连出假边。而**显式 import 是确定的**，跨模块也照收——把它一起收窄会错误影响
     （10-05 实测：Xingyan 的跨文件调用边一度从 136 掉到 125，就是因为测试根与跨模块的显式 import 被误挡）。
     */
   const add = (target: string | undefined, requireSameRoot: boolean): void => {
@@ -289,7 +289,7 @@ function javaVisibleTypes(path: string, content: string, javaTypes: Map<string, 
 }
 
 /**
-  注释按等长空格抹掉、import 整行抹掉，**行数与字符偏移都不变**：
+  注释按等长空格清除、import 整行清除，**行数与字符偏移都不变**：
   类声明可能出现在 javadoc 的示例里，注释里的 `implements` 不是证据，但行号还得对得上原文。
 */
 function stripJavaNoise(content: string): string {
@@ -395,7 +395,7 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
     // 只有 Java 走接收者判定：这门语言有「类名=文件名」的强约定，而且符号级参照也只覆盖了它
     const isJava = path.endsWith(".java");
     /**
-      Java 的调用扫描读「抹掉注释与 import 行」的正文：注释里的 `voucherOrderService.handle(orderId)`
+      Java 的调用扫描读「清除注释与 import 行」的正文：注释里的 `voucherOrderService.handle(orderId)`
       是一句说明，不是调用证据（2026-10-06 复审在 dianping 实测到 16 条跨文件调用边的落点行就是注释，
       `PaymentServiceImpl` 的 javadoc 流程图甚至给 `PayLog` 连了三条）。
       `stripJavaNoise` 用等长空格替换，所以行号与原文一一对应。
@@ -602,7 +602,7 @@ interface ResolvedImports {
 */
 function resolveFileImports(path: string, content: string, index: ImportIndex): ResolvedImports {
   /**
-    收口去重 + **去自环**。自环以前是三个分支各自 `filter(value !== path)`、另三个分支漏写：
+    收尾去重 + **去自环**。自环以前是三个分支各自 `filter(value !== path)`、另三个分支漏写：
     Go 导入自己所在的包目录、Rust 在 `src/a.rs` 里写 `use crate::a::X`、Python 的绝对自导入
     （`import app.store` 写在 store.py 里）都能指回自己（2026-10-07 复审实测三种都造出自环）。
     角色层靠 `buildFileEdges` 的 key===value 挡了一下，但 `impactRadius` 没挡——
@@ -634,7 +634,7 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
       const hits = item.wildcard ? expandJavaWildcard(path, item.specifier, body, index.javaTypes) : [resolveJavaImport(item.specifier, index.javaTypes)];
       if (hits.some(Boolean)) paths.push(...hits);
       // 仓内类型表盖得上的名字不是外部包：`import com.xingyan.dao.X` 落不到只说明 X 没被收录，
-      // 把它记成「边界之外的服务」是当场说谎（Xingyan 实测 5 个文件就是这样）。
+      // 把它记成「边界之外的服务」是当场说不实（Xingyan 实测 5 个文件就是这样）。
       else if (!coveredByPackageRoot(index.javaRoots, item.specifier)) externals.push(packageIdentity("java", item.specifier));
     }
     return finish(paths, externals);
@@ -652,7 +652,7 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
   }
   if (path.endsWith(".rs")) {
     // Rust 的外部 crate 名这次仍采不到：extractRustSpecifiers 只认 `use (crate|self|super)::`，
-    // `use serde::Serialize` 压根没进候选。要采得改那条正则——那是「给一门语言加采集面」，不在这一刀里。
+    // `use serde::Serialize` 压根没进候选。要采得改那条正则——那是「给一门语言加采集面」，不在这次改动里。
     return finish(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)), []);
   }
   if (path.endsWith(".cs")) {
@@ -709,7 +709,7 @@ const packageNameShape = /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
 /**
   「解析不到」不等于「是外部包」，这一关挡掉三类东西：
-  - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是**仓内意图**，只是断链，记成外部服务就是说谎；
+  - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是**仓内意图**，只是断链，记成外部服务就是说不实；
   - 同一个仓里的工作区包（`@codebase-tutor/shared`）：落点算不出是解析能力问题，不是「用了个三方包」；
   - 字形根本不是包名的脏捕获。`tsSpecifierPattern` 是真会吃到脏东西的——本仓的 `.tsx` 里实测抓出过
     `<div className=` 与 ` | ` 这种串。以前它只让 `resolveImport` 返回 undefined、无声无息，
@@ -733,7 +733,7 @@ function coveredByGoModule(specifier: string, goModules: Map<string, string>): b
   「这个仓的类型在 `org.foo.app` 下」顺带把所有 `org.springframework.*` 都说成仓内代码。
   判据为什么不能是「这条 import 能不能落到某个类」：Xingyan 实测 `import com.xingyan.shortlink.jump.AccessCounter;`
   当时落不到（那个类不在索引里），但 `com.xingyan.shortlink` 明明是项目自己的根——
-  把它报成「边界之外的依赖」是当场说谎。命中项目自己的包根 = 仓内断链，不记外部名。
+  把它报成「边界之外的依赖」是当场说不实。命中项目自己的包根 = 仓内断链，不记外部名。
 */
 function packageRoots(names: Iterable<string>, separator = "."): Set<string> {
   const roots = new Set<string>();
@@ -906,7 +906,7 @@ interface PathAlias {
   dirs: string[];
 }
 
-/** 去掉 JSON 里的注释与尾逗号：tsconfig 惯例是带注释的 JSONC，状态机走字符是为了不误伤字符串内的 `//`（如 `http://`）。 */
+/** 去掉 JSON 里的注释与尾逗号：tsconfig 惯例是带注释的 JSONC，状态机走字符是为了不错误影响字符串内的 `//`（如 `http://`）。 */
 function stripJsonComments(source: string): string {
   let out = "";
   let inString = false;
@@ -1062,7 +1062,7 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents:
     // 只在这文件**进得了依赖图**的语言里认约定名：`files` 是索引清单，里面还有 .md/.json/.yml。
     // 以前不筛，于是 `docs/index.md`、`config/app.json` 会顶着「conventional entrypoint」进入口清单——
     // 入口清单进 `classifyFileRoles`（它把文件抬成 core）又进流程 digest，等于让流程从一份 Markdown 讲起。
-    // 实测 dianping / Xingyan 的索引里 0 个非代码文件命中这批约定名，所以这一刀不翻已有键。
+    // 实测 dianping / Xingyan 的索引里 0 个非代码文件命中这批约定名，所以这次改动不翻已有键。
     if (!handledExtensions.has(file.extension)) continue;
     const name = basename(file.path, extname(file.path)).toLowerCase();
     if (["main", "server", "app", "index", "cli", "manage"].includes(name)) candidates.set(file.path, "conventional entrypoint");
@@ -1161,7 +1161,7 @@ const pythonFrameworkOf = (content: string): string | undefined => pythonFramewo
  * Node/TS 侧的框架入口：Express / Fastify / Koa / NestJS。
  * 动因（2026-10-16 实测）：这条链以前只靠文件名约定，本仓 `packages/engine/src/server.ts` 虽顶着 `server`
  * 这个名字，标签却是 `conventional entrypoint`（词典不认它是服务入口）⇒ 架构视图里「含对外服务入口」
- * 这一档整仓为零、`entry` 角色一格都没有。
+ * 这一档整仓为零、`entry` 角色一个节点都没有。
  *
  * 四条收紧，都为「误判比漏判更贵」而设：
  *  - **先认出框架实例的名字**（`const app = Fastify(...)`、`express()`、`new Koa()`、`NestFactory.create(...)`），
@@ -1170,7 +1170,7 @@ const pythonFrameworkOf = (content: string): string | undefined => pythonFramewo
  *  - **框架名只认行首 import / require 位置的包名**：文件里出现一个写着 "express" 的字符串不算。
  *  - **第一个参数必须是引号里的路径**（TS 泛型实参允许夹在方法名与括号之间）：`app.get(handler)` 那种重载不算登记。
  *  - **证据行必须是代码**：行首不能是注释续行，也不能落在跨行模板字符串里面。
- *    这条是实测逼出来的——本仓 `docs/ui-prototype/js/data.js` 把「一份假的后端源码」整段塞进模板字符串当演示数据，
+ *    这条是实测逼出来的——本仓 `docs/ui-prototype/js/data.js` 把「一份假的后端源码」整段写入模板字符串当演示数据，
  *    里面的 `const app = Fastify(...)` 与 `app.listen(...)` 逐行看都像真证据，第一版就把这个纯演示文件标成了
  *    「HTTP 服务启动」。判「这一行是不是代码」用语法树（`extractMultilineTemplateLines`），不自己扫引号：
  *    第二套结构判据迟早和解析器打架。注释里写的示例代码同理——行首是 `*` 或 `//` 的一律不看。
@@ -1198,7 +1198,7 @@ function detectNodeEntrypoints(contents: Map<string, string>): SourceAnchor[] {
     const instances = nodeInstanceNames(content);
     const controller = nodeControllerPattern.test(content);
     if (!instances.size && !controller) continue;
-    // 语法树没就绪（或这门语言没有语法）就**整个文件不判**：这一格没有保守退路可走——
+    // 语法树没就绪（或这门语言没有语法）就**整个文件不判**：这个节点没有保守退路可走——
     // 把「读不出字符串边界」当成「这里没有字符串」，演示数据里那份假源码就会被标成服务入口，
     // 而入口一旦进档，模块档位、流程默认入口都跟着错。宁可少一条入口（图的 parseBackend 已如实记录降级）。
     const templates = extractMultilineTemplateLines(path, content);

@@ -2,15 +2,15 @@ import type { DiagramDraft, DiagramKind, DiagramReadout, DiagramStatus } from "@
 import type { TutorDatabase } from "./database.js";
 
 /**
-  「agent 重画的图」的唯一读写口（表在 `store/database.ts` 的 `diagram_artifact`）。
+  「agent 重绘的图」的唯一读写口（表在 `store/database.ts` 的 `diagram_artifact`）。
 
-  为什么不复用 `layer_cache`：那张表每次写入都按 `at` 无差别删掉过龄的行（缺省 7 天），
+  为什么不复用 `layer_cache`：那张表每次写入都按 `at` 无差别删掉过龄的行（默认 7 天），
   语义是「输入变了就没人再命中的缓存」。而 `committed` 这一行是**用户点头留下的判断**，
   闲置七天后被一次无关的写入清掉，等于系统替用户撤了他的决定。
 
-  状态机只有三格，各占一行（主键含 status）：`pending` 等用户确认这一发钱、`preview` 等用户点替换、
-  `committed` 就是现在画布上那张。缺省那份**不在这张表里**——它仍由 `coursetree/architecture.ts` 现算现叠，
-  所以「恢复缺省」= 删掉 `committed`，不可能顺手把模型的判层删了。
+  状态机只有三个节点，各占一行（主键含 status）：`pending` 等用户确认这一发钱、`preview` 等用户点替换、
+  `committed` 就是现在画布上那张。默认那份**不在这张表里**——它仍由 `coursetree/architecture.ts` 实时计算实时叠加，
+  所以「恢复默认」= 删掉 `committed`，不可能顺带把模型的判层删了。
 */
 
 interface StoredRow {
@@ -38,7 +38,7 @@ export function readDiagram(database: TutorDatabase, repositoryId: string, kind:
   };
 }
 
-/** agent 提议重画：只记下「它想按什么目的重画」，**不发请求**。花钱那一下由用户在横幅上按。 */
+/** agent 提议重绘：只记下「它想按什么目的重绘」，**不发请求**。花钱那一下由用户在横幅上按。 */
 export function requestRedraft(database: TutorDatabase, repositoryId: string, kind: DiagramKind, purpose: string): void {
   database.putDiagramArtifact(repositoryId, kind, "pending", null, purpose.slice(0, 120));
 }
@@ -63,7 +63,7 @@ export function commitPreview(database: TutorDatabase, repositoryId: string, kin
   return true;
 }
 
-/** 恢复缺省：只删这一行，缺省那份本来就一直现算现叠着，没有「重建」这一步。 */
+/** 恢复默认：只删这一行，默认那份本来就一直实时计算实时叠加着，没有「重建」这一步。 */
 export function resetDiagram(database: TutorDatabase, repositoryId: string, kind: DiagramKind): boolean {
   const existed = Boolean(row(database, repositoryId, kind, "committed"));
   database.dropDiagramArtifact(repositoryId, kind, "committed");

@@ -5,7 +5,7 @@ import { id } from "../lib.js";
 
 /**
   人工修正的**唯一落地处**。GUI 的拖动与 Agent 的 `set_architecture` 工具都走到这里，
-  校验、写盘、审计、通知四步一次做完——两条写路径各写一套是这套东西最容易烂掉的地方
+  校验、写盘、审计、通知四步一次做完——两条写路径各写一套是这套东西最容易失效的地方
   （界面改成功、工具改失败，或反之，用户只会看到「我明明改了」）。
 
   ⚠️ 这个模块的输入形状是**白名单**：只有下面四种意图能表达出来，
@@ -28,8 +28,8 @@ export interface OverrideContext {
   /** 校验层名用：来自当前产物（缓存里那份或静态三层），**不会**为此发模型请求。 */
   layers: string[];
   /**
-    校验方块 id 用：图上现在的方块清单（原子块 + 合并块）。
-    为什么要带上合并块：agent 读到的架构图就是这些块，`arch:...` 是它手里唯一的 id；
+    校验节点 id 用：图上现在的节点清单（原子块 + 组合节点）。
+    为什么要带上组合节点：agent 读到的架构图就是这些块，`arch:...` 是它手里唯一的 id；
     只认课程树的原子模块 id 会把「把这几个小目录整体挪走」当成非法输入。
   */
   blocks?: ArchitectureBlockBrief[];
@@ -61,7 +61,7 @@ function moduleTitle(course: CourseTree, moduleId: string): string {
   return moduleNode(course, moduleId)?.title ?? moduleId;
 }
 
-/** 图上这块的名字：合并块用方块标题，原子块用课程树标题，都没有就原样报 id（不编名字）。 */
+/** 图上这块的名字：组合节点用节点标题，原子块用课程树标题，都没有就原样报 id（不编名字）。 */
 function titleOf(course: CourseTree, blocks: ArchitectureBlockBrief[] | undefined, id: string): string {
   return blocks?.find((block) => block.id === id)?.title ?? moduleTitle(course, id);
 }
@@ -72,8 +72,8 @@ function currentLayerOf(context: OverrideContext, overlays: RepositoryOverlays, 
 }
 
 /**
-  执行一次人工修正。任何一步校验不过都**不动盘**，并把原因原样交回调用方
-  （工具那条路会把这句话喂回模型，所以句子要能指导下一步：说要什么、不给什么）。
+  执行一次人工修正。任何一步校验不过都**不动盘**，并把原因原样返回调用方
+  （工具那条路会把这句话回传给模型，所以句子要能指导下一步：说要什么、不给什么）。
 */
 export function commitOverride(context: OverrideContext, intent: OverrideIntent, via: OverrideVia): OverrideOutcome {
   const known = moduleIdsOf(context.course);
@@ -82,15 +82,15 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   const refuse = (reason: string): OverrideOutcome => ({ ok: false, text: `没改：${reason}。只支持 move_module / rename_layer / set_tier / reset 四种动作，箭头、模块清单与文件路径由程序按 import 算，改不了。` });
 
   if (intent.kind === "move_module") {
-    // 方块 id 与原子模块 id 都收：前者是整块挪，后者由读侧按成员拆块（见 architecture.ts 的 applyOverrides）
-    if (!known.has(intent.module) && !blocksById.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」既不在模块地图里，也不是现在图上的方块`);
+    // 节点 id 与原子模块 id 都收：前者是整块挪，后者由读侧按成员拆块（见 architecture.ts 的 applyOverrides）
+    if (!known.has(intent.module) && !blocksById.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」既不在模块地图里，也不是现在图上的节点`);
     if (!context.layers.includes(intent.layer)) return refuse(`层名「${intent.layer.slice(0, 40)}」不在现在的图上；现在是：${context.layers.join(" / ") || "（还没分层）"}`);
     const title = titleOf(context.course, context.blocks, intent.module);
     const from = currentLayerOf(context, overlays, intent.module) ?? intent.from;
     const next = patchOverlays(context.database, context.repositoryId, { architecture: { moduleLayer: { [intent.module]: intent.layer } } });
     context.journal.append("architecture_layer_overridden", {
       correction_id: id(), module: intent.module, module_title: title, from: from ?? null, to: intent.layer, via,
-      // 引擎原判一并带上：这一格的差值就是「分层判断错了几次」的唯一读数
+      // 引擎原判一并带上：这个节点的差值就是「分层判断错了几次」的唯一读数
       layer_source: context.layers.length ? "plan" : "empty"
     });
     context.onApplied?.({ repositoryId: context.repositoryId, module: intent.module, via });
@@ -108,8 +108,8 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   }
 
   if (intent.kind === "set_tier") {
-    // 档位是**原子模块**那一格的属性（分级层按模块的文件算），合并块没有档：这里不收 `arch:` id，报错要说出该改谁
-    if (blocksById.has(intent.module) && !known.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」是合并出来的方块，没有档位：请逐个模块 id 改`);
+    // 档位是**原子模块**那个节点的属性（分级层按模块的文件算），组合节点没有档：这里不收 `arch:` id，报错要说出该改谁
+    if (blocksById.has(intent.module) && !known.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」是合并出来的节点，没有档位：请逐个模块 id 改`);
     if (!known.has(intent.module)) return refuse(`模块 id「${intent.module.slice(0, 60)}」不在当前课程树的模块地图里`);
     if (!TIER_VALUES.includes(intent.tier)) return refuse(`档只有三档：${TIER_VALUES.join(" / ")}`);
     const given = intent.given ?? overlays.modules?.tier?.[intent.module];
@@ -129,11 +129,11 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   if (intent.kind === "reset") {
     /**
       撤法只有三种，写侧必须各自有落点（2026-10-16 补第二种）：
-      - 给 `module`：只撤那一格的归层与改档；
+      - 给 `module`：只撤那个节点的归层与改档；
       - 给 `layerRename`（原层名或改成的名字都认）：只撤一条层名改名，指着新名字的归层写回旧名字；
       - 两个都不给：把这个仓的修正一次清空。
       以前只有第一与第三种，「带着改名来撤」会因为没有 module 而**掉进第三种**——用户想撤一条改名，结果全清。
-      这一格是全仓唯一会一次抹掉多处修正的动作，认不出目标就拒，不退成全清。
+      这个节点是全仓唯一会一次清除多处修正的动作，认不出目标就拒，不退成全清。
       */
     const rename = intent.layerRename?.trim();
     const renames = overlays.architecture?.layerRenames ?? {};
@@ -203,7 +203,7 @@ export function parseOverrideArguments(raw: string): { intent?: OverrideIntent; 
     if (!text("module") || !TIER_VALUES.includes(text("tier") as TierValue)) return { ignored, error: `set_tier 需要 module 与 tier（${TIER_VALUES.join(" / ")}）` };
     return { intent: { kind: "set_tier", module: text("module"), tier: text("tier") as TierValue }, ignored };
   }
-  // reset 的三种撤法：给 module（撤那一格）、给 from 或 to（撤一条改名，原判名与改后的名字都认）、都不给（全撤）
+  // reset 的三种撤法：给 module（撤那个节点）、给 from 或 to（撤一条改名，原判名与改后的名字都认）、都不给（全撤）
   if (action === "reset") {
     const rename = text("from") || text("to");
     return { intent: { kind: "reset", ...(text("module") ? { module: text("module") } : {}), ...(rename ? { layerRename: rename } : {}) }, ignored };

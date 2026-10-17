@@ -10,7 +10,7 @@ import { matchRouteSeams, routeEndpointsOfFiles } from "./routes.js";
   12 条配上控制器，全部整段相等、0 条歧义。
 
   两条刻意的取舍：
-  - **不落库、不进任何缓存键**：清单是读文件现算 + 内存 memo（键含 `versionStamp`，内容一变自然翻）。
+  - **不落库、不进任何缓存键**：清单是读文件实时计算 + 内存 memo（键含 `versionStamp`，内容一变自然翻）。
     所以已导入的仓当场就能用，不需要重新导入，也不会有摘要/流程重烧——这条功能是纯加分项，
     一旦哪天要把它变成流程证据的一部分（进 digest），就得先算重烧的账。
   - **按需算，不预先全量**：算一次要读两个仓的源码文件（dianping 前端+后端约 350 个文件，纯 CPU 几十毫秒），
@@ -89,7 +89,7 @@ export function formatSeamReport(otherName: string, report: SeamReport, filter =
     return `${caption}：配上 ${direction.matched} 处\n${body.join("\n")}${rest}`;
   };
   return [
-    `与仓「${otherName}」的 HTTP 接缝（按归一化 URL 现算，不消耗 token）：`,
+    `与仓「${otherName}」的 HTTP 接缝（按归一化 URL 实时计算，不消耗 token）：`,
     rows(report.outbound, `本仓调用「${otherName}」`),
     rows(report.inbound, `「${otherName}」调用本仓`)
   ].join("\n");

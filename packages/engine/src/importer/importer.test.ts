@@ -158,7 +158,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     const first = judge();
     expect(first.verdict).toBe("stale");
     expect(first.contentChanged).toBe(true);
-    // 只报告：产物里写的还是那个旧 stamp，引擎没顺手替用户重算
+    // 只报告：产物里写的还是那个旧 stamp，引擎没顺带替用户重算
     const database = new TutorDatabase(repo.repoDir);
     expect(database.getAnalysis(repo.repositoryId)?.versionStamp).toBe("content:fixture");
     database.close();
@@ -383,7 +383,7 @@ describe("refinementIsFresh（宏观润色缓存的失效维度）", () => {
     expect(refinementIsFresh(marker, { ...current, backendStamp: "backend:lsp" })).toBe(false);
   });
 
-  it("没有可用模型（未配置或预算触顶）时放行：复用上次成功的润色好于退回裸命名", () => {
+  it("没有可用模型（未配置或预算已达上限）时放行：复用上次成功的润色好于退回裸命名", () => {
     const withoutModel = { versionStamp: current.versionStamp, contractVersion: current.contractVersion, backendStamp: current.backendStamp };
     expect(refinementIsFresh(marker, withoutModel)).toBe(true);
     expect(refinementIsFresh({ ...marker, modelVersion: undefined }, withoutModel)).toBe(true);
@@ -429,7 +429,7 @@ describe("ImportService 编辑期免打扰：按仓挂起 fs 监听", () => {
     return repository;
   }
 
-  it("挂起 = 那条 fs 监听被关掉；恢复 = 重新起一条并交回状态", () => {
+  it("挂起 = 那条 fs 监听被关掉；恢复 = 重新起一条并返回状态", () => {
     const repo = makePersistedRepo(root, "pausable");
     writeRegistry([repo.repoDir]);
     const service = new ImportService();
@@ -479,7 +479,7 @@ describe("ImportService 编辑期免打扰：按仓挂起 fs 监听", () => {
     const now = Date.now();
     expect(service.pauseWatching(repo.repositoryId, 1).until - now).toBeGreaterThanOrEqual(59_000);
     expect(service.pauseWatching(repo.repositoryId, 9_999_999_999).until - now).toBeLessThanOrEqual(6 * 60 * 60_000 + 1_000);
-    expect(service.pauseWatching(repo.repositoryId, Number.NaN).until - now).toBeGreaterThanOrEqual(29 * 60_000); // 缺省 30 分钟
+    expect(service.pauseWatching(repo.repositoryId, Number.NaN).until - now).toBeGreaterThanOrEqual(29 * 60_000); // 默认 30 分钟
     service.resumeWatching(repo.repositoryId);
     expect(service.watchPauseOf(repo.repositoryId)).toEqual({ paused: false });
   });

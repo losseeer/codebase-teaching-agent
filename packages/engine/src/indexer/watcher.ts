@@ -23,7 +23,7 @@ export interface WatchStatus {
   引擎产物目录**在这一层恒定不回声**，且刻意**不走** `.tutorignore`：
   那份配置是用户拥有的，`ignore.test.ts` 里钉着一条「写了 `!.tutor/**` 就该把产物当源码索引」的支持用例
   ——那是个自洽但奇怪的选择，索引层照办。但监听层不能照办：产物是引擎自己写的，
-  一旦喂回事件就是「写产物 → 触发重分析 → 又写产物」的自激循环，代价为整仓反复重扫（更糟时反复重烧钱）。
+  一旦回传给事件就是「写产物 → 触发重分析 → 又写产物」的自触发循环，代价为整仓反复重扫（更糟时反复重烧钱）。
   所以这一条住在这里而不是共用判据里：**「把产物当源码读」可以，「被自己的产物叫醒」不行。**
   */
 export function isArtifactEcho(path: string): boolean {
@@ -33,7 +33,7 @@ export function isArtifactEcho(path: string): boolean {
 /**
   一个监听事件该不该上报成「源码改动」。**抽成纯函数是有原因的**：
   真 fs 事件在整包并行跑测试时不守时（几十路 fs.watch 同时投递，几秒都可能等不到一个 change），
-  判据留在类里就只能靠时序测；而这条判据一旦破是烧钱级的（自激重分析），所以它必须能确定性测。
+  判据留在类里就只能靠时序测；而这条判据一旦破是烧钱级的（自触发重分析），所以它必须能确定性测。
 
   三道筛，各自拦一种白扫：
   1. `predates-watch` 直接不报。⚠️ 这条拦的是**挂载那一刻的回放**：macOS 的 `fs.watch(recursive)` 建流时会把
@@ -69,7 +69,7 @@ export function ingestSetDiffers(previous: Iterable<string>, next: Iterable<stri
   stat 一下，只为回答「这次改动比监听的起点更新吗、是文件还是目录」。
   读不到就当判不出来——删除事件到这里时路径通常已经没了，那种情况必须叫醒（收录集真的少了东西）。
   mtime 不晚于监听起点的是**回放**（`changeWanted` 第 1 条），不是本轮要响应的事。
-  ⚠️ 同一毫秒内的真改动会被一起吞掉：那一刻的 `judgeFreshness` 比这一判晚（attach 里先起监听再算新鲜度），
+  ⚠️ 同一毫秒内的真改动会被一起丢弃：那一刻的 `judgeFreshness` 比这一判晚（attach 里先起监听再算新鲜度），
   那次改动照样会被判成脏并在界面上露出来——不是静默丢掉。
   */
 function kindOf(absolute: string, startedAtMs: number): ChangedPathKind {
@@ -143,7 +143,7 @@ export class RepositoryWatcher {
 
   /**
     这条事件要不要上报成「源码改动」。三道，按代价从低到高：
-    1. `.tutorignore`：**内容签名**变了才重读并上报。起监听时引擎自己会往仓里播种缺省那一份，
+    1. `.tutorignore`：**内容签名**变了才重读并上报。起监听时引擎自己会往仓里播种默认那一份，
        那次写入也是真事件、也常与起监听落在同一毫秒里——按 mtime 判先后挡不住（实测挡不住），按内容判才稳。
     2. `changeWanted` 的取舍（回放、产物回声、忽略项、收录集）。
     3. 模糊事件（目录、stat 不到）不带文件路径：往仓根放一张 `.png` 会把**仓根目录的 mtime** 顶一下，

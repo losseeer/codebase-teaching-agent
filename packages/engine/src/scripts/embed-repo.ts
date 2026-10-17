@@ -15,7 +15,7 @@ import type { RepositoryAnalysis } from "@codebase-tutor/shared";
   这是**花钱的动作**（外部 embedding API），所以默认只报计划，要 `--yes` 才真发请求。
   增量按「单元文本哈希」走：源码没改、摘要没重烧 ⇒ 不重嵌；改了哪个单元就只重嵌那一个。
 
-  粒度：`--level=file`（缺省，产品口径）| `--level=symbol`（函数级，第四臂的粒度对照用）。
+  粒度：`--level=file`（默认，产品口径）| `--level=symbol`（函数级，第四臂的粒度对照用）。
   两级各占一套坐标系（库里 model 列分别是 `模型名` 与 `模型名#symbol`），互不覆盖、可共存。
 
   用法：

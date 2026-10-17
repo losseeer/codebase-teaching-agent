@@ -144,7 +144,7 @@ export interface ScopedChatApi {
   content: string;
   setContent: (next: string) => void;
   sending: boolean;
-  /** 停止当前在途回合：既告诉引擎别算了（省 token），也掐掉自己的连接。没有在途回合时为空操作。 */
+  /** 停止当前在途回合：既告诉引擎别算了（省 token），也中止自己的连接。没有在途回合时为空操作。 */
   stopTurn: () => void;
   /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务 */
   progress: Record<Scope, string>;
@@ -251,7 +251,7 @@ useEffect(() => {
     const turn = activeTurn.current;
     if (!turn) return;
     turn.controller.abort();
-    // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误吞掉即可
+    // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误丢弃即可
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
   // 回复生成过程指示（按作用域）：三作用域都走各自请求的 SSE 事件（teaching 是 progress、map 是 thinking/reading），都是引擎发事件、GUI 定文案
@@ -411,7 +411,7 @@ useEffect(() => {
   }, []);
 
   /** 回合失败的分诊：用户停止（清账——这一轮不该落库）／断线（欠账原样留着，等引擎算完补回）／引擎明说失败（清账，没有可补的）／其余按原因报错。
-      `replayStarted` 由 `turnSink` 的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被掐掉的那一轮正文其实已经在库里。
+      `replayStarted` 由 `turnSink` 的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被中止的那一轮正文其实已经在库里。
       分诊前先放弃打字机队列：半途的 delta 不该继续往 `liveAnswer` 里吐。 */
   const triageTurnFailure = (target: Scope, reason: unknown, replayStarted: boolean): void => {
     abort();
@@ -420,7 +420,7 @@ useEffect(() => {
       patchDebt(target, null);
       if (replayStarted) knownRowCount.current[target] += 2; // 库里那一问一答确实存在：基准跟着走，免得日后误判成「补回」
       pushMessage(target, "agent", replayStarted
-        ? "已停止生成。引擎那一轮其实早就算完并落库了（掐掉的是回放），重新打开会话能看到完整回复。"
+        ? "已停止生成。引擎那一轮其实早就算完并落库了（中止的是回放），重新打开会话能看到完整回复。"
         : "已停止生成，这一轮没有落库。", "hint");
       return;
     }
@@ -487,7 +487,7 @@ useEffect(() => {
     }
   };
 
-  /** 只改「当前线程是哪条」，不动侧栏已展示的对话——发送时惰性新建线程走这条，免得抹掉刚敲进去的那句。 */
+  /** 只改「当前线程是哪条」，不动侧栏已展示的对话——发送时惰性新建线程走这条，免得清除刚敲进去的那句。 */
   const markCurrentThread = (scope: Scope, threadId: string): void => {
     setCurrentThreadId((prev) => ({ ...prev, [scope]: threadId }));
     currentThreadRef.current = { ...currentThreadRef.current, [scope]: threadId };
@@ -620,9 +620,9 @@ useEffect(() => {
 
   // 换节点 = 挂回该节点最近一次教学线程（GUI 从没存过 id 的存量会话也在清单里）；该节点没有会话时留空，
   // 下一次发送经 createSession 新建。清单可能比本地状态滞后一拍（新建后还没回表），这时**什么都不做**：
-  // 中途清掉当前线程会抹掉正在进行的回合，也会把 session 一起清空。真被别处删掉的线程由 refreshThreads 剪枝。
+  // 中途清掉当前线程会清除正在进行的回合，也会把 session 一起清空。真被别处删掉的线程由 refreshThreads 剪枝。
   // 已经停在这条线程上时也**不再回读**：清单每次刷新都是新数组，本效应都会重跑，而 loadThread 会用库里的
-  // 旧正文覆盖侧栏——新会话的第一问此刻还没落库，覆盖过去就把用户气泡抹掉了（只剩 agent 回复）。
+  // 旧正文覆盖侧栏——新会话的第一问此刻还没落库，覆盖过去就把用户气泡清除了（只剩 agent 回复）。
   useEffect(() => {
     if (!repositoryId || !selected) return;
     const list = chatThreadsRef.current.teaching;
@@ -639,7 +639,7 @@ useEffect(() => {
 
   const send = async (): Promise<void> => {
     if (!content.trim()) return;
-    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不再把这一句吞掉。
+    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不再把这一句丢弃。
     const message = content;
     // 断线那轮的账先结掉（回读正文会重写侧栏，得赶在用户气泡上屏前）
     await settlePendingTurn("teaching");

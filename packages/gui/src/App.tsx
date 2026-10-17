@@ -127,7 +127,7 @@ export function App(): ReactElement {
     try {
       setCatalog((await api.listRepositories()).repositories);
     } catch {
-      // 引擎没连上就空着：拿旧清单冒充「你的地址簿就这些」是假话
+      // 引擎没连上就空着：拿旧清单伪装成「你的地址簿就这些」是假话
       setCatalog([]);
     }
   }, []);
@@ -346,7 +346,7 @@ function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message:
 
 /**
   过期产物横幅：引擎在挂载时算出「当前文件内容哈希 vs 产物记录的哈希」「当前 HEAD vs 分析时 HEAD」，
-  这里只负责把结论说人话，并把两个动作交回用户——**没有第三条自动路径**。
+  这里只负责把结论说人话，并把两个动作返回用户——**没有第三条自动路径**。
   - stale：内容真的变了，明说几天前的分析、多少个文件对不上；
   - drifted：内容一模一样只是提交挪了（切分支/空提交），产物照常可用，也照样告知，避免「它是不是最新的」被猜。
   */

@@ -108,7 +108,7 @@ describe("suggestModuleEntriesCached", () => {
     expect(expandCalls).toHaveLength(2);
   });
 
-  it("候选池为空时翻译层的钱也要入账：usage 不能跟着空列表一起丢", async () => {
+  it("候选池为空时翻译层的钱也要记入审计：usage 不能跟着空列表一起丢", async () => {
     // 翻译层在选择层之前跑，所以「本轮没问选择层」的三条出口（候选为空 / 内存命中 / 持久层命中）都得把它带回去。
     // 少带一条，server 侧 `if (suggestion.usage)` 就一条 token_usage 都不记 ⇒ 花了钱而账面看不出来。
     const { provider, expandCalls, selectCalls } = fakeProvider([["n1"]]);
@@ -205,7 +205,7 @@ describe("suggestModuleEntriesCached", () => {
     expect(result.declined).toBeFalsy();
   });
 
-  it("整个模块只剩文档时连选择层都不发：池子为空直接回落，翻译层的钱照样入账", async () => {
+  it("整个模块只剩文档时连选择层都不发：池子为空直接回落，翻译层的钱照样记入审计", async () => {
     const { provider, selectCalls, expandCalls } = fakeProvider([["readme"]]);
     const result = await suggestModuleEntriesCached({ tree: treeAnchoredAt([{ id: "readme", path: "README.md" }]), moduleLabel: "根说明", moduleHint: "h", provider, repositoryId: "repo-doc-only" });
     expect(expandCalls).toHaveLength(1);
@@ -217,7 +217,7 @@ describe("suggestModuleEntriesCached", () => {
   it("文档判据只看文件自己：docs/ 下的代码不是文档，配置也不是", () => {
     expect(isDocumentationPath("docs/backend-design.md")).toBe(true);
     expect(isDocumentationPath("README.MD")).toBe(true);
-    expect(isDocumentationPath("docs/snippets/App.tsx"), "按目录一刀切会把示例代码一起挡掉").toBe(false);
+    expect(isDocumentationPath("docs/snippets/App.tsx"), "按目录一次改动切会把示例代码一起挡掉").toBe(false);
     expect(isDocumentationPath("config/app.json"), "配置与构建输入不是散文").toBe(false);
     expect(isDocumentationPath("notes"), "没有扩展名就没有性质").toBe(false);
   });

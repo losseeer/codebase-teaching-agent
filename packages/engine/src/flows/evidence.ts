@@ -4,7 +4,7 @@ import type { CallEdge, FlowEdge, FlowStage, RepositoryAnalysis, RepositoryFlow,
   流程视图的「静态证据层」：从入口出发，沿 `analysis.graph.calls` 的**跨文件**跳展开一条调用链。
 
   两个用途，必须分清：
-  1) 作为 LLM 生成流程的输入材料（把真实的跨文件调用顺序喂给模型，避免它凭空编排）；
+  1) 作为 LLM 生成流程的输入材料（把真实的跨文件调用顺序送入模型，避免它凭空编排）；
   2) LLM 不可用时的降级视图——此时它是答案本身，不是半成品。
 
   它**自己不是**流程视图的最终形态：回调注册（`add_node("evaluate", evaluate)`）、反射、
@@ -235,7 +235,7 @@ export const MAX_STAGE_TITLE = 14;
 /**
   把静态证据直接渲染成流程（LLM 不可用时的降级视图）。
   降级必须显式：`reason` 会写进 `caveats`，界面在页脚原样展示——静默降级等于把静态链
-  冒充成模型结论，读者无从知道它看不到回调注册这类编排。
+  伪装成成模型结论，读者无从知道它看不到回调注册这类编排。
 
   边也在这里产出：每个环节的 `fromOrder` 就是它的入边，`loops`/`revisits` 是真实的回边与共享去向，
   两者都是跨文件调用（`buildFlowEvidence` 只展开跨文件跳转），因此 `origin` 一律是 `static`。

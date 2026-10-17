@@ -59,7 +59,7 @@ function searchPath(name: string, pathValue: string): string | undefined {
   return undefined;
 }
 
-/** 解释器位置全部现算，不手写清单：换了 brew/conda 装的 python，profile 跟着变，不会因为注释里的旧路径骗人。 */
+/** 解释器位置全部实时计算，不手写清单：换了 brew/conda 装的 python，profile 跟着变，不会因为注释里的旧路径误导人。 */
 export function resolveToolchain(env: NodeJS.ProcessEnv = process.env): Partial<SandboxToolchain> {
   const pathValue = env.PATH ?? "";
   const resolve = (name: string): string | undefined => {
@@ -140,7 +140,7 @@ export function isolationBackend(): { platform: NodeJS.Platform; available: bool
 /**
   runner 指纹：换解释器、改 profile 形状、动默认上限，都要让旧题的缓存键一起失效。
   题面的标准答案是「这套 harness 在这套 runner 上跑出来的」——node 升一档，缺陷版可能就不挂了，
-  旧题的「必挂」承诺随之作废，所以这一格必须进出题作用域（见 exercises/llm-generate.ts 的 `fileScope`）。
+  旧题的「必挂」承诺随之作废，所以这个节点必须进出题作用域（见 exercises/llm-generate.ts 的 `fileScope`）。
   版本串现读、不写死：写死的那一份会在升级后继续报旧值，等于自证过期。
 */
 let cachedFingerprint: string | undefined;

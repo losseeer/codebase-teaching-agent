@@ -23,7 +23,7 @@ describe("summarizeCost", () => {
     const journal = new Journal(repository, "repo_1");
     journal.append("token_usage", { input_tokens: 900, output_tokens: 100, cache_hit_tokens: 400, provider: "deepseek-chat", scene: "teach" }, "thread_a");
     journal.append("token_usage", { input_tokens: 200, output_tokens: 50, cache_hit_tokens: 0, provider: "kimi-k2", scene: "map_chat" }, "thread_b");
-    // 预算触顶那一回合不付 token：provider 记本地规则、mode 记 degraded
+    // 预算已达上限那一回合不付 token：provider 记本地规则、mode 记 degraded
     journal.append("token_usage", { input_tokens: 0, output_tokens: 0, cache_hit_tokens: 0, provider: "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, "thread_a");
 
     const summary = summarizeCost(repository, defaultMonthlyBudgetUsd, undefined, pricing);
@@ -33,7 +33,7 @@ describe("summarizeCost", () => {
     expect(summary.billedInputTokens).toBe(700);
     expect(summary.outputTokens).toBe(150);
     expect(summary.degradedTurns).toBe(1);
-    // 界面那两格就是这一对差：降级那一行有 mode 标记、又被算进 turns，所以减一次；
+    // 界面那两行就是这一对差：降级那一行有 mode 标记、又被算进 turns，所以减一次；
     // 一个回合若留两行（正常行 + 降级行），没付钱的 teach 回合就会混进「计费回合」里。
     expect(summary.turns - summary.degradedTurns).toBe(2);
     expect(summary.byScene).toEqual([

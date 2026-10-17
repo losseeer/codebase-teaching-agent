@@ -146,7 +146,7 @@ export async function summarizeFiles(input: {
       const coverage = coverageOf(slice, cached.summary);
       const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
       // 命中也回写（created_at 刷新）：下游语料取的是「每路径最新一行」，而双档键让开/关档各留一行——
-      // 不刷新的话「开档烧完再切回关」时，注释档旧行会一直冒充现行摘要。回写是纯本地写，零 token。
+      // 不刷新的话「开档烧完再切回关」时，注释档旧行会一直伪装成现行摘要。回写是纯本地写，零 token。
       database.putFileSummary(key, migrated);
       byPath.set(cached.path, { ...migrated, cached: true });
       continue;
@@ -159,7 +159,7 @@ export async function summarizeFiles(input: {
     let results: (SummaryResult | undefined)[];
     // 声明在 try 之外：下面的落库循环要用它算「实际发出去的字符数」
     const sending = batch.map((slice) => maskSliceForSend(slice));
-    // 出境清单（企业化第 3 条）：这一批每个文件一条，记的是**实际发出去的那份**（隐去密钥之后的切片）。
+    // 出网清单（企业化第 3 条）：这一批每个文件一条，记的是**实际发出去的那份**（隐去密钥之后的切片）。
     // 放在 try 之前：端点失败也是真发出去了，`llm.log` 里那行 `ok=false` 会说明有没有拿到结果。
     // 确定性档不记：它一个字都不发出去（口径见 SummaryProvider.sendsCodeToEndpoint）。
     if (provider.sendsCodeToEndpoint) recordEgress({
@@ -200,7 +200,7 @@ export async function summarizeFiles(input: {
         coverage: coverageOf(slice, result.summary)
       };
       // 兜底出来的文本**不写模型档的键**：它不是模型产物，写进去下次同输入就直接命中，
-      // 一句结构文本会永久冒充 LLM 摘要，而 `fallbackFiles` 下次归零——读数上看不出有任何降级发生过。
+      // 一句结构文本会永久伪装成 LLM 摘要，而 `fallbackFiles` 下次归零——读数上看不出有任何降级发生过。
       // 落在确定性档的键上，下次同输入仍会重试模型。
       database.putFileSummary(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;

@@ -12,7 +12,7 @@ import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 */
 export type RecentChangesInput = Pick<RepositoryAnalysis, "lastIncrementalUpdate">;
 
-/** 超过 72 小时「近期」就是撒谎：那是仓库历史，结构层早已消化，不再注入。 */
+/** 超过 72 小时「近期」就是撒不实：那是仓库历史，结构层早已消化，不再注入。 */
 const MAX_AGE_MS = 72 * 3_600_000;
 /** 两条清单各最多列 8 个路径：真仓 Java 路径平均 60+ 字符，全列会把参考段撑成正文。 */
 const MAX_PATHS_SHOWN = 8;

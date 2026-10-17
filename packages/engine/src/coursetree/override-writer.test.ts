@@ -63,7 +63,7 @@ describe("parseOverrideArguments（工具入参的白名单）", () => {
     expect(moved.error).toBeUndefined();
     const withEdges = parseOverrideArguments('{"action":"move_module","module":"module:api","layer":"编排","edges":[{"from":"接入","to":"数据"}],"files":["src/a.ts"]}');
     expect(withEdges.ignored.sort()).toEqual(["edges", "files"]);
-    // 解析出来的 intent 里根本没有 edges 这一格可放——不是运行时要拦，是这个形状写不出来
+    // 解析出来的 intent 里根本没有 edges 这个节点可放——不是运行时要拦，是这个形状写不出来
     expect(JSON.stringify(withEdges.intent)).not.toContain("edges");
     expect(parseOverrideArguments('{"action":"add_edge","from":"接入"}').error).toContain("未知 action");
     expect(parseOverrideArguments('{"action":"set_tier","module":"module:api","tier":"主干"}').error).toContain("set_tier 需要");
@@ -117,7 +117,7 @@ describe("commitOverride（写盘、审计与通知）", () => {
     expect(readOverlays(database, "repo").modules?.tier).toEqual({ "module:api": "periphery" });
   });
 
-  it("reset 只撤一个模块时不能顺手把别的模块的修正也清掉", () => {
+  it("reset 只撤一个模块时不能顺带把别的模块的修正也清掉", () => {
     const context = contextFor().context;
     commitOverride(context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
     commitOverride(contextFor().context, { kind: "move_module", module: "module:db", layer: "接入" }, "gui");
@@ -135,7 +135,7 @@ describe("commitOverride（写盘、审计与通知）", () => {
   });
 });
 
-describe("reset 的三种撤法（撤错一格比不撤贵得多）", () => {
+describe("reset 的三种撤法（撤错一个节点比不撤贵得多）", () => {
   const clear = (): void => { commitOverride(contextFor().context, { kind: "reset" }, "gui"); };
 
   it("撤一条改名：按原判名或改后的名字都认，指着新名字的归层写回旧名字", () => {
@@ -158,7 +158,7 @@ describe("reset 的三种撤法（撤错一格比不撤贵得多）", () => {
     const context = contextFor().context;
     commitOverride(context, { kind: "move_module", module: "module:api", layer: "编排" }, "gui");
     const refused = commitOverride(contextFor().context, { kind: "reset", layerRename: "没这一层" }, "agent");
-    expect(refused.ok, "认不出目标就动手＝把用户别的修正一起抹掉").toBe(false);
+    expect(refused.ok, "认不出目标就动手＝把用户别的修正一起清除").toBe(false);
     expect(refused.text).toContain("其他修正一条没动");
     expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:api"], "那条归层修正还在").toBe("编排");
   });
@@ -169,7 +169,7 @@ describe("reset 的三种撤法（撤错一格比不撤贵得多）", () => {
     const refused = commitOverride(contextFor().context, { kind: "reset", module: "module:db" }, "agent");
     expect(refused.ok).toBe(false);
     expect(refused.text).toContain("本来就没有人工修正");
-    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:api"], "另一格不受牵连").toBe("编排");
+    expect(readOverlays(database, "repo").architecture?.moduleLayer?.["module:api"], "另一个节点不受牵连").toBe("编排");
   });
 
   it("整份 reset 说清撤了几处，界面上不许多出任何边", () => {
@@ -194,25 +194,25 @@ describe("工具入参里的 reset 三种写法", () => {
   });
 });
 
-describe("合并块的 id 也是可写的（图上看到什么就能改什么）", () => {
+describe("组合节点的 id 也是可写的（图上看到什么就能改什么）", () => {
   const blocksContext = (): Parameters<typeof commitOverride>[0] => ({
     ...contextFor().context,
     blocks: [{ id: "arch:src/a/x:core", title: "一、二、三", members: ["module:a/x/one", "module:a/x/two", "module:a/x/three"], role: "core" }]
   });
 
-  it("move_module 收方块 id：审计与回话里带的是方块标题，不是原 id", () => {
+  it("move_module 收节点 id：审计与回话里带的是节点标题，不是原 id", () => {
     const outcome = commitOverride(blocksContext(), { kind: "move_module", module: "arch:src/a/x:core", layer: "数据" }, "agent");
-    expect(outcome.ok, "agent 读到的就是方块 id，拒收等于让它改不动这张图").toBe(true);
+    expect(outcome.ok, "agent 读到的就是节点 id，拒收等于让它改不动这张图").toBe(true);
     expect(outcome.text).toContain("一、二、三");
     const layerEvents = readJournal(dir).filter((event) => event.type === "architecture_layer_overridden");
     expect(layerEvents[layerEvents.length - 1].payload).toMatchObject({ module: "arch:src/a/x:core", module_title: "一、二、三", to: "数据", via: "agent" });
     expect(readOverlays(database, "repo").architecture?.moduleLayer?.["arch:src/a/x:core"]).toBe("数据");
   });
 
-  it("set_tier 不收方块 id：档位是原子模块那一格的属性，报错要说清该改谁", () => {
+  it("set_tier 不收节点 id：档位是原子模块那个节点的属性，报错要说清该改谁", () => {
     const refused = commitOverride(blocksContext(), { kind: "set_tier", module: "arch:src/a/x:core", tier: "core" }, "agent");
     expect(refused.ok).toBe(false);
-    expect(refused.text).toContain("合并出来的方块");
+    expect(refused.text).toContain("合并出来的节点");
     expect(refused.text, "拒写要给出下一步：让 agent 直接换成成员 id").toContain("逐个模块");
   });
 });

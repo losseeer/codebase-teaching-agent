@@ -21,7 +21,7 @@ const MAX_EXCERPT_LINES = 60;
 
 /**
   出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
-  题面提示词、`kindRules`、裁剪上限改了，喂给模型的代码可以一字不变——这类失效只有版本号管得了：
+  题面提示词、`kindRules`、裁剪上限改了，送入模型的代码可以一字不变——这类失效只有版本号管得了：
   不 bump 就会一直复用旧题面。改上面这些要同步 bump。
 
   v1 → v2（2026-10-07 复审）：选项池过去被一条手写扩展名白名单（ts/js/py）筛过，
@@ -43,7 +43,7 @@ export interface RefinedExercise {
   /** 只有模型真的改写了题面时才有；回落那几条一律不给，免得账面把降级读成花钱成功 */
   usage?: LlmUsage;
   /**
-    题面到底是不是模型写的。**没有这一格就分不开**：润色失败时回落的是启发式题面，
+    题面到底是不是模型写的。**没有这个节点就分不开**：润色失败时回落的是启发式题面，
     而调用方过去一律记 `source: "rule"`——润色成功也记同一条，于是漏斗里「LLM 出的题」永远比真相少，
     而模型端点抽风的那几天看起来像「没人用润色」。回落的原因一并交出去，才知道该修端点还是修解析。
     */
@@ -99,7 +99,7 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
   }
 }
 
-/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出境清单登记（`security/dataflow.ts`）。 */
+/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出网清单登记（`security/dataflow.ts`）。 */
 interface ExerciseExcerpt {
   path: string;
   from: number;
@@ -110,7 +110,7 @@ interface ExerciseExcerpt {
   truncated?: boolean;
 }
 
-/** 摘录 → 出境清单的一条（润色与反馈两处共用）。 */
+/** 摘录 → 出网清单的一条（润色与反馈两处共用）。 */
 function excerptSource(excerpt: ExerciseExcerpt): EgressSource {
   return { kind: "exercise-excerpt", path: excerpt.path, from: excerpt.from, to: excerpt.to, text: excerpt.text, masked: excerpt.masked, truncated: excerpt.truncated };
 }
@@ -122,13 +122,13 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    // 与锚点摘录、L1、read_file 同一道出境前筛（`security/secrets.ts`）：这段是**源码原文**，
+    // 与锚点摘录、L1、read_file 同一道出网前筛（`security/secrets.ts`）：这段是**源码原文**，
     // 出题路径以前是裸 readFileSync，等于「模型能看到的源码」在这一条路上绕过了筛子。
     const masker = secretMasker();
     const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
-    // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间掐断，那最后几行没出门就不能算进去
+    // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间中止，那最后几行没出门就不能算进去
     const sentLines = text.split("\n").length;
     return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
@@ -185,7 +185,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  // 出境清单：候选摘录是带行号的整段源码。`to` 按摘录里**真的有几行**算（4,000 字符上限可能在中间掐断）
+  // 出网清单：候选摘录是带行号的整段源码。`to` 按摘录里**真的有几行**算（4,000 字符上限可能在中间中止）
   recordEgress({
     repositoryPath: input.repositoryPath,
     scene: "practice.generate",
@@ -270,7 +270,7 @@ export function buildTagCandidate(repositoryPath: string, path: string, maxLines
       path,
       lineCount: lines.length,
       startLine: start + 1,
-      // 行号前缀是产品要的（LLM 的锚点行号以此为基准），筛的是**行内容**：整段源码在这一条路上同样是原文出境
+      // 行号前缀是产品要的（LLM 的锚点行号以此为基准），筛的是**行内容**：整段源码在这一条路上同样是原文出网
       excerpt: lines.slice(start, start + maxLines).map((line, index) => `${start + index + 1}| ${masker.take(line)}`).join("\n").slice(0, 4_000),
       masked: masker.masked
     };

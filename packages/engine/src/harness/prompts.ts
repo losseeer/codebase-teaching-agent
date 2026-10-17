@@ -16,7 +16,7 @@ import { styleBand, validateStyle } from "../tutor-settings/tutor-settings.js";
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
   faded?: FadedState;
-  /** 上下文附带 read_file 工具时声明其用法与护栏（缺省不声明，模型不会以为能自己读文件） */
+  /** 上下文附带 read_file 工具时声明其用法与护栏（默认不声明，模型不会以为能自己读文件） */
   readToolAvailable?: boolean;
   /** 附带 search_code（词法定位文件）时声明「先搜后读」纪律；仅在 readToolAvailable 时有意义。 */
   searchToolAvailable?: boolean;

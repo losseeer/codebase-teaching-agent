@@ -266,7 +266,7 @@ for (const repo of perRepo) {
     const edgeTotal = origins.static + origins.inferred + origins.code + origins.其他;
     emit(`- 流程 grounding（layer_cache ${flows} 条 flow 的边）：static=${origins.static}、inferred=${origins.inferred}、code=${origins.code}${origins.其他 ? `、其他=${origins.其他}` : ""}；grounding 率 ${pct(origins.static + origins.code, edgeTotal)}`);
     emit(`- 按需深入（从 flow caveats 回读，只反映「生成时未被缓存挡住」的行）：核对 ${deepExamined} 条推断边 → 升级 code ${deepConfirmed}、驳回 ${deepRejected}、模型未给结论 ${deepNoAnswer} 行`);
-    // 环节 detail 触顶留痕率已删（09-22 拍板：它验收的是 digest-v3 放宽效果，验收完成后留原始计数无判据）
+    // 环节 detail 达到预算上限留痕率已删（09-22 拍板：它验收的是 digest-v3 放宽效果，验收完成后留原始计数无判据）
     emit(`- 流程 caveat 计数：丢弃环节 ${droppedStages}、编造路径 ${fakePaths}`);
     const summaries = db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT 4000").all() as { summary: string }[];
     const latest = new Map<string, { coverageLow?: boolean; rule?: string }>();
@@ -277,7 +277,7 @@ for (const repo of perRepo) {
       } catch { /* 旧纯文本行 = 键口径变更前产物，跳过 */ }
     }
     const low = [...latest.values()].filter((row) => row.coverageLow === true).length;
-    // anchor-v2（09-22 判据换尺子）：命中缓存的行会被就地重算并打上 rule 标记；新旧混杂期间分开报
+    // anchor-v2（09-22 判据换度量）：命中缓存的行会被就地重算并打上 rule 标记；新旧混杂期间分开报
     const v2 = [...latest.values()].filter((row) => row.rule === "anchor-v2");
     const lowV2 = v2.filter((row) => row.coverageLow === true).length;
     emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，09-22 起仅作读数、不再扣下游用途）；其中 anchor-v2 新判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);

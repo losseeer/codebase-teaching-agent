@@ -26,7 +26,7 @@ export type TeachingStreamEvent =
   | { type: "progress"; payload: { stage?: string; round?: number; path?: string; query?: string } }
   | { type: "delta"; delta: string };
 
-/** 一次流式回合的客户端句柄：`turnId` 让引擎能按 id 中止在途的那一轮，`signal` 掐掉自己的连接。
+/** 一次流式回合的客户端句柄：`turnId` 让引擎能按 id 中止在途的那一轮，`signal` 中止自己的连接。
     两者要分开用——只断连接引擎分不清「用户点停止」和「网络波动」，它会照常把这一轮算完并落库（断线补账靠这个）。 */
 export interface StreamTurn {
   turnId?: string;
@@ -105,7 +105,7 @@ export interface LlmEnvFallback {
 
 /**
   单价某一档的来源：`runtime` = LLM 配置框里填的，`env` = `.env` 的值，`unset` = 两层都没配。
-  界面上必须说清来源——留空那格显示的是 .env 的数，不写来源就会变成「我明明填了怎么没变」。
+  界面上必须说清来源——留空那个节点显示的是 .env 的数，不写来源就会变成「我明明填了怎么没变」。
   */
 export type PricingSource = "runtime" | "env" | "unset";
 
@@ -124,7 +124,7 @@ export interface LlmSettings {
   thinkingCapability?: ThinkingCapabilityInfo;
   /**
     单价三档的**填写值**（空串 = 这一档交给 .env）。数值口径是**人民币 / 百万 token**，
-    与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一格——变量名里的 USD 是历史遗留（改名会牵动已落盘的配置），
+    与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一个节点——变量名里的 USD 是历史遗留（改名会牵动已落盘的配置），
     引擎侧不做任何汇率换算，填什么币就显示什么币。
     */
   inputUsdPerMillion?: string;
@@ -175,7 +175,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type ArchitectureView = ArchitecturePlan & { omittedModules: number; collapsedExternals: number; diagram?: DiagramReadout };
 
 export const api = {
-  /** 探活：认证闸已撤除（§64），这一格不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
+  /** 探活：认证闸已撤除（§64），这个节点不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
   health: () => request<{ status: string; llmMode?: string; sandbox?: { level: string } }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
@@ -206,12 +206,12 @@ export const api = {
   */
   getArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture`),
   /**
-    「重画这张图」的一步。界面上只有这四个动作能到这里：`run` 是画布上那条「开始重画」（**花钱那一下**）、
-    `commit` 是「替换这张」、`keep` 是「保持现在的」、`reset` 是「恢复缺省图」。
+    「重绘这张图」的一步。界面上只有这四个动作能到这里：`run` 是画布上那条「开始重绘」（**花钱那一下**）、
+    `commit` 是「替换这张」、`keep` 是「保持现在的」、`reset` 是「恢复默认图」。
     agent 手上只有 propose / keep / reset——run 与 commit 不给它，见 engine 的 `redrawToolFor`。
   */
   redrawDiagram: (repositoryId: string, action: "run" | "commit" | "keep" | "reset", kind: DiagramKind = "architecture") => request<{ ok: boolean; status: string; text: string; draft?: ArchitectureDiagramDraft }>(`/api/repositories/${repositoryId}/diagram/redraw`, { method: "POST", body: JSON.stringify({ kind, action }) }),
-  /** 显式重问一次分层：**花 token**，没配模型或预算触顶回 422（不静默给一张静态图）。 */
+  /** 显式重问一次分层：**花 token**，没配模型或预算已达上限回 422（不静默给一张静态图）。 */
   regenerateArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
   getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
   /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
@@ -253,7 +253,7 @@ export const api = {
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
-  /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方吞掉错误即可。 */
+  /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方丢弃错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };
 
@@ -271,7 +271,7 @@ export const api = {
   `reader.read()` 既不 resolve 也不 reject，退避重连这条码路永远不会被触发——
   表现为「界面停在 40% 不动，而引擎其实早就没了」。`EventSource` 时代由浏览器管这件事，
   换成 fetch 之后必须自己管。阈值取 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧），
-  超时是**掐掉这一次尝试**再按退避重连，不是整条订阅作废。
+  超时是**中止这一次尝试**再按退避重连，不是整条订阅作废。
   */
 const STREAM_IDLE_MS = 75_000;
 
@@ -330,7 +330,7 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
           }
         }
       } catch {
-        // 空闲超时走的就是这一支：掐掉这一次尝试，下面按同一份退避重连
+        // 空闲超时走的就是这一支：中止这一次尝试，下面按同一份退避重连
         attempt.abort();
         if (stopped || controller.signal.aborted) break;
       } finally {

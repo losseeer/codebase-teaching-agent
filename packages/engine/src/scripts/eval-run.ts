@@ -19,12 +19,12 @@ import { scoreFlowArtifacts, scoreSearchArm, scoreTeachInvariants, type SearchCa
 /**
   B 档评测 runner（第 1 刀：零 token 确定性判分，设计方案 §10 第 2 档的机器检查部分）。
   默认全程只读、零 token：产物取自 <repo>/.tutor/tutor.db，索引/依赖图在本地重算，不碰引擎、不写任何文件。
-  LLM 真跑与表达质量裁判不在这一刀里（回合落盘是其前置）。
+  LLM 真跑与表达质量裁判不在这次改动里（回合落盘是其前置）。
 
   唯一例外是 dense/hybrid 两臂（检索第四臂）：它们要对查询发 embedding 请求，所以**必须显式加 --dense** 才会打网络；
-  不加就照常出三臂读数，第四臂那一格写明「未跑」和怎么跑。向量表本身是只读进来的（`search_vector`）。
+  不加就照常出三臂读数，第四臂那个节点写明「未跑」和怎么跑。向量表本身是只读进来的（`search_vector`）。
 
-  用法：pnpm phaseB:eval [仓库路径]（缺省取 repositories.json 里最近使用的那条）
+  用法：pnpm phaseB:eval [仓库路径]（默认取 repositories.json 里最近使用的那条）
         pnpm phaseB:eval -- --dense   # 出四臂对比（发 N 条查询的 embedding 请求）
 */
 
@@ -245,7 +245,7 @@ for (const { name, doc } of caseDocs) {
   const holdoutIds = new Set(doc.cases.filter((item) => item.holdout).map((item) => item.id));
   // 词法三臂对照：摘要在上（产品现状）/ 无摘要（摘要口径消融的对照）/ 摘要在上 + 中文整句切词
   // 第三臂只在**查询侧**动手（`segmentForLookup`），语料与打分一字不变——它量的是「词法臂输掉的那部分里，
-  // 有多少只是没切词」。dense/hybrid 两臂才是「换了打分器」的那一格。
+  // 有多少只是没切词」。dense/hybrid 两臂才是「换了打分器」的那个节点。
   const arms = armSet(doc.cases);
   emit();
   emit(`### ${name}`);
@@ -268,7 +268,7 @@ for (const { name, doc } of caseDocs) {
     const rate = (arm: ScoredArm) => `hit@5 ${pct(arm.hitRate.numerator, arm.hitRate.denominator)}，平均 recall ${((arm.meanRecall || 0) * 100).toFixed(1)}%`;
     for (const entry of cohortArms) emit(`- 「${cohort.label}」${entry.label}：${rate(entry.arm)}`);
     // 负例分臂报数：合并计数会把「只有某一臂撞开」读成「所有臂都撞开」，那是给兜底臂记了不该记的账。
-    // dense 天生返回 top-N 而不是「没有」，所以它的负例格一定是满的——这是它的结构事实，不是 bug。
+    // dense 天生返回 top-N 而不是「没有」，所以它的负例条目一定是满的——这是它的结构事实，不是 bug。
     if (cohortArms[0].arm.negatives.length) {
       const parts = cohortArms.map((entry) => {
         const wrong = entry.arm.negatives.filter((item) => item.wrongHits.length > 0);
@@ -279,7 +279,7 @@ for (const { name, doc } of caseDocs) {
   }
   // dense 的分数面：想让它回答「仓里没有」，唯一的办法是设余弦下限；
   // n=2 的负例只够提出疑问，扩到每集 10 条之后这条扫描才判得了「下限到底存不存在」。
-  // 两个粒度各扫一遍：粒度换了召回，也就换了「这一刀值不值」的答案。
+  // 两个粒度各扫一遍：粒度换了召回，也就换了「这次改动值不值」的答案。
   if (denseOn) {
     const cache = new Map<string, { path: string; score: number }[]>();
     const scoredList = (key: string, query: string, lister: (vector: Float32Array) => { path: string; score: number }[]) => {
@@ -310,7 +310,7 @@ for (const { name, doc } of caseDocs) {
       const parts = [`不设 ${pct(baseline.hit, positives.length)}｜负例误命中 ${pct(baseline.wrong, negatives.length)}`];
       for (const floor of [0.50, 0.54, 0.58, 0.62]) parts.push(`≥${(floor * 100).toFixed(0)} ${pct(atFloor(floor).hit, positives.length)}｜${pct(atFloor(floor).wrong, negatives.length)}`);
       emit(`- dense ${label} 余弦下限扫描（同一批向量、零额外请求）：${parts.join(" → ")}`);
-      // 结论直接判「有没有那一刀」：负例全拒 且 正例 hit@5 不因 filtering 下降
+      // 结论直接判「有没有那处改动」：负例全拒 且 正例 hit@5 不因 filtering 下降
       const cleanFloor = [0.50, 0.54, 0.58, 0.62, 0.66, 0.70].find((floor) => atFloor(floor).wrong === 0);
       const cleanHit = cleanFloor === undefined ? -1 : atFloor(cleanFloor).hit;
       emit(`  - ${label} 可用下限：${cleanFloor === undefined ? `无（扫到 0.70 仍没能把 ${negatives.length} 条负例全拒）` : cleanHit >= baseline.hit ? `有，≥${(cleanFloor * 100).toFixed(0)} 时负例全拒且正例 hit@5 不降（${pct(cleanHit, positives.length)}）` : `名义上有（≥${(cleanFloor * 100).toFixed(0)} 负例全拒），但正例 hit@5 从 ${pct(baseline.hit, positives.length)} 掉到 ${pct(cleanHit, positives.length)}——下限是拿召回换的，不是免费的`}`);

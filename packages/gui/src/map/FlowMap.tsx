@@ -14,11 +14,11 @@ import { Icon } from "../ui/icons";
  *
  * 为什么流程不画静态调用链：`add_node("evaluate", evaluate)`、路由表、插件与依赖注入这类**编排**
  * 不产生调用边，静态链在真正的主干处是断的。模型能从文件与符号语义里读出编排，这正是本视图的增量。
- * 静态调用链仍在，它作为模型输入，并在 LLM 不可用时充当降级视图——降级会显式标注，不冒充模型结论。
+ * 静态调用链仍在，它作为模型输入，并在 LLM 不可用时充当降级视图——降级会显式标注，不伪装成模型结论。
  *
  * 环节数、关联文件数都由 engine 侧校验（路径必须真实存在，行号必须落在文件范围内），前端不再二次猜测。
  * `caveats` 与 `uncovered` **不再上画布**（2026-10-16 用户判断：这类模型自述直接问 agent）——数据照旧留在产物里。
- * `flow.edges[]` 的 `origin`（static / code / inferred）仍是「这条边有多可核对」的分界，只在环节详情的抽屉里
+ * `flow.edges[]` 的 `origin`（static / code / inferred）仍是「这条边有多可核对」的分界，只运行时节详情的抽屉里
  * 以徽标出现，读法写在徽标自己的悬停里。
  */
 
@@ -88,7 +88,7 @@ export interface FlowSelection {
 }
 
 /**
-  回告给页面的读数：来源徽标、生成时间与「重新生成」都长在 `.map-viewbar` 上，
+  上报给页面的读数：来源徽标、生成时间与「重新生成」都长在 `.map-viewbar` 上，
   而这一趟取数只住在这里（流程生成是最贵的一次 LLM 调用），所以状态往外报一次，不做第二份真源。
   */
 export interface FlowStatus {
@@ -191,7 +191,7 @@ export function FlowMap({ repositoryId, analysis, index, visible, selectedStageO
     return () => { clearInterval(timer); };
   }, [loading]);
 
-  // 顶栏徽标要跟着这趟取数走：只保留最新闭包，effect 依赖仍按取数状态来（否则每次渲染都回告一遍）
+  // 顶栏徽标要跟着这趟取数走：只保留最新闭包，effect 依赖仍按取数状态来（否则每次渲染都上报一遍）
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
   useEffect(() => {

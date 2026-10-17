@@ -123,7 +123,7 @@ describe("LLM 工作日志", () => {
   /**
     重试读数（第三阶段刀 1 的前置）。日志包在重试层外面，一次逻辑调用只落一行，
     「第几次成的、每次跑了多久」只能由 `RetryLlmProvider` 挂在结果/错误上带出来——
-    没有这两格，「超时率」这个指标结构上就读不出来（§62）。
+    没有这这两个字段，「超时率」这个指标结构上就读不出来（§62）。
     */
   it("重试层带出来的 attempts 与 attemptMs 原样落行，并在控制台单行上屏", async () => {
     const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 2, attemptMs: [60_000, 1_500] })), "light");
@@ -143,7 +143,7 @@ describe("LLM 工作日志", () => {
     expect(logged.some((line) => line.includes("retry"))).toBe(false);
   });
 
-  it("最终失败也带次数；老形状的内层错误（没挂这两格）不硬造数字，缺就是缺", async () => {
+  it("最终失败也带次数；老形状的内层错误（没挂这这两个字段）不硬造数字，缺就是缺", async () => {
     const retried = new LoggingLlmProvider(fakeProvider(async () => {
       const error = new Error("LLM 请求超时（60000ms）");
       Object.defineProperty(error, "attempts", { value: 2, configurable: true });
@@ -160,7 +160,7 @@ describe("LLM 工作日志", () => {
   });
 
   it("按生产装配顺序（Logging 在 Retry 外面）走一遍：重试发生过，行里就读得出来", async () => {
-    // 单独测 Retry 或单独测 Logging 都证不了这一格能穿过去——生产装配是 Logging → Retry，
+    // 单独测 Retry 或单独测 Logging 都证不了这个字段能穿过去——生产装配是 Logging → Retry，
     // 读数要靠返回值/错误对象跨出那一层边界，所以这里按同一顺序组一次真的。
     let count = 0;
     const flaky: LlmProvider = {
@@ -224,7 +224,7 @@ describe("LLM 工作日志", () => {
     expect(entries[0].outbound.hash).toMatch(/^[0-9a-f]{12}$/);
   });
 
-  it("出境载荷指纹：正文差一个字就换哈希，工具结果与工具清单都算进去", () => {
+  it("出网载荷指纹：正文差一个字就换哈希，工具结果与工具清单都算进去", () => {
     const base = { system: "提示词", user: "问题" };
     const first = outboundFingerprint(base);
     expect(outboundFingerprint(base)).toEqual(first); // 同一次装配重跑两次必须给同一个指纹，否则没法核对

@@ -8,10 +8,10 @@ import type { JournalEvent } from "@codebase-tutor/shared";
 
   回答一个问题：**这台机器把哪些代码交给了谁**。两条线各答一半，靠 `traceId + scene` 关联：
   - `<仓>/.tutor/journal.jsonl` 的 `code_egress`（哪些文件、哪几行、多少字符、指纹、隐去过几处）
-    与 `file_read`（工具循环读到的内容在下一轮出门，同样算出境，带 `对端仓/` 前缀的就是跨仓）；
+    与 `file_read`（工具循环读到的内容在下一轮出门，同样算出网，带 `对端仓/` 前缀的就是跨仓）；
   - `~/.codebase-tutor/llm.log`（provider、model、token、载荷指纹；`actor` 这列新行恒 null，§64）。
 
-  两条口径必须说在前面，否则这张表会骗人：
+  两条口径必须说在前面，否则这张表会误导人：
   1. **后台任务（导入期的 L1 摘要、监听触发的重分析）没有 traceId**，两条线都记 null，
      所以那部分调用**不能按仓归属**——本仓的文件清单来自 journal（逐文件准确），
      而那批调用的 provider/token 只能给全局数。（按人对账那档随认证闸一起撤了，§64。）
@@ -46,7 +46,7 @@ interface FileStat {
   maxChars: number;
   totalChars: number;
   masked: number;
-  /** 有几段来自还没写「隐去」读数的旧行——这一格不是 0，是「无从判定」 */
+  /** 有几段来自还没写「隐去」读数的旧行——这个字段不是 0，是「无从判定」 */
   maskedUnknown: number;
   scenes: Set<string>;
   kinds: Set<string>;
@@ -59,20 +59,20 @@ function scalarOf(row: JournalEvent, key: string): string | number | undefined {
 }
 
 /**
-  「隐去处数」这一格从 2026-10-11（§43 入口过筛 + §45 出境清单）才开始写。
+  「隐去处数」这个字段从 2026-10-11（§43 入口过筛 + §45 出网清单）才开始写。
   journal 是 append-only 且没有行版本号，所以只能按日期判：**旧行的缺字段不等于「扫过且干净」**，
-  拿 0 冒充会把「我们没检查过」说成「检查过没命中」。
+  拿 0 伪装成会把「我们没检查过」说成「检查过没命中」。
   */
 const MASKED_SINCE = "2026-10-11";
 
-/** journal 的两条出境来源合并成一张清单：装配期登记的 `code_egress` + 工具循环的 `file_read`。 */
+/** journal 的两条出网来源合并成一张清单：装配期登记的 `code_egress` + 工具循环的 `file_read`。 */
 function egressRowsOf(events: JournalEvent[]): EgressRow[] {
   const rows: EgressRow[] = [];
   for (const event of events) {
     if (event.type === "code_egress") {
       const chars = Number(scalarOf(event, "chars") ?? 0);
-      // `masked` 这一格现在由落账方**总是**写（0 = 扫过且干净）；缺字段就是「那一路没扫」或写于今天之前，
-      // 二者都不能读成干净。落账方算的是**这一段文本**的哈希；`llm.log` 的 `outbound.hash` 是整串请求体的哈希，
+      // `masked` 这个字段现在由计入审计方**总是**写（0 = 扫过且干净）；缺字段就是「那一路没扫」或写于今天之前，
+      // 二者都不能读成干净。计入审计方算的是**这一段文本**的哈希；`llm.log` 的 `outbound.hash` 是整串请求体的哈希，
       // 两者没有包含关系，只能「本地重跑同一次装配、比那一段自己」——报表末尾那句核对就是这么写的。
       const maskedValue = scalarOf(event, "masked");
       const hashValue = scalarOf(event, "hash");
@@ -94,7 +94,7 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
       continue;
     }
     if (event.type !== "file_read") continue;
-    // 被拒与读失败的调用没拿到内容，也就没东西可出境
+    // 被拒与读失败的调用没拿到内容，也就没东西可出网
     if (event.payload.denied === true || typeof event.payload.error === "string") continue;
     const lines = Number(scalarOf(event, "lines") ?? 0);
     rows.push({
@@ -104,7 +104,7 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
       // 跨仓那档的 path 由工具层带上「对端仓名/」前缀（journal 只有 path 一个字段，不带仓名分不出是谁家的文件）
       path: String(scalarOf(event, "path") ?? "未记"),
       lines: `${lines} 行`,
-      // file_read 那行记的是行数不是字符数：这一格留 0（报表里显示为「未量」），不编一个字符数
+      // file_read 那行记的是行数不是字符数：这个字段留 0（报表里显示为「未量」），不编一个字符数
       chars: 0,
       // 工具循环那一档没有「这一段文本」的哈希可记（内容当时就进了下一轮请求，不在 journal 里），
       // 所以它不参与「比哈希」的核对——只有 code_egress 那段能逐段重跑比对
@@ -181,7 +181,7 @@ function main(): void {
 
   const events = readJournal(repoPath);
   if (!events.length) {
-    console.log(`（${repoPath}/.tutor/journal.jsonl 为空或不存在——这个仓还没有任何出境记录可查。）`);
+    console.log(`（${repoPath}/.tutor/journal.jsonl 为空或不存在——这个仓还没有任何出网记录可查。）`);
     return;
   }
   const allRows = egressRowsOf(events);
@@ -191,9 +191,9 @@ function main(): void {
   const background = allLlm.filter((row) => !row.traceId);
   const scoped = attributable;
   /**
-    窗口要**同时**掐清单。以前 `--since` 只过滤 `llm.log`，文件清单和「源码出境 N 段」
+    窗口要**同时**掐清单。以前 `--since` 只过滤 `llm.log`，文件清单和「源码出网 N 段」
     永远是全时的数，却印在写着「样本窗口」的那一行上——那是把假数报成真数。
-    （`--actor` 那一档随认证闸一起删了：新行的 `actor` 恒 null，留着就是一格永远为空的读数，§64。）
+    （`--actor` 那一档随认证闸一起删了：新行的 `actor` 恒 null，留着就是一个节点永远为空的读数，§64。）
     */
   const rows = allRows.filter((row) => !since || row.at >= since);
 
@@ -209,7 +209,7 @@ function main(): void {
     providers.set(key, bucket);
   }
   const scenesWithCalls = new Set(scoped.map((row) => row.scene));
-  // 工具循环读到的内容随同一 trace 的后续调用出门，所以「这一趟有没有源码出境」要把 tool-read 也算上：
+  // 工具循环读到的内容随同一 trace 的后续调用出门，所以「这一趟有没有源码出网」要把 tool-read 也算上：
   // 只按 code_egress 的 scene 判，会把「模型自己读了两页源码」的对话报成「没有清单」。
   const coveredScenes = new Set(rows.map((row) => row.scene));
   const toolTraces = new Set(rows.filter((row) => row.via === "tool-read" && row.traceId).map((row) => row.traceId as string));
@@ -236,20 +236,20 @@ function main(): void {
 
   console.log(`数据流审计 · ${repoPath}`);
   console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
-  console.log(`源码出境 ${num(rows.length)} 段，覆盖 ${num(files.length)} 个文件；` + (maskedTotal
+  console.log(`源码出网 ${num(rows.length)} 段，覆盖 ${num(files.length)} 个文件；` + (maskedTotal
     ? `其中 ${maskedTotal} 处疑似密钥在发出前被隐去。`
     : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段那一路压根没过这道筛——登记时没带「隐去」读数，不等于扫过且干净）` : ""}。\n`));
 
-  console.log("── 出境去向（按 provider · 只算能归属到本仓的调用）");
+  console.log("── 出网去向（按 provider · 只算能归属到本仓的调用）");
   if (!providers.size) console.log(`   （这个窗口里没有可归属的模型调用。${llmLogPath() && existsSync(llmLogPath() ?? "") ? "后台任务的调用不带 traceId，见下方说明。" : `llm.log 不存在或为空：${llmLogPath() ?? "未配落盘"}——去向表无从算起，这不等于「没有调用」。`}）`);
   for (const [name, bucket] of [...providers.entries()].sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(`   ${clip(name, 46).padEnd(46)} 调用 ${String(bucket.calls).padStart(4)} 次 · 输入 ${num(bucket.input)}（命中 ${num(bucket.cache)}）· 输出 ${num(bucket.output)}`);
   }
 
-  console.log("\n── 被看过的文件（Top " + Math.min(limit, files.length) + "，次数＝出境段数）");
+  console.log("\n── 被看过的文件（Top " + Math.min(limit, files.length) + "，次数＝出网段数）");
   console.log(`   ${"路径".padEnd(44)} ${"次数".padStart(5)} ${"最多字符".padStart(9)} ${"隐去".padStart(5)}  形态 · 场景`);
   for (const file of files.slice(0, limit)) {
-    // 工具循环那些行只记了行数没记字符数，这一格老实写「未量」，不拿 0 冒充「零字符出境」
+    // 工具循环那些行只记了行数没记字符数，这个字段老实写「未量」，不拿 0 伪装成「零字符出网」
     const chars = file.maxChars ? num(file.maxChars) : "未量";
     const masked = file.masked ? String(file.masked) : file.maskedUnknown ? "—" : "-";
     console.log(`   ${clip(file.path, 44).padEnd(44)} ${String(file.hits).padStart(5)} ${chars.padStart(9)} ${masked.padStart(5)}  ${clip([...file.kinds].join("/"), 24).padEnd(24)} ${[...file.scenes].join(",").slice(0, 46)}`);
@@ -271,7 +271,7 @@ function main(): void {
     console.log("   这一档的**文件清单仍然逐文件准确**（来自本仓 journal 的 code_egress），只有 provider/token 是全局数。");
   }
 
-  console.log(`\n── 有调用但没有源码出境清单的场景（${noInventory.length ? "下面这些送的是派生内容（路径、符号名、摘要、题面、判分要点），不是逐行源码原文——派生内容同样可能带出命名与结构，只是不在「段」这一档记账" : "无——每个有调用的场景都有源码清单（装配期摘录或工具读取）"}）`);
+  console.log(`\n── 有调用但没有源码出网清单的场景（${noInventory.length ? "下面这些送的是派生内容（路径、符号名、摘要、题面、判分要点），不是逐行源码原文——派生内容同样可能带出命名与结构，只是不在「段」这一档记账" : "无——每个有调用的场景都有源码清单（装配期摘录或工具读取）"}）`);
   if (noInventory.length) console.log(`   ${noInventory.join("  ")}`);
 
   const traced = rows.find((row) => row.hash);

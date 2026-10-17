@@ -653,7 +653,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- 响应式（原型是桌面固定档，这里保留真实用到的窄屏退让） ---------- */
-/* 只收窄固定列与对话栏缺省宽度，不动用户拖出来的 --rail-w / --file-pane-w */
+/* 只收窄固定列与对话栏默认宽度，不动用户拖出来的 --rail-w / --file-pane-w */
 @media (max-width: 1180px) { :root { --sidebar-w: 200px; --rail-w: 312px; --drawer-w: 320px; } .rail { font-size: var(--fs-12); } }
 @media (max-width: 960px) { :root { --sidebar-w: 184px; --sidebar-w-collapsed: 56px; --rail-w: 288px; --drawer-w: 300px; } }
 @media (max-width: 720px) {
@@ -669,7 +669,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
   .app .nav-item { justify-content: center; gap: 0; }
   .drawer { width: 100%; max-width: 100%; }
   .page-map, .page-teach, .page-practice { grid-template-columns: minmax(0, 1fr); }
-  /* 窄屏两栏折成一栏：收哪一格由 .pane-hidden-mobile 说了算，这里不再整块藏左栏 */
+  /* 窄屏两栏折成一栏：收哪个节点由 .pane-hidden-mobile 说了算，这里不再整块藏左栏 */
   .ws-pane.pane-hidden-mobile { display: none; }
   .col-resizer { display: none; }
   .mobile-switcher { display: flex; gap: 6px; padding: var(--sp-2) var(--sp-4); background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; }

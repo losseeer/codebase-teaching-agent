@@ -13,7 +13,7 @@ import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, type 
   「轻任务 / 教学对话」是**运行时角色**而非两份配置，见 buildLlmRuntimeProvider。
 
   密钥口径：apiKey 明文只存在于本模块的内存态与那个 0600 的文件里，**任何对外响应走 publicLlmSettings()**
-  （只有掩码），路由层拿不到明文就不可能顺手 spread 出去。
+  （只有掩码），路由层拿不到明文就不可能顺带 spread 出去。
   */
 export interface LlmRuntimeSettings {
   provider: string;
@@ -22,7 +22,7 @@ export interface LlmRuntimeSettings {
   apiKey: string;
   thinking: "auto" | ThinkingEffort;
   /**
-    三档单价的数值口径（币种不参与算术、键名 `Usd` 为历史遗留、命中价缺省按输入价计）以 `cost/cost.ts` 的 `Pricing` 为准，这里不复述。
+    三档单价的数值口径（币种不参与算术、键名 `Usd` 为历史遗留、命中价默认按输入价计）以 `cost/cost.ts` 的 `Pricing` 为准，这里不复述。
     放进这份配置而不是只留环境变量，是为了「改完立刻生效」：`cost.ts` 每次算账都现读这里，
     而环境变量那条路是模块加载时算一次的常量，非重启不可。空串 = 该项回落 `.env`（与 baseUrl 同一条规则）。
     */

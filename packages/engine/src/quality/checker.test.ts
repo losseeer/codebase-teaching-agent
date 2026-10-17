@@ -51,7 +51,7 @@ describe("锚点判据（#170：以前「名字出现在区间里」就被标成
 });
 
 describe("校验预算（#170：timeoutMs 以前只是装饰，只有 <1 会被读到）", () => {
-  it("timeoutMs=0 现在真的生效：一条都不跑，交回「跳过」", () => {
+  it("timeoutMs=0 现在真的生效：一条都不跑，返回「跳过」", () => {
     const report = verifyAnalysis(repo, [unit("src/ok.ts", "add")], root(), { timeoutMs: 0 });
     expect(report.micro).toHaveLength(0);
     expect(report.macro).toHaveLength(0);

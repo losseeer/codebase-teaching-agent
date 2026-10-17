@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, 
 
 /**
   可调宽度的栏 + 对话栏收起状态。这两个都是**用户偏好**，不是产品数据：
-  存 localStorage，读不到/读坏了就用缺省值，存储被禁（隐私模式）时功能照常、只是下次进来不记得。
+  存 localStorage，读不到/读坏了就用默认值，存储被禁（隐私模式）时功能照常、只是下次进来不记得。
   读写全兜住——与 App 里 workspace / 侧栏折叠那两处同一口径（这里一旦抛在渲染路径上就是白屏）。
 
   宽度存的是**像素**而不是比例：比例在「窗口变窄 + 侧栏收起」两种情况下会算出完全不同的栏宽，
@@ -55,7 +55,7 @@ function readLayout(): LayoutPrefs {
   try {
     raw = localStorage.getItem(LAYOUT_KEY);
   } catch {
-    return LAYOUT_DEFAULTS; // 存储不可用：本次会话照常工作，用缺省宽度
+    return LAYOUT_DEFAULTS; // 存储不可用：本次会话照常工作，用默认宽度
   }
   if (!raw) return LAYOUT_DEFAULTS;
   let parsed: unknown = null;
@@ -135,7 +135,7 @@ export function layoutVars(layout: LayoutPrefs): CSSProperties {
 
 /**
   一条可拖的竖向分隔条。**绝对定位**压在某一栏的左边界上（所以它不占栅格列——否则每个媒体查询都得跟着改列数）。
-  三种调法都给了：拖动、方向键（键盘可达，Shift 加速）、双击回到缺省。
+  三种调法都给了：拖动、方向键（键盘可达，Shift 加速）、双击回到默认。
   */
 export function ColumnResizer({ field, label, growOn }: { field: WidthField; label: string; growOn: "left" | "right" }): ReactElement {
   const [dragging, setDragging] = useState(false);
@@ -144,7 +144,7 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
   const width = useLayout()[field];
 
   /**
-    一次拖拽的全部生命周期都在这一个 effect 里：进入时上全局光标态、离开时一定摘掉。
+    一次拖拽的全部生命周期都在这一个 effect 里：进入时上全局光标态、离开时一定移除。
     ⚠️ 监听挂 `window` 而不是分隔条自己，也**不用 pointer capture**——
     拖出窗口、在浏览器边框外松手、中途切到别的 app 时，事件不会送回那个小条，
     于是「col-resize 光标 + 禁选中」会一直挂在 body 上（用户实测：指针明明不在分隔条上也是拖拽样式）。
@@ -188,13 +188,13 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label={`${label}宽度：拖动调节，或用左右方向键（按住 Shift 加速），双击回到缺省`}
+      aria-label={`${label}宽度：拖动调节，或用左右方向键（按住 Shift 加速），双击回到默认`}
       aria-valuenow={width}
       aria-valuemin={RANGES[field].min}
       aria-valuemax={RANGES[field].max}
       tabIndex={0}
       className={`col-resizer${dragging ? " dragging" : ""}`}
-      title={`${label} · ${width}px（拖动改宽，双击回缺省）`}
+      title={`${label} · ${width}px（拖动改宽，双击回默认）`}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       onDoubleClick={() => set(LAYOUT_DEFAULTS[field])}

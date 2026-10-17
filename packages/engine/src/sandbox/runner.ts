@@ -104,7 +104,7 @@ function planFor(language: SandboxLanguage, entry: string, memoryMb: number, too
   if (language === "python") {
     /**
       `-I` = 隔离模式：不吃 PYTHONPATH、不吃用户 site-packages、不吃环境变量。
-      内存这一格**在本机做不到**：macOS 拒不下调 `RLIMIT_AS`（实测 `ValueError: current limit exceeds maximum limit`，
+      内存这个节点**在本机做不到**：macOS 拒不下调 `RLIMIT_AS`（实测 `ValueError: current limit exceeds maximum limit`，
       即使当前是 unlimited），而 `RLIMIT_DATA` 在 macOS 上是空操作。所以这里试一次、失败就过——
       Python 的内存兜底只剩超时 + 整组 SIGKILL，`memoryGuarded` 会把这个缺口如实报出去，不假装封顶了。
     */

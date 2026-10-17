@@ -19,11 +19,11 @@ import { showToast } from "../modules/toast";
   - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
     早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
   - 右 「地图画布」：`.map-viewbar` 切两个视图（`.view-toggle`）——
-    「架构视图」= **分层全景**（`ArchOverview`）：一条系统边界 + 层序号导轨 + 只读方块，边不上画布；
+    「架构视图」= **分层全景**（`ArchOverview`）：一条系统边界 + 层序号导轨 + 只读节点，边不上画布；
     「流程视图」由 **LLM 生成**（`FlowMap`）：环节 = 一次执行经过的步骤，关联文件只在该环节的「节点详情」里展示，
     画布上不出现路径。课程树不上图（层级交给左侧目录与教学页），点击模块合成 CourseNode 走抽屉与地图线程。
-  - 花钱动作与流程「重新生成」同位：架构的「判一次分层」长在 viewbar 上，取数与产物却住在 `ArchOverview`，
-    所以确认、调用、回告都在这边（一次实现，不可用卡片那颗按钮也走它），完了 bump `archNonce` 让子组件重取。
+  - 花钱动作与流程「重新生成」同位：架构的「重新生成分层」长在 viewbar 上，取数与产物却住在 `ArchOverview`，
+    所以确认、调用、上报都在这边（一次实现，不可用卡片那颗按钮也走它），完了 bump `archNonce` 让子组件重取。
   - 节点详情是画布右侧的 `.drawer`（展开时 `.map-stage:has(.drawer)` 给画布让出宽度），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
     抽屉在架构视图里显示节点，在流程视图里显示环节、它的出边依据与关联文件。
   - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
@@ -88,26 +88,26 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
   /** 架构视图那个合成模块的文件清单：抽屉里「绑定到对话」要按同一份清单再绑一次（见 useScopedChat 的 scopePaths） */
   const [moduleScopePaths, setModuleScopePaths] = useState<string[]>([]);
-  /** 流程取数状态由 `FlowMap` 回告：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
+  /** 流程取数状态由 `FlowMap` 上报：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
   const [flowStatus, setFlowStatus] = useState<FlowStatus>(NO_FLOW_STATUS);
-  /** 架构视图的取数状态由 `ArchOverview` 回告：工具栏那枚徽标要说清「这几层是模型判的还是静态兜底」。 */
+  /** 架构视图的取数状态由 `ArchOverview` 上报：工具栏那枚徽标要说清「这几层是模型判的还是静态兜底」。 */
   const [archStatus, setArchStatus] = useState<ArchStatus>(NO_ARCH_STATUS);
   /** 人工修正落盘后要重取产物：这里只出一个自增号，取数住在子组件里。 */
   const [archNonce, setArchNonce] = useState(0);
-  /** 「判一次分层」在途：确认框之后的这段时间也要让按钮和徽标说真话（子组件的 loading 只覆盖它自己取数那段）。 */
+  /** 「重新生成分层」在途：确认框之后的这段时间也要让按钮和徽标如实显示（子组件的 loading 只覆盖它自己取数那段）。 */
   const [archRegening, setArchRegening] = useState(false);
   /** Agent 在对话里改了分层（`set_architecture`）时引擎会广播一帧；这边只认自己这个仓。 */
   useEffect(() => {
     const controller = new AbortController();
     subscribeServerEvents((event) => {
-      // 覆盖层落盘、重画提议、预览就绪、用户裁决——四类都只意味着一件事：这一格要重取
+      // 覆盖层落盘、重绘提议、预览就绪、用户裁决——四类都只意味着一件事：这个节点要重取
       if (!["architecture_updated", "redraft_requested", "diagram_preview", "diagram_replaced"].includes(event.type)) return;
       if (event.payload.repositoryId !== repositoryId) return;
       setArchNonce((value) => value + 1);
     }, controller.signal);
     return () => controller.abort();
   }, [repositoryId]);
-  /** 判一次分层是花钱动作：确认、调用、回告只留这一处（viewbar 那颗与画布「分层不可用」卡片上的那颗走同一条）。 */
+  /** 重新生成分层是花钱动作：确认、调用、上报只留这一处（viewbar 那颗与画布「分层不可用」卡片上的那颗走同一条）。 */
   const regenerateArch = (): void => {
     if (!window.confirm(ARCH_REGEN_CONFIRM)) return;
     setArchRegening(true);
@@ -156,7 +156,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
   }, [index]);
   /**
     节点的可见文件（本节点锚点 + 子孙锚点，按 path 去重、留第一次出现的锚点行号），
-    按「是入口 → 变更最多 → 行数最大」排。这一格取代了原先的两格：`下级节点（15）` 把同一文件里的
+    按「是入口 → 变更最多 → 行数最大」排。这个节点取代了原先的两个节点：`下级节点（15）` 把同一文件里的
     函数铺成 15 个平行条目，`源码锚点` 又按锚点重复列同一个文件——读者要的只是「这个模块先看哪几个文件」。
     */
   const coreFiles = useMemo(() => {
@@ -357,7 +357,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
                 <span
                   className={`badge ${flowStatus.source === "llm" ? "badge-info" : flowStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
                   title={`${flowStatus.source === "static"
-                    ? "LLM 未配置、预算触顶或调用失败时退回静态调用链——它不冒充模型结论"
+                    ? "LLM 未配置、预算已达上限或调用失败时退回静态调用链——它不伪装成模型结论"
                     : "环节与边由 LLM 依据静态证据生成；边级校验只降不升，声称 static 而对不上依赖图的降为 inferred"}${flowStatus.generatedAt ? ` · 生成时间 ${flowStatus.generatedAt}` : ""}`}
                 >
                   {`${flowStatus.loading ? "生成中" : flowStatus.source === "llm" ? "LLM 生成" : flowStatus.source === "static" ? "静态降级" : "未生成"}${flowStatus.generatedAt ? ` · ${stamp(flowStatus.generatedAt)}` : ""}`}
@@ -368,8 +368,8 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
               <>
                 <span
                   className={`badge ${archStatus.previewing || archStatus.pending ? "badge-warn" : archStatus.origin === "agent" || archStatus.source === "llm" ? "badge-info" : archStatus.source === "unavailable" ? "badge-warn" : "badge-neutral"}`}
-                  title={`层名与归层由模型判（要改在对话里让 agent 动）；方块怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.origin === "agent" ? "现在画这张是按对话重画并经你批准的，点画布上方那条横幅可恢复缺省。" : ""}${archStatus.reason ?? ""}`}
-                >{`${archStatus.previewing ? "预览中" : archStatus.pending ? "待你确认重画" : archStatus.origin === "agent" ? "重画那张" : archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${!archStatus.previewing && archStatus.source !== "unavailable" ? ` · ${archStatus.layers} 层` : ""}`}</span>
+                  title={`层名与归层由模型判（要改在对话里让 agent 动）；节点怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.origin === "agent" ? "现在画这张是按对话重绘并经你批准的，点画布上方那条横幅可恢复默认。" : ""}${archStatus.reason ?? ""}`}
+                >{`${archStatus.previewing ? "预览中" : archStatus.pending ? "待你确认重绘" : archStatus.origin === "agent" ? "重绘那张" : archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${!archStatus.previewing && archStatus.source !== "unavailable" ? ` · ${archStatus.layers} 层` : ""}`}</span>
                 <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
               </>
             )}
@@ -389,7 +389,7 @@ export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspa
                 disabled={archStatus.loading}
                 title={`重问一次模型怎么分层：${ARCH_REGEN_PRICE_NOTE}。边界外那一栏不变——它从来不是模型算的。`}
                 onClick={regenerateArch}
-              ><span className={archRegening ? "spin" : undefined} style={{ display: "inline-flex" }}><Icon name="rotate" size={13} /></span>{archRegening ? "分层中…" : "判一次分层"}</button>
+              ><span className={archRegening ? "spin" : undefined} style={{ display: "inline-flex" }}><Icon name="rotate" size={13} /></span>{archRegening ? "分层中…" : "重新生成分层"}</button>
             )}
             {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
             {drawer ? null : (

@@ -19,7 +19,7 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
 
 /**
   代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
-  - 左 `.teach-side`：教学模块（主干 / 设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
+  - 左 `.teach-side`：教学模块（主链路 / 基础设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
   - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位
   - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
 
@@ -129,7 +129,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
 
   // ⌘P / Ctrl+P 快速打开（原型源码面板的「⌘ P 搜索文件」）。
   // 三视图常驻挂载：本组件在非教学工作区也活着，监听器必须按当前视图开关——
-  // 否则在宏观设计/练习页按 ⌘P 会被这里 preventDefault 吞掉，还打开一个看不见的面板（切回教学页才发现它开着）。
+  // 否则在宏观设计/练习页按 ⌘P 会被这里 preventDefault 丢弃，还打开一个看不见的面板（切回教学页才发现它开着）。
   const [searchParams] = useSearchParams();
   const isActiveWorkspace = (searchParams.get("workspace") ?? "map") === "teaching";
   useEffect(() => {
@@ -182,7 +182,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     // 这里刻意不加 current 卸载标志——判据见上方 entryState 注释的 ②③
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
       .then((result) => {
-        // engine 在未配置 LLM / 预算触顶 / 主动判空 / 调用失败时都回空列表 —— 一律回落到模块自己的文件清单，
+        // engine 在未配置 LLM / 预算已达上限 / 主动判空 / 调用失败时都回空列表 —— 一律回落到模块自己的文件清单，
         // 但**为什么**回落由引擎的 reason 说明（几种情况的用户处置完全不同）
         const entries = result.source === "llm" ? result.entries : [];
         setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "files", entries: [], reason: result.reason } }));
@@ -197,7 +197,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   const moduleEntries = entryState[entryKey];
   /** 「打开过这个 tab、但请求还没落地」的那一帧也按等待渲染：否则先闪一下兜底文件清单再转 loading，看着像结果被换掉了。 */
   const entryPending = everVisible && !moduleEntries && Boolean(t.course);
-  /** 等待态 = 已有 loading 记录，或还没落账的那一帧（判据两处共用，别再各写一遍） */
+  /** 等待态 = 已有 loading 记录，或还没计入审计的那一帧（判据两处共用，别再各写一遍） */
   const entryWaiting = moduleEntries?.status === "loading" || entryPending;
   const visibleEntries: (ModuleEntry & { reason?: string })[] = moduleEntries?.status === "llm"
     ? moduleEntries.entries
@@ -212,7 +212,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     : entryWaiting
       ? "正在挑阅读顺序…"
       : moduleEntries?.reason ?? `按模块结构列出 ${moduleEntryFiles.length} 个文件`;
-  /** 正文只留「为什么是这份清单」的第一句；完整理由（触顶 / 未配置 / 判空 / 失败）进悬停——四种处置不同，不能糊成一个词。 */
+  /** 正文只留「为什么是这份清单」的第一句；完整理由（达到预算上限 / 未配置 / 判空 / 失败）进悬停——四种处置不同，不能糊成一个词。 */
   const entryNote = entryNoteFull.split(/[；，。(（]/)[0].slice(0, 14);
 
   /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——

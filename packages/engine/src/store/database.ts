@@ -14,7 +14,7 @@ const schemaVersion = 8;
 const nativeBinding = loadAddon() as unknown as string;
 
 /**
-  `getLatestFileSummaries` 的缺省行数上限，**同时导出给调用方做触顶判据**——
+  `getLatestFileSummaries` 的默认行数上限，**同时导出给调用方做达到预算上限判据**——
   两处各写一个 2000 的话，改一处就会让「读到上限」的告警永远不响（§37.6 那条「一份清单改了两处」的同型坑）。
 */
 export const LATEST_SUMMARY_LIMIT = 2_000;
@@ -114,7 +114,7 @@ export class TutorDatabase {
         payload TEXT NOT NULL,
         at INTEGER NOT NULL
       );
-      -- 被 agent 重画的图（见 store/diagram-artifacts.ts）。**刻意不住在 layer_cache 里**：
+      -- 被 agent 重绘的图（见 store/diagram-artifacts.ts）。**刻意不住在 layer_cache 里**：
       -- 那张表每次写入都按 at 无差别删掉 7 天前的行（LAYER_CACHE_MAX_AGE_MS），
       -- 而「用户点头替换的那张图」是用户数据，闲置九十天后被无声清掉就等于把他的决定删了。
       CREATE TABLE IF NOT EXISTS diagram_artifact (
@@ -312,7 +312,7 @@ export class TutorDatabase {
 
     `at` 是毫秒时间戳，语义是「最后一次被用到」：TTL 按闲置时长算，命中方应回写续期（`touchLayerCache`）。
     每仓一个 DB 文件，所以这张表天然只装本仓的条目，不涉及跨仓清理；
-    旧键（输入变了）永远不会再被命中，靠 `putLayerCache` 顺手按龄修剪兜底，防止无限累积。
+    旧键（输入变了）永远不会再被命中，靠 `putLayerCache` 顺带按龄修剪兜底，防止无限累积。
   */
   getLayerCache<T>(key: string): { value: T; at: number } | undefined {
     const row = this.db.prepare("SELECT payload, at FROM layer_cache WHERE cache_key = ?").get(key) as { payload: string; at: number } | undefined;
@@ -335,10 +335,10 @@ export class TutorDatabase {
   }
 
   /**
-    被 agent 重画的图（`store/diagram-artifacts.ts` 是唯一读写口）。一个仓每种图最多三行：
-    `pending`（agent 提议重画，等用户点头才花钱）、`preview`（新图画好了，叠在画布上等替换或保持）、
-    `committed`（用户已批准替换，读侧就拿它当这张图）。缺省产物不在这里——它仍由 `layer_cache` 那份现算现叠，
-    删掉 `committed` 这一行缺省就回来了，所以「恢复缺省」不可能误删模型的判层。
+    被 agent 重绘的图（`store/diagram-artifacts.ts` 是唯一读写口）。一个仓每种图最多三行：
+    `pending`（agent 提议重绘，等用户点头才花钱）、`preview`（新图画好了，叠在画布上等替换或保持）、
+    `committed`（用户已批准替换，读侧就拿它当这张图）。默认产物不在这里——它仍由 `layer_cache` 那份实时计算实时叠加，
+    删掉 `committed` 这一行默认就回来了，所以「恢复默认」不可能误删模型的判层。
   */
   getDiagramArtifact<T>(repositoryId: string, kind: string, status: string): { value: T; purpose: string; at: number } | undefined {
     const row = this.db.prepare("SELECT payload, purpose, at FROM diagram_artifact WHERE repository_id = ? AND kind = ? AND status = ?").get(repositoryId, kind, status) as

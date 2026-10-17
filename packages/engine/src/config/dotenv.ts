@@ -27,7 +27,7 @@ export function parseDotEnv(text: string): Record<string, string> {
       value = value.slice(1, -1);
       if (quote === `"`) value = value.replace(/\\n/g, "\n").replace(/\\"/g, `"`).replace(/\\\\/g, "\\");
     } else {
-      // 未加引号的值：去掉行内 # 注释（# 前须有空格，避免误伤 URL 里的 #fragment）
+      // 未加引号的值：去掉行内 # 注释（# 前须有空格，避免错误影响 URL 里的 #fragment）
       const hash = value.indexOf(" #");
       if (hash >= 0) value = value.slice(0, hash).trim();
     }

@@ -51,7 +51,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   // 读流与重连在 `subscribeServerEvents` 里（原来用 EventSource，但它带不了认证头，闸门一开这条就静默断流）。
   // 5s 轮询是兜底——事件流断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
   const jobId = job?.id;
-  /** 终态判定一处收口：轮询/按钮禁用都用它，不再各写一份 ["completed","failed"] */
+  /** 终态判定一处收尾：轮询/按钮禁用都用它，不再各写一份 ["completed","failed"] */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
   const jobActive = Boolean(job && !isSettled(job.phase));
   useEffect(() => {

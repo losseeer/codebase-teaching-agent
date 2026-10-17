@@ -73,8 +73,8 @@ export function createSession(repositoryId: string, courseNodeId: string, settin
 export async function respondWithProvider(session: TutorSession, node: CourseNode, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   const policy = policyFor(session.settings);
   /**
-    上下文里放了哪几段仓内源码——由 `assembleContext` 顺手登记，**发一次记一次**：
-    落账点贴在发送前、不放在装配里（理由见 `harness/context.ts` 的 egress 注释）。
+    上下文里放了哪几段仓内源码——由 `assembleContext` 顺带登记，**发一次记一次**：
+    计入审计点贴在发送前、不放在装配里（理由见 `harness/context.ts` 的 egress 注释）。
     */
   const egress: EgressCollector = [];
   const context = assembleContext({

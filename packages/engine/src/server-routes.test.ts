@@ -23,7 +23,7 @@ import { appendMessages, createThread, readMessages } from "./store/chat-store.j
 
   每条路径断言三件事：
   1. 不抛错：HTTP 200，且 SSE 流里没有 `error` 事件；
-  2. `turn_invariant` 一定落 journal（合格也记，分母才在环内成立）；
+  2. `turn_invariant` 一定落 journal（合格也记，分母才运行时内成立）；
   3. 三处文本同一份：响应/回放正文 == chat_message 正文 == journal 的 `turn_text.answer`。
 
   二、`GET /source` 的取文件边界与 `POST /journal` 的入参守卫：这两件事的判据都跨在**挂载态**上
@@ -78,8 +78,8 @@ async function fakeFetch(_url: unknown, init?: { body?: string }): Promise<Respo
     sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
   } catch { /* 非 JSON 的请求体不进这份清单 */ }
   const text = replyFor(raw);
-  // `@@tool 工具名 {json}` 这一格脚本让假 provider 回一次工具调用：副作用工具**实际被拒的是什么**从此能被端到端验，
-  // 不用只停在「清单里有这一格」
+  // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具**实际被拒的是什么**从此能被端到端验，
+  // 不用只停在「清单里有这一项」
   const call = /^@@tool (\S+) (.*)$/s.exec(text);
   const payload = {
     choices: [{ message: call ? { content: "", tool_calls: [{ id: `call_${fetchCalls}`, type: "function", function: { name: call[1], arguments: call[2] } }] } : { content: text }, finish_reason: call ? "tool_calls" : "stop" }],
@@ -267,7 +267,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(response.statusCode).toBe(200);
     const call = sentTools[0];
     expect(call?.names, "画布是只读的，改图只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_architecture");
-    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和格子 id，不然只能反问或编 id").toContain("架构现场");
+    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id id，不然只能反问或编 id").toContain("架构现场");
     expect(call?.raw).toContain("现存人工修正");
     expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
 
@@ -292,13 +292,13 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("停止生成：aborted 帧顶掉 done、正文不落库，journal 只留一行 turn_aborted", async () => {
+  it("停止生成：aborted 帧取代 done、正文不落库，journal 只留一行 turn_aborted", async () => {
     // 让 LLM 在途 300ms，好赶在它回来之前打「停止」——这一条测的是路由收尾的分诊，不是 registry 的中止本身
     scripted = [OK_REPLY];
     holdMs = 300;
     const threadId = await newThread("map", "中止线程");
     const turnId = "abort-test-turn"; // 8~64 位 URL-safe，与 GUI 的 crypto.randomUUID 同一档
-    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "这句话会被掐掉", threadId, turnId } });
+    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "这句话会被中止", threadId, turnId } });
     await new Promise((resolve) => setTimeout(resolve, 60)); // 让回合登记上再打停止
     const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
     expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
@@ -314,7 +314,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     const aborted = lastEvent("turn_aborted");
     expect(aborted.payload).toMatchObject({ scene: "map_chat", turn_id: turnId, aborted_by: "user_stop" });
     expect(aborted.sessionId).toBe(threadId);
-    // 作废的回合没有成品：库里既没有助手正文，也不该有这一轮的 turn_text（否则 GUI 回来会看到一条自己掐掉的回复）
+    // 作废的回合没有成品：库里既没有助手正文，也不该有这一轮的 turn_text（否则 GUI 回来会看到一条自己中止的回复）
     expect(readMessages(repoDir, threadId).some((message) => message.role === "assistant")).toBe(false);
     expect(eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
   });
@@ -379,7 +379,7 @@ describe("教学作用域（SSE）", () => {
     const applicable = String(invariant.payload.applicable);
     expect(applicable).toContain("reference-grounding");
     expect(applicable).toContain("anchor-binding");
-    // socratic-question 这条尺子随教学状态机于 2026-10-14 删除（判据吃 stage 与本轮动作）
+    // socratic-question 这条度量随教学状态机于 2026-10-14 删除（判据吃 stage 与本轮动作）
     expect(applicable).not.toContain("socratic-question");
     expect(invariant.payload.failed ?? null).toBe(null);
     expect(invariant.sessionId).toBe(sessionId);
@@ -405,7 +405,7 @@ describe("教学作用域（SSE）", () => {
     expect(lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("teach：通俗档不再判「点名标识符」，引用照判（档位只在环内生效才算数）", async () => {
+  it("teach：通俗档不再判「点名标识符」，引用照判（档位只运行时内生效才算数）", async () => {
     const sessionId = await openSession({ style: 80 });
     const answer = `这一步就是把请求交给注册表，你先看 ${MAIN_FILE}:3 那一行？`;
     scripted = [answer];
@@ -421,7 +421,7 @@ describe("教学作用域（SSE）", () => {
   });
 });
 
-/** 语言画像：架构视图要能说清「这条边有多硬」，而这份口径只能读侧现算。 */
+/** 语言画像：架构视图要能说清「这条边有多硬」，而这份口径只能读侧实时计算。 */
 describe("GET /analysis 附带的语言画像", () => {
   it("响应带本仓语言分布与能力档，但落库产物一字未改（不进缓存键）", async () => {
     const callsBefore = fetchCalls;
@@ -435,7 +435,7 @@ describe("GET /analysis 附带的语言画像", () => {
     expect(row!.inDependencyGraph).toBe(true);
     // 档直接从共享表来：界面不许自己判语言
     expect(row!.capabilities.cells.dependencyEdge).toBe("exact");
-    // 旧产物的图没有 parseBackend → 按 regex 认，符号抽取那一格不能因此被说成语法树结果
+    // 旧产物的图没有 parseBackend → 按 regex 认，符号抽取那个字段不能因此被说成语法树结果
     expect(body.languageProfile!.parseBackend).toBe("regex");
 
     // 关键一条：响应里多了字段，库里那份 analysis 不能有——它是缓存键的输入，写回去就等于给全仓重烧开票
@@ -556,7 +556,7 @@ describe("POST /journal 的入参守卫", () => {
     expect((unknown.json() as { reason?: string }).reason).toBe("unknown_event");
   });
 
-  it("界面侧那 10 类照常能写（收紧审计线不能顺手把可观测性弄丢）", async () => {
+  it("界面侧那 10 类照常能写（收紧审计线不能顺带把可观测性弄丢）", async () => {
     for (const type of UI_JOURNAL_EVENTS) {
       const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/journal`, payload: { type, payload: { where: "/api/x" } } });
       expect(response.statusCode, `${type} 是界面侧类型`).toBe(201);
@@ -609,14 +609,14 @@ describe("未挂载仓库的线程仍可定位", () => {
 /**
   预算闸门对**付费分支**的放行口径：`monthlyBudgetUsd` 是这产品唯一的省钱开关，调小却不拦就是
   账单照着「没预算」的样子继续走（同族事故：闸门判据散在几处、各写各的，改一处漏一处）。
-  这条放在文件末尾，因为它改的是**落库预算**——前面的用例都按缺省预算跑；
-  全程零 token：被拒的那一支根本不该打到模型上，靠 `fetchCalls` 不增加来钉死。
+  这条放在文件末尾，因为它改的是**落库预算**——前面的用例都按默认预算跑；
+  全程零 token：被拒的那一支根本不该打到模型上，靠 `fetchCalls` 不增加来硬性约束。
   */
 /**
   代码题的题型闸门（刀 2）。**出题与判分的端到端不在这一层测**（`src/exercises/code-generate.test.ts`
   11 例已经用真沙箱跑通了「假 provider 交 harness → 两跑自证 → 交卷判分」全链）：
   这条路由要过就得依赖挂载中的 analysis，而前面用例往 repoDir 写过文件会触发后台重索引、把手搓产物换掉，
-  加等待只能买到 flaky，买不到保证。留确定性的那一格：旧题型必须被闸门拦下。
+  加等待只能买到 flaky，买不到保证。只留确定性的那一条：旧题型必须被闸门拦下。
 */
 describe("代码题走通练习路由", () => {
   it("旧题型 output_prediction 已从题型闸门里退出：请求它拿 400，而不是静默出另一道题", async () => {
@@ -626,12 +626,12 @@ describe("代码题走通练习路由", () => {
   });
 });
 
-describe("预算触顶时不放行付费分支", () => {
+describe("预算已达上限时不放行付费分支", () => {
   it("预算 0 ⇒ LLM 出题被拒且一次模型调用都没发生；把预算调回去闸门就翻回放行", async () => {
     const closed = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
     expect(closed.statusCode).toBe(200);
     const closedBody = closed.json() as { mode: string; settings: { monthlyBudgetUsd: number } };
-    expect(closedBody.settings.monthlyBudgetUsd, "预算 0 要如实回读，不能被当成「没给」而回落缺省").toBe(0);
+    expect(closedBody.settings.monthlyBudgetUsd, "预算 0 要如实回读，不能被当成「没给」而回落默认").toBe(0);
     // 0 预算、一分钱没花仍是 degraded：闸门判的是「已花 ≥ 预算」，不是「还剩很多」
     expect(closedBody.mode).toBe("degraded");
 
@@ -639,7 +639,7 @@ describe("预算触顶时不放行付费分支", () => {
     const refused = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/exercises`, payload: { family: "llm", tag: "依赖注入" } });
     expect(refused.statusCode).toBe(422);
     expect(String((refused.json() as { error: string }).error)).toContain("预算");
-    expect(fetchCalls, "触顶后不该把请求打到模型上").toBe(callsBefore);
+    expect(fetchCalls, "达到预算上限后不该把请求打到模型上").toBe(callsBefore);
 
     // 对照组：同一套运行时设置、只是预算不是 0 ⇒ 闸门翻回放行（证明上面那句 422 来自闸门，不是「没配模型」）
     const reopened = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
@@ -647,10 +647,10 @@ describe("预算触顶时不放行付费分支", () => {
   });
 
   /**
-    问答回合与 map/practice 共用同一条闸门：触顶时**开火前就 422**，不再回一段本地文案
+    问答回合与 map/practice 共用同一条闸门：达到预算上限时**开火前就 422**，不再回一段本地文案
     （那段文案是教学状态机造的，阶梯已于 2026-10-14 撤掉）。所以这一轮的账面是「什么都没发生」。
     */
-  it("teach 触顶回合：拒在开火前，一次模型调用都不打、一行账都不记", async () => {
+  it("teach 达到预算上限回合：拒在开火前，一次模型调用都不打、一行账都不记", async () => {
     const closed = await app.inject({ method: "PUT", url: `/api/repositories/${repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
     expect((closed.json() as { mode: string }).mode).toBe("degraded");
     const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
@@ -660,7 +660,7 @@ describe("预算触顶时不放行付费分支", () => {
     const response = await app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "这一节我没看懂" } });
     expect(response.statusCode).toBe(422);
     expect(String((response.json() as { error: string }).error)).toContain("预算");
-    expect(fetchCalls, "触顶后这一轮不该打到模型上").toBe(callsBefore);
+    expect(fetchCalls, "达到预算上限后这一轮不该打到模型上").toBe(callsBefore);
     // 没开火就没有账：这一轮既不进 token_usage 也不进 turn_text，成本页的「计费回合」不必再减降级行
     expect(eventsOf("token_usage").filter((event) => event.sessionId === sessionId)).toEqual([]);
     expect(eventsOf("turn_text").filter((event) => event.sessionId === sessionId)).toEqual([]);
@@ -739,25 +739,25 @@ describe("跨仓工具面随地址簿变", () => {
   });
 });
 /**
-  源码出境清单（`code_egress`，企业化第 3 条）。这条线只有打真路由才算验过——
+  源码出网清单（`code_egress`，企业化第 3 条）。这条线只有打真路由才算验过——
   它要同时证明三件事，缺一件就是报表上看不出来的错：
-  1. **装配里真放了源码的那次调用才落账**，且一一对得上形态（锚点摘录 / 整文件切片 / 流程窗口 / 出题摘录）；
+  1. **装配里真放了源码的那次调用才计入审计**，且一一对得上形态（锚点摘录 / 整文件切片 / 流程窗口 / 出题摘录）；
   2. **行里有指纹而没有正文**——审计线自己不能变成第二个泄露面（`.tutor/` 是随仓可带走的东西）；
   3. 同一段代码在**动作提议与措辞两次调用里各出一次门**，就记两条，不合并成一条好看的数。
   零 token：fetch 仍被 stub 到 127.0.0.1:9。
   */
-describe("源码出境清单", () => {
+describe("源码出网清单", () => {
   const egress = () => eventsOf("code_egress");
   const sentFields = (row: JournalEvent) => Object.keys(row.payload).sort();
 
-  it("宏观设计回合：锚点摘录逐段落账，带线程 id，且不含源码正文", async () => {
+  it("宏观设计回合：锚点摘录逐段计入审计，带线程 id，且不含源码正文", async () => {
     const before = egress().length;
-    const threadId = await newThread("map", "出境线程");
+    const threadId = await newThread("map", "出网线程");
     const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这一节先看哪里？", threadId, nodeId: "unit-1" } });
     expect(response.statusCode).toBe(200);
 
     const rows = egress().slice(before);
-    expect(rows.length, "锚点附近的源码摘录应逐段入账").toBeGreaterThan(0);
+    expect(rows.length, "锚点附近的源码摘录应逐段记入审计").toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.payload).toMatchObject({ scene: "map.chat", kind: "anchor-excerpt", path: MAIN_FILE });
       expect(String(row.payload.hash)).toMatch(/^[0-9a-f]{12}$/);
@@ -769,15 +769,15 @@ describe("源码出境清单", () => {
     expect(sentFields(rows[0])).toEqual(["chars", "hash", "kind", "lines", "path", "scene"]);
   });
 
-  it("装配里没有源码时一行都不落（文件清单是派生产物，不算源码出境）", async () => {
+  it("装配里没有源码时一行都不落（文件清单是派生产物，不算源码出网）", async () => {
     const before = egress().length;
-    const threadId = await newThread("map", "无源码出境线程");
+    const threadId = await newThread("map", "无源码出网线程");
     const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这个项目整体是做什么的？", threadId } });
     expect(response.statusCode).toBe(200);
     expect(egress().slice(before)).toEqual([]);
   });
 
-  it("教学回合：只剩措辞那一趟调用，同一段摘录就只记一次（撤掉动作提议前的两次出境已成历史）", async () => {
+  it("教学回合：只剩措辞那一趟调用，同一段摘录就只记一次（撤掉动作提议前的两次出网已成历史）", async () => {
     const created = await app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId, courseNodeId: "unit-1" } });
     const sessionId = (created.json() as { session: { id: string } }).session.id;
     usedThreads.add(sessionId);
@@ -798,11 +798,11 @@ describe("源码出境清单", () => {
 });
 
 /**
-  上面那两条出境用例在整包并行时偶发拿到 0 行（#163）。差别不在出境代码，而在**挂载中的产物被换掉了**：
+  上面那两条出网用例在整包并行时偶发拿到 0 行（#163）。差别不在出网代码，而在**挂载中的产物被换掉了**：
   本文件的密钥用例往仓里写过 `.env` 与 `credentials.json`，而监听层当时的判据是「非忽略、非产物路径的改动就算源码改动」，
-  于是那两次写入各自排了一轮全量重分析（450ms 防抖 + 扫描重算），产物里的 `unit-1` 锚点被真实扫描结果顶掉——
-  出境装配读不到摘录，回合作 200 但一行账都没有。快慢机器上「重分析落到出境用例之前还是之后」不同 ⇒ 同一条用例两种结果。
-  收口后的口径：**只有「可能改变收录集」的改动才叫醒重分析**（收录判据见 indexer 的 isIngestedPath）。
+  于是那两次写入各自排了一轮全量重分析（450ms 防抖 + 扫描重算），产物里的 `unit-1` 锚点被真实扫描结果取代——
+  出网装配读不到摘录，回合作 200 但一行账都没有。快慢机器上「重分析落到出网用例之前还是之后」不同 ⇒ 同一条用例两种结果。
+  收尾后的口径：**只有「可能改变收录集」的改动才叫醒重分析**（收录判据见 indexer 的 isIngestedPath）。
 */
 describe("非收录文件的写入不该换掉挂载中的产物", () => {
   it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
@@ -841,7 +841,7 @@ describe("来源闸：默认只服务本机浏览器", () => {
     expect(refused.payload).not.toContain("// line 1");
   });
 
-  it("非可信来源改不动出境端点：403 之外更要紧的是**没执行**", async () => {
+  it("非可信来源改不动出网端点：403 之外更要紧的是**没执行**", async () => {
     const before = (await app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { baseUrl?: string };
     const refused = await fromEvil("PUT", "/api/llm/settings", { baseUrl: "http://evil.example:9/v1" });
     expect(refused.statusCode).toBe(403);
@@ -900,7 +900,7 @@ describe("编辑期免打扰与沙箱重探", () => {
     app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/watch`, payload: { paused: false } });
   });
 
-  it("挂起 → 地址簿读数跟着变 → 恢复；这条路由不会顺手重分析", async () => {
+  it("挂起 → 地址簿读数跟着变 → 恢复；这条路由不会顺带重分析", async () => {
     const before = (await app.inject({ method: "GET", url: "/api/repositories" })).json() as { repositories: { repositoryId: string; watchPaused?: boolean }[] };
     expect(before.repositories.find((item) => item.repositoryId === repositoryId)?.watchPaused, "前提：默认没有挂起").toBeUndefined();
 
@@ -949,7 +949,7 @@ describe("编辑期免打扰与沙箱重探", () => {
 
 /**
   架构视图这条新链路的路由级验收（分层产物 + 覆盖层）。为什么必须打到路由：
-  `/course` 与 `/architecture` 要在现算完 tier 之后叠**同一份**人工覆盖层——
+  `/course` 与 `/architecture` 要在实时计算完 tier 之后叠**同一份**人工覆盖层——
   两条出口的叠放顺序或来源差一点，用户拖完模块、切个 tab 就看到模块回到原位，
   而这种事各测各的单测永远发现不了。零 token：假 provider 仍指向 127.0.0.1:9。
 */
@@ -962,7 +962,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(sentTools.length, "读侧不许自己发一发：否则「打开画布」这个动作就静默产生一笔没人确认的钱").toBe(coldCalls);
     expect(cold.source).toBe("unavailable");
     expect(cold.unavailableReason).toBe("not_judged");
-    expect(cold.layers, "没判过就一格都不画：以前这里塞的是按结构角色分的三层").toEqual([]);
+    expect(cold.layers, "没判过就一个节点都不画：以前这里塞的是按结构角色分的三层").toEqual([]);
     expect(cold.reason).toContain("还没判过层");
     expect(cold.usage).toBeUndefined();
 
@@ -989,7 +989,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(afterBad.source).toBe("unavailable");
 
     // ④ 干净的一份判层落盘后，读侧命中缓存：同一笔钱不被计两次
-    //    清单只有 `module:src` 一格：另一个模块（docs/design.md）没人引用、入口也走不到，压缩那一刀已经把它删了
+    //    清单只有 `module:src` 一个节点：另一个模块（docs/design.md）没人引用、入口也走不到，压缩那处改动已经把它删了
     scripted = [JSON.stringify({ layers: [{ name: "接入", duty: "把请求收进来", modules: ["module:src"] }] })];
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/architecture/regenerate` });
     expect(sentTools.length).toBe(coldCalls + 2);
@@ -998,40 +998,40 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(hit.source).toBe("llm");
     expect(hit.usage, "命中缓存不报用量").toBeUndefined();
     expect(hit.layers.map((layer) => layer.name)).toEqual(["接入"]);
-    expect(hit.blocks?.map((block) => block.id), "方块清单是读的时候现算的，命中原判也照样带上").toEqual(["module:src"]);
-    expect(hit.sideModules, "藏掉几格要有读数，不然界面与产物两头都问不出「这是全部还是筛过的」").toBe(1);
-    expect(JSON.stringify(hit.blocks), "旁证不该连累付费载荷").not.toContain("module:docs");
+    expect(hit.blocks?.map((block) => block.id), "节点清单是读的时候实时计算的，命中原判也照样带上").toEqual(["module:src"]);
+    expect(hit.sideModules, "藏掉几个节点要有读数，不然界面与产物两头都问不出「这是全部还是筛过的」").toBe(1);
+    expect(JSON.stringify(hit.blocks), "孤立节点不该连累付费载荷").not.toContain("module:docs");
 
-    // ⑤ 被藏的那一格也能靠一次修正回到图上（agent 说「这个文档不算旁证」的那条出口）
+    // ⑤ 被藏的那个节点也能靠一次修正回到图上（agent 说「这个文档不算孤立节点」的那条出口）
     const applied = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:docs", layer: "接入" }, via: "agent" } });
     expect(applied.statusCode, "把模块挪进现有层要写成功（失败原因看 response）").toBe(200);
     const rejected = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:src", layer: "图上没有的这一层" }, via: "agent" } });
     expect(rejected.statusCode).toBe(422);
     const body = rejected.json() as { text: string; error?: string };
-    expect(body.error, "拒写理由要同时进 `error`：GUI 的 fetch 封装只认这一格，不然用户只看到一句通用的「没送达」").toBe(body.text);
+    expect(body.error, "拒写理由要同时进 `error`：GUI 的 fetch 封装只认这个字段，不然用户只看到一句通用的「没送达」").toBe(body.text);
     const dragged = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
-    expect(sentTools.length, "挪一下不是重判的理由：这一格翻键就等于每次修正 ¥0.02").toBe(coldCalls + 2);
+    expect(sentTools.length, "挪一下不是重判的理由：为此翻缓存键就等于每次修正 ¥0.02 ¥0.02").toBe(coldCalls + 2);
     expect(dragged.source).toBe("llm");
-    expect(dragged.layers.map((layer) => [layer.name, layer.moduleIds]), "原判只有一格，挪进来的那格跟着它").toEqual([["接入", ["module:src", "module:docs"]]]);
-    // 撤掉修正：那格重新被藏起来，读侧回到原判，同样不发请求
+    expect(dragged.layers.map((layer) => [layer.name, layer.moduleIds]), "原判只有一个节点，挪进来的那个节点跟着它").toEqual([["接入", ["module:src", "module:docs"]]]);
+    // 撤掉修正：那个节点重新被藏起来，读侧回到原判，同样不发请求
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "reset", module: "module:docs" }, via: "agent" } });
     const restored = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan;
     expect(sentTools.length).toBe(coldCalls + 2);
     expect(restored.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src"]]]);
-    expect(restored.blocks?.map((block) => block.id), "方块清单是算出来的，判没判都在").toEqual(["module:src"]);
+    expect(restored.blocks?.map((block) => block.id), "节点清单是算出来的，判没判都在").toEqual(["module:src"]);
 
     // ⑥ 重判换了层名：落不了地的修正必须说出来（以前是一条无声的 continue）
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "rename_layer", from: "接入", to: "入口层" }, via: "agent" } });
     scripted = [JSON.stringify({ layers: [{ name: "接口与契约", duty: "对外与形状", modules: ["module:src"] }] })];
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/architecture/regenerate` });
     const stale = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as Plan & { lostOverrides?: { kind: string; module?: string; layer?: string; from?: string }[] };
-    expect(sentTools.length, "失效读数是读的时候现算的，不该为它多发一发").toBe(coldCalls + 3);
+    expect(sentTools.length, "失效读数是读的时候实时计算的，不该为它多发一发").toBe(coldCalls + 3);
     expect(stale.lostOverrides, "「接入」这个旧层名重判后没了 ⇒ 那次改名落空，要如实报").toEqual([{ kind: "rename_layer", from: "接入" }]);
     expect(stale.layers.map((layer) => layer.name), "落空就不动模块：只留模型判的那一层").toEqual(["接口与契约"]);
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays/apply`, payload: { intent: { kind: "reset", layerRename: "接入" }, via: "agent" } });
   });
 
-  it("覆盖层写进去后 /course 看得见，撤掉之后回到引擎原判那一格", async () => {
+  it("覆盖层写进去后 /course 看得见，撤掉之后回到引擎原判的那一档", async () => {
     const patched = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/overlays`, payload: { modules: { tier: { "module:src": "core" } }, architecture: { moduleLayer: { "module:docs": "接入" } } } });
     expect(patched.statusCode).toBe(200);
     const body = patched.json() as { overlays: { modules?: { tier?: Record<string, string> }; architecture?: { moduleLayer?: Record<string, string> } }; counts: { modules: number; layers: number } };
@@ -1047,7 +1047,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(removed.statusCode).toBe(200);
     expect((removed.json() as { counts: unknown }).counts).toEqual({ modules: 0, layers: 0 });
     const read = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/overlays` })).json() as { overlays: { modules?: { tier?: Record<string, string> } } };
-    expect(read.overlays.modules?.tier ?? {}, "撤档要真删掉那一格，不能留个空值").not.toHaveProperty("module:src");
+    expect(read.overlays.modules?.tier ?? {}, "撤档要真删掉那条记录，不能留个空值").not.toHaveProperty("module:src");
   });
 });
 
@@ -1057,7 +1057,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
   零 token：假 provider 照样指向 127.0.0.1:9，被 stub 的 fetch 接住。
 */
 describe("推荐入口：文档不进候选清单", () => {
-  it("文档在课程树上、却不在出境载荷里；模型回推它的 id 也不会被路由复活", async () => {
+  it("文档在课程树上、却不在出网载荷里；模型回推它的 id 也不会被路由复活", async () => {
     const tree = (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/course` })).payload;
     expect(tree, "前提：fixture 里得有那个文档节点，否则下面的「不含」是空的通过").toContain("docs/design.md");
 
@@ -1066,12 +1066,12 @@ describe("推荐入口：文档不进候选清单", () => {
     const response = await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent("设计文档")}` });
     expect(response.statusCode).toBe(200);
     const body = response.json() as { entries: { id: string; path: string }[]; source: string };
-    // 模型按旧习惯先推文档：池子里没有这个 id，路由只交回代码那条，而不是替它把文档复活
+    // 模型按旧习惯先推文档：池子里没有这个 id，路由只返回代码那条，而不是替它把文档复活
     expect(body.entries.map((entry) => entry.id)).toEqual(["unit-1"]);
     expect(body.source).toBe("llm");
 
     const outbound = sentTools.slice(outboundBefore).map((call) => call.raw).join("\n");
-    expect(outbound, "文档连候选都不是：不该进过一次出境载荷").not.toContain("docs/design.md");
+    expect(outbound, "文档连候选都不是：不该进过一次出网载荷").not.toContain("docs/design.md");
     expect(outbound).toContain(MAIN_FILE);
     // 翻译层的词表同样来自池子：文档路径切出来的 design/md 不该进 repoVocabulary
     expect(sentTools.slice(outboundBefore)[0].raw).not.toContain('"md"');
@@ -1079,10 +1079,10 @@ describe("推荐入口：文档不进候选清单", () => {
 });
 
 /**
-  「重画这张图」这条动线（§72）。打到路由的原因很具体：这一条上**谁付钱、谁能批准**是产品红线，
+  「重绘这张图」这条动线（§72）。打到路由的原因很具体：这一条上**谁付钱、谁能批准**是产品红线，
   而它只能从 HTTP 侧看出来——`propose` 必须一发不发，`run` 必须等用户点横幅，`commit` 必须只有用户能按。
 */
-describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () => {
+describe("重绘这张图：提议 → 预览 → 替换 → 恢复默认", () => {
   type DiagramView = {
     origin: "default" | "agent";
     purpose?: string;
@@ -1100,7 +1100,7 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
   const EXPLORE = '{"findings":[{"unit":"src","claim":"这里注册路由并把请求交给编排","evidence":"src/main.ts:3"}],"boundaries":"框内是仓里写的代码","notes":""}';
   const DRAFT = JSON.stringify({ layers: [{ name: "接入", duty: "收请求", nodes: ["module:src"] }, { name: "说明", duty: "记录设计与约定", nodes: ["module:docs"] }], omitted: [] });
 
-  it("propose 一个 token 都不发；run 才发那两趟；替换与恢复缺省都不再花钱", async () => {
+  it("propose 一个 token 都不发；run 才发那两趟；替换与恢复默认都不再花钱", async () => {
     const before = sentTools.length;
     const missing = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "propose" } });
     expect(missing.statusCode, "没有目的的图只是换一种画法，得先问用户").toBe(422);
@@ -1112,7 +1112,7 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
 
     const early = await read();
     expect(early.diagram?.pending?.purpose).toContain("模块边界");
-    expect(early.diagram?.origin, "还没画，画的仍是缺省那份").toBe("default");
+    expect(early.diagram?.origin, "还没画，画的仍是默认那份").toBe("default");
 
     const tooEarly = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
     expect(tooEarly.statusCode, "没有预览就替换是凭空造一张图").toBe(422);
@@ -1124,7 +1124,7 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
     const previewing = await read();
     expect(previewing.diagram?.preview?.draft.layers.map((layer) => layer.name)).toEqual(["接入", "说明"]);
     expect(previewing.diagram?.origin, "预览态不改变生效的那张").toBe("default");
-    expect(previewing.layers.map((layer) => layer.name), "画布取数的 layers 仍是缺省那份的层").not.toEqual(["接入", "说明"]);
+    expect(previewing.layers.map((layer) => layer.name), "画布取数的 layers 仍是默认那份的层").not.toEqual(["接入", "说明"]);
 
     const committed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
     expect(committed.statusCode).toBe(200);
@@ -1132,11 +1132,11 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
     expect(replaced.diagram?.origin).toBe("agent");
     expect(replaced.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src"]], ["说明", ["module:docs"]]]);
     expect(replaced.diagram?.preview, "替换完预览就没了").toBeUndefined();
-    expect(replaced.diagram?.conflicts ?? [], "这两格的角色与所在层并不相反（一格一层），不该硬造反证").toEqual([]);
+    expect(replaced.diagram?.conflicts ?? [], "这两个节点的角色与所在层并不相反（一个节点一层），不该硬造反证").toEqual([]);
 
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "reset" } });
     const restored = await read();
-    expect(restored.diagram?.origin, "删掉替换那一行，缺省那份立刻回来（它一直现算现叠着）").toBe("default");
+    expect(restored.diagram?.origin, "删掉替换那一行，默认那份立刻回来（它一直实时计算实时叠加着）").toBe("default");
     expect(sentTools.length, "四个动作里只有 run 发过请求").toBe(before + 2);
   });
 
@@ -1145,7 +1145,7 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
     expect(orphan.statusCode, "用户没点横幅就不该发这一发").toBe(422);
 
     const before = sentTools.length;
-    const threadId = await newThread("map", "重画线程");
+    const threadId = await newThread("map", "重绘线程");
     // 第一回合模型想一步做完：直接 commit。工具回执必须拒，且**图不能被它替换掉**
     scripted = [`@@tool redraw_diagram {"action":"commit"}`, "这一步我没权限，得你在画布上点。"];
     const turn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "把刚才那张直接换上", threadId } });
@@ -1157,12 +1157,12 @@ describe("重画这张图：提议 → 预览 → 替换 → 恢复缺省", () =
 
     // 第二回合走正路：propose 仍然一发不发（除了对话本身那发）
     const beforePropose = sentTools.length;
-    scripted = [`@@tool redraw_diagram {"action":"propose","purpose":"只看下单这条链路"}`, "已把提议挂到画布上，等你点开始重画。"];
+    scripted = [`@@tool redraw_diagram {"action":"propose","purpose":"只看下单这条链路"}`, "已把提议挂到画布上，等你点开始重绘。"];
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "换个角度看这张图", threadId } });
     const pending = await read();
     expect(pending.diagram?.pending?.purpose).toBe("只看下单这条链路");
     expect(sentTools.length, "对话两发之外，propose 没多花任何一发").toBe(beforePropose + 2);
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "keep" } });
-    expect(sentTools.length - before, "整段对话只发了回合本身的请求：重画一步没花钱").toBe(4);
+    expect(sentTools.length - before, "整段对话只发了回合本身的请求：重绘一步没花钱").toBe(4);
   });
 });

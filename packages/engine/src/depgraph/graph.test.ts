@@ -96,7 +96,7 @@ describe("Node/TS 框架入口（Express / Fastify / Koa / Nest）", () => {
     const paths = graph.entrypoints.map((item) => item.path);
     // axios 的 api.get("/orders") 与路由登记长得一模一样，但它是打别人的那一方
     expect(paths).not.toContain("client/orders-api.ts");
-    // 演示数据把一份假的后端源码整段塞进模板字符串：逐行看都是证据，只有语法树知道那不是代码
+    // 演示数据把一份假的后端源码整段写入模板字符串：逐行看都是证据，只有语法树知道那不是代码
     expect(paths).not.toContain("docs/demo-data.ts");
     expect(paths).not.toContain("library/format.ts");
     expect([...paths].sort()).toEqual([
@@ -390,7 +390,7 @@ describe("依赖边 — Vue SFC 与 tsconfig paths 别名", () => {
     }));
 });
 
-describe("说明符落点按发起文件的语言收口（复审 #121①）", () => {
+describe("说明符落点按发起文件的语言收尾（复审 #121①）", () => {
   it("TS 的 `./util` 不再连到同目录的 util.py / util.go / util.java", async () =>
     await withRepo("no-cross-language", {
       "src/a.ts": "import { x } from \"./util\";\nexport const a = x;\n",
@@ -400,7 +400,7 @@ describe("说明符落点按发起文件的语言收口（复审 #121①）", ()
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
       // 旧写法拿全表 19 个扩展名挨个试，这一条会连到 util.py（同名不同语言优先命中）。
-      // 能力表 typescript 那格自称 dependencyEdge=exact（「落点逐个验证、不是连错」），跨语言猜边正好把它戳穿。
+      // 能力表 typescript 那个字段自称 dependencyEdge=exact（「落点逐个验证、不是连错」），跨语言猜边正好把它戳穿。
       expect(graph.imports.get("src/a.ts") ?? []).toEqual([]);
     }));
 
@@ -479,7 +479,7 @@ describe("整仓自环与「每个文件一个源码根」两刀（复审取图�
 });
 
 /**
-  `externals` 这一格（架构视图的「系统边界之外」）。它一份边都不该多出来，
+  `externals` 这个字段（架构视图的「系统边界之外」）。它一份边都不该多出来，
   所以下面每个用例都同时钉两件事：外部名记对了，以及 `imports` 一字未变——
   外部名一旦被当边连进图，影响范围、角色分层、流程证据全会跟着变，那就不是加一栏而是改图。
 */
@@ -508,7 +508,7 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
 
   /**
     Xingyan 实测的形状：`import com.xingyan.shortlink.jump.AccessCounter;` 落不到（那个类当时不在索引里），
-    但 `com.xingyan.shortlink` 就是这个项目自己的根。把它报成「边界之外的依赖」是说谎，
+    但 `com.xingyan.shortlink` 就是这个项目自己的根。把它报成「边界之外的依赖」是说不实，
     所以判据必须是「命中仓内包根就算断链」，不能是「这条 import 能不能落到某个类」。
   */
   it("命中项目自己的包根时不记外部名，即便那个类没被索引", async () =>
@@ -538,7 +538,7 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
       expect(graph.externals.has("src/a.ts"), "落不到的 ./missing 是仓内断链；` | ` 不是包名；@kit/core 已经落到边").toBe(false);
     }));
 
-  it("externals 走一遍序列化往返：旧产物缺这一格时按未采集处理，不硬造", async () =>
+  it("externals 走一遍序列化往返：旧产物缺这个字段时按未采集处理，不硬造", async () =>
     await withRepo("externals-roundtrip", {
       "src/a.ts": 'import axios from "axios";\nexport const a = axios;\n'
     }, (dir) => {
@@ -547,7 +547,7 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
       expect(data.externals).toEqual({ "src/a.ts": ["axios"] });
       const back = graphFromData(data);
       expect(back.externals.get("src/a.ts")).toEqual(["axios"]);
-      // 老产物（这一格根本不存在）读回来是空表，不是 undefined：调用方不用各自判空
+      // 老产物（这个字段根本不存在）读回来是空表，不是 undefined：调用方不用各自判空
       const legacy = graphFromData({ ...data, externals: undefined });
       expect(legacy.externals.size).toBe(0);
     }));

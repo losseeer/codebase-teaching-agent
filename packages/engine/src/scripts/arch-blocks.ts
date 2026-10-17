@@ -1,8 +1,8 @@
 /**
   零 token、只读：数「压缩流水线在三份真仓上把多少格压掉了」，并当场检查现存人工修正的落点。
   DB 以 readOnly 打开，不写任何产物。用法：pnpm arch:blocks /absolute/path/to/repository
-  存在的理由：判层单位从原子模块换成方块会翻缓存键（= 每仓要重问一发），这代价必须先数清楚再动手；
-  而「每层默认露 6 格」这条兜底到底还开不开得着，也只有真仓能答。
+  存在的理由：判层单位从原子模块换成节点会翻缓存键（= 每仓要重问一发），这代价必须先数清楚再动手；
+  而「每层默认显示 6 个节点」这条兜底到底还开不开得着，也只有真仓能答。
 */
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,14 +49,14 @@ const hidden = modules.filter((node) => !keptIds.has(node.id));
 const hiddenWithEntry = hidden.filter((node) => visibleOf(node).some((path) => entryPaths.has(path)));
 const staticLayers = (["core", "facility", "periphery"] as const).map((tier) => ({ tier, blocks: blocks.filter((block) => block.tier === tier) })).filter((layer) => layer.blocks.length);
 
-console.log(`仓库 ${state.repository_id}｜原子模块 ${modules.length} → 方块 ${blocks.length}（隐藏旁证 ${sideModules}、合并吃掉 ${mergedBlocks.reduce((sum, block) => sum + block.members.length - 1, 0)} 格）`);
-console.log(`  方块角色 ${dist(blocks.map((block) => block.role))}`);
-console.log(`  隐藏这一刀有红线：被藏却含入口文件的模块 ${hiddenWithEntry.length} 个${hiddenWithEntry.length ? `（**判据错了**：${hiddenWithEntry.slice(0, 4).map((node) => node.title).join(" / ")}）` : ""}`);
+console.log(`仓库 ${state.repository_id}｜原子模块 ${modules.length} → 节点 ${blocks.length}（隐藏孤立节点 ${sideModules}、合并吃掉 ${mergedBlocks.reduce((sum, block) => sum + block.members.length - 1, 0)} 个节点）`);
+console.log(`  节点角色 ${dist(blocks.map((block) => block.role))}`);
+console.log(`  隐藏这次改动有红线：被藏却含入口文件的模块 ${hiddenWithEntry.length} 个${hiddenWithEntry.length ? `（**判据错了**：${hiddenWithEntry.slice(0, 4).map((node) => node.title).join(" / ")}）` : ""}`);
 console.log(`  被藏的模块（前 6 个）${hidden.slice(0, 6).map((node) => `${node.title}(${visibleOf(node).length} 文件)`).join(" / ") || "无"}`);
-console.log(`  静态三层每层方块数 ${staticLayers.map((layer) => `${layer.tier}=${layer.blocks.length}`).join(" ")}｜超过 6 格的层 ${staticLayers.filter((layer) => layer.blocks.length > 6).length} 个（兜底折叠开不开得着就看这一格）`);
-console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换了键，这些旧行不再被读；要恢复模型分层每仓点一次「判一次分层」）`);
+console.log(`  静态三层每层节点数 ${staticLayers.map((layer) => `${layer.tier}=${layer.blocks.length}`).join(" ")}｜超过 6 个节点的层 ${staticLayers.filter((layer) => layer.blocks.length > 6).length} 个（兜底折叠开不开得着就看这个节点）`);
+console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换了键，这些旧行不再被读；要恢复模型分层每仓点一次「重新生成分层」）`);
 if (mergedBlocks.length) {
-  console.log(`\n[合并块样本]`);
+  console.log(`\n[组合节点样本]`);
   for (const block of mergedBlocks.slice(0, 8)) console.log(`  ${block.id}｜「${block.title}」成员 ${block.members.length}｜${block.members.slice(0, 3).join(" , ")}`);
 }
 const moved = Object.keys(overlays.architecture?.moduleLayer ?? {});
@@ -64,6 +64,6 @@ if (moved.length) {
   console.log(`\n[现存人工修正的落点]（读侧按成员拆块，不因为合过就挪不动）`);
   for (const moduleId of moved) {
     const host = blocks.find((block) => block.members.length > 1 && block.members.includes(moduleId));
-    console.log(`  ${moduleId} → ${overlays.architecture?.moduleLayer?.[moduleId]}｜${host ? `会拆开创块 ${host.id}` : blocks.some((block) => block.id === moduleId) ? "本身就是方块，整块走" : "图上查不到（该报进 lostOverrides）"}`);
+    console.log(`  ${moduleId} → ${overlays.architecture?.moduleLayer?.[moduleId]}｜${host ? `会拆开创块 ${host.id}` : blocks.some((block) => block.id === moduleId) ? "本身就是节点，整块走" : "图上查不到（该报进 lostOverrides）"}`);
   }
 }

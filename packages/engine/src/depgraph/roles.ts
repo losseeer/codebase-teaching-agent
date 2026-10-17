@@ -27,7 +27,7 @@ export interface FileStructure {
   imports: Record<string, string[]>;
   /** 全部入口：角色按「被任一入口依赖」判，因此与「这次看的是哪个入口」无关。 */
   entrypoints: SourceAnchor[];
-  /** 类型派发边（实现/子类 → 接口/父类）；缺省 = 旧产物里没这一类关系。 */
+  /** 类型派发边（实现/子类 → 接口/父类）；默认 = 旧产物里没这一类关系。 */
   dispatch?: TypeDispatchEdge[];
 }
 
@@ -79,7 +79,7 @@ export function buildFileEdges(structure: Pick<FileStructure, "imports" | "calls
 
 /**
   入口的「直接依赖」集合，含类型派发透传：控制器注入接口、运行时打到实现，
-  这一拍在源码里没有调用行，但它是同一次请求里的事，所以实现算一跳、实现下面的 Mapper 仍算二跳。
+  这一拍在源码里没有调用行，但它是同一次请求里的事，所以实实时计算一跳、实现下面的 Mapper 仍算二跳。
   透传可以连着走（抽象类再被抽象类继承），但**不**沿普通依赖延伸——否则整仓都会被拉成主干。
 */
 export function entryDependenciesOf(structure: Pick<FileStructure, "imports" | "calls" | "dispatch" | "entrypoints">): Set<string> {
@@ -146,13 +146,13 @@ function fileNameTokens(path: string): string[] {
   - 只看词头又挡不住 `PayLog`（流水）与 `HmacAuthFilter` 所在模块目录 `sl-gateway` 的 `gateway`——
     **目录名会一次判倒一整摞文件**，而一个类是不是设施该由它自己的名字说（2026-10-06 复审确证）。
   代价照实说：只靠目录表达设施身份的 `.../gateway/HealthCheck.java` 这类会漏判（按名字落到支撑），
-  宁可漏判也不误伤一片；`store`（门店 vs 存储）与 `log`（日志 / 流水）没法两全，留着当已知残留。
+  宁可漏判也不错误影响一片；`store`（门店 vs 存储）与 `log`（日志 / 流水）没法两全，留着当已知残留。
 */
 function hasInfraHint(path: string): boolean {
   return infraHintOf(path).hint !== undefined;
 }
 
-/** 命中在哪个设施名上、文件名有哪些词元。`export` 只为诊断脚本与生产判据共用同一把尺子，别在脚本里另写一份。 */
+/** 命中在哪个设施名上、文件名有哪些词元。`export` 只为诊断脚本与生产判据共用同一把度量，别在脚本里另写一份。 */
 export function infraHintOf(path: string): { hint?: string; tokens: string[] } {
   const tokens = fileNameTokens(path);
   return { hint: INFRA_HINTS.find((candidate) => tokens.some((token) => token.startsWith(candidate) && !INFRA_FALSE_TOKENS.has(token))), tokens };

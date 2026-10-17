@@ -78,7 +78,7 @@ export function scanRepositoryWithDigests(repositoryPath: string): RepositorySca
   const digests = new Map<string, string>();
   /**
     扫描期逐个文件兜底：一个文件读不出来（读到一半被删、权限不对、被换成特殊节点）只该让它自己缺席，
-    不该掀掉整次导入。但缺席必须**记名**——静默少索引一批文件，后面「这个仓有多少代码」的读数会跟着说谎。
+    不该掀掉整次导入。但缺席必须**记名**——静默少索引一批文件，后面「这个仓有多少代码」的读数会跟着说不实。
     */
   const unreadable: UnreadableFile[] = [];
   const ignore = createTutorIgnoreMatcher(repositoryPath);

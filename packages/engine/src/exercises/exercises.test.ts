@@ -184,7 +184,7 @@ describe("M2.1 exercise service", () => {
     expect(result.passed).toBe(true);
   });
 
-  it("图变了而源码版本一字不动：impact 题的旧缓存行不再冒充当前答案（键里带图指纹）", async () => {
+  it("图变了而源码版本一字不动：impact 题的旧缓存行不再伪装成当前答案（键里带图指纹）", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const small = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });

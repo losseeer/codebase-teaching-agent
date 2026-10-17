@@ -15,7 +15,7 @@ import { coverageOf } from "../summarizer/summarizer.js";
 const repositoryPath = resolve(process.argv[2] ?? "");
 if (!repositoryPath) throw new Error("Usage: pnpm tsx src/scripts/replay-coverage.ts /absolute/path/to/repository");
 
-// 旧判据的原样复刻（仅此处允许两份实现：它是「被替换前的尺子」，不该进生产代码）
+// 旧判据的原样复刻（仅此处允许两份实现：它是「被替换前的度量」，不该进生产代码）
 function legacyLow(path: string, names: string[], summary: string): boolean {
   const text = summary.toLowerCase().split(path.toLowerCase()).join(" ");
   const mentioned = names.filter((name) => text.includes(name.toLowerCase())).length;
@@ -62,7 +62,7 @@ for (const [path, row] of latest) {
 }
 
 console.log(`存量摘要行（按文件最新）：${latest.size}；有切片且有 top-3 符号、可判定：${latest.size - vacuous}；无从判定（无行/无符号）：${vacuous}`);
-console.log(`coverageLow：旧判据 ${oldLow}（${((oldLow / Math.max(1, latest.size - vacuous)) * 100).toFixed(1)}%）→ 新判据 ${newLow}（${((newLow / Math.max(1, latest.size - vacuous)) * 100).toFixed(1)}%）；救回 ${rescued}、两把尺子都判低 ${bothLow}`);
+console.log(`coverageLow：旧判据 ${oldLow}（${((oldLow / Math.max(1, latest.size - vacuous)) * 100).toFixed(1)}%）→ 新判据 ${newLow}（${((newLow / Math.max(1, latest.size - vacuous)) * 100).toFixed(1)}%）；救回 ${rescued}、两把度量都判低 ${bothLow}`);
 console.log("\n—— 被新判据救回的样例 ——");
 for (const line of flipExamples) console.log(`· ${line}`);
 console.log("\n—— 仍然判低的样例（真·没锚上任何符号）——");

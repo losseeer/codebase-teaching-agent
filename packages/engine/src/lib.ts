@@ -65,7 +65,7 @@ export const TURN_TEXT_LIMIT = 2_000;
 /**
   `turn_text` 事件的 payload 构造（2026-09-22 拍板口径）：三种对话（teach / map_chat / practice_chat）的
   问题+回复双边原文进 journal，各截 2000 字；截断必须留痕（`*_truncated`）——丢了字要能看出来，
-  与「回复触顶明示」同一先例。
+  与「回复达到预算上限明示」同一先例。
   */
 export function turnTextPayload(scene: "teach" | "map_chat" | "practice_chat", question: string, answer: string): Record<string, string | number | boolean> {
   const q = question.slice(0, TURN_TEXT_LIMIT);

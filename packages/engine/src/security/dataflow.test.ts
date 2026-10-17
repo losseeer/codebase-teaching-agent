@@ -9,9 +9,9 @@ import { runWithTrace } from "../trace/context.js";
 import { recordEgress, type EgressSource } from "./dataflow.js";
 
 /**
-  出境清单的落账口径。这个模块存在的意义就是「能核对」，所以四条判据都得钉住：
+  出网清单的计入审计口径。这个模块存在的意义就是「能核对」，所以四条判据都得钉住：
   - **一行都不带正文**（带了指纹就没意义了，日志本身变成第二个泄露面）；
-  - 空清单不落空行，被上层预算裁掉的段不算出境（虚报比漏报更糟）；
+  - 空清单不落空行，被上层预算裁掉的段不算出网（虚报比漏报更糟）；
   - 仓 id 由路径推导，与导入时写进索引的同一套算法，不另造一套；
   - traceId 跟着请求上下文走——报表靠它把 journal 与 llm.log 接起来。
   */
@@ -38,7 +38,7 @@ afterEach(() => {
   for (const repository of repositories.splice(0)) rmSync(repository, { recursive: true, force: true });
 });
 
-describe("源码出境清单落账", () => {
+describe("源码出网清单计入审计", () => {
   it("每段一行：路径、行区间、字符数与指纹齐全，payload 里没有正文", () => {
     const repository = fixtureRepository();
     recordEgress({ repositoryPath: repository, scene: "map.chat", sessionId: "thread-1", sources: [source(), source({ path: "src/other.ts", from: 1, to: 2, text: "// 一行\n// 两行" })] });
@@ -80,7 +80,7 @@ describe("源码出境清单落账", () => {
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [] });
     expect(rows(repository)).toHaveLength(0);
 
-    // 模拟外层上下文预算把尾部整段裁掉：第二段没出门，就不能算出境
+    // 模拟外层上下文预算把尾部整段裁掉：第二段没出门，就不能算出网
     const kept = source({ path: "src/kept.ts", text: "const kept = 1;" });
     const cut = source({ path: "src/cut.ts", text: "const cut = 2;" });
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [kept, cut], sent: `代码上下文：\n${kept.text}\n\n问题：这段干什么？` });

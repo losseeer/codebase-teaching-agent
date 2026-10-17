@@ -119,7 +119,7 @@ tboot(`ImportService（地址簿 ${importer.catalog().length} 条，挂载 0 条
 
 /**
   关停钩子只管 fs 监听这一件事：LRU 驱逐与 `forget` 各自会关自己那条，但 `app.close()` 不会。
-  `fs.FSWatcher` 是活跃 handle——不摘掉就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
+  `fs.FSWatcher` 是活跃 handle——不移除就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
   路由级测试收尾删掉临时仓后正是这种状态（handle 指向一个已不存在的目录）。
   */
 app.addHook("onClose", async () => { for (const repository of importer.mountedRepositories()) repository.watcher?.close(); });
@@ -205,7 +205,7 @@ const subscribers = new Set<{ send: (event: ServerEvent) => void; request: Fasti
 const EVENT_STREAM_PING_MS = 25_000;
 
 /**
-  广播：某一路订阅者写不进去（它的连接刚被掐掉）是它自己那一路的事，摘掉就好。
+  广播：某一路订阅者写不进去（它的连接刚被中止）是它自己那一路的事，移除就好。
   这里必须兜住异常——`broadcast` 挂在 `importer.emit("event")` 的**同步链**上，
   一路死订阅者抛出的 write 异常会一路冒到 `ImportService.run` 的 catch，把一次已经算完的导入判成 failed。
   删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
@@ -241,7 +241,7 @@ function sseWriter(reply: FastifyReply): (event: unknown) => void {
   建立 SSE：写头 + **立刻发一帧注释把响应头推到网路上**。
   只调 `writeHead` 时 Node 把头部留在缓冲区，客户端要等到第一个 `data:` 帧才拿得到响应。
   10-12 实测：空转的 `/api/events` 三秒收到 0 字节——本机直连只是「看起来连着」，
-  而共享部署那层反向代理（nginx 默认 `proxy_read_timeout` 60s）会把这种「有连接、零字节」的上游直接掐掉，
+  而共享部署那层反向代理（nginx 默认 `proxy_read_timeout` 60s）会把这种「有连接、零字节」的上游直接中止，
   界面就退回「导入进度停在 0%，任务其实跑完了」那一档。
   `:` 开头在 SSE 规范里是注释，任何解析器都跳过；读流循环只认 `data: ` 行，所以这一帧不带语义。
 
@@ -346,13 +346,13 @@ app.delete<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryI
   - 挂起**不丢东西**：产物与内存照用，只是磁盘改动不再自动重分析；恢复时重算一次新鲜度，
     脏了由界面横幅如实说，要不要重烧仍由人点（引擎绝不自动重分析这条纪律不变）。
   - 挂起活过驱逐与重新挂载：登记在 `ImportService` 里，LRU 把仓挤出去再点回来时开关仍然有效。
-  - 到点自动恢复（缺省 30 分钟，限死在 1 分钟~6 小时）：一个忘在手上的开关不该永久关掉增量更新。
+  - 到点自动恢复（默认 30 分钟，限死在 1 分钟~6 小时）：一个忘在手上的开关不该永久关掉增量更新。
   */
 app.post<{ Params: { repositoryId: string }; Body: { paused?: unknown; ttlMs?: unknown } }>("/api/repositories/:repositoryId/watch", async (request) => {
   // 不需要在这里再判一次「仓在不在」：URL 带 `:repositoryId` 的路由都由懒挂载钩子先把仓挂上，
   // 地址簿里没有 / 目录没了 / 产物不全在那一步就已经 404 了（reason=not_in_catalog 等）。
   const repositoryId = request.params.repositoryId;
-  const paused = request.body?.paused !== false; // 缺省 = 挂起（这条路由是来关监听的，不是来问状态的）
+  const paused = request.body?.paused !== false; // 默认 = 挂起（这条路由是来关监听的，不是来问状态的）
   const ttlMs = typeof request.body?.ttlMs === "number" ? request.body.ttlMs : undefined;
   if (!paused) return { repositoryId, paused: false, woken: importer.resumeWatching(repositoryId).woken, watching: importer.getRepository(repositoryId)?.watch ?? null };
   const result = importer.pauseWatching(repositoryId, ttlMs);
@@ -409,7 +409,7 @@ function budgetDegraded(repositoryPath: string, repositoryId: string): boolean {
 function latestFileSummaries(repositoryPath: string): Map<string, string> {
   const database = new TutorDatabase(repositoryPath);
   try {
-    // 触顶不是静默少文件：缺口要在日志里点名（上限本身只有一份定义，在 store/database.ts）
+    // 达到预算上限不是静默少文件：缺口要在日志里点名（上限本身只有一份定义，在 store/database.ts）
     const rows = database.getLatestFileSummaries(LATEST_SUMMARY_LIMIT);
     if (rows.length >= LATEST_SUMMARY_LIMIT) console.warn(`[engine] ${repositoryPath} 的摘要行数达到读取上限 ${LATEST_SUMMARY_LIMIT}，超出的旧路径本次没有摘要可用（流程证据与检索语料会缺这些文件）`);
     return new Map(rows.map((row) => [row.path, row.summary]));
@@ -508,7 +508,7 @@ function threadScopedHistory(repositoryPath: string, threadId: string | undefine
 
 /**
   取线程并核归属：不在库里 / 已软删 / 属于别的仓库 / 属于别的作用域一律 `undefined`（调用方据此拒绝本轮）。
-  跨作用域复用线程会把教学问答喂进宏观设计的上下文，这种串味比一个 409 难查得多。
+  跨作用域复用线程会把教学问答送入宏观设计的上下文，这种串味比一个 409 难查得多。
   */
 function scopedThread(repository: NonNullable<ReturnType<typeof repositoryOr404>>, threadId: string | undefined, scope: ChatScope) {
   if (!threadId) return undefined;
@@ -555,11 +555,11 @@ app.get("/api/health", async () => {
   return {
     status: "ok", service: "codebase-tutor-engine", version: engineVersion,
     // 摘要档由真源工厂报出：直接读 TUTOR_SUMMARY_PROVIDER 会把「没设环境变量 = 走轻量档」说成 "local"，
-    // 而 .env 里那行空值会让这个字段回成空串——健康页的读数不能反过来骗人
+    // 而 .env 里那行空值会让这个字段回成空串——健康页的读数不能反过来误导人
     summaryProvider: createSummaryProvider({ llm: lightLlmProvider }).name,
     llmProvider: llm.provider, llmModel: llm.model, llmMode: llm.mode,
     thinking: getLlmRuntimeSettings().thinking,
-    // 沙箱闸门状态原样给出（含逐项 canary 读数）：代码题能不能出，看这一格，不看界面自己猜
+    // 沙箱闸门状态原样给出（含逐项 canary 读数）：代码题能不能出，看这个节点，不看界面自己猜
     sandbox: isolationStatus()
   };
 });
@@ -580,7 +580,7 @@ function llmSettingsPayload(): Record<string, unknown> {
     presets: (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean),
     envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey) },
     /**
-      单价的「现在生效值 + 每一档从哪来」：界面上留空那格显示的是 .env 的数，
+      单价的「现在生效值 + 每一档从哪来」：界面上留空那个节点显示的是 .env 的数，
       不说清来源就会变成「我明明填了 0.28 怎么还显示 0」这类无从自查的读数。
       */
     pricing: currentPricing(),
@@ -595,7 +595,7 @@ function llmSettingsPayload(): Record<string, unknown> {
 
 /**
   GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明）。
-  这一份配置是**全局**的（服务商/端点/密钥影响每一次出境），所以它是管理面——
+  这一份配置是**全局**的（服务商/端点/密钥影响每一次出网），所以它是管理面——
   认证闸撤了之后，「谁能改端点」这件事完全落在来源闸与本机文件权限上（§64）。
   */
 app.get("/api/llm/settings", async () => llmSettingsPayload());
@@ -705,7 +705,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/i
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/course", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  // 模块分级现算（主干/设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
+  // 模块分级实时计算（主链路/基础设施/外围）：角色是结构规则的纯函数，所以已导入的仓库不用重烧就能看到分级
   const courseDatabase = new TutorDatabase(repository.path);
   try {
     return moduleCourseOf(repository.course, repository.analysis, repository.index, readOverlays(courseDatabase, repository.index.repositoryId));
@@ -745,7 +745,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   为什么挂在这条**已存在**的只读路由上，而不是新开一条：
   - 架构视图本来就要取这条路由（`DepMap` 的边来自 `analysis.graph.imports`），「这条边有多硬」
     必须和边本身同时到达，另开一条就会有两份时序与两处加载态；
-  - 它是读侧现算的元数据：不进 `repository.analysis`（那是落库产物，也是 `backendStamp` 等缓存键的输入），
+  - 它是读侧实时计算的元数据：不进 `repository.analysis`（那是落库产物，也是 `backendStamp` 等缓存键的输入），
     只在响应里浅拷贝一次 —— 因此不会引发任何摘要/流程重烧；
   - 语言分布的输入是 `index.files`（内存里已挂载的索引），不读磁盘、不调模型。
 
@@ -801,7 +801,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   }
 });
 
-// 教学模块「推荐入口」：LLM 从课程树候选节点中挑选（单轮调用）；未配置 LLM / 预算触顶时返回空列表，GUI 回落关键词分类
+// 教学模块「推荐入口」：LLM 从课程树候选节点中挑选（单轮调用）；未配置 LLM / 预算已达上限时返回空列表，GUI 回落关键词分类
 app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint?: string } }>("/api/repositories/:repositoryId/module-entries", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -809,10 +809,10 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
   if (!moduleLabel) return reply.code(400).send({ error: "请提供模块名称" });
   const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : lightLlmProvider;
-  // 「触顶 vs 未配置」分开说的口径与理由见下面 flow 路由；未配置/触顶/判空/失败的用户处置完全不同，不让界面猜。
+  // 「达到预算上限 vs 未配置」分开说的口径与理由见下面 flow 路由；未配置/达到预算上限/判空/失败的用户处置完全不同，不让界面猜。
   // 措辞按文案纪律压过：正文只留第一句，「清单从哪来、排没排序」这类机制交给悬停说明（GUI 侧拼）
   const fallback = "按模块结构列出文件";
-  if (!provider) return { entries: [], source: "module_files" as const, reason: `${budgetExhausted ? "本月预算已触顶，未调用 LLM" : "未配置 LLM"}；${fallback}。` };
+  if (!provider) return { entries: [], source: "module_files" as const, reason: `${budgetExhausted ? "本月预算已达到预算上限，未调用 LLM" : "未配置 LLM"}；${fallback}。` };
   const database = new TutorDatabase(repository.path);
   try {
     const suggestion = await suggestModuleEntriesCached({
@@ -846,9 +846,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { module?: string; hint
 });
 
 /**
-  读侧的最后一层：有用户批准的替换图就画那张，没有就画缺省那份。
+  读侧的最后一层：有用户批准的替换图就画那张，没有就画默认那份。
   投影前先重新核一遍——课程树可能重生成过、模块可能改名或被删。核不过**不删那一行**（用户点头过的东西
-  不该被系统悄悄丢掉），只回落缺省并说明为什么；接回来时不用重画一次。
+  不该被系统悄悄丢掉），只回落默认并说明为什么；接回来时不用重绘一次。
 */
 function architectureWithDiagram(repository: ImportedRepository, database: TutorDatabase, plan: ArchitectureResult): ArchitectureResult {
   const readout = readDiagram(database, repository.index.repositoryId, "architecture");
@@ -864,38 +864,38 @@ function architectureWithDiagram(repository: ImportedRepository, database: Tutor
   const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
   const projected = projectApprovedDraft(input, lightLlmProvider?.modelVersion ?? "none", committed);
   if ("stale" in projected) return { ...plan, diagram: { ...diagram, origin: "default", stale: projected.stale } };
-  // 整张图都是这趟重画出来的，「哪几格被人工挪过」那一档标记就不再有意义；冲突格另走 diagram.conflicts
+  // 整张图都是这趟重绘出来的，「哪些节点被人工挪过」那一档标记就不再有意义；冲突节点另走 diagram.conflicts
   return { ...plan, layers: projected.layers, edges: projected.edges, overriddenUnits: [], diagram: { ...diagram, conflicts: projected.conflicts } };
 }
 
 // 架构视图的分层产物（2026-10-16）：层名与模块归层是判断题（light 档，可人工改），
-// 跨层箭头与「边界之外」那一栏是事实题（只由静态 import 与外部包名词典算，模型参与不了一格）。
+// 跨层箭头与「边界之外」那一栏是事实题（只由静态 import 与外部包名词典算，模型参与不了一个节点）。
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   /**
     读侧两件事：**provider 照给**（缓存键里有 modelVersion，不给就退成 "none" ⇒ 判好的那份读不回来，
     画布会静默换成静态三层），但 `allowCall: false` 让它没有缓存行时也不发请求。
-    所以这条路由不看预算：预算只管「判一次分层」那一下，不管打开画布。
+    所以这条路由不看预算：预算只管「重新生成分层」那一下，不管打开画布。
     */
   const database = new TutorDatabase(repository.path);
   try {
     const overlays = readOverlays(database, repository.index.repositoryId);
     const plan = await generateArchitectureCached({ ...architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays }), provider: lightLlmProvider, allowCall: false });
-    // 读侧不可能有用量（allowCall: false 那条分支不发请求），所以这里不写 token_usage：钱只在 regenerate 那一下入账
+    // 读侧不可能有用量（allowCall: false 那条分支不发请求），所以这里不写 token_usage：钱只在 regenerate 那一下记入审计
     return architectureWithDiagram(repository, database, plan);
   } finally {
     database.close();
   }
 });
 
-// 显式重问一次分层（**花钱**，走预算闸门）。没配模型或触顶就 422 明说：
+// 显式重问一次分层（**花钱**，走预算闸门）。没配模型或达到预算上限就 422 明说：
 // 这条路由的语义是「按模型的判断重来」，静默给一份静态三层等于收了钱不办事还指着图说这是分层架构。
 app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/architecture/regenerate", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  if (budgetDegraded(repository.path, repository.index.repositoryId)) return reply.code(422).send({ error: "本月预算已触顶，未调用模型；判一次分层这条路由不降级。" });
-  if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：判一次分层需要模型判层名与归属。" });
+  if (budgetDegraded(repository.path, repository.index.repositoryId)) return reply.code(422).send({ error: "本月预算已达到预算上限，未调用模型；重新生成分层这条路由不降级。" });
+  if (!lightLlmProvider) return reply.code(422).send({ error: "未配置模型：重新生成分层需要模型判层名与归属。" });
   const database = new TutorDatabase(repository.path);
   try {
     const overlays = readOverlays(database, repository.index.repositoryId);
@@ -908,7 +908,7 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
 });
 
 /**
-  「重画这张图」的一步落地。**路由与 agent 工具共用这一个函数**——两条写路径各写一套校验与记账，
+  「重绘这张图」的一步落地。**路由与 agent 工具共用这一个函数**——两条写路径各写一套校验与记账，
   迟早有一处漏（覆盖层那条通道的同一课记在 §71）。
   `actor` 是唯一的权限差：**agent 只有 propose / keep / reset**；`run` 要花钱、`commit` 是用户点头，
   两个动作只有界面上的按钮能按——模型不能自己给自己批准替换，也不能替用户按下那一发。
@@ -922,24 +922,24 @@ async function redrawStep(repository: ImportedRepository, database: TutorDatabas
     `run` 要花钱、`commit` 是用户点头，**agent 只有 propose / keep / reset**。
   */
   if (actor === "agent" && !["propose", "keep", "reset"].includes(action)) {
-    return refuse(`没做：${action || "这个动作"}不由你按——你只有 propose / keep / reset，「开始重画」和「替换这张」都在画布上，要用户点。`);
+    return refuse(`没做：${action || "这个动作"}不由你按——你只有 propose / keep / reset，「开始重绘」和「替换这张」都在画布上，要用户点。`);
   }
-  if (kind === "flow") return refuse("流程视图的重画还没接上：这一期只做架构那张。流程那条复用 normalizeStage 的核验，接缝已留。");
+  if (kind === "flow") return refuse("流程视图的重绘还没接上：这一期只做架构那张。流程那条复用 normalizeStage 的核验，接缝已留。");
   if (action === "propose") {
-    if (!purpose) return refuse("重画得先说清这张图要回答什么问题（purpose）：没有目的的图只是换一种画法。");
-    if (!lightLlmProvider) return refuse("未配置模型：重画这张图需要模型真去读代码。");
-    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已触顶：重画不会偷偷发请求，先把预算调上去再让我重画。");
+    if (!purpose) return refuse("重绘得先说清这张图要回答什么问题（purpose）：没有目的的图只是换一种画法。");
+    if (!lightLlmProvider) return refuse("未配置模型：重绘这张图需要模型真去读代码。");
+    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已达到预算上限：重绘不会偷偷发请求，先把预算调上去再让我重绘。");
     requestRedraft(database, repoId, kind, purpose);
     journal.append("diagram_redraft_proposed", { kind, purpose, actor }, threadId);
     broadcast({ type: "redraft_requested", payload: { repositoryId: repoId, kind, purpose } });
-    return { statusCode: 200, ok: true, text: `已把「${purpose}」这条重画提议挂到画布上，等用户点那条横幅。这一发还没花钱，也没开始读代码。`, body: { status: "pending", purpose } };
+    return { statusCode: 200, ok: true, text: `已把「${purpose}」这条重绘提议挂到画布上，等用户点那条横幅。这一发还没花钱，也没开始读代码。`, body: { status: "pending", purpose } };
   }
   if (action === "run") {
     if (actor === "agent") return refuse("run 不由你按：这一发要花钱，只能由用户点画布上那条横幅触发。你可以 propose，然后告诉用户去点。");
     const pending = readDiagram(database, repoId, kind).pending;
-    if (!pending) return refuse("没有待确认的重画请求：这一发要用户点画布上那条横幅才开始。");
-    if (!lightLlmProvider) return refuse("未配置模型：重画这张图需要模型真去读代码。");
-    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已触顶，未调用模型：这一发没花出去。");
+    if (!pending) return refuse("没有待确认的重绘请求：这一发要用户点画布上那条横幅才开始。");
+    if (!lightLlmProvider) return refuse("未配置模型：重绘这张图需要模型真去读代码。");
+    if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已达到预算上限，未调用模型：这一发没花出去。");
     clearRedraft(database, repoId, kind, "pending");
     const overlays = readOverlays(database, repoId);
     const input = architectureInputOf({ repositoryId: repoId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
@@ -958,17 +958,17 @@ async function redrawStep(repository: ImportedRepository, database: TutorDatabas
     if (!outcome.ok || !outcome.draft) return refuse(`这一趟没画成：${outcome.reason ?? "模型没给出可用的层清单"}。钱已经花了（成本页看 map.redraft 那几行），可以换个说法再试。`);
     storePreview(database, repoId, kind, pending.purpose, outcome.draft);
     broadcast({ type: "diagram_preview", payload: { repositoryId: repoId, kind, purpose: pending.purpose } });
-    const conflictNote = outcome.draft.conflicts.length ? `其中 ${outcome.draft.conflicts.length} 格与结构证据相反，已在预览里标出。` : "";
-    const dropNote = outcome.droppedFindings ? `取证段有 ${outcome.droppedFindings} 条证据的路径核不上索引，已丢掉没带进图里。` : "";
-    return { statusCode: 200, ok: true, text: `新图已画好并进了预览态（${outcome.draft.layers.length} 层、${outcome.draft.omitted.length} 格列了理由没画；读了 ${outcome.fileReads.length} 个文件）。${conflictNote}${dropNote}等用户点「替换 / 保持」。`, body: { status: "preview", purpose: pending.purpose, draft: outcome.draft, droppedFindings: outcome.droppedFindings, findings: outcome.findings.length } };
+    const conflictNote = outcome.draft.conflicts.length ? `其中 ${outcome.draft.conflicts.length} 个节点与结构证据相反，已在预览里标出。` : "";
+    const dropNote = outcome.droppedFindings ? `证据采集段有 ${outcome.droppedFindings} 条证据的路径核不上索引，已丢掉没带进图里。` : "";
+    return { statusCode: 200, ok: true, text: `新图已画好并进了预览态（${outcome.draft.layers.length} 层、${outcome.draft.omitted.length} 个节点列了理由没画；读了 ${outcome.fileReads.length} 个文件）。${conflictNote}${dropNote}等用户点「替换 / 保持」。`, body: { status: "preview", purpose: pending.purpose, draft: outcome.draft, droppedFindings: outcome.droppedFindings, findings: outcome.findings.length } };
   }
   if (action === "commit") {
     if (actor === "agent") return refuse("commit 不由你按：替换那张图要用户点头。");
-    if (!commitPreview(database, repoId, kind)) return refuse("现在没有待确认的预览：先让我重画一张，画好才谈替换。");
+    if (!commitPreview(database, repoId, kind)) return refuse("现在没有待确认的预览：先让我重绘一张，画好才谈替换。");
     const committed = readDiagram(database, repoId, kind);
     journal.append("diagram_replaced", { kind, action: "replace", purpose: committed.purpose ?? "" }, threadId);
     broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "replace" } });
-    return { statusCode: 200, ok: true, text: "已替换：画布现在画的是这张重画出来的图，缺省那份仍在，说「恢复缺省图」就回去。", body: { status: "committed" } };
+    return { statusCode: 200, ok: true, text: "已替换：画布现在画的是这张重绘出来的图，默认那份仍在，说「恢复默认图」就回去。", body: { status: "committed" } };
   }
   if (action === "keep") {
     const had = clearRedraft(database, repoId, kind, "preview") || clearRedraft(database, repoId, kind, "pending");
@@ -980,7 +980,7 @@ async function redrawStep(repository: ImportedRepository, database: TutorDatabas
     const had = resetDiagram(database, repoId, kind);
     journal.append("diagram_replaced", { kind, action: "reset", purpose: "" }, threadId);
     broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "reset" } });
-    return { statusCode: 200, ok: true, text: had ? "已恢复缺省图：删掉了替换那一行，现算现叠的那份回来了（模型的判层与你的修正都没动）。" : "现在画的就是缺省图，没有可恢复的替换。", body: { status: had ? "default" : "already-default" } };
+    return { statusCode: 200, ok: true, text: had ? "已恢复默认图：删掉了替换那一行，实时计算实时叠加的那份回来了（模型的判层与你的修正都没动）。" : "现在画的就是默认图，没有可恢复的替换。", body: { status: had ? "default" : "already-default" } };
   }
   return refuse(`未知动作「${action.slice(0, 24)}」：只认 propose / run / commit / keep / reset。`);
 }
@@ -1005,7 +1005,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: unknown; action?: un
 });
 
 // 人工修正通道（覆盖层）。GUI 的拖动、Agent 的 `set_architecture`、浏览器旧值的一次性迁移，三条写路径共用这一处：
-// 各写一套合并逻辑，迟早有一处把用户的修正抹掉。数组整份替换、字典按键合并、`remove` 按 key 显式撤。
+// 各写一套合并逻辑，迟早有一处把用户的修正清除。数组整份替换、字典按键合并、`remove` 按 key 显式撤。
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overlays", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1053,7 +1053,7 @@ app.post<{ Params: { repositoryId: string }; Body: OverlaysPatch & { remove?: { 
 });
 
 // 宏观设计「流程视图」：按入口用 LLM 生成执行流程（静态调用链作为证据输入 + 降级视图）。
-// 缓存命中零成本；未配置 LLM / 预算触顶 / 调用失败都返回静态调用链并带 reason，不静默降级。
+// 缓存命中零成本；未配置 LLM / 预算已达上限 / 调用失败都返回静态调用链并带 reason，不静默降级。
 app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("/api/repositories/:repositoryId/flow", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1071,9 +1071,9 @@ app.get<{ Params: { repositoryId: string }; Querystring: { entry?: string } }>("
   // 而轻量档现在承担 L1 的文件级摘要（量大、单条简单）。两者不共用一档。
   const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   const provider = budgetExhausted ? undefined : teachingProvider;
-  // 「触顶」与「没配模型」分开说：处置分别是调预算、配密钥，合成一句就把人往错的方向支
+  // 「达到预算上限」与「没配模型」分开说：处置分别是调预算、配密钥，合成一句就把人往错的方向支
   // （尤其「模型主动判空/降级」被写成「还没配 LLM」会把人引去配密钥；推荐入口路由沿用同一口径）
-  if (!provider) return degradedFlow(repository.analysis, entry, budgetExhausted ? "本月预算已触顶，未调用主力档 LLM" : "未配置主力档 LLM");
+  if (!provider) return degradedFlow(repository.analysis, entry, budgetExhausted ? "本月预算已达到预算上限，未调用主力档 LLM" : "未配置主力档 LLM");
   const database = new TutorDatabase(repository.path);
   try {
     const summaries = latestFileSummaries(repository.path);
@@ -1129,7 +1129,7 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
 });
 
 /**
-  按需讲评（代码题）：判分已经落库，这一趟只补一段解释；未配模型或预算触顶时**照旧 422**，
+  按需讲评（代码题）：判分已经落库，这一趟只补一段解释；未配模型或预算已达上限时**照旧 422**，
   不回落成本地拼一句模板话——那是 §51 里撤掉的那类「看起来答完了、其实没走模型」。
 */
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/explain", async (request, reply) => {
@@ -1144,10 +1144,10 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
 });
 
 // 三条作用域对话（宏观设计 / 代码问答 / 练习评估）共用的闸门：单轮 LLM 讨论，无阶梯无本地兜底；
-// 预算触顶或未配置 LLM 时显式 422（不静默回落）。`gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
+// 预算已达上限或未配置 LLM 时显式 422（不静默回落）。`gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
 function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, repositoryId: string, gate?: { monthlyBudgetUsd: number; degraded: boolean }): LlmProvider | undefined {
   if ((gate ?? budgetGate(repositoryPath, repositoryId)).degraded) {
-    void reply.code(422).send({ error: "本月预算已触顶，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
+    void reply.code(422).send({ error: "本月预算已达到预算上限，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
     return undefined;
   }
   if (!teachingProvider) {
@@ -1184,8 +1184,8 @@ function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "practice
 
 /**
   运行期不变量复检（B 档第 2 刀的那三条，零 token / 纯函数 / 微秒级）。
-  外部批评说「回合一旦生成就不再被复核」——这一刀把话收回来：合格也记一条 `turn_invariant`，
-  分母因此在环成立；引用没能核实时在正文尾部补一行明示，学习者读到的是被核过的文本。
+  外部批评说「回合一旦生成就不再被复核」——这次改动把话收回来：合格也记一条 `turn_invariant`，
+  分母因此运行时成立；引用没能核实时在正文尾部补一行明示，学习者读到的是被核过的文本。
 
   能在尾部补话而不打断体验，靠的是一个实现事实：三种作用域都是**模型算完之后分块回放**
   （`replayTypewriter`，块长 `TYPEWRITER_CHUNK`），不是真 token 流。哪天真流式了，这行提示就得改成独立事件（记在这里防忘）。
@@ -1269,11 +1269,11 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
     用户说一句「把它挪到编排层」不该变成一笔重判的钱；
   - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
-  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、格子叫什么 id」
+  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、节点叫什么 id」
     就只会反问或编一个 id 撞在写侧白名单上。
 */
 /**
-  重画那张图的工具面：**只有提议 / 撤预览 / 恢复缺省三个动作**，`run` 与 `commit` 在这里直接拒。
+  重绘那张图的工具面：**只有提议 / 撤预览 / 恢复默认三个动作**，`run` 与 `commit` 在这里直接拒。
   这条界线写成代码而不是提示词：模型想一步做完时，描述拦不住它，缺动作拦得住。
   与写工具同一道作用域闸（map 作用域每轮都给），也共用同一个 `redrawStep`——校验、记账、通知只有一份实现。
 */
@@ -1311,18 +1311,18 @@ function architectureToolFor(repository: ImportedRepository, database: TutorData
   ];
   const diagram = readDiagram(database, repository.index.repositoryId, "architecture");
   const diagramState = diagram.origin === "agent"
-    ? `现在画布上这张是**重画并已被用户批准替换**的那张（目的：${diagram.purpose ?? "未记录"}）。要回到引擎与模型判的那张，说一声就能恢复缺省（reset）。`
-    : "现在画布上这张是缺省那份（缓存里模型的判层 + 你叠上去的修正）。";
+    ? `现在画布上这张是**重绘并已被用户批准替换**的那张（目的：${diagram.purpose ?? "未记录"}）。要回到引擎与模型判的那张，说一声就能恢复默认（reset）。`
+    : "现在画布上这张是默认那份（缓存里模型的判层 + 你叠上去的修正）。";
   const previewNote = diagram.preview
     ? `另外：画布上正压着一张**待用户裁决的预览**（目的：${diagram.preview.purpose}）。用户点头才会替换，你既不能替他点、也不能自己替换。`
     : diagram.pending
-      ? `另外：已经有一条**待用户确认的重画提议**（目的：${diagram.pending.purpose}）。等用户点横幅才会真去读代码，这期间别重复提议。`
+      ? `另外：已经有一条**待用户确认的重绘提议**（目的：${diagram.pending.purpose}）。等用户点横幅才会真去读代码，这期间别重复提议。`
       : "";
   const layers = peek.layout.length
     ? peek.layout.map((layer) => `${layer.name}：${layer.moduleIds.map((unitId) => `${titleOf(unitId)}（${unitId}）`).join("；") || "（空）"}`).join("\n")
-    : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「判一次分层」，这一发不由你代点。）";
+    : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「重新生成分层」，这一发不由你代点。）";
   return {
-    inventory: `${diagramState}${previewNote ? `\n${previewNote}` : ""}\n\n架构现场（要动哪一格就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读现叠）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那一格；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
+    inventory: `${diagramState}${previewNote ? `\n${previewNote}` : ""}\n\n架构现场（要动哪个节点就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读实时叠加）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那个节点；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
     apply: (argumentsJson: string) => {
       const parsed = parseOverrideArguments(argumentsJson);
       const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
@@ -1336,7 +1336,7 @@ function architectureToolFor(repository: ImportedRepository, database: TutorData
 function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
   const overlays = readOverlays(database, repository.index.repositoryId);
   if (!lightLlmProvider) return { ok: false, text: "没改：这份产物还没配模型，图上没有可改的层。", overlays };
-  /** 与两条读出口同一份输入构造（tier 现算 + 覆盖层）——这里曾经少叠一档，结果真仓上每次拖动都被自己的层名校验拒掉 */
+  /** 与两条读出口同一份输入构造（tier 实时计算 + 覆盖层）——这里曾经少叠一档，结果真仓上每次拖动都被自己的层名校验拒掉 */
   const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
   const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
   const outcome = commitOverride({
@@ -1468,7 +1468,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：练习答疑也在环内——它同样会引用仓库里的代码位置
+    // 运行期复检（零 token）：练习答疑也运行时内——它同样会引用仓库里的代码位置
     result.reply = recheckTurn({ repository, journal, sessionId: thread?.id, scene: "practice_chat", question: content, answer: result.reply }).answer;
     persistScopedTurn(repository.path, "practice_chat", thread?.id, content, result.reply);
     if (result.usage) journal.append("token_usage", {
@@ -1545,7 +1545,7 @@ app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number; s
   if (hasBudget && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) return reply.code(400).send({ error: "预算必须是非负数字" });
   const database = new TutorDatabase(repository.path);
   try {
-    // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们抹掉
+    // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们清除
     const stored = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean; refinement?: unknown }>(repository.index.repositoryId) ?? {};
     const merged = {
       ...stored,
@@ -1696,7 +1696,7 @@ app.patch<{ Params: { threadId: string }; Body: { title?: unknown } }>("/api/thr
 
 /**
   软删：chat_session 打时间戳，chat_message 原文一行不动，journal 追加一条 session_deleted（不删任何既有事件行）。
-  同时从内存 Map 摘掉教学会话——否则删掉的会话还能被同进程继续聊，重启后又消失，行为会分成两段。
+  同时从内存 Map 移除教学会话——否则删掉的会话还能被同进程继续聊，重启后又消失，行为会分成两段。
   */
 app.delete<{ Params: { threadId: string } }>("/api/threads/:threadId", async (request, reply) => {
   const located = locateThread(request.params.threadId);
@@ -1725,7 +1725,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
   const session = { ...current, style: settings.style, settings };
-  // 闸门与 map/practice 同一条：没配模型、或本月预算已触顶，就在开火前 422。
+  // 闸门与 map/practice 同一条：没配模型、或本月预算已达到预算上限，就在开火前 422。
   // 教学状态机撤掉之后这一域**不再有本地兜底那一档**——「看起来答完了、其实没走模型」是这条线上最难查的事故形状。
   const gate = budgetGate(repository.path, repository.index.repositoryId);
   const provider = scopedChatProviderOr422(reply, repository.path, repository.index.repositoryId, gate);
@@ -1745,7 +1745,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     });
     // 中止可能赶在最后一趟 LLM 返回之后才到：那时没人抛错，这一轮会照常走到落库。
     // 用户点了停止就按「作废」收尾——不落库、不回放，否则 GUI 那句「这一轮没有落库」成了假话，
-    // 下次进会话还会冒出一条自己掐掉的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
+    // 下次进会话还会冒出一条自己中止的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
     if (turnHandle.signal?.aborted) throw new LlmAbortedError();
     teachingStates.set(outcome.session.id, outcome.session);
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -1768,7 +1768,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     ], { settings: outcome.session.settings });
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
     // 没有 `usage` 就是端点这趟没回报用量，**这一轮不进 token_usage**：
-    // 拿字数÷4 造一份估算进账本，等于让不存在的钱吃掉预算——触顶后付费分支会被这些假账反过来关掉。
+    // 拿字数÷4 造一份估算进账本，等于让不存在的钱吃掉预算——达到预算上限后付费分支会被这些假账反过来关掉。
     // 写成「有 usage 才记」还与 map/practice 三处同一口径；成本页的「计费回合」= token_usage 行数。
     if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
     // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕

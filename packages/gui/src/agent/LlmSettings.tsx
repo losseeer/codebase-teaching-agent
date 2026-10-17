@@ -206,7 +206,7 @@ const THINKING_STYLE_HINT: Record<string, string> = {
   unknown: "未识别的模型：auto/off 不发字段；强度档位会被引擎拒绝（可用 TUTOR_THINKING_STYLES 声明）"
 };
 
-/** 单价一格的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
+/** 单价一个节点的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
   const value = llm?.pricing ? money(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
@@ -222,7 +222,7 @@ function pricingLive(llm: LlmSettings): boolean {
 
 /**
   计价读数一行：现在按哪三个数算、每一档来自界面还是 .env。
-  来源必须写出来——留空那格显示的是 .env 的数，不标来源就成了「我明明填了怎么没变」。
+  来源必须写出来——留空那个节点显示的是 .env 的数，不标来源就成了「我明明填了怎么没变」。
   更要紧的是后半句：三档全空时**预算闸门也不管事**（引擎拿到的金额恒为 0，永远判未超支）。
   */
 function pricingReadout(llm: LlmSettings): string {
@@ -316,7 +316,7 @@ function SelectSetting({ label, value, options, disabled, hint, note, ariaLabel,
 }
 
 /**
-  API Key 是**只写**项：引擎从不回显明文，所以「输入框为空」不能当成「清除」——那样点一下别处就把密钥抹掉了。
+  API Key 是**只写**项：引擎从不回显明文，所以「输入框为空」不能当成「清除」——那样点一下别处就把密钥清除了。
   留空提交 = 不改动；清除只走那颗 ✕ 按钮。
   */
 function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; note?: string; onSave: (key: string) => void; onClear: () => void }): ReactElement {

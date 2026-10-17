@@ -49,7 +49,7 @@ function groupModuleFiles(moduleFiles: Map<string, FileEntry[]>): Map<string, Fi
     }
     /**
       区域名本身也可能已经是一个模块（`observability/` 下既有散文件又有若干单子目录），
-      这时必须**并进来**而不是覆盖——原写法 `merged.set(area, bucket.files)` 直接顶掉那个模块，
+      这时必须**并进来**而不是覆盖——原写法 `merged.set(area, bucket.files)` 直接取代那个模块，
       它自己的文件就从模块地图里凭空消失了（dianping 实测：`observability` 的三个直属文件
       `check-queries.py` / `docker-compose.yml` / `README.md` 整批不见，156 个索引文件只剩 153 个有归属，
       而 `check-queries.py` 还是这仓识别出来的脚本入口之一）。

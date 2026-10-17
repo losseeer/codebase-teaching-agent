@@ -6,7 +6,7 @@ import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, mas
 
 /**
   运行时 LLM 设置的三件事：部分更新语义（留空 = 清除并回落 .env）、落盘/重启恢复、密钥只在对外视图里以掩码出现。
-  外加单价那三格：它同样「界面上改、立即生效」，但判据更硬——脏值会一路流进预算闸门（见 cost.test.ts）。
+  外加单价那这三个字段：它同样「界面上改、立即生效」，但判据更硬——脏值会一路流进预算闸门（见 cost.test.ts）。
   设置文件按 TUTOR_LLM_SETTINGS_FILE 指向临时目录——默认落点是 ~/.codebase-tutor/，那是**用户的产品数据**，测试不许碰。
   */
 const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL", "TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
@@ -167,7 +167,7 @@ describe("单价三档（界面上配、立即生效）", () => {
     expect(process.env.TUTOR_INPUT_USD_PER_MILLION).toBe("0.4");
   });
 
-  it("对外视图带得出单价：它不是密钥，掩码只给 apiKey 那一格", () => {
+  it("对外视图带得出单价：它不是密钥，掩码只给 apiKey 那个字段", () => {
     setLlmRuntimeSettings({ apiKey: "sk-super-secret-value", inputUsdPerMillion: "0.28" });
     const view = publicLlmSettings() as Record<string, unknown>;
     expect(view.inputUsdPerMillion).toBe("0.28");

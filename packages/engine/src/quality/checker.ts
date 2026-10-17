@@ -22,7 +22,7 @@ function declaresAtAnchor(headLine: string, name: string): boolean {
 
 export interface VerifyOptions {
   /**
-    墙钟预算（ms）。**真的是个截止时刻**：到点就停在下一条之前，已经跑出来的部分照常交回去，
+    墙钟预算（ms）。**真的是个截止时刻**：到点就停在下一条之前，已经跑出来的部分照常返回去，
     并在 `skippedBecause` 里说清还剩多少没跑。
     以前这个参数只有「`< 1`」这一种取值会被读到，调用方以为自己拿到了 2.5 秒预算，实际什么约束都没有。
     */

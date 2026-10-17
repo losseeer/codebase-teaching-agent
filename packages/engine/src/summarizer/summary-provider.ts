@@ -26,8 +26,8 @@ export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
   /**
-    这份摘要档会不会把**切片内容发到端点**。出境清单（`security/dataflow.ts`）只有 `true` 才落账：
-    确定性档一个字都不发出去，把它的逐文件装配记成「源码出境」就是虚报——
+    这份摘要档会不会把**切片内容发到端点**。出网清单（`security/dataflow.ts`）只有 `true` 才计入审计：
+    确定性档一个字都不发出去，把它的逐文件装配记成「源码出网」就是虚报——
     而虚报的账面比漏报更难查，它会把「这台机器没读过这个文件」洗成「读过」。
     */
   readonly sendsCodeToEndpoint: boolean;
@@ -108,7 +108,7 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
   确定性兜底：不调模型，摘要完全由结构切片拼出（离线可复现、不烧 token）。
 
   ⚠️ 摘要要**短**：它进课程树当节点摘要，而 `coursetree/llm-refine.ts` 会把节点摘要整份送去润色。
-  这里放长一句，每次润色就多付一次钱。详细信息由切片承载（那是喂给模型的），摘要只说
+  这里放长一句，每次润色就多付一次钱。详细信息由切片承载（那是送入模型的），摘要只说
   「属于哪层 + 认出哪些主要符号」。
 */
 export class LocalSummaryProvider implements SummaryProvider {
@@ -157,7 +157,7 @@ export class LlmSummaryProvider implements SummaryProvider {
 /** 本地 Ollama（`TUTOR_SUMMARY_PROVIDER=ollama` 时启用）：逐条调用，与批量档共用同一套提示与解析。 */
 class OllamaSummaryProvider implements SummaryProvider {
   readonly name = "Ollama local model";
-  /** 端点在本机也算「发到模型」：出境清单记的是「源码进过某 provider 的请求」，报表靠 provider 名分辨是哪一档。 */
+  /** 端点在本机也算「发到模型」：出网清单记的是「源码进过某 provider 的请求」，报表靠 provider 名分辨是哪一档。 */
   readonly sendsCodeToEndpoint = true;
 
   constructor(private readonly model = process.env.TUTOR_OLLAMA_MODEL ?? "llama3.2", private readonly endpoint = process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434") {}

@@ -213,7 +213,7 @@ describe("completeWithReadTool 的跨仓访问", () => {
     expect(capped?.some((message) => message.content.includes("跨仓读取最多 1 个文件"))).toBe(true);
   });
 
-  it("跨仓读成功才回报递出去的路径（供复检认账）；本仓读与拒读都不回报", async () => {
+  it("跨仓读成功才回报递出去的路径（供复检留痕）；本仓读与拒读都不回报", async () => {
     const handed: string[] = [];
     const { provider } = scriptedProvider([
       crossRead("c1", "ShopController.java", "other"),

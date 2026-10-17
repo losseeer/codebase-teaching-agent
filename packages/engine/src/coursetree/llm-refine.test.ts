@@ -132,8 +132,8 @@ describe("refineCourseMap", () => {
   });
 
   it("模型解析成功但一个名字都不改（提示词允许省略）：树不变，usage 必须交出", async () => {
-    // 这一格过去被 `renames.size` 一锅端掉：钱已经花了，既不记账也写不下 settings.refinement 标记，
-    // 于是每次导入都重付一遍而账面看不出来（同 §37.4「降级要如实入账」那条纪律）。
+    // 这个节点过去被 `renames.size` 一锅端掉：钱已经花了，既不记账也写不下 settings.refinement 标记，
+    // 于是每次导入都重付一遍而账面看不出来（同 §37.4「降级要如实记入审计」那条纪律）。
     const { provider, users } = fakeProvider(["[]"]);
     const tree = treeWith(leaf("implementation:u1", "doThing()"));
     const refinement = await refineCourseMap(tree, provider);

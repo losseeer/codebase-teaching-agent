@@ -202,7 +202,7 @@ describe("mapChat", () => {
     expect(secondTool?.content).toContain("1| ");
   });
 
-  it("回复触顶：finishReason=length 时尾附截断声明，半截句子不裸奔", async () => {
+  it("回复达到预算上限：finishReason=length 时尾附截断声明，半截句子不裸奔", async () => {
     const provider: LlmProvider = {
       name: "capped",
       modelVersion: "capped:model",

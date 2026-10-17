@@ -6,7 +6,7 @@ import { Icon } from "../ui/icons";
 
 /**
   左栏模块区（对齐 docs/ui-prototype 的 `.tier-group` / `.chip-list`）：
-  - 教学侧：模块按分级分成三组 **主干 / 设施 / 外围**（有自建模块时再加一组），组内一行一个模块，
+  - 教学侧：模块按分级分成三组 **主链路 / 基础设施 / 外围**（有自建模块时再加一组），组内一行一个模块，
     选中行 `.tier-node.active`；组标题右侧的 `.tier-tag` 是这组的判据摘要。
   - 练习侧：主题是少量自建项，没有分级，用 `.chip` 列表。
   - 引擎没给分级（旧响应）时退回平铺 chips，不凭空造分级标题。
@@ -19,8 +19,8 @@ import { Icon } from "../ui/icons";
   - 练习侧的自建主题存在浏览器本地，删掉真找不回来。
  */
 const TIER_GROUPS: { tier: CourseTier; label: string; note: string }[] = [
-  { tier: "core", label: "主干", note: "入口与它直接依赖的代码" },
-  { tier: "facility", label: "设施", note: "配置、存储、可观测等支撑代码" },
+  { tier: "core", label: "主链路", note: "入口与它直接依赖的代码" },
+  { tier: "facility", label: "基础设施", note: "配置、存储、可观测等支撑代码" },
   { tier: "periphery", label: "外围", note: "看板 / 部署 / 文档 / 测试" }
 ];
 const CUSTOM_SECTION = { key: "custom", label: "自建", note: "你自己圈的主题，没有仓库模块地图背书" };
@@ -74,7 +74,7 @@ export function ModulesPane({
 }): ReactElement {
   const [configOpen, setConfigOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
-  /** 首屏只露主干与设施（引擎在 CourseTierEvidence 的注释里就是这么写的）：外围默认折起，组头可展开。 */
+  /** 首屏只露主链路与基础设施（引擎在 CourseTierEvidence 的注释里就是这么写的）：外围默认折起，组头可展开。 */
   const [foldedGroups, setFoldedGroups] = useState<Set<string>>(() => new Set(["periphery"]));
   /** 组内超过这个行数就先截一段，剩下的点「展开其余 N 项」——否则 20 行模块把推荐入口推出首屏。 */
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
@@ -120,9 +120,9 @@ export function ModulesPane({
     const lost = treeDerived
       ? `会撤销全部改名、恢复被隐藏的模块，并清掉 ${customCount} 个自建模块`
       : customCount ? `会删掉 ${customCount} 个自定义项，并撤销全部改名` : "会撤销全部改名";
-    if (!window.confirm(`恢复缺省模块：${lost}。继续吗？`)) return;
+    if (!window.confirm(`恢复默认模块：${lost}。继续吗？`)) return;
     onReset();
-    showToast(isPractice ? "已恢复缺省模块" : "已恢复仓库的模块清单");
+    showToast(isPractice ? "已恢复默认模块" : "已恢复仓库的模块清单");
   };
 
   return (
@@ -203,7 +203,7 @@ export function ModulesPane({
 
       {configOpen && (
         <div className="side-block module-config">
-          <div className="cfg-head">{isPractice ? "自定义出题主题" : "模块配置"}<span title={isPractice ? "缺省是「程序理解题」；自定义主题由 LLM 出题" : "模块来自本仓库的模块地图；改名只影响显示，隐藏后可一键恢复"}>{isPractice ? "新主题由 LLM 出题" : "改名只影响显示"}</span></div>
+          <div className="cfg-head">{isPractice ? "自定义出题主题" : "模块配置"}<span title={isPractice ? "默认是「程序理解题」；自定义主题由 LLM 出题" : "模块来自本仓库的模块地图；改名只影响显示，隐藏后可一键恢复"}>{isPractice ? "新主题由 LLM 出题" : "改名只影响显示"}</span></div>
           {modules.map((item) => (
             <div className="cfg-row" key={item.id}>
               <input className="text-input" value={item.label} aria-label="模块名称" onChange={(event) => onRename(item.id, event.target.value)} />
@@ -215,7 +215,7 @@ export function ModulesPane({
             <button type="button" className="btn btn-ghost btn-sm" onClick={add}>添加</button>
           </div>
           <div className="cfg-foot">
-            <button type="button" className="cfg-reset" onClick={reset}>{isPractice ? "恢复缺省" : "恢复全部模块"}</button>
+            <button type="button" className="cfg-reset" onClick={reset}>{isPractice ? "恢复默认" : "恢复全部模块"}</button>
             <span className="faint fs-11">改动即时生效并本地保存</span>
           </div>
         </div>

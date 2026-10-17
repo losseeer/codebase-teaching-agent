@@ -102,7 +102,7 @@
 .map-stage { position: relative; flex: 1; min-height: 0; display: flex; }
 .map-canvas-wrap { flex: 1; position: relative; overflow: auto; min-height: 0; }
 .map-stage:has(.drawer) .map-canvas-wrap { padding-right: min(var(--drawer-w), 48%); }
-/* 架构视图 = 分层全景（原型 `.arch-pan`）：一栏居中，系统边界虚线框 + 层序号导轨 + 只读方块，框外另起一框。
+/* 架构视图 = 分层全景（原型 `.arch-pan`）：一栏居中，系统边界虚线框 + 层序号导轨 + 只读节点，框外另起一框。
    画布底网格随依赖图一起撤了——全景是流式排版，读的是「哪几层、每层哪些格」，不是坐标关系。 */
 .map-canvas { position: relative; min-height: 560px; }
 .arch-pan { width: 100%; max-width: 760px; margin: 0 auto; padding: var(--sp-5) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
@@ -151,15 +151,15 @@
 }
 .arch-module:hover { border-color: var(--brand-600); transform: translateY(-1px); }
 .arch-module.selected { border-color: var(--brand-700); box-shadow: 0 0 0 3px var(--ring-strong); }
-/* 含服务入口的那一格：左边一条 accent 边，图例只说「深底那档」 */
+/* 含服务入口的那个节点：左边一条 accent 边，图例只说「深底那档」 */
 .arch-module.entry { border-left: 3px solid var(--brand-700); }
 .arch-module-name { font-size: var(--fs-12); font-weight: 650; word-break: break-all; }
-/* 副行只有两种读数：角色（引擎按 import/调用算出，模型不参与）或「合并块 · N 个模块」 */
+/* 副行只有两种读数：角色（引擎按 import/调用算出，模型不参与）或「组合节点 · N 个模块」 */
 .arch-module-sub { font-size: 10px; color: var(--ink-3); }
 .arch-override-dot { display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--warn-ink); vertical-align: middle; }
 /* 被人工挪过层：格右上角一枚点，与「这层的名字也是人改的」区分开 */
 .arch-module.moved::after { content: ""; position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
-/* 合并块能点开看成员：用三角而不是省略号——名字里「等」已经说了「还有没写全的」，再来一个「…」读起来像标题被截断 */
+/* 组合节点能点开看成员：用三角而不是省略号——名字里「等」已经说了「还有没写全的」，再来一个「…」读起来像标题被截断 */
 .arch-module.grouped .arch-module-name::after { content: " ▾"; color: var(--ink-3); font-size: 9px; }
 .arch-members { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 2px; }
 .arch-member {
@@ -169,10 +169,10 @@
 }
 .arch-member:hover { border-color: var(--brand-600); color: var(--ink); }
 .arch-member.selected { border-color: var(--brand-700); color: var(--brand-700); background: var(--brand-050); }
-/* 一层里的方块超过 6 格才折：折叠是这一层的读数，不是「还有多少文件」那种元数据 */
+/* 一层里的节点超过 6 个才折：折叠是这一层的读数，不是「还有多少文件」那种元数据 */
 .arch-more { font-size: var(--fs-11); padding: 3px 9px; border-radius: 999px; background: transparent; border: 1px dashed var(--border-strong); color: var(--ink-3); cursor: pointer; align-self: center; transition: border var(--t-fast), color var(--t-fast); }
 .arch-more:hover { border-color: var(--brand-600); color: var(--ink); }
-/* 分层不可用：一句话说清是哪一种原因，加一颗明码标价的按钮；不画任何冒充分层的格子 */
+/* 分层不可用：一句话说清是哪一种原因，加一颗明码标价的按钮；不画任何伪装成分层的节点 */
 .arch-unavailable {
   display: flex; align-items: center; gap: var(--sp-3);
   max-width: 560px; margin: var(--sp-8) auto 0;
@@ -195,7 +195,7 @@
 .arch-legend { margin: 0; font-size: var(--fs-11); color: var(--ink-3); text-align: center; }
 /* 预览态：整框改用虚线 + warn 色，一眼能看出「这不是现在生效的那张」。淡一点点也不影响读层次。 */
 .arch-boundary.previewing { border-color: var(--warn); border-style: solid; opacity: 0.94; }
-/* 候选里与引擎算出的结构角色相反的那一格：一枚 warn 色的点，悬停给证据句。
+/* 候选里与引擎算出的结构角色相反的那个节点：一枚 warn 色的点，悬停给证据句。
    与 `.moved`（人工挪过）同一位置、不同颜色——预览态里不会同时出现两者。 */
 .arch-module.conflict::after { content: ""; position: absolute; margin-left: 46px; width: 5px; height: 5px; border-radius: 50%; background: var(--warn); }
 

@@ -36,7 +36,7 @@ import { buildFlowEvidence, MAX_STAGE_TITLE, staticFlow } from "./evidence.js";
   模型可以从文件、符号与依赖语义里读出这类结构，这是流程视图相对架构视图的增量。
 
   静态调用链没有被丢掉，它做两件事：作为 LLM 的输入证据（真实的跨文件调用顺序），
-  以及 LLM 不可用时的降级视图（显式标注，不冒充模型结论）。
+  以及 LLM 不可用时的降级视图（显式标注，不伪装成模型结论）。
 
   与 `coursetree/entry-suggest.ts` 同一套约定：失败不抛给调用方，返回降级结果 + 原因；
   缓存只存**可信答案**——成功结果与确定性降级（模型给不出更多了，见 `GeneratedFlow.deterministic`），
@@ -50,7 +50,7 @@ const MAX_CALL_CHAIN = 24;
 const ENTRY_EXCERPT_LINES = 120;
 /** 目录骨架用的行数上限：全量文件的目录树在大型仓库会失控，超出即截断并显式告知模型。 */
 const MAX_TREE_LINES = 200;
-/** 热点只给最靠前的若干个：完整列表是索引内部数据，喂给模型的是「哪里最常被改动」这个信号。 */
+/** 热点只给最靠前的若干个：完整列表是索引内部数据，送入模型的是「哪里最常被改动」这个信号。 */
 const MAX_HOTSPOTS = 15;
 const MAX_TITLE = 18;
 const MAX_SUMMARY = 100;
@@ -140,7 +140,7 @@ export interface FlowDigest {
 }
 
 /**
-  构造喂给模型的证据。证据只含「模型推不出、但必须知道」的事实：
+  构造送入模型的证据。证据只含「模型推不出、但必须知道」的事实：
   真实路径、符号名、依赖方向、静态调用顺序。刻意不放源码全文——那会把成本推高一个量级，
   而流程编排靠符号名与文件名已经能读出来。
 
@@ -252,12 +252,12 @@ export interface GenerateFlowInput {
   provider: LlmProvider;
   /** L1 摘要表（按路径索引）；缺某个文件就是「该文件职责未确认」。 */
   summaries: Map<string, string>;
-  /** 持久层（`layer_cache` 表）。缺省时只走内存缓存——测试与降级路径不落盘。 */
+  /** 持久层（`layer_cache` 表）。默认时只走内存缓存——测试与降级路径不落盘。 */
   database?: TutorDatabase;
   /**
-    出境登记（见 `security/dataflow.ts`）：`buildFlowDigest` 把入口文件的真实正文放进 digest，
+    出网登记（见 `security/dataflow.ts`）：`buildFlowDigest` 把入口文件的真实正文放进 digest，
     而 digest 就是发给模型的那份 user 消息——这一段不经工具循环，没有 `file_read` 那行可查，所以单独登记。
-    **只有真发请求的那条路会落账**：算缓存键（`flowCacheKeyOf`，含 `flow:reburn --check` 那条零 token 探针）
+    **只有真发请求的那条路会计入审计**：算缓存键（`flowCacheKeyOf`，含 `flow:reburn --check` 那条零 token 探针）
     也会装配一次 digest，那一趟可能命中缓存、一个字都没发出去，所以它攒的清单没人 booking。
     */
   egress?: EgressCollector;
@@ -269,7 +269,7 @@ export interface GeneratedFlow extends RepositoryFlowResult {
     降级是否为**确定性结论**：模型返回了合法 JSON、但环节在仓内没有代码落点——同一输入再跑一次
     模型给的答案一样，所以与成功结果一样可入缓存（与推荐入口的 `declined` 同一套口径）；
     调用异常、内容解析不出这类瞬时失败不带此标记，不入缓存。
-    ⚠️ 「输出被我们自己的上限截断」**不算**这一格，见 `capHit`（同一个坑的两半，§35.6）。
+    ⚠️ 「输出被我们自己的上限截断」**不算**这个节点，见 `capHit`（同一个坑的两半，§35.6）。
   */
   deterministic?: boolean;
   /**
@@ -290,7 +290,7 @@ export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<
   return generateFromDigest(scoped, digest);
 }
 
-/** 入口统一补一个出境收集数组（调用方没给时）：装配往里推，**只有真发请求的那条路**才落账。 */
+/** 入口统一补一个出网收集数组（调用方没给时）：装配往里推，**只有真发请求的那条路**才计入审计。 */
 function withEgressCollector<T extends GenerateFlowInput>(input: T): T {
   return input.egress ? input : { ...input, egress: [] };
 }
@@ -311,13 +311,13 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
     const recentChanges = buildRecentChangesSection(input.analysis);
-    // 出境落账：digest 就是发给模型的 user 消息本体，这一段入口正文确实跟着出门了
+    // 出网计入审计：digest 就是发给模型的 user 消息本体，这一段入口正文确实跟着出门了
     recordEgress({ repositoryPath: input.repositoryPath, scene: "map.flow", sources: input.egress ?? [] });
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: recentChanges ? `${JSON.stringify(digest)}\n\n${recentChanges}` : JSON.stringify(digest),
       // 09-22：真仓大流程输出 ~6.5k tokens 才收住，3_200 会让个别入口（VoucherOrderController 两次实测）
-      // 在 JSON 中途触顶 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
+      // 在 JSON 中途达到预算上限 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
       // 10-06 再放宽到 8_000：thinking=auto 下 6,000+6,000(余量)=12,000 的上限当天被 13 条里的 2 条
       // 正好撞满（PaymentController、ShopSearchController 输出都是整 12,000），
       // 结果是这两条流程被记成「确定性降级」并进了缓存——**上限是我们自己设的，不该算成模型给不出更多**。
@@ -377,7 +377,7 @@ interface ParseContext {
 
 /**
   依赖图的「有关系」判据。边级校验靠它把「声称来自代码」的边验一遍——
-  双向都塞进集合，查起来才是 O(1)。
+  双向都写入集合，查起来才是 O(1)。
 */
 export function buildRelatedPairs(analysis: RepositoryAnalysis): (leftPath: string, rightPath: string) => boolean {
   const pairs = new Set<string>();
@@ -636,7 +636,7 @@ function normalizeStage(
 function asText(value: unknown, limit: number): string {
   if (typeof value !== "string") return "";
   const chars = [...value.trim().replace(/\s+/g, " ")];
-  // 截断要留痕：静默掐尾会让界面把半截句子当成模型的完整结论（省略号占一格，总长仍不超 limit）
+  // 截断要留痕：静默掐尾会让界面把半截句子当成模型的完整结论（省略号占一个节点，总长仍不超 limit）
   if (chars.length <= limit) return chars.join("");
   return `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
@@ -695,12 +695,12 @@ export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string
   同键**在途**去重：内存层要等生成结束才写，所以两个请求同时打开一个冷入口时，
   各自都判定「未命中」→ 同一份输入烧两遍钱（§25.3 记的缺口：「两个标签页同时开流程视图仍可能
   并发双烧（引擎侧没有在途去重），本刀不做」——GUI 那侧只挡住了 StrictMode 的双发）。
-  后来者复用同一个回合的结果，`usage` 抹掉：与命中缓存同一口径，同一笔钱不被计两次。
+  后来者复用同一个回合的结果，`usage` 清除：与命中缓存同一口径，同一笔钱不被计两次。
 */
 const flowInFlight = new Map<string, Promise<GeneratedFlow>>();
 
 export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
-  // 出境清单在装配阶段攒下来，但**命中缓存的那条路不 booking**——那一次一个字都没发出去
+  // 出网清单在装配阶段攒下来，但**命中缓存的那条路不 booking**——那一次一个字都没发出去
   const input = withEgressCollector(raw);
   const cacheKey = flowCacheKeyOf(input);
   if (!cacheKey) return generateRepositoryFlow(input);
@@ -735,7 +735,7 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
     // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）
     flowCache.set(key, { result, at: now });
     trimToNewest(flowCache, FLOW_CACHE_MAX);
-    // 撞自己上限那一格只活在内存里：重启后可以重问，不被永久钉成静态视图（`GeneratedFlow.capHit`）
+    // 撞自己上限那个节点只活在内存里：重启后可以重问，不被永久钉成静态视图（`GeneratedFlow.capHit`）
     if (!result.capHit) input.database?.putLayerCache(key, result);
   }
   return result;
@@ -750,7 +750,7 @@ function trimToNewest<Key, Value>(map: Map<Key, Value>, max: number): void {
   }
 }
 
-/** LLM 不可用或预算触顶时的入口：直接给静态调用链，并显式说明原因。 */
+/** LLM 不可用或预算已达上限时的入口：直接给静态调用链，并显式说明原因。 */
 export function degradedFlow(analysis: RepositoryAnalysis, entry: SourceAnchor, reason: string): GeneratedFlow {
   return { flow: staticFlow(buildFlowEvidence(analysis, entry), reason), source: "static", reason };
 }

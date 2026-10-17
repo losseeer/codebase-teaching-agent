@@ -158,7 +158,7 @@ describe("parseFlow（模型输出的硬校验）", () => {
     expect(flow?.stages[1].files[0].line).toBe(1);
     // 只有越界的两个被记账：第三处 line=5 是合法行号，不该被算进去；缺行号也不算
     expect(flow?.caveats).toContain("有 2 个文件的行号超出该文件行数");
-    // 截断要留痕：超长字段以「…」收尾（占一格，总长不超口径上限），半截句子不再伪装成完整结论
+    // 截断要留痕：超长字段以「…」收尾（占一个节点，总长不超口径上限），半截句子不再伪装成完整结论
     expect([...(flow?.stages[0].title ?? "")].length).toBe(14);
     expect(flow?.stages[0].title.endsWith("…")).toBe(true);
     expect([...(flow?.stages[0].detail ?? "")].length).toBe(160);
@@ -258,10 +258,10 @@ describe("generateRepositoryFlow（含降级）", () => {
     });
     expect(result.source).toBe("static");
     expect(result.reason).toBe("模型输出在长度上限处被截断，未形成完整流程");
-    // 撞上限是我们给的容量不够，不是模型对这份代码给不出更多：标 capHit，别混进 deterministic 那一格
+    // 撞上限是我们给的容量不够，不是模型对这份代码给不出更多：标 capHit，别混进 deterministic 那个节点
     expect(result.capHit).toBe(true);
     expect(result.deterministic).toBeUndefined();
-    expect(seen?.maxTokens).toBe(8_000); // 主调用上限：3_200 时该入口必触顶 → 6_000 → 10-06 实测 13 条里 2 条撞满 12,000（含 6,000 思考余量）后再放宽到 8_000
+    expect(seen?.maxTokens).toBe(8_000); // 主调用上限：3_200 时该入口必达到预算上限 → 6_000 → 10-06 实测 13 条里 2 条撞满 12,000（含 6,000 思考余量）后再放宽到 8_000
   });
 
   it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {
@@ -442,12 +442,12 @@ describe("generateRepositoryFlow（含降级）", () => {
   });
 
   /**
-    红线（P1 加外部包名那次改动留下的守卫）：`externals` 是图里新增的一格，
+    红线（P1 加外部包名那次改动留下的守卫）：`externals` 是图里新增的一个节点，
     流程证据**一个字都不许吃它**——吃了就等于每加一个 import 都翻全仓流程键，
     而一条流程实测 ≈¥0.17、一个仓十几个入口就是几块钱，且翻完在日志里长得像「正常重烧」，没人会察觉。
     `pnpm arch:keyprobe` 拿真仓比，这条拿 fixture 钉住判据本身。
   */
-  it("图的 externals 不进流程证据也不进键：同一份图加不加这一格，键与 digest 逐字相同", () => {
+  it("图的 externals 不进流程证据也不进键：同一份图加不加这个节点，键与 digest 逐字相同", () => {
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete: async () => ({ text: "", usage: { inputTokens: 0, outputTokens: 0 }, finishReason: "stop" }) };
     const plain = analysisOf();
     const withExternals = analysisOf();
@@ -542,7 +542,7 @@ describe("generateRepositoryFlow（含降级）", () => {
   });
 });
 
-describe("buildFlowDigest（喂给模型的证据）", () => {
+describe("buildFlowDigest（送入模型的证据）", () => {
   it("带上入口文件的真实内容、文件清单按「入口优先 + 被依赖多优先」排序", () => {
     const dir = mkdtempSync(join(tmpdir(), "flow-digest-"));
     mkdirSync(join(dir, "graph"), { recursive: true });

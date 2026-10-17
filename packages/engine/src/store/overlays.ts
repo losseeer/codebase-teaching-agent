@@ -4,14 +4,14 @@ import type { TutorDatabase } from "./database.js";
 /**
   服务端覆盖层（2026-10-16 上收）。存在 `repository_state.settings_json` 的 `overlays` 子键里。
   写侧只有一条路（`patchOverlays`），因为这三处都要改它：GUI 的拖动、Agent 的 `set_architecture` 工具、
-  浏览器本地旧值的一次性迁移。**多条写路径各写一套合并逻辑，迟早有一处把用户的修正抹掉。**
+  浏览器本地旧值的一次性迁移。**多条写路径各写一套合并逻辑，迟早有一处把用户的修正清除。**
 
   ⚠️ `settings_json` 里还住着引擎自己的内部键（`refinement` 标记等，见 importer 写它的那处）。
   一次整体覆盖就会让「润色缓存命中」判定失效，等于白烧一轮重命名调用——
-  所以这里永远是**读-合并-写**，且合并完把原对象整个带回去，只碰 `overlays` 这一格。
+  所以这里永远是**读-合并-写**，且合并完把原对象整个带回去，只碰 `overlays` 这个节点。
 */
 
-/** 界面与工具的补丁形状：数组是**整份替换**（界面自己知道全集），字典是**按键合并**（增量改一格）。 */
+/** 界面与工具的补丁形状：数组是**整份替换**（界面自己知道全集），字典是**按键合并**（增量改一个节点）。 */
 export interface OverlaysPatch {
   modules?: {
     renamed?: Record<string, string>;
@@ -22,7 +22,7 @@ export interface OverlaysPatch {
   architecture?: ArchitectureOverrides;
 }
 
-/** 只认这一格里的已知键：未知字段一律不写进去（工具拒写与界面防脏同一口径）。 */
+/** 只认这个节点里的已知键：未知字段一律不写进去（工具拒写与界面防脏同一口径）。 */
 const MODULE_KEYS = ["renamed", "hidden", "custom", "tier"] as const;
 const ARCH_KEYS = ["moduleLayer", "layerRenames"] as const;
 
@@ -34,7 +34,7 @@ export function readOverlays(database: TutorDatabase, repositoryId: string): Rep
 
 /**
   改名时把引用旧层名的归层记录一起换掉——留下两套名字，下一次读到的模块就会散落在两个层里，
-  而且「恢复模型原判」再也找不回原样。这一格合并在写侧做，读侧（`applyOverrides`）就不必猜。
+  而且「恢复模型原判」再也找不回原样。这个节点合并在写侧做，读侧（`applyOverrides`）就不必猜。
 */
 export function patchOverlays(database: TutorDatabase, repositoryId: string, patch: OverlaysPatch): RepositoryOverlays {
   const settings = database.getSettings<Record<string, unknown>>(repositoryId) ?? {};
@@ -75,7 +75,7 @@ export function patchOverlays(database: TutorDatabase, repositoryId: string, pat
 }
 
 /**
-  撤掉某几格的覆盖，让那几个模块/层回到引擎自己的判据。
+  撤掉其中几个个节点的覆盖，让那几个模块/层回到引擎自己的判据。
   为什么要单独一条而不是让调用方发 `{ 模块 id: undefined }`：JSON 带不动 undefined，
   靠「值为空串」判删除会把空名字写进图里。这里按 key 显式删，语义只有一种。
 

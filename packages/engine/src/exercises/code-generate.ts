@@ -13,7 +13,7 @@
 
   测试结论只认一行 `TESTS <通过数> <失败数>`（契约见下面的提示词），**不认异常**：
   下发件如果是因为编译挂 / 语法挂而退出非 0，那一行根本不会印出来，于是被判成「harness 坏了」而不是「题做对了」。
-  这一格区分不能省——把「跑不起来」当「跑出问题」，出一批需要学习者先修语法环境的题，是这套机制最坏的死法。
+  这个节点区分不能省——把「跑不起来」当「跑出问题」，出一批需要学习者先修语法环境的题，是这套机制最坏的死法。
 */
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
@@ -102,7 +102,7 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
   ].join("\n");
 }
 
-/** 出题侧读源码：文件头部的 import 段 + 符号体，两边都过密钥筛，并如实登记出境。 */
+/** 出题侧读源码：文件头部的 import 段 + 符号体，两边都过密钥筛，并如实登记出网。 */
 export function unitSource(repositoryPath: string, unit: ImplementationUnit): { imports: string; body: string; sources: { path: string; from: number; to: number; text: string; masked: number }[] } | undefined {
   const lines = readFileLines(repositoryPath, unit.symbol.path);
   if (!lines) return undefined;
@@ -163,7 +163,7 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect } };
 }
 
-/** 只认这一行：`TESTS <通过> <失败>`。没有它 = 测试压根没跑完，不拿「非 0 退出」冒充「测出问题」。 */
+/** 只认这一行：`TESTS <通过> <失败>`。没有它 = 测试压根没跑完，不拿「非 0 退出」伪装成「测出问题」。 */
 export function verdictOf(run: SandboxRun): { passed: number; failed: number } | undefined {
   const lines = run.stdout.trimEnd().split("\n");
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -231,7 +231,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
         source: source.body.slice(0, MAX_FILE_BYTES)
       }),
       // 出题要的正文比聊天重得多（下发件 + 参考解 + 测试 + 替身，四份源码），上限按这个给。
-      // 推理模型的思考 token 也计在这格里（provider 再加 6000 余量）：
+      // 推理模型的思考 token 也计在这个节点里（provider 再加 6000 余量）：
       // 3000 那一档实测被思考吃光、正文为空（95 秒一趟），见开发日志 §55。
       maxTokens: 6_000,
       scene: "practice.generate-code"
@@ -267,7 +267,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   按需讲评（刀 4 后半）：**默认不花钱**——只有学习者在判完之后主动点一次才发这一趟。
   - 先重跑一次沙箱拿失败原因（测试文件的 stderr 是模型自己写的 `FAIL <标签>`，那是唯一具体的证据），
     重跑不花钱也不碰仓库；讲评因此是**对着这份代码的这一次运行**说的，不是对着缓存里的题面猜的。
-  - 出境登记用 `sandbox-output`：这一段出门的是学习者写的代码与运行输出，不是仓内源码，
+  - 出网登记用 `sandbox-output`：这一段出门的是学习者写的代码与运行输出，不是仓内源码，
     但同样可能带着学习者粘进去的密钥，所以照过密钥筛、照记 `code_egress`。
   - **不返回任何判分字段**：passed/score 归沙箱，这里只出一段话。
 */

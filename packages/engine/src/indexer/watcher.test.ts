@@ -23,8 +23,8 @@ function repository(extraIgnoreLines: string[] = []): string {
   const dir = mkdtempSync(join(tmpdir(), "tutor-watcher-"));
   temporaryDirectories.push(dir);
   mkdirSync(join(dir, "src"), { recursive: true });
-  // 只有测试要「用户自己写过一份」时才落那个文件：写了空文件就等于替引擎把缺省播种顶掉了
-  // （缺省那一份带 node_modules/ 与 .tutor/，正是第二条用例要读的东西）
+  // 只有测试要「用户自己写过一份」时才落那个文件：写了空文件就等于替引擎把默认播种取代了
+  // （默认那一份带 node_modules/ 与 .tutor/，正是第二条用例要读的东西）
   if (extraIgnoreLines.length) writeFileSync(join(dir, ".tutorignore"), `${extraIgnoreLines.join("\n")}\n`, "utf8");
   writeFileSync(join(dir, "src/keep.ts"), "export const keep = 1;\n", "utf8");
   return dir;
@@ -56,15 +56,15 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     const matcher = createTutorIgnoreMatcher(dir);
     // 这一条是索引层的既有设计（ignore.test.ts 钉着），说明「放行」确实生效了
     expect(matcher.ignores(".tutor/tutor.db"), "前提：用户放行后匹配器认为产物该被索引").toBe(false);
-    // 但监听层不跟：自激循环的代价是整仓反复重扫，更糟时反复重烧钱
+    // 但监听层不跟：自触发循环的代价是整仓反复重扫，更糟时反复重烧钱
     expect(changeWanted(".tutor/tutor.db", matcher)).toBe(false);
     expect(changeWanted(".tutor/journal.jsonl", matcher)).toBe(false);
     expect(changeWanted(".tutor", matcher)).toBe(false);
-    expect(isArtifactEcho(".tutorx/a.ts"), "只挡这一层目录，别顺手挡掉同前缀的源码目录").toBe(false);
+    expect(isArtifactEcho(".tutorx/a.ts"), "只挡这一层目录，别顺带挡掉同前缀的源码目录").toBe(false);
     expect(changeWanted("src/keep.ts", matcher)).toBe(true);
   });
 
-  it("缺省配置下：忽略项不上报，`.tutorignore` 自己除外（改了要立刻重读）", () => {
+  it("默认配置下：忽略项不上报，`.tutorignore` 自己除外（改了要立刻重读）", () => {
     const dir = repository();
     const matcher = createTutorIgnoreMatcher(dir);
     expect(changeWanted("node_modules/x/index.ts", matcher)).toBe(false);
@@ -74,7 +74,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
 
   /**
     #163 的判据位。以前「非忽略、非产物」就算源码改动，于是往仓里放一张图片、一份 `.env`
-    都会排一整轮重分析：产物被真实扫描换掉（测试里那两条出境用例因此在并行负载下偶发拿到 0 行），
+    都会排一整轮重分析：产物被真实扫描换掉（测试里那两条出网用例因此在并行负载下偶发拿到 0 行），
     真仓里则是缓存键重算 + 润色可能重烧。现在只有「可能改变收录集」的改动才叫醒。
     */
   it("文件那一档按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {

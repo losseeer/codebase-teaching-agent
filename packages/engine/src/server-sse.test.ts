@@ -55,7 +55,7 @@ function openStream(port: number, path: string): Promise<Stream> {
         }
         stream.frames.push(chunk);
       });
-      // 连接被服务端收尾（撤 key 后事件流就是这么关的）：把已建立的 stream 交回去，别让断言悬着等超时
+      // 连接被服务端收尾（撤 key 后事件流就是这么关的）：把已建立的 stream 返回去，别让断言悬着等超时
       response.on("end", () => { if (!settled) { settled = true; resolve(stream); } });
     });
     request.on("error", (error) => { if (!settled) reject(error); settled = true; });
@@ -140,7 +140,7 @@ describe("全局事件流的真连接", () => {
     const alive = await openStream(port(), "/api/events");
     try {
       dead.close();
-      // 等 close 事件在引擎侧走完（摘掉订阅者）；摘不摘都不该影响别人，这条断言要的是「另一路照样收」
+      // 等 close 事件在引擎侧走完（移除订阅者）；摘不摘都不该影响别人，这条断言要的是「另一路照样收」
       await new Promise((resolve) => setTimeout(resolve, 150));
       const submitted = await app!.inject({ method: "POST", url: "/api/imports", payload: { path: repoDir } });
       const jobId = (submitted.json() as { id: string }).id;

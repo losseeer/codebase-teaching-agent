@@ -172,11 +172,11 @@ export interface TeachTurn {
   /** 回复落盘时被 2000 字截断——引用核对会看到半截引用，这条不参与引用判分。 */
   answerTruncated: boolean;
   /**
-    缺省 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
+    默认 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
     「绑定锚点」这条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。
 
     2026-10-14 撤掉教学状态机时，第三条 `socratic-question`（每轮留一个可核对的问题）整条删掉：
-    它的判据吃 `stage` 与「本轮动作」，而动作由状态机决定——生产者没了，这条尺子量的东西已经不存在了。
+    它的判据吃 `stage` 与「本轮动作」，而动作由状态机决定——生产者没了，这条度量量的东西已经不存在了。
     */
   scene?: "teach" | "map_chat" | "practice_chat";
 }
@@ -192,7 +192,7 @@ const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
 /**
   出字前的本地过筛（零 token）：只查**机器能判的两件事**——疑似密钥外泄、仓库外绝对路径被当证据引用。
   与三条不变量的区别很要紧：不变量是「这轮该做到而没做到」，进分母；这两条是**改写**（隐掉再下发），
-  不进分母——把「模型偶然贴了个 key」算进教学法得分，只会让那条尺子失去意义。
+  不进分母——把「模型偶然贴了个 key」算进教学法得分，只会让那条度量失去意义。
 
   为什么值得做：`read_file` 已经在源头挡住密钥文件（拒读名单 + 软链接复核），但那挡的是**这一轮读进来的东西**；
   学习者自己贴过一段带 token 的报错、或者上一轮的正文里带着它，就会顺着对话历史被模型复述出来。
@@ -242,7 +242,7 @@ export interface TurnInvariantVerdict {
 const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
 
 /**
-  单回合的不变量机检——**离线判分器与运行期在环复检共用这一个实现**。
+  单回合的不变量机检——**离线判分器与运行期运行时复检共用这一个实现**。
   分成两份实现的后果是「线上说合格、离线算不合格」，那比没有复检更糟。
 
   判「通过」的口径刻意保守：引用核对只看「文件在不在索引、行号越不越界」，
@@ -306,7 +306,7 @@ export interface TeachInvariantScore {
 /**
   只判**设计上写了保证、且文本层可核对**的三条不变量（出处见 INVARIANTS 表）；
   「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给第 3 刀裁判。
-  逐条判定在 `checkTurnInvariants`——运行期在环复检也走它，这里只负责按条目聚合。
+  逐条判定在 `checkTurnInvariants`——运行期运行时复检也走它，这里只负责按条目聚合。
   */
 export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
   const checks = new Map<string, InvariantCheck>(INVARIANTS.map((item) => [item.id, { ...item, applicable: 0, pass: 0, misses: [] }]));

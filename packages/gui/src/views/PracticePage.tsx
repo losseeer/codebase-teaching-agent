@@ -23,7 +23,7 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
   - 右 `.practice-main > .practice-wrap`：idle 空态 → generating 的 `.phase` 读数 → `.exercise-head` 徽章 +
     `.exercise-title` + `.anchor-chip` + `.exercise-prompt` → 按 `inputMode` 给作答件 → 判分后 `.feedback-panel`
 
-  两处「不照抄原型」是有意保留的判断：原型的假进度（每 800ms 推进一格）与假分数（写死 2 / 3.8 / 日期）都不搬——
+  两处「不照抄原型」是有意保留的判断：原型的假进度（每 800ms 推进一个节点）与假分数（写死 2 / 3.8 / 日期）都不搬——
   我们只有一个 `await`，所以 generating 只说「正在出题」；判分口径逐字取自 `result.gradingMode` +
   `automatic` + `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
   */
@@ -104,7 +104,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  /** 刚才哪一格出题失败了（单元 id + 引擎原话）：那一格转警示态，别让人反复撞同一堵墙。 */
+  /** 刚才哪个节点出题失败了（单元 id + 引擎原话）：那个节点转警示态，别让人反复撞同一堵墙。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
@@ -128,7 +128,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     const isLlmFamily = activeModule !== COMPREHENSION_MODULE_ID;
-    // 失败时把「刚才点的那一格」记下来：卡片转成警示态并带上原因，用户不必再撞第二次
+    // 失败时把「刚才点的那个节点」记下来：卡片转成警示态并带上原因，用户不必再撞第二次
     const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
       const next = await api.createExercise(repositoryId, isLlmFamily
@@ -460,7 +460,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   );
 }
 
-/** 判完之后的一格：结论 + 判分口径 + 逐条判定行 + SM-2 调度 + 重做 / 按需讲评。 */
+/** 判完之后的一个节点：结论 + 判分口径 + 逐条判定行 + SM-2 调度 + 重做 / 按需讲评。 */
 function GradedPanel({ exercise, result, explanation, explaining, onExplain, onRedo }: { exercise: Exercise; result: ExerciseResult; explanation: string; explaining: boolean; onExplain: () => void; onRedo: () => void }): ReactElement {
   const grade = gradeSource(result);
   const optionLabel = (id: string): string => exercise.options?.find((item) => item.id === id)?.label ?? id;
@@ -523,7 +523,7 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
 /**
   左栏的已练卡片：`.d-score` 报的是掌握度档位（0–5），配色按「有没有通过记录」走。
   下次复习时间（`dueAt`）只有刚判过的那一题拿得到——排期住在 `ExerciseResult.review` 里，
-  `PracticeSummary.mastery` 没有这一格，所以其余卡片如实显示上次练习时间，不替它们编日期。
+  `PracticeSummary.mastery` 没有这个节点，所以其余卡片如实显示上次练习时间，不替它们编日期。
   */
 function DoneCard({ record, selected, dueAt, failed, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; failed: string | null; onPick: () => void }): ReactElement {
   const last = record.lastPracticedAt ? dateText(record.lastPracticedAt) : "";
@@ -531,7 +531,7 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
     <button
       type="button"
       className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
-      title={failed ? `刚才这一格出题失败：${failed}` : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
+      title={failed ? `刚才这个节点出题失败：${failed}` : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
       onClick={onPick}
     >
       <div className="d-head">

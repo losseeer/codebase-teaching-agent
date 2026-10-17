@@ -48,7 +48,7 @@ export interface ImportedRepository {
   freshness: RepositoryFreshness;
   /**
     fs 监听的死活。**必须跟着挂载结果一起交出去**：增量重分析是产物变新的唯一自动通道，
-    监听没起来时那次 `freshness` 就只到挂载那一刻为止——界面继续报「产物是新的」是在替引擎撒谎。
+    监听没起来时那次 `freshness` 就只到挂载那一刻为止——界面继续报「产物是新的」是在替引擎撒不实。
     */
   watch: WatchStatus;
 }
@@ -85,7 +85,7 @@ function rememberRepository(repositoryPath: string): void {
   writeRegistry([...readRegistry().filter((item) => item !== repositoryPath), repositoryPath]);
 }
 
-/** 从地址簿里摘掉一条（用户显式动作；不动仓库自己的 .tutor 产物）。 */
+/** 从地址簿里移除一条（用户显式动作；不动仓库自己的 .tutor 产物）。 */
 function dropFromRegistry(repositoryId: string): void {
   writeRegistry(readRegistry().filter((item) => catalogRepositoryId(item) !== repositoryId));
 }
@@ -313,7 +313,7 @@ export class ImportService extends EventEmitter {
 
   /**
     挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代「挂载即全卸」是切仓必须重导入的根因），
-    改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存摘掉，磁盘产物一字不动。
+    改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存移除，磁盘产物一字不动。
     */
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
@@ -341,7 +341,7 @@ export class ImportService extends EventEmitter {
     this.lru.push(repositoryId);
   }
 
-  /** 起一条 fs 监听并交回它的初始终态（attach 与恢复共用这一份，别让两处对「起不来怎么办」各写一遍）。 */
+  /** 起一条 fs 监听并返回它的初始终态（attach 与恢复共用这一份，别让两处对「起不来怎么办」各写一遍）。 */
   private startWatcher(repository: AnalyzedRepository): { watcher: RepositoryWatcher; watch: WatchStatus } {
     const repositoryId = repository.index.repositoryId;
     const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
@@ -395,7 +395,7 @@ export class ImportService extends EventEmitter {
     return { paused: false, woken: true };
   }
 
-  /** 此刻的挂起读数（到点即视为已恢复，顺手清登记）。 */
+  /** 此刻的挂起读数（到点即视为已恢复，顺带清登记）。 */
   watchPauseOf(repositoryId: string): { paused: boolean; until?: number } {
     const entry = this.watchPaused.get(repositoryId);
     if (!entry) return { paused: false };
@@ -406,7 +406,7 @@ export class ImportService extends EventEmitter {
     return { paused: true, until: entry.until };
   }
 
-  /** 驱逐 = 关它的 fs 监听 + 从内存摘掉（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
+  /** 驱逐 = 关它的 fs 监听 + 从内存移除（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
     刻意**不**清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
     换仓后不可能误命中；实测切仓时清缓存会让下一个回合把完全相同的输入重烧一次
     （切换 → 重烧 ≈1.5k in / 200 out），而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。
@@ -496,12 +496,12 @@ export class ImportService extends EventEmitter {
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     /**
-      该仓预算：取落库值，取不到才用缺省。这里**必须**用同一份，否则「把预算改成 $1」的人
+      该仓预算：取落库值，取不到才用默认。这里**必须**用同一份，否则「把预算改成 $1」的人
       在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要 + 宏观润色）。
       */
     const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
     // 闸门只认 `mode === "degraded"`，而它由「算出的钱 ≥ 预算」决定：单价没配时钱恒算 0，
-    // 于是闸门一路放行且不报错。这一格必须作为读数交出去（`/cost` 与成本页、启动日志同一口径）。
+    // 于是闸门一路放行且不报错。这一项必须作为读数交出去（`/cost` 与成本页、启动日志同一口径）。
     const lightProvider = summarizeCost(repositoryPath, budgetUsd).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
     // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
@@ -626,7 +626,7 @@ export class ImportService extends EventEmitter {
         监听报上来的改动经常不落在收录集里（往仓根放一张 `.png` 会顶一下仓根的 mtime；
         macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完就回写：
         产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过——
-        测试里那份手工造的 fixture 产物也是这样被真扫描顶掉的（#163）。
+        测试里那份手工造的 fixture 产物也是这样被真扫描取代的（#163）。
         */
       const rescan = scanRepositoryWithDigests(current.path);
       if (sameIngestedContent(current.index, rescan.index)) {
@@ -652,7 +652,7 @@ export class ImportService extends EventEmitter {
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
       this.repositories.set(repositoryId, { ...next, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
-      // 只记条数与结果，不把路径数组塞进日志（payload 口径只允许标量）
+      // 只记条数与结果，不把路径数组写入日志（payload 口径只允许标量）
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -735,7 +735,7 @@ export type RefinementMarker = { versionStamp?: string; modelVersion?: string; c
 
 /**
   润色缓存能否复用：标记里的四个维度全对上才算命中——源码内容、当时用哪个模型润的、本层提示词口径、图后端。
-  唯独 `modelVersion` 缺省（当前没有可用模型：未配置或预算触顶）时放行——复用上次成功的润色结果，
+  唯独 `modelVersion` 默认（当前没有可用模型：未配置或预算已达上限）时放行——复用上次成功的润色结果，
   好于把它丢掉、退回未润色的裸命名。旧标记缺某个字段时该维度自然不等 → 未命中，重润一次属预期。
  */
 export function refinementIsFresh(marker: RefinementMarker | undefined, current: { versionStamp: string; contractVersion: string; backendStamp: string; modelVersion?: string }): boolean {

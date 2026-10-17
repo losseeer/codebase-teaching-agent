@@ -70,7 +70,7 @@ describe("引擎工作日志", () => {
     }]);
   });
 
-  it("后台任务（无请求上下文）记 traceId: null，且显式传 null 与缺省同义", async () => {
+  it("后台任务（无请求上下文）记 traceId: null，且显式传 null 与默认同义", async () => {
     traceEngine("reindex", { ok: true });
     traceEngine("import", { phase: "completed" }, { traceId: null });
     await flushEngineLog();
@@ -103,7 +103,7 @@ describe("引擎工作日志", () => {
     expect(logged.some((line) => line.startsWith("[engine] degrade"))).toBe(true);
   });
 
-  it("durationMs 缺省时不写该字段（不假装成 0）", async () => {
+  it("durationMs 默认时不写该字段（不假装成 0）", async () => {
     traceEngine("degrade", { scope: "flow" });
     await flushEngineLog();
     expect(readLines()[0]).not.toHaveProperty("durationMs");

@@ -32,7 +32,7 @@ interface StoredExercise {
   expected: ExpectedAnswer;
   /**
     题面来源：`llm` 模型改写成功 / `failed` 试了但回落启发式 / `not_configured` 没配模型。
-    缺省（旧行）= 当时没记，读作 unknown，不事后猜。
+    默认（旧行）= 当时没记，读作 unknown，不事后猜。
     */
   polish?: "llm" | "failed" | "not_configured";
   /** 失败形状（`no_excerpt` / `unparsable` / `provider_error`）；跟着缓存行走，命中时才知道当时坏在哪 */
@@ -123,7 +123,7 @@ function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value:
 function staleDependencies(repository: PracticeRepository, exercise: Exercise): string[] {
   if (exercise.contentHashes?.length) {
     /**
-      **出题时记的是哪一档，就按哪一档比**。老索引没有逐文件 `contentHash`，那几格记的是兜底串
+      **出题时记的是哪一档，就按哪一档比**。老索引没有逐文件 `contentHash`，那几个节点记的是兜底串
       `repo:<versionStamp>`；索引一旦重生成、开始带逐文件哈希，拿逐文件哈希去比那条兜底串就永远不等
       ⇒ 这道题此后再也答不了。反过来也一样：兜底档只该问「全仓动过没有」。
       「写入侧有兜底、读取侧没有」是成对出现的 bug，路由级用例（手搓的 index 不带 contentHash）第一次把它撞出来。
@@ -196,7 +196,7 @@ export class ExerciseService {
       if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, database, journal, scope, deps);
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
       /**
-        题面到底出自谁。**过去这一格是缺的**：润色失败静默回落启发式题面，而 journal 一律记 `source: "rule"`
+        题面到底出自谁。**过去这个节点是缺的**：润色失败静默回落启发式题面，而 journal 一律记 `source: "rule"`
         ——润色成功也记同一条，于是漏斗里「模型写的题面」永远比真相少，端点抽风的那几天看着像「没人用润色」。
         三种成因分开记（模型改写成功 / 试了但失败 / 压根没配模型），失败时把失败形状一起写。
         */
@@ -227,12 +227,12 @@ export class ExerciseService {
     代码族出题（`patch_edit` / `author_function`）：模型交「题面 + 下发件 + 参考解 + 测试 + 替身」，
     引擎在沙箱里跑两趟自证（参考解必过、下发件必挂）才允许落库——**没自证过的题一道都不出**。
     每次真跑都写一行 `exercise_run`，被拒的也算：漏斗要分得开「没走到沙箱」与「沙箱说这题不行」。
-    没配模型/预算触顶时直接拒（与三条对话作用域同一纪律，不回落本地题面）。
+    没配模型/预算已达上限时直接拒（与三条对话作用域同一纪律，不回落本地题面）。
     */
   private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, database: TutorDatabase, journal: Journal, scope: string, deps: { path: string; hash: string }[]): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
-      const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已触顶。";
+      const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已达到预算上限。";
       journal.append("exercise_declined", { family: "code", tag: "", reason, stage: "no_provider" });
       throw new Error(reason);
     }
@@ -303,7 +303,7 @@ export class ExerciseService {
   private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, database: TutorDatabase): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("LLM 出题需要提供主题标签；请在「＋ 配置」里填写。");
-    if (!provider) throw new Error("LLM 出题不可用：未配置 LLM 或本月预算已触顶。");
+    if (!provider) throw new Error("LLM 出题不可用：未配置 LLM 或本月预算已达到预算上限。");
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
@@ -375,7 +375,7 @@ export class ExerciseService {
     不做时效校验是有意的：讲评吃的是冻结在缓存行里的那组测试与这次运行的输出，跟仓库现在长什么样无关。
     */
   async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
-    if (!provider) throw new Error("讲评需要配置模型；当前未配 LLM 或本月预算已触顶。");
+    if (!provider) throw new Error("讲评需要配置模型；当前未配 LLM 或本月预算已达到预算上限。");
     const database = new TutorDatabase(repository.path);
     let stored: StoredExercise | undefined;
     try {
@@ -612,9 +612,9 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, jour
   };
 }
 
-/** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不冒充确定性判分。 */
+/** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不伪装成确定性判分。 */
 async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<GradeOutcome> {
-  if (!provider) throw new Error("rubric 判分需要 LLM；当前未配置 LLM 或本月预算已触顶。");
+  if (!provider) throw new Error("rubric 判分需要 LLM；当前未配置 LLM 或本月预算已达到预算上限。");
   const learnerAnswer = (answer.text ?? "").trim();
   if (!learnerAnswer) {
     return { score: 0, passed: false, automatic: false, feedbackSource: "llm_judge", feedback: "回答为空；请写下你的分析后再提交。" };

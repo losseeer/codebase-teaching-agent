@@ -35,9 +35,9 @@ export interface TeachingContextInput {
   analysis?: RepositoryAnalysis;
   maximumCharacters?: number;
   /**
-    出境登记（见 `security/dataflow.ts`）：本函数把哪几段源码放进了上下文，就往后推几条。
-    **不在这里落账**——同一个 `assembleContext` 也被「新建会话时回给界面看」那条路径调用（server.ts 的
-    `POST /api/sessions`），那一趟根本没发请求，记了就是虚报。由真要发请求的调用方在发出前落账。
+    出网登记（见 `security/dataflow.ts`）：本函数把哪几段源码放进了上下文，就往后推几条。
+    **不在这里计入审计**——同一个 `assembleContext` 也被「新建会话时回给界面看」那条路径调用（server.ts 的
+    `POST /api/sessions`），那一趟根本没发请求，记了就是虚报。由真要发请求的调用方在发出前计入审计。
     */
   egress?: EgressCollector;
 }

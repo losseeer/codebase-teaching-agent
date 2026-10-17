@@ -123,7 +123,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
             rows={2}
             // 生成期间不锁输入框：下一条问题可以预先打进去（发送按钮与 Enter 仍由 canSend 挡住，不会并发发请求）
           />
-          {/* 生成中这颗按钮换成「停止」：整轮请求带 turnId，点了引擎就停手（省 token）、连接同时掐掉 */}
+          {/* 生成中这颗按钮换成「停止」：整轮请求带 turnId，点了引擎就停手（省 token）、连接同时中止 */}
           {t.sending ? (
             <button className="send-btn stop" aria-label="停止生成" title="停止生成" type="button" onClick={t.stopTurn}>
               <Icon name="stop" />
