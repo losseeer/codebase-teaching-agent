@@ -587,7 +587,12 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     // 只认模型判过的那份：老口径里 `source:"static"` 的行装的是 tier 三档，读回来就又变成假架构图
     if (stored && stored.value.layers?.length && stored.value.source === "llm") {
       const layered = applyOverrides(stored.value.layers, overrides, units);
-      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, ...(layered.lost.length ? { lostOverrides: layered.lost } : {}), blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
+      /**
+        `lostOverrides` 必须**每次覆写**，不能只在非空时才带上：这一格是「原判 + 当前覆盖层」的现算读数，
+        而 `...stored.value` 里可能住着上一次判层时烤进来的那条（10-17 实测：用户把落空的修正撤掉之后
+        横幅还在，因为缓存行还替它说话）。空数组要如实写成 undefined，别让旧值漏出来。
+      */
+      return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, lostOverrides: layered.lost.length ? layered.lost : undefined, blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
     }
   }
   /** 读侧（`allowCall: false`）没缓存行就到此为止：不发请求、不落盘，画布交给不可用卡片。 */
@@ -637,15 +642,14 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
       ...(parsed.droppedFacts ? { reason: "模型额外给了边或文件字段，已丢弃（层归属仍按它判的结果）" } : {}),
       // 旧产物没采过外部包名：那一栏是空的，但**不等于**「这个系统不碰任何外部服务」，得说出来
       ...(externalsMissing && !boundary.rows.length ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {}),
-      // 落盘这份是模型原判，人工挪过的格子属于「读时现叠」那一层，不进缓存
+      // 落盘这份是模型原判，人工挪过的格子与「哪几条修正这次没接上」都属于读时现算，不进缓存
       overriddenUnits: [],
-      ...(layered.lost.length ? { lostOverrides: layered.lost } : {}),
       generatedAt: new Date().toISOString(),
       basedOnVersionStamp: analysis.versionStamp
     };
     // 模型自己说「边/文件字段被我丢掉了」的那一次不落盘：payload 与产出不同构，留着下次重问才收敛
     if (!parsed.droppedFacts) database?.putLayerCache(key, plan);
-    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
+    return { ...plan, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, ...(layered.lost.length ? { lostOverrides: layered.lost } : {}), blocks: briefs, sideModules, omittedModules, collapsedExternals: boundary.collapsed, usage: response.usage };
   } catch (error) {
     return unavailable(context, "call_failed", `分层调用没成功：${error instanceof Error ? error.message.slice(0, 80) : "未知错误"}。没落盘，可以再点一次「判一次分层」。`);
   }

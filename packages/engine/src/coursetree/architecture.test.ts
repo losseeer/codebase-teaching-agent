@@ -278,6 +278,31 @@ describe("aggregateModuleEdges", () => {
     }
   });
 
+  it("撤掉落空的修正之后横幅要跟着消失：读时现算的读数不许住在缓存行里", async () => {
+    /* 10-17 真实现场：dianping-backend 撤掉「把 service 挪进业务编排」之后，界面仍报「1 处人工修正这次没生效」。
+       根因是重判那一刻修正还挂着，落盘的缓存行把 `lostOverrides` 一起烤了进去，而读侧只在「这次也算出落空」
+       时才覆写这一格 ⇒ 撤干净之后，旧值从 `...stored.value` 漏出来继续点亮横幅。 */
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-unlost-")));
+    const database = new TutorDatabase(dir);
+    try {
+      const first = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api"] }, { name: "数据", duty: "d", modules: ["module:src/core", "module:src/db"] }] }));
+      await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: first.provider, database });
+      const overrides = { moduleLayer: { "module:src/core": "业务编排" } };
+      const second = providerReturning(JSON.stringify({ layers: [{ name: "接口", duty: "d", modules: ["module:src/api", "module:src/core"] }, { name: "存储", duty: "d", modules: ["module:src/db"] }] }));
+      // 重判发生在修正还挂着的时候 ⇒ 这一发把落空读数写进了缓存行（旧写法）
+      await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: second.provider, database, force: true, overrides });
+      const stale = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: second.provider, database, overrides });
+      expect(stale.lostOverrides?.map((loss) => loss.module), "修正对不上层名时如实报落空").toEqual(["module:src/core"]);
+      const cleared = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: second.provider, database });
+      expect(cleared.lostOverrides, "修正已经撤掉：横幅不能再被缓存行点亮").toBeUndefined();
+      expect(cleared.overriddenUnits, "动过的格子也一样，撤干净就一格不亮").toEqual([]);
+      expect(second.complete, "这两次都只读缓存：清横幅不该再花一发").toHaveBeenCalledTimes(1);
+    } finally {
+      database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("共享文件挂在多个模块下时，每条文件级边按每个模块对各算一次：宁可重复也不丢往来", () => {
     const filesByModule = new Map([["m1", ["a.ts", "shared.ts"]], ["m2", ["b.ts", "shared.ts"]]]);
     const { pairs, totalEdges } = aggregateModuleEdges(filesByModule, { "a.ts": ["b.ts"], "b.ts": [] });
