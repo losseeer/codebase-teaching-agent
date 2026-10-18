@@ -22,7 +22,7 @@ export async function migrateLegacyTierOverrides(repositoryId: string): Promise<
     }
     await api.mergeOverlays(repositoryId, { modules: { tier: legacy } });
     clearLegacyTierOverrides(repositoryId);
-    showToast(`已把 ${ids.length} 处手动改档交给引擎保存`);
+    showToast(`已同步 ${ids.length} 处改档`);
   } catch {
     // 迁不动就不迁：本地值还在，下次再试。这条不弹错误——用户在用功能，不该被一条后台搬家打断
   }

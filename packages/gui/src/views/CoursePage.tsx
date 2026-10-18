@@ -11,7 +11,7 @@ import { DiagramCanvas, type DragCommit } from "../map/DiagramCanvas";
 import { GalleryPane } from "../map/GalleryPane";
 import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } from "../map/NodeDrawer";
 import { emit } from "../journal";
-import { showToast } from "../modules/toast";
+import { showToast, toastFailure } from "../modules/toast";
 
 /**
   宏观设计 = **agent 画图工作区**（2026-10-17 定案，原型 `Pages.mapPage` + `bindCanvas`）：原先「架构视图 + 流程视图」
@@ -356,7 +356,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         setRailTab("gallery");
         showToast(`已建空白图「${created.name}」`);
       } catch (reason: unknown) {
-        showToast(reason instanceof Error ? reason.message : "新建空白图没成功");
+        toastFailure("新建没成功", reason);
       }
     })();
   }, [repositoryId]);
@@ -368,7 +368,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         setDiagrams((current) => current.map((item) => (item.id === id ? { ...item, name: renamed.name, updatedAt: renamed.updatedAt } : item)));
         if (id === diagramIdForGeometry.current) setDiagram((current) => (current ? { ...current, name: renamed.name, updatedAt: renamed.updatedAt } : current));
       } catch (reason: unknown) {
-        showToast(reason instanceof Error ? reason.message : "改名没落盘");
+        toastFailure("改名没落盘", reason);
         refreshGallery();
       }
     })();
@@ -383,7 +383,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         if (item.id === openIdRef.current) { setOpenId(null); setSelected(null); }
         showToast(`已删除「${item.name}」`);
       } catch (reason: unknown) {
-        showToast(reason instanceof Error ? reason.message : "删除没成功");
+        toastFailure("删除没成功", reason);
         refreshGallery();
       }
     })();
@@ -408,9 +408,9 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         setSaveState("synced");
         setFitNonce((value) => value + 1);
         refreshGallery();
-        showToast("已恢复到那一版（本次恢复也存了一版）");
+        showToast("已恢复到那一版");
       } catch (reason: unknown) {
-        showToast(reason instanceof Error ? reason.message : "恢复没成功");
+        toastFailure("恢复没成功", reason);
       }
     })();
   }, [repositoryId, applyDiagram, refreshGallery]);
@@ -434,7 +434,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     }
     t.setMapNode(null);
     t.setMapBinding({ kind: "module", title: node.label });
-    showToast(node.kind === "note" ? `对话已绑到便签「${node.label}」` : "这个引用核不到课程树：只把标题带进对话");
+    showToast(node.kind === "note" ? `对话已绑到便签「${node.label}」` : "引用没核到课程树");
   }, [resolutionOf, filesOf, t]);
 
   const gotoTeach = useCallback((node: DiagramNode): void => {
@@ -453,7 +453,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     const handler = onQuickPromptRef.current;
     if (handler) { handler(text); return; }
     t.setContent(text);
-    showToast("填进对话栏了，发送才轮到 agent 画");
+    showToast("已填进对话栏");
   }, [t]);
 
   const drawer = selected && diagram ? (

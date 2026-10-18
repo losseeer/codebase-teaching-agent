@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch, type ThinkingEffort } from "../api/client";
-import { showToast } from "../modules/toast";
+import { toastFailure } from "../modules/toast";
 import { Icon } from "../ui/icons";
 
 /**
@@ -13,6 +13,11 @@ import { Icon } from "../ui/icons";
 export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?: "pill" | "button"; styleLabel?: string }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
   const [open, setOpen] = useState(false);
+  /**
+    被引擎拒掉的那一句（422：档位与模型不兼容、接口地址不是 http(s)…）留在表单里就地说，
+    不进弹窗——操作结果只报状态，而「该改哪个格子」必须挨着那个格子。
+    */
+  const [rejected, setRejected] = useState<string | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -33,11 +38,16 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
     // 密钥不做乐观更新：本地态里只存掩码，明文交给引擎响应（它返回的是掩码后的完整设置）
     setLlm({ ...llm, provider: partial.provider ?? llm.provider, model: partial.model ?? llm.model, baseUrl: partial.baseUrl ?? llm.baseUrl, thinking: partial.thinking ?? llm.thinking });
     api.updateLlmSettings(partial)
-      .then(setLlm)
+      .then((next) => {
+        setLlm(next);
+        setRejected(null);
+      })
       .catch((error: unknown) => {
         setLlm(previous);
-        // 引擎 422（如思考档位与新模型不兼容、接口地址不是 http(s)）会带具体原因，优先透传而不是笼统的「失败」
-        showToast(error instanceof Error && error.message ? error.message : "LLM 设置更新失败");
+        const reason = error instanceof Error ? error.message : "";
+        // 引擎那句具体原因（如档位与模型不兼容）优先留着，但位置在表单里；弹窗只报「设置没保存」
+        setRejected(reason || "设置没保存");
+        toastFailure("设置没保存", error);
       });
   };
 
@@ -80,6 +90,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
               <button type="button" className="icon-btn" aria-label="关闭" onClick={() => setOpen(false)}><Icon name="x" size={14} /></button>
             </div>
             <div className="modal-body">
+              {rejected ? <p className="error-message" role="alert">{rejected}</p> : null}
               <TextSetting
                 label="模型"
                 value={llm?.model ?? ""}

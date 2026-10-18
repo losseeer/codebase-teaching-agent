@@ -15,6 +15,16 @@ export function showToast(message: string): void {
   listener?.(message);
 }
 
+/**
+  操作失败的弹窗：只报状态，不解释「什么东西为什么出问题了」。
+  引擎带回的具体原因**不丢**——它进 console（以及本来就有内联提示的那一处，如挂载被拦、设置表单）。
+  判据：弹窗是动线上的确认，看一眼就该走；要人读完一句话才知道怎么办的，那不是弹窗该干的事。
+  */
+export function toastFailure(status: string, reason?: unknown): void {
+  if (reason !== undefined) console.warn(`[gui] ${status}`, reason instanceof Error ? reason.message : String(reason));
+  showToast(status);
+}
+
 export function subscribeToast(fn: Listener): () => void {
   listener = fn;
   return () => { if (listener === fn) listener = null; };

@@ -13,7 +13,7 @@ import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
 import { Icon, type IconName } from "./ui/icons";
 import { layoutVars, useLayout } from "./ui/ColumnResizer";
-import { showToast, ToastHost } from "./modules/toast";
+import { showToast, toastFailure, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
 
 // Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
@@ -147,7 +147,7 @@ export function App(): ReactElement {
               // 导入页，看起来像「软件自己把我的仓库弄丢了」。
               updateWorkspace(null);
               setWorkspaceReady(true);
-              showToast("上次打开的仓库不在地址簿里了，请重新导入。");
+              showToast("仓不在地址簿 · 需重新导入");
               return;
             }
             // 目录挪走 / 产物不全：仓库没丢，是挂不起来。留着 workspace 说清原因（pending 会渲染 MountBlocked），
@@ -204,7 +204,7 @@ export function App(): ReactElement {
         await refreshCatalog();
         navigate("/app?workspace=map");
       } catch (error) {
-        showToast(error instanceof Error ? error.message : "挂载失败");
+        toastFailure("挂载失败", error);
         await refreshCatalog();
       }
     })();
@@ -220,7 +220,7 @@ export function App(): ReactElement {
         await refreshCatalog();
         showToast(`已把「${name}」移出地址簿`);
       } catch (error) {
-        showToast(error instanceof Error ? error.message : "移出失败");
+        toastFailure("移出失败", error);
       }
     })();
   };

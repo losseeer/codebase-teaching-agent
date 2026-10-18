@@ -104,12 +104,18 @@ app.addHook("onResponse", (request, reply, done) => {
 tboot("Fastify constructed");
 
 /**
-  关停钩子（这一条只管 fs 监听；外部 MCP 子进程在文件末尾另有自己的一条）：
+  关停钩子（这一条只管仓库侧资源；外部 MCP 子进程在文件末尾另有自己的一条）：
   LRU 驱逐与 `forget` 各自会关自己那条监听，但 `app.close()` 不会。
   `fs.FSWatcher` 是活跃 handle，不移除就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
   路由级测试收尾删掉临时仓后正是这种状态（handle 指向一个已不存在的目录）。
+  挂载句柄同理要关——`RepositoryHandle.close()` 自己按引用计数放行，所以这里不用管有没有在途请求。
   */
-app.addHook("onClose", async () => { for (const repository of importer.mountedRepositories()) repository.watcher?.close(); });
+app.addHook("onClose", async () => {
+  for (const repository of importer.mountedRepositories()) {
+    repository.watcher?.close();
+    repository.handle.close();
+  }
+});
 
 /**
   懒挂载钩子：`/api/repositories/:repositoryId/*` 的每个请求先确保该仓已挂进内存。
@@ -1661,6 +1667,27 @@ const port = Number(process.env.ENGINE_PORT ?? 3001);
 if (!process.env.VITEST) {
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");
+  /**
+    收到 SIGINT/SIGTERM 时先跑收尾（`app.close()` → onClose 钩子：关 fs 监听、关挂载句柄、关引擎自己起的
+    外部 MCP 子进程），收尾完按 0 退出。默认行为是信号直接把进程打死——`tsx watch` 每存一次盘就重来一遍，
+    那些子进程与 SQLite 句柄没人收，留在机器上；而 Ctrl+C 也因此以 130 退出，被 pnpm 报成一次失败。
+    收尾带 1.5s 上限：`/api/events` 这类长连接会一直挂着 `server.close()`，
+    收尾不能变成「按 Ctrl+C 之后卡住」。
+    */
+  let shuttingDown = false;
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      if (shuttingDown) {
+        console.log(`[engine] 又收到一次 ${signal}，直接退出（收尾已经在跑）`);
+        process.exit(0);
+      }
+      shuttingDown = true;
+      console.log(`[engine] 收到 ${signal}，开始收尾（监听 / 库句柄 / 外部 MCP 子进程）`);
+      const done = (): void => process.exit(0);
+      const guard = setTimeout(done, 1_500);
+      app.close().then(() => { clearTimeout(guard); done(); }, () => { clearTimeout(guard); done(); });
+    });
+  }
   // 认证闸已于 2026-10-15 整体撤除（§64）：本机没有「谁在调用」这个概念，只剩来源闸管浏览器那一侧。
   console.log("[engine] 访问控制：无认证闸（本机任意进程都能调）｜来源闸生效（只信回环与 TUTOR_ALLOWED_ORIGINS，非可信来源 403）");
   /**

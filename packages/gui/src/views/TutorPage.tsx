@@ -112,7 +112,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       else emit(repositoryId, "line_located", { path, line, trigger });
       if (!toast) return;
       showToast(open.note ?? `已打开 · ${path}`);
-    } catch { showToast(`无法读取 ${path}`); }
+    } catch { showToast(`读不到 · ${path}`); }
   }, [repositoryId]);
   useEffect(() => {
     if (!anchor) { lastAutoAnchor.current = null; setSource(null); return; }
