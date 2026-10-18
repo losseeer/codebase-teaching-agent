@@ -51,19 +51,17 @@ export function decodeVectorBlob(path: string, dim: number, bytes: Uint8Array): 
   return { path, dim, vec: new Float32Array(copy.buffer, copy.byteOffset, dim) };
 }
 
-export class TutorDatabase {
-  private readonly db: Database.Database;
+/**
+  产物库的**唯一形状声明**。它同时是两样东西的源：
+  - `migrate()` 里的 `db.exec`（建缺失的表）；
+  - 列对账（`reconcileColumns`）——从这段文本里读出每张表应有的列，缺哪补哪。
 
-  constructor(readonly repositoryPath: string) {
-    const tutorDir = join(repositoryPath, ".tutor");
-    if (!existsSync(tutorDir)) mkdirSync(tutorDir, { recursive: true });
-    this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
-    this.db.pragma("journal_mode = WAL");
-    this.migrate();
-  }
-
-  private migrate(): void {
-    this.db.exec(`
+  为什么列对账必须存在：`CREATE TABLE IF NOT EXISTS` 对**已经存在的表**一个列都不加。
+  这条梯子过去有四个版本（v3/v4/v5/v6/v8）只推版本号不建 DDL，于是「往上面的声明里加一列」
+  在新仓成立、在用户已有的 .tutor/tutor.db 上静默不成立——要到第一次真读那一列才炸。
+  v7 当初就是为 `state_json` 手补的一条 PRAGMA 守卫；补得了一次补不了次次，现在变成机制。
+  */
+export const DATABASE_SCHEMA_SQL = `
       CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS repository_state (
         repository_id TEXT PRIMARY KEY,
@@ -176,7 +174,75 @@ export class TutorDatabase {
       );
       CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, created_at);
       CREATE INDEX IF NOT EXISTS chat_session_repo ON chat_session(repository_id, scope, deleted_at);
-    `);
+`;
+
+/** 声明里的约束列：ADD COLUMN 加不出这些，缺了必须写真迁移（带回填的那种）。 */
+const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
+
+/** 表级约束行（不是列声明）：`PRIMARY KEY(a, b)` 那种整行要跳过。 */
+const TABLE_CONSTRAINT = /^(PRIMARY|UNIQUE|CHECK|FOREIGN|CONSTRAINT)\b/i;
+
+/**
+  声明文本 → 每张表的列清单。
+  边界取「到第一个 `;` 为止」而不是「到单独一行的 `);` 为止」：`schema_version` 是单行写的
+  `CREATE TABLE … (version INTEGER NOT NULL);`，按换行收尾会把下一张表的列算到它头上
+  （这条测试第一天就抓到了这个错切法）。建表语句内部没有分号，所以这个边界是安全的。
+  */
+export function declaredColumns(schema: string): { table: string; column: string; declaration: string }[] {
+  const clean = schema.replace(/--[^\n]*/g, "");
+  const out: { table: string; column: string; declaration: string }[] = [];
+  for (const match of clean.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)\s*\(([^;]*)\)\s*;/g)) {
+    const table = match[1];
+    for (const entry of splitTopLevel(match[2])) {
+      const declaration = entry.trim().replace(/\s+/g, " ");
+      if (!declaration || TABLE_CONSTRAINT.test(declaration)) continue;
+      out.push({ table, column: declaration.split(" ")[0], declaration });
+    }
+  }
+  return out;
+}
+
+/** 按顶层逗号切列声明：`PRIMARY KEY(a, b)` 里面的逗号不算分隔。 */
+function splitTopLevel(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of body) {
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    if (char === "," && depth === 0) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  out.push(current);
+  return out;
+}
+
+export class TutorDatabase {
+  private readonly db: Database.Database;
+  /** 开库所在的路径（只为把告警说成「哪个仓的库」，不参与任何判据）。 */
+  readonly repositoryPathLabel: string;
+  /**
+    对账没能补上的列（`表.列`）。空数组 = 这份库的形状等于声明。
+    交出来而不是抛，是为了不把用户的存量库变成打不开的东西；挂载时这条读数会进 `engine.jsonl`。
+    */
+  readonly schemaGaps: string[] = [];
+
+  constructor(readonly repositoryPath: string) {
+    const tutorDir = join(repositoryPath, ".tutor");
+    if (!existsSync(tutorDir)) mkdirSync(tutorDir, { recursive: true });
+    this.repositoryPathLabel = repositoryPath;
+    this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
+    this.db.pragma("journal_mode = WAL");
+    this.migrate();
+  }
+
+  private migrate(): void {
+    const schema = DATABASE_SCHEMA_SQL;
+    this.db.exec(schema);
     const current = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version: number } | undefined;
     if (!current) {
       this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(schemaVersion);
@@ -201,8 +267,35 @@ export class TutorDatabase {
     }
     // v8：检索向量表（上面 CREATE 幂等建好，这里只推版本号）
     if (current.version < 8) this.db.prepare("UPDATE schema_version SET version = ?").run(8);
+    /**
+      列对账放在梯子**之后**：v2/v7 那两步会补它们各自认识的列，先对账会让梯队的 ALTER 撞 duplicate column。
+      对账兜的是「改了声明而没写梯子」那一类——v3/v4/v5/v6/v8 只推版本号不建 DDL，
+      那几版往 CREATE 里加的列在存量库上从来没有落地，而这件事当时没有任何读数会红。
+      */
+    this.reconcileColumns(schema);
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
+    }
+  }
+
+  /**
+    列对账：以声明文本为唯一源，把「声明里有、这张表还没有」的列补上。
+    每次都跑、幂等——所以它不依赖版本号是否被翻对（那正是过去四个版本只推号不建 DDL 漏掉的东西）。
+    补不上的（带约束、或 NOT NULL 又没默认值）记进 `schemaGaps` 并当场喊一声，**不抛**：
+    崩在开库上等于把用户已有的学习记录整个锁死，而那一列下一次被真读到时自然会失败——
+    失败点带得出具体列名，比开机一句「Unsupported schema」有用得多。
+    */
+  private reconcileColumns(schema: string): void {
+    for (const declared of declaredColumns(schema)) {
+      const present = (this.db.prepare(`PRAGMA table_info(${declared.table})`).all() as { name: string }[]).some((column) => column.name === declared.column);
+      if (present) continue;
+      if (NOT_ADDABLE.test(declared.declaration) || (/\bNOT NULL\b/i.test(declared.declaration) && !/\bDEFAULT\b/i.test(declared.declaration))) {
+        const gap = `${declared.table}.${declared.column}`;
+        this.schemaGaps.push(gap);
+        console.warn(`[engine] ${this.repositoryPathLabel ?? "产物库"} 缺列 ${gap}，而它的声明是「${declared.declaration}」：ADD COLUMN 加不出这种列，需要写一条一次性迁移（建新表、回填、换名）。`);
+        continue;
+      }
+      this.db.exec(`ALTER TABLE ${declared.table} ADD COLUMN ${declared.declaration.replace(/\s+/g, " ").trim()}`);
     }
   }
 
@@ -533,3 +626,4 @@ export class TutorDatabase {
       .run(repositoryId, new Date().toISOString(), ...keys.map((key) => patch[key]));
   }
 }
+

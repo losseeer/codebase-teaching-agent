@@ -313,7 +313,9 @@ export class ImportService extends EventEmitter {
     // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
     // （读侧现在是按字节水位增量解析，见 `store/journal.ts`；真到需要归档的那天，这两个数就是依据）。
     const journal = journalFootprint(path);
-    traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes }, { traceId: null, durationMs: Date.now() - startedAt });
+    traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes, schemaGaps: repository.handle.schemaGaps.length }, { traceId: null, durationMs: Date.now() - startedAt });
+    // 形状缺口不是审美问题：那一列被真读到时才会炸，所以开机这一次就把列名喊出来（同一份读数也进上面的 trace）
+    if (repository.handle.schemaGaps.length) console.warn(`[engine] ${path} 的产物库缺列：${repository.handle.schemaGaps.join("、")}——需要一条一次性迁移，光改声明补不上。`);
     return { ok: true, repository };
   }
 

@@ -26,10 +26,18 @@ export class RepositoryHandle {
   private pinned = 0;
   private closeRequested = false;
 
+  /**
+    开库时对账没补上的列（`表.列`）：正常挂载应该是空数组，非空就是要看得见的事件。
+    在构造时抄一份而不是转问库句柄——关闭之后 `database` 已经没了，而「当时这份库缺哪格」是事实，
+    不该跟着连接的生死一起消失。
+    */
+  readonly schemaGaps: readonly string[];
+
   constructor(repositoryPath: string, repositoryId: string) {
     this.repositoryPath = repositoryPath;
     this.repositoryId = repositoryId;
     this.database = new TutorDatabase(repositoryPath);
+    this.schemaGaps = [...this.database.schemaGaps];
     this.journal = new Journal(repositoryPath, repositoryId);
   }
 
