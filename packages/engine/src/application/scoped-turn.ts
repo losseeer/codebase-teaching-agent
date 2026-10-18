@@ -1,6 +1,6 @@
 import type { ChatScope } from "@codebase-tutor/shared";
-import { externalToolSurface } from "../mcp/clients.js";
-import { listSkills, readSkill, skillsBriefing } from "../skills/skills.js";
+import { externalToolSurface } from "../external/clients.js";
+import { listSkills, readSkill, skillsBriefing } from "../external/skills.js";
 import { appendMessages, getThread, readMessages } from "../store/chat-store.js";
 import { Journal } from "../store/journal.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "../eval/scorers.js";

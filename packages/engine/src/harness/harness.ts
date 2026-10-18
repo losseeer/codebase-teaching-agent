@@ -8,7 +8,7 @@ import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext, ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
-import type { McpCallAudit } from "../mcp/clients.js";
+import type { McpCallAudit } from "../external/clients.js";
 import { assembleContext } from "./context.js";
 import { teachingSystemPrompt } from "./prompts.js";
 

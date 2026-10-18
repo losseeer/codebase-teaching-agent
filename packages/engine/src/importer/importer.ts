@@ -25,7 +25,7 @@ import { buildImplementationUnits } from "../implementation/units.js";
 import { catalogRepositoryId, hash, id } from "../identity.js";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
-import { enrichWithLsp } from "../lsp/enrich.js";
+import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
 import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";

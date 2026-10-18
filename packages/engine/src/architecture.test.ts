@@ -16,8 +16,9 @@ import { describe, expect, it } from "vitest";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 
-/** 离线脚本与评测夹具允许走自己的路：它们不是产品运行路径，也不参与分层。 */
-const IGNORED_TOP = new Set(["scripts", "mcp", "eval"]);
+/** 离线脚本与评测夹具允许走自己的路：它们不是产品运行路径，也不参与分层。
+    `scripts/` 里现在也住着向量那一臂（`embed-index.ts`，产品不接，判死见 §29），它跟着离线面走。 */
+const IGNORED_TOP = new Set(["scripts", "eval"]);
 
 const PIPELINES = new Set(["flows", "coursetree", "diagram", "exercises", "depgraph", "summarizer", "implementation", "quality", "changes", "scopechat", "harness", "text", "indexer", "learner", "source"]);
 

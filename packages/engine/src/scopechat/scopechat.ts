@@ -9,7 +9,7 @@ import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
-import type { McpCallAudit } from "../mcp/clients.js";
+import type { McpCallAudit } from "../external/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
 /**

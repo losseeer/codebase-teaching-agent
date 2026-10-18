@@ -6,7 +6,7 @@ import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { createEmbeddingProvider, resolveEmbeddingConfig } from "../llm/embeddings.js";
 import { buildSearchCorpus } from "../source/search-code.js";
-import { embedUnits, fileUnits, pendingUnits, symbolUnits, type EmbedUnit } from "../search/embed-index.js";
+import { embedUnits, fileUnits, pendingUnits, symbolUnits, type EmbedUnit } from "./embed-index.js";
 import { TutorDatabase } from "../store/database.js";
 import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 

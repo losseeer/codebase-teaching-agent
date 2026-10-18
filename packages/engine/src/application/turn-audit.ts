@@ -3,7 +3,7 @@ import { Journal } from "../store/journal.js";
 import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord } from "../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../source/tool-loop.js";
-import type { McpCallAudit } from "../mcp/clients.js";
+import type { McpCallAudit } from "../external/clients.js";
 
 /**
   回合的审计线写法（谁看过什么、调过哪些外部工具）。放在应用层而不是 HTTP 层，是因为

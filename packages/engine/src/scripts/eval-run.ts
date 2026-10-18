@@ -11,7 +11,7 @@ import { loadSymbolParser } from "../depgraph/parser.js";
 import { buildSearchCorpus, executeSearchCode } from "../source/search-code.js";
 import { segmentForLookup } from "../text/lexical.js";
 import { createEmbeddingProvider, resolveEmbeddingConfig } from "../llm/embeddings.js";
-import { cosineTop, cosineTopByFile, fileUnits, pendingUnits, reciprocalRankFusion, type StoredVector } from "../search/embed-index.js";
+import { cosineTop, cosineTopByFile, fileUnits, pendingUnits, reciprocalRankFusion, type StoredVector } from "./embed-index.js";
 import { decodeVectorBlob } from "../store/database.js";
 import { readJournal } from "../store/journal.js";
 import { scoreFlowArtifacts, scoreSearchArm, scoreTeachInvariants, type SearchCase, type TeachTurn } from "../eval/scorers.js";

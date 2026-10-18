@@ -110,7 +110,7 @@ export function createRouteFixture(): RouteFixture {
     stopInside: undefined as RouteFixture["stopInside"],
     sentTools: [] as { names: string[]; raw: string }[],
     usedThreads: new Set<string>(),
-    echoServerFixture: join(import.meta.dirname, "..", "..", "mcp", "fixtures", "echo-server.mjs")
+    echoServerFixture: join(import.meta.dirname, "..", "..", "external", "fixtures", "echo-server.mjs")
   } as RouteFixture;
   let fetchCalls = 0;
 
