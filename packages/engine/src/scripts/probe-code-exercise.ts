@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/shared";
-import { loadDotEnv } from "../config/dotenv.js";
+import { loadDotEnv } from "../boot.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";
 import { generateCodeExercise } from "../exercises/code-generate.js";
 import { isolationStatus } from "../sandbox/isolation.js";

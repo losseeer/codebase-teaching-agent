@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadDotEnv } from "../config/dotenv.js";
+import { loadDotEnv } from "../boot.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";
 import { readJournal } from "../store/journal.js";
 import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudgeResponse, priorTurns, type TurnVerdict } from "../eval/judge.js";

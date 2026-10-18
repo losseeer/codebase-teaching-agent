@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { loadDotEnv } from "../config/dotenv.js";
+import { loadDotEnv } from "../boot.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";

@@ -9,7 +9,7 @@ import { importer } from "./services.js";
 import { broadcast } from "./events.js";
 import { budgetGateNotice } from "./cost/cost.js";
 import { id } from "./identity.js";
-import { loadDotEnv } from "./config/dotenv.js";
+import { loadDotEnv } from "./boot.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { reprobeIsolation } from "./sandbox/isolation.js";
 import { runWithTrace } from "./trace/context.js";

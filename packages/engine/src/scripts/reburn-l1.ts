@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadDotEnv } from "../config/dotenv.js";
+import { loadDotEnv } from "../boot.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { graphFromData } from "../depgraph/graph.js";
 import { fileStructureOf } from "../depgraph/roles.js";

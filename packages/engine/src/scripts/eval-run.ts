@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { RepositoryAnalysis, RepositoryFlow } from "@codebase-tutor/shared";
-import { loadDotEnv } from "../config/dotenv.js";
+import { loadDotEnv } from "../boot.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";

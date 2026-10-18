@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 /**
-  `GET /api/events` 的**真连接**测试（10-12）。
+  `GET /api/events` 的**真连接**测试（10-12）。这条路由住在 `platform.ts`，用例因此也住在它旁边。
 
   为什么必须听真 socket：`app.inject()` 把响应整体缓冲到结束才交出来，而这条路由永不结束——
   所以以前它一行测试都没有，也正因如此才没人发现「空转的事件流三秒收 0 字节」：
@@ -88,7 +88,7 @@ beforeAll(async () => {
 
   // 必须早于 import server：provider 在构造时就把 fetch 绑成了实例字段
   vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("测试环境不出网"); }));
-  ({ app } = await import("./server.js"));
+  ({ app } = await import("../../server.js"));
   await app.listen({ port: 0, host: "127.0.0.1" });
 });
 

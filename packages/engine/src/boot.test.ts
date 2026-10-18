@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDotEnv, parseDotEnv } from "./dotenv.js";
+import { applyDotEnv, parseDotEnv } from "./boot.js";
 
 describe("parseDotEnv", () => {
   it("解析常规键值对并跳过注释与空行", () => {
