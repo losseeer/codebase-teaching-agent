@@ -223,64 +223,150 @@ export interface ArchitectureBlockBrief {
 }
 
 /**
-  两张教学图（架构全景、流程）都能被 agent 在对话里重绘一份新的、经用户点头后替换现有那张。
-  这三态就是那条动线的全部状态机，`diagram_artifact` 表按 (仓, kind, status) 各存一行：
+  ==== 宏观设计 = agent 画图工作区（2026-10-18 定案，取代「架构视图 + 流程视图」双画布）====
 
-  - `pending`：agent 提议重绘。**这一发要花钱，所以引擎绝不自行动手**——画布出现「开始重绘吗」的横幅，
-    用户按下才真发（与「重新生成分层」那颗按钮同一条纪律：花钱的动作由人发起）；
-  - `preview`：新图画好了，叠在画布上待「替换 / 保持」；
-  - `committed`：用户批准，读侧拿它当这张图；删掉这一行默认就回来。
+  一句话：**图是产物实体，不是某一页的渲染结果**。一个仓有多张图，存在 `diagram` 表里，
+  在左侧图库里挑、在中间画布上看。图元只有三种：节点、边、分组框。
 
-  替换只改「层的形状」这一件事：边、节点清单、边界之外那一栏仍旧由 import 与词典算出来，
-  agent 画的那份里没有任何一条边能作数（与默认那条红线同一个口径）。
+  两条权限分得很清楚（这是这一页的全部纪律）：
+  - **几何自由**：节点摆哪儿、画布怎么平移缩放，都是用户自己的事，走 `PUT .../geometry`，
+    不存版本、不写审计、不经模型——位置不承载对错；
+  - **结构归 agent**：加删节点、连线、分组、改名字，只有 `set_diagram` 这一个写入口
+    （界面不留第二个，与旧那条「画布只读」同源）。每次结构改动自动存一版，上限 20 版，
+    恢复旧版也是往前追加一版（历史不许被改写）。
+
+  三样东西的来源必须分开，混了就等于让模型编事实：
+  - 节点挂的**依据**（哪些文件哪几行）与摘要：`kind:"module"` 的节点由引擎按 `ref` 现算，
+    agent 手填的一律丢弃（见 engine `diagram/set-diagram.ts`）；
+  - 边的**可信度** `origin` 三档：模型可以报 `static`/`code`，但引擎**只降不升**——
+    核不到 import / 调用证据就改成 `inferred`，并把降级原因写在 `downgraded` 上（与流程层同一条口径）；
+  - `kind:"note"` 的便签正文与 `inferred` 边的 `evidence`：这些是**模型/用户说的话**，
+    原样存、原样标，不冒充引擎读数。
 */
-export type DiagramKind = "architecture" | "flow";
-export type DiagramStatus = "pending" | "preview" | "committed";
 
-/** 候选图的一层：`nodes` 用画布上那个节点的 id（模块 id 或 `arch:` 节点 id），同形态才谈得上替换。 */
-export interface DiagramLayerDraft {
+/** 这张图是谁建的：agent 画的，还是用户自己新建空白的。图库与工具栏的徽标就看这一格。 */
+export type DiagramSource = "agent" | "me";
+
+/** 图元节点只有两种：挂在课程树上的模块节点，和一张便签。 */
+export type DiagramNodeKind = "module" | "note";
+
+/**
+  一条边的可信度，三档封闭：
+  - `static` 依赖图可证明（两个模块之间有文件级 import 边）；
+  - `code` 源码正文读过（有调用 / 类型派发边可指）；
+  - `inferred` 模型推断（没有行级依据，只有它自己那句话）。
+*/
+export type DiagramEdgeOrigin = "static" | "code" | "inferred";
+
+/** 节点上的一条依据：文件 + 行号。`module` 节点读时现算，不落在图里。 */
+export interface DiagramAnchor {
+  path: string;
+  line: number;
+}
+
+export interface DiagramNode {
+  id: string;
+  kind: DiagramNodeKind;
+  label: string;
+  /** 角色小字（入口 / 核心 / 环节 / 决策……）。`module` 节点没写就现算一个。 */
+  sub?: string;
+  /** 画布世界坐标，左上角，px。 */
+  x: number;
+  y: number;
+  /** 挂在哪个分组框里（纯声明，不做包含判定）。 */
+  group?: string;
+  /**
+    `kind:"module"` 必填：课程树里的模块 id 或架构方块 id（`arch:...`）。
+    引擎按它现算依据与摘要，id 核不上就**拒写**（宁可让 agent 重说一次，也不画一个查无此人的节点）。
+  */
+  ref?: string;
+  /** `kind:"note"`：便签正文。这是人/模型写的话，不是读数。 */
+  text?: string;
+}
+
+export interface DiagramEdge {
+  id: string;
+  from: string;
+  to: string;
+  origin: DiagramEdgeOrigin;
+  /** 边上那句关系名（事务写入 / 校验参数……）只进抽屉，画布上不排字。 */
+  label?: string;
+  /** `static`/`code` 是引擎核出来的那条依据；`inferred` 是模型自述的理由。 */
+  evidence?: string;
+  /** 被引擎降过档：原报的哪一档 + 为什么。界面要在悬停里说清，别替模型圆。 */
+  downgraded?: string;
+}
+
+/** 分组框：一个标签加一块底。不可点、不可拖，纯排版记号（框住的是节点，不是关系）。 */
+export interface DiagramGroup {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** 一张图的结构本体。版本快照存的就是这一格。 */
+export interface DiagramBody {
+  groups: DiagramGroup[];
+  nodes: DiagramNode[];
+  edges: DiagramEdge[];
+}
+
+/** 一版快照：时间是 ISO 串（界面自己格式化），`body` 是**改完之后**的整张结构。 */
+export interface DiagramVersion {
+  at: string;
+  note: string;
+  body: DiagramBody;
+}
+
+export interface Diagram {
+  repositoryId: string;
+  id: string;
   name: string;
-  duty: string;
-  nodes: string[];
+  source: DiagramSource;
+  createdAt: string;
+  updatedAt: string;
+  /** 旧→新排列，上限 20（超了丢最旧的一版）。恢复旧版往后追加，绝不截断历史。 */
+  versions: DiagramVersion[];
+  body: DiagramBody;
+}
+
+/** 图库列表用的一行摘要：不拖整张图的结构进左栏。 */
+export interface DiagramSummary {
+  id: string;
+  name: string;
+  source: DiagramSource;
+  updatedAt: string;
+  nodes: number;
+  edges: number;
+  versions: number;
 }
 
 /**
-  架构图的候选（重绘那一趟的产物）。三条清单都是给「核验」与「如实外露」用的：
-  - `omitted`：没画进去的可见节点必须逐条给理由，不许静默丢格（丢了格就等于图上的节点数在误导人）；
-  - `conflicts`：这趟读到的结构证据与主张相反的格（角色/可达 vs 目标层）——**落库但仍然标注**，
-    标签会随修正一起进下一次判层的输入，免得一条没根据的归层被下一轮当成事实；
-  - `readPaths`：这一趟真读了哪些文件。预览横幅要指得出证据在哪，不然「重绘」与「换个说法」没区别。
+  `set_diagram` 的一次结构改动（单写入口能表达的全部形状）。
+  ⚠️ 这里是**白名单**：想改边就只能是 add_edge / remove_edge，
+  「把这条箭头变粗」「加一个模块」这类要求在类型层面就没有落点，不是运行时的漏洞。
 */
-export interface ArchitectureDiagramDraft {
-  kind: "architecture";
-  layers: DiagramLayerDraft[];
-  omitted: { node: string; reason: string }[];
-  conflicts: { node: string; layer: string; evidence: string }[];
-  readPaths: string[];
+export type DiagramEdit =
+  | { action: "draw"; name?: string; body: DiagramBody }
+  | { action: "add_node"; node: DiagramNode }
+  | { action: "remove_node"; target: string }
+  | { action: "add_edge"; edge: DiagramEdge }
+  | { action: "remove_edge"; target: string }
+  | { action: "add_group"; group: DiagramGroup }
+  | { action: "remove_group"; target: string }
+  | { action: "relabel"; target: string; label?: string; sub?: string; text?: string }
+  /** 几何：agent 替用户挪一格（用户自己拖走另一条免费路由，不进这里、不存版本）。 */
+  | { action: "move"; target: string; x: number; y: number };
+
+/** 一次结构改动的落点：改哪张图 + 改什么。`diagram` 缺省时由服务端按「画布上正打开的那张」定，认不出就拒。 */
+export interface DiagramEditRequest {
+  diagram?: string;
+  edit: DiagramEdit;
 }
 
-/** 流程图的候选：过的就是默认那条同一套确定性核验（路径在可用集合里、行号按文件长度 clip）。 */
-export interface FlowDiagramDraft {
-  kind: "flow";
-  flow: RepositoryFlow;
-  readPaths: string[];
-}
-
-export type DiagramDraft = ArchitectureDiagramDraft | FlowDiagramDraft;
-
-/** 读侧交给界面的一份「现在画的是哪张、还有没有待确认的」读数。 */
-export interface DiagramReadout {
-  origin: "default" | "agent";
-  /** origin=agent 时：当初为什么重绘、什么时候批准的。 */
-  purpose?: string;
-  committedAt?: string;
-  /** 替换图引用的模块已经不在树上了（改名 / 删模块 / 课程树重生成）。这时**画的是默认**，那行不删，只说出来。 */
-  stale?: string;
-  /** 画面上这些格与引擎算出的结构角色相反：落库、不拦，但要看得见（悬停给证据句）。 */
-  conflicts?: { node: string; layer: string; evidence: string }[];
-  pending?: { purpose: string; at: string };
-  preview?: { purpose: string; at: string; draft: DiagramDraft };
-}
 
 export interface ArchitecturePlan {
   repositoryId: string;
@@ -1405,16 +1491,23 @@ export type JournalEventType =
     */
   | "code_egress"
   /**
-    一次「重绘这张图」的账（2026-10-17）：payload = kind + purpose + layers + units + omitted
-    + findings(采信条数) + dropped_findings(证据路径核不上被丢的条数) + conflicts(与结构证据相反的格数)
-    + rounds/tool_reads + input_tokens/output_tokens。**记的是这一趟花了多少、信了多少、拒了多少**，
-    不记图内容本身（图在 diagram_artifact 表里）。
+    画布上的一张图被**建出来**（agent 一次画完整张，或用户新建空白）：
+    payload = diagram + name + source(agent|me) + nodes + edges + downgraded（几条边被引擎降了档）。
+    记的是「谁画的、画了多少、有几条不成立」，不记图内容（内容在 `diagram` 表里）。
   */
-  | "diagram_redrafted"
-  /** agent 提议重绘（**这一条不花钱**，只是让界面出那条横幅）：payload = kind + purpose。 */
-  | "diagram_redraft_proposed"
-  /** 用户对那张预览的裁决：action = replace|keep|reset，kind = architecture|flow。 */
-  | "diagram_replaced";
+  | "diagram_created"
+  /**
+    一次结构改动落了盘：payload = diagram + action(add_node|remove_node|add_edge|remove_edge|add_group|remove_group|relabel|move)
+    + nodes + edges + downgraded + via(agent|user)。
+    **几何拖动不走这条**——位置不承载对错、也不是判断被推翻的读数，一天能拖几百次，写进审计只会淹掉真信号。
+  */
+  | "diagram_edited"
+  /** 图改名（payload = diagram + from + to）。改名不存版本：它不动结构。 */
+  | "diagram_renamed"
+  /** 图被删（payload = diagram + name + versions）：版本历史一起删，所以这条要留痕。 */
+  | "diagram_deleted"
+  /** 恢复到某一版（payload = diagram + to + note）：恢复本身又追加一版，历史只追加不改写。 */
+  | "diagram_restored";
 
 /**
   同一份事件的**写入权分两张表**（2026-10-12，接 §45）。
@@ -1432,7 +1525,7 @@ export const ENGINE_JOURNAL_EVENTS = [
   "session_created", "session_deleted", "repository_paired", "code_egress",
   // 2026-10-16：挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写——
   // 落盘的那条路（`POST .../overlays/apply`）在引擎里，审计与写入同处才不漏；界面自己 emit 的旧日子已随覆盖层上收结束
-  "architecture_layer_overridden", "module_tier_overridden", "diagram_redraft_proposed", "diagram_redrafted", "diagram_replaced"
+  "architecture_layer_overridden", "module_tier_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [
@@ -1499,10 +1592,10 @@ export interface ServerEvent {
     `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
   */
   /**
-    `diagram_preview`：重绘好的新图进了预览态，等用户点「替换 / 保持」。
-    `diagram_replaced`：用户裁决完了（replace|keep|reset），画布要重取一次。
-    `redraft_requested`：agent 提议重绘（还没花钱），界面要出那条「开始重绘吗」的横幅。
+    `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复）。
+    payload = `diagramId` + `action`。界面据此重取图库与当前图——**几何拖动不广播**，
+    那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
   */
-  type: "import.progress" | "repository.updated" | "architecture_updated" | "redraft_requested" | "diagram_preview" | "diagram_replaced";
+  type: "import.progress" | "repository.updated" | "architecture_updated" | "diagram_updated";
   payload: Record<string, unknown>;
 }

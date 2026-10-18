@@ -50,8 +50,12 @@ export interface ReadToolLoopInput {
     工具清单里连 `set_architecture` 这个节点都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
   */
   architecture?: ArchitectureToolContext;
-  /** 重绘这张图（只有提议、撤预览、恢复默认三个动作）：不传 = 这个作用域连提议的权力都没有。 */
-  redraw?: RedrawToolContext;
+  /**
+    画布上那张图的结构改动（第二个有副作用的工具，2026-10-18 与 `set_architecture` 同一道作用域闸）。
+    不传 = 这个作用域没有改图的权力，清单里连 `set_diagram` 这个节点都不出现——只有 map 作用域给，
+    教学与练习两张脸都不给：它们面对的是代码与题目，不是画布。
+  */
+  diagram?: SetDiagramToolContext;
   /**
     技能正文的取用通道（2026-10-17）。不传 = 工具清单里没有 `read_skill`，
     系统提示词也不该出现技能清单——清单与通道必须同时给或同时不给，只给一半就是让模型找一个不存在的工具。
@@ -176,32 +180,39 @@ export interface ArchitectureToolContext {
 }
 
 /**
-  「重绘这张图」的工具面。**故意只开三个动作**：propose（提议，不花钱）、keep（撤掉那张预览）、
-  reset（恢复默认图）。`run` 与 `commit` 不在这里——那一发要花钱、替换要用户点头，两个都只有画布上的按钮能按。
-  这条界线写进描述里，是因为模型会本能地想「一步做完」；把动作收掉比在提示词里劝它更有效。
+  画布上「结构」的写入口（2026-10-18，与 `set_architecture` 并列为全仓仅有的两个有副作用的工具）。
+  描述里把那四条纪律写死，而不是留在提示词里劝：
+  ① 位置是用户的（不让动就别动，`move` 只在用户开口时代挪一格）；
+  ② `module` 节点必须带真 `ref`，核不上整次拒写；
+  ③ 边的 `origin` 引擎会拿三张结构表核，**只降不升**，降完把原因写在边上；
+  ④ `draw` 一次交整张图，别一格一格试（图库里一张图 = 一个能讲清楚的问题）。
 */
-export const REDRAW_DIAGRAM_TOOL: LlmTool = {
-  name: "redraw_diagram",
-  description: "换一张架构图的画法。propose（提议按某个目的重绘：给一句 purpose 说清这张图要回答什么问题，比如「给第一次进这个仓的人讲模块边界」「只顺着下单这条链路看」；这一步不发请求，画布上会出现一条横幅由用户点「开始重绘」）、keep（用户说不要换，撤掉现在那张预览）、reset（用户说要恢复默认图）。**你不能自己开始重绘，也不能自己替换**：那两下由用户按。目的说不清就先问用户，别直接 propose。",
+export const SET_DIAGRAM_TOOL: LlmTool = {
+  name: "set_diagram",
+  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：**① 位置是用户的**，除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；**② kind=module 的节点必须带 ref**，指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；**③ 边的 origin 你可以报 static 或 code，引擎会拿 import、调用、类型派发三张表逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，那一格由引擎填）**。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", description: "propose / keep / reset" },
-      purpose: { type: "string", description: "propose 必填：这张图要回答什么问题，不超过 120 字" }
+      diagram: { type: "string", description: "要改的那张图：id 或名字。省略时如果这个仓只有一张图就用它，认不出会被拒并列出图库" },
+      edit: { type: "object", description: "一次改动：{ action, ...该动作的字段 }。action 取 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move；node={id,kind:module|note,label,x,y,sub?,group?,module 再带 ref,note 再带 text}，edge={id,from,to,origin:static|code|inferred,label?,evidence?}，group={id,label,x,y,w,h}，body={groups,nodes,edges}" }
     },
-    required: ["action"]
+    required: ["edit"]
   }
 };
 
-/** 重绘那张图的落地通道：由服务层给闭包，工具循环不认识数据库与预算闸。 */
-export interface RedrawToolContext {
-  /** 执行一步并回一句给模型看的话（实际落盘后的状态，与 set_architecture 同一条纪律）。
-      允许异步：`propose` 那一步要过预算闸并广播，路由与工具共用同一个实现。 */
-  apply: (argumentsJson: string) => string | Promise<string>;
+/**
+  改这张图的落地通道：由服务层给闭包，工具循环不认识数据库、journal 与课程树。
+  与 `ArchitectureToolContext` 同一条纪律：回的是**实际落盘后的状态**（或拒写的那句原因），
+  不是意图——回错了模型就会把没改成的说成改成了。`inventory` 是「画布现场」，
+  有副作用的工具必须先看得见现状（§71），否则它只能猜 id、猜「那条边」到底指哪条。
+*/
+export interface SetDiagramToolContext {
+  apply: (argumentsJson: string) => string;
+  inventory?: string;
 }
 
 /** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, redraw?: RedrawToolContext, skills?: SkillsToolContext, external?: ExternalToolContext): LlmTool[] {
+function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, diagram?: SetDiagramToolContext, skills?: SkillsToolContext, external?: ExternalToolContext): LlmTool[] {
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -216,7 +227,7 @@ function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: 
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
   // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
   if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
-  if (redraw) tools.push(REDRAW_DIAGRAM_TOOL);
+  if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
   // 外部工具原样并进清单：描述里已带「【外部 <server>】」前缀，模型分得清这是别人的程序
   if (external?.tools.length) tools.push(...external.tools);
@@ -276,7 +287,7 @@ export interface ReadToolLoopResult {
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
-  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.redraw, input.skills, input.external);
+  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.diagram, input.skills, input.external);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
@@ -344,8 +355,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         messages.push({ role: "tool", toolCallId: call.id, content: input.architecture.apply(call.argumentsJson) });
         continue;
       }
-      if (call.name === REDRAW_DIAGRAM_TOOL.name) {
-        messages.push({ role: "tool", toolCallId: call.id, content: await (input.redraw?.apply(call.argumentsJson) ?? "这个作用域没有重绘这张图的权力。") });
+      if (call.name === SET_DIAGRAM_TOOL.name) {
+        // 结构改动一次一回执（落成了什么、被降了几条边、或为什么整次拒写）。不占读文件额度：它读的是产物不是源码
+        messages.push({ role: "tool", toolCallId: call.id, content: input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。" });
         continue;
       }
       if (call.name === READ_SKILL_TOOL.name && input.skills) {

@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { ChatThreadMessage, CourseTree, Diagram, DiagramBody, DiagramSummary, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { isolationBackend } from "./sandbox/profile.js";
 import { flushLlmLog } from "./llm/call-log.js";
 import { TutorDatabase } from "./store/database.js";
+import { applyStructure, buildDiagram } from "./store/diagrams.js";
 import { readJournal } from "./store/journal.js";
 import { appendMessages, createThread, readMessages } from "./store/chat-store.js";
 
@@ -286,7 +287,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const threadId = await newThread("map", "没装外部能力");
     const before = sentTools.length;
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "这仓分几层？", threadId } });
-    expect(sentTools[before].names).toEqual(["read_file", "search_code", "set_architecture", "redraw_diagram"]);
+    expect(sentTools[before].names).toEqual(["read_file", "search_code", "set_architecture", "set_diagram"]);
   });
 
   it("装了之后 read_skill 与 mcp__fixture__echo 真并进请求，清单进上下文，两条审计各落一行", async () => {
@@ -376,9 +377,11 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(response.statusCode).toBe(200);
     const call = sentTools[0];
     expect(call?.names, "画布是只读的，改图只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_architecture");
+    expect(call?.names, "结构改动同样只有 agent 这一条路：界面上没有第二个写入口").toContain("set_diagram");
     expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id id，不然只能反问或编 id").toContain("架构现场");
     expect(call?.raw).toContain("现存人工修正");
     expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
+    expect(call?.raw, "改图工具必须先看得见现状（§71）：有哪几张图、正打开那张的图元 id").toContain("画布现场");
 
     // 反面对照：练习答疑没有画布，也就没有写能力——放宽不能顺着作用域漏出去
     scripted = [OK_REPLY];
@@ -386,6 +389,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     sentTools.length = 0;
     await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId, threadId: practiceThread } });
     expect(sentTools[0]?.names, "practice_chat 永远不给有副作用的工具").not.toContain("set_architecture");
+    expect(sentTools[0]?.names, "它也不该拿到改这张图的权力：练习那张脸上没有画布，给了就是让用户改自己看不见的东西").not.toContain("set_diagram");
   });
 
   it("map-chat SSE：delta 拼起来＝done.reply＝库里正文", async () => {
@@ -1282,90 +1286,173 @@ describe("推荐入口：文档不进候选清单", () => {
 });
 
 /**
-  「重绘这张图」这条动线（§72）。打到路由的原因很具体：这一条上**谁付钱、谁能批准**是产品红线，
-  而它只能从 HTTP 侧看出来——`propose` 必须一发不发，`run` 必须等用户点横幅，`commit` 必须只有用户能按。
+  ==== 画图工作区（2026-10-18，取代「重绘这张图」那条两趟烧钱的流水线）====
+
+  打到路由才验得清的三件事，各自对应一条会被踩的线：
+  1. **几何与结构权限不同**：`PUT .../geometry` 一天几百次，它必须**一版都不存、一行审计都不写、一帧都不广播**，
+     否则真信号被淹掉、界面还会被自己刚拖的东西抢鼠标；
+  2. **界面对结构只读**：这一组路由里没有任何一条能加删节点或连线，写只经 `set_diagram`。
+     这条不对称是设计，测试把它钉住——顺手「补一个结构编辑接口」就等于把校验与审计抄成第二份（§71 的同一课）；
+  3. **边的可信度只降不升**：agent 嘴上说 `static`，引擎拿 import / 调用 / 类型派发三张表核，核不到就降，
+     并把为什么写在 `downgraded` 上。这一条只能端到端看：它穿过工具回执、落盘、审计三处。
+
+  零 token：种图走 `store/diagrams.ts`（那是唯一的读写口，路由写不了结构，测试也只能从这儿起步），
+  模型侧仍然是 stub 掉的 `fetch`。
 */
-describe("重绘这张图：提议 → 预览 → 替换 → 恢复默认", () => {
-  type DiagramView = {
-    origin: "default" | "agent";
-    purpose?: string;
-    stale?: string;
-    pending?: { purpose: string };
-    preview?: { purpose: string; draft: { kind: string; layers: { name: string; nodes: string[] }[]; omitted: unknown[]; conflicts: { node: string }[] } };
-    conflicts?: { node: string }[];
-  };
-  type ArchView = {
-    layers: { name: string; moduleIds: string[] }[];
-    source: string;
-    diagram?: DiagramView;
-  };
-  const read = async (): Promise<ArchView> => (await app.inject({ method: "GET", url: `/api/repositories/${repositoryId}/architecture` })).json() as ArchView;
-  const EXPLORE = '{"findings":[{"unit":"src","claim":"这里注册路由并把请求交给编排","evidence":"src/main.ts:3"}],"boundaries":"框内是仓里写的代码","notes":""}';
-  const DRAFT = JSON.stringify({ layers: [{ name: "接入", duty: "收请求", nodes: ["module:src"] }, { name: "说明", duty: "记录设计与约定", nodes: ["module:docs"] }], omitted: [] });
+describe("画图工作区：图库、几何只存位置、结构归 agent", () => {
+  const base = () => `/api/repositories/${repositoryId}/diagrams`;
+  type Single = { diagram: Diagram; warnings?: { node: string; reason: string }[] };
 
-  it("propose 一个 token 都不发；run 才发那两趟；替换与恢复默认都不再花钱", async () => {
-    const before = sentTools.length;
-    const missing = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "propose" } });
-    expect(missing.statusCode, "没有目的的图只是换一种画法，得先问用户").toBe(422);
-
-    const proposed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "propose", purpose: "给第一次进这个仓的人讲模块边界" } });
-    expect(proposed.statusCode).toBe(200);
-    expect((proposed.json() as { status: string }).status).toBe("pending");
-    expect(sentTools.length, "挂一条提议不该发出任何一发请求").toBe(before);
-
-    const early = await read();
-    expect(early.diagram?.pending?.purpose).toContain("模块边界");
-    expect(early.diagram?.origin, "还没画，画的仍是默认那份").toBe("default");
-
-    const tooEarly = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
-    expect(tooEarly.statusCode, "没有预览就替换是凭空造一张图").toBe(422);
-
-    scripted = [EXPLORE, DRAFT];
-    const drawn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "run" } });
-    expect(drawn.statusCode, (drawn.json() as { error?: string }).error ?? "").toBe(200);
-    expect(sentTools.length, "取证 + 出图：这一趟正好两发").toBe(before + 2);
-    const previewing = await read();
-    expect(previewing.diagram?.preview?.draft.layers.map((layer) => layer.name)).toEqual(["接入", "说明"]);
-    expect(previewing.diagram?.origin, "预览态不改变生效的那张").toBe("default");
-    expect(previewing.layers.map((layer) => layer.name), "画布取数的 layers 仍是默认那份的层").not.toEqual(["接入", "说明"]);
-
-    const committed = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "commit" } });
-    expect(committed.statusCode).toBe(200);
-    const replaced = await read();
-    expect(replaced.diagram?.origin).toBe("agent");
-    expect(replaced.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src"]], ["说明", ["module:docs"]]]);
-    expect(replaced.diagram?.preview, "替换完预览就没了").toBeUndefined();
-    expect(replaced.diagram?.conflicts ?? [], "这两个节点的角色与所在层并不相反（一个节点一层），不该硬造反证").toEqual([]);
-
-    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "reset" } });
-    const restored = await read();
-    expect(restored.diagram?.origin, "删掉替换那一行，默认那份立刻回来（它一直实时计算实时叠加着）").toBe("default");
-    expect(sentTools.length, "四个动作里只有 run 发过请求").toBe(before + 2);
+  const nodeOf = (id: string, ref: string, label: string): { id: string; kind: "module"; label: string; ref: string; x: number; y: number } => ({ id, kind: "module", label, ref, x: 40, y: 60 });
+  const fixtureBody = (): DiagramBody => ({
+    groups: [{ id: "g-1", label: "仓内写的", x: 20, y: 20, w: 400, h: 300 }],
+    nodes: [nodeOf("n-src", "module:src", "注册实现"), nodeOf("n-doc", "module:docs", "设计说明")],
+    edges: [{ id: "e-1", from: "n-src", to: "n-doc", origin: "inferred" }]
   });
 
-  it("没有待确认的提议时 run 拒；agent 手上只有 propose / keep / reset", async () => {
-    const orphan = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "run" } });
-    expect(orphan.statusCode, "用户没点横幅就不该发这一发").toBe(422);
+  /** 从存储层种一张图（带第一版）：结构与名字都由 fixture 定，路由只负责被读。 */
+  function seed(name: string, body: DiagramBody = fixtureBody()): Diagram {
+    const database = new TutorDatabase(repoDir);
+    try {
+      const draft = buildDiagram(repositoryId, { name, source: "agent", body });
+      return applyStructure(database, draft, draft.body, "fixture 初版");
+    } finally {
+      database.close();
+    }
+  }
 
+  const read = async (diagramId: string): Promise<Single> => (await app.inject({ method: "GET", url: `${base()}/${diagramId}` })).json() as Single;
+
+  it("建一张空白图：source=me、没有版本可回，列表只给摘要不给结构", async () => {
+    const created = await app.inject({ method: "POST", url: base(), payload: { name: "我的草稿" } });
+    expect(created.statusCode).toBe(200);
+    const blank = (created.json() as Single).diagram;
+    expect(blank.source, "用户自己点「+」建的，徽标就得是「我建的」而不是 agent 画的").toBe("me");
+    expect(blank.body).toEqual({ groups: [], nodes: [], edges: [] });
+    expect(blank.versions, "还没有结构可回，第一版都不存").toEqual([]);
+    expect(lastEvent("diagram_created").payload).toMatchObject({ diagram: blank.id, name: "我的草稿", source: "me", nodes: 0, edges: 0, via: "user" });
+
+    const listed = (await app.inject({ method: "GET", url: base() })).json() as { diagrams: (DiagramSummary & { body?: unknown })[] };
+    expect(listed.diagrams.map((item) => item.id)).toContain(blank.id);
+    for (const item of listed.diagrams) {
+      expect(item, "左栏只要摘要：把整张图的结构拖进列表就是每次切仓都传一遍产物").not.toHaveProperty("body");
+      expect(item).toMatchObject({ nodes: expect.any(Number), edges: expect.any(Number), versions: expect.any(Number) });
+    }
+  });
+
+  it("同名图建不出来（加序号），改名撞车则直接拒：图库靠名字认图", async () => {
+    seed("系统分层总览");
+    const second = (await app.inject({ method: "POST", url: base(), payload: { name: "系统分层总览" } })).json() as Single;
+    expect(second.diagram.name, "两张同名会让「改那张登录流程」这句话没有答案，所以压根不让它发生").toBe("系统分层总览（2）");
+
+    const doomed = seed("换个名试试");
+    const taken = await app.inject({ method: "PATCH", url: `${base()}/${doomed.id}`, payload: { name: "系统分层总览" } });
+    expect(taken.statusCode).toBe(400);
+    expect((taken.json() as { reason?: string }).reason).toBe("name_taken");
+    expect((await read(doomed.id)).diagram.name, "被拒之后名字没动").toBe("换个名试试");
+  });
+
+  it("改名不存版本；一个字都没改时 400 说清是哪一种", async () => {
+    const seeded = seed("待改名");
+    const renamed = await app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "  改过的名字  " } });
+    expect(renamed.statusCode).toBe(200);
+    const after = (renamed.json() as Single).diagram;
+    expect(after.name, "空白收口在写侧，界面不必自己 trim").toBe("改过的名字");
+    expect(after.versions, "改名不动结构：把它记进版本历史会把「回到那一版」这件事弄脏").toHaveLength(1);
+    expect(lastEvent("diagram_renamed").payload).toMatchObject({ diagram: seeded.id, from: "待改名", to: "改过的名字" });
+
+    const unchanged = await app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "改过的名字" } });
+    expect(unchanged.statusCode).toBe(400);
+    expect((unchanged.json() as { reason?: string }).reason).toBe("name_unchanged");
+    const empty = await app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "   " } });
+    expect((empty.json() as { reason?: string }).reason, "「没改动」与「名字空了」是两种处置，界面得能分开说").toBe("name_empty");
+  });
+
+  it("拖动位置：只改坐标，一版不存、一行审计不写；图上没有的 id 被跳过而不是被造出来", async () => {
+    const seeded = seed("拖一下");
+    const editedBefore = eventsOf("diagram_edited").length;
+    const createdBefore = eventsOf("diagram_created").length;
+    const response = await app.inject({ method: "PUT", url: `${base()}/${seeded.id}/geometry`, payload: { positions: [{ id: "n-src", x: 320.6, y: 115.4 }, { id: "图上根本没有的节点", x: 1, y: 1 }] } });
+    expect(response.statusCode).toBe(200);
+    const moved = (response.json() as Single).diagram;
+    expect(moved.body.nodes.find((item) => item.id === "n-src")).toMatchObject({ x: 321, y: 115, label: "注册实现" });
+    expect(moved.body.nodes).toHaveLength(2);
+    expect(moved.versions, "位置不承载对错：几百次拖动不该攒出几百版历史").toHaveLength(seeded.versions.length);
+    expect(moved.body.edges, "结构一格都不许动").toEqual(seeded.body.edges);
+    expect(eventsOf("diagram_edited")).toHaveLength(editedBefore);
+    expect(eventsOf("diagram_created")).toHaveLength(createdBefore);
+  });
+
+  it("恢复旧版是往前追加一版；下标越界 400，行也确实删得掉", async () => {
+    const seeded = seed("要看历史");
+    const restored = await app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 0 } });
+    expect(restored.statusCode).toBe(200);
+    const after = (restored.json() as Single).diagram;
+    expect(after.versions, "恢复本身也存一版，历史只追加不改写").toHaveLength(2);
+    expect(after.versions[1]!.note).toContain("恢复到");
+    expect(after.body, "恢复到的就是那一版的结构").toEqual(seeded.body);
+    expect(lastEvent("diagram_restored").payload).toMatchObject({ diagram: seeded.id, to: 0 });
+
+    const outOfRange = await app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 9 } });
+    expect(outOfRange.statusCode).toBe(400);
+    expect((outOfRange.json() as { reason?: string }).reason).toBe("version_missing");
+    const notANumber = await app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: "0" } });
+    expect(notANumber.statusCode, "字符串下标不收：JSON 里 index 写成品类就得拒，不能自己猜成数字").toBe(400);
+
+    const doomed = seed("要删的那张");
+    const removed = await app.inject({ method: "DELETE", url: `${base()}/${doomed.id}` });
+    expect(removed.json()).toMatchObject({ deleted: true, diagramId: doomed.id });
+    expect(lastEvent("diagram_deleted").payload, "版本历史一起没了，所以这行要留得下名字与版数").toMatchObject({ diagram: doomed.id, name: "要删的那张", versions: 1 });
+    const missing = await app.inject({ method: "GET", url: `${base()}/${doomed.id}` });
+    expect(missing.statusCode).toBe(404);
+    expect((missing.json() as { reason?: string }).reason).toBe("diagram_not_found");
+    const listed = (await app.inject({ method: "GET", url: base() })).json() as { diagrams: DiagramSummary[] };
+    expect(listed.diagrams.map((item) => item.id)).not.toContain(doomed.id);
+    const database = new TutorDatabase(repoDir);
+    try {
+      expect(database.getDiagramRow(repositoryId, doomed.id), "只删行：别留一张读不出来的半个图").toBeUndefined();
+    } finally {
+      database.close();
+    }
+    expect((await app.inject({ method: "DELETE", url: `${base()}/${doomed.id}` })).statusCode, "删第二次的 404 与「图本来就没有」同一口径，不装作又删成功一次").toBe(404);
+  });
+
+  it("读侧报出断掉的引用；界面这条路对结构一个字段都写不进去", async () => {
+    const stale = seed("引用过期的那张", { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "已经不在树上的模块", ref: "module:被删掉的那个", x: 10, y: 10 }], edges: [] });
+    const warning = await read(stale.id);
+    expect(warning.warnings).toEqual([{ node: "n-gone", reason: expect.stringContaining("已经不在现在的课程树或方块清单里") }]);
+
+    const seeded = seed("结构不归界面");
+    const attempted = await app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "还是只有名字能改", edit: { action: "add_node", node: nodeOf("n-extra", "module:src", "界面偷偷加的节点") } } });
+    expect(attempted.statusCode, "改名这一支照样成功：它不动结构").toBe(200);
+    const after = await read(seeded.id);
+    expect(after.diagram.name).toBe("还是只有名字能改");
+    expect(after.diagram.body.nodes.map((item) => item.id), "PATCH 只改名：这一组路由里没有任何一条能表达「加个节点」，body 里的 edit 一格都不看").toEqual(["n-src", "n-doc"]);
+    expect(after.diagram.body.edges).toHaveLength(1);
+    const geometry = await app.inject({ method: "PUT", url: `${base()}/${seeded.id}/geometry`, payload: { positions: "不合法" } });
+    expect(geometry.statusCode, "positions 不是数组就拒：宁可让界面重发一次，也不把半个坐标写进图").toBe(400);
+  });
+
+  it("agent 连一条声称 static 的边：引擎核不到就降档，落盘、回执、审计三处说的是同一件事", async () => {
+    const seeded = seed("边要说清依据", { groups: [], nodes: [nodeOf("n-src", "module:src", "注册实现"), nodeOf("n-doc", "module:docs", "设计说明")], edges: [] });
+    const threadId = await newThread("map", "改图线程");
     const before = sentTools.length;
-    const threadId = await newThread("map", "重绘线程");
-    // 第一回合模型想一步做完：直接 commit。工具回执必须拒，且**图不能被它替换掉**
-    scripted = [`@@tool redraw_diagram {"action":"commit"}`, "这一步我没权限，得你在画布上点。"];
-    const turn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "把刚才那张直接换上", threadId } });
+    scripted = [
+      `@@tool set_diagram ${JSON.stringify({ diagram: seeded.id, edit: { action: "add_edge", edge: { id: "e-ghost", from: "n-src", to: "n-doc", origin: "static", label: "读文档" } } })}`,
+      OK_REPLY
+    ];
+    const turn = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "把实现到说明那条依赖画上", threadId, diagramId: seeded.id } });
     expect(turn.statusCode).toBe(200);
-    expect(sentTools[0]?.names, "map 作用域每一轮都该有这个工具（不要求先选中模块）").toContain("redraw_diagram");
-    const second = sentTools[sentTools.length - 1]?.raw ?? "";
-    expect(second, "工具回执要回实话：这一动作不由 agent 按").toContain("不由你按");
-    expect((await read()).diagram?.origin, "被拒之后生效的那张没变").toBe("default");
 
-    // 第二回合走正路：propose 仍然一发不发（除了对话本身那发）
-    const beforePropose = sentTools.length;
-    scripted = [`@@tool redraw_diagram {"action":"propose","purpose":"只看下单这条链路"}`, "已把提议挂到画布上，等你点开始重绘。"];
-    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat`, payload: { content: "换个角度看这张图", threadId } });
-    const pending = await read();
-    expect(pending.diagram?.pending?.purpose).toBe("只看下单这条链路");
-    expect(sentTools.length, "对话两发之外，propose 没多花任何一发").toBe(beforePropose + 2);
-    await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/diagram/redraw`, payload: { kind: "architecture", action: "keep" } });
-    expect(sentTools.length - before, "整段对话只发了回合本身的请求：重绘一步没花钱").toBe(4);
+    expect(sentTools[before]?.names).toContain("set_diagram");
+    expect(sentTools[before]?.raw, "有副作用的工具必须先看见现状：有哪几张图、正打开那张的图元 id").toContain("画布现场");
+    expect(sentTools[before]?.raw, "用户那句「这条边」指的是他眼前那张，不是最近更新那张").toContain("画布上正打开的这张");
+    expect(sentTools[before + 1]?.raw ?? "", "回喂给模型的是实际落盘后的状态：这条边被降了档").toContain("降档");
+
+    const edge = (await read(seeded.id)).diagram.body.edges.find((item) => item.id === "e-ghost");
+    expect(edge?.origin, "fixture 的图里这一对模块之间没有 import、没有调用：static 这个说法核不到").toBe("inferred");
+    expect(edge?.downgraded ?? "", "为什么不算这一格要留下，界面在悬停里读它，不替模型圆").toContain("模型报的是 static");
+    expect(lastEvent("diagram_edited").payload).toMatchObject({ diagram: seeded.id, action: "add_edge", downgraded: 1, via: "agent" });
+    expect(sentTools.length, "这一轮只发了对话本身那两趟：改图一格模型都不发").toBe(before + 2);
   });
 });

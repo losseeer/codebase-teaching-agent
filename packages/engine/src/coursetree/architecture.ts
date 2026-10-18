@@ -1,4 +1,4 @@
-import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrideLoss, ArchitectureOverrides, ArchitecturePlan, DiagramReadout, CourseNode, CourseTier, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
+import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureEdge, ArchitectureExternal, ArchitectureLayer, ArchitectureOverrideLoss, ArchitectureOverrides, ArchitecturePlan, CourseNode, CourseTier, CourseTree, RepositoryAnalysis, RepositoryIndex, RepositoryOverlays } from "@codebase-tutor/shared";
 import { groupExternals, isBoundaryMember } from "../depgraph/external-catalog.js";
 import { graphFromData, isServedEntrypoint } from "../depgraph/graph.js";
 import { classifyFileRoles, fileStructureOf } from "../depgraph/roles.js";
@@ -81,8 +81,6 @@ export interface ArchitectureInput {
 }
 
 export interface ArchitectureResult extends ArchitecturePlan {
-  /** 现在画的是默认那张还是被替换过的那张，外加 pending/preview 两条过渡态（见 shared 的 DiagramReadout）。 */
-  diagram?: DiagramReadout;
   /** 只有真发了请求才带这个节点；命中缓存不报用量（与流程层同一口径，同一笔钱不被计两次）。 */
   usage?: LlmUsage;
   /** 被截掉的模块数（>MAX_MODULES 时界面要能说清「这不是全部」）。 */
@@ -92,8 +90,12 @@ export interface ArchitectureResult extends ArchitecturePlan {
   // `lostOverrides` 声明在 shared 的 ArchitecturePlan 上：它是读时实时计算的失效读数，不写进缓存
 }
 
-/** 模块 → 它可见的文件（本节点锚点 + 子孙锚点，去重）：与分级层、GUI 模块清单同一条口径。 */
-function moduleFiles(node: CourseNode): string[] {
+/**
+  模块 → 它可见的文件（本节点锚点 + 子孙锚点，去重）：与分级层、GUI 模块清单同一条口径。
+  导出给画图工作区复用（`diagram/set-diagram.ts` 核一条边的依据用的就是这张表）——
+  「这个模块包含哪些文件」有两套算法，早晚会有一天图上两个节点说的是两回事。
+*/
+export function moduleFiles(node: CourseNode): string[] {
   const paths: string[] = [];
   const collect = (current: CourseNode): void => {
     current.anchors.forEach((anchor) => paths.push(anchor.path));
@@ -103,7 +105,8 @@ function moduleFiles(node: CourseNode): string[] {
   return [...new Set(paths)];
 }
 
-function moduleNodes(course: CourseTree): CourseNode[] {
+/** 课程树「模块地图」那一支的全部模块节点（与画布上 `kind:"module"` 的节点同一份 id 池）。 */
+export function moduleNodes(course: CourseTree): CourseNode[] {
   const branch = course.root.children.find((node) => node.id === "modules");
   return branch?.children.filter((node) => node.kind === "module") ?? [];
 }

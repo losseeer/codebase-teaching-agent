@@ -7,7 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, RedrawToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../mcp/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
@@ -239,7 +239,15 @@ function joinList(items: string[]): string {
   return items.join("、") || "（无）";
 }
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（唯一能写产物的工具）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 重绘这张图（只有提议/撤预览/恢复默认）：与写工具同一道作用域闸。 */ redraw?: RedrawToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+/**
+  map 作用域的一轮对话。
+  两个写工具（`set_architecture` 改分层判断、`set_diagram` 改画布上的结构）**只给这一个作用域**：
+  教学与练习两张脸面对的是代码与题目，画布不在它们面前，给了就是让模型去改用户此刻看不见的东西。
+  每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
+  否则它只能猜 id（§71 那条教训，与 `set_diagram` 的画布现场同源）。
+*/
+
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -268,6 +276,9 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   if (input.focus) sections.push(flowStageSection(input.focus));
   // 架构现场（层名、节点 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
   if (input.architecture?.inventory) sections.push(input.architecture.inventory);
+  // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 是第二个写工具，同理必须先把现状给它，
+  // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id 撞在写侧白名单上
+  if (input.diagram?.inventory) sections.push(input.diagram.inventory);
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
     const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);
@@ -301,7 +312,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.search ? { search: input.search } : {}),
     ...(input.cross ? { cross: input.cross } : {}),
     ...(input.architecture ? { architecture: input.architecture } : {}),
-    ...(input.redraw ? { redraw: input.redraw } : {}),
+    ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.external ? { external: input.external } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),

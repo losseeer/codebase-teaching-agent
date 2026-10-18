@@ -22,12 +22,6 @@ export const LATEST_SUMMARY_LIMIT = 2_000;
 /** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
 const LAYER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
-/**
-  `diagram_artifact` 里两个过渡态（pending 等确认这一发、preview 等点替换）的存活线。
-  过渡态没人管就是垃圾，隔天清掉；**committed 不参与修剪**——那是用户点头留下的图，只有他自己撤才消失。
-*/
-const DIAGRAM_TRANSIENT_MAX_AGE_MS = 24 * 60 * 60_000;
-
 /** chat_session 的行形状（snake_case 贴着表；域类型转换在 store/chat-store.ts）。 */
 export interface ChatSessionRow {
   id: string;
@@ -114,9 +108,10 @@ export class TutorDatabase {
         payload TEXT NOT NULL,
         at INTEGER NOT NULL
       );
-      -- 被 agent 重绘的图（见 store/diagram-artifacts.ts）。**刻意不住在 layer_cache 里**：
-      -- 那张表每次写入都按 at 无差别删掉 7 天前的行（LAYER_CACHE_MAX_AGE_MS），
-      -- 而「用户点头替换的那张图」是用户数据，闲置九十天后被无声清掉就等于把他的决定删了。
+      -- 【已退役，2026-10-18】「agent 重绘后待替换」那张过渡图住的表：宏观设计改成图库 + 自由画布之后，
+      -- 结构改动直接落在下面的 diagram 表上，pending/preview 这套三态机没有了。
+      -- 表与历史行都留着：老仓里可能还躺着一份用户点过头的判断，删表等于把他的记录毁了，
+      -- 而留着不读的成本是零（同一道理见上面 repository_state 那几列的注释）。
       CREATE TABLE IF NOT EXISTS diagram_artifact (
         repository_id TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -125,6 +120,20 @@ export class TutorDatabase {
         payload TEXT NOT NULL,
         at INTEGER NOT NULL,
         PRIMARY KEY(repository_id, kind, status)
+      );
+      -- 画布上的一张图（store/diagrams.ts 是唯一读写口）。一行 = 一张图，一个仓可以有很多张。
+      -- **刻意不住在 layer_cache 里**：那张表每次写入都按 at 无差别删掉 7 天前的行，
+      -- 语义是「输入变了就没人再命中的缓存」；而图是用户资产，闲置九十天后被一次无关写入清掉就是丢数据。
+      -- 名字/来源/时间戳单独立列：图库列表只要这几格，不必把整张图的 JSON 解析一遍。
+      CREATE TABLE IF NOT EXISTS diagram (
+        repository_id TEXT NOT NULL,
+        diagram_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(repository_id, diagram_id)
       );
       CREATE TABLE IF NOT EXISTS chat_session (
         id TEXT PRIMARY KEY,
@@ -335,32 +344,31 @@ export class TutorDatabase {
   }
 
   /**
-    被 agent 重绘的图（`store/diagram-artifacts.ts` 是唯一读写口）。一个仓每种图最多三行：
-    `pending`（agent 提议重绘，等用户点头才花钱）、`preview`（新图画好了，叠在画布上等替换或保持）、
-    `committed`（用户已批准替换，读侧就拿它当这张图）。默认产物不在这里——它仍由 `layer_cache` 那份实时计算实时叠加，
-    删掉 `committed` 这一行默认就回来了，所以「恢复默认」不可能误删模型的判层。
+    画布上的一张图（`store/diagrams.ts` 是唯一业务读写口，这里只收 SQL）。
+    一行 = 一张图，`payload` 装的是 `{ groups, nodes, edges, versions }`；
+    名字/来源/两个时间戳单独立列，图库列表就不用把每行的 JSON 解析一遍。
+    ⚠️ 列一律 `AS` 成返回类型上那几个驼峰名：better-sqlite3 按 **SQL 里写的列名**交回键，
+    而这里的类型声明是驼峰的——`created_at` 不写别名的话 `row.createdAt` 是 `undefined`，
+    编译器一句都不报（类型是断言出来的），到运行期才炸成「Invalid time value」。
+    与 `chat_session` 那种「类型就写蛇形」的行形状是另一条路，两条都行，但**声明与交出的键必须是同一套**。
   */
-  getDiagramArtifact<T>(repositoryId: string, kind: string, status: string): { value: T; purpose: string; at: number } | undefined {
-    const row = this.db.prepare("SELECT payload, purpose, at FROM diagram_artifact WHERE repository_id = ? AND kind = ? AND status = ?").get(repositoryId, kind, status) as
-      | { payload: string; purpose: string; at: number } | undefined;
-    if (!row) return undefined;
-    try {
-      return { value: JSON.parse(row.payload) as T, purpose: row.purpose, at: row.at };
-    } catch {
-      return undefined;
-    }
+  listDiagramRows(repositoryId: string): { diagramId: string; name: string; source: string; createdAt: number; updatedAt: number; payload: string }[] {
+    return this.db.prepare("SELECT diagram_id AS diagramId, name, source, created_at AS createdAt, updated_at AS updatedAt, payload FROM diagram WHERE repository_id = ? ORDER BY updated_at DESC").all(repositoryId) as
+      { diagramId: string; name: string; source: string; createdAt: number; updatedAt: number; payload: string }[];
   }
 
-  putDiagramArtifact(repositoryId: string, kind: string, status: string, payload: unknown, purpose: string): void {
-    const now = Date.now();
-    this.db.prepare("INSERT OR REPLACE INTO diagram_artifact(repository_id, kind, status, purpose, payload, at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(repositoryId, kind, status, purpose, JSON.stringify(payload), now);
-    // pending 与 preview 是过渡态，隔天没人管就当垃圾清掉；committed 不带时间线，只有用户自己撤才消失
-    this.db.prepare("DELETE FROM diagram_artifact WHERE status <> 'committed' AND at < ?").run(now - DIAGRAM_TRANSIENT_MAX_AGE_MS);
+  getDiagramRow(repositoryId: string, diagramId: string): { name: string; source: string; createdAt: number; updatedAt: number; payload: string } | undefined {
+    return this.db.prepare("SELECT name, source, created_at AS createdAt, updated_at AS updatedAt, payload FROM diagram WHERE repository_id = ? AND diagram_id = ?").get(repositoryId, diagramId) as
+      | { name: string; source: string; createdAt: number; updatedAt: number; payload: string } | undefined;
   }
 
-  dropDiagramArtifact(repositoryId: string, kind: string, status: string): void {
-    this.db.prepare("DELETE FROM diagram_artifact WHERE repository_id = ? AND kind = ? AND status = ?").run(repositoryId, kind, status);
+  putDiagramRow(repositoryId: string, diagramId: string, row: { name: string; source: string; createdAt: number; updatedAt: number; payload: unknown }): void {
+    this.db.prepare("INSERT OR REPLACE INTO diagram(repository_id, diagram_id, name, source, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(repositoryId, diagramId, row.name, row.source, row.createdAt, row.updatedAt, JSON.stringify(row.payload));
+  }
+
+  deleteDiagramRow(repositoryId: string, diagramId: string): void {
+    this.db.prepare("DELETE FROM diagram WHERE repository_id = ? AND diagram_id = ?").run(repositoryId, diagramId);
   }
 
   /**
