@@ -429,6 +429,26 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .msg-bubble .md img { max-width: 100%; }
 
 .rail-foot { flex: none; border-top: 1px solid var(--border); padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+/* 宏观设计的快捷指令排：点在 composer 上方，发出去的就是按钮上那句原话 */
+.rail-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.rail-quick .chip-quick { font-size: var(--fs-11); padding: 4px 10px; }
+/* agent 画完一张图挂在消息下面的卡片：点开就把这张图放到画布上 */
+.dg-card {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; margin-top: var(--sp-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 8px 10px;
+  text-align: left; cursor: pointer; transition: border var(--t-fast);
+}
+.dg-card:hover { border-color: var(--brand-600); }
+.dg-card-thumb {
+  width: 46px; height: 32px; flex: none;
+  border-radius: var(--r-sm);
+  background: var(--brand-050); border: 1px solid var(--border);
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 650; color: var(--brand-700);
+}
+.dg-card .link { color: var(--brand-700); }
 .rail-model-pill {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--fs-11); color: var(--ink-2);

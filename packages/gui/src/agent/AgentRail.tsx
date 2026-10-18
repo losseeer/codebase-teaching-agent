@@ -85,7 +85,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} />)}
         {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时顶替 */}
         {t.sending && t.progress[scope] && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -101,6 +101,15 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
 
       <div className="rail-foot">
+        {/* 快捷指令只在宏观设计出现：这一页是「让 agent 画图」的工作区，空画布上那三个按钮在这儿才有意义。
+            点一下就是真发一句（会花钱），所以按钮上写的就是发出去的原话，不加「试试」这种软化措辞。 */}
+        {scope === "map" ? (
+          <div className="rail-quick">
+            {MAP_QUICK_PROMPTS.map((prompt) => (
+              <button key={prompt} type="button" className="chip-quick" disabled={t.sending} title={`发这句给 agent：${prompt}`} onClick={() => void t.sendMapQuick(prompt)}>{prompt}</button>
+            ))}
+          </div>
+        ) : null}
         {/* 模型入口：一颗胶囊显示「当前模型 · 思考档 · 风格」，点开弹窗做全部配置 */}
         <LlmSettingsControl styleLabel={STYLE_BAND_LABEL[activeBand]} />
         {t.error ? <p className="error-message">{t.error}</p> : null}
@@ -183,10 +192,10 @@ function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
  */
 function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
-    // 绑定只认三种情形（2026-09-18）：目录里选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。
-    // 不再把默认根节点拼进绑定——那会让「从目录随便打开一个文件」显示成节点「根目录文件」。
+    // 绑定只认四种情形：目录里选文件 / 选中模块 / 选中环节 / 画布上正打开的那张图。
+    // 最后一种是画图工作区加的——用户什么也没点、只是让 agent「把这条边删掉」时，得有个所指。
     const binding = t.mapBinding;
-    if (!binding) return "未绑定 —— 选中模块 / 环节 / 文件后提问";
+    if (!binding) return t.openDiagram ? `当前图 · ${t.openDiagram.name}` : "未绑定 —— 选中节点 / 文件，或直接让 agent 画一张";
     if (binding.kind === "file") return `文件 · ${binding.path}`;
     const label = binding.kind === "module" ? "模块" : "环节";
     return binding.path ? `${label}「${binding.title}」 · ${binding.path}` : `${label}「${binding.title}」`;
@@ -263,14 +272,41 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
 }
 
 /** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
-function ThreadEntry({ item }: { item: ThreadItem }): ReactElement {
+/** 画布空态与 composer 上方共用的三条快捷指令：按钮上写的就是发出去的原话。 */
+const MAP_QUICK_PROMPTS = ["画一张架构分层图", "把模块依赖画出来", "画一条主要请求的流程"];
+
+function ThreadEntry({ item, onOpenDiagram }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;
   const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
   const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : "";
+  const card = agent?.card;
+  // 卡片消息：agent 这一回合画/改了一张图。正文为空时只出卡片，不撑一个空气泡出来。
+  if (card && !agent?.text) {
+    return (
+      <div className="msg msg-agent" style={{ alignSelf: "stretch" }}>
+        <button type="button" className="dg-card" title={`在画布打开「${card.name}」`} onClick={() => onOpenDiagram?.({ id: card.diagramId, name: card.name })}>
+          <span className="dg-card-thumb">图</span>
+          <span className="col" style={{ gap: 0, minWidth: 0 }}>
+            <b className="fs-12">{card.name}</b>
+            <span className="fs-11 link">在画布打开 ↗</span>
+          </span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className={`msg msg-${agent ? "agent" : "user"}`}>
       <div className={`msg-bubble${tone}`}>{body}</div>
+      {card ? (
+        <button type="button" className="dg-card" title={`在画布打开「${card.name}」`} onClick={() => onOpenDiagram?.({ id: card.diagramId, name: card.name })}>
+          <span className="dg-card-thumb">图</span>
+          <span className="col" style={{ gap: 0, minWidth: 0 }}>
+            <b className="fs-12">{card.name}</b>
+            <span className="fs-11 link">在画布打开 ↗</span>
+          </span>
+        </button>
+      ) : null}
     </div>
   );
 }

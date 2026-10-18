@@ -1,4 +1,4 @@
-import type { ArchitectureDiagramDraft, ArchitecturePlan, DiagramKind, DiagramReadout, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportJob, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFlowResult, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { Diagram, DiagramSummary, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportJob, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -171,8 +171,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-/** 架构画布拿到的那份产物：`ArchitecturePlan` 之外，引擎多带两个读数与一份「这张图是谁画的」。 */
-export type ArchitectureView = ArchitecturePlan & { omittedModules: number; collapsedExternals: number; diagram?: DiagramReadout };
+/**
+  画图工作区（`/diagrams`）的两条线上形状。
+
+  - `DiagramPosition`：拖动落盘只带坐标，**结构一个字段都不碰**；
+  - `DiagramWarning`：读侧的诚实检查——图上某个模块节点的 `ref` 在现在的课程树里查不到了（改名、删模块或重分析过）。
+    引擎发的是节点 id + 一句原因，界面据此把那个节点标成失效，不当活节点画。
+*/
+export interface DiagramPosition {
+  id: string;
+  x: number;
+  y: number;
+}
+
+export interface DiagramWarning {
+  node: string;
+  reason: string;
+}
+
+/**
+  画布那格保存状态（界面自己的读数，不是引擎的字段）。
+  `synced`（刚从盘上取下来、还没动过）与 `saved`（真写过一次几何）都表示「画布 = 盘上那份」；
+  `queued` 是拖动结束、去抖还没到；`saving` 是在途；`failed` 必须显形——**绝不替一次失败的写入说「已保存」**。
+*/
+export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 
 export const api = {
   /** 探活：认证闸已撤除（§64），这个节点不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
@@ -193,23 +215,25 @@ export const api = {
   getAnalysis: (repositoryId: string) => request<RepositoryAnalysis>(`/api/repositories/${repositoryId}/analysis`),
   /** 导入前报告：索引概况 + 预估 token/金额 + 建议入口（ImportPage 在「花大钱之前」展示用）。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string }; entrypoints: { title: string; anchors: { path: string; line: number }[] }[] }>(`/api/repositories/${repositoryId}/report`),
+  /** 教学/练习两侧的锚点行读数：按文件路径取那份实时源码。 */
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "module_files"; reason?: string }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
-  /** 流程视图：按入口取一条 LLM 生成的执行流程；source=static 表示降级为静态调用链（reason 说明原因）。 */
-  getRepositoryFlow: (repositoryId: string, entryPath: string) => request<RepositoryFlowResult>(`/api/repositories/${repositoryId}/flow?entry=${encodeURIComponent(entryPath)}`),
-  /**
-    架构视图的分层产物：层名与模块归层是模型判的（可人工改），箭头与「边界之外」由引擎算。
-    `source` 与 `reason` 说清这份是谁算的；`ArchitecturePlan` 之外引擎多带两个读数。
-  */
-  getArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture`),
-  /**
-    「重绘这张图」的一步。界面上只有这四个动作能到这里：`run` 是画布上那条「开始重绘」（**花钱那一下**）、
-    `commit` 是「替换这张」、`keep` 是「保持现在的」、`reset` 是「恢复默认图」。
-    agent 手上只有 propose / keep / reset——run 与 commit 不给它，见 engine 的 `redrawToolFor`。
-  */
-  redrawDiagram: (repositoryId: string, action: "run" | "commit" | "keep" | "reset", kind: DiagramKind = "architecture") => request<{ ok: boolean; status: string; text: string; draft?: ArchitectureDiagramDraft }>(`/api/repositories/${repositoryId}/diagram/redraw`, { method: "POST", body: JSON.stringify({ kind, action }) }),
-  /** 显式重问一次分层：**花 token**，没配模型或预算已达上限回 422（不静默给一张静态图）。 */
-  regenerateArchitecture: (repositoryId: string) => request<ArchitectureView>(`/api/repositories/${repositoryId}/architecture/regenerate`, { method: "POST" }),
+  /* ---- 画图工作区（宏观设计）：七条路由**全部免费**——它们只读/写库里的图元，一次都不碰模型。
+     ⚠️ 这里**故意没有**「加节点 / 删节点 / 改边」那种面向界面的结构写入口：结构改动只有 agent 的
+     `set_diagram` 一条路（引擎侧白名单），界面提供拖动（几何）与改名，别的一律不给。
+     新增图 = 一张空白画布（`source:"me"`），它同样只能靠对话往里画东西。 ---- */
+  /** 图库列表：只有摘要（节点/边/版本计数），不把整张结构拖进左栏。 */
+  listDiagrams: (repositoryId: string) => request<{ diagrams: DiagramSummary[] }>(`/api/repositories/${repositoryId}/diagrams`),
+  /** 新建一张空白图（名字省略则由引擎起「未命名图」并去重）。 */
+  createDiagram: (repositoryId: string, name?: string) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams`, { method: "POST", body: JSON.stringify(name ? { name } : {}) }),
+  /** 打开一张图：`warnings` 是读侧的失效检查（`ref` 已经不在课程树/方块清单里的节点）。 */
+  getDiagram: (repositoryId: string, diagramId: string) => request<{ diagram: Diagram; warnings: DiagramWarning[] }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`),
+  renameDiagram: (repositoryId: string, diagramId: string, name: string) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteDiagram: (repositoryId: string, diagramId: string) => request<{ deleted: boolean; diagramId: string }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "DELETE" }),
+  /** 几何落盘：拖动结束后只送变化过的位置。存的是位置，**不产生版本**（版本只由 agent 的结构改动留下）。 */
+  saveDiagramGeometry: (repositoryId: string, diagramId: string, positions: DiagramPosition[]) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/geometry`, { method: "PUT", body: JSON.stringify({ positions }) }),
+  /** 回到某一版快照（`index` 按 `versions` 数组下标，旧→新）。引擎会把恢复后的样子再存一版，历史不截断。 */
+  restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
   getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
   /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
   mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
@@ -244,12 +268,16 @@ export const api = {
       },
       turn.signal
     ),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done 事件。threadId = 当前会话线程，引擎据此自取历史并落回合正文（GUI 不再回传窗口正文）；focus = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
-  /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。 */
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、以及这一回合真画/真改了哪张图）。
+      `focus` = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）；`diagramId` = 画布上正打开的那张图，
+      agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张，不送猜的。 */
+  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
+    sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
+  /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
+      `diagram?: undefined` 不是漏填：练习作用域没有画图工具，那一格**恒不出现**——两条流的 done 形状对齐，
+      调用方合成一个变量读时才不必再分岔（调用方是 `useScopedChat` 的 sendScoped）。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedChatEvent) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
+    sseStream<{ reply: string; provider: string; diagram?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, (event) => mapScopedEvent(event, onEvent), turn.signal),
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方丢弃错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };

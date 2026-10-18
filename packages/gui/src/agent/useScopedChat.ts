@@ -43,7 +43,11 @@ export function progressText(event: { type?: string; stage?: string; round?: num
   线程只留真实的对话内容（v0.8.1）。 */
 export type ThreadItem =
   | { kind: "user"; id: string; text: string }
-  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" };
+  /**
+    `card`：这一回合 agent 画（或改）了一张图，消息下面挂一张可点开的图卡片（prototype `.dg-card`）。
+    它挂在消息上而不是全局提示条上——用户要能在两分钟之后回来还找得到「哪句话画出了哪张图」。
+  */
+  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint"; card?: { diagramId: string; name: string } };
 
 /** 线程正文一行的最小形状：teaching 的 TutorMessage 与 map/practice 的 ChatThreadMessage 都能对上（断线补账只比条数）。 */
 type ThreadRow = { id: string; role: string; content: string };
@@ -96,7 +100,7 @@ export interface ScopedChatApi {
   /** Agent 侧栏 thread 状态：3 作用域各独立。写入器只有 `pushMessage`（清空由线程边界负责，不留第二个出口）。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
-  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint") => void;
+  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }) => void;
 
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：
@@ -133,6 +137,17 @@ export interface ScopedChatApi {
   mapFile: string;
   setMapFile: (path: string) => void;
 
+  /**
+    画布上正打开的那张图（宏观设计 = 画图工作区）。两件事靠它：绑定行显示「当前图：X」，
+    以及 map-chat 把它当作用域上送——「把这条边删掉」得有个所指。
+  */
+  openDiagram: { id: string; name: string } | null;
+  setOpenDiagram: (diagram: { id: string; name: string } | null) => void;
+  /** 对话里的图卡片点开 → 页面取走这一格去开图（取完清空）。 */
+  pendingDiagramOpen: { id: string; name: string } | null;
+  requestOpenDiagram: (diagram: { id: string; name: string }) => void;
+  clearDiagramOpen: () => void;
+
   /** 练习作用域绑定（prototype `binds.practice` = 练习 #N · 文件）：由 PracticePage 写入 */
   practiceUnit: string;
   setPracticeUnit: (label: string) => void;
@@ -150,6 +165,8 @@ export interface ScopedChatApi {
   send: () => Promise<void>;
   /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
   sendMap: () => Promise<void>;
+  /** 快捷指令：直接发一句（画布空态那三个「画一张…」按钮）。 */
+  sendMapQuick: (text: string) => Promise<void>;
   sendPractice: () => Promise<void>;
   /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复） */
   replySource: Record<Scope, string>;
@@ -177,9 +194,9 @@ export function useScopedChat(repositoryId: string): ScopedChatApi {
   只有 `pushMessage` / `clearThread` 两个写入器——渲染口径见上方 `ThreadItem` 注释。
   */
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
-const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint"): void => {
+const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
+  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}) }] }));
 };
 
 // 课程与节点
@@ -197,8 +214,15 @@ const mapNode = mapSelection.node;
 const setMapNode = (node: CourseNode | null, scopePaths: string[] = [], focus: FlowStage | null = null): void => setMapSelection({ node, scopePaths, focus });
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
+// 画布上正打开的那张图（prototype `state.map.openDiagramId`）：绑定行读它，map-chat 也把它当作用域上送，
+// 这样「把这条边删掉」指的是用户眼前那张，而不是模型从图库里猜一张。
+const [openDiagram, setOpenDiagram] = useState<{ id: string; name: string } | null>(null);
+// 对话里的图卡片被点开：页面取走这一格去开图，取完清空（一次性的投递，不当事件总线用）
+const [pendingDiagramOpen, setPendingDiagramOpen] = useState<{ id: string; name: string } | null>(null);
+const requestOpenDiagram = (diagram: { id: string; name: string }): void => setPendingDiagramOpen(diagram);
+const clearDiagramOpen = (): void => setPendingDiagramOpen(null);
 const [practiceUnit, setPracticeUnit] = useState("");
-useEffect(() => { setMapNode(null); setMapFile(""); setPracticeUnit(""); }, [repositoryId]);
+useEffect(() => { setMapNode(null); setMapFile(""); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
 useEffect(() => {
   if (!repositoryId) { setCourse(null); setSelected(null); return; }
   let cancelled = false;
@@ -674,13 +698,14 @@ useEffect(() => {
   };
 
   // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
-  const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
-    if (!content.trim() || !repositoryId) return;
-    const message = content;
+  // `overrideText`：画布空态与 composer 上方那排快捷指令用——它们要发的是**按钮上那句**，不是输入框里可能写到一半的话。
+  const sendScoped = async (scope: "map" | "practice", overrideText?: string): Promise<void> => {
+    const message = (overrideText ?? content).trim();
+    if (!message || !repositoryId) return;
     // 同 teaching：先结断线那轮的账，再让这一句上屏——原来「没题就 return」会让用户输入凭空消失。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
-    setContent("");
+    if (overrideText === undefined) setContent("");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
@@ -710,11 +735,15 @@ useEffect(() => {
             // 流程视图选中环节：节点只到入口粒度，环节信息靠这一并上送
             ...(mapSelection.focus ? { focus: mapSelection.focus } : {}),
             path: mapFile || undefined,
+            // 画布正打开的图：agent 改哪张、删哪条边都按这一格定，认不出就不动
+            ...(openDiagram ? { diagramId: openDiagram.id } : {}),
             threadId,
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
       await sink.settle(reply.reply, reply.provider);
+      // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
+      if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" });
     } catch (reason) {
       sink.fail(reason);
     } finally {
@@ -727,6 +756,8 @@ useEffect(() => {
     }
   };
   const sendMap = (): Promise<void> => sendScoped("map");
+  /** 快捷指令：直接发一句（画布空态与 composer 上方那排 chips）。输入框里写到一半的话不受影响。 */
+  const sendMapQuick = (text: string): Promise<void> => sendScoped("map", text);
   const sendPractice = (): Promise<void> => sendScoped("practice");
 
   return {
@@ -735,9 +766,10 @@ useEffect(() => {
     chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread,
     course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
+    openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,
     practiceUnit, setPracticeUnit,
     settings, setSettings: setSettingsState,
-    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendPractice, replySource,
+    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendMapQuick, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
   };
 }

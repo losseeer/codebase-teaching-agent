@@ -1462,7 +1462,7 @@ function mcpCallPayload(call: McpCallAudit): Record<string, string | number | bo
   这句话的指代对象是**他眼前那张**，不是图库里最近更新那张——所以它既进上下文（标出哪张是打开的），
   也进写侧（`edit.diagram` 省略时按它落点）。认不出就拒，绝不猜（见 `resolveTarget`）。
 */
-function setDiagramToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string, openDiagramId?: string): SetDiagramToolContext {
+function setDiagramToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string, openDiagramId?: string, onWrite?: (diagram: { id: string; name: string }) => void): SetDiagramToolContext {
   const context = () => diagramWriteContextFor(repository, database, sessionId);
   return {
     inventory: diagramInventoryFor(context(), openDiagramId),
@@ -1470,7 +1470,11 @@ function setDiagramToolFor(repository: ImportedRepository, database: TutorDataba
       const parsed = parseDiagramEditArguments(argumentsJson);
       const note = parsed.ignored.length ? `（多余字段 ${[...new Set(parsed.ignored)].join(" / ")} 已忽略：这一层只认那九种动作各自的字段，边上「降过档」那一格由引擎写）` : "";
       if (parsed.error) return `没改：${parsed.error}。${note}`;
-      return `${applyDiagramEdit(context(), parsed.request!, "agent").text}${note}`;
+      const outcome = applyDiagramEdit(context(), parsed.request!, "agent");
+      // 真落了盘才回报给路由：界面上那张图卡片要挂在「这句话画出了这张图」上，
+      // 拒写的回合也挂一张卡就是替模型撒谎（它可能一次试了三遍才画对）。
+      if (outcome.ok && outcome.diagram) onWrite?.({ id: outcome.diagram.id, name: outcome.diagram.name });
+      return `${outcome.text}${note}`;
     }
   };
 }
@@ -1541,10 +1545,12 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   try {
     const crossFiles = new Map<string, number>();
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId));
+    // 这一回合真写过哪张图：回话带回去，界面上那张图卡片才有依据（拒写不算写过）
+    let writtenDiagram: { id: string; name: string } | undefined;
+    const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}), diagram: diagramContext, ...(await externalAndSkills()) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
-    return { reply: result.reply, provider: result.provider };
+    return { reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) };
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
   } finally {
@@ -1583,7 +1589,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const overlayDatabase = new TutorDatabase(repository.path);
   try {
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId));
+    // 这一回合真写过哪张图：回话带回去，界面上那张图卡片才有依据（拒写不算写过）
+    let writtenDiagram: { id: string; name: string } | undefined;
+    const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
@@ -1604,7 +1612,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     replayTypewriter(send, result.reply);
-    send({ type: "done", reply: result.reply, provider: result.provider });
+    send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) });
   } catch (error) {
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {

@@ -1,36 +1,570 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import type { CourseNode, CourseNodeDetail, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
-import { api, type Workspace } from "../api/client";
+import type { CourseNode, Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared";
+import { api, subscribeServerEvents, type DiagramPosition, type DiagramWarning, type SaveState, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
-import { EmptyState, flatten, Loading } from "./helpers";
+import { Loading, flatten } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
-import { subscribeServerEvents } from "../api/client";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { ArchOverview, ARCH_REGEN_CONFIRM, ARCH_REGEN_PRICE_NOTE, archRegenToast, NO_ARCH_STATUS, type ArchStatus } from "../map/ArchOverview";
-import { FLOW_KIND_LABEL, FlowMap, type FlowSelection, type FlowStatus } from "../map/FlowMap";
-import { Icon } from "../ui/icons";
+import { DiagramCanvas, type DragCommit } from "../map/DiagramCanvas";
+import { GalleryPane } from "../map/GalleryPane";
+import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } from "../map/NodeDrawer";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 
 /**
-  宏观设计工作区（两栏，prototype `.page-map` = `.map-side` + `.map-main`）：
-  - 左 「项目目录」：真实目录层级树（v0.5.4 起与原始目录结构一致，顶层目录保留语义标签；
-    早期版本按顶层目录平铺文件，用户反馈看不到子目录后改为 RepoTree）
-  - 右 「地图画布」：`.map-viewbar` 切两个视图（`.view-toggle`）——
-    「架构视图」= **分层全景**（`ArchOverview`）：一条系统边界 + 层序号导轨 + 只读节点，边不上画布；
-    「流程视图」由 **LLM 生成**（`FlowMap`）：环节 = 一次执行经过的步骤，关联文件只在该环节的「节点详情」里展示，
-    画布上不出现路径。课程树不上图（层级交给左侧目录与教学页），点击模块合成 CourseNode 走抽屉与地图线程。
-  - 花钱动作与流程「重新生成」同位：架构的「重新生成分层」长在 viewbar 上，取数与产物却住在 `ArchOverview`，
-    所以确认、调用、上报都在这边（一次实现，不可用卡片那颗按钮也走它），完了 bump `archNonce` 让子组件重取。
-  - 节点详情是画布右侧的 `.drawer`（展开时 `.map-stage:has(.drawer)` 给画布让出宽度），不再是独立第三栏；源码抽屉已移除（v0.5.3）。
-    抽屉在架构视图里显示节点，在流程视图里显示环节、它的出边依据与关联文件。
-  - 选中节点 / 文件只更新会话绑定与线程（v0.8.1 起不再往线程插「已切换到 / 已选中」分隔线）
+  宏观设计 = **agent 画图工作区**（2026-10-17 定案，原型 `Pages.mapPage` + `bindCanvas`）。
+  原先的「架构视图 + 流程视图」两张只读画布没了：图的产物的确还在（分层、流程、依赖），
+  但它们的身份变了——从"界面各画一张"变成 **agent 作图的输入**，画布上只有一张由 agent 落的图。
 
-  对应 prototype `docs/ui-prototype/js/pages.js` 的 mapPage / archCanvas / flowCanvas / flowDrawer。
+  两栏（原型 `.page-map`）：
+  - 左栏两个 tab：**图库**（搜索 / 新建 / 一张图一行 + ⋯ 菜单）与**项目目录**（沿用 `RepoTree` 与栏宽拖拽）。
+    tab 与正打开的那张图按仓记在 localStorage（读必须 try/catch，这条路径抛在渲染里就是白屏）；
+  - 右栏是画布那一列（`DiagramCanvas`）：工具条 + 平移缩放的视口 + 图元 + 图例 + 节点抽屉。
+
+  **这里的请求全是免费的**（列图库 / 读一张图 / 改名 / 删 / 几何 PUT / 恢复版本，一次都不碰模型），
+  所以取数就是普通的"可见才取"。旧页面那三处 `useEverVisible` 单向门是为架构重绘与流程生成
+  那两趟付费调用建的，它们随那两个视图一起删了——**别把付费调用再引回这一页**：
+  结构改动只有对话里的 agent 一条路（`set_diagram`），界面上连加删节点的按钮都不给。
+
+  两条诚实口径：
+  - 保存那一格只说真发生过的写入：拖动结束 → 待存 → 在途 → 落盘 / 没存上，绝不在没发请求时显示「已保存」；
+  - `warnings`（节点 `ref` 在课程树里查不到）必须显形：图上标灰 + 抽屉里说明，不当活节点画。
+    引擎还没接上这条路由时，这边按同一口径自己核一遍（只比课程树的 id，不猜）。
+*/
+
+/** 按仓记「正打开哪张图 + 左栏停在哪个 tab」。存储可能被禁或写着坏数据，读写两头都兜住。 */
+const MAP_MEMORY_KEY = "codebase-tutor.map-memory";
+type RailTab = "gallery" | "tree";
+interface MapMemory { openId: string | null; railTab: RailTab }
+const EMPTY_MEMORY: MapMemory = { openId: null, railTab: "gallery" };
+
+type MapMemoryMap = Record<string, MapMemory>;
+
+function readMapMemory(repositoryId: string): MapMemory {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(MAP_MEMORY_KEY);
+  } catch {
+    return EMPTY_MEMORY; // 存储不可用（隐私模式 / 被禁）：本次会话照常工作，只是不记得上次开到哪张
+  }
+  if (!raw) return EMPTY_MEMORY;
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return EMPTY_MEMORY; // 坏数据按「没记过」处理，绝不拿它当真实状态
+  }
+  const entry = (parsed as MapMemoryMap | null)?.[repositoryId];
+  if (!entry || typeof entry !== "object") return EMPTY_MEMORY;
+  const openId = typeof entry.openId === "string" ? entry.openId : null;
+  const railTab: RailTab = entry.railTab === "tree" ? "tree" : "gallery";
+  return { openId, railTab };
+}
+
+function writeMapMemory(repositoryId: string, memory: MapMemory): void {
+  try {
+    const raw = localStorage.getItem(MAP_MEMORY_KEY);
+    let map: MapMemoryMap = {};
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object") map = parsed as MapMemoryMap;
+    }
+    map[repositoryId] = memory;
+    localStorage.setItem(MAP_MEMORY_KEY, JSON.stringify(map));
+  } catch {
+    /* 落不下盘：下次进来重新选，不值得打断用户 */
+  }
+}
+
+/** 一次几何写入去抖多少毫秒：连拖四下只落一趟 PUT，但界面不假装"还在攒"。 */
+const GEOMETRY_DEBOUNCE_MS = 300;
+
+/** 便签不参与引用核对（它不指向课程树）；`arch:` 前缀指的是架构方块，课程树里没有它，这边不判失效。 */
+function isBlockRef(ref: string): boolean {
+  return ref.startsWith("arch:");
+}
+
+export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean; onQuickPrompt?: (text: string) => void }): ReactElement {
+  const repositoryId = workspace.repositoryId;
+  const memory = useMemo(() => readMapMemory(repositoryId), [repositoryId]);
+  const [railTab, setRailTab] = useState<RailTab>(memory.railTab);
+  const [openId, setOpenId] = useState<string | null>(memory.openId);
+  const [query, setQuery] = useState("");
+
+  const [diagrams, setDiagrams] = useState<DiagramSummary[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState("");
+  const [galleryNonce, setGalleryNonce] = useState(0);
+  const [diagramNonce, setDiagramNonce] = useState(0);
+
+  const [diagram, setDiagram] = useState<Diagram | null>(null);
+  const [serverWarnings, setServerWarnings] = useState<DiagramWarning[]>([]);
+  const [diagramLoading, setDiagramLoading] = useState(false);
+  const [diagramError, setDiagramError] = useState("");
+  const [selected, setSelected] = useState<DiagramNode | null>(null);
+
+  const [saveState, setSaveState] = useState<SaveState>("synced");
+  const [saveError, setSaveError] = useState("");
+  const [fitNonce, setFitNonce] = useState(0);
+  const [versionsSignal, setVersionsSignal] = useState(0);
+  const versionsWantedFor = useRef<string | null>(null);
+
+  const [index, setIndex] = useState<RepositoryIndex | null>(null);
+  const [indexError, setIndexError] = useState("");
+
+  const openIdRef = useRef(openId);
+  openIdRef.current = openId;
+  /** 外层传进来的快捷指令处理器（App 接对话栏时用）；没传就退回自己填输入框（见 quickPrompt）。 */
+  const onQuickPromptRef = useRef(onQuickPrompt);
+  onQuickPromptRef.current = onQuickPrompt;
+  const navigate = useNavigate();
+  const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+
+  useEffect(() => { writeMapMemory(repositoryId, { openId, railTab }); }, [repositoryId, openId, railTab]);
+
+  /* ---------- 与对话栏之间的两格：正打开的图（送出去）与卡片点开的图（收进来） ---------- */
+  /**
+    `openDiagram` 在 `useScopedChat` 那边：绑定行要显示「当前图：X」，map-chat 也要把它当作用域上送
+    （「把这条边删掉」指的是用户眼前那张，而不是模型从图库里猜一张）。所以这一页是**唯一写入方**，
+    对话栏那张卡片反过来通过 `pendingDiagramOpen` 投递一次「点开这张」，取完即清。
   */
+  useEffect(() => {
+    if (!openId) { if (t.openDiagram) t.setOpenDiagram(null); return; }
+    const summary = diagrams.find((item) => item.id === openId);
+    const name = diagram?.id === openId ? diagram.name : summary?.name;
+    if (!name) return; // 名字还没跟着到（刚切过去、清单也还没回）：等下一拍，别送一个假名字给模型
+    if (t.openDiagram?.id === openId && t.openDiagram.name === name) return;
+    t.setOpenDiagram({ id: openId, name });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId, diagram?.id, diagram?.name, diagrams]);
 
+  /** 对话里那张图卡片被点开：把它搬上画布（一次性的投递，取完就清）。 */
+  useEffect(() => {
+    const wanted = t.pendingDiagramOpen;
+    if (!wanted) return;
+    t.clearDiagramOpen();
+    setSelected(null);
+    setOpenId(wanted.id);
+    setRailTab("gallery");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.pendingDiagramOpen]);
+
+  /* ---------- 图库清单（免费读；只在页面可见时取） ---------- */
+  useEffect(() => {
+    if (!visible) return;
+    let current = true;
+    setListLoading(true);
+    setListError("");
+    api.listDiagrams(repositoryId)
+      .then((result) => { if (current) setDiagrams(result.diagrams); })
+      .catch((reason: unknown) => { if (current) setListError(reason instanceof Error ? reason.message : "图库读取失败"); })
+      .finally(() => { if (current) setListLoading(false); });
+    return () => { current = false; };
+  }, [repositoryId, visible, galleryNonce, t.dataVersion]);
+
+  const refreshGallery = useCallback((): void => { setGalleryNonce((value) => value + 1); }, []);
+
+  /** 一次取图的收尾：结构 + 引用告警一起落地，顺带看要不要打开那张图的版本菜单（图库里点「版本历史」那条路）。 */
+  const applyDiagram = useCallback((next: Diagram): void => {
+    setDiagram(next);
+    if (versionsWantedFor.current === next.id) {
+      versionsWantedFor.current = null;
+      setVersionsSignal((value) => value + 1);
+    }
+  }, []);
+
+  /* ---------- 当前这张图（免费读） ---------- */
+  useEffect(() => {
+    if (!openId) { setDiagram(null); setServerWarnings([]); setSelected(null); setDiagramError(""); return; }
+    if (!visible) return;
+    let current = true;
+    setDiagramLoading(true);
+    setDiagramError("");
+    api.getDiagram(repositoryId, openId)
+      .then((result) => {
+        if (!current) return;
+        applyDiagram(result.diagram);
+        setServerWarnings(result.warnings ?? []);
+        setSaveState("synced");
+      })
+      .catch((reason: unknown) => {
+        if (!current) return;
+        setDiagram(null);
+        setDiagramError(reason instanceof Error ? reason.message : "这张图没读到");
+      })
+      .finally(() => { if (current) setDiagramLoading(false); });
+    return () => { current = false; };
+  }, [repositoryId, openId, visible, diagramNonce, t.dataVersion, applyDiagram]);
+
+  /** 换仓：上一仓欠着的位置别再想了（那些节点 id 不属于这里的任何一张图），队列整条作废。 */
+  useEffect(() => {
+    pendingPositions.current.clear();
+    queueOwner.current = null;
+    window.clearTimeout(geometryTimer.current);
+    geometryInFlight.current = false;
+    setSaveState("synced");
+    setSaveError("");
+  }, [repositoryId]);
+
+  /* ---------- 引擎广播：agent 画完 / 改完 / 删了（几何拖动**不广播**，那是用户正在拖的东西） ---------- */
+  useEffect(() => {
+    const controller = new AbortController();
+    subscribeServerEvents((event) => {
+      if (event.type !== "diagram_updated") return;
+      if (event.payload.repositoryId !== repositoryId) return;
+      refreshGallery();
+      const changedId = typeof event.payload.diagramId === "string" ? event.payload.diagramId : null;
+      if (!changedId) return;
+      if (changedId === openIdRef.current) setDiagramNonce((value) => value + 1);
+    }, controller.signal);
+    return () => controller.abort();
+  }, [repositoryId, refreshGallery]);
+
+  /* ---------- 项目目录（原来就在左栏；栏宽与教学页共用同一条拖拽） ---------- */
+  useEffect(() => {
+    if (!visible || railTab !== "tree" || index) return;
+    let current = true;
+    setIndexError("");
+    api.getIndex(repositoryId)
+      .then((next) => { if (current) setIndex(next); })
+      .catch((reason: unknown) => { if (current) setIndexError(reason instanceof Error ? reason.message : "文件索引没读到"); });
+    return () => { current = false; };
+  }, [repositoryId, visible, railTab, index]);
+
+  /* ---------- 几何落盘：去抖 + 在途合并，乐观更新本地那份 ---------- */
+  const pendingPositions = useRef(new Map<string, DiagramPosition>());
+  /** 这批位置属于哪张图：切图之前得先把上一张欠的那趟送给**它**，不能顺着新的 openId 写错地方。 */
+  const queueOwner = useRef<string | null>(null);
+  const geometryTimer = useRef(0);
+  const geometryInFlight = useRef(false);
+  const diagramIdForGeometry = useRef<string | null>(openId);
+  diagramIdForGeometry.current = openId;
+
+  /** 去抖计时器先看这个，再看真正的发送函数：两条路要互相引用，用 ref 拆掉这个环。 */
+  const sendNow = useRef<() => void>(() => undefined);
+  const scheduleGeometry = useCallback((): void => {
+    window.clearTimeout(geometryTimer.current);
+    geometryTimer.current = window.setTimeout(() => sendNow.current(), GEOMETRY_DEBOUNCE_MS);
+  }, []);
+
+  const sendGeometry = useCallback(async (): Promise<void> => {
+    const diagramId = queueOwner.current;
+    const entries = [...pendingPositions.current.values()];
+    if (!diagramId || !entries.length || geometryInFlight.current) return;
+    pendingPositions.current.clear();
+    queueOwner.current = null;
+    geometryInFlight.current = true;
+    setSaveState("saving");
+    setSaveError("");
+    try {
+      const { diagram: written } = await api.saveDiagramGeometry(repositoryId, diagramId, entries);
+      // 只认这次真写过的东西：位置用本地那份（已经是拖完的），名字/来源/时间跟着引擎的读数更新
+      setDiagram((current) => (current && current.id === written.id ? { ...current, name: written.name, source: written.source, updatedAt: written.updatedAt } : current));
+      setDiagrams((current) => current.map((item) => (item.id === written.id ? { ...item, name: written.name, updatedAt: written.updatedAt } : item)));
+      setSaveState("saved");
+    } catch (reason: unknown) {
+      setSaveState("failed");
+      setSaveError(reason instanceof Error ? reason.message : "位置写入失败");
+    } finally {
+      geometryInFlight.current = false;
+      if (pendingPositions.current.size) scheduleGeometry();
+    }
+  }, [repositoryId, scheduleGeometry]);
+  sendNow.current = (): void => { void sendGeometry(); };
+
+  /** 切图（或删图）之前把上一张欠的位置送出去：用户的拖动不该因为换了张画布就静默丢掉。 */
+  const flushQueuedGeometry = useCallback((): void => {
+    window.clearTimeout(geometryTimer.current);
+    sendNow.current();
+  }, []);
+
+  /** 拖动结束：先把位置落到本地那份（画布立刻跟着稳），再排队一次 PUT。不重取整张图，也不产生版本。 */
+  const handleNodeMove = useCallback((commit: DragCommit): void => {
+    const diagramId = diagramIdForGeometry.current;
+    if (!diagramId) return;
+    if (queueOwner.current && queueOwner.current !== diagramId) flushQueuedGeometry();
+    setDiagram((current) => (current ? { ...current, body: commit.body } : current));
+    for (const position of commit.positions) pendingPositions.current.set(position.id, position);
+    queueOwner.current = diagramId;
+    setSaveState("queued");
+    scheduleGeometry();
+  }, [scheduleGeometry, flushQueuedGeometry]);
+
+  useEffect(() => () => { window.clearTimeout(geometryTimer.current); }, []);
+
+  /* ---------- 引用核对（引擎没给 warnings 时，按课程树自己核一遍：只比 id，不猜） ---------- */
+  const nodesById = useMemo(() => {
+    const map = new Map<string, CourseNode>();
+    if (t.course) for (const node of flatten(t.course.root)) map.set(node.id, node);
+    return map;
+  }, [t.course]);
+
+  const localStale = useMemo<DiagramWarning[]>(() => {
+    if (!diagram || !t.course) return [];
+    const out: DiagramWarning[] = [];
+    for (const node of diagram.body.nodes) {
+      if (node.kind !== "module" || !node.ref || isBlockRef(node.ref)) continue;
+      if (!nodesById.has(node.ref)) out.push({ node: node.id, reason: `引用 ${node.ref} 已经不在现在的课程树里（改名、删模块或重分析过）` });
+    }
+    return out;
+  }, [diagram, t.course, nodesById]);
+
+  const warnings = serverWarnings.length ? serverWarnings : localStale;
+  const staleReasonFor = useCallback((id: string): string | undefined => warnings.find((item) => item.node === id)?.reason, [warnings]);
+
+  /* ---------- 抽屉的三份读数：说明落点、关联文件、出边 ---------- */
+  const resolutionOf = useCallback((node: DiagramNode): NodeResolution => {
+    const stale = staleReasonFor(node.id);
+    if (stale) return { state: "stale", reason: stale };
+    if (node.kind === "module") {
+      if (!t.course) return { state: "pending" };
+      if (!node.ref) return { state: "unknown" };
+      if (isBlockRef(node.ref)) return { state: "block" };
+      const courseNode = nodesById.get(node.ref);
+      return courseNode ? { state: "ok", node: courseNode } : { state: "unknown" };
+    }
+    return { state: "unknown" };
+  }, [staleReasonFor, t.course, nodesById]);
+
+  /** 关联文件 = 课程树里那个节点（含子孙）的锚点，按 path 去重留第一次出现的行号。树没读到就是空。 */
+  const filesOf = useCallback((node: DiagramNode): DrawerFile[] => {
+    if (node.kind !== "module") return [];
+    const courseNode = node.ref ? nodesById.get(node.ref) : undefined;
+    if (!courseNode) return [];
+    const rows = new Map<string, DrawerFile>();
+    for (const item of flatten(courseNode)) for (const anchor of item.anchors) {
+      if (rows.has(anchor.path)) continue;
+      rows.set(anchor.path, { path: anchor.path, line: anchor.line, ...(anchor.label ? { label: anchor.label } : {}) });
+    }
+    return [...rows.values()];
+  }, [nodesById]);
+
+  const outgoingOf = useCallback((node: DiagramNode): DrawerEdge[] => {
+    if (!diagram) return [];
+    const labelOf = new Map(diagram.body.nodes.map((item) => [item.id, item.label]));
+    return diagram.body.edges
+      .filter((edge) => edge.from === node.id)
+      .map((edge) => ({ edge, toLabel: labelOf.get(edge.to) ?? edge.to }));
+  }, [diagram]);
+
+  /* ---------- 动作 ---------- */
+  const openDiagram = useCallback((id: string): void => {
+    setSelected(null);
+    setOpenId(id);
+  }, []);
+
+  const createDiagram = useCallback((): void => {
+    void (async () => {
+      try {
+        const { diagram: created } = await api.createDiagram(repositoryId);
+        setDiagrams((current) => [createdSummary(created), ...current]);
+        versionsWantedFor.current = null;
+        setSelected(null);
+        setOpenId(created.id);
+        setRailTab("gallery");
+        showToast(`已建空白图「${created.name}」`);
+      } catch (reason: unknown) {
+        showToast(reason instanceof Error ? reason.message : "新建空白图没成功");
+      }
+    })();
+  }, [repositoryId]);
+
+  const renameDiagram = useCallback((id: string, name: string): void => {
+    void (async () => {
+      try {
+        const { diagram: renamed } = await api.renameDiagram(repositoryId, id, name);
+        setDiagrams((current) => current.map((item) => (item.id === id ? { ...item, name: renamed.name, updatedAt: renamed.updatedAt } : item)));
+        if (id === diagramIdForGeometry.current) setDiagram((current) => (current ? { ...current, name: renamed.name, updatedAt: renamed.updatedAt } : current));
+      } catch (reason: unknown) {
+        showToast(reason instanceof Error ? reason.message : "改名没落盘");
+        refreshGallery();
+      }
+    })();
+  }, [repositoryId, refreshGallery]);
+
+  const removeDiagram = useCallback((item: DiagramSummary): void => {
+    if (!window.confirm(`删除「${item.name}」？版本历史一起删掉，不可恢复。`)) return;
+    void (async () => {
+      try {
+        await api.deleteDiagram(repositoryId, item.id);
+        setDiagrams((current) => current.filter((entry) => entry.id !== item.id));
+        if (item.id === openIdRef.current) { setOpenId(null); setSelected(null); }
+        showToast(`已删除「${item.name}」`);
+      } catch (reason: unknown) {
+        showToast(reason instanceof Error ? reason.message : "删除没成功");
+        refreshGallery();
+      }
+    })();
+  }, [repositoryId, refreshGallery]);
+
+  /** 图库里点「版本历史」：没打开的图要先取（免费读），取完再让画布把菜单弹出来。 */
+  const openVersions = useCallback((item: DiagramSummary): void => {
+    if (item.id === openIdRef.current) { setVersionsSignal((value) => value + 1); return; }
+    versionsWantedFor.current = item.id;
+    setOpenId(item.id);
+  }, []);
+
+  const restoreVersion = useCallback((index: number): void => {
+    const diagramId = diagramIdForGeometry.current;
+    if (!diagramId) return;
+    void (async () => {
+      try {
+        const { diagram: restored } = await api.restoreDiagram(repositoryId, diagramId, index);
+        applyDiagram(restored);
+        setSelected(null);
+        pendingPositions.current.clear();
+        setSaveState("synced");
+        setFitNonce((value) => value + 1);
+        refreshGallery();
+        showToast("已恢复到那一版（本次恢复也存了一版）");
+      } catch (reason: unknown) {
+        showToast(reason instanceof Error ? reason.message : "恢复没成功");
+      }
+    })();
+  }, [repositoryId, applyDiagram, refreshGallery]);
+
+  const openFile = useCallback((path: string): void => {
+    t.setMapFile(path);
+    t.setMapBinding({ kind: "file", path });
+    showToast(`已选中 · ${path}`);
+    emit(repositoryId, "file_anchored", { path, source: "anchor" });
+  }, [repositoryId, t]);
+
+  /** 绑定这一格给对话：核得上课程树节点就带上它的文件清单（引擎据此把作用域收到这个模块），核不上就解绑退回全局视野。 */
+  const bindNode = useCallback((node: DiagramNode): void => {
+    const resolution = resolutionOf(node);
+    if (resolution.state === "ok") {
+      const files = filesOf(node);
+      t.setMapNode(resolution.node, files.map((file) => file.path), null);
+      t.setMapBinding({ kind: "module", title: node.label });
+      showToast(`对话已绑到「${node.label}」`);
+      return;
+    }
+    t.setMapNode(null);
+    t.setMapBinding({ kind: "module", title: node.label });
+    showToast(node.kind === "note" ? `对话已绑到便签「${node.label}」` : "这个引用核不到课程树：只把标题带进对话");
+  }, [resolutionOf, filesOf, t]);
+
+  const gotoTeach = useCallback((node: DiagramNode): void => {
+    const courseNode = node.ref ? nodesById.get(node.ref) : undefined;
+    if (courseNode) t.setSelected(courseNode);
+    navigate("/app?workspace=teaching");
+  }, [nodesById, navigate, t]);
+
+  const selectNode = useCallback((node: DiagramNode | null): void => {
+    setSelected(node);
+    if (node) emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.label.slice(0, 120), view: "canvas" });
+  }, [repositoryId]);
+
+  /** 外层（App）要是接了对话栏，就用它的；没接就自己把这句填进输入框——两条路都不发请求，发送那一下归用户。 */
+  const quickPrompt = useCallback((text: string): void => {
+    const handler = onQuickPromptRef.current;
+    if (handler) { handler(text); return; }
+    t.setContent(text);
+    showToast("填进对话栏了，发送才轮到 agent 画");
+  }, [t]);
+
+  /* ---------- 抽屉 ---------- */
+  const drawer = selected && diagram ? (
+    <NodeDrawer
+      node={selected}
+      outgoing={outgoingOf(selected)}
+      files={filesOf(selected)}
+      resolution={resolutionOf(selected)}
+      onClose={() => setSelected(null)}
+      onOpenFile={openFile}
+      onGotoTeach={() => gotoTeach(selected)}
+      onBind={() => bindNode(selected)}
+    />
+  ) : null;
+
+  const repositoryName = (index?.repositoryPath ?? workspace.repositoryPath).split("/").filter(Boolean).pop() ?? repositoryId;
+  const lineOf = useMemo(() => {
+    const map = new Map<string, number>();
+    index?.files.forEach((file) => map.set(file.path, file.lines));
+    return map;
+  }, [index]);
+
+  const topbar = <PageTopbar crumb={<><b>{repositoryName}</b><span className="faint">/</span><span>宏观设计</span></>} showRailToggle />;
+
+  return (
+    <>
+      {topbar}
+      <MobileSwitcher labels={["图库 / 目录", "画布"]} active={paneActive} onSelect={setPaneActive} />
+      <div className="page page-map">
+        <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
+        <aside className={`map-rail ${paneClass(0)}`}>
+          <div className="rail-tabs" role="tablist" aria-label="左栏">
+            <button type="button" role="tab" aria-selected={railTab === "gallery"} className={`rail-tab ${railTab === "gallery" ? "active" : ""}`} onClick={() => setRailTab("gallery")}>图库</button>
+            <button type="button" role="tab" aria-selected={railTab === "tree"} className={`rail-tab ${railTab === "tree" ? "active" : ""}`} onClick={() => setRailTab("tree")}>项目目录</button>
+          </div>
+          {railTab === "gallery" ? (
+            <GalleryPane
+              diagrams={diagrams}
+              openId={openId}
+              loading={listLoading}
+              error={listError}
+              query={query}
+              onQueryChange={setQuery}
+              onOpen={openDiagram}
+              onCreate={createDiagram}
+              onRename={renameDiagram}
+              onVersions={openVersions}
+              onDelete={removeDiagram}
+            />
+          ) : (
+            <div className="map-side-tree">
+              {indexError ? <p className="gallery-error">{indexError}</p> : null}
+              {index ? (
+                <RepoTree
+                  nodes={index.fileTree}
+                  onOpenFile={openFile}
+                  activePath={t.mapFile}
+                  lineOf={lineOf}
+                  badge={(node, depth) => (depth === 0 ? groupLabel(node.name) : undefined)}
+                />
+              ) : <Loading />}
+            </div>
+          )}
+        </aside>
+
+        <DiagramCanvas
+          diagram={diagram}
+          warnings={warnings}
+          saveState={saveState}
+          saveError={saveError}
+          loading={listLoading}
+          error={listError || diagramError}
+          fitNonce={fitNonce}
+          versionsSignal={versionsSignal}
+          onQuickPrompt={quickPrompt}
+          onRename={(name) => { if (diagram) renameDiagram(diagram.id, name); }}
+          onRestore={restoreVersion}
+          onNodeMove={handleNodeMove}
+          onSelect={selectNode}
+          drawer={drawer}
+        />
+      </div>
+    </>
+  );
+}
+
+/** 摘要行：新建之后本地先插一条，不等清单回来（数字全部来自引擎刚返回的那张图，不是我估的）。 */
+function createdSummary(diagram: Diagram): DiagramSummary {
+  return {
+    id: diagram.id,
+    name: diagram.name,
+    source: diagram.source,
+    updatedAt: diagram.updatedAt,
+    nodes: diagram.body.nodes.length,
+    edges: diagram.body.edges.length,
+    versions: diagram.versions.length
+  };
+}
+
+/** 顶层目录的语义标注（与原来一致：这一栏说的是「这些文件是干什么的」，不是文件数）。 */
 const GROUP_LABELS: { pattern: RegExp; label: string }[] = [
   { pattern: /^(src|lib|app|apps|packages|core|internal|server|client|service|services)$/i, label: "核心代码" },
   { pattern: /^(tests?|spec|specs|__tests__|e2e)$/i, label: "行为证据" },
@@ -41,403 +575,4 @@ const GROUP_LABELS: { pattern: RegExp; label: string }[] = [
 
 function groupLabel(name: string): string {
   return GROUP_LABELS.find((entry) => entry.pattern.test(name))?.label ?? "其他文件";
-}
-
-/** CourseNode.kind 的中文展示（不再直显 workflow 等英文 kind）。 */
-export function kindLabel(kind: CourseNode["kind"] | undefined): string {
-  if (kind === "workflow") return "执行路径";
-  if (kind === "module") return "模块";
-  if (kind === "implementation") return "实现";
-  return "概览";
-}
-
-/**
-  出边依据的正文写法。`inferred` 那句是模型自述「我凭什么这么连」——动辄七八十字、夹一串文件名清单，
-  读者要的不是它的措辞，而是这条去向**没有行级依据**，所以正文只说这一档意味着什么，原话整段留在悬停里。
-  static / code 的依据是行级事实（路径:行号），照原样给，只按长度截一下。
-  */
-function edgePlain(edge: { origin: "static" | "code" | "inferred"; evidence: string }): string {
-  if (edge.origin === "inferred") return "没有行级依据：模型按编排推的";
-  const head = edge.evidence.split(/[；;]/)[0].trim();
-  return head.length > 46 ? `${head.slice(0, 46)}…` : head;
-}
-
-/** 锚点只露文件名：抽屉只有 `--drawer-w` 宽，整条路径读不完，全路径进 title。 */
-function fileTail(path: string): string {
-  const segments = path.split("/");
-  return segments[segments.length - 1] ?? path;
-}
-
-/** 时间戳只露到分钟（完整 ISO 串留在 title）——「产物是哪天生成的」要能一眼对上。 */
-function stamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
-const NO_FLOW_STATUS: FlowStatus = { source: null, generatedAt: "", title: "", summary: "", loading: false };
-
-export function CoursePage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
-  const repositoryId = workspace.repositoryId;
-  const [index, setIndex] = useState<RepositoryIndex | null>(null);
-  const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
-  const [detail, setDetail] = useState<CourseNodeDetail | null>(null);
-  /** 节点详情抽屉是否展开。架构视图里由节点点击 / 按钮打开，流程视图里由环节点击打开。 */
-  const [drawer, setDrawer] = useState(false);
-  /** 流程视图里选中的环节：关联文件只在详情里展示，画布上不出现路径。 */
-  const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
-  /** 架构视图那个合成模块的文件清单：抽屉里「绑定到对话」要按同一份清单再绑一次（见 useScopedChat 的 scopePaths） */
-  const [moduleScopePaths, setModuleScopePaths] = useState<string[]>([]);
-  /** 流程取数状态由 `FlowMap` 上报：来源徽标与「重新生成」长在 `.map-viewbar` 上，取数却住在那里 */
-  const [flowStatus, setFlowStatus] = useState<FlowStatus>(NO_FLOW_STATUS);
-  /** 架构视图的取数状态由 `ArchOverview` 上报：工具栏那枚徽标要说清「这几层是模型判的还是静态兜底」。 */
-  const [archStatus, setArchStatus] = useState<ArchStatus>(NO_ARCH_STATUS);
-  /** 人工修正落盘后要重取产物：这里只出一个自增号，取数住在子组件里。 */
-  const [archNonce, setArchNonce] = useState(0);
-  /** 「重新生成分层」在途：确认框之后的这段时间也要让按钮和徽标如实显示（子组件的 loading 只覆盖它自己取数那段）。 */
-  const [archRegening, setArchRegening] = useState(false);
-  /** Agent 在对话里改了分层（`set_architecture`）时引擎会广播一帧；这边只认自己这个仓。 */
-  useEffect(() => {
-    const controller = new AbortController();
-    subscribeServerEvents((event) => {
-      // 覆盖层落盘、重绘提议、预览就绪、用户裁决——四类都只意味着一件事：这个节点要重取
-      if (!["architecture_updated", "redraft_requested", "diagram_preview", "diagram_replaced"].includes(event.type)) return;
-      if (event.payload.repositoryId !== repositoryId) return;
-      setArchNonce((value) => value + 1);
-    }, controller.signal);
-    return () => controller.abort();
-  }, [repositoryId]);
-  /** 重新生成分层是花钱动作：确认、调用、上报只留这一处（viewbar 那颗与画布「分层不可用」卡片上的那颗走同一条）。 */
-  const regenerateArch = (): void => {
-    if (!window.confirm(ARCH_REGEN_CONFIRM)) return;
-    setArchRegening(true);
-    api.regenerateArchitecture(repositoryId)
-      .then((plan) => showToast(archRegenToast(plan)))
-      .catch((reason: unknown) => showToast(reason instanceof Error ? reason.message : "判分层没成功"))
-      .finally(() => { setArchRegening(false); setArchNonce((value) => value + 1); });
-  };
-  const [regenNonce, setRegenNonce] = useState(0);
-  const [error, setError] = useState("");
-  const [paneActive, paneClass, setPaneActive] = useMobilePanes();
-  const [mapView, setMapView] = useState<"architecture" | "flow">("architecture");
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    let current = true;
-    setError("");
-    setAnalysis(null);
-    api.getIndex(repositoryId).then((next) => { if (current) setIndex(next); })
-      .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法加载仓库索引"); });
-    api.getAnalysis(repositoryId).then((next) => { if (current) setAnalysis(next); })
-      .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "无法加载依赖分析"); });
-    return () => { current = false; };
-  }, [repositoryId, t.dataVersion]);
-
-  const selected = t.mapNode;
-  useEffect(() => {
-    if (!selected) { setDetail(null); return; }
-    let current = true;
-    api.getCourseNodeDetail(repositoryId, selected.id).then((next) => { if (current) setDetail(next); })
-      .catch(() => { if (current) setDetail(null); });
-    return () => { current = false; };
-  }, [selected?.id, repositoryId]);
-
-  const lineOf = useMemo(() => {
-    const map = new Map<string, number>();
-    index?.files.forEach((file) => map.set(file.path, file.lines));
-    return map;
-  }, [index]);
-  /** 引擎在图里标的入口文件（HTTP 路由 / 框架启动）：抽屉里那份文件清单排序的第一档。 */
-  const entryPaths = useMemo(() => new Set((analysis?.graph.entrypoints ?? []).map((anchor) => anchor.path)), [analysis]);
-  const hotOf = useMemo(() => {
-    const map = new Map<string, number>();
-    index?.hotspots.forEach((spot) => map.set(spot.path, spot.changes));
-    return map;
-  }, [index]);
-  /**
-    节点的可见文件（本节点锚点 + 子孙锚点，按 path 去重、留第一次出现的锚点行号），
-    按「是入口 → 变更最多 → 行数最大」排。这个节点取代了原先的两个节点：`下级节点（15）` 把同一文件里的
-    函数铺成 15 个平行条目，`源码锚点` 又按锚点重复列同一个文件——读者要的只是「这个模块先看哪几个文件」。
-    */
-  const coreFiles = useMemo(() => {
-    if (!selected) return [];
-    const rows = new Map<string, { path: string; line: number; label: string; hot: number }>();
-    for (const node of flatten(selected)) for (const anchor of node.anchors) {
-      if (rows.has(anchor.path)) continue;
-      rows.set(anchor.path, { path: anchor.path, line: anchor.line, label: anchor.label ?? "", hot: hotOf.get(anchor.path) ?? 0 });
-    }
-    return [...rows.values()].sort((left, right) =>
-      Number(entryPaths.has(right.path)) - Number(entryPaths.has(left.path))
-      || right.hot - left.hot
-      || (lineOf.get(right.path) ?? 0) - (lineOf.get(left.path) ?? 0));
-  }, [selected, entryPaths, hotOf, lineOf]);
-
-  const course = t.course;
-  const pickNode = (node: CourseNode, scopePaths: string[] = []): void => {
-    t.setMapNode(node, scopePaths);
-    t.setMapBinding({ kind: "module", title: node.title });
-    setModuleScopePaths(scopePaths);
-    setDrawer(true);
-    emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.title.slice(0, 120), view: mapView });
-  };
-  // 源码抽屉已按需求移除（v0.5.3）：点文件只同步到 Agent 绑定（绑定区展示），
-  // 源码阅读在「代码教学」工作区的实时源码面板完成。
-  const openFile = (path: string, source: "tree" | "anchor" | "flow" = "tree"): void => {
-    t.setMapFile(path);
-    // 绑定行只认三种情形：目录选文件 / 架构模块(+其关联文件) / 流程环节(+其关联文件)
-    if (source === "tree") t.setMapBinding({ kind: "file", path });
-    else if (source === "flow") t.setMapBinding({ kind: "flow", title: flowSelection?.stage.title, path });
-    else t.setMapBinding({ kind: "module", title: t.mapNode?.title, path });
-    showToast(`已选中 · ${path}`);
-    emit(repositoryId, "file_anchored", { path, source });
-  };
-
-  const repositoryName = (index?.repositoryPath ?? workspace.repositoryPath).split("/").filter(Boolean).pop() ?? repositoryId;
-  const crumbContext = mapView === "flow"
-    ? (flowSelection ? `第 ${flowSelection.stage.order} 环节 · ${flowSelection.stage.title}` : "未选中环节")
-    : (selected?.title ?? "未选中模块");
-  const topbar = (
-    <PageTopbar
-      crumb={<><b>{repositoryName}</b><span className="faint">/</span><span>宏观设计</span><span className="faint">·</span><span className="muted">{crumbContext}</span></>}
-      showRailToggle
-    />
-  );
-
-  if (error) return <>{topbar}<EmptyState title="课程暂不可用" detail={error} /></>;
-  if (!course || !index || !analysis) return <>{topbar}<Loading /></>;
-
-  /** 环节 → 对话作用域：课程树里有该流程入口对应的 workflow 节点就挂它；
-      没有就解绑（请求退回全局视野）——留着上一个模块的节点会让 agent 答的不是用户选中的东西。
-      环节本身（说明/关联文件/分叉回环）作为 focus 一并上送：课程树节点只到入口粒度，不带它就答不了「这个环节具体做什么」 */
-  const workflowOf = (flow: FlowSelection["flow"]): CourseNode | null =>
-    flatten(course.root).find((item) => item.id === `workflow:${flow.entry.path}`) ?? null;
-  const bindStage = (selection: FlowSelection | null): void => {
-    if (!selection) { t.setMapNode(null); return; }
-    t.setMapBinding({ kind: "flow", title: selection.stage.title });
-    t.setMapNode(workflowOf(selection.flow), [], selection.stage);
-  };
-  /** 抽屉里跳代码教学：只认真实课程树节点（架构图现在画的就是树里的模块），查不到就只换工作区。 */
-  const gotoTeach = (node: CourseNode | null): void => {
-    const real = node ? flatten(course.root).find((item) => item.id === node.id) : undefined;
-    if (real) t.setSelected(real);
-    navigate("/app?workspace=teaching");
-  };
-
-  const implementation = detail?.implementation;
-  const outgoingEdges = flowSelection ? flowSelection.flow.edges.filter((edge) => edge.from === flowSelection.stage.order) : [];
-
-  const drawerBody = mapView === "flow"
-    ? (flowSelection ? (
-      <>
-        <div className="kv">
-          <span className="kv-k">环节说明</span>
-          <span className="kv-v">{flowSelection.stage.detail}</span>
-        </div>
-        {flowSelection.stage.branches.length ? (
-          <div className="kv">
-            <span className="kv-k">{`去向与判断依据（${flowSelection.stage.branches.length}）`}</span>
-            <div className="row-wrap">{flowSelection.stage.branches.map((branch) => <span key={branch} className="branch-chip">{branch}</span>)}</div>
-          </div>
-        ) : null}
-        {/* 出边 + 依据：`flow.edges` 才是拓扑真源，origin 三档说的是「这条去向有多可核对」 */}
-        <div className="kv">
-          <span className="kv-k">{`出边（${outgoingEdges.length}）`}</span>
-          {outgoingEdges.length ? (
-            outgoingEdges.map((edge) => (
-              <div className="col" key={`${edge.from}->${edge.to}`}>
-                <span className="row">
-                  <span
-                    className={`flow-origin origin-${edge.origin}`}
-                    title={edge.origin === "static" ? "依赖图能证明这条去向" : edge.origin === "code" ? "在源码正文里读到的编排（回调、路由、注入）" : "模型按编排常识推断，没有可核对的行级依据"}
-                  >{edge.origin}</span>
-                  <span className="fs-11 faint">{`→ 第 ${edge.to} 环节`}</span>
-                </span>
-                <span className={`kv-v${edge.origin === "inferred" ? "" : " mono"}`} title={edge.evidence}>{edgePlain(edge)}</span>
-              </div>
-            ))
-          ) : <span className="kv-v muted">没有记出的去向边</span>}
-        </div>
-        <div className="kv">
-          <span className="kv-k">{`关联文件（${flowSelection.stage.files.length}）`}</span>
-          <div className="col">
-            {flowSelection.stage.files.map((file) => (
-              <button key={`${file.path}:${file.line}`} type="button" className="anchor-chip" title={`${file.path}:${file.line}${file.note ? ` · ${file.note}` : ""}`} onClick={() => openFile(file.path, "flow")}>
-                <Icon name="file" size={12} />
-                <span>{`${fileTail(file.path)}:${file.line}`}</span>
-                {file.note ? <em className="fs-11 faint">{file.note}</em> : null}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="kv">
-          <span className="kv-k">所属流程</span>
-          <span className="kv-v" title={`${flowSelection.flow.summary}（生成时间 ${flowSelection.flow.generatedAt}）`}>{flowSelection.flow.title}</span>
-        </div>
-        <div className="row">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(workflowOf(flowSelection.flow))}><Icon name="book" size={13} />去代码教学</button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => bindStage(flowSelection)}><Icon name="zap" size={13} />绑定到对话</button>
-        </div>
-        {/* 「已知边界」不在这里重复一遍：同一条 caveats 已经写在流程画布下方（抽屉压在画布旁边，两处并排就是同屏两遍） */}
-      </>
-    ) : (
-      <div className="empty">
-        <span className="empty-icon"><Icon name="info" size={18} /></span>
-        <p>点流程里的任一环节</p>
-      </div>
-    ))
-    : (
-      <>
-        <div className="kv">
-          <span className="kv-k">摘要</span>
-          <span className="kv-v">{selected?.summary ?? "点画布上的模块，或左侧目录里的文件"}</span>
-        </div>
-        {coreFiles.length ? (
-          <div className="kv">
-            <span className="kv-k">{`核心相关文件（${coreFiles.length}）`}</span>
-            <div className="col">
-              {coreFiles.slice(0, 6).map((file) => (
-                <button key={file.path} type="button" className="tier-node" title={`${file.path}:${file.line}${file.label ? ` · ${file.label}` : ""}`} onClick={() => openFile(file.path, "anchor")}>
-                  <Icon name="file" size={13} />
-                  <span className="tier-name mono">{`${fileTail(file.path)}:${file.line}`}</span>
-                  <span className="tier-count">{`${entryPaths.has(file.path) ? "入口 · " : ""}${(lineOf.get(file.path) ?? 0).toLocaleString()} 行${file.hot ? ` · ${file.hot} 次变更` : ""}`}</span>
-                </button>
-              ))}
-              {coreFiles.length > 6 ? (
-                <span className="fs-11 faint mono" title={coreFiles.slice(6).map((file) => file.path).join("\n")}>{`另有 ${coreFiles.length - 6} 个文件`}</span>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-        {implementation ? (
-          <>
-            <div className="kv"><span className="kv-k">输入</span><span className="kv-v">{implementation.inputs.join("、")}</span></div>
-            <div className="kv"><span className="kv-k">输出</span><span className="kv-v">{implementation.output}</span></div>
-            <div className="kv"><span className="kv-k">不变量</span><span className="kv-v">{implementation.invariants.join("；")}</span></div>
-            <div className="kv"><span className="kv-k">边界与陷阱</span><span className="kv-v">{[...implementation.boundaries, ...implementation.traps].join("；") || "尚未检测到显式边界。"}</span></div>
-          </>
-        ) : null}
-        <div className="row">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => gotoTeach(selected ?? null)}><Icon name="book" size={13} />去代码教学</button>
-          <button type="button" className="btn btn-ghost btn-sm" disabled={!selected} onClick={() => { if (selected) pickNode(selected, moduleScopePaths); }}><Icon name="zap" size={13} />绑定到对话</button>
-        </div>
-      </>
-    );
-
-  return (
-    <>
-      {topbar}
-      <MobileSwitcher labels={["项目目录", "地图画布"]} active={paneActive} onSelect={setPaneActive} />
-      <div className="page page-map">
-        {/* 与教学页同一条列表栏宽度：拖一次，三个工作区的左栏一起跟 */}
-        <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
-        <aside className={`map-side ${paneClass(0)}`}>
-          <div>
-            <div className="row between">
-              <span className="section-title">项目目录</span>
-              <span className="fs-11 faint">{index.totalFiles}</span>
-            </div>
-            <RepoTree
-              nodes={index.fileTree}
-              onOpenFile={openFile}
-              activePath={t.mapFile}
-              lineOf={lineOf}
-              badge={(node, depth) => (depth === 0 ? groupLabel(node.name) : undefined)}
-            />
-          </div>
-        </aside>
-
-        <div className={`map-main ${paneClass(1)}`}>
-          <div className="map-viewbar">
-            <div className="view-toggle" role="tablist" aria-label="地图视图">
-              <button type="button" role="tab" aria-selected={mapView === "architecture"} className={mapView === "architecture" ? "active" : ""} onClick={() => { setMapView("architecture"); setDrawer(false); }}>架构视图</button>
-              <button type="button" role="tab" aria-selected={mapView === "flow"} className={mapView === "flow" ? "active" : ""} onClick={() => { setMapView("flow"); setDrawer(false); }}>流程视图</button>
-            </div>
-            {mapView === "flow" ? (
-              <>
-                <span
-                  className={`badge ${flowStatus.source === "llm" ? "badge-info" : flowStatus.source === "static" ? "badge-warn" : "badge-neutral"}`}
-                  title={`${flowStatus.source === "static"
-                    ? "LLM 未配置、预算已达上限或调用失败时退回静态调用链——它不伪装成模型结论"
-                    : "环节与边由 LLM 依据静态证据生成；边级校验只降不升，声称 static 而对不上依赖图的降为 inferred"}${flowStatus.generatedAt ? ` · 生成时间 ${flowStatus.generatedAt}` : ""}`}
-                >
-                  {`${flowStatus.loading ? "生成中" : flowStatus.source === "llm" ? "LLM 生成" : flowStatus.source === "static" ? "静态降级" : "未生成"}${flowStatus.generatedAt ? ` · ${stamp(flowStatus.generatedAt)}` : ""}`}
-                </span>
-                {flowStatus.title ? <span className="fs-11 muted" title={flowStatus.summary}>{flowStatus.title}</span> : null}
-              </>
-            ) : (
-              <>
-                <span
-                  className={`badge ${archStatus.previewing || archStatus.pending ? "badge-warn" : archStatus.origin === "agent" || archStatus.source === "llm" ? "badge-info" : archStatus.source === "unavailable" ? "badge-warn" : "badge-neutral"}`}
-                  title={`层名与归层由模型判（要改在对话里让 agent 动）；节点怎么压、边界外那一栏由词典认出，模型参与不了。${archStatus.origin === "agent" ? "现在画这张是按对话重绘并经你批准的，点画布上方那条横幅可恢复默认。" : ""}${archStatus.reason ?? ""}`}
-                >{`${archStatus.previewing ? "预览中" : archStatus.pending ? "待你确认重绘" : archStatus.origin === "agent" ? "重绘那张" : archStatus.loading ? "分层中" : archStatus.source === "llm" ? "LLM 分层" : archStatus.source === "unavailable" ? "分层不可用" : "未取到"}${!archStatus.previewing && archStatus.source !== "unavailable" ? ` · ${archStatus.layers} 层` : ""}`}</span>
-                <span className="fs-11 faint mono" title={`依赖分析生成时间（ISO）：${analysis.generatedAt}${archStatus.generatedAt ? ` · 分层产物生成于 ${archStatus.generatedAt}` : ""}`}>{`分析于 ${stamp(analysis.generatedAt)}`}</span>
-              </>
-            )}
-            <div className="grow" />
-            {mapView === "flow" ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={flowStatus.loading}
-                title="重发这一趟取数：引擎侧若仍命中缓存，回来的还是同一条流程"
-                onClick={() => setRegenNonce((value) => value + 1)}
-              ><Icon name="rotate" size={13} />重新生成</button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={archStatus.loading}
-                title={`重问一次模型怎么分层：${ARCH_REGEN_PRICE_NOTE}。边界外那一栏不变——它从来不是模型算的。`}
-                onClick={regenerateArch}
-              ><span className={archRegening ? "spin" : undefined} style={{ display: "inline-flex" }}><Icon name="rotate" size={13} /></span>{archRegening ? "分层中…" : "重新生成分层"}</button>
-            )}
-            {/* 详情入口放在工具栏行内：原先浮在画布右上角，会压住流程视图首行的入口卡片 */}
-            {drawer ? null : (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawer(true)}>
-                <Icon name="panelRight" size={13} />{mapView === "flow" ? "环节详情" : "节点详情"}
-              </button>
-            )}
-          </div>
-          {/* 抽屉与画布同处一层：抽屉绝对定位只盖画布，不盖上面那条视图切换栏 */}
-          <div className="map-stage">
-          <div className="map-canvas-wrap">
-            <div className="map-canvas">
-              {mapView === "architecture"
-                ? <ArchOverview repositoryId={repositoryId} course={course} visible={visible} selectedId={selected?.id} reloadNonce={archNonce + t.dataVersion} regenerating={archRegening} onRegenerate={regenerateArch} onSelect={pickNode} onStatus={setArchStatus} />
-                : (
-                  <FlowMap
-                    repositoryId={repositoryId}
-                    analysis={analysis}
-                    index={index}
-                    visible={visible}
-                    selectedStageOrder={flowSelection?.stage.order}
-                    regenNonce={regenNonce}
-                    onStatus={setFlowStatus}
-                    onSelectStage={(selection) => {
-                      setFlowSelection(selection);
-                      setDrawer(selection !== null);
-                      bindStage(selection);
-                      if (selection) {
-                        emit(repositoryId, "flow_node_selected", { node_id: `flow-stage-${selection.stage.order}`, title: selection.stage.title.slice(0, 120), view: "flow" });
-                      }
-                    }}
-                  />
-                )}
-            </div>
-          </div>
-          {drawer ? (
-            <aside className="drawer" aria-label="节点详情">
-              <div className="drawer-head">
-                <h3>{mapView === "flow" ? (flowSelection ? `第 ${flowSelection.stage.order} 环节 · ${flowSelection.stage.title}` : "环节详情") : (selected?.title ?? "节点详情")}</h3>
-                <span className="badge badge-neutral">{mapView === "flow" ? (flowSelection ? FLOW_KIND_LABEL[flowSelection.stage.kind] : "未选中") : kindLabel(selected?.kind)}</span>
-                <button type="button" className="icon-btn" aria-label="关闭详情" title="关闭详情" onClick={() => setDrawer(false)}><Icon name="x" size={14} /></button>
-              </div>
-              <div className="drawer-body">{drawerBody}</div>
-            </aside>
-          ) : null}
-          </div>
-        </div>
-      </div>
-    </>
-  );
 }
