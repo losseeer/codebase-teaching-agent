@@ -197,11 +197,18 @@ describe("M2.1 exercise service", () => {
     const widened: PracticeRepository = { ...repository, analysis: { ...repository.analysis, graph: widenedGraph } };
     expect(widened.analysis.versionStamp).toBe(repository.analysis.versionStamp);
     const large = await service.next(widened, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
-    // 没有图指纹的话这一条会直接命中上一行（createdAt 一字不差），拿旧图的答案出新题
-    expect(large.createdAt).not.toBe(small.createdAt);
-    // 原图那一行必须还在自己的作用域里：回到旧图要能命中它，而不是被新行覆盖掉
+    // 回到旧图必须命中原来那一行（被新行覆盖就等于拿旧图的答案出当前题）
     const back = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
+    /**
+      判据是 journal 里的**命中序列**，不是时间戳。原来这里比的是 `createdAt` 不相等，而这条不成立：
+      静态题的 id 只由（仓、versionStamp、题型、单元）算出，**不含图指纹**，两条行的 `createdAt` 又能
+      落在同一毫秒——2026-10-18 读 journal 改成增量解析之后两次生成更容易撞在一起，这条就开始抖。
+      真正要钉的是「换图必须未命中、回旧图必须命中」，`exercise_generated.source` 就是这条读数的出处。
+      */
+    const sourcesOf = (): unknown[] => readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source);
+    expect(sourcesOf()).toEqual(["rule", "rule", "cache"]);
     expect(back.createdAt).toBe(small.createdAt);
+    expect(large.prompt).toBeTruthy();
   });
 });
 
