@@ -19,7 +19,7 @@
 |---|---|
 | 模块本体 | `courseModules(tree)`：取 `root.children` 里 id 为 `modules` 的分支（engine `coursetree/build.ts` 固定给这个 id），每个子节点 = 一个模块 |
 | 模块 id | `module:<目录>`（build 时按锚点目录生成，**跨重新导入稳定**），所以覆盖层按 id 存不会因改名而漂 |
-| 文件清单 | `moduleEntries(node)`：本节点锚点 + 子孙锚点，**按 path 去重、保留最浅层那条**；条目带树节点 id，点击即可回查选中（断链自动跳过） |
+| 文件清单 | `moduleEntries(node)`：本节点与子孙节点的**全部锚点**，**按 path 去重、先到先得**（访问序是深度优先，不是层深排序）；条目带树节点 id，点击即可回查选中（断链自动跳过） |
 | 覆盖层 | `loadModuleOverrides(repositoryId)` → `{ renamed, hidden, custom }`，三个键分别落 `codebase-tutor.renamed-modules.<repo>` / `.hidden-modules.<repo>` / `.modules.<repo>` |
 | 推荐顺序 | 仍走 `GET /module-entries`（LLM 从该模块的候选里挑最多 5 个并给理由）；LLM 不可用/判空/失败时**直接列模块自己的文件清单**，引擎用 `reason` 说明是哪一种 |
 | 选中项 | `codebase-tutor.module.teaching.<repo>`；模块被隐藏或树里没了才回落 |

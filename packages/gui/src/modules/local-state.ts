@@ -118,15 +118,19 @@ export function clearLegacyTierOverrides(repositoryId: string): void {
 }
 
 /**
-  一个模块节点的文件清单：本节点与子孙节点，**每个节点取它的第一条锚点**，再按 path 去重（先到先得 = 最浅层）。
+  一个模块节点的文件清单：本节点与子孙节点的**全部锚点**，按 path 去重（先到先得，顺序是深度优先的访问序
+  ——一个早期兄弟分支里的深层节点，会比后面那个浅节点先占住同一条路径，所以「谁挂着这个文件」看的是访问序而不是层深）。
   不去重就会出现「同一个 `Result.java` 在清单里重复十几遍」——共享文件被每个经过它的节点各挂一次，
   这是树的结构事实，不是 bug；模块清单要的是「这个模块有哪些文件」。
+  ⚠️ 与引擎那条 `collectCandidates`（推荐入口的候选池）**刻意不是同一判据**：那边一个节点只有一个候选，
+  按节点 id 让模型挑，所以只取第一条锚点；这边问的是文件集合，第二条以后的锚点同样是这个模块的文件。
   */
 function moduleEntries(node: CourseNode): ModuleEntry[] {
   const byPath = new Map<string, ModuleEntry>();
   const walk = (current: CourseNode): void => {
-    const anchor = current.anchors[0];
-    if (anchor && !byPath.has(anchor.path)) byPath.set(anchor.path, { id: current.id, title: current.title, path: anchor.path, line: anchor.line });
+    for (const anchor of current.anchors) {
+      if (!byPath.has(anchor.path)) byPath.set(anchor.path, { id: current.id, title: current.title, path: anchor.path, line: anchor.line });
+    }
     current.children.forEach(walk);
   };
   walk(node);

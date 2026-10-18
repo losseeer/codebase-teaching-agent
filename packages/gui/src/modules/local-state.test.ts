@@ -64,7 +64,7 @@ describe("课程树 → 模块清单", () => {
     expect(courseModules(tree([]))).toEqual([]);
   });
 
-  it("文件清单按 path 去重并保留最浅层那条：共享文件不再被每个经过它的节点各挂一次", () => {
+  it("文件清单按 path 去重、先到先得（深度优先访问序）：共享文件不再被每个经过它的节点各挂一次", () => {
     const modules = courseModules(tree([
       node("pay", "支付", ["Pay.java"], [
         node("pay.service", "支付服务", ["PayService.java"], [node("pay.impl", "支付实现", ["PayImpl.java", "Result.java"])]),
@@ -73,12 +73,13 @@ describe("课程树 → 模块清单", () => {
       ])
     ]));
     expect(modules[0]?.entries?.map((entry) => entry.path)).toEqual(["Pay.java", "PayService.java", "PayImpl.java", "Result.java"]);
-    expect(modules[0]?.entries?.find((entry) => entry.path === "Result.java")?.id).toBe("pay.dto");
+    expect(modules[0]?.entries?.find((entry) => entry.path === "Result.java")?.id).toBe("pay.impl");
   });
 
-  it("一个节点只认它的第一条锚点：清单要的是「这个模块有哪些文件」，不是把节点的多锚点全铺开", () => {
-    const [only] = courseModules(tree([node("a", "甲", ["A.java", "B.java"])]));
-    expect(only?.entries?.map((entry) => entry.path)).toEqual(["A.java"]);
+  it("一个节点的第二条以后锚点也进清单：那同样是这个模块的文件（去重仍按 path）", () => {
+    const [only] = courseModules(tree([node("a", "甲", ["A.java", "B.java", "A.java"])]));
+    expect(only?.entries?.map((entry) => entry.path)).toEqual(["A.java", "B.java"]);
+    expect(only?.entries?.map((entry) => entry.id)).toEqual(["a", "a"]);
   });
 
   it("档位与「引擎原判」原样带出：引擎没给 tierGiven 就等于没人工改过，界面不自己补一个", () => {
