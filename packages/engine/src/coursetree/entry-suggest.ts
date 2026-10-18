@@ -17,7 +17,7 @@ import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
     代码问答的入口必须是代码，实测 23 条选择层产出里 4 条把 README / 设计文档当成了入口（§66）。
   - 失败处理：翻译失败退化为「只有原始词元」；选择层任何失败（无 provider、超时、JSON 不合法）都返回空列表
     ——但「模型主动判空」（declined）是可信答案，与失败回落区分，可以进缓存。
-  - 与 refineCourseMap 共用 TUTOR_TEACHING_PROVIDER 配置（见根目录 .env.example）
+  - 与 refineCourseMap 共用 `TUTOR_LLM_*` 那套配置（见根目录 .env.example）
   */
 
 const MAX_ENTRIES = 5;

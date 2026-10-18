@@ -613,7 +613,6 @@ function llmSettingsPayload(): Record<string, unknown> {
   const active = teachingProviderStatus(teachingProvider);
   return {
     ...publicLlmSettings(),
-    presets: (process.env.TUTOR_MODEL_PRESETS ?? "").split(",").map((slug) => slug.trim()).filter(Boolean),
     envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey) },
     /**
       单价的「现在生效值 + 每一档从哪来」：界面上留空那个节点显示的是 .env 的数，
@@ -1262,7 +1261,7 @@ function scopedChatProviderOr422(reply: FastifyReply, repositoryPath: string, re
     return undefined;
   }
   if (!teachingProvider) {
-    // 指路要指当前的入口：GUI 的 LLM 设置优先，`TUTOR_TEACHING_*` 只是仍在读的废弃别名（写进 .env 也不再是主路径）
+    // 指路要指当前的入口：GUI 的 LLM 设置优先，.env 那一层只有 `TUTOR_LLM_*` 一套（旧别名已于 10-18 停止读取）
     void reply.code(422).send({ error: "尚未配置 LLM（在设置里选服务商与模型，或在 .env 写 TUTOR_LLM_PROVIDER / TUTOR_LLM_MODEL），此作用域的 LLM 对话不可用。" });
     return undefined;
   }

@@ -9,7 +9,7 @@ import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, mas
   外加单价那这三个字段：它同样「界面上改、立即生效」，但判据更硬——脏值会一路流进预算闸门（见 cost.test.ts）。
   设置文件按 TUTOR_LLM_SETTINGS_FILE 指向临时目录——默认落点是 ~/.codebase-tutor/，那是**用户的产品数据**，测试不许碰。
   */
-const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL", "TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
+const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_OPENAI_URL", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL", "TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
 
 const BLANK = { provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" as const, inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" };
 

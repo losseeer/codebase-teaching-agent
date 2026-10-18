@@ -190,7 +190,7 @@ describe("OpenAICompatibleProvider", () => {
 });
 
 describe("createLlmProvider（单一配置）", () => {
-  const ENV_KEYS = ["TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_ANTHROPIC_URL", "TUTOR_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "TUTOR_OLLAMA_URL"];
+  const ENV_KEYS = ["TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_TEACHING_PROVIDER", "TUTOR_TEACHING_MODEL", "TUTOR_OPENAI_URL", "TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY", "TUTOR_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "TUTOR_OLLAMA_URL"];
 
   afterEach(() => {
     for (const key of ENV_KEYS) delete process.env[key];
@@ -206,29 +206,35 @@ describe("createLlmProvider（单一配置）", () => {
     }) as typeof fetch);
   }
 
-  it("TUTOR_LLM_* 单套配置生效；TUTOR_TEACHING_* 作为废弃别名仍被读取", async () => {
+  /**
+    10-18 精简：一扇门只留一把钥匙。旧别名 `TUTOR_TEACHING_*` 与 `TUTOR_OPENAI_API_KEY` / `TUTOR_ANTHROPIC_API_KEY`
+    停止读取，这条用例钉住「读了也不算」——不然哪天有人为了兼容旧 .env 再把别名接回去，账面看不出来。
+    */
+  it("只认 TUTOR_LLM_* 与通用密钥名；已删的别名一个都不读", async () => {
+    process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
+    process.env.TUTOR_TEACHING_MODEL = "legacy-model";
+    process.env.TUTOR_OPENAI_API_KEY = "alias-key";
+    expect(createLlmProvider(), "别名再也不是配置来源").toBeUndefined();
+
+    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
+    const captured = { url: "", auth: "", model: "" };
+    captureStub(captured);
+    await createLlmProvider()!.complete({ system: "s", user: "u" });
+    expect(captured.model, "legacy-model 不该从别名漏进来").toBe("gpt-4o-mini");
+    expect(captured.auth, "TUTOR_OPENAI_API_KEY 不该被当成密钥").toBe("");
+  });
+
+  it("TUTOR_LLM_* 生效，密钥只认通用名 OPENAI_API_KEY", async () => {
     process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
     process.env.TUTOR_LLM_MODEL = "glm-4.7";
     process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
     process.env.OPENAI_API_KEY = "shared-key";
     const captured = { url: "", auth: "", model: "" };
     captureStub(captured);
-    const provider = createLlmProvider();
-    expect(provider).toBeDefined();
-    await provider!.complete({ system: "s", user: "u" });
+    await createLlmProvider()!.complete({ system: "s", user: "u" });
     expect(captured.url).toBe("https://llm.example.com/v1/chat/completions");
     expect(captured.model).toBe("glm-4.7");
-
-    // 旧 .env 只写了 TUTOR_TEACHING_* 时仍能工作（平滑过渡），但 TUTOR_LLM_* 优先
-    delete process.env.TUTOR_LLM_PROVIDER;
-    delete process.env.TUTOR_LLM_MODEL;
-    process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
-    process.env.TUTOR_TEACHING_MODEL = "legacy-model";
-    await createLlmProvider()!.complete({ system: "s", user: "u" });
-    expect(captured.model).toBe("legacy-model");
-    process.env.TUTOR_LLM_MODEL = "new-model";
-    await createLlmProvider()!.complete({ system: "s", user: "u" });
-    expect(captured.model).toBe("new-model");
+    expect(captured.auth).toBe("Bearer shared-key");
   });
 
   it("provider 未配置时返回 undefined（调用方回落本地启发式，不静默造空模型实例）", () => {

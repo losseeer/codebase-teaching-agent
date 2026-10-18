@@ -86,13 +86,9 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 label="模型"
                 value={llm?.model ?? ""}
                 placeholder={llm?.envFallback.model || ".env 未配置"}
-                list="llm-model-presets"
                 disabled={!llm}
                 onCommit={(model) => updateLlm({ model })}
               />
-              <datalist id="llm-model-presets">
-                {modelOptions(llm, llm?.model ?? "").map((slug) => <option key={slug} value={slug} />)}
-              </datalist>
               <SelectSetting
                 label="思考档位（主力任务）"
                 value={llm?.thinking ?? "auto"}
@@ -251,12 +247,6 @@ function activeSummary(llm: LlmSettings | null): { pill: string; text: string; t
   const [protocol, ...model] = (llm.activeModel ?? "").split(":");
   const slug = model.join(":") || llm.activeModel || "";
   return { pill: slug, text: `${protocol} · ${slug}`, title: `${llm.activeProvider ?? ""} · ${llm.activeModel ?? ""}`, hint: "", thinking, local: false };
-}
-
-/** 模型输入框的候选（datalist）：.env 预设 + 当前已填的自定义 slug。 */
-function modelOptions(settings: LlmSettings | null, current: string): string[] {
-  const presets = settings?.presets ?? [];
-  return current && !presets.includes(current) ? [...presets, current] : presets;
 }
 
 /** 思考能力提示行：白话说清这个模型能选哪些档，被置灰的 option 在部分浏览器不浮出说明。 */

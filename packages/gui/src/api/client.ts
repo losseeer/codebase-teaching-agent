@@ -119,7 +119,6 @@ export interface LlmSettings {
   /** 运行时密钥只以掩码出现——引擎从不回显明文 */
   apiKeyMasked: string;
   hasApiKey: boolean;
-  presets: string[];
   envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
   /**

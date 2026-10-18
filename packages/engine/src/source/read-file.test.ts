@@ -11,10 +11,10 @@ let outsideRoot = "";
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "tutor-readfile-"));
   outsideRoot = mkdtempSync(join(tmpdir(), "tutor-readfile-out-"));
-  writeFileSync(join(repoRoot, ".env"), "TUTOR_OPENAI_API_KEY=sk-secret\n");
-  writeFileSync(join(repoRoot, ".env.example"), "TUTOR_OPENAI_API_KEY=sk-replace-me\n");
+  writeFileSync(join(repoRoot, ".env"), "OPENAI_API_KEY=sk-secret\n");
+  writeFileSync(join(repoRoot, ".env.example"), "OPENAI_API_KEY=sk-replace-me\n");
   mkdirSync(join(repoRoot, "config"));
-  writeFileSync(join(repoRoot, "config/prod.env"), "TUTOR_OPENAI_API_KEY=sk-secret\n");
+  writeFileSync(join(repoRoot, "config/prod.env"), "OPENAI_API_KEY=sk-secret\n");
   writeFileSync(join(repoRoot, ".npmrc"), "//registry.npmjs.org/:_authToken=npm_secret\n");
   writeFileSync(join(repoRoot, "id_rsa"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
   writeFileSync(join(repoRoot, "credentials.json"), "{\"aws_access_key_id\":\"AKIA\"}\n");
@@ -58,7 +58,7 @@ describe("executeReadFile 护栏", () => {
   it("放行 .env 模板：只列键名、不含密钥，是理解配置的入口", () => {
     const outcome = executeReadFile(repoRoot, JSON.stringify({ path: ".env.example" }));
     expect(outcome.audit.denied).toBe(false);
-    expect(outcome.content).toContain("TUTOR_OPENAI_API_KEY=sk-replace-me");
+    expect(outcome.content).toContain("OPENAI_API_KEY=sk-replace-me");
   });
 
   it("拒绝 .env 的后缀写法，以及无扩展名的密钥/凭据载体", () => {

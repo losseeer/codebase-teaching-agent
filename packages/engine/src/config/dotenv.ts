@@ -27,9 +27,16 @@ export function parseDotEnv(text: string): Record<string, string> {
       value = value.slice(1, -1);
       if (quote === `"`) value = value.replace(/\\n/g, "\n").replace(/\\"/g, `"`).replace(/\\\\/g, "\\");
     } else {
-      // 未加引号的值：去掉行内 # 注释（# 前须有空格，避免错误影响 URL 里的 #fragment）
-      const hash = value.indexOf(" #");
-      if (hash >= 0) value = value.slice(0, hash).trim();
+      /**
+        未加引号的值：`#` 起头 = 这一行其实是空值加说明（模板里 `KEY=   # 说明` 很常见，
+        不特判会把整段中文注释当成配置值读进去）；` #` 之前截断 = 行尾注释。
+        截断要带那个空格，才不会把 URL 里的 `#fragment` 剪掉。
+      */
+      if (value.startsWith("#")) value = "";
+      else {
+        const hash = value.indexOf(" #");
+        if (hash >= 0) value = value.slice(0, hash).trim();
+      }
     }
     result[key] = value;
   }

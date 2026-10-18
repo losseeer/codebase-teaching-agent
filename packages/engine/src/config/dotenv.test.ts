@@ -6,11 +6,27 @@ describe("parseDotEnv", () => {
     const parsed = parseDotEnv([
       "# 顶部注释",
       "",
-      "TUTOR_TEACHING_PROVIDER=openai",
-      "  TUTOR_TEACHING_MODEL = gpt-4o-mini  ",
+      "TUTOR_LLM_PROVIDER=openai",
+      "  TUTOR_LLM_MODEL = gpt-4o-mini  ",
       "   # 行注释也要跳过"
     ].join("\n"));
-    expect(parsed).toEqual({ TUTOR_TEACHING_PROVIDER: "openai", TUTOR_TEACHING_MODEL: "gpt-4o-mini" });
+    expect(parsed).toEqual({ TUTOR_LLM_PROVIDER: "openai", TUTOR_LLM_MODEL: "gpt-4o-mini" });
+  });
+
+  /**
+    模板文件里 `KEY=   # 这一项留空会怎样` 是主要写法：等号后只剩一段说明。
+    不特判的话整段中文注释会被当成配置值读进去——`.env.example` 抄成 `.env` 就中招，
+    而且读起来像「配了但没用」，比读不到更难查。
+    */
+  it("空值加行内注释 = 空值，注释不进值里", () => {
+    const parsed = parseDotEnv([
+      "TUTOR_LLM_PROVIDER=              # openai | anthropic | ollama；留空 = 不启用模型",
+      "TUTOR_LLM_TIMEOUT_MS=12000       # 单次请求超时",
+      "TUTOR_EMBED_API_KEY=\t# 与对话用的 key 分开配"
+    ].join("\n"));
+    expect(parsed.TUTOR_LLM_PROVIDER).toBe("");
+    expect(parsed.TUTOR_LLM_TIMEOUT_MS).toBe("12000");
+    expect(parsed.TUTOR_EMBED_API_KEY).toBe("");
   });
 
   it("支持 export 前缀、引号包裹与行内注释", () => {

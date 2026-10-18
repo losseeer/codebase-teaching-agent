@@ -513,18 +513,19 @@ export interface LlmConfigOverrides {
 const trimmed = (value?: string): string => value?.trim() ?? "";
 
 /**
-  一份配置的三层回落：GUI 运行时覆盖 → `.env`（`TUTOR_LLM_*`，废弃别名 `TUTOR_TEACHING_*` 仍读）→ 该协议默认。
+  一份配置的三层回落：GUI 运行时覆盖 → `.env`（只有 `TUTOR_LLM_*` 一套）→ 该协议默认。
   provider 没配时返回 `provider: ""`，由 createLlmProvider 判成「未配置」。
+  密钥只认业界通用名 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`——一个值两把钥匙迟早读成两份配置。
   */
 export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLlmConfig {
-  const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || process.env.TUTOR_TEACHING_PROVIDER || "").toLowerCase();
+  const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || "").toLowerCase();
   const baseUrl = trimmed(overrides.baseUrl);
   const apiKey = trimmed(overrides.apiKey);
-  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || process.env.TUTOR_TEACHING_MODEL || defaultModel(provider);
+  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel(provider);
   const timeoutMs = Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
-  if (provider === "anthropic") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_ANTHROPIC_URL || "https://api.anthropic.com", apiKey: apiKey || process.env.ANTHROPIC_API_KEY || process.env.TUTOR_ANTHROPIC_API_KEY, timeoutMs };
+  if (provider === "anthropic") return { provider, model, baseUrl: baseUrl || "https://api.anthropic.com", apiKey: apiKey || process.env.ANTHROPIC_API_KEY, timeoutMs };
   if (provider === "ollama") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OLLAMA_URL || "http://127.0.0.1:11434", timeoutMs };
-  return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY || process.env.TUTOR_OPENAI_API_KEY, timeoutMs };
+  return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
 }
 
 /**
@@ -558,7 +559,8 @@ function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
 /**
   唯一的 LLM 工厂（2026-09-18 起不再有「轻量 / 主力」两套配置）：
   .env 只有一套 `TUTOR_LLM_*`；「轻任务 / 教学对话」是**运行时角色**（差别只在思考开关，见 llm/runtime.ts），
-  不是两份配置。`TUTOR_TEACHING_*` 作为已废弃别名仍被读取（旧 .env 不至于静默失效），但不再写进 .env.example。
+  不是两份配置。旧别名 `TUTOR_TEACHING_*` 与 `TUTOR_OPENAI_API_KEY` / `TUTOR_ANTHROPIC_API_KEY` 已于 10-18 停止读取
+  ——同一扇门两把钥匙，配错一把会读成另一份配置，而且账面看不出来。
   */
 export function createLlmProvider(overrides?: LlmConfigOverrides): LlmProvider | undefined {
   const config = resolveLlmConfig(overrides);
