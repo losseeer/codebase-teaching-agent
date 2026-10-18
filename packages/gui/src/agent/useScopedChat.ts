@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatScope, ChatThread, CostSummary, CourseNode, CourseTree, Exercise, FadedState, FlowStage, LearnerProfile, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, CourseNode, CourseTree, Exercise, FlowStage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { api, type ScopedChatEvent, type StreamTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 import { useTypewriter } from "./useTypewriter";
@@ -93,11 +93,10 @@ export interface ScopedChatApi {
   scope: Scope;
   setScope: (next: Scope) => void;
 
-  /** Agent 侧栏 thread 状态：3 作用域各独立。`pushMessage/clearThread` 两个写入器封装为方法。 */
+  /** Agent 侧栏 thread 状态：3 作用域各独立。写入器只有 `pushMessage`（清空由线程边界负责，不留第二个出口）。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
   pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint") => void;
-  clearThread: (scope: Scope) => void;
 
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：
@@ -137,10 +136,8 @@ export interface ScopedChatApi {
   /** 练习作用域绑定（prototype `binds.practice` = 练习 #N · 文件）：由 PracticePage 写入 */
   practiceUnit: string;
   setPracticeUnit: (label: string) => void;
-  session: TutorSession | null;
   settings: TutorSettings;
   setSettings: (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)) => void;
-  cost: CostSummary | null;
   content: string;
   setContent: (next: string) => void;
   sending: boolean;
@@ -149,8 +146,6 @@ export interface ScopedChatApi {
   /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务 */
   progress: Record<Scope, string>;
   liveAnswer: string;
-  learner: LearnerProfile | null;
-  faded: FadedState | null;
   error: string;
   send: () => Promise<void>;
   /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
@@ -166,9 +161,9 @@ export interface ScopedChatApi {
 /**
   三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）。
   命名口径：本对象管的是**线程**（threadId / ThreadItem / chatThreads）；`session` 字段是引擎的 TutorSession
-  （教学作用域的在途状态：stage / fallbackCount / settings）。同一条教学会话三个名字——库里 `chat_session` 行
+  （教学作用域的在途状态：settings + 正文；stage / fallbackCount 随状态机于 2026-10-14 撤了）。同一条教学会话三个名字——库里 `chat_session` 行
   = GUI 的 threadId = 引擎的 sessionId，id 一致，只是各层叫法不同。
-  - TutorPage 只读 chat.selected/settings/learner/faded/cost（阶梯 + 锚点 + 成本 chip）
+  - 三个页面只读 chat.selected / settings / mapNode / practiceUnit 这些**绑定与选择**
   - AgentRail 写入 content / send / scope / pushMessage
   */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
@@ -186,7 +181,6 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}) }] }));
 };
-const clearThread = (target: Scope): void => setThreads((prev) => ({ ...prev, [target]: [] }));
 
 // 课程与节点
 const [course, setCourse] = useState<CourseTree | null>(null);
@@ -228,9 +222,9 @@ useEffect(() => {
   return () => { cancelled = true; };
 }, [repositoryId, dataVersion]);
   // 代码教学 + settings + 流式
+  /** 引擎的在途教学会话：只在本 hook 内部用（切节点要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
-  const [cost, setCost] = useState<CostSummary | null>(null);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   // 在途回合：turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。
@@ -281,22 +275,19 @@ useEffect(() => {
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
 
-  const [learner, setLearner] = useState<LearnerProfile | null>(null);
-  const [faded, setFaded] = useState<FadedState | null>(null);
   useEffect(() => {
-    if (!repositoryId) { setLearner(null); setFaded(null); return; }
+    if (!repositoryId) return;
     // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态（与下方 getCourse 效应同一套口径）
     let cancelled = false;
+    // 这一发唯一的用处：把**没被用户动过**的设置档种子成推荐值。画像本身界面不显示（成本与明细都在 InsightsPage 自己取数）
     api.getLearner(repositoryId).then((profile) => {
       if (cancelled) return;
-      setLearner(profile);
       setSettingsState((curr) => curr.style === 50 && curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
-    }).catch(() => { if (!cancelled) setLearner(null); });
+    }).catch(() => { /* 取不到画像就保持当前档，不猜 */ });
     return () => { cancelled = true; };
   }, [repositoryId]);
   useEffect(() => {
     setSession(null);
-    setFaded(null);
     clear();
   }, [selected?.id]);
 
@@ -534,8 +525,7 @@ useEffect(() => {
         if (!selected) return null;
         const created = await api.createSession(repositoryId, selected.id, settings);
         setSession(created.session);
-        setFaded(created.faded);
-        void refreshThreads(scope);
+          void refreshThreads(scope);
         return created.session.id;
       }
       const { thread } = await api.createThread(repositoryId, {
@@ -657,8 +647,7 @@ useEffect(() => {
       if (!active) {
         const created = await api.createSession(repositoryId, selected.id, settings);
         active = created.session;
-        setFaded(created.faded);
-        // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
+          // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
         markCurrentThread("teaching", active.id);
         knownRowCount.current.teaching = 0; // 新建线程是空的：补账基准从这里起算
         void refreshThreads("teaching");
@@ -673,7 +662,7 @@ useEffect(() => {
       }, turn);
       setSession(reply.session);
       setSettingsState(reply.session.settings);
-      setCost(reply.cost);
+      // reply.cost 不进状态：成本监控页按整月自己取数，单次回合这一格没人显示
       await sink.settle(reply.message.content, reply.provider);
     } catch (reason) {
       sink.fail(reason);
@@ -742,13 +731,13 @@ useEffect(() => {
 
   return {
     scope, setScope,
-    threads, pushMessage, clearThread,
+    threads, pushMessage,
     chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread,
     course, dataVersion, reloadCourseData, selected, setSelected,
     mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
     practiceUnit, setPracticeUnit,
-    session, settings, setSettings: setSettingsState, cost,
-    content, setContent, sending, stopTurn, progress, liveAnswer, learner, faded, error, send, sendMap, sendPractice, replySource,
+    settings, setSettings: setSettingsState,
+    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
   };
 }

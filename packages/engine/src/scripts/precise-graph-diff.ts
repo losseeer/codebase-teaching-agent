@@ -33,7 +33,6 @@ const index: RepositoryIndex = indexRepository(repositoryPath);
 // 与产品同一条取图路径：先装语法解析器（AST 档），否则引擎在这里退化成逐行正则，差值就不是「启发式 vs 编译器」了
 await loadSymbolParser();
 const graph = buildDependencyGraph(repositoryPath, index.files);
-const known = new Set(index.files.map((file: FileEntry) => file.path));
 
 const edgeKey = (from: string, to: string): string => `${from}→${to}`;
 const pct = (part: number, whole: number): string => (whole ? `${((part / whole) * 100).toFixed(1)}%` : "—");

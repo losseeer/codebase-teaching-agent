@@ -12,7 +12,7 @@ import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
 import { Icon, type IconName } from "./ui/icons";
-import { layoutVars, patchLayout, useLayout } from "./ui/ColumnResizer";
+import { layoutVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
 

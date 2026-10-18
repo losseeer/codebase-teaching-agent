@@ -1,13 +1,11 @@
 import type { ReactElement } from "react";
-import type { CourseNode, ExerciseKind, ImplementationUnit, ImportJob } from "@codebase-tutor/shared";
-import { Icon } from "../ui/icons";
+import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared";
 
 /**
   views/ 共享的小工具：
   - Loading / EmptyState：通用占位 UI
-  - phaseLabel / exerciseKindLabel：枚举 → 中文文案
+  - exerciseKindLabel：题型枚举 → 中文文案（导入阶段的文案在 ImportPage 的 PHASES 表里）
   - firstTeachNode / flatten：课程树遍历
-  - MicroDetail：微观拆解（输入 / 输出 / 不变量 / 边界与陷阱）——抽屉里的 `.kv` 四行
  */
 
 export function Loading(): ReactElement {
@@ -30,17 +28,6 @@ export function dateText(iso: string): string {
   return Number.isFinite(date.getTime()) ? `${date.getMonth() + 1} 月 ${date.getDate()} 日` : "日期未上报";
 }
 
-export function phaseLabel(phase: ImportJob["phase"]): string {
-  return ({
-    queued: "队列中",
-    indexing: "索引文件与 Git 历史",
-    summarizing: "摘要缓存与分层归纳",
-    building_course: "构建入口课程树",
-    completed: "完成",
-    failed: "失败"
-  })[phase];
-}
-
 export function exerciseKindLabel(kind: ExerciseKind): string {
   return ({
     change_localization: "修改定位",
@@ -59,24 +46,3 @@ export function flatten(root: CourseNode): CourseNode[] {
   return [root, ...root.children.flatMap(flatten)];
 }
 
-/** 微观拆解四行：没有实现单元时不渲染（旧产物与概览节点都没有）。 */
-export function MicroDetail({ detail }: { detail: { implementation?: ImplementationUnit } | null }): ReactElement | null {
-  const implementation = detail?.implementation;
-  if (!implementation) return null;
-  const rows: [string, string][] = [
-    ["输入", implementation.inputs.join("、")],
-    ["输出", implementation.output],
-    ["不变量", implementation.invariants.join("；")],
-    ["边界与陷阱", [...implementation.boundaries, ...implementation.traps].join("；") || "尚未检测到显式边界。"]
-  ];
-  return (
-    <>
-      {rows.map(([label, value]) => (
-        <div className="kv" key={label}>
-          <span className="kv-k">{label}</span>
-          <span className="kv-v muted">{value}</span>
-        </div>
-      ))}
-    </>
-  );
-}

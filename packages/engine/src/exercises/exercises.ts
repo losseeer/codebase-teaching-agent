@@ -1,13 +1,13 @@
 import { dirname } from "node:path";
-import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLanguage, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, ReviewSchedule, RubricCriterion } from "@codebase-tutor/shared";
+import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLanguage, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RubricCriterion } from "@codebase-tutor/shared";
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
-import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
 import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
-import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile, type HarnessRun } from "./code-generate.js";
+import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
-import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
+import { runSandbox } from "../sandbox/isolation.js";
 import { runnerFingerprint } from "../sandbox/profile.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";

@@ -24,8 +24,6 @@ export interface OverlaysPatch {
 
 /** 只认这个节点里的已知键：未知字段一律不写进去（工具拒写与界面防脏同一口径）。 */
 const MODULE_KEYS = ["renamed", "hidden", "custom", "tier"] as const;
-const ARCH_KEYS = ["moduleLayer", "layerRenames"] as const;
-
 export function readOverlays(database: TutorDatabase, repositoryId: string): RepositoryOverlays {
   const settings = database.getSettings<Record<string, unknown>>(repositoryId);
   const overlays = settings?.overlays;

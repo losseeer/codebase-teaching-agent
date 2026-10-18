@@ -36,7 +36,6 @@ const MAX_TITLE = 40;
 const MAX_PROMPT = 600;
 const MAX_ANSWER_KEY = 2_000;
 const MAX_CRITERIA = 6;
-const MAX_ANCHORS = 4;
 
 export function guardLlmProposal(proposal: LlmExerciseProposal, candidates: GuardCandidate[]): GuardIssue[] {
   const issues: GuardIssue[] = [];

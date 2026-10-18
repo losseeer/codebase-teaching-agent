@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ArchitectureBlockBrief, ArchitectureLayer } from "@codebase-tutor/shared";
+import type { ArchitectureBlockBrief } from "@codebase-tutor/shared";
 import { verifyArchitectureDraft, type CanvasUnits } from "./redraft.js";
 
 /**

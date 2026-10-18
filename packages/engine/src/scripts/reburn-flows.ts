@@ -17,7 +17,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { SourceAnchor } from "@codebase-tutor/shared";
 import { loadDotEnv } from "../config/dotenv.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";

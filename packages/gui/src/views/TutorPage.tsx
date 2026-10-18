@@ -15,7 +15,7 @@ import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { Icon } from "../ui/icons";
 import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, saveActiveModule, saveModuleOverrides, type ModuleEntry, type ModuleOverrides } from "../modules/local-state";
 import { migrateLegacyTierOverrides } from "../modules/server-overlays";
-import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
+import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**
   代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
@@ -302,14 +302,6 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   if (!t.course || !t.selected) return <Loading />;
   const { selected, course } = t;
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
-  /** 面板只渲染前 MAX_RENDER_LINES 行：锚点行落在范围外时，源码区根本没有那一行，
-      文案不能再说「已定位」（渲染与滚动都在 SourceView 里，这里只负责说实话）。 */
-  const lineRenderable = source ? isLineRendered(source.line) : true;
-  const locateReadout = !source
-    ? "未选文件"
-    : lineRenderable
-      ? `${source.path}:${source.line}`
-      : `${source.path}（锚点第 ${source.line} 行超出预览）`;
 
   return (
     <>

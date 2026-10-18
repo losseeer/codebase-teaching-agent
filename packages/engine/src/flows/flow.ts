@@ -757,7 +757,7 @@ function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key:
 }
 
 /**
-  只读出口（`GET .../flow?readonly=1`，MCP 用的就是它）：命中缓存就把产物交出去，没缓存也不生成。
+  只读出口（`GET .../flow?readonly=1`）：命中缓存就把产物交出去，没缓存也不生成。
   为什么单独开一条：`generateRepositoryFlowCached` 冷缓存时会发一趟主力档（≈¥0.17），
   而「外部 agent 问一句这条流程怎么走」不该让账单多一笔——与架构那条 `allowCall: false` 同一口径。
 */

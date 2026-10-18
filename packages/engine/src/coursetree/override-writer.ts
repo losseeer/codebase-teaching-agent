@@ -67,7 +67,7 @@ function titleOf(course: CourseTree, blocks: ArchitectureBlockBrief[] | undefine
 }
 
 /** 从覆盖层与树里找某模块当前所在的层名（写审计的 `from` 用；找不到就如实留空）。 */
-function currentLayerOf(context: OverrideContext, overlays: RepositoryOverlays, moduleId: string): string | undefined {
+function currentLayerOf(overlays: RepositoryOverlays, moduleId: string): string | undefined {
   return overlays.architecture?.moduleLayer?.[moduleId];
 }
 
@@ -86,7 +86,7 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
     if (!known.has(intent.module) && !blocksById.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」既不在模块地图里，也不是现在图上的节点`);
     if (!context.layers.includes(intent.layer)) return refuse(`层名「${intent.layer.slice(0, 40)}」不在现在的图上；现在是：${context.layers.join(" / ") || "（还没分层）"}`);
     const title = titleOf(context.course, context.blocks, intent.module);
-    const from = currentLayerOf(context, overlays, intent.module) ?? intent.from;
+    const from = currentLayerOf(overlays, intent.module) ?? intent.from;
     const next = patchOverlays(context.database, context.repositoryId, { architecture: { moduleLayer: { [intent.module]: intent.layer } } });
     context.journal.append("architecture_layer_overridden", {
       correction_id: id(), module: intent.module, module_title: title, from: from ?? null, to: intent.layer, via,
