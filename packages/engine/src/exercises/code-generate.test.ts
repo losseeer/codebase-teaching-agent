@@ -10,6 +10,7 @@ import { indexRepository } from "../indexer/indexer.js";
 import type { LlmProvider } from "../llm/provider.js";
 import { readJournal } from "../store/journal.js";
 import { TutorDatabase } from "../store/database.js";
+import { RepositoryHandle } from "../store/repository-handle.js";
 import { nestedSandboxUsable } from "../sandbox/capability.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
@@ -23,8 +24,11 @@ const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
 const temporaryDirectories: string[] = [];
+/** 夹具的真句柄（`PracticeRepository.handle`）：收尾要先关连接再删目录，否则 -wal/-shm 删不净。 */
+const handles: RepositoryHandle[] = [];
 
 afterEach(() => {
+  for (const handle of handles.splice(0)) handle.close();
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -43,7 +47,14 @@ function testRepository(): PracticeRepository {
     quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
     versionStamp: "content-v1"
   };
-  return { path: repositoryPath, index, analysis };
+  return { path: repositoryPath, index, analysis, handle: openHandle(repositoryPath, index.repositoryId) };
+}
+
+/** 夹具用真句柄：`PracticeRepository.handle` 是挂载项唯一的连接入口，出题与判分都经它读写产物库。 */
+function openHandle(repositoryPath: string, repositoryId: string): RepositoryHandle {
+  const handle = new RepositoryHandle(repositoryPath, repositoryId);
+  handles.push(handle);
+  return handle;
 }
 
 /** 真源码那一份：patch_edit 的 solution 必须逐字含它，否则被判「把原码改花了还自称原样」。 */

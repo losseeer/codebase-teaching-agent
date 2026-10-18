@@ -11,6 +11,7 @@ import { runSandbox } from "../sandbox/isolation.js";
 import { runnerFingerprint } from "../sandbox/profile.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
+import type { RepositoryHandle } from "../store/repository-handle.js";
 import { deriveMastery } from "../learner/mastery.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
@@ -43,6 +44,8 @@ type PracticeTarget<T> = ZpdTarget<T> & { kind: ExerciseKind };
 
 export interface PracticeRepository {
   path: string;
+  /** 挂载项的连接生命周期：出题、判分、讲评都读写产物库与审计线，不再各自开一份句柄。 */
+  handle: RepositoryHandle;
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
 }
@@ -137,13 +140,13 @@ function staleDependencies(repository: PracticeRepository, exercise: Exercise): 
 
 export class ExerciseService {
   getSummary(repository: PracticeRepository): PracticeSummary {
-    const database = new TutorDatabase(repository.path);
+    const database = repository.handle.pin();
     try {
       const mastery = this.mastery(repository, database);
       const dueReviews = database.getReviewSchedules(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
       return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
     } finally {
-      database.close();
+      repository.handle.unpin();
     }
   }
 
@@ -153,11 +156,12 @@ export class ExerciseService {
     family="llm" 走 LLM 出题族（tag 主题出题，一轮调用可拒绝，rubric 判分）。
     */
   async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
-    const database = new TutorDatabase(repository.path);
+    const database = repository.handle.pin();
     try {
-      // journal 的开必须在 try 内：`new Journal` 要 mkdir/append `.tutor/`，只读盘上它会抛，
-      // 而构造在外面的话 finally 根本还没接管 ⇒ 每次请求漏一个 SQLite 句柄（§36.6 那一类的同一个洞）。
-      const journal = new Journal(repository.path, repository.index.repositoryId);
+      // 审计线取自挂载句柄：以前这里现造一个 Journal，而它的构造要 mkdir/append `.tutor/`——
+      // 放在 `try` 之前抛就会漏掉那份 SQLite 句柄（§36.6 那一类的同一个洞）。
+      // 现在句柄随挂载走、pin/unpin 成对，这一行不再有「构造失败谁收尾」的问题。
+      const journal = repository.handle.journal;
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
       const modelVersion = provider?.modelVersion ?? "deterministic";
       if (!requested.kind && !requested.targetUnitId) {
@@ -216,7 +220,7 @@ export class ExerciseService {
       journal.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, polish, polish_failure: polishFailure });
       return stored.exercise;
     } finally {
-      database.close();
+      repository.handle.unpin();
     }
   }
 
@@ -304,7 +308,7 @@ export class ExerciseService {
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
-    const journal = new Journal(repository.path, repository.index.repositoryId);
+    const journal = repository.handle.journal;
     // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
     const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
     const candidates = selectTagCandidates(repository, tag, 3, summaries);
@@ -373,12 +377,12 @@ export class ExerciseService {
     */
   async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
     if (!provider) throw new Error("讲评需要配置模型；当前未配 LLM 或本月预算已达到预算上限。");
-    const database = new TutorDatabase(repository.path);
+    const database = repository.handle.pin();
     let stored: StoredExercise | undefined;
     try {
       stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
     } finally {
-      database.close();
+      repository.handle.unpin();
     }
     if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
     if (stored.expected.type !== "harness") throw new Error("只有代码题有这一趟讲评：其余题型的反馈本来就出自规则或 rubric。");
@@ -393,7 +397,7 @@ export class ExerciseService {
       learnerFiles,
       provider
     });
-    const journal = new Journal(repository.path, repository.index.repositoryId);
+    const journal = repository.handle.journal;
     if (explained.usage) journal.append("token_usage", {
       input_tokens: explained.usage.inputTokens,
       output_tokens: explained.usage.outputTokens,
@@ -405,13 +409,13 @@ export class ExerciseService {
   }
 
   async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {
-    const database = new TutorDatabase(repository.path);
+    const database = repository.handle.pin();
     try {
       const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
       if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
       const stale = staleDependencies(repository, stored.exercise);
       if (stale.length) throw new Error(`这道题依赖的源码已更新（${stale.join("、")}）；请使用新版本重新生成练习。`);
-      const journal = new Journal(repository.path, repository.index.repositoryId);
+      const journal = repository.handle.journal;
       let graded = stored.expected.type === "rubric"
         ? await gradeRubric(stored, answer, provider)
         : await grade(stored, answer, journal, repository.path);
@@ -461,7 +465,7 @@ export class ExerciseService {
       mastery.find((record) => record.unitId === stored.exercise.targetUnitId) && database.saveMastery(repository.index.repositoryId, mastery.find((record) => record.unitId === stored.exercise.targetUnitId)!);
       return { ...graded, exerciseId, repositoryId: repository.index.repositoryId, targetUnitId: stored.exercise.targetUnitId, kind: stored.exercise.kind, gradingMode: stored.exercise.gradingMode, reviewedAt: now.toISOString(), review };
     } finally {
-      database.close();
+      repository.handle.unpin();
     }
   }
 

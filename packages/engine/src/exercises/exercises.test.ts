@@ -10,6 +10,7 @@ import { indexRepository } from "../indexer/indexer.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { TutorDatabase } from "../store/database.js";
 import { readJournal } from "../store/journal.js";
+import { RepositoryHandle } from "../store/repository-handle.js";
 import { selectZpdTarget } from "./zpd.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
@@ -18,6 +19,8 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtur
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  // 先关连接再删目录：还开着 SQLite 就去 rm 会留下删不净的 -wal/-shm 边文件
+  for (const handle of handles.splice(0)) handle.close();
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -351,5 +354,16 @@ function testRepository(): PracticeRepository {
     quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
     versionStamp: "content-v1"
   };
-  return { path: repositoryPath, index, analysis };
+  return { path: repositoryPath, index, analysis, handle: openHandle(repositoryPath, index.repositoryId) };
+}
+
+/**
+  夹具也要真句柄：`PracticeRepository.handle` 是挂载项唯一的连接入口，出题与判分都经它读写产物库。
+  收尾顺序是先关连接再删目录——留着打开的 SQLite 去 rm 会留下删不净的 -wal/-shm。
+  */
+const handles: RepositoryHandle[] = [];
+function openHandle(repositoryPath: string, repositoryId: string): RepositoryHandle {
+  const handle = new RepositoryHandle(repositoryPath, repositoryId);
+  handles.push(handle);
+  return handle;
 }

@@ -32,6 +32,7 @@ import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, journalFootprint } from "../store/journal.js";
+import { RepositoryHandle } from "../store/repository-handle.js";
 import { traceEngine } from "../trace/engine-log.js";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
@@ -43,6 +44,11 @@ export interface ImportedRepository {
   course: CourseTree;
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
+  /**
+    这份产物的连接生命周期（一份 SQLite + 一条审计线）。随挂载创建、随卸载关闭——
+    处理函数不再各自 `new TutorDatabase` / `close()`（见 `store/repository-handle.ts`）。
+    */
+  handle: RepositoryHandle;
   watcher?: RepositoryWatcher;
   /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
   freshness: RepositoryFreshness;
@@ -282,25 +288,28 @@ export class ImportService extends EventEmitter {
     let course: CourseTree | undefined;
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
-    // close 放 finally：这一带任何一行抛错（`getIndex` 里就是 JSON.parse）都会把 SQLite 句柄漏在外面，
-    // 而懒挂载挂在 preHandler 上——坏库每次请求都漏一个 FD（2026-10-06 复审指出）
-    let database: TutorDatabase | undefined;
+    /**
+      句柄从这里起就交给挂载项，不再「读完就关」：这一带任何一步失败（库读不出、产物缺一半）
+      都由当前的 `close()` 收尾，成功则活到卸载为止。
+      以前靠 `finally` 关，是因为每个请求都自己开一份——漏一次就漏一个 FD（2026-10-06 复审指出）。
+      */
+    let handle: RepositoryHandle | undefined;
     try {
-      database = new TutorDatabase(path);
-      index = database.getIndex(repositoryId);
-      course = database.getCourse(repositoryId);
-      analysis = database.getAnalysis(repositoryId);
-      estimate = database.getEstimate(repositoryId);
+      handle = new RepositoryHandle(path, repositoryId);
+      index = handle.db.getIndex(repositoryId);
+      course = handle.db.getCourse(repositoryId);
+      analysis = handle.db.getAnalysis(repositoryId);
+      estimate = handle.db.getEstimate(repositoryId);
     } catch {
+      handle?.close();
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor/tutor.db 读不出来（文件损坏或权限不足），需要重新导入。` };
-    } finally {
-      database?.close();
     }
     if (!index || !course || !analysis || !estimate) {
+      handle?.close();
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、课程树、分析结果或估算），需要重新导入才能继续。` };
     }
     const startedAt = Date.now();
-    const repository = this.attach({ path, index, course, estimate, analysis });
+    const repository = this.attach({ path, index, course, estimate, analysis, handle });
     // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
     // （读侧现在是按字节水位增量解析，见 `store/journal.ts`；真到需要归档的那天，这两个数就是依据）。
     const journal = journalFootprint(path);
@@ -320,7 +329,10 @@ export class ImportService extends EventEmitter {
     */
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
-    this.repositories.get(repositoryId)?.watcher?.close();
+    const previous = this.repositories.get(repositoryId);
+    previous?.watcher?.close();
+    // 重新导入同一个仓：旧句柄要让位给这一轮的（增量重分析传进来的就是同一份，那种情况不动它）
+    if (previous && previous.handle !== repository.handle) previous.handle.close();
     // 挂起中：不重新开监听。产物与内存照用，只是磁盘改动不会再叫醒重分析——这正是这个开关存在的理由。
     const paused = this.watchPaused.has(repositoryId);
     if (paused) traceEngine("mount", { repositoryId, phase: "watch_skipped_paused" }, { traceId: null });
@@ -427,6 +439,8 @@ export class ImportService extends EventEmitter {
   private unmountOne(repositoryId: string): void {
     const repository = this.repositories.get(repositoryId);
     repository?.watcher?.close();
+    // 句柄的关闭按引用计数走：驱逐时若还有请求卡在 await 里，它挂起等最后一个 unpin（见 RepositoryHandle）
+    repository?.handle.close();
     this.repositories.delete(repositoryId);
     const position = this.lru.indexOf(repositoryId);
     if (position >= 0) this.lru.splice(position, 1);
@@ -439,10 +453,11 @@ export class ImportService extends EventEmitter {
     try {
       this.update(job, "indexing", 10, "正在建立文件树与 Git 热点索引");
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
-      const { index, course, estimate, analysis } = imported;
+      const { index, course, estimate, analysis, handle } = imported;
 
-      // 新导入的仓库进地址簿（最近使用在后）并就地挂载；其它已挂载仓库不再被卸载
-      this.attach({ path: job.repositoryPath, index, course, estimate, analysis });
+      // 新导入的仓库进地址簿（最近使用在后）并就地挂载；其它已挂载仓库不再被卸载。
+      // 这一轮的句柄直接交给挂载项——它已经在 analyze 里开好并跑过 migrate，再开一份就是两个连接。
+      this.attach({ path: job.repositoryPath, index, course, estimate, analysis, handle });
       job.repositoryId = index.repositoryId;
       try {
         rememberRepository(job.repositoryPath);
@@ -465,37 +480,40 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    句柄生命周期只认这一层：`analyzeWith` 中途抛错（读文件失败、LLM 解析不出、磁盘写不进）
-    也会把库连接关掉。连接挂在 `TutorDatabase` 构造函数上，漏一次就漏一个 FD，
-    而懒挂载是「每请求可能新建一个」——坏库反复重试能把进程拖到 EMFILE。
+    句柄生命周期只认这一层，而且分两种情况——这是「漏关就漏 FD」那条评论的继任者：
+    - **新建档**（导入那一轮，没传 `existing`）：建的那份交给调用方，成功就进挂载项活到卸载；
+      中途抛错则由这里就地关一次，不让一次失败的导入留下连接。
+    - **复用挂载句柄**（增量重分析传进 `existing`）：绝不由这一层关。重分析跑在监听触发的后台队列里，
+      句柄同时被在途请求用着，关闭的唯一入口是卸载（`unmountOne`）。
     */
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
-    const database = new TutorDatabase(repositoryPath);
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, existing?: RepositoryHandle): Promise<AnalyzedRepository> {
+    const handle = existing ?? new RepositoryHandle(repositoryPath, catalogRepositoryId(repositoryPath));
     try {
-      return await this.analyzeWith(repositoryPath, database, progress, summaryHeaderComments, preScanned);
-    } finally {
-      database.close();
+      return await this.analyzeWith(repositoryPath, handle, progress, summaryHeaderComments, preScanned);
+    } catch (error) {
+      if (!existing) handle.close();
+      throw error;
     }
   }
 
-  private async analyzeWith(repositoryPath: string, database: TutorDatabase, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
+  private async analyzeWith(repositoryPath: string, handle: RepositoryHandle, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
     // 增量重分析先扫过一次再决定要不要跑整轮（`reanalyzeOnce`），那份结果直接接手，别把同一个仓扫两遍
     const scan = preScanned ?? scanRepositoryWithDigests(repositoryPath);
     const index = scan.index;
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
     const versionStamp = contentVersion(repositoryPath, index, scan.digests);
-    database.saveIndex(index);
+    handle.db.saveIndex(index);
     progress("summarizing", 40, "正在生成分层摘要并检查缓存");
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
     // `refinement`/`monthlyBudgetUsd` 后面润色缓存与预算还要用同一份。
-    let storedSettings = database.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
+    let storedSettings = handle.db.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
     // 导入页的显式选择是**该仓摘要口径唯一的写入时点之一**（另一个是成本监控页开关）：读-合并-写保住其它键，
     // 之后的增量重分析/重导入不再带选择，只读这份落库值。本地副本同步更新——
     // 后面润色标记的读-合并-写展开的就是这份，不更新会把刚写的开关冲掉（真仓实测抓到的丢失更新）。
     if (summaryHeaderComments !== undefined) {
       storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
-      database.saveSettings(index.repositoryId, storedSettings);
+      handle.db.saveSettings(index.repositoryId, storedSettings);
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     /**
@@ -515,7 +533,7 @@ export class ImportService extends EventEmitter {
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
     const { summaries, estimate } = await summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
-      database,
+      database: handle.db,
       provider,
       withHeaderComments
     });
@@ -534,8 +552,8 @@ export class ImportService extends EventEmitter {
     // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
     // 润色缓存：`settings.refinement` 标记里的四个维度（源码内容 / 模型 / 口径版本 / 图后端）全对上才复用已润色 course。
     // 这是「engine 重启 → GUI 重新导入」不重烧 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
-    const storedAnalysis = database.getAnalysis(index.repositoryId);
-    const storedCourse = database.getCourse(index.repositoryId);
+    const storedAnalysis = handle.db.getAnalysis(index.repositoryId);
+    const storedCourse = handle.db.getCourse(index.repositoryId);
     // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在**源码内容不变**的时候，只比 versionStamp 抓不到，
     // 会把降级证据下算出的命名当成事实继续复用（同型坑见 docs/开发关键点问题与解决方案.md §3.6）。
     const backendStamp = hash(`${graph.semanticBackend}:${graph.parseBackend}:${JSON.stringify(graph.lspStatus)}`);
@@ -558,7 +576,7 @@ export class ImportService extends EventEmitter {
         const refinement = await refineCourseMap(course, mapProvider);
         course = refinement.course;
         if (refinement.usage) {
-          new Journal(repositoryPath, index.repositoryId).append("token_usage", {
+          handle.journal.append("token_usage", {
             input_tokens: refinement.usage.inputTokens,
             output_tokens: refinement.usage.outputTokens,
             cache_hit_tokens: refinement.usage.promptCacheHitTokens ?? null,
@@ -566,7 +584,7 @@ export class ImportService extends EventEmitter {
             scene: "course_map"
           });
           // 读-合并-写：settings 里还存着 monthlyBudgetUsd 等其他键，不能整体覆盖
-          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINE_STEP.contractVersion, backendStamp } });
+          handle.db.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINE_STEP.contractVersion, backendStamp } });
         }
       }
     }
@@ -583,9 +601,9 @@ export class ImportService extends EventEmitter {
       // 记下分析时的 HEAD：懒挂载要靠它区分「内容没变但分析点在另一个提交上」与真的过期
       ...(analysisHead ? { gitHead: analysisHead } : {})
     };
-    database.saveCourse(course, estimate);
-    database.saveAnalysis(analysis);
-    return { path: repositoryPath, index, course, estimate, analysis };
+    handle.db.saveCourse(course, estimate);
+    handle.db.saveAnalysis(analysis);
+    return { path: repositoryPath, index, course, estimate, analysis, handle };
   }
 
   /**
@@ -624,6 +642,12 @@ export class ImportService extends EventEmitter {
     if (!current) return;
     const startedAt = Date.now();
     let impactedPaths: string[] = [];
+    /**
+      整轮重分析跨几十秒的 await（建图、摘要、润色），期间 LRU 驱逐或用户把仓移出地址簿都不能把这份
+      连接关掉——关了就等于让下一次语句拿着已关闭的句柄。pin 住它，`finally` 里放开；
+      真有挂起的关闭请求，会在最后一个引用放开时才落地。
+      */
+    current.handle.pin();
     try {
       /**
         先重扫一遍「收录集 + 每文件内容哈希」，再决定要不要跑整轮。
@@ -638,7 +662,8 @@ export class ImportService extends EventEmitter {
         return;
       }
       impactedPaths = impactRadius(graphFromData(current.analysis.graph), changedPaths).impactedPaths;
-      const next = await this.analyze(current.path, () => undefined, undefined, rescan);
+      // 复用挂载句柄跑这一轮（不再另开一份连接）：见 `analyze` 的两种生命周期
+      const next = await this.analyze(current.path, () => undefined, undefined, rescan, current.handle);
       // 回写前确认挂载项没被换掉：换仓 / 重新导入会让这一轮基于旧快照，写回即用脏数据覆盖内存与
       // SQLite，甚至把刚卸载、watcher 已 close 的仓库复活进映射（破坏「挂载集合 = 监听集合」单槽不变量）。
       if (this.repositories.get(repositoryId) !== current) {
@@ -646,12 +671,7 @@ export class ImportService extends EventEmitter {
         return;
       }
       next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths, at: new Date().toISOString() };
-      const database = new TutorDatabase(current.path);
-      try {
-        database.saveAnalysis(next.analysis);
-      } finally {
-        database.close();
-      }
+      current.handle.db.saveAnalysis(next.analysis);
       // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
       this.repositories.set(repositoryId, { ...next, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
@@ -662,6 +682,8 @@ export class ImportService extends EventEmitter {
       const message = error instanceof Error ? error.message : String(error);
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, error: message } });
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: false, error: message }, { traceId: null, durationMs: Date.now() - startedAt });
+    } finally {
+      current.handle.unpin();
     }
   }
 
