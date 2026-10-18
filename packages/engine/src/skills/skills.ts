@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -48,6 +48,66 @@ export function skillDirectories(): string[] {
   const configured = (process.env.TUTOR_SKILLS_DIR ?? "").split(/[:,]/).map((item) => item.trim()).filter(Boolean);
   if (configured.length) return configured;
   return [join(homedir(), ".codebase-tutor", "skills"), join(homedir(), ".claude", "skills")];
+}
+
+/**
+  出厂预置技能的来源：**引擎包内的 `skills/`**，随代码一起发布。
+  路径按 `package.json` 的包名往上找，不按 `../..` 的层数猜——`tsx` 跑 `src/` 与 `tsc` 出 `dist/` 两种跑法都要认，
+  层数写死的那一份会在改 outDir 之后静默指到别处去。
+*/
+export function bundledSkillSource(): string | undefined {
+  let directory = import.meta.dirname;
+  for (let up = 0; up < 6; up += 1) {
+    try {
+      if (/"name":\s*"@codebase-tutor\/engine"/.test(readFileSync(join(directory, "package.json"), "utf8"))) {
+        const candidate = join(directory, "skills");
+        return statSync(candidate).isDirectory() ? candidate : undefined;
+      }
+    } catch {
+      // 这一层没有 package.json：继续往上
+    }
+    directory = join(directory, "..");
+  }
+  return undefined;
+}
+
+/** 一次播种的读数：装了哪些、哪些同名已存在（保留用户那份）、哪些形状不合所以没搬。 */
+export interface SkillSeed {
+  target: string;
+  installed: string[];
+  kept: string[];
+  skipped: { dir: string; reason: string }[];
+}
+
+/**
+  把出厂预置技能**复制**到 `TUTOR_SKILLS_DIR` 的第一处（缺省即 `~/.codebase-tutor/skills`）。
+
+  为什么是复制而不是「加载器多认一档出厂目录」：这样**加载路径只有一条**——所有技能都在用户自己看得见、
+  改得动的目录里，`GET /api/external` 报的 `directory` 也就是真出处；同名技能谁的份生效，答案是「目录里那份」，
+  不需要再解释「出厂的垫底、用户的覆盖」这套优先级。
+
+  两条刻意的规矩：
+  - **绝不覆盖同名**：装过一次之后用户改过的那份就是用户的，升级不该把它冲掉（要更新请自己删了重装）。
+  - **只搬形状合规格的**：坏形状搬进用户目录，之后每一轮都会多一条 `skipped` 读数，且没人知道是谁搬进来的。
+*/
+export function installBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillSeed {
+  const target = input?.targetDir ?? skillDirectories()[0];
+  const source = input?.sourceDir ?? bundledSkillSource();
+  const seed: SkillSeed = { target, installed: [], kept: [], skipped: [] };
+  if (!source) return seed;
+  const load = listSkills([source]);
+  seed.skipped = load.skipped;
+  mkdirSync(target, { recursive: true });
+  for (const skill of load.skills) {
+    const destination = join(target, skill.name);
+    if (existsSync(destination)) {
+      seed.kept.push(skill.name);
+      continue;
+    }
+    cpSync(join(source, skill.name), destination, { recursive: true });
+    seed.installed.push(skill.name);
+  }
+  return seed;
 }
 
 /** 取 frontmatter（文件开头两条 `---` 之间）里的单层 `key: value`。只支持这个形状，多余的一律当没写。 */

@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills.js";
+import { bundledSkillSource, installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills.js";
 
 /**
   技能加载的回归：清单是**每轮都付费**的那一半，正文与附属文件是按需的那一半。
@@ -123,5 +123,50 @@ describe("取正文与附属文件", () => {
     const body = readSkill("huge", undefined, [root]) as string;
     expect(body.length).toBeLessThan(20_000);
     expect(body).toContain("正文已截断，共 20000 字");
+  });
+});
+
+/**
+  出厂预置技能的播种：把引擎包里的 `skills/` 复制到 `TUTOR_SKILLS_DIR` 第一处。
+  这条通道要拦的事故有两个方向——**冲掉用户改过的那份**，和**把坏形状搬进人家目录**（之后每轮多一条噪音，
+  且没人说得清是谁搬进来的）。所以两条都各测一条，外加「源目录指得对」这条自证。
+*/
+describe("出厂预置技能播种", () => {
+  const seedRoot = join(root, "seed");
+  const source = join(seedRoot, "src");
+  const target = join(seedRoot, "target");
+
+  it("只装合规格的，整目录搬（含附属文件），目标不存在就建出来", () => {
+    skill(source, "tutor-cost-audit", "---\nname: tutor-cost-audit\ndescription: 对账一次对话花了多少钱。\n---\n\n先看 llm.log。");
+    mkdirSync(join(source, "tutor-cost-audit", "references"), { recursive: true });
+    writeFileSync(join(source, "tutor-cost-audit", "references", "lines.md"), "两条账的落点。\n", "utf8");
+    skill(source, "Broken_Name", "---\nname: Broken_Name\ndescription: 名字不合规格，不该被搬走。\n---\n\n正文。");
+    writeFileSync(join(source, "README.md"), "顶层的说明文件不是技能，不该进读数。", "utf8");
+    const seeded = installBundledSkills({ sourceDir: source, targetDir: target });
+    expect(seeded.installed).toEqual(["tutor-cost-audit"]);
+    expect(readFileSync(join(target, "tutor-cost-audit", "references", "lines.md"), "utf8")).toContain("两条账的落点");
+    // 坏形状连原因一起回，但**没搬**；顶层的 README.md 是文件，加载器本来就不看它
+    expect(seeded.skipped.map((entry) => entry.dir)).toEqual([expect.stringContaining("Broken_Name")]);
+    expect(seeded.skipped[0].reason).toContain("name 不合规格");
+    expect(existsSync(join(target, "Broken_Name"))).toBe(false);
+    // 装完就该被加载器认出来：播种与读取是同一套判据，不是两份规则
+    expect(listSkills([target]).skills.map((entry) => entry.name)).toEqual(["tutor-cost-audit"]);
+  });
+
+  it("同名一律不覆盖，第二次开机什么都不做", () => {
+    skill(target, "tutor-cost-audit", "---\nname: tutor-cost-audit\ndescription: 我自己改过的一份。\n---\n\n我的做法。");
+    const seeded = installBundledSkills({ sourceDir: source, targetDir: target });
+    expect(seeded.installed).toEqual([]);
+    expect(seeded.kept).toEqual(["tutor-cost-audit"]);
+    expect(readSkill("tutor-cost-audit", "SKILL.md", [target])).toContain("我的做法");
+  });
+
+  it("引擎包里的出厂目录解析得到，且里面只有 README 时装 0 份、也不报错", () => {
+    const found = bundledSkillSource();
+    expect(found, "解析不到 packages/engine/skills ⇒ 播种会静默什么都不做").toBeTruthy();
+    expect(found!.endsWith(join("packages", "engine", "skills"))).toBe(true);
+    const empty = installBundledSkills({ sourceDir: found, targetDir: join(seedRoot, "empty-target") });
+    expect(empty.installed).toEqual([]);
+    expect(empty.skipped).toEqual([]);
   });
 });

@@ -26,7 +26,7 @@
 .
 ├── packages/
 │   ├── engine/                  # 分析与教学引擎（Fastify API，:3001）
-│   │   └── src/
+│   │   ├── src/
 │   │       ├── server.ts        #   全部 REST 路由 + SSE 流式接口 + 启动计时
 │   │       ├── importer/        #   仓库导入：路径归一化、分析编排、增量重分析
 │   │       ├── indexer/         #   文件树 / Git 热点索引（热点同样过滤 .tutorignore）、文件变更监听
@@ -56,6 +56,7 @@
 │   │       ├── trace/           #   请求 traceId 上下文 + 引擎自身 JSONL 日志
 │   │       ├── scripts/         #   phase0 研究脚本（prepare-study / audit / run-trace / dataflow-report）+ phaseB 评测 + search:embed
 │   │       └── lib.ts           #   hash / id / 路径工具
+│   │   └── skills/              #   出厂预置技能的源目录：开机复制到 TUTOR_SKILLS_DIR 第一处（同名不覆盖、坏形状不搬）
 │   ├── gui/                     # 前端（Vite dev server，:3000，/api 代理到 engine）
 │   │   ├── public/              #   design-prototype.html（界面基线）+ 截图
 │   │   └── src/
@@ -104,7 +105,7 @@ pnpm dev            # 同时启动 engine(:3001) 与 gui(:3000)
 
 多仓：引擎记一张**地址簿**（`~/.codebase-tutor/repositories.json`，你导入过的仓都在里面，最近使用的排在最后），启动时一条都不读产物、一个 fs 监听都不开；侧栏「仓库」下拉切到哪个仓，才把那个仓的 `.tutor` 产物挂进内存（同时只保留最近用过的 3 个，`TUTOR_MAX_MOUNTED` 可调，超出的按 LRU 驱逐——只关它的监听、从内存摘掉，磁盘产物一字不动，下次访问再挂回来）。三个学习视图是常驻挂载的（切 tab 不丢状态），所以花钱的取数（推荐入口、流程生成）都挂在**单向可见性闸门**上：没打开过的 tab 一次都不发，打开过之后按输入变化走，来回切 tab 不重发。挂载时顺手做一次**新鲜度判定**：把当前文件内容哈希与产物记录的 `versionStamp` 比、把当前 git HEAD 与分析时记的 HEAD 比。脏了就在页面顶部横幅**如实说明**（几天前跑的、多少个文件对不上、HEAD 从哪挪到哪），给你「去重新分析」（跳导入页、路径已填好，要你亲手点导入）或「知道，先用旧的」两条路——**引擎绝不自动重新分析，也不静默清掉你选过的仓**。目录被挪走 / `.tutor` 产物不全时同样只说原因，并给「移出地址簿」。
 
-外部能力面（**产品 agent 消费外部东西**，默认关闭）**照业界现成的规格做，不自研格式**：技能按公开的 Agent Skills 规格读——一个目录一份 `SKILL.md`，frontmatter 必填 `name`（≤64 字、小写字母/数字/单个连字符、等于目录名）与 `description`（≤1024 字，原样进清单不裁短），可选 `license` / `allowed-tools` / `metadata` 解析但不消费（这个产品的权限落在代码那侧）；三级加载就是规格里的 progressive disclosure——清单常驻上下文，正文与目录内**附属文件**由 `read_skill` 按需取（`file` 参数只接该技能目录内的相对路径，绝对路径、`..`、二进制一律不接）；默认认 `~/.codebase-tutor/skills` 与 `~/.claude/skills` 两处（后者让社区已发布的那批技能直接可用；**本仓库里不带技能包**，10-18 按用户意见删了，运维做法记在本 README 与开发日志里），`TUTOR_SKILLS_DIR` 可用 `:` 或 `,` 列多处，**刻意不扫被学习仓里的 `skills/`**——仓自带的指令文件直接进 agent 上下文是提示注入面。MCP 那侧用官方 SDK 做客户端，配置文件形状跟各家客户端一致：顶层 `mcpServers`，一段一个 server（`command` / `args` / `env`，关掉写 `disabled`），白名单 `allowedTools`（取值认 `mcp__<server>__<tool>` 这种完整 id，也认裸工具名），工具名同样带 `mcp__<server>__` 前缀，单次调用有墙钟上限（`TUTOR_MCP_TIMEOUT_MS`，缺省 20s）。**远程 server（`url` / `type`）现在不接**，被跳过时会把原因写进读数——前置是 #175（外部调用的出境记账与 fail-closed）。
+外部能力面（**产品 agent 消费外部东西**，默认关闭）**照业界现成的规格做，不自研格式**：技能按公开的 Agent Skills 规格读——一个目录一份 `SKILL.md`，frontmatter 必填 `name`（≤64 字、小写字母/数字/单个连字符、等于目录名）与 `description`（≤1024 字，原样进清单不裁短），可选 `license` / `allowed-tools` / `metadata` 解析但不消费（这个产品的权限落在代码那侧）；三级加载就是规格里的 progressive disclosure——清单常驻上下文，正文与目录内**附属文件**由 `read_skill` 按需取（`file` 参数只接该技能目录内的相对路径，绝对路径、`..`、二进制一律不接）；默认认 `~/.codebase-tutor/skills` 与 `~/.claude/skills` 两处（后者让社区已发布的那批技能直接可用）；**出厂预置技能住在 `packages/engine/skills/`**，开机把那里**合规格**的整目录复制到上面第一处（`TUTOR_SKILLS_DIR` 显式设置时，目标就是你列的第一处），**同名一律不覆盖**（你改过的那份就是你的，要更新请删了重启）、坏形状不搬并把原因写进开机读数——加载器因此只认一条路径，运行时不存在「出厂档」这种隐藏优先级。10-18 删掉的那六份运维手册删的是**内容**（它们是 README 与开发日志的副本，留着迟早漂移），不是这条通道。，`TUTOR_SKILLS_DIR` 可用 `:` 或 `,` 列多处，**刻意不扫被学习仓里的 `skills/`**——仓自带的指令文件直接进 agent 上下文是提示注入面。MCP 那侧用官方 SDK 做客户端，配置文件形状跟各家客户端一致：顶层 `mcpServers`，一段一个 server（`command` / `args` / `env`，关掉写 `disabled`），白名单 `allowedTools`（取值认 `mcp__<server>__<tool>` 这种完整 id，也认裸工具名），工具名同样带 `mcp__<server>__` 前缀，单次调用有墙钟上限（`TUTOR_MCP_TIMEOUT_MS`，缺省 20s）。**远程 server（`url` / `type`）现在不接**，被跳过时会把原因写进读数——前置是 #175（外部调用的出境记账与 fail-closed）。
 
 默认关不是开关而是「不加」：没配 = 工具清单与上下文逐字不变，一分钱不多付（每条外部工具的 schema 都进每轮请求，还会改前缀缓存的形状）。第三方报什么工具都不自动算数——`allowedTools` 没写就等于把别人的全部能力交到模型手上，因为那些程序做了什么我们看不见。外部结果进模型前过一次密钥筛，参数正文从不落日志（`mcp_call` 那行只有字符数与 12 位指纹，且**不能**当源码出网的证据）。装了什么的读数：`GET /api/external`（零 token；读它会顺带把没连上的 server 拉起一次——「连不上」要实测）。
 
