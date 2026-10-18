@@ -105,30 +105,40 @@ export async function postJournalEvent(post: JournalPost): Promise<void> {
   }
 }
 
-/** 重放 localStorage 里积压的事件；成功的出队、失败的留队。整体排在串行队列里，与新事件不争先后。 */
-export async function flushJournalQueue(): Promise<void> {
-  return schedule(async () => {
-    const queue = readQueue();
-    if (!queue.length) return;
-    const remaining: JournalPost[] = [];
-    for (const post of queue) {
-      try {
-        await send(post);
-      } catch (error) {
-        // 积压里也可能混着永远不会成功的 4xx：同样只丢这一条，别让它占着队列
-        if (error instanceof JournalSendError && rejected(error)) {
-          console.error(`[journal] 补发 ${post.type} 被拒收（HTTP ${error.status}），丢弃这一条`);
-          continue;
-        }
-        remaining.push(post);
+/** 重放积压的那一段（不含排队）：成功的出队、4xx 丢弃、其余留队等下一轮。 */
+async function drain(): Promise<void> {
+  const queue = readQueue();
+  if (!queue.length) return;
+  const remaining: JournalPost[] = [];
+  for (const post of queue) {
+    try {
+      await send(post);
+    } catch (error) {
+      // 积压里也可能混着永远不会成功的 4xx：同样只丢这一条，别让它占着队列
+      if (error instanceof JournalSendError && rejected(error)) {
+        console.error(`[journal] 补发 ${post.type} 被拒收（HTTP ${error.status}），丢弃这一条`);
+        continue;
       }
+      remaining.push(post);
     }
-    writeQueue(remaining);
-    if (remaining.length) console.warn(`[journal] 仍有 ${remaining.length} 条事件待重试`);
-  });
+  }
+  writeQueue(remaining);
+  if (remaining.length) console.warn(`[journal] 仍有 ${remaining.length} 条事件待重试`);
 }
 
-/** 新事件也走同一条串行链：补发在前、本条在后，顺序与用户动作一致。 */
+/** 补发积压。整体排在串行队列里，与新事件不争先后。 */
+export async function flushJournalQueue(): Promise<void> {
+  return schedule(drain);
+}
+
+/**
+  新事件也走同一条串行链：**先按顺序补发积压，再发本条**，append 顺序才等于用户动作顺序。
+  只在 `online` 与开机时补发是不够的——「引擎重启」不会让浏览器掉线，那条积压会一直压着，
+  而这条新事件先落库就成了「动作晚的记录排在前面」。队里没东西时这里等于直接发，不多花一次请求。
+ */
 export async function queueJournalEvent(post: JournalPost): Promise<void> {
-  return schedule(() => postJournalEvent(post));
+  return schedule(async () => {
+    await drain();
+    await postJournalEvent(post);
+  });
 }

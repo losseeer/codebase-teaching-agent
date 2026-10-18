@@ -122,7 +122,7 @@ app.get<{ Params: { jobId: string } }>("/api/imports/:jobId", async (request, re
   每一次切节点、打开文件、切换模块、提交练习都必须有 journal 事件可查——缺事件的 UI 操作是设计漏洞。
 
   契约要点：
-  - **只收界面侧那张表**（`UI_JOURNAL_EVENTS`，10 类）；两张表怎么分、为什么必须分，见 shared 里两张表的注释与下面的行内判据（§46）。
+  - **只收界面侧那张表**（`UI_JOURNAL_EVENTS`，成员以那张表为准，这里不抄条数）；两张表怎么分、为什么必须分，见 shared 里两张表的注释与下面的行内判据（§46）。
   - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移。
   - `sessionId` **不做存在性校验**（只校验是字符串且有长度上限）：journal 是 append-only 事件流，
     sessionId 是关联属性而非外键。三作用域的会话续命都走 `chat_session`/`chat_message`（见 resolveTeachingState），
@@ -132,7 +132,7 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const { type, payload, sessionId } = request.body ?? {};
-  // 只收界面侧那 10 类：审计线里 `file_read` / `code_egress` / `token_usage` 是「哪些代码出过门」的证据，
+  // 只收界面侧那张表里的类型：审计线里 `file_read` / `code_egress` / `token_usage` 是「哪些代码出过门」的证据，
   // 而这条接口本机任何进程都调得到——照全集合放行，等于让被审计的一方自己填账（§46）。
   if (!isUiJournalEventType(type)) {
     const owned = isEngineOwnedEventType(type);
