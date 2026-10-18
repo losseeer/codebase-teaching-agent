@@ -1,13 +1,18 @@
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { performance as _perf } from "node:perf_hooks";
+import { join } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ChatScope, ChatThread, CourseNode, Diagram, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ScopedStreamFrame, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { ChatScope, ChatThread, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, TutorSettings } from "@codebase-tutor/shared";
+import type { FastifyReply } from "fastify";
 import { RepositoryHandle } from "./store/repository-handle.js";
+import { engineVersion, tboot } from "./boot.js";
+import { exercises, importer, lightLlm, repositoryOr404, teachingLlm } from "./services.js";
+import { beginScopedStream, broadcast, failScopedTurn, openEventStream, replayTypewriter } from "./http/sse.js";
+import { auditsFromResult, mcpCallPayload, recordAbortedAudits } from "./application/turn-audit.js";
+import { persistTeachingTurn, resolveTeachingState } from "./application/teaching-turn.js";
+import { applyOverrideIntent, architectureToolFor, diagramWriteContextFor, setDiagramToolFor } from "./application/canvas-tools.js";
+import { locateThread, threadJournalPayload } from "./application/threads.js";
 import { budgetExceeded, budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
@@ -17,20 +22,15 @@ import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEdi
 import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "./store/diagrams.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
 import type { ArchitectureToolContext, ExternalToolContext, SetDiagramToolContext, SkillsToolContext } from "./source/tool-loop.js";
-import { toolLoopAuditsOf, type ToolLoopAudits } from "./source/tool-loop.js";
-import type { FileReadRecord } from "./source/read-file.js";
-import type { CodeSearchRecord } from "./source/search-code.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
 import { fileStructureOf } from "./depgraph/roles.js";
-import { ExerciseService } from "./exercises/exercises.js";
 import { degradedFlow, generateRepositoryFlowCached, peekCachedFlow, resolveFlowEntry } from "./flows/flow.js";
-import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs, type McpCallAudit } from "./mcp/clients.js";
+import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs } from "./mcp/clients.js";
 import { installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills/skills.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
-import { ImportService } from "./importer/importer.js";
 import { indexRepository } from "./indexer/indexer.js";
 import { id, isWithin, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
@@ -42,10 +42,10 @@ import { overlayCounts, patchOverlays, readOverlays, removeOverlayKeys, type Ove
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
-import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread, type NewMessage, type TeachingThreadState } from "./store/chat-store.js";
+import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, renameThread, saveThreadState, softDeleteThread } from "./store/chat-store.js";
 import { markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
-import { abortTurn, beginTurn, type TurnHandle, type TurnScene } from "./turns/registry.js";
+import { abortTurn } from "./turns/registry.js";
 import { dedupeFileReads, pathReadBlock } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
@@ -53,29 +53,13 @@ import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } f
 import { deriveLearnerProfile } from "./learner/model.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
-import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
+import { effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
 import { mapChat, practiceChat, type MapChatProgress, type ScopedChatResult, type ScopedChatTurn } from "./scopechat/scopechat.js";
 
 // .env 先加载：`buildLlmRuntimeProvider` 在运行期随时可能被调用，它要能在设置缺项时读到 TUTOR_LLM_* 那套回落值
 loadDotEnv();
 
-/** engine version: 单源 = packages/engine/package.json. 读不到时回落到 0.0.0. */
-const engineVersion: string = (() => {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
-
-/** 启动耗时分段计时：始终落引擎日志（kind: boot），控制台回显由 TUTOR_BOOT_TIMING=1 控制。 */
-const T0 = _perf.now();
-const tboot = (label: string): void => {
-  const durationMs = Math.round(_perf.now() - T0);
-  if (process.env.TUTOR_BOOT_TIMING === "1") console.log(`[boot] +${String(durationMs).padStart(5)}ms ${label}`);
-  traceEngine("boot", { phase: label }, { traceId: null, durationMs });
-};
+/** 引擎的装配与单例（`services.ts`）；启动计时与版本号在 `boot.ts`。 */
 
 tboot("imports resolved");
 
@@ -118,207 +102,13 @@ app.addHook("onResponse", (request, reply, done) => {
 });
 tboot("Fastify constructed");
 
-const importer = new ImportService();
-// 启动**只读地址簿**（一串路径），一条产物都不读、一个 fs 监听都不开：
-// 挂载推迟到 GUI 真的访问某个仓库时（见 preHandler 懒挂载），超出的按 LRU 驱逐。
-tboot(`ImportService（地址簿 ${importer.catalog().length} 条，挂载 0 条）`);
-
 /**
-  关停钩子只管 fs 监听这一件事：LRU 驱逐与 `forget` 各自会关自己那条，但 `app.close()` 不会。
-  `fs.FSWatcher` 是活跃 handle——不移除就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
+  关停钩子（这一条只管 fs 监听；外部 MCP 子进程在文件末尾另有自己的一条）：
+  LRU 驱逐与 `forget` 各自会关自己那条监听，但 `app.close()` 不会。
+  `fs.FSWatcher` 是活跃 handle，不移除就是「HTTP 已经关了、监听还替引擎抱着一个目录」，
   路由级测试收尾删掉临时仓后正是这种状态（handle 指向一个已不存在的目录）。
   */
 app.addHook("onClose", async () => { for (const repository of importer.mountedRepositories()) repository.watcher?.close(); });
-
-const exercises = new ExerciseService();
-tboot("ExerciseService");
-
-// LLM 走运行时构建器：服务商/模型/端点/密钥/思考档位来自运行时设置（GUI PUT /api/llm/settings 可改，
-// 落盘持久，重启后仍在；空项回落 .env——.env 是降级策略而非唯一入口）。
-// 只有一套配置；teaching / light 是**运行时角色**（差别只在思考开关），不是两份配置。
-restoreLlmRuntimeSettings();
-const restoredLlmSettings = getLlmRuntimeSettings();
-if (restoredLlmSettings.provider || restoredLlmSettings.model || restoredLlmSettings.baseUrl || restoredLlmSettings.apiKey) console.log(`[startup] 已恢复 GUI 的 LLM 设置（${restoredLlmSettings.provider || "服务商回落 .env"} · ${restoredLlmSettings.model || "模型回落 .env"}）`);
-
-/**
-  两个运行时角色的取用口。**每次现取，不再留模块级变量**：
-  以前这里是 `let teachingProvider / let lightLlmProvider`，改设置的那条路由必须记得重建它们——
-  漏一处就是「界面显示新模型而回合还在用旧模型」，而且新增一个消费点时没人会提醒。
-  构建成本是读一份内存设置 + 两个包装对象（`buildLlmRuntimeProvider` 不出网，见 llm/runtime.ts），
-  比那一类失效便宜得多，所以不配缓存。
-  */
-function teachingLlm(): LlmProvider | undefined {
-  return buildLlmRuntimeProvider("teaching");
-}
-
-function lightLlm(): LlmProvider | undefined {
-  return buildLlmRuntimeProvider("light");
-}
-
-/**
-  会话解析：按 sessionId 从**该仓的 chat_session / chat_message** 装配回内存（原来这里还挂一个
-  `Map<sessionId, TutorSession>` 当在途缓存，但库里那份才是真源——缓存会说话：回合收尾写了快照、
-  缓存里却是上一轮的设置，这类「读得到但不对」的坑已经踩过一次，2026-10-18 架构复审把它记成该删的全局态）。
-  装配一次是几条 SELECT，相对一趟 LLM 可以忽略。
-  缺最低证据（线程不在、已软删、或状态快照字段不齐）就返回 undefined——
-  调用方照旧 404/400 让 GUI 走新建，绝不编造半截会话。
-
-  09-27 起真源是这两张表，journal 重放（旧 harness/restore.ts）退役：审计线继续按自己的口径记截断摘要，
-  但「接着聊」不该依赖审计摘要的 2000 字截断。
-  */
-function resolveTeachingState(sessionId: string): TutorSession | undefined {
-  for (const repository of importer.mountedRepositories()) {
-    const restored = restoreThreadAsSession(repository.path, repository.index.repositoryId, sessionId);
-    if (restored) return restored;
-  }
-  return undefined;
-}
-
-/** 教学线程 → TutorSession：正文取原文（不截断），状态取回合收尾写的快照。 */
-function restoreThreadAsSession(repositoryPath: string, repositoryId: string, sessionId: string): TutorSession | undefined {
-  const thread = getThread(repositoryPath, sessionId);
-  if (!thread || thread.repositoryId !== repositoryId || thread.scope !== "teach" || !thread.courseNodeId) return undefined;
-  const state = readThreadState(repositoryPath, sessionId);
-  if (!state) return undefined;
-  const settings = validateSettings(state.settings);
-  return {
-    id: thread.id,
-    repositoryId: thread.repositoryId,
-    courseNodeId: thread.courseNodeId,
-    style: settings.style,
-    settings,
-    messages: readMessages(repositoryPath, sessionId) as TutorMessage[],
-    createdAt: thread.createdAt
-  };
-}
-
-/**
-  教学回合落库：正文（user + assistant 全文，不截断）+ 回合结束后的状态快照。
-  线程行不在就按同一个 id 补建再写——回合正文是产品数据，丢了比多一行严重得多；
-  反过来如果静默跳过写入，GUI 重启后就会看到「聊过但没记录」的空会话。
-  */
-function persistTeachingTurn(repositoryPath: string, repositoryId: string, courseNodeId: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
-  if (!appendMessages(repositoryPath, sessionId, messages)) {
-    createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, courseNodeId, title });
-    appendMessages(repositoryPath, sessionId, messages);
-  }
-  saveThreadState(repositoryPath, sessionId, state);
-}
-
-
-/**
-  全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。
-  一路订阅连着它的**请求**一起存：来源闸只在连接进来那一次判，之后每一帧不再重判来源；
-  帧里带着目标仓的绝对路径与改动文件名，所以这条流是本机可读的（认证闸与按人过滤已于 2026-10-15 撤除，§64）。
-  */
-const subscribers = new Set<{ send: (event: ServerEvent) => void; request: FastifyRequest }>();
-
-/** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
-const EVENT_STREAM_PING_MS = 25_000;
-
-/**
-  广播：某一路订阅者写不进去（它的连接刚被中止）是它自己那一路的事，移除就好。
-  这里必须兜住异常——`broadcast` 挂在 `importer.emit("event")` 的**同步链**上，
-  一路死订阅者抛出的 write 异常会一路冒到 `ImportService.run` 的 catch，把一次已经算完的导入判成 failed。
-  删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
-  ⚠️ 帧**不按归属过滤**：认证闸撤了之后没有「谁的名单」这个东西可过滤（§64）。
-  载荷里带着目标仓的绝对路径与改动文件名，所以这条长连接的可见面等于本机的可见面。
-  */
-function broadcast(event: ServerEvent): void {
-  for (const client of subscribers) {
-    try {
-      client.send(event);
-    } catch {
-      subscribers.delete(client);
-      traceEngine("degrade", { what: "sse_subscriber_dropped" });
-    }
-  }
-}
-
-/**
-  SSE 单帧写出（四处出口共用的一条判据）。
-  判 `destroyed` 不只看 `writableEnded`：客户端硬断（关页面、切走）时 `writableEnded` 仍是 false，
-  这时 write 会抛——四条出口是一条判据，分开写迟早只改一处（10-06 复审就是这么发现广播会崩导入的）。
-  */
-function sseFrame(reply: FastifyReply, frame: string): void {
-  if (reply.raw.writableEnded || reply.raw.destroyed) return;
-  reply.raw.write(frame);
-}
-
-function sseWriter<TFrame>(reply: FastifyReply): (event: TFrame) => void {
-  return (event) => sseFrame(reply, `data: ${JSON.stringify(event)}\n\n`);
-}
-
-/**
-  建立 SSE：写头 + **立刻发一帧注释把响应头推到网路上**。
-  只调 `writeHead` 时 Node 把头部留在缓冲区，客户端要等到第一个 `data:` 帧才拿得到响应。
-  10-12 实测：空转的 `/api/events` 三秒收到 0 字节——本机直连只是「看起来连着」，
-  而共享部署那层反向代理（nginx 默认 `proxy_read_timeout` 60s）会把这种「有连接、零字节」的上游直接中止，
-  界面就退回「导入进度停在 0%，任务其实跑完了」那一档。
-  `:` 开头在 SSE 规范里是注释，任何解析器都跳过；读流循环只认 `data: ` 行，所以这一帧不带语义。
-
-  头里还必须自己带上 CORS：`hijack()` 之后响应不再经 `@fastify/cors` 收尾，
-  跨来源部署的浏览器一帧都读不到（与 §47 那个钩子顺序是同一类事故）。
-
-  帧的种类由类型参数管，两条流各有各的词表：作用域对话流默认 `ScopedStreamFrame`（shared 的
-  `ScopedStreamProgress` + done/error/aborted），全局事件流是 `ServerEvent`（import.progress 那一套）。
-  发一种没登记的帧编不过去——两侧不再各抄一份字面量（10-06 那次「引擎发 thinking、界面只认 progress」
-  就是因为这两份词表各写各的）。
-  */
-function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyRequest, reply: FastifyReply): (event: TFrame) => void {
-  const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
-  reply.raw.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-    ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {})
-  });
-  sseFrame(reply, ": open\n\n");
-  return sseWriter<TFrame>(reply);
-}
-
-/** 打字机回放的块长：三作用域同款，改一处就全改（真 token 流式要 provider 层改造，这里先消除「整段落下」）。 */
-const TYPEWRITER_CHUNK = 72;
-
-function replayTypewriter(send: (event: ScopedStreamFrame) => void, text: string): void {
-  for (const delta of chunk(text, TYPEWRITER_CHUNK)) send({ type: "delta", delta });
-}
-
-/**
-  开一轮作用域对话流：hijack → 首帧落网 → 登记回合。三处顺序一致，且 `dispose()` 必须留在调用方的 finally 里——
-  漏一处就是往回合登记表里塞一个永不摘除的在途条目，之后「停止生成」按名字也掐不到它。
-*/
-function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: ScopedStreamFrame) => void; turnHandle: TurnHandle } {
-  reply.hijack();
-  return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene) };
-}
-
-/**
-  回合失败的收尾（三作用域同一口径）：中止与出错是两件事，先判中止——只有它带着登记过的 turnId，
-  出错分支什么都不知道。用户点了停止就按「作废」收：journal 留一条 `turn_aborted`、不伪造正文也不写 `turn_text`。
-*/
-function failScopedTurn(input: {
-  send: (event: ScopedStreamFrame) => void;
-  repositoryPath: string;
-  repositoryId: string;
-  scene: TurnScene;
-  turnHandle: TurnHandle;
-  threadId?: string;
-  error: unknown;
-  fallbackError: string;
-}): void {
-  if (!input.turnHandle.signal?.aborted) {
-    input.send({ type: "error", error: input.error instanceof Error ? input.error.message : input.fallbackError });
-    return;
-  }
-  recordAbortedAudits({ repositoryPath: input.repositoryPath, repositoryId: input.repositoryId, scene: input.scene, ...(input.threadId ? { threadId: input.threadId } : {}), audits: toolLoopAuditsOf(input.error) });
-  new Journal(input.repositoryPath, input.repositoryId).append("turn_aborted", { scene: input.scene, turn_id: input.turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, input.threadId);
-  input.send({ type: "aborted", scene: input.scene });
-}
-
-function repositoryOr404(repositoryId: string) {
-  return importer.getRepository(repositoryId);
-}
 
 /**
   懒挂载钩子：`/api/repositories/:repositoryId/*` 的每个请求先确保该仓已挂进内存。
@@ -719,19 +509,9 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
 });
 
 app.get("/api/events", async (request, reply) => {
+  // 开局、心跳与断开摘除都在 `http/sse.ts`；这里只负责「谁可以连」（来源闸已经跑过了）。
   // 断线重连与「空闲超时只掐这一条连接」由前端 `subscribeServerEvents` 自己管（fetch 读流才掐得住，见 §47）。
-  reply.hijack();
-  const client = { send: openSseStream<ServerEvent>(request, reply), request };
-  subscribers.add(client);
-  // 心跳：这条例外是「订阅之后可能永远没有第一个事件」——没人导入、没人改仓时连接整天空着。
-  // 注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前就从写入失败里察觉连接已死。
-  const ping = setInterval(() => {
-    sseFrame(reply, ": ping\n\n");
-  }, EVENT_STREAM_PING_MS);
-  reply.raw.on("close", () => {
-    clearInterval(ping);
-    subscribers.delete(client);
-  });
+  openEventStream(request, reply);
 });
 
 app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
@@ -957,25 +737,6 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
 /** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
 function diagramNotFound(reply: FastifyReply) {
   return reply.code(404).send({ error: "这张图不存在或已被删除：图库列表里没有它，就不要再来取。", reason: "diagram_not_found" });
-}
-
-/**
-  一次图写入的上下文。`course` 取 `architectureInputOf` 那份（实时算完 tier、叠过覆盖层之后的树）：
-  写侧核 `ref` 用的模块清单与方块清单必须和读侧画出来的**同一份**，否则会出现「界面正画着这个节点，
-  工具却说它查无此人」——覆盖层那条通道栽过的同一件事（§70），构造口径只留一处。
-*/
-function diagramWriteContextFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): DiagramWriteContext {
-  const overlays = readOverlays(database, repository.index.repositoryId);
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
-  return {
-    database,
-    repositoryId: repository.index.repositoryId,
-    course: input.course,
-    analysis: repository.analysis,
-    // 线程 id 带上去：审计里「这次改动是谁在哪个会话里说的」要能回到那一轮对话（与 set_architecture 那一路同款）
-    journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
-    onApplied: (event) => broadcast({ type: "diagram_updated", payload: { repositoryId: event.repositoryId, diagramId: event.diagramId, action: event.action } })
-  };
 }
 
 /** 图库列表：只回摘要，不拖整张图的结构进左栏。 */
@@ -1354,31 +1115,6 @@ function recheckTurn(input: {
   return { answer: notice ? `${screened.text}${notice}` : screened.text, failed: verdict.failed };
 }
 
-/**
-  作废的回合也要把**已发生的事实**落账：读过的文件、搜过的查询、取过的技能、打过的外部工具。
-  两条路径都走这里——① 中止在工具循环中途（旁证挂在异常上）；② 中止晚于最后一趟（循环已正常返回，旁证在返回值里）。
-  都不落 `turn_text`（那仍是「这一轮没有成品」），但花掉的钱与出过门的内容不能当没发生（§77 第 6 条）。
-*/
-function recordAbortedAudits(input: { repositoryPath: string; repositoryId: string; scene: TurnScene; threadId?: string; audits?: ToolLoopAudits }): void {
-  const audits = input.audits;
-  if (!audits || (!audits.fileReads.length && !audits.codeSearches.length && !audits.skillReads.length && !audits.mcpCalls.length)) return;
-  const journal = new Journal(input.repositoryPath, input.repositoryId);
-  for (const read of dedupeFileReads(audits.fileReads)) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, input.threadId);
-  }
-  for (const search of audits.codeSearches) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, input.threadId);
-  }
-  for (const call of audits.mcpCalls) journal.append("mcp_call", mcpCallPayload(call), input.threadId);
-  for (const skill of audits.skillReads) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, input.threadId);
-  journal.append("loop_round", { scene: input.scene, aborted: true, tool_rounds: audits.rounds, tool_reads: audits.fileReads.length, tool_searches: audits.codeSearches.length, tool_external: audits.mcpCalls.length, tool_skills: audits.skillReads.length }, input.threadId);
-}
-
-/** 回合返回值里那几组审计的形状（三作用域共用；practice 没有工具时都是空数组）。 */
-function auditsFromResult(result: { fileReads?: FileReadRecord[]; codeSearches?: CodeSearchRecord[]; skillReads?: { skill: string; chars: number; found: boolean }[]; mcpCalls?: McpCallAudit[]; toolRounds?: number }): ToolLoopAudits {
-  return { fileReads: result.fileReads ?? [], codeSearches: result.codeSearches ?? [], skillReads: result.skillReads ?? [], mcpCalls: result.mcpCalls ?? [], rounds: result.toolRounds ?? 0 };
-}
-
 /** map_chat 回合的统一收尾（JSON 与 SSE 两条路由共用）：复检（零 token）→ 正文落库 → 审计线，三处读同一份文本。 */
 function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
   const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -1437,99 +1173,6 @@ async function externalAndSkills(): Promise<{ skills?: SkillsToolContext; extern
   const skills = skillsForTurn();
   const external = await externalForTurn();
   return { ...(skills ? { skills } : {}), ...(external ? { external } : {}) };
-}
-
-/** `mcp_call` 的 payload：参数正文一个都不落，只留字符数与 12 位指纹（与 code_egress 同一口径）。 */
-function mcpCallPayload(call: McpCallAudit): Record<string, string | number | boolean | null> {
-  return { server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars, masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {}) };
-}
-
-/**
-  本轮的改图工具面（**只给 map 作用域**，与 `set_architecture` 同一道闸；教学与练习两张脸永远不给）。
-  界面上没有第二条结构写路径，所以这是 agent 唯一能改图的入口：校验、降档、存版、审计、广播全在
-  `applyDiagramEdit` 一处，这一层只做「把参数原语翻成请求 + 把回执说回去」。
-  与 `set_architecture` 同一条纪律：**没有模型也能用**（它不发消息，只写本地产物），所以这里不卡 `lightLlmProvider`。
-  `openDiagramId` 是界面随请求带上来的「画布上现在正打开那张」：用户说「把这条边删掉」时，
-  这句话的指代对象是**他眼前那张**，不是图库里最近更新那张——所以它既进上下文（标出哪张是打开的），
-  也进写侧（`edit.diagram` 省略时按它落点）。认不出就拒，绝不猜（见 `resolveTarget`）。
-*/
-function setDiagramToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string, openDiagramId?: string, onWrite?: (diagram: { id: string; name: string }) => void): SetDiagramToolContext {
-  const context = () => diagramWriteContextFor(repository, database, sessionId);
-  return {
-    inventory: diagramInventoryFor(context(), openDiagramId),
-    apply: (argumentsJson: string) => {
-      const parsed = parseDiagramEditArguments(argumentsJson);
-      const note = parsed.ignored.length ? `（多余字段 ${[...new Set(parsed.ignored)].join(" / ")} 已忽略：这一层只认那九种动作各自的字段，边上「降过档」那一格由引擎写）` : "";
-      if (parsed.error) return `没改：${parsed.error}。${note}`;
-      const outcome = applyDiagramEdit(context(), parsed.request!, "agent");
-      // 真落了盘才回报给路由：界面上那张图卡片要挂在「这句话画出了这张图」上，
-      // 拒写的回合也挂一张卡就是替模型撒谎（它可能一次试了三遍才画对）。
-      if (outcome.ok && outcome.diagram) onWrite?.({ id: outcome.diagram.id, name: outcome.diagram.name });
-      return `${outcome.text}${note}`;
-    }
-  };
-}
-
-/**
-  架构修正工具的装配（**map 作用域每一轮都给**；practice 与教学作用域永远不给）。
-  以前还要「这一轮绑到了模块地图里的节点」才给，于是用户在架构画布上直接说一句「把它挪到编排层」时
-  工具压根不在清单里，模型只能嘴上答（2026-10-16 用户指出：画布是只读的，改图只有 agent 这一条路，
-  那就不能要求说话前先在左栏点进某个模块）。
-  三条纪律：
-  - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
-    用户说一句「把它挪到编排层」不该变成一笔重判的钱；
-  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
-  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、节点叫什么 id」
-    就只会反问或编一个 id 撞在写侧白名单上。
-*/
-function architectureToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
-  const lightLlmProvider = lightLlm();
-  if (!lightLlmProvider) return undefined;
-  const overlays = readOverlays(database, repository.index.repositoryId);
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
-  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
-  const titleById = new Map(peek.blocks.map((block) => [block.id, block.title]));
-  const titleOf = (unitId: string): string => titleById.get(unitId) ?? findCourseNode(input.course.root, unitId)?.title ?? unitId;
-  const lost = new Set(peek.lost.map((loss) => (loss.kind === "move_module" ? `move:${loss.module}` : `rename:${loss.from}`)));
-  const corrections = [
-    ...Object.entries(overlays.architecture?.moduleLayer ?? {}).map(([unitId, layer]) => `- 把「${titleOf(unitId)}」挪进「${layer}」（id=${unitId}）${lost.has(`move:${unitId}`) ? "｜这条这次没接上：现在这份判层里没有这一层，或这个 id 已不在树上" : ""}`),
-    ...Object.entries(overlays.architecture?.layerRenames ?? {}).map(([from, to]) => `- 层名「${from}」改成了「${to}」${lost.has(`rename:${from}`) ? "｜这条这次没接上：原判层里没有这个旧层名" : ""}`),
-    ...Object.entries(overlays.modules?.tier ?? {}).map(([unitId, tier]) => `- 「${titleOf(unitId)}」的结构档改成 ${tier}（id=${unitId}）`)
-  ];
-  const layers = peek.layout.length
-    ? peek.layout.map((layer) => `${layer.name}：${layer.moduleIds.map((unitId) => `${titleOf(unitId)}（${unitId}）`).join("；") || "（空）"}`).join("\n")
-    : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「重新生成分层」，这一发不由你代点。）";
-  return {
-    // 「画布上这张是被批准替换的那张 / 正压着一张预览」那两段随重绘流水线一起退了（2026-10-18）：
-    // 分层判断只有一份，就是缓存里那份判层叠上覆盖层；图是图库里的独立实体，它的现场由 `set_diagram` 那份 inventory 给
-    inventory: `架构现场（要动哪个节点就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读实时叠加）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那个节点；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
-    apply: (argumentsJson: string) => {
-      const parsed = parseOverrideArguments(argumentsJson);
-      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
-      if (parsed.error) return `没改：${parsed.error}。${note}`;
-      return `${applyOverrideIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
-    }
-  };
-}
-
-/** 一次人工修正的落地：校验 → 写盘 → 审计 → 通知。GUI 的拖动与 Agent 的工具都走这一个函数。 */
-function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
-  const overlays = readOverlays(database, repository.index.repositoryId);
-  const lightLlmProvider = lightLlm();
-  if (!lightLlmProvider) return { ok: false, text: "没改：这份产物还没配模型，图上没有可改的层。", overlays };
-  /** 与两条读出口同一份输入构造（tier 实时计算 + 覆盖层）——这里曾经少叠一档，结果真仓上每次拖动都被自己的层名校验拒掉 */
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
-  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
-  const outcome = commitOverride({
-    database,
-    repositoryId: repository.index.repositoryId,
-    course: input.course,
-    layers: peek.layers,
-    blocks: peek.blocks,
-    journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
-    onApplied: (event) => broadcast({ type: "architecture_updated", payload: { repositoryId: event.repositoryId, module: event.module ?? null, via: event.via } })
-  }, intent, via);
-  return { ...outcome, layers: peek.layers };
 }
 
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
@@ -1762,7 +1405,7 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const settings = readRepositorySettings(repository.handle);
   // 预算降级或 light 未配置时不烧钱：与导入路径同口径，确定性档重烧会把 LLM 摘要整表覆盖成兜底
-  const lightProvider = budgetDegraded(repository.handle) ? undefined : buildLlmRuntimeProvider("light");
+  const lightProvider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments: settings.summaryHeaderComments });
   if (provider instanceof LocalSummaryProvider) {
     return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重烧会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
@@ -1815,31 +1458,6 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
   const nodeId = request.query.nodeId ?? "";
   return { sessionId: nodeId ? latestThreadForNode(repository.path, repository.index.repositoryId, nodeId)?.id ?? null : null };
 });
-
-/**
-  线程住在**哪个仓的库**里，就读那个库——不能只看挂在内存里的那几个。
-  挂载集有上限（`maxMounted()`，其余按 LRU 驱逐），而被驱逐的仓只是不在内存，它的 `.tutor/tutor.db` 一字未动。
-  过去这三条线程路由只扫挂载集，于是切够几次仓再点开旧对话，就得到一句「会话不存在或已删除」，
-  改名和删除也跟着 404——库里明明还在。兜法是把地址簿逐仓核一趟：每条只开一次 SQLite（读完即关）、纯本地读，零 token。
-  ⚠️ 这里**刻意不挂回该仓**：三条路由要的只是库路径与仓 id（id 就写在线程行上），
-  挂回来反而会把「产物读不动」误报成「会话没了」，还为一次读历史付一趟挂载的代价。
-  */
-function locateThread(threadId: string): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
-  for (const repository of importer.mountedRepositories()) {
-    const thread = getThread(repository.path, threadId);
-    if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
-  }
-  for (const entry of importer.catalog()) {
-    if (entry.mounted || !entry.exists) continue;
-    const thread = getThread(entry.repositoryPath, threadId);
-    if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
-  }
-  return undefined;
-}
-
-function threadJournalPayload(thread: ChatThread, reason: string): Record<string, string | null> {
-  return { scope: thread.scope, thread_id: thread.id, node_id: thread.courseNodeId ?? null, exercise_id: thread.exerciseId ?? null, reason };
-}
 
 /**
   会话线程管理（三作用域共用，作用域是 `teach | map | practice`）。
@@ -2032,8 +1650,6 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
 });
 
 function flatten(root: CourseNode): CourseNode[] { return [root, ...root.children.flatMap(flatten)]; }
-// s 标志：`.` 默认不匹配换行，回放会把多行回复的 `\n` 全丢掉（打字机预览塌成一行）；加上后逐块保留换行
-function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
 
 // 退出时关掉外部 MCP 子进程：它们是引擎起来的，不能留在机器上。
 app.addHook("onClose", async () => { await closeExternalTools(); });
