@@ -28,18 +28,28 @@ describe("沙箱隔离探测", () => {
   /**
     名单是「有哪几项」的读数，所以硬性约束顺序与个数：加一项减一项都要在这里显式改，
     免得哪天探测悄悄少跑一项而测试还绿着。（每项的真伪由下面几条分别读 stdout 断言，不看这里。）
+
+    ⚠️ 但这份名单**只在探测真跑起来的机器上存在**：`isolationBackend()` 判「这台机器没有隔离后端」时
+    探测直接短路返回零项（Linux CI 就是这种）。那种环境是一条 canary 都没跑，不是跑完且全过——
+    所以先按「有没有 canary」分档，再谈名单。把零项也拿去比 11 个名字，红的是环境，不是产品。
     */
   it("逐项检查全过才算 enforced：三语言跑得起来、读家目录/仓/外连/fork 被拒、死循环与超量输出被兜住", (ctx) => {
-    // 名单与环境无关：探测每次都把这一套跑完，所以「有哪几项」在这里硬性约束
+    if (!status.checks.length) {
+      // 零项只允许出现在「根本没有后端」这一支，且必须判 unavailable 并说清原因（fail-closed 的另一种形态）
+      expect(status.level, "一条 canary 都没跑却报出别的等级，就是凭空造证据").toBe("unavailable");
+      expect(status.reason.length, "界面直接显示这句白话原因，不能空").toBeGreaterThan(0);
+      console.warn(`[sandbox] 本机没有隔离后端（${status.reason}）：逐项证据取不到，跳过 ≠ 通过`);
+      ctx.skip();
+    }
     expect(status.checks.map((check) => check.name)).toEqual([
       "run-typescript", "run-python", "run-java",
       "read-home", "read-repo", "read-repo-via-symlink", "network", "fork", "timeout-kill", "output-cap", "memory-cap"
     ]);
-    // 这条等价律不分环境：判成 enforced 必须每一项都过，一项没过就必须判 unavailable（fail-closed 的正面写法）
+    // 这条等价律不分环境（零项那支已经在上面跳过）：判成 enforced 必须每一项都过，一项没过就必须判 unavailable
     expect(status.level === "enforced", `级别与逐项读数不一致：${status.level} / 没过的是 ${status.checks.filter((check) => !check.passed).map((check) => check.name).join("、") || "无"}`).toBe(status.checks.every((check) => check.passed));
     if (!capability.usable) {
-      // 挡板只影响测试分档，不影响真探测：这台机器上探测其实过得去，那就只验上面那条等价律
-      expect(status.checks.every((check) => check.passed), "挡板环境下若真探测全过，说明这台机器本可用").toBe(true);
+      // 起不了嵌套 sandbox-exec 的 macOS，或被 `TUTOR_TEST_FORCE_UNSUPPORTED` 挡板的机器：结论只由等价律管，
+      // 这里不再断言「一定过」——但挡板不许漏进产品那半条仍然成立：探测真跑了 11 项，就是没被挡板短路
       ctx.skip();
     }
     expect(status.checks.filter((check) => !check.passed).map((check) => `${check.name}: ${check.detail}`)).toEqual([]);

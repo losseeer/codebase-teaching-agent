@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +7,10 @@ import type { ChatThreadMessage, CourseTree, ImportEstimate, JournalEvent, Repos
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "./lib.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
+import { isolationBackend } from "./sandbox/profile.js";
 import { flushLlmLog } from "./llm/call-log.js";
-import { flushEngineLog } from "./trace/engine-log.js";
 import { TutorDatabase } from "./store/database.js";
 import { readJournal } from "./store/journal.js";
-import { setLlmRuntimeSettings as setLlmRuntimeSettingsForTest } from "./llm/runtime.js";
 import { appendMessages, createThread, readMessages } from "./store/chat-store.js";
 
 /**
@@ -54,6 +53,11 @@ let spoken = OK_REPLY;
 let fetchCalls = 0;
 /** 让假 provider 在途一会儿：「停止生成」的路由级测试得赶在 LLM 返回之前打进 `/api/turns/stop`。 */
 let holdMs = 0;
+/**
+  在**第 N 趟请求返回之前**替用户点停止：这样中止一定落在「最后一趟 LLM 已回来、路由还没收尾」那一刻，
+  测的就是「审计数组在返回值里」那半条（靠 sleep 抢时间窗做不到这么准）。
+*/
+let stopInside: { turnId: string; atCall: number } | undefined;
 
 function decisionCall(raw: string): boolean {
   return raw.includes("动作决策器") || raw.includes("意图分类");
@@ -69,9 +73,22 @@ function replyFor(raw: string): string {
 /** 每次请求实际带上的工具清单（跨仓那档要验的就是它随不随地址簿变长）。 */
 const sentTools: { names: string[]; raw: string }[] = [];
 
-async function fakeFetch(_url: unknown, init?: { body?: string }): Promise<Response> {
+async function fakeFetch(_url: unknown, init?: { body?: string; signal?: AbortSignal }): Promise<Response> {
   fetchCalls += 1;
-  if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
+  if (holdMs) {
+    // 真在途、真被 signal 打断：provider 会把它归因成 LlmAbortedError，于是测得到「异常携带」那半条补账路径
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, holdMs);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
+      }, { once: true });
+    });
+  }
+  if (stopInside && fetchCalls === stopInside.atCall) {
+    const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId: stopInside.turnId } });
+    expect(stopped.json()).toMatchObject({ stopped: true });
+  }
   const raw = String(init?.body ?? "{}");
   try {
     const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
@@ -220,6 +237,7 @@ beforeEach(() => {
   scripted = [];
   spoken = OK_REPLY;
   holdMs = 0;
+  stopInside = undefined;
 });
 
 describe("外部能力面进回合：技能与 MCP（默认关，装了才给）", () => {
@@ -395,6 +413,52 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(readMessages(repoDir, threadId).some((message) => message.role === "assistant")).toBe(false);
     expect(eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
   });
+
+  /**
+    上一条证的是「作废的回合不落正文」，这两条补它漏掉的那半：**已发生的事实要照落**。
+    这一轮真读过 src/main.ts（源码进过模型上下文）、真花过两趟 LLM，回合却被中止。
+    要是跟着正文一起丢掉，journal 上这一轮就成了「什么都没干」的假账（§77 第 6 条）。
+    中止有两种落法，带的审计数组在两个不同地方，所以各测一条：
+    ① 落在最后一趟 LLM 在途 → 异常一路抛上来，数组挂在异常上；
+    ② 落在最后一趟回来之后 → 循环已正常返回，数组在返回值里。
+    */
+  function expectAbortedAudit(threadId: string, events: Record<string, unknown>[]): void {
+    expect(events.some((event) => event.type === "done"), "中止的回合不该回放 done").toBe(false);
+    expect(events.filter((event) => event.type === "delta"), "中止后一帧正文都不该回放").toHaveLength(0);
+    const reads = eventsOf("file_read").filter((event) => event.sessionId === threadId);
+    expect(reads.map((event) => event.payload.path), "中止前读过的文件必须留痕").toEqual([MAIN_FILE]);
+    expect(reads[0].payload.denied).toBe(false);
+    const loop = eventsOf("loop_round").filter((event) => event.sessionId === threadId);
+    expect(loop).toHaveLength(1);
+    expect(loop[0].payload).toMatchObject({ scene: "map_chat", aborted: true, tool_rounds: 1, tool_reads: 1 });
+    // 补账不等于放行成品
+    expect(eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
+    expect(readMessages(repoDir, threadId).some((message) => message.role === "assistant")).toBe(false);
+    expect(eventsOf("turn_aborted").filter((event) => event.sessionId === threadId)).toHaveLength(1);
+  }
+
+  it("① 停止落在最后一趟在途：异常带着本轮读过的文件上来，收尾照样落账", async () => {
+    scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
+    holdMs = 400; // 第一趟 400ms 回来并执行 read_file，第二趟在途时打「停止」
+    const threadId = await newThread("map", "中止补账·在途");
+    const turnId = "abort-audit-inflight";
+    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "这句话会被中止但要记账", threadId, turnId } });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
+    expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
+    expectAbortedAudit(threadId, sseEvents((await pending).payload));
+  });
+
+  it("② 停止落在最后一趟之后：数组在返回值里，收尾同样落账", async () => {
+    scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
+    const threadId = await newThread("map", "中止补账·收尾");
+    const turnId = "abort-audit-late";
+    // 第二趟请求**返回之前**把停止打进去：signal 已置位但这一趟照样回正文，路由收尾时才判作废
+    stopInside = { turnId, atCall: fetchCalls + 2 };
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "答完才发现已经点了停止", threadId, turnId } });
+    stopInside = undefined;
+    expectAbortedAudit(threadId, sseEvents(response.payload));
+  });
 });
 
 /** 练习答疑：与 map-chat 同款 SSE 收尾，但线程绑题、作用域记 practice_chat。 */
@@ -536,7 +600,10 @@ describe("LLM 工作日志落点", () => {
     // `teaching.action` 这一档随教学状态机一起没了：问答回合每个回合只发一趟措辞调用
     expect(lines.map((line) => line.scene)).toEqual(expect.arrayContaining(["map.chat", "practice.chat", "teaching.turn"]));
     expect(new Set(lines.map((line) => line.scene))).not.toContain("teaching.action");
-    expect(lines.every((line) => line.ok === true)).toBe(true);
+    // 中止的用例会把请求真打断（provider 收 AbortError），那是唯一允许的 fail 行；其余任何失败都是回归
+    const failed = lines.filter((line) => line.ok !== true);
+    expect(failed.length, "上面那几个中止用例应该各留下一行 fail（一行都没有就是这条断言空转了）").toBeGreaterThan(0);
+    expect(failed.every((line) => String(line.error).includes("已被中止")), `llm.log 里出现了非中止的失败：${JSON.stringify(failed.map((line) => line.error))}`).toBe(true);
     // 四条路径都标了线程：日志里出现的线程集合 == 本文件真正问过的线程集合
     const threads = new Set(lines.map((line) => line.threadId));
     expect(threads).toEqual(usedThreads);
@@ -1003,9 +1070,12 @@ describe("编辑期免打扰与沙箱重探", () => {
   });
 
   /**
-    重探的断言刻意与环境无关：能跑嵌套 `sandbox-exec` 的机器上是 enforced，受限 CI 上是 unavailable——
-    **两者都是合法读数**，要钉住的是「这条路当场给出新的实测结果」而不是「它一定过」
+    重探的断言刻意与环境无关：**能判的都要判准**，但「判成什么」允许随环境变——
+    能跑嵌套 `sandbox-exec` 的机器上是 enforced，受限 CI 上是 unavailable，**两者都是合法读数**
     （用户 10-15 那句：环境不支持不能伪装成通过）。
+    ⚠️ 唯一不能拿「环境」当借口的是**形状**：等级、白话原因、时间戳、逐项布尔。
+    ⚠️ 逐项 canary 只在**这台机器有隔离后端**时才存在：`isolationBackend()` 判没有时探测直接短路（Linux CI），
+    那种读数是「零项 + unavailable + 一句原因」，硬要它 `>3` 项红的是环境。判据与产品同源，不另写一份 platform 判断。
     ⚠️ 超时给到 30 秒是实测逼出来的：这一发单独跑 2.7~4.5 秒，全量并行时**实测撞过 vitest 默认的 5 秒**（用例本身没红在断言上，红在没时间）。
     它要起十来个沙箱子进程，不是能被别的用例挤一挤就该判失败的逻辑问题。
     */
@@ -1014,9 +1084,15 @@ describe("编辑期免打扰与沙箱重探", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { sandbox: { level: string; checks: { name: string; passed: boolean }[]; reason: string; probedAt: string } };
     expect(["enforced", "unavailable"]).toContain(body.sandbox.level);
-    expect(body.sandbox.checks.length, "一次重探必须给出逐项 canary，而不是一个总判断").toBeGreaterThan(3);
+    expect(body.sandbox.reason.length, "界面直接显示这句白话原因，不能空").toBeGreaterThan(0);
+    if (isolationBackend().available) {
+      expect(body.sandbox.checks.length, "有后端的机器上一次重探必须给出逐项 canary，而不是一个总判断").toBeGreaterThan(3);
+    } else {
+      // 没有后端却报出 canary，那是编的；报了 enforced 更是要命（整域禁用的闸门被绕过）
+      expect(body.sandbox.checks, "零 canary 才是这台机器的实话").toEqual([]);
+      expect(body.sandbox.level).toBe("unavailable");
+    }
     expect(body.sandbox.checks.every((check) => typeof check.passed === "boolean")).toBe(true);
-    expect(body.sandbox.reason.length).toBeGreaterThan(0);
     expect(new Date(body.sandbox.probedAt).getTime()).toBeGreaterThanOrEqual(Date.now() - 60_000);
     // 与开机那份同源：/api/health 的 sandbox 必须已经是重探之后的读数
     const health = (await app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
