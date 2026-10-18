@@ -3,7 +3,7 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ChatScope, CourseNode, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, TutorSettings } from "@codebase-tutor/shared";
+import type { CourseNode, Exercise, ExerciseAnswer, ExerciseKind, JournalEvent, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply } from "fastify";
 import { RepositoryHandle } from "./store/repository-handle.js";
 import { engineVersion, tboot } from "./boot.js";
@@ -12,23 +12,23 @@ import { beginScopedStream, failScopedTurn, openEventStream, replayTypewriter } 
 import { broadcast } from "./events.js";
 import { auditsFromResult, mcpCallPayload, recordAbortedAudits } from "./application/turn-audit.js";
 import { persistTeachingTurn, resolveTeachingState } from "./application/teaching-turn.js";
-import { applyOverrideIntent, architectureToolFor, diagramWriteContextFor, setDiagramToolFor } from "./application/canvas-tools.js";
+import { applyOverrideIntent, architectureToolFor, setDiagramToolFor } from "./application/canvas-tools.js";
 import { locateThread, threadJournalPayload } from "./application/threads.js";
 import { budgetExceeded, budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import { architectureInputOf, generateArchitectureCached, moduleCourseOf } from "./coursetree/architecture.js";
-import { diagramWarnings } from "./diagram/set-diagram.js";
-import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "./store/diagrams.js";
+import { registerDiagramRoutes } from "./http/routes/diagrams.js";
+import { sanitizeChatFocus, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "./http/input.js";
+import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "./application/scoped-turn.js";
 import type { OverrideIntent, OverrideVia } from "./coursetree/override-writer.js";
-import type { ExternalToolContext, SkillsToolContext } from "./source/tool-loop.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
 import { fileStructureOf } from "./depgraph/roles.js";
 import { degradedFlow, generateRepositoryFlowCached, peekCachedFlow, resolveFlowEntry } from "./flows/flow.js";
 import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs } from "./mcp/clients.js";
-import { installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills/skills.js";
+import { installBundledSkills, listSkills, skillDirectories } from "./skills/skills.js";
 import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { indexRepository } from "./indexer/indexer.js";
@@ -42,19 +42,18 @@ import { overlayCounts, patchOverlays, readOverlays, removeOverlayKeys, type Ove
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./store/journal.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { isolationStatus, reprobeIsolation } from "./sandbox/isolation.js";
-import { appendMessages, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, renameThread, saveThreadState, softDeleteThread } from "./store/chat-store.js";
+import { createThread, isChatScope, latestThreadForNode, listThreads, readMessages, renameThread, saveThreadState, softDeleteThread } from "./store/chat-store.js";
 import { markThread, runWithTrace } from "./trace/context.js";
 import { traceEngine } from "./trace/engine-log.js";
 import { abortTurn } from "./turns/registry.js";
 import { dedupeFileReads, pathReadBlock } from "./source/read-file.js";
 import { buildSearchCorpus, type SearchCorpus } from "./source/search-code.js";
 import type { CrossRepoContext } from "./source/tool-loop.js";
-import { checkTurnInvariants, invariantTailNotice, screenNotice, screenReply } from "./eval/scorers.js";
 import { deriveLearnerProfile } from "./learner/model.js";
 import { LlmAbortedError, resolveLlmConfig, teachingProviderStatus, type LlmProvider } from "./llm/provider.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "./llm/thinking.js";
 import { effectiveLlmConfig, getLlmRuntimeSettings, LLM_PROVIDERS, normalizeRate, PRICING_KEYS, publicLlmSettings, setLlmRuntimeSettings, THINKING_EFFORTS } from "./llm/runtime.js";
-import { mapChat, practiceChat, type MapChatProgress, type ScopedChatResult, type ScopedChatTurn } from "./scopechat/scopechat.js";
+import { mapChat, practiceChat, type MapChatProgress } from "./scopechat/scopechat.js";
 
 // .env 先加载：`buildLlmRuntimeProvider` 在运行期随时可能被调用，它要能在设置缺项时读到 TUTOR_LLM_* 那套回落值
 loadDotEnv();
@@ -313,88 +312,7 @@ function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>
   };
 }
 
-/** GUI 上送的 scopePaths（架构图 chip 的文件清单）：只留非空字符串、去重封顶。它是提示而非裁决——未知路径由引擎交集丢弃。 */
-function sanitizeScopePaths(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const paths = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 400))];
-  return paths.length ? paths.slice(0, 1_000) : undefined;
-}
 
-/** 线程 id 入参守卫：非空字符串、截长；没给就是「无会话线程」（单次提问，不带历史也不落库）。 */
-function sanitizeThreadId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
-}
-
-/**
-  「画布上正打开的那张图」入参守卫：它只当**句柄**用（标进上下文、当结构改动的默认落点），
-  所以和线程 id 同一档处理——收长度、不做存在性校验。
-  指不到一张真图时由写侧回一句「没有这张图，图库现在是…」，比在这里 400 更有指导性；
-  而界面刷新间隙里带着一个旧 id 说话是常态，那儿拦一次就把用户的整句话打回去了。
-*/
-function sanitizeDiagramId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
-}
-
-/**
-  线程正文 → 模型上下文：最近 6 条进「最近对话」窗口，窗口外只留学习者提问作问题脉络。
-  窗口大小就是下面这两个字面量（6 / 8）——**这里才是选行的地方**。scopechat 的
-  `HISTORY_TURNS` / `EARLIER_QUESTIONS_MAX` 只在那一侧做渲染期再裁剪，对这里交出去的条数是恒等操作，
-  所以调窗口要改本函数，只改那边不会跟着变（逐行截断确实只在那边）。
-
-  它替换掉的是「客户端回传 history + earlierQuestions」那条通路（09-27 会话持久化）：
-  进模型上下文的东西必须能在库里考据到——客户端临时拼的窗口正文既可能是旧的、也可能被改，
-  与「上下文≠选中项」是同一类事故。
-  */
-function threadScopedHistory(repositoryPath: string, threadId: string | undefined): { history: ScopedChatTurn[]; earlierQuestions: string[] } {
-  const messages = threadId ? readMessages(repositoryPath, threadId) : [];
-  const boundary = Math.max(0, messages.length - 6);
-  return {
-    history: messages.slice(boundary).map((message) => ({ role: message.role, content: message.content })),
-    earlierQuestions: messages.slice(0, boundary).filter((message) => message.role === "user").slice(-8).map((message) => message.content)
-  };
-}
-
-/**
-  取线程并核归属：不在库里 / 已软删 / 属于别的仓库 / 属于别的作用域一律 `undefined`（调用方据此拒绝本轮）。
-  跨作用域复用线程会把教学问答送入宏观设计的上下文，这种串味比一个 409 难查得多。
-  */
-function scopedThread(repository: NonNullable<ReturnType<typeof repositoryOr404>>, threadId: string | undefined, scope: ChatScope) {
-  if (!threadId) return undefined;
-  const thread = getThread(repository.path, threadId);
-  if (!thread || thread.repositoryId !== repository.index.repositoryId || thread.scope !== scope) return undefined;
-  return thread;
-}
-
-/** 流程视图选中环节（入参守卫）：逐字段核类型并截长后重建——请求体是外部输入，形状不可信；字段不齐即视为没选环节。 */
-function sanitizeChatFocus(value: unknown): FlowStage | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const stage = value as { order?: unknown; kind?: unknown; title?: unknown; detail?: unknown; files?: unknown; branches?: unknown; loopsTo?: unknown };
-  if (typeof stage.order !== "number" || !Number.isFinite(stage.order)) return undefined;
-  if (typeof stage.title !== "string" || !stage.title.trim()) return undefined;
-  const kinds = ["entry", "stage", "decision", "loop", "exit"] as const;
-  const kind = kinds.find((item) => item === stage.kind) ?? "stage";
-  const files = Array.isArray(stage.files)
-    ? stage.files.flatMap((item): { path: string; line: number; note?: string }[] => {
-        if (typeof item !== "object" || item === null) return [];
-        const file = item as { path?: unknown; line?: unknown; note?: unknown };
-        if (typeof file.path !== "string" || !file.path.trim() || file.path.length > 400) return [];
-        const line = typeof file.line === "number" && Number.isFinite(file.line) ? Math.max(0, Math.trunc(file.line)) : 1;
-        return [{ path: file.path.trim(), line, ...(typeof file.note === "string" && file.note.trim() ? { note: file.note.trim().slice(0, 120) } : {}) }];
-      }).slice(0, 200)
-    : [];
-  const branches = Array.isArray(stage.branches)
-    ? stage.branches.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim().slice(0, 160)).slice(0, 20)
-    : [];
-  return {
-    order: Math.trunc(stage.order),
-    kind,
-    title: stage.title.trim().slice(0, 120),
-    detail: typeof stage.detail === "string" ? stage.detail.trim().slice(0, 600) : "",
-    files,
-    branches,
-    ...(typeof stage.loopsTo === "number" && Number.isFinite(stage.loopsTo) ? { loopsTo: Math.trunc(stage.loopsTo) } : {})
-  };
-}
 
 importer.on("event", broadcast);
 
@@ -723,165 +641,8 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   }
 });
 
-/**
-  ==== 画布工作区（2026-10-18，取代「架构视图 + 流程视图」双画布）====
 
-  图是**产物实体**，不是某一页的渲染结果：一个仓可以有很多张，住在 `diagram` 表里，左栏图库挑、中间画布看。
-  这一组路由的权限划分就是这一页的全部纪律，两条分得很开：
-
-  - **几何**（`PUT .../geometry`）：位置不承载对错，所以**不存版本、不写审计、不广播**——
-    一天要拖几百次，进任何一条记录线都只会淹掉真信号；广播那一帧还会抢鼠标（用户自己正在拖的就是答案）；
-  - **结构**（加删节点、连线、分组、改名）：**这里刻意一条路由都没有**。界面对结构只能读，
-    写只能经 agent 的 `set_diagram` 这一个入口（`diagram/set-diagram.ts`）。这不是没做完，是设计：
-    两条写路径各写一套校验与记账，迟早有一处把「没改成」说成「改成了」（覆盖层那条通道的同一课，§71）。
-
-  建、改名、删、恢复这四格动的是**这张图这个实体**而不是它的结构，所以由界面直发，
-  各自记一行审计、广播一帧——「谁建的、现在几版、刚被恢复过」都得问得出。
-  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` 只比对课程树与方块清单，那两张表现算、零 token）。
-*/
-
-/** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
-function diagramNotFound(reply: FastifyReply) {
-  return reply.code(404).send({ error: "这张图不存在或已被删除：图库列表里没有它，就不要再来取。", reason: "diagram_not_found" });
-}
-
-/** 图库列表：只回摘要，不拖整张图的结构进左栏。 */
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const database = repository.handle.pin();
-  try {
-    return { diagrams: listDiagrams(database, repository.index.repositoryId) };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/**
-  新建一张空白图（用户点「+」）。名字撞了由 `uniqueDiagramName` 加序号——**不让两张同名发生**，
-  而不是在界面上标一下：图库靠名字认图，两张「系统分层总览」会让「改那张登录流程」这句话没有答案，agent 那一侧也一样。
-*/
-app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const database = repository.handle.pin();
-  try {
-    const diagram = createBlankDiagram(database, repository.index.repositoryId, typeof request.body?.name === "string" ? request.body.name : undefined);
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_created", {
-      diagram: diagram.id, name: diagram.name, source: diagram.source, nodes: diagram.body.nodes.length, edges: diagram.body.edges.length, downgraded: 0, via: "user"
-    });
-    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "created" } });
-    return { diagram };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/** 单张图 + 读侧的诚实检查：图上的模块节点还指得着现在的课程树吗（图是历史产物，树会重生成）。 */
-app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const database = repository.handle.pin();
-  try {
-    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
-    if (!diagram) return diagramNotFound(reply);
-    return { diagram, warnings: diagramWarnings(diagramWriteContextFor(repository, database), diagram) };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/**
-  改名。两条 400 分开说：「一个字都没改」与「图库里已经有这个名字」是两件事，处置也完全不同。
-  改名**不存版本**——它不动结构，把它记进版本历史会把「回得到那一版」这件事弄脏。
-*/
-app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const raw = typeof request.body?.name === "string" ? request.body.name : "";
-  const database = repository.handle.pin();
-  try {
-    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
-    if (!diagram) return diagramNotFound(reply);
-    const wanted = normalizeDiagramName(raw);
-    if (wanted && listDiagrams(database, repository.index.repositoryId).some((item) => item.id !== diagram.id && item.name === wanted)) {
-      return reply.code(400).send({ error: `图库里已经有「${wanted}」这张图：两张同名会让「改那张」这句话没有答案，先换一个名字`, reason: "name_taken" });
-    }
-    const renamed = renameDiagram(database, diagram, raw);
-    if (!renamed) {
-      return reply.code(400).send({
-        error: wanted ? `这张图已经叫「${diagram.name}」了：收完空白一个字都没变，所以这一笔不写` : "图名收完空白就没了：至少留一个字（图库与 agent 都靠名字认图）",
-        reason: wanted ? "name_unchanged" : "name_empty"
-      });
-    }
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_renamed", { diagram: renamed.id, from: diagram.name, to: renamed.name });
-    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: renamed.id, action: "renamed" } });
-    return { diagram: renamed };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/** 删掉一张图（版本历史一起没，所以这一行审计要留：用户问「我那张图呢」时要答得出它叫什么、存了几版）。 */
-app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const database = repository.handle.pin();
-  try {
-    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
-    if (!diagram) return diagramNotFound(reply);
-    deleteDiagram(database, diagram);
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_deleted", { diagram: diagram.id, name: diagram.name, versions: diagram.versions.length });
-    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "deleted" } });
-    return { deleted: true, diagramId: diagram.id };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/**
-  几何落盘：**只有位置**，不存版本、不写审计、不广播。
-  认不出来的节点 id 会被 `saveGeometry` 一个个跳过（图上没有的东西不该因为一次陈旧拖拽被造出来），
-  所以这里不为「有几个 id 没落上」而拒——用户拖的是他眼前那张画布，不是数据库的一致性检查。
-*/
-app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const raw = request.body?.positions;
-  if (!Array.isArray(raw)) return reply.code(400).send({ error: "positions 要是一个数组：[{ id, x, y }]，只给节点 id 与它的新位置" });
-  const positions = raw.flatMap((item): { id: string; x: number; y: number }[] => {
-    const entry = item as { id?: unknown; x?: unknown; y?: unknown };
-    return typeof entry?.id === "string" && typeof entry.x === "number" && typeof entry.y === "number" ? [{ id: entry.id, x: entry.x, y: entry.y }] : [];
-  });
-  const database = repository.handle.pin();
-  try {
-    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
-    if (!diagram) return diagramNotFound(reply);
-    return { diagram: saveGeometry(database, diagram, positions) };
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
-/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `store/diagrams.ts` 的 `restoreVersion`）。 */
-app.post<{ Params: { repositoryId: string; diagramId: string }; Body: { index?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/restore", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const index = request.body?.index;
-  if (typeof index !== "number" || !Number.isInteger(index)) return reply.code(400).send({ error: "index 要是一个整数（版本清单的下标，0 起）" });
-  const database = repository.handle.pin();
-  try {
-    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
-    if (!diagram) return diagramNotFound(reply);
-    const restored = restoreVersion(database, diagram, index);
-    if (!restored) return reply.code(400).send({ error: `这张图没有第 ${index} 版：现在一共 ${diagram.versions.length} 版（下标 0 起）`, reason: "version_missing" });
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_restored", { diagram: restored.id, to: index, note: restored.versions[restored.versions.length - 1]?.note ?? "" });
-    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: restored.id, action: "restored" } });
-    return { diagram: restored };
-  } finally {
-    repository.handle.unpin();
-  }
-});
+registerDiagramRoutes(app);
 
 // 人工修正通道（覆盖层）。GUI 的拖动、Agent 的 `set_architecture`、浏览器旧值的一次性迁移，三条写路径共用这一处：
 // 各写一套合并逻辑，迟早有一处把用户的修正清除。数组整份替换、字典按键合并、`remove` 按 key 显式撤。
@@ -1047,146 +808,13 @@ function scopedChatProviderOr422(reply: FastifyReply, handle: RepositoryHandle, 
   return teachingProvider;
 }
 
-/** 作用域回合的线程上下文三件套：解析 threadId → 核归属 → 从库里取历史。`threadId` 缺席即「单次提问」（不带历史、不落库）。 */
-function scopedThreadTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, value: unknown, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[]; earlierQuestions: string[] } | undefined {
-  const threadId = sanitizeThreadId(value);
-  if (!threadId) return { threadId: undefined, history: [], earlierQuestions: [] };
-  const thread = scopedThread(repository, threadId, scope);
-  if (!thread) return undefined;
-  return { threadId: thread.id, ...threadScopedHistory(repository.path, thread.id) };
-}
-
-/**
-  回合正文落库（用户问 + 助手答，全文不截断）：这是产品线，与 journal 的 `turn_text`（审计线，2000 字截断）
-  是**有意的双写**——一份供模型下一轮读，一份供指标与裁判读。软删线程不会动这里的行，只让它查不到。
-
-  `threadId` 缺席 = 单次提问，按设计不落库；**线程在但写不进去**（这一轮期间被软删、库写不动）是真丢正文：
-  GUI 已经拿到回放，库里却查无此人，下次进会话就是「聊过但没记录」。静默跳过等于把失败说成成功，
-  所以这里必须留下一条能在 engine.jsonl 查到的读数（`chat-store.appendMessages` 的契约也是这么写的）。
-  */
-function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "practice_chat", threadId: string | undefined, question: string, answer: string): void {
-  if (!threadId) return;
-  if (appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }])) return;
-  traceEngine("degrade", { what: "turn_body_dropped", scene, thread_id: threadId });
-  console.warn(`[engine] ${scene} 这一轮的正文没能写进线程 ${threadId}（线程已被删除或库写不动）；journal 的 turn_text 仍在，产品线缺这一行`);
-}
-
-/**
-  运行期不变量复检（B 档第 2 刀的那三条，零 token / 纯函数 / 微秒级）。
-  外部批评说「回合一旦生成就不再被复核」——这次改动把话收回来：合格也记一条 `turn_invariant`，
-  分母因此运行时成立；引用没能核实时在正文尾部补一行明示，学习者读到的是被核过的文本。
-
-  能在尾部补话而不打断体验，靠的是一个实现事实：三种作用域都是**模型算完之后分块回放**
-  （`replayTypewriter`，块长 `TYPEWRITER_CHUNK`），不是真 token 流。哪天真流式了，这行提示就得改成独立事件（记在这里防忘）。
-
-  判据与 `phaseB:eval` 第 4 节共用 `checkTurnInvariants` 同一个函数，不分两份实现。
-  */
-function recheckTurn(input: {
-  repository: NonNullable<ReturnType<typeof repositoryOr404>>;
-  journal: Journal;
-  sessionId?: string;
-  scene: "teach" | "map_chat" | "practice_chat";
-  /**
-    本回合经 `cross_repo_link` / 跨仓 read_file **由引擎亲手递给模型**的对端路径（裸路径 → 总行数）。
-    没有这份登记，模型引用后端 controller 的行号会被判成「未在当前仓库核实」——那是引擎给它的证据，
-    判它编造是假阳性；但只有登记过的路径算数，模型自己凭空写一个后端文件照样过不去。
-   */
-  crossFiles?: Map<string, number>;
-  question: string;
-  answer: string;
-  style?: number;
-}): { answer: string; failed: string[] } {
-  // 先过筛再复检：判的必须是「用户将会看到的那一份」，且密钥不能等到下发之后才挡
-  const screened = screenReply(input.answer);
-  const verdict = checkTurnInvariants({
-    sessionId: input.sessionId ?? "unscoped",
-    at: new Date().toISOString(),
-    question: input.question,
-    answer: screened.text,
-    style: input.style ?? 0,
-    answerTruncated: false,
-    scene: input.scene
-  }, new Map<string, number>([...input.repository.index.files.map((file) => [file.path, file.lines] as [string, number]), ...(input.crossFiles ?? [])]));
-  input.journal.append("turn_invariant", {
-    scene: input.scene,
-    applicable: verdict.applicable.join("、") || null,
-    failed: verdict.failed.join("、") || null,
-    evidence: Object.entries(verdict.evidence).map(([id, text]) => `${id}=${text}`).join(" ｜ ") || null,
-    // 过筛只记数量与首个样例（不记原文——那正是不能外泄的东西）：审计线要能回答「这轮被改过没有」
-    masked_secrets: screened.secrets || null,
-    masked_paths: screened.paths || null,
-    masked_samples: screened.samples.join("、") || null
-  }, input.sessionId);
-  const notice = `${screenNotice(screened) ?? ""}${invariantTailNotice(verdict) ?? ""}`;
-  return { answer: notice ? `${screened.text}${notice}` : screened.text, failed: verdict.failed };
-}
-
-/** map_chat 回合的统一收尾（JSON 与 SSE 两条路由共用）：复检（零 token）→ 正文落库 → 审计线，三处读同一份文本。 */
-function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
-  const journal = new Journal(repository.path, repository.index.repositoryId);
-  result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
-  persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
-  if (result.usage) journal.append("token_usage", {
-    input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
-    cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
-  }, threadId);
-  // 同一轮对同一路径的重复读取（重试/换窗口）在 journal 归并为一条：审计回答「看过哪些文件」
-  for (const read of dedupeFileReads(result.fileReads ?? [])) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, threadId);
-  }
-  // 检索漏斗：搜了什么、命中多少、前几条落在哪——「先搜后读」的转化率要靠这条读数
-  for (const search of result.codeSearches ?? []) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, threadId);
-  }
-  // 外部工具与技能：一条调用一行，**失败也记**（连不上 / 超时 / 参数不合法 / server 报错是四种不同处置）
-  for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
-  for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
-  // 作用域验收信号：降级次数是「上下文≠选中项」的负向代理指标（设计方案 §10 层2），必须留痕可聚合
-  if (result.scopeDegraded) {
-    journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, threadId);
-  }
-  journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
-  journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
-}
-
-/**
-  本轮的技能通道（2026-10-17 接入）。装了才给：**没装时工具清单与上下文逐字不变**，
-  不加一个「技能不可用」的占位节点——每轮白付一句没人用的说明，还会诱导模型去找不存在的工具。
-*/
-function skillsForTurn(): SkillsToolContext | undefined {
-  const load = listSkills();
-  const brief = skillsBriefing(load.skills);
-  if (!brief) return undefined;
-  if (load.skipped.length) traceEngine("degrade", { what: "skill_skipped", skipped: load.skipped.map((item) => `${item.dir}：${item.reason}`).join("、") });
-  return { brief, bodyOf: (name, file) => readSkill(name, file) };
-}
-
-/**
-  本轮的外部 MCP 工具面（2026-10-17 接入）。默认关：配置文件不存在就一个工具都不加。
-  连不上不报错、只是不给——原因由 `GET /api/external` 说清（读侧不静默降级，也不为「可能用得上」先付 token）。
-*/
-async function externalForTurn(): Promise<ExternalToolContext | undefined> {
-  const surface = await externalToolSurface();
-  if (!surface?.tools.length) return undefined;
-  return { tools: surface.tools, call: surface.call };
-}
-
-/**
-  两条外部能力一次取齐（map-chat JSON / map-chat SSE / 教学回合三个入口共用）。
-  都缺省时回空对象——展开进去等于**一个字都不变**，这是「默认关闭」的实现方式，不是一道开关。
-*/
-async function externalAndSkills(): Promise<{ skills?: SkillsToolContext; external?: ExternalToolContext }> {
-  const skills = skillsForTurn();
-  const external = await externalForTurn();
-  return { ...(skills ? { skills } : {}), ...(external ? { external } : {}) };
-}
 
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
-  const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
+  const turn = scopedThreadTurn(repository, sanitizeThreadId(request.body?.threadId), "map");
   // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝：一个干净的 409 比「模型拿错上下文自信作答」便宜得多
   if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
   // 线程就地标注：llm.log 的每条 provider 调用都带上它，前缀缓存才能按「同一线程相邻两轮」算间隔
@@ -1232,7 +860,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
-  const turn = scopedThreadTurn(repository, request.body?.threadId, "map");
+  const turn = scopedThreadTurn(repository, sanitizeThreadId(request.body?.threadId), "map");
   if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
   markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.handle);

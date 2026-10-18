@@ -1,0 +1,174 @@
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { broadcast } from "../../events.js";
+import { diagramWarnings } from "../../diagram/set-diagram.js";
+import { diagramWriteContextFor } from "../../application/canvas-tools.js";
+import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../store/diagrams.js";
+import { Journal } from "../../store/journal.js";
+import { repositoryOr404 } from "../../services.js";
+
+/**
+  画布那组路由（图库、单张图、改名、删、恢复、几何）。注册在根实例上，所以懒挂载钩子与来源闸照常生效。
+  它从 `server.ts` 搬出来的唯一理由是让「改一条画布路由」不必在 1500 行的装配文件里找位置——
+  路由的权限纪律（几何只写位置、结构只经 agent 一个入口）写在下面这段原话里，一行都没改。
+  */
+export function registerDiagramRoutes(app: FastifyInstance): void {
+/**
+  ==== 画布工作区（2026-10-18，取代「架构视图 + 流程视图」双画布）====
+
+  图是**产物实体**，不是某一页的渲染结果：一个仓可以有很多张，住在 `diagram` 表里，左栏图库挑、中间画布看。
+  这一组路由的权限划分就是这一页的全部纪律，两条分得很开：
+
+  - **几何**（`PUT .../geometry`）：位置不承载对错，所以**不存版本、不写审计、不广播**——
+    一天要拖几百次，进任何一条记录线都只会淹掉真信号；广播那一帧还会抢鼠标（用户自己正在拖的就是答案）；
+  - **结构**（加删节点、连线、分组、改名）：**这里刻意一条路由都没有**。界面对结构只能读，
+    写只能经 agent 的 `set_diagram` 这一个入口（`diagram/set-diagram.ts`）。这不是没做完，是设计：
+    两条写路径各写一套校验与记账，迟早有一处把「没改成」说成「改成了」（覆盖层那条通道的同一课，§71）。
+
+  建、改名、删、恢复这四格动的是**这张图这个实体**而不是它的结构，所以由界面直发，
+  各自记一行审计、广播一帧——「谁建的、现在几版、刚被恢复过」都得问得出。
+  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` 只比对课程树与方块清单，那两张表现算、零 token）。
+*/
+
+/** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
+function diagramNotFound(reply: FastifyReply) {
+  return reply.code(404).send({ error: "这张图不存在或已被删除：图库列表里没有它，就不要再来取。", reason: "diagram_not_found" });
+}
+
+/** 图库列表：只回摘要，不拖整张图的结构进左栏。 */
+app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = repository.handle.pin();
+  try {
+    return { diagrams: listDiagrams(database, repository.index.repositoryId) };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/**
+  新建一张空白图（用户点「+」）。名字撞了由 `uniqueDiagramName` 加序号——**不让两张同名发生**，
+  而不是在界面上标一下：图库靠名字认图，两张「系统分层总览」会让「改那张登录流程」这句话没有答案，agent 那一侧也一样。
+*/
+app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = repository.handle.pin();
+  try {
+    const diagram = createBlankDiagram(database, repository.index.repositoryId, typeof request.body?.name === "string" ? request.body.name : undefined);
+    new Journal(repository.path, repository.index.repositoryId).append("diagram_created", {
+      diagram: diagram.id, name: diagram.name, source: diagram.source, nodes: diagram.body.nodes.length, edges: diagram.body.edges.length, downgraded: 0, via: "user"
+    });
+    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "created" } });
+    return { diagram };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/** 单张图 + 读侧的诚实检查：图上的模块节点还指得着现在的课程树吗（图是历史产物，树会重生成）。 */
+app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = repository.handle.pin();
+  try {
+    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
+    if (!diagram) return diagramNotFound(reply);
+    return { diagram, warnings: diagramWarnings(diagramWriteContextFor(repository, database), diagram) };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/**
+  改名。两条 400 分开说：「一个字都没改」与「图库里已经有这个名字」是两件事，处置也完全不同。
+  改名**不存版本**——它不动结构，把它记进版本历史会把「回得到那一版」这件事弄脏。
+*/
+app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const raw = typeof request.body?.name === "string" ? request.body.name : "";
+  const database = repository.handle.pin();
+  try {
+    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
+    if (!diagram) return diagramNotFound(reply);
+    const wanted = normalizeDiagramName(raw);
+    if (wanted && listDiagrams(database, repository.index.repositoryId).some((item) => item.id !== diagram.id && item.name === wanted)) {
+      return reply.code(400).send({ error: `图库里已经有「${wanted}」这张图：两张同名会让「改那张」这句话没有答案，先换一个名字`, reason: "name_taken" });
+    }
+    const renamed = renameDiagram(database, diagram, raw);
+    if (!renamed) {
+      return reply.code(400).send({
+        error: wanted ? `这张图已经叫「${diagram.name}」了：收完空白一个字都没变，所以这一笔不写` : "图名收完空白就没了：至少留一个字（图库与 agent 都靠名字认图）",
+        reason: wanted ? "name_unchanged" : "name_empty"
+      });
+    }
+    new Journal(repository.path, repository.index.repositoryId).append("diagram_renamed", { diagram: renamed.id, from: diagram.name, to: renamed.name });
+    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: renamed.id, action: "renamed" } });
+    return { diagram: renamed };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/** 删掉一张图（版本历史一起没，所以这一行审计要留：用户问「我那张图呢」时要答得出它叫什么、存了几版）。 */
+app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const database = repository.handle.pin();
+  try {
+    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
+    if (!diagram) return diagramNotFound(reply);
+    deleteDiagram(database, diagram);
+    new Journal(repository.path, repository.index.repositoryId).append("diagram_deleted", { diagram: diagram.id, name: diagram.name, versions: diagram.versions.length });
+    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "deleted" } });
+    return { deleted: true, diagramId: diagram.id };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/**
+  几何落盘：**只有位置**，不存版本、不写审计、不广播。
+  认不出来的节点 id 会被 `saveGeometry` 一个个跳过（图上没有的东西不该因为一次陈旧拖拽被造出来），
+  所以这里不为「有几个 id 没落上」而拒——用户拖的是他眼前那张画布，不是数据库的一致性检查。
+*/
+app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const raw = request.body?.positions;
+  if (!Array.isArray(raw)) return reply.code(400).send({ error: "positions 要是一个数组：[{ id, x, y }]，只给节点 id 与它的新位置" });
+  const positions = raw.flatMap((item): { id: string; x: number; y: number }[] => {
+    const entry = item as { id?: unknown; x?: unknown; y?: unknown };
+    return typeof entry?.id === "string" && typeof entry.x === "number" && typeof entry.y === "number" ? [{ id: entry.id, x: entry.x, y: entry.y }] : [];
+  });
+  const database = repository.handle.pin();
+  try {
+    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
+    if (!diagram) return diagramNotFound(reply);
+    return { diagram: saveGeometry(database, diagram, positions) };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+
+/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `store/diagrams.ts` 的 `restoreVersion`）。 */
+app.post<{ Params: { repositoryId: string; diagramId: string }; Body: { index?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/restore", async (request, reply) => {
+  const repository = repositoryOr404(request.params.repositoryId);
+  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  const index = request.body?.index;
+  if (typeof index !== "number" || !Number.isInteger(index)) return reply.code(400).send({ error: "index 要是一个整数（版本清单的下标，0 起）" });
+  const database = repository.handle.pin();
+  try {
+    const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
+    if (!diagram) return diagramNotFound(reply);
+    const restored = restoreVersion(database, diagram, index);
+    if (!restored) return reply.code(400).send({ error: `这张图没有第 ${index} 版：现在一共 ${diagram.versions.length} 版（下标 0 起）`, reason: "version_missing" });
+    new Journal(repository.path, repository.index.repositoryId).append("diagram_restored", { diagram: restored.id, to: index, note: restored.versions[restored.versions.length - 1]?.note ?? "" });
+    broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: restored.id, action: "restored" } });
+    return { diagram: restored };
+  } finally {
+    repository.handle.unpin();
+  }
+});
+}
