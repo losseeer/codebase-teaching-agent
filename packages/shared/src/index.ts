@@ -1,19 +1,50 @@
-export type JobPhase = "queued" | "indexing" | "summarizing" | "building_course" | "completed" | "failed";
+import type {
+  ChatScope,
+  ChatThread,
+  ChatThreadMessage,
+  CostBucket,
+  CostComponent,
+  CostDay,
+  CostSummary,
+  ImportJob,
+  JobPhase,
+  RepositoryCatalogEntry,
+  RepositoryFreshness,
+  RepositoryFreshnessVerdict,
+  RepositoryMountReason,
+  ScopedStreamFrame,
+  ScopedStreamProgress,
+  ServerEvent,
+  TeachingProgress,
+  TurnScene
+} from "./contracts.js";
 
-export interface ImportJob {
-  id: string;
-  repositoryPath: string;
-  repositoryId?: string;
-  phase: JobPhase;
-  progress: number;
-  message: string;
-  createdAt: string;
-  completedAt?: string;
-  error?: string;
-  /** 导入时选择的摘要口径：true=「参考注释导入」（slice-v2c 档），false=普通导入；undefined=不改该仓既有设置。
-      导入开始时会把显式值写进该仓 settings（读-合并-写），之后成本监控页的开关继续作为唯一事实源。 */
-  summaryHeaderComments?: boolean;
-}
+export type {
+  ChatScope,
+  ChatThread,
+  ChatThreadMessage,
+  CostBucket,
+  CostComponent,
+  CostDay,
+  CostSummary,
+  ImportJob,
+  JobPhase,
+  RepositoryCatalogEntry,
+  RepositoryFreshness,
+  RepositoryFreshnessVerdict,
+  RepositoryMountReason,
+  ScopedStreamFrame,
+  ScopedStreamProgress,
+  ServerEvent,
+  TeachingProgress,
+  TurnScene
+} from "./contracts.js";
+export { checkContract, ContractViolation, scopedStreamProgressSchema, serverEventSchema, importJobSchema, repositoryCatalogEntrySchema, costSummarySchema, chatThreadSchema, chatThreadMessageSchema } from "./contracts.js";
+
+/**
+  共享契约的总出口。**跨进程流动的形状一律住在 `contracts.ts`（zod schema 反推类型）**，
+  这里留的是引擎内部的领域模型（课程树、图、切片、练习……）与它们的辅助函数。
+*/
 
 export interface FileEntry {
   path: string;
@@ -563,29 +594,6 @@ export interface TutorSession {
   与 journal 的 `turn_text.scene`（teach / map_chat / practice_chat）是两套口径——前者是产品域的会话归属，
   后者是审计线的事件标签，不强行统一。
   */
-export type ChatScope = "teach" | "map" | "practice";
-
-/** 一个对话线程的头（正文在 chat_message；软删只体现在 `deletedAt`，列表读侧过滤）。 */
-export interface ChatThread {
-  id: string;
-  repositoryId: string;
-  scope: ChatScope;
-  courseNodeId?: string;
-  exerciseId?: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** 线程里的一条消息：`error` 非空表示这轮失败（失败也入库，GUI 才能重现「当时报错」的气泡）。 */
-export interface ChatThreadMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt: string;
-  error?: string;
-}
-
 export interface SymbolInfo {
   id: string;
   name: string;
@@ -1004,62 +1012,6 @@ export interface SeamReport {
   inbound: SeamDirection;
 }
 
-/**
-  挂载在引擎内存里的仓库的新鲜度判定（**只报告，不触发任何重分析**）：
-  - `contentChanged` = 磁盘内容与产物记录的 `versionStamp` 不一致（真的过期了）；
-  - `changedFiles` = 与落库 `contentHash` 不一致的文件数（告诉用户「改动集中在哪几处」，比只说「脏了」有用）；
-  - HEAD 变了但内容哈希没变（切分支回到同一份内容、或提交移动但工作树相同）判 `drifted`——产物仍可用，只是要知道分析点在别的提交上；
-  - 老仓库没记 HEAD 时判 `unknown`，界面明说「只比对了文件内容」。
-  */
-export type RepositoryFreshnessVerdict = "fresh" | "drifted" | "stale" | "unknown";
-
-export interface RepositoryFreshness {
-  verdict: RepositoryFreshnessVerdict;
-  /** 产物生成时间（`analysis.generatedAt`），界面据此说「这是几天前的分析」 */
-  analyzedAt: string;
-  versionStamp: string;
-  contentChanged: boolean;
-  changedFiles: number;
-  headAtAnalysis?: string;
-  headNow?: string;
-}
-
-/** 地址簿里的一条（引擎**不读产物**就能列出；`mounted` 才带新鲜度）。 */
-export interface RepositoryCatalogEntry {
-  repositoryId: string;
-  repositoryPath: string;
-  /** 目录名，界面显示用 */
-  name: string;
-  mounted: boolean;
-  /** 目录还在吗（不存在时保留条目并如实标注，由用户决定移除） */
-  exists: boolean;
-  /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测，默认 */
-  artifactsReady?: boolean;
-  freshness?: RepositoryFreshness;
-  /**
-    增量监听此刻活着吗（只挂着的仓有值）。false = 这个仓**不会**自动跟上磁盘改动，
-    上面那份 `freshness` 只到挂载那一刻为止——不报这条，界面就会一直拿一次旧判定说「产物是新的」。
-    */
-  watching?: boolean;
-  /** 监听起不来或中途死掉的报错原文，配合 `watching: false` 看 */
-  watchError?: string;
-  /**
-    监听是不是**被人为挂起**的（编辑期免打扰，`POST /api/repositories/:id/watch`）。
-    这个节点必须与 `watching: false` 分开：同为「不会自动跟上磁盘」，
-    但一个是引擎坏了要修，另一个是用户按下的、到点会自己恢复的开关。
-    */
-  watchPaused?: boolean;
-  /** 挂起到什么时候（ISO 串）；到点自动恢复并重算一次新鲜度 */
-  watchPausedUntil?: string;
-  /**
-    预算闸门此刻是否失效（只在失效时有值）。挂在地址簿而不是等用户进了仓才在成本页说：
-    单价没配 ⇒ 闸门判不出超支 ⇒ 下一次导入就是在无上限花钱，这句话必须出现在花钱**之前**那页。
-    */
-  budgetGateNotice?: string;
-}
-
-/** 懒挂载失败的原因：GUI 要靠它分清「清掉工作区」还是「留着让用户处置」。 */
-export type RepositoryMountReason = "not_in_catalog" | "directory_missing" | "artifacts_incomplete";
 
 /** 流程环节的性质；界面据此给不同的徽标（判断/回环与普通环节的读法不同）。 */
 export type FlowStageKind = "entry" | "stage" | "decision" | "loop" | "exit";
@@ -1143,59 +1095,6 @@ export interface RepositoryFlowResult {
   reason?: string;
 }
 
-/** 一个计费档位：输入拆「未命中 / 缓存命中」两档价，输出单独一档。 */
-export interface CostComponent {
-  label: "未命中输入" | "命中输入（缓存）" | "输出";
-  tokens: number;
-  ratePerMillionUsd: number;
-  /** true = 命中价没单独配置，按输入价计（不打折的理由见 engine `cost/cost.ts` 的 `Pricing` 注释，不在此复述） */
-  rateFallback: boolean;
-  estimatedCostUsd: number;
-}
-
-/** 成本聚合的一个分桶（按场景或按 provider），一条 `token_usage` 记一个回合。 */
-export interface CostBucket {
-  label: string;
-  turns: number;
-  inputTokens: number;
-  outputTokens: number;
-}
-
-/** 按自然日（本地时区无关，取 journal `at` 的前 10 位）聚合的用量，画近期条形用。 */
-export interface CostDay {
-  date: string;
-  inputTokens: number;
-  outputTokens: number;
-}
-
-export interface CostSummary {
-  sessionId?: string;
-  /** 输入总用量（含命中那部分，与 provider 的 prompt_tokens 同口径） */
-  inputTokens: number;
-  /** 按未命中价计费的那部分输入 = inputTokens − cacheHitTokens（逐条相减后求和，不为负） */
-  billedInputTokens: number;
-  /** 命中前缀缓存、按命中价计费的那部分输入；provider 没上报时为 0 */
-  cacheHitTokens: number;
-  outputTokens: number;
-  estimatedCostUsd: number;
-  monthlyBudgetUsd: number;
-  remainingBudgetUsd: number;
-  mode: "normal" | "degraded";
-  /** 本月计入的回合数 */
-  turns: number;
-  /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
-  costComponents: CostComponent[];
-  /**
-    ⚠️ false = 三档单价全未配置 ⇒ 金额恒 0、`mode` 恒为 "normal"——预算闸门根本没在管事，不是「没超预算」。
-    界面必须把这个节点说成「预算闸门未生效」，不能只报 ¥0.0000。判据与完整因果链在 engine `cost/cost.ts`（`pricingIsConfigured`）。
-    */
-  pricingConfigured: boolean;
-  /** 因预算已达上限而走本地规则（不付 token）的回合数 */
-  degradedTurns: number;
-  byScene: CostBucket[];
-  byProvider: CostBucket[];
-  byDay: CostDay[];
-}
 
 /**
   题型五档（2026-10-14 练习域沙箱改造）：
@@ -1585,45 +1484,3 @@ export interface EngineTraceEvent {
   detail: Record<string, TraceScalar>;
 }
 
-/**
-  回合场景名：三条作用域对话流共用，与 journal 的 `scene`、引擎回合登记表同一套词。
-  原来这个联合类型只活在引擎的 `turns/registry.ts` 里，界面想按它判就得复制一份字面量。
-  */
-export type TurnScene = "teach" | "map_chat" | "practice_chat";
-
-/** 教学回合的过程提示（`{stage}` 形状）：引擎 `harness` 发它，文案由界面定（引擎不关心中文措辞，界面不猜阶段语义）。 */
-export type TeachingProgress = { stage: "thinking"; round: number } | { stage: "reading"; path: string } | { stage: "searching"; query: string };
-
-/**
-  作用域对话流（三处 per-request SSE）的过程帧与正文帧词表。**这是引擎与界面之间的唯一词表**：
-  - 引擎要发新的一类帧，必须先加进这里（`server.ts` 的 `send` 按这份联合类型收，编不出没登记的帧）；
-  - 界面的映射带穷尽守卫（`never` 断言），漏接一类直接编译不过。
-
-  为什么值得为它单独建一张表：10-06 引擎发了 `thinking`，界面只认 `progress`，
-  于是宏观设计那侧「引擎在思考第三轮」而屏幕上一直挂着「回复生成中…」——**没有任何报错**。
-  这类失效不在返回值上、在过程帧上，靠返回值类型看不出来。
-
-  刻意不含 `done` 的成品载荷：三条流的 done 形状各不相同（teach 带 session/policy/cost，map 带 diagram），
-  那部分属于「响应体契约」，与运行时校验一起处理；这里只锁**帧的种类**。
-  */
-export type ScopedStreamProgress =
-  | { type: "thinking"; round: number }
-  | { type: "reading"; path: string }
-  | { type: "searching"; query: string }
-  | { type: "progress"; payload: TeachingProgress }
-  | { type: "delta"; delta: string };
-
-/** 一条流的完整帧词表：过程/正文 + 三条出口（done 载荷见上，暂为开放形状）。 */
-export type ScopedStreamFrame = ScopedStreamProgress | { type: "error"; error: string } | { type: "aborted"; scene: TurnScene } | { type: "done"; [key: string]: unknown };
-
-/** 全局事件流（GET /api/events，SSE）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——它们在各自请求的响应流里。 */
-export interface ServerEvent {
-  /**
-    `repository.updated`：产物或覆盖层变了，界面该重取的那个节点（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
-    `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
-    `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复），payload = `diagramId` + `action`。
-    界面据此重取图库与当前图——**几何拖动不广播**，那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
-  */
-  type: "import.progress" | "repository.updated" | "architecture_updated" | "diagram_updated";
-  payload: Record<string, unknown>;
-}

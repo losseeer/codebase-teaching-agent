@@ -15,7 +15,7 @@
   "scripts": {
     "dev": "concurrently -n engine,gui -c cyan,magenta \"pnpm --filter @codebase-tutor/engine dev\" \"pnpm --filter @codebase-tutor/gui dev\"",
     "build": "pnpm -r build",
-    "test": "pnpm --filter @codebase-tutor/engine test",
+    "test": "pnpm -r test",
     "test:watch": "pnpm --filter @codebase-tutor/engine test:watch",
     "lint": "pnpm -r lint",
     "test:e2e": "playwright test",

@@ -1,4 +1,5 @@
-import type { Diagram, DiagramSummary, RepositoryOverlays,  ChatScope, ChatThread, ChatThreadMessage, CostSummary, CourseNodeDetail, CourseTree, Exercise, ExerciseAnswer, ExerciseKind, ExerciseResult, FadedState, FlowStage, ImportJob, LearnerProfile, PracticeSummary, RepositoryAnalysis, RepositoryCatalogEntry, RepositoryFreshness, RepositoryIndex, RepositoryMountReason, ScopedStreamProgress, ServerEvent, SuggestedEntry, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import { z, type ZodType } from "zod";
+import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type RepositoryOverlays, type ChatScope, type CostSummary, type CourseNodeDetail, type CourseTree, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type FlowStage, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryAnalysis, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type SuggestedEntry, type TutorSession, type TutorSettings } from "@codebase-tutor/shared";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -23,9 +24,17 @@ export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tuto
 export type { ScopedStreamProgress } from "@codebase-tutor/shared";
 
 /**
-  一帧原始 JSON → 词表里的过程帧：逐字段夹一下形状（缺字段给兜底值），并**穷尽**这张表——
-  shared 里新增一类而这里没接，`default` 上的 `never` 断言就编译不过。
-  字段级校验不在这一刀（那是运行时契约的事），这里锁的是「种类不会漏接」。
+  一帧原始 JSON → 词表里的过程帧：先过 shared 的契约（种类与形状都在那里定），再逐字段兜一下形状。
+  导出是为了这条边界能被单独测。以前帧的种类只活在 GUI 自造的字面量联合里，
+  引擎加一类帧时界面不会编译失败，只会「屏幕永远停在『回复生成中…』且没有任何报错」（10-06 实测）。
+  */
+export function parseScopedStreamFrame(raw: unknown): ScopedStreamProgress {
+  return toScopedEvent(checkContract(scopedStreamProgressSchema, raw, "stream.progress"));
+}
+
+/**
+  契约过了之后的一份窄化：种类已由上面的 schema 锁死，这里只剩「缺字段给兜底值」，
+  并**穷尽**这张表——shared 里新增一类而这里没接，`default` 上的 `never` 断言就编译不过。
 */
 function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
   switch (event.type) {
@@ -70,7 +79,9 @@ async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: 
     }
     // 中止帧这里不做事：点「停止」那一侧本来就知道自己停了，本地收尾比等一帧可靠（引擎发这一帧是给自己记账的）
     if (event.type === "aborted") return;
-    onEvent(toScopedEvent(event as unknown as ScopedStreamProgress));
+    // 过程帧逐帧过契约：形状不符当场抛。以前是「引擎那一帧缺个 path」就一路挂着「正在读取…」，
+    // 而空字符串还会被 progressText 的兜底吃掉——连「读到的是空」这个读数都留不下。
+    onEvent(parseScopedStreamFrame(event));
   };
   for (;;) {
     const { done, value } = await reader.read();
@@ -166,12 +177,30 @@ export class ApiError extends Error {
 
 export const isNotFound = (error: unknown): boolean => error instanceof ApiError && error.status === 404;
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestRaw(path: string, init?: RequestInit): Promise<unknown> {
   // 只有带 body 的请求才声明 JSON Content-Type：Fastify 见到「application/json + 空 body」会 400 拒掉，无体的 DELETE 就是这么被打回的。
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
-  const body = await response.json() as T & { error?: string; reason?: RepositoryMountReason };
+  const body = await response.json() as { error?: string; reason?: RepositoryMountReason };
   if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
   return body;
+}
+
+/**
+  没套契约的端点走这条：仍是编译期声明 + 一次 `as`。
+  这是**在册的债**——热路径（地址簿、导入任务、成本、会话线程、两条事件流）已经改走 `checked()`，
+  剩下的按访问量继续补；一条都不许当成终态。
+  */
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await requestRaw(path, init)) as T;
+}
+
+/**
+  边界上真校验的一条路：引擎给的东西不符契约就抛 `ContractViolation`（带格名），
+  而不是让 `undefined` 一路画上屏、界面停在半个状态也不报错。
+  `name` 用节点名（`catalog` / `import` / `cost`…），报出来就读得出是哪个端点变了形状。
+  */
+async function checked<T>(name: string, schema: ZodType<T>, path: string, init?: RequestInit): Promise<T> {
+  return checkContract(schema, await requestRaw(path, init), name);
 }
 
 /**
@@ -205,9 +234,9 @@ export const api = {
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
-  getImport: (jobId: string) => request<ImportJob>(`/api/imports/${jobId}`),
+  getImport: (jobId: string) => checked<ImportJob>("import", importJobSchema, `/api/imports/${jobId}`),
   /** 引擎的地址簿（用户导过的仓）：只列不读产物，所以打开切换器很便宜。 */
-  listRepositories: () => request<{ repositories: RepositoryCatalogEntry[] }>("/api/repositories"),
+  listRepositories: () => checked("repositories", z.object({ repositories: z.array(repositoryCatalogEntrySchema) }), "/api/repositories"),
   /** 显式挂载一个仓库并拿到新鲜度判定；不在地址簿/目录没了/产物不全都按 reason 抛错。 */
   mountRepository: (repositoryId: string) => request<{ repositoryId: string; repositoryPath: string; freshness: RepositoryFreshness }>(`/api/repositories/${repositoryId}/mount`, { method: "POST" }),
   /** 把仓库移出地址簿（只动引擎的登记，不碰仓库里的 .tutor/）。 */
@@ -246,8 +275,8 @@ export const api = {
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   /** 代码题的按需讲评：判完之后点一次才发这一趟（默认不花钱，见 engine `exercises/explain`）。 */
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
-  getCost: (repositoryId: string, sessionId?: string) => request<CostSummary>(`/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
-  setBudget: (repositoryId: string, monthlyBudgetUsd: number) => request<CostSummary>(`/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
+  getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
+  setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
   createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
   /** 按 id 取教学会话：内存未命中时引擎从 chat_session（含状态快照）+ chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
@@ -255,11 +284,11 @@ export const api = {
     会话线程（产品线真源在引擎的 chat_session / chat_message）：三作用域各一份独立列表。
     删除是软删——列表与正文从此看不见，行仍在库里；journal 另记一条 session_deleted。
     */
-  listThreads: (repositoryId: string, scope: ChatScope) => request<{ threads: ChatThread[] }>(`/api/repositories/${repositoryId}/threads?scope=${scope}`),
-  createThread: (repositoryId: string, payload: { scope: ChatScope; nodeId?: string; exerciseId?: string; title?: string }) => request<{ thread: ChatThread }>(`/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
-  getThreadMessages: (threadId: string) => request<{ thread: ChatThread; messages: ChatThreadMessage[] }>(`/api/threads/${encodeURIComponent(threadId)}/messages`),
-  renameThread: (threadId: string, title: string) => request<{ thread: ChatThread }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
-  deleteThread: (threadId: string) => request<{ deleted: boolean; threadId: string }>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
+  listThreads: (repositoryId: string, scope: ChatScope) => checked("threads", z.object({ threads: z.array(chatThreadSchema) }), `/api/repositories/${repositoryId}/threads?scope=${scope}`),
+  createThread: (repositoryId: string, payload: { scope: ChatScope; nodeId?: string; exerciseId?: string; title?: string }) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
+  getThreadMessages: (threadId: string) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages`),
+  renameThread: (threadId: string, title: string) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteThread: (threadId: string) => checked("threadDelete", z.object({ deleted: z.boolean(), threadId: z.string() }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** 教学回合流式版：SSE 逐事件回调过程提示（progress）与正文增量（delta），resolve 于 done（session/message/cost/provider）。会话或节点失效仍是普通 JSON。 */
   sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(
@@ -341,9 +370,11 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
             const line = frame.split("\n").find((entry) => entry.startsWith("data: "));
             if (line) {
               try {
-                onEvent(JSON.parse(line.slice(6)) as ServerEvent);
-              } catch {
-                /* 畸形帧跳过：一条坏帧不该断掉整条流 */
+                // 契约不符会走下面这条 catch：一条坏帧不该断掉整条流，但也不能当没看见——
+                // 「畸形 JSON」与「引擎换了形状」在这里都喊出来，只是不杀连接。
+                onEvent(checkContract(serverEventSchema, JSON.parse(line.slice(6)), "events"));
+              } catch (error) {
+                console.error("[gui] 事件流有一帧不符契约，已跳过：", error instanceof Error ? error.message : error);
               }
             }
             boundary = buffer.indexOf("\n\n");

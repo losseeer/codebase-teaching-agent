@@ -1,0 +1,60 @@
+import { describe, expect, it } from "vitest";
+import { ContractViolation } from "@codebase-tutor/shared";
+import { parseScopedStreamFrame } from "./client";
+import { progressText } from "../agent/useScopedChat";
+
+/**
+  引擎 ↔ 界面这条边界上的契约。这一组用例是「GUI 一条单测都没有」那笔债的第一块还款（架构复审 10-18 的第 3 条）：
+  以前约 40 个端点共用一次 `as T` 硬转、导入进度甚至 `as unknown as ImportJob`，
+  引擎改个字段名，界面拿到 `undefined` 照样画，既不报错也不留痕。
+  过程帧是这里最容易测准的一类（它是纯函数一进一出），也是历史上真出过事的一类（10-06 的 `thinking` 漏接）。
+  */
+describe("作用域对话流的过程帧契约", () => {
+  it("五类已登记的帧都能过，字段原样带出", () => {
+    expect(parseScopedStreamFrame({ type: "thinking", round: 3 })).toEqual({ type: "thinking", round: 3 });
+    expect(parseScopedStreamFrame({ type: "reading", path: "src/a.ts" })).toEqual({ type: "reading", path: "src/a.ts" });
+    expect(parseScopedStreamFrame({ type: "searching", query: "缓存" })).toEqual({ type: "searching", query: "缓存" });
+    expect(parseScopedStreamFrame({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toEqual({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } });
+    expect(parseScopedStreamFrame({ type: "delta", delta: "前半段" })).toEqual({ type: "delta", delta: "前半段" });
+  });
+
+  it("引擎多发一个没声明的字段：不炸，但不带进界面", () => {
+    // 向后兼容是刻意的：加字段不该让旧界面报错；而没声明的东西也不该被悄悄用上
+    expect(parseScopedStreamFrame({ type: "delta", delta: "x", extraFutureField: 1 })).toEqual({ type: "delta", delta: "x" });
+  });
+
+  it("缺了必填的格子：当场抛，并报出是哪一格的契约不符", () => {
+    expect(() => parseScopedStreamFrame({ type: "delta" })).toThrow(ContractViolation);
+    expect(() => parseScopedStreamFrame({ type: "reading" })).toThrow(/stream\.progress/);
+  });
+
+  it("没登记过的帧种类：抛，而不是让界面继续挂着上一行提示", () => {
+    // 10-06 的形状：引擎发了 GUI 不认识的一类帧，界面上「回复生成中…」永远不消失且零报错
+    expect(() => parseScopedStreamFrame({ type: "compacting", chars: 120 })).toThrow(/stream\.progress/);
+  });
+
+  it("`{stage}` 形状的进度载荷走 `progress` 那一类，不裸发", () => {
+    expect(() => parseScopedStreamFrame({ stage: "thinking", round: 1 })).toThrow(ContractViolation);
+  });
+});
+
+describe("过程帧的界面文案", () => {
+  it("thinking 第一轮不带轮次，之后带", () => {
+    expect(progressText({ type: "thinking", round: 1 })).toBe("正在思考…");
+    expect(progressText({ type: "thinking", round: 4 })).toBe("正在思考（第 4 轮）…");
+  });
+
+  it("reading / searching 缺字段时给通用兜底，不显示空白", () => {
+    expect(progressText({ type: "reading", path: "src/a.ts" })).toBe("正在读取 src/a.ts …");
+    expect(progressText({ type: "searching", query: "" })).toBe("正在检索代码：关键词 …");
+  });
+
+  it("教学那条流是 `progress` 包一层 payload：文案与裸帧同一条", () => {
+    expect(progressText({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toBe("正在读取 src/b.ts …");
+    expect(progressText({ stage: "thinking", round: 2 })).toBe("正在思考（第 2 轮）…");
+  });
+
+  it("整个帧缺席时给「回复生成中…」，不假装知道在哪一步", () => {
+    expect(progressText(undefined)).toBe("回复生成中…");
+  });
+});

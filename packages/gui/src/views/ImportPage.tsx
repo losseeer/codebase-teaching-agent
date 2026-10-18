@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import type { ImportJob, RepositoryCatalogEntry } from "@codebase-tutor/shared";
+import { checkContract, importJobSchema, type ImportJob, type RepositoryCatalogEntry } from "@codebase-tutor/shared";
 import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { Icon } from "../ui/icons";
@@ -57,8 +57,18 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     if (!jobActive || !jobId) return;
     const stop = subscribeServerEvents((event) => {
       if (event.type !== "import.progress") return;
-      const progress = event.payload as unknown as ImportJob;
-      if (progress.id === jobId) setJob(progress);
+      /**
+        以前这一行是 `event.payload as unknown as ImportJob`（双重硬转）：引擎换了进度字段，
+        界面会拿着 `undefined` 的 phase 继续画进度条，既不断也不报错。现在过一遍契约，
+        读不懂就在页面上说实话——这一帧是导入进度的唯一实时通道，静默等于骗人。
+        */
+      try {
+        const progress = checkContract(importJobSchema, event.payload, "import.progress");
+        if (progress.id === jobId) setJob(progress);
+      } catch (error) {
+        console.error("[gui] 导入进度帧不符契约", error);
+        setError("读不懂引擎发的导入进度（契约不符，细节在控制台）");
+      }
     });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),

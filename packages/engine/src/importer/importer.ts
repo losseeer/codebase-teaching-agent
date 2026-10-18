@@ -31,7 +31,7 @@ import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
-import { Journal, journalFootprint } from "../store/journal.js";
+import { journalFootprint } from "../store/journal.js";
 import { RepositoryHandle } from "../store/repository-handle.js";
 import { traceEngine } from "../trace/engine-log.js";
 
