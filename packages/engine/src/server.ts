@@ -8,7 +8,7 @@ import { tboot } from "./boot.js";
 import { importer } from "./services.js";
 import { broadcast } from "./events.js";
 import { budgetGateNotice } from "./cost/cost.js";
-import { id } from "./lib.js";
+import { id } from "./identity.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { reprobeIsolation } from "./sandbox/isolation.js";

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } 
 import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage, CourseTree, Diagram, DiagramBody, DiagramSummary, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
-import { repositoryId as deriveRepositoryId } from "./lib.js";
+import { repositoryId as deriveRepositoryId } from "./identity.js";
 import { defaultMonthlyBudgetUsd } from "./cost/cost.js";
 import { isolationBackend } from "./sandbox/profile.js";
 import { flushLlmLog } from "./llm/call-log.js";

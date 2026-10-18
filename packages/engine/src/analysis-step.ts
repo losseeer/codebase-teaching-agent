@@ -1,13 +1,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hash } from "./lib.js";
+import { hash } from "./identity.js";
 
 /**
   一个 LLM 分析步骤的「口径」= 缓存键里的版本号 + 喂给模型的固定文案。这两样在这份文件里绑成一个对象，
   存在的理由是一条已经记在多处注释里的失效路径：
 
-  缓存键里只有版本号、**没有提示词文本**（`lib.ts` 的 `layerCacheKey`，那是有意的取舍）。
+  缓存键里只有版本号、**没有提示词文本**（下面的 `layerCacheKey`，那是有意的取舍）。
   于是「改了文案、忘了翻版本号」时 payload 逐字不变 ⇒ 旧答案永久命中；而每次命中都会给闲置 TTL 续期
   （`flows/flow.ts` 的 `touchLayerCache`、`store/database.ts` 的 `putLayerCache` 修剪线），
   常用的仓连「放 7 天自然过期」这条兜底都拿不到。过去这条纪律只写在注释里靠人记得（见 `entry-suggest.ts`

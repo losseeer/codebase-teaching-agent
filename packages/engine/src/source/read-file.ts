@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { isWithin } from "../lib.js";
+import { isWithin } from "./files.js";
 import { maskSecrets } from "../security/secrets.js";
 import type { LlmTool } from "../llm/provider.js";
 

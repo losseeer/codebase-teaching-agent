@@ -1,5 +1,5 @@
 import type { CourseNode, FadedState, RepositoryAnalysis, TeachingProgress, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { id } from "../lib.js";
+import { id } from "../identity.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "../tutor-settings/tutor-settings.js";

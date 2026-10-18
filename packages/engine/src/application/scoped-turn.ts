@@ -9,7 +9,7 @@ import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop
 import { traceEngine } from "../trace/engine-log.js";
 import type { ScopedChatResult, ScopedChatTurn } from "../scopechat/scopechat.js";
 import type { LlmProvider } from "../llm/provider.js";
-import { turnTextPayload } from "../lib.js";
+import { turnTextPayload } from "../store/journal.js";
 import { screenNotice } from "../eval/scorers.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import { mcpCallPayload } from "./turn-audit.js";

@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { loadDotEnv } from "../config/dotenv.js";
-import { hash } from "../lib.js";
+import { hash } from "../identity.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { flowCacheKeyOf } from "../flows/flow.js";
 import { TutorDatabase } from "../store/database.js";

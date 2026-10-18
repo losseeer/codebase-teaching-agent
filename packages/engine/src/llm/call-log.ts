@@ -1,7 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { hash, logTargetFromEnv } from "../lib.js";
+import { hash } from "../identity.js";
+import { logTargetFromEnv } from "../trace/log-target.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
 import { currentThreadId, currentTraceId } from "../trace/context.js";
 

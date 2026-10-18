@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
-import { repositoryId as deriveRepositoryId } from "../lib.js";
+import { repositoryId as deriveRepositoryId } from "../identity.js";
 import { TutorDatabase } from "../store/database.js";
 import { ImportService, refinementIsFresh, type ImportedRepository } from "./importer.js";
 

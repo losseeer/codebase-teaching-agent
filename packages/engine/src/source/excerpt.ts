@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isWithin } from "../lib.js";
+import { isWithin } from "./files.js";
 import { secretMasker } from "../security/secrets.js";
 
 /**

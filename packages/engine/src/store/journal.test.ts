@@ -2,8 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Journal, isEngineOwnedEventType, isUiJournalEventType, journalFootprint, readJournal } from "./journal.js";
-import { turnTextPayload, TURN_TEXT_LIMIT } from "../lib.js";
+import { Journal, isEngineOwnedEventType, isUiJournalEventType, journalFootprint, readJournal, turnTextPayload, TURN_TEXT_LIMIT } from "./journal.js";
 import { runWithTrace } from "../trace/context.js";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/shared";
 

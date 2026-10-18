@@ -1,6 +1,6 @@
 import type { AssertionCheck, CourseNode, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
 import { flattenCourseTree } from "../coursetree/projection.js";
-import { readFileLines, symbolBodyLines } from "../lib.js";
+import { readFileLines, symbolBodyLines } from "../source/files.js";
 
 /** 校验时每个文件只读一次：几百个符号常挤在同几十个大文件里，一人一次 `readFileSync` 是纯浪费。 */
 type LineCache = Map<string, string[] | undefined>;

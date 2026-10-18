@@ -5,7 +5,7 @@ import { courseChildren, courseOverview, findCourseNode, flattenCourseTree } fro
 import { graphFromData, impactRadius } from "../../depgraph/graph.js";
 import { languageProfileOf } from "../../depgraph/language-profile.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
-import { isWithin } from "../../lib.js";
+import { isWithin } from "../../source/files.js";
 import { exercises, repositoryOr404 } from "../../services.js";
 import { pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../store/journal.js";

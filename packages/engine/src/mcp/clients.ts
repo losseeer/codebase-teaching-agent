@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { LlmTool } from "../llm/provider.js";
-import { hash } from "../lib.js";
+import { hash } from "../identity.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**

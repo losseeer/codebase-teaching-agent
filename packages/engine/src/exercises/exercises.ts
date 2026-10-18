@@ -3,7 +3,7 @@ import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLa
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
-import { hash } from "../lib.js";
+import { hash } from "../identity.js";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";

@@ -1,6 +1,6 @@
 import type { EmbeddingProvider } from "../llm/embeddings.js";
 import type { TutorDatabase } from "../store/database.js";
-import { hash } from "../lib.js";
+import { hash } from "../identity.js";
 
 /**
   文件级 / 函数级向量索引：建什么文本、什么时候需要重嵌、怎么算相似、怎么和词法结果融合。

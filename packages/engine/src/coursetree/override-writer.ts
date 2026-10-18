@@ -1,7 +1,7 @@
 import type { ArchitectureBlockBrief, ArchitectureOverrideIntent, CourseTree, RepositoryOverlays } from "@codebase-tutor/shared";
 import { clearOverlays, overlayCounts, patchOverlays, readOverlays, removeOverlayKeys } from "../store/overlays.js";
 import type { TutorDatabase } from "../store/database.js";
-import { id } from "../lib.js";
+import { id } from "../identity.js";
 
 /**
   人工修正的**唯一落地处**。GUI 的拖动与 Agent 的 `set_architecture` 工具都走到这里，

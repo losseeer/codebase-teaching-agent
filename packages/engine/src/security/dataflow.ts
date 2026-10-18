@@ -1,4 +1,4 @@
-import { hash, repositoryId as deriveRepositoryId } from "../lib.js";
+import { hash, repositoryId as deriveRepositoryId } from "../identity.js";
 import { Journal } from "../store/journal.js";
 
 /**

@@ -1,5 +1,4 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
@@ -23,7 +22,7 @@ import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } fro
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
-import { catalogRepositoryId, hash, id } from "../lib.js";
+import { catalogRepositoryId, hash, id } from "../identity.js";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../lsp/enrich.js";

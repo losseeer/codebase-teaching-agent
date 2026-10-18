@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { JournalEvent } from "@codebase-tutor/shared";
-import { repositoryId } from "../lib.js";
+import { repositoryId } from "../identity.js";
 import { readJournal } from "../store/journal.js";
 import { runWithTrace } from "../trace/context.js";
 import { recordEgress, type EgressSource } from "./dataflow.js";

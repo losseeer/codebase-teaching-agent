@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/shared";
-import { logTargetFromEnv } from "../lib.js";
+import { logTargetFromEnv } from "./log-target.js";
 import { currentTraceId } from "./context.js";
 
 /**

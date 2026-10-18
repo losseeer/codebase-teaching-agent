@@ -19,7 +19,7 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/share
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
-import { readFileLines, symbolBodyLines } from "../lib.js";
+import { readFileLines, symbolBodyLines } from "../source/files.js";
 import { recordEgress } from "../security/dataflow.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";

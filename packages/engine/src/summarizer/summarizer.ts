@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
-import { hash } from "../lib.js";
+import { hash } from "../identity.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";

@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync,
 import { join } from "node:path";
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/shared";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
-import { id } from "../lib.js";
+import { id } from "../identity.js";
 import { currentTraceId } from "../trace/context.js";
 
 /**
@@ -54,6 +54,29 @@ export class Journal {
     appendFileSync(this.file, `${JSON.stringify(event)}\n`, "utf8");
     return event;
   }
+}
+
+/**
+  回合文本单边落盘上限：与 `POST .../journal` 那条 HTTP 出口的 payload 字符串校验同口径（2000 字符）。
+  两处数字必须一起改，所以它住在 journal 旁边而不是某个通用工具模块里。
+ */
+export const TURN_TEXT_LIMIT = 2_000;
+
+/**
+  `turn_text` 事件的 payload 构造（2026-09-22 拍板口径）：三种对话（teach / map_chat / practice_chat）的
+  问题+回复双边原文进 journal，各截 2000 字；截断必须留痕（`*_truncated`）——丢了字要能看出来，
+  与「回复达到预算上限明示」同一先例。
+  */
+export function turnTextPayload(scene: "teach" | "map_chat" | "practice_chat", question: string, answer: string): Record<string, string | number | boolean> {
+  const q = question.slice(0, TURN_TEXT_LIMIT);
+  const a = answer.slice(0, TURN_TEXT_LIMIT);
+  return {
+    scene,
+    question: q,
+    question_truncated: question.length > q.length,
+    answer: a,
+    answer_truncated: answer.length > a.length
+  };
 }
 
 /**
