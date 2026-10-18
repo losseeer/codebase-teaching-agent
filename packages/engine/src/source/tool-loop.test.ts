@@ -6,7 +6,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { LlmAbortedError } from "../llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { completeWithReadTool } from "./tool-loop.js";
+import { completeWithReadTool, toolLoopAuditsOf } from "./tool-loop.js";
 
 /** repoPath 指向本目录：目录内 read-file.ts 是稳定存在的真实文件 */
 const repoPath = import.meta.dirname;
@@ -126,6 +126,76 @@ describe("completeWithReadTool 的中止", () => {
     await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal }))
       .rejects.toBeInstanceOf(LlmAbortedError);
     expect(calls).toHaveLength(1);
+  });
+
+  /**
+    拦的事故：回合按作废收尾时把「这一轮真做过什么」连同异常一起丢掉，journal 于是留下一行
+    「什么都没读、什么都没打」的**假账**——钱确实花了、外部内容确确实实出过门（§77 第 6 条）。
+    这里测的是异常携带那半条；返回值携带那半条（中止晚于最后一趟 LLM）由路由级用例守。
+    */
+  it("最后一趟 LLM 在途被中止：异常上带着本轮已发生的读文件、技能与外部调用", async () => {
+    const externalTool = { name: "mcp__docs__lookup", description: "【外部 docs】查一份文档", parameters: { type: "object" as const, properties: {} } };
+    const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 6, masked: 0, ok: true, ms: 1 };
+    let n = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:v1",
+      complete: async () => {
+        n += 1;
+        if (n === 1) {
+          return {
+            text: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              { id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) },
+              { id: "s1", name: "read_skill", argumentsJson: JSON.stringify({ name: "tutor-cost-audit" }) },
+              { id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }
+            ]
+          };
+        }
+        throw new LlmAbortedError();
+      }
+    };
+    const error = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
+      skills: { brief: "可用技能：\n- tutor-cost-audit：对账", bodyOf: (name) => (name === "tutor-cost-audit" ? "第一步：看 llm.log。" : undefined) },
+      external: { tools: [externalTool], call: async () => ({ text: "外部正文。", audit }) }
+    }).then(() => undefined, (caught: unknown) => caught);
+    expect(error, "中止没上抛").toBeInstanceOf(LlmAbortedError);
+    expect(toolLoopAuditsOf(error)).toMatchObject({
+      rounds: 1,
+      fileReads: [expect.objectContaining({ path: "read-file.ts", denied: false })],
+      codeSearches: [],
+      skillReads: [{ skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true }],
+      mcpCalls: [audit]
+    });
+    // symbol 键：provider 与 GUI 看到的错误形状不能因为这份旁证而变（和一条裸的中止错误逐字同形）
+    expect(Object.keys(error as object)).toEqual(Object.keys(new LlmAbortedError()));
+    expect(JSON.stringify(error)).not.toContain("read-file.ts");
+  });
+
+  it("轮次之间被中止：本轮已经读过的照样带上（空数组只允许真的什么都没做）", async () => {
+    const controller = new AbortController();
+    let n = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:v1",
+      complete: async () => {
+        n += 1;
+        // 第一趟读一个能读的、撞一个护栏；第二趟回来时用户已经点了停止
+        if (n === 1) {
+          return { text: "", finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: ".env" }) }] };
+        }
+        controller.abort();
+        return { text: "", finishReason: "tool_calls", toolCalls: [{ id: "c3", name: "read_file", argumentsJson: JSON.stringify({ path: "tool-loop.ts" }) }] };
+      }
+    };
+    const error = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5, signal: controller.signal })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(LlmAbortedError);
+    expect(n, "中止后不该把第二趟的工具调用真执行掉").toBe(2);
+    // 被护栏拒读的那次也要留痕：它同样是「已经发生过」，只是没拿到内容
+    expect(toolLoopAuditsOf(error)?.fileReads.map((read) => `${read.path}:${read.denied ? "拒" : "读"}`)).toEqual(["read-file.ts:读", ".env:拒"]);
   });
 });
 

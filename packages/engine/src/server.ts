@@ -16,6 +16,9 @@ import { projectApprovedDraft, runArchitectureRedraft } from "./diagram/redraft.
 import { clearRedraft, commitPreview, readDiagram, requestRedraft, resetDiagram, storePreview } from "./store/diagram-artifacts.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "./coursetree/override-writer.js";
 import type { ArchitectureToolContext, ExternalToolContext, RedrawToolContext, SkillsToolContext } from "./source/tool-loop.js";
+import { toolLoopAuditsOf, type ToolLoopAudits } from "./source/tool-loop.js";
+import type { FileReadRecord } from "./source/read-file.js";
+import type { CodeSearchRecord } from "./source/search-code.js";
 import { impactRadius, graphFromData } from "./depgraph/graph.js";
 import { languageProfileOf } from "./depgraph/language-profile.js";
 import { formatSeamReport, seamReportFor } from "./depgraph/seams.js";
@@ -28,7 +31,7 @@ import { respondWithProvider, createSession } from "./harness/harness.js";
 import { assembleContext } from "./harness/context.js";
 import { ImportService } from "./importer/importer.js";
 import { indexRepository } from "./indexer/indexer.js";
-import { catalogRepositoryId, id, isWithin, turnTextPayload } from "./lib.js";
+import { id, isWithin, turnTextPayload } from "./lib.js";
 import { loadDotEnv } from "./config/dotenv.js";
 import { defaultTutorSettings, policyFor, validateSettings, validateStyle } from "./tutor-settings/tutor-settings.js";
 import { createSummaryProvider, LocalSummaryProvider } from "./summarizer/summary-provider.js";
@@ -297,6 +300,7 @@ function failScopedTurn(input: {
     input.send({ type: "error", error: input.error instanceof Error ? input.error.message : input.fallbackError });
     return;
   }
+  recordAbortedAudits({ repositoryPath: input.repositoryPath, repositoryId: input.repositoryId, scene: input.scene, ...(input.threadId ? { threadId: input.threadId } : {}), audits: toolLoopAuditsOf(input.error) });
   new Journal(input.repositoryPath, input.repositoryId).append("turn_aborted", { scene: input.scene, turn_id: input.turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, input.threadId);
   input.send({ type: "aborted", scene: input.scene });
 }
@@ -1272,6 +1276,33 @@ function recheckTurn(input: {
   map_chat 回合的统一收尾（非流式与流式两条路由共用这一份）：运行期复检（零 token）→ 线程正文落库 → 审计线。
   引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本。
 */
+/**
+  作废的回合也要把**已发生的事实**落账：读过的文件、搜过的查询、取过的技能、打过的外部工具。
+
+  两条路径都会走到这里：① 中止发生在工具循环中途（异常带着 `toolLoopAuditsOf` 上来）；
+  ② 中止晚于最后一趟 LLM —— 循环已经正常返回，结果却被判作废，数组就在返回值里。
+  两者都不落 `turn_text`、不落正文（那仍是"这一轮没有成品"），但**花掉的钱与出过门的内容不能当没发生**（§77 第 6 条）。
+*/
+function recordAbortedAudits(input: { repositoryPath: string; repositoryId: string; scene: TurnScene; threadId?: string; audits?: ToolLoopAudits }): void {
+  const audits = input.audits;
+  if (!audits || (!audits.fileReads.length && !audits.codeSearches.length && !audits.skillReads.length && !audits.mcpCalls.length)) return;
+  const journal = new Journal(input.repositoryPath, input.repositoryId);
+  for (const read of dedupeFileReads(audits.fileReads)) {
+    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, input.threadId);
+  }
+  for (const search of audits.codeSearches) {
+    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, input.threadId);
+  }
+  for (const call of audits.mcpCalls) journal.append("mcp_call", mcpCallPayload(call), input.threadId);
+  for (const skill of audits.skillReads) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, input.threadId);
+  journal.append("loop_round", { scene: input.scene, aborted: true, tool_rounds: audits.rounds, tool_reads: audits.fileReads.length, tool_searches: audits.codeSearches.length, tool_external: audits.mcpCalls.length, tool_skills: audits.skillReads.length }, input.threadId);
+}
+
+/** 回合返回值里那几组审计的形状（三作用域共用；practice 没有工具时都是空数组）。 */
+function auditsFromResult(result: { fileReads?: FileReadRecord[]; codeSearches?: CodeSearchRecord[]; skillReads?: { skill: string; chars: number; found: boolean }[]; mcpCalls?: McpCallAudit[]; toolRounds?: number }): ToolLoopAudits {
+  return { fileReads: result.fileReads ?? [], codeSearches: result.codeSearches ?? [], skillReads: result.skillReads ?? [], mcpCalls: result.mcpCalls ?? [], rounds: result.toolRounds ?? 0 };
+}
+
 function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
   const journal = new Journal(repository.path, repository.index.repositoryId);
   result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
@@ -1500,7 +1531,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
-    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
+    if (turnHandle.signal?.aborted) {
+      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", threadId: turn.threadId, audits: auditsFromResult(result) });
+      throw new LlmAbortedError();
+    }
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     replayTypewriter(send, result.reply);
@@ -1545,7 +1579,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
-    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
+    if (turnHandle.signal?.aborted) {
+      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
+      throw new LlmAbortedError();
+    }
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：练习答疑也运行时内——它同样会引用仓库里的代码位置
     result.reply = recheckTurn({ repository, journal, sessionId: thread?.id, scene: "practice_chat", question: content, answer: result.reply }).answer;
@@ -1826,7 +1863,10 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     // 中止可能赶在最后一趟 LLM 返回之后才到：那时没人抛错，这一轮会照常走到落库。
     // 用户点了停止就按「作废」收尾——不落库、不回放，否则 GUI 那句「这一轮没有落库」成了假话，
     // 下次进会话还会冒出一条自己中止的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
-    if (turnHandle.signal?.aborted) throw new LlmAbortedError();
+    if (turnHandle.signal?.aborted) {
+      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
+      throw new LlmAbortedError();
+    }
     teachingStates.set(outcome.session.id, outcome.session);
     const journal = new Journal(repository.path, repository.index.repositoryId);
     // 运行期复检（零 token）：撤掉阶梯后教学回合也只剩「引用能不能落地」这一条有对象（另两条吃 stage/问句），

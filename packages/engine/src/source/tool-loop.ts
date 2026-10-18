@@ -233,6 +233,33 @@ function readArg(argumentsJson: string, key: string): string {
   }
 }
 
+/**
+  回合被中止时随异常带走的「这一轮真做过什么」。
+
+  为什么挂在异常上而不是返回值：中止的回合**按作废收尾**（不落正文、不回放、不写 turn_text），
+  但读过的文件、搜过的查询、打过的外部工具是**已经发生的事实**——钱花了、内容出过门。
+  这些要是跟着抛出的异常一起被丢掉，journal 就会出现「这一轮什么都没干」的假账（§77 第 6 条）。
+  用 symbol 键，不污染错误对象的公开形状（provider 与 GUI 都不该看见它）。
+*/
+export interface ToolLoopAudits {
+  fileReads: FileReadRecord[];
+  codeSearches: CodeSearchRecord[];
+  skillReads: { skill: string; chars: number; found: boolean }[];
+  mcpCalls: McpCallAudit[];
+  rounds: number;
+}
+
+const auditsKey = Symbol("codebaseTutor.toolLoopAudits");
+
+export function toolLoopAuditsOf(error: unknown): ToolLoopAudits | undefined {
+  return error && typeof error === "object" ? (error as Record<symbol, unknown>)[auditsKey] as ToolLoopAudits | undefined : undefined;
+}
+
+function attachToolLoopAudits(error: unknown, audits: ToolLoopAudits): void {
+  if (!error || typeof error !== "object") return;
+  (error as Record<symbol, unknown>)[auditsKey] = audits;
+}
+
 export interface ReadToolLoopResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
@@ -264,6 +291,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let succeededReads = 0;
   let crossReads = 0;
   let externalCalls = 0;
+  const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds });
+  try {
   while (completion.toolCalls?.length) {
     // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
     if (input.signal?.aborted) throw new LlmAbortedError();
@@ -377,6 +406,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     usage = addUsage(usage, completion.usage);
   }
   return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls };
+  } catch (error) {
+    if (isLlmAborted(error)) attachToolLoopAudits(error, audits());
+    throw error;
+  }
 }
 
 /** 读取 read_skill 参数里的 name（仅用于审计与回话；解析失败按空名走，工具会回「没有这份技能」）。 */
