@@ -1,0 +1,13 @@
+/**
+  重写提示词指纹锁：`pnpm analysis:lock`。
+  只在「口径登记守卫」（`analysis-step.test.ts`）报红之后跑，跑之前先想清楚那条改动该不该让旧产物作废——
+  翻 `contractVersion` 是一次真金白银的重烧（一条流程 ≈¥0.17、全仓摘要 ≈¥0.06）。
+
+  这份脚本不做判断，只做记录；判断留在测试报错的那两句话里。
+*/
+import { writeLockedFingerprints, ANALYSIS_STEP_LOCK_FILE } from "../analysis-step.js";
+import { loadedAnalysisStepCount } from "../analysis-steps.js";
+
+const registered = loadedAnalysisStepCount();
+const written = writeLockedFingerprints();
+console.log(`已写入 ${ANALYSIS_STEP_LOCK_FILE}：${written} 个步骤（代码里登记了 ${registered} 个）`);

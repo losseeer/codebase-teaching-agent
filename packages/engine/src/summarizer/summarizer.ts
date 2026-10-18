@@ -8,7 +8,7 @@ import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "./slice.js";
 import { recordEgress } from "../security/dataflow.js";
-import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
+import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMARY_STEP, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**
   文件级摘要表（L1）：每文件一行「职责摘要 + 架构角色 + 覆盖率标记」，落 SQLite。
@@ -22,14 +22,6 @@ import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider, type Su
     切片变了（文件改了、符号抽取规则改了、依赖变了）缓存即失效，不必再单独追踪文件内容。
   - 摘要档改成**批量**调用：先算缓存缺失的，再按 `SUMMARY_BATCH_SIZE` 分批，一条没结果就那一条回落。
 */
-
-/** 缓存键里带上输入口径版本：切片或角色规则的语义变了，旧缓存必须失效。
-    `slice-v2`（2026-09-22）：摘要提示词新增「至少点出一个真实英文标识符」+「带学习者会说的中文概念词」
-    两条要求——旧产出按新口径不合格，且这两条正是检索消融（phaseB:eval 三臂）的处理变量，全仓重烧一次。
-    后缀 `c`（slice-v2c）：该仓打开了「摘要参考注释」开关（每仓设置，默认关）。开关同时切换提示词
-    （多一行 headerComment 用法说明）与切片字段，故键前缀必须分流——**不 bump 全局版本**：
-    关着的仓输入逐字节不变，今天烧好的 slice-v2 行继续命中。 */
-const SUMMARY_INPUT_VERSION = "slice-v2";
 
 /**
   覆盖率只查切片里最靠前的这几条——它们是最该被摘要提及的。
@@ -75,9 +67,12 @@ type StoredSummary = Omit<FileSummary, "cached">;
   L1 的键形状与 `layerCacheKey` 同构（口径版本 + 模型版本 + 本层实际输入），但**不换成**那个函数：
   一是这张表按仓库分库（`TutorDatabase(repositoryPath)`），键里再放 repositoryId 是纯冗余；
   二是换构造会让存量行整体失配，等于替每个用户重烧一遍全仓摘要——收益为零。
+  版本号仍然登记成分析步骤（`SUMMARY_STEP` / `SUMMARY_COMMENTS_STEP`，见 `summary-provider.ts`）：
+  键的形状可以特例，提示词文案的指纹守卫不能有特例（见 `analysis-step.ts`）。
  */
 function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: boolean): string {
-  return hash(`${withHeaderComments ? "slice-v2c" : SUMMARY_INPUT_VERSION}:${modelVersion}:${JSON.stringify(slice)}`);
+  const contractVersion = (withHeaderComments ? SUMMARY_COMMENTS_STEP : SUMMARY_STEP).contractVersion;
+  return hash(`${contractVersion}:${modelVersion}:${JSON.stringify(slice)}`);
 }
 
 /** 导出仅为测试可写入「旧判据时代的存量行」，验证缓存命中路径的就地重算。 */
@@ -142,7 +137,7 @@ export async function summarizeFiles(input: {
     if (cached) {
       cachedFiles += 1;
       // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对，零 token，
-      // 也不属于 LLM 的输入口径——所以不需要 bump SUMMARY_INPUT_VERSION 让全仓重烧摘要。
+      // 也不属于 LLM 的输入口径——所以不需要翻 L1 的口径版本让全仓重烧摘要。
       const coverage = coverageOf(slice, cached.summary);
       const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
       // 命中也回写（created_at 刷新）：下游语料取的是「每路径最新一行」，而双档键让开/关档各留一行——

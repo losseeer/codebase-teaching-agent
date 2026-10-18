@@ -6,7 +6,7 @@ import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import type { TutorDatabase } from "../store/database.js";
 import { applyRepositoryOverlays } from "../store/overlays.js";
 import { annotateModuleTiers } from "./projection.js";
-import { layerCacheKey } from "../lib.js";
+import { defineAnalysisStep } from "../analysis-step.js";
 
 /**
   架构视图的分层产物（每仓一次，可缓存）。
@@ -36,12 +36,31 @@ const MERGE_MAX_MEMBERS = 4;
 const MERGE_MIN_PARENT_DEPTH = 2;
 
 /**
-  这一层输入的口径版本：提示词、层数约束或 payload 形状变了就翻它（同 `ENTRY_INPUT_VERSION` 的纪律）。
+  判层这一步发给模型的固定文案。定名口径（2026-10-16 改）：原先这里写着「别写成应用层/领域层这种模板话」，
+  与上一句「典型形态：接入 / 编排 / 核心能力 / 数据访问」自相矛盾——先递梯子再踩一脚。而且它管不到任何硬事实
+  （节点必须恰好归一层、造节点/漏归整份作废、边只能算不能编，这些都有校验兜着），管的只是措辞；
+  更糟的是覆盖层按层名匹配，名字越花、重判后对不上的概率越高，用户改过的修正就越是无声落空。
+  现在反过来要通用职责名：稳定、跨仓可比，教学信息交给每层那句 duty 与层内节点清单去承载。
+  */
+const ARCHITECTURE_SYSTEM_PROMPT = [
+  "你是代码教学产品的架构分层器。给定一个仓库的架构节点清单：每个节点带结构角色（entry=含对外服务入口、core=入口可达的主链路、shared=被多处引用的底座、support=其余）、",
+  "可见文件数、由几个模块合成（parts）、是否含对外服务入口与 git 热度，再带节点之间的 import 往来计数。",
+  "把它们分进 3~5 个**职责层次**（典型形态：接入 / 编排 / 核心能力 / 数据访问），自上而下排列。",
+  "只判这三件事：分几层、每层叫什么、每个节点归哪层。每个节点必须且只能出现一次，id 原样返回。",
+  "层名用软件工程里读得懂的职责名（接入 / 应用编排 / 核心能力 / 数据访问 / 支撑设施这一档），每层再给一句这个仓库自己的职责说明，不超过 40 字。",
+  "箭头、文件路径、外部依赖由程序自己算：**不许输出这些字段**，输出了会被丢弃。",
+  "严格输出 JSON：{\"layers\":[{\"name\":\"层名\",\"duty\":\"一句话职责\",\"modules\":[\"节点 id\"]}]}，不要输出其他文字。"
+].join("");
+
+/**
+  这一层输入的口径版本：层数约束或 payload 形状变了就翻它。
+  提示词文案改了会由守卫测试拦下（见 `analysis-step.ts`），届时二选一：翻版本让旧判层作废，
+  或显式重写锁（`pnpm analysis:lock`）表示「这次润色不值得重烧一遍」——不许无声通过。
   `arch-v2`（2026-10-16）：判层单位从「课程树的原子模块」换成「压缩后的节点」，并新增 `role`/`parts` 两个节点证据。
   ⚠️ 这一翻键是**有意的**：粒度变了，模型判的 70 个碎片和读者看到的 34 个节点不能各留一份。
   已付费的 v1 判层仍留在库里但不再被读；三份仓的画布会显示「分层不可用」，要恢复模型分层得点一次「重新生成分层」（≈¥0.02/仓）。
   */
-const ARCH_INPUT_VERSION = "arch-v2";
+const ARCHITECTURE_STEP = defineAnalysisStep({ layer: "architecture", contractVersion: "arch-v2", prompts: [ARCHITECTURE_SYSTEM_PROMPT] });
 
 interface ModuleFact {
   id: string;
@@ -496,7 +515,7 @@ export function archContext(input: ArchitectureInput, modelVersion: string) {
     ...(overrides ? { userOverrides: overrides } : {}),
     ...(omittedModules ? { omittedModules } : {})
   };
-  const key = layerCacheKey({ layer: "architecture", repositoryId, contractVersion: ARCH_INPUT_VERSION, modelVersion, payload: keyPayload });
+  const key = ARCHITECTURE_STEP.cacheKey({ repositoryId, modelVersion, payload: keyPayload });
   const units: ArchitectureUnits = {
     blocks: new Map(blocks.map((block) => [block.id, block.members])),
     members: new Set(modules.map((node) => node.id))
@@ -605,23 +624,8 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     return unavailable(context, "not_judged", "还没判过层：打开画布是读取动作，不会替用户点这一发。要判，点「重新生成分层」。");
   }
   try {
-    /**
-      定名口径（2026-10-16 改）：原先这里写着「别写成应用层/领域层这种模板话」，与上一句
-      「典型形态：接入 / 编排 / 核心能力 / 数据访问」自相矛盾——先递梯子再踩一脚。而且它管不到任何硬事实
-      （节点必须恰好归一层、造节点/漏归整份作废、边只能算不能编，这些都有校验兜着），管的只是措辞；
-      更糟的是覆盖层按层名匹配，名字越花、重判后对不上的概率越高，用户改过的修正就越是无声落空。
-      现在反过来要通用职责名：稳定、跨仓可比，教学信息交给每层那句 duty 与层内节点清单去承载。
-      */
     const response = await provider.complete({
-      system: [
-        "你是代码教学产品的架构分层器。给定一个仓库的架构节点清单：每个节点带结构角色（entry=含对外服务入口、core=入口可达的主链路、shared=被多处引用的底座、support=其余）、",
-        "可见文件数、由几个模块合成（parts）、是否含对外服务入口与 git 热度，再带节点之间的 import 往来计数。",
-        "把它们分进 3~5 个**职责层次**（典型形态：接入 / 编排 / 核心能力 / 数据访问），自上而下排列。",
-        "只判这三件事：分几层、每层叫什么、每个节点归哪层。每个节点必须且只能出现一次，id 原样返回。",
-        "层名用软件工程里读得懂的职责名（接入 / 应用编排 / 核心能力 / 数据访问 / 支撑设施这一档），每层再给一句这个仓库自己的职责说明，不超过 40 字。",
-        "箭头、文件路径、外部依赖由程序自己算：**不许输出这些字段**，输出了会被丢弃。",
-        "严格输出 JSON：{\"layers\":[{\"name\":\"层名\",\"duty\":\"一句话职责\",\"modules\":[\"节点 id\"]}]}，不要输出其他文字。"
-      ].join(""),
+      system: ARCHITECTURE_SYSTEM_PROMPT,
       user: JSON.stringify(payload),
       maxTokens: 1_200,
       temperature: 0.2,

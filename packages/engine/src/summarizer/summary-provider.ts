@@ -1,4 +1,5 @@
 import type { FileRole } from "@codebase-tutor/shared";
+import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { FileSlice } from "./slice.js";
 
@@ -73,6 +74,18 @@ export function batchSystemPrompt(withHeaderComments: boolean): string {
 }
 
 const BATCH_SYSTEM_PROMPT = batchSystemPrompt(false);
+
+/**
+  L1 摘要这一步的口径 = 上面的批量提示词 + 版本号（绑在一起登记，见 `analysis-step.ts`）。
+  缓存键口径版本：切片或角色规则的语义变了，旧缓存必须失效。
+  - `slice-v2`（2026-09-22）：摘要提示词新增「至少点出一个真实英文标识符」+「带学习者会说的中文概念词」
+    两条要求——旧产出按新口径不合格，且这两条正是检索消融（phaseB:eval 三臂）的处理变量，全仓重烧一次。
+  - `slice-v2c`：该仓打开了「摘要参考注释」开关（每仓设置，默认关）时走这一档。开关同时切换提示词
+    （多一行 headerComment 用法说明）与切片字段，故键前缀必须分流——**不 bump 全局版本**：
+    关着的仓输入逐字节不变，今天烧好的 slice-v2 行继续命中。
+  */
+export const SUMMARY_STEP = defineAnalysisStep({ layer: "summary-slice", contractVersion: "slice-v2", prompts: [batchSystemPrompt(false)] });
+export const SUMMARY_COMMENTS_STEP = defineAnalysisStep({ layer: "summary-slice-comments", contractVersion: "slice-v2c", prompts: [batchSystemPrompt(true)] });
 
 /**
   解析批量回复：按路径建索引（不按下标硬对，模型偶尔会漏项或换序）。

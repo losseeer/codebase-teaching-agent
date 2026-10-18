@@ -1,4 +1,4 @@
-import type { CourseNode, FadedState, RepositoryAnalysis, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { CourseNode, FadedState, RepositoryAnalysis, TeachingProgress, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../lib.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
@@ -46,11 +46,11 @@ export interface TutorReply {
   server 把它经本请求的 SSE 响应流发为 `progress` 事件，GUI 显示成 Agent 侧栏里的过程提示行。
   `stage` 字段名与 map-chat 的 SSE 过程事件保持一致（GUI 两侧同一套取值）；
   原 `deciding`（正在判断本轮教学动作）随状态机一起撤了。
+
+  形状已上收 `shared`（`TeachingProgress`）：过程帧的种类是引擎与界面的共同契约，
+  不再由两边各自抄一遍字面量。
   */
-export type TeachingProgress =
-  | { stage: "thinking"; round: number }
-  | { stage: "reading"; path: string }
-  | { stage: "searching"; query: string };
+export type { TeachingProgress };
 
 export interface RespondOptions {
   /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */

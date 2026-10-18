@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Journal, isEngineOwnedEventType, isUiJournalEventType, readJournal } from "./journal.js";
+import { Journal, isEngineOwnedEventType, isUiJournalEventType, journalFootprint, readJournal } from "./journal.js";
 import { turnTextPayload, TURN_TEXT_LIMIT } from "../lib.js";
 import { runWithTrace } from "../trace/context.js";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/shared";
@@ -102,5 +102,92 @@ describe("回合文本落盘（turn_text）", () => {
   it("practice_chat 场景标签原样落盘（B 档按场景分列的读侧依赖）", () => {
     new Journal(repository, "repo_1").append("turn_text", turnTextPayload("practice_chat", "这题我这么写对吗", "思路对，边界再想想。"));
     expect(readJournal(repository)[0]?.payload.scene).toBe("practice_chat");
+  });
+});
+
+/**
+  增量读缓存（`readJournal` 的水位那套）。这一条线是付费判据与审计的唯一来源，
+  读到错账比读得慢严重得多，所以四种「文件已经不是刚才那份」的形态要各自钉住：
+  追加、半行、等长原地改写、截断。
+  */
+describe("增量读缓存：只在文件真的变了时才多读", () => {
+  let repository: string;
+  const file = () => join(repository, ".tutor", "journal.jsonl");
+
+  beforeEach(() => { repository = mkdtempSync(join(tmpdir(), "tutor-journal-read-")); });
+  afterEach(() => { rmSync(repository, { recursive: true, force: true }); });
+
+  it("读过后又追加的行，下一次读得到（水位往前推，旧行不重复）", () => {
+    const journal = new Journal(repository, "repo_1");
+    journal.append("token_usage", { scene: "teach", input_tokens: 1 });
+    journal.append("token_usage", { scene: "teach", input_tokens: 2 });
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1, 2]);
+    journal.append("token_usage", { scene: "teach", input_tokens: 3 });
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1, 2, 3]);
+  });
+
+  it("最后半行（没写完）不算事件；补完那一行才出现，且只出现一次", () => {
+    new Journal(repository, "repo_1").append("token_usage", { scene: "teach", input_tokens: 7 });
+    mkdirSync(join(repository, ".tutor"), { recursive: true });
+    const half = JSON.stringify({ id: "x", type: "token_usage", at: "2026-10-18T00:00:00.000Z", repositoryId: "repo_1", payload: { scene: "teach", input_tokens: 8 } });
+    appendFileSync(file(), half.slice(0, 40), "utf8");
+    expect(readJournal(repository)).toHaveLength(1);
+    // 写完剩余部分并收尾换行：journal 的行一律以 `\n` 结束（写侧只有 `appendFileSync(... + "\n")` 一条路）
+    appendFileSync(file(), `${half.slice(40)}\n`, "utf8");
+    const events = readJournal(repository);
+    expect(events.map((event) => event.payload.input_tokens)).toEqual([7, 8]);
+  });
+
+  it("长度一格没变但内容被原地改写：靠 mtime 认出来，不拿旧事件做账", () => {
+    const journal = new Journal(repository, "repo_1");
+    journal.append("turn_text", turnTextPayload("teach", "甲", "回复一"));
+    journal.append("turn_text", turnTextPayload("teach", "乙", "回复二"));
+    expect(readJournal(repository).map((event) => event.payload.question)).toEqual(["甲", "乙"]);
+    // 等长改写：把「甲」换成同样占 3 字节的「丙」，文件长度一动不动
+    const rewritten = readFileSync(file(), "utf8").replace("甲", "丙");
+    expect(Buffer.byteLength(rewritten)).toBe(Buffer.byteLength(readFileSync(file(), "utf8")));
+    writeFileSync(file(), rewritten, "utf8");
+    // 显式把 mtime 往前推一秒：同一毫秒内改完的话，文件系统给的秒/纳秒精度不够时这条会退化（不该指望测试机器给 ns）
+    const stamp = new Date(Date.now() + 1_000);
+    utimesSync(file(), stamp, stamp);
+    expect(readJournal(repository).map((event) => event.payload.question)).toEqual(["丙", "乙"]);
+  });
+
+  it("文件被截短（换仓、手工清账）：整份重读，不拿旧前缀续新尾巴", () => {
+    const journal = new Journal(repository, "repo_1");
+    journal.append("token_usage", { scene: "teach", input_tokens: 1 });
+    journal.append("token_usage", { scene: "teach", input_tokens: 2 });
+    journal.append("token_usage", { scene: "teach", input_tokens: 3 });
+    expect(readJournal(repository)).toHaveLength(3);
+    writeFileSync(file(), `${JSON.stringify({ id: "k", type: "token_usage", at: "2026-10-18T00:00:00.000Z", repositoryId: "repo_1", payload: { scene: "teach", input_tokens: 9 } })}\n`, "utf8");
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([9]);
+  });
+
+  it("坏行跳过也算读过：不会每次重读同一行，也不会卡住后面的好行", () => {
+    mkdirSync(join(repository, ".tutor"), { recursive: true });
+    appendFileSync(file(), '{"this is not json}\n', "utf8");
+    new Journal(repository, "repo_1").append("token_usage", { scene: "teach", input_tokens: 1 });
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1]);
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1]);
+  });
+
+  it("给调用方的是数组拷贝：谁 sort/splice 一下不会弄坏缓存", () => {
+    const journal = new Journal(repository, "repo_1");
+    journal.append("token_usage", { scene: "teach", input_tokens: 1 });
+    journal.append("token_usage", { scene: "teach", input_tokens: 2 });
+    const first = readJournal(repository);
+    first.reverse();
+    first.splice(0, 1);
+    expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1, 2]);
+  });
+
+  it("journal 体量读数：行数与解析出的事件数一致，字节数是文件实测", () => {
+    const journal = new Journal(repository, "repo_1");
+    journal.append("token_usage", { scene: "teach", input_tokens: 1 });
+    journal.append("token_usage", { scene: "teach", input_tokens: 2 });
+    const footprint = journalFootprint(repository);
+    expect(footprint.lines).toBe(2);
+    expect(footprint.bytes).toBe(statSync(file()).size);
+    expect(journalFootprint(join(repository, "没有这个目录"))).toEqual({ lines: 0, bytes: 0 });
   });
 });

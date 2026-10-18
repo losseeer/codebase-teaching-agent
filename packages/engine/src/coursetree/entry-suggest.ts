@@ -5,7 +5,7 @@ import { addUsage } from "../llm/usage.js";
 import type { TutorDatabase } from "../store/database.js";
 import { buildRecentChangesSection, type RecentChangesInput } from "../changes/recent-changes.js";
 import { isTestPath } from "../depgraph/roles.js";
-import { layerCacheKey } from "../lib.js";
+import { defineAnalysisStep } from "../analysis-step.js";
 import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
 
 /**
@@ -50,18 +50,9 @@ interface Candidate {
 async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string }): Promise<ModuleEntrySuggestion> {
   const { candidates, moduleLabel, moduleHint, provider, recentChanges } = input;
   try {
-    const system = [
-      "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
-      `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
-      "不要选测试文件或琐碎工具函数。",
-      "候选列表可能整体与主题无关（排序只是关键词级别的近似）；如果没有任何候选真正适合作为该模块入口，输出空数组 []，不要硬凑。",
-      "用户消息末尾可能另附「近期仓库变更」段（本地文件监听检测到的改动与波及文件）：它不是证据来源，不得据此推荐候选之外的节点，只在证据相当的候选之间做取舍时倾向这些当前活跃文件。",
-      "严格输出 JSON 数组：[{\"id\":\"候选 id 原样返回\",\"reason\":\"不超过 20 字的推荐理由\"}]，按推荐顺序排列，不要输出其他文字。"
-    ].join("");
-
     const payload = JSON.stringify({ module: { label: moduleLabel, hint: moduleHint }, candidates });
     const response = await provider.complete({
-      system,
+      system: ENTRY_SYSTEM_PROMPT,
       user: recentChanges ? `${payload}\n\n${recentChanges}` : payload,
       maxTokens: 800,
       temperature: 0.2,
@@ -189,13 +180,31 @@ function themeFingerprint(candidates: Candidate[]): string[] {
     .map(([word]) => word);
 }
 
+/** 选择层发给模型的固定文案（原样内联在 `selectFromCandidates` 里，2026-10-18 提到模块顶层与版本号同处）。 */
+const ENTRY_SYSTEM_PROMPT = [
+  "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
+  `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
+  "不要选测试文件或琐碎工具函数。",
+  "候选列表可能整体与主题无关（排序只是关键词级别的近似）；如果没有任何候选真正适合作为该模块入口，输出空数组 []，不要硬凑。",
+  "用户消息末尾可能另附「近期仓库变更」段（本地文件监听检测到的改动与波及文件）：它不是证据来源，不得据此推荐候选之外的节点，只在证据相当的候选之间做取舍时倾向这些当前活跃文件。",
+  "严格输出 JSON 数组：[{\"id\":\"候选 id 原样返回\",\"reason\":\"不超过 20 字的推荐理由\"}]，按推荐顺序排列，不要输出其他文字。"
+].join("");
+
+/** 主题翻译层发给模型的固定文案。 */
+const EXPAND_SYSTEM_PROMPT = [
+  "你是代码教学产品的检索规划器。给定一个中文学习模块主题和一个代码仓库中常见的路径/标识符词表，",
+  `产出该主题在该仓库里最可能以英文标识符、目录名或注解名形式出现的检索词（最多 ${MAX_EXPANDED_TOKENS} 个，全小写，短而具体，如 timeout、retry、distributedlock、redis）。`,
+  "只收录**承载该主题语义**的词：泛化的结构词（controller、service、config、utils、api 这类每层都有的命名）会淹没真信号，禁止输出；仓库词表只用来判断技术栈与命名习惯，不是让你照抄。",
+  "只收录与该主题真实相关的词；主题在本仓库没有对应代码时输出空数组。",
+  "严格输出 JSON 字符串数组，如 [\"http\",\"timeout\",\"retry\"]，不要输出其他文字。"
+].join("");
+
 /**
-  每层实际输入的口径版本，进各自缓存键：
+  每层实际输入的口径版本，进各自缓存键（两层的键各自独立，命中率也不绑在一起）：
   - `candidate-v2`（2026-09-20）：词边界打分 + boost 补位 + 翻译词元入池。旧键的缓存行全部作废——
     那批「字典序前 15 喂模型」的推荐结果没有保留价值。
   - `expand-v2`（2026-09-20）：v1 实测模型把仓库词表照抄成 controller/service/utils 泛化词，池子被结构词灌满。
     提示词禁止泛化词后旧产出必须作废，故 bump。
-  系统提示词、打分权重或 `MAX_*` 变了，送进模型的 payload 可以一字不变，这类失效只有版本号管得了。
   - `candidate-v3`（2026-09-22，A2）：选择层 user 消息末尾新增可选「近期仓库变更」参考段 + 系统提示词加了对应
     用法约束（该段本身不进键）。旧条目生成时模型看不到这一输入，翻一次键。
   - `candidate-v4`（2026-10-01，方案 A）：学科模块（计算机网络/操作系统/语言特性）按**工程证据锚点**加权，
@@ -208,9 +217,13 @@ function themeFingerprint(candidates: Candidate[]): string[] {
   「文档不当入口」（2026-10-16）**刻意不 bump 版本号**：文档节点是在组装候选池时被剔除的，只要一份旧记录真推过文档，
   那个文档当时就在送进模型的 top-15 里 ⇒ 池子一变 payload 就变 ⇒ 键自己就失效，不需要版本号代劳。
   翻版本反而会把从没沾过文档的模块也重烧一遍（那是花钱买一次已经免费的作废）。
+
+  2026-10-18 起这条纪律换了执行方式：两段提示词的文案改动由指纹守卫拦（见 `analysis-step.ts`），
+  改文案会当场测试红，不再依赖「记得顺手 bump」；版本号因此只留给**不进提示词也不进 payload** 的那类失效——
+  比如 `rankEntryCandidates` 的打分权重（代码里，模型看不见）与截断条数的语义。
 */
-const ENTRY_INPUT_VERSION = "candidate-v6";
-const EXPAND_INPUT_VERSION = "expand-v2";
+const ENTRY_STEP = defineAnalysisStep({ layer: "entry-suggest", contractVersion: "candidate-v6", prompts: [ENTRY_SYSTEM_PROMPT] });
+const EXPAND_STEP = defineAnalysisStep({ layer: "entry-expand", contractVersion: "expand-v2", prompts: [EXPAND_SYSTEM_PROMPT] });
 
 interface ExpansionRecord {
   tokens: string[];
@@ -219,10 +232,8 @@ interface ExpansionRecord {
 const expandCache = new Map<string, { value: ExpansionRecord; at: number }>();
 
 async function expandThemeTokensCached(input: { repositoryId: string; moduleLabel: string; moduleHint: string; fingerprint: string[]; provider: LlmProvider; database?: TutorDatabase }): Promise<ExpansionRecord & { usage?: LlmUsage }> {
-  const key = layerCacheKey({
-    layer: "entry-expand",
+  const key = EXPAND_STEP.cacheKey({
     repositoryId: input.repositoryId,
-    contractVersion: EXPAND_INPUT_VERSION,
     modelVersion: input.provider.modelVersion,
     payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, fingerprint: input.fingerprint }
   });
@@ -243,13 +254,7 @@ async function expandThemeTokensCached(input: { repositoryId: string; moduleLabe
   }
   try {
     const response = await input.provider.complete({
-      system: [
-        "你是代码教学产品的检索规划器。给定一个中文学习模块主题和一个代码仓库中常见的路径/标识符词表，",
-        `产出该主题在该仓库里最可能以英文标识符、目录名或注解名形式出现的检索词（最多 ${MAX_EXPANDED_TOKENS} 个，全小写，短而具体，如 timeout、retry、distributedlock、redis）。`,
-        "只收录**承载该主题语义**的词：泛化的结构词（controller、service、config、utils、api 这类每层都有的命名）会淹没真信号，禁止输出；仓库词表只用来判断技术栈与命名习惯，不是让你照抄。",
-        "只收录与该主题真实相关的词；主题在本仓库没有对应代码时输出空数组。",
-        "严格输出 JSON 字符串数组，如 [\"http\",\"timeout\",\"retry\"]，不要输出其他文字。"
-      ].join(""),
+      system: EXPAND_SYSTEM_PROMPT,
       user: JSON.stringify({ module: { label: input.moduleLabel, hint: input.moduleHint }, repoVocabulary: input.fingerprint }),
       maxTokens: 400,
       temperature: 0.1,
@@ -355,10 +360,8 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
   const candidates = rankEntryCandidates(pool, tokens, fileSummaries, avoidPaths, input.boostPaths ?? []);
   if (!candidates.length) return { entries: [], ...(expansion.usage ? { usage: expansion.usage } : {}) };
 
-  const key = layerCacheKey({
-    layer: "entry-suggest",
+  const key = ENTRY_STEP.cacheKey({
     repositoryId: input.repositoryId,
-    contractVersion: ENTRY_INPUT_VERSION,
     modelVersion: input.provider.modelVersion,
     payload: { module: { label: input.moduleLabel, hint: input.moduleHint }, candidates }
   });

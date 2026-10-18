@@ -122,6 +122,17 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
   };
 }
 
+/**
+  预算闸的唯一判据：本月已花的钱 ≥ 该仓预算就算降级（也就是 `summarizeCost` 的 `mode === "degraded"`）。
+  这条判据原先在 `server.ts` 的 `budgetGate` 与 `importer.ts` 的导入分支各写一遍——同一个表达式抄两处，
+  改一处就会出现「导入照旧放行而对话已经 422」这种分岔（2026-10-18 架构复审抓到）。
+  单价没配时钱恒算 0 ⇒ 永远不降级：那是**闸门失效**，由 `budgetGateNotice` 那句话说明，
+  这条判据不伪装成「额度还很宽」。
+  */
+export function budgetExceeded(repositoryPath: string, monthlyBudgetUsd: number, sessionId?: string): boolean {
+  return summarizeCost(repositoryPath, monthlyBudgetUsd, sessionId).mode === "degraded";
+}
+
 function bucket(events: JournalEvent[], labelOf: (event: JournalEvent) => string): CostBucket[] {
   const map = new Map<string, CostBucket>();
   for (const event of events) {

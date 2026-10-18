@@ -1,4 +1,5 @@
 import type { CourseNode, CourseTree } from "@codebase-tutor/shared";
+import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 
@@ -42,15 +43,6 @@ function fitTitle(title: string): string {
   return `${(boundary > 4 ? room.slice(0, boundary) : room).trimEnd()}…`;
 }
 
-/**
-  润色层的输入口径版本，写进 `settings.refinement` 标记（见 importer/importer.ts）。
-  上面的批次/深度/长度阈值或 `REFINE_SYSTEM_PROMPT` 改了，课程树可以一字不变——这类失效只有版本号管得了，
-  改它们要同步 bump。首次带该版本的运行会让旧标记的仓库重润一次，属预期。
-  - `refine-v3`（2026-10-02）：标题长度上限 18 → 24 + 边界式收长（不再从中间切断符号名），
-    并且标题口径改成「不了解本仓库业务的学习者也看得懂」。
-  */
-export const REFINEMENT_CONTRACT_VERSION = "refine-v3";
-
 interface NodeRename {
   key: string;
   title: string;
@@ -82,6 +74,18 @@ const REFINE_SYSTEM_PROMPT = [
   "",
   "严格输出 JSON 数组：[{\"key\":\"原样返回\",\"title\":\"…\",\"summary\":\"…\"}]，不要输出任何其他文字。"
 ].join("\n");
+
+/**
+  润色层的输入口径版本，写进 `settings.refinement` 标记（见 `importer/importer.ts` 的 `refinementIsFresh`）。
+  `refine-v3`（2026-10-02）：标题长度上限 18 → 24 + 边界式收长（不再从中间切断符号名），
+  并且标题口径改成「不了解本仓库业务的学习者也看得懂」。
+
+  2026-10-18 起「`REFINE_SYSTEM_PROMPT` 或长度阈值改了要同步 bump」这条纪律换了执行方式：
+  文案与插值进文案的 `MAX_TITLE`/`MAX_SUMMARY` 由指纹守卫拦（见 `analysis-step.ts`）。
+  仍然只有版本号管得了的是**不进文案也不进提纲**的那一类：`MAX_DEPTH`/`BATCH_SIZE` 之外的组装规则。
+  首次带新版本的运行会让旧标记的仓库重润一次，属预期。
+*/
+export const REFINE_STEP = defineAnalysisStep({ layer: "coursemap-refine", contractVersion: "refine-v3", prompts: [REFINE_SYSTEM_PROMPT] });
 
 export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): Promise<CourseMapRefinement> {
   const outline: OutlineEntry[] = [];

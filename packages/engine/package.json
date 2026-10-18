@@ -9,6 +9,7 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "analysis:lock": "tsx src/scripts/lock-analysis-steps.ts",
     "phase0:prepare-study": "tsx src/scripts/prepare-study.ts",
     "phase0:audit": "tsx src/scripts/audit.ts",
     "phase0:metrics": "tsx src/scripts/metrics.ts",

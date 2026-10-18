@@ -10,7 +10,10 @@
   生命周期：路由 beginTurn → finally dispose；abortTurn 命中即摘除。表里只有进行中的回合，不会累积。
   */
 
-export type TurnScene = "teach" | "map_chat" | "practice_chat";
+import type { TurnScene } from "@codebase-tutor/shared";
+
+/** 场景名已上收到 `shared`（SSE 帧词表里的 `aborted` 要用同一个词），这里再导出一次，别处的 import 路径不变。 */
+export type { TurnScene };
 
 export interface TurnHandle {
   /** 校验后的 turnId（journal 留痕用）；客户端没给或格式非法时为 undefined。 */

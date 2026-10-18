@@ -4,7 +4,7 @@ import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "
 import type { LlmProvider } from "../llm/provider.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../lib.js";
-import { buildTagCandidate, EXERCISE_INPUT_VERSION, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
+import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { runSandbox } from "../sandbox/isolation.js";
@@ -69,7 +69,7 @@ const kinds: ExerciseKind[] = SUPPORTED_EXERCISE_KINDS;
   作答校验走 `contentHashes`（见 `staleDependencies`）。
  */
 function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
-  return `${versionStamp}#${graphStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
+  return `${versionStamp}#${graphStamp}#${EXERCISE_STEP.contractVersion}#${modelVersion}`;
 }
 
 /**
@@ -102,7 +102,7 @@ function depsFingerprint(deps: { path: string; hash: string }[]): string {
   代码题正解相反——「缺陷版必挂」这条承诺是在某个具体 runner 上验出来的，解释器一升级就得重验。
 */
 function fileScope(deps: { path: string; hash: string }[], modelVersion: string, runner?: string): string {
-  return `${depsFingerprint(deps)}#${EXERCISE_INPUT_VERSION}#${modelVersion}${runner ? `#runner=${runner}` : ""}`;
+  return `${depsFingerprint(deps)}#${EXERCISE_STEP.contractVersion}#${modelVersion}${runner ? `#runner=${runner}` : ""}`;
 }
 
 /** 一道题依赖的文件清单及其哈希。查不到 contentHash（旧索引）时以全仓 versionStamp 兜底。 */

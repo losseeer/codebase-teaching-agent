@@ -1585,6 +1585,37 @@ export interface EngineTraceEvent {
   detail: Record<string, TraceScalar>;
 }
 
+/**
+  回合场景名：三条作用域对话流共用，与 journal 的 `scene`、引擎回合登记表同一套词。
+  原来这个联合类型只活在引擎的 `turns/registry.ts` 里，界面想按它判就得复制一份字面量。
+  */
+export type TurnScene = "teach" | "map_chat" | "practice_chat";
+
+/** 教学回合的过程提示（`{stage}` 形状）：引擎 `harness` 发它，文案由界面定（引擎不关心中文措辞，界面不猜阶段语义）。 */
+export type TeachingProgress = { stage: "thinking"; round: number } | { stage: "reading"; path: string } | { stage: "searching"; query: string };
+
+/**
+  作用域对话流（三处 per-request SSE）的过程帧与正文帧词表。**这是引擎与界面之间的唯一词表**：
+  - 引擎要发新的一类帧，必须先加进这里（`server.ts` 的 `send` 按这份联合类型收，编不出没登记的帧）；
+  - 界面的映射带穷尽守卫（`never` 断言），漏接一类直接编译不过。
+
+  为什么值得为它单独建一张表：10-06 引擎发了 `thinking`，界面只认 `progress`，
+  于是宏观设计那侧「引擎在思考第三轮」而屏幕上一直挂着「回复生成中…」——**没有任何报错**。
+  这类失效不在返回值上、在过程帧上，靠返回值类型看不出来。
+
+  刻意不含 `done` 的成品载荷：三条流的 done 形状各不相同（teach 带 session/policy/cost，map 带 diagram），
+  那部分属于「响应体契约」，与运行时校验一起处理；这里只锁**帧的种类**。
+  */
+export type ScopedStreamProgress =
+  | { type: "thinking"; round: number }
+  | { type: "reading"; path: string }
+  | { type: "searching"; query: string }
+  | { type: "progress"; payload: TeachingProgress }
+  | { type: "delta"; delta: string };
+
+/** 一条流的完整帧词表：过程/正文 + 三条出口（done 载荷见上，暂为开放形状）。 */
+export type ScopedStreamFrame = ScopedStreamProgress | { type: "error"; error: string } | { type: "aborted"; scene: TurnScene } | { type: "done"; [key: string]: unknown };
+
 /** 全局事件流（GET /api/events，SSE）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——它们在各自请求的响应流里。 */
 export interface ServerEvent {
   /**

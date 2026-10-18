@@ -1,0 +1,47 @@
+[
+  {
+    "layer": "architecture",
+    "contractVersion": "arch-v2",
+    "promptDigest": "09148a60daaf8485"
+  },
+  {
+    "layer": "coursemap-refine",
+    "contractVersion": "refine-v3",
+    "promptDigest": "00186e9d8192cd03"
+  },
+  {
+    "layer": "entry-expand",
+    "contractVersion": "expand-v2",
+    "promptDigest": "7f1a7f4ba66f275b"
+  },
+  {
+    "layer": "entry-suggest",
+    "contractVersion": "candidate-v6",
+    "promptDigest": "31c81ceccedbf95d"
+  },
+  {
+    "layer": "exercise-code-generate",
+    "contractVersion": "exercise-v3",
+    "promptDigest": "2cfda3be3cc2e827"
+  },
+  {
+    "layer": "exercise-generate",
+    "contractVersion": "exercise-v3",
+    "promptDigest": "f54e4bcdc8df1119"
+  },
+  {
+    "layer": "flow",
+    "contractVersion": "digest-v4",
+    "promptDigest": "d95546c278039a7a"
+  },
+  {
+    "layer": "summary-slice",
+    "contractVersion": "slice-v2",
+    "promptDigest": "5902408ad2dcc36c"
+  },
+  {
+    "layer": "summary-slice-comments",
+    "contractVersion": "slice-v2c",
+    "promptDigest": "80f03a7eaf4f2d88"
+  }
+]

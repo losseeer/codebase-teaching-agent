@@ -21,7 +21,7 @@ import type { TutorDatabase } from "../store/database.js";
 import { buildRecentChangesSection } from "../changes/recent-changes.js";
 import { classifyFileRoles, roleOf } from "../depgraph/roles.js";
 import { rankSymbolsByCalls } from "../depgraph/symbol-rank.js";
-import { layerCacheKey } from "../lib.js";
+import { defineAnalysisStep } from "../analysis-step.js";
 import { executeReadFile } from "../source/read-file.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 import { deepenInferredEdges } from "./deepen.js";
@@ -73,14 +73,6 @@ const FALLBACK_UNGROUNDED = "模型给出的环节缺少仓内代码落点";
 const FALLBACK_TRUNCATED = "模型输出在长度上限处被截断，未形成完整流程";
 const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用链";
 
-/**
-  流程层的输入口径版本，进缓存键。`buildFlowDigest` 的形状、上面各 `MAX_*` 裁剪阈值、或
-  `SYSTEM_PROMPT` 的文本改了，模型看到的输入可以一字不变——这类失效只有版本号管得了，改它们要同步 bump。
-  `digest-v4`（2026-09-22，A2）：user 消息末尾新增可选的「近期仓库变更」参考段（见 `changes/recent-changes.ts`），
-  系统提示词同步加了它的用法说明。旧条目没有这一输入，翻一次键让流程在有/无变更段的前提下重新生成。
-  */
-const FLOW_INPUT_VERSION = "digest-v4";
-
 /** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
 export const SYSTEM_PROMPT = [
   "你是代码教学产品的架构讲解者。给定一个仓库的执行入口、文件清单（含符号名与依赖）与静态调用链证据，",
@@ -105,6 +97,17 @@ export const SYSTEM_PROMPT = [
   `"caveats":"≤${MAX_CAVEATS}字，说明不确定处或已知遗漏"}。`,
   "不要输出 JSON 以外的任何文字。"
 ].join("");
+
+/**
+  流程层这一步的口径 = 上面的提示词 + 这个版本号（两者绑在一起，见 `analysis-step.ts`）。
+  `digest-v4`（2026-09-22，A2）：user 消息末尾新增可选的「近期仓库变更」参考段（见 `changes/recent-changes.ts`），
+  系统提示词同步加了它的用法说明。旧条目没有这一输入，翻一次键让流程在有/无变更段的前提下重新生成。
+
+  什么时候要翻版本：`buildFlowDigest` 的形状变了、或裁剪阈值**没有**体现在提示词文案里的那种改动。
+  不用手动翻的情况：`SYSTEM_PROMPT` 本身的文本、以及被插值进文案的那些 `MAX_*` 阈值——
+  它们会改变指纹，守卫测试直接拦下（`pnpm analysis:lock` 才是唯一的放行口）。
+*/
+const FLOW_STEP = defineAnalysisStep({ layer: "flow", contractVersion: "digest-v4", prompts: [SYSTEM_PROMPT] });
 
 export interface FlowDigestFile {
   path: string;
@@ -680,10 +683,8 @@ export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string
   if (!digest) return undefined;
   return {
     digest,
-    key: layerCacheKey({
-      layer: "flow",
+    key: FLOW_STEP.cacheKey({
       repositoryId: input.repositoryId,
-      contractVersion: FLOW_INPUT_VERSION,
       modelVersion: input.provider.modelVersion,
       payload: digest,
       scope: input.entry.path

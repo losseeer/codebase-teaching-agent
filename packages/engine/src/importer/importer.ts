@@ -16,9 +16,9 @@ import type {
   ServerEvent
 } from "@codebase-tutor/shared";
 import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
-import { REFINEMENT_CONTRACT_VERSION, refineCourseMap } from "../coursetree/llm-refine.js";
+import { REFINE_STEP, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
-import { budgetGateNotice, defaultMonthlyBudgetUsd, summarizeCost } from "../cost/cost.js";
+import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 import { fileStructureOf } from "../depgraph/roles.js";
@@ -31,7 +31,7 @@ import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
-import { Journal } from "../store/journal.js";
+import { Journal, journalFootprint } from "../store/journal.js";
 import { traceEngine } from "../trace/engine-log.js";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
@@ -301,7 +301,10 @@ export class ImportService extends EventEmitter {
     }
     const startedAt = Date.now();
     const repository = this.attach({ path, index, course, estimate, analysis });
-    traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size }, { traceId: null, durationMs: Date.now() - startedAt });
+    // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
+    // （读侧现在是按字节水位增量解析，见 `store/journal.ts`；真到需要归档的那天，这两个数就是依据）。
+    const journal = journalFootprint(path);
+    traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes }, { traceId: null, durationMs: Date.now() - startedAt });
     return { ok: true, repository };
   }
 
@@ -500,9 +503,10 @@ export class ImportService extends EventEmitter {
       在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要 + 宏观润色）。
       */
     const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
-    // 闸门只认 `mode === "degraded"`，而它由「算出的钱 ≥ 预算」决定：单价没配时钱恒算 0，
-    // 于是闸门一路放行且不报错。这一项必须作为读数交出去（`/cost` 与成本页、启动日志同一口径）。
-    const lightProvider = summarizeCost(repositoryPath, budgetUsd).mode === "degraded" ? undefined : buildLlmRuntimeProvider("light");
+    // 判据只留一处（`cost.ts` 的 `budgetExceeded`）：这里以前自己抄了一遍 `mode === "degraded"`，
+    // 与对话那八处成了两个副本。单价没配时钱恒算 0 ⇒ 闸门一路放行且不报错，
+    // 那一档必须作为读数交出去（`/cost` 与成本页、启动日志同一口径，见 `budgetGateNotice`）。
+    const lightProvider = budgetExceeded(repositoryPath, budgetUsd) ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
     // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
     // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。
@@ -538,14 +542,14 @@ export class ImportService extends EventEmitter {
     const refinementCacheHit = Boolean(
       storedAnalysis?.versionStamp === versionStamp && storedCourse && refinementIsFresh(storedSettings?.refinement, {
         versionStamp,
-        contractVersion: REFINEMENT_CONTRACT_VERSION,
+        contractVersion: REFINE_STEP.contractVersion,
         backendStamp,
         ...(lightProvider ? { modelVersion: lightProvider.modelVersion } : {})
       })
     );
     if (refinementCacheHit) {
       course = storedCourse as CourseTree;
-    } else if (summarizeCost(repositoryPath, budgetUsd).mode !== "degraded") {
+    } else if (!budgetExceeded(repositoryPath, budgetUsd)) {
       // 复用导入开头建好的轻量档实例（运行期设置在一次导入内不会变）；预算另查一次——
       // L1 摘要可能刚花掉一部分，所以不能沿用开头那个判断结果
       const mapProvider = lightProvider;
@@ -562,7 +566,7 @@ export class ImportService extends EventEmitter {
             scene: "course_map"
           });
           // 读-合并-写：settings 里还存着 monthlyBudgetUsd 等其他键，不能整体覆盖
-          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINEMENT_CONTRACT_VERSION, backendStamp } });
+          database.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINE_STEP.contractVersion, backendStamp } });
         }
       }
     }

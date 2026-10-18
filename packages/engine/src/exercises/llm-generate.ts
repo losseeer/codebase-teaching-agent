@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
+import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { recordEgress, type EgressSource } from "../security/dataflow.js";
 import { secretMasker } from "../security/secrets.js";
@@ -18,25 +19,6 @@ import type { GuardCandidate } from "./guard-proposal.js";
 const MAX_TITLE = 24;
 const MAX_PROMPT = 300;
 const MAX_EXCERPT_LINES = 60;
-
-/**
-  出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
-  题面提示词、`kindRules`、裁剪上限改了，送入模型的代码可以一字不变——这类失效只有版本号管得了：
-  不 bump 就会一直复用旧题面。改上面这些要同步 bump。
-
-  v1 → v2（2026-10-07 复审）：选项池过去被一条手写扩展名白名单（ts/js/py）筛过，
-  **Java / Go 仓的正确答案根本进不了选项**，「定位改动」这类题在那些仓里是怎么选都过不了。
-  生成逻辑已改（正解只按「在不在索引里」认，干扰项池由能力表派生），但已经冻结进缓存的坏题
-  不会自愈——它的作用域里不含「选项怎么来的」这一轴，所以只能整体作废重来。
-  代价：两仓 3 行缓存全废（含 2 条已付费的 llm_rubric，重做合计 <¥0.05），用户拍板选这条路而不是手删坏行。
-
-  v2 → v3（2026-10-14 练习域沙箱改造）：`output_prediction` 连同它的受限执行判据一起退役，新增
-  `patch_edit` / `author_function` 两型（判分由沙箱跑测试决定，缓存行里冻结的是测试与替身而不是一个表达式）。
-  旧行里的 `{type:"output"}` 期望已不在 `ExpectedAnswer` 联合里，作答时会命中「该练习类型已不再支持」——
-  与其写一段兼容分支去猜旧行的形状，不如让版本作废它：存量只有 4 行，且没有一行被提交过。
-  代码族另外挂 `#runner=<指纹>`（见 `exercises.ts` 的 `fileScope`），那一轴不在本版本号里。
-  */
-export const EXERCISE_INPUT_VERSION = "exercise-v3";
 
 export interface RefinedExercise {
   exercise: Exercise;
@@ -60,24 +42,32 @@ const kindRules: Record<ExerciseKind, string> = {
   llm_rubric: "题面围绕给定主题描述一个开放的分析任务，要求学习者用自己的话作答；题面不得包含或暗示参考答案。"
 };
 
+/**
+  题面润色这一步的提示词（按题型取 `kindRules` 那一条红线）。提出来成函数是为了让口径登记的指纹
+  能把**全部题型的文案**一次覆盖（见 `EXERCISE_STEP` 的 prompts）。
+*/
+function refineSystemPrompt(kind: ExerciseKind): string {
+  return [
+    "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
+    "",
+    `本题型的任务与红线：${kindRules[kind]}`,
+    "",
+    "通用规则：",
+    `- title：≤${MAX_TITLE} 字，具体并点出摘录中的真实符号（函数名/配置项/路由等），不用「练习 1」这类泛称。`,
+    `- prompt：≤${MAX_PROMPT} 字，清晰陈述任务步骤；可引用摘录中的真实标识符与行号，但不要承诺摘录之外的行为。`,
+    "- 不要给解题提示，不要复述标准答案；输出中出现的每个代码事实都必须能在摘录中找到。",
+    "",
+    "严格输出 JSON：{\"title\":\"…\",\"prompt\":\"…\"}，不要输出任何其他文字。"
+  ].join("\n");
+}
+
 export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider): Promise<RefinedExercise> {
   try {
     const excerpt = sourceExcerpt(repositoryPath, exercise);
     // 摘录读不出来＝这道题连源码都没给模型看，题面必然是规则拼的——不记一笔就没人知道润色没跑
     if (!excerpt) return { exercise, polished: false, polishFailure: "no_excerpt" };
 
-    const system = [
-      "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
-      "",
-      `本题型的任务与红线：${kindRules[exercise.kind]}`,
-      "",
-      "通用规则：",
-      `- title：≤${MAX_TITLE} 字，具体并点出摘录中的真实符号（函数名/配置项/路由等），不用「练习 1」这类泛称。`,
-      `- prompt：≤${MAX_PROMPT} 字，清晰陈述任务步骤；可引用摘录中的真实标识符与行号，但不要承诺摘录之外的行为。`,
-      "- 不要给解题提示，不要复述标准答案；输出中出现的每个代码事实都必须能在摘录中找到。",
-      "",
-      "严格输出 JSON：{\"title\":\"…\",\"prompt\":\"…\"}，不要输出任何其他文字。"
-    ].join("\n");
+    const system = refineSystemPrompt(exercise.kind);
 
     const anchor = exercise.anchors[0];
     const user = JSON.stringify({
@@ -177,6 +167,31 @@ const GENERATION_SYSTEM_PROMPT = [
   "- 题面不得包含或暗示 answerKey 的内容。",
   "- criteria 给 2-4 条可操作的评分维度；answerKey 要具体到能让另一位评分者据此判分。"
 ].join("\n");
+
+/**
+  出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
+  v1 → v2（2026-10-07 复审）：选项池过去被一条手写扩展名白名单（ts/js/py）筛过，
+  **Java / Go 仓的正确答案根本进不了选项**，「定位改动」这类题在那些仓里是怎么选都过不了。
+  生成逻辑已改（正解只按「在不在索引里」认，干扰项池由能力表派生），但已经冻结进缓存的坏题
+  不会自愈——它的作用域里不含「选项怎么来的」这一轴，所以只能整体作废重来。
+  代价：两仓 3 行缓存全废（含 2 条已付费的 llm_rubric，重做合计 <¥0.05），用户拍板选这条路而不是手删坏行。
+
+  v2 → v3（2026-10-14 练习域沙箱改造）：`output_prediction` 连同它的受限执行判据一起退役，新增
+  `patch_edit` / `author_function` 两型（判分由沙箱跑测试决定，缓存行里冻结的是测试与替身而不是一个表达式）。
+  旧行里的 `{type:"output"}` 期望已不在 `ExpectedAnswer` 联合里，作答时会命中「该练习类型已不再支持」——
+  与其写一段兼容分支去猜旧行的形状，不如让版本作废它：存量只有 4 行，且没有一行被提交过。
+  代码族另外挂 `#runner=<指纹>`（见 `exercises.ts` 的 `fileScope`），那一轴不在本版本号里。
+
+  2026-10-18 起「题面提示词、`kindRules`、裁剪上限改了要同步 bump」这条纪律换了执行方式：
+  这三样现在都在提示词文案里（`kindRules` 与 `MAX_TITLE`/`MAX_PROMPT` 被插值进去），
+  改任何一处都会让下面的指纹变，守卫测试当场拦（见 `analysis-step.ts`）。
+  版本号因此只留给**不进文案**的那类失效——比如 v1→v2 那种「选项池怎么来的」的生成逻辑改动。
+  */
+export const EXERCISE_STEP = defineAnalysisStep({
+  layer: "exercise-generate",
+  contractVersion: "exercise-v3",
+  prompts: [GENERATION_SYSTEM_PROMPT, () => (Object.keys(kindRules) as ExerciseKind[]).map((kind) => refineSystemPrompt(kind)).join("\n")]
+});
 
 export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider }): Promise<LlmGeneration> {
   const excerpts = input.candidates.map((candidate) => ({

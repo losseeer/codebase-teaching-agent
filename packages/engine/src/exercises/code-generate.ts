@@ -16,7 +16,9 @@
   这个节点区分不能省——把「跑不起来」当「跑出问题」，出一批需要学习者先修语法环境的题，是这套机制最坏的死法。
 */
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/shared";
+import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "../lib.js";
 import { recordEgress } from "../security/dataflow.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
@@ -101,6 +103,18 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
     "约束：`given` 与 `solution` 的 **path 集合必须完全一致**；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。"
   ].join("\n");
 }
+
+/**
+  代码题这一步的口径登记。版本号与 llm 出题那一步**共用同一个字符串**（`EXERCISE_STEP.contractVersion`）：
+  三条出题路径（规则题、代码题、LLM 题）在 `exercises.ts` 的 `fileScope` 里拼的是同一个作用域轴，
+  分两处写迟早漂移成两个版本号，于是一处 bump 会留下另一处的旧题面继续命中。
+  提示词按「题型 × 语言」全枚举：`TEST_CONTRACT` 里加一门语言、或给某语言改测试形状，指纹都会变。
+*/
+defineAnalysisStep({
+  layer: "exercise-code-generate",
+  contractVersion: EXERCISE_STEP.contractVersion,
+  prompts: [() => (["patch_edit", "author_function"] as const).flatMap((kind) => (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => systemPrompt(kind, language))).join("\n")]
+});
 
 /** 出题侧读源码：文件头部的 import 段 + 符号体，两边都过密钥筛，并如实登记出网。 */
 export function unitSource(repositoryPath: string, unit: ImplementationUnit): { imports: string; body: string; sources: { path: string; from: number; to: number; text: string; masked: number }[] } | undefined {

@@ -1,3 +1,4 @@
+import type { ScopedStreamProgress } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
@@ -21,7 +22,12 @@ import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type Search
     不吞成「基于已有上下文直接回答」的收尾结论（那会把用户主动停止伪装成模型答完）。
   */
 
-export type ReadToolProgress = { type: "thinking"; round: number } | { type: "reading"; path: string } | { type: "searching"; query: string };
+/**
+  工具循环的过程事件。形状**从帧词表里取**（`shared` 的 `ScopedStreamProgress`）：
+  宏观设计与练习那两条流是把这三类直接当 SSE 帧发出去的，两处各写一份字面量迟早漂——
+  漂了以后引擎在发一种界面不认识的帧，屏幕上只剩「回复生成中…」（10-06 的 `thinking` 漏接就是这个形状）。
+*/
+export type ReadToolProgress = Extract<ScopedStreamProgress, { type: "thinking" | "reading" | "searching" }>;
 
 export interface ReadToolLoopInput {
   provider: LlmProvider;

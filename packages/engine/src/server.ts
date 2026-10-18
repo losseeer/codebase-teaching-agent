@@ -5,9 +5,9 @@ import { performance as _perf } from "node:perf_hooks";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
-import type { ChatScope, ChatThread, CourseNode, Diagram, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { ChatScope, ChatThread, CourseNode, Diagram, Exercise, ExerciseAnswer, ExerciseKind, FlowStage, JournalEvent, ScopedStreamFrame, ServerEvent, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
+import { budgetExceeded, budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, pricingSourceOf, summarizeCost } from "./cost/cost.js";
 import { courseChildren, courseOverview, findCourseNode } from "./coursetree/projection.js";
 import { suggestModuleEntriesCached } from "./coursetree/entry-suggest.js";
 import type { ImportedRepository } from "./importer/importer.js";
@@ -239,7 +239,7 @@ function sseFrame(reply: FastifyReply, frame: string): void {
   reply.raw.write(frame);
 }
 
-function sseWriter(reply: FastifyReply): (event: unknown) => void {
+function sseWriter<TFrame>(reply: FastifyReply): (event: TFrame) => void {
   return (event) => sseFrame(reply, `data: ${JSON.stringify(event)}\n\n`);
 }
 
@@ -253,8 +253,13 @@ function sseWriter(reply: FastifyReply): (event: unknown) => void {
 
   头里还必须自己带上 CORS：`hijack()` 之后响应不再经 `@fastify/cors` 收尾，
   跨来源部署的浏览器一帧都读不到（与 §47 那个钩子顺序是同一类事故）。
+
+  帧的种类由类型参数管，两条流各有各的词表：作用域对话流默认 `ScopedStreamFrame`（shared 的
+  `ScopedStreamProgress` + done/error/aborted），全局事件流是 `ServerEvent`（import.progress 那一套）。
+  发一种没登记的帧编不过去——两侧不再各抄一份字面量（10-06 那次「引擎发 thinking、界面只认 progress」
+  就是因为这两份词表各写各的）。
   */
-function openSseStream(request: FastifyRequest, reply: FastifyReply): (event: unknown) => void {
+function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyRequest, reply: FastifyReply): (event: TFrame) => void {
   const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
   reply.raw.writeHead(200, {
     "content-type": "text/event-stream",
@@ -263,13 +268,13 @@ function openSseStream(request: FastifyRequest, reply: FastifyReply): (event: un
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {})
   });
   sseFrame(reply, ": open\n\n");
-  return sseWriter(reply);
+  return sseWriter<TFrame>(reply);
 }
 
 /** 打字机回放的块长：三作用域同款，改一处就全改（真 token 流式要 provider 层改造，这里先消除「整段落下」）。 */
 const TYPEWRITER_CHUNK = 72;
 
-function replayTypewriter(send: (event: unknown) => void, text: string): void {
+function replayTypewriter(send: (event: ScopedStreamFrame) => void, text: string): void {
   for (const delta of chunk(text, TYPEWRITER_CHUNK)) send({ type: "delta", delta });
 }
 
@@ -277,7 +282,7 @@ function replayTypewriter(send: (event: unknown) => void, text: string): void {
   开一轮作用域对话流：hijack → 首帧落网 → 登记回合。三处顺序一致，且 `dispose()` 必须留在调用方的 finally 里——
   漏一处就是往回合登记表里塞一个永不摘除的在途条目，之后「停止生成」按名字也掐不到它。
 */
-function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: unknown) => void; turnHandle: TurnHandle } {
+function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: ScopedStreamFrame) => void; turnHandle: TurnHandle } {
   reply.hijack();
   return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene) };
 }
@@ -287,7 +292,7 @@ function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: 
   出错分支什么都不知道。用户点了停止就按「作废」收：journal 留一条 `turn_aborted`、不伪造正文也不写 `turn_text`。
 */
 function failScopedTurn(input: {
-  send: (event: unknown) => void;
+  send: (event: ScopedStreamFrame) => void;
   repositoryPath: string;
   repositoryId: string;
   scene: TurnScene;
@@ -424,7 +429,7 @@ function readRepositorySettings(repositoryPath: string, repositoryId: string): R
   */
 function budgetGate(repositoryPath: string, repositoryId: string): { monthlyBudgetUsd: number; degraded: boolean } {
   const monthlyBudgetUsd = readRepositorySettings(repositoryPath, repositoryId).monthlyBudgetUsd;
-  return { monthlyBudgetUsd, degraded: summarizeCost(repositoryPath, monthlyBudgetUsd).mode === "degraded" };
+  return { monthlyBudgetUsd, degraded: budgetExceeded(repositoryPath, monthlyBudgetUsd) };
 }
 
 function budgetDegraded(repositoryPath: string, repositoryId: string): boolean {
@@ -706,7 +711,7 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
 app.get("/api/events", async (request, reply) => {
   // 断线重连与「空闲超时只掐这一条连接」由前端 `subscribeServerEvents` 自己管（fetch 读流才掐得住，见 §47）。
   reply.hijack();
-  const client = { send: openSseStream(request, reply), request };
+  const client = { send: openSseStream<ServerEvent>(request, reply), request };
   subscribers.add(client);
   // 心跳：这条例外是「订阅之后可能永远没有第一个事件」——没人导入、没人改仓时连接整天空着。
   // 注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前就从写入失败里察觉连接已死。
@@ -819,7 +824,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "LLM 出题需要提供主题标签" });
   if (kind && !SUPPORTED_EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
-  const budgetExceeded = budgetDegraded(repository.path, repository.index.repositoryId);
+  const budgetExhausted = budgetDegraded(repository.path, repository.index.repositoryId);
   try {
     return reply.code(201).send(await exercises.next(repository, {
       kind,
@@ -828,7 +833,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
       tag: request.body?.tag,
       tagId: request.body?.tagId,
       variantNonce: request.body?.variantNonce
-    }, budgetExceeded ? undefined : lightLlmProvider));
+    }, budgetExhausted ? undefined : lightLlmProvider));
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成练习" });
   }
