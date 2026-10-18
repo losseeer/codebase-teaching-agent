@@ -54,10 +54,11 @@ let fetchCalls = 0;
 /** 让假 provider 在途一会儿：「停止生成」的路由级测试得赶在 LLM 返回之前打进 `/api/turns/stop`。 */
 let holdMs = 0;
 /**
-  在**第 N 趟请求返回之前**替用户点停止：这样中止一定落在「最后一趟 LLM 已回来、路由还没收尾」那一刻，
-  测的就是「审计数组在返回值里」那半条（靠 sleep 抢时间窗做不到这么准）。
+  在**本回合第 N 趟请求返回之前**替用户点停止：中止于是精确落在「最后一趟已发出、还没回来」或「已回来、路由还没收尾」，
+  取决于 `holdMs`。计数只认带 `marker`（这一回合的问题原文）的请求——`fetchCalls` 是全文件累加的，
+  任何别处多发一发就会把序号挪走（CI 上实测被这条坑过一次）。
 */
-let stopInside: { turnId: string; atCall: number } | undefined;
+let stopInside: { turnId: string; marker: string; atCall: number; seen: number } | undefined;
 
 function decisionCall(raw: string): boolean {
   return raw.includes("动作决策器") || raw.includes("意图分类");
@@ -73,8 +74,26 @@ function replyFor(raw: string): string {
 /** 每次请求实际带上的工具清单（跨仓那档要验的就是它随不随地址簿变长）。 */
 const sentTools: { names: string[]; raw: string }[] = [];
 
+/** 这一回合（按问题原文认）已经**发出**了几趟请求。用来等「第一轮工具真跑完」，不靠 sleep 猜。 */
+const requestsOf = (marker: string): number => sentTools.filter((entry) => entry.raw.includes(marker)).length;
+
+/** 轮询到条件成立；到点不成就带着「在等什么」失败，而不是悄悄跳过。 */
+async function waitFor(predicate: () => boolean, why: string, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`等不到「${why}」（${timeoutMs}ms 超时）`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function fakeFetch(_url: unknown, init?: { body?: string; signal?: AbortSignal }): Promise<Response> {
   fetchCalls += 1;
+  const raw = String(init?.body ?? "{}");
+  // 先登记再在途：这一行代表「请求已经发出去了」，用例靠它判断自己该在什么时刻打停止
+  try {
+    const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
+    sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
+  } catch { /* 非 JSON 的请求体不进这份清单 */ }
   if (holdMs) {
     // 真在途、真被 signal 打断：provider 会把它归因成 LlmAbortedError，于是测得到「异常携带」那半条补账路径
     await new Promise<void>((resolve, reject) => {
@@ -85,15 +104,10 @@ async function fakeFetch(_url: unknown, init?: { body?: string; signal?: AbortSi
       }, { once: true });
     });
   }
-  if (stopInside && fetchCalls === stopInside.atCall) {
+  if (stopInside && raw.includes(stopInside.marker) && ++stopInside.seen === stopInside.atCall) {
     const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId: stopInside.turnId } });
     expect(stopped.json()).toMatchObject({ stopped: true });
   }
-  const raw = String(init?.body ?? "{}");
-  try {
-    const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
-    sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
-  } catch { /* 非 JSON 的请求体不进这份清单 */ }
   const text = replyFor(raw);
   // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具**实际被拒的是什么**从此能被端到端验，
   // 不用只停在「清单里有这一项」
@@ -438,24 +452,28 @@ describe("宏观设计作用域（JSON + SSE）", () => {
   }
 
   it("① 停止落在最后一趟在途：异常带着本轮读过的文件上来，收尾照样落账", async () => {
+    const question = "这句会被中止但要记账·在途";
     scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
-    holdMs = 400; // 第一趟 400ms 回来并执行 read_file，第二趟在途时打「停止」
+    holdMs = 1_200; // 第二趟留足在途窗口，停止一定撞在请求还活着的时候
     const threadId = await newThread("map", "中止补账·在途");
     const turnId = "abort-audit-inflight";
-    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "这句话会被中止但要记账", threadId, turnId } });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    const pending = app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
+    // 等的是「第一趟已回来、read_file 真执行过、第二趟已经发出」这个**事件**（判据=本回合第二发请求登记上），
+    // 不是墙上时间：CI 那台机器上 sleep(500) 会抢在 holdMs 之前打完停止，中止于是落在第一轮工具之前，账上本来就没东西
+    await waitFor(() => requestsOf(question) >= 2, "第一趟回来、read_file 执行完、第二趟请求发出");
     const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
     expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
     expectAbortedAudit(threadId, sseEvents((await pending).payload));
   });
 
   it("② 停止落在最后一趟之后：数组在返回值里，收尾同样落账", async () => {
+    const question = "这句答完才发现已经点了停止·收尾";
     scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
     const threadId = await newThread("map", "中止补账·收尾");
     const turnId = "abort-audit-late";
     // 第二趟请求**返回之前**把停止打进去：signal 已置位但这一趟照样回正文，路由收尾时才判作废
-    stopInside = { turnId, atCall: fetchCalls + 2 };
-    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: "答完才发现已经点了停止", threadId, turnId } });
+    stopInside = { turnId, marker: question, atCall: 2, seen: 0 };
+    const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
     stopInside = undefined;
     expectAbortedAudit(threadId, sseEvents(response.payload));
   });
