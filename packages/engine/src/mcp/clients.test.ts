@@ -94,14 +94,16 @@ describe("连上与清单", () => {
   it("白名单一条都没匹配上：不静默给空清单，errors 里说清是白名单的问题", async () => {
     configure({ pick: stdio(["no_such_tool_here"]) });
     const surface = await externalToolSurface();
-    expect(surface?.tools ?? []).toEqual([]);
+    expect(surface, "白名单全不匹配时也要带回 errors，不能回 undefined 让这句假绿").toBeDefined();
+    expect(surface?.tools).toEqual([]);
     expect(surface?.errors).toEqual([{ server: "pick", reason: "连上了但它报的工具都不在白名单里" }]);
   });
 
   it("子进程起不来 → 一个工具都不给，原因进读数，不抛", async () => {
     configure({ "broken-boot": { command: "/nonexistent/tutor-fixture-binary" } });
     const surface = await externalToolSurface();
-    expect(surface?.tools ?? []).toEqual([]);
+    expect(surface, "连不上也要带回 errors").toBeDefined();
+    expect(surface?.tools).toEqual([]);
     expect(surface?.errors[0]).toMatchObject({ server: "broken-boot", reason: "连不上（子进程起不来或 initialize 失败）" });
   });
 });

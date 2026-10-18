@@ -34,8 +34,3 @@ export function nestedSandboxUsable(): { usable: boolean; detail: string } {
   cached = result.status === 0 ? { usable: true, detail } : { usable: false, detail: detail || `exit=${String(result.status)} sig=${String(result.signal ?? "-")}` };
   return cached;
 }
-
-/** 只给测试用：换一台机器/换一种沙箱策略后重新判一次（默认缓存住，避免每条用例都起一个进程）。 */
-export function resetNestedSandboxProbeForTest(): void {
-  cached = undefined;
-}

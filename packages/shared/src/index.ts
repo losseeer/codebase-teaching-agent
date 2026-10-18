@@ -610,14 +610,6 @@ export const CAPABILITY_CELLS = ["symbolExtraction", "dependencyEdge", "entrypoi
 
 export type CapabilityCell = (typeof CAPABILITY_CELLS)[number];
 
-/** 能力格的中文显示名（界面提示用；别在界面上露英文格名）。 */
-export const CAPABILITY_CELL_LABEL: Record<CapabilityCell, string> = {
-  symbolExtraction: "符号抽取",
-  dependencyEdge: "依赖边",
-  entrypoint: "入口判定",
-  packageResolution: "路径别名与包解析",
-  buildVisibility: "构建可见性"
-};
 
 /** 三档的中文显示名。`unsupported` 直说「没有规则」，不用「未支持」这种看着像「差一点就支持」的说法。 */
 export const CAPABILITY_LEVEL_LABEL: Record<CapabilityLevel, string> = {
@@ -1305,8 +1297,8 @@ export interface PracticeSummary {
   - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
     这条契约来自设计文档第 8 章 PRINCIPLE 03「可观测」：每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
 
-  ⚠️ 改这里必须同步 `packages/engine/src/store/journal.ts` 的运行时 `eventTypes` Set——
-  它才是 `Journal.append` 的白名单，漏同步会在运行期抛 `Unknown journal event`。
+  ⚠️ 每张表都要**正好**归到 `ENGINE_JOURNAL_EVENTS` 或 `UI_JOURNAL_EVENTS` 之一：下面那条编译期对账会查漏归类，
+  `packages/engine/src/store/journal.ts` 的运行时白名单由这两张表派生（不再是手抄的一份 Set）。
   append-only：只许新增，不许改名既有取值；删除只发生过一次例外——teach_moment 随 companion 功能于 2026-09-22 整体移除
   （readJournal 读侧不校验类型，历史仓里的旧 teach_moment 事件仍可读，只是不再接受新写入）。
   */

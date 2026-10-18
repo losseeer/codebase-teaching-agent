@@ -251,7 +251,6 @@
 .origin-static { background: var(--ok-bg); color: var(--ok); }
 .origin-code { background: var(--info-bg); color: var(--info-ink); }
 .origin-inferred { background: var(--warn-bg); color: var(--warn-ink); }
-.flow-legend { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-4); font-size: 10px; color: var(--ink-3); }
 /* 首次流程生成是几十秒量级的 LLM 调用：分相 + 骨架，让人看出「还在动」 */
 .flow-skeleton { width: 380px; max-width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .flow-skeleton span { height: 46px; border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: linear-gradient(90deg, var(--surface-2) 25%, var(--brand-050) 50%, var(--surface-2) 75%); background-size: 320px 100%; animation: flow-skeleton 1.4s linear infinite; }

@@ -410,7 +410,6 @@ h1, h2, h3, h4, p { margin-top: 0; }
 }
 @keyframes blink { 50% { opacity: 0; } }
 .msg-streaming::after { content: "▍"; opacity: 0.4; }
-.msg-meta { font-size: 10px; color: var(--ink-3); padding: 0 4px; align-self: flex-start; }
 .msg-bubble.error { border-color: var(--danger-border); color: var(--danger); }
 .msg-bubble.hint { border-color: var(--border); color: var(--ink-3); font-style: italic; }
 
@@ -468,11 +467,6 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .send-btn.stop { background: var(--danger); }
 
 /* 对话栏收起成一条边 */
-.rail.rail-collapsed { align-items: center; padding: var(--sp-3) 0; }
-.rail-mini { display: flex; flex-direction: column; align-items: center; gap: 9px; width: 100%; padding: var(--sp-2) 0; border-radius: var(--r-sm); color: var(--ink-2); font-size: var(--fs-11); font-weight: 700; }
-.rail-mini:hover { background: var(--brand-050); color: var(--brand-700); }
-.rail-mini-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--ring-strong); }
-.rail-mini-text { writing-mode: vertical-rl; letter-spacing: 2px; }
 
 /* 空状态 */
 .empty {

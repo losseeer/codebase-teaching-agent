@@ -281,7 +281,7 @@ export function ArchOverview({ repositoryId, course, visible, selectedId, reload
       {previewDraft ? (
         <div className="banner banner-info">
           <Icon name="info" size={14} />
-          <div className="banner-text" title={`目的：${diagram?.preview?.purpose ?? ""}。${previewDraft.layers.length} 层、${previewDraft.layers.reduce((total, layer) => total + layer.nodes.length, 0)} 个节点，另有 ${previewDraft.omitted.length} 个节点列了理由没画。箭头与「边界之外」仍是程序按 import 算的，这张图里一条都不来自模型。${previewDraft.conflicts.length ? `其中 ${previewDraft.conflicts.length} 个节点与引擎算出的结构角色相反，节点上标了点。` : ""}`}>
+          <div className="banner-text" title={`目的：${diagram?.preview?.purpose ?? ""}。${previewDraft.layers.length} 层、${previewDraft.layers.reduce((total, layer) => total + layer.nodes.length, 0)} 个节点，另有 ${previewDraft.omitted.length} 个节点列了理由没画。「边界之外」那一栏仍是程序按 import 算的，一条都不来自模型；跨层箭头本来就不画。${previewDraft.conflicts.length ? `其中 ${previewDraft.conflicts.length} 个节点与引擎算出的结构角色相反，节点上标了点。` : ""}`}>
             <strong>这是一张预览</strong>
             <span> · 还没替换</span>
           </div>

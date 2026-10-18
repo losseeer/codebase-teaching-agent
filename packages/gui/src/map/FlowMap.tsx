@@ -6,7 +6,7 @@ import { OptionDropdown, type DropdownOption } from "../ui/OptionDropdown";
 import { Icon } from "../ui/icons";
 
 /**
- * 宏观设计 v0.10：流程视图（与 `DepMap` 的架构视图并列，prototype `.flow-col` + `.flow-stage`）。
+ * 宏观设计 v0.10：流程视图（与 `ArchOverview` 的架构视图并列，prototype `.flow-col` + `.flow-stage`）。
 
  * 两个视图的分工：
  * - 架构视图由**文件**驱动：节点 = 目录聚合模块，边 = import 依赖。客观、稳定、可穷举。

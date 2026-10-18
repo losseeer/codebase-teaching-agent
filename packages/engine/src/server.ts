@@ -199,7 +199,8 @@ function persistTeachingTurn(repositoryPath: string, repositoryId: string, cours
 
 /**
   全局事件流的订阅者（GET /api/events）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。
-  一路订阅连着它的**身份**一起存：这条流是常开连接，onRequest 那道按 URL 判的 ACL 够不到后来的每一帧。
+  一路订阅连着它的**请求**一起存：来源闸只在连接进来那一次判，之后每一帧不再重判来源；
+  帧里带着目标仓的绝对路径与改动文件名，所以这条流是本机可读的（认证闸与按人过滤已于 2026-10-15 撤除，§64）。
   */
 const subscribers = new Set<{ send: (event: ServerEvent) => void; request: FastifyRequest }>();
 
@@ -961,7 +962,9 @@ async function redrawStep(repository: ImportedRepository, database: TutorDatabas
     if (!pending) return refuse("没有待确认的重绘请求：这一发要用户点画布上那条横幅才开始。");
     if (!lightLlmProvider) return refuse("未配置模型：重绘这张图需要模型真去读代码。");
     if (budgetDegraded(repository.path, repoId)) return refuse("本月预算已达到预算上限，未调用模型：这一发没花出去。");
-    clearRedraft(database, repoId, kind, "pending");
+    // **删除的返回值就是领取闸门**：两个标签页同时点「开始重绘」时，只有删掉 pending 的那一个能往下走。
+    // 少了这一道，两边各自读到 pending、各自烧一发（重绘是本产品最贵的单动作，实测 ¥0.1~0.3），钱花两遍而账上看着像一次。
+    if (!clearRedraft(database, repoId, kind, "pending")) return refuse("这条提议已经被领走了（同一个画布上有别的「开始重绘」在跑，或者它刚被撤掉）。这一发没花出去。");
     const overlays = readOverlays(database, repoId);
     const input = architectureInputOf({ repositoryId: repoId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
     const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
@@ -992,7 +995,10 @@ async function redrawStep(repository: ImportedRepository, database: TutorDatabas
     return { statusCode: 200, ok: true, text: "已替换：画布现在画的是这张重绘出来的图，默认那份仍在，说「恢复默认图」就回去。", body: { status: "committed" } };
   }
   if (action === "keep") {
-    const had = clearRedraft(database, repoId, kind, "preview") || clearRedraft(database, repoId, kind, "pending");
+    // 两句都要执行：`||` 会在删掉预览后**短路**，那条待确认的提议就留在账上——用户点「保持现在的」之后横幅还说「等你确认重绘」
+    const hadPreview = clearRedraft(database, repoId, kind, "preview");
+    const hadPending = clearRedraft(database, repoId, kind, "pending");
+    const had = hadPreview || hadPending;
     journal.append("diagram_replaced", { kind, action: "keep", purpose: "" }, threadId);
     broadcast({ type: "diagram_replaced", payload: { repositoryId: repoId, kind, action: "keep" } });
     return { statusCode: 200, ok: true, text: had ? "已撤掉那张预览，画布还是原来那张。" : "本来就没有待确认的预览，画布没动。", body: { status: had ? "discarded" : "none" } };
@@ -1503,6 +1509,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
+    // 与 JSON 那条同一个收尾：这条库句柄是给两个写工具闭包用的，不关就是每个回合漏一个 fd（better-sqlite3 还带 WAL）
+    overlayDatabase.close();
   }
   reply.raw.end();
 });

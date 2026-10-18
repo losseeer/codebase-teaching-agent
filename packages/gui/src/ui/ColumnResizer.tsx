@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, 
 export interface LayoutPrefs {
   /** Agent 对话栏（最右一栏）宽度 */
   railWidth: number;
-  /** 对话栏是否收起成一条窄边 */
+  /** 对话栏是否收起（收起时这一栏**整条不渲染**，不是留一条窄边） */
   railCollapsed: boolean;
   /** 三个工作区共用的左侧列表栏宽度（教学的「仓库文件」、宏观的「项目目录」、练习的「练习模块」） */
   filePaneWidth: number;

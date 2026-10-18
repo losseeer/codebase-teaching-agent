@@ -269,6 +269,13 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     const messages = calls[1].messages ?? [];
     expect(messages.find((message) => message.toolCallId === "s1")?.content).toContain("看 llm.log");
     expect(messages.find((message) => message.toolCallId === "s2")?.content).toContain("没有「不存在的技能」这份技能");
+    // 装了但正文为空 ≠ 没装：found 必须还是 true，模型才不会回用户一句「这个技能不存在」
+    const blank = await completeWithReadTool({
+      provider: scriptedProvider([{ text: "", toolCalls: [{ id: "b1", name: "read_skill", argumentsJson: JSON.stringify({ name: "empty-skill" }) }], finishReason: "tool_calls" }, { text: "答。", finishReason: "stop" }]).provider,
+      repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2,
+      skills: { brief: "可用技能：\n- empty-skill：一份还没写正文的技能。", bodyOf: (name) => (name === "empty-skill" ? "" : undefined) }
+    });
+    expect(blank.skillReads).toEqual([{ skill: "empty-skill", chars: 0, found: true }]);
     // 「清单里有名字、正文从没被取走」只能从这一行看出来，所以 found:false 必须照样记
     expect(result.skillReads).toEqual([
       { skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true },

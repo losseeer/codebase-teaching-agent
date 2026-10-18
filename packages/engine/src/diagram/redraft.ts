@@ -1,5 +1,6 @@
 import type { ArchitectureBlockBrief, ArchitectureBlockRole, ArchitectureDiagramDraft, ArchitectureEdge, ArchitectureLayer, DiagramLayerDraft } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
 import type { SearchCorpus } from "../source/search-code.js";
 import type { FileReadRecord } from "../source/read-file.js";
@@ -162,6 +163,15 @@ function canvasBrief(canvas: CanvasUnits, currentLayers: string[], purpose: stri
   ].join("\n");
 }
 
+/** 两趟之间攒下来的进度：模型抛错时也要能交出「钱花了多少、读过哪些文件」。 */
+interface RedraftProgress {
+  usage?: LlmUsage;
+  fileReads: FileReadRecord[];
+  rounds: number;
+  findings: DiagramFinding[];
+  droppedFindings: number;
+}
+
 export async function runArchitectureRedraft(input: {
   architectureInput: ArchitectureInput;
   provider: LlmProvider;
@@ -171,6 +181,37 @@ export async function runArchitectureRedraft(input: {
   search?: SearchCorpus;
   signal?: AbortSignal;
 }): Promise<RedraftOutcome> {
+  const progress: RedraftProgress = { fileReads: [], rounds: 0, findings: [], droppedFindings: 0 };
+  try {
+    return await runRedraftPasses(input, progress);
+  } catch (error) {
+    // 用户点「停止生成」抛的中止照原样上抛：那一轮按作废收尾，不落成「模型失败了」
+    if (isLlmAborted(error)) throw error;
+    /**
+      网络/额度/超时这类异常以前会一路撞到路由的 500：而第一趟的钱**已经花出去了**、读过的文件也真读过，
+      结果 journal 里一行都没有——「报了没发生的出网比漏报糟」，反过来漏报发生过的花费同样糟。
+      现在带着进度交回一个 ok:false，调用页照旧落 token_usage / file_read / diagram_redrafted。
+    */
+    return {
+      ok: false,
+      reason: `模型调用失败：${error instanceof Error ? error.message : String(error)}`,
+      usage: progress.usage,
+      fileReads: progress.fileReads,
+      rounds: progress.rounds,
+      findings: progress.findings,
+      droppedFindings: progress.droppedFindings
+    };
+  }
+}
+
+async function runRedraftPasses(input: {
+  architectureInput: ArchitectureInput;
+  provider: LlmProvider;
+  purpose: string;
+  currentLayers: string[];
+  search?: SearchCorpus;
+  signal?: AbortSignal;
+}, progress: RedraftProgress): Promise<RedraftOutcome> {
   const { architectureInput: architecture, provider, purpose } = input;
   const context = archContext(architecture, provider.modelVersion);
   const canvas: CanvasUnits = { blocks: context.briefs, units: context.units };
@@ -199,6 +240,9 @@ export async function runArchitectureRedraft(input: {
     ...(input.search ? { search: input.search } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
+  progress.usage = explore.usage;
+  progress.fileReads = explore.fileReads;
+  progress.rounds = explore.rounds;
   const explored = parseJsonObject(explore.completion.text);
   const findings: DiagramFinding[] = [];
   let droppedFindings = 0;
@@ -214,6 +258,8 @@ export async function runArchitectureRedraft(input: {
     if (findings.length >= MAX_FINDINGS) break;
   }
 
+  progress.findings = findings;
+  progress.droppedFindings = droppedFindings;
   const drafted = await provider.complete({
     system: [
       "你是架构分层器。给定一个仓的**事实清单**（上一趟真读出来的）与画布上现有的节点，把它们分进 2~7 个职责层次，自上而下。",
@@ -230,6 +276,7 @@ export async function runArchitectureRedraft(input: {
     ...(input.signal ? { signal: input.signal } : {})
   });
   const usage = addUsage(explore.usage, drafted.usage);
+  progress.usage = usage;
   const fileReads = explore.fileReads;
   const verified = verifyArchitectureDraft(parseJsonObject(drafted.text) ?? {}, canvas);
   if (!verified.ok || !verified.draft) {
@@ -237,7 +284,7 @@ export async function runArchitectureRedraft(input: {
   }
   return {
     ok: true,
-    draft: { ...verified.draft, readPaths: [...new Set(fileReads.map((read) => read.path))] },
+    draft: { ...verified.draft, readPaths: [...new Set(fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path))] },
     usage,
     droppedFindings,
     findings,

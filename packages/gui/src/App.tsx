@@ -82,7 +82,7 @@ function readStoredWorkspace(): _Workspace | null {
 
 /**
   顶层 Shell（对齐 docs/ui-prototype 的 .app 三栏栅格）：
-  - 侧栏：品牌行 + 五项主导航（图标 + 标签）+ 仓库切换器 + 页脚（收起侧栏 / 引擎状态 / 访问口令）
+  - 侧栏：品牌行 + 五项主导航（图标 + 标签）+ 仓库切换器 + 页脚（收起侧栏 / 引擎状态）
   - 主区：/import 与 /insights 保留独立路由；三个学习工作区（map / teaching / practice）合并为
     单一主区组件树（`/app?workspace=`），三个工作区同时挂载、
     `hidden` 切换可见性：切换不丢状态，隐藏时不发付费 LLM 请求（useEverVisible），SSE 续接也依赖这份常驻

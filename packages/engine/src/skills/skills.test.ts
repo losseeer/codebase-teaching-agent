@@ -90,7 +90,8 @@ describe("清单（按 Agent Skills 规格验形状）", () => {
     expect(skillDirectories()).toEqual([root, second]);
     process.env.TUTOR_SKILLS_DIR = `${root},${second}`;
     expect(skillDirectories()).toEqual([root, second]);
-    if (previous !== undefined) process.env.TUTOR_SKILLS_DIR = previous;
+    if (previous === undefined) delete process.env.TUTOR_SKILLS_DIR;
+    else process.env.TUTOR_SKILLS_DIR = previous;
   });
 });
 

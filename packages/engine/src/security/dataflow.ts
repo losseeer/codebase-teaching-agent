@@ -15,7 +15,7 @@ import { Journal } from "../store/journal.js";
      报了没发生的出网，比漏报更糟（它会把「我们没读过这个文件」洗成「读过」）。
      端点失败照记：请求确实发出去了，`llm.log` 里那行的 `ok=false` 就是它的另一半。
 
-  provider / model / token / 调用方 `actor` 都**不在这里重复**：那些在 `~/.codebase-tutor/llm.log`，
+  provider / model / token 都**不在这里重复**：那些在 `~/.codebase-tutor/llm.log`（`actor` 这列自 2026-10-15 撤认证闸起新行恒 null，只留着保 JSONL 列形状），
   两边靠 `traceId + scene` 关联（同一事实只写一处，与 engine.jsonl↔llm.log 同一套分工）。
   工具循环 `read_file` 拿到的内容也不在这里记——它已有 `file_read` 那一行（内容在下一轮出门，
   报表按「同一 traceId 内的 file_read 也算出网」口径合并）。

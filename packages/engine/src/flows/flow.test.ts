@@ -408,7 +408,8 @@ describe("generateRepositoryFlow（含降级）", () => {
     const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
     const [owner, joiner] = await Promise.all([generateRepositoryFlowCached(base), generateRepositoryFlowCached(base)]);
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(owner.flow.stages).toHaveLength(joiner.flow.stages.length);
+    expect(owner.flow.stages.length).toBeGreaterThan(0);
+    expect(joiner.flow).toBe(owner.flow); // 后来者复用同一个结果对象（不是另算一遍）
     expect(owner.usage).toBeDefined();
     expect(joiner.usage).toBeUndefined(); // 同一笔钱不被计两次（与命中缓存同一口径）
     // 生成结束后照常落缓存：第三次访问连模型都不用问

@@ -69,8 +69,9 @@ describe("verifyArchitectureDraft", () => {
 
   it("只给一层不叫分层；八层以上那是清单不是图", () => {
     expect(verifyArchitectureDraft(draft([{ name: "全都在这", nodes: ["module:a", "module:b", "arch:x:c"] }]), canvas).ok).toBe(false);
-    const many = Array.from({ length: 8 }, (_unused, index) => ({ name: `层${index + 1}`, nodes: index === 0 ? ["module:a", "module:b"] : ["module:a"] }));
-    expect(verifyArchitectureDraft(draft(many.slice(0, 4)), canvas).ok, "先确认 4 层这种是过的").toBe(false);
+    // 这一句验的是**重复归层**（同一个节点被塞进两层），不是层数：层数那条在下一句单独钉
+    const dup = Array.from({ length: 4 }, (_unused, index) => ({ name: `层${index + 1}`, nodes: index === 0 ? ["module:a", "module:b"] : ["module:a"] }));
+    expect(verifyArchitectureDraft(draft(dup), canvas).reason, "同一节点进两层要当场拒掉").toContain("同时进");
     const eight = Array.from({ length: 8 }, (_unused, index) => ({ name: `层${index + 1}`, nodes: index === 0 ? ["module:a"] : [] as string[] }));
     expect(verifyArchitectureDraft({ layers: eight, omitted: [] }, canvas).reason, "超过 7 层先被层数上限挡下").toContain("7 层上限");
   });
@@ -99,13 +100,11 @@ describe("verifyArchitectureDraft", () => {
   组合节点整个进同一层 → 标块 id；成员分了两层 → 块解散，标的是成员 id。
 */
 describe("冲突标注的粒度与画布一致", () => {
-  const rendered = (layers: ArchitectureLayer[]): ArchitectureLayer[] => layers;
   it("候选里把组合节点拆开，标注跟着落到成员那个节点", () => {
     const outcome = verifyArchitectureDraft(draft([{ name: "上", nodes: ["module:a", "module:c"] }, { name: "下", nodes: ["module:b", "module:d"] }]), canvas);
     expect(outcome.ok).toBe(true);
     // 下层里 module:d（来自 shared 块）与 module:b（core）同层，且 core 只有一个节点 ⇒ 没有多数，不标
     expect(outcome.draft?.conflicts ?? []).toEqual([]);
-    expect(rendered([])).toEqual([]);
   });
 
   it("整个组合节点留在同一层时，可核对的节点 id 是组合节点的 id，而不是成员 id", () => {

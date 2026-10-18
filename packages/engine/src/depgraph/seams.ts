@@ -6,7 +6,7 @@ import { matchRouteSeams, routeEndpointsOfFiles } from "./routes.js";
 
   为什么是**跨仓**而不是同仓：用户手上的语料每仓都是单语言的（后端全 Java、前端全 Vue），
   同仓配对在真实数据上配不出任何东西；而这条链的价值恰恰是「点这个按钮之后代码在哪」。
-  实测可行性（`pnpm tsx src/scripts/route-seam-probe.ts` 跑 dianping 前端×后端）：14 条调用串里
+  当年实测可行性用的是 `src/scripts/route-seam-probe.ts`（跨仓接缝面板撤除时一并删了，读数记在开发日志 §41）：14 条调用串里
   12 条配上控制器，全部整段相等、0 条歧义。
 
   两条刻意的取舍：

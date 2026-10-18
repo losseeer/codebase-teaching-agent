@@ -135,7 +135,7 @@ interface Connected {
   origin: Map<string, string>;
 }
 
-/** 连接池：按 server 名惰性连一次并缓存这条 promise；失败也缓存（不每个回合重开一个子进程）。 */
+/** 连接池：按 server 名惰性连一次并缓存这条 promise。**连成功的一直复用**；连不上或调用时发现连接已死的，把这一项摘掉，下一个回合重连——既不留僵尸子进程，也不让一次故障被永久钉成「每轮都超时」。 */
 const pool = new Map<string, Promise<Connected | undefined>>();
 
 async function connect(config: McpServerConfig): Promise<Connected | undefined> {
@@ -149,8 +149,9 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    // 白名单两种写法都认：完整 id（mcp__server__tool）剥掉前缀，裸工具名照原样比
-    const allowed = config.allowedTools?.length ? new Set(config.allowedTools.map((entry) => entry.replace(/^mcp__[^_]+__/, ""))) : undefined;
+    // 白名单两种写法都认：完整 id 按**这台 server 的名字**剥前缀（名字允许下划线，用 `[^_]+` 的正则会整条失配、把工具静默丢光），裸工具名照原样比
+    const prefix = `mcp__${config.name}__`;
+    const allowed = config.allowedTools?.length ? new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry))) : undefined;
     const tools: LlmTool[] = [];
     const origin = new Map<string, string>();
     for (const tool of listed.tools) {
@@ -172,11 +173,15 @@ function previewOf(argumentsJson: string): { argsChars: number; argsHash: string
   return { argsChars: text.length, argsHash: hash(text).slice(0, 12) };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    const timer = setTimeout(() => resolve(onTimeout()), ms);
-    promise.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(onTimeout()); });
-  });
+/** 超时与「调用本身失败」是两个读数：前者是 server 慢，后者是连接/子进程已经死了，处置完全不同。 */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; reason: "timeout" | "failed" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await Promise.race([
+    promise.then((value) => ({ ok: true as const, value }), () => ({ ok: false as const, reason: "failed" as const })),
+    new Promise<{ ok: false; reason: "timeout" }>((resolve) => { timer = setTimeout(() => resolve({ ok: false, reason: "timeout" }), ms); })
+  ]);
+  clearTimeout(timer);
+  return outcome;
 }
 
 /**
@@ -217,16 +222,21 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
         return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms: Date.now() - started, error: "bad_arguments" } };
       }
       const limit = timeoutMs();
-      const outcome = await withTimeout(entry.client.callTool({ name: entry.origin.get(name) as string, arguments: args }), limit, () => undefined);
+      const outcome = await withTimeout(entry.client.callTool({ name: entry.origin.get(name) as string, arguments: args }), limit);
       const ms = Date.now() - started;
-      if (!outcome) {
-        const text = `外部工具「${entry.server}/${entry.origin.get(name)}」${limit / 1000}s 没回话（这台 server 是外部程序，可能卡住了）。请基于已有信息回答，并说明这一项没核实。`;
-        return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms, error: "timeout" } };
+      if (!outcome.ok) {
+        // 调用本身失败 = 这条连接大概率已经死了：从池里摘掉，下一个回合重连（留着就是每轮都报超时）
+        if (outcome.reason === "failed") pool.delete(entry.server);
+        const text = outcome.reason === "timeout"
+          ? `外部工具「${entry.server}/${entry.origin.get(name)}」${limit / 1000}s 没回话（这台 server 是外部程序，可能卡住了）。请基于已有信息回答，并说明这一项没核实。`
+          : `外部工具「${entry.server}/${entry.origin.get(name)}」这条连接没打通（子进程退了或已经断了）。这一项没核实，请基于已有信息回答。`;
+        return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms, error: outcome.reason } };
       }
-      const parts = (outcome.content ?? []) as { type?: string; text?: string }[];
+      const result = outcome.value;
+      const parts = (result.content ?? []) as { type?: string; text?: string }[];
       const texts = parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text as string);
       const dropped = parts.length - texts.length;
-      const flagged = Boolean((outcome as { isError?: boolean }).isError);
+      const flagged = Boolean((result as { isError?: boolean }).isError);
       const raw = `${flagged ? "外部工具回了错误：\n" : ""}${texts.join("\n")}${dropped > 0 ? `\n…（另有 ${dropped} 段非文本内容未交回）` : ""}`;
       const clipped = raw.length > RESULT_CHARS ? `${raw.slice(0, RESULT_CHARS)}\n…（外部返回已截断，原 ${raw.length} 字。）` : raw;
       const masked = maskSecrets(clipped);
@@ -242,7 +252,7 @@ export async function closeExternalTools(): Promise<void> {
   for (const entry of entries) await entry?.client.close().catch(() => undefined);
 }
 
-/** 让下一个回合重新连（改完配置文件用；测试也靠它清掉失败缓存）。 */
+/** 清空连接池：测试收尾用。改了配置文件本身需要重启引擎才生效（没有热加载入口，读数里会照实这么写）。 */
 export function resetExternalTools(): void {
   pool.clear();
 }

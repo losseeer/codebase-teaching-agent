@@ -706,7 +706,7 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
   if (!cacheKey) return generateRepositoryFlow(input);
   const key = cacheKey.key;
   const now = Date.now();
-  const cached = readFlowCache(input, key, now);
+  const cached = readFlowCache(input, key, now, true);
   if (cached) return cached;
   const running = flowInFlight.get(key);
   if (running) return { ...(await running), usage: undefined };
@@ -728,21 +728,29 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
   return result;
 }
 
-/** 内存层 → SQLite 两层只读查询：命中就续期（含 LRU 新近度），没命中返回 undefined。*/
-function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key: string, now: number): GeneratedFlow | undefined {
+/**
+  内存层 → SQLite 两层查询：命中就返回，没命中回 undefined。
+  `renew` 为真才动缓存与库（续期 + LRU 新近度 + `touchLayerCache`）；只读出口传 false——
+  名字里写着 readonly 的那条路由不该写库，哪怕只是改一个 `at`。
+*/
+function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key: string, now: number, renew: boolean): GeneratedFlow | undefined {
   const hit = flowCache.get(key);
   if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
-    flowCache.delete(key);
-    flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
-    input.database?.touchLayerCache(key, now);
+    if (renew) {
+      flowCache.delete(key);
+      flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
+      input.database?.touchLayerCache(key, now);
+    }
     return { ...hit.result, usage: undefined };
   }
   // 内存过期/缺失时查 SQLite：engine 重启（tsx watch）会清空内存层，持久层让重启不重烧
   const stored = input.database?.getLayerCache<GeneratedFlow>(key);
   if (stored && now - stored.at < FLOW_PERSISTED_TTL_MS) {
-    flowCache.set(key, { result: stored.value, at: now });
-    trimToNewest(flowCache, FLOW_CACHE_MAX);
-    input.database?.touchLayerCache(key, now);
+    if (renew) {
+      flowCache.set(key, { result: stored.value, at: now });
+      trimToNewest(flowCache, FLOW_CACHE_MAX);
+      input.database?.touchLayerCache(key, now);
+    }
     return { ...stored.value, usage: undefined };
   }
   return undefined;
@@ -756,7 +764,7 @@ function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key:
 export function peekCachedFlow(input: GenerateFlowInput & { repositoryId: string }): GeneratedFlow | undefined {
   const cacheKey = flowCacheKeyOf(input);
   if (!cacheKey) return undefined;
-  return readFlowCache(input, cacheKey.key, Date.now());
+  return readFlowCache(input, cacheKey.key, Date.now(), false);
 }
 
 /** Map 的迭代序即插入序，配合「先 delete 再 set」即为新近度，从头裁掉最旧项。 */

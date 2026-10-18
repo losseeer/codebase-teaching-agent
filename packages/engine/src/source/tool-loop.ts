@@ -323,8 +323,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const skill = readSkillHint(call.argumentsJson);
         const file = readSkillFileHint(call.argumentsJson);
         const body = input.skills.bodyOf(skill, file);
-        skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found: Boolean(body) });
-        messages.push({ role: "tool", toolCallId: call.id, content: body ?? `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
+        // 「取到了但正文是空的」与「没有这份技能」是两个读数：前者的做法确实装了、只是没写内容，
+        // 用 Boolean(body) 会把前者判成后者，模型于是回用户一句「这个技能不存在」——那是假话
+        const found = body !== undefined;
+        skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found });
+        messages.push({ role: "tool", toolCallId: call.id, content: found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
         continue;
       }
       if (input.external?.tools.some((tool) => tool.name === call.name)) {
