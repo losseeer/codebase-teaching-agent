@@ -60,8 +60,8 @@ async function send(post: JournalPost): Promise<void> {
 }
 
 /**
-  「这条事件本身不被接受」的判定：4xx = 引擎不收这个类型（事件名越权、载荷不合形状），丢弃并点名；
-  5xx 与网络错留在队列里等下一轮补发。
+  「这条事件本身不被接受」的判定：4xx = 引擎不收这个类型（事件名越权、载荷不合形状、仓库没挂载），丢弃并点名——
+  留在队列里只会每轮重放、挤掉真正能补发的事件，所以丢弃，但要把丢弃说得查得回来。5xx 与网络错留在队列等下一轮补发。
   （以前这里还排除 401——那是「还没给口令」，留着等用户补；认证闸已于 2026-10-15 撤除，§64，
   再留着就是一个节点永远不为真的豁免。）
   */
@@ -97,8 +97,6 @@ export async function postJournalEvent(post: JournalPost): Promise<void> {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (error instanceof JournalSendError && rejected(error)) {
-      // 4xx = 这条事件本身不被接受（类型不在白名单、仓库没挂载）。留在队列里只会每轮重放、
-      // 挤掉真正能补发的事件，所以丢弃，但要把丢弃说得查得回来。
       console.error(`[journal] 事件 ${post.type} 被引擎拒收（HTTP ${error.status}：${reason}），已丢弃，不进重试队列`);
       return;
     }

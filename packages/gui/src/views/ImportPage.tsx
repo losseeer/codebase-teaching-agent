@@ -47,9 +47,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
   const switchLogged = useRef(false);
 
-  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress）；
-  // 读流与重连在 `subscribeServerEvents` 里（留着 fetch 读流不是为了认证头——那道闸 10-15 撤了；是三条流共用同一套退避与 AbortSignal 语义）。
-  // 5s 轮询是兜底——事件流断线/丢事件时靠全量 GET 追上终态，轮询本身不再承担实时性。
+  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress），读流与重连见
+  // `subscribeServerEvents`；5s 轮询只是兜底——事件流断线 / 丢事件时靠全量 GET 追上终态，本身不承担实时性。
   const jobId = job?.id;
   /** 终态判定一处收尾：轮询/按钮禁用都用它，不再各写一份 ["completed","failed"] */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";

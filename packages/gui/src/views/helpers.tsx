@@ -1,12 +1,7 @@
 import type { ReactElement } from "react";
 import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared";
 
-/**
-  views/ 共享的小工具：
-  - Loading / EmptyState：通用占位 UI
-  - exerciseKindLabel：题型枚举 → 中文文案（导入阶段的文案在 ImportPage 的 PHASES 表里）
-  - firstTeachNode / flatten：课程树遍历
- */
+/** views/ 共享的小工具：通用占位 UI（Loading / EmptyState）、题型与日期的中文文案、课程树遍历。 */
 
 export function Loading(): ReactElement {
   return <div className="loading"><i className="spinner" aria-hidden />正在读取本地课程数据</div>;

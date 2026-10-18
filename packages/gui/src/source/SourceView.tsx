@@ -2,13 +2,11 @@ import { useEffect, useMemo, useRef, type ReactElement } from "react";
 import { detectLanguage, highlightLines } from "./highlight";
 
 /**
-  只读源码岛（对齐 docs/ui-prototype 的 `.source-view` / `.src-line`）：
-  语法高亮 + 行号 + 锚点行高亮（`.anchored` 就是 Agent 的绑定行）+ 把目标行滚进可视区。
-  传入 `onLineClick` 时，点任意一行即可换锚点——这是代码教学页「点一行问一行」的入口。
-
-  高亮由 `highlight.ts` 的逐行 tokenizer 完成（零依赖）；语言按文件扩展名判定，
-  识别不了则整行纯文本。渲染上限 500 行 —— 超过上限的锚点行**不会被渲染**，
-  所以调用方必须先问 `isLineRendered()` 再决定文案能不能说「已定位」（见 TutorPage）。
+  只读源码岛（对齐 docs/ui-prototype 的 `.source-view` / `.src-line`）：语法高亮 + 行号 + 锚点行高亮
+  （`.anchored` 就是 Agent 的绑定行）+ 把目标行滚进可视区。传入 `onLineClick` 时，点任意一行即可换锚点——
+  这是代码教学页「点一行问一行」的入口。高亮由 `highlight.ts` 的逐行 tokenizer 完成（零依赖），语言按扩展名判定，
+  识别不了则整行纯文本。渲染上限 500 行 —— 超过上限的锚点行**不会被渲染**，所以调用方必须先问 `isLineRendered()`
+  再决定文案能不能说「已定位」（见 TutorPage）。
  */
 
 export interface SourcePayload {

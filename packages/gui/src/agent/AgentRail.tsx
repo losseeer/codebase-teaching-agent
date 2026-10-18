@@ -7,13 +7,8 @@ import { Icon } from "../ui/icons";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
-  持久 Agent 对话栏（对齐 docs/ui-prototype 的 `.rail` 五段）：
-  ① 绑定上下文行 → ② 语言风格三档 → ③ 线程条（切换 / 新建 / 重命名 / 软删）→ ④ 消息流 → ⑤ 模型胶囊 + composer。
-  - 绑定行 = 当前作用域的**当前**位置（不是历史）：切换作用域/节点/文件只改这一行的值
-  - 语言风格是会话级设置，三个作用域共用一份
-  - 线程正文的真源在引擎库（chat_session + chat_message），这里只是入口
-  - 分工不变：所有 chat / composer / 流式订阅由本栏拥有（状态在 useScopedChat），工作区页面只呈现内容
-
+  持久 Agent 对话栏（对齐 docs/ui-prototype 的 `.rail` 五段：绑定上下文行 → 语言风格 → 线程条 → 消息流 → 模型胶囊 + composer）。
+  分工不变：所有 chat / composer / 流式订阅由本栏拥有（状态在 useScopedChat），工作区页面只呈现内容。
   收起态由外壳（App）负责：`railCollapsed` 时整栏不渲染，页顶栏那枚 panelRight 是再开入口。
  */
 export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
@@ -156,7 +151,6 @@ const STYLE_CHOICES = [
 ] as const;
 
 function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {
-  // 三个作用域的发送条件一致：生成中或空输入都不发
   const canSend = !t.sending && t.content.trim().length > 0;
   if (scope === "teaching") {
     return {
@@ -271,10 +265,10 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
   );
 }
 
-/** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
 /** 画布空态与 composer 上方共用的三条快捷指令：按钮上写的就是发出去的原话。 */
 const MAP_QUICK_PROMPTS = ["画一张架构分层图", "把模块依赖画出来", "画一条主要请求的流程"];
 
+/** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
 function ThreadEntry({ item, onOpenDiagram }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;

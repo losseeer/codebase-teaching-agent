@@ -97,7 +97,7 @@ export interface ScopedChatApi {
   scope: Scope;
   setScope: (next: Scope) => void;
 
-  /** Agent 侧栏 thread 状态：3 作用域各独立。写入器只有 `pushMessage`（清空由线程边界负责，不留第二个出口）。 */
+  /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责，不留第二个出口。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
   pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }) => void;
@@ -158,7 +158,7 @@ export interface ScopedChatApi {
   sending: boolean;
   /** 停止当前在途回合：既告诉引擎别算了（省 token），也中止自己的连接。没有在途回合时为空操作。 */
   stopTurn: () => void;
-  /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务 */
+  /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务。三作用域都走各自请求的 SSE 事件——引擎发事件、GUI 定文案 */
   progress: Record<Scope, string>;
   liveAnswer: string;
   error: string;
@@ -168,7 +168,7 @@ export interface ScopedChatApi {
   /** 快捷指令：直接发一句（画布空态那三个「画一张…」按钮）。 */
   sendMapQuick: (text: string) => Promise<void>;
   sendPractice: () => Promise<void>;
-  /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复） */
+  /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复）。显式展示 LLM 是否参与，不静默回落 */
   replySource: Record<Scope, string>;
   /** 当前练习对象（练习评估作用域的对话上下文；由 PracticePage 写入） */
   practiceExercise: Exercise | null;
@@ -176,12 +176,10 @@ export interface ScopedChatApi {
 }
 
 /**
-  三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）。
-  命名口径：本对象管的是**线程**（threadId / ThreadItem / chatThreads）；`session` 字段是引擎的 TutorSession
-  （教学作用域的在途状态：settings + 正文；stage / fallbackCount 随状态机于 2026-10-14 撤了）。同一条教学会话三个名字——库里 `chat_session` 行
-  = GUI 的 threadId = 引擎的 sessionId，id 一致，只是各层叫法不同。
-  - 三个页面只读 chat.selected / settings / mapNode / practiceUnit 这些**绑定与选择**
-  - AgentRail 写入 content / send / scope / pushMessage
+  三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）：
+  页面只读绑定与选择（selected / settings / mapNode / practiceUnit），写入都经 AgentRail。
+  命名口径：本对象管**线程**（threadId / ThreadItem / chatThreads），`session` 是引擎的 TutorSession（教学作用域的在途状态）；
+  同一条教学会话三个名字——库里 `chat_session` 行 = GUI 的 threadId = 引擎的 sessionId。stage / fallbackCount 随状态机于 2026-10-14 撤了。
   */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
   const [scope, setScope] = useState<Scope>(loadInitialScope);
@@ -189,24 +187,18 @@ export function useScopedChat(repositoryId: string): ScopedChatApi {
     try { localStorage.setItem(SCOPE_STORAGE_KEY, scope); } catch { /* 持久化失败不回退 */ }
   }, [scope]);
 
-  /**
-  Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。
-  只有 `pushMessage` / `clearThread` 两个写入器——渲染口径见上方 `ThreadItem` 注释。
-  */
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
 const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}) }] }));
 };
 
-// 课程与节点
 const [course, setCourse] = useState<CourseTree | null>(null);
 const [selected, setSelected] = useState<CourseNode | null>(null);
 // 课程数据代数：同一仓库重新导入时 repositoryId 由内容 hash 派生、保持不变，
 // 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
-// 宏观设计 / 练习作用域的绑定（跨组件只读展示；prototype 的 binds 对象）
 // 节点 + depmap 文件清单 + 流程环节 focus 是一个绑定的三半，合成一个 state 原子更新——分开两个 setState 会让
 // 「换绑到其他节点却残留旧清单/旧环节」成为可能（它们只对特定选中项有意义）。
 const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[]; focus: FlowStage | null }>({ node: null, scopePaths: [], focus: null });
@@ -245,7 +237,6 @@ useEffect(() => {
   }).catch(() => { if (!cancelled) setCourse(null); });
   return () => { cancelled = true; };
 }, [repositoryId, dataVersion]);
-  // 代码教学 + settings + 流式
   /** 引擎的在途教学会话：只在本 hook 内部用（切节点要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
@@ -279,9 +270,7 @@ useEffect(() => {
   };
   const { liveAnswer, begin, enqueue, finish, clear, abort, stop } = useTypewriter();
   const [error, setError] = useState("");
-  // 最近一条回复的来源（按作用域记录）：显式展示 LLM 是否参与（不静默回落）
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
-  // 会话线程（三作用域各一份独立列表，真源在引擎库）：清单 + 当前打开的线程
   const [chatThreads, setChatThreads] = useState<Record<Scope, ChatThread[]>>({ map: [], teaching: [], practice: [] });
   const [currentThreadId, setCurrentThreadId] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
   // 渲染期镜像：切线程、清选择这些动作要读「此刻的当前线程」，setState 的异步值不可用
@@ -289,7 +278,6 @@ useEffect(() => {
   currentThreadRef.current = currentThreadId;
   const chatThreadsRef = useRef(chatThreads);
   chatThreadsRef.current = chatThreads;
-  // 练习评估作用域的对话上下文（由 PracticePage 在生成练习时写入）
   const [practiceExercise, setPracticeExerciseState] = useState<Exercise | null>(null);
   const setPracticeExercise = (exercise: Exercise | null): void => {
     setPracticeExerciseState(exercise);
@@ -314,8 +302,6 @@ useEffect(() => {
     setSession(null);
     clear();
   }, [selected?.id]);
-
-  // ==== 会话线程：清单 / 当前线程 / 新建·切换·重命名·删除 ====
 
   /** 写记忆：静默兜底与取舍见 chatMemory.ts 的 `writeThreadMemory`。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
@@ -655,7 +641,6 @@ useEffect(() => {
     if (!content.trim()) return;
     // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不再把这一句丢弃。
     const message = content;
-    // 断线那轮的账先结掉（回读正文会重写侧栏，得赶在用户气泡上屏前）
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
     setContent("");
@@ -715,7 +700,6 @@ useEffect(() => {
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
     setSending(true); setError(""); setScopeProgress(scope, "回复生成中…");
-    // 流式正文的落点：map/practice 的 SSE delta 进打字机队列，节奏吐字，排空后固化为正式消息
     begin();
     const turn = beginTurn(scope);
     recordDebt(scope, threadId);

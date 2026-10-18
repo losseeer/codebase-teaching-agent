@@ -66,9 +66,7 @@ const kinds: ExerciseKind[] = SUPPORTED_EXERCISE_KINDS;
   被引擎判据换掉——10-06 补上「接口→实现」与「变量接收者」两类边就是这样，`versionStamp` 没动、答案却变了。
   所以作用域里带 `graphStampOf` 的图指纹：**图一变，旧那行自动失效**，不会一直拿旧图答人。
   注意这里只改缓存键：`exercise.contentVersion` 仍是真实的 `versionStamp`，展示与旧数据兼容靠它，
-  作答校验走 `contentHashes`（见 `exerciseIsCurrent`）。
-  静态题（change_localization / impact_analysis）的 id 只含**文件哈希部分**、
-  不含模型与口径版本——标准答案与判分完全出自静态分析，换模型只换题面措辞，共用一个 id 不会串答案。
+  作答校验走 `contentHashes`（见 `staleDependencies`）。
  */
 function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
   return `${versionStamp}#${graphStamp}#${EXERCISE_INPUT_VERSION}#${modelVersion}`;
@@ -168,7 +166,7 @@ export class ExerciseService {
           .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
         for (const schedule of due) {
           const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
-          // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 exerciseIsCurrent
+          // 跳过旧版本缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 `staleDependencies`
           if (stored && SUPPORTED_EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
             journal.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
             return stored.exercise;
@@ -182,7 +180,6 @@ export class ExerciseService {
         journal.append("exercise_declined", { family: requested.family ?? "comprehension", tag: requested.tagId ?? "", reason, stage: "no_target" });
         throw new Error(reason);
       }
-      // 文件粒度作用域：题面与答案由目标文件决定的题型按文件哈希失效；impact 答案取决于整张图，保持全仓
       const deps = exerciseDeps(repository, target.kind, target.value);
       const scope = deps.length
         ? fileScope(deps, modelVersion, isCodeKind(target.kind) ? runnerFingerprint() : undefined)
@@ -551,7 +548,8 @@ function impactExercise(repository: PracticeRepository, changedPath: string, dif
 }
 
 function baseExercise(repository: PracticeRepository, kind: ExerciseKind, targetUnitId: string, targetTitle: string, difficulty: MasteryLevel, deps: { path: string; hash: string }[], input: Pick<Exercise, "title" | "prompt" | "anchors" | "inputMode" | "gradingMode" | "options">): Exercise {
-  // id 只含文件哈希部分（不含模型/口径版本）：静态题的答案出自静态分析，换模型只换题面措辞，共用 id 不串答案；
+  // id 只含文件哈希部分（不含模型/口径版本）：静态题（change_localization / impact_analysis）的答案出自静态分析，
+  // 换模型只换题面措辞，共用 id 不串答案；
   // deps 为空（impact_analysis / 旧索引兜底）时沿用全仓 versionStamp 的旧 id 形状
   const idBase = deps.length ? depsFingerprint(deps) : repository.analysis.versionStamp;
   const id = `exercise:${hash(`${repository.index.repositoryId}:${idBase}:${kind}:${targetUnitId}`).slice(0, 20)}`;

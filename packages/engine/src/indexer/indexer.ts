@@ -94,7 +94,6 @@ export function scanRepositoryWithDigests(repositoryPath: string): RepositorySca
         try {
           content = readFileSync(absolute, "utf8");
         } catch (error) {
-          // 读到一半文件被删 / 权限不对 / 被换成特殊节点：只让这一个文件缺席，不掀掉整次导入
           if (unreadable.length < 50) unreadable.push({ path, reason: error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error) });
           continue;
         }

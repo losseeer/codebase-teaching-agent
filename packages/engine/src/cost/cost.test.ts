@@ -6,10 +6,7 @@ import { Journal } from "../store/journal.js";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, priceComponents, pricingIsConfigured, pricingSourceOf, summarizeCost, type Pricing } from "./cost.js";
 import { setLlmRuntimeSettings } from "../llm/runtime.js";
 
-/**
-  成本读数全部来自本月 `token_usage` 事件的分桶聚合，金额是三档单价之和。
-  测试一律显式传 pricing：不依赖机器上的环境变量，算式才对得上。
-  */
+/** 测试一律显式传 pricing：不依赖机器上的环境变量，算式才对得上。 */
 
 const pricing: Pricing = { inputPerMillionUsd: 0.3, cacheHitPerMillionUsd: 0.03, outputPerMillionUsd: 0.6 };
 
@@ -95,9 +92,7 @@ describe("summarizeCost", () => {
 });
 
 /**
-  闸门告警：`mode` 由「算出的钱 ≥ 预算」决定，单价全零时钱恒为 0，
-  于是「超预算回落本地规则」的每一条分支都静默放行。这句告警是那一整族失效唯一的出口，
-  所以它的触发条件本身要有测试：配了任一档就该闭嘴，全没配才说话。
+  这句告警是「闸门静默失效」那一整族唯一的出口，所以它的触发条件本身要有测试：配了任一档就该闭嘴，全没配才说话。
   */
 describe("budgetGateNotice", () => {
   it("三档全没配 → 说清闸门未生效与花钱无上限", () => {
@@ -112,9 +107,8 @@ describe("budgetGateNotice", () => {
 });
 
 /**
-  单价是**每次现读**的：界面上填完不必重启引擎。优先级只有两层——运行时设置（LLM 配置框）→ `.env` → 未配。
-  这几条钉的是「填了却不算」那一类事故：以前 `envPricing` 是模块加载时算一次的常量，
-  界面改了价、成本读数与预算闸门还按老数走，正是 §36.6 那个「有闸门的名字、闸门不在管事」的形状。
+  钉的是「填了却不算」那一类事故：以前 `envPricing` 是模块加载时算一次的常量，界面改了价、
+  成本读数与预算闸门还按老数走（§36.6「有闸门的名字、闸门不在管事」的形状）。两层回落链本身见 `currentPricing`。
   */
 describe("currentPricing（现读两层回落）", () => {
   const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];

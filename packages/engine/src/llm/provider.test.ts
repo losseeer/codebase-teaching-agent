@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, screenOutbound, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
-/** 构造一个 OpenAI chat.completions 形状的响应。 */
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
 }
@@ -88,7 +87,6 @@ describe("OpenAICompatibleProvider", () => {
 
   it("请求中止时抛显式超时错误", async () => {
     const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
-      // 模拟 fetch 对 abort signal 的行为
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => {
           const error = new Error("This operation was aborted");

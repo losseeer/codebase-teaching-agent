@@ -32,7 +32,6 @@ export interface ReadToolLoopInput {
   user: string;
   maxTokens: number;
   temperature: number;
-  /** 最多几轮工具调用 */
   maxRounds: number;
   /** 本次对话累计最多读取几个文件（只数读成功的；被拒绝/失败的仍进 fileReads 审计但不占额度） */
   maxCalls: number;
@@ -245,12 +244,10 @@ function readArg(argumentsJson: string, key: string): string {
 }
 
 /**
-  回合被中止时随异常带走的「这一轮真做过什么」。
-
-  为什么挂在异常上而不是返回值：中止的回合**按作废收尾**（不落正文、不回放、不写 turn_text），
+  回合被中止时随异常带走的「这一轮真做过什么」：中止按作废收尾（不落正文、不回放、不写 turn_text），
   但读过的文件、搜过的查询、打过的外部工具是**已经发生的事实**——钱花了、内容出过门。
-  这些要是跟着抛出的异常一起被丢掉，journal 就会出现「这一轮什么都没干」的假账（§77 第 6 条）。
-  用 symbol 键，不污染错误对象的公开形状（provider 与 GUI 都不该看见它）。
+  跟着异常一起丢掉，journal 就留下一行「这一轮什么都没干」的假账（§77 第 6 条）。
+  走 symbol 键：provider 与 GUI 都不该看见这份旁证。
 */
 export interface ToolLoopAudits {
   fileReads: FileReadRecord[];

@@ -51,9 +51,9 @@ export function skillDirectories(): string[] {
 }
 
 /**
-  出厂预置技能的来源：**引擎包内的 `skills/`**，随代码一起发布。
-  路径按 `package.json` 的包名往上找，不按 `../..` 的层数猜——`tsx` 跑 `src/` 与 `tsc` 出 `dist/` 两种跑法都要认，
-  层数写死的那一份会在改 outDir 之后静默指到别处去。
+  出厂预置技能在哪：**引擎包内的 `skills/`**。
+  路径按 `package.json` 的包名往上找，不写 `../..` 层数——`tsx` 跑 `src/` 与 `tsc` 出 `dist/` 两种跑法都要认，
+  而写死的层数在改 `outDir` 之后会静默指到别处。
 */
 export function bundledSkillSource(): string | undefined {
   let directory = import.meta.dirname;
@@ -64,14 +64,14 @@ export function bundledSkillSource(): string | undefined {
         return statSync(candidate).isDirectory() ? candidate : undefined;
       }
     } catch {
-      // 这一层没有 package.json：继续往上
+      // 空 catch 是有意的：这一层没有 package.json，继续往上就是正常路径
     }
     directory = join(directory, "..");
   }
   return undefined;
 }
 
-/** 一次播种的读数：装了哪些、哪些同名已存在（保留用户那份）、哪些形状不合所以没搬。 */
+/** 播种结果，`kept` = 目标目录里同名已存在、因此**没动**的那几份。 */
 export interface SkillSeed {
   target: string;
   installed: string[];
@@ -80,15 +80,13 @@ export interface SkillSeed {
 }
 
 /**
-  把出厂预置技能**复制**到 `TUTOR_SKILLS_DIR` 的第一处（缺省即 `~/.codebase-tutor/skills`）。
+  把引擎包里的技能复制到 `TUTOR_SKILLS_DIR` **第一处**（缺省即 `~/.codebase-tutor/skills`）。
 
-  为什么是复制而不是「加载器多认一档出厂目录」：这样**加载路径只有一条**——所有技能都在用户自己看得见、
-  改得动的目录里，`GET /api/external` 报的 `directory` 也就是真出处；同名技能谁的份生效，答案是「目录里那份」，
-  不需要再解释「出厂的垫底、用户的覆盖」这套优先级。
+  为什么复制而不是「加载器多认一档出厂目录」：加载路径只有一条，`GET /api/external` 报的 `directory`
+  就是真出处，「同名谁的份生效」也变成「目录里那份」这个物理事实，不用另解释一套优先级。
 
-  两条刻意的规矩：
-  - **绝不覆盖同名**：装过一次之后用户改过的那份就是用户的，升级不该把它冲掉（要更新请自己删了重装）。
-  - **只搬形状合规格的**：坏形状搬进用户目录，之后每一轮都会多一条 `skipped` 读数，且没人知道是谁搬进来的。
+  两条规矩：**绝不覆盖同名**（装过一次那份就归用户，升级不该冲掉）；**只搬合规格的**
+  （坏形状搬进用户目录 = 之后每轮多一条没人认领的 `skipped`）。
 */
 export function installBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillSeed {
   const target = input?.targetDir ?? skillDirectories()[0];

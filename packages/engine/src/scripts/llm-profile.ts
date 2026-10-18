@@ -33,7 +33,7 @@ interface SceneRow {
   /** 有 token 读数的行数——缺行的场景不能按 0 算钱，要按「未记」报 */
   billed: number;
   costUsd: number;
-  /** 同一 traceId + 同一出网指纹的重复行数：那是「一次逻辑调用被记成多行」的形状，不是重试（重试在行内，见 attempts） */
+  /** 出网载荷字符数合计（含系统提示与工具清单）：用来估「调大超时会不会让一次失败更贵」。 */
   outboundChars: number;
   longestOkMs: number;
   /** 带 `attempts` 的行数（这个字段 2026-10-15 才有）：分母不齐时不能把「没记」当「一次就成」 */

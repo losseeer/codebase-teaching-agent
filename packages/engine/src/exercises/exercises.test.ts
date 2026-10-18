@@ -75,9 +75,7 @@ describe("M2.1 exercise service", () => {
     await service.next(repository, { kind: "change_localization" }, provider("model-b"));
     expect(polishAttempts).toBe(2);
     // 静态题的答案与判分不出自模型，所以两档作用域共用同一个 id 是安全的
-    //
-    // 润色失败必须自己站出来：这三条在过去全记成同一副样子（只有 source:"rule"），
-    // 于是漏斗里「模型写过的题面」永远比真相少，端点抽风的那几天看着像「没人用润色」。
+    // 下面两条 journal 读数就是「润色失败要自己站出来」那条事故的可查形态：三种成因分档记，不再全挤成同一副样子
     const generated = readJournal(repository.path).filter((event) => event.type === "exercise_generated");
     expect(generated.map((event) => event.payload.polish)).toEqual(["failed", "failed", "failed"]);
     expect(generated.map((event) => event.payload.polish_failure)).toEqual(["provider_error", "provider_error", "provider_error"]);

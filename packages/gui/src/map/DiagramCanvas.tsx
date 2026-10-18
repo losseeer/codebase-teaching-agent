@@ -10,18 +10,14 @@ import {
 } from "./diagramView";
 
 /**
-  agent 画图工作区的画布那一列（原型 `diagramMainHtml` + `bindCanvas` + `fitView` + `applyView`）。
-
-  三件事决定了它的形状：
-  - **结构不是这里能改的**。界面上没有「加节点 / 删连线」那颗按钮：结构改动只有对话里的 agent 一条路
-    （`set_diagram` 单写入口），画布只接受两件事——拖动位置、改名。所以这一列一次付费请求都不发：
-    图库、图本体、几何写入、恢复版本全是本地读写，摸不到模型；
-  - **视野是状态，不是每次渲染重算的**。原型每次 render 都 fit 一遍，用户拖两下就被拽回去；
-    这里只在「打开另一张图 / 内容变空 / 点 ⤢ / 恢复旧版」这几种情况下 fit，其余时刻纹丝不动。
-    工作区常驻挂载、藏着时宽度为 0，所以视野按图 id 存一份（`viewCache`）：切回来还是用户离开时那格；
-  - **边的端点用真实测量值**。节点定宽 132，高度随标签换行、角色小字、便签正文变。
-    原型按固定 48 高算中心，于是标签折了行的节点一拖，箭头就飘在半空。这里把量到的盒子
-    （`ResizeObserver` + 图元挂上时补量一次）当作边与包围盒的锚点来源，箭头永远指着节点正中。
+  agent 画图工作区的画布那一列（原型 `diagramMainHtml` + `bindCanvas` + `fitView` + `applyView`）。三件事决定它的形状：
+  - **结构不是这里能改的**：界面上没有「加节点 / 删连线」那颗按钮，结构改动只有对话里 agent 的 `set_diagram` 单写入口，
+    画布只接受两件事——拖动位置、改名；所以这一列一次付费请求都不发（图库、图本体、几何写入、恢复版本全是本地读写，摸不到模型）。
+  - **视野是状态，不是每次渲染重算的**：原型每次 render 都 fit 一遍，用户拖两下就被拽回去；这里只在「打开另一张图 /
+    内容变空 / 点 ⤢ / 恢复旧版」这几种情况下 fit，其余时刻纹丝不动。工作区常驻挂载、藏着时宽度为 0，所以视野按图 id
+    存一份 `viewCache`：切回来还是用户离开时那格。
+  - **边的端点用真实测量值**：节点定宽 132，高度随标签换行、角色小字、便签正文变；原型按固定 48 高算中心，于是标签
+    折了行的节点一拖，箭头就飘在半空。这里把量到的盒子（`ResizeObserver` + 图元挂上时补量一次）当作边与包围盒的锚点来源，箭头永远指着节点正中。
 */
 
 interface DragState {
@@ -79,7 +75,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   /** 空图（一个节点都没有）：视野就是默认值，没什么可 fit 的。 */
   const blank = !body || !body.nodes.length;
 
-  /* ---------- 视野 ---------- */
   const viewCache = useRef(new Map<string, View>()).current;
   const [view, setView] = useState<View>(DEFAULT_VIEW);
   const viewRef = useRef<View>(view);
@@ -89,7 +84,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (diagramId) viewCache.set(diagramId, next);
   }, [diagramId, viewCache]);
 
-  /* ---------- 量到的节点盒子 ---------- */
   const boxesRef = useRef<NodeBoxes>(new Map());
   const [measured, setMeasured] = useState<NodeBoxes>(boxesRef.current);
   /** 这张图里还没量到盒子的那些 id：欠着的时候不能宣布 fit 完成，否则 fit 之后来一次 resize，视野自己跳。 */
@@ -142,7 +136,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     window.requestAnimationFrame(runFit);
   }, [runFit]);
 
-  /* ---------- 拖动 ---------- */
   const drag = useRef<DragState | null>(null);
   const [dragging, setDragging] = useState<DragState | null>(null);
 
@@ -238,7 +231,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (versionsSignal > 0) setVersionsShown(true);
   }, [versionsSignal]);
 
-  /* ---------- 缩放 ---------- */
   const zoomBy = (factor: number): void => applyView(zoomAt(viewRef.current, centerAnchor(viewportRef.current), factor));
 
   /** 滚轮必须走原生监听：React 的 onWheel 是 passive 注册的，preventDefault 拦不住页面滚动。 */
@@ -496,10 +488,7 @@ function withDragOffsets(body: DiagramBody | null, dragging: DragState | null): 
   return { ...body, nodes: body.nodes.map((node) => (node.id === id ? { ...node, x: dx, y: dy } : node)) };
 }
 
-/**
-  保存状态那一格。`synced`（刚取下来、还没动过）与 `saved`（真写过一次几何）都说明「画布 = 盘上那份」，
-  所以都显示 ✓；`queued`/`saving` 是在途，`failed` 必须显形——不能替失败的写入说一句已保存。
-*/
+/** 保存状态那一格：`synced` 与 `saved` 都表示「画布 = 盘上那份」，所以共用一个 ✓（完整口径与 failed 必须显形见 api/client.ts 的 `SaveState`）。 */
 const SAVE_LABEL: Record<SaveState, string> = {
   synced: "✓ 已保存",
   queued: "位置待存",

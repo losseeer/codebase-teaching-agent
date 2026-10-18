@@ -81,18 +81,11 @@ function readStoredWorkspace(): _Workspace | null {
 }
 
 /**
-  顶层 Shell（对齐 docs/ui-prototype 的 .app 三栏栅格）：
-  - 侧栏：品牌行 + 五项主导航（图标 + 标签）+ 仓库切换器 + 页脚（收起侧栏 / 引擎状态）
-  - 主区：/import 与 /insights 保留独立路由；三个学习工作区（map / teaching / practice）合并为
-    单一主区组件树（`/app?workspace=`），三个工作区同时挂载、
-    `hidden` 切换可见性：切换不丢状态，隐藏时不发付费 LLM 请求（useEverVisible），SSE 续接也依赖这份常驻
-  - 工作区切换由侧栏导航承担（原型形态），页内不再有 tab 条；旧路径 /course /tutor /practice 仍兼容跳转
-  - 右侧栏：持久 Agent 对话栏，三工作区共享一套结构，作用域跟随工作区
-
-  持久化：workspace（localStorage `codebase-tutor.workspace`）；scope（`codebase-tutor.scope`）。
+  顶层 Shell（对齐 docs/ui-prototype 的 .app 三栏栅格）：侧栏 = 品牌行 + 五项主导航 + 页脚（收起侧栏 / 引擎状态），
+  右侧 = 持久 Agent 对话栏（三工作区共享一套结构，作用域跟随工作区）。工作区切换由侧栏导航承担，页内不再有 tab 条。
+  /import 与 /insights 保留独立路由；三个学习工作区合并为单一主区组件树（`/app?workspace=`），旧路径 /course /tutor /practice 仍兼容跳转。
+  持久化：workspace（localStorage `codebase-tutor.workspace`）、scope（`codebase-tutor.scope`）；
   线程正文与清单的真源在引擎库（chat_session / chat_message），GUI 只记「当前停在哪条」。
-
-  对应 prototype `design-prototype.html` 中的「主导航 + 工作区主区 + Agent 侧栏」。
   */
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
@@ -431,10 +424,8 @@ function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon
 }
 
 /**
-  单一学习主区：
-  - 三个工作区始终挂载，`hidden` 控制可见 —— 切换不重新请求数据、不丢状态
-  - 工作区切换在侧栏导航（原型形态），切换只改 `?workspace=` 参数
-  - 作用域跟随工作区（对话栏的绑定上下文按 scope 取）
+  单一学习主区：三个工作区常驻挂载、`hidden` 切可见性——切换不重新请求数据、不丢状态，SSE 续接也依赖这份常驻。
+  切换只改 `?workspace=` 参数（入口在侧栏导航），作用域跟随工作区（对话栏的绑定上下文按 scope 取）。
   */
 function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnType<typeof useScopedChat> }): ReactElement {
   const [params] = useSearchParams();

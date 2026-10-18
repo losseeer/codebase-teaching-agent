@@ -5,8 +5,8 @@
   形状是实测出来的，两条反直觉的约束都记在这里，别再改回去：
   - **不能整片 `deny file-read*` 再白名单放行**。这样写 launcher 自己 SIGABRT：`sandbox-exec` 要先 execvp 目标程序，
     而它需要的读也在被拒之列。可用形状是「默认放行 + 点名拒读敏感子树」，
-    即 `(deny file-read* (subpath "$HOME"))` 把家目录整片拒掉，**再把解释器自己的根后置放行**——
-    SBPL 是同操作下后写的规则覆盖先写的，所以「先拒家目录、再放 `/Users/…/miniconda3`」是真生效的（已验）。
+    即 `(deny file-read* (subpath "$HOME"))` 把家目录整片拒掉，**再把解释器自己的根后置放行**
+    （规则先后为什么有意义，见 `seatbeltProfile` 里 SBPL 覆盖语义那一条）。
     ⚠️ 2026-10-15 又试了一次并留了读数：白名单里连 `/usr`、`/System/Library`、`/private/etc`、`/dev`、
     TMPDIR、node/python/javac/java 各自的根全都放行之后，三语言与 `node -e` **一律 SIGABRT（exit=null）**。
     所以「默认拒绝」这条路在本机 macOS 上走不通，别再用它当方案；要护住什么就往名单里点名。

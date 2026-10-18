@@ -1590,11 +1590,8 @@ export interface ServerEvent {
   /**
     `repository.updated`：产物或覆盖层变了，界面该重取的那个节点（历史上一直是"有类型、零订阅"，10-16 起由覆盖层写路径真发）。
     `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新。
-  */
-  /**
-    `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复）。
-    payload = `diagramId` + `action`。界面据此重取图库与当前图——**几何拖动不广播**，
-    那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
+    `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复），payload = `diagramId` + `action`。
+    界面据此重取图库与当前图——**几何拖动不广播**，那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
   */
   type: "import.progress" | "repository.updated" | "architecture_updated" | "diagram_updated";
   payload: Record<string, unknown>;

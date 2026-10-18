@@ -32,7 +32,6 @@ const PATHS = {
   play: <><polygon points="5 3 19 12 5 21 5 3" /></>,
   /** 图库条目上那颗「⋯」：按同一套 24×24 线性画法补（原型用的是 ▾，定案文案是 ⋯） */
   more: <><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" /></>,
-  /** 原型图标集里没有钥匙：引擎口令那一行需要一枚，按同一套 24×24 网格线性画法补 */
 } as const;
 
 export type IconName = keyof typeof PATHS;

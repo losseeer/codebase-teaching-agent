@@ -104,7 +104,6 @@ export function patchLayout(patch: Partial<LayoutPrefs>): void {
   recompute();
 }
 
-// 窗口变窄时只重算渲染宽度（不动盘里那份）：放大回来，用户原本拖出来的宽度还在。
 if (typeof window !== "undefined") {
   window.addEventListener("resize", recompute);
   recompute();
@@ -145,10 +144,9 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
 
   /**
     一次拖拽的全部生命周期都在这一个 effect 里：进入时上全局光标态、离开时一定移除。
-    ⚠️ 监听挂 `window` 而不是分隔条自己，也**不用 pointer capture**——
-    拖出窗口、在浏览器边框外松手、中途切到别的 app 时，事件不会送回那个小条，
-    于是「col-resize 光标 + 禁选中」会一直挂在 body 上（用户实测：指针明明不在分隔条上也是拖拽样式）。
-    挂在 window 上，松手/取消/窗口失焦任一条都能收尾；组件被卸载时 cleanup 同样会摘干净。
+    ⚠️ 监听挂 `window` 而不是分隔条自己，也**不用 pointer capture**：拖出窗口、在浏览器边框外松手、中途切到别的 app
+    时事件不会送回那个小条，于是「col-resize 光标 + 禁选中」会一直挂在 body 上（用户实测：指针明明不在分隔条上也是拖拽样式）。
+    挂在 window 上，松手 / 取消 / 窗口失焦任一条都能收尾；组件被卸载时 cleanup 同样会摘干净。
     */
   useEffect(() => {
     if (!dragging) return;

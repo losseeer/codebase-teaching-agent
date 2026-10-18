@@ -150,7 +150,6 @@ describe("mapChat", () => {
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
     expect(result.fileReads).toEqual([{ path: "scopechat.ts", lines: 150, truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
-    // 第二轮请求携带完整历史：原始 user 消息（上下文+问题）+ assistant toolCalls + tool 结果（带行号的真实文件内容）
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });
     expect(second.messages?.[0].content).toContain("项目结构全景"); // 回归：工具轮次后不得丢失代码上下文
@@ -159,7 +158,6 @@ describe("mapChat", () => {
     const toolResult = second.messages?.find((m) => m.role === "tool");
     expect(toolResult?.content).toContain("1| ");
     expect(toolResult?.content).toContain("export");
-    // 首轮请求带 tools 定义
     expect(calls[0].tools?.[0]?.name).toBe("read_file");
   });
 
@@ -187,7 +185,6 @@ describe("mapChat", () => {
     // 第一轮结果 → 占位符（内容可再生，不逐轮重付）
     expect(toolResults[0].content).toContain("早期读取结果已省略");
     expect(toolResults[0].content.length).toBeLessThan(400);
-    // 最近一轮结果 → 原文保留
     expect(toolResults[1].content).toContain("1| ");
     expect(toolResults[1].content.length).toBeGreaterThan(1000);
     // 用占位符独有的短语判定，而不是 "已省略"：本测试的夹具就是本文件，正文里本来就有「已省略」三个字

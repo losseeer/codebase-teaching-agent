@@ -17,15 +17,11 @@ import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeMo
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 /**
-  练习评估工作区（对齐 docs/ui-prototype/js/pages.js 的 `practicePage` L644-900 + pages.css L227-317，两栏）：
-  - 顶栏 `PageTopbar`：仓名 · 待复习 N 个 · 掌握度 x/5（只有 `api.getPractice` 的真读数，没读到就明说）
-  - 左 `.practice-side`：ModulesPane（主题 chips + 配置）→ 本模块已练卡片（`.done-card`）→ 防泄题脚注
-  - 右 `.practice-main > .practice-wrap`：idle 空态 → generating 的 `.phase` 读数 → `.exercise-head` 徽章 +
-    `.exercise-title` + `.anchor-chip` + `.exercise-prompt` → 按 `inputMode` 给作答件 → 判分后 `.feedback-panel`
-
+  练习评估工作区（对齐 docs/ui-prototype 的 `practicePage`，两栏）：左 = 主题 chips + 本模块已练卡片 + 防泄题脚注，
+  右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。顶栏只报 `api.getPractice` 的真读数，没读到就明说。
   两处「不照抄原型」是有意保留的判断：原型的假进度（每 800ms 推进一个节点）与假分数（写死 2 / 3.8 / 日期）都不搬——
-  我们只有一个 `await`，所以 generating 只说「正在出题」；判分口径逐字取自 `result.gradingMode` +
-  `automatic` + `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
+  我们只有一个 `await`，所以 generating 只说「正在出题」；判分口径逐字取自 `result.gradingMode` + `automatic` +
+  `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
   */
 
 /** 作答前也要能说清「这一题怎么判」：口径与判分后 `.grade-source` 那一行同源，不另起一套说法。 */
@@ -460,7 +456,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   );
 }
 
-/** 判完之后的一个节点：结论 + 判分口径 + 逐条判定行 + SM-2 调度 + 重做 / 按需讲评。 */
 function GradedPanel({ exercise, result, explanation, explaining, onExplain, onRedo }: { exercise: Exercise; result: ExerciseResult; explanation: string; explaining: boolean; onExplain: () => void; onRedo: () => void }): ReactElement {
   const grade = gradeSource(result);
   const optionLabel = (id: string): string => exercise.options?.find((item) => item.id === id)?.label ?? id;

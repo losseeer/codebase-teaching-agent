@@ -14,12 +14,8 @@ import { nestedSandboxUsable } from "../sandbox/capability.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
 /**
-  代码题（刀 2）：出题由假 provider 交一份**手工构造的 harness**，自证与判分全部走真沙箱。
-  零模型调用、真执行——「跑测试判分」这句话只能用跑过来自证，用例里不接受任何 mock 掉的沙箱。
-*/
-
-/**
-  这一份整体是**集成**用例：自证两跑、判分、讲评前的重跑都要真起沙箱（假沙箱就等于没验「跑测试判分」这句话）。
+  代码题（刀 2）整体是**集成**用例：出题由假 provider 交一份**手工构造的 harness**（零模型调用、真执行），
+  自证两跑、判分、讲评前的重跑都要真起沙箱——「跑测试判分」这句话只能用跑过来自证，用例里不接受任何 mock 掉的沙箱。
   环境起不了嵌套 `sandbox-exec` 时整片按「环境不支持」跳过并在输出里点名——跳过不是通过（#168 同一条），
   而「探测没过 ⇒ 代码题域整域禁用」那半条保证由 `sandbox.test.ts` 里不依赖真跑的几条钉住。
 */

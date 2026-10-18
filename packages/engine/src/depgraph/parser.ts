@@ -179,7 +179,6 @@ function unwrap(node: SyntaxNode): SyntaxNode | undefined {
 }
 
 function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): SymbolInfo | undefined {
-  // C/C++ 的 function_definition 没有 name 字段，名字要从 declarator 链取
   const name = node.childForFieldName("name")?.text.trim() || declaratorName(node);
   if (!name) return undefined;
   const line = node.startPosition.row + 1;

@@ -21,7 +21,6 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 15;
 /** 查询词元上限：再多也只是给打分灌噪声（同 entry-suggest 的翻译词元纪律）。 */
 const MAX_QUERY_TOKENS = 12;
-/** 每条结果最多列几个命中符号。 */
 const MAX_SYMBOLS_SHOWN = 6;
 /** 每条结果最多报几个「撞上的函数」——行号是给 read_file 的落点，不是让模型猜的。 */
 const MAX_UNITS_SHOWN = 2;

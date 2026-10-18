@@ -460,10 +460,9 @@ function searchCorpusFor(repository: NonNullable<ReturnType<typeof repositoryOr4
     还会诱使模型去猜不存在的对端）。
   - **对端按需挂载**：`corpusOf` / `links` 里才 `ensureMounted`，模型不开口就不读第二个仓的产物。
     挂载会占 LRU 名额（可能把当前仓挤出去），但当前这一回合握的是内存引用，不受影响。
-  - **守卫不另起一套**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
-    在对端仓上一样成立——这一条是这套能力唯一的安全边界。
-  - **边界只有一层，就是仓内边界**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、拒读名单、软链接复核
-    在对端仓上一样成立。地址簿里有的仓就对模型全部可见（认证闸撤了之后没有「名单外」这一档，§64）。
+  - **守卫不另起一套，边界只有一层就是仓内边界**：跨仓读走的是同一个 `executeReadFile(根, …)`，所以仓内边界、
+    拒读名单、软链接复核在对端仓上一样成立——这是这套能力唯一的安全边界。地址簿里有的仓就对模型全部可见
+    （认证闸撤了之后没有「名单外」这一档，§64）。
   */
 function crossRepoFor(repository: NonNullable<ReturnType<typeof repositoryOr404>>, handedOut: Map<string, number>): CrossRepoContext | undefined {
   const targets = new Map<string, { id: string; path: string }>();
@@ -705,8 +704,7 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
 });
 
 app.get("/api/events", async (request, reply) => {
-  // 全局推送流（导入进度这类无请求边界的推送）；对话回放走各自请求的 SSE 响应流。
-  // 断线重连由前端 `subscribeServerEvents` 自己管（fetch 读流才能带口令头，见 §47）。
+  // 断线重连与「空闲超时只掐这一条连接」由前端 `subscribeServerEvents` 自己管（fetch 读流才掐得住，见 §47）。
   reply.hijack();
   const client = { send: openSseStream(request, reply), request };
   subscribers.add(client);
@@ -1082,10 +1080,7 @@ app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions
   }
 });
 
-/**
-  恢复某一版。**恢复本身再存一版**（`恢复到 …`）：历史只追加不改写，
-  否则这个动作会把它之后的证据一起抹掉，用户下一句「不，我要刚才那版」就没处可回了。
-*/
+/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `store/diagrams.ts` 的 `restoreVersion`）。 */
 app.post<{ Params: { repositoryId: string; diagramId: string }; Body: { index?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/restore", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -1343,15 +1338,9 @@ function recheckTurn(input: {
 }
 
 /**
-  map_chat 回合的统一收尾（非流式与流式两条路由共用这一份）：运行期复检（零 token）→ 线程正文落库 → 审计线。
-  引用核不上就在正文尾部补一行明示；此后落库、回放、审计读的是同一份文本。
-*/
-/**
   作废的回合也要把**已发生的事实**落账：读过的文件、搜过的查询、取过的技能、打过的外部工具。
-
-  两条路径都会走到这里：① 中止发生在工具循环中途（异常带着 `toolLoopAuditsOf` 上来）；
-  ② 中止晚于最后一趟 LLM —— 循环已经正常返回，结果却被判作废，数组就在返回值里。
-  两者都不落 `turn_text`、不落正文（那仍是"这一轮没有成品"），但**花掉的钱与出过门的内容不能当没发生**（§77 第 6 条）。
+  两条路径都走这里——① 中止在工具循环中途（旁证挂在异常上）；② 中止晚于最后一趟（循环已正常返回，旁证在返回值里）。
+  都不落 `turn_text`（那仍是「这一轮没有成品」），但花掉的钱与出过门的内容不能当没发生（§77 第 6 条）。
 */
 function recordAbortedAudits(input: { repositoryPath: string; repositoryId: string; scene: TurnScene; threadId?: string; audits?: ToolLoopAudits }): void {
   const audits = input.audits;
@@ -1373,6 +1362,7 @@ function auditsFromResult(result: { fileReads?: FileReadRecord[]; codeSearches?:
   return { fileReads: result.fileReads ?? [], codeSearches: result.codeSearches ?? [], skillReads: result.skillReads ?? [], mcpCalls: result.mcpCalls ?? [], rounds: result.toolRounds ?? 0 };
 }
 
+/** map_chat 回合的统一收尾（JSON 与 SSE 两条路由共用）：复检（零 token）→ 正文落库 → 审计线，三处读同一份文本。 */
 function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryOr404>>, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
   const journal = new Journal(repository.path, repository.index.repositoryId);
   result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
@@ -1400,24 +1390,6 @@ function finishMapChatTurn(repository: NonNullable<ReturnType<typeof repositoryO
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 
-/**
-  架构修正工具的装配（**map 作用域每一轮都给**；practice 与教学作用域永远不给）。
-  以前还要「这一轮绑到了模块地图里的节点」才给，于是用户在架构画布上直接说一句「把它挪到编排层」时
-  工具压根不在清单里，模型只能嘴上答（2026-10-16 用户指出：画布是只读的，改图只有 agent 这一条路，
-  那就不能要求说话前先在左栏点进某个模块）。
-  三条纪律：
-  - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
-    用户说一句「把它挪到编排层」不该变成一笔重判的钱；
-  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
-  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、节点叫什么 id」
-    就只会反问或编一个 id 撞在写侧白名单上。
-*/
-/**
-  画布结构改动的工具面（**只给 map 作用域**，与 `set_architecture` 同一道闸；教学与练习两张脸永远不给）。
-  界面上没有第二条结构写路径，所以这个工具是 agent 唯一能改图的地方，也是用户唯一能让 agent 改图的地方：
-  校验、降档、存版、审计、广播全在 `applyDiagramEdit` 一处，这一层只做「把参数原语翻成请求 + 把回执说回去」。
-  与 `set_architecture` 同一条纪律：**没有模型也能用**（它不发消息，只写本地产物），所以这里不卡 `lightLlmProvider`。
-*/
 /**
   本轮的技能通道（2026-10-17 接入）。装了才给：**没装时工具清单与上下文逐字不变**，
   不加一个「技能不可用」的占位节点——每轮白付一句没人用的说明，还会诱导模型去找不存在的工具。
@@ -1456,7 +1428,10 @@ function mcpCallPayload(call: McpCallAudit): Record<string, string | number | bo
 }
 
 /**
-  本轮的改图工具面（map 作用域每轮都给，与 `set_architecture` 同一道闸）。
+  本轮的改图工具面（**只给 map 作用域**，与 `set_architecture` 同一道闸；教学与练习两张脸永远不给）。
+  界面上没有第二条结构写路径，所以这是 agent 唯一能改图的入口：校验、降档、存版、审计、广播全在
+  `applyDiagramEdit` 一处，这一层只做「把参数原语翻成请求 + 把回执说回去」。
+  与 `set_architecture` 同一条纪律：**没有模型也能用**（它不发消息，只写本地产物），所以这里不卡 `lightLlmProvider`。
   `openDiagramId` 是界面随请求带上来的「画布上现在正打开那张」：用户说「把这条边删掉」时，
   这句话的指代对象是**他眼前那张**，不是图库里最近更新那张——所以它既进上下文（标出哪张是打开的），
   也进写侧（`edit.diagram` 省略时按它落点）。认不出就拒，绝不猜（见 `resolveTarget`）。
@@ -1478,6 +1453,18 @@ function setDiagramToolFor(repository: ImportedRepository, database: TutorDataba
   };
 }
 
+/**
+  架构修正工具的装配（**map 作用域每一轮都给**；practice 与教学作用域永远不给）。
+  以前还要「这一轮绑到了模块地图里的节点」才给，于是用户在架构画布上直接说一句「把它挪到编排层」时
+  工具压根不在清单里，模型只能嘴上答（2026-10-16 用户指出：画布是只读的，改图只有 agent 这一条路，
+  那就不能要求说话前先在左栏点进某个模块）。
+  三条纪律：
+  - 校验层名用的是「现在图上的层」，从缓存产物读，**绝不为了校验去发一发模型**——
+    用户说一句「把它挪到编排层」不该变成一笔重判的钱；
+  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
+  - 清单（`inventory`）进上下文：修正存在引擎里，横幅读得到、对话读不到，模型没有「现在有哪几条、节点叫什么 id」
+    就只会反问或编一个 id 撞在写侧白名单上。
+*/
 function architectureToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
   if (!lightLlmProvider) return undefined;
   const overlays = readOverlays(database, repository.index.repositoryId);
@@ -1588,7 +1575,6 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const overlayDatabase = new TutorDatabase(repository.path);
   try {
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    // 这一回合真写过哪张图：回话带回去，界面上那张图卡片才有依据（拒写不算写过）
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const result = await mapChat({
@@ -1609,7 +1595,6 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       throw new LlmAbortedError();
     }
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
-    // 打字机回放（三作用域同款 72 字分块）：真 token 流式需 provider 层改造，这里先消除「整段落下」
     replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) });
   } catch (error) {
@@ -1814,13 +1799,6 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
 });
 
 /**
-  会话线程管理（三作用域共用，作用域是 `teach | map | practice`）。
-
-  线程 id 由**引擎**发（`createThread` 里的 UUID），GUI 只持有与回传——这是「上下文≠选中项」那一轮的同一条纪律：
-  凡是要进模型上下文的东西都得能在库里考据到，客户端临时拼的窗口正文不算。
-  `map` / `practice` 的对话正文靠这些线程累积，服务端在流式回合里自己取历史、自己落正文。
-  */
-/**
   线程住在**哪个仓的库**里，就读那个库——不能只看挂在内存里的那几个。
   挂载集有上限（`maxMounted()`，其余按 LRU 驱逐），而被驱逐的仓只是不在内存，它的 `.tutor/tutor.db` 一字未动。
   过去这三条线程路由只扫挂载集，于是切够几次仓再点开旧对话，就得到一句「会话不存在或已删除」，
@@ -1845,6 +1823,13 @@ function threadJournalPayload(thread: ChatThread, reason: string): Record<string
   return { scope: thread.scope, thread_id: thread.id, node_id: thread.courseNodeId ?? null, exercise_id: thread.exerciseId ?? null, reason };
 }
 
+/**
+  会话线程管理（三作用域共用，作用域是 `teach | map | practice`）。
+
+  线程 id 由**引擎**发（`createThread` 里的 UUID），GUI 只持有与回传——这是「上下文≠选中项」那一轮的同一条纪律：
+  凡是要进模型上下文的东西都得能在库里考据到，客户端临时拼的窗口正文不算。
+  `map` / `practice` 的对话正文靠这些线程累积，服务端在流式回合里自己取历史、自己落正文。
+  */
 app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string } }>("/api/repositories/:repositoryId/threads", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });

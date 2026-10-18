@@ -344,9 +344,7 @@ export class TutorDatabase {
   }
 
   /**
-    画布上的一张图（`store/diagrams.ts` 是唯一业务读写口，这里只收 SQL）。
-    一行 = 一张图，`payload` 装的是 `{ groups, nodes, edges, versions }`；
-    名字/来源/两个时间戳单独立列，图库列表就不用把每行的 JSON 解析一遍。
+    画布上的一张图（`store/diagrams.ts` 是唯一业务读写口，这里只收 SQL；表结构与「为什么单独立列」见上面 `diagram` 那段）。
     ⚠️ 列一律 `AS` 成返回类型上那几个驼峰名：better-sqlite3 按 **SQL 里写的列名**交回键，
     而这里的类型声明是驼峰的——`created_at` 不写别名的话 `row.createdAt` 是 `undefined`，
     编译器一句都不报（类型是断言出来的），到运行期才炸成「Invalid time value」。

@@ -20,12 +20,8 @@ import { SourceView, type SourcePayload } from "../source/SourceView";
 /**
   代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
   - 左 `.teach-side`：教学模块（主链路 / 基础设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
-  - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位
+  - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位（这一行为什么不照抄原型，见 `pickLine`）
   - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
-
-  与原型的一处口径差：原型把「点一行」当成 Agent 绑定切换。这里能对上就照做——按 path + 行区间回查
-  最具体的课程节点，命中就换绑（会话按节点 id 建，换绑等于换线程，所以一定给一条 toast）；
-  那一行不属于任何节点时才退回「只改本地定位读数」，并在顶栏如实写出来。
  */
 /** 推荐入口一屏先露这么多条，其余收进「显示更多」（规则归类常有几十条，全铺会把「仓库文件」挤出视野）。 */
 const ENTRY_PAGE = 8;
@@ -215,12 +211,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   /** 正文只留「为什么是这份清单」的第一句；完整理由（达到预算上限 / 未配置 / 判空 / 失败）进悬停——四种处置不同，不能糊成一个词。 */
   const entryNote = entryNoteFull.split(/[；，。(（]/)[0].slice(0, 14);
 
-  /** 推荐配对埋点（2026-09-21 定口径「开文件即改选」）：推荐列表展示中——
-      点推荐入口 = `entry_adopted`；手动打开不在清单里的文件 = `entry_overridden`。
-      loading（列表还没出现）或空列表不发改选事件；adopted 只在真的换绑了选中节点时发（断链点击不充分子）。 */
-  /** 埋点取值随兜底语义改名（2026-10-02 取消知识模块）：旧值 `heuristic` 说的是「关键词猜」，
-      现在兜底是模块地图给的文件清单 → `module_files`。journal 里 10-02 之前的历史值（含 `network`/`os`/`lang`
-      这类模块 id）不迁移，跨这段时间的模块维度读数不可比，分界记在开发日志。 */
+  /** 埋点口径（2026-09-21 定「开文件即改选」）：推荐列表展示中——点推荐入口 = `entry_adopted`，
+      手动打开不在清单里的文件 = `entry_overridden`；loading（列表还没出现）或空列表不发改选事件，
+      adopted 只在真的换绑了选中节点时发（断链点击不充分子）。
+      取值随兜底语义改名（2026-10-02 取消知识模块）：旧值 `heuristic`（关键词猜）→ `module_files`（模块地图给的文件清单）。
+      journal 里 10-02 之前的历史值（含 `network`/`os`/`lang` 这类模块 id）不迁移，跨这段时间的模块维度读数不可比，分界记在开发日志。 */
   const entrySource = moduleEntries?.status === "llm" ? "llm" : "module_files";
   const suggestedPaths = useMemo(() => new Set(visibleEntries.map((entry) => entry.path)), [visibleEntries]);
   const maybeEmitOverride = (path: string): void => {

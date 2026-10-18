@@ -43,7 +43,6 @@ export interface LlmTool {
   parameters: Record<string, unknown>;
 }
 
-/** 模型发起的一次工具调用。 */
 export interface LlmToolCall {
   id: string;
   name: string;

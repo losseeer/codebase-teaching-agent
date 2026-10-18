@@ -111,7 +111,7 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
     mode: estimatedCostUsd >= monthlyBudgetUsd ? "degraded" : "normal",
     turns: events.length,
     costComponents,
-    // 三档单价全没配时金额恒为 0——这个事实要一起交出去，否则页面一句「本月 ¥0.0000」看着像真的没花钱
+    // 闸门有没有在管事必须一起交出去，否则页面那句「本月 ¥0.0000」看着像真的没花钱（判据与因果链见 `pricingIsConfigured`）
     pricingConfigured: pricingIsConfigured(pricing),
     // 历史口径：`mode:"degraded"` 的行只有教学状态机在写（达到预算上限那一轮记 0 token），2026-10-14 起改成
     // 达到预算上限直接 422 拒在开火前、不再留这种行。减法照旧——存量行还在，去掉就会把那些免费回合算成付过钱。

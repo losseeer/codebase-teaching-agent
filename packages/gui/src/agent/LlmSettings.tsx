@@ -4,14 +4,12 @@ import { showToast } from "../modules/toast";
 import { Icon } from "../ui/icons";
 
 /**
-  模型入口与配置弹窗（对齐 docs/ui-prototype 的 `.rail-model-pill` + `.modal`）：对话栏底部只留**一颗胶囊**
-  显示「当前用哪个模型 · 思考档」，点开弹窗做全部配置——模型、思考档位，以及装机时才改的服务商 / 接口地址 / API Key。
-
-  两条不变项：
-  - **胶囊必须自带状态**：本地兜底（没配齐服务商或密钥）时胶囊变警示态并直说原因，配置错了不该只有一个不起眼的齿轮；
-  - **改完即生效**：每个字段失焦/换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）。
-    所以关掉窗口不等于放弃修改——文案上也不给这个错觉。
- */
+  模型入口与配置弹窗（对齐 docs/ui-prototype 的 `.rail-model-pill` + `.modal`）：除模型与思考档位，还管装机时
+  才改的服务商 / 接口地址 / API Key。两条不变项：
+  - **胶囊必须自带状态**：本地兜底（没配齐服务商或密钥）时变警示态并直说原因，配置错了不该只有一个不起眼的齿轮；
+  - **改完即生效**：每个字段失焦 / 换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）——
+    所以关掉窗口不等于放弃修改，文案上也不给这个错觉。
+  */
 export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?: "pill" | "button"; styleLabel?: string }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
   const [open, setOpen] = useState(false);
@@ -217,8 +215,7 @@ function pricingLive(llm: LlmSettings): boolean {
 }
 
 /**
-  计价读数一行：现在按哪三个数算、每一档来自界面还是 .env。
-  来源必须写出来——留空那个节点显示的是 .env 的数，不标来源就成了「我明明填了怎么没变」。
+  计价读数一行：现在按哪三个数算、每一档由谁给出（来源判据见 api/client.ts 的 `PricingSource`）。
   更要紧的是后半句：三档全空时**预算闸门也不管事**（引擎拿到的金额恒为 0，永远判未超支）。
   */
 function pricingReadout(llm: LlmSettings): string {

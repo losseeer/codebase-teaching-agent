@@ -122,9 +122,8 @@ export interface LlmSettings {
   envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
   /**
-    单价三档的**填写值**（空串 = 这一档交给 .env）。数值口径是**人民币 / 百万 token**，
-    与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同一个节点——变量名里的 USD 是历史遗留（改名会牵动已落盘的配置），
-    引擎侧不做任何汇率换算，填什么币就显示什么币。
+    单价三档的**填写值**（空串 = 这一档交给 .env），口径是**人民币 / 百万 token**——与 `.env` 的
+    `TUTOR_*_USD_PER_MILLION` 同一个节点，变量名里的 USD 属历史遗留（改名的牵动面见 InsightsPage 的 `usd` 注释）。
     */
   inputUsdPerMillion?: string;
   outputUsdPerMillion?: string;
@@ -282,19 +281,14 @@ export const api = {
 };
 
 /**
-  全局事件流（`GET /api/events`，导入进度与仓库更新）。
-
-  **为什么不用 `EventSource`**（2026-10-15 改了理由）：原先是为了能带认证请求头，那条需求随认证闸一起撤了
-  （§64）。留下 fetch 读流是因为三条流共用同一套读流、退避与 abort 语义——
-  重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，
-  一旦成功建立连接就清零。`AbortSignal` 用来在依赖变化/卸载时彻底停下（含正在退避的那一次等待）。
-  注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎现在开局就发一帧把响应头推到网路上，
-  所以 `fetch` 立刻 resolve，连接状态是实测的而不是等第一个事件才知道。
-
-  **空闲看门狗**（10-12 实测补的）：引擎死了但中间的代理/反代还替它挂着这条连接时，
-  `reader.read()` 既不 resolve 也不 reject，退避重连这条码路永远不会被触发——
-  表现为「界面停在 40% 不动，而引擎其实早就没了」。`EventSource` 时代由浏览器管这件事，
-  换成 fetch 之后必须自己管。阈值取 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧），
+  全局事件流（`GET /api/events`，导入进度与仓库更新）。**不用 `EventSource`**（2026-10-15 改了理由）：原先是为了能带
+  认证请求头，那条需求随认证闸一起撤了（§64）；留下 fetch 读流是因为三条流共用同一套读流、退避与 abort 语义。
+  重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，一旦成功建立连接就清零；`AbortSignal` 用来在依赖变化 / 卸载时
+  彻底停下（含正在退避的那一次等待）。注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎现在开局就发
+  一帧把响应头推到网路上，所以 `fetch` 立刻 resolve，连接状态是实测的而不是等第一个事件才知道。
+  **空闲看门狗**（10-12 实测补的）：引擎死了但中间的代理 / 反代还替它挂着这条连接时，`reader.read()` 既不 resolve
+  也不 reject，退避重连这条码路永远不会被触发——表现为「界面停在 40% 不动，而引擎其实早就没了」；这件事在
+  `EventSource` 时代由浏览器管，换成 fetch 之后必须自己管。阈值取 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧），
   超时是**中止这一次尝试**再按退避重连，不是整条订阅作废。
   */
 const STREAM_IDLE_MS = 75_000;

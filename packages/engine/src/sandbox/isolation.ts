@@ -138,7 +138,6 @@ function outcome(run: SandboxRun): string {
   return `${run.stdout.trim().split("\n")[0] ?? ""}${run.stderr ? ` | stderr ${run.stderr.trim().slice(0, 60)}` : ""}`;
 }
 
-/** 真跑 canary。只在探测里用，别拿它当出题/判分路径。 */
 function realpathSafeDir(path: string): string {
   try {
     return realpathSync(path);
@@ -147,6 +146,7 @@ function realpathSafeDir(path: string): string {
   }
 }
 
+/** 真跑 canary。只在探测里用，别拿它当出题/判分路径。 */
 export async function probeIsolation(): Promise<IsolationStatus> {
   const started = Date.now();
   const backend = isolationBackend();

@@ -5,18 +5,14 @@ import { COMPREHENSION_MODULE_ID, type KnowledgeModule, type ModuleWhere } from 
 import { Icon } from "../ui/icons";
 
 /**
-  左栏模块区（对齐 docs/ui-prototype 的 `.tier-group` / `.chip-list`）：
-  - 教学侧：模块按分级分成三组 **主链路 / 基础设施 / 外围**（有自建模块时再加一组），组内一行一个模块，
-    选中行 `.tier-node.active`；组标题右侧的 `.tier-tag` 是这组的判据摘要。
-  - 练习侧：主题是少量自建项，没有分级，用 `.chip` 列表。
-  - 引擎没给分级（旧响应）时退回平铺 chips，不凭空造分级标题。
-  - 改名 / 隐藏 / 新增收在「模块配置」这一小块里；**档位在这里只读**（分组与悬停给判据），改档只剩 agent 的 `set_tier`
-  - 面板主体（推荐入口 / 仓库文件 / 模块内的练习）由调用方以 children 注入
+  左栏模块区（对齐 docs/ui-prototype 的 `.tier-group` / `.chip-list`）：教学侧按分级分三组
+  **主链路 / 基础设施 / 外围**（有自建模块时再加一组），组标题右侧的 `.tier-tag` 是这组的判据摘要；
+  练习侧是少量自建主题、没有分级的 `.chip` 列表。引擎没给分级（旧响应）时退回平铺 chips，不凭空造分级标题。
+  改名 / 隐藏 / 新增收在「模块配置」这一小块里；**档位在这里只读**（分组与悬停给判据），改档只剩 agent 的 `set_tier`。
+  面板主体（推荐入口 / 仓库文件 / 模块内的练习）由调用方以 children 注入。
 
-  两侧语义不同，用 `treeDerived` 区分，**文案必须跟着变**：
-  - 教学侧模块来自课程树（`treeDerived`）——「删除」实际是**隐藏**（重新导入或点「恢复」就回来），
-    说「删除不可恢复」是假话；
-  - 练习侧的自建主题存在浏览器本地，删掉真找不回来。
+  两侧语义不同，用 `treeDerived` 区分，**文案必须跟着变**：教学侧模块来自课程树——「删除」实际是**隐藏**
+  （重新导入或点「恢复」就回来），说「删除不可恢复」是假话；练习侧的自建主题存在浏览器本地，删掉真找不回来。
  */
 const TIER_GROUPS: { tier: CourseTier; label: string; note: string }[] = [
   { tier: "core", label: "主链路", note: "入口与它直接依赖的代码" },

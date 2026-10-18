@@ -7,8 +7,7 @@ import { runWithTrace } from "./context.js";
 import type { EngineTraceEvent } from "@codebase-tutor/shared";
 
 /**
-  引擎工作日志：可机读落盘（JSONL）+ 控制台摘要；http / boot 只落盘不回显（pino 与 [boot] 行已覆盖）。
-  与 llm.log 的分工是「同一事实只写一处」，靠 traceId 关联。
+  落盘要逐行可机读、回显只给非 http/boot 的种类；LLM 调用明细不在这一条线（同一事实只写一处，靠 traceId 关联 llm.log）。
   */
 
 describe("引擎工作日志", () => {

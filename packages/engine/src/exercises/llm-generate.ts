@@ -270,7 +270,7 @@ export function buildTagCandidate(repositoryPath: string, path: string, maxLines
       path,
       lineCount: lines.length,
       startLine: start + 1,
-      // 行号前缀是产品要的（LLM 的锚点行号以此为基准），筛的是**行内容**：整段源码在这一条路上同样是原文出网
+      // 筛的是**行内容**：整段源码在这一条路上同样是原文出网
       excerpt: lines.slice(start, start + maxLines).map((line, index) => `${start + index + 1}| ${masker.take(line)}`).join("\n").slice(0, 4_000),
       masked: masker.masked
     };

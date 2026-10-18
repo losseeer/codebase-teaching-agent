@@ -14,24 +14,16 @@ import { emit } from "../journal";
 import { showToast } from "../modules/toast";
 
 /**
-  宏观设计 = **agent 画图工作区**（2026-10-17 定案，原型 `Pages.mapPage` + `bindCanvas`）。
-  原先的「架构视图 + 流程视图」两张只读画布没了：图的产物的确还在（分层、流程、依赖），
-  但它们的身份变了——从"界面各画一张"变成 **agent 作图的输入**，画布上只有一张由 agent 落的图。
-
-  两栏（原型 `.page-map`）：
-  - 左栏两个 tab：**图库**（搜索 / 新建 / 一张图一行 + ⋯ 菜单）与**项目目录**（沿用 `RepoTree` 与栏宽拖拽）。
-    tab 与正打开的那张图按仓记在 localStorage（读必须 try/catch，这条路径抛在渲染里就是白屏）；
-  - 右栏是画布那一列（`DiagramCanvas`）：工具条 + 平移缩放的视口 + 图元 + 图例 + 节点抽屉。
+  宏观设计 = **agent 画图工作区**（2026-10-17 定案，原型 `Pages.mapPage` + `bindCanvas`）：原先「架构视图 + 流程视图」
+  两张只读画布没了——分层、流程、依赖这些产物还在，但身份从"界面各画一张"变成 **agent 作图的输入**，画布上只有一张由 agent 落的图。
+  两栏（原型 `.page-map`）：左栏是 **图库**（搜索 / 新建 / 一张图一行 + ⋯ 菜单）与**项目目录**（沿用 `RepoTree` 与栏宽拖拽）
+  两个 tab，右栏是画布那一列（`DiagramCanvas`）。
 
   **这里的请求全是免费的**（列图库 / 读一张图 / 改名 / 删 / 几何 PUT / 恢复版本，一次都不碰模型），
   所以取数就是普通的"可见才取"。旧页面那三处 `useEverVisible` 单向门是为架构重绘与流程生成
   那两趟付费调用建的，它们随那两个视图一起删了——**别把付费调用再引回这一页**：
   结构改动只有对话里的 agent 一条路（`set_diagram`），界面上连加删节点的按钮都不给。
-
-  两条诚实口径：
-  - 保存那一格只说真发生过的写入：拖动结束 → 待存 → 在途 → 落盘 / 没存上，绝不在没发请求时显示「已保存」；
-  - `warnings`（节点 `ref` 在课程树里查不到）必须显形：图上标灰 + 抽屉里说明，不当活节点画。
-    引擎还没接上这条路由时，这边按同一口径自己核一遍（只比课程树的 id，不猜）。
+  两条诚实口径（保存读数只说真发生过的写入、失效引用必须显形）分别见 api/client.ts 的 `SaveState` 与下面的引用核对。
 */
 
 /** 按仓记「正打开哪张图 + 左栏停在哪个 tab」。存储可能被禁或写着坏数据，读写两头都兜住。 */
@@ -140,7 +132,6 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId, diagram?.id, diagram?.name, diagrams]);
 
-  /** 对话里那张图卡片被点开：把它搬上画布（一次性的投递，取完就清）。 */
   useEffect(() => {
     const wanted = t.pendingDiagramOpen;
     if (!wanted) return;
@@ -349,7 +340,6 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
       .map((edge) => ({ edge, toLabel: labelOf.get(edge.to) ?? edge.to }));
   }, [diagram]);
 
-  /* ---------- 动作 ---------- */
   const openDiagram = useCallback((id: string): void => {
     setSelected(null);
     setOpenId(id);
@@ -466,7 +456,6 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     showToast("填进对话栏了，发送才轮到 agent 画");
   }, [t]);
 
-  /* ---------- 抽屉 ---------- */
   const drawer = selected && diagram ? (
     <NodeDrawer
       node={selected}

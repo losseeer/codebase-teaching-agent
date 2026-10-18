@@ -142,7 +142,6 @@ export function formatLlmCallLine(record: LlmCallRecord): string {
   return `[llm] ${record.tier} · ${record.scene} · ${record.model} · ${record.ok ? "ok" : "fail"} · ${record.ms}ms${retry} · ${tokens} · think ${record.thinking}${tools}${detail}`;
 }
 
-/** 记录一次调用（控制台 + 落盘）。 */
 export function logLlmCall(record: LlmCallRecord): void {
   console.log(formatLlmCallLine(record));
   const target = llmLogPath();
