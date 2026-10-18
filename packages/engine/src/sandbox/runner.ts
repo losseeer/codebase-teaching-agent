@@ -190,9 +190,15 @@ function createWorkdir(): string {
   对外入口是 `runSandbox`（在 isolation.ts 那一侧，先验状态再放行）。
 */
 export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
-  const backend = isolationBackend();
-  if (!backend.available && !options.baseline) throw new Error(`沙箱不可用：${backend.reason}`);
   const { language, entry, baseline = false } = options;
+  /**
+    形状校验排在隔离闸门**前面**：文件名合不合法与这台机器有没有沙箱后端无关。
+    反过来的话，同一份坏输入在 macOS 上报「非法的沙箱文件名」、在没有后端的机器上报「沙箱不可用」，
+    调用方（和用例）就分不清是模型写坏了还是环境不行——§79 那两条 Linux 红就是这条顺序。
+  */
+  const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
+  const backend = isolationBackend();
+  if (!backend.available && !baseline) throw new Error(`沙箱不可用：${backend.reason}`);
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULTS.maxOutputBytes;
   const toolchain = toolchainOrThrow();
@@ -201,7 +207,6 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const workdir = createWorkdir();
   const started = Date.now();
   try {
-    const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
     for (const file of files) {
       /**
         路径可以带子目录（模型真会把文件命名成 `pkg/mod.py`），所以父目录要先建出来。

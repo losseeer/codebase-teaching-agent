@@ -436,14 +436,27 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     ① 落在最后一趟 LLM 在途 → 异常一路抛上来，数组挂在异常上；
     ② 落在最后一趟回来之后 → 循环已正常返回，数组在返回值里。
     */
-  function expectAbortedAudit(threadId: string, events: Record<string, unknown>[]): void {
-    expect(events.some((event) => event.type === "done"), "中止的回合不该回放 done").toBe(false);
-    expect(events.filter((event) => event.type === "delta"), "中止后一帧正文都不该回放").toHaveLength(0);
+  function expectAbortedAudit(threadId: string, events: Record<string, unknown>[], marker: string): void {
+    // 红的时候必须自带现场：这一回合发了几趟、脚本还剩几段、帧序列长什么样、journal 里 file_read 一共几行——
+    // 否则「file_read 是空的」分不清是「工具没执行」「没落账」还是「落了但线程号不对」
     const reads = eventsOf("file_read").filter((event) => event.sessionId === threadId);
-    expect(reads.map((event) => event.payload.path), "中止前读过的文件必须留痕").toEqual([MAIN_FILE]);
+    const allReads = eventsOf("file_read");
+    /** 每一趟请求里工具到底回了什么：读到了正文、还是「未知工具 / 未知仓库 / 额度用尽」这类不落账的分支。 */
+    const toolReplies = sentTools.filter((entry) => entry.raw.includes(marker)).map((entry) => ["未知工具", "未知仓库", "读文件上限", "跨仓读取最多"].find((word) => entry.raw.includes(word)) ?? (entry.raw.includes("// line 1") ? "读到正文" : "没读到")).join(" | ");
+    const scene = `本回合请求 ${requestsOf(marker)} 趟（工具回话：${toolReplies}）/ 脚本剩余 ${scripted.length} 段 / 帧 ${events.map((event) => event.type).join("→")} / journal 里 file_read 共 ${allReads.length} 行（本线程 ${reads.length} 行，线程号 ${[...new Set(allReads.map((event) => String(event.sessionId)))].join(" ") || "无"}）`;
+    /**
+      先问「工具到底执行了没有」：第二趟请求里必须带着 `read_file` 回填的正文（`// line 1` 是那 20 行注释的第一行）。
+      带着 ⇒ 真读过，问题在落账；没带 ⇒ 问题在工具循环，此时「账上该有一行」这个期待本身就不成立。
+    */
+    expect(sentTools.some((entry) => entry.raw.includes(marker) && entry.raw.includes("// line 1")), `第二趟请求里没有 read_file 的回填正文 ⇒ 工具没执行，不是落账问题（${scene}）`).toBe(true);
+    expect(events.some((event) => event.type === "aborted"), `没收到 aborted 帧（${scene}）`).toBe(true);
+    expect(events.some((event) => event.type === "done"), `中止的回合不该回放 done（${scene}）`).toBe(false);
+    expect(events.some((event) => event.type === "error"), `中止不是错误（${scene}）`).toBe(false);
+    expect(events.filter((event) => event.type === "delta"), `中止后一帧正文都不该回放（${scene}）`).toHaveLength(0);
+    expect(reads.map((event) => event.payload.path), `中止前读过的文件必须留痕（${scene}）`).toEqual([MAIN_FILE]);
     expect(reads[0].payload.denied).toBe(false);
     const loop = eventsOf("loop_round").filter((event) => event.sessionId === threadId);
-    expect(loop).toHaveLength(1);
+    expect(loop, `loop_round 应该正好一行（${scene}）`).toHaveLength(1);
     expect(loop[0].payload).toMatchObject({ scene: "map_chat", aborted: true, tool_rounds: 1, tool_reads: 1 });
     // 补账不等于放行成品
     expect(eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
@@ -463,7 +476,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     await waitFor(() => requestsOf(question) >= 2, "第一趟回来、read_file 执行完、第二趟请求发出");
     const stopped = await app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
     expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
-    expectAbortedAudit(threadId, sseEvents((await pending).payload));
+    expectAbortedAudit(threadId, sseEvents((await pending).payload), question);
   });
 
   it("② 停止落在最后一趟之后：数组在返回值里，收尾同样落账", async () => {
@@ -475,7 +488,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     stopInside = { turnId, marker: question, atCall: 2, seen: 0 };
     const response = await app.inject({ method: "POST", url: `/api/repositories/${repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
     stopInside = undefined;
-    expectAbortedAudit(threadId, sseEvents(response.payload));
+    expectAbortedAudit(threadId, sseEvents(response.payload), question);
   });
 });
 
