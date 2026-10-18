@@ -66,18 +66,23 @@ export function ingestSetDiffers(previous: Iterable<string>, next: Iterable<stri
 }
 
 /**
+  「这条 mtime 算不算起监听之后的改动」：**两边先对到同一格整数毫秒再比**。
+  `Date.now()` 截到整数而 `stat.mtimeMs` 带小数，所以「先写文件、再取起点」时那份播种反而「比起点还晚」——
+  实测 400 次里 393 次撞进这一格（10-18 查那条端到端偶发白醒时量出来的），等于**每次挂载都可能白排一轮全量重分析**。
+  ⚠️ 代价是挂载那一毫秒内的真改动会被当回放丢掉：attach 里 `judgeFreshness` 比这一判晚，
+  那次改动照样会被判成脏并在界面上露出来——不是静默丢掉。
+  */
+export const changedAfter = (mtimeMs: number, startedAtMs: number): boolean => Math.floor(mtimeMs) > startedAtMs;
+
+/**
   stat 一下，只为回答「这次改动比监听的起点更新吗、是文件还是目录」。
   读不到就当判不出来——删除事件到这里时路径通常已经没了，那种情况必须叫醒（收录集真的少了东西）。
   mtime 不晚于监听起点的是**回放**（`changeWanted` 第 1 条），不是本轮要响应的事。
-  ⚠️ 同一毫秒内的真改动会被一起丢弃：那一刻的 `judgeFreshness` 比这一判晚（attach 里先起监听再算新鲜度），
-  那次改动照样会被判成脏并在界面上露出来——不是静默丢掉。
   */
 function kindOf(absolute: string, startedAtMs: number): ChangedPathKind {
   try {
     const stat = statSync(absolute);
-    // mtimeMs 是小数毫秒、startedAtMs 是整数毫秒，两者的差常不到 1ms：所以「同一毫秒内的播种」不靠这里挡，
-    // 靠下面那份 `.tutorignore` 内容签名（时序在这条路上不可靠）。
-    if (stat.mtimeMs <= startedAtMs) return "predates-watch";
+    if (!changedAfter(stat.mtimeMs, startedAtMs)) return "predates-watch";
     return stat.isDirectory() ? "directory" : "file";
   } catch {
     return "gone";
@@ -152,8 +157,9 @@ export class RepositoryWatcher {
 
   /**
     这条事件要不要上报成「源码改动」。三道，按代价从低到高：
-    1. `.tutorignore`：**内容签名**变了才重读并上报。起监听时引擎自己会往仓里播种默认那一份，
-       那次写入也是真事件、也常与起监听落在同一毫秒里——按 mtime 判先后挡不住（实测挡不住），按内容判才稳。
+    1. `.tutorignore`：**内容签名**变了才重读并上报。起监听时引擎自己会往仓里播种默认那一份，那次写入也是真事件；
+       按 mtime 判先后现在也挡得住（`changedAfter` 把两边对到同一格整数毫秒），但**内容判据更强**：
+       改了又改回同一份不该叫醒、mtime 只到秒的文件系统上时序也不可靠，所以留的是「签名不同才重读」。
     2. `changeWanted` 的取舍（回放、产物回声、忽略项、收录集）。
     3. 模糊事件（目录、stat 不到）不带文件路径：往仓根放一张 `.png` 会把**仓根目录的 mtime** 顶一下，
        那种事件既不是文件也读不出内容，于是比一下收录集——没多也没少就别为它整仓重扫。

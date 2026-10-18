@@ -1,9 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTutorIgnoreMatcher } from "./ignore.js";
-import { changeWanted, ingestSetDiffers, isArtifactEcho, RepositoryWatcher } from "./watcher.js";
+import { changeWanted, changedAfter, ingestSetDiffers, isArtifactEcho, RepositoryWatcher } from "./watcher.js";
 import { listIngestedPaths } from "./indexer.js";
 
 /**
@@ -100,6 +100,17 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     expect(ingestSetDiffers(["src/a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"]), "顺序不算变化").toBe(false);
   });
 
+  it("mtime 与监听起点对到同一格整数毫秒：播种算回放，跨到下一格才算改动", () => {
+    // 端到端那条用例偶发白醒的根因：起点 `Date.now()` 是整数毫秒而 `stat.mtimeMs` 带小数，
+    // 先写文件再取起点时那份播种反过来「比起点晚」——实测 400 次里 393 次撞进这一格（10-18）。
+    expect(changedAfter(1_000, 1_000)).toBe(false);
+    expect(changedAfter(1_000.7, 1_000)).toBe(false);
+    expect(changedAfter(1_001.0, 1_000), "跨到下一格就是起监听之后的改动了").toBe(true);
+    // 真磁盘上的那一份：写完才取起点，无论如何不该被当成改动
+    const dir = repository();
+    expect(changedAfter(statSync(join(dir, "src/keep.ts")).mtimeMs, Date.now())).toBe(false);
+  });
+
   it("listIngestedPaths 只列收录进来的路径，且不读文件内容", () => {
     const dir = repository();
     writeFileSync(join(dir, "src/skip.png"), "not-text", "utf8");
@@ -144,6 +155,9 @@ describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
     const batches: string[][] = [];
     const watcher = new RepositoryWatcher(dir, (paths) => batches.push(paths), 60);
     expect(watcher.start().started).toBe(true);
+    // 先让起点跨过整毫秒再动笔：挂载那一毫秒内的改动按判据算回放（`changedAfter` 那段写明了这一代价），
+    // 而这条要验的是「之后的真源码改动能走到回调」，不是那一格里的时序。
+    await new Promise((resolve) => setTimeout(resolve, 5));
     // 先写产物、再写源码：两者若都会上报就同处一批，所以「这批里没有 .tutor」是可判定的
     mkdirSync(join(dir, ".tutor"), { recursive: true });
     writeFileSync(join(dir, ".tutor", "tutor.db"), "{}", "utf8");
