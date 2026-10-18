@@ -90,12 +90,16 @@ export function isTutorIgnoreFile(relativePath: string): boolean {
 }
 
 export function ensureTutorIgnore(repositoryPath: string): void {
+  // 仓目录本身不在了就没得播种：用户把被学习的仓删了或挪走了，这时写默认清单会抛 ENOENT，
+  // 而调用方常常是 fs 监听回调——那里没人接异常，一次事件就能把进程带倒（2026-10-18 路由测试里抓到）。
+  if (!existsSync(repositoryPath)) return;
   const path = join(repositoryPath, configName);
   if (existsSync(path)) return;
   try {
     writeFileSync(path, defaultTutorIgnoreContents, { encoding: "utf8", flag: "wx" });
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    // EEXIST = 有人抢先写了默认那一份；ENOENT = 检查与写之间目录消失了。两种都不是故障
+    if (!(error instanceof Error && "code" in error && (error.code === "EEXIST" || error.code === "ENOENT"))) throw error;
   }
 }
 

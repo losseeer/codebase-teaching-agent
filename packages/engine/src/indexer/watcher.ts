@@ -113,10 +113,19 @@ export class RepositoryWatcher {
       // 都比这一瞬间老，一律不当成本轮改动（判据见 `changeWanted` 第 1 条）。
       const startedAtMs = Date.now();
       this.watcher = watch(this.repositoryPath, { recursive: true }, (_event, filename) => {
-        if (!filename) return;
-        const path = String(filename).replaceAll("\\", "/");
-        if (!this.wanted(path, kindOf(this.absoluteOf(path), startedAtMs))) return;
-        this.pending.add(path);
+        // 回调里什么都不许往外抛：`fs.watch` 的监听器没有调用方，异常直接变成进程的未捕获异常。
+        // 真实形态就是「用户把仓删了/挪走了，而下一次事件还要去读它的 .tutorignore」——
+        // 判 dead 并说清原因，与下面 `on("error")` 那条同一个口径（界面据此报「监听停了」，不是假装还在跟）。
+        try {
+          if (!filename) return;
+          const path = String(filename).replaceAll("\\", "/");
+          if (!this.wanted(path, kindOf(this.absoluteOf(path), startedAtMs))) return;
+          this.pending.add(path);
+        } catch (error) {
+          this.status = { ...this.status, dead: true, error: error instanceof Error ? error.message : String(error) };
+          console.warn(`[watcher] ${this.repositoryPath} 的事件处理抛了，监听判死：${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => {
           const changed = [...this.pending].filter(Boolean);
