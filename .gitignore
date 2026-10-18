@@ -32,11 +32,12 @@ docs/
 CONTRIBUTING.md
 
 # ─────────────────────────────────────────────────────────────
-# Tooling configs not versioned（项目不发 npm / 不走 PR review）
+# 仍然只留本地的东西（不发 npm，所以没有 changesets / release 工作流）
+#   .tutorignore.example 与 .playwright-mcp/ 是本地调试产物模板与截图目录
+# 2026-10-18：`.github/` 与 `.npmrc` 从此处**移出**——远程已在 GitHub，`ci.yml` 那四条命令
+#   （install/lint/test/build）本来就每天手跑，被排除的结果是一份永不执行的 CI；
+#   `.npmrc` 那两条 pnpm 安装口径不入仓会让 clone 出来的安装行为不一致（npm 还会警告不认这两个键）。
 # ─────────────────────────────────────────────────────────────
-.changeset/
-.github/
-.npmrc
 .tutorignore.example
 .playwright-mcp/
 

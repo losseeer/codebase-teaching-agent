@@ -18,7 +18,7 @@
 | **gui** | Vite 6 + React 19 + react-router-dom v7 + lucide-react |
 | **shared** | 前后端共享 TypeScript 类型（workspace 内直接引用源码） |
 | **LLM** | 多 Provider 抽象（OpenAI / OpenAI 兼容端点如 DeepSeek / Anthropic / Ollama）；**只有一套模型配置**，「轻任务」是运行时角色（推荐入口、命名、L1 摘要、分层）而非第二档，思考固定关闭 |
-| **工具链** | pnpm 10 workspace + turbo + changesets；vitest + Playwright（`e2e/`）；TypeScript 5.8；concurrently 双进程开发 |
+| **工具链** | pnpm 10 workspace + turbo；vitest + Playwright（`e2e/`）；TypeScript 5.8；concurrently 双进程开发；GitHub Actions 跑 `install → lint → test → build`（`.github/workflows/ci.yml`，不发 npm 故无发布流) |
 
 ## 仓库结构
 
@@ -71,7 +71,8 @@
 │   │       └── styles/          #   全局样式（页面不滚动，组件内滚动）
 │   └── shared/                  # 前后端共享类型定义
 ├── e2e/                         # Playwright 端到端测试
-├── docs/                        # 设计方案 / UI 原型说明 / 调研报告
+├── docs/                        # 设计方案 / UI 原型说明 / 调研报告（本地维护，不入 git）
+├── .github/workflows/ci.yml     # 唯一的工作流：install → lint → test → build
 ├── .env.example                 # LLM Provider 配置模板
 └── turbo.json / pnpm-workspace.yaml
 ```
