@@ -1,45 +1,19 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ScopedStreamFrame, ServerEvent, TurnScene } from "@codebase-tutor/shared";
 import { Journal } from "../store/journal.js";
-import { traceEngine } from "../trace/engine-log.js";
+import { subscribeEvents, unsubscribeEvents } from "../events.js";
 import { beginTurn, type TurnHandle } from "../turns/registry.js";
 import { recordAbortedAudits, toolLoopAuditsOf } from "../application/turn-audit.js";
 
 /**
   SSE 传输层：帧怎么写、连接怎么开、心跳与中止怎么收尾。
   两条流各有各的词表（都是 shared 里的闭合联合，发一种没登记的帧编不过去）：
-  - 全局事件流 `ServerEvent`：导入进度、产物更新这类「没有请求边界的推送」；
+  - 全局事件流 `ServerEvent`：导入进度、产物更新这类「没有请求边界的推送」（订阅表在 `events.ts`，这里只管连）；
   - 作用域对话流 `ScopedStreamFrame`：三条对话流各自请求的响应流（事件天然按请求隔离，断开自动清理）。
 */
 
-/**
-  全局事件流的订阅者（`GET /api/events`）：导入进度这类「无请求边界的推送」走这里；对话回放走各自请求的 SSE 响应流。
-  一路订阅连着它的**请求**一起存：来源闸只在连接进来那一次判，之后每一帧不再重判来源；
-  帧里带着目标仓的绝对路径与改动文件名，所以这条流是本机可读的（认证闸与按人过滤已于 2026-10-15 撤除，§64）。
-  */
-const subscribers = new Set<{ send: (event: ServerEvent) => void; request: FastifyRequest }>();
-
 /** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
 const EVENT_STREAM_PING_MS = 25_000;
-
-/**
-  广播：某一路订阅者写不进去（它的连接刚被中止）是它自己那一路的事，移除就好。
-  这里必须兜住异常——`broadcast` 挂在 `importer.emit("event")` 的**同步链**上，
-  一路死订阅者抛出的 write 异常会一路冒到 `ImportService.run` 的 catch，把一次已经算完的导入判成 failed。
-  删除正在迭代的 Set 元素是安全的（已访问的不动、未访问的跳过）。
-  ⚠️ 帧**不按归属过滤**：认证闸撤了之后没有「谁的名单」这个东西可过滤（§64）。
-  载荷里带着目标仓的绝对路径与改动文件名，所以这条长连接的可见面等于本机的可见面。
-  */
-export function broadcast(event: ServerEvent): void {
-  for (const client of subscribers) {
-    try {
-      client.send(event);
-    } catch {
-      subscribers.delete(client);
-      traceEngine("degrade", { what: "sse_subscriber_dropped" });
-    }
-  }
-}
 
 /**
   SSE 单帧写出（四处出口共用的一条判据）。
@@ -86,14 +60,14 @@ export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyReques
   */
 export function openEventStream(request: FastifyRequest, reply: FastifyReply): void {
   reply.hijack();
-  const client = { send: openSseStream<ServerEvent>(request, reply), request };
-  subscribers.add(client);
+  const connectionId = String(request.id);
+  subscribeEvents({ connectionId, send: openSseStream<ServerEvent>(request, reply) });
   const ping = setInterval(() => {
     sseFrame(reply, ": ping\n\n");
   }, EVENT_STREAM_PING_MS);
   reply.raw.on("close", () => {
     clearInterval(ping);
-    subscribers.delete(client);
+    unsubscribeEvents(connectionId);
   });
 }
 

@@ -8,7 +8,7 @@ import { commitOverride, parseOverrideArguments, type OverrideIntent, type Overr
 import { findCourseNode } from "../coursetree/projection.js";
 import { readOverlays } from "../store/overlays.js";
 import { Journal } from "../store/journal.js";
-import { broadcast } from "../http/sse.js";
+import { broadcast } from "../events.js";
 import { lightLlm } from "../services.js";
 
 /**
