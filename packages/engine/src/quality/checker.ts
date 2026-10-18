@@ -1,4 +1,5 @@
 import type { AssertionCheck, CourseNode, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
+import { flattenCourseTree } from "../coursetree/projection.js";
 import { readFileLines, symbolBodyLines } from "../lib.js";
 
 /** 校验时每个文件只读一次：几百个符号常挤在同几十个大文件里，一人一次 `readFileSync` 是纯浪费。 */
@@ -46,7 +47,7 @@ export function verifyAnalysis(repositoryPath: string, implementations: Implemen
     if (outOfTime()) break;
     micro.push(verifyUnit(repositoryPath, unit, cache));
   }
-  const macroCandidates = flatten(root).filter((node) => node.kind !== "implementation");
+  const macroCandidates = flattenCourseTree(root).filter((node) => node.kind !== "implementation");
   const sampleSize = Math.max(1, Math.ceil(macroCandidates.length * 0.2));
   const macroSample = [...macroCandidates].sort((left, right) => left.id.localeCompare(right.id)).slice(0, sampleSize);
   const macro: AssertionCheck[] = [];
@@ -93,8 +94,4 @@ function verifyNode(repositoryPath: string, node: CourseNode, cache: LineCache):
   if (!lines) return { statement: node.summary, status: "needs_review", reason: "抽样锚点不可读取。", anchors: [anchor] };
   const line = lines[anchor.line - 1] ?? "";
   return { statement: node.summary, status: line.trim() ? "verified" : "needs_review", reason: line.trim() ? "抽样锚点可读取。" : "抽样锚点为空。", anchors: [anchor] };
-}
-
-function flatten(root: CourseNode): CourseNode[] {
-  return [root, ...root.children.flatMap(flatten)];
 }

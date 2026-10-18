@@ -89,6 +89,11 @@ export function findCourseNode(root: CourseNode, nodeId: string): CourseNode | u
   return undefined;
 }
 
+/** 整棵树摊平成一维清单：按 kind 筛（路由要 workflow 节点、质检要非 implementation 节点）与「按 id 找」之外的一切遍历。 */
+export function flattenCourseTree(root: CourseNode): CourseNode[] {
+  return [root, ...root.children.flatMap(flattenCourseTree)];
+}
+
 function projectNode(node: CourseNode, depth: number): CourseNode {
   return {
     ...node,
