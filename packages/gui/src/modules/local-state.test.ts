@@ -1,4 +1,4 @@
-import type { CourseNode, CourseTree } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTree } from "@codebase-tutor/shared/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COMPREHENSION_MODULE_ID,

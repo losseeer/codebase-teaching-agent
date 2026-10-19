@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { CourseTree, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseTree, JournalEvent, RepositoryIndex } from "@codebase-tutor/shared";
 import { readJournal } from "../store/journal.js";
 
 /**
@@ -86,20 +86,10 @@ const perRepo: { path: string; id: string | null; journal: JournalEvent[] }[] = 
 for (const repo of perRepo) {
   const label = `\`${repo.path}\`${repo.id ? `（${repo.id}）` : ""}`;
   if (!repo.id) { emit(`- ${label}：journal 无 repositoryId，未执行`); continue; }
-  const analysis = await getJson<RepositoryAnalysis>(`/api/repositories/${repo.id}/analysis`);
-  if (!analysis) { emit(`- ${label}：未执行（引擎不可达或未加载该仓库；锚点质量只在 /analysis 输出中）`); continue; }
   const index = await getJson<RepositoryIndex>(`/api/repositories/${repo.id}/index`);
   const course = await getJson<CourseTree>(`/api/repositories/${repo.id}/course`);
-  for (const kind of ["micro", "macro"] as const) {
-    const checks = analysis.quality?.[kind] ?? [];
-    if (!checks.length) { emit(`- ${label} ${kind} 锚点有效率：未执行（该仓库此层级无断言，读「未执行」而非 0）`); continue; }
-    const verified = checks.filter((check) => check.status === "verified").length;
-    const skipped = checks.filter((check) => check.status === "skipped").length;
-    emit(`- ${label} 锚点有效率（${kind}）：${pct(verified, checks.length - skipped)}；skipped 单列 ${skipped} 条不进分母`);
-  }
   if (index) {
     const covered = new Set<string>();
-    for (const implementation of analysis.implementations) covered.add(implementation.symbol.path);
     if (course) {
       const walk = (node: CourseTree["root"]): void => { node.anchors.forEach((anchor) => covered.add(anchor.path)); node.children.forEach(walk); };
       walk(course.root);
@@ -223,40 +213,9 @@ for (const repo of perRepo) {
   emit(`- 推荐入口：采纳 ${adopted.length}（llm ${adoptedLlm}/回落 ${adopted.length - adoptedLlm}）、改选 ${overridden.length}（llm ${overriddenLlm}/回落 ${overridden.length - overriddenLlm}）；采纳率 全口径 ${pct(adopted.length, adopted.length + overridden.length)}、仅 llm 推荐 ${pct(adoptedLlm, adoptedLlm + overriddenLlm)}`);
 
   const dbFile = join(repo.path, ".tutor", "tutor.db");
-  if (!existsSync(dbFile)) { emit("- tutor.db 缺失：flow grounding / coverageLow 未执行"); continue; }
+  if (!existsSync(dbFile)) { emit("- tutor.db 缺失：coverageLow 未执行"); continue; }
   const db = new DatabaseSync(dbFile, { readOnly: true });
   try {
-    const origins = { static: 0, inferred: 0, code: 0, 其他: 0 };
-    let flows = 0;
-    let droppedStages = 0;
-    let fakePaths = 0;
-    // 按需深入（map.flow.deep）的读数只能从 flow 的 caveats 文本里回读
-    let deepExamined = 0;
-    let deepConfirmed = 0;
-    let deepRejected = 0;
-    let deepNoAnswer = 0;
-    for (const row of db.prepare("SELECT payload FROM layer_cache WHERE cache_key LIKE 'flow:%'").all() as { payload: string }[]) {
-      try {
-        const parsed = JSON.parse(row.payload) as { flow?: { edges?: { origin?: string }[]; stages?: { detail?: string }[]; caveats?: string } };
-        const flow = parsed.flow;
-        if (!flow) continue;
-        flows += 1;
-        for (const edge of flow.edges ?? []) origins[edge.origin === "static" || edge.origin === "inferred" || edge.origin === "code" ? edge.origin : "其他"] += 1;
-        droppedStages += Number(flow.caveats?.match(/(\d+) 个环节因未给出存在的文件路径被丢弃/)?.[1] ?? 0);
-        fakePaths += Number(flow.caveats?.match(/(\d+) 个文件路径不在仓库中/)?.[1] ?? 0);
-        const caveats = flow.caveats ?? "";
-        if (caveats.includes("按需深入：核对了")) {
-          deepExamined += Number(caveats.match(/核对了 (\d+) 条/)?.[1] ?? 0);
-          deepConfirmed += Number(caveats.match(/(\d+) 条在代码里找到依据/)?.[1] ?? 0);
-          deepRejected += Number(caveats.match(/(\d+) 条因引用的文件不属于该边被驳回/)?.[1] ?? 0);
-        }
-        if (caveats.includes("模型没有给出结论")) deepNoAnswer += 1;
-      } catch { /* 脏行跳过：聚合脚本不修数据 */ }
-    }
-    const edgeTotal = origins.static + origins.inferred + origins.code + origins.其他;
-    emit(`- 流程 grounding（layer_cache ${flows} 条 flow 的边）：static=${origins.static}、inferred=${origins.inferred}、code=${origins.code}${origins.其他 ? `、其他=${origins.其他}` : ""}；grounding 率 ${pct(origins.static + origins.code, edgeTotal)}`);
-    emit(`- 按需深入（从 flow caveats 回读，只反映「生成时未被缓存挡住」的行）：核对 ${deepExamined} 条推断边 → 升级 code ${deepConfirmed}、驳回 ${deepRejected}、模型未给结论 ${deepNoAnswer} 行`);
-    emit(`- 流程 caveat 计数：丢弃环节 ${droppedStages}、编造路径 ${fakePaths}`);
     const summaries = db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT 4000").all() as { summary: string }[];
     const latest = new Map<string, { coverageLow?: boolean; rule?: string }>();
     for (const row of summaries) {

@@ -1,10 +1,10 @@
 import type { Exercise } from "@codebase-tutor/shared";
-import { architectureToolFor, factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
+import { factsToolFor, moduleTierToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor } from "../../application/paid-turn.js";
 import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordAbortedAudits } from "../../application/turn-audit.js";
 import { flattenCourseTree } from "../../coursetree/projection.js";
-import { sanitizeChatFocus, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
+import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
 import { id } from "../../identity.js";
@@ -20,42 +20,10 @@ import { validateStyle } from "../../tutor-settings/tutor-settings.js";
 import type { FastifyInstance } from "fastify";
 
 /**
-  三作用域对话中的两个（宏观设计 / 练习答疑）：JSON 与 SSE 两条 map-chat、practice-chat、以及带外的「停止生成」。
+  三作用域对话中的两个（宏观设计 / 练习答疑）：map-chat 流式、practice-chat 流式、以及带外的「停止生成」。
   开火闸门 `scopedChatProviderOr422` 由四个消费方（含教学回合）共用同一句 422 文案。
  */
 export function registerChatRoutes(app: FastifyInstance): void {
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const content = request.body?.content?.trim();
-  if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
-  const turn = scopedThreadTurn(repository, sanitizeThreadId(request.body?.threadId), "map");
-  // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝，回干净的 409
-  if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
-  // 线程就地标注：llm.log 的每条 provider 调用都带上它，前缀缓存才能按「同一线程相邻两轮」算间隔
-  markThread(turn.threadId);
-  const provider = scopedChatProviderOr422(reply, repository.handle);
-  if (!provider) return reply;
-  const node = request.body?.nodeId ? flattenCourseTree(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
-  // 覆盖层的读写要一条库连接：工具闭包与回合共用它，收尾统一 close
-  const overlayDatabase = repository.handle.pin();
-  try {
-    const crossFiles = new Map<string, number>();
-    const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    // 这一回合真写过哪张图（拒写不算写过）：回话带回去，界面上那张图卡片才有依据
-    let writtenDiagram: { id: string; name: string } | undefined;
-    const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
-    const factsContext = factsToolFor(repository, overlayDatabase);
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}), diagram: diagramContext, ...(factsContext ? { facts: factsContext } : {}), ...(await externalAndSkills()) });
-    finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
-    return { reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) };
-  } catch (error) {
-    return reply.code(422).send({ error: error instanceof Error ? error.message : "LLM 对话失败" });
-  } finally {
-    repository.handle.unpin();
-  }
-});
-
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
     单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动 / 刷新页面，
     后者引擎必须把这一轮算完并落库（见 turns/registry.ts）。
@@ -70,7 +38,7 @@ app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, repl
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -85,18 +53,18 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const crossFiles = new Map<string, number>();
   const overlayDatabase = repository.handle.pin();
   try {
-    const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
+    const toolContext = moduleTierToolFor(repository, overlayDatabase, turn.threadId);
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const factsContext = factsToolFor(repository, overlayDatabase);
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
+      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
-      ...(toolContext ? { architecture: toolContext } : {}),
+      ...(toolContext ? { moduleTier: toolContext } : {}),
       diagram: diagramContext,
       ...(factsContext ? { facts: factsContext } : {}),
       ...(await externalAndSkills()),

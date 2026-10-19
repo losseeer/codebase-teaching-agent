@@ -12,7 +12,7 @@
 
 Give it a repository path and it reads the repository into a structure it can talk about, then answers questions about that repository.
 
-Static analysis is the base: a symbol-level dependency graph plus per-file summaries, and four deterministic artifacts (control-flow graphs, intra-function data flow, type relations, registry and config index) stored in the `.tutor/` `static_fact` table — they enter no cache key, so adding an analysis class never re-bills an imported repository. From these the module map and the layered architecture are derived, and the execution flow is unpacked starting from an entrypoint. Question answering, exercise generation and diagram edits all go through one agent that searches, reads files and queries those artifacts itself rather than guessing.
+Static analysis is the base: a symbol-level dependency graph plus per-file summaries, and four deterministic artifacts (control-flow graphs, intra-function data flow, type relations, registry and config index) stored in the `.tutor/` `static_fact` table — they enter no cache key, so adding an analysis class never re-bills an imported repository. From these the module map and module blocks are derived. Question answering, exercise generation and diagram edits all go through one agent that searches, reads files and queries those artifacts itself rather than guessing.
 
 Everything runs on your machine and artifacts stay in the analysed repository's `.tutor/`. It starts without a model configured; with a model it bills per repository, and the monthly budget stops calls before they are sent.
 
@@ -20,7 +20,7 @@ Everything runs on your machine and artifacts stay in the analysed repository's 
 
 - Import any local repository: indexing, graph and summaries in one pass, with `.tutorignore` for exclusions
 - Module map assigns every module to main path / infrastructure / periphery and suggests which entries to read first
-- Architecture canvas is a gallery plus an infinite canvas: your drags and renames are saved, node and edge changes are proposed by the agent from code evidence and applied only after you confirm the preview
+- Architecture canvas is a gallery plus an infinite canvas: your drags and renames are saved, node and edge changes are proposed by the agent from code evidence and written directly, with every structural edit versioned and restorable
 - Exercises in two families: comprehension questions graded deterministically, code questions graded by running tests in a sandbox; mastery and pending reviews follow your answers
 - Chat spans design / teaching / practice scopes with separate threads, streamed output and a stop action
 - The cost page reports scene, latency, tokens and amount per model call; browsing structure, diagrams and capability lists costs nothing

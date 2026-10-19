@@ -1,18 +1,13 @@
-import { budgetDegraded, readRepositorySettings } from "../../application/paid-turn.js";
+import { readRepositorySettings } from "../../application/paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
-import { graphFromData } from "../../depgraph/graph.js";
-import { fileStructureOf } from "../../depgraph/roles.js";
-import { indexRepository } from "../../indexer/indexer.js";
 import { resolveLlmConfig, teachingProviderStatus } from "../../llm/provider.js";
 import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, publicLlmSettings, setLlmRuntimeSettings } from "../../llm/runtime.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../llm/thinking.js";
-import { lightLlm, repositoryOr404, teachingLlm } from "../../services.js";
-import { summarizeFiles } from "../../summarizer/summarizer.js";
-import { LocalSummaryProvider, createSummaryProvider } from "../../summarizer/summary-provider.js";
+import { repositoryOr404, teachingLlm } from "../../services.js";
 import type { FastifyInstance } from "fastify";
 
 /**
-  配置与成本面：运行时 LLM 设置（全局，含密钥掩码）、每仓设置（预算与摘要参考注释）、成本读数、L1 摘要重跑。
+  配置与成本面：运行时 LLM 设置（全局，含密钥掩码）、每仓预算、成本读数。
   它们共用同一套口径：单价、预算、`pricingSourceOf` 的来源说明。
  */
 export function registerSettingsRoutes(app: FastifyInstance): void {
@@ -120,62 +115,21 @@ app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } 
   return summarizeCost(repository.path, readRepositorySettings(repository.handle).monthlyBudgetUsd, request.query.sessionId);
 });
 
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  return readRepositorySettings(repository.handle);
-});
-
-app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number; summaryHeaderComments?: boolean } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
+app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const budget = request.body?.monthlyBudgetUsd;
-  const hasBudget = budget !== undefined;
-  const hasToggle = typeof request.body?.summaryHeaderComments === "boolean";
-  if (!hasBudget && !hasToggle) return reply.code(400).send({ error: "至少提供 monthlyBudgetUsd 或 summaryHeaderComments 之一" });
-  if (hasBudget && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)) return reply.code(400).send({ error: "预算必须是非负数字" });
+  if (budget === undefined) return reply.code(400).send({ error: "请提供 monthlyBudgetUsd" });
+  if (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0) return reply.code(400).send({ error: "预算必须是非负数字" });
   const database = repository.handle.pin();
   try {
     // 读-合并-写：settings_json 里还存着 refinement 标记等内部键，整体覆盖会把它们清除
-    const stored = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean; refinement?: unknown }>(repository.index.repositoryId) ?? {};
-    const merged = {
-      ...stored,
-      ...(hasBudget ? { monthlyBudgetUsd: budget } : {}),
-      ...(hasToggle ? { summaryHeaderComments: request.body.summaryHeaderComments } : {})
-    };
-    database.saveSettings(repository.index.repositoryId, merged);
+    const stored = database.getSettings<{ monthlyBudgetUsd?: number; refinement?: unknown }>(repository.index.repositoryId) ?? {};
+    database.saveSettings(repository.index.repositoryId, { ...stored, monthlyBudgetUsd: budget });
   } finally {
     repository.handle.unpin();
   }
   const next = readRepositorySettings(repository.handle);
   return { ...summarizeCost(repository.path, next.monthlyBudgetUsd), settings: next };
-});
-
-/**
-  L1 摘要按当前「摘要参考注释」开关重跑（有意的产品写入，与 `l1:reburn` 脚本同一通道）。
-  切开关后必须调它，新档位才生效；键前缀分流（slice-v2 / slice-v2c）保证另一档的存量行原样保留。
-*/
-app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/summaries/rebuild", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  const settings = readRepositorySettings(repository.handle);
-  // 预算降级或 light 未配置时不发调用：与导入路径同口径，确定性档重跑会把 LLM 摘要整表覆盖成兜底
-  const lightProvider = budgetDegraded(repository.handle) ? undefined : lightLlm();
-  const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments: settings.summaryHeaderComments });
-  if (provider instanceof LocalSummaryProvider) {
-    return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重算会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
-  }
-  const database = repository.handle.pin();
-  try {
-    const { estimate } = await summarizeFiles({
-      structure: fileStructureOf(indexRepository(repository.path).files, graphFromData(repository.analysis.graph)),
-      database,
-      provider,
-      withHeaderComments: settings.summaryHeaderComments
-    });
-    return estimate;
-  } finally {
-    repository.handle.unpin();
-  }
 });
 }

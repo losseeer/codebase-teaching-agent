@@ -30,7 +30,7 @@ function eventLine(event: JournalEvent): string {
       // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "loop_round":
-      return `决策=${p.decision ?? "未记"} 提议=${p.proposed ?? "—"}→执行=${p.executed ?? "—"} 工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}`;
+      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}`;
     case "token_usage":
       return `in=${p.input_tokens ?? "未记"} out=${p.output_tokens ?? "未记"} cache=${p.cache_hit_tokens ?? 0} provider=${p.provider ?? "未记"} scene=${p.scene ?? "未记"}${p.mode === "degraded" ? " 【降级】" : ""}`;
     case "file_read":
@@ -43,7 +43,7 @@ function eventLine(event: JournalEvent): string {
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
     case "module_tier_overridden":
-      return `手动改档 ${clip(p.module_label, 24)}：${p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主链路占比=${p.core_share ?? "未记"}）`;
+      return `手动改档 ${clip(p.module_title ?? p.module_label, 24)}：${p.given ?? p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主链路占比=${p.core_share ?? "未记"}）`;
     case "action_veto":
       return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
     case "hint_depth":

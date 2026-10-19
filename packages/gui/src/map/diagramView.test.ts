@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DiagramBody, DiagramEdge, DiagramNode } from "@codebase-tutor/shared";
+import type { DiagramBody, DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
 import {
   DEFAULT_VIEW,
   EDGE_ORIGINS,

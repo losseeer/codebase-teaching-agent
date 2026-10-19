@@ -1,5 +1,5 @@
 import type { CourseNode, CourseTree, Diagram, DiagramBody, DiagramEdit, DiagramEditRequest, DiagramEdge, DiagramGroup, DiagramNode, JournalEventType, RepositoryAnalysis } from "@codebase-tutor/shared";
-import { architectureBlocks, moduleFiles, moduleNodes } from "../coursetree/architecture.js";
+import { moduleBlocks, moduleFiles, moduleNodes } from "../coursetree/blockmap.js";
 import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../store/diagrams.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { FactsPairChecker } from "./facts-verify.js";
@@ -15,11 +15,11 @@ import type { FactsPairChecker } from "./facts-verify.js";
      （`arch:...`）。核不上就整次拒写并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
   2. 边的可信度只降不升：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
      核不到就降档，并把「为什么不算」写进 `downgraded`（界面上进悬停）。模型永远不能把自己的推断升成事实
-     ——与流程层 `parseFlow` 的边级校验同一个口径。
+     ——与边级证据校验同一个口径。
   3. 每次结构改动自动存一版；回滚同样是往前追加一版（`store/diagrams.ts`）。
 */
 
-/** 一次改动回给模型的话：说的是落了什么，不是它想干什么（与 `set_architecture` 同一条纪律）。 */
+/** 一次改动回给模型的话：说的是落了什么，不是它想干什么（与 `set_module_tier` 同一条纪律）。 */
 export interface DiagramWriteOutcome {
   ok: boolean;
   text: string;
@@ -51,7 +51,7 @@ interface RefIndex {
 
 function refIndexOf(course: CourseTree, analysis: RepositoryAnalysis): RefIndex {
   const modules = new Map(moduleNodes(course).map((node) => [node.id, node]));
-  const blocks = new Map(architectureBlocks(course, analysis).blocks.map((block) => [block.id, { title: block.title, members: block.members }]));
+  const blocks = new Map(moduleBlocks(course, analysis).blocks.map((block) => [block.id, { title: block.title, members: block.members }]));
   return { modules, blocks };
 }
 

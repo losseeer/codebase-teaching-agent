@@ -97,12 +97,6 @@ export function listThreads(repositoryPath: string, repositoryId: string, scope:
   return rows.map(threadOf);
 }
 
-/** 按节点找回最近一次教学会话（GUI 本地没存过 id 时的入口）。 */
-export function latestThreadForNode(repositoryPath: string, repositoryId: string, courseNodeId: string): ChatThread | undefined {
-  const row = withDatabase(repositoryPath, (database) => database.getLatestChatSessionByNode(repositoryId, courseNodeId));
-  return row ? threadOf(row) : undefined;
-}
-
 export interface NewMessage {
   role: "user" | "assistant";
   content: string;

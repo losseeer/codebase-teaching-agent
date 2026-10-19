@@ -16,7 +16,6 @@ import { importer } from "../services.js";
 /** 每仓可持久化的设置形态（settings_json 里的一个子集；refinement 标记等内部键不在此列、读写都须保留）。 */
 export interface RepositorySettingsPayload {
   monthlyBudgetUsd: number;
-  summaryHeaderComments: boolean;
 }
 
 export function readRepositorySettings(handle: RepositoryHandle): RepositorySettingsPayload {
@@ -24,10 +23,9 @@ export function readRepositorySettings(handle: RepositoryHandle): RepositorySett
   // pin/unpin 按计数可重入，嵌套在已经 pin 的请求里也安全。
   const database = handle.pin();
   try {
-    const settings = database.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(handle.repositoryId);
+    const settings = database.getSettings<{ monthlyBudgetUsd?: number }>(handle.repositoryId);
     return {
-      monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd,
-      summaryHeaderComments: settings?.summaryHeaderComments === true
+      monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd
     };
   } finally {
     handle.unpin();

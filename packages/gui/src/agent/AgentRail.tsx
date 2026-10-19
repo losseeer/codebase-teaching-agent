@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared";
+import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared/wire";
 import { Markdown } from "./Markdown";
 import { LlmSettingsControl } from "./LlmSettings";
 import { ColumnResizer } from "../ui/ColumnResizer";
 import { Icon } from "../ui/icons";
-import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
+import { SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
   持久 Agent 对话栏，五段：绑定上下文行 → 语言风格 → 线程条 → 消息流 → 模型胶囊 + composer。
@@ -70,11 +70,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
         <div className="thread-meta">
           <span title="三个作用域各记各的对话，互不混在一起">{items.length} 条 · 仅 {SCOPE_LABEL[scope]}</span>
-          {t.replySource[scope] ? (
-            <span title={t.replySource[scope] === HEURISTIC_SOURCE ? "本次回复由本地启发式模板生成，LLM 未参与（调用失败或未配置）" : `本次回复由 ${t.replySource[scope]} 生成`}>
-              来源 · <b>{t.replySource[scope] === HEURISTIC_SOURCE ? "本地启发式" : "LLM"}</b>
-            </span>
-          ) : null}
+          {t.replySource[scope] ? <span title={`本次回复由 ${t.replySource[scope]} 生成`}>来源 · <b>LLM</b></span> : null}
         </div>
       </div>
 

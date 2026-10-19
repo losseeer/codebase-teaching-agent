@@ -1,4 +1,4 @@
-import type { ChatScope } from "@codebase-tutor/shared";
+import type { ChatScope } from "@codebase-tutor/shared/wire";
 
 /**
   Agent 侧栏的本地持久化（localStorage / sessionStorage）与补账节奏常量。

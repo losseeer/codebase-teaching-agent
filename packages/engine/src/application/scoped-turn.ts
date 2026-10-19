@@ -115,7 +115,7 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   if (result.scopeDegraded) {
     journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, threadId);
   }
-  journal.append("loop_round", { scene: "map_chat", decision: "deterministic", proposed: null, executed: null, tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
+  journal.append("loop_round", { scene: "map_chat", tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 

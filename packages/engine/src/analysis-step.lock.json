@@ -1,10 +1,5 @@
 [
   {
-    "layer": "architecture",
-    "contractVersion": "arch-v2",
-    "promptDigest": "09148a60daaf8485"
-  },
-  {
     "layer": "coursemap-refine",
     "contractVersion": "refine-v3",
     "promptDigest": "00186e9d8192cd03"
@@ -28,11 +23,6 @@
     "layer": "exercise-generate",
     "contractVersion": "exercise-v3",
     "promptDigest": "f54e4bcdc8df1119"
-  },
-  {
-    "layer": "flow",
-    "contractVersion": "digest-v4",
-    "promptDigest": "d95546c278039a7a"
   },
   {
     "layer": "summary-slice",

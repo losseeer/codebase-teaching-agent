@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from "react";
-import type { FileTreeNode } from "@codebase-tutor/shared";
+import type { FileTreeNode } from "@codebase-tutor/shared/wire";
 import { Icon } from "../ui/icons";
 
 /**

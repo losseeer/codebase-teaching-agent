@@ -3,8 +3,6 @@
   产品路径不 import 这里（会把全部分析模块拖进任何用到口径登记的地方）。
   漏加的后果有界：键仍只能由登记的步骤构造，只是该层的提示词没进这一轮的指纹基准。
 */
-import "./flows/flow.js";
-import "./coursetree/architecture.js";
 import "./coursetree/entry-suggest.js";
 import "./coursetree/llm-refine.js";
 import "./summarizer/summary-provider.js";

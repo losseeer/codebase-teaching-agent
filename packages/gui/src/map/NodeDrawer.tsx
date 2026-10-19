@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { CourseNode, DiagramEdge, DiagramNode } from "@codebase-tutor/shared";
+import type { CourseNode, DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
 import { Icon } from "../ui/icons";
 import { ORIGIN_NOTE } from "./diagramView";
 

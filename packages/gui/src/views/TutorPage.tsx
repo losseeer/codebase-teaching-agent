@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared";
-import { isDocumentationPath } from "@codebase-tutor/shared";
+import type { FileTreeNode, SuggestedEntry } from "@codebase-tutor/shared/wire";
+import { isDocumentationPath } from "@codebase-tutor/shared/wire";
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
 import { EmptyState, Loading, flatten } from "./helpers";

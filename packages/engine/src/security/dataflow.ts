@@ -27,7 +27,7 @@ export type EgressKind =
   | "l1-slice"
   /** 锚点附近的真实源码摘录（教学 / 宏观设计 / 练习答疑共用 source/excerpt.ts 那套取码规则） */
   | "anchor-excerpt"
-  /** 流程层读的入口文件与推断边窗口（flows 自己调 executeReadFile，不经工具循环，所以必须单独记） */
+  /** 历史：流程生成读的入口文件与推断边窗口；随流程视图退役后不再产生新行。 */
   | "flow-window"
   /** 出题与题面润色用的源码摘录 */
   | "exercise-excerpt"

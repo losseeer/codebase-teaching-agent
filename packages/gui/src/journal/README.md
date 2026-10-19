@@ -16,7 +16,7 @@
 
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
-| 宏观设计 | 分层全景、目录索引、流程节点 | `flow_node_selected` · `file_anchored` | 不写 LLM 调用 |
+| 宏观设计 | 图库、项目目录、画布节点 | `flow_node_selected`（画布节点选中沿用此事件名） · `file_anchored` | 不写 LLM 调用 |
 | 代码教学 | 源码 tab、课程树锚点 | `file_opened` · `line_located` · `entry_adopted` · `entry_overridden` | 不直接改源码、不写 `style_shift` |
 | 练习评估 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 | 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |

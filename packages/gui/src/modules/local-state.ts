@@ -1,4 +1,4 @@
-import type { CourseNode, CourseTier, CourseTierEvidence, CourseTree } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTier, CourseTierEvidence, CourseTree } from "@codebase-tutor/shared/wire";
 
 /**
   教学模块（业务模块）：模块 = 课程树「仓库模块地图」分支下的一个节点，

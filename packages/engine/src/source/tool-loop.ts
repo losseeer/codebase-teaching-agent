@@ -43,8 +43,8 @@ export interface ReadToolLoopInput {
   signal?: AbortSignal;
   /** 跨仓访问，见 `CrossRepoContext`。不传 = 只有当前仓，工具清单不变。 */
   cross?: CrossRepoContext;
-  /** 架构修正工具（有副作用的工具之一）。不传 = 这个作用域没有写能力，清单里连 `set_architecture` 这个节点都不出现。 */
-  architecture?: ArchitectureToolContext;
+  /** 模块档位工具（有副作用的工具之一）。不传 = 这个作用域没有写能力，清单里连 `set_module_tier` 这个节点都不出现。 */
+  moduleTier?: ModuleTierToolContext;
   /** 画布上那张图的结构改动。不传 = 这个作用域没有改图的权力，清单里不出现 `set_diagram`；教学与练习作用域都不给。 */
   diagram?: SetDiagramToolContext;
   /** 静态产物的只读门。不传 = 清单里没有 `query_facts`：产物层没算过的仓给了它只会每次回「这类产物不在册」。 */
@@ -129,21 +129,18 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 };
 
 /**
-  人工修正通道的工具面（有副作用）。
-  ⚠️ 参数表里没有边、没有文件、没有模块的增删，是刻意不给：跨层箭头由 import 聚合而来，
-  「模型说有一条 A→B 的边」不可能被证据支持。写侧（服务层传进来的闭包）再做一次白名单校验，两层都挡住改边。
+  模块档位通道的工具面（有副作用）。
+  ⚠️ 参数表里没有层、边、文件、模块的增删，是刻意不给：这一层只回答「这个模块归哪一档」。
+  写侧（服务层传进来的闭包）再做一次白名单校验，两层都挡住改结构。
 */
-export const SET_ARCHITECTURE_TOOL: LlmTool = {
-  name: "set_architecture",
-  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那个节点挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那个节点的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓所有修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张节点清单上的 id（arch: 开头是组合节点，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+export const SET_MODULE_TIER_TOOL: LlmTool = {
+  name: "set_module_tier",
+  description: "修正模块的结构档（主链路 core / 基础设施 facility / 外围 periphery），两种动作：set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工改档）。reset 给 module 只撤那个模块的改档；不给 module＝把这个仓所有人工修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张模块清单上的 id（module: 开头）。只能改「结构档怎么归」这个判断题；层、箭头、模块清单、文件路径都不在可改范围内。",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", description: "move_module / rename_layer / set_tier / reset" },
-      module: { type: "string", description: "图上那个节点的 id：组合节点 arch: 开头（整块挪），原子模块 module: 开头（set_tier 只认这一档；reset 给了它就只撤这个节点）" },
-      layer: { type: "string", description: "目标层名（move_module 必填）" },
-      from: { type: "string", description: "rename_layer 的原层名；reset 时给它就是「只撤这条改名」" },
-      to: { type: "string", description: "rename_layer 的新层名（1~24 字）；reset 时给它就是「只撤改成这个名字的那条改名」" },
+      action: { type: "string", description: "set_tier / reset" },
+      module: { type: "string", description: "模块 id（module: 开头）；reset 给了它只撤这个模块的改档" },
       tier: { type: "string", description: "core / facility / periphery（set_tier 必填）" }
     },
     required: ["action"]
@@ -151,21 +148,21 @@ export const SET_ARCHITECTURE_TOOL: LlmTool = {
 };
 
 /** 副作用工具的落地通道：由服务层给一个闭包，工具循环不认识数据库与 journal。 */
-export interface ArchitectureToolContext {
+export interface ModuleTierToolContext {
   /**
     执行一次修正并回一句给模型看的话（写成什么、或拒写原因）。
     这段文本会作为 `role:"tool"` 结果回喂，模型下一轮就按它说——所以必须是实际落盘后的状态，不能回意图。
   */
   apply: (argumentsJson: string) => string;
   /**
-    现在的分层现场 + 已存的人工修正清单（一段文本，由作用域层进上下文）。
+    现在的模块清单 + 已存的人工改档（一段文本，由作用域层进上下文）。
     修正存在引擎里，横幅读得到、模型读不到：没有这份清单，用户说「撤掉那条」时模型既没有条目也没有节点 id。
   */
   inventory?: string;
 }
 
 /**
-  画布上「结构」的写入口（与 `set_architecture` 并列为仅有的两个有副作用的工具）。
+  画布上「结构」的写入口（与 `set_module_tier` 并列为仅有的两个有副作用的工具）。
   四条纪律写死在描述里而不是留在提示词里劝：位置是用户的（`move` 只在用户开口时代挪一格）；
   `module` 节点必须带真 `ref`，核不上整次拒写；边的 `origin` 由引擎拿结构表核，只降不升，降完把原因写在边上；
   `draw` 一次交整张图。
@@ -184,7 +181,7 @@ export const SET_DIAGRAM_TOOL: LlmTool = {
 };
 
 /**
-  改这张图的落地通道，口径同 `ArchitectureToolContext`：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
+  改这张图的落地通道，口径同 `ModuleTierToolContext`：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
   `inventory` 是画布现场——有副作用的工具必须先看见现状，否则只能猜 id、猜「那条边」指哪条。
 */
 export interface SetDiagramToolContext {
@@ -218,8 +215,8 @@ export interface FactsToolContext {
 }
 
 /** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "architecture" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
-  const { cross, architecture, diagram, skills, external } = input;
+function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "moduleTier" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
+  const { cross, moduleTier, diagram, skills, external } = input;
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -233,7 +230,7 @@ function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "architect
   if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
   // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
-  if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
+  if (moduleTier) tools.push(SET_MODULE_TIER_TOOL);
   if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
   if (input.facts) tools.push(QUERY_FACTS_TOOL);
@@ -351,12 +348,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
         continue;
       }
-      if (call.name === SET_ARCHITECTURE_TOOL.name) {
-        if (!input.architecture) {
-          messages.push({ role: "tool", toolCallId: call.id, content: "当前作用域没开放架构修正。" });
-          continue;
-        }
-        messages.push({ role: "tool", toolCallId: call.id, content: input.architecture.apply(call.argumentsJson) });
+      if (call.name === SET_MODULE_TIER_TOOL.name) {
+        // 副作用一次就回一句实话；不占读文件额度（它读的是产物，不是源码）
+        messages.push({ role: "tool", toolCallId: call.id, content: input.moduleTier?.apply(call.argumentsJson) ?? "当前作用域没开放模块档位修正。" });
         continue;
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {

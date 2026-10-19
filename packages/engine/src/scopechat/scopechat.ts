@@ -1,5 +1,5 @@
 import { basename, dirname } from "node:path";
-import type { CourseNode, Exercise, FlowStage, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
+import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
@@ -7,7 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, FactsToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ModuleTierToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../external/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
@@ -160,8 +160,8 @@ function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
 }
 
 /**
-  架构视图选中模块的作用域段。那些节点是 GUI 合成的（`depmap:目录`），课程树里查不到，
-  所以文件清单由 GUI 随请求上送，这里与已分析集求交后列「路径（行数）：L1 职责」。
+  画布选中模块的作用域段。模块 id 在课程树里，文件清单由 GUI 随请求上送；
+  这里与已分析集求交后列「路径（行数）：L1 职责」。
   与 search_code 同源同口径（复用其语料的 lines/summary 字段），交集为空返回空串（= 没解析到作用域）。
 */
 function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undefined, scopePaths: string[]): string {
@@ -176,27 +176,6 @@ function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undef
   });
   const tail = files.length > MAX_SCOPE_LISTED ? `\n…其余 ${files.length - MAX_SCOPE_LISTED} 个文件未列出，需要时可用 search_code 定位。` : "";
   return `当前作用域：学习者在架构图选中的模块，含 ${files.length} 个已分析文件：\n${lines.join("\n")}${tail}`;
-}
-
-/** 流程视图环节类型的中文名（与 GUI FlowMap 的 FLOW_KIND_LABEL 同口径）。 */
-const FLOW_KIND_LABEL: Record<FlowStage["kind"], string> = { entry: "入口", stage: "环节", decision: "分叉判断", loop: "回环", exit: "出口" };
-
-/**
-  流程视图选中环节的作用域段。环节只存在于流程产物里（课程树节点只到「入口」一层），
-  不上送的话模型只看得见入口信息，「这个环节具体做什么」必然答偏——
-  这里注入环节名/说明/关联文件（带行号与职责）/分叉与回环，聚焦口径与架构图模块段一致。
-*/
-function flowStageSection(focus: FlowStage): string {
-  const files = focus.files.slice(0, MAX_SCOPE_LISTED).map((file) => `- ${file.path}${file.line > 0 ? `:${file.line}` : ""}${file.note ? `：${file.note}` : ""}`);
-  const tail = focus.files.length > MAX_SCOPE_LISTED ? `\n…其余 ${focus.files.length - MAX_SCOPE_LISTED} 个关联文件未列出。` : "";
-  const lines = [
-    `当前聚焦环节：学习者在流程视图选中「${focus.title}」（第 ${focus.order} 环节 · ${FLOW_KIND_LABEL[focus.kind]}），流程讲解只到入口粒度，本环节的展开以下面这些信息为准。`,
-    `环节说明：${focus.detail}`,
-    files.length ? `关联文件（${focus.files.length}）：\n${files.join("\n")}${tail}` : "关联文件：（无）"
-  ];
-  if (focus.branches.length) lines.push(`分叉去向：${focus.branches.join("；")}`);
-  if (focus.loopsTo !== undefined) lines.push(`回环：回到第 ${focus.loopsTo} 环节继续`);
-  return lines.join("\n");
 }
 
 /** 依赖图中某文件的邻域：一度（直接 import / 被 import）+ 二度（import 的 import / 被被 import），去重排序。 */
@@ -230,13 +209,13 @@ function joinList(items: string[]): string {
 
 /**
   map 作用域的一轮对话。
-  两个写工具（`set_architecture` 改分层判断、`set_diagram` 改画布上的结构）只给这一个作用域：
+  两个写工具（`set_module_tier` 改模块结构档、`set_diagram` 改画布上的结构）只给这一个作用域：
   教学与练习两张脸面对的是代码与题目，画布不在它们面前，给了就是让模型去改用户此刻看不见的东西。
   每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
   否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 模块档位工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ moduleTier?: ModuleTierToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -249,22 +228,18 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
     excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true, egress).forEach((block) => sections.push(block));
   } else if (input.nodeId) {
-    // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型以错误作用域自信作答。
-    // 先试架构图文件清单，仍解析不到就明示「按全局视野作答」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
+    // 选了节点却在课程树解析不到（课程重新生成后 id 失效）：静默降级会让模型以错误作用域自信作答。
+    // 先试画布上送的文件清单，仍解析不到就明示「按全局视野作答」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
     const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
     if (scope) {
       sections.push(scope);
     } else {
-      // 有环节段时作用域并未真正丢失，不发「全局视野」声明、不记降级
-      if (!input.focus) {
-        sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
-        scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
-      }
+      sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自画布或课程已更新），本次按全局视野作答。`);
+      scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
     }
   }
-  if (input.focus) sections.push(flowStageSection(input.focus));
-  // 架构现场（层名、节点 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
-  if (input.architecture?.inventory) sections.push(input.architecture.inventory);
+  // 模块现场（模块 id、当前档位、已存的人工改档）：有写工具才有意义，没有写能力的作用域不占这段 token
+  if (input.moduleTier?.inventory) sections.push(input.moduleTier.inventory);
   // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 是第二个写工具，同理必须先把现状给它，
   // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id。
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
@@ -302,7 +277,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     scene: "map.chat",
     ...(input.search ? { search: input.search } : {}),
     ...(input.cross ? { cross: input.cross } : {}),
-    ...(input.architecture ? { architecture: input.architecture } : {}),
+    ...(input.moduleTier ? { moduleTier: input.moduleTier } : {}),
     ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),

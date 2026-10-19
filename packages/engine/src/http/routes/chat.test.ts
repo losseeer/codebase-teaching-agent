@@ -19,6 +19,13 @@ beforeAll(async () => { await fx.mount(); });
 afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
+/** map 对话只有 SSE 一条产品路径：测试里要拿整段回复时，从 done 帧取，不另开一条 JSON 路由。 */
+async function mapChat(payload: Record<string, unknown>) {
+  const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload });
+  if (response.statusCode !== 200) return { statusCode: response.statusCode, payload: response.payload, json: () => response.json() };
+  return { statusCode: response.statusCode, payload: response.payload, json: () => doneEvent(sseEvents(response.payload)) };
+}
+
 describe("外部能力面进回合：技能与 MCP（默认关，装了才给）", () => {
   const skillsDir = join(fx.root, "skills");
   const fixture = fx.echoServerFixture;
@@ -55,9 +62,9 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "没装外部能力");
     const before = fx.sentTools.length;
-    await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这仓分几层？", threadId } });
+    await mapChat({ content: "这仓分几层？", threadId });
     // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有，所以那条只读门也不该出现
-    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_architecture", "set_diagram"]);
+    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_module_tier", "set_diagram"]);
   });
 
   it("盘上有产物时 query_facts 才进清单，那份「在册情况」也真进了请求", async () => {
@@ -73,7 +80,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "产物也要能查");
     const before = fx.sentTools.length;
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这个模块的结构长什么样？", threadId } });
+    const response = await mapChat({ content: "这个模块的结构长什么样？", threadId });
     expect(response.statusCode).toBe(200);
     expect(fx.sentTools[before].names).toContain("query_facts");
     expect(fx.sentTools[before].raw, "有这扇门却没告诉模型里面有什么，等于让它去猜有没有产物").toContain("静态产物在册");
@@ -84,7 +91,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     fx.scripted = ['@@tool read_skill {"name":"tutor-fixture"}', '@@tool mcp__fixture__echo {"text":"读到 nothing"}', `清单上的做法第一步是看日志。${MAIN_FILE}:3 有人问先改哪行？`];
     const threadId = await fx.newThread("map", "装了外部能力");
     const before = fx.sentTools.length;
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "按那份做法看一下", threadId } });
+    const response = await mapChat({ content: "按那份做法看一下", threadId });
     expect(response.statusCode).toBe(200);
 
     // ① 清单真的进了请求（模型看得见名字与描述，不是只在界面里挂着）
@@ -121,13 +128,13 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
   });
 });
 
-/** 宏观设计作用域：JSON 与 SSE 两条出口共用同一次收尾，两边的文本一致性各验一遍。 */
+/** 宏观设计作用域：SSE 回合的收尾与正文一致性。 */
 
-describe("宏观设计作用域（JSON + SSE）", () => {
-  it("map-chat JSON：合格回合也写 turn_invariant，响应正文＝库里正文＝turn_text", async () => {
+describe("宏观设计作用域（SSE）", () => {
+  it("map-chat：合格回合也写 turn_invariant，响应正文＝库里正文＝turn_text", async () => {
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "合格线程");
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这一节先看哪里？", threadId } });
+    const response = await mapChat({ content: "这一节先看哪里？", threadId });
     expect(response.statusCode).toBe(200);
     const reply = (response.json() as { reply: string }).reply;
 
@@ -144,10 +151,10 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("map-chat JSON：引用核不上时尾注进正文，落库与审计读的是同一份被补过的文本", async () => {
+  it("map-chat：引用核不上时尾注进正文，落库与审计读的是同一份被补过的文本", async () => {
     fx.scripted = ["见 src/ghost.ts:88，这一步为什么放锁？"];
     const threadId = await fx.newThread("map", "假引用线程");
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "假引用问题", threadId } });
+    const response = await mapChat({ content: "假引用问题", threadId });
     const reply = (response.json() as { reply: string }).reply;
 
     const invariant = fx.lastEvent("turn_invariant");
@@ -159,17 +166,17 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("map-chat 没绑定模块也带写工具，并把「架构现场＋现存修正」送进上下文", async () => {
+  it("map-chat 没绑定模块也带写工具，并把「模块地图＋现存改档」送进上下文", async () => {
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "画布上直接说话");
     fx.sentTools.length = 0;
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "把刚才那条修正撤掉", threadId } });
+    const response = await mapChat({ content: "把刚才那条修正撤掉", threadId });
     expect(response.statusCode).toBe(200);
     const call = fx.sentTools[0];
-    expect(call?.names, "画布是只读的，改图只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_architecture");
+    expect(call?.names, "画布是只读的，改档只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_module_tier");
     expect(call?.names, "结构改动同样只有 agent 这一条路：界面上没有第二个写入口").toContain("set_diagram");
-    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id id，不然只能反问或编 id").toContain("架构现场");
-    expect(call?.raw).toContain("现存人工修正");
+    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id，不然只能反问或编 id").toContain("模块地图");
+    expect(call?.raw).toContain("现有人工改档");
     expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
     expect(call?.raw, "改图工具必须先看得见现状：有哪几张图、正打开那张的图元 id").toContain("画布现场");
 
@@ -178,7 +185,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     const practiceThread = await fx.newThread("practice", "对照线程", fx.exerciseId);
     fx.sentTools.length = 0;
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId: fx.exerciseId, threadId: practiceThread } });
-    expect(fx.sentTools[0]?.names, "practice_chat 永远不给有副作用的工具").not.toContain("set_architecture");
+    expect(fx.sentTools[0]?.names, "practice_chat 永远不给有副作用的工具").not.toContain("set_module_tier");
     expect(fx.sentTools[0]?.names, "它也不该拿到改这张图的权力：练习那张脸上没有画布，给了就是让用户改自己看不见的东西").not.toContain("set_diagram");
   });
 
@@ -323,7 +330,7 @@ describe("出字前的本地过筛", () => {
   it("疑似密钥与仓库外路径在 reply、chat_message、turn_text 三处都已隐去", async () => {
     fx.scripted = ["凭据写在 sk-abcdefghijklmnop1234 这里，本机路径 /Users/someone/.ssh/id_rsa 也提一下。你觉得该先看哪一处？"];
     const threadId = await fx.newThread("map", "过筛线程");
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这段配置安全吗？", threadId } });
+    const response = await mapChat({ content: "这段配置安全吗？", threadId });
     expect(response.statusCode).toBe(200);
     const reply = (response.json() as { reply: string }).reply;
     expect(reply).toContain("[疑似密钥，已隐去]");
@@ -354,7 +361,7 @@ describe("跨仓工具面随地址簿变", () => {
     const peerDir = join(fx.root, "peer-repo");
     mkdirSync(peerDir, { recursive: true });
     const threadId = await fx.newThread("map", "跨仓工具面");
-    const ask = () => fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这个请求打到哪个仓去了？", threadId } });
+    const ask = () => mapChat({ content: "这个请求打到哪个仓去了？", threadId });
 
     try {
       fx.sentTools.length = 0;
@@ -391,7 +398,7 @@ describe("源码出网清单", () => {
   it("宏观设计回合：锚点摘录逐段计入审计，带线程 id，且不含源码正文", async () => {
     const before = egress().length;
     const threadId = await fx.newThread("map", "出网线程");
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这一节先看哪里？", threadId, nodeId: "unit-1" } });
+    const response = await mapChat({ content: "这一节先看哪里？", threadId, nodeId: "unit-1" });
     expect(response.statusCode).toBe(200);
 
     const rows = egress().slice(before);
@@ -410,7 +417,7 @@ describe("源码出网清单", () => {
   it("装配里没有源码时一行都不落（文件清单是派生产物，不算源码出网）", async () => {
     const before = egress().length;
     const threadId = await fx.newThread("map", "无源码出网线程");
-    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这个项目整体是做什么的？", threadId } });
+    const response = await mapChat({ content: "这个项目整体是做什么的？", threadId });
     expect(response.statusCode).toBe(200);
     expect(egress().slice(before)).toEqual([]);
   });

@@ -45,7 +45,7 @@ const analysis = {
     calls: [], symbols: [], entrypoints: [{ path: "src/api.ts", line: 1, label: "HTTP 路由" }],
     semanticBackend: "static", lspStatus: []
   },
-  implementations: [], quality: { generatedAt: "2026-10-18T00:00:00.000Z", micro: [], macro: [] }
+  implementations: []
 } as unknown as RepositoryAnalysis;
 
 const moduleNode = (id: string, ref: string, label: string, x: number, y: number): DiagramBody["nodes"][number] => ({ id, kind: "module", label, ref, x, y });

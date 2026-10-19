@@ -46,7 +46,7 @@ interface Candidate {
 
 /** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。
     `recentChanges` 是可选的「近期仓库变更」参考段：随 user 消息进、刻意不进缓存键——
-    变更清单每次保存都刷新，进键等于每次保存都把推荐重算一遍（与流程层同一套取舍）。 */
+    变更清单每次保存都刷新，进键等于每次保存都把推荐重算一遍（与其它 L2 缓存同一套取舍）。 */
 async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string }): Promise<ModuleEntrySuggestion> {
   const { candidates, moduleLabel, moduleHint, provider, recentChanges } = input;
   try {
@@ -294,7 +294,7 @@ interface EntryRecord {
 const entryCache = new Map<string, { value: EntryRecord; at: number }>();
 const ENTRY_CACHE_TTL_MS = 10 * 60_000;
 const ENTRY_CACHE_MAX = 100;
-/** 持久层的闲置 TTL：键是输入精确哈希，过期只是垃圾回收，不是可信性防线（与流程层同一套机制）。 */
+/** 持久层的闲置 TTL：键是输入精确哈希，过期只是垃圾回收，不是可信性防线（与其它 L2 缓存同一套机制）。 */
 const ENTRY_PERSISTED_TTL_MS = 7 * 24 * 60 * 60_000;
 
 /** 跨模块去重的记录：repositoryId → { path → 推荐它的模块 }。
@@ -355,7 +355,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     input.database?.touchLayerCache(key, now);
     return { ...hit.value, ...(expansion.usage ? { usage: expansion.usage } : {}) };
   }
-  // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重算（与流程层同一套机制）
+  // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重算（与其它 L2 缓存同一套机制）
   const stored = input.database?.getLayerCache<EntryRecord>(key);
   if (stored && now - stored.at < ENTRY_PERSISTED_TTL_MS && (stored.value.entries.length || stored.value.declined)) {
     entryCache.set(key, { value: stored.value, at: now });

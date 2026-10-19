@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatScope, ChatThread, CourseNode, CourseTree, Exercise, FlowStage, ScopedStreamProgress, TeachingProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { api, type StreamTurn } from "../api/client";
+import type { ChatScope, ChatThread, CourseNode, CourseTree, Exercise, ScopedStreamProgress, TeachingProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
+import { api, subscribeServerEvents, type StreamTurn } from "../api/client";
 import { firstTeachNode, flatten } from "../views/helpers";
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
@@ -14,7 +14,7 @@ import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK
 export type Scope = "map" | "teaching" | "practice";
 export const SCOPES: ReadonlyArray<Scope> = ["map", "teaching", "practice"] as const;
 
-/** 宏观设计绑定的三种合法情形：项目目录选文件 / 架构视图模块(+其关联文件) / 流程视图环节(+其关联文件)。 */
+/** 宏观设计绑定的两种合法情形：项目目录选文件 / 画布模块（+其关联文件）。 */
 export type MapBinding = { kind: "file" | "module" | "flow"; title?: string; path?: string };
 
 export const SCOPE_LABEL: Record<Scope, string> = {
@@ -105,9 +105,6 @@ function loadInitialScope(): Scope {
   return "teaching";
 }
 
-/** 引擎启发式回落 provider 名：与 engine harness 的 local fallback 标识一致。 */
-export const HEURISTIC_SOURCE = "local-heuristic-v1";
-
 /**
   回合失败是「断线」还是「引擎答砸了」：fetch 层面两者同形（都是抛错），但只有前者引擎仍会把这一轮
   算完并落库，回来时补得回——补账只对这一类开。AbortError 是连接被掐（断网时浏览器也这么抛），
@@ -153,11 +150,10 @@ export interface ScopedChatApi {
   setSelected: (node: CourseNode) => void;
 
   /** 宏观设计作用域绑定（节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
-    `scopePaths`：从架构图拖住一个模块时随请求上送它的可见文件清单（真课程树节点），
-    引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
-    `focus`：仅流程视图选中环节时给出——课程树节点只到入口粒度，环节自身的说明与关联文件要随请求上送。 */
+    `scopePaths`：从画布上拖住一个模块时随请求上送它的可见文件清单（真课程树节点），
+    引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。 */
   mapNode: CourseNode | null;
-  setMapNode: (node: CourseNode | null, scopePaths?: string[], focus?: FlowStage | null) => void;
+  setMapNode: (node: CourseNode | null, scopePaths?: string[]) => void;
   /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
   mapBinding: MapBinding | null;
   setMapBinding: (binding: MapBinding | null) => void;
@@ -226,11 +222,20 @@ const [selected, setSelected] = useState<CourseNode | null>(null);
 // 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadCourseData = (): void => setDataVersion((version) => version + 1);
-// 节点 + depmap 文件清单 + 流程环节 focus 是一个绑定的三半，合成一个 state 原子更新——分开两个 setState 会让
-// 「换绑到其他节点却残留旧清单/旧环节」成为可能（它们只对特定选中项有意义）。
-const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[]; focus: FlowStage | null }>({ node: null, scopePaths: [], focus: null });
+// 引擎侧产物变了（watcher 增量重分析 / agent 改档）：课程树与模块档位要跟着重取，不能停在旧读数上
+useEffect(() => {
+  if (!repositoryId) return;
+  const controller = new AbortController();
+  const stop = subscribeServerEvents((event) => {
+    if (event.type === "repository.updated" && event.payload.repositoryId === repositoryId) setDataVersion((version) => version + 1);
+  }, controller.signal);
+  return () => { stop(); controller.abort(); };
+}, [repositoryId]);
+// 节点 + 画布模块文件清单是一个绑定的两半，合成一个 state 原子更新——分开两个 setState 会让
+// 「换绑到其他节点却残留旧清单」成为可能（它们只对特定选中项有意义）。
+const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[] }>({ node: null, scopePaths: [] });
 const mapNode = mapSelection.node;
-const setMapNode = (node: CourseNode | null, scopePaths: string[] = [], focus: FlowStage | null = null): void => setMapSelection({ node, scopePaths, focus });
+const setMapNode = (node: CourseNode | null, scopePaths: string[] = []): void => setMapSelection({ node, scopePaths });
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
 // 画布上正打开的那张图：绑定行读它，map-chat 也把它当作用域上送，
@@ -251,9 +256,8 @@ useEffect(() => {
     // 重导入后按 id 把在绑选择挂回新树：`prev ?? …` 保旧对象会让上下文请求一直带着过期节点（children/anchors 都是旧的）
     const nodes = flatten(tree.root);
     setMapSelection((prev) => {
-      // 课程重新生成后流程快照也可能更新，环节 focus 一并清空（重选环节即可）
-      if (!prev.node) return { node: tree.root, scopePaths: [], focus: null };
-      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [], focus: null };
+      if (!prev.node) return { node: tree.root, scopePaths: [] };
+      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [] };
     });
     const first = firstTeachNode(tree.root);
     setSelected((prev) => {
@@ -739,10 +743,8 @@ useEffect(() => {
         ? await api.mapChatStream(repositoryId, {
             content: message,
             nodeId: mapNode?.id,
-            // 架构图选中模块：带上它的可见文件清单，引擎按这份清单解析作用域（节点本身也照旧上送）
+            // 画布选中模块：带上它的可见文件清单，引擎按这份清单解析作用域（节点本身也照旧上送）
             ...(mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
-            // 流程视图选中环节：节点只到入口粒度，环节信息靠这一并上送
-            ...(mapSelection.focus ? { focus: mapSelection.focus } : {}),
             path: mapFile || undefined,
             // 画布正打开的图：agent 改哪张、删哪条边都按这一格定，认不出就不动
             ...(openDiagram ? { diagramId: openDiagram.id } : {}),

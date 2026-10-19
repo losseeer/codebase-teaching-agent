@@ -20,7 +20,6 @@ const analysis = {
     lspStatus: []
   },
   implementations: [],
-  quality: {},
   versionStamp: "v1"
 } as unknown as RepositoryAnalysis;
 

@@ -10,7 +10,6 @@ import {
   type CapabilityLevel,
   type FileEntry
 } from "@codebase-tutor/shared";
-import { languageProfileOf } from "./language-profile.js";
 import { graphExtensions } from "./graph.js";
 import { loadSymbolParser } from "./parser.js";
 import { buildFileCfg } from "../facts/cfg.js";
@@ -118,58 +117,3 @@ describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
   });
 });
 
-describe("语言画像（只读实时计算，不参与任何缓存键）", () => {
-  const graph = { parseBackend: "ast" as const };
-
-  it("按语言归堆、给出占比，未进图的语言单独成行", () => {
-    const profile = languageProfileOf([
-      file("src/Order.java", 30),
-      file("src/Items.java", 10),
-      file("src/main.ts", 5),
-      file("README.md", 100)
-    ], graph);
-
-    const java = profile.languages.find((row) => row.language === "java");
-    expect(java).toBeDefined();
-    expect(java!.files).toBe(2);
-    expect(java!.lines).toBe(40);
-    expect(java!.inDependencyGraph).toBe(true);
-    // 排序按文件数：Java 2 > TS 1 > Markdown 1（同数按名字）
-    expect(profile.languages[0].language).toBe("java");
-    expect(profile.graphFileShare).toBe(0.75);
-
-    const markdown = profile.languages.find((row) => row.displayName === ".md 文件");
-    expect(markdown, "Markdown 要如实标成「没进依赖图」").toBeDefined();
-    expect(markdown!.inDependencyGraph).toBe(false);
-    expect(markdown!.capabilities.cells.dependencyEdge).toBe("unsupported");
-  });
-
-  it("主语言的依赖边档能直接被界面读到（近似语言不许被显示成可信）", () => {
-    const profile = languageProfileOf([file("cmd/main.go"), file("a.go")], graph);
-    const go = profile.languages.find((row) => row.language === "go")!;
-    expect(go.capabilities.cells.dependencyEdge).toBe("approximate");
-    expect(go.capabilities.cells.entrypoint).toBe("exact");
-    expect(profile.graphFileShare).toBe(1);
-  });
-
-  it("大写后缀「进了索引但没进图」这个节点要如实报，图内文件数不许按小写归堆后虚高", () => {
-    // 索引器的闸门先 lowercase 再比（`App.TS` 收得进来），图层是大小写敏感的（它进不去），
-    // 语言画像必须跟着图层那句判据走，否则 graphFileShare 会把没建过边的文件说成在图里。
-    const profile = languageProfileOf([file("src/App.TS", 10), file("src/util.ts", 5)], graph);
-    const typescript = profile.languages.find((row) => row.language === "typescript")!;
-    expect(typescript.files, "两个文件按名字都算 TypeScript").toBe(2);
-    expect(profile.graphFileShare, "只有 src/util.ts 真进了依赖图").toBe(0.5);
-  });
-
-  it("旧产物没有 parseBackend 时按 regex 认，与 graphFromData 同口径（不假装是语法树结果）", () => {
-    const profile = languageProfileOf([file("src/main.ts")], {});
-    expect(profile.parseBackend).toBe("regex");
-    expect(profile.parseBackendReason).toBeUndefined();
-    const withReason = languageProfileOf([file("src/main.ts")], { parseBackend: "regex", parseBackendReason: "语法解析器加载失败" });
-    expect(withReason.parseBackendReason).toBe("语法解析器加载失败");
-  });
-
-  it("空仓库不炸：分布为空、占比 0", () => {
-    expect(languageProfileOf([], graph)).toMatchObject({ languages: [], graphFileShare: 0, parseBackend: "ast" });
-  });
-});

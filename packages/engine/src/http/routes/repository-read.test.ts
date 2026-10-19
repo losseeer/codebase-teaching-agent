@@ -1,48 +1,17 @@
 import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-kit.js";
-import { TutorDatabase } from "../../store/database.js";
 
 /**
   只读产物那组路由的边界：`GET /source` 只放已索引的文件（索引白名单挡住密钥载体），
-  越界与软链接各判一次；`GET /analysis` 顺带交出的语言画像是读侧现算的元数据，不进任何产物。
-  挂载态下的取舍在单测里看不出来，所以这组打到路由。
+  越界与软链接各判一次。挂载态下的取舍在单测里看不出来，所以这组打到路由。
  */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
 afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
-
-describe("GET /analysis 附带的语言画像", () => {
-  it("响应带本仓语言分布与能力档，但落库产物一字未改（不进缓存键）", async () => {
-    const callsBefore = fx.fetchCalls();
-    const response = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/analysis` });
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as RepositoryAnalysis & { languageProfile?: NonNullable<RepositoryAnalysis["languageProfile"]> };
-
-    const row = body.languageProfile?.languages.find((item) => item.language === "typescript");
-    expect(row, "只有一个 .ts 文件的仓，语言分布应当只有 TypeScript 一行").toBeDefined();
-    expect(row!.files).toBe(1);
-    expect(row!.inDependencyGraph).toBe(true);
-    // 档直接从共享表来：界面不许自己判语言
-    expect(row!.capabilities.cells.dependencyEdge).toBe("exact");
-    // 旧产物的图没有 parseBackend → 按 regex 认，符号抽取那个字段不能因此被说成语法树结果
-    expect(body.languageProfile!.parseBackend).toBe("regex");
-
-    // 响应里可以加实时算出的字段，库里那份 analysis 不能有——它是缓存键的输入，写回去等于让全仓重算
-    const database = new TutorDatabase(fx.repoDir);
-    const stored = database.getAnalysis(fx.repositoryId);
-    database.close();
-    expect(stored, "落库产物读不出来就没法比对").toBeDefined();
-    expect(Object.prototype.hasOwnProperty.call(stored!, "languageProfile")).toBe(false);
-    expect(stored!.versionStamp).toBe("content:fixture");
-    // 零 token：拿语言画像不该付出任何模型调用
-    expect(fx.fetchCalls()).toBe(callsBefore);
-  });
-});
 
 /** llm.log 落点：每次 provider 调用都要有一行；线程归属必须跟着进来（前缀缓存按线程算间隔靠它）。 */
 

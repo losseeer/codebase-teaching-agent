@@ -16,7 +16,7 @@ import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { importer, repositoryOr404 } from "../../services.js";
 import { dedupeFileReads } from "../../source/read-file.js";
-import { createThread, latestThreadForNode, saveThreadState } from "../../store/chat-store.js";
+import { createThread, saveThreadState } from "../../store/chat-store.js";
 import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "../../tutor-settings/tutor-settings.js";
@@ -53,13 +53,6 @@ app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (re
   return session ?? reply.code(404).send({ error: "会话不存在" });
 });
 
-/** 该课程节点最近一次教学会话的 id（查 chat_session）：GUI 刷新后即使本地没存过 id，也能找回存量历史。 */
-app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>("/api/repositories/:repositoryId/latest-session", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库未挂载" });
-  const nodeId = request.query.nodeId ?? "";
-  return { sessionId: nodeId ? latestThreadForNode(repository.path, repository.index.repositoryId, nodeId)?.id ?? null : null };
-});
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const current = resolveTeachingState(request.params.sessionId);

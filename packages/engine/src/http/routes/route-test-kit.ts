@@ -174,7 +174,7 @@ export function createRouteFixture(): RouteFixture {
           { id: "unit-1", title: "注册顺序", summary: "builder 先注册再分发。", kind: "implementation", anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], children: [] },
           // 推荐入口要把文档节点挡在候选之外，所以 fixture 得先有文档节点，否则下面的断言是空的通过
           { id: "unit-doc", title: "设计文档", summary: "秒杀方案记录。", kind: "module", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] },
-          // 架构视图这路的 fixture：`modules` 分支是它的模块清单来源（与 GUI 的模块地图同一个 id）
+          // 模块地图这路的 fixture：`modules` 分支是模块清单来源（与 GUI 的模块地图同一个 id）
           {
             id: "modules", title: "模块地图", kind: "overview", summary: "两个模块，一个有代码、一个只有文档。", anchors: [],
             children: [
@@ -193,7 +193,7 @@ export function createRouteFixture(): RouteFixture {
         entrypoints: [{ path: MAIN_FILE, line: 3, label: "registerOrder" }],
         semanticBackend: "static", lspStatus: []
       },
-      implementations: [], quality: { generatedAt: now, micro: [], macro: [] }
+      implementations: []
     };
     const estimate: ImportEstimate = { cachedFiles: 0, summarizedFiles: 1, estimatedInputTokens: 0, estimatedCostUsd: 0, provider: "none", modelVersion: "fixture-v1" };
     const database = new TutorDatabase(repoDir);
@@ -272,7 +272,7 @@ export function createRouteFixture(): RouteFixture {
     if (options.expectAborted) expect(failed.length, "中止用例应该各留下一行 fail（一行都没有就是那条用例空转了）").toBeGreaterThan(0);
     expect(failed.every((line) => String(line.error).includes("已被中止")), `llm.log 里出现了非中止的失败：${JSON.stringify(failed.map((line) => line.error))}`).toBe(true);
     // 回合那一档的线程集合 == 本文件真正问过的线程集合；
-    // 只筛这三档，是因为分析类调用（分层、推荐入口、流程）本来就不属于任何会话线程
+    // 只筛这三档，是因为分析类调用（推荐入口等）本来就不属于任何会话线程
     const turnLines = lines.filter((line) => TURN_SCENES.has(String(line.scene)));
     expect(new Set(turnLines.map((line) => line.threadId))).toEqual(fx.usedThreads);
     expect(turnLines.every((line) => typeof line.threadId === "string" && line.threadId.length > 0), "有回合调用没带 threadId：前缀缓存按线程算间隔就读不到").toBe(true);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import type { CourseNode, Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared";
+import type { CourseNode, Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type DiagramPosition, type DiagramWarning, type SaveState, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
 import { Loading, flatten } from "./helpers";
@@ -65,7 +65,7 @@ function writeMapMemory(repositoryId: string, memory: MapMemory): void {
 /** 几何写入的去抖窗口：连续拖动合并成一趟 PUT。 */
 const GEOMETRY_DEBOUNCE_MS = 300;
 
-/** 便签与 `arch:` 前缀（架构方块）不指向课程树，不参与引用核对。 */
+/** 便签与 `arch:` 前缀（画布模块块）不指向课程树，不参与引用核对。 */
 function isBlockRef(ref: string): boolean {
   return ref.startsWith("arch:");
 }
@@ -415,7 +415,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     const resolution = resolutionOf(node);
     if (resolution.state === "ok") {
       const files = filesOf(node);
-      t.setMapNode(resolution.node, files.map((file) => file.path), null);
+      t.setMapNode(resolution.node, files.map((file) => file.path));
       t.setMapBinding({ kind: "module", title: node.label });
       showToast(`对话已绑到「${node.label}」`);
       return;

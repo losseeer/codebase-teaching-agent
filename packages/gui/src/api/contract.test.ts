@@ -1,7 +1,22 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ContractViolation } from "@codebase-tutor/shared";
+import { ContractViolation } from "@codebase-tutor/shared/wire";
 import { parseScopedStreamFrame } from "./client";
 import { progressText } from "../agent/useScopedChat";
+
+/** 界面源码根：本测试住在 `src/api/`。 */
+const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) sourceFiles(path, out);
+    else if (/\.(ts|tsx)$/.test(path) && !path.endsWith(".test.ts") && !path.endsWith(".test.tsx")) out.push(path);
+  }
+  return out;
+}
 
 /**
   引擎 ↔ 界面这条边界上的契约：作用域对话的过程帧解析与界面文案映射。
@@ -52,5 +67,14 @@ describe("过程帧的界面文案", () => {
 
   it("整个帧缺席时给「回复生成中…」，不假装知道在哪一步", () => {
     expect(progressText(undefined)).toBe("回复生成中…");
+  });
+});
+
+describe("界面只从 wire 边界取契约", () => {
+  it("没有任何界面源码直接 import `@codebase-tutor/shared` 根出口（引擎内部模型不跨进程）", () => {
+    const offenders = sourceFiles(SRC)
+      .filter((file) => /from "@codebase-tutor\/shared"/.test(readFileSync(file, "utf8")))
+      .map((file) => file.slice(SRC.length + 1));
+    expect(offenders, `改从 @codebase-tutor/shared/wire 取：${offenders.join(", ")}`).toEqual([]);
   });
 });

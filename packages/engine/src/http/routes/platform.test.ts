@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/shared";
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-kit.js";
 import { isolationBackend } from "../../sandbox/profile.js";
+import { TutorDatabase } from "../../store/database.js";
 
 /**
   引擎自己的面：界面动作事件出口的形状守卫、来源闸（不可信 Origin 一行 handler 都不许跑）、
@@ -62,12 +63,13 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
     writeFileSync(join(fx.repoDir, "credentials.json"), '{"aws_access_key_id":"AKIA-STILL-NOT-A-SOURCE-CHANGE"}\n', "utf8");
     await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-    const response = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/analysis` });
-    expect(response.statusCode).toBe(200);
-    const analysis = response.json() as { versionStamp: string; graph: { symbols: { path: string }[] }; lastIncrementalUpdate?: { changedPaths: string[] } };
+    const database = new TutorDatabase(fx.repoDir);
+    const analysis = database.getAnalysis(fx.repositoryId);
+    database.close();
+    expect(analysis, "产物读不出来就没法比对").toBeDefined();
     // 重分析一跑，versionStamp 就从「手工造的 content:fixture」翻成真实内容哈希，锚点同时消失
-    expect(analysis.versionStamp, `非收录文件的写入不该触发重分析；这轮被 ${JSON.stringify(analysis.lastIncrementalUpdate?.changedPaths ?? null)} 叫醒`).toBe("content:fixture");
-    expect(analysis.graph.symbols.map((symbol) => symbol.path), "符号表不该被换成真实扫描的空结果").toContain(MAIN_FILE);
+    expect(analysis!.versionStamp, `非收录文件的写入不该触发重分析；这轮被 ${JSON.stringify(analysis!.lastIncrementalUpdate?.changedPaths ?? null)} 叫醒`).toBe("content:fixture");
+    expect(analysis!.graph.symbols.map((symbol) => symbol.path), "符号表不该被换成真实扫描的空结果").toContain(MAIN_FILE);
   });
 });
 

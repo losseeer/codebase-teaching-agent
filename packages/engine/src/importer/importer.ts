@@ -14,7 +14,7 @@ import type {
   RepositoryMountReason,
   ServerEvent
 } from "@codebase-tutor/shared";
-import { attachQuality, buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
+import { buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
 import { REFINE_STEP, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
@@ -27,7 +27,6 @@ import { catalogRepositoryId, hash, id } from "../identity.js";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
-import { verifyAnalysis } from "../quality/checker.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
@@ -538,14 +537,7 @@ export class ImportService extends EventEmitter {
     progress("building_course", 75, "正在生成微观单元和影响图");
     const graph = await enrichWithLsp(repositoryPath, baseGraph);
     const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
-    const draftCourse = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations });
-    const quality = verifyAnalysis(repositoryPath, implementations, draftCourse.root, { timeoutMs: 2_500 });
-    const verifiedImplementations = implementations.map((unit) => ({
-      ...unit,
-      verification: quality.micro.filter((check) => check.anchors[0]?.path === unit.symbol.path && check.anchors[0]?.line === unit.symbol.line)
-    }));
-    let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations: verifiedImplementations });
-    course = attachQuality(course, quality);
+    let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations });
     // 宏观设计 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
     // 润色缓存：`settings.refinement` 标记里的四个维度（源码内容 / 模型 / 口径版本 / 图后端）全对上才复用已润色 course。
@@ -593,8 +585,7 @@ export class ImportService extends EventEmitter {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),
       graph: serializeGraph(graph),
-      implementations: verifiedImplementations,
-      quality,
+      implementations,
       versionStamp,
       // 记下分析时的 HEAD：懒挂载要靠它区分「内容没变但分析点在另一个提交上」与真的过期
       ...(analysisHead ? { gitHead: analysisHead } : {})

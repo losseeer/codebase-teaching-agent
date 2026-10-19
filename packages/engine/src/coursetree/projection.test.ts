@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CourseNode, CourseTree, FileRole, RepositoryIndex } from "@codebase-tutor/shared";
-import { annotateModuleTiers, courseChildren, courseOverview } from "./projection.js";
+import type { CourseNode, CourseTree, FileRole } from "@codebase-tutor/shared";
+import { annotateModuleTiers } from "./projection.js";
 
 const tree: CourseTree = {
   repositoryId: "repo_test",
@@ -23,35 +23,11 @@ const tree: CourseTree = {
   }
 };
 
-const index: RepositoryIndex = {
-  repositoryId: "repo_test",
-  repositoryPath: "/repo",
-  scannedAt: "2026-01-01T00:00:00.000Z",
-  totalFiles: 5000,
-  totalLines: 250000,
-  files: [],
-  fileTree: [],
-  hotspots: [{ path: "src/main.ts", changes: 12 }]
-};
-
 const node = (id: string, paths: string[], children: CourseNode[] = []): CourseNode => ({
   id, title: id, kind: "module", summary: "", anchors: paths.map((path) => ({ path, line: 1, label: path })), children
 });
 
 describe("course projections", () => {
-  it("keeps the overview shallow and pages descendants", () => {
-    const overview = courseOverview(tree, index);
-    expect(overview.root.children).toHaveLength(1);
-    expect(overview.root.children[0]).toMatchObject({ id: "modules", childCount: 35, children: [] });
-
-    const firstPage = courseChildren(tree, "modules", 0, 30)!;
-    expect(firstPage).toMatchObject({ total: 35, offset: 0, nextOffset: 30 });
-    expect(firstPage.items).toHaveLength(30);
-    const secondPage = courseChildren(tree, "modules", firstPage.nextOffset!, 30)!;
-    expect(secondPage.items).toHaveLength(5);
-    expect(secondPage.nextOffset).toBeUndefined();
-  });
-
   it("tiers modules by the structural roles of their visible files", () => {
     const branches: CourseTree = {
       ...tree,

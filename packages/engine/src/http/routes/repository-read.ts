@@ -1,9 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { moduleCourseOf } from "../../coursetree/architecture.js";
-import { courseChildren, courseOverview, findCourseNode, flattenCourseTree } from "../../coursetree/projection.js";
-import { graphFromData, impactRadius } from "../../depgraph/graph.js";
-import { languageProfileOf } from "../../depgraph/language-profile.js";
+import { moduleCourseOf } from "../../coursetree/blockmap.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "../../source/files.js";
 import { exercises, repositoryOr404 } from "../../services.js";
@@ -13,10 +10,10 @@ import { readOverlays } from "../../store/overlays.js";
 import type { FastifyInstance } from "fastify";
 
 /**
-  仓库的只读产物路由：索引、课程树投影、分析读数、影响面、练习摘要、学习者画像、报告、源码。
+  仓库的只读产物路由：索引、课程树投影、练习摘要、学习者画像、导入报告、源码。
   这一组一条纪律：一行模型请求都不发、一分钱都不花（对照 `read-routes-never-bill`）。
-  付费的那几组各自在 architecture / exercises / chat / teaching 里。
- */
+  付费的几组各自在 architecture / exercises / chat / teaching 里。
+*/
 export function registerRepositoryReadRoutes(app: FastifyInstance): void {
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/index", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
@@ -35,55 +32,6 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/c
   }
 });
 
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/overview", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  return repository ? courseOverview(repository.course, repository.index) : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-});
-
-app.get<{ Params: { repositoryId: string }; Querystring: { parentId?: string; offset?: string; limit?: string } }>("/api/repositories/:repositoryId/course/nodes", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  const parentId = request.query.parentId;
-  if (!repository || !parentId) return reply.code(400).send({ error: "请提供课程父节点" });
-  const page = courseChildren(repository.course, parentId, Number(request.query.offset ?? 0), Number(request.query.limit ?? 30));
-  return page ?? reply.code(404).send({ error: "课程节点不存在" });
-});
-
-app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>("/api/repositories/:repositoryId/analysis/node", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  const nodeId = request.query.nodeId;
-  if (!repository || !nodeId) return reply.code(400).send({ error: "请提供课程节点" });
-  if (!findCourseNode(repository.course.root, nodeId)) return reply.code(404).send({ error: "课程节点不存在" });
-  return {
-    nodeId,
-    implementation: repository.analysis.implementations.find((unit) => unit.id === nodeId)
-  };
-});
-
-/**
-  仓库分析（架构视图与流程视图的共同数据源）。响应里额外挂一份 `languageProfile`：
-  本仓语言分布 + 每语言能力档，来自 shared 的 `LANGUAGE_CAPABILITIES`（引擎自报口径）。
-
-  挂在这条已有的只读路由上而不是新开一条：「这条边有多硬」必须和边本身同时到达，
-  另开一条就会有两份时序与两处加载态。
-  它是读侧实时计算的元数据：不进 `repository.analysis`（那是落库产物，也是 `backendStamp` 等缓存键的输入），
-  只在响应里浅拷贝一次；输入是内存里的 `index.files`，不读磁盘、不调模型。
-
-  引擎没有「重新分析」这条路由：挂载只读落库产物并报告新鲜度，所以结构规则改了之后，
-  已导入的仓库仍用旧图回答。生效方式只有两条——重新导入，或等文件变动触发 watcher 重分析。
- */
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/analysis", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  return { ...repository.analysis, languageProfile: languageProfileOf(repository.index.files, repository.analysis.graph) };
-});
-
-app.post<{ Params: { repositoryId: string }; Body: { changedPaths?: string[] } }>("/api/repositories/:repositoryId/impact", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  const changedPaths = request.body?.changedPaths?.filter((path): path is string => typeof path === "string") ?? [];
-  if (!repository || !changedPaths.length) return reply.code(400).send({ error: "请提供至少一个变更路径" });
-  return impactRadius(graphFromData(repository.analysis.graph), changedPaths);
-});
-
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/practice", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   return repository ? exercises.getSummary(repository) : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -99,12 +47,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/l
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/report", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  return {
-    index: repository.index,
-    estimate: repository.estimate,
-    entrypoints: flattenCourseTree(repository.course.root).filter((node) => node.kind === "workflow").map((node) => ({ title: node.title, anchors: node.anchors })),
-    analysis: { implementations: repository.analysis.implementations.length, semanticBackend: repository.analysis.graph.semanticBackend, lspStatus: repository.analysis.graph.lspStatus }
-  };
+  return { index: repository.index, estimate: repository.estimate };
 });
 
 /**

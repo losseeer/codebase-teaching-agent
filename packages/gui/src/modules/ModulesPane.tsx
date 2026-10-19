@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
-import type { CourseTier } from "@codebase-tutor/shared";
+import type { CourseTier } from "@codebase-tutor/shared/wire";
 import { showToast } from "./toast";
 import { COMPREHENSION_MODULE_ID, type KnowledgeModule, type ModuleWhere } from "./local-state";
 import { Icon } from "../ui/icons";

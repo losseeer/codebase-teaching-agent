@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared";
+import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared/wire";
 
 // views/ 共享的小工具：通用占位 UI（Loading / EmptyState）、题型与日期的中文文案、课程树遍历。
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode } from "react";
-import type { Diagram, DiagramBody, DiagramNode } from "@codebase-tutor/shared";
+import type { Diagram, DiagramBody, DiagramNode } from "@codebase-tutor/shared/wire";
 import type { DiagramPosition, DiagramWarning, SaveState } from "../api/client";
 import { Icon } from "../ui/icons";
 import { InlineName, PopMenu, type MenuItem } from "./PopMenu";

@@ -8,7 +8,7 @@ function unit(path: string, name: string): ImplementationUnit {
     id: `symbol:${path}:${name}:${line}`,
     symbol: { id: `symbol:${path}:${name}:${line}`, name, kind: "function", path, line, endLine: 8, parameters: [], language: "typescript" },
     summary: `${name} 的实现细节。`,
-    inputs: [], output: "无", invariants: [], boundaries: [], traps: [], verification: []
+    inputs: [], output: "无", invariants: [], boundaries: [], traps: []
   };
 }
 

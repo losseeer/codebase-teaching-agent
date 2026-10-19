@@ -138,7 +138,7 @@ export class ExerciseService {
   getSummary(repository: PracticeRepository): PracticeSummary {
     const database = repository.handle.pin();
     try {
-      const mastery = this.mastery(repository, database);
+      const mastery = this.mastery(repository);
       const dueReviews = database.getReviewSchedules(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
       return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
     } finally {
@@ -171,7 +171,7 @@ export class ExerciseService {
           }
         }
       }
-      const mastery = this.mastery(repository, database);
+      const mastery = this.mastery(repository);
       const target = this.pickTarget(repository, requested, mastery);
       if (!target) {
         const reason = "当前分析结果没有可生成的练习。请先重新导入仓库。";
@@ -447,26 +447,14 @@ export class ExerciseService {
         generation_source: stored.exercise.family === "llm" ? "llm_proposed" : "static",
         feedback_source: graded.feedbackSource ?? "rule"
       });
-      journal.append("unassisted_test", {
-        unit_id: stored.exercise.targetUnitId,
-        exercise_id: exerciseId,
-        passed: graded.passed,
-        score: graded.score,
-        minutes: 0
-      });
-      const mastery = this.mastery(repository, database);
-      mastery.find((record) => record.unitId === stored.exercise.targetUnitId) && database.saveMastery(repository.index.repositoryId, mastery.find((record) => record.unitId === stored.exercise.targetUnitId)!);
       return { ...graded, exerciseId, repositoryId: repository.index.repositoryId, targetUnitId: stored.exercise.targetUnitId, kind: stored.exercise.kind, gradingMode: stored.exercise.gradingMode, reviewedAt: now.toISOString(), review };
     } finally {
       repository.handle.unpin();
     }
   }
 
-  private mastery(repository: PracticeRepository, database: TutorDatabase): MasteryRecord[] {
-    const fromJournal = deriveMastery(readJournal(repository.path));
-    const records = fromJournal.length ? fromJournal : database.getMastery(repository.index.repositoryId);
-    for (const record of records) database.saveMastery(repository.index.repositoryId, record);
-    return records;
+  private mastery(repository: PracticeRepository): MasteryRecord[] {
+    return deriveMastery(readJournal(repository.path));
   }
 
   private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {

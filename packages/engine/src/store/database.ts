@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { CourseTree, FactKind, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { CourseTree, FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 8;
@@ -39,12 +39,6 @@ export interface ChatMessageRow {
   error: string | null;
 }
 
-/** 检索向量的解码口径，与 saveVectors 的写入配方成对；评测台架的只读句柄必须走这里。 */
-export function decodeVectorBlob(path: string, dim: number, bytes: Uint8Array): { path: string; dim: number; vec: Float32Array } {
-  const copy = new Uint8Array(bytes); // 驱动给的 Buffer 可能被复用，拷一份再视图化
-  return { path, dim, vec: new Float32Array(copy.buffer, copy.byteOffset, dim) };
-}
-
 /**
   产物库的唯一形状声明：migrate() 的 db.exec 与 reconcileColumns() 的列对账都从这里读。
   CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，声明本身在存量库上不成立——列对账是补这一步的机制。
@@ -73,13 +67,6 @@ export const DATABASE_SCHEMA_SQL = `
         exercise_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY(repository_id, content_version, kind, target_unit_id)
-      );
-      CREATE TABLE IF NOT EXISTS learner_mastery (
-        repository_id TEXT NOT NULL,
-        unit_id TEXT NOT NULL,
-        mastery_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(repository_id, unit_id)
       );
       CREATE TABLE IF NOT EXISTS review_schedule (
         repository_id TEXT NOT NULL,
@@ -146,19 +133,6 @@ export const DATABASE_SCHEMA_SQL = `
         -- 列留着不删——tutor.db 是随仓可带走的东西，历史行里的值得在，删列要迁移而收益是零。
         stage TEXT,
         error TEXT
-      );
-      -- 检索第四臂的向量表（2026-10-04）。键是 (仓, 文件, embedding 模型)：
-      -- 换模型就是换一套坐标系，不能混用；content_hash 让「文件没改」直接等于「不用重嵌」。
-      -- 向量存 float32 小端 BLOB，相似度在 JS 里算（几百~几千条，扫一遍是毫秒级，不引 sqlite-vec 原生扩展）。
-      CREATE TABLE IF NOT EXISTS search_vector (
-        repository_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        model TEXT NOT NULL,
-        dim INTEGER NOT NULL,
-        content_hash TEXT NOT NULL,
-        vec BLOB NOT NULL,
-        at TEXT NOT NULL,
-        PRIMARY KEY(repository_id, path, model)
       );
       -- 静态产物层（2026-10-19）：控制流图、数据流、类型关系、注册与配置索引，按文件一行。
       -- 为什么不进 repository_state.analysis_json：那一列已经是大仓里最重的一块，而且它的指纹
@@ -505,12 +479,6 @@ export class TutorDatabase {
       .all(repositoryId, scope, limit) as ChatSessionRow[];
   }
 
-  /** 按节点找回最近一次教学会话（GUI 本地没存过 id 时用）：未删、最近更新在前。 */
-  getLatestChatSessionByNode(repositoryId: string, courseNodeId: string): ChatSessionRow | undefined {
-    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = 'teach' AND course_node_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1")
-      .get(repositoryId, courseNodeId) as ChatSessionRow | undefined;
-  }
-
   touchChatSession(sessionId: string, at: string): void {
     this.db.prepare("UPDATE chat_session SET updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(at, sessionId);
   }
@@ -557,16 +525,6 @@ export class TutorDatabase {
     return row.count;
   }
 
-  getMastery(repositoryId: string): MasteryRecord[] {
-    const rows = this.db.prepare("SELECT mastery_json FROM learner_mastery WHERE repository_id = ? ORDER BY unit_id").all(repositoryId) as { mastery_json: string }[];
-    return rows.map((row) => JSON.parse(row.mastery_json) as MasteryRecord);
-  }
-
-  saveMastery(repositoryId: string, record: MasteryRecord): void {
-    this.db.prepare("INSERT OR REPLACE INTO learner_mastery(repository_id, unit_id, mastery_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run(repositoryId, record.unitId, JSON.stringify(record), new Date().toISOString());
-  }
-
   getReviewSchedule(repositoryId: string, exerciseId: string): ReviewSchedule | undefined {
     const row = this.db.prepare("SELECT schedule_json FROM review_schedule WHERE repository_id = ? AND exercise_id = ?").get(repositoryId, exerciseId) as { schedule_json: string } | undefined;
     return row ? JSON.parse(row.schedule_json) as ReviewSchedule : undefined;
@@ -580,38 +538,6 @@ export class TutorDatabase {
   saveReviewSchedule(repositoryId: string, schedule: ReviewSchedule): void {
     this.db.prepare("INSERT OR REPLACE INTO review_schedule(repository_id, exercise_id, unit_id, schedule_json, updated_at) VALUES (?, ?, ?, ?, ?)")
       .run(repositoryId, schedule.exerciseId, schedule.unitId, JSON.stringify(schedule), new Date().toISOString());
-  }
-
-  /** 检索向量：某模型下已存的 path → content_hash（决定哪些文件需要重嵌）。 */
-  getVectorHashes(repositoryId: string, model: string): Map<string, string> {
-    const rows = this.db.prepare("SELECT path, content_hash FROM search_vector WHERE repository_id = ? AND model = ?").all(repositoryId, model) as { path: string; content_hash: string }[];
-    return new Map(rows.map((row) => [row.path, row.content_hash]));
-  }
-
-  saveVectors(repositoryId: string, model: string, vectors: { path: string; dim: number; contentHash: string; vec: Float32Array }[]): void {
-    if (!vectors.length) return;
-    const insert = this.db.prepare("INSERT OR REPLACE INTO search_vector(repository_id, path, model, dim, content_hash, vec, at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    const at = new Date().toISOString();
-    const tx = this.db.transaction((rows: { path: string; dim: number; contentHash: string; vec: Float32Array }[]) => {
-      for (const row of rows) insert.run(repositoryId, row.path, model, row.dim, row.contentHash, Buffer.from(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength), at);
-    });
-    tx(vectors);
-  }
-
-  loadVectors(repositoryId: string, model: string): { path: string; dim: number; vec: Float32Array }[] {
-    // ORDER BY path：固定扫描顺序，dense 臂两次跑同样输入结果可复现
-    const rows = this.db.prepare("SELECT path, dim, vec FROM search_vector WHERE repository_id = ? AND model = ? ORDER BY path").all(repositoryId, model) as { path: string; dim: number; vec: Uint8Array }[];
-    return rows.map((row) => decodeVectorBlob(row.path, row.dim, row.vec));
-  }
-
-  /** 文件已从索引里消失（或被改名）时删掉它的向量——留着只会让 dense 臂返回不存在的路径。 */
-  pruneVectors(repositoryId: string, model: string, keepPaths: string[]): number {
-    const keep = new Set(keepPaths);
-    const rows = this.db.prepare("SELECT path FROM search_vector WHERE repository_id = ? AND model = ?").all(repositoryId, model) as { path: string }[];
-    const del = this.db.prepare("DELETE FROM search_vector WHERE repository_id = ? AND model = ? AND path = ?");
-    let removed = 0;
-    for (const row of rows) if (!keep.has(row.path)) { del.run(repositoryId, model, row.path); removed += 1; }
-    return removed;
   }
 
   close(): void {

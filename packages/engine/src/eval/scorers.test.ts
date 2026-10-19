@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { RepositoryFlow } from "@codebase-tutor/shared";
-import { checkTurnInvariants, invariantTailNotice, scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, screenNotice, screenReply, type TeachTurn } from "./scorers.js";
+import { checkTurnInvariants, invariantTailNotice, scoreReferences, scoreSearchArm, scoreTeachInvariants, screenNotice, screenReply, type TeachTurn } from "./scorers.js";
 
 /**
   确定性判分器单测：全部零 token、纯函数，守判分口径本身——
-  引用落地认「整路径/裸文件名/行号越界」，边证据沿用 deepen 的归属闸，检索臂算 hit/recall 与负例误命中。
+  引用落地认「整路径/裸文件名/行号越界」，检索臂算 hit/recall 与负例误命中。
 */
 
 const FILES = new Map([
@@ -28,44 +27,6 @@ describe("引用落地", () => {
     const score = scoreReferences(["builder.py 里注册"], new Map(FILES).set("other/builder.py", 3));
     // src/graph/builder.py 与 src/utils/builder.py、other/builder.py 三个同名
     expect(score.problems[0]?.why).toContain("同名文件 3 个");
-  });
-});
-
-function flowOf(edges: RepositoryFlow["edges"]): RepositoryFlow {
-  return {
-    entry: { path: "src/graph/builder.py", line: 1, label: "入口" },
-    title: "t",
-    summary: "s",
-    stages: [
-      { order: 1, kind: "entry", title: "一", detail: "d", files: [{ path: "src/graph/builder.py", line: 1 }], branches: [] },
-      { order: 2, kind: "stage", title: "二", detail: "d", files: [{ path: "src/graph/nodes.py", line: 3 }], branches: [] }
-    ],
-    edges,
-    generatedAt: "2026-09-22T00:00:00.000Z"
-  };
-}
-
-describe("flow 产物判分", () => {
-  it("code 边证据须属于端点文件、static 边须引到真实文件；inferred 边不核对", () => {
-    const score = scoreFlowArtifacts(
-      [flowOf([
-        { from: 1, to: 2, origin: "code", evidence: "src/graph/builder.py:4 调用 register_all()" },
-        { from: 1, to: 2, origin: "static", evidence: "src/graph/ghost.py:1 → nodes.py:3" },
-        { from: 1, to: 2, origin: "inferred", evidence: "猜的" }
-      ])],
-      FILES
-    );
-    expect(score.code).toMatchObject({ total: 1, ok: 1 });
-    // static 边有 nodes.py:3 能落地就算核过（「至少引到一个存在文件」口径）
-    expect(score.static).toMatchObject({ total: 1, ok: 1 });
-    expect(score.static.bad).toHaveLength(0);
-    expect(score.refs.problems.some((problem) => problem.raw === "src/graph/ghost.py:1")).toBe(true);
-  });
-
-  it("证据引别家文件的 code 边进 bad 清单", () => {
-    const score = scoreFlowArtifacts([flowOf([{ from: 1, to: 2, origin: "code", evidence: "src/utils/builder.py:2 注册" }])], new Map(FILES).set("src/web/app.py", 8));
-    expect(score.code.ok).toBe(0);
-    expect(score.code.bad[0]?.key).toContain("1->2");
   });
 });
 

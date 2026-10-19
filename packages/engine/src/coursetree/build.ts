@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import type { CourseNode, CourseTree, FileEntry, ImplementationUnit, QualityReport } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTree, FileEntry, ImplementationUnit } from "@codebase-tutor/shared";
 import type { DependencyGraph } from "../depgraph/graph.js";
 import { isTestPath } from "../depgraph/roles.js";
 import type { FileSummary } from "../summarizer/summarizer.js";
@@ -100,7 +100,6 @@ export function buildCourseTree(input: {
     kind: "implementation" as const,
     summary: unit.summary,
     anchors: [{ path: unit.symbol.path, line: unit.symbol.line, endLine: unit.symbol.endLine, label: "实现定义" }],
-    verification: unit.verification,
     children: []
   }));
   return {
@@ -158,15 +157,6 @@ export function groupImplementationsByModule(tree: CourseTree): CourseTree {
   return { ...tree, root: { ...tree.root, children } };
 }
 
-export function attachQuality(tree: CourseTree, quality: QualityReport): CourseTree {
-  const checks = new Map(quality.macro.map((check) => [check.anchors[0] ? `${check.anchors[0].path}:${check.anchors[0].line}` : check.statement, check]));
-  const visit = (node: CourseNode): CourseNode => {
-    const anchor = node.anchors[0];
-    const key = anchor ? `${anchor.path}:${anchor.line}` : node.summary;
-    return { ...node, verification: node.verification?.length ? node.verification : checks.get(key) ? [checks.get(key)!] : undefined, children: node.children.map(visit) };
-  };
-  return { ...tree, root: visit(tree.root) };
-}
 
 /**
   「不作为执行路径讲述」= 测试文件 ∪ 示例/快照目录。

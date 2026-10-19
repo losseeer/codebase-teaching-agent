@@ -1,4 +1,4 @@
-import type { ArchitectureToolContext, FactsToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
+import type { FactsToolContext, ModuleTierToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
 import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
 import type { ImportedRepository } from "../importer/importer.js";
 import type { TutorDatabase } from "../store/database.js";
@@ -6,32 +6,29 @@ import type { DiagramWriteContext } from "../diagram/set-diagram.js";
 import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from "../diagram/set-diagram.js";
 import { factsPairChecker } from "../diagram/facts-verify.js";
 import { factsQueryTool } from "../facts/query.js";
-import { architectureInputOf, peekCachedArchitecture } from "../coursetree/architecture.js";
+import { moduleCourseOf, moduleNodes } from "../coursetree/blockmap.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "../coursetree/override-writer.js";
-import { findCourseNode } from "../coursetree/projection.js";
 import { readOverlays } from "../store/overlays.js";
 import { Journal } from "../store/journal.js";
 import { broadcast } from "../events.js";
-import { lightLlm } from "../services.js";
 
 /**
-  画布这条写路径的装配层：agent 的两个写工具（`set_diagram` 改结构、`set_architecture` 改分层）
+  画布这条写路径的装配层：agent 的三个写工具（`set_diagram` 改结构、`set_module_tier` 改档）
   与界面拖动共用的那一份上下文。都不是 HTTP 的事。
-  「图不存在」那条回复留在 `server.ts`（它要 `reply`），这里只放构造上下文与落地修正。
+  「图不存在」那条回复留在路由层（它要 `reply`），这里只放构造上下文与落地修正。
 */
 
 /**
-  一次图写入的上下文。`course` 取 `architectureInputOf` 那份（实时算完 tier、叠过覆盖层之后的树）：
-  写侧核 `ref` 用的模块清单与方块清单必须和读侧画出来的同一份，否则会出现「界面正画着这个节点，
+  一次图写入的上下文。`course` 取 `moduleCourseOf` 那份（实时算完 tier、叠过覆盖层之后的树）：
+  写侧核 `ref` 用的模块清单必须和读侧画出来的同一份，否则会出现「界面正画着这个节点，
   工具却说它查无此人」。构造口径只留一处。
 */
 export function diagramWriteContextFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): DiagramWriteContext {
   const overlays = readOverlays(database, repository.index.repositoryId);
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
   return {
     database,
     repositoryId: repository.index.repositoryId,
-    course: input.course,
+    course: moduleCourseOf(repository.course, repository.analysis, repository.index, overlays),
     analysis: repository.analysis,
     // 带上线程 id：审计要能从这次改动回到那一轮对话
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
@@ -55,9 +52,8 @@ export function factsToolFor(repository: ImportedRepository, database: TutorData
 }
 
 /**
-  本轮的改图工具面（只给 map 作用域，与 `set_architecture` 同一道闸；教学与练习两张脸永远不给）。
+  本轮的改图工具面（只给 map 作用域，与 `set_module_tier` 同一道闸；教学与练习两张脸永远不给）。
   校验、降档、存版、审计、广播全在 `applyDiagramEdit` 一处，这一层只把参数原语翻成请求、把回执说回去。
-  与 `set_architecture` 同一条纪律：没有模型也能用（它不发消息，只写本地产物），所以这里不卡 `lightLlmProvider`。
   `openDiagramId` 是界面随请求带上来的「画布上现在正打开那张」：用户说「把这条边删掉」指的是他眼前那张，
   不是图库里最近更新那张——所以它既进上下文（标出哪张是打开的），也进写侧（`edit.diagram` 省略时按它落点）。
   认不出就拒，绝不猜（见 `resolveTarget`）。
@@ -79,59 +75,42 @@ export function setDiagramToolFor(repository: ImportedRepository, database: Tuto
 }
 
 /**
-  架构修正工具的装配（map 作用域每一轮都给；practice 与教学作用域永远不给）。
+  模块档位工具的装配（map 作用域每一轮都给；practice 与教学作用域永远不给）。
   三条纪律：
-  - 校验层名用的是「现在图上的层」，从缓存产物读，绝不为了校验去发一发模型——
-    用户说一句「把它挪到编排层」不该变成一笔重判的钱；
-  - 落盘走 `commitOverride`，与 GUI 拖动同一条写路径：校验、写盘、审计、通知四步一次做完；
+  - 只改「结构档」这一个判断题，层、边、文件都不在可改范围内；
+  - 落盘走 `commitOverride`，与浏览器旧值迁移同一条写路径：校验、写盘、审计、通知四步一次做完；
   - 清单（`inventory`）进上下文：修正存在引擎里，对话读不到，模型没有「现在有哪几条、节点叫什么 id」
     就只会反问或编一个 id，被写侧白名单拒掉。
 */
-export function architectureToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ArchitectureToolContext | undefined {
-  const lightLlmProvider = lightLlm();
-  if (!lightLlmProvider) return undefined;
+export function moduleTierToolFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): ModuleTierToolContext {
   const overlays = readOverlays(database, repository.index.repositoryId);
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
-  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
-  const titleById = new Map(peek.blocks.map((block) => [block.id, block.title]));
-  const titleOf = (unitId: string): string => titleById.get(unitId) ?? findCourseNode(input.course.root, unitId)?.title ?? unitId;
-  const lost = new Set(peek.lost.map((loss) => (loss.kind === "move_module" ? `move:${loss.module}` : `rename:${loss.from}`)));
-  const corrections = [
-    ...Object.entries(overlays.architecture?.moduleLayer ?? {}).map(([unitId, layer]) => `- 把「${titleOf(unitId)}」挪进「${layer}」（id=${unitId}）${lost.has(`move:${unitId}`) ? "｜这条这次没接上：现在这份判层里没有这一层，或这个 id 已不在树上" : ""}`),
-    ...Object.entries(overlays.architecture?.layerRenames ?? {}).map(([from, to]) => `- 层名「${from}」改成了「${to}」${lost.has(`rename:${from}`) ? "｜这条这次没接上：原判层里没有这个旧层名" : ""}`),
-    ...Object.entries(overlays.modules?.tier ?? {}).map(([unitId, tier]) => `- 「${titleOf(unitId)}」的结构档改成 ${tier}（id=${unitId}）`)
-  ];
-  const layers = peek.layout.length
-    ? peek.layout.map((layer) => `${layer.name}：${layer.moduleIds.map((unitId) => `${titleOf(unitId)}（${unitId}）`).join("；") || "（空）"}`).join("\n")
-    : "（现在图上没有分层：这份产物还没判过层。要改归属，得先让用户自己点「重新生成分层」，这一发不由你代点。）";
+  const course = moduleCourseOf(repository.course, repository.analysis, repository.index, overlays);
+  const modules = moduleNodes(course);
+  const titleOf = new Map(modules.map((node) => [node.id, node.title]));
+  const lines = modules.slice(0, 80).map((node) => `- ${node.title}（id=${node.id}，引擎判=${node.tierGiven ?? node.tier ?? "未分级"}${node.tierOverridden ? `，人工改成 ${node.tier}` : ""}）`);
+  const omitted = modules.length > 80 ? `\n…其余 ${modules.length - 80} 个模块未列出。` : "";
+  const corrections = Object.entries(overlays.modules?.tier ?? {}).map(([moduleId, tier]) => `- 「${titleOf.get(moduleId) ?? moduleId}」的结构档改成 ${tier}（id=${moduleId}）`);
   return {
-    // 分层判断只有一份：缓存里那份判层叠上覆盖层；图是图库里的独立实体，现场由 `set_diagram` 那份 inventory 给
-    inventory: `架构现场（要动哪个节点就用这里给的 id）：\n${layers}\n现存人工修正（叠在模型原判上，每次读实时叠加）：\n${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销分三种：reset 给 module 只撤那个节点；reset 给 from 或 to 只撤一条改名；reset 两个都不给＝把这个仓所有修正一次清空（只有用户明确要全清时才这样）。`,
+    inventory: `模块地图（要改哪个模块就用这里给的 id）：\n${lines.join("\n") || "（这个仓没有模块地图）"}${omitted}\n现有人工改档：${corrections.length ? corrections.join("\n") : "（一条也没有）"}\n撤销：reset 给 module 只撤那个模块的改档；reset 不给 module＝把这个仓所有人工修正一次清空（只有用户明确要全清时才这样）。`,
     apply: (argumentsJson: string) => {
       const parsed = parseOverrideArguments(argumentsJson);
-      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：边、模块清单与文件路径不在可改范围内）` : "";
+      const note = parsed.ignored.length ? `（多余字段 ${parsed.ignored.join(" / ")} 已忽略：层、边、模块清单与文件路径不在可改范围内）` : "";
       if (parsed.error) return `没改：${parsed.error}。${note}`;
-      return `${applyOverrideIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
+      return `${applyModuleTierIntent(repository, database, parsed.intent as OverrideIntent, "agent", sessionId).text}${note}`;
     }
   };
 }
 
-/** 一次人工修正的落地：校验 → 写盘 → 审计 → 通知。GUI 的拖动与 Agent 的工具都走这一个函数。 */
-export function applyOverrideIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
+/** 一次档位修正的落地：校验 → 写盘 → 审计 → 通知。Agent 的工具与浏览器旧值迁移都走这一个函数。 */
+export function applyModuleTierIntent(repository: ImportedRepository, database: TutorDatabase, intent: OverrideIntent, via: OverrideVia, sessionId?: string) {
   const overlays = readOverlays(database, repository.index.repositoryId);
-  const lightLlmProvider = lightLlm();
-  if (!lightLlmProvider) return { ok: false, text: "没改：这份产物还没配模型，图上没有可改的层。", overlays };
-  /** 与两条读出口同一份输入构造（tier 实时计算 + 覆盖层）：少叠一档会让拖动被自己的层名校验拒掉 */
-  const input = architectureInputOf({ repositoryId: repository.index.repositoryId, repositoryPath: repository.path, course: repository.course, analysis: repository.analysis, index: repository.index, database, overlays });
-  const peek = peekCachedArchitecture({ ...input, provider: lightLlmProvider });
+  const course = moduleCourseOf(repository.course, repository.analysis, repository.index, overlays);
   const outcome = commitOverride({
     database,
     repositoryId: repository.index.repositoryId,
-    course: input.course,
-    layers: peek.layers,
-    blocks: peek.blocks,
+    course,
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
-    onApplied: (event) => broadcast({ type: "architecture_updated", payload: { repositoryId: event.repositoryId, module: event.module ?? null, via: event.via } })
+    onApplied: (event) => broadcast({ type: "repository.updated", payload: { repositoryId: event.repositoryId, changedPaths: [], impactedPaths: [] } })
   }, intent, via);
-  return { ...outcome, layers: peek.layers };
+  return outcome;
 }

@@ -28,7 +28,7 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
   const analysis: RepositoryAnalysis = {
     repositoryId, generatedAt: now, versionStamp: "content:fixture",
     graph: { imports: {}, calls: [], symbols: [], entrypoints: [], semanticBackend: "static", lspStatus: [] },
-    implementations: [], quality: { generatedAt: now, micro: [], macro: [] }
+    implementations: []
   };
   const estimate: ImportEstimate = { cachedFiles: 0, summarizedFiles: 1, estimatedInputTokens: 0, estimatedCostUsd: 0, provider: "none", modelVersion: "fixture-v1" };
   const database = new TutorDatabase(repoDir);

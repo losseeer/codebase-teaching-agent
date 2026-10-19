@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type RepositoryOverlays, type ChatScope, type CostSummary, type CourseNodeDetail, type CourseTree, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type FlowStage, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryAnalysis, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type SuggestedEntry, type TutorSession, type TutorSettings } from "@codebase-tutor/shared";
+import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type RepositoryOverlays, type ChatScope, type CostSummary, type CourseTree, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type SuggestedEntry, type TutorSession, type TutorSettings } from "@codebase-tutor/shared/wire";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -11,13 +11,13 @@ export interface Workspace {
 }
 
 // 形状来自 shared，这里转发一次，视图层统一从 api/client 取类型。
-export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tutor/shared";
+export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tutor/shared/wire";
 
 /**
   作用域对话流的过程帧词表来自 `shared`（引擎的 `send` 也按同一份类型收）。
   种类由 shared 定，守卫点是下面的 `toScopedEvent`。
 */
-export type { ScopedStreamProgress } from "@codebase-tutor/shared";
+export type { ScopedStreamProgress } from "@codebase-tutor/shared/wire";
 
 /**
   一帧原始 JSON → 词表里的过程帧：先过 shared 的契约（种类与形状都在那里定），再逐字段兜一下形状。
@@ -222,8 +222,6 @@ export interface DiagramWarning {
 export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 
 export const api = {
-  /** 探活：返回引擎状态、LLM 模式与沙箱闸门读数。 */
-  health: () => request<{ status: string; llmMode?: string; sandbox?: { level: string } }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
@@ -236,10 +234,8 @@ export const api = {
   forgetRepository: (repositoryId: string) => request<{ repositories: RepositoryCatalogEntry[] }>(`/api/repositories/${repositoryId}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   getCourse: (repositoryId: string) => request<CourseTree>(`/api/repositories/${repositoryId}/course`),
-  getCourseNodeDetail: (repositoryId: string, nodeId: string) => request<CourseNodeDetail>(`/api/repositories/${repositoryId}/analysis/node?nodeId=${encodeURIComponent(nodeId)}`),
-  getAnalysis: (repositoryId: string) => request<RepositoryAnalysis>(`/api/repositories/${repositoryId}/analysis`),
-  /** 导入前报告：索引概况 + 预估 token/金额 + 建议入口（ImportPage 在「花大钱之前」展示用）。 */
-  getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string }; entrypoints: { title: string; anchors: { path: string; line: number }[] }[] }>(`/api/repositories/${repositoryId}/report`),
+  /** 导入完成后的报告：索引概况 + 本次 token/金额估算 + 建议入口。 */
+  getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string } }>(`/api/repositories/${repositoryId}/report`),
   /** 教学/练习两侧的锚点行读数：按文件路径取那份实时源码。 */
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "module_files"; reason?: string }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
@@ -259,9 +255,9 @@ export const api = {
   saveDiagramGeometry: (repositoryId: string, diagramId: string, positions: DiagramPosition[]) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/geometry`, { method: "PUT", body: JSON.stringify({ positions }) }),
   /** 回到某一版快照（`index` 按 `versions` 数组下标，旧→新）。引擎会把恢复后的样子再存一版，历史不截断。 */
   restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
-  getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
+  getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number } }>(`/api/repositories/${repositoryId}/overlays`),
   /** 浏览器本地遗留覆盖层的一次性上报。 */
-  mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
+  mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
   createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
@@ -291,9 +287,8 @@ export const api = {
       turn.signal
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、以及这一回合真画/真改了哪张图）。
-      `focus` = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）；`diagramId` = 画布上正打开的那张图，
-      agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
+      `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
+  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
       `diagram?: undefined`：练习作用域没有画图工具，那一格恒不出现——两条流的 done 形状对齐，

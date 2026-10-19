@@ -5,7 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { java } from "@codemirror/lang-java";
-import type { ExerciseLanguage } from "@codebase-tutor/shared";
+import type { ExerciseLanguage } from "@codebase-tutor/shared/wire";
 
 // 练习页代码编辑器：CodeMirror 6，只装高亮与基础交互，不装 lint / 补全 / 语法检查——
 // 判分只认沙箱里那组测试（见 engine `exercises/code-generate.ts`），编辑器给出的「看起来对」不是判据。

@@ -1,6 +1,4 @@
-import type { RepositoryFlow } from "@codebase-tutor/shared";
 import { styleBand } from "@codebase-tutor/shared";
-import { citesOwnedFile } from "../flows/deepen.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**
@@ -57,52 +55,6 @@ export function scoreReferences(texts: Iterable<string>, files: Map<string, numb
     }
   }
   return score;
-}
-
-export interface EdgeEvidenceScore {
-  code: { total: number; ok: number; bad: { key: string; evidence: string }[] };
-  static: { total: number; ok: number; bad: { key: string; evidence: string }[] };
-}
-
-export interface FlowArtifactScore extends EdgeEvidenceScore {
-  flows: number;
-  refs: ReferenceScore;
-}
-
-/** 评一批 flow 产物：全文引用落地 + code/static 边的证据可核对性。inferred 边不核对（它本来就是「没依据」的自认）。 */
-export function scoreFlowArtifacts(flows: RepositoryFlow[], files: Map<string, number>): FlowArtifactScore {
-  const refs: ReferenceScore = { total: 0, ok: 0, problems: [] };
-  const code: EdgeEvidenceScore["code"] = { total: 0, ok: 0, bad: [] };
-  const static_: EdgeEvidenceScore["static"] = { total: 0, ok: 0, bad: [] };
-  for (const flow of flows) {
-    const texts: string[] = [flow.title, flow.summary ?? ""];
-    for (const stage of flow.stages) {
-      // 只判模型写的文本：stage.files 的结构化 path/line 已被 parseFlow 对着索引验过，不重复计入
-      texts.push(stage.title, stage.detail, ...stage.files.map((file) => file.note ?? ""), ...stage.branches);
-    }
-    for (const edge of flow.edges) texts.push(edge.evidence ?? "");
-    if (flow.caveats) texts.push(flow.caveats);
-    const merged = scoreReferences(texts, files);
-    refs.total += merged.total;
-    refs.ok += merged.ok;
-    refs.problems.push(...merged.problems);
-    const stageFiles = new Map(flow.stages.map((stage) => [stage.order, stage.files.map((file) => file.path)]));
-    for (const edge of flow.edges) {
-      const key = `${flow.entry.path}#${edge.from}->${edge.to}`;
-      if (edge.origin === "code") {
-        code.total += 1;
-        const owned = [...new Set([...(stageFiles.get(edge.from) ?? []), ...(stageFiles.get(edge.to) ?? [])])];
-        if (citesOwnedFile(edge.evidence ?? "", owned)) code.ok += 1;
-        else code.bad.push({ key, evidence: edge.evidence ?? "" });
-      } else if (edge.origin === "static") {
-        static_.total += 1;
-        const check = scoreReferences([edge.evidence ?? ""], files);
-        if (check.ok > 0) static_.ok += 1;
-        else static_.bad.push({ key, evidence: edge.evidence ?? "" });
-      }
-    }
-  }
-  return { flows: flows.length, refs, code, static: static_ };
 }
 
 export interface SearchCase {

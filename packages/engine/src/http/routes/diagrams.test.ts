@@ -156,7 +156,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
       `@@tool set_diagram ${JSON.stringify({ diagram: seeded.id, edit: { action: "add_edge", edge: { id: "e-ghost", from: "n-src", to: "n-doc", origin: "static", label: "读文档" } } })}`,
       OK_REPLY
     ];
-    const turn = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "把实现到说明那条依赖画上", threadId, diagramId: seeded.id } });
+    const turn = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: "把实现到说明那条依赖画上", threadId, diagramId: seeded.id } });
     expect(turn.statusCode).toBe(200);
 
     expect(fx.sentTools[before]?.names).toContain("set_diagram");

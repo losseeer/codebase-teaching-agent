@@ -9,8 +9,8 @@ import { isTestPath } from "./roles.js";
 export interface DependencyGraph {
   imports: Map<string, string[]>;
   /**
-    文件 → 它 import 了但仓内解析不到的裸包名（架构视图「边界之外」那一栏）。
-    刻意与 `imports` 分家：这里没有一个字是边，`impactRadius`、角色分层、流程证据都不看它。
+    文件 → 它 import 了但仓内解析不到的裸包名（图上「边界之外」那一栏）。
+    刻意与 `imports` 分家：这里没有一个字是边，`impactRadius`、角色分层、出题缓存键都不看它。
     没采到外部名的语言（Rust 的 `use serde::` 与 C/C++ 的 `<...>` 头）不写键，读侧按「未采集」处理。
   */
   externals: Map<string, string[]>;
@@ -181,7 +181,7 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
 export function graphFromData(data: DependencyGraphData): DependencyGraph {
   return {
     imports: new Map(Object.entries(data.imports)),
-    // 产物里没有 externals 节点时按「未采集」处理成空表：架构视图读到空表要说「这份产物还没采外部依赖」，
+    // 产物里没有 externals 节点时按「未采集」处理成空表：图读到空表要说「这份产物还没采外部依赖」，
     // 不能说「这个仓不碰任何外部服务」
     externals: new Map(Object.entries(data.externals ?? {})),
     calls: data.calls,
@@ -573,7 +573,7 @@ interface ImportIndex {
   aliases: PathAlias[];
 }
 
-/** 一条 import 语句的两类结果：仓内落点（进图的边）与仓外裸包名（进架构视图「边界之外」那一栏）。 */
+/** 一条 import 语句的两类结果：仓内落点（进图的边）与仓外裸包名（进图上「边界之外」那一栏）。 */
 interface ResolvedImports {
   paths: string[];
   externals: string[];
@@ -1137,7 +1137,7 @@ const pythonFrameworkOf = (content: string): string | undefined => pythonFramewo
 
 /**
  * Node/TS 侧的框架入口：Express / Fastify / Koa / NestJS。
- * 只靠文件名约定认不出服务级入口，架构视图的「含对外服务入口」一档会整仓为空。
+ * 只靠文件名约定认不出服务级入口，画布模块块的「含对外服务入口」一档会整仓为空。
  *
  * 四条收紧，都为「误判比漏判更贵」而设：
  *  - 先认出框架实例的名字（`const app = Fastify(...)`、`express()`、`new Koa()`、`NestFactory.create(...)`），

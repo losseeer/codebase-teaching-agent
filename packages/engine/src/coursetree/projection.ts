@@ -1,4 +1,4 @@
-import type { CourseNode, CourseNodePage, CourseTier, CourseTierEvidence, CourseTree, FileRole, RepositoryIndex, RepositoryOverview, SourceAnchor } from "@codebase-tutor/shared";
+import type { CourseNode, CourseTier, CourseTierEvidence, CourseTree, FileRole, SourceAnchor } from "@codebase-tutor/shared";
 import { isServedEntrypoint } from "../depgraph/graph.js";
 
 /**
@@ -55,26 +55,6 @@ export function annotateModuleTiers(tree: CourseTree, roles: Map<string, FileRol
   return { ...tree, root: { ...tree.root, children: tree.root.children.map((node) => (node === branch ? { ...branch, children } : node)) } };
 }
 
-export function courseOverview(tree: CourseTree, index: RepositoryIndex): RepositoryOverview {
-  return {
-    repositoryId: tree.repositoryId,
-    totalFiles: index.totalFiles,
-    totalLines: index.totalLines,
-    hotspots: index.hotspots.slice(0, 10),
-    root: projectNode(tree.root, 1)
-  };
-}
-
-export function courseChildren(tree: CourseTree, parentId: string, offset = 0, limit = 30): CourseNodePage | undefined {
-  const parent = findCourseNode(tree.root, parentId);
-  if (!parent) return undefined;
-  const start = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
-  const size = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 30;
-  const items = parent.children.slice(start, start + size).map((node) => projectNode(node, 0));
-  const nextOffset = start + items.length < parent.children.length ? start + items.length : undefined;
-  return { parentId, offset: start, total: parent.children.length, items, nextOffset };
-}
-
 export function findCourseNode(root: CourseNode, nodeId: string): CourseNode | undefined {
   if (root.id === nodeId) return root;
   for (const child of root.children) {
@@ -87,12 +67,4 @@ export function findCourseNode(root: CourseNode, nodeId: string): CourseNode | u
 /** 整棵树摊平成一维清单：按 kind 筛（路由要 workflow 节点、质检要非 implementation 节点）与「按 id 找」之外的一切遍历。 */
 export function flattenCourseTree(root: CourseNode): CourseNode[] {
   return [root, ...root.children.flatMap(flattenCourseTree)];
-}
-
-function projectNode(node: CourseNode, depth: number): CourseNode {
-  return {
-    ...node,
-    childCount: node.children.length,
-    children: depth > 0 ? node.children.map((child) => projectNode(child, depth - 1)) : []
-  };
 }

@@ -127,7 +127,6 @@ describe("provider-backed code Q&A harness", () => {
         lspStatus: []
       },
       implementations: [],
-      quality: {},
       versionStamp: "v1",
       repositoryId: "repo",
       generatedAt: new Date().toISOString()

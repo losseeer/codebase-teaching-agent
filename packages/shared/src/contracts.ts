@@ -33,7 +33,7 @@ export const importJobSchema = z.object({
   completedAt: z.string().optional(),
   error: z.string().optional(),
   /** 导入时选择的摘要口径：true=「参考注释导入」（slice-v2c 档），false=普通导入；undefined=不改该仓既有设置。
-      导入开始时会把显式值写进该仓 settings（读-合并-写），之后成本监控页的开关继续作为唯一事实源。 */
+      显式值会写进该仓 settings（读-合并-写）；换口径只能重新导入。 */
   summaryHeaderComments: z.boolean().optional()
 });
 export type ImportJob = z.infer<typeof importJobSchema>;
@@ -235,12 +235,11 @@ export type ScopedStreamFrame =
   全局事件流（`GET /api/events`）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——
   它们在各自请求的响应流里。
   - `repository.updated`：产物或覆盖层变了，界面该重取的那个节点；
-  - `architecture_updated`：人工修正落盘（拖动换层 / Agent 工具），架构视图与教学左栏都要跟着刷新；
   - `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复）。
   界面据此重取图库与当前图——几何拖动不广播，那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
 */
 export const serverEventSchema = z.object({
-  type: z.enum(["import.progress", "repository.updated", "architecture_updated", "diagram_updated"]),
+  type: z.enum(["import.progress", "repository.updated", "diagram_updated"]),
   payload: z.record(z.string(), z.unknown())
 });
 export type ServerEvent = z.infer<typeof serverEventSchema>;

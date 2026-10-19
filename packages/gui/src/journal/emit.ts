@@ -1,4 +1,4 @@
-import type { TraceScalar } from "@codebase-tutor/shared";
+import type { TraceScalar } from "@codebase-tutor/shared/wire";
 import type { UiJournalEventType } from "./events";
 import { flushJournalQueue, queueJournalEvent } from "./transport";
 

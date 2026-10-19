@@ -2,7 +2,7 @@ import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 
 /**
   影响范围注入：把 watcher 增量重分析落盘的 `lastIncrementalUpdate`（改动文件 + 依赖图反查波及）
-  转成一段简短参考文本，追加到流程层与推荐入口选择层的 user 消息末尾——「最近在动哪些文件」
+  转成一段简短参考文本，追加到推荐入口选择层的 user 消息末尾——「最近在动哪些文件」
   是讲解与选材想要的倾向信号。
 
   只进上下文、不进缓存键：变更清单每次保存监听中的仓库都会刷新，进键等于每次保存都把全仓已缓存的

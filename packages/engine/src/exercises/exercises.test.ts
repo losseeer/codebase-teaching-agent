@@ -355,7 +355,6 @@ function testRepository(): PracticeRepository {
     generatedAt: "2026-01-01T00:00:00.000Z",
     graph: serializeGraph(graph),
     implementations,
-    quality: { generatedAt: "2026-01-01T00:00:00.000Z", micro: [], macro: [] },
     versionStamp: "content-v1"
   };
   return { path: repositoryPath, index, analysis, handle: openHandle(repositoryPath, index.repositoryId) };

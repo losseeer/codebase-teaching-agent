@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import type { CostSummary } from "@codebase-tutor/shared";
+import type { CostSummary } from "@codebase-tutor/shared/wire";
 import { api, type Workspace } from "../api/client";
 import { LlmSettingsControl } from "../agent/LlmSettings";
 import { Icon } from "../ui/icons";
@@ -15,7 +15,6 @@ const SCENE_LABEL: Record<string, string> = {
   map_chat: "宏观设计对话",
   practice_chat: "练习评估对话",
   course_map: "课程树生成",
-  flow_map: "流程视图生成",
   module_entries: "推荐入口",
   exercise_generate: "练习生成",
   exercise_llm_generate: "练习生成",

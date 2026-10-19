@@ -34,8 +34,7 @@ export function buildImplementationUnits(repositoryPath: string, symbols: Symbol
       output: returns.length ? `返回 ${returns.join("；")}` : "未检测到显式返回值（可能通过副作用完成工作）。",
       invariants: guards.length ? guards.map((guard) => `守卫条件：${guard.trim()}`) : ["源码中未检测到显式守卫；需要结合调用方确认前置条件。"],
       boundaries: throws.length ? throws.map((value) => `异常边界：${value}`) : ["未检测到显式异常抛出；外部依赖仍可能失败。"],
-      traps,
-      verification: []
+      traps
     });
   }
   return units;

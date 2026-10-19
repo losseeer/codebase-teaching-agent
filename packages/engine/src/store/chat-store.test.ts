@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendMessages, countMessagesRaw, createThread, getThread, isChatScope, latestThreadForNode, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
+import { appendMessages, countMessagesRaw, createThread, getThread, isChatScope, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
 
 /**
   会话持久化出入口（产品数据线）的口径用例。
@@ -91,8 +91,6 @@ describe("会话持久化", () => {
 
     const teach = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "teach", courseNodeId: "node_x" });
     appendMessages(repository, teach.id, [{ role: "user", content: "教学第一问" }]);
-    expect(latestThreadForNode(repository, "repo_1", "node_x")?.id).toBe(teach.id);
-    expect(latestThreadForNode(repository, "repo_1", "node_missing")).toBeUndefined();
     // 作用域隔离：map 的列表里不会混进教学会话
     expect(listThreads(repository, "repo_1", "map").some((thread) => thread.id === teach.id)).toBe(false);
   });
