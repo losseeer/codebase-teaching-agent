@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   CAPABILITY_CELLS,
   CAPABILITY_LEVEL_LABEL,
@@ -12,6 +12,8 @@ import {
 } from "@codebase-tutor/shared";
 import { languageProfileOf } from "./language-profile.js";
 import { graphExtensions } from "./graph.js";
+import { loadSymbolParser } from "./parser.js";
+import { buildFileCfg } from "../facts/cfg.js";
 
 /**
   语言能力表的回归。要拦的事故有三个：
@@ -28,6 +30,11 @@ import { graphExtensions } from "./graph.js";
 
 const LEVELS: CapabilityLevel[] = ["exact", "approximate", "unsupported"];
 
+// 产物层那一格要拿语法树探，解析器得先起来（没起来时每个扩展名都读出 backend none，整条会假红）
+beforeAll(async () => {
+  await loadSymbolParser();
+});
+
 /** `DependencyGraph` 实际处理的扩展名 = 表派生出来的那一份（不再有第二处清单）。 */
 function extensionsHandledByGraph(): string[] {
   return [...graphExtensions];
@@ -39,7 +46,7 @@ function file(path: string, lines = 1): FileEntry {
 }
 
 describe("语言能力表：每个节点都要有明确取值", () => {
-  it("每门已支持语言的五个字段都取三档之一，且每个节点都配了一句白话说明", () => {
+  it("每门已支持语言的九个字段都取三档之一，且每个节点都配了一句白话说明", () => {
     for (const [language, entry] of Object.entries(LANGUAGE_CAPABILITIES)) {
       expect(entry.language, `${language}：language 要与表键一致`).toBe(language);
       expect(entry.displayName, `${language}：界面要中文名`).toBeTruthy();
@@ -69,6 +76,18 @@ describe("语言能力表：每个节点都要有明确取值", () => {
       }
     }
     expect(UNKNOWN_LANGUAGE_CAPABILITIES.cells.dependencyEdge).toBe("unsupported");
+  });
+
+  it("产物层那四格不许超过语法树的实际覆盖：controlFlow 与「这个扩展名真能出图」必须同进同退", () => {
+    // 表说某语言有控制流图，而 `facts/cfg.ts` 的节点表里没有它 ⇒ 读侧会拿到一片空白却以为是「算过是空的」。
+    // 反向也要成立：加了节点表却忘了改表，就是把能算的东西说成不能算。
+    // 空内容即可探：spec 缺失直接返回 backend none，spec 在则空文件也解析得动，返回 ast。
+    for (const [language, entry] of Object.entries(LANGUAGE_CAPABILITIES)) {
+      for (const extension of entry.extensions) {
+        const supported = buildFileCfg(`probe${extension}`, "", [], language).backend === "ast";
+        expect(entry.cells.controlFlow === "unsupported", `${language}${extension}：表说${entry.cells.controlFlow}，实际${supported ? "出得了图" : "出不了图"}`).toBe(!supported);
+      }
+    }
   });
 });
 
