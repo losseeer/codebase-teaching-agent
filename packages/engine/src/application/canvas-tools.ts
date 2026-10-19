@@ -1,8 +1,10 @@
 import type { ArchitectureToolContext, FactsToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
+import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
 import type { ImportedRepository } from "../importer/importer.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { DiagramWriteContext } from "../diagram/set-diagram.js";
 import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from "../diagram/set-diagram.js";
+import { factsPairChecker } from "../diagram/facts-verify.js";
 import { factsQueryTool } from "../facts/query.js";
 import { architectureInputOf, peekCachedArchitecture } from "../coursetree/architecture.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "../coursetree/override-writer.js";
@@ -34,6 +36,11 @@ export function diagramWriteContextFor(repository: ImportedRepository, database:
     analysis: repository.analysis,
     // 线程 id 带上去：审计里「这次改动是谁在哪个会话里说的」要能回到那一轮对话（与 set_architecture 那一路同款）
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
+    // 第四张结构表：产物层里的类型关系与运行时绑定（Spring 这类仓里「注入」那条线代码中没有直接调用）
+    facts: factsPairChecker({
+      typeRelations: () => database.listFileFacts<TypeRelationFileFact>(repository.index.repositoryId, "typeRelations"),
+      registry: () => database.listFileFacts<RegistryFileFact>(repository.index.repositoryId, "registry")
+    }),
     onApplied: (event) => broadcast({ type: "diagram_updated", payload: { repositoryId: event.repositoryId, diagramId: event.diagramId, action: event.action } })
   };
 }

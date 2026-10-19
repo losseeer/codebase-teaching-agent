@@ -199,7 +199,7 @@ export interface ArchitectureToolContext {
 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：**① 位置是用户的**，除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；**② kind=module 的节点必须带 ref**，指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；**③ 边的 origin 你可以报 static 或 code，引擎会拿 import、调用、类型派发三张表逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，那一格由引擎填）**。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
+  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：**① 位置是用户的**，除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；**② kind=module 的节点必须带 ref**，指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；**③ 边的 origin 你报 static 或 code，引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，那一格由引擎填）**。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
   parameters: {
     type: "object",
     properties: {

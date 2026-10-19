@@ -176,6 +176,29 @@ describe("applyDiagramEdit：边的可信度只降不升", () => {
     expect(f.events[0]!.payload.downgraded).toBe(3);
     f.database.close();
   });
+
+  it("第四张表补上时，注入那条线就不该被降成猜测；方向反了照样降（第四张表也不替它圆）", () => {
+    const f = fixture();
+    // 真产物由 `facts-verify.test.ts` 对着库验；这里喂一份等价判据，只验「settleEdge 会不会用它」
+    const context: DiagramWriteContext = { ...f.context, facts: (fromFiles, toFiles) => (fromFiles.includes("src/api.ts") && toFiles.includes("src/db.ts") ? { origin: "static", detail: "运行时绑定：src/api.ts:7 注入 DbService" } : undefined) };
+    const outcome = applyDiagramEdit(context, {
+      edit: {
+        action: "draw", name: "注入也要算证据", body: {
+          groups: [],
+          nodes: [moduleNode("n-api", "module:api", "接口层", 0, 0), moduleNode("n-db", "module:db", "存储", 200, 0)],
+          edges: [{ id: "e-di", from: "n-api", to: "n-db", origin: "static" }, { id: "e-back", from: "n-db", to: "n-api", origin: "static" }]
+        }
+      }
+    }, "agent");
+    expect(outcome.ok, outcome.text).toBe(true);
+    const byId = new Map(outcome.diagram!.body.edges.map((edge) => [edge.id, edge]));
+    expect(byId.get("e-di")!.origin, "三张老表核不到，但产物里有这条运行时绑定").toBe("static");
+    expect(byId.get("e-di")!.evidence).toContain("注入 DbService");
+    expect(byId.get("e-di")!.downgraded).toBeUndefined();
+    expect(byId.get("e-back")!.origin, "第四张表也是单向的：反方向没有依据就照降").toBe("inferred");
+    expect(outcome.text).toContain("1 条边核不到依据、已降档");
+    f.database.close();
+  });
 });
 
 describe("applyDiagramEdit：删与改都连带收尾", () => {

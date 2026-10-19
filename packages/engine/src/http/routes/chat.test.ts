@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import type { JournalEvent } from "@codebase-tutor/shared";
 import { createRouteFixture, MAIN_FILE, OK_REPLY, TAIL, sseEvents, deltasOf, doneEvent, waitFor, type RouteFixture } from "./route-test-kit.js";
 import { readMessages } from "../../store/chat-store.js";
+import { TutorDatabase } from "../../store/database.js";
 
 /**
   宏观设计 / 练习答疑两条作用域的回合收尾，以及喂进回合的外部能力面、跨仓工具面与出网清单。
@@ -46,11 +47,36 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
   });
 
   it("没装时工具清单逐字不变——默认关是靠不加，不是靠开关", async () => {
+    // 「没装」要指**确确实实空的目录**：不指这个变量时，加载器会去作家目录那两处，
+    // 于是这台机器装过什么就决定了这条用例断言什么（出厂技能一播种，家目录就不再是空的）。
+    const empty = join(fx.root, "skills-empty");
+    mkdirSync(empty, { recursive: true });
+    process.env.TUTOR_SKILLS_DIR = empty;
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "没装外部能力");
     const before = fx.sentTools.length;
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这仓分几层？", threadId } });
+    // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有 ⇒ 那扇只读门也不该出现
     expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_architecture", "set_diagram"]);
+  });
+
+  it("盘上有产物时 query_facts 才进清单，那份「在册情况」也真进了请求", async () => {
+    const empty = join(fx.root, "skills-empty2");
+    mkdirSync(empty, { recursive: true });
+    process.env.TUTOR_SKILLS_DIR = empty;
+    const database = new TutorDatabase(fx.repoDir);
+    try {
+      database.saveFileFacts(fx.repositoryId, "cfg", [{ path: "src/main.ts", payload: { path: "src/main.ts", language: "typescript", backend: "ast", version: "test", functions: [] } }]);
+    } finally {
+      database.close();
+    }
+    fx.scripted = [OK_REPLY];
+    const threadId = await fx.newThread("map", "产物也要能查");
+    const before = fx.sentTools.length;
+    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat`, payload: { content: "这个模块的结构长什么样？", threadId } });
+    expect(response.statusCode).toBe(200);
+    expect(fx.sentTools[before].names).toContain("query_facts");
+    expect(fx.sentTools[before].raw, "有这扇门却没告诉模型里面有什么，等于让它去猜有没有产物").toContain("静态产物在册");
   });
 
   it("装了之后 read_skill 与 mcp__fixture__echo 真并进请求，清单进上下文，两条审计各落一行", async () => {

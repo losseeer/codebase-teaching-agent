@@ -2,6 +2,7 @@ import type { CourseNode, CourseTree, Diagram, DiagramBody, DiagramEdit, Diagram
 import { architectureBlocks, moduleFiles, moduleNodes } from "../coursetree/architecture.js";
 import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../store/diagrams.js";
 import type { TutorDatabase } from "../store/database.js";
+import type { FactsPairChecker } from "./facts-verify.js";
 
 /**
   画布上「结构」的**唯一写入口**。用户只能拖位置（走 `store/diagrams.ts` 的 `saveGeometry`），
@@ -32,6 +33,11 @@ export interface DiagramWriteContext {
   analysis: RepositoryAnalysis;
   journal: { append: (type: JournalEventType, payload: Record<string, string | number | boolean | null>) => void };
   onApplied?: (event: { repositoryId: string; diagramId: string; action: string }) => void;
+  /**
+    第四张结构表（产物层里的类型关系与运行时绑定）。缺省时核边只看 import / 调用 / 类型派发三张表，
+    行为与从前逐字一致；给了它，「控制器注入服务接口」这类**代码里没有那一行调用**的真关系才不会被降成猜测。
+  */
+  facts?: FactsPairChecker;
 }
 
 /** 可信度排序：核出来更低就降过去，绝不上抬。 */
@@ -79,9 +85,10 @@ function reverseImport(fromFiles: string[], toFiles: string[], analysis: Reposit
 
 /**
   把模型报的那条边按引擎核出来的档位改一遍，**只会往下改**。
-  便签参与的边一律 `inferred`：便签不是代码，三张结构表里都没有它，硬标 static 就是撒谎。
+  便签参与的边一律 `inferred`：便签不是代码，四张结构表里都没有它，硬标 static 就是撒谎。
 */
-function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, index: RefIndex, analysis: RepositoryAnalysis): { edge: DiagramEdge; downgraded: boolean } {
+function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, index: RefIndex, context: DiagramWriteContext): { edge: DiagramEdge; downgraded: boolean } {
+  const { analysis } = context;
   const from = nodesById.get(edge.from);
   const to = nodesById.get(edge.to);
   const fromFiles = from ? filesOfNode(from, index) : [];
@@ -91,13 +98,16 @@ function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, inde
     const reason = "有一端不是模块节点（便签，或引用已经不在树上的格），没有可比对的结构表";
     return { edge: { ...edge, origin: "inferred", evidence: edge.evidence ?? reason, ...(edge.origin === "inferred" ? {} : { downgraded: `模型报的是 ${edge.origin}，${reason}` }) }, downgraded: edge.origin !== "inferred" };
   }
-  const verified = verifyPair(fromFiles, toFiles, analysis);
+  const graph = verifyPair(fromFiles, toFiles, analysis);
+  const fact = context.facts?.(fromFiles, toFiles);
+  // 取核得最高那一档作依据；两张都没有才算 inferred。这里只挑高档用于「不降它」，不上抬模型自己报低的那一档
+  const verified = graph && fact ? (ORIGIN_RANK[graph.origin] >= ORIGIN_RANK[fact.origin] ? graph : fact) : graph ?? fact;
   const rank = verified ? ORIGIN_RANK[verified.origin] : 0;
   if (rank >= claim) {
     // 核得到且不比它报的低：按它报的那一档留（模型报 code 而其实是 static 也不上抬——上抬等于替它吹）
     return { edge: { ...edge, evidence: verified?.detail ?? edge.evidence }, downgraded: false };
   }
-  const reason = verified ? `只核得到 ${verified.origin}（${verified.detail}）` : `import、调用、类型派发三张表里都没有这一对${reverseImport(fromFiles, toFiles, analysis) ? `，只有反向那条（${reverseImport(fromFiles, toFiles, analysis)}）` : ""}`;
+  const reason = verified ? `只核得到 ${verified.origin}（${verified.detail}）` : `import、调用、类型派发与产物里的类型关系、运行时绑定都核不到这一对${reverseImport(fromFiles, toFiles, analysis) ? `，只有反向那条（${reverseImport(fromFiles, toFiles, analysis)}）` : ""}`;
   return { edge: { ...edge, origin: verified ? verified.origin : "inferred", evidence: verified?.detail ?? edge.evidence ?? reason, downgraded: `模型报的是 ${edge.origin}，${reason}` }, downgraded: true };
 }
 
@@ -105,7 +115,8 @@ const clampCoord = (value: number): number => (Number.isFinite(value) ? Math.max
 const clampText = (value: string | undefined, limit: number): string | undefined => (value === undefined ? undefined : value.trim().slice(0, limit));
 
 /** 整张图的结构校验：id 唯一、边两端存在、分组存在、几何收口、边按证据定档。返回字符串 = 拒写并说清哪一格。 */
-function settleBody(body: DiagramBody, index: RefIndex, analysis: RepositoryAnalysis): { body: DiagramBody; downgraded: number } | string {
+function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteContext): { body: DiagramBody; downgraded: number } | string {
+  const { analysis } = context;
   if (body.nodes.length > DIAGRAM_NODE_LIMIT) return `这张图有 ${body.nodes.length} 个节点，超过 ${DIAGRAM_NODE_LIMIT} 个：画布不是用来装全仓的，拆成几张图（图库就是为这个存在的）`;
   if (body.edges.length > DIAGRAM_EDGE_LIMIT) return `边超过 ${DIAGRAM_EDGE_LIMIT} 条：这张图已经读不出东西了，只画主要关系`;
   const seen = new Set<string>();
@@ -143,7 +154,7 @@ function settleBody(body: DiagramBody, index: RefIndex, analysis: RepositoryAnal
     if (edgeIds.has(edge.id)) return `边 id 重复：${edge.id}`;
     edgeIds.add(edge.id);
     if (!(edge.origin in ORIGIN_RANK)) return `边的可信度只有 static / code / inferred 三档，收到「${String(edge.origin)}」`;
-    const settled = settleEdge({ ...edge, label: clampText(edge.label, 30) }, nodesById, index, analysis);
+    const settled = settleEdge({ ...edge, label: clampText(edge.label, 30) }, nodesById, index, context);
     if (settled.downgraded) downgraded += 1;
     edges.push(settled.edge);
   }
@@ -212,7 +223,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   const index = refIndexOf(context.course, context.analysis);
 
   if (edit.action === "draw") {
-    const settled = settleBody(edit.body, index, context.analysis);
+    const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const wanted = normalizeDiagramName(edit.name) || "未命名图";
     const diagram = buildDiagram(context.repositoryId, { name: uniqueDiagramName(context.database, context.repositoryId, wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
@@ -278,7 +289,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 
   /** 校验 + 落盘 + 记账 + 广播，一次做完（每个分支都从这儿出去，免得哪条漏了审计）。 */
   function finish(done: DiagramEdit, override: string): DiagramWriteOutcome {
-    const settled = settleBody(body, index, context.analysis);
+    const settled = settleBody(body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const saved = applyStructure(context.database, diagram, settled.body, versionNoteOf(done, nameOf));
     context.journal.append(done.action === "draw" ? "diagram_created" : "diagram_edited", {
