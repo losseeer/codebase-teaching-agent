@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { CfgFileFact, FileEntry, SymbolInfo } from "@codebase-tutor/shared";
+import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "../identity.js";
 import { TutorDatabase } from "../store/database.js";
 import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
@@ -31,13 +31,14 @@ describe("静态产物落库", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-")));
     try {
       mkdirSync(join(root, "src"), { recursive: true });
-      const alpha = `export function pick(a: number) {\n  if (a > 1) { return 1; }\n  return 0;\n}\n`;
+      const alpha = `export class Box {\n  size = 0;\n}\nexport function pick(a: number) {\n  if (a > 1) { return 1; }\n  return 0;\n}\n`;
       const beta = `export function flat(a: number) {\n  return a + 1;\n}\n`;
       writeFileSync(join(root, "src", "alpha.ts"), alpha);
+      const alphaSymbols = symbolsOf("src/alpha.ts", alpha);
       writeFileSync(join(root, "src", "beta.ts"), beta);
       const repositoryId = deriveRepositoryId(root);
-      const files = [entry("src/alpha.ts", 4), entry("src/beta.ts", 3)];
-      const symbols = [...symbolsOf("src/alpha.ts", alpha), ...symbolsOf("src/beta.ts", beta)];
+      const files = [entry("src/alpha.ts", 7), entry("src/beta.ts", 3)];
+      const symbols = [...alphaSymbols, ...symbolsOf("src/beta.ts", beta)];
 
       const db = new TutorDatabase(root);
       saveFileFacts(db, repositoryId, collectFileFacts(root, files, symbols));
@@ -48,9 +49,13 @@ describe("静态产物落库", () => {
       expect(facts.get("src/alpha.ts")?.version).toBe(FACTS_VERSION);
       const coverage = db.factCoverage(repositoryId);
       expect(coverage.find((row) => row.kind === "cfg")?.files).toBe(2);
-      expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出两类产物").toBe(2);
+      expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出各类产物").toBe(2);
+      expect(coverage.find((row) => row.kind === "typeRelations")?.files).toBe(2);
       // 没算过的类别一条都不报：读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
-      expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow"]);
+      expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "typeRelations"]);
+      const typed = db.getFileFact<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
+      expect(typed?.types.map((item) => item.name)).toEqual(["Box"]);
+      expect(typed?.types[0]?.kind).toBe("class");
       db.close();
     } finally {
       rmSync(root, { recursive: true, force: true });

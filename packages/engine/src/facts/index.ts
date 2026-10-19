@@ -1,10 +1,13 @@
-import type { CfgFileFact, DataflowFileFact, DataflowFunctionFact, FactKind, FileEntry, SymbolInfo } from "@codebase-tutor/shared";
+import type { CfgFileFact, DeclaredType, DataflowFileFact, DataflowFunctionFact, FactKind, FactSkip, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
 import { languageCapabilitiesOf } from "@codebase-tutor/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TutorDatabase } from "../store/database.js";
+import type { SyntaxNode } from "../depgraph/parser.js";
 import { eachFunction } from "./cfg.js";
+import { graphExtensions } from "../depgraph/graph.js";
 import { analyzeFunctionDataflow } from "./dataflow.js";
+import { analyzeFileTypes } from "./types.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
@@ -28,43 +31,46 @@ export interface FileFactRow {
 export interface FileFacts {
   cfg: CfgFileFact;
   dataflow: DataflowFileFact;
+  types: TypeRelationFileFact;
 }
 
-export function analyzeFile(path: string, content: string, symbols: SymbolInfo[], language: string): FileFacts {
+export function analyzeFile(path: string, content: string, symbols: SymbolInfo[], language: string, allSymbols: SymbolInfo[] = symbols): FileFacts {
   const flows: DataflowFunctionFact[] = [];
-  const cfg = eachFunction(path, content, symbols, language, (scope) => void flows.push(analyzeFunctionDataflow(scope)));
-  // backend 跟着图走：没有语法树就没有任何一份产物，`skipped` 里那句原因对两类产物同时成立
-  const dataflow: DataflowFileFact = {
-    path,
-    language,
-    backend: cfg.backend,
-    version: FACTS_VERSION,
-    functions: flows.sort((left, right) => left.startLine - right.startLine),
-    ...(cfg.skipped ? { skipped: cfg.skipped } : {})
+  const types: DeclaredType[] = [];
+  const typeSkips: FactSkip[] = [];
+  const onRoot = (root: SyntaxNode): void => {
+    const fact = analyzeFileTypes(path, root, language, allSymbols);
+    types.push(...fact.types);
+    typeSkips.push(...(fact.skipped ?? []));
   };
-  return { cfg, dataflow };
+  const cfg = eachFunction(path, content, symbols, language, (scope) => void flows.push(analyzeFunctionDataflow(scope)), onRoot);
+  // backend 跟着图走：没有语法树就没有任何一份产物，`skipped` 里那句原因对三类产物同时成立
+  const shared = { path, language, backend: cfg.backend, version: FACTS_VERSION };
+  return {
+    cfg,
+    dataflow: { ...shared, functions: flows.sort((left, right) => left.startLine - right.startLine), ...(cfg.skipped ? { skipped: cfg.skipped } : {}) },
+    types: { ...shared, types: types.sort((left, right) => left.line - right.line), ...(typeSkips.length ? { skipped: typeSkips } : {}) }
+  };
 }
 
 export function collectFileFacts(repositoryPath: string, files: FileEntry[], symbols: SymbolInfo[]): FileFactRow[] {
   const rows: FileFactRow[] = [];
-  const indexed = new Set(files.map((file) => file.path));
   const byPath = new Map<string, SymbolInfo[]>();
-  for (const symbol of symbols) {
-    if (symbol.kind !== "function" && symbol.kind !== "method") continue;
-    byPath.set(symbol.path, [...(byPath.get(symbol.path) ?? []), symbol]);
-  }
-  for (const [path, list] of [...byPath.entries()].sort()) {
-    if (!indexed.has(path)) continue;
+  for (const symbol of symbols) byPath.set(symbol.path, [...(byPath.get(symbol.path) ?? []), symbol]);
+  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+    // 没有语法就没有任何产物：文档、样式、配置走不到这里，也不会留下一行「算过、是空的」
+    if (!graphExtensions.includes(file.extension.toLowerCase())) continue;
     let content: string;
     try {
-      content = readFileSync(join(repositoryPath, path), "utf8");
+      content = readFileSync(join(repositoryPath, file.path), "utf8");
     } catch {
       // 扫描期就读不到的文件已经在 `RepositoryIndex.unreadable` 里记过名，这里不再重复报一条
       continue;
     }
-    const facts = analyzeFile(path, content, list, languageCapabilitiesOf(path).language);
-    rows.push({ kind: "cfg", path, payload: facts.cfg });
-    rows.push({ kind: "dataflow", path, payload: facts.dataflow });
+    const facts = analyzeFile(file.path, content, byPath.get(file.path) ?? [], languageCapabilitiesOf(file.path).language, symbols);
+    rows.push({ kind: "cfg", path: file.path, payload: facts.cfg });
+    rows.push({ kind: "dataflow", path: file.path, payload: facts.dataflow });
+    rows.push({ kind: "typeRelations", path: file.path, payload: facts.types });
   }
   return rows;
 }

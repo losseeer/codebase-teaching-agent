@@ -1038,6 +1038,43 @@ export interface DataflowFileFact extends FactFileBase {
   skipped?: FactSkip[];
 }
 
+/**
+  类型之间「谁用到谁」的那一类边。与依赖图的 `dispatch`（implements/extends 的**文件级**边）分开放：
+  那边是为「让实现类接回执行流」服务的，只到文件为止；这里要的是**类型名级别**的全貌——
+  字段指向哪个类型、泛型实参是谁、方法返回什么、参数收什么。
+
+  ⚠️ 落点（`toFile`）靠「类型名 → 声明了这个名字的文件」反查，与 `dispatch.supertypePath` 同一判据：
+  **同名类型可能指错**，所以每条边都带 `via` 说明它是怎么来的，反查不到就不写 `toFile`（不猜）。
+*/
+export type TypeRelationKind = "extends" | "implements" | "field" | "parameter" | "returns" | "generic-argument" | "alias";
+
+export interface TypeRelationEdge {
+  /** 被关联到的类型名（原文，不带泛型实参） */
+  to: string;
+  kind: TypeRelationKind;
+  /** 这一格写了什么判据：`extends 子句` / `字段类型标注` / `泛型实参` 等 */
+  via: string;
+  line: number;
+  /** 反查到的仓内文件；空 = 仓外类型、标准库、或同名多解（不猜） */
+  toFile?: string;
+  /** 同名多解时把候选都列出来，读的人才知道这不是「没解析出来」 */
+  ambiguous?: string[];
+}
+
+export interface DeclaredType {
+  name: string;
+  kind: "class" | "interface" | "struct" | "enum" | "alias" | "trait";
+  line: number;
+  endLine: number;
+  relations: TypeRelationEdge[];
+  truncated?: boolean;
+}
+
+export interface TypeRelationFileFact extends FactFileBase {
+  types: DeclaredType[];
+  skipped?: FactSkip[];
+}
+
 export interface ImplementationUnit {
   id: string;
   symbol: SymbolInfo;

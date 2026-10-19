@@ -804,7 +804,7 @@ export interface FunctionScope {
   ⚠️ `visit` 必须在回调内用完节点：回调一返回语法树就被释放，留在外面的节点引用会读出空值与
   `ERROR`（第一版把节点存到数组里，测试当场抓到了）。
 */
-export function eachFunction(path: string, content: string, symbols: SymbolInfo[], language: string, visit?: (scope: FunctionScope) => void): CfgFileFact {
+export function eachFunction(path: string, content: string, symbols: SymbolInfo[], language: string, visit?: (scope: FunctionScope) => void, onRoot?: (root: SyntaxNode) => void): CfgFileFact {
   const executable = symbols.filter((symbol) => symbol.kind === "function" || symbol.kind === "method");
   const spec = SPECS[grammarKeyOf(path)];
   if (!spec) {
@@ -822,6 +822,7 @@ export function eachFunction(path: string, content: string, symbols: SymbolInfo[
   const orphanCarriers: { name: string; line: number }[] = [];
   const anonymous: { name: string; line: number }[] = [];
   const trees = withSyntaxTrees(path, content, (root) => {
+    onRoot?.(root);
     const carriers: Carrier[] = [];
     collectCarriers(root, spec, carriers);
     for (const carrier of carriers) {
