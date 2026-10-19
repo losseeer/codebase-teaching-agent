@@ -82,7 +82,7 @@ describe("断线欠账（sessionStorage）", () => {
     expect(readDebtMap()).toEqual({});
   });
 
-  it("回读节奏是 12s / 30s / 60s 三趟：第一次「正文没多」是常态，不能据此宣布补账失败", () => {
+  it("回读节奏是 12s / 30s / 60s 三趟：单趟「正文没多」是常态，不能据此宣布补账失败", () => {
     expect([...RECHECK_DELAYS]).toEqual([12_000, 30_000, 60_000]);
     expect(RECHECK_DELAYS.reduce((sum, delay) => sum + delay, 0)).toBe(102_000);
   });

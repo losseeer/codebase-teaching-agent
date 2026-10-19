@@ -42,7 +42,7 @@ const withHeaderComments = database.getSettings<{ summaryHeaderComments?: boolea
 const light = buildLlmRuntimeProvider("light");
 const provider = createSummaryProvider({ llm: light, withHeaderComments });
 if (provider instanceof LocalSummaryProvider) {
-  throw new Error(`摘要档解析为确定性档（light 未配置或 TUTOR_SUMMARY_PROVIDER=off）——重烧会整表覆盖成兜底摘要，中止`);
+  throw new Error(`摘要档解析为确定性档（light 未配置或 TUTOR_SUMMARY_PROVIDER=off）——重算会整表覆盖成兜底摘要，中止`);
 }
 
 const started = Date.now();
@@ -58,5 +58,5 @@ const low = summaries.filter((summary) => summary.coverage.low).length;
 console.log(`仓库：${repositoryPath}（${index.files.length} 文件）`);
 console.log(`摘要参考注释：${withHeaderComments ? "开（slice-v2c）" : "关（slice-v2）"}`);
 console.log(`provider：${estimate.provider}｜modelVersion：${estimate.modelVersion}`);
-console.log(`重烧 ${estimate.summarizedFiles} 条（缓存命中 ${estimate.cachedFiles}，单条回落 ${estimate.fallbackFiles}）｜耗时 ${Math.round((Date.now() - started) / 1000)}s`);
+console.log(`重算 ${estimate.summarizedFiles} 条（缓存命中 ${estimate.cachedFiles}，单条回落 ${estimate.fallbackFiles}）｜耗时 ${Math.round((Date.now() - started) / 1000)}s`);
 console.log(`coverageLow：${low}/${summaries.length}`);

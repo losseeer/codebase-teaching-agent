@@ -76,7 +76,7 @@ describe("OpenAICompatibleProvider", () => {
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await expect(provider.complete({ system: "s", user: "u", maxTokens: 300 }))
       .rejects.toThrow(/两发都被 max_tokens=12300 截断.*推理模型/);
-    expect(sent, "6300 与 12300：第一次被截断之后余量翻倍再发一次，不是原样重发").toEqual([6300, 12300]);
+    expect(sent, "6300 → 12300：被截断后把余量翻倍再发一次，不原样重发").toEqual([6300, 12300]);
   });
 
   it("非 length 的空 content 保持通用错误", async () => {
@@ -506,7 +506,7 @@ describe("OpenAICompatibleProvider 的推理预算升档", () => {
     expect(sent).toEqual([6700, 12700]);
   });
 
-  it("余量关成 0 ⇒ 只发一发就抛：原样重发同一份预算只是赌运气，不做", async () => {
+  it("余量关成 0 ⇒ 只发一发就抛：同一份预算原样重发没有意义，不做", async () => {
     process.env.TUTOR_LLM_REASONING_HEADROOM = "0";
     const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("", "length"))]);
     await expect(new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u" })).rejects.toThrow("max_tokens=700");

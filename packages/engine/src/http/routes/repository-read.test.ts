@@ -6,9 +6,9 @@ import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-k
 import { TutorDatabase } from "../../store/database.js";
 
 /**
-  只读产物那组路由的边界：`GET /source` 只放**已索引**的文件（索引白名单替它挡住了密钥载体），
+  只读产物那组路由的边界：`GET /source` 只放已索引的文件（索引白名单挡住密钥载体），
   越界与软链接各判一次；`GET /analysis` 顺带交出的语言画像是读侧现算的元数据，不进任何产物。
-  单测查不出「带着真挂载态时到底给不给」，所以这组打路由。
+  挂载态下的取舍在单测里看不出来，所以这组打到路由。
  */
 const fx: RouteFixture = createRouteFixture();
 
@@ -32,7 +32,7 @@ describe("GET /analysis 附带的语言画像", () => {
     // 旧产物的图没有 parseBackend → 按 regex 认，符号抽取那个字段不能因此被说成语法树结果
     expect(body.languageProfile!.parseBackend).toBe("regex");
 
-    // 关键一条：响应里多了字段，库里那份 analysis 不能有——它是缓存键的输入，写回去就等于给全仓重烧开票
+    // 响应里可以加实时算出的字段，库里那份 analysis 不能有——它是缓存键的输入，写回去等于让全仓重算
     const database = new TutorDatabase(fx.repoDir);
     const stored = database.getAnalysis(fx.repositoryId);
     database.close();
@@ -75,12 +75,10 @@ describe("GET /source 的取文件边界", () => {
   });
 
   /**
-    路由这一侧也做**链接目标实测**（`pathReadBlock`，与 `read_file` 同一份判据）。
-    以前只有工具侧查，HTTP 侧停在「字面路径在不在仓里 + 在不在索引里」：仓里放一个名字无害的链接
-    就能只绕过界面那道闸。
-    ⚠️ 链接取名 `evidence.txt` 是算过的两难：`.png` 会先被**名字**那道闸拦下（「该文件类型不开放读取」），
-    根本走不到链接判定；而 `.ts`/`.md` 这类**收录**扩展名一进仓就是真改动，会排一轮重分析换掉挂载中的产物
-    （#163 守的正是这件事）。`.txt` 既不在拒读名单、也不在收录集，才只验链接这一关。
+    路由这一侧也判链接目标（`pathReadBlock`，与 `read_file` 同一份判据），否则仓里放一个名字无害的
+    链接就只绕过了界面这道闸。夹具取名 `evidence.txt` 是有讲究的：`.png` 先被扩展名名单拦下、
+    走不到链接判定；`.ts` / `.md` 属收录扩展名，写进仓就会排一轮重分析换掉挂载中的产物；
+    `.txt` 既不在拒读名单也不在收录集，只剩链接这一关可验。
     */
   it("仓里的符号链接指向仓外时，这条路由也给不出原文", async () => {
     const sentinel = "OUTSIDE-SENTINEL-must-not-be-served";

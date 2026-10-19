@@ -163,7 +163,7 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   const lightProvider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments: settings.summaryHeaderComments });
   if (provider instanceof LocalSummaryProvider) {
-    return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重烧会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
+    return reply.code(409).send({ error: "摘要档解析为确定性档（轻量模型未配置、或预算已降级）：重算会把 LLM 摘要整表覆盖成兜底摘要，已中止。" });
   }
   const database = repository.handle.pin();
   try {

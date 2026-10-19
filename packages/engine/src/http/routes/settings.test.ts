@@ -32,8 +32,8 @@ describe("预算已达上限时不放行付费分支", () => {
   });
 
   /**
-    问答回合与 map/practice 共用同一条闸门：达到预算上限时**开火前就 422**，不再回一段本地文案
-    （那段文案是教学状态机造的，阶梯已于 2026-10-14 撤掉）。所以这一轮的账面是「什么都没发生」。
+    问答回合与 map/practice 共用同一条闸门：达到预算上限时在发请求之前就 422，不回本地兜底文案。
+    所以这一轮的账面是「什么都没发生」。
     */
   it("teach 达到预算上限回合：拒在开火前，一次模型调用都不打、一行账都不记", async () => {
     const closed = await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
@@ -53,8 +53,8 @@ describe("预算已达上限时不放行付费分支", () => {
 
   /**
     闸门值是这个 describe 唯一的共享状态：每条用例跑完都还回默认预算。
-    以前只在用例末尾手抖一句还原——一旦中间某条断言先红，还原就跳不过去，
-    后面的 teach/map 用例会整片变成 422（撤掉本地兜底之后，这种泄露再也藏不住）。
+    还原必须放在 afterEach——放在用例末尾时，中间任何一条断言先红就会跳过还原，
+    后面的 teach/map 用例会整片变成 422。
     */
   afterEach(async () => {
     await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
@@ -62,7 +62,6 @@ describe("预算已达上限时不放行付费分支", () => {
 });
 
 /**
-  本地过筛（零 token）要验的是**位置**：隐去必须发生在下发与落库之前，
-  否则用户已经看见了、库里也已经存下了，再改就是事后修饰。
-  全程零 token：正文由 stub 的 fetch 给定。
+  本地过筛（零 token）验的是位置：隐去必须发生在下发与落库之前，
+  否则用户已经看见、库里已经存下，再改就是事后修饰。正文由 stub 的 fetch 给定。
   */

@@ -264,7 +264,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(seen?.maxTokens).toBe(8_000);
   });
 
-  it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {
+  it("确定性降级入缓存：第二次访问不再请求模型；瞬时失败仍每次重试", async () => {
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => ({ text: ungroundedReply, usage: { inputTokens: 6_872, outputTokens: 8_400 } }));
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
@@ -349,7 +349,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(staleCalls[0]?.user ?? "").not.toContain("近期仓库变更");
   });
 
-  it("变更段不进缓存键（A2 取舍）：结构输入一致时换一份变更记录，第二次访问仍命中缓存不重烧", async () => {
+  it("变更段不进缓存键（A2 取舍）：结构输入一致时换一份变更记录，第二次访问仍命中缓存不重算", async () => {
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
@@ -361,7 +361,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
-  it("持久层让重启不重烧：清空内存缓存后同键仍命中 SQLite；瞬时失败不落盘", async () => {
+  it("持久层让重启不重算：清空内存缓存后同键仍命中 SQLite；瞬时失败不落盘", async () => {
     clearRepositoryFlowCache();
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-persist-")));
     const database = new TutorDatabase(dir);
@@ -396,7 +396,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     }
   });
 
-  it("同键在途去重：两个并发请求只烧一次模型，后来者不带 usage", async () => {
+  it("同键在途去重：两个并发请求只请求一次模型，后来者不带 usage", async () => {
     // 内存层要等生成结束才写，所以冷入口上的两个并发（两个标签页 / GUI 重试 + 首屏）会各生成一次
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => {
@@ -475,7 +475,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(JSON.stringify(buildFlowDigest("/repo", INDEX, withExternals, ENTRY, NO_SUMMARIES))).not.toContain("externals");
   });
 
-  it("确定性降级也落盘：模拟 engine 重启后仍不重烧", async () => {
+  it("确定性降级也落盘：模拟 engine 重启后仍不重算", async () => {
     clearRepositoryFlowCache();
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-flow-deterministic-")));
     const database = new TutorDatabase(dir);

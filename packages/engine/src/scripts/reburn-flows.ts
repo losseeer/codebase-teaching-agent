@@ -44,7 +44,7 @@ const repositoryPath = (() => {
 })();
 
 const provider = buildLlmRuntimeProvider("teaching");
-if (!provider) throw new Error("主力档未配置：这个脚本只烧模型档，不烧静态降级视图");
+if (!provider) throw new Error("主力档未配置：这个脚本只走模型档，不重算静态降级视图");
 
 const index = indexRepository(repositoryPath);
 const store = new TutorDatabase(repositoryPath);
@@ -63,16 +63,16 @@ if (!entries.length) throw new Error(wanted ? `没有入口匹配「${wanted}」
 
 const check = flags.has("--check");
 if (check) {
-  console.log("只算键、不发请求：命中=这行产物就是当前判据算出来的；待烧=下次打开会重烧（或现在批量烧掉）");
+  console.log("只算键、不发请求：命中=这行产物就是当前判据算出来的；待重算=下次打开会重算（或现在批量重算）");
   let stale = 0;
   for (const entry of entries) {
     const cacheKey = flowCacheKeyOf({ repositoryPath, index, analysis, entry, provider, summaries, repositoryId: index.repositoryId });
     if (!cacheKey) { console.log(`  算不出键 ${entry.path.split("/").pop()}（入口不在证据里，产品侧本来就走直降路径）`); continue; }
     const hit = store.getLayerCache<unknown>(cacheKey.key);
     if (!hit) stale += 1;
-    console.log(`  ${hit ? "命中" : "待烧"} ${entry.path.split("/").pop()}｜键 ${cacheKey.key.slice(-12)}｜${hit ? `${Math.round((Date.now() - hit.at) / 3_600_000)} 小时前生成` : "没有对应缓存行"}`);
+    console.log(`  ${hit ? "命中" : "待重算"} ${entry.path.split("/").pop()}｜键 ${cacheKey.key.slice(-12)}｜${hit ? `${Math.round((Date.now() - hit.at) / 3_600_000)} 小时前生成` : "没有对应缓存行"}`);
   }
-  console.log(`\n合计：${entries.length} 个入口里 ${stale} 个待烧（按实测 ≈¥0.17/条 ⇒ ≈¥${(stale * 0.17).toFixed(2)} 峰时口径）`);
+  console.log(`\n合计：${entries.length} 个入口里 ${stale} 个待重算（按单价 ≈¥0.17/条 ⇒ ≈¥${(stale * 0.17).toFixed(2)} 峰时口径）`);
   store.close();
   process.exit(0);
 }
@@ -108,7 +108,7 @@ for (const entry of entries) {
     const grounded = composition.static + composition.code;
     burned += generated.usage ? 1 : 0;
     reused += generated.usage ? 0 : 1;
-    console.log(`${generated.usage ? "重烧" : "命中"} ${entry.path.split("/").pop()}${repeat > 1 ? ` #${attempt}` : ""}｜环节 ${generated.flow.stages.length}｜边 ${generated.flow.edges.length} ` +
+    console.log(`${generated.usage ? "重算" : "命中"} ${entry.path.split("/").pop()}${repeat > 1 ? ` #${attempt}` : ""}｜环节 ${generated.flow.stages.length}｜边 ${generated.flow.edges.length} ` +
       `{static:${composition.static}, inferred:${composition.inferred}, code:${composition.code}}｜grounding ${(grounded / total * 100).toFixed(0)}%｜` +
       `in ${generated.usage?.inputTokens ?? 0}(cache ${generated.usage?.promptCacheHitTokens ?? 0}) out ${generated.usage?.outputTokens ?? 0}｜来源 ${generated.source}`);
   }

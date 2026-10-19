@@ -179,7 +179,7 @@ describe("增量读缓存：只在文件真的变了时才多读", () => {
     expect(readJournal(repository).map((event) => event.payload.input_tokens)).toEqual([1, 2]);
   });
 
-  it("journal 体量读数：行数与解析出的事件数一致，字节数是文件实测", () => {
+  it("journal 体量读数：行数与解析出的事件数一致，字节数取文件的实际长度", () => {
     const journal = new Journal(repository, "repo_1");
     journal.append("token_usage", { scene: "teach", input_tokens: 1 });
     journal.append("token_usage", { scene: "teach", input_tokens: 2 });

@@ -134,7 +134,7 @@ const variants: Record<string, (path: string) => FileRole | undefined> = {
   "F4 流程证据算主链路（仅源码文件）": (path) => (pathsInFlows.has(path) && sourceExtensions.has(extensionOf.get(path) ?? "") && (roles.get(path) === "support" || roles.get(path) === "tool" || roles.get(path) === "infra") && !isTestPath(path) ? "core" : undefined)
 };
 const baseline = new Map(tiers.map((node) => [node.id, node.tier ?? "?"]));
-console.log(`\n[4] 反事实改法（改角色=翻 L1 摘要键=重烧；只改 tier 聚合=零成本）`);
+console.log(`\n[4] 反事实改法（改角色=翻 L1 摘要键=重算；只改 tier 聚合=零成本）`);
 for (const [name, rule] of Object.entries(variants)) {
   const patched = new Map(roles);
   const changed = new Set<string>();
@@ -145,7 +145,7 @@ for (const [name, rule] of Object.entries(variants)) {
   const after = annotateModuleTiers(tree, patched, structure.entrypoints).root.children.find((node) => node.id === "modules")?.children ?? [];
   const flips = after.filter((node) => (node.tier ?? "?") !== baseline.get(node.id));
   const staleFlows = flowPathSets.filter((set) => [...set].some((path) => changed.has(path))).length;
-  console.log(`  ${name}：角色改写 ${changed.size} 个文件（=重烧 ${changed.size} 条 L1 摘要 + ${staleFlows}/${flowPathSets.length} 条缓存流程）→ 模块换档 ${flips.length}/${tiers.length}${flips.length ? `（${flips.slice(0, 4).map((node) => `${node.title}:${baseline.get(node.id)}→${node.tier}`).join("、")}）` : ""}`);
+  console.log(`  ${name}：角色改写 ${changed.size} 个文件（=重算 ${changed.size} 条 L1 摘要 + ${staleFlows}/${flowPathSets.length} 条缓存流程）→ 模块换档 ${flips.length}/${tiers.length}${flips.length ? `（${flips.slice(0, 4).map((node) => `${node.title}:${baseline.get(node.id)}→${node.tier}`).join("、")}）` : ""}`);
 }
 const visibleOf = (node: (typeof tiers)[number]): string[] => {
   const paths: string[] = [];
@@ -183,4 +183,4 @@ tierOnly("T2 主链路判据从「有 1 个 core」改成「core 占比 ≥1/4�
   const ratio = visible.length ? visible.filter((path) => roles.get(path) === "core").length / visible.length : 0;
   return ratio < 0.25 && node.tier === "core" ? "facility" : undefined;
 });
-console.log(`\n读法：a/b/d 是判据问题（改角色=重烧），e 是图的问题（边不全时任何判据都白搭），c 说明流程证据能反过来校准结构判据，[7] 是免费的那个节点。`);
+console.log(`\n读法：a/b/d 是判据问题（改角色=重算），e 是图的问题（边不全时任何判据都无从判准），c 说明流程证据能反过来校准结构判据，[7] 是免费的那个节点。`);

@@ -97,7 +97,7 @@ describe("route seam — 配对", () => {
 });
 
 describe("route seam — 读文件的闸门与分派同源", () => {
-  it("`.mjs` / `.cjs` 也是消费方：过去闸门那条正则只写了 ts|tsx|js|jsx|vue，这两类文件连读都不读", () => {
+  it("`.mjs` / `.cjs` 也是消费方：闸门清单必须含这两类后缀，否则它们根本不进读文件路径", () => {
     expect(routeFileExtensions, "闸门清单必须认得 ES/CJS 后缀").toEqual(expect.arrayContaining([".mjs", ".cjs", ".java", ".py", ".vue"]));
     const { consumers } = extractRouteEndpoints(new Map([
       ["src/api.mjs", "request.get('/probe/ping');\n"],

@@ -126,7 +126,7 @@ describe("本地存储里的坏形状", () => {
     expect(loaded.custom).toEqual([{ id: "ok", label: "行", hint: "h" }]);
   });
 
-  it("旧版手动改档只认那三档：不认识的值不迁给服务端", () => {
+  it("手动改档只认那三档：本地存的其它值不迁给服务端", () => {
     localStorage.setItem("codebase-tutor.module-tiers.repo_x", JSON.stringify({ a: "core", b: "随便写的档", c: "periphery", d: 3 }));
     expect(readLegacyTierOverrides("repo_x")).toEqual({ a: "core", c: "periphery" });
   });

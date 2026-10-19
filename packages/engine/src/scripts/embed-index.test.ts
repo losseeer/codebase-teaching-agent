@@ -42,7 +42,7 @@ describe("嵌入文本口径", () => {
     expect(embeddableHash(unit!.text)).toHaveLength(16);
   });
 
-  it("哈希只认这段文本：摘要重烧会重嵌，无关字段（行数等）不会", () => {
+  it("哈希只认这段文本：摘要重算会重嵌，无关字段（行数等）不会", () => {
     const before = fileUnits([entryOf("a.ts", ["A"], "旧职责")]);
     expect(pendingUnits(before, new Map()).map((item) => item.unitId)).toEqual(["a.ts"]);
     const stored = new Map([["a.ts", pendingUnits(before, new Map())[0]!.contentHash]]);

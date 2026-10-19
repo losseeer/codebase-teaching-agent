@@ -260,7 +260,7 @@ for (const repositoryPath of repositories) {
     const row = db.prepare("SELECT analysis_json FROM repository_state WHERE analysis_json IS NOT NULL ORDER BY updated_at DESC").get() as { analysis_json: string } | undefined;
     analysis = row ? (JSON.parse(row.analysis_json) as RepositoryAnalysis) : undefined;
   } finally { db.close(); }
-  if (!analysis) { perRepo.push({ repository: label, reason: "产物里没有 graph/implementation（重烧后才有点可测）", rows: [] }); continue; }
+  if (!analysis) { perRepo.push({ repository: label, reason: "产物里没有 graph/implementation（重新生成产物后才有可测的点）", rows: [] }); continue; }
 
   const repoFiles = walkRepo(repositoryPath);
   const fileSet = new Set(repoFiles);

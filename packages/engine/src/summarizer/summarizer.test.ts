@@ -247,7 +247,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
       .toEqual({ checked: 3, mentioned: 1, low: false, rule: "anchor-v2" });
   });
 
-  it("路径剥离仍然生效：含糊摘要不能靠路径里的名字混过去", async () => {
+  it("路径不参与比对：含糊摘要不能靠路径里的符号名算命中", async () => {
     expect(await coverageFor(["billing"], "src/billing.ts：负责一些事情。"))
       .toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
   });

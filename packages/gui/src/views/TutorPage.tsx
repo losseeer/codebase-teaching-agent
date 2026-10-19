@@ -324,7 +324,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
             <p className="field-note" title="模块职责来自课程树节点摘要；名称与取舍可在齿轮里的「模块配置」改">{modules.find((item) => item.id === activeModule)?.hint ?? ""}</p>
 
             <div className="tier-group">
-              <ModuleSectionLabel label="推荐入口" note={entryNote} tip={`${entryNoteFull.replace(/。+$/, "")}。点一下即换阅读起点；清单由 LLM 按模块职责挑，token 花在第一次展开时`} />
+              <ModuleSectionLabel label="推荐入口" note={entryNote} tip={`${entryNoteFull.replace(/。+$/, "")}。点一下即换阅读起点；清单由 LLM 按模块职责挑，每个模块首次展开时请求一次`} />
               {visibleEntries.length ? (
                 <div className="col gap-2">
                   {shownEntries.map((entry) => (

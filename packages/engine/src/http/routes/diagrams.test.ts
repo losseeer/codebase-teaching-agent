@@ -98,7 +98,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
     expect(fx.eventsOf("diagram_created")).toHaveLength(createdBefore);
   });
 
-  it("恢复旧版是往前追加一版；下标越界 400，行也确实删得掉", async () => {
+  it("恢复历史版本也是往前追加一版；下标越界 400，行也确实删得掉", async () => {
     const seeded = seed("要看历史");
     const restored = await fx.app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 0 } });
     expect(restored.statusCode).toBe(200);

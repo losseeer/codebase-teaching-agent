@@ -241,7 +241,7 @@ describe("generateArchitectureCached", () => {
       expect(architectureInputOf(args).overrides, "没有架构覆盖层就不给空对象：空对象也是一种「有人改过」的读数").toBeUndefined();
       const peek = peekCachedArchitecture({ ...architectureInputOf(args), provider });
       expect(peek.layers, "写侧 peek 读得到判好的那几层").toEqual(["接入", "数据"]);
-      expect(complete, "peek 绝不发请求：为校验层名烧一发重判是把「挪一下模块」变成一笔钱").toHaveBeenCalledTimes(1);
+      expect(complete, "peek 绝不发请求：为校验层名重判一发是把「挪一下模块」变成一笔钱").toHaveBeenCalledTimes(1);
     } finally {
       database.close();
       rmSync(dir, { recursive: true, force: true });

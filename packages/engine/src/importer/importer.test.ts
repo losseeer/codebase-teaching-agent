@@ -389,7 +389,7 @@ describe("refinementIsFresh（宏观润色缓存的失效维度）", () => {
     expect(refinementIsFresh({ ...marker, modelVersion: undefined }, withoutModel)).toBe(true);
   });
 
-  it("缺任何标记字段都算未命中（旧版本遗留的标记不做兼容猜测）", () => {
+  it("缺任何标记字段都算未命中：宁可重算，也不替缺字段的标记补一个猜测值", () => {
     expect(refinementIsFresh(undefined, current)).toBe(false);
     expect(refinementIsFresh({ versionStamp: "content:v1" }, current)).toBe(false);
   });

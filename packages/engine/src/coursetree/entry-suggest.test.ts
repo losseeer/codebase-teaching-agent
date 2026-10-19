@@ -131,7 +131,7 @@ describe("suggestModuleEntriesCached", () => {
     expect(selectCalls).toHaveLength(1);
   });
 
-  it("持久层让重启不重烧：清空内存缓存后两层都命中 SQLite；失败回落在持久层同样不落盘", async () => {
+  it("持久层让重启不重算：清空内存缓存后两层都命中 SQLite；失败回落在持久层同样不落盘", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-entry-persist-")));
     const database = new TutorDatabase(dir);
     try {

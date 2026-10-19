@@ -207,7 +207,7 @@ const hybridSymbolTop = (query: string): string[] => reciprocalRankFusion([produ
 emit();
 if (denseOn) {
   emit(`- dense/hybrid 已跑：文件级向量 ${liveVectors.length} 条参与打分（另 ${allVectors.length - liveVectors.length} 条已不在索引里），函数级向量 ${symbolOn ? `${liveSymbolVectors.length} 单元 / ${new Set(liveSymbolVectors.map((vector) => vector.path.split("#")[0])).size} 文件` : "未建（跑 pnpm search:embed -- --level=symbol -- --yes 才出函数级两路）"}，查询 ${queryVectors.size} 条已嵌入（记账见 llm.log 的 scene=embed）`);
-  if (driftedText) emit(`- ⚠️ ${driftedText} 个单元的语料文本与向量哈希不一致（摘要重烧或索引变了）——dense 臂用的还是旧向量，要准数就重跑 pnpm search:embed -- --yes`);
+  if (driftedText) emit(`- ⚠️ ${driftedText} 个单元的语料文本与向量哈希不一致（摘要重算或索引变了）——dense 臂用的还是旧向量，要准数就重跑 pnpm search:embed -- --yes`);
 } else {
   emit(`- dense/hybrid 未跑：${wantDense ? denseSkipped : `加 --dense 会先对本集 ${distinctQueries.length} 条查询发 embedding 请求（这是整个脚本唯一花钱的一步；向量表 ${allVectors.length} 条 / 模型 ${denseModelLabel}）`}`);
 }
