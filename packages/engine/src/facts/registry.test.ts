@@ -63,6 +63,15 @@ describe("注册与配置索引", () => {
     expect(text).not.toContain("注释行");
   });
 
+  it("yml 的键按缩进拼回全名：只记叶子会把两个不同段的 password 混成一个", () => {
+    const fact = analyzeFileRegistry("src/main/resources/application.yml", "spring:\n  datasource:\n    password: S3cr3t-DoNot-Leak\nserver:\n  password: another-secret\n  port: 8080\n", "unknown", false);
+    expect(fact.entries.map((entry) => entry.name)).toEqual(["spring", "spring.datasource", "spring.datasource.password", "server", "server.password", "server.port"]);
+    const text = JSON.stringify(fact);
+    expect(text, "值一个字都不进产物").not.toContain("S3cr3t");
+    expect(text).not.toContain("another-secret");
+    expect(text).not.toContain("8080");
+  });
+
   it("SPI 清单：文件名是接口，每行是实现", () => {
     const fact = analyzeFileRegistry("src/main/resources/META-INF/services/com.demo.Renderer", "com.demo.PngRenderer\n# 注释\ncom.demo.SvgRenderer", "unknown", false);
     expect(fact.entries.map((entry) => `${entry.name}→${entry.target}`)).toEqual([

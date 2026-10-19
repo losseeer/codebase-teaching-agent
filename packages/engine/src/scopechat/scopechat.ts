@@ -7,7 +7,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { ArchitectureToolContext, CrossRepoContext, ExternalToolContext, FactsToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../external/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
@@ -241,7 +241,7 @@ function joinList(items: string[]): string {
   否则它只能猜 id（§71 那条教训，与 `set_diagram` 的画布现场同源）。
 */
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门（2026-10-19）：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -273,6 +273,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 是第二个写工具，同理必须先把现状给它，
   // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id 撞在写侧白名单上
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
+  // 产物在册情况一句话（哪几类、各多少文件）：没有这句，模型会以为「没提过的东西就不存在」而不去查
+  if (input.facts?.inventory) sections.push(input.facts.inventory);
   const target = path ?? node?.anchors[0]?.path;
   if (target) {
     const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);
@@ -307,6 +309,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.cross ? { cross: input.cross } : {}),
     ...(input.architecture ? { architecture: input.architecture } : {}),
     ...(input.diagram ? { diagram: input.diagram } : {}),
+    ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.external ? { external: input.external } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),

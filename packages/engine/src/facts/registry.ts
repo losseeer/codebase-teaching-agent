@@ -99,6 +99,27 @@ function injectionEntries(lines: string[], language: string): RegistryEntry[] {
   return rows;
 }
 
+/**
+  yml 的键是**分层**的：只记叶子名会把 `spring.datasource.password` 与 `server.password` 混成同一个
+  `password`，读侧就没了归属可说。这里按缩进把父级拼回去（值依旧一个字都不抄）。
+*/
+function yamlKeys(lines: string[]): RegistryEntry[] {
+  const rows: RegistryEntry[] = [];
+  const stack: { indent: number; key: string }[] = [];
+  lines.forEach((line, offset) => {
+    if (/^\s*#/.test(line) || !/\S/.test(line)) return;
+    const match = /^(\s*)([\w.[\]-]+)\s*:(?![\w.])/u.exec(line) ?? /^(\s*)([\w.[\]-]+)\s*:(\s|$)/u.exec(line);
+    if (!match) return;
+    const indent = match[1].length;
+    const key = match[2];
+    while (stack.length && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
+    push(rows, { kind: "config-key", name: [...stack.map((item) => item.key), key].join("."), via: "配置键（值不进产物）", line: offset + 1 });
+    // 冒号后面什么都没有＝这是个父级，下一层缩进的键都挂在它下面
+    if (!line.slice(match[0].length).trim()) stack.push({ indent, key });
+  });
+  return rows;
+}
+
 /** 清单与配置文件：只取键与结构名，值一律不抄（见文件头那条泄露面说明）。 */
 function manifestEntries(path: string, lines: string[]): RegistryEntry[] {
   const rows: RegistryEntry[] = [];
@@ -107,7 +128,7 @@ function manifestEntries(path: string, lines: string[]): RegistryEntry[] {
     ...(MANIFEST_KEYS[tail] ?? []),
     ...(/\.csproj$/.test(tail) ? [{ pattern: /<(ProjectReference|PackageReference)\s+Include="([^"]+)"/, kind: "manifest" as const, via: "csproj 引用", group: 2 }] : []),
     ...(/\.sln$/.test(tail) ? [{ pattern: /^Project\("[^"]*"\)\s*=\s*([^,]+),/, kind: "manifest" as const, via: "解决方案项目", group: 1 }] : []),
-    ...(/\.(yml|yaml|properties)$/.test(tail) ? [{ pattern: /^\s*([\w.[\]-]+)\s*[:=]/, kind: "config-key" as const, via: "配置键（值不进产物）", group: 1 }] : []),
+    ...(/\.properties$/.test(tail) ? [{ pattern: /^\s*([\w.[\]-]+)\s*[:=]/, kind: "config-key" as const, via: "配置键（值不进产物）", group: 1 }] : []),
     ...(tail === "spring.factories" ? [{ pattern: /^\s*([\w.$]+)\s*=/, kind: "di-binding" as const, via: "spring.factories 键", group: 1 }] : [])
   ];
   lines.forEach((line, offset) => {
@@ -118,6 +139,7 @@ function manifestEntries(path: string, lines: string[]): RegistryEntry[] {
       if (name) push(rows, { kind: rule.kind, name, via: rule.via, line: offset + 1 });
     }
   });
+  if (/\.(yml|yaml)$/.test(tail)) rows.push(...yamlKeys(lines));
   if (path.includes("META-INF/services/")) {
     lines.forEach((line, offset) => {
       if (/^\s*#/.test(line)) return;

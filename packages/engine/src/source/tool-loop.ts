@@ -62,6 +62,11 @@ export interface ReadToolLoopInput {
   */
   diagram?: SetDiagramToolContext;
   /**
+    静态产物的只读门（2026-10-19）。不传 = 清单里没有 `query_facts`：
+    产物层没算过的仓给了它只会每次回「这类产物不在册」，不如不给。
+  */
+  facts?: FactsToolContext;
+  /**
     技能正文的取用通道（2026-10-17）。不传 = 工具清单里没有 `read_skill`，
     系统提示词也不该出现技能清单——清单与通道必须同时给或同时不给，只给一半就是让模型找一个不存在的工具。
   */
@@ -216,8 +221,36 @@ export interface SetDiagramToolContext {
   inventory?: string;
 }
 
-/** 按「有没有第二个仓」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: ArchitectureToolContext, diagram?: SetDiagramToolContext, skills?: SkillsToolContext, external?: ExternalToolContext): LlmTool[] {
+/**
+  静态产物的只读门（2026-10-19）。与 `set_diagram` 配对：那边写图，这边给证据。
+
+  它**不重算任何东西**——绘图阶段的职责边界就是「只消费导入时已算好的产物」。
+  也不占读文件额度：读的是产物行，不是源码（与两个写工具同一条口径）。
+*/
+export const QUERY_FACTS_TOOL: LlmTool = {
+  name: "query_facts",
+  description: "查这个仓**已经算好**的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。**查不到不等于仓库里没有**：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
+  parameters: {
+    type: "object",
+    properties: {
+      kind: { type: "string", description: "cfg / dataflow / typeRelations / registry；省略就回覆盖率清单" },
+      path: { type: "string", description: "仓内相对路径，如 src/order/Service.java" },
+      target: { type: "string", description: "函数名（cfg、dataflow）或类型名/条目名（typeRelations、registry）" }
+    },
+    required: []
+  }
+};
+
+/** 产物查询通道：闭包由服务层给（它才有 db 句柄与仓 id），工具循环不认识 SQLite 与 payload 形状。 */
+export interface FactsToolContext {
+  /** 一句「产物在册情况」，随上下文常驻；不给就只有工具清单那一行。 */
+  inventory?: string;
+  apply: (argumentsJson: string) => string;
+}
+
+/** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
+function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "architecture" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
+  const { cross, architecture, diagram, skills, external } = input;
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -228,12 +261,13 @@ function toolsFor(withSearch: boolean, cross?: CrossRepoContext, architecture?: 
     };
   };
   const tools: LlmTool[] = [names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL];
-  if (withSearch) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
+  if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
   // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
   if (architecture) tools.push(SET_ARCHITECTURE_TOOL);
   if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
+  if (input.facts) tools.push(QUERY_FACTS_TOOL);
   // 外部工具原样并进清单：描述里已带「【外部 <server>】」前缀，模型分得清这是别人的程序
   if (external?.tools.length) tools.push(...external.tools);
   return tools;
@@ -290,7 +324,7 @@ export interface ReadToolLoopResult {
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
-  const tools = toolsFor(Boolean(input.search), input.cross, input.architecture, input.diagram, input.skills, input.external);
+  const tools = toolsFor(input);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
@@ -361,6 +395,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       if (call.name === SET_DIAGRAM_TOOL.name) {
         // 结构改动一次一回执（落成了什么、被降了几条边、或为什么整次拒写）。不占读文件额度：它读的是产物不是源码
         messages.push({ role: "tool", toolCallId: call.id, content: input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。" });
+        continue;
+      }
+      if (call.name === QUERY_FACTS_TOOL.name) {
+        // 只读产物，不占读文件额度（与两个写工具同口径）；也没重算——门后面就是盘上那份读数
+        messages.push({ role: "tool", toolCallId: call.id, content: input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。" });
         continue;
       }
       if (call.name === READ_SKILL_TOOL.name && input.skills) {

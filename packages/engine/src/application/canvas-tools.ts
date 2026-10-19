@@ -1,8 +1,9 @@
-import type { ArchitectureToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
+import type { ArchitectureToolContext, FactsToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { DiagramWriteContext } from "../diagram/set-diagram.js";
 import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from "../diagram/set-diagram.js";
+import { factsQueryTool } from "../facts/query.js";
 import { architectureInputOf, peekCachedArchitecture } from "../coursetree/architecture.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent, type OverrideVia } from "../coursetree/override-writer.js";
 import { findCourseNode } from "../coursetree/projection.js";
@@ -35,6 +36,18 @@ export function diagramWriteContextFor(repository: ImportedRepository, database:
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
     onApplied: (event) => broadcast({ type: "diagram_updated", payload: { repositoryId: event.repositoryId, diagramId: event.diagramId, action: event.action } })
   };
+}
+
+/**
+  本轮的静态产物查询门（**只给 map 作用域**，与 `set_diagram` 配对：那边写图，这边给证据）。
+
+  盘上一行产物都没有时回 `undefined`：那时这个工具每次只会答「不在册」，给了反而让模型去调
+  一扇没有内容的门（与 `crossRepoFor`「没有第二个仓就一个工具不多给」同一条纪律）。
+  它也**不触发重算**——绘图阶段只消费导入时算好的读数。
+*/
+export function factsToolFor(repository: ImportedRepository, database: TutorDatabase): FactsToolContext | undefined {
+  const repositoryId = repository.index.repositoryId;
+  return database.factCoverage(repositoryId).length ? factsQueryTool(database, repositoryId) : undefined;
 }
 
 /**

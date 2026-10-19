@@ -1,5 +1,5 @@
 import type { Exercise } from "@codebase-tutor/shared";
-import { architectureToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
+import { architectureToolFor, factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor } from "../../application/paid-turn.js";
 import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordAbortedAudits } from "../../application/turn-audit.js";
@@ -45,7 +45,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     // 这一回合真写过哪张图：回话带回去，界面上那张图卡片才有依据（拒写不算写过）
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
-    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}), diagram: diagramContext, ...(await externalAndSkills()) });
+    const factsContext = factsToolFor(repository, overlayDatabase);
+    const result = await mapChat({ repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider, style: validateStyle(request.body?.style), search: searchCorpusFor(repository), cross: crossRepoFor(repository, crossFiles), threadId: turn.threadId, ...(toolContext ? { architecture: toolContext } : {}), diagram: diagramContext, ...(factsContext ? { facts: factsContext } : {}), ...(await externalAndSkills()) });
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     return { reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) };
   } catch (error) {
@@ -88,6 +89,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
+    const factsContext = factsToolFor(repository, overlayDatabase);
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, focus: sanitizeChatFocus(request.body?.focus), content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
@@ -97,6 +99,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       onProgress: (progress: MapChatProgress) => send(progress),
       ...(toolContext ? { architecture: toolContext } : {}),
       diagram: diagramContext,
+      ...(factsContext ? { facts: factsContext } : {}),
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });

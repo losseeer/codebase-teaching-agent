@@ -161,6 +161,39 @@ describe("mapChat", () => {
     expect(calls[0].tools?.[0]?.name).toBe("read_file");
   });
 
+  it("query_facts 这一门：清单里有它、闭包的回话原样喂给模型、且不占读文件额度", async () => {
+    const script: LlmCompletion[] = [
+      { text: "", toolCalls: [{ id: "call_f", name: "query_facts", argumentsJson: JSON.stringify({ kind: "cfg", path: "src/app.ts" }) }], usage: { inputTokens: 100, outputTokens: 10 }, finishReason: "tool_calls" },
+      { text: "按产物说的回答。", usage: { inputTokens: 120, outputTokens: 20 }, finishReason: "stop" }
+    ];
+    const calls: LlmCompletionInput[] = [];
+    let index = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:model",
+      async complete(input) {
+        calls.push(input);
+        return script[index++] ?? script[script.length - 1];
+      }
+    };
+    const result = await mapChat({
+      repoPath: import.meta.dirname,
+      analysis,
+      path: "src/app.ts",
+      content: "这个函数的分支长什么样？",
+      provider,
+      style: 50,
+      facts: { inventory: "静态产物在册：cfg 3 文件。", apply: () => "语言 typescript，backend ast\npick@3-5 复杂度 2，块 6、边 6" }
+    });
+    expect(result.reply).toContain("按产物说的回答");
+    expect(calls[0].tools?.map((tool) => tool.name)).toContain("query_facts");
+    // 有副作用的工具要先看见现状，只读的门同理：产物在册情况得进上下文，否则模型不知道有什么可查
+    expect(calls[0].user ?? calls[0].messages?.[0]?.content ?? "").toContain("静态产物在册");
+    const second = calls[1];
+    expect(second.messages?.find((m) => m.role === "tool")?.content).toContain("复杂度 2");
+    expect(result.fileReads ?? [], "查产物不是读源码，一行文件额度都不该占").toEqual([]);
+  });
+
   it("micro_compact：多轮读取时，更早轮次的 tool 结果替换为占位符、早期 reasoning 丢弃，最近一轮保留原文", async () => {
     const script: LlmCompletion[] = [
       { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.ts" }) }], reasoningContent: "思考A1", usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
