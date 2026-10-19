@@ -31,7 +31,7 @@ loadDotEnv();
 restoreLlmRuntimeSettings();
 const provider = buildLlmRuntimeProvider("light");
 if (!provider) {
-  console.log(`# 真模型出题探针\n\n- **未执行**：没有解析出模型档（未配置或本月预算已达上限）。零调用、零支出。`);
+  console.log(`# 真模型出题探针\n\n- 未执行：没有解析出模型档（未配置或本月预算已达上限）。零调用、零支出。`);
   process.exit(0);
 }
 
@@ -61,15 +61,15 @@ const started = Date.now();
 const generation = await generateCodeExercise({ repositoryPath, unit, kind: kind === "author_function" ? "author_function" : "patch_edit", provider });
 const elapsed = Date.now() - started;
 for (const run of generation.runs) {
-  console.log(`- 自证 ${run.label}：TESTS ${run.verdict ? `${run.verdict.passed} 过 ${run.verdict.failed} 挂` : "**没印出结论**"}｜exit=${run.exitCode ?? "null"}${run.timedOut ? "｜超时" : ""}`);
+  console.log(`- 自证 ${run.label}：TESTS ${run.verdict ? `${run.verdict.passed} 通过 ${run.verdict.failed} 失败` : "没有输出结论"}｜exit=${run.exitCode ?? "null"}${run.timedOut ? "｜超时" : ""}`);
 }
 if (!generation.ok) {
-  console.log(`\n**拒题**（stage=${generation.stage}，${elapsed}ms）：${generation.reason}`);
+  console.log(`\n拒题（stage=${generation.stage}，${elapsed}ms）：${generation.reason}`);
   // 这里不能 process.exit：调用已经发生，`call-log` 用的是异步 appendFile，立刻退出会把这一笔从 llm.log 里截掉。
   // 通则：必须发生的收尾不能排在退出之后；前面的 exit 只因零调用才安全。
 } else {
 const proposal = generation.proposal;
-console.log(`\n**过了两跑自证**（${elapsed}ms）：${proposal.title}`);
+console.log(`\n两跑自证通过（${elapsed}ms）：${proposal.title}`);
 console.log(`- 题面：${proposal.prompt.slice(0, 160)}`);
 console.log(`- 缺陷（留档不下发）：${proposal.defect}`);
 console.log(`- 文件：下发 ${proposal.given.length} 个 / 判分 ${proposal.hidden.length} 个｜入口 ${proposal.entry}`);

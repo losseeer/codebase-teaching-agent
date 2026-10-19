@@ -22,7 +22,7 @@ import { join } from "node:path";
 const file = process.argv.slice(2).find((value) => !value.startsWith("-"));
 const logPath = file ?? join(homedir(), ".codebase-tutor", "llm.log");
 if (!existsSync(logPath)) {
-  console.log(`# 前缀缓存基线\n\n- **未执行**：找不到 ${logPath}（还没发过任何 provider 调用）。`);
+  console.log(`# 前缀缓存基线\n\n- 未执行：找不到 ${logPath}（还没发过任何 provider 调用）。`);
   process.exit(0);
 }
 
@@ -160,7 +160,7 @@ if (turnGaps.length) {
   out.push("");
   out.push(`轮次间隔中位数：${median(turnGaps.map((item) => item.seconds))?.toFixed(1) ?? "—"} 秒；对话类场景的跨轮命中率：${percent(sum(chat, "hit"), sum(chat, "input"))}（${chat.length} 个间隔）。`);
 } else {
-  out.push("（还没有跨轮样本：要么 threadId 埋点刚上、还没在同一线程里问过第二次，要么历史行都没这个字段。攒样本期间以下表为准。）");
+  out.push("（还没有跨轮样本：要么还没有同一线程的第二轮提问，要么这些行不带 threadId 字段。攒样本期间以下表为准。）");
 }
 out.push("");
 out.push("| 线程 | 场景 | 调用数 | 回合数 | 输入 token | 命中 token | 命中率 |");
@@ -186,10 +186,10 @@ for (const scene of [...chatScenes, "map.summary", "map.refine"]) {
   }
 }
 out.push("");
-out.push("## 4. 读法（判刀 1「拼接顺序」与刀 2「真多轮 messages」各值不值得做）");
+out.push("## 4. 读法（判「拼接顺序」与「真多轮 messages」两种改造各值不值得做）");
 out.push("");
-out.push("- **第 2 节短间隔档命中率高、且学习者就是在这些间隔里追问**：刀 1 有明确天花板，按该档输入 token 占比折算就知道能省多少。");
-out.push("- **第 2 节没样本而第 3 节有数**：第 3 节的间隔是「两个不同会话碰巧挨着」造出来的假象，不能拿来判刀 1。先正常用 GUI 多问几轮攒样本，别改代码。");
-out.push("- **各档命中率都差不多**：端点没按间隔给折扣，刀 1 收益基本为零，转刀 2（同一线程拼成真 messages 数组，让命中靠请求本身而不是时序运气）或直接放弃这条线。");
-out.push("- 批量场景（map.summary / map.refine）命中率天然高是**同一段系统提示被反复命中**的结果，不能当对话场景的对照基线。");
+out.push("- 若第 2 节短间隔档命中率高、且学习者就在这些间隔里追问：拼接顺序改造有明确上限，按该档输入 token 占比折算就知道能省多少。");
+out.push("- 若第 2 节没有样本而第 3 节有数：第 3 节的间隔来自两个不同会话恰好相邻，不能用来判拼接顺序改造。先在 GUI 里多问几轮攒样本，不改代码。");
+out.push("- 若各档命中率都差不多：端点没按间隔给折扣，拼接顺序改造的收益基本为零，转「真多轮 messages」（同一线程拼成完整 messages 数组，让命中取决于请求本身而不是时序），或直接放弃这条线。");
+out.push("- 批量场景（map.summary / map.refine）命中率天然高，是同一段系统提示被反复命中的结果，不能当对话场景的对照基线。");
 console.log(out.join("\n"));

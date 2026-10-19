@@ -49,12 +49,12 @@ const hidden = modules.filter((node) => !keptIds.has(node.id));
 const hiddenWithEntry = hidden.filter((node) => visibleOf(node).some((path) => entryPaths.has(path)));
 const staticLayers = (["core", "facility", "periphery"] as const).map((tier) => ({ tier, blocks: blocks.filter((block) => block.tier === tier) })).filter((layer) => layer.blocks.length);
 
-console.log(`仓库 ${state.repository_id}｜原子模块 ${modules.length} → 节点 ${blocks.length}（隐藏孤立节点 ${sideModules}、合并吃掉 ${mergedBlocks.reduce((sum, block) => sum + block.members.length - 1, 0)} 个节点）`);
+console.log(`仓库 ${state.repository_id}｜原子模块 ${modules.length} → 节点 ${blocks.length}（隐藏孤立节点 ${sideModules}、合并减少 ${mergedBlocks.reduce((sum, block) => sum + block.members.length - 1, 0)} 个节点）`);
 console.log(`  节点角色 ${dist(blocks.map((block) => block.role))}`);
-console.log(`  隐藏这次改动有红线：被藏却含入口文件的模块 ${hiddenWithEntry.length} 个${hiddenWithEntry.length ? `（**判据错了**：${hiddenWithEntry.slice(0, 4).map((node) => node.title).join(" / ")}）` : ""}`);
+console.log(`  隐藏的红线检查：被藏却含入口文件的模块 ${hiddenWithEntry.length} 个${hiddenWithEntry.length ? `（判据错了：${hiddenWithEntry.slice(0, 4).map((node) => node.title).join(" / ")}）` : ""}`);
 console.log(`  被藏的模块（前 6 个）${hidden.slice(0, 6).map((node) => `${node.title}(${visibleOf(node).length} 文件)`).join(" / ") || "无"}`);
 console.log(`  静态三层每层节点数 ${staticLayers.map((layer) => `${layer.tier}=${layer.blocks.length}`).join(" ")}｜超过 6 个节点的层 ${staticLayers.filter((layer) => layer.blocks.length > 6).length} 个（兜底折叠开不开得着就看这个节点）`);
-console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换了键，这些旧行不再被读；要恢复模型分层每仓点一次「重新生成分层」）`);
+console.log(`  架构缓存行 ${cached.n} 条（arch-v2 换过键，这些旧行不再被读；要恢复模型分层每仓点一次「重新生成分层」）`);
 if (mergedBlocks.length) {
   console.log(`\n[组合节点样本]`);
   for (const block of mergedBlocks.slice(0, 8)) console.log(`  ${block.id}｜「${block.title}」成员 ${block.members.length}｜${block.members.slice(0, 3).join(" , ")}`);

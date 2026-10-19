@@ -30,20 +30,20 @@ const here = (() => {
 const out: string[] = [];
 const emit = (line = ""): void => { out.push(line); };
 
-emit(`# B 档第 3 刀：表达质量裁判报告`);
+emit(`# B 档表达质量裁判报告`);
 emit(`生成时间：${new Date().toISOString()}｜仓库：\`${here}\``);
 emit();
 
 const provider = buildLlmRuntimeProvider("light");
 if (!provider) {
-  emit("- **未执行**：light 档模型未配置。裁判维度的分数必须由模型给出，确定性档无话术可判——不跑、不造数。");
+  emit("- 未执行：light 档模型未配置。裁判维度的分数必须由模型给出，确定性档无话术可判——不跑、不造数。");
   console.log(out.join("\n"));
   process.exit(0);
 }
 
 const { turns, truncatedAnswers } = assembleJudgeTurns(readJournal(here));
 if (!turns.length) {
-  emit("- **未执行**：journal 里没有 turn_text 回合（先经 GUI 真实对话攒样本）。");
+  emit("- 未执行：journal 里没有 turn_text 回合（先经 GUI 真实对话攒样本）。");
   console.log(out.join("\n"));
   process.exit(0);
 }
@@ -101,5 +101,5 @@ for (const verdict of verdicts) {
 emit();
 emit("## 读数天花板（预登记）");
 emit(`- 本报告的结论上限只到「${verdicts.length} 个回合的描述性统计」：n 为个位数时，均分差异不构成任何口径优劣判断，仅用于发现驳回率异常与明显坏样本。`);
-emit("- 裁判看不到源码：「接地」维只判锚定具体性，锚点事实真伪以第 2 刀机检为准。");
+emit("- 裁判看不到源码：「接地」维只判锚定具体性，锚点事实真伪以 pnpm phaseB:eval 的机检为准。");
 console.log(out.join("\n"));

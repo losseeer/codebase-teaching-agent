@@ -171,7 +171,7 @@ describe("宏观设计作用域（JSON + SSE）", () => {
     expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id id，不然只能反问或编 id").toContain("架构现场");
     expect(call?.raw).toContain("现存人工修正");
     expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
-    expect(call?.raw, "改图工具必须先看得见现状（§71）：有哪几张图、正打开那张的图元 id").toContain("画布现场");
+    expect(call?.raw, "改图工具必须先看得见现状：有哪几张图、正打开那张的图元 id").toContain("画布现场");
 
     // 反面对照：练习答疑没有画布，也就没有写能力——放宽不能顺着作用域漏出去
     fx.scripted = [OK_REPLY];

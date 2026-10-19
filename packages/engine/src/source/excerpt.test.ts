@@ -63,7 +63,7 @@ describe("sliceExcerpt", () => {
     expect(sliceExcerpt(repository, { path: "src/missing.ts", line: 1 }, options)).toBeUndefined();
   });
 
-  it("锚点窗口里的疑似密钥在出门前被隐去，并报告处数（§43 的入口这道铺到摘录）", () => {
+  it("锚点窗口里的疑似密钥在出门前被隐去，并报告处数（入口那道隐密钥规则同样铺到摘录）", () => {
     const repository = mkdtempSync(join(tmpdir(), "codebase-tutor-excerpt-secret-"));
     repositories.push(repository);
     writeFileSync(join(repository, "config.ts"), ['export const endpoint = "https://api.internal";', 'export const token = "sk-abcdefghijklmnopqrstuvwx";', "export const region = 1;"].join("\n"), "utf8");

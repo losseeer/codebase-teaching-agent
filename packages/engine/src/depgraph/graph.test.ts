@@ -390,7 +390,7 @@ describe("依赖边 — Vue SFC 与 tsconfig paths 别名", () => {
     }));
 });
 
-describe("说明符落点按发起文件的语言收尾（复审 #121①）", () => {
+describe("说明符落点按发起文件的语言收尾", () => {
   it("TS 的 `./util` 不再连到同目录的 util.py / util.go / util.java", async () =>
     await withRepo("no-cross-language", {
       "src/a.ts": "import { x } from \"./util\";\nexport const a = x;\n",
@@ -428,7 +428,7 @@ describe("说明符落点按发起文件的语言收尾（复审 #121①）", ()
     }));
 });
 
-describe("整仓自环与「每个文件一个源码根」两刀（复审取图层）", () => {
+describe("整仓自环与「每个文件一个源码根」", () => {
   beforeAll(async () => {
     await loadSymbolParser();
   });
@@ -484,7 +484,7 @@ describe("整仓自环与「每个文件一个源码根」两刀（复审取图�
   所以下面每个用例都同时钉两件事：外部名记对了，以及 `imports` 一字未变——
   外部名一旦被当边连进图，影响范围、角色分层、流程证据全会跟着变，那就不是加一栏而是改图。
 */
-describe("外部包名采集（P1：以前直接丢弃，现在留名不留边）", () => {
+describe("外部包名采集（留名不留边）", () => {
   it("四种语言各自采到裸包名，且一条边都不许多", async () =>
     await withRepo("externals-basic", {
       "src/app.ts": 'import { render } from "react-dom";\nimport axios from "axios";\nimport { helper } from "./helper";\nexport const a = [render, axios, helper];\n',

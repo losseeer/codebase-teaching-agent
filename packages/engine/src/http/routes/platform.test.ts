@@ -93,7 +93,7 @@ describe("来源闸：默认只服务本机浏览器", () => {
     expect(refused.payload).not.toContain("// line 1");
   });
 
-  it("非可信来源改不动出网端点：403 之外更要紧的是**没执行**", async () => {
+  it("非可信来源改不动出网端点：403 之外更要紧的是「没执行」", async () => {
     const before = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { baseUrl?: string };
     const refused = await fromEvil("PUT", "/api/llm/settings", { baseUrl: "http://evil.example:9/v1" });
     expect(refused.statusCode).toBe(403);

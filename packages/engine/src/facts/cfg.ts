@@ -814,7 +814,7 @@ export function eachFunction(path: string, content: string, symbols: SymbolInfo[
   }
   const skipped: FactSkip[] = [
     ...executable.filter((symbol) => !claimed.has(symbol.id)).map((symbol): FactSkip => ({ name: `${symbol.name}@${symbol.line}`, reason: "符号表里有这个函数，语法树里却找不到对应的可执行体（多为宏或生成代码），未画控制流" })),
-    ...orphanCarriers.map((carrier): FactSkip => ({ name: `${carrier.name}@${carrier.line}`, reason: "语法树里有可执行体，符号表里没有它——两处的判据漂了，这张图不替它圆场" })),
+    ...orphanCarriers.map((carrier): FactSkip => ({ name: `${carrier.name}@${carrier.line}`, reason: "语法树里有可执行体，符号表里没有它——两处的判据漂了，这里如实记录、不并入控制流图" })),
     ...anonymous.map((carrier): FactSkip => ({ name: `${carrier.name}@${carrier.line}`, reason: "匿名函数体（没有可寻址的名字），未单独成图" }))
   ];
   return { path, language, backend: "ast", version: FACTS_VERSION, functions: drawn.sort((left, right) => left.startLine - right.startLine), ...(skipped.length ? { skipped } : {}) };

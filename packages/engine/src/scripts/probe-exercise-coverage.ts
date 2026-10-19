@@ -245,7 +245,7 @@ function tierOf(verdicts: Verdict[], specifierCount: number): Tier {
 const registry = resolve(join(homedir(), ".codebase-tutor", "repositories.json"));
 const repositories: string[] = existsSync(registry) ? (JSON.parse(readFileSync(registry, "utf8")) as { repositories?: string[] }).repositories ?? [] : process.argv.slice(2);
 if (!repositories.length) {
-  console.log(`# 练习沙箱覆盖面探针\n\n- **未执行**：找不到 ${registry}，也没给仓库路径参数。`);
+  console.log(`# 练习沙箱覆盖面探针\n\n- 未执行：找不到 ${registry}，也没给仓库路径参数。`);
   process.exit(0);
 }
 
@@ -312,12 +312,12 @@ for (const repositoryPath of repositories) {
 
 const percent = (part: number, whole: number): string => whole ? `${Math.round((part / whole) * 100)}%` : "—";
 
-console.log("# 练习沙箱覆盖面探针（刀 0，零 token、只读）\n");
-console.log(`- 本机解释器：python3 stdlib ${STDLIB_PY.size ? `已取（${STDLIB_PY.size} 个顶层名）` : "**取不到**，Python 的分档全落 unknown"} · node ${process.versions.node}`);
+console.log("# 练习沙箱覆盖面探针（零 token、只读）\n");
+console.log(`- 本机解释器：python3 stdlib ${STDLIB_PY.size ? `已取（${STDLIB_PY.size} 个顶层名）` : "取不到，Python 的分档全落 unknown"} · node ${process.versions.node}`);
 console.log(`- 各语言本机工具链：${Object.entries(TOOLCHAINS).filter(([language]) => language !== "javascript").map(([language, version]) => `${language}=${version ?? "缺"}`).join(" · ")}`);
 console.log("- 判据：`self-contained` = 除标准库外不 import 任何东西；`closure` = import 全在「标准库 ∪ 仓内文件」；`external` = 至少一条外部包；`unknown` = 探针判不准。");
-console.log("- `sandbox-ready` = self-contained + closure，即**不装依赖就能进沙箱跑**的比例。");
-console.log("- 历史一列（已撤）：`safeInvocationFor` 那条 TS 纯函数判据当时只命中 **2 / 1222** 个 TypeScript 单元，该判据随 `output_prediction` 于 2026-10-14 一起退役，所以这里不再重算——读数留在开发日志 §52。\n");
+console.log("- `sandbox-ready` = self-contained + closure，即不装依赖就能进沙箱跑的比例。");
+console.log("- 判读口径只有上面四档：每档都按当前文件正文现算，不输出任何历史读数列。\n");
 
 for (const { repository, reason, rows } of perRepo) {
   console.log(`## ${repository}`);
@@ -354,8 +354,8 @@ for (const row of [...totals.values()].sort((left, right) => right.units - left.
   const share = row.units ? ready / row.units : 0;
   const toolchain = TOOLCHAINS[row.language];
   const verdict = !toolchain ? "本机跑不起来（先装工具链才谈得出题）" : share < 0.05 ? "不出代码题" : share < 0.2 ? "只做自包含档" : "可上仓内闭包档";
-  console.log(`| ${row.language} | ${row.units} | ${percent(ready, row.units)} | ${percent(row.tiers["self-contained"], row.units)} | ${percent(row.tiers.external, row.units)} | ${percent(row.tiers.unknown, row.units)} | ${toolchain ?? "**缺**"} | ${verdict} |`);
+  console.log(`| ${row.language} | ${row.units} | ${percent(ready, row.units)} | ${percent(row.tiers["self-contained"], row.units)} | ${percent(row.tiers.external, row.units)} | ${percent(row.tiers.unknown, row.units)} | ${toolchain ?? "缺"} | ${verdict} |`);
 }
 console.log("\n- 阈值口径：<5% 不出代码题；5~20% 只做自包含档；>20% 才值得做仓内闭包（快照 + 模块解析）；再往上才考虑装依赖 / 转译。");
 console.log("- 判读时注意样本量：单元数 < 20 的语言这一列是噪声，不构成结论。");
-console.log("- 「可进沙箱」是**文件级**判据：一个文件只要有一条外部 import 就整档落到「需外部包」，所以工程仓（人人都碰框架）天生压得低。");
+console.log("- 「可进沙箱」是文件级判据：一个文件只要有一条外部 import 就整档落到「需外部包」，所以以框架为主的工程仓读数天然偏低。");

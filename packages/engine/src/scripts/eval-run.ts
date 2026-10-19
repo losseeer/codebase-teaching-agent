@@ -61,7 +61,7 @@ const index = indexRepository(repositoryPath);
 const files = new Map(index.files.map((file) => [file.path, file.lines]));
 const databaseFile = join(repositoryPath, ".tutor", "tutor.db");
 if (!existsSync(databaseFile)) {
-  console.log(`# B 档评测报告\n\n- 仓库 \`${repositoryPath}\`：**未执行**（tutor.db 缺失，flow 产物与 L1 摘要都没有数据源）`);
+  console.log(`# B 档评测报告\n\n- 仓库 \`${repositoryPath}\`：未执行（tutor.db 缺失，flow 产物与 L1 摘要都没有数据源）`);
   process.exit(0);
 }
 const database = new DatabaseSync(databaseFile, { readOnly: true });
@@ -122,7 +122,7 @@ emit();
 emit("## 1. 产物引用落地（模型写的文本里，每个 文件:行号 都要真实存在）");
 emit("## 2. 边证据可核对（code 边须引到本边端点文件；static 边须至少引到一个存在文件）");
 if (!flows.length) {
-  emit("- **未执行**：layer_cache 无 flow 行。");
+  emit("- 未执行：layer_cache 无 flow 行。");
 } else {
   const score = scoreFlowArtifacts(flows, files);
   emit(`- 引用落地：${pct(score.refs.ok, score.refs.total)}；问题引用 ${score.refs.problems.length} 条`);
@@ -206,10 +206,10 @@ const hybridSymbolTop = (query: string): string[] => reciprocalRankFusion([produ
 
 emit();
 if (denseOn) {
-  emit(`- dense/hybrid **已跑**：文件级向量 ${liveVectors.length} 条参与打分（另 ${allVectors.length - liveVectors.length} 条已不在索引里），函数级向量 ${symbolOn ? `${liveSymbolVectors.length} 单元 / ${new Set(liveSymbolVectors.map((vector) => vector.path.split("#")[0])).size} 文件` : "未建（跑 pnpm search:embed -- --level=symbol -- --yes 才出那两臂）"}，查询 ${queryVectors.size} 条已嵌入（记账见 llm.log 的 scene=embed）`);
+  emit(`- dense/hybrid 已跑：文件级向量 ${liveVectors.length} 条参与打分（另 ${allVectors.length - liveVectors.length} 条已不在索引里），函数级向量 ${symbolOn ? `${liveSymbolVectors.length} 单元 / ${new Set(liveSymbolVectors.map((vector) => vector.path.split("#")[0])).size} 文件` : "未建（跑 pnpm search:embed -- --level=symbol -- --yes 才出函数级两路）"}，查询 ${queryVectors.size} 条已嵌入（记账见 llm.log 的 scene=embed）`);
   if (driftedText) emit(`- ⚠️ ${driftedText} 个单元的语料文本与向量哈希不一致（摘要重烧或索引变了）——dense 臂用的还是旧向量，要准数就重跑 pnpm search:embed -- --yes`);
 } else {
-  emit(`- dense/hybrid **未跑**：${wantDense ? denseSkipped : `加 --dense 会先对本集 ${distinctQueries.length} 条查询发 embedding 请求（这是整个脚本唯一花钱的一步；向量表 ${allVectors.length} 条 / 模型 ${denseModelLabel}）`}`);
+  emit(`- dense/hybrid 未跑：${wantDense ? denseSkipped : `加 --dense 会先对本集 ${distinctQueries.length} 条查询发 embedding 请求（这是整个脚本唯一花钱的一步；向量表 ${allVectors.length} 条 / 模型 ${denseModelLabel}）`}`);
 }
 
 // 臂的统一装配：加臂只在这张表里多一行，表格与分组读数自动跟着长
@@ -313,19 +313,19 @@ for (const { name, doc } of caseDocs) {
     if (symbolOn) floorSweep("函数级", "symbol", (vector) => cosineTopByFile(vector, liveSymbolVectors, 5));
   }
 }
-if (!anyCaseRan) emit("- **未执行**：没有匹配当前仓库的用例文件。");
+if (!anyCaseRan) emit("- 未执行：没有匹配当前仓库的用例文件。");
 emit();
 
-emit("## 4. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类留第 3 刀裁判）");
+emit("## 4. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类由 phaseB:judge 裁判）");
 const journalEvents = readJournal(repositoryPath);
 const teachTurns = assembleTeachTurns(journalEvents);
 if (!teachTurns.length) {
-  emit("- **未执行**：journal 里没有 teach 回合（`turn_text` 上线后尚未产生真实教学对话，先攒样本）。");
+  emit("- 未执行：journal 里没有 teach 回合（还没有 `turn_text` 记录，先攒真实教学对话的样本）。");
 } else {
   const score = scoreTeachInvariants(teachTurns, files);
   emit(`- 数据源：journal ${journalEvents.length} 事件 → ${score.turns} 个 teach 回合（回复截断致引用核对跳过 ${score.skippedTruncated} 条）`);
   for (const check of score.checks) {
-    emit(`- ${check.label}：**${pct(check.pass, check.applicable)}**｜适用 ${check.applicable} 回合｜出处：${check.source}`);
+    emit(`- ${check.label}：${pct(check.pass, check.applicable)}｜适用 ${check.applicable} 回合｜出处：${check.source}`);
     for (const miss of check.misses.slice(0, 8)) emit(`  - ⚠️ ${miss.at} 会话 ${miss.sessionId.slice(0, 8)}：${miss.excerpt}`);
     if (check.misses.length > 8) emit(`  - …另有 ${check.misses.length - 8} 条未过`);
   }

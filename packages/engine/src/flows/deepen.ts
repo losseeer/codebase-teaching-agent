@@ -36,7 +36,7 @@ const DEEP_MAX_TOKENS = 2_400;
 const DEEP_SCENE = "map.flow.deep";
 
 const DEEP_SYSTEM_PROMPT = [
-  "下面是一个代码仓库执行流程里若干条**待核实的去向**，以及这些去向涉及文件的真实源码片段（带行号）。",
+  "下面是一个代码仓库执行流程里若干条「待核实的去向」，以及这些去向涉及文件的真实源码片段（带行号）。",
   "请只依据给出的代码判断每一条：这条去向在代码里是否真的有依据（例如回调或节点注册、路由表、依赖注入、事件订阅、显式调用）。",
   '有依据写 verdict="code"，evidence 必须写清「文件路径:行」（路径照抄片段里给出的 path，至少写到能认出是哪个文件的后缀）并说明是什么结构（如 graph/builder.py:112 注册 evaluate 节点）。',
   '看不出来就写 verdict="inferred"，evidence 写一句为什么仍不确定。',

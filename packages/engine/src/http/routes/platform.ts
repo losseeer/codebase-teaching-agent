@@ -75,7 +75,7 @@ app.post<{ Params: { repositoryId: string }; Body: { paused?: unknown; ttlMs?: u
   */
 app.post("/api/sandbox/reprobe", async () => {
   const sandbox = await reprobeIsolation();
-  console.log(`[engine] 沙箱重探：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `**未通过——代码题域继续禁用**：${sandbox.reason}`}`);
+  console.log(`[engine] 沙箱重探：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `未通过——代码题域继续禁用：${sandbox.reason}`}`);
   return { sandbox };
 });
 

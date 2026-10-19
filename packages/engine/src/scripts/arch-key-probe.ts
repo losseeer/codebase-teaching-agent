@@ -88,7 +88,7 @@ for (const repo of snapshots) {
   const name = repo.repositoryPath.split("/").pop() ?? repo.repositoryPath;
   if (!repo.hasArtifacts) { console.log(`  ${name}  尚无分析产物，跳过`); continue; }
   const keyless = repo.flowKeys.filter((row) => row.key === "<无键>").length;
-  console.log(`  ${name}  入口 ${repo.flowKeys.length} 个（算不出键 ${keyless}）｜digest 合计 ${repo.flowKeys.reduce((sum, row) => sum + row.digestSize, 0)} 字符｜digest 里出现 externals：${repo.digestMentionsExternals ? "**是（已踩红线）**" : "否"}`);
+  console.log(`  ${name}  入口 ${repo.flowKeys.length} 个（算不出键 ${keyless}）｜digest 合计 ${repo.flowKeys.reduce((sum, row) => sum + row.digestSize, 0)} 字符｜digest 里出现 externals：${repo.digestMentionsExternals ? "是（已踩红线）" : "否"}`);
 }
 
 if (saveTo) {
@@ -101,7 +101,7 @@ if (compareTo) {
   const differences: string[] = [];
   const leaked = snapshots.filter((repo) => repo.digestMentionsExternals);
   if (leaked.length) {
-    console.log(`\n**红线直接踩了**：这 ${leaked.length} 个仓的流程 digest 里出现了 externals 字段——不用比键，改证据就是改键：`);
+    console.log(`\n红线直接踩了：这 ${leaked.length} 个仓的流程 digest 里出现了 externals 字段——不用比键，改证据就是改键：`);
     for (const repo of leaked) console.log(`  - ${repo.repositoryPath}`);
     process.exit(1);
   }
@@ -117,9 +117,9 @@ if (compareTo) {
     for (const oldRow of old.flowKeys) if (!repo.flowKeys.some((row) => row.entryPath === oldRow.entryPath)) differences.push(`${repo.repositoryId} 当前快照丢了入口：${oldRow.entryPath}`);
   }
   if (differences.length) {
-    console.log(`\n**差异 ${differences.length} 处**。先分清两种成因再看要不要停手：`);
+    console.log(`\n差异 ${differences.length} 处。先分清两种成因再看要不要停手：`);
     console.log("  ① 这个仓的源码被改过（digest 吃每个文件的行数/符号清单）⇒ 键必然翻，属于正常失效；");
-    console.log("  ② externals 漏进证据 ⇒ 全线翻键、真烧钱。判据看上面那行「digest 里出现 externals」，是「否」就排除②；");
+    console.log("  ② externals 漏进证据 ⇒ 全线翻键、每个入口都要付费重算。判据看上面那行「digest 里出现 externals」，是「否」就排除②；");
     console.log("  本次差异落在哪些仓：" + [...new Set(differences.map((line) => line.split(" ")[0]))].join("、"));
     for (const line of differences.slice(0, 40)) console.log(`  - ${line}`);
     process.exit(1);

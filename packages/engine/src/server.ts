@@ -142,7 +142,7 @@ if (!process.env.VITEST) {
     没过的话代码题域整域禁用，不降级成「弱隔离照跑」——闸门失效不能等到用户点下按钮才知道（fail-closed）。
     */
   void reprobeIsolation().then((sandbox) => {
-    console.log(`[engine] 沙箱：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `**未通过——代码题域禁用**：${sandbox.reason}`}`);
+    console.log(`[engine] 沙箱：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `未通过——代码题域禁用：${sandbox.reason}`}`);
     if (sandbox.level !== "enforced") {
       traceEngine("degrade", { what: "sandbox_isolation", reason: sandbox.reason }, { traceId: null });
     }

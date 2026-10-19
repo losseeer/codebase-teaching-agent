@@ -72,8 +72,8 @@ function report(title: string, nodes: Set<string>, precise: Map<string, Set<stri
   console.log(`\n## ${title}`);
   console.log(`- 可比节点（两侧都索引的文件）：${nodes.size} 个`);
   console.log(`- 边：精确 ${preciseEdges.size}｜引擎 ${heuristicEdges.size}｜交集 ${shared.length}`);
-  console.log(`  - **引擎边的精度**（能被精确档复核）：${pct(shared.length, heuristicEdges.size)}（${shared.length}/${heuristicEdges.size}）`);
-  console.log(`  - **引擎边的召回**（精确档的边被引擎抓到）：${pct(shared.length, preciseEdges.size)}（${shared.length}/${preciseEdges.size}）`);
+  console.log(`  - 引擎边的精度（能被精确档复核）：${pct(shared.length, heuristicEdges.size)}（${shared.length}/${heuristicEdges.size}）`);
+  console.log(`  - 引擎边的召回（精确档的边被引擎抓到）：${pct(shared.length, preciseEdges.size)}（${shared.length}/${preciseEdges.size}）`);
   console.log(`  - 精确有、引擎没有 ${onlyPrecise.length} 条（上界，见文件头口径纪律）：${onlyPrecise.slice(0, 4).map((edge) => edge.split("→")[1]).join("、") || "—"}`);
   console.log(`  - 引擎有、精确没有 ${onlyHeuristic.length} 条：${onlyHeuristic.slice(0, 4).join("、") || "—"}`);
   console.log(`- 孤立文件（无进无出）：精确 ${isolatedPrecise.length}｜引擎 ${isolatedHeuristic.length}；引擎多报 ${extraIsolated.length} 个：${extraIsolated.slice(0, 3).join("、") || "—"}`);

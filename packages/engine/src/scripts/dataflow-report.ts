@@ -162,7 +162,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const repoPath = args.find((arg) => !arg.startsWith("--"));
   if (!repoPath) {
-    console.error("用法：tsx src/scripts/dataflow-report.ts <被学习仓路径> [--since 2026-10-01] [--limit 20] [--json]");
+    console.error("用法：tsx src/scripts/dataflow-report.ts <被学习仓路径> [--since <ISO 日期>] [--limit 20] [--json]");
     process.exit(2);
   }
   const take = (flag: string): string | undefined => {
@@ -227,7 +227,7 @@ function main(): void {
   console.log(`样本窗口 ${window}${since ? ` · --since ${since}` : ""} · llm.log：${llmLogPath() ?? "（只打控制台，未落盘）"}`);
   console.log(`源码出网 ${num(rows.length)} 段，覆盖 ${num(files.length)} 个文件；` + (maskedTotal
     ? `其中 ${maskedTotal} 处疑似密钥在发出前被隐去。`
-    : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段那一路压根没过这道筛——登记时没带「隐去」读数，不等于扫过且干净）` : ""}。\n`));
+    : `没有命中过密钥隐去${maskedUnknown ? `（另有 ${maskedUnknown} 段没过这道筛——登记时没带「隐去」读数，不等于扫过且干净）` : ""}。\n`));
 
   console.log("── 出网去向（按 provider · 只算能归属到本仓的调用）");
   if (!providers.size) console.log(`   （这个窗口里没有可归属的模型调用。${llmLogPath() && existsSync(llmLogPath() ?? "") ? "后台任务的调用不带 traceId，见下方说明。" : `llm.log 不存在或为空：${llmLogPath() ?? "未配落盘"}——去向表无从算起，这不等于「没有调用」。`}）`);
@@ -248,7 +248,7 @@ function main(): void {
   if (paired.length) {
     const partners = new Set(paired.map((event) => String(event.payload.other_repository_id ?? "未记")));
     console.log(`\n── 跨仓配对 ${paired.length} 次（配一次读两个仓），对端仓 id：${[...partners].join(" / ")}`);
-    console.log("   跨仓读到的文件在上面的清单里带「模型用的仓名/」前缀（配对记录里的 other_repository_id 是仓 id，两者不同名）；按仓授权生效时，名单外的对端连仓名都不下发（§44）。");
+    console.log("   跨仓读到的文件在上面的清单里带「模型用的仓名/」前缀（配对记录里的 other_repository_id 是仓 id，两者不同名）；按仓授权生效时，名单外的对端连仓名都不下发。");
   }
 
   if (background.length) {
@@ -256,14 +256,14 @@ function main(): void {
     for (const row of background) byScene.set(row.scene, (byScene.get(row.scene) ?? 0) + 1);
     console.log(`\n── 后台任务的调用（traceId 为 null）：${background.length} 次，不能按仓归属`);
     console.log(`   主要场景：${[...byScene.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([scene, count]) => `${scene}×${count}`).join(" ")}`);
-    console.log("   这一档的**文件清单仍然逐文件准确**（来自本仓 journal 的 code_egress），只有 provider/token 是全局数。");
+    console.log("   这一档的文件清单仍然逐文件准确（来自本仓 journal 的 code_egress），只有 provider/token 是全局数。");
   }
 
   console.log(`\n── 有调用但没有源码出网清单的场景（${noInventory.length ? "下面这些送的是派生内容（路径、符号名、摘要、题面、判分要点），不是逐行源码原文——派生内容同样可能带出命名与结构，只是不在「段」这一档记账" : "无——每个有调用的场景都有源码清单（装配期摘录或工具读取）"}）`);
   if (noInventory.length) console.log(`   ${noInventory.join("  ")}`);
 
   const traced = rows.find((row) => row.hash);
-  if (traced) console.log(`\n核对（两步，各自的能兑现的部分）：\n   1) 逐段——任取一行 code_egress，本地重跑**同一次装配**，比对那一段文本自己的 hash（journal.hash）与 chars；`+
+  if (traced) console.log(`\n核对（两步，各自的能兑现的部分）：\n   1) 逐段——任取一行 code_egress，本地重跑同一次装配，比对那一段文本自己的 hash（journal.hash）与 chars；`+
     `\n   2) 整次——llm.log 的 outbound.hash 是「system+消息+工具定义」整串的哈希，与单段哈希没有包含关系；只有单轮装配（L1 摘要、出题、宏观设计首轮）能整串复现，工具循环第 2 轮起载荷里含模型自己的 tool_call，本地无从重放。`+
     `\n   整回合过程看 pnpm run-trace ${repoPath} --trace ${traced.traceId ?? "（这一段没带 traceId）"}`);
 }

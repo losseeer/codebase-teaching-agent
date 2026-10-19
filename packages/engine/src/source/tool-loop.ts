@@ -135,7 +135,7 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 */
 export const SET_ARCHITECTURE_TOOL: LlmTool = {
   name: "set_architecture",
-  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那个节点挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那个节点的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓**所有**修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张节点清单上的 id（arch: 开头是组合节点，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
+  description: "修正架构视图的分层判断，四种动作：move_module（给 module+layer，把图上那个节点挪进某层）、rename_layer（给 from+to，给层改名）、set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工修正）。reset 有三种撤法，按给几个参数分：给 module 只撤那个节点的归层与改档；给 from 或 to 只撤一条层名改名（原判名或改后的名字都认）；两个都不给＝把这个仓所有修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张节点清单上的 id（arch: 开头是组合节点，整块走；module: 开头是单个模块）。只能改「层怎么归」这类判断题；箭头、模块清单、文件路径都由程序按 import 算，改不了，也不要试图在这里改。",
   parameters: {
     type: "object",
     properties: {
@@ -172,7 +172,7 @@ export interface ArchitectureToolContext {
 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：**① 位置是用户的**，除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；**② kind=module 的节点必须带 ref**，指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；**③ 边的 origin 你报 static 或 code，引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，那一格由引擎填）**。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
+  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
   parameters: {
     type: "object",
     properties: {
@@ -198,7 +198,7 @@ export interface SetDiagramToolContext {
 */
 export const QUERY_FACTS_TOOL: LlmTool = {
   name: "query_facts",
-  description: "查这个仓**已经算好**的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。**查不到不等于仓库里没有**：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
+  description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
   parameters: {
     type: "object",
     properties: {

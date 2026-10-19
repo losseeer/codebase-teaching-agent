@@ -58,7 +58,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   it("同名图建不出来（加序号），改名撞车则直接拒：图库靠名字认图", async () => {
     seed("系统分层总览");
     const second = (await fx.app.inject({ method: "POST", url: base(), payload: { name: "系统分层总览" } })).json() as Single;
-    expect(second.diagram.name, "两张同名会让「改那张登录流程」这句话没有答案，所以压根不让它发生").toBe("系统分层总览（2）");
+    expect(second.diagram.name, "两张同名会让「改那张登录流程」这句话没有答案，所以不允许它发生").toBe("系统分层总览（2）");
 
     const doomed = seed("换个名试试");
     const taken = await fx.app.inject({ method: "PATCH", url: `${base()}/${doomed.id}`, payload: { name: "系统分层总览" } });

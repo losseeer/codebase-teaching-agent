@@ -236,7 +236,7 @@ type ImportServiceProbe = {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-describe("ImportService 重分析在途守卫（A1）", () => {
+describe("ImportService 重分析在途守卫（同一仓不并发两轮）", () => {
   let root: string;
   let registryFile: string;
 

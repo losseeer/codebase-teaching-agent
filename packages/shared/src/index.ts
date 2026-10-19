@@ -739,14 +739,14 @@ export const LANGUAGE_CAPABILITIES = {
     cells: { symbolExtraction: "exact", dependencyEdge: "exact", entrypoint: "approximate", packageResolution: "approximate", buildVisibility: "approximate", controlFlow: "exact", dataflow: "approximate", typeRelations: "approximate", registry: "approximate" },
     notes: {
       symbolExtraction: "按真实语法树抽取函数、类、方法、接口与类型别名，起止行是解析出来的而不是按大括号数出来的。语法树整体加载失败时引擎会回落逐行匹配，并在图数据里写明回落原因。",
-      dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证，而且**只试这一门语言（含 Vue 与 TS 互引这一族）的扩展名**——TS 里写 `./util` 不会连到同目录的 `util.py`（2026-10-06 复审 #121 之前是全表挨个试，那种跨语言猜边会把这句话戳穿）。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
+      dependencyEdge: "边来自真正的 import / export 语句，落点按「同名文件是否真在仓库里」逐个验证，而且只试这一门语言（含 Vue 与 TS 互引这一族）的扩展名——TS 里写 `./util` 不会连到同目录的 `util.py`。第三方包与解析不到的写法不会画出来，所以这里的少边是真少，不是连错。",
       entrypoint: "框架入口是精确的：Fastify / Express / Koa / Nest 的实例构造、路由登记与 listen 都算服务入口；客户端调用（axios 那种 api.get 一个路径）刻意不算，它是打路由的一方。证据行落在注释或跨行模板字符串里的也不算——这个节点判据取自语法树。剩下的靠 package.json 的 main / bin / scripts 与文件名（main、index、app、server、cli）猜：同名但并非入口的文件会被误标，实例从形参进来的子路由文件认不出来。",
       packageResolution: "只读仓库根那一份 tsconfig.json 的 paths，且只认带星号的通配别名（如 `@/*` → `src/*`）；精确别名、通过 extends 继承来的配置、包内的导出映射都不读，这类别名导入会画不出边。",
       buildVisibility: "读过根 package.json 与 tsconfig.json，但没有应用 include / exclude，也不看子包配置，所以图里的文件集合来自目录扫描，不受构建范围约束。",
       controlFlow: "if / 三元 / 循环（含 do-while 的先跑后判）/ switch（含无 break 的贯穿）/ try-catch-finally / return / throw / break / continue 全部按语法树编成节点与边，圈复杂度是「边数 − 节点数 + 2」算出来的而不是数分支数出来的。可选链与短路只用一条边近似表达先后，不逐子表达式分叉。",
-      dataflow: "定义与读到按**名字**记：`a.x = 1` 记成对 `a` 的一次写，成员与解构不拆开；不做别名与指针分析，也不跨函数（谁传进来的参数在函数外被改，这里看不见）。多分支汇合处用并集，所以某行读到的定义是「可能到达」而不是「一定到达」。读不到本仓定义的名字进 `unresolved`，外部件与上游传值都混在这一格。",
+      dataflow: "定义与读到按「名字」记：`a.x = 1` 记成对 `a` 的一次写，成员与解构不拆开；不做别名与指针分析，也不跨函数（谁传进来的参数在函数外被改，这里看不见）。多分支汇合处用并集，所以某行读到的定义是「可能到达」而不是「一定到达」。读不到本仓定义的名字进 `unresolved`，外部件与上游传值都混在这一格。",
       typeRelations: "边（继承 / 实现 / 字段 / 参数 / 返回值 / 泛型实参 / 类型别名）取自语法树，形状可信；但「这个类型定义在哪个文件」是按名字在全仓反查——同名类型会标成 `ambiguous`，第三方与标准库类型查不到落点（边留着，`toFile` 空着）。",
-      registry: "认的是写法不是执行：`app.use(...)`、`router.get(\"/x\")`、Nest 的装饰器这类登记语句命中即入册，运行时未必真跑到。没覆盖的框架（自建路由表、插件按约定加载）只剩通用写法兜底；配置文件只进**键名**，值一律不抄（`.tutor` 目录是明文，抄口令就多一处泄露面）。"
+      registry: "认的是写法不是执行：`app.use(...)`、`router.get(\"/x\")`、Nest 的装饰器这类登记语句命中即入册，运行时未必真跑到。没覆盖的框架（自建路由表、插件按约定加载）只剩通用写法兜底；配置文件只进「键名」，值一律不抄（`.tutor` 目录是明文，抄口令就多一处泄露面）。"
     }
   },
   vue: {
@@ -772,7 +772,7 @@ export const LANGUAGE_CAPABILITIES = {
     extensions: [".py"],
     cells: { symbolExtraction: "exact", dependencyEdge: "approximate", entrypoint: "approximate", packageResolution: "unsupported", buildVisibility: "unsupported", controlFlow: "approximate", dataflow: "approximate", typeRelations: "approximate", registry: "approximate" },
     notes: {
-      symbolExtraction: "按真实语法树抽取函数与类，方法的归属靠缩进层级判定，起止行不再靠猜。语法树加载失败时回落逐行匹配（引擎会写明原因）。",
+      symbolExtraction: "按真实语法树抽取函数与类，方法的归属靠缩进层级判定，起止行是解析出来的。语法树加载失败时回落逐行匹配（引擎会写明原因）。",
       dependencyEdge: "import 语句本身是真的，但 Python 的模块名是点号路径，落点要试文件：`from a.b import c` 会同时试 `a/b.py`、`a/b/__init__.py` 和 `a/b/c.py`——同名目录或文件会连错；标准库与第三方包按设计不入图。仓库不是「根目录就是包根」的布局（例如代码在 `src/` 下）时，绝对导入落不到点。",
       entrypoint: "认的是框架级语句而不是文件名：应用对象（`app = FastAPI(...)`）、Django 的路由表、挂在应用对象上的路由装饰器、启动语句，以及脚本守卫 `if __name__ == \"__main__\":`——命中即取代按文件名猜，且一个文件只取最强的一条。没覆盖到的（其它 Web 框架、命令行工具的入口声明）只剩文件名约定兜底；装饰器那一条理论上会把同名的其它装饰器误认成路由。",
       packageResolution: "不读任何包配置（pyproject.toml、setup.cfg、requirements.txt），没有源码根布局与命名空间包的概念。",
@@ -780,7 +780,7 @@ export const LANGUAGE_CAPABILITIES = {
       controlFlow: "if / elif 链（含缩进里的 `else if`）/ for / while / try-except-else-finally / return / raise / break / continue 都按语法树编边；`with` 当作直接穿过的壳。两处形状还没进表：3.10 的 `match/case` 会被摊平成普通语句（图上看着像没有分支），`for/while ... else` 的 else 体不收。看到这两类文件的图比实际短，是这一格造成的，不是解析失败。",
       dataflow: "按名字记定义与读到：`self.count = 1` 记成对 `self` 的写，成员不拆开；不解推导式与生成器表达式的内部变量作用域，也不跨函数。多分支汇合取并集，读不到本仓定义的名字进 `unresolved`（内置函数、第三方对象全在这一格）。",
       typeRelations: "类头的基类与函数签名上的标注照收；Python 的类型是可选的，没写标注的地方一条边也不会有——这里的少边是「源码本身没说」，不是「引擎丢了」。基类落点按名字在全仓反查，同名会标 `ambiguous`，标准库基类没有落点。",
-      registry: "`@app.route` / `urlpatterns` / Blueprint 登记这类写法命中即入册；用装饰器变量、循环批量注册或第三方框架自有的登记形状认不出来。pyproject 与 requirements 只进**键名与包名**，值不抄。"
+      registry: "`@app.route` / `urlpatterns` / Blueprint 登记这类写法命中即入册；用装饰器变量、循环批量注册或第三方框架自有的登记形状认不出来。pyproject 与 requirements 只进「键名与包名」，值不抄。"
     }
   },
   java: {
@@ -790,14 +790,14 @@ export const LANGUAGE_CAPABILITIES = {
     cells: { symbolExtraction: "exact", dependencyEdge: "approximate", entrypoint: "approximate", packageResolution: "approximate", buildVisibility: "unsupported", controlFlow: "exact", dataflow: "approximate", typeRelations: "approximate", registry: "approximate" },
     notes: {
       symbolExtraction: "按真实语法树抽取类、方法、构造器、接口、枚举与记录，起止行是解析出来的。",
-      dependencyEdge: "三条路：① 直接 import（`import com.a.B;`）按「包名 + 文件名」定位，通常可信；② `import com.a.*;` 这种整包导入只在类名真的出现在正文（含注释）里时才补一条边，强度低于直接 import；③ 类型派发边——类头 `extends`/`implements` 的落点（接口与实现之间没有调用行，靠它把实现类接回执行流）。跨文件调用边认「类名.方法(」与**变量接收者**：`mapper.insert(` 靠字段、方法参数、局部变量三种声明形状换成类型，换不出就退回裸名匹配。注释与 import 行在扫描前清除（等长替换，行号不变），注释里写的 `xxxService.handle(...)` 不算调用证据。同名类型、继承来的方法、内部类的归属仍可能指错，所以整格是 approximate。",
+      dependencyEdge: "三条路：① 直接 import（`import com.a.B;`）按「包名 + 文件名」定位，通常可信；② `import com.a.*;` 这种整包导入只在类名真的出现在正文（含注释）里时才补一条边，强度低于直接 import；③ 类型派发边——类头 `extends`/`implements` 的落点（接口与实现之间没有调用行，靠它把实现类接回执行流）。跨文件调用边认「类名.方法(」与「变量接收者」：`mapper.insert(` 靠字段、方法参数、局部变量三种声明形状换成类型，换不出就退回裸名匹配。注释与 import 行在扫描前清除（等长替换，行号不变），注释里写的 `xxxService.handle(...)` 不算调用证据。同名类型、继承来的方法、内部类的归属仍可能指错，所以整格是 approximate。",
       entrypoint: "Spring 仓可信：启动类与控制器上的框架注解是权威标记，路由前缀能直接报出来。但非 Spring 的 Java 仓目前没有规则（连 `public static void main` 都还没进主函数清单），只剩文件名约定兜底。",
       packageResolution: "全限定类名靠每个文件自己的 package 声明来定，这条可信；但同名类型的取舍、内部类与静态成员的精确归属靠逐级去尾试探，不做模块级区分。",
       buildVisibility: "不读 Maven / Gradle 构建文件：分不清主代码目录与测试目录的构建范围，生成的源码目录也被当成普通源码进图。",
       controlFlow: "if / else、三种 for（含 for-each）、while / do-while、switch（冒号贯穿与箭头形式都认）、try-catch-finally 与带资源的 try、return / throw / break / continue 全按语法树编边。唯一没区分的一处：`break 标签` / `continue 标签` 目前按最内层那层循环接，所以标签跳多层循环的函数会少一段路。",
       dataflow: "按名字记定义与读到：`user.getName()` 里的 `user` 算读、`this.count = 1` 算对 `this` 的写，成员与字段不拆开；不做别名分析、不跨方法（接口方法在哪实现、实现里改了什么，这里看不见）。汇合点取并集，读不到本仓定义的名字进 `unresolved`——getter 拿到的、依赖注入框架塞进来的都落在这一格，数量大是正常的。",
-      typeRelations: "类头的 `extends` / `implements`、字段类型、方法参数与返回值、泛型实参都成边，形状来自语法树；落点按简单类名在全仓反查，同名类型标 `ambiguous`，JDK 与第三方类型没有落点（边留着、`toFile` 空着）。**接口与实现之间靠这张表才连得上**——它比依赖图那条派发边细，但同样是名字反查。",
-      registry: "Spring 这条线覆盖得最全：`@Autowired` / `@Resource` 字段注入与构造器注入落成「接口 → 实现」的绑定，`@RestController` / `@RequestMapping` 的路由、`@Bean` 工厂方法、`@ComponentScan` 这类扫描开关、`META-INF/services` 的 SPI 实现清单都入册。认的是写法不是执行：没被扫到的包里的注解一样进册。application.yml / .properties 只进**键名**，值一律不抄（`.tutor` 是明文目录，抄了口令就多一处泄露面）。非 Spring 仓只剩通用写法兜底。"
+      typeRelations: "类头的 `extends` / `implements`、字段类型、方法参数与返回值、泛型实参都成边，形状来自语法树；落点按简单类名在全仓反查，同名类型标 `ambiguous`，JDK 与第三方类型没有落点（边留着、`toFile` 空着）。接口与实现之间靠这张表才连得上——它比依赖图那条派发边细，但同样是名字反查。",
+      registry: "Spring 这条线覆盖得最全：`@Autowired` / `@Resource` 字段注入与构造器注入落成「接口 → 实现」的绑定，`@RestController` / `@RequestMapping` 的路由、`@Bean` 工厂方法、`@ComponentScan` 这类扫描开关、`META-INF/services` 的 SPI 实现清单都入册。认的是写法不是执行：没被扫到的包里的注解一样进册。application.yml / .properties 只进「键名」，值一律不抄（`.tutor` 是明文目录，抄了口令就多一处泄露面）。非 Spring 仓只剩通用写法兜底。"
     }
   },
   go: {
@@ -845,7 +845,7 @@ export const LANGUAGE_CAPABILITIES = {
       entrypoint: "`Main` / `MainAsync` 方法名命中即可信；但新版允许的顶层语句（入口文件直接写代码、不声明 Main）认不出来，这类仓只能退回文件名约定。",
       packageResolution: "不读工程文件与解决方案文件：没有项目引用的概念，全仓按命名空间字符串混在一起找落点。",
       buildVisibility: "工程文件没读：目标框架、按条件编译取舍的代码、被排除的文件都判不出来，生成物目录只在目录排除规则生效时才不进图。",
-      controlFlow: "if / else、for（三种头）/ foreach / while / do、switch（C# 不贯穿，所以每臂一条到结尾的边）、try-catch-finally（含只 catch 或只有 finally 的形状）、`using` / `lock` / `checked` 这类不改路径的壳按直接穿过处理、return / throw / break / continue 与 goto + 标签都按语法树编边。`break 标签` 同 Java：按最内层接；switch 里的 `goto case` / `goto default` 认成接不上的标签，会在该函数的 `notes` 里点名，不假装编好了。",
+      controlFlow: "if / else、for（三种头）/ foreach / while / do、switch（C# 不贯穿，所以每臂一条到结尾的边）、try-catch-finally（含只 catch 或只有 finally 的形状）、`using` / `lock` / `checked` 这类不改路径的壳按直接穿过处理、return / throw / break / continue 与 goto + 标签都按语法树编边。`break 标签` 同 Java：按最内层接；switch 里的 `goto case` / `goto default` 认成接不上的标签，会在该函数的 `notes` 里点名，不静默略过。",
       dataflow: "按名字记定义与读到：声明（含 `var`）、赋值、`+=` 复合赋值、`out` / `ref` 实参、形参都算定义；`user.Name = x` 记成对 `user` 的写，属性与字段不拆开。不跨方法调用（`service.Save(list)` 里对 list 做了什么看不见），汇合取并集。读不到本仓定义的名字进 `unresolved`，BCL 类型与扩展方法全落在这一格。",
       typeRelations: "类头的基类与接口列表、字段类型、方法参数与返回值、泛型实参、`where T : …` 约束都成边；属性（`public Foo Bar { get; set; }`）的 `Foo` 暂时不收，这类关系要去调用边那边看。落点按名字在全仓反查，同名标 `ambiguous`，BCL 与 NuGet 里的类型没有落点。",
       registry: "依赖注入这条线覆盖到位：`AddScoped<接口, 实现>()` / `AddSingleton` / `AddTransient`（含 Keyed 那三种与 `AddScoped<I>(sp => …)` 的工厂写法）都落成「接口 → 实现」的绑定；工程文件收 `ProjectReference` / `PackageReference` 的项目名、解决方案收项目清单。路由不在射程内：`[Route(\"api/x\")]` 特性与最小 API 的 `app.MapGet(…)` 都不认，那是 Java / Python 那条路由规则没扩到这里。配置文件只进键名，值一律不抄。"
@@ -863,7 +863,7 @@ export const LANGUAGE_CAPABILITIES = {
       packageResolution: "没有包管理器清单可查，引擎也没读：包含目录、库依赖关系都不判。",
       buildVisibility: "构建脚本（CMake / Bazel / makefile）一条都没读：编译单元怎么划分、宏定义了哪些分支、按条件取舍的文件都判不出来。",
       controlFlow: "if / else、for（含区间 for）、while / do-while、switch（C/C++ 默认贯穿，没写 break 就掉下一臂）、goto + 标签（向前跳先记账、建完再连）、try / catch（C++，一个 catch 既是处理器也是兜底）、return / throw / break / continue 都按语法树编边。两处不建模：`throw` 之后经过的局部对象析构不画展开路径；`setjmp` / 信号 / 协程这类非常规跳转当普通调用。",
-      dataflow: "按名字记定义与读到：声明、初始化、赋值、`++` / `--`、复合赋值、形参都算定义。**指针与引用不做别名分析**——`*p = x` 记成对 `p` 的写，`p` 指向的那个对象在图上不认；`free(p)` 之后再用 `p` 也照旧算「读得到」。这就是 C/C++ 里这一格只能是近似的原因。汇合取并集，不跨函数；读不到的名字进 `unresolved`（库函数、宏展开出来的全在这一格）。",
+      dataflow: "按名字记定义与读到：声明、初始化、赋值、`++` / `--`、复合赋值、形参都算定义。指针与引用不做别名分析——`*p = x` 记成对 `p` 的写，`p` 指向的那个对象在图上不认；`free(p)` 之后再用 `p` 也照旧算「读得到」。这就是 C/C++ 里这一格只能是近似的原因。汇合取并集，不跨函数；读不到的名字进 `unresolved`（库函数、宏展开出来的全在这一格）。",
       typeRelations: "类的基类列表（含 `public` / `virtual` 修饰后的那个名字）、结构体与类的成员、函数参数与返回、模板实参、`using X = Y` 的别名都成边；前置声明（`class Foo;`）也收到，可能只有一条指向自己的名字。落点按名字在全仓反查——头文件声明、源文件实现是两份同名，会标成 `ambiguous`；标准库类型没有落点。",
       registry: "这一格没有规则：注册与配置索引靠的是框架写法（路由登记、依赖注入绑定）或构建清单，C/C++ 两边都没接——既没有可注册的框架概念，也不读 CMakeLists / Bazel / makefile。所以本门语言的源码与构建脚本在注册索引里一条都不会有，读侧看到的空白是真空白。"
     }

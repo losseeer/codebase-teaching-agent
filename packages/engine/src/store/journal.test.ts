@@ -18,7 +18,7 @@ describe("学习日志", () => {
   beforeEach(() => { repository = mkdtempSync(join(tmpdir(), "tutor-journal-")); });
   afterEach(() => { rmSync(repository, { recursive: true, force: true }); });
 
-  it("UI 侧事件（设计文档第 8 章契约）能写入并读回", () => {
+  it("UI 侧事件（契约取自 shared 那张事件表）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
     // 清单取 shared 那张表，不在测试里另抄一份
     for (const type of UI_JOURNAL_EVENTS) journal.append(type, { where: "/api/x" });
@@ -97,7 +97,7 @@ describe("回合文本落盘（turn_text）", () => {
     expect(payload.answer_truncated).toBe(false);
   });
 
-  it("practice_chat 场景标签原样落盘（B 档按场景分列的读侧依赖）", () => {
+  it("practice_chat 场景标签原样落盘（读侧按场景分列要用它）", () => {
     new Journal(repository, "repo_1").append("turn_text", turnTextPayload("practice_chat", "这题我这么写对吗", "思路对，边界再想想。"));
     expect(readJournal(repository)[0]?.payload.scene).toBe("practice_chat");
   });

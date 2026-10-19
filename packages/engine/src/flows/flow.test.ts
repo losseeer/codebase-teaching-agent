@@ -242,7 +242,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     expect(result.deterministic).toBeUndefined();
   });
 
-  it("输出被我们自己的上限截断 = 单独文案 + capHit，**不算**确定性结论（同输入再问结果一样这件事不成立）", async () => {
+  it("输出被我们自己的上限截断 = 单独文案 + capHit，「不算」确定性结论（同输入再问结果一样这件事不成立）", async () => {
     let seen: LlmCompletionInput | undefined;
     const result = await generateRepositoryFlow({
       repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), entry: ENTRY,
@@ -803,7 +803,7 @@ describe("边级校验（L0 监督 L2）", () => {
 });
 
 describe("L1 摘要表进流程证据", () => {
-  it("摘要一律随文件给出（09-22 取消 coverageLow 扣用；低判只是没复述符号名，职责描述仍是线索）", () => {
+  it("摘要一律随文件给出（coverageLow 不扣下游用途；低判只是没复述符号名，职责描述仍是线索）", () => {
     const dir = mkdtempSync(join(tmpdir(), "flow-digest-"));
     writeFileSync(join(dir, "main.py"), "def main():\n    pass\n");
     const summaries = new Map<string, string>([

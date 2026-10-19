@@ -63,7 +63,7 @@ describe("课程树 → 模块清单", () => {
     expect(courseModules(tree([]))).toEqual([]);
   });
 
-  it("文件清单按 path 去重、先到先得（深度优先访问序）：共享文件不再被每个经过它的节点各挂一次", () => {
+  it("文件清单按 path 去重、先到先得（深度优先访问序）：共享文件只挂在第一个经过它的节点上", () => {
     const modules = courseModules(tree([
       node("pay", "支付", ["Pay.java"], [
         node("pay.service", "支付服务", ["PayService.java"], [node("pay.impl", "支付实现", ["PayImpl.java", "Result.java"])]),

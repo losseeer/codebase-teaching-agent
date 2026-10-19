@@ -179,7 +179,7 @@ export type InvariantId = "reference-grounding" | "anchor-binding";
 
 /** 不变量的定义表：离线报告与运行期提示共用同一份措辞与出处，改一处就两边一起变。 */
 const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
-  { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", source: "锚点可靠性纪律（第 1 刀同一口径）" },
+  { id: "reference-grounding", label: "回复零编造（每个 文件[:行号] 引用都能落地）", source: "锚点可靠性纪律（与静态锚点判据同一口径）" },
   { id: "anchor-binding", label: "非小白档回复点名至少一个标识符/路径", source: "tutor-settings.ts「将问题绑定到当前源码锚点」" }
 ];
 

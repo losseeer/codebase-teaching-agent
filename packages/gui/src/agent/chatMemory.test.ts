@@ -36,7 +36,7 @@ describe("线程记忆（localStorage）", () => {
     }
   });
 
-  it("旧形状（值是字符串而不是按作用域分的对象）在这一层露馅并被跳过", () => {
+  it("旧形状（值是字符串而不是按作用域分的对象）在这一层被认出并跳过", () => {
     localStorage.setItem("codebase-tutor.teaching-sessions", JSON.stringify({ repo_old: "上一个会话 id", repo_new: { map: { currentId: "t1", ids: ["t1"] } } }));
     const memory = readThreadMemory();
     expect(memory.repo_old).toBeUndefined();

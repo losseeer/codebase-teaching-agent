@@ -353,7 +353,7 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     ]);
   });
 
-  it("外部调用并进清单、结果回喂，且**不吃读文件额度**（那一格管的是本地事实）", async () => {
+  it("外部调用并进清单、结果回喂，且不吃读文件额度（读文件额度只管本地读取）", async () => {
     const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 6, masked: 0, ok: true, ms: 3 };
     const { provider, calls } = scriptedProvider([
       { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },

@@ -73,7 +73,7 @@ const registry = existsSync(join(tutorHome, "repositories.json"))
 const llmRows = readJsonl<LlmLogRow>(join(tutorHome, "llm.log"));
 const engineRows = readJsonl<EngineLogRow>(join(tutorHome, "engine.jsonl"));
 
-emit(`# 指标基线报告（第 1 档 · 零 LLM 聚合）`);
+emit(`# 指标基线报告（零 LLM 聚合）`);
 emit(`生成时间：${new Date().toISOString()}｜引擎探针：${engineUrl}`);
 emit(`仓库：${registry.join("、") || "（repositories.json 为空）"}`);
 emit();
@@ -87,7 +87,7 @@ for (const repo of perRepo) {
   const label = `\`${repo.path}\`${repo.id ? `（${repo.id}）` : ""}`;
   if (!repo.id) { emit(`- ${label}：journal 无 repositoryId，未执行`); continue; }
   const analysis = await getJson<RepositoryAnalysis>(`/api/repositories/${repo.id}/analysis`);
-  if (!analysis) { emit(`- ${label}：**未执行**（引擎不可达或未加载该仓库；锚点质量只在 /analysis 输出中）`); continue; }
+  if (!analysis) { emit(`- ${label}：未执行（引擎不可达或未加载该仓库；锚点质量只在 /analysis 输出中）`); continue; }
   const index = await getJson<RepositoryIndex>(`/api/repositories/${repo.id}/index`);
   const course = await getJson<CourseTree>(`/api/repositories/${repo.id}/course`);
   for (const kind of ["micro", "macro"] as const) {
@@ -206,7 +206,7 @@ for (const repo of perRepo) {
     const runs = of("exercise_run");
     const runOutcome = ["accepted", "passed", "failed", "no-verdict"].map((outcome) => `${outcome} ${count(runs, "outcome", outcome)}`).join("、");
     emit(`- 沙箱运行：${runs.length} 趟（自证 ${count(runs, "stage", "validate-proposal")}、判分 ${count(runs, "stage", "grade")}）；结论 ${runOutcome}；超时 ${runs.filter((event) => event.payload.timed_out === true).length}、没印 TESTS 结论 ${runs.filter((event) => event.payload.verdict_passed === null).length}`);
-    emit(`- 练习漏斗：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（按族 ${byFamily}；按档 ${byStage}）`);
+    emit(`- 练习链路：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（按族 ${byFamily}；按档 ${byStage}）`);
   }
 
   // 作用域降级：分母 = map_chat 轮次（token_usage scene 记账）；scope_paths=0 是 GUI 没上送清单，>0 是上送了但交集为空——成因不同要分列
@@ -269,17 +269,17 @@ for (const repo of perRepo) {
     // anchor-v2：命中缓存的行会被就地重算并打上 rule 标记；两种判据混杂期间分开报
     const v2 = [...latest.values()].filter((row) => row.rule === "anchor-v2");
     const lowV2 = v2.filter((row) => row.coverageLow === true).length;
-    emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，09-22 起仅作读数、不再扣下游用途）；其中 anchor-v2 新判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);
+    emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，仅作读数、不再扣下游用途）；其中 anchor-v2 判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);
   } finally {
     db.close();
   }
 }
 
 emit();
-emit("## 5. 本轮明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
+emit("## 5. 明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
 emit("- 作用域降级：已埋 `scope_degraded`（见 §4 读数）；埋点前发生的降级无法回补，基线从本次起算；");
 emit("- 推荐入口采纳/改选：已埋 `entry_adopted`/`entry_overridden`（见 §4 读数，口径=开文件即改选）；埋点前的点击无法回补；");
-emit("- 每教会一个节点的平均成本：分母是 `unit_mastered`，而它随教学状态机于 2026-10-14 停止产生 → 这条指标**不再有口径**，要问「一次问答多少成本」看 §2 的 teach 场景行；");
-emit("- 表达质量归因（文件:行号 落点核验）：回合文本不落盘（教条），走离线评测档。");
+emit("- 每教会一个节点的平均成本：分母是 `unit_mastered`，而教学状态机已不再产生这个事件 → 这条指标不再有口径，要问「一次问答多少成本」看 §2 的 teach 场景行；");
+emit("- 表达质量归因（文件:行号 落点核验）：回合文本不落盘（按设计），走离线评测档。");
 emit();
 console.log(out.join("\n"));

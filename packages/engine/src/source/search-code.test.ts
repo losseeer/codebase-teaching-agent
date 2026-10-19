@@ -181,23 +181,23 @@ describe("executeSearchCode 边界行为", () => {
   });
 });
 
-describe("整句中文：兜底最后一级与它的两道闸（§26 读数换来的行为）", () => {
+describe("整句中文：兜底最后一级与它的两道闸", () => {
   const sentence = "缓存读写这块是谁负责的";
 
-  it("原样查询零命中 ⇒ 自动用中文二分切词重试，并明说结果来自兜底臂", () => {
+  it("原样查询零命中 ⇒ 自动用中文二分切词重试，并明说结果来自切词兜底", () => {
     const { content, audit } = run(sentence);
     expect(audit.segmented).toBe(true);
     expect(audit.topPaths[0]).toBe("src/io/FileService.java");
     expect(content).toContain("中文切词兜底");
   });
 
-  it("关键词式查询第一遍就命中 ⇒ 根本不碰兜底臂（已验证的行为一分不动）", () => {
+  it("关键词式查询第一遍就命中 ⇒ 根本不进切词兜底通道（已验证的行为一分不动）", () => {
     expect(run("缓存").audit.segmented).toBeUndefined();
     expect(run("FileService").audit.segmented).toBeUndefined();
     expect(run("io").audit.segmented).toBeUndefined();
   });
 
-  it("DF 闸 + 一致性闸：只被通用双字撞上的文件不算命中，带两个片段的仍能捞到", () => {
+  it("DF 闸 + 一致性闸：只被通用双字命中的文件不算命中，带两个片段的仍能取到", () => {
     const paths = ["src/a/Up.java", "src/a/Down.java", "src/a/Parse.java", "src/a/Keep.java"];
     const index = {
       repositoryId: "r9", repositoryPath: "/f", scannedAt: "2026-10-04T00:00:00.000Z", totalFiles: 4, totalLines: 40,
@@ -225,7 +225,7 @@ describe("整句中文：兜底最后一级与它的两道闸（§26 读数换�
     expect(segmentForLookup("缓存击穿")).toBe("缓存 存击 击穿");
   });
 
-  it("一致性闸只认互不重叠的证据：「一对一」切出的 一对/对一 是一处文字不是两处（真仓负例实测的形状）", () => {
+  it("一致性闸只认互不重叠的证据：「一对一」切出的 一对/对一 是一处文字不是两处", () => {
     const paths = ["src/a/Pair.java", "src/a/Chat.java"];
     const index = {
       repositoryId: "r10", repositoryPath: "/g", scannedAt: "2026-10-04T00:00:00.000Z", totalFiles: 2, totalLines: 20,
@@ -269,7 +269,7 @@ describe("符号级位置回报（就近函数 + 行号）", () => {
     expect(result.content).toContain("就近: verifyCallback:41");
   });
 
-  it("形参与种类不参与打分（三仓实测：加了这个命中面 hit@5 一个节点不涨，还把干净负例撞成误命中）", () => {
+  it("形参与种类不参与打分（加了这个命中面 hit@5 一个节点不涨，还会把干净负例变成误命中）", () => {
     expect(ask("tokenvalue 无关词").audit.hits).toBe(0);
     expect(ask("id 无关词").audit.hits).toBe(0);
   });

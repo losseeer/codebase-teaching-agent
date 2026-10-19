@@ -58,7 +58,7 @@ describe("清单（按 Agent Skills 规格验形状）", () => {
     expect(reasons["no-skill-file"]).toContain("没有可读的 SKILL.md");
   });
 
-  it("描述**不裁短**（规格上限 1024 之内原样进清单）", () => {
+  it("描述不裁短（规格上限 1024 之内原样进清单）", () => {
     const entry = listSkills([root]).skills.find((skill) => skill.name === "good-one");
     expect(entry?.description).toBe("一份写好的做法：先跑零成本探针，再决定要不要花钱。");
   });

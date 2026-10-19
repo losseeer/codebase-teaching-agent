@@ -232,7 +232,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     return summaries[0].coverage;
   }
 
-  it("中文行为描述里出现英文特征词即算锚上——旧判据整名对不上造成的假低覆盖被救回", async () => {
+  it("中文行为描述里出现英文特征词即算锚上——整名对不上不该算成假低覆盖", async () => {
     expect(await coverageFor(["RedisTemplate"], "负责 redis 连接池维护与断线重连。"))
       .toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
   });
@@ -282,9 +282,9 @@ describe("extractHeaderComment（「摘要参考注释」开时取文件首段�
   it("Java：跳过 license 块注释，取类 Javadoc，并剔除 @author/@version 标签行", () => {
     const text = [
       "/*",
-      " * Copyright 2020 dianping.com. All rights reserved.",
+      " * Copyright 2020 example.com. All rights reserved.",
       " */",
-      "package com.dianping;",
+      "package com.example;",
       "/**",
       " * 库存扣减服务：处理秒杀场景下的并发扣减与回滚。",
       " * @author tom",

@@ -137,9 +137,9 @@ const crossPackageMisses = onlyReference.filter((key) => !referenceKeys.get(key)
 const shortKey = (key: string): string => key.replace(/[^→:]*\//g, "").replace(/\.java/g, "");
 const pct = (part: number, whole: number): string => (whole ? `${((part / whole) * 100).toFixed(1)}%` : "—");
 
-console.log(`# 符号级调用边差值（参照为**下界**：只认 Type.method( 且类型可见、方法声明在同文件）｜${repositoryPath}`);
+console.log(`# 符号级调用边差值（参照为下界：只认 Type.method( 且类型可见、方法声明在同文件）｜${repositoryPath}`);
 console.log(`- 参照边（按 文件→文件:方法名 去重）：${referenceKeys.size}｜引擎跨文件调用边：${engine.size}｜交集：${both.length}`);
-console.log(`- **参照有、引擎没有 ${onlyReference.length} 条**（同包 ${samePackageMisses.length}／跨包 ${crossPackageMisses.length}）⇒ 这是可以断定的漏配`);
+console.log(`- 参照有、引擎没有 ${onlyReference.length} 条（同包 ${samePackageMisses.length}／跨包 ${crossPackageMisses.length}）⇒ 这是可以断定的漏配`);
 console.log(`  例：${onlyReference.slice(0, 5).map(shortKey).join("、") || "—"}`);
-console.log(`- 引擎有、参照确认不了 ${unconfirmed.length} 条（占引擎 ${pct(unconfirmed.length, engine.size)}）：变量接收者、继承与接口分派都在下界之外，**别当假阳性引用**`);
+console.log(`- 引擎有、参照确认不了 ${unconfirmed.length} 条（占引擎 ${pct(unconfirmed.length, engine.size)}）：变量接收者、继承与接口分派都在下界之外，不能当假阳性引用`);
 console.log(`  例：${unconfirmed.slice(0, 5).map(shortKey).join("、") || "—"}`);

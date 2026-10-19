@@ -53,7 +53,7 @@ describe("provider-backed code Q&A harness", () => {
     expect(prompt).toContain("学习者本轮输入：那配置从哪来？");
   });
 
-  it("模型调用失败就抛错：**不再回落成本地启发式文案**", async () => {
+  it("模型调用失败就抛错：不回落成本地启发式文案", async () => {
     const provider: LlmProvider = { name: "broken", modelVersion: "broken-v1", complete: async () => { throw new Error("offline"); } };
     await expect(respondWithProvider(createSession("repo", "unit"), node, "这是什么？", provider)).rejects.toThrow("offline");
   });

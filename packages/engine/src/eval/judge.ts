@@ -44,7 +44,7 @@ export function axesFor(scene: JudgeScene): JudgeAxis[] {
   return scene === "teach" ? [...BASE_AXES, TEACH_AXIS] : BASE_AXES;
 }
 
-export const JUDGE_SYSTEM = `你是教学内容的质检裁判。只按给定维度打分，每题给 0、1 或 2 的整数分，并为每个维度从「被评回复」原文里摘一段**连续逐字**的证据（不许改写、不许拼接；证据可以就是没给分的理由所在的原文）。只输出一个 JSON 对象，形如 {"维度名":{"score":2,"evidence":"原文摘录"}}，不要输出其他文字。`;
+export const JUDGE_SYSTEM = `你是教学内容的质检裁判。只按给定维度打分，每题给 0、1 或 2 的整数分，并为每个维度从「被评回复」原文里摘一段「连续逐字」的证据（不许改写、不许拼接；证据可以就是没给分的理由所在的原文）。只输出一个 JSON 对象，形如 {"维度名":{"score":2,"evidence":"原文摘录"}}，不要输出其他文字。`;
 
 export function buildJudgePrompt(turn: JudgeTurn, prior: JudgeTurn[]): string {
   const lines: string[] = [];

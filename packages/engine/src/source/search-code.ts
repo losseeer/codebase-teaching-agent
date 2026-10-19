@@ -33,7 +33,7 @@ const FALLBACK_MIN_HITS = 2;
 
 export const SEARCH_CODE_TOOL: LlmTool = {
   name: "search_code",
-  description: "按关键词检索仓库内已分析的文件（匹配文件路径、符号名、文件一句话职责），返回候选文件的位置（含撞上的函数与行号）与职责清单——**不返回源码正文**。不确定实现在哪个文件时先调用它缩小范围，再用 read_file 读命中的路径。禁止用它替代 read_file 获取代码内容。",
+  description: "按关键词检索仓库内已分析的文件（匹配文件路径、符号名、文件一句话职责），返回候选文件的位置（含命中的函数与行号）与职责清单——不返回源码正文。不确定实现在哪个文件时先调用它缩小范围，再用 read_file 读命中的路径。禁止用它替代 read_file 获取代码内容。",
   parameters: {
     type: "object",
     properties: {

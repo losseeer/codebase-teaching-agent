@@ -53,7 +53,7 @@ const firstLine = (error: string): string => error.trim().split("\n")[0]?.slice(
 const file = process.env.TUTOR_LLM_LOG && process.env.TUTOR_LLM_LOG !== "off" ? process.env.TUTOR_LLM_LOG : join(homedir(), ".codebase-tutor", "llm.log");
 
 if (!existsSync(file)) {
-  console.log(`# 调用层耗时与费用画像（刀 0）\n\n数据源缺失：${file} 不存在——本表全部指标输出「未执行 + 原因」，不给你空数字。`);
+  console.log(`# 调用层耗时与费用画像（零 token · 只读）\n\n数据源缺失：${file} 不存在——本表全部指标输出「未执行 + 原因」，不给你空数字。`);
   process.exit(0);
 }
 
@@ -111,11 +111,11 @@ for (const row of rows) {
 const out: string[] = [];
 const emit = (line = ""): void => { out.push(line); };
 
-emit("# 调用层耗时与费用画像（第三阶段刀 0 · 零 token · 只读）");
+emit("# 调用层耗时与费用画像（零 token · 只读）");
 emit();
 emit(`数据源：${file}｜行数 ${rows.length}${unparsed ? `（另有 ${unparsed} 行解析失败，已跳过）` : ""}｜时间跨度 ${span.first} → ${span.last}`);
-emit(`单价口径（**本进程视角**，取数函数与成本页同一个）：输入 ${pricing.inputPerMillionUsd}（来源 ${pricingSourceOf("input")}）· 输出 ${pricing.outputPerMillionUsd}（${pricingSourceOf("output")}）· 命中 ${pricing.cacheHitPerMillionUsd ?? "未配，按输入价算"}（${pricingSourceOf("cacheHit")}）。`);
-if (!pricingIsConfigured(pricing)) emit("⚠️ **本进程读不到任何单价**（三档来源都 unset）⇒ 下面「钱」一栏恒 ¥0.0000。");
+emit(`单价口径（本进程视角，取数函数与成本页同一个）：输入 ${pricing.inputPerMillionUsd}（来源 ${pricingSourceOf("input")}）· 输出 ${pricing.outputPerMillionUsd}（${pricingSourceOf("output")}）· 命中 ${pricing.cacheHitPerMillionUsd ?? "未配，按输入价算"}（${pricingSourceOf("cacheHit")}）。`);
+if (!pricingIsConfigured(pricing)) emit("⚠️ 本进程读不到任何单价（三层来源都 unset）⇒ 下面「钱」一栏恒 ¥0.0000。");
 if (!pricingIsConfigured(pricing)) emit("   这是【这个 shell 算不出】，不是产品没配、更不是没花钱：单价走三层回落（界面运行时 → .env → 未配），脚本只看得见自己那份环境。");
 if (!pricingIsConfigured(pricing)) emit("   要和产品对账：跑之前先 set -a; source .env; set +a，或直接问在跑的引擎 GET /api/llm/settings 的 pricing 与 pricingSources。");
 emit();
@@ -139,19 +139,19 @@ emit();
 
 emit(`## 这张表读不到的三件事（说清为什么，别用猜的数填满）`);
 emit();
-emit(`1. **首次与重试次数（今天起读得到，历史行读不到）**：日志包装在重试层**外面**（\`runtime.ts\` 的装配是 ThinkingOverride → Logging → Retry → 真 provider），`);
-emit(`   一次逻辑调用只落一行，\`ms\` 是「含全部重试的总墙钟」。2026-10-15 起 \`RetryLlmProvider\` 把 \`attempts\` 与 \`attemptMs\` 挂在结果/错误上带出来，`);
-emit(`   所以新行才有这两个节点；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
-emit(`2. **降级频率**：本地兜底与预算降级按设计**不发请求**（§43），日志里根本没有这个字段。`);
+emit(`1. 首次与重试次数（新行有读数，旧行没有）：日志包装在重试层外面（\`runtime.ts\` 的装配是 ThinkingOverride → Logging → Retry → 真 provider），`);
+emit(`   一次逻辑调用只落一行，\`ms\` 是「含全部重试的总墙钟」。\`RetryLlmProvider\` 会把 \`attempts\` 与 \`attemptMs\` 挂在结果/错误上带出来，`);
+emit(`   所以带这两个字段的行才有重试读数；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
+emit(`2. 降级频率：本地兜底与预算降级按设计不发请求，日志里根本没有这个字段。`);
 emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算已达上限）与 \`scope_degraded\`，`);
 emit(`   \`pnpm phase0:metrics\` 已经把这两栏按场景聚合。`);
-emit(`3. **按仓归属的钱**：导入与监听刷新那批调用没有 traceId（带 trace 的 ${withTrace}/${rows.length} 行），`);
-emit(`   那部分 provider/model/token 归不到某个仓——与出网报表同一条读数口径（§48）。`);
+emit(`3. 按仓归属的钱：导入与监听刷新那批调用没有 traceId（带 trace 的 ${withTrace}/${rows.length} 行），`);
+emit(`   那部分 provider/model/token 归不到某个仓——与出网报表同一条读数口径。`);
 emit();
 emit(`## 顺带给的两条准备读数`);
 emit();
-emit(`- 同一 traceId + 同一场景 + 同一出网指纹**重复出现**的行：${duplicates} 条。这就是「同样的载荷原样重发」的下界——`);
-emit(`  重试层重发的是同一份输入，所以它会留下同样的指纹（上界要等 \`attempts\` 那个字段补上才说得准）。`);
+emit(`- 同一 traceId + 同一场景 + 同一出网指纹重复出现的行：${duplicates} 条。这就是「同样的载荷原样重发」的下界——`);
+emit(`  重试层重发的是同一份输入，所以它会留下同样的指纹（精确上界看 \`attempts\` 读数）。`);
 emit(`- 出网载荷合计 ${[...byScene.values()].reduce((sum, bucket) => sum + bucket.outboundChars, 0).toLocaleString()} 字符（含系统提示与工具清单），按场景分的平均字符可用来估「调大超时会不会让一次失败更贵」。`);
 
 console.log(out.join("\n"));

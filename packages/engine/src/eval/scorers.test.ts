@@ -89,7 +89,7 @@ describe("检索 gold 命中", () => {
   });
 });
 
-describe("不变量机检（第 2 刀剩下的两条）", () => {
+describe("不变量机检（批量回合上的两条判据）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
     ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
@@ -124,7 +124,7 @@ describe("不变量机检（第 2 刀剩下的两条）", () => {
   });
 });
 
-describe("运行期运行时复检（第 2 刀的那两条搬到回合收尾）", () => {
+describe("运行期运行时复检（同样的两条在回合收尾判）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
     ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });

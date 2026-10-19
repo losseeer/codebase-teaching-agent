@@ -42,7 +42,7 @@ describe("在途回合注册表", () => {
     first.dispose();
   });
 
-  it("登记不带走任何身份：这台机器上谁都能停任何回合（按 key 归属判的那道随认证闸一起撤，§64）", () => {
+  it("登记不带走任何身份：这台机器上谁都能停任何回合（认证闸已撤，不按 key 归属判权限）", () => {
     const handle = beginTurn(TURN_ID, "map_chat");
     expect(abortTurn(TURN_ID)).toMatchObject({ aborted: true, scene: "map_chat" });
     expect(handle.signal?.aborted).toBe(true);

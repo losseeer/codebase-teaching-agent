@@ -76,7 +76,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     判据位：`file` 那一档按收录集筛——「非忽略、非产物」还不够，只有「可能改变收录集」的改动才叫醒。
     否则往仓里放一张图片、一份 `.env` 都会排一整轮重分析：产物被真实扫描换掉、缓存键重算、润色可能重跑。
     */
-  it("文件那一档按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {
+  it("事件类型是 file 的那一支按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {
     const dir = repository();
     const matcher = createTutorIgnoreMatcher(dir);
     expect(changeWanted("src/keep.ts", matcher, "file"), "收录进来的源码照样叫醒").toBe(true);
@@ -121,7 +121,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
   });
 });
 
-describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
+describe("RepositoryWatcher 的死活（起不来要交出状态、中途报错要出声）", () => {
   it("路径不可监听时交出死活并出声（不再空 catch 之后一路假 fresh）", () => {
     const errors: string[] = [];
     const watcher = new RepositoryWatcher("/definitely/not/here/xyz", () => undefined, 50, (message) => errors.push(message));
