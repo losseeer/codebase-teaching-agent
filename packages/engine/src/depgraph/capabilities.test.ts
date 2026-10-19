@@ -82,10 +82,12 @@ describe("语言能力表：每个节点都要有明确取值", () => {
     // 表说某语言有控制流图，而 `facts/cfg.ts` 的节点表里没有它 ⇒ 读侧会拿到一片空白却以为是「算过是空的」。
     // 反向也要成立：加了节点表却忘了改表，就是把能算的东西说成不能算。
     // 空内容即可探：spec 缺失直接返回 backend none，spec 在则空文件也解析得动，返回 ast。
+    const claimsCoverage = (level: CapabilityLevel): boolean => level !== "unsupported";
     for (const [language, entry] of Object.entries(LANGUAGE_CAPABILITIES)) {
       for (const extension of entry.extensions) {
         const supported = buildFileCfg(`probe${extension}`, "", [], language).backend === "ast";
-        expect(entry.cells.controlFlow === "unsupported", `${language}${extension}：表说${entry.cells.controlFlow}，实际${supported ? "出得了图" : "出不了图"}`).toBe(!supported);
+        const level: CapabilityLevel = entry.cells.controlFlow;
+        expect(claimsCoverage(level), `${language}${extension}：表说${level}，实际${supported ? "出得了图" : "出不了图"}`).toBe(supported);
       }
     }
   });
