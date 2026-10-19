@@ -25,6 +25,7 @@
     "arch:keyprobe": "tsx src/scripts/arch-key-probe.ts",
     "arch:externals": "tsx src/scripts/external-scan.ts",
     "arch:blocks": "tsx src/scripts/arch-blocks.ts",
+    "facts:report": "tsx src/scripts/facts-report.ts",
     "sandbox:coverage": "tsx src/scripts/probe-exercise-coverage.ts",
     "probe:code-exercise": "tsx src/scripts/probe-code-exercise.ts",
     "graph:diff": "tsx src/scripts/precise-graph-diff.ts",

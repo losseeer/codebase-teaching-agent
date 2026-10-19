@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { CourseTree, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { CourseTree, FactKind, ImportEstimate, MasteryRecord, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 8;
@@ -172,6 +172,20 @@ export const DATABASE_SCHEMA_SQL = `
         at TEXT NOT NULL,
         PRIMARY KEY(repository_id, path, model)
       );
+      -- 静态产物层（2026-10-19）：控制流图、数据流、类型关系、注册与配置索引，按文件一行。
+      -- 为什么不进 repository_state.analysis_json：那一列已经是大仓里最重的一块，而且它的指纹
+      -- （backendStamp）参与宏观润色的复用判定——把新产物塞进去等于每加一类分析就翻一次全仓的键。
+      -- 为什么不进 layer_cache：那张表每次写入都按 at 删掉 7 天前的行，而这里的东西是确定性重算的，
+      -- 只要源码没改就一直有效，被无关写入清掉就得白重算一遍。
+      -- 一文件一行而不是整仓一行：读侧只取要的那几个文件，不必把整仓的图解析一遍。
+      CREATE TABLE IF NOT EXISTS static_fact (
+        repository_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        path TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY(repository_id, kind, path)
+      );
       CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, created_at);
       CREATE INDEX IF NOT EXISTS chat_session_repo ON chat_session(repository_id, scope, deleted_at);
 `;
@@ -338,6 +352,46 @@ export class TutorDatabase {
 
   saveSettings(repositoryId: string, settings: Record<string, unknown>): void {
     this.upsert(repositoryId, { settings: JSON.stringify(settings) });
+  }
+
+  /**
+    写一批文件级静态产物。`replaceAll` 表示这批就是该产物的全集（整仓重算时用，删掉已消失文件的行）；
+    不传则是按文件增改——增量重分析只重写受影响文件的行，其余文件的产物仍然有效，不该跟着丢。
+  */
+  saveFileFacts(repositoryId: string, kind: FactKind, rows: { path: string; payload: unknown }[], options?: { replaceAll?: boolean }): void {
+    const insert = this.db.prepare("INSERT OR REPLACE INTO static_fact(repository_id, kind, path, payload, at) VALUES (?, ?, ?, ?, ?)");
+    const at = Date.now();
+    const tx = this.db.transaction((batch: { path: string; payload: unknown }[]) => {
+      if (options?.replaceAll) this.db.prepare("DELETE FROM static_fact WHERE repository_id = ? AND kind = ?").run(repositoryId, kind);
+      for (const row of batch) insert.run(repositoryId, kind, row.path, JSON.stringify(row.payload), at);
+    });
+    tx(rows);
+  }
+
+  getFileFact<T>(repositoryId: string, kind: FactKind, path: string): T | undefined {
+    const row = this.db.prepare("SELECT payload FROM static_fact WHERE repository_id = ? AND kind = ? AND path = ?").get(repositoryId, kind, path) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as T : undefined;
+  }
+
+  /** 整类产物按文件路径归堆（读侧与报表用；一行一文件，不必解析整仓的大 JSON）。 */
+  listFileFacts<T>(repositoryId: string, kind: FactKind): Map<string, T> {
+    const rows = this.db.prepare("SELECT path, payload FROM static_fact WHERE repository_id = ? AND kind = ? ORDER BY path").all(repositoryId, kind) as { path: string; payload: string }[];
+    return new Map(rows.map((row) => [row.path, JSON.parse(row.payload) as T]));
+  }
+
+  /** 某类产物各占多少文件、总共多少字节——「这项没做过」与「做了但都是空」在这里分开。 */
+  factCoverage(repositoryId: string): { kind: FactKind; files: number; bytes: number }[] {
+    const rows = this.db.prepare("SELECT kind, COUNT(*) AS files, SUM(LENGTH(payload)) AS bytes FROM static_fact WHERE repository_id = ? GROUP BY kind ORDER BY kind").all(repositoryId) as { kind: string; files: number; bytes: number }[];
+    return rows.map((row) => ({ kind: row.kind as FactKind, files: row.files, bytes: row.bytes ?? 0 }));
+  }
+
+  dropFileFacts(repositoryId: string, kind: FactKind, paths: string[]): void {
+    if (!paths.length) return;
+    const del = this.db.prepare("DELETE FROM static_fact WHERE repository_id = ? AND kind = ? AND path = ?");
+    const tx = this.db.transaction((batch: string[]) => {
+      for (const path of batch) del.run(repositoryId, kind, path);
+    });
+    tx(paths);
   }
 
   /**

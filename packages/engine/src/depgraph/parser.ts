@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { dirname, extname, join } from "node:path";
-import { Language, Parser } from "web-tree-sitter";
+import { Language, Parser, type Tree } from "web-tree-sitter";
 import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/shared";
 import { traceEngine } from "../trace/engine-log.js";
 
@@ -39,7 +39,7 @@ const GRAMMAR_FILES = {
   cpp: "tree-sitter-cpp.wasm"
 } as const;
 
-type GrammarName = keyof typeof GRAMMAR_FILES;
+export type GrammarName = keyof typeof GRAMMAR_FILES;
 
 /** 语法选择按扩展名：`.jsx` 用 tsx 语法（JSX 是它的子集，纯 JS 语法解析不了 JSX）。 */
 function grammarOf(path: string): GrammarName | undefined {
@@ -68,7 +68,44 @@ function languageOf(path: string): SymbolInfo["language"] {
   return language as SymbolInfo["language"];
 }
 
-type SyntaxNode = NonNullable<ReturnType<Parser["parse"]>>["rootNode"];
+export type SyntaxNode = NonNullable<ReturnType<Parser["parse"]>>["rootNode"];
+
+/**
+  解析一份源码并交出一棵语法树供遍历，**遍历完立即释放**（`tree.delete()`）。
+
+  这一层是唯一的解析出口：符号抽取、模板串行号、控制流图都从这里要树。原来各处自己
+  `parser.parse()` 一份就走，其中符号抽取那条不释放——一个仓两千个文件就是两千棵留在
+  WASM 堆上的树，产物层再加一遍遍历会把它放大成看得见的内存问题。
+*/
+export function withSyntaxTrees<T>(path: string, content: string, visit: (root: SyntaxNode, grammar: GrammarName) => T): T[] | undefined {
+  if (!parser) return undefined;
+  if (path.endsWith(".vue")) {
+    const blocks = vueScriptBlocks(content);
+    if (!blocks.length) return [];
+    const out: T[] = [];
+    for (const block of blocks) {
+      const tree = parse(block.ts ? "tsx" : "javascript", padVueBlock(content, block));
+      if (!tree) return undefined;
+      out.push(visit(tree.rootNode, block.ts ? "tsx" : "javascript"));
+      tree.delete();
+    }
+    return out;
+  }
+  const grammar = grammarOf(path);
+  if (!grammar) return undefined;
+  const tree = parse(grammar, content);
+  if (!tree) return undefined;
+  const result = visit(tree.rootNode, grammar);
+  tree.delete();
+  return [result];
+}
+
+function parse(grammar: GrammarName, source: string): Tree | undefined {
+  const language = grammars.get(grammar);
+  if (!parser || !language) return undefined;
+  parser.setLanguage(language);
+  return parser.parse(source) ?? undefined;
+}
 
 let loading: Promise<ParseBackendStatus> | undefined;
 let status: ParseBackendStatus = { backend: "regex", reason: "语法解析器尚未加载" };
@@ -258,23 +295,12 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
   for (const child of node.namedChildren) collectSymbols(child, path, childInClass, out);
 }
 
-function parseAndCollect(path: string, content: string, grammar: GrammarName): SymbolInfo[] | undefined {
-  const language = grammars.get(grammar);
-  if (!parser || !language) return undefined;
-  parser.setLanguage(language);
-  const tree = parser.parse(content);
-  if (!tree) return undefined;
-  const symbols: SymbolInfo[] = [];
-  collectSymbols(tree.rootNode, path, false, symbols);
-  return symbols;
-}
-
 /**
   Vue 单文件组件没有专属语法，但 `<script>` 块本体就是 JS/TS：把块外的行换成空行原地垫出来
   （模板/样式不会误进语法树，块内节点的 `startPosition.row` 天然就是全文件行号），
-  再走现有 tsx/js 语法。无语法树可用时返回 undefined，交调用方回落逐行匹配。
+  再走现有 tsx/js 语法。
 */
-function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefined {
+function vueScriptBlocks(content: string): { start: number; end: number; ts: boolean }[] {
   const lines = content.split("\n");
   const blocks: { start: number; end: number; ts: boolean }[] = [];
   let start: number | undefined;
@@ -287,17 +313,16 @@ function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefin
       start = undefined;
     }
   }
-  if (!blocks.length) return [];
-  const out: SymbolInfo[] = [];
-  for (const block of blocks) {
-    // 垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行**不带**换行符，`join("\n")` 会在垫子与正文之间
-    // 再补一个，合起来正好 `start` 个换行 ⇒ 块内第一行仍落在原文件的第 start 行，节点行号不用二次换算
-    const padded = ["\n".repeat(Math.max(0, block.start - 1)), ...lines.slice(block.start, block.end), "\n".repeat(lines.length - block.end)].join("\n");
-    const symbols = parseAndCollect(path, padded, block.ts ? "tsx" : "javascript");
-    if (!symbols) return undefined;
-    out.push(...symbols);
-  }
-  return out;
+  return blocks;
+}
+
+/**
+  垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行**不带**换行符，`join("\n")` 会在垫子与正文之间
+  再补一个，合起来正好 `start` 个换行 ⇒ 块内第一行仍落在原文件的第 start 行，节点行号不用二次换算。
+*/
+function padVueBlock(content: string, block: { start: number; end: number }): string {
+  const lines = content.split("\n");
+  return ["\n".repeat(Math.max(0, block.start - 1)), ...lines.slice(block.start, block.end), "\n".repeat(lines.length - block.end)].join("\n");
 }
 
 /**
@@ -309,25 +334,18 @@ function vueScriptSymbols(path: string, content: string): SymbolInfo[] | undefin
   返回 undefined 的语义与 `extractSymbolsFromAst` 同一口径：解析器没就绪或这语言没有语法，调用方自己决定退路。
 */
 export function extractMultilineTemplateLines(path: string, content: string): Set<number> | undefined {
-  if (!parser) return undefined;
-  const grammar = grammarOf(path);
-  if (!grammar) return undefined;
-  const language = grammars.get(grammar);
-  if (!language) return undefined;
-  parser.setLanguage(language);
-  const tree = parser.parse(content);
-  if (!tree) return undefined;
   const lines = new Set<number>();
-  const walk = (node: SyntaxNode): void => {
+  const found = withSyntaxTrees(path, content, (root) => {
     // tree-sitter 的 TS/JS 语法里模板串是 template_string；`string` 是普通引号串（单行，不需要占行号）
-    if (node.type === "template_string" && node.startPosition.row !== node.endPosition.row) {
-      for (let line = node.startPosition.row + 1; line <= node.endPosition.row; line += 1) lines.add(line);
-    }
-    for (const child of node.namedChildren) walk(child);
-  };
-  walk(tree.rootNode);
-  tree.delete();
-  return lines;
+    const walk = (node: SyntaxNode): void => {
+      if (node.type === "template_string" && node.startPosition.row !== node.endPosition.row) {
+        for (let line = node.startPosition.row + 1; line <= node.endPosition.row; line += 1) lines.add(line);
+      }
+      for (const child of node.namedChildren) walk(child);
+    };
+    walk(root);
+  });
+  return found ? lines : undefined;
 }
 
 /**
@@ -335,9 +353,10 @@ export function extractMultilineTemplateLines(path: string, content: string): Se
   而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
 */
 export function extractSymbolsFromAst(path: string, content: string): SymbolInfo[] | undefined {
-  if (!parser) return undefined;
-  if (path.endsWith(".vue")) return vueScriptSymbols(path, content);
-  const grammar = grammarOf(path);
-  if (!grammar) return undefined;
-  return parseAndCollect(path, content, grammar);
+  const perTree = withSyntaxTrees(path, content, (root) => {
+    const symbols: SymbolInfo[] = [];
+    collectSymbols(root, path, false, symbols);
+    return symbols;
+  });
+  return perTree?.flat();
 }

@@ -923,6 +923,80 @@ export interface ImpactResult {
   edges: { from: string; to: string; kind: "import" | "call" }[];
 }
 
+/**
+  ==== 静态产物层（facts）====
+
+  依赖图回答「谁指向谁」，这一层回答**单个函数内部**的事：控制流、数据流、类型关系、注册与配置。
+  它们与图同源（都出自同一份语法树），但形状完全不同，所以**单独存一张按文件分片的表**，
+  既不写进 `analysis_json`（那是最重的一列），也**不参与任何缓存键与 `backendStamp`**——
+  否则加一类产物就把已导入的仓全部翻键重烧（红线探针 `pnpm arch:keyprobe` 钉这条）。
+
+  三条口径，破了就等于这份产物在说谎：
+  1. `backend: "none"` 与「这个文件真没有分支」是两件事，必须分开。语法树没就绪、或这个构造
+     引擎还没写规则，都落到 `skipped` 里点名，不许静默交一张空图。
+  2. 超大函数按 `truncated` 留痕，不悄悄砍。
+  3. 每类产物都要在语言能力表里有自己的一格，逐语言照实填——没有规则就填 `unsupported`。
+*/
+export const FACT_KINDS = ["cfg", "dataflow", "typeRelations", "registry"] as const;
+
+export type FactKind = (typeof FACT_KINDS)[number];
+
+export type FactBackend = "ast" | "none";
+
+/** 一个没被算出来的构造：名字 + 说得出口的原因（与 `RepositoryIndex.unreadable` 同一口径）。 */
+export interface FactSkip {
+  name: string;
+  reason: string;
+}
+
+/** 每类产物共有的四格：哪个文件、按哪门语言的语法树算的、算得成不成、哪一版判据算的。 */
+export interface FactFileBase {
+  path: string;
+  language: string;
+  backend: FactBackend;
+  /** 产出这份读数的分析器版本：形状改了要 bump，读侧据此区分旧行，不拿旧形状当新结论 */
+  version: string;
+}
+
+/** 控制流图的一个节点：一串顺序执行的语句，或一个判定。 */
+export interface CfgBlock {
+  id: number;
+  kind: "entry" | "straight" | "branch" | "loop" | "selector" | "handler" | "exit";
+  startLine: number;
+  endLine: number;
+  /** 块内语句的语法节点类型（原样、不去重）：块有多"厚"与它由什么构成，靠这一列判 */
+  statements: string[];
+}
+
+export type CfgEdgeKind = "next" | "true" | "false" | "back" | "exception" | "finally";
+
+export interface CfgEdge {
+  from: number;
+  to: number;
+  kind: CfgEdgeKind;
+}
+
+export interface CfgFunction {
+  /** 与 `SymbolInfo.id` 同格式，调用边按同一个键引用它 */
+  symbolId: string;
+  name: string;
+  kind: SymbolInfo["kind"];
+  startLine: number;
+  endLine: number;
+  blocks: CfgBlock[];
+  edges: CfgEdge[];
+  /** 没有后继的块（正常返回、隐式落到函数尾）——图上要能看出这个函数从哪儿出去 */
+  exitBlocks: number[];
+  /** 圈复杂度 = 判定节点数 + 1（分支、循环、switch 分支、catch 各计一格） */
+  complexity: number;
+  truncated?: boolean;
+}
+
+export interface CfgFileFact extends FactFileBase {
+  functions: CfgFunction[];
+  skipped?: FactSkip[];
+}
+
 export interface ImplementationUnit {
   id: string;
   symbol: SymbolInfo;

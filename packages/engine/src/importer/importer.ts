@@ -20,6 +20,7 @@ import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
+import { collectFileFacts, saveFileFacts } from "../facts/index.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { catalogRepositoryId, hash, id } from "../identity.js";
@@ -604,6 +605,15 @@ export class ImportService extends EventEmitter {
     };
     handle.db.saveCourse(course, estimate);
     handle.db.saveAnalysis(analysis);
+    // 静态产物层（控制流图等）：纯本地计算、零 token，失败绝不能掀掉这次导入——
+    // 但必须说出口，否则「这一类产物没有」会被后面读成「这个仓的函数都没分支」
+    try {
+      saveFileFacts(handle.db, index.repositoryId, collectFileFacts(repositoryPath, index.files, graph.symbols));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[engine] 静态产物层没算完（${reason}）：依赖图与摘要不受影响，但这次没有控制流图`);
+      traceEngine("degrade", { component: "facts", repositoryId: index.repositoryId, reason }, { traceId: null });
+    }
     return { path: repositoryPath, index, course, estimate, analysis, handle };
   }
 

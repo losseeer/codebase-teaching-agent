@@ -27,7 +27,8 @@
     "search:embed": "pnpm --filter @codebase-tutor/engine search:embed",
     "cache:probe": "pnpm --filter @codebase-tutor/engine cache:probe",
     "graph:diff": "pnpm --filter @codebase-tutor/engine graph:diff",
-    "calls:diff": "pnpm --filter @codebase-tutor/engine calls:diff"
+    "calls:diff": "pnpm --filter @codebase-tutor/engine calls:diff",
+    "facts:report": "pnpm --filter @codebase-tutor/engine facts:report"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.1",
