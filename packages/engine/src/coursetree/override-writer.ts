@@ -14,8 +14,8 @@ import { id } from "../identity.js";
   两层挡的是同一件事：`set_architecture` 是全仓第一个有副作用的工具。
 */
 
-export const TIER_VALUES = ["core", "facility", "periphery"] as const;
-export type TierValue = (typeof TIER_VALUES)[number];
+const TIER_VALUES = ["core", "facility", "periphery"] as const;
+type TierValue = (typeof TIER_VALUES)[number];
 
 /** 形状的权威在 shared（GUI 的拖动与工具走同一个线上形状），这里只是别名。 */
 export type OverrideIntent = ArchitectureOverrideIntent;

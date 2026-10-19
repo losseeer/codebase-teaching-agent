@@ -164,7 +164,7 @@ export function aggregateModuleEdges(filesByModule: Map<string, string[]>, impor
 }
 
 /** 归层结果定了之后才算箭头：模型不许发明边，边只能从这张表出来（画布虽不画，产物与审计仍要用）。 */
-export function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, string[]>, imports: Record<string, string[]>): ArchitectureEdge[] {
+function layerEdges(layers: ArchitectureLayer[], filesByModule: Map<string, string[]>, imports: Record<string, string[]>): ArchitectureEdge[] {
   const layerOfModule = new Map<string, string>();
   for (const layer of layers) for (const moduleId of layer.moduleIds) layerOfModule.set(moduleId, layer.id);
   const { pairs } = aggregateModuleEdges(filesByModule, imports);
@@ -462,7 +462,7 @@ export interface ArchitectureContext {
   units: ArchitectureUnits;
 }
 
-export function archContext(input: ArchitectureInput, modelVersion: string) {
+function archContext(input: ArchitectureInput, modelVersion: string) {
   const { repositoryId, course, analysis, index, overrides } = input;
   const servedEntryPaths = new Set((analysis.graph.entrypoints ?? []).filter(isServedEntrypoint).map((anchor) => anchor.path));
   const hotChanges = new Map(index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
