@@ -21,7 +21,7 @@ import type { FastifyInstance } from "fastify";
 
 /**
   三作用域对话中的两个（宏观设计 / 练习答疑）：JSON 与 SSE 两条 map-chat、practice-chat、以及带外的「停止生成」。
-  `scopedChatProviderOr422` 是这一组的开火闸门，四个消费方（含教学回合）共用同一句 422 文案。
+  开火闸门 `scopedChatProviderOr422` 由四个消费方（含教学回合）共用同一句 422 文案。
  */
 export function registerChatRoutes(app: FastifyInstance): void {
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: unknown; threadId?: unknown; style?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat", async (request, reply) => {
@@ -30,19 +30,19 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
   const turn = scopedThreadTurn(repository, sanitizeThreadId(request.body?.threadId), "map");
-  // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝：一个干净的 409 比「模型拿错上下文自信作答」便宜得多
+  // 线程无效（跨仓库 / 跨作用域 / 已软删）在开火前拒绝，回干净的 409
   if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
   // 线程就地标注：llm.log 的每条 provider 调用都带上它，前缀缓存才能按「同一线程相邻两轮」算间隔
   markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.handle);
   if (!provider) return reply;
   const node = request.body?.nodeId ? flattenCourseTree(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
-  // 覆盖层的读写要一条库连接；工具闭包与回合共用它，收尾统一 close（句柄泄漏的旧坑见 §37.4）
+  // 覆盖层的读写要一条库连接：工具闭包与回合共用它，收尾统一 close
   const overlayDatabase = repository.handle.pin();
   try {
     const crossFiles = new Map<string, number>();
     const toolContext = architectureToolFor(repository, overlayDatabase, turn.threadId);
-    // 这一回合真写过哪张图：回话带回去，界面上那张图卡片才有依据（拒写不算写过）
+    // 这一回合真写过哪张图（拒写不算写过）：回话带回去，界面上那张图卡片才有依据
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const factsContext = factsToolFor(repository, overlayDatabase);
@@ -57,10 +57,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
 });
 
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
-    为什么单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动/刷新页面——
-    后者引擎必须把这一轮**算完并落库**，用户回来才有账可补（见 turns/registry.ts）。
-    未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。
-    认证闸撤了之后**这台机器上谁都能停任何回合**（原来按 key 归属判的那道 403 一起没了，§64）。 */
+    单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动 / 刷新页面，
+    后者引擎必须把这一轮算完并落库（见 turns/registry.ts）。
+    未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。 */
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
   const stopped = abortTurn(request.body?.turnId);
   if (!stopped.aborted) {
@@ -103,7 +102,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
-    // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
+    // 中止若晚于最后一趟 LLM 到达，这一轮照样作废：不落库也不回放（与教学回合同一口径）
     if (turnHandle.signal?.aborted) {
       recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", threadId: turn.threadId, audits: auditsFromResult(result) });
       throw new LlmAbortedError();
@@ -115,7 +114,6 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
-    // 与 JSON 那条同一个收尾：这条库句柄是给两个写工具闭包用的，不关就是每个回合漏一个 fd（better-sqlite3 还带 WAL）
     repository.handle.unpin();
   }
   reply.raw.end();
@@ -130,13 +128,12 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   const threadId = sanitizeThreadId(request.body?.threadId);
   const thread = threadId ? scopedThread(repository, threadId, "practice") : undefined;
   if (threadId && !thread) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的练习作用域；请新建会话后再问。" });
-  // 线程绑题（exercise_id 由 GUI 建线程时给出）：换题走新建线程，这里兜住「拿着 A 题的会话问 B 题」——
-  // 上一题的解答混进本轮上下文，模型会把两道题的条件揉在一起作答
+  // 线程绑题（exercise_id 由 GUI 建线程时给出）：换题走新建线程，这里拒掉「拿着 A 题的会话问 B 题」
   if (thread?.exerciseId && thread.exerciseId !== request.body.exerciseId) return reply.code(409).send({ error: "该会话属于另一道练习；请新建会话后再追问。" });
   markThread(thread?.id);
   const provider = scopedChatProviderOr422(reply, repository.handle);
   if (!provider) return reply;
-  // 练习查询留在 hijack 前：404 还是干净的 JSON，只有确定要开火了才切 SSE
+  // 练习查询留在 hijack 前：404 还是干净的 JSON，确定要开火了才切 SSE
   const database = repository.handle.pin();
   let stored: { exercise: Exercise } | undefined;
   try {
@@ -150,13 +147,12 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
-    // 与教学回合同款收尾：中止若晚于最后一趟 LLM 到达，这一轮照样作废，不落库也不回放
     if (turnHandle.signal?.aborted) {
       recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
       throw new LlmAbortedError();
     }
     const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：练习答疑也运行时内——它同样会引用仓库里的代码位置
+    // 运行期复检（零 token）先于落库与回放：练习答疑同样会引用仓库里的代码位置，尾注要进同一份正文
     result.reply = recheckTurn({ repository, journal, sessionId: thread?.id, scene: "practice_chat", question: content, answer: result.reply }).answer;
     persistScopedTurn(repository.path, "practice_chat", thread?.id, content, result.reply);
     if (result.usage) journal.append("token_usage", {

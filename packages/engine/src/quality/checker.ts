@@ -11,10 +11,8 @@ function linesOf(cache: LineCache, repositoryPath: string, relativePath: string)
 }
 
 /**
-  锚点首行有没有把这个符号**作为完整词**写出来。
-  以前测的是「名字出现在定义区间里的任意位置」——那是个近乎必然成立的条件（递归调用、注释里提一句都算），
-  于是 `verified` 这个词盖在了一个什么都没证明的判据上。首行 + 词边界才真的能回答「索引记的这一行是不是它的定义行」：
-  文件被挪动过、行号漂了，这里就会掉下来。
+  锚点首行有没有把这个符号作为完整词写出来。
+  首行 + 词边界才回答得了「索引记的这一行是不是它的定义行」：文件被挪动过、行号漂了，这里就会掉下来。
   */
 function declaresAtAnchor(headLine: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -23,9 +21,8 @@ function declaresAtAnchor(headLine: string, name: string): boolean {
 
 export interface VerifyOptions {
   /**
-    墙钟预算（ms）。**真的是个截止时刻**：到点就停在下一条之前，已经跑出来的部分照常返回去，
+    墙钟预算（ms）。真的是个截止时刻：到点就停在下一条之前，已经跑出来的部分照常返回去，
     并在 `skippedBecause` 里说清还剩多少没跑。
-    以前这个参数只有「`< 1`」这一种取值会被读到，调用方以为自己拿到了 2.5 秒预算，实际什么约束都没有。
     */
   timeoutMs?: number;
   /** 测试用：直接模拟「预算归零」那条分支。 */
@@ -70,8 +67,8 @@ function verifyUnit(repositoryPath: string, unit: ImplementationUnit, cache: Lin
   const { symbol } = unit;
   const anchors = [{ path: symbol.path, line: symbol.line, endLine: symbol.endLine, label: "实现定义" }];
   /**
-    读不到就按「待确认」交出去，不抛：`verifyAnalysis` 跑在导入的中途，一个索引之后被删/权限不对的文件
-    不该掀掉整次导入（与 `verifyNode` 的抽样兜底、扫描层 §37.3 同一条口径）。
+    读不到就按「待确认」交出去，不抛：`verifyAnalysis` 跑在导入的中途，
+    一个索引之后被删或权限不对的文件不该掀掉整次导入。
     */
   const lines = linesOf(cache, repositoryPath, symbol.path);
   if (!lines) {

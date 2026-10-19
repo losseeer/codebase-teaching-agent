@@ -1,15 +1,7 @@
 /**
-  零 token、只读：对一个**已导入**的仓现场跑一遍函数级分析（控制流图 + 数据流），只打印读数、不写任何东西。
-
+  零 token、只读：对已导入的仓现场跑一遍函数级分析（控制流图 + 数据流），只打印读数、不写任何东西。
   用法：pnpm facts:report /absolute/path/to/repository
-
-  为什么值得单独有一个脚本：这类分析的代价必须先数清楚再决定接不接进导入流程——
-  它要给多少个文件出图、一个仓的产物有多大、哪些函数画不出来。
-
-  ⚠️ 符号**现读现算**（`extractSymbolsFromAst`），不取库里的 `analysis.graph.symbols`：
-  本仓这类天天在改的仓，库里的符号表是上一次导入时的行号，拿它比今天的文件会造出一堆
-  「对不上」的假事故（第一版就这么误判过一次）。生产路径在同一次导入里建符号表再建图，
-  两边天然同 vintage；这里照同一口径来，读数才可比。
+  接进导入流程之前要先数清代价：要给多少个文件出图、一个仓的产物有多大、哪些函数画不出来。
 */
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -61,12 +53,12 @@ const note = (reason: string): void => void skips.set(reason, (skips.get(reason)
 const allSymbols: SymbolInfo[] = [];
 const parsed = new Map<string, { content: string; symbols: SymbolInfo[] }>();
 
-// 两趟：先把全仓符号收齐，再逐文件算产物。落点反查必须拿**整仓**的符号表——
-// 只给当前文件那一份，类型边几乎全都「查不到仓内声明」，读数会说谎
-// （探针与产品不同口径、输入不同 vintage，是复审里反复栽过的坑）。
+// 两趟：先把全仓符号收齐，再逐文件算产物。符号现读现算（`extractSymbolsFromAst`），不取库里的
+// `analysis.graph.symbols`：那是上次导入时的行号，比今天的文件会造出一堆假「对不上」。
+// 落点反查必须拿整仓符号表，只给当前文件那一份几乎全都查不到声明——与产品同口径，读数才可比。
 for (const file of index.files) {
-  // 与产品同一道闸门：没有语法的文件（配置、样式、文档）根本不进产物层，
-  // 探针要是把它们算进「没规则」那一栏，读数就比产品难看得多，两边对不上
+  // 与产品同一道闸门：没有语法的文件（配置、样式、文档）不进产物层，
+  // 把它们算进「没规则」那一栏会让两边对不上
   if (!graphExtensions.includes(file.extension.toLowerCase()) && !registryEligible(file.path, false)) continue;
   const absolute = join(repositoryPath, file.path);
   if (!existsSync(absolute)) {
@@ -91,7 +83,7 @@ for (const [path, entry] of [...parsed.entries()].sort()) {
   const facts = analyzeFile(path, content, symbols, language, allSymbols);
   const cfg = facts.cfg;
   if (!graphExtensions.includes(path.slice(path.lastIndexOf(".")).toLowerCase())) {
-    // 清单与 SPI：没有语法树，只有注册索引这一类产物，按产品同一口径记一笔
+    // 清单与 SPI：没有语法树，只有注册索引这一类产物
     registryEntries += facts.registry.entries.length;
     bytes += JSON.stringify(facts.registry).length;
     for (const entry of facts.registry.entries) registryKinds.set(entry.kind, (registryKinds.get(entry.kind) ?? 0) + 1);

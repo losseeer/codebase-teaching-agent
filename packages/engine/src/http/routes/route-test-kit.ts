@@ -11,11 +11,10 @@ import { readJournal } from "../../store/journal.js";
 import { readMessages } from "../../store/chat-store.js";
 
 /**
-  路由级测试的共用夹具（`server-routes.test.ts` 按路由分组拆开时抽出来的那一份）。
-  它管四件事：一份行号可预期的临时仓与地址簿、假 provider、journal/chat_message 的读回口径，
-  以及「每一次 provider 调用都带得上线程」这条账面核对。
+  路由级测试的共用夹具。它管四件事：一份行号可预期的临时仓与地址簿、假 provider、
+  journal/chat_message 的读回口径，以及「每一次 provider 调用都带得上线程」这条账面核对。
   产品数据一条都不碰：注册表、llm.log、llm-settings 全指到本夹具自己的临时目录，
-  而且**必须早于 import server**（provider 在构造时就把 fetch 绑成了实例字段）。
+  而且必须早于 import server（provider 在构造时就把 fetch 绑成了实例字段）。
 
   零 token：服务商指向 127.0.0.1:9（打不到的端口），一切正文由 `scripted` 给定。
   每个用例文件各拿一个实例——`process.env`、`sentTools`、`usedThreads` 都不跨文件串。
@@ -27,7 +26,7 @@ export const OK_REPLY = `先看 ${MAIN_FILE}:3 的 registerOrder，你觉得哪�
 /** 尾注里独有的词（文案全文住在 eval/scorers.ts，这里只判「有没有出现」） */
 export const TAIL = "自动复检";
 
-/** 轮询到条件成立；到点不成就带着「在等什么」失败，而不是悄悄跳过。 */
+/** 轮询到条件成立；到点不成就带着「在等什么」失败。 */
 export async function waitFor(predicate: () => boolean, why: string, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -54,8 +53,7 @@ export function doneEvent(events: Record<string, unknown>[]): Record<string, unk
 /** llm.log 里属于「会话回合」的那三档：只有这些行必须带 threadId。 */
 const TURN_SCENES = new Set(["map.chat", "practice.chat", "teaching.turn"]);
 
-/** 决策调用（动作提议 / 意图分类）单独回：它的正文只被解析成动作标签，
-    喂对话正文进去会被解析成一个真动作、把状态机推进，后续断言就跟着阶段漂了。 */
+/** 决策调用（动作提议 / 意图分类）单独回：它的正文只被解析成动作标签，喂对话正文进去会被解析成一个真动作。 */
 function decisionCall(raw: string): boolean {
   return raw.includes("动作决策器") || raw.includes("意图分类");
 }
@@ -63,7 +61,7 @@ function decisionCall(raw: string): boolean {
 export interface RouteFixture {
   readonly root: string;
   readonly repoDir: string;
-  /** 仓与地址簿建好之后才 import server；没挂上就用 = 用例当场红，而不是悄悄打到别人的 app 上。 */
+  /** 仓与地址簿建好之后才 import server；没挂上就用 = 用例当场红。 */
   app: FastifyInstance;
   repositoryId: string;
   exerciseId: string;
@@ -73,10 +71,9 @@ export interface RouteFixture {
   spoken: string;
   /** 让假 provider 在途一会儿：「停止生成」的用例得赶在 LLM 返回之前打进 `/api/turns/stop`。 */
   holdMs: number;
-  /** 在**本回合第 N 趟请求返回之前**替用户点停止。计数只认带 `marker`（这一回合的问题原文）的请求——
-      全局调用序号会被任何别处多发的一发挪走（CI 上实测被这条坑过一次）。 */
+  /** 在本回合第 N 趟请求返回之前替用户点停止。计数只认带 `marker`（这一回合的问题原文）的请求——全局调用序号会被别处多发的一发挪走。 */
   stopInside: { turnId: string; marker: string; atCall: number; seen: number } | undefined;
-  /** 每次请求实际带上的工具清单（跨仓那档要验的就是它随不随地址簿变长）。 */
+  /** 每次请求实际带上的工具清单（跨仓那档要验的是它随不随地址簿变长）。 */
   readonly sentTools: { names: string[]; raw: string }[];
   /** 本文件真正用过的线程 id（teach 的 sessionId 也算线程）：与 llm.log 里的 threadId 集合做全等比对。 */
   readonly usedThreads: Set<string>;
@@ -144,8 +141,7 @@ export function createRouteFixture(): RouteFixture {
       expect(stopped.json()).toMatchObject({ stopped: true });
     }
     const text = replyFor(raw);
-    // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具**实际被拒的是什么**从此能被端到端验，
-    // 不用只停在「清单里有这一项」
+    // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具实际被拒的是什么，从此能端到端验
     const call = /^@@tool (\S+) (.*)$/s.exec(text);
     const payload = {
       choices: [{ message: call ? { content: "", tool_calls: [{ id: `call_${fetchCalls}`, type: "function", function: { name: call[1], arguments: call[2] } }] } : { content: text }, finish_reason: call ? "tool_calls" : "stop" }],
@@ -176,8 +172,7 @@ export function createRouteFixture(): RouteFixture {
         id: "root", title: "测试课程", summary: "路由级测试用课程树", kind: "overview", anchors: [],
         children: [
           { id: "unit-1", title: "注册顺序", summary: "builder 先注册再分发。", kind: "implementation", anchors: [{ path: MAIN_FILE, line: 3, label: "入口" }], children: [] },
-          // 真仓的文档节点确实挂在课程树上（dianping 的 README 与 backend-design.md 都是树里的模块），
-          // 推荐入口这条路由要把它们挡在候选之外，所以 fixture 得先有它，否则下面的断言是空的。
+          // 推荐入口要把文档节点挡在候选之外，所以 fixture 得先有文档节点，否则下面的断言是空的通过
           { id: "unit-doc", title: "设计文档", summary: "秒杀方案记录。", kind: "module", anchors: [{ path: "docs/design.md", line: 1, label: "文档" }], children: [] },
           // 架构视图这路的 fixture：`modules` 分支是它的模块清单来源（与 GUI 的模块地图同一个 id）
           {
@@ -216,7 +211,7 @@ export function createRouteFixture(): RouteFixture {
     });
     database.close();
 
-    // 引擎的四条产品数据落点全部改指临时目录（各自的 env 注释见对应模块）
+    // 引擎的产品数据落点全部改指临时目录（各自的 env 注释见对应模块）
     process.env.TUTOR_REGISTRY_FILE = join(root, "registry.json");
     writeFileSync(process.env.TUTOR_REGISTRY_FILE, `${JSON.stringify({ repositories: [repoDir] }, null, 2)}\n`, "utf8");
     process.env.TUTOR_LLM_SETTINGS_FILE = join(root, "llm-settings.json");
@@ -224,7 +219,7 @@ export function createRouteFixture(): RouteFixture {
     process.env.TUTOR_LLM_LOG = join(root, "llm.log");
     process.env.TUTOR_ENGINE_LOG = "off";
 
-    // 必须早于 import server：provider 在构造时就把 fetch 绑成了实例字段
+    // 必须早于 import server（理由见本文件开头的夹具说明）
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
     ({ app: fx.app } = await import("../../server.js"));
   };
@@ -269,16 +264,15 @@ export function createRouteFixture(): RouteFixture {
     await flushLlmLog();
     const lines = readFileSync(join(root, "llm.log"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(lines.length).toBe(fetchCalls);
-    // `teaching.action` 这一档随教学状态机一起没了：问答回合每个回合只发一趟措辞调用
+    // 问答回合每个回合只发一趟措辞调用，没有别的教学档
     expect(new Set(lines.map((line) => line.scene))).not.toContain("teaching.action");
     for (const scene of options.scenes ?? []) expect(lines.map((line) => line.scene), `llm.log 里少了 ${scene} 这一档`).toContain(scene);
     // 中止的用例会把请求真打断（provider 收 AbortError），那是唯一允许的 fail 行；其余任何失败都是回归
     const failed = lines.filter((line) => line.ok !== true);
     if (options.expectAborted) expect(failed.length, "中止用例应该各留下一行 fail（一行都没有就是那条用例空转了）").toBeGreaterThan(0);
     expect(failed.every((line) => String(line.error).includes("已被中止")), `llm.log 里出现了非中止的失败：${JSON.stringify(failed.map((line) => line.error))}`).toBe(true);
-    // 回合调用都标了线程：日志里**回合那一档**的线程集合 == 本文件真正问过的线程集合。
-    // 只筛这三档是因为分析类调用（分层、推荐入口、流程）本来就不属于任何会话线程——
-    // 这条判据以前靠「日志检查恰好排在那些 describe 之前」成立，拆文件之后必须把它说清楚。
+    // 回合那一档的线程集合 == 本文件真正问过的线程集合；
+    // 只筛这三档，是因为分析类调用（分层、推荐入口、流程）本来就不属于任何会话线程
     const turnLines = lines.filter((line) => TURN_SCENES.has(String(line.scene)));
     expect(new Set(turnLines.map((line) => line.threadId))).toEqual(fx.usedThreads);
     expect(turnLines.every((line) => typeof line.threadId === "string" && line.threadId.length > 0), "有回合调用没带 threadId：前缀缓存按线程算间隔就读不到").toBe(true);

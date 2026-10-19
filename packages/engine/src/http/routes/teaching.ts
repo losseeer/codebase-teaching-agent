@@ -24,7 +24,6 @@ import type { FastifyInstance } from "fastify";
 
 /**
   教学会话的建立与回合（SSE）：会话即线程，回合收尾要落正文、用量、复检与审计。
-  这一域没有本地兜底那一档——没配模型或预算已达上限就在开火前 422。
  */
 export function registerTeachingRoutes(app: FastifyInstance): void {
 app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
@@ -65,12 +64,11 @@ app.get<{ Params: { repositoryId: string }; Querystring: { nodeId?: string } }>(
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const current = resolveTeachingState(request.params.sessionId);
   if (!current || !request.body?.content?.trim()) return reply.code(400).send({ error: "会话或消息无效" });
-  // 教学侧的 sessionId 就是 chat_session 的线程 id（一个 id 三个名字），llm.log 直接沿用它做线程聚合
+  // 教学侧的 sessionId 就是 chat_session 的线程 id，llm.log 直接沿用它做线程聚合
   markThread(current.id);
   /**
-    同上：URL 里没有 `:repositoryId`，钩子够不到，这里补挂一次。
-    会话还活在内存里、它的仓却已被 LRU 驱逐时，继续聊该像别的仓路由那样把它挂回来，
-    而不是回一句「课程节点不可用」——那会把一次正常追问判成产物丢失，用户只会去重新导入（花钱）。
+    URL 里没有 `:repositoryId`，懒挂载钩子够不到，这里补挂一次：
+    会话还活在内存里、它的仓却已被 LRU 驱逐时，应该像别的仓路由那样把它挂回来，而不是回一句「课程节点不可用」。
     */
   const mounted = importer.ensureMounted(current.repositoryId);
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
@@ -81,14 +79,13 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
   const session = { ...current, style: settings.style, settings };
-  // 闸门与 map/practice 同一条：没配模型、或本月预算已达到预算上限，就在开火前 422。
-  // 教学状态机撤掉之后这一域**不再有本地兜底那一档**——「看起来答完了、其实没走模型」是这条线上最难查的事故形状。
+  // 与 map/practice 同一条闸门：没配模型、或本月预算已达到上限就在开火前 422，这一域没有本地兜底那一档
   const gate = budgetGate(repository.handle);
   const provider = scopedChatProviderOr422(reply, repository.handle, gate);
   if (!provider) return reply;
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
-  // 与 map/practice 同款 SSE：过程提示 + delta 回放并入本请求的响应流（事件天然按请求隔离，连接断开自动清理）
+  // 与 map/practice 同款 SSE：过程提示与 delta 回放并入本请求的响应流
   const { send, turnHandle } = beginScopedStream(request, reply, "teach", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   try {
@@ -100,16 +97,15 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
-    // 中止可能赶在最后一趟 LLM 返回之后才到：那时没人抛错，这一轮会照常走到落库。
-    // 用户点了停止就按「作废」收尾——不落库、不回放，否则 GUI 那句「这一轮没有落库」成了假话，
-    // 下次进会话还会冒出一条自己中止的回复。断线（没点停止）才是另一条路：照常算完并落库，等着补账。
+    // 中止可能赶在最后一趟 LLM 返回之后才到，那时没人抛错：点了停止就按「作废」收尾，不落库、不回放；
+    // 断线（没点停止）才是另一条路，照常算完并落库
     if (turnHandle.signal?.aborted) {
       recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
       throw new LlmAbortedError();
     }
     const journal = new Journal(repository.path, repository.index.repositoryId);
-    // 运行期复检（零 token）：撤掉阶梯后教学回合也只剩「引用能不能落地」这一条有对象（另两条吃 stage/问句），
-    // 引用核不上就在正文尾部补一行明示，让「落库的正文 / 回放的正文 / journal 的 turn_text」是同一份。
+    // 运行期复检（零 token）先于落库与回放：引用核不上就在正文尾部补一行明示，
+    // 让落库的正文、回放的正文、journal 的 turn_text 是同一份
     outcome.assistant.content = recheckTurn({
       repository,
       journal,
@@ -126,11 +122,10 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       { role: "assistant", content: outcome.assistant.content }
     ], { settings: outcome.session.settings });
     if (styleChanged) journal.append("style_shift", { style: settings.style, pedagogy: settings.pedagogy, depth: settings.depth, trigger: "manual" }, session.id);
-    // 没有 `usage` 就是端点这趟没回报用量，**这一轮不进 token_usage**：
-    // 拿字数÷4 造一份估算进账本，等于让不存在的钱吃掉预算——达到预算上限后付费分支会被这些假账反过来关掉。
-    // 写成「有 usage 才记」还与 map/practice 三处同一口径；成本页的「计费回合」= token_usage 行数。
+    // 没有 `usage` 就是端点这趟没回报用量，这一轮不进 token_usage：估算值等于让不存在的钱吃掉预算，
+    // 反过来把付费分支关掉；「有 usage 才记」与 map/practice 同一口径
     if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
-    // 回合文本落盘（B 档第 2/3 刀的被测输入）：问题+回复双边，各截 2000 字并留痕
+    // 回合文本落盘：问题 + 回复双边，各截 2000 字并留痕
     journal.append("turn_text", turnTextPayload("teach", request.body.content.trim(), outcome.assistant.content), session.id);
     // 问答回合的 read_file 审计：与宏观设计作用域同一事件类型；同路径重复读取归并为一条
     for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
@@ -141,13 +136,12 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     }
     for (const call of outcome.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), session.id);
     for (const skill of outcome.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, session.id);
-    // 回合摘要：状态机那三列（decision/proposed/executed）随阶梯一起停写，这里只留工具循环的轮次与次数
+    // 回合摘要：只记工具循环的轮次与各类工具次数
     journal.append("loop_round", { scene: "teach", tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length, tool_external: (outcome.mcpCalls ?? []).length, tool_skills: (outcome.skillReads ?? []).length }, session.id);
     const cost = summarizeCost(repository.path, gate.monthlyBudgetUsd, session.id);
     replayTypewriter(send, outcome.assistant.content);
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider });
   } catch (error) {
-    // 用户点了停止：这一轮没有成品。不伪造 assistant 正文、不写 turn_text，只留一条中止痕迹
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", turnHandle, threadId: session.id, error, fallbackError: "教学回合失败" });
   } finally {
     turnHandle.dispose();

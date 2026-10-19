@@ -1,7 +1,7 @@
 /**
-  一次性判据重放（零 token、只读）：用真仓 tutor.db 里的存量摘要 + 当前结构切片，
-  对比「旧判据（整名默写过半）」与「新判据（anchor-v2 特征词锚定 any-of）」的 coverageLow 结论。
-  不写任何文件：DB 以 readOnly 打开。
+  判据重放（零 token、只读，不写任何文件）：用真仓 tutor.db 的存量摘要加当前结构切片，
+  对比被替换掉的整名默写判据与在用的 anchor-v2 特征词锚定判据各自的 coverageLow 结论。
+  DB 以 readOnly 打开。
 */
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -15,7 +15,7 @@ import { coverageOf } from "../summarizer/summarizer.js";
 const repositoryPath = resolve(process.argv[2] ?? "");
 if (!repositoryPath) throw new Error("Usage: pnpm tsx src/scripts/replay-coverage.ts /absolute/path/to/repository");
 
-// 旧判据的原样复刻（仅此处允许两份实现：它是「被替换前的度量」，不该进生产代码）
+// 被替换判据的原样复刻：仅此处允许两份实现，它不该进生产代码
 function legacyLow(path: string, names: string[], summary: string): boolean {
   const text = summary.toLowerCase().split(path.toLowerCase()).join(" ");
   const mentioned = names.filter((name) => text.includes(name.toLowerCase())).length;
@@ -38,7 +38,7 @@ for (const row of rows) {
   try {
     const parsed = JSON.parse(row.summary) as StoredRow;
     if (typeof parsed.path === "string" && typeof parsed.summary === "string" && !latest.has(parsed.path)) latest.set(parsed.path, parsed);
-  } catch { /* 非 JSON 旧行跳过 */ }
+  } catch { /* 非 JSON 行跳过 */ }
 }
 
 let oldLow = 0;

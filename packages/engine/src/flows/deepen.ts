@@ -4,46 +4,33 @@ import { executeReadFile } from "../source/read-file.js";
 import { recordEgress } from "../security/dataflow.js";
 
 /**
-  按需深入：主调用之后，对**模型自认是推断的**那些去向做一次有界的核实。
+  按需深入：主调用之后，对模型自认是推断的那些去向做一次有界的核实。
 
- 为什么需要这一步：流程视图存在的理由就是静态调用图看不见编排（`add_node("evaluate", evaluate)`、
-  路由表、依赖注入）。这类结构**在代码正文里看得见、在调用图上没有边**——所以「依赖图证不出来」
-  并不等于「代码里没有」。主调用没读正文（只有入口前 120 行），只能猜；这一步把那些文件的
-  **真实片段**给它看，让它要么给出可核对的依据（`origin: "code"` + 文件:行），要么承认仍不确定。
+  流程视图存在的理由就是静态调用图看不见编排（节点注册、路由表、依赖注入）。这类结构在代码正文里
+  看得见、在调用图上没有边——「依赖图证不出来」不等于「代码里没有」。主调用没读正文（只有入口前
+  120 行），只能猜；这一步把相关文件的真实片段给它看，让它要么给出可核对的依据（`origin: "code"` +
+  文件:行），要么承认仍不确定。
 
   三条硬边界：
-  1. **只读被问到的文件的窗口，起点由符号表给出**（不是随机读文件、不是整份正文）；
-  2. 条数与文件数都有上限（`MAX_DEEP_EDGES` / `MAX_DEEP_FILES`）；窗口是给定的，**问哪几条边**
-     按「文件被多少条推断边需要」加权选（09-22 修正：旧选择法按边迭代序拿前 3 个文件，一条流程的
-     6 条推断边常涉及十几个文件，多数边根本没读到正文——提示词又规定「没给片段一律判 inferred」，
-     等于注定白问）；窗口大小也按同一天的重放定：真仓 19 条 flow、136 条推断边，「端点全落窗口」
-     （唯一问得出来的边）在 3 文件窗口下只有 1 条，放宽到 5 是 13 条（成本口径见 `MAX_DEEP_FILES` 注释）；
-  3. **核实失败不损失流程**：解析不出、调用失败、引用对不上，都保留原边并把情况写进 caveats。
+  1. 只读被问到的文件的窗口，起点由符号表给出，不是整份正文；
+  2. 边数与文件数都有上限（`MAX_DEEP_EDGES` / `MAX_DEEP_FILES`），窗口是给定的；「问哪几条边」按
+     文件被多少条推断边需要加权选——没读到片段的边按提示词一律判 inferred，问也问不出东西；
+  3. 核实失败不损失流程：解析不出、调用失败、引用对不上，都保留原边并把情况写进 caveats。
 */
 
 /** 一次最多核实几条推断边。 */
 const MAX_DEEP_EDGES = 6;
-/**
-  一次最多读几个文件。读窗口才是这一步的成本大头，但真正的闸是下面的字符预算：
-  80 行窗口 × 5 文件已贴近 16k 上界，6 个只是被字符闸悄悄裁掉——这里放宽到 5 不增加最坏成本。
-*/
+/** 一次最多读几个文件。真正的成本闸是下面的字符预算，文件数放宽不会增加最坏成本。 */
 const MAX_DEEP_FILES = 5;
 /** 每个窗口的行数：够看清一个函数与它周边十几行即可。 */
 const DEEP_EXCERPT_LINES = 80;
-/**
-  所有窗口加起来的字符预算。行数上限管不住成本——`read_file` 的单次字闸是 12,000 字符，
-  三个文件最坏能凑出三万多字符（≈9k token），比主调用还贵。这里按字符收尾，保证这一步
-  永远是「有界的小调用」。
-*/
+/** 所有窗口加起来的字符预算：行数上限管不住成本，按字符收尾才能保证这一步是有界的小调用。 */
 const MAX_DEEP_CHARS = 16_000;
 /** 窗口从符号起始行往上多带几行，便于看到装饰器/注册语句。 */
 const DEEP_LEAD_LINES = 5;
 /**
-  核实环节的正文上限。900 是在非推理模型时代定的，DeepSeek 这类模型会把思考 token 也算进
-  `max_tokens`（provider 再加 `TUTOR_LLM_REASONING_HEADROOM`），2026-10-06 实测：
-  17 条流程里 3 条的核实趟被 6900 上限截断成正文为空，整条流程降级成静态调用链——
-  **钱照扣、产物不能用、而且降级不入缓存，下次打开还要再烧一遍**。
-  按「最坏思考 + 满额正文」留到 2400：这只是上限，模型用不到就不花钱。
+  核实环节的正文上限。推理模型会把思考 token 也算进 `max_tokens`（provider 另加
+  `TUTOR_LLM_REASONING_HEADROOM`），所以按「最坏思考 + 满额正文」留量；这只是上限，用不到就不花钱。
 */
 const DEEP_MAX_TOKENS = 2_400;
 const DEEP_SCENE = "map.flow.deep";
@@ -95,8 +82,8 @@ export function parseDeepenReply(text: string): Map<string, { verdict: "code" | 
 }
 
 /**
-  找到覆盖该行的符号，用它的**起始行**当窗口锚点——这就是「行区间由符号表给出」的落点。
-  找不到就退回原行号（模型给的行业已经过范围校验）。
+  找到覆盖该行的符号，用它的起始行当窗口锚点——这就是「行区间由符号表给出」的落点。
+  找不到就退回原行号（模型给的行已经过范围校验）。
 */
 function anchorLine(analysis: RepositoryAnalysis, path: string, line: number): number {
   const symbol = analysis.graph.symbols.find((item) => item.path === path && item.line <= line && item.endLine >= line);
@@ -130,7 +117,7 @@ export async function deepenInferredEdges(input: {
     }
   }
   const wanted = new Map([...score].sort((a, b) => b[1].edges - a[1].edges).slice(0, MAX_DEEP_FILES).map(([path, row]) => [path, row.anchor]));
-  // 问哪些边：端点在窗口（wanted）里的才问得到（没读到的片段按提示词一律判 inferred，问了注定白问）；全覆盖优先，截到 MAX_DEEP_EDGES。
+  // 问哪些边：端点落在阅读窗口（wanted）里的才问得到；全覆盖优先，截到 MAX_DEEP_EDGES。
   const askable = inferred.filter((edge) => pathsOf(edge).some((path) => wanted.has(path)));
   const pending = askable
     .map((edge) => ({ edge, full: pathsOf(edge).every((path) => wanted.has(path)) }))
@@ -226,12 +213,9 @@ export async function deepenInferredEdges(input: {
 }
 
 /**
-  依据文本里是否引用了这条边自己的文件。
-
-  真仓重放（09-22）：19 条 code 判定被驳回 18 条——全因旧匹配要求 evidence 里出现**完整路径**，
-  而模型按提示只写了裸文件名（`nodes.py:4` 而非 `src/main/java/com/hmdp/graph/nodes.py:4`）。
-  现在允许「完整路径 / 目录后缀 / 裸文件名」，但必须**整段相等**：`IShopServiceImpl.java`
-  不能伪装成 `ShopServiceImpl.java`，`core/redis.py` 依然对不上任何一端。
+  依据文本里是否引用了这条边自己的文件。允许「完整路径 / 目录后缀 / 裸文件名」，
+  但必须整段相等：`IShopServiceImpl.java` 不能伪装成 `ShopServiceImpl.java`，
+  `core/redis.py` 依然对不上任何一端。
 */
 export function citesOwnedFile(evidence: string, ownedPaths: string[]): boolean {
   for (const match of evidence.matchAll(/[\w./\\-]+\.[A-Za-z0-9]+/g)) {

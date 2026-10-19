@@ -1,20 +1,18 @@
 /**
-  沙箱 profile（刀 1）：macOS 用系统自带的 Seatbelt（`/usr/bin/sandbox-exec`），Linux 暂不实现——
-  没有可用的强制隔离时**整域禁用代码题**，不降级成「弱隔离照跑」（2026-10-14 拍板）。
+  沙箱 profile：macOS 用系统自带的 Seatbelt（`/usr/bin/sandbox-exec`），Linux 暂不实现——
+  没有可用的强制隔离时整域禁用代码题，不降级成「弱隔离照跑」。
 
-  形状是实测出来的，两条反直觉的约束都记在这里，别再改回去：
-  - **不能整片 `deny file-read*` 再白名单放行**。这样写 launcher 自己 SIGABRT：`sandbox-exec` 要先 execvp 目标程序，
-    而它需要的读也在被拒之列。可用形状是「默认放行 + 点名拒读敏感子树」，
-    即 `(deny file-read* (subpath "$HOME"))` 把家目录整片拒掉，**再把解释器自己的根后置放行**
+  两条形状约束（改回去会让 launcher 自杀，别改回去）：
+  - 不能整片 `deny file-read*` 再白名单放行：`sandbox-exec` 启动时要先 execvp 目标程序，
+    它需要的读也在被拒之列，launcher 直接 SIGABRT。可用形状是「默认放行 + 点名拒读敏感子树」：
+    `(deny file-read* (subpath "$HOME"))` 把家目录整片拒掉，再把解释器自己的根后置放行
     （规则先后为什么有意义，见 `seatbeltProfile` 里 SBPL 覆盖语义那一条）。
-    ⚠️ 2026-10-15 又试了一次并留了读数：白名单里连 `/usr`、`/System/Library`、`/private/etc`、`/dev`、
-    TMPDIR、node/python/javac/java 各自的根全都放行之后，三语言与 `node -e` **一律 SIGABRT（exit=null）**。
-    所以「默认拒绝」这条路在本机 macOS 上走不通，别再用它当方案；要护住什么就往名单里点名。
-  - **`deny network*` 与 `deny process-fork` 放在 profile 层是安全的**，不会杀掉 launcher（已验：
-    echo/node/python3/javac/java 全部照常跑，而 fork 与 connect 在沙箱内拿到 EPERM）。
+    即使把系统根与解释器根全部放行，「默认拒读」这条路在本机 macOS 上仍走不通；要护住什么就往名单里点名。
+  - `deny network*` 与 `deny process-fork` 放在 profile 层是安全的，不会杀掉 launcher
+    （三语言 launcher 与解释器都照常跑，而 fork 与 connect 在沙箱内拿到 EPERM）。
     这一条顺带解决了 fork 炸弹：连一次 `fork()` 都出不去，不需要 rlimit。
 
-  写侧仍然是整片拒 + 白名单：`(deny file-write*)` 不参与启动，所以不会 SIGABRT。
+  写侧是整片拒 + 白名单：`(deny file-write*)` 不参与启动，没有 SIGABRT 问题。
 */
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
@@ -24,11 +22,10 @@ import { hash } from "../identity.js";
 
 /**
   恒定拒读的子树：家目录整片（引擎口令、`.ssh`、多数仓都在这里）加上可移动盘与网络挂载。
-  ⚠️ 这一份**不够**：`POST /imports` 收任意绝对路径，仓完全可以住在 `/opt`、`/srv`、`/Volumes` 之外——
-  2026-10-15 实测确认，一个放在家目录之外的「仓」（里面有 `.tutor/tutor.db`＝标准答案与 hidden 测试）
-  在旧名单下照读不误。所以被学习仓的根必须由调用方**逐次点名**（`seatbeltProfile` 的 `options.denyRead`，
-  产品侧三个入口都从 `runSandbox` 强制带 `repositoryPath`）。
-  为什么不改成「默认拒读 + 白名单放行」：试过，且在这台 macOS 上不可行——见本文件顶部那条 SIGABRT。
+  这一份不够：`POST /imports` 收任意绝对路径，仓完全可以住在 `/opt`、`/srv` 这类位置，
+  那里的 `.tutor/tutor.db` 装着标准答案与 hidden 测试——所以被学习仓的根必须由调用方逐次点名
+  （`seatbeltProfile` 的 `options.denyRead`，产品侧入口都经 `runSandbox` 强制带 `repositoryPath`）。
+  为什么不改成「默认拒读 + 白名单放行」：本机 macOS 不可行，见文件顶部 SIGABRT 那条。
 */
 function deniedReadRoots(): string[] {
   return [homedir(), "/Volumes", "/Network"];
@@ -104,15 +101,15 @@ const quote = (value: string): string => `"${value.replaceAll("\\", "\\\\").repl
 /**
   生成一份 Seatbelt profile。
   @param workdir 本次运行的沙箱目录（必须是 realpath 后的绝对路径，`/tmp` 会解析成 `/private/tmp`）
-  @param options.denyRead 额外点名拒读的子树——**被学习仓的根就走这里**（见 `deniedReadRoots`）
+  @param options.denyRead 额外点名拒读的子树——被学习仓的根就走这里（见 `deniedReadRoots`）
 */
 export function seatbeltProfile(workdir: string, toolchain: Partial<SandboxToolchain>, options: { allowNetwork?: boolean; allowFork?: boolean; denyRead?: string[] } = {}): string {
   const writable = [workdir, realpathSafe(tmpdir()), "/dev"];
-  // 家目录那一档在前、系统根在后：SBPL 是同操作下**后写的覆盖先写的**，
-  // 所以「先拒家目录、再放 `~/miniconda3` 的解释器根」是真生效的（§53 实测形状）。
+  // 家目录那一档在前、系统根在后：SBPL 是同操作下后写的覆盖先写的，
+  // 所以「先拒家目录、再放解释器根」是真生效的。
   const blanket = deniedReadRoots().filter((root) => existsSync(root));
-  // 点名要护住的仓放在所有 allow **之后**：优先级反过来变成「系统根赢」，
-  // 一个恰好住在 `/usr/local/...` 里的仓就白护了。沙箱本来就不该读仓（判分不读仓库源码是不变量），
+  // 点名要护住的仓放在所有 allow 之后：反过来会让 allow 覆盖这条 deny，
+  // 恰好住在 `/usr/local/...` 里的仓就白护了。沙箱本来就不该读仓（判分不读仓库源码是不变量），
   // 所以这一档压在所有放行上面没有副作用。
   const named = (options.denyRead ?? []).map((root) => realpathSafe(root)).filter((root) => root && existsSync(root));
   const rules: string[] = [
@@ -140,8 +137,8 @@ export function isolationBackend(): { platform: NodeJS.Platform; available: bool
 /**
   runner 指纹：换解释器、改 profile 形状、动默认上限，都要让旧题的缓存键一起失效。
   题面的标准答案是「这套 harness 在这套 runner 上跑出来的」——node 升一档，缺陷版可能就不挂了，
-  旧题的「必挂」承诺随之作废，所以这个节点必须进出题作用域（见 exercises/llm-generate.ts 的 `fileScope`）。
-  版本串现读、不写死：写死的那一份会在升级后继续报旧值，等于自证过期。
+  旧题的「必挂」承诺随之作废，所以这个指纹必须进出题作用域（见 exercises/llm-generate.ts 的 `fileScope`）。
+  版本串现读、不写死：写死的那一份会在升级后继续报旧值。
 */
 let cachedFingerprint: string | undefined;
 export function runnerFingerprint(): string {
@@ -149,7 +146,7 @@ export function runnerFingerprint(): string {
   const toolchain = resolveToolchain();
   const probe = (command: string | undefined, args: string[]): string => {
     if (!command) return "missing";
-    // spawnSync 而不是 execFileSync：`javac -version` 把版本写在 **stderr** 上，抛异常的版本读不到那一行
+    // 用 spawnSync 而不是 execFileSync：`javac -version` 把版本写在 stderr，按异常处理的读法拿不到那一行
     const result = spawnSync(command, args, { encoding: "utf8", timeout: 5_000 });
     if (result.error) return `error ${result.error.message.slice(0, 40)}`;
     return (result.stdout || result.stderr || "").trim().split("\n")[0];

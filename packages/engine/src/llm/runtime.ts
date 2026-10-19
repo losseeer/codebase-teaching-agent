@@ -6,14 +6,12 @@ import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, type 
 
 /**
   LLM 运行时设置（GUI 可改，落盘到 ~/.codebase-tutor/llm-settings.json，重启后仍在）。
-  **只有一套配置**（2026-09-18 起不再有 teaching / light 两个配置槽）：
-  - provider / model / baseUrl / apiKey：空串 = 该项回落 .env（.env 是降级策略，不是被摒弃）；
-  - thinking：深任务（三作用域对话、流程生成）的思考档位，"auto" = 不发思考字段（模型默认，
-    DeepSeek V4 默认开启思考）。
-  「轻任务 / 教学对话」是**运行时角色**而非两份配置，见 buildLlmRuntimeProvider。
+  只有一套配置：
+  - provider / model / baseUrl / apiKey：空串 = 该项回落 .env；
+  - thinking：深任务（三作用域对话、流程生成）的思考档位，"auto" = 不发思考字段。
+  「轻任务 / 教学对话」是运行时角色而非两份配置，见 buildLlmRuntimeProvider。
 
-  密钥口径：apiKey 明文只存在于本模块的内存态与那个 0600 的文件里，**任何对外响应走 publicLlmSettings()**
-  （只有掩码），路由层拿不到明文就不可能顺带 spread 出去。
+  密钥口径：apiKey 明文只存在于本模块的内存态与那个 0600 的文件里，对外响应一律走 publicLlmSettings()（只有掩码）。
   */
 export interface LlmRuntimeSettings {
   provider: string;
@@ -22,9 +20,9 @@ export interface LlmRuntimeSettings {
   apiKey: string;
   thinking: "auto" | ThinkingEffort;
   /**
-    三档单价的数值口径（币种不参与算术、键名 `Usd` 为历史遗留、命中价默认按输入价计）以 `cost/cost.ts` 的 `Pricing` 为准，这里不复述。
-    放进这份配置而不是只留环境变量，是为了「改完立刻生效」：`cost.ts` 每次算账都现读这里，
-    而环境变量那条路是模块加载时算一次的常量，非重启不可。空串 = 该项回落 `.env`（与 baseUrl 同一条规则）。
+    三档单价的数值口径以 cost/cost.ts 的 Pricing 为准，这里不复述。
+    放进这份配置而不是只留环境变量，是为了改完立刻生效：cost.ts 每次算账都现读这里，
+    环境变量那条路是模块加载时算一次的常量、非重启不可。空串 = 该项回落 .env。
     */
   inputUsdPerMillion: string;
   outputUsdPerMillion: string;
@@ -37,7 +35,7 @@ export const LLM_PROVIDERS = ["openai-compatible", "openai", "anthropic", "ollam
 /** 可选思考档位（"auto" = 不发字段）；PUT 校验与磁盘恢复都按这份清单，错误文案不会再和判据走散。 */
 export const THINKING_EFFORTS = ["auto", "off", "low", "high", "max"] as const;
 
-/** 单价那几项的键名（PUT 逐键校验、落盘恢复与界面都按这份清单走，不各写一遍字面量）。 */
+/** 单价那几项的键名：PUT 逐键校验、落盘恢复与界面共用这份清单。 */
 export const PRICING_KEYS = ["inputUsdPerMillion", "outputUsdPerMillion", "cacheHitUsdPerMillion"] as const;
 
 /** 回落 .env 的文本字段（provider/model/baseUrl/apiKey）：部分更新与磁盘恢复共用这份清单。 */
@@ -49,8 +47,8 @@ const DEFAULT_SETTINGS: LlmRuntimeSettings = {
 };
 
 /**
-  单价输入框的判据（只管形状、不管币种）：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
-  收数字也收字符串——界面传的是文本框，而老配置文件里可能写的是数字。
+  单价输入的判据（只管形状、不管币种）：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
+  数字与字符串都收——界面传文本框，配置文件里可能写的是数字。
   */
 export function normalizeRate(value: unknown): string | undefined {
   if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? String(value) : undefined;
@@ -94,8 +92,7 @@ export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, 
     const value = partial[key];
     if (typeof value === "string") settings[key] = value.trim();
   }
-  // 单价走 `normalizeRate` 而不是直接 trim：路由层已经先验过一遍，这里是第二道，
-  // 免得将来有新的调用点（脚本/内部装配）绕过路由把 "-3" 或 "abc" 写进配置
+  // 单价走 normalizeRate 而不是直接 trim：路由层已先验一遍，这里是第二道，不让新调用点绕过校验写进脏串
   for (const key of PRICING_KEYS) {
     const normalized = partial[key] === undefined ? undefined : normalizeRate(partial[key]);
     if (normalized !== undefined) settings[key] = normalized;
@@ -117,7 +114,7 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
     }
     const thinking = parsed.thinking;
     if (typeof thinking === "string" && (THINKING_EFFORTS as readonly string[]).includes(thinking)) next.thinking = thinking as LlmRuntimeSettings["thinking"];
-    // 单价按同一份判据收：文件里被别的工具写成 "-3"/"abc" 时**丢掉该项**（回落 .env）而不是把脏串带进内存
+    // 单价按同一份判据收：不合格就丢掉该项（回落 .env），不把脏串带进内存
     for (const key of PRICING_KEYS) {
       const normalized = normalizeRate(parsed[key]);
       if (normalized !== undefined) next[key] = normalized;
@@ -155,10 +152,10 @@ function persist(): void {
 /** 同一套配置的两个运行时角色；llm.log 的 tier 仍按角色记账，方便区分深浅任务的成本。 */
 export type LlmRole = "teaching" | "light";
 
-/**
+/** 两个运行时角色的思考口径：
   - "teaching"：三作用域对话、流程生成等深任务——思考档位随运行时设置；
   - "light"：推荐入口 / 题面润色 / 命名 / L1 摘要等单轮浅任务——思考强制 "off"
-    （这是行为约定，不是第二份配置；开了思考只会白烧 reasoning token，2026-09-15 实测教训）。
+    （这是行为约定，不是第二份配置；浅任务开思考只是多花 reasoning token）。
   */
 export function buildLlmRuntimeProvider(role: LlmRole): LlmProvider | undefined {
   const raw = createLlmProvider(toOverrides(settings));

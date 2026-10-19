@@ -1,24 +1,8 @@
 /**
-  思考参数能力声明（按模型家族查表，2026-09-15 官方文档核实）：
-  - deepseek（官方 Chat Completions）：顶层 thinking {type:"enabled"/"disabled"}（默认 enabled、effort 默认 high）
-    + reasoning_effort: low/high/max（medium 会被映射为 high、xhigh 映射为 max）
-  - openai（顶层 reasoning_effort，Chat Completions）：
-    * GPT-5.6+：none/low/medium/high/xhigh/max（minimal 已移除）
-    * GPT-5.2~5.5：none/low/medium/high/xhigh（官方帮助中心口径，5.2 起支持 none）
-    * GPT-5 初代（gpt-5/-mini/-nano）：minimal/low/medium/high（不支持关闭）
-    * o 系列（o1/o3/o4）：low/medium/high（不支持关闭）
-    * 发送模型不支持的取值 OpenAI 直接报 unsupported_value 错误
-  - anthropic（OpenAI 兼容层 /v1/chat/completions）：仅支持 thinking {type:"enabled", budget_tokens} 开关，
-    新版 Claude 为自适应思考（Claude 5 默认开启）；兼容层不支持 effort 档位参数
-  - gemini（OpenAI 兼容层）：顶层 reasoning_effort: minimal/low/medium/high（映射到 thinking_level/budget）；
-    2.5 非 Pro 可用 "none" 关闭，2.5 Pro 与 Gemini 3 无法关闭思考
-  - glm（智谱 OpenAI 兼容 API）：thinking {type:"enabled"/"disabled"} 开关（GLM-4.5+，默认开启）；
-    reasoning_effort 仅 GLM-5.2+ 支持（none/minimal/low/medium/high/xhigh/max，low/medium 映射为 high），
-    GLM-5.3 只剩 low/high/max 且无法关闭思考；GLM-4.5~5.1 只有开关没有强度档
-  - kimi（月之暗面 OpenAI 兼容 API）：仅 thinking {type:"enabled"/"disabled"} 开关，无 effort 档位；
-    kimi-k2.5 / kimi-k2.6 可关闭（默认开启）；kimi-k2.7-code 与 kimi-k3 为强制思考，传 disabled 会报错
-  - unknown：表内没有的模型。auto/off 都不发字段；显式档位显式报错，
-    可用 TUTOR_THINKING_STYLES=前缀=样式,前缀=样式 为私有/新模型声明能力（样式：deepseek|openai|anthropic|none）
+  思考参数能力声明：按模型家族查表（BUILTIN_CAPABILITIES，前缀匹配、先命中先赢）。
+  档位语义见 provider.ts 的 ThinkingEffort；表内没有的模型 auto/off 都不发字段、显式档位报错，
+  可用 TUTOR_THINKING_STYLES=前缀=样式,前缀=样式 为私有/新模型声明能力（样式：deepseek|openai|anthropic|none）。
+  各家族支持哪些取值、能不能关思考，写在下面表项的注释里。
   */
 import type { ThinkingEffort } from "./provider.js";
 
@@ -40,12 +24,11 @@ const STYLE_VOCABULARIES: Record<Exclude<ThinkingStyle, "unknown">, ThinkingCapa
 
 /** 内置能力表：前缀匹配，先命中先赢（更具体的前缀必须排在前面）。 */
 const BUILTIN_CAPABILITIES: { prefix: string; capability: ThinkingCapability }[] = [
-  // deepseek-flash：官方现役模型名（2026-09-15 官方文档；旧名 deepseek-v4-flash 为遗留别名，
-  // 请求同样由 DeepSeek-V4.1-Flash 提供服务），思考参数与 V4 格式一致，默认开启思考
+  // deepseek-flash：官方现役名（deepseek-v4-flash 是遗留别名），思考参数与 V4 同格式，默认开启
   { prefix: "deepseek-flash", capability: { style: "deepseek", efforts: { off: "disabled", low: "low", high: "high", max: "max" } } },
-  // DeepSeek V4：thinking 开关 + effort 三档，默认开启思考（2026-09 官方文档）
+  // DeepSeek V4：thinking 开关 + effort 三档，默认开启思考
   { prefix: "deepseek-v4", capability: { style: "deepseek", efforts: { off: "disabled", low: "low", high: "high", max: "max" } } },
-  // 旧 DeepSeek 模型无思考参数（deepseek-v3 系将于 2026-10-10 下架）
+  // 更早的 DeepSeek 模型无思考参数
   { prefix: "deepseek-chat", capability: { style: "none", efforts: {} } },
   { prefix: "deepseek-reasoner", capability: { style: "none", efforts: {} } },
   { prefix: "deepseek-v3", capability: { style: "none", efforts: {} } },
@@ -68,7 +51,7 @@ const BUILTIN_CAPABILITIES: { prefix: string; capability: ThinkingCapability }[]
   { prefix: "gemini-2.5-pro", capability: { style: "openai", efforts: { low: "low", high: "high" } } },
   { prefix: "gemini-2.5", capability: { style: "openai", efforts: { off: "none", low: "low", high: "high" } } },
   // GLM（智谱）：与 DeepSeek 同构（thinking 开关 + reasoning_effort）。注意前缀顺序——glm-5.3/glm-5.2 必须在 glm-5 之前
-  // GLM-5.3：只剩 low/high/max，无法关闭思考（2026-09 官方文档）
+  // GLM-5.3：只剩 low/high/max，无法关闭思考
   { prefix: "glm-5.3", capability: { style: "deepseek", efforts: { low: "low", high: "high", max: "max" } } },
   // GLM-5.2+：thinking 开关 + effort 全档（low/medium 会被映射为 high，对调用方透明）
   { prefix: "glm-5.2", capability: { style: "deepseek", efforts: { off: "disabled", low: "low", high: "high", max: "max" } } },
@@ -152,7 +135,7 @@ export function isThinkingEffortSupported(model: string, effort: "auto" | Thinki
   把思考档位写入 OpenAI Chat Completions 请求体（就地修改 payload）。
   - deepseek/anthropic 样式：off → thinking:{type:"disabled"}；low/high/max → thinking:{type:"enabled"}（deepseek 另加 reasoning_effort）
   - openai 样式：一律走顶层 reasoning_effort（off 映射到 "none"）
-  - none/unknown：off = 不发任何字段；显式思考档位抛错（不许静默降级——假装没看见就是伪装失败）
+  - none/unknown：off = 不发任何字段；显式思考档位抛错（不许静默降级）
   */
 export function applyThinking(payload: Record<string, unknown>, model: string, effort: ThinkingEffort): void {
   const capability = resolveThinkingCapability(model);

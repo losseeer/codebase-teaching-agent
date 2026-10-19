@@ -6,17 +6,16 @@ import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
 
 /**
-  L2 校验通道的第二格：**符号级调用边**的差值（文件级 import 差值已由 `pnpm graph:diff` 量过，见 §32/§33）。
+  符号级调用边的差值（文件级 import 差值由 `pnpm graph:diff` 量）。
   要回答的问题：引擎那条「按方法名 + 已导入文件」配调用边的规则，值不值得升级成 L1 的接收者类型消歧——
-  这需要一个独立参照，而且参照必须**宁可少报也不能错报**，否则差值就是噪声。
+  这需要一个独立参照，而且参照必须宁可少报也不能错报，否则差值就是噪声。
 
-  参照口径（故意保守，是**下界**）：只认「显式以类型名作接收者」的调用 `Type.method(...)`，并且要求
-  ① 该 `Type` 在发起文件里可见（直接 import、通配 import 的整包、或**同包**——Java 同包不需要 import，
-  这条引擎现在完全没有）；② 该 `Type` 所在文件里确实声明了同名方法（跳过构造器与关键字）。
-  于是两条读法不对称，别混着说：
-  - **参照有、引擎没有** ⇒ 引擎确实漏了（这是可以拿去修 L1 的靶子）。
-  - **引擎有、参照没有** ⇒ 只是「这条规则确认不了」，因为通过变量/接口/继承的调用本来就不在下界里，
-    **不能当成假阳性引用**。要判假阳性得另建证据，别用这个节点。
+  参照口径（故意保守，是下界）：只认「显式以类型名作接收者」的调用 `Type.method(...)`，并且要求
+  ① 该 `Type` 在发起文件里可见（直接 import、通配 import 的整包、或同包）；
+  ② 该 `Type` 所在文件里确实声明了同名方法（跳过构造器与关键字）。
+  于是两条读法不对称：
+  - 参照有、引擎没有 ⇒ 引擎确实漏了，这是可以拿去修 L1 的靶子。
+  - 引擎有、参照没有 ⇒ 只是这条规则确认不了：通过变量、接口、继承的调用本来就不在下界里，不能当假阳性引用。
 
   零 token、零新依赖、只读被分析仓。用法：pnpm calls:diff [仓库路径]
 */
@@ -38,7 +37,7 @@ const analysis: Pick<RepositoryAnalysis, "graph"> = { graph: serializeGraph(grap
 
 const textOf = (path: string): string => readFileSync(join(repositoryPath, path), "utf8");
 
-// 1) 每个文件里**声明**的方法名（含包内私有类的方法都算在这个文件上，因为落点就是文件）
+// 1) 每个文件里声明的方法名（包内私有类的方法也算在这个文件上，因为落点就是文件）
 const methodDeclPattern = /^\s*(?:(?:public|private|protected|static|final|synchronized|abstract|default|native|strictfp)\s+)*(?!class|interface|enum|record|if|for|while|switch|catch|return|new|throw|else|do|try|synchronized)([\w<>\[\],.?]+(?:<[^>]*>)?\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?:throws [\w., ]+)?\{?\s*$/;
 const methodsByFile = new Map<string, Set<string>>();
 const simpleNameOf = (path: string): string => path.split("/").pop()!.replace(/\.java$/, "");
@@ -92,7 +91,7 @@ function visibleTypesOf(path: string): Map<string, string> {
     const direct = typeByFqn.get(match[1]!) ?? typeByFqn.get(match[1]!.split(".").slice(0, -1).join("."));
     if (direct) add(direct);
   }
-  // 同包可见（Java 不需要 import）——这是引擎目前完全没有的一路
+  // 同包可见（Java 不需要 import）：引擎目前没有这一路
   for (const sibling of byPackage.get(packageOf.get(path) ?? "") ?? []) {
     if (sourceRootOf(sibling) === sourceRootOf(path)) add(sibling);
   }
@@ -132,7 +131,7 @@ const referenceKeys = new Map<string, RefEdge>(reference.map((edge) => [`${edge.
 const both = [...referenceKeys.keys()].filter((key) => engine.has(key));
 const onlyReference = [...referenceKeys.keys()].filter((key) => !engine.has(key));
 const unconfirmed = [...engine].filter((key) => !referenceKeys.has(key));
-// 「参照有、引擎没有」按成因拆两类：同包调用（引擎压根没有这一路）vs 跨包（通配落点之外的漏配）
+// 「参照有、引擎没有」按成因拆两类：同包调用 vs 跨包（通配落点之外的漏配）
 const samePackageMisses = onlyReference.filter((key) => referenceKeys.get(key)?.samePackage);
 const crossPackageMisses = onlyReference.filter((key) => !referenceKeys.get(key)?.samePackage);
 const shortKey = (key: string): string => key.replace(/[^→:]*\//g, "").replace(/\.java/g, "");

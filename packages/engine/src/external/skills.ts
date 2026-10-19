@@ -3,21 +3,18 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
-  技能加载（产品 agent 的「按需取做法」通道），照 **Agent Skills 那套公开规格**（`SKILL.md` + YAML frontmatter）：
+  技能加载（产品 agent 的「按需取做法」通道），照 Agent Skills 那套公开规格（`SKILL.md` + YAML frontmatter）：
   必填 `name`、`description`；`name` ≤64 字、小写字母/数字/单个连字符、首尾不是连字符，且必须等于目录名；
   `description` ≤1024 字。可选 `license` / `allowed-tools` / `metadata` 解析但不消费
   ——这个产品的权限落在代码那侧（作用域决定给不给工具），不写在别人的文案里。
+  按规格而不是自造字段：装技能的目录可以直接指社区已经发布的那批（`~/.claude/skills` 里的东西原样读得懂）。
 
-  为什么按规格不自造：装技能的目录可以直接指社区已经发布的那批（`~/.claude/skills` 里的东西原样读得懂）；
-  自造字段等于要求别人为这个产品改写一份副本。
-
-  三级加载（规格里的 progressive disclosure）在本产品里的落法：**清单**（名字 + 描述）每轮进上下文，
-  **正文**与目录内的**附属文件**由 `read_skill` 按需取。成本口径：12 份清单 ≈ 几百 token；
-  12 份正文全塞进每轮 = 每轮白付一遍。
+  三级加载（规格里的 progressive disclosure）在本产品里的落法：清单（名字 + 描述）每轮进上下文，
+  正文与目录内的附属文件由 `read_skill` 按需取。
 
   ⚠️ 两处刻意的边界：
-  - **不扫被学习仓里的 `skills/`**：一个仓自带的指令文件会直接进 agent 上下文，那是提示注入面。只读用户自己装的目录。
-  - 目录不存在 = **一条技能都不给**，工具清单与上下文逐字不变。把「没装」读成「有个空清单」会诱导模型去猜一份不存在的做法。
+  - 不扫被学习仓里的 `skills/`：一个仓自带的指令文件会直接进 agent 上下文，那是提示注入面。只读用户自己装的目录。
+  - 目录不存在 = 一条技能都不给，工具清单与上下文逐字不变。把「没装」读成「有个空清单」会诱导模型去猜一份不存在的做法。
 */
 
 export interface SkillBrief {
@@ -51,9 +48,9 @@ export function skillDirectories(): string[] {
 }
 
 /**
-  出厂预置技能在哪：**引擎包内的 `skills/`**。
-  路径按 `package.json` 的包名往上找，不写 `../..` 层数——`tsx` 跑 `src/` 与 `tsc` 出 `dist/` 两种跑法都要认，
-  而写死的层数在改 `outDir` 之后会静默指到别处。
+  出厂预置技能在哪：引擎包内的 `skills/`。
+  路径按 `package.json` 的包名往上找，不写层数——`tsx` 跑 `src/` 与 `tsc` 出 `dist/` 两种跑法都要认，
+  写死的层数会静默指到别处。
 */
 export function bundledSkillSource(): string | undefined {
   let directory = import.meta.dirname;
@@ -71,7 +68,7 @@ export function bundledSkillSource(): string | undefined {
   return undefined;
 }
 
-/** 播种结果，`kept` = 目标目录里同名已存在、因此**没动**的那几份。 */
+/** 播种结果，`kept` = 目标目录里同名已存在、因此没动的那几份。 */
 export interface SkillSeed {
   target: string;
   installed: string[];
@@ -80,12 +77,11 @@ export interface SkillSeed {
 }
 
 /**
-  把引擎包里的技能复制到 `TUTOR_SKILLS_DIR` **第一处**（缺省即 `~/.codebase-tutor/skills`）。
+  把引擎包里的技能复制到 `TUTOR_SKILLS_DIR` 第一处（缺省即 `~/.codebase-tutor/skills`）。
+  复制而不是让加载器多认一档出厂目录：加载路径只有一条，`GET /api/external` 报的 `directory`
+  就是真出处，「同名谁的份生效」也变成「目录里那份」这个物理事实。
 
-  为什么复制而不是「加载器多认一档出厂目录」：加载路径只有一条，`GET /api/external` 报的 `directory`
-  就是真出处，「同名谁的份生效」也变成「目录里那份」这个物理事实，不用另解释一套优先级。
-
-  两条规矩：**绝不覆盖同名**（装过一次那份就归用户，升级不该冲掉）；**只搬合规格的**
+  两条规矩：绝不覆盖同名（装过一次那份就归用户，升级不该冲掉）；只搬合规格的
   （坏形状搬进用户目录 = 之后每轮多一条没人认领的 `skipped`）。
 */
 export function installBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillSeed {
@@ -136,7 +132,7 @@ function validName(name: string): boolean {
 }
 
 /**
-  附属文件的读取守卫：只接技能目录**内**的相对路径。
+  附属文件的读取守卫：只接技能目录内的相对路径。
   挡三种走法：绝对路径与 `~` 开头、`..` 段、以及经符号链接跳出目录（先 realpath 再比前缀）。
   二进制（正文含 NUL）一律不接：读出来是噪声，而噪声会被模型当成事实。
 */
@@ -240,7 +236,7 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
 }
 
 /**
-  上下文里那段清单。为什么写「先调 read_skill 再照做」：模型见过名字就倾向直接凭名字作答，
+  上下文里那段清单。写成「先调 read_skill 再照做」：模型见过名字就倾向直接凭名字作答，
   那份做法里写死的命令与红线它一个字都没读到。
 */
 export function skillsBriefing(skills: SkillBrief[]): string {

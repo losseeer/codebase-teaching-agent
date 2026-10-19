@@ -5,11 +5,9 @@ import { readJournal } from "../store/journal.js";
 export const defaultMonthlyBudgetUsd = 5;
 
 /**
-  三档单价：输入按「未命中 / 缓存命中」分别计价，输出单独一档。**币种不参与算术**——
-  tokens × 单价 ÷ 一百万，填的是哪种币就算出哪种币的钱，显示层统一按人民币（¥）标出来。
-  字段名里的 `Usd` 是历史遗留（改名会牵动落盘的设置与库里的字段）。
-  命中价没单独配置时**按输入价计**——不打折宁可高估，也不能把真花掉的钱说少了。
-  （DeepSeek 这类端点命中价通常是输入价的 1/10，想要准确账面就显式配上。）
+  三档单价：输入按「未命中 / 缓存命中」分别计价，输出单独一档。
+  币种不参与算术：tokens × 单价 ÷ 一百万，填哪种币就算出哪种币。
+  命中价没单独配置时按输入价计——不打折宁可高估，不能把真花掉的钱说少了。
   */
 export interface Pricing {
   inputPerMillionUsd: number;
@@ -23,16 +21,13 @@ function rateOf(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-/** 三档各自对应的 `.env` 名：`currentPricing` 与 `pricingSourceOf` 共用这一份映射，回落链不在本文件写两遍。 */
+/** 三档各自对应的 `.env` 名：currentPricing 与 pricingSourceOf 共用这一份映射，回落链只写一处。 */
 const ENV_RATE_KEYS = { input: "TUTOR_INPUT_USD_PER_MILLION", cacheHit: "TUTOR_CACHE_HIT_USD_PER_MILLION", output: "TUTOR_OUTPUT_USD_PER_MILLION" } as const;
 
 /**
-  现在生效的三档单价：**运行时设置（LLM 配置框里的单价）→ `.env` → 未配（0）**。
-  空串 = 该项没在界面上配过，回落到环境变量。
-
-  这条必须是**每次现读**，不能是模块加载时算一次的常量：单价既然是界面上能改的，
-  「改完照旧按老数算账」就等于账面与闸门都不认新价——那正是 §36.6 那个形状（有闸门的名字，闸门不在管事）。
-  所以 `summarizeCost`、预算闸门、启动告警与导入清单上的读数都从这一处出发。
+  现在生效的三档单价：运行时设置（LLM 配置框里的单价）→ `.env` → 未配（0）；空串 = 该项回落环境变量。
+  必须每次现读，不能是模块加载时算一次的常量：界面上改了价，按老数算账等于账面与闸门都不认新价。
+  summarizeCost、预算闸门、启动告警与导入清单的读数都从这一处出发。
   */
 export function currentPricing(): Pricing {
   const live = getLlmRuntimeSettings();
@@ -52,27 +47,25 @@ export function pricingSourceOf(key: "input" | "output" | "cacheHit"): "runtime"
 }
 
 /**
-  三档单价里是否**至少有一档**可用。这是预算闸门的开关：`mode` 由「算出的钱 ≥ 预算」决定，
-  全零单价 ⇒ 钱恒为 0 ⇒ 永远判 "normal" ⇒ 所有「超预算回落本地规则」的分支一起静默放行。
-  判据只留这一处：`summarizeCost` 的读数、启动告警与界面文案都从这里出发，不各写一遍。
+  预算闸门的开关：三档单价里是否至少有一档可用。全零单价 ⇒ 钱恒为 0 ⇒ 永远判 "normal"，
+  所有「超预算回落本地规则」的分支一起静默放行。判据只留这一处，读数、告警与界面文案都从这里出发。
   */
 export function pricingIsConfigured(pricing: Pricing = currentPricing()): boolean {
   return pricing.inputPerMillionUsd > 0 || (pricing.cacheHitPerMillionUsd ?? 0) > 0 || pricing.outputPerMillionUsd > 0;
 }
 
 /**
-  闸门失效时该说的那句话；闸门在管事时返回 `undefined`。
-  措辞刻意点破「¥0.0000 不是没花钱」——只报金额会把人引向「这月很省」，而实际是无上限花钱。
-  句子里**不带预算数字**：这句话会在地址簿（不读每仓 settings）与启动日志（没有仓上下文）两处出现，
-  写死一个数就等于对配过预算的仓撒不实。数字让 `monthlyBudgetUsd` 自己在成本页显示。
+  闸门失效时该说的那句话；闸门在管事时返回 undefined。
+  句子里不带预算数字：它会在不读每仓 settings 的场合出现，写死一个数就对配过别的预算的仓不准；
+  数字由 monthlyBudgetUsd 自己在成本页显示。
   */
 export function budgetGateNotice(pricing: Pricing = currentPricing()): string | undefined {
   if (pricingIsConfigured(pricing)) return undefined;
-  // 一句因果链读完即可；环境变量名交给界面的悬停说明（这句话会出现在导入页第一屏，读者是刚打开产品的人）
+  // 一句因果链读完即可；环境变量名交给界面的悬停说明
   return "预算闸门未生效：没配单价 ⇒ 花费算不出 ⇒ 闸门永远判为没超支，实际是无上限调用。配上任一单价即恢复上限。";
 }
 
-/** 把用量切成三个计费档位。输入口径与 provider 的 `prompt_tokens` 一致：命中那部分**含在**输入里。 */
+/** 把用量切成三个计费档位。输入口径与 provider 的 prompt_tokens 一致：命中那部分含在输入里。 */
 export function priceComponents(usage: { inputTokens: number; cacheHitTokens: number; outputTokens: number }, pricing: Pricing): CostComponent[] {
   const hit = Math.max(0, Math.min(usage.inputTokens, usage.cacheHitTokens));
   const billedInput = Math.max(0, usage.inputTokens - hit);
@@ -87,8 +80,7 @@ export function priceComponents(usage: { inputTokens: number; cacheHitTokens: nu
 }
 
 export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = defaultMonthlyBudgetUsd, sessionId?: string, pricing: Pricing = currentPricing()): CostSummary {
-  // 月份边界按 UTC 取（journal 的 `at` 就是 ISO UTC 串，两侧同一口径）：这里若换成本地时区，
-  // 跨月那几天「本月」就跟写入侧对不上，预算会在月初被清零或延后。
+  // 月份边界按 UTC 取（journal 的 at 就是 ISO UTC 串，两侧同一口径）：换成本地时区会让跨月那几天的「本月」与写入侧对不上
   const month = new Date().toISOString().slice(0, 7);
   const events = readJournal(repositoryPath).filter((event) => event.type === "token_usage" && event.at.startsWith(month) && (!sessionId || event.sessionId === sessionId));
   const inputTokens = sum(events, "input_tokens");
@@ -111,10 +103,9 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
     mode: estimatedCostUsd >= monthlyBudgetUsd ? "degraded" : "normal",
     turns: events.length,
     costComponents,
-    // 闸门有没有在管事必须一起交出去，否则页面那句「本月 ¥0.0000」看着像真的没花钱（判据与因果链见 `pricingIsConfigured`）
+    // 闸门有没有在管事必须一起交出去，否则页面那句「本月 ¥0.0000」看着像真的没花钱（判据见 pricingIsConfigured）
     pricingConfigured: pricingIsConfigured(pricing),
-    // 历史口径：`mode:"degraded"` 的行只有教学状态机在写（达到预算上限那一轮记 0 token），2026-10-14 起改成
-    // 达到预算上限直接 422 拒在开火前、不再留这种行。减法照旧——存量行还在，去掉就会把那些免费回合算成付过钱。
+    // mode:"degraded" 的行是存量历史写法（现在超预算直接在开火前 422，不再写这种行）；减法照旧，去掉会把那些免费回合算成付过钱
     degradedTurns: events.filter((event) => event.payload.mode === "degraded").length,
     byScene: bucket(events, (event) => typeof event.payload.scene === "string" ? event.payload.scene : "unknown"),
     byProvider: bucket(events, (event) => typeof event.payload.provider === "string" ? event.payload.provider : "unknown"),
@@ -123,11 +114,9 @@ export function summarizeCost(repositoryPath: string, monthlyBudgetUsd = default
 }
 
 /**
-  预算闸的唯一判据：本月已花的钱 ≥ 该仓预算就算降级（也就是 `summarizeCost` 的 `mode === "degraded"`）。
-  这条判据原先在 `server.ts` 的 `budgetGate` 与 `importer.ts` 的导入分支各写一遍——同一个表达式抄两处，
-  改一处就会出现「导入照旧放行而对话已经 422」这种分岔（2026-10-18 架构复审抓到）。
-  单价没配时钱恒算 0 ⇒ 永远不降级：那是**闸门失效**，由 `budgetGateNotice` 那句话说明，
-  这条判据不伪装成「额度还很宽」。
+  预算闸的唯一判据：本月已花的钱 ≥ 该仓预算就算降级（即 summarizeCost 的 mode === "degraded"）。
+  判据只留这一处，各入口分抄会出现「导入放行而对话 422」的分岔。
+  单价没配时钱恒算 0 ⇒ 永远不降级：那是闸门失效，由 budgetGateNotice 说明，这条判据不伪装成「额度还很宽」。
   */
 export function budgetExceeded(repositoryPath: string, monthlyBudgetUsd: number, sessionId?: string): boolean {
   return summarizeCost(repositoryPath, monthlyBudgetUsd, sessionId).mode === "degraded";

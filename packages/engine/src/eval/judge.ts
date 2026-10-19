@@ -2,14 +2,13 @@ import type { JournalEvent } from "@codebase-tutor/shared";
 import { policyFor, validateSettings } from "../tutor-settings/tutor-settings.js";
 
 /**
-  B 档第 3 刀：表达质量裁判的**纯逻辑层**（rubric 预登记 + 判分解析 + 证据核验）。
+  表达质量裁判的纯逻辑层（rubric 预登记 + 判分解析 + 证据核验）。
   真发 LLM 调用在 scripts/judge-turns.ts；这里一条都不发，保证判分口径可单测。
 
   口径纪律：
-  - 证据必须**逐字**来自被评回复（压平空白后做子串匹配）。引用不存在 = 判分驳回、该维记 0 并单独计数——
-    这是防裁判模型幻觉的第一道闸：分数可以是主观的，证据不许编。
-  - 裁判只能看转录、看不到源码：「接地」维判的是**锚定具体性**（点名到文件/符号/行号），
-    不是事实真伪——事实真伪归第 2 刀机检（同一引用落地口径），两刀不越界。
+  - 证据必须逐字来自被评回复（压平空白后做子串匹配）；引用不存在 = 判分驳回、该维记 0 并单独计数。
+  - 裁判只看转录、看不到源码：「接地」维判锚定具体性（点名到文件/符号/行号），
+    事实真伪由机检层负责，两者不越界。
   - 教学法契合只对 teach 回合判（map_chat/practice_chat 不吃 policy 约束）。
 */
 
@@ -21,7 +20,7 @@ export interface JudgeTurn {
   scene: JudgeScene;
   question: string;
   answer: string;
-  /** journal 侧 answer_truncated 留痕：被截断的回复「易读」按 1 封顶（机械执行，不只靠 rubric 自觉）。 */
+  /** journal 侧 answer_truncated 留痕：被截断的回复「易读」按 1 封顶（机械执行）。 */
   answerTruncated?: boolean;
   /** teach 专属：该回合生效时的策略约束（来自 style_shift 快照，经 policyFor 展开）。 */
   constraints: string[];
@@ -149,7 +148,7 @@ export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]
     const answer = typeof event.payload.answer === "string" ? event.payload.answer : "";
     if (!scene || !SCENES.has(scene) || !question || !answer) continue;
     if (event.payload.answer_truncated === true) truncatedAnswers += 1;
-    // map_chat/practice_chat 无会话概念、落盘不带 sessionId：按场景各自成桶，避免前情跨场景串话
+    // map_chat/practice_chat 无会话概念、落盘不带 sessionId：按场景各自成桶，前情不跨场景
     const sessionKey = event.sessionId || `scene:${scene}`;
     let constraints: string[] = [];
     if (scene === "teach") {

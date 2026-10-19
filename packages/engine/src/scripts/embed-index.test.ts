@@ -7,14 +7,8 @@ import { TutorDatabase } from "../store/database.js";
 import { cosine, cosineTop, cosineTopByFile, embedUnits, embeddableHash, embeddableText, fileUnits, pendingUnits, reciprocalRankFusion, symbolUnits, type StoredVector } from "./embed-index.js";
 
 /**
-  检索第四臂（dense / hybrid，文件级与函数级两种粒度）的自建件：嵌入文本口径、增量失效键、向量存取、相似度与融合。
-  全程假 provider——单测绝不打外部 embedding 端点（真跑有 `pnpm search:embed` 的 --yes 闸门管着）。
-  守住的几件事：
-  1. 嵌的文本必须与词法臂的三个命中面一字对齐（否则比的是文本不是模型）；
-  2. 「文本没变」直接等于「不重嵌」，且第二次调用**一个请求都不发**（重复跑不重复花钱）；
-  3. 换 embedding 模型 / 换粒度 = 换坐标系，旧向量一条都不能复用；
-  4. 存进去的 float32 与读出来的必须逐位相同（BLOB 编解码成对，评测台架走的是同一个解码函数）；
-  5. 函数级池化取**文件内最高分**，且没符号的文件不会因为换粒度而消失。
+  嵌入索引自建件（文件级与函数级两种粒度）：文本口径、增量失效键、向量存取、相似度与融合。
+  全程假 provider——单测绝不打外部 embedding 端点，真跑由 `pnpm search:embed` 的 --yes 闸门管着。
   */
 
 const vectorOf = (text: string): Float32Array => {
@@ -171,7 +165,7 @@ describe("相似度与融合", () => {
   it("cosineTop 按分数降序、零分不参与、同分按路径字典序、limit 生效", () => {
     const top = cosineTop(vectorOf("cache cache cache"), vectors, 5);
     expect(top[0]!.path).toBe("src/cache.java");
-    expect(top.map((item) => item.path)).not.toContain("src/zero.java");   // 零向量压根不进候选
+    expect(top.map((item) => item.path)).not.toContain("src/zero.java");   // 零向量不进候选
     expect(cosineTop(vectorOf("cache cache cache"), vectors, 1)).toHaveLength(1);
 
     const tied = [vector("b.java", "aa"), vector("a.java", "aa"), vector("c.java", "aa")];
@@ -179,8 +173,7 @@ describe("相似度与融合", () => {
   });
 
   it("cosineTopByFile：同文件的多个函数单元取最高分，返回的是文件而不是单元 id", () => {
-    // 手写向量而不是文本派生：文本直方图 embedding 下「cache」「cache cache」方向相同（余弦都是 1），
-    // 分不开高低，池化方式就没东西可判——这条要测的是池化，不是相似度本身。
+    // 手写向量而不是从文本派生：文本直方图下同向文本的余弦都是 1，池化没东西可判——这条测的是池化不是相似度
     const axis = (values: number[]): Float32Array => Float32Array.from(values);
     const unit = (path: string, values: number[]): StoredVector => ({ path, dim: 8, vec: axis(values) });
     const query = axis([3, 4, 0, 0, 0, 0, 0, 0]);   // 模长 5
@@ -193,8 +186,7 @@ describe("相似度与融合", () => {
     const top = cosineTopByFile(query, units, 3);
     expect(top.map((item) => item.path)).toEqual(["src/x.java", "src/y.java", "src/lonely.java"]);
     expect(top.every((item) => !item.path.includes("#"))).toBe(true);
-    // max 池化：x.java 靠那一个强函数排第一。换成均值池化它就掉到 lonely 之下（(1+0)/2=0.5 < 0.6），
-    // 也就是说「粒度有没有用」会被池化方式决定——这条断言把 max 钉住。
+    // max 池化：x.java 靠那一个强函数排第一；换成均值就掉到 lonely 之下（(1+0)/2=0.5 < 0.6），这条断言把 max 钉住
     expect(top[0]!.score).toBeGreaterThan(top[1]!.score);
     expect(top[1]!.score).toBeGreaterThan(top[2]!.score);
   });
@@ -204,7 +196,7 @@ describe("相似度与融合", () => {
     expect(reciprocalRankFusion([["x", "y"], ["x", "z"]])[0]).toBe("x");
     expect(reciprocalRankFusion([[], []])).toEqual([]);
     expect(reciprocalRankFusion([])).toEqual([]);
-    // 名次差一名就换序（k=60 时靠前的臂权重略高），这是「融合」而非「取并集」
+    // 名次差一名就换序（k=60 时靠前的列表权重略高），这是融合而不是取并集
     expect(reciprocalRankFusion([["only-lexical", "shared"], ["shared", "only-dense"]])).toEqual(["shared", "only-lexical", "only-dense"]);
   });
 });

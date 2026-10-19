@@ -6,17 +6,11 @@ import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 8;
 
-// 一次性 pre-load：dlopen 对应当前 Node ABI 的 binding 路径，避免 better-sqlite3
-// 走默认 `bindings('better_sqlite3.node')` 触发 127↔147 mismatch。
-// 后端只需 `new Database(filename, { nativeBinding })` 即可。
-// 类型 cast 是因为 @types/better-sqlite3 只声明了 `nativeBinding: string`，但
-// runtime 接受 addon 对象（见 better-sqlite3/lib/database.js 注释 "string or addon object"）。
+// 预加载对应当前 Node ABI 的 native binding，避免默认解析路径触发 ABI mismatch。
+// runtime 接受 addon 对象而 @types 只声明 string，故 cast。
 const nativeBinding = loadAddon() as unknown as string;
 
-/**
-  `getLatestFileSummaries` 的默认行数上限，**同时导出给调用方做达到预算上限判据**——
-  两处各写一个 2000 的话，改一处就会让「读到上限」的告警永远不响（§37.6 那条「一份清单改了两处」的同型坑）。
-*/
+/** getLatestFileSummaries 的默认行数上限；同时导出给调用方做达到上限的判据，避免各处字面量分叉。 */
 export const LATEST_SUMMARY_LIMIT = 2_000;
 
 /** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
@@ -45,21 +39,15 @@ export interface ChatMessageRow {
   error: string | null;
 }
 
-/** 检索向量的解码口径，与 `saveVectors` 的写入配方成对。评测台架自己开只读句柄取行，必须走这里同一个函数——两臂读两套坐标系就什么也没比。 */
+/** 检索向量的解码口径，与 saveVectors 的写入配方成对；评测台架的只读句柄必须走这里。 */
 export function decodeVectorBlob(path: string, dim: number, bytes: Uint8Array): { path: string; dim: number; vec: Float32Array } {
   const copy = new Uint8Array(bytes); // 驱动给的 Buffer 可能被复用，拷一份再视图化
   return { path, dim, vec: new Float32Array(copy.buffer, copy.byteOffset, dim) };
 }
 
 /**
-  产物库的**唯一形状声明**。它同时是两样东西的源：
-  - `migrate()` 里的 `db.exec`（建缺失的表）；
-  - 列对账（`reconcileColumns`）——从这段文本里读出每张表应有的列，缺哪补哪。
-
-  为什么列对账必须存在：`CREATE TABLE IF NOT EXISTS` 对**已经存在的表**一个列都不加。
-  这条梯子过去有四个版本（v3/v4/v5/v6/v8）只推版本号不建 DDL，于是「往上面的声明里加一列」
-  在新仓成立、在用户已有的 .tutor/tutor.db 上静默不成立——要到第一次真读那一列才炸。
-  v7 当初就是为 `state_json` 手补的一条 PRAGMA 守卫；补得了一次补不了次次，现在变成机制。
+  产物库的唯一形状声明：migrate() 的 db.exec 与 reconcileColumns() 的列对账都从这里读。
+  CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，声明本身在存量库上不成立——列对账是补这一步的机制。
   */
 export const DATABASE_SCHEMA_SQL = `
       CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -197,10 +185,7 @@ const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
 const TABLE_CONSTRAINT = /^(PRIMARY|UNIQUE|CHECK|FOREIGN|CONSTRAINT)\b/i;
 
 /**
-  声明文本 → 每张表的列清单。
-  边界取「到第一个 `;` 为止」而不是「到单独一行的 `);` 为止」：`schema_version` 是单行写的
-  `CREATE TABLE … (version INTEGER NOT NULL);`，按换行收尾会把下一张表的列算到它头上
-  （这条测试第一天就抓到了这个错切法）。建表语句内部没有分号，所以这个边界是安全的。
+  声明文本 → 每张表的列清单。边界取「到第一个 `;` 为止」：建表语句内部没有分号，这个切法安全。
   */
 export function declaredColumns(schema: string): { table: string; column: string; declaration: string }[] {
   const clean = schema.replace(/--[^\n]*/g, "");
@@ -241,7 +226,7 @@ export class TutorDatabase {
   readonly repositoryPathLabel: string;
   /**
     对账没能补上的列（`表.列`）。空数组 = 这份库的形状等于声明。
-    交出来而不是抛，是为了不把用户的存量库变成打不开的东西；挂载时这条读数会进 `engine.jsonl`。
+    交出来而不是抛，是不把用户的存量库变成打不开的东西；挂载时这条读数会进 `engine.jsonl`。
     */
   readonly schemaGaps: string[] = [];
 
@@ -270,22 +255,15 @@ export class TutorDatabase {
     if (current.version < 3) this.db.prepare("UPDATE schema_version SET version = ?").run(3);
     if (current.version < 4) this.db.prepare("UPDATE schema_version SET version = ?").run(4);
     if (current.version < 5) this.db.prepare("UPDATE schema_version SET version = ?").run(5);
-    // v6：会话持久化两表（上面 CREATE IF NOT EXISTS 幂等建好，这里只推版本号）
     if (current.version < 6) this.db.prepare("UPDATE schema_version SET version = ?").run(6);
     if (current.version < 7) {
-      // v7：chat_session 加 state_json。守卫是必需的而不是保险——
-      // 老库（v5/v6 之前）走上面的 CREATE 时已经带了这一列，无脑 ALTER 会抛 duplicate column。
+      // 走过上面 CREATE 的库已带这一列，无守卫的 ALTER 会抛 duplicate column
       const hasState = (this.db.prepare("PRAGMA table_info(chat_session)").all() as { name: string }[]).some((column) => column.name === "state_json");
       if (!hasState) this.db.exec("ALTER TABLE chat_session ADD COLUMN state_json TEXT;");
       this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
     }
-    // v8：检索向量表（上面 CREATE 幂等建好，这里只推版本号）
     if (current.version < 8) this.db.prepare("UPDATE schema_version SET version = ?").run(8);
-    /**
-      列对账放在梯子**之后**：v2/v7 那两步会补它们各自认识的列，先对账会让梯队的 ALTER 撞 duplicate column。
-      对账兜的是「改了声明而没写梯子」那一类——v3/v4/v5/v6/v8 只推版本号不建 DDL，
-      那几版往 CREATE 里加的列在存量库上从来没有落地，而这件事当时没有任何读数会红。
-      */
+    // 列对账必须放在版本梯子之后，否则梯子里的 ALTER 会撞 duplicate column
     this.reconcileColumns(schema);
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
@@ -293,11 +271,9 @@ export class TutorDatabase {
   }
 
   /**
-    列对账：以声明文本为唯一源，把「声明里有、这张表还没有」的列补上。
-    每次都跑、幂等——所以它不依赖版本号是否被翻对（那正是过去四个版本只推号不建 DDL 漏掉的东西）。
-    补不上的（带约束、或 NOT NULL 又没默认值）记进 `schemaGaps` 并当场喊一声，**不抛**：
-    崩在开库上等于把用户已有的学习记录整个锁死，而那一列下一次被真读到时自然会失败——
-    失败点带得出具体列名，比开机一句「Unsupported schema」有用得多。
+    列对账：以声明文本为唯一源，把「声明里有、表里还没有」的列补上；幂等，不依赖版本号是否翻对。
+    补不上的（带约束、或 NOT NULL 又没默认值）记进 schemaGaps 并告警，不抛：
+    崩在开库上等于锁死用户已有的学习记录，留给读取点失败才能带上具体列名。
     */
   private reconcileColumns(schema: string): void {
     for (const declared of declaredColumns(schema)) {
@@ -355,8 +331,8 @@ export class TutorDatabase {
   }
 
   /**
-    写一批文件级静态产物。`replaceAll` 表示这批就是该产物的全集（整仓重算时用，删掉已消失文件的行）；
-    不传则是按文件增改——增量重分析只重写受影响文件的行，其余文件的产物仍然有效，不该跟着丢。
+    写一批文件级静态产物。replaceAll 表示这批是该产物的全集（删掉已消失文件的行）；
+    不传则只按文件增改，其余文件的产物保持有效。
   */
   saveFileFacts(repositoryId: string, kind: FactKind, rows: { path: string; payload: unknown }[], options?: { replaceAll?: boolean }): void {
     const insert = this.db.prepare("INSERT OR REPLACE INTO static_fact(repository_id, kind, path, payload, at) VALUES (?, ?, ?, ?, ?)");
@@ -401,12 +377,7 @@ export class TutorDatabase {
   }
 
   /**
-    文件摘要记录（L1）。
-
-    沿用 `summaries` 表与 `summary` 列，只是列内容自 2026-09-18 起是 **JSON**（摘要 + 角色 + 覆盖率）——
-    列本身是不透明 TEXT，不值得为改内容做一次表结构迁移。
-    旧行是纯文本摘要，且缓存键口径已变（现在含切片与输入口径版本），本来不会再被命中：
-    **读不出来就当未命中重算**，不猜、不补默认值。
+    文件摘要记录（L1）。summary 列是不透明 TEXT，内容是 JSON；读不出来就当未命中重算，不猜、不补默认值。
   */
   getFileSummary<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
     const row = this.db.prepare("SELECT summary FROM summaries WHERE cache_key = ?").get(cacheKey) as { summary: string } | undefined;
@@ -425,11 +396,8 @@ export class TutorDatabase {
   }
 
   /**
-    每个文件**最新**的一条摘要（同一文件会有多行：缓存键里含切片与模型版本）。
-
-    按写入时间倒序扫一遍、按路径取首次出现即可，不必让调用方理解缓存键的构造。
-    带 `limit` 是因为这张表只会追加、长期累积后全表扫描会变慢；取不到的行不影响正确性
-    （缺摘要 = 该文件没有已确认的职责，调用方按「未知」处理）。
+    每个文件最新的摘要（缓存键含切片与模型版本，同一文件有多行）；按写入时间倒序取每个路径的首次出现。
+    limit 兜住只追加表的全表扫描；取不到 = 该文件没有已确认的职责，调用方按未知处理。
   */
   getLatestFileSummaries(limit = LATEST_SUMMARY_LIMIT): { path: string; summary: string; role?: string; coverageLow?: boolean }[] {
     const rows = this.db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ?").all(limit) as { summary: string }[];
@@ -445,7 +413,7 @@ export class TutorDatabase {
           ...(typeof parsed.coverage?.low === "boolean" ? { coverageLow: parsed.coverage.low } : {})
         });
       } catch {
-        // 旧行是纯文本、或半截 JSON：跳过，不猜内容
+        // 非 JSON 行：跳过，当作没有这条摘要
       }
     }
     return [...latest.values()];
@@ -469,12 +437,9 @@ export class TutorDatabase {
   }
 
   /**
-    通用 L2 产物缓存（流程 / 推荐入口等），键由 `layerCacheKey()` 构造——键里已含仓库、口径版本、
-    模型版本与本层输入哈希，所以读出来直接用，不需要任何失效判断。
-
-    `at` 是毫秒时间戳，语义是「最后一次被用到」：TTL 按闲置时长算，命中方应回写续期（`touchLayerCache`）。
-    每仓一个 DB 文件，所以这张表天然只装本仓的条目，不涉及跨仓清理；
-    旧键（输入变了）永远不会再被命中，靠 `putLayerCache` 顺带按龄修剪兜底，防止无限累积。
+    通用 L2 产物缓存（流程 / 推荐入口等）。键由 layerCacheKey() 构造，已含仓库、口径版本、模型版本与
+    本层输入哈希，读出来直接用，不需要失效判断。
+    at 语义是「最后一次被用到」：命中方应回写续期（touchLayerCache）；putLayerCache 顺带按龄修剪，防止无限累积。
   */
   getLayerCache<T>(key: string): { value: T; at: number } | undefined {
     const row = this.db.prepare("SELECT payload, at FROM layer_cache WHERE cache_key = ?").get(key) as { payload: string; at: number } | undefined;
@@ -497,11 +462,9 @@ export class TutorDatabase {
   }
 
   /**
-    画布上的一张图（`store/diagrams.ts` 是唯一业务读写口，这里只收 SQL；表结构与「为什么单独立列」见上面 `diagram` 那段）。
-    ⚠️ 列一律 `AS` 成返回类型上那几个驼峰名：better-sqlite3 按 **SQL 里写的列名**交回键，
-    而这里的类型声明是驼峰的——`created_at` 不写别名的话 `row.createdAt` 是 `undefined`，
-    编译器一句都不报（类型是断言出来的），到运行期才炸成「Invalid time value」。
-    与 `chat_session` 那种「类型就写蛇形」的行形状是另一条路，两条都行，但**声明与交出的键必须是同一套**。
+    画布上的一张图（store/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
+    列一律 AS 成返回类型上的驼峰名：better-sqlite3 按 SQL 里写的列名交回键，
+    类型是断言出来的、编译器不报，键名不一致到运行期才炸。
   */
   listDiagramRows(repositoryId: string): { diagramId: string; name: string; source: string; createdAt: number; updatedAt: number; payload: string }[] {
     return this.db.prepare("SELECT diagram_id AS diagramId, name, source, created_at AS createdAt, updated_at AS updatedAt, payload FROM diagram WHERE repository_id = ? ORDER BY updated_at DESC").all(repositoryId) as
@@ -523,10 +486,8 @@ export class TutorDatabase {
   }
 
   /**
-    会话持久化（chat_session / chat_message）的语句层。
-    业务出入口是 `store/chat-store.ts`——那里负责 id/时间戳生成、入参守卫与领域类型，
-    这一层只把 SQL 收在一处。软删语义在此层就要落实：**所有读侧带 `deleted_at IS NULL`**，
-    所以「列表看不见」与「消息行仍在」可以同时成立（产品删除不动审计线，也不动消息原文）。
+    会话持久化（chat_session / chat_message）的语句层；业务出入口是 store/chat-store.ts（id/时间戳生成、入参守卫与领域类型在那里）。
+    软删语义在此层落实：所有读侧带 deleted_at IS NULL，「列表看不见」与「消息行仍在」同时成立。
     */
   insertChatSession(session: { id: string; repositoryId: string; scope: string; courseNodeId: string | null; exerciseId: string | null; title: string; at: string }): void {
     this.db.prepare(`INSERT INTO chat_session(id, repository_id, scope, course_node_id, exercise_id, title, created_at, updated_at)
@@ -554,7 +515,7 @@ export class TutorDatabase {
     this.db.prepare("UPDATE chat_session SET updated_at = ? WHERE id = ? AND deleted_at IS NULL").run(at, sessionId);
   }
 
-  /** 问答线程的设置快照（settings）——会话续命靠它把下一轮的档位接回上一轮用的那一套。 */
+  /** 问答线程的设置快照：续接会话时用同一套设置开下一轮。 */
   updateChatSessionState(sessionId: string, stateJson: string): void {
     this.db.prepare("UPDATE chat_session SET state_json = ? WHERE id = ? AND deleted_at IS NULL").run(stateJson, sessionId);
   }
@@ -570,7 +531,7 @@ export class TutorDatabase {
     return result.changes;
   }
 
-  /** 正文行入库。`stage` 列一律写 NULL（教学状态机已于 2026-10-14 撤掉，列留着不迁移）。 */
+  /** 正文行入库。stage 是遗留列，一律不写不读，留着不迁移。 */
   insertChatMessage(message: { id: string; sessionId: string; role: string; content: string; createdAt: string; error: string | null }): void {
     this.db.prepare("INSERT INTO chat_message(id, session_id, role, content, created_at, error) VALUES (?, ?, ?, ?, ?, ?)")
       .run(message.id, message.sessionId, message.role, message.content, message.createdAt, message.error);
@@ -638,8 +599,7 @@ export class TutorDatabase {
   }
 
   loadVectors(repositoryId: string, model: string): { path: string; dim: number; vec: Float32Array }[] {
-    // ORDER BY path：dense 臂的扫描顺序固定下来（同分排名本来按路径破平，但扫描顺序不定会让「两次跑同样输入」
-    // 在浮点边界上有理论差异的可能——可复现性不留这个口子）
+    // ORDER BY path：固定扫描顺序，dense 臂两次跑同样输入结果可复现
     const rows = this.db.prepare("SELECT path, dim, vec FROM search_vector WHERE repository_id = ? AND model = ? ORDER BY path").all(repositoryId, model) as { path: string; dim: number; vec: Uint8Array }[];
     return rows.map((row) => decodeVectorBlob(row.path, row.dim, row.vec));
   }
@@ -659,9 +619,8 @@ export class TutorDatabase {
   }
 
   /**
-    一次只取要的**那一列**。以前五个 getter 全走「SELECT 全部五列」，而 `analysis_json` 是大仓里最重的一块
-    （依赖图 + 符号表 + 质量报告，整仓序列化），于是「只想读 settings 里那个月预算」也要把它几十 MB 捞一遍。
-    列名取自这张表的固定五个，不接受任何外部字符串，拼进 SQL 不构成注入面。
+    一次只取要的那一列：analysis_json 是大仓里最重的一块，整行捞取会让轻读付重代价。
+    列名取自这张表固定的五个，不接受外部字符串，拼进 SQL 不构成注入面。
     */
   private getJsonColumn(repositoryId: string, column: "index_json" | "course_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
     const row = this.db.prepare(`SELECT ${column} AS value FROM repository_state WHERE repository_id = ?`).get(repositoryId) as { value: string | null } | undefined;
@@ -669,9 +628,7 @@ export class TutorDatabase {
   }
 
   /**
-    只写这次给出来的那几列。旧写法是「SELECT 全部五列 → 拼回七列 INSERT OR REPLACE」，
-    所以「存一份 settings」也要把最重的 `analysis_json` 读出来再原样写回去；
-    `ON CONFLICT DO UPDATE` 只碰给了值的列，其余留在原地不动。
+    只写这次给出来的那几列：ON CONFLICT DO UPDATE 只碰给了值的列，其余留在原地不动。
     列名从这张表固定的五个键里查，外部字符串进不了 SQL。
     */
   private upsert(repositoryId: string, patch: { index?: string; course?: string; estimate?: string; analysis?: string; settings?: string }): void {

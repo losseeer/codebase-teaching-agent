@@ -9,8 +9,8 @@ import { runWithTrace } from "../trace/context.js";
 import { recordEgress, type EgressSource } from "./dataflow.js";
 
 /**
-  出网清单的计入审计口径。这个模块存在的意义就是「能核对」，所以四条判据都得钉住：
-  - **一行都不带正文**（带了指纹就没意义了，日志本身变成第二个泄露面）；
+  出网清单的计入审计口径，四条判据都得钉住：
+  - 一行都不带正文（带了指纹就没意义了，日志本身变成第二个泄露面）；
   - 空清单不落空行，被上层预算裁掉的段不算出网（虚报比漏报更糟）；
   - 仓 id 由路径推导，与导入时写进索引的同一套算法，不另造一套；
   - traceId 跟着请求上下文走——报表靠它把 journal 与 llm.log 接起来。
@@ -49,7 +49,6 @@ describe("源码出网清单计入审计", () => {
     expect(String(list[0].payload.hash)).toMatch(/^[0-9a-f]{12}$/);
     expect(list[0].sessionId).toBe("thread-1");
     expect(list[1].payload.path).toBe("src/other.ts");
-    // 「有指纹而不抄正文」是这条线的全部前提：正文一旦进日志，`.tutor/` 就变成第二个泄露面
     for (const event of list) expect(JSON.stringify(event)).not.toContain(CLEAN_TEXT);
   });
 
@@ -59,7 +58,7 @@ describe("源码出网清单计入审计", () => {
       repositoryPath: repository,
       scene: "practice.polish",
       sources: [
-        source({ path: "src/unswept.ts" }), // 装配方没给读数 = 这道路压根没过筛
+        source({ path: "src/unswept.ts" }), // 装配方没给读数 = 这道路没过筛
         source({ path: "src/clean.ts", masked: 0 }), // 过了筛、零命中——必须留得下这个 0
         source({ path: "src/dirty.ts", text: SECRET_TEXT, masked: 2, truncated: true })
       ]
@@ -70,7 +69,6 @@ describe("源码出网清单计入审计", () => {
     expect(clean?.payload.masked).toBe(0);
     expect(clean?.payload.truncated).toBeUndefined();
     expect(dirty?.payload).toMatchObject({ masked: 2, truncated: true });
-    // 以前 `masked: 0` 会被压成缺字段，报表就只能把「没扫」印成「扫过且干净」（§45：虚报比漏报糟）
     // 被隐去过的段，其正文（含密钥原样）绝不落进审计线
     expect(JSON.stringify(dirty)).not.toContain("sk-abcdefghijklmnop");
   });

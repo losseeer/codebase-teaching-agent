@@ -1,14 +1,13 @@
 import type { CallEdge, FlowEdge, FlowStage, RepositoryAnalysis, RepositoryFlow, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
 
 /**
-  流程视图的「静态证据层」：从入口出发，沿 `analysis.graph.calls` 的**跨文件**跳展开一条调用链。
+  流程视图的静态证据层：从入口出发，沿 `analysis.graph.calls` 的跨文件跳展开一条调用链。
 
   两个用途，必须分清：
   1) 作为 LLM 生成流程的输入材料（把真实的跨文件调用顺序送入模型，避免它凭空编排）；
   2) LLM 不可用时的降级视图——此时它是答案本身，不是半成品。
 
-  它**自己不是**流程视图的最终形态：回调注册（`add_node("evaluate", evaluate)`）、反射、
-  依赖注入这类编排不产生调用边，静态调用图看不见它们。这正是流程视图要交给 LLM 的原因。
+  它自己不是流程视图的最终形态：回调注册、反射、依赖注入这类编排不产生调用边，静态调用图看不见它们。
  */
 
 const MAX_EVIDENCE_STEPS = 24;
@@ -31,7 +30,7 @@ export interface EvidenceStage {
   endLine?: number;
   /** 调用点：谁（函数）在哪一行发起了这次跳转 */
   from?: { title: string; path: string; line: number };
-  /** 发起这次跳转的**环节序号**（边要按序号连，光有路径连不起来） */
+  /** 发起这次跳转的环节序号（边要按序号连，光有路径连不起来） */
   fromOrder?: number;
   /** 跨文件去重后的去向总数 */
   branches: number;
@@ -226,19 +225,13 @@ export function buildFlowEvidence(
   return { entry, stages, truncated, omitted };
 }
 
-/**
-  环节标题的字数上限。**模型流程与静态降级视图共用这一份**（`flow.ts` 的提示词与校验都读它）：
-  两处各写一个 14 的话，改一处就会出现「降级视图比模型产物宽」的两种卡片。
-*/
+/** 环节标题的字数上限：模型流程与静态降级视图共用这一份（`flow.ts` 的提示词与校验都读它）。 */
 export const MAX_STAGE_TITLE = 14;
 
 /**
-  把静态证据直接渲染成流程（LLM 不可用时的降级视图）。
-  降级必须显式：`reason` 会写进 `caveats`，界面在页脚原样展示——静默降级等于把静态链
-  伪装成成模型结论，读者无从知道它看不到回调注册这类编排。
-
-  边也在这里产出：每个环节的 `fromOrder` 就是它的入边，`loops`/`revisits` 是真实的回边与共享去向，
-  两者都是跨文件调用（`buildFlowEvidence` 只展开跨文件跳转），因此 `origin` 一律是 `static`。
+  把静态证据渲染成流程（LLM 不可用时的降级视图）。降级必须显式：`reason` 写进 `caveats`，界面原样展示。
+  边也在这里产出：每个环节的 `fromOrder` 是它的入边，`loops`/`revisits` 是真实的回边与共享去向；
+  两者都是跨文件调用（`buildFlowEvidence` 只展开跨文件跳转），所以 `origin` 一律是 `static`。
 */
 export function staticFlow(evidence: FlowEvidence, reason: string): RepositoryFlow {
   const stages: FlowStage[] = evidence.stages.map((step) => {

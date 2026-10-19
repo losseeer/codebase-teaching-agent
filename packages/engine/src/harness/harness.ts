@@ -16,14 +16,7 @@ import { teachingSystemPrompt } from "./prompts.js";
 const TEACHING_MAX_TOOL_ROUNDS = 2;
 const TEACHING_MAX_TOOL_CALLS = 3;
 
-/**
-  代码问答回合的产出。
-
-  2026-10-14 把教学状态机整条撤了：不再有 `stage` 推进、提示阶梯 `fallbackCount`、动作提议与守门，
-  回合形状就是「装配上下文 → 工具循环 → 让模型回答一次」，与宏观设计作用域同形。
-  被撤掉时一起停写的还有 `hint_depth` / `unit_mastered` / `dependency_event` / `action_veto` 四类审计事件
-  （历史行仍留在 journal 里，读侧不再产生新行）。
-  */
+/** 代码问答回合的产出：一轮就是「装配上下文 → 工具循环 → 模型回答一次」。 */
 export interface TutorReply {
   session: TutorSession;
   assistant: TutorMessage;
@@ -44,11 +37,7 @@ export interface TutorReply {
 /**
   问答回合的过程事件：一个回合里模型实际做的事（读代码 / 检索 / 组织回复）。
   server 把它经本请求的 SSE 响应流发为 `progress` 事件，GUI 显示成 Agent 侧栏里的过程提示行。
-  `stage` 字段名与 map-chat 的 SSE 过程事件保持一致（GUI 两侧同一套取值）；
-  原 `deciding`（正在判断本轮教学动作）随状态机一起撤了。
-
-  形状已上收 `shared`（`TeachingProgress`）：过程帧的种类是引擎与界面的共同契约，
-  不再由两边各自抄一遍字面量。
+  形状已上收 `shared`（`TeachingProgress`）：过程帧的种类是引擎与界面的共同契约，不由两边各抄一遍字面量。
   */
 export type { TeachingProgress };
 
@@ -63,9 +52,9 @@ export interface RespondOptions {
   onProgress?: (progress: TeachingProgress) => void;
   /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）：贯穿工具循环。 */
   signal?: AbortSignal;
-  /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill。 */
+  /** 技能清单与取正文通道：不给就没有 read_skill。 */
   skills?: SkillsToolContext;
-  /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */
+  /** 外部 MCP 工具面：不给就没有任何 `mcp__` 前缀的工具。 */
   external?: ExternalToolContext;
 }
 
@@ -75,14 +64,13 @@ export function createSession(repositoryId: string, courseNodeId: string, settin
 }
 
 /**
-  一轮代码问答：provider 是**必填**的——没有模型可调用时这条路由直接拒（见 server.ts 的 422 分支），
-  不再像以前那样回一段本地启发式文案。理由：那段兜底文案是按阶梯造的，而阶梯已经没了；
-  更要紧的是「看起来答完了、其实没走模型」是这条产品线上最难查的事故形状。
+  一轮代码问答：provider 必填——没有模型可调用时这条路由直接拒（见 server.ts 的 422 分支），
+  不回一段本地启发式文案。「看起来答完了、其实没走模型」是最难查的事故形状。
 */
 export async function respondWithProvider(session: TutorSession, node: CourseNode, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   const policy = policyFor(session.settings);
   /**
-    上下文里放了哪几段仓内源码——由 `assembleContext` 顺带登记，**发一次记一次**：
+    上下文里放了哪几段仓内源码——由 `assembleContext` 顺带登记，发一次记一次：
     计入审计点贴在发送前、不放在装配里（理由见 `harness/context.ts` 的 egress 注释）。
     */
   const egress: EgressCollector = [];
@@ -119,7 +107,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
 
 /** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。
-    `usage` 取工具循环的**累计值**而不是最后一趟的，否则多轮回合的 token 会被少记。 */
+    `usage` 取工具循环的累计值而不是最后一趟的，否则多轮回合的 token 会被少记。 */
 async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; cross?: CrossRepoContext; skills?: SkillsToolContext; external?: ExternalToolContext; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[]; mcpCalls: McpCallAudit[]; skillReads: { skill: string; chars: number; found: boolean }[] }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
     input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round });

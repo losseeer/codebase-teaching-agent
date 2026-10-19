@@ -28,19 +28,14 @@ import { deepenInferredEdges } from "./deepen.js";
 import { buildFlowEvidence, MAX_STAGE_TITLE, staticFlow } from "./evidence.js";
 
 /**
-  流程视图的服务端（宏观设计 · 流程视图）：
-
-  流程由 LLM 生成，而不是直接把静态调用链画出来。理由是静态调用图看不见**编排**——
-  `add_node("evaluate", evaluate)`、路由表、插件注册、依赖注入都不会产生调用边，
-  于是真正的主干（如 LangGraph 的 evaluate → improve → 回环）在静态链上是断的。
-  模型可以从文件、符号与依赖语义里读出这类结构，这是流程视图相对架构视图的增量。
+  流程视图的服务端（宏观设计 · 流程视图）：流程由 LLM 生成，而不是直接画静态调用链——
+  静态调用图看不见编排（节点注册、路由表、插件注册、依赖注入都不产生调用边），真正的主干
+  在静态链上是断的；模型可以从文件、符号与依赖语义里读出这类结构。
 
   静态调用链没有被丢掉，它做两件事：作为 LLM 的输入证据（真实的跨文件调用顺序），
   以及 LLM 不可用时的降级视图（显式标注，不伪装成模型结论）。
 
-  与 `coursetree/entry-suggest.ts` 同一套约定：失败不抛给调用方，返回降级结果 + 原因；
-  缓存只存**可信答案**——成功结果与确定性降级（模型给不出更多了，见 `GeneratedFlow.deterministic`），
-  瞬时失败（调用异常 / 内容解析不出）不固化，下次访问仍重试。
+  与 `coursetree/entry-suggest.ts` 同一套约定：失败不抛给调用方，返回降级结果 + 原因。
  */
 
 const MAX_DIGEST_FILES = 60;
@@ -48,20 +43,20 @@ const MAX_SYMBOLS_PER_FILE = 8;
 const MAX_IMPORTS_PER_FILE = 8;
 const MAX_CALL_CHAIN = 24;
 const ENTRY_EXCERPT_LINES = 120;
-/** 目录骨架用的行数上限：全量文件的目录树在大型仓库会失控，超出即截断并显式告知模型。 */
+/** 目录骨架行数上限，超出即截断并在 digest 里标记。 */
 const MAX_TREE_LINES = 200;
-/** 热点只给最靠前的若干个：完整列表是索引内部数据，送入模型的是「哪里最常被改动」这个信号。 */
+/** 只送最常改动的前若干个热点；完整列表是索引内部数据。 */
 const MAX_HOTSPOTS = 15;
 const MAX_TITLE = 18;
 const MAX_SUMMARY = 100;
-/** 环节说明进的是详情抽屉（可滚动），不是画布卡片；提示词已要求一句话简要描述，这里是防御性硬上限。 */
+/** 环节说明进详情抽屉，提示词已要求一句话；这里是防御性硬上限。 */
 const MAX_STAGE_DETAIL = 160;
 const MAX_STAGE_FILES = 3;
 const MAX_FILE_NOTE = 40;
 const MAX_BRANCHES = 4;
 const MAX_BRANCH_TEXT = 60;
 const MAX_CAVEATS = 240;
-/** 环节数上限 12，边比环节多不了太多；给点余量，多出来的会在校验时丢弃并计数。 */
+/** 边数上限；超出的在校验时丢弃并计入 caveats。 */
 const MAX_EDGES = 24;
 const MAX_EDGE_EVIDENCE = 60;
 const MAX_UNCOVERED = 6;
@@ -73,7 +68,7 @@ const FALLBACK_UNGROUNDED = "模型给出的环节缺少仓内代码落点";
 const FALLBACK_TRUNCATED = "模型输出在长度上限处被截断，未形成完整流程";
 const FALLBACK_DIGEST_FAILED = "流程输入组装失败，已回落静态调用链";
 
-/** 与 buildFlowDigest 配套的流程生成系统提示词；导出供探针/测试复用（改提示词时同步看 flow.test.ts）。 */
+/** 导出供探针与测试复用（改文案时同步看 flow.test.ts）。 */
 export const SYSTEM_PROMPT = [
   "你是代码教学产品的架构讲解者。给定一个仓库的执行入口、文件清单（含符号名与依赖）与静态调用链证据，",
   "输出「一次执行从入口到结束经过哪些环节」。",
@@ -99,13 +94,9 @@ export const SYSTEM_PROMPT = [
 ].join("");
 
 /**
-  流程层这一步的口径 = 上面的提示词 + 这个版本号（两者绑在一起，见 `analysis-step.ts`）。
-  `digest-v4`（2026-09-22，A2）：user 消息末尾新增可选的「近期仓库变更」参考段（见 `changes/recent-changes.ts`），
-  系统提示词同步加了它的用法说明。旧条目没有这一输入，翻一次键让流程在有/无变更段的前提下重新生成。
-
-  什么时候要翻版本：`buildFlowDigest` 的形状变了、或裁剪阈值**没有**体现在提示词文案里的那种改动。
-  不用手动翻的情况：`SYSTEM_PROMPT` 本身的文本、以及被插值进文案的那些 `MAX_*` 阈值——
-  它们会改变指纹，守卫测试直接拦下（`pnpm analysis:lock` 才是唯一的放行口）。
+  流程层这一步的口径 = 提示词文本 + `contractVersion`（两者绑在一起，见 `analysis-step.ts`）。
+  提示词文案以及被它插值的 `MAX_*` 阈值会改变缓存指纹，守卫测试直接拦下（`pnpm analysis:lock` 是唯一的放行口），
+  不需要手动翻版本；`buildFlowDigest` 的形状变了、或裁剪阈值没有体现在文案里，才要翻 `contractVersion`。
 */
 const FLOW_STEP = defineAnalysisStep({ layer: "flow", contractVersion: "digest-v4", prompts: [SYSTEM_PROMPT] });
 
@@ -115,12 +106,9 @@ export interface FlowDigestFile {
   symbols: string[];
   imports: string[];
   importedBy: number;
-  /** 结构角色（core 主干 / infra 设施 / support 支撑 / tool 末端 / test 测试），与摘要表同一套分类。 */
+  /** 结构角色（core 主干 / infra 设施 / support 支撑 / tool 末端 / test 测试）。 */
   role: FileRole;
-  /**
-    该文件的一句话职责（来自 L1 摘要表，基于正文生成）。
-    09-22 起不再按 coverageLow 扣用——低判行只是没复述符号名，职责描述本身仍是定位线索。
-  */
+  /** 该文件的一句话职责，来自 L1 摘要表（基于正文生成）；缺失表示未确认。 */
   summary?: string;
 }
 
@@ -138,17 +126,15 @@ export interface FlowDigest {
   directoryTree: string[];
   /** 目录骨架是否被行数上限截断 */
   directoryTreeTruncated: boolean;
-  /** git 改动热点；**已过滤到被索引的文件**，避免模型引用一个不在索引里的路径 */
+  /** git 改动热点，已过滤到被索引的文件 */
   hotspots: Hotspot[];
 }
 
 /**
-  构造送入模型的证据。证据只含「模型推不出、但必须知道」的事实：
-  真实路径、符号名、依赖方向、静态调用顺序。刻意不放源码全文——那会把成本推高一个量级，
-  而流程编排靠符号名与文件名已经能读出来。
+  送入模型的证据只含模型推不出但必须知道的事实：真实路径、符号名、依赖方向、静态调用顺序；刻意不含源码全文。
 
-  ⚠️ 字段顺序即前缀缓存成本：`entry` 与 `entryExcerpt` 随入口变，所以**新增段一律追加在末尾**，
-  别往中间插（会让其后全部失效）；`files` 的排序是全仓维度、不随入口变，改动它同样会破缓存。
+  ⚠️ 字段顺序即前缀缓存成本：`entry` 与 `entryExcerpt` 随入口变，新增段一律追加在末尾；
+  `files` 的排序是全仓维度、不随入口变，改动它同样会破缓存。
  */
 export function buildFlowDigest(
   repositoryPath: string,
@@ -164,7 +150,7 @@ export function buildFlowDigest(
   }
   const ranked = rankSymbolsByCalls(analysis.graph.symbols, analysis.graph.calls, [entry.path], MAX_SYMBOLS_PER_FILE);
   const symbolsByPath = new Map<string, string[]>([...ranked].map(([path, list]) => [path, list.map((symbol) => symbol.name)]));
-  // 角色按结构判（不依赖有没有配模型），因此同一份仓库任何时候算出的角色都一样
+  // 角色只按结构判定，与是否配置模型无关，同一仓库任何时候结果一样
   const roles = classifyFileRoles({
     files: index.files,
     symbols: analysis.graph.symbols,
@@ -174,7 +160,7 @@ export function buildFlowDigest(
     dispatch: analysis.graph.dispatch ?? []
   });
 
-  // 有依赖边或有符号的文件才进清单：流程视图关心的是「谁参与执行」，不是全量文件清单
+  // 流程清单关心「谁参与执行」，不是全量文件
   const candidates = index.files
     .map((file) => {
       const known = summaries.get(file.path);
@@ -185,7 +171,6 @@ export function buildFlowDigest(
         imports: (analysis.graph.imports[file.path] ?? []).slice(0, MAX_IMPORTS_PER_FILE),
         importedBy: inDegree.get(file.path) ?? 0,
         role: roleOf(roles, file.path),
-        // 摘要不再按覆盖度扣用（09-22 拍板）：anchor-v2 判低的残余是「纯中文行为描述」，扣掉等于把职责线索也丢了
         ...(known ? { summary: known } : {})
       };
     })
@@ -206,8 +191,7 @@ export function buildFlowDigest(
   if (entryExcerpt) egress?.push({ kind: "flow-window", path: read.audit.path || entry.path, from: 1, to: read.audit.lines ?? 0, text: entryExcerpt, masked: read.audit.masked, truncated: read.audit.truncated || undefined });
 
   const tree = renderDirectoryTree(index.fileTree, MAX_TREE_LINES);
-  // 热点可能落在未索引的文件上（gitHotspots 只按 .tutorignore 过滤、不看扩展名），
-  // 而 parseFlow 会把「不在索引里的路径」当编造丢弃——先把这类路径剔掉，免得模型白白踩坑。
+  // 热点可能落在未索引的文件上，而 parseFlow 会把清单外的路径当编造丢弃，先剔掉
   const indexedPaths = new Set(index.files.map((file) => file.path));
   const hotspots = index.hotspots.filter((hotspot) => indexedPaths.has(hotspot.path)).slice(0, MAX_HOTSPOTS);
 
@@ -224,7 +208,7 @@ export function buildFlowDigest(
   };
 }
 
-/** 目录骨架：只列目录与被索引文件，目录行附该目录下被索引文件数。超出 maxLines 即截断并标记。 */
+/** 目录骨架：只列目录与被索引文件，目录行附该目录下被索引文件数。 */
 function renderDirectoryTree(nodes: FileTreeNode[], maxLines: number): { lines: string[]; truncated: boolean } {
   const lines: string[] = [];
   let truncated = false;
@@ -253,34 +237,31 @@ export interface GenerateFlowInput {
   analysis: RepositoryAnalysis;
   entry: SourceAnchor;
   provider: LlmProvider;
-  /** L1 摘要表（按路径索引）；缺某个文件就是「该文件职责未确认」。 */
+  /** L1 摘要表，按路径索引。 */
   summaries: Map<string, string>;
-  /** 持久层（`layer_cache` 表）。默认时只走内存缓存——测试与降级路径不落盘。 */
+  /** 持久层（`layer_cache` 表）。缺省时只走内存缓存——测试与降级路径不落盘。 */
   database?: TutorDatabase;
   /**
-    出网登记（见 `security/dataflow.ts`）：`buildFlowDigest` 把入口文件的真实正文放进 digest，
-    而 digest 就是发给模型的那份 user 消息——这一段不经工具循环，没有 `file_read` 那行可查，所以单独登记。
-    **只有真发请求的那条路会计入审计**：算缓存键（`flowCacheKeyOf`，含 `flow:reburn --check` 那条零 token 探针）
-    也会装配一次 digest，那一趟可能命中缓存、一个字都没发出去，所以它攒的清单没人 booking。
-    */
+    出网登记（见 `security/dataflow.ts`）：digest 含入口文件的真实正文，而 digest 就是发给模型的那份 user 消息；
+    这一段不经工具循环，没有 `file_read` 那行可查，所以单独登记。
+    清单从装配阶段就开始攒，但只有真发请求的那条路才计入审计——算缓存键（`flowCacheKeyOf`）
+    也会装配一次 digest，那一趟可能命中缓存、一个字都没发出去。
+  */
   egress?: EgressCollector;
 }
 
 export interface GeneratedFlow extends RepositoryFlowResult {
   usage?: LlmUsage;
   /**
-    降级是否为**确定性结论**：模型返回了合法 JSON、但环节在仓内没有代码落点——同一输入再跑一次
-    模型给的答案一样，所以与成功结果一样可入缓存（与推荐入口的 `declined` 同一套口径）；
-    调用异常、内容解析不出这类瞬时失败不带此标记，不入缓存。
-    ⚠️ 「输出被我们自己的上限截断」**不算**这个节点，见 `capHit`（同一个坑的两半，§35.6）。
+    降级是否为确定性结论：模型返回了合法 JSON、但环节在仓内没有代码落点——同一输入再跑一次答案一样，
+    所以与成功结果一样可入缓存；调用异常、内容解析不出这类瞬时失败不带此标记，不入缓存。
+    被我们自己的输出上限截断不算确定性结论，见 `capHit`。
   */
   deterministic?: boolean;
   /**
-    降级是因为**我们设的输出上限被撞满**（`finishReason === "length"`），不是模型答不出。
-    这种结果可以留在内存层（本进程内不重复烧钱），但**绝不进 SQLite 持久层**：
-    持久化等于把一次容量误判永久钉成「这条流程讲不动」的静态视图，而且读起来与「模型给不出更多」
-    一模一样，再也没人去修那个上限。代价算过：撞上限时重问一条 ≈¥0.17，比一条流程被永久降级便宜得多。
-    2026-10-06 §35.6 定下这条，代码当时只抬了上限、没改规则；这次补齐。
+    降级是因为输出达到了我们设的上限（`finishReason === "length"`），不是模型答不出。
+    这种结果可以留在内存层（本进程内不重复生成），但不进 SQLite 持久层：
+    持久化等于把一次容量误判永久钉成「这条流程讲不动」的静态视图，之后也没人去修那个上限。
   */
   capHit?: boolean;
 }
@@ -293,7 +274,7 @@ export async function generateRepositoryFlow(input: GenerateFlowInput): Promise<
   return generateFromDigest(scoped, digest);
 }
 
-/** 入口统一补一个出网收集数组（调用方没给时）：装配往里推，**只有真发请求的那条路**才计入审计。 */
+/** 调用方没给出网收集器时补一个空数组，让装配阶段统一往里推。 */
 function withEgressCollector<T extends GenerateFlowInput>(input: T): T {
   return input.egress ? input : { ...input, egress: [] };
 }
@@ -308,23 +289,16 @@ function tryBuildFlowDigest(input: GenerateFlowInput): FlowDigest | undefined {
   }
 }
 
-/** 用**已算好的**输入摘要生成一条流程：digest 既是发给模型的内容主体，也是缓存键的哈希对象；
-    末尾可附加「近期仓库变更」参考段——它**刻意不进键**（进键=每次保存重烧全仓缓存，见 changes/recent-changes.ts）。 */
+/** 用已算好的输入摘要生成一条流程：digest 既是发给模型的内容主体，也是缓存键的哈希对象。 */
 async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest): Promise<GeneratedFlow> {
   const evidence = buildFlowEvidence(input.analysis, input.entry);
   try {
+    // 「近期仓库变更」参考段追加在 digest 之后、刻意不进缓存键：它每次保存都会刷新，只影响讲解重心（见 changes/recent-changes.ts）
     const recentChanges = buildRecentChangesSection(input.analysis);
-    // 出网计入审计：digest 就是发给模型的 user 消息本体，这一段入口正文确实跟着出门了
     recordEgress({ repositoryPath: input.repositoryPath, scene: "map.flow", sources: input.egress ?? [] });
     const response = await input.provider.complete({
       system: SYSTEM_PROMPT,
       user: recentChanges ? `${JSON.stringify(digest)}\n\n${recentChanges}` : JSON.stringify(digest),
-      // 09-22：真仓大流程输出 ~6.5k tokens 才收住，3_200 会让个别入口（VoucherOrderController 两次实测）
-      // 在 JSON 中途达到预算上限 → 必解析失败 → 每次访问重烧。放宽到 6_000 给完整 JSON 留空间。
-      // 10-06 再放宽到 8_000：thinking=auto 下 6,000+6,000(余量)=12,000 的上限当天被 13 条里的 2 条
-      // 正好撞满（PaymentController、ShopSearchController 输出都是整 12,000），
-      // 结果是这两条流程被记成「确定性降级」并进了缓存——**上限是我们自己设的，不该算成模型给不出更多**。
-      // 这只是上限不是配额：模型用不到就不多花钱。
       maxTokens: 8_000,
       temperature: 0.2,
       scene: "map.flow"
@@ -336,9 +310,6 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
       areRelated: buildRelatedPairs(input.analysis)
     });
     if ("failure" in parsed) {
-      // 失败分三种（同推荐入口 declined 的口径）：合法 JSON 但环节没有落点、或输出在长度上限处被截断
-      // （09-22 真仓两次 finishReason=length 实测：同输入必同结果，不是抖动）——都是确定性结论，
-      // 带 deterministic 入缓存，别每次访问都重烧一遍钱；真正解析不出的按瞬时异常处理，不缓存、下次重试。
       const truncated = response.finishReason === "length";
       const reason = truncated ? FALLBACK_TRUNCATED : parsed.failure === "ungrounded" ? FALLBACK_UNGROUNDED : FALLBACK_UNPARSEABLE;
       return {
@@ -350,8 +321,7 @@ async function generateFromDigest(input: GenerateFlowInput, digest: FlowDigest):
         usage: response.usage
       };
     }
-    // 按需深入：只对模型自认是推断的去向、有界地读一次代码正文。
-    // 没有推断边就一条调用都不发生；这一步失败也只损失 caveats 一行，不会丢掉主调用的结果。
+    // 按需深入：只对模型自认是推断的去向有界地读一次正文；这一步失败只损失 caveats，不影响主调用结果。
     const deepened = await deepenInferredEdges({
       repositoryPath: input.repositoryPath,
       analysis: input.analysis,
@@ -379,7 +349,7 @@ interface ParseContext {
 }
 
 /**
-  依赖图的「有关系」判据。边级校验靠它把「声称来自代码」的边验一遍——
+  依赖图的「有关系」判据：两个文件之间存在 import 边或跨文件调用边（任一方向），同一文件视为有关系。
   双向都写入集合，查起来才是 O(1)。
 */
 export function buildRelatedPairs(analysis: RepositoryAnalysis): (leftPath: string, rightPath: string) => boolean {
@@ -406,10 +376,10 @@ function stagesRelated(left: FlowStage, right: FlowStage, areRelated: ParseConte
 }
 
 /**
-  校验失败的两种原因，口径与推荐入口的 `declined` 一致：
-  - `ungrounded`：响应是合法 JSON、`stages` 也是数组，但落到仓内代码的环节不足——模型对这份输入
-    能给的就是这些，是**确定性结论**，可以让降级结果进缓存。
-  - `unparseable`：连一个 JSON 对象都提不出来（或没有 stages 数组），按坏输出/瞬时异常处理，不缓存。
+  校验失败的两种原因：
+  - `ungrounded`：响应是合法 JSON、`stages` 也是数组，但落到仓内代码的环节不足——模型对这份输入能给的就是这些，
+    属于确定性结论，降级结果可入缓存。
+  - `unparseable`：连一个 JSON 对象都提不出来（或没有 stages 数组），按坏输出处理，不缓存。
 */
 type FlowParseFailure = "ungrounded" | "unparseable";
 
@@ -436,17 +406,12 @@ function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome
   const record = raw as Record<string, unknown>;
 
   const droppedFiles = { count: 0 };
-  // 行号越界不再静默收缩：模型给的行号若不在文件范围内会被改到范围内，**并在这里记账**，
-  // 最终写进 caveats。这些行号只说明「大概在这个文件里」，不能当精确定位读。
   const clampedLines = { count: 0 };
-  // 序号以模型输出数组的位置为准（1 起）：提示词已要求「按真实执行顺序排列」，数组顺序比模型自填的
-  // order 字段可靠——自填序号一旦跳号，回环目标就会整体错位。
+  // 环节序号取模型输出数组的位置（1 起），不取它自填的 order 字段：跳号的自填序号会让回环目标整体错位
   const kept = (Array.isArray(record.stages) ? record.stages : [])
     .slice(0, FLOW_MAX_STAGES)
     .map((item, index) => normalizeStage(item, context, droppedFiles, clampedLines, index + 1))
     .filter((stage): stage is NormalizedStage => stage !== null);
-  // 路径全部编造的环节直接丢弃：宁可少一个环节，也不给一个指不到代码的环节。
-  // 给过 stages 数组却落不到 3 个环节 = 模型的确定性结论（ungrounded）；压根没给数组 = 坏输出（unparseable）。
   if (kept.length < MIN_STAGES) return { failure: Array.isArray(record.stages) ? "ungrounded" : "unparseable" };
 
   const orderMap = new Map<number, number>();
@@ -469,8 +434,7 @@ function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome
   });
 
   const declaredStages = Array.isArray(record.stages) ? record.stages.length : 0;
-  // 两种「少了」原因不同，不能合并成同一句「路径不存在」：超出环节上限的是我们自己截的，
-  // 落不到仓内文件才是模型的锅（caveats 是直接给读者看的）。
+  // 两种「少了」原因不同，不能合并成一句「路径不存在」：超出上限的是我们自己截的，落不到仓内文件才是模型的结论
   const stagesBeyondCap = Math.max(0, declaredStages - FLOW_MAX_STAGES);
   const stagesDroppedAsUngrounded = Math.min(declaredStages, FLOW_MAX_STAGES) - kept.length;
   const edgeStats = { dropped: 0, downgradedStatic: 0, demotedCode: 0 };
@@ -506,14 +470,9 @@ function parseFlowOutcome(text: string, context: ParseContext): FlowParseOutcome
 }
 
 /**
-  `/flow` 的入口解析：**推断入口优先，人工指定兜底**。
-  入口识别（`detectEntrypoints`）是启发式——package.json 清单 + 约定文件名——裸脚本、
-  非常规布局的仓会一无所获；这时允许把任意**已索引文件**当作流程起点（GUI 的「自定义入口」）。
-  指定的路径不在索引里返回 undefined（调用方 404），不猜。
-
-  不带路径时优先选**有仓内证据**的入口（传 `graph` 才启用，GUI 用同一口径）：
-  Spring 启动类排在他的识别清单最前，但它的 import 全指向框架，静态证据凑不出一条流程、
-  必然降级；控制器这类入口有真实依赖边，默认选它，全体都没边时才回落第一个。
+  `/flow` 的入口解析：人工指定优先，其次推断。指定路径不在索引里返回 undefined（调用方 404），不猜。
+  不带路径时优先选有仓内证据的入口（传 `graph` 才启用，GUI 用同一口径）：框架启动类的 import 全指向框架，
+  静态证据凑不出一条流程、必然降级；控制器这类有真实依赖边的入口优先，全体都没边时才回落第一个。
   */
 export function resolveFlowEntry(
   wanted: string,
@@ -530,8 +489,7 @@ export function resolveFlowEntry(
   if (!graph) return entrypoints[0];
   const linked = new Set<string>();
   for (const [from, targets] of Object.entries(graph.imports)) {
-    // 只有出现在**边**上才算证据：序列化的 imports 里每个已分析文件都是键（真仓 172 键、89 个空数组），
-    // 无条件 `linked.add(from)` 会让全体入口入围，启动类以 entrypoints[0] 溜回默认——2026-09-21 journal 实查。
+    // 只有出现在边上的才算证据：imports 里每个已分析文件都是键，无条件 add(from) 会让全体入口都入围
     if (targets.length) linked.add(from);
     for (const target of targets) linked.add(target);
   }
@@ -543,12 +501,12 @@ export function resolveFlowEntry(
 }
 
 /**
-  边的校验。三件事：
-  1. 端点必须是**保留下来的**环节（模型给的是它自己的数组序号，被丢弃的环节会让序号整体前移，
-     因此要经 `orderMap` 换算）；依据与 origin 必填——空依据的边等于没有依据。
-  2. **声称 `static` 的边要由依赖图证明**：两个环节的文件之间必须真有 import 或跨文件调用。
-     证不出来就**降级为 `inferred`**，不删边：删边会篡改拓扑，降级保真度更高。
-  3. 去重、按上限截断，并如实记下丢了几条、降级了几条（进 caveats，不静默）。
+  边的校验三件事：
+  1. 端点必须是保留下来的环节（模型给的是它自己的数组序号，被丢弃的环节会让序号整体前移，需经 `orderMap` 换算）；
+     依据与 origin 必填——空依据的边等于没有依据。
+  2. 声称 `static` 的边要由依赖图证明（两个环节的文件之间真有 import 或跨文件调用）；证不出来降级为 `inferred`，
+     不删边——删边会篡改拓扑。
+  3. 去重、按上限截断，丢弃与降级条数分别计入 caveats。
 */
 function normalizeEdges(
   value: unknown,
@@ -577,10 +535,8 @@ function normalizeEdges(
     }
     if (seen.has(`${from}\u0000${to}`)) continue;
     seen.add(`${from}\u0000${to}`);
-    // 边级校验：**只降不升**。两种情况都降为 inferred，条数分别记账（进 caveats，不静默）：
-    // ① 声称 static 而依赖图证不出来；
-    // ② 声称 code ——这一步只读了入口前 120 行，「在源码里读到」不成立（真正的 code 边由按需深入给出）。
-    // 反过来永远不成立：模型自己说推断的边，就算图上恰有关系也不抬成「来自代码」。
+    // 只降不升：声称 code 同样不成立——这一步只读了入口前 120 行，真正的 code 边由按需深入给出；
+    // 模型自报 inferred 的边，即使图上恰有关系也不抬成 static。
     const downgradedStatic = origin === "static" && !stagesRelated(stages[from - 1], stages[to - 1], context.areRelated);
     const demotedCode = origin === "code";
     if (downgradedStatic) stats.downgradedStatic += 1;
@@ -615,8 +571,7 @@ function normalizeStage(
     if (seen.has(path)) continue;
     seen.add(path);
     const limit = Math.max(1, context.linesOf.get(path) ?? 1);
-    // 越界的行号仍要落回文件范围内（指到文件外更没有意义），但**不再无声无息**：
-    // 改了几处由调用方记账并写进 caveats。缺行号（没给）不算越界——那是省略，不是错报。
+    // 越界行号改到文件范围内（指到文件外更没有意义）并记账，由调用方写进 caveats；缺行号是省略，不算越界
     const raw = Number(file.line);
     const requested = Number.isFinite(raw) ? Math.floor(raw) : 1;
     const line = Math.min(Math.max(1, requested), limit);
@@ -624,7 +579,7 @@ function normalizeStage(
     const note = asText(file.note, MAX_FILE_NOTE);
     files.push(note ? { path, line, note } : { path, line });
   }
-  // 一个指不到代码的环节没有价值：静默保留会让读者以为它对应某处实现
+  // 指不到代码的环节静默保留，会让读者以为它对应某处实现
   if (!files.length) return null;
   const kindText = typeof record.kind === "string" ? record.kind : "";
   const kind: FlowStageKind = kindText === "entry" || kindText === "decision" || kindText === "loop" || kindText === "exit" ? kindText : "stage";
@@ -639,44 +594,31 @@ function normalizeStage(
 function asText(value: unknown, limit: number): string {
   if (typeof value !== "string") return "";
   const chars = [...value.trim().replace(/\s+/g, " ")];
-  // 截断要留痕：静默掐尾会让界面把半截句子当成模型的完整结论（省略号占一个节点，总长仍不超 limit）
+  // 截断要留痕：静默掐尾会让界面把半截句子当成模型的完整结论（省略号占一个字符，总长仍不超 limit）
   if (chars.length <= limit) return chars.join("");
   return `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
 /**
-  流程缓存：键 = 层名 + 仓库 + 入口 + **本层实际输入的哈希**（即发给模型的 digest）。
-  入不入缓存的口径见模块头（只存可信答案）。TTL 是**闲置时长**而非「生成后的固定时长」——每次命中都把 `at` 推到当下，
-  所以只要这个入口还在被访问，缓存就一直有效。
-
-  为什么续期是安全的（此处原先靠全仓 `versionStamp` 兜底）：digest 变了键就变，而 digest 涵盖
-  入口、文件清单与符号、跨文件依赖、静态调用链证据、L1 摘要——仓库改到这些里的任何一处、
-  换了模型，都会翻键。反过来说，digest 一字不变时模型看到的问题就一字不变，缓存里那条流程正是它
-  当下会给出的答案；LSP 从降级恢复但结构事实没变，也落在这一类里（恢复会改 digest 时才需要重算）。
-  所以不需要再论证「哪些变更会作废流程」。
-
-  唯一的例外是「近期仓库变更」参考段（A2，09-22）：它跟着 user 消息进、不进 payload 哈希——
-  变更清单每次保存都会刷新，进键等于每次保存重烧这条流程的钱，而它只是讲解重心的倾向提示。
-  因此命中缓存的流程可能是变更检测前生成的：可接受，结构事实的变化本来就会翻 digest 重烧，
-  变更段只影响「同分时先讲谁」，不影响流程里任何一条落点的真伪。
+  流程缓存：键 = 层名 + 仓库 + 入口 + 本层实际输入（即发给模型的 digest）的哈希。
+  TTL 是闲置时长而非「生成后的固定时长」——每次命中都把 `at` 推到当下，入口还在被访问就一直有效。
+  续期安全是因为 digest 涵盖入口、文件清单与符号、跨文件依赖、静态调用链证据、L1 摘要：
+  这些任一处变化或换模型都会翻键；digest 一字不变时，缓存里那条流程正是模型当下会给出的答案。
   */
 const flowCache = new Map<string, { result: GeneratedFlow; at: number }>();
 const FLOW_CACHE_TTL_MS = 10 * 60_000;
 const FLOW_CACHE_MAX = 60;
-/** 持久层的闲置 TTL：键是输入精确哈希，「过期」条目只是不再被读到的垃圾，不存在可信性问题，
-    所以可以远长于内存层的 10 分钟——它防的是重启后重烧（dev 模式 tsx watch 每次改代码都重启）。 */
+/** 持久层的闲置 TTL 可以远长于内存层的 10 分钟：键是输入的精确哈希，「过期」条目只是不再被读到的垃圾，不涉及可信性。 */
 const FLOW_PERSISTED_TTL_MS = 7 * 24 * 60 * 60_000;
 
-/** 清空流程缓存：供测试隔离回合间状态。换仓/卸载路径**不**调它——键里已带 `repositoryId`，
-    跨仓库不会串味，且有 TTL + 条数上限，切回来还能继续命中。 */
+/** 清空流程缓存：供测试隔离回合间状态。换仓/卸载路径不调它——键里已含 `repositoryId`，跨仓库不会串。 */
 export function clearRepositoryFlowCache(): void {
   flowCache.clear();
 }
 
 /**
-  流程产物的缓存键（连带算出的 digest）。**只这一处构造**：
-  `generateRepositoryFlowCached` 与 `pnpm flow:reburn --check` 共用它，
-  不然「脚本说要不要重烧」与「产品实际命不命中」就是两套判据，那还查它干什么。
+  流程缓存键（连带算出的 digest）的唯一构造处：`generateRepositoryFlowCached` 与
+  `pnpm flow:reburn --check` 共用它，否则「脚本报要不要重新生成」与「产品实际命不命中」就是两套判据。
 */
 export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string }): { key: string; digest: FlowDigest } | undefined {
   const digest = tryBuildFlowDigest(input);
@@ -693,15 +635,12 @@ export function flowCacheKeyOf(input: GenerateFlowInput & { repositoryId: string
 }
 
 /**
-  同键**在途**去重：内存层要等生成结束才写，所以两个请求同时打开一个冷入口时，
-  各自都判定「未命中」→ 同一份输入烧两遍钱（§25.3 记的缺口：「两个标签页同时开流程视图仍可能
-  并发双烧（引擎侧没有在途去重），本刀不做」——GUI 那侧只挡住了 StrictMode 的双发）。
-  后来者复用同一个回合的结果，`usage` 清除：与命中缓存同一口径，同一笔钱不被计两次。
+  同键在途去重：内存层要等生成结束才写，两个请求同时打开一个冷入口会各自判定未命中、同一份输入生成两遍。
+  后来者复用同一个结果并清除 `usage`——与命中缓存同一口径，同一笔用量不被计两次。
 */
 const flowInFlight = new Map<string, Promise<GeneratedFlow>>();
 
 export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { repositoryId: string }): Promise<GeneratedFlow> {
-  // 出网清单在装配阶段攒下来，但**命中缓存的那条路不 booking**——那一次一个字都没发出去
   const input = withEgressCollector(raw);
   const cacheKey = flowCacheKeyOf(input);
   if (!cacheKey) return generateRepositoryFlow(input);
@@ -720,10 +659,8 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
     flowInFlight.delete(key);
   }
   if (result.source === "llm" || result.deterministic || result.capHit) {
-    // 确定性降级也是可信答案：不缓存的话，每次打开这个入口都重烧一遍钱（实测启动类入口 ~15k tok/次）
     flowCache.set(key, { result, at: now });
     trimToNewest(flowCache, FLOW_CACHE_MAX);
-    // 撞自己上限那个节点只活在内存里：重启后可以重问，不被永久钉成静态视图（`GeneratedFlow.capHit`）
     if (!result.capHit) input.database?.putLayerCache(key, result);
   }
   return result;
@@ -731,7 +668,7 @@ export async function generateRepositoryFlowCached(raw: GenerateFlowInput & { re
 
 /**
   内存层 → SQLite 两层查询：命中就返回，没命中回 undefined。
-  `renew` 为真才动缓存与库（续期 + LRU 新近度 + `touchLayerCache`）；只读出口传 false——
+  `renew` 为真才写（续期 + LRU 新近度 + `touchLayerCache`）；只读出口传 false——
   名字里写着 readonly 的那条路由不该写库，哪怕只是改一个 `at`。
 */
 function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key: string, now: number, renew: boolean): GeneratedFlow | undefined {
@@ -739,12 +676,11 @@ function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key:
   if (hit && now - hit.at < FLOW_CACHE_TTL_MS) {
     if (renew) {
       flowCache.delete(key);
-      flowCache.set(key, { result: hit.result, at: now }); // 命中即续期 + 刷新 LRU 新近度
+      flowCache.set(key, { result: hit.result, at: now });
       input.database?.touchLayerCache(key, now);
     }
     return { ...hit.result, usage: undefined };
   }
-  // 内存过期/缺失时查 SQLite：engine 重启（tsx watch）会清空内存层，持久层让重启不重烧
   const stored = input.database?.getLayerCache<GeneratedFlow>(key);
   if (stored && now - stored.at < FLOW_PERSISTED_TTL_MS) {
     if (renew) {
@@ -758,9 +694,8 @@ function readFlowCache(input: GenerateFlowInput & { repositoryId: string }, key:
 }
 
 /**
-  只读出口（`GET .../flow?readonly=1`）：命中缓存就把产物交出去，没缓存也不生成。
-  为什么单独开一条：`generateRepositoryFlowCached` 冷缓存时会发一趟主力档（≈¥0.17），
-  而「外部 agent 问一句这条流程怎么走」不该让账单多一笔——与架构那条 `allowCall: false` 同一口径。
+  只读出口（`GET .../flow?readonly=1`）：命中缓存才把产物交出去，没缓存也不生成——
+  外部 agent 问一句不该产生一次主力档调用（与架构那条 `allowCall: false` 同一口径）。
 */
 export function peekCachedFlow(input: GenerateFlowInput & { repositoryId: string }): GeneratedFlow | undefined {
   const cacheKey = flowCacheKeyOf(input);

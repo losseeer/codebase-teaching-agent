@@ -6,13 +6,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 /**
-  `GET /api/events` 的**真连接**测试（10-12）。这条路由住在 `platform.ts`，用例因此也住在它旁边。
+  `GET /api/events` 的真连接测试。这条路由住在 `platform.ts`，用例因此也住在它旁边。
 
-  为什么必须听真 socket：`app.inject()` 把响应整体缓冲到结束才交出来，而这条路由永不结束——
-  所以以前它一行测试都没有，也正因如此才没人发现「空转的事件流三秒收 0 字节」：
-  只有 writeHead、没有第一帧，响应头就一直压在 Node 的缓冲里。
-  本机直连时这只是「看起来连着」，一旦套上反向代理（nginx 默认 60s 空闲就掐上游），
-  界面就退回「导入进度停在 0%，任务其实跑完了」那一档。
+  为什么必须听真 socket：`app.inject()` 把响应整体缓冲到结束才交出来，而这条路由永不结束，
+  于是看不出「只有 writeHead、没有第一帧」时响应头一直压在 Node 的缓冲里。
+  本机直连只是「看起来连着」，一旦套上反向代理（nginx 默认 `proxy_read_timeout` 60s 就掐上游），
+  这种「有连接、零字节」会被直接中止，界面就退回「导入进度停在 0%，任务其实跑完了」。
 
   零 token：fetch 被 stub 到 127.0.0.1:9（打不到真端点），地址簿、日志、待导入的仓全在临时目录。
   */
@@ -26,7 +25,7 @@ interface Stream {
   statusCode: number;
   contentType: string | undefined;
   firstChunk: string;
-  /** 首帧之前等了多久（毫秒）——这条断言防的就是「要等第一个事件才拿到响应」 */
+  /** 首帧之前等了多久（毫秒）：这条断言防的是「要等第一个事件才拿到响应」 */
   msToFirst: number;
   frames: string[];
   close(): void;
@@ -55,7 +54,7 @@ function openStream(port: number, path: string): Promise<Stream> {
         }
         stream.frames.push(chunk);
       });
-      // 连接被服务端收尾（撤 key 后事件流就是这么关的）：把已建立的 stream 返回去，别让断言悬着等超时
+      // 连接被服务端收尾：把已建立的 stream 返回去，别让断言悬着等超时
       response.on("end", () => { if (!settled) { settled = true; resolve(stream); } });
     });
     request.on("error", (error) => { if (!settled) reject(error); settled = true; });
@@ -114,7 +113,7 @@ describe("全局事件流的真连接", () => {
     try {
       expect(stream.statusCode).toBe(200);
       expect(stream.contentType).toContain("text/event-stream");
-      // 首帧是注释帧（SSE 解析器跳过，读流循环只认 `data: `）；以前这里要等到第一个导入事件才有字节
+      // 首帧是注释帧：SSE 解析器跳过它，读流循环只认 `data: ` 行
       expect(stream.firstChunk).toBe(": open\n\n");
       expect(stream.msToFirst).toBeLessThan(1_000);
     } finally {
@@ -140,7 +139,7 @@ describe("全局事件流的真连接", () => {
     const alive = await openStream(port(), "/api/events");
     try {
       dead.close();
-      // 等 close 事件在引擎侧走完（移除订阅者）；摘不摘都不该影响别人，这条断言要的是「另一路照样收」
+      // 等 close 事件在引擎侧走完（移除订阅者）；这条断言要的是「另一路照样收」
       await new Promise((resolve) => setTimeout(resolve, 150));
       const submitted = await app!.inject({ method: "POST", url: "/api/imports", payload: { path: repoDir } });
       const jobId = (submitted.json() as { id: string }).id;

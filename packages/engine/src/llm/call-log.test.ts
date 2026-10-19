@@ -121,9 +121,8 @@ describe("LLM 工作日志", () => {
   });
 
   /**
-    重试读数（第三阶段刀 1 的前置）。日志包在重试层外面，一次逻辑调用只落一行，
-    「第几次成的、每次跑了多久」只能由 `RetryLlmProvider` 挂在结果/错误上带出来——
-    没有这这两个字段，「超时率」这个指标结构上就读不出来（§62）。
+    重试读数：日志包在重试层外面，一次逻辑调用只落一行，第几次成、每次多久只能由 RetryLlmProvider
+    挂在结果/错误上带出来。
     */
   it("重试层带出来的 attempts 与 attemptMs 原样落行，并在控制台单行上屏", async () => {
     const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 2, attemptMs: [60_000, 1_500] })), "light");
@@ -160,8 +159,7 @@ describe("LLM 工作日志", () => {
   });
 
   it("按生产装配顺序（Logging 在 Retry 外面）走一遍：重试发生过，行里就读得出来", async () => {
-    // 单独测 Retry 或单独测 Logging 都证不了这个字段能穿过去——生产装配是 Logging → Retry，
-    // 读数要靠返回值/错误对象跨出那一层边界，所以这里按同一顺序组一次真的。
+    // 单独测 Retry 或单独测 Logging 都证不了这个字段能穿过装配边界，这里按生产顺序 Logging → Retry 组一次真的。
     let count = 0;
     const flaky: LlmProvider = {
       name: "flaky",
@@ -230,7 +228,7 @@ describe("LLM 工作日志", () => {
     expect(outboundFingerprint(base)).toEqual(first); // 同一次装配重跑两次必须给同一个指纹，否则没法核对
     expect(outboundFingerprint({ ...base, user: "问题？" })).not.toEqual(first);
 
-    // read_file 的内容是在**下一轮**出门的：它作为 tool 消息进 messages，指纹必须认得到
+    // read_file 的内容是在下一轮出门的：它作为 tool 消息进 messages，指纹必须认得到
     const withTool = { system: "提示词", messages: [{ role: "user" as const, content: "问题" }, { role: "tool" as const, content: "文件 src/main.ts（第 1-20 行）：\nsecret" }] };
     expect(outboundFingerprint(withTool).chars).toBeGreaterThan(first.chars);
     expect(outboundFingerprint({ ...withTool, messages: withTool.messages.slice(0, 1) }).hash).not.toBe(outboundFingerprint(withTool).hash);

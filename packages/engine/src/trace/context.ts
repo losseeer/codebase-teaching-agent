@@ -1,16 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
-  请求级 traceId 上下文（trace context propagation）。
+  请求级 traceId 上下文：`llm/call-log.ts` 与 `store/journal.ts` 在很深的调用栈里落记录，
+  从这里读 traceId，不用把参数穿进 server → harness → tool-loop → provider 四五层签名。
 
-  为什么需要它：`llm/call-log.ts` 与 `store/journal.ts` 分别在很深的调用栈里落记录，
-  如果逐层加参数，签名要改穿 server → harness → tool-loop → provider 四五层。
-  AsyncLocalStorage 让这两处直接读到当前请求的 traceId，无需改签名。
-
-  传播方式（关键，别改成别的写法）：在 `onRequest` 里 `run(traceId, done)`。
-  Fastify 的钩子链是**同步串联**的——`done()` 会同步调用下一个钩子/handler，
-  因此在 `run` 回调内调用 `done()` 能让后续钩子与 handler 继承该 store。
-  ❌ 不要改用「先 done() 再 run()」或放在 handler 里设值：那样子进程已经创建、store 传不下去。
+  传播方式：在 `onRequest` 里 `run(traceId, done)`。Fastify 的钩子链同步串联，`done()` 会同步调用
+  下一个钩子/handler，所以在 `run` 回调内调用 `done()` 后续钩子与 handler 才继承该 store；
+  先 `done()` 再 `run()`、或在 handler 里设值，store 都传不下去。
 
   后台任务（导入、fs 监听触发的重分析）不在任何请求上下文里 → `currentTraceId()` 返回 null，
   各自用自己的事件标识（如 `job:<jobId>`）写在 detail 里。
@@ -19,10 +15,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 interface TraceContext {
   traceId: string;
   /**
-    本轮所属的会话线程 id（教学侧 = sessionId，同一个 id 三个名字）。
-    为什么放这里而不是穿参数：`provider.complete` 埋在 tool-loop / 状态机下面四五层，
-    为日志字段改签名会把「观测」变成主流程的依赖。改由路由在确定线程后 `markThread()` 就地标注，
-    深层只读不写——和 traceId 同一套传播机制、同一条纪律（见上方「传播方式」）。
+    本轮所属的会话线程 id（教学侧 = sessionId）。放上下文而不是穿参数与 traceId 同一理由、同一传播机制：
+    路由在确定线程后 markThread() 就地标注，深层只读不写。
     */
   threadId?: string;
 }

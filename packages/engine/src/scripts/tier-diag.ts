@@ -34,7 +34,7 @@ const roles = classifyFileRoles(structure);
 
 const entryPaths = new Set(structure.entrypoints.map((anchor) => anchor.path));
 
-/** 离最近入口几跳（沿「本文件依赖谁」往下走，类型派发**透明**：接口→实实时计算同一拍）；未收录 = 任何入口都到不了。 */
+/** 离最近入口几跳（沿「本文件依赖谁」往下走，类型派发透明：接口→实现算同一拍）；未收录 = 任何入口都到不了。 */
 const hop = new Map<string, number>();
 {
   const dispatches = new Map<string, Set<string>>();
@@ -60,8 +60,8 @@ const hop = new Map<string, number>();
 }
 
 /**
-  旧判据的原样复刻（只有这里允许两份实现：它是「被替换前的那把度量」，不该进生产代码）。
-  生产判据现已改成「文件名成词命中 + 业务同形词黑名单」，留着它只为把「挡掉了多少」数出来。
+  被替换判据的原样复刻：只有这里允许两份实现，它不该进生产代码。
+  留着是为了把「现判据挡掉了多少」数出来。
 */
 function legacyInfraHit(path: string): string | undefined {
   const lower = path.toLowerCase();
@@ -72,7 +72,7 @@ function legacyInfraHit(path: string): string | undefined {
 const infraHit = infraHintOf;
 
 const files = index.files.map((file) => file.path);
-/** 「源码文件」= 扩展名在语言表里有归属的那些；文档 / 看板 / 编排文件也会出现在流程证据里，但它们是名副其实的外围。 */
+/** 「源码文件」= 扩展名在语言表里有归属的那些；文档 / 看板 / 编排文件也会出现在流程证据里，但它们本来就是外围。 */
 const sourceExtensions = new Set(Object.keys(LANGUAGE_BY_EXTENSION));
 const extensionOf = new Map(index.files.map((file) => [file.path, file.extension.toLowerCase()]));
 const isolated = files.filter((path) => !dependencies.get(path)?.size && !dependents.get(path)?.size);
@@ -123,8 +123,7 @@ console.log(`  e) 任何入口都到不了：${unreachable.length}（其中源�
 for (const path of unreachableSource.slice(0, 8)) console.log(`       ${path}｜出边 ${dependencies.get(path)?.size ?? 0} 入边 ${dependents.get(path)?.size ?? 0}｜角色 ${roles.get(path)}`);
 console.log(`     典型分层（Controller/Service/Mapper 共 ${impls.length} 个）里入口到不了的：${impls.filter((path) => !hop.has(path)).length}`);
 
-/** 反事实：只换判据，其余不动。改写量 = 角色变动的文件数（角色进 L1 切片键，所以它就是重烧条数）。 */
-/** 词边界判据已经在生产里生效了，这个节点改成反向量：回滚成旧子串判据会多判多少（改动价值的读数）。 */
+/** 反事实：只换判据，其余不动。改写量 = 角色变动的文件数，角色进 L1 切片键，所以它就是待重做的摘要条数。 */
 const legacyRollback = (path: string): FileRole | undefined => (roles.get(path) !== "infra" && roles.get(path) !== "test" && legacyInfraHit(path) ? "infra" : undefined);
 const reachFirst = (path: string): FileRole | undefined => ((hop.get(path) ?? Infinity) === 1 && roles.get(path) === "infra" ? "core" : undefined);
 const twoHopCore = (path: string): FileRole | undefined => ((hop.get(path) ?? Infinity) === 2 && (roles.get(path) === "support" || roles.get(path) === "infra") ? "core" : undefined);
@@ -171,7 +170,7 @@ const rescuedByImplements = unreachableSource.filter((path) => {
 console.log(`\n[6] 入口到不了的源码 ${unreachableSource.length} 个里，接口名能对上（补 implements/DI 边就能救）：${rescuedByImplements.length}`);
 for (const path of rescuedByImplements.slice(0, 6)) console.log(`       ${path}`);
 
-/** 零成本那个节点：不动角色，只改「模块 → 档」的聚合判据（`annotateModuleTiers` 是响应期实时计算，不进任何缓存键）。 */
+/** 不动角色，只改「模块 → 档」的聚合判据：`annotateModuleTiers` 是响应期实时计算，不进任何缓存键。 */
 const tierOnly = (label: string, decide: (node: (typeof tiers)[number], current: CourseTier | undefined) => CourseTier | undefined): void => {
   const flips = tiers.map((node) => ({ node, next: decide(node, baseline.get(node.id) === "?" ? undefined : (baseline.get(node.id) as CourseTier)) }))
     .filter((entry) => entry.next && entry.next !== baseline.get(entry.node.id));

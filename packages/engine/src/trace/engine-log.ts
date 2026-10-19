@@ -6,13 +6,12 @@ import { logTargetFromEnv } from "./log-target.js";
 import { currentTraceId } from "./context.js";
 
 /**
-  引擎工作日志：记录「引擎这个进程在干活」的事件（请求 / 导入 / 重分析 / 降级 / 启动），
-  不记录对话语义——对话与教学轨迹在 `<repo>/.tutor/journal.jsonl`，两者互不依赖。
+  引擎工作日志：记录「引擎这个进程在干活」的事件（请求 / 导入 / 重分析 / 降级 / 启动），不记录对话语义。
+  落点分工：对话与教学轨迹在 `<repo>/.tutor/journal.jsonl`；LLM 调用明细只在 `llm/call-log.ts` 落一份
+  （含 tokens / thinking / tools）；各处靠 `traceId` 关联，同一事实只写一处。
 
-  - 落盘：JSONL 追加到 `TUTOR_ENGINE_LOG`（默认 `~/.codebase-tutor/engine.jsonl`）；设为 `off`/`none`/`0`/`false` 只打控制台。
-  - 与 `llm/call-log.ts` 的分工：**LLM 调用明细只在那边落一份**（含 tokens / thinking / tools），
-    本文件不重复记，两处靠 `traceId` 关联——同一事实只写一处，避免双写漂移。
-  - 写失败只报警告：日志不是主流程，但也不能一声不吭（静默降级明令禁止）。
+  - 落盘：JSONL 追加到 `TUTOR_ENGINE_LOG`（默认 `~/.codebase-tutor/engine.jsonl`）；设为 off/none/0/false 只打控制台。
+  - 写失败只报警告：日志不是主流程，但也不能一声不吭。
   */
 
 const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "engine.jsonl");
@@ -57,11 +56,9 @@ export function formatEngineTraceLine(event: EngineTraceEvent): string {
 
 /**
   记录一条引擎工作日志。
-
   traceId 默认取当前请求上下文（`trace/context.ts`）；导入 / 监听刷新等后台任务显式传 null，
-  并用 `detail` 里的 `job` 字段自带标识。
-  `actor` 现在恒 null：认证闸（API key）已于 2026-10-15 整体撤除（§64），上下文里不再有身份可取。
-  **字段本身保留**——两份 JSONL 的列形状不能变，10-12 到 10-15 之间的历史行里这一列有值。
+  并用 detail 里的 job 字段自带标识。
+  actor 恒 null（认证闸撤除后上下文里没有身份可取）；字段保留以稳定两份 JSONL 的列形状。
   */
 export function traceEngine(
   kind: EngineTraceKind,

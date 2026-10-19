@@ -1,10 +1,8 @@
 /**
-  零 token 的重分析：按**当前引擎代码**重算依赖图，只回写 `analysis_json` 里的 graph。
-
-  为什么需要这个脚本：引擎没有「重新分析」这条产品路由（§34.7 记的缺口）。改了建图判据之后，
-  不落这一步的话烧出来的还是旧图——上一轮就吃过这个亏（新图只存在于代码里，产物仍是旧的）。
-  它只动图：不重算摘要、不动课程树、不改 versionStamp（内容没变就不该不实报新鲜度）。
-  跑完该跑 `pnpm l1:reburn`——切片变了的那些文件会被它自己挑出来重烧。
+  零 token 的重分析：按当前引擎代码重算依赖图，只回写 `analysis_json` 里的 graph。
+  引擎没有「重新分析」这条产品路由：改了建图判据后不落这一步，产物里留的还是旧图。
+  它只动图：不重算摘要、不动课程树、不改 versionStamp（内容没变就不该虚报新鲜度）。
+  跑完接着跑 `pnpm l1:reburn`，切片变了的文件由它自己挑出来重做。
 
   ⚠️ 别在引擎在线时跑：SQLite 单写者，回写会撞锁。
 */
@@ -68,7 +66,7 @@ const demoted = index.files.filter((file) => newRoles.get(file.path) !== "core" 
 console.log(`从主干落下 ${demoted.length} 个：${demoted.slice(0, 10).map((path) => path.split("/").pop()).join(" ")}`);
 
 /**
-  调用边的逐条差值：`calls:diff` 的参照是**下界**，判不了变量接收者这一类，
+  调用边的逐条差值：`calls:diff` 的参照是下界，判不了变量接收者这一类，
   所以改判据时必须把「少了哪几条、多了哪几条」摊出来人眼看一遍，不能只看总数。
 */
 const pairOf = (edge: { callerPath: string; calleePath: string; calleeSymbol?: string }): string =>

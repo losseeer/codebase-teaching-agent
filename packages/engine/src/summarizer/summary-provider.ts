@@ -4,17 +4,13 @@ import type { LlmProvider } from "../llm/provider.js";
 import type { FileSlice } from "./slice.js";
 
 /**
-  文件职责摘要的提供方（L1）。
-
-  契约自 2026-09-18 起：
-  - **输入**是**结构切片**（`FileSlice`），不是整份正文。正文既贵又噪，切片只留按重要性排过序的
-    符号签名与依赖方向。
-  - **输出**是 `{summary, role?}`；角色本由结构规则给出（`depgraph/roles.ts`），模型给的角色是
-    **可选覆盖**——给了就用，没给就沿用结构结论。
-  - 接口是**批量**的：一次调用处理多条切片。逐文件一次调用在导入期会串行几百次（300 文件 ≈ 300 次
-    往返），批量化把往返次数降到 1/8，且重复的系统提示只付一次。
-  - 返回值**按下标对齐**入参，某一条 `undefined` 表示没拿到结果、由调用方回落——不用异常表达
-    「部分失败」，因为批量里坏一条不该丢掉另外七条。
+  文件职责摘要的提供方（L1）契约：
+  - 输入是结构切片（`FileSlice`），不是整份正文：只留按重要性排序的符号签名与依赖方向。
+  - 输出是 {summary, role?}；角色本由结构规则给出（`depgraph/roles.ts`），模型给的角色是
+    可选覆盖——给了就用，没给就沿用结构结论。
+  - 接口是批量的：一次调用处理多条切片，把导入期的往返次数降到 1/8，重复的系统提示只付一次。
+  - 返回值按下标对齐入参，某一条 `undefined` 表示没拿到结果、由调用方回落——
+    批量里坏一条不该丢掉其余。
 */
 
 export interface SummaryResult {
@@ -27,9 +23,8 @@ export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
   /**
-    这份摘要档会不会把**切片内容发到端点**。出网清单（`security/dataflow.ts`）只有 `true` 才计入审计：
-    确定性档一个字都不发出去，把它的逐文件装配记成「源码出网」就是虚报——
-    而虚报的账面比漏报更难查，它会把「这台机器没读过这个文件」洗成「读过」。
+    这份摘要档会不会把切片内容发到端点。出网清单（`security/dataflow.ts`）只有 `true` 才计入审计：
+    确定性档一个字都不发出去，把它的逐文件装配记成「源码出网」就是虚报，虚报的账面比漏报更难查。
     */
   readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
@@ -77,12 +72,10 @@ const BATCH_SYSTEM_PROMPT = batchSystemPrompt(false);
 
 /**
   L1 摘要这一步的口径 = 上面的批量提示词 + 版本号（绑在一起登记，见 `analysis-step.ts`）。
-  缓存键口径版本：切片或角色规则的语义变了，旧缓存必须失效。
-  - `slice-v2`（2026-09-22）：摘要提示词新增「至少点出一个真实英文标识符」+「带学习者会说的中文概念词」
-    两条要求——旧产出按新口径不合格，且这两条正是检索消融（phaseB:eval 三臂）的处理变量，全仓重烧一次。
-  - `slice-v2c`：该仓打开了「摘要参考注释」开关（每仓设置，默认关）时走这一档。开关同时切换提示词
-    （多一行 headerComment 用法说明）与切片字段，故键前缀必须分流——**不 bump 全局版本**：
-    关着的仓输入逐字节不变，今天烧好的 slice-v2 行继续命中。
+  - `slice-v2`：缓存键口径版本。摘要提示词要求「点出真实英文标识符 + 带学习者会说的中文概念词」；
+    切片或角色规则的语义变了才翻版本让旧产物作废——翻一次是全仓付费重生成，由翻版本这个动作把关。
+  - `slice-v2c`：打开「摘要参考注释」开关（每仓设置，默认关）的仓走这一档。
+    开关同时切换提示词与切片字段，键前缀必须分流；关着的仓保持 slice-v2，输入逐字节不变、照常命中。
   */
 export const SUMMARY_STEP = defineAnalysisStep({ layer: "summary-slice", contractVersion: "slice-v2", prompts: [batchSystemPrompt(false)] });
 export const SUMMARY_COMMENTS_STEP = defineAnalysisStep({ layer: "summary-slice-comments", contractVersion: "slice-v2c", prompts: [batchSystemPrompt(true)] });
@@ -118,18 +111,16 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
 }
 
 /**
-  确定性兜底：不调模型，摘要完全由结构切片拼出（离线可复现、不烧 token）。
-
-  ⚠️ 摘要要**短**：它进课程树当节点摘要，而 `coursetree/llm-refine.ts` 会把节点摘要整份送去润色。
-  这里放长一句，每次润色就多付一次钱。详细信息由切片承载（那是送入模型的），摘要只说
-  「属于哪层 + 认出哪些主要符号」。
+  确定性兜底：不调模型，摘要完全由结构切片拼出（离线可复现、不消耗 token）。
+  ⚠️ 摘要要短：它进课程树当节点摘要，而 `coursetree/llm-refine.ts` 会把节点摘要整份送去润色，
+  这里长一句，每次润色就多付一次钱。详细信息由切片承载，摘要只说「属于哪层 + 认出哪些主要符号」。
 */
 export class LocalSummaryProvider implements SummaryProvider {
   readonly modelVersion = "local-heuristic-v1";
   readonly name = "local deterministic fallback";
   readonly sendsCodeToEndpoint = false;
 
-  /** 契约比接口更紧：确定性档对**每一条**都给结果（调用方据此把它当补齐手段）。 */
+  /** 契约比接口更紧：确定性档对每一条都给结果（调用方据此把它当补齐手段）。 */
   async summarizeMany(slices: FileSlice[]): Promise<SummaryResult[]> {
     return slices.map((slice) => {
       const names = slice.entries.slice(0, 3).map((entry) => entry.name);
@@ -142,7 +133,7 @@ export class LocalSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 走项目自己的**轻量档**（L1 的语义来源）。批量调用，单次失败由调用方按条回落。 */
+/** 走项目自己的轻量档（L1 的语义来源）。批量调用，单次失败由调用方按条回落。 */
 export class LlmSummaryProvider implements SummaryProvider {
   readonly name = "light tier LLM";
   readonly sendsCodeToEndpoint = true;
@@ -207,13 +198,10 @@ class OllamaSummaryProvider implements SummaryProvider {
 
 /**
   选择摘要档：
-
   - `TUTOR_SUMMARY_PROVIDER=ollama` → 本地 Ollama
   - `TUTOR_SUMMARY_PROVIDER=off|none|local` → 确定性档（不调模型的显式开关）
-  - 未设置（默认）→ **有轻量档就用轻量档**，没有就退确定性档
-
-  默认值是有意选的：L1 的价值就在「语义摘要」，默认不烧 token 等于这个能力永远不生效。
-  但要能一键关掉，所以留了 `off`；费用闸门在调用方（预算降级时传不进 llm）。
+  - 未设置（默认）→ 有轻量档就用轻量档，没有就退确定性档
+  默认用模型是因为 L1 的价值就在语义摘要；费用闸门在调用方——预算降级时传不进 llm，自然落到确定性档。
 */
 export function createSummaryProvider(input: { llm?: LlmProvider; withHeaderComments?: boolean } = {}): SummaryProvider {
   const mode = (process.env.TUTOR_SUMMARY_PROVIDER ?? "").trim().toLowerCase();

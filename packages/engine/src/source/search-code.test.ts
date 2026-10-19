@@ -117,7 +117,7 @@ describe("executeSearchCode 打分与词边界", () => {
     const only = executeSearchCode(corpus, JSON.stringify({ query: "命中行为" }));
     expect(only.audit.topPaths).toEqual(["src/test/java/io/FileServiceTest.java"]);
     expect(only.content).toContain("测试文件");
-    // 兜底分与真实弱命中并列（都是 1）时，测试仍靠后——真仓 cache-penetration 用例就是被这条挤掉的
+    // 兜底分与真实弱命中并列（都是 1）时，测试仍靠后
     const tieCorpus = buildSearchCorpus(
       { files: [{ path: "src/io/a/CacheService.java", extension: ".java", bytes: 1, lines: 10 }, { path: "src/test/java/io/ZzTest.java", extension: ".java", bytes: 1, lines: 8 }] } as unknown as RepositoryIndex,
       { graph: { imports: { "src/io/a/CacheService.java": [], "src/test/java/io/ZzTest.java": [] }, symbols: [] } } as unknown as RepositoryAnalysis,

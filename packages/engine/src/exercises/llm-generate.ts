@@ -11,7 +11,7 @@ import type { GuardCandidate } from "./guard-proposal.js";
   练习题生成的 LLM 润色层（单轮调用）：
   - 输入：静态分析产出的结构化练习（题型 / 目标单元 / 锚点源码摘录）
   - 输出：仅重写 title（题面标题）与 prompt（题面描述），让题目更贴近真实代码细节
-  - **不改** kind / anchors / inputMode / gradingMode / options —— 判分锚点与标准答案保持静态，
+  - 不改 kind / anchors / inputMode / gradingMode / options —— 判分锚点与标准答案保持静态，
     保证 execution / set_match / rubric 三种判分路径不受 LLM 输出影响
   - 任何失败都原样返回输入练习；与其余调用点共用同一套 `TUTOR_LLM_*` 配置（见 llm/provider.ts）
   */
@@ -22,12 +22,11 @@ const MAX_EXCERPT_LINES = 60;
 
 export interface RefinedExercise {
   exercise: Exercise;
-  /** 只有模型真的改写了题面时才有；回落那几条一律不给，免得账面把降级读成花钱成功 */
+  /** 只有模型真的改写了题面时才有；回落那几条一律不给，免得记录把降级读成调用成功 */
   usage?: LlmUsage;
   /**
-    题面到底是不是模型写的。**没有这个节点就分不开**：润色失败时回落的是启发式题面，
-    而调用方过去一律记 `source: "rule"`——润色成功也记同一条，于是漏斗里「LLM 出的题」永远比真相少，
-    而模型端点抽风的那几天看起来像「没人用润色」。回落的原因一并交出去，才知道该修端点还是修解析。
+    题面是不是模型真的改写的：润色失败回落启发式题面，调用方要把三种成因分开记；
+    回落原因一并交出去，才知道该修端点还是修解析。
     */
   polished: boolean;
   polishFailure?: "no_excerpt" | "unparsable" | "provider_error";
@@ -44,7 +43,7 @@ const kindRules: Record<ExerciseKind, string> = {
 
 /**
   题面润色这一步的提示词（按题型取 `kindRules` 那一条红线）。提出来成函数是为了让口径登记的指纹
-  能把**全部题型的文案**一次覆盖（见 `EXERCISE_STEP` 的 prompts）。
+  能把全部题型的文案一次覆盖（见 `EXERCISE_STEP` 的 prompts）。
 */
 function refineSystemPrompt(kind: ExerciseKind): string {
   return [
@@ -95,7 +94,7 @@ interface ExerciseExcerpt {
   from: number;
   to: number;
   text: string;
-  /** 这段摘录隐去了几处疑似密钥（0 = 扫过且干净）。报表要靠它区分「扫过」与「压根没扫」（§45：虚报比漏报糟） */
+  /** 这段摘录隐去了几处疑似密钥（0 = 扫过且干净）。报表要靠它区分「扫过且为 0」与「没扫」。 */
   masked: number;
   truncated?: boolean;
 }
@@ -112,13 +111,12 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    // 与锚点摘录、L1、read_file 同一道出网前筛（`security/secrets.ts`）：这段是**源码原文**，
-    // 出题路径以前是裸 readFileSync，等于「模型能看到的源码」在这一条路上绕过了筛子。
+    // 与锚点摘录、L1、read_file 同一道出网前筛（`security/secrets.ts`）：这段是源码原文，出网前必须过筛。
     const masker = secretMasker();
     const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
-    // `to` 按**真的进请求的那几行**算：4,000 字符上限也可能在中间中止，那最后几行没出门就不能算进去
+    // `to` 按真的进请求的那几行算：4,000 字符上限也可能在中间中止，最后几行没出门就不能算进去
     const sentLines = text.split("\n").length;
     return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
@@ -170,22 +168,11 @@ const GENERATION_SYSTEM_PROMPT = [
 
 /**
   出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
-  v1 → v2（2026-10-07 复审）：选项池过去被一条手写扩展名白名单（ts/js/py）筛过，
-  **Java / Go 仓的正确答案根本进不了选项**，「定位改动」这类题在那些仓里是怎么选都过不了。
-  生成逻辑已改（正解只按「在不在索引里」认，干扰项池由能力表派生），但已经冻结进缓存的坏题
-  不会自愈——它的作用域里不含「选项怎么来的」这一轴，所以只能整体作废重来。
-  代价：两仓 3 行缓存全废（含 2 条已付费的 llm_rubric，重做合计 <¥0.05），用户拍板选这条路而不是手删坏行。
-
-  v2 → v3（2026-10-14 练习域沙箱改造）：`output_prediction` 连同它的受限执行判据一起退役，新增
-  `patch_edit` / `author_function` 两型（判分由沙箱跑测试决定，缓存行里冻结的是测试与替身而不是一个表达式）。
-  旧行里的 `{type:"output"}` 期望已不在 `ExpectedAnswer` 联合里，作答时会命中「该练习类型已不再支持」——
-  与其写一段兼容分支去猜旧行的形状，不如让版本作废它：存量只有 4 行，且没有一行被提交过。
+  版本号只留给不进提示词文案的那类失效——生成逻辑本身变了（比如正确答案怎么进选项池），
+  已冻结进缓存的坏题不会自愈，只能整体作废重来。
+  「题面提示词、`kindRules`、裁剪上限」不用手 bump：它们都被插进提示词文案，改任何一处
+  下面的指纹就变，守卫测试当场拦（见 `analysis-step.ts`）。
   代码族另外挂 `#runner=<指纹>`（见 `exercises.ts` 的 `fileScope`），那一轴不在本版本号里。
-
-  2026-10-18 起「题面提示词、`kindRules`、裁剪上限改了要同步 bump」这条纪律换了执行方式：
-  这三样现在都在提示词文案里（`kindRules` 与 `MAX_TITLE`/`MAX_PROMPT` 被插值进去），
-  改任何一处都会让下面的指纹变，守卫测试当场拦（见 `analysis-step.ts`）。
-  版本号因此只留给**不进文案**的那类失效——比如 v1→v2 那种「选项池怎么来的」的生成逻辑改动。
   */
 export const EXERCISE_STEP = defineAnalysisStep({
   layer: "exercise-generate",
@@ -200,7 +187,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  // 出网清单：候选摘录是带行号的整段源码。`to` 按摘录里**真的有几行**算（4,000 字符上限可能在中间中止）
+  // 出网清单：候选摘录是带行号的整段源码。`to` 按摘录里真的有几行算（4,000 字符上限可能在中间中止）
   recordEgress({
     repositoryPath: input.repositoryPath,
     scene: "practice.generate",
@@ -285,7 +272,7 @@ export function buildTagCandidate(repositoryPath: string, path: string, maxLines
       path,
       lineCount: lines.length,
       startLine: start + 1,
-      // 筛的是**行内容**：整段源码在这一条路上同样是原文出网
+      // 逐行过筛：整段源码在这一条路上同样是原文出网
       excerpt: lines.slice(start, start + maxLines).map((line, index) => `${start + index + 1}| ${masker.take(line)}`).join("\n").slice(0, 4_000),
       masked: masker.masked
     };

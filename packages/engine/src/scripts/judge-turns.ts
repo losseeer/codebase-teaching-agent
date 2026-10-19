@@ -7,7 +7,7 @@ import { readJournal } from "../store/journal.js";
 import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudgeResponse, priorTurns, type TurnVerdict } from "../eval/judge.js";
 
 /**
-  B 档第 3 刀：表达质量裁判（真发 LLM 调用、烧 token 的独立脚本——与零 token 的 phaseB:eval 严格分开）。
+  表达质量裁判：真发 LLM 调用、消耗 token 的独立脚本，与零 token 的 phaseB:eval 严格分开。
   判 rubric 已在 eval/judge.ts 预登记的四维：接续 / 接地 / 易读（全场景）+ 教学法契合（仅 teach）。
   证据必须逐字来自被评回复，编证据即驳回记 0；light 档未配置时整场报「未执行」，绝不回落确定性档伪装成 judged。
 
@@ -24,7 +24,7 @@ const here = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后；取最后一条才是「你现在在弄的那个仓」
+  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
 })();
 
 const out: string[] = [];

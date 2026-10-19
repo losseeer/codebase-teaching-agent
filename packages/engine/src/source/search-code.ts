@@ -5,12 +5,10 @@ import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "../text/lexic
 
 /**
   search_code 工具（宏观设计 map 与教学 teaching 共用，练习答疑不提供）：
-  纯词法检索「文件在哪」——路径、符号名、L1 一句话职责三处做词边界命中打分，
-  **只回位置与职责，不回正文**：正文仍必须走 read_file，护栏与 file_read 审计口径不被绕过。
+  纯词法检索「文件在哪」——路径、符号名、L1 一句话职责三处做词边界命中打分，只回位置与职责，不回正文：
+  正文仍必须走 read_file，护栏与 file_read 审计口径不被绕过。
 
-  动机：对话 agent 此前的世界清单只有目录全景（每目录截 20 个文件名）+ 邻接 + 锚点，
-  清单外的文件模型连存在都不知道，只能盲猜路径试 read_file。检索不读任何文件、
-  不占 maxCalls 文件额度，单次结果约 2,000 字符（对照 read_file 单窗 12,000），是省 token 的探路手段。
+  它不读任何文件、不占 maxCalls 文件额度，单次结果约 2,000 字符（对照 read_file 单窗 12,000）。
 
   零 LLM、零 I/O：语料全部来自导入期已产出的结构事实（依赖图符号表 + L1 摘要表），
   不进任何缓存层、不改任何对话固定输入——关闭只需不传 corpus，无失效语义。
@@ -19,18 +17,18 @@ import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "../text/lexic
 const MAX_RESULT_CHARS = 2_000;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 15;
-/** 查询词元上限：再多也只是给打分灌噪声（同 entry-suggest 的翻译词元纪律）。 */
+/** 查询词元上限：再多只是给打分灌噪声。 */
 const MAX_QUERY_TOKENS = 12;
 const MAX_SYMBOLS_SHOWN = 6;
-/** 每条结果最多报几个「撞上的函数」——行号是给 read_file 的落点，不是让模型猜的。 */
+/** 每条结果最多报几个命中的函数：行号是给 read_file 的落点，不是让模型猜的。 */
 const MAX_UNITS_SHOWN = 2;
-/** 摘要进语料/结果的长度上限：L1 承诺 ≤60 字，这里防御脏行——超长摘要会挤掉别的命中条目。 */
+/** 摘要进语料与结果的长度上限：防御脏行——超长摘要会挤掉别的命中条目。 */
 const MAX_SUMMARY_CHARS = 160;
 /** 兜底臂的文档频率闸：词元出现在超过这个比例的语料文件里就当通用词丢掉（下限见 FALLBACK_DF_FLOOR）。 */
 const FALLBACK_DF_RATIO = 0.12;
 /** 小仓里比例没有意义（3 条语料时任何词都「无处不在」），所以另设绝对下限。 */
 const FALLBACK_DF_FLOOR = 3;
-/** 兜底臂要求同一文件被几枚**不同**词元同时命中——一个碎词撞上的不算答案。 */
+/** 兜底臂要求同一文件被几枚不同词元同时命中——单个碎词命中不算答案。 */
 const FALLBACK_MIN_HITS = 2;
 
 export const SEARCH_CODE_TOOL: LlmTool = {
@@ -46,13 +44,13 @@ export const SEARCH_CODE_TOOL: LlmTool = {
   }
 };
 
-/** 一次检索的审计记录（由调用方记 journal code_search；无正文，符合 §1.1 口径）。 */
+/** 一次检索的审计记录（由调用方记 journal code_search；不含正文）。 */
 export interface CodeSearchRecord {
   query: string;
   hits: number;
-  /** 前 5 条命中的路径（漏斗读数：搜到什么之后去读了什么）。 */
+  /** 前 5 条命中的路径，用于对照「搜到什么之后去读了什么」。 */
   topPaths: string[];
-  /** 结果来自中文切词兜底臂（第一遍原样查询零命中）。没有这个字段就分不清命中率是哪一臂挣来的。 */
+  /** 结果来自中文切词兜底臂（原样查询零命中才会走）；没有这个字段就分不清命中率出自哪一臂。 */
   segmented?: boolean;
 }
 
@@ -64,12 +62,7 @@ interface CorpusEntry {
   symbols: string[];
   /** 符号名拼成的检索文本（小写）。 */
   symbolText: string;
-  /**
-    文件内符号连定义行。**不参与打分**，只用来把「撞上的到底是哪个函数、在第几行」回报给模型。
-    为什么不给它一个命中面：2026-10-04 试过把 `种类(形参)` 加成第四个面，三仓 hit@5 一个节点没涨
-    （83.3 / 70.0 / 7.7 / 75.0 / 6.3 / 87.5 / 15.8 全部一字不动），反倒把 `avro schema registry`
-    那条干净负例撞成误命中——通用参数名满地都是。实验读数见开发日志 §30，代码留这条注释防重犯。
-    */
+  /** 文件内符号连定义行。不参与打分，只用来把「命中的是哪个函数、在第几行」回报给模型。 */
   units: { name: string; line?: number }[];
   summary: string;
 }
@@ -123,7 +116,7 @@ interface Scored {
   pathHit: boolean;
   symbolHit: boolean;
   summaryHit: boolean;
-  /** 被符号名词元撞上的具体符号：不改排名，只多给一个落点。 */
+  /** 被符号名词元命中的具体符号：不改排名，只多给一个落点。 */
   hitUnits: { name: string; line?: number }[];
 }
 
@@ -134,12 +127,11 @@ const spanOf = (text: string, token: string): [number, number] => {
 };
 
 /**
-  同一命中面里**互相重叠**的词元只算一份证据。
+  同一命中面里互相重叠的词元只算一份证据。
 
-  为什么需要它：兜底臂的一致性闸要求「≥2 枚不同词元命中同一文件」，但 `segmentForLookup` 是滑动窗口切词，
-  「一对一」会同时产出 `一对` 与 `对一`，两者都命中摘要里的同一处「一对一」⇒ 一个短语骗过两票闸。
-  真仓负例实测两次都是这个形状（`一对/对一`→SeckillVoucher、`的订/订单`→OrderController）。
-  相邻但不重叠的词元（`支付` + `回调`）仍算两票——闸要挡的是「同一处文字被数了两次」，不是「词元挨着」。
+  兜底臂的一致性闸要求「≥2 枚不同词元命中同一文件」，而 `segmentForLookup` 是滑动窗口切词：
+  「一对一」会同时产出 `一对` 与 `对一`，两者都命中摘要里的同一处 ⇒ 一个短语骗过两票闸。
+  相邻但不重叠的词元（`支付` + `回调`）仍算两票——闸要挡的是同一处文字被数了两次，不是词元挨着。
   */
 function distinctEvidence(faces: { text: string; tokens: string[] }[]): number {
   let evidence = 0;
@@ -154,7 +146,7 @@ function distinctEvidence(faces: { text: string; tokens: string[] }[]): number {
   return evidence;
 }
 
-/** 打一轮分；`minHits` = 一个文件要有几枚**互不重叠**的词元同时命中才算候选。 */
+/** 打一轮分；`minHits` = 一个文件要有几枚互不重叠的词元同时命中才算候选。 */
 function scoreCorpus(corpus: SearchCorpus, tokens: string[], minHits: number): Scored[] {
   const scored: Scored[] = [];
   for (const entry of corpus.entries) {
@@ -171,9 +163,8 @@ function scoreCorpus(corpus: SearchCorpus, tokens: string[], minHits: number): S
     }
     const matchedTokens = distinctEvidence([{ text: entry.pathWords, tokens: pathTokens }, { text: entry.symbolText, tokens: symbolTokens }, { text: summary, tokens: summaryTokens }]);
     if (matchedTokens >= minHits) {
-      // 09-22：测试文件重罚垫底但**不剔除**——真仓 B 档实测 CacheClientTest 这类顶着同名类前缀的
-      // 文件抢 top1；封顶 1 分压在一切真实命中之下（非测试最低 2 分），概念只有测试演示时仍能兜底
-      // 出现——硬剔除会把「仓里有」答成「没有」，那是事实性错误，比排名瑕疵严重。
+      // 测试文件重罚垫底但不剔除：封顶 1 分压在一切真实命中之下（非测试最低 2 分）；
+      // 硬剔除会把「仓里有」答成「没有」，那是事实性错误，比排名瑕疵严重。
       scored.push({
         entry,
         score: isTestPath(entry.path) ? Math.min(score, 1) : score,
@@ -189,9 +180,9 @@ function scoreCorpus(corpus: SearchCorpus, tokens: string[], minHits: number): S
 }
 
 /**
-  兜底臂的文档频率闸：某个词元出现在超过 `FALLBACK_DF_RATIO`（且不少于 `FALLBACK_DF_FLOOR` 个）文件里，
-  就当通用词丢掉。切词后的双字片段（「文件」「数据」「如何」）在满是中文注释的仓里满地都是，
-  没有这道闸，「概念不存在所以应该零命中」的负例会被撞开——真仓实测两条负例全误命中。
+  兜底臂的文档频率闸：某个词元出现在超过 `FALLBACK_DF_RATIO`（且不少于 `FALLBACK_DF_FLOOR` 个）文件里就当通用词丢掉。
+  切词后的双字片段（「文件」「数据」「如何」）在满是中文注释的仓里满地都是；
+  没有这道闸，本该零命中的负例会被切成误命中。
 */
 function gateFallbackTokens(corpus: SearchCorpus, tokens: string[]): string[] {
   const ceiling = Math.max(FALLBACK_DF_FLOOR, Math.floor(corpus.entries.length * FALLBACK_DF_RATIO));
@@ -214,9 +205,8 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
   }
   const limit = Math.max(1, Math.min(MAX_LIMIT, typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : DEFAULT_LIMIT));
   let scored = scoreCorpus(corpus, queryTokens(query), 1);
-  // 兜底最后一级：**只有原样查询零命中**才重试中文二分切词。真仓 §26 读数——整句中文在第一遍恒为 0/13，
-  // 切词能抬到 30.8%，而关键词式查询本来就有命中、根本走不到这里 ⇒ 已验证的行为一分不动。
-  // 两道闸（DF 闸 + 同一文件至少 2 枚词元）是它敢进产品的唯一理由：裸切词会把负例撞出误命中。
+  // 兜底最后一级：只有原样查询零命中才重试中文二分切词；关键词式查询本来就有命中，走不到这里。
+  // 两道闸（DF 闸 + 同一文件至少 2 枚词元）是它敢进产品的前提：裸切词会把负例切成误命中。
   let segmented = false;
   if (!scored.length) {
     const loose = gateFallbackTokens(corpus, queryTokens(segmentForLookup(query), MAX_QUERY_TOKENS * 3));
@@ -240,7 +230,7 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
     const matched = [item.pathHit && "路径", item.symbolHit && "符号", item.summaryHit && "职责"].filter(Boolean).join("/");
     // 兜底进结果时明说是测试文件——模型拿着这个上下文自己决定要不要读，而不是被排名悄悄误导
     const testTag = isTestPath(item.entry.path) ? "，测试文件" : "";
-    // 「就近」= 这条查询真的撞在哪个函数、第几行；把符号级位置交给模型，省一次「搜到文件再猜位置」的读取
+    // 「就近」= 这条查询命中在哪个函数、第几行；把符号级位置交给模型，省一次「搜到文件再猜位置」的读取
     const nearest = item.hitUnits.map((unit) => (unit.line === undefined ? unit.name : `${unit.name}:${unit.line}`)).join("、");
     const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}${testTag}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${nearest ? `\n  就近: ${nearest}` : ""}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
     if (used + block.length > MAX_RESULT_CHARS) {

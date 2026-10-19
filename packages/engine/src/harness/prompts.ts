@@ -3,14 +3,14 @@ import { styleBand, validateStyle } from "../tutor-settings/tutor-settings.js";
 
 /**
   集中式 LLM 提示词构建器。所有需要「遵循语言风格」的对话提示词都从这里取，
-  保证 style → 风格指令的映射只有一处口径。风格是**离散三档**（GUI 三选一：通俗/普通/严肃，
+  保证 style → 风格指令的映射只有一处口径。风格是离散三档（GUI 三选一：通俗/普通/严肃，
   值 100/50/0，learner 推荐同）；0~100 的其他取值按 shared 的 styleBand 阈值归到最近一档（≤33 严肃 / ≥67 通俗）。
 
   - teachingSystemPrompt：代码教学对话（harness）
   - overviewSystemPrompt：宏观设计对话（map 作用域，scopechat 调用）
   - exerciseQaSystemPrompt：练习答疑对话（practice 作用域，scopechat 调用）
   三个作用域的作用域边界也都在这里定义（宏观设计只讲流程与结构、代码教学只讲实现、练习答疑只依据题面），
-  作用域 system prompt 全仓只有这一份定义——scopechat 不再自带提示词副本。
+  scopechat 不自带提示词副本。
   */
 
 export interface TeachingPromptInput {
@@ -23,8 +23,8 @@ export interface TeachingPromptInput {
 }
 
 /**
-  三档语言风格指令（2026-09-18 由 0~100 滑块改离散三档）：
-  - 通俗：允许并鼓励用类比、举例等手法把原理讲直观（不再要求给类比贴标注）；
+  三档语言风格指令：
+  - 通俗：允许并鼓励用类比、举例等手法把原理讲直观；
   - 普通：中性准确（默认档）；
   - 严肃：工程评审式专业严谨，明确不用类比。
   两端各留一句「不要做什么」，防止通俗变油滑、严肃变啰嗦。
@@ -44,11 +44,8 @@ export function styleBrief(style: number): string {
 }
 
 /**
-  代码问答作用域的 system prompt。
-
-  2026-10-14 撤掉教学状态机时，这里删了两样东西：`kindContract`（四种教学动作的输出契约，
-  动作本身已不存在）与「当前阶段 / 提示深度」那一行。**教学法（policy.constraints）保留**——
-  它是用户设的风格档，由 `policyFor` 展开，不依赖状态机；`socratic` 档下模型仍会先要学习者说推理。
+  代码问答作用域的 system prompt：证据只到上下文摘录与工具取回的内容，边界只讲实现。
+  教学法（policy.constraints）是用户设的风格档，由 `policyFor` 展开；`socratic` 档下模型仍会先要学习者说推理。
 */
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
   const { policy, faded, readToolAvailable, searchToolAvailable } = input;

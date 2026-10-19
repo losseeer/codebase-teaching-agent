@@ -3,12 +3,12 @@ import type { JournalEvent } from "@codebase-tutor/shared";
 
 /**
   只读聚合脚本：按 traceId 把 journal.jsonl 的事件串成「一次请求 = 一段可读轨迹」。
-  journal 是 append-only 事件流，逐行看是散的；复盘某次对话的完整执行轨迹
-  （用户问了什么 → 模型提议/守门裁决 → 读了哪些文件 → 回了什么）要靠 traceId 分组重放。
+  journal 是 append-only 事件流，逐行看是散的；复盘一次对话的完整执行轨迹
+  （用户问了什么 → 守门裁决 → 读了哪些文件 → 回了什么）要靠 traceId 分组重放。
 
   用法：pnpm run-trace -- <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]
   - 不带 --trace 时按时间倒序列出最近 N 次请求（traceId 为 null 的后台事件归入「后台」组）；
-  - --session 只看一个会话线程（chat_session.id = journal 的 sessionId）经历过的事件，仍按 traceId 分段——
+  - --session 只看一个会话线程（chat_session.id = journal 的 sessionId）经历过的事件，仍按 traceId 分段：
     一个会话跨多次请求，按线程过滤才看得到「新建 → 每轮读了什么 → 软删」的完整生命周期；
   - --json 输出分组后的原始事件，供进一步机检。
 

@@ -11,10 +11,10 @@ import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
 
 /**
-  L1 摘要全仓重烧（有意的产品写入——它正是「口径 bump 后让全仓摘要换新」的正规通道）。
+  全仓重做 L1 摘要：口径 bump 之后让全仓摘要换新走的正规产品写入通道。
 
-  与 phase0:prepare-study 的差别：那个脚本走确定性档且会改写课程树、往仓库里写调研材料；
-  本脚本只重烧摘要，烧前先断言 provider 是模型档（确定性档重烧毫无意义，且会把 LLM 摘要整表覆盖）。
+  与 phase0:prepare-study 的差别：那个走确定性档且会改写课程树、往仓库里写调研材料；
+  本脚本只更新摘要，写入前先断言 provider 是模型档（确定性档会把 LLM 摘要整表覆盖掉）。
 
   用法：pnpm l1:reburn [仓库路径]（默认取 repositories.json 里最近使用的那条）
 */
@@ -29,7 +29,7 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后；取最后一条才是「你现在在弄的那个仓」
+  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
 })();
 
 const index = indexRepository(repositoryPath);
@@ -37,7 +37,7 @@ const database = new TutorDatabase(repositoryPath);
 const analysis = database.getAnalysis(index.repositoryId);
 if (!analysis) throw new Error(`仓库 ${repositoryPath} 尚无分析记录（先走 GUI 导入）`);
 
-// 「摘要参考注释」是每仓设置（默认关）：重烧沿用当前开关状态，与导入路径同口径
+// 「摘要参考注释」是每仓设置（默认关）：这里沿用当前开关状态，与导入路径同口径
 const withHeaderComments = database.getSettings<{ summaryHeaderComments?: boolean }>(index.repositoryId)?.summaryHeaderComments === true;
 const light = buildLlmRuntimeProvider("light");
 const provider = createSummaryProvider({ llm: light, withHeaderComments });

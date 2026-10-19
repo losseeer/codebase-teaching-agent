@@ -7,10 +7,9 @@ import { runWithTrace } from "../trace/context.js";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/shared";
 
 /**
-  学习日志：append-only、白名单在**运行时**（`eventTypes`），不是只靠编译期类型。
-  现在这张白名单由 shared 的两张「写入权表」并起来生成，所以老那条评论担心的事（往 union 加取值却忘了
-  同步运行期 Set）已经结构性消失；剩下要守的是**谁有资格写**：
-  审计线的引擎侧类型不能从界面接口进来（§46），否则「哪些代码出过门」这条账谁都能填。
+  学习日志：append-only、白名单在运行时（eventTypes）判，不只靠编译期类型。
+  白名单由 shared 两张写入权表并起来生成；要守的是谁有资格写：
+  审计线的引擎侧类型不能从界面接口进来，否则「哪些代码出过门」这条账谁都能填。
   */
 
 describe("学习日志", () => {
@@ -21,7 +20,7 @@ describe("学习日志", () => {
 
   it("UI 侧事件（设计文档第 8 章契约）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
-    // 清单取 shared 那张表，不在测试里另抄一份：以前抄的那份漏了 module_tier_overridden
+    // 清单取 shared 那张表，不在测试里另抄一份
     for (const type of UI_JOURNAL_EVENTS) journal.append(type, { where: "/api/x" });
 
     const events = readJournal(repository);
@@ -31,7 +30,7 @@ describe("学习日志", () => {
 
   it("白名单由两张表并起来；接口只收界面侧那一份，引擎侧类型只能由引擎自己 append", () => {
     const journal = new Journal(repository, "repo_1");
-    // 引擎侧类型照旧能写（那是内部路径），但**不在这条接口的受理范围**里
+    // 引擎侧类型照旧能写（那是内部路径），但不在这条接口的受理范围里
     journal.append("code_egress", { scene: "map.chat", kind: "anchor-excerpt", path: "a.ts", lines: "1-2", chars: 2, hash: "abcdef123456" });
     journal.append("token_usage", { scene: "teach", input_tokens: 10 });
     expect(readJournal(repository)).toHaveLength(2);

@@ -4,15 +4,14 @@ import { citesOwnedFile } from "../flows/deepen.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**
-  B 档（离线评测）的**确定性判分器**——一条 LLM 调用都不发起，判的是「产出的形态与可定位性」。
-  对应设计方案 §10「教学内容质量」里可机器检查的两类：
-  1. **引用落地**：产物文本里每个 `文件[:行号]` 都必须在仓内真实存在、行号不越界（归因正确性）；
-  2. **边证据可核对**：code 边的 evidence 必须引到这条边端点自己的文件（与 deepen 的驳回闸同一口径），
+  离线评测的确定性判分器——不发起任何 LLM 调用，判「产出的形态与可定位性」：
+  1. 引用落地：产物文本里每个 `文件[:行号]` 都必须在仓内真实存在、行号不越界；
+  2. 边证据可核对：code 边的 evidence 必须引到这条边端点自己的文件（与 deepen 的驳回闸同一口径），
      static 边至少引到一个能落地的文件；
-  3. **检索 gold 命中**：`executeSearchCode` 离线重放，摘要上/不上两臂算 hit@k 与 recall@k，
-     负例（仓内没有的东西）期望零命中——这是 search_code / L1 摘要消融的零成本前测。
+  3. 检索 gold 命中：`executeSearchCode` 离线重放，摘要上/不上两臂算 hit@k 与 recall@k，
+     负例（仓内没有的东西）期望零命中。
 
-  口径纪律同 A 档：数据源缺失报「未执行」，不拿空数组伪装成满分。
+  数据源缺失报「未执行」，不拿空数组伪装成满分。
 */
 
 const EXTENSIONS = "java|kt|kts|scala|groovy|py|ts|tsx|js|jsx|vue|go|rb|php|rs|swift|sql|xml|yaml|yml|md";
@@ -78,7 +77,7 @@ export function scoreFlowArtifacts(flows: RepositoryFlow[], files: Map<string, n
   for (const flow of flows) {
     const texts: string[] = [flow.title, flow.summary ?? ""];
     for (const stage of flow.stages) {
-      // 只判**模型写的文本**：stage.files 的结构化 path/line 已被 parseFlow 对着索引验过，再算进来是拿校验过的字段刷分
+      // 只判模型写的文本：stage.files 的结构化 path/line 已被 parseFlow 对着索引验过，不重复计入
       texts.push(stage.title, stage.detail, ...stage.files.map((file) => file.note ?? ""), ...stage.branches);
     }
     for (const edge of flow.edges) texts.push(edge.evidence ?? "");
@@ -111,8 +110,8 @@ export interface SearchCase {
   query: string;
   /** 该查询的正确答案文件；负例为空数组（期望零命中）。 */
   goldPaths: string[];
-  /** 留出例（true）：建集时**没参照任何一代摘要**措辞，只按代码事实写 query 与 gold。
-      报告把它与调优例分列——口径变更后若只有调优例涨、留出例不涨，就是「对着考纲出题」的证据。 */
+  /** 留出例（true）：建集时不参照任何一代摘要措辞，只按代码事实写 query 与 gold；
+      报告与调优例分列，若只有调优例涨、留出例不涨，即口径过拟合的信号。 */
   holdout?: boolean;
 }
 
@@ -159,7 +158,7 @@ export function scoreSearchArm(cases: SearchCase[], search: (query: string) => s
   };
 }
 
-// ---------- 第 2 刀：教学法不变量机检（数据源 = journal 的 turn_text + style_shift） ----------
+// ---------- 教学法不变量机检（数据源 = journal 的 turn_text + style_shift） ----------
 
 /** 一个回合的机检视图：由 runner 从 journal 装配，判分器保持纯函数。 */
 export interface TeachTurn {
@@ -171,13 +170,8 @@ export interface TeachTurn {
   style: number;
   /** 回复落盘时被 2000 字截断——引用核对会看到半截引用，这条不参与引用判分。 */
   answerTruncated: boolean;
-  /**
-    默认 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
-    「绑定锚点」这条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。
-
-    2026-10-14 撤掉教学状态机时，第三条 `socratic-question`（每轮留一个可核对的问题）整条删掉：
-    它的判据吃 `stage` 与「本轮动作」，而动作由状态机决定——生产者没了，这条度量量的东西已经不存在了。
-    */
+  /** 默认 = teach（离线样本全是 teach）。运行期复检对三种作用域都跑，但只有 teach 的设计写了
+      「绑定锚点」这条承诺，map/practice 只判引用落地那条——不适用不等于通过，分母如实缩。 */
   scene?: "teach" | "map_chat" | "practice_chat";
 }
 
@@ -190,17 +184,14 @@ const INVARIANTS: { id: InvariantId; label: string; source: string }[] = [
 ];
 
 /**
-  出字前的本地过筛（零 token）：只查**机器能判的两件事**——疑似密钥外泄、仓库外绝对路径被当证据引用。
-  与两条不变量的区别很要紧：不变量是「这轮该做到而没做到」，进分母；这两条是**改写**（隐掉再下发），
-  不进分母——把「模型偶然贴了个 key」算进教学法得分，只会让那条度量失去意义。
-
-  为什么值得做：`read_file` 已经在源头挡住密钥文件（拒读名单 + 软链接复核），但那挡的是**这一轮读进来的东西**；
-  学习者自己贴过一段带 token 的报错、或者上一轮的正文里带着它，就会顺着对话历史被模型复述出来。
-  正文一旦下发就收不回，所以这一步放在复检最前面、流式之前。
+  出字前的本地过筛（零 token）：只查机器能判的两件事——疑似密钥外泄、仓库外绝对路径被当证据引用。
+  过筛做改写（隐掉再下发）不进分母，与「该做到没做到」的不变量分开计——密钥误进教学法分母会让那条度量失真。
+  read_file 只在源头挡住本轮读进来的东西；学习者贴的或历史回合里的密钥会被模型复述，正文下发后收不回，
+  所以这一步放在复检最前面、流式之前。
  */
 export interface ScreenedReply {
   text: string;
-  /** 各隐去了几处（journal 埋点用；只记数量与首个样例，绝不记原文——那正是要挡住外泄的东西）。 */
+  /** 各隐去了几处（journal 埋点用；只记数量与首个样例，不记原文，避免把要挡的东西再存一遍）。 */
   secrets: number;
   paths: number;
   samples: string[];
@@ -242,11 +233,9 @@ export interface TurnInvariantVerdict {
 const excerpt = (text: string): string => text.replaceAll(/\s+/g, " ").slice(0, 60);
 
 /**
-  单回合的不变量机检——**离线判分器与运行期运行时复检共用这一个实现**。
-  分成两份实现的后果是「线上说合格、离线算不合格」，那比没有复检更糟。
-
-  判「通过」的口径刻意保守：引用核对只看「文件在不在索引、行号越不越界」，
-  代码示例里的三元 `?` 之类可能造成极个别假通过——读数只用于回归对比，不当绝对分。
+  单回合的不变量机检——离线判分器与运行期复检共用这一个实现，两份实现会出现「线上合格、离线不合格」。
+  判「通过」的口径刻意保守：引用核对只看文件在不在索引、行号越不越界，
+  代码示例可能造成极个别假通过——读数只用于回归对比，不当绝对分。
   */
 export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>): TurnInvariantVerdict {
   const teach = (turn.scene ?? "teach") === "teach";
@@ -276,10 +265,9 @@ export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>)
 }
 
 /**
-  运行期给学习者看的那一行明示。**只在引用失守时出现**：风格类失守是教学侧的读数问题，
-  不是学习者能据以行动的事实，把它显示出来只是噪音。
-  这句话里刻意不含任何 `文件.扩展名:行号` 形态的串，也不含 `read_file` 这类工具名——
-  否则它自己会变成下一条被检的引用（journal 记的是用户真看到的文本，回放同一条时会二次判分）。
+  运行期给学习者看的那一行明示，只在引用失守时出现：风格类失守是教学侧读数问题，不是学习者能行动的事实。
+  这句话刻意不含 `文件.扩展名:行号` 形态的串和工具名——journal 记的是用户真实看到的文本，
+  含了它自己会变成下一条被检引用、回放时二次判分。
   */
 export function invariantTailNotice(verdict: TurnInvariantVerdict): string | undefined {
   if (!verdict.failed.includes("reference-grounding")) return undefined;
@@ -304,9 +292,9 @@ export interface TeachInvariantScore {
 }
 
 /**
-  只判**设计上写了保证、且文本层可核对**的两条不变量（出处见 INVARIANTS 表）；
-  「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给第 3 刀裁判。
-  逐条判定在 `checkTurnInvariants`——运行期运行时复检也走它，这里只负责按条目聚合。
+  只判设计上写了保证、且文本层可核对的两条不变量（出处见 INVARIANTS 表）；
+  「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给质检裁判。
+  逐条判定在 `checkTurnInvariants`——运行期复检也走它，这里只按条目聚合。
   */
 export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
   const checks = new Map<string, InvariantCheck>(INVARIANTS.map((item) => [item.id, { ...item, applicable: 0, pass: 0, misses: [] }]));

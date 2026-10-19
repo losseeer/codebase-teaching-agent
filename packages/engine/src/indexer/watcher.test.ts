@@ -7,14 +7,14 @@ import { changeWanted, changedAfter, ingestSetDiffers, isArtifactEcho, Repositor
 import { listIngestedPaths } from "./indexer.js";
 
 /**
-  监听这一层的三条口径（2026-10-06 复审 #123）：
-  ① 起不来要如实交出死活（旧写法一个空 catch，之后界面永远报 fresh）；
-  ② 自己写的产物不能叫醒自己（`.tutor/**` 恒定不回声，哪怕用户把 `.tutorignore` 写成 `!.tutor/**`）；
+  监听这一层的三条口径：
+  ① 起不来要如实交出死活，不能让界面一路报 fresh；
+  ② 自己写的产物不能叫醒自己（`.tutor` 恒定不回声，哪怕用户把 `.tutorignore` 写成放行 `.tutor`）；
   ③ FSWatcher 必须有 error 监听——它是 EventEmitter，运行中报错而没人听会把整台引擎带走。
 
   ⚠️ 测试口径：判据（`changeWanted`）用纯函数确定性测，真 fs 事件只留一条端到端兜底、
-  并且把等待窗口放到 10 秒——整包并行跑时几十路 `fs.watch` 同时投递，3 秒等不到一个 change 是实测到的（第一次就因此红了）。
-  时序不能当判据的依据：烧钱级的规则必须每次都能被稳定测到。
+  并且把等待窗口放到 10 秒——整包并行跑时几十路 `fs.watch` 同时投递，几秒等不到一个 change。
+  时序不能当判据的依据：代价大的规则必须每次都能被稳定测到。
   */
 
 const temporaryDirectories: string[] = [];
@@ -35,7 +35,7 @@ afterEach(() => {
     try {
       chmodSync(dir, 0o755);
     } catch {
-      // 目录可能压根没建成
+      // 目录可能没建成
     }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -56,7 +56,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     const matcher = createTutorIgnoreMatcher(dir);
     // 这一条是索引层的既有设计（ignore.test.ts 钉着），说明「放行」确实生效了
     expect(matcher.ignores(".tutor/tutor.db"), "前提：用户放行后匹配器认为产物该被索引").toBe(false);
-    // 但监听层不跟：自触发循环的代价是整仓反复重扫，更糟时反复重烧钱
+    // 但监听层不跟：自触发循环的代价是整仓反复重扫
     expect(changeWanted(".tutor/tutor.db", matcher)).toBe(false);
     expect(changeWanted(".tutor/journal.jsonl", matcher)).toBe(false);
     expect(changeWanted(".tutor", matcher)).toBe(false);
@@ -73,9 +73,8 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
   });
 
   /**
-    #163 的判据位。以前「非忽略、非产物」就算源码改动，于是往仓里放一张图片、一份 `.env`
-    都会排一整轮重分析：产物被真实扫描换掉（测试里那两条出网用例因此在并行负载下偶发拿到 0 行），
-    真仓里则是缓存键重算 + 润色可能重烧。现在只有「可能改变收录集」的改动才叫醒。
+    判据位：`file` 那一档按收录集筛——「非忽略、非产物」还不够，只有「可能改变收录集」的改动才叫醒。
+    否则往仓里放一张图片、一份 `.env` 都会排一整轮重分析：产物被真实扫描换掉、缓存键重算、润色可能重跑。
     */
   it("文件那一档按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {
     const dir = repository();
@@ -101,8 +100,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
   });
 
   it("mtime 与监听起点对到同一格整数毫秒：播种算回放，跨到下一格才算改动", () => {
-    // 端到端那条用例偶发白醒的根因：起点 `Date.now()` 是整数毫秒而 `stat.mtimeMs` 带小数，
-    // 先写文件再取起点时那份播种反过来「比起点晚」——实测 400 次里 393 次撞进这一格（10-18）。
+    // 起点 `Date.now()` 是整数毫秒而 `stat.mtimeMs` 带小数，不对齐时先写文件再取起点会让播种「比起点晚」。
     expect(changedAfter(1_000, 1_000)).toBe(false);
     expect(changedAfter(1_000.7, 1_000)).toBe(false);
     expect(changedAfter(1_001.0, 1_000), "跨到下一格就是起监听之后的改动了").toBe(true);
@@ -141,7 +139,7 @@ describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
     const errors: string[] = [];
     const watcher = new RepositoryWatcher(dir, () => undefined, 50, (message) => errors.push(message));
     expect(watcher.start().started).toBe(true);
-    // 直接对内部 FSWatcher 发一个 error：修复前的形状里没有监听器，这一条会变成未捕获异常
+    // 直接对内部 FSWatcher 发一个 error：没有监听器时这一条会变成未捕获异常
     const inner = (watcher as unknown as { watcher?: { emit(event: string, error: Error): boolean } }).watcher;
     expect(inner, "监听没起来就别继续测了").toBeTruthy();
     inner!.emit("error", new Error("inotify 额度用尽"));
@@ -165,15 +163,14 @@ describe("RepositoryWatcher 的死活（复审 #123①③）", () => {
     const arrived = await waitFor(() => batches.flat().includes("src/keep.ts"), 20_000);
     watcher.close();
     if (!arrived) {
-      // 真 fs 事件在多路 vitest 并行时能迟到二十秒以上（全量首跑实测红过一次）。
-      // 这条只是兜底：判据本身由上面那组纯函数用例确定性钉住，所以这里自我跳过并报一声，
-      // 而不是留一条会自己红的测试——红一次就被当成真出了问题。
+      // 真 fs 事件在多路 vitest 并行时能迟到二十秒以上。这条只是兜底：判据本身由上面那组纯函数用例
+      // 确定性钉住，所以这里自我跳过并报一声，而不是留一条会自己红的测试。
       console.warn("[watcher] 20 秒内没收到真 fs 事件，端到端兜底跳过（判据见上一组纯函数用例）");
       ctx.skip();
     }
     expect(batches.flat().filter((path) => isArtifactEcho(path))).toEqual([]);
     // ⚠️ 这条的超时必须大于上面 20 秒的等待：vitest 默认 5 秒会先把测试判红，
-    // 于是「慢就自跳过」这条路根本走不到（并行全量跑实测红过一次，就是这个原因）。
+    // 于是「慢就自跳过」这条路根本走不到。
   }, 25_000);
 
   it("端到端：非收录文件的写入（含它顶一下的仓根目录 mtime）一路都不叫醒", async (ctx) => {

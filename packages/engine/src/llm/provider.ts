@@ -2,14 +2,9 @@ import { maskSecrets } from "../security/secrets.js";
 import { applyThinking } from "./thinking.js";
 
 /**
-  出网前的**最后一道筛**（企业化第 2 条的总闸口）：三个真发请求的 provider 在 `complete` 第一行各调一次。
-
-  为什么贴在发送边而不是只靠装配点：10-12 的审计查出四条漏网——出题的源码摘录、符号形参原文、
-  L2 聚合上下文、向量批量——它们全是**后来新增的装配路径**，不是谁把旧代码改坏了。
-  「每个新调用点都记得过筛」是指望不住的纪律，防线得长在出口上。
-
-  判据与那几处装配点完全同一份（`security/secrets.ts`），掩码串不会被二次命中，
-  所以已经筛过的文本再过一次是原样返回；没人命中密钥时也**不会重拼消息**（缓存前缀逐字节不变）。
+  出网前的最后一道筛：三个真发请求的 provider 在 complete 第一行各调一次。
+  防线长在出口而不指望每个装配点自觉；判据与 security/secrets.ts 同一份——掩码串不会被二次命中，
+  已筛过的文本再过一次原样返回；没命中密钥时不重拼消息（缓存前缀逐字节不变）。
   */
 export function screenOutbound(input: LlmCompletionInput): LlmCompletionInput {
   const system = maskSecrets(input.system);
@@ -76,10 +71,8 @@ export interface LlmCompletionInput {
 }
 
 /**
-  外部中止专用错误：必须与「超时」区分开。两件事原来会撞在一起——
-  OpenAI 兼容层把任何 AbortError 都改写成「LLM 请求超时」文案，
-  而 RetryLlmProvider 只按 `returned 4xx` 判可重试，于是**用户刚点停止，引擎又把同一轮重发一遍**。
-  带 llmAborted 标记后重试层与 harness 的降级 catch 都能把中止原样上抛，不伪装成失败或降级结论。
+  外部中止专用错误：必须与「超时」区分开。带 llmAborted 标记后，重试层与 harness 的降级 catch
+  都会把中止原样上抛，不伪装成失败、也不重发已停止的那一轮。
   */
 export class LlmAbortedError extends Error {
   readonly llmAborted = true;
@@ -137,16 +130,13 @@ export interface LlmCompletion {
   usage?: LlmUsage;
   finishReason?: string;
   /**
-    第几次尝试拿到的这个结果（1 = 一次就成）。只有 `RetryLlmProvider` 会填——
-    日志包在重试层**外面**，一次逻辑调用只落一行，「试了几次」不带出来就永远测不到（第三阶段点名的指标）。
+    第几次尝试拿到的这个结果（1 = 一次就成）。只有 RetryLlmProvider 会填——
+    日志包在重试层外面，一次逻辑调用只落一行，不带出来就观测不到重试。
     */
   attempts?: number;
   /** 每次尝试各自的墙钟（ms），按发生顺序。`[60000, 15000]` 这种形状就是「被超时中止一次再发一遍并成了」。 */
   attemptMs?: number[];
-  /**
-    这一发的 `max_tokens` 是**加过一档推理余量**之后才成的：说明上一发是被思考量挤空的。
-    没有这个字段，日志里只看得见「一次成功、耗时略长」，看不出预算其实动过。
-    */
+  /** 这一发的 max_tokens 是加过一档推理余量之后才成的（上一发被思考量挤空）。 */
   headroomEscalated?: boolean;
 }
 
@@ -219,12 +209,8 @@ export class OpenAICompatibleProvider implements LlmProvider {
   readonly modelVersion: string;
   private readonly fetchImpl: typeof fetch;
   /**
-    推理余量：推理模型（如 DeepSeek 系列）会把 reasoning token 计入 max_tokens 上限，
-    调用点按非推理模型设的小上限（12~1600）会被思考烧光导致 content 为空。
-    余量直接加在请求的 max_tokens 上——非推理模型不会为多余上限多花 token（用完即停），所以无条件加上是安全的。
-    可用 TUTOR_LLM_REASONING_HEADROOM 调整（0 表示关闭）。
-    默认 6000（2026-09-18 实测校准）：map.flow 全流程生成在 thinking=auto 下的自然思考量 **2.4k~4.2k+ tok**（探针直测 reasoning 4,203 + 正文 1,849 = 6,445 outputTokens）；
-    旧默认 3000 + map.flow maxTokens 2400 = 5400，被 5 连败截断/空正文——思考余量必须按「最坏思考 + 满额正文」留。
+    推理模型的 reasoning token 计入 max_tokens 上限，故在请求上限上直接加一档余量；
+    非推理模型用完即停、不为多余上限多花 token，无条件加上是安全的。可用 TUTOR_LLM_REASONING_HEADROOM 调整（0 = 关闭）。
     */
   private readonly reasoningHeadroom: number;
 
@@ -241,10 +227,8 @@ export class OpenAICompatibleProvider implements LlmProvider {
     const first = await this.attemptOnce(input, base + this.reasoningHeadroom);
     if (!first.truncated) return first.completion;
     /**
-      只有一种败法值得**当场换一档预算重发**：被 `max_tokens` 截断且正文为空。实测（§62）这一族的同载荷
-      重发后来 12/12 都成功了，说明多半是那一发的思考量瞬时超预算，不是请求本身坏。
-      这与「原样重发同一份载荷」是两件事——那样赌的是运气，这次带的是信息。
-      余量被关成 0 时不重发（再发一次同样的预算没有意义），直接把话说清让用户调。
+      截断且正文为空时按加过两档余量的预算重发一次：多半是那一发的思考量瞬时超预算，不是请求本身坏。
+      余量被关成 0 时不重发（同样预算再发一次没有意义），直接抛错说明原因。
     */
     if (!this.reasoningHeadroom) throw OpenAICompatibleProvider.truncatedError(base, 0, false);
     const second = await this.attemptOnce(input, base + this.reasoningHeadroom * 2);
@@ -270,9 +254,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       max_tokens: budget,
       messages
     };
-    // 思考参数按模型能力声明组装（llm/thinking.ts 查表）：DeepSeek 走 thinking+reasoning_effort，
-    // OpenAI 系走顶层 reasoning_effort，其余样式/未知模型不发字段；显式下发不支持的档位直接抛错。
-    // 注意省略字段时不发任何思考字段，保持行为完全不变。
+    // 思考参数按模型能力声明组装（llm/thinking.ts 查表）；显式下发不支持的档位直接抛错，省略时不发任何思考字段。
     if (input.thinking) applyThinking(payload, this.options.model, input.thinking);
     if (input.tools?.length) {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
@@ -441,11 +423,10 @@ export class RetryLlmProvider implements LlmProvider {
       try {
         const completion = await this.primary.complete(input);
         attemptMs.push(Date.now() - started);
-        // 「第几次成的」必须带出去：外层日志一次逻辑调用只落一行，不带上就读不出重试发生过
         return { ...completion, attempts: attempt + 1, attemptMs };
       } catch (error) {
         attemptMs.push(Date.now() - started);
-        // 中止优先于「可重试」判定：用户已经停了，重发同一轮只会再烧一遍 token；
+        // 中止优先于「可重试」判定：用户已经停了，不再重发同一轮；
         // 判据带 signal 而不只看错误——response.json() 阶段的 AbortError 不带哨兵标记。
         if (isLlmAborted(error, input.signal)) throw markAttempts(error instanceof LlmAbortedError ? error : new LlmAbortedError(), attempt + 1, attemptMs);
         if (isNonRetryable(error)) throw markAttempts(error, attempt + 1, attemptMs);
@@ -470,8 +451,7 @@ function markAttempts(error: unknown, attempts: number, attemptMs: number[]): un
   return error;
 }
 
-/** 确定性 4xx（除 408 请求超时 / 429 限速）不做重试：同样的请求原样重发只会原样再败，
-    白烧两次失败调用（借鉴 Claude Code s08 reactive_compact 的「先分类再决定升级路径」）。 */
+/** 确定性 4xx（除 408 / 429）不做重试：同样的请求原样重发只会原样再败。 */
 function isNonRetryable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const status = /(?:LLM|Anthropic|Ollama) returned (\d{3})/.exec(message)?.[1];
@@ -481,7 +461,7 @@ function isNonRetryable(error: unknown): boolean {
 }
 
 /** 思考模式注入包装：把运行时档位附加到包装内 provider 的每一次调用上（"auto" = 原样透传不注入）。
-    档位是「部署/会话级」决定（GUI 设置），不该侵入各调用点——所以包在 provider 层而不是改每个 complete 调用。 */
+    档位是部署/会话级决定（GUI 设置），包在 provider 层，不侵入各调用点。 */
 export class ThinkingOverrideLlmProvider implements LlmProvider {
   readonly name: string;
   readonly modelVersion: string;
@@ -512,9 +492,9 @@ export interface LlmConfigOverrides {
 const trimmed = (value?: string): string => value?.trim() ?? "";
 
 /**
-  一份配置的三层回落：GUI 运行时覆盖 → `.env`（只有 `TUTOR_LLM_*` 一套）→ 该协议默认。
+  一份配置的三层回落：GUI 运行时覆盖 → .env（只有 TUTOR_LLM_* 一套）→ 该协议默认。
   provider 没配时返回 `provider: ""`，由 createLlmProvider 判成「未配置」。
-  密钥只认业界通用名 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`——一个值两把钥匙迟早读成两份配置。
+  密钥只认通用名 OPENAI_API_KEY / ANTHROPIC_API_KEY，不认引擎专属别名——别名会被读成另一份配置。
   */
 export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLlmConfig {
   const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || "").toLowerCase();
@@ -556,10 +536,8 @@ function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
 }
 
 /**
-  唯一的 LLM 工厂（2026-09-18 起不再有「轻量 / 主力」两套配置）：
-  .env 只有一套 `TUTOR_LLM_*`；「轻任务 / 教学对话」是**运行时角色**（差别只在思考开关，见 llm/runtime.ts），
-  不是两份配置。旧别名 `TUTOR_TEACHING_*` 与 `TUTOR_OPENAI_API_KEY` / `TUTOR_ANTHROPIC_API_KEY` 已于 10-18 停止读取
-  ——同一扇门两把钥匙，配错一把会读成另一份配置，而且账面看不出来。
+  唯一的 LLM 工厂：.env 只有一套 TUTOR_LLM_*。「轻任务 / 教学对话」是运行时角色
+  （差别只在思考开关，见 llm/runtime.ts），不是两份配置；也不读引擎专属的密钥别名。
   */
 export function createLlmProvider(overrides?: LlmConfigOverrides): LlmProvider | undefined {
   const config = resolveLlmConfig(overrides);

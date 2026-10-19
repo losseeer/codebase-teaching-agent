@@ -16,7 +16,7 @@ describe("buildImplementationUnits", () => {
     try {
       mkdirSync(join(dir, "src"), { recursive: true });
       writeFileSync(join(dir, "src/keep.ts"), "export function kept() {\n  return 1;\n}\n");
-      // 索引之后文件被删 / 被换成特殊节点：与扫描层 §37.3 同一条口径——缺席可以，掀桌不行
+      // 索引之后文件被删 / 被换成特殊节点：与扫描层同一条口径——符号可以缺席，整次导入不能掀翻
       const units = buildImplementationUnits(dir, [symbol("src/keep.ts", "kept"), symbol("src/gone.ts", "vanished"), symbol("src", "isDirectory")]);
       expect(units.map((unit) => unit.symbol.name)).toEqual(["kept"]);
       expect(units[0].output, "正文取的是定义区间里的 return 表达式").toBe("返回 1");

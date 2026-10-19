@@ -5,12 +5,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs, resetExternalTools } from "./clients.js";
 
 /**
-  MCP 客户端这一层的回归。全部打**本机子进程夹具**（`fixtures/echo-server.mjs`，一个真 stdio server），
-  不发任何模型请求：这一层要验的是「别人的程序回什么都不能把回合掀掉」，与模型无关。
-
+  MCP 客户端这一层的回归：全部打本机子进程夹具（`fixtures/echo-server.mjs`，一个真 stdio server），
+  不发任何模型请求——这一层要验的是「别人的程序回什么都不能毁掉回合」，与模型无关。
   配置形状照客户端生态的通用写法：顶层 `mcpServers`，一个 server 一段（`command` / `args` / `env` / `disabled`），
-  白名单 `allowedTools`——任何一份 MCP README 里的片段都能直接贴进来。
-  配置文件一律写临时目录（`TUTOR_MCP_SETTINGS_FILE`），`~/.codebase-tutor/mcp.json` 一个字都不碰。
+  白名单 `allowedTools`。配置文件一律写临时目录（`TUTOR_MCP_SETTINGS_FILE`），`~/.codebase-tutor/mcp.json` 一个字都不碰。
 */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-mcp-")));

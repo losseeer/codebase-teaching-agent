@@ -4,15 +4,14 @@ import { isIngestedPath, listIngestedPaths } from "./indexer.js";
 import { createTutorIgnoreMatcher, isTutorIgnoreFile, type TutorIgnoreMatcher } from "./ignore.js";
 
 /**
-  事件里那条路径**相对监听开始的那一刻**是什么：
+  事件里那条路径相对监听开始的那一刻是什么：
   - `file` / `directory`：改动之后还在磁盘上；
   - `gone`：stat 不到（刚删掉，或事件与 stat 抢了先后）——判不出来就当最坏情况；
-  - `predates-watch`：这条路径比监听起点还老。macOS 的 recursive watch 建立时会把目录近期历史**倒还一遍**，
-    那些「监听开始前就发生的改动」不是本轮要响应的事（详见 `changeWanted` 那段）。
+  - `predates-watch`：这条路径比监听起点还老，不是本轮要响应的事。
   */
 export type ChangedPathKind = "file" | "directory" | "gone" | "predates-watch";
 
-/** 监听此刻的死活与原因。`dead` 不是「还没启动」，是**曾经想过以后不会再来事件**的那种。 */
+/** 监听此刻的死活与原因。`dead` 不是「还没启动」，是起来过、之后不会再来事件的那种。 */
 export interface WatchStatus {
   started: boolean;
   dead: boolean;
@@ -20,28 +19,22 @@ export interface WatchStatus {
 }
 
 /**
-  引擎产物目录**在这一层恒定不回声**，且刻意**不走** `.tutorignore`：
-  那份配置是用户拥有的，`ignore.test.ts` 里钉着一条「写了 `!.tutor/**` 就该把产物当源码索引」的支持用例
-  ——那是个自洽但奇怪的选择，索引层照办。但监听层不能照办：产物是引擎自己写的，
-  一旦回传给事件就是「写产物 → 触发重分析 → 又写产物」的自触发循环，代价为整仓反复重扫（更糟时反复重烧钱）。
-  所以这一条住在这里而不是共用判据里：**「把产物当源码读」可以，「被自己的产物叫醒」不行。**
+  引擎产物目录在这一层恒定不回声，且刻意不走 `.tutorignore`：那份配置是用户拥有的，
+  用户显式放行 `.tutor` 时索引层照收是个自洽但奇怪的选择，监听层不能跟——产物是引擎自己写的，
+  一旦回传事件就是「写产物 → 触发重分析 → 又写产物」的自触发循环，代价为整仓反复重扫。
+  所以这一条住在这里而不是共用判据里：「把产物当源码读」可以，「被自己的产物叫醒」不行。
   */
 export function isArtifactEcho(path: string): boolean {
   return path === ".tutor" || path.startsWith(".tutor/");
 }
 
 /**
-  一个监听事件该不该上报成「源码改动」。**抽成纯函数是有原因的**：
-  真 fs 事件在整包并行跑测试时不守时（几十路 fs.watch 同时投递，几秒都可能等不到一个 change），
-  判据留在类里就只能靠时序测；而这条判据一旦破是烧钱级的（自触发重分析），所以它必须能确定性测。
-
-  三道筛，各自拦一种白扫：
-  1. `predates-watch` 直接不报。⚠️ 这条拦的是**挂载那一刻的回放**：macOS 的 `fs.watch(recursive)` 建流时会把
-     目录近期历史倒还一遍，实测（2026-10-14）新建临时仓、先写好 `src/a.ts`、再 `start()`，
-     第一批事件里就带着仓根目录、`src`、`src/a.ts` 和引擎自己播种的 `.tutorignore`——
-     照旧当源码改动，等于**每次挂载都白排一轮全量重分析**（产物被真实扫描换掉、缓存键重算、润色可能重烧）。
+  一个监听事件该不该上报成「源码改动」。三道筛，各自拦一种无谓重扫：
+  1. `predates-watch` 直接不报。⚠️ 拦的是挂载那一刻的回放：macOS 的 `fs.watch(recursive)` 建流时会把
+     目录近期历史倒还一遍，那些「监听开始前就发生的改动」不是本轮要响应的事，照旧当源码改动
+     等于每次挂载都多排一轮全量重分析（产物被真实扫描换掉、缓存键重算、润色可能重跑）。
   2. `gone` 与目录两档保守叫醒：批量删除时系统常常只报父目录那一条，漏了就永远漏。
-  3. `file` 那一档按**收录集**筛（`isIngestedPath`：扩展名白名单 ∩ `.tutorignore` ∩ 非密钥载体名）。
+  3. `file` 那一档按收录集筛（`isIngestedPath`：扩展名白名单 ∩ `.tutorignore` ∩ 非密钥载体名）。
      往仓里放一张 `.png`、一份 `.env`、一个 `credentials.json` 都不该惊动整仓重扫。
   */
 export function changeWanted(path: string, matcher: { ignores(path: string, isDirectory?: boolean): boolean }, kind: ChangedPathKind = "gone"): boolean {
@@ -53,10 +46,7 @@ export function changeWanted(path: string, matcher: { ignores(path: string, isDi
   return isIngestedPath(path, matcher);
 }
 
-/**
-  两份「收录集」快照是否不同（只看路径集合，不看内容）。
-  抽成纯函数是为了确定性测——它守的是「别白扫整仓」，靠时序测不出来。
-  */
+/** 两份「收录集」快照是否不同（只看路径集合，不看内容）：模糊事件的最后一道筛，没多也没少就不重扫整仓。 */
 export function ingestSetDiffers(previous: Iterable<string>, next: Iterable<string>): boolean {
   const before = new Set(previous);
   const after = new Set(next);
@@ -66,18 +56,17 @@ export function ingestSetDiffers(previous: Iterable<string>, next: Iterable<stri
 }
 
 /**
-  「这条 mtime 算不算起监听之后的改动」：**两边先对到同一格整数毫秒再比**。
-  `Date.now()` 截到整数而 `stat.mtimeMs` 带小数，所以「先写文件、再取起点」时那份播种反而「比起点还晚」——
-  实测 400 次里 393 次撞进这一格（10-18 查那条端到端偶发白醒时量出来的），等于**每次挂载都可能白排一轮全量重分析**。
+  「这条 mtime 算不算起监听之后的改动」：两边先对到同一格整数毫秒再比。
+  `Date.now()` 截到整数而 `stat.mtimeMs` 带小数，不对齐时「先写文件、再取起点」会让那份播种比起点还晚，
+  等于每次挂载都可能多排一轮全量重分析。
   ⚠️ 代价是挂载那一毫秒内的真改动会被当回放丢掉：attach 里 `judgeFreshness` 比这一判晚，
-  那次改动照样会被判成脏并在界面上露出来——不是静默丢掉。
+  那次改动照样会被判成脏并在界面上露出来，不是静默丢掉。
   */
 export const changedAfter = (mtimeMs: number, startedAtMs: number): boolean => Math.floor(mtimeMs) > startedAtMs;
 
 /**
   stat 一下，只为回答「这次改动比监听的起点更新吗、是文件还是目录」。
   读不到就当判不出来——删除事件到这里时路径通常已经没了，那种情况必须叫醒（收录集真的少了东西）。
-  mtime 不晚于监听起点的是**回放**（`changeWanted` 第 1 条），不是本轮要响应的事。
   */
 function kindOf(absolute: string, startedAtMs: number): ChangedPathKind {
   try {
@@ -90,12 +79,12 @@ function kindOf(absolute: string, startedAtMs: number): ChangedPathKind {
 }
 
 /**
-  文件监听是**增强**，不是主流程：不支持 recursive watch 的文件系统（网络盘、只读挂载、inotify 额度用尽）
-  上导入照样要能用。但「增强没起来」绝不能等于「没人知道」：
-  增量重分析是这仓产物保持新鲜的唯一自动通道，它一停，界面上那个「产物是新的」就会一直停在挂载那一刻。
-  所以 `start()` 把死活如实交出去，并且给 FSWatcher 挂了 `error` 监听——
-  ⚠️ 那条监听是**必需品不是装饰**：`fs.FSWatcher` 是 EventEmitter，运行中报错而没人听，
-  Node 会把这次 emit 变成未捕获异常，一整台引擎跟着掉。
+  文件监听是增强，不是主流程：不支持 recursive watch 的文件系统（网络盘、只读挂载、inotify 额度用尽）
+  上导入照样要能用。但「增强没起来」绝不能等于「没人知道」：增量重分析是这仓产物保持新鲜的唯一自动通道，
+  它一停，界面上那个「产物是新的」就停在挂载那一刻。
+  所以 `start()` 把死活如实交出去，并给 FSWatcher 挂了 `error` 监听：
+  ⚠️ 那条监听是必需品不是装饰——`fs.FSWatcher` 是 EventEmitter，运行中报错而没人听，
+  Node 会把这次 emit 变成未捕获异常，一整台引擎跟着停。
   */
 export class RepositoryWatcher {
   private watcher?: FSWatcher;
@@ -114,12 +103,11 @@ export class RepositoryWatcher {
     try {
       const ignore = createTutorIgnoreMatcher(this.repositoryPath);
       this.state = { ignore, snapshot: new Set(listIngestedPaths(this.repositoryPath, ignore)) };
-      // 起点取在「引擎自己要往仓里写的东西」之后、`watch()` 之前：建流时倒还回来的那批目录历史
-      // 都比这一瞬间老，一律不当成本轮改动（判据见 `changeWanted` 第 1 条）。
+      // 起点取在「引擎自己要往仓里写的东西」之后、`watch()` 之前（回放判据见 `changeWanted` 第 1 条）。
       const startedAtMs = Date.now();
       this.watcher = watch(this.repositoryPath, { recursive: true }, (_event, filename) => {
         // 回调里什么都不许往外抛：`fs.watch` 的监听器没有调用方，异常直接变成进程的未捕获异常。
-        // 真实形态就是「用户把仓删了/挪走了，而下一次事件还要去读它的 .tutorignore」——
+        // 真实形态是「用户把仓删了/挪走了，而下一次事件还要去读它的 .tutorignore」——
         // 判 dead 并说清原因，与下面 `on("error")` 那条同一个口径（界面据此报「监听停了」，不是假装还在跟）。
         try {
           if (!filename) return;
@@ -157,12 +145,10 @@ export class RepositoryWatcher {
 
   /**
     这条事件要不要上报成「源码改动」。三道，按代价从低到高：
-    1. `.tutorignore`：**内容签名**变了才重读并上报。起监听时引擎自己会往仓里播种默认那一份，那次写入也是真事件；
-       按 mtime 判先后现在也挡得住（`changedAfter` 把两边对到同一格整数毫秒），但**内容判据更强**：
-       改了又改回同一份不该叫醒、mtime 只到秒的文件系统上时序也不可靠，所以留的是「签名不同才重读」。
+    1. `.tutorignore`：内容签名变了才重读并上报。起监听时引擎自己会往仓里播种默认那一份，那次写入也是真事件；
+       签名判据比 mtime 强——改了又改回同一份不该叫醒，mtime 只到秒的文件系统上时序也不可靠。
     2. `changeWanted` 的取舍（回放、产物回声、忽略项、收录集）。
-    3. 模糊事件（目录、stat 不到）不带文件路径：往仓根放一张 `.png` 会把**仓根目录的 mtime** 顶一下，
-       那种事件既不是文件也读不出内容，于是比一下收录集——没多也没少就别为它整仓重扫。
+    3. 模糊事件（目录、stat 不到）不带文件路径：比一下收录集，没多也没少就别为它整仓重扫。
     */
   private wanted(path: string, kind: ChangedPathKind): boolean {
     const state = this.state;
@@ -179,9 +165,8 @@ export class RepositoryWatcher {
   }
 
   /**
-    事件里的路径拼成绝对路径。macOS 的 recursive 监听会把**被监听目录自己**报成它那一层的名字
-    （实测：仓根事件带的是 `watch-repro-XYZ` 这种目录名，不是空串也不是 `.`），
-    照字面 join 就拼出一个不存在的子路径 → 被判成「stat 不到」→ 白醒一轮。
+    事件里的路径拼成绝对路径。macOS 的 recursive 监听会把被监听目录自己报成它那一层的目录名
+    （不是空串也不是 `.`），照字面 join 就拼出一个不存在的子路径 → 被判成「stat 不到」→ 多醒一轮。
     */
   private absoluteOf(path: string): string {
     return path === this.repositoryBase ? this.repositoryPath : join(this.repositoryPath, path);

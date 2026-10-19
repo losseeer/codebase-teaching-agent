@@ -53,8 +53,8 @@ export interface TutorIgnoreMatcher {
   ignores(relativePath: string, isDirectory?: boolean): boolean;
   shouldTraverse(relativeDirectory: string): boolean;
   /**
-    那份文件**读到的内容**。监听层靠它区分「用户真改了配置」与「引擎自己播种了默认那一份」：
-    播种也是写文件，也会给 `fs.watch` 一条事件，而按 mtime 判先后在这条路上不稳（同一毫秒内既播种又改文件是常态）。
+    那份文件读到的内容：监听层靠它区分「用户真改了配置」与「引擎自己播种了默认那一份」。
+    播种也是写文件、也给 `fs.watch` 一条事件，而按 mtime 判先后在这条路上不稳（同一毫秒内既播种又改文件是常态）。
     */
   signature: string;
 }
@@ -90,8 +90,8 @@ export function isTutorIgnoreFile(relativePath: string): boolean {
 }
 
 export function ensureTutorIgnore(repositoryPath: string): void {
-  // 仓目录本身不在了就没得播种：用户把被学习的仓删了或挪走了，这时写默认清单会抛 ENOENT，
-  // 而调用方常常是 fs 监听回调——那里没人接异常，一次事件就能把进程带倒（2026-10-18 路由测试里抓到）。
+  // 仓目录本身不在了就没得播种：用户把被学习的仓删了或挪走了，这时写默认清单会抛 ENOENT。
+  // 调用方常常是 fs 监听回调——那里没人接异常，一次事件就能把进程带倒。
   if (!existsSync(repositoryPath)) return;
   const path = join(repositoryPath, configName);
   if (existsSync(path)) return;

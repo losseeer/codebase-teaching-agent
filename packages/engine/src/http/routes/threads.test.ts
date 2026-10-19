@@ -20,7 +20,7 @@ describe("未挂载仓库的线程仍可定位", () => {
     expect(registryFile, "地址簿要指向临时文件").toBeTruthy();
     const original = readFileSync(registryFile!, "utf8");
 
-    // 第二个仓：只建目录并写它自己的库——它**不进挂载路径**（这几条路由只需要库路径，产物在不在都一样读）
+    // 第二个仓：只建目录并写它自己的库——它不进挂载路径（这几条路由只需要库路径，产物在不在都一样读）
     const archivedDir = join(fx.root, "archived");
     mkdirSync(archivedDir, { recursive: true });
     const archivedId = deriveRepositoryId(archivedDir);
@@ -51,8 +51,6 @@ describe("未挂载仓库的线程仍可定位", () => {
 });
 
 /**
-  代码题的题型闸门（刀 2）。**出题与判分的端到端不在这一层测**（`src/exercises/code-generate.test.ts`
-  11 例已经用真沙箱跑通了「假 provider 交 harness → 两跑自证 → 交卷判分」全链）：
-  这条路由要过就得依赖挂载中的 analysis，而前面用例往 fx.repoDir 写过文件会触发后台重索引、把手搓产物换掉，
-  加等待只能买到 flaky，买不到保证。只留确定性的那一条：旧题型必须被闸门拦下。
+  代码题的题型闸门：出题与判分的端到端住在 `src/exercises/code-generate.test.ts`（真沙箱跑全链），
+  这一层只留确定性的那一条——旧题型必须被闸门拦下。
 */

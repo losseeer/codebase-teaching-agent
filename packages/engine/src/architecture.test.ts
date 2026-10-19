@@ -4,20 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
-  分层守卫。它管的不是风格，而是这一轮重构**唯一会无声回退**的东西。
-  我们把服务与组合根从 `server.ts` 搬出去（`services.ts` / `application/**` / `http/**`），
-  靠的是一条方向规则：谁都不许 import 回 `server.ts`。这条规则以前只写在提交信息里——
-  下一个人为了拿单例把 `import { importer } from "../server.js"` 写回去，类型不红、行为测试也不红，
-  分层当天就没了。所以把它写成测试，跟 771 条行为测试一起跑（零新依赖，CI 一行都不用改）。
-
-  还没做到的那条（管线只认端口、不直接落库）不假装存在：用一个**只能下调的预算**记在账上，
-  而不是抄一份 45 行的边清单——逐边清单会因为一次 import 换行就误报，那种测试第一天就没人信。
+  分层守卫：把 import 方向规则写成测试——谁都不许 import 回 `server.ts`，
+  应用层不指向传输层，管线与持久层单向，跨包不互 import。
+  尚未达成的那条（管线只认端口、不直接落库）用只能下调的条数预算记在账上。
 */
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 
-/** 离线脚本与评测夹具允许走自己的路：它们不是产品运行路径，也不参与分层。
-    `scripts/` 里现在也住着向量那一臂（`embed-index.ts`，产品不接，判死见 §29），它跟着离线面走。 */
+/** 离线脚本与评测夹具不是产品运行路径，不参与分层。 */
 const IGNORED_TOP = new Set(["scripts", "eval"]);
 
 const PIPELINES = new Set(["flows", "coursetree", "diagram", "exercises", "depgraph", "summarizer", "implementation", "quality", "changes", "scopechat", "harness", "text", "indexer", "learner", "source"]);
@@ -60,10 +54,7 @@ const short = (path: string): string => path.slice(SRC.length + 1);
 const topOf = (path: string): string => short(path).split("/")[0] ?? "";
 const list = (edges: Edge[]): string[] => edges.map((edge) => `${short(edge.from)} → ${short(edge.to)}`).sort();
 
-/**
-  注释剥掉再比字符串。这一条不是讲究：这个仓的块注释续行**不以 `*` 开头**（是缩进正文），
-  按行首猜会把「文档里提到某个函数名」当成调用——`store/database.ts` 的缓存说明正好中招过。
-*/
+/** 比字符串前先剥注释：本仓块注释续行不以 `*` 开头，按行首粗滤会把注释正文里提到的名字当成代码。 */
 function codeOnly(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
@@ -127,10 +118,8 @@ describe("分层守卫", () => {
   });
 
   /**
-    已知这笔债，用「条数」记而不是「逐条清单」记：管线模块还在直接落 `store/`（拿句柄类型、读覆盖层、
-    写摘要表）。理想形态是这些一律由参数把端口传进来。逐条清单会因为一次换行就误报、进而没人信这份测试，
-    所以这里钉的是**条数恰好等于登记值**：改掉一条就把数字调小（变大与变小都会被拦下来，
-    数字因此始终是真实债务的读数，不会悄悄过期）。
+    已知这笔债：管线模块还在直接落 `store/`，理想形态是由参数把端口传进来。
+    账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
     */
   const STORE_DEBT_LINES = 12;
 

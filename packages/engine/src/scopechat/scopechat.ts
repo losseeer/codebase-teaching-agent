@@ -15,17 +15,12 @@ import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 /**
   作用域对话（宏观设计 map / 练习评估 practice）：单轮 LLM 开放讨论——不是教学状态机（无阶段/提示阶梯），
   判分权不涉及。上下文全部来自静态分析事实（依赖图、课程节点、练习题面 + 源码摘录）；
-  练习的标准答案/锚点**不进入**上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
+  练习的标准答案/锚点不进入上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
   map 额外注入项目结构全景与依赖/调用邻接——全局视野对全局问题必要，且路径/边清单成本远低于源码全文；
   更深的代码由模型经 read_file 按需拉取，server 传入 search 语料时才另开放 search_code（只回位置与职责，不占读文件额度）。
-  系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），本文件不再自带副本；
+  系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），本文件不自带副本；
   style 由 server 路由从请求里取用户当前风格档位后传入（默认 50 = 普通档）。
-  两条「上下文必须承认自己看到的是多大一片」的纪律都源自用户实感 bug：
-  - 作用域解析不到又在写侧静默降级 ⇒ 模型以错误作用域自信作答，因此明示「按全局视野作答」（2026-09-21）；
-    流程环节同理，课程树只到入口粒度，不上送 focus 就答偏（2026-09-25）。
-  - 历史由引擎从 chat_message 自取，不再由 GUI 回传（2026-09-27 会话持久化）：单轮无历史时追问指代
-    （「这一点展开讲」）无从解析，窗口外只留学习者提问做抽取式压缩（零 LLM 成本）。
-    窗口大小与逐行截断口径以 `threadScopedHistory`（server.ts）为准，这里只做渲染期再裁剪。
+  上下文必须承认自己看到的是多大一片：作用域解析不到时不静默降级，明示「按全局视野作答」（判据见 mapChat 里那段分支）。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -34,23 +29,23 @@ const EXCERPT_AFTER_LINES = 35;
 /** 符号边界可信上限（行）：超过即只取符号开头，避免超大函数吃掉整个预算 */
 const MAX_SYMBOL_LINES = 120;
 const MAX_EXCERPT_BLOCK_CHARS = 3_200;
-/** 锚点摘录总预算：摘录是「定位用的上下文」，不是全文阅读——更深的代码由模型经 read_file 按需拉取。 */
+/** 锚点摘录总预算：摘录是「定位用的上下文」，不是全文阅读。 */
 const EXCERPTS_TOTAL_CHARS = 8_000;
 const PRACTICE_CONTEXT_CHARS = 12_000;
 const MAP_CONTEXT_CHARS = 20_000;
 const MAX_PANORAMA_ENTRIES = 20;
 
-/** 工具循环为什么要两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。 */
+/** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。 */
 const MAP_MAX_TOOL_ROUNDS = 3;
 const MAP_MAX_TOOL_CALLS = 4;
 
-/** GUI 上送的最近对话回合（同线程此前轮次的原文）：作用域对话本是单轮，追问的指代（「这一点展开讲」）没有历史就无法解析。 */
+/** 同一线程里此前几轮的问答原文，由引擎按 threadId 从库里取；追问的指代（「这一点展开讲」）要靠它解析。 */
 export interface ScopedChatTurn {
   role: "user" | "assistant";
   content: string;
 }
 
-/** 历史窗口：口径对齐教学 harness 的 context.ts（有限轮次 + 每轮压缩截断），不是整段线程重放。 */
+/** 历史窗口：口径对齐教学 harness 的 context.ts（有限轮次 + 每轮压缩截断），不是整段线程重放。窗口大小与逐行截断口径以 `threadScopedHistory`（server.ts）为准，这里只做渲染期再裁剪。 */
 const HISTORY_TURNS = 6;
 const HISTORY_TURN_CHARS = 400;
 
@@ -77,7 +72,7 @@ function earlierQuestionsSection(questions: string[] | undefined): string {
   return `此前问题脉络（更早轮次的学习者提问，按时间序）:\n${lines.join("\n")}\n\n`;
 }
 
-/** mapChat 过程事件（对外契约名保持不变）：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
+/** mapChat 过程事件：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
 export type MapChatProgress = ReadToolProgress;
 
 export interface ScopedChatResult {
@@ -107,7 +102,7 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: bool
   );
   if (!slice) return "";
   const numbered = slice.lines.map((item) => `${item.line}| ${item.text}`).join("\n");
-  // 这段就是马上要进请求的源码原文：登记给出网清单（发出去之前计入审计，见 security/dataflow.ts）
+  // 这段就是马上要进请求的源码原文：登记给出网清单（见 security/dataflow.ts）
   egress?.push({ kind: "anchor-excerpt", path: slice.path, from: slice.from, to: slice.to, text: numbered, masked: slice.masked, truncated: slice.truncated || undefined });
   const total = slice.to < slice.totalLines || slice.truncated ? `，共 ${slice.totalLines} 行` : "";
   const symbol = slice.mode === "symbol" && slice.symbolEnd !== undefined && slice.symbolEnd !== slice.to ? `，符号结束于第 ${slice.symbolEnd} 行` : "";
@@ -165,8 +160,8 @@ function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
 }
 
 /**
-  架构视图选中模块的作用域段。那些节点是 GUI 合成的（`depmap:目录`），课程树里查无此人——
-  改由 GUI 随请求上送 chip 内的文件清单，这里与已分析集求交后列「路径（行数）：L1 职责」。
+  架构视图选中模块的作用域段。那些节点是 GUI 合成的（`depmap:目录`），课程树里查不到，
+  所以文件清单由 GUI 随请求上送，这里与已分析集求交后列「路径（行数）：L1 职责」。
   与 search_code 同源同口径（复用其语料的 lines/summary 字段），交集为空返回空串（= 没解析到作用域）。
 */
 function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undefined, scopePaths: string[]): string {
@@ -235,13 +230,13 @@ function joinList(items: string[]): string {
 
 /**
   map 作用域的一轮对话。
-  两个写工具（`set_architecture` 改分层判断、`set_diagram` 改画布上的结构）**只给这一个作用域**：
+  两个写工具（`set_architecture` 改分层判断、`set_diagram` 改画布上的结构）只给这一个作用域：
   教学与练习两张脸面对的是代码与题目，画布不在它们面前，给了就是让模型去改用户此刻看不见的东西。
   每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
-  否则它只能猜 id（§71 那条教训，与 `set_diagram` 的画布现场同源）。
+  否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门（2026-10-19）：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道（2026-10-17）：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面（2026-10-17）：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 架构修正工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ architecture?: ArchitectureToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
   const { analysis, node, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -254,13 +249,13 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
     excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true, egress).forEach((block) => sections.push(block));
   } else if (input.nodeId) {
-    // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型按错误作用域作答。
-    // 先试架构图文件清单，仍解析不到就明示「全局视野」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
+    // 选了节点却在课程树解析不到（合成模块 / 课程重新生成后 id 失效）：静默降级会让模型以错误作用域自信作答。
+    // 先试架构图文件清单，仍解析不到就明示「按全局视野作答」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
     const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
     if (scope) {
       sections.push(scope);
     } else {
-      // 有环节段兜着时作用域并未真正丢失，不发「全局视野」声明、不记降级
+      // 有环节段时作用域并未真正丢失，不发「全局视野」声明、不记降级
       if (!input.focus) {
         sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自架构视图或课程已更新），本次按全局视野作答。`);
         scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
@@ -271,7 +266,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   // 架构现场（层名、节点 id、已存的人工修正）：有写工具才有意义，没有写能力的作用域不占这段 token
   if (input.architecture?.inventory) sections.push(input.architecture.inventory);
   // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 是第二个写工具，同理必须先把现状给它，
-  // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id 撞在写侧白名单上
+  // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id。
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
   // 产物在册情况一句话（哪几类、各多少文件）：没有这句，模型会以为「没提过的东西就不存在」而不去查
   if (input.facts?.inventory) sections.push(input.facts.inventory);

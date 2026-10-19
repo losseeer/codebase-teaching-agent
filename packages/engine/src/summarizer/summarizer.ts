@@ -12,23 +12,16 @@ import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMAR
 
 /**
   文件级摘要表（L1）：每文件一行「职责摘要 + 架构角色 + 覆盖率标记」，落 SQLite。
-
-  与旧版的差别：
-  - 输入不再是整份正文，而是**结构切片**（`slice.ts`）——它只消费依赖图；
-    「文件内容变了没」由切片内容（含符号与依赖）间接反映。
+  - 输入是结构切片（`slice.ts`），不是整份正文；「文件内容变了没」由切片内容间接反映。
     唯一的读盘例外是「摘要参考注释」开关打开时取 headerComment（见 summarizeFiles）。
-  - 输出多了角色与覆盖率。角色由结构规则给出，模型可以覆盖并标注来源。
-  - 缓存键从「正文哈希 + 模型版本」变成「**切片 + 输入口径版本 + 模型版本**」的哈希：
-    切片变了（文件改了、符号抽取规则改了、依赖变了）缓存即失效，不必再单独追踪文件内容。
-  - 摘要档改成**批量**调用：先算缓存缺失的，再按 `SUMMARY_BATCH_SIZE` 分批，一条没结果就那一条回落。
+  - 角色由结构规则给出，模型可以覆盖并标注来源。
+  - 缓存键 = hash(切片 + 输入口径版本 + 模型版本)：切片变了缓存即失效。
+  - 摘要档按 `SUMMARY_BATCH_SIZE` 批量调用，一条没结果就那一条回落确定性档。
 */
 
 /**
   覆盖率只查切片里最靠前的这几条——它们是最该被摘要提及的。
-  anchor-v2（2026-09-22）：旧判据要求「前 3 个符号名过半被原文默写」，真仓重放显示低覆盖
-  行 160/164 是 mentioned=0——模型用中文行为描述（「负责好友申请的校验」）而非英文符号名，
-  整名子串永远对不上。新判据允许**特征词锚定**（RedisTemplate → "redis"），只要 top-3 里
-  有任何一个锚上就不算低（any-of），因为「提到了一个核心符号」已是有效信号。
+  anchor-v2 判据：允许特征词锚定（RedisTemplate → "redis"），前 3 条任一锚上（any-of）就不算低。
   仍只查前 3 条（而非切片上限 8）：确定性档就只点前 3 个名字，同一口径下兜底档必然满分。
 */
 const COVERAGE_CHECKED = 3;
@@ -64,10 +57,10 @@ export interface FileSummary {
 type StoredSummary = Omit<FileSummary, "cached">;
 
 /**
-  L1 的键形状与 `layerCacheKey` 同构（口径版本 + 模型版本 + 本层实际输入），但**不换成**那个函数：
-  一是这张表按仓库分库（`TutorDatabase(repositoryPath)`），键里再放 repositoryId 是纯冗余；
-  二是换构造会让存量行整体失配，等于替每个用户重烧一遍全仓摘要——收益为零。
-  版本号仍然登记成分析步骤（`SUMMARY_STEP` / `SUMMARY_COMMENTS_STEP`，见 `summary-provider.ts`）：
+  L1 的键形状与 `layerCacheKey` 同构（口径版本 + 模型版本 + 本层实际输入），但不改用它的构造：
+  这张表按仓库分库（`TutorDatabase(repositoryPath)`），键里再放 repositoryId 是纯冗余；
+  换构造会让存量行整体失配、等于全量付费重生成，收益为零。
+  版本号仍登记成分析步骤（`SUMMARY_STEP` / `SUMMARY_COMMENTS_STEP`，见 `summary-provider.ts`）：
   键的形状可以特例，提示词文案的指纹守卫不能有特例（见 `analysis-step.ts`）。
  */
 function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: boolean): string {
@@ -79,11 +72,10 @@ function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: 
 export const summaryCacheKey = cacheKeyOf;
 
 /**
-  出门前的隐去：**只作用于发给模型的那份副本**，切片原样保留、缓存键不动。
-  这条边界是拍过板的：L1 的键是 `hash(切片本身)`（见 `cacheKeyOf`），若在切片阶段就地隐去，
-  全仓摘要键会整体翻掉＝替每个用户重烧一遍。所以这里筛的是「发出去的内容」与「存回来的摘要」，
-  代价是缓存里存的切片仍含原文（它只在本机磁盘上，不出门）。
-  逐字段列举式写法会随 `FileSlice` 长新字段而漏掉，所以整份递归走字符串。
+  出门前的隐去只作用于发给模型的那份副本：切片原样保留、缓存键不动
+  （键是 `hash(切片本身)`，让隐去参与键计算会让全仓摘要键整体翻掉）。
+  筛的是「发出去的内容」与「存回来的摘要」两处，代价是缓存里的切片仍含原文（只在本机磁盘，不出门）。
+  整份递归走字符串而不是逐字段列举，防 `FileSlice` 长新字段时漏掉。
  */
 function maskSliceForSend(slice: FileSlice): { copy: FileSlice; masked: number } {
   const masker = secretMasker();
@@ -136,12 +128,12 @@ export async function summarizeFiles(input: {
     const cached = database.getFileSummary<StoredSummary>(key);
     if (cached) {
       cachedFiles += 1;
-      // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对，零 token，
-      // 也不属于 LLM 的输入口径——所以不需要翻 L1 的口径版本让全仓重烧摘要。
+      // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对、零模型消耗，
+      // 不属于 LLM 输入口径——不需要翻口径版本触发全仓付费重生成。
       const coverage = coverageOf(slice, cached.summary);
       const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
-      // 命中也回写（created_at 刷新）：下游语料取的是「每路径最新一行」，而双档键让开/关档各留一行——
-      // 不刷新的话「开档烧完再切回关」时，注释档旧行会一直伪装成现行摘要。回写是纯本地写，零 token。
+      // 命中也回写（刷新 created_at）：下游语料取「每路径最新一行」，双档键各写一行——
+      // 不刷新则从注释档切回关档时，旧行会一直伪装成现行摘要。回写是纯本地写，零成本。
       database.putFileSummary(key, migrated);
       byPath.set(cached.path, { ...migrated, cached: true });
       continue;
@@ -154,7 +146,7 @@ export async function summarizeFiles(input: {
     let results: (SummaryResult | undefined)[];
     // 声明在 try 之外：下面的落库循环要用它算「实际发出去的字符数」
     const sending = batch.map((slice) => maskSliceForSend(slice));
-    // 出网清单（企业化第 3 条）：这一批每个文件一条，记的是**实际发出去的那份**（隐去密钥之后的切片）。
+    // 出网清单：这一批每个文件一条，记实际发出去的那份（隐去密钥之后的切片）。
     // 放在 try 之前：端点失败也是真发出去了，`llm.log` 里那行 `ok=false` 会说明有没有拿到结果。
     // 确定性档不记：它一个字都不发出去（口径见 SummaryProvider.sendsCodeToEndpoint）。
     if (provider.sendsCodeToEndpoint) recordEgress({
@@ -174,9 +166,8 @@ export async function summarizeFiles(input: {
       if (sendMasked) console.warn(`[summarizer] 本批有 ${sendMasked} 处疑似密钥在发给 ${provider.name} 之前被隐去（切片与缓存键未改动）`);
       results = await provider.summarizeMany(sending.map((item) => item.copy));
     } catch (error) {
-      // 整批抛错（网络、429、端点抖动）不等于导入失败：这一批全按「没拿到结果」处理，逐条走确定性补齐。
-      // provider 的契约注释早就写了「单次失败由调用方按条回落」，但回落只有缺项时才触发，
-      // 抛出去过就是整次导入判失败——两种失败形态在这里合流成同一条兜底路径。
+      // 整批抛错（网络、429、端点抖动）不等于导入失败：本批全按「没拿到结果」处理，
+      // 与缺项合流成同一条路径——逐条走确定性补齐（按条回落是 SummaryProvider 的调用方契约）。
       console.warn(`[summarizer] 第 ${Math.floor(offset / SUMMARY_BATCH_SIZE) + 1} 批调用失败，本批 ${batch.length} 条走确定性档：${error instanceof Error ? error.message : String(error)}`);
       results = [];
     }
@@ -194,12 +185,11 @@ export async function summarizeFiles(input: {
         roleSource: result.role ? "provider" : "structure",
         coverage: coverageOf(slice, result.summary)
       };
-      // 兜底出来的文本**不写模型档的键**：它不是模型产物，写进去下次同输入就直接命中，
-      // 一句结构文本会永久伪装成 LLM 摘要，而 `fallbackFiles` 下次归零——读数上看不出有任何降级发生过。
-      // 落在确定性档的键上，下次同输入仍会重试模型。
+      // 兜底文本只写确定性档的键、不写模型档的键：写了的话下次同输入即永久命中，
+      // 结构文本会伪装成模型产物、`fallbackFiles` 读数归零。落确定性档键则下次同输入仍会重试模型。
       database.putFileSummary(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
-      // 估算口径按**实际发出去的那份**算，隐去过就该比切片原文短
+      // 估算口径按实际发出去的那份算，隐去过就该比切片原文短
       inputCharacters += JSON.stringify(sending[index].copy).length;
       byPath.set(slice.path, { ...stored, cached: false });
     }
@@ -212,7 +202,7 @@ export async function summarizeFiles(input: {
       cachedFiles,
       summarizedFiles,
       fallbackFiles,
-      // 估算口径 = 切片字符数 / 4（旧版是整份正文；估算本就是量级参考，实测单价见 REFERENCE.md）
+      // 估算口径 = 切片字符数 / 4，只是量级参考（单价读数见 REFERENCE.md）
       estimatedInputTokens: Math.ceil(inputCharacters / 4),
       estimatedCostUsd: 0,
       provider: provider.name,
@@ -223,13 +213,10 @@ export async function summarizeFiles(input: {
 
 /**
   摘要是否锚定到了切片里最该提到的那些符号名（纯字符串比对，零成本）。
-
-  ⚠️ 比对前必须**把文件路径从摘要文本里去掉**：摘要几乎总以路径开头，而路径里常含有符号名
-  （`main.py` 里有 `main`、`config.py` 里有 `config`），不去掉的话「一个字没提符号」的含糊摘要
-  会因为这层巧合被判成高覆盖——这个洞是写测试时才暴露出来的。
-
-  锚定 = 整名子串出现，或任一**特征词**整词出现（`user-service-impl` 归一后 "user" 命中
-  `UserService`）。结构词（service/test/main…）与短词不算特征词——它们谁都带，锚上不带来信息。
+  ⚠️ 比对前必须把文件路径从摘要文本里去掉：摘要几乎总以路径开头，而路径里常含符号名
+  （`main.py` 里有 `main`、`config.py` 里有 `config`），不去掉会让一个字没提的含糊摘要被判成高覆盖。
+  锚定 = 整名子串出现，或任一特征词整词出现（`user-service-impl` 归一后 "user" 命中 `UserService`）。
+  结构词（service/test/main…）与短词不算特征词——它们谁都带，锚上不带来信息。
 */
 /** 导出是为了判据重放脚本（scripts/replay-coverage）能走与生产完全同一份实现，不复刻规则。 */
 export function coverageOf(slice: { path: string; entries: { name: string }[] }, summary: string): SummaryCoverage {
@@ -241,7 +228,7 @@ export function coverageOf(slice: { path: string; entries: { name: string }[] },
 
 function anchored(name: string, text: string): boolean {
   if (name && text.includes(name.toLowerCase())) return true;
-  // ⚠️ 分词必须吃**原始大小写**：camelCase 边界是 `wordsOf` 拆词的依据，先转小写会把
+  // ⚠️ 分词必须吃原始大小写：camelCase 边界是 `wordsOf` 拆词的依据，先转小写会把
   // `RedisTemplate` 拆成整块 "redistemplate"，特征词锚定随之失效。
   return wordsOf(name).some((word) => word.length >= MIN_ANCHOR_WORD && !STRUCTURAL_WORDS.has(word) && tokenHits(word, text));
 }

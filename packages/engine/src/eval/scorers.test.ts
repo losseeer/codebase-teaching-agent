@@ -3,7 +3,7 @@ import type { RepositoryFlow } from "@codebase-tutor/shared";
 import { checkTurnInvariants, invariantTailNotice, scoreFlowArtifacts, scoreReferences, scoreSearchArm, scoreTeachInvariants, screenNotice, screenReply, type TeachTurn } from "./scorers.js";
 
 /**
-  B 档判分器：全部零 token、纯函数。这里守的是判分口径本身——
+  确定性判分器单测：全部零 token、纯函数，守判分口径本身——
   引用落地认「整路径/裸文件名/行号越界」，边证据沿用 deepen 的归属闸，检索臂算 hit/recall 与负例误命中。
 */
 
@@ -179,7 +179,7 @@ describe("运行期运行时复检（第 2 刀的那两条搬到回合收尾）"
 });
 
 /**
-  出字前的本地过筛。两头的事故都要钉住：漏了＝密钥随正文下发/入库；错误影响＝把正常讲代码的回复改得没法读。
+  出字前的本地过筛单测：两头都钉住——漏筛＝密钥随正文下发/入库，误筛＝把正常讲代码的回复改坏。
  */
 describe("screenReply", () => {
   it("隐去密钥形态与仓库外绝对路径，并只记数量与样例", () => {

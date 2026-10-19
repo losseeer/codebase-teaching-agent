@@ -4,7 +4,7 @@ import type { FileSlice } from "./slice.js";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { AnthropicProvider, OllamaTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";
 
-/** L1 的输入是结构切片（不再是整份正文），桩数据按切片形状给。 */
+/** L1 的输入是结构切片，桩数据按切片形状给。 */
 function sliceOf(path = "src/main.ts"): FileSlice {
   return {
     path,

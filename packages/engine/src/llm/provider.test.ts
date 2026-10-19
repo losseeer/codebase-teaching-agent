@@ -23,7 +23,7 @@ describe("OpenAICompatibleProvider", () => {
       return jsonResponse(chatBody("ok", "stop"));
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
-    // 出题那条路以前就是裸 readFileSync 拼原文；这道闸防的正是「新增装配路径忘了过筛」
+    // 这道闸防的正是「新增装配路径忘了过筛」——出题的源码摘录原文就是这类载荷
     await provider.complete({
       system: "你是代码教学产品",
       messages: [{ role: "user", content: "const awsKey = \"AKIAIOSFODNN7EXAMPLE\";" }]
@@ -205,8 +205,7 @@ describe("createLlmProvider（单一配置）", () => {
   }
 
   /**
-    10-18 精简：一扇门只留一把钥匙。旧别名 `TUTOR_TEACHING_*` 与 `TUTOR_OPENAI_API_KEY` / `TUTOR_ANTHROPIC_API_KEY`
-    停止读取，这条用例钉住「读了也不算」——不然哪天有人为了兼容旧 .env 再把别名接回去，账面看不出来。
+    钉住「只认 TUTOR_LLM_* 与通用密钥名」：已删的别名不再是配置来源，防止将来为兼容旧 .env 把别名接回去。
     */
   it("只认 TUTOR_LLM_* 与通用密钥名；已删的别名一个都不读", async () => {
     process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
@@ -473,8 +472,7 @@ describe("RetryLlmProvider", () => {
 });
 
 /**
-  推理预算升档（#169）。§62 的读数把话说清了：这一族失败不是超时，是**思考量把输出预算挤空**；
-  而且同载荷重发后来 12/12 都成功——所以值得做的是「换一档预算再发一次」，不是原样重发赌运气。
+  推理预算升档：这一族失败是思考量把输出预算挤空，不是超时，值得「换一档预算再发一次」而不是原样重发。
   Response 的 body 只能读一次，所以这里给的是工厂函数而不是现成响应。
   */
 describe("OpenAICompatibleProvider 的推理预算升档", () => {

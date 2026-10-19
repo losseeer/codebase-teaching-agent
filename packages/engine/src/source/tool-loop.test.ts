@@ -129,8 +129,8 @@ describe("completeWithReadTool 的中止", () => {
   });
 
   /**
-    拦的事故：回合按作废收尾时把「这一轮真做过什么」连同异常一起丢掉，journal 于是留下一行
-    「什么都没读、什么都没打」的**假账**——钱确实花了、外部内容确确实实出过门（§77 第 6 条）。
+    拦的事故：回合按作废收尾时把「这一轮真做过什么」连同异常一起丢掉，journal 就留下一行
+    「什么都没读、什么都没打」的假账——读文件与外部调用确实发生过、内容确实出过门。
     这里测的是异常携带那半条；返回值携带那半条（中止晚于最后一趟 LLM）由路由级用例守。
     */
   it("最后一趟 LLM 在途被中止：异常上带着本轮已发生的读文件、技能与外部调用", async () => {
@@ -182,7 +182,7 @@ describe("completeWithReadTool 的中止", () => {
       modelVersion: "scripted:v1",
       complete: async () => {
         n += 1;
-        // 第一趟读一个能读的、撞一个护栏；第二趟回来时用户已经点了停止
+        // 第一趟读一个能读的、被护栏拒一个；第二趟回来时用户已经点了停止
         if (n === 1) {
           return { text: "", finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: ".env" }) }] };
         }
@@ -239,9 +239,9 @@ describe("completeWithReadTool 的 search_code 集成", () => {
 });
 
 /**
-  跨仓那一档（面板删掉后，跨仓只经由这三个工具发生）。
+  跨仓那一档（跨仓只经由这三个工具发生）。
   要拦的事故：换根时把守卫也换掉（对端仓的 .env 就该照样拒）、未知仓名让模型原地打转、
-  以及「没有第二个仓时工具清单悄悄变长」——那会让每次对话都多付一段没用的 schema。
+  以及「没有第二个仓时工具清单悄悄变长」——那会让每次对话都多带一段没用的 schema。
 */
 describe("completeWithReadTool 的跨仓访问", () => {
   const other = mkdtempSync(join(tmpdir(), "tutor-cross-"));

@@ -15,10 +15,10 @@ import { nestedSandboxUsable } from "../sandbox/capability.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
 /**
-  代码题（刀 2）整体是**集成**用例：出题由假 provider 交一份**手工构造的 harness**（零模型调用、真执行），
-  自证两跑、判分、讲评前的重跑都要真起沙箱——「跑测试判分」这句话只能用跑过来自证，用例里不接受任何 mock 掉的沙箱。
-  环境起不了嵌套 `sandbox-exec` 时整片按「环境不支持」跳过并在输出里点名——跳过不是通过（#168 同一条），
-  而「探测没过 ⇒ 代码题域整域禁用」那半条保证由 `sandbox.test.ts` 里不依赖真跑的几条钉住。
+  代码题整体是集成用例：出题由假 provider 交一份手工构造的 harness（零模型调用、真执行），
+  自证两跑、判分、讲评前的重跑都要真起沙箱——「跑测试判分」这句话只能用跑过来自证，用例里不接受 mock 掉的沙箱。
+  环境起不了嵌套 `sandbox-exec` 时整片按「环境不支持」跳过并在输出里点名——跳过不是通过；
+  「探测失败 ⇒ 代码题域整域禁用」那半条保证由 `sandbox.test.ts` 里不依赖真跑的几条钉住。
 */
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
@@ -163,7 +163,7 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: drifted }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
       .rejects.toThrow(/逐字对不上/);
-    // 压根没跑到沙箱：一行 exercise_run 都不该有
+    // 根本没跑到沙箱：一行 exercise_run 都不该有
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_run")).toHaveLength(0);
   });
 
@@ -259,9 +259,9 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
 
   it("老索引出的题，索引后来长出逐文件哈希也不该被永远判过期：兜底档只按全仓比", async () => {
     /**
-      `exerciseDeps` 在文件没有 `contentHash` 时记的是兜底串 `repo:<versionStamp>`，而 `staleDependencies`
-      早先是拿「当前逐文件哈希」去比那条串——重索引一次（内容一字没动）就开始次次不等，
-      这道题此后**再也答不了**。写侧有兜底、读侧没有，是成对出现的 bug（路由级夹具先撞到的，这里把它钉在服务层）。
+      `exerciseDeps` 在文件没有 `contentHash` 时记兜底串 `repo:<versionStamp>`，`staleDependencies` 必须
+      按同一档回看：拿当前逐文件哈希去比兜底串会次次不等，重索引一次这道题就再也答不了。
+      写侧有兜底、读侧就要有兜底，这一条把服务层钉住。
     */
     const repository = testRepository();
     const service = new ExerciseService();

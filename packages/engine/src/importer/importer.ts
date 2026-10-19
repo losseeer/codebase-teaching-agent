@@ -45,25 +45,23 @@ export interface ImportedRepository {
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
   /**
-    这份产物的连接生命周期（一份 SQLite + 一条审计线）。随挂载创建、随卸载关闭——
-    处理函数不再各自 `new TutorDatabase` / `close()`（见 `store/repository-handle.ts`）。
+    这份产物的连接生命周期（一份 SQLite + 一条审计线）：随挂载创建、随卸载关闭，见 `store/repository-handle.ts`。
     */
   handle: RepositoryHandle;
   watcher?: RepositoryWatcher;
   /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
   freshness: RepositoryFreshness;
   /**
-    fs 监听的死活。**必须跟着挂载结果一起交出去**：增量重分析是产物变新的唯一自动通道，
-    监听没起来时那次 `freshness` 就只到挂载那一刻为止——界面继续报「产物是新的」是在替引擎撒不实。
+    fs 监听的死活，必须跟着挂载结果一起交出去：监听没起来时这份 `freshness` 只到挂载那一刻为止，
+    界面继续报「产物是新的」就是替引擎撒不实。
     */
   watch: WatchStatus;
 }
 
 /**
-  挂载注册表（**N 条地址簿**）：engine 重启后据此把用户用过的仓库找回来，但**启动时一条都不读产物、不开监听**。
+  挂载注册表（N 条地址簿）：engine 重启后据此把用户用过的仓库找回来，但启动时一条都不读产物、不开监听。
   默认 ~/.codebase-tutor/repositories.json，测试可用 TUTOR_REGISTRY_FILE 覆盖；顺序 = 最近使用在后。
-  为什么不再单槽：产物本来就分仓存在各自的 `.tutor/` 里，内存态也是 `Map<repositoryId, …>`——
-  单槽只是这份注册表写死了一条，代价是「切回上一个仓必须重新导入」。
+  产物本来就分仓存在各自的 `.tutor/` 里，内存态也是 `Map<repositoryId, …>`，所以地址簿是列表而不是单槽。
   */
 function registryFile(): string {
   return process.env.TUTOR_REGISTRY_FILE ?? join(homedir(), ".codebase-tutor", "repositories.json");
@@ -107,7 +105,7 @@ function isDirectory(path: string): boolean {
 /**
   同时挂载（每个挂载项 = 一个 fs 监听 + 一份完整产物内存态）的上限。
   地址簿可以有几十条，但只有最近用过的这几个真的占 watcher 与内存；LRU 超出的被驱逐，产物仍在各自 .tutor 里。
-  每次读取（`TUTOR_MAX_MOUNTED`），测试要能换档——同 `engineLogPath()` 的理由。
+  每次读 `TUTOR_MAX_MOUNTED`，测试要能换档。
   */
 function maxMounted(): number {
   return Math.max(1, Number(process.env.TUTOR_MAX_MOUNTED ?? 3) || 3);
@@ -126,9 +124,9 @@ function gitHeadOf(repositoryPath: string): string | undefined {
 /**
   一次遍历算出「当前内容哈希 + 与落库 contentHash 不符的文件数」。
   口径与 `contentVersion` / 索引器完全一致（utf8 读、同一段 path:hash 拼法），否则新鲜度永远比不中。
-  代价是读一遍被索引的文件：只发生在**挂载时**（每仓每进程一次），启动不付这个钱。
-  `digests` 给的时候（同一轮里 `scanRepositoryWithDigests` 刚算出来的那份）就不重读——
-  拼进 stamp 的是**完整**64 位哈希，不是索引里那 16 位前缀，所以这一份不能省、也不能拿前缀代替。
+  代价是读一遍被索引的文件：只发生在挂载时（每仓每进程一次）。
+  给 `digests`（同一轮里 `scanRepositoryWithDigests` 刚算出来的那份）就不重读；拼进 stamp 的是完整 64 位哈希，
+  不是索引里那 16 位前缀，所以这一份不能省、也不能拿前缀代替。
   */
 function stampAndDiff(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): { versionStamp: string; changedFiles: number } {
   let changedFiles = 0;
@@ -154,7 +152,7 @@ function stampAndDiff(repositoryPath: string, index: RepositoryIndex, digests?: 
 
 /**
   两次扫描的「收录集 + 每文件内容哈希」是否完全一致。一致就说明这一轮算不出任何新东西。
-  ⚠️ 任一侧缺 `contentHash`（B1 之前的老索引、或扫描期读不出来的文件）就当**不一致**：
+  ⚠️ 任一侧缺 `contentHash`（老索引、或扫描期读不出来的文件）就当不一致：
   判不出来不等于没变，宁可重扫一遍，也不要把一个没验证过的状态当成事实。
   */
 export function sameIngestedContent(previous: RepositoryIndex, next: RepositoryIndex): boolean {
@@ -168,7 +166,7 @@ export function sameIngestedContent(previous: RepositoryIndex, next: RepositoryI
 }
 
 /**
-  新鲜度判定（**只报告**）：内容哈希不等 = 过期（stale）；内容对得上但 HEAD 移动了 = drifted（产物仍可用，
+  新鲜度判定（只报告）：内容哈希不等 = 过期（stale）；内容对得上但 HEAD 移动了 = drifted（产物仍可用，
   只是分析点在别的提交上）；老仓库没记 HEAD 时退化成 unknown，界面明说「只比对了文件内容」。
   刻意不由引擎自动重分析：重跑是花钱的动作，谁脏了、要不要重跑，交给用户点头。
   */
@@ -210,7 +208,7 @@ export class ImportService extends EventEmitter {
   private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
   /**
     监听被人为挂起的仓（编辑期免打扰）：`until` 之后自动恢复。放在这里而不是挂载态里，
-    因为**挂起要活过驱逐与重新挂载**——LRU 把这个仓挤出去再点回来时，用户按下的开关不能悄悄失效。
+    因为挂起要活过驱逐与重新挂载——LRU 把这个仓挤出去再点回来时，用户按下的开关不能悄悄失效。
     */
   private readonly watchPaused = new Map<string, { until: number; timer?: ReturnType<typeof setTimeout> }>();
 
@@ -231,13 +229,13 @@ export class ImportService extends EventEmitter {
     return this.repositories.get(repositoryId);
   }
 
-  /** 当前**挂在内存里**的仓库（≤ `maxMounted()`）；地址簿全量看 `catalog()`。 */
+  /** 当前挂在内存里的仓库（≤ `maxMounted()`）；地址簿全量看 `catalog()`。 */
   mountedRepositories(): ImportedRepository[] {
     return [...this.repositories.values()];
   }
 
   /**
-    地址簿清单：**不读任何产物**（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
+    地址簿清单：不读任何产物（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
     `mounted` 的条目带上挂载时算好的新鲜度；未挂载的条目 `artifactsReady` 留空——探它就得读它的 db，
     而「用户没点它」正是懒挂载要省掉的那笔。
     `budgetGateNotice` 是唯一的例外：它只看进程自己的环境变量（单价配没配），既不读库也不发请求，
@@ -273,7 +271,7 @@ export class ImportService extends EventEmitter {
 
   /**
     懒挂载：已挂着就只更新 LRU；没挂着才从地址簿找到那条路径、读它的 `.tutor` 产物挂进内存并开监听。
-    失败分三种原因（GUI 要靠它决定「清掉工作区」还是「留着让用户处置」），且**任何一种都不会触发重分析**。
+    失败分三种原因（GUI 要靠它决定「清掉工作区」还是「留着让用户处置」），任何一种都不会触发重分析。
     */
   ensureMounted(repositoryId: string): { ok: true; repository: ImportedRepository } | { ok: false; reason: RepositoryMountReason; message: string } {
     const live = this.repositories.get(repositoryId);
@@ -289,9 +287,8 @@ export class ImportService extends EventEmitter {
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
     /**
-      句柄从这里起就交给挂载项，不再「读完就关」：这一带任何一步失败（库读不出、产物缺一半）
-      都由当前的 `close()` 收尾，成功则活到卸载为止。
-      以前靠 `finally` 关，是因为每个请求都自己开一份——漏一次就漏一个 FD（2026-10-06 复审指出）。
+      句柄从这里起交给挂载项：这一带任何一步失败（库读不出、产物缺一半）都由当前的 `close()` 收尾，
+      成功则活到卸载为止。
       */
     let handle: RepositoryHandle | undefined;
     try {
@@ -311,7 +308,7 @@ export class ImportService extends EventEmitter {
     const startedAt = Date.now();
     const repository = this.attach({ path, index, course, estimate, analysis, handle });
     // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
-    // （读侧现在是按字节水位增量解析，见 `store/journal.ts`；真到需要归档的那天，这两个数就是依据）。
+    // （读侧按字节水位增量解析，见 `store/journal.ts`）。
     const journal = journalFootprint(path);
     traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes, schemaGaps: repository.handle.schemaGaps.length }, { traceId: null, durationMs: Date.now() - startedAt });
     // 形状缺口不是审美问题：那一列被真读到时才会炸，所以开机这一次就把列名喊出来（同一份读数也进上面的 trace）
@@ -326,8 +323,8 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    挂载一个仓库并监听。**不再卸载别的仓库**（单槽时代「挂载即全卸」是切仓必须重导入的根因），
-    改为按 LRU 驱逐超出 `MAX_MOUNTED` 的最久未用项：只关它的 fs 监听、从内存移除，磁盘产物一字不动。
+    挂载一个仓库并监听；不卸载别的仓库，按 LRU 驱逐超出 `maxMounted()` 的最久未用项：
+    只关它的 fs 监听、从内存移除，磁盘产物一字不动。
     */
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
@@ -358,7 +355,7 @@ export class ImportService extends EventEmitter {
     this.lru.push(repositoryId);
   }
 
-  /** 起一条 fs 监听并返回它的初始终态（attach 与恢复共用这一份，别让两处对「起不来怎么办」各写一遍）。 */
+  /** 起一条 fs 监听并返回它的初始终态（attach 与恢复共用这一份）。 */
   private startWatcher(repository: AnalyzedRepository): { watcher: RepositoryWatcher; watch: WatchStatus } {
     const repositoryId = repository.index.repositoryId;
     const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
@@ -375,9 +372,9 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    编辑期免打扰：**关掉这个仓的 fs 监听**，到点自己恢复。给它的理由是这台机器上改代码的人
-    与正在被学习的仓常常是同一个（引擎在学它自己的仓），一轮编辑就会叫醒一次重分析并烧 light 调用（§62 实测 8 条）。
-    挂起不丢东西：恢复时重算一次新鲜度，脏了由界面横幅如实说，要不要重烧仍由人点。
+    编辑期免打扰：关掉这个仓的 fs 监听，到点自己恢复。存在的理由是这台机器上改代码的人
+    与正在被学习的仓常常是同一批文件（引擎在学它自己的仓），一轮编辑就会叫醒一次重分析并花掉 light 调用。
+    挂起不丢东西：恢复时重算一次新鲜度，脏了由界面横幅如实说，要不要重跑仍由人点。
   */
   pauseWatching(repositoryId: string, ttlMs = WATCH_PAUSE_DEFAULT_MS): { paused: boolean; until: number } {
     const until = Date.now() + Math.min(WATCH_PAUSE_MAX_MS, Math.max(WATCH_PAUSE_MIN_MS, pauseWindow(ttlMs)));
@@ -424,9 +421,9 @@ export class ImportService extends EventEmitter {
   }
 
   /** 驱逐 = 关它的 fs 监听 + 从内存移除（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
-    刻意**不**清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
-    换仓后不可能误命中；实测切仓时清缓存会让下一个回合把完全相同的输入重烧一次
-    （切换 → 重烧 ≈1.5k in / 200 out），而「切回来还要用」才是常见路径。两层的 TTL + 条数上限本身就把驻留量兜住了。
+    刻意不清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
+    换仓后不可能误命中，而「切回来还要用」才是常见路径——清了就是让下一个回合把完全相同的输入重算一次。
+    两层的 TTL + 条数上限本身把驻留量限制住了。
     */
   private evictBeyondLru(): void {
     while (this.lru.length > maxMounted()) {
@@ -482,10 +479,10 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    句柄生命周期只认这一层，而且分两种情况——这是「漏关就漏 FD」那条评论的继任者：
-    - **新建档**（导入那一轮，没传 `existing`）：建的那份交给调用方，成功就进挂载项活到卸载；
+    句柄生命周期只认这一层，分两种情况：
+    - 新建档（导入那一轮，没传 `existing`）：建的那份交给调用方，成功就进挂载项活到卸载；
       中途抛错则由这里就地关一次，不让一次失败的导入留下连接。
-    - **复用挂载句柄**（增量重分析传进 `existing`）：绝不由这一层关。重分析跑在监听触发的后台队列里，
+    - 复用挂载句柄（增量重分析传进 `existing`）：绝不由这一层关。重分析跑在监听触发的后台队列里，
       句柄同时被在途请求用着，关闭的唯一入口是卸载（`unmountOne`）。
     */
   private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, existing?: RepositoryHandle): Promise<AnalyzedRepository> {
@@ -510,26 +507,25 @@ export class ImportService extends EventEmitter {
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
     // `refinement`/`monthlyBudgetUsd` 后面润色缓存与预算还要用同一份。
     let storedSettings = handle.db.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
-    // 导入页的显式选择是**该仓摘要口径唯一的写入时点之一**（另一个是成本监控页开关）：读-合并-写保住其它键，
-    // 之后的增量重分析/重导入不再带选择，只读这份落库值。本地副本同步更新——
-    // 后面润色标记的读-合并-写展开的就是这份，不更新会把刚写的开关冲掉（真仓实测抓到的丢失更新）。
+    // 导入页的显式选择是该仓摘要口径唯一的写入时点之一（另一个是成本监控页开关）：读-合并-写保住其它键，
+    // 之后的增量重分析/重导入不再带选择，只读这份落库值。本地副本要同步更新——
+    // 后面润色标记的读-合并-写展开的就是这份，不更新会把刚写的开关冲掉。
     if (summaryHeaderComments !== undefined) {
       storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
       handle.db.saveSettings(index.repositoryId, storedSettings);
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     /**
-      该仓预算：取落库值，取不到才用默认。这里**必须**用同一份，否则「把预算改成 $1」的人
+      该仓预算：取落库值，取不到才用默认。这里必须用同一份，否则「把预算改成 $1」的人
       在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要 + 宏观润色）。
       */
     const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
-    // 判据只留一处（`cost.ts` 的 `budgetExceeded`）：这里以前自己抄了一遍 `mode === "degraded"`，
-    // 与对话那八处成了两个副本。单价没配时钱恒算 0 ⇒ 闸门一路放行且不报错，
-    // 那一档必须作为读数交出去（`/cost` 与成本页、启动日志同一口径，见 `budgetGateNotice`）。
+    // 预算判据只留一处（`cost.ts` 的 `budgetExceeded`）。
+    // 单价没配时钱恒算 0 ⇒ 闸门一路放行且不报错，那一档必须作为读数交出去
+    // （`/cost` 与成本页、启动日志同一口径，见 `budgetGateNotice`）。
     const lightProvider = budgetExceeded(repositoryPath, budgetUsd) ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
-    // ⚠️ 顺序不能反：L1 的输入是**结构切片**（符号 + 依赖方向），所以必须先建图再摘要。
-    // 旧版是「先摘要、后建图」（那时摘要吃的是整份正文，不需要图）。
+    // ⚠️ 顺序不能反：L1 的输入是结构切片（符号 + 依赖方向），所以必须先建图再摘要。
     // 语法解析器是异步加载的，必须在建图前就绪；加载失败不抛错，改由 graph 记录回落原因。
     await loadSymbolParser();
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
@@ -553,11 +549,11 @@ export class ImportService extends EventEmitter {
     // 宏观设计 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
     // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
     // 润色缓存：`settings.refinement` 标记里的四个维度（源码内容 / 模型 / 口径版本 / 图后端）全对上才复用已润色 course。
-    // 这是「engine 重启 → GUI 重新导入」不重烧 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
+    // 这是 engine 重启后重新导入不再付一遍 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
     const storedAnalysis = handle.db.getAnalysis(index.repositoryId);
     const storedCourse = handle.db.getCourse(index.repositoryId);
-    // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在**源码内容不变**的时候，只比 versionStamp 抓不到，
-    // 会把降级证据下算出的命名当成事实继续复用（同型坑见 docs/开发关键点问题与解决方案.md §3.6）。
+    // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在源码内容不变的时候，只比 versionStamp 抓不到，
+    // 会把降级证据下算出的命名当成事实继续复用。
     const backendStamp = hash(`${graph.semanticBackend}:${graph.parseBackend}:${JSON.stringify(graph.lspStatus)}`);
     const refinementCacheHit = Boolean(
       storedAnalysis?.versionStamp === versionStamp && storedCourse && refinementIsFresh(storedSettings?.refinement, {
@@ -605,7 +601,7 @@ export class ImportService extends EventEmitter {
     };
     handle.db.saveCourse(course, estimate);
     handle.db.saveAnalysis(analysis);
-    // 静态产物层（控制流图等）：纯本地计算、零 token，失败绝不能掀掉这次导入——
+    // 静态产物层（控制流图等）：纯本地计算、零 token，失败绝不能让这次导入失败——
     // 但必须说出口，否则「这一类产物没有」会被后面读成「这个仓的函数都没分支」
     try {
       saveFileFacts(handle.db, index.repositoryId, collectFileFacts(repositoryPath, index.files, graph.symbols));
@@ -619,7 +615,7 @@ export class ImportService extends EventEmitter {
 
   /**
     在途守卫 + 变更合并：watcher 的 debounce 只有 450ms，而一轮全量重分析（含 LLM 润色）远长于此。
-    重叠回合会让「先启动、后完成」的那轮用旧快照回写内存与 SQLite，并且每轮都重烧一次全量润色。
+    重叠回合会让「先启动、后完成」的那轮用旧快照回写内存与 SQLite，并且每轮都重跑一次全量润色。
     在途时新到的路径只累积进 pending，本轮结束后合并成下一轮——路径不丢，轮次不重叠。
     */
   private async reanalyzeIncrementally(repositoryId: string, changedPaths: string[]): Promise<void> {
@@ -664,8 +660,7 @@ export class ImportService extends EventEmitter {
         先重扫一遍「收录集 + 每文件内容哈希」，再决定要不要跑整轮。
         监听报上来的改动经常不落在收录集里（往仓根放一张 `.png` 会顶一下仓根的 mtime；
         macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完就回写：
-        产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过——
-        测试里那份手工造的 fixture 产物也是这样被真扫描取代的（#163）。
+        产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过。
         */
       const rescan = scanRepositoryWithDigests(current.path);
       if (sameIngestedContent(current.index, rescan.index)) {
@@ -676,7 +671,7 @@ export class ImportService extends EventEmitter {
       // 复用挂载句柄跑这一轮（不再另开一份连接）：见 `analyze` 的两种生命周期
       const next = await this.analyze(current.path, () => undefined, undefined, rescan, current.handle);
       // 回写前确认挂载项没被换掉：换仓 / 重新导入会让这一轮基于旧快照，写回即用脏数据覆盖内存与
-      // SQLite，甚至把刚卸载、watcher 已 close 的仓库复活进映射（破坏「挂载集合 = 监听集合」单槽不变量）。
+      // SQLite，甚至把刚卸载、watcher 已 close 的仓库复活进映射（破坏「挂载集合 = 监听集合」）。
       if (this.repositories.get(repositoryId) !== current) {
         traceEngine("reindex", { repositoryId, changed: changedPaths.length, ok: false, error: "unmounted-during-run" }, { traceId: null, durationMs: Date.now() - startedAt });
         return;
@@ -763,7 +758,6 @@ function expandHome(input: string): string {
 
 /** Exercise cache versioning follows source content, not an import timestamp. */
 function contentVersion(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): string {
-  // 与新鲜度判定共用同一次实现：两边口径必须逐字相同，否则挂载时永远比不中、每次访问都报过期
   return stampAndDiff(repositoryPath, index, digests).versionStamp;
 }
 

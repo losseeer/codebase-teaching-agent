@@ -7,10 +7,8 @@ import { loadAddon } from "./betterSqlite3Loader.cjs";
 import { DATABASE_SCHEMA_SQL, TutorDatabase, declaredColumns } from "./database.js";
 
 /**
-  形状迁移的守卫。这一组的每一条都对应一件**过去只会静默发生**的事：
-  `CREATE TABLE IF NOT EXISTS` 对已经存在的表一个列都不加，而版本梯子有四年（v3/v4/v5/v6/v8）
-  只推号不建 DDL——往声明里加一列，新仓有、老仓没有，谁都不红，直到第一次读那一列才炸。
-  现在由 `reconcileColumns` 每次开机逐列对账，这几条就是它对账行为的实测。
+  形状迁移的守卫：CREATE TABLE IF NOT EXISTS 对已存在的表一个列都不加。
+  reconcileColumns 每次开机逐列对账，这组用例钉住对账行为——往声明里加一列，存量库也要落地，不能只有新仓有。
   */
 describe("产物库形状对账", () => {
   let repository: string;
@@ -58,8 +56,8 @@ describe("产物库形状对账", () => {
     new TutorDatabase(repository).close();
     surgery("ALTER TABLE chat_session DROP COLUMN title;");
     /**
-      这条刻意**不抛**。以前的写法是抛：那等于让一次形状缺口把用户已有的学习记录变成打不开的库。
-      现在缺口是读数（`schemaGaps`），挂载时进 `engine.jsonl`，而那一列真被读到时失败点带得出列名。
+      这条刻意不抛：抛在开库上等于把用户已有的学习记录变成打不开的库。
+      缺口是读数（schemaGaps），挂载时进 engine.jsonl；那一列真被读到时，失败点带得出列名。
       */
     const database = new TutorDatabase(repository);
     expect(database.schemaGaps).toContain("chat_session.title");
@@ -67,8 +65,7 @@ describe("产物库形状对账", () => {
   });
 
   it("对账跑在梯子之后：老库（version=1）开一次不撞 duplicate column，两列都补齐", () => {
-    // 手工造一份「v1 时代」的库：repository_state 还没有 analysis_json / settings_json，
-    // 而 v2 那步梯子认识它们、对账也认识——顺序错了就是 duplicate column 崩在开机上。
+    // 手工造一份还没有 analysis_json / settings_json 的库：梯子和对账都认识这两列，顺序错了就是 duplicate column 崩在开机上。
     mkdirSync(join(repository, ".tutor"), { recursive: true });
     surgery(`
       CREATE TABLE schema_version (version INTEGER NOT NULL);

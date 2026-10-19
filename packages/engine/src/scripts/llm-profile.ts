@@ -5,15 +5,15 @@ import type { LlmCallRecord } from "../llm/call-log.js";
 import { currentPricing, priceComponents, pricingIsConfigured, pricingSourceOf } from "../cost/cost.js";
 
 /**
-  第三阶段刀 0：把 `~/.codebase-tutor/llm.log` 按场景切成「耗时 / 失败 / token / 钱」的对照表（零 token、纯只读）。
-  先测再调：`TUTOR_LLM_TIMEOUT_MS=12000` 这个数到底在哪些场景撞、撞掉多少钱、调大之后的代价是什么，
-  有读数才谈得上按任务分配预算（用户 2026-10-15 那句「不要简单地把所有请求的超时统一改成更长」）。
+  把 `~/.codebase-tutor/llm.log` 按场景切成「耗时 / 失败 / token / 钱」的对照表（零 token、纯只读）。
+  先测再调：`TUTOR_LLM_TIMEOUT_MS` 这个数在哪些场景触发、触发掉多少钱、调大的代价是什么，
+  有读数才谈得上按任务分配预算。
 
   三条口径纪律：
-  - 对账只认 `llm.log`（journal 的 teach 行在 10-08 之前含按字数造的估算 token，§37.9）；
+  - 对账只认 `llm.log`：journal 的 teach 行历史上有按字数造的估算 token；
   - 缺字段一律「未记」，不用默认值兜底——「没记」伪装成 0 会把口径问题读成产品结论；
-  - **本地兜底与预算降级根本不发请求**（§43 那条 `sendsCodeToEndpoint` 表态），所以「降级频率」这个字段
-    在本表里天生读不到，只能看 journal 的 `exercise_declined` / `scope_degraded`（`pnpm phase0:metrics` 出那两栏）。
+  - 本地兜底与预算降级根本不发请求，所以「降级频率」在本表里天生读不到，只能看 journal 的
+    `exercise_declined` / `scope_degraded`（`pnpm phase0:metrics` 出那两栏）。
 */
 
 interface SceneRow {
@@ -36,7 +36,6 @@ interface SceneRow {
   /** 出网载荷字符数合计（含系统提示与工具清单）：用来估「调大超时会不会让一次失败更贵」。 */
   outboundChars: number;
   longestOkMs: number;
-  /** 带 `attempts` 的行数（这个字段 2026-10-15 才有）：分母不齐时不能把「没记」当「一次就成」 */
   withAttempts: number;
   retried: number;
   attemptsSum: number;
@@ -124,7 +123,7 @@ emit(`| 场景（档位） | 次数 | 成功 | 超时 | 其它失败 | 耗时 p5
 emit(`| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`);
 for (const bucket of [...byScene.values()].sort((a, b) => b.calls - a.calls)) {
   const other = bucket.failed - bucket.timedOut;
-  // 分母只算「带 attempts 读数的行」：10-15 之前的历史行没这个字段，把缺的当 1 会把重试率读成 0
+  // 分母只算带 attempts 读数的行：历史行没这个字段，把缺的当 1 会把重试率读成 0
   const attempts = bucket.withAttempts ? `${bucket.retried}/${bucket.withAttempts} · ${(bucket.attemptsSum / bucket.withAttempts).toFixed(2)}` : "这个字段没记";
   emit(`| ${bucket.scene}（${bucket.tier}） | ${bucket.calls} | ${bucket.ok} | ${bucket.timedOut} | ${other} | ${percentile(bucket.ms, 0.5)} / ${percentile(bucket.ms, 0.9)} / ${percentile(bucket.ms, 0.95)} / ${percentile(bucket.ms, 1)} | ${bucket.longestOkMs || "—"} | ${attempts} | ${bucket.inputTokens} / ${bucket.outputTokens} / ${bucket.cacheHitTokens} | ${money(bucket.costUsd)} | ${bucket.calls - bucket.billed} |`);
 }

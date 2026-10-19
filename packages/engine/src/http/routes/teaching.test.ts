@@ -36,7 +36,6 @@ describe("教学作用域（SSE）", () => {
     const applicable = String(invariant.payload.applicable);
     expect(applicable).toContain("reference-grounding");
     expect(applicable).toContain("anchor-binding");
-    // socratic-question 这条度量随教学状态机于 2026-10-14 删除（判据吃 stage 与本轮动作）
     expect(applicable).not.toContain("socratic-question");
     expect(invariant.payload.failed ?? null).toBe(null);
     expect(invariant.sessionId).toBe(sessionId);

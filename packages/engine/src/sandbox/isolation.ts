@@ -1,15 +1,14 @@
 /**
-  隔离探测与闸门（刀 1 的 fail-closed 那一半）。
+  隔离探测与闸门：沙箱 fail-closed 的那一半。
+  profile 写错了不会报错，它只会让沙箱里的代码照常读你的家目录；所以判定只能来自
+  「真跑一遍恶意样本、看它是不是真被挡」，而不是「sandbox-exec 存在且 profile 语法过」。
 
-  为什么不能省这一层：profile 写错了**不会报错**，它只会让沙箱里的代码照常读你的家目录。
-  所以判定只能来自「真跑一遍恶意样本、看它是不是真被挡」，而不是「sandbox-exec 存在且 profile 语法过」。
-
-  每一项 checks 全过才叫 `enforced`；任何一个不过就是 `unavailable`，**整个代码题域禁用**
-  （2026-10-14 拍板：不降级成「弱隔离照跑」）。`runSandbox` 是唯一对外入口，它先过这道闸。
+  每一项 checks 全过才叫 `enforced`；任何一个不过就是 `unavailable`，整个代码题域禁用，
+  不降级成「弱隔离照跑」。`runSandbox` 是唯一对外入口，它先过这道闸。
 
   对照组（`baseline`）是刻意只给三条做的：读家目录、外连、fork。
   没有对照，「BLOCKED」可能只是样本本身写错了，或者这台机器根本连不上网——那不能算隔离生效的证据。
-  对照失败（沙箱外也没漏）**不**把等级判成 unavailable：那只会让离线机器永远出不了题，
+  对照失败（沙箱外也没漏）不把等级判成 unavailable：那只会让离线机器永远出不了题，
   它记在 `control` 字段上如实显示「这一条没证成」。
 */
 import { createServer } from "node:net";
@@ -59,9 +58,8 @@ export function isolationStatus(): IsolationStatus {
 }
 
 /**
-  并发请求共享同一次探测；**探过就认结果，失败也缓存**。
-  每次请求都重探一遍有两个不能接受的理由：canary 是起九个进程的活儿，请求风暴等于自己 DDoS 自己；
-  而「这次没过就不拦了」根本不是 fail-closed——闸门只在没证据的时候关着，有失败证据的时候更要关着。
+  并发请求共享同一次探测；探过就认结果，失败也缓存：canary 要起一批进程，每请求重探等于自造负载；
+  而闸门在有失败证据时更要关着——这才叫 fail-closed。
   要重开这一域就重启引擎（或显式调 `reprobeIsolation`）。
 */
 export function ensureIsolation(): Promise<IsolationStatus> {
@@ -89,10 +87,9 @@ export function stubIsolationForTest(status: IsolationStatus): void {
 
 /**
   判分/出题的唯一入口：先把闸门过一遍，再交给 runner。
-  ⚠️ `repositoryPath` 是**必填**的：它不是为了定位源码（判分路径永不读仓库源码，那是不变量），
-  而是为了把这一次跑的仓点名拒读。地址簿收的是任意绝对路径，「仓在家目录里」根本不成立，
-  只靠家目录那份恒定名单会漏掉 `/opt`、`/srv` 这类位置——那里的 `.tutor/tutor.db` 装着标准答案与 hidden 测试。
-  把它定成必填而不是可选项，是为了让「忘了护仓」变成编译错误，不是一条要靠 review 才发现的漏口。
+  `repositoryPath` 必填：不是为了定位源码（判分路径永不读仓库源码，那是不变量），而是把这一次跑的仓点名拒读。
+  地址簿收的是任意绝对路径，「仓在家目录里」不成立，只靠家目录的恒定名单会漏掉 `/opt`、`/srv` 这类位置——
+  那里的 `.tutor/tutor.db` 装着标准答案与 hidden 测试。定成必填是让「忘了护仓」成为编译错误，而不是 review 漏口。
 */
 export async function runSandbox(options: SandboxRunOptions & { repositoryPath: string }): Promise<SandboxRun> {
   const status = await ensureIsolation();
@@ -121,8 +118,8 @@ try { console.log("LEAK", readFileSync(${JSON.stringify(target)}, "utf8").trim()
 
 /**
   沙箱内自己建一条指向仓的符号链接再读：Seatbelt 判的是解析后的目标，链接不该成为绕行口。
-  ⚠️ 链接必须建在**工作目录里**（用相对名；cwd 就是 workdir）。写到 /tmp 会被写侧规则先拒一次，
-  于是读到的是 ENOENT 而不是 EPERM——那条用例就会「因为别的原因」变绿，等于没验。
+  链接必须建在工作目录里（用相对名；cwd 就是 workdir）：写到 /tmp 会被写侧规则先拒一次，
+  于是读到的是 ENOENT 而不是 EPERM——用例就会「因为别的原因」变绿，等于没验。
 */
 const readSymlinkCanary = (target: string): string => `import { symlinkSync, readFileSync } from "node:fs";
 symlinkSync(${JSON.stringify(target)}, "link-to-repo");

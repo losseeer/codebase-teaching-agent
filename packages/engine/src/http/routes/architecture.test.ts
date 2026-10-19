@@ -2,8 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-kit.js";
 
 /**
-  分析视图那组：分层产物（读侧 allowCall:false，regenerate 才花钱）、人工覆盖层的三条写路径、流程视图的只读出口、推荐入口的文档过滤。
-  共用判据是「缓存存原判、覆盖层不进键、读侧永不发请求」。
+  分析视图那组：分层产物（读侧 allowCall:false，regenerate 才花钱）、人工覆盖层的三条写路径、
+  流程视图的只读出口、推荐入口的文档过滤。共用判据：缓存存原判、覆盖层不进键、读侧永不发请求。
  */
 const fx: RouteFixture = createRouteFixture();
 
@@ -14,7 +14,7 @@ beforeEach(() => { fx.reset(); });
 describe("架构视图：分层产物与人工覆盖层", () => {
   it("读侧一发不发，只有 regenerate 花钱；模型给的箭头一个字都不进产物", async () => {
     type Plan = { layers: { name: string; moduleIds: string[] }[]; edges: unknown[]; externals: unknown[]; source: string; unavailableReason?: string; reason?: string; externalsNote?: string; usage?: unknown; blocks?: { id: string }[]; sideModules?: number };
-    // ① 打开画布（GET）：这个仓还没判过层，路由必须只给静态三层，一次请求都不发
+    // ① 打开画布（GET）：这个仓还没判过层，路由必须一发请求都不发
     const coldCalls = fx.sentTools.length;
     const cold = (await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/architecture` })).json() as Plan;
     expect(fx.sentTools.length, "读侧不许自己发一发：否则「打开画布」这个动作就静默产生一笔没人确认的钱").toBe(coldCalls);
@@ -47,7 +47,6 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(afterBad.source).toBe("unavailable");
 
     // ④ 干净的一份判层落盘后，读侧命中缓存：同一笔钱不被计两次
-    //    清单只有 `module:src` 一个节点：另一个模块（docs/design.md）没人引用、入口也走不到，压缩那处改动已经把它删了
     fx.scripted = [JSON.stringify({ layers: [{ name: "接入", duty: "把请求收进来", modules: ["module:src"] }] })];
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/architecture/regenerate` });
     expect(fx.sentTools.length).toBe(coldCalls + 2);
@@ -60,7 +59,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(hit.sideModules, "藏掉几个节点要有读数，不然界面与产物两头都问不出「这是全部还是筛过的」").toBe(1);
     expect(JSON.stringify(hit.blocks), "孤立节点不该连累付费载荷").not.toContain("module:docs");
 
-    // ⑤ 被藏的那个节点也能靠一次修正回到图上（agent 说「这个文档不算孤立节点」的那条出口）
+    // ⑤ 被藏的那个节点也能靠一次修正回到图上
     const applied = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:docs", layer: "接入" }, via: "agent" } });
     expect(applied.statusCode, "把模块挪进现有层要写成功（失败原因看 response）").toBe(200);
     const rejected = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/overlays/apply`, payload: { intent: { kind: "move_module", module: "module:src", layer: "图上没有的这一层" }, via: "agent" } });
@@ -78,7 +77,7 @@ describe("架构视图：分层产物与人工覆盖层", () => {
     expect(restored.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src"]]]);
     expect(restored.blocks?.map((block) => block.id), "节点清单是算出来的，判没判都在").toEqual(["module:src"]);
 
-    // ⑥ 重判换了层名：落不了地的修正必须说出来（以前是一条无声的 continue）
+    // ⑥ 重判换了层名：落不了地的修正必须说出来
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/overlays/apply`, payload: { intent: { kind: "rename_layer", from: "接入", to: "入口层" }, via: "agent" } });
     fx.scripted = [JSON.stringify({ layers: [{ name: "接口与契约", duty: "对外与形状", modules: ["module:src"] }] })];
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/architecture/regenerate` });
@@ -109,12 +108,6 @@ describe("架构视图：分层产物与人工覆盖层", () => {
   });
 });
 
-/**
-  「推荐入口」这条路由以前只有 entry-suggest 的单测兜着（判据住在那一层）。这次补路由级用例是因为
-  改的是**什么有资格当入口**：只有打一次路由才看得见送出去的候选载荷里真没有文档，而不只是本地算对了。
-  零 token：假 provider 照样指向 127.0.0.1:9，被 stub 的 fetch 接住。
-*/
-
 describe("流程视图的只读出口（MCP 的 repo_flow 打的是这一条）", () => {
   type FlowResponse = { flow: { entry: { path: string }; title: string }; source: string; reason?: string };
 
@@ -144,7 +137,7 @@ describe("推荐入口：文档不进候选清单", () => {
     const response = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/module-entries?module=${encodeURIComponent("设计文档")}` });
     expect(response.statusCode).toBe(200);
     const body = response.json() as { entries: { id: string; path: string }[]; source: string };
-    // 模型按旧习惯先推文档：池子里没有这个 id，路由只返回代码那条，而不是替它把文档复活
+    // 模型推了文档 id：候选池子里没有它，路由只返回代码那条，不替它把文档复活
     expect(body.entries.map((entry) => entry.id)).toEqual(["unit-1"]);
     expect(body.source).toBe("llm");
 
@@ -156,20 +149,6 @@ describe("推荐入口：文档不进候选清单", () => {
   });
 });
 
-/**
-  ==== 画图工作区（2026-10-18，取代「重绘这张图」那条两趟烧钱的流水线）====
-
-  打到路由才验得清的三件事，各自对应一条会被踩的线：
-  1. **几何与结构权限不同**：`PUT .../geometry` 一天几百次，它必须**一版都不存、一行审计都不写、一帧都不广播**，
-     否则真信号被淹掉、界面还会被自己刚拖的东西抢鼠标；
-  2. **界面对结构只读**：这一组路由里没有任何一条能加删节点或连线，写只经 `set_diagram`。
-     这条不对称是设计，测试把它钉住——顺手「补一个结构编辑接口」就等于把校验与审计抄成第二份（§71 的同一课）；
-  3. **边的可信度只降不升**：agent 嘴上说 `static`，引擎拿 import / 调用 / 类型派发三张表核，核不到就降，
-     并把为什么写在 `downgraded` 上。这一条只能端到端看：它穿过工具回执、落盘、审计三处。
-
-  零 token：种图走 `store/diagrams.ts`（那是唯一的读写口，路由写不了结构，测试也只能从这儿起步），
-  模型侧仍然是 stub 掉的 `fetch`。
-*/
 describe("LLM 工作日志的账面一致性", () => {
   it("每次 provider 调用追加一行，threadId 与本文件用过的线程全等，失败只允许是中止", async () => {
     await fx.verifyLlmLog({ expectAborted: false, scenes: undefined });

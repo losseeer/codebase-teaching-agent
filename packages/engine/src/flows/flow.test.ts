@@ -93,7 +93,7 @@ const reply = JSON.stringify({
   caveats: "evaluate 的具体判分逻辑未在证据里体现。"
 });
 
-/** 合法 JSON、stages 也给了，但落点全是仓外路径：确定性结论（实测 Spring 启动类入口的形态）。 */
+/** 合法 JSON、stages 也给了，但落点全是仓外路径：确定性结论的形态。 */
 const ungroundedReply = JSON.stringify({
   title: "应用启动",
   summary: "从 main 进入。",
@@ -158,7 +158,7 @@ describe("parseFlow（模型输出的硬校验）", () => {
     expect(flow?.stages[1].files[0].line).toBe(1);
     // 只有越界的两个被记账：第三处 line=5 是合法行号，不该被算进去；缺行号也不算
     expect(flow?.caveats).toContain("有 2 个文件的行号超出该文件行数");
-    // 截断要留痕：超长字段以「…」收尾（占一个节点，总长不超口径上限），半截句子不再伪装成完整结论
+    // 截断要留痕：超长字段以「…」收尾（占一个字符，总长不超上限），半截句子不会被当成完整结论
     expect([...(flow?.stages[0].title ?? "")].length).toBe(14);
     expect(flow?.stages[0].title.endsWith("…")).toBe(true);
     expect([...(flow?.stages[0].detail ?? "")].length).toBe(160);
@@ -250,7 +250,7 @@ describe("generateRepositoryFlow（含降级）", () => {
         name: "stub", modelVersion: "stub-1",
         complete: async (input) => {
           seen = input;
-          // 真仓 VoucherOrderController 两次实测：~9.2k output tokens、JSON 中途断掉
+          // 输出在 JSON 中途被长度上限截断
           return { text: '{"title":"截断", "stages": [{"order":1', usage: { inputTokens: 5_000, outputTokens: 9_200 }, finishReason: "length" };
         }
       },
@@ -261,7 +261,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     // 撞上限是我们给的容量不够，不是模型对这份代码给不出更多：标 capHit，别混进 deterministic 那个节点
     expect(result.capHit).toBe(true);
     expect(result.deterministic).toBeUndefined();
-    expect(seen?.maxTokens).toBe(8_000); // 主调用上限：3_200 时该入口必达到预算上限 → 6_000 → 10-06 实测 13 条里 2 条撞满 12,000（含 6,000 思考余量）后再放宽到 8_000
+    expect(seen?.maxTokens).toBe(8_000);
   });
 
   it("确定性降级入缓存：第二次访问不再烧模型；瞬时失败仍每次重试", async () => {
@@ -274,7 +274,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     const second = await generateRepositoryFlowCached(base);
     expect(second.source).toBe("static");
     expect(second.usage).toBeUndefined(); // 命中不带 usage，不会重复记账
-    expect(complete).toHaveBeenCalledTimes(1); // 关键点：启动类入口不再每次访问重烧 ~15k tok
+    expect(complete).toHaveBeenCalledTimes(1);
     // 对照：解析不出的响应不进缓存，每次访问都会重试（换个入口，避开上面确定性结果占用的键）
     const flaky = vi.fn(async () => ({ text: "抱歉，我无法完成。", usage: { inputTokens: 1, outputTokens: 1 } }));
     const flakyProvider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete: flaky };
@@ -301,7 +301,7 @@ describe("generateRepositoryFlow（含降级）", () => {
     const complete = vi.fn(async () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1 } }));
     const provider: LlmProvider = { name: "stub", modelVersion: "stub-1", complete };
     const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY };
-    // 冷缓存：只读到空手，路由据此回静态调用链——外部问一句结构，账单不该多一发
+    // 冷缓存：只读到空手，路由据此回静态调用链——外部问一句结构不该产生一次模型调用
     expect(peekCachedFlow(base)).toBeUndefined();
     expect(complete).toHaveBeenCalledTimes(0);
     const generated = await generateRepositoryFlowCached(base);
@@ -319,8 +319,8 @@ describe("generateRepositoryFlow（含降级）", () => {
     const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo" };
     await generateRepositoryFlowCached({ ...base, entry: ENTRY });
     expect(complete).toHaveBeenCalledTimes(1);
-    // versionStamp 是「全仓内容一把哈希」，它在 digest 里根本不出现：改任何一个文件都会翻它。
-    // 键按实际输入算，就不会因为一处无关改动把这条流程重烧一遍——结构没变，模型的问题也没变。
+    // versionStamp 是全仓内容的整体哈希，它在 digest 里根本不出现：改任何一个文件都会翻它。
+    // 键按实际输入算：结构没变、模型的问题就没变，一处无关改动不该让这条流程重新生成。
     await generateRepositoryFlowCached({ ...base, analysis: { ...analysisOf(), versionStamp: "v2" }, entry: ENTRY });
     expect(complete).toHaveBeenCalledTimes(1);
     // 换模型必须重算：同一个问题在不同模型上不是同一个答案
@@ -384,7 +384,7 @@ describe("generateRepositoryFlow（含降级）", () => {
       expect(second.source).toBe("llm");
       expect(attempts).toBe(2);
       expect(second.usage).toBeDefined(); // 这次是真调用，带 usage 记账
-      // 成功的结果同时落在内存与持久层；此后每次重启都命中持久层，不再烧钱
+      // 成功的结果同时落在内存与持久层：此后每次重启都命中持久层
       clearRepositoryFlowCache();
       const third = await generateRepositoryFlowCached(base);
       expect(third.source).toBe("llm");
@@ -397,8 +397,7 @@ describe("generateRepositoryFlow（含降级）", () => {
   });
 
   it("同键在途去重：两个并发请求只烧一次模型，后来者不带 usage", async () => {
-    // 内存层要等生成结束才写，所以冷入口上的两个并发（两个标签页 / GUI 重试 + 首屏）过去各烧一次
-    // ——§25.3 记的缺口「引擎侧没有在途去重」。§35.7 实测一条流程 ≈¥0.17，双烧就是白付一份。
+    // 内存层要等生成结束才写，所以冷入口上的两个并发（两个标签页 / GUI 重试 + 首屏）会各生成一次
     clearRepositoryFlowCache();
     const complete = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -442,7 +441,7 @@ describe("generateRepositoryFlow（含降级）", () => {
       const base = { repositoryPath: "/repo", index: INDEX, analysis: analysisOf(), provider, summaries: NO_SUMMARIES, repositoryId: "repo", entry: ENTRY, database };
       expect((await generateRepositoryFlowCached(base)).capHit).toBe(true);
       expect(complete).toHaveBeenCalledTimes(1);
-      // 同一进程内再开一次：内存层挡住，不重复烧钱（这条是保留内存复用的理由）
+      // 同一进程内再开一次：内存层挡住，不重复生成（这条是保留内存复用的理由）
       await generateRepositoryFlowCached(base);
       expect(complete).toHaveBeenCalledTimes(1);
       // 但持久层不能有它：否则一次容量误判被永久钉成静态视图，读起来还像「模型讲不动」
@@ -459,9 +458,8 @@ describe("generateRepositoryFlow（含降级）", () => {
   });
 
   /**
-    红线（P1 加外部包名那次改动留下的守卫）：`externals` 是图里新增的一个节点，
-    流程证据**一个字都不许吃它**——吃了就等于每加一个 import 都翻全仓流程键，
-    而一条流程实测 ≈¥0.17、一个仓十几个入口就是几块钱，且翻完在日志里长得像「正常重烧」，没人会察觉。
+    红线守卫：`externals` 是图里新增的一个节点，流程证据一个字都不许吃它——
+    吃了就等于每加一个 import 都翻全仓流程键，而翻键在日志里长得像「正常重新生成」，没人会察觉。
     `pnpm arch:keyprobe` 拿真仓比，这条拿 fixture 钉住判据本身。
   */
   it("图的 externals 不进流程证据也不进键：同一份图加不加这个节点，键与 digest 逐字相同", () => {
@@ -818,7 +816,7 @@ describe("L1 摘要表进流程证据", () => {
     expect(byPath.get("main.py")?.summary).toBe("CLI 入口，解析参数后构建执行图。");
     expect(byPath.get("graph/builder.py")?.summary).toBe("把节点注册成可执行图。");
     expect(byPath.get("graph/nodes.py")?.summary).toBe("节点实现。");
-    // 字段整体出清：digest 上不再有 withheldSummaries 这个读数
+    // digest 上没有 withheldSummaries 这个读数
     expect("withheldSummaries" in digest).toBe(false);
   });
 
@@ -861,11 +859,10 @@ describe("resolveFlowEntry（人工指定入口兜底）", () => {
       imports: {},
       calls: [{ callerPath: "common/Interceptor.java", callerSymbol: "s", calleePath: controller.path, calleeSymbol: "c", line: 3 }]
     })).toEqual(controller);
-    // 全体入口都没边：回落第一个；不传 graph 维持旧行为
+    // 全体入口都没边：回落第一个；不传 graph 时直接取第一个
     expect(resolveFlowEntry("", [boot, controller], files, { imports: {}, calls: [] })).toEqual(boot);
     expect(resolveFlowEntry("", [boot, controller], files)).toEqual(boot);
-    // 回归（2026-09-21 journal 实查）：序列化的 imports 把**每个**已分析文件都登记为键（真仓 172 键、89 个空数组）。
-    // 启动类顶着空数组键混进 linked 会让「证据优先」整个退化——空键不算边证据。
+    // imports 把每个已分析文件都登记为键、多数值为空数组：空键不算边证据，否则「证据优先」整个退化。
     expect(resolveFlowEntry("", [boot, controller], files, {
       imports: { [boot.path]: [], [controller.path]: ["shop/ShopService.java"], "entity/Shop.java": [] },
       calls: []

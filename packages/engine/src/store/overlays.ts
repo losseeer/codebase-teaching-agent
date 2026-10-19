@@ -2,16 +2,16 @@ import type { ArchitectureOverrides, CourseNode, CourseTier, CourseTree, ModuleO
 import type { TutorDatabase } from "./database.js";
 
 /**
-  服务端覆盖层（2026-10-16 上收）。存在 `repository_state.settings_json` 的 `overlays` 子键里。
-  写侧只有一条路（`patchOverlays`），因为这三处都要改它：GUI 的拖动、Agent 的 `set_architecture` 工具、
-  浏览器本地旧值的一次性迁移。**多条写路径各写一套合并逻辑，迟早有一处把用户的修正清除。**
+  服务端覆盖层，存在 repository_state.settings_json 的 overlays 子键里。
+  写侧只有一条路（patchOverlays）：GUI 的拖动、Agent 的 set_architecture 工具、浏览器本地旧值的一次性迁移都走这里——
+  多条写路径各写一套合并逻辑，迟早有一处把用户的修正清除。
 
-  ⚠️ `settings_json` 里还住着引擎自己的内部键（`refinement` 标记等，见 importer 写它的那处）。
-  一次整体覆盖就会让「润色缓存命中」判定失效，等于白烧一轮重命名调用——
-  所以这里永远是**读-合并-写**，且合并完把原对象整个带回去，只碰 `overlays` 这个节点。
+  settings_json 里还住着引擎自己的内部键（refinement 标记等，见 importer）。
+  这里永远是读-合并-写：合并完把原对象整个带回去，只碰 overlays 这个节点；
+  整体覆盖会让「润色缓存命中」判定失效，重跑一轮本可复用的命名调用。
 */
 
-/** 界面与工具的补丁形状：数组是**整份替换**（界面自己知道全集），字典是**按键合并**（增量改一个节点）。 */
+/** 界面与工具的补丁形状：数组是整份替换（界面自己知道全集），字典是按键合并（增量改一个节点）。 */
 export interface OverlaysPatch {
   modules?: {
     renamed?: Record<string, string>;
@@ -31,8 +31,8 @@ export function readOverlays(database: TutorDatabase, repositoryId: string): Rep
 }
 
 /**
-  改名时把引用旧层名的归层记录一起换掉——留下两套名字，下一次读到的模块就会散落在两个层里，
-  而且「恢复模型原判」再也找不回原样。这个节点合并在写侧做，读侧（`applyOverrides`）就不必猜。
+  改名时把引用旧层名的归层记录一起换掉——留下两套名字，下一次读到的模块会散落在两个层里，
+  「恢复模型原判」也找不回原样。这个节点合并在写侧做，读侧（applyOverrides）不必猜。
 */
 export function patchOverlays(database: TutorDatabase, repositoryId: string, patch: OverlaysPatch): RepositoryOverlays {
   const settings = database.getSettings<Record<string, unknown>>(repositoryId) ?? {};
@@ -73,14 +73,11 @@ export function patchOverlays(database: TutorDatabase, repositoryId: string, pat
 }
 
 /**
-  撤掉其中几个个节点的覆盖，让那几个模块/层回到引擎自己的判据。
-  为什么要单独一条而不是让调用方发 `{ 模块 id: undefined }`：JSON 带不动 undefined，
-  靠「值为空串」判删除会把空名字写进图里。这里按 key 显式删，语义只有一种。
+  撤掉其中几个节点的覆盖，让那几个模块/层回到引擎自己的判据。
+  不叫调用方发 `{ 模块 id: undefined }`：JSON 带不动 undefined，靠「值为空串」判删除会把空名字写进图里——这里按 key 显式删。
 
-  `architecture.layerRenames` 收的是**层名**，原层名与新层名都认（`数据访问` 与它改成的 `存储与枚举` 指的是同一条）：
-  改名记录存的是「原判名 → 改成」，而模型与界面看得见的是改完的那个名字，两边都不该猜。
-  撤掉一条改名时，指着**新名字**的归层要写回旧名字——不写回的话这些模块下次读就「目标层不存在」，
-  撤个名字却把别的修正弄坏了（与 `patchOverlays` 里那次正向合并是同一件事的反向）。
+  architecture.layerRenames 收层名，原层名与新层名都认（改名记录存「原判名 → 改成」，模型与界面看得见的是后者）。
+  撤掉一条改名时，指着新名字的归层写回旧名字——不写回这些模块下次读就「目标层不存在」（patchOverlays 里正向合并的反向）。
 */
 export function removeOverlayKeys(database: TutorDatabase, repositoryId: string, target: { modules?: { tier?: string[]; renamed?: string[] }; architecture?: { moduleLayer?: string[]; layerRenames?: string[] } }): RepositoryOverlays {
   const settings = database.getSettings<Record<string, unknown>>(repositoryId) ?? {};
@@ -127,10 +124,9 @@ export function overlayCounts(overlays: RepositoryOverlays): { modules: number; 
 }
 
 /**
-  把模块覆盖层落到树上（`/course` 与 `/architecture` 都用它，保证界面与 Agent 看到的是同一份）。
+  把模块覆盖层落到树上（/course 与 /architecture 共用，界面与 Agent 看到同一份）。
   只做三件事：改名（id 不变，缓存与埋点仍按树 id 走）、隐藏、改档；自建模块追加在分支末尾。
-  ⚠️ 改档时把引擎原判留在 `tierGiven`：覆盖值与原值都要在响应里，
-  不然「恢复引擎判据」没有依据，「分得准不准」的读数也只剩一个孤零零的改后值。
+  改档时把引擎原判留在 tierGiven：覆盖值与原值都要在响应里，「恢复引擎判据」与准确性读数才有依据。
 */
 export function applyRepositoryOverlays(course: CourseTree, overlays: RepositoryOverlays): CourseTree {
   const branch = course.root.children.find((node) => node.id === "modules");

@@ -5,8 +5,8 @@ import { TutorDatabase } from "../../store/database.js";
 import { applyStructure, buildDiagram } from "../../store/diagrams.js";
 
 /**
-  画图工作区：图库的建/改名/删/恢复、几何只写位置（不存版本不广播不审计）、结构一律归 agent 的 `set_diagram`。
-  界面对结构只能读——这一组用例钉的就是「界面发不出结构改动」这件事。
+  画图工作区：图库的建/改名/删/恢复、几何只写位置（不存版本、不广播、不审计）、结构一律归 agent 的 `set_diagram`。
+  界面对结构只能读，这一组用例钉的就是「界面发不出结构改动」。
  */
 const fx: RouteFixture = createRouteFixture();
 

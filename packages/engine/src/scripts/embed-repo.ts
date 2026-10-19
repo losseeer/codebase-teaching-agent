@@ -12,10 +12,10 @@ import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 
 /**
   把仓库的检索语料嵌成向量，落到该仓 `.tutor/tutor.db` 的 `search_vector` 表。
-  这是**花钱的动作**（外部 embedding API），所以默认只报计划，要 `--yes` 才真发请求。
-  增量按「单元文本哈希」走：源码没改、摘要没重烧 ⇒ 不重嵌；改了哪个单元就只重嵌那一个。
+  这是花钱的动作（外部 embedding API），所以默认只报计划，要 `--yes` 才真发请求。
+  增量按「单元文本哈希」走：源码没改、摘要没换新 ⇒ 不重嵌；改了哪个单元就只重嵌那一个。
 
-  粒度：`--level=file`（默认，产品口径）| `--level=symbol`（函数级，第四臂的粒度对照用）。
+  粒度：`--level=file`（默认，产品口径）| `--level=symbol`（函数级，用于粒度对照）。
   两级各占一套坐标系（库里 model 列分别是 `模型名` 与 `模型名#symbol`），互不覆盖、可共存。
 
   用法：
@@ -51,7 +51,7 @@ if (!config) {
   process.exit(0);
 }
 
-// 粒度进坐标系：文件级沿用裸模型名（已存的 142 条不动），函数级加 `#symbol` 后缀
+// 坐标系按粒度分开：文件级沿用裸模型名，函数级加 `#symbol` 后缀
 const coordinate = level === "file" ? config.model : `${config.model}#${level}`;
 const provider = { ...createEmbeddingProvider(config), model: coordinate };
 

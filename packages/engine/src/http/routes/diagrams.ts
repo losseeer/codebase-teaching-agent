@@ -7,26 +7,20 @@ import { Journal } from "../../store/journal.js";
 import { repositoryOr404 } from "../../services.js";
 
 /**
-  画布那组路由（图库、单张图、改名、删、恢复、几何）。注册在根实例上，所以懒挂载钩子与来源闸照常生效。
-  它从 `server.ts` 搬出来的唯一理由是让「改一条画布路由」不必在 1500 行的装配文件里找位置——
-  路由的权限纪律（几何只写位置、结构只经 agent 一个入口）写在下面这段原话里，一行都没改。
+  画布那组路由：图库、单张图、改名、删、恢复、几何。注册在根实例上，所以懒挂载钩子与来源闸照常生效。
   */
 export function registerDiagramRoutes(app: FastifyInstance): void {
 /**
-  ==== 画布工作区（2026-10-18，取代「架构视图 + 流程视图」双画布）====
+  图是产物实体，不是某一页的渲染结果：一个仓可以有很多张，住在 `diagram` 表里。
+  这一组路由的权限划分分得很开：
 
-  图是**产物实体**，不是某一页的渲染结果：一个仓可以有很多张，住在 `diagram` 表里，左栏图库挑、中间画布看。
-  这一组路由的权限划分就是这一页的全部纪律，两条分得很开：
+  - 几何（`PUT .../geometry`）：位置不承载对错，所以不存版本、不写审计、不广播——
+    拖动频次高，进任何一条记录线都会淹掉真信号，广播那一帧还会抢鼠标；
+  - 结构（加删节点、连线、分组）：界面对结构只能读，写只能经 agent 的 `set_diagram` 一个入口
+    （`diagram/set-diagram.ts`），避免两条写路径各写一套校验与记账。
 
-  - **几何**（`PUT .../geometry`）：位置不承载对错，所以**不存版本、不写审计、不广播**——
-    一天要拖几百次，进任何一条记录线都只会淹掉真信号；广播那一帧还会抢鼠标（用户自己正在拖的就是答案）；
-  - **结构**（加删节点、连线、分组、改名）：**这里刻意一条路由都没有**。界面对结构只能读，
-    写只能经 agent 的 `set_diagram` 这一个入口（`diagram/set-diagram.ts`）。这不是没做完，是设计：
-    两条写路径各写一套校验与记账，迟早有一处把「没改成」说成「改成了」（覆盖层那条通道的同一课，§71）。
-
-  建、改名、删、恢复这四格动的是**这张图这个实体**而不是它的结构，所以由界面直发，
-  各自记一行审计、广播一帧——「谁建的、现在几版、刚被恢复过」都得问得出。
-  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` 只比对课程树与方块清单，那两张表现算、零 token）。
+  建、改名、删、恢复动的是这张图这个实体而不是它的结构，所以由界面直发，各自记一行审计、广播一帧。
+  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` 只比对课程树与方块清单）。
 */
 
 /** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
@@ -46,10 +40,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/d
   }
 });
 
-/**
-  新建一张空白图（用户点「+」）。名字撞了由 `uniqueDiagramName` 加序号——**不让两张同名发生**，
-  而不是在界面上标一下：图库靠名字认图，两张「系统分层总览」会让「改那张登录流程」这句话没有答案，agent 那一侧也一样。
-*/
+/** 新建一张空白图：名字撞了由 `uniqueDiagramName` 加序号——图库与 agent 都靠名字认图，不允许两张同名。 */
 app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -66,7 +57,7 @@ app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/r
   }
 });
 
-/** 单张图 + 读侧的诚实检查：图上的模块节点还指得着现在的课程树吗（图是历史产物，树会重生成）。 */
+/** 单张图 + 读侧的引用复检：图上的模块节点还指得着现在的课程树吗（图是历史产物，树会重生成）。 */
 app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -81,8 +72,7 @@ app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositor
 });
 
 /**
-  改名。两条 400 分开说：「一个字都没改」与「图库里已经有这个名字」是两件事，处置也完全不同。
-  改名**不存版本**——它不动结构，把它记进版本历史会把「回得到那一版」这件事弄脏。
+  改名：不存版本（它不动结构）。两条 400 分开给——「一个字都没改」与「图库里已经有这个名字」处置不同。
 */
 app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
@@ -111,7 +101,7 @@ app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: 
   }
 });
 
-/** 删掉一张图（版本历史一起没，所以这一行审计要留：用户问「我那张图呢」时要答得出它叫什么、存了几版）。 */
+/** 删掉一张图：版本历史一起没，所以这一行审计要留得住名字与版数。 */
 app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -129,9 +119,8 @@ app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/reposi
 });
 
 /**
-  几何落盘：**只有位置**，不存版本、不写审计、不广播。
-  认不出来的节点 id 会被 `saveGeometry` 一个个跳过（图上没有的东西不该因为一次陈旧拖拽被造出来），
-  所以这里不为「有几个 id 没落上」而拒——用户拖的是他眼前那张画布，不是数据库的一致性检查。
+  几何落盘：认不出来的节点 id 由 `saveGeometry` 一个个跳过（图上没有的东西不该因为一次陈旧拖拽被造出来），
+  所以这里不为「有几个 id 没落上」而拒。
 */
 app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);

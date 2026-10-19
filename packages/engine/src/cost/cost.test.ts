@@ -107,8 +107,8 @@ describe("budgetGateNotice", () => {
 });
 
 /**
-  钉的是「填了却不算」那一类事故：以前 `envPricing` 是模块加载时算一次的常量，界面改了价、
-  成本读数与预算闸门还按老数走（§36.6「有闸门的名字、闸门不在管事」的形状）。两层回落链本身见 `currentPricing`。
+  钉的是「现读」契约：界面上改价后，成本读数与预算闸门必须认新价，不能按模块加载时算一次的旧值走。
+  两层回落链本身见 currentPricing。
   */
 describe("currentPricing（现读两层回落）", () => {
   const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];

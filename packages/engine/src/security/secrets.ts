@@ -1,11 +1,11 @@
 /**
-  密钥形态的**唯一一份**判据。两处消费方必须同源，否则迟早漂移：
-  - `source/read-file.ts`：入口——文件正文进发往远端的 prompt 之前先隐去；
-  - `eval/scorers.ts` 的 `screenReply`：出口——模型回复进对话与落库之前再筛一遍
-    （学习者自己贴进来的报错、上一轮正文里带回来的，只有这一道挡得住）。
+  密钥形态的唯一判据，入口与出口两处消费方同源：
+  - `source/read-file.ts`：文件正文进发往远端的 prompt 之前先隐去；
+  - `eval/scorers.ts` 的 `screenReply`：模型回复进对话与落库之前再筛一遍
+    （学习者贴进来的报错、上一轮正文带回来的，只有这一道挡得住）。
 
-  只收**高信号**形态：宁可漏，不可错误影响——把 `YOUR_KEY`、`token = config.get("x")` 这类正常讲代码的字样改掉，
-  等于毁掉教学正文的可读性。命中一律换成固定占位文本，**原文绝不落任何日志**。
+  只收高信号形态：误伤 `YOUR_KEY`、`token = config.get("x")` 这类讲解代码的字样，等于毁掉教学正文的可读性。
+  命中一律换成固定占位文本，原文绝不落任何日志。
  */
 export const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}/g, // OpenAI / DeepSeek 一类的 key 形态
@@ -35,11 +35,8 @@ export function maskSecrets(text: string): { text: string; masked: number } {
 }
 
 /**
-  逐段（一行或一个字段）过筛并把命中数累加进同一份计数。四处装配点是这个形状——锚点摘录、
-  出题摘录、带行号前缀的候选原文、摘要切片的递归过筛，各自拼外壳（行号、join、对象重建），
-  而计数只有这一处：`masked` 会进 journal 的 `code_egress`，多算少算都是虚报。
-  做成可反复调用的累加器而不是一次性 `map`，是因为摘录那处要在字符预算耗尽时中断循环：
-  多筛一行就是多报一次出网。
+  逐段（一行或一个字段）过筛，把命中数累加进同一份计数：`masked` 会进 journal 的 `code_egress`，
+  多算少算都是虚报。做成可反复调用的累加器而不是一次性 `map`，是因为摘录要在字符预算耗尽时中断循环。
 */
 export function secretMasker(): { take: (text: string) => string; masked: number } {
   const state = {

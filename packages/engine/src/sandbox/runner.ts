@@ -1,15 +1,13 @@
 /**
-  沙箱 runner（刀 1 最小面）：把「一小组文件 + 一个入口」在强制隔离下真跑一次，返回 stdout/stderr/退出状态。
-  这一层只做机制，不做判分语义——怎么把读数变成 passed/score 在刀 4。
+  沙箱 runner（最小面）：把「一小组文件 + 一个入口」在强制隔离下真跑一次，返回 stdout/stderr/退出状态。
+  这一层只做机制，不做判分语义——怎么把读数变成 passed/score 在上层判分器。
 
-  四条实现约束不是可有可无的：
-  - **异步 spawn，不用 `spawnSync`**。现有预言机 `executeSafeInvocation` 在请求线程里 `spawnSync` 一个 node，
-    上限 1.5s，却把整台引擎的 loop 卡住。沙箱跑的是学习者代码，时长不可预期，必须让出线程。
-  - **超时杀整个进程组**：`detached: true` 让子进程自成一组，超时 `kill(-pid, SIGKILL)`。
-    只杀直接子进程会留下孤儿——沙箱里的代码若能 fork，孙进程就不受我们控制了。
-  - **输出上限是「继续排空但丢弃」**，不是「到量就停读」。停读会让子进程卡在满管道上，看起来像超时、其实是死锁。
-  - **`baseline` 是真的不进沙箱**（不裹 sandbox-exec、用真 HOME 跑），用来证明 canary 本身在这台机器上做得到那件坏事。
-    没有对照，「BLOCKED」可能只是样本自己写错了。
+  四条实现约束：
+  - 异步 spawn，不用 `spawnSync`：沙箱跑的是学习者代码，时长不可预期，不能占住请求线程的 loop。
+  - 超时杀整个进程组：`detached: true` 让子进程自成一组，超时 `kill(-pid, SIGKILL)`；
+    只杀直接子进程会留下孤儿——沙箱里的代码若能起进程，孙进程就不受控制了。
+  - 输出上限是「继续排空但丢弃」，不是「到量就停读」：停读会让子进程卡在满管道上，看起来像超时、其实是死锁。
+  - `baseline` 是真的不进沙箱（不裹 sandbox-exec、用真 HOME 跑），用来证明 canary 本身在这台机器上做得到那件坏事。
 */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -38,7 +36,7 @@ export interface SandboxRunOptions {
   /** 故意放宽 profile 的某一项（隔离探测用它做「这条规则真的在管」的对照） */
   profileOverride?: { allowNetwork?: boolean; allowFork?: boolean };
   /**
-    这一次要额外点名拒读的子树。**被学习仓的根走这里**：判分与自证只吃传进来的文件字符串，
+    这一次要额外点名拒读的子树：被学习仓的根走这里。判分与自证只吃传进来的文件字符串，
     沙箱里的代码本来就不该读得到仓（`.tutor/tutor.db` 里躺着标准答案与 hidden 测试），
     而「仓一定在家目录里」这一假设不成立（`POST /imports` 收任意绝对路径）。
     产品入口是 `runSandbox`，它把 `repositoryPath` 定成必填并转到这里——漏传编译不过。
@@ -59,7 +57,7 @@ export interface SandboxStep {
 export interface SandboxRun {
   language: SandboxLanguage;
   steps: SandboxStep[];
-  /** 每一步都正常退出且没超时（不代表业务成功——那是刀 4 读 stdout 的事） */
+  /** 每一步都正常退出且没超时（不代表业务成功——那是判分器读 stdout 的事） */
   ok: boolean;
   stdout: string;
   stderr: string;
@@ -68,8 +66,8 @@ export interface SandboxRun {
   durationMs: number;
   /** 本次是否真跑在强制隔离下；`baseline` 为 false，两种读数不许混 */
   isolated: boolean;
-  /** 这门语言这次**真的有内存上限**吗。typescript 走 `--max-old-space-size`、java 走 `-Xmx`，python 在 macOS 上设不了 `RLIMIT_AS` ⇒ false，
-      读数必须区分「跑了但没封顶」和「封顶了」，别让审计线替我们夸口。 */
+  /** 这门语言这次是否真的有内存上限：typescript 走 `--max-old-space-size`、java 走 `-Xmx`；
+      python 在 macOS 上设不了 `RLIMIT_AS` ⇒ false，读数要区分「跑了但没封顶」和「封顶了」。 */
   memoryGuarded: boolean;
 }
 
@@ -104,9 +102,9 @@ function planFor(language: SandboxLanguage, entry: string, memoryMb: number, too
   if (language === "python") {
     /**
       `-I` = 隔离模式：不吃 PYTHONPATH、不吃用户 site-packages、不吃环境变量。
-      内存这个节点**在本机做不到**：macOS 拒不下调 `RLIMIT_AS`（实测 `ValueError: current limit exceeds maximum limit`，
-      即使当前是 unlimited），而 `RLIMIT_DATA` 在 macOS 上是空操作。所以这里试一次、失败就过——
-      Python 的内存兜底只剩超时 + 整组 SIGKILL，`memoryGuarded` 会把这个缺口如实报出去，不假装封顶了。
+      macOS 拒不下调 python 的 `RLIMIT_AS`（即使当前是 unlimited），`RLIMIT_DATA` 又是空操作，
+      所以设限失败只能放过：Python 的内存兜底只剩超时 + 整组 SIGKILL，
+      这个缺口由 `memoryGuarded=false` 如实报出去。
     */
     const bootstrap = `import resource, runpy, sys
 try:
@@ -186,15 +184,14 @@ function createWorkdir(): string {
 }
 
 /**
-  真跑一次。**这一层不查隔离状态**——隔离探测正要用它跑 canary，查了就成环。
+  真跑一次。这一层不查隔离状态——隔离探测正要用它跑 canary，查了就成环。
   对外入口是 `runSandbox`（在 isolation.ts 那一侧，先验状态再放行）。
 */
 export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const { language, entry, baseline = false } = options;
   /**
-    形状校验排在隔离闸门**前面**：文件名合不合法与这台机器有没有沙箱后端无关。
-    反过来的话，同一份坏输入在 macOS 上报「非法的沙箱文件名」、在没有后端的机器上报「沙箱不可用」，
-    调用方（和用例）就分不清是模型写坏了还是环境不行——§79 那两条 Linux 红就是这条顺序。
+    形状校验排在隔离闸门前面：文件名合不合法与这台机器有没有沙箱后端无关。
+    反过来的话，同一份坏输入在不同机器上报不同的错，调用方（和用例）分不清是模型写坏了还是环境不行。
   */
   const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
   const backend = isolationBackend();
@@ -209,9 +206,8 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   try {
     for (const file of files) {
       /**
-        路径可以带子目录（模型真会把文件命名成 `pkg/mod.py`），所以父目录要先建出来。
-        这条在真模型那一发上撞穿的时机很难看：**调用已经花钱、答案已经拿到**，写文件才 ENOENT，
-        整道题连同付过的 token 一起丢掉。形状校验只保证不带 `..` 与绝对路径，不保证目录存在。
+        路径可以带子目录（模型会把文件命名成 `pkg/mod.py`），所以父目录要先建出来：
+        形状校验只保证不带 `..` 与绝对路径，不保证目录存在。
       */
       const target = join(workdir, file.path);
       mkdirSync(dirname(target), { recursive: true });

@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { bundledSkillSource, installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills.js";
 
 /**
-  技能加载的回归：清单是**每轮都付费**的那一半，正文与附属文件是按需的那一半。
+  技能加载的回归：清单是每轮都进上下文的那一半，正文与附属文件是按需的那一半。
   这里判的都是「装歪了要不要看得见」——静默跳过一份不合规的技能，等于用户以为自己装了。
 */
 
@@ -128,8 +128,8 @@ describe("取正文与附属文件", () => {
 
 /**
   出厂预置技能的播种：把引擎包里的 `skills/` 复制到 `TUTOR_SKILLS_DIR` 第一处。
-  这条通道要拦的事故有两个方向——**冲掉用户改过的那份**，和**把坏形状搬进人家目录**（之后每轮多一条噪音，
-  且没人说得清是谁搬进来的）。所以两条都各测一条，外加「源目录指得对」这条自证。
+  要拦的事故有两个方向——冲掉用户改过的那份，和把坏形状搬进用户目录（之后每轮多一条噪音，
+  且没人说得清是谁搬进来的）。两条各测一条，外加「源目录指得对」这条自证。
 */
 describe("出厂预置技能播种", () => {
   const seedRoot = join(root, "seed");
@@ -145,7 +145,7 @@ describe("出厂预置技能播种", () => {
     const seeded = installBundledSkills({ sourceDir: source, targetDir: target });
     expect(seeded.installed).toEqual(["tutor-cost-audit"]);
     expect(readFileSync(join(target, "tutor-cost-audit", "references", "lines.md"), "utf8")).toContain("两条账的落点");
-    // 坏形状连原因一起回，但**没搬**；顶层的 README.md 是文件，加载器本来就不看它
+    // 坏形状连原因一起回，但没搬；顶层的 README.md 是文件，加载器本来就不看它
     expect(seeded.skipped.map((entry) => entry.dir)).toEqual([expect.stringContaining("Broken_Name")]);
     expect(seeded.skipped[0].reason).toContain("name 不合规格");
     expect(existsSync(join(target, "Broken_Name"))).toBe(false);

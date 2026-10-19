@@ -3,27 +3,20 @@ import { id } from "../identity.js";
 import { TutorDatabase, type ChatMessageRow, type ChatSessionRow } from "./database.js";
 
 /**
-  会话持久化的唯一出入口（产品数据线，不是审计线）。
+  会话持久化的唯一出入口（产品数据线，不是审计线）。三条口径：
+  - 正文不截断。2000 字截断只属于 journal 的 turn_text（审计摘要）；这里的原文给上下文注入与 GUI 重放用。两条线各记各的。
+  - 删除是软的。softDeleteThread 只打 deleted_at，消息行留在库里；journal（append-only 审计线）不受影响。
+  - 仓库归属用 repository_id（= sha256(realpath) 前缀，确定性可重算）。仓库被移动/改名时老行查不到，表现同「会话自然过期」。
 
-  三条口径要说清楚：
-  - **正文不截断**。2000 字截断只属于 journal 的 `turn_text`（审计摘要）；这里的原文是给上下文注入和
-    GUI 重放用的，截了就把「学习者实际问过什么」改写了。两条线各记各的，差异是刻意的。
-  - **删除是软的**。`softDeleteThread` 只打 `deleted_at`，消息行留在库里——GUI 列表读不到，
-    journal（另一条 append-only 线）完全不受影响。产品删除永远不动审计。
-  - **仓库归属用 `repository_id`**（= `sha256(realpath)` 前缀，确定性可重算）。仓库被移动/改名时
-    老行查不到，表现与「会话自然过期」一致，不额外兜底。
-
-  每个函数自开自闭一个 `TutorDatabase`：引擎里 DB 句柄不作长驻（与 cost/settings 读取同一做法），
-  免得连接生命周期和 tsx 热重载缠在一起。开闭都走 `withDatabase`，不在各函数里手写 `close()`。
+  每个函数自开自闭一个 TutorDatabase（DB 句柄不作长驻），开闭都走 withDatabase，不在各函数里手写 close()。
   */
 
 const SCOPES: ChatScope[] = ["teach", "map", "practice"];
 const TITLE_MAX = 120;
 
 /**
-  唯一的一处「开连接 → 用 → 关」。写在 try/finally 而不是每个函数末尾 `database.close()`：
-  这些函数挂在每个对话回合的读写路径上，SQL 出错 / 库文件被外部换掉时抛错，
-  尾置的 `close()` 就跳过了一次，攒够直接把进程拖到 EMFILE。
+  唯一的一处「开连接 → 用 → 关」。写在 try/finally：这些函数挂在每个对话回合的读写路径上，
+  尾置的 close() 一被异常跳过就攒文件描述符，攒够把进程拖到 EMFILE。
   */
 function withDatabase<T>(repositoryPath: string, run: (database: TutorDatabase) => T): T {
   const database = new TutorDatabase(repositoryPath);
@@ -68,7 +61,8 @@ function normalizeTitle(title: string | undefined, scope: ChatScope): string {
   return scope === "teach" ? "新的教学会话" : scope === "map" ? "新的宏观设计对话" : "新的练习对话";
 }
 
-export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; courseNodeId?: string; exerciseId?: string; /** 会话 id 由调用方持有时传进来（教学作用域的 id 是 `createSession` 生成的），不传则现生成。 */ id?: string }): ChatThread {
+// 会话 id 由调用方持有时传进来（教学作用域的 id 是 createSession 生成的），不传则现生成。
+export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; courseNodeId?: string; exerciseId?: string; id?: string }): ChatThread {
   const now = new Date().toISOString();
   const thread: ChatThread = {
     id: input.id ?? id(),
@@ -140,12 +134,8 @@ export function appendMessages(repositoryPath: string, threadId: string, message
 }
 
 /**
-  问答线程的状态快照：**只剩设置那个节点**。2026-10-14 撤掉教学状态机后 `stage` / `fallbackCount`
-  既不再推进也不再读——历史行的 `state_json` 里那两个键还在，读侧忽略即可，不做迁移。
-  map/practice 没有这个快照，只有 scope='teach' 的线程写。
-
-  读侧**不做兜底**：`settings` 不齐就返回 `undefined`，调用方按「这轮没有可续的状态」处理——
-  把「没记」伪装成默认值，等于让会话从默认档假装重来一遍。
+  问答线程的状态快照：只剩设置这一个节点（只有 scope='teach' 的线程写；历史行里的多余键读侧忽略，不迁移）。
+  读侧不做兜底：settings 不齐就返回 undefined，调用方按「这轮没有可续的状态」处理——不把「没记」伪装成默认值。
   */
 export interface TeachingThreadState {
   settings: TutorSettings;
@@ -199,7 +189,7 @@ export function softDeleteThread(repositoryPath: string, threadId: string): bool
   return withDatabase(repositoryPath, (database) => database.softDeleteChatSession(threadId, new Date().toISOString())) > 0;
 }
 
-/** 机检与脚本用：正文行数。走**未过滤**的计数，所以软删线程的行仍然数得到——用来证明「删除没动原文」。 */
+/** 机检与脚本用：正文行数，走未过滤的计数，所以软删线程的行仍然数得到——用来证明「删除没动原文」。 */
 export function countMessagesRaw(repositoryPath: string, threadId: string): number {
   return withDatabase(repositoryPath, (database) => database.countChatMessages(threadId));
 }

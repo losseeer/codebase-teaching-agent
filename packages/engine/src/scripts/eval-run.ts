@@ -17,15 +17,15 @@ import { readJournal } from "../store/journal.js";
 import { scoreFlowArtifacts, scoreSearchArm, scoreTeachInvariants, type SearchCase, type TeachTurn } from "../eval/scorers.js";
 
 /**
-  B 档评测 runner（第 1 刀：零 token 确定性判分，设计方案 §10 第 2 档的机器检查部分）。
-  默认全程只读、零 token：产物取自 <repo>/.tutor/tutor.db，索引/依赖图在本地重算，不碰引擎、不写任何文件。
-  LLM 真跑与表达质量裁判不在这次改动里（回合落盘是其前置）。
+  评测 runner：零 token 确定性判分。
+  全程只读：产物取自 <repo>/.tutor/tutor.db，索引/依赖图在本地重算，不碰引擎、不写任何文件。
+  LLM 真跑与表达质量裁判是另开的脚本。
 
-  唯一例外是 dense/hybrid 两臂（检索第四臂）：它们要对查询发 embedding 请求，所以**必须显式加 --dense** 才会打网络；
-  不加就照常出三臂读数，第四臂那个节点写明「未跑」和怎么跑。向量表本身是只读进来的（`search_vector`）。
+  唯一会打网络的是 dense/hybrid：它们要对查询发 embedding 请求，必须显式加 --dense 才会发；
+  不加就只出词法读数，dense/hybrid 那几行写明「未跑」和怎么跑。向量表本身是只读进来的（`search_vector`）。
 
   用法：pnpm phaseB:eval [仓库路径]（默认取 repositories.json 里最近使用的那条）
-        pnpm phaseB:eval -- --dense   # 出四臂对比（发 N 条查询的 embedding 请求）
+        pnpm phaseB:eval -- --dense   # 追加 dense/hybrid 与函数级档（发 N 条查询的 embedding 请求）
 */
 
 loadDotEnv();
@@ -40,7 +40,7 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后；取最后一条才是「你现在在弄的那个仓」
+  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
 })();
 
 function pct(numerator: number, denominator: number): string {
@@ -80,18 +80,18 @@ for (const row of database.prepare("SELECT summary FROM summaries ORDER BY creat
   try {
     const parsed = JSON.parse(row.summary) as { path?: string; summary?: string };
     if (typeof parsed.path === "string" && typeof parsed.summary === "string" && !summaries.has(parsed.path)) summaries.set(parsed.path, parsed.summary);
-  } catch { /* 旧纯文本行：键口径变更前产物，跳过 */ }
+  } catch { /* 非 JSON 行跳过 */ }
 }
-// 第四臂的原料（还在只读句柄里）：某仓 + 某坐标系下的向量行与文本哈希。
-// 坐标系 = 模型 + 粒度（`模型名` 是文件级，`模型名#symbol` 是函数级）。换任何一个都是换坐标，
-// 拿旧模型或旧粒度的向量跟新查询算余弦，会得到「看起来像读数」的噪声。
+// 向量读数（还在只读句柄里）：某仓 + 某坐标系下的向量行与文本哈希。
+// 坐标系 = 模型 + 粒度（`模型名` 是文件级，`模型名#symbol` 是函数级），换任何一个都是换坐标：
+// 拿旧模型或旧粒度的向量跟新查询算余弦，得到的是「看起来像读数」的噪声。
 const embedConfig = resolveEmbeddingConfig();
 const denseModelLabel = embedConfig?.model ?? "未配置";
 const symbolCoordinate = embedConfig ? `${embedConfig.model}#symbol` : "";
 const storedHashes = new Map<string, string>();
 const allVectors: StoredVector[] = [];
 const symbolVectors: StoredVector[] = [];
-// 只读句柄不能建表，而 v8 之前落盘的库根本没有 search_vector：先探一下，缺表就等于「还没嵌过」
+// 只读句柄不能建表：老库可能还没有 search_vector 表，先探一下，缺表就等于「还没嵌过」
 const hasVectorTable = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'search_vector'").get() !== undefined;
 if (embedConfig && hasVectorTable) {
   const readVectors = (coordinate: string, sink: StoredVector[]): number => {
@@ -119,7 +119,6 @@ emit(`生成时间：${new Date().toISOString()}｜仓库：\`${repositoryPath}\
 emit(`数据源：layer_cache flow ${flows.length} 条；L1 摘要 ${summaries.size} 个文件（含英文标识符 ${pct(withIdentifier, summaries.size)}）；用例文件 ${caseFiles.length} 份；检索向量 ${hasVectorTable ? `文件级 ${allVectors.length} 条 + 函数级 ${symbolVectors.length} 条（模型 ${denseModelLabel}）` : "表不存在"}`);
 emit();
 
-// ---------- 1/2. 存量 flow 产物：引用落地 + 边证据可核对 ----------
 emit("## 1. 产物引用落地（模型写的文本里，每个 文件:行号 都要真实存在）");
 emit("## 2. 边证据可核对（code 边须引到本边端点文件；static 边须至少引到一个存在文件）");
 if (!flows.length) {
@@ -138,7 +137,6 @@ if (!flows.length) {
 }
 emit();
 
-// ---------- 3. 检索 gold 命中（离线重放：词法三臂恒跑，dense/hybrid 两臂要 --dense） ----------
 emit("## 3. 检索 gold 命中（hit@5 / recall@5，词法三臂 + dense/hybrid 的文件级与函数级四臂）");
 await loadSymbolParser();
 const graph = buildDependencyGraph(repositoryPath, index.files);
@@ -153,9 +151,8 @@ const analysis: RepositoryAnalysis = {
 const corpusWith = buildSearchCorpus(index, analysis, summaries);
 const corpusWithout = buildSearchCorpus(index, analysis, new Map());
 let anyCaseRan = false;
-// 用例集按「仓库路径包含 repository 名」匹配，但包含关系会串仓（dianping ⊂ dianping-agent2）：
-// 只有被**更具体**（字符串更长且包含本条）的用例集盖住时才让位，同名的兄弟集（dianping 的关键词集与
-// 整句中文集）都要跑——早先的「取最长者」写法会让第二个同名集被静默跳过，新加用例集等于没加。
+// 用例集按「仓库路径包含 repository 名」匹配，包含关系会串仓：只有被更具体（字符串更长且包含本条）的
+// 用例集盖住时才让位，同名的兄弟集都要跑。
 const caseDocs = caseFiles.map((name) => ({ name, doc: JSON.parse(readFileSync(join(caseDirectory, name), "utf8")) as { repository: string; cases: SearchCase[] } }));
 const matched = caseDocs.filter((entry) => repositoryPath.toLowerCase().includes(entry.doc.repository.toLowerCase()));
 const takenOver = (entry: { name: string; doc: { repository: string } }): string | undefined => {
@@ -165,14 +162,14 @@ const takenOver = (entry: { name: string; doc: { repository: string } }): string
   return owner?.name;
 };
 
-// ---------- dense / hybrid 两臂的准备（唯一可能打网络的一步） ----------
+// dense / hybrid 的准备：整个脚本里唯一可能打网络的一步
 const topOf = (corpus: typeof corpusWith, segment = false) => (query: string) => executeSearchCode(corpus, JSON.stringify({ query: segment ? segmentForLookup(query) : query, limit: 5 })).audit.topPaths;
 const productTop = topOf(corpusWith);          // hybrid 融的正是这一路（产品现状，含兜底臂与两道闸）
 const corpusPaths = new Set(corpusWith.entries.map((entry) => entry.path));
 const liveVectors = allVectors.filter((vector) => corpusPaths.has(vector.path));
 // 函数级向量按 `路径#符号#行` 存，池化前先用「文件部分在不在语料里」过滤
 const liveSymbolVectors = symbolVectors.filter((vector) => corpusPaths.has(vector.path.split("#")[0]!));
-// 语料文本哈希对不上 = 摘要重烧过或索引口径变了，向量还是旧文本嵌的：能跑，但读数偏旧，必须明说
+// 语料文本哈希对不上 = 摘要换新过或索引口径变了，向量还是旧文本嵌的：能跑，但读数偏旧，必须明说
 const driftedText = embedConfig ? pendingUnits(fileUnits(corpusWith.entries), storedHashes).length : 0;
 const distinctQueries = [...new Set(matched.flatMap((entry) => entry.doc.cases.map((item) => item.query)))];
 const queryVectors = new Map<string, Float32Array>();
@@ -184,7 +181,7 @@ if (wantDense) {
   else {
     try {
       // 去重后一次嵌完（客户端内部按 ≤10 条分批）：同一句在「整集」与「调优/留出」两次计分里只嵌一次。
-      // 查询向量**不落盘**（台架保持只读），所以每次 --dense 都会重发这几十条——量小、可接受，别误以为有缓存。
+      // 查询向量不落盘（台架保持只读），所以每次 --dense 都会重发这几十条——量小、可接受，别误以为有缓存。
       const embedded = await createEmbeddingProvider(embedConfig).embed(distinctQueries);
       distinctQueries.forEach((query, position) => queryVectors.set(query, embedded[position]!));
     } catch (error) {
@@ -243,9 +240,8 @@ for (const { name, doc } of caseDocs) {
   }
   anyCaseRan = true;
   const holdoutIds = new Set(doc.cases.filter((item) => item.holdout).map((item) => item.id));
-  // 词法三臂对照：摘要在上（产品现状）/ 无摘要（摘要口径消融的对照）/ 摘要在上 + 中文整句切词
-  // 第三臂只在**查询侧**动手（`segmentForLookup`），语料与打分一字不变——它量的是「词法臂输掉的那部分里，
-  // 有多少只是没切词」。dense/hybrid 两臂才是「换了打分器」的那个节点。
+  // 词法三臂对照：摘要在上（产品现状）/ 无摘要 / 摘要在上 + 中文整句切词
+  // 第三臂只在查询侧动手（`segmentForLookup`），语料与打分一字不变：量的是词法输掉的部分里有多少只是没切词。
   const arms = armSet(doc.cases);
   emit();
   emit(`### ${name}`);
@@ -267,8 +263,8 @@ for (const { name, doc } of caseDocs) {
     const cohortArms = armSet(cohort.cases);
     const rate = (arm: ScoredArm) => `hit@5 ${pct(arm.hitRate.numerator, arm.hitRate.denominator)}，平均 recall ${((arm.meanRecall || 0) * 100).toFixed(1)}%`;
     for (const entry of cohortArms) emit(`- 「${cohort.label}」${entry.label}：${rate(entry.arm)}`);
-    // 负例分臂报数：合并计数会把「只有某一臂撞开」读成「所有臂都撞开」，那是给兜底臂记了不该记的账。
-    // dense 天生返回 top-N 而不是「没有」，所以它的负例条目一定是满的——这是它的结构事实，不是 bug。
+    // 负例分臂报数：合并计数会把「只有一档误命中」读成「所有档都误命中」。
+    // dense 天生返回 top-N 而不是「没有」，所以它的负例条目一定是满的——这是结构事实，不是 bug。
     if (cohortArms[0].arm.negatives.length) {
       const parts = cohortArms.map((entry) => {
         const wrong = entry.arm.negatives.filter((item) => item.wrongHits.length > 0);
@@ -277,9 +273,7 @@ for (const { name, doc } of caseDocs) {
       emit(`- 「${cohort.label}」负例误命中：${parts.join("｜")}`);
     }
   }
-  // dense 的分数面：想让它回答「仓里没有」，唯一的办法是设余弦下限；
-  // n=2 的负例只够提出疑问，扩到每集 10 条之后这条扫描才判得了「下限到底存不存在」。
-  // 两个粒度各扫一遍：粒度换了召回，也就换了「这次改动值不值」的答案。
+  // dense 的分数面：想让它回答「仓里没有」，唯一的办法是设余弦下限；两个粒度各扫一遍，粒度换了召回也就换了答案。
   if (denseOn) {
     const cache = new Map<string, { path: string; score: number }[]>();
     const scoredList = (key: string, query: string, lister: (vector: Float32Array) => { path: string; score: number }[]) => {
@@ -310,7 +304,7 @@ for (const { name, doc } of caseDocs) {
       const parts = [`不设 ${pct(baseline.hit, positives.length)}｜负例误命中 ${pct(baseline.wrong, negatives.length)}`];
       for (const floor of [0.50, 0.54, 0.58, 0.62]) parts.push(`≥${(floor * 100).toFixed(0)} ${pct(atFloor(floor).hit, positives.length)}｜${pct(atFloor(floor).wrong, negatives.length)}`);
       emit(`- dense ${label} 余弦下限扫描（同一批向量、零额外请求）：${parts.join(" → ")}`);
-      // 结论直接判「有没有那处改动」：负例全拒 且 正例 hit@5 不因 filtering 下降
+      // 结论直接判「有没有可用的改动」：负例全拒 且 正例 hit@5 不因过滤下降
       const cleanFloor = [0.50, 0.54, 0.58, 0.62, 0.66, 0.70].find((floor) => atFloor(floor).wrong === 0);
       const cleanHit = cleanFloor === undefined ? -1 : atFloor(cleanFloor).hit;
       emit(`  - ${label} 可用下限：${cleanFloor === undefined ? `无（扫到 0.70 仍没能把 ${negatives.length} 条负例全拒）` : cleanHit >= baseline.hit ? `有，≥${(cleanFloor * 100).toFixed(0)} 时负例全拒且正例 hit@5 不降（${pct(cleanHit, positives.length)}）` : `名义上有（≥${(cleanFloor * 100).toFixed(0)} 负例全拒），但正例 hit@5 从 ${pct(baseline.hit, positives.length)} 掉到 ${pct(cleanHit, positives.length)}——下限是拿召回换的，不是免费的`}`);
@@ -322,7 +316,6 @@ for (const { name, doc } of caseDocs) {
 if (!anyCaseRan) emit("- **未执行**：没有匹配当前仓库的用例文件。");
 emit();
 
-// ---------- 4. 教学法不变量机检（第 2 刀；数据源 = journal turn_text，零 token 只读） ----------
 emit("## 4. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类留第 3 刀裁判）");
 const journalEvents = readJournal(repositoryPath);
 const teachTurns = assembleTeachTurns(journalEvents);
@@ -340,8 +333,7 @@ if (!teachTurns.length) {
 emit();
 console.log(out.join("\n"));
 
-/** 从 journal 事件流装配问答回合的机检视图：style 取回合前最后一次 style_shift。
-    2026-10-14 撤掉教学状态机后这里不再捞 `hint_depth` 的 stage——那条不变量（每轮留问句）也一并从判分表里删了。 */
+/** 从 journal 事件流装配问答回合的机检视图：style 取回合前最后一次 style_shift。 */
 function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[] {
   const bySession = new Map<string, typeof events>();
   for (const event of events) {

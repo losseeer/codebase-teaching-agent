@@ -13,11 +13,7 @@ describe("parseDotEnv", () => {
     expect(parsed).toEqual({ TUTOR_LLM_PROVIDER: "openai", TUTOR_LLM_MODEL: "gpt-4o-mini" });
   });
 
-  /**
-    模板文件里 `KEY=   # 这一项留空会怎样` 是主要写法：等号后只剩一段说明。
-    不特判的话整段中文注释会被当成配置值读进去——`.env.example` 抄成 `.env` 就中招，
-    而且读起来像「配了但没用」，比读不到更难查。
-    */
+  /** 模板里 `KEY=   # 说明` 是常见写法：等号后只剩一段注释，须解析成空值而不是把注释当配置值。 */
   it("空值加行内注释 = 空值，注释不进值里", () => {
     const parsed = parseDotEnv([
       "TUTOR_LLM_PROVIDER=              # openai | anthropic | ollama；留空 = 不启用模型",

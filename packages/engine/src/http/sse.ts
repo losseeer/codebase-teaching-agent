@@ -7,19 +7,15 @@ import { recordAbortedAudits, toolLoopAuditsOf } from "../application/turn-audit
 
 /**
   SSE 传输层：帧怎么写、连接怎么开、心跳与中止怎么收尾。
-  两条流各有各的词表（都是 shared 里的闭合联合，发一种没登记的帧编不过去）：
-  - 全局事件流 `ServerEvent`：导入进度、产物更新这类「没有请求边界的推送」（订阅表在 `events.ts`，这里只管连）；
-  - 作用域对话流 `ScopedStreamFrame`：三条对话流各自请求的响应流（事件天然按请求隔离，断开自动清理）。
+  两条流各有各的词表，都是 shared 里的闭合联合：未登记的帧编译不通过：
+  - 全局事件流 `ServerEvent`：没有请求边界的推送（订阅表在 `events.ts`，这里只管连）；
+  - 作用域对话流 `ScopedStreamFrame`：三条对话流各自请求的响应流，事件按请求隔离、断开自动清理。
 */
 
-/** 事件流心跳间隔：25s 卡在常见反向代理 60s 空闲超时之内，又是浏览器完全无感的一档。 */
+/** 事件流心跳间隔：必须小于常见反向代理的空闲超时。 */
 const EVENT_STREAM_PING_MS = 25_000;
 
-/**
-  SSE 单帧写出（四处出口共用的一条判据）。
-  判 `destroyed` 不只看 `writableEnded`：客户端硬断（关页面、切走）时 `writableEnded` 仍是 false，
-  这时 write 会抛——四条出口是一条判据，分开写迟早只改一处（10-06 复审就是这么发现广播会崩导入的）。
-  */
+/** SSE 单帧写出（所有出口共用一条判据）：客户端硬断时 `writableEnded` 仍是 false，所以要连 `destroyed` 一起判。 */
 function sseFrame(reply: FastifyReply, frame: string): void {
   if (reply.raw.writableEnded || reply.raw.destroyed) return;
   reply.raw.write(frame);
@@ -30,15 +26,10 @@ function sseWriter<TFrame>(reply: FastifyReply): (event: TFrame) => void {
 }
 
 /**
-  建立 SSE：写头 + **立刻发一帧注释把响应头推到网路上**。
-  只调 `writeHead` 时 Node 把头部留在缓冲区，客户端要等到第一个 `data:` 帧才拿得到响应。
-  10-12 实测：空转的 `/api/events` 三秒收到 0 字节——本机直连只是「看起来连着」，
-  而共享部署那层反向代理（nginx 默认 `proxy_read_timeout` 60s）会把这种「有连接、零字节」的上游直接中止，
-  界面就退回「导入进度停在 0%，任务其实跑完了」那一档。
+  建立 SSE：写头 + 立刻发一帧注释把响应头推到网路上。只调 `writeHead` 时 Node 把头部留在缓冲区，
+  客户端要等到第一个 `data:` 帧才拿到响应，而中间层的空闲超时会中止这种「有连接、零字节」的上游。
   `:` 开头在 SSE 规范里是注释，任何解析器都跳过；读流循环只认 `data: ` 行，所以这一帧不带语义。
-
-  头里还必须自己带上 CORS：`hijack()` 之后响应不再经 `@fastify/cors` 收尾，
-  跨来源部署的浏览器一帧都读不到（与 §47 那个钩子顺序是同一类事故）。
+  头里必须自己带 CORS：`hijack()` 之后响应不再经 `@fastify/cors` 收尾，跨来源部署的浏览器一帧都读不到。
   */
 export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyRequest, reply: FastifyReply): (event: TFrame) => void {
   const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
@@ -54,9 +45,8 @@ export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyReques
 
 /**
   全局事件流的一条订阅：开局（含 `hijack` 与首帧）→ 心跳 → 断开摘除，全在这里，路由只剩一行。
-  断线重连与「空闲超时只掐这一条连接」由前端 `subscribeServerEvents` 自己管
-  （fetch 读流才掐得住，见 §47）；注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前
-  就从写入失败里察觉连接已死。
+  断线重连与空闲超时由前端 `subscribeServerEvents` 管（fetch 读流才掐得住）；
+  注释帧既顶住中间层的空闲超时，也让客户端在下一次广播之前从写入失败里察觉连接已死。
   */
 export function openEventStream(request: FastifyRequest, reply: FastifyReply): void {
   reply.hijack();
@@ -71,10 +61,10 @@ export function openEventStream(request: FastifyRequest, reply: FastifyReply): v
   });
 }
 
-/** 打字机回放的块长：三作用域同款，改一处就全改（真 token 流式要 provider 层改造，这里先消除「整段落下」）。 */
+/** 打字机回放的块长，三作用域共用。 */
 const TYPEWRITER_CHUNK = 72;
 
-// s 标志：`.` 默认不匹配换行，回放会把多行回复的 `\n` 全丢掉（打字机预览塌成一行）；加上后逐块保留换行
+// s 标志：`.` 默认不匹配换行，少了它回放会把多行回复的 `\n` 丢掉
 function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
 
 export function replayTypewriter(send: (event: ScopedStreamFrame) => void, text: string): void {
@@ -82,8 +72,8 @@ export function replayTypewriter(send: (event: ScopedStreamFrame) => void, text:
 }
 
 /**
-  开一轮作用域对话流：hijack → 首帧落网 → 登记回合。三处顺序一致，且 `dispose()` 必须留在调用方的 finally 里——
-  漏一处就是往回合登记表里塞一个永不摘除的在途条目，之后「停止生成」按名字也掐不到它。
+  开一轮作用域对话流：hijack → 首帧落网 → 登记回合，三处顺序一致。
+  `dispose()` 必须留在调用方的 finally 里，否则回合登记表里留一个永不摘除的在途条目，「停止生成」掐不到它。
 */
 export function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: ScopedStreamFrame) => void; turnHandle: TurnHandle } {
   reply.hijack();
@@ -91,8 +81,8 @@ export function beginScopedStream(request: FastifyRequest, reply: FastifyReply, 
 }
 
 /**
-  回合失败的收尾（三作用域同一口径）：中止与出错是两件事，先判中止——只有它带着登记过的 turnId，
-  出错分支什么都不知道。用户点了停止就按「作废」收：journal 留一条 `turn_aborted`、不伪造正文也不写 `turn_text`。
+  回合失败的收尾（三作用域同一口径）：先判中止再判出错——只有中止带着登记过的 turnId。
+  用户点了停止就按「作废」收：journal 留一条 `turn_aborted`，不伪造正文也不写 `turn_text`。
 */
 export function failScopedTurn(input: {
   send: (event: ScopedStreamFrame) => void;

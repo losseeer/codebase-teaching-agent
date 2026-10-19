@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { configuredOrigins, isTrustedOrigin } from "./origins.js";
 
 /**
-  来源闸判据的测试（#166 第一层）。「为什么默认只信两类」与「认证闸已于 2026-10-15 撤除、这是唯一的 Web 闸」（§64）
-  写在 `origins.ts`，不在这里重述。这里钉的是那条边界的两侧：没有 Origin 头的调用方与回环来源放行，
-  其余一律不信——含把回环名当前缀的 `localhost.evil.example` 这种写法。
+  来源闸判据的测试。「默认只信哪两类」与「这是唯一的 Web 闸」写在 `origins.ts`，不在这里重述。
+  这里钉的是那条边界的两侧：没有 Origin 头的调用方与回环来源放行，其余一律不信——
+  含把回环名当前缀的 `localhost.evil.example` 这种写法。
   */
 
 describe("isTrustedOrigin", () => {

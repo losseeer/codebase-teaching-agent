@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { styleBrief } from "./prompts.js";
 
 /**
-  语言风格是**离散三档**（通俗 100 / 普通 50 / 严肃 0，GUI 三选一、learner 推荐同）。
+  语言风格是离散三档（通俗 100 / 普通 50 / 严肃 0，GUI 三选一、learner 推荐同）。
   0~100 的其他取值按 styleBand 归到最近一档——所以全值域只允许出现 3 种提示词，
   这组断言守的就是「不会因为怪值冒出第四种风格」。
   */

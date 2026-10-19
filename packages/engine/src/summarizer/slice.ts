@@ -3,14 +3,9 @@ import { buildFileEdges, type FileStructure } from "../depgraph/roles.js";
 import { rankSymbolsByCalls, countSymbolsByPath } from "../depgraph/symbol-rank.js";
 
 /**
-  L1 的输入：**文件切片**，不是整份正文。
-
-  为什么切成这样：整份正文喂模型有两个毛病——贵（一个 2,000 行的文件就取代整批预算），
-  且噪声大（导入区、license 头、内部小工具函数与「这个文件负责什么」无关）。
-  切片只保留判定文件职责真正需要的东西：**按重要性排过序的符号条目**（签名而非正文）、
-  依赖方向、以及结构规则给出的角色。
-
-  切片是**确定性**的（同一份符号表 + 同一份依赖图 → 同一份切片），因此可以直接做缓存键。
+  L1 的输入是文件切片，不是整份正文：只保留按重要性排序的符号条目（签名而非正文）、
+  依赖方向与结构规则给出的角色；导入区、license 头、内部小工具与「文件负责什么」无关。
+  切片是确定性的（同一份符号表 + 同一份依赖图 → 同一份切片），因此可以直接做缓存键。
 */
 
 export interface SliceEntry {
@@ -47,8 +42,7 @@ export const MAX_HEADER_COMMENT_CHARS = 120;
 const BOILERPLATE_PATTERN = /copyright|licen[cs]e|spdx|©/i;
 
 /**
-  「摘要参考注释」开关打开时附进切片的文件自述：**源码顺序上第一段正经注释**。
-
+  「摘要参考注释」开关打开时附进切片的文件自述：源码顺序上第一段正经注释。
   取材规则（宁缺毋滥，抽不到就 undefined，绝不捞行内碎语）：
   - 块注释 / Javadoc / Python 三引号 docstring，或连续 ≥1 行的整行注释组；
   - 跳过 license/SPDX/纯 @author 样板段；正文里的 @param/@return 标签行剔除；
@@ -106,9 +100,8 @@ function signatureOf(symbol: SymbolInfo): string {
 
 /**
   一次构建全仓的文件切片。
-
-  ⚠️ 排序用的入口是**全部入口**（被任一入口直接调到的符号优先），所以同一份仓库
-  在任何时候算出来的切片都一样——它是缓存键，不能随「这次点的是哪个入口」变。
+  ⚠️ 排序用的入口是全部入口（被任一入口直接调到的符号优先）：切片是缓存键，
+  同一份仓库任何时候算出来的必须一样，不能随「这次点的是哪个入口」变。
 */
 export function buildFileSlices(structure: FileStructure, roles: Map<string, FileRole>): Map<string, FileSlice> {
   const { dependencies, dependents } = buildFileEdges(structure);

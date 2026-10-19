@@ -24,9 +24,7 @@ function fixtureRepository(): string {
 }
 
 /**
-  2026-10-14 撤掉教学状态机：这里的用例随之收缩——
-  动作提议 / 意图分类 / 守门否决 / 熔断阶梯那五组测试的生产者已经不存在，
-  留下的都是「问答回合」这一条形状：装配上下文 → 工具循环 → 模型答一次 → 双边正文进会话。
+  问答回合的用例：一条形状——装配上下文 → 工具循环 → 模型答一次 → 双边正文进会话。
   */
 describe("provider-backed code Q&A harness", () => {
   it("把真实源码摘录与有界历史拼进提示词，且不再出现阶段与本轮动作", async () => {
@@ -38,7 +36,7 @@ describe("provider-backed code Q&A harness", () => {
     expect(result.provider).toBe("fake");
     expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 7 });
     expect(result.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-    // 会话形状：撤掉阶梯后 TutorSession 不再有 stage / fallbackCount
+    // 会话形状里没有 stage / fallbackCount 这类回合状态字段
     expect(result.session).not.toHaveProperty("stage");
     expect(result.session).not.toHaveProperty("fallbackCount");
     expect(prompt).toContain("课程节点: 入口");
@@ -95,14 +93,12 @@ describe("provider-backed code Q&A harness", () => {
     const result = await respondWithProvider(createSession("repo", "unit"), node, "入口的输入是什么？", provider, undefined, repository);
     expect(result.assistant.content).toContain("readConfig");
     expect(result.fileReads?.map((read) => read.path)).toEqual(["src/main.ts"]);
-    // 用量是工具循环各趟**累计**的那一份，不是最后一趟的
+    // 用量是工具循环各趟累计的那一份，不是最后一趟的
     expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
     // 轮数按「工具轮」计：一次 read_file 往返算 1 轮（journal 的 loop_round.tool_rounds 就是它）
     expect(result.toolRounds).toBe(1);
-    // 首轮带工具定义，且 system 声明了 read_file 的用法与护栏
     expect(calls[0].tools?.[0]?.name).toBe("read_file");
     expect(calls[0].system).toContain("read_file 只能读仓库内的源码与配置");
-    // 第二轮完整携带首轮 user 消息（上下文 + 学习者提问）与 tool 结果
     expect(calls[1].messages?.[0].content).toContain("课程节点: 入口");
     expect(calls[1].messages?.[0].content).toContain("入口的输入是什么？");
     expect(calls[1].messages?.some((message) => message.role === "tool")).toBe(true);

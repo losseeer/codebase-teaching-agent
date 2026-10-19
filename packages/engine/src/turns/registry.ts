@@ -1,11 +1,11 @@
 /**
-  在途回合注册表——「停止生成」的落点（2026-09-30）。
+  在途回合注册表——「停止生成」的落点。
 
-  为什么不能只靠 SSE 连接断开来中止：客户端消失对引擎来说有两种截然相反的原因——
-  - 用户点了「停止」：要立刻中止 LLM 调用，别再烧完这一轮 token；
-  - 网络波动 / 刷新页面：要**继续算完并落库**，用户回到应用时才能补上这一轮的回复。
-  连接层分不出这两者（点停止同样会把 fetch 断掉），所以「停止」是一条带外的显式请求，
-  按客户端生成的 turnId 找到这一轮的 AbortController；SSE 断开本身一律按第二种处理。
+  客户端消失对引擎来说有两种截然相反的原因，而连接层分不出（点停止同样会把 fetch 断掉）：
+  - 用户点了「停止」：立刻中止 LLM 调用；
+  - 网络波动 / 刷新页面：继续算完并落库，用户回到应用时才能补上这一轮的回复。
+  所以「停止」是一条带外的显式请求，按客户端生成的 turnId 找到这一轮的 AbortController；
+  SSE 断开本身一律按第二种处理。
 
   生命周期：路由 beginTurn → finally dispose；abortTurn 命中即摘除。表里只有进行中的回合，不会累积。
   */
@@ -55,9 +55,8 @@ export function beginTurn(turnId: unknown, scene: TurnScene): TurnHandle {
 export type AbortResult = { aborted: false; reason: "not_found" } | { aborted: true; scene: TurnScene; waitedMs: number; turnId: string };
 
 /**
-  中止指定回合。没中止只有**一种**：`not_found` = 这一轮已经结束或本来就没登记，调用方回 404，GUI 照常收尾、不报错。
-  原来还有第二种（`forbidden`：这一轮是别人的 key 发起的，回 403），随认证闸一起撤了——
-  这台机器上谁都能停任何回合（§64）。
+  中止指定回合。没中止只有一种：`not_found` = 这一轮已经结束或本来就没登记，调用方回 404，GUI 照常收尾、不报错。
+  这台机器上谁都能停任何回合。
   */
 export function abortTurn(turnId: unknown): AbortResult {
   const id = sanitizeTurnId(turnId);

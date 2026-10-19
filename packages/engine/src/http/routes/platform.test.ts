@@ -7,8 +7,7 @@ import { isolationBackend } from "../../sandbox/profile.js";
 
 /**
   引擎自己的面：界面动作事件出口的形状守卫、来源闸（不可信 Origin 一行 handler 都不许跑）、
-  编辑期免打扰开关、沙箱重探，以及「非收录文件的写入不该换掉挂载中的产物」。
-  夹具与假 provider 见 `route-test-kit.ts`。
+  编辑期免打扰开关、沙箱重探，以及「非收录文件的写入不该换掉挂载中的产物」。夹具与假 provider 见 `route-test-kit.ts`。
  */
 const fx: RouteFixture = createRouteFixture();
 
@@ -33,9 +32,8 @@ describe("POST /journal 的入参守卫", () => {
   });
 
   /**
-    审计线不能由被审计的一方填。这条接口本机任何进程都调得到，
-    若照旧按「全部事件类型」放行，一行 `code_egress`（哪些代码出过门）或 `token_usage`（花了多少钱）
-    就可以被伪造进去——报表再怎么算，算的都是别人想让你看的数。
+    审计线不能由被审计的一方填：这条接口本机任何进程都调得到，
+    按「全部事件类型」放行就能伪造一行 `code_egress`（哪些代码出过门）或 `token_usage`（花了多少钱）。
     */
   it("引擎侧类型从这条接口写不进来：400 且区分「越权」与「未知」", async () => {
     for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted", "repository_paired"]) {
@@ -58,13 +56,6 @@ describe("POST /journal 的入参守卫", () => {
   });
 });
 
-/**
-  线程定位**不看挂载集**（LRU 驱逐后仍能取回历史）。
-  要拦的事故：内存里只装 `maxMounted()` 个仓，其余被驱逐的仓只是没挂上，它的库一字未动；
-  而三条线程路由过去只扫内存，于是「切够几次仓再点开旧对话」会得到一句 会话不存在或已删除 ——
-  把还在的历史判没了，改名和删除也一起 404。全程零 token：这几条路由压根不打模型。
-  */
-
 describe("非收录文件的写入不该换掉挂载中的产物", () => {
   it("写 .env 与 credentials.json 后：等到防抖+重扫都远超，产物仍是那份 fixture", async () => {
     writeFileSync(join(fx.repoDir, ".env"), "OPENAI_API_KEY=sk-still-not-a-source-change\n", "utf8");
@@ -81,13 +72,12 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
 });
 
 /**
-  来源闸（#166 第一层）。CORS 原先写的是 `{ origin: true }` ——反射任意来源，而只听 127.0.0.1 挡不住：
-  浏览器里任意网页都能把请求打到这个地址，发请求不需要跨域权限，只有读响应才需要。
-  2026-10-15 认证闸整体撤除（§64）之后**这一道就是唯一的 Web 闸**，而它只管「哪个页面能碰这台引擎」，
-  不管「本机哪个进程能碰」——后者从此没有判据。
+  来源闸。CORS 若反射任意来源，只听 127.0.0.1 也挡不住：浏览器里任意网页都能把请求打到这个地址，
+  发请求不需要跨域权限，只有读响应才需要。它是唯一的 Web 闸，只管「哪个页面能碰这台引擎」，
+  不管「本机哪个进程能碰」。
 
-  这一组用例把三件事分开钉住：① 非可信来源被拒在**执行之前**（不只是不给 CORS 头）；
-  ② 回环来源与不带 Origin 的本机调用方照常能用（产品形态不能被锁死）；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
+  这一组用例把三件事分开钉住：① 非可信来源被拒在执行之前（不只是不给 CORS 头）；
+  ② 回环来源与不带 Origin 的本机调用方照常能用；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
 */
 
 describe("来源闸：默认只服务本机浏览器", () => {
@@ -120,8 +110,8 @@ describe("来源闸：默认只服务本机浏览器", () => {
   });
 
   it("连 /api/health 也不白给：这道闸免的是「不带 Origin 的本机调用」，不是「任意网页」", async () => {
-    // 进程管理器与本机 curl 不带 Origin，照样走得通；健康读数里有服务商、模型名、沙箱闸门状态，
-    // 那是给下一步攻击踩点用的，不该让任意网页白拿
+    // 健康读数里有服务商、模型名、沙箱闸门状态，不该让任意网页白拿；
+    // 进程管理器与本机 curl 不带 Origin，照样走得通
     const refused = await fromEvil("GET", "/api/health");
     expect(refused.statusCode).toBe(403);
     expect(refused.payload).not.toContain("fixture-model");

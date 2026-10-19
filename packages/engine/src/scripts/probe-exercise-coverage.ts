@@ -1,17 +1,15 @@
 /**
-  练习沙箱覆盖面探针（刀 0，零 token、只读）：回答「改代码 / 写代码 + 沙箱跑测试」这类题现在能给几门语言出、
+  练习沙箱覆盖面探针（零 token、只读）：回答「改代码 / 写代码 + 沙箱跑测试」这类题现在能给几门语言出、
   首发哪几门、要不要额外做转译。
 
-  为什么先量这个：判分要真跑代码，就得把「这个单元」连它能解析到的依赖一起写入沙箱。
+  判分要真跑代码，就得把「这个单元」连它能解析到的依赖一起写入沙箱：
   一个文件的 import 若全部落在「标准库 ∪ 仓内文件」，挂只读快照 + 该语言的模块解析就够跑；
   只要有一条落在外部包（npm / pip / Maven classpath），跑起来就变成「装依赖」，成本与失败面完全不是一个量级。
-  所以这里量的不是「语言支持得好不好」，而是**不装东西能不能跑**。
+  所以这里量的不是「语言支持得好不好」，而是不装东西能不能跑。
 
-  分档（自包含 / 仓内闭包 / 需外部包 / 判不准 / 需容器）是**探针口径**：现读文件正文把每条 import 说明符抽出来再分类。
+  分档（自包含 / 仓内闭包 / 需外部包 / 判不准 / 需容器）是探针口径：现读文件正文把每条 import 说明符抽出来再分类。
   引擎产物里只存「解析成功的仓内目标」，外部包 import 天生不可见，所以这一层必须自己抽；
   它只用来定首发语言集，不进产品判据。
-  曾经还有一档「TS 零依赖纯函数」直接调引擎真判据 `safeInvocationFor`，用来对照现状能出多少题——
-  那条判据随 `output_prediction` 于 2026-10-14 退役（当时读数：2 / 1222），此处不再重算。
 
   只读：DB 以 readOnly 打开，仓库文件只 readFileSync，不写任何产物。
   用法：pnpm sandbox:coverage
@@ -29,10 +27,8 @@ import { languageOfExtension } from "@codebase-tutor/shared";
 type UnitLanguage = SymbolInfo["language"];
 
 /**
-  `.vue` 在符号上没有专属标签（`SymbolInfo.language` 那一族里没有 vue），存量产物里一律记成 `other`，
-  直接照 tag 分派会把整个 `<script>` 块的 import 抽成空表、判成「什么都不 import」。
-  这里按扩展名回查共享能力表那一档真实语言，其它情况照原 tag。
-  （`languageOfExtension` 只吃扩展名，喂整条路径它不会自己截尾段，所以在这里截。）
+  `.vue` 在符号上没有专属标签，存量产物里一律记成 `other`：照 tag 分派会把整个 `<script>` 块的 import 抽成空表。
+  这里按扩展名回查共享能力表拿真实语言，其它情况照原 tag（`languageOfExtension` 只吃扩展名，所以在这里截尾段）。
 */
 function languageOfUnit(unit: ImplementationUnit): UnitLanguage | string {
   if (unit.symbol.language !== "other") return unit.symbol.language;
@@ -91,7 +87,7 @@ function walkRepo(root: string): string[] {
 
 /**
   点号后缀全集：`src/main/java/com/x/y/Z.java` 产出 `com.x.y.Z`、`x.y.Z`、`y.Z`、`Z`。
-  Java 的全限定名与 Python 的点号模块名都靠它认「仓里有没有这个东西」——两边都不该各写一份目录推导。
+  Java 的全限定名与 Python 的点号模块名共用这一份目录推导。
 */
 function dottedSuffixes(paths: string[]): Set<string> {
   const set = new Set<string>();
@@ -210,8 +206,7 @@ function goModuleOf(root: string): string | undefined {
 }
 
 /**
-  本机能不能起这门语言的解释器/编译器。「不装依赖就能跑」的前提是这里先有一句「有」——
-  否则覆盖率再高也是空谈（Go 在这台机器上就是这个形状：仓内 100% 自包含，可 `go` 根本没装）。
+  本机能不能起这门语言的解释器/编译器：覆盖率再高，工具链缺了就出不了题。
   只跑 `--version`，不执行任何仓内代码。
 */
 const TOOLCHAIN: Record<string, { command: string; args: string[] }> = {
@@ -281,8 +276,8 @@ for (const repositoryPath of repositories) {
   };
 
   /**
-    被调用侧的两种形态都收：`calleeSymbol` 在真产物里存的是**符号 id**（`symbol:<path>:<name>:<line>`），
-    而实现单元手上同时有 id 和 name。只按 name 拼键会整列判成 0——第一版探针就在 dianping 后端这么漏掉了 1177 条 Java 边。
+    被调用侧的两种形态都收：`calleeSymbol` 在产物里存的是符号 id（`symbol:<path>:<name>:<line>`），
+    实现单元手上同时有 id 和 name；只按 name 拼键会整列判成 0。
     */
   const calleeIds = new Set<string>();
   const calleeNames = new Set<string>();

@@ -39,8 +39,8 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
   return { repoDir, repositoryId };
 }
 
-/** 测试期的引擎工作日志只打控制台：默认落点是 `~/.codebase-tutor/engine.jsonl`，那是**产品数据**，
-    测试回合的 reindex 事件混进去之后，事后排查就分不清哪条来自真实用户操作了。 */
+/** 测试期不写引擎工作日志：默认落点是 `~/.codebase-tutor/engine.jsonl`，那是产品数据，
+    测试回合的 reindex 事件混进去之后，事后排查就分不清哪条来自真实用户操作。 */
 beforeEach(() => {
   process.env.TUTOR_ENGINE_LOG = "off";
 });
@@ -143,7 +143,7 @@ describe("ImportService 地址簿与懒挂载", () => {
   it("新鲜度只报告不重算：stale → 补上真 stamp 变 unknown（非 git 仓）→ git 仓里对得上才 fresh，HEAD 移动而内容不变是 drifted", () => {
     const repo = makePersistedRepo(root, "alpha");
     writeRegistry([repo.repoDir]);
-    /** 每个阶段都新起一个 service：模拟「进程重启后第一次访问」，判定只在挂载时发生一次，不需要 unmount 原语 */
+    /** 每个阶段都新起一个 service：模拟「进程重启后首次访问」，判定只在挂载时发生一次，不需要 unmount 原语 */
     const judge = (): RepositoryFreshness => {
       const service = new ImportService();
       const result = service.ensureMounted(repo.repositoryId);
@@ -332,10 +332,10 @@ describe("ImportService 重分析在途守卫（A1）", () => {
   });
 
   /**
-    #163 的服务层那半边。监听被「非内容事件」叫醒是常态（往仓根放一张图片会顶一下仓根的 mtime；
-    macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完、跑完就回写：
+    服务层这一半边：监听被「非内容事件」叫醒是常态（往仓根放一张图片会顶一下仓根的 mtime；
+    macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完就回写：
     产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过。
-    现在按内容哈希判：这一轮扫出来的 `versionStamp` 与挂载中那份相同，就什么都没发生（只留一行 noop 读数）。
+    按内容哈希判：这一轮扫出来的 `versionStamp` 与挂载中那份相同，就什么都没发生（只留一行 noop 读数）。
     */
   it("内容没变的一轮不回写产物、不换内存那份分析、也不广播", async () => {
     const { repoDir, repositoryId } = makePersistedRepo(root, "alpha");
@@ -396,9 +396,9 @@ describe("refinementIsFresh（宏观润色缓存的失效维度）", () => {
 });
 
 /**
-  编辑期免打扰（#173）。存在的理由很具体：引擎在学它自己的仓，**改代码的人与正在烧钱的学习者是同一台机器上的同一批文件**
-  ——10-15 实测一轮编辑叫醒一次重分析、落 8 条付费 light 调用。这一组不测「文件事件到底来没来」（那是 watcher.test.ts 的活，
-  而且真实事件在并行负载下本来就飘），只钉这个开关的三条可判定性质：关掉的就是那条监听、状态看得见、挂起活过驱逐。
+  编辑期免打扰：引擎在学它自己的仓，改代码的人与正在被学习的是同一批文件，一轮编辑就会叫醒一次重分析。
+  这一组不测「文件事件到底来没来」（那是 watcher.test.ts 的活，真实事件在并行负载下本来就飘），
+  只钉这个开关的三条可判定性质：关掉的就是那条监听、状态看得见、挂起活过驱逐。
   */
 describe("ImportService 编辑期免打扰：按仓挂起 fs 监听", () => {
   let root: string;

@@ -8,21 +8,18 @@ import { hash } from "../identity.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**
-  MCP 客户端：把**外部** MCP server 的工具接进产品 agent 的工具循环。
-
-  只做**一个方向**：产品 agent 读外部。反方向（把引擎读数当 MCP server 交给别人读）10-17 建过又按用户意见撤了，
-  引擎侧不需要为它保留第二条出口——外部要读就直接打这几条只读路由。
+  MCP 客户端：把外部 MCP server 的工具接进产品 agent 的工具循环。
+  只做产品 agent 读外部这一个方向；外部要读引擎就直接打那几条只读路由。
 
   三条规矩：
 
-  1. **默认关闭**。配置文件不存在 = 一条外部工具都不给，工具清单与系统提示词逐字不变。
-     每条外部工具的 schema 都要进每一轮请求的 token，还会改前缀缓存的形状——「可能用得上」不是开它的理由。
-  2. **配置文件照客户端生态的通用形状**：顶层 `mcpServers`，一个 server 一段（`command` / `args` / `env`，
+  1. 默认关闭。配置文件不存在 = 一条外部工具都不给，工具清单与系统提示词逐字不变。
+     每条外部工具的 schema 都要进每一轮请求的 token，还会改前缀缓存的形状。
+  2. 配置文件照客户端生态的通用形状：顶层 `mcpServers`，一个 server 一段（`command` / `args` / `env`，
      关掉用 `disabled`），把任何一份 MCP README 里的片段贴过来就能用。白名单用 `allowedTools`
      （取值与 Claude Code 那套工具 id 同形：`mcp__<server>__<tool>`，写裸工具名也认）。
-     没写 `allowedTools` = 该 server 报上来的工具**全部**进模型手上；写了就只认清单。
-     工具的副作用我们看不见（程序是别人写的），所以只能按名字收口。
-  3. **正文不进任何日志**。发出去的参数与拿回来的内容只记 `chars + hash`（与 `code_egress` 同一口径：
+     没写 `allowedTools` = 该 server 报上来的工具全部进模型手上；写了就只认清单。
+  3. 正文不进任何日志。发出去的参数与拿回来的内容只记 `chars + hash`（与 `code_egress` 同一口径：
      报「出过门没有、是哪一版」，不另开一个泄露面）。返回内容进模型前先过一次密钥筛。
 */
 
@@ -33,7 +30,7 @@ export interface McpServerConfig {
   command: string;
   args?: string[];
   cwd?: string;
-  /** 传给子进程的环境变量。值**从不**回显、从不落日志（第三方 server 的密钥常放这里）。 */
+  /** 传给子进程的环境变量。值从不回显、从不落日志（第三方 server 的密钥常放这里）。 */
   env?: Record<string, string>;
   /**
     工具白名单。取值两种写法都接：Claude Code 那种完整 id（`mcp__<server>__<tool>`）或裸工具名。
@@ -77,12 +74,12 @@ export interface ExternalSurface {
   tools: LlmTool[];
   /** 连不上/被跳过的 server 与原因：这是读数，要能在界面上问出来。 */
   errors: { server: string; reason: string }[];
-  /** 调一次。**永不抛**：失败回一句给模型看的实话 + 审计记录（抛出去会把整个回合掀掉）。 */
+  /** 调一次。永不抛：失败回一句给模型看的实话 + 审计记录（抛出去会毁掉整个回合）。 */
   call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
 }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/;
-/** 单次外部调用的墙钟上限：外部 server 是别人写的，超时必须有默认值。**每次调用现读**（改环境变量不必重启引擎，测试也靠它压到一秒）。 */
+/** 单次外部调用的墙钟上限：外部 server 是别人写的，超时必须有默认值。每次调用现读（改环境变量不必重启引擎，测试也靠它压到一秒）。 */
 function timeoutMs(): number {
   return Math.max(1_000, Number(process.env.TUTOR_MCP_TIMEOUT_MS ?? 20_000) || 20_000);
 }
@@ -135,7 +132,7 @@ interface Connected {
   origin: Map<string, string>;
 }
 
-/** 连接池：按 server 名惰性连一次并缓存这条 promise。**连成功的一直复用**；连不上或调用时发现连接已死的，把这一项摘掉，下一个回合重连——既不留僵尸子进程，也不让一次故障被永久钉成「每轮都超时」。 */
+/** 连接池：按 server 名惰性连一次并缓存这条 promise。连成功的一直复用；连不上或调用时发现连接已死的，把这一项摘掉，下一个回合重连——既不留僵尸子进程，也不让一次故障被永久钉成「每轮都超时」。 */
 const pool = new Map<string, Promise<Connected | undefined>>();
 
 async function connect(config: McpServerConfig): Promise<Connected | undefined> {
@@ -149,7 +146,7 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    // 白名单两种写法都认：完整 id 按**这台 server 的名字**剥前缀（名字允许下划线，用 `[^_]+` 的正则会整条失配、把工具静默丢光），裸工具名照原样比
+    // 白名单两种写法都认：完整 id 按这台 server 的名字剥前缀（server 名允许下划线），裸工具名照原样比
     const prefix = `mcp__${config.name}__`;
     const allowed = config.allowedTools?.length ? new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry))) : undefined;
     const tools: LlmTool[] = [];
@@ -185,8 +182,8 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: tr
 }
 
 /**
-  现做本轮的外部工具面。没有配置文件就回 `undefined`——调用方据此**一个工具都不加**，
-  而不是加一个「外部工具不可用」的空节点（那等于每轮白付一句没人用的说明）。
+  现做本轮的外部工具面。没有配置文件就回 `undefined`——调用方据此一个工具都不加，
+  而不是加一个「外部工具不可用」的空节点（那等于每轮多一句没人用的说明）。
 */
 export async function externalToolSurface(): Promise<ExternalSurface | undefined> {
   const { servers, skipped } = readMcpConfigs();

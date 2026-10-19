@@ -41,8 +41,8 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
 });
 
 /**
-  按需讲评（代码题）：判分已经落库，这一趟只补一段解释；未配模型或预算已达上限时**照旧 422**，
-  不回落成本地拼一句模板话——那是 §51 里撤掉的那类「看起来答完了、其实没走模型」。
+  按需讲评（代码题）：判分已经落库，这一趟只补一段解释；未配模型或预算已达上限时照旧 422，
+  不回落成本地拼一句模板话。
 */
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/explain", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);

@@ -33,7 +33,7 @@ describe("M2.1 exercise service", () => {
     expect(second.id).toBe(first.id);
     expect(second.createdAt).toBe(first.createdAt);
 
-    // 无关文件的改动只会翻转全仓 versionStamp，不碰目标文件的 contentHash → 命中缓存，不重烧
+    // 无关文件的改动只翻转全仓 versionStamp，不碰目标文件的 contentHash → 命中缓存，不作废旧题
     const unrelatedChange = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
     const reused = await service.next(unrelatedChange, { kind: "change_localization" });
     expect(reused.id).toBe(first.id);
@@ -78,7 +78,7 @@ describe("M2.1 exercise service", () => {
     await service.next(repository, { kind: "change_localization" }, provider("model-b"));
     expect(polishAttempts).toBe(2);
     // 静态题的答案与判分不出自模型，所以两档作用域共用同一个 id 是安全的
-    // 下面两条 journal 读数就是「润色失败要自己站出来」那条事故的可查形态：三种成因分档记，不再全挤成同一副样子
+    // 下面两条 journal 读数要求三种成因分档记，不把润色失败混进成功记录
     const generated = readJournal(repository.path).filter((event) => event.type === "exercise_generated");
     expect(generated.map((event) => event.payload.polish)).toEqual(["failed", "failed", "failed"]);
     expect(generated.map((event) => event.payload.polish_failure)).toEqual(["provider_error", "provider_error", "provider_error"]);
@@ -105,7 +105,7 @@ describe("M2.1 exercise service", () => {
     const graded = await service.answer(repository, localization.id, { selectedIds: [expectedPath!] });
     expect(graded.passed).toBe(true);
 
-    // 排期把这道题推到过去 → next() 先还复习队列，而不是另出一题
+    // 把这道题的到期时间改早 → next() 先还复习队列，而不是另出一题
     const database = new TutorDatabase(repository.path);
     database.saveReviewSchedule(repository.index.repositoryId, { ...graded.review, dueAt: "2020-01-01T00:00:00.000Z" });
     database.close();
@@ -118,11 +118,9 @@ describe("M2.1 exercise service", () => {
 
   it("非 JS 仓的 set_match 题：正解必须在选项里，干扰项也得是同族源码", async () => {
     /**
-      旧 `sourceOptions` 先按**手写的**扩展名白名单（ts/js/py）筛一遍再取正解，非 JS 仓的
-      `change_localization` / `impact_analysis` 于是给出「怎么选都不过」的题——dianping 库里那条
-      `CircuitBreakerAspect.java` 的缓存行实测选项全是 `stress/report/content/js/*.js`。
-      夹具把正解排在字典序末尾、同包塞满竞争者，是为了让这条测试咬得住：只换宽干扰项池过不了它，
-      必须有「正解不被扩展名筛掉」这条不变量在才选得出答案。
+      验证「正解必须出现在选项里」：若正解也先过手写的扩展名白名单，非 JS 仓会给出
+      「怎么选都不过」的题。夹具把正解排在字典序末尾、同包塞满竞争者，是为了让这条测试咬得住：
+      只放宽干扰项池过不了它，必须有「正解不被扩展名筛掉」这条不变量在。
       */
     const repository = testRepository();
     const service = new ExerciseService();
@@ -155,7 +153,7 @@ describe("M2.1 exercise service", () => {
     const localization = await service.next(localizationRepository, { kind: "change_localization", targetUnitId: javaUnit.id });
     const localizationIds = optionIdsOf(localization);
     expect(localizationIds).toContain(answer);
-    // 干扰项来自依赖图那套扩展名（能力表派生），不再是「本模块手写的一份 JS 清单」
+    // 干扰项来自依赖图那套扩展名（能力表派生），不是本模块手写的 JS 清单
     expect(localizationIds.every((id) => id.endsWith(".java"))).toBe(true);
     expect((await service.answer(localizationRepository, localization.id, { selectedIds: [answer] })).passed).toBe(true);
   });
@@ -189,7 +187,7 @@ describe("M2.1 exercise service", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const small = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
-    // 模拟 10-06 那种改图：源代码内容没动（versionStamp 不变），只是引擎多认出一条依赖边
+    // 模拟只改图的情形：源代码内容没动（versionStamp 不变），引擎多认出一条依赖边
     const widenedGraph: RepositoryAnalysis["graph"] = {
       ...repository.analysis.graph,
       imports: { ...repository.analysis.graph.imports, "src/widened-consumer.js": ["src/config.js"] }
@@ -200,10 +198,9 @@ describe("M2.1 exercise service", () => {
     // 回到旧图必须命中原来那一行（被新行覆盖就等于拿旧图的答案出当前题）
     const back = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
     /**
-      判据是 journal 里的**命中序列**，不是时间戳。原来这里比的是 `createdAt` 不相等，而这条不成立：
-      静态题的 id 只由（仓、versionStamp、题型、单元）算出，**不含图指纹**，两条行的 `createdAt` 又能
-      落在同一毫秒——2026-10-18 读 journal 改成增量解析之后两次生成更容易撞在一起，这条就开始抖。
-      真正要钉的是「换图必须未命中、回旧图必须命中」，`exercise_generated.source` 就是这条读数的出处。
+      判据是 journal 里的命中序列，不是时间戳：静态题的 id 不含图指纹，两行的 createdAt
+      可能落在同一毫秒，比时间戳会不稳。真正要钉的是「换图必须未命中、回旧图必须命中」，
+      `exercise_generated.source` 就是这条读数的出处。
       */
     const sourcesOf = (): unknown[] => readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source);
     expect(sourcesOf()).toEqual(["rule", "rule", "cache"]);
@@ -285,7 +282,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
-    // 每次「送达」都留痕：漏斗分母要分得清 llm 新生成与缓存复用
+    // 每次「送达」都留痕：记录要分得清 llm 新生成与缓存复用
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source)).toEqual(["llm", "cache", "llm"]);
   });
 
@@ -309,7 +306,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const { provider, calls } = fakeProvider([generationJson]);
     await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("没有找到与「kubernetes」主题相关的源码文件");
     expect(calls).toHaveLength(0);
-    // 09-22 改口径：零候选也要留痕——漏斗必须分得清「没走到模型」与「被模型拒绝」
+    // 零候选也要留痕：记录要分得清「没走到模型」与「被模型拒绝」
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "no_candidates")).toBe(true);
   });
 
@@ -366,7 +363,6 @@ function testRepository(): PracticeRepository {
 
 /**
   夹具也要真句柄：`PracticeRepository.handle` 是挂载项唯一的连接入口，出题与判分都经它读写产物库。
-  收尾顺序是先关连接再删目录——留着打开的 SQLite 去 rm 会留下删不净的 -wal/-shm。
   */
 const handles: RepositoryHandle[] = [];
 function openHandle(repositoryPath: string, repositoryId: string): RepositoryHandle {

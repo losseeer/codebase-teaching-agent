@@ -8,8 +8,8 @@ import { extractHeaderComment } from "../summarizer/slice.js";
   零 token 探针：「摘要参考注释」开档实际会往切片里塞什么。
   输出：每仓「有 headerComment 的文件数 / 总文件数」+ 全部抽到的注释清单（截 90 字）。
   「新/旧」标记 = 该注释开头是否已出现在参照 cohort（COHORT_BEFORE 之前生成的最新一行摘要）里；
-  不设 COHORT_BEFORE 时全标「?」。只读打开 <仓>/.tutor/tutor.db。
-  用法：COHORT_BEFORE=2026-09-22T11:00 npx tsx src/scripts/probe-header-comments.ts <仓库路径> [...]
+  不设 COHORT_BEFORE 时全标「?」。DB 只读打开 <仓>/.tutor/tutor.db。
+  用法：COHORT_BEFORE=<ISO 时间> npx tsx src/scripts/probe-header-comments.ts <仓库路径> [...]
 */
 
 const cohortBefore = process.env.COHORT_BEFORE;

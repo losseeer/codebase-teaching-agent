@@ -13,8 +13,7 @@ export function deriveMastery(events: JournalEvent[]): MasteryRecord[] {
       ? event.payload.unit_id
       : typeof event.payload.target_unit_id === "string" ? event.payload.target_unit_id : undefined;
     if (!unitId || (event.type !== "exercise_result" && event.type !== "unit_mastered")) continue;
-    // `unit_mastered` 的生产者（教学状态机的确认档）已于 2026-10-14 撤掉：这里仍读它，
-    // 是为了让「历史上学通过」继续算数——它是一次真实通过，不是会过期的信号。
+    // `unit_mastered` 已没有生产者，但这里仍读它：历史上学通过是一次真实通过，不是会过期的信号。
     const current = records.get(unitId) ?? { unitId, level: 0 as MasteryLevel, attempts: 0, successes: 0 };
     const passed = event.type === "unit_mastered" || event.payload.passed === true;
     const level = event.type === "unit_mastered"
@@ -38,11 +37,8 @@ export function currentMastery(records: MasteryRecord[]): MasteryLevel {
 
 /**
   `deriveMastery` 的加料版：补一个成功率——学习画像的设置推荐吃这一份。
-
-  2026-10-14 撤掉教学状态机时，这里原本还从 `hint_depth` / `dependency_event` 捞「平均提示深度」与
-  「依赖事件数」两项。那两个生产者已经不写了，留着会让画像**永久卡在历史某次的熔断上**
-  （画像回放的是整本 journal，没有新行去稀释它），所以一并删掉。
-  历史行仍在 journal 里，要回看走 `pnpm run-trace`。
+  这里不聚合提示深度、依赖事件数这类信号：画像回放整本 journal，
+  生产者已停写的字段没有新行稀释，会永久停在历史读数上，不再是当前信号。
   */
 export function deriveMasteryMap(events: JournalEvent[]): MasteryMapEntry[] {
   return deriveMastery(events).map((record) => ({ ...record, successRate: record.attempts ? record.successes / record.attempts : 0 }));

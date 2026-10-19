@@ -5,15 +5,9 @@ import { loadedAnalysisStepCount } from "./analysis-steps.js";
 import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFingerprints } from "./analysis-step.js";
 
 /**
-  口径登记的守卫。它管的是一条**看不见**的失效：缓存键里只有口径版本号、没有提示词文本，
-  所以改了文案而没翻版本号时，模型看到的输入逐字不变 ⇒ 旧答案永久命中，
-  界面与账面都不会有任何异常（命中还给闲置 TTL 续期，常用的仓连自然过期都等不到）。
-
-  锁文件 `analysis-step.lock.json` 记的是「每个步骤当时的版本号 + 当时的提示词指纹」。
-  测试红只有两种正确出路，都必须是人的一次显式决定：
-  - 这份改动**该让旧产物作废** → 翻 `contractVersion`，再跑 `pnpm analysis:lock` 把新指纹写进锁；
-  - 这份改动**不值得重烧**（纯措辞润色） → 直接跑 `pnpm analysis:lock`，并在 commit 信息里说出为什么不翻版本。
-  两种都要改锁文件，于是 diff 上一定留痕；不许无声通过。
+  口径登记的守卫：L2 缓存键只含口径版本号、不含提示词文本，改文案不翻版本时旧答案永久命中。
+  本测试红只有两种出路，都要显式操作：该让旧产物作废就翻 `contractVersion` 再跑 `pnpm analysis:lock`；
+  不值得作废（纯措辞润色）就直接跑 `pnpm analysis:lock` 并在 commit 里说明。
 */
 
 /** 本目录（源码根）：扫描与清单比对都以它为基准，路径写法才和 `analysis-steps.ts` 里的导入一致。 */

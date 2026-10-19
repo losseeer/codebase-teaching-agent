@@ -3,10 +3,7 @@ import type { CallEdge, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/s
 import { buildFlowEvidence, FLOW_EVIDENCE_LIMITS, staticFlow } from "./evidence.js";
 import { makeSymbol } from "../test-utils.js";
 
-/**
-  静态证据层：流程视图拿它当 LLM 输入材料，以及 LLM 不可用时的降级视图。
-  本仓库只有 engine 配了 vitest，所以纯函数测试落在这一侧。
-  */
+/** 静态证据层：流程视图拿它当 LLM 输入材料，以及 LLM 不可用时的降级视图。 */
 function symbol(path: string, name: string, line: number): SymbolInfo {
   return makeSymbol(path, name, { line, endLine: line + 4, language: path.endsWith(".py") ? "python" : "typescript" });
 }

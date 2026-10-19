@@ -6,10 +6,10 @@ import { graphExtensions } from "../depgraph/graph.js";
 import { indexRepository, isIngestedPath, nonGraphExtensions, sourceExtensions } from "./indexer.js";
 
 /**
-  扫描期的兜底口径（2026-10-06 复审 #123③）：**一个文件读不出来，只让它自己缺席**。
-  旧写法是 `readFileSync` 裸奔——用户边用边改是常态，读到一半文件被删/被移动就让整次导入失败，
-  而「重新导入」对那种文件治不好，等于把一次偶发抖动放大成整个功能不可用。
-  但缺席必须**记名**：静默少索引一批文件，`totalFiles` 与「哪些文件没摘要」这些读数会一起说不实。
+  扫描期的兜底口径：一个文件读不出来，只让它自己缺席。
+  用户边用边改是常态，读到一半文件被删/被移动就让整次导入失败，而「重新导入」对那种文件治不好，
+  等于把一次偶发抖动放大成整个功能不可用。但缺席必须记名：
+  静默少索引一批文件，`totalFiles` 与「哪些文件没摘要」这些读数会一起说不实。
   */
 
 describe("indexRepository 扫描期兜底", () => {
@@ -58,9 +58,9 @@ describe("indexRepository 扫描期兜底", () => {
 });
 
 /**
-  扫描白名单的构成口径（indexer.ts 顶部那段注释承诺的三条核对）。索引范围 = graphExtensions ∪ nonGraphExtensions。
-  graphExtensions 由能力表派生，所以这里真正要拦的不是「两边相不相等」（那是同义反复），而是派生别把范围改小、
-  两组别打架：漏一项就少索引一类文件、后面的摘要与热点读数一起跟着说不实；重叠则说明同一扩展名既想进图又想当配置。
+  扫描白名单的构成：索引范围 = graphExtensions ∪ nonGraphExtensions，前者由能力表派生。
+  这里要拦的不是「两边相不相等」（同义反复），而是派生别把范围改小、两组别打架：
+  漏一项就少索引一类文件、摘要与热点读数一起跟着说不实；重叠则说明同一扩展名既想进图又想当配置。
 */
 describe("indexRepository 的扩展名白名单构成", () => {
   it("图内与表外两组不重叠", () => {
@@ -83,10 +83,8 @@ describe("indexRepository 的扩展名白名单构成", () => {
 
   /**
     白名单之外还有第二道：读层判「不开放读取」的密钥载体名不该进收录集。
-    口径漂移的实际代价——`credentials.json` 的扩展名 `.json` 属于收录类型，
-    于是它的路径与行数进了产物、界面文件树里点得到，而 `GET /source` 早就拒读它；
-    「摘要参考注释」开关一开，`summarizer` 会照着 slice 的路径把正文读出来（只剩 maskSecrets 兜底）。
-    同一份名单两处判，收尾成 `isIngestedPath` 一处。
+    `credentials.json` 的扩展名 `.json` 属于收录类型，于是它的路径与行数进了产物、文件树里点得到，
+    而 `GET /source` 拒读它；「摘要参考注释」开关一开，`summarizer` 会照着 slice 的路径把正文读出来。
     */
   it("密钥载体名不进收录集，普通配置文件照收（`.json` 这一类的两种命运）", () => {
     const dir = mkdtempSync(join(tmpdir(), "tutor-indexer-denied-"));

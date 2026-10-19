@@ -9,24 +9,17 @@ import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type Search
 /**
   read_file / search_code 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
 
-  - 预算硬上限（轮数 / 累计**读成功**的文件数）；用尽时对未应答的 tool_call 明确回绝，再做一轮不带工具的收尾回答。
-    被护栏拒绝或路径写错的调用**不占文件额度**（代价只有一行文本，且「反复乱试」已由轮数兜住），但仍逐条进 fileReads 审计；
-  - 传入 `search` 语料时额外提供 search_code（词法检索「文件在哪」，只回位置与职责）：
-    它不读任何文件，**不占文件额度也不记 file_read**，单独进 codeSearches 审计；轮数上限同样约束它；
-  - messages[0] 恒为首轮 user 消息——provider 提供 messages 时忽略 user 字段，
-    首轮 user 若不进 messages，工具调用后的轮次会同时丢失代码上下文与学习者提问（回归防线）；
-  - 每轮调用前 micro_compact：更早轮次的 tool 结果压成占位符、早期 reasoningContent 丢弃
-    （读取结果可再生，推理 token 是账单大头）；最近一轮 assistant 的 reasoningContent 保留（部分协议要求回传）；
+  - 预算硬上限是轮数与累计读成功的文件数；用尽时对未应答的 tool_call 明确回绝，再做一轮不带工具的收尾回答。
+  - 传入 `search` 语料时额外提供 search_code（词法检索「文件在哪」，只回位置与职责），它同样受轮数上限约束。
+  - messages[0] 恒为首轮 user 消息——provider 收到 messages 时忽略 user 字段，
+    首轮 user 若不进 messages，工具调用后的轮次会同时丢失代码上下文与学习者提问。
+  - 每轮调用前压缩历史，意图见 `compactToolHistory`。
   - 每次 read_file（含拒绝与失败）返回审计记录，由调用方记 journal file_read。
-  - `signal` 透传到每一轮 LLM 调用，并在开新一轮前检查：中止一律抛 LlmAbortedError 原样上抛，
+  - `signal` 透传到每一轮 LLM 调用，并在开新一轮前检查：中止一律原样抛出 `LlmAbortedError`，
     不吞成「基于已有上下文直接回答」的收尾结论（那会把用户主动停止伪装成模型答完）。
   */
 
-/**
-  工具循环的过程事件。形状**从帧词表里取**（`shared` 的 `ScopedStreamProgress`）：
-  宏观设计与练习那两条流是把这三类直接当 SSE 帧发出去的，两处各写一份字面量迟早漂——
-  漂了以后引擎在发一种界面不认识的帧，屏幕上只剩「回复生成中…」（10-06 的 `thinking` 漏接就是这个形状）。
-*/
+/** 工具循环的过程事件；类型取自 `shared` 的 `ScopedStreamProgress`，与 SSE 帧共用同一份词表。 */
 export type ReadToolProgress = Extract<ScopedStreamProgress, { type: "thinking" | "reading" | "searching" }>;
 
 export interface ReadToolLoopInput {
@@ -39,7 +32,7 @@ export interface ReadToolLoopInput {
   maxTokens: number;
   temperature: number;
   maxRounds: number;
-  /** 本次对话累计最多读取几个文件（只数读成功的；被拒绝/失败的仍进 fileReads 审计但不占额度） */
+  /** 本次对话累计最多读几个文件：只数读成功的；被拒绝或失败的仍进 fileReads 审计，但不占额度。 */
   maxCalls: number;
   onProgress?: (progress: ReadToolProgress) => void;
   /** LLM 工作日志的场景标签（teaching.turn / map.chat），透传给每一轮调用 */
@@ -48,31 +41,18 @@ export interface ReadToolLoopInput {
   search?: SearchCorpus;
   /** 外部中止信号：透传给每一轮 LLM 调用，并在进入下一轮前检查（读文件是本地操作，不在此列）。 */
   signal?: AbortSignal;
-  /** 跨仓访问：见 `CrossRepoContext`。不传 = 只有当前仓，工具清单与从前逐字一致。 */
+  /** 跨仓访问，见 `CrossRepoContext`。不传 = 只有当前仓，工具清单不变。 */
   cross?: CrossRepoContext;
-  /**
-    架构修正工具（唯一的有副作用工具）。不传 = 这个作用域没有写能力，
-    工具清单里连 `set_architecture` 这个节点都不出现——practice_chat 与教学回合就是这种（map 作用域每轮都给，见 `server.ts` 的 `architectureToolFor`）。
-  */
+  /** 架构修正工具（有副作用的工具之一）。不传 = 这个作用域没有写能力，清单里连 `set_architecture` 这个节点都不出现。 */
   architecture?: ArchitectureToolContext;
-  /**
-    画布上那张图的结构改动（第二个有副作用的工具，2026-10-18 与 `set_architecture` 同一道作用域闸）。
-    不传 = 这个作用域没有改图的权力，清单里连 `set_diagram` 这个节点都不出现——只有 map 作用域给，
-    教学与练习两张脸都不给：它们面对的是代码与题目，不是画布。
-  */
+  /** 画布上那张图的结构改动。不传 = 这个作用域没有改图的权力，清单里不出现 `set_diagram`；教学与练习作用域都不给。 */
   diagram?: SetDiagramToolContext;
-  /**
-    静态产物的只读门（2026-10-19）。不传 = 清单里没有 `query_facts`：
-    产物层没算过的仓给了它只会每次回「这类产物不在册」，不如不给。
-  */
+  /** 静态产物的只读门。不传 = 清单里没有 `query_facts`：产物层没算过的仓给了它只会每次回「这类产物不在册」。 */
   facts?: FactsToolContext;
-  /**
-    技能正文的取用通道（2026-10-17）。不传 = 工具清单里没有 `read_skill`，
-    系统提示词也不该出现技能清单——清单与通道必须同时给或同时不给，只给一半就是让模型找一个不存在的工具。
-  */
+  /** 技能正文的取用通道。不传 = 工具清单里没有 `read_skill`，系统提示词也不该出现技能清单。 */
   skills?: SkillsToolContext;
   /**
-    外部 MCP 工具面（2026-10-17）。**默认不给**：每一条外部工具的 schema 都要进每一轮请求的 token，
+    外部 MCP 工具面，默认不给：每条外部工具的 schema 都要进每一轮请求的 token，
     还会改变请求前缀的形状（前缀缓存按请求头部算）。服务层只在配置文件里真有启用的 server 时才传。
   */
   external?: ExternalToolContext;
@@ -83,17 +63,16 @@ export interface SkillsToolContext {
   /** 进上下文的那段清单（名字 + 一句描述 + 「先取正文再照做」那句约束）。 */
   brief: string;
   /**
-    取正文（`file` 省略 = `SKILL.md`）或该技能目录里的附属文件（规格第三层：正文用相对路径引用它们）。
-    回 `undefined` = 没这个技能或没这个文件；工具把这句话照实回给模型，不编一段看着像正文的东西。
+    取技能正文（`file` 省略 = `SKILL.md`）或该技能目录里的附属文件（正文用相对路径引用它们）。
+    回 `undefined` = 没这个技能或没这个文件；工具把这句照实回给模型，不编一段看着像正文的东西。
   */
   bodyOf: (name: string, file?: string) => string | undefined;
 }
 
 /**
   外部 MCP 工具面。清单与调用都由服务层实现，本循环不认识 SDK、也不认识子进程。
-
-  ⚠️ `call` **不许抛**：外部 server 是别人写的程序，超时、崩了、回了错误都得变成一句给模型看的实话，
-  否则一个第三方故障会把整个回合掀掉（学习者只看到报错，还不知道是哪一环节掉的）。
+  ⚠️ `call` 不许抛：外部 server 是别人写的程序，超时、崩溃、回错误都要先变成一句给模型看的实话，
+  否则一个第三方故障会把整个回合掀掉。
 */
 export interface ExternalToolContext {
   /** 已带 `mcp__<server>__<tool>` 前缀的清单，直接并进本轮工具数组。 */
@@ -118,13 +97,12 @@ export const READ_SKILL_TOOL: LlmTool = {
 };
 
 /**
-  跨仓访问上下文。**只在地址簿里还有别的仓时才传**——没有第二个仓时三个工具一个都不多给，
-  工具清单与提示词逐字不变（多一段没用的清单就是每轮白付 token，还会让模型去猜不存在的对端）。
+  跨仓访问上下文。只在地址簿里还有别的仓时才传——没有第二个仓时三个工具一个都不多给，工具清单与提示词不变。
 
-  - `roots`：仓名 → 仓库根路径。`read_file` 靠它换根，**守卫整套复用**（仓内边界、拒读名单、软链接复核都在根路径这一层）；
-  - `corpusOf`：仓名 → 检索语料，**模型真搜时才现取**（取一份对端语料意味着要把那个仓挂进内存，不该为「它可能问一句」先付）；
-    回 `undefined` 表示这仓没产物、只能读不能搜，工具会照实回一句，不让模型以为工具坏了；
-  - `links`：当前仓 ↔ 对端仓按归一化 URL 配好的接缝清单（零 token 实时计算，代价是读两边源码，所以只在模型真调用时才算）。
+  - `roots`：仓名 → 仓库根路径。`read_file` 靠它换根，守卫整套复用（仓内边界、拒读名单、软链接复核都在根路径这一层）；
+  - `corpusOf`：仓名 → 检索语料，模型真搜时才现取（取一份语料意味着把那个仓挂进内存）。
+    回 `undefined` 表示这仓没产物、只能读不能搜，工具会照实回一句；
+  - `links`：当前仓 ↔ 对端仓按归一化 URL 配好的接缝清单。零 token，代价是读两边源码，所以只在模型真调用时才算。
   */
 export interface CrossRepoContext {
   roots: Record<string, string>;
@@ -151,10 +129,9 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 };
 
 /**
-  人工修正通道的工具面（全仓第一个**有副作用**的工具，2026-10-16）。
-  ⚠️ 参数表里没有边、没有文件、没有模块的增删——**不是忘了加，是刻意不给**：
-  跨层箭头由 import 聚合而来，任何「模型说有一条 A→B 的边」都不可能被证据支持。
-  写侧（scopechat 传进来的闭包）再做一次白名单校验，两层都要挡住改边这条路。
+  人工修正通道的工具面（有副作用）。
+  ⚠️ 参数表里没有边、没有文件、没有模块的增删，是刻意不给：跨层箭头由 import 聚合而来，
+  「模型说有一条 A→B 的边」不可能被证据支持。写侧（服务层传进来的闭包）再做一次白名单校验，两层都挡住改边。
 */
 export const SET_ARCHITECTURE_TOOL: LlmTool = {
   name: "set_architecture",
@@ -176,26 +153,22 @@ export const SET_ARCHITECTURE_TOOL: LlmTool = {
 /** 副作用工具的落地通道：由服务层给一个闭包，工具循环不认识数据库与 journal。 */
 export interface ArchitectureToolContext {
   /**
-    执行一次修正并回一句给模型看的话（写成/写成什么、或拒写原因）。
-    返回文本会作为 `role:"tool"` 的结果回喂，模型下一轮就按它说——所以这里必须回**实际落盘后的状态**，
-    不能回「意图」：回错了模型会把没改成的说成改成了。
+    执行一次修正并回一句给模型看的话（写成什么、或拒写原因）。
+    这段文本会作为 `role:"tool"` 结果回喂，模型下一轮就按它说——所以必须是实际落盘后的状态，不能回意图。
   */
   apply: (argumentsJson: string) => string;
   /**
     现在的分层现场 + 已存的人工修正清单（一段文本，由作用域层进上下文）。
-    为什么要有这个节点：修正存在引擎里，横幅读得到、模型读不到——用户说「撤掉那条」时，
-    模型手上既没有「哪一条」的清单，也没有节点 id，只能猜或反问（2026-10-16 用户指出）。
+    修正存在引擎里，横幅读得到、模型读不到：没有这份清单，用户说「撤掉那条」时模型既没有条目也没有节点 id。
   */
   inventory?: string;
 }
 
 /**
-  画布上「结构」的写入口（2026-10-18，与 `set_architecture` 并列为全仓仅有的两个有副作用的工具）。
-  描述里把那四条纪律写死，而不是留在提示词里劝：
-  ① 位置是用户的（不让动就别动，`move` 只在用户开口时代挪一格）；
-  ② `module` 节点必须带真 `ref`，核不上整次拒写；
-  ③ 边的 `origin` 引擎会拿三张结构表核，**只降不升**，降完把原因写在边上；
-  ④ `draw` 一次交整张图，别一格一格试（图库里一张图 = 一个能讲清楚的问题）。
+  画布上「结构」的写入口（与 `set_architecture` 并列为仅有的两个有副作用的工具）。
+  四条纪律写死在描述里而不是留在提示词里劝：位置是用户的（`move` 只在用户开口时代挪一格）；
+  `module` 节点必须带真 `ref`，核不上整次拒写；边的 `origin` 由引擎拿结构表核，只降不升，降完把原因写在边上；
+  `draw` 一次交整张图。
 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
@@ -211,10 +184,8 @@ export const SET_DIAGRAM_TOOL: LlmTool = {
 };
 
 /**
-  改这张图的落地通道：由服务层给闭包，工具循环不认识数据库、journal 与课程树。
-  与 `ArchitectureToolContext` 同一条纪律：回的是**实际落盘后的状态**（或拒写的那句原因），
-  不是意图——回错了模型就会把没改成的说成改成了。`inventory` 是「画布现场」，
-  有副作用的工具必须先看得见现状（§71），否则它只能猜 id、猜「那条边」到底指哪条。
+  改这张图的落地通道，口径同 `ArchitectureToolContext`：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
+  `inventory` 是画布现场——有副作用的工具必须先看见现状，否则只能猜 id、猜「那条边」指哪条。
 */
 export interface SetDiagramToolContext {
   apply: (argumentsJson: string) => string;
@@ -222,10 +193,8 @@ export interface SetDiagramToolContext {
 }
 
 /**
-  静态产物的只读门（2026-10-19）。与 `set_diagram` 配对：那边写图，这边给证据。
-
-  它**不重算任何东西**——绘图阶段的职责边界就是「只消费导入时已算好的产物」。
-  也不占读文件额度：读的是产物行，不是源码（与两个写工具同一条口径）。
+  静态产物的只读门，与 `set_diagram` 配对：那边写图，这边给证据。
+  不重算任何东西——绘图阶段的职责边界就是只消费导入时已算好的产物。
 */
 export const QUERY_FACTS_TOOL: LlmTool = {
   name: "query_facts",
@@ -285,9 +254,8 @@ function readArg(argumentsJson: string, key: string): string {
 
 /**
   回合被中止时随异常带走的「这一轮真做过什么」：中止按作废收尾（不落正文、不回放、不写 turn_text），
-  但读过的文件、搜过的查询、打过的外部工具是**已经发生的事实**——钱花了、内容出过门。
-  跟着异常一起丢掉，journal 就留下一行「这一轮什么都没干」的假账（§77 第 6 条）。
-  走 symbol 键：provider 与 GUI 都不该看见这份旁证。
+  但读过的文件、搜过的查询、打过的外部工具是已经发生的事实——跟着异常一起丢掉，journal 就留下
+  「这一轮什么都没干」的假账。走 symbol 键：provider 与 GUI 都不该看见这份旁证。
 */
 export interface ToolLoopAudits {
   fileReads: FileReadRecord[];
@@ -371,7 +339,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const repo = readArg(call.argumentsJson, "repo");
         const corpus = repo ? input.cross?.corpusOf?.(repo) : input.search;
         if (!corpus) {
-          // 说清「这个仓能读不能搜」，否则模型会以为工具坏了而反复重试；不占任何额度
+          // 说清「这个仓能读不能搜」，否则模型会以为工具坏了而反复重试
           messages.push({ role: "tool", toolCallId: call.id, content: repo
             ? `仓「${repo}」没有可检索的产物（可能还没导入完成），但可以用 read_file 带 repo="${repo}" 直接读它的文件。`
             : "当前作用域未开放 search_code。" });
@@ -388,17 +356,15 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           messages.push({ role: "tool", toolCallId: call.id, content: "当前作用域没开放架构修正。" });
           continue;
         }
-        // 副作用一次就回一句实话；不占读文件额度（它读的是产物，不是源码）
         messages.push({ role: "tool", toolCallId: call.id, content: input.architecture.apply(call.argumentsJson) });
         continue;
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {
-        // 结构改动一次一回执（落成了什么、被降了几条边、或为什么整次拒写）。不占读文件额度：它读的是产物不是源码
+        // 结构改动一次一回执：落成了什么、被降了几条边、或为什么整次拒写
         messages.push({ role: "tool", toolCallId: call.id, content: input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。" });
         continue;
       }
       if (call.name === QUERY_FACTS_TOOL.name) {
-        // 只读产物，不占读文件额度（与两个写工具同口径）；也没重算——门后面就是盘上那份读数
         messages.push({ role: "tool", toolCallId: call.id, content: input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。" });
         continue;
       }
@@ -406,8 +372,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const skill = readSkillHint(call.argumentsJson);
         const file = readSkillFileHint(call.argumentsJson);
         const body = input.skills.bodyOf(skill, file);
-        // 「取到了但正文是空的」与「没有这份技能」是两个读数：前者的做法确实装了、只是没写内容，
-        // 用 Boolean(body) 会把前者判成后者，模型于是回用户一句「这个技能不存在」——那是假话
+        // 「取到了但正文是空的」与「没有这份技能」是两个读数：用 Boolean(body) 会把前者判成后者，
+        // 模型于是回用户一句「这个技能不存在」——那是假话
         const found = body !== undefined;
         skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found });
         messages.push({ role: "tool", toolCallId: call.id, content: found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
@@ -416,12 +382,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       if (input.external?.tools.some((tool) => tool.name === call.name)) {
         const cap = input.external.maxCalls ?? 3;
         if (externalCalls >= cap) {
-          // 照实说上限，别让模型以为外部工具坏了而反复重试（与 corpusOf「这仓能读不能搜」同一条纪律）
+          // 照实说额度用完了，不写成工具故障
           messages.push({ role: "tool", toolCallId: call.id, content: `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。` });
           continue;
         }
         externalCalls += 1;
-        // 外部 server 是别人写的程序：call 里任何失败都已转成一句实话，这里不允许抛出（抛出会掀掉整个回合）
         const outcome = await input.external.call(call.name, call.argumentsJson);
         mcpCalls.push(outcome.audit);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
@@ -507,10 +472,9 @@ function readQueryHint(argumentsJson: string): string {
   }
 }
 
-/** micro_compact（借鉴 Claude Code s06 的分级压缩）：发给下一轮前，只保留最近一轮的 tool 结果原文，
-    更早轮次的 tool 内容替换为短占位符（模型忘了可再次调用 read_file 重取——结果可再生，不值得逐轮重付）；
-    早期 assistant 的 reasoningContent 一并丢弃（后续轮不需要重放思考，推理 token 是账单大头）。
-    最近一轮 assistant 的 reasoningContent 保留——部分协议要求 tool 调用轮回传 reasoning_content。 */
+/** micro_compact：发给下一轮前，只保留最近一轮的 tool 结果原文，更早轮次的 tool 内容压成短占位符——
+    读取结果可再生，模型忘了可以再调一次 read_file，不值得逐轮重付。
+    早期 assistant 的 reasoningContent 一并丢弃（推理 token 是账单大头）；最近一轮保留，部分协议要求 tool 调用轮回传。 */
 export function compactToolHistory(messages: LlmMessage[], placeholderChars = 240): void {
   let lastAssistant = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {

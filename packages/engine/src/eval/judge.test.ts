@@ -3,7 +3,7 @@ import type { JournalEvent } from "@codebase-tutor/shared";
 import { assembleJudgeTurns, axesFor, buildJudgePrompt, parseJudgeResponse, priorTurns, type JudgeTurn } from "./judge.js";
 
 /**
-  第 3 刀纯逻辑层单测：零 token。守的是判分口径本身——
+  判分纯逻辑层单测：零 token。守判分口径本身——
   证据核验（逐字/压平空白）、驳回记 0、维度按场景伸缩、前情只取同会话最近 2 轮、teach 约束跟 style_shift 快照走。
 */
 
