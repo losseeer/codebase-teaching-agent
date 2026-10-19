@@ -161,12 +161,17 @@ describe("出厂预置技能播种", () => {
     expect(readSkill("tutor-cost-audit", "SKILL.md", [target])).toContain("我的做法");
   });
 
-  it("引擎包里的出厂目录解析得到，且里面只有 README 时装 0 份、也不报错", () => {
+  it("引擎包里的出厂目录解析得到，装的正是那四份可视化技能（一份通用 + 三份图类型）", () => {
     const found = bundledSkillSource();
     expect(found, "解析不到 packages/engine/skills ⇒ 播种会静默什么都不做").toBeTruthy();
     expect(found!.endsWith(join("packages", "engine", "skills"))).toBe(true);
-    const empty = installBundledSkills({ sourceDir: found, targetDir: join(seedRoot, "empty-target") });
-    expect(empty.installed).toEqual([]);
-    expect(empty.skipped).toEqual([]);
+    const seeded = installBundledSkills({ sourceDir: found, targetDir: join(seedRoot, "bundled-target") });
+    expect(seeded.skipped, "出厂技能形状不合规就是给自己留一条永久噪音").toEqual([]);
+    expect(seeded.installed.sort()).toEqual(["diagram-architecture", "diagram-flow", "diagram-sequence", "project-visualization"]);
+    // 清单每轮都进上下文：这一句钉住「出厂技能不能写成解释性长文」
+    for (const skill of listSkills([join(seedRoot, "bundled-target")]).skills) {
+      expect(skill.description.length, skill.name).toBeLessThan(300);
+      expect(readSkill(skill.name, "SKILL.md", [join(seedRoot, "bundled-target")]), skill.name).toContain("证据");
+    }
   });
 });
