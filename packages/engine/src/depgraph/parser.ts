@@ -215,8 +215,17 @@ function unwrap(node: SyntaxNode): SyntaxNode | undefined {
   return undefined;
 }
 
+/**
+  一个声明节点的名字：优先 `name` 字段，C 系没有就沿 declarator 链找。
+  符号表与控制流图共用这一份——两处各写一遍就会漂（C 的函数名不在独立字段里，漏了兜底
+  就等于整个仓的 C 函数「没有名字」）。
+*/
+export function declarationNameOf(node: SyntaxNode): string | undefined {
+  return node.childForFieldName("name")?.text.trim() || declaratorName(node);
+}
+
 function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): SymbolInfo | undefined {
-  const name = node.childForFieldName("name")?.text.trim() || declaratorName(node);
+  const name = declarationNameOf(node);
   if (!name) return undefined;
   const line = node.startPosition.row + 1;
   return {

@@ -43,7 +43,7 @@ describe("静态产物落库", () => {
       saveFileFacts(db, repositoryId, collectFileFacts(root, files, symbols));
       const facts = db.listFileFacts<CfgFileFact>(repositoryId, "cfg");
       expect([...facts.keys()]).toEqual(["src/alpha.ts", "src/beta.ts"]);
-      expect(facts.get("src/alpha.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "branch", "straight", "exit", "straight", "exit"]);
+      expect(facts.get("src/alpha.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "branch", "straight", "straight", "exit"]);
       expect(facts.get("src/beta.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "exit"]);
       expect(facts.get("src/alpha.ts")?.version).toBe(FACTS_VERSION);
       const coverage = db.factCoverage(repositoryId);

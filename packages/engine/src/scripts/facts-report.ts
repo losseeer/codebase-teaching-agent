@@ -24,7 +24,9 @@ if (!repositoryPath) throw new Error("用法：pnpm facts:report /absolute/path/
 await loadSymbolParser();
 const backend = parseBackendStatus();
 
-const db = new DatabaseSync(join(repositoryPath, ".tutor", "tutor.db"), { readOnly: true });
+const databaseFile = join(repositoryPath, ".tutor", "tutor.db");
+if (!existsSync(databaseFile)) throw new Error(`打不开 ${databaseFile}：这个路径下没有 .tutor/tutor.db（注意 pnpm --filter 会把工作目录换到 packages/engine，请传绝对路径）`);
+const db = new DatabaseSync(databaseFile, { readOnly: true });
 const state = db.prepare("SELECT index_json FROM repository_state WHERE index_json IS NOT NULL LIMIT 1").get() as { index_json: string } | undefined;
 db.close();
 if (!state) throw new Error("这个仓还没有索引产物（.tutor/tutor.db 里没有 index_json）：先导入。");

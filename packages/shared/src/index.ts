@@ -989,6 +989,8 @@ export interface CfgFunction {
   exitBlocks: number[];
   /** 圈复杂度 = 判定节点数 + 1（分支、循环、switch 分支、catch 各计一格） */
   complexity: number;
+  /** 接不上线的构造（`goto` 找不到标签、`break` 在循环外）：如实记一条，不猜一条边出来 */
+  notes?: string[];
   truncated?: boolean;
 }
 

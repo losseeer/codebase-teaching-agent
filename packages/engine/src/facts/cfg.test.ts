@@ -162,24 +162,24 @@ describe("switch 与异常", () => {
 });
 
 describe("不可达与不撒谎", () => {
-  it("return 之后的语句仍成一格，但没有入边——被丢掉和「走不到」在产物里是两件事", () => {
-    const graph = only(`function ten(a: number) {
-  if (a) { return 1; }
-  return 2;
+  it("return 之后的语句仍成一格，但没有任何入边——「丢掉」和「走不到」在产物里是两件事", () => {
+    const graph = only(`function ten() {
+  work();
+  return 1;
+  const dead = 2;
 }`, "ten");
-    const returns = graph.blocks.filter((block) => block.kind === "exit");
-    expect(returns.length).toBeGreaterThanOrEqual(2);
+    const entry = graph.blocks.find((block) => block.kind === "entry");
+    const detached = graph.blocks.filter((block) => !graph.edges.some((edge) => edge.to === block.id) && block.id !== entry?.id);
+    expect(detached, `应有一格走不到的死代码：${JSON.stringify(graph.blocks)}`).toHaveLength(1);
+    expect(detached[0].statements).toContain("lexical_declaration");
+    expect(graph.blocks.find((block) => block.kind === "exit")?.statements).toContain("return_statement");
   });
 
-  it("没有控制流规则的语言：backend 为 none、函数为空、skipped 必须点名（不许交空图冒充「都没分支」）", () => {
-    const code = `def f(a):
-    if a:
-        return 1
-    return 2`;
-    const fact = cfg(code, "sample.py");
+  it("没有对应语法的文件：backend 为 none、函数为空、skipped 必须点名（不许交空图冒充「都没分支」）", () => {
+    const fact = cfg(`def f(a):\n    if a:\n        return 1\n    return 2`, "sample.rb");
     expect(fact.backend).toBe("none");
     expect(fact.functions).toEqual([]);
-    expect(fact.skipped?.[0]?.reason).toContain("python");
+    expect(fact.skipped?.[0]?.reason, `实际 skipped=${JSON.stringify(fact.skipped)}`).toContain("语法树");
   });
 
   it("符号表里有、语法树里对不上的函数进 skipped，不静默消失", () => {
@@ -212,5 +212,300 @@ describe("不可达与不撒谎", () => {
     const graph = only(`function big(x: number) {\n  ${body}\n}`, "big");
     expect(graph.truncated).toBe(true);
     expect(graph.blocks.length).toBeLessThanOrEqual(200);
+  });
+});
+
+const lines = (...rows: string[]): string => rows.join("\n");
+
+function graphOf(path: string, code: string, name: string): CfgFunction {
+  const symbols = extractSymbolsFromAst(path, code) ?? [];
+  const fact = buildFileCfg(path, code, symbols, languageCapabilitiesOf(path).language);
+  expect(fact.backend, `${path} 该出图，实际 skipped=${JSON.stringify(fact.skipped)}`).toBe("ast");
+  const graph = fact.functions.find((item) => item.name === name);
+  if (!graph) throw new Error(`${path} 没画出 ${name}：画出来的是 ${fact.functions.map((item) => item.name).join(" / ") || "无"}`);
+  return graph;
+}
+
+/** 每张图都要过的形状自检：图自己不矛盾，才有资格谈对不对。 */
+function expectWellFormed(graph: CfgFunction): void {
+  const ids = graph.blocks.map((block) => block.id);
+  expect(new Set(ids).size, `${graph.name}：块 id 不能重复`).toBe(ids.length);
+  expect(ids).toContain(0);
+  for (const edge of graph.edges) {
+    expect(ids, `${graph.name}：边 ${edge.from}→${edge.to} 指向了不存在的块`).toContain(edge.from);
+    expect(ids, `${graph.name}：边 ${edge.from}→${edge.to} 指向了不存在的块`).toContain(edge.to);
+  }
+  const reached = new Set<number>([0]);
+  let frontier = [0];
+  while (frontier.length) {
+    const next: number[] = [];
+    for (const id of frontier) for (const edge of graph.edges) if (edge.from === id && !reached.has(edge.to)) { reached.add(edge.to); next.push(edge.to); }
+    frontier = next;
+  }
+  expect([...reached].sort((a, b) => a - b), `${graph.name}：有从入口走不到的块（这份样例里没有死代码，出现即画错）`).toEqual([...ids].sort((a, b) => a - b));
+  expect(graph.complexity).toBeGreaterThanOrEqual(1);
+}
+
+describe("逐语言的构造覆盖", () => {
+  // 样例源码放在模块层，**建图必须留在 it 里面**：describe 体在收集阶段就跑，
+  // 那时 `beforeAll` 的语法解析器还没加载，建出来的图全是「语法树不可用」
+  const PYTHON = lines(
+    "def pick(a):",
+    "    if a:",
+    "        g()",
+    "    elif a > 2:",
+    "        h()",
+    "    else:",
+    "        return 0",
+    "    for i in xs:",
+    "        if i == 1:",
+    "            break",
+    "    else:",
+    "        tail()",
+    "    while a < 9:",
+    "        a += 1",
+    "        continue",
+    "    try:",
+    "        risky()",
+    "    except ValueError as e:",
+    "        fix()",
+    "    except Exception:",
+    "        pass",
+    "    finally:",
+    "        done()",
+    "    with open('x') as fh:",
+    "        read(fh)",
+    "    raise ValueError('x')"
+  );
+
+  it("Python：elif 走 false 边、for-else 只在没 break 时进、两个 except 各一条异常边、with 体穿过", () => {
+    const python = graphOf("s.py", PYTHON, "pick");
+    expectWellFormed(python);
+    const branches = python.blocks.filter((block) => block.kind === "branch");
+    expect(branches.length).toBeGreaterThanOrEqual(2);
+    const elseEntry = python.blocks.filter((block) => block.statements.includes("elif_clause"));
+    expect(elseEntry.length, "elif 要留在图上（不是当成普通 else）").toBeGreaterThanOrEqual(1);
+    const forHead = python.blocks.find((block) => block.kind === "loop" && python.edges.some((edge) => edge.from === block.id && python.blocks.find((item) => item.id === edge.to)?.statements.includes("else")));
+    expect(forHead, "for-else：条件的 false 那一路要进 else 体").toBeDefined();
+    expect(python.blocks.filter((block) => block.kind === "handler")).toHaveLength(2);
+    expect(python.edges.filter((edge) => edge.kind === "exception").length).toBeGreaterThanOrEqual(2);
+    expect(python.edges.map((edge) => edge.kind)).toContain("finally");
+    expect(python.blocks.flatMap((block) => block.statements), "with 体里的语句不能丢").toContain("expression_statement");
+    expect(python.blocks.filter((block) => block.kind === "exit").map((block) => block.statements).flat()).toContain("raise_statement");
+  });
+
+  const JAVA_COLON = lines(
+    "class S {",
+    "  void colon(int a) {",
+    "    switch (a) {",
+    "      case 1: b();",
+    "      case 2: c(); break;",
+    "      default: d();",
+    "    }",
+    "  }",
+    "}"
+  );
+  const JAVA_ARROW = lines(
+    "class S {",
+    "  void arrow(int a) {",
+    "    switch (a) {",
+    "      case 1, 2 -> b();",
+    "      default -> c();",
+    "    }",
+    "  }",
+    "}"
+  );
+
+  it("Java：冒号形式少 break 要掉进下一组，箭头形式不许掉", () => {
+    const colonSwitch = graphOf("S.java", JAVA_COLON, "colon");
+    const arrowSwitch = graphOf("S.java", JAVA_ARROW, "arrow");
+    expectWellFormed(colonSwitch);
+    expectWellFormed(arrowSwitch);
+    const groups = colonSwitch.blocks.filter((block) => block.statements.includes("switch_block_statement_group"));
+    expect(groups.length).toBeGreaterThanOrEqual(2);
+    const groupIds = new Set(groups.map((block) => block.id));
+    expect(colonSwitch.edges.some((edge) => edge.kind === "next" && groupIds.has(edge.from) && groupIds.has(edge.to)), "case 1 没 break ⇒ 组与组之间要有 fallthrough 边").toBe(true);
+    const rules = new Set(arrowSwitch.blocks.filter((block) => block.statements.includes("switch_rule")).map((block) => block.id));
+    expect(arrowSwitch.edges.some((edge) => edge.kind === "next" && rules.has(edge.from) && rules.has(edge.to)), "箭头形式不该有 fallthrough").toBe(false);
+  });
+
+  const JAVA_REST = lines(
+    "class S {",
+    "  int rest(int a) {",
+    "    outer: for (int i = 0; i < 3; i++) { if (i == 1) break outer; }",
+    "    do { a++; } while (a < 5);",
+    "    for (String k : xs) { use(k); }",
+    "    try (AutoCloseable c = open()) { risky(); } catch (Exception e) { fix(); } finally { done(); }",
+    "    throw new RuntimeException();",
+    "  }",
+    "}"
+  );
+
+  it("Java：带资源的 try、do-while、标签 break 都接得上", () => {
+    const javaRest = graphOf("S.java", JAVA_REST, "rest");
+    expectWellFormed(javaRest);
+    expect(javaRest.blocks.some((block) => block.kind === "handler")).toBe(true);
+    expect(javaRest.edges.map((edge) => edge.kind)).toContain("finally");
+    const head = javaRest.blocks.find((block) => block.kind === "loop" && javaRest.edges.some((edge) => edge.from === block.id && edge.kind === "true"));
+    expect(head, "do-while 的条件块要能回到体").toBeDefined();
+    expect(javaRest.blocks.flatMap((block) => block.statements), "标签块要留下名字").toContain("label:outer");
+    expect(javaRest.blocks.filter((block) => block.kind === "exit").map((block) => block.statements).flat()).toContain("throw_statement");
+  });
+
+  const GO = lines(
+    "package main",
+    "",
+    "func f(a int) int {",
+    "    for {",
+    "        if stop() { break }",
+    "    }",
+    "    for i := 0; i < 3; i++ { if i == 1 { continue } }",
+    "    switch a {",
+    "    case 1:",
+    "        b()",
+    "        fallthrough",
+    "    case 2:",
+    "        c()",
+    "    }",
+    "    select {",
+    "    case v := <-ch:",
+    "        use(v)",
+    "    default:",
+    "        other()",
+    "    }",
+    "    goto end",
+    "end:",
+    "    return a",
+    "}"
+  );
+
+  it("Go：无条件的 for 没有 false 边、fallthrough 与 goto 标签都接得上、select 两臂", () => {
+    const go = graphOf("s.go", GO, "f");
+    expectWellFormed(go);
+    const endless = go.blocks.filter((block) => block.kind === "loop" && !go.edges.some((edge) => edge.from === block.id && edge.kind === "false"));
+    expect(endless.length, "`for {}` 不该有条件不成立那条边").toBeGreaterThanOrEqual(1);
+    const arms = go.blocks.filter((block) => block.statements.some((type) => type === "expression_case" || type === "default_case" || type === "communication_case"));
+    expect(arms.length, "switch 两臂 + select 两臂").toBeGreaterThanOrEqual(4);
+    const caseArms = new Set(go.blocks.filter((block) => block.statements.includes("expression_case")).map((block) => block.id));
+    expect(go.edges.some((edge) => edge.kind === "next" && caseArms.has(edge.from) && caseArms.has(edge.to)), "fallthrough 那条边必须在").toBe(true);
+    expect(go.blocks.flatMap((block) => block.statements), "goto 要落到标签块").toContain("label:end");
+    const gotoEdge = go.edges.find((edge) => go.blocks.find((block) => block.id === edge.from)?.statements.includes("label:end") === false && edge.to === go.blocks.find((block) => block.statements.includes("label:end"))?.id);
+    expect(gotoEdge, "goto end ⇒ 一条指向标签块的边").toBeDefined();
+    expect(go.notes ?? [], `Go 样例不该有接不上的东西：${JSON.stringify(go.notes)}`).toEqual([]);
+  });
+
+  const RUST = lines(
+    "fn f(a: i32) -> i32 {",
+    "    for i in 0..3 { if i == 1 { break; } else { continue; } }",
+    "    while a < 9 { a += 1; }",
+    "    loop { if q() { break; } }",
+    "    match a {",
+    "        1 => b(),",
+    "        2 | 3 => c(),",
+    "        _ if a > 9 => d(),",
+    "        _ => e(),",
+    "    }",
+    "    let v = risky()?;",
+    "    return v;",
+    "}"
+  );
+
+  it("Rust：match 各臂之间不掉下去、`?` 给一条到出口的异常边", () => {
+    const rust = graphOf("s.rs", RUST, "f");
+    expectWellFormed(rust);
+    const arms = new Set(rust.blocks.filter((block) => block.statements.includes("match_arm")).map((block) => block.id));
+    expect(arms.size).toBeGreaterThanOrEqual(3);
+    expect(rust.edges.some((edge) => edge.kind === "next" && arms.has(edge.from) && arms.has(edge.to)), "match 臂之间不该有 fallthrough").toBe(false);
+    const gate = rust.blocks.find((block) => block.statements.includes("propagate"));
+    expect(gate, `问号传播要把所在语句升成一个判定块：${JSON.stringify(rust.blocks.map((block) => block.statements))}`).toBeDefined();
+    const exitIds = new Set(rust.exitBlocks);
+    expect(rust.edges.some((edge) => edge.from === gate?.id && edge.kind === "exception" && exitIds.has(edge.to)), "`?` 的 Err 一路要到出口").toBe(true);
+  });
+
+  const CSHARP = lines(
+    "class S {",
+    "  int F(int a) {",
+    "    foreach (var k in Xs) { Use(k); }",
+    "    do { a++; } while (a < 5);",
+    "    switch (a) {",
+    "      case 1:",
+    "      case 2: B(); break;",
+    "      default: D(); break;",
+    "    }",
+    "    try { Risky(); } catch (Exception e) when (e.Data != null) { Fix(); } finally { Done(); }",
+    "    checked { Work(); }",
+    "    return a;",
+    "  }",
+    "}"
+  );
+
+  it("C#：switch 段之间不掉下去、catch 的 when 条件留下、checked 体穿过", () => {
+    const csharp = graphOf("S.cs", CSHARP, "F");
+    expectWellFormed(csharp);
+    const sections = new Set(csharp.blocks.filter((block) => block.statements.includes("switch_section")).map((block) => block.id));
+    expect(sections.size).toBeGreaterThanOrEqual(2);
+    expect(csharp.edges.some((edge) => edge.kind === "next" && sections.has(edge.from) && sections.has(edge.to))).toBe(false);
+    expect(csharp.blocks.filter((block) => block.kind === "handler").map((block) => block.statements).flat()).toContain("catch_filter_clause");
+    expect(csharp.blocks.flatMap((block) => block.statements), "checked 块里的语句不能丢").toContain("expression_statement");
+  });
+
+  const C = lines(
+    "int f(int a) {",
+    "    for (int i = 0; i < 3; i++) { if (i == 1) break; else continue; }",
+    "    while (a < 9) { a++; }",
+    "    do { a++; } while (a < 5);",
+    "    switch (a) {",
+    "      case 1: b();",
+    "      case 2: c(); break;",
+    "      default: d();",
+    "    }",
+    "    goto end;",
+    "end:",
+    "    return a;",
+    "}"
+  );
+
+  it("C：case 掉下去、向前 goto 落到标签块（函数名从 declarator 里取，取不到就没图）", () => {
+    const c = graphOf("s.c", C, "f");
+    expectWellFormed(c);
+    const cases = new Set(c.blocks.filter((block) => block.statements.includes("case_statement")).map((block) => block.id));
+    expect(cases.size).toBeGreaterThanOrEqual(2);
+    expect(c.edges.some((edge) => edge.kind === "next" && cases.has(edge.from) && cases.has(edge.to)), "case 1 没 break ⇒ 要有 fallthrough 边").toBe(true);
+    expect(c.blocks.flatMap((block) => block.statements)).toContain("label:end");
+    expect(c.notes ?? [], `C 样例不该有接不上的东西：${JSON.stringify(c.notes)}`).toEqual([]);
+  });
+
+  const CPP = lines(
+    "class S {",
+    " public:",
+    "  int f(int a) {",
+    "    for (auto& k : xs) { use(k); }",
+    "    try { risky(); } catch (const E& e) { fix(); } catch (...) { swallow(); }",
+    "    switch (a) { case 1: throw std::runtime_error(\"x\"); }",
+    "    return a;",
+    "  }",
+    "};"
+  );
+
+  it("C++：范围 for、两个 catch、switch 里的 throw 都接得上", () => {
+    const cpp = graphOf("S.cpp", CPP, "f");
+    expectWellFormed(cpp);
+    expect(cpp.blocks.filter((block) => block.kind === "handler")).toHaveLength(2);
+    expect(cpp.blocks.filter((block) => block.kind === "exit").map((block) => block.statements).flat()).toContain("throw_statement");
+    expect(cpp.blocks.some((block) => block.kind === "loop")).toBe(true);
+  });
+
+  it("同一份 TS 表也服务 .vue：脚本块里的分支照样出图", () => {
+    const vue = graphOf("S.vue", lines(
+      "<script setup lang=\"ts\">",
+      "function pick(a: number) {",
+      "  if (a) { return 1; }",
+      "  return 0;",
+      "}",
+      "</script>",
+      "<template><div /></template>"
+    ), "pick");
+    expect(vue.blocks.map((block) => block.kind)).toContain("branch");
+    expect(vue.startLine).toBeGreaterThanOrEqual(2);
   });
 });
