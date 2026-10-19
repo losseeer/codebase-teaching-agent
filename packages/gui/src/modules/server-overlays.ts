@@ -3,19 +3,17 @@ import { showToast } from "./toast";
 import { clearLegacyTierOverrides, readLegacyTierOverrides } from "./local-state";
 
 /**
-  人工修正走服务端（2026-10-16）。存在这里的只有「发给引擎」这一件事：
-  校验、写盘、审计、通知都在引擎侧的 `commitOverride` 里，界面**不自己算一份再合并**——
-  两边各判一次，就会出现「界面以为改成了、图上还是旧的」。
+  人工修正档位走服务端：校验、写盘、审计、通知都在引擎侧 `commitOverride`，界面不自己算一份再合并。
 */
 
-/** 旧版本留在浏览器里的手动改档：第一次连上这个仓时一次性上报，成功后清本地键（不留双写）。 */
+/** 浏览器里遗留的手动改档：首次连上该仓时一次性上报，成功后清本地键（不双写）。 */
 export async function migrateLegacyTierOverrides(repositoryId: string): Promise<void> {
   const legacy = readLegacyTierOverrides(repositoryId);
   const ids = Object.keys(legacy);
   if (!ids.length) return;
   try {
     const current = await api.getOverlays(repositoryId);
-    // 服务端已经有档位就什么都不做：说明这台浏览器不是第一次迁（或另一台机器先迁了），旧值不该盖掉新值
+    // 服务端已有档位时只清本地键：本地值不覆盖服务端值
     if (Object.keys(current.overlays.modules?.tier ?? {}).length) {
       clearLegacyTierOverrides(repositoryId);
       return;
@@ -24,6 +22,6 @@ export async function migrateLegacyTierOverrides(repositoryId: string): Promise<
     clearLegacyTierOverrides(repositoryId);
     showToast(`已同步 ${ids.length} 处改档`);
   } catch {
-    // 迁不动就不迁：本地值还在，下次再试。这条不弹错误——用户在用功能，不该被一条后台搬家打断
+    // 失败则保留本地值下次再试；后台迁移不弹错误
   }
 }

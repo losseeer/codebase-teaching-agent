@@ -2,18 +2,16 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Icon } from "./icons";
 
 /**
-  共用的「下拉选择器」：触发器一行写完**区名 + 当前选中项 + 数量**，展开后是定高可滚的选项面板。
-  用在模块分级（主链路/基础设施/外围/自建）与流程视图的入口选择上——这两处的列表都长到不能平铺，
-  但都不需要搜索：分级本身就是入口，选错区了再开另一个区，成本比打字低。
+  共用的「下拉选择器」：触发器一行写完区名 + 当前选中项 + 数量，展开后是定高可滚的选项面板。
+  用在模块分级与流程视图的入口选择上——列表长到不能平铺，但都不需要搜索。
 
-  开合状态由调用方持有（`open` / `onOpenChange`）：同级有多个下拉时要「同时只开一个」，
-  组件自己管 state 就协调不了（ModulesPane 用 openKey，FlowMap 只有一个下拉所以不必协调）。
+  开合状态由调用方持有（`open` / `onOpenChange`）：同级有多个下拉时要「同时只开一个」，组件自己管 state 就协调不了。
   */
 export interface DropdownOption {
   value: string;
   /** 主文案：模块名或入口名 */
   label: string;
-  /** 次行（小字）：文件路径这类「选中前不必看清、选中后要能核对」的信息 */
+  /** 次行小字：选中前不必看清、选中后要能核对的信息（如文件路径） */
   detail?: string;
   /** 触发器与选项右侧的计数徽章 */
   count?: number;

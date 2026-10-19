@@ -2,13 +2,12 @@ import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@
 
 /**
   画布的几何与文案口径（纯函数，无 JSX）：`DiagramCanvas` 与 `CoursePage` 共用。
-  两条与原型不同的定案（**节点高度是量出来的**——边的端点按量到的盒子算中心；**视野由调用方持有**——
-  只有「打开图 / 恢复旧版 / 点 ⤢ / 内容变空」四件事让它重算，重渲染不动它）判据见 `DiagramCanvas` 的头注释。
+  「节点高度靠量」「视野由调用方持有」两条判据见 `DiagramCanvas` 的头注释。
 */
 
-/** 原型 `.dg-node` 的定宽；高度不写死（见上）。 */
+/** 节点定宽；高度不写死（靠量，见上）。 */
 export const NODE_W = 132;
-/** 量不到盒子时的兜底高度（原型 min-height）。 */
+/** 量不到盒子时的兜底高度。 */
 export const NODE_H = 48;
 /** 世界层最小尺寸：网格与边的坐标系铺到这里，节点再往右下拖就自动扩（`.dg-world` 的 inline 尺寸）。 */
 export const WORLD_MIN_W = 2400;
@@ -39,8 +38,7 @@ export const DEFAULT_VIEW: View = { x: 40, y: 20, z: 1 };
 export const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 /**
-  边级可信度三档的说法。`ORIGIN_SHORT` 上图例与抽屉都要用，措辞只在这里定一次
-  （界面别处不许再抄一份解释——同屏两遍就是冗余）。
+  边级可信度三档的说法。`ORIGIN_SHORT` 图例与抽屉都用，措辞只在这里定一次。
 */
 export const ORIGIN_SHORT: Record<DiagramEdgeOrigin, string> = {
   static: "依赖图可证明",
@@ -102,7 +100,7 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
 
 /**
   内容包围盒（含分组框）。空图返回 null，由调用方退回默认视野。
-  节点按量到的尺寸算右下角，所以长标签的节点不会被当成 48 高。
+  节点按量到的尺寸算右下角。
 */
 export function boundsOf(body: DiagramBody, boxes: NodeBoxes): { minX: number; minY: number; maxX: number; maxY: number } | null {
   if (!body.nodes.length && !body.groups.length) return null;
@@ -155,7 +153,7 @@ export function zoomAt(view: View, anchor: { x: number; y: number }, factor: num
   return { z, x: anchor.x - (anchor.x - view.x) * (z / view.z), y: anchor.y - (anchor.y - view.y) * (z / view.z) };
 }
 
-/** 便签正文在画布上露多少字：超出就交给抽屉，节点不变成段落阅读器。 */
+/** 便签正文在画布上露多少字：超出交给抽屉。 */
 export const NOTE_TEXT_PREVIEW = 42;
 
 export function notePreview(text: string): string {
@@ -163,7 +161,7 @@ export function notePreview(text: string): string {
   return oneLine.length > NOTE_TEXT_PREVIEW ? `${oneLine.slice(0, NOTE_TEXT_PREVIEW)}…` : oneLine;
 }
 
-/** 节点上的 sub 缺失时的显示口径：便签就是便签，模块节点没写角色就什么都不补（别替引擎编）。 */
+/** 节点 sub 缺失时的显示口径：便签回落到「便签」，模块节点不补字。 */
 export function subLineOf(node: DiagramNode): string {
   if (node.kind === "note") return node.sub ?? "便签";
   return node.sub ?? "";

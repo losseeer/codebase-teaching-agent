@@ -8,7 +8,7 @@ function fileTail(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
-/** 节点在课程树里的落点读数。四种状态各有各的一句话——**查不到就说查不到，不替 agent 圆场**。 */
+/** 节点在课程树里的落点读数。四种状态各有各的一句话：查不到就说查不到。 */
 export type NodeResolution =
   | { state: "ok"; node: CourseNode }
   | { state: "stale"; reason: string }
@@ -37,9 +37,8 @@ function evidenceLine(edge: DiagramEdge): string {
 }
 
 /**
-  节点抽屉（原型 `nodeDrawerHtml`）：说明 / 关联文件 / 出边 / 两个动作 / 那行权限说明。
-  它是**读数面板**，不是编辑器：这里没有任何改结构的入口（加删节点、连线只走对话里的 agent），
-  位置也不在这一格——拖动直接发生在画布上。
+  节点抽屉：说明 / 关联文件 / 出边 / 两个动作 / 那行权限说明。
+  它是读数面板、不是编辑器：这里没有改结构的入口（加删节点、连线只走对话里的 agent），位置也不在这一格。
 */
 export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenFile, onGotoTeach, onBind }: {
   node: DiagramNode;
@@ -130,7 +129,7 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
           <button type="button" className="btn btn-ghost btn-sm" title="把这一格设为对话的作用域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
 
-        {/* 权限那一行只在这里说一次（画布上不重复同一段话）：结构归 agent，几何归你。 */}
+        {/* 权限说明只在这一处（画布不重复）：结构归 agent，几何归你。 */}
         <p className="dg-drawer-foot">
           <span>加删节点、连线：在对话里说。</span>
           <span>拖动位置：自由，且不存版本。</span>

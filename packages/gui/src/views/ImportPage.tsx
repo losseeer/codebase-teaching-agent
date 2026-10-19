@@ -7,18 +7,14 @@ import { Icon } from "../ui/icons";
 import { dateText } from "./helpers";
 import { PageTopbar } from "./WorkspaceChrome";
 
-/**
-  导入仓库页（对齐 docs/ui-prototype 的 `importPage`）：绝对路径 → 分相进度 → 成本报告 → 仓库地址簿。
-  完成后通过 `onImported` 把 workspace 交给 App，再跳宏观设计。
-
-  这里**必须**能直接切到地址簿里已导入的仓：侧栏收起时那个全局切换器不在视野内，
-  而这一页是唯一还能改工作区的地方——只给一个路径输入框等于逼人重新填绝对路径。
- */
+// 导入仓库页：绝对路径 → 分相进度 → 成本报告 → 仓库地址簿。
+// 完成后通过 `onImported` 把 workspace 交给 App，再跳宏观设计。
+// 这一页是唯一还能改工作区的地方（侧栏收起时全局切换器不在视野内），所以必须能直接切到地址簿里已导入的仓。
 
 interface Props {
   onImported: (workspace: Workspace) => void;
   workspace: Workspace | null;
-  /** 引擎地址簿（App 持有，避免这页再拉一次同份清单） */
+  /** 引擎地址簿（App 持有，这一页不再拉一次同份清单） */
   catalog: RepositoryCatalogEntry[];
   /** 切到地址簿里的另一个仓（挂载成功由 App 负责换工作区并跳转） */
   onSwitchRepository: (repositoryId: string) => void;
@@ -26,7 +22,7 @@ interface Props {
   onOpenRepository: () => void;
 }
 
-/** 导入的分相清单：与引擎 ImportJob.phase 同一口径，进度条只画「现在在哪一相」。 */
+/** 导入的分相清单：与引擎 ImportJob.phase 同一口径。 */
 const PHASES: { key: ImportJob["phase"]; label: string }[] = [
   { key: "queued", label: "排队中" },
   { key: "indexing", label: "索引文件与 Git 历史" },
@@ -42,26 +38,22 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [error, setError] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   const navigate = useNavigate();
-  /** 预算闸门是否失效（引擎按进程环境给出，地址簿每条都带同一句）——取一条代表即可，与具体仓库无关 */
+  /** 预算闸门失效提示：引擎按进程环境给出、地址簿每条都带同一句，取一条代表即可。 */
   const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
-  /** 工作区切换只记一次：完成态可能被轮询/广播重复渲染，append-only 日志里重复记会造出假轨迹。 */
+  /** 工作区切换只记一次：完成态会被轮询与广播重复渲染。 */
   const switchLogged = useRef(false);
 
-  // 进度更新主通道 = /api/events 全局 SSE 事件流（引擎每个进度事件都 publish import.progress），读流与重连见
-  // `subscribeServerEvents`；5s 轮询只是兜底——事件流断线 / 丢事件时靠全量 GET 追上终态，本身不承担实时性。
+  // 进度主通道是 /api/events 的 SSE 事件流（读流与重连见 `subscribeServerEvents`）；
+  // 5s 轮询只做断线兜底，靠全量 GET 追上终态，不承担实时性。
   const jobId = job?.id;
-  /** 终态判定一处收尾：轮询/按钮禁用都用它，不再各写一份 ["completed","failed"] */
+  /** 终态判定的唯一出口：轮询与按钮禁用共用它。 */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
   const jobActive = Boolean(job && !isSettled(job.phase));
   useEffect(() => {
     if (!jobActive || !jobId) return;
     const stop = subscribeServerEvents((event) => {
       if (event.type !== "import.progress") return;
-      /**
-        以前这一行是 `event.payload as unknown as ImportJob`（双重硬转）：引擎换了进度字段，
-        界面会拿着 `undefined` 的 phase 继续画进度条，既不断也不报错。现在过一遍契约，
-        读不懂就在页面上说实话——这一帧是导入进度的唯一实时通道，静默等于骗人。
-        */
+      // 进度帧过一遍契约再落地：这是导入进度的唯一实时通道，读不懂就在页面上说明，不静默继续画进度条。
       try {
         const progress = checkContract(importJobSchema, event.payload, "import.progress");
         if (progress.id === jobId) setJob(progress);
@@ -125,7 +117,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 {commentMode ? <span className="badge badge-warn">更费 token</span> : null}
               </label>
             </div>
-            {/* 一句给结论，「为什么/怎么改」进悬停：第一屏不该读两段说明书 */}
+            {/* 正文一句结论，「为什么 / 怎么改」进悬停 */}
             <p className="field-note" title={commentMode
               ? "注释写得多的仓库里的中文概念词会一起进摘要，也因此更费 token。"
               : "想连注释一起摘要请在导入前切「详细导入」；导入后换口径需要重新导入。"}>{commentMode
@@ -162,7 +154,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                   <div className="card report-cell"><div className="num">{report.index.totalFiles}</div><div className="lbl">可分析文件</div></div>
                   <div className="card report-cell"><div className="num">{report.estimate.cachedFiles}</div><div className="lbl">摘要已缓存</div></div>
                   <div className="card report-cell"><div className="num">{(report.estimate.estimatedInputTokens / 1000).toFixed(1)}k</div><div className="lbl">预估输入 tokens</div></div>
-                  {/* 单价没配时金额恒为 0，这时候写 ¥0.00 是假读数 */}
+                  {/* 单价未配时金额恒为 0，写 ¥0.00 是假读数 */}
                   <div className="card report-cell"><div className="num">{report.estimate.estimatedCostUsd > 0 ? `¥${report.estimate.estimatedCostUsd.toFixed(2)}` : "未计价"}</div><div className="lbl">预估本次成本</div></div>
                 </div>
                 <div className="row">
@@ -179,15 +171,13 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 <div className="section-title">仓库地址簿 · {catalog.length} 个</div>
                 <span className="fs-11 faint" title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span>
               </div>
-              {/* 闸门失效是整个进程的事实，与哪条仓无关，所以只说一次。放在这一页是因为它是「花大钱之前」唯一的落点：
-                  成本监控页要有工作区才进得去，而第一次导入的人还没有工作区。 */}
+              {/* 闸门失效是进程级事实，与哪条仓无关，全页只说一次 */}
               {gateNotice ? <div className="banner banner-warn"><Icon name="alert" /><span className="banner-text">{gateNotice}</span></div> : null}
               <div className="addr-list">
                 {catalog.map((item) => {
                   const isCurrent = item.repositoryId === workspace?.repositoryId;
                   const verdict = item.freshness?.verdict;
-                  // 监听死了要说：这条决定「产物会不会自己跟上」，而挂载项存在时人只会以为它会。
-                  // 「被人为挂起」（编辑期免打扰）是另一件事：同为不自动跟上，一个是坏了要修、一个是自己按下的开关。
+                  // 挂起（用户按下的开关）与监听失败是两种状态：后者要修，都得在界面上说清。
                   const paused = item.mounted && item.watchPaused === true;
                   const watching = item.mounted && item.watching === false && !paused;
                   const meta = [

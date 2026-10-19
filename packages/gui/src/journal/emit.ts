@@ -3,10 +3,8 @@ import type { UiJournalEventType } from "./events";
 import { flushJournalQueue, queueJournalEvent } from "./transport";
 
 /**
-  唯一的 UI 事件发射入口：`emit(repositoryId, type, payload, { sessionId })`。repositoryId 显式传而不做全局单例：
-  视图本来就各自持有 workspace，显式传参让「这条事件属于哪个仓库」在调用点一眼可见，也避免全局态在切仓库时错位。
-  没有 repositoryId 时**不静默丢弃**：打一条 warning——缺事件的 UI 操作是设计漏洞，但「未挂载仓库」时确实无处可写，
-  所以要说出来而不是假装发过。
+  唯一的 UI 事件发射入口：`emit(repositoryId, type, payload, { sessionId })`。
+  repositoryId 显式传参、不做全局单例；缺失时打 warning 而不静默丢弃。
   */
 export function emit(
   repositoryId: string | null | undefined,
@@ -19,7 +17,7 @@ export function emit(
     return;
   }
   const post = { repositoryId, type, payload, ...(options.sessionId ? { sessionId: options.sessionId } : {}) };
-  // 排在串行队列末尾：先补发积压、再发本条，「顺序即 append 顺序」由 transport.ts 的单条链保证
+  // 排在串行队列末尾：先补发积压、再发本条，顺序即 append 顺序
   void queueJournalEvent(post);
 }
 

@@ -25,10 +25,8 @@ import {
 } from "./diagramView";
 
 /**
-  画布那些「量出来的」与「不替引擎编」的口径。
-  这一层全是纯函数，而它的错都是**看得见的错**：边画到空气里、空图被撑满整屏、
-  时间读数编出一个不存在的时刻、模块节点被补上界面自己想的角色小字。
-  拖动与渲染的时序要真浏览器才能验（那是另一回事），这里锁的是判据本身。
+  画布几何与读数口径都是纯函数。
+  拖动与渲染的时序要真浏览器才能验，这里锁的是判据本身。
  */
 
 const node = (id: string, x: number, y: number, kind: DiagramNode["kind"] = "module", sub?: string): DiagramNode => ({ id, kind, label: id, x, y, ...(sub === undefined ? {} : { sub }), ref: kind === "module" ? id : undefined });

@@ -17,13 +17,11 @@ import { courseModules, loadActiveModule, loadModuleOverrides, mergeModules, sav
 import { migrateLegacyTierOverrides } from "../modules/server-overlays";
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
-/**
-  代码教学工作区（对齐 docs/ui-prototype 的 `teachPage`，两栏）：
-  - 左 `.teach-side`：教学模块（主链路 / 基础设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
-  - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位（这一行为什么不照抄原型，见 `pickLine`）
-  - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
- */
-/** 推荐入口一屏先露这么多条，其余收进「显示更多」（规则归类常有几十条，全铺会把「仓库文件」挤出视野）。 */
+// 代码教学工作区（两栏）：
+// - 左 `.teach-side`：教学模块（主链路 / 基础设施 / 外围三组，档位只读）+ 推荐入口 + 仓库文件树
+// - 右 `.teach-main`：源码 tabs（≤5）+ 深色源码岛，点任意一行即定位（见 `pickLine`）
+// - 语言风格与线程管理在右侧 Agent 对话栏；chat / composer / 流式订阅由 AgentRail 拥有（共享 useScopedChat）
+/** 推荐入口一屏先露这么多条，其余收进「显示更多」。 */
 const ENTRY_PAGE = 8;
 
 export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
@@ -37,24 +35,21 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   const [tabs, setTabs] = useState<{ path: string; line: number }[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
-  /** palette 的键盘选中行（↑↓ 移动，Enter 打开这一行而不是第一条）。 */
+  /** palette 的键盘选中行（↑↓ 移动，Enter 打开这一行）。 */
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
   const layout = useLayout();
   /** 当前打开的源码 tab 路径（与 tabs 同步镜像，含 slice(-5) 淘汰）：判定「新开文件」还是「就地定位」。 */
   const openedPaths = useRef<string[]>([]);
-  /** 上一次自动定位过的锚点（`path:line`）。三视图常驻挂载 + StrictMode 下 effect 会在首挂载双跑，
-      没有这道闸就会对同一锚点重复拉源码、并把同一个 UI 动作记成两条 journal 事件
-      （`openedPaths` 在 setTabs 的 updater 里才更新，两次调用之间它还是空的，所以两边都会判成「新开文件」）。
-      只挡「同一锚点连发」，用户来回切节点仍会各记一条。 */
+  /** 上一次自动定位的锚点（`path:line`）：常驻挂载 + StrictMode 首挂载双跑会让同一锚点重复拉源码、重复记 journal。
+      只挡同一锚点连发，来回切节点仍各记一条。 */
   const lastAutoAnchor = useRef<string | null>(null);
   /** palette 结果列表容器（键盘 ↑↓ 时手动把它滚进可视区）。 */
   const paletteRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { saveModuleOverrides(repositoryId, overrides); }, [repositoryId, overrides]);
-  /** 选中项失效才回落：初次挂载取上次停的那个（按仓库记），模块被隐藏或树里没了也重选。
-      刻意不写 `activeModule || …`——空串既可能是「还没选」也可能是「刚切到一个空清单」，
-      后者被覆盖成第一项会让用户看到 chips 自己跳走。 */
+  /** 选中项失效才回落（初次挂载取上次停的那个，按仓库记）。
+      空串既可能是「还没选」也可能是「刚切到空清单」，不能一律覆盖成第一项。 */
   useEffect(() => {
     if (!modules.length) return;
     setActiveModule((current) => (modules.some((item) => item.id === current) ? current : loadActiveModule("teaching", repositoryId, modules)));
@@ -86,23 +81,22 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   };
 
   const anchor = t.selected?.anchors[0];
-  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5，原型同规则）+ 可选 toast 提示。
-      `open.toast` 控制是否弹提示（切 tab、自动定位都不该弹——用户已经看见视图变了，再 toast 是噪音），
-      `open.trigger` 把「手动打开 / 切节点自动带过来 / 点已开的 tab」三种来源分开记进 journal。
-      依赖只取 repositoryId——放整个 t（或任何每次渲染换引用的值）会让本回调每渲染换引用，
-      连带下方自动定位 effect 在 composer 每敲一个字符时重发一次 getSource（v0.6.1 修）。 */
+  /** 统一的源码加载入口：拉源码 + upsert 源码 tab（上限 5）+ 可选 toast。
+      `open.toast` 控制提示（切 tab 与自动定位不弹，视图已经变了），
+      `open.trigger` 区分「手动打开 / 切节点自动带过来 / 点已开的 tab」三种来源记进 journal。
+      依赖只取 repositoryId：放整个 t 会让本回调每次渲染换引用，自动定位 effect 随输入重发 getSource。 */
   const loadSource = useCallback(async (path: string, line: number, open: { note?: string; toast?: boolean; trigger?: "manual" | "auto" | "tab" } = {}): Promise<void> => {
     try {
       const next = await api.getSource(repositoryId, path, line);
       setSource(next);
-      // 新文件 = file_opened；已开过的文件只是换行定位 = line_located。两件事不能混记成一条。
-      // 判定用 ref 而非 tabs state：连续两次 loadSource 之间可能还没提交渲染，用 state 会重复判成「新文件」。
+      // 新文件记 file_opened，已开过的换行定位记 line_located，两条不混记。
+      // 判定用 ref 而非 tabs state：连续两次 loadSource 之间可能还没提交渲染。
       const isNewFile = !openedPaths.current.includes(path);
       setTabs((current) => {
         const tab = { path, line };
         const existing = current.find((item) => item.path === path);
         const nextTabs = (existing ? current.map((item) => (item.path === path ? tab : item)) : [...current, tab]).slice(-5);
-        // 在 updater 里同步镜像（同一 current 重复执行是幂等的），含淘汰——被挤出窗口的文件再打开应重新算「新开」
+        // 在 updater 里同步镜像（幂等），含淘汰：被挤出窗口的文件再打开重新算「新开」
         openedPaths.current = nextTabs.map((item) => item.path);
         return nextTabs;
       });
@@ -119,13 +113,12 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     const key = `${anchor.path}:${anchor.line}`;
     if (lastAutoAnchor.current === key) return;
     lastAutoAnchor.current = key;
-    // 首挂载自动定位不打 toast（三视图常驻挂载，隐藏视图的提示对用户是噪音）
     void loadSource(anchor.path, anchor.line, { toast: false, trigger: "auto" });
   }, [anchor?.path, anchor?.line, loadSource]);
 
-  // ⌘P / Ctrl+P 快速打开（原型源码面板的「⌘ P 搜索文件」）。
-  // 三视图常驻挂载：本组件在非教学工作区也活着，监听器必须按当前视图开关——
-  // 否则在宏观设计/练习页按 ⌘P 会被这里 preventDefault 丢弃，还打开一个看不见的面板（切回教学页才发现它开着）。
+  // ⌘P / Ctrl+P 快速打开。
+  // 三个工作区常驻挂载、靠 hidden 切换：本组件在非教学工作区也活着，键盘监听必须按当前视图开关，
+  // 否则在宏观设计或练习页按 ⌘P 会被这里 preventDefault 丢弃，还打开一个看不见的面板。
   const [searchParams] = useSearchParams();
   const isActiveWorkspace = (searchParams.get("workspace") ?? "map") === "teaching";
   useEffect(() => {
@@ -141,45 +134,39 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     return () => window.removeEventListener("keydown", onKey);
   }, [isActiveWorkspace]);
 
-  /** 当前模块能当「推荐入口」的文件：LLM 不可用时直接列这份，不再靠关键词猜。
-      树结构清单（已按 path 去重）在这里去掉文档——代码问答的入口必须是代码（同一判据引擎侧也有一条，§66）。
-      ⚠️ 左侧模块徽标那个「N 个文件」数的仍是完整清单：那是结构事实，不该跟着这条产品规则变。 */
+  /** 当前模块可当「推荐入口」的文件：去掉文档——代码问答的入口必须是代码（引擎侧同一判据）。
+      左侧模块徽标的「N 个文件」数的是完整清单：那是结构事实，不跟着这条产品规则变。 */
   const moduleEntryFiles = useMemo<ModuleEntry[]>(
     () => (modules.find((item) => item.id === activeModule)?.entries ?? []).filter((entry) => !isDocumentationPath(entry.path)),
     [modules, activeModule]
   );
 
-  /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），
-      只有 LLM 不可用 / 预算熔断 / 调用失败 / 返回空时才落到模块自己的文件清单。
-      两个坑（都实测踩过，下面 effect 里的注释别在这里复述）：
-      ① 回落态也必须记录状态，否则失败的模块会反复重试同一请求（engine 只缓存非空结果）；
-      ② 去重必须用 ref 而不是 state——把 entryState 放进依赖会让写入 loading 触发重跑、cleanup 判死唯一那次请求，永久 loading；
-      ③ 因此 effect 里不用 current/unmount 标志丢弃结果（StrictMode 双跑同理）。
-      key 带 repositoryId：换仓库后同一模块不会复用上一仓库的结果。 */
+  /** 推荐入口的三态：等 LLM 时不渲染任何入口（避免「先规则、后 LLM」的闪换），落到回退清单时也要记录状态。
+      key 带 repositoryId：换仓后同一模块不复用上一仓的结果。 */
   const [entryState, setEntryState] = useState<Record<string, { status: "loading" | "llm" | "files"; entries: SuggestedEntry[]; reason?: string }>>({});
   const requestedEntries = useRef<Set<string>>(new Set());
   const entryKey = `${repositoryId}:${activeModule}`;
-  /** 换仓：覆盖层按仓库分键要重读，推荐入口的记账也得清空（否则新仓沿用旧仓的 loading/结果）。 */
+  /** 换仓：覆盖层按仓库分键要重读，推荐入口的记账也要清空。 */
   useEffect(() => {
     setOverrides(loadModuleOverrides(repositoryId));
     setEntryState({});
     requestedEntries.current.clear();
-    // 旧版本把改档存在浏览器里，引擎完全不知道：第一次连上这个仓就搬一次家（幂等，搬完清本地键）
+    // 存在浏览器里的改档要搬进引擎（幂等，搬完清本地键）
     void migrateLegacyTierOverrides(repositoryId);
   }, [repositoryId]);
   useEffect(() => {
-    // 推荐入口是**花 token 的请求**：用户停在宏观设计时，隐藏的教学面板也曾替他点过一次 LLM
-    // （实测切一次仓就白烧两轮 map.entry-suggest）——闸门由 everVisible 把住，去重另有 ref 兜着。
+    // 推荐入口是花 token 的请求：闸门由 everVisible 把住。
+    // 去重用 ref 而不是 state——entryState 进依赖会让写 loading 触发重跑，永久停在 loading。
     if (!everVisible || !t.course) return;
     const mod = modules.find((item) => item.id === activeModule);
     if (!mod || requestedEntries.current.has(entryKey)) return;
     requestedEntries.current.add(entryKey);
     setEntryState((curr) => (curr[entryKey] ? curr : { ...curr, [entryKey]: { status: "loading", entries: [] } }));
-    // 这里刻意不加 current 卸载标志——判据见上方 entryState 注释的 ②③
+    // 刻意不加卸载标志丢弃结果（StrictMode 双跑同理）。
     api.getModuleEntries(repositoryId, mod.label, mod.hint)
       .then((result) => {
-        // engine 在未配置 LLM / 预算已达上限 / 主动判空 / 调用失败时都回空列表 —— 一律回落到模块自己的文件清单，
-        // 但**为什么**回落由引擎的 reason 说明（几种情况的用户处置完全不同）
+        // engine 未配置 LLM / 预算已达上限 / 判空 / 调用失败都回空列表，一律落到模块自己的文件清单；
+        // 为什么回落由引擎的 reason 说明，几种情况的处置不同。
         const entries = result.source === "llm" ? result.entries : [];
         setEntryState((curr) => ({ ...curr, [entryKey]: entries.length ? { status: "llm", entries } : { status: "files", entries: [], reason: result.reason } }));
       })
@@ -187,35 +174,32 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         setEntryState((curr) => ({ ...curr, [entryKey]: { status: "files", entries: [], reason: "请求失败，按模块结构列出文件" } }));
       });
   }, [t.course, repositoryId, activeModule, entryKey, modules, everVisible]);
-  /** 推荐入口默认只露前若干条（判据见文件头 ENTRY_PAGE）。
-      展开按「仓库:模块」记，切模块不互相污染，也不跨仓库残留。 */
+  /** 展开态按「仓库:模块」记，切模块与换仓互不残留。 */
   const [expandedEntryLists, setExpandedEntryLists] = useState<Set<string>>(new Set());
   const moduleEntries = entryState[entryKey];
-  /** 「打开过这个 tab、但请求还没落地」的那一帧也按等待渲染：否则先闪一下兜底文件清单再转 loading，看着像结果被换掉了。 */
+  /** 「tab 打开过但请求还没落地」的那一帧也按等待渲染，避免先闪一下回退清单。 */
   const entryPending = everVisible && !moduleEntries && Boolean(t.course);
-  /** 等待态 = 已有 loading 记录，或还没计入审计的那一帧（判据两处共用，别再各写一遍） */
+  /** 等待态 = 已有 loading 记录，或还没计入审计的那一帧。 */
   const entryWaiting = moduleEntries?.status === "loading" || entryPending;
   const visibleEntries: (ModuleEntry & { reason?: string })[] = moduleEntries?.status === "llm"
     ? moduleEntries.entries
     : entryWaiting || !t.course
       ? []
       : moduleEntryFiles;
-  /** 渲染用的截断视图：只影响列表高度。`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`——
-      否则「在清单里但被折叠掉」的文件被手动打开时会被误记成「用户自己换了入口」。 */
+  /** 渲染用的截断视图，只影响列表高度；`suggestedPaths` 与改选埋点仍看完整 `visibleEntries`，
+      否则被折叠掉的文件被手动打开时会误记成「用户自己换了入口」。 */
   const shownEntries = expandedEntryLists.has(entryKey) || visibleEntries.length <= ENTRY_PAGE ? visibleEntries : visibleEntries.slice(0, ENTRY_PAGE);
   const entryNoteFull = moduleEntries?.status === "llm"
     ? "LLM 推荐 · 点开即问"
     : entryWaiting
       ? "正在挑阅读顺序…"
       : moduleEntries?.reason ?? `按模块结构列出 ${moduleEntryFiles.length} 个文件`;
-  /** 正文只留「为什么是这份清单」的第一句；完整理由（达到预算上限 / 未配置 / 判空 / 失败）进悬停——四种处置不同，不能糊成一个词。 */
+  /** 正文只留「为什么是这份清单」的第一句，完整理由进悬停。 */
   const entryNote = entryNoteFull.split(/[；，。(（]/)[0].slice(0, 14);
 
-  /** 埋点口径（2026-09-21 定「开文件即改选」）：推荐列表展示中——点推荐入口 = `entry_adopted`，
-      手动打开不在清单里的文件 = `entry_overridden`；loading（列表还没出现）或空列表不发改选事件，
-      adopted 只在真的换绑了选中节点时发（断链点击不充分子）。
-      取值随兜底语义改名（2026-10-02 取消知识模块）：旧值 `heuristic`（关键词猜）→ `module_files`（模块地图给的文件清单）。
-      journal 里 10-02 之前的历史值（含 `network`/`os`/`lang` 这类模块 id）不迁移，跨这段时间的模块维度读数不可比，分界记在开发日志。 */
+  /** 埋点口径「开文件即改选」：列表展示中，点推荐入口 = `entry_adopted`（真的换绑了选中节点才发），
+      手动打开不在清单里的文件 = `entry_overridden`；loading 或空列表不发改选事件。
+      `suggested_source` 取 `llm` 或 `module_files`（模块地图给的文件清单）。 */
   const entrySource = moduleEntries?.status === "llm" ? "llm" : "module_files";
   const suggestedPaths = useMemo(() => new Set(visibleEntries.map((entry) => entry.path)), [visibleEntries]);
   const maybeEmitOverride = (path: string): void => {
@@ -240,8 +224,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     return pool.slice(0, 12);
   }, [filePaths, query]);
   useEffect(() => { setPaletteIndex(0); }, [query]);
-  /** 选中行变化时把它滚进可视区：`.pal-list` 自己有 max-height + overflow，是真正的滚动容器。
-      用 rect 差值而不是 `scrollIntoView`——后者会连带滚动祖先，在零视口的应用内浏览器里会把整页滚到底（§6.1 同族坑）。 */
+  /** 选中行滚进可视区：滚动容器是 `.pal-list`。用 rect 差值而不是 `scrollIntoView`——后者会连带滚动祖先，把整页滚到底。 */
   useEffect(() => {
     const list = paletteRef.current;
     const item = list?.children[paletteIndex] as HTMLElement | undefined;
@@ -256,7 +239,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     void loadSource(path, 1);
     setPaletteOpen(false);
   };
-  /** palette 键盘动线：↑↓ 移动选中行（首尾环绕），Enter 打开选中的那一行——不再只能「回车 = 第一条」。 */
+  /** palette 键盘动线：↑↓ 移动选中行（首尾环绕），Enter 打开选中的那一行。 */
   const onPaletteKey = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -274,9 +257,9 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   /** 本地定位读数：只有「这一行不属于任何课程节点」时才会与绑定行不一致，此时如实说「本页已定位」。 */
   const located = source && source.line !== anchor?.line ? source.line : null;
   /**
-    点源码一行 = 换阅读锚点。原型把这一行直接当成 Agent 绑定；教学的会话是按课程节点建的
-    （引擎按节点 id 装配上下文，不收任意 path:line），所以先按 path + 行区间回查最具体的节点：
-    查到就换绑（换绑会换线程，必须给一条 toast 让人看见），查不到就只改本地定位读数。
+    点源码一行 = 换阅读锚点。会话按课程节点建（引擎按节点 id 装配上下文，不收任意 path:line），
+    所以先按 path + 行区间回查最具体的节点：查到就换绑（换绑会换线程，必须给一条 toast），
+    查不到就只改本地定位读数。
    */
   const pickLine = (line: number): void => {
     if (!source || source.line === line) return;
@@ -290,7 +273,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     }
     setSource({ ...source, line });
   };
-  /** 传给源码岛的读数：定位行随点行走，内容/路径不变（重扫高亮的代价已在 SourceView 里挡掉）。 */
+  /** 传给源码岛的读数：定位行随点行走，内容与路径不变。 */
   const viewSource = source;
 
   if (t.error && !t.course) return <EmptyState title="代码教学暂不可用" detail={t.error} />;
@@ -306,7 +289,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
           <span className="faint">/</span>
           <span>代码教学</span>
           <span className="faint">·</span>
-          {/* 正文只放「绑到哪个文件的哪一行 + 哪个模块」，整条路径与完整模块名进悬停：路径的目录上下文左边树里就有 */}
+          {/* 正文只放文件名 + 行号 + 模块，完整路径与模块名进悬停 */}
           <span className="muted" title={`Agent 绑定：${anchor ? `${anchor.path}:${anchor.line}` : "未定位"} · 模块「${moduleLabel}」`}>
             <b className="mono fs-12">{anchor ? `${anchor.path.split("/").pop() ?? anchor.path}:${anchor.line}` : "未定位"}</b> · {moduleLabel.length > 12 ? `${moduleLabel.slice(0, 12)}…` : moduleLabel}
           </span>
@@ -317,7 +300,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       />
       <MobileSwitcher labels={["教学模块", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
       <section className="page page-teach" style={layoutVars(layout)}>
-        {/* 压在「文件栏 / 源码岛」边界上的拖宽条：文件栏给了宽度，源码栏就是剩下的那一块 */}
+        {/* 「文件栏 / 源码岛」边界上的拖宽条：源码栏占剩余宽度 */}
         <ColumnResizer field="filePaneWidth" label="文件栏" growOn="right" />
         <aside className={`teach-side ${paneClass(0)}`}>
           <ModulesPane

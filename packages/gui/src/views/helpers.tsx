@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared";
 
-/** views/ 共享的小工具：通用占位 UI（Loading / EmptyState）、题型与日期的中文文案、课程树遍历。 */
+// views/ 共享的小工具：通用占位 UI（Loading / EmptyState）、题型与日期的中文文案、课程树遍历。
 
 export function Loading(): ReactElement {
   return <div className="loading"><i className="spinner" aria-hidden />正在读取本地课程数据</div>;
@@ -17,7 +17,7 @@ export function EmptyState({ title, detail }: { title: string; detail: string })
   );
 }
 
-/** 中文日期：界面是中文的，别露出 10/17/2026 这种美式串。 */
+/** 中文日期文案：只显示到日；时间戳读不出时明说。 */
 export function dateText(iso: string): string {
   const date = new Date(iso);
   return Number.isFinite(date.getTime()) ? `${date.getMonth() + 1} 月 ${date.getDate()} 日` : "日期未上报";

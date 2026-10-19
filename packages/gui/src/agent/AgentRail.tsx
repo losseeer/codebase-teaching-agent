@@ -7,15 +7,15 @@ import { Icon } from "../ui/icons";
 import { HEURISTIC_SOURCE, SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
 /**
-  持久 Agent 对话栏（对齐 docs/ui-prototype 的 `.rail` 五段：绑定上下文行 → 语言风格 → 线程条 → 消息流 → 模型胶囊 + composer）。
-  分工不变：所有 chat / composer / 流式订阅由本栏拥有（状态在 useScopedChat），工作区页面只呈现内容。
+  持久 Agent 对话栏，五段：绑定上下文行 → 语言风格 → 线程条 → 消息流 → 模型胶囊 + composer。
+  分工：所有 chat / composer / 流式订阅由本栏拥有（状态在 useScopedChat），工作区页面只呈现内容。
   收起态由外壳（App）负责：`railCollapsed` 时整栏不渲染，页顶栏那枚 panelRight 是再开入口。
  */
 export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
   const { scope, threads } = t;
   const items = threads[scope];
   const threadRef = useRef<HTMLDivElement | null>(null);
-  /** 「贴底跟随」开关：用户手动往上翻回看历史时置 false，新内容就不再把他拽回底部（流式期间尤其恼人）。
+  /** 「贴底跟随」开关：用户手动往上翻回看历史时置 false，新内容就不再把他拽回底部。
       离底 80px 以内视为「仍在看最新一条」，翻回底部即恢复跟随。 */
   const stickToBottom = useRef(true);
   useEffect(() => {
@@ -49,7 +49,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
           </span>
         </div>
 
-        {/* 语言风格：离散三档（2026-09-18 起不再是 0~100 滑块），三作用域共用 */}
+        {/* 语言风格：离散三档，三作用域共用 */}
         <div className="segmented" role="radiogroup" aria-label="语言风格">
           {STYLE_CHOICES.map((choice) => (
             <button
@@ -87,7 +87,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
             <div className="msg-hint">{t.progress[scope]}</div>
           </div>
         ) : null}
-        {/* 流式正文气泡：三作用域共用——各自请求的 SSE delta（72 字分块回放） */}
+        {/* 流式正文气泡：三作用域共用，内容来自各自请求的 SSE delta */}
         {t.liveAnswer ? (
           <div className="msg msg-agent">
             <div className="msg-bubble msg-streaming"><Markdown content={t.liveAnswer} /></div>
@@ -96,8 +96,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
 
       <div className="rail-foot">
-        {/* 快捷指令只在宏观设计出现：这一页是「让 agent 画图」的工作区，空画布上那三个按钮在这儿才有意义。
-            点一下就是真发一句（会花钱），所以按钮上写的就是发出去的原话，不加「试试」这种软化措辞。 */}
+        {/* 快捷指令只在宏观设计出现：点一下就是真发一句，按钮上写的就是发出去的原话。 */}
         {scope === "map" ? (
           <div className="rail-quick">
             {MAP_QUICK_PROMPTS.map((prompt) => (
@@ -165,7 +164,7 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
   return { placeholder: "对这道练习追问…", canSend, onSend: t.sendPractice };
 }
 
-/** 空线程时的一句话指引（原型 `.empty`）：每个作用域问法不同，别写成通用欢迎语。 */
+/** 空线程时的一句话指引：每个作用域问法不同，不写通用欢迎语。 */
 function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
   const hint = scope === "map"
     ? "点模块、环节或目录里的文件，我围绕它展开。"
@@ -181,13 +180,12 @@ function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
 }
 
 /**
-  绑定行 = 当前作用域的**当前**位置（不是历史）：切换作用域/节点/文件只改这一行的值。
+  绑定行 = 当前作用域的当前位置（不是历史）：切换作用域/节点/文件只改这一行的值。
   teaching 只显示当前文件的 `path:line`（不累积历史切换）。
  */
 function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
-    // 绑定只认四种情形：目录里选文件 / 选中模块 / 选中环节 / 画布上正打开的那张图。
-    // 最后一种是画图工作区加的——用户什么也没点、只是让 agent「把这条边删掉」时，得有个所指。
+    // 绑定只认四种情形：目录里选文件 / 选中模块 / 选中环节 / 画布上正打开的那张图
     const binding = t.mapBinding;
     if (!binding) return t.openDiagram ? `当前图 · ${t.openDiagram.name}` : "未绑定 —— 选中节点 / 文件，或直接让 agent 画一张";
     if (binding.kind === "file") return `文件 · ${binding.path}`;
@@ -207,7 +205,7 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 /**
   会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
   切哪条就按 threadId 回读哪条的历史。删除是软删：列表与正文从此看不见，
-  库里的行与 journal 的审计事件（session_deleted）都还在，所以二次确认把这话说明白。
+  库里的行与 journal 的审计事件（session_deleted）都还在。
  */
 function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {
   const list = t.chatThreads[scope];

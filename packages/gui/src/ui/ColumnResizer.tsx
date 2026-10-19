@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 
 /**
-  可调宽度的栏 + 对话栏收起状态。这两个都是**用户偏好**，不是产品数据：
-  存 localStorage，读不到/读坏了就用默认值，存储被禁（隐私模式）时功能照常、只是下次进来不记得。
-  读写全兜住——与 App 里 workspace / 侧栏折叠那两处同一口径（这里一旦抛在渲染路径上就是白屏）。
-
-  宽度存的是**像素**而不是比例：比例在「窗口变窄 + 侧栏收起」两种情况下会算出完全不同的栏宽，
-  而用户拖出来的那一条边界记住的应该是「我要这么宽」。
+  可调宽度的栏 + 对话栏收起状态：存 localStorage 的用户偏好，不是产品数据。
+  读不到/读坏了用默认值，存储被禁（隐私模式）时功能照常、只是下次进来不记得；读写全兜住（抛到渲染路径上就是白屏）。
+  宽度存像素而不是比例：比例在「窗口变窄 + 侧栏收起」两种情况下会算出完全不同的栏宽。
   */
 export interface LayoutPrefs {
   /** Agent 对话栏（最右一栏）宽度 */
   railWidth: number;
-  /** 对话栏是否收起（收起时这一栏**整条不渲染**，不是留一条窄边） */
+  /** 对话栏是否收起（收起时整条不渲染，不是留一条窄边） */
   railCollapsed: boolean;
   /** 三个工作区共用的左侧列表栏宽度（教学的「仓库文件」、宏观的「项目目录」、练习的「练习模块」） */
   filePaneWidth: number;
@@ -19,19 +16,17 @@ export interface LayoutPrefs {
 
 export const LAYOUT_DEFAULTS: LayoutPrefs = { railWidth: 348, railCollapsed: false, filePaneWidth: 264 };
 
-/** 下限取「内容还能不能用」：对话栏再窄气泡就换行成竖条，文件栏再窄路径全成省略号。 */
+/** 下限按内容还能不能用定：再窄就换行成竖条、路径全成省略号。 */
 const RANGES = { railWidth: { min: 268, max: 620 }, filePaneWidth: { min: 168, max: 520 } } as const;
 const LAYOUT_KEY = "codebase-tutor.layout";
 
 /**
-  窗口窄时**渲染**要再夹一遍：只按各自上限夹，1100px 的窗口上「文件栏 520 + 对话栏 620」
-  能把中间的源码栏挤成一条缝。但这一层夹**不回写**偏好——否则「拖宽后临时缩窗口」会把用户
-  原本要的宽度永久改掉，放大窗口也回不来了。
+  窗口窄时渲染层要再夹一遍，但这一层不回写偏好——
+  否则「拖宽后临时缩窗口」会永久改掉用户原本要的宽度，放大窗口也回不来。
 */
 const MAIN_FLOOR_PX = 420; // 对话栏变宽时，主区至少留这么多
 const SOURCE_FLOOR_PX = 260; // 文件栏变宽时，源码栏至少留这么多
-/** 主区左边固定要吃掉的宽度：展开态侧栏 232 + 工作区左右留白 32。对话栏夹算时必须扣掉它，
-    否则侧栏展开 + 对话栏拖到上限时中间主区会被挤到 200px 以下（原型是固定侧栏，没这个问题）。 */
+/** 主区左边固定要吃掉的宽度：展开态侧栏 232 + 工作区左右留白 32。对话栏夹算时必须扣掉它。 */
 const FIXED_LEFT_PX = 232 + 32;
 
 type WidthField = "railWidth" | "filePaneWidth";
@@ -110,8 +105,8 @@ if (typeof window !== "undefined") {
 }
 
 /**
-  当前**生效**宽度。键盘连按（以及同一帧里到多次的事件）要拿它累加，
-  不能拿组件闭包里那份 `width`——React 还没重渲染时那一份是旧的，四下方向键会合成一下。
+  当前生效宽度。键盘连按（以及同一帧里到多次的事件）要拿它累加，
+  不能拿组件闭包里那份 `width`——React 还没重渲染时那一份是旧的。
   */
 function widthOf(field: WidthField): number {
   return field === "railWidth" ? current.railWidth : current.filePaneWidth;
@@ -122,7 +117,7 @@ function subscribe(listener: () => void): () => void {
   return () => { listeners.delete(listener); };
 }
 
-/** 当前视口下**该渲染成多宽**（不是用户存的那份，见上面两层夹的注释）。 */
+/** 当前视口下该渲染成多宽（不是用户存的那份，见上面两层夹的注释）。 */
 export function useLayout(): LayoutPrefs {
   return useSyncExternalStore(subscribe, () => current, () => current);
 }
@@ -133,8 +128,8 @@ export function layoutVars(layout: LayoutPrefs): CSSProperties {
 }
 
 /**
-  一条可拖的竖向分隔条。**绝对定位**压在某一栏的左边界上（所以它不占栅格列——否则每个媒体查询都得跟着改列数）。
-  三种调法都给了：拖动、方向键（键盘可达，Shift 加速）、双击回到默认。
+  一条可拖的竖向分隔条，绝对定位压在某一栏的左边界上（所以它不占栅格列）。
+  三种调法：拖动、方向键（键盘可达，Shift 加速）、双击回到默认。
   */
 export function ColumnResizer({ field, label, growOn }: { field: WidthField; label: string; growOn: "left" | "right" }): ReactElement {
   const [dragging, setDragging] = useState(false);
@@ -144,9 +139,8 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
 
   /**
     一次拖拽的全部生命周期都在这一个 effect 里：进入时上全局光标态、离开时一定移除。
-    ⚠️ 监听挂 `window` 而不是分隔条自己，也**不用 pointer capture**：拖出窗口、在浏览器边框外松手、中途切到别的 app
-    时事件不会送回那个小条，于是「col-resize 光标 + 禁选中」会一直挂在 body 上（用户实测：指针明明不在分隔条上也是拖拽样式）。
-    挂在 window 上，松手 / 取消 / 窗口失焦任一条都能收尾；组件被卸载时 cleanup 同样会摘干净。
+    监听挂 `window` 而不是分隔条自己，也不用 pointer capture：
+    拖出窗口、在浏览器边框外松手、中途切到别的 app 时事件不会送回那个小条，光标态就会一直挂在 body 上。
     */
   useEffect(() => {
     if (!dragging) return;
@@ -170,7 +164,7 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
 
   const set = (next: number): void => { patchLayout({ [field]: next } as Partial<LayoutPrefs>); };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    // 不 preventDefault 会起手就选中一段文字，拖动过程一路跟着刷蓝
+    // preventDefault：否则起手就选中一段文字，拖动过程一路跟着刷蓝
     event.preventDefault();
     start.current = { x: event.clientX, width };
     setDragging(true);

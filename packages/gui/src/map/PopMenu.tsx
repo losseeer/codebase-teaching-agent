@@ -3,21 +3,21 @@ import { createPortal } from "react-dom";
 import { Icon } from "../ui/icons";
 
 /**
-  挂在按钮下方的小菜单（原型 `attachPop`）。三条约定：
-  - **走 portal**：图库那一条是可滚的（`.gallery-list`），菜单装在栏里就会被 `overflow` 裁掉半截；
-  - **翻边自己修**：贴到视口下沿就往上翻、贴到右沿就往里收，不然「删除」永远点在菜单框外面；
-  - **点外面、Esc、滚动都关**：菜单是临时决定，留在屏上就是一层挡路的浮块。
+  挂在按钮下方的小菜单。三条约定：
+  - 走 portal：图库那一条是可滚的（`.gallery-list`），装在栏里会被 `overflow` 裁掉半截；
+  - 贴到视口下沿就往上翻、贴到右沿就往里收，保证菜单项都在框内；
+  - 点外面、Esc、滚动都关。
 */
 export interface MenuItem {
   label: ReactNode;
-  /** 补充口径进 title（菜单正文只留一行短语，与全局文案口径一致）。 */
+  /** 补充说明放 title，菜单正文只留一行短语。 */
   title?: string;
   danger?: boolean;
   disabled?: boolean;
   onSelect: () => void;
 }
 
-/** 空列表 = 这格此刻没什么可给（例如版本还没取到）：不渲染菜单也不渲染遮罩，免得点一下就"没反应"。 */
+/** 空列表 = 这格此刻没什么可给（例如版本还没取到）：不渲染菜单也不渲染遮罩。 */
 export function PopMenu({ anchor, items, onClose, ariaLabel }: {
   anchor: HTMLElement | null;
   items: MenuItem[];
@@ -75,8 +75,8 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
 }
 
 /**
-  「⋯」那颗菜单按钮：hover 才现身（原型 `.g-menu-btn`），但**键盘聚焦时必须现身**——
-  只用 opacity 的话，用 Tab 走过去的人看到一个看不见的按钮被按下了。
+  「⋯」那颗菜单按钮：hover 才现身，但键盘聚焦时必须现身——
+  只用 opacity 的话，Tab 过来的人会按下看不见的按钮。
 */
 export function MenuButton({ label, open, onToggle, className }: {
   label: string;
@@ -98,8 +98,8 @@ export function MenuButton({ label, open, onToggle, className }: {
 }
 
 /**
-  就地改名：点图名变输入框，Enter 提交、Esc 取消、离开焦点提交（与图库菜单同一个动作）。
-  空标题一律不提交——把图改成没有名字，下次在图库里就再也认不出它。
+  就地改名：点图名变输入框，Enter 提交、Esc 取消、离开焦点提交。
+  空标题一律不提交。
 */
 export function InlineName({ value, placeholder, ariaLabel, onCommit, onClose }: {
   value: string;

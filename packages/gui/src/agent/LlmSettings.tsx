@@ -4,11 +4,10 @@ import { toastFailure } from "../modules/toast";
 import { Icon } from "../ui/icons";
 
 /**
-  模型入口与配置弹窗（对齐 docs/ui-prototype 的 `.rail-model-pill` + `.modal`）：除模型与思考档位，还管装机时
-  才改的服务商 / 接口地址 / API Key。两条不变项：
-  - **胶囊必须自带状态**：本地兜底（没配齐服务商或密钥）时变警示态并直说原因，配置错了不该只有一个不起眼的齿轮；
-  - **改完即生效**：每个字段失焦 / 换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）——
-    所以关掉窗口不等于放弃修改，文案上也不给这个错觉。
+  模型入口与配置弹窗：除模型与思考档位，还管装机时才改的服务商 / 接口地址 / API Key。两条不变项：
+  - 胶囊自带状态：本地兜底（没配齐服务商或密钥）时变警示态并直说原因；
+  - 改完即生效：每个字段失焦 / 换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）——
+    关掉窗口不等于放弃修改。
   */
 export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?: "pill" | "button"; styleLabel?: string }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
@@ -45,7 +44,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
       .catch((error: unknown) => {
         setLlm(previous);
         const reason = error instanceof Error ? error.message : "";
-        // 引擎那句具体原因（如档位与模型不兼容）优先留着，但位置在表单里；弹窗只报「设置没保存」
+        // 引擎带回的具体原因留在表单里，弹窗只报「设置没保存」
         setRejected(reason || "设置没保存");
         toastFailure("设置没保存", error);
       });
@@ -111,7 +110,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                   ...(["off", "low", "high", "max"] as const).map((effort) => ({
                     value: effort,
                     label: THINKING_EFFORT_LABEL[effort],
-                    // 引擎按模型查表下发能力声明；老引擎没有该字段时全部可用（向后兼容）。
+                    // 引擎按模型查表下发能力声明；没有该字段时全部可选。
                     // off 对 none/unknown 样式恒可选（= 不发字段），与引擎 PUT 校验的豁免一致。
                     disabled: llm?.thinkingCapability ? !effortSelectable(llm.thinkingCapability, effort) : false
                   }))
@@ -227,7 +226,7 @@ function pricingLive(llm: LlmSettings): boolean {
 
 /**
   计价读数一行：现在按哪三个数算、每一档由谁给出（来源判据见 api/client.ts 的 `PricingSource`）。
-  更要紧的是后半句：三档全空时**预算闸门也不管事**（引擎拿到的金额恒为 0，永远判未超支）。
+  三档全空时预算闸门也不管事（引擎拿到的金额恒为 0）。
   */
 function pricingReadout(llm: LlmSettings): string {
   const p = llm.pricing;
@@ -237,7 +236,7 @@ function pricingReadout(llm: LlmSettings): string {
   return `按 输入 ${money(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${money(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${money(p.outputPerMillionUsd)}（${source("output")}）计价`;
 }
 
-/** ¥2.000 这种写法；命中价没配时明说是「按输入价计」，不留一个空白让人以为算错了。 */
+/** ¥2.000 这种写法；命中价没配时写「按输入价」。 */
 function money(value: number | undefined): string {
   return value === undefined ? "按输入价" : `¥${value.toFixed(3)}`;
 }
@@ -257,7 +256,7 @@ function activeSummary(llm: LlmSettings | null): { pill: string; text: string; t
   return { pill: slug, text: `${protocol} · ${slug}`, title: `${llm.activeProvider ?? ""} · ${llm.activeModel ?? ""}`, hint: "", thinking, local: false };
 }
 
-/** 思考能力提示行：白话说清这个模型能选哪些档，被置灰的 option 在部分浏览器不浮出说明。 */
+/** 思考能力提示行：说清这个模型能选哪些档（置灰的 option 在部分浏览器不浮出说明）。 */
 function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>): string {
   const styleName: Record<string, string> = {
     deepseek: "DeepSeek 格式",
@@ -270,7 +269,7 @@ function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>
   return `${capability.model} · ${styleName[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
 }
 
-/** off 恒可表达：无思考参数/未声明模型选 off = 不发字段（与引擎 applyThinking 语义一致，不算「支持」也不禁用）。 */
+/** off 恒可表达：无思考参数/未声明的模型选 off = 不发字段。 */
 function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapability"]>, effort: "off" | "low" | "high" | "max"): boolean {
   if (capability.efforts.includes(effort)) return true;
   return effort === "off" && (capability.style === "none" || capability.style === "unknown");
@@ -314,7 +313,7 @@ function SelectSetting({ label, value, options, disabled, hint, note, ariaLabel,
 }
 
 /**
-  API Key 是**只写**项：引擎从不回显明文，所以「输入框为空」不能当成「清除」——那样点一下别处就把密钥清除了。
+  API Key 是只写项：引擎从不回显明文，所以「输入框为空」不能当成「清除」。
   留空提交 = 不改动；清除只走那颗 ✕ 按钮。
   */
 function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; note?: string; onSave: (key: string) => void; onClear: () => void }): ReactElement {

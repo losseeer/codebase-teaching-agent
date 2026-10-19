@@ -1,8 +1,7 @@
 import type { ReactElement } from "react";
 
 /**
-  图标集：逐条照搬 docs/ui-prototype/js/components.js 的内联 SVG（lucide 风格 16px）。
-  放在这里而不是直接用 lucide-react，是为了跟原型像素级一致——原型调过每一枚的取舍。
+  图标集：内联 SVG，lucide 风格 16px。
  */
 const PATHS = {
   import: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
@@ -30,7 +29,6 @@ const PATHS = {
   arrowRight: <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>,
   arrowDown: <><line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" /></>,
   play: <><polygon points="5 3 19 12 5 21 5 3" /></>,
-  /** 图库条目上那颗「⋯」：按同一套 24×24 线性画法补（原型用的是 ▾，定案文案是 ⋯） */
   more: <><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" /></>,
 } as const;
 

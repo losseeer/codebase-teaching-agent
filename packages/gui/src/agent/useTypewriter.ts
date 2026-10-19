@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
-  打字机节奏器：SSE 回放是「LLM 生成完一次性 flush」，delta 直写 liveAnswer 会在一帧内全部渲染、观感仍是整段落下。
-  收到的 delta 进队列，由定时器按自适应步长吐字（队列越长步长越大，任意长度约 2s 追平）；done 后等队列排空再固化正式消息。
-
-  自成一个 Hook：队列/定时器/liveAnswer 三态与六个动作只在这一处，发送逻辑只按语义调 begin/enqueue/finish/clear/abort/stop。
+  打字机节奏器：SSE 的 delta 会在一帧内全部 flush，直写 liveAnswer 观感仍是整段落下。
+  delta 先进队列，由定时器按自适应步长吐字（队列越长步长越大，任意长度约 2s 追平）；
+  done 后等队列排空再固化正式消息。
   */
 export interface Typewriter {
   liveAnswer: string;
@@ -35,11 +34,11 @@ export function useTypewriter(): Typewriter {
   const begin = (): void => {
     setLiveAnswer("");
     typeQueue.current = "";
-    if (typeTimer.current !== null) return; // 表已在跑，复用
+    if (typeTimer.current !== null) return; // 复用运行中的定时器
     typeTimer.current = window.setInterval(() => {
       const queue = typeQueue.current;
       if (!queue) return;
-      // 三段式步长：长回复粗步追进度、中段匀速、尾部细步收尾——任意长度约 2s 排空，观感是恒速打字而非几何拖尾
+      // 三段式步长：任意长度约 2s 排空，观感恒速
       const step = queue.length > 240 ? Math.ceil(queue.length / 40) : queue.length > 40 ? 6 : 2;
       typeQueue.current = queue.slice(step);
       setLiveAnswer((current) => current + queue.slice(0, step));
@@ -59,7 +58,7 @@ export function useTypewriter(): Typewriter {
     stop();
     setLiveAnswer("");
   };
-  // 卸载时停表：否则在途吐字定时器会一直跑（只在 stop/finish 里停的话，卸载即泄漏）
+  // 卸载时停止定时器，避免在途吐字泄漏
   useEffect(() => () => stop(), []);
   return { liveAnswer, begin, enqueue, finish, clear, abort, stop };
 }

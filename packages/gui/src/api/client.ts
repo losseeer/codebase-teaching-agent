@@ -4,37 +4,32 @@ import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySc
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
  * 都以这个 workspace 为锚点。Agent 侧栏与各视图的 localStorage 偏好也按 repositoryId 持久化。
- *
- * 对应 prototype `design-prototype.html` 中的 `binds[scope]` 概念。
  */
 export interface Workspace {
   repositoryId: string;
   repositoryPath: string;
 }
 
-// 地址簿与新鲜度的形状来自 shared，这里转发一次，视图层统一从 api/client 取类型（与 Workspace 同例）。
+// 形状来自 shared，这里转发一次，视图层统一从 api/client 取类型。
 export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tutor/shared";
 
 /**
-  作用域对话流的过程帧词表来自 `shared`（引擎的 `send` 也按同一份类型收）：
-  原先这里有两份 GUI 自造的字面量联合（`ScopedChatEvent` / `TeachingStreamEvent`），
-  引擎加一类过程帧时界面这边不会编译失败，只会「屏幕永远停在『回复生成中…』且没有任何报错」（10-06 实测）。
-  现在种类由 shared 定，守卫点是下面的 `toScopedEvent`。
+  作用域对话流的过程帧词表来自 `shared`（引擎的 `send` 也按同一份类型收）。
+  种类由 shared 定，守卫点是下面的 `toScopedEvent`。
 */
 export type { ScopedStreamProgress } from "@codebase-tutor/shared";
 
 /**
   一帧原始 JSON → 词表里的过程帧：先过 shared 的契约（种类与形状都在那里定），再逐字段兜一下形状。
-  导出是为了这条边界能被单独测。以前帧的种类只活在 GUI 自造的字面量联合里，
-  引擎加一类帧时界面不会编译失败，只会「屏幕永远停在『回复生成中…』且没有任何报错」（10-06 实测）。
+  导出是为了这条边界能被单独测。
   */
 export function parseScopedStreamFrame(raw: unknown): ScopedStreamProgress {
   return toScopedEvent(checkContract(scopedStreamProgressSchema, raw, "stream.progress"));
 }
 
 /**
-  契约过了之后的一份窄化：种类已由上面的 schema 锁死，这里只剩「缺字段给兜底值」，
-  并**穷尽**这张表——shared 里新增一类而这里没接，`default` 上的 `never` 断言就编译不过。
+  契约过了之后的一份窄化：种类已由 schema 锁死，这里只剩「缺字段给兜底值」，并穷尽这张表——
+  shared 里新增一类而这里没接，`default` 上的 `never` 断言就编译不过。
 */
 function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
   switch (event.type) {
@@ -79,8 +74,7 @@ async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: 
     }
     // 中止帧这里不做事：点「停止」那一侧本来就知道自己停了，本地收尾比等一帧可靠（引擎发这一帧是给自己记账的）
     if (event.type === "aborted") return;
-    // 过程帧逐帧过契约：形状不符当场抛。以前是「引擎那一帧缺个 path」就一路挂着「正在读取…」，
-    // 而空字符串还会被 progressText 的兜底吃掉——连「读到的是空」这个读数都留不下。
+    // 过程帧逐帧过契约：形状不符当场抛
     onEvent(parseScopedStreamFrame(event));
   };
   for (;;) {
@@ -121,7 +115,7 @@ export interface LlmEnvFallback {
 
 /**
   单价某一档的来源：`runtime` = LLM 配置框里填的，`env` = `.env` 的值，`unset` = 两层都没配。
-  界面上必须说清来源——留空那个节点显示的是 .env 的数，不写来源就会变成「我明明填了怎么没变」。
+  界面上必须说清来源。
   */
 export type PricingSource = "runtime" | "env" | "unset";
 
@@ -138,15 +132,15 @@ export interface LlmSettings {
   envFallback: LlmEnvFallback;
   thinkingCapability?: ThinkingCapabilityInfo;
   /**
-    单价三档的**填写值**（空串 = 这一档交给 .env），口径是**人民币 / 百万 token**——与 `.env` 的
-    `TUTOR_*_USD_PER_MILLION` 同一个节点，变量名里的 USD 属历史遗留（改名的牵动面见 InsightsPage 的 `usd` 注释）。
+    单价三档的填写值（空串 = 这一档交给 .env），口径是人民币 / 百万 token。
+    字段名与 `.env` 的 `TUTOR_*_USD_PER_MILLION` 同名同义，名字里的 USD 不代表美元。
     */
   inputUsdPerMillion?: string;
   outputUsdPerMillion?: string;
   cacheHitUsdPerMillion?: string;
   /** 现在真在用的三档（人民币 / 百万 token；引擎每次算账现读，改完不用重启） */
   pricing?: { inputPerMillionUsd: number; cacheHitPerMillionUsd?: number; outputPerMillionUsd: number };
-  /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset（闸门不管事） */
+  /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset */
   pricingSources?: { input: PricingSource; output: PricingSource; cacheHit: PricingSource };
   /** 当前实际生效的 provider/模型/模式（local = 没配齐或密钥缺失，走本地启发式） */
   activeModel?: string;
@@ -186,9 +180,8 @@ async function requestRaw(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 /**
-  没套契约的端点走这条：仍是编译期声明 + 一次 `as`。
-  这是**在册的债**——热路径（地址簿、导入任务、成本、会话线程、两条事件流）已经改走 `checked()`，
-  剩下的按访问量继续补；一条都不许当成终态。
+  没套契约的端点走这条：编译期声明 + 一次 `as`。
+  热路径（地址簿、导入任务、成本、会话线程、两条事件流）已改走 `checked()`，新端点优先用 `checked()`。
   */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await requestRaw(path, init)) as T;
@@ -206,7 +199,7 @@ async function checked<T>(name: string, schema: ZodType<T>, path: string, init?:
 /**
   画图工作区（`/diagrams`）的两条线上形状。
 
-  - `DiagramPosition`：拖动落盘只带坐标，**结构一个字段都不碰**；
+  - `DiagramPosition`：拖动落盘只带坐标，结构一个字段都不碰；
   - `DiagramWarning`：读侧的诚实检查——图上某个模块节点的 `ref` 在现在的课程树里查不到了（改名、删模块或重分析过）。
     引擎发的是节点 id + 一句原因，界面据此把那个节点标成失效，不当活节点画。
 */
@@ -224,12 +217,12 @@ export interface DiagramWarning {
 /**
   画布那格保存状态（界面自己的读数，不是引擎的字段）。
   `synced`（刚从盘上取下来、还没动过）与 `saved`（真写过一次几何）都表示「画布 = 盘上那份」；
-  `queued` 是拖动结束、去抖还没到；`saving` 是在途；`failed` 必须显形——**绝不替一次失败的写入说「已保存」**。
+  `queued` 是拖动结束、去抖还没到；`saving` 是在途；`failed` 必须显形，不替一次失败的写入说「已保存」。
 */
 export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 
 export const api = {
-  /** 探活：认证闸已撤除（§64），这个节点不再有 `auth` 读数；沙箱闸门状态仍然如实报。 */
+  /** 探活：返回引擎状态、LLM 模式与沙箱闸门读数。 */
   health: () => request<{ status: string; llmMode?: string; sandbox?: { level: string } }>("/api/health"),
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
@@ -250,8 +243,8 @@ export const api = {
   /** 教学/练习两侧的锚点行读数：按文件路径取那份实时源码。 */
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
   getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "module_files"; reason?: string }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
-  /* ---- 画图工作区（宏观设计）：七条路由**全部免费**——它们只读/写库里的图元，一次都不碰模型。
-     ⚠️ 这里**故意没有**「加节点 / 删节点 / 改边」那种面向界面的结构写入口：结构改动只有 agent 的
+  /* ---- 画图工作区（宏观设计）：七条路由全部免费——只读/写库里的图元，一次都不碰模型。
+     这里故意没有「加节点 / 删节点 / 改边」那种面向界面的结构写入口：结构改动只有 agent 的
      `set_diagram` 一条路（引擎侧白名单），界面提供拖动（几何）与改名，别的一律不给。
      新增图 = 一张空白画布（`source:"me"`），它同样只能靠对话往里画东西。 ---- */
   /** 图库列表：只有摘要（节点/边/版本计数），不把整张结构拖进左栏。 */
@@ -262,12 +255,12 @@ export const api = {
   getDiagram: (repositoryId: string, diagramId: string) => request<{ diagram: Diagram; warnings: DiagramWarning[] }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`),
   renameDiagram: (repositoryId: string, diagramId: string, name: string) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteDiagram: (repositoryId: string, diagramId: string) => request<{ deleted: boolean; diagramId: string }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "DELETE" }),
-  /** 几何落盘：拖动结束后只送变化过的位置。存的是位置，**不产生版本**（版本只由 agent 的结构改动留下）。 */
+  /** 几何落盘：拖动结束后只送变化过的位置。存的是位置，不产生版本（版本只由 agent 的结构改动留下）。 */
   saveDiagramGeometry: (repositoryId: string, diagramId: string, positions: DiagramPosition[]) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/geometry`, { method: "PUT", body: JSON.stringify({ positions }) }),
   /** 回到某一版快照（`index` 按 `versions` 数组下标，旧→新）。引擎会把恢复后的样子再存一版，历史不截断。 */
   restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
   getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`),
-  /** 浏览器本地旧覆盖层的一次性上报（引擎此前完全不知道这些改动）。 */
+  /** 浏览器本地遗留覆盖层的一次性上报。 */
   mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number; layers: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
@@ -299,12 +292,12 @@ export const api = {
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、以及这一回合真画/真改了哪张图）。
       `focus` = 流程视图选中环节（课程树节点只到入口粒度，环节信息不上送模型就看不见）；`diagramId` = 画布上正打开的那张图，
-      agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张，不送猜的。 */
+      agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
   mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; focus?: FlowStage; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
-      `diagram?: undefined` 不是漏填：练习作用域没有画图工具，那一格**恒不出现**——两条流的 done 形状对齐，
-      调用方合成一个变量读时才不必再分岔（调用方是 `useScopedChat` 的 sendScoped）。 */
+      `diagram?: undefined`：练习作用域没有画图工具，那一格恒不出现——两条流的 done 形状对齐，
+      调用方（`useScopedChat` 的 sendScoped）合成一个变量读时不必再分岔。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string; diagram?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方丢弃错误即可。 */
@@ -312,15 +305,13 @@ export const api = {
 };
 
 /**
-  全局事件流（`GET /api/events`，导入进度与仓库更新）。**不用 `EventSource`**（2026-10-15 改了理由）：原先是为了能带
-  认证请求头，那条需求随认证闸一起撤了（§64）；留下 fetch 读流是因为三条流共用同一套读流、退避与 abort 语义。
+  全局事件流（`GET /api/events`，导入进度与仓库更新）。用 fetch 读流，与三条对话流共用同一套读流、退避与 abort 语义。
   重连自己管：指数退避 1s→2s→4s→8s→16s，20s 封顶，一旦成功建立连接就清零；`AbortSignal` 用来在依赖变化 / 卸载时
-  彻底停下（含正在退避的那一次等待）。注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎现在开局就发
-  一帧把响应头推到网路上，所以 `fetch` 立刻 resolve，连接状态是实测的而不是等第一个事件才知道。
-  **空闲看门狗**（10-12 实测补的）：引擎死了但中间的代理 / 反代还替它挂着这条连接时，`reader.read()` 既不 resolve
-  也不 reject，退避重连这条码路永远不会被触发——表现为「界面停在 40% 不动，而引擎其实早就没了」；这件事在
-  `EventSource` 时代由浏览器管，换成 fetch 之后必须自己管。阈值取 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧），
-  超时是**中止这一次尝试**再按退避重连，不是整条订阅作废。
+  彻底停下（含正在退避的那一次等待）。注释帧（`: open` / `: ping`）在这里被 `data: ` 那一条筛掉——引擎开局就发
+  一帧把响应头推到网路上，所以 `fetch` 立刻 resolve，连接状态在开局就能确认。
+  空闲看门狗：引擎死了但中间的代理 / 反代还替它挂着这条连接时，`reader.read()` 既不 resolve 也不 reject，
+  退避重连永远不会被触发（表现为「界面停在 40% 不动，而引擎其实早就没了」）。
+  阈值 75s（引擎每 25s 一帧心跳，等于容忍连丢三帧）；超时只中止这一次尝试再按退避重连，不作废整条订阅。
   */
 const STREAM_IDLE_MS = 75_000;
 
@@ -370,8 +361,7 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void, sig
             const line = frame.split("\n").find((entry) => entry.startsWith("data: "));
             if (line) {
               try {
-                // 契约不符会走下面这条 catch：一条坏帧不该断掉整条流，但也不能当没看见——
-                // 「畸形 JSON」与「引擎换了形状」在这里都喊出来，只是不杀连接。
+                // 契约不符走下面这条 catch：一条坏帧只跳过、不断流，但也不能当没看见
                 onEvent(checkContract(serverEventSchema, JSON.parse(line.slice(6)), "events"));
               } catch (error) {
                 console.error("[gui] 事件流有一帧不符契约，已跳过：", error instanceof Error ? error.message : error);

@@ -16,23 +16,19 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, PRACTICE_DEFAULT_MODULES, type KnowledgeModule } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
-/**
-  练习评估工作区（对齐 docs/ui-prototype 的 `practicePage`，两栏）：左 = 主题 chips + 本模块已练卡片 + 防泄题脚注，
-  右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。顶栏只报 `api.getPractice` 的真读数，没读到就明说。
-  两处「不照抄原型」是有意保留的判断：原型的假进度（每 800ms 推进一个节点）与假分数（写死 2 / 3.8 / 日期）都不搬——
-  我们只有一个 `await`，所以 generating 只说「正在出题」；判分口径逐字取自 `result.gradingMode` + `automatic` +
-  `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
-  */
+// 练习评估工作区（两栏）：左 = 主题 chips + 本模块已练卡片 + 防泄题脚注，
+// 右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。
+// 顶栏只报 `api.getPractice` 的真读数，没读到就明说；出题中只说「正在出题」，不画假进度。
+// 判分口径逐字取自 `result.gradingMode` + `automatic` + `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
 
-/** 作答前也要能说清「这一题怎么判」：口径与判分后 `.grade-source` 那一行同源，不另起一套说法。 */
+/** 出题时的判分口径与判分后 `.grade-source` 那一行同源，不另起一套说法。 */
 function gradingLabel(mode: ExerciseGradingMode): string {
-  // 2026-10-14 起 `execution` 指的是「沙箱真跑那组冻结测试」，不再是旧的受限表达式求值
   if (mode === "execution") return "沙箱跑测试判分";
   if (mode === "rubric") return "rubric 细则判分（LLM 比对参考答案）";
   return "集合精确匹配";
 }
 
-/** 判分来源那一行要说实话：`automatic` 与 `feedbackSource` 决定模型到底有没有参与结论。 */
+/** 判分来源那一行要说实话：`automatic` 与 `feedbackSource` 决定模型有没有参与结论。 */
 function gradeSource(result: ExerciseResult): { label: string; detail: string } {
   const automatic = result.automatic ? "automatic：模型不参与判分结论" : "非 automatic：结论里有模型成分";
   if (result.gradingMode === "execution") {
@@ -57,14 +53,13 @@ function llmUnitNonce(unitId: string): number | null {
 const FAMILY_WORD: Record<string, string> = { impact: "影响面", workflow: "流程", implementation: "实现", change: "定位" };
 
 function unitName(unitId: string): string {
-  // LLM 出题单元 id 形如 llm:<tagId>:<nonce>，展示为主题练习序号
   if (unitId.startsWith("llm:")) {
     const nonce = llmUnitNonce(unitId);
     return `主题练习 #${nonce !== null ? nonce + 1 : unitId}`;
   }
   const [head, ...rest] = unitId.split(":");
   const word = FAMILY_WORD[head] ?? FAMILY_WORD[head.split("-")[0] ?? head] ?? "";
-  // 单元 id 里最像路径的那一段取文件名；没有路径就取最后一段非纯数字（否则整卡只剩一个「233」）
+  // 取最像路径的那一段的文件名；没有路径就取最后一段非纯数字
   const pathLike = rest.find((segment) => segment.includes("/"));
   const tail = pathLike ? pathLike.split("/").pop() ?? "" : rest.filter((segment) => segment && !/^\d+$/.test(segment)).pop() ?? head;
   return word ? `${tail} · ${word}` : tail || unitId;
@@ -75,7 +70,7 @@ function llmNonce(unitId: string): number {
   return llmUnitNonce(unitId) ?? 0;
 }
 
-/** 回答框的提示随题型走：按题型给口径，不能给一个「预测返回值」那种已经把题型删掉的旧说法。 */
+/** 回答框的提示按题型与判分口径给。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
   if (kind === "change_localization") return "写出要改的文件与位置（行号或函数名）";
@@ -90,17 +85,17 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [text, setText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  /** 代码题的工作副本：练习一换就整份重置成引擎下发的那一组文件（`exercise.code.files`） */
+  /** 代码题的工作副本：换题就整份重置成引擎下发的 `exercise.code.files` */
   const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
   const [activeCodePath, setActiveCodePath] = useState("");
-  /** 讲评是按需的第二趟：只在**点过一次之后**才出现，且发的仍是被判的那一版代码（不是当前编辑器里的草稿） */
+  /** 讲评是按需的第二趟：点过一次才出现，发的是被判的那一版代码，不是当前编辑器里的草稿 */
   const [submittedFiles, setSubmittedFiles] = useState<{ path: string; contents: string }[]>([]);
   const [explanation, setExplanation] = useState("");
   const [explaining, setExplaining] = useState(false);
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  /** 刚才哪个节点出题失败了（单元 id + 引擎原话）：那个节点转警示态，别让人反复撞同一堵墙。 */
+  /** 最近一次出题失败的节点（单元 id + 引擎原话）：对应卡片转警示态。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
@@ -110,21 +105,19 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   useEffect(() => { savePracticeModules(modules); }, [modules]);
   useEffect(() => { saveActiveModule("practice", repositoryId, activeModule); }, [repositoryId, activeModule]);
 
-  /** 进度读取：成功也要把旧的错误清掉——原来错误一旦挂上就一直留在面板里，重新拉好之后还在「无法读取练习进度」。
-      只在「这个 tab 被打开过」之后读一次（常驻挂载的隐藏面板不必替用户查库）；
-      生成与提交后仍按原路 `refreshSummary()` 主动刷新。 */
+  /** 进度读取：成功也要清掉旧错误；视图常驻挂载靠 hidden 切换，只在 tab 被打开过之后读一次。
+      生成与提交后仍走 `refreshSummary()` 主动刷新。 */
   const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
     api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
-  // 出题分派：活动 chip = 程序理解题 → 规则出题族；自定义主题 chip → LLM 出题族（family 对用户不可见）。
-  // 「换一题」对 LLM 题走 variantNonce+1（出新题，旧题保留）；对规则题按 targetUnitId 重出。
+  // 出题分派：理解题走规则出题族，自定义主题 chip 走 LLM 出题族（family 对用户不可见）。
+  // 「换一题」对 LLM 题是 variantNonce+1（出新题、旧题保留），对规则题按 targetUnitId 重出。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     const isLlmFamily = activeModule !== COMPREHENSION_MODULE_ID;
-    // 失败时把「刚才点的那个节点」记下来：卡片转成警示态并带上原因，用户不必再撞第二次
     const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
       const next = await api.createExercise(repositoryId, isLlmFamily
@@ -167,8 +160,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   }, [exercise?.id]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  /** 模块切换是设计文档第 8 章点名要可查的操作；id 未变（重复点同一 chip）不记，避免假轨迹。
-      `list` 供「新增/删除模块」路径传入尚未提交的新列表——否则 label 会取到旧值。 */
+  /** 重复点同一 chip（id 未变）不记事件；`list` 供新增/删除模块传入尚未提交的新列表，否则 label 取到旧值。 */
   const switchModule = (id: string, list: KnowledgeModule[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
@@ -177,7 +169,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const submit = async (): Promise<void> => {
     if (!exercise) return;
     setLoading(true); setError("");
-    // 提交动作先记（用户做了什么），判分结果是引擎侧的事，落在 journal 的 exercise_result
+    // 提交动作先记；判分结果由 journal 的 exercise_result 记。
     emit(repositoryId, "exercise_submitted", { exercise_id: exercise.id, kind: exercise.kind, module: activeModule, target_unit: exercise.targetUnitId });
     try {
       const answer = exercise.inputMode === "multi_select" ? { selectedIds } : exercise.inputMode === "code" ? { files: codeFiles } : { text };
@@ -212,7 +204,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
   const anchor = exercise?.anchors[0];
-  /** 与代码教学同一条规矩：面板只渲染前 MAX_RENDER_LINES 行，锚点行落在范围外就不能说「已高亮」。 */
+  /** 面板只渲染前 MAX_RENDER_LINES 行，锚点行落在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
     ? anchorRenderable
@@ -222,7 +214,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
   const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : exercise?.inputMode === "code" ? codeFiles.length > 0 : text.trim().length > 0);
   const activeCodeFile = codeFiles.find((file) => file.path === activeCodePath);
-  /** 掌握度只有均值可报：`PracticeSummary.mastery` 每条带 level，页顶要的是一个数。 */
+  /** 掌握度页顶只报均值：`PracticeSummary.mastery` 每条带 level。 */
   const masteryAvg = summary && summary.mastery.length
     ? `${(summary.mastery.reduce((sum, record) => sum + record.level, 0) / summary.mastery.length).toFixed(1)} / 5`
     : summary ? "暂无记录" : "读数未到";
@@ -297,7 +289,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="banner banner-danger">
                 <Icon name="alert" size={14} />
                 <span className="banner-text">{error}</span>
-                {/* 「重新导入 / 源码已更新」这两类原因是产物与实文件脱节，出路只有一条：去导入页重跑 */}
+                {/* 「重新导入 / 源码已更新」两类原因是产物与实际文件脱节，出路只有去导入页重跑 */}
                 {/重新导入|已更新/.test(error) ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
                 ) : null}
@@ -516,10 +508,9 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
 }
 
 /**
-  左栏的已练卡片：`.d-score` 报的是掌握度档位（0–5），配色按「有没有通过记录」走。
-  下次复习时间（`dueAt`）只有刚判过的那一题拿得到——排期住在 `ExerciseResult.review` 里，
-  `PracticeSummary.mastery` 没有这个节点，所以其余卡片如实显示上次练习时间，不替它们编日期。
-  */
+  左栏的已练卡片：`.d-score` 报掌握度档位（0–5），配色按有没有通过记录走。
+  `dueAt` 只存在于 `ExerciseResult.review`，其余卡片如实显示上次练习时间，不编日期。
+ */
 function DoneCard({ record, selected, dueAt, failed, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; failed: string | null; onPick: () => void }): ReactElement {
   const last = record.lastPracticedAt ? dateText(record.lastPracticedAt) : "";
   return (

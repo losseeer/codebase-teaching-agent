@@ -3,9 +3,7 @@ import type { UiJournalEventType } from "./events";
 
 /**
   journal 事件的传输通道：`POST /api/repositories/:id/journal`。
-
-  失败不静默：网络失败或非 2xx 都先 `console.warn` 再入 localStorage 重试队列——
-  「缺事件的 UI 操作是设计漏洞」（设计文档第 8 章 PRINCIPLE 03），所以丢了必须看得见。
+  失败不静默：网络失败或非 2xx 都先 `console.warn` 再入 localStorage 重试队列。
   */
 
 const RETRY_KEY = "codebase-tutor.journal-retry";
@@ -60,16 +58,14 @@ async function send(post: JournalPost): Promise<void> {
 }
 
 /**
-  「这条事件本身不被接受」的判定：4xx = 引擎不收这个类型（事件名越权、载荷不合形状、仓库没挂载），丢弃并点名——
-  留在队列里只会每轮重放、挤掉真正能补发的事件，所以丢弃，但要把丢弃说得查得回来。5xx 与网络错留在队列等下一轮补发。
-  （以前这里还排除 401——那是「还没给口令」，留着等用户补；认证闸已于 2026-10-15 撤除，§64，
-  再留着就是一个节点永远不为真的豁免。）
+  4xx = 引擎明确不收（事件名越权、载荷不合形状、仓库没挂载）：丢弃并点名——
+  留在队列只会每轮重放、挤掉真正能补发的事件。5xx 与网络错留在队列等下一轮补发。
   */
 function rejected(event: JournalSendError): boolean {
   return event.status >= 400 && event.status < 500;
 }
 
-/** 带上状态码：4xx 是「引擎明确不收」，与「网络不通」必须区别对待（前者重试一万次也不会成功）。 */
+/** 带上状态码：4xx「引擎明确不收」与「网络不通」必须区别对待。 */
 class JournalSendError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -77,14 +73,13 @@ class JournalSendError extends Error {
 }
 
 /**
-  单条串行队列：每一次发送（含补发积压）都排到上一次之后再走。
-  旧实现用 `flushing` 布尔做「并发只跑一次」，结果第二次 emit 直接跳过补发就发新事件
-  ——`emit.ts` 那句「顺序即 append 顺序」就成了假话（2026-10-06 复审指出）。
+  单条串行队列：每一次发送（含补发积压）都排在上一次之后再走，
+  append 顺序才等于用户动作顺序。
 */
 let chain: Promise<unknown> = Promise.resolve();
 function schedule(task: () => Promise<unknown>): Promise<void> {
   const result = chain.then(task, task);
-  // 链上只挂丢弃结局的那一份，调用方拿到同一份（成功/失败都不让链断掉）
+  // 链上只挂吞掉结局的那一份，调用方拿到同一份（成功/失败都不让链断掉）
   const settled = result.then(() => undefined, () => undefined);
   chain = settled;
   return settled;
@@ -114,7 +109,7 @@ async function drain(): Promise<void> {
     try {
       await send(post);
     } catch (error) {
-      // 积压里也可能混着永远不会成功的 4xx：同样只丢这一条，别让它占着队列
+      // 积压里混着的 4xx 同样只丢这一条，不占队列
       if (error instanceof JournalSendError && rejected(error)) {
         console.error(`[journal] 补发 ${post.type} 被拒收（HTTP ${error.status}），丢弃这一条`);
         continue;
@@ -132,9 +127,8 @@ export async function flushJournalQueue(): Promise<void> {
 }
 
 /**
-  新事件也走同一条串行链：**先按顺序补发积压，再发本条**，append 顺序才等于用户动作顺序。
-  只在 `online` 与开机时补发是不够的——「引擎重启」不会让浏览器掉线，那条积压会一直压着，
-  而这条新事件先落库就成了「动作晚的记录排在前面」。队里没东西时这里等于直接发，不多花一次请求。
+  新事件也走同一条串行链：先按顺序补发积压、再发本条。
+  队里没积压时等于直接发，不多花一次请求。
  */
 export async function queueJournalEvent(post: JournalPost): Promise<void> {
   return schedule(async () => {

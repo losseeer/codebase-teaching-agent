@@ -5,14 +5,11 @@ import { COMPREHENSION_MODULE_ID, type KnowledgeModule, type ModuleWhere } from 
 import { Icon } from "../ui/icons";
 
 /**
-  左栏模块区（对齐 docs/ui-prototype 的 `.tier-group` / `.chip-list`）：教学侧按分级分三组
-  **主链路 / 基础设施 / 外围**（有自建模块时再加一组），组标题右侧的 `.tier-tag` 是这组的判据摘要；
-  练习侧是少量自建主题、没有分级的 `.chip` 列表。引擎没给分级（旧响应）时退回平铺 chips，不凭空造分级标题。
-  改名 / 隐藏 / 新增收在「模块配置」这一小块里；**档位在这里只读**（分组与悬停给判据），改档只剩 agent 的 `set_tier`。
-  面板主体（推荐入口 / 仓库文件 / 模块内的练习）由调用方以 children 注入。
-
-  两侧语义不同，用 `treeDerived` 区分，**文案必须跟着变**：教学侧模块来自课程树——「删除」实际是**隐藏**
-  （重新导入或点「恢复」就回来），说「删除不可恢复」是假话；练习侧的自建主题存在浏览器本地，删掉真找不回来。
+  左栏模块区：教学侧按分级分三组（主链路 / 基础设施 / 外围，有自建模块再加一组），
+  组标题右侧的 `.tier-tag` 是这组的判据摘要；练习侧是没有分级的 `.chip` 列表。
+  引擎没给分级时退回平铺 chips，不凭空造分级标题。
+  改名 / 隐藏 / 新增收在「模块配置」里；档位在这里只读，改档只剩 agent 的 `set_tier`。
+  `treeDerived` 区分两侧语义，文案跟着变：教学侧的移除是隐藏（可恢复），练习侧的自建主题删掉找不回来。
  */
 const TIER_GROUPS: { tier: CourseTier; label: string; note: string }[] = [
   { tier: "core", label: "主链路", note: "入口与它直接依赖的代码" },
@@ -23,8 +20,8 @@ const CUSTOM_SECTION = { key: "custom", label: "自建", note: "你自己圈的�
 const GROUP_LIMIT = 6;
 
 /**
-  悬停文案：规模 + 分级依据（判据露出来，用户才知道该不该手动改）。
-  这里**不放模块摘要**——摘要正文在节点详情里读，hover 里再摊一段职责说明就成了这屏最长的一块字。
+  悬停文案：规模 + 分级依据（判据露出来才知道该不该手动改）。
+  这里不放模块摘要——摘要在节点详情里读。
   */
 function hoverText(item: KnowledgeModule): string {
   const parts = [
@@ -70,9 +67,9 @@ export function ModulesPane({
 }): ReactElement {
   const [configOpen, setConfigOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
-  /** 首屏只露主链路与基础设施（引擎在 CourseTierEvidence 的注释里就是这么写的）：外围默认折起，组头可展开。 */
+  /** 外围默认折起、组头可展开：首屏只露主链路与基础设施。 */
   const [foldedGroups, setFoldedGroups] = useState<Set<string>>(() => new Set(["periphery"]));
-  /** 组内超过这个行数就先截一段，剩下的点「展开其余 N 项」——否则 20 行模块把推荐入口推出首屏。 */
+  /** 组内超过 GROUP_LIMIT 行先截断，剩下的点「展开其余 N 项」。 */
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const isPractice = where === "practice";
   const removable = (item: KnowledgeModule): boolean => (isPractice ? item.custom === true : modules.length > 1);
@@ -83,7 +80,7 @@ export function ModulesPane({
       key: group.tier,
       label: group.label,
       note: group.note,
-      // 组内按文件数从多到少：模块名一样长时，大模块更容易被看见
+      // 组内按文件数从多到少
       items: modules.filter((item) => item.tier === group.tier).sort((a, b) => (b.entries?.length ?? 0) - (a.entries?.length ?? 0))
     })).filter((section) => section.items.length);
     const custom = modules.filter((item) => !item.tier);
@@ -221,8 +218,7 @@ export function ModulesPane({
   );
 }
 
-/** 「推荐入口 / 仓库文件 / 模块内的练习」共用的小节标题：`note` 是跟在标题后的小字（能删就删），
-  `tip` 是「机制/口径」那类解释——只在悬停时出现，不占版面。 */
+/** 「推荐入口 / 仓库文件 / 模块内的练习」共用的小节标题：`note` 是跟在标题后的小字，`tip` 是只在悬停出现的口径解释。 */
 export function ModuleSectionLabel({ label, note, tip }: { label: string; note?: string; tip?: string }): ReactElement {
   return <div className="section-title row">{label}{note ? <span className="faint fs-11" title={tip}>{note}</span> : null}</div>;
 }

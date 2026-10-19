@@ -10,14 +10,13 @@ import {
 } from "./diagramView";
 
 /**
-  agent 画图工作区的画布那一列（原型 `diagramMainHtml` + `bindCanvas` + `fitView` + `applyView`）。三件事决定它的形状：
-  - **结构不是这里能改的**：界面上没有「加节点 / 删连线」那颗按钮，结构改动只有对话里 agent 的 `set_diagram` 单写入口，
+  agent 画图工作区的画布那一列。三件事决定它的形状：
+  - 结构不在这里改：界面上没有「加节点 / 删连线」那颗按钮，结构改动只有对话里 agent 的 `set_diagram` 单写入口，
     画布只接受两件事——拖动位置、改名；所以这一列一次付费请求都不发（图库、图本体、几何写入、恢复版本全是本地读写，摸不到模型）。
-  - **视野是状态，不是每次渲染重算的**：原型每次 render 都 fit 一遍，用户拖两下就被拽回去；这里只在「打开另一张图 /
-    内容变空 / 点 ⤢ / 恢复旧版」这几种情况下 fit，其余时刻纹丝不动。工作区常驻挂载、藏着时宽度为 0，所以视野按图 id
-    存一份 `viewCache`：切回来还是用户离开时那格。
-  - **边的端点用真实测量值**：节点定宽 132，高度随标签换行、角色小字、便签正文变；原型按固定 48 高算中心，于是标签
-    折了行的节点一拖，箭头就飘在半空。这里把量到的盒子（`ResizeObserver` + 图元挂上时补量一次）当作边与包围盒的锚点来源，箭头永远指着节点正中。
+  - 视野是状态，不是每次渲染重算的：只在「打开另一张图 / 内容变空 / 点 ⤢ / 恢复某个版本」这几种情况下 fit，其余时刻不动。
+    工作区常驻挂载、藏着时宽度为 0，所以视野按图 id 存一份 `viewCache`：切回来还是用户离开时那格。
+  - 边的端点靠量出来的盒子：节点定宽 132，高度随标签换行、角色小字、便签正文变；
+    盒子由 `ResizeObserver`（图元挂上时补量一次）提供，是边与包围盒的锚点来源，箭头永远指着节点正中。
 */
 
 interface DragState {
@@ -50,7 +49,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   saveError: string;
   loading: boolean;
   error: string;
-  /** 变化一次就重新适应内容（恢复旧版之后要用它：那张图的 id 没变，走不到「换图就 fit」那条路）。 */
+  /** 变化一次就重新适应内容（恢复版本之后要用它：那张图的 id 没变，走不到「换图就 fit」那条路）。 */
   fitNonce: number;
   /** 变化一次就把版本菜单弹开（图库里点另一张图的「版本历史」：先取图、取完再弹，菜单才不会是上一张的）。 */
   versionsSignal: number;
@@ -148,7 +147,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     return map;
   }, [warnings]);
 
-  /** 换图 / 图变空：视野回缓存或默认值，并补一次 fit。同一张图的重渲染**绝不**走这条路。 */
+  /** 换图 / 图变空：视野回缓存或默认值，并补一次 fit。同一张图的重渲染不走这条路。 */
   useEffect(() => {
     setSelectedId(null);
     onSelect(null);
@@ -215,7 +214,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagram?.id, structure]);
 
-  /** 恢复旧版之后外层会 bump 一次：那张图的 id 没变，走不到「换图就 fit」那条路，视野得自己跟上。 */
+  /** 恢复版本之后外层会 bump 一次：那张图的 id 没变，走不到「换图就 fit」那条路，视野得自己跟上。 */
   const seenFitNonce = useRef(0);
   useEffect(() => {
     if (fitNonce === seenFitNonce.current) return;
@@ -308,7 +307,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     }
   };
 
-  /* ---------- 导出：只有 JSON —— 原型那两行 PNG / SVG 是点了只弹一句「原型演示」的假条目，不搬 ---------- */
+  /* ---------- 导出：只有 JSON ---------- */
   const exportJson = (): void => {
     if (!diagram) return;
     const blob = new Blob([JSON.stringify(diagram.body, null, 2)], { type: "application/json" });
@@ -356,7 +355,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
           title={`结构改动只走对话里的 agent（set_diagram 单写入口）；这张图由${diagram.source === "agent" ? " agent 画" : " 你自己新建"}。${warnings.length ? `${warnings.length} 个节点的引用核不到课程树。` : ""}`}
         >{`${diagram.source === "agent" ? "agent 生成" : "我创建"} · ${relativeTime(diagram.updatedAt)}`}</span>
         <SavePill state={saveState} error={saveError} />
-        {/* 原型这里靠一个没写规则的 .spacer 想右对齐，结果整排挤在左边；规则补在 pages.css。 */}
         <span className="spacer" />
         <button
           ref={versionsAnchor}

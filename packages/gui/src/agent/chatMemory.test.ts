@@ -3,8 +3,8 @@ import { readDebtMap, readThreadMemory, RECHECK_DELAYS, writeDebtMap, writeThrea
 
 /**
   侧栏的两份本地记忆：「这个浏览器上次停在哪个会话」与「断线那一轮还欠着账」。
-  真源都在引擎库，所以这里的判据只有一条——**读坏数据不许崩，也不许把坏数据当好数据送去补账**。
-  补账节奏那三条延时是产品读数（总等待约 100s），改它等于改用户等得起多久，因此钉在这里。
+  真源在引擎库，判据只有一条：读坏数据不许崩，也不许把坏数据当好数据送去补账。
+  补账节奏那三条延时是产品读数（总等待约 100s），钉在这里。
  */
 
 function fakeStorage(initial: Record<string, string> = {}): Storage {

@@ -4,10 +4,7 @@ import { parseScopedStreamFrame } from "./client";
 import { progressText } from "../agent/useScopedChat";
 
 /**
-  引擎 ↔ 界面这条边界上的契约。这一组用例是「GUI 一条单测都没有」那笔债的第一块还款（架构复审 10-18 的第 3 条）：
-  以前约 40 个端点共用一次 `as T` 硬转、导入进度甚至 `as unknown as ImportJob`，
-  引擎改个字段名，界面拿到 `undefined` 照样画，既不报错也不留痕。
-  过程帧是这里最容易测准的一类（它是纯函数一进一出），也是历史上真出过事的一类（10-06 的 `thinking` 漏接）。
+  引擎 ↔ 界面这条边界上的契约：作用域对话的过程帧解析与界面文案映射。
   */
 describe("作用域对话流的过程帧契约", () => {
   it("五类已登记的帧都能过，字段原样带出", () => {
@@ -19,7 +16,7 @@ describe("作用域对话流的过程帧契约", () => {
   });
 
   it("引擎多发一个没声明的字段：不炸，但不带进界面", () => {
-    // 向后兼容是刻意的：加字段不该让旧界面报错；而没声明的东西也不该被悄悄用上
+    // 加字段不报错（向后兼容），未声明的字段也不带进界面
     expect(parseScopedStreamFrame({ type: "delta", delta: "x", extraFutureField: 1 })).toEqual({ type: "delta", delta: "x" });
   });
 
@@ -29,7 +26,6 @@ describe("作用域对话流的过程帧契约", () => {
   });
 
   it("没登记过的帧种类：抛，而不是让界面继续挂着上一行提示", () => {
-    // 10-06 的形状：引擎发了 GUI 不认识的一类帧，界面上「回复生成中…」永远不消失且零报错
     expect(() => parseScopedStreamFrame({ type: "compacting", chars: 120 })).toThrow(/stream\.progress/);
   });
 

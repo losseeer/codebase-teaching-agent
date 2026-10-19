@@ -16,12 +16,11 @@ import { layoutVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, toastFailure, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
 
-// Re-export so 子组件可统一从 `../App` 取 Workspace 类型（类型已在 api/client 定义）。
+// 类型已在 api/client 定义，这里转发一次，子组件统一从 `../App` 取 Workspace。
 export type Workspace = _Workspace;
 
 /**
-  工作区校验在「连不上」时的退避重试节奏（毫秒）。引擎重启（`tsx watch` 改文件即重启）约 150ms 起、
-  带原生绑定时也就一秒出头，500ms 起步的三趟足够跨过；总等待 ~5s，再长就该让用户看见了。
+  工作区校验在「连不上」时的退避重试节奏（毫秒）：三趟总等待 ~5s，足够跨过引擎重启的一秒出头；再长就该让用户看见。
   */
 const WORKSPACE_RETRY_DELAYS = [500, 1500, 3000] as const;
 
@@ -29,9 +28,8 @@ const WORKSPACE_STORAGE_KEY = "codebase-tutor.workspace";
 const SIDEBAR_STORAGE_KEY = "codebase-tutor.sidebar-collapsed";
 
 /**
-  侧栏折叠态的读写。读**必须**包 try/catch 并走 useState 初始化器：存储不可用（隐私模式 / 被禁）时
-  初始化器里一抛就白屏（与 readStoredWorkspace 同一类事故）。写也兜住：它挂在事件处理器里，
-  抛错会连累同一处理器里紧随其后的状态更新。
+  侧栏折叠态的读写。读必须包 try/catch 并走 useState 初始化器：存储不可用（隐私模式 / 被禁）时
+  初始化器里一抛就白屏。写也兜住：它挂在事件处理器里，抛错会连累同一处理器里紧随其后的状态更新。
   */
 function readSidebarCollapsed(): boolean {
   try {
@@ -50,9 +48,8 @@ function writeSidebarCollapsed(value: boolean): void {
 }
 
 /**
-  读回上次的仓库选择。**这条路径上原来没有 try**：那一个值坏掉（手改过、被截断、别的版本写过别的形状）
-  就等于整棵应用抛在 useState 初始化器里——实测 `/app` 与 `/import` 都是 `#root` 空白 + `SyntaxError`，
-  用户只能自己开 DevTools 删键。坏数据按「没有选择」处理并清掉，让他回到导入页那条活路（地址簿还在，点一下就能选回来）。
+  读回上次的仓库选择。坏数据按「没有选择」处理并清掉，让用户回到导入页那条活路（地址簿还在，点一下就能选回来）。
+  这条路径必须包 try/catch：它在 useState 初始化器里，一抛就白屏。
   */
 function readStoredWorkspace(): _Workspace | null {
   let raw: string | null;
@@ -81,7 +78,7 @@ function readStoredWorkspace(): _Workspace | null {
 }
 
 /**
-  顶层 Shell（对齐 docs/ui-prototype 的 .app 三栏栅格）：侧栏 = 品牌行 + 五项主导航 + 页脚（收起侧栏 / 引擎状态），
+  顶层 Shell：侧栏 = 品牌行 + 五项主导航 + 页脚（收起侧栏 / 引擎状态），
   右侧 = 持久 Agent 对话栏（三工作区共享一套结构，作用域跟随工作区）。工作区切换由侧栏导航承担，页内不再有 tab 条。
   /import 与 /insights 保留独立路由；三个学习工作区合并为单一主区组件树（`/app?workspace=`），旧路径 /course /tutor /practice 仍兼容跳转。
   持久化：workspace（localStorage `codebase-tutor.workspace`）、scope（`codebase-tutor.scope`）；
@@ -89,12 +86,9 @@ function readStoredWorkspace(): _Workspace | null {
   */
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
-  // 引擎的**地址簿**是持久的（N 条路径），但启动一条都不挂载：GUI 恢复 workspace 后第一次访问该仓，
+  // 引擎的地址簿是持久的（N 条路径），但启动一条都不挂载：GUI 恢复 workspace 后要访问某个仓，
   // 引擎才读它的 `.tutor` 产物挂进内存（超上限的最久未用项被驱逐）。所以这里的校验 = 一次挂载请求，
   // 顺带把新鲜度判定带回来，好在横幅上如实说「这是 X 天前的分析」。
-  // 失败分三类处置：**not_in_catalog 才是「本地选择真失效」**（清掉、引到导入页）；
-  // directory_missing / artifacts_incomplete 要**留着 workspace**——仓库没丢，是引擎挂不起来，
-  // 静默清掉等于把用户的路径弄丢。连不上 / 5xx 多半是引擎正在重启，只退避重试，绝不清 localStorage。
   const [workspaceReady, setWorkspaceReady] = useState(() => workspace === null);
   /** 校验放弃（连不上 / 5xx 重试耗尽）：本地选择不删，改说「引擎没连上」，并允许手动或 online 后重验。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
@@ -110,7 +104,7 @@ export function App(): ReactElement {
   useEffect(() => { installJournalRetry(); }, []);
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
-    // 存储不可用时（隐私模式 / 被禁）本次会话照常工作：见 readSidebarCollapsed 的同款兜底
+    // 存储不可用时（隐私模式 / 被禁）本次会话照常工作
     try {
       if (value) localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(value));
       else localStorage.removeItem(WORKSPACE_STORAGE_KEY);
@@ -143,19 +137,18 @@ export function App(): ReactElement {
           if (stale()) return;
           if (isNotFound(error)) {
             if (error instanceof ApiError && error.reason === "not_in_catalog") {
-              // 引擎明说「地址簿里没这个仓」：本地选择确实失效。失效必须说出来——静默清 localStorage 再把用户甩到
-              // 导入页，看起来像「软件自己把我的仓库弄丢了」。
+              // 「地址簿里没这个仓」= 本地选择真失效：清掉并说出来，静默失效看起来像软件把仓库弄丢了
               updateWorkspace(null);
               setWorkspaceReady(true);
               showToast("仓不在地址簿 · 需重新导入");
               return;
             }
             // 目录挪走 / 产物不全：仓库没丢，是挂不起来。留着 workspace 说清原因（pending 会渲染 MountBlocked），
-            // 让用户选「放回原处再来」还是「移出地址簿」——绝不静默清掉，也绝不自动重新导入。
+            // 让用户选「放回原处再来」还是「移出地址簿」：不清本地选择，也不自动重新导入
             setMountBlocked(error instanceof Error ? error.message : "该仓库暂时挂不起来");
             return;
           }
-          // 其余失败（连不上 / 5xx）多半是引擎正在重启，而不是仓库没了：退避重试，绝不清 localStorage。
+          // 其余失败（连不上 / 5xx）多半是引擎正在重启而不是仓库没了：退避重试，不清 localStorage
           const wait = WORKSPACE_RETRY_DELAYS[attempt];
           if (wait === undefined) {
             setEngineUnreachable(true);
@@ -236,7 +229,7 @@ export function App(): ReactElement {
     : null;
   // Agent 对话栏只属于「有对话可谈」的路由：导入页还没有工作区语义，成本监控页问的不是代码——
   // 两页挂着它都只会占宽并让人以为能问点什么。收起态由用户偏好（layout.railCollapsed）决定，
-  // 页顶栏那枚 panelRight 是唯一的再开入口，所以收起时整栏不再占位（原型 `.rail-hidden`）。
+  // 页顶栏那枚 panelRight 是唯一的再开入口，所以收起时整栏不再占位。
   const location = useLocation();
   const railRoute = !!workspace && !["/import", "/insights"].includes(location.pathname);
   const layout = useLayout();
@@ -275,7 +268,7 @@ export function App(): ReactElement {
         {banner}
         <div className="route-content">
           <Routes>
-            {/* 根路径固定落导入页（用户口径 09-23）：不带 workspace 记忆直通 /app——导入是每次打开的起点 */}
+            {/* 根路径固定落导入页：导入是每次打开的起点，不带 workspace 记忆直通 /app */}
             <Route path="/" element={<Navigate to="/import" replace />} />
             <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} />} />
             <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
@@ -317,7 +310,7 @@ function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; on
 /**
   地址簿里有这条、但引擎挂不起来（目录被挪走 / `.tutor` 产物不全）。
   这与「不在地址簿」不同：仓库没丢，用户把目录放回原处就能继续用，所以两条路都摆出来，
-  也**绝不自动重新导入**——重跑是花钱的动作。
+  也不自动重新导入（重跑是花钱的动作）。
   */
 function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message: string; repositoryPath: string; onRetry: () => void; onForget: () => void }): ReactElement {
   return (
@@ -339,9 +332,9 @@ function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message:
 
 /**
   过期产物横幅：引擎在挂载时算出「当前文件内容哈希 vs 产物记录的哈希」「当前 HEAD vs 分析时 HEAD」，
-  这里只负责把结论说人话，并把两个动作返回用户——**没有第三条自动路径**。
+  这里只负责把结论说人话，并把两个动作返回用户——没有第三条自动路径。
   - stale：内容真的变了，明说几天前的分析、多少个文件对不上；
-  - drifted：内容一模一样只是提交挪了（切分支/空提交），产物照常可用，也照样告知，避免「它是不是最新的」被猜。
+  - drifted：内容一模一样只是提交挪了（切分支/空提交），产物照常可用，也照样告知。
   */
 function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze }: { repositoryPath: string; freshness: RepositoryFreshness; onAcknowledge: () => void; onReanalyze: () => void }): ReactElement {
   const stale = freshness.verdict === "stale";
@@ -434,8 +427,8 @@ function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnTyp
   useEffect(() => { chat.setScope(active); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [active]);
   return (
     <div className="workbench-root">
-      {/* 三个视图常驻挂载（切换不丢状态），所以「可见性」必须传进去：
-          推荐入口与流程生成都是花钱的 LLM 调用，用户停在宏观设计时不该由隐藏面板替他点一次。 */}
+      {/* 三个视图常驻挂载，所以「可见性」必须传进去：推荐入口与流程生成都是花钱的 LLM 调用，
+          用户停在宏观设计时不该由隐藏面板替他点一次。 */}
       <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} visible={active === "map"} /></div>
       <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} visible={active === "teaching"} /></div>
       <div className="workbench-view" hidden={active !== "practice"}><PracticePage workspace={workspace} chat={chat} visible={active === "practice"} /></div>

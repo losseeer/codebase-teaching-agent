@@ -6,7 +6,7 @@ import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 
 /**
-  Agent 侧栏的 3 个作用域。对应 prototype 中 `SCOPES = { map, teaching, practice }`。
+  Agent 侧栏的 3 个作用域。
   - `map`      宏观设计（绑定文件树，可见模块/关系，动作只读）
   - `teaching` 代码教学（绑定当前课程节点，可见源码/锚点/stage，动作可写入 session）
   - `practice` 练习评估（绑定当前练习，可见题目/进度，动作可写入学习日志）
@@ -46,9 +46,8 @@ function activityOf(event: ProgressFrame): TeachingProgress {
 }
 
 /**
-  过程提示的中文文案，**三个作用域共用一份**。文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
-  原来只有教学那侧接了，宏观的 `thinking` 到了钩子里没分支接——引擎在思考第三轮，
-  界面一直挂着「回复生成中…」，而且没有任何报错。现在种类由 `shared` 的词表管，漏接编译不过。
+  过程提示的中文文案，三个作用域共用一份：文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
+  种类由 `shared` 的词表管，漏接编译不过。
   帧整个缺席（引擎没带 payload）时给「回复生成中…」：那是过程提示的措辞档位，不是伪造的事实读数。
   */
 export function progressText(event: ProgressFrame | undefined): string {
@@ -67,13 +66,13 @@ export function progressText(event: ProgressFrame | undefined): string {
 
 /** thread 一条消息的形态：用户/Agent。
   agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示）。
-  位置/状态变化（切换作用域、切换节点、选中文件等）不再以分割线入线程——上下文变化由绑定区展示，
-  线程只留真实的对话内容（v0.8.1）。 */
+  位置/状态变化（切换作用域、切换节点、选中文件等）不以分割线入线程——上下文变化由绑定区展示，
+  线程只留真实的对话内容。 */
 export type ThreadItem =
   | { kind: "user"; id: string; text: string }
   /**
-    `card`：这一回合 agent 画（或改）了一张图，消息下面挂一张可点开的图卡片（prototype `.dg-card`）。
-    它挂在消息上而不是全局提示条上——用户要能在两分钟之后回来还找得到「哪句话画出了哪张图」。
+    `card`：这一回合 agent 画（或改）了一张图，消息下面挂一张可点开的图卡片。
+    挂在消息上而不是全局提示条上——用户事后回来还能找到「哪句话画出了哪张图」。
   */
   | { kind: "agent"; id: string; text: string; variant?: "error" | "hint"; card?: { diagramId: string; name: string } };
 
@@ -113,7 +112,7 @@ export const HEURISTIC_SOURCE = "local-heuristic-v1";
   回合失败是「断线」还是「引擎答砸了」：fetch 层面两者同形（都是抛错），但只有前者引擎仍会把这一轮
   算完并落库，回来时补得回——补账只对这一类开。AbortError 是连接被掐（断网时浏览器也这么抛），
   「连接中断，未收到完整回复」是流提前收尾，Failed to fetch / Load failed / NetworkError 是各家浏览器
-  对 fetch 网络错误的文案。引擎显式回的 error 事件（模型失败、会话失效）不在其列：那一轮确实没成品，没什么可补。
+  对 fetch 网络错误的文案。引擎显式回的 error 事件（模型失败、会话失效）不在其列。
   */
 function lostInTransit(reason: unknown): boolean {
   if (reason instanceof Error && reason.name === "AbortError") return true;
@@ -125,7 +124,7 @@ export interface ScopedChatApi {
   scope: Scope;
   setScope: (next: Scope) => void;
 
-  /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责，不留第二个出口。 */
+  /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
   pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }) => void;
@@ -137,7 +136,7 @@ export interface ScopedChatApi {
     */
   chatThreads: Record<Scope, ChatThread[]>;
   currentThreadId: Record<Scope, string | null>;
-  /** 新建线程并切过去；`firstQuestion` 用来给线程起个认得出的标题。teaching 走 createSession（它才装配策略与学习者画像）。 */
+  /** 新建线程并选中它；`firstQuestion` 用来给线程起个认得出的标题。teaching 走 createSession（它才装配策略与学习者画像）。 */
   newThread: (scope: Scope, firstQuestion?: string) => Promise<string | null>;
   switchThread: (scope: Scope, threadId: string | null) => void;
   renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
@@ -153,9 +152,9 @@ export interface ScopedChatApi {
   selected: CourseNode | null;
   setSelected: (node: CourseNode) => void;
 
-  /** 宏观设计作用域绑定（prototype `binds.map` = 节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
-    `scopePaths`：从架构图拖住一个**模块**时随请求上送它的可见文件清单（10-16 起都是真课程树节点，
-    不再是目录合成块），引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
+  /** 宏观设计作用域绑定（节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
+    `scopePaths`：从架构图拖住一个模块时随请求上送它的可见文件清单（真课程树节点），
+    引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。
     `focus`：仅流程视图选中环节时给出——课程树节点只到入口粒度，环节自身的说明与关联文件要随请求上送。 */
   mapNode: CourseNode | null;
   setMapNode: (node: CourseNode | null, scopePaths?: string[], focus?: FlowStage | null) => void;
@@ -176,7 +175,7 @@ export interface ScopedChatApi {
   requestOpenDiagram: (diagram: { id: string; name: string }) => void;
   clearDiagramOpen: () => void;
 
-  /** 练习作用域绑定（prototype `binds.practice` = 练习 #N · 文件）：由 PracticePage 写入 */
+  /** 练习作用域绑定（练习 #N · 文件）：由 PracticePage 写入 */
   practiceUnit: string;
   setPracticeUnit: (label: string) => void;
   settings: TutorSettings;
@@ -206,8 +205,8 @@ export interface ScopedChatApi {
 /**
   三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）：
   页面只读绑定与选择（selected / settings / mapNode / practiceUnit），写入都经 AgentRail。
-  命名口径：本对象管**线程**（threadId / ThreadItem / chatThreads），`session` 是引擎的 TutorSession（教学作用域的在途状态）；
-  同一条教学会话三个名字——库里 `chat_session` 行 = GUI 的 threadId = 引擎的 sessionId。stage / fallbackCount 随状态机于 2026-10-14 撤了。
+  命名口径：本对象管线程（threadId / ThreadItem / chatThreads），`session` 是引擎的 TutorSession（教学作用域的在途状态）；
+  同一条教学会话三个名字——库里 `chat_session` 行 = GUI 的 threadId = 引擎的 sessionId。
   */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
   const [scope, setScope] = useState<Scope>(loadInitialScope);
@@ -234,7 +233,7 @@ const mapNode = mapSelection.node;
 const setMapNode = (node: CourseNode | null, scopePaths: string[] = [], focus: FlowStage | null = null): void => setMapSelection({ node, scopePaths, focus });
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
-// 画布上正打开的那张图（prototype `state.map.openDiagramId`）：绑定行读它，map-chat 也把它当作用域上送，
+// 画布上正打开的那张图：绑定行读它，map-chat 也把它当作用域上送，
 // 这样「把这条边删掉」指的是用户眼前那张，而不是模型从图库里猜一张。
 const [openDiagram, setOpenDiagram] = useState<{ id: string; name: string } | null>(null);
 // 对话里的图卡片被点开：页面取走这一格去开图，取完清空（一次性的投递，不当事件总线用）
@@ -252,7 +251,7 @@ useEffect(() => {
     // 重导入后按 id 把在绑选择挂回新树：`prev ?? …` 保旧对象会让上下文请求一直带着过期节点（children/anchors 都是旧的）
     const nodes = flatten(tree.root);
     setMapSelection((prev) => {
-      // 课程重烧后流程快照也可能更新，环节 focus 一并清空（旧对象不再上送；重选环节即可）
+      // 课程重新生成后流程快照也可能更新，环节 focus 一并清空（重选环节即可）
       if (!prev.node) return { node: tree.root, scopePaths: [], focus: null };
       return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [], focus: null };
     });
@@ -291,7 +290,7 @@ useEffect(() => {
     // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误丢弃即可
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
-  // 回复生成过程指示（按作用域）：三作用域都走各自请求的 SSE 事件（teaching 是 progress、map 是 thinking/reading），都是引擎发事件、GUI 定文案
+  // 回复生成过程指示（按作用域）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
   const [progress, setProgress] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const setScopeProgress = (target: Scope, text: string): void => {
     setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
@@ -310,7 +309,6 @@ useEffect(() => {
   const setPracticeExercise = (exercise: Exercise | null): void => {
     setPracticeExerciseState(exercise);
     // 换题即换线程：旧题的问答留在旧线程里（列表可切回），当前线程清空、下次追问时新建并绑到新题。
-    // 这替掉的是 09-25 的「历史游标」——同一份「旧题问答不许进新题上下文」的语义，改由线程边界来保证。
     if (currentThreadRef.current.practice) switchThread("practice", null);
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
@@ -319,7 +317,7 @@ useEffect(() => {
     if (!repositoryId) return;
     // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态（与下方 getCourse 效应同一套口径）
     let cancelled = false;
-    // 这一发唯一的用处：把**没被用户动过**的设置档种子成推荐值。画像本身界面不显示（成本与明细都在 InsightsPage 自己取数）
+    // 这一发唯一的用处：把没被用户动过的设置档种子成推荐值。画像本身界面不显示（成本与明细都在 InsightsPage 自己取数）
     api.getLearner(repositoryId).then((profile) => {
       if (cancelled) return;
       setSettingsState((curr) => curr.style === 50 && curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
@@ -347,7 +345,7 @@ useEffect(() => {
   const recheckTimers = useRef<Record<Scope, number | null>>({ map: null, teaching: null, practice: null });
   /**
     补账结论是一句「本地提示」，库里没有正文对应物：回读线程会把侧栏整个重写一遍，
-    靠 pushMessage 递出去的这句会在第二次回读时消失（实测刷新一次就没了）。
+    靠 pushMessage 递出去的这句会在第二次回读时消失。
     所以按线程存一份，place 每次铺正文都把它补回最后一项；记账（新一轮开始）时作废。
     */
   const backfillNotice = useRef<Record<Scope, { threadId: string; item: ThreadItem } | null>>({ map: null, teaching: null, practice: null });
@@ -418,7 +416,7 @@ useEffect(() => {
     };
   }, []);
 
-  /** 发送前先结断线那轮的账：回读正文会重写侧栏，必须赶在用户新气泡上屏之前跑完，否则又变成「气泡被覆盖」。 */
+  /** 发送前先结断线那轮的账：回读正文会重写侧栏，必须赶在用户新消息上屏之前跑完。 */
   const settlePendingTurn = async (target: Scope): Promise<void> => {
     if (!hasDebt(target)) return;
     await loadThread(target, currentThreadRef.current[target]!);
@@ -465,7 +463,7 @@ useEffect(() => {
   /**
     一次流式回合的共用三动作（三作用域同一份）：delta 落点、成功结账、失败分诊。
     「回放是否已开始」只活在这个闭包里：分诊发生在 catch 里，而那一个布尔决定提示文案说不说「引擎其实算完了」。
-    结账顺序是拍过板的：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
+    结账顺序：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
   */
   const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined) => Promise<void>; fail: (reason: unknown) => void } => {
     let replayStarted = false;
@@ -496,7 +494,7 @@ useEffect(() => {
     try {
       if (scope === "teaching") {
         const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
-        // 教学线程绑节点：点开的线程若属于别的节点，先把左栏挪过去（节点效应接着把这个线程挂回来）
+        // 教学线程绑节点：点开的线程若属于别的节点，先把左栏指向那个节点（节点效应接着把这个线程挂回来）
         if (thread?.courseNodeId && thread.courseNodeId !== selected?.id) {
           const node = course ? flatten(course.root).find((item) => item.id === thread.courseNodeId) : undefined;
           if (node) { setSelected(node); return; }
@@ -583,7 +581,7 @@ useEffect(() => {
     }
   };
 
-  /** 「新建会话」按钮：建完切过去，侧栏清空成一段新对话。 */
+  /** 「新建会话」按钮：建完选中它，侧栏清空成一段新对话。 */
   const newThread = async (scope: Scope, firstQuestion?: string): Promise<string | null> => {
     const threadId = await createThreadFor(scope, firstQuestion);
     if (threadId) setCurrentThread(scope, threadId, false);
@@ -646,11 +644,10 @@ useEffect(() => {
     if (repositoryId) void refreshThreads(scope);
   }, [repositoryId, scope]);
 
-  // 换节点 = 挂回该节点最近一次教学线程（GUI 从没存过 id 的存量会话也在清单里）；该节点没有会话时留空，
-  // 下一次发送经 createSession 新建。清单可能比本地状态滞后一拍（新建后还没回表），这时**什么都不做**：
-  // 中途清掉当前线程会清除正在进行的回合，也会把 session 一起清空。真被别处删掉的线程由 refreshThreads 剪枝。
-  // 已经停在这条线程上时也**不再回读**：清单每次刷新都是新数组，本效应都会重跑，而 loadThread 会用库里的
-  // 旧正文覆盖侧栏——新会话的第一问此刻还没落库，覆盖过去就把用户气泡清除了（只剩 agent 回复）。
+  // 换节点 = 挂回该节点最近一次教学线程；该节点没有会话时留空，下一次发送经 createSession 新建。
+  // 清单可能比本地状态滞后一拍（新建后还没回表），这时什么都不做：中途清掉当前线程会打断正在进行的回合，也会把 session 一起清空。
+  // 已经停在这条线程上时也不再回读：loadThread 会用库里的旧正文覆盖侧栏，而新会话的第一问可能还没落库。
+  // 真被别处删掉的线程由 refreshThreads 剪枝。
   useEffect(() => {
     if (!repositoryId || !selected) return;
     const list = chatThreadsRef.current.teaching;
@@ -667,7 +664,7 @@ useEffect(() => {
 
   const send = async (): Promise<void> => {
     if (!content.trim()) return;
-    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不再把这一句丢弃。
+    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不丢弃这一句。
     const message = content;
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
@@ -692,7 +689,7 @@ useEffect(() => {
       if (!active) return;
       begin();
       recordDebt("teaching", active.id);
-      // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流（替代原 /ws 全局广播 + sessionId 过滤）
+      // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
         if (event.type === "delta") sink.onDelta(event.delta);
         else if (event.type === "progress") setScopeProgress("teaching", progressText(event.payload));
@@ -711,11 +708,11 @@ useEffect(() => {
   };
 
   // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
-  // `overrideText`：画布空态与 composer 上方那排快捷指令用——它们要发的是**按钮上那句**，不是输入框里可能写到一半的话。
+  // `overrideText`：画布空态与 composer 上方那排快捷指令用——它们要发的是按钮上那句，不是输入框里可能写到一半的话。
   const sendScoped = async (scope: "map" | "practice", overrideText?: string): Promise<void> => {
     const message = (overrideText ?? content).trim();
     if (!message || !repositoryId) return;
-    // 同 teaching：先结断线那轮的账，再让这一句上屏——原来「没题就 return」会让用户输入凭空消失。
+    // 同 teaching：先结断线那轮的账，再让这一句上屏。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
     if (overrideText === undefined) setContent("");

@@ -14,9 +14,8 @@ import {
 } from "./local-state";
 
 /**
-  业务模块清单的投影与本地覆盖层。这一层的错都是「界面自己造出来的读数」那一类：
-  共享文件在清单里重复十几遍、被隐藏的模块又冒出来、旧浏览器里存着的坏形状把整页带崩。
-  真源在引擎（档位、覆盖层都由 /course 叠好交出来），这里只验界面**不改写、不臆造**这两件事。
+  业务模块清单的投影与本地覆盖层。
+  真源在引擎（档位、覆盖层都由 /course 叠好交出来），这里只验界面不改写、不臆造。
  */
 
 const node = (id: string, title: string, anchors: string[], children: CourseNode[] = [], extra: Partial<CourseNode> = {}): CourseNode => ({
@@ -36,7 +35,7 @@ const tree = (modules: CourseNode[]): CourseTree => ({
   root: node("root", "仓库", [], [node("modules", "仓库模块地图", [], modules), node("entries", "入口", [], [])])
 });
 
-/** 一个能记事的 localStorage：存储坏掉这条码路也要能测（写不进去不等于界面就该崩）。 */
+/** 可控的 localStorage 替身：存储写不进去时界面也不该崩。 */
 function fakeStorage(initial: Record<string, string> = {}): Storage {
   const store = new Map(Object.entries(initial));
   return {

@@ -3,13 +3,10 @@ import type { FileTreeNode } from "@codebase-tutor/shared";
 import { Icon } from "../ui/icons";
 
 /**
-  仓库文件树（对齐 docs/ui-prototype 的 `.tree` / `.tree-row`）：按真实目录层级渲染。
-  - 目录可折叠，**首层目录默认展开**；每目录最多展示 8 项 + 「显示其余 N 项」
+  仓库文件树：按真实目录层级渲染，首层目录默认展开。
   - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示行数
-  - `badge`：可选的目录徽标（宏观设计用它给顶层目录标注语义分组）
+  - `badge`：可选的目录徽标，用于给顶层目录标注语义分组
   - `activePath`：高亮当前选中的文件
-
-  原为 TutorPage 内部组件，提取共享后由宏观设计的「项目目录」与代码教学的「仓库文件」两处复用。
  */
 export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
   nodes: FileTreeNode[];

@@ -5,8 +5,8 @@ import { InlineName, MenuButton, PopMenu, type MenuItem } from "./PopMenu";
 import { relativeTime } from "./diagramView";
 
 /**
-  左栏「图库」那一面（原型 `galleryHtml` / `galleryListHtml`）：搜索 + 新建 + 一张图一行。
-  这里**只列摘要**（`DiagramSummary`）：整张结构是点开才取的，左栏不承担画布。
+  左栏「图库」那一面：搜索 + 新建 + 一张图一行。
+  这里只列摘要（`DiagramSummary`）：整张结构是点开才取的，左栏不承担画布。
   条目上那颗 ⋯ 才有重命名 / 版本历史 / 删除——三个动作都不碰结构，删除连版本历史一起没。
 */
 export function GalleryPane({ diagrams, openId, loading, error, query, onQueryChange, onOpen, onCreate, onRename, onVersions, onDelete }: {

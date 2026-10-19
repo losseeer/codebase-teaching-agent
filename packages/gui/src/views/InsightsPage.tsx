@@ -5,13 +5,11 @@ import { LlmSettingsControl } from "../agent/LlmSettings";
 import { Icon } from "../ui/icons";
 import { PageTopbar } from "./WorkspaceChrome";
 
-/**
-  成本监控页（对齐 docs/ui-prototype 的 `insightsPage`）：预算卡 → 指标 tiles → 逐日条形 → 场景 / Provider / 计价三表。
-  读数全部来自引擎对本月 `token_usage` 事件的聚合（`cost/cost.ts`），这里只做呈现与分桶明细，
-  不二次估算——所以「未配单价」这种会让金额恒为 0 的事实必须显式说出来，而不是留一句 ¥0.0000 让人误读。
- */
+// 成本监控页：预算卡 → 指标 tiles → 逐日条形 → 场景 / Provider / 计价三表。
+// 读数全部来自引擎对本月 `token_usage` 事件的聚合（`cost/cost.ts`），这里只做呈现与分桶明细，不二次估算；
+// 单价未配时金额恒为 0，这一事实必须显式说出来。
 
-/** 场景取值 → 界面叫法。取值清单是引擎 `JournalEventType["token_usage"]` 的 scene 白名单，两边要同步。 */
+/** 场景取值 → 界面叫法。取值清单是引擎 `JournalEventType["token_usage"]` 的 scene 白名单，两边同步。 */
 const SCENE_LABEL: Record<string, string> = {
   teach: "代码教学",
   map_chat: "宏观设计对话",
@@ -25,12 +23,9 @@ const SCENE_LABEL: Record<string, string> = {
   unknown: "未标注"
 };
 
-/**
-  金额一律按**人民币**显示（¥）。三档单价与月度预算填的就是每百万 token 的人民币价，
-  字段名与变量名里的 `Usd` / `USD_PER_MILLION` 是历史遗留——没跟着改是因为这些键已经落进
-  `llm-settings.json`、库里的 `repository_state.settings_json` 与接口契约里，改名会把存量数据一起牵动。
-  换算逻辑没有两种口径：引擎算出来的数原样带上 ¥，不做任何汇率乘除。
- */
+// 金额一律按人民币显示（¥）：字段名里的 `Usd` / `USD_PER_MILLION` 是存量键名
+// （已落进 `llm-settings.json`、`repository_state.settings_json` 与接口契约，不能改），
+// 引擎算出来的数原样带 ¥，不做汇率乘除。
 const usd = (value: number): string => `¥${value.toFixed(4)}`;
 const tokensText = (value: number): string => value.toLocaleString();
 
@@ -39,7 +34,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   const [budget, setBudget] = useState("5");
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  /** 每次拉取都先清掉上一回合的错误：原来一次失败就把红字永久挂在页面上，数据明明已经刷成功了。 */
+  /** 每次拉取先清掉上一回合的错误，读取成功后不留残留红字。 */
   const refresh = useCallback((): void => {
     setError("");
     api.getCost(workspace.repositoryId)
@@ -47,10 +42,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取成本"));
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
-  /**
-    引擎只收「有限非负数」。空串在 JS 里 `Number("") === 0`，直接发过去就等于把月预算改成 0
-    ——那一档是「从此所有付费分支都判为达到预算上限」，一次误输就能把整个产品静音掉，所以在这里先判住。
-    */
+  // 引擎只收「有限非负数」：`Number("") === 0`，空串会被当成把月预算改成 0，
+  // 那一档让此后所有付费分支都判为达到预算上限。
   const budgetNumber = Number(budget);
   const budgetValid = budget.trim() !== "" && Number.isFinite(budgetNumber) && budgetNumber >= 0;
   const saveBudget = async (): Promise<void> => {
@@ -65,9 +58,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   };
 
   const pricingConfigured = cost?.pricingConfigured ?? true;
-  /** 读数没拿到（首帧 / 拉取失败）时 `cost` 是 null——这时任何「正常」字样都是替引擎编的：
-      闸门生效与否、金额、剩余都来自那一次读取。实测把 `/cost` 打成 500，页面会同时说
-      「正常运行」和「剩余 ¥0.0000；达到预算上限后改走本地规则」，正是要避免的那类「坏了但看不出来」。 */
+  /** 读数没拿到（首帧或拉取失败）时 `cost` 是 null，此时不能出现任何「正常」字样：
+      闸门生效与否、金额、剩余都来自那一次读取。 */
   const readoutReady = cost !== null;
   const usedRatio = cost && cost.monthlyBudgetUsd > 0 ? Math.min(1, cost.estimatedCostUsd / cost.monthlyBudgetUsd) : 0;
   const overBudget = readoutReady && pricingConfigured && cost.mode === "degraded";
@@ -89,7 +81,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       />
       <section className="page page-insights">
         <div className="insights-wrap">
-          {/* 错误紧跟标题：原来挂在整页最底部，读数失败时页面照常显示 0.0000，红字要滚到底才看得见 */}
+          {/* 错误紧跟标题：读数失败时页面照常显示 0.0000，红字必须一眼可见 */}
           {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
 
           <section className="card budget-card col gap-3">

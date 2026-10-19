@@ -2,8 +2,7 @@ import type { ChatScope } from "@codebase-tutor/shared";
 
 /**
   Agent 侧栏的本地持久化（localStorage / sessionStorage）与补账节奏常量。
-  真源在引擎库，这里只记「这个浏览器上次停在哪」与「断线那轮的欠账」——从 useScopedChat 抽出来，
-  让单一状态源那一个 Hook 只管编排，不管存储读写。
+  真源在引擎库，这里只记「这个浏览器上次停在哪」与「断线那轮的欠账」。
   */
 
 /** 会话线程记忆的键（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。 */
@@ -18,8 +17,8 @@ export interface TurnDebt {
 }
 
 /**
-  补账的回读节奏（毫秒）：断线那一刻引擎多半还在算，第一次回读「正文没多」是常态，不能据此宣布失败。
-  12s / 30s / 60s 三趟仍没等到才说明白——那一轮确实没落库。总等待约 100s，够一轮教学回合算完。
+  补账的回读节奏（毫秒）：断线那一刻引擎多半还在算，前几次「正文没多」不算失败；
+  三档都没等到才认定那一轮未落库。总等待约 100s，够一轮教学回合算完。
   */
 export const RECHECK_DELAYS = [12_000, 30_000, 60_000] as const;
 
@@ -66,7 +65,7 @@ export function readThreadMemory(): ThreadMemoryMap {
     if (typeof parsed !== "object" || parsed === null) return {};
     const out: ThreadMemoryMap = {};
     for (const [repositoryId, scopes] of Object.entries(parsed)) {
-      if (typeof scopes !== "object" || scopes === null) continue; // 旧形状在这一层露馅：值是字符串
+      if (typeof scopes !== "object" || scopes === null) continue; // 形状不符（值为字符串）时跳过
       const entry: Partial<Record<ChatScope, ThreadMemory>> = {};
       for (const scope of ["teach", "map", "practice"] as const) {
         const value = (scopes as Record<string, unknown>)[scope];
