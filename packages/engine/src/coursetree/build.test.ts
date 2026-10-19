@@ -114,7 +114,7 @@ describe("course tree", () => {
       graph: { imports: new Map(), externals: new Map(), calls: [], dispatch: [], symbols: [], semanticBackend: "static", lspStatus: [], entrypoints: [], parseBackend: "regex" }
     });
     const ids = tree.root.children.find((node) => node.id === "modules")!.children.map((node) => node.id);
-    // 真仓就是这里碎掉的：observability 下三个子目录各 1 个文件 → 三个几乎同名的 chip
+    // observability 下三个子目录各 1 个文件，合并成一个模块才不是三个几乎同名的 chip
     expect(ids).toContain("module:observability");
     expect(ids.filter((id) => id.startsWith("module:observability/"))).toEqual([]);
     // 源码根下面不跨包合并：entity / repository 是有语义的边界，合成 src/main 就是大杂烩
@@ -143,7 +143,7 @@ describe("course tree", () => {
     const modules = tree.root.children.find((node) => node.id === "modules")!.children;
     const observability = modules.find((node) => node.id === "module:observability")!;
     expect(observability.summary, "区域名与目录名同名时，原写法用合并结果覆盖了整个模块").toContain("包含 5 个可分析文件");
-    // 这条是「文件不会凭空消失」的总闸：dianping 实测丢了 observability 的三个直属文件（156 个索引文件只剩 153 有归属）
+    // 「文件不会凭空消失」的总闸：每个索引文件都要算进某个模块的归属
     const claimed = modules.reduce((sum, node) => sum + Number(/包含 (\d+) 个可分析文件/.exec(node.summary)?.[1] ?? 0), 0);
     expect(claimed, "每个索引文件都必须有模块归属").toBe(files.length);
   });

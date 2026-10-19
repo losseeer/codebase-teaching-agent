@@ -3,7 +3,7 @@ import type { RouteProvider } from "@codebase-tutor/shared";
 import { extractRouteEndpoints, matchRouteSeams, normalizeRoute, routeFileExtensions } from "./routes.js";
 
 /**
-  接缝判据的单测：真值来自**写死的文本样例**，不靠跑真仓看效果（这条纪律是 §32/§33 反复用过的）。
+  接缝判据的单测：真值来自写死的文本样例，不靠跑真仓看效果。
   重点钉三件容易错的事：参数折叠形态、类级基路径的相接、后缀匹配不能被当成整段相等。
 */
 

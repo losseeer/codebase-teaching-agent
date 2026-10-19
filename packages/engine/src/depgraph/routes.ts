@@ -3,18 +3,16 @@ import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 
 /**
-  跨语言接缝（route seam）：**HTTP 路由字符串**是前端与后端之间唯一共享的标识符——它不产生任何语法级依赖边，
-  所以整仓依赖图（L0）天生看不见这条链。这个节点补的是「点了按钮之后代码在哪」这类问题的最后一公里。
+  跨语言接缝（route seam）：HTTP 路由字符串是前端与后端之间唯一共享的标识符，它不产生语法级依赖边，
+  整仓依赖图（L0）看不见这条链；这里补的是「点了按钮之后代码在哪」这一问。
 
   纯函数、零 LLM、零 I/O（除最后那个读文件的入口）：输入是 `路径 → 文件内容`，输出是「谁调了哪条路由、落在哪个文件」。
-  之所以做成纯函数：接缝的判定必须在**没有仓库上下文**的情况下也能被单测钉住（真值来自 fixture 文本，不靠跑真仓看效果）。
+  做成纯函数是为了让接缝判定在没有仓库上下文时也能被单测钉住。
 
-  两条刻意保守的口径，都直接影响误判率：
-  - **参数一律折成 `{*}`**（`{id}` / `:id` / `${id}` / Django 的 `<int:id>`），否则 `/blog/likes/12` 这类形态永远对不上；
-    代价是 `/user/{id}` 与 `/user/code` 在折参后仍然不同（尾段一个是占位一个是字面量），不会互相误配。
-  - **后缀匹配单独标 `via: "suffix"`**：网关或 axios 的 baseURL 会给前端路径加 `/api` 这类前缀，
-    整段相等判不住。后缀匹配只在「按 / 分段完整落在尾部」时成立，且必须让调用方知道这条边是后缀配上的——
-    它是二档证据，不能和整段相等混成一个数。
+  两条保守口径，直接影响误判率：
+  - 参数一律折成 `{*}`（`{id}` / `:id` / `${id}` / Django 的 `<int:id>`），否则 `/blog/likes/12` 这类形态永远对不上。
+  - 后缀匹配单独标 `via: "suffix"`：网关或 axios 的 baseURL 会给前端路径加 `/api` 这类前缀，整段相等判不住。
+    后缀只在「按 / 分段完整落在尾部」时成立；它是二档证据，必须让调用方知道，不能和整段相等混成一个数。
 */
 
 const PARAMETER = "{*}";
@@ -34,7 +32,7 @@ export function normalizeRoute(input: string): string {
 }
 
 const segments = (route: string): string[] => route.split("/").filter(Boolean);
-/** 后缀匹配：提供方按**整段**落在消费方尾部（`/shop/list` 配 `/api/shop/list`），不做子串匹配。 */
+/** 后缀匹配：提供方按整段落在消费方尾部（`/shop/list` 配 `/api/shop/list`），不做子串匹配。 */
 function suffixMatched(provider: string, consumer: string): boolean {
   const tail = segments(provider);
   const head = segments(consumer);
@@ -119,11 +117,9 @@ function jsConsumers(path: string, content: string): RouteConsumer[] {
 }
 
 /**
-  哪些扩展名参与接缝判定——**只列一次**，提供方/消费方的分派与读文件的闸门都从这两组派生。
-  复审 #121② 点的是这里过去的写法：`extractRouteEndpoints` 里一条 if 链、`routeEndpointsOfFiles` 里另一条正则，
-  同一个问题两份清单；加了 Go 的规则却忘了改正则，Go 的路由就永远读不出来，而且没有任何读数会报这件事。
-  扩展名本身取自共享能力表（`vue` 也算消费方：SFC 的 `<script>` 里就是 fetch/axios）。
-  ⚠️ 这一改顺带把 `.mjs`/`.cjs` 纳进消费方（旧正则漏了）——两仓实测没有这类文件，接缝读数不变。
+  哪些扩展名参与接缝判定，只列一次：提供方/消费方的分派与读文件的闸门都从这两组派生。
+  同一个问题写两份清单时，加了新语言的规则却漏改另一处，新语言的路由就永远读不出来，读数上看不出这件事。
+  扩展名取自共享能力表（`vue` 也算消费方：SFC 的 `<script>` 里就是 fetch/axios）。
 */
 const providerExtensions = new Set([...LANGUAGE_CAPABILITIES.java.extensions, ...LANGUAGE_CAPABILITIES.python.extensions]);
 const consumerExtensions = new Set([...LANGUAGE_CAPABILITIES.typescript.extensions, ...LANGUAGE_CAPABILITIES.vue.extensions]);
@@ -135,7 +131,7 @@ export function extractRouteEndpoints(contents: Map<string, string>): { provider
   const providers: RouteProvider[] = [];
   const consumers: RouteConsumer[] = [];
   for (const [path, content] of contents) {
-    // 后缀比较与上面闸门同一份集合：路径没后缀时 extname 给空串，两个集合都不含它，自然跳过
+    // 无后缀路径的 extname 是空串，不在任何集合里，自然跳过
     const extension = extname(path).toLowerCase();
     if (extension === ".java") providers.push(...springProviders(path, content));
     else if (extension === ".py") providers.push(...pythonProviders(path, content));
@@ -145,7 +141,7 @@ export function extractRouteEndpoints(contents: Map<string, string>): { provider
 }
 
 /**
-  配对：整段相等优先，配不上再看后缀。返回的每条边都带 `via`，
+  配对：整段相等优先，配不上再看后缀。每条边都带 `via`，
   以及「这条消费方字符串一共配到几个提供方」——歧义数是要报给用户的数，不是内部细节。
 */
 export function matchRouteSeams(providers: RouteProvider[], consumers: RouteConsumer[]): RouteLink[] {
@@ -167,11 +163,7 @@ export function matchRouteSeams(providers: RouteProvider[], consumers: RouteCons
   return links;
 }
 
-/**
-  读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。
-  ⚠️ 只读这些扩展名的文件，闸门由上面两组分派集合派生——接缝的提供方/消费方判据与「读不读这个文件」
-  必须是同一份清单，否则会出现「规则写了、文件从来没被打开」那种在读数上看不见的漏读（复审 #121②）。
-*/
+/** 读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。 */
 export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
   const handled = new Set(routeFileExtensions);
   const contents = new Map<string, string>();

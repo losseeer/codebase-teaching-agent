@@ -2,16 +2,13 @@ import type { CourseNode, CourseNodePage, CourseTier, CourseTierEvidence, Course
 import { isServedEntrypoint } from "../depgraph/graph.js";
 
 /**
-  模块分级（2026-10-02 分级折叠；2026-10-06 改成占比判据 + 把依据露出来）。
-  判据是模块**可见文件**（本节点锚点 + 子孙锚点，就是用户在 chips 与推荐入口里看到的那批）的结构角色：
-  含**对外服务入口**（HTTP 路由 / 框架启动类），或主链路文件占到可见文件的 1/4，才算主链路；只剩工具/测试才算外围。
-  为什么要占比：旧判据「有一个主链路文件就算主链路」在 Xingyan 让一个 66 个可见文件的模块全靠 1 个文件撑成主链路，
-  三档的比例就读不出模块大小了（2026-10-06 tier:diag 实测该仓有 7 个模块因此虚高）。
-  为什么脚本型入口既不能顶模块、也不计入主链路证据：`observability/check-queries.py`（Grafana 自动加载用的运维脚本）
-  与造数脚本在角色表里因为是入口所以是 core，但分级问的是「学习者该先看它吗」。
-  这个节点差异只在分级层处理，**不动 `classifyFileRoles`**——动角色会翻全仓摘要键（开发日志 §34.5）。
-  在响应前实时计算而不是写进树：角色是纯函数、每次几毫秒，且**已导入的仓库不用重烧就能看到分级**。
-  */
+  模块分级：判据是模块可见文件（本节点锚点 + 子孙锚点，即用户在 chips 与推荐入口里看到的那批）的结构角色。
+  含对外服务入口（HTTP 路由 / 框架启动类），或主链路文件占到可见文件的 1/4，才算主链路；只剩工具/测试才算外围。
+  用占比而不是「有一个主链路文件就算」：否则大模块靠 1 个文件就被抬成主链路，三档比例读不出模块大小。
+  脚本型入口（运维/造数脚本）既不能顶模块、也不计入主链路证据：角色表里它是 core，分级问的是「学习者该先看它吗」。
+  这个差异只在分级层处理，不动 `classifyFileRoles`——改角色会翻全仓摘要键。
+  在响应前实时计算而不是写进树：角色是纯函数、每次几毫秒，已导入的仓库无需重新分析就能看到分级。
+*/
 const CORE_SHARE_THRESHOLD = 0.25;
 
 export function annotateModuleTiers(tree: CourseTree, roles: Map<string, FileRole>, entrypoints?: readonly SourceAnchor[]): CourseTree {
@@ -28,10 +25,8 @@ export function annotateModuleTiers(tree: CourseTree, roles: Map<string, FileRol
     collect(node);
     const visible = [...new Set(paths)];
     /**
-      ⚠️ 这里**刻意不用** `roles.ts` 的 `roleOf()`（查不到路径回落 `support`）：
-      分级问的是「这个模块有没有代码证据」，一个不在图里的路径不该被抬进「基础设施」。
-      2026-10-06 有独立复审把它当成「同一件事两套判据」报了出来，结论是不统一——
-      两处回答的是两个问题（`roleOf` 服务模型证据，`tier` 服务折叠与占比），各自说清回落理由即可。
+      刻意不用 `roles.ts` 的 `roleOf()`（查不到路径回落 `support`）：分级问的是「这个模块有没有代码证据」，
+      不在图里的路径不该被抬进「基础设施」。`roleOf` 服务模型证据、`tier` 服务折叠与占比，是两个问题，判据不合并。
     */
     const known = visible.map((path) => roles.get(path));
     const trunkFiles = visible.filter((path, index) => known[index] === "core" && !scriptOnly.has(path));

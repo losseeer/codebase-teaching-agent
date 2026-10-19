@@ -7,9 +7,8 @@ import { indexRepository } from "../indexer/indexer.js";
 import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus, resetSymbolParserForTest } from "./parser.js";
 
 /**
-  语法树符号抽取：这里验证的是「逐行文本匹配做不到的事」——
-  类方法、接口/类型别名、装饰器包裹的函数、精确的最后一行。
-  最后两例守回落路径：解析器没就绪时必须交出 undefined（交空数组会被误读成「这文件真没符号」）。
+  语法树符号抽取：这里验证的是逐行文本匹配做不到的事——类方法、接口/类型别名、装饰器包裹的函数、精确的最后一行。
+  另有两例守回落路径：解析器没就绪时必须交出 undefined（交空数组会被误读成「这文件真没符号」）。
 */
 
 describe("语法树符号抽取", () => {
@@ -113,10 +112,10 @@ describe("语法树符号抽取", () => {
   });
 
   it("逐行匹配回落的能力上限：findEndLine 在四种声明形态下的边界", async () => {
-    resetSymbolParserForTest(); // 强制走逐行匹配，专门验证 findEndLine 的边界
+    resetSymbolParserForTest(); // 强制走逐行匹配路径
     const dir = mkdtempSync(join(tmpdir(), "regex-endline-"));
     const source = [
-      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行（修复前会向后丢弃后续声明）
+      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行
       "const b = (x) => {", // 常规花括号多行箭头
       "  return x + 2;",
       "};",

@@ -42,7 +42,7 @@ export type {
 export { checkContract, ContractViolation, scopedStreamProgressSchema, serverEventSchema, importJobSchema, repositoryCatalogEntrySchema, costSummarySchema, chatThreadSchema, chatThreadMessageSchema } from "./contracts.js";
 
 /**
-  共享契约的总出口。**跨进程流动的形状一律住在 `contracts.ts`（zod schema 反推类型）**，
+  共享契约的总出口。跨进程流动的形状一律住在 `contracts.ts`（zod schema 反推类型），
   这里留的是引擎内部的领域模型（课程树、图、切片、练习……）与它们的辅助函数。
 */
 
@@ -51,7 +51,7 @@ export interface FileEntry {
   extension: string;
   bytes: number;
   lines: number;
-  /** 正文 SHA-256 前 16 位；升级前生成的旧索引没有此字段——出题键对缺值回落全仓 versionStamp 语义。 */
+  /** 正文 SHA-256 前 16 位；缺这个字段时出题键回落到全仓 `versionStamp` 语义。 */
   contentHash?: string;
 }
 
@@ -85,11 +85,11 @@ export interface RepositoryIndex {
   fileTree: FileTreeNode[];
   hotspots: Hotspot[];
   /**
-    扫描期**读不出来**的文件（读到一半被删、权限不对、被换成特殊节点）。默认 = 一个都没有。
+    扫描期读不出来的文件（读到一半被删、权限不对、被换成特殊节点）。默认 = 一个都没有。
     这些文件被跳过而不算失败（一个坏文件不该掀掉整次导入），但必须记名：
     `totalFiles` 与后面所有「这个仓有多少代码、哪些文件没摘要」的读数都建立在「缺席是知道的」之上。
-    上限 50 条，超出只按前 50 条报（真出到几百条时，前 50 条足够定位问题目录）。
-    */
+    上限 50 条，超出只按前 50 条报（够定位问题目录）。
+  */
   unreadable?: UnreadableFile[];
 }
 
@@ -121,8 +121,8 @@ export interface AssertionCheck {
   - `facility` 基础设施 = 只有支撑逻辑或外部设施接入（配置、存储、网络客户端）；
   - `periphery` 外围 = 只剩末端工具与测试（文档、监控看板、压测报表都在这里）。
   判据来自 `depgraph/roles.ts` 的结构规则（确定、可复现），不依赖模型。
-  占比这一档 2026-10-06 实测：只「有一个主干文件就算主干」时，Xingyan 有个 66 个可见文件的模块全靠 1 个文件撑档。
-  */
+  占比门槛是为了别让一个文件把几十文件的模块抬成主干。
+*/
 export type CourseTier = "core" | "facility" | "periphery";
 
 /**
@@ -156,8 +156,8 @@ export interface CourseNode {
   tierEvidence?: CourseTierEvidence;
   /**
     仅 module 节点有值：`tier` 被人工改过时为 true，并带上引擎自己判的那一档。
-    为什么要回带给界面（2026-10-16 覆盖层上收服务端）：用户改档后，界面得知道现在这个档**是谁说的**，
-    否则「恢复引擎判据」这个动作没有依据，「分得准不准」的读数也只剩一个孤零零的改后值。
+    界面得知道现在这个档是谁说的，否则「恢复引擎判据」没有依据，
+    「分得准不准」的读数也只剩一个孤零零的改后值。
   */
   tierOverridden?: boolean;
   tierGiven?: CourseTier;
@@ -191,14 +191,14 @@ export const EXTERNAL_CATEGORY_LABEL: Record<ExternalCategory, string> = {
 };
 
 /**
-  ==== 架构视图的分层产物（2026-10-16 改造）====
+  ==== 架构视图的分层产物 ====
 
   一句话：一条系统边界，边界内按职责分 3~5 层，边界外是数据存储与外部服务，
-  跨层箭头由**真实 import 聚合**得出。读者先看大结构，再逐层下钻到模块→文件→代码锚点。
+  跨层箭头由真实 import 聚合得出。读者先看大结构，再逐层下钻到模块→文件→代码锚点。
 
-  ⚠️ 这里有三类东西，来源完全不同，混淆就等于让模型编造事实：
-  - `layers` 的层名/职责/归属是**判断题**，可以来自模型，也可以人工改；
-  - `edges`（跨层箭头）与 `externals`（边界之外）是**事实题**，只由静态 import 与外部包名词典聚合，
+  这里有三类东西，来源完全不同，混淆就等于让模型编造事实：
+  - `layers` 的层名/职责/归属是判断题，可以来自模型，也可以人工改；
+  - `edges`（跨层箭头）与 `externals`（边界之外）是事实题，只由静态 import 与外部包名词典聚合，
     模型给了这一类的任何字段一律丢弃（见 engine 侧 architecture.ts 的校验）；
   - `source` 与 `reason` 说清这份产物是谁算的，降级不许静默。
 */
@@ -239,7 +239,7 @@ export interface ArchitectureExternal {
   - `core` 从入口走得到的主链路；
   - `shared` 被 ≥4 个模块引用而自己最多引 3 个（工具、DTO、枚举这一档底座）；
   - `support` 其余。
-  判不出来的那一档（没有入边、入口也走不到）不进这个联合：它压根不画，见 `ArchitectureBlockBrief`。
+  判不出来的那一档（没有入边、入口也走不到）不进这个联合：它不画，见 `ArchitectureBlockBrief`。
 */
 export type ArchitectureBlockRole = "entry" | "core" | "shared" | "support";
 
@@ -254,24 +254,23 @@ export interface ArchitectureBlockBrief {
 }
 
 /**
-  ==== 宏观设计 = agent 画图工作区（2026-10-18 定案，取代「架构视图 + 流程视图」双画布）====
+  ==== 宏观设计 = agent 画图工作区 ====
 
-  一句话：**图是产物实体，不是某一页的渲染结果**。一个仓有多张图，存在 `diagram` 表里，
+  一句话：图是产物实体，不是某一页的渲染结果。一个仓有多张图，存在 `diagram` 表里，
   在左侧图库里挑、在中间画布上看。图元只有三种：节点、边、分组框。
 
   两条权限分得很清楚（这是这一页的全部纪律）：
-  - **几何自由**：节点摆哪儿、画布怎么平移缩放，都是用户自己的事，走 `PUT .../geometry`，
+  - 几何自由：节点摆哪儿、画布怎么平移缩放，都是用户自己的事，走 `PUT .../geometry`，
     不存版本、不写审计、不经模型——位置不承载对错；
-  - **结构归 agent**：加删节点、连线、分组、改名字，只有 `set_diagram` 这一个写入口
-    （界面不留第二个，与旧那条「画布只读」同源）。每次结构改动自动存一版，上限 20 版，
-    恢复旧版也是往前追加一版（历史不许被改写）。
+  - 结构归 agent：加删节点、连线、分组、改名字，只有 `set_diagram` 这一个写入口（界面不留第二个）。
+    每次结构改动自动存一版，上限 20 版，回滚也是往前追加一版（历史不许被改写）。
 
   三样东西的来源必须分开，混了就等于让模型编事实：
-  - 节点挂的**依据**（哪些文件哪几行）与摘要：`kind:"module"` 的节点由引擎按 `ref` 现算，
+  - 节点挂的依据（哪些文件哪几行）与摘要：`kind:"module"` 的节点由引擎按 `ref` 现算，
     agent 手填的一律丢弃（见 engine `diagram/set-diagram.ts`）；
-  - 边的**可信度** `origin` 三档：模型可以报 `static`/`code`，但引擎**只降不升**——
+  - 边的可信度 `origin` 三档：模型可以报 `static`/`code`，但引擎只降不升——
     核不到 import / 调用证据就改成 `inferred`，并把降级原因写在 `downgraded` 上（与流程层同一条口径）；
-  - `kind:"note"` 的便签正文与 `inferred` 边的 `evidence`：这些是**模型/用户说的话**，
+  - `kind:"note"` 的便签正文与 `inferred` 边的 `evidence`：这些是模型/用户说的话，
     原样存、原样标，不冒充引擎读数。
 */
 
@@ -308,7 +307,7 @@ export interface DiagramNode {
   group?: string;
   /**
     `kind:"module"` 必填：课程树里的模块 id 或架构方块 id（`arch:...`）。
-    引擎按它现算依据与摘要，id 核不上就**拒写**（宁可让 agent 重说一次，也不画一个查无此人的节点）。
+    引擎按它现算依据与摘要，id 核不上就拒写（宁可让 agent 重说一次，也不画一个查无此人的节点）。
   */
   ref?: string;
   /** `kind:"note"`：便签正文。这是人/模型写的话，不是读数。 */
@@ -324,7 +323,7 @@ export interface DiagramEdge {
   label?: string;
   /** `static`/`code` 是引擎核出来的那条依据；`inferred` 是模型自述的理由。 */
   evidence?: string;
-  /** 被引擎降过档：原报的哪一档 + 为什么。界面要在悬停里说清，别替模型圆。 */
+  /** 被引擎降过档：原报的哪一档 + 为什么。界面要在悬停里说清，不能替模型掩盖。 */
   downgraded?: string;
 }
 
@@ -345,7 +344,7 @@ export interface DiagramBody {
   edges: DiagramEdge[];
 }
 
-/** 一版快照：时间是 ISO 串（界面自己格式化），`body` 是**改完之后**的整张结构。 */
+/** 一版快照：时间是 ISO 串（界面自己格式化），`body` 是改完之后的整张结构。 */
 export interface DiagramVersion {
   at: string;
   note: string;
@@ -359,7 +358,7 @@ export interface Diagram {
   source: DiagramSource;
   createdAt: string;
   updatedAt: string;
-  /** 旧→新排列，上限 20（超了丢最旧的一版）。恢复旧版往后追加，绝不截断历史。 */
+  /** 旧→新排列，上限 20（超了丢最早的一版）。回滚同样往后追加，绝不截断历史。 */
   versions: DiagramVersion[];
   body: DiagramBody;
 }
@@ -377,7 +376,7 @@ export interface DiagramSummary {
 
 /**
   `set_diagram` 的一次结构改动（单写入口能表达的全部形状）。
-  ⚠️ 这里是**白名单**：想改边就只能是 add_edge / remove_edge，
+  这里是白名单：想改边就只能是 add_edge / remove_edge，
   「把这条箭头变粗」「加一个模块」这类要求在类型层面就没有落点，不是运行时的漏洞。
 */
 export type DiagramEdit =
@@ -407,35 +406,34 @@ export interface ArchitecturePlan {
   /**
     这份产物怎么来的：
     - `llm` = 模型判的层（层名/归属），边与外部栏仍是算出来的；
-    - `unavailable` = **分层这个节点没有产物可画**。2026-10-16 用户定：原先这里会回落成 tier 三档
-      （主链路/基础设施/外围）并自称一层「职责层」，那是把结构角色伪装成成分层架构——读者照着它讲架构就讲错了，
-      不如直接说不可用。`layers` 给空数组，原因写在 `reason`，界面出不可用卡片与明码标价的按钮。
-    ⚠️ 边、节点清单、边界之外那一栏仍是算出来的事实：`unavailable` 只说明「层没判」，不说明这些也没了。
+    - `unavailable` = 分层这个节点没有产物可画。回落成 tier 三档（主链路/基础设施/外围）并自称一层
+      「职责层」是把结构角色伪装成分层架构，读者照着它讲架构就讲错了，不如直接说不可用。
+      `layers` 给空数组，原因写在 `reason`，界面出不可用卡片与明码标价的按钮。
+    边、节点清单、边界之外那一栏仍是算出来的事实：`unavailable` 只说明「层没判」，不说明这些也没了。
   */
   source: "llm" | "unavailable";
   reason?: string;
   /** 不可用的哪一种：没判过 / 没配模型 / 输出没采信 / 调用失败。界面靠它决定按钮文案，不靠拆 `reason` 的中文。 */
   unavailableReason?: "not_judged" | "no_model" | "rejected" | "call_failed";
   /**
-    人工**点名挪过层**的那些节点（`layers[].moduleIds` 里出现的那个 id：原子块是模块 id，组合节点是 `arch:...`）。
-    界面只给这些格点「动过」的标记。原先这里给的是**层 id**，于是有人往一层挪进一个模块，
-    那一整层的节点就全带上标记——层是收留方，不是被改方（2026-10-16 改）。
-    层名是不是人工改过的，走 `ArchitectureLayer.overridden`，与这个节点无关。
+    人工点名挪过层的那些节点（`layers[].moduleIds` 里出现的那个 id：原子块是模块 id，组合节点是 `arch:...`）。
+    界面只给这些格点「动过」的标记。这里不能给层 id：往一层挪进一个模块就会让整层都带上标记——
+    层是收留方，不是被改方。层名是不是人工改过的，走 `ArchitectureLayer.overridden`，与这个节点无关。
   */
   overriddenUnits: string[];
   generatedAt: string;
   /** 产物吃的是哪一份课程树/图：与 `versionStamp` 同源，用来如实说明「这是按哪次分析算的」。 */
   basedOnVersionStamp: string;
-  /** 边界那一栏为空时**为什么**空：「这份产物还没采外部包名」与「这个系统真不碰外部服务」是两条不同读数。 */
+  /** 边界那一栏为空时为什么空：「这份产物还没采外部包名」与「这个系统真不碰外部服务」是两条不同读数。 */
   externalsNote?: string;
   /**
-    这次读的时候没能落地的人工修正（覆盖层按层名匹配，重判换了叫法就对不上）。**读时实时计算、不落盘**：
+    这次读的时候没能落地的人工修正（覆盖层按层名匹配，重判换了叫法就对不上）。读时实时计算、不落盘：
     缓存里住的是模型原判，失效与否取决于「原判 + 当前覆盖层」这两样，写死进缓存反而会在下次读时说话。
     界面上它是「你的 N 处修正这次没生效」那句提示的唯一依据。
-    */
+  */
   lostOverrides?: ArchitectureOverrideLoss[];
   /**
-    画布上的节点（原子块 + 组合节点）：由课程树与图实时计算，**读时实时计算、不落盘**——
+    画布上的节点（原子块 + 组合节点）：由课程树与图实时计算，读时实时计算、不落盘——
     合并口径是判层输入的一部分（进了缓存键），把结果再写进产物等于冻结一份迟早和键对不上的副本。
     界面靠它把组合节点展开成成员，`layers[].moduleIds` 里的 id 就在这个节点里找。
   */
@@ -445,10 +443,9 @@ export interface ArchitecturePlan {
 }
 
 /**
-  人工修正通道（2026-10-16 上收到服务端）。存 `repository_state.settings_json` 的 `overlays` 子键。
-  为什么必须上收：这三类改动从前只活在浏览器本地存储里，引擎完全不知道——
-  下次重分析按原判据再判一遍，用户的修正就**当场蒸发**，而且换个浏览器看不到。
-  分层判断是可错的，所以这条通道与图同期落地，不许后补。
+  人工修正通道，存 `repository_state.settings_json` 的 `overlays` 子键。
+  修正必须存在服务端：只活在浏览器本地存储里时引擎完全不知道，
+  下次重分析按原判据再判一遍，用户的修正就当场蒸发，而且换个浏览器看不到。
 */
 export interface ArchitectureOverrides {
   /** 模块 id → 人工指定的层名（图上拖动换层写的就是这个节点）。按名字不按序号：序号会随重生成漂。 */
@@ -458,10 +455,10 @@ export interface ArchitectureOverrides {
 }
 
 /**
-  这次读的时候**没能落地**的人工修正：覆盖层按层名字符串匹配，重判后模型换了叫法就找不到目标层。
+  这次读的时候没能落地的人工修正：覆盖层按层名字符串匹配，重判后模型换了叫法就找不到目标层。
   不造假（找不到就不动那个模块）但要说出来——不然用户拖过几次、下次重判全落空而界面上看不出来。
   它同时是「命名稳定性」唯一的读数：层名越通用，这个节点越空。
-  */
+*/
 export interface ArchitectureOverrideLoss {
   kind: "move_module" | "rename_layer";
   /** `move_module`：那个模块 id */
@@ -474,7 +471,7 @@ export interface ArchitectureOverrideLoss {
 
 /**
   一次人工修正的意图（GUI 的拖动与 Agent 的 `set_architecture` 共用这一个形状，POST 到引擎）。
-  ⚠️ 四条分支之外没有第五种写法：**这里没有能表达「一条边」的字段**——边由 import 聚合，
+  四条分支之外没有第五种写法：这里没有能表达「一条边」的字段——边由 import 聚合，
   谁都不许增删改。类型层面写不出这个动作，比运行时拦一道更可靠。
 */
 export type ArchitectureOverrideIntent =
@@ -528,14 +525,14 @@ export interface ImportEstimate {
   fallbackFiles?: number;
 }
 
-/** M1 policy is a continuous 0-100 value; M0 presets remain 35, 50 and 65. */
+/** 风格档是 0~100 的连续值；预设值仍是 35、50、65。 */
 export type StyleLevel = number;
 
 /**
-  语言风格档位的判据与展示名 —— engine 与 GUI 的**唯一**来源（两侧都从这里取，不再各写阈值）。
-  历史坑：harness 的本地回落文案曾写死 `>= 65`，与 policy 里的 67 不一致，滑块 65/66 两处口径不同。
-  档位只决定基调和回显名；档**内**的逐步细化在 engine 的 harness/prompts.ts（那里的 `at` 阈值是叠加在档位之上的补充要求）。
-  */
+  语言风格档位的判据与展示名 —— engine 与 GUI 的唯一来源（两侧都从这里取，不各写阈值）：
+  别处写死一个数字就会和这里的取值不一致，同一个滑块出现两套口径。
+  档位只决定基调和回显名；档内的逐步细化在 engine 的 harness/prompts.ts（那里的 `at` 阈值是叠加在档位之上的补充要求）。
+*/
 export const STYLE_BAND_THRESHOLDS = { rigorousMax: 33, plainMin: 67 } as const;
 
 export type StyleBand = "plain" | "neutral" | "rigorous";
@@ -554,10 +551,9 @@ export type Pedagogy = "socratic" | "explanatory" | "practice";
 export type DecompositionDepth = "macro" | "micro";
 
 /**
-  教学阶段（orient→…→confirmed）与提示阶梯**已于 2026-10-14 整条撤掉**：教学回合变成纯问答，
-  不再推进阶段、不再记 fallbackCount，也不再产生 `hint_depth` / `unit_mastered` / `dependency_event` / `action_veto` 四类事件。
-  库里与 journal 里 10-12 之前的历史行仍带着这些取值，读侧不再解释它们（类型已删，字段留在 SQLite 列里不迁移）。
-  */
+  教学回合是纯问答：不推进阶段、不记 fallbackCount，也不产生提示阶梯那一类事件。
+  库里与 journal 的历史行仍带着阶段与阶梯的取值，读侧不再解释它们（字段留在 SQLite 列里不迁移）。
+*/
 export interface TeachingPolicy {
   level: StyleLevel;
   label: string;
@@ -619,13 +615,12 @@ export interface CallEdge {
 /**
   类型派发边：`实现类/子类的文件 → 它 extends/implements 的那个类型所在的文件`。
 
-  为什么要单独一类边，而不是写入 `imports`：Java/C# 的「控制器注入接口、运行时才绑到实现」这一拍
-  **在源码里没有调用行**，import 边只到接口为止，于是实现类整片在图上失联（2026-10-05 实测：
-  dianping 45 个 Controller/Service/Mapper 文件里 30 个从任何入口都走不到）。方向反过来是
+  为什么要单独一类边而不是写入 `imports`：Java/C# 的「控制器注入接口、运行时才绑到实现」这一拍
+  在源码里没有调用行，import 边只到接口为止，于是实现类整片在图上失联。方向反过来是
   「接口 → 实现」的派发，这是执行流，不是依赖流，混进 import 边会把「谁依赖谁」说反。
 
   TS/Python 不产这类边：那两门语言的继承/实现必须先 import 那个名字，关系已经在 import 边里了。
-  ⚠️ `supertypePath` 靠类名→文件解析，同名类型可能指错，故它是 A1 级的近似证据，不是权威结论。
+  `supertypePath` 靠类名→文件解析，同名类型可能指错，故它是近似证据，不是权威结论。
 */
 export interface TypeDispatchEdge {
   subtypePath: string;
@@ -638,24 +633,24 @@ export interface DependencyGraphData {
   imports: Record<string, string[]>;
   /**
     每个文件「仓内解析不到的裸包名」（`redis`、`@fastify/cors`、`org.springframework`、`github.com/gin-gonic`）。
-    它是架构视图「系统边界之外那一栏」的唯一数据源，且**与 `imports` 严格分家**：
-    `imports` 只连仓内文件、外部一律丢弃（这是既定设计，见上面 `languageOfExtension` 那段与 §33），
+    它是架构视图「系统边界之外那一栏」的唯一数据源，且与 `imports` 严格分家：
+    `imports` 只连仓内文件、外部一律丢弃（这是既定设计，见上面 `languageOfExtension` 那段），
     这里只是把被丢掉的名字留个名，不新增任何一条边。
-    ⚠️ 流程层与出题的缓存键**不吃这个节点**：`buildFlowDigest` 逐字段挑证据，`graphStampOf` 只数三类边。
-    把它写入任何一份 payload = 全部已缓存流程与题目翻键 = 每仓重烧付费调用（红线探针 `pnpm arch:keyprobe` 钉这条）。
-    旧产物没有该字段（缺失即按「未采集」处理，与 `dispatch` 同一口径——不是「这个仓没有外部依赖」）。
+    流程层与出题的缓存键不吃这个节点：`buildFlowDigest` 逐字段挑证据，`graphStampOf` 只数三类边。
+    把它写进任何一份 payload = 全部已缓存流程与题目翻键 = 每仓重付一次付费调用（红线探针 `pnpm arch:keyprobe` 钉这条）。
+    产物没有这个字段时按「未采集」处理，与 `dispatch` 同一口径——不是「这个仓没有外部依赖」。
   */
   externals?: Record<string, string[]>;
   calls: CallEdge[];
-  /** 类型派发边；旧产物没有该字段（那时只有 import 与 call 两类关系），缺失即按空表处理。 */
+  /** 类型派发边；产物没有这个字段时按空表处理。 */
   dispatch?: TypeDispatchEdge[];
   symbols: SymbolInfo[];
   entrypoints: SourceAnchor[];
   semanticBackend: "lsp" | "static";
   lspStatus: { language: "typescript" | "python"; status: "available" | "fallback"; reason?: string }[];
   /**
-    符号抽取走的哪条路：`ast` = 语法树（准确），`regex` = 逐行文本匹配（回落，只在
-    语法解析器加载失败时出现）。旧数据没有这两个字段，故可选；缺失即视为 `regex`。
+    符号抽取走的哪条路：`ast` = 语法树（准确），`regex` = 逐行文本匹配（回落，只在语法解析器加载失败时出现）。
+    字段缺失视为 `regex`。
   */
   parseBackend?: "ast" | "regex";
   parseBackendReason?: string;
@@ -666,17 +661,17 @@ export interface DependencyGraphData {
 
   这是什么：每门语言 × 五个能力格的取值，只回答「引擎现在真的能做到什么程度」。
   为什么要单独成表：各语言的支持程度本来就不均——符号抽取走真实语法树（多语法，加载失败会回落逐行匹配），
-  import 落点是**每语言一条自己的规则**（Java 全限定类名、Go 包目录、C# 命名空间、TS 相对路径 + 别名、
+  import 落点是每语言一条自己的规则（Java 全限定类名、Go 包目录、C# 命名空间、TS 相对路径 + 别名、
   Python 点号模块、C/C++ 头文件），入口判定只有部分语言有权威规则，构建清单只读了三份
-  （package.json / tsconfig / go.mod）。这些差异过去只写在引擎代码的注释里，界面与读数都看不出来，
+  （package.json / tsconfig / go.mod）。这些差异只写在引擎代码里时，界面与读数都看不出来，
   用户拿到一张图没法判断「这条边是编译器级的、还是按文件名猜的」。
 
-  ⚠️ 四条纪律，违反任何一条就等于这张表在误导人：
-  1. 它是**引擎自报口径**，与 `packages/engine/src/depgraph/graph.ts` + `parser.ts` 的实现必须同步：
-     新增一门语言、补了某条规则，就改这张表；**别在 GUI 或提示词里另写一份判断**。
-  2. 取值**照实填**，别因为「想让表好看」抬高某一个节点。判据见下面 `CapabilityLevel`。
-  3. 纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关）——
-     改这张表不会引发流程/摘要重烧。真要挪走这份口径，先确认没有键把它算进去。
+  四条纪律，违反任何一条就等于这张表在误导人：
+  1. 它是引擎自报口径，与 `packages/engine/src/depgraph/graph.ts` + `parser.ts` 的实现必须同步：
+     新增一门语言、补了某条规则，就改这张表；别在 GUI 或提示词里另写一份判断。
+  2. 取值照实填，别因为「想让表好看」抬高某一个节点。判据见下面 `CapabilityLevel`。
+  3. 纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关），
+     改这张表不会引发流程或摘要重算。真要挪走这份口径，先确认没有键把它算进去。
   4. 它跟 `DependencyGraphData.lspStatus` 是两套口径，别混用：本表说「引擎自己的规则有多硬」，
      `lspStatus` 说「有没有借到外部语义服务补类型与被引用次数」（目前只有 TypeScript 与 Python 会去探测）。
 */
@@ -694,7 +689,7 @@ export type CapabilityLevel = "exact" | "approximate" | "unsupported";
 
 /**
   九个能力格（GUI 与单测都按这份清单遍历，加格要一起改表与测试）：
-  前五格说**依赖图**，后四格说**静态产物层**（`static_fact` 表，不参与任何缓存键）。
+  前五格说依赖图，后四格说静态产物层（`static_fact` 表，不参与任何缓存键）。
   - `symbolExtraction` 符号抽取：函数/类/方法是怎么被认出来的、起止行可不可信
   - `dependencyEdge` 依赖边落点：一条依赖边指向哪个文件，可信到什么程度
   - `entrypoint` 入口判定：图上标成「执行入口」的那个文件是怎么定的
@@ -918,7 +913,7 @@ export function languageOfExtension(extension: string): SupportedLanguage | unde
 
 /**
   查一门语言的能力档：接受语言 id（`java`）、扩展名（`.java` 或 `java`）或带扩展名的路径（`src/a.java`）。
-  未知语言回落 `UNKNOWN_LANGUAGE_CAPABILITIES`（全格 `unsupported`），**不假装是 approximate**。
+  未知语言回落 `UNKNOWN_LANGUAGE_CAPABILITIES`（全格 `unsupported`），不假装是 approximate。
 */
 export function languageCapabilitiesOf(extensionOrLanguage: string): LanguageCapabilities {
   const raw = (extensionOrLanguage ?? "").trim().toLowerCase();
@@ -946,7 +941,7 @@ export interface RepositoryLanguageRow {
 }
 
 /**
-  随分析响应下发的语言画像（引擎**请求时实时计算**，不落库、不参与任何缓存键）。
+  随分析响应下发的语言画像（引擎请求时实时计算，不落库、不参与任何缓存键）。
   `parseBackend` 是全局回落位：它为 `regex` 时，上面各语言的「符号抽取」都要按近似读。
 */
 export interface RepositoryLanguageProfile {
@@ -967,10 +962,10 @@ export interface ImpactResult {
 /**
   ==== 静态产物层（facts）====
 
-  依赖图回答「谁指向谁」，这一层回答**单个函数内部**的事：控制流、数据流、类型关系、注册与配置。
-  它们与图同源（都出自同一份语法树），但形状完全不同，所以**单独存一张按文件分片的表**，
-  既不写进 `analysis_json`（那是最重的一列），也**不参与任何缓存键与 `backendStamp`**——
-  否则加一类产物就把已导入的仓全部翻键重烧（红线探针 `pnpm arch:keyprobe` 钉这条）。
+  依赖图回答「谁指向谁」，这一层回答单个函数内部的事：控制流、数据流、类型关系、注册与配置。
+  它们与图同源（都出自同一份语法树），但形状完全不同，所以单独存一张按文件分片的表，
+  既不写进 `analysis_json`（那是最重的一列），也不参与任何缓存键与 `backendStamp`——
+  否则加一类产物就把已导入的仓全部翻键重算（红线探针 `pnpm arch:keyprobe` 钉这条）。
 
   三条口径，破了就等于这份产物在说谎：
   1. `backend: "none"` 与「这个文件真没有分支」是两件事，必须分开。语法树没就绪、或这个构造
@@ -1080,12 +1075,12 @@ export interface DataflowFileFact extends FactFileBase {
 }
 
 /**
-  类型之间「谁用到谁」的那一类边。与依赖图的 `dispatch`（implements/extends 的**文件级**边）分开放：
-  那边是为「让实现类接回执行流」服务的，只到文件为止；这里要的是**类型名级别**的全貌——
+  类型之间「谁用到谁」的那一类边。与依赖图的 `dispatch`（implements/extends 的文件级边）分开放：
+  那边是为「让实现类接回执行流」服务的，只到文件为止；这里要的是类型名级别的全貌——
   字段指向哪个类型、泛型实参是谁、方法返回什么、参数收什么。
 
-  ⚠️ 落点（`toFile`）靠「类型名 → 声明了这个名字的文件」反查，与 `dispatch.supertypePath` 同一判据：
-  **同名类型可能指错**，所以每条边都带 `via` 说明它是怎么来的，反查不到就不写 `toFile`（不猜）。
+  落点（`toFile`）靠「类型名 → 声明了这个名字的文件」反查，与 `dispatch.supertypePath` 同一判据：
+  同名类型可能指错，所以每条边都带 `via` 说明它是怎么来的，反查不到就不写 `toFile`（不猜）。
 */
 export type TypeRelationKind = "extends" | "implements" | "field" | "parameter" | "returns" | "generic-argument" | "alias";
 
@@ -1117,11 +1112,11 @@ export interface TypeRelationFileFact extends FactFileBase {
 }
 
 /**
-  注册与配置索引：**运行时才连上的那批关系**。
+  注册与配置索引：运行时才连上的那批关系。
   依赖图看不见它们——`@Autowired private OrderService svc` 没有一行调用，
   `app.use(router)` 的实参是个导入进来的对象，`META-INF/services` 更是纯文本清单。
 
-  ⚠️ 配置文件**只记键名，绝不记值**。这份产物落在被学习仓自己的 `.tutor/` 里，跟着仓库走、
+  配置文件只记键名，绝不记值。这份产物落在被学习仓自己的 `.tutor/` 里，跟着仓库走、
   可被随仓删掉，但它仍是明文盘上文件：把 `spring.datasource.password=...` 抄进来，
   等于自己新开一个泄露面。值里有意义的那部分（比如「有没有配数据源」）由键名本身就能说出来。
 */
@@ -1175,8 +1170,8 @@ export interface RepositoryAnalysis {
   gitHead?: string;
   lastIncrementalUpdate?: { changedPaths: string[]; impactedPaths: string[]; at: string };
   /**
-    本仓语言分布 + 每语言能力档。**只在 HTTP 响应里实时计算**（见 engine `GET /api/repositories/:id/analysis`）：
-    不落库、不进缓存键，所以已导入的仓不用重烧就能看到这份口径；旧产物/旧引擎读不到时就当没有，
+    本仓语言分布 + 每语言能力档。只在 HTTP 响应里实时计算（见 engine `GET /api/repositories/:id/analysis`）：
+    不落库、不进缓存键，所以已导入的仓不用重新分析就能看到这份口径；读不到时就当没有，
     界面按「没有提示」处理，不自己另判一套语言规则。
    */
   languageProfile?: RepositoryLanguageProfile;
@@ -1184,7 +1179,7 @@ export interface RepositoryAnalysis {
 
 /**
   跨语言 HTTP 接缝：前端那条 `request.get('/shop/list')` 与后端 `@GetMapping("/list")` 之间
-  **没有任何语法级依赖**——两边唯一的共享标识符是路由字符串，所以整仓依赖图天生看不见这条链。
+  没有任何语法级依赖——两边唯一的共享标识符是路由字符串，所以整仓依赖图天生看不见这条链。
   类型放共享层是因为两侧都要读（界面要显示「这条链的另一头在哪个仓的哪一行」）。
   识别与配对逻辑住在 engine `depgraph/routes.ts`，这里只定契约。
 */
@@ -1238,7 +1233,7 @@ export interface SeamReport {
 /** 流程环节的性质；界面据此给不同的徽标（判断/回环与普通环节的读法不同）。 */
 export type FlowStageKind = "entry" | "stage" | "decision" | "loop" | "exit";
 
-/** 环节关联的一个文件。**只在节点详情里展示**——画布上不出现路径，避免流程视图退化成定位清单。 */
+/** 环节关联的一个文件。只在节点详情里展示——画布上不出现路径，避免流程视图退化成定位清单。 */
 export interface FlowStageFile {
   path: string;
   line: number;
@@ -1272,11 +1267,11 @@ export interface FlowStage {
 
   `origin` 必须显式区分三种来源，这是「读到的」与「推断的」的分界：
   - `static`：依赖图能证明（两个环节的文件之间存在 import 或跨文件调用）
-  - `code`：在**源码正文**里读到的（回调或节点注册、路由表、依赖注入、事件订阅），
+  - `code`：在源码正文里读到的（回调或节点注册、路由表、依赖注入、事件订阅），
     依赖图上看不见，但代码里写着；evidence 必须引到这条边自己的文件上
   - `inferred`：模型的编排常识推断，没有可核对的行级依据
 
-  ⚠️ 边级校验**只降不升**：声称 `static` 但依赖图对不上的会降为 `inferred`（不删边——删边会篡改
+  边级校验只降不升：声称 `static` 但依赖图对不上的会降为 `inferred`（不删边——删边会篡改
   拓扑，降级保真度更高）；`code` 只由「按需深入」那一步在真的读过正文之后给出。
 */
 export interface FlowEdge {
@@ -1297,7 +1292,7 @@ export interface RepositoryFlow {
   /** 流程总述（≤100 字） */
   summary: string;
   stages: FlowStage[];
-  /** 环节之间的去向；**这是拓扑的真源**，`stages[].branches` 只是给人看的文字说明。 */
+  /** 环节之间的去向；这是拓扑的真源，`stages[].branches` 只是给人看的文字说明。 */
   edges: FlowEdge[];
   /** 自述没能确认的部分（例如怀疑参与但证据不足的文件、看不清的分支）。 */
   uncovered?: string[];
@@ -1319,13 +1314,11 @@ export interface RepositoryFlowResult {
 
 
 /**
-  题型五档（2026-10-14 练习域沙箱改造）：
+  题型五档：
   - `change_localization` / `impact_analysis`：静态分析产出的理解题，不跑代码。
   - `patch_edit`：给一段有缺陷的实现，学习者在编辑器里改到测试全过。
   - `author_function`：给题面与骨架文件，学习者从零写实现。
   - `llm_rubric`：开放分析题，rubric 判分。
-  旧档 `output_prediction`（预测一段纯表达式的返回值）已删：它的判据 `safeInvocationFor` 在唯一有全量产物的仓里
-  只命中 2 / 1222 个单元，而同一段代码沙箱能做且做得更好（见开发日志 §52–§53）。
 */
 export type ExerciseKind = "change_localization" | "impact_analysis" | "patch_edit" | "author_function" | "llm_rubric";
 /** 规则出题族题型：题面/选项/标准答案全部由静态分析产出（server 校验 / 缓存命中校验共用这一份）。 */
@@ -1337,7 +1330,7 @@ export const SUPPORTED_EXERCISE_KINDS: ExerciseKind[] = [...EXERCISE_KINDS, ...C
 /** 练习题族：comprehension=程序理解题（规则出题、确定性判分），code=沙箱代码题（模型出题、跑测试判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
 export type ExerciseFamily = "comprehension" | "code" | "llm";
 export type ExerciseInputMode = "text" | "multi_select" | "open" | "code";
-/** `execution` 现在意味着「沙箱真跑测试」，不再是从前那条受限表达式求值。 */
+/** `execution` 意味着「沙箱真跑测试」，判分只由测试是否全过决定。 */
 export type ExerciseGradingMode = "execution" | "set_match" | "rubric";
 /** 沙箱支持的语言。就是这一份清单——加一门语言要同时给 runner（怎么起）与探测（能不能真拦住），否则整域禁用。 */
 export type ExerciseLanguage = "typescript" | "python" | "java";
@@ -1400,9 +1393,9 @@ export interface SuggestedEntry {
 
 /**
   「这条路径是文档，不是代码」——推荐入口的排除判据，引擎与界面共用这一份（判据两处各写一遍迟早漂移）。
-  只看文件自己的扩展名，**不看目录名**：`docs/` 下放的可能是示例代码，按目录一次改动切会连代码一起挡掉。
+  只看文件自己的扩展名，不看目录名：`docs/` 下放的可能是示例代码，按目录一次改动切会连代码一起挡掉。
   `.json`/`.yml` 不算文档（它们是配置与构建输入，不是散文）。
-  今天只有 `.md` 真能走到这一层（收录层的扩展名白名单在前面把关），列全是为了这条判据本身说得通。
+  现在只有 `.md` 真能走到这一层（收录层的扩展名白名单在前面把关），列全是为了这条判据本身说得通。
 */
 export const DOCUMENTATION_EXTENSIONS: readonly string[] = [".md", ".markdown", ".rst", ".adoc", ".txt"];
 
@@ -1499,20 +1492,19 @@ export interface PracticeSummary {
 /**
   学习日志事件类型。分两类：
 
-  - 引擎侧（学习语义）：`ENGINE_JOURNAL_EVENTS`（含 turn_text / turn_invariant / code_egress 等后加的审计事件）；
+  - 引擎侧（学习语义）：`ENGINE_JOURNAL_EVENTS`（含 turn_text / turn_invariant / code_egress 等审计事件），
     由引擎在工具循环 / 判分 / 成本核算里写。
   - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
-    这条契约来自设计文档第 8 章 PRINCIPLE 03「可观测」：每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
+    每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
 
-  ⚠️ 每张表都要**正好**归到 `ENGINE_JOURNAL_EVENTS` 或 `UI_JOURNAL_EVENTS` 之一：下面那条编译期对账会查漏归类，
-  `packages/engine/src/store/journal.ts` 的运行时白名单由这两张表派生（不再是手抄的一份 Set）。
-  append-only：只许新增，不许改名既有取值；删除只发生过一次例外——teach_moment 随 companion 功能于 2026-09-22 整体移除
-  （readJournal 读侧不校验类型，历史仓里的旧 teach_moment 事件仍可读，只是不再接受新写入）。
-  */
+  每张表都要正好归到 `ENGINE_JOURNAL_EVENTS` 或 `UI_JOURNAL_EVENTS` 之一：下面那条编译期对账会查漏归类，
+  `packages/engine/src/store/journal.ts` 的运行时白名单由这两张表派生。
+  append-only：只许新增，不许改名既有取值，也不删类型——读侧不校验类型，历史事件仍可读，只是不再接受新写入。
+*/
 export type JournalEventType =
   // 引擎侧
-  /** ⚠️ 下面四项随「教学状态机」于 2026-10-14 停写（回合变纯问答，不再有阶梯、掌握判定与动作守门）。
-      类型**保留不删**——append-only 那条纪律，且历史仓里的这些行仍要能被归类型；新行不再产生。 */
+  /** 下面几项随「教学状态机」停写（回合是纯问答，没有阶梯、掌握判定与动作守门）。
+      类型保留不删——append-only 那条纪律，且历史仓里的这些行仍要能被归类型；新行不再产生。 */
   | "unit_mastered"
   | "exercise_result"
   | "hint_depth"
@@ -1521,61 +1513,60 @@ export type JournalEventType =
   | "unassisted_test"
   | "action_veto"
   /**
-    练习**未送达**事件。payload 必带 `family`（comprehension|code|llm）与 `stage`：
+    练习未送达事件。payload 必带 `family`（comprehension|code|llm）与 `stage`：
     `no_target` 这一档是共用的选题路径写出的，两族都可能命中，没有族别就没法把「代码题被沙箱拒了」
-    和「这个仓里挑不出单元」分在一个数里读。2026-10-15 之前落的历史行没这个键，报表按「未标族别」单列。
-    */
+    和「这个仓里挑不出单元」分在一个数里读。没带这个键的历史行按「未标族别」单列。
+  */
   | "exercise_declined"
-  /** 练习**送达**事件（漏斗分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
+  /** 练习送达事件（转化率的分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
   | "exercise_generated"
   | "token_usage"
   | "file_read"
   | "code_search"
   /**
-    产品 agent 调了一次**外部 MCP 工具**（2026-10-17 接入）。一次调用一条，失败也记——
-    漏斗要分母：连不上、超时、参数不合法、server 自己报错是四种不同处置（改配置 / 调上限 / 换提示词 / 收白名单）。
-    payload = `server` / `tool` / `args_chars` + `args_hash`（**参数正文不落盘**，与 `code_egress` 同一口径：
+    产品 agent 调了一次外部 MCP 工具。一次调用一条，失败也记——
+    分母要完整：连不上、超时、参数不合法、server 自己报错是四种不同处置（改配置 / 调上限 / 换提示词 / 收白名单）。
+    payload = `server` / `tool` / `args_chars` + `args_hash`（参数正文不落盘，与 `code_egress` 同一口径：
     发出去的可能是仓内代码，另开一条日志线等于自己造一个泄露面）/ `result_chars` / `masked`（密钥筛隐去处数，
     `0` 与不填是两个读数）/ `ok` / `ms` / `error`(unknown_tool|bad_arguments|timeout|no_tool|server_reported_error)。
-    ⚠️ 这一行**不能**当「源码出网」的证据：MCP server 是别人写的本机子进程，它拿到的内容会不会再往外走，引擎不知道，
+    这一行不能当「源码出网」的证据：MCP server 是别人写的本机子进程，它拿到的内容会不会再往外走，引擎不知道，
     所以这条线只是「我们把什么交给了哪个 server」的指针。数据流报表要单列，不许混进 `code_egress` 的总数。
-    */
+  */
   | "mcp_call"
   /**
-    产品 agent 取了一份技能正文（2026-10-17 接入）：`skill` + `chars` + `found`。
+    产品 agent 取了一份技能正文：`skill` + `chars` + `found`。
     记「取过」而不是只记「装过」——一份写好的做法没人调用，是这份做法没被模型认出来的读数，
     而清单里有名字、正文从没被取走这件事只能从这一行看出来。
-    */
+  */
   | "skill_read"
   | "scope_degraded"
-  /** 回合文本落盘（2026-09-22 拍板口径）：payload = scene(teach|map_chat|practice_chat) + question/answer
-    双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。B 档第 2/3 刀（教学法机检、
-    表达质量裁判）的被测输入源。 */
+  /** 回合文本落盘：payload = scene(teach|map_chat|practice_chat) + question/answer
+      双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。教学法机检与表达质量裁判的被测输入源。 */
   | "turn_text"
-  /** 运行期不变量复检（2026-10-04，B 档第 2 刀的运行时那一半）：一回合一条，**合格也记**（分母要运行时成立）。
-    payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
-    判据与离线 `phaseB:eval` 第 4 节共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
+  /** 运行期不变量复检：一回合一条，合格也记（分母要运行时成立）。
+      payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
+      判据与离线 `phaseB:eval` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
-  /** 会话线程的生命周期事件（2026-09-27 会话持久化）：`session_created` 在引擎发 id 建线程时写，
-    `session_deleted` 只在**软删**时写。payload = scope(teach|map|practice) + thread_id + node_id/exercise_id + reason。
-    删除是产品线的动作，journal 这条线只留「发生过删除」这一事实，不删任何既有事件行。 */
+  /** 会话线程的生命周期事件：`session_created` 在引擎发 id 建线程时写，
+      `session_deleted` 只在软删时写。payload = scope(teach|map|practice) + thread_id + node_id/exercise_id + reason。
+      删除是产品线的动作，journal 这条线只留「发生过删除」这一事实，不删任何既有事件行。 */
   | "session_created"
   | "session_deleted"
-  /** agent 回合的循环决策摘要（2026-09-27）：一回合一条，记「提议动作 → 守门裁决 → 实际执行」与工具循环轮次。
-    practice 对话无 agent loop，不记本事件；veto 侧另有更早的 action_veto（学习语义口径，保留不并入）。 */
+  /** agent 回合的循环决策摘要：一回合一条，记「提议动作 → 守门裁决 → 实际执行」与工具循环轮次。
+      practice 对话无 agent loop，不记本事件；veto 侧另有 action_veto（学习语义口径，保留不并入）。 */
   | "loop_round"
-  /** 回合被用户主动停止（2026-09-30「停止生成」）：payload = scene(teach|map_chat|practice_chat) + turn_id +
+  /** 回合被用户主动停止：payload = scene(teach|map_chat|practice_chat) + turn_id +
       aborted_by(恒为 user_stop)。与「客户端断开」刻意区分——后者引擎照常算完落库，不记本事件。
       中止的一轮没有成品：不写 turn_text，也不伪造 assistant 正文。 */
   | "turn_aborted"
   /**
-    沙箱真跑了一次代码（2026-10-14 刀 1，练习域沙箱）。一次运行一条，**成败都记**——
-    漏斗要的是分母：出题自证链跑三趟（原码/缺陷版/参考解），判分再跑一趟，少一条就分不清「题没出成」和「题没被作答」。
+    沙箱真跑了一次代码。一次运行一条，成败都记——
+    分母要完整：出题自证链跑三趟（原码/缺陷版/参考解），判分再跑一趟，少一条就分不清「题没出成」和「题没被作答」。
     payload：`language` / `stage`(validate-proposal|grade) / `ok` / `exit_code` / `signal` / `timed_out` /
     `truncated` / `stdout_bytes` / `duration_ms` / `isolation`(enforced|unavailable) / `runner`（解释器与 profile 指纹，
     换 runner 要让旧题的缓存键一起失效，所以这列必须落在行上才查得回）。
     只记读数不记正文：学习者写的代码与运行输出留在内存里判完就丢，正文进 `code_egress` 那一侧才有出网记录。
-    */
+  */
   | "exercise_run"
   // UI 侧
   | "flow_node_selected"
@@ -1588,31 +1579,31 @@ export type JournalEventType =
   | "entry_adopted"
   | "entry_overridden"
   /**
-    把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。**引擎侧写**：这条读的是两个仓的源码，
-    配上几条是要能查的数。原来由界面面板点一次写一条，现在只有 agent 调 `cross_repo_link` 时才会发生（`via: "tool"`）。
+    把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。引擎侧写：这条读的是两个仓的源码，
+    配上几条是要能查的数。只有 agent 调 `cross_repo_link` 时才会发生（`via: "tool"`）。
     payload：`other_repository_id` / `outbound` / `inbound`（两个方向各自配上的条数）。
-    */
+  */
   | "repository_paired"
   /**
     用户手动把某个模块改成另一档（主链路 / 基础设施 / 外围）。GUI 侧写。
     payload：`module_id` / `module_label` / `from` / `to` / `core_share`（改的时候引擎算的占比，用来看判据离真值有多远）。
     结构判据没有真值可比，这条就是攒真值的读数——攒够了才谈「判据改对了没」。
-    */
+  */
   | "module_tier_overridden"
   /**
-    人工把模块挪到另一层 / 改了层名（2026-10-16 架构视图）。与 `module_tier_overridden` 同一类：
-    分层判断是可错的，**改档次数就是本次唯一能拿到的错误率读数**，所以 payload 必须带引擎当时判的原值。
+    人工把模块挪到另一层 / 改了层名。与 `module_tier_overridden` 同一类：
+    分层判断是可错的，改档次数是唯一能拿到的错误率读数，所以 payload 必须带引擎当时判的原值。
     写入权在引擎侧（改的落点是服务端覆盖层，GUI 与 Agent 工具都经同一条写路径）。
   */
   | "architecture_layer_overridden"
   /**
-    源码出网清单（2026-10-11，企业化第 3 条「LLM 数据流审计」）。**引擎侧写**，一行 = 一段进过模型请求的仓内源码。
+    源码出网清单（LLM 数据流审计）。引擎侧写，一行 = 一段进过模型请求的仓内源码。
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
-    与 llm.log 靠 `traceId + scene` 关联。两条设计口径与字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
-    */
+    与 llm.log 靠 `traceId + scene` 关联。字段语义以 engine `security/dataflow.ts` 的注释为准，不在此复述。
+  */
   | "code_egress"
   /**
-    画布上的一张图被**建出来**（agent 一次画完整张，或用户新建空白）：
+    画布上的一张图被建出来（agent 一次画完整张，或用户新建空白）：
     payload = diagram + name + source(agent|me) + nodes + edges + downgraded（几条边被引擎降了档）。
     记的是「谁画的、画了多少、有几条不成立」，不记图内容（内容在 `diagram` 表里）。
   */
@@ -1620,7 +1611,7 @@ export type JournalEventType =
   /**
     一次结构改动落了盘：payload = diagram + action(add_node|remove_node|add_edge|remove_edge|add_group|remove_group|relabel|move)
     + nodes + edges + downgraded + via(agent|user)。
-    **几何拖动不走这条**——位置不承载对错、也不是判断被推翻的读数，一天能拖几百次，写进审计只会淹掉真信号。
+    几何拖动不走这条——位置不承载对错、也不是判断被推翻的读数，一天能拖几百次，写进审计只会淹掉真信号。
   */
   | "diagram_edited"
   /** 图改名（payload = diagram + from + to）。改名不存版本：它不动结构。 */
@@ -1631,21 +1622,20 @@ export type JournalEventType =
   | "diagram_restored";
 
 /**
-  同一份事件的**写入权分两张表**（2026-10-12，接 §45）。
+  同一份事件的写入权分两张表。
   上面那张联合类型说的是「有哪些事件」，这两张说的是「谁有资格写」：
   `POST /api/repositories/:id/journal` 只认 UI 侧那张。理由是证据价值本身——
-  `.tutor/journal.jsonl` 现在承担着「哪些代码出过门」这类账（`file_read` / `code_egress` / `token_usage`），
+  `.tutor/journal.jsonl` 承担着「哪些代码出过门」这类账（`file_read` / `code_egress` / `token_usage`），
   而这条接口是本机任何进程都能调的：能塞一行就能编一段账，能编账的审计线就不是审计线。
   引擎侧那张由引擎在状态机、工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
-  */
+*/
 export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
-  // 2026-10-16：挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写——
-  // 落盘的那条路（`POST .../overlays/apply`）在引擎里，审计与写入同处才不漏；界面自己 emit 的旧日子已随覆盖层上收结束
+  // 挪层/改层名/改档都是「判断被人工推翻」的读数，只能由引擎写：落盘的那条路（`POST .../overlays/apply`）在引擎里，审计与写入同处才不漏
   "architecture_layer_overridden", "module_tier_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
 ] as const satisfies readonly JournalEventType[];
 
@@ -1661,9 +1651,9 @@ export type UiJournalEventType = (typeof UI_JOURNAL_EVENTS)[number];
 type AssertNever<T extends never> = T;
 
 /**
-  编译期对账：两张表并起来必须**正好等于** `JournalEventType`。
-  往 union 加了新事件却忘了归进某一张表 ⇒ 这里直接报错，不用等运行期，也不用靠人审。
-  */
+  编译期对账：两张表并起来必须正好等于 `JournalEventType`。
+  往 union 加了新事件却忘了归进某一张表，这里直接报错，不用等运行期，也不用靠人审。
+*/
 type _JournalPartitionGuard = AssertNever<Exclude<JournalEventType, EngineJournalEventType | UiJournalEventType>>;
 
 export interface JournalEvent {
@@ -1698,9 +1688,9 @@ export interface EngineTraceEvent {
   /** 关联键：同一请求产生的 http / llm / journal 事件共享它；后台任务为 null。 */
   traceId: string | null;
   /**
-    调用方身份（API key 的名字）：**认证闸撤了之后新行恒 null**（2026-10-15，§64），历史行里有值。
-    字段保留只为两份日志线（`llm.log` 与本文件）的列形状一致，别再按它做按人对账。
-    */
+    调用方身份（API key 的名字）。认证闸撤了之后新行恒 null，只有历史行里有值。
+    字段保留只为两份日志线（`llm.log` 与本文件）的列形状一致，不要按它做按人对账。
+  */
   actor?: string | null;
   durationMs?: number | null;
   detail: Record<string, TraceScalar>;

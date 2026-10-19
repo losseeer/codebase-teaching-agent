@@ -138,7 +138,7 @@ describe("suggestModuleEntriesCached", () => {
       const { provider, selectCalls, expandCalls } = fakeProvider([["n1"]]);
       const input = { tree: treeWithNodes(["n1"]), moduleLabel: "配置", moduleHint: "h", provider, repositoryId: "repo", database };
       expect((await suggestModuleEntriesCached(input)).entries).toHaveLength(1);
-      // 模拟 engine 重启：内存层被清空，SQLite 还在——同键直接命中，翻译层与选择层都不再烧调用
+      // 模拟 engine 重启：内存层被清空，SQLite 还在——同键直接命中，翻译层与选择层都不再发调用
       clearModuleEntryCache();
       const second = await suggestModuleEntriesCached(input);
       expect(second.entries.map((entry: SuggestedEntry) => entry.id)).toEqual(["n1"]);
@@ -154,7 +154,7 @@ describe("suggestModuleEntriesCached", () => {
       await suggestModuleEntriesCached(emptyInput);
       expect(bad.selectCalls).toHaveLength(2);
 
-      // 主动判空在持久层落盘：重启后仍复用，不重复烧
+      // 主动判空在持久层落盘：重启后仍复用，不重复发调用
       const declined = fakeProvider(["[]"]);
       const declinedInput = { ...input, moduleLabel: "并发", provider: declined.provider };
       expect((await suggestModuleEntriesCached(declinedInput)).declined).toBe(true);
@@ -238,7 +238,7 @@ describe("rankEntryCandidates（词边界打分 + boost 补位 + 跨模块去重
     const sameFile = [1, 2, 3, 4, 5].map((index) => mk(`a${index}`, "src/CacheClient.java", "缓存工具"));
     const others = [mk("b", "src/QueueConfig.java", "队列配置"), mk("c", "src/UserHolder.java", "线程上下文")];
     const ranked = rankEntryCandidates([...sameFile, ...others], ["缓存"], new Map());
-    // 池子装得下时溢出会被放回（一个都不丢），关键是**顺序**：同文件最多连占 3 席，
+    // 池子装得下时溢出会被放回（一个都不丢），关键是顺序：同文件最多连占 3 席，
     // 后面的候选要先于本文件的溢出进场。
     expect(ranked.map((candidate) => candidate.id)).toEqual(["a1", "a2", "a3", "b", "c", "a4", "a5"]);
     const crowded = rankEntryCandidates([...sameFile, ...others, ...Array.from({ length: 12 }, (_, index) => mk(`z${index}`, `src/z${index}.ts`, "无关"))], ["缓存"], new Map());

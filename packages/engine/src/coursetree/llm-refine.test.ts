@@ -132,8 +132,7 @@ describe("refineCourseMap", () => {
   });
 
   it("模型解析成功但一个名字都不改（提示词允许省略）：树不变，usage 必须交出", async () => {
-    // 这个节点过去被 `renames.size` 一锅端掉：钱已经花了，既不记账也写不下 settings.refinement 标记，
-    // 于是每次导入都重付一遍而账面看不出来（同 §37.4「降级要如实记入审计」那条纪律）。
+    // 空数组也算跑完：这一发已经计费，不交出 usage 就记不下 settings.refinement 标记，每次导入都重付一遍
     const { provider, users } = fakeProvider(["[]"]);
     const tree = treeWith(leaf("implementation:u1", "doThing()"));
     const refinement = await refineCourseMap(tree, provider);
@@ -152,7 +151,7 @@ describe("refineCourseMap", () => {
     const tree = treeWith(leaf("implementation:u1", "one()"), leaf("implementation:u2", "two()"));
     const refinement = await refineCourseMap(tree, provider);
     const children = refinement.course.root.children.find((node) => node.id === "micro")!.children;
-    // 旧口径 `.slice(0, 18)` 会切出 `Grafana 大盘 provisi` / `buildIndexSettingsA`——半截词比超长难读得多
+    // 从中间硬切会切出 `Grafana 大盘 provisi` / `buildIndexSettingsA` 这类半截词，比超长难读得多
     expect(children[0].title).toBe("Grafana 大盘 provisioning…");
     expect(children[1].title).toBe(symbol);
   });

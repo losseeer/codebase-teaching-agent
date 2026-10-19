@@ -13,9 +13,9 @@ import { factsToolFor } from "../application/canvas-tools.js";
 import type { ImportedRepository } from "../importer/importer.js";
 
 /**
-  产物查询门的回归。要拦的事故有两个方向：
-  - 把「没算过」说成「仓库里没有」——模型会据此对用户下一句否定的结论；
-  - 把整份产物（含配置文件的值）原样吐出去——`.tutor` 是明文盘，口令一旦进上下文就出过门了。
+  两个不能越的方向：
+  - 「没算过」不能说成「仓库里没有」，模型会据此给出否定的结论；
+  - 整份产物（含配置文件的值）不能原样吐出去：`.tutor` 是明文盘。
 */
 
 const ALPHA = `export class Box {\n  size = 0;\n}\nexport function pick(a: number) {\n  if (a > 1) { return 1; }\n  return 0;\n}\n`;
@@ -27,7 +27,7 @@ function entry(path: string, lines = 5): FileEntry {
   return { path, extension: path.slice(path.lastIndexOf(".")), bytes: 100, lines };
 }
 
-/** 建一个算好产物的小仓（真分析，不是手捏 payload），返回库与仓 id。 */
+/** 真分析出来的小仓（不是手捏 payload），返回库、仓 id 与调用门的入口。 */
 function fixture(): { root: string; db: TutorDatabase; id: string; call: (args: Record<string, string>) => string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-query-")));
   mkdirSync(join(root, "src"), { recursive: true });
@@ -131,7 +131,7 @@ describe("产物查询门", () => {
     const f = fixture();
     try {
       expect(f.call({ kind: "cfg", path: "src/missing.ts" })).toContain("这个文件不在其中");
-      // 只留 cfg 一类的库：registry 那类一行都没有，门必须说「先重新分析」而不是「没有条目」
+      // 库里只有 cfg 一类：registry 一行都没有，门要说「先重新分析」而不是「没有条目」
       const partial = new TutorDatabase(f.root);
       const cfgOnly = collectFileFacts(f.root, [entry("src/alpha.ts")], extractSymbolsFromAst("src/alpha.ts", ALPHA) ?? []).filter((row) => row.kind === "cfg");
       const id2 = "repo_partial";

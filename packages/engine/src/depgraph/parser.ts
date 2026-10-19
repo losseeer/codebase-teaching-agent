@@ -5,17 +5,15 @@ import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/shared";
 import { traceEngine } from "../trace/engine-log.js";
 
 /**
-  基于语法树的符号抽取（替代原先的逐行文本匹配）。
+  基于语法树的符号抽取。不用逐行文本匹配：类方法会被当成普通函数、接口与类型别名认不出来，
+  函数体结束行只能靠数大括号猜（代码里出现含大括号的字符串或注释就猜错），
+  而 `endLine` 是锚点高亮、调用归属、微观讲解切片的共同依据。
 
-  逐行匹配的固有缺陷：只认「长得像函数定义行」的文本，于是类方法被当成普通函数、
-  接口与类型别名根本认不出来，函数体到哪一行结束还要靠数大括号猜——代码里出现含大括号的
-  字符串或注释就会猜错。而 `endLine` 是锚点高亮、调用归属、微观讲解切片的共同依据。
+  实现用 WASM 版解析器（`web-tree-sitter` + VS Code 预编译的语法文件），不引入原生模块：
+  原生预编译二进制跟 Node 版本绑。
 
-  实现用 WASM 版解析器（`web-tree-sitter` + VS Code 预编译的语法文件），**不引入原生模块**：
-  本项目已经在数据库驱动上吃过「换 Node 版本就要重新配预编译二进制」的亏，不再增加这类依赖。
-
-  ⚠️ 加载失败**不抛给调用方**：回落逐行匹配，但必须把原因写进图数据的 `parseBackendReason`
-  并记一条 `degrade` 工作日志——静默降级是明令禁止的。
+  加载失败不抛给调用方：回落逐行匹配，但原因必须写进图数据的 `parseBackendReason` 并记一条 `degrade`
+  工作日志，不允许静默降级。
 */
 
 export type ParseBackend = "ast" | "regex";
@@ -26,7 +24,7 @@ export interface ParseBackendStatus {
   reason?: string;
 }
 
-/** 只覆盖依赖图真正处理的扩展名（其余语言本来就走不进这里）。wasm 全部来自 `@vscode/tree-sitter-wasm`，零新增依赖。 */
+/** 只覆盖依赖图真正处理的扩展名（其余语言走不进这里）；wasm 全部来自 `@vscode/tree-sitter-wasm`。 */
 const GRAMMAR_FILES = {
   python: "tree-sitter-python.wasm",
   java: "tree-sitter-java.wasm",
@@ -56,11 +54,8 @@ function grammarOf(path: string): GrammarName | undefined {
 }
 
 /**
-  `SymbolInfo.language` 的口径与索引层保持一致，与用哪种语法解析无关：
-  「扩展名 → 语言」这一步**用共享能力表**（复审 #121）。上面 `grammarOf` 认 `.mts`/`.cts`，
-  而这一条过去自己手写一份正则、把它们漏在外面——同一个文件用 TypeScript 语法解析、却被标成 `other`，
-  于是「这门语言有几个符号」的读数按扩展名分堆时漏算。两处判据同源之后不会再各走各的。
-  表里的 `vue` 不在这个联合类型里（SFC 的符号取自 `<script>` 块，历史上按 other 记），显式映射而不是默默漏。
+  `SymbolInfo.language` 的口径与索引层一致、与用哪种语法解析无关：「扩展名 → 语言」这一步用共享能力表。
+  表里的 `vue` 不在这个联合类型里（SFC 的符号取自 `<script>` 块），显式映射成 other 而不是默默漏掉。
   */
 function languageOf(path: string): SymbolInfo["language"] {
   const language = languageOfExtension(extname(path));
@@ -71,11 +66,9 @@ function languageOf(path: string): SymbolInfo["language"] {
 export type SyntaxNode = NonNullable<ReturnType<Parser["parse"]>>["rootNode"];
 
 /**
-  解析一份源码并交出一棵语法树供遍历，**遍历完立即释放**（`tree.delete()`）。
-
-  这一层是唯一的解析出口：符号抽取、模板串行号、控制流图都从这里要树。原来各处自己
-  `parser.parse()` 一份就走，其中符号抽取那条不释放——一个仓两千个文件就是两千棵留在
-  WASM 堆上的树，产物层再加一遍遍历会把它放大成看得见的内存问题。
+  解析一份源码并交出一棵语法树供遍历，遍历完立即 `tree.delete()`：树留在 WASM 堆上，GC 收不掉，
+  一个仓两千个文件就是两千棵。
+  这一层是唯一的解析出口：符号抽取、模板串行号、控制流图都从这里要树。
 */
 export function withSyntaxTrees<T>(path: string, content: string, visit: (root: SyntaxNode, grammar: GrammarName) => T): T[] | undefined {
   if (!parser) return undefined;
@@ -217,8 +210,7 @@ function unwrap(node: SyntaxNode): SyntaxNode | undefined {
 
 /**
   一个声明节点的名字：优先 `name` 字段，C 系没有就沿 declarator 链找。
-  符号表与控制流图共用这一份——两处各写一遍就会漂（C 的函数名不在独立字段里，漏了兜底
-  就等于整个仓的 C 函数「没有名字」）。
+  符号表与控制流图共用这一份判据；C 的函数名不在独立字段里，少了 declarator 兜底就等于整个仓的 C 函数没有名字。
 */
 export function declarationNameOf(node: SyntaxNode): string | undefined {
   return node.childForFieldName("name")?.text.trim() || declaratorName(node);
@@ -229,20 +221,20 @@ function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): Sym
   if (!name) return undefined;
   const line = node.startPosition.row + 1;
   return {
-    // id 格式与旧实现一致：它写进 `analysis_json` 并被调用边按 `calleeSymbol` 引用，不能改
+    // id 格式是线上契约：写进 analysis_json 并被调用边按 calleeSymbol 引用，不能改
     id: `symbol:${path}:${name}:${line}`,
     name,
     kind,
     path,
     line,
-    // 语法树给的是**最后一行（含）**，与旧的「数大括号/看缩进」结果口径一致但不再猜错
+    // 语法树的 endPosition 是最后一行（含）
     endLine: node.endPosition.row + 1,
     parameters: parameterTexts(node),
     language: languageOf(path)
   };
 }
 
-/** 变量声明里的箭头函数/函数表达式/类表达式：`const f = () => {}` 这类旧实现也在收，语义保持一致。 */
+/** 变量声明里的箭头函数/函数表达式/类表达式：`const f = () => {}` 也算符号。 */
 function collectVariableDeclarators(node: SyntaxNode, path: string, out: SymbolInfo[]): void {
   for (const declarator of node.namedChildren) {
     if (declarator.type !== "variable_declarator") continue;
@@ -305,9 +297,8 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
 }
 
 /**
-  Vue 单文件组件没有专属语法，但 `<script>` 块本体就是 JS/TS：把块外的行换成空行原地垫出来
-  （模板/样式不会误进语法树，块内节点的 `startPosition.row` 天然就是全文件行号），
-  再走现有 tsx/js 语法。
+  Vue 单文件组件没有专属语法，但 `<script>` 块本体就是 JS/TS：把块外的行换成空行原地垫出来，
+  再走现有 tsx/js 语法。模板/样式不会误进语法树，块内节点的 `startPosition.row` 天然就是全文件行号。
 */
 function vueScriptBlocks(content: string): { start: number; end: number; ts: boolean }[] {
   const lines = content.split("\n");
@@ -326,8 +317,8 @@ function vueScriptBlocks(content: string): { start: number; end: number; ts: boo
 }
 
 /**
-  垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行**不带**换行符，`join("\n")` 会在垫子与正文之间
-  再补一个，合起来正好 `start` 个换行 ⇒ 块内第一行仍落在原文件的第 start 行，节点行号不用二次换算。
+  垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行不带换行符，`join("\n")` 会在垫子与正文之间
+  再补一个，合起来正好 `start` 个换行，块内第一行仍落在原文件的第 start 行，节点行号不用二次换算。
 */
 function padVueBlock(content: string, block: { start: number; end: number }): string {
   const lines = content.split("\n");
@@ -335,12 +326,10 @@ function padVueBlock(content: string, block: { start: number; end: number }): st
 }
 
 /**
-  跨行模板字符串占的行号（tree-sitter 认出来的，不是自己扫引号）。
-  存在的理由只有一件：入口规则得知道「这一行是代码还是展示内容」。真仓里把一份示例源码整段写入
-  模板字符串当演示数据是常见写法（本仓 `docs/ui-prototype/js/data.js` 就是），逐行看那些
-  `const app = Fastify(...)`、`app.listen(...)` 与真代码一模一样，按行匹配的入口判据就会把演示数据
-  标成服务入口。自己再写一份字符串扫描器会和这里的语法树打架，所以判据只出树一份。
-  返回 undefined 的语义与 `extractSymbolsFromAst` 同一口径：解析器没就绪或这语言没有语法，调用方自己决定退路。
+  跨行模板字符串占的行号（tree-sitter 认出来的，不自己扫引号，判据只出树一份）。
+  入口判据得知道「这一行是代码还是展示内容」：把示例源码整段写进模板字符串当演示数据是常见写法，
+  逐行看那些 `const app = Fastify(...)` 与真代码一模一样，按行匹配会把演示数据标成服务入口。
+  返回 undefined 表示解析器没就绪或该语言没有语法，与 `extractSymbolsFromAst` 同一口径。
 */
 export function extractMultilineTemplateLines(path: string, content: string): Set<number> | undefined {
   const lines = new Set<number>();
@@ -358,7 +347,7 @@ export function extractMultilineTemplateLines(path: string, content: string): Se
 }
 
 /**
-  用语法树抽符号。**解析器未就绪或该扩展名没有语法时返回 undefined**（调用方据此回落逐行匹配），
+  用语法树抽符号。解析器未就绪或该扩展名没有语法时返回 undefined（调用方据此回落逐行匹配），
   而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
 */
 export function extractSymbolsFromAst(path: string, content: string): SymbolInfo[] | undefined {

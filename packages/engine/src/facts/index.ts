@@ -12,16 +12,10 @@ import { analyzeFileRegistry, registryEligible } from "./registry.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  静态产物层的总装：**一个文件解析一次，产出所有类别的读数**。
-
-  为什么合在一趟里：语法树解析是全仓最贵的一步，每多一类产物就多扫一遍源码
-  （复审 #170 就记过「一轮两遍全仓读」这笔账）。各产物之间还要靠同一份块 id 对齐，
-  分开算等于让两份图各自漂移。
-
-  与依赖图分家（见 `store/database.ts` 里 `static_fact` 那段）：这些产物是确定性重算的，
-  不进 `analysis_json`、不进 `backendStamp`、不参与任何缓存键——加一类分析绝不该让
-  已导入的仓重烧付费调用。源码在这里再读一遍：图那边读完就丢了内容，
-  为省一遍磁盘读把 Map 穿到三处调用方不值得。
+  静态产物层的总装：一个文件解析一次，产出所有类别的读数。
+  语法树解析是全仓最贵的一步，各产物又要靠同一份块 id 对齐，所以合在同一趟里算。
+  产物确定性重算，不进 `analysis_json`、不进 `backendStamp`、不参与缓存键。
+  源码在这里再读一次：图那边读完就丢了内容。
 */
 export interface FileFactRow {
   kind: FactKind;
@@ -46,7 +40,7 @@ export function analyzeFile(path: string, content: string, symbols: SymbolInfo[]
     typeSkips.push(...(fact.skipped ?? []));
   };
   const cfg = eachFunction(path, content, symbols, language, (scope) => void flows.push(analyzeFunctionDataflow(scope)), onRoot);
-  // backend 跟着图走：没有语法树就没有任何一份产物，`skipped` 里那句原因对三类产物同时成立
+  // backend 跟着图走：没有语法树就没有任何一份产物，skipped 里的原因对三类产物同时成立
   const shared = { path, language, backend: cfg.backend, version: FACTS_VERSION };
   return {
     cfg,
@@ -61,13 +55,13 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
   const byPath = new Map<string, SymbolInfo[]>();
   for (const symbol of symbols) byPath.set(symbol.path, [...(byPath.get(symbol.path) ?? []), symbol]);
   for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
-    // 没有语法就没有任何产物：文档、样式、配置走不到这里，也不会留下一行「算过、是空的」
+    // 没有对应语法就不产行，读侧才分得开「没算过」与「算过、是空的」
     if (!graphExtensions.includes(file.extension.toLowerCase())) continue;
     let content: string;
     try {
       content = readFileSync(join(repositoryPath, file.path), "utf8");
     } catch {
-      // 扫描期就读不到的文件已经在 `RepositoryIndex.unreadable` 里记过名，这里不再重复报一条
+      // 扫描期读不到的文件已在 RepositoryIndex.unreadable 记名，这里不重复报
       continue;
     }
     const facts = analyzeFile(file.path, content, byPath.get(file.path) ?? [], languageCapabilitiesOf(file.path).language, symbols);
@@ -76,8 +70,7 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
     rows.push({ kind: "typeRelations", path: file.path, payload: facts.types });
     rows.push({ kind: "registry", path: file.path, payload: facts.registry });
   }
-  // 构建清单与 SPI 这类非源码文件：只有注册索引一类产物，但「哪些文件真在一起编译」
-  // 与「接口运行时绑到哪个实现」只有它们能回答
+  // 构建清单与 SPI 这类非源码文件只产注册索引：哪些文件在一起编译、接口运行时绑到哪个实现，只有它们能回答
   for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
     if (graphExtensions.includes(file.extension.toLowerCase()) || !registryEligible(file.path, false)) continue;
     try {
@@ -91,10 +84,8 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
 }
 
 /**
-  整批落库，按类别各存一次 `replaceAll`。
-
-  为什么是整类替换而不是逐行增改：这一批就是**当前源码算出来的全集**，盘上多出来的行只可能来自
-  已删除或已不再含函数的文件——留着它们，读侧就会把「这个文件没图」误读成「这个文件的图是空的」。
+  整批落库，按类别各存一次 `replaceAll`：这一批就是当前源码算出的全集，
+  留下的旧行会被读成「这个文件有产物、但是空的」。
 */
 export function saveFileFacts(db: TutorDatabase, repositoryId: string, rows: FileFactRow[]): void {
   const grouped = new Map<FactKind, { path: string; payload: unknown }[]>();

@@ -1,21 +1,20 @@
 /**
-  外部包名 → 类别的**确定性词典**（架构视图「系统边界之外」那一栏的唯一判据）。
+  外部包名 → 类别的确定性词典（架构视图「系统边界之外」那一栏的唯一判据）。
 
-  三条纪律，都是这条链路里最容易被顺带破坏的：
-  1. **不许模型参与分类**。层名可以让模型判（那是断言类判断，可错、有人工修正通道），
-     「这个仓连了 Redis」是事实类判断——事实类一旦交给模型，图上的一个箭头就变成了编造。
-  2. **命中不了的一律 `other`，不按名字里的字眼瞎猜**。`org.springframework.web.bind` 里也有 `web`，
-     它是入站注解不是 HTTP 客户端；`cn.hutool` 里没有 `db` 但 `cn.hutool.db` 真的是数据库工具——
-     靠词根猜两头都会错，所以只按**逐项列出的前缀**判。
-  3. **词典只覆盖真实遇到的包**（下面每个键都来自 2026-10-16 对地址簿 6 个仓的实测扫描，`pnpm arch:externals` 可复算）。
-     宁缺毋滥：漏一个包只是让它进 `other`（界面折叠起来），错一个包会让边界栏指着一个不存在的服务。
+  三条纪律：
+  1. 不许模型参与分类。层名可以让模型判（断言类判断，可错、有人工修正通道）；
+     「这个仓连了 Redis」是事实类判断，交给模型就等于让图上的箭头变成编造。
+  2. 命中不了的一律 `other`，不按名字里的字眼猜。`org.springframework.web.bind` 里有 `web`，
+     它是入站注解不是 HTTP 客户端；`cn.hutool.db` 真的是数据库工具，但 `cn.hutool` 不是——
+     靠词根猜两头都会错，所以只按逐项列出的前缀判。
+  3. 词典只覆盖真实遇到的包（`pnpm arch:externals` 可复算）。漏一个包只是让它进 `other`（界面折叠起来），
+     错一个包会让边界栏指着一个不存在的服务。
 
-  ⚠️ `other` 不等于「外部服务」，它的意思是「词典不认识」。两类东西都会落在这里：
-  真的三方小库，以及**仓内解析不到的自有包**——Python 的导入根不在仓根时必然发生
-  （实测 CS-learning 的 `crawler.wordlist`、`search.environment` 就是这样）。界面要说「未识别」，不能说「外部依赖」。
+  `other` 不等于「外部服务」，它的意思是「词典不认识」：真的三方小库和仓内解析不到的自有包都会落在这里
+  （Python 的导入根不在仓根时就会发生）。界面要说「未识别」，不能说「外部依赖」。
 */
 
-/** 档名的类型与中文标签都在 shared（那是线上形状与界面文案的唯一来源），这里只转发一次。 */
+/** 档名的类型与中文标签都在 shared（线上形状与界面文案的唯一来源），这里只转发一次。 */
 import { EXTERNAL_CATEGORY_LABEL, type ExternalCategory } from "@codebase-tutor/shared";
 
 export { EXTERNAL_CATEGORY_LABEL, type ExternalCategory };
@@ -24,14 +23,14 @@ export interface ExternalClass {
   category: ExternalCategory;
   /** 界面上显示的那个名字（命中词典时是条目的名字，没命中时就是原身份）。 */
   display: string;
-  /** 命中的词典键（`undefined` = 没命中，进 `other`）。诊断脚本与悬停「依据」都靠它说清是哪条规则判的。 */
+  /** 命中的词典键；`undefined` 表示没命中，进 `other`。诊断脚本与悬停「依据」靠它说清是哪条规则判的。 */
   matched?: string;
 }
 
 /**
-  前缀词典：键是按点/斜杠切开的**包名前缀**，匹配取「段数最长的那条」，
+  前缀词典：键是按点/斜杠切开的包名前缀，匹配取「段数最长的那条」，
   这样 `org.springframework.data.redis`（缓存）能盖过 `org.springframework`（框架）。
-  只放实测遇到的包，见文件头第 3 条。
+  只放真实遇到的包，见文件头第 3 条。
 */
 export const EXTERNAL_CATALOG: Record<string, { category: ExternalCategory; display: string }> = {
   // —— 存储与缓存（Java 侧大多经 Spring Data / 官方客户端出来）——
@@ -57,7 +56,7 @@ export const EXTERNAL_CATALOG: Record<string, { category: ExternalCategory; disp
   "com.rabbitmq": { category: "queue", display: "RabbitMQ" },
   "kafka": { category: "queue", display: "kafka" },
   "celery": { category: "queue", display: "Celery" },
-  // —— 模型服务（这三仓里没有 SDK 形态的调用，键留着是给下一个仓的，不算瞎猜：只按整名命中）——
+  // —— 模型服务（本仓群没有 SDK 形态的调用，键留着给下一个仓；只按整名命中）——
   "openai": { category: "model", display: "OpenAI SDK" },
   "langchain": { category: "model", display: "LangChain" },
   "langgraph": { category: "model", display: "LangGraph" },
@@ -116,11 +115,11 @@ export const EXTERNAL_CATALOG: Record<string, { category: ExternalCategory; disp
 };
 
 /**
-  标准库这一档不逐包列（列不完，也不该列），按**形状**判三条：
-  - Java/JVM：`java.*` 与 `javax.*` 里 JDK 自带的那些——注意 `javax.servlet` 不是 JDK 自带、是容器给的，
+  标准库不逐包列（列不完，也不该列），按形状判：
+  - Java/JVM：`java.*` / `javax.*` / `jdk.*` 里 JDK 自带的那些。`javax.servlet` 不是 JDK 自带、是容器给的，
     所以词典先判、形状规则只在词典没命中时兜底，顺序反过来会把容器 API 说成语言自带；
-  - Node：`node:` 前缀，以及不带前缀的内置模块名（实测这六个仓里出现过的就这几个）；
-  - Python：一份实测出现过的标准库名单（`__future__` 到 `uuid`）。名单外的仍进 `other`，不假装认识。
+  - Node：`node:` 前缀，以及不带前缀的内置模块名；
+  - Python / Go：一份已知的标准库名单，名单外的仍进 `other`，不假装认识。
 */
 const NODE_BUILTINS = new Set(["path", "fs", "os", "url", "util", "crypto", "events", "module", "child_process", "sqlite", "http", "https", "zlib", "stream", "buffer", "assert"]);
 const PYTHON_STDLIB = new Set([
@@ -129,10 +128,10 @@ const PYTHON_STDLIB = new Set([
   "logging", "math", "operator", "os", "pathlib", "pickle", "pprint", "random", "re", "shutil", "signal", "socket", "ssl", "string", "subprocess",
   "sys", "tempfile", "threading", "time", "tkinter", "traceback", "types", "typing", "unittest", "urllib", "uuid", "warnings", "weakref", "optparse", "py_compile"
 ]);
-/** Go 标准库只有一层包名（`fmt`、`strings`、`net`…），身份的第一段就够判。 */
+/** Go 标准库只有单层包名（`fmt`、`strings`、`net`…），身份的第一段就够判。 */
 const GO_STDLIB = new Set(["bytes", "context", "crypto", "encoding", "errors", "fmt", "io", "log", "math", "net", "os", "path", "regexp", "runtime", "sort", "strconv", "strings", "sync", "testing", "time", "unicode", "atomic"]);
 
-/** 词典按段数倒序排一次（建表一次、每次调用省一遍比较）；真正的「取最长命中」在 classify 里按段数判。 */
+/** 词典按段数倒序排一次（建表一次、每次调用省一遍比较）；「取最长命中」在 classifyExternal 里按段数判。 */
 const catalogEntries = Object.entries(EXTERNAL_CATALOG).sort((left, right) => segmentsOf(right[0]).length - segmentsOf(left[0]).length);
 
 /** 词典键与身份都按各自的形状切段（Go 用斜杠、其余用点），切完只比段，不做字符串前缀粘连。 */
@@ -141,7 +140,7 @@ function segmentsOf(name: string): string[] {
 }
 
 /**
-  一个包名身份 → 类别。**纯函数、无模型、可复算**。
+  一个包名身份 → 类别。纯函数、无模型、可复算。
   先查词典（命中段数最多的那条前缀），查不到再按标准库形状判，都不中就 `other`。
   比段不比字符串是为了挡住「`fastify` 命中 `fastify-plugin`」这一类粘连。
 */
@@ -172,14 +171,13 @@ export interface ExternalGroup {
   matched?: string;
   /** 归到这一行的包名身份（`lombok.Data` 与 `lombok.extern.slf4j.Slf4j` 会并成一行，这里留全名当依据）。 */
   identities: string[];
-  /** 哪些文件 import 了它——界面上「用到它的文件数」就是这个节点的长度，也是悬停「依据」。 */
+  /** 哪些文件 import 了它：界面上「用到它的文件数」就是这个数组的长度，也是悬停「依据」。 */
   files: string[];
 }
 
 /**
-  文件 → 外部包名 的原始表，聚成「边界栏」要的那些行。
-  为什么合在这里而不是界面或路由各写一遍：`lombok.Data` / `lombok.experimental.Accessors` 是同一个 Lombok，
-  分开列会把一栏挤满；而 `other` 档**恰恰不能合**——没认出名字就不知道它们是不是同一个东西。
+  文件 → 外部包名的原始表，聚成边界栏要的那些行。合在这里而不是界面或路由各写一遍：
+  `lombok.Data` / `lombok.experimental.Accessors` 是同一个 Lombok，分开列会把一栏挤满。
   排序：先按类别（存储/缓存/队列/模型/接口在前，框架/测试/语言自带居中，未识别垫底），类内按文件数倒序。
 */
 export function groupExternals(externals: Record<string, string[]>): ExternalGroup[] {
@@ -189,10 +187,9 @@ export function groupExternals(externals: Record<string, string[]>): ExternalGro
     for (const identity of identities) {
       const info = classifyExternal(identity);
       /**
-        行按**读者看到的那个名字**合，不按词典键合。实测的洞：dianping 的 `org.apache.ibatis.annotations`
-        与 `org.mybatis.spring.annotation` 是两条词典键、同一个显示名（MyBatis），于是边界栏里出现两枚一模一样的
-        chip——同一类错误还有一份：标准库以前按身份逐条建行，几十个 `java.*` 把「未列出」的计数灌满。
-        没认出来的（`other`）仍然一个名字一行：不知道是不是同一个东西就不硬合。
+        行按读者看到的那个名字合，不按词典键合：两条词典键可以有同一个显示名（`org.apache.ibatis.annotations`
+        与 `org.mybatis.spring.annotation` 都叫 MyBatis），按键合会在边界栏里长出两枚一模一样的 chip。
+        `other` 不能合——没认出名字就不知道它们是不是同一个东西，仍然一个名字一行。
       */
       const key = info.category === "other" ? `other:${identity}` : `${info.category}|${info.display}`;
       const current = byKey.get(key);

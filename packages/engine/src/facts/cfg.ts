@@ -3,23 +3,12 @@ import { declarationNameOf, withSyntaxTrees, type GrammarName, type SyntaxNode }
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  函数内的控制流图：把「哪些语句可能按什么顺序被执行」收成节点与边。
-
-  与依赖图分家的那一半事实——图回答「谁指向谁」，这里回答**单个函数体内**的走向。
-  粒度刻意是语句级的（一块 = 一串顺序语句，边 = 走向），不做教科书式的基本块切分：
-  真按基本块切，每语言要伺候的构造多出一倍，而消费方（讲清一段代码怎么走、图上标分支）要的就是语句级。
-
-  三条不撒谎的规矩：
-  - 语法树没就绪、或这门语言还没写规则 ⇒ `backend: "none"` 并把原因落到 `skipped`，**绝不交一张空图冒充「这个函数没分支」**。
-  - 块数打满上限 ⇒ 置 `truncated`，不悄悄砍；`goto` 找不到标签 ⇒ 记进 `notes`，不猜一条边接上。
-  - 函数键取自符号表（`symbol:<路径>:<名字>:<行>`），与调用边、讲解切片同一个 id，产物之间能直接对上。
-
-  下面每语言的节点名与字段名都出自本机语法树的逐语言普查（不限深度，含 `childForFieldName` 探测），
-  不是按记忆写的：同一份普查也钉住了「Python 的 `elif_clause` 带 condition 字段」「Go 的分支直接挂在
-  switch 节点上、Rust 隔一层 `match_block`」这类不查就会写错的细节。
+  函数内的控制流图：一块 = 一串顺序语句，边 = 走向，粒度停在语句级而不是基本块。
+  与依赖图分工：那边回答谁指向谁，这里回答单个函数体内的走向。
+  同一构造在各语法里的挂法不同（Python 的 `elif_clause` 自带 condition 字段、Go 的分支直接挂在 switch 节点上、Rust 隔一层 `match_block`），由 SPECS 与取值函数吸收。
 */
 
-/** 一个函数最多留这么多块，超出只留前面这些并置 `truncated`。 */
+/** 单个函数最多保留的块数，超出只留前面的并置 `truncated`。 */
 const MAX_BLOCKS = 200;
 
 /** 语句序列容器：各语言名字不同，但都是「具名子节点即语句」。 */
@@ -40,12 +29,12 @@ interface CfgSpec {
   loopNodes: Set<string>;
   /** 先跑体、后判条件（do-while） */
   postTestLoops: Set<string>;
-  /** 没有条件的循环（Rust 的 `loop`）；`for {}` 那种「有条件字段缺失」的情况另判 */
+  /** 没有条件的循环（Rust 的 `loop`）。 */
   endlessLoops: Set<string>;
   switchNodes: Set<string>;
   /** 一个分支：`case …:`、`case … ->`、`match` 的一臂、`select` 的一个通信 */
   caseNodes: Set<string>;
-  /** 这些分支执行完**不会**掉进下一个（Rust 的 match、C# 的 switch、Java 的 `->` 形式） */
+  /** 执行完不掉进下一个的分支（Rust 的 match、C# 的 switch、Java 的箭头形式） */
   noFallthroughArms: Set<string>;
   /** 走完一臂不 break 就自动掉进下一臂（C 系、Java 冒号形式、TS）；false = 只有显式 `fallthrough` 才掉 */
   implicitFall: boolean;
@@ -54,15 +43,15 @@ interface CfgSpec {
   tryNodes: Set<string>;
   handlerNodes: Set<string>;
   finalizerNodes: Set<string>;
-  /** 正常离开函数：全部汇到同一个出口块（图上只有一个「走到头」的格子，读图的人才数得清） */
+  /** 正常离开函数：全部汇到同一个出口块 */
   returnNodes: Set<string>;
-  /** 异常离开函数：各自成一个出口块——它和「正常返回」不是一条路，不能合进同一个格子 */
+  /** 异常离开函数：各自成一个出口块 */
   throwNodes: Set<string>;
   breakNodes: Set<string>;
   continueNodes: Set<string>;
-  /** 只是包了一层体的语句（Python 的 `with`、C# 的 `checked`/`lock`）：按顺序穿过去 */
+  /** 只是包了一层体的语句（Python 的 `with`、C# 的 `checked`/`lock`）：按顺序展开其中的语句 */
   transparentNodes: Set<string>;
-  /** 可能提前离开函数、也可能继续（Rust 的 `?`）：一条继续边 + 一条到出口的异常边 */
+  /** 可能提前离开函数、也可能继续（Rust 的 `?`） */
   propagateNodes: Set<string>;
   gotoNodes: Set<string>;
   labelNodes: Set<string>;
@@ -122,7 +111,7 @@ const JAVA_SPEC: CfgSpec = {
   loopNodes: set("for_statement", "enhanced_for_statement", "while_statement", "do_statement"),
   postTestLoops: set("do_statement"),
   endlessLoops: set(),
-  // 这份语法里冒号形式与箭头形式都叫 switch_expression，区别在体里是 group 还是 rule
+  // 冒号形式与箭头形式都叫 switch_expression，区别在体里是 group 还是 rule
   switchNodes: set("switch_expression"),
   caseNodes: set("switch_block_statement_group", "switch_rule"),
   noFallthroughArms: set("switch_rule"),
@@ -149,9 +138,7 @@ const GO_SPEC: CfgSpec = {
   endlessLoops: set(),
   switchNodes: set("expression_switch_statement", "type_switch_statement", "select_statement"),
   caseNodes: set("expression_case", "type_case", "default_case", "communication_case"),
-  // Go 只在写了 fallthrough 时才掉下去，所以「掉」是一条显式边，不是默认
   noFallthroughArms: set(),
-  // Go 只在写了 `fallthrough` 时才掉下去，所以「掉」是一条显式边，不是默认
   implicitFall: false,
   fallthroughNodes: set("fallthrough_statement"),
   tryNodes: set(),
@@ -215,7 +202,7 @@ const CSHARP_SPEC: CfgSpec = {
   labelNodes: set("labeled_statement")
 };
 
-/** C 与 C++ 共用一份语法：差异只体现在「有没有这个节点」，表里并集放着不会错连。 */
+/** C 与 C++ 共用一份节点表：差异只体现在某类节点是否存在。 */
 const CLIKE_SPEC: CfgSpec = {
   functionNodes: set("function_definition", "method_definition", "constructor_declaration", "destructor_declaration"),
   ifNodes: set("if_statement"),
@@ -229,7 +216,7 @@ const CLIKE_SPEC: CfgSpec = {
   fallthroughNodes: set(),
   tryNodes: set("try_statement"),
   handlerNodes: set("catch_clause"),
-  // C++ 的 catch 既是处理器也兜住「没有 finally」这件事：同一节点两处出现会被去重，不会画两条边
+  // C++ 的 catch 只作处理器，这一层语法没有 finally 节点
   finalizerNodes: set(),
   returnNodes: set("return_statement"),
   throwNodes: set("throw_statement"),
@@ -271,7 +258,7 @@ interface Frame {
   labels: Map<string, CfgBlock>;
   /** 还没接上的 `goto`：C 与 Go 都允许向前跳，所以先记账、建完再连 */
   gotos: { from: CfgBlock; label: string; line: number }[];
-  /** 接不上的东西（goto 找不到标签、break 在循环外）：如实记，不猜一条边 */
+  /** 接不上的东西（goto 找不到标签、break 在循环外）记在这里，不补边 */
   notes: string[];
 }
 
@@ -302,11 +289,8 @@ class Builder {
   }
 
   /**
-    收尾：把「从入口走不到、又不记任何语句」的脚手架块摘掉，连带它的边。
-
-    这类块是建图过程的副产品——没人用到的汇合点、标签语句后面那一格、`goto` 之后为下一条
-    语句临时开的空壳。**有语句的走不到块要留着**：那是死代码，是有效读数。
-    留着空壳，图上就多一格谁都进不去的方块，读图的人会以为那里有一条路。
+    收尾：摘掉「从入口走不到、又不记任何语句」的脚手架块，连带它们的边。
+    有语句的走不到块要留着：那是死代码，是有效读数。
   */
   settle(entryId: number): void {
     const reachable = new Set<number>([entryId]);
@@ -323,13 +307,13 @@ class Builder {
     this.edges = this.edges.filter((edge) => !dead.has(edge.from) && !dead.has(edge.to));
   }
 
-  /** 圈复杂度取图自己的性质：`边 - 节点 + 2`，数的是独立回路个数，不另立一套判据。 */
+  /** 圈复杂度 = 边 - 节点 + 2，数的是独立回路个数。 */
   complexity(): number {
     return Math.max(1, this.edges.length - this.blocks.length + 2);
   }
 }
 
-/** 按字段名依次试（各语法的字段名不统一，位置约定也不统一，所以两条都要）。 */
+/** 各语法的字段名与位置约定都不统一：按顺序试，命中即返回。 */
 function fieldOf(node: SyntaxNode, fields: string[]): SyntaxNode | undefined {
   for (const name of fields) {
     const child = node.childForFieldName(name);
@@ -338,7 +322,7 @@ function fieldOf(node: SyntaxNode, fields: string[]): SyntaxNode | undefined {
   return undefined;
 }
 
-/** 注释不是语句：块里数出来的是「走了几步」，把注释算进去每个函数都凭空多几步。 */
+/** 注释不算语句，否则块里的语句数会虚高。 */
 function isStatement(node: SyntaxNode): boolean {
   return !/^comment|line_comment|block_comment$/i.test(node.type);
 }
@@ -351,7 +335,7 @@ function isBranchShell(node: SyntaxNode): boolean {
   return BRANCH_SHELL.test(node.type);
 }
 
-/** 判定条件：字段拿不到就退到「第一个不是体、不是壳、不是注释的具名子节点」。 */
+/** 判定条件：字段拿不到时退到第一个不是体、不是壳、不是注释的具名子节点。 */
 function conditionOf(node: SyntaxNode): SyntaxNode | undefined {
   return fieldOf(node, ["condition", "test", "value"]) ?? node.namedChildren.find((child) => isStatement(child) && !isSequence(child) && !isBranchShell(child) && !looksLikeBody(child));
 }
@@ -391,9 +375,8 @@ interface IfArm {
 
 /**
   把 `if / elif / else if / else` 拉平成一串判定 + 一个可选的 else。
-  为什么要拉平：Python 把 elif 与 else 并排挂在同一个 if_statement 上，Java/Go 却把 else-if 塞成
-  alternative 位置的嵌套 if——只读 `alternative` 那一份的实现会**整条丢掉 elif 体**（第一版就是），
-  拉平之后两种形状走同一段代码。
+  Python 把 elif 与 else 并排挂在同一个 if_statement 上，Java/Go 把 else-if 塞成
+  alternative 位置的嵌套 if；拉平后两种形状走同一段代码。
 */
 function flattenIf(statement: SyntaxNode, spec: CfgSpec): { arms: IfArm[]; otherwise: SyntaxNode | undefined } {
   const arms: IfArm[] = [{ node: statement, body: statementsOf(consequentOf(statement)) }];
@@ -430,7 +413,7 @@ function statementsOf(node: SyntaxNode | undefined): SyntaxNode[] {
 
 /**
   Go 的函数体是 `block` 里再套一层 `statement_list`（C# 的 switch 段同理）：
-  不splice 就会把整串语句当成**一条**语句塞进一个块，函数看着只有两格、其实全糊在一起。
+  不展开就会把整串语句当成一条语句塞进一个块。
 */
 function splice(children: SyntaxNode[]): SyntaxNode[] {
   const out: SyntaxNode[] = [];
@@ -442,9 +425,9 @@ function splice(children: SyntaxNode[]): SyntaxNode[] {
 }
 
 /**
-  分支清单：从 switch/select 往下找 `caseNodes`，**不钻进嵌套的那一层**。
-  为什么不直接读某个字段：六门语法把分支挂在三种位置上——TS/Java/C# 在 body 那个容器里、
-  Go 直接是 switch 自己的子节点、Rust 隔一层 `match_block`。按字段名写死就会一换语言就空表。
+  分支清单：从 switch/select 往下找 `caseNodes`，不钻进嵌套的那一层。
+  六门语法把分支挂在三种位置（TS/Java/C# 在 body 容器里、Go 是 switch 的直接子节点、
+  Rust 隔一层 `match_block`），所以按节点类型找，不按字段名。
 */
 function armsOf(node: SyntaxNode, spec: CfgSpec): SyntaxNode[] {
   const found: SyntaxNode[] = [];
@@ -462,12 +445,11 @@ function armsOf(node: SyntaxNode, spec: CfgSpec): SyntaxNode[] {
   return found;
 }
 
-/** 分支头（`case 1:` 的 1、`match` 的模式）：留在块上，图上才说得出「凭什么走这条」。 */
 function armHeaderOf(arm: SyntaxNode): SyntaxNode | undefined {
   return arm.namedChildren.find((child) => ARM_HEADER.test(child.type));
 }
 
-/** ⚠️ 一律比 `id` 而不是比对象：tree-sitter 每次取子节点都返回新的包装对象，`a !== b` 恒成立。 */
+/** tree-sitter 每次取子节点都返回新的包装对象，比较一律用 `.id`。 */
 function armBodyOf(arm: SyntaxNode, header: SyntaxNode | undefined): SyntaxNode[] {
   return splice(arm.namedChildren.filter((child) => isStatement(child) && child.id !== header?.id && !ARM_HEADER.test(child.type)));
 }
@@ -481,18 +463,14 @@ function gotoTargetOf(node: SyntaxNode): string | undefined {
 }
 
 /**
-  跑一串语句，返回**最后一个活的块**（null = 后面已经没有路径能走到）。
-
-  每个构造都自己负责接线：分支开 `branch`/`loop`/`selector` 块，汇合处再开一个普通块，
-  所以调用方拿到的永远是「一个可以往里追加语句的块」或「没有」。
+  跑一串语句，返回最后一个活的块（null = 这条路已经走断）。
+  分支、循环等构造各自负责开块与接线，调用方只管往返回的块里追加语句。
 */
 function run(statements: SyntaxNode[], cursor: Cursor, frame: Frame): Cursor {
   let current = cursor;
   for (const statement of statements) {
     if (!current) {
-      // 已经没有路径走到这里（`return`/`goto` 之后）。仍给它开一格且不接线：不可达代码要在图上是
-      // 一格进不去的节点，而不是被静默丢掉。但仍然要过一遍 step —— 标签得注册、循环要建出来，
-      // 否则「向前 goto」会因为标签没登记而永远接不上
+      // 不可达语句仍开一格且不接线，继续走 step：标签要登记、循环要建出来，向前 goto 才接得上
       current = frame.builder.open("straight", statement);
     }
     current = step(statement, current, frame);
@@ -501,9 +479,8 @@ function run(statements: SyntaxNode[], cursor: Cursor, frame: Frame): Cursor {
 }
 
 /**
-  语句位置的壳要穿过去：Rust 的 `if` / `match` / `return` 本质是**表达式**，
-  语法树把它们包在 `expression_statement` 里。不穿这一层，整个 Rust 函数就只剩一串普通语句、
-  一条分支都没有——形状看着对，内容全是假的。
+  语句位置的壳要剥掉一层：Rust 的 `if` / `match` / `return` 是表达式，被包在 `expression_statement` 里。
+  不剥这一层，Rust 函数就只剩一串普通语句、一条分支都没有。
 */
 function unwrapStatement(node: SyntaxNode, spec: CfgSpec): SyntaxNode {
   if (node.type !== "expression_statement") return node;
@@ -520,8 +497,7 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   const statement = unwrapStatement(node, spec);
 
   if (spec.returnNodes.has(statement.type) || spec.throwNodes.has(statement.type)) {
-    // 每条离开函数的语句各占一格，并记在自己的行区间上：数据流靠「这一行落在哪个块」把使用
-    // 点对到定义，汇成一个出口会把 `return x` 那行的归属丢掉（第一版就是这么错的）
+    // 每条离开函数的语句各占一格：数据流靠「这一行落在哪个块」把使用点对到定义块
     const left = builder.open("exit", statement, [statement.type]);
     builder.link(current, left, "next");
     return null;
@@ -540,7 +516,7 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
     return null;
   }
   if (spec.propagateNodes.has(statement.type)) {
-    // Rust 的 `?`：Err 走出口、Ok 继续往下。两条边都给，不假装知道走哪条
+    // Rust 的 `?`：继续往下与走出口两条边都给
     const gate = builder.open("branch", statement, [statement.type]);
     builder.link(current, gate, "next");
     builder.link(gate, frame.exit, "exception");
@@ -553,9 +529,7 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   if (spec.transparentNodes.has(statement.type)) return run(statementsOf(bodyOf(statement)), current, frame);
   if (spec.labelNodes.has(statement.type)) return buildLabel(statement, current, frame);
 
-  // 普通语句。Rust 的 `?` 常常藏在 `let v = f()?;` 里，而它**能提前离开函数**：
-  // 只看语句类型会把它当成一步普通赋值，图上就少一条出函数的路。所以扫一遍子树，
-  // 有传播型错误就把这一格升成判定块（继续 / 走出口两条边）。
+  // 普通语句里也可能藏着传播（`let v = f()?;`）：扫到就把这一格升成判定块，给继续边与异常边
   if (spec.propagateNodes.size && hasPropagate(statement, spec)) {
     const gate = builder.open("branch", statement, [statement.type, "propagate"]);
     builder.link(current, gate, "next");
@@ -566,7 +540,7 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   return current;
 }
 
-/** 语句子树里有没有「可能提前离开函数」的构造（限深 6 层：再深就不是一个语句该管的事了）。 */
+/** 语句子树里有没有「可能提前离开函数」的构造（限深 6 层）。 */
 function hasPropagate(node: SyntaxNode, spec: CfgSpec, depth = 0): boolean {
   if (depth > 6) return false;
   for (const child of node.namedChildren) {
@@ -586,7 +560,6 @@ function buildIf(statement: SyntaxNode, current: CfgBlock, frame: Frame): CfgBlo
   let branch = first;
   arms.forEach((arm, index) => {
     if (index > 0) {
-      // 每一臂都是图上一个独立的判定块：读图的人才看得出「这里有第三种可能」，而不是以为只有真/假两条
       const next = builder.open("branch", arm.node, [arm.node.type]);
       builder.link(branch, next, "false");
       branch = next;
@@ -595,7 +568,6 @@ function buildIf(statement: SyntaxNode, current: CfgBlock, frame: Frame): CfgBlo
     tails.push(tail ?? null);
   });
   if (otherwise) {
-    // `elif` 之后没有 else 时，最后那个判定的 false 直接汇到 merge；有 else 才走 else 体
     const tail = run(statementsOf(otherwise), entryFrom(builder, branch, "false", otherwise, otherwise.type), frame);
     if (tail) tails.push(tail);
   } else {
@@ -649,8 +621,7 @@ function buildSwitch(statement: SyntaxNode, current: CfgBlock, frame: Frame): Cf
   builder.link(current, selector, "next");
   const after = builder.open("straight", statement);
   const arms = armsOf(statement, spec);
-  // 每臂的入口先全部建好并接上 selector：fallthrough 的目标就是「下一臂的入口」本身，
-  // 为它另开一格会让图上多出一个谁都进不去的孤儿块
+  // 分支入口先全部建好并接上 selector：fallthrough 的目标就是下一臂的入口本身
   const entries = arms.map((arm) => {
     const entry = builder.open("straight", arm, [arm.type]);
     builder.link(selector, entry, "next");
@@ -662,18 +633,16 @@ function buildSwitch(statement: SyntaxNode, current: CfgBlock, frame: Frame): Cf
     const canFall = spec.implicitFall || spec.fallthroughNodes.size > 0;
     const nextEntry = canFall && index + 1 < arms.length && !spec.noFallthroughArms.has(arms[index + 1].type) ? entries[index + 1] : undefined;
     const tail = run(armBodyOf(arm, armHeaderOf(arm)), entries[index], { ...frame, breakTo: after, fallTo: nextEntry });
-    // C/Java 冒号形式/C++：没写 break 就掉进下一臂。Go 只有显式 fallthrough 才掉，Rust 与 C# 根本不掉
     if (tail && spec.implicitFall && nextEntry) builder.link(tail, nextEntry, "next");
     if (tail) builder.link(tail, after, "next");
   });
   if (!arms.length) builder.link(selector, after, "next");
-  // 没有 default 的 switch 必须有一条「一个都没匹配上，直接往下」的边：
-  // 否则「每个分支都 terminating」的 switch 会让 after 变成走不到，后面的代码在图上凭空消失
+  // 没有 default 时补一条 selector→after 的边，否则每个分支都终止的 switch 会让后续代码在图上消失
   else if (!arms.some(isDefaultArm)) builder.link(selector, after, "false");
   return after;
 }
 
-/** 这一臂是不是兜底臂：`default:`、Go 的 `default_case`、Rust 的 `_ =>`。 */
+/** 默认臂：`default:`、Go 的 `default_case`、Rust 的 `_ =>`。 */
 function isDefaultArm(arm: SyntaxNode): boolean {
   if (arm.type.includes("default")) return true;
   const text = arm.text.trimStart();
@@ -692,7 +661,7 @@ function buildTry(statement: SyntaxNode, current: CfgBlock, frame: Frame): CfgBl
   for (const child of statement.namedChildren) {
     if (!spec.handlerNodes.has(child.type)) continue;
     const handler = builder.open("handler", child, ["catch"]);
-    // 异常边从「进体」与「体出来」两处出去：静态上不知道抛在哪一行，所以不假装知道
+    // 异常边从「进体」与「体出来」两处出去：静态上不确定抛在哪一行
     for (const source of sources) builder.link(source, handler, "exception");
     const filter = child.namedChildren.find((item) => /filter|guard/.test(item.type));
     if (filter) builder.append(handler, filter);
@@ -709,7 +678,7 @@ function buildTry(statement: SyntaxNode, current: CfgBlock, frame: Frame): CfgBl
   return merge;
 }
 
-/** `标签: 语句`：标签处是被标注语句的**入口**（Go/C 的 `goto` 落这里），而 `break 标签` 落在这条语句之后。 */
+/** `标签: 语句`：标签处是被标注语句的入口（`goto` 落这里），`break 标签` 落在语句之后。 */
 function buildLabel(statement: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   const { builder, spec } = frame;
   const name = labelNameOf(statement);
@@ -729,13 +698,13 @@ interface Carrier {
   name: string;
   line: number;
   endLine: number;
-  /** 没有名字的函数体（回调那些）：不成图，但要在 `skipped` 里点名，不能当它不存在 */
+  /** 匿名函数体：不成图，但要进 `skipped` */
   anonymous?: boolean;
 }
 
 /**
-  找出「有体的那些节点」并与符号表对上：id 必须与 `SymbolInfo.id` 逐字一致，
-  否则这张图与调用边、讲解切片说的是两个函数。
+  找出有体的节点并与符号表对上：函数 id 必须与 `SymbolInfo.id` 逐字一致，
+  才能和调用边、讲解切片说同一个函数。
 */
 function collectCarriers(root: SyntaxNode, spec: CfgSpec, out: Carrier[]): void {
   for (const child of root.namedChildren) {
@@ -757,13 +726,13 @@ function collectCarriers(root: SyntaxNode, spec: CfgSpec, out: Carrier[]): void 
 function buildOne(carrier: Carrier, path: string, symbol: SymbolInfo | undefined, spec: CfgSpec): CfgFunction {
   const builder = new Builder();
   const entry = builder.open("entry", carrier.node);
-  // 出口块先建好：`return` 与 Rust 的 `?` 都要往这里接线
+  // 出口块先建好：`return` 与 `?` 都接向它
   const exit = builder.open("exit", carrier.node);
   exit.startLine = carrier.endLine;
   exit.endLine = carrier.endLine;
   const frame: Frame = { builder, spec, exit, labels: new Map<string, CfgBlock>(), gotos: [], notes: [] };
   const tail = run(statementsOf(bodyOf(carrier.node)), entry, frame);
-  // 只有「走到函数尾」真的可达时才接线：以 `return` 收尾的函数不需要第二条出边
+  // 以 `return` 收尾时函数尾不可达，不再接这条边
   if (tail) builder.link(tail, exit, "next");
   for (const goto of frame.gotos) {
     const target = frame.labels.get(goto.label);
@@ -779,7 +748,7 @@ function buildOne(carrier: Carrier, path: string, symbol: SymbolInfo | undefined
     kind: symbol?.kind ?? "function",
     startLine: carrier.line,
     endLine: carrier.endLine,
-    // 按行号排：块的数组顺序就是读代码的顺序，而边只认 id，排序不会改接线
+    // 块按行号排序，边只认 id，排序不影响接线
     blocks: builder.blocks.sort((left, right) => left.startLine - right.startLine || left.id - right.id),
     edges: builder.edges,
     exitBlocks: kept && sinks.includes(exit.id) ? sinks : kept ? [exit.id, ...sinks] : sinks,
@@ -798,11 +767,9 @@ export interface FunctionScope {
 }
 
 /**
-  一次解析，逐函数回调。控制流图与数据流、类型关系**共用这一趟**：语法树解析是全仓最贵的一步，
-  每多一类产物就多扫一遍源码（复审 #170 就记过「一轮两遍全仓读」这笔账）。
+  一次解析，逐函数回调：控制流图与数据流、类型关系共用这一趟，语法树解析是全仓最贵的一步。
 
-  ⚠️ `visit` 必须在回调内用完节点：回调一返回语法树就被释放，留在外面的节点引用会读出空值与
-  `ERROR`（第一版把节点存到数组里，测试当场抓到了）。
+  `visit` 必须在回调内用完节点：回调一返回语法树就被释放，留在外面的节点引用会读出空值与 `ERROR`。
 */
 export function eachFunction(path: string, content: string, symbols: SymbolInfo[], language: string, visit?: (scope: FunctionScope) => void, onRoot?: (root: SyntaxNode) => void): CfgFileFact {
   const executable = symbols.filter((symbol) => symbol.kind === "function" || symbol.kind === "method");
@@ -854,8 +821,8 @@ export function eachFunction(path: string, content: string, symbols: SymbolInfo[
 }
 
 /**
-  一个文件的控制流图。`symbols` 传符号表（决定函数 id 与归属），返回的形状里
-  `backend` 为 `none` 时 `functions` 必空、`skipped` 必非空——空图与没判过永远不混。
+  一个文件的控制流图。`symbols` 传符号表（决定函数 id 与归属）；
+  `backend` 为 `none` 时 `functions` 必空、`skipped` 必非空——空图与没判过是两种读数。
 */
 export function buildFileCfg(path: string, content: string, symbols: SymbolInfo[], language: string): CfgFileFact {
   return eachFunction(path, content, symbols, language);

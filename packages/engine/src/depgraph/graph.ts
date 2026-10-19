@@ -9,7 +9,7 @@ import { isTestPath } from "./roles.js";
 export interface DependencyGraph {
   imports: Map<string, string[]>;
   /**
-    文件 → 它 import 了但**仓内解析不到**的裸包名（架构视图的「边界之外」那一栏）。
+    文件 → 它 import 了但仓内解析不到的裸包名（架构视图「边界之外」那一栏）。
     刻意与 `imports` 分家：这里没有一个字是边，`impactRadius`、角色分层、流程证据都不看它。
     没采到外部名的语言（Rust 的 `use serde::` 与 C/C++ 的 `<...>` 头）不写键，读侧按「未采集」处理。
   */
@@ -27,27 +27,23 @@ export interface DependencyGraph {
 }
 
 /**
-  图认哪些扩展名 = **能力表各条目的 `extensions` 汇总**，不在这里再抄一份清单（复审 #121②）。
-  过去这里是一条手写的 19 项数组，而 `capabilities.test.ts` 只能用正则去读源码来核对两者有没有漂移
-  ——判据同源之后，那份测试改成直接 import 这个值。
+  图认哪些扩展名 = 能力表各条目的 `extensions` 汇总，不在这里另抄一份清单。
   */
 export const graphExtensions: readonly string[] = [...new Set(Object.values(LANGUAGE_CAPABILITIES).flatMap((entry) => entry.extensions))];
 /**
   建图时真正的那道后缀闸门（`buildDependencyGraph` 与语言画像共用）。
-  ⚠️ **区分大小写**，这是复审里确认过、刻意不收紧的已知局限：`.TS` 这类大写后缀在图这一层一致排除，
+  它区分大小写，这是刻意不收紧的已知局限：`.TS` 这类大写后缀在图这一层一致排除，
   单点改成小写匹配只会造出「符号按 TS 语法解析、边却连不出来」的半状态。
-  注意它和索引层的闸门不是一条：索引器先 lowercase 再比，所以 `App.TS` 进得了索引清单、进不了图。
-  语言画像必须按**这一句**判据报数，否则它会把「进了索引、没进图」说成「都在图里」。
+  它与索引层的闸门不是一条：索引器先 lowercase 再比，所以 `App.TS` 进得了索引清单、进不了图。
+  语言画像必须按这道闸门报数，否则会把「进了索引、没进图」说成「都在图里」。
   */
 export const handledExtensions = new Set(graphExtensions);
 
 /**
-  裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：**按发起文件的语言收尾**。
-  旧写法是拿全表 19 个扩展名挨个试，于是同一个目录里 TS 的 `./util` 能连到 `util.py`、`util.go`——
-  而能力表 typescript 那个节点自称 `dependencyEdge: exact`（「落点逐个验证过」），这条跨语言的猜让那句话不成立。
-  按语言收尾后：`typescript` / `vue` 一族互连（SFC 的 `<script>` 里 `./util` 落的就是 `.ts`），
-  其余语言各自只试自己的扩展名。实测两仓（dianping 156 文件 / Xingyan 126）本来就没有跨语言边、
-  也没有同目录同名碰撞，所以这一改**不翻任何已有的边、不引发重烧**，它挡的是混语言仓里的假依赖。
+  裸说明符（TS 的 `./util`、`./util.js`）允许落到哪些扩展名：按发起文件的语言收尾。
+  拿全表 19 个扩展名挨个试的话，同目录里 TS 的 `./util` 能连到 `util.py`、`util.go`，
+  而能力表给 typescript 的 `dependencyEdge: exact` 就不再成立。
+  收尾后 `typescript` / `vue` 一族互连（SFC 的 `<script>` 里 `./util` 落的就是 `.ts`），其余语言各自只试自己的扩展名。
   */
 const SCRIPT_FAMILY = ["typescript", "vue"] as const;
 
@@ -60,14 +56,11 @@ const nodeNextTargets: Record<string, string[]> = {
 };
 
 /**
-  「按 TypeScript 那一族的写法处理」的判据：取自能力表，不再手写正则。
-  两处旧写法（`extractSymbolsWithRegex` 的语言判定、`detectLspStatus` 的探测清单）都漏 `.mts`/`.cts`——
-  回落正则时这类文件的符号会被标成 `other`，LSP 探测也压根不考虑它。
-  ⚠️ 这一族**不含 `.vue`**：它换来的是两件事——回落抽出的符号标成 `other` 而不是伪装成 typescript，
-  以及不给 `.vue` 探 TS 语言服务。⚠️ 它**不**意味着回落时 `.vue` 不被那条 JS/TS 正则扫：
-  回落分支只有「python 一条、其余一条」两条正则，SFC 的 `<script>` 块按那一条扫得出的都是真符号
-  （模板里的 `{{ }}` 撞不上 `function`/`const … =>`/`class` 三种形状）。刻意不收紧成「非本族就不抽符号」：
-  那样 wasm 一挂，`.vue`/`.java` 这些文件连回落符号都没了，比标错语言更糟。
+  「按 TypeScript 那一族的写法处理」的判据，取自能力表而不是手写正则（手写会漏 `.mts`/`.cts`）。
+  这一族不含 `.vue`：回落抽出的符号因此标成 `other` 而不是伪装成 typescript，也不给 `.vue` 探 TS 语言服务。
+  不含它不意味着回落时 `.vue` 不被那条 JS/TS 正则扫：SFC 的 `<script>` 块里扫得出的都是真符号
+  （模板里的 `{{ }}` 撞不上 `function`/`const … =>`/`class` 三种形状）。
+  刻意不收紧成「非本族就不抽符号」：那样 wasm 一挂，`.vue`/`.java` 连回落符号都没有，比标错语言更糟。
   */
 const tsFamilyExtensions = new Set(LANGUAGE_CAPABILITIES.typescript.extensions);
 
@@ -153,9 +146,9 @@ export function serializeGraph(graph: DependencyGraph): DependencyGraphData {
 
 /**
   改这些文件会波及谁：沿 import 边与跨文件调用边反向往上走。
-  ⚠️ 同文件内的调用**不算**波及关系——图里同文件调用边是常态（dianping 1294 条里 741 条是同一文件内部），
-  不过滤的话每个改动文件都会给自己贡献一条「X 影响 X」的边，影响范围的箭头清单被自环灌满。
-  这与 `roles.ts` 的 `buildFileEdges` 同一条口径（那里是 `key === value` 直接不建）。
+  同文件内的调用不算波及关系：图里同文件调用边是常态，不过滤的话每个改动文件都会给自己
+  贡献一条「X 影响 X」的边，影响范围的箭头清单被自环占满。
+  与 `roles.ts` 的 `buildFileEdges` 同一条口径（那里是 `key === value` 直接不建）。
 */
 export function impactRadius(graph: DependencyGraph, changedPaths: string[]): ImpactResult {
   const reverse = new Map<string, { from: string; kind: "import" | "call" }[]>();
@@ -188,17 +181,17 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
 export function graphFromData(data: DependencyGraphData): DependencyGraph {
   return {
     imports: new Map(Object.entries(data.imports)),
-    // 旧产物的图里没有这个节点（那时外部名直接被丢弃、没留名）：按「未采集」处理成空表，
-    // 架构视图读到空表要说「这份产物还没采外部依赖」，不能说「这个仓不碰任何外部服务」
+    // 产物里没有 externals 节点时按「未采集」处理成空表：架构视图读到空表要说「这份产物还没采外部依赖」，
+    // 不能说「这个仓不碰任何外部服务」
     externals: new Map(Object.entries(data.externals ?? {})),
     calls: data.calls,
-    // 旧产物的图里没有这一类关系（那时只有 import 与 call 两条路），按空表处理，别硬造
+    // 产物里可能只有 import 与 call 两类关系：dispatch 缺省按空表处理，别硬造
     dispatch: data.dispatch ?? [],
     symbols: data.symbols,
     entrypoints: data.entrypoints,
     semanticBackend: data.semanticBackend,
     lspStatus: data.lspStatus,
-    // 旧数据没有该字段（那时只有逐行匹配一条路），按 regex 认，别假装是语法树结果
+    // parseBackend 缺省按 regex 认（逐行匹配产出的图），别假装是语法树结果
     parseBackend: data.parseBackend ?? "regex",
     ...(data.parseBackendReason ? { parseBackendReason: data.parseBackendReason } : {})
   };
@@ -254,12 +247,10 @@ function findEndLine(lines: string[], start: number, language: SymbolInfo["langu
 }
 
 /**
-  Java 的「接收者类型名 → 仓内文件」可见表：`import` 带进来的（含通配）加上**同包**——
-  Java 里同包的类不需要 import 就能用，这一路引擎原先完全没有（10-05 的符号级参照实测：
-  dianping 漏 5 条、Xingyan 漏 6 条，全部是同包调用）。
+  Java 的「接收者类型名 → 仓内文件」可见表：`import` 带进来的（含通配）加上同包——
+  Java 里同包的类不需要 import 就能用，这一路不能少。
 
-  同源码根才算可见（`src/main` 与 `src/test` 是两个编译范围）：主源码看不见测试源码里的类，
-  这条收窄是在参考档踩过一次「测试类被当成主源码可 import 的目标」之后补的。
+  同源码根才算可见（`src/main` 与 `src/test` 是两个编译范围）：主源码看不见测试源码里的类。
 */
 function javaVisibleTypes(path: string, content: string, javaTypes: Map<string, string>): Map<string, string> {
   const packagePart = (fqn: string): string => fqn.slice(0, fqn.lastIndexOf("."));
@@ -267,10 +258,10 @@ function javaVisibleTypes(path: string, content: string, javaTypes: Map<string, 
   const ownRoot = javaSourceRootOf(path);
   const visible = new Map<string, string>();
   /**
-    `sameRootOnly` 只对「靠包名猜」的两条路成立（通配 import、同包可见）：多模块仓里
-    `sl-common/src/main/java/com/x/util` 与 `sl-jump/src/main/java/com/x/util` 是**两个不同的编译单元**，
-    按包名把它们互相可见就会连出假边。而**显式 import 是确定的**，跨模块也照收——把它一起收窄会错误影响
-    （10-05 实测：Xingyan 的跨文件调用边一度从 136 掉到 125，就是因为测试根与跨模块的显式 import 被误挡）。
+    `requireSameRoot` 只对「靠包名猜」的两条路成立（通配 import、同包可见）：多模块仓里
+    `module-a/src/main/java/com/x/util` 与 `module-b/src/main/java/com/x/util` 是两个不同的编译单元，
+    按包名把它们互相可见就会连出假边。显式 import 是确定的，跨模块也照收——
+    把它一起收窄会误挡真边。
     */
   const add = (target: string | undefined, requireSameRoot: boolean): void => {
     if (!target || target === path) return;
@@ -289,7 +280,7 @@ function javaVisibleTypes(path: string, content: string, javaTypes: Map<string, 
 }
 
 /**
-  注释按等长空格清除、import 整行清除，**行数与字符偏移都不变**：
+  注释按等长空格清除、import 整行清除，行数与字符偏移都不变：
   类声明可能出现在 javadoc 的示例里，注释里的 `implements` 不是证据，但行号还得对得上原文。
 */
 function stripJavaNoise(content: string): string {
@@ -312,11 +303,10 @@ function stripJavaGenerics(head: string): string {
 /**
   Java 类头里的 `extends` / `implements` 落点：这是「接口与实现」唯一的静态证据。
 
-  为什么值得单独建一类边：Spring 的控制器注入的是**接口**，实现类在源码里没有任何调用行，
-  import 边走到接口就断，于是 service/impl 与它下面的 mapper 整片在图上失联
-  （2026-10-05 实测 dianping：45 个 Controller/Service/Mapper 文件里 30 个从任何入口都走不到）。
+  值得单独建一类边：Spring 的控制器注入的是接口，实现类在源码里没有任何调用行，
+  import 边走到接口就断，service/impl 与它下面的 mapper 会整片在图上失联。
   落点复用 `javaVisibleTypes`：接口要么显式 import、要么同包，Java 没有第三种可能，所以这条判据不缺证据。
-  代价照实说：同名类型（多个模块各有一个 `IUserService`）可能指错，所以它是 A1 级近似证据。
+  代价：同名类型（多个模块各有一个 `IUserService`）可能指错，所以它是近似证据、不是权威结论。
 */
 function extractJavaDispatch(path: string, content: string, javaTypes: Map<string, string>): TypeDispatchEdge[] {
   const visible = javaVisibleTypes(path, content, javaTypes);
@@ -354,15 +344,14 @@ function extractJavaDispatch(path: string, content: string, javaTypes: Map<strin
 }
 
 /**
-  接收者名 → 它可能有的声明类型（一个名字可以有多个）：字段、方法参数、局部变量三种声明形状。
+  接收者名 → 它可能有的声明类型（一个名字可以有多个）：字段、方法参数、局部变量三种声明形状，
   `private final OrderMapper mapper`、`void write(ErrorCode errorCode)`、`StringBuilder sb = new ...`。
 
-  为什么值得解到这个程度：Spring 代码里的调用几乎全是 `service.query(...)` 这种**小写变量接收者**，
-  只认类名接收者就等于看不见它们；而 10-06 实测「只解字段」会让 Xingyan 丢掉 `errorCode.getMessage()`
-  这类经方法参数进来的真边，所以三类声明一起解才算完整。
-  为什么一个名字要留多个类型：同一个变量名在不同方法里声明成不同类型是真事
-  （dianping 的 `status` 既可能是 `OrderStatus` 也可能是 `PayType`），只留最后一个会凭空丢边。
-  解不出类型的接收者照旧走裸名匹配（`this.foo()`、链式中间段都不挡）。
+  要解到这个程度是因为 Spring 代码里的调用几乎全是 `service.query(...)` 这种小写变量接收者，
+  只认类名接收者就等于看不见它们；只解字段又会丢掉经方法参数进来的真边，所以三类声明一起解才算完整。
+  一个名字留多个类型：同一个变量名在不同方法里声明成不同类型是真事
+  （`status` 既可能是 `OrderStatus` 也可能是 `PayType`），只留最后一个会凭空丢边。
+  解不出类型的接收者仍走裸名匹配（`this.foo()`、链式中间段都不挡）。
 */
 function javaReceiverTypes(content: string): Map<string, string[]> {
   const declared = new Map<string, string[]>();
@@ -396,10 +385,9 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
     const isJava = path.endsWith(".java");
     /**
       Java 的调用扫描读「清除注释与 import 行」的正文：注释里的 `voucherOrderService.handle(orderId)`
-      是一句说明，不是调用证据（2026-10-06 复审在 dianping 实测到 16 条跨文件调用边的落点行就是注释，
-      `PaymentServiceImpl` 的 javadoc 流程图甚至给 `PayLog` 连了三条）。
+      是一句说明，不是调用证据，javadoc 里的流程图照样能给它连出几条假边。
       `stripJavaNoise` 用等长空格替换，所以行号与原文一一对应。
-      其他语言的注释（`#`、`--`）暂不抹：符号级参照只覆盖了 Java，改动无法用参照校验，宁缺毋滥。
+      其他语言的注释（`#`、`--`）暂不抹：符号级参照只覆盖了 Java，改动无法用参照校验。
     */
     const body = isJava ? stripJavaNoise(content) : content;
     const receivers = isJava ? javaVisibleTypes(path, content, javaTypes) : undefined;
@@ -421,7 +409,7 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
         const receiverTypes = receiver ? (/^[A-Z]/.test(receiver) ? [receiver] : declaredTypes?.get(receiver)) : undefined;
         const typedTargets: SymbolInfo[] = [];
         if (receivers && receiverTypes?.length) {
-          // 接收者是仓内可见类型 ⇒ 只认它声明的那个方法。找不到就**不退回裸名匹配**：
+          // 接收者是仓内可见类型 ⇒ 只认它声明的那个方法。找不到就不退回裸名匹配：
           // 继承来的方法会因此漏一条，但把「另一个文件里撞名的方法」当成调用落点是更坏的结果
           const typedFiles = new Set(receiverTypes.map((type) => receivers.get(type)).filter((file): file is string => Boolean(file)));
           typedTargets.push(...candidates.filter((symbol) => typedFiles.has(symbol.path)));
@@ -456,9 +444,9 @@ function dedupeCalls(calls: CallEdge[]): CallEdge[] {
  * `import a.b as c`、`import a, b`、`from a.b import c`、`from . import c`（相对包）。
  * 第三方模块（fastapi、langgraph）也会被提取出来，最终由 resolvePythonImport 按「仓库内是否存在」过滤。
  *
- * 返回的是**一条 import 语句一组**（`primary` = 语句写的那个模块，`candidates` = 所有可能的落点），
+ * 返回的是「一条 import 语句一组」（`primary` = 语句写的那个模块，`candidates` = 所有可能的落点），
  * 不是一个平铺的说明符数组：`from a.b import c` 会同时给出 `a.b` 与 `a.b.c`（c 可能是子模块也可能是符号名），
- * 平铺之后「这条语句落不到」就判不出来了——而外部包名这一栏要的正是语句级的失败。
+ * 平铺之后就判不出「这条语句落不到」，而外部包名这一栏要的正是语句级的失败。
  */
 function extractPythonSpecifiers(content: string): { primary: string; candidates: string[] }[] {
   const groups: { primary: string; candidates: string[] }[] = [];
@@ -491,9 +479,8 @@ function readImportedNames(raw: string): string[] {
 
 /**
  * Java 的 import 语句：`import com.a.B;`、`import static com.a.B.C;`、`import com.a.*;`。
- * 通配符要**留痕**（`wildcard`），因为它落不到具体类：`.*` 剥掉后剩下的是包名，
- * 包名在 `javaTypes` 里没有条目，逐级上溯也落不到——10-05 的 A1 差值实测：
- * dianping 一处 `import com.hmdp.utils.*;` 原本产生**零条边**，连带 13 个 utils 类被误判成孤立文件。
+ * 通配符要留痕（`wildcard`）：`.*` 剥掉后剩下的是包名，在 `javaTypes` 里没有条目、逐级上溯也落不到，
+ * 不留痕就整条丢掉，同包里那些没被显式 import 的类会被误判成孤立文件。
  */
 function extractJavaSpecifiers(content: string): { specifier: string; wildcard: boolean }[] {
   const specifiers: { specifier: string; wildcard: boolean }[] = [];
@@ -506,13 +493,11 @@ function extractJavaSpecifiers(content: string): { specifier: string; wildcard: 
 
 /**
   Java 的源码根：`src/main` 与 `src/test`（Maven/Gradle 布局）是两个编译范围，主源码看不见测试源码里的类。
-  这条收窄是在参考档踩过「测试类被当成主源码可 import 的目标、凭空造出十条假边」之后补的，
-  通配展开与接收者可见表共用它，两处口径必须一致，否则文件级边和调用级边会互相打脸。
-  ⚠️ 认不出 `src/main|test` 的仓返回**空串**（整个仓算一个编译范围），不是文件自身：
+  通配展开与接收者可见表共用它，两处口径必须一致，否则文件级边和调用级边会互相矛盾。
+  认不出 `src/main|test` 的仓返回空串（整个仓算一个编译范围），不是文件自身：
   扁平布局（`com/demo/App.java`、Eclipse 式无 src 的仓）里同包的类本来就互相可见，
   按「每个文件一个根」判会让 `javaSourceRootOf(a) !== javaSourceRootOf(b)` 恒成立，
-  于是同包可见与包通配展开**整条静默失效**（2026-10-07 复审实测：扁平仓同包调用零边）。
-  真正的收窄靠包名，这里只负责把 main/test 分开。
+  于是同包可见与包通配展开整条静默失效。真正的收窄靠包名，这里只负责把 main/test 分开。
 */
 function javaSourceRootOf(path: string): string {
   const match = /(^|\/)src\/(main|test)\//.exec(path);
@@ -520,12 +505,12 @@ function javaSourceRootOf(path: string): string {
 }
 
 /**
-  通配 import 的落点：只认「这个包里的类名**真的出现在正文里**」的那些。
+  通配 import 的落点：只认「这个包里的类名真的出现在正文里」的那些。
 
-  为什么不整包展开：`com.hmdp.utils.*` 覆盖十几个类，而一个文件通常只用其中三四个；
+  不整包展开：`com.demo.utils.*` 覆盖十几个类，而一个文件通常只用其中三四个；
   全量入图等于给同一包内的每对文件都连一条边——影响范围会虚胖、流程证据会被无关文件挤掉。
-  判据用「标识符集合包含」而不是逐个正则：一次分词就能判完整个包，且天然带词边界（`Keys` 不会被 `Keys2` 蒙对）。
-  代价也要如实说：注释里提过的类名会被算进来，所以这类边的强度低于直接 import——它是 A1 实测出来的缺口回补，不是新的权威证据。
+  判据用「标识符集合包含」而不是逐个正则：一次分词就能判完整个包，且天然带词边界（`Keys` 不会被 `Keys2` 误配）。
+  代价：注释里提过的类名会被算进来，所以这类边的强度低于直接 import，是近似证据而非新的权威证据。
   */
 function expandJavaWildcard(caller: string, pkg: string, body: string, javaTypes: Map<string, string>): string[] {
   const identifiers = new Set(body.match(/[A-Za-z_$][\w$]*/g) ?? []);
@@ -595,19 +580,16 @@ interface ResolvedImports {
 }
 
 /**
-  按语言分派「提取说明符 → 落点」。落不了的（stdlib/第三方/系统头）**不进图**——图里只留仓内依赖，
-  这条既定设计一字未动。这里多做的一件事是把落不到的**包名身份**记进 `externals`：
-  「这个系统边界之外碰了什么」这个问题从前没有确定性数据可答（名字直接丢在地上），现在有了。
-  失败按**一条 import 语句**判，不按单个候选说明符判——`from a.b import c` 落不到才算这条语句用了外部包。
+  按语言分派「提取说明符 → 落点」。落不到的（stdlib/第三方/系统头）不进图，图里只留仓内依赖。
+  这里多做的一件事是把落不到的包名身份记进 `externals`，让「这个系统边界之外碰了什么」有确定性数据可答。
+  失败按一条 import 语句判，不按单个候选说明符判——`from a.b import c` 落不到才算这条语句用了外部包。
 */
 function resolveFileImports(path: string, content: string, index: ImportIndex): ResolvedImports {
   /**
-    收尾去重 + **去自环**。自环以前是三个分支各自 `filter(value !== path)`、另三个分支漏写：
-    Go 导入自己所在的包目录、Rust 在 `src/a.rs` 里写 `use crate::a::X`、Python 的绝对自导入
-    （`import app.store` 写在 store.py 里）都能指回自己（2026-10-07 复审实测三种都造出自环）。
-    角色层靠 `buildFileEdges` 的 key===value 挡了一下，但 `impactRadius` 没挡——
-    自环进了影响范围就变成「改它影响它自己」这种废话证据，还会进流程与出题的图指纹。
-    判据只留这一处：以后加语言不会再漏。
+    收尾去重 + 去自环。Go 导入自己所在的包目录、Rust 在 `src/a.rs` 里写 `use crate::a::X`、
+    Python 的绝对自导入（`import app.store` 写在 store.py 里）都能指回自己。
+    角色层靠 `buildFileEdges` 的 key===value 挡了一下，`impactRadius` 没挡——
+    自环进了影响范围就变成「改它影响它自己」这种无效证据，还会进流程与出题的图指纹。判据只留这一处。
     */
   const dedupe = (values: Iterable<string>): string[] => [...new Set(values)].filter((value) => value !== path);
   const finish = (paths: (string | undefined)[], externals: string[]): ResolvedImports => ({
@@ -633,8 +615,8 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
     for (const item of extractJavaSpecifiers(content)) {
       const hits = item.wildcard ? expandJavaWildcard(path, item.specifier, body, index.javaTypes) : [resolveJavaImport(item.specifier, index.javaTypes)];
       if (hits.some(Boolean)) paths.push(...hits);
-      // 仓内类型表盖得上的名字不是外部包：`import com.xingyan.dao.X` 落不到只说明 X 没被收录，
-      // 把它记成「边界之外的服务」是当场说不实（Xingyan 实测 5 个文件就是这样）。
+      // 仓内类型表盖得上的名字不是外部包：`import com.demo.dao.X` 落不到只说明 X 没被收录，
+      // 把它记成「边界之外的服务」不准确
       else if (!coveredByPackageRoot(index.javaRoots, item.specifier)) externals.push(packageIdentity("java", item.specifier));
     }
     return finish(paths, externals);
@@ -651,8 +633,8 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
     return finish(paths, externals);
   }
   if (path.endsWith(".rs")) {
-    // Rust 的外部 crate 名这次仍采不到：extractRustSpecifiers 只认 `use (crate|self|super)::`，
-    // `use serde::Serialize` 压根没进候选。要采得改那条正则——那是「给一门语言加采集面」，不在这次改动里。
+    // Rust 的外部 crate 名仍采不到：extractRustSpecifiers 只认 `use (crate|self|super)::`，
+    // `use serde::Serialize` 不在候选里。要采得改那条正则，属于「给一门语言加采集面」，不在这里。
     return finish(extractRustSpecifiers(content).map((value) => resolveRustImport(path, value, index.available)), []);
   }
   if (path.endsWith(".cs")) {
@@ -666,7 +648,7 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
     return finish(paths, externals);
   }
   if (cppExtensionPattern.test(path)) {
-    // C/C++ 同理：extractCppIncludes 只取引号形式，`<vector>` 这类系统头从来没进过候选。
+    // C/C++ 同理：extractCppIncludes 只取引号形式，`<vector>` 这类系统头不在候选里。
     return finish(dedupe(extractCppIncludes(content).flatMap((value) => resolveCppInclude(path, value, index.available))), []);
   }
   const paths: (string | undefined)[] = [];
@@ -680,15 +662,15 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
 }
 
 /**
-  「仓内解析不到」的说明符 → 边界栏用的**包名身份**。每种语言按「这个生态里一个包叫什么」来切：
+  「仓内解析不到」的说明符 → 边界栏用的包名身份。每种语言按「这个生态里一个包叫什么」来切：
   - python `redis.clients.Redis` → `redis`（PyPI 发行名就是第一段）；
-  - java / csharp → **前四段**：`org.springframework.data.redis`、`StackExchange.Redis`。
+  - java / csharp → 前四段：`org.springframework.data.redis`、`StackExchange.Redis`。
     只切两段会把整个 spring 挤成同一个东西——`spring-data-redis`（数据库）与 `spring-web`（HTTP）
-    该不该同栏，差别就在中间这两段；切到类名那一段又会一个类一个身份，四段是实测够分开的最浅一层；
+    该不该同栏，差别就在中间这两段；切到类名那一段又会一个类一个身份，四段是最浅的能分开的一层；
   - go `github.com/gin-gonic/gin` → `github.com/gin-gonic`（域名式取前三段）；`fmt` → `fmt`：标准库照实记名，
-    要不要算「外部」由词典那一层判，别在这里替它做主；
+    要不要算「外部」由词典那一层判，不在这里替它做主；
   - node `@fastify/cors/register` → `@fastify/cors`、`axios/lib/x` → `axios`（npm 包名是第一段，scope 例外要两段）。
-  ⚠️ 只切名字、不判类别、更不猜语义：判类别在 `external-catalog.ts`，而「猜」是模型的事——边界这一栏不许它碰。
+  只切名字、不判类别、更不猜语义：判类别在 `external-catalog.ts`，而「猜」是模型的事，边界这一栏不许它碰。
 */
 export function packageIdentity(language: "python" | "java" | "go" | "csharp" | "node", specifier: string): string {
   if (language === "go") {
@@ -709,11 +691,10 @@ const packageNameShape = /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
 /**
   「解析不到」不等于「是外部包」，这一关挡掉三类东西：
-  - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是**仓内意图**，只是断链，记成外部服务就是说不实；
+  - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是仓内意图，只是断链，记成外部服务不准确；
   - 同一个仓里的工作区包（`@codebase-tutor/shared`）：落点算不出是解析能力问题，不是「用了个三方包」；
-  - 字形根本不是包名的脏捕获。`tsSpecifierPattern` 是真会吃到脏东西的——本仓的 `.tsx` 里实测抓出过
-    `<div className=` 与 ` | ` 这种串。以前它只让 `resolveImport` 返回 undefined、无声无息，
-    现在要把名字留下来当产物，就必须先验形。
+  - 字形根本不是包名的脏捕获：`tsSpecifierPattern` 在 `.tsx` 里真会吃到 `<div className=`、` | ` 这种串，
+    只让 `resolveImport` 返回 undefined 不够，名字要留档就必须先验形。
 */
 function isBarePackageName(specifier: string, index: ImportIndex): boolean {
   if (!specifier || specifier.startsWith(".") || specifier.startsWith("/")) return false;
@@ -722,18 +703,17 @@ function isBarePackageName(specifier: string, index: ImportIndex): boolean {
   return ![...index.packages.keys()].some((name) => specifier === name || specifier.startsWith(`${name}/`));
 }
 
-/** Go 的「仓内」判据与 `resolveGoImport` 用同一份 go.mod 前缀，两边口径不能各写一遍。 */
+/** Go 的「仓内」判据与 `resolveGoImport` 用同一份 go.mod 前缀，两边口径一致。 */
 function coveredByGoModule(specifier: string, goModules: Map<string, string>): boolean {
   return [...goModules.keys()].some((name) => specifier === name || specifier.startsWith(`${name}/`));
 }
 
 /**
-  Java / C# 这一档的「仓内包根」集合：把已知类型全限定名（Java）或已知命名空间（C#）的前 **2~3** 段收下。
-  为什么不含第 1 段：`com` / `org` / `io` / `cn` 是顶级域，不是项目根——收进来会让
-  「这个仓的类型在 `org.foo.app` 下」顺带把所有 `org.springframework.*` 都说成仓内代码。
-  判据为什么不能是「这条 import 能不能落到某个类」：Xingyan 实测 `import com.xingyan.shortlink.jump.AccessCounter;`
-  当时落不到（那个类不在索引里），但 `com.xingyan.shortlink` 明明是项目自己的根——
-  把它报成「边界之外的依赖」是当场说不实。命中项目自己的包根 = 仓内断链，不记外部名。
+  Java / C# 这一档的「仓内包根」集合：把已知类型全限定名（Java）或已知命名空间（C#）的前 2~3 段收下。
+  不含第 1 段：`com` / `org` / `io` / `cn` 是顶级域，不是项目根——收进来会让
+  「这个仓的类型在 `org.foo.app` 下」连带把所有 `org.springframework.*` 都说成仓内代码。
+  判据不能是「这条 import 能不能落到某个类」：项目自己包根下的类没被索引时照样落不到，
+  命中项目自己的包根 = 仓内断链，不记外部名。
 */
 function packageRoots(names: Iterable<string>, separator = "."): Set<string> {
   const roots = new Set<string>();
@@ -942,7 +922,7 @@ function stripJsonComments(source: string): string {
 
 /**
  * 仓库根 tsconfig 的 `compilerOptions.baseUrl + paths` → 别名前缀表（Vue/TS 项目 `@/x` 这类导入的唯一仓内依据）。
- * 只读根 tsconfig、只收通配条目（`"x/*"`）；exact 别名与 extends 继承的 paths 不在此列，解析不到就照旧丢弃。
+ * 只读根 tsconfig、只收通配条目（`"x/*"`）；exact 别名与 extends 继承的 paths 不在此列，解析不到就丢弃。
  */
 function collectPathAliases(repositoryPath: string): PathAlias[] {
   const manifest = join(repositoryPath, "tsconfig.json");
@@ -1002,8 +982,7 @@ function resolveImport(from: string, specifier: string, available: Set<string>, 
     const normalized = normalize(candidate).replaceAll("\\", "/");
     const direct = [normalized];
     // TypeScript 的 NodeNext 约定：源码里写的是运行时的后缀，实际文件是 TS 的那一个。
-    // 后缀对子是固定的（.js↔.ts、.mjs↔.mts、.cjs↔.cts），所以按表逐项映射，
-    // 不再只写 `.js` 那一支——`.mts/.cts` 这次才第一次进得了图。
+    // 后缀对子是固定的（.js↔.ts、.mjs↔.mts、.cjs↔.cts），所以按表逐项映射，不只写 `.js` 那一支。
     const extension = extname(normalized);
     const rewritten = nodeNextTargets[extension];
     if (rewritten) {
@@ -1041,7 +1020,7 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents:
   const mains = detectMainFunctionEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
   // Python 同理：框架约定（Flask/FastAPI/Django）与脚本守卫都是确定的启动点，命中即取代按文件名猜的那条
   const python = detectPythonEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
-  // Node/TS 的框架入口（Express/Fastify/Koa/Nest）：以前这条链只靠文件名，服务入口一档整个看不见
+  // Node/TS 的框架入口（Express/Fastify/Koa/Nest）：同一类服务级证据
   const node = detectNodeEntrypoints(contents).filter((anchor) => !isTestPath(anchor.path));
   const authoritativePaths = new Set([...java, ...mains, ...python, ...node].map((anchor) => anchor.path));
   const candidates = new Map<string, string>();
@@ -1059,18 +1038,17 @@ function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents:
     } catch { /* A malformed package file is not fatal to import. */ }
   }
   for (const file of files) {
-    // 只在这文件**进得了依赖图**的语言里认约定名：`files` 是索引清单，里面还有 .md/.json/.yml。
-    // 以前不筛，于是 `docs/index.md`、`config/app.json` 会顶着「conventional entrypoint」进入口清单——
-    // 入口清单进 `classifyFileRoles`（它把文件抬成 core）又进流程 digest，等于让流程从一份 Markdown 讲起。
-    // 实测 dianping / Xingyan 的索引里 0 个非代码文件命中这批约定名，所以这次改动不翻已有键。
+    // 只在这文件进得了依赖图的语言里认约定名：`files` 是索引清单，里面还有 .md/.json/.yml。
+    // 不筛的话 `docs/index.md`、`config/app.json` 会顶着「conventional entrypoint」进入口清单，
+    // 而入口清单进 `classifyFileRoles`（它把文件抬成 core）又进流程 digest，等于让流程从一份 Markdown 讲起。
     if (!handledExtensions.has(file.extension)) continue;
     const name = basename(file.path, extname(file.path)).toLowerCase();
     if (["main", "server", "app", "index", "cli", "manage"].includes(name)) candidates.set(file.path, "conventional entrypoint");
   }
-  // 测试夹具里的 main.py / index.js 不是真入口（实测 fixture 仓的 package.json scripts 会指进去）——
+  // 测试夹具里的 main.py / index.js 不是真入口（package.json 的 scripts 会指进去）——
   // 与结构角色用同一套测试路径判定，把这类候选剔除。
-  // 注解命中的入口是权威清单（每一个都对应真实的路由/启动点），不能沿用弱启发式的 12 截断——
-  // 实测 Spring 仓 15 个入口会在 12 处静默丢掉 UserController。给宽上限只为兜底极端仓。
+  // 注解命中的入口是权威清单（每一个都对应真实的路由/启动点），不能沿用弱启发式的 12 截断；
+  // 给宽上限只为兜底极端仓。
   const conventional = [...candidates.entries()]
     .filter(([path]) => !isTestPath(path) && !authoritativePaths.has(path) && files.some((file) => file.path === path))
     .map(([path, label]) => ({ path, line: 1, label }));
@@ -1100,16 +1078,16 @@ function detectMainFunctionEntrypoints(contents: Map<string, string>): SourceAnc
 }
 
 /**
- * Python 的入口证据写在框架约定里，文件名基本不带信息：真仓（agent2）靠 `main.py` 才碰巧命中约定名，
- * 而 FastAPI/Flask 的路由常拆在 api/、routers/ 下，Django 的 URL 表在 urls.py——一个都不叫 main/server。
- * 规则表按**证据强度**排序，且**一个文件只取最先命中的那条**（与 Spring「启动类优先于 @Controller」同口径）：
- * 真仓一个 main.py 挂着十几条路由装饰器，逐条标会把入口清单变成路由清单，
+ * Python 的入口证据写在框架约定里，文件名基本不带信息：FastAPI/Flask 的路由常拆在 api/、routers/ 下，
+ * Django 的 URL 表在 urls.py，一个都不叫 main/server。
+ * 规则表按证据强度排序，且一个文件只取最先命中的那条（与 Spring「启动类优先于 @Controller」同口径）：
+ * 一个 main.py 挂着十几条路由装饰器，逐条标会把入口清单变成路由清单，
  * GUI 的入口下拉与课程树的「执行路径」都会被同一个文件的十几个候选挤满。
  * 误判比漏判更贵：只定义函数的库模块被标成入口后，流程证据从一条不会自己开始执行的链路铺起，
  * 课程树就把工具模块当执行起点讲——所以这里只认框架级语句，不认「看着像在启动进程」的形态
  * （`runner.run(...)`、裸 `main()` 一律不算证据）。
  * 刻意没写的几条：`app.add_url_rule` 命令式登记、Sanic/Starlette/aiohttp 的构造形态、`re_path`/`include`
- * 的二级路由表——test-fixtures/pyframeworkdemo-repo 里没有对应样例，**没有 fixture 就不写规则**。
+ * 的二级路由表——test-fixtures/pyframeworkdemo-repo 里没有对应样例，没有 fixture 就不写规则。
  */
 function detectPythonEntrypoints(contents: Map<string, string>): SourceAnchor[] {
   const rules: { pattern: RegExp; label: string }[] = [
@@ -1129,8 +1107,8 @@ function detectPythonEntrypoints(contents: Map<string, string>): SourceAnchor[] 
   const anchors: SourceAnchor[] = [];
   const taken = new Set<string>();
   const pythonFiles = [...contents].filter(([path]) => path.endsWith(".py"));
-  // 外层按规则、内层按文件：证据强的先挑走文件，入口清单自然排在前面（真仓的默认入口取 entrypoints[0]，
-  // 排序不是 cosmetics——把 app 对象排在脚本守卫前面，默认入口才是那个真的服务）
+  // 外层按规则、内层按文件：证据强的先挑走文件，入口清单自然排在前面
+  // （默认入口取 entrypoints[0]，所以排序不是外观问题——app 对象排在脚本守卫前面，默认入口才是那个真的服务）
   for (const rule of rules) {
     for (const [path, content] of pythonFiles) {
       if (taken.has(path)) continue;
@@ -1150,7 +1128,7 @@ function detectPythonEntrypoints(contents: Map<string, string>): SourceAnchor[] 
 
 /**
  * 框架名只认行首的 import：装饰器分不出框架（`@x.route` 是 Flask 还是 Sanic 都可能），
- * 而 `\b` 顺带挡掉 `flaskshop`、`fastapiapp` 这类同前缀的仓内包名。
+ * 而 `\b` 同时挡掉 `flaskshop`、`fastapiapp` 这类同前缀的仓内包名。
  * 认不出就不带框架名——标签宁可少说，别说错。
  */
 const pythonFrameworkNames = new Map([["flask", "Flask"], ["fastapi", "FastAPI"], ["django", "Django"]]);
@@ -1159,26 +1137,22 @@ const pythonFrameworkOf = (content: string): string | undefined => pythonFramewo
 
 /**
  * Node/TS 侧的框架入口：Express / Fastify / Koa / NestJS。
- * 动因（2026-10-16 实测）：这条链以前只靠文件名约定，本仓 `packages/engine/src/server.ts` 虽顶着 `server`
- * 这个名字，标签却是 `conventional entrypoint`（词典不认它是服务入口）⇒ 架构视图里「含对外服务入口」
- * 这一档整仓为零、`entry` 角色一个节点都没有。
+ * 只靠文件名约定认不出服务级入口，架构视图的「含对外服务入口」一档会整仓为空。
  *
  * 四条收紧，都为「误判比漏判更贵」而设：
- *  - **先认出框架实例的名字**（`const app = Fastify(...)`、`express()`、`new Koa()`、`NestFactory.create(...)`），
+ *  - 先认出框架实例的名字（`const app = Fastify(...)`、`express()`、`new Koa()`、`NestFactory.create(...)`），
  *    只认这些名字上的 `.get/.post/.listen`。不收「任何标识符.get(字符串)」——那会把前端 axios 的
  *    `api.get("/users")` 与 `map.get("key")` 标成 HTTP 路由：客户端调用与被服务的路由是两件相反的事。
- *  - **框架名只认行首 import / require 位置的包名**：文件里出现一个写着 "express" 的字符串不算。
- *  - **第一个参数必须是引号里的路径**（TS 泛型实参允许夹在方法名与括号之间）：`app.get(handler)` 那种重载不算登记。
- *  - **证据行必须是代码**：行首不能是注释续行，也不能落在跨行模板字符串里面。
- *    这条是实测逼出来的——本仓 `docs/ui-prototype/js/data.js` 把「一份假的后端源码」整段写入模板字符串当演示数据，
- *    里面的 `const app = Fastify(...)` 与 `app.listen(...)` 逐行看都像真证据，第一版就把这个纯演示文件标成了
- *    「HTTP 服务启动」。判「这一行是不是代码」用语法树（`extractMultilineTemplateLines`），不自己扫引号：
- *    第二套结构判据迟早和解析器打架。注释里写的示例代码同理——行首是 `*` 或 `//` 的一律不看。
+ *  - 框架名只认行首 import / require 位置的包名：文件里出现一个写着 "express" 的字符串不算。
+ *  - 第一个参数必须是引号里的路径（TS 泛型实参允许夹在方法名与括号之间）：`app.get(handler)` 那种重载不算登记。
+ *  - 证据行必须是代码：行首不能是注释续行，也不能落在跨行模板字符串里面。
+ *    判「这一行是不是代码」用语法树（`extractMultilineTemplateLines`），不自己扫引号：
+ *    第二套结构判据迟早和解析器打架。
  *
- * 一个文件只取最先命中的那一行证据（与 Python 那条同一口径）：真仓一个 server.ts 挂着上百条路由，
+ * 一个文件只取最先命中的那一行证据（与 Python 那条同一口径）：一个 server.ts 挂着上百条路由，
  * 逐条标会把入口清单变成路由清单。
- * 已知漏判：`fastify.register(routes)` 拆到子文件的路由，接收者只是形参名、本地没有构造证据 ⇒ 不标。
- * 补它要跨文件传实例名，代价与收益先放着，等真实仓问出「子路由看不见」再动。
+ * 已知漏判：`fastify.register(routes)` 拆到子文件的路由，接收者只是形参名、本地没有构造证据 ⇒ 不标；
+ * 补它要跨文件传实例名。
  */
 const nodeExtensionPattern = /\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 const nodeRoutePattern = /^[ \t]*(?:(?:await|return)\s+)?([\w$]+)\s*\.\s*(?:get|post|put|patch|delete|all|route)\s*(?:<[^<]*>)?\s*\(\s*["'`]/;
@@ -1198,7 +1172,7 @@ function detectNodeEntrypoints(contents: Map<string, string>): SourceAnchor[] {
     const instances = nodeInstanceNames(content);
     const controller = nodeControllerPattern.test(content);
     if (!instances.size && !controller) continue;
-    // 语法树没就绪（或这门语言没有语法）就**整个文件不判**：这个节点没有保守退路可走——
+    // 语法树没就绪（或这门语言没有语法）就整个文件不判：这个节点没有保守退路——
     // 把「读不出字符串边界」当成「这里没有字符串」，演示数据里那份假源码就会被标成服务入口，
     // 而入口一旦进档，模块档位、流程默认入口都跟着错。宁可少一条入口（图的 parseBackend 已如实记录降级）。
     const templates = extractMultilineTemplateLines(path, content);
@@ -1237,8 +1211,7 @@ function nodeInstanceNames(content: string): Set<string> {
 }
 
 /**
- * 框架名只认 import / require 位置的包名（与 Python 那条同一口径）：认不出就不带框架名，
- * 标签宁可少说，别说错。
+ * 框架名只认 import / require 位置的包名（与 Python 那条同一口径）：认不出就不带框架名。
  */
 const nodeFrameworkNames = new Map([["fastify", "Fastify"], ["express", "Express"], ["koa", "Koa"]]);
 const nodeFrameworkDisplay = (specifier: string): string | undefined =>
@@ -1259,13 +1232,11 @@ function nodeFrameworkOf(content: string): string | undefined {
 /**
   这个入口锚点是不是「外部会打到它」那一类：HTTP 路由/路由表/服务启动，或框架启动类。
   `脚本主入口`（Python 的 `if __name__ == "__main__"`）与 `Go/Rust/C/C++/C# 主函数` 都不算——
-  它们只说明「这个文件能自己跑」，不说明它在执行流里的位置。
-  动因是 10-06 的实测：dianping 的 `observability/check-queries.py`（Grafana 自动加载用的运维脚本）
-  因为是脚本主入口，把整个「可观测性」模块抬成了主干；而真正承载下单请求的控制器接口文件只占模块
-  可见文件的 1/20 —— 分级判据要保护的是后者。
-  ⚠️ 已知残留：整个仓就是一个 CLI（只靠 `main`）拿不到这条特权，只能靠占比那一档兜。
-  正解是给 `SourceAnchor` 加一个 `trigger`（http | binary | script），但那字段会进流程 digest
-  ⇒ 全部流程重烧，所以这一版按标签判（标签字符串就是本文件产的那几个，两边同源）。
+  它们只说明「这个文件能自己跑」，不说明它在执行流里的位置；把一份自动加载的运维脚本当入口，
+  会把它所在的整个模块抬成主干。
+  已知残留：整个仓就是一个 CLI（只靠 `main`）拿不到这条特权，只能靠模块占比那一档。
+  按标签判而不是给 `SourceAnchor` 加 `trigger`（http | binary | script）字段：
+  加字段会进流程 digest、触发全部流程重算；标签字符串就是本文件产的那几个，两边同源。
 */
 export function isServedEntrypoint(anchor: SourceAnchor): boolean {
   return /HTTP|启动类/.test(anchor.label ?? "");

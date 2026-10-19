@@ -9,8 +9,8 @@ import { Journal, readJournal } from "../store/journal.js";
 import { commitOverride, parseOverrideArguments, type OverrideIntent } from "./override-writer.js";
 
 /**
-  `set_architecture` 是全仓第一个**有副作用**的 agent 工具，这一组用例钉的是它的边界：
-  能改的只有「层怎么归、层叫什么、模块哪一档」，**改不动任何一条边**。
+  `set_architecture` 是全仓第一个有副作用的 agent 工具，这一组用例钉的是它的边界：
+  能改的只有「层怎么归、层叫什么、模块哪一档」，改不动任何一条边。
   边是 import 聚合出来的事实；让模型（或界面）能增删一条箭头，这张图就从证据变成了意见。
 */
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-override-")));

@@ -57,11 +57,10 @@ describe("文件角色分类（结构规则）", () => {
       files: paths("main.py", "entity/Blog.java", "dto/LoginFormDTO.java", "web/CatalogService.java", "web/LogController.java", "svc/logging.py"),
       entrypoints: [ENTRY]
     }));
-    // 这三个在 2026-10-05 的 dianping 实测里全被误判成设施
     expect(roles.get("entity/Blog.java")).not.toBe("infra");
     expect(roles.get("dto/LoginFormDTO.java")).not.toBe("infra");
     expect(roles.get("web/CatalogService.java")).not.toBe("infra");
-    // 真正叫「日志」的照旧算设施
+    // 名字真叫「日志」的算设施
     expect(roles.get("web/LogController.java")).toBe("infra");
     expect(roles.get("svc/logging.py")).toBe("infra");
   });
@@ -78,7 +77,7 @@ describe("文件角色分类（结构规则）", () => {
       entrypoints: [ENTRY]
     }));
     expect(roles.get("svc/IOrderService.java")).toBe("core");
-    // 控制器注入接口、运行时打到实现：同一拍执行，所以实实时计算主干
+    // 控制器注入接口、运行时打到实现：同一拍执行，所以实现算主干
     expect(roles.get("svc/OrderServiceImpl.java")).toBe("core");
     // 实现下面的 Mapper 是第二跳，不算主干（透传只沿派生走，不沿普通依赖延伸）
     expect(roles.get("svc/OrderMapper.java")).toBe("support");

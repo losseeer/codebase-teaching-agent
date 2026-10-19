@@ -5,13 +5,8 @@ import type { FactsToolContext } from "../source/tool-loop.js";
 
 /**
   把 `static_fact` 里的四类产物交给模型的只读门。
-
-  三条纪律：
-  - **只读、不计费、不重算**：这一门只搬运已算好的读数，绝不触发分析（绘图阶段的职责边界）。
-  - **按指针给，不给整仓**：`path` 与 `target` 决定给多少，一次最多回这么多字。整仓产物是 2~4 MB，
-    灌进上下文既付不起，也会让模型在噪声里编关系。
-  - **「没算过」与「算出来是空的」必须分得开**：没有行就说没有行、请重新分析；
-    有行但 `backend: "none"` 就照读 `skipped` 里那句原因。含糊过去，模型就会把空白当「本仓不存在」。
+  - 只读、不计费、不重算：只搬运已算好的读数。
+  - 按指针给：`path` 与 `target` 决定给多少，一次最多回这么多字；整仓产物是 2~4 MB，不整份进上下文。
 */
 
 const MAX_LINES = 40;
@@ -31,10 +26,8 @@ function arg(argumentsJson: string, key: string): string {
 const at = (ms: number): string => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 
 /**
-  截断只发生在「已经如实说过还有多少」之后：那条声明是读数的一部分，不是装饰。
-
-  ⚠️ 条数只按 `items` 算（表头与尾部提示不占「没列出」的名额）：把三者混在一起数，
-  「另有 N 条没列出」就会多报一两个——那条声明是给模型看的读数，差一条都算说谎。
+  截断前先声明还剩多少：那条声明是读数的一部分。
+  条数只按 `items` 算，表头与尾部提示不占「没列出」的名额。
 */
 function emit(heads: string[], items: string[], tails: string[] = []): string {
   const cap = Math.max(1, MAX_LINES - heads.length - tails.length);
@@ -56,7 +49,7 @@ function blockLine(functionGraph: CfgFunction): string {
 const skips = (fact: { skipped?: { name: string; reason: string }[] }): string[] =>
   (fact.skipped ?? []).map((item) => `未成图：${item.name} —— ${item.reason}`);
 
-/** 每份产物都先报「用什么算的」：backend 为 none 时后面那些空读数不是「仓库里没有」，而是「没算出来」。 */
+/** 每份产物先报「用什么算的」：backend 为 none 时后面的空读数是「没算出来」，不是「仓库里没有」。 */
 const head = (fact: { language: string; backend: string; skipped?: { reason: string }[] }): string =>
   `语言 ${fact.language}，backend ${fact.backend}${fact.backend === "none" && fact.skipped ? `（${fact.skipped.map((item) => item.reason).join("；")}）` : ""}`;
 
@@ -64,7 +57,7 @@ interface Named {
   name: string;
 }
 
-/** 先按名字全等，再退到包含——模型报的名字常常是 `handle` 而产物里是 `handleOrder`。 */
+/** 先按名字全等，再退到包含：模型报的名字常常是 `handle` 而产物里是 `handleOrder`。 */
 const pick = <T extends Named>(items: T[], target: string): T | undefined =>
   target ? items.find((item) => item.name === target) ?? items.find((item) => item.name.toLowerCase().includes(target.toLowerCase())) : undefined;
 
@@ -91,13 +84,11 @@ function missing(kind: FactKind, db: TutorDatabase, repositoryId: string): strin
 
 /**
   产物查询门的实现（装配在 `application/canvas-tools.ts`：路由只认装配层，不直接 import 领域模块）。
-
-  逐类产物的读数指针；`target` 在 cfg/dataflow 里是函数名，在 typeRelations/registry 里是类型名或条目名。
+  `target` 在 cfg/dataflow 里是函数名，在 typeRelations/registry 里是类型名或条目名。
 */
 export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsToolContext {
   const rowsOf = <T>(kind: FactKind, path: string): T | undefined => db.getFileFact<T>(repositoryId, kind, path);
-  // 整类扫描要把这一类的每一行 JSON 都解析一遍（一个仓 2~4 MB）：同一回合里模型会连着查好几次，
-  // 门活着的时间就是一回合，按类别记一次就够了
+  // 整类扫描要解析这一类每一行 JSON（一个仓 2~4 MB）：这扇门只活一个回合，按类别缓存一次
   const scanned = new Map<FactKind, Map<string, unknown>>();
   const scan = <T>(kind: FactKind): Map<string, T> => {
     const cached = scanned.get(kind) as Map<string, T> | undefined;
@@ -147,7 +138,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
             lines.push(...fact.entries.filter((entry) => `${entry.name} ${entry.target ?? ""}`.toLowerCase().includes(needle)).map((entry) => entryLine(file, entry)));
           }
         } else {
-          // cfg 与 dataflow 的函数清单形状一致（都有 name/startLine），这一格只报「在哪个文件的哪一行」，展开要带 path
+          // cfg 与 dataflow 的函数清单形状一致（都有 name/startLine），这里只报文件与行号，展开要带 path
           const names = kind === "cfg" ? [...scan<CfgFileFact>(kind).entries()] : [...scan<DataflowFileFact>(kind).entries()];
           for (const [file, fact] of names) {
             lines.push(...fact.functions.filter((item) => item.name.toLowerCase().includes(needle)).map((item) => `${file}:${item.startLine} ${item.name}`));

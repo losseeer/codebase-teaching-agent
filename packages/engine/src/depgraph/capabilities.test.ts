@@ -17,15 +17,12 @@ import { buildFileCfg } from "../facts/cfg.js";
 
 /**
   语言能力表的回归。要拦的事故有三个：
-  1. **表漂移**：引擎加了/去了一个扩展名的支持，表没跟着改——读数以表为准，漂了就等于在误导人。
-  2. **空档**：某门语言某一个节点没填（或填了个自造的档），界面就会把「没说」显示成「没问题」。
-  3. **抬高**：把没规则的节点写成 `approximate` 装「大概能行」，等于回到「假装支持」的老毛病。
+  1. 表漂移：引擎加了/去了一个扩展名的支持，表没跟着改——读数以表为准，漂了就等于误导人。
+  2. 空档：某门语言的某个节点没填（或填了个自造的档），界面会把「没说」显示成「没问题」。
+  3. 抬高：把没有规则的节点写成 `approximate` 装「大概能行」。
 
-  基准是 `graph.ts` 导出的 `graphExtensions`——它**由本表派生**（复审 #121②）。
-  过去这条清单在 graph.ts 里是手写的，而测试不许 import 实现细节，于是测试用正则去**读源码文本**比对，
-  两处判据各活一次：加一门语言要改两处，还得指望那条正则一直跟得上数组的写法。
-  现在清单只有一个来源，这里的检查退化成两件事：派生没漏项（有人又把清单写回硬编码就会红），
-  以及索引范围不因派生而缩小。
+  基准是 `graph.ts` 导出的 `graphExtensions`，它由本表派生，清单只有一个来源，
+  因此这里的检查只剩两件：派生没漏项（有人把清单写回硬编码就会红），以及索引范围不因派生而缩小。
 */
 
 const LEVELS: CapabilityLevel[] = ["exact", "approximate", "unsupported"];
@@ -35,7 +32,7 @@ beforeAll(async () => {
   await loadSymbolParser();
 });
 
-/** `DependencyGraph` 实际处理的扩展名 = 表派生出来的那一份（不再有第二处清单）。 */
+/** `DependencyGraph` 实际处理的扩展名，取自表派生出来的那一份清单。 */
 function extensionsHandledByGraph(): string[] {
   return [...graphExtensions];
 }
@@ -61,7 +58,7 @@ describe("语言能力表：每个节点都要有明确取值", () => {
   });
 
   it("已知写法能查到；未知语言回落 unsupported，不假装是 approximate", () => {
-    // 三种写法同一档：扩展名、带点的扩展名、完整路径
+    // 三种写法同一档：扩展名、带点的扩展名、完整路径、大写
     for (const spelling of [".java", "java", "src/main/Order.java", "JAVA"]) {
       expect(languageCapabilitiesOf(spelling).language, spelling).toBe("java");
     }
@@ -95,9 +92,8 @@ describe("语言能力表：每个节点都要有明确取值", () => {
 
 describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
   it("派生自表的 graphExtensions 不得因改表而缩小：收尾前那份手写清单的每一项都还得在", () => {
-    // 不再把 graphExtensions 与 LANGUAGE_BY_EXTENSION 互相比对——两者都由 LANGUAGE_CAPABILITIES 派生，
-    // 恒等，永远绿，是一条同义反复（复审 #121 收尾之后它才退化成这样）。这里对着「收尾前手写清单」这个
-    // 独立快照核对：有人从表里删了一门语言、或漏写一个扩展名，依赖图就静默失去它的覆盖，这条会红。
+    // 不与 LANGUAGE_BY_EXTENSION 互相比对：两者都由 LANGUAGE_CAPABILITIES 派生，恒等、永远绿。
+    // 这里对着下面那份独立快照核对：有人从表里删了一门语言或漏写一个扩展名，依赖图会静默失去覆盖，这条会红。
     // 新增语言不必动这里；只有「缩小」才该红。
     const handled = [...extensionsHandledByGraph()];
     const baselineBeforeDerivation = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".java", ".go", ".rs", ".cs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".vue"];
@@ -114,7 +110,7 @@ describe("语言能力表：与依赖图的实际支持清单不漂移", () => {
   });
 
   it("索引器会收录但依赖图不处理的扩展名，查出来是 unsupported（而不是含糊的近似）", () => {
-    // 这几门是实测存在的坑：文件进了索引与目录树，但一条边都不会有
+    // 这些语言的文件进了索引与目录树，但一条边都不会有
     for (const extension of [".rb", ".php", ".svelte"]) {
       expect(extensionsHandledByGraph(), extension).not.toContain(extension);
       expect(languageCapabilitiesOf(`${extension}`).cells.dependencyEdge).toBe("unsupported");

@@ -194,7 +194,7 @@ describe("dependency graph — Java/Spring", () => {
     const graph = buildDependencyGraph(javaFixture, index.files);
     expect(graph.imports.get("src/main/java/com/demo/DemoApplication.java")).toEqual(["src/main/java/com/demo/shop/ShopController.java"]);
     expect(graph.imports.get("src/main/java/com/demo/shop/ShopService.java")).toEqual(["src/main/java/com/demo/util/Keys.java"]);
-    // 直接导入与静态导入同一文件 → 合并成一条；`com.demo.util.*` 只带来**正文真引用过**的 Metrics，
+    // 直接导入与静态导入同一文件 → 合并成一条；`com.demo.util.*` 只带来正文真引用过的 Metrics，
     // 不引 Counters（整包展开会让同包文件两两连边，影响范围虚胖）
     expect(graph.imports.get("src/main/java/com/demo/shop/ShopController.java")).toEqual([
       "src/main/java/com/demo/order/IOrderFacade.java",
@@ -399,8 +399,8 @@ describe("说明符落点按发起文件的语言收尾（复审 #121①）", ()
       "src/util.java": "public class Util {}\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // 旧写法拿全表 19 个扩展名挨个试，这一条会连到 util.py（同名不同语言优先命中）。
-      // 能力表 typescript 那个字段自称 dependencyEdge=exact（「落点逐个验证、不是连错」），跨语言猜边正好把它戳穿。
+      // 落点只按发起文件所属语言的扩展名族试，不拿全表 19 个扩展名挨个试：
+      // 挨个试会连到同名不同语言的 util.py，能力表给 typescript 的 dependencyEdge=exact 也就不成立。
       expect(graph.imports.get("src/a.ts") ?? []).toEqual([]);
     }));
 
@@ -440,8 +440,9 @@ describe("整仓自环与「每个文件一个源码根」两刀（复审取图�
       "util/Keys.java": "package com.demo.util;\n\npublic class Keys {\n  public static void check() {}\n}\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // 源码根兜底曾返回「文件自身」：于是扁平布局里每个文件都是一个编译范围，
-      // `requireSameRoot` 恒不成立 ⇒ 同包可见与通配展开整条静默失效（边数看上去只是「这仓边少」）。
+      // 扁平布局没有 src/main|test，源码根兜底必须给仓根而不是文件自身：
+      // 返回文件自身时每个文件都自成一个编译范围，`requireSameRoot` 恒不成立，
+      // 同包可见与通配展开整条静默失效（读数上只是「这仓边少」）。
       expect(graph.imports.get("App.java"), "包通配要在扁平布局里按正文引用落点").toEqual(["util/Keys.java"]);
       expect(graph.calls.some((call) => call.callerPath === "App.java" && call.calleePath === "Service.java"), "Java 同包不 import 也互相可见").toBe(true);
     }));
@@ -507,9 +508,9 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
     }));
 
   /**
-    Xingyan 实测的形状：`import com.xingyan.shortlink.jump.AccessCounter;` 落不到（那个类当时不在索引里），
-    但 `com.xingyan.shortlink` 就是这个项目自己的根。把它报成「边界之外的依赖」是说不实，
-    所以判据必须是「命中仓内包根就算断链」，不能是「这条 import 能不能落到某个类」。
+    判据是「命中仓内包根就算断链」，不是「这条 import 能不能落到某个类」：
+    `com.mycompany.shortlink` 这类项目自己的包根在边界之内，即便某个类当时不在索引里，
+    把它报成「边界之外的依赖」也不准确。
   */
   it("命中项目自己的包根时不记外部名，即便那个类没被索引", async () =>
     await withRepo("externals-inrepo-root", {
@@ -523,8 +524,8 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
 
   /**
     两类「解析不到」都不是外部包：仓内意图（相对路径 / 命中别名 / 工作区包）与脏捕获。
-    脏捕获不是假想敌——`tsSpecifierPattern` 在本仓的 `.tsx` 里实测抓出过 `<div className=` 和 ` | ` 这种串，
-    以前它只让落点返回 undefined、无声无息；名字一旦要留档，就必须先验形。
+    `tsSpecifierPattern` 在 `.tsx` 里会抓到 `<div className=`、` | ` 这种根本不是模块名的串，
+    只让落点返回 undefined 不够，名字要留档就必须先验形。
   */
   it("相对路径、别名与工作区包不算外部；不是包名字形的脏捕获也不记", async () =>
     await withRepo("externals-shape", {
@@ -547,7 +548,7 @@ describe("外部包名采集（P1：以前直接丢弃，现在留名不留边�
       expect(data.externals).toEqual({ "src/a.ts": ["axios"] });
       const back = graphFromData(data);
       expect(back.externals.get("src/a.ts")).toEqual(["axios"]);
-      // 老产物（这个字段根本不存在）读回来是空表，不是 undefined：调用方不用各自判空
+      // 缺这个字段的产物读回来是空表而不是 undefined：调用方不用各自判空
       const legacy = graphFromData({ ...data, externals: undefined });
       expect(legacy.externals.size).toBe(0);
     }));

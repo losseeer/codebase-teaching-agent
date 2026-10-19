@@ -2,26 +2,18 @@ import type { FileEntry, RouteConsumer, RouteProvider, SeamDirection, SeamReport
 import { matchRouteSeams, routeEndpointsOfFiles } from "./routes.js";
 
 /**
-  跨仓 HTTP 接缝的读侧：把两个仓的「路由清单」配成边。
+  跨仓 HTTP 接缝的读侧：把两个仓的「路由清单」配成边，回答「点这个按钮之后代码在哪」。
+  只做跨仓：真实语料每仓单语言，同仓配对配不出任何东西。
 
-  为什么是**跨仓**而不是同仓：用户手上的语料每仓都是单语言的（后端全 Java、前端全 Vue），
-  同仓配对在真实数据上配不出任何东西；而这条链的价值恰恰是「点这个按钮之后代码在哪」。
-  当年实测可行性用的是 `src/scripts/route-seam-probe.ts`（跨仓接缝面板撤除时一并删了，读数记在开发日志 §41）：14 条调用串里
-  12 条配上控制器，全部整段相等、0 条歧义。
-
-  两条刻意的取舍：
-  - **不落库、不进任何缓存键**：清单是读文件实时计算 + 内存 memo（键含 `versionStamp`，内容一变自然翻）。
-    所以已导入的仓当场就能用，不需要重新导入，也不会有摘要/流程重烧——这条功能是纯加分项，
-    一旦哪天要把它变成流程证据的一部分（进 digest），就得先算重烧的账。
-  - **按需算，不预先全量**：算一次要读两个仓的源码文件（dianping 前端+后端约 350 个文件，纯 CPU 几十毫秒），
-    只在用户显式选了「相关仓」时才算；界面无需第二个加载态，因为它挂在架构视图的一次性动作里。
+  不落库、不进任何缓存键：清单由读文件实时计算 + 进程内 memo（键含 `versionStamp`，内容一变自然失效），
+  已导入的仓库不需要重新导入。算一次要读两个仓的源码，因此只在用户显式选了「相关仓」时才算。
 */
 
 export interface SeamRepository {
   repositoryId: string;
   path: string;
   files: FileEntry[];
-  /** 分析产物的内容戳：清单 memo 的键之一，仓库一变就自然失效 */
+  /** 分析产物的内容戳：清单 memo 的键之一 */
   versionStamp: string;
 }
 
@@ -32,7 +24,7 @@ function endpointsOf(repository: SeamRepository): { providers: RouteProvider[]; 
   const key = `${repository.repositoryId}:${repository.versionStamp}`;
   const hit = memo.get(key);
   if (hit) {
-    // 命中即续期：Map 的迭代序就是新近序，先删再放等于把这条推到最新
+    // Map 的迭代序就是新近序：先删再放等于把这条推到最新
     memo.delete(key);
     memo.set(key, hit);
     return hit;
@@ -54,7 +46,7 @@ function directionOf(consumers: RouteConsumer[], providers: RouteProvider[]): Se
   return { links, scanned: consumers.length, matched: matchedKeys.size, ambiguous: ambiguousKeys.size };
 }
 
-/** 双向：本仓调相关仓（outbound）与相关仓调本仓（inbound）。两个方向的学习者问题不同，界面分开列。 */
+/** 双向：本仓调相关仓（outbound）与相关仓调本仓（inbound），两个方向的学习者问题不同。 */
 export function seamReportFor(repository: SeamRepository, other: SeamRepository): SeamReport {
   const mine = endpointsOf(repository);
   const theirs = endpointsOf(other);
@@ -66,18 +58,18 @@ export function seamReportFor(repository: SeamRepository, other: SeamRepository)
   };
 }
 
-/** 测试隔离用：清单 memo 是进程级缓存。 */
+/** 清单 memo 是进程级缓存，测试之间需要清空。 */
 export function clearSeamMemo(): void {
   memo.clear();
 }
 
-/** 一次回给模型的行数上限：再多模型也只是把清单抄进答案，不如让它用 search_code 缩小范围。 */
+/** 一次回给模型的行数上限；更多只会变成模型抄进答案的清单。 */
 const MODEL_ROWS = 12;
 
 /**
   把配对结果压成给模型看的清单（`cross_repo_link` 的返回值）。
-  每行都必须带「文件:行」——模型下一步就是拿它去 read_file，给个模块名等于没给。
-  证据强度也照实写：后缀配上的（网关前缀那一类）与一条串配到多个落点的，都不能混在「配上了」里。
+  每行都带「文件:行」——模型的下一步是拿它去 read_file，给模块名没用。
+  证据强度照实区分：按后缀配上的（网关前缀那一类）与一条串配到多个落点的，都不算「配上了」。
   */
 export function formatSeamReport(otherName: string, report: SeamReport, filter = ""): string {
   const needle = filter.trim().toLowerCase();

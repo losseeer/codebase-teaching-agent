@@ -1,22 +1,20 @@
 import type { CallEdge, FileRole, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/shared";
 
 /**
-  文件角色的结构分类：只用符号表、调用边、import 边、类型派发边与入口清单，**不调模型**。
-
-  为什么不让模型来分：角色要落进缓存、要被流程证据与课程树同时引用，若它的来源随配置变
-  （配了模型一套、没配另一套），同一个仓库会得到两套角色，缓存与对比都失去意义。
-  模型该做的是「这个文件在讲什么」（职责摘要），不是「它在图上处在哪个位置」——后者是结构问题。
+  文件角色的结构分类：只用符号表、调用边、import 边、类型派发边与入口清单，不调模型。
+  角色要落进缓存、被流程证据与课程树同时引用，来源必须与模型配置无关；
+  「这个文件在讲什么」是职责摘要的事，「它在图上处在哪个位置」是结构问题。
 
   口径（按顺序判定，先命中先用）：
   1. 测试路径 → test
   2. 入口文件 → core
-  3. 名字**成词**命中设施类词（配置、存储、缓存、日志、可观测、网络客户端、队列、部署…）→ infra
+  3. 文件名成词命中设施类词（配置、存储、缓存、日志、可观测、网络客户端、队列、部署…）→ infra
   4. 被任一入口直接依赖（import、调用，或经接口派发到实现这一拍）→ core
   5. 既不依赖别人、也不被别人依赖、也没有类型派生关系 → tool
   6. 其余 → support
 
-  ⚠️ 第 3 步排在第 4 步之前是有意的：被服务类用着的配置类仍然是配置，不该因为「入口用到了它」就升成主干。
-  这条顺序只有在词表误命中时才会咬人，所以防误判靠词形判据与业务同形词黑名单（见 `hasInfraHint`），不靠换序。
+  第 3 步排在第 4 步之前是有意的：被服务类用着的配置类仍然是配置，不该因为「入口用到了它」就升成主干。
+  这条顺序只在词表误命中时才有影响，防误判靠词形判据与黑名单（见 `hasInfraHint`），不靠换序。
 */
 
 export interface FileStructure {
@@ -25,20 +23,17 @@ export interface FileStructure {
   symbols: SymbolInfo[];
   calls: CallEdge[];
   imports: Record<string, string[]>;
-  /** 全部入口：角色按「被任一入口依赖」判，因此与「这次看的是哪个入口」无关。 */
+  /** 全部入口：角色按「被任一入口依赖」判，与「这次看的是哪个入口」无关。 */
   entrypoints: SourceAnchor[];
-  /** 类型派发边（实现/子类 → 接口/父类）；默认 = 旧产物里没这一类关系。 */
+  /** 类型派发边（实现/子类 → 接口/父类）；缺省表示没有这一类关系。 */
   dispatch?: TypeDispatchEdge[];
 }
 
 /**
-  文件级依赖双向表：import 边 **加上** 跨文件调用边。
-  调用边能补上 import 边看不见的关系（例如 Python 同包内的隐式引用），
-  两条边都算「依赖」是为了让「谁依赖谁」这一问在同一口径下回答。
+  文件级依赖双向表：import 边加上跨文件调用边，两条边都算「依赖」，让「谁依赖谁」在同一口径下回答。
 
-  类型派发边**不进** `dependencies`/`dependents`：接口与实现之间是「运行时派发到」，不是「谁依赖谁」，
-  混进依赖流会把方向说反给模型听。它单独走 `dispatches`，只用于两件事：入口可达性的透传、
-  以及「这个文件到底孤不孤立」的判据。
+  类型派发边不进 `dependencies`/`dependents`：接口与实现之间是运行时派发，不是「谁依赖谁」，
+  混进依赖流会把方向说反。它单独走 `dispatches`，只用于入口可达性的透传与孤立性判据。
 */
 export function buildFileEdges(structure: Pick<FileStructure, "imports" | "calls" | "dispatch">): {
   dependencies: Map<string, Set<string>>;
@@ -64,7 +59,6 @@ export function buildFileEdges(structure: Pick<FileStructure, "imports" | "calls
       link(dependents, to, from);
     }
   }
-  // 跨文件调用也是依赖：只算文件级，同文件内的调用不构成文件间关系
   for (const call of structure.calls) {
     link(dependencies, call.callerPath, call.calleePath);
     link(dependents, call.calleePath, call.callerPath);
@@ -79,8 +73,8 @@ export function buildFileEdges(structure: Pick<FileStructure, "imports" | "calls
 
 /**
   入口的「直接依赖」集合，含类型派发透传：控制器注入接口、运行时打到实现，
-  这一拍在源码里没有调用行，但它是同一次请求里的事，所以实实时计算一跳、实现下面的 Mapper 仍算二跳。
-  透传可以连着走（抽象类再被抽象类继承），但**不**沿普通依赖延伸——否则整仓都会被拉成主干。
+  这一拍在源码里没有调用行，但属于同一次请求，所以接口算一跳、实现下面的 Mapper 仍算二跳。
+  透传可以连着走（抽象类再被抽象类继承），但不沿普通依赖延伸——否则整仓都会被拉成主干。
 */
 export function entryDependenciesOf(structure: Pick<FileStructure, "imports" | "calls" | "dispatch" | "entrypoints">): Set<string> {
   const { dependencies, dispatches } = buildFileEdges(structure);
@@ -103,11 +97,8 @@ export function entryDependenciesOf(structure: Pick<FileStructure, "imports" | "
 const TEST_SEGMENTS = new Set(["test", "tests", "__tests__", "test-fixtures", "fixtures", "spec", "specs", "testing", "e2e"]);
 
 /**
-  设施类词：命中即认作「与外部世界或运行环境打交道」。
-  这是粗分类，宁可漏判也不要把业务逻辑误判成设施——所以只收公认的设施名，不收 `core`/`util` 这类泛词。
-  ⚠️ 命中要求**成词**（见 `hasInfraHint`）：`log` 这四个字母在中文业务仓里同时是
-  博客（Blog）、登录（Login）、目录（Catalog）、对话（Dialog）、逻辑（Logic）的一部分，
-  纯 substring 判据把这些整片判成了日志设施（2026-10-05 实测 dianping 8 个文件、Xingyan 0 个）。
+  设施类词：命中即认作「与外部世界或运行环境打交道」。粗分类，宁可漏判也不把业务逻辑误判成设施，
+  因此只收公认的设施名，不收 `core`/`util` 这类泛词。
   `export` 只为诊断脚本（`src/scripts/tier-diag.ts`）能复算命中位置，生产判据走 `hasInfraHint`。
 */
 export const INFRA_HINTS = [
@@ -120,9 +111,8 @@ export const INFRA_HINTS = [
 ];
 
 /**
-  以设施词开头、但在业务代码里另有常见含义的词元，逐个有实测来源：
-  `login`/`logout`（登录登出，dianping 的 `LoginFormDTO`）、`logic`/`logical`（业务逻辑）。
-  注意 `store`（门店 vs 存储）没法进这张表——挡了它就等于挡掉真正的存储层，只能留着当已知残留。
+  以设施词开头、但在业务代码里另有常见含义的词元：`login`/`logout`（登录登出）、`logic`/`logical`（业务逻辑）。
+  `store`（门店 vs 存储）不进这张表——挡了它就等于挡掉真正的存储层，只能留着当已知残留。
 */
 const INFRA_FALSE_TOKENS = new Set(["login", "logins", "logout", "logouts", "logic", "logical"]);
 
@@ -140,19 +130,17 @@ function fileNameTokens(path: string): string[] {
 }
 
 /**
-  设施名要**成词**才算，且只看文件名（不看目录名）。两刀都是实测逼出来的：
-  - 子串判据把博客（Blog）、登录（Login）、目录（Catalog）、对话（Dialog）全判成日志设施
-    （2026-10-05 实测 dianping 8 个文件误判）；
-  - 只看词头又挡不住 `PayLog`（流水）与 `HmacAuthFilter` 所在模块目录 `sl-gateway` 的 `gateway`——
-    **目录名会一次判倒一整摞文件**，而一个类是不是设施该由它自己的名字说（2026-10-06 复审确证）。
-  代价照实说：只靠目录表达设施身份的 `.../gateway/HealthCheck.java` 这类会漏判（按名字落到支撑），
-  宁可漏判也不错误影响一片；`store`（门店 vs 存储）与 `log`（日志 / 流水）没法两全，留着当已知残留。
+  设施名要成词才算，且只看文件名、不看目录名：
+  子串判据会把博客（Blog）、登录（Login）、目录（Catalog）、对话（Dialog）判成日志设施；
+  只看词头又挡不住 `PayLog`（流水），而目录名会一次判倒一整摞文件——一个类是不是设施该由它自己的名字说。
+  代价：只靠目录表达设施身份的 `.../gateway/HealthCheck.java` 这类漏判（按名字落到支撑）；
+  `store`（门店 vs 存储）与 `log`（日志 vs 流水）无法两全，留作已知残留。
 */
 function hasInfraHint(path: string): boolean {
   return infraHintOf(path).hint !== undefined;
 }
 
-/** 命中在哪个设施名上、文件名有哪些词元。`export` 只为诊断脚本与生产判据共用同一把度量，别在脚本里另写一份。 */
+/** 命中在哪个设施名上、文件名有哪些词元；供诊断脚本与生产判据共用同一把度量。 */
 export function infraHintOf(path: string): { hint?: string; tokens: string[] } {
   const tokens = fileNameTokens(path);
   return { hint: INFRA_HINTS.find((candidate) => tokens.some((token) => token.startsWith(candidate) && !INFRA_FALSE_TOKENS.has(token))), tokens };
@@ -182,9 +170,8 @@ export function roleOf(roles: Map<string, FileRole>, path: string): FileRole {
 }
 
 /**
-  从索引文件清单与依赖图拼出结构输入。
-  单独收在这里是因为 `DependencyGraph.imports` 是 Map、而结构输入要普通对象——
-  这层转换若散在各调用点，早晚会有一处漏转或转错。
+  从索引文件清单与依赖图拼出结构输入：`DependencyGraph.imports` 是 Map，结构输入要普通对象，
+  这层转换收在一处，免得散在各调用点漏转或转错。
 */
 export function fileStructureOf(
   files: FileStructure["files"],

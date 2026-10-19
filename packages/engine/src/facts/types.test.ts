@@ -4,9 +4,9 @@ import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
 import { analyzeFile } from "./index.js";
 
 /**
-  类型关系的回归。要拦的事故有两个：
-  1. **把标量与内置类型当成项目类型**收进表里（那样每个仓都会有一堆 `int`→`int` 的假边）；
-  2. **落点猜错还不说**：同名类型必须报 `ambiguous`，查不到就什么都不写。
+  两个方向：
+  1. 标量与内置类型不能当项目类型收进表里（否则每个仓都有一堆 `int`→`int` 的假边）。
+  2. 落点不能猜错还不说：同名类型必须报 `ambiguous`，查不到就什么都不写。
 */
 
 beforeAll(async () => {
@@ -120,7 +120,7 @@ describe("类型关系", () => {
       "}"
     ], "s.rs");
     expect(declared(fact, "Repo").kind).toBe("struct");
-    // `items: Vec<Kit>`：字段类型是 Vec，Kit 是它的泛型实参——两格分开记，不糊成「字段指向 Kit」
+    // `items: Vec<Kit>`：字段类型是 Vec，Kit 是它的泛型实参，两格分开记
     expect(kindsOf(declared(fact, "Repo"))).toEqual(expect.arrayContaining(["field:Vec", "generic-argument:Kit"]));
     const impl = fact.find((item) => item.name === "Repo" && item.relations.some((edge) => edge.kind === "implements"));
     expect(impl?.relations.map((edge) => `${edge.kind}:${edge.to}`)).toContain("implements:Greetable");

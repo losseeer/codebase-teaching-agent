@@ -8,7 +8,7 @@ import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/prov
 import { architectureInputOf, generateArchitectureCached, peekCachedArchitecture, aggregateModuleEdges } from "./architecture.js";
 
 /**
-  分层产物这层的测试全围着一条线打转：**模型只许动判断题**。
+  分层产物这层的测试全围着一条线打转：模型只许动判断题。
   所以每个用例都同时断言两件事——层怎么分（可以是模型说的），以及箭头/外部栏的数（只能是算出来的，模型说什么都不算）。
 */
 const INDEX = {
@@ -41,7 +41,7 @@ function analysisOf(externals?: Record<string, string[]>): RepositoryAnalysis {
       imports: { "src/api.ts": ["src/core.ts"], "src/core.ts": ["src/db.ts"], "src/db.ts": [] },
       calls: [], symbols: [], entrypoints: [{ path: "src/api.ts", line: 1, label: "HTTP 路由 (Express)：/x" }],
       semanticBackend: "static", lspStatus: [],
-      // 没传就**不带这个节点**：旧产物缺这个节点是「还没采」，与「采了但没有」是两条不同的读数
+      // 没传就不带这个节点：产物缺这个节点是「还没采」，与「采了但没有」是两条不同的读数
       ...(externals ? { externals } : {})
     },
     implementations: [], quality: { generatedAt: "2026-10-16T00:00:00.000Z", micro: [], macro: [] }
@@ -143,7 +143,7 @@ describe("generateArchitectureCached", () => {
     const { provider } = providerReturning(JSON.stringify({ layers: [{ name: "接入", duty: "d", modules: ["module:src/api", "module:src/core"] }, { name: "数据", duty: "d", modules: ["module:src/db"] }] }));
     const moved = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider, overrides: { moduleLayer: { "module:src/core": "数据" }, layerRenames: { 接入: "入口层" } } });
     expect(moved.layers.find((layer) => layer.name === "入口层")?.moduleIds).toEqual(["module:src/api"]);
-    // 挪进来的那个节点按**节点原有顺序**排，不是追加到末尾：顺序只影响读图，不做任何「谁在上谁在下」的宣称
+    // 挪进来的那个节点按节点原有顺序排，不是追加到末尾：顺序只影响读图，不做任何「谁在上谁在下」的宣称
     expect(moved.layers.find((layer) => layer.name === "数据")?.moduleIds).toEqual(["module:src/core", "module:src/db"]);
     expect(moved.overriddenUnits, "标记只落在被点名挪走的那个节点：收留它的「数据」层里其余节点没被动过").toEqual(["module:src/core"]);
     expect(moved.layers.find((layer) => layer.name === "入口层")?.overridden, "改名落在层上").toBe(true);
@@ -180,7 +180,7 @@ describe("generateArchitectureCached", () => {
       expect(complete, "人工修正是覆盖，不是新证据：不许因此重问").toHaveBeenCalledTimes(1);
       expect(moved.source).toBe("llm");
       expect(moved.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["入口层", ["module:src/api"]], ["数据", ["module:src/core", "module:src/db"]]]);
-      // ② 落盘的必须是**未叠修正的原判**：把修正烤进缓存，下一次读会再叠第二遍，改名那类修正当场就对不上号了
+      // ② 落盘的必须是未叠修正的原判：把修正烤进缓存，下一次读会再叠第二遍，改名那类修正当场就对不上号了
       const bare = await generateArchitectureCached(input);
       expect(complete).toHaveBeenCalledTimes(1);
       expect(bare.layers.map((layer) => [layer.name, layer.moduleIds])).toEqual([["接入", ["module:src/api", "module:src/core"]], ["数据", ["module:src/db"]]]);
@@ -223,11 +223,9 @@ describe("generateArchitectureCached", () => {
 
   it("输入构造收成一处：存的课程树没带 tier 也要实时计算，读侧与写侧算的是同一个键", async () => {
     /**
-      这条是 2026-10-16 浏览器实测留下的回归位。`/overlays/apply` 以前自己拼了一遍输入、少叠 `annotateModuleTiers`，
-      于是 payload 里每个模块的 tier 都成 periphery ⇒ 算出的键和读侧不是同一个 ⇒ peek 读不到判好的那份 ⇒
-      校验层名时只认得「外围」，真仓上每一次拖动都被自己的校验拒成 422。
-      现在四个入口共用 `architectureInputOf`，就按「存的树不带 tier」这个真实形状验两边同键。
-      */
+      输入少叠一次 `annotateModuleTiers` 就会让每个模块的 tier 都成 periphery、两侧算出不同的键，
+      peek 读不到判好的那份、校验层名只认得「外围」。这里按「存的树不带 tier」这个真实形状验读侧与写侧同键。
+    */
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-input-")));
     const database = new TutorDatabase(dir);
     try {
@@ -279,9 +277,8 @@ describe("aggregateModuleEdges", () => {
   });
 
   it("撤掉落空的修正之后横幅要跟着消失：读时实时计算的读数不许住在缓存行里", async () => {
-    /* 10-17 真实现场：dianping-backend 撤掉「把 service 挪进业务编排」之后，界面仍报「1 处人工修正这次没生效」。
-       根因是重判那一刻修正还挂着，落盘的缓存行把 `lostOverrides` 一起烤了进去，而读侧只在「这次也算出落空」
-       时才覆写这个节点 ⇒ 撤干净之后，旧值从 `...stored.value` 漏出来继续点亮横幅。 */
+    /* 落空读数必须每次覆写：重判那一刻修正还挂着，缓存行会把 `lostOverrides` 一起烤进去；
+       读侧只在「这次也算出落空」时才覆写，撤干净之后旧值就从 `...stored.value` 漏出来继续点亮横幅。 */
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "tutor-arch-unlost-")));
     const database = new TutorDatabase(dir);
     try {
@@ -289,7 +286,7 @@ describe("aggregateModuleEdges", () => {
       await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: first.provider, database });
       const overrides = { moduleLayer: { "module:src/core": "业务编排" } };
       const second = providerReturning(JSON.stringify({ layers: [{ name: "接口", duty: "d", modules: ["module:src/api", "module:src/core"] }, { name: "存储", duty: "d", modules: ["module:src/db"] }] }));
-      // 重判发生在修正还挂着的时候 ⇒ 这一发把落空读数写进了缓存行（旧写法）
+      // 重判发生在修正还挂着的时候：这一发会把落空读数写进缓存行
       await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: second.provider, database, force: true, overrides });
       const stale = await generateArchitectureCached({ ...base, analysis: analysisOf(), provider: second.provider, database, overrides });
       expect(stale.lostOverrides?.map((loss) => loss.module), "修正对不上层名时如实报落空").toEqual(["module:src/core"]);
@@ -312,9 +309,9 @@ describe("aggregateModuleEdges", () => {
 });
 
 /**
-  压缩流水线的形状（2026-10-16 用户定：没用的模块就是删除，能合的就合，剩下的才折叠）。
+  压缩流水线：没用的模块直接删除，能合的就合，剩下的才折叠。
   夹具刻意做成「三个同父小模块 + 一个入口 + 一个被四处引用的底座 + 一个没人理的造数脚本」：
-  前三个节点该合成一块，最后一个节点该整个消失，而这一切都发生在**问模型之前**。
+  前三个节点该合成一块，最后一个节点该整个消失，而这一切都发生在问模型之前。
 */
 function deepCourse(): CourseTree {
   const leaf = (id: string, title: string, paths: string[], tier: "core" | "facility" | "periphery") => ({

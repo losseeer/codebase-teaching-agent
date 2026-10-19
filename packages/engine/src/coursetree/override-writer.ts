@@ -4,14 +4,12 @@ import type { TutorDatabase } from "../store/database.js";
 import { id } from "../identity.js";
 
 /**
-  人工修正的**唯一落地处**。GUI 的拖动与 Agent 的 `set_architecture` 工具都走到这里，
-  校验、写盘、审计、通知四步一次做完——两条写路径各写一套是这套东西最容易失效的地方
-  （界面改成功、工具改失败，或反之，用户只会看到「我明明改了」）。
+  人工修正的唯一落地处。GUI 的拖动与 Agent 的 `set_architecture` 工具都走到这里，
+  校验、写盘、审计、通知四步一次做完——两条写路径各写一套最容易失效（界面改成功、工具改失败，用户只会看到「我明明改了」）。
 
-  ⚠️ 这个模块的输入形状是**白名单**：只有下面四种意图能表达出来，
-  所以「模型说把这条箭头删掉」「给这个仓加一个模块」这类要求在类型层面就没有落点，
-  不是运行时要拦截的漏洞，而是压根写不出这个动作。工具层还要再挡一次（未知字段拒写），
-  两层挡的是同一件事：`set_architecture` 是全仓第一个有副作用的工具。
+  这个模块的输入形状是白名单：只有下面四种意图能表达出来，
+  所以「模型说把这条箭头删掉」「给这个仓加一个模块」这类要求在类型层面就没有落点，不是运行时要拦截的漏洞。
+  工具层还要再挡一次（未知字段拒写），两层挡的是同一件事：`set_architecture` 是全仓第一个有副作用的工具。
 */
 
 const TIER_VALUES = ["core", "facility", "periphery"] as const;
@@ -25,11 +23,11 @@ export interface OverrideContext {
   repositoryId: string;
   /** 校验模块 id 用：id 必须真的在课程树的模块地图里。 */
   course: CourseTree;
-  /** 校验层名用：来自当前产物（缓存里那份或静态三层），**不会**为此发模型请求。 */
+  /** 校验层名用：来自当前产物（缓存里那份或静态三层），不会为此发模型请求。 */
   layers: string[];
   /**
     校验节点 id 用：图上现在的节点清单（原子块 + 组合节点）。
-    为什么要带上组合节点：agent 读到的架构图就是这些块，`arch:...` 是它手里唯一的 id；
+    必须带上组合节点：agent 读到的架构图就是这些块，`arch:...` 是它手里唯一的 id，
     只认课程树的原子模块 id 会把「把这几个小目录整体挪走」当成非法输入。
   */
   blocks?: ArchitectureBlockBrief[];
@@ -40,7 +38,7 @@ export interface OverrideContext {
 
 export type OverrideVia = "gui" | "agent";
 
-/** 一句给模型/界面看的话：**实际落盘之后**的状态，不是意图。 */
+/** 一句给模型/界面看的话：实际落盘之后的状态，不是意图。 */
 export interface OverrideOutcome {
   ok: boolean;
   text: string;
@@ -72,7 +70,7 @@ function currentLayerOf(overlays: RepositoryOverlays, moduleId: string): string 
 }
 
 /**
-  执行一次人工修正。任何一步校验不过都**不动盘**，并把原因原样返回调用方
+  执行一次人工修正。任何一步校验不过都不动盘，并把原因原样返回调用方
   （工具那条路会把这句话回传给模型，所以句子要能指导下一步：说要什么、不给什么）。
 */
 export function commitOverride(context: OverrideContext, intent: OverrideIntent, via: OverrideVia): OverrideOutcome {
@@ -108,7 +106,7 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
   }
 
   if (intent.kind === "set_tier") {
-    // 档位是**原子模块**那个节点的属性（分级层按模块的文件算），组合节点没有档：这里不收 `arch:` id，报错要说出该改谁
+    // 档位是原子模块那个节点的属性（分级层按模块的文件算），组合节点没有档：这里不收 `arch:` id，报错要说出该改谁
     if (blocksById.has(intent.module) && !known.has(intent.module)) return refuse(`「${intent.module.slice(0, 60)}」是合并出来的节点，没有档位：请逐个模块 id 改`);
     if (!known.has(intent.module)) return refuse(`模块 id「${intent.module.slice(0, 60)}」不在当前课程树的模块地图里`);
     if (!TIER_VALUES.includes(intent.tier)) return refuse(`档只有三档：${TIER_VALUES.join(" / ")}`);
@@ -128,13 +126,12 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
 
   if (intent.kind === "reset") {
     /**
-      撤法只有三种，写侧必须各自有落点（2026-10-16 补第二种）：
+      撤法只有三种，写侧必须各自有落点：
       - 给 `module`：只撤那个节点的归层与改档；
       - 给 `layerRename`（原层名或改成的名字都认）：只撤一条层名改名，指着新名字的归层写回旧名字；
       - 两个都不给：把这个仓的修正一次清空。
-      以前只有第一与第三种，「带着改名来撤」会因为没有 module 而**掉进第三种**——用户想撤一条改名，结果全清。
-      这个节点是全仓唯一会一次清除多处修正的动作，认不出目标就拒，不退成全清。
-      */
+      这是全仓唯一会一次清除多处修正的动作，认不出目标就拒，不退成全清。
+    */
     const rename = intent.layerRename?.trim();
     const renames = overlays.architecture?.layerRenames ?? {};
     const matched = rename ? Object.entries(renames).filter(([from, to]) => from === rename || to === rename) : [];
@@ -150,7 +147,7 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
       })
       : clearOverlays(context.database, context.repositoryId);
     context.journal.append("architecture_layer_overridden", { correction_id: id(), action: "reset", module: intent.module ?? null, layer_rename: rename ?? null, via });
-    // 撤销顺带撤掉的可能不止归层：旧读数以 `restored:true` 分「改档」与「恢复」，这里只在**真有一处档位被撤掉**时补一行——
+    // 撤销可能顺带撤掉改档：`restored:true` 分「改档」与「恢复」两种读数，只在真有一处档位被撤掉时补一行，
     // 没撤也记会让恢复数虚高。
     const clearedTiers = intent.module ? (clearedTier ? [intent.module] : []) : Object.keys(overlays.modules?.tier ?? {});
     for (const moduleId of clearedTiers) {
@@ -176,7 +173,7 @@ export function commitOverride(context: OverrideContext, intent: OverrideIntent,
 }
 
 /**
-  把工具传回的参数原语翻成 `OverrideIntent`。**没列出来的字段一律不看**——
+  把工具传回的参数原语翻成 `OverrideIntent`。没列出来的字段一律不看：
   模型在参数里塞 `edges` / `paths` / `add_module` 之类时，这里既不报错也不采纳，
   只在回给模型的话里提一句「多余字段已忽略」，让它知道边界在哪。
 */

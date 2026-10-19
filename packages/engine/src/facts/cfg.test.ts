@@ -4,9 +4,8 @@ import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
 import { buildFileCfg } from "./cfg.js";
 
 /**
-  控制流图的回归。要拦的事故只有一个：**图上画的走向与源码的走向不一致**。
-  所以每条断言都问「这条边在源码里真的走得通吗」，而不是问块数对不对——
-  块数会因为多开一个汇合块而变，走不通的边却永远是错的。
+  每条断言只问「这条边在源码里真的走得通吗」，不问块数：
+  多开一个汇合块就会改块数，走不通的边却永远是错的。
 */
 
 beforeAll(async () => {
@@ -226,7 +225,7 @@ function graphOf(path: string, code: string, name: string): CfgFunction {
   return graph;
 }
 
-/** 每张图都要过的形状自检：图自己不矛盾，才有资格谈对不对。 */
+/** 每张图都要过的形状自检：id 唯一、边不悬空、除死代码外都能从入口走到。 */
 function expectWellFormed(graph: CfgFunction): void {
   const ids = graph.blocks.map((block) => block.id);
   expect(new Set(ids).size, `${graph.name}：块 id 不能重复`).toBe(ids.length);
@@ -247,8 +246,7 @@ function expectWellFormed(graph: CfgFunction): void {
 }
 
 describe("逐语言的构造覆盖", () => {
-  // 样例源码放在模块层，**建图必须留在 it 里面**：describe 体在收集阶段就跑，
-  // 那时 `beforeAll` 的语法解析器还没加载，建出来的图全是「语法树不可用」
+  // 样例源码放模块层，建图必须留在 it 里面：describe 体在收集阶段就跑，那时 beforeAll 的解析器还没加载
   const PYTHON = lines(
     "def pick(a):",
     "    if a:",

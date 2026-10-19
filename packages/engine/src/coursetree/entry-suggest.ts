@@ -10,18 +10,18 @@ import { themeTokens, tokenHits, wordsOf } from "../text/lexical.js";
 
 /**
   教学模块「推荐入口」的 LLM 选择层（纯推荐，不改课程树结构）。两段调用：
-  - 主题翻译层（P1，2026-09-20）：中文模块主题 → 本仓库里对应的英文检索词（路径段/标识符），
-    一次性、按主题+仓库指纹缓存——真仓实测证明中文概念词对英文业务仓的词法命中≈0（诊断见开发日志 §7.4）。
-  - 选择层：模块主题 + 词元排序后的候选（含翻译词元）→ 最多 5 个入口；候选都不合适时允许输出空数组（P4）。
-  - 候选池不收的两种路径：测试（`isTestPath`，与结构角色同一份判据）与**任何文档**（`isDocumentationPath`）——
-    代码问答的入口必须是代码，实测 23 条选择层产出里 4 条把 README / 设计文档当成了入口（§66）。
+  - 主题翻译层：中文模块主题 → 本仓库里对应的英文检索词（路径段/标识符），一次性、按主题+仓库指纹缓存——
+    中文概念词对英文业务仓的词法命中≈0，不翻译就选不出候选。
+  - 选择层：模块主题 + 词元排序后的候选（含翻译词元）→ 最多 5 个入口；候选都不合适时允许输出空数组。
+  - 候选池不收的两种路径：测试（`isTestPath`，与结构角色同一份判据）与任何文档（`isDocumentationPath`）——
+    代码问答的入口必须是代码。
   - 失败处理：翻译失败退化为「只有原始词元」；选择层任何失败（无 provider、超时、JSON 不合法）都返回空列表
     ——但「模型主动判空」（declined）是可信答案，与失败回落区分，可以进缓存。
   - 与 refineCourseMap 共用 `TUTOR_LLM_*` 那套配置（见根目录 .env.example）
-  */
+*/
 
 const MAX_ENTRIES = 5;
-/** 送进 LLM 的候选上限（排序后截断；收集不设上限——524 个节点里只看前 40 是「不相关」的根源之一） */
+/** 送进 LLM 的候选上限（排序后截断；收集阶段不设上限）。 */
 const MAX_LLM_CANDIDATES = 15;
 const MAX_SUMMARY = 60;
 /** 主题翻译层产出的检索词上限：再多也只是给词法打分灌噪声。 */
@@ -45,8 +45,8 @@ interface Candidate {
 }
 
 /** 送入模型的实际输入：排过序的候选 + 模块主题。候选由 `suggestModuleEntriesCached` 组装（并进缓存键）。
-    `recentChanges` 是可选的「近期仓库变更」参考段（A2，09-22）：随 user 消息进、**刻意不进缓存键**，
-    与流程层同一套取舍（变更清单每次保存都刷新，进键等于每次保存重烧推荐）。 */
+    `recentChanges` 是可选的「近期仓库变更」参考段：随 user 消息进、刻意不进缓存键——
+    变更清单每次保存都刷新，进键等于每次保存都把推荐重算一遍（与流程层同一套取舍）。 */
 async function selectFromCandidates(input: { candidates: Candidate[]; moduleLabel: string; moduleHint: string; provider: LlmProvider; recentChanges?: string }): Promise<ModuleEntrySuggestion> {
   const { candidates, moduleLabel, moduleHint, provider, recentChanges } = input;
   try {
@@ -88,18 +88,17 @@ function collectCandidates(tree: CourseTree): Candidate[] {
   return candidates;
 }
 
-/** 词法命中判定的唯一实现在 `text/lexical.ts`（与 search_code 工具共用，P2 口径只维护一份）。 */
+/** 词法命中判定的唯一实现在 `text/lexical.ts`（与 search_code 工具共用同一份判据）。 */
 
 /**
-  候选按模块主题排序（2026-09-18 由「树序前 40」改语义排序；2026-09-20 补词边界与零分兜底）：
-  - 路径命中 +20、候选摘要命中 +10、**锚点文件的 L1 摘要**命中 +15——目录聚合节点的模板摘要
-    （「含 N 个可分析文件」）没有信号，文件摘要才有；这也是推荐入口在业务仓不相关的主因。
+  候选按模块主题语义排序：
+  - 路径命中 +20、候选摘要命中 +10、锚点文件的 L1 摘要命中 +15——目录聚合节点的模板摘要
+    （「含 N 个可分析文件」）没有信号，文件摘要才有。
   - 其他模块已推荐的路径 -50：跨模块去重，压「不同 chip 推荐重合」。
-  - 非零候选不足 15 时用 **boostPaths（入口点 + git 热点，调用方给）** 按序补零分候选：
-    真仓实测「语言特性」全池 0 分，旧兜底=路径字典序前 15，送进模型的是 docs/ 与 Grafana YAML——
-    字典序是纯噪声，入口/热点至少是「值得先读的代码」。boost 补位后仍不足才落字典序。
-    （负分候选不参与补位：那是去重惩罚的主动判断，不是无信号。）
-  */
+  - 非零候选不足 15 时用 boostPaths（入口点 + git 热点，调用方给）按序补零分候选：
+    纯字典序补位送进模型的是 docs/ 与配置文件，字典序是噪声，入口/热点至少是「值得先读的代码」；
+    boost 补位后仍不足才落字典序。（负分候选不参与补位：那是去重惩罚的主动判断，不是无信号。）
+*/
 export function rankEntryCandidates(
   candidates: Candidate[],
   tokens: string[],
@@ -122,7 +121,7 @@ export function rankEntryCandidates(
     return { candidate, score };
   });
   // id 决胜：同一文件里多个函数节点的相对顺序不能依赖候选的进入顺序（树遍历序一改，
-  // 排序后 top15 就变、缓存键跟着变——微观归组这类纯结构改动会白白重烧选择层）。
+  // 排序后 top15 就变、缓存键跟着变——微观归组这类纯结构改动会把选择层白重算一遍）。
   const compareScore = (left: Scored, right: Scored): number =>
     right.score - left.score || left.candidate.path.localeCompare(right.candidate.path) || left.candidate.id.localeCompare(right.candidate.id);
   const positives = scored.filter((item) => item.score > 0).sort(compareScore);
@@ -130,8 +129,8 @@ export function rankEntryCandidates(
   const zeros = scored.filter((item) => item.score === 0).sort((left, right) => left.candidate.path.localeCompare(right.candidate.path) || left.candidate.id.localeCompare(right.candidate.id));
   const boostRank = new Map(boostPaths.slice(0, MAX_BOOST_PATHS).map((path, index) => [path, index]));
   const isBoosted = (item: Scored): boolean => boostRank.has(item.candidate.path);
-  // 零分候选按 boost 优先排好队列后，**每路径限 2 个**再进池：真仓实测热点文件的十几个方法
-  // 会成块挤满 top15（同路径在字典序里相邻），模型只能看到一文件。限流后仍不足 15 时放开设限。
+  // 零分候选按 boost 优先排好队列后，每路径限 2 个再进池：热点文件的十几个方法会成块挤满 top15
+  // （同路径在字典序里相邻），模型只能看到一个文件。限流后仍不足 15 时放开设限。
   const zeroQueue = [
     ...zeros.filter(isBoosted).sort((left, right) => boostRank.get(left.candidate.path)! - boostRank.get(right.candidate.path)!),
     ...zeros.filter((item) => !isBoosted(item))
@@ -152,9 +151,8 @@ export function rankEntryCandidates(
     return { kept, overflow };
   };
   // 正分候选也限流（每路径 3 个），溢出的排到零分候选之后再补位（不设限就全丢）：
-  // 真仓实测「操作系统」的证据加权把 CacheClient / QueueConfig / UserHolder 的 5~6 个方法全顶进 top15，
-  // 模型看到的是 getUser() / removeUser() / orderDelayQueueBinding() 这种切片，按提示词
-  // 「不要琐碎工具函数」整池判空。**池子要的是覆盖面，不是同一文件的多张切片。**
+  // 加权会把同一文件的五六个方法全顶进 top15，模型看到的是 getUser() / removeUser() 这种切片，
+  // 按提示词「不要琐碎工具函数」整池判空。池子要的是覆盖面，不是同一文件的多张切片。
   const positiveCap = capPerPath(positives, 3);
   const zeroCap = capPerPath(zeroQueue, 2);
   // 正分（限流）→ 限流零分（boost 在前）→ 放开设限的溢出（正分优先）→ 被去重惩罚的负分候选垫底
@@ -164,7 +162,7 @@ export function rankEntryCandidates(
 }
 
 /* ------------------------------------------------------------------ */
-/* 主题翻译层（P1）：中文教学概念 → 本仓库英文检索词                     */
+/* 主题翻译层：中文教学概念 → 本仓库英文检索词                            */
 /* ------------------------------------------------------------------ */
 
 /** 仓库路径词指纹：全部候选路径切词后按出现频次取前 40，给翻译模型「这个仓大概用什么栈」。 */
@@ -180,7 +178,7 @@ function themeFingerprint(candidates: Candidate[]): string[] {
     .map(([word]) => word);
 }
 
-/** 选择层发给模型的固定文案（原样内联在 `selectFromCandidates` 里，2026-10-18 提到模块顶层与版本号同处）。 */
+/** 选择层发给模型的固定文案（改动由 `analysis-step.ts` 的指纹守卫拦，不必手动 bump 版本号）。 */
 const ENTRY_SYSTEM_PROMPT = [
   "你是代码教学产品的课程导览。给定一个学习模块的主题与候选代码节点列表（含文件路径、起始行与摘要），",
   `选出最适合作为该模块「推荐入口」的节点（最多 ${MAX_ENTRIES} 个）：优先选择能代表该主题的入口或主干实现，`,
@@ -200,27 +198,11 @@ const EXPAND_SYSTEM_PROMPT = [
 ].join("");
 
 /**
-  每层实际输入的口径版本，进各自缓存键（两层的键各自独立，命中率也不绑在一起）：
-  - `candidate-v2`（2026-09-20）：词边界打分 + boost 补位 + 翻译词元入池。旧键的缓存行全部作废——
-    那批「字典序前 15 喂模型」的推荐结果没有保留价值。
-  - `expand-v2`（2026-09-20）：v1 实测模型把仓库词表照抄成 controller/service/utils 泛化词，池子被结构词灌满。
-    提示词禁止泛化词后旧产出必须作废，故 bump。
-  - `candidate-v3`（2026-09-22，A2）：选择层 user 消息末尾新增可选「近期仓库变更」参考段 + 系统提示词加了对应
-    用法约束（该段本身不进键）。旧条目生成时模型看不到这一输入，翻一次键。
-  - `candidate-v4`（2026-10-01，方案 A）：学科模块（计算机网络/操作系统/语言特性）按**工程证据锚点**加权，
-    证据口径进 payload。业务主题不受影响（`discipline: null`），但同一份 payload 的解释变了，一律翻键。
-  - `candidate-v5`（2026-10-02）：学科那段系统提示词从「宁可少选」改成「一个都不沾边才输出空数组」——
-    前一版把 os/lang 整池判空收紧了（真仓实测：同一份候选，措辞一改就从 5 条变 0 条）。提示词不在缓存键里，
-    这类收紧只能靠版本号翻键。
-  - `candidate-v6`（2026-10-02，取消知识模块）：学科证据锚点整套撤掉（模块改由课程树「模块地图」派生，
-    业务名字本身就是最好的检索词）。payload 里去掉 `discipline` 字段，旧键全部作废。
-  「文档不当入口」（2026-10-16）**刻意不 bump 版本号**：文档节点是在组装候选池时被剔除的，只要一份旧记录真推过文档，
-  那个文档当时就在送进模型的 top-15 里 ⇒ 池子一变 payload 就变 ⇒ 键自己就失效，不需要版本号代劳。
-  翻版本反而会把从没沾过文档的模块也重烧一遍（那是花钱买一次已经免费的作废）。
-
-  2026-10-18 起这条纪律换了执行方式：两段提示词的文案改动由指纹守卫拦（见 `analysis-step.ts`），
-  改文案会当场测试红，不再依赖「记得顺手 bump」；版本号因此只留给**不进提示词也不进 payload** 的那类失效——
-  比如 `rankEntryCandidates` 的打分权重（代码里，模型看不见）与截断条数的语义。
+  每层实际输入的口径版本，进各自缓存键（两层的键各自独立，命中率也不绑在一起）。
+  版本号只留给不进提示词也不进 payload 的那类失效——比如 `rankEntryCandidates` 的打分权重
+  （写在代码里，模型看不见）与截断条数的语义。
+  两段提示词的文案改动由 `analysis-step.ts` 的指纹守卫拦，改文案会当场测试红，不靠手动 bump；
+  候选池成员增删会改变 payload，键自己就失效，也不需要版本号代劳。
 */
 const ENTRY_STEP = defineAnalysisStep({ layer: "entry-suggest", contractVersion: "candidate-v6", prompts: [ENTRY_SYSTEM_PROMPT] });
 const EXPAND_STEP = defineAnalysisStep({ layer: "entry-expand", contractVersion: "expand-v2", prompts: [EXPAND_SYSTEM_PROMPT] });
@@ -272,7 +254,7 @@ async function expandThemeTokensCached(input: { repositoryId: string; moduleLabe
     input.database?.putLayerCache(key, record); // 「[]」是合法答案（该主题在本仓无对应代码），同样落盘
     return { ...record, usage: response.usage };
   } catch (error) {
-    // 翻译失败不致命：退化为只用原始词元打分（≈ P1 之前的行为），且**不缓存**，下次重试
+    // 翻译失败不致命：退化为只用原始词元打分，且不缓存，下次重试
     console.error("[entry-suggest] 主题翻译调用失败，本次跳过扩展词:", error instanceof Error ? error.message : error);
     return { tokens: [] };
   }
@@ -297,13 +279,13 @@ function parseExpansionTokens(text: string): string[] | undefined {
 /* 选择层结果缓存（三级：内存 → SQLite → 计算）                          */
 /* ------------------------------------------------------------------ */
 
-/** 推荐入口结果缓存：键 = 层名 + 仓库 + **本层实际输入**（模块主题 + 排好序的候选，含翻译词元的效果）。
-    GUI 每次进入教学页都会触发该请求，实测同一输入反复计费（8 次调用 2/3 输入完全相同）。
+/** 推荐入口结果缓存：键 = 层名 + 仓库 + 本层实际输入（模块主题 + 排好序的候选，含翻译词元的效果）。
+    GUI 每次进入教学页都会触发该请求，同一输入不该反复计费。
     非空结果与「模型主动判空」（declined）都缓存——后者是可信答案；只有失败回落的空列表不缓存，
     否则会把一次网络抖动固化成永久无推荐。键里带上候选清单本身（含去重与 boost 的效果），
-    「输入相同 ⇒ 模型看到的问题相同 ⇒ 可直接复用」这一条不需要额外论证。
-    唯一的例外是「近期仓库变更」参考段（A2，09-22）：随 user 消息进、不进键——变更清单每次保存都刷新，
-    进键等于每次保存把全仓推荐重烧一遍；它只影响证据相当的候选之间的取舍，命中的旧推荐不算错答。 */
+    输入相同就意味着模型看到的问题相同，可直接复用。
+    唯一的例外是「近期仓库变更」参考段：随 user 消息进、不进键——变更清单每次保存都刷新，
+    进键等于每次保存把全仓推荐重算一遍；它只影响证据相当的候选之间的取舍，命中的旧推荐不算错答。 */
 interface EntryRecord {
   entries: SuggestedEntry[];
   declined?: boolean;
@@ -332,7 +314,7 @@ function trimToNewest<Key, Value>(map: Map<Key, Value>, max: number): void {
 }
 
 /** 清空内存态缓存与去重记录：供测试隔离回合间状态（也用来模拟 engine 重启，验证 SQLite 持久层）。
-    换仓/卸载路径**不**调它——两者都已按 `repositoryId` 分键，跨仓库不会串味，且都有 TTL + 条数上限。 */
+    换仓/卸载路径不调它——两者都已按 `repositoryId` 分键，跨仓库不会串味，且都有 TTL + 条数上限。 */
 export function clearModuleEntryCache(): void {
   entryCache.clear();
   expandCache.clear();
@@ -350,11 +332,11 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
   const pool = collectCandidates(input.tree);
   const fileSummaries = input.fileSummaries ?? new Map<string, string>();
   /**
-    翻译层在选择层之前，所以它这一轮花掉的钱必须在**所有**出口都带出去（含下面两处缓存命中）。
+    翻译层在选择层之前，所以它这一轮花掉的钱必须在所有出口都带出去（含下面两处缓存命中）。
     两层的命中率并不绑在一起：选择层的行还在内存里、翻译层的行已经过期的形状是真实存在的。
-    以前命中缓存就只回列表，server 侧 `if (suggestion.usage)` 一条 token_usage 都不记 ⇒ 花了钱而账面看不见
-    （同 §36.6、§37.4 那条纪律）。两层都命中时 `expansion.usage` 本来就是 undefined，带出去也是 undefined，不会凭空多出读数。
-    */
+    命中缓存只回列表、不带 usage，server 侧的 `if (suggestion.usage)` 就一条 token_usage 都不记，
+    花了钱而账面看不见。两层都命中时 `expansion.usage` 本来就是 undefined，带出去也不会凭空多出读数。
+   */
   const expansion = await expandThemeTokensCached({ repositoryId: input.repositoryId, moduleLabel: input.moduleLabel, moduleHint: input.moduleHint, fingerprint: themeFingerprint(pool), provider: input.provider, database: input.database });
   const tokens = [...themeTokens(input.moduleLabel, input.moduleHint), ...expansion.tokens];
   const candidates = rankEntryCandidates(pool, tokens, fileSummaries, avoidPaths, input.boostPaths ?? []);
@@ -373,7 +355,7 @@ export async function suggestModuleEntriesCached(input: { repositoryId: string; 
     input.database?.touchLayerCache(key, now);
     return { ...hit.value, ...(expansion.usage ? { usage: expansion.usage } : {}) };
   }
-  // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重烧（与流程层同一套机制）
+  // 内存过期/缺失时查 SQLite：engine 重启会清空内存层，持久层让重启不重算（与流程层同一套机制）
   const stored = input.database?.getLayerCache<EntryRecord>(key);
   if (stored && now - stored.at < ENTRY_PERSISTED_TTL_MS && (stored.value.entries.length || stored.value.declined)) {
     entryCache.set(key, { value: stored.value, at: now });
@@ -413,7 +395,7 @@ function pickEntries(text: string, candidates: Candidate[]): { entries: Suggeste
     return { entries: [], declined: false };
   }
   if (!Array.isArray(parsed)) return { entries: [], declined: false };
-  // 解析成功且模型明确给了空数组 = 主动判空（P4 的拒绝出口）；条目全被过滤掉不算（那是坏输出）
+  // 解析成功且模型明确给了空数组 = 主动判空（拒绝出口的契约）；条目全被过滤掉不算（那是坏输出）
   if (parsed.length === 0) return { entries: [], declined: true };
   const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   const entries: SuggestedEntry[] = [];

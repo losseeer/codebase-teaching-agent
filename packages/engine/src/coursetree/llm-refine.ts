@@ -11,30 +11,28 @@ export interface CourseMapRefinement {
 /**
   宏观设计的 LLM 完善层（用户可见的命名/摘要质量，结构仍由静态分析锚定）：
   - 输入：启发式课程树 + 文件摘要；把 root 与深度 ≤3 的节点提纲交给 LLM
-  - 覆盖预算分批自适应：每批 ≤40 个节点、最多 3 批（120 节点）；DFS 顺序在前者优先
-    （root / workflows / modules / micro 概述与函数节点先入队，超预算截断发生在长尾）
-  - 输出：同名节点的中文标题（≤18 字）与摘要（≤60 字）；**不改 id / anchors / 树结构**
-  - 失败只损失所在批次：单批超时 / JSON 不合法跳过该批继续下一批；全部失败原样返回输入树 —— 导入永不因 LLM 失败而中断
-  - 禁用「工作流 N」这类模板命名（engine 侧已改用路径命名，LLM 层进一步语义化）
+  - 覆盖预算分批自适应：每批 ≤40 个节点、最多 3 批（120 节点）；DFS 顺序在前者优先，超预算截断发生在长尾
+  - 输出：同名节点的中文标题与摘要（上限见 `MAX_TITLE` / `MAX_SUMMARY`）；不改 id / anchors / 树结构
+  - 失败只损失所在批次：单批超时 / JSON 不合法跳过该批继续下一批；全部失败原样返回输入树——导入永不因 LLM 失败而中断
+  - 禁止「工作流 N」这类序号模板命名
 
-  Config（见根目录 .env.example）：
-  - 走轻任务角色（同一套 TUTOR_LLM_* 配置、思考强制 off；2026-09-18 前是 light/teaching 双档配置）
-  */
+  Config（见根目录 .env.example）：走轻任务角色（同一套 TUTOR_LLM_* 配置、思考强制 off）。
+*/
 
 const MAX_DEPTH = 3;
 const BATCH_SIZE = 40;
 const MAX_BATCHES = 3;
-/** 标题上限：18 会把 `应用配置 application.yml`、`Grafana 大盘 provisioning` 这类「中文职责 + 真实名」的写法从中间切断（真仓就切出了 `provisi`）。 */
+/** 标题上限：18 会把 `应用配置 application.yml`、`Grafana 大盘 provisioning` 这类「中文职责 + 真实名」的写法从中间切断。 */
 const MAX_TITLE = 24;
 const MAX_SUMMARY = 60;
 /** 每批输出预算：40 条 × (key+标题+摘要) ≈ 2800 token；推理模型的思考余量由 provider 层统一加。 */
 const BATCH_MAX_TOKENS = 3_200;
 
 /**
-  模型偶尔越界，这里兜底收长——但**收法**决定可读性：
+  模型偶尔越界，这里统一收长——收法决定可读性：
   - 代码标识符 / 文件名（`buildIndexSettings()`、`application.yml`）原样保留：切一半的符号名比超长标题糟得多；
   - 散文标题按空格 / 括号 / 斜杠边界收，收不下才带省略号（绝不切进单词中间）。
-  */
+*/
 function fitTitle(title: string): string {
   if (title.length <= MAX_TITLE) return title;
   if (!/\s/.test(title)) return title;
@@ -77,12 +75,8 @@ const REFINE_SYSTEM_PROMPT = [
 
 /**
   润色层的输入口径版本，写进 `settings.refinement` 标记（见 `importer/importer.ts` 的 `refinementIsFresh`）。
-  `refine-v3`（2026-10-02）：标题长度上限 18 → 24 + 边界式收长（不再从中间切断符号名），
-  并且标题口径改成「不了解本仓库业务的学习者也看得懂」。
-
-  2026-10-18 起「`REFINE_SYSTEM_PROMPT` 或长度阈值改了要同步 bump」这条纪律换了执行方式：
-  文案与插值进文案的 `MAX_TITLE`/`MAX_SUMMARY` 由指纹守卫拦（见 `analysis-step.ts`）。
-  仍然只有版本号管得了的是**不进文案也不进提纲**的那一类：`MAX_DEPTH`/`BATCH_SIZE` 之外的组装规则。
+  文案与插值进文案的 `MAX_TITLE`/`MAX_SUMMARY` 由指纹守卫拦（见 `analysis-step.ts`），改文案不必手动 bump。
+  版本号只管得了不进文案也不进提纲的那一类：`MAX_DEPTH`/`BATCH_SIZE` 之外的组装规则。
   首次带新版本的运行会让旧标记的仓库重润一次，属预期。
 */
 export const REFINE_STEP = defineAnalysisStep({ layer: "coursemap-refine", contractVersion: "refine-v3", prompts: [REFINE_SYSTEM_PROMPT] });
@@ -107,13 +101,12 @@ export async function refineCourseMap(tree: CourseTree, provider: LlmProvider): 
   const renames = new Map<string, NodeRename>();
   let usage: LlmUsage | undefined;
   /**
-    至少有一批**解析成功**（哪怕是模型主动交来空数组）：这一次润色真的跑完了，
+    至少有一批解析成功（哪怕是模型主动交来空数组）：这一次润色真的跑完了，
     调用方据此写 `settings.refinement` 标记、并把 usage 记进 token_usage。
-    全批都是「抛错」或「读不出 JSON」时不算跑完：那时 usage 照旧不交，下次导入继续重试
-    （同 §2.8「确定性结论入缓存、瞬时失败重试」，也同本函数「失败原样返回输入树」的既有承诺）。
-    为什么不能只看 `renames.size`：模型按提示词把推断不出的节点全部省略时会交来空数组——
-    钱已经花了，既不记账也不写标记，于是每次导入都重付一遍，而账面看不见。
-    */
+    全批都是「抛错」或「读不出 JSON」时不算跑完：那时 usage 照旧不交，下次导入继续重试。
+    判据不能只看 `renames.size`：模型按提示词把推断不出的节点全部省略时交来空数组，
+    这一发已经计费，不记账就会每次导入重付一遍而账面看不出来。
+   */
   let parsed = false;
   const batches: OutlineEntry[][] = [];
   for (let offset = 0; offset < outline.length; offset += BATCH_SIZE) {

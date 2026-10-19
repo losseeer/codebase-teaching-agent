@@ -1,19 +1,12 @@
 import type { CallEdge, SymbolInfo } from "@codebase-tutor/shared";
 
 /**
-  文件内符号的排序——凡是「每文件只能留若干个符号」的地方都用这一份口径，
-  避免流程证据与摘要切片各自排序、结果不一致。
+  文件内符号排序的统一口径：凡「每文件只留若干个符号」的地方都共用它，避免各处各排一份导致结果不一致。
 
-  排序用两根轴：
-  ① 被**入口文件**直接调用（`CallEdge.callerPath` 落在传入的入口集合里，执行链路上最近的一跳）；
-  ② 符号级调用入度（`CallEdge.calleeSymbol` 精确到符号 id，不是按名字匹配）。
-  最后回到声明序 + 名字，保证同输入同输出。
-
-  入口轴优先于全局入度轴是有意的：对一个具体入口的执行流程来说，「这个入口用到了它」
-  比「全仓很多地方引用它」更有信息量（否则公共配置模块会挤掉真正的链路函数）。
-
-  截断前**按名字去重**：同名符号很常见（两个类各有 `__init__`），而按名字展示的地方
-  重复的名字等于白占名额。
+  排序轴：① 是否被入口文件直接调用（`CallEdge.callerPath` 落在 entryPaths 里）；② 符号级调用入度
+  （`CallEdge.calleeSymbol` 精确到符号 id，不按名字匹配）；末尾回到声明序 + 名字，保证同输入同输出。
+  入口轴优先于全局入度：对某个入口的执行流程来说，「这个入口用到了它」比「全仓很多地方引用它」更有信息量。
+  截断前按名字去重：同名符号（例如两个类各有 `__init__`）在按名字展示时重复占名额。
 */
 export function rankSymbolsByCalls(
   symbols: SymbolInfo[],
@@ -51,7 +44,7 @@ export function rankSymbolsByCalls(
   return ranked;
 }
 
-/** 每个文件的符号总数（与排序无关，用来表达「这个文件还有多少没被展示」）。 */
+/** 每个文件的符号总数：表达「这个文件还有多少没被展示」。 */
 export function countSymbolsByPath(symbols: SymbolInfo[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const symbol of symbols) counts.set(symbol.path, (counts.get(symbol.path) ?? 0) + 1);

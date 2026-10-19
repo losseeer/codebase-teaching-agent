@@ -72,8 +72,8 @@ describe("跨仓 HTTP 接缝", () => {
     roots.push(consumer.path, provider.path);
     expect(seamReportFor(consumer, provider).outbound.matched).toBe(2);
 
-    // 磁盘上把控制器删空，但戳没变：读的还是内存里那份清单——这是「按需算 + 按内容戳缓存」的既定取舍，
-    // 真实链路里删文件会让重新分析翻 versionStamp，不会长期停留在旧清单
+    // 磁盘上把控制器删空但戳没变：读的仍是内存里那份清单（按需算 + 按内容戳缓存的既定取舍）。
+    // 真实链路里删文件会触发重新分析、翻 versionStamp，不会停在过期清单上
     writeFileSync(join(provider.path, "src/main/java/com/demo/PingController.java"), "package com.demo;\n\npublic class Gone {\n}\n", "utf8");
     expect(seamReportFor(consumer, provider).outbound.matched).toBe(2);
     // 换了戳（等于重新分析过一次）：立刻按新内容重算，一条也配不上

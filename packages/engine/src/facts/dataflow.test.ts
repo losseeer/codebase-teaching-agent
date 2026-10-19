@@ -4,9 +4,8 @@ import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
 import { analyzeFile } from "./index.js";
 
 /**
-  到达定义的回归。要拦的事故是**把到不了的定义算成能到**：
-  只按「同一函数里赋过值」来报，分支与循环里就会满是假到达，而这份产物将来是拿去
-  解释「这个值是从哪来的」的，假到达直接等于讲错。
+  断言盯住「把到不了的定义算成能到」：只按「同一函数里赋过值」报，
+  分支与循环里就会满是假到达，而这份产物用来说明「这个值从哪来」。
 */
 
 beforeAll(async () => {

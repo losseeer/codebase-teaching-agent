@@ -113,7 +113,7 @@ describe("course projections", () => {
         }]
       }
     };
-    // 20 个可见文件里只有 1 个主干：旧判据会把它抬成主干，现判据按占比降回设施
+    // 20 个可见文件里只有 1 个主干：占比不过 1/4，降回设施
     const roles = new Map<string, FileRole>([
       ...many.map((path): [string, FileRole] => [path, "support"]),
       [many[0]!, "core"],
@@ -122,15 +122,15 @@ describe("course projections", () => {
     const modules = annotateModuleTiers(branches, roles, [{ path: "src/notify/Entry.java", line: 1, label: "HTTP 路由 (Spring MVC)：/notify" }]).root.children.find((item) => item.id === "modules")!.children;
     expect(modules.map((item) => `${item.id}=${item.tier}`)).toEqual(["module:big=facility", "module:withEntry=core", "module:unmapped=periphery"]);
     expect(modules[0]?.tierEvidence).toMatchObject({ visibleFiles: 20, coreFiles: 1, coreShare: 0.05, decidingPath: "src/notify/Topic0.java" });
-    // 只有路径、图里没有任何角色的模块 = 没有代码证据 = 外围。这里刻意不与 `roleOf` 的 support 回落统一（理由见 projection.ts）
+    // 只有路径、图里没有任何角色的模块 = 没有代码证据 = 外围（不与 `roleOf` 的 support 回落统一，理由见 projection.ts）
     expect(modules[2]?.tierEvidence?.visibleFiles).toBe(1);
-    // 不传入口集合时（旧引擎响应）判据只剩占比那一档：2/21 过不了 1/4，含入口的那个也落回设施
+    // 不传入口集合时判据只剩占比那一档：2/21 过不了 1/4，含入口的那个也落回设施
     const noEntry = annotateModuleTiers(branches, roles).root.children.find((item) => item.id === "modules")!.children;
     expect(noEntry.map((item) => item.tier)).toEqual(["facility", "facility", "periphery"]);
   });
 
   it("脚本型入口只说明「能自己跑」：既不把模块顶成主干，也不计入主干证据", () => {
-    // 照搬 10-06 的 dianping 实测形状：可观测性模块 4 个可见文件，其中 Grafana 自动加载用的运维脚本是入口（角色 core）
+    // 形状取自真实场景：可观测性模块 4 个可见文件，其中 Grafana 自动加载用的运维脚本是入口（角色 core）
     const branches: CourseTree = {
       ...tree,
       root: {

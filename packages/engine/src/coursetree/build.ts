@@ -6,20 +6,19 @@ import type { FileSummary } from "../summarizer/summarizer.js";
 
 /**
   目录树的「源码根」：这些名字下面一个目录就是一个有语义的包/模块
-  （`entity` / `model` / `repository` 各是独立职责），**绝不跨它们合并**——否则会得到一个
+  （`entity` / `model` / `repository` 各是独立职责），绝不跨它们合并——否则会得到一个
   `src/main` 大杂烩模块，比 20 个碎片 chip 更糟。
   */
 const SOURCE_ROOTS = new Set(["src", "lib", "app", "apps", "packages", "cmd", "internal", "source"]);
 
-/** 低于这个文件数的目录单独成模块没有讲解空间（真仓 35 个模块里 20 个只有 1 个文件）。 */
+/** 低于这个文件数的目录单独成模块没有讲解空间。 */
 const MIN_MODULE_FILES = 2;
 
 /**
-  小目录归并（精炼模块列表，2026-10-02）：只在**顶层功能区**里合并，且只有当该区域确实有 ≥2 个碎片时才合。
-  真仓实测：`observability/` 下面五个子目录各 1 个文件 → 五个几乎同名的 chip（`Grafana 大盘定义`、
-  `Grafana 大盘 provisi`、`Prometheus 抓取配置`…），学习者既看不懂也没法取舍；合并成一个
-  `observability` 模块（5 个文件）后它才是一个完整的「可观测性配置」单元。
-  反过来 `src/**` 下的单子目录（`entity`、`annotation`…）保持独立——它们是真实的包边界。
+  小目录归并：只在顶层功能区里合并，且只有该区域确实有 ≥2 个碎片时才合。
+  五个各含 1 个文件的子目录会排成五个几乎同名的 chip，学习者既看不懂也没法取舍，
+  合成一个模块后才是一个完整的讲解单元。
+  反过来 `src` 下任意深度的单子目录（`entity`、`annotation`…）保持独立——它们是真实的包边界。
   */
 function groupModuleFiles(moduleFiles: Map<string, FileEntry[]>): Map<string, FileEntry[]> {
   /** 可合并的顶层区域名；源码根、仓库根、本身就在一层的目录返回 undefined（不合并）。 */
@@ -49,21 +48,18 @@ function groupModuleFiles(moduleFiles: Map<string, FileEntry[]>): Map<string, Fi
     }
     /**
       区域名本身也可能已经是一个模块（`observability/` 下既有散文件又有若干单子目录），
-      这时必须**并进来**而不是覆盖——原写法 `merged.set(area, bucket.files)` 直接取代那个模块，
-      它自己的文件就从模块地图里凭空消失了（dianping 实测：`observability` 的三个直属文件
-      `check-queries.py` / `docker-compose.yml` / `README.md` 整批不见，156 个索引文件只剩 153 个有归属，
-      而 `check-queries.py` 还是这仓识别出来的脚本入口之一）。
-      */
+      这时必须并进来而不是覆盖——覆盖会让那个模块自己的文件从模块地图里消失。
+    */
     merged.set(area, [...(merged.get(area) ?? []), ...bucket.files]);
   }
   return merged;
 }
 
 /**
-  实现节点该挂到哪个模块：先按精确目录匹配，匹配不到就**逐级上溯**。
+  实现节点该挂到哪个模块：先按精确目录匹配，匹配不到就逐级上溯。
   上溯是小目录合并的必然配套——`observability/grafana/dashboards` 并进 `observability` 之后，
   该目录下的函数节点仍要回到这个模块，否则它们会集体变成孤儿留在「微观精读」里。
-  */
+*/
 function nearestModuleId(path: string, moduleIds: Set<string>): string | undefined {
   let dir = dirname(path);
   for (;;) {
@@ -130,7 +126,7 @@ export function buildCourseTree(input: {
 
 /**
  * 微观归组投影：把函数级节点按锚点目录搬回所属模块的 children，让「树」不再是三条平行清单。
- * 必须跑在润色**之后**——润色吃的仍是平坦结构，其缓存标记与产出都不受归组影响；
+ * 必须跑在润色之后——润色吃的仍是平坦结构，其缓存标记与产出都不受归组影响；
  * 归组本身只改挂位置不改 id/摘要，对已归组的树重复执行是无操作（幂等）。
  */
 export function groupImplementationsByModule(tree: CourseTree): CourseTree {
@@ -174,9 +170,8 @@ export function attachQuality(tree: CourseTree, quality: QualityReport): CourseT
 
 /**
   「不作为执行路径讲述」= 测试文件 ∪ 示例/快照目录。
-  测试那一半**不在这儿重写**：判据只有 `roles.ts` 的 `isTestPath` 一份（复审 #121——过去这两处
-  各维护一份段落清单，roles 那份有 spec/testing/e2e，这份有 demos/examples/mocks/snapshot，
-  谁改了谁不知道，同一个 `src/e2e/login.spec.ts` 在角色层算测试、在课程树里却当执行入口讲）。
+  测试那一半不在这里重写：判据只有 `roles.ts` 的 `isTestPath` 一份。两处各维护一份段落清单时，
+  同一个 `src/e2e/login.spec.ts` 会在角色层算测试、在课程树里当执行入口讲。
   下面这条正则只补「不是测试、但也不会被执行」的目录。
 */
 const NON_EXECUTABLE_SEGMENT = /(?:^|\/)(?:demos?|examples?|__mocks__|snapshots?)(?:\/|$)/i;

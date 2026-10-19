@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { analyzeFileRegistry } from "./registry.js";
 
 /**
-  注册索引的回归。要拦的事故有两个方向：
-  1. **把配置值抄进产物**——这份东西落在被学习仓的 `.tutor/` 里，是盘上明文，抄值等于自己开泄露面；
-  2. **把「没认出来」说成「没有」**——认不出来的登记不写条目是可以的（保守），但绝不能反过来编一条。
+  两个方向：
+  1. 配置值不能进产物（`.tutor/` 是盘上明文）。
+  2. 「没认出来」不能说成「没有」：认不出来的登记可以不写条目，但不能反过来编一条。
 */
 
 const registry = (path: string, code: string[]): string[] => {

@@ -5,21 +5,21 @@ import type { TutorDatabase } from "../store/database.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
 /**
-  画布上「结构」的**唯一写入口**。用户只能拖位置（走 `store/diagrams.ts` 的 `saveGeometry`），
+  画布上「结构」的唯一写入口。用户只能拖位置（走 `store/diagrams.ts` 的 `saveGeometry`），
   加删节点、连线、分组、改名都只能从这里进——界面上不留第二个写入口，
-  两边各写一套校验与审计，用户的修正就会只活在某一边（这条在覆盖层上已经栽过一次，见 §70）。
+  两边各写一套校验与审计，用户的修正就会只活在某一边。
 
   三件事在这一层同时守住，缺一层都会漏：
 
-  1. **`kind:"module"` 的节点必须指得着真东西**：`ref` 要么在课程树的模块地图里，要么是引擎现在聚出来的方块
-     （`arch:...`）。核不上就**整次拒写**并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
-  2. **边的可信度只降不升**：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
+  1. `kind:"module"` 的节点必须指得着真东西：`ref` 要么在课程树的模块地图里，要么是引擎现在聚出来的方块
+     （`arch:...`）。核不上就整次拒写并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
+  2. 边的可信度只降不升：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
      核不到就降档，并把「为什么不算」写进 `downgraded`（界面上进悬停）。模型永远不能把自己的推断升成事实
-     ——与流程层 `parseFlow` 的边级校验同一个口径（§67）。
-  3. **每次结构改动自动存一版**；恢复旧版也是往前追加一版（`store/diagrams.ts`）。
+     ——与流程层 `parseFlow` 的边级校验同一个口径。
+  3. 每次结构改动自动存一版；回滚同样是往前追加一版（`store/diagrams.ts`）。
 */
 
-/** 一次改动回给模型的话：说的是**落了什么**，不是它想干什么（与 `set_architecture` 同一条纪律）。 */
+/** 一次改动回给模型的话：说的是落了什么，不是它想干什么（与 `set_architecture` 同一条纪律）。 */
 export interface DiagramWriteOutcome {
   ok: boolean;
   text: string;
@@ -34,13 +34,13 @@ export interface DiagramWriteContext {
   journal: { append: (type: JournalEventType, payload: Record<string, string | number | boolean | null>) => void };
   onApplied?: (event: { repositoryId: string; diagramId: string; action: string }) => void;
   /**
-    第四张结构表（产物层里的类型关系与运行时绑定）。缺省时核边只看 import / 调用 / 类型派发三张表，
-    行为与从前逐字一致；给了它，「控制器注入服务接口」这类**代码里没有那一行调用**的真关系才不会被降成猜测。
+    第四张结构表（产物层里的类型关系与运行时绑定）。缺省时核边只看 import / 调用 / 类型派发三张表；
+    给了它，「控制器注入服务接口」这类代码里没有那一行调用的真关系才不会被降成猜测。
   */
   facts?: FactsPairChecker;
 }
 
-/** 可信度排序：核出来更低就降过去，绝不上抬。 */
+/** 可信度排序：核出来更低就降到那一档，绝不上抬。 */
 const ORIGIN_RANK: Record<DiagramEdge["origin"], number> = { inferred: 0, code: 1, static: 2 };
 
 /** 节点可指的东西：模块 id 或引擎现在聚出的方块 id。两张表都从课程树 + 依赖图现算，零 token。 */
@@ -84,7 +84,7 @@ function reverseImport(fromFiles: string[], toFiles: string[], analysis: Reposit
 }
 
 /**
-  把模型报的那条边按引擎核出来的档位改一遍，**只会往下改**。
+  把模型报的那条边按引擎核出来的档位改一遍，只会往下改。
   便签参与的边一律 `inferred`：便签不是代码，四张结构表里都没有它，硬标 static 就是撒谎。
 */
 function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, index: RefIndex, context: DiagramWriteContext): { edge: DiagramEdge; downgraded: boolean } {
@@ -163,7 +163,7 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
   return { body: { groups: groups.map((group) => ({ ...group, label: clampText(group.label, 40)!, x: clampCoord(group.x), y: clampCoord(group.y), w: Math.max(40, Math.round(group.w)), h: Math.max(40, Math.round(group.h)) })), nodes, edges }, downgraded };
 }
 
-/** 目标图怎么认：给了 id 或唯一名字就用它；只有一张且没指名就用那一张；否则**拒**（绝不猜一张来改）。 */
+/** 目标图怎么认：给了 id 或唯一名字就用它；只有一张且没指名就用那一张；否则拒（绝不猜一张来改）。 */
 function resolveTarget(context: DiagramWriteContext, requested: string | undefined): { diagram: Diagram } | { error: string } {
   const wanted = (requested ?? "").trim();
   const all = listDiagrams(context.database, context.repositoryId);
@@ -238,7 +238,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   const diagram = target.diagram;
   const body: DiagramBody = { groups: [...diagram.body.groups], nodes: [...diagram.body.nodes], edges: [...diagram.body.edges] };
   /**
-    图元的名字：**先在改完的结构里查，查不到再回到改之前那一份**。
+    图元的名字：先在改完的结构里查，查不到再回到改之前那一份。
     删掉的东西在改完的结构里已经没有位置了，而版本历史那句「删除 X」要的恰恰是 X 原来叫什么——
     只写得下 id 的历史读不出东西（`store/diagrams.ts` 给 `note` 那句话定的就是这件事）。
   */
@@ -308,13 +308,13 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 /**
   ==== `set_diagram` 的参数层（写入口的前门）====
 
-  模型发回来的是一段 **JSON 字符串**，而且写法不固定：契约里 `edit` 嵌一层，实测常有把它摊平到顶层的。
-  两种写法都收（同一处校验，不让模型因为形状不对白跑一轮），但**字段一格都不多认**：
+  模型发回来的是一段 JSON 字符串，而且写法不固定：契约里 `edit` 嵌一层，实际常有把它摊平到顶层的。
+  两种写法都收（同一处校验，不让模型因为形状不对重跑一轮），但字段一格都不多认：
   白名单之外的键不看，只在回话里点名（照 `coursetree/override-writer.ts` 的 `parseOverrideArguments` 那条纪律——
   「不报错也不采纳」比「原样塞进产物」好，后者会把模型随手编的字段变成图上的一项读数）。
 
-  ⚠️ 两处刻意不留口子：
-  - 边上的 `downgraded` 不在白名单里。降档说明只能由引擎写，模型自己填一句等于替自己圆「这条边成立」；
+  两处刻意不留口子：
+  - 边上的 `downgraded` 不在白名单里。降档说明只能由引擎写，模型自己填一句等于替自己说「这条边成立」；
   - `origin` 三档必须写出来且只认这三档。报低了引擎不会替它抬（见 `settleEdge`），所以虚报在这儿没有收益。
 */
 
@@ -359,7 +359,7 @@ function nodeFrom(raw: unknown, ignored: string[]): DiagramNode | string {
   const group = optionalText(entry.group, 60);
   const base: DiagramNode = { id, kind: entry.kind, label, x: coordOf(entry.x), y: coordOf(entry.y) };
   if (entry.kind === "module") {
-    // 这里只判「写没写」，**指得着指不着由 `settleBody` 按课程树与方块清单判**：两张表只有一份判据
+    // 这里只判「写没写」，指得着指不着由 `settleBody` 按课程树与方块清单判：两张表只有一份判据
     const ref = textOf(entry.ref, 120);
     if (!ref) return "kind=module 的节点要写 ref：课程树里的模块 id，或上下文那份画布现场上的 arch: 方块 id";
     return { ...base, ...(sub ? { sub } : {}), ...(group ? { group } : {}), ref };
@@ -421,7 +421,7 @@ function bodyFrom(raw: unknown, ignored: string[]): DiagramBody | string {
 }
 
 /**
-  翻一次工具参数。回 `error` 就是**这一步没做**（调用方据此不落盘），句子要说清缺哪一格——
+  翻一次工具参数。回 `error` 就是这一步没做（调用方据此不落盘），句子要说清缺哪一格——
   这句话会作为 `role:"tool"` 回喂给模型，它下一轮就按这个改。
 */
 export function parseDiagramEditArguments(raw: string): { request?: DiagramEditRequest; ignored: string[]; error?: string } {
@@ -502,7 +502,7 @@ export function diagramWarnings(context: DiagramWriteContext, diagram: Diagram):
 
 /**
   给模型的「画布现场」：有哪几张图、正打开的那张有哪些图元。
-  ⚠️ 有副作用的工具必须先看得见现状（§71 的教训）——没有这一段，模型只能猜 id、猜「那条边」是哪条。
+  有副作用的工具必须先看得见现状——没有这一段，模型只能猜 id、猜「那条边」是哪条。
 */
 export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?: string): string {
   const all = listDiagrams(context.database, context.repositoryId);

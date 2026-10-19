@@ -1,11 +1,8 @@
 import type { RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/shared";
 
 /**
-  调用图邻接：把依赖图里的调用边翻译成「它调用谁 / 谁调用它 / 同文件符号定义位置」的文本段。
-
-  为什么需要它：锚点摘录回答的是「代码长什么样」，调用邻接回答「该去哪儿找」——
-  真正相关的代码常常不在锚点附近（跨文件的调用方、被调函数、类型定义），
-  模型需要先知道邻接清单才能定向读取。只给路径与符号名（不给源码），成本是路径清单级别。
+  调用图邻接：把依赖图里的调用边整理成「它调用谁 / 谁调用它 / 同文件符号定义位置」，只给路径与符号名、不给源码。
+  锚点摘录回答「代码长什么样」，这里回答「该去哪儿找」——相关代码常在别的文件里。
   */
 
 const MAX_CALL_ENTRIES = 8;
@@ -16,7 +13,7 @@ export interface CallNeighborhood {
   callsOut: string[];
   /** 谁调用了本文件里的符号（文件:符号，去重后按字典序） */
   callsIn: string[];
-  /** 去重前的目标总数（超过上限时调用方可提示「等 N 项」） */
+  /** 去重前的目标总数，超过上限时调用方据此提示「等 N 项」 */
   callsOutTotal: number;
   callsInTotal: number;
   /** 同文件符号定义位置（用于定位，不含源码） */
@@ -26,7 +23,7 @@ export interface CallNeighborhood {
 export function callNeighborhood(analysis: RepositoryAnalysis, path: string): CallNeighborhood {
   const symbols = analysis.graph.symbols;
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
-  // 调用边里的 callerSymbol / calleeSymbol 是符号 id（symbol:路径:名字:行号），翻译成人类可读的 路径:名字
+  // callerSymbol / calleeSymbol 是符号 id（symbol:路径:名字:行号），这里翻译成 路径:名字；查不到就退回路径
   const label = (symbolId: string | undefined, fallbackPath: string): string => {
     const symbol = symbolId ? byId.get(symbolId) : undefined;
     return symbol ? `${symbol.path}:${symbol.name}` : fallbackPath;

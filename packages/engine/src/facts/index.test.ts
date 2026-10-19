@@ -10,8 +10,8 @@ import { collectFileFacts, saveFileFacts } from "./index.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  产物层的落库与读回。这里验的是**接线**：图算得对不对由 `cfg.test.ts` 管，
-  这一份管「算出来的东西真进了 `static_fact`、按文件一行、文件消失后不留假行」。
+  这里验接线，图算得对不对由 `cfg.test.ts` 管：
+  算出来的东西真进了 `static_fact`、按文件一行、文件消失后不留旧行。
 */
 
 beforeAll(async () => {
@@ -51,7 +51,7 @@ describe("静态产物落库", () => {
       expect(coverage.find((row) => row.kind === "cfg")?.files).toBe(2);
       expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出各类产物").toBe(2);
       expect(coverage.find((row) => row.kind === "typeRelations")?.files).toBe(2);
-      // 没算过的类别一条都不报：读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
+      // 没算过的类别不报行，读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
       expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "registry", "typeRelations"]);
       const typed = db.getFileFact<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
       expect(typed?.types.map((item) => item.name)).toEqual(["Box"]);
@@ -74,7 +74,6 @@ describe("静态产物落库", () => {
       const db = new TutorDatabase(root);
       saveFileFacts(db, repositoryId, collectFileFacts(root, [entry("src/one.ts", 1), entry("src/two.ts", 1)], symbols));
       expect(db.getFileFact<CfgFileFact>(repositoryId, "cfg", "src/two.ts")?.backend).toBe("ast");
-      // 第二轮：two.ts 被删了，这一批就是全集，旧行必须跟着没
       saveFileFacts(db, repositoryId, collectFileFacts(root, [entry("src/one.ts", 1)], symbolsOf("src/one.ts", code)));
       expect(db.getFileFact(repositoryId, "cfg", "src/two.ts")).toBeUndefined();
       expect(db.factCoverage(repositoryId).find((row) => row.kind === "cfg")?.files).toBe(1);

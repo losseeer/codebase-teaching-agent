@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EXTERNAL_CATALOG, classifyExternal, groupExternals, isBoundaryMember } from "./external-catalog.js";
 
 /**
-  边界栏的分类判据。这一层的价值全在「不乱猜」上，所以下面几条钉的都是**不该发生的事**：
+  边界栏的分类判据。这一层的价值全在「不乱猜」上，所以下面几条钉的都是不该发生的事：
   按字面词根归类、把没认出来的东西合并、把标准库当外部服务。
 */
 describe("外部包名词典（确定性，无模型）", () => {
@@ -69,13 +69,13 @@ describe("外部包名词典（确定性，无模型）", () => {
     expect(mybatis, "org.apache.ibatis.* 与 org.mybatis.* 都叫 MyBatis ⇒ 一行").toHaveLength(1);
     expect(mybatis[0].identities.sort()).toEqual(["org.apache.ibatis.annotations.Mapper", "org.apache.ibatis.session.SqlSessionFactory", "org.mybatis.spring.annotation.MapperScan"]);
     expect(mybatis[0].files).toEqual(["ShopService.java", "Index.java"]);
-    // 标准库按语言合一行：以前每个 java.* 各占一行，把「未列出」的计数灌满
+    // 标准库按语言合一行，不逐个 `java.*` 身份建行
     expect(groups.filter((group) => group.category === "stdlib")).toHaveLength(1);
   });
 
   /**
-    词典只收真实遇到的包（文件头第 3 条纪律）。这条测试不查内容查**形状**：
-    每个键都得是个能当包名前缀用的写法，别把中文、空格、通配符写进键里——那会让匹配静默失效。
+    词典只收真实遇到的包（文件头第 3 条纪律）。这条不查内容查形状：
+    每个键都得是能当包名前缀用的写法，中文、空格、通配符写进键里会让匹配静默失效。
   */
   it("词典键的形状：不含空格与中文，段与段都是标识符", () => {
     for (const prefix of Object.keys(EXTERNAL_CATALOG)) {

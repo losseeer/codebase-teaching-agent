@@ -11,15 +11,14 @@ import { defineAnalysisStep } from "../analysis-step.js";
 /**
   架构视图的分层产物（每仓一次，可缓存）。
 
-  这份模块的存在理由是把两类东西**分开算**，一分开就不能再混：
-  - **判断题**：分几层、层叫什么、每个模块归哪层 → 交给模型（light 档），错了有人工修正通道；
-  - **事实题**：跨层箭头、边界之外有哪些服务/存储 → 只由静态 import 与外部包名词典算，
-    模型输出里出现这一类字段一律丢弃。图上每一条箭头都必须能被「哪几个文件的 import」复算出来，
-    否则这个产品就在画虚构的东西。
+  这个模块的存在理由是把两类东西分开算，一分开就不能再混：
+  - 判断题：分几层、层叫什么、每个模块归哪层 → 交给模型（light 档），错了有人工修正通道；
+  - 事实题：跨层箭头、边界之外有哪些服务/存储 → 只由静态 import 与外部包名词典算，
+    模型输出里出现这一类字段一律丢弃。图上每一条箭头都必须能被「哪几个文件的 import」复算出来。
 
   缓存与降级口径照 `flows/flow.ts`、`coursetree/entry-suggest.ts` 那一套：
-  键 = 本层实际输入（节点清单 + 聚合边），**人工覆盖层只进请求不进键**，命中不报 usage；
-  判不出来就报不可用并**不落盘**（一次网络抖动不能被永久钉成「这仓判过了」）。
+  键 = 本层实际输入（节点清单 + 聚合边），人工覆盖层只进请求不进键，命中不报 usage；
+  判不出来就报不可用并不落盘（一次网络抖动不能被永久钉成「这仓判过了」）。
 */
 
 /** 模块上限：超过就把清单截到这么多并如实说明（一个 200 模块的仓不该指望模型一次读完）。 */
@@ -28,7 +27,7 @@ const MAX_MODULES = 80;
 const MAX_PAYLOAD_EDGES = 40;
 /** 边界栏最多画这么多行，其余折成「还有 N 类未列出」。 */
 const MAX_BOUNDARY_ROWS = 24;
-/** 模块压缩流水线的三条阈值（2026-10-16 用户定：架构图里没用的模块就是删除，能合的就合，剩下的才折叠）。 */
+/** 模块压缩流水线的三条阈值：架构图里没用的模块直接删除，能合的就合，剩下的才折叠。 */
 const MERGE_MAX_FILES = 2;
 const MERGE_MIN_MEMBERS = 2;
 const MERGE_MAX_MEMBERS = 4;
@@ -36,12 +35,10 @@ const MERGE_MAX_MEMBERS = 4;
 const MERGE_MIN_PARENT_DEPTH = 2;
 
 /**
-  判层这一步发给模型的固定文案。定名口径（2026-10-16 改）：原先这里写着「别写成应用层/领域层这种模板话」，
-  与上一句「典型形态：接入 / 编排 / 核心能力 / 数据访问」自相矛盾——先递梯子再踩一脚。而且它管不到任何硬事实
-  （节点必须恰好归一层、造节点/漏归整份作废、边只能算不能编，这些都有校验兜着），管的只是措辞；
-  更糟的是覆盖层按层名匹配，名字越花、重判后对不上的概率越高，用户改过的修正就越是无声落空。
-  现在反过来要通用职责名：稳定、跨仓可比，教学信息交给每层那句 duty 与层内节点清单去承载。
-  */
+  判层这一步发给模型的固定文案。层名要通用职责名：稳定、跨仓可比，
+  教学信息交给每层那句 duty 与层内节点清单去承载。
+  覆盖层按层名匹配，名字越花、重判后对不上的概率越高，用户改过的修正会无声落空。
+*/
 const ARCHITECTURE_SYSTEM_PROMPT = [
   "你是代码教学产品的架构分层器。给定一个仓库的架构节点清单：每个节点带结构角色（entry=含对外服务入口、core=入口可达的主链路、shared=被多处引用的底座、support=其余）、",
   "可见文件数、由几个模块合成（parts）、是否含对外服务入口与 git 热度，再带节点之间的 import 往来计数。",
@@ -55,18 +52,16 @@ const ARCHITECTURE_SYSTEM_PROMPT = [
 /**
   这一层输入的口径版本：层数约束或 payload 形状变了就翻它。
   提示词文案改了会由守卫测试拦下（见 `analysis-step.ts`），届时二选一：翻版本让旧判层作废，
-  或显式重写锁（`pnpm analysis:lock`）表示「这次润色不值得重烧一遍」——不许无声通过。
-  `arch-v2`（2026-10-16）：判层单位从「课程树的原子模块」换成「压缩后的节点」，并新增 `role`/`parts` 两个节点证据。
-  ⚠️ 这一翻键是**有意的**：粒度变了，模型判的 70 个碎片和读者看到的 34 个节点不能各留一份。
-  已付费的 v1 判层仍留在库里但不再被读；三份仓的画布会显示「分层不可用」，要恢复模型分层得点一次「重新生成分层」（≈¥0.02/仓）。
-  */
+  或显式重写锁（`pnpm analysis:lock`）表示「这次改动不值得重判一遍」——不许无声通过。
+  版本翻掉后画布显示「分层不可用」，要恢复模型分层得点一次「重新生成分层」。
+*/
 const ARCHITECTURE_STEP = defineAnalysisStep({ layer: "architecture", contractVersion: "arch-v2", prompts: [ARCHITECTURE_SYSTEM_PROMPT] });
 
 interface ModuleFact {
   id: string;
   title: string;
   summary: string;
-  /** 结构角色判的档（主链路/基础设施/外围）：只作为**证据**送进模型，界面上不再拿它伪装成分层。 */
+  /** 结构角色判的档（主链路/基础设施/外围）：只作为证据送进模型，界面上不拿它伪装成分层。 */
   tier: CourseTier;
   files: number;
   hasServedEntry: boolean;
@@ -81,7 +76,7 @@ interface ModuleFact {
 export interface ArchitectureInput {
   repositoryId: string;
   repositoryPath: string;
-  /** 必须是**已实时计算过 tier** 的那棵树（`annotateModuleTiers` 之后），否则模块没有档可依。 */
+  /** 必须是已实时计算过 tier 的那棵树（`annotateModuleTiers` 之后），否则模块没有档可依。 */
   course: CourseTree;
   analysis: RepositoryAnalysis;
   index: RepositoryIndex;
@@ -92,10 +87,10 @@ export interface ArchitectureInput {
   /** regenerate 路由用：跳过缓存与「命中即返回」，真问一次。 */
   force?: boolean;
   /**
-    读侧（`GET /architecture`）传 false：**没有缓存行就回「分层不可用」，绝不自己发请求**。
-    这是「不静默触发花钱动作」在架构视图上的落点——打开画布是个读取动作，
-    「这个仓还没判过层」不能顺带变成一笔没人确认的调用；要判，界面上有明确的「重新生成分层」那一下。
-    */
+    读侧（`GET /architecture`）传 false：没有缓存行就回「分层不可用」，绝不自己发请求。
+    打开画布是个读取动作，「这个仓还没判过层」不能顺带变成一笔没人确认的调用；
+    要判，界面上有明确的「重新生成分层」那一下。
+  */
   allowCall?: boolean;
 }
 
@@ -112,7 +107,7 @@ export interface ArchitectureResult extends ArchitecturePlan {
 /**
   模块 → 它可见的文件（本节点锚点 + 子孙锚点，去重）：与分级层、GUI 模块清单同一条口径。
   导出给画图工作区复用（`diagram/set-diagram.ts` 核一条边的依据用的就是这张表）——
-  「这个模块包含哪些文件」有两套算法，早晚会有一天图上两个节点说的是两回事。
+  「这个模块包含哪些文件」只能有一套算法，否则图上两个节点说的是两回事。
 */
 export function moduleFiles(node: CourseNode): string[] {
   const paths: string[] = [];
@@ -131,8 +126,8 @@ export function moduleNodes(course: CourseTree): CourseNode[] {
 }
 
 /**
-  文件级 import 边 → 模块级聚合边。**边只能从这里来**：模型不参与这一步，
-  人工改层也不改边——改的是节点归哪层，箭头自然按新归属重算（这就是「挪一下不烧钱」的根据）。
+  文件级 import 边 → 模块级聚合边。边只能从这里来：模型不参与这一步，
+  人工改层也不改边——改的是节点归哪层，箭头自然按新归属重算（所以挪一下不产生重判费用）。
   一个文件可能同时出现在多个模块的可见清单里（共享文件是树的结构事实），
   那条边会给每个模块对各算一条：宁可在依据里重复，也不悄悄丢一条真存在的往来。
 */
@@ -195,11 +190,11 @@ function mergeSameName(layers: ArchitectureLayer[]): ArchitectureLayer[] {
 }
 
 /**
-  校验模型输出。**只要有一处不成立就整份作废**（判不可用，不落盘）：
+  校验模型输出。只要有一处不成立就整份作废（判不可用，不落盘）：
   - 层里出现清单外的模块 id = 模型在造模块（这是红线，不是小瑕疵）；
   - 有模块没归任何层 = 图上一块空白，读者会以为那部分不属于这个系统；
   - 同一模块被写入两层 = 归属自相矛盾；
-  - 出现 `edges` / `files` / `path` 这类字段 = 模型想改事实题。这一条**不整份作废**：
+  - 出现 `edges` / `files` / `path` 这类字段 = 模型想改事实题。这一条不整份作废：
     层归属本身仍可信，按纪律丢掉那些字段、不缓存、在下一次重问时再试（照 `flow.ts` 里「确定性结论才落盘」的分寸）。
 */
 function parseLayers(text: string, modules: ModuleFact[]): { layers?: ArchitectureLayer[]; droppedFacts: boolean; reason?: string } {
@@ -217,7 +212,7 @@ function parseLayers(text: string, modules: ModuleFact[]): { layers?: Architectu
   if (!Array.isArray(raw) || !raw.length) return { droppedFacts: false, reason: "layers 不是非空数组" };
   /**
     顶层就摆了 `edges` / `files` / `externals` 这类事实字段。它们本来也进不了层（层只认 name/duty/modules），
-    但**不能无声丢弃**：模型在试图发明箭头这件事必须留下读数，否则下一次它这么干没人知道。
+    但不能无声丢弃：模型在试图发明箭头这件事必须留下读数，否则下一次它这么干没人知道。
   */
   const topFacts = ["edges", "files", "paths", "imports", "externals"].filter((key) => (parsed as Record<string, unknown>)[key] !== undefined);
   const droppedAtTop = topFacts.length > 0;
@@ -275,10 +270,10 @@ export interface ArchitectureBlock {
 }
 
 /**
-  组合节点的标题：成员名**整段**拼到 24 字为止，装不下的用「等」收尾。
-  不用父目录末段（dianping 那一档的末段是包根 `hmdp`，读者看不出里面是什么），也不截半句话——
+  组合节点的标题：成员名整段拼到 24 字为止，装不下的用「等」收尾。
+  不用父目录末段（末段常常只是包根名，读者看不出里面是什么），也不截半句话——
   一个节点的名字读到一半断了，比它长一点更糟。
-  */
+*/
 function joinedTitle(members: CourseNode[]): string {
   const parts: string[] = [];
   for (const node of members) {
@@ -290,24 +285,24 @@ function joinedTitle(members: CourseNode[]): string {
 
 /**
   架构图的模块集合 = 原子模块经「隐藏孤立节点 → 同父合并」压缩后的块集合。
-  为什么放在判层**之前**而不是画完再藏：孤立节点模块连进载荷都是白花 token，
-  而组合节点的粒度必须先让模型看见，否则它判的是 70 个碎片、读者看到的是 34 个块，两套口径迟早打架。
+  放在判层之前而不是画完再藏：孤立节点连进载荷都是多付 token，而组合节点的粒度必须先让模型看见，
+  否则模型判的是一堆碎片、读者看到的是少数几个块，两套口径迟早打架。
 
-  可达性沿 **import ∪ 调用 ∪ 接口实现** 三条边算。最后那条不能省：Spring 的控制器只 import 接口，
+  可达性沿 import ∪ 调用 ∪ 接口实现三条边算。最后那条不能省：Spring 的控制器只 import 接口，
   `service/impl` 与 `mapper` 在纯 import 图上永远不可达，只按 import 判就会把全仓最核心的实现当孤立节点删掉。
 
-  ⚠️ 这份集合**不许读人工覆盖层**：读了就等于「挪一下模块」会改变节点清单，进而翻掉缓存键——
+  这份集合不许读人工覆盖层：读了就等于「挪一下模块」会改变节点清单，进而翻掉缓存键——
   覆盖层不进键是这一层不花钱的前提（见 `archContext`）。修正怎么落见 `applyOverrides`。
-  */
+*/
 export function architectureBlocks(course: CourseTree, analysis: RepositoryAnalysis): { blocks: ArchitectureBlock[]; sideModules: number } {
   const modules = moduleNodes(course);
   const filesOf = new Map(modules.map((node) => [node.id, moduleFiles(node)]));
   const servedEntryPaths = new Set((analysis.graph.entrypoints ?? []).filter(isServedEntrypoint).map((anchor) => anchor.path));
   /**
-    可达性的种子用**全部**入口候选，不只词典认出来的服务入口：TS 侧的规则只产出「conventional entrypoint」
+    可达性的种子用全部入口候选，不只词典认出来的服务入口：TS 侧的规则只产出「conventional entrypoint」
     （`server.ts` / `main.tsx` 这一档），只拿 served 当种子会把整个仓判成走不到、把最该看的那个节点当孤立节点删掉。
     `entry` 这一档角色仍只认 served——「含对外服务入口」这句话不能因为一个 index 文件就说出口。
-    */
+   */
   const entrySeeds = new Set((analysis.graph.entrypoints ?? []).map((anchor) => anchor.path));
   const ownerOf = new Map<string, string>();
   for (const node of modules) for (const file of filesOf.get(node.id) ?? []) if (!ownerOf.has(file)) ownerOf.set(file, node.id);
@@ -394,22 +389,22 @@ export interface ArchitectureUnits {
 }
 
 /**
-  把人工修正落到判层结果上，顺带处理**组合节点被拆开**这个节点。
-  覆盖层存的可能是节点 id（整块走），也可能是块里的某个原子模块 id（只走自己——dianping 现存的三条修正全是成员级），
-  所以先在**成员层面**定归属再重新聚块：挪走一个成员不该让兄弟跟着动，也不该让同一个文件在图上出现两次。
+  把人工修正落到判层结果上，顺带处理组合节点被拆开这种情况。
+  覆盖层存的可能是节点 id（整块走），也可能是块里的某个原子模块 id（只走自己），
+  所以先在成员层面定归属再重新聚块：挪走一个成员不该让兄弟跟着动，也不该让同一个文件在图上出现两次。
 
-  聚回来的规则只有一条：一个块的成员**全都在同一层**时它才继续是一块，否则拆成单个节点。
+  聚回来的规则只有一条：一个块的成员全都在同一层时它才继续是一块，否则拆成单个节点。
   宁可在图上多几个小块，也不造一个「id 指向的成员和画出来的不是一回事」的假块。
   被藏起来的孤立节点只要有人工修正点名，就作为单独节点回到图上——这是「agent 说这个不该藏」唯一的出口。
 
-  `lost` 是这次**没能落地**的修正：覆盖层按层名字符串匹配，重判之后模型换了叫法
+  `lost` 是这次没能落地的修正：覆盖层按层名字符串匹配，重判之后模型换了叫法
   （五层判成四层、"数据访问"并进"支撑"），目标名就找不到；id 不在树上也是找不到。
-  找不到仍然**不动它**（宁可留在模型判的层里，也不凭空造一层），但不能装作没事——
-  2026-10-16 之前这里是一条无声的 `continue`，用户改过几次、下次重判全落空而界面上看不出来。
-  */
+  找不到仍然不动它（宁可留在模型判的层里，也不凭空造一层），但必须记下来——
+  否则用户改过几次、下次重判全落空而界面上看不出来。
+*/
 export function applyOverrides(layers: ArchitectureLayer[], overrides: ArchitectureOverrides | undefined, units: ArchitectureUnits): { layers: ArchitectureLayer[]; overriddenUnits: string[]; lost: ArchitectureOverrideLoss[] } {
   const clone = layers.map((layer) => ({ ...layer, moduleIds: [...layer.moduleIds] }));
-  // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——**没覆盖层时也要滤**，
+  // 空层不占一栏（模型偶尔给一个「存储层」却一个模块都没归进来）——没有覆盖层时也要滤，
   // 否则同一次判层会因为「有没有人工改过」画出不同数量的层，读者会以为层是被人删掉的
   if (!overrides) return { layers: clone.filter((layer) => layer.moduleIds.length > 0), overriddenUnits: [], lost: [] };
   const renames = overrides.layerRenames ?? {};
@@ -422,7 +417,7 @@ export function applyOverrides(layers: ArchitectureLayer[], overrides: Architect
   const layerOfMember = new Map<string, string>();
   for (const layer of renamed) for (const id of layer.moduleIds) for (const member of units.blocks.get(id) ?? [id]) layerOfMember.set(member, layer.name);
   const names = new Set(renamed.map((layer) => layer.name));
-  /** 人工**点名挪过**的成员：只有这些节点该带「动过」的标记，收留它们的那一层不算被改过。 */
+  /** 人工点名挪过的成员：只有这些节点该带「动过」的标记，收留它们的那一层不算被改过。 */
   const movedMembers = new Set<string>();
   for (const [id, target] of Object.entries(overrides.moduleLayer ?? {})) {
     const members = units.blocks.get(id) ?? [id];
@@ -481,7 +476,7 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
   }));
   const truncated = facts.slice(0, MAX_MODULES);
   const omittedModules = Math.max(0, facts.length - truncated.length);
-  /** 给模型的往来计数只按**节点**算：一个文件的原子模块 id 也在下面那张表里，两张一起送进 payload 会把同一条边数两遍。 */
+  /** 给模型的往来计数只按节点算：一个文件的原子模块 id 也在下面那张表里，两张一起送进 payload 会把同一条边数两遍。 */
   const filesByBlock = new Map(blocks.map((block) => [block.id, block.files]));
   const { pairs } = aggregateModuleEdges(filesByBlock, analysis.graph.imports);
   const moduleEdges = [...pairs.values()]
@@ -498,12 +493,13 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
   const boundary = boundaryRows(analysis.graph.externals);
   const externalsMissing = analysis.graph.externals === undefined;
   /**
-    人工修正（改层名 / 挪模块）**不进键**，只进请求。
-    为什么单独钉这件事：修正本来就是读的时候实时叠加上去的一层——
-    让它翻键等于把「挪一下」变成一次重判请求，模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
-    判层的**证据**（节点 id、名字、摘要、结构角色与档位、规模、入口、热度、节点间往来）照样进键：
-    节点增删、摘要重烧这些真变化必须重问，人工改名归到证据那一档（改一次翻一次键，但读侧不发请求，要花必须点「重新生成分层」）。
-    */
+    人工修正（改层名 / 挪模块）不进键，只进请求。
+    修正本来就是读的时候实时叠加上去的一层：让它翻键等于把「挪一下」变成一次重判请求，
+    模型看不见用户的意见反而要多花钱（改档之后原判还在，叠一遍就出结果）。
+    判层的证据（节点 id、名字、摘要、结构角色与档位、规模、入口、热度、节点间往来）照样进键：
+    节点增删、摘要重算这些真变化必须重问；人工改名归到证据那一档（改一次翻一次键，
+    但读侧不发请求，要花必须点「重新生成分层」）。
+   */
   const keyPayload = {
     modules: truncated.map((fact) => ({ id: fact.id, title: fact.title, summary: fact.summary, tier: fact.tier, role: fact.role, files: fact.files, parts: fact.parts, entry: fact.hasServedEntry, hot: fact.hotCommits })),
     edges: moduleEdges,
@@ -525,10 +521,10 @@ function archContext(input: ArchitectureInput, modelVersion: string) {
 }
 
 /**
-  模块地图那条出口的共同形态：**先实时计算 tier，再叠人工覆盖层**。`/course` 与架构四个入口都走这里，
+  模块地图那条出口的共同形态：先实时计算 tier，再叠人工覆盖层。`/course` 与架构四个入口都走这里，
   所以「界面看到的分组」和「架构图上谁在哪层」不会各算一套。
   幂等靠 id：覆盖层按模块 id 改名/隐藏/改档，叠两次还是同一份。
-  */
+*/
 export function moduleCourseOf(course: CourseTree, analysis: RepositoryAnalysis, index: RepositoryIndex, overlays: RepositoryOverlays): CourseTree {
   const roles = classifyFileRoles(fileStructureOf(index.files, graphFromData(analysis.graph)));
   return applyRepositoryOverlays(annotateModuleTiers(course, roles, analysis.graph.entrypoints), overlays);
@@ -536,19 +532,18 @@ export function moduleCourseOf(course: CourseTree, analysis: RepositoryAnalysis,
 
 /**
   架构这条链上四个入口（读、重新生成分层、覆盖层校验、Agent 写工具）共用的一份输入。
-  为什么收成一处：`/overlays/apply` 以前自己拼了一遍、少叠 `annotateModuleTiers` ⇒ payload 里每个模块的 tier 都成 periphery ⇒
-  算出的缓存键和读侧不是同一个 ⇒ peek 找不到判好的那份 ⇒ 校验层名时只认得「外围」，真仓上每一次拖动都被 422 拒掉
-  （2026-10-16 浏览器实测 dianping）。这类漂移不靠「记得照抄」防，靠只有一处能构造。
-  */
+  只能有一处构造：少叠 `annotateModuleTiers` 会让每个模块的 tier 都成 periphery，算出的缓存键和读侧不是同一个，
+  校验层名时只认得「外围」，真仓上每一次拖动都会被 422 拒掉。
+*/
 export function architectureInputOf(input: { repositoryId: string; repositoryPath: string; course: CourseTree; analysis: RepositoryAnalysis; index: RepositoryIndex; database?: TutorDatabase; overlays: RepositoryOverlays }): ArchitectureInput {
   const { repositoryId, repositoryPath, analysis, index, database, overlays } = input;
   return { repositoryId, repositoryPath, analysis, index, database, course: moduleCourseOf(input.course, analysis, index, overlays), overrides: overlays.architecture };
 }
 
 /**
-  只查缓存、**绝不发请求**的读侧。副作用工具要先知道「图上现在有哪几层」才能校验层名，
-  而为了校验去烧一发模型是不可接受的（用户问一句「把 X 挪到 Y 层」，代价不该是一笔重判的钱）。
-  没缓存行就回空层名：调用方按「现在没有分层可改」处理，并如实告诉模型（以前这里塞结构角色三档，agent 会收到一句假的「已挪好」）。
+  只查缓存、绝不发请求的读侧。副作用工具要先知道「图上现在有哪几层」才能校验层名，
+  而为了校验去重判一发模型是不可接受的（用户问一句「把 X 挪到 Y 层」，代价不该是一笔重判的钱）。
+  没缓存行就回空层名：调用方按「现在没有分层可改」处理，并如实告诉模型。
 
   `layout` 与 `lost` 是给 agent 那份「架构现场」用的：现在每层里画了哪些节点、哪几条人工修正这次没接上。
   与界面横幅同源（都是 `applyOverrides` 一次算出来的），免得对话里说「这条修正还在」而图上没有。
@@ -563,8 +558,8 @@ export function peekCachedArchitecture(input: ArchitectureInput & { provider: Ll
   const context = archContext(input, input.provider.modelVersion);
   const stored = input.database?.getLayerCache<ArchitecturePlan>(context.key);
   const plan = stored?.value?.layers?.length ? stored.value : undefined;
-  // 没有判好的那份就回**空层名**：以前这里塞的是 tier 三档（主链路/基础设施/外围），
-  // 于是 agent 能「把模块挪进外围」并收到一句成功——它挪动的其实是结构角色分组，不是分层判断（2026-10-16 改）。
+  // 没有判好的那份就回空层名：这里不能塞 tier 三档，否则 agent 能「把模块挪进外围」并收到一句成功，
+  // 而它挪动的其实是结构角色分组，不是分层判断。
   if (!plan) return { layers: [], blocks: context.briefs, layout: [], lost: [] };
   const layered = applyOverrides(plan.layers, input.overrides, context.units);
   return {
@@ -579,11 +574,10 @@ export function peekCachedArchitecture(input: ArchitectureInput & { provider: Ll
 export async function generateArchitectureCached(input: ArchitectureInput): Promise<ArchitectureResult> {
   const { repositoryId, analysis, provider, database, overrides } = input;
   /**
-    分层不可用时的那一份（**不落盘**）：`layers` 给空数组、原因说清是哪一种，事实那几个节点（节点、外部栏）照算照给。
-    为什么不再退成 tier 三档（2026-10-16 用户定）：主链路/基础设施/外围是**结构角色**，把它画成「职责分层」
-    等于递给大家一张假架构图——读者会照着它讲「这个系统的分层」，而那句话没有依据。
-    不可用就直说不可用，并留一个明码标价的出口。
-    */
+    分层不可用时的那一份（不落盘）：`layers` 给空数组、原因说清是哪一种，事实那几个节点（节点、外部栏）照算照给。
+    不退成 tier 三档：主链路/基础设施/外围是结构角色，把它画成「职责分层」等于递给大家一张假架构图——
+    读者会照着它讲「这个系统的分层」，而那句话没有依据。不可用就直说不可用，并留一个明码标价的出口。
+   */
   const unavailable = (context: ArchitectureContext, kind: NonNullable<ArchitecturePlan["unavailableReason"]>, reason: string): ArchitectureResult => ({
     repositoryId,
     layers: [],
@@ -608,13 +602,13 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
   const { truncated, filesByUnit, briefs, sideModules, boundary, externalsMissing, omittedModules, payload, key, units } = context;
   if (!input.force) {
     const stored = database?.getLayerCache<ArchitecturePlan>(key);
-    // 只认模型判过的那份：老口径里 `source:"static"` 的行装的是 tier 三档，读回来就又变成假架构图
+    // 只认模型判过的那份：缓存里 `source:"static"` 的行装的是 tier 三档，读回来就又变成假架构图
     if (stored && stored.value.layers?.length && stored.value.source === "llm") {
       const layered = applyOverrides(stored.value.layers, overrides, units);
       /**
-        `lostOverrides` 必须**每次覆写**，不能只在非空时才带上：这个节点是「原判 + 当前覆盖层」的实时计算读数，
-        而 `...stored.value` 里可能住着上一次判层时烤进来的那条（10-17 实测：用户把落空的修正撤掉之后
-        横幅还在，因为缓存行还替它说话）。空数组要如实写成 undefined，别让旧值漏出来。
+        `lostOverrides` 必须每次覆写，不能只在非空时才带上：这个节点是「原判 + 当前覆盖层」的实时计算读数，
+        而 `...stored.value` 里可能住着上一次判层时烤进来的那条——用户把落空的修正撤掉之后横幅还在，
+        就是缓存行还替它说话。空数组要如实写成 undefined，别让旧值漏出来。
       */
       return { ...stored.value, repositoryId, layers: layered.layers, edges: layerEdges(layered.layers, filesByUnit, analysis.graph.imports), overriddenUnits: layered.overriddenUnits, lostOverrides: layered.lost.length ? layered.lost : undefined, blocks: briefs, sideModules, externals: boundary.rows, collapsedExternals: boundary.collapsed, omittedModules, usage: undefined };
     }
@@ -633,15 +627,15 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
     });
     const parsed = parseLayers(response.text, truncated);
     if (!parsed.layers) {
-      // 判不出来就报不可用并说清是哪一条不合格；**不落盘**——同一份输入下次还要再问
+      // 判不出来就报不可用并说清是哪一条不合格；不落盘——同一份输入下次还要再问
       return { ...unavailable(context, "rejected", `分层判断没采信：${parsed.reason ?? "输出不合法"}。这次没落盘，再点一次「重新生成分层」会重问。`), usage: response.usage };
     }
     const layered = applyOverrides(parsed.layers, overrides, units);
     /**
-      落盘的是模型的**原判**（没叠人工修正）：修正每次读的时候实时叠加一次。
+      落盘的是模型的原判（没叠人工修正）：修正每次读的时候实时叠加一次。
       键里不含修正，所以同一份原判会被反复读到——把修正烤进缓存等于下一次读叠第二遍，
       那时「接入→入口层」这类改名已经不成立，界面上的层会开始对不上号。
-      */
+    */
     const plan: ArchitecturePlan = {
       repositoryId,
       layers: parsed.layers,
@@ -649,7 +643,7 @@ export async function generateArchitectureCached(input: ArchitectureInput): Prom
       externals: boundary.rows,
       source: "llm",
       ...(parsed.droppedFacts ? { reason: "模型额外给了边或文件字段，已丢弃（层归属仍按它判的结果）" } : {}),
-      // 旧产物没采过外部包名：那一栏是空的，但**不等于**「这个系统不碰任何外部服务」，得说出来
+      // 产物没采过外部包名：那一栏是空的，但不等于「这个系统不碰任何外部服务」，得说出来
       ...(externalsMissing && !boundary.rows.length ? { externalsNote: "这份产物还没采外部包名（重新分析后才会有）" } : {}),
       // 落盘这份是模型原判，人工挪过的节点与「哪几条修正这次没接上」都属于读时实时计算，不进缓存
       overriddenUnits: [],

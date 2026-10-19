@@ -3,17 +3,10 @@ import { extractRouteEndpoints } from "../depgraph/routes.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  注册与配置索引：那些**运行时才连上**的关系——依赖图天生看不见它们。
-  `@Autowired private OrderService svc` 没有一行调用；`app.use(router)` 的实参是个导入进来的对象；
-  `META-INF/services` 更是纯文本清单。缺了这一格，「请求进来之后代码在哪」这条链就断在门口。
-
-  三条口径：
-  1. **配置文件只记键名，绝不记值。** 这份产物落在被学习仓自己的 `.tutor/` 里，是盘上明文：
-     把 `spring.datasource.password=...` 抄进来等于自己新开一个泄露面。键名本身已经说得出
-     「这里配了数据源」，那就够了。
-  2. 路由不另写一套判据：直接复用 `depgraph/routes.ts` 的识别结果，接缝与这张表说的是同一条路由。
-  3. 认出来的每条都带 `via`（Spring 注解 / 构造注入 / app.use / SPI 清单 / pom 模块…），
-     读的人分得清「编译器级的」和「按正则猜的」。
+  注册与配置索引：运行时才连上的关系（注解注入、`app.use`、`META-INF/services` 清单），依赖图看不见。
+  1. 配置文件只记键名，绝不记值：产物落在被学习仓自己的 `.tutor/` 里，是盘上明文。
+  2. 路由不另写判据：复用 `depgraph/routes.ts` 的识别结果，与接缝表说同一条路由。
+  3. 每条都带 `via`（Spring 注解 / 构造注入 / app.use / SPI 清单 / pom 模块…），区分编译器级与正则猜测。
 */
 
 const MAX_ENTRIES = 200;
@@ -99,10 +92,7 @@ function injectionEntries(lines: string[], language: string): RegistryEntry[] {
   return rows;
 }
 
-/**
-  yml 的键是**分层**的：只记叶子名会把 `spring.datasource.password` 与 `server.password` 混成同一个
-  `password`，读侧就没了归属可说。这里按缩进把父级拼回去（值依旧一个字都不抄）。
-*/
+/** yml 的键是分层的：按缩进把父级拼回全名，否则不同段的同名叶子会被并成一个。 */
 function yamlKeys(lines: string[]): RegistryEntry[] {
   const rows: RegistryEntry[] = [];
   const stack: { indent: number; key: string }[] = [];
@@ -114,13 +104,13 @@ function yamlKeys(lines: string[]): RegistryEntry[] {
     const key = match[2];
     while (stack.length && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
     push(rows, { kind: "config-key", name: [...stack.map((item) => item.key), key].join("."), via: "配置键（值不进产物）", line: offset + 1 });
-    // 冒号后面什么都没有＝这是个父级，下一层缩进的键都挂在它下面
+    // 冒号后为空表示这是父级，下一层缩进的键挂在它下面
     if (!line.slice(match[0].length).trim()) stack.push({ indent, key });
   });
   return rows;
 }
 
-/** 清单与配置文件：只取键与结构名，值一律不抄（见文件头那条泄露面说明）。 */
+/** 清单与配置文件：只取键与结构名。 */
 function manifestEntries(path: string, lines: string[]): RegistryEntry[] {
   const rows: RegistryEntry[] = [];
   const tail = path.split("/").pop() ?? path;
@@ -157,8 +147,8 @@ function isManifest(path: string): boolean {
 }
 
 /**
-  一个文件的注册与配置索引。清单类文件没有语法树，`backend` 就是 `none`——
-  但它们的条目是真读数，所以这里用 `via` 说清每条是怎么认出来的，不借 `backend` 报「没做」。
+  一个文件的注册与配置索引。清单类文件没有语法树，`backend` 记为 `none`，
+  但条目是真读数，识别来源由 `via` 说明。
 */
 export function analyzeFileRegistry(path: string, content: string, language: string, isCode: boolean): RegistryFileFact {
   const lines = content.split("\n");
@@ -186,7 +176,7 @@ export function analyzeFileRegistry(path: string, content: string, language: str
       });
       for (const match of content.matchAll(DI_CALL)) {
         const index = content.slice(0, match.index ?? 0).split("\n").length;
-        // 两种写法都要认：`AddScoped<I, X>()`（实现在尖括号里）与 `AddScoped<I>(sp => sp.GetRequiredService<X>())`
+        // 两种写法：`AddScoped<I, X>()`（实现在尖括号里）与 `AddScoped<I>(sp => sp.GetRequiredService<X>())`
         const [first, second] = (match[2] ?? "").split(",").map((part) => clean(part));
         const argument = clean((match[3] ?? "").split(/[,=]/)[0]);
         push(entries, { kind: "di-binding", name: first ?? argument ?? "?", target: second ?? (first ? argument : undefined), via: `Add${match[1]} 注册`, line: index });

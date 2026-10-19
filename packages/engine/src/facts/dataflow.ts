@@ -3,17 +3,11 @@ import type { SyntaxNode } from "../depgraph/parser.js";
 import type { FunctionScope } from "./cfg.js";
 
 /**
-  函数内的数据流：每个变量的定义点、使用点，以及每次使用「能被哪些定义到达」。
-  算的是经典的到达定义（reaching definitions）——沿控制流图的边做前向不动点，
-  不是「同一函数里出现过的赋值」那种糊账：后者在 `if` 的两个分支之间会给出假到达。
+  函数内的数据流：每个变量的定义点、使用点，以及每次使用能被哪些定义到达。
+  用到达定义（沿控制流图的边做前向不动点）；只按「同一函数里赋过值」收口，在分支之间会给出假到达。
 
-  刻意只做到**函数内**这一层。跨过程要别名分析（`obj.field` 到底指向谁），Python/JS 这类
-  动态语言在静态前提下精度上不去，业界把它当独立产品线做（Soot / WALA / CodeQL）——
-  做不动就明说做不动，不交一份看着像、实际会骗人的表。
-
-  两条已写进能力表的限制：
-  - 变量粒度是「名字」，不分「名字 + 路径」：`a.b = 1` 记成对 `a` 的一次写。
-  - 块是按行区间对上的（取最小的那个包含块），所以同一行上的多个构造会落进同一块。
+  只做函数内这一层：跨过程要别名分析（`obj.field` 指向谁），动态语言在静态前提下精度不足。
+  变量粒度是名字：`a.b = 1` 记成对 `a` 的一次写。
 */
 
 const MAX_VARIABLES = 200;
@@ -97,7 +91,7 @@ function collectSites(body: SyntaxNode, skipName: SyntaxNode | undefined): { def
   return { defs, reads };
 }
 
-/** 站点归块：取行区间最小的那个包含块（分支块比外层块精确）。 */
+/** 站点归块：取行区间最小的包含块（分支块比外层块精确），同一行上的构造会落进同一块。 */
 function blockFor(graph: CfgFunction, line: number): number {
   let best: { id: number; span: number } | undefined;
   for (const block of graph.blocks) {
@@ -110,8 +104,7 @@ function blockFor(graph: CfgFunction, line: number): number {
 
 export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionFact {
   const { cfg } = scope;
-  // 从整个函数节点起手，而不是只走体：参数是**入口处的一次定义**，漏掉它，函数体里所有
-  // 对参数的读都会被误报成「没有任何定义能到达」。函数自己的名字要跳过——它不是对变量的使用。
+  // 从整个函数节点起手而不是只走体：参数是入口处的一次定义，漏掉会把所有对参数的读报成不可达
   const { defs, reads } = collectSites(scope.node, scope.node.childForFieldName("name") ?? undefined);
   const sites = [...defs, ...reads];
   for (const site of sites) site.block = blockFor(cfg, site.line);
