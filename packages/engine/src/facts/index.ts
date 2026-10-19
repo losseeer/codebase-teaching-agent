@@ -1,20 +1,48 @@
+import type { CfgFileFact, DataflowFileFact, DataflowFunctionFact, FactKind, FileEntry, SymbolInfo } from "@codebase-tutor/shared";
+import { languageCapabilitiesOf } from "@codebase-tutor/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FACT_KINDS, languageCapabilitiesOf, type FactKind, type FileEntry, type SymbolInfo } from "@codebase-tutor/shared";
 import type { TutorDatabase } from "../store/database.js";
-import { buildFileCfg } from "./cfg.js";
+import { eachFunction } from "./cfg.js";
+import { analyzeFunctionDataflow } from "./dataflow.js";
+import { FACTS_VERSION } from "./version.js";
 
 /**
-  静态产物层的总装：一次遍历源码，产出所有类别的**文件级**读数。
+  静态产物层的总装：**一个文件解析一次，产出所有类别的读数**。
 
-  刻意与依赖图分家（见 `store/database.ts` 里 `static_fact` 那段）：这些产物是确定性重算的，
-  不进 `analysis_json`、不进 `backendStamp`、不参与任何缓存键——加一类分析绝不该让已导入的仓重烧付费调用。
-  源码在这里**再读一遍**：图那边读完就丢了内容，为省一遍磁盘读把 Map 穿到三处调用方不值得。
+  为什么合在一趟里：语法树解析是全仓最贵的一步，每多一类产物就多扫一遍源码
+  （复审 #170 就记过「一轮两遍全仓读」这笔账）。各产物之间还要靠同一份块 id 对齐，
+  分开算等于让两份图各自漂移。
+
+  与依赖图分家（见 `store/database.ts` 里 `static_fact` 那段）：这些产物是确定性重算的，
+  不进 `analysis_json`、不进 `backendStamp`、不参与任何缓存键——加一类分析绝不该让
+  已导入的仓重烧付费调用。源码在这里再读一遍：图那边读完就丢了内容，
+  为省一遍磁盘读把 Map 穿到三处调用方不值得。
 */
 export interface FileFactRow {
   kind: FactKind;
   path: string;
   payload: unknown;
+}
+
+export interface FileFacts {
+  cfg: CfgFileFact;
+  dataflow: DataflowFileFact;
+}
+
+export function analyzeFile(path: string, content: string, symbols: SymbolInfo[], language: string): FileFacts {
+  const flows: DataflowFunctionFact[] = [];
+  const cfg = eachFunction(path, content, symbols, language, (scope) => void flows.push(analyzeFunctionDataflow(scope)));
+  // backend 跟着图走：没有语法树就没有任何一份产物，`skipped` 里那句原因对两类产物同时成立
+  const dataflow: DataflowFileFact = {
+    path,
+    language,
+    backend: cfg.backend,
+    version: FACTS_VERSION,
+    functions: flows.sort((left, right) => left.startLine - right.startLine),
+    ...(cfg.skipped ? { skipped: cfg.skipped } : {})
+  };
+  return { cfg, dataflow };
 }
 
 export function collectFileFacts(repositoryPath: string, files: FileEntry[], symbols: SymbolInfo[]): FileFactRow[] {
@@ -34,8 +62,9 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
       // 扫描期就读不到的文件已经在 `RepositoryIndex.unreadable` 里记过名，这里不再重复报一条
       continue;
     }
-    const language = languageCapabilitiesOf(path).language;
-    rows.push({ kind: "cfg", path, payload: buildFileCfg(path, content, list, language) });
+    const facts = analyzeFile(path, content, list, languageCapabilitiesOf(path).language);
+    rows.push({ kind: "cfg", path, payload: facts.cfg });
+    rows.push({ kind: "dataflow", path, payload: facts.dataflow });
   }
   return rows;
 }
@@ -49,5 +78,5 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
 export function saveFileFacts(db: TutorDatabase, repositoryId: string, rows: FileFactRow[]): void {
   const grouped = new Map<FactKind, { path: string; payload: unknown }[]>();
   for (const row of rows) grouped.set(row.kind, [...(grouped.get(row.kind) ?? []), { path: row.path, payload: row.payload }]);
-  for (const kind of FACT_KINDS) db.saveFileFacts(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
+  for (const kind of ["cfg", "dataflow", "typeRelations", "registry"] as FactKind[]) db.saveFileFacts(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
 }

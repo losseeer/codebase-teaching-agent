@@ -43,13 +43,14 @@ describe("静态产物落库", () => {
       saveFileFacts(db, repositoryId, collectFileFacts(root, files, symbols));
       const facts = db.listFileFacts<CfgFileFact>(repositoryId, "cfg");
       expect([...facts.keys()]).toEqual(["src/alpha.ts", "src/beta.ts"]);
-      expect(facts.get("src/alpha.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "branch", "straight", "straight", "exit"]);
+      expect(facts.get("src/alpha.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "branch", "straight", "straight", "exit", "exit"]);
       expect(facts.get("src/beta.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "exit"]);
       expect(facts.get("src/alpha.ts")?.version).toBe(FACTS_VERSION);
       const coverage = db.factCoverage(repositoryId);
       expect(coverage.find((row) => row.kind === "cfg")?.files).toBe(2);
+      expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出两类产物").toBe(2);
       // 没算过的类别一条都不报：读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
-      expect(coverage.map((row) => row.kind)).toEqual(["cfg"]);
+      expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow"]);
       db.close();
     } finally {
       rmSync(root, { recursive: true, force: true });

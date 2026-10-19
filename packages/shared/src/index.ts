@@ -999,6 +999,45 @@ export interface CfgFileFact extends FactFileBase {
   skipped?: FactSkip[];
 }
 
+/** 一次定义或一次使用落在哪：行 + 控制流图上的块 + 它是哪种动作。 */
+export type DataflowRole = "param" | "init" | "assign" | "read" | "argument" | "return";
+
+export interface DataflowSite {
+  line: number;
+  /** `CfgFunction.blocks` 里那个块的 id；块是按行区间对上的 */
+  block: number;
+  role: DataflowRole;
+}
+
+export interface DataflowUse extends DataflowSite {
+  /** 能到达这次使用的定义行（沿控制流图的边算出来，不是「同一函数里出现过的赋值」） */
+  reaches: number[];
+}
+
+export interface DataflowVariable {
+  name: string;
+  defs: DataflowSite[];
+  uses: DataflowUse[];
+}
+
+export interface DataflowFunctionFact {
+  /** 与 `CfgFunction.symbolId` 同一个键 */
+  symbolId: string;
+  name: string;
+  startLine: number;
+  endLine: number;
+  variables: DataflowVariable[];
+  /** 读在写之前（这个函数里没有任何定义能到达它）：可能是外层变量、也可能是真 bug */
+  unresolved?: { name: string; line: number }[];
+  /** 变量数、单变量的使用数或不动点迭代打满上限：只留前面这些，不悄悄砍 */
+  truncated?: boolean;
+}
+
+export interface DataflowFileFact extends FactFileBase {
+  functions: DataflowFunctionFact[];
+  skipped?: FactSkip[];
+}
+
 export interface ImplementationUnit {
   id: string;
   symbol: SymbolInfo;

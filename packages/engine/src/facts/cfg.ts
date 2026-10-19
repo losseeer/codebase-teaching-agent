@@ -297,11 +297,6 @@ class Builder {
     block.endLine = Math.max(block.endLine, node.endPosition.row + 1);
   }
 
-  /** 只记「是什么从这里离开」，不动行号：出口块的区间属于函数尾，不属于某一条 return。 */
-  note(block: CfgBlock, type: string): void {
-    block.statements.push(type);
-  }
-
   link(from: CfgBlock, to: CfgBlock, kind: CfgEdgeKind): void {
     this.edges.push({ from: from.id, to: to.id, kind });
   }
@@ -524,36 +519,24 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   const { builder, spec } = frame;
   const statement = unwrapStatement(node, spec);
 
-  if (spec.returnNodes.has(statement.type)) {
-    // 正常返回全部汇到那一个出口块：多个 return 的函数在图上只有一格「走到头」，
-    // 但出口块上仍记下每一条 return（读的人才知道它是几条路合起来的）
-    builder.note(frame.exit, statement.type);
-    builder.link(current, frame.exit, "next");
+  if (spec.returnNodes.has(statement.type) || spec.throwNodes.has(statement.type)) {
+    // 每条离开函数的语句各占一格，并记在自己的行区间上：数据流靠「这一行落在哪个块」把使用
+    // 点对到定义，汇成一个出口会把 `return x` 那行的归属丢掉（第一版就是这么错的）
+    const left = builder.open("exit", statement, [statement.type]);
+    builder.link(current, left, "next");
     return null;
   }
-  if (spec.throwNodes.has(statement.type)) {
-    const thrown = builder.open("exit", statement, [statement.type]);
-    builder.link(current, thrown, "next");
-    return null;
-  }
-  if (spec.breakNodes.has(statement.type)) {
-    if (frame.breakTo) builder.link(current, frame.breakTo, "next");
-    else frame.notes.push(`break@${statement.startPosition.row + 1}：不在循环或 switch 里，没有落点`);
-    return null;
-  }
-  if (spec.continueNodes.has(statement.type)) {
-    if (frame.continueTo) builder.link(current, frame.continueTo, "back");
-    else frame.notes.push(`continue@${statement.startPosition.row + 1}：不在循环里，没有落点`);
-    return null;
-  }
-  if (spec.fallthroughNodes.has(statement.type)) {
-    if (frame.fallTo) builder.link(current, frame.fallTo, "next");
-    return null;
-  }
-  if (spec.gotoNodes.has(statement.type)) {
-    const label = gotoTargetOf(statement);
+  if (spec.breakNodes.has(statement.type) || spec.continueNodes.has(statement.type) || spec.fallthroughNodes.has(statement.type) || spec.gotoNodes.has(statement.type)) {
+    builder.append(current, statement);
+    const label = spec.gotoNodes.has(statement.type) ? gotoTargetOf(statement) : undefined;
     if (label) frame.gotos.push({ from: current, label, line: statement.startPosition.row + 1 });
-    else builder.append(current, statement);
+    else if (spec.breakNodes.has(statement.type)) {
+      if (frame.breakTo) builder.link(current, frame.breakTo, "next");
+      else frame.notes.push(`break@${statement.startPosition.row + 1}：不在循环或 switch 里，没有落点`);
+    } else if (spec.continueNodes.has(statement.type)) {
+      if (frame.continueTo) builder.link(current, frame.continueTo, "back");
+      else frame.notes.push(`continue@${statement.startPosition.row + 1}：不在循环里，没有落点`);
+    } else if (frame.fallTo) builder.link(current, frame.fallTo, "next");
     return null;
   }
   if (spec.propagateNodes.has(statement.type)) {
@@ -806,15 +789,22 @@ function buildOne(carrier: Carrier, path: string, symbol: SymbolInfo | undefined
   };
 }
 
-/**
-  一个文件的控制流图。`symbols` 传符号表（决定函数 id 与归属），返回的形状里
-  `backend` 为 `none` 时 `functions` 必空、`skipped` 必非空——空图与没判过永远不混。
+/** 一个函数：语法树里的体节点 + 它的控制流图 + 对上的符号（可能没有，见 skipped）。 */
+export interface FunctionScope {
+  node: SyntaxNode;
+  cfg: CfgFunction;
+  symbol?: SymbolInfo;
+  language: string;
+}
 
-  ⚠️ 整张图必须在 `withSyntaxTrees` 的回调**里面**算完：回调一返回，语法树就被释放，
-  留在外面的节点引用会读出空值与 `ERROR`（第一版就是这么写的，测试当场抓到了）。
-  所以回调只往外交「已经算好的普通对象 + 定位用的行号」，一个节点都不留。
+/**
+  一次解析，逐函数回调。控制流图与数据流、类型关系**共用这一趟**：语法树解析是全仓最贵的一步，
+  每多一类产物就多扫一遍源码（复审 #170 就记过「一轮两遍全仓读」这笔账）。
+
+  ⚠️ `visit` 必须在回调内用完节点：回调一返回语法树就被释放，留在外面的节点引用会读出空值与
+  `ERROR`（第一版把节点存到数组里，测试当场抓到了）。
 */
-export function buildFileCfg(path: string, content: string, symbols: SymbolInfo[], language: string): CfgFileFact {
+export function eachFunction(path: string, content: string, symbols: SymbolInfo[], language: string, visit?: (scope: FunctionScope) => void): CfgFileFact {
   const executable = symbols.filter((symbol) => symbol.kind === "function" || symbol.kind === "method");
   const spec = SPECS[grammarKeyOf(path)];
   if (!spec) {
@@ -846,7 +836,9 @@ export function buildFileCfg(path: string, content: string, symbols: SymbolInfo[
         continue;
       }
       claimed.add(symbol.id);
-      drawn.push(buildOne(carrier, path, symbol, spec));
+      const cfg = buildOne(carrier, path, symbol, spec);
+      drawn.push(cfg);
+      visit?.({ node: carrier.node, cfg, symbol, language });
     }
   });
   if (!trees) {
@@ -858,6 +850,14 @@ export function buildFileCfg(path: string, content: string, symbols: SymbolInfo[
     ...anonymous.map((carrier): FactSkip => ({ name: `${carrier.name}@${carrier.line}`, reason: "匿名函数体（没有可寻址的名字），未单独成图" }))
   ];
   return { path, language, backend: "ast", version: FACTS_VERSION, functions: drawn.sort((left, right) => left.startLine - right.startLine), ...(skipped.length ? { skipped } : {}) };
+}
+
+/**
+  一个文件的控制流图。`symbols` 传符号表（决定函数 id 与归属），返回的形状里
+  `backend` 为 `none` 时 `functions` 必空、`skipped` 必非空——空图与没判过永远不混。
+*/
+export function buildFileCfg(path: string, content: string, symbols: SymbolInfo[], language: string): CfgFileFact {
+  return eachFunction(path, content, symbols, language);
 }
 
 /** `.vue` 走 tsx/js 语法，但符号表按 vue 记：这里只按扩展名挑节点表。 */
