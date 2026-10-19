@@ -1,5 +1,5 @@
-import type { CfgFileFact, DeclaredType, DataflowFileFact, DataflowFunctionFact, FactKind, FactSkip, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
-import { languageCapabilitiesOf } from "@codebase-tutor/shared";
+import type { CfgFileFact, DataflowFileFact, DataflowFunctionFact, DeclaredType, FactKind, FactSkip, FileEntry, RegistryFileFact, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
+import { FACT_KINDS, languageCapabilitiesOf } from "@codebase-tutor/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TutorDatabase } from "../store/database.js";
@@ -8,6 +8,7 @@ import { eachFunction } from "./cfg.js";
 import { graphExtensions } from "../depgraph/graph.js";
 import { analyzeFunctionDataflow } from "./dataflow.js";
 import { analyzeFileTypes } from "./types.js";
+import { analyzeFileRegistry, registryEligible } from "./registry.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
@@ -32,6 +33,7 @@ export interface FileFacts {
   cfg: CfgFileFact;
   dataflow: DataflowFileFact;
   types: TypeRelationFileFact;
+  registry: RegistryFileFact;
 }
 
 export function analyzeFile(path: string, content: string, symbols: SymbolInfo[], language: string, allSymbols: SymbolInfo[] = symbols): FileFacts {
@@ -49,7 +51,8 @@ export function analyzeFile(path: string, content: string, symbols: SymbolInfo[]
   return {
     cfg,
     dataflow: { ...shared, functions: flows.sort((left, right) => left.startLine - right.startLine), ...(cfg.skipped ? { skipped: cfg.skipped } : {}) },
-    types: { ...shared, types: types.sort((left, right) => left.line - right.line), ...(typeSkips.length ? { skipped: typeSkips } : {}) }
+    types: { ...shared, types: types.sort((left, right) => left.line - right.line), ...(typeSkips.length ? { skipped: typeSkips } : {}) },
+    registry: analyzeFileRegistry(path, content, language, cfg.backend === "ast")
   };
 }
 
@@ -71,6 +74,18 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
     rows.push({ kind: "cfg", path: file.path, payload: facts.cfg });
     rows.push({ kind: "dataflow", path: file.path, payload: facts.dataflow });
     rows.push({ kind: "typeRelations", path: file.path, payload: facts.types });
+    rows.push({ kind: "registry", path: file.path, payload: facts.registry });
+  }
+  // 构建清单与 SPI 这类非源码文件：只有注册索引一类产物，但「哪些文件真在一起编译」
+  // 与「接口运行时绑到哪个实现」只有它们能回答
+  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+    if (graphExtensions.includes(file.extension.toLowerCase()) || !registryEligible(file.path, false)) continue;
+    try {
+      const content = readFileSync(join(repositoryPath, file.path), "utf8");
+      rows.push({ kind: "registry", path: file.path, payload: analyzeFile(file.path, content, [], languageCapabilitiesOf(file.path).language, []).registry });
+    } catch {
+      continue;
+    }
   }
   return rows;
 }
@@ -84,5 +99,5 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
 export function saveFileFacts(db: TutorDatabase, repositoryId: string, rows: FileFactRow[]): void {
   const grouped = new Map<FactKind, { path: string; payload: unknown }[]>();
   for (const row of rows) grouped.set(row.kind, [...(grouped.get(row.kind) ?? []), { path: row.path, payload: row.payload }]);
-  for (const kind of ["cfg", "dataflow", "typeRelations", "registry"] as FactKind[]) db.saveFileFacts(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
+  for (const kind of FACT_KINDS) db.saveFileFacts(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
 }

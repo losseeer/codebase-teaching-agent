@@ -1075,6 +1075,35 @@ export interface TypeRelationFileFact extends FactFileBase {
   skipped?: FactSkip[];
 }
 
+/**
+  注册与配置索引：**运行时才连上的那批关系**。
+  依赖图看不见它们——`@Autowired private OrderService svc` 没有一行调用，
+  `app.use(router)` 的实参是个导入进来的对象，`META-INF/services` 更是纯文本清单。
+
+  ⚠️ 配置文件**只记键名，绝不记值**。这份产物落在被学习仓自己的 `.tutor/` 里，跟着仓库走、
+  可被随仓删掉，但它仍是明文盘上文件：把 `spring.datasource.password=...` 抄进来，
+  等于自己新开一个泄露面。值里有意义的那部分（比如「有没有配数据源」）由键名本身就能说出来。
+*/
+export type RegistryKind = "route" | "route-consumer" | "di-binding" | "registration" | "config-key" | "manifest";
+
+export interface RegistryEntry {
+  kind: RegistryKind;
+  /** 被登记的东西：路由是归一化后的路径，DI 是接口名，注册点是中间件/插件名，清单是模块或入口 */
+  name: string;
+  /** 怎么认出来的：`Spring 注解` / `构造注入` / `app.use` / `SPI 清单` / `pom 模块` 等 */
+  via: string;
+  line: number;
+  /** 指向谁：接口→实现、路由→处理函数、SPI 接口→实现类 */
+  target?: string;
+  /** 方法（路由用）：GET/POST…，认不出来就不写 */
+  method?: string;
+}
+
+export interface RegistryFileFact extends FactFileBase {
+  entries: RegistryEntry[];
+  skipped?: FactSkip[];
+}
+
 export interface ImplementationUnit {
   id: string;
   symbol: SymbolInfo;

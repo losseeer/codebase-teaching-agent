@@ -18,6 +18,7 @@ import { languageCapabilitiesOf, type RepositoryIndex, type SymbolInfo } from "@
 import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus } from "../depgraph/parser.js";
 import { analyzeFile } from "../facts/index.js";
 import { graphExtensions } from "../depgraph/graph.js";
+import { registryEligible } from "../facts/registry.js";
 
 const repositoryPath = resolve(process.argv[2] ?? "");
 if (!repositoryPath) throw new Error("用法：pnpm facts:report /absolute/path/to/repository");
@@ -51,6 +52,8 @@ let declaredTypes = 0;
 let typeEdges = 0;
 let typeResolved = 0;
 let typeAmbiguous = 0;
+let registryEntries = 0;
+const registryKinds = new Map<string, number>();
 const skips = new Map<string, number>();
 const drift: string[] = [];
 const languages = new Map<string, { files: number; ast: number; none: number }>();
@@ -64,7 +67,7 @@ const parsed = new Map<string, { content: string; symbols: SymbolInfo[] }>();
 for (const file of index.files) {
   // 与产品同一道闸门：没有语法的文件（配置、样式、文档）根本不进产物层，
   // 探针要是把它们算进「没规则」那一栏，读数就比产品难看得多，两边对不上
-  if (!graphExtensions.includes(file.extension.toLowerCase())) continue;
+  if (!graphExtensions.includes(file.extension.toLowerCase()) && !registryEligible(file.path, false)) continue;
   const absolute = join(repositoryPath, file.path);
   if (!existsSync(absolute)) {
     gone += 1;
@@ -87,6 +90,13 @@ for (const [path, entry] of [...parsed.entries()].sort()) {
   const language = languageCapabilitiesOf(path).language;
   const facts = analyzeFile(path, content, symbols, language, allSymbols);
   const cfg = facts.cfg;
+  if (!graphExtensions.includes(path.slice(path.lastIndexOf(".")).toLowerCase())) {
+    // 清单与 SPI：没有语法树，只有注册索引这一类产物，按产品同一口径记一笔
+    registryEntries += facts.registry.entries.length;
+    bytes += JSON.stringify(facts.registry).length;
+    for (const entry of facts.registry.entries) registryKinds.set(entry.kind, (registryKinds.get(entry.kind) ?? 0) + 1);
+    continue;
+  }
   const row = languages.get(language) ?? { files: 0, ast: 0, none: 0 };
   languages.set(language, row);
   if (cfg.backend === "none") {
@@ -117,7 +127,9 @@ for (const [path, entry] of [...parsed.entries()].sort()) {
     if (edge.toFile) typeResolved += 1;
     if (edge.ambiguous?.length) typeAmbiguous += 1;
   }
-  bytes += JSON.stringify(facts.types).length;
+  bytes += JSON.stringify(facts.types).length + JSON.stringify(facts.registry).length;
+  registryEntries += facts.registry.entries.length;
+  for (const entry of facts.registry.entries) registryKinds.set(entry.kind, (registryKinds.get(entry.kind) ?? 0) + 1);
   for (const skip of cfg.skipped ?? []) {
     const reason = skip.reason.replace(/\d+/g, "N");
     note(reason);
@@ -144,6 +156,7 @@ emit(`出了图：${drawn} 个函数（${files} 个文件），块 ${blocks} 个
 emit(`产物体积：约 ${(bytes / 1024).toFixed(0)} KB（整仓一次性，含控制流图 + 数据流 + 类型关系），最大圈复杂度 ${maxComplexity}，打满块数上限的 ${truncated} 个`);
 emit(`数据流：${variables} 个变量、${uses} 次使用，其中 ${unresolved} 次读不到任何可达定义（外层变量与导入名都算在这里），打满上限的 ${flowTruncated} 个函数`);
 emit(`类型关系：${declaredTypes} 个声明类型、${typeEdges} 条边，其中 ${typeResolved} 条反查到了仓内文件、${typeAmbiguous} 条同名多解（只列候选，不挑一个）`);
+emit(`注册与配置索引：${registryEntries} 条 —— ${[...registryKinds.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${kind} ${count}`).join("、") || "一条都没有"}`);
 emit(`按语言（文件数 / 出了图 / 没规则）：${[...languages.entries()].sort((a, b) => b[1].files - a[1].files).slice(0, 10).map(([language, row]) => `${language} ${row.files}/${row.ast}/${row.none}`).join("、") || "一个都没有"}`);
 emit(`没出图的函数体按原因：${skips.size ? [...skips.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => `${count} × ${reason}`).join("；") : "一条都没有"}`);
 if (drift.length) emit(`符号表与语法树对不上的（要逐个看，前 5 条）：\n  ${drift.join("\n  ")}`);

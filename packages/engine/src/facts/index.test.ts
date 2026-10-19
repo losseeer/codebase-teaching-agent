@@ -52,7 +52,7 @@ describe("静态产物落库", () => {
       expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出各类产物").toBe(2);
       expect(coverage.find((row) => row.kind === "typeRelations")?.files).toBe(2);
       // 没算过的类别一条都不报：读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
-      expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "typeRelations"]);
+      expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "registry", "typeRelations"]);
       const typed = db.getFileFact<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
       expect(typed?.types.map((item) => item.name)).toEqual(["Box"]);
       expect(typed?.types[0]?.kind).toBe("class");
