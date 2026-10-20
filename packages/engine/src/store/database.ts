@@ -13,9 +13,6 @@ const nativeBinding = loadAddon() as unknown as string;
 /** getLatestFileSummaries 的默认行数上限；同时导出给调用方做达到上限的判据，避免各处字面量分叉。 */
 export const LATEST_SUMMARY_LIMIT = 2_000;
 
-/** layer_cache 的按龄修剪线：键是输入精确哈希，过期条目只是占空间的垃圾，不存在「过期还在被信任」。 */
-const LAYER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
-
 /** chat_session 的行形状（snake_case 贴着表；域类型转换在 store/chat-store.ts）。 */
 export interface ChatSessionRow {
   id: string;
@@ -78,6 +75,9 @@ export const DATABASE_SCHEMA_SQL = `
         updated_at TEXT NOT NULL,
         PRIMARY KEY(repository_id, exercise_id)
       );
+      -- 【已退役】LLM 产物的通用缓存表：读它写它的两个消费方（流程层与推荐入口层）已经撤掉，
+      -- 表与历史行留着：里面的行是付过费算出来的产物，删表等于把已花的钱抹掉，而留着不读的成本是零
+      -- （同一处置见上面的 diagram_artifact 与 repository_state 那几列）。
       CREATE TABLE IF NOT EXISTS layer_cache (
         cache_key TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
@@ -97,8 +97,7 @@ export const DATABASE_SCHEMA_SQL = `
         PRIMARY KEY(repository_id, kind, status)
       );
       -- 画布上的一张图（store/diagrams.ts 是唯一读写口）。一行 = 一张图，一个仓可以有很多张。
-      -- **刻意不住在 layer_cache 里**：那张表每次写入都按 at 无差别删掉 7 天前的行，
-      -- 语义是「输入变了就没人再命中的缓存」；而图是用户资产，闲置九十天后被一次无关写入清掉就是丢数据。
+      -- 图是用户资产，所以自己一张表：按龄清空的缓存语义（上面那张 layer_cache）不适用在这里。
       -- 名字/来源/时间戳单独立列：图库列表只要这几格，不必把整张图的 JSON 解析一遍。
       CREATE TABLE IF NOT EXISTS diagram (
         repository_id TEXT NOT NULL,
@@ -141,8 +140,8 @@ export const DATABASE_SCHEMA_SQL = `
       -- 静态产物层（2026-10-19）：控制流图、数据流、类型关系、注册与配置索引，按文件一行。
       -- 为什么不进 repository_state.analysis_json：那一列已经是大仓里最重的一块，而且它的指纹
       -- （backendStamp）参与宏观润色的复用判定——把新产物塞进去等于每加一类分析就翻一次全仓的键。
-      -- 为什么不进 layer_cache：那张表每次写入都按 at 删掉 7 天前的行，而这里的东西是确定性重算的，
-      -- 只要源码没改就一直有效，被无关写入清掉就得白重算一遍。
+      -- 为什么不进按龄清空的缓存表：这里的东西是确定性重算的，只要源码没改就一直有效，
+      -- 被一次无关的清理干掉就得白重算一遍。
       -- 一文件一行而不是整仓一行：读侧只取要的那几个文件，不必把整仓的图解析一遍。
       CREATE TABLE IF NOT EXISTS static_fact (
         repository_id TEXT NOT NULL,
@@ -409,30 +408,6 @@ export class TutorDatabase {
       .run(repositoryId, contentVersion, kind, targetUnitId, JSON.stringify(exercise), new Date().toISOString());
   }
 
-  /**
-    通用 L2 产物缓存（流程 / 推荐入口等）。键由 layerCacheKey() 构造，已含仓库、口径版本、模型版本与
-    本层输入哈希，读出来直接用，不需要失效判断。
-    at 语义是「最后一次被用到」：命中方应回写续期（touchLayerCache）；putLayerCache 顺带按龄修剪，防止无限累积。
-  */
-  getLayerCache<T>(key: string): { value: T; at: number } | undefined {
-    const row = this.db.prepare("SELECT payload, at FROM layer_cache WHERE cache_key = ?").get(key) as { payload: string; at: number } | undefined;
-    if (!row) return undefined;
-    try {
-      return { value: JSON.parse(row.payload) as T, at: row.at };
-    } catch {
-      return undefined;
-    }
-  }
-
-  putLayerCache(key: string, value: unknown): void {
-    const now = Date.now();
-    this.db.prepare("INSERT OR REPLACE INTO layer_cache(cache_key, payload, at) VALUES (?, ?, ?)").run(key, JSON.stringify(value), now);
-    this.db.prepare("DELETE FROM layer_cache WHERE at < ?").run(now - LAYER_CACHE_MAX_AGE_MS);
-  }
-
-  touchLayerCache(key: string, at = Date.now()): void {
-    this.db.prepare("UPDATE layer_cache SET at = ? WHERE cache_key = ?").run(at, key);
-  }
 
   /**
     画布上的一张图（store/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
