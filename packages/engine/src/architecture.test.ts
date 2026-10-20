@@ -14,7 +14,7 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 /** 离线脚本与评测夹具不是产品运行路径，不参与分层。 */
 const IGNORED_TOP = new Set(["scripts", "eval"]);
 
-const PIPELINES = new Set(["coursetree", "diagram", "exercises", "depgraph", "summarizer", "implementation", "changes", "scopechat", "harness", "text", "indexer", "learner", "source"]);
+const PIPELINES = new Set(["diagram", "exercises", "depgraph", "summarizer", "implementation", "changes", "scopechat", "harness", "text", "indexer", "learner", "source"]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -121,7 +121,7 @@ describe("分层守卫", () => {
     已知这笔债：管线模块还在直接落 `store/`，理想形态是由参数把端口传进来。
     账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
     */
-  const STORE_DEBT_LINES = 10;
+  const STORE_DEBT_LINES = 6;
 
   it(`管线直接落到 store/ 的依赖恰好等于在册条数（现 ${STORE_DEBT_LINES} 条，只能变小）`, () => {
     const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "store"));

@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatScope, ChatThread, CourseNode, CourseTree, Exercise, ScopedStreamProgress, TeachingProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
+import type { ChatScope, ChatThread, Exercise, ScopedStreamProgress, TeachingProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type StreamTurn } from "../api/client";
-import { firstTeachNode, flatten } from "../views/helpers";
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 
 /**
   Agent 侧栏的 3 个作用域。
-  - `map`      宏观设计（绑定文件树，可见模块/关系，动作只读）
-  - `teaching` 代码教学（绑定当前课程节点，可见源码/锚点/stage，动作可写入 session）
+  - `map`      宏观设计（绑定文件树，可见画布/关系，动作只读）
+  - `teaching` 代码教学（绑定当前文件或目录，可见源码/锚点，动作可写入 session）
   - `practice` 练习评估（绑定当前练习，可见题目/进度，动作可写入学习日志）
   */
 export type Scope = "map" | "teaching" | "practice";
 export const SCOPES: ReadonlyArray<Scope> = ["map", "teaching", "practice"] as const;
 
 /** 宏观设计绑定的两种合法情形：项目目录选文件 / 画布模块（+其关联文件）。 */
-export type MapBinding = { kind: "file" | "module" | "flow"; title?: string; path?: string };
+export type MapBinding = { kind: "file" | "module"; title?: string; path?: string };
 
 export const SCOPE_LABEL: Record<Scope, string> = {
   map: "宏观设计",
@@ -140,20 +139,19 @@ export interface ScopedChatApi {
   /** 软删线程：GUI 侧二次确认在 AgentRail（文案要让用户看见「审计日志仍保留脱敏摘要」）。 */
   removeThread: (scope: Scope, threadId: string) => Promise<void>;
 
-  /** 课程树（teaching 作用的节点数据；在途教学状态是下面的 `session`） */
-  course: CourseTree | null;
-  /** 课程数据代数：repositoryId 不变的重新导入 / 需要强制刷新课程请求时递增。 */
+  /** 教学作用域：`file:<path>` / `dir:<path>`；null = 还没选。 */
+  scopeRef: string | null;
+  /** 作用域的人话标签（文件名 / 目录名 / 仓库根目录）。 */
+  scopeLabel: string;
+  setScopeRef: (ref: string | null) => void;
+  /** 数据代数：重新导入 / 产物更新时递增，画布与源码树据此重取。 */
   dataVersion: number;
-  /** 强制重发课程相关请求（导入完成后由 App 调用）。 */
-  reloadCourseData: () => void;
-  selected: CourseNode | null;
-  setSelected: (node: CourseNode) => void;
+  /** 强制重发产物相关请求（导入完成或收到 repository.updated 后调用）。 */
+  reloadRepositoryData: () => void;
 
-  /** 宏观设计作用域绑定（节点「X」· 文件）：由 CoursePage 写入，AgentRail 只读。
-    `scopePaths`：从画布上拖住一个模块时随请求上送它的可见文件清单（真课程树节点），
-    引擎据此把作用域收到这个模块上；换绑其他节点时必须省略（清空），否则旧清单会污染新节点的上下文。 */
-  mapNode: CourseNode | null;
-  setMapNode: (node: CourseNode | null, scopePaths?: string[]) => void;
+  /** 宏观设计作用域的文件清单：由 CoursePage 选中画布节点时写入，map-chat 只把它当作用域提示。 */
+  mapScopePaths: string[];
+  setMapScope: (scopePaths: string[]) => void;
   /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
   mapBinding: MapBinding | null;
   setMapBinding: (binding: MapBinding | null) => void;
@@ -200,7 +198,7 @@ export interface ScopedChatApi {
 
 /**
   三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）：
-  页面只读绑定与选择（selected / settings / mapNode / practiceUnit），写入都经 AgentRail。
+  页面只读绑定与选择（scopeRef / settings / mapScopePaths / practiceUnit），写入都经 AgentRail。
   命名口径：本对象管线程（threadId / ThreadItem / chatThreads），`session` 是引擎的 TutorSession（教学作用域的在途状态）；
   同一条教学会话三个名字——库里 `chat_session` 行 = GUI 的 threadId = 引擎的 sessionId。
   */
@@ -216,13 +214,15 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}) }] }));
 };
 
-const [course, setCourse] = useState<CourseTree | null>(null);
-const [selected, setSelected] = useState<CourseNode | null>(null);
-// 课程数据代数：同一仓库重新导入时 repositoryId 由内容 hash 派生、保持不变，
-// 仅靠 [repositoryId] 依赖不会重发请求（首次 404 后 course 恒为 null）——导入完成后由 App 调 reloadCourseData() 强制重跑。
+/** 教学作用域：只存 `file:<path>` / `dir:<path>`，不依赖课程树。 */
+const [scopeRef, setScopeRefState] = useState<string | null>(null);
+const setScopeRef = (ref: string | null): void => setScopeRefState(ref);
+const scopeLabel = scopeRef
+  ? (scopeRef.startsWith("dir:") ? (scopeRef.slice(4) === "." ? "仓库根目录" : scopeRef.slice(4)) : scopeRef.slice(5).split("/").pop() ?? scopeRef)
+  : "";
+// 产物数据代数：重新导入 / watcher 重分析 / agent 改图后递增，画布与源码树据此重取。
 const [dataVersion, setDataVersion] = useState(0);
-const reloadCourseData = (): void => setDataVersion((version) => version + 1);
-// 引擎侧产物变了（watcher 增量重分析 / agent 改档）：课程树与模块档位要跟着重取，不能停在旧读数上
+const reloadRepositoryData = (): void => setDataVersion((version) => version + 1);
 useEffect(() => {
   if (!repositoryId) return;
   const controller = new AbortController();
@@ -231,11 +231,9 @@ useEffect(() => {
   }, controller.signal);
   return () => { stop(); controller.abort(); };
 }, [repositoryId]);
-// 节点 + 画布模块文件清单是一个绑定的两半，合成一个 state 原子更新——分开两个 setState 会让
-// 「换绑到其他节点却残留旧清单」成为可能（它们只对特定选中项有意义）。
-const [mapSelection, setMapSelection] = useState<{ node: CourseNode | null; scopePaths: string[] }>({ node: null, scopePaths: [] });
-const mapNode = mapSelection.node;
-const setMapNode = (node: CourseNode | null, scopePaths: string[] = []): void => setMapSelection({ node, scopePaths });
+// 画布选中节点时上送的文件清单：只作为 map-chat 的作用域提示。
+const [mapScopePaths, setMapScopePaths] = useState<string[]>([]);
+const setMapScope = (scopePaths: string[]): void => setMapScopePaths(scopePaths);
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
 // 画布上正打开的那张图：绑定行读它，map-chat 也把它当作用域上送，
@@ -246,29 +244,8 @@ const [pendingDiagramOpen, setPendingDiagramOpen] = useState<{ id: string; name:
 const requestOpenDiagram = (diagram: { id: string; name: string }): void => setPendingDiagramOpen(diagram);
 const clearDiagramOpen = (): void => setPendingDiagramOpen(null);
 const [practiceUnit, setPracticeUnit] = useState("");
-useEffect(() => { setMapNode(null); setMapFile(""); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
-useEffect(() => {
-  if (!repositoryId) { setCourse(null); setSelected(null); return; }
-  let cancelled = false;
-  api.getCourse(repositoryId).then((tree) => {
-    if (cancelled) return;
-    setCourse(tree);
-    // 重导入后按 id 把在绑选择挂回新树：`prev ?? …` 保旧对象会让上下文请求一直带着过期节点（children/anchors 都是旧的）
-    const nodes = flatten(tree.root);
-    setMapSelection((prev) => {
-      if (!prev.node) return { node: tree.root, scopePaths: [] };
-      return { node: nodes.find((item) => item.id === prev.node!.id) ?? tree.root, scopePaths: [] };
-    });
-    const first = firstTeachNode(tree.root);
-    setSelected((prev) => {
-      if (!prev) return first ?? null;
-      // id 失效 → 归位首个可教节点；id 一变，[selected?.id] 效应自动清掉过期教学 session
-      return nodes.find((item) => item.id === prev.id) ?? first ?? null;
-    });
-  }).catch(() => { if (!cancelled) setCourse(null); });
-  return () => { cancelled = true; };
-}, [repositoryId, dataVersion]);
-  /** 引擎的在途教学会话：只在本 hook 内部用（切节点要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
+useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); setMapBinding(null); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
+  /** 引擎的在途教学会话：只在本 hook 内部用（切作用域要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
   const [content, setContent] = useState("");
@@ -319,7 +296,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (!repositoryId) return;
-    // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态（与下方 getCourse 效应同一套口径）
+    // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态
     let cancelled = false;
     // 这一发唯一的用处：把没被用户动过的设置档种子成推荐值。画像本身界面不显示（成本与明细都在 InsightsPage 自己取数）
     api.getLearner(repositoryId).then((profile) => {
@@ -328,11 +305,6 @@ useEffect(() => {
     }).catch(() => { /* 取不到画像就保持当前档，不猜 */ });
     return () => { cancelled = true; };
   }, [repositoryId]);
-  useEffect(() => {
-    setSession(null);
-    clear();
-  }, [selected?.id]);
-
   /** 写记忆：静默兜底与取舍见 chatMemory.ts 的 `writeThreadMemory`。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
     if (!repositoryId) return;
@@ -432,7 +404,7 @@ useEffect(() => {
       if (hasDebt(target)) void loadThread(target, currentThreadRef.current[target]!);
     }
   };
-  // 处理器只装一次，通过 ref 调最新闭包：loadThread 读的是渲染期的 selected/course
+  // 处理器只装一次，通过 ref 调最新闭包：loadThread 读的是渲染期的 scopeRef
   const reconcilePendingRef = useRef(reconcilePending);
   reconcilePendingRef.current = reconcilePending;
   useEffect(() => {
@@ -498,13 +470,17 @@ useEffect(() => {
     try {
       if (scope === "teaching") {
         const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
-        // 教学线程绑节点：点开的线程若属于别的节点，先把左栏指向那个节点（节点效应接着把这个线程挂回来）
-        if (thread?.courseNodeId && thread.courseNodeId !== selected?.id) {
-          const node = course ? flatten(course.root).find((item) => item.id === thread.courseNodeId) : undefined;
-          if (node) { setSelected(node); return; }
+        if (thread && !thread.scopeRef) {
+          // 旧课程树时代的线程没有文件/目录作用域：直接断，不假装还能接着聊
+          setCurrentThread("teaching", null);
+          pushMessage("teaching", "agent", "这条教学线程绑的是旧课程节点，作用域已失效；请重新选一个文件或目录开始。", "hint");
+          return;
         }
+        // 教学线程绑作用域：点开的线程若属于别的文件/目录，先把左栏指向那个作用域
+        if (thread?.scopeRef && thread.scopeRef !== scopeRef) setScopeRefState(thread.scopeRef);
         const restored = await api.getSession(threadId);
         if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
+        setScopeRefState(restored.scopeRef);
         setSession(restored);
         setSettingsState(restored.settings);
         place(restored.messages);
@@ -562,15 +538,14 @@ useEffect(() => {
     const title = firstQuestion?.trim().slice(0, 60) || undefined; // 首问当标题：列表里一眼认得出这条会话在聊什么
     try {
       if (scope === "teaching") {
-        if (!selected) return null;
-        const created = await api.createSession(repositoryId, selected.id, settings);
+        if (!scopeRef) return null;
+        const created = await api.createSession(repositoryId, scopeRef, settings);
         setSession(created.session);
-          void refreshThreads(scope);
+        void refreshThreads(scope);
         return created.session.id;
       }
       const { thread } = await api.createThread(repositoryId, {
         scope: CHAT_SCOPE[scope],
-        ...(scope === "map" && mapNode ? { nodeId: mapNode.id } : {}),
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
         ...(title ? { title } : {})
       });
@@ -648,33 +623,33 @@ useEffect(() => {
     if (repositoryId) void refreshThreads(scope);
   }, [repositoryId, scope]);
 
-  // 换节点 = 挂回该节点最近一次教学线程；该节点没有会话时留空，下一次发送经 createSession 新建。
+  // 换作用域 = 挂回该文件/目录最近一次教学线程；没有会话时留空，下一次发送经 createSession 新建。
   // 清单可能比本地状态滞后一拍（新建后还没回表），这时什么都不做：中途清掉当前线程会打断正在进行的回合，也会把 session 一起清空。
   // 已经停在这条线程上时也不再回读：loadThread 会用库里的旧正文覆盖侧栏，而新会话的第一问可能还没落库。
   // 真被别处删掉的线程由 refreshThreads 剪枝。
   useEffect(() => {
-    if (!repositoryId || !selected) return;
+    if (!repositoryId || !scopeRef) return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
     const currentThread = current ? list.find((item) => item.id === current) : undefined;
     if (current && !currentThread) return; // 清单还没回表（刚新建 / 刚刷新）：这一拍什么都不做
     if (currentThread) {
-      if (currentThread.courseNodeId !== selected.id) setCurrentThread("teaching", null);
+      if (currentThread.scopeRef !== scopeRef) setCurrentThread("teaching", null);
       return;
     }
-    const target = list.find((item) => item.courseNodeId === selected.id);
+    const target = list.find((item) => item.scopeRef === scopeRef);
     if (target) setCurrentThread("teaching", target.id);
-  }, [repositoryId, selected, chatThreads.teaching, session?.id]);
+  }, [repositoryId, scopeRef, chatThreads.teaching, session?.id]);
 
   const send = async (): Promise<void> => {
     if (!content.trim()) return;
-    // 用户说出口的话一定先上屏：下面的守卫（没绑节点）只补一条提示，不丢弃这一句。
+    // 用户说出口的话一定先上屏：下面的守卫（没选作用域）只补一条提示，不丢弃这一句。
     const message = content;
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
     setContent("");
-    if (!selected) {
-      pushMessage("teaching", "agent", "先在左栏选一个可教节点，再回到这里对话。", "hint");
+    if (!scopeRef) {
+      pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
       return;
     }
     setSending(true); setError(""); setScopeProgress("teaching", "正在准备教学上下文…");
@@ -683,9 +658,9 @@ useEffect(() => {
     try {
       let active = session;
       if (!active) {
-        const created = await api.createSession(repositoryId, selected.id, settings);
+        const created = await api.createSession(repositoryId, scopeRef, settings);
         active = created.session;
-          // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
+        // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
         markCurrentThread("teaching", active.id);
         knownRowCount.current.teaching = 0; // 新建线程是空的：补账基准从这里起算
         void refreshThreads("teaching");
@@ -742,9 +717,8 @@ useEffect(() => {
       const reply = scope === "map"
         ? await api.mapChatStream(repositoryId, {
             content: message,
-            nodeId: mapNode?.id,
-            // 画布选中模块：带上它的可见文件清单，引擎按这份清单解析作用域（节点本身也照旧上送）
-            ...(mapSelection.scopePaths.length ? { scopePaths: mapSelection.scopePaths } : {}),
+            // 画布选中节点：带上它关联的文件清单，引擎按这份清单解析作用域
+            ...(mapScopePaths.length ? { scopePaths: mapScopePaths } : {}),
             path: mapFile || undefined,
             // 画布正打开的图：agent 改哪张、删哪条边都按这一格定，认不出就不动
             ...(openDiagram ? { diagramId: openDiagram.id } : {}),
@@ -775,8 +749,8 @@ useEffect(() => {
     scope, setScope,
     threads, pushMessage,
     chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread,
-    course, dataVersion, reloadCourseData, selected, setSelected,
-    mapNode, setMapNode, mapFile, setMapFile, mapBinding, setMapBinding,
+    scopeRef, scopeLabel, setScopeRef, dataVersion, reloadRepositoryData,
+    mapScopePaths, setMapScope, mapFile, setMapFile, mapBinding, setMapBinding,
     openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,
     practiceUnit, setPracticeUnit,
     settings, setSettings: setSettingsState,

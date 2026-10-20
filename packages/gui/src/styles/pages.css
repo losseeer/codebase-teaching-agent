@@ -173,7 +173,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .dg-node:hover { border-color: var(--brand-600); }
 .dg-node.selected { border-color: var(--brand-700); box-shadow: 0 0 0 3px var(--ring-strong); }
 .dg-node.note { background: var(--accent-soft); border-style: dashed; }
-/* 引用核不到课程树：虚线 + 去色 + 右上角一枚点。画成"还活着"就是在骗读者。 */
+/* 引用核不到索引：虚线 + 去色 + 右上角一枚点。画成"还活着"就是在骗读者。 */
 .dg-node.stale { border-style: dashed; opacity: 0.62; border-color: var(--warn-border); }
 .dg-node .dg-label { font-size: var(--fs-12); font-weight: 650; line-height: 1.3; word-break: break-all; }
 .dg-node .dg-sub { font-size: 10px; color: var(--ink-3); margin-top: 1px; }

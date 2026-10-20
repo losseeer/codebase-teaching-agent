@@ -13,7 +13,6 @@ import { TutorDatabase } from "../store/database.js";
 /**
   全仓重做 L1 摘要：口径 bump 之后让全仓摘要换新走的正规产品写入通道。
 
-  与 phase0:prepare-study 的差别：那个走确定性档且会改写课程树、往仓库里写调研材料；
   本脚本只更新摘要，写入前先断言 provider 是模型档（确定性档会把 LLM 摘要整表覆盖掉）。
 
   用法：pnpm l1:reburn [仓库路径]（默认取 repositories.json 里最近使用的那条）

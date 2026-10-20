@@ -25,17 +25,11 @@ function recommend(entries: MasteryMapEntry[]): RecommendedTutorSettings {
 
 export function deriveLearnerProfile(repositoryId: string, events: JournalEvent[], now = new Date()): LearnerProfile {
   const mastery = deriveMasteryMap(events);
-  const unitIds = [...new Set(events.map((event) => {
-    const value = event.payload.unit_id ?? event.payload.target_unit_id;
-    return typeof value === "string" ? value : undefined;
-  }).filter((value): value is string => Boolean(value)))];
-  const fadedByUnit = Object.fromEntries(unitIds.map((unitId) => [unitId, deriveFaded(events, unitId)]));
   return {
     repositoryId,
     generatedAt: now.toISOString(),
     mastery,
     faded: deriveFaded(events),
-    fadedByUnit,
     recommended: recommend(mastery)
   };
 }

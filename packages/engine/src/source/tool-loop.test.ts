@@ -42,8 +42,11 @@ describe("completeWithReadTool", () => {
     expect(result.usage).toEqual({ inputTokens: 250, outputTokens: 40 });
     // 收尾轮不再带工具，并以回绝文本应答第二次调用
     expect(calls[2].tools).toBeUndefined();
-    const refusal = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("读文件上限"));
-    expect(refusal).toBeDefined();
+    const refusal = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("工具轮次已用完"));
+    expect(refusal?.content, "到限的是轮数，回话就不能说成读文件上限——模型会把这句转述给学习者").toContain("读文件额度还剩 4 次");
+    // 收尾这一次是本回合最后一次调用：折叠换来的省没有下一轮可享，读到的正文必须原样在场
+    const readBody = calls[2].messages?.find((message) => message.role === "tool" && message.content.startsWith("文件 "));
+    expect(readBody?.content, "到闸收尾把正文抽成占位符，这一回合就交不出东西").not.toContain("早期读取结果已省略");
     // 首轮 user 消息始终在 messages[0]（工具轮次后不丢上下文与提问）
     expect(calls[1].messages?.[0]).toMatchObject({ role: "user" });
     expect(calls[1].messages?.[0].content).toBe("问题原文");

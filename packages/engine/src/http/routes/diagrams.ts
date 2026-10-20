@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { broadcast } from "../../events.js";
-import { diagramWarnings } from "../../diagram/set-diagram.js";
+import { diagramFilesByNode, diagramWarnings } from "../../diagram/set-diagram.js";
 import { diagramWriteContextFor } from "../../application/canvas-tools.js";
 import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../store/diagrams.js";
 import { Journal } from "../../store/journal.js";
@@ -20,7 +20,7 @@ export function registerDiagramRoutes(app: FastifyInstance): void {
     （`diagram/set-diagram.ts`），避免两条写路径各写一套校验与记账。
 
   建、改名、删、恢复动的是这张图这个实体而不是它的结构，所以由界面直发，各自记一行审计、广播一帧。
-  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` 只比对课程树与方块清单）。
+  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` / `diagramFilesByNode` 只比对索引与依赖图）。
 */
 
 /** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
@@ -57,7 +57,7 @@ app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/r
   }
 });
 
-/** 单张图 + 读侧的引用复检：图上的模块节点还指得着现在的课程树吗（图是历史产物，树会重生成）。 */
+/** 单张图 + 读侧的引用复检：图上的模块节点还指得着现在的索引吗（图是历史产物，文件会改名、目录会删）。 */
 app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
@@ -65,7 +65,8 @@ app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositor
   try {
     const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
     if (!diagram) return diagramNotFound(reply);
-    return { diagram, warnings: diagramWarnings(diagramWriteContextFor(repository, database), diagram) };
+    const context = diagramWriteContextFor(repository, database);
+    return { diagram, warnings: diagramWarnings(context, diagram), filesByNode: diagramFilesByNode(context, diagram) };
   } finally {
     repository.handle.unpin();
   }

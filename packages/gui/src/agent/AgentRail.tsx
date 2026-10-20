@@ -149,7 +149,7 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
   const canSend = !t.sending && t.content.trim().length > 0;
   if (scope === "teaching") {
     return {
-      placeholder: t.selected ? `围绕「${t.selected.title}」说说你的推理；不知道就输入「不知道」` : "说说你的推理；不知道就输入「不知道」",
+      placeholder: t.scopeRef ? `围绕「${t.scopeLabel}」说说你的推理；不知道就输入「不知道」` : "先在左栏选一个文件或目录，再说说你的推理；不知道就输入「不知道」",
       canSend,
       onSend: t.send,
     };
@@ -185,13 +185,11 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
     const binding = t.mapBinding;
     if (!binding) return t.openDiagram ? `当前图 · ${t.openDiagram.name}` : "未绑定 —— 选中节点 / 文件，或直接让 agent 画一张";
     if (binding.kind === "file") return `文件 · ${binding.path}`;
-    const label = binding.kind === "module" ? "模块" : "环节";
-    return binding.path ? `${label}「${binding.title}」 · ${binding.path}` : `${label}「${binding.title}」`;
+    return binding.path ? `节点「${binding.title}」 · ${binding.path}` : `节点「${binding.title}」`;
   }
   if (scope === "teaching") {
-    if (!t.selected) return "未定位锚点";
-    const anchor = t.selected.anchors[0];
-    return anchor ? `锚点 ${anchor.path}:${anchor.line}` : t.selected.title;
+    if (!t.scopeRef) return "未选作用域";
+    return `${t.scopeRef.startsWith("dir:") ? "目录" : "文件"} · ${t.scopeRef.slice(t.scopeRef.indexOf(":") + 1)}`;
   }
   if (!t.practiceUnit) return "未开始练习";
   const anchor = t.practiceExercise?.anchors[0];

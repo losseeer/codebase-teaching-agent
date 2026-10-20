@@ -42,17 +42,13 @@ function eventLine(event: JournalEvent): string {
       return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
-    case "module_tier_overridden":
-      return `手动改档 ${clip(p.module_title ?? p.module_label, 24)}：${p.given ?? p.from ?? "未记"}→${p.to ?? "未记"}（引擎当时算的主链路占比=${p.core_share ?? "未记"}）`;
     case "action_veto":
       return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
     case "hint_depth":
       return `深度=${p.depth ?? "未记"} stage=${p.stage ?? "未记"}（unit=${clip(p.unit_id, 24)}）`;
-    case "scope_degraded":
-      return `node=${clip(p.node_id, 40)} scopePaths=${p.scope_paths ?? "未记"}`;
     case "session_created":
     case "session_deleted":
-      return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} node=${clip(p.node_id, 24)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;
+      return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} scopeRef=${clip(p.scope_ref, 40)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;
     default: {
       const detail = Object.entries(p).slice(0, 5).map(([key, value]) => `${key}=${clip(value, 30)}`).join(" ");
       return detail || "（无字段）";

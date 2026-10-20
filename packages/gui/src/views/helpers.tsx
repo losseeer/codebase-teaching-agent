@@ -1,10 +1,10 @@
 import type { ReactElement } from "react";
-import type { CourseNode, ExerciseKind } from "@codebase-tutor/shared/wire";
+import type { ExerciseKind } from "@codebase-tutor/shared/wire";
 
-// views/ 共享的小工具：通用占位 UI（Loading / EmptyState）、题型与日期的中文文案、课程树遍历。
+// views/ 共享的小工具：通用占位 UI（Loading / EmptyState）与题型、日期的中文文案。
 
 export function Loading(): ReactElement {
-  return <div className="loading"><i className="spinner" aria-hidden />正在读取本地课程数据</div>;
+  return <div className="loading"><i className="spinner" aria-hidden />正在读取本地数据</div>;
 }
 
 export function EmptyState({ title, detail }: { title: string; detail: string }): ReactElement {
@@ -31,13 +31,5 @@ export function exerciseKindLabel(kind: ExerciseKind): string {
     author_function: "从零实现",
     llm_rubric: "主题练习"
   })[kind];
-}
-
-export function firstTeachNode(root: CourseNode): CourseNode {
-  return flatten(root).find((node) => node.kind === "workflow" && node.anchors.length) ?? root;
-}
-
-export function flatten(root: CourseNode): CourseNode[] {
-  return [root, ...root.children.flatMap(flatten)];
 }
 

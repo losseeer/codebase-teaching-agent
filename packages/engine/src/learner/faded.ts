@@ -21,15 +21,9 @@ function isFailure(event: JournalEvent): boolean {
  * Derives the remaining support clues. A successful mastery event fades one
  * dimension at a time; a failure restores support in the reverse order.
  */
-export function deriveFaded(events: JournalEvent[], unitId?: string): FadedState {
+export function deriveFaded(events: JournalEvent[]): FadedState {
   const state: FadedState = { ...initial };
-  const relevant = [...events]
-    .filter((event) => {
-      if (!unitId) return true;
-      const eventUnit = event.payload.unit_id ?? event.payload.target_unit_id;
-      return eventUnit === unitId || (event.type === "dependency_event" && typeof eventUnit !== "string");
-    })
-    .sort((left, right) => left.at.localeCompare(right.at));
+  const relevant = [...events].sort((left, right) => left.at.localeCompare(right.at));
   for (const event of relevant) {
     if (isSuccess(event)) {
       state.mastered = true;

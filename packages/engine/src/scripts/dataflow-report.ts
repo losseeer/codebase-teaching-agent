@@ -13,8 +13,8 @@ import type { JournalEvent } from "@codebase-tutor/shared";
   两条口径必须说在前面，否则这张表会误导人：
   1. 后台任务（导入期的 L1 摘要、监听触发的重分析）没有 traceId，两条线都记 null，所以那部分调用
      不能按仓归属——本仓的文件清单来自 journal（逐文件准确），那批调用的 provider/token 只能给全局数。
-  2. 只有装进请求的源码原文才落清单。推荐入口、课程树润色、意图/动作分类这些 scene 送的是
-     派生产物（路径、标题、摘要），按设计没有 `code_egress` 行；报表末尾把它们列出来，
+  2. 只有装进请求的源码原文才落清单。摘要生成这类 scene 送的是派生产物（路径、摘要），
+     按设计没有 `code_egress` 行；报表末尾把它们列出来，
      「没有清单」与「漏了清单」是两件事，得让人分得清。
 
   用法：pnpm dataflow:report -- <被学习仓路径> [--since <ISO 日期>] [--limit 20] [--json]

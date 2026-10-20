@@ -17,7 +17,7 @@
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
 | 宏观设计 | 图库、项目目录、画布节点 | `flow_node_selected`（画布节点选中沿用此事件名） · `file_anchored` | 不写 LLM 调用 |
-| 代码教学 | 源码 tab、课程树锚点 | `file_opened` · `line_located` · `entry_adopted` · `entry_overridden` | 不直接改源码、不写 `style_shift` |
+| 代码教学 | 源码 tab、目录锚点 | `file_opened` · `line_located` | 不直接改源码、不写 `style_shift` |
 | 练习评估 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 | 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |
 
@@ -27,14 +27,14 @@
    （`session_created` 与 `manual`），前端再写一遍就是同一事实双写、必然漂移。
    此处与早前「接入点」清单里的 `TutorPage: 风格滑杆 → style_shift` 冲突，**以契约表为准**。
 2. **引擎侧事件前端不得发射，而且 2026-10-12 起这条不再是口头约定**：`POST /api/repositories/:id/journal`
-   只受理 shared 的 `UI_JOURNAL_EVENTS` 那 10 类，其余（`file_read` / `code_egress` / `token_usage` /
+   只受理 shared 的 `UI_JOURNAL_EVENTS`，其余（`file_read` / `code_egress` / `token_usage` /
    `turn_text` / `unit_mastered` / `hint_depth` / `exercise_result` …）一律 400 + `reason: "engine_owned_event"`。
    理由是证据价值：`journal.jsonl` 现在承担着「哪些代码出过门、花了多少钱」这类账，
    而这条接口本机任何进程都调得到——照旧全类型放行，等于让被审计的一方自己填账（细节见开发日志 §46）。
    前端只写「用户做了什么」，不写「引擎得出了什么」；`exercise_submitted`（用户提交）与
    `exercise_result`（判分结果）就是这条边界两侧。
    `events.ts` 里的 `UI_JOURNAL_EVENTS` **是转出口，真源在 shared**（引擎的准入判定与前端类型同源）；
-   以前这里手抄一份、还漏过 `module_tier_overridden`，那份副本已经删掉。
+   以前这里手抄过一份，那份副本已经删掉。
    `turn_text`（2026-09-22 口径）是「消息全文不落盘」红线的重新谈判结果：三种对话（teach / map_chat /
    practice_chat）的问题+回复双边进 journal，各截 2000 字带 `*_truncated` 留痕，永久追加、无 TTL 无开关——
    它是 B 档第 2/3 刀（教学法不变量机检、表达质量裁判）的被测输入源，只能由引擎写。
@@ -54,13 +54,11 @@
 
 | 文件 | 触发 | 事件 |
 |---|---|---|
-| `views/CoursePage.tsx` | 点模块节点 / 流程环节 | `flow_node_selected`（`view` 区分 architecture / flow） |
-| `views/CoursePage.tsx` | 点目录文件 / 锚点 / 流程环节里的文件 | `file_anchored`（`source` 区分 tree / anchor / flow） |
+| `views/CoursePage.tsx` | 点画布节点 | `flow_node_selected`（`view: "canvas"`） |
+| `views/CoursePage.tsx` | 点节点抽屉里的关联文件 / 锚点文件 | `file_anchored`（`source: "anchor"`） |
 | `views/TutorPage.tsx` | 打开一个没开过的文件 | `file_opened` |
-| `views/TutorPage.tsx` | 已开过的文件换行定位（含切节点带过来的自动定位） | `line_located` |
-| `views/TutorPage.tsx` | 点推荐入口且真的换绑选中节点（`source` 区分 llm/回落） | `entry_adopted` |
-| `views/TutorPage.tsx` | 推荐列表展示中手动打开不在清单里的文件（树/⌘P；口径「开文件即改选」） | `entry_overridden` |
-| `views/PracticePage.tsx` | 切换练习模块（id 未变不记） | `module_switched` |
+| `views/TutorPage.tsx` | 已开过的文件换行定位 | `line_located` |
+| `views/PracticePage.tsx` | 切换练习主题（id 未变不记） | `module_switched` |
 | `views/PracticePage.tsx` | 提交答案（判分结果由引擎记 `exercise_result`） | `exercise_submitted` |
 | `views/ImportPage.tsx` | 导入完成、工作区切换（只记一次） | `repository_switched` |
 

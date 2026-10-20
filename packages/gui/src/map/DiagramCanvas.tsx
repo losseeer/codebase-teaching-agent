@@ -352,7 +352,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
         )}
         <span
           className={`badge ${diagram.source === "agent" ? "badge-info" : "badge-neutral"}`}
-          title={`结构改动只走对话里的 agent（set_diagram 单写入口）；这张图由${diagram.source === "agent" ? " agent 画" : " 你自己新建"}。${warnings.length ? `${warnings.length} 个节点的引用核不到课程树。` : ""}`}
+          title={`结构改动只走对话里的 agent（set_diagram 单写入口）；这张图由${diagram.source === "agent" ? " agent 画" : " 你自己新建"}。${warnings.length ? `${warnings.length} 个节点的引用核不到索引。` : ""}`}
         >{`${diagram.source === "agent" ? "agent 生成" : "我创建"} · ${relativeTime(diagram.updatedAt)}`}</span>
         <SavePill state={saveState} error={saveError} />
         <span className="spacer" />

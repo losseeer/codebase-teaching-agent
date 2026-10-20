@@ -5,10 +5,6 @@
 export * from "./contracts.js";
 
 export type {
-  CourseNode,
-  CourseTree,
-  CourseTier,
-  CourseTierEvidence,
   Diagram,
   DiagramBody,
   DiagramEdge,
@@ -31,12 +27,10 @@ export type {
   MasteryRecord,
   PracticeSummary,
   RepositoryIndex,
-  RepositoryOverlays,
-  SuggestedEntry,
   TraceScalar,
   TutorSession,
   TutorSettings,
   UiJournalEventType
 } from "./index.js";
 
-export { isDocumentationPath, STYLE_BAND_LABEL, styleBand, UI_JOURNAL_EVENTS } from "./index.js";
+export { STYLE_BAND_LABEL, styleBand, UI_JOURNAL_EVENTS } from "./index.js";

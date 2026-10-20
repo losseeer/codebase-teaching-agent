@@ -21,7 +21,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   const nodeOf = (id: string, ref: string, label: string): { id: string; kind: "module"; label: string; ref: string; x: number; y: number } => ({ id, kind: "module", label, ref, x: 40, y: 60 });
   const fixtureBody = (): DiagramBody => ({
     groups: [{ id: "g-1", label: "仓内写的", x: 20, y: 20, w: 400, h: 300 }],
-    nodes: [nodeOf("n-src", "module:src", "注册实现"), nodeOf("n-doc", "module:docs", "设计说明")],
+    nodes: [nodeOf("n-src", "file:src/main.ts", "注册实现"), nodeOf("n-doc", "dir:src", "源码目录")],
     edges: [{ id: "e-1", from: "n-src", to: "n-doc", origin: "inferred" }]
   });
 
@@ -133,12 +133,12 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   });
 
   it("读侧报出断掉的引用；界面这条路对结构一个字段都写不进去", async () => {
-    const stale = seed("引用过期的那张", { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "已经不在树上的模块", ref: "module:被删掉的那个", x: 10, y: 10 }], edges: [] });
+    const stale = seed("引用过期的那张", { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "已经不在索引里的模块", ref: "file:src/被删掉的那个.ts", x: 10, y: 10 }], edges: [] });
     const warning = await read(stale.id);
-    expect(warning.warnings).toEqual([{ node: "n-gone", reason: expect.stringContaining("已经不在现在的课程树或方块清单里") }]);
+    expect(warning.warnings).toEqual([{ node: "n-gone", reason: expect.stringContaining("核不上") }]);
 
     const seeded = seed("结构不归界面");
-    const attempted = await fx.app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "还是只有名字能改", edit: { action: "add_node", node: nodeOf("n-extra", "module:src", "界面偷偷加的节点") } } });
+    const attempted = await fx.app.inject({ method: "PATCH", url: `${base()}/${seeded.id}`, payload: { name: "还是只有名字能改", edit: { action: "add_node", node: nodeOf("n-extra", "file:src/main.ts", "界面偷偷加的节点") } } });
     expect(attempted.statusCode, "改名这一支照样成功：它不动结构").toBe(200);
     const after = await read(seeded.id);
     expect(after.diagram.name).toBe("还是只有名字能改");
@@ -149,7 +149,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   });
 
   it("agent 连一条声称 static 的边：引擎核不到就降档，落盘、回执、审计三处说的是同一件事", async () => {
-    const seeded = seed("边要说清依据", { groups: [], nodes: [nodeOf("n-src", "module:src", "注册实现"), nodeOf("n-doc", "module:docs", "设计说明")], edges: [] });
+    const seeded = seed("边要说清依据", { groups: [], nodes: [nodeOf("n-src", "file:src/main.ts", "注册实现"), nodeOf("n-doc", "dir:src", "源码目录")], edges: [] });
     const threadId = await fx.newThread("map", "改图线程");
     const before = fx.sentTools.length;
     fx.scripted = [

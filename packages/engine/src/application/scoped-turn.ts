@@ -112,9 +112,6 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
   for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
   // 降级次数是「上下文≠选中项」的负向代理指标，必须留痕可聚合
-  if (result.scopeDegraded) {
-    journal.append("scope_degraded", { node_id: result.scopeDegraded.nodeId, scope_paths: result.scopeDegraded.scopePathsCount }, threadId);
-  }
   journal.append("loop_round", { scene: "map_chat", tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }

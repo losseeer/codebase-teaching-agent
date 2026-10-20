@@ -43,8 +43,6 @@ export interface ReadToolLoopInput {
   signal?: AbortSignal;
   /** 跨仓访问，见 `CrossRepoContext`。不传 = 只有当前仓，工具清单不变。 */
   cross?: CrossRepoContext;
-  /** 模块档位工具（有副作用的工具之一）。不传 = 这个作用域没有写能力，清单里连 `set_module_tier` 这个节点都不出现。 */
-  moduleTier?: ModuleTierToolContext;
   /** 画布上那张图的结构改动。不传 = 这个作用域没有改图的权力，清单里不出现 `set_diagram`；教学与练习作用域都不给。 */
   diagram?: SetDiagramToolContext;
   /** 静态产物的只读门。不传 = 清单里没有 `query_facts`：产物层没算过的仓给了它只会每次回「这类产物不在册」。 */
@@ -129,47 +127,14 @@ export const CROSS_REPO_LINK_TOOL: LlmTool = {
 };
 
 /**
-  模块档位通道的工具面（有副作用）。
-  ⚠️ 参数表里没有层、边、文件、模块的增删，是刻意不给：这一层只回答「这个模块归哪一档」。
-  写侧（服务层传进来的闭包）再做一次白名单校验，两层都挡住改结构。
-*/
-export const SET_MODULE_TIER_TOOL: LlmTool = {
-  name: "set_module_tier",
-  description: "修正模块的结构档（主链路 core / 基础设施 facility / 外围 periphery），两种动作：set_tier（给 module+tier，改某模块的结构档）、reset（撤销人工改档）。reset 给 module 只撤那个模块的改档；不给 module＝把这个仓所有人工修正一次清空——不是「撤销刚才那条」的意思，只有用户明确说要全清时才这么调。module 用上下文里那张模块清单上的 id（module: 开头）。只能改「结构档怎么归」这个判断题；层、箭头、模块清单、文件路径都不在可改范围内。",
-  parameters: {
-    type: "object",
-    properties: {
-      action: { type: "string", description: "set_tier / reset" },
-      module: { type: "string", description: "模块 id（module: 开头）；reset 给了它只撤这个模块的改档" },
-      tier: { type: "string", description: "core / facility / periphery（set_tier 必填）" }
-    },
-    required: ["action"]
-  }
-};
-
-/** 副作用工具的落地通道：由服务层给一个闭包，工具循环不认识数据库与 journal。 */
-export interface ModuleTierToolContext {
-  /**
-    执行一次修正并回一句给模型看的话（写成什么、或拒写原因）。
-    这段文本会作为 `role:"tool"` 结果回喂，模型下一轮就按它说——所以必须是实际落盘后的状态，不能回意图。
-  */
-  apply: (argumentsJson: string) => string;
-  /**
-    现在的模块清单 + 已存的人工改档（一段文本，由作用域层进上下文）。
-    修正存在引擎里，横幅读得到、模型读不到：没有这份清单，用户说「撤掉那条」时模型既没有条目也没有节点 id。
-  */
-  inventory?: string;
-}
-
-/**
-  画布上「结构」的写入口（与 `set_module_tier` 并列为仅有的两个有副作用的工具）。
+  画布上「结构」的写入口（全仓唯一有副作用的工具）。
   四条纪律写死在描述里而不是留在提示词里劝：位置是用户的（`move` 只在用户开口时代挪一格）；
   `module` 节点必须带真 `ref`，核不上整次拒写；边的 `origin` 由引擎拿结构表核，只降不升，降完把原因写在边上；
   `draw` 一次交整张图。
 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：指课程树里的模块 id 或上下文那份画布现场上的 arch: 方块 id，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
+  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
   parameters: {
     type: "object",
     properties: {
@@ -181,7 +146,7 @@ export const SET_DIAGRAM_TOOL: LlmTool = {
 };
 
 /**
-  改这张图的落地通道，口径同 `ModuleTierToolContext`：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
+  改这张图的落地通道：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
   `inventory` 是画布现场——有副作用的工具必须先看见现状，否则只能猜 id、猜「那条边」指哪条。
 */
 export interface SetDiagramToolContext {
@@ -215,8 +180,8 @@ export interface FactsToolContext {
 }
 
 /** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "moduleTier" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
-  const { cross, moduleTier, diagram, skills, external } = input;
+function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
+  const { cross, diagram, skills, external } = input;
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
     const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
@@ -229,8 +194,7 @@ function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "moduleTie
   const tools: LlmTool[] = [names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL];
   if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
   if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
-  // 写侧工具只在服务层给了闭包时才出现：practice_chat 与没绑定模块的回合都不该有这个能力
-  if (moduleTier) tools.push(SET_MODULE_TIER_TOOL);
+  // 写侧工具只在服务层给了闭包时才出现：教学与练习作用域都不该有改图能力
   if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
   if (input.facts) tools.push(QUERY_FACTS_TOOL);
@@ -311,11 +275,18 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     if (input.signal?.aborted) throw new LlmAbortedError();
     if (rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
+      // 到闸时说的是**真正到限的那一项**。轮次用完时读文件额度常常还剩着，两种情况混成同一句「读文件上限」，
+      // 模型只会把这句错话转述给学习者（实测读数：3 轮 / 只读了 2 个文件，上限是 4）。
+      const refusal = succeededReads >= input.maxCalls
+        ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
+        : `本次对话的工具轮次已用完（${rounds} 轮）；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
       for (const call of completion.toolCalls) {
-        messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
+        messages.push({ role: "tool", toolCallId: call.id, content: refusal });
       }
       input.onProgress?.({ type: "thinking", round: rounds + 2 });
-      compactToolHistory(messages);
+      // 这是本回合最后一次调用：折叠换来的省没有下一轮可享，把刚读到的正文抽走只会让这一回合交不出东西。
+      // 所以只丢早期 reasoning（推理 token 才是账单大头），tool 原文留着。
+      compactToolHistory(messages, { keepToolResults: true });
       completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene, signal: input.signal });
       usage = addUsage(usage, completion.usage);
       break;
@@ -346,11 +317,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const outcome = executeSearchCode(corpus, call.argumentsJson);
         codeSearches.push(repo ? { ...outcome.audit, query: `${outcome.audit.query}（仓 ${repo}）` } : outcome.audit);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
-        continue;
-      }
-      if (call.name === SET_MODULE_TIER_TOOL.name) {
-        // 副作用一次就回一句实话；不占读文件额度（它读的是产物，不是源码）
-        messages.push({ role: "tool", toolCallId: call.id, content: input.moduleTier?.apply(call.argumentsJson) ?? "当前作用域没开放模块档位修正。" });
         continue;
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {
@@ -468,8 +434,11 @@ function readQueryHint(argumentsJson: string): string {
 
 /** micro_compact：发给下一轮前，只保留最近一轮的 tool 结果原文，更早轮次的 tool 内容压成短占位符——
     读取结果可再生，模型忘了可以再调一次 read_file，不值得逐轮重付。
+    这条前提只在「还有下一轮」时成立，所以到闸那一次要传 `keepToolResults`：最后一次调用把正文抽走，
+    省的是一个不存在的成本，代价是这一回合交不出东西。
     早期 assistant 的 reasoningContent 一并丢弃（推理 token 是账单大头）；最近一轮保留，部分协议要求 tool 调用轮回传。 */
-export function compactToolHistory(messages: LlmMessage[], placeholderChars = 240): void {
+export function compactToolHistory(messages: LlmMessage[], options: { placeholderChars?: number; keepToolResults?: boolean } = {}): void {
+  const placeholderChars = options.placeholderChars ?? 240;
   let lastAssistant = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "assistant" && messages[index].toolCalls?.length) {
@@ -481,6 +450,7 @@ export function compactToolHistory(messages: LlmMessage[], placeholderChars = 24
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (index < lastAssistant && message.role === "assistant") message.reasoningContent = undefined;
+    if (options.keepToolResults) continue;
     if (index < lastAssistant && message.role === "tool" && message.content.length > placeholderChars) {
       message.content = `${message.content.slice(0, placeholderChars)}\n…（早期读取结果已省略以控制上下文，需要完整内容可再次调用 read_file。）`;
     }

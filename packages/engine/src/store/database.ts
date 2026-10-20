@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { CourseTree, FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 
 const schemaVersion = 8;
@@ -21,7 +21,8 @@ export interface ChatSessionRow {
   id: string;
   repository_id: string;
   scope: string;
-  course_node_id: string | null;
+  /** 教学作用域：`file:<path>` / `dir:<path>`；旧行的 course_node_id 不再读取。 */
+  scope_ref: string | null;
   exercise_id: string | null;
   title: string;
   state_json: string | null;
@@ -49,6 +50,7 @@ export const DATABASE_SCHEMA_SQL = `
         repository_id TEXT PRIMARY KEY,
         updated_at TEXT NOT NULL,
         index_json TEXT,
+        -- 历史列：旧课程树产物。2026-10-20 起不再写入、不再读取；历史行留着，删列要迁移而收益是零。
         course_json TEXT,
         estimate_json TEXT,
         analysis_json TEXT,
@@ -112,6 +114,8 @@ export const DATABASE_SCHEMA_SQL = `
         id TEXT PRIMARY KEY,
         repository_id TEXT NOT NULL,
         scope TEXT NOT NULL,
+        scope_ref TEXT,
+        -- 历史列：旧版课程节点 id。新行恒 NULL，读侧不再使用。
         course_node_id TEXT,
         exercise_id TEXT,
         title TEXT NOT NULL,
@@ -267,8 +271,8 @@ export class TutorDatabase {
     this.upsert(index.repositoryId, { index: JSON.stringify(index) });
   }
 
-  saveCourse(tree: CourseTree, estimate: ImportEstimate): void {
-    this.upsert(tree.repositoryId, { course: JSON.stringify(tree), estimate: JSON.stringify(estimate) });
+  saveEstimate(repositoryId: string, estimate: ImportEstimate): void {
+    this.upsert(repositoryId, { estimate: JSON.stringify(estimate) });
   }
 
   saveAnalysis(analysis: RepositoryAnalysis): void {
@@ -278,11 +282,6 @@ export class TutorDatabase {
   getIndex(repositoryId: string): RepositoryIndex | undefined {
     const value = this.getJsonColumn(repositoryId, "index_json");
     return value ? JSON.parse(value) as RepositoryIndex : undefined;
-  }
-
-  getCourse(repositoryId: string): CourseTree | undefined {
-    const value = this.getJsonColumn(repositoryId, "course_json");
-    return value ? JSON.parse(value) as CourseTree : undefined;
   }
 
   getEstimate(repositoryId: string): ImportEstimate | undefined {
@@ -463,19 +462,19 @@ export class TutorDatabase {
     会话持久化（chat_session / chat_message）的语句层；业务出入口是 store/chat-store.ts（id/时间戳生成、入参守卫与领域类型在那里）。
     软删语义在此层落实：所有读侧带 deleted_at IS NULL，「列表看不见」与「消息行仍在」同时成立。
     */
-  insertChatSession(session: { id: string; repositoryId: string; scope: string; courseNodeId: string | null; exerciseId: string | null; title: string; at: string }): void {
-    this.db.prepare(`INSERT INTO chat_session(id, repository_id, scope, course_node_id, exercise_id, title, created_at, updated_at)
+  insertChatSession(session: { id: string; repositoryId: string; scope: string; scopeRef: string | null; exerciseId: string | null; title: string; at: string }): void {
+    this.db.prepare(`INSERT INTO chat_session(id, repository_id, scope, scope_ref, exercise_id, title, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(session.id, session.repositoryId, session.scope, session.courseNodeId, session.exerciseId, session.title, session.at, session.at);
+      .run(session.id, session.repositoryId, session.scope, session.scopeRef, session.exerciseId, session.title, session.at, session.at);
   }
 
   getChatSession(sessionId: string): ChatSessionRow | undefined {
-    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE id = ?").get(sessionId) as ChatSessionRow | undefined;
+    return this.db.prepare("SELECT id, repository_id, scope, scope_ref, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE id = ?").get(sessionId) as ChatSessionRow | undefined;
   }
 
   /** 未删会话列表：最近更新在前（GUI 的会话列表口径）。`limit` 兜住长期累积。 */
   listChatSessions(repositoryId: string, scope: string, limit = 100): ChatSessionRow[] {
-    return this.db.prepare("SELECT id, repository_id, scope, course_node_id, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?")
+    return this.db.prepare("SELECT id, repository_id, scope, scope_ref, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?")
       .all(repositoryId, scope, limit) as ChatSessionRow[];
   }
 
@@ -546,19 +545,19 @@ export class TutorDatabase {
 
   /**
     一次只取要的那一列：analysis_json 是大仓里最重的一块，整行捞取会让轻读付重代价。
-    列名取自这张表固定的五个，不接受外部字符串，拼进 SQL 不构成注入面。
+    列名取自这张表固定的四个，不接受外部字符串，拼进 SQL 不构成注入面。
     */
-  private getJsonColumn(repositoryId: string, column: "index_json" | "course_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
+  private getJsonColumn(repositoryId: string, column: "index_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
     const row = this.db.prepare(`SELECT ${column} AS value FROM repository_state WHERE repository_id = ?`).get(repositoryId) as { value: string | null } | undefined;
     return row?.value;
   }
 
   /**
     只写这次给出来的那几列：ON CONFLICT DO UPDATE 只碰给了值的列，其余留在原地不动。
-    列名从这张表固定的五个键里查，外部字符串进不了 SQL。
+    列名从这张表固定的四个键里查，外部字符串进不了 SQL。
     */
-  private upsert(repositoryId: string, patch: { index?: string; course?: string; estimate?: string; analysis?: string; settings?: string }): void {
-    const columnOf = { index: "index_json", course: "course_json", estimate: "estimate_json", analysis: "analysis_json", settings: "settings_json" } as const;
+  private upsert(repositoryId: string, patch: { index?: string; estimate?: string; analysis?: string; settings?: string }): void {
+    const columnOf = { index: "index_json", estimate: "estimate_json", analysis: "analysis_json", settings: "settings_json" } as const;
     const keys = (Object.keys(columnOf) as (keyof typeof columnOf)[]).filter((key) => patch[key] !== undefined);
     if (!keys.length) return;
     const columns = keys.map((key) => columnOf[key]).join(", ");

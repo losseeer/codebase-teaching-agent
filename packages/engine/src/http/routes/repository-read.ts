@@ -1,35 +1,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { moduleCourseOf } from "../../coursetree/blockmap.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "../../source/files.js";
 import { exercises, repositoryOr404 } from "../../services.js";
 import { pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../store/journal.js";
-import { readOverlays } from "../../store/overlays.js";
 import type { FastifyInstance } from "fastify";
 
 /**
-  仓库的只读产物路由：索引、课程树投影、练习摘要、学习者画像、导入报告、源码。
+  仓库的只读产物路由：索引、练习摘要、学习者画像、导入报告、源码。
   这一组一条纪律：一行模型请求都不发、一分钱都不花（对照 `read-routes-never-bill`）。
-  付费的几组各自在 architecture / exercises / chat / teaching 里。
+  付费的几组各自在 exercises / chat / teaching 里。
 */
 export function registerRepositoryReadRoutes(app: FastifyInstance): void {
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/index", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   return repository?.index ?? reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-});
-
-app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/course", async (request, reply) => {
-  const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  // 模块分级实时计算（主链路/基础设施/外围）：角色是结构规则的纯函数，已导入的仓库不用重跑分析就能看到分级
-  const courseDatabase = repository.handle.pin();
-  try {
-    return moduleCourseOf(repository.course, repository.analysis, repository.index, readOverlays(courseDatabase, repository.index.repositoryId));
-  } finally {
-    repository.handle.unpin();
-  }
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/practice", async (request, reply) => {

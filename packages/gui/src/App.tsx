@@ -191,8 +191,8 @@ export function App(): ReactElement {
         updateWorkspace({ repositoryId, repositoryPath: mounted.repositoryPath });
         setFreshness(mounted.freshness);
         setMountBlocked(null);
-        // 切仓后课程树必须重取：它按 repositoryId 拉，但首次 404 后不会自己重试（同导入完成后的处理）
-        chat.reloadCourseData();
+        // 切仓后仓内数据必须重取：它按 repositoryId 拉，但首次 404 后不会自己重试（同导入完成后的处理）
+        chat.reloadRepositoryData();
         emit(repositoryId, "repository_switched", { repository_path: mounted.repositoryPath, trigger: "catalog" });
         await refreshCatalog();
         navigate("/app?workspace=map");
@@ -270,7 +270,7 @@ export function App(): ReactElement {
           <Routes>
             {/* 根路径固定落导入页：导入是每次打开的起点，不带 workspace 记忆直通 /app */}
             <Route path="/" element={<Navigate to="/import" replace />} />
-            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadCourseData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} />} />
+            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadRepositoryData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} />} />
             <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
             <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
             <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
@@ -427,8 +427,8 @@ function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnTyp
   useEffect(() => { chat.setScope(active); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [active]);
   return (
     <div className="workbench-root">
-      {/* 三个视图常驻挂载，所以「可见性」必须传进去：推荐入口与流程生成都是花钱的 LLM 调用，
-          用户停在宏观设计时不该由隐藏面板替他点一次。 */}
+      {/* 三个视图常驻挂载，所以「可见性」必须传进去：文件树与画布数据只在可见时拉取，
+          隐藏面板不该替用户发请求。 */}
       <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} visible={active === "map"} /></div>
       <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} visible={active === "teaching"} /></div>
       <div className="workbench-view" hidden={active !== "practice"}><PracticePage workspace={workspace} chat={chat} visible={active === "practice"} /></div>

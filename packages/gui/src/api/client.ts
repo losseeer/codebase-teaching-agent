@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type RepositoryOverlays, type ChatScope, type CostSummary, type CourseTree, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type SuggestedEntry, type TutorSession, type TutorSettings } from "@codebase-tutor/shared/wire";
+import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type ChatScope, type CostSummary, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type TutorSession, type TutorSettings } from "@codebase-tutor/shared/wire";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -200,7 +200,7 @@ async function checked<T>(name: string, schema: ZodType<T>, path: string, init?:
   画图工作区（`/diagrams`）的两条线上形状。
 
   - `DiagramPosition`：拖动落盘只带坐标，结构一个字段都不碰；
-  - `DiagramWarning`：读侧的诚实检查——图上某个模块节点的 `ref` 在现在的课程树里查不到了（改名、删模块或重分析过）。
+  - `DiagramWarning`：读侧的诚实检查——图上某个模块节点的 `ref` 在现在的索引里查不到了（改名、删文件或重分析过）。
     引擎发的是节点 id + 一句原因，界面据此把那个节点标成失效，不当活节点画。
 */
 export interface DiagramPosition {
@@ -233,12 +233,10 @@ export const api = {
   /** 把仓库移出地址簿（只动引擎的登记，不碰仓库里的 .tutor/）。 */
   forgetRepository: (repositoryId: string) => request<{ repositories: RepositoryCatalogEntry[] }>(`/api/repositories/${repositoryId}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
-  getCourse: (repositoryId: string) => request<CourseTree>(`/api/repositories/${repositoryId}/course`),
-  /** 导入完成后的报告：索引概况 + 本次 token/金额估算 + 建议入口。 */
+  /** 导入完成后的报告：索引概况 + 本次 token/金额估算。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string } }>(`/api/repositories/${repositoryId}/report`),
   /** 教学/练习两侧的锚点行读数：按文件路径取那份实时源码。 */
   getSource: (repositoryId: string, path: string, line: number) => request<{ path: string; line: number; content: string }>(`/api/repositories/${repositoryId}/source?path=${encodeURIComponent(path)}&line=${line}`),
-  getModuleEntries: (repositoryId: string, moduleLabel: string, moduleHint?: string) => request<{ entries: SuggestedEntry[]; source: "llm" | "module_files"; reason?: string }>(`/api/repositories/${repositoryId}/module-entries?module=${encodeURIComponent(moduleLabel)}&hint=${encodeURIComponent(moduleHint ?? "")}`),
   /* ---- 画图工作区（宏观设计）：七条路由全部免费——只读/写库里的图元，一次都不碰模型。
      这里故意没有「加节点 / 删节点 / 改边」那种面向界面的结构写入口：结构改动只有 agent 的
      `set_diagram` 一条路（引擎侧白名单），界面提供拖动（几何）与改名，别的一律不给。
@@ -247,17 +245,15 @@ export const api = {
   listDiagrams: (repositoryId: string) => request<{ diagrams: DiagramSummary[] }>(`/api/repositories/${repositoryId}/diagrams`),
   /** 新建一张空白图（名字省略则由引擎起「未命名图」并去重）。 */
   createDiagram: (repositoryId: string, name?: string) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams`, { method: "POST", body: JSON.stringify(name ? { name } : {}) }),
-  /** 打开一张图：`warnings` 是读侧的失效检查（`ref` 已经不在课程树/方块清单里的节点）。 */
-  getDiagram: (repositoryId: string, diagramId: string) => request<{ diagram: Diagram; warnings: DiagramWarning[] }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`),
+  /** 打开一张图：`warnings` 是读侧的失效检查（`ref` 已经不在索引里的节点）。 */
+  getDiagram: (repositoryId: string, diagramId: string) => request<{ diagram: Diagram; warnings: DiagramWarning[]; filesByNode: Record<string, { path: string; line: number }[]> }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`),
   renameDiagram: (repositoryId: string, diagramId: string, name: string) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteDiagram: (repositoryId: string, diagramId: string) => request<{ deleted: boolean; diagramId: string }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}`, { method: "DELETE" }),
   /** 几何落盘：拖动结束后只送变化过的位置。存的是位置，不产生版本（版本只由 agent 的结构改动留下）。 */
   saveDiagramGeometry: (repositoryId: string, diagramId: string, positions: DiagramPosition[]) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/geometry`, { method: "PUT", body: JSON.stringify({ positions }) }),
   /** 回到某一版快照（`index` 按 `versions` 数组下标，旧→新）。引擎会把恢复后的样子再存一版，历史不截断。 */
   restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
-  getOverlays: (repositoryId: string) => request<{ overlays: RepositoryOverlays; counts: { modules: number } }>(`/api/repositories/${repositoryId}/overlays`),
   /** 浏览器本地遗留覆盖层的一次性上报。 */
-  mergeOverlays: (repositoryId: string, overlays: RepositoryOverlays) => request<{ overlays: RepositoryOverlays; counts: { modules: number } }>(`/api/repositories/${repositoryId}/overlays`, { method: "POST", body: JSON.stringify(overlays) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
   createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
@@ -266,7 +262,7 @@ export const api = {
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
-  createSession: (repositoryId: string, courseNodeId: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, courseNodeId, ...(settings ? { settings } : {}) }) }),
+  createSession: (repositoryId: string, scopeRef: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, scopeRef, ...(settings ? { settings } : {}) }) }),
   /** 按 id 取教学会话：内存未命中时引擎从 chat_session（含状态快照）+ chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   /**
@@ -274,7 +270,7 @@ export const api = {
     删除是软删——列表与正文从此看不见，行仍在库里；journal 另记一条 session_deleted。
     */
   listThreads: (repositoryId: string, scope: ChatScope) => checked("threads", z.object({ threads: z.array(chatThreadSchema) }), `/api/repositories/${repositoryId}/threads?scope=${scope}`),
-  createThread: (repositoryId: string, payload: { scope: ChatScope; nodeId?: string; exerciseId?: string; title?: string }) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
+  createThread: (repositoryId: string, payload: { scope: ChatScope; scopeRef?: string; exerciseId?: string; title?: string }) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
   getThreadMessages: (threadId: string) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages`),
   renameThread: (threadId: string, title: string) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteThread: (threadId: string) => checked("threadDelete", z.object({ deleted: z.boolean(), threadId: z.string() }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
@@ -288,7 +284,7 @@ export const api = {
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、以及这一回合真画/真改了哪张图）。
       `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; nodeId?: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
+  mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
       `diagram?: undefined`：练习作用域没有画图工具，那一格恒不出现——两条流的 done 形状对齐，

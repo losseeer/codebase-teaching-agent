@@ -1,5 +1,5 @@
 import { basename, dirname } from "node:path";
-import type { CourseNode, Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
+import type { Exercise, RepositoryAnalysis, SourceAnchor } from "@codebase-tutor/shared";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
@@ -7,20 +7,20 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ModuleTierToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, FactsToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../external/clients.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
 /**
   作用域对话（宏观设计 map / 练习评估 practice）：单轮 LLM 开放讨论——不是教学状态机（无阶段/提示阶梯），
-  判分权不涉及。上下文全部来自静态分析事实（依赖图、课程节点、练习题面 + 源码摘录）；
+  判分权不涉及。上下文全部来自静态分析事实（依赖图、画布上送的文件清单、练习题面 + 源码摘录）；
   练习的标准答案/锚点不进入上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
   map 额外注入项目结构全景与依赖/调用邻接——全局视野对全局问题必要，且路径/边清单成本远低于源码全文；
   更深的代码由模型经 read_file 按需拉取，server 传入 search 语料时才另开放 search_code（只回位置与职责，不占读文件额度）。
   系统提示词统一由 harness/prompts.ts 构建（与代码教学共用 styleBrief 口径与作用域边界），本文件不自带副本；
   style 由 server 路由从请求里取用户当前风格档位后传入（默认 50 = 普通档）。
-  上下文必须承认自己看到的是多大一片：作用域解析不到时不静默降级，明示「按全局视野作答」（判据见 mapChat 里那段分支）。
+  上下文必须承认自己看到的是多大一片：作用域清单与已分析集交集为空时不注入作用域段，只在全景里作答。
   */
 
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
@@ -85,8 +85,6 @@ export interface ScopedChatResult {
   codeSearches?: CodeSearchRecord[];
   /** mapChat 专用：工具循环实际轮数（供 server 记 journal loop_round）。 */
   toolRounds: number;
-  /** mapChat 专用：作用域解析失败、按全局视野作答的留痕（供 server 记 journal scope_degraded）。 */
-  scopeDegraded?: { nodeId: string; scopePathsCount: number };
   /** mapChat 专用：本回合打过的外部工具（供 server 逐条记 journal mcp_call，失败也在里面）。 */
   mcpCalls?: McpCallAudit[];
   /** mapChat 专用：本回合取过的技能正文（供 server 记 journal skill_read）。 */
@@ -160,7 +158,7 @@ function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
 }
 
 /**
-  画布选中模块的作用域段。模块 id 在课程树里，文件清单由 GUI 随请求上送；
+  画布选中模块的作用域段。文件清单由 GUI 随请求上送；
   这里与已分析集求交后列「路径（行数）：L1 职责」。
   与 search_code 同源同口径（复用其语料的 lines/summary 字段），交集为空返回空串（= 没解析到作用域）。
 */
@@ -209,43 +207,28 @@ function joinList(items: string[]): string {
 
 /**
   map 作用域的一轮对话。
-  两个写工具（`set_module_tier` 改模块结构档、`set_diagram` 改画布上的结构）只给这一个作用域：
+  写工具（`set_diagram` 改画布上的结构）只给这一个作用域：
   教学与练习两张脸面对的是代码与题目，画布不在它们面前，给了就是让模型去改用户此刻看不见的东西。
   每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
   否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; node?: CourseNode; nodeId?: string; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 模块档位工具（能写产物的工具之一）：只在 map_chat 由路由给，`inventory` 那个节点同时进上下文。 */ moduleTier?: ModuleTierToolContext; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
-  const { analysis, node, path, provider } = input;
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+  const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
   const egress: EgressCollector = [];
-  let scopeDegraded: ScopedChatResult["scopeDegraded"];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
-  if (node) {
-    const children = node.children.map((child) => `- ${child.title}（${child.kind}）`).join("\n");
-    sections.push(`当前节点：${node.title}（${node.kind}）\n摘要：${node.summary}${children ? `\n子节点：\n${children}` : ""}`);
-    excerptsWithinBudget(input.repoPath, node.anchors.slice(0, 3), true, egress).forEach((block) => sections.push(block));
-  } else if (input.nodeId) {
-    // 选了节点却在课程树解析不到（课程重新生成后 id 失效）：静默降级会让模型以错误作用域自信作答。
-    // 先试画布上送的文件清单，仍解析不到就明示「按全局视野作答」，让回复自己承认作用域；降级本身记一条留痕供 journal 统计。
-    const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
-    if (scope) {
-      sections.push(scope);
-    } else {
-      sections.push(`作用域说明：学习者聚焦的节点「${input.nodeId.slice(0, 120)}」不在当前课程树中（可能来自画布或课程已更新），本次按全局视野作答。`);
-      scopeDegraded = { nodeId: input.nodeId.slice(0, 200), scopePathsCount: new Set(input.scopePaths ?? []).size };
-    }
-  }
-  // 模块现场（模块 id、当前档位、已存的人工改档）：有写工具才有意义，没有写能力的作用域不占这段 token
-  if (input.moduleTier?.inventory) sections.push(input.moduleTier.inventory);
-  // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 是第二个写工具，同理必须先把现状给它，
+  // 画布上送的文件清单（选中模块时）：只作为作用域提示，未知路径由交集丢弃
+  const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
+  if (scope) sections.push(scope);
+  // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 必须先把现状给它，
   // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id。
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
   // 产物在册情况一句话（哪几类、各多少文件）：没有这句，模型会以为「没提过的东西就不存在」而不去查
   if (input.facts?.inventory) sections.push(input.facts.inventory);
-  const target = path ?? node?.anchors[0]?.path;
+  const target = path;
   if (target) {
     const { importsOut, importedBy, outTwo, inTwo } = graphNeighborhood(analysis, target);
     if (importsOut.length || importedBy.length || outTwo.length || inTwo.length) {
@@ -254,7 +237,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     const calls = callNeighborhoodSection(analysis, target);
     if (calls) sections.push(calls);
   }
-  if (path && (!node || !node.anchors.some((anchor) => anchor.path === path))) {
+  if (path) {
     const bound = excerptForAnchor(input.repoPath, { path, line: 1, label: "绑定文件" }, true, egress);
     if (bound) sections.push(bound);
   }
@@ -277,7 +260,6 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     scene: "map.chat",
     ...(input.search ? { search: input.search } : {}),
     ...(input.cross ? { cross: input.cross } : {}),
-    ...(input.moduleTier ? { moduleTier: input.moduleTier } : {}),
     ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
@@ -295,8 +277,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
     ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {}),
     ...(result.mcpCalls.length ? { mcpCalls: result.mcpCalls } : {}),
-    ...(result.skillReads.length ? { skillReads: result.skillReads } : {}),
-    ...(scopeDegraded ? { scopeDegraded } : {})
+    ...(result.skillReads.length ? { skillReads: result.skillReads } : {})
   };
 }
 

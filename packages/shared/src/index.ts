@@ -44,7 +44,7 @@ export { checkContract, ContractViolation, scopedStreamProgressSchema, serverEve
 /**
   引擎侧共享出口。跨进程流动的形状住在 `contracts.ts`（zod schema 反推类型）；
   界面只从 `wire.ts` 取（contracts + 界面真正消费的领域类型），不再直接依赖这里的引擎内部模型
-  （课程树、图、切片、练习……）与辅助函数。
+  （图、切片、练习……）与辅助函数。
 */
 
 export interface FileEntry {
@@ -108,58 +108,6 @@ export interface SourceAnchor {
 }
 
 /**
-  模块分级（分级折叠用，引擎在 `/course` 响应前实时计算，不落树）：
-  - `core` 主干 = 模块里有入口，或执行主干文件占到可见文件的四分之一；
-  - `facility` 基础设施 = 只有支撑逻辑或外部设施接入（配置、存储、网络客户端）；
-  - `periphery` 外围 = 只剩末端工具与测试（文档、监控看板、压测报表都在这里）。
-  判据来自 `depgraph/roles.ts` 的结构规则（确定、可复现），不依赖模型。
-  占比门槛是为了别让一个文件把几十文件的模块抬成主干。
-*/
-export type CourseTier = "core" | "facility" | "periphery";
-
-/**
-  分级依据（与 `tier` 一起实时计算，给界面把判据露出来）：分不准时先要看得见为什么这么分。
-  `decidingPath` 是把模块抬成主干的那个文件；`entryFiles`/`coreFiles`/`visibleFiles` 是数出来的量。
-*/
-export interface CourseTierEvidence {
-  visibleFiles: number;
-  coreFiles: number;
-  entryFiles: number;
-  /** 可见文件里被判主干的占比（0~1）。 */
-  coreShare: number;
-  decidingPath?: string;
-  /** 为什么是这个档：一句话（中文，界面原样显示）。 */
-  reason: string;
-}
-
-export interface CourseNode {
-  id: string;
-  title: string;
-  summary: string;
-  kind: "overview" | "workflow" | "module" | "implementation";
-  anchors: SourceAnchor[];
-  children: CourseNode[];
-  /** 仅 module 节点有值：界面据此把「外围」折起来，首屏只露主链路与基础设施 */
-  tier?: CourseTier;
-  /** 仅 module 节点有值，与 `tier` 同时实时计算：这一档是按哪些数判出来的 */
-  tierEvidence?: CourseTierEvidence;
-  /**
-    仅 module 节点有值：`tier` 被人工改过时为 true，并带上引擎自己判的那一档。
-    界面得知道现在这个档是谁说的，否则「恢复引擎判据」没有依据，
-    「分得准不准」的读数也只剩一个孤零零的改后值。
-  */
-  tierOverridden?: boolean;
-  tierGiven?: CourseTier;
-}
-
-export interface CourseTree {
-  repositoryId: string;
-  modelVersion: string;
-  generatedAt: string;
-  root: CourseNode;
-}
-
-/**
   外部包的分类档。类型放在 shared（图上的「边界之外」栏与它对得上），
   具体词典在引擎侧 `depgraph/external-catalog.ts`（那是数据，且只覆盖真实遇到的包）。
   `stdlib` 单列：语言自带的东西不算「系统之外」，混进 `other` 会把那一栏灌满噪声。
@@ -203,7 +151,7 @@ export const EXTERNAL_CATEGORY_LABEL: Record<ExternalCategory, string> = {
 /** 这张图是谁建的：agent 画的，还是用户自己新建空白的。图库与工具栏的徽标就看这一格。 */
 export type DiagramSource = "agent" | "me";
 
-/** 图元节点只有两种：挂在课程树上的模块节点，和一张便签。 */
+/** 图元节点只有两种：挂在文件/目录/符号或分组上的模块节点，和一张便签。 */
 export type DiagramNodeKind = "module" | "note";
 
 /**
@@ -232,10 +180,16 @@ export interface DiagramNode {
   /** 挂在哪个分组框里（纯声明，不做包含判定）。 */
   group?: string;
   /**
-    `kind:"module"` 必填：课程树里的模块 id 或画布模块块 id（`arch:...`）。
-    引擎按它现算依据与摘要，id 核不上就拒写（宁可让 agent 重说一次，也不画一个查无此人的节点）。
+    `kind:"module"` 必填：画布代码实体的引用。
+    支持 `file:<仓内路径>`、`dir:<仓内目录>`、`symbol:<仓内路径>#<名字>`、`group:<id>`；
+    引擎按索引与依赖图核对，核不上就拒写。`group:` 必须同时给 `files`。
   */
   ref?: string;
+  /**
+    可选：这个节点显式关联的文件（`group:` 必填，其余可用来收窄范围）。
+    引擎逐条核对是否在索引里；界面抽屉展示的就是这份清单。
+  */
+  files?: string[];
   /** `kind:"note"`：便签正文。这是人/模型写的话，不是读数。 */
   text?: string;
 }
@@ -324,25 +278,6 @@ export interface DiagramEditRequest {
 }
 
 
-/**
-  一次模块档位修正的意图（Agent 的 `set_module_tier` 与覆盖层写入口共用）。
-  只表达「这个模块归哪一档」与「撤销」：层、边、文件都不在这里，类型层面就写不出。
-*/
-export type ModuleTierOverrideIntent =
-  | { kind: "set_tier"; module: string; tier: CourseTier; given?: string }
-  | { kind: "reset"; module?: string };
-
-export interface ModuleOverlayRecord {
-  renamed?: Record<string, string>;
-  hidden?: string[];
-  custom?: { id: string; label: string; hint?: string }[];
-  tier?: Record<string, CourseTier>;
-}
-
-export interface RepositoryOverlays {
-  modules?: ModuleOverlayRecord;
-}
-
 export interface ImportEstimate {
   cachedFiles: number;
   summarizedFiles: number;
@@ -407,7 +342,8 @@ export interface TutorMessage {
 export interface TutorSession {
   id: string;
   repositoryId: string;
-  courseNodeId: string;
+  /** 教学作用域：`file:<仓内路径>` 或 `dir:<仓内目录>`。 */
+  scopeRef: string;
   style: StyleLevel;
   settings: TutorSettings;
   messages: TutorMessage[];
@@ -1086,30 +1022,6 @@ export interface Exercise {
   createdAt: string;
 }
 
-/** 教学模块「推荐入口」的单条 LLM 推荐（engine `/module-entries` 返回；id 必须能回查课程树节点）。 */
-export interface SuggestedEntry {
-  id: string;
-  title: string;
-  path: string;
-  line: number;
-  reason?: string;
-}
-
-/**
-  「这条路径是文档，不是代码」——推荐入口的排除判据，引擎与界面共用这一份（判据两处各写一遍迟早漂移）。
-  只看文件自己的扩展名，不看目录名：`docs/` 下放的可能是示例代码，按目录一次改动切会连代码一起挡掉。
-  `.json`/`.yml` 不算文档（它们是配置与构建输入，不是散文）。
-  现在只有 `.md` 真能走到这一层（收录层的扩展名白名单在前面把关），列全是为了这条判据本身说得通。
-*/
-export const DOCUMENTATION_EXTENSIONS: readonly string[] = [".md", ".markdown", ".rst", ".adoc", ".txt"];
-
-export function isDocumentationPath(path: string): boolean {
-  const base = (path ?? "").replaceAll("\\", "/").split("/").pop() ?? "";
-  const dot = base.lastIndexOf(".");
-  if (dot <= 0) return false;
-  return DOCUMENTATION_EXTENSIONS.includes(base.slice(dot).toLowerCase());
-}
-
 export interface ExerciseAnswer {
   text?: string;
   selectedIds?: string[];
@@ -1172,7 +1084,6 @@ export interface LearnerProfile {
   generatedAt: string;
   mastery: MasteryMapEntry[];
   faded: FadedState;
-  fadedByUnit: Record<string, FadedState>;
   recommended: RecommendedTutorSettings;
 }
 
@@ -1244,7 +1155,6 @@ export type JournalEventType =
     而清单里有名字、正文从没被取走这件事只能从这一行看出来。
   */
   | "skill_read"
-  | "scope_degraded"
   /** 回合文本落盘：payload = scene(teach|map_chat|practice_chat) + question/answer
       双边原文，各截 2000 字并带 *_truncated 留痕；永久追加、不做 TTL、无开关。教学法机检与表达质量裁判的被测输入源。 */
   | "turn_text"
@@ -1253,7 +1163,7 @@ export type JournalEventType =
       判据与离线 `phaseB:eval` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
   /** 会话线程的生命周期事件：`session_created` 在引擎发 id 建线程时写，
-      `session_deleted` 只在软删时写。payload = scope(teach|map|practice) + thread_id + node_id/exercise_id + reason。
+      `session_deleted` 只在软删时写。payload = scope(teach|map|practice) + thread_id + scope_ref/exercise_id + reason。
       删除是产品线的动作，journal 这条线只留「发生过删除」这一事实，不删任何既有事件行。 */
   | "session_created"
   | "session_deleted"
@@ -1281,20 +1191,12 @@ export type JournalEventType =
   | "module_switched"
   | "exercise_submitted"
   | "repository_switched"
-  | "entry_adopted"
-  | "entry_overridden"
   /**
     把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。引擎侧写：这条读的是两个仓的源码，
     配上几条是要能查的数。只有 agent 调 `cross_repo_link` 时才会发生（`via: "tool"`）。
     payload：`other_repository_id` / `outbound` / `inbound`（两个方向各自配上的条数）。
   */
   | "repository_paired"
-  /**
-    人工把某个模块改成另一档（主链路 / 基础设施 / 外围）。引擎侧写（Agent 的 `set_module_tier`）。
-    payload：`module` / `module_title` / `given` / `to` / `core_share` / `visible_files` / `restored` / `via`。
-    结构判据没有真值可比，这条就是攒真值的读数——攒够了才谈「判据改对了没」。
-  */
-  | "module_tier_overridden"
   /**
     历史事件：分层视图的人工改层/改层名，随分层视图退役后不再写。
     类型保留不删——历史仓里的这些行仍要能被归类。
@@ -1337,15 +1239,15 @@ export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
-  "scope_degraded", "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
+  "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
-  // 改档是「判断被人工推翻」的读数，只能由引擎写（`set_module_tier` 的落盘路径），审计与写入同处才不漏；architecture_layer_overridden 仅为历史行保留
-  "architecture_layer_overridden", "module_tier_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
+  // architecture_layer_overridden 仅为历史行保留
+  "architecture_layer_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [
   "flow_node_selected", "file_anchored", "file_opened", "line_located", "module_switched",
-  "exercise_submitted", "repository_switched", "entry_adopted", "entry_overridden"
+  "exercise_submitted", "repository_switched"
 ] as const satisfies readonly JournalEventType[];
 
 export type EngineJournalEventType = (typeof ENGINE_JOURNAL_EVENTS)[number];

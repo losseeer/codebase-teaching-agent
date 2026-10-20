@@ -1,20 +1,5 @@
 [
   {
-    "layer": "coursemap-refine",
-    "contractVersion": "refine-v3",
-    "promptDigest": "00186e9d8192cd03"
-  },
-  {
-    "layer": "entry-expand",
-    "contractVersion": "expand-v2",
-    "promptDigest": "7f1a7f4ba66f275b"
-  },
-  {
-    "layer": "entry-suggest",
-    "contractVersion": "candidate-v6",
-    "promptDigest": "31c81ceccedbf95d"
-  },
-  {
     "layer": "exercise-code-generate",
     "contractVersion": "exercise-v3",
     "promptDigest": "2cfda3be3cc2e827"

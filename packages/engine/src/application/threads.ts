@@ -24,5 +24,5 @@ export function locateThread(threadId: string): { repositoryPath: string; reposi
 }
 
 export function threadJournalPayload(thread: ChatThread, reason: string): Record<string, string | null> {
-  return { scope: thread.scope, thread_id: thread.id, node_id: thread.courseNodeId ?? null, exercise_id: thread.exerciseId ?? null, reason };
+  return { scope: thread.scope, thread_id: thread.id, scope_ref: thread.scopeRef ?? null, exercise_id: thread.exerciseId ?? null, reason };
 }

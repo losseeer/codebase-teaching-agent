@@ -13,7 +13,7 @@ import { currentPricing, priceComponents, pricingIsConfigured, pricingSourceOf }
   - 对账只认 `llm.log`：journal 的 teach 行历史上有按字数造的估算 token；
   - 缺字段一律「未记」，不用默认值兜底——「没记」伪装成 0 会把口径问题读成产品结论；
   - 本地兜底与预算降级根本不发请求，所以「降级频率」在本表里天生读不到，只能看 journal 的
-    `exercise_declined` / `scope_degraded`（`pnpm phase0:metrics` 出那两栏）。
+    `exercise_declined`（`pnpm phase0:metrics` 出一栏）。
 */
 
 interface SceneRow {
@@ -143,8 +143,8 @@ emit(`1. 首次与重试次数（新行有读数，旧行没有）：日志包�
 emit(`   一次逻辑调用只落一行，\`ms\` 是「含全部重试的总墙钟」。\`RetryLlmProvider\` 会把 \`attempts\` 与 \`attemptMs\` 挂在结果/错误上带出来，`);
 emit(`   所以带这两个字段的行才有重试读数；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
 emit(`2. 降级频率：本地兜底与预算降级按设计不发请求，日志里根本没有这个字段。`);
-emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算已达上限）与 \`scope_degraded\`，`);
-emit(`   \`pnpm phase0:metrics\` 已经把这两栏按场景聚合。`);
+emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算已达上限），`);
+emit(`   \`pnpm phase0:metrics\` 已经把这一栏按场景聚合。`);
 emit(`3. 按仓归属的钱：导入与监听刷新那批调用没有 traceId（带 trace 的 ${withTrace}/${rows.length} 行），`);
 emit(`   那部分 provider/model/token 归不到某个仓——与出网报表同一条读数口径。`);
 emit();

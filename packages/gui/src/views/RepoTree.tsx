@@ -8,10 +8,12 @@ import { Icon } from "../ui/icons";
   - `badge`：可选的目录徽标，用于给顶层目录标注语义分组
   - `activePath`：高亮当前选中的文件
  */
-export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
+export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, lineOf, badge }: {
   nodes: FileTreeNode[];
   onOpenFile: (path: string) => void;
+  onOpenDir?: (path: string) => void;
   activePath?: string;
+  activeDir?: string;
   lineOf?: Map<string, number>;
   badge?: (node: FileTreeNode, depth: number) => string | undefined;
 }): ReactElement {
@@ -30,7 +32,7 @@ export function RepoTree({ nodes, onOpenFile, activePath, lineOf, badge }: {
         const open = expanded.has(node.path);
         const label = badge?.(node, depth);
         rows.push(
-          <button key={node.path} type="button" className="tree-row" style={{ paddingLeft: `${4 + depth * 12}px` }} onClick={() => setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; })} aria-expanded={open}>
+          <button key={node.path} type="button" className={`tree-row ${activeDir === node.path ? "active" : ""}`} style={{ paddingLeft: `${4 + depth * 12}px` }} onClick={() => { onOpenDir?.(node.path); setExpanded((prev) => { const next = new Set(prev); if (open) next.delete(node.path); else next.add(node.path); return next; }); }} aria-expanded={open} title={onOpenDir ? `选中目录 ${node.path}（再点一次展开/收起）` : node.path}>
             <Icon name="folder" size={13} />
             <span className="tree-name">{node.name}</span>
             {label ? <span className="ext-badge">{label}</span> : <span className="ext-badge">{node.children?.length ?? 0} 项</span>}

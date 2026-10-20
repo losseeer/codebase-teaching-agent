@@ -63,11 +63,13 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const threadId = await fx.newThread("map", "没装外部能力");
     const before = fx.sentTools.length;
     await mapChat({ content: "这仓分几层？", threadId });
-    // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有，所以那条只读门也不该出现
-    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_module_tier", "set_diagram"]);
+    // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有，但那扇门照旧在——
+    // 缺席由它自己说出来，模型才不会从「工具不在清单里」反推出「这轮画不了」
+    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_diagram", "query_facts"]);
+    expect(fx.sentTools[before].raw, "一行产物都没有时，上下文要直接说没有，别让模型自己试出来").toContain("本仓还没有静态产物");
   });
 
-  it("盘上有产物时 query_facts 才进清单，那份「在册情况」也真进了请求", async () => {
+  it("盘上有产物时，那份「在册情况」也真进了请求", async () => {
     const empty = join(fx.root, "skills-empty2");
     mkdirSync(empty, { recursive: true });
     process.env.TUTOR_SKILLS_DIR = empty;
@@ -166,18 +168,14 @@ describe("宏观设计作用域（SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("map-chat 没绑定模块也带写工具，并把「模块地图＋现存改档」送进上下文", async () => {
+  it("map-chat 没绑定模块也带画布写工具，并把画布现场送进上下文", async () => {
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "画布上直接说话");
     fx.sentTools.length = 0;
     const response = await mapChat({ content: "把刚才那条修正撤掉", threadId });
     expect(response.statusCode).toBe(200);
     const call = fx.sentTools[0];
-    expect(call?.names, "画布是只读的，改档只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_module_tier");
-    expect(call?.names, "结构改动同样只有 agent 这一条路：界面上没有第二个写入口").toContain("set_diagram");
-    expect(call?.raw, "用户说「撤掉那条」时，模型手上得有那份清单和节点 id，不然只能反问或编 id").toContain("模块地图");
-    expect(call?.raw).toContain("现有人工改档");
-    expect(call?.raw, "一条修正也没有时也得这么写，否则模型会以为有东西可撤").toContain("一条也没有");
+    expect(call?.names, "画布是只读的，结构改动只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_diagram");
     expect(call?.raw, "改图工具必须先看得见现状：有哪几张图、正打开那张的图元 id").toContain("画布现场");
 
     // 反面对照：练习答疑没有画布，也就没有写能力——放宽不能顺着作用域漏出去
@@ -185,7 +183,6 @@ describe("宏观设计作用域（SSE）", () => {
     const practiceThread = await fx.newThread("practice", "对照线程", fx.exerciseId);
     fx.sentTools.length = 0;
     await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId: fx.exerciseId, threadId: practiceThread } });
-    expect(fx.sentTools[0]?.names, "practice_chat 永远不给有副作用的工具").not.toContain("set_module_tier");
     expect(fx.sentTools[0]?.names, "它也不该拿到改这张图的权力：练习那张脸上没有画布，给了就是让用户改自己看不见的东西").not.toContain("set_diagram");
   });
 
@@ -398,7 +395,7 @@ describe("源码出网清单", () => {
   it("宏观设计回合：锚点摘录逐段计入审计，带线程 id，且不含源码正文", async () => {
     const before = egress().length;
     const threadId = await fx.newThread("map", "出网线程");
-    const response = await mapChat({ content: "这一节先看哪里？", threadId, nodeId: "unit-1" });
+    const response = await mapChat({ content: "这一节先看哪里？", threadId, path: MAIN_FILE });
     expect(response.statusCode).toBe(200);
 
     const rows = egress().slice(before);
@@ -423,7 +420,7 @@ describe("源码出网清单", () => {
   });
 
   it("教学回合：只剩措辞那一趟调用，同一段摘录就只记一次（撤掉动作提议前的两次出网已成历史）", async () => {
-    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, courseNodeId: "unit-1" } });
+    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, scopeRef: `file:${MAIN_FILE}` } });
     const sessionId = (created.json() as { session: { id: string } }).session.id;
     fx.usedThreads.add(sessionId);
     const before = egress().length;
@@ -444,7 +441,7 @@ describe("源码出网清单", () => {
 
 /**
   上面那两条出网用例依赖挂载中的产物不被换掉：本文件的密钥用例往仓里写过 `.env` 与 `credentials.json`，
-  这类写入若触发全量重分析，产物里的 `unit-1` 锚点会被真实扫描结果取代，出网装配就读不到摘录了。
+  这类写入若触发全量重分析，产物里的 `MAIN_FILE` 索引项会被真实扫描结果取代，出网装配就读不到摘录了。
   口径：只有「可能改变收录集」的改动才触发重分析（收录判据见 indexer 的 isIngestedPath）。
 */
 describe("LLM 工作日志的账面一致性", () => {

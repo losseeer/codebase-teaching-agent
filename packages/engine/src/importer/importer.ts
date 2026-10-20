@@ -4,7 +4,6 @@ import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type {
-  CourseTree,
   ImportEstimate,
   ImportJob,
   RepositoryAnalysis,
@@ -14,8 +13,6 @@ import type {
   RepositoryMountReason,
   ServerEvent
 } from "@codebase-tutor/shared";
-import { buildCourseTree, groupImplementationsByModule } from "../coursetree/build.js";
-import { REFINE_STEP, refineCourseMap } from "../coursetree/llm-refine.js";
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
@@ -40,7 +37,6 @@ type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "wa
 export interface ImportedRepository {
   path: string;
   index: RepositoryIndex;
-  course: CourseTree;
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
   /**
@@ -282,7 +278,6 @@ export class ImportService extends EventEmitter {
     if (!path) return { ok: false, reason: "not_in_catalog", message: "这个仓库不在引擎的地址簿里；请重新导入以恢复它。" };
     if (!isDirectory(path)) return { ok: false, reason: "directory_missing", message: `地址簿记的目录已经不存在：${path}。产物在它原来的 .tutor/ 里，把仓库放回该路径或重新导入即可。` };
     let index: RepositoryIndex | undefined;
-    let course: CourseTree | undefined;
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
     /**
@@ -293,19 +288,18 @@ export class ImportService extends EventEmitter {
     try {
       handle = new RepositoryHandle(path, repositoryId);
       index = handle.db.getIndex(repositoryId);
-      course = handle.db.getCourse(repositoryId);
       analysis = handle.db.getAnalysis(repositoryId);
       estimate = handle.db.getEstimate(repositoryId);
     } catch {
       handle?.close();
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor/tutor.db 读不出来（文件损坏或权限不足），需要重新导入。` };
     }
-    if (!index || !course || !analysis || !estimate) {
+    if (!index || !analysis || !estimate) {
       handle?.close();
-      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、课程树、分析结果或估算），需要重新导入才能继续。` };
+      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、分析结果或估算），需要重新导入才能继续。` };
     }
     const startedAt = Date.now();
-    const repository = this.attach({ path, index, course, estimate, analysis, handle });
+    const repository = this.attach({ path, index, estimate, analysis, handle });
     // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
     // （读侧按字节水位增量解析，见 `store/journal.ts`）。
     const journal = journalFootprint(path);
@@ -420,7 +414,7 @@ export class ImportService extends EventEmitter {
   }
 
   /** 驱逐 = 关它的 fs 监听 + 从内存移除（`fs.FSWatcher.close()` 幂等，重复关闭无害）。
-    刻意不清内存态 L2 缓存（流程 / 推荐入口）：键里已经带 `repositoryId` + 本层输入哈希，
+    刻意不清内存态 L2 缓存（摘要 / 出题）：键里已经带 `repositoryId` + 本层输入哈希，
     换仓后不可能误命中，而「切回来还要用」才是常见路径——清了就是让下一个回合把完全相同的输入重算一次。
     两层的 TTL + 条数上限本身把驻留量限制住了。
     */
@@ -451,11 +445,11 @@ export class ImportService extends EventEmitter {
     try {
       this.update(job, "indexing", 10, "正在建立文件树与 Git 热点索引");
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
-      const { index, course, estimate, analysis, handle } = imported;
+      const { index, estimate, analysis, handle } = imported;
 
       // 新导入的仓库进地址簿（最近使用在后）并就地挂载；其它已挂载仓库不再被卸载。
       // 这一轮的句柄直接交给挂载项——它已经在 analyze 里开好并跑过 migrate，再开一份就是两个连接。
-      this.attach({ path: job.repositoryPath, index, course, estimate, analysis, handle });
+      this.attach({ path: job.repositoryPath, index, estimate, analysis, handle });
       job.repositoryId = index.repositoryId;
       try {
         rememberRepository(job.repositoryPath);
@@ -465,9 +459,9 @@ export class ImportService extends EventEmitter {
       }
       // 读不到的文件只让它们自己缺席，但要在完成消息里点名：否则「导入成功」会把少索引这件事盖住
       const unreadableNote = imported.index.unreadable?.length ? `（${imported.index.unreadable.length} 个文件读不到，已跳过：${imported.index.unreadable.slice(0, 3).map((file) => file.path).join("、")}${imported.index.unreadable.length > 3 ? " 等" : ""}）` : "";
-      this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${course.root.children.length} 个课程分区${unreadableNote}`);
+      this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${analysis.implementations.length} 个实现单元${unreadableNote}`);
       job.completedAt = new Date().toISOString();
-      traceEngine("import", { job: jobId, phase: "completed", repositoryId: index.repositoryId, files: index.totalFiles, cards: course.root.children.length, unreadable: index.unreadable?.length ?? 0 }, { traceId: null, durationMs: Date.now() - startedAt });
+      traceEngine("import", { job: jobId, phase: "completed", repositoryId: index.repositoryId, files: index.totalFiles, implementations: analysis.implementations.length, unreadable: index.unreadable?.length ?? 0 }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       job.phase = "failed";
       job.error = error instanceof Error ? error.message : String(error);
@@ -502,13 +496,11 @@ export class ImportService extends EventEmitter {
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
     const versionStamp = contentVersion(repositoryPath, index, scan.digests);
     handle.db.saveIndex(index);
-    progress("summarizing", 40, "正在生成分层摘要并检查缓存");
-    // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），
-    // `refinement`/`monthlyBudgetUsd` 后面润色缓存与预算还要用同一份。
-    let storedSettings = handle.db.getSettings<{ refinement?: RefinementMarker; monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
-    // 导入页的显式选择是该仓摘要口径唯一的写入时点之一（另一个是成本监控页开关）：读-合并-写保住其它键，
-    // 之后的增量重分析/重导入不再带选择，只读这份落库值。本地副本要同步更新——
-    // 后面润色标记的读-合并-写展开的就是这份，不更新会把刚写的开关冲掉。
+    progress("summarizing", 40, "正在生成文件摘要并检查缓存");
+    // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），预算后面还要用同一份。
+    let storedSettings = handle.db.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
+    // 导入页的显式选择是该仓摘要口径唯一的写入时点；读-合并-写保住其它键，
+    // 之后的增量重分析/重导入不再带选择，只读这份落库值。
     if (summaryHeaderComments !== undefined) {
       storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
       handle.db.saveSettings(index.repositoryId, storedSettings);
@@ -516,7 +508,7 @@ export class ImportService extends EventEmitter {
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     /**
       该仓预算：取落库值，取不到才用默认。这里必须用同一份，否则「把预算改成 $1」的人
-      在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要 + 宏观润色）。
+      在导入这一步仍按 $5 判——而导入恰好是全流程里最贵的一步（L1 摘要）。
       */
     const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
     // 预算判据只留一处（`cost.ts` 的 `budgetExceeded`）。
@@ -528,58 +520,15 @@ export class ImportService extends EventEmitter {
     // 语法解析器是异步加载的，必须在建图前就绪；加载失败不抛错，改由 graph 记录回落原因。
     await loadSymbolParser();
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
-    const { summaries, estimate } = await summarizeFiles({
+    const { estimate } = await summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
       database: handle.db,
       provider,
       withHeaderComments
     });
-    progress("building_course", 75, "正在生成微观单元和影响图");
+    progress("summarizing", 75, "正在生成实现单元与静态产物");
     const graph = await enrichWithLsp(repositoryPath, baseGraph);
     const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
-    let course = buildCourseTree({ repositoryId: index.repositoryId, modelVersion: provider.modelVersion, files: index.files, summaries, graph, implementations });
-    // 宏观设计 LLM 完善层：命名/摘要语义化（结构仍由静态分析锚定；失败原样返回）
-    // 走运行时构建器（GUI 设置的模型覆盖生效）；light 档思考强制 off——宏观设计润色是结构化重命名，不需要思考
-    // 润色缓存：`settings.refinement` 标记里的四个维度（源码内容 / 模型 / 口径版本 / 图后端）全对上才复用已润色 course。
-    // 这是 engine 重启后重新导入不再付一遍 LLM 账单的关键；标记只在润色确有产出（usage 非空）时写入，失败不缓存。
-    const storedAnalysis = handle.db.getAnalysis(index.repositoryId);
-    const storedCourse = handle.db.getCourse(index.repositoryId);
-    // 图后端指纹：LSP 从降级恢复、语法解析回落变化都发生在源码内容不变的时候，只比 versionStamp 抓不到，
-    // 会把降级证据下算出的命名当成事实继续复用。
-    const backendStamp = hash(`${graph.semanticBackend}:${graph.parseBackend}:${JSON.stringify(graph.lspStatus)}`);
-    const refinementCacheHit = Boolean(
-      storedAnalysis?.versionStamp === versionStamp && storedCourse && refinementIsFresh(storedSettings?.refinement, {
-        versionStamp,
-        contractVersion: REFINE_STEP.contractVersion,
-        backendStamp,
-        ...(lightProvider ? { modelVersion: lightProvider.modelVersion } : {})
-      })
-    );
-    if (refinementCacheHit) {
-      course = storedCourse as CourseTree;
-    } else if (!budgetExceeded(repositoryPath, budgetUsd)) {
-      // 复用导入开头建好的轻量档实例（运行期设置在一次导入内不会变）；预算另查一次——
-      // L1 摘要可能刚花掉一部分，所以不能沿用开头那个判断结果
-      const mapProvider = lightProvider;
-      if (mapProvider) {
-        progress("building_course", 85, "正在用 LLM 完善宏观设计命名与摘要");
-        const refinement = await refineCourseMap(course, mapProvider);
-        course = refinement.course;
-        if (refinement.usage) {
-          handle.journal.append("token_usage", {
-            input_tokens: refinement.usage.inputTokens,
-            output_tokens: refinement.usage.outputTokens,
-            cache_hit_tokens: refinement.usage.promptCacheHitTokens ?? null,
-            provider: mapProvider.modelVersion,
-            scene: "course_map"
-          });
-          // 读-合并-写：settings 里还存着 monthlyBudgetUsd 等其他键，不能整体覆盖
-          handle.db.saveSettings(index.repositoryId, { ...(storedSettings ?? {}), refinement: { versionStamp, modelVersion: mapProvider.modelVersion, contractVersion: REFINE_STEP.contractVersion, backendStamp } });
-        }
-      }
-    }
-    // 微观归组投影跑在润色（含其缓存命中路径）之后：润色的输入结构不变，归组只是重挂位置、可重复执行
-    course = groupImplementationsByModule(course);
     const analysisHead = gitHeadOf(repositoryPath);
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
@@ -590,7 +539,7 @@ export class ImportService extends EventEmitter {
       // 记下分析时的 HEAD：懒挂载要靠它区分「内容没变但分析点在另一个提交上」与真的过期
       ...(analysisHead ? { gitHead: analysisHead } : {})
     };
-    handle.db.saveCourse(course, estimate);
+    handle.db.saveEstimate(index.repositoryId, estimate);
     handle.db.saveAnalysis(analysis);
     // 静态产物层（控制流图等）：纯本地计算、零 token，失败绝不能让这次导入失败——
     // 但必须说出口，否则「这一类产物没有」会被后面读成「这个仓的函数都没分支」
@@ -601,7 +550,7 @@ export class ImportService extends EventEmitter {
       console.warn(`[engine] 静态产物层没算完（${reason}）：依赖图与摘要不受影响，但这次没有控制流图`);
       traceEngine("degrade", { component: "facts", repositoryId: index.repositoryId, reason }, { traceId: null });
     }
-    return { path: repositoryPath, index, course, estimate, analysis, handle };
+    return { path: repositoryPath, index, estimate, analysis, handle };
   }
 
   /**
@@ -752,18 +701,3 @@ function contentVersion(repositoryPath: string, index: RepositoryIndex, digests?
   return stampAndDiff(repositoryPath, index, digests).versionStamp;
 }
 
-/** 落在 settings 里的宏观润色标记：记录「这份已润色的课程树是在什么输入下算出来的」。 */
-export type RefinementMarker = { versionStamp?: string; modelVersion?: string; contractVersion?: string; backendStamp?: string };
-
-/**
-  润色缓存能否复用：标记里的四个维度全对上才算命中——源码内容、当时用哪个模型润的、本层提示词口径、图后端。
-  唯独 `modelVersion` 默认（当前没有可用模型：未配置或预算已达上限）时放行——复用上次成功的润色结果，
-  好于把它丢掉、退回未润色的裸命名。旧标记缺某个字段时该维度自然不等 → 未命中，重润一次属预期。
- */
-export function refinementIsFresh(marker: RefinementMarker | undefined, current: { versionStamp: string; contractVersion: string; backendStamp: string; modelVersion?: string }): boolean {
-  if (!marker) return false;
-  if (marker.versionStamp !== current.versionStamp) return false;
-  if (marker.contractVersion !== current.contractVersion) return false;
-  if (marker.backendStamp !== current.backendStamp) return false;
-  return current.modelVersion === undefined || marker.modelVersion === current.modelVersion;
-}

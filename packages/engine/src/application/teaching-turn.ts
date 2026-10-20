@@ -25,14 +25,14 @@ export function resolveTeachingState(sessionId: string): TutorSession | undefine
 /** 教学线程 → TutorSession：正文取原文（不截断），状态取回合收尾写的快照。 */
 export function restoreThreadAsSession(repositoryPath: string, repositoryId: string, sessionId: string): TutorSession | undefined {
   const thread = getThread(repositoryPath, sessionId);
-  if (!thread || thread.repositoryId !== repositoryId || thread.scope !== "teach" || !thread.courseNodeId) return undefined;
+  if (!thread || thread.repositoryId !== repositoryId || thread.scope !== "teach" || !thread.scopeRef) return undefined;
   const state = readThreadState(repositoryPath, sessionId);
   if (!state) return undefined;
   const settings = validateSettings(state.settings);
   return {
     id: thread.id,
     repositoryId: thread.repositoryId,
-    courseNodeId: thread.courseNodeId,
+    scopeRef: thread.scopeRef,
     style: settings.style,
     settings,
     messages: readMessages(repositoryPath, sessionId) as TutorMessage[],
@@ -44,9 +44,9 @@ export function restoreThreadAsSession(repositoryPath: string, repositoryId: str
   教学回合落库：正文（user + assistant 全文，不截断）+ 回合结束后的状态快照。
   线程行不在就按同一个 id 补建再写：正文是产品数据，不可恢复；静默跳过会让 GUI 重启后看到空会话。
 */
-export function persistTeachingTurn(repositoryPath: string, repositoryId: string, courseNodeId: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
+export function persistTeachingTurn(repositoryPath: string, repositoryId: string, scopeRef: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
   if (!appendMessages(repositoryPath, sessionId, messages)) {
-    createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, courseNodeId, title });
+    createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, scopeRef, title });
     appendMessages(repositoryPath, sessionId, messages);
   }
   saveThreadState(repositoryPath, sessionId, state);

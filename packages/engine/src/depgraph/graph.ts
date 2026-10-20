@@ -1082,9 +1082,9 @@ function detectMainFunctionEntrypoints(contents: Map<string, string>): SourceAnc
  * Django 的 URL 表在 urls.py，一个都不叫 main/server。
  * 规则表按证据强度排序，且一个文件只取最先命中的那条（与 Spring「启动类优先于 @Controller」同口径）：
  * 一个 main.py 挂着十几条路由装饰器，逐条标会把入口清单变成路由清单，
- * GUI 的入口下拉与课程树的「执行路径」都会被同一个文件的十几个候选挤满。
- * 误判比漏判更贵：只定义函数的库模块被标成入口后，流程证据从一条不会自己开始执行的链路铺起，
- * 课程树就把工具模块当执行起点讲——所以这里只认框架级语句，不认「看着像在启动进程」的形态
+ * 同一个文件的十几个候选会挤满入口清单。
+ * 误判比漏判更贵：只定义函数的库模块被标成入口后，画布会把工具模块当执行起点讲——
+ * 所以这里只认框架级语句，不认「看着像在启动进程」的形态
  * （`runner.run(...)`、裸 `main()` 一律不算证据）。
  * 刻意没写的几条：`app.add_url_rule` 命令式登记、Sanic/Starlette/aiohttp 的构造形态、`re_path`/`include`
  * 的二级路由表——test-fixtures/pyframeworkdemo-repo 里没有对应样例，没有 fixture 就不写规则。
@@ -1174,7 +1174,7 @@ function detectNodeEntrypoints(contents: Map<string, string>): SourceAnchor[] {
     if (!instances.size && !controller) continue;
     // 语法树没就绪（或这门语言没有语法）就整个文件不判：这个节点没有保守退路——
     // 把「读不出字符串边界」当成「这里没有字符串」，演示数据里那份假源码就会被标成服务入口，
-    // 而入口一旦进档，模块档位、流程默认入口都跟着错。宁可少一条入口（图的 parseBackend 已如实记录降级）。
+    // 而入口一旦进档，入口清单与画布起点都跟着错。宁可少一条入口（图的 parseBackend 已如实记录降级）。
     const templates = extractMultilineTemplateLines(path, content);
     if (!templates) continue;
     const lines = content.split("\n");

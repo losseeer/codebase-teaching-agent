@@ -18,7 +18,7 @@ import { z } from "zod";
 /* 地址簿与导入                                                        */
 /* ------------------------------------------------------------------ */
 
-export const jobPhaseSchema = z.enum(["queued", "indexing", "summarizing", "building_course", "completed", "failed"]);
+export const jobPhaseSchema = z.enum(["queued", "indexing", "summarizing", "completed", "failed"]);
 export type JobPhase = z.infer<typeof jobPhaseSchema>;
 
 /** 一条导入任务：`GET /api/imports/:jobId` 的返回体，也是 `import.progress` 帧的 payload。 */
@@ -110,7 +110,8 @@ export const chatThreadSchema = z.object({
   id: z.string(),
   repositoryId: z.string(),
   scope: chatScopeSchema,
-  courseNodeId: z.string().optional(),
+  /** 教学作用域：`file:<仓内路径>` 或 `dir:<仓内目录>`；map / practice 线程可不填。 */
+  scopeRef: z.string().optional(),
   exerciseId: z.string().optional(),
   title: z.string(),
   createdAt: z.string(),

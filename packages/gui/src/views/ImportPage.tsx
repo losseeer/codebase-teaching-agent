@@ -26,8 +26,7 @@ interface Props {
 const PHASES: { key: ImportJob["phase"]; label: string }[] = [
   { key: "queued", label: "排队中" },
   { key: "indexing", label: "索引文件与 Git 历史" },
-  { key: "summarizing", label: "摘要缓存与分层归纳" },
-  { key: "building_course", label: "构建入口课程树" },
+  { key: "summarizing", label: "摘要缓存与静态分析" },
   { key: "completed", label: "写入 .tutor/ 产物" }
 ];
 
@@ -93,7 +92,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         <div className="import-wrap">
           <div className="import-hero">
             <h1>导入一个代码仓库</h1>
-            <p title="索引、摘要、依赖图与课程树都写进仓库内的 .tutor/，随仓库走，随时可恢复">输入本机仓库的绝对路径，产物只写进仓库内的 <code className="mono">.tutor/</code>。</p>
+            <p title="索引、摘要与依赖图都写进仓库内的 .tutor/，随仓库走，随时可恢复">输入本机仓库的绝对路径，产物只写进仓库内的 <code className="mono">.tutor/</code>。</p>
           </div>
 
           <div className="card card-pad col gap-4">

@@ -33,7 +33,7 @@ export interface SummaryProvider {
 /** 一次调用塞几条切片：太多则单次失败牵连面大，太少则往返次数又上去了。 */
 export const SUMMARY_BATCH_SIZE = 8;
 
-/** 约束回复长度：摘要会进课程树、再被 `llm-refine` 整份送去润色，长了就是长尾成本。 */
+/** 约束回复长度：摘要会进检索语料与上下文，长了就是长尾成本。 */
 const MAX_SUMMARY_CHARS = 200;
 const BATCH_MAX_TOKENS = 1_200;
 const BATCH_SCENE = "map.summary";
@@ -112,8 +112,8 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
 
 /**
   确定性兜底：不调模型，摘要完全由结构切片拼出（离线可复现、不消耗 token）。
-  ⚠️ 摘要要短：它进课程树当节点摘要，而 `coursetree/llm-refine.ts` 会把节点摘要整份送去润色，
-  这里长一句，每次润色就多付一次钱。详细信息由切片承载，摘要只说「属于哪层 + 认出哪些主要符号」。
+  ⚠️ 摘要要短：它进检索语料当文件职责，这里长一句，每次检索与装配就多背一份钱。
+  详细信息由切片承载，摘要只说「属于哪层 + 认出哪些主要符号」。
 */
 export class LocalSummaryProvider implements SummaryProvider {
   readonly modelVersion = "local-heuristic-v1";

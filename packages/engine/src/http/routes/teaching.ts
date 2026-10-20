@@ -5,7 +5,6 @@ import { persistTeachingTurn, resolveTeachingState } from "../../application/tea
 import { threadJournalPayload } from "../../application/threads.js";
 import { auditsFromResult, mcpCallPayload, recordAbortedAudits } from "../../application/turn-audit.js";
 import { summarizeCost } from "../../cost/cost.js";
-import { flattenCourseTree } from "../../coursetree/projection.js";
 import { assembleContext } from "../../harness/context.js";
 import { createSession, respondWithProvider } from "../../harness/harness.js";
 import { scopedChatProviderOr422 } from "../gate.js";
@@ -16,6 +15,7 @@ import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { importer, repositoryOr404 } from "../../services.js";
 import { dedupeFileReads } from "../../source/read-file.js";
+import { parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope.js";
 import { createThread, saveThreadState } from "../../store/chat-store.js";
 import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
@@ -26,26 +26,27 @@ import type { FastifyInstance } from "fastify";
   教学会话的建立与回合（SSE）：会话即线程，回合收尾要落正文、用量、复检与审计。
  */
 export function registerTeachingRoutes(app: FastifyInstance): void {
-app.post<{ Body: { repositoryId?: string; courseNodeId?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
+app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
   const mounted = importer.ensureMounted(request.body?.repositoryId ?? "");
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
-  const node = flattenCourseTree(repository.course.root).find((item) => item.id === request.body?.courseNodeId);
-  if (!node) return reply.code(404).send({ error: "课程节点不存在" });
+  const scope = parseScopeRef(request.body?.scopeRef ?? "");
+  if (!scope) return reply.code(400).send({ error: "作用域格式不对：需要 file:<仓内路径> 或 dir:<仓内目录>" });
+  if (!scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这个作用域里没有已分析的文件；请换一个文件或目录。" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : undefined);
   const hasExplicitSettings = Boolean(request.body?.settings && Object.keys(request.body.settings).length) || typeof request.body?.style === "number";
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
   let settings = hasExplicitSettings
     ? validateSettings({ ...defaultTutorSettings, ...request.body?.settings, style: requestedStyle })
     : learnerProfile.recommended.settings;
-  const session = createSession(repository.index.repositoryId, node.id, settings);
+  const session = createSession(repository.index.repositoryId, scope.ref, settings);
   // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
-  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, courseNodeId: node.id, title: node.title });
+  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, scopeRef: scope.ref, title: scopeTitle(scope) });
   saveThreadState(repository.path, session.id, { settings: session.settings });
   const journal = new Journal(repository.path, repository.index.repositoryId);
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
   journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
-  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext({ node, policy: policyFor(session.settings), history: [], repositoryPath: repository.path, analysis: repository.analysis }) });
+  return reply.code(201).send({ session, recommendedSettings: learnerProfile.recommended, faded: learnerProfile.faded, policy: policyFor(session.settings), context: assembleContext({ scope, policy: policyFor(session.settings), history: [], repositoryPath: repository.path, index: repository.index, analysis: repository.analysis }) });
 });
 
 app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (request, reply) => {
@@ -61,13 +62,13 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   markThread(current.id);
   /**
     URL 里没有 `:repositoryId`，懒挂载钩子够不到，这里补挂一次：
-    会话还活在内存里、它的仓却已被 LRU 驱逐时，应该像别的仓路由那样把它挂回来，而不是回一句「课程节点不可用」。
+    会话还活在内存里、它的仓却已被 LRU 驱逐时，应该像别的仓路由那样把它挂回来，而不是回一句「作用域不可用」。
     */
   const mounted = importer.ensureMounted(current.repositoryId);
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
-  const node = flattenCourseTree(repository.course.root).find((item) => item.id === current.courseNodeId);
-  if (!node) return reply.code(404).send({ error: "课程节点不可用" });
+  const scope = parseScopeRef(current.scopeRef);
+  if (!scope || !scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这个教学作用域已不可用；请重新选择文件或目录。" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : current.settings.style);
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
@@ -77,12 +78,13 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const provider = scopedChatProviderOr422(reply, repository.handle, gate);
   if (!provider) return reply;
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
-  const faded = learnerProfile.fadedByUnit[node.id] ?? learnerProfile.faded;
+  const faded = learnerProfile.faded;
   // 与 map/practice 同款 SSE：过程提示与 delta 回放并入本请求的响应流
   const { send, turnHandle } = beginScopedStream(request, reply, "teach", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   try {
-    const outcome = await respondWithProvider(session, node, request.body.content.trim(), provider, faded, repository.path, {
+    const outcome = await respondWithProvider(session, scope, request.body.content.trim(), provider, faded, repository.path, {
+      index: repository.index,
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
@@ -110,7 +112,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       style: outcome.session.settings.style
     }).answer;
     // 回合正文 + 设置快照落库：GUI 重启后接着聊、以及「这一轮用的是哪档设置」都从这里取
-    persistTeachingTurn(repository.path, repository.index.repositoryId, node.id, node.title, outcome.session.id, [
+    persistTeachingTurn(repository.path, repository.index.repositoryId, scope.ref, scopeTitle(scope), outcome.session.id, [
       { role: "user", content: request.body.content.trim() },
       { role: "assistant", content: outcome.assistant.content }
     ], { settings: outcome.session.settings });

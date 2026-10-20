@@ -38,7 +38,7 @@ describe("预算已达上限时不放行付费分支", () => {
   it("teach 达到预算上限回合：拒在开火前，一次模型调用都不打、一行账都不记", async () => {
     const closed = await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: 0 } });
     expect((closed.json() as { mode: string }).mode).toBe("degraded");
-    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, courseNodeId: "unit-1" } });
+    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, scopeRef: "file:src/main.ts" } });
     const sessionId = (created.json() as { session: { id: string } }).session.id;
 
     const callsBefore = fx.fetchCalls();

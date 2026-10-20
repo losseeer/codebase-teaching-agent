@@ -24,7 +24,6 @@
     "probe:code-exercise": "tsx src/scripts/probe-code-exercise.ts",
     "graph:diff": "tsx src/scripts/precise-graph-diff.ts",
     "calls:diff": "tsx src/scripts/precise-call-diff.ts",
-    "tier:diag": "tsx src/scripts/tier-diag.ts",
     "reanalyze": "tsx src/scripts/reanalyze.ts",
     "l1:reburn": "tsx src/scripts/reburn-l1.ts"
   },

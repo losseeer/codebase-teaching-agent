@@ -36,7 +36,7 @@ function threadOf(row: ChatSessionRow): ChatThread {
     id: row.id,
     repositoryId: row.repository_id,
     scope: row.scope as ChatScope,
-    ...(row.course_node_id ? { courseNodeId: row.course_node_id } : {}),
+    ...(row.scope_ref ? { scopeRef: row.scope_ref } : {}),
     ...(row.exercise_id ? { exerciseId: row.exercise_id } : {}),
     title: row.title,
     createdAt: row.created_at,
@@ -62,13 +62,13 @@ function normalizeTitle(title: string | undefined, scope: ChatScope): string {
 }
 
 // 会话 id 由调用方持有时传进来（教学作用域的 id 是 createSession 生成的），不传则现生成。
-export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; courseNodeId?: string; exerciseId?: string; id?: string }): ChatThread {
+export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; scopeRef?: string; exerciseId?: string; id?: string }): ChatThread {
   const now = new Date().toISOString();
   const thread: ChatThread = {
     id: input.id ?? id(),
     repositoryId: input.repositoryId,
     scope: input.scope,
-    ...(input.courseNodeId ? { courseNodeId: input.courseNodeId } : {}),
+    ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
     ...(input.exerciseId ? { exerciseId: input.exerciseId } : {}),
     title: normalizeTitle(input.title, input.scope),
     createdAt: now,
@@ -78,7 +78,7 @@ export function createThread(input: { repositoryPath: string; repositoryId: stri
     id: thread.id,
     repositoryId: thread.repositoryId,
     scope: thread.scope,
-    courseNodeId: thread.courseNodeId ?? null,
+    scopeRef: thread.scopeRef ?? null,
     exerciseId: thread.exerciseId ?? null,
     title: thread.title,
     at: now

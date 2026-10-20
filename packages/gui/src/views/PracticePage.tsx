@@ -8,7 +8,7 @@ import { Markdown } from "../agent/Markdown";
 import { dateText, exerciseKindLabel } from "./helpers";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { ModulesPane, ModuleSectionLabel } from "../modules/ModulesPane";
+import { PracticeThemes, PracticeSectionLabel } from "../modules/PracticeThemes";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
 import { showToast } from "../modules/toast";
@@ -16,7 +16,7 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, PRACTICE_DEFAULT_MODULES, type KnowledgeModule } from "../modules/local-state";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
-// 练习评估工作区（两栏）：左 = 主题 chips + 本模块已练卡片 + 防泄题脚注，
+// 练习评估工作区（两栏）：左 = 主题 chips + 本主题已练卡片 + 防泄题脚注，
 // 右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。
 // 顶栏只报 `api.getPractice` 的真读数，没读到就明说；出题中只说「正在出题」，不画假进度。
 // 判分口径逐字取自 `result.gradingMode` + `automatic` + `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
@@ -99,11 +99,11 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
-  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule("practice", repositoryId, modules));
+  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule(repositoryId, modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
   useEffect(() => { savePracticeModules(modules); }, [modules]);
-  useEffect(() => { saveActiveModule("practice", repositoryId, activeModule); }, [repositoryId, activeModule]);
+  useEffect(() => { saveActiveModule(repositoryId, activeModule); }, [repositoryId, activeModule]);
 
   /** 进度读取：成功也要清掉旧错误；视图常驻挂载靠 hidden 切换，只在 tab 被打开过之后读一次。
       生成与提交后仍走 `refreshSummary()` 主动刷新。 */
@@ -160,7 +160,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   }, [exercise?.id]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  /** 重复点同一 chip（id 未变）不记事件；`list` 供新增/删除模块传入尚未提交的新列表，否则 label 取到旧值。 */
+  /** 重复点同一 chip（id 未变）不记事件；`list` 供新增/删除主题传入尚未提交的新列表，否则 label 取到旧值。 */
   const switchModule = (id: string, list: KnowledgeModule[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
@@ -202,7 +202,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const moduleMastery = (summary?.mastery ?? [])
     .filter((record) => isComprehensionChip ? !record.unitId.startsWith("llm:") : record.unitId.startsWith(`llm:${activeModule}:`))
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
-  const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名模块";
+  const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名主题";
   const anchor = exercise?.anchors[0];
   /** 面板只渲染前 MAX_RENDER_LINES 行，锚点行落在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
@@ -240,14 +240,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         </>}
         showRailToggle
       />
-      <MobileSwitcher labels={["练习模块", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
+      <MobileSwitcher labels={["练习主题", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
       <div className="page page-practice">
         <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
 
         <aside className={`practice-side ${paneClass(0)}`}>
-          <ModulesPane
-            where="practice"
-            header="练习模块"
+          <PracticeThemes
+            header="练习主题"
             modules={modules}
             activeId={activeModule}
             onSelectModule={switchModule}
@@ -262,7 +261,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             onReset={() => { const next = PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_MODULE_ID, next); }}
           >
             {moduleHint ? <p className="field-note" title="主题可在「＋ 配置」里自定义">{moduleHint}</p> : null}
-            <ModuleSectionLabel label="本模块已练" note={`${moduleMastery.length} 项`} tip="读数由 journal 回读；点卡片按这个单元重新出题" />
+            <PracticeSectionLabel label="本主题已练" note={`${moduleMastery.length} 项`} tip="读数由 journal 回读；点卡片按这个单元重新出题" />
             {moduleMastery.length ? (
               <div className="col">
                 {moduleMastery.map((record) => (
@@ -280,7 +279,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <p className="entry-empty" title="右侧「生成练习」出题">{isComprehensionChip ? "还没有练习记录。" : "这个主题还没有题。"}</p>
             )}
             <p className="fs-11 faint stretch-end" title="防止对话绕过题面拿到标准答案：判分答案与锚点都不进练习侧上下文">练习侧不给模型 read_file</p>
-          </ModulesPane>
+          </PracticeThemes>
         </aside>
 
         <div className={`practice-main ${paneClass(1)}`}>
@@ -310,7 +309,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             {!exercise && !loading ? (
               <div className="empty">
                 <div className="empty-icon"><Icon name="practice" size={34} /></div>
-                <div>{isComprehensionChip ? "这个模块还没有练习" : `「${moduleLabel}」还没有题`}</div>
+                <div>{isComprehensionChip ? "这个主题还没有练习" : `「${moduleLabel}」还没有题`}</div>
                 <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading} title={isComprehensionChip ? "静态分析即时出题；命中代码单元时由模型出题并在沙箱两跑自证" : "LLM 按这个主题出题，模型可以拒题"}><Icon name="play" size={14} /> 生成练习</button>
               </div>
             ) : null}

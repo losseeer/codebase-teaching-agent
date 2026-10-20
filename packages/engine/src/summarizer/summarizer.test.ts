@@ -75,7 +75,7 @@ describe("文件摘要表（L1）", () => {
     expect(main.roleSource).toBe("structure");
     expect(main.coverage).toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
     expect(main.cached).toBe(false);
-    // 兜底档的摘要格式：路径 + 结构角色 + 主要符号名（简短，因为它会进课程树再被润色）
+    // 兜底档的摘要格式：路径 + 结构角色 + 主要符号名（简短，因为它会进检索语料）
     expect(main.summary).toBe("main.py：执行主干；定义 main");
 
     const second = await summarizeFiles({ structure: STRUCTURE, database, provider });

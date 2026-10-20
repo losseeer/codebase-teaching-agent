@@ -1,4 +1,4 @@
-import type { CourseNode, FadedState, RepositoryAnalysis, TeachingProgress, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
+import type { FadedState, RepositoryAnalysis, RepositoryIndex, TeachingProgress, TutorMessage, TutorSession, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../identity.js";
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
@@ -8,6 +8,7 @@ import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext, ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
+import type { TeachingScope } from "../source/scope.js";
 import type { McpCallAudit } from "../external/clients.js";
 import { assembleContext } from "./context.js";
 import { teachingSystemPrompt } from "./prompts.js";
@@ -42,6 +43,8 @@ export interface TutorReply {
 export type { TeachingProgress };
 
 export interface RespondOptions {
+  /** 索引：提供时目录作用域可以列出目录内文件。 */
+  index?: RepositoryIndex;
   /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */
   analysis?: RepositoryAnalysis;
   /** search_code 语料（server 侧用 index+analysis+L1 摘要构建）：提供时开放检索工具。 */
@@ -58,16 +61,16 @@ export interface RespondOptions {
   external?: ExternalToolContext;
 }
 
-export function createSession(repositoryId: string, courseNodeId: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
+export function createSession(repositoryId: string, scopeRef: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {
   const normalized = validateSettings(settings);
-  return { id: id(), repositoryId, courseNodeId, style: normalized.style, settings: normalized, messages: [], createdAt: new Date().toISOString() };
+  return { id: id(), repositoryId, scopeRef, style: normalized.style, settings: normalized, messages: [], createdAt: new Date().toISOString() };
 }
 
 /**
   一轮代码问答：provider 必填——没有模型可调用时这条路由直接拒（见 server.ts 的 422 分支），
   不回一段本地启发式文案。「看起来答完了、其实没走模型」是最难查的事故形状。
 */
-export async function respondWithProvider(session: TutorSession, node: CourseNode, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
+export async function respondWithProvider(session: TutorSession, scope: TeachingScope, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   const policy = policyFor(session.settings);
   /**
     上下文里放了哪几段仓内源码——由 `assembleContext` 顺带登记，发一次记一次：
@@ -75,10 +78,11 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
     */
   const egress: EgressCollector = [];
   const context = assembleContext({
-    node,
+    scope,
     policy,
     history: session.messages,
     ...(repositoryPath ? { repositoryPath, egress } : {}),
+    ...(options.index ? { index: options.index } : {}),
     ...(options.analysis ? { analysis: options.analysis } : {})
   });
   const readToolAvailable = Boolean(repositoryPath);
@@ -86,7 +90,7 @@ export async function respondWithProvider(session: TutorSession, node: CourseNod
   const system = teachingSystemPrompt({ policy, faded, readToolAvailable, searchToolAvailable });
   // 清单贴在上下文尾部而非系统提示词里：系统提示词是前缀缓存的固定段，装卸一份技能就改它等于把每仓缓存全翻一遍。
   const skillsBrief = options.skills ? `\n\n${options.skills.brief}` : "";
-  const user = `学习者本轮输入：${learnerContent}\n\n可审计课程上下文：\n${context}${skillsBrief}`;
+  const user = `学习者本轮输入：${learnerContent}\n\n可审计代码上下文：\n${context}${skillsBrief}`;
   if (repositoryPath) recordEgress({ repositoryPath, scene: "teaching.turn", sessionId: session.id, sources: egress, sent: user });
   const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.skills ? { skills: options.skills } : {}), ...(options.external ? { external: options.external } : {}), ...(options.search ? { search: options.search } : {}), ...(options.cross ? { cross: options.cross } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
   const content = flagTruncatedReply(outcome.completion.text.slice(0, 1_500), outcome.completion.finishReason === "length" || outcome.completion.text.length > 1_500);

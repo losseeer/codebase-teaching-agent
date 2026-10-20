@@ -1,9 +1,8 @@
 import type { Exercise } from "@codebase-tutor/shared";
-import { factsToolFor, moduleTierToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
+import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor } from "../../application/paid-turn.js";
 import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordAbortedAudits } from "../../application/turn-audit.js";
-import { flattenCourseTree } from "../../coursetree/projection.js";
 import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
@@ -38,7 +37,7 @@ app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, repl
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
   const content = request.body?.content?.trim();
@@ -48,25 +47,22 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; nodeId?: 
   markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.handle);
   if (!provider) return reply;
-  const node = request.body?.nodeId ? flattenCourseTree(repository.course.root).find((item) => item.id === request.body?.nodeId) : undefined;
   const { send, turnHandle } = beginScopedStream(request, reply, "map_chat", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   const overlayDatabase = repository.handle.pin();
   try {
-    const toolContext = moduleTierToolFor(repository, overlayDatabase, turn.threadId);
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const factsContext = factsToolFor(repository, overlayDatabase);
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, node, nodeId: request.body?.nodeId, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
+      repoPath: repository.path, analysis: repository.analysis, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
-      ...(toolContext ? { moduleTier: toolContext } : {}),
       diagram: diagramContext,
-      ...(factsContext ? { facts: factsContext } : {}),
+      facts: factsContext,
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });

@@ -28,13 +28,13 @@ describe("M2.3 learner model", () => {
     const mastered = deriveFaded([
       event("unit_mastered", "2026-01-01T00:00:00.000Z", { unit_id: "unit" }),
       event("unit_mastered", "2026-01-02T00:00:00.000Z", { unit_id: "unit" })
-    ], "unit");
+    ]);
     expect(mastered).toMatchObject({ mastered: true, sampleCompleteness: 0, hintDepth: 3, transition: "fade" });
     const recovered = deriveFaded([
       event("unit_mastered", "2026-01-01T00:00:00.000Z", { unit_id: "unit" }),
       event("unit_mastered", "2026-01-02T00:00:00.000Z", { unit_id: "unit" }),
       event("exercise_result", "2026-01-03T00:00:00.000Z", { target_unit_id: "unit", passed: false, score: 0 })
-    ], "unit");
+    ]);
     expect(recovered).toMatchObject({ sampleCompleteness: 1, hintDepth: 3, stylePlainness: 2, transition: "replenish" });
   });
 

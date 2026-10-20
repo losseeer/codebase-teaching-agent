@@ -206,9 +206,3 @@ describe("编辑期免打扰与沙箱重探", () => {
     expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
   }, 30_000);
 });
-
-/**
-  架构视图这条链路的路由级验收（分层产物 + 覆盖层）。必须打到路由：`/course` 与 `/architecture`
-  要在实时算完 tier 之后叠同一份人工覆盖层，两条出口的叠放顺序或来源差一点，用户拖完模块换个 tab
-  就看到模块回到原位，而各测各的单测发现不了。零 token：假 provider 仍指向 127.0.0.1:9。
-*/

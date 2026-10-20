@@ -14,8 +14,6 @@ const SCENE_LABEL: Record<string, string> = {
   teach: "代码教学",
   map_chat: "宏观设计对话",
   practice_chat: "练习评估对话",
-  course_map: "课程树生成",
-  module_entries: "推荐入口",
   exercise_generate: "练习生成",
   exercise_llm_generate: "练习生成",
   exercise_feedback_polish: "反馈润色",

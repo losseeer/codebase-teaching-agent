@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import type { CourseNode, Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared/wire";
+import type { Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type DiagramPosition, type DiagramWarning, type SaveState, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/useScopedChat";
-import { Loading, flatten } from "./helpers";
+import { Loading } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
@@ -65,11 +65,6 @@ function writeMapMemory(repositoryId: string, memory: MapMemory): void {
 /** 几何写入的去抖窗口：连续拖动合并成一趟 PUT。 */
 const GEOMETRY_DEBOUNCE_MS = 300;
 
-/** 便签与 `arch:` 前缀（画布模块块）不指向课程树，不参与引用核对。 */
-function isBlockRef(ref: string): boolean {
-  return ref.startsWith("arch:");
-}
-
 export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean; onQuickPrompt?: (text: string) => void }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const memory = useMemo(() => readMapMemory(repositoryId), [repositoryId]);
@@ -85,6 +80,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
 
   const [diagram, setDiagram] = useState<Diagram | null>(null);
   const [serverWarnings, setServerWarnings] = useState<DiagramWarning[]>([]);
+  const [filesByNode, setFilesByNode] = useState<Record<string, { path: string; line: number }[]>>({});
   const [diagramLoading, setDiagramLoading] = useState(false);
   const [diagramError, setDiagramError] = useState("");
   const [selected, setSelected] = useState<DiagramNode | null>(null);
@@ -166,6 +162,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         if (!current) return;
         applyDiagram(result.diagram);
         setServerWarnings(result.warnings ?? []);
+        setFilesByNode(result.filesByNode ?? {});
         setSaveState("synced");
       })
       .catch((reason: unknown) => {
@@ -273,52 +270,23 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
 
   useEffect(() => () => { window.clearTimeout(geometryTimer.current); }, []);
 
-  /* ---------- 引用核对（引擎没给 warnings 时，按课程树自己核一遍：只比 id，不猜） ---------- */
-  const nodesById = useMemo(() => {
-    const map = new Map<string, CourseNode>();
-    if (t.course) for (const node of flatten(t.course.root)) map.set(node.id, node);
-    return map;
-  }, [t.course]);
-
-  const localStale = useMemo<DiagramWarning[]>(() => {
-    if (!diagram || !t.course) return [];
-    const out: DiagramWarning[] = [];
-    for (const node of diagram.body.nodes) {
-      if (node.kind !== "module" || !node.ref || isBlockRef(node.ref)) continue;
-      if (!nodesById.has(node.ref)) out.push({ node: node.id, reason: `引用 ${node.ref} 已经不在现在的课程树里（改名、删模块或重分析过）` });
-    }
-    return out;
-  }, [diagram, t.course, nodesById]);
-
-  const warnings = serverWarnings.length ? serverWarnings : localStale;
+  /* ---------- 引用核对：服务端按索引/依赖图解析，客户端只展示 ---------- */
+  const warnings = serverWarnings;
   const staleReasonFor = useCallback((id: string): string | undefined => warnings.find((item) => item.node === id)?.reason, [warnings]);
 
   /* ---------- 抽屉的三份读数：说明落点、关联文件、出边 ---------- */
+  const filesOf = useCallback((node: DiagramNode): DrawerFile[] => {
+    if (node.kind !== "module") return [];
+    return (filesByNode[node.id] ?? []).map((file) => ({ path: file.path, line: file.line }));
+  }, [filesByNode]);
+
   const resolutionOf = useCallback((node: DiagramNode): NodeResolution => {
     const stale = staleReasonFor(node.id);
     if (stale) return { state: "stale", reason: stale };
-    if (node.kind === "module") {
-      if (!t.course) return { state: "pending" };
-      if (!node.ref) return { state: "unknown" };
-      if (isBlockRef(node.ref)) return { state: "block" };
-      const courseNode = nodesById.get(node.ref);
-      return courseNode ? { state: "ok", node: courseNode } : { state: "unknown" };
-    }
-    return { state: "unknown" };
-  }, [staleReasonFor, t.course, nodesById]);
-
-  /** 关联文件 = 课程树里那个节点（含子孙）的锚点，按 path 去重、保留最先出现的行号。 */
-  const filesOf = useCallback((node: DiagramNode): DrawerFile[] => {
-    if (node.kind !== "module") return [];
-    const courseNode = node.ref ? nodesById.get(node.ref) : undefined;
-    if (!courseNode) return [];
-    const rows = new Map<string, DrawerFile>();
-    for (const item of flatten(courseNode)) for (const anchor of item.anchors) {
-      if (rows.has(anchor.path)) continue;
-      rows.set(anchor.path, { path: anchor.path, line: anchor.line, ...(anchor.label ? { label: anchor.label } : {}) });
-    }
-    return [...rows.values()];
-  }, [nodesById]);
+    if (node.kind !== "module") return { state: "unknown" };
+    const files = filesOf(node);
+    return files.length ? { state: "ok", files } : { state: "unknown" };
+  }, [staleReasonFor, filesOf]);
 
   const outgoingOf = useCallback((node: DiagramNode): DrawerEdge[] => {
     if (!diagram) return [];
@@ -404,32 +372,35 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
   }, [repositoryId, applyDiagram, refreshGallery]);
 
   const openFile = useCallback((path: string): void => {
+    t.setMapScope([path]);
     t.setMapFile(path);
     t.setMapBinding({ kind: "file", path });
     showToast(`已选中 · ${path}`);
     emit(repositoryId, "file_anchored", { path, source: "anchor" });
   }, [repositoryId, t]);
 
-  /** 绑定这一格给对话：核得上课程树节点就带上它的文件清单，核不上就解绑退回全局视野。 */
+  /** 绑定这一格给对话：核得上就带上它关联的文件清单，核不上就解绑退回全局视野。 */
   const bindNode = useCallback((node: DiagramNode): void => {
-    const resolution = resolutionOf(node);
-    if (resolution.state === "ok") {
-      const files = filesOf(node);
-      t.setMapNode(resolution.node, files.map((file) => file.path));
+    const files = filesOf(node);
+    if (files.length) {
+      t.setMapScope(files.map((file) => file.path));
+      t.setMapFile("");
       t.setMapBinding({ kind: "module", title: node.label });
       showToast(`对话已绑到「${node.label}」`);
       return;
     }
-    t.setMapNode(null);
+    t.setMapScope([]);
+    t.setMapFile("");
     t.setMapBinding({ kind: "module", title: node.label });
-    showToast(node.kind === "note" ? `对话已绑到便签「${node.label}」` : "引用没核到课程树");
-  }, [resolutionOf, filesOf, t]);
+    showToast(node.kind === "note" ? `对话已绑到便签「${node.label}」` : "这个引用核不上");
+  }, [filesOf, t]);
 
   const gotoTeach = useCallback((node: DiagramNode): void => {
-    const courseNode = node.ref ? nodesById.get(node.ref) : undefined;
-    if (courseNode) t.setSelected(courseNode);
+    const files = filesOf(node);
+    if (node.ref?.startsWith("file:") || node.ref?.startsWith("dir:")) t.setScopeRef(node.ref);
+    else if (files[0]) t.setScopeRef(`file:${files[0].path}`);
     navigate("/app?workspace=teaching");
-  }, [nodesById, navigate, t]);
+  }, [filesOf, navigate, t]);
 
   const selectNode = useCallback((node: DiagramNode | null): void => {
     setSelected(node);

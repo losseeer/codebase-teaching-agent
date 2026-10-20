@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { CourseNode, DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
+import type { DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
 import { Icon } from "../ui/icons";
 import { ORIGIN_NOTE } from "./diagramView";
 
@@ -8,13 +8,11 @@ function fileTail(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
-/** 节点在课程树里的落点读数。四种状态各有各的一句话：查不到就说查不到。 */
+/** 节点引用的核对读数：引用核上了就带上它覆盖的文件；核不上就说清原因。 */
 export type NodeResolution =
-  | { state: "ok"; node: CourseNode }
+  | { state: "ok"; files: DrawerFile[] }
   | { state: "stale"; reason: string }
   | { state: "pending" }
-  /** `ref` 指的是架构方块（`arch:…`）：它本来就不在课程树里，这边读不到它的摘要。 */
-  | { state: "block" }
   | { state: "unknown" };
 
 export interface DrawerFile {
@@ -51,13 +49,13 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
   onBind: () => void;
 }): ReactElement {
   const isNote = node.kind === "note";
-  const badgeText = isNote ? (node.sub ?? "便签") : resolution.state === "ok" ? "模块" : "节点";
+  const badgeText = isNote ? (node.sub ?? "便签") : resolution.state === "ok" ? "代码实体" : "节点";
 
   return (
     <aside className="drawer" aria-label="节点详情">
       <div className="drawer-head">
         <h3>{node.label}</h3>
-        <span className="badge badge-neutral" title={isNote ? "便签：正文由人或模型写，不是引擎读数" : resolution.state === "ok" ? "挂在课程树的一个节点上" : "引用核不到课程树"}>{badgeText}</span>
+        <span className="badge badge-neutral" title={isNote ? "便签：正文由人或模型写，不是引擎读数" : resolution.state === "ok" ? "引用核到了索引里的文件" : "引用核不上"}>{badgeText}</span>
         <button type="button" className="icon-btn" aria-label="关闭详情" title="关闭详情" onClick={onClose}><Icon name="x" size={14} /></button>
       </div>
       <div className="drawer-body">
@@ -68,18 +66,16 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
               ? <span className="kv-v" title="这是人/模型写的正文，不是引擎读数">{node.text}</span>
               : <span className="kv-v muted">这张便签还是空的。</span>
           ) : resolution.state === "ok" ? (
-            <span className="kv-v" title={`课程树里「${resolution.node.title}」的摘要（引擎算的），agent 没给画布另写一句`}>{resolution.node.summary}</span>
+            <span className="kv-v" title={`引用：${node.ref ?? "（未给）"}`}>引用核上了：关联 {resolution.files.length} 个已索引文件。具体职责问 agent，或打开文件看。</span>
           ) : resolution.state === "stale" ? (
             <>
               <span className="kv-v"><span className="badge badge-warn">引用已失效</span></span>
               <span className="kv-v muted" title={resolution.reason}>{resolution.reason}</span>
             </>
           ) : resolution.state === "pending" ? (
-            <span className="kv-v muted">课程树还没取到，这一格暂时没有可核对的说明。</span>
-          ) : resolution.state === "block" ? (
-            <span className="kv-v muted" title={`引用：${node.ref}`}>这一格挂在架构方块上，摘要要在对话里问 agent。</span>
+            <span className="kv-v muted">文件索引还没取到，这一格暂时没有可核对的说明。</span>
           ) : (
-            <span className="kv-v muted">{node.ref ? `引用 ${node.ref} 不在现在的课程树里。` : "这个模块节点没带引用。"}</span>
+            <span className="kv-v muted">{node.ref ? `引用 ${node.ref} 不在当前索引或依赖图里。` : "这个节点没带引用。"}</span>
           )}
         </div>
 
@@ -123,7 +119,7 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={isNote || resolution.state !== "ok"}
-            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个模块去代码教学" : "这个引用在课程树里查不到，没有可去的教学节点"}
+            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个节点的第一个文件去代码教学" : "这个引用核不上，没有可去的教学作用域"}
             onClick={onGotoTeach}
           ><Icon name="book" size={13} />去代码教学</button>
           <button type="button" className="btn btn-ghost btn-sm" title="把这一格设为对话的作用域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>

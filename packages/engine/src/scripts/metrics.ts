@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { CourseTree, JournalEvent, RepositoryIndex } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/shared";
 import { readJournal } from "../store/journal.js";
 
 /**
@@ -54,15 +54,6 @@ function normalizeUrl(url: string): string {
     .replaceAll(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi, ":id");
 }
 
-async function getJson<T>(path: string): Promise<T | null> {
-  try {
-    const response = await fetch(`${engineUrl}${path}`);
-    return response.ok ? (await response.json() as T) : null;
-  } catch {
-    return null;
-  }
-}
-
 
 const out: string[] = [];
 const emit = (line = ""): void => { out.push(line); };
@@ -78,30 +69,12 @@ emit(`生成时间：${new Date().toISOString()}｜引擎探针：${engineUrl}`)
 emit(`仓库：${registry.join("、") || "（repositories.json 为空）"}`);
 emit();
 
-emit("## 1. 仓库理解质量");
 const perRepo: { path: string; id: string | null; journal: JournalEvent[] }[] = registry.map((path) => {
   const journal = readJournal(path);
   return { path, id: journal.find((event) => event.repositoryId)?.repositoryId ?? null, journal };
 });
-for (const repo of perRepo) {
-  const label = `\`${repo.path}\`${repo.id ? `（${repo.id}）` : ""}`;
-  if (!repo.id) { emit(`- ${label}：journal 无 repositoryId，未执行`); continue; }
-  const index = await getJson<RepositoryIndex>(`/api/repositories/${repo.id}/index`);
-  const course = await getJson<CourseTree>(`/api/repositories/${repo.id}/course`);
-  if (index) {
-    const covered = new Set<string>();
-    if (course) {
-      const walk = (node: CourseTree["root"]): void => { node.anchors.forEach((anchor) => covered.add(anchor.path)); node.children.forEach(walk); };
-      walk(course.root);
-    }
-    const indexed = index.files.map((file) => file.path);
-    const hit = indexed.filter((path) => covered.has(path)).length;
-    emit(`- ${label} 解析覆盖率：${pct(hit, indexed.length)}（分母 = 索引文件数；course 树离线不可得时只含实现单元，偏低并注明）`);
-  }
-}
-emit();
 
-emit("## 2. 成本与效率（调用层真源 = llm.log；scene 缺失 = 未记，不兜底）");
+emit("## 1. 成本与效率（调用层真源 = llm.log；scene 缺失 = 未记，不兜底）");
 type Bucket = { calls: number; failed: number; input: number; output: number; cacheHit: number; cacheReportedCalls: number; ms: number[] };
 const buckets = new Map<string, Bucket>();
 for (const row of llmRows) {
@@ -199,19 +172,6 @@ for (const repo of perRepo) {
     emit(`- 练习链路：送达 ${generated.length}（${bySource}）→ 提交 ${submitted.length} → 判分 ${results.length}（通过 ${passed}）；未送达即拒 ${declined.length}（按族 ${byFamily}；按档 ${byStage}）`);
   }
 
-  // 作用域降级：分母 = map_chat 轮次（token_usage scene 记账）；scope_paths=0 是 GUI 没上送清单，>0 是上送了但交集为空——成因不同要分列
-  const degradedEvents = of("scope_degraded");
-  const mapChatRounds = [...ledger].filter(([scene]) => scene === "map_chat").reduce((sum, row) => sum + row[1].calls, 0);
-  const degradedNoList = degradedEvents.filter((event) => !Number(event.payload.scope_paths)).length;
-  emit(`- 作用域降级（按全局视野作答）：${pct(degradedEvents.length, mapChatRounds)}；map_chat 共 ${mapChatRounds} 轮（上送清单但交集为空 ${degradedEvents.length - degradedNoList}、未上送清单 ${degradedNoList}）`);
-
-  // 推荐入口采纳率（口径：开文件即改选）：分母 = 实际选型动作；按 llm 推荐与规则回落分列，混算会把降级产物当推荐质量
-  const adopted = of("entry_adopted");
-  const overridden = of("entry_overridden");
-  const adoptedLlm = adopted.filter((event) => event.payload.source === "llm").length;
-  const overriddenLlm = overridden.filter((event) => event.payload.suggested_source === "llm").length;
-  emit(`- 推荐入口：采纳 ${adopted.length}（llm ${adoptedLlm}/回落 ${adopted.length - adoptedLlm}）、改选 ${overridden.length}（llm ${overriddenLlm}/回落 ${overridden.length - overriddenLlm}）；采纳率 全口径 ${pct(adopted.length, adopted.length + overridden.length)}、仅 llm 推荐 ${pct(adoptedLlm, adoptedLlm + overriddenLlm)}`);
-
   const dbFile = join(repo.path, ".tutor", "tutor.db");
   if (!existsSync(dbFile)) { emit("- tutor.db 缺失：coverageLow 未执行"); continue; }
   const db = new DatabaseSync(dbFile, { readOnly: true });
@@ -236,8 +196,6 @@ for (const repo of perRepo) {
 
 emit();
 emit("## 5. 明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
-emit("- 作用域降级：已埋 `scope_degraded`（读数见第 4 节）；事件上线前的降级不在内，基线从埋点起算；");
-emit("- 推荐入口采纳/改选：已埋 `entry_adopted`/`entry_overridden`（读数见第 4 节，口径=开文件即改选）；上线前的点击不在内；");
 emit("- 每教会一个节点的平均成本：分母 `unit_mastered` 现在没有产出方（问答回合不再经过教学状态机）→ 这条指标没有口径；要问「一次问答多少成本」看第 2 节的 teach 场景行；");
 emit("- 表达质量归因（文件:行号 落点核验）：回合文本不落盘（按设计），走离线评测档。");
 emit();

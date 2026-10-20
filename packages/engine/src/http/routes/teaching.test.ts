@@ -13,7 +13,7 @@ beforeEach(() => { fx.reset(); });
 
 describe("教学作用域（SSE）", () => {
   async function openSession(settings?: Record<string, unknown>): Promise<string> {
-    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, courseNodeId: "unit-1", ...(settings ? { settings } : {}) } });
+    const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, scopeRef: `file:${MAIN_FILE}`, ...(settings ? { settings } : {}) } });
     const id = (created.json() as { session: { id: string } }).session.id;
     fx.usedThreads.add(id);
     return id;

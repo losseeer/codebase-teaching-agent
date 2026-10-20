@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, mkdtempSync, realpathSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import type { CourseTree, Diagram, DiagramBody, JournalEventType, RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import { TutorDatabase } from "../store/database.js";
 import { applyStructure, buildDiagram, DIAGRAM_VERSION_LIMIT, listDiagrams, readDiagram, restoreVersion } from "../store/diagrams.js";
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
@@ -10,39 +10,36 @@ import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEdi
 /**
   画布「结构」这唯一写入口的测试。每一条都对着一条会被踩的线：
 
-  - 查无此人不落笔：`kind:"module"` 的节点指不到课程树/方块清单上的东西就整次拒写，
+  - 查无此人不落笔：`kind:"module"` 的节点指不到索引里的文件/目录/符号就整次拒写，
     因为读者会拿着图上那个名字去代码里找它（半张真图比一张假图好，但一张拼出来的假图谁都会照着讲）；
   - 边的可信度只降不升：模型报低了引擎不替它抬（抬等于替它吹），报高了引擎一定降并把为什么写在边上；
   - 删一个节点要连带清掉挂在它身上的边、删一个框要清掉节点上的归属：留着就是指向空气的图元；
   - 版本历史只追加：存版有上限、回滚也是往前追加一版，谁都不许把已经落过的那几版抹掉。
 
-  零 token：这一层不发模型请求（`refIndexOf` 那两张表由课程树与依赖图现算）。
+  零 token：这一层不发模型请求（`refIndexOf` 那两张表由索引与依赖图现算）。
 */
 
 const REPO = "repo_diagram_fixture";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-set-diagram-")));
 
-const course = {
-  repositoryId: REPO, modelVersion: "fixture", generatedAt: "2026-10-18T00:00:00.000Z",
-  root: {
-    id: "root", title: "r", summary: "s", kind: "overview", anchors: [],
-    children: [{
-      id: "modules", title: "模块地图", kind: "overview", summary: "s", anchors: [],
-      children: [
-        { id: "module:api", title: "接口层", summary: "收请求", kind: "module", tier: "core", anchors: [{ path: "src/api.ts", line: 1, label: "入口" }], children: [] },
-        { id: "module:core", title: "编排", summary: "主流程", kind: "module", tier: "core", anchors: [{ path: "src/core.ts", line: 1, label: "实现" }], children: [] },
-        { id: "module:db", title: "存储", summary: "落库", kind: "module", tier: "facility", anchors: [{ path: "src/db.ts", line: 1, label: "实现" }], children: [] }
-      ]
-    }]
-  }
-} as unknown as CourseTree;
+const index = {
+  repositoryId: REPO, repositoryPath: root, scannedAt: "2026-10-18T00:00:00.000Z", totalFiles: 3, totalLines: 120,
+  files: [
+    { path: "src/api.ts", extension: ".ts", bytes: 1, lines: 40 },
+    { path: "src/core.ts", extension: ".ts", bytes: 1, lines: 50 },
+    { path: "src/db.ts", extension: ".ts", bytes: 1, lines: 30 }
+  ],
+  fileTree: [], hotspots: []
+} as RepositoryIndex;
 
 /** import 链只有一条：api → core → db。边上报的其它说法都得在这里撞墙。 */
 const analysis = {
   repositoryId: REPO, generatedAt: "2026-10-18T00:00:00.000Z", versionStamp: "content:fixture",
   graph: {
     imports: { "src/api.ts": ["src/core.ts"], "src/core.ts": ["src/db.ts"], "src/db.ts": [] },
-    calls: [], symbols: [], entrypoints: [{ path: "src/api.ts", line: 1, label: "HTTP 路由" }],
+    calls: [],
+    symbols: [{ id: "sym-1", name: "registerOrder", kind: "function", path: "src/api.ts", line: 1, endLine: 4, parameters: [], language: "typescript" }],
+    entrypoints: [{ path: "src/api.ts", line: 1, label: "HTTP 路由" }],
     semanticBackend: "static", lspStatus: []
   },
   implementations: []
@@ -59,7 +56,7 @@ function fixture(): { database: TutorDatabase; context: DiagramWriteContext; eve
   const context: DiagramWriteContext = {
     database,
     repositoryId: REPO,
-    course,
+    index,
     analysis,
     journal: { append: (type, payload) => { events.push({ type, payload }); } },
     onApplied: (event) => { applied.push(`${event.diagramId}:${event.action}`); }
@@ -69,7 +66,7 @@ function fixture(): { database: TutorDatabase; context: DiagramWriteContext; eve
 
 /** 种一张已经画好的图（走 draw 本身，顺带验初版会留一版历史）。 */
 function seeded(context: DiagramWriteContext): Diagram {
-  const outcome = applyDiagramEdit(context, { edit: { action: "draw", name: "主线", body: { groups: [], nodes: [moduleNode("n-api", "module:api", "接口层", 0, 0), moduleNode("n-core", "module:core", "编排", 0, 200)], edges: [] } } }, "agent");
+  const outcome = applyDiagramEdit(context, { edit: { action: "draw", name: "主线", body: { groups: [], nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-core", "file:src/core.ts", "编排", 0, 200)], edges: [] } } }, "agent");
   expect(outcome.ok, outcome.text).toBe(true);
   return outcome.diagram!;
 }
@@ -85,11 +82,15 @@ afterAll(() => {
 });
 
 describe("applyDiagramEdit：查无此人不落笔", () => {
-  it("module 节点的 ref 不在树上：整次拒写，库里一行都不多、审计一行都不记", () => {
+  it("module 节点的 ref 核不上索引：整次拒写，库里一行都不多、审计一行都不记", () => {
     const f = fixture();
-    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "假节点", body: { groups: [], nodes: [{ id: "n-ghost", kind: "module", label: "查无此人", ref: "module:不存在的那一个", x: 10, y: 10 }], edges: [] } } }, "agent");
+    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "假节点", body: { groups: [], nodes: [{ id: "n-ghost", kind: "module", label: "查无此人", ref: "file:不存在的那一个.ts", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(outcome.ok).toBe(false);
-    expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("既不在模块地图里");
+    expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("不在本仓索引里");
+    // 旧课程树的引用已退役：不能当成「一次普通核不上」轻轻放过，回话要给出新写法
+    const retired = applyDiagramEdit(f.context, { edit: { action: "draw", name: "旧引用", body: { groups: [], nodes: [{ id: "n-old", kind: "module", label: "旧模块", ref: "module:src", x: 10, y: 10 }], edges: [] } } }, "agent");
+    expect(retired.ok).toBe(false);
+    expect(retired.text).toContain("已退役");
     expect(listDiagrams(f.database, REPO), "被拒的这一次连一张空图都不该留下").toEqual([]);
     expect(f.events).toEqual([]);
     expect(f.applied).toEqual([]);
@@ -98,10 +99,38 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
 
   it("节点指得到、边的一端却不在图上：同样整次拒（先加节点再加边）", () => {
     const f = fixture();
-    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "半张图", body: { groups: [], nodes: [moduleNode("n-api", "module:api", "接口层", 0, 0)], edges: [{ id: "e-1", from: "n-api", to: "n-none", origin: "inferred" }] } } }, "agent");
+    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "半张图", body: { groups: [], nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0)], edges: [{ id: "e-1", from: "n-api", to: "n-none", origin: "inferred" }] } } }, "agent");
     expect(outcome.ok).toBe(false);
     expect(outcome.text).toContain("一端不在图上");
     expect(listDiagrams(f.database, REPO)).toEqual([]);
+    f.database.close();
+  });
+
+  it("file/dir/symbol/group 四种引用都能落笔；group 没给 files 整次拒", () => {
+    const f = fixture();
+    const outcome = applyDiagramEdit(f.context, {
+      edit: {
+        action: "draw", name: "四种引用", body: {
+          groups: [], edges: [], nodes: [
+            { id: "n-file", kind: "module", label: "文件", ref: "file:src/api.ts", x: 0, y: 0 },
+            { id: "n-dir", kind: "module", label: "目录", ref: "dir:src", x: 100, y: 0 },
+            { id: "n-sym", kind: "module", label: "符号", ref: "symbol:src/api.ts#registerOrder", x: 200, y: 0 },
+            { id: "n-group", kind: "module", label: "分组", ref: "group:g-1", files: ["src/core.ts", "src/db.ts"], x: 300, y: 0 }
+          ]
+        }
+      }
+    }, "agent");
+    expect(outcome.ok, outcome.text).toBe(true);
+    const byId = new Map(outcome.diagram!.body.nodes.map((node) => [node.id, node]));
+    // 单引用节点只留 ref，文件清单在读侧由同一份解析器现算；只有 group 需要把 files 落进结构
+    expect(byId.get("n-file")!.ref).toBe("file:src/api.ts");
+    expect(byId.get("n-dir")!.ref).toBe("dir:src");
+    expect(byId.get("n-sym")!.ref).toBe("symbol:src/api.ts#registerOrder");
+    expect(byId.get("n-group")!.files).toEqual(["src/core.ts", "src/db.ts"]);
+
+    const refused = applyDiagramEdit(f.context, { edit: { action: "add_node", node: { id: "n-bad", kind: "module", label: "空分组", ref: "group:g-2", x: 0, y: 0 } } }, "agent");
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toContain("必须给 files");
     f.database.close();
   });
 
@@ -109,7 +138,7 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
     const f = fixture();
     const first = seeded(f.context);
     seeded(f.context); // 第二张同名图会被加序号：从此「不说改哪张」就没有唯一答案
-    const refused = applyDiagramEdit(f.context, { edit: { action: "add_node", node: moduleNode("n-extra", "module:db", "存储", 400, 400) } }, "agent");
+    const refused = applyDiagramEdit(f.context, { edit: { action: "add_node", node: moduleNode("n-extra", "file:src/db.ts", "存储", 400, 400) } }, "agent");
     expect(refused.ok, `两张图且没指名改哪一张：${refused.text}`).toBe(false);
     expect(refused.text).toContain("说清要改哪一张");
     const still = readDiagram(f.database, REPO, first.id)!;
@@ -145,7 +174,7 @@ describe("applyDiagramEdit：边的可信度只降不升", () => {
       edit: {
         action: "draw", name: "依赖要说清", body: {
           groups: [],
-          nodes: [moduleNode("n-api", "module:api", "接口层", 0, 0), moduleNode("n-core", "module:core", "编排", 200, 0), moduleNode("n-db", "module:db", "存储", 400, 0), { id: "n-note", kind: "note", label: "便签", x: 600, y: 0, text: "猜的" }],
+          nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-core", "file:src/core.ts", "编排", 200, 0), moduleNode("n-db", "file:src/db.ts", "存储", 400, 0), { id: "n-note", kind: "note", label: "便签", x: 600, y: 0, text: "猜的" }],
           edges: [
             // 真有 import：static 站得住
             { id: "e-true", from: "n-api", to: "n-core", origin: "static" },
@@ -185,7 +214,7 @@ describe("applyDiagramEdit：边的可信度只降不升", () => {
       edit: {
         action: "draw", name: "注入也要算证据", body: {
           groups: [],
-          nodes: [moduleNode("n-api", "module:api", "接口层", 0, 0), moduleNode("n-db", "module:db", "存储", 200, 0)],
+          nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-db", "file:src/db.ts", "存储", 200, 0)],
           edges: [{ id: "e-di", from: "n-api", to: "n-db", origin: "static" }, { id: "e-back", from: "n-db", to: "n-api", origin: "static" }]
         }
       }
@@ -222,7 +251,7 @@ describe("applyDiagramEdit：删与改都连带收尾", () => {
     const diagram = seeded(f.context);
     applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "add_group", group: { id: "g-1", label: "主链路", x: 0, y: 0, w: 300, h: 300 } } }, "agent");
     applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "relabel", target: "n-api", label: "接口层", sub: "入口" } }, "agent");
-    const grouped = applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "add_node", node: { ...moduleNode("n-db", "module:db", "存储", 500, 500), group: "g-1" } } }, "agent");
+    const grouped = applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "add_node", node: { ...moduleNode("n-db", "file:src/db.ts", "存储", 500, 500), group: "g-1" } } }, "agent");
     expect(grouped.diagram!.body.nodes.find((node) => node.id === "n-db")!.group).toBe("g-1");
     const removed = applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "remove_group", target: "g-1" } }, "agent");
     expect(removed.ok, removed.text).toBe(true);
@@ -279,10 +308,10 @@ describe("版本历史：存版有上限，恢复只追加", () => {
 
   it("读侧：引用断掉的节点要报出来，画布现场那份清单把正打开那张标出来", () => {
     const f = fixture();
-    const broken = buildDiagram(REPO, { name: "过时的一张", source: "agent", body: { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "重命名前的模块", ref: "module:gone", x: 0, y: 0 }], edges: [] } });
+    const broken = buildDiagram(REPO, { name: "过时的一张", source: "agent", body: { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "重命名前的模块", ref: "file:src/gone.ts", x: 0, y: 0 }], edges: [] } });
     applyStructure(f.database, broken, broken.body, "agent 初版");
     const stored = readDiagram(f.database, REPO, broken.id)!;
-    expect(diagramWarnings(f.context, stored)).toEqual([{ node: "n-gone", reason: expect.stringContaining("已经不在现在的课程树或方块清单里") }]);
+    expect(diagramWarnings(f.context, stored)).toEqual([{ node: "n-gone", reason: expect.stringContaining("核不上") }]);
 
     seeded(f.context);
     const inventory = diagramInventoryFor(f.context, broken.id);
@@ -320,11 +349,11 @@ describe("parseDiagramEditArguments：白名单就是白名单", () => {
 
   it("九种动作真能从这一层走到写入口（draw 的整张结构按缺省补空表）", () => {
     const f = fixture();
-    const drawn = parseDiagramEditArguments('{"edit":{"action":"draw","name":"从参数层进来","body":{"nodes":[{"id":"n-api","kind":"module","label":"接口层","ref":"module:api","x":0,"y":0}]}}}');
+    const drawn = parseDiagramEditArguments('{"edit":{"action":"draw","name":"从参数层进来","body":{"nodes":[{"id":"n-api","kind":"module","label":"接口层","ref":"file:src/api.ts","x":0,"y":0}]}}}');
     expect(drawn.error).toBeUndefined();
     const outcome = applyDiagramEdit(f.context, drawn.request!, "agent");
     expect(outcome.ok, outcome.text).toBe(true);
-    expect(outcome.diagram!.body).toMatchObject({ groups: [], edges: [], nodes: [{ id: "n-api", ref: "module:api" }] });
+    expect(outcome.diagram!.body).toMatchObject({ groups: [], edges: [], nodes: [{ id: "n-api", ref: "file:src/api.ts" }] });
     f.database.close();
   });
 });

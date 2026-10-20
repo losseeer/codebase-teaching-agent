@@ -16,8 +16,8 @@ describe("会话持久化", () => {
   beforeEach(() => { repository = mkdtempSync(join(tmpdir(), "tutor-chat-store-")); });
   afterEach(() => { rmSync(repository, { recursive: true, force: true }); });
 
-  const openThread = (input?: { scope?: "teach" | "map" | "practice"; title?: string; courseNodeId?: string }) =>
-    createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: input?.scope ?? "map", ...(input?.title ? { title: input.title } : {}), ...(input?.courseNodeId ? { courseNodeId: input.courseNodeId } : {}) });
+  const openThread = (input?: { scope?: "teach" | "map" | "practice"; title?: string; scopeRef?: string }) =>
+    createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: input?.scope ?? "map", ...(input?.title ? { title: input.title } : {}), ...(input?.scopeRef ? { scopeRef: input.scopeRef } : {}) });
 
   it("创建的线程可读回，未给标题时落作用域占位名", () => {
     const thread = openThread({ title: "  秒杀链路怎么走  " });
@@ -76,7 +76,7 @@ describe("会话持久化", () => {
     expect(countMessagesRaw(repository, thread.id)).toBe(0);
   });
 
-  it("列表按最近更新在前；改名与按节点找回", async () => {
+  it("列表按最近更新在前；改名与按作用域找回", async () => {
     const a = openThread({ title: "A" });
     const b = openThread({ title: "B" });
     appendMessages(repository, a.id, [{ role: "user", content: "a1" }]);
@@ -89,7 +89,7 @@ describe("会话持久化", () => {
     expect(renamed?.title).toBe("改名后的标题");
     expect(renameThread(repository, a.id, "   ")).toBeUndefined();
 
-    const teach = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "teach", courseNodeId: "node_x" });
+    const teach = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "teach", scopeRef: "file:src/main.ts" });
     appendMessages(repository, teach.id, [{ role: "user", content: "教学第一问" }]);
     // 作用域隔离：map 的列表里不会混进教学会话
     expect(listThreads(repository, "repo_1", "map").some((thread) => thread.id === teach.id)).toBe(false);

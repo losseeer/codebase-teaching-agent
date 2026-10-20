@@ -53,12 +53,12 @@ const exercise = {
 } as unknown as Exercise;
 
 describe("mapChat", () => {
-  it("上下文包含节点摘要与依赖关系，回复与 usage 透传", async () => {
+  it("上下文包含作用域文件与依赖关系，回复与 usage 透传", async () => {
     const { provider, calls } = fakeProvider();
     const result = await mapChat({
       repoPath: import.meta.dirname,
       analysis,
-      node: { id: "n1", title: "启动流程", summary: "应用入口的装配顺序", kind: "workflow", anchors: [], children: [] },
+      scopePaths: ["src/app.ts"],
       path: "src/app.ts",
       content: "为什么要分层？",
       provider,
@@ -70,7 +70,7 @@ describe("mapChat", () => {
     const user = calls[0].user;
     expect(user).toContain("项目结构全景");
     expect(user).toContain("src/utils/（1）：normalize.ts"); // 全景按目录分组列出已分析文件
-    expect(user).toContain("启动流程");
+    expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 1 个已分析文件");
     expect(user).toContain("src/app.ts");
     expect(user).toContain("src/config.ts"); // 一度邻居
     expect(user).toContain("src/paths.ts"); // 二度下游：config.ts 的 import
@@ -206,32 +206,29 @@ describe("mapChat", () => {
     expect(result.reply).toBe("这句话说到一半就被\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）");
   });
 
-  it("架构图合成节点：nodeId 未命中但带 scopePaths → 注入「当前作用域」清单（含 L1 职责），未分析路径被丢弃", async () => {
+  it("画布上送作用域：只注入已分析路径的「当前作用域」清单（含 L1 职责），未分析路径被丢弃", async () => {
     const { provider, calls } = fakeProvider();
     const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;
     const search = buildSearchCorpus(index, analysis, new Map([["src/app.ts", "装配应用入口"], ["src/config.ts", "读取并校验配置"]]));
-    const result = await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "depmap:src", scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
-    expect(result.scopeDegraded).toBeUndefined(); // 解析成功不留痕，降级率分母才可信
+    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
     const user = calls[0].user;
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
     expect(user).toContain("src/app.ts（120 行）：装配应用入口");
     expect(user).not.toContain("README.md"); // 未分析的提示路径不参与交集
-    expect(user).not.toContain("不在当前课程树中"); // 作用域已解析成功，不再叠加降级声明
   });
 
-  it("nodeId 未命中且作用域解析为空 → 明示降级为全局视野，不静默，并给出 journal 留痕（scope_paths=上送清单去重数）", async () => {
+  it("作用域清单全部未分析 → 不注入作用域段，按全局视野作答", async () => {
     const { provider, calls } = fakeProvider();
-    const result = await mapChat({ repoPath: import.meta.dirname, analysis, nodeId: "module:src/gone", scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, style: 50 });
-    expect(calls[0].user).toContain("「module:src/gone」不在当前课程树中");
-    expect(calls[0].user).toContain("按全局视野作答");
-    expect(result.scopeDegraded).toEqual({ nodeId: "module:src/gone", scopePathsCount: 2 });
+    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, style: 50 });
+    expect(calls[0].user).toContain("项目结构全景");
+    expect(calls[0].user).not.toContain("当前作用域");
   });
 
   it("作用域文件数超上限 → 逐个列前 60 并明示余量与 search_code 出口", async () => {
     const { provider, calls } = fakeProvider();
     const files = Array.from({ length: 65 }, (_, i) => `src/mod/f${i}.ts`);
     const wide = { ...analysis, graph: { ...analysis.graph, imports: Object.fromEntries(files.map((file) => [file, []])) } } as unknown as RepositoryAnalysis;
-    await mapChat({ repoPath: import.meta.dirname, analysis: wide, nodeId: "depmap:src/mod", scopePaths: files, content: "问", provider, style: 50 });
+    await mapChat({ repoPath: import.meta.dirname, analysis: wide, scopePaths: files, content: "问", provider, style: 50 });
     const user = calls[0].user;
     expect(user).toContain("含 65 个已分析文件");
     expect(user).toContain("其余 5 个文件未列出");

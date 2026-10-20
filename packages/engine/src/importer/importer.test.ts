@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CourseTree, ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
+import type { ImportEstimate, ImportJob, RepositoryAnalysis, RepositoryFreshness, RepositoryIndex, ServerEvent } from "@codebase-tutor/shared";
 import { repositoryId as deriveRepositoryId } from "../identity.js";
 import { TutorDatabase } from "../store/database.js";
-import { ImportService, refinementIsFresh, type ImportedRepository } from "./importer.js";
+import { ImportService, type ImportedRepository } from "./importer.js";
 
 /** 构造一个带完整 .tutor 持久化数据的最小仓库目录（走 TutorDatabase 真实写库）。 */
 function makePersistedRepo(root: string, name: string): { repoDir: string; repositoryId: string } {
@@ -21,10 +21,6 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
     files: [{ path: "src/main.ts", extension: ".ts", bytes: 30, lines: 2 }],
     fileTree: [], hotspots: []
   };
-  const course: CourseTree = {
-    repositoryId, modelVersion: "fixture-v1", generatedAt: now,
-    root: { id: "root", title: `${name} 课程树`, summary: "测试用", kind: "overview", anchors: [], children: [] }
-  };
   const analysis: RepositoryAnalysis = {
     repositoryId, generatedAt: now, versionStamp: "content:fixture",
     graph: { imports: {}, calls: [], symbols: [], entrypoints: [], semanticBackend: "static", lspStatus: [] },
@@ -33,7 +29,7 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
   const estimate: ImportEstimate = { cachedFiles: 0, summarizedFiles: 1, estimatedInputTokens: 0, estimatedCostUsd: 0, provider: "none", modelVersion: "fixture-v1" };
   const database = new TutorDatabase(repoDir);
   database.saveIndex(index);
-  database.saveCourse(course, estimate);
+  database.saveEstimate(repositoryId, estimate);
   database.saveAnalysis(analysis);
   database.close();
   return { repoDir, repositoryId };
@@ -136,7 +132,7 @@ describe("ImportService 地址簿与懒挂载", () => {
 
     const good = service.ensureMounted(ok.repositoryId);
     expect(good.ok).toBe(true);
-    expect(service.getRepository(ok.repositoryId)?.course.root.title).toBe("ok 课程树");
+    expect(service.getRepository(ok.repositoryId)?.analysis.repositoryId).toBe(ok.repositoryId);
     quiet(service, ok.repositoryId);
   });
 
@@ -364,34 +360,6 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     const reopened = new TutorDatabase(repoDir);
     expect(reopened.getAnalysis(repositoryId)!.lastIncrementalUpdate, "库里那份也不该被 noop 轮改写").toEqual(storedFirst);
     reopened.close();
-  });
-});
-
-describe("refinementIsFresh（宏观润色缓存的失效维度）", () => {
-  const marker = { versionStamp: "content:v1", modelVersion: "lite-a", contractVersion: "refine-v1", backendStamp: "backend:ok" };
-  const current = { versionStamp: "content:v1", contractVersion: "refine-v1", backendStamp: "backend:ok", modelVersion: "lite-a" };
-
-  it("四个维度全对上才算命中；任一不符就重润", () => {
-    expect(refinementIsFresh(marker, current)).toBe(true);
-    // 源码内容变了
-    expect(refinementIsFresh(marker, { ...current, versionStamp: "content:v2" })).toBe(false);
-    // 换了轻量档模型：同一份代码在另一个模型上不是同一套命名
-    expect(refinementIsFresh({ ...marker, modelVersion: "lite-b" }, current)).toBe(false);
-    // 提示词口径版本 bump（代码一字不变，命名口径已经不同）
-    expect(refinementIsFresh(marker, { ...current, contractVersion: "refine-v2" })).toBe(false);
-    // LSP 从降级恢复：源码没动，但证据不同
-    expect(refinementIsFresh(marker, { ...current, backendStamp: "backend:lsp" })).toBe(false);
-  });
-
-  it("没有可用模型（未配置或预算已达上限）时放行：复用上次成功的润色好于退回裸命名", () => {
-    const withoutModel = { versionStamp: current.versionStamp, contractVersion: current.contractVersion, backendStamp: current.backendStamp };
-    expect(refinementIsFresh(marker, withoutModel)).toBe(true);
-    expect(refinementIsFresh({ ...marker, modelVersion: undefined }, withoutModel)).toBe(true);
-  });
-
-  it("缺任何标记字段都算未命中：宁可重算，也不替缺字段的标记补一个猜测值", () => {
-    expect(refinementIsFresh(undefined, current)).toBe(false);
-    expect(refinementIsFresh({ versionStamp: "content:v1" }, current)).toBe(false);
   });
 });
 

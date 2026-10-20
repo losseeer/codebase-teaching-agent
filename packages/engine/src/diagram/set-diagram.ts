@@ -1,5 +1,4 @@
-import type { CourseNode, CourseTree, Diagram, DiagramBody, DiagramEdit, DiagramEditRequest, DiagramEdge, DiagramGroup, DiagramNode, JournalEventType, RepositoryAnalysis } from "@codebase-tutor/shared";
-import { moduleBlocks, moduleFiles, moduleNodes } from "../coursetree/blockmap.js";
+import type { Diagram, DiagramBody, DiagramEdit, DiagramEditRequest, DiagramEdge, DiagramGroup, DiagramNode, JournalEventType, RepositoryAnalysis, RepositoryIndex, SymbolInfo } from "@codebase-tutor/shared";
 import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../store/diagrams.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { FactsPairChecker } from "./facts-verify.js";
@@ -11,15 +10,15 @@ import type { FactsPairChecker } from "./facts-verify.js";
 
   三件事在这一层同时守住，缺一层都会漏：
 
-  1. `kind:"module"` 的节点必须指得着真东西：`ref` 要么在课程树的模块地图里，要么是引擎现在聚出来的方块
-     （`arch:...`）。核不上就整次拒写并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
+  1. `kind:"module"` 的节点必须指得着真东西：`ref` 是文件、目录、符号或带文件清单的分组，
+     由索引与依赖图核对。核不上就整次拒写并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
   2. 边的可信度只降不升：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
      核不到就降档，并把「为什么不算」写进 `downgraded`（界面上进悬停）。模型永远不能把自己的推断升成事实
      ——与边级证据校验同一个口径。
   3. 每次结构改动自动存一版；回滚同样是往前追加一版（`store/diagrams.ts`）。
 */
 
-/** 一次改动回给模型的话：说的是落了什么，不是它想干什么（与 `set_module_tier` 同一条纪律）。 */
+/** 一次改动回给模型的话：说的是落了什么，不是它想干什么。 */
 export interface DiagramWriteOutcome {
   ok: boolean;
   text: string;
@@ -29,7 +28,7 @@ export interface DiagramWriteOutcome {
 export interface DiagramWriteContext {
   database: TutorDatabase;
   repositoryId: string;
-  course: CourseTree;
+  index: RepositoryIndex;
   analysis: RepositoryAnalysis;
   journal: { append: (type: JournalEventType, payload: Record<string, string | number | boolean | null>) => void };
   onApplied?: (event: { repositoryId: string; diagramId: string; action: string }) => void;
@@ -43,25 +42,59 @@ export interface DiagramWriteContext {
 /** 可信度排序：核出来更低就降到那一档，绝不上抬。 */
 const ORIGIN_RANK: Record<DiagramEdge["origin"], number> = { inferred: 0, code: 1, static: 2 };
 
-/** 节点可指的东西：模块 id 或引擎现在聚出的方块 id。两张表都从课程树 + 依赖图现算，零 token。 */
+/** 节点可指的东西：索引里的文件/目录、依赖图里的符号，或带显式文件清单的分组。 */
 interface RefIndex {
-  modules: Map<string, CourseNode>;
-  blocks: Map<string, { title: string; members: string[] }>;
+  files: Set<string>;
+  symbols: SymbolInfo[];
 }
 
-function refIndexOf(course: CourseTree, analysis: RepositoryAnalysis): RefIndex {
-  const modules = new Map(moduleNodes(course).map((node) => [node.id, node]));
-  const blocks = new Map(moduleBlocks(course, analysis).blocks.map((block) => [block.id, { title: block.title, members: block.members }]));
-  return { modules, blocks };
+function refIndexOf(index: RepositoryIndex, analysis: RepositoryAnalysis): RefIndex {
+  return { files: new Set(index.files.map((file) => file.path)), symbols: analysis.graph.symbols };
 }
 
-/** 一个节点覆盖哪些文件：模块节点=它自己的可见文件，方块节点=成员并集，便签=没有。 */
+function normalizeRefPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, "");
+}
+
+/** 解析 ref：返回它关联的文件；`group:` 不在这里展开，由节点自带的 `files` 决定。 */
+function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error: string } {
+  const value = ref.trim();
+  if (!value) return { error: "ref 是空的" };
+  if (value.startsWith("module:") || value.startsWith("arch:")) {
+    return { error: `${value.slice(0, 80)} 是旧课程树/分层的引用，已退役；改成 file:/dir:/symbol:/group:` };
+  }
+  if (value.startsWith("group:")) return { files: [] };
+  if (value.startsWith("file:")) {
+    const path = normalizeRefPath(value.slice("file:".length));
+    return index.files.has(path) ? { files: [path] } : { error: `文件 ${path.slice(0, 80)} 不在本仓索引里` };
+  }
+  if (value.startsWith("dir:")) {
+    const path = normalizeRefPath(value.slice("dir:".length));
+    const prefix = path && path !== "." ? `${path}/` : "";
+    const files = [...index.files].filter((file) => (prefix ? file.startsWith(prefix) : true));
+    return files.length ? { files } : { error: `目录 ${path.slice(0, 80)} 下没有已索引的文件` };
+  }
+  if (value.startsWith("symbol:")) {
+    const body = value.slice("symbol:".length);
+    const hash = body.lastIndexOf("#");
+    if (hash <= 0) return { error: "symbol 引用要写成 symbol:<仓内路径>#<符号名>" };
+    const path = normalizeRefPath(body.slice(0, hash));
+    const name = body.slice(hash + 1).trim();
+    const found = index.symbols.some((symbol) => symbol.path === path && symbol.name === name);
+    return found ? { files: [path] } : { error: `符号 ${path.slice(0, 60)}#${name.slice(0, 40)} 不在依赖图里` };
+  }
+  // 裸路径按文件处理，方便模型直接写索引里看到过的路径
+  const path = normalizeRefPath(value);
+  return index.files.has(path) ? { files: [path] } : { error: `${value.slice(0, 80)} 既不是 file:/dir:/symbol:/group:，也不在本仓索引里` };
+}
+
+/** 一个节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析；便签没有。 */
 function filesOfNode(node: DiagramNode, index: RefIndex): string[] {
-  if (node.kind !== "module" || !node.ref) return [];
-  const block = index.blocks.get(node.ref);
-  if (block) return [...new Set(block.members.flatMap((member) => (index.modules.has(member) ? moduleFiles(index.modules.get(member)!) : [])))];
-  const module = index.modules.get(node.ref);
-  return module ? moduleFiles(module) : [];
+  if (node.kind !== "module") return [];
+  if (node.files?.length) return node.files.filter((path) => index.files.has(path));
+  if (!node.ref) return [];
+  const resolved = resolveRef(node.ref, index);
+  return "files" in resolved ? resolved.files : [];
 }
 
 /** 这一对文件之间，结构表里最高能核到哪一档（含依据那一句）。 */
@@ -126,9 +159,17 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
     if (!node.id || !label) return "每个节点都要有 id 和一个说得出口的名字";
     if (seen.has(node.id)) return `节点 id 重复：${node.id}`;
     seen.add(node.id);
+    let files: string[] | undefined;
     if (node.kind === "module") {
-      if (!node.ref) return `节点「${label}」没写 ref：模块节点必须指到课程树里的模块 id 或引擎现在聚出的方块 id`;
-      if (!index.modules.has(node.ref) && !index.blocks.has(node.ref)) return `「${label}」指的 ${node.ref.slice(0, DIAGRAM_NAME_LIMIT)} 既不在模块地图里，也不是现在图上的方块。要加新东西先让课程树长出来，别在图上凭空造`;
+      if (!node.ref) return `节点「${label}」没写 ref：模块节点必须指到 file:/dir:/symbol:/group: 之一`;
+      if (!node.ref.startsWith("group:")) {
+        const resolved = resolveRef(node.ref, index);
+        if ("error" in resolved) return `「${label}」指的 ${node.ref.slice(0, DIAGRAM_NAME_LIMIT)} 核不上：${resolved.error}`;
+      }
+      const explicit = node.files?.map(normalizeRefPath).filter((path) => index.files.has(path)) ?? [];
+      if (node.ref.startsWith("group:") && !explicit.length) return `「${label}」是 group 节点，必须给 files 清单（至少一个已索引文件）`;
+      if (node.files?.length && !explicit.length) return `「${label}」给的 files 一个都不在本仓索引里`;
+      if (explicit.length) files = explicit;
     } else if (node.kind !== "note") {
       return `节点类型只有 module 与 note 两种，收到「${String(node.kind)}」`;
     }
@@ -140,7 +181,7 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
       y: clampCoord(node.y),
       ...(sub ? { sub } : {}),
       ...(node.group && body.groups.some((group) => group.id === node.group) ? { group: node.group } : { group: undefined }),
-      ...(node.kind === "note" ? { ref: undefined, text: clampText(node.text, 500) ?? "" } : { text: undefined })
+      ...(node.kind === "note" ? { ref: undefined, files: undefined, text: clampText(node.text, 500) ?? "" } : { files, text: undefined })
     });
   }
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
@@ -220,7 +261,7 @@ const ACTION_LABEL: Record<DiagramEdit["action"], string> = {
 */
 export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramEditRequest, via: "agent" | "user" = "agent"): DiagramWriteOutcome {
   const edit = request.edit;
-  const index = refIndexOf(context.course, context.analysis);
+  const index = refIndexOf(context.index, context.analysis);
 
   if (edit.action === "draw") {
     const settled = settleBody(edit.body, index, context);
@@ -310,8 +351,8 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 
   模型发回来的是一段 JSON 字符串，而且写法不固定：契约里 `edit` 嵌一层，实际常有把它摊平到顶层的。
   两种写法都收（同一处校验，不让模型因为形状不对重跑一轮），但字段一格都不多认：
-  白名单之外的键不看，只在回话里点名（照 `coursetree/override-writer.ts` 的 `parseOverrideArguments` 那条纪律——
-  「不报错也不采纳」比「原样塞进产物」好，后者会把模型随手编的字段变成图上的一项读数）。
+  白名单之外的键不看，只在回话里点名（「不报错也不采纳」比「原样塞进产物」好，
+  后者会把模型随手编的字段变成图上的一项读数）。
 
   两处刻意不留口子：
   - 边上的 `downgraded` 不在白名单里。降档说明只能由引擎写，模型自己填一句等于替自己说「这条边成立」；
@@ -331,7 +372,7 @@ const EDIT_FIELDS: Record<DiagramEdit["action"], readonly string[]> = {
   move: ["action", "target", "x", "y"]
 };
 
-const NODE_FIELDS = ["id", "kind", "label", "sub", "x", "y", "group", "ref", "text"];
+const NODE_FIELDS = ["id", "kind", "label", "sub", "x", "y", "group", "ref", "files", "text"];
 const EDGE_FIELDS = ["id", "from", "to", "origin", "label", "evidence"];
 const GROUP_FIELDS = ["id", "label", "x", "y", "w", "h"];
 const BODY_FIELDS = ["groups", "nodes", "edges"];
@@ -359,10 +400,14 @@ function nodeFrom(raw: unknown, ignored: string[]): DiagramNode | string {
   const group = optionalText(entry.group, 60);
   const base: DiagramNode = { id, kind: entry.kind, label, x: coordOf(entry.x), y: coordOf(entry.y) };
   if (entry.kind === "module") {
-    // 这里只判「写没写」，指得着指不着由 `settleBody` 按课程树与方块清单判：两张表只有一份判据
-    const ref = textOf(entry.ref, 120);
-    if (!ref) return "kind=module 的节点要写 ref：课程树里的模块 id，或上下文那份画布现场上的 arch: 方块 id";
-    return { ...base, ...(sub ? { sub } : {}), ...(group ? { group } : {}), ref };
+    // 这里只判「写没写」，指得着指不着由 `settleBody` 按索引与依赖图判：只有一份判据
+    const ref = textOf(entry.ref, 200);
+    if (!ref) return "kind=module 的节点要写 ref：file:<路径> / dir:<目录> / symbol:<路径>#<符号> / group:<id>";
+    const files = Array.isArray(entry.files)
+      ? entry.files.flatMap((item): string[] => (typeof item === "string" && item.trim() ? [item.trim().replaceAll("\\", "/").slice(0, 400)] : [])).slice(0, 500)
+      : undefined;
+    if (entry.files !== undefined && !files) return "node.files 要是字符串数组（仓内相对路径）";
+    return { ...base, ...(sub ? { sub } : {}), ...(group ? { group } : {}), ref, ...(files?.length ? { files } : {}) };
   }
   const text = optionalText(entry.text, 500);
   return { ...base, ...(sub ? { sub } : {}), ...(group ? { group } : {}), text: text ?? "" };
@@ -487,15 +532,31 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
 }
 
 /**
-  读侧的诚实检查：图上的模块节点还指得着课程树吗？
-  课程树会重生成、模块会改名，而图是历史产物——引用断了要说出来，不能画一个查无此人的方块。
+  读侧的诚实检查：图上的模块节点还指得着索引里的文件/目录/符号吗？
+  文件会改名、目录会删，而图是历史产物——引用断了要说出来，不能画一个查无此人的节点。
 */
 export function diagramWarnings(context: DiagramWriteContext, diagram: Diagram): { node: string; reason: string }[] {
-  const index = refIndexOf(context.course, context.analysis);
+  const index = refIndexOf(context.index, context.analysis);
   const out: { node: string; reason: string }[] = [];
   for (const node of diagram.body.nodes) {
     if (node.kind !== "module" || !node.ref) continue;
-    if (!index.modules.has(node.ref) && !index.blocks.has(node.ref)) out.push({ node: node.id, reason: `${node.ref.slice(0, DIAGRAM_NAME_LIMIT)} 已经不在现在的课程树或方块清单里（改名、删模块或重分析过）` });
+    const resolved = node.ref.startsWith("group:")
+      ? (node.files?.length ? { files: node.files.filter((path) => index.files.has(path)), missing: node.files.filter((path) => !index.files.has(path)) } : { error: "group 节点没有 files 清单" })
+      : resolveRef(node.ref, index);
+    if ("error" in resolved) out.push({ node: node.id, reason: `${node.ref.slice(0, DIAGRAM_NAME_LIMIT)} 核不上：${resolved.error}` });
+    else if (!resolved.files.length) out.push({ node: node.id, reason: `${node.ref.slice(0, DIAGRAM_NAME_LIMIT)} 没有可展示的已索引文件（改名、删文件或重分析过）` });
+    else if ("missing" in resolved && resolved.missing.length) out.push({ node: node.id, reason: `${resolved.missing.length} 个关联文件已不在索引里（${resolved.missing.slice(0, 3).join("、")}）` });
+  }
+  return out;
+}
+
+/** 读侧给界面的文件关联：节点 id → 它覆盖的已索引文件。界面抽屉直接用这份。 */
+export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagram): Record<string, { path: string; line: number }[]> {
+  const index = refIndexOf(context.index, context.analysis);
+  const out: Record<string, { path: string; line: number }[]> = {};
+  for (const node of diagram.body.nodes) {
+    if (node.kind !== "module") continue;
+    out[node.id] = filesOfNode(node, index).map((path) => ({ path, line: 1 }));
   }
   return out;
 }
@@ -509,9 +570,14 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
   if (!all.length) return "画布现场：这个仓还没有图。要画就用 draw 一次画完整张（节点、边、分组都给全），别一格一格试。";
   const lines = all.map((item) => `- ${item.name}（${item.id}，${item.source === "agent" ? "agent 画的" : "用户建的"}，${item.nodes} 节点 / ${item.edges} 边 / ${item.versions} 版，最后改动 ${versionStamp(item.updatedAt)}）${item.id === openDiagramId ? " ← 画布上正打开的这张" : ""}`);
   const open = openDiagramId ? readDiagram(context.database, context.repositoryId, openDiagramId) : undefined;
+  const refs = open ? refIndexOf(context.index, context.analysis) : undefined;
   const detail = open
     ? `正打开的「${open.name}」图元清单：\n`
-      + (open.body.nodes.length ? open.body.nodes.map((node) => `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""}${node.kind === "module" ? ` 指 ${node.ref}` : " 便签"}`).join("\n") : "  ·（还没有节点）")
+      + (open.body.nodes.length ? open.body.nodes.map((node) => {
+        if (node.kind !== "module" || !refs) return `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""} 便签`;
+        const files = filesOfNode(node, refs);
+        return `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""} 指 ${node.ref}${files.length ? `（${files.length} 个文件）` : ""}`;
+      }).join("\n") : "  ·（还没有节点）")
       + "\n"
       + (open.body.edges.length ? open.body.edges.map((edge) => `  · ${edge.id}: ${edge.from} → ${edge.to} [${edge.origin}]${edge.label ? ` ${edge.label}` : ""}${edge.downgraded ? `（降档：${edge.downgraded}）` : ""}`).join("\n") : "  ·（还没有边）")
     : "";

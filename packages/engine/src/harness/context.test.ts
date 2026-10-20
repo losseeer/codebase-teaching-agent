@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CourseNode, TeachingPolicy, TutorMessage } from "@codebase-tutor/shared";
+import type { TeachingPolicy, TutorMessage } from "@codebase-tutor/shared";
+import type { TeachingScope } from "../source/scope.js";
 import { assembleContext } from "./context.js";
 
 /**
@@ -7,7 +8,7 @@ import { assembleContext } from "./context.js";
   长线程（含续命恢复的存量历史）里，模型至少看得到「一路问过什么」，导师长答出窗即弃。
   */
 
-const node: CourseNode = { id: "n", title: "入口", summary: "入口摘要。", kind: "workflow", anchors: [], children: [] };
+const scope: TeachingScope = { kind: "file", path: "src/main.ts", ref: "file:src/main.ts" };
 const policy = { constraints: ["先复述目标"] } as unknown as TeachingPolicy;
 const msg = (role: "user" | "assistant", content: string, i: number): TutorMessage => ({ id: `m${i}`, role, content } as TutorMessage);
 
@@ -19,7 +20,7 @@ describe("assembleContext 此前问题脉络", () => {
       msg("user", "尾".repeat(200), 3),
       ...Array.from({ length: 8 }, (_, i) => msg(i % 2 ? "assistant" : "user", `近期${i}`, 10 + i))
     ];
-    const context = assembleContext({ node, policy, history });
+    const context = assembleContext({ scope, policy, history });
     expect(context).toContain("此前问题脉络（更早轮次的学习者提问，按时间序）");
     expect(context).toContain("- 老问题一");
     expect(context).toContain("尾".repeat(160));
@@ -31,14 +32,14 @@ describe("assembleContext 此前问题脉络", () => {
 
   it("历史不超窗口、或窗口外只剩导师消息 → 不生成脉络块", () => {
     const short = [msg("user", "首问", 1), msg("assistant", "首答", 2)];
-    expect(assembleContext({ node, policy, history: short })).not.toContain("此前问题脉络");
+    expect(assembleContext({ scope, policy, history: short })).not.toContain("此前问题脉络");
     const assistantOnlyTail = [msg("assistant", "窗口外的导师独白", 0), ...Array.from({ length: 8 }, (_, i) => msg("user", `近期${i}`, i))];
-    expect(assembleContext({ node, policy, history: assistantOnlyTail })).not.toContain("此前问题脉络");
+    expect(assembleContext({ scope, policy, history: assistantOnlyTail })).not.toContain("此前问题脉络");
   });
 
   it("窗口外提问超过 8 条 → 只留最近 8 条", () => {
     const history = [...Array.from({ length: 10 }, (_, i) => msg("user", `问${i}`, i)), ...Array.from({ length: 8 }, (_, i) => msg("assistant", `答${i}`, 20 + i))];
-    const context = assembleContext({ node, policy, history });
+    const context = assembleContext({ scope, policy, history });
     expect(context).toContain("- 问2");
     expect(context).toContain("- 问9");
     expect(context).not.toContain("- 问0");

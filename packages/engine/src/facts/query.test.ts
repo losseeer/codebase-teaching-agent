@@ -182,12 +182,14 @@ describe("产物查询门", () => {
     }
   });
 
-  it("盘上一行产物都没有时，这扇门根本不开（不给模型留一个每次只答「不在册」的工具）", () => {
+  it("盘上一行产物都没有时门照旧开着，且两个面都说实话", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-empty-")));
     const db = new TutorDatabase(root);
     try {
       const repository = { index: { repositoryId: deriveRepositoryId(root) } } as unknown as ImportedRepository;
-      expect(factsToolFor(repository, db)).toBeUndefined();
+      const door = factsToolFor(repository, db);
+      expect(door.inventory, "缺席要说成缺席，不能靠工具不在清单里让模型反推").toContain("本仓还没有静态产物");
+      expect(door.apply(JSON.stringify({ kind: "cfg", path: "src/main.ts" }))).toContain("本仓还没有 cfg 这类产物");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

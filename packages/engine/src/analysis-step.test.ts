@@ -13,7 +13,7 @@ import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFin
 /** 本目录（源码根）：扫描与清单比对都以它为基准，路径写法才和 `analysis-steps.ts` 里的导入一致。 */
 const SRC_DIR = resolve(new URL(".", import.meta.url).pathname);
 
-/** 清单模块里列出的副作用导入，形如 `./coursetree/entry-suggest.js`。 */
+/** 清单模块里列出的副作用导入，形如 `./foo/bar.js`。 */
 function barrelImports(): string[] {
   return (readFileSync(join(SRC_DIR, "analysis-steps.ts"), "utf8").match(/^import "\.\/[^"]+";/gm) ?? []).map((line) => line.slice(8, -2));
 }
