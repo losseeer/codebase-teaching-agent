@@ -1,3 +1,4 @@
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import type { CfgFileFact, CfgFunction, DataflowFileFact, FactKind, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
 import { FACT_KINDS } from "@codebase-tutor/shared";
 import type { TutorDatabase } from "../store/database.js";
@@ -9,8 +10,14 @@ import type { FactsToolContext } from "../source/tool-loop.js";
   - 按指针给：`path` 与 `target` 决定给多少，一次最多回这么多字；整仓产物是 2~4 MB，不整份进上下文。
 */
 
-const MAX_LINES = 40;
-const MAX_CHARS = 4000;
+/* 一次查询的预算按窗口份额派生：整仓产物是 2~4 MB，不整份进上下文，但也不该手填一个小数字把读数切没。 */
+function budgetChars(): number {
+  return contextShare(CONTEXT_SHARE.factsQuery);
+}
+
+function budgetLines(): number {
+  return contextShareLines(CONTEXT_SHARE.factsQuery);
+}
 
 const KINDS = new Set<string>(FACT_KINDS);
 
@@ -30,12 +37,13 @@ const at = (ms: number): string => new Date(ms).toISOString().slice(0, 16).repla
   条数只按 `items` 算，表头与尾部提示不占「没列出」的名额。
 */
 function emit(heads: string[], items: string[], tails: string[] = []): string {
-  const cap = Math.max(1, MAX_LINES - heads.length - tails.length);
+  const chars = budgetChars();
+  const cap = Math.max(1, budgetLines() - heads.length - tails.length);
   const kept = items.slice(0, cap);
   const omitted = items.length - kept.length;
   const lines = [...heads, ...kept, ...(omitted ? [`…另有 ${omitted} 条没列出：换个 path 或 target 再查。`] : []), ...tails];
   const text = lines.join("\n");
-  return text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}\n…（本次输出已到 ${MAX_CHARS} 字上限，请缩小查询范围）` : text;
+  return text.length > chars ? `${text.slice(0, chars)}\n…（本次输出已到 ${chars} 字上限，请缩小查询范围）` : text;
 }
 
 function blockLine(functionGraph: CfgFunction): string {

@@ -165,18 +165,30 @@ describe("产物查询门", () => {
     }
   });
 
-  it("超过 40 行会声明「另有几条没列出」，不静默砍；不认识的 kind 回可选值", () => {
+  it("行预算来自窗口：小窗口下少列要声明「另有几条没列出」，宽窗口下全列出来", () => {
     const f = fixture();
     try {
       expect(f.call({ kind: "nope" })).toContain("只认");
       const many = Array.from({ length: 45 }, (_, index) => ({ symbolId: `symbol:bulk.ts:f${index}:1`, name: `f${index}`, kind: "function", startLine: index + 1, endLine: index + 2, blocks: [], edges: [], exitBlocks: [], complexity: 1 }));
       const id2 = "repo_bulk";
       saveFileFacts(f.db, id2, [{ kind: "cfg", path: "bulk.ts", payload: { path: "bulk.ts", language: "typescript", backend: "ast", version: FACTS_VERSION, functions: many } }]);
-      const text = factsQueryTool(f.db, id2).apply(JSON.stringify({ kind: "cfg", path: "bulk.ts" }));
-      const omitted = Number(/另有 (\d+) 条没列出/.exec(text)?.[1] ?? -1);
-      expect(omitted, "45 个函数不可能全列出来，但少了几条要说明").toBeGreaterThan(0);
-      expect(text.split("\n").filter((line) => /^f\d+@/.test(line)).length + omitted).toBe(45);
+      const tool = factsQueryTool(f.db, id2);
+      const listed = (text: string) => text.split("\n").filter((line) => /^f\d+@/.test(line)).length;
+
+      // 窗口 8_000 token ⇒ 单次查询只有 1_600 字符 / 40 行的预算。少列几条不在断言里写死：
+      // 那个数由表头与尾部提示占的行数决定，写死等于把份额抄进测试第二遍，改份额时只会红得莫名其妙。
+      process.env.TUTOR_CONTEXT_WINDOW_TOKENS = "8000";
+      const tight = tool.apply(JSON.stringify({ kind: "cfg", path: "bulk.ts" }));
+      const omitted = Number(/另有 (\d+) 条没列出/.exec(tight)?.[1] ?? -1);
+      expect(omitted, "小窗口下必然列不全，但少几条要如实声明").toBeGreaterThan(0);
+      expect(listed(tight) + omitted).toBe(45);
+
+      process.env.TUTOR_CONTEXT_WINDOW_TOKENS = "1000000";
+      const wide = tool.apply(JSON.stringify({ kind: "cfg", path: "bulk.ts" }));
+      expect(listed(wide), "窗口放到 1M 就不该再砍任何一条").toBe(45);
+      expect(wide).not.toContain("没列出");
     } finally {
+      delete process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
       f.db.close();
       rmSync(f.root, { recursive: true, force: true });
     }

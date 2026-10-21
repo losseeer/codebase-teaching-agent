@@ -1170,6 +1170,11 @@ export type JournalEventType =
   /** agent 回合的工具循环摘要：一回合一条，记工具轮次与各类工具调用次数。
       practice 对话无工具循环，不记本事件。 */
   | "loop_round"
+  /** 回合的上下文装配摘要：一回合一条，三作用域都有（practice 没有工具轮，也有这一行）。
+      payload = scene + conversation_folded（本轮折掉几条历史）+ conversation_recalled（按词法找回几条）
+      + 可选 resumed_from_round（从第几轮检查点续上）与 stopped_by（budget = 预算到线）。
+      与 `loop_round` 分家：那边记「工具做了几次」，这边记「这条回复是在多大的上下文里写的」。 */
+  | "turn_context"
   /** 回合被用户主动停止：payload = scene(teach|map_chat|practice_chat) + turn_id +
       aborted_by(恒为 user_stop)。与「客户端断开」刻意区分——后者引擎照常算完落库，不记本事件。
       中止的一轮没有成品：不写 turn_text，也不伪造 assistant 正文。 */
@@ -1239,7 +1244,7 @@ export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
-  "turn_text", "turn_invariant", "loop_round", "turn_aborted", "exercise_run",
+  "turn_text", "turn_invariant", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
   // architecture_layer_overridden 仅为历史行保留
   "architecture_layer_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"

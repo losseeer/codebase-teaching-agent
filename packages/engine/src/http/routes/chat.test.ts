@@ -116,6 +116,8 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
 
     const loop = fx.lastEvent("loop_round");
     expect(loop.payload).toMatchObject({ tool_external: 1, tool_skills: 1 });
+    // 上下文折叠同属回合审计，但住在另一行：loop_round 只管工具做了几次
+    expect(fx.lastEvent("turn_context").payload).toMatchObject({ scene: "map_chat", conversation_folded: 0, conversation_recalled: 0 });
   });
 
   it("GET /api/external 把装了什么、连不上的原因交出来（零 token，读侧不发模型）", async () => {

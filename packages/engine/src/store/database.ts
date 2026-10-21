@@ -13,6 +13,19 @@ const nativeBinding = loadAddon() as unknown as string;
 /** getLatestFileSummaries 的默认行数上限；同时导出给调用方做达到上限的判据，避免各处字面量分叉。 */
 export const LATEST_SUMMARY_LIMIT = 2_000;
 
+/**
+  唯一的一处「开连接 → 用 → 关」。写在 try/finally：这些调用挂在每个对话回合的读写路径上，
+  尾置的 close() 一被异常跳过就攒文件描述符，攒够把进程拖到 EMFILE。
+  */
+export function withDatabase<T>(repositoryPath: string, run: (database: TutorDatabase) => T): T {
+  const database = new TutorDatabase(repositoryPath);
+  try {
+    return run(database);
+  } finally {
+    database.close();
+  }
+}
+
 /** chat_session 的行形状（snake_case 贴着表；域类型转换在 store/chat-store.ts）。 */
 export interface ChatSessionRow {
   id: string;
@@ -150,6 +163,22 @@ export const DATABASE_SCHEMA_SQL = `
         payload TEXT NOT NULL,
         at INTEGER NOT NULL,
         PRIMARY KEY(repository_id, kind, path)
+      );
+      -- 回合检查点（照 LangGraph 的 checkpoint 语义）：一行 = 一个 super-step（一次工具轮）结束时的状态快照。
+      -- 按线程寻址：续跑要问的就是「这个线程上次走到第几轮」；input_hash 保证只有同一个问题才接得上，
+      -- 换一句提问去复用别人的中间状态等于答非所问。
+      -- 正常收尾与用户主动停止都删行——停止按作废收尾（见 journal 的 turn_aborted），替他续跑是违背他的意图；
+      -- 留着的行就是「进程没了/抛异常」的残局，下一次同线程同问题的请求据此接上，已经读到的源码不必再付一遍。
+      -- 保留策略：按 updated_at 过 TTL 清（读侧顺手清），检查点膨胀是 LangGraph 同款已知代价。
+      CREATE TABLE IF NOT EXISTS turn_checkpoint (
+        thread_id TEXT NOT NULL,
+        scene TEXT NOT NULL,
+        round INTEGER NOT NULL,
+        input_hash TEXT NOT NULL,
+        stopped_reason TEXT,
+        payload TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(thread_id, scene, round)
       );
       CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, created_at);
       CREATE INDEX IF NOT EXISTS chat_session_repo ON chat_session(repository_id, scope, deleted_at);
@@ -346,6 +375,38 @@ export class TutorDatabase {
       for (const path of batch) del.run(repositoryId, kind, path);
     });
     tx(paths);
+  }
+
+  /**
+    回合检查点（一个 super-step 一行）。同一回合的每一轮各写一行，续跑取最大 round 那行。
+    `stoppedReason` 只在异常退出那一次写：正常收尾走 clearTurnCheckpoints，留着的行就是没人收尾的残局。
+  */
+  saveTurnCheckpoint(input: { threadId: string; scene: string; round: number; inputHash: string; stoppedReason?: string; payload: unknown }): void {
+    this.db.prepare("INSERT OR REPLACE INTO turn_checkpoint(thread_id, scene, round, input_hash, stopped_reason, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(input.threadId, input.scene, input.round, input.inputHash, input.stoppedReason ?? null, JSON.stringify(input.payload), Date.now());
+  }
+
+  /** 这个线程最近一轮的检查点；`inputHash` 对不上就不算「同一个问题」，宁可不续跑。 */
+  latestTurnCheckpoint<T>(threadId: string, scene: string, inputHash: string): { round: number; stoppedReason?: string; payload: T } | undefined {
+    const row = this.db.prepare("SELECT round, stopped_reason, payload, input_hash FROM turn_checkpoint WHERE thread_id = ? AND scene = ? ORDER BY round DESC LIMIT 1")
+      .get(threadId, scene) as { round: number; stopped_reason: string | null; payload: string; input_hash: string } | undefined;
+    if (!row || row.input_hash !== inputHash) return undefined;
+    return { round: row.round, ...(row.stopped_reason ? { stoppedReason: row.stopped_reason } : {}), payload: JSON.parse(row.payload) as T };
+  }
+
+  clearTurnCheckpoints(threadId: string, scene: string): number {
+    return this.db.prepare("DELETE FROM turn_checkpoint WHERE thread_id = ? AND scene = ?").run(threadId, scene).changes;
+  }
+
+  /** 过期残局清理（TTL 是检查点膨胀的唯一解药；LangGraph 也要配 retention 同理）。 */
+  pruneTurnCheckpoints(olderThan: number): number {
+    return this.db.prepare("DELETE FROM turn_checkpoint WHERE updated_at < ?").run(olderThan).changes;
+  }
+
+  /** 检查点存量读数（报表用）：留了多少行、最旧的一行多久了。 */
+  turnCheckpointStats(): { rows: number; oldestAt: number | null } {
+    const row = this.db.prepare("SELECT COUNT(*) AS rows, MIN(updated_at) AS oldest_at FROM turn_checkpoint").get() as { rows: number; oldest_at: number | null };
+    return { rows: row.rows, oldestAt: row.oldest_at ?? null };
   }
 
   /**

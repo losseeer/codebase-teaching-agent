@@ -2,6 +2,7 @@ import type { ScopedStreamProgress } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
+import { hash } from "../identity.js";
 import type { McpCallAudit } from "../external/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
@@ -13,7 +14,7 @@ import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type Search
   - 传入 `search` 语料时额外提供 search_code（词法检索「文件在哪」，只回位置与职责），它同样受轮数上限约束。
   - messages[0] 恒为首轮 user 消息——provider 收到 messages 时忽略 user 字段，
     首轮 user 若不进 messages，工具调用后的轮次会同时丢失代码上下文与学习者提问。
-  - 每轮调用前压缩历史，意图见 `compactToolHistory`。
+  - 每轮调用前压缩回合上下文，口径见 `compactTurnContext`。
   - 每次 read_file（含拒绝与失败）返回审计记录，由调用方记 journal file_read。
   - `signal` 透传到每一轮 LLM 调用，并在开新一轮前检查：中止一律原样抛出 `LlmAbortedError`，
     不吞成「基于已有上下文直接回答」的收尾结论（那会把用户主动停止伪装成模型答完）。
@@ -54,6 +55,14 @@ export interface ReadToolLoopInput {
     还会改变请求前缀的形状（前缀缓存按请求头部算）。服务层只在配置文件里真有启用的 server 时才传。
   */
   external?: ExternalToolContext;
+  /** 回合检查点通道（见 `TurnCheckpointChannel`）。不给就是纯内存回合，行为与从前逐字一致。 */
+  checkpoint?: TurnCheckpointChannel;
+  /**
+    每轮开火前的预算闸门：回一句「为什么不能再来一轮」，`undefined` = 可以继续。
+    到线时不再开新的一轮工具调用，只回绝掉挂着的调用并做一次不带工具的收尾——
+    闸门管的是「别再往上加轮次」，把已经读到的东西咽回去不算答完。
+  */
+  budgetGuard?: () => string | undefined;
 }
 
 /** 技能通道：清单（`brief`）与取正文的通道必须同时给或同时不给——只给一半就是让模型找一个不存在的工具。 */
@@ -240,7 +249,7 @@ function attachToolLoopAudits(error: unknown, audits: ToolLoopAudits): void {
 export interface ReadToolLoopResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
-  /** 实际发生的工具调用轮数（预算上限打满提前收尾的轮也算）。 */
+  /** 实际发生的工具调用轮数（预算打满提前收尾的轮也算）。 */
   rounds: number;
   fileReads: FileReadRecord[];
   /** 本次对话的 search_code 调用审计（不合并去重——同一查询反复搜本身就是信号）。 */
@@ -249,6 +258,43 @@ export interface ReadToolLoopResult {
   skillReads: { skill: string; chars: number; found: boolean }[];
   /** 外部 MCP 工具的实际调用（一条一次，失败也记）。正文不在这里，只有字符数与指纹。 */
   mcpCalls: McpCallAudit[];
+  /** 本次回合是从检查点续跑起来的（恢复时该轮从头重跑，但已读到的正文不再重付）。 */
+  resumedFromRound?: number;
+  /** 回合被预算闸掐断过；没这个字段就是正常答完或轮数/额度用尽。 */
+  stoppedBy?: TurnStopReason;
+}
+
+/**
+  一个 super-step（一次工具轮）结束时的回合状态——恢复它就是恢复「读到哪儿了」。
+  刻意把审计一起装进去：续跑后这一回合仍然要能如实交代它真读过哪些文件。
+*/
+/** 回合被什么掐断：`budget` = 预算到线（既不是模型答完，也不是用户停止）。 */
+export type TurnStopReason = "budget";
+
+export interface TurnLoopState {
+  messages: LlmMessage[];
+  rounds: number;
+  succeededReads: number;
+  crossReads: number;
+  externalCalls: number;
+  fileReads: FileReadRecord[];
+  codeSearches: CodeSearchRecord[];
+  skillReads: { skill: string; chars: number; found: boolean }[];
+  mcpCalls: McpCallAudit[];
+}
+
+/**
+  回合检查点通道（照 LangGraph 的 checkpoint 语义：一行 = 一个 super-step 的快照，同一线程续跑）。
+  循环只管什么时候写、写什么，存哪儿由服务层给闭包。三条口径：
+  - 回合正常收尾就 `clear`：留着的行只该是「进程没了/抛异常」的残局；
+  - 用户主动停止也 `clear`：那一轮按作废收尾，替他续跑是违背他的意图（见 journal 的 turn_aborted）；
+  - 写失败不掀回合：检查点是省钱的旁路，不是回合的前提。
+*/
+export interface TurnCheckpointChannel {
+  /** 上一回合留下的状态；`inputHash` 对不上（换了提问、模型或系统提示词）就回 `undefined`，宁可不续跑。 */
+  restore: (inputHash: string) => { round: number; state: TurnLoopState } | undefined;
+  save: (inputHash: string, state: TurnLoopState, stoppedReason?: string) => void;
+  clear: () => void;
 }
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
@@ -257,36 +303,69 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
-  input.onProgress?.({ type: "thinking", round: 1 });
-  let completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
   const fileReads: FileReadRecord[] = [];
   const codeSearches: CodeSearchRecord[] = [];
   const skillReads: { skill: string; chars: number; found: boolean }[] = [];
   const mcpCalls: McpCallAudit[] = [];
-  let usage: LlmUsage | undefined = completion.usage;
   let rounds = 0;
   let succeededReads = 0;
   let crossReads = 0;
   let externalCalls = 0;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds });
+  const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, crossReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
+  let resumedFromRound: number | undefined;
+  let stoppedBy: TurnStopReason | undefined;
+  let completion: LlmCompletion;
+  // 指纹把「同一个问题」钉住：线程续得上、提问也必须是同一句，否则接的是别人的中间状态
+  const inputHash = hash(`${provider.modelVersion}:${system}:${input.user}`);
+  try {
+    const restored = input.checkpoint?.restore(inputHash);
+    if (restored) {
+      messages.splice(0, messages.length, ...restored.state.messages);
+      rounds = restored.state.rounds;
+      succeededReads = restored.state.succeededReads;
+      crossReads = restored.state.crossReads;
+      externalCalls = restored.state.externalCalls;
+      fileReads.push(...restored.state.fileReads);
+      codeSearches.push(...restored.state.codeSearches);
+      skillReads.push(...restored.state.skillReads);
+      mcpCalls.push(...restored.state.mcpCalls);
+      resumedFromRound = restored.round;
+      // 恢复的是「第 N 轮做完」的状态，接下来开第 N+1 轮：这一次带工具，续在同一线程的上下文之后
+      input.onProgress?.({ type: "thinking", round: rounds + 1 });
+      compactTurnContext(messages);
+      completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
+    } else {
+      input.onProgress?.({ type: "thinking", round: 1 });
+      completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
+    }
+  } catch (error) {
+    if (isLlmAborted(error)) attachToolLoopAudits(error, audits());
+    throw error;
+  }
+  let usage: LlmUsage | undefined = completion.usage;
   try {
   while (completion.toolCalls?.length) {
     // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
     if (input.signal?.aborted) throw new LlmAbortedError();
-    if (rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
+    const budgetStop = input.budgetGuard?.();
+    if (budgetStop || rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
       // 到闸时说的是**真正到限的那一项**。轮次用完时读文件额度常常还剩着，两种情况混成同一句「读文件上限」，
       // 模型只会把这句错话转述给学习者（实测读数：3 轮 / 只读了 2 个文件，上限是 4）。
-      const refusal = succeededReads >= input.maxCalls
-        ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
-        : `本次对话的工具轮次已用完（${rounds} 轮）；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
+      const refusal = budgetStop
+        ? `${budgetStop}请基于已读到的正文直接回答，缺什么就照实说缺什么。`
+        : succeededReads >= input.maxCalls
+          ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
+          : `本次对话的工具轮次已用完（${rounds} 轮）；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
+      if (budgetStop) stoppedBy = "budget";
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: refusal });
       }
       input.onProgress?.({ type: "thinking", round: rounds + 2 });
       // 这是本回合最后一次调用：折叠换来的省没有下一轮可享，把刚读到的正文抽走只会让这一回合交不出东西。
-      // 所以只丢早期 reasoning（推理 token 才是账单大头），tool 原文留着。
-      compactToolHistory(messages, { keepToolResults: true });
+      // 所以早期轮次的工具原文留着（reasoning 照丢，那才是账单大头）。
+      compactTurnContext(messages, { keepToolResults: true });
       completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene, signal: input.signal });
       usage = addUsage(usage, completion.usage);
       break;
@@ -379,14 +458,25 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       messages.push({ role: "tool", toolCallId: call.id, content: repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content });
     }
+    // 一个 super-step 落一份快照：进程在这之后被杀掉，下一次同线程同问题的请求就从这里接上
+    input.checkpoint?.save(inputHash, snapshot());
     input.onProgress?.({ type: "thinking", round: rounds + 1 });
-    compactToolHistory(messages);
+    compactTurnContext(messages);
     completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     usage = addUsage(usage, completion.usage);
   }
-  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls };
+  // 答完了：留着检查点只会在下次误续跑一个已经结束的回合
+  input.checkpoint?.clear();
+  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }) };
   } catch (error) {
-    if (isLlmAborted(error)) attachToolLoopAudits(error, audits());
+    if (isLlmAborted(error)) {
+      // 用户主动停止 = 这一轮作废，检查点跟着作废（替他续跑是违背他的意图）
+      attachToolLoopAudits(error, audits());
+      input.checkpoint?.clear();
+    } else {
+      // 其它异常（端点 500、进程被 OOM 杀之前的这一趟）留下残局并写明为什么没走完
+      input.checkpoint?.save(inputHash, snapshot(), "error");
+    }
     throw error;
   }
 }
@@ -432,27 +522,55 @@ function readQueryHint(argumentsJson: string): string {
   }
 }
 
-/** micro_compact：发给下一轮前，只保留最近一轮的 tool 结果原文，更早轮次的 tool 内容压成短占位符——
-    读取结果可再生，模型忘了可以再调一次 read_file，不值得逐轮重付。
-    这条前提只在「还有下一轮」时成立，所以到闸那一次要传 `keepToolResults`：最后一次调用把正文抽走，
-    省的是一个不存在的成本，代价是这一回合交不出东西。
-    早期 assistant 的 reasoningContent 一并丢弃（推理 token 是账单大头）；最近一轮保留，部分协议要求 tool 调用轮回传。 */
-export function compactToolHistory(messages: LlmMessage[], options: { placeholderChars?: number; keepToolResults?: boolean } = {}): void {
-  const placeholderChars = options.placeholderChars ?? 240;
-  let lastAssistant = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === "assistant" && messages[index].toolCalls?.length) {
-      lastAssistant = index;
-      break;
-    }
+/**
+  回合内压缩（每轮开火前跑一次，就地改 messages）。两条口径：
+
+  1. **reasoning 一律丢**。推理内容服务的是「当轮怎么决定下一步」，下一轮用不上，而它是账单大头。
+     唯一例外是最近一次工具调用那条 assistant：DeepSeek thinking + tools 要求原样回传，少了直接 400（见 `llm/provider.ts`）。
+  2. **工具结果只完整保留最近 `TOOL_CONTEXT_KEEP_ROUNDS` 轮**，更早的换成占位符。
+     占位符必须保住开头那行身份（哪个文件、第几到第几行、隐去几处密钥）：模型据此仍能说「我读过 X 的前 N 行」，
+     既不会误以为自己没读过而重复读同一段，也不会把折叠说成读取失败。
+     tool_calls 本身留着——摘掉它后面那条 tool 消息就悬空了，协议不认。
+
+  折叠换来的省要有下一轮才享受得到，所以到闸那一次调用传 `keepToolResults`：
+  最后一次调用把正文抽走，省的是一个不存在的成本，代价是这一回合交不出东西。
+*/
+/** 工具结果完整保留最近几轮：更早的正文可再生（再调一次同一个工具就有），不值得逐轮重付。 */
+export const TOOL_CONTEXT_KEEP_ROUNDS = 2;
+/** 折叠后保留的身份行取自结果开头，最多两行、200 字符：再多就成了一段小摘录，折叠白折。 */
+const MASK_HEAD_CHARS = 200;
+
+function headLinesOf(content: string): string {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of content.split("\n")) {
+    if (kept.length && used + line.length + 1 > MASK_HEAD_CHARS) break;
+    kept.push(line);
+    used += line.length + 1;
+    if (kept.length >= 2) break;
   }
-  if (lastAssistant <= 0) return;
+  return kept.join("\n");
+}
+
+export function compactTurnContext(messages: LlmMessage[], options: { keepToolResults?: boolean; keepRounds?: number } = {}): void {
+  const keepRounds = Math.max(1, options.keepRounds ?? TOOL_CONTEXT_KEEP_ROUNDS);
+  const roundStarts: number[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role === "assistant" && messages[index].toolCalls?.length) roundStarts.push(index);
+  }
+  if (!roundStarts.length) return;
+  const newestRound = roundStarts[roundStarts.length - 1];
+  /*
+    折叠分界线 = 保留窗口里最早那一轮的起点，分界线之前的工具结果才折叠。
+    轮数没超出窗口时它就是第一轮自己——窗口前只剩首条 user 消息，等于什么都不折。
+  */
+  const foldBoundary = roundStarts[Math.max(0, roundStarts.length - keepRounds)];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    if (index < lastAssistant && message.role === "assistant") message.reasoningContent = undefined;
-    if (options.keepToolResults) continue;
-    if (index < lastAssistant && message.role === "tool" && message.content.length > placeholderChars) {
-      message.content = `${message.content.slice(0, placeholderChars)}\n…（早期读取结果已省略以控制上下文，需要完整内容可再次调用 read_file。）`;
+    if (message.role === "assistant" && index !== newestRound) message.reasoningContent = undefined;
+    if (options.keepToolResults || index >= foldBoundary) continue;
+    if (message.role === "tool" && message.content.length > MASK_HEAD_CHARS) {
+      message.content = `${headLinesOf(message.content)}\n…（这一轮的其余结果已折叠：需要正文就再调一次同一个工具。）`;
     }
   }
 }

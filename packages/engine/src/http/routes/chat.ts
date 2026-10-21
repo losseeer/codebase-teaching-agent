@@ -1,6 +1,7 @@
 import type { Exercise } from "@codebase-tutor/shared";
 import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
-import { crossRepoFor, searchCorpusFor } from "../../application/paid-turn.js";
+import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
+import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
 import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordAbortedAudits } from "../../application/turn-audit.js";
 import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
@@ -55,7 +56,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
     const factsContext = factsToolFor(repository, overlayDatabase);
     const result = await mapChat({
-      repoPath: repository.path, analysis: repository.analysis, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: turn.history, earlierQuestions: turn.earlierQuestions, provider,
+      repoPath: repository.path, analysis: repository.analysis, scopePaths: sanitizeScopePaths(request.body?.scopePaths), path: request.body?.path, content, history: turn.history, provider,
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
@@ -63,6 +64,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
       onProgress: (progress: MapChatProgress) => send(progress),
       diagram: diagramContext,
       facts: factsContext,
+      // 中断恢复：同一线程同一问题的残局（进程被杀、端点报错）从这里接上，已读到的源码不必再付一遍
+      checkpoint: turnCheckpointChannel({ repositoryPath: repository.path, threadId: turn.threadId ?? "", scene: "map.chat", ...(turn.threadId ? {} : { enabled: false }) }),
+      budgetGuard: turnBudgetGuard(repository.handle),
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
     });
@@ -106,11 +110,11 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     repository.handle.unpin();
   }
   if (!stored) return reply.code(404).send({ error: "练习不存在或已被清理；请重新生成练习。" });
-  const { history, earlierQuestions } = threadScopedHistory(repository.path, thread?.id);
+  const { history } = threadScopedHistory(repository.path, thread?.id);
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
   const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
   try {
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, earlierQuestions, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     if (turnHandle.signal?.aborted) {
       recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
       throw new LlmAbortedError();
@@ -123,6 +127,8 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     }, thread?.id);
+    // 练习答疑一轮就到，没有工具轮可记；上下文折叠的读数照样有地方（loop_round 的语义因此不动）
+    journal.append("turn_context", { scene: "practice_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, thread?.id);
     journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply), thread?.id);
     replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider });

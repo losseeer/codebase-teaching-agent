@@ -7,9 +7,11 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt } from "../harness/prompts
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { CrossRepoContext, ExternalToolContext, FactsToolContext, SetDiagramToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, FactsToolContext, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../external/clients.js";
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
+import { type ConversationBlock, renderConversation } from "../llm/conversation.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 
 /**
@@ -26,14 +28,17 @@ import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 // 摘录窗口：符号边界不可用时回落到锚点前 12 行 / 后 35 行（合计 48 行）
 const EXCERPT_BEFORE_LINES = 12;
 const EXCERPT_AFTER_LINES = 35;
-/** 符号边界可信上限（行）：超过即只取符号开头，避免超大函数吃掉整个预算 */
-const MAX_SYMBOL_LINES = 120;
-const MAX_EXCERPT_BLOCK_CHARS = 3_200;
-/** 锚点摘录总预算：摘录是「定位用的上下文」，不是全文阅读。 */
-const EXCERPTS_TOTAL_CHARS = 8_000;
-const PRACTICE_CONTEXT_CHARS = 12_000;
-const MAP_CONTEXT_CHARS = 20_000;
-const MAX_PANORAMA_ENTRIES = 20;
+/*
+  上下文预算全部按窗口份额派生（唯一真源在 `llm/context-window.ts`）：窗口是唯一手填的数，
+  这里只声明「哪一类内容占多少」。地板刻意不给——窗口配多小就按多小办事，省略由各处如实说明。
+*/
+const symbolLineCap = () => contextShareLines(CONTEXT_SHARE.symbolLines, 12);
+const excerptBlockCap = () => contextShare(CONTEXT_SHARE.excerptBlock);
+const excerptTotalCap = () => contextShare(CONTEXT_SHARE.anchorExcerpts);
+const mapContextCap = () => contextShare(CONTEXT_SHARE.mapContext);
+const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);
+/** 全景里一个目录最多列多少个文件名：超出只报总数，目录本身不丢。 */
+const panoramaPerDirectoryCap = () => Math.max(1, Math.floor(contextShareLines(CONTEXT_SHARE.panorama, 60) / 4));
 
 /** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。 */
 const MAP_MAX_TOOL_ROUNDS = 3;
@@ -45,31 +50,12 @@ export interface ScopedChatTurn {
   content: string;
 }
 
-/** 历史窗口：口径对齐教学 harness 的 context.ts（有限轮次 + 每轮压缩截断），不是整段线程重放。窗口大小与逐行截断口径以 `threadScopedHistory`（server.ts）为准，这里只做渲染期再裁剪。 */
-const HISTORY_TURNS = 6;
-const HISTORY_TURN_CHARS = 400;
-
-/** 「最近对话」块：取最后若干轮、压空白并逐轮截断；无有效内容返回空串（不注入空段）。 */
-function recentConversationSection(history: ScopedChatTurn[] | undefined): string {
-  const lines = (history ?? []).slice(-HISTORY_TURNS).flatMap((turn) => {
-    const text = turn.content.replaceAll(/\s+/g, " ").trim().slice(0, HISTORY_TURN_CHARS);
-    return text ? [`${turn.role === "user" ? "学习者" : "助手"}: ${text}`] : [];
-  });
-  if (!lines.length) return "";
-  return `最近对话（此前轮次，按时间序，用于理解追问的指代；当时的聚焦范围可能与当前不同）:\n${lines.join("\n")}\n\n`;
-}
-
-/** 窗口外的抽取式压缩（零 LLM 成本）：更早轮次只保留学习者提问——问题承载话题锚点，助手长答出窗即弃。 */
-const EARLIER_QUESTION_CHARS = 160;
-const EARLIER_QUESTIONS_MAX = 8;
-
-function earlierQuestionsSection(questions: string[] | undefined): string {
-  const lines = (questions ?? []).slice(-EARLIER_QUESTIONS_MAX).flatMap((question) => {
-    const text = question.replaceAll(/\s+/g, " ").trim().slice(0, EARLIER_QUESTION_CHARS);
-    return text ? [`- ${text}`] : [];
-  });
-  if (!lines.length) return "";
-  return `此前问题脉络（更早轮次的学习者提问，按时间序）:\n${lines.join("\n")}\n\n`;
+/**
+  历史窗口不再在这里定：整段线程交给 `llm/conversation.ts` 按窗口占用决定折不折。
+  占位与找回的口径三作用域共用一份，代码问答那边改一个比例，这边跟着变。
+*/
+function conversationBlock(history: ScopedChatTurn[] | undefined, query: string, usedCharacters: number): ConversationBlock {
+  return renderConversation({ turns: history ?? [], query, usedCharacters });
 }
 
 /** mapChat 过程事件：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
@@ -85,10 +71,16 @@ export interface ScopedChatResult {
   codeSearches?: CodeSearchRecord[];
   /** mapChat 专用：工具循环实际轮数（供 server 记 journal loop_round）。 */
   toolRounds: number;
+  /** 本回合从第几轮的检查点接上来续跑的；没续跑就没这个字段。 */
+  resumedFromRound?: number;
+  /** 回合被预算闸掐断过（不是模型答完，也不是用户停止）。 */
+  stoppedBy?: TurnStopReason;
   /** mapChat 专用：本回合打过的外部工具（供 server 逐条记 journal mcp_call，失败也在里面）。 */
   mcpCalls?: McpCallAudit[];
   /** mapChat 专用：本回合取过的技能正文（供 server 记 journal skill_read）。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
+  /** 本轮对话历史的折叠读数：折了几条、又从折叠段找回几条（供 journal 回答「这条回复是在看过多少历史的前提下写的」）。 */
+  conversation: { foldedMessages: number; recalledMessages: number };
 }
 
 /** 按锚点取带行号的源码摘录：符号边界优先、窗口兜底（规则见 source/excerpt.ts）。路径越界或读不到返回空串。 */
@@ -96,7 +88,7 @@ function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: bool
   const slice = sliceExcerpt(
     repoPath,
     { path: anchor.path, line: anchor.line, endLine: anchor.endLine },
-    { before: EXCERPT_BEFORE_LINES, after: EXCERPT_AFTER_LINES, maxSymbolLines: MAX_SYMBOL_LINES, maxChars: MAX_EXCERPT_BLOCK_CHARS }
+    { before: EXCERPT_BEFORE_LINES, after: EXCERPT_AFTER_LINES, maxSymbolLines: symbolLineCap(), maxChars: excerptBlockCap() }
   );
   if (!slice) return "";
   const numbered = slice.lines.map((item) => `${item.line}| ${item.text}`).join("\n");
@@ -115,7 +107,7 @@ function excerptsWithinBudget(repoPath: string, anchors: SourceAnchor[], readHin
   for (const anchor of anchors) {
     const block = excerptForAnchor(repoPath, anchor, readHint, egress);
     if (!block) continue;
-    if (used + block.length > EXCERPTS_TOTAL_CHARS) {
+    if (used + block.length > excerptTotalCap()) {
       const suggest = readHint ? "，需要时可用 read_file 查看" : "";
       blocks.push(`（${anchor.path} 等其余锚点的摘录超出上下文预算已省略${suggest}。）`);
       break;
@@ -141,7 +133,8 @@ function structurePanorama(analysis: RepositoryAnalysis): string {
     directories.set(key, [...(directories.get(key) ?? []), basename(path)]);
   }
   const lines = [...directories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([directory, names]) => {
-    const shown = names.length > MAX_PANORAMA_ENTRIES ? `${names.slice(0, MAX_PANORAMA_ENTRIES).join("、")}…等 ${names.length} 个` : names.join("、");
+    const perDirectory = panoramaPerDirectoryCap();
+    const shown = names.length > perDirectory ? `${names.slice(0, perDirectory).join("、")}…等 ${names.length} 个` : names.join("、");
     return directory ? `- ${directory}/（${names.length}）：${shown}` : `- （根目录）：${shown}`;
   });
   return `项目结构全景（${paths.length} 个已分析文件，按目录分组）：\n${lines.join("\n")}`;
@@ -213,7 +206,7 @@ function joinList(items: string[]): string {
   否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
 
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/dataflow.ts） */
@@ -241,17 +234,20 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     const bound = excerptForAnchor(input.repoPath, { path, line: 1, label: "绑定文件" }, true, egress);
     if (bound) sections.push(bound);
   }
-  const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", MAP_CONTEXT_CHARS);
+  const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", mapContextCap());
   // 技能清单贴在上下文尾部而不是系统提示词里：系统提示词是前缀缓存的固定段，
   // 每装/卸一份技能就改它等于把每仓的缓存全翻一遍（清单本来就在回合级现算）。
   const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
-  const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的问题：${input.content}`;
+  const system = overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) });
+  // 折叠判据看的是「本轮已经占掉多少」：系统提示词 + 代码上下文 + 技能清单，对话历史是最后进来的一半
+  const conversation = conversationBlock(input.history, input.content, system.length + context.length + skillsBrief.length);
+  const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${conversation.text}学习者的问题：${input.content}`;
 
   recordEgress({ repositoryPath: input.repoPath, scene: "map.chat", sessionId: input.threadId, sources: egress, sent: userMessage });
   const result = await completeWithReadTool({
     provider,
     repoPath: input.repoPath,
-    system: overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) }),
+    system,
     user: userMessage,
     maxTokens: 1_000,
     temperature: 0.3,
@@ -264,6 +260,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.external ? { external: input.external } : {}),
+    ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
+    ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
@@ -277,11 +275,14 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(result.fileReads.length ? { fileReads: result.fileReads } : {}),
     ...(result.codeSearches.length ? { codeSearches: result.codeSearches } : {}),
     ...(result.mcpCalls.length ? { mcpCalls: result.mcpCalls } : {}),
-    ...(result.skillReads.length ? { skillReads: result.skillReads } : {})
+    ...(result.skillReads.length ? { skillReads: result.skillReads } : {}),
+    ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
+    ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
+    conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; earlierQuestions?: string[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -289,16 +290,24 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
     sections.push(`选项：\n${exercise.options.map((option) => `- ${option.id}. ${option.label}${option.detail ? `（${option.detail}）` : ""}`).join("\n")}`);
   }
   excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false, egress).forEach((block) => sections.push(block));
-  const context = clip(sections.filter(Boolean).join("\n\n"), PRACTICE_CONTEXT_CHARS);
-  const user = `练习上下文：\n${context}\n\n${earlierQuestionsSection(input.earlierQuestions)}${recentConversationSection(input.history)}学习者的追问：${input.content}`;
+  const context = clip(sections.filter(Boolean).join("\n\n"), practiceContextCap());
+  const system = exerciseQaSystemPrompt({ style: input.style });
+  const conversation = conversationBlock(input.history, input.content, system.length + context.length);
+  const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
   const completion = await input.provider.complete({
-    system: exerciseQaSystemPrompt({ style: input.style }),
+    system,
     user,
     maxTokens: 700,
     temperature: 0.3,
     scene: "practice.chat",
     ...(input.signal ? { signal: input.signal } : {})
   });
-  return { reply: flagTruncatedReply(completion.text, completion.finishReason === "length"), provider: input.provider.name, usage: completion.usage, toolRounds: 0 };
+  return {
+    reply: flagTruncatedReply(completion.text, completion.finishReason === "length"),
+    provider: input.provider.name,
+    usage: completion.usage,
+    toolRounds: 0,
+    conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
+  };
 }

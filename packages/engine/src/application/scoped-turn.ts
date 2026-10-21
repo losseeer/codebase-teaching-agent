@@ -23,8 +23,8 @@ import { mcpCallPayload } from "./turn-audit.js";
   作用域回合的线程上下文三件套：核归属 → 从库里取历史。`threadId` 缺席即「单次提问」（不带历史、不落库）。
   收的是已经过入参守卫的 threadId：解析原始 body 是传输层（`http/input.ts`）的事，这一层不猜请求体的形状。
 */
-export function scopedThreadTurn(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[]; earlierQuestions: string[] } | undefined {
-  if (!threadId) return { threadId: undefined, history: [], earlierQuestions: [] };
+export function scopedThreadTurn(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[] } | undefined {
+  if (!threadId) return { threadId: undefined, history: [] };
   const thread = scopedThread(repository, threadId, scope);
   if (!thread) return undefined;
   return { threadId: thread.id, ...threadScopedHistory(repository.path, thread.id) };
@@ -112,7 +112,18 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
   for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
   // 降级次数是「上下文≠选中项」的负向代理指标，必须留痕可聚合
-  journal.append("loop_round", { scene: "map_chat", tool_rounds: result.toolRounds, tool_reads: (result.fileReads ?? []).length, tool_searches: (result.codeSearches ?? []).length, tool_external: (result.mcpCalls ?? []).length, tool_skills: (result.skillReads ?? []).length }, threadId);
+  journal.append("loop_round", {
+    scene: "map_chat",
+    tool_rounds: result.toolRounds,
+    tool_reads: (result.fileReads ?? []).length,
+    tool_searches: (result.codeSearches ?? []).length,
+    tool_external: (result.mcpCalls ?? []).length,
+    tool_skills: (result.skillReads ?? []).length,
+    ...(result.resumedFromRound === undefined ? {} : { resumed_from_round: result.resumedFromRound }),
+    ...(result.stoppedBy === undefined ? {} : { stopped_by: result.stoppedBy })
+  }, threadId);
+  // 上下文装配摘要是另一件事：这条回复是在「折了几条历史、找回几条」的前提下写的（三作用域都有这一行）
+  journal.append("turn_context", { scene: "map_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, threadId);
   journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 
@@ -149,20 +160,16 @@ export async function externalAndSkills(): Promise<{ skills?: SkillsToolContext;
 }
 
 /**
-  线程正文 → 模型上下文：最近 6 条进「最近对话」窗口，窗口外只留学习者提问作问题脉络。
-  窗口大小就是下面这两个字面量（6 / 8），这里才是选行的地方：scopechat 的 `HISTORY_TURNS` /
-  `EARLIER_QUESTIONS_MAX` 只做渲染期再裁剪，对这里交出去的条数是恒等操作，调窗口要改本函数。
+  线程正文 → 本轮可用的历史：整段交出去，进多少由 `llm/conversation.ts` 按上下文窗口占用决定
+  （不占窗口就整段留着，占到 m% 之后留最近几条与最早几条、中间换占位，并按本轮提问从折叠段找回）。
+  这里不再自己数「最近 6 条」：一处选行、一处渲染，改窗口要改两个文件是最容易失配的形状。
 
-  进模型上下文的必须是库里能考据的正文，不接受客户端回传的 history / earlierQuestions：
+  进模型上下文的必须是库里能考据的正文，不接受客户端回传的 history：
   客户端临时拼的窗口既可能是旧的、也可能被改。
 */
-export function threadScopedHistory(repositoryPath: string, threadId: string | undefined): { history: ScopedChatTurn[]; earlierQuestions: string[] } {
+export function threadScopedHistory(repositoryPath: string, threadId: string | undefined): { history: ScopedChatTurn[] } {
   const messages = threadId ? readMessages(repositoryPath, threadId) : [];
-  const boundary = Math.max(0, messages.length - 6);
-  return {
-    history: messages.slice(boundary).map((message) => ({ role: message.role, content: message.content })),
-    earlierQuestions: messages.slice(0, boundary).filter((message) => message.role === "user").slice(-8).map((message) => message.content)
-  };
+  return { history: messages.map((message) => ({ role: message.role, content: message.content })) };
 }
 
 /**

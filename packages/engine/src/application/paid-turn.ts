@@ -48,6 +48,16 @@ export function budgetDegraded(handle: RepositoryHandle): boolean {
 }
 
 /**
+  回合中间的预算复查（一次工具轮 = 一次新开火，到线就不该再加）。
+  回的那句直接给模型看：说清是「预算到线」而不是「读文件上限」，它才不会把这句错话转述给学习者。
+  币种只看配置不看键名（`monthlyBudgetUsd` 这个名字是历史遗留）。
+*/
+export function turnBudgetGuard(handle: RepositoryHandle): () => string | undefined {
+  const { monthlyBudgetUsd } = readRepositorySettings(handle);
+  return () => (budgetExceeded(handle.repositoryPath, monthlyBudgetUsd) ? `本仓本月预算（${monthlyBudgetUsd}）已经用完，这是本次对话的最后一趟调用。` : undefined);
+}
+
+/**
   L1 摘要表 → `path → 一句话职责`（流程证据、search 语料、推荐入口共用）。
   借用挂载句柄：这张表每回合要读几次，别各开一份连接。
 */

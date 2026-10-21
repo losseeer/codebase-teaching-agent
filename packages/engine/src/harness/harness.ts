@@ -5,7 +5,7 @@ import { flagTruncatedReply } from "../llm/provider.js";
 import { defaultTutorSettings, policyFor, validateSettings } from "../tutor-settings/tutor-settings.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { CrossRepoContext, ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, SkillsToolContext, TurnCheckpointChannel, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool, type ReadToolProgress } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/dataflow.js";
 import type { TeachingScope } from "../source/scope.js";
@@ -33,6 +33,12 @@ export interface TutorReply {
   mcpCalls?: McpCallAudit[];
   /** 本轮取过的技能正文（供 server 记 journal skill_read）。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
+  /** 本轮对话历史的折叠读数（供 server 记 journal loop_round）。 */
+  conversation: { foldedMessages: number; recalledMessages: number };
+  /** 本回合从第几轮的检查点接上来续跑；没续跑就没这个字段。 */
+  resumedFromRound?: number;
+  /** 回合被预算闸掐断过。 */
+  stoppedBy?: TurnStopReason;
 }
 
 /**
@@ -55,6 +61,10 @@ export interface RespondOptions {
   onProgress?: (progress: TeachingProgress) => void;
   /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）：贯穿工具循环。 */
   signal?: AbortSignal;
+  /** 每轮开火前的预算闸门（应用层给）：到线就只再做一次收尾调用。 */
+  budgetGuard?: () => string | undefined;
+  /** 回合检查点通道：没线程就给空操作通道。 */
+  checkpoint?: TurnCheckpointChannel;
   /** 技能清单与取正文通道：不给就没有 read_skill。 */
   skills?: SkillsToolContext;
   /** 外部 MCP 工具面：不给就没有任何 `mcp__` 前缀的工具。 */
@@ -77,10 +87,13 @@ export async function respondWithProvider(session: TutorSession, scope: Teaching
     计入审计点贴在发送前、不放在装配里（理由见 `harness/context.ts` 的 egress 注释）。
     */
   const egress: EgressCollector = [];
+  const conversationAudit = { foldedMessages: 0, recalledMessages: 0 };
   const context = assembleContext({
     scope,
     policy,
     history: session.messages,
+    query: learnerContent,
+    conversationAudit,
     ...(repositoryPath ? { repositoryPath, egress } : {}),
     ...(options.index ? { index: options.index } : {}),
     ...(options.analysis ? { analysis: options.analysis } : {})
@@ -92,7 +105,7 @@ export async function respondWithProvider(session: TutorSession, scope: Teaching
   const skillsBrief = options.skills ? `\n\n${options.skills.brief}` : "";
   const user = `学习者本轮输入：${learnerContent}\n\n可审计代码上下文：\n${context}${skillsBrief}`;
   if (repositoryPath) recordEgress({ repositoryPath, scene: "teaching.turn", sessionId: session.id, sources: egress, sent: user });
-  const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.skills ? { skills: options.skills } : {}), ...(options.external ? { external: options.external } : {}), ...(options.search ? { search: options.search } : {}), ...(options.cross ? { cross: options.cross } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+  const outcome = await completeWording({ provider, system, user, ...(repositoryPath ? { repositoryPath } : {}), ...(options.skills ? { skills: options.skills } : {}), ...(options.external ? { external: options.external } : {}), ...(options.search ? { search: options.search } : {}), ...(options.cross ? { cross: options.cross } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.budgetGuard ? { budgetGuard: options.budgetGuard } : {}), ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}) });
   const content = flagTruncatedReply(outcome.completion.text.slice(0, 1_500), outcome.completion.finishReason === "length" || outcome.completion.text.length > 1_500);
   const userMessage: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString() };
   const assistant: TutorMessage = { id: id(), role: "assistant", content, createdAt: new Date().toISOString() };
@@ -100,6 +113,9 @@ export async function respondWithProvider(session: TutorSession, scope: Teaching
     session: { ...session, messages: [...session.messages, userMessage, assistant] },
     assistant,
     provider: provider.name,
+    conversation: conversationAudit,
+    ...(outcome.resumedFromRound === undefined ? {} : { resumedFromRound: outcome.resumedFromRound }),
+    ...(outcome.stoppedBy === undefined ? {} : { stoppedBy: outcome.stoppedBy }),
     ...(outcome.usage ? { usage: outcome.usage } : {}),
     ...(outcome.fileReads.length ? { fileReads: outcome.fileReads } : {}),
     ...(outcome.codeSearches.length ? { codeSearches: outcome.codeSearches } : {}),
@@ -112,7 +128,7 @@ export async function respondWithProvider(session: TutorSession, scope: Teaching
 /** 措辞调用：有仓库路径时走 read_file/search_code 工具循环（上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；
     没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。
     `usage` 取工具循环的累计值而不是最后一趟的，否则多轮回合的 token 会被少记。 */
-async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; cross?: CrossRepoContext; skills?: SkillsToolContext; external?: ExternalToolContext; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[]; mcpCalls: McpCallAudit[]; skillReads: { skill: string; chars: number; found: boolean }[] }> {
+async function completeWording(input: { provider: LlmProvider; system: string; user: string; repositoryPath?: string; search?: SearchCorpus; cross?: CrossRepoContext; skills?: SkillsToolContext; external?: ExternalToolContext; onProgress?: (progress: TeachingProgress) => void; signal?: AbortSignal; budgetGuard?: () => string | undefined; checkpoint?: TurnCheckpointChannel }): Promise<{ completion: LlmCompletion; usage?: LlmUsage; toolRounds: number; fileReads: FileReadRecord[]; codeSearches: CodeSearchRecord[]; mcpCalls: McpCallAudit[]; skillReads: { skill: string; chars: number; found: boolean }[]; resumedFromRound?: number; stoppedBy?: TurnStopReason }> {
   const forwardProgress = (progress: ReadToolProgress): void => {
     input.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round });
   };
@@ -135,8 +151,20 @@ async function completeWording(input: { provider: LlmProvider; system: string; u
     ...(input.cross ? { cross: input.cross } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.external ? { external: input.external } : {}),
+    ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
+    ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
     ...(input.onProgress ? { onProgress: forwardProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
-  return { completion: result.completion, ...(result.usage ? { usage: result.usage } : {}), toolRounds: result.rounds, fileReads: result.fileReads, codeSearches: result.codeSearches, mcpCalls: result.mcpCalls, skillReads: result.skillReads };
+  return {
+    completion: result.completion,
+    ...(result.usage ? { usage: result.usage } : {}),
+    toolRounds: result.rounds,
+    fileReads: result.fileReads,
+    codeSearches: result.codeSearches,
+    mcpCalls: result.mcpCalls,
+    skillReads: result.skillReads,
+    ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
+    ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy })
+  };
 }

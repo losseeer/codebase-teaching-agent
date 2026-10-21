@@ -1,5 +1,5 @@
 import type { TutorSettings } from "@codebase-tutor/shared";
-import { budgetGate, crossRepoFor, searchCorpusFor } from "../../application/paid-turn.js";
+import { budgetGate, crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { externalAndSkills, recheckTurn } from "../../application/scoped-turn.js";
 import { persistTeachingTurn, resolveTeachingState } from "../../application/teaching-turn.js";
 import { threadJournalPayload } from "../../application/threads.js";
@@ -12,6 +12,7 @@ import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { id } from "../../identity.js";
 import { turnTextPayload } from "../../store/journal.js";
+import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { importer, repositoryOr404 } from "../../services.js";
 import { dedupeFileReads } from "../../source/read-file.js";
@@ -88,6 +89,9 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
       analysis: repository.analysis,
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
+      // 中断恢复与预算复查都挂在工具循环上：前者按线程续跑，后者每轮开火前问一次
+      checkpoint: turnCheckpointChannel({ repositoryPath: repository.path, threadId: session.id, scene: "teaching.turn" }),
+      budgetGuard: turnBudgetGuard(repository.handle),
       onProgress: (progress) => send({ type: "progress", payload: progress }),
       ...(await externalAndSkills()),
       ...(turnHandle.signal ? { signal: turnHandle.signal } : {})
@@ -132,7 +136,17 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     for (const call of outcome.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), session.id);
     for (const skill of outcome.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, session.id);
     // 回合摘要：只记工具循环的轮次与各类工具次数
-    journal.append("loop_round", { scene: "teach", tool_rounds: outcome.toolRounds ?? 0, tool_reads: (outcome.fileReads ?? []).length, tool_searches: (outcome.codeSearches ?? []).length, tool_external: (outcome.mcpCalls ?? []).length, tool_skills: (outcome.skillReads ?? []).length }, session.id);
+    journal.append("loop_round", {
+      scene: "teach",
+      tool_rounds: outcome.toolRounds ?? 0,
+      tool_reads: (outcome.fileReads ?? []).length,
+      tool_searches: (outcome.codeSearches ?? []).length,
+      tool_external: (outcome.mcpCalls ?? []).length,
+      tool_skills: (outcome.skillReads ?? []).length,
+      ...(outcome.resumedFromRound === undefined ? {} : { resumed_from_round: outcome.resumedFromRound }),
+      ...(outcome.stoppedBy === undefined ? {} : { stopped_by: outcome.stoppedBy })
+    }, session.id);
+    journal.append("turn_context", { scene: "teach", conversation_folded: outcome.conversation.foldedMessages, conversation_recalled: outcome.conversation.recalledMessages }, session.id);
     const cost = summarizeCost(repository.path, gate.monthlyBudgetUsd, session.id);
     replayTypewriter(send, outcome.assistant.content);
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider });

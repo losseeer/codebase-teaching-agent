@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
-import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../llm/provider.js";
 import { LlmAbortedError } from "../llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { completeWithReadTool, toolLoopAuditsOf } from "./tool-loop.js";
+import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, toolLoopAuditsOf, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
 
 /** repoPath 指向本目录：目录内 read-file.ts 是稳定存在的真实文件 */
 const repoPath = import.meta.dirname;
@@ -46,7 +46,7 @@ describe("completeWithReadTool", () => {
     expect(refusal?.content, "到限的是轮数，回话就不能说成读文件上限——模型会把这句转述给学习者").toContain("读文件额度还剩 4 次");
     // 收尾这一次是本回合最后一次调用：折叠换来的省没有下一轮可享，读到的正文必须原样在场
     const readBody = calls[2].messages?.find((message) => message.role === "tool" && message.content.startsWith("文件 "));
-    expect(readBody?.content, "到闸收尾把正文抽成占位符，这一回合就交不出东西").not.toContain("早期读取结果已省略");
+    expect(readBody?.content, "到闸收尾把正文抽成占位符，这一回合就交不出东西").not.toContain("已折叠");
     // 首轮 user 消息始终在 messages[0]（工具轮次后不丢上下文与提问）
     expect(calls[1].messages?.[0]).toMatchObject({ role: "user" });
     expect(calls[1].messages?.[0].content).toBe("问题原文");
@@ -401,5 +401,190 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toContain("没连上");
     expect(result.completion.text).toBe("带保留答。");
     expect(result.mcpCalls[0].ok).toBe(false);
+  });
+});
+
+/**
+  回合内压缩的两条口径。两个方向都要拦：留太多是同一份正文逐轮重付，留太少是模型以为自己没读过——
+  于是重复读同一段、或者对用户说「读取失败」。
+*/
+describe("compactTurnContext", () => {
+  /** 一条真实的读取结果形状：抬头写明文件与行区间，正文撑到足够长才会被折叠。 */
+  const readBody = (path: string) => `文件 ${path}（第 1-200 行，共 400 行，已达单次读取预算，继续读请用 offset=201）：\n${"1| const value = 1;\n".repeat(200)}`;
+  const roundOf = (index: number): LlmMessage[] => [
+    { role: "assistant", content: "", reasoningContent: `推理${index}`, toolCalls: [{ id: `c${index}`, name: "read_file", argumentsJson: JSON.stringify({ path: `f${index}.ts` }) }] },
+    { role: "tool", toolCallId: `c${index}`, content: readBody(`f${index}.ts`) }
+  ];
+  const roundsOf = (count: number): LlmMessage[] => Array.from({ length: count }, (_, index) => roundOf(index + 1)).flat();
+  const tools = (messages: LlmMessage[]) => messages.filter((message) => message.role === "tool");
+  const assistants = (messages: LlmMessage[]) => messages.filter((message) => message.role === "assistant");
+
+  it("工具结果只完整保留最近几轮，更早的折叠掉正文、留下「哪个文件第几到第几行」", () => {
+    const messages = roundsOf(TOOL_CONTEXT_KEEP_ROUNDS + 2);
+    compactTurnContext(messages);
+    const results = tools(messages);
+    const folded = results.slice(0, 2);
+    const intact = results.slice(2);
+    for (const message of folded) {
+      expect(message.content.length, "折叠后还留着整份正文等于没折").toBeLessThan(400);
+      expect(message.content).toContain("已折叠");
+      expect(message.content, "抬头在：模型据此知道自己读过哪一段，不会重复读也不会说成读取失败").toContain("文件 f");
+      expect(message.content).toContain("第 1-200 行");
+      expect(message.content).toContain("offset=201");
+    }
+    for (const message of intact) expect(message.content).toContain("const value = 1;");
+  });
+
+  it("reasoning 一律丢，只有最近一次工具调用那条留着（协议要求原样回传）", () => {
+    const messages = roundsOf(TOOL_CONTEXT_KEEP_ROUNDS + 2);
+    compactTurnContext(messages);
+    const kept = assistants(messages);
+    expect(kept.slice(0, -1).every((message) => message.reasoningContent === undefined), "推理 token 是账单大头，且下一轮用不上").toBe(true);
+    expect(kept.at(-1)?.reasoningContent).toBe(`推理${TOOL_CONTEXT_KEEP_ROUNDS + 2}`);
+    // tool_calls 骨架不能跟着折叠一起摘掉：摘了它，后面那条 tool 消息就悬空，请求直接不合法
+    expect(kept.every((message) => message.toolCalls?.length === 1)).toBe(true);
+  });
+
+  it("到闸收尾（keepToolResults）：正文全留着，reasoning 照丢", () => {
+    const messages = roundsOf(TOOL_CONTEXT_KEEP_ROUNDS + 2);
+    compactTurnContext(messages, { keepToolResults: true });
+    expect(tools(messages).every((message) => message.content.includes("const value = 1;"))).toBe(true);
+    expect(assistants(messages).slice(0, -1).every((message) => message.reasoningContent === undefined)).toBe(true);
+  });
+
+  it("轮数还没超过保留窗口时正文一字不动，reasoning 照丢", () => {
+    const messages = roundsOf(TOOL_CONTEXT_KEEP_ROUNDS);
+    const bodies = tools(messages).map((message) => message.content);
+    compactTurnContext(messages);
+    expect(tools(messages).map((message) => message.content)).toEqual(bodies);
+    expect(assistants(messages).map((message) => message.reasoningContent)).toEqual([undefined, `推理${TOOL_CONTEXT_KEEP_ROUNDS}`]);
+  });
+
+  it("跨仓结果的抬头是两行：折叠后仓名与文件行区间都还在", () => {
+    const oldest: LlmMessage[] = [
+      { role: "assistant", content: "", reasoningContent: "推理0", toolCalls: [{ id: "cX", name: "read_file", argumentsJson: JSON.stringify({ path: "Shop.java", repo: "other" }) }] },
+      { role: "tool", toolCallId: "cX", content: `【来自仓 other】\n${readBody("Shop.java")}` }
+    ];
+    const messages = [...oldest, ...roundsOf(TOOL_CONTEXT_KEEP_ROUNDS)];
+    compactTurnContext(messages);
+    const folded = tools(messages)[0];
+    expect(folded.content).toContain("已折叠");
+    expect(folded.content).toContain("【来自仓 other】");
+    expect(folded.content).toContain("文件 Shop.java");
+  });
+});
+
+/**
+  中断恢复（照 LangGraph 的 checkpoint：一个 super-step 一份快照，同一线程续跑）与每轮开火前的预算复查。
+  要拦的事故：答完了还留着残局（下次误续一个已经结束的回合）、用户点了停止却留下残局
+  （替他续跑是违背意图）、预算到线后继续一轮轮往上加钱。
+*/
+describe("回合检查点与预算闸门", () => {
+  const emptyState = (rounds: number): TurnLoopState => ({
+    messages: [
+      { role: "user", content: "首问原文" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }] },
+      { role: "tool", toolCallId: "c1", content: "文件 read-file.ts（第 1-3 行）：\n1| import { readFileSync } from \"node:fs\";" }
+    ],
+    rounds,
+    succeededReads: 1,
+    crossReads: 0,
+    externalCalls: 0,
+    fileReads: [{ path: "read-file.ts", lines: 3, truncated: false, denied: false }],
+    codeSearches: [],
+    skillReads: [],
+    mcpCalls: []
+  });
+
+  /** 记账用的假通道：断言「什么时候写、写了什么、有没有清」都靠它。 */
+  function fakeChannel(restored?: { round: number; state: TurnLoopState }) {
+    const saved: { round: number; stoppedReason?: string }[] = [];
+    let cleared = 0;
+    return {
+      saved: () => saved,
+      cleared: () => cleared,
+      channel: {
+        restore: () => restored,
+        save: (_hash: string, state: TurnLoopState, stoppedReason?: string) => { saved.push({ round: state.rounds, ...(stoppedReason ? { stoppedReason } : {}) }); },
+        clear: () => { cleared += 1; }
+      } satisfies TurnCheckpointChannel
+    };
+  }
+
+  it("每完成一轮存一份快照，答完就清空", async () => {
+    const tracker = fakeChannel();
+    const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "答完。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
+    expect(tracker.saved()).toEqual([{ round: 1 }]);
+    expect(tracker.cleared(), "答完了还留着残局，下一次就会误续一个已经结束的回合").toBe(1);
+    expect(result.resumedFromRound).toBeUndefined();
+    expect(calls[1].messages).toBeDefined();
+  });
+
+  it("有残局就从那一轮接着开火：不重放首轮，已读到的正文直接在场", async () => {
+    const tracker = fakeChannel({ round: 1, state: emptyState(1) });
+    const { provider, calls } = scriptedProvider([{ text: "接上了。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "换了一份新的首问原文", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].user, "续跑不带 user：首轮已经在 messages[0] 里，再给一份会重复付一遍上下文").toBeUndefined();
+    expect(calls[0].messages?.[0].content).toBe("首问原文");
+    expect(calls[0].tools, "续跑之后还要能继续用工具").toBeDefined();
+    expect(result.resumedFromRound).toBe(1);
+    expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
+    expect(tracker.cleared()).toBe(1);
+  });
+
+  it("残局里的读文件额度跟着状态回来：续跑不会把已经用掉的额度重新花一遍", async () => {
+    const tracker = fakeChannel({ round: 1, state: emptyState(1) });
+    const { provider, calls } = scriptedProvider([readCall("c2", "tool-loop.ts"), { text: "答完。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 2, checkpoint: tracker.channel });
+    // 额度 2：残局已用掉 1 次成功读取，这一轮再用掉第 2 次，之后没有额度就收尾
+    expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts", "tool-loop.ts"]);
+    expect(result.rounds).toBe(2);
+    // 两趟调用：残局之后接着开的一轮、和模型答完的那一趟——首轮不再重放
+    expect(calls).toHaveLength(2);
+  });
+
+  it("异常退出留下 stopped_reason=error 的残局，不清空", async () => {
+    const tracker = fakeChannel();
+    let fired = 0;
+    const provider: LlmProvider = {
+      name: "scripted",
+      modelVersion: "scripted:v1",
+      complete: async () => {
+        fired += 1;
+        if (fired === 1) return readCall("c1", "read-file.ts");
+        throw new Error("端点 500");
+      }
+    };
+    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel })).rejects.toThrow("端点 500");
+    expect(tracker.saved()).toEqual([{ round: 1 }, { round: 1, stoppedReason: "error" }]);
+    expect(tracker.cleared(), "残局就是给人续的，清了等于白死一次").toBe(0);
+  });
+
+  it("用户主动停止不留残局：那一轮按作废收尾", async () => {
+    const tracker = fakeChannel();
+    const controller = new AbortController();
+    controller.abort();
+    const { provider } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
+    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal, checkpoint: tracker.channel }))
+      .rejects.toBeInstanceOf(LlmAbortedError);
+    expect(tracker.saved(), "中止不留残局：替他续跑是违背他的意图").toEqual([]);
+    expect(tracker.cleared()).toBe(1);
+  });
+
+  it("每轮开火前查预算：到线就不再执行工具，收尾那句说的是预算不是读文件上限", async () => {
+    let asked = 0;
+    const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "收尾。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
+      budgetGuard: () => { asked += 1; return asked === 1 ? "本仓本月预算（5）已经用完，这是本次对话的最后一趟调用。" : undefined; }
+    });
+    expect(result.fileReads, "到线那一轮不该再把工具调用执行掉").toEqual([]);
+    expect(result.stoppedBy).toBe("budget");
+    const refusal = (calls[1].messages ?? []).find((message) => message.role === "tool");
+    expect(refusal?.content).toContain("本仓本月预算");
+    expect(refusal?.content, "错话说成「读文件上限」会被模型原样转述给学习者").not.toContain("读文件上限");
+    expect(calls[1].tools, "收尾轮不带工具").toBeUndefined();
   });
 });

@@ -30,7 +30,9 @@ function eventLine(event: JournalEvent): string {
       // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "loop_round":
-      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}`;
+      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
+    case "turn_context":
+      return `历史折=${p.conversation_folded ?? "未记"} 找回=${p.conversation_recalled ?? "未记"} scene=${p.scene ?? "未记"}`;
     case "token_usage":
       return `in=${p.input_tokens ?? "未记"} out=${p.output_tokens ?? "未记"} cache=${p.cache_hit_tokens ?? 0} provider=${p.provider ?? "未记"} scene=${p.scene ?? "未记"}${p.mode === "degraded" ? " 【降级】" : ""}`;
     case "file_read":

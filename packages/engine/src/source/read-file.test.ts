@@ -122,28 +122,44 @@ describe("executeReadFile 护栏", () => {
     expect(outcome.content).not.toContain("line15");
   });
 
-  it("limit 超上限被钳制到 400 行，首行给出文件总行数（钳制 ≠ 截断）", () => {
-    const outcome = executeReadFile(repoRoot, JSON.stringify({ path: "src/long.ts", limit: 100_000 }));
-    expect(outcome.audit.lines).toBe(400);
-    expect(outcome.audit.truncated).toBe(false);
-    expect(outcome.content.split("\n")[0]).toContain("第 1-400 行，共 700 行");
+  /*
+    两条预算用例都把窗口钉死成 40_000 token，于是行数预算 = 40_000 × 4 字符/token × 8% ÷ 40 平均行长 = 320 行，
+    字符预算 = 12_800。数字写在测试里而不是调实现算出来：改了份额就该红，红得有意义。
+  */
+  const WINDOW = "40000";
+
+  it("limit 超出行预算时被钳到那一行预算，首行给出文件总行数（钳制 ≠ 截断）", () => {
+    process.env.TUTOR_CONTEXT_WINDOW_TOKENS = WINDOW;
+    try {
+      const outcome = executeReadFile(repoRoot, JSON.stringify({ path: "src/long.ts", limit: 100_000 }));
+      expect(outcome.audit.lines).toBe(320);
+      expect(outcome.audit.truncated).toBe(false);
+      expect(outcome.content.split("\n")[0]).toContain("第 1-320 行，共 700 行");
+    } finally {
+      delete process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
+    }
   });
 
   it("超字符预算时少给整行：首行报的是实得区间、并给出续读 offset", () => {
-    const outcome = executeReadFile(repoRoot, JSON.stringify({ path: "src/dense.ts", limit: 400 }));
-    expect(outcome.audit.truncated).toBe(true);
-    const [header, ...body] = outcome.content.split("\n");
-    const claimed = header.match(/第 (\d+)-(\d+) 行/);
-    expect(claimed).not.toBeNull();
-    const end = Number(claimed![2]);
-    // 首行声称的末行 == 正文最后一条行号 == audit.lines，三者必须一致
-    const numbers = body.filter((line) => /^\d+\| /.test(line)).map((line) => Number(line.slice(0, line.indexOf("|"))));
-    expect(numbers[0]).toBe(1);
-    expect(numbers[numbers.length - 1]).toBe(end);
-    expect(end).toBe(outcome.audit.lines);
-    expect(end).toBeLessThan(400);
-    expect(header).toContain("共 700 行");
-    expect(header).toContain(`offset=${end + 1}`);
+    process.env.TUTOR_CONTEXT_WINDOW_TOKENS = WINDOW;
+    try {
+      const outcome = executeReadFile(repoRoot, JSON.stringify({ path: "src/dense.ts", limit: 320 }));
+      expect(outcome.audit.truncated).toBe(true);
+      const [header, ...body] = outcome.content.split("\n");
+      const claimed = header.match(/第 (\d+)-(\d+) 行/);
+      expect(claimed).not.toBeNull();
+      const end = Number(claimed![2]);
+      // 首行声称的末行 == 正文最后一条行号 == audit.lines，三者必须一致
+      const numbers = body.filter((line) => /^\d+\| /.test(line)).map((line) => Number(line.slice(0, line.indexOf("|"))));
+      expect(numbers[0]).toBe(1);
+      expect(numbers[numbers.length - 1]).toBe(end);
+      expect(end).toBe(outcome.audit.lines);
+      expect(end).toBeLessThan(320);
+      expect(header).toContain("共 700 行");
+      expect(header).toContain(`offset=${end + 1}`);
+    } finally {
+      delete process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
+    }
   });
 });
 

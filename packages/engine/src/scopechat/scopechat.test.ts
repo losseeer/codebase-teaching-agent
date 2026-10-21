@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
@@ -111,7 +113,14 @@ describe("mapChat", () => {
       { type: "thinking", round: 2 }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
-    expect(result.fileReads).toEqual([{ path: "scopechat.ts", lines: 150, truncated: false, denied: false }]); // 请求的 150 行一行不少 → truncated=false；「文件还有后面」由首行的「共 N 行」表达（口径同 excerpt.ts）
+    /*
+      不给 limit 就一次读到字符预算为止（预算按窗口派生，1M 窗口下整份源码都在里面）：
+      实得行数必须等于文件真实行数，且 truncated=false —— 这条钉住「默认只给 150 行」那个旧行为没回来。
+    */
+    const wholeFileLines = readFileSync(join(import.meta.dirname, "scopechat.ts"), "utf8").split(/\r?\n/).length;
+    const reads = result.fileReads ?? [];
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ path: "scopechat.ts", lines: wholeFileLines, truncated: false, denied: false });
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });
     expect(second.messages?.[0].content).toContain("项目结构全景"); // 回归：工具轮次后不得丢失代码上下文
@@ -156,10 +165,11 @@ describe("mapChat", () => {
     expect(result.fileReads ?? [], "查产物不是读源码，一行文件额度都不该占").toEqual([]);
   });
 
-  it("micro_compact：多轮读取时，更早轮次的 tool 结果替换为占位符、早期 reasoning 丢弃，最近一轮保留原文", async () => {
+  it("回合内压缩：第 3 轮起最早那轮的正文折掉、抬头留着，早期 reasoning 丢弃而最近一轮原样回传", async () => {
     const script: LlmCompletion[] = [
       { text: "", toolCalls: [{ id: "call_a", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.ts" }) }], reasoningContent: "思考A1", usage: { inputTokens: 100, outputTokens: 20 }, finishReason: "tool_calls" },
       { text: "", toolCalls: [{ id: "call_b", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.test.ts" }) }], reasoningContent: "思考A2", usage: { inputTokens: 150, outputTokens: 25 }, finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "call_c", name: "read_file", argumentsJson: JSON.stringify({ path: "scopechat.ts" }) }], reasoningContent: "思考A3", usage: { inputTokens: 150, outputTokens: 25 }, finishReason: "tool_calls" },
       { text: "三轮后的回答。", usage: { inputTokens: 200, outputTokens: 30 }, finishReason: "stop" }
     ];
     const calls: LlmCompletionInput[] = [];
@@ -174,24 +184,28 @@ describe("mapChat", () => {
     };
     const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider, style: 50 });
     expect(result.reply).toContain("三轮后的回答");
-    const third = calls[2];
-    const toolResults = third.messages?.filter((m) => m.role === "tool") ?? [];
-    expect(toolResults).toHaveLength(2);
-    // 第一轮结果 → 占位符（内容可再生，不逐轮重付）
-    expect(toolResults[0].content).toContain("早期读取结果已省略");
+    /*
+      保留窗口是 2 轮（`TOOL_CONTEXT_KEEP_ROUNDS`）：第 4 次请求带着 3 轮历史，最早那轮该折掉。
+      别拿 calls[1]、calls[2] 判「更早的请求长什么样」——它们与本条引用的是同一个 messages 数组，
+      就地折叠会同时改到所有已记录的请求上。
+    */
+    const fourth = calls[3];
+    const toolResults = fourth.messages?.filter((m) => m.role === "tool") ?? [];
+    expect(toolResults).toHaveLength(3);
+    // 最早一轮：正文换占位符，但「哪个文件、第几到第几行」留着
+    expect(toolResults[0].content).toContain("已折叠");
+    expect(toolResults[0].content).toContain("文件 scopechat.ts");
+    expect(toolResults[0].content.split("\n").length).toBeLessThanOrEqual(3);
     expect(toolResults[0].content.length).toBeLessThan(400);
-    expect(toolResults[1].content).toContain("1| ");
-    expect(toolResults[1].content.length).toBeGreaterThan(1000);
-    // 用占位符独有的短语判定，而不是 "已省略"：本测试的夹具就是本文件，正文里本来就有「已省略」三个字
-    expect(toolResults[1].content).not.toContain("以控制上下文");
+    /*
+      判「这一条是原文」不能靠「不含某个短语」：夹具读的就是本文件，占位符里那串字本来就在源码里。
+      改判形状——整份原文有几百行，被折叠过的只剩抬头加一句说明。
+    */
+    for (const kept of toolResults.slice(1)) expect(kept.content.split("\n").length).toBeGreaterThan(200);
     // 早期 assistant 的 reasoningContent 丢弃；最近一轮保留（协议要求 tool 轮回传）
-    const assistants = third.messages?.filter((m) => m.role === "assistant") ?? [];
-    expect(assistants[0].reasoningContent).toBeUndefined();
-    expect(assistants[1].reasoningContent).toBe("思考A2");
-    // 第二轮请求（只有一轮历史）不受压缩影响
-    const second = calls[1];
-    const secondTool = second.messages?.find((m) => m.role === "tool");
-    expect(secondTool?.content).toContain("1| ");
+    const assistants = fourth.messages?.filter((m) => m.role === "assistant") ?? [];
+    expect(assistants.slice(0, 2).every((m) => m.reasoningContent === undefined)).toBe(true);
+    expect(assistants[2].reasoningContent).toBe("思考A3");
   });
 
   it("回复达到预算上限：finishReason=length 时尾附截断声明，半截句子不裸奔", async () => {
@@ -234,7 +248,7 @@ describe("mapChat", () => {
     expect(user).toContain("其余 5 个文件未列出");
   });
 
-  it("最近对话窗口：按时间序注入在代码上下文与问题之间，超长轮次逐轮截断，空内容不生成行", async () => {
+  it("最近对话窗口：按时间序注入在代码上下文与问题之间，历史原文不逐轮截断，空内容不生成行", async () => {
     const { provider, calls } = fakeProvider();
     await mapChat({
       repoPath: import.meta.dirname, analysis, content: "第二点再展开讲", provider, style: 50,
@@ -247,52 +261,55 @@ describe("mapChat", () => {
     const user = calls[0].user ?? "";
     expect(user).toContain("最近对话（此前轮次，按时间序");
     expect(user).toContain("学习者: 这个模块的分层有哪些？");
-    expect(user).toContain("长".repeat(400));
-    expect(user).not.toContain("长".repeat(401));
+    expect(user).toContain("长".repeat(500));
     expect(user.indexOf("最近对话")).toBeLessThan(user.indexOf("学习者的问题：第二点再展开讲"));
     expect(user.indexOf("最近对话")).toBeGreaterThan(user.indexOf("项目结构全景"));
     // 空内容轮不生成行：整块只有 学习者/助手 两行
     expect(user.match(/(学习者|助手): /g)?.filter((line) => line === "助手: ").length).toBe(1);
   });
 
-  it("最近对话只取最后 6 轮；无历史时不注入空段", async () => {
+  it("窗口还宽时历史整段留着（不再只取最后 6 条）；无历史不注入空段", async () => {
     const { provider, calls } = fakeProvider();
     const turns = Array.from({ length: 8 }, (_, i): ScopedChatTurn => ({ role: i % 2 ? "assistant" : "user", content: `轮次${i}` }));
     await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", history: turns, provider, style: 50 });
-    expect(calls[0].user).toContain("轮次2");
-    expect(calls[0].user).not.toContain("轮次1");
-    expect(calls[0].user).not.toContain("轮次0");
+    for (const turn of turns) expect(calls[0].user).toContain(turn.content);
     const fresh = fakeProvider();
     await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: fresh.provider, style: 50 });
     expect(fresh.calls[0].user).not.toContain("最近对话");
   });
 
-  it("此前问题脉络：窗口外提问逐行渲染（160 字截断、空项丢弃、封顶 8 条），排在最近对话之前", async () => {
-    const { provider, calls } = fakeProvider();
-    await mapChat({
-      repoPath: import.meta.dirname, analysis, content: "再总结下", provider, style: 50,
-      history: [{ role: "user", content: "窗口内的问题" }],
-      earlierQuestions: ["项目结构是什么？", `Q${"尾".repeat(200)}`, "   "]
-    });
-    const user = calls[0].user ?? "";
-    expect(user).toContain("此前问题脉络（更早轮次的学习者提问，按时间序）");
-    expect(user).toContain("- 项目结构是什么？");
-    expect(user).toContain("Q".concat("尾".repeat(159)));
-    expect(user).not.toContain("尾".repeat(160));
-    expect(user.indexOf("此前问题脉络")).toBeLessThan(user.indexOf("最近对话"));
-    expect(user).toContain("学习者: 窗口内的问题"); // 窗口内轮次走「最近对话」块
-
-    const many = Array.from({ length: 10 }, (_, i) => `问${i}`);
-    const second = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", earlierQuestions: many, provider: second.provider, style: 50 });
-    expect(second.calls[0].user).toContain("- 问2");
-    expect(second.calls[0].user).toContain("- 问9");
-    expect(second.calls[0].user).not.toContain("- 问1");
-    expect(second.calls[0].user).not.toContain("- 问0");
-
-    const bare = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: bare.provider, style: 50 });
-    expect(bare.calls[0].user).not.toContain("此前问题脉络");
+  it("历史装不下本轮空间时才折：留最早与最近、中间换占位，本轮引用到的那条按词法找回", async () => {
+    const previous = process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
+    // 10000 token = 40000 字符，对话份额 5% = 2000 字符：下面这份历史约 2200 字符，超出本轮分给它的安全空间
+    process.env.TUTOR_CONTEXT_WINDOW_TOKENS = "10000";
+    try {
+      const { provider, calls } = fakeProvider();
+      const history: ScopedChatTurn[] = [
+        { role: "user", content: "开场：这个仓怎么分层" },
+        { role: "assistant", content: "开场答：按主干、设施、外部三档。" },
+        { role: "user", content: `中段一问${"聊".repeat(300)}` },
+        { role: "assistant", content: `中段一答${"聊".repeat(300)}` },
+        { role: "assistant", content: "装配清单里有一处 蓝绿发布锚点：它落在 registry.ts。" },
+        { role: "user", content: `中段二问${"聊".repeat(300)}` },
+        { role: "assistant", content: `中段二答${"聊".repeat(300)}` },
+        { role: "user", content: `中段三问${"聊".repeat(300)}` },
+        { role: "assistant", content: `中段三答${"聊".repeat(300)}` },
+        { role: "user", content: `中段四问${"聊".repeat(300)}` },
+        { role: "user", content: "最近的问题" },
+        { role: "assistant", content: "最近的回答" }
+      ];
+      const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "蓝绿发布锚点在哪一行？", history, provider, style: 50 });
+      const user = calls[0].user ?? "";
+      expect(user).toContain("开场：这个仓怎么分层");
+      expect(user).toContain("最近的回答");
+      expect(user).toContain("中间 4 条对话已折叠");
+      expect(user).not.toContain("中段一问");
+      expect(user).toContain("蓝绿发布锚点：它落在 registry.ts");
+      expect(result.conversation).toMatchObject({ recalledMessages: 1, foldedMessages: 3 });
+    } finally {
+      if (previous === undefined) delete process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
+      else process.env.TUTOR_CONTEXT_WINDOW_TOKENS = previous;
+    }
   });
 });
 
@@ -330,15 +347,6 @@ describe("practiceChat", () => {
     const fresh = fakeProvider();
     await practiceChat({ repoPath: import.meta.dirname, exercise, content: "问", provider: fresh.provider, style: 50 });
     expect(fresh.calls[0].user).not.toContain("最近对话");
-  });
-
-  it("此前问题脉络同样注入 practice：位于题面上下文之后、追问之前", async () => {
-    const { provider, calls } = fakeProvider();
-    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "为什么？", earlierQuestions: ["这题选什么？"], provider, style: 50 });
-    const user = calls[0].user ?? "";
-    expect(user).toContain("- 这题选什么？");
-    expect(user.indexOf("此前问题脉络")).toBeGreaterThan(user.indexOf("练习上下文："));
-    expect(user.indexOf("此前问题脉络")).toBeLessThan(user.indexOf("学习者的追问："));
   });
 });
 

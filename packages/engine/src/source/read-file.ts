@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { isWithin } from "./files.js";
 import { maskSecrets } from "../security/secrets.js";
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import type { LlmTool } from "../llm/provider.js";
 
 /**
@@ -19,10 +20,11 @@ import type { LlmTool } from "../llm/provider.js";
   那是内容判定，不在本模块职责内。
   */
 
-/** 行数上限（工具对模型的承诺）；字符预算才是真正的闸。 */
-const MAX_WINDOW_LINES = 400;
-const DEFAULT_WINDOW_LINES = 150;
-const MAX_WINDOW_CHARS = 12_000;
+/*
+  单次读取的预算从上下文窗口按份额派生（`llm/context-window.ts` 是唯一真源），这里不再手填字符数。
+  `MAX_FILE_BYTES` 是进程级安全阀，与上下文预算无关：它挡的是「一次 readFileSync 把内存打死」，
+  所以窗口调到多大它都不跟着长。
+*/
 const MAX_FILE_BYTES = 2_000_000;
 
 const DENIED_DIRECTORIES = new Set([".git", "node_modules", ".tutor"]);
@@ -54,7 +56,7 @@ export const READ_FILE_TOOL: LlmTool = {
     properties: {
       path: { type: "string", description: "仓库内相对路径，如 src/app.ts" },
       offset: { type: "integer", description: "起始行号（1 起），默认 1" },
-      limit: { type: "integer", description: `读取行数，默认 ${DEFAULT_WINDOW_LINES}，上限 ${MAX_WINDOW_LINES}；单次返回还受约 ${MAX_WINDOW_CHARS} 字符的预算限制，一次拿不完就按首行给的 offset 继续读` }
+      limit: { type: "integer", description: "读取行数：不给就一次读到单次字符预算为止（整份源码通常装得下）；给数字则按行窗口读。两种情况都受同一份字符预算约束，装不下时首行会说明并给出续读的 offset" }
     },
     required: ["path"]
   }
@@ -192,7 +194,10 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
     if (bytes > MAX_FILE_BYTES) return deny(`文件过大（${bytes} 字节）`);
     const lines = readFileSync(absolute, "utf8").split(/\r?\n/);
     const offset = Math.max(1, Math.floor(Number(args.offset ?? 1) || 1));
-    const limit = Math.min(MAX_WINDOW_LINES, Math.max(1, Math.floor(Number(args.limit ?? DEFAULT_WINDOW_LINES) || DEFAULT_WINDOW_LINES)));
+    const budgetChars = contextShare(CONTEXT_SHARE.fileRead);
+    const budgetLines = contextShareLines(CONTEXT_SHARE.fileRead);
+    const wanted = args.limit === undefined ? budgetLines : Math.max(1, Math.floor(Number(args.limit) || 1));
+    const limit = Math.min(budgetLines, wanted);
     const start = Math.min(offset, Math.max(1, lines.length));
     const requestedEnd = Math.min(lines.length, start - 1 + limit);
     // 逐行装进字符预算：宁可少给几行，也不把一行切一半 —— 否则首行那句「第 X-Y 行」就不成立，
@@ -201,14 +206,14 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
     let used = 0;
     for (let index = start - 1; index < requestedEnd; index += 1) {
       const rendered = `${index + 1}| ${lines[index]}`;
-      if (kept.length && used + rendered.length + 1 > MAX_WINDOW_CHARS) break;
+      if (kept.length && used + rendered.length + 1 > budgetChars) break;
       kept.push(rendered);
       used += rendered.length + 1;
     }
     // 极端情况：单行本身就超预算（压缩过的 JS/JSON）→ 只能按字符切，并在首行说明该行只给了前半段
     let numbered = kept.join("\n");
-    const cutMidLine = numbered.length > MAX_WINDOW_CHARS;
-    if (cutMidLine) numbered = numbered.slice(0, MAX_WINDOW_CHARS);
+    const cutMidLine = numbered.length > budgetChars;
+    if (cutMidLine) numbered = numbered.slice(0, budgetChars);
     const end = start + kept.length - 1;
     const truncated = end < requestedEnd || cutMidLine;
     const total = end < lines.length ? `，共 ${lines.length} 行` : "";
@@ -216,7 +221,7 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
       续读建议一律指向 `end + 1`：单行被字符上限切开时，那一行的后半段永远给不出来（下一次同样只拿到前半段），
       把 offset 指回它自己等于建议模型原地转圈。
       */
-    const hint = truncated ? `，已达单次字符上限${cutMidLine ? `（第 ${end} 行本身超长，只给到开头，整行读不全）` : ""}，继续读请用 offset=${end + 1}` : "";
+    const hint = truncated ? `，已达单次读取预算${cutMidLine ? `（第 ${end} 行本身超长，只给到开头，整行读不全）` : ""}，继续读请用 offset=${end + 1}` : "";
     /**
       入口这道过筛：正文要进发往远端的 prompt，硬编码在普通源文件里的真 key 是名单挡不住的（它叫 `config.ts`）。
       首行必须说明「这里被隐去了 N 处」——不写的话模型会以为文件本来就少了几段，

@@ -1,6 +1,6 @@
 import type { ChatScope, ChatThread, ChatThreadMessage, TutorSettings } from "@codebase-tutor/shared";
 import { id } from "../identity.js";
-import { TutorDatabase, type ChatMessageRow, type ChatSessionRow } from "./database.js";
+import { type ChatMessageRow, type ChatSessionRow, withDatabase } from "./database.js";
 
 /**
   会话持久化的唯一出入口（产品数据线，不是审计线）。三条口径：
@@ -15,17 +15,8 @@ const SCOPES: ChatScope[] = ["teach", "map", "practice"];
 const TITLE_MAX = 120;
 
 /**
-  唯一的一处「开连接 → 用 → 关」。写在 try/finally：这些函数挂在每个对话回合的读写路径上，
-  尾置的 close() 一被异常跳过就攒文件描述符，攒够把进程拖到 EMFILE。
+  唯一的一处「开连接 → 用 → 关」在 `store/database.ts` 的 `withDatabase`：这些函数挂在每个对话回合的读写路径上。
   */
-function withDatabase<T>(repositoryPath: string, run: (database: TutorDatabase) => T): T {
-  const database = new TutorDatabase(repositoryPath);
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
-}
 
 export function isChatScope(value: unknown): value is ChatScope {
   return typeof value === "string" && (SCOPES as string[]).includes(value);
