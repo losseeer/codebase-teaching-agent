@@ -48,7 +48,9 @@ export function turnCheckpointChannel(input: {
       }
     },
     save: (inputHash, state, stoppedReason) => {
-      const size = JSON.stringify(state).length;
+      // 上限按字节判（`CHECKPOINT_MAX_BYTES`）：`JSON.stringify().length` 数的是 UTF-16 字符，
+      // 快照里的源码与中文注释多字节占大头，按字符算会把上限悄悄放宽近三倍。
+      const size = Buffer.byteLength(JSON.stringify(state), "utf8");
       if (size > CHECKPOINT_MAX_BYTES) {
         traceEngine("degrade", { component: "turn_checkpoint", action: "skip", cause: `快照 ${size} 字节超过上限 ${CHECKPOINT_MAX_BYTES}，这一轮没存` });
         return;

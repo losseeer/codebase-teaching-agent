@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isWithin } from "./files.js";
+import { isWithin, readFileLines } from "./files.js";
 import { secretMasker } from "../security/secrets.js";
 
 /**
@@ -57,12 +56,9 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
   const relative = anchor.path.replaceAll("\\", "/");
   const absolute = join(repositoryPath, relative);
   if (!isWithin(repositoryPath, absolute)) return undefined;
-  let all: string[];
-  try {
-    all = readFileSync(absolute, "utf8").split(/\r?\n/);
-  } catch {
-    return undefined;
-  }
+  // 读行口径与 read_file 同源（含「非普通文件不读」：命名管道的同步读没有 EOF，会把单线程引擎冻住）
+  const all = readFileLines(repositoryPath, relative);
+  if (!all) return undefined;
   const totalLines = all.length;
   const line = Math.min(Math.max(1, Math.floor(anchor.line) || 1), totalLines);
   const declared = typeof anchor.endLine === "number" && Number.isInteger(anchor.endLine) && anchor.endLine > line ? anchor.endLine : undefined;

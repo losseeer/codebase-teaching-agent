@@ -420,6 +420,15 @@ function extractCalls(contents: Map<string, string>, symbols: SymbolInfo[], impo
         }
         if (!target) continue;
         const caller = [...localSymbols].reverse().find((symbol) => symbol.line <= index + 1 && symbol.endLine >= index + 1);
+        /**
+          声明行自己不算调用。上面两条跳过判据都要 Java 修饰符或声明关键字，管不到接口里的
+          `String submit();`（无修饰符）和包私有构造器 `Foo()`——它们在声明行上匹配到「名字(」，
+          又在同文件候选里落回自己，于是产出一条「它调用它自己」的假边。
+          只挡「函数体左括号之前」那一处：`int f(int n) { return n * f(n - 1); }` 这种单行函数
+          的真递归写在 `{` 之后，一刀切按行跳过会把它一起吃掉。
+        */
+        const bodyStart = line.indexOf("{");
+        if (caller && !receiver && caller.line === index + 1 && caller.name === name && (bodyStart === -1 || match.index < bodyStart)) continue;
         for (const callee of (typedTargets.length ? typedTargets : [target])) {
           edges.push({ callerPath: path, callerSymbol: caller?.id, calleePath: callee.path, calleeSymbol: callee.id, line: index + 1 });
         }
@@ -667,7 +676,7 @@ function resolveFileImports(path: string, content: string, index: ImportIndex): 
   - java / csharp → 前四段：`org.springframework.data.redis`、`StackExchange.Redis`。
     只切两段会把整个 spring 挤成同一个东西——`spring-data-redis`（数据库）与 `spring-web`（HTTP）
     该不该同栏，差别就在中间这两段；切到类名那一段又会一个类一个身份，四段是最浅的能分开的一层；
-  - go `github.com/gin-gonic/gin` → `github.com/gin-gonic`（域名式取前三段）；`fmt` → `fmt`：标准库照实记名，
+  - go 域名式取前三段：`github.com/gin-gonic/gin` 正好三段、原样留下，`github.com/gin-gonic/gin/middleware` → `github.com/gin-gonic/gin`；`fmt` → `fmt`：标准库照实记名，
     要不要算「外部」由词典那一层判，不在这里替它做主；
   - node `@fastify/cors/register` → `@fastify/cors`、`axios/lib/x` → `axios`（npm 包名是第一段，scope 例外要两段）。
   只切名字、不判类别、更不猜语义：判类别在 `external-catalog.ts`，而「猜」是模型的事，边界这一栏不许它碰。

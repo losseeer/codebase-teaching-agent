@@ -3,6 +3,7 @@ import type { CfgFileFact, CfgFunction, DataflowFileFact, FactKind, RegistryEntr
 import { FACT_KINDS } from "@codebase-tutor/shared";
 import type { TutorDatabase } from "../store/database.js";
 import type { FactsToolContext } from "../source/tool-loop.js";
+import { FACTS_VERSION } from "./version.js";
 
 /**
   把 `static_fact` 里的四类产物交给模型的只读门。
@@ -83,7 +84,9 @@ const relationLine = (owner: string, edge: TypeRelationFileFact["types"][number]
 const entryLine = (path: string, entry: RegistryEntry): string =>
   `${path}:${entry.line} ${entry.kind} ${entry.name}${entry.target ? ` → ${entry.target}` : ""}${entry.method ? ` ${entry.method}` : ""}（${entry.via}）`;
 
-function missing(kind: FactKind, db: TutorDatabase, repositoryId: string): string {
+function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: string): string {
+  const stored = db.getFileFact<{ version?: string }>(repositoryId, kind, path);
+  if (stored && stored.version !== FACTS_VERSION) return `这个文件的 ${kind} 产物是旧判据算的（产物 version=${stored.version ?? "没写过版本"}，当前 ${FACTS_VERSION}），不作为现行读数给出；要用它先重新分析这个仓。`;
   const covered = db.factCoverage(repositoryId).some((row) => row.kind === kind);
   return covered
     ? `这类产物（${kind}）在本仓有行，但这个文件不在其中：可能它没有可执行体，也可能路径写错了。`
@@ -95,13 +98,19 @@ function missing(kind: FactKind, db: TutorDatabase, repositoryId: string): strin
   `target` 在 cfg/dataflow 里是函数名，在 typeRelations/registry 里是类型名或条目名。
 */
 export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsToolContext {
-  const rowsOf = <T>(kind: FactKind, path: string): T | undefined => db.getFileFact<T>(repositoryId, kind, path);
+  // 判据改过版（`FACTS_VERSION` 翻过）的旧行不再当现行读数交给模型：那是另一套判据算出来的结果
+  const rowsOf = <T>(kind: FactKind, path: string): T | undefined => {
+    const fact = db.getFileFact<T & { version?: string }>(repositoryId, kind, path);
+    return fact?.version === FACTS_VERSION ? fact : undefined;
+  };
   // 整类扫描要解析这一类每一行 JSON（一个仓 2~4 MB）：这扇门只活一个回合，按类别缓存一次
   const scanned = new Map<FactKind, Map<string, unknown>>();
   const scan = <T>(kind: FactKind): Map<string, T> => {
     const cached = scanned.get(kind) as Map<string, T> | undefined;
     if (cached) return cached;
-    const loaded = db.listFileFacts<T>(repositoryId, kind);
+    const loaded = db.listFileFacts<T & { version?: string }>(repositoryId, kind);
+    // 「全仓找」这条路与按 path 取读必须同一道版本闸，否则旧判据产物从 scan 那边照样进模型
+    for (const [factPath, fact] of loaded) if (fact?.version !== FACTS_VERSION) loaded.delete(factPath);
     scanned.set(kind, loaded as Map<string, unknown>);
     return loaded;
   };
@@ -157,7 +166,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 
       if (kind === "cfg") {
         const fact = rowsOf<CfgFileFact>(kind, path);
-        if (!fact) return missing(kind, db, repositoryId);
+        if (!fact) return missing(kind, db, repositoryId, path);
         const base = head(fact);
         const hit = pick(fact.functions, target);
         if (target && !hit) return notInFile(fact.functions, target);
@@ -171,7 +180,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 
       if (kind === "dataflow") {
         const fact = rowsOf<DataflowFileFact>(kind, path);
-        if (!fact) return missing(kind, db, repositoryId);
+        if (!fact) return missing(kind, db, repositoryId, path);
         const base = head(fact);
         const hit = pick(fact.functions, target);
         if (target && !hit) return notInFile(fact.functions, target);
@@ -185,13 +194,13 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 
       if (kind === "typeRelations") {
         const fact = rowsOf<TypeRelationFileFact>(kind, path);
-        if (!fact) return missing(kind, db, repositoryId);
+        if (!fact) return missing(kind, db, repositoryId, path);
         if (!fact.types.length) return `${head(fact)}\n这个文件有产物行，但没声明任何具名类型（标量与内置类型按设计不进这张表）。`;
         return emit([head(fact)], fact.types.flatMap((type) => [`${type.name}（${type.kind}@${type.line}-${type.endLine}）${type.truncated ? " 边已截断" : ""}`, ...type.relations.map((edge) => `  ${relationLine(type.name, edge)}`)]), skips(fact));
       }
 
       const fact = rowsOf<RegistryFileFact>(kind, path);
-      if (!fact) return missing(kind, db, repositoryId);
+      if (!fact) return missing(kind, db, repositoryId, path);
       const entries = target ? fact.entries.filter((entry) => `${entry.name} ${entry.target ?? ""}`.toLowerCase().includes(needle)) : fact.entries;
       if (!entries.length) return `${head(fact)}\n这个文件进了注册索引，但${target ? `没有名字含「${target}」的条目` : "没认出任一条目（配置文件只记键名，值不抄）"}。`;
       const digest = entries.reduce<Record<string, number>>((acc, entry) => ({ ...acc, [entry.kind]: (acc[entry.kind] ?? 0) + 1 }), {});

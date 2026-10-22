@@ -1,4 +1,5 @@
 import { styleBand } from "@codebase-tutor/shared";
+import { sourceExtensions } from "../indexer/indexer.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**
@@ -12,8 +13,14 @@ import { maskSecrets } from "../security/secrets.js";
   数据源缺失报「未执行」，不拿空数组伪装成满分。
 */
 
-const EXTENSIONS = "java|kt|kts|scala|groovy|py|ts|tsx|js|jsx|vue|go|rb|php|rs|swift|sql|xml|yaml|yml|md";
-const REFERENCE_PATTERN = new RegExp(`[A-Za-z0-9_./\\-]+\\.(?:${EXTENSIONS})(?::\\d{1,5})?`, "g");
+/**
+  引用核验认得的扩展名 = 索引会收录的那一份名单（`sourceExtensions`：图内语言由能力表派生 ∪ 图外的配置/文档）。
+  判据只有一条，就是「文件表里可能出现的形状」——手写清单既漏了 `.c/.h/.cpp/.cs/.mjs/.cjs`
+  （模型编一条 `parser.cpp:88` 的假引用，这台机器连看都不看），也必须跟着索引走，
+  不然核验的是引擎根本不会收录的文件形状。名单本身由 `depgraph/capabilities.test.ts` 钉住。
+*/
+const CITATION_EXTENSIONS = [...sourceExtensions].map((extension) => extension.replace(/^\./, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
+const REFERENCE_PATTERN = new RegExp(`[A-Za-z0-9_./\\-]+\\.(?:${CITATION_EXTENSIONS.join("|")})(?![A-Za-z0-9])(?::\\d{1,5})?`, "g");
 
 export interface ReferenceScore {
   total: number;

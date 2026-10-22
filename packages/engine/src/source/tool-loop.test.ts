@@ -65,6 +65,19 @@ describe("completeWithReadTool", () => {
     expect(result.fileReads).toHaveLength(1); // 未知工具不计入读取审计
   });
 
+  it("额度在同一轮里花完也逐条挡：轮首那次判据只挡得到下一轮", async () => {
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: "tool-loop.ts" }) }], finishReason: "tool_calls" },
+      { text: "看完了。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
+    // 两条都发在同一个回合里：不逐条挡就真读两个文件，「本次最多读 1 个」成了空话
+    expect(result.fileReads).toHaveLength(1);
+    const blocked = calls[1].messages?.find((message) => message.role === "tool" && message.content.includes("读文件上限"));
+    expect(blocked?.content, "第二条读取要照实回绝，不能悄悄真读").toBeDefined();
+    expect(result.completion.text).toBe("看完了。");
+  });
+
   it("被护栏拒绝的读取计入审计（denied），不中断对话", async () => {
     const { provider } = scriptedProvider([
       readCall("c1", ".env"),
@@ -268,6 +281,14 @@ describe("completeWithReadTool 的跨仓访问", () => {
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
     expect(result.fileReads[0].denied).toBe(true);
     expect(result.fileReads[0].path).toBe("other/.env");
+  });
+
+  it("`__proto__` 这类原型属性名不算仓库：回喂未知仓库清单，不抛异常终止回合", async () => {
+    const { provider, calls } = scriptedProvider([crossRead("c1", "ShopController.java", "__proto__"), { text: "收尾。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
+    const tool = calls[1].messages?.find((message) => message.role === "tool");
+    expect(tool?.content).toContain("未知仓库「__proto__」");
+    expect(result.fileReads).toHaveLength(0);
   });
 
   it("未知仓名回喂可用清单且不占额度；跨仓读另有独立上限", async () => {

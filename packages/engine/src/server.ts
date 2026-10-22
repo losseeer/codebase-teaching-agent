@@ -13,7 +13,8 @@ import { loadDotEnv } from "./boot.js";
 import { isTrustedOrigin } from "./security/origins.js";
 import { reprobeIsolation } from "./sandbox/isolation.js";
 import { runWithTrace } from "./trace/context.js";
-import { traceEngine } from "./trace/engine-log.js";
+import { flushEngineLog, traceEngine } from "./trace/engine-log.js";
+import { flushLlmLog } from "./llm/call-log.js";
 import { closeExternalTools } from "./external/clients.js";
 import { installBundledSkills } from "./external/skills.js";
 import { registerPlatformRoutes } from "./http/routes/platform.js";
@@ -108,6 +109,9 @@ registerThreadRoutes(app);
 
 // 退出时关掉外部 MCP 子进程：它们是引擎起来的，不能留在机器上。
 app.addHook("onClose", async () => { await closeExternalTools(); });
+// 最后一条：把已排队的两条日志写完再退。`appendLine` 走异步队列，直接 exit 会把收尾那几行留在内存里丢掉——
+// engine.jsonl 丢的是 mount 的 schemaGaps 与 degrade 行，llm.log 丢的正是「这一发到底花没花钱」的对账凭据。
+app.addHook("onClose", async () => { await Promise.all([flushEngineLog(), flushLlmLog()]); });
 
 // 测试里不占端口：vitest 会把 VITEST 置为 "true"，此时只用 app.inject() 打路由。
 // 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。
@@ -131,7 +135,11 @@ if (!process.env.VITEST) {
       console.log(`[engine] 收到 ${signal}，开始收尾（监听 / 库句柄 / 外部 MCP 子进程）`);
       const done = (): void => process.exit(0);
       const guard = setTimeout(done, 1_500);
-      app.close().then(() => { clearTimeout(guard); done(); }, () => { clearTimeout(guard); done(); });
+      // 先把已排队的日志写完：`/api/events` 这类长连接会挂住 `app.close()`，1.5s 一到就直接 exit，
+      // 排在 onClose 钩子里的那次 flush 可能根本没机会跑。llm.log 也是异步队列，漏掉的正是最贵的收尾对账行。
+      void flushEngineLog();
+      void flushLlmLog();
+      app.close().then(() => { clearTimeout(guard); done(); }, (error: unknown) => { clearTimeout(guard); console.error(`[engine] 收尾没跑完（外部 MCP 子进程或日志 flush 抛错）：${String(error)}`); done(); });
     });
   }
   console.log("[engine] 访问控制：无认证闸（本机任意进程都能调）｜来源闸生效（只信回环与 TUTOR_ALLOWED_ORIGINS，非可信来源 403）");

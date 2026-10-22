@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, screenOutbound, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
+import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, resolveLlmConfig, screenOutbound, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
@@ -43,6 +43,44 @@ describe("OpenAICompatibleProvider", () => {
     expect(screenOutbound(screened)).toBe(screened);
   });
 
+  it("私钥块连正文一起隐去：只挡 BEGIN 标记行等于把密钥本身发出去", () => {
+    const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nAgMBAAECggEAR8UJ6YUkPz0wZ3tQ9Y4hY1mXc0kM2n7u\n-----END PRIVATE KEY-----";
+    const screened = screenOutbound({ system: "s", user: `配置贴在这里：\n${pem}\n下一行正常文字` });
+    expect(screened.user).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7");
+    expect(screened.user).not.toContain("AgMBAAECggEAR8UJ6YUkPz0wZ3tQ9Y4hY1mXc0kM2n7u");
+    expect(screened.user).toContain("下一行正常文字");
+  });
+
+  it("出网筛覆盖工具参数与 reasoning：模型复述的密钥回传时不能再原样发走", () => {
+    const input = {
+      system: "s",
+      user: "u",
+      messages: [{
+        role: "assistant" as const,
+        content: "看一下",
+        reasoningContent: "key=sk-abcdefghijklmnopqrstuvwxyz0123456789",
+        toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{\"path\":\"x\",\"note\":\"AKIAABCDEFGHIJKLMNOP\"}" }]
+      }]
+    };
+    const screened = screenOutbound(input);
+    const message = screened.messages?.[0];
+    expect(message?.reasoningContent).not.toContain("sk-abcdefghijklmnopqrstuvwxyz0123456789");
+    expect(message?.toolCalls?.[0].argumentsJson).not.toContain("AKIAABCDEFGHIJKLMNOP");
+    expect(screenOutbound(screened)).toBe(screened);
+  });
+
+
+  it("TUTOR_LLM_TIMEOUT_MS 留空或写坏都退回默认，不接受 0：0ms 会把每一发真实请求当场判成超时", () => {
+    const saved = process.env.TUTOR_LLM_TIMEOUT_MS;
+    process.env.TUTOR_LLM_TIMEOUT_MS = "";
+    expect(resolveLlmConfig().timeoutMs, '空串 `Number("")` 是 0').toBe(12_000);
+    process.env.TUTOR_LLM_TIMEOUT_MS = "abc";
+    expect(resolveLlmConfig().timeoutMs, "NaN 也按未配置").toBe(12_000);
+    process.env.TUTOR_LLM_TIMEOUT_MS = "50";
+    expect(resolveLlmConfig().timeoutMs, "过小也不给放行").toBe(1_000);
+    if (saved === undefined) delete process.env.TUTOR_LLM_TIMEOUT_MS;
+    else process.env.TUTOR_LLM_TIMEOUT_MS = saved;
+  });
 
   it("max_tokens 加上推理余量（默认 6000）", async () => {
     let captured: Record<string, unknown> | undefined;

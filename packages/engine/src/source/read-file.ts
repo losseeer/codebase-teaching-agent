@@ -190,8 +190,10 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
   const blocked = pathReadBlock(repoPath, rawPath);
   if (blocked) return deny(blocked);
   try {
-    const bytes = statSync(absolute).size;
-    if (bytes > MAX_FILE_BYTES) return deny(`文件过大（${bytes} 字节）`);
+    const stat = statSync(absolute);
+    // 只读普通文件：命名管道与设备节点的同步读没有 EOF，一次就把整个单线程引擎冻住（不抛异常，下面的 catch 兜不住）
+    if (!stat.isFile()) return deny("不是普通文件（目录、命名管道或设备节点）");
+    if (stat.size > MAX_FILE_BYTES) return deny(`文件过大（${stat.size} 字节）`);
     const lines = readFileSync(absolute, "utf8").split(/\r?\n/);
     const offset = Math.max(1, Math.floor(Number(args.offset ?? 1) || 1));
     const budgetChars = contextShare(CONTEXT_SHARE.fileRead);

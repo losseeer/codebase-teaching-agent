@@ -23,6 +23,23 @@ function fixtureRepository(): string {
 const options = { before: 2, after: 3, maxSymbolLines: 80, maxChars: 4_000 };
 
 describe("sliceExcerpt", () => {
+  it("逐行取段也挡得住私钥块正文：跨行模式在这里命不中，靠行状态", () => {
+    const repository = mkdtempSync(join(tmpdir(), "codebase-tutor-excerpt-pem-"));
+    repositories.push(repository);
+    writeFileSync(join(repository, "config.ts"), [
+      "const key = `",
+      "-----BEGIN PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7",
+      "AgMBAAECggEAR8UJ6YUkPz0wZ3tQ9Y4hY1mXc0kM2n7u",
+      "-----END PRIVATE KEY-----",
+      "`;"
+    ].join("\n"), "utf8");
+    const slice = sliceExcerpt(repository, { path: "config.ts", line: 2, endLine: 5 }, options);
+    const text = slice?.lines.map((item) => item.text).join("\n") ?? "";
+    expect(text).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7");
+    expect(text).not.toContain("AgMBAAECggEAR8UJ6YUkPz0wZ3tQ9Y4hY1mXc0kM2n7u");
+    expect(slice?.masked, "块里每一行都算一处被隐去").toBe(4);
+  });
   it("有可信符号边界时只取符号自身行区间（不受空白行影响）", () => {
     const repository = fixtureRepository();
     const slice = sliceExcerpt(repository, { path: "src/a.ts", line: 3, endLine: 6 }, options);

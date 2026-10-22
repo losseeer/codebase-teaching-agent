@@ -1,12 +1,18 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dedupeFileReads, executeReadFile, pathReadBlock, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
+import { readFileLines } from "./files.js";
 
 let repoRoot = "";
 /** 仓库之外的一个目录：给「链接指向仓外」那条用例当真目标 */
 let outsideRoot = "";
+
+/** 只放一条命名管道的临时目录；mkfifo 不可用的机器上，用它跑的两条用例记为 skipped 而不是静默通过。 */
+const pipeDir = mkdtempSync(join(tmpdir(), "tutor-pipe-"));
+const hasMkfifo = spawnSync("mkfifo", [join(pipeDir, "pipe.txt")]).status === 0;
 
 beforeAll(() => {
   repoRoot = mkdtempSync(join(tmpdir(), "tutor-readfile-"));
@@ -41,12 +47,23 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(outsideRoot, { recursive: true, force: true });
+  rmSync(pipeDir, { recursive: true, force: true });
 });
 
 describe("executeReadFile 护栏", () => {
   it("工具定义暴露 read_file 名称与 path 必填", () => {
     expect(READ_FILE_TOOL.name).toBe("read_file");
     expect((READ_FILE_TOOL.parameters as { required: string[] }).required).toContain("path");
+  });
+
+  it.skipIf(!hasMkfifo)("命名管道没有 EOF：判成「不是普通文件」就拒，不碰同步读", () => {
+    const outcome = executeReadFile(pipeDir, JSON.stringify({ path: "pipe.txt" }));
+    expect(outcome.audit.denied).toBe(true);
+    expect(outcome.content).toContain("不是普通文件");
+  });
+
+  it.skipIf(!hasMkfifo)("readFileLines 同一口径：非普通文件返回 undefined，不阻塞", () => {
+    expect(readFileLines(pipeDir, "pipe.txt")).toBeUndefined();
   });
 
   it("拒绝 .env（防密钥进 prompt）", () => {

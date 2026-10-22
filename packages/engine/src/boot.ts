@@ -22,7 +22,9 @@ export const engineVersion: string = (() => {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
     return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
-  } catch {
+  } catch (error) {
+    // 版本只用于 /api/health 的回显；读不到就报 0.0.0，但必须留一行原因，否则排障时会把一个装坏的包读成「引擎很旧」
+    console.warn(`[boot] 读不到 engine 的 package.json version，健康检查将回显 0.0.0：${String(error)}`);
     return "0.0.0";
   }
 })();
@@ -90,13 +92,14 @@ export function findDotEnvPath(): string | undefined {
   return walkUp(dirname(fileURLToPath(import.meta.url))) ?? walkUp(process.cwd());
 }
 
-/** 启动时调用一次：加载仓库根 .env（存在即加载，静默——配置文件缺失是常态而非错误）。 */
+/** 启动时调用一次：加载本工具项目根的 .env（不是被分析仓的；存在即加载，静默——配置文件缺失是常态而非错误）。 */
 export function loadDotEnv(): void {
   const path = findDotEnvPath();
   if (!path) return;
   try {
     applyDotEnv(parseDotEnv(readFileSync(path, "utf8")));
-  } catch {
-    // 读失败不阻断启动：环境变量口径仍可用，.env 缺失/损坏按未配置处理
+  } catch (error) {
+    // 缺失走上面那句 `if (!path)`；文件读得到却解析不动必须出声，否则 TUTOR_LLM_*、来源闸、单价全按「没配置」生效，排查方向只剩猜
+    console.warn(`[boot] .env 读到了却用不上，按未配置处理：path=${path} error=${String(error)}`);
   }
 }

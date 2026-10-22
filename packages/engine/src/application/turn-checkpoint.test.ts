@@ -80,6 +80,13 @@ describe("回合检查点通道", () => {
     c.save(HASH, huge);
     expect(c.restore(HASH)).toBeUndefined();
     expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows).toBe(0);
+
+    // 上限写的是字节，就得按字节判：汉字一份字符 ≈ 三个字节，字符数看着没超上限的快照其实早已超标
+    const cjkHash = `${HASH}-cjk`;
+    const cjk = state(1, "汉".repeat(Math.ceil(CHECKPOINT_MAX_BYTES / 2)));
+    expect(Buffer.byteLength(JSON.stringify(cjk), "utf8")).toBeGreaterThan(CHECKPOINT_MAX_BYTES);
+    c.save(cjkHash, cjk);
+    expect(c.restore(cjkHash), "按字符数算会把这一份存下来，上限被悄悄放宽近三倍").toBeUndefined();
   });
 
   it("没有线程就没有续跑的对象：三个动作全是空操作", () => {

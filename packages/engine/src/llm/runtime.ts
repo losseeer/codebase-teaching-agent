@@ -1,14 +1,14 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { LoggingLlmProvider } from "./call-log.js";
 import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, type LlmConfigOverrides, type LlmProvider, type ResolvedLlmConfig, type ThinkingEffort } from "./provider.js";
+import { tutorDataDir } from "../tutor-home.js";
 
 /**
   LLM 运行时设置（GUI 可改，落盘到 ~/.codebase-tutor/llm-settings.json，重启后仍在）。
   只有一套配置：
   - provider / model / baseUrl / apiKey：空串 = 该项回落 .env；
-  - thinking：深任务（三作用域对话、流程生成）的思考档位，"auto" = 不发思考字段。
+  - thinking：深任务（三作用域对话）的思考档位，"auto" = 不发思考字段。
   「轻任务 / 教学对话」是运行时角色而非两份配置，见 buildLlmRuntimeProvider。
 
   密钥口径：apiKey 明文只存在于本模块的内存态与那个 0600 的文件里，对外响应一律走 publicLlmSettings()（只有掩码）。
@@ -61,7 +61,7 @@ export function normalizeRate(value: unknown): string | undefined {
 
 /** 默认 ~/.codebase-tutor/llm-settings.json，测试用 TUTOR_LLM_SETTINGS_FILE 指向临时文件。 */
 function settingsFile(): string {
-  return process.env.TUTOR_LLM_SETTINGS_FILE ?? join(homedir(), ".codebase-tutor", "llm-settings.json");
+  return process.env.TUTOR_LLM_SETTINGS_FILE ?? join(tutorDataDir(), "llm-settings.json");
 }
 
 let settings: LlmRuntimeSettings = { ...DEFAULT_SETTINGS };
@@ -120,8 +120,9 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
       if (normalized !== undefined) next[key] = normalized;
     }
     settings = next;
-  } catch {
-    // 损坏的设置文件按未配置处理：保留内存态，下次保存会整体覆盖
+  } catch (error) {
+    // 损坏的设置文件按未配置处理：保留内存态，下次保存会整体覆盖。不出声的话，文件里明明还留着可用密钥，界面却读成「没配模型」
+    console.warn(`[llm] 设置文件解析失败，按未配置处理：path=${file} error=${String(error)}`);
   }
   return getLlmRuntimeSettings();
 }
@@ -144,8 +145,9 @@ function persist(): void {
     writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     // mode 只在创建时生效：文件若已存在且是 644（别的工具写过），这里补一次
     chmodSync(file, 0o600);
-  } catch {
-    // 落盘失败不影响本次会话生效：内存态与 provider 已经更新，只是重启后会回落 .env
+  } catch (error) {
+    // 落盘失败不影响本次会话生效：内存态与 provider 已经更新。但要让用户知道重启会回落 .env，否则会以为界面里已经存住了
+    console.warn(`[llm] 设置没能落盘（本次会话仍生效，重启后回落 .env）：path=${file} error=${String(error)}`);
   }
 }
 
@@ -153,7 +155,7 @@ function persist(): void {
 export type LlmRole = "teaching" | "light";
 
 /** 两个运行时角色的思考口径：
-  - "teaching"：三作用域对话、流程生成等深任务——思考档位随运行时设置；
+  - "teaching"：三作用域对话等深任务——思考档位随运行时设置；
   - "light"：推荐入口 / 题面润色 / 命名 / L1 摘要等单轮浅任务——思考强制 "off"
     （这是行为约定，不是第二份配置；浅任务开思考只是多花 reasoning token）。
   */

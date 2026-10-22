@@ -28,6 +28,12 @@ describe("引用落地", () => {
     // src/graph/builder.py 与 src/utils/builder.py、other/builder.py 三个同名
     expect(score.problems[0]?.why).toContain("同名文件 3 个");
   });
+
+  it("依赖图认识的语言都在核验射程里；图外的 Ruby/PHP 与文档也不许被悄悄缩小", () => {
+    const score = scoreReferences(["见 src/parser.cpp:88 与 Order.cs:2 与 app.rb:12；样式在 theme.css:1 不算代码引用"], FILES);
+    // 清单手写的那几年，.cpp/.cs 压根不进分母：编一条假引用也不会被拦
+    expect(score.problems.map((problem) => problem.raw)).toEqual(["src/parser.cpp:88", "Order.cs:2", "app.rb:12"]);
+  });
 });
 
 describe("检索 gold 命中", () => {

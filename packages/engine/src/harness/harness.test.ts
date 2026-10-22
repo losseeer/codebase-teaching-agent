@@ -51,7 +51,7 @@ describe("provider-backed code Q&A harness", () => {
     expect(prompt).toContain("当前作用域: 文件 src/main.ts");
     expect(prompt).toContain("src/main.ts:1-3");
     expect(prompt).toContain("1: export const main = () => readConfig();");
-    expect(prompt).toContain("通俗化 1/5");
+    expect(prompt).toContain("通俗化 1/2");
     expect(prompt).not.toContain("当前阶段");
     expect(prompt).not.toContain("本轮动作");
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JournalEvent } from "@codebase-tutor/shared";
 import { readJournal } from "../store/journal.js";
+import { LATEST_SUMMARY_LIMIT } from "../store/database.js";
 
 /**
   在线聚合脚本（零 LLM、纯只读）：产出指标集里「可算」项与验收读数的基线报告（markdown 到 stdout）。
@@ -176,7 +177,7 @@ for (const repo of perRepo) {
   if (!existsSync(dbFile)) { emit("- tutor.db 缺失：coverageLow 未执行"); continue; }
   const db = new DatabaseSync(dbFile, { readOnly: true });
   try {
-    const summaries = db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT 4000").all() as { summary: string }[];
+    const summaries = db.prepare(`SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ${LATEST_SUMMARY_LIMIT}`).all() as { summary: string }[];
     const latest = new Map<string, { coverageLow?: boolean; rule?: string }>();
     for (const row of summaries) {
       try {

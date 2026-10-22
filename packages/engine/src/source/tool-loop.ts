@@ -436,13 +436,21 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         continue;
       }
       const repo = readArg(call.argumentsJson, "repo");
-      const root = repo ? input.cross?.roots[repo] : input.repoPath;
+      // 仓名由模型给出：`__proto__`、`constructor` 这类原型属性名在普通对象上取得到真值，会被当成可访问的仓库往下读并把整回合抛死
+      const roots = input.cross?.roots;
+      const root = repo ? (roots && Object.hasOwn(roots, repo) ? roots[repo] : undefined) : input.repoPath;
       if (!root) {
         messages.push({ role: "tool", toolCallId: call.id, content: `未知仓库「${repo}」；可访问：当前仓${crossNames.length ? ` / ${crossNames.join(" / ")}` : "（地址簿里没有其他仓，跨仓请省略 repo 参数）"}。` });
         continue;
       }
       if (repo && crossReads >= (input.cross?.maxCrossReads ?? 2)) {
         messages.push({ role: "tool", toolCallId: call.id, content: `跨仓读取最多 ${input.cross?.maxCrossReads ?? 2} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。` });
+        continue;
+      }
+      // 读文件额度逐条判：轮首那次判据（上面 `succeededReads >= input.maxCalls`）只挡得到「下一轮」，
+      // 模型在同一轮里连发十个 read_file 时，不在这里挡就真读十个——「本次最多读 N 个」就成了空话。
+      if (succeededReads >= input.maxCalls) {
+        messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
         continue;
       }
       input.onProgress?.({ type: "reading", path: repo ? `${repo}/${readPathHint(call.argumentsJson)}` : readPathHint(call.argumentsJson) });
@@ -537,7 +545,7 @@ function readQueryHint(argumentsJson: string): string {
 */
 /** 工具结果完整保留最近几轮：更早的正文可再生（再调一次同一个工具就有），不值得逐轮重付。 */
 export const TOOL_CONTEXT_KEEP_ROUNDS = 2;
-/** 折叠后保留的身份行取自结果开头，最多两行、200 字符：再多就成了一段小摘录，折叠白折。 */
+/** 折叠后保留的身份行取自结果开头，最多两行：首行整行保留，第二行起受 200 字符上限；再多就成了一段小摘录，折叠白折。 */
 const MASK_HEAD_CHARS = 200;
 
 function headLinesOf(content: string): string {

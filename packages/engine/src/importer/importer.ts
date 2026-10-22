@@ -22,6 +22,7 @@ import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { catalogRepositoryId, hash, id } from "../identity.js";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
+import { tutorDataDir } from "../tutor-home.js";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
@@ -59,7 +60,7 @@ export interface ImportedRepository {
   产物本来就分仓存在各自的 `.tutor/` 里，内存态也是 `Map<repositoryId, …>`，所以地址簿是列表而不是单槽。
   */
 function registryFile(): string {
-  return process.env.TUTOR_REGISTRY_FILE ?? join(homedir(), ".codebase-tutor", "repositories.json");
+  return process.env.TUTOR_REGISTRY_FILE ?? join(tutorDataDir(), "repositories.json");
 }
 
 function readRegistry(): string[] {
@@ -212,6 +213,9 @@ export class ImportService extends EventEmitter {
     const repositoryPath = validateRepositoryPath(inputPath);
     const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString(), ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) };
     this.jobs.set(job.id, job);
+    // 排队回调继承「挂上去那一刻」的请求上下文：导入由 POST /api/imports 排队，它那几分钟里发生的
+    // journal / llm.log 行因此都带着这个 reqId——这是「这一次导入花了哪些钱」唯一的关联键，别断开。
+    // 监听器叫醒的重分析没有请求，traceId 为 null，靠 detail 里的 repositoryId 与 job 认。
     this.queue = this.queue.then(() => this.run(job.id)).catch(() => undefined);
     return job;
   }

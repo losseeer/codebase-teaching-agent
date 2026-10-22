@@ -110,12 +110,10 @@ export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionF
   for (const site of sites) site.block = blockFor(cfg, site.line);
 
   const keyOf = (site: Site): string => `${site.name}@${site.line}`;
-  const owners = new Map<string, Site>();
   const gen = new Map<number, string[]>();
   const kill = new Map<number, Set<string>>();
   for (const block of cfg.blocks) {
     const inBlock = defs.filter((site) => site.block === block.id);
-    for (const site of inBlock) owners.set(keyOf(site), site);
     const names = new Set(inBlock.map((site) => site.name));
     gen.set(block.id, [...names].map((name) => keyOf(inBlock.filter((site) => site.name === name).at(-1)!)));
     kill.set(block.id, new Set(inBlock.map(keyOf)));
@@ -146,11 +144,14 @@ export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionF
   }
 
   const reachingLines = (site: Site): number[] => {
-    const alive = new Set(incoming.get(site.block) ?? []);
-    for (const key of gen.get(site.block) ?? []) {
-      const owner = owners.get(key);
-      if (owner?.name === site.name && owner.line <= site.line) alive.add(key);
+    const alive = new Set<string>(incoming.get(site.block) ?? []);
+    // 块内 gen 只留这个块最后一次定义，所以「写在读之前、读完又写一次」这种直线写法里，读之前那次会被挤掉，
+    // 报成「读不到可达定义」。按使用点行号单独捞一次块内定义。
+    let lastBefore: Site | undefined;
+    for (const other of defs) {
+      if (other.block === site.block && other.name === site.name && other.line <= site.line && (lastBefore === undefined || other.line > lastBefore.line)) lastBefore = other;
     }
+    if (lastBefore) alive.add(keyOf(lastBefore));
     return [...alive].filter((key) => key.split("@")[0] === site.name).map((key) => Number(key.split("@")[1])).sort((a, b) => a - b);
   };
 

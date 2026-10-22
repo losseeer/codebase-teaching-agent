@@ -112,13 +112,15 @@ export function readMcpConfigs(file = mcpConfigFile()): { servers: McpServerConf
     if (typeof raw?.url === "string" && raw.url.trim()) { skipped.push({ server: name, reason: "远程 server（url/type）没接：外部调用的出境记账与 fail-closed 是前置（#175）" }); continue; }
     if (typeof raw?.command !== "string" || !raw.command.trim()) { skipped.push({ server: name, reason: "本地 server 缺 command" }); continue; }
     const allowed = Array.isArray(raw.allowedTools) ? raw.allowedTools : Array.isArray(raw.tools) ? raw.tools : [];
+    // 「没写白名单」与「写了空数组」是两个读数：空数组是用户显式要「这台一个都不给」，不能退成全放行
+    const declared = raw.allowedTools !== undefined || raw.tools !== undefined;
     servers.push({
       name,
       command: raw.command,
       ...(Array.isArray(raw.args) ? { args: raw.args.map(String) } : {}),
       ...(typeof raw.cwd === "string" ? { cwd: raw.cwd } : {}),
       ...(raw.env && typeof raw.env === "object" ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).map(([key, value]) => [key, String(value)])) } : {}),
-      ...(allowed.length ? { allowedTools: allowed.map(String) } : {})
+      ...(declared ? { allowedTools: allowed.map(String) } : {})
     });
   }
   return { servers, skipped };
@@ -148,7 +150,7 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
     const listed = await client.listTools();
     // 白名单两种写法都认：完整 id 按这台 server 的名字剥前缀（server 名允许下划线），裸工具名照原样比
     const prefix = `mcp__${config.name}__`;
-    const allowed = config.allowedTools?.length ? new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry))) : undefined;
+    const allowed = config.allowedTools ? new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry))) : undefined;
     const tools: LlmTool[] = [];
     const origin = new Map<string, string>();
     for (const tool of listed.tools) {
@@ -222,8 +224,12 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
       const outcome = await withTimeout(entry.client.callTool({ name: entry.origin.get(name) as string, arguments: args }), limit);
       const ms = Date.now() - started;
       if (!outcome.ok) {
-        // 调用本身失败 = 这条连接大概率已经死了：从池里摘掉，下一个回合重连（留着就是每轮都报超时）
-        if (outcome.reason === "failed") pool.delete(entry.server);
+        // 调用本身失败 = 这条连接大概率已经死了：从池里摘掉，下一个回合重连（留着就是每轮都报超时）。
+        // 摘池不等于收尾——子进程是 SDK 在 `close()` 里杀的，不关掉它下一回合重开一条，旧的就在机器上挂到引擎退出。
+        if (outcome.reason === "failed") {
+          void entry.client.close().catch(() => undefined);
+          pool.delete(entry.server);
+        }
         const text = outcome.reason === "timeout"
           ? `外部工具「${entry.server}/${entry.origin.get(name)}」${limit / 1000}s 没回话（这台 server 是外部程序，可能卡住了）。请基于已有信息回答，并说明这一项没核实。`
           : `外部工具「${entry.server}/${entry.origin.get(name)}」这条连接没打通（子进程退了或已经断了）。这一项没核实，请基于已有信息回答。`;
@@ -249,7 +255,9 @@ export async function closeExternalTools(): Promise<void> {
   for (const entry of entries) await entry?.client.close().catch(() => undefined);
 }
 
-/** 清空连接池：测试收尾用。改了配置文件本身需要重启引擎才生效（没有热加载入口，读数里会照实这么写）。 */
+/** 清空连接池并把子进程关掉：测试收尾用（改了配置文件本身需要重启引擎才生效，没有热加载入口，读数里会照实这么写）。 */
 export function resetExternalTools(): void {
+  const pending = [...pool.values()];
   pool.clear();
+  for (const entry of pending) void entry.then((connected) => connected?.client.close().catch(() => undefined), () => undefined);
 }

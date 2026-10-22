@@ -14,7 +14,7 @@ import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/shared";
 import { loadDotEnv } from "../boot.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../llm/runtime.js";
 import { generateCodeExercise } from "../exercises/code-generate.js";
-import { isolationStatus } from "../sandbox/isolation.js";
+import { ensureIsolation } from "../sandbox/isolation.js";
 import { resolve } from "node:path";
 
 const repositoryPath = resolve(process.argv[2] ?? "");
@@ -54,7 +54,15 @@ if (!chosen.length) { console.log("- 这门仓里没有合适的候选单元"); 
 const unit = chosen[0]!;
 console.log(`# 真模型出题探针 · ${repositoryPath.split("/").pop()}`);
 console.log(`\n- 模型：${provider.modelVersion}｜候选单元 ${candidates.length} 个｜本次挑的是 ${unit.symbol.name}（${unit.symbol.path}:${unit.symbol.line}-${unit.symbol.endLine}，${unit.symbol.language}，${unit.symbol.parameters.length} 个参数）`);
-console.log(`- 隔离：${isolationStatus().level}（${isolationStatus().reason}）`);
+// 探一次（探过就认缓存），读数才与线上同源：不探就永远读到 unknown，与产品闸门两个说法
+const isolationProbe = await ensureIsolation();
+console.log(`- 隔离：${isolationProbe.level}（${isolationProbe.reason}）`);
+if (isolationProbe.level !== "enforced") {
+  // 与产品同一道闸门：`nextCode` 现在在发模型请求之前就拒。探针跟着它走，否则这里会白烧一次出题调用，
+  // 报出来的还是「沙箱不可用」——花钱的探针不能替产品撒谎。
+  console.log("\n沙箱不可用，这一趟不发模型请求（零花费）。");
+  process.exit(0);
+}
 console.log(`- 题型：${kind}\n`);
 
 const started = Date.now();

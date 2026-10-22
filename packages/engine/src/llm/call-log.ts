@@ -1,10 +1,10 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { hash } from "../identity.js";
 import { logTargetFromEnv } from "../trace/log-target.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
 import { currentThreadId, currentTraceId } from "../trace/context.js";
+import { tutorDataDir } from "../tutor-home.js";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。
@@ -75,7 +75,7 @@ function attemptStats(value: unknown): { attempts?: number; attemptMs?: number[]
   return { ...(attempts === undefined ? {} : { attempts }), ...(attemptMs?.length ? { attemptMs } : {}) };
 }
 
-const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "llm.log");
+const DEFAULT_LOG_FILE = join(tutorDataDir(), "llm.log");
 
 /** 当前日志目标文件；null = 只打控制台（`TUTOR_LLM_LOG=off`）。每次读取，便于测试用 env 切换。 */
 export function llmLogPath(): string | null {

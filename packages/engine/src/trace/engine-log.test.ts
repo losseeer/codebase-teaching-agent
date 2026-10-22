@@ -3,12 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { engineLogPath, flushEngineLog, formatEngineTraceLine, traceEngine } from "./engine-log.js";
-import { runWithTrace } from "./context.js";
+import { currentTraceId, runWithTrace } from "./context.js";
 import type { EngineTraceEvent } from "@codebase-tutor/shared";
 
 /**
   落盘要逐行可机读、回显只给非 http/boot 的种类；LLM 调用明细不在这一条线（同一事实只写一处，靠 traceId 关联 llm.log）。
   */
+
+describe("traceId 上下文的传播", () => {
+  it("排队回调继承「挂上去那一刻」的上下文；出了上下文回 null", async () => {
+    const seen = await runWithTrace("req-A", async () => {
+      await Promise.resolve();
+      return Promise.resolve().then(() => currentTraceId());
+    });
+    // 这一条钉住 `importer.submit` 的排队语义：导入是这么排队的，所以它几分钟内的 journal / llm.log 行
+    // 都带着来源请求的 reqId——那是「这一次导入花了哪些钱」唯一的关联键，断开就没法回查。
+    expect(seen).toBe("req-A");
+    expect(currentTraceId(), "监听器叫醒的重分析没有请求上下文，读数是 null").toBeNull();
+  });
+});
 
 describe("引擎工作日志", () => {
   let directory: string;

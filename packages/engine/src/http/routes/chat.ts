@@ -21,7 +21,7 @@ import type { FastifyInstance } from "fastify";
 
 /**
   三作用域对话中的两个（宏观设计 / 练习答疑）：map-chat 流式、practice-chat 流式、以及带外的「停止生成」。
-  开火闸门 `scopedChatProviderOr422` 由四个消费方（含教学回合）共用同一句 422 文案。
+  开火闸门 `scopedChatProviderOr422` 有三个调用点（本文件两处、教学回合 `teaching.ts` 一处），共用同一句 422 文案。
  */
 export function registerChatRoutes(app: FastifyInstance): void {
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。

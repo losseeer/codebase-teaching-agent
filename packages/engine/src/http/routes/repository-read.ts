@@ -40,8 +40,9 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/r
   源码查看（GUI 的源码面板与练习锚点用）。
 
   只放已索引的文件，不是「仓库里的任何文件」：`.env`、私钥这类密钥载体本来就不在索引扩展名白名单里，
-  所以按索引集合放行等于借用同一份边界；裸 `readFileSync` 会绕过名单，
-  让本机任意进程乃至任意打开的网页（CORS 全放开）读出被学习仓库里的密钥。
+  所以按索引集合放行等于借用同一份边界；裸 `readFileSync` 会绕过名单，让不带 Origin 的本机调用方
+  （curl、别的本机进程）读出被学习仓库里的密钥——这一道没有认证闸，是已接受的代价。
+  浏览器里的跨源请求受来源闸约束：非可信 Origin 当场 403，handler 一行都不跑（判据见 `security/origins.ts`）。
   GUI 的取参来源全是锚点 / 文件树，都在索引里，收紧不改变正常动线。
   */
 app.get<{ Params: { repositoryId: string }; Querystring: { path?: string; line?: string } }>("/api/repositories/:repositoryId/source", async (request, reply) => {

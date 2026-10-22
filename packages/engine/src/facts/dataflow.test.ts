@@ -57,6 +57,19 @@ describe("到达定义", () => {
     expect(y.uses.find((use) => use.line === 4)?.reaches).toEqual([3]);
   });
 
+  it("同一块里两写夹一读：写在读之前的那次要报到达，不能被块末的最后一次定义挤掉", () => {
+    const fact = flow([
+      "function f() {",
+      "  let x = 1;",
+      "  use(x);",
+      "  x = 2;",
+      "}"
+    ]);
+    const x = variable(fact, "x");
+    expect(x.uses.find((use) => use.line === 3)?.reaches, "第 3 行的读到达第 2 行的写").toEqual([2]);
+    expect(x.uses.find((use) => use.line === 3)?.reaches, "第 4 行的后写不该混进来").not.toContain(4);
+  });
+
   it("循环里自增：回边让「上一轮的值」也到达本轮的读", () => {
     const fact = flow([
       "function f(n: number) {",

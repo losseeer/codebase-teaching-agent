@@ -105,6 +105,9 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     for (const entry of entries) measureNow(entry.target as HTMLElement);
   })), [measureNow]);
 
+  // 组件都卸载了，就不该再有测量回调打进来：观察者在离场时一律断开。
+  useEffect(() => () => { observer?.disconnect(); }, [observer]);
+
   /** 在 transform 的 scale 里面，offsetWidth 量的仍是世界坐标那份未缩放尺寸——正是边与包围盒要的那份。 */
   const attachNode = useCallback((element: HTMLDivElement | null): void => {
     if (!element) return;

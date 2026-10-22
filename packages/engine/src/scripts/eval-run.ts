@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { RepositoryAnalysis } from "@codebase-tutor/shared";
 import { loadDotEnv } from "../boot.js";
+import { LATEST_SUMMARY_LIMIT } from "../store/database.js";
 import { indexRepository } from "../indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { loadSymbolParser } from "../depgraph/parser.js";
@@ -51,9 +52,9 @@ if (!existsSync(databaseFile)) {
 }
 const database = new DatabaseSync(databaseFile, { readOnly: true });
 
-// L1 摘要按「同文件最新一行」取（与 metrics 同口径），作为检索语料的「摘要在上」臂
+// L1 摘要按「同文件最新一行」取，行数上限与产品语料同一份常量：口径比产品宽，hit@5 就是虚高
 const summaries = new Map<string, string>();
-for (const row of database.prepare("SELECT summary FROM summaries ORDER BY created_at DESC").all() as { summary: string }[]) {
+for (const row of database.prepare(`SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ${LATEST_SUMMARY_LIMIT}`).all() as { summary: string }[]) {
   try {
     const parsed = JSON.parse(row.summary) as { path?: string; summary?: string };
     if (typeof parsed.path === "string" && typeof parsed.summary === "string" && !summaries.has(parsed.path)) summaries.set(parsed.path, parsed.summary);

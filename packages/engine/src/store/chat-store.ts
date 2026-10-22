@@ -83,6 +83,7 @@ export function getThread(repositoryPath: string, threadId: string): ChatThread 
   return row && !row.deleted_at ? threadOf(row) : undefined;
 }
 
+/** 会话列表：按最近更新在前，**只含已有正文的线程**（判据在 `database.listChatSessions`，一处）。 */
 export function listThreads(repositoryPath: string, repositoryId: string, scope: ChatScope, limit = 100): ChatThread[] {
   const rows = withDatabase(repositoryPath, (database) => database.listChatSessions(repositoryId, scope, limit));
   return rows.map(threadOf);

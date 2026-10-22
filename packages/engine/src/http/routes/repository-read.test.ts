@@ -13,8 +13,6 @@ beforeAll(async () => { await fx.mount(); });
 afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
-/** llm.log 落点：每次 provider 调用都要有一行；线程归属必须跟着进来（前缀缓存按线程算间隔靠它）。 */
-
 describe("GET /source 的取文件边界", () => {
   // ⚠️ 本文件后面的用例靠 beforeAll 手工造的产物（锚点在 src/main.ts:3）跑。往 fx.repoDir 写文件这件事本身
   // 不该惊动重分析（收录判据见 indexer 的 isIngestedPath，#163 那条用例钉着），但挪动用例顺序前先想清楚这一条。
@@ -61,5 +59,3 @@ describe("GET /source 的取文件边界", () => {
     rmSync(join(fx.repoDir, "evidence.txt"), { force: true }); // 只摘链接，仓外那份真目标不动
   });
 });
-
-/** UI 动作事件出口：契约里写的「sessionId 有长度上限」得有实现钉住（超长会永久占进 append-only 的审计线）。 */

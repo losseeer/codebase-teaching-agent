@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { repositoryId as deriveRepositoryId } from "../../identity.js";
 import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
-import { appendMessages, createThread } from "../../store/chat-store.js";
+import { appendMessages, createThread, softDeleteThread } from "../../store/chat-store.js";
 
 /**
   会话线程：线程 id 由引擎发，正文落在各自仓的 chat_message 里；仓被移出地址簿之后，线程仍可只凭 threadId 定位（读侧不靠内存挂载）。
@@ -50,7 +50,24 @@ describe("未挂载仓库的线程仍可定位", () => {
   });
 });
 
-/**
-  代码题的题型闸门：出题与判分的端到端住在 `src/exercises/code-generate.test.ts`（真沙箱跑全链），
-  这一层只留确定性的那一条——旧题型必须被闸门拦下。
-*/
+/** 会话下拉的取数口径：只列谈过的会话，但当前打开着的那条空壳要被认下来。 */
+describe("线程清单的收录口径", () => {
+  it("零消息的会话不进列表；?current 认下正打开的那条，删掉或不属于这个作用域才回 null", async () => {
+    const unsent = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "刚点新建" });
+    const talked = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "谈过的" });
+    expect(appendMessages(fx.repoDir, talked.id, [{ role: "user", content: "谈过一句" }])).toBe(true);
+
+    const plain = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=map` });
+    expect((plain.json() as { threads: { title: string }[] }).threads.map((thread) => thread.title)).toEqual(["谈过的"]);
+    expect(plain.json()).toMatchObject({ current: null });
+
+    const asked = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=map&current=${unsent.id}` });
+    expect((asked.json() as { current?: { id?: string } }).current?.id, "空壳不在清单里，但界面正开着它——剪枝判据要用这一格").toBe(unsent.id);
+
+    const elsewhere = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "teach", title: "教学的" });
+    expect((await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=map&current=${elsewhere.id}` })).json()).toMatchObject({ current: null });
+
+    expect(softDeleteThread(fx.repoDir, unsent.id)).toBe(true);
+    expect((await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=map&current=${unsent.id}` })).json()).toMatchObject({ current: null });
+  });
+});

@@ -11,6 +11,7 @@ import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/prov
 import { TutorDatabase } from "../store/database.js";
 import { readJournal } from "../store/journal.js";
 import { RepositoryHandle } from "../store/repository-handle.js";
+import { resetIsolationForTest, stubIsolationForTest } from "../sandbox/isolation.js";
 import { selectZpdTarget } from "./zpd.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
@@ -228,6 +229,28 @@ describe("M2.1 learner scheduling", () => {
     ], [{ unitId: "recent", level: 2, attempts: 3, successes: 2, lastPracticedAt: "2026-01-03T00:00:00.000Z" }]);
     expect(selected).toBeDefined();
     expect(Math.abs(selected!.difficulty - 2)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("沙箱这一关走在扣钱之前", () => {
+  it("隔离不可用 ⇒ 代码题直接拒，provider 一次都没被打", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const unit = repository.analysis.implementations.find((candidate) => candidate.symbol.language === "typescript") ?? repository.analysis.implementations[0]!;
+    const sent: LlmCompletionInput[] = [];
+    const provider: LlmProvider = {
+      name: "fake", modelVersion: "fake-model",
+      complete: async (input) => { sent.push(input); return { text: "{}", finishReason: "stop" }; }
+    };
+    stubIsolationForTest({ level: "unavailable", backend: "seatbelt", checks: [], probedAt: new Date().toISOString(), durationMs: 0, reason: "探测没过（测试注入）" });
+    try {
+      await expect(service.next(repository, { kind: "patch_edit", targetUnitId: unit.id }, provider)).rejects.toThrow("沙箱当前不可用");
+      // 改之前这一段是先烧一次 ≈6k token 的出题调用、再在 runSandbox 抛错——「整域禁用」就成了只写在 README 里的话
+      expect(sent).toEqual([]);
+      expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload).toMatchObject({ stage: "sandbox_unavailable", family: "code" });
+    } finally {
+      resetIsolationForTest();
+    }
   });
 });
 

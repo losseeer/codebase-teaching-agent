@@ -6,6 +6,7 @@ import { repositoryId, hash } from "../identity.js";
 import { graphExtensions } from "../depgraph/graph.js";
 import { deniedSecretNameReason } from "../source/read-file.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
+import { traceEngine } from "../trace/engine-log.js";
 
 /**
   索引只收「扩展名白名单」：全量收会一路收进 .png/.mp4/锁文件，既花字节也毁掉热点计数。
@@ -160,7 +161,11 @@ function gitHotspots(repositoryPath: string, ignore: ReturnType<typeof createTut
     }
     return [...changes.entries()].map(([path, count]) => ({ path, changes: count }))
       .sort((a, b) => b.changes - a.changes || a.path.localeCompare(b.path)).slice(0, 30);
-  } catch {
+  } catch (error) {
+    // 「这仓没有 git」走上面那条 return；走到这里说明 git 跑起来了却没交出可读的历史
+    // （超过 maxBuffer、被信号杀掉、二进制不在）。两种情况都返回空，但只有后者要出声——
+    // 否则界面「Git 热点」空着，谁都不知道是没数据还是读崩了。
+    traceEngine("degrade", { component: "hotspots", cause: error instanceof Error ? error.message : String(error) });
     return [];
   }
 }

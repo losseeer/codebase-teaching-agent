@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
 
 /**
-  代码题从出题到判分走完整路由：沙箱真跑、判分不落模型，出网与审计各自留痕。
+  练习路由这一层的闸门读数：题型拒收。
+  出题与判分的沙箱实跑住在 `exercises/code-generate.test.ts`，「沙箱不可用要在付费前拒」住在 `exercises/exercises.test.ts`。
  */
 const fx: RouteFixture = createRouteFixture();
 

@@ -9,11 +9,23 @@ import { applyThinking } from "./thinking.js";
 export function screenOutbound(input: LlmCompletionInput): LlmCompletionInput {
   const system = maskSecrets(input.system);
   const user = typeof input.user === "string" ? maskSecrets(input.user) : { text: input.user, masked: 0 };
+  let messageMasked = 0;
   const messages = input.messages?.map((message) => {
-    const screened = typeof message.content === "string" ? maskSecrets(message.content) : undefined;
-    return screened && screened.masked ? { ...message, content: screened.text } : message;
+    const content = typeof message.content === "string" ? maskSecrets(message.content) : undefined;
+    // 工具参数与 reasoning 也是出网正文：多轮循环里模型把学习者贴进来的 key 复述进这两处，不过筛就原样发走
+    const reasoning = typeof message.reasoningContent === "string" ? maskSecrets(message.reasoningContent) : undefined;
+    const toolCalls = message.toolCalls?.map((call) => maskSecrets(call.argumentsJson));
+    const hits = (content?.masked ?? 0) + (reasoning?.masked ?? 0) + (toolCalls?.reduce((sum, call) => sum + call.masked, 0) ?? 0);
+    if (!hits) return message;
+    messageMasked += hits;
+    return {
+      ...message,
+      ...(content ? { content: content.text } : {}),
+      ...(reasoning ? { reasoningContent: reasoning.text } : {}),
+      ...(toolCalls ? { toolCalls: toolCalls.map((call, index) => (call.masked ? { ...message.toolCalls![index], argumentsJson: call.text } : message.toolCalls![index])) } : {})
+    };
   });
-  const masked = system.masked + user.masked + (messages?.filter((message, index) => message !== input.messages?.[index]).length ?? 0);
+  const masked = system.masked + user.masked + messageMasked;
   if (!masked) return input;
   return {
     ...input,
@@ -501,7 +513,8 @@ export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLl
   const baseUrl = trimmed(overrides.baseUrl);
   const apiKey = trimmed(overrides.apiKey);
   const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel(provider);
-  const timeoutMs = Number(process.env.TUTOR_LLM_TIMEOUT_MS ?? 12_000);
+  // 留空与非法值都回落到默认：`Number("")` 是 0，而 0ms 定时器会把每一发真实请求当场判成超时（重试层再补一发，全部模型路径瘫痪）
+  const timeoutMs = Math.max(1_000, Number(process.env.TUTOR_LLM_TIMEOUT_MS) || 12_000);
   if (provider === "anthropic") return { provider, model, baseUrl: baseUrl || "https://api.anthropic.com", apiKey: apiKey || process.env.ANTHROPIC_API_KEY, timeoutMs };
   if (provider === "ollama") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OLLAMA_URL || "http://127.0.0.1:11434", timeoutMs };
   return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };

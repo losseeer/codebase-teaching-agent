@@ -77,7 +77,6 @@ describe("教学作用域（SSE）", () => {
   });
 });
 
-/** 语言画像：架构视图要能说清「这条边有多硬」，而这份口径只能读侧实时计算。 */
 describe("LLM 工作日志的账面一致性", () => {
   it("每次 provider 调用追加一行，threadId 与本文件用过的线程全等，失败只允许是中止", async () => {
     await fx.verifyLlmLog({ expectAborted: false, scenes: ["teaching.turn"] });

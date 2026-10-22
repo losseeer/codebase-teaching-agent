@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
 /** 读被学习仓库源码的三件底层小件：仓内边界判定、把一个文件读成行、按符号取行区间。 */
@@ -15,8 +15,11 @@ export function isWithin(root: string, candidate: string): boolean {
   由调用方决定「缺席」还是「待确认」。实现单元、质量校验、练习出题共用这一份读行口径。
   */
 export function readFileLines(repositoryPath: string, relativePath: string): string[] | undefined {
+  const absolute = join(repositoryPath, relativePath);
   try {
-    return readFileSync(join(repositoryPath, relativePath), "utf8").split(/\r?\n/);
+    // 非普通文件（命名管道、设备节点）的同步读没有 EOF，一次调用就把单线程引擎冻住
+    if (!statSync(absolute).isFile()) return undefined;
+    return readFileSync(absolute, "utf8").split(/\r?\n/);
   } catch {
     return undefined;
   }

@@ -242,7 +242,13 @@ export class TutorDatabase {
     this.repositoryPathLabel = repositoryPath;
     this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
     this.db.pragma("journal_mode = WAL");
-    this.migrate();
+    try {
+      this.migrate();
+    } catch (error) {
+      // 迁移失败时实例还没交出去，调用方无从 close：schema 版本过高或 ALTER 撞车时每试一次就漏一对 WAL 描述符，攒到 EMFILE
+      this.db.close();
+      throw error;
+    }
   }
 
   private migrate(): void {
@@ -423,6 +429,7 @@ export class TutorDatabase {
     }
   }
 
+  /** `summaries.created_at` 每次写入都取当下（缓存命中也回写）：它是「最近一次被确认 / 刷新的时间」，不是首次生成时间。 */
   putFileSummary(cacheKey: string, value: { path: string; summary: string }): void {
     this.db.prepare("INSERT OR REPLACE INTO summaries(cache_key, summary, created_at) VALUES (?, ?, ?)")
       .run(cacheKey, JSON.stringify(value), new Date().toISOString());
@@ -509,8 +516,18 @@ export class TutorDatabase {
   }
 
   /** 未删会话列表：最近更新在前（GUI 的会话列表口径）。`limit` 兜住长期累积。 */
+  /**
+    会话清单：只回**已经有正文**的线程。
+    零消息的 `chat_session` 行是正常中间态（新建先发行，第一条消息才落正文），但它不该进界面上的会话下拉——
+    那里列的是「谈过的话」，不是「开着的空壳」。行本身留着不删：删行等于作废用户刚点的新建，而且界面还指着这个 id。
+    `chat_message(session_id)` 上有索引，这条 EXISTS 不走全表。
+  */
   listChatSessions(repositoryId: string, scope: string, limit = 100): ChatSessionRow[] {
-    return this.db.prepare("SELECT id, repository_id, scope, scope_ref, exercise_id, title, state_json, created_at, updated_at, deleted_at FROM chat_session WHERE repository_id = ? AND scope = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?")
+    return this.db.prepare(`SELECT s.id, s.repository_id, s.scope, s.scope_ref, s.exercise_id, s.title, s.state_json, s.created_at, s.updated_at, s.deleted_at
+      FROM chat_session s
+      WHERE s.repository_id = ? AND s.scope = ? AND s.deleted_at IS NULL
+        AND EXISTS (SELECT 1 FROM chat_message m WHERE m.session_id = s.id)
+      ORDER BY s.updated_at DESC LIMIT ?`)
       .all(repositoryId, scope, limit) as ChatSessionRow[];
   }
 

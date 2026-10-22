@@ -447,6 +447,28 @@ describe("整仓自环与「每个文件一个源码根」", () => {
       expect(graph.calls.some((call) => call.callerPath === "App.java" && call.calleePath === "Service.java"), "Java 同包不 import 也互相可见").toBe(true);
     }));
 
+  it("Java 无修饰符的声明行不算调用（接口方法与包私有构造器），真递归仍留着", async () =>
+    await withRepo("java-declaration-line", {
+      "IOrder.java": "package com.demo;\n\npublic interface IOrder {\n  String submit();\n}\n",
+      "Holder.java": "package com.demo;\n\npublic class Holder {\n  Holder() {\n    reset();\n  }\n\n  int fact(int n) {\n    if (n > 1) {\n      return n * fact(n - 1);\n    }\n    return 1;\n  }\n\n  void reset() {}\n}\n",
+      "One.java": "package com.demo;\n\npublic class One {\n  int f(int n) { return n > 1 ? n * f(n - 1) : 1; }\n}\n"
+    }, (dir) => {
+      const graph = buildDependencyGraph(dir, indexRepository(dir).files);
+      const byId = new Map(graph.symbols.map((symbol) => [symbol.id, symbol]));
+      // 落在「它自己的声明行」上的自环才是假边：模型据此读到「submit() 调用 submit()」，热点排序也被顶高。
+      // One.java 例外——它是单行函数体，真递归就写在声明那一行，正好处在下面那条断言里。
+      const declaredSelfCall = graph.calls.filter((call) => {
+        const caller = call.callerSymbol ? byId.get(call.callerSymbol) : undefined;
+        return caller !== undefined && caller.id === call.calleeSymbol && call.line === caller.line && call.callerPath !== "One.java";
+      });
+      expect(declaredSelfCall.map((call) => `${call.callerPath}:${call.line}`), "声明行匹配到的「名字(」就是它自己，不是调用").toEqual([]);
+      const fact = graph.symbols.find((symbol) => symbol.name === "fact");
+      expect(graph.calls.some((call) => call.callerSymbol === fact?.id && call.calleeSymbol === fact?.id), "递归调用写在别的行上，这条边要留着").toBe(true);
+      // 单行函数体里递归与声明挤在同一行：按「整行跳过」会把它一起吃掉，所以判据只看左括号之前那一段
+      const one = graph.symbols.find((symbol) => symbol.name === "f");
+      expect(graph.calls.filter((call) => call.callerSymbol === one?.id && call.calleeSymbol === one?.id).length, "单行函数的真递归不能被声明行判据吃掉").toBe(1);
+    }));
+
   it("自环不落依赖边：Go 导自己的包目录、Rust 的 crate 自引用、Python 的绝对自导入", async () =>
     await withRepo("no-self-loop", {
       "go.mod": "module example.com/shop\n\ngo 1.21\n",

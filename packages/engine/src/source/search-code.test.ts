@@ -173,7 +173,9 @@ describe("executeSearchCode 边界行为", () => {
     expect(audit.hits).toBe(20);
     expect(content.length).toBeLessThan(3_000);
     expect(content).toContain("超出结果预算");
-    expect(content).toMatch(/返回前 \d+ 条/);
+    // 抬头那句条数必须等于真给出的条目行：省略提示那一行不算一条结果
+    const claimed = Number(/返回前 (\d+) 条/.exec(content)?.[1] ?? -1);
+    expect(claimed).toBe(content.split("\n").filter((line) => line.startsWith("- ")).length);
   });
 
   it("工具定义要求 query 必填", () => {

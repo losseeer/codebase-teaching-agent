@@ -73,7 +73,9 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "",
     "【语言风格】",
     styleBrief(policy.level),
-    ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/5、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/5）：${faded.reason}。`] : []),
+    // 分母写真实上限（shared `FadedState` 的字面量联合：样例完整度 0|1|2、提示深度 0..3、通俗化 0|1|2）。
+    // 曾经统一写 /5，于是满档读数被模型看成「2/5 = 还差得远」，反过来少给讲解。
+    ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
     `策略：${policy.label}；教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,

@@ -1,6 +1,7 @@
 import type { TutorMessage, TutorSession } from "@codebase-tutor/shared";
 import { importer } from "../services.js";
 import { validateSettings } from "../tutor-settings/tutor-settings.js";
+import { traceEngine } from "../trace/engine-log.js";
 import { appendMessages, createThread, getThread, readMessages, readThreadState, saveThreadState, type NewMessage, type TeachingThreadState } from "../store/chat-store.js";
 
 /**
@@ -47,7 +48,10 @@ export function restoreThreadAsSession(repositoryPath: string, repositoryId: str
 export function persistTeachingTurn(repositoryPath: string, repositoryId: string, scopeRef: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
   if (!appendMessages(repositoryPath, sessionId, messages)) {
     createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, scopeRef, title });
-    appendMessages(repositoryPath, sessionId, messages);
+    if (!appendMessages(repositoryPath, sessionId, messages)) {
+      // 补建线程之后还是写不进，这一轮正文就没了（GUI 重启看到的是空会话）。不可恢复的丢必须出声。
+      traceEngine("degrade", { component: "teaching_turn", action: "persist", cause: `线程补建后正文仍写不进（session ${sessionId}）` });
+    }
   }
   saveThreadState(repositoryPath, sessionId, state);
 }

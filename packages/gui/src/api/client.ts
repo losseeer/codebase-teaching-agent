@@ -269,7 +269,8 @@ export const api = {
     会话线程（产品线真源在引擎的 chat_session / chat_message）：三作用域各一份独立列表。
     删除是软删——列表与正文从此看不见，行仍在库里；journal 另记一条 session_deleted。
     */
-  listThreads: (repositoryId: string, scope: ChatScope) => checked("threads", z.object({ threads: z.array(chatThreadSchema) }), `/api/repositories/${repositoryId}/threads?scope=${scope}`),
+  /** 会话清单：`threads` 只含已有对话记录的会话；`current` 回认界面正打开着的那条（还没发言也认，删了才回 null）。 */
+  listThreads: (repositoryId: string, scope: ChatScope, current?: string) => checked("threads", z.object({ threads: z.array(chatThreadSchema), current: chatThreadSchema.nullable() }), `/api/repositories/${repositoryId}/threads?scope=${scope}${current ? `&current=${encodeURIComponent(current)}` : ""}`),
   createThread: (repositoryId: string, payload: { scope: ChatScope; scopeRef?: string; exerciseId?: string; title?: string }) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
   getThreadMessages: (threadId: string) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages`),
   renameThread: (threadId: string, title: string) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),

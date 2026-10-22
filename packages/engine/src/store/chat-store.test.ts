@@ -55,6 +55,15 @@ describe("会话持久化", () => {
     expect(readMessages(repository, thread.id, 99)).toHaveLength(5);
   });
 
+  it("清单只收谈过的会话：新建后没发言的那条不进列表，行留在库里", () => {
+    const unsent = openThread({ title: "刚点新建" });
+    expect(listThreads(repository, "repo_1", "map").map((thread) => thread.id)).toEqual([]);
+    // 行本身不删：界面还指着这个 id，正文一落库它就进清单
+    expect(getThread(repository, unsent.id)?.title).toBe("刚点新建");
+    appendMessages(repository, unsent.id, [{ role: "user", content: "第一问" }]);
+    expect(listThreads(repository, "repo_1", "map").map((thread) => thread.id)).toEqual([unsent.id]);
+  });
+
   it("软删：列表与正文都看不见，但消息行仍在库里", () => {
     const thread = openThread();
     appendMessages(repository, thread.id, [{ role: "user", content: "会被删掉的问题" }]);

@@ -1,9 +1,9 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/shared";
 import { logTargetFromEnv } from "./log-target.js";
 import { currentTraceId } from "./context.js";
+import { tutorDataDir } from "../tutor-home.js";
 
 /**
   引擎工作日志：记录「引擎这个进程在干活」的事件（请求 / 导入 / 重分析 / 降级 / 启动），不记录对话语义。
@@ -14,7 +14,7 @@ import { currentTraceId } from "./context.js";
   - 写失败只报警告：日志不是主流程，但也不能一声不吭。
   */
 
-const DEFAULT_LOG_FILE = join(homedir(), ".codebase-tutor", "engine.jsonl");
+const DEFAULT_LOG_FILE = join(tutorDataDir(), "engine.jsonl");
 
 /** 不回显控制台的种类：http 已被 pino 覆盖（且 reqId 就是 traceId），boot 已有 `TUTOR_BOOT_TIMING=1` 的 `[boot]` 行。 */
 const CONSOLE_SILENT = new Set<EngineTraceKind>(["http", "boot"]);

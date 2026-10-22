@@ -60,8 +60,3 @@ describe("预算已达上限时不放行付费分支", () => {
     await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
   });
 });
-
-/**
-  本地过筛（零 token）验的是位置：隐去必须发生在下发与落库之前，
-  否则用户已经看见、库里已经存下，再改就是事后修饰。正文由 stub 的 fetch 给定。
-  */

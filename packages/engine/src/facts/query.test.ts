@@ -146,6 +146,23 @@ describe("产物查询门", () => {
     }
   });
 
+  it("旧判据算出的行不当现行读数：按 path 取要说清是版本旧，「全仓找」那条路也不能漏出去", () => {
+    const f = fixture();
+    try {
+      saveFileFacts(f.db, f.id, [{
+        kind: "cfg",
+        path: "legacy/old.ts",
+        payload: { path: "legacy/old.ts", language: "typescript", backend: "ast", version: "facts-v1", functions: [{ symbolId: "symbol:legacy/old.ts:run:1", name: "run", kind: "function", startLine: 1, endLine: 2, blocks: [], edges: [], exitBlocks: [], complexity: 1 }] }
+      }]);
+      const tool = factsQueryTool(f.db, f.id);
+      expect(tool.apply(JSON.stringify({ kind: "cfg", path: "legacy/old.ts" }))).toContain("旧判据算的");
+      expect(tool.apply(JSON.stringify({ kind: "cfg", target: "run" }))).not.toContain("legacy/old.ts");
+    } finally {
+      f.db.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("backend 为 none 的行照实把原因顶到第一行（空图与没判过在门这一层也分得开）", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-none-")));
     const db = new TutorDatabase(root);

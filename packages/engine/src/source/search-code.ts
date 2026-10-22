@@ -24,6 +24,10 @@ const MAX_SYMBOLS_SHOWN = 6;
 const MAX_UNITS_SHOWN = 2;
 /** 摘要进语料与结果的长度上限：防御脏行——超长摘要会挤掉别的命中条目。 */
 const MAX_SUMMARY_CHARS = 160;
+
+function sliceSummary(summary: string): string {
+  return summary.length > MAX_SUMMARY_CHARS ? `${summary.slice(0, MAX_SUMMARY_CHARS)}…` : summary;
+}
 /** 兜底臂的文档频率闸：词元出现在超过这个比例的语料文件里就当通用词丢掉（下限见 FALLBACK_DF_FLOOR）。 */
 const FALLBACK_DF_RATIO = 0.12;
 /** 小仓里比例没有意义（3 条语料时任何词都「无处不在」），所以另设绝对下限。 */
@@ -95,7 +99,8 @@ export function buildSearchCorpus(index: RepositoryIndex, analysis: RepositoryAn
       symbols: names,
       symbolText: names.join(" ").toLowerCase(),
       units,
-      summary: (summaries.get(path) ?? "").slice(0, MAX_SUMMARY_CHARS)
+      // 裁过的摘要要留标记：残句不带记号时，模型把半截职责当成完整描述，据以规划 read_file 落点
+      summary: sliceSummary(summaries.get(path) ?? "")
     });
   }
   return { entries };
@@ -208,9 +213,12 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
   // 兜底最后一级：只有原样查询零命中才重试中文二分切词；关键词式查询本来就有命中，走不到这里。
   // 两道闸（DF 闸 + 同一文件至少 2 枚词元）是它敢进产品的前提：裸切词会把负例切成误命中。
   let segmented = false;
+  // 兜底跑过没有（词元活过文档频率闸）与兜底有没有命中是两条读数；`scored` 为空时兜底分支必进
+  let fallbackTried = false;
   if (!scored.length) {
     const loose = gateFallbackTokens(corpus, queryTokens(segmentForLookup(query), MAX_QUERY_TOKENS * 3));
-    if (loose.length >= FALLBACK_MIN_HITS) {
+    fallbackTried = loose.length >= FALLBACK_MIN_HITS;
+    if (fallbackTried) {
       scored = scoreCorpus(corpus, loose, FALLBACK_MIN_HITS);
       segmented = scored.length > 0;
     }
@@ -219,9 +227,13 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
   // topPaths 跟着 limit 走（审计口径是「模型这一轮真看到了哪几条」，不是「仓里哪几条最好」）
   const audit: CodeSearchRecord = { query, hits: scored.length, topPaths: hits.map((item) => item.entry.path).slice(0, 5), ...(segmented ? { segmented: true } : {}) };
   if (!hits.length) {
-    return { content: `search_code "${query}" 没有命中任何已分析文件${segmented ? "（中文切词兜底也未过闸）" : ""}。可换更短/更通用的检索词，或直接基于已有上下文回答。`, audit };
+    // 两句是真的两个读数：词元全被文档频率闸丢掉 ≠ 词元活下来了但没有文件同时命中两枚（前者换词，后者拆成两次查）
+    const why = fallbackTried ? "（中文切词兜底的词元过了文档频率闸，但没有文件同时命中两枚）" : "（中文切词兜底出来的词元没过文档频率闸）";
+    return { content: `search_code "${query}" 没有命中任何已分析文件${why}。可换更短/更通用的检索词，或直接基于已有上下文回答。`, audit };
   }
   const blocks: string[] = [];
+  // 抬头那句「返回前 N 条」数的是结果条目，省略提示那一行不算一条（截断时会多报 1 条，且与「其余 X 条」对不上）
+  let shown = 0;
   let used = 0;
   for (const item of hits) {
     const symbolNames = item.entry.symbols.slice(0, MAX_SYMBOLS_SHOWN).join(", ") || "（无符号）";
@@ -234,12 +246,13 @@ export function executeSearchCode(corpus: SearchCorpus, argumentsJson: string): 
     const nearest = item.hitUnits.map((unit) => (unit.line === undefined ? unit.name : `${unit.name}:${unit.line}`)).join("、");
     const block = `- ${item.entry.path}（${lines.slice(1) || "行数未知"}${testTag}）【命中 ${item.score}：${matched || "-"}】\n  符号: ${symbolNames}${more}${nearest ? `\n  就近: ${nearest}` : ""}${item.entry.summary ? `\n  职责: ${item.entry.summary}` : ""}`;
     if (used + block.length > MAX_RESULT_CHARS) {
-      blocks.push(`…（其余 ${hits.length - blocks.length} 条超出结果预算已省略，可收窄 query 或调低 limit。）`);
+      blocks.push(`…（其余 ${hits.length - shown} 条超出结果预算已省略，可收窄 query 或调低 limit。）`);
       break;
     }
     blocks.push(block);
+    shown += 1;
     used += block.length;
   }
-  const head = `search_code "${query}"：共 ${scored.length} 个文件命中${segmented ? "（原查询零命中，这里来自中文切词兜底，相关性弱于直接命中——请把它当候选而不是答案）" : ""}，返回前 ${blocks.length} 条（本工具只给位置与职责，正文请用 read_file 读取）：`;
+  const head = `search_code "${query}"：共 ${scored.length} 个文件命中${segmented ? "（原查询零命中，这里来自中文切词兜底，相关性弱于直接命中——请把它当候选而不是答案）" : ""}，返回前 ${shown} 条（本工具只给位置与职责，正文请用 read_file 读取）：`;
   return { content: `${head}\n${blocks.join("\n")}`, audit };
 }

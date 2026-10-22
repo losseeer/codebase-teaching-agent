@@ -7,7 +7,7 @@ import { hash } from "../identity.js";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
-import { runSandbox } from "../sandbox/isolation.js";
+import { ensureIsolation, runSandbox } from "../sandbox/isolation.js";
 import { runnerFingerprint } from "../sandbox/profile.js";
 import { TutorDatabase } from "../store/database.js";
 import { Journal, readJournal } from "../store/journal.js";
@@ -228,6 +228,18 @@ export class ExerciseService {
     if (!provider) {
       const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已达到预算上限。";
       journal.append("exercise_declined", { family: "code", tag: "", reason, stage: "no_provider" });
+      throw new Error(reason);
+    }
+    /**
+      沙箱这一关必须走在付费之前：README 承诺「隔离探测不过则代码题整域禁用」，
+      而 `runSandbox` 的 `SandboxUnavailableError` 要到模型已经出完一份题（≈6k token）才抛——
+      在那台永远出不了题的机器上，每点一次「下一道题」都扣一次钱，账面还看着「沙箱不可用」。
+      这里先探（探过就认缓存，不重复起 canary），不是 `enforced` 就直接拒，一行模型调用都不发。
+    */
+    const isolation = await ensureIsolation();
+    if (isolation.level !== "enforced") {
+      const reason = `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`;
+      journal.append("exercise_declined", { family: "code", tag: "", reason, stage: "sandbox_unavailable" });
       throw new Error(reason);
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
@@ -572,18 +584,19 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, jour
   const files = [...expected.hidden.map((file) => ({ ...file })), ...submitted.map((file) => ({ path: file.path, contents: file.contents }))];
   const run = await runSandbox({ language: expected.language, entry: expected.entry, files, repositoryPath });
   const verdict = verdictOf(run);
+  // journal 的 outcome 与返回给界面的 passed 取同一个布尔值：`TESTS 0 0`（一条断言都没有）时两者必须同向
+  const passed = verdict ? verdict.failed === 0 && verdict.passed >= 1 && run.ok : false;
   journal.append("exercise_run", {
     stage: "grade", label: "learner", language: expected.language, exercise_id: stored.exercise.id,
     verdict_passed: verdict?.passed ?? null, verdict_failed: verdict?.failed ?? null,
     exit_code: run.steps.at(-1)?.exitCode ?? null, timed_out: run.timedOut, truncated: run.truncated,
-    outcome: verdict ? (verdict.failed === 0 && run.ok ? "passed" : "failed") : "no-verdict"
+    outcome: verdict ? (passed ? "passed" : "failed") : "no-verdict"
   });
   if (!verdict) {
     const detail = (run.stderr || (run.timedOut ? "运行超时被终止" : "没有输出")).trim().split("\n").slice(0, 3).join(" / ").slice(0, 400);
     return { score: 0, passed: false, automatic: true, feedbackSource: "sandbox", feedback: `测试没能跑完，所以这一份还没有被判分。沙箱报：${detail}。` };
   }
   const total = verdict.passed + verdict.failed;
-  const passed = verdict.failed === 0 && verdict.passed >= 1 && run.ok;
   return {
     score: total ? verdict.passed / total : 0,
     passed,

@@ -198,6 +198,8 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 
 /**
   会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
+  下拉里只列**谈过的**会话（引擎按正文过滤）；刚点＋建出来、还没发言的那条不占列表位，
+  单独显示成「（还没有发言的会话）」，第一句话落库后它才带真标题进列表。
   切哪条就按 threadId 回读哪条的历史。删除是软删：列表与正文从此看不见，
   库里的行与 journal 的审计事件（session_deleted）都还在。
  */
@@ -205,6 +207,9 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
   const list = t.chatThreads[scope];
   const currentId = t.currentThreadId[scope];
   const current = list.find((thread) => thread.id === currentId);
+  // 清单里没有当前这条 = 它还没发言（引擎的会话列表只收有正文的线程），此时给它在下拉里留自己的位置；
+  // 否则 select 的值落不到任何 option 上，浏览器会显示成「选了第一条」。
+  const unsent = Boolean(currentId) && !current;
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   if (renaming) {
@@ -233,9 +238,11 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
           className="select"
           value={currentId ?? ""}
           aria-label={`切换会话（${SCOPE_LABEL[scope]}）`}
+          title="只列谈过的会话"
           onChange={(event) => t.switchThread(scope, event.target.value || null)}
         >
-          {currentId || list.length ? <option value="">（新会话）</option> : <option value="">还没有会话，直接提问即可新建</option>}
+          {!currentId ? <option value="">{list.length ? "（新会话）" : "（还没有会话）"}</option> : null}
+          {unsent ? <option value={currentId ?? ""}>（还没有发言的会话）</option> : null}
           {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
         </select>
       </div>

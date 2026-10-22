@@ -29,6 +29,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
   const layout = useLayout();
   const openedPaths = useRef<string[]>([]);
+  const sourceSeq = useRef(0);
   const lastAutoAnchor = useRef<string | null>(null);
   const paletteRef = useRef<HTMLDivElement | null>(null);
 
@@ -42,8 +43,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   }, [repositoryId, everVisible, t.dataVersion]);
 
   const loadSource = useCallback(async (path: string, line: number, open: { toast?: boolean; trigger?: "manual" | "auto" | "tab" } = {}): Promise<void> => {
+    const seq = ++sourceSeq.current;
     try {
       const next = await api.getSource(repositoryId, path, line);
+      // 连点两个文件时迟到那份不落格：右栏内容、页签与教学作用域都要跟着最后一次点击走，否则发问绑到错的作用域
+      if (seq !== sourceSeq.current) return;
       setSource(next);
       const isNewFile = !openedPaths.current.includes(path);
       setTabs((current) => {

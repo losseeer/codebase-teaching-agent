@@ -97,6 +97,14 @@ describe("连上与清单", () => {
     expect(surface?.errors).toEqual([{ server: "pick", reason: "连上了但它报的工具都不在白名单里" }]);
   });
 
+  it("allowedTools 写成空数组是「一个都不给」，不是「没写」：不能退成全放行", async () => {
+    configure({ none: stdio([]) });
+    const surface = await externalToolSurface();
+    expect(surface, "空白名单也要带回 errors，不能让调用方以为这台没配工具").toBeDefined();
+    expect(surface?.tools).toEqual([]);
+    expect(surface?.errors.map((entry) => entry.reason)).toContain("连上了但它报的工具都不在白名单里");
+  });
+
   it("子进程起不来 → 一个工具都不给，原因进读数，不抛", async () => {
     configure({ "broken-boot": { command: "/nonexistent/tutor-fixture-binary" } });
     const surface = await externalToolSurface();

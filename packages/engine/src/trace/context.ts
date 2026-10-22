@@ -8,8 +8,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
   下一个钩子/handler，所以在 `run` 回调内调用 `done()` 后续钩子与 handler 才继承该 store；
   先 `done()` 再 `run()`、或在 handler 里设值，store 都传不下去。
 
-  后台任务（导入、fs 监听触发的重分析）不在任何请求上下文里 → `currentTraceId()` 返回 null，
-  各自用自己的事件标识（如 `job:<jobId>`）写在 detail 里。
+  后台任务分两种读数，别当成一个：
+  - **导入**由 `POST /api/imports` 排队，`.then` 回调继承挂上去那一刻的上下文 → 它那几分钟里的 journal / llm.log
+    行都带着这个 reqId。这是「这一次导入花了哪些钱」唯一的关联键，所以刻意不断开（reqId 对应的请求早已结束，
+    读轨迹时按「活动的来源请求」理解，不是「请求还没跑完」）。
+  - **监听器叫醒的重分析**没有请求上下文 → `currentTraceId()` 返回 null，靠 detail 里的 `repositoryId` / `job` 认。
   */
 
 interface TraceContext {

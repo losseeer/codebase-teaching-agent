@@ -280,6 +280,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const [error, setError] = useState("");
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const [chatThreads, setChatThreads] = useState<Record<Scope, ChatThread[]>>({ map: [], teaching: [], practice: [] });
+  /** 引擎认下来、但清单不收的那一条（还没发言的新会话）：切作用域与开机恢复都要靠它认回当前会话。 */
+  const [unsentThread, setUnsentThread] = useState<Partial<Record<Scope, ChatThread>>>({});
   const [currentThreadId, setCurrentThreadId] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
   // 渲染期镜像：切线程、清选择这些动作要读「此刻的当前线程」，setState 的异步值不可用
   const currentThreadRef = useRef(currentThreadId);
@@ -401,7 +403,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   /** 网络恢复时最可能已经落库：把有欠账的作用域各回读一次。 */
   const reconcilePending = (): void => {
     for (const target of SCOPES) {
-      if (hasDebt(target)) void loadThread(target, currentThreadRef.current[target]!);
+      // 在途回合的正文还没落库：这时回读等于用旧正文覆盖侧栏（而且这一轮的欠账本来就等着 settle 去清）
+      if (hasDebt(target) && activeTurn.current?.scope !== target) void loadThread(target, currentThreadRef.current[target]!);
     }
   };
   // 处理器只装一次，通过 ref 调最新闭包：loadThread 读的是渲染期的 scopeRef
@@ -480,6 +483,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         if (thread?.scopeRef && thread.scopeRef !== scopeRef) setScopeRefState(thread.scopeRef);
         const restored = await api.getSession(threadId);
         if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
+        // 迟到的旧响应不落格（`place()` 里同一道守卫）：三个 setter 不看它的话，A 线程的会话会盖住正在看的 B，
+        // 下一问就顺着 session 发进 A 里
+        if (currentThreadRef.current.teaching !== threadId) return;
         setScopeRefState(restored.scopeRef);
         setSession(restored);
         setSettingsState(restored.settings);
@@ -514,22 +520,34 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   const switchThread = (scope: Scope, threadId: string | null): void => setCurrentThread(scope, threadId);
 
-  /** 拉某作用域的线程清单（引擎为准，按更新时间倒序）：清单里没有的当前线程直接放弃——它可能在别处被删了。 */
-  const refreshThreads = async (scope: Scope): Promise<ChatThread[]> => {
-    if (!repositoryId) return [];
+  /**
+    拉某作用域的线程清单（引擎为准，按更新时间倒序）：引擎只列**谈过的**会话，
+    `current` 回认我们正打开着但还没发言的那条。
+    剪枝只在「引擎说这条已经不存在」时发生——清单里没有它不等于它没了，只等于它还没第一句话；
+    拿清单当唯一依据会把刚点「新建」还没发言的那条剪掉。
+  */
+  const refreshThreads = async (scope: Scope): Promise<{ threads: ChatThread[]; current: ChatThread | null }> => {
+    if (!repositoryId) return { threads: [], current: null };
+    // 发请求前先记住「此刻开着哪条」：引擎的 `current` 问的是这一条，剪枝也只能据它判。
+    // 用 await 之后的值会剪错——新建会话的回合里，响应落地时当前线程已经换成刚建的那条了。
+    const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId ?? null;
+    const opened = currentThreadRef.current[scope] ?? remembered;
     let list: ChatThread[];
+    let current: ChatThread | null;
     try {
-      list = (await api.listThreads(repositoryId, CHAT_SCOPE[scope])).threads;
+      const fetched = await api.listThreads(repositoryId, CHAT_SCOPE[scope], opened ?? undefined);
+      list = fetched.threads;
+      current = fetched.current;
     } catch {
       // 引擎重启后仓库要先重新导入，清单暂时拿不到：保留上次所见，不清空选择
-      return chatThreadsRef.current[scope];
+      return { threads: chatThreadsRef.current[scope], current: null };
     }
     setChatThreads((prev) => ({ ...prev, [scope]: list }));
     chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+    setUnsentThread((prev) => ({ ...prev, [scope]: current && !list.some((item) => item.id === current.id) ? current : null }));
     patchMemory(scope, { ids: list.map((item) => item.id) });
-    const current = currentThreadRef.current[scope];
-    if (current && !list.some((item) => item.id === current)) setCurrentThread(scope, null);
-    return list;
+    if (opened && !list.some((item) => item.id === opened) && current?.id !== opened) setCurrentThread(scope, null);
+    return { threads: list, current };
   };
 
   /** 建线程（引擎发 id）。teaching 走 createSession——只有它装配策略与学习者画像，同时落 chat_session 行。 */
@@ -549,10 +567,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
         ...(title ? { title } : {})
       });
-      const list = [thread, ...chatThreadsRef.current[scope]];
-      setChatThreads((prev) => ({ ...prev, [scope]: list }));
-      chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
-      patchMemory(scope, { ids: list.map((item) => item.id) });
+      // 不把它插进清单：清单只列谈过的会话，还没发言的这一条由 ThreadBar 单独占一格显示。
       return thread.id;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "新建会话失败");
@@ -607,10 +622,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     let cancelled = false;
     const boot = async (): Promise<void> => {
       for (const scope of ["map", "practice"] as const) {
-        const list = await refreshThreads(scope);
+        const { threads: list, current } = await refreshThreads(scope);
         if (cancelled) return;
         const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId;
-        setCurrentThread(scope, list.find((item) => item.id === remembered)?.id ?? list[0]?.id ?? null);
+        // 记住的那条还活着就回到它（还没发言也算活着——引擎用 current 认它）；否则退回清单第一条
+        const stillOpen = remembered && (current?.id === remembered || list.some((item) => item.id === remembered));
+        setCurrentThread(scope, stillOpen ? remembered : (list[0]?.id ?? null));
       }
       void refreshThreads("teaching");
     };
@@ -629,17 +646,24 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   // 真被别处删掉的线程由 refreshThreads 剪枝。
   useEffect(() => {
     if (!repositoryId || !scopeRef) return;
+    // 教学回合在途时不动线程：清栏或回读都会拿库里那份旧正文覆盖侧栏，刚推上屏的问题就没了。
+    // 代价：途中换的作用域要等回合结束后下一次清单变化才对齐（这一轮的提问仍带着原 session 走，不会串到别的文件）。
+    if (activeTurn.current?.scope === "teaching") return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
     const currentThread = current ? list.find((item) => item.id === current) : undefined;
-    if (current && !currentThread) return; // 清单还没回表（刚新建 / 刚刷新）：这一拍什么都不做
+    if (current && !currentThread) {
+      // 清单里没有它 = 这条会话还没发言（引擎只列谈过的）。什么都不做会留着旧会话，除非教学 session 自己说它绑的不是这个作用域。
+      if (session && session.scopeRef !== scopeRef) setCurrentThread("teaching", null);
+      return;
+    }
     if (currentThread) {
       if (currentThread.scopeRef !== scopeRef) setCurrentThread("teaching", null);
       return;
     }
-    const target = list.find((item) => item.scopeRef === scopeRef);
+    const target = list.find((item) => item.scopeRef === scopeRef) ?? (unsentThread.teaching?.scopeRef === scopeRef ? unsentThread.teaching : undefined);
     if (target) setCurrentThread("teaching", target.id);
-  }, [repositoryId, scopeRef, chatThreads.teaching, session?.id]);
+  }, [repositoryId, scopeRef, chatThreads.teaching, unsentThread.teaching, session?.id]);
 
   const send = async (): Promise<void> => {
     if (!content.trim()) return;
