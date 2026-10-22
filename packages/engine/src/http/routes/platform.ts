@@ -43,7 +43,7 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   return { repositoryId: result.repository.index.repositoryId, repositoryPath: result.repository.path, freshness: result.repository.freshness };
 });
 
-/** 把某仓移出地址簿（并就地卸载）。默认只动引擎的注册表；`?artifacts=1` 才删该仓的 `.tutor/`（分析结果、对话与练习记录）。 */
+/** 把某仓移出地址簿（并就地卸载）。默认只动引擎的注册表；`?artifacts=1` 才连该仓 `.tutor/` 里的分析产物、对话记录与运行日志一起删。 */
 app.delete<{ Params: { repositoryId: string }; Querystring: { artifacts?: string } }>("/api/repositories/:repositoryId", async (request) => {
   return { repositories: importer.catalog(), ...importer.forget(request.params.repositoryId, request.query.artifacts === "1") };
 });

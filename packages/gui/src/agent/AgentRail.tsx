@@ -149,7 +149,7 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
   const canSend = !t.sending && t.content.trim().length > 0;
   if (scope === "teaching") {
     return {
-      placeholder: t.scopeRef ? `围绕「${t.scopeLabel}」说说你的推理；不知道就输入「不知道」` : "先在左栏选一个文件或目录，再说说你的推理；不知道就输入「不知道」",
+      placeholder: t.scopeRef ? `围绕「${t.scopeLabel}」说说你的推理` : "先在左栏选一个文件或目录，再说说你的推理",
       canSend,
       onSend: t.send,
     };
@@ -165,7 +165,7 @@ function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
   const hint = scope === "map"
     ? "点模块、环节或目录里的文件，我围绕它展开。"
     : scope === "teaching"
-      ? "写下你的观察或疑问；不知道就输入「不知道」。"
+      ? "写下你的观察或疑问"
       : "只讨论思路，不给标准答案。";
   return (
     <div className="empty">

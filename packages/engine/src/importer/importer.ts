@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
@@ -314,9 +314,10 @@ export class ImportService extends EventEmitter {
   }
 
   /**
-    用户显式把某仓移出地址簿（并就地卸载）。默认不动仓库里的产物；`deleteArtifacts` 才删 `<仓根>/.tutor/`，
-    那里头是这个仓的分析结果、对话记录与练习记录。全局的 `llm.log` / `engine.jsonl` 不属于单个仓，一律不碰。
-    回 `artifacts` 是三个不同读数：removed 删了、absent 本来就没有、refused 位置不对所以没敢删。
+    用户显式把某仓移出地址簿（并就地卸载）。默认不动仓库里的东西；`deleteArtifacts` 一次删掉整个 `<仓根>/.tutor/`
+    ——那里头就是这个仓的分析产物、对话记录与运行日志，只留 `.tutorignore`（它在仓根，不在这里）。
+    全局的 `llm.log` 与 `engine.jsonl` 不属于单个仓，也不在这一步之内：那是花的钱的唯一对账凭据。
+    回 `artifacts`：removed 删了、absent 本来就没有、refused 位置不对所以没敢删。
   */
   forget(repositoryId: string, deleteArtifacts = false): { artifacts?: "removed" | "absent" | "refused" } {
     const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
@@ -330,7 +331,7 @@ export class ImportService extends EventEmitter {
       if (!target.startsWith(`${realpathSync(path)}${sep}`) || !statSync(target).isDirectory()) return { artifacts: "refused" };
       rmSync(target, { recursive: true, force: true });
       traceEngine("mount", { repositoryId, phase: "artifacts_removed", path: target }, { traceId: null });
-      return { artifacts: "removed" };
+      return { artifacts: existsSync(target) ? "refused" : "removed" };
     } catch {
       return { artifacts: "absent" };
     }

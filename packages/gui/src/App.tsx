@@ -12,6 +12,7 @@ import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./views/helpers";
 import { Icon, type IconName } from "./ui/icons";
+import { DangerDialog } from "./ui/DangerDialog";
 import { layoutVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, toastFailure, ToastHost } from "./modules/toast";
 import { emit, installJournalRetry } from "./journal";
@@ -86,6 +87,8 @@ function readStoredWorkspace(): _Workspace | null {
   */
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
+  // 待移出的那条：弹窗开着时记着它，点哪一条按钮决定删不删文件
+  const [forgetTarget, setForgetTarget] = useState<{ repositoryId: string; name: string } | null>(null);
   // 引擎的地址簿是持久的（N 条路径），但启动一条都不挂载：GUI 恢复 workspace 后要访问某个仓，
   // 引擎才读它的 `.tutor` 产物挂进内存（超上限的最久未用项被驱逐）。所以这里的校验 = 一次挂载请求，
   // 顺带把新鲜度判定带回来，好在横幅上如实说「这是 X 天前的分析」。
@@ -203,17 +206,19 @@ export function App(): ReactElement {
     })();
   };
 
-  /** 移出地址簿；删不删该仓的分析结果与对话由用户第二问决定（默认不删）。 */
-  const forgetRepository = (repositoryId: string, name: string): void => {
-    if (!window.confirm(`把「${name}」移出地址簿？移出后不再跟踪它的改动，要再用需重新导入。`)) return;
-    const alsoDelete = window.confirm("要同时删掉这个仓库里的分析结果和对话记录吗？\n删了就找不回来；点「取消」只移出，不删文件。");
+  /** 列表与挂载失败页都走这里：先开弹窗，删不删由弹窗里点的那一条决定。 */
+  const forgetRepository = (repositoryId: string, name: string): void => { setForgetTarget({ repositoryId, name }); };
+
+  /** 弹窗的落点：移出地址簿，并按需连该仓 `.tutor/` 里的分析产物、对话记录与运行日志一起删。 */
+  const runForget = (repositoryId: string, name: string, deleteArtifacts: boolean): void => {
+    setForgetTarget(null);
     void (async () => {
       try {
-        const result = await api.forgetRepository(repositoryId, alsoDelete);
+        const result = await api.forgetRepository(repositoryId, deleteArtifacts);
         if (repositoryId === workspace?.repositoryId) updateWorkspace(null);
         await refreshCatalog();
-        if (alsoDelete && result.artifacts === "refused") toastFailure("已移出，产物没删掉", new Error(`${name} 的产物目录不在仓内常规位置`));
-        else showToast(alsoDelete ? "已移出，产物已删除" : `已把「${name}」移出地址簿`);
+        if (deleteArtifacts && result.artifacts === "refused") toastFailure("已移出，文件没删掉", new Error(`${name} 的 .tutor 不在仓内常规位置`));
+        else showToast(deleteArtifacts ? `已移出并删掉「${name}」的文件` : `已把「${name}」移出地址簿`);
       } catch (error) {
         toastFailure("移出失败", error);
       }
@@ -238,6 +243,17 @@ export function App(): ReactElement {
   const showRail = railRoute && !layout.railCollapsed;
   return (
     <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " rail-hidden"}`} style={layoutVars(layout)}>
+      {forgetTarget ? (
+        <DangerDialog
+          title={`移出「${forgetTarget.name}」`}
+          body="移出后引擎不再跟踪这个仓库的改动，要再用需重新导入。是否需要将已生成的相关分析产物、对话记录、运行日志删除？"
+          keepLabel="只移出，保留文件"
+          deleteLabel="移出并删除"
+          onKeep={() => runForget(forgetTarget.repositoryId, forgetTarget.name, false)}
+          onDelete={() => runForget(forgetTarget.repositoryId, forgetTarget.name, true)}
+          onClose={() => setForgetTarget(null)}
+        />
+      ) : null}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <span className="brand-mark">码</span>

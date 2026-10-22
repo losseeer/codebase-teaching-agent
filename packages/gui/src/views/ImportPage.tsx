@@ -211,7 +211,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                         {isCurrent ? <span className="badge badge-neutral">当前</span> : null}
                       </span>
                     </button>
-                      <button type="button" className="btn btn-ghost btn-sm addr-forget" title="只移出地址簿，不删文件" onClick={() => onForget(item.repositoryId, item.name)}><Icon name="x" size={13} />移出</button>
+                      <button type="button" className="btn btn-ghost btn-sm addr-forget" title="移出地址簿" onClick={() => onForget(item.repositoryId, item.name)}><Icon name="x" size={13} />移出</button>
                     </div>
                   );
                 })}
