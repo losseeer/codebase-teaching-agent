@@ -181,7 +181,7 @@ describe("Anthropic / Ollama provider 显式思考档位", () => {
   it("AnthropicProvider 显式档位抛错；off/auto 正常", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }), { status: 200 })) as typeof fetch;
     const provider = new AnthropicProvider({ endpoint: "https://api.anthropic.com", apiKey: "k", model: "claude-opus-5", fetchImpl });
-    await expect(provider.complete({ system: "s", user: "u", thinking: "high" })).rejects.toThrow(/Anthropic 原生协议暂不支持思考档位 "high"/);
+    await expect(provider.complete({ system: "s", user: "u", thinking: "high" })).rejects.toThrow(/Anthropic 的思考按预算计/);
     const ok = await provider.complete({ system: "s", user: "u", thinking: "off" });
     expect(ok.text).toBe("ok");
   });
@@ -189,7 +189,7 @@ describe("Anthropic / Ollama provider 显式思考档位", () => {
   it("OllamaTeachingProvider 显式档位抛错", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ message: { content: "ok" }, done_reason: "stop" }), { status: 200 })) as typeof fetch;
     const provider = new OllamaTeachingProvider({ endpoint: "http://127.0.0.1:11434", model: "llama3.2", fetchImpl });
-    await expect(provider.complete({ system: "s", user: "u", thinking: "low" })).rejects.toThrow(/Ollama provider 暂不支持思考档位 "low"/);
+    await expect(provider.complete({ system: "s", user: "u", thinking: "low" })).rejects.toThrow(/请选「自动」或「关闭」。/);
   });
 });
 

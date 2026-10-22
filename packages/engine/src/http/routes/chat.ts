@@ -11,7 +11,7 @@ import { id } from "../../identity.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { type MapChatProgress, mapChat, practiceChat } from "../../scopechat/scopechat.js";
-import { repositoryOr404 } from "../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { Journal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
 import { traceEngine } from "../../trace/engine-log.js";
@@ -40,11 +40,11 @@ app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, repl
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
   const turn = scopedThreadTurn(repository, sanitizeThreadId(request.body?.threadId), "map");
-  if (!turn) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的宏观设计作用域；请新建会话后再问。" });
+  if (!turn) return reply.code(409).send({ error: "这个会话已经不在了，请新建一个再问。" });
   markThread(turn.threadId);
   const provider = scopedChatProviderOr422(reply, repository.handle);
   if (!provider) return reply;
@@ -89,13 +89,13 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
 
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; style?: unknown; turnId?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const content = request.body?.content?.trim();
   if (!content) return reply.code(400).send({ error: "消息内容不能为空" });
   if (!request.body?.exerciseId) return reply.code(400).send({ error: "缺少练习上下文；请先在练习页生成一道练习。" });
   const threadId = sanitizeThreadId(request.body?.threadId);
   const thread = threadId ? scopedThread(repository, threadId, "practice") : undefined;
-  if (threadId && !thread) return reply.code(409).send({ error: "会话线程不存在、已删除或不属于本仓库的练习作用域；请新建会话后再问。" });
+  if (threadId && !thread) return reply.code(409).send({ error: "这个会话已经不在了，请新建一个再问。" });
   // 线程绑题（exercise_id 由 GUI 建线程时给出）：换题走新建线程，这里拒掉「拿着 A 题的会话问 B 题」
   if (thread?.exerciseId && thread.exerciseId !== request.body.exerciseId) return reply.code(409).send({ error: "该会话属于另一道练习；请新建会话后再追问。" });
   markThread(thread?.id);

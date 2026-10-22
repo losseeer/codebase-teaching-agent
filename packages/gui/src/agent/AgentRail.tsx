@@ -69,7 +69,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
         <ThreadBar scope={scope} t={t} />
 
         <div className="thread-meta">
-          <span title="三个作用域各记各的对话，互不混在一起">{items.length} 条 · 仅 {SCOPE_LABEL[scope]}</span>
+          <span title="每个标签页各记一份对话">{items.length} 条 · 仅 {SCOPE_LABEL[scope]}</span>
           {t.replySource[scope] ? <span title={`本次回复由 ${t.replySource[scope]} 生成`}>来源 · <b>LLM</b></span> : null}
         </div>
       </div>
@@ -188,7 +188,7 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
     return binding.path ? `节点「${binding.title}」 · ${binding.path}` : `节点「${binding.title}」`;
   }
   if (scope === "teaching") {
-    if (!t.scopeRef) return "未选作用域";
+    if (!t.scopeRef) return "还没选文件";
     return `${t.scopeRef.startsWith("dir:") ? "目录" : "文件"} · ${t.scopeRef.slice(t.scopeRef.indexOf(":") + 1)}`;
   }
   if (!t.practiceUnit) return "未开始练习";

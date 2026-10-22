@@ -46,11 +46,11 @@ export const ORIGIN_SHORT: Record<DiagramEdgeOrigin, string> = {
   inferred: "模型推断"
 };
 
-/** 完整口径进悬停：一句话说清这一档凭什么，以及它凭什么不算更硬的那一档。 */
+/** 每档一句短说明，进悬停。 */
 export const ORIGIN_NOTE: Record<DiagramEdgeOrigin, string> = {
-  static: "两个模块之间有文件级 import，依赖图直接可指",
-  code: "在源码正文里读到的调用、回调或类型派发",
-  inferred: "没有行级依据，只有模型自己那句理由"
+  static: "有文件 import 依据",
+  code: "源码里读到的调用",
+  inferred: "模型推断，没有行级依据"
 };
 
 export const EDGE_ORIGINS = Object.keys(ORIGIN_SHORT) as DiagramEdgeOrigin[];

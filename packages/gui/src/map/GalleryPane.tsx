@@ -59,7 +59,7 @@ export function GalleryPane({ diagrams, openId, loading, error, query, onQueryCh
         {shown.map((item) => {
           const menuItems: MenuItem[] = [
             { label: "重命名", onSelect: () => setRenaming(item.id) },
-            { label: `版本历史${item.versions ? `（${item.versions}）` : ""}`, title: "agent 每改一次结构自动存一版；拖动位置不存版", disabled: !item.versions, onSelect: () => onVersions(item) },
+            { label: `版本历史${item.versions ? `（${item.versions}）` : ""}`, title: "每次结构改动存一版", disabled: !item.versions, onSelect: () => onVersions(item) },
             { label: "删除", danger: true, onSelect: () => onDelete(item) }
           ];
           return (
@@ -70,11 +70,11 @@ export function GalleryPane({ diagrams, openId, loading, error, query, onQueryCh
                 <div className="g-name" title={item.name}>{item.name}</div>
               )}
               <div className="g-meta">
-                <span className={`g-src ${item.source}`} title={item.source === "agent" ? "结构由对话里的 agent 写（set_diagram 单写入口）" : "你新建的图：结构仍然只能由 agent 画"}>
+                <span className={`g-src ${item.source}`} title={item.source === "agent" ? "结构由对话里的 agent 写" : "这张图由你新建"}>
                   {item.source === "agent" ? "agent" : "我"}
                 </span>
                 <span title={`最后改动（ISO）：${item.updatedAt}`}>{relativeTime(item.updatedAt)}</span>
-                <span className="g-count" title="节点 / 边 / 版本的条数（引擎的读数）">{`${item.nodes} 节点 · ${item.edges} 边${item.versions ? ` · ${item.versions} 版` : ""}`}</span>
+                <span className="g-count" title="节点、边与版本数">{`${item.nodes} 节点 · ${item.edges} 边${item.versions ? ` · ${item.versions} 版` : ""}`}</span>
               </div>
               <MenuButton label="更多操作" open={menuFor === item.id} onToggle={toggleMenu(item.id)} className="g-menu-btn" />
               {menuFor === item.id ? <PopMenu anchor={anchor.current} items={menuItems} onClose={() => setMenuFor(null)} ariaLabel={`图「${item.name}」的操作`} /> : null}

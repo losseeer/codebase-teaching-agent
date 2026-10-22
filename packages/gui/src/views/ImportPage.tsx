@@ -20,6 +20,7 @@ interface Props {
   onSwitchRepository: (repositoryId: string) => void;
   /** 点的就是当前仓：离开导入页即可 */
   onOpenRepository: () => void;
+  onForget: (repositoryId: string, name: string) => void;
 }
 
 /** 导入的分相清单：与引擎 ImportJob.phase 同一口径。 */
@@ -27,10 +28,10 @@ const PHASES: { key: ImportJob["phase"]; label: string }[] = [
   { key: "queued", label: "排队中" },
   { key: "indexing", label: "索引文件与 Git 历史" },
   { key: "summarizing", label: "摘要缓存与静态分析" },
-  { key: "completed", label: "写入 .tutor/ 产物" }
+  { key: "completed", label: "保存分析结果" }
 ];
 
-export function ImportPage({ onImported, workspace, catalog, onSwitchRepository, onOpenRepository }: Props): ReactElement {
+export function ImportPage({ onImported, workspace, catalog, onSwitchRepository, onOpenRepository, onForget }: Props): ReactElement {
   const [path, setPath] = useState(workspace?.repositoryPath ?? "");
   const [commentMode, setCommentMode] = useState(false);
   const [job, setJob] = useState<ImportJob | null>(null);
@@ -58,7 +59,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         if (progress.id === jobId) setJob(progress);
       } catch (error) {
         console.error("[gui] 导入进度帧不符契约", error);
-        setError("读不懂引擎发的导入进度（契约不符，细节在控制台）");
+        setError("导入进度读不出来，请刷新；详情看控制台");
       }
     });
     const interval = window.setInterval(
@@ -92,7 +93,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         <div className="import-wrap">
           <div className="import-hero">
             <h1>导入一个代码仓库</h1>
-            <p title="索引、摘要与依赖图都写进仓库内的 .tutor/，随仓库走，随时可恢复">输入本机仓库的绝对路径，产物只写进仓库内的 <code className="mono">.tutor/</code>。</p>
+            <p title="分析结果写在仓库内的 .tutor/，随仓库走">输入本机仓库的绝对路径，分析结果只写进仓库内的 <code className="mono">.tutor/</code>。</p>
           </div>
 
           <div className="card card-pad col gap-4">
@@ -119,7 +120,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
             {/* 正文一句结论，「为什么 / 怎么改」进悬停 */}
             <p className="field-note" title={commentMode
               ? "注释写得多的仓库里的中文概念词会一起进摘要，也因此更费 token。"
-              : "想连注释一起摘要请在导入前切「详细导入」；导入后换口径需要重新导入。"}>{commentMode
+              : "要连注释一起分析请在导入前选「详细导入」；导入后改设置需重新导入。"}>{commentMode
               ? "连注释一起摘要，更费 token。"
               : "只看代码结构，最省 token。"}</p>
 
@@ -168,7 +169,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
             <div className="col gap-3">
               <div className="row between">
                 <div className="section-title">仓库地址簿 · {catalog.length} 个</div>
-                <span className="fs-11 faint" title="切换只是把该仓已有的分析产物挂回内存，不重新分析、不消耗 token">点一下切过去，不用重填路径</span>
+                <span className="fs-11 faint" title="切换不重新分析、不产生费用">点一下切过去，不用重填路径</span>
               </div>
               {/* 闸门失效是进程级事实，与哪条仓无关，全页只说一次 */}
               {gateNotice ? <div className="banner banner-warn"><Icon name="alert" /><span className="banner-text">{gateNotice}</span></div> : null}
@@ -181,12 +182,12 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                   const watching = item.mounted && item.watching === false && !paused;
                   const meta = [
                     item.repositoryPath,
-                    paused ? `监听挂起中${item.watchPausedUntil ? `至 ${new Date(item.watchPausedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : ""}` : watching ? `增量监听没起来：${item.watchError ?? "原因未知"}` : item.mounted ? "已监听变更" : "未挂载",
-                    item.freshness?.analyzedAt ? `分析于 ${dateText(item.freshness.analyzedAt)}` : item.artifactsReady === false ? "无产物" : ""
+                    paused ? `跟踪已暂停${item.watchPausedUntil ? `至 ${new Date(item.watchPausedUntil).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : ""}` : watching ? `变更跟踪未启动：${item.watchError ?? "原因未知"}` : item.mounted ? "正在跟踪变更" : "未加载",
+                    item.freshness?.analyzedAt ? `分析于 ${dateText(item.freshness.analyzedAt)}` : item.artifactsReady === false ? "暂无分析结果" : ""
                   ].filter(Boolean).join(" · ");
                   return (
+                    <div className="addr-row" key={item.repositoryId}>
                     <button
-                      key={item.repositoryId}
                       type="button"
                       className={`card addr-card${isCurrent ? " current" : ""}`}
                       title={item.exists ? meta : `${item.repositoryPath}\n目录已不在这里`}
@@ -199,17 +200,19 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                       </span>
                       <span className="addr-badges">
                         {!item.exists ? <span className="badge badge-danger">目录不存在</span>
-                          : paused ? <span className="badge badge-info">监听挂起中</span>
+                          : paused ? <span className="badge badge-info">跟踪已暂停</span>
                             : watching ? <span className="badge badge-warn">无增量监听</span>
-                            : item.mounted ? <span className="badge badge-ok">已挂载</span>
-                              : <span className="badge badge-neutral">未挂载</span>}
-                        {verdict === "stale" ? <span className="badge badge-warn">产物已过期</span>
+                            : item.mounted ? <span className="badge badge-ok">已就绪</span>
+                              : <span className="badge badge-neutral">未加载</span>}
+                        {verdict === "stale" ? <span className="badge badge-warn">分析已过期</span>
                           : verdict === "drifted" ? <span className="badge badge-info">提交已移动</span>
-                            : verdict === "fresh" ? <span className="badge badge-ok">产物新鲜</span>
-                              : item.artifactsReady === false ? null : <span className="badge badge-neutral">产物在</span>}
+                            : verdict === "fresh" ? <span className="badge badge-ok">分析未过期</span>
+                              : item.artifactsReady === false ? null : <span className="badge badge-neutral">有分析结果</span>}
                         {isCurrent ? <span className="badge badge-neutral">当前</span> : null}
                       </span>
                     </button>
+                      <button type="button" className="btn btn-ghost btn-sm addr-forget" title="只移出地址簿，不删文件" onClick={() => onForget(item.repositoryId, item.name)}><Icon name="x" size={13} />移出</button>
+                    </div>
                   );
                 })}
               </div>

@@ -167,11 +167,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
           <span className="faint">/</span>
           <span>代码教学</span>
           <span className="faint">·</span>
-          <span className="muted" title={t.scopeRef ? `教学作用域：${t.scopeRef}` : "还没有选作用域"}>
-            {t.scopeRef ? t.scopeLabel : "未选作用域"}
+          <span className="muted" title={t.scopeRef ? t.scopeLabel : "还没选文件"}>
+            {t.scopeRef ? t.scopeLabel : "还没选文件"}
           </span>
         </>}
-        actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点目录可把整个目录当教学作用域">⌘P 快速打开</span>}
+        actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点目录可按整个目录教学">⌘P 快速打开</span>}
         showRailToggle
       />
       <MobileSwitcher labels={["项目目录", "实时源码"]} active={paneActive} onSelect={setPaneActive} />
@@ -180,7 +180,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         <aside className={`teach-side ${paneClass(0)}`}>
           <div className="row between">
             <h3 className="section-title">项目目录</h3>
-            <span className="fs-11 faint" title="选中文件 = 按文件教学；选中目录 = 按目录教学">选中即作用域</span>
+            <span className="fs-11 faint" title="点文件或目录即可开始">选中即教学域</span>
           </div>
           {fileTreeError ? <p className="entry-empty">{fileTreeError}</p> : <RepoTree nodes={fileTree} onOpenFile={openFile} onOpenDir={openDir} activePath={source?.path} activeDir={activeDir} />}
         </aside>

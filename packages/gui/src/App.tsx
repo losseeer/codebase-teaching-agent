@@ -197,21 +197,23 @@ export function App(): ReactElement {
         await refreshCatalog();
         navigate("/app?workspace=map");
       } catch (error) {
-        toastFailure("挂载失败", error);
+        toastFailure("打开仓库失败", error);
         await refreshCatalog();
       }
     })();
   };
 
-  /** 移出地址簿是破坏性动作（产物还在仓库自己的 .tutor 里，但引擎不再记得这个仓），先确认。 */
+  /** 移出地址簿；删不删该仓的分析结果与对话由用户第二问决定（默认不删）。 */
   const forgetRepository = (repositoryId: string, name: string): void => {
-    if (!window.confirm(`把「${name}」移出地址簿？引擎会停掉它的监听并忘掉这个路径，仓库里的 .tutor/ 产物原样不动；要再用它得重新导入。`)) return;
+    if (!window.confirm(`把「${name}」移出地址簿？移出后不再跟踪它的改动，要再用需重新导入。`)) return;
+    const alsoDelete = window.confirm("要同时删掉这个仓库里的分析结果和对话记录吗？\n删了就找不回来；点「取消」只移出，不删文件。");
     void (async () => {
       try {
-        await api.forgetRepository(repositoryId);
+        const result = await api.forgetRepository(repositoryId, alsoDelete);
         if (repositoryId === workspace?.repositoryId) updateWorkspace(null);
         await refreshCatalog();
-        showToast(`已把「${name}」移出地址簿`);
+        if (alsoDelete && result.artifacts === "refused") toastFailure("已移出，产物没删掉", new Error(`${name} 的产物目录不在仓内常规位置`));
+        else showToast(alsoDelete ? "已移出，产物已删除" : `已把「${name}」移出地址簿`);
       } catch (error) {
         toastFailure("移出失败", error);
       }
@@ -270,7 +272,7 @@ export function App(): ReactElement {
           <Routes>
             {/* 根路径固定落导入页：导入是每次打开的起点，不带 workspace 记忆直通 /app */}
             <Route path="/" element={<Navigate to="/import" replace />} />
-            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadRepositoryData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} />} />
+            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadRepositoryData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} onForget={forgetRepository} />} />
             <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
             <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
             <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
@@ -299,7 +301,7 @@ function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; on
       <div className="import-wrap">
         <div className="import-hero">
           <h1>连不上本地引擎</h1>
-          <p>仓库选择已保留（{repositoryPath}）。引擎没起来或正在重启——开发态改一下 engine 里的文件就会重启一次，这属于瞬时而不是仓库丢了。</p>
+          <p>仓库已保留（{repositoryPath}）。本地服务没起来或正在重启，稍后可点重新校验。</p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onRetry}>重新校验</button>
       </div>
@@ -343,9 +345,9 @@ function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze
       <Icon name="alert" />
       {/* 横幅只留「变了没有 / 能不能继续用」这一句；路径、哈希口径、HEAD 记录缺失这些细节进悬停 */}
       <span className="banner-text" title={`${repositoryPath}｜${stale
-        ? `有 ${freshness.changedFiles > 0 ? freshness.changedFiles : "若干"} 个文件的当前内容与产物记录的哈希对不上`
+        ? `${freshness.changedFiles > 0 ? freshness.changedFiles : "若干"} 个文件的当前内容与上次分析时不一致`
         : `HEAD 从 ${short(freshness.headAtAnalysis)} 挪到 ${short(freshness.headNow)}${!freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容）" : ""}`}`}>
-        <b>{stale ? "产物已过期" : "提交已移动，内容与分析时一致"}</b>{" "}
+        <b>{stale ? "分析已过期" : "提交已移动，内容与分析时一致"}</b>{" "}
         {stale
           ? `${ageOf(freshness.analyzedAt)}跑的分析，${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个文件` : "有些文件"}已经变了 · 看到的是旧结论`
           : `代码内容没变，产物照常可用`}

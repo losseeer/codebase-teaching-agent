@@ -39,6 +39,9 @@ export function lightLlm(): LlmProvider | undefined {
   return buildLlmRuntimeProvider("light");
 }
 
+/** 仓路由第一道失败时给界面的一句话：文案单源，各路由共用，不再各抄一份。 */
+export const REPOSITORY_NOT_MOUNTED = "这个仓库现在打不开；请重新导入。";
+
 /** 所有 `/api/repositories/:repositoryId/*` 的第一道：这条仓现在挂着吗。没挂着就是 404，绝不懒到去读盘。 */
 export function repositoryOr404(repositoryId: string) {
   return importer.getRepository(repositoryId);

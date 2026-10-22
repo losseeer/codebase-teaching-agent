@@ -19,28 +19,12 @@ import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from
 // 练习评估工作区（两栏）：左 = 主题 chips + 本主题已练卡片 + 防泄题脚注，
 // 右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。
 // 顶栏只报 `api.getPractice` 的真读数，没读到就明说；出题中只说「正在出题」，不画假进度。
-// 判分口径逐字取自 `result.gradingMode` + `automatic` + `feedbackSource`，复习读数只取 `result.review` 里真存在的字段。
+// 判分说法只由 `result.gradingMode` 决定，复习读数只取 `result.review` 里真存在的字段。
 
-/** 出题时的判分口径与判分后 `.grade-source` 那一行同源，不另起一套说法。 */
 function gradingLabel(mode: ExerciseGradingMode): string {
-  if (mode === "execution") return "沙箱跑测试判分";
-  if (mode === "rubric") return "rubric 细则判分（LLM 比对参考答案）";
-  return "集合精确匹配";
-}
-
-/** 判分来源那一行要说实话：`automatic` 与 `feedbackSource` 决定模型有没有参与结论。 */
-function gradeSource(result: ExerciseResult): { label: string; detail: string } {
-  const automatic = result.automatic ? "automatic：模型不参与判分结论" : "非 automatic：结论里有模型成分";
-  if (result.gradingMode === "execution") {
-    return { label: `沙箱真跑冻结测试${result.automatic ? "（automatic）" : ""}`, detail: `${automatic}。沙箱只回「通过/失败」计数，逐条断言名不下发到界面，具体计数见上面那句反馈。` };
-  }
-  if (result.gradingMode === "rubric") {
-    return { label: "rubric（LLM 比对参考答案）", detail: `${automatic}。评分细则与参考答案由出题模型给出，判分模型逐维比对学习者的原文。` };
-  }
-  return {
-    label: "set_match（集合精确匹配）",
-    detail: `${automatic}。选项 id 与标准答案逐个比对；反馈措辞${result.feedbackSource === "llm_polished" ? "由 LLM 润色过（结论不变）" : "出自规则原文"}。`
-  };
+  if (mode === "execution") return "跑测试判分";
+  if (mode === "rubric") return "LLM 按评分细则比对参考答案";
+  return "与标准答案逐项比对";
 }
 
 /** LLM 出题单元 id 的版本号段（`llm:<tagId>:<nonce>`）；解析不出返回 null，两处判据共用。 */
@@ -234,9 +218,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           <span className="faint">/</span>
           <span>练习评估</span>
           <span className="faint">·</span>
-          <span title={summary ? `待复习条目取自引擎的复习排期（dueAt 已到）· ${summary.mastery.length} 个单元有练习记录` : "练习进度还没读到"}>待复习 {summary ? <><b className="num-warn">{summary.dueReviews}</b> 个</> : "读数未到"}</span>
+          <span title={summary ? `${summary.mastery.length} 个单元练过` : "练习进度还没读到"}>待复习 {summary ? <><b className="num-warn">{summary.dueReviews}</b> 个</> : "读数未到"}</span>
           <span className="faint">·</span>
-          <span title={summary && summary.mastery.length ? `${summary.mastery.length} 个单元掌握度的平均值，档位 0–5` : "掌握度来自 journal 回读，没有记录就不报数"}>掌握度 {masteryAvg}</span>
+          <span title={summary && summary.mastery.length ? `${summary.mastery.length} 个单元的平均掌握度` : "暂无答题记录"}>掌握度 {masteryAvg}</span>
         </>}
         showRailToggle
       />
@@ -261,7 +245,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             onReset={() => { const next = PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_MODULE_ID, next); }}
           >
             {moduleHint ? <p className="field-note" title="主题可在「＋ 配置」里自定义">{moduleHint}</p> : null}
-            <PracticeSectionLabel label="本主题已练" note={`${moduleMastery.length} 项`} tip="读数由 journal 回读；点卡片按这个单元重新出题" />
+            <PracticeSectionLabel label="本主题已练" note={`${moduleMastery.length} 项`} tip="点卡片可按同一主题重新出题" />
             {moduleMastery.length ? (
               <div className="col">
                 {moduleMastery.map((record) => (
@@ -278,7 +262,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             ) : (
               <p className="entry-empty" title="右侧「生成练习」出题">{isComprehensionChip ? "还没有练习记录。" : "这个主题还没有题。"}</p>
             )}
-            <p className="fs-11 faint stretch-end" title="防止对话绕过题面拿到标准答案：判分答案与锚点都不进练习侧上下文">练习侧不给模型 read_file</p>
           </PracticeThemes>
         </aside>
 
@@ -298,9 +281,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             {!exercise && loading ? (
               <div className="card card-pad col">
                 <div className="section-title">正在出题</div>
-                <div className="phase active" title={isComprehensionChip ? "族别由引擎决定：静态分析出理解题，命中代码单元时由模型出题并在沙箱两跑自证" : "LLM 按这个主题出题，模型可以拒题"}>
+                <div className="phase active" title={isComprehensionChip ? "按代码结构出题，涉及具体代码时先验证题目可用" : "按这个主题出题"}>
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>
-                  <span className="fs-12">{isComprehensionChip ? "引擎出题中" : "LLM 出题中"}</span>
+                  <span className="fs-12">{isComprehensionChip ? "正在出题" : "正在按主题出题"}</span>
                 </div>
                 <div className="flow-skeleton" aria-hidden><span /><span /><span /></div>
               </div>
@@ -310,7 +293,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="empty">
                 <div className="empty-icon"><Icon name="practice" size={34} /></div>
                 <div>{isComprehensionChip ? "这个主题还没有练习" : `「${moduleLabel}」还没有题`}</div>
-                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading} title={isComprehensionChip ? "静态分析即时出题；命中代码单元时由模型出题并在沙箱两跑自证" : "LLM 按这个主题出题，模型可以拒题"}><Icon name="play" size={14} /> 生成练习</button>
+                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading} title={isComprehensionChip ? "按代码结构出题" : "按这个主题出题"}><Icon name="play" size={14} /> 生成练习</button>
               </div>
             ) : null}
 
@@ -318,7 +301,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <>
                 <div className="exercise-head">
                   <span className="badge badge-neutral">{exerciseKindLabel(exercise.kind)}</span>
-                  <span className="badge badge-info ellipsis" title={`单元 id ${exercise.targetUnitId}`}>目标单元 · {exercise.targetTitle || unitName(exercise.targetUnitId)}</span>
+                  <span className="badge badge-info ellipsis" >目标单元 · {exercise.targetTitle || unitName(exercise.targetUnitId)}</span>
                   <span className="badge badge-neutral" title="难度档位由引擎按单元的结构复杂度给出（0–5）">难度 {exercise.difficulty}/5</span>
                   {result ? <span className={`badge ${result.passed ? "badge-ok" : "badge-danger"}`}>{result.passed ? "通过" : "未通过"} · {Math.round(result.score * 100)} 分</span> : null}
                 </div>
@@ -349,7 +332,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 <div className="col">
                   <div className="row between">
                     <span className="section-title">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
-                    <span className="fs-11 faint" title={`判分口径：${gradingLabel(exercise.gradingMode)}｜代码版本 ${exercise.contentVersion.slice(0, 14)}，代码改过就重出题`}>{gradingLabel(exercise.gradingMode)}</span>
+                    <span className="fs-11 faint" title={`判分：${gradingLabel(exercise.gradingMode)}｜代码改过就要重新出题`}>{gradingLabel(exercise.gradingMode)}</span>
                   </div>
 
                   {exercise.inputMode === "multi_select" ? (
@@ -377,7 +360,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
                   {exercise.inputMode === "code" && exercise.code ? (
                     <div className="col">
-                      <p className="fs-11 faint" title="提交后在沙箱跑冻结测试：automatic，模型不参与判分">下发代码包</p>
+                      <p className="fs-11 faint" title="提交后运行测试判分">代码包</p>
                       {codeFiles.length > 1 ? (
                         <div className="tabs light" role="tablist" aria-label="下发代码文件">
                           {codeFiles.map((file) => (
@@ -448,11 +431,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 }
 
 function GradedPanel({ exercise, result, explanation, explaining, onExplain, onRedo }: { exercise: Exercise; result: ExerciseResult; explanation: string; explaining: boolean; onExplain: () => void; onRedo: () => void }): ReactElement {
-  const grade = gradeSource(result);
   const optionLabel = (id: string): string => exercise.options?.find((item) => item.id === id)?.label ?? id;
   /** 逐条判定行只有两种真数据可列：集合匹配的三类 id，与沙箱那条总体判定（沙箱不下发逐条断言名）。 */
   const rows: { passed: boolean; label: string }[] = result.gradingMode === "execution"
-    ? [{ passed: result.passed, label: result.passed ? "冻结测试全部通过" : "冻结测试未全过" }]
+    ? [{ passed: result.passed, label: result.passed ? "测试全部通过" : "测试没有全部通过" }]
     : result.gradingMode === "set_match"
       ? [
           ...(result.matchedIds ?? []).map((id) => ({ passed: true, label: `选中 ${optionLabel(id)}` })),
@@ -460,7 +442,7 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
           ...(result.unexpectedIds ?? []).map((id) => ({ passed: false, label: `多选 ${optionLabel(id)}` }))
         ]
       : [];
-  const sm2 = [`间隔 ${result.review.intervalDays} 天`, `第 ${result.review.repetitions} 次复习`, `易度系数 ${result.review.easinessFactor.toFixed(2)}`];
+  const sm2 = [`间隔 ${result.review.intervalDays} 天`, `第 ${result.review.repetitions} 次复习`];
   if (result.review.lastReviewedAt) sm2.push(`上次作答 ${dateText(result.review.lastReviewedAt)}`);
 
   return (
@@ -468,16 +450,15 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
       <div className="feedback-head">
         <Icon name={result.passed ? "check" : "alert"} size={16} />
         {result.passed ? "通过" : "未通过"} · {Math.round(result.score * 100)} 分
-        <span className="grade-source" title={grade.detail}>判分来源：{grade.label}</span>
       </div>
 
       <p>{result.feedback}</p>
 
       {rows.length ? (
-        <div className="test-table" title={result.gradingMode === "execution" ? "沙箱回的是「通过/失败」计数，逐条断言名不在界面这一层" : "逐个选项 id 与标准答案比对"}>
+        <div className="test-table" title={result.gradingMode === "execution" ? "只显示通过数与失败数" : "选项与标准答案逐项比对"}>
           {rows.map((row, index) => (
             <div className={`test-row ${row.passed ? "pass" : "fail"}`} key={`${row.label}-${index}`}>
-              <span className="t-status">{row.passed ? "✓ PASS" : "✗ FAIL"}</span>
+              <span className="t-status">{row.passed ? "通过" : "未通过"}</span>
               <span>{row.label}</span>
             </div>
           ))}
@@ -491,8 +472,8 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
       <div className="row">
         {result.passed ? null : <button type="button" className="btn btn-ghost btn-sm" onClick={onRedo} title="收起判分结果，答案留着可再交">再试一次</button>}
         {exercise.inputMode === "code" && !explanation ? (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onExplain} disabled={explaining} title="点一次才发一趟模型：讲被判那一版差在哪">
-            {explaining ? <span className="spin"><Icon name="rotate" size={14} /></span> : <Icon name="zap" size={14} />}讲这版差在哪
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onExplain} disabled={explaining} title="需要一次模型请求">
+            {explaining ? <span className="spin"><Icon name="rotate" size={14} /></span> : <Icon name="zap" size={14} />}讲解这版
           </button>
         ) : null}
       </div>

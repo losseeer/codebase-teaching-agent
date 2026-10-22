@@ -206,14 +206,14 @@ export async function validateHarness(proposal: CodeProposal, repositoryPath: st
   const runs: HarnessRun[] = [];
   const solution = await harnessRun(proposal, "solution", repositoryPath);
   runs.push(solution);
-  if (!solution.verdict) return { ok: false, reason: "参考解没印出 TESTS 结论（多半没编译过或测试文件自己崩了）", runs };
+  if (!solution.verdict) return { ok: false, reason: "参考实现那次运行没有测试结论（可能没编译过，或测试文件自己出错）", runs };
   if (solution.verdict.passed < 1) return { ok: false, reason: `参考解一条测试都没过（TESTS ${solution.verdict.passed} ${solution.verdict.failed}）`, runs };
   if (solution.verdict.failed > 0 || solution.exitCode !== 0) return { ok: false, reason: `参考解没过：TESTS ${solution.verdict.passed} ${solution.verdict.failed}`, runs };
 
   const given = await harnessRun(proposal, "given", repositoryPath);
   runs.push(given);
-  if (!given.verdict) return { ok: false, reason: "下发件没印出 TESTS 结论——它可能是靠语法错误「失败」的，这种题不能出", runs };
-  if (given.verdict.failed < 1) return { ok: false, reason: `下发件本身就全过（TESTS ${given.verdict.passed} ${given.verdict.failed}），这道题是白送的`, runs };
+  if (!given.verdict) return { ok: false, reason: "发出去的代码那次运行没有测试结论，可能连语法都没过；这种题不能出", runs };
+  if (given.verdict.failed < 1) return { ok: false, reason: `发出去的代码不改也能全过（${given.verdict.passed} 项通过），这道题没有可练的内容`, runs };
   return { ok: true, runs };
 }
 
@@ -228,7 +228,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   const source = unitSource(input.repositoryPath, input.unit);
   if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [] };
   const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
-  if (!language) return { ok: false, stage: "proposal_shape", reason: `单元语言 ${input.unit.symbol.language} 不在沙箱首发三档里。`, runs: [] };
+  if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
   let response: { text: string; usage?: LlmUsage };
@@ -249,7 +249,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     });
   } catch (error) {
     // 端点失败单列一档：402/超时/被拒都不是「模型交出来的题不对」，混进形状档就会把人引去修提示词
-    return { ok: false, stage: "provider_error", reason: `出题调用没走通：${(error as Error).message}`, runs: [] };
+    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [] };
   }
   const parsed = parseJsonObject(response.text);
   if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [] };
@@ -260,7 +260,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   const proposal = normalized.proposal;
   if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [] };
   if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
-    return { ok: false, stage: "proposal_shape", reason: "参考解与仓库里那段实现逐字对不上：patch_edit 的 solution 必须是原样摘出的那一份。", runs: [] };
+    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [] };
   }
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };

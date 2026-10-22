@@ -95,10 +95,10 @@ describe("summarizeCost", () => {
   这句告警是「闸门静默失效」那一整族唯一的出口，所以它的触发条件本身要有测试：配了任一档就该闭嘴，全没配才说话。
   */
 describe("budgetGateNotice", () => {
-  it("三档全没配 → 说清闸门未生效与花钱无上限", () => {
+  it("三档全没配 → 说清算不出花费、额度上限不会触发", () => {
     const notice = budgetGateNotice({ inputPerMillionUsd: 0, outputPerMillionUsd: 0 });
-    expect(notice).toContain("未生效");
-    expect(notice).toContain("无上限");
+    expect(notice).toContain("额度上限不会触发");
+    expect(notice).toContain("配上任一单价即恢复");
   });
 
   it("只配了输出价也算闸门在管事 → 不再告警", () => {
@@ -146,7 +146,7 @@ describe("currentPricing（现读两层回落）", () => {
   });
 
   it("界面上把输入价填上，闸门告警当场消失（这条以前只能改 .env 再重启引擎）", () => {
-    expect(budgetGateNotice()).toContain("未生效");
+    expect(budgetGateNotice()).toContain("额度上限不会触发");
     setLlmRuntimeSettings({ inputUsdPerMillion: "0.28" });
     expect(budgetGateNotice()).toBeUndefined();
     expect(pricingIsConfigured()).toBe(true);

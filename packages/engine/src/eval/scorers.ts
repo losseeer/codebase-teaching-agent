@@ -178,7 +178,7 @@ export function screenReply(answer: string): ScreenedReply {
 export function screenNotice(screened: ScreenedReply): string | undefined {
   if (!screened.secrets && !screened.paths) return undefined;
   const parts = [screened.secrets ? `${screened.secrets} 处疑似密钥` : "", screened.paths ? `${screened.paths} 处仓库外路径` : ""].filter(Boolean);
-  return `\n\n⚠️ 本地过筛：本轮回复中的 ${parts.join(" 与 ")} 已被隐去（不落库、不发给模型对端）。`;
+  return `\n\n⚠️ 本轮回复中的 ${parts.join(" 与 ")} 已被隐去。`;
 }
 
 /** 单回合复检结论。`applicable` 是该回合该判的条目，`failed` 是其中的失守项。 */
@@ -230,7 +230,7 @@ export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>)
   */
 export function invariantTailNotice(verdict: TurnInvariantVerdict): string | undefined {
   if (!verdict.failed.includes("reference-grounding")) return undefined;
-  return "\n\n⚠️ 自动复检：本轮有代码位置引用未能在当前仓库核实，请以仓库实际内容为准。";
+  return "\n\n⚠️ 本轮引用的代码位置未能核实，请以仓库实际内容为准。";
 }
 
 export interface InvariantCheck {

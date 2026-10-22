@@ -327,7 +327,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("没有找到与「kubernetes」主题相关的源码文件");
+    await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("这个主题在本仓找不到相关代码");
     expect(calls).toHaveLength(0);
     // 零候选也要留痕：记录要分得清「没走到模型」与「被模型拒绝」
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "no_candidates")).toBe(true);
@@ -347,7 +347,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const hallucinated = JSON.parse(generationJson);
     hallucinated.anchors = [{ path: "src/invented.ts", line: 1 }];
     const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("守门校验");
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型出的题不合格");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
   });
 
@@ -361,7 +361,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(result.passed).toBe(true);
     expect(result.score).toBe(0.8);
     expect(result.feedbackSource).toBe("llm_judge");
-    await expect(service.answer(repository, exercise.id, { text: "再答一次" })).rejects.toThrow("rubric 判分需要 LLM");
+    await expect(service.answer(repository, exercise.id, { text: "再答一次" })).rejects.toThrow("判分需要模型");
   });
 });
 

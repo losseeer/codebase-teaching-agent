@@ -120,7 +120,7 @@ describe("OpenAICompatibleProvider", () => {
   it("非 length 的空 content 保持通用错误", async () => {
     const fetchImpl = (async () => jsonResponse(chatBody("  ", "stop"))) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
-    await expect(provider.complete({ system: "s", user: "u" })).rejects.toThrow("LLM returned an empty completion");
+    await expect(provider.complete({ system: "s", user: "u" })).rejects.toThrow("模型没有返回内容");
   });
 
   it("请求中止时抛显式超时错误", async () => {
@@ -134,7 +134,7 @@ describe("OpenAICompatibleProvider", () => {
       });
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl, timeoutMs: 20 });
-    await expect(provider.complete({ system: "s", user: "u" })).rejects.toThrow(/LLM 请求超时（20ms）/);
+    await expect(provider.complete({ system: "s", user: "u" })).rejects.toThrow(/模型请求超时（20ms）/);
   });
 
   it("finish=length 但 content 非空时正常返回", async () => {

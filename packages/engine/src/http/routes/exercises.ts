@@ -1,6 +1,6 @@
 import { type ExerciseAnswer, type ExerciseKind, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
 import { budgetDegraded } from "../../application/paid-turn.js";
-import { exercises, lightLlm, repositoryOr404 } from "../../services.js";
+import { exercises, lightLlm, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import type { FastifyInstance } from "fastify";
 
 /**
@@ -11,8 +11,8 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   const repository = repositoryOr404(request.params.repositoryId);
   const kind = request.body?.kind;
   const family = request.body?.family === "llm" ? "llm" as const : "comprehension" as const;
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
-  if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "LLM 出题需要提供主题标签" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
+  if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "出题需要先填主题名称" });
   if (kind && !SUPPORTED_EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
   const budgetExhausted = budgetDegraded(repository.handle);
   try {
@@ -31,7 +31,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
 
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
     return await exercises.answer(repository, request.params.exerciseId, request.body ?? {}, provider);
@@ -46,7 +46,7 @@ app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseA
 */
 app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/explain", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
     return await exercises.explain(repository, request.params.exerciseId, request.body ?? {}, provider);

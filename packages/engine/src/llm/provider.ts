@@ -286,7 +286,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     });
     if (!text && !toolCalls.length) {
       if (choice?.finish_reason === "length") return { truncated: true };
-      throw new Error("LLM returned an empty completion");
+      throw new Error("模型没有返回内容");
     }
     const reasoningRaw = choice?.message?.reasoning_content;
     return {
@@ -311,14 +311,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
         body: JSON.stringify(payload),
         signal: linked.signal
       });
-      if (!response.ok) throw new Error(`LLM returned ${response.status}`);
+      if (!response.ok) throw new Error(`模型服务出错（HTTP ${response.status}）`);
       return response;
     } catch (error) {
       const attributed = attributeAbort(error, signal);
       // 顺序是刻意的：先归因外部中止，再判超时——否则用户点停止会被写成「请求超时」并被重试层重发。
       if (attributed instanceof LlmAbortedError) throw attributed;
       if (attributed instanceof Error && attributed.name === "AbortError") {
-        throw new Error(`LLM 请求超时（${timeoutMs}ms）：推理模型生成较慢时可调大 TUTOR_LLM_TIMEOUT_MS。`);
+        throw new Error(`模型请求超时（${timeoutMs}ms）：推理模型较慢时可以调大超时时长。`);
       }
       throw attributed;
     } finally {
@@ -341,7 +341,7 @@ export class AnthropicProvider implements LlmProvider {
     // 原生 Anthropic Messages API 的思考用 budget_tokens（预算制），与 effort 档位语义不同——未实现映射，
     // 显式档位直接报错而不是静默忽略（不许把失败伪装成结果）。off/auto = 不发思考字段。
     if (input.thinking && input.thinking !== "off") {
-      throw new Error(`Anthropic 原生协议暂不支持思考档位 "${input.thinking}"（思考为 budget_tokens 预算制）。请用 auto/off，或改走 OpenAI 兼容端点。`);
+      throw new Error(`这个模型不支持所选思考档位（Anthropic 的思考按预算计）。请选「自动」或「关闭」，或改用 OpenAI 兼容端点。`);
     }
     input = screenOutbound(input);
     const endpoint = this.options.endpoint.replace(/\/$/, "");
@@ -354,7 +354,7 @@ export class AnthropicProvider implements LlmProvider {
     }, input.signal);
     const body = await response.json() as { content?: unknown; stop_reason?: string; usage?: { input_tokens?: number; output_tokens?: number } };
     const text = contentText(body.content);
-    if (!text) throw new Error("LLM returned an empty completion");
+    if (!text) throw new Error("模型没有返回内容");
     return { text, usage: body.usage ? tokenUsage(body.usage) : undefined, finishReason: body.stop_reason };
   }
 
@@ -392,7 +392,7 @@ export class OllamaTeachingProvider implements LlmProvider {
     // 各 Ollama 模型的思考控制不统一（qwen3 等走 options.think / 模板变量），未做映射——
     // 显式档位直接报错而不是静默忽略。off/auto = 不发思考相关字段。
     if (input.thinking && input.thinking !== "off") {
-      throw new Error(`Ollama provider 暂不支持思考档位 "${input.thinking}"。请用 auto/off。`);
+      throw new Error(`这个模型不支持所选思考档位，请选「自动」或「关闭」。`);
     }
     input = screenOutbound(input);
     const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, input.signal);
@@ -406,7 +406,7 @@ export class OllamaTeachingProvider implements LlmProvider {
       if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
       const body = await response.json() as { message?: { content?: unknown }; prompt_eval_count?: number; eval_count?: number; done_reason?: string };
       const text = contentText(body.message?.content);
-      if (!text) throw new Error("LLM returned an empty completion");
+      if (!text) throw new Error("模型没有返回内容");
       return { text, usage: tokenUsage({ input_tokens: body.prompt_eval_count, output_tokens: body.eval_count }), finishReason: body.done_reason };
     } catch (error) {
       // 同 Anthropic：只归因外部中止，其余原样上抛

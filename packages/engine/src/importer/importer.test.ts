@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -208,7 +208,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     expect(book.repositories).toEqual([alpha.repoDir, beta.repoDir, gamma.repoDir]);
   });
 
-  it("forget 出簿并就地卸载；不动仓库自己的 .tutor 产物", () => {
+  it("forget 默认只出簿，不动仓库里的分析结果", () => {
     const repo = makePersistedRepo(root, "alpha");
     writeRegistry([repo.repoDir]);
     const service = new ImportService();
@@ -220,6 +220,29 @@ describe("ImportService 地址簿与懒挂载", () => {
     const database = new TutorDatabase(repo.repoDir);
     expect(database.getAnalysis(repo.repositoryId)?.repositoryId).toBe(repo.repositoryId);
     database.close();
+    expect(existsSync(join(repo.repoDir, ".tutor"))).toBe(true);
+  });
+
+  it("forget 带 artifacts 才删该仓的产物目录", () => {
+    const repo = makePersistedRepo(root, "beta");
+    writeRegistry([repo.repoDir]);
+    const service = new ImportService();
+    service.ensureMounted(repo.repositoryId);
+    expect(service.forget(repo.repositoryId, true)).toEqual({ artifacts: "removed" });
+    expect(existsSync(join(repo.repoDir, ".tutor"))).toBe(false);
+  });
+
+  it("产物目录不在仓内常规位置时拒删（软链到仓外也不算删成）", () => {
+    const repo = makePersistedRepo(root, "gamma");
+    writeRegistry([repo.repoDir]);
+    const outside = realpathSync(mkdtempSync(join(root, "outside-")));
+    rmSync(join(repo.repoDir, ".tutor"), { recursive: true, force: true });
+    symlinkSync(outside, join(repo.repoDir, ".tutor"));
+    const service = new ImportService();
+    expect(service.forget(repo.repositoryId, true)).toEqual({ artifacts: "refused" });
+    expect(lstatSync(join(repo.repoDir, ".tutor")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(outside, "tutor.db"))).toBe(false);
+    rmSync(outside, { recursive: true, force: true });
   });
 });
 

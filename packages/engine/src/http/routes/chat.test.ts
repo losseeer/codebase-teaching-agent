@@ -334,7 +334,7 @@ describe("出字前的本地过筛", () => {
     const reply = (response.json() as { reply: string }).reply;
     expect(reply).toContain("[疑似密钥，已隐去]");
     expect(reply).toContain("[仓库外路径，已隐去]");
-    expect(reply).toContain("本地过筛"); // 改过字要说明，不能暗改
+    expect(reply).toContain("已被隐去"); // 改过字要说明，不能暗改
     expect(reply).not.toContain("sk-abcdefghijklmnop");
     expect(reply).not.toContain("someone");
     expect(fx.assistantMessage(threadId).content).toContain("[疑似密钥，已隐去]");

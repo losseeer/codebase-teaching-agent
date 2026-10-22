@@ -8,13 +8,13 @@ import { teachingLlm } from "../services.js";
 
 export function scopedChatProviderOr422(reply: FastifyReply, handle: RepositoryHandle, gate?: { monthlyBudgetUsd: number; degraded: boolean }): LlmProvider | undefined {
   if ((gate ?? budgetGate(handle)).degraded) {
-    void reply.code(422).send({ error: "本月预算已达到预算上限，此作用域的 LLM 对话不可用；可在设置中调整预算。" });
+    void reply.code(422).send({ error: "本月预算已用完，这个对话暂时用不了；可在「模型与计价」里调整额度。" });
     return undefined;
   }
   const teachingProvider = teachingLlm();
   if (!teachingProvider) {
     // 文案里的入口顺序即实际优先级：GUI 的 LLM 设置优先，其次 .env 的 `TUTOR_LLM_*`
-    void reply.code(422).send({ error: "尚未配置 LLM（在设置里选服务商与模型，或在 .env 写 TUTOR_LLM_PROVIDER / TUTOR_LLM_MODEL），此作用域的 LLM 对话不可用。" });
+    void reply.code(422).send({ error: "还没配置模型，这个对话暂时用不了；在「模型与计价」里选服务商与模型即可。" });
     return undefined;
   }
   return teachingProvider;

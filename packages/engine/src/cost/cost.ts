@@ -62,7 +62,7 @@ export function pricingIsConfigured(pricing: Pricing = currentPricing()): boolea
 export function budgetGateNotice(pricing: Pricing = currentPricing()): string | undefined {
   if (pricingIsConfigured(pricing)) return undefined;
   // 一句因果链读完即可；环境变量名交给界面的悬停说明
-  return "预算闸门未生效：没配单价 ⇒ 花费算不出 ⇒ 闸门永远判为没超支，实际是无上限调用。配上任一单价即恢复上限。";
+  return "没配单价时算不出花了多少，额度上限不会触发；配上任一单价即恢复。";
 }
 
 /** 把用量切成三个计费档位。输入口径与 provider 的 prompt_tokens 一致：命中那部分含在输入里。 */

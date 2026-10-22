@@ -231,7 +231,7 @@ export const api = {
   /** 显式挂载一个仓库并拿到新鲜度判定；不在地址簿/目录没了/产物不全都按 reason 抛错。 */
   mountRepository: (repositoryId: string) => request<{ repositoryId: string; repositoryPath: string; freshness: RepositoryFreshness }>(`/api/repositories/${repositoryId}/mount`, { method: "POST" }),
   /** 把仓库移出地址簿（只动引擎的登记，不碰仓库里的 .tutor/）。 */
-  forgetRepository: (repositoryId: string) => request<{ repositories: RepositoryCatalogEntry[] }>(`/api/repositories/${repositoryId}`, { method: "DELETE" }),
+  forgetRepository: (repositoryId: string, artifacts = false) => request<{ repositories: RepositoryCatalogEntry[]; artifacts?: "removed" | "absent" | "refused" }>(`/api/repositories/${repositoryId}${artifacts ? "?artifacts=1" : ""}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   /** 导入完成后的报告：索引概况 + 本次 token/金额估算。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string } }>(`/api/repositories/${repositoryId}/report`),

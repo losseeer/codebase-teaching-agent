@@ -4,7 +4,7 @@ import { diagramFilesByNode, diagramWarnings } from "../../diagram/set-diagram.j
 import { diagramWriteContextFor } from "../../application/canvas-tools.js";
 import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../store/diagrams.js";
 import { Journal } from "../../store/journal.js";
-import { repositoryOr404 } from "../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 
 /**
   画布那组路由：图库、单张图、改名、删、恢复、几何。注册在根实例上，所以懒挂载钩子与来源闸照常生效。
@@ -25,13 +25,13 @@ export function registerDiagramRoutes(app: FastifyInstance): void {
 
 /** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
 function diagramNotFound(reply: FastifyReply) {
-  return reply.code(404).send({ error: "这张图不存在或已被删除：图库列表里没有它，就不要再来取。", reason: "diagram_not_found" });
+  return reply.code(404).send({ error: "这张图已经不在了。", reason: "diagram_not_found" });
 }
 
 /** 图库列表：只回摘要，不拖整张图的结构进左栏。 */
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const database = repository.handle.pin();
   try {
     return { diagrams: listDiagrams(database, repository.index.repositoryId) };
@@ -43,7 +43,7 @@ app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/d
 /** 新建一张空白图：名字撞了由 `uniqueDiagramName` 加序号——图库与 agent 都靠名字认图，不允许两张同名。 */
 app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const database = repository.handle.pin();
   try {
     const diagram = createBlankDiagram(database, repository.index.repositoryId, typeof request.body?.name === "string" ? request.body.name : undefined);
@@ -60,7 +60,7 @@ app.post<{ Params: { repositoryId: string }; Body: { name?: unknown } }>("/api/r
 /** 单张图 + 读侧的引用复检：图上的模块节点还指得着现在的索引吗（图是历史产物，文件会改名、目录会删）。 */
 app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const database = repository.handle.pin();
   try {
     const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
@@ -77,7 +77,7 @@ app.get<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositor
 */
 app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const raw = typeof request.body?.name === "string" ? request.body.name : "";
   const database = repository.handle.pin();
   try {
@@ -105,7 +105,7 @@ app.patch<{ Params: { repositoryId: string; diagramId: string }; Body: { name?: 
 /** 删掉一张图：版本历史一起没，所以这一行审计要留得住名字与版数。 */
 app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/repositories/:repositoryId/diagrams/:diagramId", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const database = repository.handle.pin();
   try {
     const diagram = readDiagram(database, repository.index.repositoryId, request.params.diagramId);
@@ -125,7 +125,7 @@ app.delete<{ Params: { repositoryId: string; diagramId: string } }>("/api/reposi
 */
 app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const raw = request.body?.positions;
   if (!Array.isArray(raw)) return reply.code(400).send({ error: "positions 要是一个数组：[{ id, x, y }]，只给节点 id 与它的新位置" });
   const positions = raw.flatMap((item): { id: string; x: number; y: number }[] => {
@@ -145,7 +145,7 @@ app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions
 /** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `store/diagrams.ts` 的 `restoreVersion`）。 */
 app.post<{ Params: { repositoryId: string; diagramId: string }; Body: { index?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/restore", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const index = request.body?.index;
   if (typeof index !== "number" || !Number.isInteger(index)) return reply.code(400).send({ error: "index 要是一个整数（版本清单的下标，0 起）" });
   const database = repository.handle.pin();

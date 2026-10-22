@@ -32,8 +32,8 @@ app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
   const scope = parseScopeRef(request.body?.scopeRef ?? "");
-  if (!scope) return reply.code(400).send({ error: "作用域格式不对：需要 file:<仓内路径> 或 dir:<仓内目录>" });
-  if (!scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这个作用域里没有已分析的文件；请换一个文件或目录。" });
+  if (!scope) return reply.code(400).send({ error: "教学域格式不对：需要 file:<仓内路径> 或 dir:<仓内目录>" });
+  if (!scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这里暂时没有可问的代码；请换一个文件或目录。" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : undefined);
   const hasExplicitSettings = Boolean(request.body?.settings && Object.keys(request.body.settings).length) || typeof request.body?.style === "number";
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
@@ -69,7 +69,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   if (!mounted.ok) return reply.code(404).send({ error: mounted.message, reason: mounted.reason });
   const repository = mounted.repository;
   const scope = parseScopeRef(current.scopeRef);
-  if (!scope || !scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这个教学作用域已不可用；请重新选择文件或目录。" });
+  if (!scope || !scopeAvailable(scope, repository.index)) return reply.code(404).send({ error: "这个教学域已不可用；请重新选择一个文件或目录。" });
   const requestedStyle = request.body?.settings?.style ?? (typeof request.body?.style === "number" ? request.body.style : current.settings.style);
   const settings = validateSettings({ ...current.settings, ...request.body?.settings, style: requestedStyle });
   const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);

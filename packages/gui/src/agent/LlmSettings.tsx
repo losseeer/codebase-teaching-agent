@@ -125,7 +125,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 value={llm?.provider ?? ""}
                 disabled={!llm}
                 ariaLabel="LLM 服务商协议"
-                hint="协议决定请求格式与默认接口地址；选「默认」即沿用 .env 的 TUTOR_LLM_PROVIDER"
+                hint="协议决定请求格式与默认地址；选「默认」即沿用 .env 的配置"
                 onChange={(provider) => updateLlm({ provider: provider as LlmProviderKind | "" })}
                 options={[
                   { value: "", label: `默认（${llm?.envFallback.provider || ".env 未配置"}）` },
@@ -176,7 +176,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
-              <span className="modal-note" title="持久化在 ~/.codebase-tutor/llm-settings.json">改完即生效；留空回落 .env</span>
+              <span className="modal-note" title="设置保存在本机用户目录">改完即生效；留空则用 .env 的配置</span>
               <button type="button" className="btn btn-primary" onClick={() => setOpen(false)}>完成</button>
             </div>
           </div>
@@ -203,11 +203,11 @@ const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
 
 /** 各思考能力样式的悬停提示（引擎按模型 slug 解析出的样式）。 */
 const THINKING_STYLE_HINT: Record<string, string> = {
-  deepseek: "DeepSeek 格式：thinking 开关 + reasoning_effort（V4 默认开启思考）",
-  openai: "OpenAI 格式：顶层 reasoning_effort（GPT-5 / o 系 / Gemini 兼容层）",
+  deepseek: "DeepSeek：思考开关 + 强度档（V4 默认开启思考）",
+  openai: "OpenAI：强度档（GPT-5 / o 系 / Gemini 兼容层）",
   anthropic: "Anthropic 兼容层：仅 thinking 开关，无强度档位",
   none: "该模型没有思考参数",
-  unknown: "未识别的模型：auto/off 不发字段；强度档位会被引擎拒绝（可用 TUTOR_THINKING_STYLES 声明）"
+  unknown: "这个模型没有已知的思考档位，只能选自动或关闭"
 };
 
 /** 单价一个节点的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
@@ -231,7 +231,7 @@ function pricingLive(llm: LlmSettings): boolean {
 function pricingReadout(llm: LlmSettings): string {
   const p = llm.pricing;
   if (!p) return "单价读数未返回";
-  if (!pricingLive(llm)) return "三档都没配 ⇒ 金额恒 ¥0.0000，「超预算改走本地规则」这道闸没在管事";
+  if (!pricingLive(llm)) return "三种单价都没填，金额恒为 ¥0.0000，额度上限不会触发";
   const source = (key: "input" | "output" | "cacheHit"): string => ({ runtime: "界面", env: ".env", unset: "未配" })[llm.pricingSources?.[key] ?? "unset"];
   return `按 输入 ${money(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${money(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${money(p.outputPerMillionUsd)}（${source("output")}）计价`;
 }
@@ -249,7 +249,7 @@ function activeSummary(llm: LlmSettings | null): { pill: string; text: string; t
   const thinking = llm?.thinking === "auto" || !llm?.thinking ? "自动" : THINKING_EFFORT_LABEL[llm.thinking];
   if (!llm) return { pill: "读取中…", text: "读取中…", title: "", hint: "", thinking, local: false };
   if (llm.activeMode === "local") {
-    return { pill: "本地兜底", text: "本地兜底（未走 LLM）", title: llm.activeProvider ?? "", hint: "服务商或密钥没配齐，教学走本地启发式（不消耗 token）。", thinking, local: true };
+    return { pill: "本地规则", text: "本地规则（未连模型）", title: llm.activeProvider ?? "", hint: "服务商或密钥没配齐，回答走本地规则，不产生费用。", thinking, local: true };
   }
   const [protocol, ...model] = (llm.activeModel ?? "").split(":");
   const slug = model.join(":") || llm.activeModel || "";

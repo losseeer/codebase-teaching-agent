@@ -226,7 +226,7 @@ export class ExerciseService {
   private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, database: TutorDatabase, journal: Journal, scope: string, deps: { path: string; hash: string }[]): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
-      const reason = "代码题需要配置模型：题面、缺陷与测试由模型设计，判分由沙箱跑测试。当前未配 LLM 或本月预算已达到预算上限。";
+      const reason = "代码题需要模型：题面、缺陷与测试都由模型设计，判分靠运行测试。当前没配模型，或本月预算已用完。";
       journal.append("exercise_declined", { family: "code", tag: "", reason, stage: "no_provider" });
       throw new Error(reason);
     }
@@ -308,8 +308,8 @@ export class ExerciseService {
     */
   private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, database: TutorDatabase): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
-    if (!tag) throw new Error("LLM 出题需要提供主题标签；请在「＋ 配置」里填写。");
-    if (!provider) throw new Error("LLM 出题不可用：未配置 LLM 或本月预算已达到预算上限。");
+    if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
+    if (!provider) throw new Error("出题用的模型现在用不了：没配模型，或本月预算已用完。");
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
@@ -320,7 +320,7 @@ export class ExerciseService {
     if (!candidates.length) {
       // 零候选也要留痕：记录要分得清「没走到模型」与「被模型拒绝」，才知道该修选稿还是修提示词
       journal.append("exercise_declined", { family: "llm", tag, reason: `词法候选选择没有命中任何与「${tag}」相关的源码文件。`, stage: "no_candidates" });
-      throw new Error(`没有找到与「${tag}」主题相关的源码文件；可换一个更贴近本仓库的主题标签，或在配置里补充业务 tag。`);
+      throw new Error(`这个主题在本仓找不到相关代码：「${tag}」。换一个更具体的主题名称试试。`);
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
@@ -344,7 +344,7 @@ export class ExerciseService {
     });
     const issues = guardLlmProposal(generation.proposal, candidates);
     if (issues.length) {
-      const reason = `LLM 出题未通过守门校验：${issues.map((issue) => issue.message).join("；")}。`;
+      const reason = `模型出的题不合格：${issues.map((issue) => issue.message).join("；")}。`;
       journal.append("exercise_declined", { family: "llm", tag, reason, stage: "guard" });
       throw new Error(reason);
     }
@@ -381,7 +381,7 @@ export class ExerciseService {
     不做时效校验是有意的：讲评吃的是冻结在缓存行里的那组测试与这次运行的输出，跟仓库现在长什么样无关。
     */
   async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
-    if (!provider) throw new Error("讲评需要配置模型；当前未配 LLM 或本月预算已达到预算上限。");
+    if (!provider) throw new Error("讲评需要模型：当前没配模型，或本月预算已用完。");
     const database = repository.handle.pin();
     let stored: StoredExercise | undefined;
     try {
@@ -610,7 +610,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, jour
 
 /** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不伪装成确定性判分。 */
 async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<GradeOutcome> {
-  if (!provider) throw new Error("rubric 判分需要 LLM；当前未配置 LLM 或本月预算已达到预算上限。");
+  if (!provider) throw new Error("这道题的判分需要模型：当前没配模型，或本月预算已用完。");
   const learnerAnswer = (answer.text ?? "").trim();
   if (!learnerAnswer) {
     return { score: 0, passed: false, automatic: false, feedbackSource: "llm_judge", feedback: "回答为空；请写下你的分析后再提交。" };

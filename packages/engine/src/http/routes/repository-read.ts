@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "../../source/files.js";
-import { exercises, repositoryOr404 } from "../../services.js";
+import { exercises, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../store/journal.js";
 import type { FastifyInstance } from "fastify";
@@ -15,24 +15,24 @@ import type { FastifyInstance } from "fastify";
 export function registerRepositoryReadRoutes(app: FastifyInstance): void {
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/index", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  return repository?.index ?? reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  return repository?.index ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/practice", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  return repository ? exercises.getSummary(repository) : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  return repository ? exercises.getSummary(repository) : reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/learner", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   return repository
     ? deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path))
-    : reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+    : reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
 });
 
 app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/report", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   return { index: repository.index, estimate: repository.estimate };
 });
 

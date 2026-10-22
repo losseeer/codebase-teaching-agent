@@ -1,8 +1,8 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import type {
   ImportEstimate,
   ImportJob,
@@ -280,7 +280,7 @@ export class ImportService extends EventEmitter {
     }
     const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
     if (!path) return { ok: false, reason: "not_in_catalog", message: "这个仓库不在引擎的地址簿里；请重新导入以恢复它。" };
-    if (!isDirectory(path)) return { ok: false, reason: "directory_missing", message: `地址簿记的目录已经不存在：${path}。产物在它原来的 .tutor/ 里，把仓库放回该路径或重新导入即可。` };
+    if (!isDirectory(path)) return { ok: false, reason: "directory_missing", message: `地址簿记的目录已经不在了：${path}。把仓库放回该路径，或重新导入。` };
     let index: RepositoryIndex | undefined;
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
@@ -296,11 +296,11 @@ export class ImportService extends EventEmitter {
       estimate = handle.db.getEstimate(repositoryId);
     } catch {
       handle?.close();
-      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor/tutor.db 读不出来（文件损坏或权限不足），需要重新导入。` };
+      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的分析结果读不出来（文件损坏或权限不足），需要重新导入。` };
     }
     if (!index || !analysis || !estimate) {
       handle?.close();
-      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的 .tutor 产物不完整（缺索引、分析结果或估算），需要重新导入才能继续。` };
+      return { ok: false, reason: "artifacts_incomplete", message: `${path} 的分析结果不完整，需要重新导入才能继续。` };
     }
     const startedAt = Date.now();
     const repository = this.attach({ path, index, estimate, analysis, handle });
@@ -313,10 +313,27 @@ export class ImportService extends EventEmitter {
     return { ok: true, repository };
   }
 
-  /** 用户显式把某仓移出地址簿（并就地卸载）；不动仓库里的产物。 */
-  forget(repositoryId: string): void {
+  /**
+    用户显式把某仓移出地址簿（并就地卸载）。默认不动仓库里的产物；`deleteArtifacts` 才删 `<仓根>/.tutor/`，
+    那里头是这个仓的分析结果、对话记录与练习记录。全局的 `llm.log` / `engine.jsonl` 不属于单个仓，一律不碰。
+    回 `artifacts` 是三个不同读数：removed 删了、absent 本来就没有、refused 位置不对所以没敢删。
+  */
+  forget(repositoryId: string, deleteArtifacts = false): { artifacts?: "removed" | "absent" | "refused" } {
+    const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
     this.unmountOne(repositoryId);
     dropFromRegistry(repositoryId);
+    if (!deleteArtifacts) return {};
+    if (!path || !isAbsolute(path)) return { artifacts: "refused" };
+    try {
+      const target = realpathSync(join(path, ".tutor"));
+      // 只删「仓根下那个叫 .tutor 的真实目录」：指向别处或不是目录就拒，删错等于删掉用户的仓库
+      if (!target.startsWith(`${realpathSync(path)}${sep}`) || !statSync(target).isDirectory()) return { artifacts: "refused" };
+      rmSync(target, { recursive: true, force: true });
+      traceEngine("mount", { repositoryId, phase: "artifacts_removed", path: target }, { traceId: null });
+      return { artifacts: "removed" };
+    } catch {
+      return { artifacts: "absent" };
+    }
   }
 
   /**
@@ -447,7 +464,7 @@ export class ImportService extends EventEmitter {
     if (!job) return;
     const startedAt = Date.now();
     try {
-      this.update(job, "indexing", 10, "正在建立文件树与 Git 热点索引");
+      this.update(job, "indexing", 10, "正在读取文件结构");
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
       const { index, estimate, analysis, handle } = imported;
 
@@ -493,7 +510,7 @@ export class ImportService extends EventEmitter {
   }
 
   private async analyzeWith(repositoryPath: string, handle: RepositoryHandle, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
-    progress("indexing", 10, "正在建立文件树、Git 热点与语义后备索引");
+    progress("indexing", 10, "正在读取文件结构");
     // 增量重分析先扫过一次再决定要不要跑整轮（`reanalyzeOnce`），那份结果直接接手，别把同一个仓扫两遍
     const scan = preScanned ?? scanRepositoryWithDigests(repositoryPath);
     const index = scan.index;
@@ -530,7 +547,7 @@ export class ImportService extends EventEmitter {
       provider,
       withHeaderComments
     });
-    progress("summarizing", 75, "正在生成实现单元与静态产物");
+    progress("summarizing", 75, "正在整理模块与代码单元");
     const graph = await enrichWithLsp(repositoryPath, baseGraph);
     const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
     const analysisHead = gitHeadOf(repositoryPath);

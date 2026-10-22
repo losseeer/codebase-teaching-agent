@@ -16,6 +16,8 @@ const SCENE_LABEL: Record<string, string> = {
   practice_chat: "练习评估对话",
   exercise_generate: "练习生成",
   exercise_llm_generate: "练习生成",
+  exercise_generate_code: "代码题生成",
+  exercise_explain: "讲评",
   exercise_feedback_polish: "反馈润色",
   unknown: "未标注"
 };
@@ -68,7 +70,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
         crumb={<>
           <b>成本监控</b>
           <span className="faint">·</span>
-          <span className="muted" title="读数来自引擎对本月 token_usage 事件的聚合，界面不二次估算">journal token_usage 聚合</span>
+          <span className="muted" title="按本月模型用量统计，界面不再二次估算">本月用量汇总</span>
           <span className="fs-11 faint mono">{savedAt ? `读数 ${savedAt}` : "正在读取…"}</span>
         </>}
         actions={<>
@@ -87,8 +89,8 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 {readoutReady ? usd(cost.estimatedCostUsd) : "—"}
                 <small> / 月度预算 {cost ? usd(cost.monthlyBudgetUsd) : "—"}</small>
               </div>
-              <span className={`badge ${!readoutReady ? "badge-neutral" : overBudget ? "badge-danger" : pricingConfigured ? "badge-ok" : "badge-warn"}`} title={!readoutReady ? "闸门管不管事来自那一次成本读取；读不到就不能替它说「正常」" : pricingConfigured ? undefined : "单价未配置 ⇒ 花费算不出来 ⇒ 「超预算降级」这道闸没在管事，这个 normal 不是读数"}>
-                {!readoutReady ? "闸门状态：读数未到" : !pricingConfigured ? "无上限运行（闸门未生效）" : overBudget ? "已达到预算上限，降级为本地规则" : "正常运行 · 无降级回合"}
+              <span className={`badge ${!readoutReady ? "badge-neutral" : overBudget ? "badge-danger" : pricingConfigured ? "badge-ok" : "badge-warn"}`} title={!readoutReady ? "这个状态和金额来自同一次读取" : pricingConfigured ? undefined : "没配单价就不限额"}>
+                {!readoutReady ? "额度状态：读数未到" : !pricingConfigured ? "未配单价，不限额度" : overBudget ? "本月预算已用完" : "未达上限"}
               </span>
             </div>
             <div className="progress" role="img" aria-label={cost ? `预算已用 ${Math.round(usedRatio * 100)}%` : "预算已用比例：读数未到"}>
@@ -98,7 +100,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
               {!readoutReady
                 ? "读数没拿到，刷新一次再看。"
                 : pricingConfigured
-                  ? <>剩余 {usd(cost.remainingBudgetUsd)} · 达到预算上限后改走本地规则（已用 {Math.round(usedRatio * 100)}%）</>
+                  ? <>剩余 {usd(cost.remainingBudgetUsd)} · 已用 {Math.round(usedRatio * 100)}%</>
                   : <>剩余 {usd(cost.remainingBudgetUsd)} 不算上限：没配单价就算不出已花金额。</>}
             </p>
             <label className="field budget-field">
@@ -111,7 +113,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                   step="0.01"
                   value={budget}
                   aria-invalid={!budgetValid}
-                  title={budgetValid ? "改成非负数即可；¥0 表示此后所有付费分支一律走本地规则" : "要一个有限的非负数字；留空不算 0"}
+                  title={budgetValid ? "¥0 等于此后不再调用模型" : "要一个有限的非负数字；留空不算 0"}
                   onChange={(event) => setBudget(event.target.value)}
                 />
                 <button type="button" className="btn btn-primary btn-sm" disabled={!budgetValid} title={budgetValid ? undefined : "先填一个有限的非负数字"} onClick={() => void saveBudget()}>更新</button>
@@ -122,26 +124,24 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
           {readoutReady && cost.turns > 0 ? (
             <>
               <div className="tiles">
-                <div className="card tile" title="含缓存命中部分，与模型上报的 prompt_tokens 同口径"><div className="t-val">{tokensText(cost.inputTokens)}</div><div className="t-lbl">输入 tokens</div></div>
-                <div className="card tile" title="= 输入 − 命中"><div className="t-val">{tokensText(cost.billedInputTokens)}</div><div className="t-lbl">未命中输入</div></div>
-                <div className="card tile" title="复用同一份前缀省下的输入，按命中价计；端点没上报则为 0"><div className="t-val">{tokensText(cost.cacheHitTokens)}</div><div className="t-lbl">命中输入（缓存）</div></div>
+                <div className="card tile" title="含缓存命中部分"><div className="t-val">{tokensText(cost.inputTokens)}</div><div className="t-lbl">输入 tokens</div></div>
+                <div className="card tile" title="输入减去命中部分"><div className="t-val">{tokensText(cost.billedInputTokens)}</div><div className="t-lbl">未命中输入</div></div>
+                <div className="card tile" title="命中的输入按命中价计；端点未上报时记 0"><div className="t-val">{tokensText(cost.cacheHitTokens)}</div><div className="t-lbl">命中输入（缓存）</div></div>
                 <div className="card tile"><div className="t-val">{tokensText(cost.outputTokens)}</div><div className="t-lbl">输出 tokens</div></div>
-                <div className="card tile"><div className="t-val">{cost.turns - cost.degradedTurns}</div><div className="t-lbl">计费回合</div></div>
-                <div className="card tile" title="走本地规则、未付 token 的回合"><div className="t-val">{cost.degradedTurns}</div><div className="t-lbl">降级回合</div></div>
-                <div className="card tile" title="单价没配 ⇒ 金额恒 ¥0 ⇒ 这道闸永远判未超支。单价在「模型与计价」里填，改完即生效"><div className="t-val">{pricingConfigured ? "生效中" : "未生效"}</div><div className="t-lbl">预算闸门</div></div>
+                <div className="card tile" title="没配单价时不会触发额度上限"><div className="t-val">{pricingConfigured ? "生效中" : "未生效"}</div><div className="t-lbl">额度上限</div></div>
               </div>
 
               {!pricingConfigured ? (
                 <div className="banner banner-warn">
                   <Icon name="alert" />
-                  <span className="banner-text" title="「模型与计价」→ 单价，填完即生效；留空回落 .env 的 TUTOR_*_USD_PER_MILLION">
-                    没配单价 ⇒ 金额恒 ¥0.0000，<b>预算闸门也因此不管事</b>。上面的 token 用量是真读数。
+                  <span className="banner-text" title="在「模型与计价」里填任一单价即恢复">
+                    没配单价时金额恒为 ¥0.0000，<b>额度上限不会触发</b>。token 用量是真实读数。
                   </span>
                 </div>
               ) : null}
 
               <section className="card card-pad col gap-3">
-                <div className="section-title" title="柱高按本月单日最大 tokens 归一，悬停看每天输入/输出">本月逐日</div>
+                <div className="section-title" title="柱高按本月最高一天的比例">本月逐日</div>
                 <div className="bar-chart">
                   {cost.byDay.slice(-14).map((day) => {
                     const total = day.inputTokens + day.outputTokens;

@@ -3,7 +3,7 @@ import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.
 import { resolveLlmConfig, teachingProviderStatus } from "../../llm/provider.js";
 import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, publicLlmSettings, setLlmRuntimeSettings } from "../../llm/runtime.js";
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../llm/thinking.js";
-import { repositoryOr404, teachingLlm } from "../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404, teachingLlm } from "../../services.js";
 import type { FastifyInstance } from "fastify";
 
 /**
@@ -111,13 +111,13 @@ app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: 
 
 app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } }>("/api/repositories/:repositoryId/cost", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   return summarizeCost(repository.path, readRepositorySettings(repository.handle).monthlyBudgetUsd, request.query.sessionId);
 });
 
 app.put<{ Params: { repositoryId: string }; Body: { monthlyBudgetUsd?: number } }>("/api/repositories/:repositoryId/settings", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const budget = request.body?.monthlyBudgetUsd;
   if (budget === undefined) return reply.code(400).send({ error: "请提供 monthlyBudgetUsd" });
   if (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0) return reply.code(400).send({ error: "预算必须是非负数字" });

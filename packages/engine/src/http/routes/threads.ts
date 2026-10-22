@@ -1,5 +1,5 @@
 import { locateThread, threadJournalPayload } from "../../application/threads.js";
-import { repositoryOr404 } from "../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { createThread, getThread, isChatScope, listThreads, readMessages, renameThread, softDeleteThread } from "../../store/chat-store.js";
 import { Journal } from "../../store/journal.js";
 import type { FastifyInstance } from "fastify";
@@ -13,7 +13,7 @@ import type { FastifyInstance } from "fastify";
 export function registerThreadRoutes(app: FastifyInstance): void {
 app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string; current?: string } }>("/api/repositories/:repositoryId/threads", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   if (!isChatScope(request.query.scope)) return reply.code(400).send({ error: "scope 只能是 teach / map / practice" });
   const threads = listThreads(repository.path, repository.index.repositoryId, request.query.scope);
   /*
@@ -29,7 +29,7 @@ app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string; curre
 
 app.post<{ Params: { repositoryId: string }; Body: { scope?: unknown; scopeRef?: unknown; exerciseId?: unknown; title?: unknown } }>("/api/repositories/:repositoryId/threads", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   if (!isChatScope(request.body?.scope)) return reply.code(400).send({ error: "scope 只能是 teach / map / practice" });
   const scope = request.body.scope;
   // 归属对象（文件/目录作用域、练习题）由调用方给出，服务端只截长不校验存在性：产物会重新分析

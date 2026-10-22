@@ -117,7 +117,7 @@ describe("运行期运行时复检（同样的两条在回合收尾判）", () =
   it("尾部明示只在引用失守时出现，且它自己不含任何引用形态的串（否则回放同一份文本会被二次判分）", () => {
     const failing = checkTurnInvariants(turn({ answer: "见 src/graph/ghost.py:8，为什么？" }), files);
     const notice = invariantTailNotice(failing);
-    expect(notice).toContain("自动复检");
+    expect(notice).toContain("未能核实");
     expect(notice).toContain("未能");
     expect(scoreReferences([notice ?? ""], files).total).toBe(0);
     // 幂等：把加了明示的文本再判一遍，结论不变、也不会新长出问题
@@ -158,7 +158,7 @@ describe("screenReply", () => {
     expect(screened.text).not.toContain("sk-abcdefghijklmnop");
     expect(screened.text).not.toContain("devsecczk");
     expect(screened.samples.join(" ")).not.toContain("abcdefghijklmnop");
-    expect(screenNotice(screened)).toContain("本地过筛");
+    expect(screenNotice(screened)).toContain("已被隐去");
   });
 
   it("正常讲代码的回复一个字都不该被改（仓库内路径、占位符、普通赋值句）", () => {

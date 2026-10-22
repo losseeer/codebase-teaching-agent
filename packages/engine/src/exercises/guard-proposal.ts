@@ -50,7 +50,7 @@ export function guardLlmProposal(proposal: LlmExerciseProposal, candidates: Guar
 
   const criteria = Array.isArray(proposal.criteria) ? proposal.criteria : [];
   if (!criteria.length) issues.push({ check: "contract", message: "评分细则为空" });
-  if (criteria.length > MAX_CRITERIA) issues.push({ check: "contract", message: `评分细维度过多（>${MAX_CRITERIA}）` });
+  if (criteria.length > MAX_CRITERIA) issues.push({ check: "contract", message: `评分维度太多（>${MAX_CRITERIA}）` });
   for (const criterion of criteria) {
     if (!criterion?.dimension?.trim() || !criterion?.description?.trim()) {
       issues.push({ check: "contract", message: "评分细则存在空维度或空描述" });

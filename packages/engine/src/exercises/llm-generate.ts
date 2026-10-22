@@ -198,14 +198,14 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   });
   const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4, scene: "practice.generate" });
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, reason: "LLM 返回内容无法解析为出题结果；请重试。" };
+  if (!parsed) return { ok: false, reason: "模型给的题目读不出来，请重试。" };
   if (parsed.ok === false) {
     const reason = String(parsed.reason ?? "").trim();
     return { ok: false, reason: reason || "当前仓库没有适合该主题的出题素材。" };
   }
-  if (parsed.ok !== true) return { ok: false, reason: "LLM 返回内容缺少出题结果标记；请重试。" };
+  if (parsed.ok !== true) return { ok: false, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
   const proposal = normalizeProposal(parsed);
-  if (!proposal) return { ok: false, reason: "LLM 返回的出题结果字段不完整；请重试。" };
+  if (!proposal) return { ok: false, reason: "模型给的题目字段不完整，请重试。" };
   return { ok: true, proposal, usage: response.usage };
 }
 
@@ -225,7 +225,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   const response = await input.provider.complete({ system, user, maxTokens: 500, temperature: 0.1, scene: "practice.judge" });
   const parsed = parseJsonObject(response.text);
   if (!parsed || typeof parsed.score !== "number" || !Number.isFinite(parsed.score)) {
-    throw new Error("rubric 判分结果无法解析；请重试。");
+    throw new Error("这次判分没成功，请再试一次。");
   }
   const score = Math.max(0, Math.min(1, Number(parsed.score.toFixed(2))));
   const passed = typeof parsed.passed === "boolean" ? parsed.passed : score >= 0.6;

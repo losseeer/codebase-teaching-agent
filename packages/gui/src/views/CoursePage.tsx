@@ -312,7 +312,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         setRailTab("gallery");
         showToast(`已建空白图「${created.name}」`);
       } catch (reason: unknown) {
-        toastFailure("新建没成功", reason);
+        toastFailure("新建失败", reason);
       }
     })();
   }, [repositoryId]);
@@ -324,7 +324,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         setDiagrams((current) => current.map((item) => (item.id === id ? { ...item, name: renamed.name, updatedAt: renamed.updatedAt } : item)));
         if (id === diagramIdForGeometry.current) setDiagram((current) => (current ? { ...current, name: renamed.name, updatedAt: renamed.updatedAt } : current));
       } catch (reason: unknown) {
-        toastFailure("改名没落盘", reason);
+        toastFailure("改名失败", reason);
         refreshGallery();
       }
     })();
@@ -339,7 +339,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         if (item.id === openIdRef.current) { setOpenId(null); setSelected(null); }
         showToast(`已删除「${item.name}」`);
       } catch (reason: unknown) {
-        toastFailure("删除没成功", reason);
+        toastFailure("删除失败", reason);
         refreshGallery();
       }
     })();
@@ -366,7 +366,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
         refreshGallery();
         showToast("已恢复到那一版");
       } catch (reason: unknown) {
-        toastFailure("恢复没成功", reason);
+        toastFailure("恢复失败", reason);
       }
     })();
   }, [repositoryId, applyDiagram, refreshGallery]);
@@ -386,7 +386,7 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
       t.setMapScope(files.map((file) => file.path));
       t.setMapFile("");
       t.setMapBinding({ kind: "module", title: node.label });
-      showToast(`对话已绑到「${node.label}」`);
+      showToast(`对话已切到「${node.label}」`);
       return;
     }
     t.setMapScope([]);

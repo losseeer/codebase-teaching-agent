@@ -359,13 +359,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (!debt || debt.threadId !== threadId) return;
     if (rows.length > debt.count) {
       patchDebt(target, null);
-      patchNotice(target, threadId, "这一轮在断线期间由引擎算完，回复已从库里补回。");
+      patchNotice(target, threadId, "断线期间的回复已取回。");
       return;
     }
     const wait = RECHECK_DELAYS[reconcileAttempts.current[target]];
     if (wait === undefined) {
       patchDebt(target, null);
-      patchNotice(target, threadId, "等了一会儿，断线那一轮仍没落库（引擎没算完，或根本没收到）。可以重新提问。");
+      patchNotice(target, threadId, "断线那一轮没有完成，请重新提问。");
       return;
     }
     reconcileAttempts.current[target] += 1;
@@ -476,7 +476,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         if (thread && !thread.scopeRef) {
           // 旧课程树时代的线程没有文件/目录作用域：直接断，不假装还能接着聊
           setCurrentThread("teaching", null);
-          pushMessage("teaching", "agent", "这条教学线程绑的是旧课程节点，作用域已失效；请重新选一个文件或目录开始。", "hint");
+          pushMessage("teaching", "agent", "这条会话沿用的是旧的目录结构，请重新选一个文件或目录。", "hint");
           return;
         }
         // 教学线程绑作用域：点开的线程若属于别的文件/目录，先把左栏指向那个作用域
@@ -496,7 +496,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch {
       if (currentThreadRef.current[scope] !== threadId) return;
       setThreads((prev) => ({ ...prev, [scope]: [] }));
-      pushMessage(scope, "agent", "这个会话的历史暂时读不到（引擎未挂载该仓库，或会话已被删除）。", "hint");
+      pushMessage(scope, "agent", "这段历史暂时读不到，可稍后再试或新建会话。", "hint");
     }
   };
 

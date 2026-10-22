@@ -5,7 +5,7 @@ import { teachingProviderStatus } from "../../llm/provider.js";
 import { getLlmRuntimeSettings } from "../../llm/runtime.js";
 import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../external/clients.js";
 import { isolationStatus, reprobeIsolation } from "../../sandbox/isolation.js";
-import { importer, lightLlm, repositoryOr404, teachingLlm } from "../../services.js";
+import { importer, lightLlm, REPOSITORY_NOT_MOUNTED, repositoryOr404, teachingLlm } from "../../services.js";
 import { listSkills, skillDirectories } from "../../external/skills.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType } from "../../store/journal.js";
 import { createSummaryProvider } from "../../summarizer/summary-provider.js";
@@ -43,10 +43,9 @@ app.post<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/
   return { repositoryId: result.repository.index.repositoryId, repositoryPath: result.repository.path, freshness: result.repository.freshness };
 });
 
-/** 把某仓移出地址簿（并就地卸载）。只动引擎的注册表，不碰仓库里的 `.tutor/`。 */
-app.delete<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId", async (request) => {
-  importer.forget(request.params.repositoryId);
-  return { repositories: importer.catalog() };
+/** 把某仓移出地址簿（并就地卸载）。默认只动引擎的注册表；`?artifacts=1` 才删该仓的 `.tutor/`（分析结果、对话与练习记录）。 */
+app.delete<{ Params: { repositoryId: string }; Querystring: { artifacts?: string } }>("/api/repositories/:repositoryId", async (request) => {
+  return { repositories: importer.catalog(), ...importer.forget(request.params.repositoryId, request.query.artifacts === "1") };
 });
 
 /**
@@ -119,7 +118,7 @@ app.get<{ Params: { jobId: string } }>("/api/imports/:jobId", async (request, re
   */
 app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: unknown; sessionId?: unknown } }>("/api/repositories/:repositoryId/journal", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
-  if (!repository) return reply.code(404).send({ error: "仓库不在当前引擎会话中；请重新导入以恢复它。" });
+  if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const { type, payload, sessionId } = request.body ?? {};
   // 只收界面侧那张表里的类型：`file_read` / `code_egress` / `token_usage` 是审计证据，
   // 而这条接口本机任何进程都调得到，照全集合放行等于让被审计的一方自己填账

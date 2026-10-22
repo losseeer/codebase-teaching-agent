@@ -355,7 +355,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
         )}
         <span
           className={`badge ${diagram.source === "agent" ? "badge-info" : "badge-neutral"}`}
-          title={`结构改动只走对话里的 agent（set_diagram 单写入口）；这张图由${diagram.source === "agent" ? " agent 画" : " 你自己新建"}。${warnings.length ? `${warnings.length} 个节点的引用核不到索引。` : ""}`}
+          title={warnings.length ? `${warnings.length} 个节点的引用已失效` : undefined}
         >{`${diagram.source === "agent" ? "agent 生成" : "我创建"} · ${relativeTime(diagram.updatedAt)}`}</span>
         <SavePill state={saveState} error={saveError} />
         <span className="spacer" />
@@ -363,7 +363,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
           ref={versionsAnchor}
           type="button"
           className="btn btn-ghost btn-sm"
-          title="agent 每改一次结构自动存一版；拖动位置不存版"
+          title="每次结构改动存一版"
           aria-haspopup="menu"
           aria-expanded={versionsShown}
           onClick={() => setVersionsShown((value) => !value)}
@@ -410,7 +410,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
                 if (!points) return null;
                 return (
                   <g key={edge.id}>
-                    <title>{`${edge.origin} · ${ORIGIN_SHORT[edge.origin]}${edge.label ? ` · ${edge.label}` : ""}${edge.evidence ? ` · ${edge.evidence}` : ""}${edge.downgraded ? ` · 降档：${edge.downgraded}` : ""}`}</title>
+                    <title>{`${ORIGIN_SHORT[edge.origin]}${edge.downgraded ? " · 依据偏弱" : ""}`}</title>
                     <path className={`dg-edge edge-${edge.origin}`} d={`M ${points.x1} ${points.y1} L ${points.x2} ${points.y2}`} markerEnd={`url(#dg-arrow-${edge.origin})`} />
                   </g>
                 );
@@ -453,12 +453,12 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
               <p className="dg-warn" title={warnings.map((warning) => `${diagram.body.nodes.find((node) => node.id === warning.node)?.label ?? warning.node}：${warning.reason}`).join("\n")}>
                 <Icon name="alert" size={12} />
                 <span>{`${warnings.length} 个节点的引用查不到了`}</span>
-                <span className="faint">图上标灰，在对话里让 agent 重指</span>
+                <span className="faint">标灰的节点可在对话里让它改指</span>
               </p>
             ) : null}
-            <div className="dg-legend" title="边的颜色 = 这条关系凭什么：最硬的一档是依赖图里能对上的 import">
+            <div className="dg-legend" title="边色表示这条关系的依据强弱">
               {EDGE_ORIGINS.map((origin) => (
-                <span key={origin}><i className={`dot dot-${origin}`} aria-hidden />{`${origin} · ${ORIGIN_SHORT[origin]}`}</span>
+                <span key={origin}><i className={`dot dot-${origin}`} aria-hidden />{ORIGIN_SHORT[origin]}</span>
               ))}
             </div>
           </div>
@@ -469,7 +469,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   );
 }
 
-const noVersionsItem: MenuItem = { label: "还没有版本", title: "agent 改一次结构存一版；这张图一次都没被改过", disabled: true, onSelect: () => undefined };
+const noVersionsItem: MenuItem = { label: "还没有版本", title: "这张图还没有结构改动", disabled: true, onSelect: () => undefined };
 
 const exportItems = (onExport: () => void): MenuItem[] => [
   { label: "JSON（图元数据）", title: "导出 body：节点、边、分组框与坐标。画布上的位置就是这里的一份。", onSelect: onExport }
@@ -495,15 +495,15 @@ const SAVE_LABEL: Record<SaveState, string> = {
   queued: "位置待存",
   saving: "保存中…",
   saved: "✓ 已保存",
-  failed: "没存上"
+  failed: "保存失败"
 };
 
 const SAVE_NOTE: Record<SaveState, string> = {
-  synced: "画布上这份就是盘上那份。拖动只写位置，不存版本。",
-  queued: "这一格拖动结束，300ms 内合并成一次写入。",
-  saving: "正在把变化的位置 PUT 给引擎（不产生版本）。",
-  saved: "位置已落盘。",
-  failed: "这次位置没写进去。"
+  synced: "位置已保存，不影响图的版本",
+  queued: "稍后自动保存位置",
+  saving: "正在保存位置",
+  saved: "位置已保存",
+  failed: "位置没保存上"
 };
 
 function SavePill({ state, error }: { state: SaveState; error: string }): ReactElement {
@@ -511,7 +511,7 @@ function SavePill({ state, error }: { state: SaveState; error: string }): ReactE
   return (
     <span
       className={`dg-save${busy ? " busy" : ""}${state === "failed" ? " failed" : ""}`}
-      title={state === "failed" && error ? `${SAVE_NOTE.failed}${error}` : SAVE_NOTE[state]}
+      title={state === "failed" && error ? `${SAVE_NOTE.failed}：${error}` : SAVE_NOTE[state]}
       role="status"
     >{SAVE_LABEL[state]}</span>
   );
@@ -523,7 +523,7 @@ function EmptyCanvas({ onQuickPrompt, disabled }: { onQuickPrompt?: (text: strin
     <div className="dg-empty">
       <h2>一张空画布</h2>
       <p>
-        <span>说一句需求，agent 来画。</span>
+        <span>描述你想要的图，由 agent 来画。</span>
         <span>画好的图出现在这里，并存进左栏图库。</span>
         <span>图上的位置你可以随便拖。</span>
       </p>
@@ -534,7 +534,7 @@ function EmptyCanvas({ onQuickPrompt, disabled }: { onQuickPrompt?: (text: strin
             type="button"
             className="chip-quick"
             disabled={disabled || !onQuickPrompt}
-            title={onQuickPrompt ? "把这句填进对话栏，发送才轮到 agent 动手" : "对话栏没接上，这颗暂时点不动"}
+            title={onQuickPrompt ? "填入对话栏，发送后生效" : "对话栏暂不可用"}
             onClick={() => onQuickPrompt?.(text)}
           >{text}</button>
         ))}

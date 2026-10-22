@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import type { DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
 import { Icon } from "../ui/icons";
-import { ORIGIN_NOTE } from "./diagramView";
+import { ORIGIN_SHORT } from "./diagramView";
 
 /** 文件路径只露文件名：抽屉只有 `--drawer-w` 宽，整条路径读不完，全路径进 title。 */
 function fileTail(path: string): string {
@@ -29,9 +29,9 @@ export type DrawerEdge = { edge: DiagramEdge; toLabel: string };
   `inferred` 那格的真内容就是模型自述，所以正文只说这一档意味着什么，原话整段留在悬停里。
 */
 function evidenceLine(edge: DiagramEdge): string {
-  if (edge.origin === "inferred") return ORIGIN_NOTE[edge.origin];
+  if (edge.origin === "inferred") return ORIGIN_SHORT[edge.origin];
   const head = (edge.evidence || "").split(/[；;]/)[0].trim();
-  return head.length > 46 ? `${head.slice(0, 46)}…` : head || "引擎没记下这条的依据";
+  return head.length > 46 ? `${head.slice(0, 46)}…` : head || "这条关系没有记录依据";
 }
 
 /**
@@ -55,7 +55,7 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
     <aside className="drawer" aria-label="节点详情">
       <div className="drawer-head">
         <h3>{node.label}</h3>
-        <span className="badge badge-neutral" title={isNote ? "便签：正文由人或模型写，不是引擎读数" : resolution.state === "ok" ? "引用核到了索引里的文件" : "引用核不上"}>{badgeText}</span>
+        <span className="badge badge-neutral" title={isNote ? "正文由人或模型写" : resolution.state === "ok" ? "已对应到文件" : "没对应到文件"}>{badgeText}</span>
         <button type="button" className="icon-btn" aria-label="关闭详情" title="关闭详情" onClick={onClose}><Icon name="x" size={14} /></button>
       </div>
       <div className="drawer-body">
@@ -63,19 +63,19 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
           <span className="kv-k">说明</span>
           {isNote ? (
             node.text
-              ? <span className="kv-v" title="这是人/模型写的正文，不是引擎读数">{node.text}</span>
+              ? <span className="kv-v" title="正文由人或模型写">{node.text}</span>
               : <span className="kv-v muted">这张便签还是空的。</span>
           ) : resolution.state === "ok" ? (
-            <span className="kv-v" title={`引用：${node.ref ?? "（未给）"}`}>引用核上了：关联 {resolution.files.length} 个已索引文件。具体职责问 agent，或打开文件看。</span>
+            <span className="kv-v">已对应到 {resolution.files.length} 个文件</span>
           ) : resolution.state === "stale" ? (
             <>
               <span className="kv-v"><span className="badge badge-warn">引用已失效</span></span>
               <span className="kv-v muted" title={resolution.reason}>{resolution.reason}</span>
             </>
           ) : resolution.state === "pending" ? (
-            <span className="kv-v muted">文件索引还没取到，这一格暂时没有可核对的说明。</span>
+            <span className="kv-v muted">暂时取不到文件清单</span>
           ) : (
-            <span className="kv-v muted">{node.ref ? `引用 ${node.ref} 不在当前索引或依赖图里。` : "这个节点没带引用。"}</span>
+            <span className="kv-v muted">{node.ref ? "这个引用没找到对应文件。" : "这个节点没有指向文件的引用。"}</span>
           )}
         </div>
 
@@ -105,7 +105,7 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
             <div className="dg-out-rows">
               {outgoing.map(({ edge, toLabel }) => (
                 <div className="dg-out-row" key={edge.id}>
-                  <span className={`flow-origin origin-${edge.origin}`} title={`${ORIGIN_NOTE[edge.origin]}${edge.downgraded ? ` · 被引擎降档：${edge.downgraded}` : ""}`}>{edge.origin}</span>
+                  <span className={`flow-origin origin-${edge.origin}`} title={edge.downgraded ? "依据偏弱" : undefined}>{ORIGIN_SHORT[edge.origin]}</span>
                   <span title={edge.label ? `关系名：${edge.label}` : undefined}>{`→ ${toLabel}`}</span>
                   <span className="faint dg-edge-evidence" title={edge.origin === "inferred" ? (edge.evidence || undefined) : undefined}>{evidenceLine(edge)}</span>
                 </div>
@@ -119,10 +119,10 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={isNote || resolution.state !== "ok"}
-            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个节点的第一个文件去代码教学" : "这个引用核不上，没有可去的教学作用域"}
+            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个节点的第一个文件去代码教学" : "这个节点的引用已失效，没有可去的教学域"}
             onClick={onGotoTeach}
           ><Icon name="book" size={13} />去代码教学</button>
-          <button type="button" className="btn btn-ghost btn-sm" title="把这一格设为对话的作用域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>
+          <button type="button" className="btn btn-ghost btn-sm" title="把这个节点设为对话的教学域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
 
         {/* 权限说明只在这一处（画布不重复）：结构归 agent，几何归你。 */}
