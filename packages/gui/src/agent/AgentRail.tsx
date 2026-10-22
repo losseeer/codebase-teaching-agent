@@ -92,14 +92,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
 
       <div className="rail-foot">
-        {/* 快捷指令只在宏观设计出现：点一下就是真发一句，按钮上写的就是发出去的原话。 */}
-        {scope === "map" ? (
-          <div className="rail-quick">
-            {MAP_QUICK_PROMPTS.map((prompt) => (
-              <button key={prompt} type="button" className="chip-quick" disabled={t.sending} title={`发这句给 agent：${prompt}`} onClick={() => void t.sendMapQuick(prompt)}>{prompt}</button>
-            ))}
-          </div>
-        ) : null}
         {/* 模型入口：一颗胶囊显示「当前模型 · 思考档 · 风格」，点开弹窗做全部配置 */}
         <LlmSettingsControl styleLabel={STYLE_BAND_LABEL[activeBand]} />
         {t.error ? <p className="error-message">{t.error}</p> : null}
@@ -263,9 +255,6 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
     </div>
   );
 }
-
-/** 画布空态与 composer 上方共用的三条快捷指令：按钮上写的就是发出去的原话。 */
-const MAP_QUICK_PROMPTS = ["画一张架构分层图", "把模块依赖画出来", "画一条主要请求的流程"];
 
 /** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
 function ThreadEntry({ item, onOpenDiagram }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void }): ReactElement {

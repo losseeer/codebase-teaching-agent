@@ -186,8 +186,6 @@ export interface ScopedChatApi {
   send: () => Promise<void>;
   /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
   sendMap: () => Promise<void>;
-  /** 快捷指令：直接发一句（画布空态那三个「画一张…」按钮）。 */
-  sendMapQuick: (text: string) => Promise<void>;
   sendPractice: () => Promise<void>;
   /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复）。显式展示 LLM 是否参与，不静默回落 */
   replySource: Record<Scope, string>;
@@ -711,14 +709,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
 
   // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
-  // `overrideText`：画布空态与 composer 上方那排快捷指令用——它们要发的是按钮上那句，不是输入框里可能写到一半的话。
-  const sendScoped = async (scope: "map" | "practice", overrideText?: string): Promise<void> => {
-    const message = (overrideText ?? content).trim();
+  const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
+    const message = content.trim();
     if (!message || !repositoryId) return;
     // 同 teaching：先结断线那轮的账，再让这一句上屏。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
-    if (overrideText === undefined) setContent("");
+    setContent("");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
@@ -765,8 +762,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
   const sendMap = (): Promise<void> => sendScoped("map");
-  /** 快捷指令：直接发一句（画布空态与 composer 上方那排 chips）。输入框里写到一半的话不受影响。 */
-  const sendMapQuick = (text: string): Promise<void> => sendScoped("map", text);
   const sendPractice = (): Promise<void> => sendScoped("practice");
 
   return {
@@ -778,7 +773,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,
     practiceUnit, setPracticeUnit,
     settings, setSettings: setSettingsState,
-    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendMapQuick, sendPractice, replySource,
+    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendPractice, replySource,
     practiceExercise, setPracticeExercise,
   };
 }
