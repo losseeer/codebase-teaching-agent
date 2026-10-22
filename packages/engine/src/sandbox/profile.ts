@@ -16,7 +16,7 @@
 */
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { hash } from "../identity.js";
 
@@ -104,7 +104,10 @@ const quote = (value: string): string => `"${value.replaceAll("\\", "\\\\").repl
   @param options.denyRead 额外点名拒读的子树——被学习仓的根就走这里（见 `deniedReadRoots`）
 */
 export function seatbeltProfile(workdir: string, toolchain: Partial<SandboxToolchain>, options: { allowNetwork?: boolean; allowFork?: boolean; denyRead?: string[] } = {}): string {
-  const writable = [workdir, realpathSafe(tmpdir()), "/dev"];
+  // SBPL 判的是内核解析后的路径：`/var` 与 `/private/var` 必须写成同一份，否则下面这条放行压不过上面的拒读
+  const runDir = realpathSafe(workdir);
+  // 只许写自己这一份 run 目录：TMPDIR 已经指进 workdir，放行整片临时目录等于让沙箱代码读写同根的历次 run
+  const writable = [runDir, "/dev"];
   // 家目录那一档在前、系统根在后：SBPL 是同操作下后写的覆盖先写的，
   // 所以「先拒家目录、再放解释器根」是真生效的。
   const blanket = deniedReadRoots().filter((root) => existsSync(root));

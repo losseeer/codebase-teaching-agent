@@ -59,7 +59,7 @@ export interface RespondOptions {
   cross?: CrossRepoContext;
   /** 过程事件回调（可选；用于把「正在读 xx 文件」推给 GUI）。 */
   onProgress?: (progress: TeachingProgress) => void;
-  /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）：贯穿工具循环。 */
+  /** 外部中止信号（只有用户点「停止生成」会置位）：贯穿工具循环。 */
   signal?: AbortSignal;
   /** 每轮开火前的预算闸门（应用层给）：到线就只再做一次收尾调用。 */
   budgetGuard?: () => string | undefined;

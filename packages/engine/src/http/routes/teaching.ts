@@ -3,14 +3,13 @@ import { budgetGate, crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../.
 import { externalAndSkills, recheckTurn } from "../../application/scoped-turn.js";
 import { persistTeachingTurn, resolveTeachingState } from "../../application/teaching-turn.js";
 import { threadJournalPayload } from "../../application/threads.js";
-import { auditsFromResult, mcpCallPayload, recordAbortedAudits } from "../../application/turn-audit.js";
+import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../../application/turn-audit.js";
 import { summarizeCost } from "../../cost/cost.js";
 import { assembleContext } from "../../harness/context.js";
 import { createSession, respondWithProvider } from "../../harness/harness.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
-import { id } from "../../identity.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
 import { LlmAbortedError } from "../../llm/provider.js";
@@ -99,7 +98,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     // 中止可能赶在最后一趟 LLM 返回之后才到，那时没人抛错：点了停止就按「作废」收尾，不落库、不回放；
     // 断线（没点停止）才是另一条路，照常算完并落库
     if (turnHandle.signal?.aborted) {
-      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
+      recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", provider: provider.modelVersion, outcome: "aborted", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
       throw new LlmAbortedError();
     }
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -151,7 +150,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
     replayTypewriter(send, outcome.assistant.content);
     send({ type: "done", session: outcome.session, message: outcome.assistant, policy: policyFor(settings), cost, provider: outcome.provider });
   } catch (error) {
-    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", turnHandle, threadId: session.id, error, fallbackError: "教学回合失败" });
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", turnHandle, provider: provider.modelVersion, threadId: session.id, error, fallbackError: "教学回合失败" });
   } finally {
     turnHandle.dispose();
   }

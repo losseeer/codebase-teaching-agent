@@ -148,7 +148,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
       setPaletteIndex((index) => (index + (event.key === "ArrowDown" ? 1 : paletteMatches.length - 1)) % paletteMatches.length);
       return;
     }
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
       event.preventDefault();
       const picked = paletteMatches[paletteIndex] ?? paletteMatches[0];
       if (picked) openFile(picked);

@@ -127,7 +127,7 @@ export function InlineName({ value, placeholder, ariaLabel, onCommit, onClose }:
       onChange={(event) => setDraft(event.target.value)}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
-        if (event.key === "Enter") { event.preventDefault(); commit(); }
+        if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); }
         else if (event.key === "Escape") { event.preventDefault(); onClose(); }
       }}
       onBlur={commit}

@@ -12,7 +12,7 @@ import { traceEngine } from "../trace/engine-log.js";
   索引只收「扩展名白名单」：全量收会一路收进 .png/.mp4/锁文件，既花字节也毁掉热点计数。
   白名单不是唯一的一道：真正落地的口径是 `isIngestedPath`（白名单 ∩ `.tutorignore` ∩ 非密钥载体名）。
 
-  ⚠️ 这份名单刻意不是「引擎支持的源码语言」——能力表（`LANGUAGE_CAPABILITIES`）才是那个答案。
+   这份名单刻意不是「引擎支持的源码语言」——能力表（`LANGUAGE_CAPABILITIES`）才是那个答案。
   图内扩展名从表派生（`graphExtensions`，加一门语言只改表这一处，索引自动跟上），
   表外那一组是「进索引但不进依赖图」的配置 / 文档 / 构建输入，各自写清为什么不进图。
   单测钉住：两组不重叠、并集等于实际名单、且每一项都还在（别让派生悄悄缩小索引范围）。
@@ -28,7 +28,7 @@ export { nonGraphExtensions, sourceExtensions };
   三道：扩展名白名单、`.tutorignore`、读层拒读名单里的「名字」那一半（`credentials.json` 这类密钥载体）。
   第三道的理由是口径自洽：`GET /source` 与 `read_file` 都判它「不开放读取」，索引却收着它
   （路径与行数进产物、文件树里看得见），「摘要参考注释」开关一开还会把正文读出来，只剩 maskSecrets 一道。
-  ⚠️ 目录规则不在这里：见 `deniedSecretNameReason` 那段（用户显式放行 `.tutor` 目录时索引层照收是既有设计）。
+   目录规则不在这里：见 `deniedSecretNameReason` 那段（用户显式放行 `.tutor` 目录时索引层照收是既有设计）。
   */
 export function isIngestedPath(relativePath: string, matcher?: { ignores(path: string, isDirectory?: boolean): boolean }): boolean {
   const path = relativePath.replaceAll("\\", "/");

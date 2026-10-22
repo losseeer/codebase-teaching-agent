@@ -30,7 +30,7 @@ export function isArtifactEcho(path: string): boolean {
 
 /**
   一个监听事件该不该上报成「源码改动」。三道筛，各自拦一种无谓重扫：
-  1. `predates-watch` 直接不报。⚠️ 拦的是挂载那一刻的回放：macOS 的 `fs.watch(recursive)` 建流时会把
+  1. `predates-watch` 直接不报。 拦的是挂载那一刻的回放：macOS 的 `fs.watch(recursive)` 建流时会把
      目录近期历史倒还一遍，那些「监听开始前就发生的改动」不是本轮要响应的事，照旧当源码改动
      等于每次挂载都多排一轮全量重分析（产物被真实扫描换掉、缓存键重算、润色可能重跑）。
   2. `gone` 与目录两档保守叫醒：批量删除时系统常常只报父目录那一条，漏了就永远漏。
@@ -59,7 +59,7 @@ export function ingestSetDiffers(previous: Iterable<string>, next: Iterable<stri
   「这条 mtime 算不算起监听之后的改动」：两边先对到同一格整数毫秒再比。
   `Date.now()` 截到整数而 `stat.mtimeMs` 带小数，不对齐时「先写文件、再取起点」会让那份播种比起点还晚，
   等于每次挂载都可能多排一轮全量重分析。
-  ⚠️ 代价是挂载那一毫秒内的真改动会被当回放丢掉：attach 里 `judgeFreshness` 比这一判晚，
+   代价是挂载那一毫秒内的真改动会被当回放丢掉：attach 里 `judgeFreshness` 比这一判晚，
   那次改动照样会被判成脏并在界面上露出来，不是静默丢掉。
   */
 export const changedAfter = (mtimeMs: number, startedAtMs: number): boolean => Math.floor(mtimeMs) > startedAtMs;
@@ -83,7 +83,7 @@ function kindOf(absolute: string, startedAtMs: number): ChangedPathKind {
   上导入照样要能用。但「增强没起来」绝不能等于「没人知道」：增量重分析是这仓产物保持新鲜的唯一自动通道，
   它一停，界面上那个「产物是新的」就停在挂载那一刻。
   所以 `start()` 把死活如实交出去，并给 FSWatcher 挂了 `error` 监听：
-  ⚠️ 那条监听是必需品不是装饰——`fs.FSWatcher` 是 EventEmitter，运行中报错而没人听，
+   那条监听是必需品不是装饰——`fs.FSWatcher` 是 EventEmitter，运行中报错而没人听，
   Node 会把这次 emit 变成未捕获异常，一整台引擎跟着停。
   */
 export class RepositoryWatcher {

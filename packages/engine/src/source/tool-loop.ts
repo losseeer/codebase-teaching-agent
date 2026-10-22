@@ -233,6 +233,8 @@ export interface ToolLoopAudits {
   skillReads: { skill: string; chars: number; found: boolean }[];
   mcpCalls: McpCallAudit[];
   rounds: number;
+  /** 到抛出那一刻为止已发生的 token 用量：那一发已经跑完并计费，中止或失败都不能把它从账上抹掉。 */
+  usage?: LlmUsage;
 }
 
 const auditsKey = Symbol("codebaseTutor.toolLoopAudits");
@@ -311,7 +313,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let succeededReads = 0;
   let crossReads = 0;
   let externalCalls = 0;
-  const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds });
+  let usage: LlmUsage | undefined;
+  const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
   const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, crossReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
   let resumedFromRound: number | undefined;
   let stoppedBy: TurnStopReason | undefined;
@@ -340,10 +343,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     }
   } catch (error) {
-    if (isLlmAborted(error)) attachToolLoopAudits(error, audits());
+    attachToolLoopAudits(error, audits());
     throw error;
   }
-  let usage: LlmUsage | undefined = completion.usage;
+  usage = completion.usage;
   try {
   while (completion.toolCalls?.length) {
     // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
@@ -477,9 +480,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   input.checkpoint?.clear();
   return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }) };
   } catch (error) {
+    // 「读过哪些文件、搜过什么、调过哪些外部工具」是已发生的事实，中止与失败两条路都要把它带出循环
+    attachToolLoopAudits(error, audits());
     if (isLlmAborted(error)) {
       // 用户主动停止 = 这一轮作废，检查点跟着作废（替他续跑是违背他的意图）
-      attachToolLoopAudits(error, audits());
       input.checkpoint?.clear();
     } else {
       // 其它异常（端点 500、进程被 OOM 杀之前的这一趟）留下残局并写明为什么没走完

@@ -308,25 +308,13 @@ describe("createLlmProvider（单一配置）", () => {
     expect(createLlmProvider({ apiKey: "gui-key" })).toBeDefined();
   });
 
-  it("anthropic 走 GUI 密钥与默认端点；两边都没有密钥就不建实例", () => {
-    // 显式清空两侧密钥：这台机器上 export 了 ANTHROPIC_API_KEY 时「缺 key 不建实例」的断言仍要成立
-    for (const key of ["ANTHROPIC_API_KEY", "TUTOR_ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TUTOR_OPENAI_API_KEY"]) delete process.env[key];
-    const provider = createLlmProvider({ provider: "anthropic", apiKey: "gui-anthropic-key" });
-    expect(provider?.name).toContain("Anthropic");
-    expect(createLlmProvider({ provider: "anthropic" })).toBeUndefined();
-    // 官方 openai 同理：没 key 必然 401，宁可不建实例让调用方走本地启发式
+  it("官方 openai 缺密钥就不建实例；兼容端点允许无密钥", () => {
+    // 显式清空两侧密钥：这台机器上 export 了 OPENAI_API_KEY 时「缺 key 不建实例」的断言仍要成立
+    for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TUTOR_OPENAI_API_KEY"]) delete process.env[key];
     expect(createLlmProvider({ provider: "openai" })).toBeUndefined();
-    // 兼容端点允许无 key（本地 Ollama/LM Studio 的 OpenAI 层）
     expect(createLlmProvider({ provider: "openai-compatible" })).toBeDefined();
   });
 
-  it("ollama 端点覆盖生效（本地服务改端口/改主机是常见配置）", () => {
-    delete process.env.TUTOR_LLM_MODEL;
-    delete process.env.TUTOR_OLLAMA_URL;
-    const provider = createLlmProvider({ provider: "ollama", baseUrl: "http://192.168.1.9:11434" });
-    expect(provider?.name).toContain("Ollama");
-    expect(provider?.modelVersion).toContain("llama3.2");
-  });
 });
 
 describe("ThinkingOverrideLlmProvider + thinking 参数", () => {

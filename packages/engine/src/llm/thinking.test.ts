@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { AnthropicProvider, OpenAICompatibleProvider, OllamaTeachingProvider } from "./provider.js";
+import { OpenAICompatibleProvider } from "./provider.js";
 import { applyThinking, isThinkingEffortSupported, resetThinkingEnvCacheForTests, resolveThinkingCapability, supportedThinkingEfforts } from "./thinking.js";
 
 afterEach(() => {
@@ -174,22 +174,6 @@ describe("applyThinking", () => {
   it("显式下发不支持的档位（gpt-5 初代 off）报错并给出支持档位", () => {
     expect(() => applyThinking({}, "gpt-5", "off")).toThrow(/不支持思考档位 "off"[\s\S]*支持：low\/high/);
     expect(() => applyThinking({}, "o3", "max")).toThrow(/不支持思考档位 "max"/);
-  });
-});
-
-describe("Anthropic / Ollama provider 显式思考档位", () => {
-  it("AnthropicProvider 显式档位抛错；off/auto 正常", async () => {
-    const fetchImpl = (async () => new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }), { status: 200 })) as typeof fetch;
-    const provider = new AnthropicProvider({ endpoint: "https://api.anthropic.com", apiKey: "k", model: "claude-opus-5", fetchImpl });
-    await expect(provider.complete({ system: "s", user: "u", thinking: "high" })).rejects.toThrow(/Anthropic 的思考按预算计/);
-    const ok = await provider.complete({ system: "s", user: "u", thinking: "off" });
-    expect(ok.text).toBe("ok");
-  });
-
-  it("OllamaTeachingProvider 显式档位抛错", async () => {
-    const fetchImpl = (async () => new Response(JSON.stringify({ message: { content: "ok" }, done_reason: "stop" }), { status: 200 })) as typeof fetch;
-    const provider = new OllamaTeachingProvider({ endpoint: "http://127.0.0.1:11434", model: "llama3.2", fetchImpl });
-    await expect(provider.complete({ system: "s", user: "u", thinking: "low" })).rejects.toThrow(/请选「自动」或「关闭」。/);
   });
 });
 

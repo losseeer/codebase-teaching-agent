@@ -1,4 +1,4 @@
-import type { JournalEvent, LearnerProfile, MasteryMapEntry, RecommendedTutorSettings, TutorSettings } from "@codebase-tutor/shared";
+import type { JournalEvent, LearnerProfile, MasteryMapEntry, RecommendedTutorSettings } from "@codebase-tutor/shared";
 import { deriveMasteryMap } from "./mastery.js";
 import { deriveFaded } from "./faded.js";
 
@@ -32,8 +32,4 @@ export function deriveLearnerProfile(repositoryId: string, events: JournalEvent[
     faded: deriveFaded(events),
     recommended: recommend(mastery)
   };
-}
-
-export function recommendedSettings(profile: LearnerProfile): TutorSettings {
-  return profile.recommended.settings;
 }

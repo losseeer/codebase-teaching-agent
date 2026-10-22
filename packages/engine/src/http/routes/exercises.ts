@@ -11,8 +11,10 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
   const repository = repositoryOr404(request.params.repositoryId);
   const kind = request.body?.kind;
   const family = request.body?.family === "llm" ? "llm" as const : "comprehension" as const;
+  // 非字符串的 `tag` 按没填处理：直接在请求体上做 `.trim()` 会抛 TypeError，把不合规格的请求记成引擎故障
+  const tag = typeof request.body?.tag === "string" ? request.body.tag : "";
   if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
-  if (family === "llm" && !(request.body?.tag ?? "").trim()) return reply.code(400).send({ error: "出题需要先填主题名称" });
+  if (family === "llm" && !tag.trim()) return reply.code(400).send({ error: "出题需要先填主题名称" });
   if (kind && !SUPPORTED_EXERCISE_KINDS.includes(kind)) return reply.code(400).send({ error: "不支持的练习题型" });
   const budgetExhausted = budgetDegraded(repository.handle);
   try {
@@ -20,7 +22,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
       kind,
       targetUnitId: request.body?.targetUnitId,
       family,
-      tag: request.body?.tag,
+      tag,
       tagId: request.body?.tagId,
       variantNonce: request.body?.variantNonce
     }, budgetExhausted ? undefined : lightLlm()));

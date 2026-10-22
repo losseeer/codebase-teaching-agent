@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
@@ -28,7 +28,7 @@ import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { TutorDatabase } from "../store/database.js";
-import { journalFootprint } from "../store/journal.js";
+import { Journal, journalFootprint } from "../store/journal.js";
 import { RepositoryHandle } from "../store/repository-handle.js";
 import { traceEngine } from "../trace/engine-log.js";
 
@@ -63,21 +63,46 @@ function registryFile(): string {
   return process.env.TUTOR_REGISTRY_FILE ?? join(tutorDataDir(), "repositories.json");
 }
 
+function preserveCorruptRegistry(file: string): string {
+  const backup = `${file}.corrupt`;
+  try { copyFileSync(file, backup); } catch { /* 连备份都写不动，下面的告警会说明这一点 */ }
+  return backup;
+}
+
 function readRegistry(): string[] {
+  const file = registryFile();
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(registryFile(), "utf8")) as { repositories?: unknown };
-    if (!Array.isArray(parsed.repositories)) return [];
-    const seen = new Set<string>();
-    return parsed.repositories.filter((item): item is string => typeof item === "string" && item.length > 0 && !seen.has(item) && !!seen.add(item));
-  } catch {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    // 地址簿不存在是常态，读不动不是：静默当空会让下一次写入把「只剩一条」当成事实，所以先留原件再报
+    if ((error as { code?: string }).code === "ENOENT") return [];
+    preserveCorruptRegistry(file);
+    console.warn(`[registry] 地址簿读不动，本轮按空处理：file=${file} error=${String(error)}`);
+    traceEngine("mount", { phase: "registry_unreadable", file }, { traceId: null });
     return [];
   }
+  let parsed: { repositories?: unknown };
+  try {
+    parsed = JSON.parse(text) as { repositories?: unknown };
+  } catch (error) {
+    const backup = preserveCorruptRegistry(file);
+    console.warn(`[registry] 地址簿不是合法 JSON，本轮按空处理：backup=${backup} error=${String(error)}`);
+    traceEngine("mount", { phase: "registry_corrupt", file, backup }, { traceId: null });
+    return [];
+  }
+  if (!Array.isArray(parsed.repositories)) return [];
+  const seen = new Set<string>();
+  return parsed.repositories.filter((item): item is string => typeof item === "string" && item.length > 0 && !seen.has(item) && !!seen.add(item));
 }
 
 function writeRegistry(paths: string[]): void {
   const file = registryFile();
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
+  // 先写临时文件再改名覆盖：直接覆写时进程被打断会留下半截 JSON，下一次读回来就是空地址簿
+  const temp = `${file}.tmp`;
+  writeFileSync(temp, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
+  renameSync(temp, file);
 }
 
 /** 记进地址簿并挪到末尾（最近使用在后）。 */
@@ -317,7 +342,7 @@ export class ImportService extends EventEmitter {
     用户显式把某仓移出地址簿（并就地卸载）。默认不动仓库里的东西；`deleteArtifacts` 一次删掉整个 `<仓根>/.tutor/`
     ——那里头就是这个仓的分析产物、对话记录与运行日志，只留 `.tutorignore`（它在仓根，不在这里）。
     全局的 `llm.log` 与 `engine.jsonl` 不属于单个仓，也不在这一步之内：那是花的钱的唯一对账凭据。
-    回 `artifacts`：removed 删了、absent 本来就没有、refused 位置不对所以没敢删。
+    回 `artifacts`：removed 删了、absent 本来就没有、refused 没敢删或删不动（位置不对、权限不够）。
   */
   forget(repositoryId: string, deleteArtifacts = false): { artifacts?: "removed" | "absent" | "refused" } {
     const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
@@ -332,8 +357,12 @@ export class ImportService extends EventEmitter {
       rmSync(target, { recursive: true, force: true });
       traceEngine("mount", { repositoryId, phase: "artifacts_removed", path: target }, { traceId: null });
       return { artifacts: existsSync(target) ? "refused" : "removed" };
-    } catch {
-      return { artifacts: "absent" };
+    } catch (error) {
+      // ENOENT 才是「本来就没有」；EACCES/EPERM 是「没删成」，回 absent 会让界面宣布文件已删除
+      if ((error as { code?: string }).code === "ENOENT") return { artifacts: "absent" };
+      console.warn(`[importer] ${path} 的 .tutor 没删掉：${String(error)}`);
+      traceEngine("mount", { repositoryId, phase: "artifacts_remove_failed", error: String(error) }, { traceId: null });
+      return { artifacts: "refused" };
     }
   }
 
@@ -542,11 +571,20 @@ export class ImportService extends EventEmitter {
     // 语法解析器是异步加载的，必须在建图前就绪；加载失败不抛错，改由 graph 记录回落原因。
     await loadSymbolParser();
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
+    const summaryJournal = new Journal(repositoryPath, index.repositoryId);
     const { estimate } = await summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
       database: handle.db,
       provider,
-      withHeaderComments
+      withHeaderComments,
+      // 每一批发出去的钱当场入账：闸门与成本页只认 journal，漏这一路等于导入可以无限超预算
+      onUsage: (usage) => {
+        if (!usage || (!usage.inputTokens && !usage.outputTokens)) return;
+        summaryJournal.append("token_usage", {
+          input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
+          cache_hit_tokens: usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map.summary"
+        });
+      }
     });
     progress("summarizing", 75, "正在整理模块与代码单元");
     const graph = await enrichWithLsp(repositoryPath, baseGraph);

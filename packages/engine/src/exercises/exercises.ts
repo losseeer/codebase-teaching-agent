@@ -422,7 +422,7 @@ export class ExerciseService {
       if (stale.length) throw new Error(`这道题依赖的源码已更新（${stale.join("、")}）；请使用新版本重新生成练习。`);
       const journal = repository.handle.journal;
       let graded = stored.expected.type === "rubric"
-        ? await gradeRubric(stored, answer, provider)
+        ? await gradeRubric(stored, answer, provider, journal)
         : await grade(stored, answer, journal, repository.path);
       /**
         程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
@@ -609,7 +609,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, jour
 }
 
 /** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不伪装成确定性判分。 */
-async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<GradeOutcome> {
+async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined, journal: Journal): Promise<GradeOutcome> {
   if (!provider) throw new Error("这道题的判分需要模型：当前没配模型，或本月预算已用完。");
   const learnerAnswer = (answer.text ?? "").trim();
   if (!learnerAnswer) {
@@ -623,6 +623,7 @@ async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provi
     learnerAnswer,
     provider
   });
+  if (judged.usage) journal.append("token_usage", { input_tokens: judged.usage.inputTokens, output_tokens: judged.usage.outputTokens, cache_hit_tokens: judged.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "exercise_judge" });
   return { score: judged.score, passed: judged.passed, automatic: false, feedbackSource: "llm_judge", feedback: judged.feedback };
 }
 

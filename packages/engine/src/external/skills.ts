@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { maskSecrets } from "../security/secrets.js";
 
 /**
   技能加载（产品 agent 的「按需取做法」通道），照 Agent Skills 那套公开规格（`SKILL.md` + YAML frontmatter）：
@@ -126,6 +127,11 @@ function clip(text: string, label: string): string {
   return text.length > PAYLOAD_CHARS ? `${text.slice(0, PAYLOAD_CHARS)}\n…（${label}已截断，共 ${text.length} 字。）` : text;
 }
 
+/** 密钥在读取出口就隐去：出网那发另有 `screenOutbound`，但它管不到随检查点落进 `.tutor/` 的同一份正文。 */
+function mask(text: string): string {
+  return maskSecrets(text).text;
+}
+
 /** 名字合不合规格（连续连字符单独判，正则里表达这条约束太绕）。 */
 function validName(name: string): boolean {
   return NAME_PATTERN.test(name) && !name.includes("--");
@@ -153,7 +159,7 @@ function readAttached(skillRoot: string, file: string): string | undefined {
     if (!statSync(real).isFile()) return undefined;
     const text = readFileSync(real, "utf8");
     if (text.includes("\0")) return undefined;
-    return clip(text, "附属文件");
+    return mask(clip(text, "附属文件"));
   } catch {
     return undefined;
   }
@@ -190,7 +196,7 @@ function scan(directory: string, taken: Set<string>): { skills: SkillBrief[]; sk
     if (fields.name !== dir) { skipped.push({ dir, reason: `frontmatter 的 name「${fields.name}」与目录名不一致` }); continue; }
     if (!fields.description) { skipped.push({ dir, reason: "frontmatter 缺 description" }); continue; }
     if (fields.description.length > DESCRIPTION_MAX) { skipped.push({ dir, reason: `description 超过规格上限 ${DESCRIPTION_MAX} 字` }); continue; }
-    skills.push({ name: fields.name, description: fields.description, directory });
+    skills.push({ name: fields.name, description: mask(fields.description), directory });
     taken.add(fields.name);
   }
   return { skills, skipped };
@@ -224,7 +230,7 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
     }
     if (file === "SKILL.md") {
       try {
-        return clip(stripFrontmatter(readFileSync(join(skillRoot, "SKILL.md"), "utf8")), "正文");
+        return mask(clip(stripFrontmatter(readFileSync(join(skillRoot, "SKILL.md"), "utf8")), "正文"));
       } catch {
         return undefined;
       }

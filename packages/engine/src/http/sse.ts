@@ -3,7 +3,7 @@ import type { ScopedStreamFrame, ServerEvent, TurnScene } from "@codebase-tutor/
 import { Journal } from "../store/journal.js";
 import { subscribeEvents, unsubscribeEvents } from "../events.js";
 import { beginTurn, type TurnHandle } from "../turns/registry.js";
-import { recordAbortedAudits, toolLoopAuditsOf } from "../application/turn-audit.js";
+import { recordUnfinishedTurn, toolLoopAuditsOf } from "../application/turn-audit.js";
 
 /**
   SSE 传输层：帧怎么写、连接怎么开、心跳与中止怎么收尾。
@@ -90,15 +90,17 @@ export function failScopedTurn(input: {
   repositoryId: string;
   scene: TurnScene;
   turnHandle: TurnHandle;
+  provider: string;
   threadId?: string;
   error: unknown;
   fallbackError: string;
 }): void {
-  if (!input.turnHandle.signal?.aborted) {
+  const aborted = Boolean(input.turnHandle.signal?.aborted);
+  recordUnfinishedTurn({ repositoryPath: input.repositoryPath, repositoryId: input.repositoryId, scene: input.scene, provider: input.provider, outcome: aborted ? "aborted" : "failed", ...(input.threadId ? { threadId: input.threadId } : {}), audits: toolLoopAuditsOf(input.error) });
+  if (!aborted) {
     input.send({ type: "error", error: input.error instanceof Error ? input.error.message : input.fallbackError });
     return;
   }
-  recordAbortedAudits({ repositoryPath: input.repositoryPath, repositoryId: input.repositoryId, scene: input.scene, ...(input.threadId ? { threadId: input.threadId } : {}), audits: toolLoopAuditsOf(input.error) });
   new Journal(input.repositoryPath, input.repositoryId).append("turn_aborted", { scene: input.scene, turn_id: input.turnHandle.turnId ?? "unregistered", aborted_by: "user_stop" }, input.threadId);
   input.send({ type: "aborted", scene: input.scene });
 }

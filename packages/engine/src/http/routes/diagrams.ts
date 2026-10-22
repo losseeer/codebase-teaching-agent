@@ -23,7 +23,7 @@ export function registerDiagramRoutes(app: FastifyInstance): void {
   读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` / `diagramFilesByNode` 只比对索引与依赖图）。
 */
 
-/** 图不存在：`reason` 是给界面的机器码（它按这个决定「重取图库」还是「这条链接失效」，不靠拆那句中文）。 */
+/** 图不存在：`reason` 是机器码，供日志与排障对账；界面目前只展示那句中文，没按它分岔。 */
 function diagramNotFound(reply: FastifyReply) {
   return reply.code(404).send({ error: "这张图已经不在了。", reason: "diagram_not_found" });
 }

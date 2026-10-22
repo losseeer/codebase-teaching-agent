@@ -106,9 +106,10 @@ describe("对外视图与生效配置", () => {
     setLlmRuntimeSettings({ model: "gui-model", apiKey: "gui-key" });
     expect(effectiveLlmConfig()).toMatchObject({ model: "gui-model", baseUrl: "https://env.example.com/v1", hasApiKey: true });
 
-    // 服务商换成 ollama：端点回到该协议默认，且这个协议不认密钥
-    setLlmRuntimeSettings({ provider: "ollama" });
-    expect(effectiveLlmConfig()).toMatchObject({ provider: "ollama", model: "gui-model", baseUrl: "http://127.0.0.1:11434", hasApiKey: false });
+    // 换成官方 openai 且 .env 也没写端点：才回到该协议默认
+    delete process.env.TUTOR_OPENAI_URL;
+    setLlmRuntimeSettings({ provider: "openai", baseUrl: "" });
+    expect(effectiveLlmConfig()).toMatchObject({ provider: "openai", model: "gui-model", baseUrl: "https://api.openai.com/v1", hasApiKey: true });
   });
 
   it("buildLlmRuntimeProvider 用运行时设置建实例：.env 一个字段都没配也能跑通", () => {

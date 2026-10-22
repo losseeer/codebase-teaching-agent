@@ -24,11 +24,6 @@ export function unsubscribeEvents(connectionId: string): void {
   subscriptions.delete(connectionId);
 }
 
-/** 当前订阅数（`GET /api/health` 与排障用的读数，不是判据）。 */
-export function subscriptionCount(): number {
-  return subscriptions.size;
-}
-
 /**
   广播必须 catch 单路异常：`broadcast` 挂在 `importer.emit("event")` 的同步链上，
   一路死订阅者的 write 异常会冒到 `ImportService.run`，把已经算完的导入判成 failed。

@@ -217,7 +217,8 @@ export function App(): ReactElement {
         const result = await api.forgetRepository(repositoryId, deleteArtifacts);
         if (repositoryId === workspace?.repositoryId) updateWorkspace(null);
         await refreshCatalog();
-        if (deleteArtifacts && result.artifacts === "refused") toastFailure("已移出，文件没删掉", new Error(`${name} 的 .tutor 不在仓内常规位置`));
+        if (deleteArtifacts && result.artifacts === "refused") toastFailure("已移出，文件没删掉", new Error(`${name} 的 .tutor 没删成：位置不合规则，或这台机器没权限`));
+        else if (deleteArtifacts && result.artifacts === "absent") showToast(`已把「${name}」移出地址簿（没有发现产物）`);
         else showToast(deleteArtifacts ? `已移出并删掉「${name}」的文件` : `已把「${name}」移出地址簿`);
       } catch (error) {
         toastFailure("移出失败", error);

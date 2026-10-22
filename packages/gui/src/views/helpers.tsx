@@ -1,20 +1,10 @@
 import type { ReactElement } from "react";
 import type { ExerciseKind } from "@codebase-tutor/shared/wire";
 
-// views/ 共享的小工具：通用占位 UI（Loading / EmptyState）与题型、日期的中文文案。
+// views/ 共享的小工具：加载占位与题型、日期的中文文案。
 
 export function Loading(): ReactElement {
   return <div className="loading"><i className="spinner" aria-hidden />正在读取本地数据</div>;
-}
-
-export function EmptyState({ title, detail }: { title: string; detail: string }): ReactElement {
-  return (
-    <section className="page page-import">
-      <div className="import-wrap">
-        <div className="import-hero"><h1>{title}</h1><p>{detail}</p></div>
-      </div>
-    </section>
-  );
 }
 
 /** 中文日期文案：只显示到日；时间戳读不出时明说。 */

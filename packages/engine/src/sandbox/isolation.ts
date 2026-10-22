@@ -68,9 +68,20 @@ export function ensureIsolation(): Promise<IsolationStatus> {
   return inFlight;
 }
 
-/** 重新跑一遍探测并覆盖缓存（启动时走这里；运行期不自动走，免得把失败悄悄洗掉）。 */
+/**
+  重新跑一遍探测并覆盖缓存（启动时走这里；运行期不自动走，免得把失败静默洗掉）。
+  两种结局都要清 `inFlight`，否则留着 rejected promise 会让之后每次重探只重放同一个错误。
+*/
 export function reprobeIsolation(): Promise<IsolationStatus> {
-  inFlight ??= probeIsolation().then((status) => { current = status; inFlight = undefined; return status; });
+  inFlight ??= probeIsolation().then(
+    (status) => { current = status; return status; },
+    (error: unknown) => {
+      // 探测自身跑不动（缺解释器、临时目录建不起来）也是一种失败证据：判成不可用并缓存，别让开机那次抛错把整条闸门打死
+      const reason = error instanceof Error ? error.message : String(error);
+      current = { level: "unavailable", backend: isolationBackend().reason, checks: [], probedAt: new Date().toISOString(), durationMs: 0, reason: `隔离探测没跑成：${reason}` };
+      return current;
+    }
+  ).finally(() => { inFlight = undefined; });
   return inFlight;
 }
 

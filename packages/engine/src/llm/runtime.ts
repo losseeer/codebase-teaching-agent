@@ -30,7 +30,7 @@ export interface LlmRuntimeSettings {
 }
 
 /** GUI 可选的服务商协议（与 provider.ts 的工厂分支一一对应）；空串另意为「回落 .env」。 */
-export const LLM_PROVIDERS = ["openai-compatible", "openai", "anthropic", "ollama"] as const;
+export const LLM_PROVIDERS = ["openai-compatible", "openai"] as const;
 
 /** 可选思考档位（"auto" = 不发字段）；PUT 校验与磁盘恢复都按这份清单，错误文案不会再和判据走散。 */
 export const THINKING_EFFORTS = ["auto", "off", "low", "high", "max"] as const;

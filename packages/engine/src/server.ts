@@ -115,7 +115,7 @@ app.addHook("onClose", async () => { await Promise.all([flushEngineLog(), flushL
 
 // 测试里不占端口：vitest 会把 VITEST 置为 "true"，此时只用 app.inject() 打路由。
 // 不加这道闸，测试会和 pnpm dev 正在跑的引擎抢 3001 端口直接 EADDRINUSE 崩在 import。
-const port = Number(process.env.ENGINE_PORT ?? 3001);
+const port = Number(process.env.ENGINE_PORT?.trim()) || 3001;
 if (!process.env.VITEST) {
   await app.listen({ port, host: "127.0.0.1" });
   tboot("listening");

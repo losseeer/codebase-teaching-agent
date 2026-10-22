@@ -99,4 +99,4 @@ function loadAddon() {
   return addon;
 }
 
-module.exports = { resolveBindingPath, loadAddon };
+module.exports = { loadAddon };

@@ -1,6 +1,6 @@
 import type { FileRole } from "@codebase-tutor/shared";
 import { defineAnalysisStep } from "../analysis-step.js";
-import type { LlmProvider } from "../llm/provider.js";
+import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import type { FileSlice } from "./slice.js";
 
 /**
@@ -28,6 +28,8 @@ export interface SummaryProvider {
     */
   readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
+  /** 最近一次调用拿到的用量（没调用过 = undefined）：导入这一路的钱要靠它进账。 */
+  lastUsage?: LlmUsage;
 }
 
 /** 一次调用塞几条切片：太多则单次失败牵连面大，太少则往返次数又上去了。 */
@@ -144,6 +146,8 @@ export class LlmSummaryProvider implements SummaryProvider {
     return this.llm.modelVersion;
   }
 
+  lastUsage?: LlmUsage;
+
   async summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]> {
     if (!slices.length) return [];
     const response = await this.llm.complete({
@@ -153,6 +157,7 @@ export class LlmSummaryProvider implements SummaryProvider {
       temperature: 0,
       scene: BATCH_SCENE
     });
+    this.lastUsage = response.usage;
     const byPath = parseBatchReply(response.text);
     return slices.map((slice) => byPath.get(slice.path));
   }

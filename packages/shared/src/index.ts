@@ -162,12 +162,6 @@ export type DiagramNodeKind = "module" | "note";
 */
 export type DiagramEdgeOrigin = "static" | "code" | "inferred";
 
-/** 节点上的一条依据：文件 + 行号。`module` 节点读时现算，不落在图里。 */
-export interface DiagramAnchor {
-  path: string;
-  line: number;
-}
-
 export interface DiagramNode {
   id: string;
   kind: DiagramNodeKind;

@@ -5,7 +5,7 @@ import { Icon } from "../ui/icons";
 
 /**
   模型入口与配置弹窗：除模型与思考档位，还管装机时才改的服务商 / 接口地址 / API Key。两条不变项：
-  - 胶囊自带状态：本地兜底（没配齐服务商或密钥）时变警示态并直说原因；
+  - 胶囊自带状态：未配模型（服务商或密钥没配齐）时变警示态并直说原因；
   - 改完即生效：每个字段失焦 / 换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）——
     关掉窗口不等于放弃修改。
   */
@@ -17,10 +17,14 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
     不进弹窗——操作结果只报状态，而「该改哪个格子」必须挨着那个格子。
     */
   const [rejected, setRejected] = useState<string | null>(null);
+  /** 「还没读回来」与「读不到」是两个读数：合成一个就一直假装进行中。 */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     let current = true;
-    api.getLlmSettings().then((next) => { if (current) setLlm(next); }).catch(() => undefined);
+    api.getLlmSettings()
+      .then((next) => { if (current) setLlm(next); })
+      .catch(() => { if (current) setLoadFailed(true); });
     return () => { current = false; };
   }, []);
 
@@ -50,7 +54,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
       });
   };
 
-  const status = activeSummary(llm);
+  const status = activeSummary(llm, loadFailed);
 
   return (
     <>
@@ -189,9 +193,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
 /** 服务商候选：与引擎对齐的口径见 `LlmProviderKind`（api/client.ts）；「默认（沿用 .env）」的空选项由调用处拼。 */
 const PROVIDER_CHOICES = [
   { value: "openai-compatible", label: "OpenAI 兼容" },
-  { value: "openai", label: "OpenAI 官方" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "ollama", label: "Ollama（本地）" }
+  { value: "openai", label: "OpenAI 官方" }
 ] as const;
 
 const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
@@ -245,11 +247,15 @@ function money(value: number | undefined): string {
   胶囊与弹窗标题共用的生效状态。`pill` 是窄位用的短名（去掉 `openai:` 这类协议前缀），
   `text` 是弹窗里的完整一行，`title` 挂协议全名供悬停排查。
   */
-function activeSummary(llm: LlmSettings | null): { pill: string; text: string; title: string; hint: string; thinking: string; local: boolean } {
+function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: string; text: string; title: string; hint: string; thinking: string; local: boolean } {
   const thinking = llm?.thinking === "auto" || !llm?.thinking ? "自动" : THINKING_EFFORT_LABEL[llm.thinking];
-  if (!llm) return { pill: "读取中…", text: "读取中…", title: "", hint: "", thinking, local: false };
+  if (!llm) {
+    return loadFailed
+      ? { pill: "读不到", text: "读不到模型设置（引擎没连上）", title: "", hint: "", thinking, local: true }
+      : { pill: "读取中…", text: "读取中…", title: "", hint: "", thinking, local: false };
+  }
   if (llm.activeMode === "local") {
-    return { pill: "本地规则", text: "本地规则（未连模型）", title: llm.activeProvider ?? "", hint: "服务商或密钥没配齐，回答走本地规则，不产生费用。", thinking, local: true };
+    return { pill: "未配模型", text: "未配模型（不发请求）", title: llm.activeProvider ?? "", hint: "服务商或密钥没配齐：对话与 LLM 出题会被当场挡下，摘要与规则题走确定性档。", thinking, local: true };
   }
   const [protocol, ...model] = (llm.activeModel ?? "").split(":");
   const slug = model.join(":") || llm.activeModel || "";
@@ -293,7 +299,7 @@ function TextSetting({ label, value, placeholder, list, hint, note, numeric, dis
         spellCheck={false}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
-        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); } }}
+        onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); } }}
       />
       {note ? <span className="field-note">{note}</span> : null}
     </label>
@@ -335,7 +341,7 @@ function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: 
           aria-label="API Key"
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
-          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); } }}
+          onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); } }}
         />
         {saved ? <button type="button" className="icon-btn" title="清除已存密钥，改用 .env 的" disabled={disabled} onClick={() => { setDraft(""); onClear(); }}><Icon name="trash" size={14} /></button> : null}
       </span>

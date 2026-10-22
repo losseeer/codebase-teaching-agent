@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
 import { hash } from "../identity.js";
+import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
@@ -94,6 +95,8 @@ export async function summarizeFiles(input: {
   provider: SummaryProvider;
   /** 「摘要参考注释」开关（每仓设置，默认关）。开=切片附 headerComment，键前缀走 slice-v2c。 */
   withHeaderComments?: boolean;
+  /** 每一批发给模型的用量回调：导入的钱要进 journal，不然月预算闸门看不到它。 */
+  onUsage?: (usage: LlmUsage | undefined) => void;
 }): Promise<{ summaries: FileSummary[]; estimate: ImportEstimate }> {
   const { structure, database, provider } = input;
   const withHeaderComments = input.withHeaderComments ?? false;
@@ -165,6 +168,7 @@ export async function summarizeFiles(input: {
       const sendMasked = sending.reduce((total, item) => total + item.masked, 0);
       if (sendMasked) console.warn(`[summarizer] 本批有 ${sendMasked} 处疑似密钥在发给 ${provider.name} 之前被隐去（切片与缓存键未改动）`);
       results = await provider.summarizeMany(sending.map((item) => item.copy));
+      input.onUsage?.(provider.lastUsage);
     } catch (error) {
       // 整批抛错（网络、429、端点抖动）不等于导入失败：本批全按「没拿到结果」处理，
       // 与缺项合流成同一条路径——逐条走确定性补齐（按条回落是 SummaryProvider 的调用方契约）。

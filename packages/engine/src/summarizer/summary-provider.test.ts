@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { batchSystemPrompt, LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./summary-provider.js";
 import type { FileSlice } from "./slice.js";
 import type { LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { AnthropicProvider, OllamaTeachingProvider, OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";
+import { OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../llm/provider.js";
 
 /** L1 的输入是结构切片，桩数据按切片形状给。 */
 function sliceOf(path = "src/main.ts"): FileSlice {
@@ -114,13 +114,6 @@ describe("teaching LLM providers", () => {
       }
     });
     await expect(provider.complete({ system: "system", user: "user" })).resolves.toMatchObject({ text: "回答", usage: { inputTokens: 12, outputTokens: 8 } });
-  });
-
-  it("supports Anthropic and Ollama response shapes", async () => {
-    const anthropic = new AnthropicProvider({ endpoint: "https://example.test", apiKey: "key", model: "claude-test", fetchImpl: async () => new Response(JSON.stringify({ content: [{ type: "text", text: "安" }], usage: { input_tokens: 3, output_tokens: 4 } }), { status: 200 }) });
-    await expect(anthropic.complete({ system: "s", user: "u" })).resolves.toMatchObject({ text: "安", usage: { inputTokens: 3, outputTokens: 4 } });
-    const ollama = new OllamaTeachingProvider({ endpoint: "http://ollama", model: "qwen", fetchImpl: async () => new Response(JSON.stringify({ message: { content: "答" }, prompt_eval_count: 5, eval_count: 6 }), { status: 200 }) });
-    await expect(ollama.complete({ system: "s", user: "u" })).resolves.toMatchObject({ text: "答", usage: { inputTokens: 5, outputTokens: 6 } });
   });
 
   it("retries one failed teaching request before succeeding", async () => {

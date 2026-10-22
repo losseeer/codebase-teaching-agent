@@ -5,7 +5,7 @@ const configName = ".tutorignore";
 
 // This seed is materialized in each imported repository. Matching only reads .tutorignore.
 const defaultTutorIgnoreContents = `# Codebase Tutor analysis exclusions.
-# Supports comments, *, ?, **, directory suffixes and ! re-inclusion rules.
+# Supports comments, *, ?, **, directory suffixes and ! re-inclusion rules. A pattern containing "/" matches at any depth — gitignore would anchor it to this file's directory.
 
 # Engine and VCS metadata
 .git/
@@ -106,7 +106,9 @@ export function ensureTutorIgnore(repositoryPath: string): void {
 function readTutorIgnore(repositoryPath: string): string[] {
   const path = join(repositoryPath, configName);
   if (!existsSync(path)) return [];
-  try { return readFileSync(path, "utf8").split(/\r?\n/); } catch { return []; }
+  try { return readFileSync(path, "utf8").split(/\r?\n/); }
+  // 读不到规则还接着扫，等于把排除掉的目录全收进索引并送去摘要（按文件计费）：抛出去，导入与监听两侧都要看见原因
+  catch (error) { throw new Error(`读不动 ${path}，无法确定该排除哪些目录：${String(error)}`); }
 }
 
 function parseRule(line: string): IgnoreRule[] {

@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "../../source/files.js";
 import { exercises, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
-import { pathReadBlock } from "../../source/read-file.js";
+import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../store/journal.js";
 import type { FastifyInstance } from "fastify";
 
@@ -58,7 +58,12 @@ app.get<{ Params: { repositoryId: string }; Querystring: { path?: string; line?:
   if (!repository.index.files.some((file) => file.path === requestedPath)) return reply.code(404).send({ error: "该文件不在本仓索引里（未收录的类型与密钥/凭据文件不提供源码）" });
   // line 是给界面定位用的：非数字 / 负数按 1，NaN 序列化进 JSON 会变成 null
   const line = Number(request.query.line ?? 1);
-  try { return { path: requestedPath, line: Number.isFinite(line) ? Math.max(1, Math.trunc(line)) : 1, content: readFileSync(absolute, "utf8") }; }
+  try {
+    const size = statSync(absolute).size;
+    // 与模型侧 `read_file` 同一把尺：收录没有体积上限，超了就把数字说明白，不让「打开一个文件」把引擎拖死
+    if (size > MAX_FILE_BYTES) return reply.code(413).send({ error: `文件 ${String(size)} 字节，超过 ${String(MAX_FILE_BYTES)} 字节上限，没有加载` });
+    return { path: requestedPath, line: Number.isFinite(line) ? Math.max(1, Math.trunc(line)) : 1, content: readFileSync(absolute, "utf8") };
+  }
   catch { return reply.code(404).send({ error: "无法读取该源码文件" }); }
 });
 }

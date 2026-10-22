@@ -260,8 +260,10 @@ export class TutorDatabase {
       return;
     }
     if (current.version < 2) {
-      this.db.exec("ALTER TABLE repository_state ADD COLUMN analysis_json TEXT;");
-      this.db.exec("ALTER TABLE repository_state ADD COLUMN settings_json TEXT;");
+      // 与 v<7 同一判据：走过 CREATE 或上次只跑了一条 ALTER 的库已带这两列，无守卫的 ADD COLUMN 会抛 duplicate column，之后每次开库都失败
+      const stateColumns = new Set((this.db.prepare("PRAGMA table_info(repository_state)").all() as { name: string }[]).map((column) => column.name));
+      if (!stateColumns.has("analysis_json")) this.db.exec("ALTER TABLE repository_state ADD COLUMN analysis_json TEXT;");
+      if (!stateColumns.has("settings_json")) this.db.exec("ALTER TABLE repository_state ADD COLUMN settings_json TEXT;");
       this.db.prepare("UPDATE schema_version SET version = ?").run(2);
     }
     if (current.version < 3) this.db.prepare("UPDATE schema_version SET version = ?").run(3);

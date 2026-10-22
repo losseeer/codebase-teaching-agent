@@ -96,7 +96,7 @@ async function sseStream<TDone>(url: string, payload: unknown, onEvent: (event: 
 export type ThinkingEffort = "auto" | "off" | "low" | "high" | "max";
 
 /** 服务商协议，与引擎 llm/runtime.ts 的 LLM_PROVIDERS 一致；空串 = 用 .env 的 TUTOR_LLM_PROVIDER。 */
-export type LlmProviderKind = "openai-compatible" | "openai" | "anthropic" | "ollama";
+export type LlmProviderKind = "openai-compatible" | "openai";
 
 /** 模型思考能力声明（引擎按模型 slug 查表解析，见 engine llm/thinking.ts）。efforts 为该模型支持的显式档位（auto 恒可用）。 */
 export interface ThinkingCapabilityInfo {
@@ -142,7 +142,7 @@ export interface LlmSettings {
   pricing?: { inputPerMillionUsd: number; cacheHitPerMillionUsd?: number; outputPerMillionUsd: number };
   /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset */
   pricingSources?: { input: PricingSource; output: PricingSource; cacheHit: PricingSource };
-  /** 当前实际生效的 provider/模型/模式（local = 没配齐或密钥缺失，走本地启发式） */
+  /** 当前实际生效的 provider/模型/模式（local = 没配齐或密钥缺失：对话与 LLM 出题在发请求前被拒） */
   activeModel?: string;
   activeProvider?: string;
   activeMode?: "remote" | "local";

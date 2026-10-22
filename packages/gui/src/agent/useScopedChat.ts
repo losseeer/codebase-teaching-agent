@@ -494,6 +494,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch {
       if (currentThreadRef.current[scope] !== threadId) return;
       setThreads((prev) => ({ ...prev, [scope]: [] }));
+      // 正文没读回来就不能留着旧 session：否则标题是这一条、下一问发进上一条线程
+      if (scope === "teaching") setSession(null);
       pushMessage(scope, "agent", "这段历史暂时读不到，可稍后再试或新建会话。", "hint");
     }
   };

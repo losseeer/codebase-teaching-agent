@@ -78,7 +78,7 @@ export interface LlmCompletionInput {
   thinking?: ThinkingEffort;
   /** 调用场景标签（如 "teaching.turn" / "practice.generate"），只用于 LLM 工作日志（llm/call-log.ts）。协议层不发送。 */
   scene?: string;
-  /** 外部中止信号（用户点「停止生成」或 SSE 客户端断开）。触发后 fetch 立即断开并抛 LlmAbortedError。 */
+  /** 外部中止信号（只有用户点「停止生成」会置位；SSE 客户端断开不中止回合，照常算完落库）。触发后 fetch 立即断开并抛 LlmAbortedError。 */
   signal?: AbortSignal;
 }
 
@@ -89,7 +89,7 @@ export interface LlmCompletionInput {
 export class LlmAbortedError extends Error {
   readonly llmAborted = true;
   constructor() {
-    super("LLM 调用已被中止（用户停止或客户端断开）");
+    super("LLM 调用已被中止（用户停止）");
     this.name = "LlmAbortedError";
   }
 }
@@ -123,6 +123,19 @@ function linkFetchSignal(timeoutMs: number, external?: AbortSignal): LinkedFetch
 function attributeAbort(error: unknown, signal?: AbortSignal): unknown {
   if (error instanceof LlmAbortedError) return error;
   if (signal?.aborted && error instanceof Error && error.name === "AbortError") return new LlmAbortedError();
+  return error;
+}
+
+/** 非 2xx 的统一出口：状态码挂在错误上供重试层判据，服务商回的原因带进文案（过密钥筛、截 300 字）。 */
+async function httpFailure(response: Response, label: string): Promise<Error> {
+  let reason = "";
+  try {
+    reason = maskSecrets(await response.text()).text.replace(/\s+/g, " ").trim().slice(0, 300);
+  } catch {
+    // 原因读不出来就只报状态码
+  }
+  const error = new Error(`${label}（HTTP ${String(response.status)}）${reason ? `：${reason}` : ""}`);
+  Object.defineProperty(error, "httpStatus", { value: response.status, configurable: true });
   return error;
 }
 
@@ -229,7 +242,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
   constructor(private readonly options: FetchProviderOptions) {
     this.modelVersion = `openai:${options.model}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    const headroom = Number(process.env.TUTOR_LLM_REASONING_HEADROOM ?? 6_000);
+    const raw = process.env.TUTOR_LLM_REASONING_HEADROOM?.trim();
+    // 空串（`.env` 模板里 `KEY=` 就是这个形状）按默认 6000；显式填 0 才是关闭
+    const headroom = raw ? Number(raw) : 6_000;
     this.reasoningHeadroom = Number.isFinite(headroom) && headroom > 0 ? Math.floor(headroom) : 0;
   }
 
@@ -272,8 +287,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
       payload.tool_choice = "auto";
     }
-    const response = await this.request(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload, input.signal);
-    const body = await response.json() as {
+    const body = await this.requestJson(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload, input.signal) as {
       choices?: { message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number };
     };
@@ -301,7 +315,8 @@ export class OpenAICompatibleProvider implements LlmProvider {
     };
   }
 
-  private async request(url: string, payload: unknown, signal?: AbortSignal): Promise<Response> {
+  /** 发一发并取回 JSON 正文。超时与外部中止必须覆盖到正文读完：`dispose()` 放在 `finally`，而 `json()` 在 `try` 内。 */
+  private async requestJson(url: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
     const timeoutMs = this.options.timeoutMs ?? 12_000;
     const linked = linkFetchSignal(timeoutMs, signal);
     try {
@@ -311,106 +326,16 @@ export class OpenAICompatibleProvider implements LlmProvider {
         body: JSON.stringify(payload),
         signal: linked.signal
       });
-      if (!response.ok) throw new Error(`模型服务出错（HTTP ${response.status}）`);
-      return response;
+      if (!response.ok) throw await httpFailure(response, "模型服务出错");
+      return await response.json();
     } catch (error) {
       const attributed = attributeAbort(error, signal);
       // 顺序是刻意的：先归因外部中止，再判超时——否则用户点停止会被写成「请求超时」并被重试层重发。
       if (attributed instanceof LlmAbortedError) throw attributed;
       if (attributed instanceof Error && attributed.name === "AbortError") {
-        throw new Error(`模型请求超时（${timeoutMs}ms）：推理模型较慢时可以调大超时时长。`);
+        throw new Error(`模型请求超时（${String(timeoutMs)}ms）：推理模型较慢时可以调大超时时长。`);
       }
       throw attributed;
-    } finally {
-      linked.dispose();
-    }
-  }
-}
-
-export class AnthropicProvider implements LlmProvider {
-  readonly name = "Anthropic teaching model";
-  readonly modelVersion: string;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(private readonly options: FetchProviderOptions) {
-    this.modelVersion = `anthropic:${options.model}`;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-  }
-
-  async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
-    // 原生 Anthropic Messages API 的思考用 budget_tokens（预算制），与 effort 档位语义不同——未实现映射，
-    // 显式档位直接报错而不是静默忽略（不许把失败伪装成结果）。off/auto = 不发思考字段。
-    if (input.thinking && input.thinking !== "off") {
-      throw new Error(`这个模型不支持所选思考档位（Anthropic 的思考按预算计）。请选「自动」或「关闭」，或改用 OpenAI 兼容端点。`);
-    }
-    input = screenOutbound(input);
-    const endpoint = this.options.endpoint.replace(/\/$/, "");
-    const response = await this.request(`${endpoint}/v1/messages`, {
-      model: this.options.model,
-      max_tokens: input.maxTokens ?? 700,
-      temperature: input.temperature ?? 0.2,
-      system: input.system,
-      messages: [{ role: "user", content: input.user }]
-    }, input.signal);
-    const body = await response.json() as { content?: unknown; stop_reason?: string; usage?: { input_tokens?: number; output_tokens?: number } };
-    const text = contentText(body.content);
-    if (!text) throw new Error("模型没有返回内容");
-    return { text, usage: body.usage ? tokenUsage(body.usage) : undefined, finishReason: body.stop_reason };
-  }
-
-  private async request(url: string, payload: unknown, signal?: AbortSignal): Promise<Response> {
-    const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, signal);
-    try {
-      const response = await this.fetchImpl(url, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": this.options.apiKey ?? "", "anthropic-version": "2023-06-01" },
-        body: JSON.stringify(payload),
-        signal: linked.signal
-      });
-      if (!response.ok) throw new Error(`Anthropic returned ${response.status}`);
-      return response;
-    } catch (error) {
-      // 外部中止归因成哨兵后原样上抛；其余错误也一律原样（Anthropic 无超时改写）
-      throw attributeAbort(error, signal);
-    } finally {
-      linked.dispose();
-    }
-  }
-}
-
-export class OllamaTeachingProvider implements LlmProvider {
-  readonly name = "Ollama teaching model";
-  readonly modelVersion: string;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(private readonly options: FetchProviderOptions) {
-    this.modelVersion = `ollama:${options.model}`;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-  }
-
-  async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
-    // 各 Ollama 模型的思考控制不统一（qwen3 等走 options.think / 模板变量），未做映射——
-    // 显式档位直接报错而不是静默忽略。off/auto = 不发思考相关字段。
-    if (input.thinking && input.thinking !== "off") {
-      throw new Error(`这个模型不支持所选思考档位，请选「自动」或「关闭」。`);
-    }
-    input = screenOutbound(input);
-    const linked = linkFetchSignal(this.options.timeoutMs ?? 12_000, input.signal);
-    try {
-      const response = await this.fetchImpl(`${this.options.endpoint.replace(/\/$/, "")}/api/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: linked.signal,
-        body: JSON.stringify({ model: this.options.model, stream: false, options: { temperature: input.temperature ?? 0.2, num_predict: input.maxTokens ?? 700 }, messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }] })
-      });
-      if (!response.ok) throw new Error(`Ollama returned ${response.status}`);
-      const body = await response.json() as { message?: { content?: unknown }; prompt_eval_count?: number; eval_count?: number; done_reason?: string };
-      const text = contentText(body.message?.content);
-      if (!text) throw new Error("模型没有返回内容");
-      return { text, usage: tokenUsage({ input_tokens: body.prompt_eval_count, output_tokens: body.eval_count }), finishReason: body.done_reason };
-    } catch (error) {
-      // 同 Anthropic：只归因外部中止，其余原样上抛
-      throw attributeAbort(error, input.signal);
     } finally {
       linked.dispose();
     }
@@ -465,11 +390,17 @@ function markAttempts(error: unknown, attempts: number, attemptMs: number[]): un
 
 /** 确定性 4xx（除 408 / 429）不做重试：同样的请求原样重发只会原样再败。 */
 function isNonRetryable(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = /(?:LLM|Anthropic|Ollama) returned (\d{3})/.exec(message)?.[1];
-  if (!status) return false;
-  const code = Number(status);
-  return code >= 400 && code < 500 && code !== 408 && code !== 429;
+  const code = httpStatusOf(error);
+  return code !== undefined && code >= 400 && code < 500 && code !== 408 && code !== 429;
+}
+
+/** 状态码优先取错误上挂的 `httpStatus`；扫文案只服务包装层与外部抛出的错误。 */
+function httpStatusOf(error: unknown): number | undefined {
+  const attached = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+  if (typeof attached === "number") return attached;
+  const matched = /(?:LLM returned|HTTP) (\d{3})/.exec(error instanceof Error ? error.message : String(error));
+  const code = Number(matched?.[1] ?? matched?.[2]);
+  return Number.isFinite(code) && matched ? code : undefined;
 }
 
 /** 思考模式注入包装：把运行时档位附加到包装内 provider 的每一次调用上（"auto" = 原样透传不注入）。
@@ -487,9 +418,7 @@ export class ThinkingOverrideLlmProvider implements LlmProvider {
   }
 }
 
-function defaultModel(provider: string): string {
-  if (provider === "anthropic") return "claude-3-5-sonnet-20241022";
-  if (provider === "ollama") return "llama3.2";
+function defaultModel(): string {
   return "gpt-4o-mini";
 }
 
@@ -506,17 +435,15 @@ const trimmed = (value?: string): string => value?.trim() ?? "";
 /**
   一份配置的三层回落：GUI 运行时覆盖 → .env（只有 TUTOR_LLM_* 一套）→ 该协议默认。
   provider 没配时返回 `provider: ""`，由 createLlmProvider 判成「未配置」。
-  密钥只认通用名 OPENAI_API_KEY / ANTHROPIC_API_KEY，不认引擎专属别名——别名会被读成另一份配置。
+  密钥只认通用名 OPENAI_API_KEY，不认引擎专属别名——别名会被读成另一份配置。
   */
 export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLlmConfig {
   const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || "").toLowerCase();
   const baseUrl = trimmed(overrides.baseUrl);
   const apiKey = trimmed(overrides.apiKey);
-  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel(provider);
+  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel();
   // 留空与非法值都回落到默认：`Number("")` 是 0，而 0ms 定时器会把每一发真实请求当场判成超时（重试层再补一发，全部模型路径瘫痪）
   const timeoutMs = Math.max(1_000, Number(process.env.TUTOR_LLM_TIMEOUT_MS) || 12_000);
-  if (provider === "anthropic") return { provider, model, baseUrl: baseUrl || "https://api.anthropic.com", apiKey: apiKey || process.env.ANTHROPIC_API_KEY, timeoutMs };
-  if (provider === "ollama") return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OLLAMA_URL || "http://127.0.0.1:11434", timeoutMs };
   return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
 }
 
@@ -525,7 +452,7 @@ export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLl
   所以这个结构本身不带来源信息——GUI 要知道哪些是回落值，由路由另外下发 .env 预设。
   */
 export interface ResolvedLlmConfig {
-  /** 空串 = 一个都没配（此时 createLlmProvider 返回 undefined，调用方走本地启发式） */
+  /** 空串 = 一个都没配（createLlmProvider 返回 undefined：L1 摘要与规则题走确定性档，三作用域对话与 LLM 出题在发请求前 422） */
   provider: string;
   model: string;
   baseUrl: string;
@@ -535,11 +462,6 @@ export interface ResolvedLlmConfig {
 
 function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
   const { provider, model, baseUrl, apiKey, timeoutMs } = config;
-  if (provider === "anthropic") {
-    if (!apiKey) return undefined;
-    return new RetryLlmProvider(new AnthropicProvider({ endpoint: baseUrl, apiKey, model, timeoutMs }));
-  }
-  if (provider === "ollama") return new RetryLlmProvider(new OllamaTeachingProvider({ endpoint: baseUrl, model, timeoutMs }));
   if (provider === "openai" || provider === "openai-compatible") {
     // 官方 openai 协议没有 key 必然 401，直接不建实例；兼容端点（Ollama/LM Studio 的 OpenAI 层）允许无 key 本地跑
     if (provider === "openai" && !apiKey) return undefined;

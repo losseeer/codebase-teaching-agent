@@ -10,5 +10,4 @@
  * 若 `pnpm install` 时与 `pnpm exec tsx` 时使用的 Node 不同，会触发
  * `NODE_MODULE_VERSION 127 vs 147` 错。
  */
-export function resolveBindingPath(): string | null;
 export function loadAddon(): unknown;

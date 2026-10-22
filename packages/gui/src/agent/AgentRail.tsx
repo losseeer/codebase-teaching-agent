@@ -3,6 +3,7 @@ import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared/wire";
 import { Markdown } from "./Markdown";
 import { LlmSettingsControl } from "./LlmSettings";
 import { ColumnResizer } from "../ui/ColumnResizer";
+import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
 import { SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
 
@@ -104,7 +105,8 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
             value={t.content}
             onChange={(event) => t.setContent(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && canSend) {
+              // 中文输入法选词那一下回车也是 Enter：正在组合时不许提交
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && canSend) {
                 event.preventDefault();
                 void onSend();
               }
@@ -204,6 +206,7 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
   const unsent = Boolean(currentId) && !current;
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(false);
   if (renaming) {
     return (
       <div className="thread-bar">
@@ -214,7 +217,7 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
           aria-label="会话名称"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") { event.preventDefault(); setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); setRenaming(false); if (currentId && draft.trim()) void t.renameThread(scope, currentId, draft.trim()); }
             else if (event.key === "Escape") setRenaming(false);
           }}
         />
@@ -243,15 +246,20 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
       <button
         type="button"
         className="icon-btn"
-        title="删除当前会话（软删）"
+        title="删除当前会话"
         aria-label="删除当前会话"
         disabled={!currentId}
-        onClick={() => {
-          if (!currentId) return;
-          if (!window.confirm(`删除会话「${current?.title ?? ""}」？删除后不可恢复；审计日志仍保留脱敏摘要。`)) return;
-          void t.removeThread(scope, currentId);
-        }}
+        onClick={() => setPendingDelete(true)}
       ><Icon name="trash" size={14} /></button>
+      {pendingDelete && currentId ? (
+        <DangerDialog
+          title="删除这条会话"
+          body={`「${current?.title ?? ""}」的提问与回答从此看不见；本机记录仍留一份脱敏摘要。`}
+          deleteLabel={`删除「${current?.title ?? "当前会话"}」`}
+          onDelete={() => { setPendingDelete(false); void t.removeThread(scope, currentId); }}
+          onClose={() => setPendingDelete(false)}
+        />
+      ) : null}
     </div>
   );
 }

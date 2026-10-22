@@ -32,7 +32,7 @@
 
 ```bash
 pnpm install
-cp .env.example .env   # 可全部留空：摘要回落本地启发式
+cp .env.example .env   # 可全部留空：摘要与规则题走确定性档
 pnpm dev               # 引擎 127.0.0.1:3001，界面 127.0.0.1:3000
 ```
 

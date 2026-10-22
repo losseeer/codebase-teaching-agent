@@ -46,13 +46,6 @@ export const ORIGIN_SHORT: Record<DiagramEdgeOrigin, string> = {
   inferred: "模型推断"
 };
 
-/** 每档一句短说明，进悬停。 */
-export const ORIGIN_NOTE: Record<DiagramEdgeOrigin, string> = {
-  static: "有文件 import 依据",
-  code: "源码里读到的调用",
-  inferred: "模型推断，没有行级依据"
-};
-
 export const EDGE_ORIGINS = Object.keys(ORIGIN_SHORT) as DiagramEdgeOrigin[];
 
 /** ISO 串 → 「刚刚 / N 分钟前 / N 小时前 / N 天前 / 03-04 15:02」。坏串原样显示，不编一个时间。 */

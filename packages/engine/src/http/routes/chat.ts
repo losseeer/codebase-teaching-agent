@@ -3,11 +3,10 @@ import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
 import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
-import { auditsFromResult, recordAbortedAudits } from "../../application/turn-audit.js";
+import { auditsFromResult, recordUnfinishedTurn } from "../../application/turn-audit.js";
 import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
-import { id } from "../../identity.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { type MapChatProgress, mapChat, practiceChat } from "../../scopechat/scopechat.js";
@@ -72,14 +71,14 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
     });
     // 中止若晚于最后一趟 LLM 到达，这一轮照样作废：不落库也不回放（与教学回合同一口径）
     if (turnHandle.signal?.aborted) {
-      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", threadId: turn.threadId, audits: auditsFromResult(result) });
+      recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", provider: provider.modelVersion, outcome: "aborted", threadId: turn.threadId, audits: auditsFromResult(result) });
       throw new LlmAbortedError();
     }
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) });
   } catch (error) {
-    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, provider: provider.modelVersion, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
     repository.handle.unpin();
@@ -116,7 +115,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   try {
     const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     if (turnHandle.signal?.aborted) {
-      recordAbortedAudits({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
+      recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", provider: provider.modelVersion, outcome: "aborted", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
       throw new LlmAbortedError();
     }
     const journal = new Journal(repository.path, repository.index.repositoryId);
@@ -133,7 +132,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
     replayTypewriter(send, result.reply);
     send({ type: "done", reply: result.reply, provider: result.provider });
   } catch (error) {
-    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", turnHandle, ...(thread?.id ? { threadId: thread.id } : {}), error, fallbackError: "LLM 对话失败" });
+    failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", turnHandle, provider: provider.modelVersion, ...(thread?.id ? { threadId: thread.id } : {}), error, fallbackError: "LLM 对话失败" });
   } finally {
     turnHandle.dispose();
   }

@@ -108,6 +108,11 @@ export function readMcpConfigs(file = mcpConfigFile()): { servers: McpServerConf
       skipped.push({ server: name, reason: "server 名不合形（小写字母/数字/下划线/连字符，首字符不能是 - 或 _，≤40）" });
       continue;
     }
+    if (name.includes("__")) {
+      // 工具名拼成 `mcp__<server>__<tool>`：server 名里再有 `__` 就没法从暴露名反解，两台 server 撞名时调用会落到错的那台
+      skipped.push({ server: name, reason: "server 名不能含连续下划线（与 `mcp__` 前缀冲突）" });
+      continue;
+    }
     if (raw?.disabled === true) { skipped.push({ server: name, reason: "配置里 disabled=true（没接）" }); continue; }
     if (typeof raw?.url === "string" && raw.url.trim()) { skipped.push({ server: name, reason: "远程 server（url/type）没接：外部调用的出境记账与 fail-closed 是前置（#175）" }); continue; }
     if (typeof raw?.command !== "string" || !raw.command.trim()) { skipped.push({ server: name, reason: "本地 server 缺 command" }); continue; }
@@ -129,13 +134,27 @@ export function readMcpConfigs(file = mcpConfigFile()): { servers: McpServerConf
 interface Connected {
   client: Client;
   server: string;
+  /** 这台 server 报上来的全部工具；白名单每轮现裁，见 `externalToolSurface`。 */
   tools: LlmTool[];
   /** 暴露名 → server 侧的原始工具名。 */
   origin: Map<string, string>;
+  /** 建这条连接时用的启动配置指纹：改了 command/args/cwd/env 就要重连，留着旧连接等于拿旧配置办事。 */
+  signature: string;
 }
 
-/** 连接池：按 server 名惰性连一次并缓存这条 promise。连成功的一直复用；连不上或调用时发现连接已死的，把这一项摘掉，下一个回合重连——既不留僵尸子进程，也不让一次故障被永久钉成「每轮都超时」。 */
+/** 连接池：按 server 名惰性连一次并缓存这条 promise。连成功的一直复用；连不上、调用时发现连接已死、或启动配置变了的，把这一项摘掉，下一个回合重连——既不留僵尸子进程，也不让一次故障被永久钉成「每轮都超时」。 */
 const pool = new Map<string, Promise<Connected | undefined>>();
+
+function configSignature(config: McpServerConfig): string {
+  return hash(JSON.stringify({ command: config.command, args: config.args ?? [], cwd: config.cwd ?? "", env: config.env ?? {} }));
+}
+
+/** 白名单两种写法都认：完整 id 按这台 server 的名字剥前缀（server 名允许下划线），裸工具名照原样比。`undefined` = 没写白名单 = 全部放行。 */
+function allowedNames(config: McpServerConfig): Set<string> | undefined {
+  if (!config.allowedTools) return undefined;
+  const prefix = `mcp__${config.name}__`;
+  return new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry)));
+}
 
 async function connect(config: McpServerConfig): Promise<Connected | undefined> {
   const client = new Client({ name: "codebase-tutor-engine", version: "0.1.0" });
@@ -148,19 +167,15 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    // 白名单两种写法都认：完整 id 按这台 server 的名字剥前缀（server 名允许下划线），裸工具名照原样比
-    const prefix = `mcp__${config.name}__`;
-    const allowed = config.allowedTools ? new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry))) : undefined;
     const tools: LlmTool[] = [];
     const origin = new Map<string, string>();
     for (const tool of listed.tools) {
-      if (allowed && !allowed.has(tool.name)) continue;
       const name = `mcp__${config.name}__${tool.name}`;
       const { $schema: _ignored, ...parameters } = (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>;
       tools.push({ name, description: tool.description ? `【外部 ${config.name}】${tool.description}` : `【外部 ${config.name}】${tool.name}`, parameters: parameters as LlmTool["parameters"] });
       origin.set(name, tool.name);
     }
-    return { client, server: config.name, tools, origin };
+    return { client, server: config.name, tools, origin, signature: configSignature(config) };
   } catch {
     await client.close().catch(() => undefined);
     return undefined;
@@ -189,19 +204,37 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: tr
 */
 export async function externalToolSurface(): Promise<ExternalSurface | undefined> {
   const { servers, skipped } = readMcpConfigs();
+  // 配置里删掉的 server 先收尾：这一轮一个都不配时也不能留子进程
+  const wanted = new Set(servers.map((config) => config.name));
+  for (const [name, pending] of [...pool]) {
+    if (wanted.has(name)) continue;
+    pool.delete(name);
+    void pending.then((entry) => entry?.client.close().catch(() => undefined), () => undefined);
+  }
   if (!servers.length && !skipped.length) return undefined;
   const connected: Connected[] = [];
   const errors = skipped.map((entry) => ({ server: entry.server, reason: entry.reason }));
   for (const config of servers) {
+    const signature = configSignature(config);
     let cached = pool.get(config.name);
+    const existing = await cached;
+    if (existing && existing.signature !== signature) {
+      // 启动配置变了就连新的，否则改了 command/args/env 要重启引擎才生效
+      void existing.client.close().catch(() => undefined);
+      pool.delete(config.name);
+      cached = undefined;
+    }
     if (!cached) {
-      cached = connect(config).finally(() => undefined);
+      cached = connect(config).catch(() => undefined);
       pool.set(config.name, cached);
     }
     const entry = await cached;
     if (!entry) { errors.push({ server: config.name, reason: "连不上（子进程起不来或 initialize 失败）" }); pool.delete(config.name); continue; }
-    if (!entry.tools.length) errors.push({ server: config.name, reason: "连上了但它报的工具都不在白名单里" });
-    connected.push(entry);
+    // 白名单每轮现裁：连接里存的是这台报上来的全部工具，改了 `allowedTools` 不必重启就生效
+    const allowed = allowedNames(config);
+    const tools = allowed ? entry.tools.filter((tool) => allowed.has(entry.origin.get(tool.name) ?? tool.name)) : entry.tools;
+    if (!tools.length) errors.push({ server: config.name, reason: allowed ? "连上了但它报的工具都不在白名单里" : "连上了，它一个工具都没报" });
+    connected.push({ client: entry.client, server: entry.server, tools, origin: new Map(tools.map((tool) => [tool.name, entry.origin.get(tool.name) as string])), signature: entry.signature });
   }
   const tools = connected.flatMap((entry) => entry.tools);
   if (!tools.length) return errors.length ? { tools: [], errors, call: async (name, argumentsJson) => { const base = { server: name.split("__")[1] ?? "-", tool: name, ...previewOf(argumentsJson) }; return { text: "外部工具当前不可用。", audit: { ...base, resultChars: 0, masked: 0, ok: false, ms: 0, error: "no_tool" } }; } } : undefined;
@@ -255,7 +288,7 @@ export async function closeExternalTools(): Promise<void> {
   for (const entry of entries) await entry?.client.close().catch(() => undefined);
 }
 
-/** 清空连接池并把子进程关掉：测试收尾用（改了配置文件本身需要重启引擎才生效，没有热加载入口，读数里会照实这么写）。 */
+/** 清空连接池并把子进程关掉：测试收尾用（配置本身每轮现读，增删 server、改白名单与改启动配置都下一回合生效，没有单独的热加载入口）。 */
 export function resetExternalTools(): void {
   const pending = [...pool.values()];
   pool.clear();

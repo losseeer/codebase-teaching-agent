@@ -69,5 +69,15 @@ echo "=== Native binding 状态 ==="
 ls -lh "$NATIVE_DIR"/ | grep -v "^total"
 echo
 echo "本机 Node ABI: $(node -p 'process.versions.modules')"
-RESOLVED="$("$NATIVE_DIR/../../src/store/betterSqlite3Loader.cjs" 2>/dev/null || true)"
-echo "loader self-check ok"
+
+# 自检走与 store/database.ts 相同的那条路：loadAddon() 解析出 binding，再交给 better-sqlite3 开一个内存库。跑不通就退非 0，别报「装好了」。
+echo
+echo "=== loader 自检 ==="
+LOADER="$(dirname "$NATIVE_DIR")/src/store/betterSqlite3Loader.cjs"
+node -e '
+  const { loadAddon } = require(process.argv[1]);
+  const Database = require("better-sqlite3");
+  const db = new Database(":memory:", { nativeBinding: loadAddon() });
+  db.exec("SELECT 1;");
+  console.log("[ok] 按本机 Node ABI 打开了内存库");
+' "$LOADER" || { echo "[error] loader 自检失败：native/ 里的 binding 与本机 Node ABI 对不上" >&2; exit 1; }

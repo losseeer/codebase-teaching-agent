@@ -32,7 +32,7 @@ Everything runs on your machine and artifacts stay in the analysed repository's 
 
 ```bash
 pnpm install
-cp .env.example .env   # all values may stay blank; summaries fall back to local heuristics
+cp .env.example .env   # all values may stay blank; summaries and rule-made questions use the deterministic tier
 pnpm dev               # engine 127.0.0.1:3001, UI 127.0.0.1:3000
 ```
 

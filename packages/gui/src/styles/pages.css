@@ -14,7 +14,6 @@
 .icon-btn.on { background: var(--brand-100); color: var(--brand-700); }
 .side-col { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .tier-groups, .chip-block { display: flex; flex-direction: column; gap: var(--sp-3); }
-.tier-head .tier-note { margin-left: auto; font-weight: 400; font-size: 10px; }
 .side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: var(--fs-11); font-weight: 700; color: var(--brand-700); }
 .cfg-head span { color: var(--ink-3); font-size: 10px; font-weight: 400; }
@@ -184,7 +183,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .dg-stale-mark { position: absolute; right: 4px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--warn-ink); }
 .dg-node.flash { animation: dg-flash 1.1s ease 2; }
 /* 原型写的是 `rgba(216,239,88,0.6)`——那正是 --accent 的 60%，所以用 color-mix 现推而不是抄色值：
-   下次改 --accent，这一格跟着改，不会出现「品牌色换了、闪光还是旧的」。（.gen-overlay 也是这么写的。） */
+   下次改 --accent，这一格跟着改，不会出现「品牌色换了、闪光还是旧的」。 */
 @keyframes dg-flash {
   0%, 100% { box-shadow: var(--shadow-sm); }
   40% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 60%, transparent); border-color: var(--accent-ink); }
@@ -249,49 +248,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 /* ==================== 代码教学 ==================== */
 .page-teach { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .teach-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
-.tier-group { display: flex; flex-direction: column; gap: 2px; }
-.tier-group .tier-head {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
-  color: var(--ink-3);
-  padding: 0 var(--sp-1) 4px;
-  display: flex; align-items: center; gap: 5px;
-}
-.tier-group .tier-head .tier-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; }
-.tier-head .tier-fold { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--ink-3); }
-.tier-head .tier-fold:hover { color: var(--brand-700); }
-.tag-core { background: var(--brand-100); color: var(--brand-700); }
-.tag-facility { background: var(--info-bg); color: var(--info-ink); }
-.tag-periphery { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--border); }
-.tag-custom { background: var(--brand-050); color: var(--brand-700); border: 1px dashed var(--border-strong); }
-.tier-node {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px; border-radius: var(--r-sm);
-  font-size: var(--fs-12); color: var(--ink-2);
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  min-width: 0;
-}
-.tier-node:hover { background: var(--brand-050); }
-.tier-node.active { background: var(--brand-100); color: var(--brand-700); font-weight: 600; }
-.tier-node .tier-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tier-node .tier-count { margin-left: auto; font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); flex: 0 0 auto; }
-
-.entry-card {
-  width: 100%; text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 9px 11px;
-  background: var(--surface);
-  transition: border var(--t-fast);
-  display: flex; flex-direction: column; gap: 3px;
-}
-.entry-card:hover { border-color: var(--brand-600); }
-.entry-card.selected { border-color: var(--brand-700); background: var(--brand-050); }
-.entry-card .e-title { font-size: var(--fs-12); font-weight: 650; color: var(--ink); display: flex; align-items: center; gap: 6px; }
-.entry-card .e-reason { font-size: var(--fs-11); color: var(--ink-2); line-height: 1.5; }
-.entry-card .e-path { font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 .side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfg-row, .cfg-add { display: flex; align-items: center; gap: 5px; }
 .cfg-row .text-input, .cfg-add .text-input { padding: 5px 8px; font-size: var(--fs-11); border-radius: var(--r-sm); }
@@ -455,7 +411,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .feedback-pass .feedback-head { color: var(--ok); }
 .feedback-fail .feedback-head { color: var(--danger); }
 .feedback-panel p { margin: 0; font-size: var(--fs-13); line-height: 1.65; color: var(--ink); }
-.feedback-panel .grade-source { font-size: var(--fs-11); color: var(--ink-2); }
 .test-table { font-size: var(--fs-12); }
 .test-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-family: var(--font-mono); font-size: var(--fs-11); }
 .test-row .t-status { font-weight: 700; width: 44px; flex: 0 0 auto; }

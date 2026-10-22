@@ -25,7 +25,7 @@ import type { LlmTool } from "../llm/provider.js";
   `MAX_FILE_BYTES` 是进程级安全阀，与上下文预算无关：它挡的是「一次 readFileSync 把内存打死」，
   所以窗口调到多大它都不跟着长。
 */
-const MAX_FILE_BYTES = 2_000_000;
+export const MAX_FILE_BYTES = 2_000_000;
 
 const DENIED_DIRECTORIES = new Set([".git", "node_modules", ".tutor"]);
 /** 模板类 env 文件只列键名、不含密钥，而且是理解配置的入口 → 放行。 */

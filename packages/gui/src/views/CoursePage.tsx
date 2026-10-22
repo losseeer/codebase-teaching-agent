@@ -7,6 +7,7 @@ import { Loading } from "./helpers";
 import { RepoTree } from "./RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
+import { DangerDialog } from "../ui/DangerDialog";
 import { DiagramCanvas, type DragCommit } from "../map/DiagramCanvas";
 import { GalleryPane } from "../map/GalleryPane";
 import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } from "../map/NodeDrawer";
@@ -330,8 +331,9 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
     })();
   }, [repositoryId, refreshGallery]);
 
-  const removeDiagram = useCallback((item: DiagramSummary): void => {
-    if (!window.confirm(`删除「${item.name}」？版本历史一起删掉，不可恢复。`)) return;
+  const [pendingDiagramDelete, setPendingDiagramDelete] = useState<DiagramSummary | null>(null);
+
+  const runRemoveDiagram = useCallback((item: DiagramSummary): void => {
     void (async () => {
       try {
         await api.deleteDiagram(repositoryId, item.id);
@@ -449,19 +451,30 @@ export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { wor
             <button type="button" role="tab" aria-selected={railTab === "tree"} className={`rail-tab ${railTab === "tree" ? "active" : ""}`} onClick={() => setRailTab("tree")}>项目目录</button>
           </div>
           {railTab === "gallery" ? (
-            <GalleryPane
-              diagrams={diagrams}
-              openId={openId}
-              loading={listLoading}
-              error={listError}
-              query={query}
-              onQueryChange={setQuery}
-              onOpen={openDiagram}
-              onCreate={createDiagram}
-              onRename={renameDiagram}
-              onVersions={openVersions}
-              onDelete={removeDiagram}
-            />
+            <>
+              <GalleryPane
+                diagrams={diagrams}
+                openId={openId}
+                loading={listLoading}
+                error={listError}
+                query={query}
+                onQueryChange={setQuery}
+                onOpen={openDiagram}
+                onCreate={createDiagram}
+                onRename={renameDiagram}
+                onVersions={openVersions}
+                onDelete={setPendingDiagramDelete}
+              />
+              {pendingDiagramDelete ? (
+                <DangerDialog
+                  title="删除这张图"
+                  body={`「${pendingDiagramDelete.name}」连同它的版本历史一起删掉，找不回来。`}
+                  deleteLabel={`删除「${pendingDiagramDelete.name}」`}
+                  onDelete={() => { const item = pendingDiagramDelete; setPendingDiagramDelete(null); runRemoveDiagram(item); }}
+                  onClose={() => setPendingDiagramDelete(null)}
+                />
+              ) : null}
+            </>
           ) : (
             <div className="map-side-tree">
               {indexError ? <p className="gallery-error">{indexError}</p> : null}
