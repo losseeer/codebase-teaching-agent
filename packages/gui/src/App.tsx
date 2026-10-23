@@ -5,16 +5,16 @@ import { ApiError, api, isNotFound } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
-import { CoursePage } from "./views/CoursePage";
+import { DiagramPage } from "./views/DiagramPage";
 import { TutorPage } from "./views/TutorPage";
 import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
-import { Loading } from "./views/helpers";
+import { Loading } from "./ui/Loading";
 import { Icon, type IconName } from "./ui/icons";
 import { DangerDialog } from "./ui/DangerDialog";
 import { layoutVars, useLayout } from "./ui/ColumnResizer";
-import { showToast, toastFailure, ToastHost } from "./modules/toast";
+import { showToast, toastFailure, ToastHost } from "./ui/toast";
 import { emit, installJournalRetry } from "./journal";
 
 // 类型已在 api/client 定义，这里转发一次，子组件统一从 `../App` 取 Workspace。
@@ -448,7 +448,7 @@ function Workbench({ workspace, chat }: { workspace: _Workspace; chat: ReturnTyp
     <div className="workbench-root">
       {/* 三个视图常驻挂载，所以「可见性」必须传进去：文件树与画布数据只在可见时拉取，
           隐藏面板不该替用户发请求。 */}
-      <div className="workbench-view" hidden={active !== "map"}><CoursePage workspace={workspace} chat={chat} visible={active === "map"} /></div>
+      <div className="workbench-view" hidden={active !== "map"}><DiagramPage workspace={workspace} chat={chat} visible={active === "map"} /></div>
       <div className="workbench-view" hidden={active !== "teaching"}><TutorPage workspace={workspace} chat={chat} visible={active === "teaching"} /></div>
       <div className="workbench-view" hidden={active !== "practice"}><PracticePage workspace={workspace} chat={chat} visible={active === "practice"} /></div>
     </div>

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { useNavigate } from "react-router-dom";
 import type { Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type DiagramPosition, type DiagramWarning, type SaveState, type Workspace } from "../api/client";
-import type { ScopedChatApi } from "../agent/useScopedChat";
-import { Loading } from "./helpers";
-import { RepoTree } from "./RepoTree";
+import type { ScopedChatApi } from "../agent/scopedChatApi";
+import { Loading } from "../ui/Loading";
+import { RepoTree } from "../source/RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
 import { DangerDialog } from "../ui/DangerDialog";
@@ -12,7 +12,7 @@ import { DiagramCanvas, type DragCommit } from "../map/DiagramCanvas";
 import { GalleryPane } from "../map/GalleryPane";
 import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } from "../map/NodeDrawer";
 import { emit } from "../journal";
-import { showToast, toastFailure } from "../modules/toast";
+import { showToast, toastFailure } from "../ui/toast";
 
 // 宏观设计 = agent 画图工作区，两栏：左栏是图库（搜索 / 新建 / 一张图一行 + ⋯ 菜单）与项目目录
 // （沿用 `RepoTree` 与栏宽拖拽）两个 tab，右栏是画布那一列（`DiagramCanvas`）。
@@ -66,7 +66,7 @@ function writeMapMemory(repositoryId: string, memory: MapMemory): void {
 /** 几何写入的去抖窗口：连续拖动合并成一趟 PUT。 */
 const GEOMETRY_DEBOUNCE_MS = 300;
 
-export function CoursePage({ workspace, chat: t, visible, onQuickPrompt }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean; onQuickPrompt?: (text: string) => void }): ReactElement {
+export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean; onQuickPrompt?: (text: string) => void }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const memory = useMemo(() => readMapMemory(repositoryId), [repositoryId]);
   const [railTab, setRailTab] = useState<RailTab>(memory.railTab);

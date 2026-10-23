@@ -5,7 +5,9 @@ import { LlmSettingsControl } from "./LlmSettings";
 import { ColumnResizer } from "../ui/ColumnResizer";
 import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
-import { SCOPE_LABEL, type Scope, type ScopedChatApi, type ThreadItem } from "./useScopedChat";
+import { SCOPE_LABEL, type Scope } from "./chatScope";
+import type { ScopedChatApi } from "./scopedChatApi";
+import type { ThreadItem } from "./threadItems";
 
 /**
   持久 Agent 对话栏，五段：绑定上下文行 → 语言风格 → 线程条 → 消息流 → 模型胶囊 + composer。

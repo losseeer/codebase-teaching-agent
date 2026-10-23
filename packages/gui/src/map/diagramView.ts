@@ -1,7 +1,7 @@
 import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@codebase-tutor/shared/wire";
 
 /**
-  画布的几何与文案口径（纯函数，无 JSX）：`DiagramCanvas` 与 `CoursePage` 共用。
+  画布的几何与文案口径（纯函数，无 JSX）：`DiagramCanvas` 与 `DiagramPage` 共用。
   「节点高度靠量」「视野由调用方持有」两条判据见 `DiagramCanvas` 的头注释。
 */
 

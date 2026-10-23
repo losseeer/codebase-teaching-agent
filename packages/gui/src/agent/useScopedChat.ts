@@ -1,198 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatScope, ChatThread, Exercise, ScopedStreamProgress, TeachingProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
+import type { ChatThread, Exercise, ScopedStreamProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
+import { defaultTutorSettings } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type StreamTurn } from "../api/client";
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
-
-/**
-  Agent 侧栏的 3 个作用域。
-  - `map`      宏观设计（绑定文件树，可见画布/关系，动作只读）
-  - `teaching` 代码教学（绑定当前文件或目录，可见源码/锚点，动作可写入 session）
-  - `practice` 练习评估（绑定当前练习，可见题目/进度，动作可写入学习日志）
-  */
-export type Scope = "map" | "teaching" | "practice";
-export const SCOPES: ReadonlyArray<Scope> = ["map", "teaching", "practice"] as const;
-
-/** 宏观设计绑定的两种合法情形：项目目录选文件 / 画布模块（+其关联文件）。 */
-export type MapBinding = { kind: "file" | "module"; title?: string; path?: string };
-
-export const SCOPE_LABEL: Record<Scope, string> = {
-  map: "宏观设计",
-  teaching: "代码教学",
-  practice: "练习评估",
-};
-
-/** 能变成一行过程提示的帧：`delta` 是正文增量、不进这里，其余四类与教学那层的 `TeachingProgress` 同义。 */
-type ProgressFrame = Exclude<ScopedStreamProgress, { type: "delta" }> | TeachingProgress;
-
-/**
-  帧 → 三档阶段之一。`progress` 剥一层 payload（教学回合走这个形状），
-  宏观与练习那两条流直接把阶段名放在 `type` 上——两侧本来就同一套取值，这里只做换算不做判断。
-  穷尽守卫在 `default`：shared 的词表加一类而这里没接，编译就不过。
-  */
-function activityOf(event: ProgressFrame): TeachingProgress {
-  if ("stage" in event) return event;
-  switch (event.type) {
-    case "thinking": return { stage: "thinking", round: event.round };
-    case "reading": return { stage: "reading", path: event.path };
-    case "searching": return { stage: "searching", query: event.query };
-    case "progress": return event.payload;
-    default: {
-      const unhandled: never = event;
-      throw new Error(`未登记的过程帧：${JSON.stringify(unhandled)}`);
-    }
-  }
-}
-
-/**
-  过程提示的中文文案，三个作用域共用一份：文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
-  种类由 `shared` 的词表管，漏接编译不过。
-  帧整个缺席（引擎没带 payload）时给「回复生成中…」：那是过程提示的措辞档位，不是伪造的事实读数。
-  */
-export function progressText(event: ProgressFrame | undefined): string {
-  if (!event) return "回复生成中…";
-  const activity = activityOf(event);
-  switch (activity.stage) {
-    case "reading": return `正在读取 ${activity.path || "代码文件"} …`;
-    case "searching": return `正在检索代码：${activity.query || "关键词"} …`;
-    case "thinking": return activity.round && activity.round > 1 ? `正在思考（第 ${activity.round} 轮）…` : "正在思考…";
-    default: {
-      const unhandled: never = activity;
-      throw new Error(`未登记的过程阶段：${JSON.stringify(unhandled)}`);
-    }
-  }
-}
-
-/** thread 一条消息的形态：用户/Agent。
-  agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示）。
-  位置/状态变化（切换作用域、切换节点、选中文件等）不以分割线入线程——上下文变化由绑定区展示，
-  线程只留真实的对话内容。 */
-export type ThreadItem =
-  | { kind: "user"; id: string; text: string }
-  /**
-    `card`：这一回合 agent 画（或改）了一张图，消息下面挂一张可点开的图卡片。
-    挂在消息上而不是全局提示条上——用户事后回来还能找到「哪句话画出了哪张图」。
-  */
-  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint"; card?: { diagramId: string; name: string } };
-
-/** 线程正文一行的最小形状：teaching 的 TutorMessage 与 map/practice 的 ChatThreadMessage 都能对上（断线补账只比条数）。 */
-type ThreadRow = { id: string; role: string; content: string };
-
-const SCOPE_STORAGE_KEY = "codebase-tutor.scope";
-
-/** GUI 作用域（teaching）→ 引擎作用域取值（teach）：两套口径的对应关系只在这一处表里换算。 */
-const CHAT_SCOPE: Record<Scope, ChatScope> = { map: "map", teaching: "teach", practice: "practice" };
-
-/** 线程正文 → 侧栏展示项：库里只有 user/assistant 两种角色，hint/error 这类本地提示不落库、也读不回来。 */
-function threadItemsFrom(messages: readonly ThreadRow[]): ThreadItem[] {
-  return messages
-    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)
-    .map((message) => ({ kind: message.role === "user" ? "user" as const : "agent" as const, id: message.id, text: message.content }));
-}
-
-function isScope(value: string): value is Scope {
-  return value === "map" || value === "teaching" || value === "practice";
-}
-
-function loadInitialScope(): Scope {
-  try {
-    const saved = localStorage.getItem(SCOPE_STORAGE_KEY);
-    if (saved && isScope(saved)) return saved;
-  } catch {
-    /* localStorage 不可用时 fallback */
-  }
-  return "teaching";
-}
-
-/**
-  回合失败是「断线」还是「引擎答砸了」：fetch 层面两者同形（都是抛错），但只有前者引擎仍会把这一轮
-  算完并落库，回来时补得回——补账只对这一类开。AbortError 是连接被掐（断网时浏览器也这么抛），
-  「连接中断，未收到完整回复」是流提前收尾，Failed to fetch / Load failed / NetworkError 是各家浏览器
-  对 fetch 网络错误的文案。引擎显式回的 error 事件（模型失败、会话失效）不在其列。
-  */
-function lostInTransit(reason: unknown): boolean {
-  if (reason instanceof Error && reason.name === "AbortError") return true;
-  const text = reason instanceof Error ? reason.message : String(reason);
-  return text.includes("连接中断") || text.includes("Failed to fetch") || text.includes("Load failed") || text.includes("NetworkError");
-}
-
-export interface ScopedChatApi {
-  scope: Scope;
-  setScope: (next: Scope) => void;
-
-  /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责。 */
-  threads: Record<Scope, ThreadItem[]>;
-  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
-  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }) => void;
-
-  /**
-    会话线程（三作用域各一份独立列表，真源在引擎库里）：
-    `chatThreads` 按 updated_at 倒序，`currentThreadId` 是当前打开的线程。
-    新建 / 切换 / 重命名 / 删除四个动作都在这里；软删口径见 api/client.ts 的 `listThreads` 注释。
-    */
-  chatThreads: Record<Scope, ChatThread[]>;
-  currentThreadId: Record<Scope, string | null>;
-  /** 新建线程并选中它；`firstQuestion` 用来给线程起个认得出的标题。teaching 走 createSession（它才装配策略与学习者画像）。 */
-  newThread: (scope: Scope, firstQuestion?: string) => Promise<string | null>;
-  switchThread: (scope: Scope, threadId: string | null) => void;
-  renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
-  /** 软删线程：GUI 侧二次确认在 AgentRail（文案要让用户看见「审计日志仍保留脱敏摘要」）。 */
-  removeThread: (scope: Scope, threadId: string) => Promise<void>;
-
-  /** 教学作用域：`file:<path>` / `dir:<path>`；null = 还没选。 */
-  scopeRef: string | null;
-  /** 作用域的人话标签（文件名 / 目录名 / 仓库根目录）。 */
-  scopeLabel: string;
-  setScopeRef: (ref: string | null) => void;
-  /** 数据代数：重新导入 / 产物更新时递增，画布与源码树据此重取。 */
-  dataVersion: number;
-  /** 强制重发产物相关请求（导入完成或收到 repository.updated 后调用）。 */
-  reloadRepositoryData: () => void;
-
-  /** 宏观设计作用域的文件清单：由 CoursePage 选中画布节点时写入，map-chat 只把它当作用域提示。 */
-  mapScopePaths: string[];
-  setMapScope: (scopePaths: string[]) => void;
-  /** 绑定行数据（AgentRail 的「绑定」只读展示）；null = 未绑定，不再默认拼根节点 */
-  mapBinding: MapBinding | null;
-  setMapBinding: (binding: MapBinding | null) => void;
-  mapFile: string;
-  setMapFile: (path: string) => void;
-
-  /**
-    画布上正打开的那张图（宏观设计 = 画图工作区）。两件事靠它：绑定行显示「当前图：X」，
-    以及 map-chat 把它当作用域上送——「把这条边删掉」得有个所指。
-  */
-  openDiagram: { id: string; name: string } | null;
-  setOpenDiagram: (diagram: { id: string; name: string } | null) => void;
-  /** 对话里的图卡片点开 → 页面取走这一格去开图（取完清空）。 */
-  pendingDiagramOpen: { id: string; name: string } | null;
-  requestOpenDiagram: (diagram: { id: string; name: string }) => void;
-  clearDiagramOpen: () => void;
-
-  /** 练习作用域绑定（练习 #N · 文件）：由 PracticePage 写入 */
-  practiceUnit: string;
-  setPracticeUnit: (label: string) => void;
-  settings: TutorSettings;
-  setSettings: (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)) => void;
-  content: string;
-  setContent: (next: string) => void;
-  sending: boolean;
-  /** 停止当前在途回合：既告诉引擎别算了（省 token），也中止自己的连接。没有在途回合时为空操作。 */
-  stopTurn: () => void;
-  /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务。三作用域都走各自请求的 SSE 事件——引擎发事件、GUI 定文案 */
-  progress: Record<Scope, string>;
-  liveAnswer: string;
-  error: string;
-  send: () => Promise<void>;
-  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
-  sendMap: () => Promise<void>;
-  sendPractice: () => Promise<void>;
-  /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复）。显式展示 LLM 是否参与，不静默回落 */
-  replySource: Record<Scope, string>;
-  /** 当前练习对象（练习评估作用域的对话上下文；由 PracticePage 写入） */
-  practiceExercise: Exercise | null;
-  setPracticeExercise: (exercise: Exercise | null) => void;
-}
+import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
+import { progressText } from "./progressLines";
+import { threadItemsFrom, type ThreadItem, type ThreadRow } from "./threadItems";
+import { lostInTransit } from "./turnFailure";
+import type { ScopedChatApi } from "./scopedChatApi";
 
 /**
   三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）：
@@ -245,7 +61,7 @@ const [practiceUnit, setPracticeUnit] = useState("");
 useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); setMapBinding(null); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
   /** 引擎的在途教学会话：只在本 hook 内部用（切作用域要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
   const [session, setSession] = useState<TutorSession | null>(null);
-  const [settings, setSettingsState] = useState<TutorSettings>({ style: 50, pedagogy: "socratic", depth: "macro" });
+  const [settings, setSettingsState] = useState<TutorSettings>(defaultTutorSettings);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   // 在途回合：turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。

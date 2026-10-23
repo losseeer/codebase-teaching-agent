@@ -2,15 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, t
 import { useSearchParams } from "react-router-dom";
 import type { FileTreeNode } from "@codebase-tutor/shared/wire";
 import { api, type Workspace } from "../api/client";
-import type { ScopedChatApi } from "../agent/useScopedChat";
-import { Loading } from "./helpers";
-import { RepoTree } from "./RepoTree";
+import type { ScopedChatApi } from "../agent/scopedChatApi";
+import { Loading } from "../ui/Loading";
+import { RepoTree } from "../source/RepoTree";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { useEverVisible } from "../ui/useEverVisible";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
-import { showToast } from "../modules/toast";
+import { showToast } from "../ui/toast";
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
 /**

@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
-import { showToast } from "./toast";
-import { COMPREHENSION_MODULE_ID, type KnowledgeModule } from "./local-state";
+import { showToast } from "../ui/toast";
+import { COMPREHENSION_THEME_ID, type PracticeTheme } from "./practiceThemeState";
 import { Icon } from "../ui/icons";
 import { DangerDialog } from "../ui/DangerDialog";
 
@@ -20,7 +20,7 @@ export function PracticeThemes({
   children
 }: {
   header: string;
-  modules: KnowledgeModule[];
+  modules: PracticeTheme[];
   activeId: string;
   onSelectModule: (id: string) => void;
   onRename: (id: string, label: string) => void;
@@ -31,11 +31,11 @@ export function PracticeThemes({
 }): ReactElement {
   const [configOpen, setConfigOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
-  const removable = (item: KnowledgeModule): boolean => item.custom === true && item.id !== COMPREHENSION_MODULE_ID;
-  const [pending, setPending] = useState<{ remove?: KnowledgeModule; reset?: true } | null>(null);
+  const removable = (item: PracticeTheme): boolean => item.custom === true && item.id !== COMPREHENSION_THEME_ID;
+  const [pending, setPending] = useState<{ remove?: PracticeTheme; reset?: true } | null>(null);
 
-  const remove = (item: KnowledgeModule): void => {
-    if (item.id === COMPREHENSION_MODULE_ID) return;
+  const remove = (item: PracticeTheme): void => {
+    if (item.id === COMPREHENSION_THEME_ID) return;
     onRemove(item.id);
     showToast(`已删除主题「${item.label}」`);
   };

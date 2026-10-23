@@ -54,8 +54,8 @@
 
 | 文件 | 触发 | 事件 |
 |---|---|---|
-| `views/CoursePage.tsx` | 点画布节点 | `flow_node_selected`（`view: "canvas"`） |
-| `views/CoursePage.tsx` | 点节点抽屉里的关联文件 / 锚点文件 | `file_anchored`（`source: "anchor"`） |
+| `views/DiagramPage.tsx` | 点画布节点 | `flow_node_selected`（`view: "canvas"`） |
+| `views/DiagramPage.tsx` | 点节点抽屉里的关联文件 / 锚点文件 | `file_anchored`（`source: "anchor"`） |
 | `views/TutorPage.tsx` | 打开一个没开过的文件 | `file_opened` |
 | `views/TutorPage.tsx` | 已开过的文件换行定位 | `line_located` |
 | `views/PracticePage.tsx` | 切换练习主题（id 未变不记） | `module_switched` |

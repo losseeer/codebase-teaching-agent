@@ -1,19 +1,19 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { CodeEditor, type CodeEditorFile } from "./CodeEditor";
+import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
 import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared/wire";
 import { api, type Workspace } from "../api/client";
-import type { ScopedChatApi } from "../agent/useScopedChat";
+import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Markdown } from "../agent/Markdown";
-import { dateText, exerciseKindLabel } from "./helpers";
+import { dateText, exerciseKindLabel } from "../ui/labels";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { PracticeThemes, PracticeSectionLabel } from "../modules/PracticeThemes";
+import { PracticeThemes, PracticeSectionLabel } from "./PracticeThemes";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
-import { showToast } from "../modules/toast";
+import { showToast } from "../ui/toast";
 import { useEverVisible } from "../ui/useEverVisible";
-import { loadActiveModule, loadPracticeModules, saveActiveModule, savePracticeModules, COMPREHENSION_MODULE_ID, PRACTICE_DEFAULT_MODULES, type KnowledgeModule } from "../modules/local-state";
+import { loadActiveTheme, loadPracticeThemes, saveActiveTheme, savePracticeThemes, COMPREHENSION_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 // 练习评估工作区（两栏）：左 = 主题 chips + 本主题已练卡片 + 防泄题脚注，
@@ -82,12 +82,12 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 最近一次出题失败的节点（单元 id + 引擎原话）：对应卡片转警示态。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
-  const [modules, setModules] = useState<KnowledgeModule[]>(loadPracticeModules);
-  const [activeModule, setActiveModule] = useState<string>(() => loadActiveModule(repositoryId, modules));
+  const [modules, setModules] = useState<PracticeTheme[]>(loadPracticeThemes);
+  const [activeModule, setActiveModule] = useState<string>(() => loadActiveTheme(repositoryId, modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
-  useEffect(() => { savePracticeModules(modules); }, [modules]);
-  useEffect(() => { saveActiveModule(repositoryId, activeModule); }, [repositoryId, activeModule]);
+  useEffect(() => { savePracticeThemes(modules); }, [modules]);
+  useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
 
   /** 进度读取：成功也要清掉旧错误；视图常驻挂载靠 hidden 切换，只在 tab 被打开过之后读一次。
       生成与提交后仍走 `refreshSummary()` 主动刷新。 */
@@ -101,7 +101,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   // 「换一题」对 LLM 题是 variantNonce+1（出新题、旧题保留），对规则题按 targetUnitId 重出。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
-    const isLlmFamily = activeModule !== COMPREHENSION_MODULE_ID;
+    const isLlmFamily = activeModule !== COMPREHENSION_THEME_ID;
     const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
       const next = await api.createExercise(repositoryId, isLlmFamily
@@ -145,7 +145,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   /** 重复点同一 chip（id 未变）不记事件；`list` 供新增/删除主题传入尚未提交的新列表，否则 label 取到旧值。 */
-  const switchModule = (id: string, list: KnowledgeModule[] = modules): void => {
+  const switchModule = (id: string, list: PracticeTheme[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
     emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? id).slice(0, 120) });
@@ -182,7 +182,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
-  const isComprehensionChip = activeModule === COMPREHENSION_MODULE_ID;
+  const isComprehensionChip = activeModule === COMPREHENSION_THEME_ID;
   const moduleMastery = (summary?.mastery ?? [])
     .filter((record) => isComprehensionChip ? !record.unitId.startsWith("llm:") : record.unitId.startsWith(`llm:${activeModule}:`))
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
@@ -242,7 +242,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               switchModule(id, next);
             }}
             onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
-            onReset={() => { const next = PRACTICE_DEFAULT_MODULES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_MODULE_ID, next); }}
+            onReset={() => { const next = PRACTICE_DEFAULT_THEMES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_THEME_ID, next); }}
           >
             {moduleHint ? <p className="field-note" title="主题可在「＋ 配置」里自定义">{moduleHint}</p> : null}
             <PracticeSectionLabel label="本主题已练" note={`${moduleMastery.length} 项`} tip="点卡片可按同一主题重新出题" />

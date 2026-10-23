@@ -4,7 +4,7 @@ import { checkContract, importJobSchema, type ImportJob, type RepositoryCatalogE
 import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { Icon } from "../ui/icons";
-import { dateText } from "./helpers";
+import { dateText } from "../ui/labels";
 import { PageTopbar } from "./WorkspaceChrome";
 
 // 导入仓库页：绝对路径 → 分相进度 → 成本报告 → 仓库地址簿。

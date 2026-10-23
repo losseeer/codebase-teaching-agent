@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch, type ThinkingEffort } from "../api/client";
-import { toastFailure } from "../modules/toast";
+import { toastFailure } from "../ui/toast";
 import { Icon } from "../ui/icons";
 
 /**

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ContractViolation } from "@codebase-tutor/shared/wire";
 import { parseScopedStreamFrame } from "./client";
-import { progressText } from "../agent/useScopedChat";
+import { progressText } from "../agent/progressLines";
 
 /** 界面源码根：本测试住在 `src/api/`。 */
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");

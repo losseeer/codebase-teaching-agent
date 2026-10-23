@@ -1,5 +1,5 @@
 /**
-  轻量 toast 总线：模块配置 / 文件打开等操作的轻提示。
+  轻量 toast 总线：主题配置 / 文件打开等操作的轻提示。
   - `showToast(msg)`：任意模块直接调用（无需 context / prop drilling）
   - `<ToastHost />`：挂在 App 根部，订阅并渲染
   */
