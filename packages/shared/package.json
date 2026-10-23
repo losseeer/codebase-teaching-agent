@@ -10,10 +10,14 @@
     "./wire": "./src/wire.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.3"
   }
 }

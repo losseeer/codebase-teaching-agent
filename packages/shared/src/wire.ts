@@ -33,4 +33,5 @@ export type {
   UiJournalEventType
 } from "./index.js";
 
+export { defaultTutorSettings } from "./index.js";
 export { STYLE_BAND_LABEL, styleBand, UI_JOURNAL_EVENTS } from "./index.js";
