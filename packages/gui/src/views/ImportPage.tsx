@@ -5,18 +5,19 @@ import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { Icon } from "../ui/icons";
 import { dateText } from "../ui/labels";
+import { MenuButton, PopMenu, type MenuItem } from "../ui/PopMenu";
 import { PageTopbar } from "./WorkspaceChrome";
 
-// 导入仓库页：绝对路径 → 分相进度 → 成本报告 → 仓库地址簿。
+// 导入仓库页：绝对路径 → 分相进度 → 成本报告 → 已导入仓库清单。
 // 完成后通过 `onImported` 把 workspace 交给 App，再跳宏观设计。
-// 这一页是唯一还能改工作区的地方（侧栏收起时全局切换器不在视野内），所以必须能直接切到地址簿里已导入的仓。
+// 这一页是唯一还能改工作区的地方（侧栏收起时全局切换器不在视野内），所以必须能直接切到已导入的仓。
 
 interface Props {
   onImported: (workspace: Workspace) => void;
   workspace: Workspace | null;
-  /** 引擎地址簿（App 持有，这一页不再拉一次同份清单） */
+  /** 已导入仓库清单（App 持有，这一页不再拉一次同份清单） */
   catalog: RepositoryCatalogEntry[];
-  /** 切到地址簿里的另一个仓（挂载成功由 App 负责换工作区并跳转） */
+  /** 切到清单里的另一个仓（挂载成功由 App 负责换工作区并跳转） */
   onSwitchRepository: (repositoryId: string) => void;
   /** 点的就是当前仓：离开导入页即可 */
   onOpenRepository: () => void;
@@ -37,8 +38,10 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [job, setJob] = useState<ImportJob | null>(null);
   const [error, setError] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
+  /** 打开着操作菜单的那一行（连同它的锚点按钮，菜单靠锚点定位）。 */
+  const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
   const navigate = useNavigate();
-  /** 预算闸门失效提示：引擎按进程环境给出、地址簿每条都带同一句，取一条代表即可。 */
+  /** 预算闸门失效提示：引擎按进程环境给出、每条都带同一句，取一条代表即可。 */
   const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
   /** 工作区切换只记一次：完成态会被轮询与广播重复渲染。 */
   const switchLogged = useRef(false);
@@ -78,13 +81,30 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     }
   }, [job?.phase, job?.repositoryId]);
 
-  const submit = async (): Promise<void> => {
+  /** 发起一次分析：清单那排的「重新分析」与上方按钮共用这一条路径，区别只在路径从哪来。 */
+  const startImport = async (target: string): Promise<void> => {
+    const pathToUse = target.trim();
+    if (!pathToUse || jobActive) return;
+    setPath(pathToUse); // 输入框要显示正在分析的是哪个仓，不能只藏在任务里
     setError(""); setReport(null);
-    try { setJob(await api.submitImport(path.trim(), commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
+    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
   };
+
+  const submit = async (): Promise<void> => startImport(path);
 
   const activeIndex = job ? PHASES.findIndex((phase) => phase.key === job.phase) : -1;
   const failed = job?.phase === "failed";
+
+  const menuTarget = menu ? catalog.find((item) => item.repositoryId === menu.id) : undefined;
+  const menuItems: MenuItem[] = !menuTarget ? [] : [
+    {
+      label: "重新分析",
+      title: menuTarget.exists ? "重扫仓库并重算分析产物" : "目录已不在这里，先放回原处",
+      disabled: jobActive || !menuTarget.exists,
+      onSelect: () => void startImport(menuTarget.repositoryPath)
+    },
+    { label: "移出清单", title: "停止跟踪这个仓库", danger: true, onSelect: () => onForget(menuTarget.repositoryId, menuTarget.name) }
+  ];
 
   return (
     <>
@@ -168,7 +188,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
           {catalog.length > 0 ? (
             <div className="col gap-3">
               <div className="row between">
-                <div className="section-title">仓库地址簿 · {catalog.length} 个</div>
+                <div className="section-title">已导入仓库 · {catalog.length} 个</div>
                 <span className="fs-11 faint" title="切换不重新分析、不产生费用">点一下切过去，不用重填路径</span>
               </div>
               {/* 闸门失效是进程级事实，与哪条仓无关，全页只说一次 */}
@@ -211,11 +231,17 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                         {isCurrent ? <span className="badge badge-neutral">当前</span> : null}
                       </span>
                     </button>
-                      <button type="button" className="btn btn-ghost btn-sm addr-forget" title="移出地址簿" onClick={() => onForget(item.repositoryId, item.name)}><Icon name="x" size={13} />移出</button>
+                      <MenuButton
+                        label={`「${item.name}」的操作`}
+                        open={menu?.id === item.repositoryId}
+                        onToggle={(element) => setMenu(menu?.id === item.repositoryId ? null : { id: item.repositoryId, anchor: element })}
+                        className="addr-menu"
+                      />
                     </div>
                   );
                 })}
               </div>
+              <PopMenu anchor={menu?.anchor ?? null} items={menuItems} ariaLabel="仓库操作" onClose={() => setMenu(null)} />
             </div>
           ) : null}
         </div>

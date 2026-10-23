@@ -49,7 +49,7 @@ function writeSidebarCollapsed(value: boolean): void {
 }
 
 /**
-  读回上次的仓库选择。坏数据按「没有选择」处理并清掉，让用户回到导入页那条活路（地址簿还在，点一下就能选回来）。
+  读回上次的仓库选择。坏数据按「没有选择」处理并清掉，让用户回到导入页那条活路（已导入清单还在，点一下就能选回来）。
   这条路径必须包 try/catch：它在 useState 初始化器里，一抛就白屏。
   */
 function readStoredWorkspace(): _Workspace | null {
@@ -95,7 +95,7 @@ export function App(): ReactElement {
   const [workspaceReady, setWorkspaceReady] = useState(() => workspace === null);
   /** 校验放弃（连不上 / 5xx 重试耗尽）：本地选择不删，改说「引擎没连上」，并允许手动或 online 后重验。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
-  /** 挂载失败（目录挪走 / 产物不全）：workspace 保留，但要说清原因并给出「移出地址簿」这条路。 */
+  /** 挂载失败（目录挪走 / 产物不全）：workspace 保留，但要说清原因并给出「移出清单」这条路。 */
   const [mountBlocked, setMountBlocked] = useState<string | null>(null);
   const [freshness, setFreshness] = useState<RepositoryFreshness | null>(null);
   const [catalog, setCatalog] = useState<RepositoryCatalogEntry[]>([]);
@@ -117,7 +117,7 @@ export function App(): ReactElement {
     try {
       setCatalog((await api.listRepositories()).repositories);
     } catch {
-      // 引擎没连上就空着：拿旧清单伪装成「你的地址簿就这些」是假话
+      // 引擎没连上就空着：拿旧清单伪装成「你只导入过这些」是假话
       setCatalog([]);
     }
   }, []);
@@ -140,14 +140,14 @@ export function App(): ReactElement {
           if (stale()) return;
           if (isNotFound(error)) {
             if (error instanceof ApiError && error.reason === "not_in_catalog") {
-              // 「地址簿里没这个仓」= 本地选择真失效：清掉并说出来，静默失效看起来像软件把仓库弄丢了
+              // 「已导入清单里没这个仓」= 本地选择真失效：清掉并说出来，静默失效看起来像软件把仓库弄丢了
               updateWorkspace(null);
               setWorkspaceReady(true);
-              showToast("仓不在地址簿 · 需重新导入");
+              showToast("仓不在已导入清单 · 需重新导入");
               return;
             }
             // 目录挪走 / 产物不全：仓库没丢，是挂不起来。留着 workspace 说清原因（pending 会渲染 MountBlocked），
-            // 让用户选「放回原处再来」还是「移出地址簿」：不清本地选择，也不自动重新导入
+            // 让用户选「放回原处再来」还是「移出清单」：不清本地选择，也不自动重新导入
             setMountBlocked(error instanceof Error ? error.message : "该仓库暂时挂不起来");
             return;
           }
@@ -180,10 +180,10 @@ export function App(): ReactElement {
       return next;
     });
   };
-  /** 地址簿里点的正是当前这个仓：不重挂（懒挂载会自己处理），只是离开导入页。 */
+  /** 清单里点的正是当前这个仓：不重挂（懒挂载会自己处理），只是离开导入页。 */
   const openRepository = (): void => { navigate("/app?workspace=map"); };
 
-  /** 切到地址簿里的另一个仓：先让引擎挂载（顺带拿新鲜度），成功才换 workspace。
+  /** 切到清单里的另一个仓：先让引擎挂载（顺带拿新鲜度），成功才换 workspace。
       挂载失败不改本地选择——上一个仓不该因为这次点错而被弄丢。 */
   const switchRepository = (repositoryId: string): void => {
     const entry = catalog.find((item) => item.repositoryId === repositoryId);
@@ -209,7 +209,7 @@ export function App(): ReactElement {
   /** 列表与挂载失败页都走这里：先开弹窗，删不删由弹窗里点的那一条决定。 */
   const forgetRepository = (repositoryId: string, name: string): void => { setForgetTarget({ repositoryId, name }); };
 
-  /** 弹窗的落点：移出地址簿，并按需连该仓 `.tutor/` 里的分析产物、对话记录与运行日志一起删。 */
+  /** 弹窗的落点：移出清单，并按需连该仓 `.tutor/` 里的分析产物、对话记录与运行日志一起删。 */
   const runForget = (repositoryId: string, name: string, deleteArtifacts: boolean): void => {
     setForgetTarget(null);
     void (async () => {
@@ -218,8 +218,8 @@ export function App(): ReactElement {
         if (repositoryId === workspace?.repositoryId) updateWorkspace(null);
         await refreshCatalog();
         if (deleteArtifacts && result.artifacts === "refused") toastFailure("已移出，文件没删掉", new Error(`${name} 的 .tutor 没删成：位置不合规则，或这台机器没权限`));
-        else if (deleteArtifacts && result.artifacts === "absent") showToast(`已把「${name}」移出地址簿（没有发现产物）`);
-        else showToast(deleteArtifacts ? `已移出并删掉「${name}」的文件` : `已把「${name}」移出地址簿`);
+        else if (deleteArtifacts && result.artifacts === "absent") showToast(`已把「${name}」移出清单（没有发现产物）`);
+        else showToast(deleteArtifacts ? `已移出并删掉「${name}」的文件` : `已把「${name}」移出清单`);
       } catch (error) {
         toastFailure("移出失败", error);
       }
@@ -270,7 +270,7 @@ export function App(): ReactElement {
           <WorkspaceNavItem id="practice" icon="practice" label="练习评估" disabled={!workspace} />
           <NavItem to="/insights" icon="gauge" label="成本监控" disabled={!workspace} />
         </nav>
-        {/* 侧栏不放仓库切换器：切仓是导入页地址簿那一件事（同一个动作不在两处各摆一份入口），
+        {/* 侧栏不放仓库切换器：切仓是导入页「已导入仓库」那一件事（同一个动作不在两处各摆一份入口），
             当前在哪个仓写在每页顶栏的面包里。 */}
         <div className="sidebar-footer">
           <button type="button" className="nav-item" aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} onClick={toggleSidebar}>
@@ -327,8 +327,8 @@ function EngineOffline({ repositoryPath, onRetry }: { repositoryPath: string; on
 }
 
 /**
-  地址簿里有这条、但引擎挂不起来（目录被挪走 / `.tutor` 产物不全）。
-  这与「不在地址簿」不同：仓库没丢，用户把目录放回原处就能继续用，所以两条路都摆出来，
+  已导入清单里有这条、但引擎挂不起来（目录被挪走 / `.tutor` 产物不全）。
+  这与「没导入过」不同：仓库没丢，用户把目录放回原处就能继续用，所以两条路都摆出来，
   也不自动重新导入（重跑是花钱的动作）。
   */
 function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message: string; repositoryPath: string; onRetry: () => void; onForget: () => void }): ReactElement {
@@ -342,7 +342,7 @@ function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message:
         </div>
         <div className="row">
           <button type="button" className="btn btn-primary" onClick={onRetry}>再试一次</button>
-          <button type="button" className="btn btn-danger-ghost" onClick={onForget}>移出地址簿</button>
+          <button type="button" className="btn btn-danger-ghost" onClick={onForget}>移出清单</button>
         </div>
       </div>
     </div>

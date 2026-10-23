@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Diagram, DiagramBody, DiagramNode } from "@codebase-tutor/shared/wire";
 import type { DiagramPosition, DiagramWarning, SaveState } from "../api/client";
 import { Icon } from "../ui/icons";
-import { InlineName, PopMenu, type MenuItem } from "./PopMenu";
+import { InlineName, PopMenu, type MenuItem } from "../ui/PopMenu";
 import {
   DEFAULT_VIEW, EDGE_ORIGINS, ORIGIN_SHORT, ZOOM_MAX, ZOOM_MIN,
   edgePoints, fitView, notePreview, relativeTime, safeFileName, subLineOf, versionTime, worldSizeOf, zoomAt,
