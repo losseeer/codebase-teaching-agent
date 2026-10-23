@@ -18,8 +18,8 @@ export interface ScopedChatApi {
     */
   chatThreads: Record<Scope, ChatThread[]>;
   currentThreadId: Record<Scope, string | null>;
-  /** 新建线程并选中它；`firstQuestion` 用来给线程起个认得出的标题。teaching 走 createSession（它才装配策略与学习者画像）。 */
-  newThread: (scope: Scope, firstQuestion?: string) => Promise<string | null>;
+  /** 「＋」只清空当前线程：线程 id 由引擎在第一句话落库时才发，没人发言的线程不该躺在库里。 */
+  newThread: (scope: Scope) => void;
   switchThread: (scope: Scope, threadId: string | null) => void;
   renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
   /** 软删线程：GUI 侧二次确认在 AgentRail（文案要让用户看见「审计日志仍保留脱敏摘要」）。 */

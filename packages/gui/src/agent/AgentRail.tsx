@@ -194,8 +194,8 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 
 /**
   会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
-  下拉里只列**谈过的**会话（引擎按正文过滤）；刚点＋建出来、还没发言的那条不占列表位，
-  单独显示成「（还没有发言的会话）」，第一句话落库后它才带真标题进列表。
+  下拉里只列**谈过的**会话（引擎按正文过滤）；点＋只是清空当前线程，第一句话才让引擎发线程 id，
+  「（还没有发言的会话）」这一格只服务历史上建了却没发言的那几条。
   切哪条就按 threadId 回读哪条的历史。删除是软删：列表与正文从此看不见，
   库里的行与 journal 的审计事件（session_deleted）都还在。
  */
@@ -238,12 +238,12 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
           title="只列谈过的会话"
           onChange={(event) => t.switchThread(scope, event.target.value || null)}
         >
-          {!currentId ? <option value="">{list.length ? "（新会话）" : "（还没有会话）"}</option> : null}
+          {!currentId ? <option value="">（未选择会话）</option> : null}
           {unsent ? <option value={currentId ?? ""}>（还没有发言的会话）</option> : null}
           {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
         </select>
       </div>
-      <button type="button" className="icon-btn" title="新建会话" aria-label="新建会话" onClick={() => void t.newThread(scope)}><Icon name="plus" size={14} /></button>
+      <button type="button" className="icon-btn" title="新建会话" aria-label="新建会话" onClick={() => t.newThread(scope)}><Icon name="plus" size={14} /></button>
       <button type="button" className="icon-btn" title="重命名当前会话" aria-label="重命名当前会话" disabled={!currentId} onClick={() => { setDraft(current?.title ?? ""); setRenaming(true); }}><Icon name="edit" size={14} /></button>
       <button
         type="button"

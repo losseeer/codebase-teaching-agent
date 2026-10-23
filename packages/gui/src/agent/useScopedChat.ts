@@ -324,14 +324,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
 
   /** 切当前线程并回读正文；`load=false` 用于刚建好的空线程（没必要回读一遍空清单）。 */
-  const setCurrentThread = (scope: Scope, threadId: string | null, load = true): void => {
+  const setCurrentThread = (scope: Scope, threadId: string | null): void => {
     if (threadId) markCurrentThread(scope, threadId);
     else {
       setCurrentThreadId((prev) => ({ ...prev, [scope]: null }));
       currentThreadRef.current = { ...currentThreadRef.current, [scope]: null };
       patchMemory(scope, { currentId: null });
     }
-    if (!threadId || !load) { setThreads((prev) => ({ ...prev, [scope]: [] })); knownRowCount.current[scope] = 0; if (scope === "teaching" && !threadId) setSession(null); return; }
+    if (!threadId) { setThreads((prev) => ({ ...prev, [scope]: [] })); knownRowCount.current[scope] = 0; if (scope === "teaching") setSession(null); return; }
     void loadThread(scope, threadId);
   };
   const switchThread = (scope: Scope, threadId: string | null): void => setCurrentThread(scope, threadId);
@@ -366,18 +366,11 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return { threads: list, current };
   };
 
-  /** 建线程（引擎发 id）。teaching 走 createSession——只有它装配策略与学习者画像，同时落 chat_session 行。 */
-  const createThreadFor = async (scope: Scope, firstQuestion?: string): Promise<string | null> => {
+  /** 建线程（引擎发 id，标题取首问）：只在真有第一句话时叫。点＋不建线程——建了没人发言，就是库里躺一条清单选不中的空壳。 */
+  const createThreadFor = async (scope: "map" | "practice", firstQuestion?: string): Promise<string | null> => {
     if (!repositoryId) return null;
     const title = firstQuestion?.trim().slice(0, 60) || undefined; // 首问当标题：列表里一眼认得出这条会话在聊什么
     try {
-      if (scope === "teaching") {
-        if (!scopeRef) return null;
-        const created = await api.createSession(repositoryId, scopeRef, settings);
-        setSession(created.session);
-        void refreshThreads(scope);
-        return created.session.id;
-      }
       const { thread } = await api.createThread(repositoryId, {
         scope: CHAT_SCOPE[scope],
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
@@ -391,11 +384,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  /** 「新建会话」按钮：建完选中它，侧栏清空成一段新对话。 */
-  const newThread = async (scope: Scope, firstQuestion?: string): Promise<string | null> => {
-    const threadId = await createThreadFor(scope, firstQuestion);
-    if (threadId) setCurrentThread(scope, threadId, false);
-    return threadId;
+  /** 「新建会话」按钮：清空当前线程与侧栏，线程 id 等第一句话由引擎发。 */
+  const newThread = (scope: Scope): void => {
+    setCurrentThread(scope, null);
   };
 
   const renameThread = async (scope: Scope, threadId: string, title: string): Promise<void> => {
