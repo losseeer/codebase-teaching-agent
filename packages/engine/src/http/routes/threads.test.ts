@@ -71,3 +71,18 @@ describe("线程清单的收录口径", () => {
     expect((await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=map&current=${unsent.id}` })).json()).toMatchObject({ current: null });
   });
 });
+
+/** 界面上「删除当前会话」的真实走法：POST 建一条还没发言的，再经 DELETE 路由删掉。 */
+describe("删除还没发言的会话", () => {
+  for (const scope of ["map", "practice", "teach"] as const) {
+    it(`${scope}：刚建的空壳要删得掉，删过第二次才 404`, async () => {
+      const created = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/threads`, payload: { scope } });
+      expect(created.statusCode, "建线程本身要先成功").toBe(201);
+      const threadId = (created.json() as { thread: { id: string } }).thread.id;
+
+      const deleted = await fx.app.inject({ method: "DELETE", url: `/api/threads/${threadId}` });
+      expect(deleted.statusCode, "空壳也是引擎发的 id，删除不该判成不存在").toBe(200);
+      expect((await fx.app.inject({ method: "DELETE", url: `/api/threads/${threadId}` })).statusCode).toBe(404);
+    });
+  }
+});

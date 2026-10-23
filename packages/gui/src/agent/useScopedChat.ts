@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatThread, Exercise, ScopedStreamProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
 import { defaultTutorSettings } from "@codebase-tutor/shared/wire";
-import { api, subscribeServerEvents, type StreamTurn } from "../api/client";
+import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/client";
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
@@ -415,12 +415,17 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     try {
       await api.deleteThread(threadId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除会话失败");
-      return;
+      // 404 说明引擎那边早就不存在了：目标状态本就达到，按已删除收尾，不该再报一次错
+      if (!isNotFound(reason)) {
+        setError(reason instanceof Error ? reason.message : "删除会话失败");
+        return;
+      }
     }
     const list = chatThreadsRef.current[scope].filter((item) => item.id !== threadId);
     setChatThreads((prev) => ({ ...prev, [scope]: list }));
     chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
+    // 清单本就不收没发言的线程，这一格只能在这里摘掉：留着它，教学的节点效应会当场把已删的那条重新选成当前会话
+    setUnsentThread((prev) => (prev[scope]?.id === threadId ? { ...prev, [scope]: null } : prev));
     patchMemory(scope, { ids: list.map((item) => item.id) });
     if (currentThreadRef.current[scope] === threadId) setCurrentThread(scope, null);
   };
