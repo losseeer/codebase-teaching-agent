@@ -1,16 +1,16 @@
 import type { ChatScope } from "@codebase-tutor/shared";
-import { externalToolSurface } from "../external/clients.js";
-import { listSkills, readSkill, skillsBriefing } from "../external/skills.js";
+import { externalToolSurface } from "../integrations/clients.js";
+import { listSkills, readSkill, skillsBriefing } from "../integrations/skills.js";
 import { appendMessages, getThread, readMessages } from "../store/chat-store.js";
 import { Journal } from "../store/journal.js";
-import { checkTurnInvariants, invariantTailNotice, screenReply } from "../eval/scorers.js";
+import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
 import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { traceEngine } from "../trace/engine-log.js";
-import type { ScopedChatResult, ScopedChatTurn } from "../scopechat/scopechat.js";
+import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
 import type { LlmProvider } from "../llm/provider.js";
 import { turnTextPayload } from "../store/journal.js";
-import { screenNotice } from "../eval/scorers.js";
+import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import { mcpCallPayload } from "./turn-audit.js";
 

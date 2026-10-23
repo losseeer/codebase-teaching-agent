@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/shared";
-import { repositoryId, hash } from "../identity.js";
+import { repositoryId, hash } from "../ids.js";
 import { graphExtensions } from "../depgraph/graph.js";
 import { deniedSecretNameReason } from "../source/read-file.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
@@ -20,7 +20,7 @@ import { traceEngine } from "../trace/engine-log.js";
 const nonGraphExtensions = [".rb", ".php", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"];
 const sourceExtensions = new Set([...graphExtensions, ...nonGraphExtensions]);
 
-// 导出这两份清单给单测钉住上面那段口径；graphExtensions 由 capabilities.test 直接从 graph.js 取，这里不转发。
+// 导出这两份清单给单测钉住上面那段口径；graphExtensions 由 capability-coverage.test 直接从 graph.js 取，这里不转发。
 export { nonGraphExtensions, sourceExtensions };
 
 /**

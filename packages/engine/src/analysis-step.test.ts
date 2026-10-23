@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadedAnalysisStepCount } from "./analysis-steps.js";
+import { loadedAnalysisStepCount } from "./analysis-steps.register.js";
 import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFingerprints } from "./analysis-step.js";
 
 /**
@@ -10,12 +10,12 @@ import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFin
   不值得作废（纯措辞润色）就直接跑 `pnpm analysis:lock` 并在 commit 里说明。
 */
 
-/** 本目录（源码根）：扫描与清单比对都以它为基准，路径写法才和 `analysis-steps.ts` 里的导入一致。 */
+/** 本目录（源码根）：扫描与清单比对都以它为基准，路径写法才和 `analysis-steps.register.ts` 里的导入一致。 */
 const SRC_DIR = resolve(new URL(".", import.meta.url).pathname);
 
 /** 清单模块里列出的副作用导入，形如 `./foo/bar.js`。 */
 function barrelImports(): string[] {
-  return (readFileSync(join(SRC_DIR, "analysis-steps.ts"), "utf8").match(/^import "\.\/[^"]+";/gm) ?? []).map((line) => line.slice(8, -2));
+  return (readFileSync(join(SRC_DIR, "analysis-steps.register.ts"), "utf8").match(/^import "\.\/[^"]+";/gm) ?? []).map((line) => line.slice(8, -2));
 }
 
 /** 扫出所有调用了 `defineAnalysisStep(` 的源码文件（排除登记模块自己与测试），返回 `./x/y.js` 形式。 */
@@ -37,7 +37,7 @@ describe("口径登记的提示词指纹守卫", () => {
     expect(loadedAnalysisStepCount()).toBeGreaterThan(0);
     const listed = new Set(barrelImports());
     const missing = stepDefiningFiles().filter((module) => !listed.has(module));
-    expect(missing, `这些模块登记了口径却没被 analysis-steps.ts 加载，指纹不会覆盖它们：${missing.join(", ")}`).toEqual([]);
+    expect(missing, `这些模块登记了口径却没被 analysis-steps.register.ts 加载，指纹不会覆盖它们：${missing.join(", ")}`).toEqual([]);
   });
 
   it("每一层都交了提示词：空 prompts 等于把守卫关掉", () => {

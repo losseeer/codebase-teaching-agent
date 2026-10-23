@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
-import { repositoryId as deriveRepositoryId } from "../../identity.js";
+import { repositoryId as deriveRepositoryId } from "../../ids.js";
 import { flushLlmLog } from "../../llm/call-log.js";
 import { TutorDatabase } from "../../store/database.js";
 import { readJournal } from "../../store/journal.js";
@@ -23,7 +23,7 @@ import { readMessages } from "../../store/chat-store.js";
 export const MAIN_FILE = "src/main.ts";
 /** 引用核得上时的默认正文：带问句、带真引用、带长标识符，三条不变量都能过。 */
 export const OK_REPLY = `先看 ${MAIN_FILE}:3 的 registerOrder，你觉得哪一步会先执行？`;
-/** 尾注里独有的词（文案全文住在 eval/scorers.ts，这里只判「有没有出现」） */
+/** 尾注里独有的词（文案全文住在 application/turn-invariants.ts，这里只判「有没有出现」） */
 export const TAIL = "未能核实";
 
 /** 轮询到条件成立；到点不成就带着「在等什么」失败。 */
@@ -107,7 +107,7 @@ export function createRouteFixture(): RouteFixture {
     stopInside: undefined as RouteFixture["stopInside"],
     sentTools: [] as { names: string[]; raw: string }[],
     usedThreads: new Set<string>(),
-    echoServerFixture: join(import.meta.dirname, "..", "..", "external", "fixtures", "echo-server.mjs")
+    echoServerFixture: join(import.meta.dirname, "..", "..", "integrations", "fixtures", "echo-server.mjs")
   } as RouteFixture;
   let fetchCalls = 0;
 

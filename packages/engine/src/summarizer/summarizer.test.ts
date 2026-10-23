@@ -7,7 +7,7 @@ import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
 import { readJournal } from "../store/journal.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
-import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./slice.js";
+import { buildFileSlices, extractHeaderComment, MAX_HEADER_COMMENT_CHARS, MAX_SLICE_ENTRIES, type FileSlice } from "./l1-slice.js";
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
 import { makeSymbol } from "../test-utils.js";
 

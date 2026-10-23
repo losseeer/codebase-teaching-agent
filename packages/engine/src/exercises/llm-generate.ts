@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
-import { recordEgress, type EgressSource } from "../security/dataflow.js";
+import { recordEgress, type EgressSource } from "../security/egress-log.js";
 import { secretMasker } from "../security/secrets.js";
 import type { GuardCandidate } from "./guard-proposal.js";
 
@@ -88,7 +88,7 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
   }
 }
 
-/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出网清单登记（`security/dataflow.ts`）。 */
+/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出网清单登记（`security/egress-log.ts`）。 */
 interface ExerciseExcerpt {
   path: string;
   from: number;

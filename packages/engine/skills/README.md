@@ -3,7 +3,7 @@
 引擎开机时把这个目录里的技能**复制**到 `TUTOR_SKILLS_DIR` 的第一处（没配就是 `~/.codebase-tutor/skills`）。
 加载器只认用户目录那一套路径，所以「出厂」和「你自己装的」在运行时没有区别：`GET /api/external` 报的出处就是真实出处。
 
-两条规矩（写在 `src/external/skills.ts` 的 `installBundledSkills`）：
+两条规矩（写在 `src/integrations/skills.ts` 的 `installBundledSkills`）：
 
 - **同名不覆盖**：装过一次之后你改过的那份就是你的，升级不冲掉。要拿新的，删掉那份目录再重启。
 - **坏形状不搬**：`name` 必须等于目录名、小写字母/数字/单个连字符、≤64 字，`description` ≤1024 字。不合规格的原地跳过并写进开机读数，不搬进你家目录留一条永久噪音。

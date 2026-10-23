@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { languageCapabilitiesOf, type DataflowFunctionFact, type DataflowVariable } from "@codebase-tutor/shared";
 import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
-import { analyzeFile } from "./index.js";
+import { analyzeFile } from "./build.js";
 
 /**
   断言盯住「把到不了的定义算成能到」：只按「同一函数里赋过值」报，

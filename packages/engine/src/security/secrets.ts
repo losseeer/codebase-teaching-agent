@@ -1,6 +1,6 @@
 /**
   密钥形态的唯一判据。整段文本的消费方走 `maskSecrets`：`source/read-file.ts`（文件正文进 prompt 前）、
-  `llm/provider.ts` 的 `screenOutbound`（出网最后一道，含工具参数与 reasoning）、`eval/scorers.ts` 的 `screenReply`
+  `llm/provider.ts` 的 `screenOutbound`（出网最后一道，含工具参数与 reasoning）、`application/turn-invariants.ts` 的 `screenReply`
   （模型回复进对话与落库前再筛一遍——学习者贴进来的报错、上一轮正文带回来的，只有这一道挡得住）。
   逐行取段的消费方走 `secretMasker`：`source/excerpt.ts`、`exercises/llm-generate.ts`、`exercises/code-generate.ts`、`summarizer/summarizer.ts`。
 

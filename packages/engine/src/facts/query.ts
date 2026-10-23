@@ -2,6 +2,7 @@ import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-w
 import type { CfgFileFact, CfgFunction, DataflowFileFact, FactKind, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
 import { FACT_KINDS } from "@codebase-tutor/shared";
 import type { TutorDatabase } from "../store/database.js";
+import type { LlmTool } from "../llm/provider.js";
 import type { FactsToolContext } from "../source/tool-loop.js";
 import { FACTS_VERSION } from "./version.js";
 
@@ -208,3 +209,21 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
     }
   };
 }
+
+/**
+  静态产物的只读门，与 `set_diagram` 配对：那边写图，这边给证据。
+  不重算任何东西——绘图阶段的职责边界就是只消费导入时已算好的产物。
+*/
+export const QUERY_FACTS_TOOL: LlmTool = {
+  name: "query_facts",
+  description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
+  parameters: {
+    type: "object",
+    properties: {
+      kind: { type: "string", description: "cfg / dataflow / typeRelations / registry；省略就回覆盖率清单" },
+      path: { type: "string", description: "仓内相对路径，如 src/order/Service.java" },
+      target: { type: "string", description: "函数名（cfg、dataflow）或类型名/条目名（typeRelations、registry）" }
+    },
+    required: []
+  }
+};

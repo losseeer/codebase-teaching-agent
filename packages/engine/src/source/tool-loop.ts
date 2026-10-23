@@ -2,10 +2,14 @@ import type { ScopedStreamProgress } from "@codebase-tutor/shared";
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
-import { hash } from "../identity.js";
-import type { McpCallAudit } from "../external/clients.js";
+import { hash } from "../ids.js";
+import type { McpCallAudit } from "../integrations/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
+import { CROSS_REPO_LINK_TOOL } from "../depgraph/seams.js";
+import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
+import { QUERY_FACTS_TOOL } from "../facts/query.js";
+import { READ_SKILL_TOOL } from "../integrations/skills.js";
 
 /**
   read_file / search_code 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
@@ -89,20 +93,6 @@ export interface ExternalToolContext {
   maxCalls?: number;
 }
 
-/** 技能正文的取用工具：清单常驻上下文，正文按需拉取，成本差一个数量级。 */
-export const READ_SKILL_TOOL: LlmTool = {
-  name: "read_skill",
-  description: "按名字取一份技能的完整正文（系统提示词里那张清单上的名字）。做法、命令与红线都在正文里——只凭名字猜内容会猜错。正文提到的附属文件（脚本、参照表之类）用 file 参数按相对该技能目录的路径取。",
-  parameters: {
-    type: "object",
-    properties: {
-      name: { type: "string", description: "清单上的技能名字" },
-      file: { type: "string", description: "可选：技能目录内的相对路径，省略就取 SKILL.md 正文" }
-    },
-    required: ["name"]
-  }
-};
-
 /**
   跨仓访问上下文。只在地址簿里还有别的仓时才传——没有第二个仓时三个工具一个都不多给，工具清单与提示词不变。
 
@@ -121,39 +111,6 @@ export interface CrossRepoContext {
   onHandedOut?: (repoName: string, path: string) => void;
 }
 
-/** 跨仓接缝查询工具：把「点这个按钮之后代码在哪个仓的哪一行」这条零 token 的证据交给模型。 */
-export const CROSS_REPO_LINK_TOOL: LlmTool = {
-  name: "cross_repo_link",
-  description: "查询当前仓库与另一个仓库之间按 URL 配好的 HTTP 接缝：本仓调用的地址落在对端哪个文件哪一行，以及对端提供了哪些地址被本仓调用。回答跨仓「这个请求打到哪里去」时先调用它拿准确落点，不要靠猜 URL 字符串。",
-  parameters: {
-    type: "object",
-    properties: {
-      repo: { type: "string", description: "对端仓库名" },
-      filter: { type: "string", description: "只看包含该片段（路径或 URL 片段）的接缝，可选" }
-    },
-    required: ["repo"]
-  }
-};
-
-/**
-  画布上「结构」的写入口（全仓唯一有副作用的工具）。
-  四条纪律写死在描述里而不是留在提示词里劝：位置是用户的（`move` 只在用户开口时代挪一格）；
-  `module` 节点必须带真 `ref`，核不上整次拒写；边的 `origin` 由引擎拿结构表核，只降不升，降完把原因写在边上；
-  `draw` 一次交整张图。
-*/
-export const SET_DIAGRAM_TOOL: LlmTool = {
-  name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
-  parameters: {
-    type: "object",
-    properties: {
-      diagram: { type: "string", description: "要改的那张图：id 或名字。省略时如果这个仓只有一张图就用它，认不出会被拒并列出图库" },
-      edit: { type: "object", description: "一次改动：{ action, ...该动作的字段 }。action 取 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move；node={id,kind:module|note,label,x,y,sub?,group?,module 再带 ref,note 再带 text}，edge={id,from,to,origin:static|code|inferred,label?,evidence?}，group={id,label,x,y,w,h}，body={groups,nodes,edges}" }
-    },
-    required: ["edit"]
-  }
-};
-
 /**
   改这张图的落地通道：闭包由服务层给，`apply` 回实际落盘后的状态或拒写原因。
   `inventory` 是画布现场——有副作用的工具必须先看见现状，否则只能猜 id、猜「那条边」指哪条。
@@ -162,24 +119,6 @@ export interface SetDiagramToolContext {
   apply: (argumentsJson: string) => string;
   inventory?: string;
 }
-
-/**
-  静态产物的只读门，与 `set_diagram` 配对：那边写图，这边给证据。
-  不重算任何东西——绘图阶段的职责边界就是只消费导入时已算好的产物。
-*/
-export const QUERY_FACTS_TOOL: LlmTool = {
-  name: "query_facts",
-  description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
-  parameters: {
-    type: "object",
-    properties: {
-      kind: { type: "string", description: "cfg / dataflow / typeRelations / registry；省略就回覆盖率清单" },
-      path: { type: "string", description: "仓内相对路径，如 src/order/Service.java" },
-      target: { type: "string", description: "函数名（cfg、dataflow）或类型名/条目名（typeRelations、registry）" }
-    },
-    required: []
-  }
-};
 
 /** 产物查询通道：闭包由服务层给（它才有 db 句柄与仓 id），工具循环不认识 SQLite 与 payload 形状。 */
 export interface FactsToolContext {

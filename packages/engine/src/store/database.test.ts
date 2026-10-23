@@ -4,7 +4,9 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadAddon } from "./betterSqlite3Loader.cjs";
-import { DATABASE_SCHEMA_SQL, TutorDatabase, declaredColumns } from "./database.js";
+import { DATABASE_SCHEMA_SQL } from "./database-schema.js";
+import { TutorDatabase } from "./database.js";
+import { declaredColumns } from "./declared-columns.js";
 
 /**
   形状迁移的守卫：CREATE TABLE IF NOT EXISTS 对已存在的表一个列都不加。

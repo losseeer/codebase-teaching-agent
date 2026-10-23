@@ -11,15 +11,12 @@ import { describe, expect, it } from "vitest";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 
-/** 离线脚本与评测夹具不是产品运行路径，不参与分层。 */
-const IGNORED_TOP = new Set(["scripts", "eval"]);
-
-const PIPELINES = new Set(["diagram", "exercises", "depgraph", "summarizer", "implementation", "changes", "scopechat", "harness", "text", "indexer", "learner", "source"]);
+const PIPELINES = new Set(["diagram", "exercises", "depgraph", "summarizer", "implementation", "turn", "text", "indexer", "learner", "source"]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    if (entry === "scripts" || entry === "fixtures") continue;
+    if (entry === "fixtures") continue;
     if (statSync(path).isDirectory()) sourceFiles(path, out);
     else if (path.endsWith(".ts") && !path.endsWith(".test.ts")) out.push(path);
   }
@@ -46,7 +43,7 @@ function edgesOf(path: string): Edge[] {
   return out;
 }
 
-const files = sourceFiles(SRC).filter((file) => !IGNORED_TOP.has(file.slice(SRC.length + 1).split("/")[0] ?? ""));
+const files = sourceFiles(SRC);
 const allEdges = files.flatMap(edgesOf);
 const valueEdges = allEdges.filter((edge) => !edge.typeOnly);
 

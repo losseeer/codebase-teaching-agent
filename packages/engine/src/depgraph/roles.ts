@@ -99,7 +99,7 @@ const TEST_SEGMENTS = new Set(["test", "tests", "__tests__", "test-fixtures", "f
 /**
   设施类词：命中即认作「与外部世界或运行环境打交道」。粗分类，宁可漏判也不把业务逻辑误判成设施，
   因此只收公认的设施名，不收 `core`/`util` 这类泛词。
-  `export` 只为诊断脚本（`src/scripts/tier-diag.ts`）能复算命中位置，生产判据走 `hasInfraHint`。
+  `export` 目前没有外部消费者（生产判据走 `hasInfraHint`，命中位置由 `infraHintOf` 在本文件内复算）。
 */
 export const INFRA_HINTS = [
   "config", "setting", "env", "credential", "secret",

@@ -9,13 +9,13 @@ import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
-import { type MapChatProgress, mapChat, practiceChat } from "../../scopechat/scopechat.js";
+import { type MapChatProgress, mapChat, practiceChat } from "../../turn/run-turn.js";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { Journal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
 import { traceEngine } from "../../trace/engine-log.js";
-import { abortTurn } from "../../turns/registry.js";
-import { validateStyle } from "../../tutor-settings/tutor-settings.js";
+import { abortTurn } from "../../application/turn-registry.js";
+import { validateStyle } from "@codebase-tutor/shared";
 import type { FastifyInstance } from "fastify";
 
 /**
@@ -25,7 +25,7 @@ import type { FastifyInstance } from "fastify";
 export function registerChatRoutes(app: FastifyInstance): void {
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
     单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动 / 刷新页面，
-    后者引擎必须把这一轮算完并落库（见 turns/registry.ts）。
+    后者引擎必须把这一轮算完并落库（见 application/turn-registry.ts）。
     未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。 */
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
   const stopped = abortTurn(request.body?.turnId);

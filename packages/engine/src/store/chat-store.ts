@@ -1,5 +1,5 @@
 import type { ChatScope, ChatThread, ChatThreadMessage, TutorSettings } from "@codebase-tutor/shared";
-import { id } from "../identity.js";
+import { id } from "../ids.js";
 import { type ChatMessageRow, type ChatSessionRow, withDatabase } from "./database.js";
 
 /**

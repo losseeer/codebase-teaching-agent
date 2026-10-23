@@ -1,0 +1,122 @@
+import { readJournal } from "../../src/store/journal.js";
+import type { JournalEvent } from "@codebase-tutor/shared";
+
+/**
+  只读聚合脚本：按 traceId 把 journal.jsonl 的事件串成「一次请求 = 一段可读轨迹」。
+  journal 是 append-only 事件流，逐行看是散的；复盘一次对话的完整执行轨迹
+  （用户问了什么 → 守门裁决 → 读了哪些文件 → 回了什么）要靠 traceId 分组重放。
+
+  用法：pnpm run-trace -- <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]
+  - 不带 --trace 时按时间倒序列出最近 N 次请求（traceId 为 null 的后台事件归入「后台」组）；
+  - --session 只看一个会话线程（chat_session.id = journal 的 sessionId）经历过的事件，仍按 traceId 分段：
+    一个会话跨多次请求，按线程过滤才看得到「新建 → 每轮读了什么 → 软删」的完整生命周期；
+  - --json 输出分组后的原始事件，供进一步机检。
+
+  口径纪律与 metrics.ts 一致：缺字段落「未记」，不用默认值伪装；本脚本纯只读，不写任何文件。
+*/
+
+function clip(value: unknown, max = 80): string {
+  if (value === null || value === undefined) return "—";
+  const text = String(value).replaceAll(/\s+/g, " ");
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function eventLine(event: JournalEvent): string {
+  const p = event.payload;
+  switch (event.type) {
+    case "turn_text":
+      return `问「${clip(p.question, 60)}」答「${clip(p.answer, 80)}」${p.answer_truncated ? "（答截断）" : ""}${p.question_truncated ? "（问截断）" : ""}`;
+    case "turn_invariant":
+      // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
+      return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
+    case "loop_round":
+      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
+    case "turn_context":
+      return `历史折=${p.conversation_folded ?? "未记"} 找回=${p.conversation_recalled ?? "未记"} scene=${p.scene ?? "未记"}`;
+    case "token_usage":
+      return `in=${p.input_tokens ?? "未记"} out=${p.output_tokens ?? "未记"} cache=${p.cache_hit_tokens ?? 0} provider=${p.provider ?? "未记"} scene=${p.scene ?? "未记"}${p.mode === "degraded" ? " 【降级】" : ""}`;
+    case "file_read":
+      return `${p.path ?? "未记"}${p.denied ? " 【拒绝】" : ""}${p.error ? ` 【错误:${clip(p.error, 40)}】` : ""}${p.truncated ? " 【截断】" : ""}`;
+    case "code_search":
+      return `搜「${clip(p.query, 60)}」命中=${p.hits ?? "未记"} 前几落点：${clip(p.top_paths, 60)}`;
+    case "code_egress":
+      // 出网清单：与 token_usage 那行成对看——这条说「哪几行源码进了请求」，那条说「这次调用付了多少钱」
+      return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
+    case "repository_paired":
+      return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
+    case "action_veto":
+      return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
+    case "hint_depth":
+      return `深度=${p.depth ?? "未记"} stage=${p.stage ?? "未记"}（unit=${clip(p.unit_id, 24)}）`;
+    case "session_created":
+    case "session_deleted":
+      return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} scopeRef=${clip(p.scope_ref, 40)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;
+    default: {
+      const detail = Object.entries(p).slice(0, 5).map(([key, value]) => `${key}=${clip(value, 30)}`).join(" ");
+      return detail || "（无字段）";
+    }
+  }
+}
+
+function main(): void {
+  const args = process.argv.slice(2);
+  const repoPath = args.find((arg) => !arg.startsWith("--"));
+  if (!repoPath) {
+    console.error("用法：tsx dev/reports/run-trace.ts <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]");
+    process.exit(2);
+  }
+  const lastFlag = args.indexOf("--last");
+  const last = lastFlag >= 0 ? Number(args[lastFlag + 1]) || 20 : 20;
+  const traceFlag = args.indexOf("--trace");
+  const traceId = traceFlag >= 0 ? args[traceFlag + 1] : undefined;
+  const sessionFlag = args.indexOf("--session");
+  const threadId = sessionFlag >= 0 ? args[sessionFlag + 1] : undefined;
+  const asJson = args.includes("--json");
+
+  const allEvents = readJournal(repoPath);
+  const events = threadId ? allEvents.filter((event) => event.sessionId === threadId) : allEvents;
+  if (!allEvents.length) {
+    console.log(`（${repoPath}/.tutor/journal.jsonl 为空或不存在——该仓还没有任何教学/对话事件。）`);
+    return;
+  }
+  if (!events.length) {
+    console.log(`（journal 里没有 sessionId=${threadId} 的事件——该线程或许已被软删？删除只动标记，但从未记过 sessionId 的老事件也不会出现在这里。）`);
+    process.exit(1);
+  }
+
+  const groups = new Map<string, JournalEvent[]>();
+  for (const event of events) {
+    const key = event.traceId ?? "background";
+    const group = groups.get(key);
+    if (group) group.push(event);
+    else groups.set(key, [event]);
+  }
+  const ordered = [...groups.entries()]
+    .map(([key, list]) => ({ key, list: [...list].sort((a, b) => a.at.localeCompare(b.at)) }))
+    .sort((a, b) => a.list[0].at.localeCompare(b.list[0].at));
+
+  const selected = traceId ? ordered.filter((group) => group.key === traceId) : ordered.slice(-last);
+  if (!selected.length) {
+    console.log(`（journal 里没有 traceId=${traceId} 的事件。）`);
+    process.exit(1);
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify(Object.fromEntries(selected.map((group) => [group.key, group.list])), null, 2));
+    return;
+  }
+
+  console.log(`共 ${events.length} 条事件 / ${ordered.length} 次请求；本次展示 ${selected.length} 段。\n`);
+  for (const group of selected) {
+    const span = `${group.list[0].at} → ${group.list[group.list.length - 1].at}`;
+    const sessionId = group.list.find((event) => event.sessionId)?.sessionId ?? "—";
+    console.log(`── trace ${group.key === "background" ? "（后台任务）" : group.key}`);
+    console.log(`   ${span} · ${group.list.length} 条事件 · session=${sessionId}`);
+    for (const event of group.list) {
+      console.log(`   ${event.at.slice(11, 23)} ${event.type.padEnd(18)} ${eventLine(event)}`);
+    }
+    console.log();
+  }
+}
+
+main();

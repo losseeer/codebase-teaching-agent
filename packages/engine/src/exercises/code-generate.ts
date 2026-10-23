@@ -18,7 +18,7 @@ import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "../source/files.js";
-import { recordEgress } from "../security/dataflow.js";
+import { recordEgress } from "../security/egress-log.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
 import { assertSafePath, type SandboxFile, type SandboxRun } from "../sandbox/runner.js";
@@ -295,7 +295,7 @@ export async function explainCodeAttempt(input: {
   const verdict = verdictOf(run);
   const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
   const sources = input.learnerFiles.map((file) => {
-    // 逐文件各自计数：masked 是「这一段扫过、隐了几处」，一个累加器不能摊到多段上（0 与「没扫」是两个读数，见 dataflow.ts）
+    // 逐文件各自计数：masked 是「这一段扫过、隐了几处」，一个累加器不能摊到多段上（0 与「没扫」是两个读数，见 egress-log.ts）
     const screened = maskSecrets(file.contents);
     return { kind: "sandbox-output" as const, path: file.path, from: 1, to: screened.text.split("\n").length, text: screened.text, masked: screened.masked };
   });

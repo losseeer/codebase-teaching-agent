@@ -5,21 +5,22 @@ import { persistTeachingTurn, resolveTeachingState } from "../../application/tea
 import { threadJournalPayload } from "../../application/threads.js";
 import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../../application/turn-audit.js";
 import { summarizeCost } from "../../cost/cost.js";
-import { assembleContext } from "../../harness/context.js";
-import { createSession, respondWithProvider } from "../../harness/harness.js";
+import { assembleContext } from "../../turn/context-teaching.js";
+import { createSession } from "../../turn/session.js";
+import { respondWithProvider } from "../../turn/run-turn.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
 import { LlmAbortedError } from "../../llm/provider.js";
-import { importer, repositoryOr404 } from "../../services.js";
+import { importer } from "../../services.js";
 import { dedupeFileReads } from "../../source/read-file.js";
-import { parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope.js";
+import { parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { createThread, saveThreadState } from "../../store/chat-store.js";
 import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
-import { defaultTutorSettings, policyFor, validateSettings } from "../../tutor-settings/tutor-settings.js";
+import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/shared";
 import type { FastifyInstance } from "fastify";
 
 /**

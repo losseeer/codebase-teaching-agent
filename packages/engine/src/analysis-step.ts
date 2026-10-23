@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hash } from "./identity.js";
+import { hash } from "./ids.js";
 
 /**
   一个 LLM 分析步骤的登记 = 这一层的口径版本号 + 喂给模型的全部固定文案，二者绑在一起登记。

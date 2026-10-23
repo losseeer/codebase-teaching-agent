@@ -1,7 +1,7 @@
 import type { FileRole } from "@codebase-tutor/shared";
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
-import type { FileSlice } from "./slice.js";
+import type { FileSlice } from "./l1-slice.js";
 
 /**
   文件职责摘要的提供方（L1）契约：
@@ -23,7 +23,7 @@ export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
   /**
-    这份摘要档会不会把切片内容发到端点。出网清单（`security/dataflow.ts`）只有 `true` 才计入审计：
+    这份摘要档会不会把切片内容发到端点。出网清单（`security/egress-log.ts`）只有 `true` 才计入审计：
     确定性档一个字都不发出去，把它的逐文件装配记成「源码出网」就是虚报，虚报的账面比漏报更难查。
     */
   readonly sendsCodeToEndpoint: boolean;

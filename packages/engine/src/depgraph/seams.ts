@@ -1,5 +1,6 @@
 import type { FileEntry, RouteConsumer, RouteProvider, SeamDirection, SeamReport } from "@codebase-tutor/shared";
-import { matchRouteSeams, routeEndpointsOfFiles } from "./routes.js";
+import type { LlmTool } from "../llm/provider.js";
+import { matchRouteSeams, routeEndpointsOfFiles } from "./url-routes.js";
 
 /**
   跨仓 HTTP 接缝的读侧：把两个仓的「路由清单」配成边，回答「点这个按钮之后代码在哪」。
@@ -86,3 +87,17 @@ export function formatSeamReport(otherName: string, report: SeamReport, filter =
     rows(report.inbound, `「${otherName}」调用本仓`)
   ].join("\n");
 }
+
+/** 跨仓接缝查询工具：把「点这个按钮之后代码在哪个仓的哪一行」这条零 token 的证据交给模型。 */
+export const CROSS_REPO_LINK_TOOL: LlmTool = {
+  name: "cross_repo_link",
+  description: "查询当前仓库与另一个仓库之间按 URL 配好的 HTTP 接缝：本仓调用的地址落在对端哪个文件哪一行，以及对端提供了哪些地址被本仓调用。回答跨仓「这个请求打到哪里去」时先调用它拿准确落点，不要靠猜 URL 字符串。",
+  parameters: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "对端仓库名" },
+      filter: { type: "string", description: "只看包含该片段（路径或 URL 片段）的接缝，可选" }
+    },
+    required: ["repo"]
+  }
+};

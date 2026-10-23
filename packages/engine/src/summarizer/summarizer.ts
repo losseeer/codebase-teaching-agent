@@ -1,19 +1,19 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
-import { hash } from "../identity.js";
+import { hash } from "../ids.js";
 import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "../text/lexical.js";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
-import { buildFileSlices, extractHeaderComment, type FileSlice } from "./slice.js";
-import { recordEgress } from "../security/dataflow.js";
+import { buildFileSlices, extractHeaderComment, type FileSlice } from "./l1-slice.js";
+import { recordEgress } from "../security/egress-log.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMARY_STEP, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**
   文件级摘要表（L1）：每文件一行「职责摘要 + 架构角色 + 覆盖率标记」，落 SQLite。
-  - 输入是结构切片（`slice.ts`），不是整份正文；「文件内容变了没」由切片内容间接反映。
+  - 输入是结构切片（`l1-slice.ts`），不是整份正文；「文件内容变了没」由切片内容间接反映。
     唯一的读盘例外是「摘要参考注释」开关打开时取 headerComment（见 summarizeFiles）。
   - 角色由结构规则给出，模型可以覆盖并标注来源。
   - 缓存键 = hash(切片 + 输入口径版本 + 模型版本)：切片变了缓存即失效。
