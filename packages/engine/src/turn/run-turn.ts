@@ -9,7 +9,7 @@ import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnStopReason } from "../source/tool-loop.js";
-import { completeWithReadTool } from "../source/tool-loop.js";
+import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/egress-log.js";
 import type { ScopeRef } from "../source/scope-ref.js";
 import type { McpCallAudit } from "../integrations/clients.js";
@@ -220,6 +220,30 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy })
     };
   }
+  // 练习答疑没有文件面，但装了技能就该能取正文：只给 `read_skill`（和外部工具），两轮封顶。
+  // 没装技能时这条不成立，行为与单轮调用逐字一致——「默认关 = 不加」在这里同样生效。
+  if (input.scope === "practice" && (input.skills || input.external)) {
+    const result = await completeWithSkillTool({
+      provider: input.provider,
+      system: input.system,
+      user: input.user,
+      maxTokens: input.maxTokens,
+      temperature: input.temperature,
+      scene: input.scene,
+      ...(input.skills ? { skills: input.skills } : {}),
+      ...(input.external ? { external: input.external } : {}),
+      ...(input.signal ? { signal: input.signal } : {})
+    });
+    return {
+      completion: result.completion,
+      ...(result.usage ? { usage: result.usage } : {}),
+      rounds: result.rounds,
+      fileReads: result.fileReads,
+      codeSearches: result.codeSearches,
+      mcpCalls: result.mcpCalls,
+      skillReads: result.skillReads
+    };
+  }
   input.onProgress?.({ type: "thinking", round: 1 });
   const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: input.maxTokens, temperature: input.temperature, scene: input.scene, ...(input.signal ? { signal: input.signal } : {}) });
   return { completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] };
@@ -377,7 +401,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -386,16 +410,17 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   }
   excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false, egress).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), practiceContextCap());
-  const system = exerciseQaSystemPrompt({ style: input.style });
+  const system = `${exerciseQaSystemPrompt({ style: input.style })}${input.skills ? `\n\n${input.skills.brief}` : ""}`;
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
-  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, maxTokens: 700, temperature: 0.3, scene: "practice.chat", ...(input.signal ? { signal: input.signal } : {}) });
+  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, maxTokens: 700, temperature: 0.3, scene: "practice.chat", ...(input.skills ? { skills: input.skills } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   return {
     reply: flagTruncatedReply(result.completion.text, result.completion.finishReason === "length"),
     provider: input.provider.name,
     usage: result.usage,
-    toolRounds: 0,
+    toolRounds: result.rounds,
+    ...(result.skillReads.length ? { skillReads: result.skillReads } : {}),
     conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
   };
 }

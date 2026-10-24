@@ -16,6 +16,7 @@
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/shared";
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "../source/files.js";
 import { recordEgress } from "../security/egress-log.js";
@@ -62,8 +63,8 @@ export interface HarnessRun {
 }
 
 export type CodeGeneration =
-  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[] }
-  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage };
+  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; skillReads: SkillReadAudit[] }
+  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[] };
 
 const MAX_TITLE = 40;
 const MAX_PROMPT = 700;
@@ -224,16 +225,17 @@ function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   return proposal.solution.some((file) => file.contents.replace(/\s+/g, " ").includes(needle));
 }
 
-export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider }): Promise<CodeGeneration> {
+export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; skills?: SkillsToolContext }): Promise<CodeGeneration> {
   const source = unitSource(input.repositoryPath, input.unit);
-  if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [] };
+  if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [], skillReads: [] };
   const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
-  if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [] };
+  if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [], skillReads: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
-  let response: { text: string; usage?: LlmUsage };
+  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[] };
   try {
-    response = await input.provider.complete({
+    response = await completeWithOptionalSkills({
+      provider: input.provider,
       system: systemPrompt(input.kind, language),
       user: JSON.stringify({
         kind: input.kind,
@@ -245,33 +247,34 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
       // 出题要的正文比聊天重得多（下发件 + 参考解 + 测试 + 替身，四份源码），上限按这个给；
       // 推理模型的思考 token 也计在这个数里（provider 再加 6000 余量）。
       maxTokens: 6_000,
-      scene: "practice.generate-code"
+      scene: "practice.generate-code",
+      ...(input.skills ? { skills: input.skills } : {})
     });
   } catch (error) {
     // 端点失败单列一档：402/超时/被拒都不是「模型交出来的题不对」，混进形状档就会把人引去修提示词
-    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [] };
+    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [] };
-  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [] };
+  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], skillReads: response.skillReads };
+  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], skillReads: response.skillReads };
 
   const normalized = normalizeProposal({ ...parsed, kind: input.kind, language });
-  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [] };
+  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], skillReads: response.skillReads };
   const proposal = normalized.proposal;
-  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [] };
+  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], skillReads: response.skillReads };
   if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
-    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [] };
+    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], skillReads: response.skillReads };
   }
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
     validation = await validateHarness(proposal, input.repositoryPath);
   } catch (error) {
-    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [] };
+    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], skillReads: response.skillReads };
     throw error;
   }
-  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs };
-  return { ok: true, proposal, runs: validation.runs, usage: response.usage };
+  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, skillReads: response.skillReads };
+  return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
 }
 
 /**

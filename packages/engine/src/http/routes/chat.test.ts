@@ -120,6 +120,34 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     expect(fx.lastEvent("turn_context").payload).toMatchObject({ scene: "map_chat", conversation_folded: 0, conversation_recalled: 0 });
   });
 
+  it("练习答疑装了技能：只给 read_skill（没有文件面），取正文后作答并落 skill_read", async () => {
+    install();
+    fx.scripted = ['@@tool read_skill {"name":"tutor-fixture"}', `按那份做法：${MAIN_FILE}:3 先改这一行。`];
+    const threadId = await fx.newThread("practice", "练习带技能", fx.exerciseId);
+    const before = fx.sentTools.length;
+    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId: fx.exerciseId, threadId } });
+    expect(response.statusCode).toBe(200);
+    // 这一路没有仓库文件面：能取的就是技能正文，工具清单里不该混进 read_file
+    expect(fx.sentTools[before].names).toEqual(["read_skill"]);
+    expect(fx.sentTools[before].raw).toContain("tutor-fixture：测试用做法");
+    expect(fx.sentTools[before + 1].raw).toContain("读 ~/.codebase-tutor/llm.log");
+    expect(fx.lastEvent("skill_read").payload).toMatchObject({ skill: "tutor-fixture", found: true });
+  });
+
+  it("练习答疑没装技能：还是那一趟单轮调用，一个字都没多", async () => {
+    const empty = join(fx.root, "skills-empty-practice");
+    mkdirSync(empty, { recursive: true });
+    process.env.TUTOR_SKILLS_DIR = empty;
+    fx.scripted = [OK_REPLY];
+    const threadId = await fx.newThread("practice", "练习不装技能", fx.exerciseId);
+    const before = fx.sentTools.length;
+    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId: fx.exerciseId, threadId } });
+    expect(response.statusCode).toBe(200);
+    expect(fx.sentTools.length, "没有技能就不该多出第二趟").toBe(before + 1);
+    expect(fx.sentTools[before].names).toEqual([]);
+    expect(fx.sentTools[before].raw).not.toContain("可用技能");
+  });
+
   it("GET /api/external 把装了什么、连不上的原因交出来（零 token，读侧不发模型）", async () => {
     install();
     const response = await fx.app.inject({ method: "GET", url: "/api/external" });

@@ -1,5 +1,6 @@
 import { type ExerciseAnswer, type ExerciseKind, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
 import { budgetDegraded } from "../../application/paid-turn.js";
+import { skillsForTurn } from "../../application/scoped-turn.js";
 import { exercises, lightLlm, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import type { FastifyInstance } from "fastify";
 
@@ -25,7 +26,7 @@ app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; target
       tag,
       tagId: request.body?.tagId,
       variantNonce: request.body?.variantNonce
-    }, budgetExhausted ? undefined : lightLlm()));
+    }, budgetExhausted ? undefined : lightLlm(), skillsForTurn()));
   } catch (error) {
     return reply.code(422).send({ error: error instanceof Error ? error.message : "无法生成练习" });
   }

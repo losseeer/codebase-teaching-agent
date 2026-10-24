@@ -29,13 +29,17 @@ export type ReadToolProgress = Extract<ScopedStreamProgress, { type: "thinking" 
 
 export interface ReadToolLoopInput {
   provider: LlmProvider;
-  /** 仓库根：read_file 只能在此范围内读取 */
-  repoPath: string;
+  /**
+    仓库根：read_file 只能在此范围内读取。省略 = 这一轮没有文件面（练习答疑与出题走这一档），
+    于是清单里只有 `read_skill` 与外部工具——「没有仓库路径」和「读不到文件」是两件事，前者是能力不给。
+    */
+  repoPath?: string;
   system: string;
   /** 首轮 user 消息（代码上下文 + 学习者提问） */
   user: string;
   maxTokens: number;
-  temperature: number;
+  /** 省略 = 用 provider 的默认采样温度（出题那一路以前就没给）。 */
+  temperature?: number;
   maxRounds: number;
   /** 本次对话累计最多读几个文件：只数读成功的；被拒绝或失败的仍进 fileReads 审计，但不占额度。 */
   maxCalls: number;
@@ -127,8 +131,8 @@ export interface FactsToolContext {
   apply: (argumentsJson: string) => string;
 }
 
-/** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
+/** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现；没有仓库根时文件面一个都不给。 */
+function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
   const { cross, diagram, skills, external } = input;
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
@@ -139,13 +143,17 @@ function toolsFor(input: Pick<ReadToolLoopInput, "search" | "cross" | "diagram" 
       parameters: { ...tool.parameters, properties: { ...properties, repo: { type: "string", description: `其他仓的名字，可选；本仓请省略。可用值：${names.join(" / ")}` } } }
     };
   };
-  const tools: LlmTool[] = [names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL];
-  if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
-  if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
+  const tools: LlmTool[] = [];
+  if (input.repoPath) {
+    tools.push(names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL);
+    if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
+    if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
+  }
   // 写侧工具只在服务层给了闭包时才出现：教学与练习作用域都不该有改图能力
   if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
-  if (input.facts) tools.push(QUERY_FACTS_TOOL);
+  // 产物门同样要有文件面才有意义：没有仓库根，它能查的「这个文件的产物」根本无从指认
+  if (input.repoPath && input.facts) tools.push(QUERY_FACTS_TOOL);
   // 外部工具原样并进清单：描述里已带「【外部 <server>】」前缀，模型分得清这是别人的程序
   if (external?.tools.length) tools.push(...external.tools);
   return tools;
@@ -291,15 +299,17 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     // 中止检查点：上一轮的 LLM 已返回，若此时用户已经停了，就绝不再开新一轮（也不落收尾调用）。
     if (input.signal?.aborted) throw new LlmAbortedError();
     const budgetStop = input.budgetGuard?.();
-    if (budgetStop || rounds >= input.maxRounds || succeededReads >= input.maxCalls) {
+    // 读文件额度只在有文件面时才算：出题与练习答疑没有 read_file，`maxCalls` 给 0 不该被读成「额度用完」。
+    const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= input.maxCalls;
+    if (budgetStop || rounds >= input.maxRounds || fileQuotaSpent) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
       // 到闸时说的是**真正到限的那一项**。轮次用完时读文件额度常常还剩着，两种情况混成同一句「读文件上限」，
       // 模型只会把这句错话转述给学习者（实测读数：3 轮 / 只读了 2 个文件，上限是 4）。
       const refusal = budgetStop
         ? `${budgetStop}请基于已读到的正文直接回答，缺什么就照实说缺什么。`
-        : succeededReads >= input.maxCalls
+        : fileQuotaSpent
           ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
-          : `本次对话的工具轮次已用完（${rounds} 轮）；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
+          : `本次对话的工具轮次已用完（${rounds} 轮）${input.repoPath ? `；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了` : ""}。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
       if (budgetStop) stoppedBy = "budget";
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: refusal });
@@ -382,7 +392,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       const roots = input.cross?.roots;
       const root = repo ? (roots && Object.hasOwn(roots, repo) ? roots[repo] : undefined) : input.repoPath;
       if (!root) {
-        messages.push({ role: "tool", toolCallId: call.id, content: `未知仓库「${repo}」；可访问：当前仓${crossNames.length ? ` / ${crossNames.join(" / ")}` : "（地址簿里没有其他仓，跨仓请省略 repo 参数）"}。` });
+        messages.push({ role: "tool", toolCallId: call.id, content: input.repoPath
+          ? `未知仓库「${repo}」；可访问：当前仓${crossNames.length ? ` / ${crossNames.join(" / ")}` : "（地址簿里没有其他仓，跨仓请省略 repo 参数）"}。`
+          : "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。" });
         continue;
       }
       if (repo && crossReads >= (input.cross?.maxCrossReads ?? 2)) {
@@ -430,6 +442,58 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     throw error;
   }
+}
+
+/**
+  只开放 `read_skill`（以及外部工具）的最小循环：出题与练习答疑没有文件面，但技能正文要能按需取。
+  两轮 = 取一份正文 + 作答；再多就是拿一次出题的钱买一次搜索。没有装技能时这条路径根本不会被走到。
+*/
+export function completeWithSkillTool(input: Omit<ReadToolLoopInput, "repoPath" | "maxRounds" | "maxCalls" | "search" | "cross" | "diagram" | "facts">): Promise<ReadToolLoopResult> {
+  return completeWithReadTool({ ...input, maxRounds: 2, maxCalls: 0 });
+}
+
+/** 技能取用读数：一条 = 模型真取过一份正文（`found:false` 表示清单上没这个名字）。 */
+export interface SkillReadAudit {
+  skill: string;
+  chars: number;
+  found: boolean;
+}
+
+/**
+  「装了技能就能取正文，没装就单轮」的收口：两条路的返回形状统一在这里，调用点不必各写一套分支。
+  没给 `skills` 时走的就是原来那一趟 `provider.complete`，请求体逐字不变——清单每轮都付费，
+  所以「默认关 = 不加」在这里同样成立。
+*/
+export async function completeWithOptionalSkills(input: {
+  provider: LlmProvider;
+  system: string;
+  user: string;
+  maxTokens: number;
+  temperature?: number;
+  scene: string;
+  skills?: SkillsToolContext;
+}): Promise<{ text: string; usage?: LlmUsage; skillReads: SkillReadAudit[] }> {
+  if (!input.skills) {
+    const response = await input.provider.complete({
+      system: input.system,
+      user: input.user,
+      maxTokens: input.maxTokens,
+      ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+      scene: input.scene
+    });
+    return { text: response.text, usage: response.usage, skillReads: [] };
+  }
+  const loop = await completeWithSkillTool({
+    provider: input.provider,
+    user: input.user,
+    maxTokens: input.maxTokens,
+    ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+    scene: input.scene,
+    // 清单由这里并进去：调用点只说「有技能通道」，不必各自再拼一遍文案（五处各拼一次迟早漂）
+    system: `${input.system}\n\n${input.skills.brief}`,
+    skills: input.skills
+  });
+  return { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads };
 }
 
 /** 读取 read_skill 参数里的 name（仅用于审计与回话；解析失败按空名走，工具会回「没有这份技能」）。 */

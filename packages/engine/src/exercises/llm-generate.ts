@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
 import { recordEgress, type EgressSource } from "../security/egress-log.js";
 import { secretMasker } from "../security/secrets.js";
 import type { GuardCandidate } from "./guard-proposal.js";
@@ -139,8 +140,8 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
   返回的 proposal 仍需过 exercises/guard-proposal.ts 的确定性守门才允许落库。
   */
 export type LlmGeneration =
-  | { ok: false; reason: string }
-  | { ok: true; proposal: LlmProposal; usage?: LlmUsage };
+  | { ok: false; reason: string; skillReads: SkillReadAudit[] }
+  | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[] };
 
 export interface LlmProposal {
   title: string;
@@ -180,7 +181,7 @@ export const EXERCISE_STEP = defineAnalysisStep({
   prompts: [GENERATION_SYSTEM_PROMPT, () => (Object.keys(kindRules) as ExerciseKind[]).map((kind) => refineSystemPrompt(kind)).join("\n")]
 });
 
-export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider }): Promise<LlmGeneration> {
+export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; skills?: SkillsToolContext }): Promise<LlmGeneration> {
   const excerpts = input.candidates.map((candidate) => ({
     path: candidate.path,
     lineCount: candidate.lineCount,
@@ -196,17 +197,26 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
       return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt, masked: candidate.masked };
     })
   });
-  const response = await input.provider.complete({ system: GENERATION_SYSTEM_PROMPT, user, maxTokens: 1_200, temperature: 0.4, scene: "practice.generate" });
+  const response = await completeWithOptionalSkills({
+    provider: input.provider,
+    // 清单由技能通道自己并进系统提示词：这一趟没有 read_file，能取的就是技能正文（两轮封顶）
+    system: GENERATION_SYSTEM_PROMPT,
+    user,
+    maxTokens: 1_200,
+    temperature: 0.4,
+    scene: "practice.generate",
+    ...(input.skills ? { skills: input.skills } : {})
+  });
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, reason: "模型给的题目读不出来，请重试。" };
+  if (!parsed) return { ok: false, skillReads: response.skillReads, reason: "模型给的题目读不出来，请重试。" };
   if (parsed.ok === false) {
     const reason = String(parsed.reason ?? "").trim();
-    return { ok: false, reason: reason || "当前仓库没有适合该主题的出题素材。" };
+    return { ok: false, skillReads: response.skillReads, reason: reason || "当前仓库没有适合该主题的出题素材。" };
   }
-  if (parsed.ok !== true) return { ok: false, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
+  if (parsed.ok !== true) return { ok: false, skillReads: response.skillReads, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
   const proposal = normalizeProposal(parsed);
-  if (!proposal) return { ok: false, reason: "模型给的题目字段不完整，请重试。" };
-  return { ok: true, proposal, usage: response.usage };
+  if (!proposal) return { ok: false, skillReads: response.skillReads, reason: "模型给的题目字段不完整，请重试。" };
+  return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
 }
 
 /** rubric 判分（LLM-as-Judge + 细则锚点）：拿参考答案与评分细则比对学习者回答，输出结构化分数。 */

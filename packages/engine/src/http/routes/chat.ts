@@ -2,7 +2,7 @@ import type { Exercise } from "@codebase-tutor/shared";
 import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
-import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, threadScopedHistory } from "../../application/scoped-turn.js";
+import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, skillsForTurn, threadScopedHistory } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../../application/turn-audit.js";
 import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
 import { scopedChatProviderOr422 } from "../gate.js";
@@ -113,7 +113,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   // 与 map-chat/stream 同款 SSE：delta 打字机回放 + done/error——GUI 三作用域的流式解析共用一条路径
   const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
   try {
-    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
+    // 技能清单与取正文通道同时给或同时不给：没装技能时这一轮与从前逐字一致（单轮、无工具）
+    const skills = skillsForTurn();
+    const result = await practiceChat({ repoPath: repository.path, exercise: stored.exercise, content, history, provider, style: validateStyle(request.body?.style), ...(thread?.id ? { threadId: thread.id } : {}), ...(skills ? { skills } : {}), ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     if (turnHandle.signal?.aborted) {
       recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", provider: provider.modelVersion, outcome: "aborted", ...(thread?.id ? { threadId: thread.id } : {}), audits: auditsFromResult(result) });
       throw new LlmAbortedError();
@@ -126,7 +128,10 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
       input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
       cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
     }, thread?.id);
-    // 练习答疑一轮就到，没有工具轮可记；上下文折叠的读数照样有地方（loop_round 的语义因此不动）
+    // 取过哪份技能正文逐条留痕（`found:false` 也记：那是清单与提示词漂移的读数）
+    for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, thread?.id);
+    // 练习答疑只有「取技能正文」这一类工具调用，逐条已由 skill_read 记下；不写 loop_round（那条记的是文件与检索工具的轮次）
+    // 上下文折叠的读数照样有地方
     journal.append("turn_context", { scene: "practice_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, thread?.id);
     journal.append("turn_text", turnTextPayload("practice_chat", content, result.reply), thread?.id);
     replayTypewriter(send, result.reply);

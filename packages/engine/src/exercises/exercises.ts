@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLanguage, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RubricCriterion } from "@codebase-tutor/shared";
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
 import type { LlmProvider } from "../llm/provider.js";
+import type { SkillsToolContext } from "../source/tool-loop.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
 import { hash } from "../ids.js";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
@@ -151,12 +152,12 @@ export class ExerciseService {
     传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
     family="llm" 走 LLM 出题族（tag 主题出题，一轮调用可拒绝，rubric 判分）。
     */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, skills?: SkillsToolContext): Promise<Exercise> {
     const database = repository.handle.pin();
     try {
       // 审计线与 SQLite 句柄同随挂载 pin/unpin 成对：不在 try 内现造 Journal，避免构造失败漏句柄
       const journal = repository.handle.journal;
-      if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database);
+      if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database, skills);
       const modelVersion = provider?.modelVersion ?? "deterministic";
       if (!requested.kind && !requested.targetUnitId) {
         const due = database.getReviewSchedules(repository.index.repositoryId)
@@ -188,7 +189,7 @@ export class ExerciseService {
         journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
         return cached.exercise;
       }
-      if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, database, journal, scope, deps);
+      if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, database, journal, scope, deps, skills);
       let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
       /**
         题面来源按三种成因分开记（模型改写成功 / 试了但失败 / 未配置模型），失败时把失败形状一起写，
@@ -223,7 +224,7 @@ export class ExerciseService {
     每次真跑都写一行 `exercise_run`，被拒的也算：要分得开「没走到沙箱」与「沙箱说这题不行」。
     没配模型/预算已达上限时直接拒（与对话作用域同一纪律，不回落本地题面）。
     */
-  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, database: TutorDatabase, journal: Journal, scope: string, deps: { path: string; hash: string }[]): Promise<Exercise> {
+  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, database: TutorDatabase, journal: Journal, scope: string, deps: { path: string; hash: string }[], skills?: SkillsToolContext): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
       const reason = "代码题需要模型：题面、缺陷与测试都由模型设计，判分靠运行测试。当前没配模型，或本月预算已用完。";
@@ -244,7 +245,9 @@ export class ExerciseService {
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
-    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider });
+    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, ...(skills ? { skills } : {}) });
+    // 取过哪份出题技能先留痕：拒题的趟也真取过正文，账上不能只写「模型没出题」
+    for (const read of generation.skillReads) journal.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
     /**
       自证两跑逐条留痕，失败趟也要有行：`exercise_run` 是「沙箱真跑了」的唯一证据，
       只在成功时写会让「沙箱挂了」和「模型没出题」在记录里长成同一个样子。
@@ -306,7 +309,7 @@ export class ExerciseService {
     换一题传 variantNonce+1 生成新题（旧题保留在缓存/复习记录里）。
     一轮调用内由 LLM 判定「能否出题」——拒绝理由与守门否决都记 journal（exercise_declined），不静默。
     */
-  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, database: TutorDatabase): Promise<Exercise> {
+  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, database: TutorDatabase, skills?: SkillsToolContext): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
     if (!provider) throw new Error("出题用的模型现在用不了：没配模型，或本月预算已用完。");
@@ -330,7 +333,8 @@ export class ExerciseService {
       journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag });
       return cached.exercise;
     }
-    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider });
+    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider, ...(skills ? { skills } : {}) });
+    for (const read of generation.skillReads) repository.handle.journal.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
     if (!generation.ok) {
       journal.append("exercise_declined", { family: "llm", tag, reason: generation.reason, stage: "llm_generate" });
       throw new Error(generation.reason);
