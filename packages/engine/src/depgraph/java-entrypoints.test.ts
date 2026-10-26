@@ -3,10 +3,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer/indexer.js";
-import { buildDependencyGraph } from "./graph.js";
-import { loadSymbolParser } from "./parser.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
 
-const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/javademo-repo");
+const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/javademo-repo");
 
 describe("dependency graph — Java/Spring", () => {
   // Java 的符号只来自语法树（回落档不认 Java），不加载解析器就没有任何调用边

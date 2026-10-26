@@ -2,11 +2,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer/indexer.js";
-import { buildDependencyGraph } from "./graph.js";
-import { isServedEntrypoint } from "./entrypoints.js";
-import { loadSymbolParser } from "./parser.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { isServedEntrypoint } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
 
-const nodeFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/nodedemo-repo");
+const nodeFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/nodedemo-repo");
 
 describe("Node/TS 框架入口（Express / Fastify / Koa / Nest）", () => {
   it("四份真形态各认一条服务入口，锚点落在证据行", async () => {

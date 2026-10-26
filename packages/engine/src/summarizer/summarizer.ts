@@ -7,8 +7,8 @@ import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../store/database.js";
-import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
-import { buildFileSlices, extractHeaderComment, type FileSlice } from "./l1-slice.js";
+import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
+import { buildFileSlices, extractHeaderComment, type FileSlice } from "@codebase-tutor/analysis";
 import { recordEgress } from "../security/egress-log.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMARY_STEP, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 

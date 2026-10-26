@@ -8,16 +8,16 @@ import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codeb
 
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
-import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";
-import { loadSymbolParser } from "../depgraph/parser.js";
+import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
 import { collectFileFacts, saveFileFacts } from "../facts/build.js";
-import { fileStructureOf } from "../depgraph/roles.js";
+import { fileStructureOf } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { catalogRepositoryId, hash, id } from "@codebase-tutor/platform";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
 import { tutorDataDir } from "@codebase-tutor/platform";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
-import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
+import { enrichWithLsp } from "@codebase-tutor/analysis";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { Journal, journalFootprint } from "../store/journal.js";

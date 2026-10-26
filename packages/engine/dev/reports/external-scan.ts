@@ -14,8 +14,9 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadDotEnv } from "../../src/boot.js";
 import { indexRepository } from "../../src/indexer/indexer.js";
-import { buildDependencyGraph } from "../../src/depgraph/graph.js";
-import { EXTERNAL_CATEGORY_LABEL, groupExternals, type ExternalCategory } from "../../src/depgraph/external-catalog.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { EXTERNAL_CATEGORY_LABEL, groupExternals } from "@codebase-tutor/analysis";
+import type { ExternalCategory } from "@codebase-tutor/domain";
 
 loadDotEnv();
 

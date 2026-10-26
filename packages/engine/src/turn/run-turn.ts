@@ -7,7 +7,7 @@ import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { CONTEXT_SHARE, contextShare } from "../llm/context-window.js";
 import { type ConversationBlock, renderConversation } from "../llm/conversation.js";
-import { callNeighborhoodSection } from "../depgraph/neighbors.js";
+import { callNeighborhoodSection } from "@codebase-tutor/analysis";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";

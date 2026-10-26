@@ -1,7 +1,7 @@
 import type { FileEntry, RouteConsumer, RouteProvider, SeamDirection, SeamReport } from "@codebase-tutor/domain";
 
 import type { LlmTool } from "../llm/provider.js";
-import { matchRouteSeams, routeEndpointsOfFiles } from "./url-routes.js";
+import { matchRouteSeams, routeEndpointsOfFiles } from "@codebase-tutor/analysis";
 
 /**
   跨仓 HTTP 接缝的读侧：把两个仓的「路由清单」配成边，回答「点这个按钮之后代码在哪」。

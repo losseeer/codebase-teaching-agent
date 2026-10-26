@@ -8,10 +8,10 @@ import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { languageCapabilitiesOf, type RepositoryIndex, type SymbolInfo } from "@codebase-tutor/domain";
 
-import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus } from "../../src/depgraph/parser.js";
+import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus } from "@codebase-tutor/analysis";
 import { analyzeFile } from "../../src/facts/build.js";
-import { graphExtensions } from "../../src/depgraph/graph.js";
-import { registryEligible } from "../../src/facts/registration.js";
+import { graphExtensions } from "@codebase-tutor/analysis";
+import { registryEligible } from "@codebase-tutor/analysis";
 
 const repositoryPath = resolve(process.argv[2] ?? "");
 if (!repositoryPath) throw new Error("用法：pnpm facts:report /absolute/path/to/repository");

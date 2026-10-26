@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTutorIgnoreMatcher } from "./ignore.js";
+import { createTutorIgnoreMatcher } from "@codebase-tutor/analysis";
 import { changeWanted, changedAfter, ingestSetDiffers, isArtifactEcho, RepositoryWatcher } from "./watcher.js";
 import { listIngestedPaths } from "./indexer.js";
 

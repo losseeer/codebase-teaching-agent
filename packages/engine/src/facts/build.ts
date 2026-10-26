@@ -15,13 +15,13 @@ import { FACT_KINDS, languageCapabilitiesOf } from "@codebase-tutor/domain";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TutorDatabase } from "../store/database.js";
-import type { SyntaxNode } from "../depgraph/parser.js";
-import { eachFunction } from "./cfg.js";
-import { graphExtensions } from "../depgraph/graph.js";
-import { analyzeFunctionDataflow } from "./dataflow.js";
-import { analyzeFileTypes } from "./types.js";
-import { analyzeFileRegistry, registryEligible } from "./registration.js";
-import { FACTS_VERSION } from "./version.js";
+import type { SyntaxNode } from "@codebase-tutor/analysis";
+import { eachFunction } from "@codebase-tutor/analysis";
+import { graphExtensions } from "@codebase-tutor/analysis";
+import { analyzeFunctionDataflow } from "@codebase-tutor/analysis";
+import { analyzeFileTypes } from "@codebase-tutor/analysis";
+import { analyzeFileRegistry, registryEligible } from "@codebase-tutor/analysis";
+import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
   静态产物层的总装：一个文件解析一次，产出所有类别的读数。

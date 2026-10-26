@@ -3,8 +3,8 @@ import { join, resolve } from "node:path";
 import type { CallEdge, FileEntry, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
 
 import { indexRepository } from "../../src/indexer/indexer.js";
-import { buildDependencyGraph, serializeGraph } from "../../src/depgraph/graph.js";
-import { loadSymbolParser } from "../../src/depgraph/parser.js";
+import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
   符号级调用边的差值（文件级 import 差值由 `pnpm graph:diff` 量）。

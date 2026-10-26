@@ -15,9 +15,6 @@ import { handledExtensions, tsFamilyExtensions } from "./language-extensions.js"
 import { resolveFileImports } from "./import-edges.js";
 import { collectPathAliases, collectWorkspacePackages } from "./repo-manifest.js";
 
-export { graphExtensions, handledExtensions } from "./language-extensions.js";
-export { graphFromData, serializeGraph } from "./serialization.js";
-export { impactRadius } from "./impact-radius.js";
 
 export interface DependencyGraph {
   imports: Map<string, string[]>;

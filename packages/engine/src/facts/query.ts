@@ -13,7 +13,7 @@ import { FACT_KINDS } from "@codebase-tutor/domain";
 import type { TutorDatabase } from "../store/database.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsToolContext } from "../source/tool-loop.js";
-import { FACTS_VERSION } from "./version.js";
+import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
   把 `static_fact` 里的四类产物交给模型的只读门。

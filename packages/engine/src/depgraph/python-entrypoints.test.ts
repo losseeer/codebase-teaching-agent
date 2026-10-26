@@ -3,9 +3,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer/indexer.js";
-import { buildDependencyGraph } from "./graph.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
 
-const pyFrameworkFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/pyframeworkdemo-repo");
+const pyFrameworkFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/pyframeworkdemo-repo");
 
 describe("Python 框架入口（fixture 先于规则）", () => {
   it("Flask：入口锚在 app 构造行；同文件的路由与启动语句不再各出一条", () => {

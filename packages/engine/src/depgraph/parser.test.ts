@@ -2,9 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildDependencyGraph } from "./graph.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { indexRepository } from "../indexer/indexer.js";
-import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus, resetSymbolParserForTest } from "./parser.js";
+import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus, resetSymbolParserForTest } from "@codebase-tutor/analysis";
 
 /**
   语法树符号抽取：这里验证的是逐行文本匹配做不到的事——类方法、接口/类型别名、装饰器包裹的函数、精确的最后一行。

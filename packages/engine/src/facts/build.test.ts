@@ -6,9 +6,9 @@ import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@
 
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../store/database.js";
-import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
+import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysis";
 import { collectFileFacts, saveFileFacts } from "./build.js";
-import { FACTS_VERSION } from "./version.js";
+import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
   这里验接线，图算得对不对由 `cfg.test.ts` 管：

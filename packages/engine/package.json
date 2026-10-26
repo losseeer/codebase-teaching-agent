@@ -40,7 +40,8 @@
     "typescript-language-server": "^4.3.4",
     "web-tree-sitter": "^0.27.0",
     "zod": "^4.6.7",
-    "@codebase-tutor/platform": "workspace:*"
+    "@codebase-tutor/platform": "workspace:*",
+    "@codebase-tutor/analysis": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

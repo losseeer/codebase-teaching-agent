@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { languageCapabilitiesOf, type DeclaredType, type SymbolInfo } from "@codebase-tutor/domain";
 
-import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
+import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysis";
 import { analyzeFile } from "./build.js";
 
 /**

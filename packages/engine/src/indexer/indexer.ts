@@ -4,9 +4,9 @@ import { join, relative, extname } from "node:path";
 import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/domain";
 
 import { repositoryId, hash } from "@codebase-tutor/platform";
-import { graphExtensions } from "../depgraph/graph.js";
+import { graphExtensions } from "@codebase-tutor/analysis";
 import { deniedSecretNameReason } from "../source/read-file.js";
-import { createTutorIgnoreMatcher } from "./ignore.js";
+import { createTutorIgnoreMatcher } from "@codebase-tutor/analysis";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**

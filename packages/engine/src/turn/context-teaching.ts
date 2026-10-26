@@ -1,6 +1,6 @@
 import type { RepositoryAnalysis, RepositoryIndex, TeachingPolicy, TutorMessage } from "@codebase-tutor/domain";
 
-import { callNeighborhoodSection } from "../depgraph/neighbors.js";
+import { callNeighborhoodSection } from "@codebase-tutor/analysis";
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import { type ConversationTurn, renderConversation } from "../llm/conversation.js";
 import { sliceExcerpt } from "../source/excerpt.js";

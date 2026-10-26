@@ -1,7 +1,7 @@
 import { statSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { isIngestedPath, listIngestedPaths } from "./indexer.js";
-import { createTutorIgnoreMatcher, isTutorIgnoreFile, type TutorIgnoreMatcher } from "./ignore.js";
+import { createTutorIgnoreMatcher, isTutorIgnoreFile, type TutorIgnoreMatcher } from "@codebase-tutor/analysis";
 
 /**
   事件里那条路径相对监听开始的那一刻是什么：

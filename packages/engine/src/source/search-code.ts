@@ -1,6 +1,6 @@
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import { isTestPath } from "../depgraph/roles.js";
+import { isTestPath } from "@codebase-tutor/analysis";
 import type { LlmTool } from "../llm/provider.js";
 import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "@codebase-tutor/platform";
 

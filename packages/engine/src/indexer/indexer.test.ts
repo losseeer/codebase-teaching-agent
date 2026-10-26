@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { graphExtensions } from "../depgraph/graph.js";
+import { graphExtensions } from "@codebase-tutor/analysis";
 import { indexRepository, isIngestedPath, nonGraphExtensions, sourceExtensions } from "./indexer.js";
 
 /**

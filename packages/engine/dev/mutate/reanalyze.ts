@@ -10,9 +10,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { indexRepository } from "../../src/indexer/indexer.js";
-import { buildDependencyGraph, graphFromData, serializeGraph } from "../../src/depgraph/graph.js";
-import { loadSymbolParser } from "../../src/depgraph/parser.js";
-import { classifyFileRoles, fileStructureOf } from "../../src/depgraph/roles.js";
+import { buildDependencyGraph, graphFromData, serializeGraph } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
+import { classifyFileRoles, fileStructureOf } from "@codebase-tutor/analysis";
 import { TutorDatabase } from "../../src/store/database.js";
 
 const repositoryPath = (() => {

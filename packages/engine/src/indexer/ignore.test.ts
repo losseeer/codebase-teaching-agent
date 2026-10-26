@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { indexRepository } from "./indexer.js";
-import { createTutorIgnoreMatcher } from "./ignore.js";
+import { createTutorIgnoreMatcher } from "@codebase-tutor/analysis";
 
 const directories: string[] = [];
 

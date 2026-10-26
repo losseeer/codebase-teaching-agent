@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import type { FileEntry, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { indexRepository } from "../../src/indexer/indexer.js";
-import { buildDependencyGraph } from "../../src/depgraph/graph.js";
-import { loadSymbolParser } from "../../src/depgraph/parser.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
   编译器级精确模块图只当评测证据，引擎运行时一行都不读它。

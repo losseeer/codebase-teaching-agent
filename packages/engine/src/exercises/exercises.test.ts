@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 
-import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
+import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
@@ -17,7 +17,7 @@ import { selectZpdTarget } from "./zpd.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
 
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/frozen-demo-repo");
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {

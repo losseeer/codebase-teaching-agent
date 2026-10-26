@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 
-import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
+import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -23,7 +23,7 @@ import { ExerciseService, type PracticeRepository } from "./exercises.js";
 */
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/frozen-demo-repo");
 const temporaryDirectories: string[] = [];
 /** 夹具的真句柄（`PracticeRepository.handle`）：收尾要先关连接再删目录，否则 -wal/-shm 删不净。 */
 const handles: RepositoryHandle[] = [];

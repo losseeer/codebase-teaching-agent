@@ -3,11 +3,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer/indexer.js";
-import { buildDependencyGraph } from "./graph.js";
-import { impactRadius } from "./impact-radius.js";
+import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { impactRadius } from "@codebase-tutor/analysis";
 
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/frozen-demo-repo");
-const tsFixture = join(dirname(fileURLToPath(import.meta.url)), "../../test-fixtures/tsnext-demo-repo");
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/frozen-demo-repo");
+const tsFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/tsnext-demo-repo");
 
 describe("dependency graph v1", () => {
   it("returns callers in the impact radius of a changed imported file", () => {

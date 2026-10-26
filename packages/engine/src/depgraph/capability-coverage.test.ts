@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { LANGUAGE_BY_EXTENSION, LANGUAGE_CAPABILITIES, languageCapabilitiesOf, type CapabilityLevel } from "@codebase-tutor/domain";
 
-import { graphExtensions } from "./graph.js";
-import { loadSymbolParser } from "./parser.js";
-import { buildFileCfg } from "../facts/cfg.js";
+import { graphExtensions } from "@codebase-tutor/analysis";
+import { loadSymbolParser } from "@codebase-tutor/analysis";
+import { buildFileCfg } from "@codebase-tutor/analysis";
 
 /**
   语言能力表的回归。要拦的事故有三个：

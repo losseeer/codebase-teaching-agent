@@ -18,7 +18,7 @@ import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "
 
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillsToolContext } from "../source/tool-loop.js";
-import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";
+import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
