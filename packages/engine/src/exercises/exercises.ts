@@ -319,18 +319,21 @@ export class ExerciseService {
     const journal = repository.handle.journal;
     // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
     const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
-    const candidates = selectTagCandidates(repository, tag, 3, summaries);
+    const matched = selectTagCandidates(repository, tag, 3, summaries);
+    // 词法零命中不再直接拒题：改从仓库全景挑素材（有摘要 / 改动热点 / 有可讲的函数），仍是一次调用、仍带行号锚点，守门照旧可核
+    const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);
+    const selection = matched.length ? "tag" : "panorama";
     if (!candidates.length) {
-      // 零候选也要留痕：记录要分得清「没走到模型」与「被模型拒绝」，才知道该修选稿还是修提示词
-      journal.append("exercise_declined", { family: "llm", tag, reason: `词法候选选择没有命中任何与「${tag}」相关的源码文件。`, stage: "no_candidates" });
-      throw new Error(`这个主题在本仓找不到相关代码：「${tag}」。换一个更具体的主题名称试试。`);
+      // 零素材也要留痕：记录要分得清「没走到模型」与「被模型拒绝」，才知道该修选料还是修提示词
+      journal.append("exercise_declined", { family: "llm", tag, reason: `词法命中与仓库全景都挑不出可出题的源码文件（主题「${tag}」）。`, stage: "no_candidates" });
+      throw new Error(`这个仓库现在找不到能出题的代码：「${tag}」。换一个更具体的主题，或先让它完成一次分析。`);
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
     const scope = fileScope(deps, provider.modelVersion);
     const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") {
-      journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag });
+      journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection });
       return cached.exercise;
     }
     const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider, ...(skills ? { skills } : {}) });
@@ -375,7 +378,7 @@ export class ExerciseService {
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
     database.putExerciseCache(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
-    journal.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag });
+    journal.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection });
     return exercise;
   }
 
@@ -691,6 +694,38 @@ function selectTagCandidates(repository: PracticeRepository, tag: string, limit 
     .slice(0, limit);
   return scored.flatMap(({ path }) => {
     const candidate = buildTagCandidate(repository.path, path, windowSpan(symbolsByPath.get(path) ?? [], tokens));
+    return candidate ? [candidate] : [];
+  });
+}
+
+/**
+  全景选料：主题词在路径、符号名与摘要上都没命中时的兜底。判据只用已有产物——有 L1 摘要、改动热点、
+  有可讲的函数，三者打分排序；开窗用该文件里最大的那个函数，不再硬开 80 行。
+  同一份产物下结果必须确定：否则每次出题都是新的缓存作用域，缓存等于没有。
+ */
+function panoramaCandidates(repository: PracticeRepository, summaries: Map<string, string>, limit = 3): GuardCandidate[] {
+  const bodyOf = new Map<string, SymbolInfo>();
+  for (const symbol of repository.analysis.graph.symbols) {
+    if (symbol.kind !== "function" && symbol.kind !== "method") continue;
+    const best = bodyOf.get(symbol.path);
+    if (!best || symbol.endLine - symbol.line > best.endLine - best.line) bodyOf.set(symbol.path, symbol);
+  }
+  const hotspots = new Map(repository.index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
+  const scored = repository.index.files
+    .filter((file) => handledExtensions.has(file.extension))
+    .map((file) => {
+      const body = bodyOf.get(file.path);
+      return {
+        path: file.path,
+        score: (summaries.has(file.path) ? 20 : 0) + Math.min(hotspots.get(file.path) ?? 0, 10) + (body ? Math.min(body.endLine - body.line + 1, 30) : 0)
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, limit);
+  return scored.flatMap(({ path }) => {
+    const body = bodyOf.get(path);
+    const candidate = buildTagCandidate(repository.path, path, body ? { start: body.line, end: body.endLine } : { start: 1 });
     return candidate ? [candidate] : [];
   });
 }

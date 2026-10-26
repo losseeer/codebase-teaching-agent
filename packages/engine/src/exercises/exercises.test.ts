@@ -323,14 +323,16 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     database.close();
   });
 
-  it("主题与仓库零命中时不调用 LLM，抛出可换的标签提示并记 no_candidates 拒绝", async () => {
+  it("主题与仓库零命中时改从全景挑素材：仍打模型一次，并记 selection=panorama", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    await expect(service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider)).rejects.toThrow("这个主题在本仓找不到相关代码");
-    expect(calls).toHaveLength(0);
-    // 零候选也要留痕：记录要分得清「没走到模型」与「被模型拒绝」
-    expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "no_candidates")).toBe(true);
+    const exercise = await service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider);
+    expect(calls, "词法零命中不再直接拒题：全景挑得出的素材照样出题").toHaveLength(1);
+    expect(exercise.kind).toBe("llm_rubric");
+    const events = readJournal(repository.path);
+    expect(events.some((event) => event.type === "exercise_declined" && event.payload.stage === "no_candidates"), "不该再记零候选拒绝").toBe(false);
+    expect(events.find((event) => event.type === "exercise_generated" && event.payload.source === "llm")?.payload.selection, "留痕要分得清这次是命中选题还是全景兜底").toBe("panorama");
   });
 
   it("LLM 拒绝出题时抛出理由并记 exercise_declined journal", async () => {
