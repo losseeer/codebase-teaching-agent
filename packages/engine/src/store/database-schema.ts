@@ -123,7 +123,11 @@ export const DATABASE_SCHEMA_SQL = `
         scene TEXT NOT NULL,
         round INTEGER NOT NULL,
         input_hash TEXT NOT NULL,
+        -- 等用户回答那一档专用：模型与系统提示的指纹（不含答句）+ 挂着的那条调用 id。
+        -- 认领按这两格查，输入哈希那条路会整档跳过 await_user。
+        prompt_hash TEXT,
         stopped_reason TEXT,
+        pending_tool_call_id TEXT,
         payload TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY(thread_id, scene, round)

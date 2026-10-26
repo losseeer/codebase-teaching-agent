@@ -3,16 +3,16 @@ import type { AskFacet } from "../../source/ask-user.js";
 import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
-import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, skillsForTurn, threadScopedHistory } from "../../application/scoped-turn.js";
+import { externalAndSkills, finishMapChatTurn, persistScopedTurn, recheckTurn, scopedThread, scopedThreadTurn, skillsForTurn, threadScopedHistory, consecutiveAskedTurns, settleStaleAsks } from "../../application/scoped-turn.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../../application/turn-audit.js";
-import { sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
+import { sanitizeAskId, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
 import { scopedChatProviderOr422 } from "../gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
 import { turnTextPayload } from "../../store/journal.js";
 import { LlmAbortedError } from "../../llm/provider.js";
 import { type MapChatProgress, mapChat, practiceChat } from "../../turn/run-turn.js";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
-import { Journal } from "../../store/journal.js";
+import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
 import { traceEngine } from "../../trace/engine-log.js";
 import { abortTurn } from "../../application/turn-registry.js";
@@ -38,7 +38,7 @@ app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, repl
 });
 
 /** map-chat 流式版：SSE 推送过程事件（thinking / reading / searching），GUI 借此显示「回复生成中 / 正在读取 xx / 正在检索 xx」。 */
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown; resumeAsk?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const repository = repositoryOr404(request.params.repositoryId);
   if (!repository) return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   const content = request.body?.content?.trim();
@@ -51,6 +51,15 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
   const { send, turnHandle } = beginScopedStream(request, reply, "map_chat", request.body?.turnId);
   const crossFiles = new Map<string, number>();
   const overlayDatabase = repository.handle.pin();
+  // 认领的那一句：内容就是用户选中的答句，`resumeAsk` 带着当时挂着的调用 id 回来
+  const resumeAskId = sanitizeAskId(request.body?.resumeAsk);
+  const threadJournal = new Journal(repository.path, repository.index.repositoryId);
+  // 开火前先结算这条线程上不会再被回答的提问（过期 / 换话题），认领不算换话题
+  settleStaleAsks(repository, threadJournal, turn.threadId, resumeAskId);
+  const threadEvents = readJournal(repository.path).filter((event) => event.sessionId === turn.threadId);
+  // 连续两回合都在问 ⇒ 这一轮不给提问通道（第三句该按默认答并写明假设）；范围已知的回合本来就不缺那一格
+  const rangeKnown = Boolean(sanitizeScopePaths(request.body?.scopePaths)?.length || request.body?.path);
+  const askGiven = !rangeKnown && consecutiveAskedTurns(threadEvents) < 2;
   try {
     let writtenDiagram: { id: string; name: string } | undefined;
     const diagramContext = setDiagramToolFor(repository, overlayDatabase, turn.threadId, sanitizeDiagramId(request.body?.diagramId), (diagram) => { writtenDiagram = diagram; });
@@ -60,9 +69,11 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
-      // 缺哪一格由上下文判：画布已选中文件或绑定路径 = 范围不缺，这一轮连问的通道都不给。
-      // 「缺意图」那一格引擎无从判，交给模型按工具里写死的判据核——所以只有范围真缺时才下发。
-      ...(sanitizeScopePaths(request.body?.scopePaths)?.length || request.body?.path ? {} : { ask: { facets: ["range", "goal"] as AskFacet[] } }),
+      // 缺哪一格由上下文判：画布已选中文件或绑定路径 = 范围不缺；「缺意图」这一格交给模型按工具里写死的判据核。
+      // 认领的那一句必须带着 `resume` 进循环（否则答句就变成一句新提问），但能不能再问一句照旧受同一道闸管
+      ...(resumeAskId
+        ? { ask: { facets: askGiven ? (["range", "goal"] as AskFacet[]) : [], resume: { toolCallId: resumeAskId, answer: content } } }
+        : askGiven ? { ask: { facets: ["range", "goal"] as AskFacet[] } } : {}),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
       diagram: diagramContext,

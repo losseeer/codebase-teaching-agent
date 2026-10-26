@@ -6,7 +6,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared
 import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../llm/provider.js";
 import { LlmAbortedError } from "../llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithOptionalSkills, completeWithReadTool, toolLoopAuditsOf, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
+import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithOptionalSkills, completeWithReadTool, toolLoopAuditsOf, type ReadToolProgress, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
 
 /** repoPath 指向本目录：目录内 read-file.ts 是稳定存在的真实文件 */
 const repoPath = import.meta.dirname;
@@ -395,6 +395,34 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     expect(result.mcpCalls).toEqual([audit]);
   });
 
+  it("每一类工具活动都各自上一帧：技能、改图、查产物、外部调用都不该是静默的", async () => {
+    const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 4, masked: 0, ok: true, ms: 1 };
+    const { provider } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "k1", name: "read_skill", argumentsJson: JSON.stringify({ name: "demo" }) }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "d1", name: "set_diagram", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "f1", name: "query_facts", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "答完。", finishReason: "stop" }
+    ]);
+    const frames: ReadToolProgress[] = [];
+    await completeWithReadTool({
+      provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 6, maxCalls: 5,
+      skills: { brief: "可用技能：demo", bodyOf: () => "做法。" },
+      diagram: { apply: () => "已落成一张图。" },
+      facts: { apply: () => "在册：分层。" },
+      external: { tools: [externalTool], call: async () => ({ text: "外部正文", audit }) },
+      onProgress: (frame) => frames.push(frame)
+    });
+    // 一轮一件活动 ⇒ 帧序是「想 → 做 → 想 → 做 …」；少了哪一件，界面上就是「它只思考了」
+    expect(frames).toEqual([
+      { type: "thinking" }, { type: "loading_skill", skill: "demo" },
+      { type: "thinking" }, { type: "editing_diagram" },
+      { type: "thinking" }, { type: "querying_facts" },
+      { type: "thinking" }, { type: "calling_external" },
+      { type: "thinking" }
+    ]);
+  });
+
   it("外部调用另有每回合上限：用尽后不再打外部程序，回话照实说（免得模型以为工具坏了反复重试）", async () => {
     let fired = 0;
     const { provider, calls } = scriptedProvider([
@@ -630,6 +658,28 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
   function spyChannel(log: string[], seen: TurnLoopState[]): TurnCheckpointChannel {
     return { restore: () => undefined, save: (_hash, state, reason) => { log.push(reason ?? "progress"); seen.push(state); }, clear: () => { log.push("clear"); } };
   }
+  /**
+    重试那一路的假模型：modelVersion 与 `loopingProvider` 同一份（输入哈希才对得上），
+    先做一次取证、下一趟就答完——「接得上」与「做得完」两件事要能在同一趟重发里同时验。
+  */
+  function resumingProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
+    const calls: LlmCompletionInput[] = [];
+    let fired = 0;
+    return {
+      calls,
+      provider: {
+        name: "resuming",
+        modelVersion: "looping:v1",
+        async complete(input) {
+          calls.push(input);
+          fired += 1;
+          return fired === 1
+            ? { text: "", toolCalls: [{ id: "again1", name: "search_code", argumentsJson: JSON.stringify({ query: "zzz-不存在" }) }], finishReason: "tool_calls" as const }
+            : { text: "接着读到的东西答完了。", finishReason: "stop" as const };
+        }
+      }
+    };
+  }
 
   it("轮次用完：不再发收尾那一趟，快照留着并写明原因", async () => {
     const { provider, calls } = loopingProvider();
@@ -667,13 +717,32 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
     const once = loopingProvider();
     await completeWithReadTool({ provider: once.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(states.size, "中断该留下一份快照").toBe(1);
-    const again = loopingProvider();
+    const again = resumingProvider();
     const resumed = await completeWithReadTool({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(resumed.resumedFromRound, "同一句、同一模型、同一份系统提示 ⇒ 接得上，用户点重试不该是从头再来").toBe(1);
-    expect(again.calls.length, "接上就只发这一趟").toBe(1);
     const carried = again.calls[0].messages ?? [];
     expect(carried.some((message) => message.role === "tool" && message.content.includes("这一轮在这里中断")), "续跑的请求里得带着中断那一句，否则模型不知道自己是接着做的").toBe(true);
     expect(carried[0].content, "首轮那条装了上下文的 user 消息不能因续跑而丢").toBe("画张图");
+    expect(resumed.completion.text).toBe("接着读到的东西答完了。");
+  });
+
+  it("点重试的那一次自己有整份轮数配额：不然它一开火就再撞同一道闸，那颗按钮是摆设", async () => {
+    const states = new Map<string, { round: number; state: TurnLoopState }>();
+    const channel: TurnCheckpointChannel = {
+      restore: (key) => states.get(key),
+      save: (key, state) => { states.set(key, { round: state.rounds, state }); },
+      clear: () => { states.clear(); }
+    };
+    const stopped = await completeWithReadTool({ provider: loopingProvider().provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    expect(stopped.interrupted?.reason).toBe("rounds");
+
+    const again = resumingProvider();
+    const resumed = await completeWithReadTool({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    expect(resumed.resumedFromRound, "接上的正是中断那一轮之后").toBe(2);
+    // 中断那次已经把累计轮数顶满了：闸门若跟着累计走，重试第一趟就要取证、第二趟直接被同一道闸拦下
+    expect(resumed.interrupted, "重试是「再给一次机会」，不是「再撞一次同一道闸」").toBeUndefined();
+    expect(resumed.completion.text).toBe("接着读到的东西答完了。");
+    expect(again.calls.length, "本次配额下真做了实事：一趟取证 + 一趟作答").toBe(2);
   });
 
   it("不开这一档就还是老结局：回绝掉挂着的调用，再发一趟不带工具的收尾", async () => {
@@ -716,24 +785,103 @@ describe("completeWithOptionalSkills（出题与练习答疑的技能通道）",
   });
 });
 
-describe("ask_user（回合内提问：问句即本轮正文，就地收尾）", () => {
+describe("ask_user（回合内提问：问句即本轮正文，快照留着等认领）", () => {
   const facets = ["range", "goal"] as ("range" | "goal")[];
   const askCall = (id: string, args: Record<string, unknown>): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "ask_user", argumentsJson: JSON.stringify(args) }], finishReason: "tool_calls" });
-  /** 记录检查点动作的假通道：刀 1 要求提问这一轮一个字都不写。 */
-  function spyCheckpoint(log: string[]): TurnCheckpointChannel {
-    return { restore: () => undefined, save: (_hash, _state, reason) => { log.push(reason ?? "progress"); }, clear: () => { log.push("clear"); } };
-  }
   const base = { provider: undefined as unknown as LlmProvider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 4, maxCalls: 4 };
+  /** 照 `turn_checkpoint` 的取行口径重演一遍：哈希那条路跳过 `await_user`，认领只比调用 id 与提示指纹。 */
+  function fakeStore() {
+    const rows: { inputHash: string; stoppedReason?: string; promptHash?: string; pendingToolCallId?: string; state: TurnLoopState }[] = [];
+    return {
+      rows,
+      channel: {
+        restore: (inputHash) => {
+          const hit = rows.filter((row) => row.stoppedReason !== "await_user" && row.inputHash === inputHash).at(-1);
+          return hit ? { round: hit.state.rounds, state: hit.state } : undefined;
+        },
+        claimAsk: (pendingToolCallId, promptHash) => {
+          const hit = rows.find((row) => row.pendingToolCallId === pendingToolCallId);
+          if (!hit) return undefined;
+          // 取到即删（与 `claimTurnCheckpoint` 同口径）：答了就等于关闭，核不上也不该留给下一回合再结算
+          rows.splice(rows.indexOf(hit), 1);
+          return hit.promptHash === promptHash ? { round: hit.state.rounds, state: hit.state } : undefined;
+        },
+        save: (inputHash: string, state: TurnLoopState, stoppedReason?: string, ask?: { promptHash: string; pendingToolCallId: string }) => {
+          rows.push({ inputHash, state, ...(stoppedReason ? { stoppedReason } : {}), ...(ask ?? {}) });
+        },
+        clear: () => { rows.length = 0; }
+      } satisfies TurnCheckpointChannel
+    };
+  }
+  const question = { facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] };
 
-  it("问一句就不再发第二次调用；正文是「问句 + 可选项」；检查点不写", async () => {
-    const { provider, calls } = scriptedProvider([askCall("a1", { facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] })]);
-    const log: string[] = [];
-    const result = await completeWithReadTool({ ...base, provider, ask: { facets }, checkpoint: spyCheckpoint(log) });
+  it("问一句就不再发第二次调用；正文是「问句 + 可选项」；只留一份等回答的快照", async () => {
+    const { provider, calls } = scriptedProvider([askCall("a1", question)]);
+    const store = fakeStore();
+    const result = await completeWithReadTool({ ...base, provider, ask: { facets }, checkpoint: store.channel });
     expect(calls.length, "提问就是本轮成品，不该再烧一趟调用").toBe(1);
     expect(result.completion.text).toBe("这张图画哪一块？\n可选项：整仓 / 下单那条");
-    expect(result.asked).toEqual({ facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] });
-    expect(calls[0].messages ?? [], "没回灌 tool_result，也没第二条请求可查").toEqual([]);
-    expect(log, "刀 1 没有「等用户回答再接着算」的语义：留着快照只会在下次误续跑一个已经收尾的回合").toEqual(["clear"]);
+    expect(result.asked).toEqual({ ...question, toolCallId: "a1" });
+    expect(store.rows).toEqual([{ inputHash: expect.any(String), state: expect.any(Object), stoppedReason: "await_user", promptHash: expect.any(String), pendingToolCallId: "a1" }]);
+  });
+
+  it("认领一句提问：答句回灌到挂着的那条调用，接着算而不是从头再来", async () => {
+    const store = fakeStore();
+    const first = scriptedProvider([askCall("a1", question)]);
+    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+
+    const again = scriptedProvider([{ text: "那就画下单那条。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "下单那条" } }, checkpoint: store.channel });
+    expect(result.askClaimed).toEqual({ toolCallId: "a1", outcome: "claimed" });
+    expect(result.resumedFromRound, "认领回到的正是问出那句的那一轮").toBe(1);
+    expect(again.calls.length, "接上之后只发这一趟：已读过的上下文不该重付").toBe(1);
+    const carried = again.calls[0].messages ?? [];
+    expect(carried[0].content, "首轮那条装了上下文的 user 消息不能因续跑而丢").toBe("画张图");
+    expect(carried.at(-1), "答句是那条调用的回执，不是新的一句话").toEqual({ role: "tool", toolCallId: "a1", content: "下单那条" });
+    expect(result.completion.text).toBe("那就画下单那条。");
+  });
+
+  it("同一句原样重发绝不接上「等回答」的快照", async () => {
+    const store = fakeStore();
+    const first = scriptedProvider([askCall("a1", question)]);
+    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    const again = scriptedProvider([{ text: "按整仓画。", finishReason: "stop" }]);
+    const result = await completeWithReadTool({ ...base, provider: again.provider, ask: { facets }, checkpoint: store.channel });
+    expect(result.resumedFromRound, "重发走的是哈希那条路：接到一句没人答的提问上，模型会以为自己已经问过了").toBeUndefined();
+    expect(again.calls[0].user).toBe("画张图");
+  });
+
+  it("换了模型就不认领：老实重跑，并把「没认上」报出去", async () => {
+    const store = fakeStore();
+    const first = scriptedProvider([askCall("a1", question)]);
+    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    const otherModel: LlmProvider = { name: "scripted", modelVersion: "scripted:v2", complete: async () => ({ text: "整仓三层。", finishReason: "stop" }) };
+    const result = await completeWithReadTool({ ...base, provider: otherModel, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
+    expect(result.askClaimed).toEqual({ toolCallId: "a1", outcome: "missed" });
+    expect(result.resumedFromRound, "另一家模型的中间状态接过来就是答非所问").toBeUndefined();
+    expect(result.completion.text).toBe("整仓三层。");
+  });
+
+  it("同一批里排在被问调用之后的调用先拿到一句实话：认领时的消息数组才合法", async () => {
+    const store = fakeStore();
+    const first = scriptedProvider([{
+      text: "",
+      toolCalls: [
+        { id: "a1", name: "ask_user", argumentsJson: JSON.stringify(question) },
+        { id: "r1", name: "read_file", argumentsJson: JSON.stringify({ path: "tool-loop.ts" }) }
+      ],
+      finishReason: "tool_calls"
+    }]);
+    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+
+    const again = scriptedProvider([{ text: "整仓三层。", finishReason: "stop" }]);
+    await completeWithReadTool({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
+    const carried = again.calls[0].messages ?? [];
+    const asked = carried.flatMap((message) => message.toolCalls ?? []).map((call) => call.id).sort();
+    const replies = carried.filter((message) => message.role === "tool").map((message) => message.toolCallId).sort();
+    expect(replies, "认领发出去的那一趟，每个调用都要有回执（悬挂的会被协议层拒）").toEqual(asked);
+    expect(carried.filter((message) => message.toolCallId === "r1"), "同一条调用只许有一份回执").toHaveLength(1);
+    expect(carried.some((message) => message.toolCallId === "r1" && String(message.content).includes("这一条没有执行"))).toBe(true);
   });
 
   it("一句里塞两个提问：只认第一个，第二句不但不执行也不再发调用", async () => {

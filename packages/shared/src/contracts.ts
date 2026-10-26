@@ -199,11 +199,19 @@ export type CostSummary = z.infer<typeof costSummarySchema>;
 export const turnSceneSchema = z.enum(["teach", "map_chat", "practice_chat"]);
 export type TurnScene = z.infer<typeof turnSceneSchema>;
 
-/** 教学回合的过程提示（`{stage}` 形状）：引擎 `harness` 发它，文案由界面定（引擎不关心中文措辞，界面不猜阶段语义）。 */
+/**
+  教学回合的过程提示（`{stage}` 形状）：引擎 `harness` 发它，文案由界面定（引擎不关心中文措辞，界面不猜阶段语义）。
+  读文件、检索、取技能、改图、查产物、打外部程序各成一档——没有帧的活动在界面上就是「没发生过」，用户只会看到一串「正在思考」。
+  思考不带轮数：轮数是引擎自己的成本读数（journal 的 `loop_round`），不是给用户看的进度。
+  */
 export const teachingProgressSchema = z.discriminatedUnion("stage", [
-  z.object({ stage: z.literal("thinking"), round: z.number() }),
+  z.object({ stage: z.literal("thinking") }),
   z.object({ stage: z.literal("reading"), path: z.string() }),
-  z.object({ stage: z.literal("searching"), query: z.string() })
+  z.object({ stage: z.literal("searching"), query: z.string() }),
+  z.object({ stage: z.literal("loading_skill"), skill: z.string() }),
+  z.object({ stage: z.literal("editing_diagram") }),
+  z.object({ stage: z.literal("querying_facts") }),
+  z.object({ stage: z.literal("calling_external") })
 ]);
 export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
 
@@ -217,9 +225,13 @@ export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
   那部分仍由各自的返回体声明；这里只锁过程帧的种类与形状。
 */
 export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("thinking"), round: z.number() }),
+  z.object({ type: z.literal("thinking") }),
   z.object({ type: z.literal("reading"), path: z.string() }),
   z.object({ type: z.literal("searching"), query: z.string() }),
+  z.object({ type: z.literal("loading_skill"), skill: z.string() }),
+  z.object({ type: z.literal("editing_diagram") }),
+  z.object({ type: z.literal("querying_facts") }),
+  z.object({ type: z.literal("calling_external") }),
   z.object({ type: z.literal("progress"), payload: teachingProgressSchema }),
   z.object({ type: z.literal("delta"), delta: z.string() })
 ]);

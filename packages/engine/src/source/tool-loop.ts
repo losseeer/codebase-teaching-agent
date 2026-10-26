@@ -10,7 +10,7 @@ import { CROSS_REPO_LINK_TOOL } from "../depgraph/seams.js";
 import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
 import { QUERY_FACTS_TOOL } from "../facts/query.js";
 import { READ_SKILL_TOOL } from "../integrations/skills.js";
-import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskFacet, type AskUserAudit } from "./ask-user.js";
+import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskClaimAudit, type AskFacet, type AskResume, type AskUserAudit } from "./ask-user.js";
 
 /**
   read_file / search_code 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
@@ -25,8 +25,12 @@ import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskFacet, t
     不吞成「基于已有上下文直接回答」的收尾结论（那会把用户主动停止伪装成模型答完）。
   */
 
-/** 工具循环的过程事件；类型取自 `shared` 的 `ScopedStreamProgress`，与 SSE 帧共用同一份词表。 */
-export type ReadToolProgress = Extract<ScopedStreamProgress, { type: "thinking" | "reading" | "searching" }>;
+/**
+  工具循环发得出来的过程帧：正文帧（`delta`）与教学那条流包过一层的（`progress`）都不在此列。
+  写成「减掉那两类」而不是「点名列出这几类」：循环里新加一类活动，不必回来补一份名单，
+  漏发一帧才是唯一可能悄悄发生的错。
+*/
+export type ReadToolProgress = Exclude<ScopedStreamProgress, { type: "delta" } | { type: "progress" }>;
 
 export interface ReadToolLoopInput {
   provider: LlmProvider;
@@ -62,8 +66,9 @@ export interface ReadToolLoopInput {
   /**
     回合内向用户提问的通道：只在本轮上下文确实缺某一格时才给（服务层算缺哪一格）。
     不给 = 清单里没有 `ask_user`，回合行为与从前逐字一致。一次回合最多问一次（循环内的本地判据）。
+    `resume` = 这一句是用户对上一回合提问的回答：带着当时挂着的调用 id 与所选答句，认领成功就把这条调用回灌后接着算。
   */
-  ask?: { facets: AskFacet[] };
+  ask?: { facets: AskFacet[]; resume?: AskResume };
   /**
     外部 MCP 工具面，默认不给：每条外部工具的 schema 都要进每一轮请求的 token，
     还会改变请求前缀的形状（前缀缓存按请求头部算）。服务层只在配置文件里真有启用的 server 时才传。
@@ -233,6 +238,8 @@ export interface ReadToolLoopResult {
   askRefused?: string;
   /** 本轮被中断（预算到线或轮次用完）：没有成品，`detail` 就是界面那句话的原因，快照留着等用户点重试。 */
   interrupted?: TurnInterrupt;
+  /** 这一句是来认领上一回合提问的回答：带着认领的那条调用 id 与结局（`claimed` 接上了；`missed` 没接上——过期、换模型或已被消费，本轮照新回合跑）。 */
+  askClaimed?: AskClaimAudit;
 }
 
 /**
@@ -268,9 +275,14 @@ export interface TurnLoopState {
   - 写失败不掀回合：检查点是省钱的旁路，不是回合的前提。
 */
 export interface TurnCheckpointChannel {
-  /** 上一回合留下的状态；`inputHash` 对不上（换了提问、模型或系统提示词）就回 `undefined`，宁可不续跑。 */
+  /** 上一回合留下的状态；`inputHash` 对不上（换了提问、模型或系统提示词）就回 `undefined`，宁可不续跑。等用户回答那一档不会被这条路取到。 */
   restore: (inputHash: string) => { round: number; state: TurnLoopState } | undefined;
-  save: (inputHash: string, state: TurnLoopState, stoppedReason?: string) => void;
+  /**
+    认领一句提问：按挂着的调用 id + 「模型与系统提示」那份指纹取状态。取不到就是没得认领（过期、换模型、已被清）。
+    可省略：只有会「等人回答」的那条通道需要它，纯崩溃续跑的通道给个空操作就够。
+  */
+  claimAsk?: (pendingToolCallId: string, promptHash: string) => { round: number; state: TurnLoopState } | undefined;
+  save: (inputHash: string, state: TurnLoopState, stoppedReason?: string, ask?: { promptHash: string; pendingToolCallId: string }) => void;
   clear: () => void;
 }
 
@@ -285,11 +297,20 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const skillReads: { skill: string; chars: number; found: boolean }[] = [];
   const mcpCalls: McpCallAudit[] = [];
   let rounds = 0;
+  /**
+    本次请求里已开的工具轮数。`rounds` 是这场对话累计的（快照与审计都跟着它走，续跑才知道接到第几轮），
+    中断闸门看的却是这一份：接上的状态本来就停在累计上限上，闸门若也用累计值，
+    用户点重试 ⇒ 第一趟取证 ⇒ 立刻再撞同一道闸、再报一次「执行耗时过长」——那颗按钮就成了摆设。
+    回绝后收尾那一档仍按累计值判：问答类作用域没有重试入口，累计上限就是它的成本上限。
+    真正兜住花费的是预算闸（`budgetGuard`），它按本仓本月实付算，重试多少次都照样挡。
+  */
+  let attemptRounds = 0;
   let succeededReads = 0;
   let crossReads = 0;
   let externalCalls = 0;
   let asked: AskUserAudit | undefined;
   let askRefused: string | undefined;
+  let askClaimed: AskClaimAudit | undefined;
   let interrupted: TurnInterrupt | undefined;
   let usage: LlmUsage | undefined;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
@@ -299,10 +320,16 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let completion: LlmCompletion;
   // 指纹把「同一个问题」钉住：线程续得上、提问也必须是同一句，否则接的是别人的中间状态
   const inputHash = hash(`${provider.modelVersion}:${system}:${input.user}`);
+  // 另一份不含答句的指纹：认领时用户给的是选项，不是原问题，只能按「模型 + 系统提示」这一截核
+  const promptHash = hash(`${provider.modelVersion}:${system}`);
   try {
-    const restored = input.checkpoint?.restore(inputHash);
+    // 认领优先：这一句是对上一回合提问的回答。取不到（过期、换模型、已被清）就照新回合跑，并把「没认领上」报出去。
+    const claimed = input.ask?.resume ? input.checkpoint?.claimAsk?.(input.ask.resume.toolCallId, promptHash) : undefined;
+    if (input.ask?.resume) askClaimed = { toolCallId: input.ask.resume.toolCallId, outcome: claimed ? "claimed" : "missed" };
+    const restored = claimed ?? input.checkpoint?.restore(inputHash);
     if (restored) {
       messages.splice(0, messages.length, ...restored.state.messages);
+      if (claimed && input.ask?.resume) messages.push({ role: "tool", toolCallId: input.ask.resume.toolCallId, content: input.ask.resume.answer });
       rounds = restored.state.rounds;
       succeededReads = restored.state.succeededReads;
       crossReads = restored.state.crossReads;
@@ -313,11 +340,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       mcpCalls.push(...restored.state.mcpCalls);
       resumedFromRound = restored.round;
       // 恢复的是「第 N 轮做完」的状态，接下来开第 N+1 轮：这一次带工具，续在同一线程的上下文之后
-      input.onProgress?.({ type: "thinking", round: rounds + 1 });
+      input.onProgress?.({ type: "thinking" });
       compactTurnContext(messages);
       completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     } else {
-      input.onProgress?.({ type: "thinking", round: 1 });
+      input.onProgress?.({ type: "thinking" });
       completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     }
   } catch (error) {
@@ -332,12 +359,12 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     const budgetStop = input.budgetGuard?.();
     // 读文件额度只在有文件面时才算：出题与练习答疑没有 read_file，`maxCalls` 给 0 不该被读成「额度用完」。
     const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= input.maxCalls;
-    const roundsSpent = rounds >= input.maxRounds;
+    const roundsSpent = input.interruptAtLimit ? attemptRounds >= input.maxRounds : rounds >= input.maxRounds;
     // 长回合到限就中断（不出成品，交给用户点重试）：只有宏观设计开这一档——问答类上限本来就低，
-    // 到限硬答一句比白跑一趟划算，而 10 轮还没完通常意味着它陷在取证里，硬答出来的东西更不可信。
+    // 到限硬答一句比白跑一趟划算，而连开几十轮还没完通常意味着它陷在取证里，硬答出来的东西更不可信。
     if (input.interruptAtLimit && (budgetStop || roundsSpent)) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
-      const detail = budgetStop ?? `工具轮次已用完（${rounds} 轮）`;
+      const detail = budgetStop ?? `这一次已连开 ${attemptRounds} 轮工具调用，还没到能答完的程度`;
       // 未应答的 tool_call 先回一句实话再存快照：带着悬挂调用的消息数组下次发出去会被协议层直接拒
       for (const call of completion.toolCalls) messages.push({ role: "tool", toolCallId: call.id, content: `这一轮在这里中断：${detail}。接着做就从这里继续，已读过的内容不必重读。` });
       interrupted = { reason: budgetStop ? "budget" : "rounds", detail };
@@ -359,7 +386,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: refusal });
       }
-      input.onProgress?.({ type: "thinking", round: rounds + 2 });
+      input.onProgress?.({ type: "thinking" });
       // 这是本回合最后一次调用：折叠换来的省没有下一轮可享，把刚读到的正文抽走只会让这一回合交不出东西。
       // 所以早期轮次的工具原文留着（reasoning 照丢，那才是账单大头）。
       compactTurnContext(messages, { keepToolResults: true });
@@ -368,6 +395,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       break;
     }
     rounds += 1;
+    attemptRounds += 1;
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
       if (call.name === CROSS_REPO_LINK_TOOL.name) {
@@ -397,16 +425,19 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {
         // 结构改动一次一回执：落成了什么、被降了几条边、或为什么整次拒写
+        input.onProgress?.({ type: "editing_diagram" });
         messages.push({ role: "tool", toolCallId: call.id, content: input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。" });
         continue;
       }
       if (call.name === QUERY_FACTS_TOOL.name) {
+        input.onProgress?.({ type: "querying_facts" });
         messages.push({ role: "tool", toolCallId: call.id, content: input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。" });
         continue;
       }
       if (call.name === READ_SKILL_TOOL.name && input.skills) {
         const skill = readSkillHint(call.argumentsJson);
         const file = readSkillFileHint(call.argumentsJson);
+        input.onProgress?.({ type: "loading_skill", skill });
         const body = input.skills.bodyOf(skill, file);
         // 「取到了但正文是空的」与「没有这份技能」是两个读数：用 Boolean(body) 会把前者判成后者，
         // 模型于是回用户一句「这个技能不存在」——那是假话
@@ -431,8 +462,13 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           messages.push({ role: "tool", toolCallId: call.id, content: "本轮已经问过一句了，不能再问第二句。请基于已读到的内容作答，把没核实的部分写明。" });
           continue;
         }
-        // 提问即收尾：这句之后不回灌 tool_result、不再发第二次调用，未应答的 tool_call 就留在 messages 末尾
-        asked = attempt.ask;
+        // 提问即收尾：这句之后不回灌 tool_result、不再发第二次调用；被问的那条调用留着不答，认领时才有东西可答
+        asked = { ...attempt.ask, toolCallId: call.id };
+        // 同一批里排在这条之后的调用不会再执行：不先给它们一句实话，认领时那条 assistant 就带着多个悬挂调用（协议层直接拒）
+        const answered = new Set(messages.map((message) => message.toolCallId));
+        for (const sibling of completion.toolCalls) {
+          if (sibling.id !== call.id && !answered.has(sibling.id)) messages.push({ role: "tool", toolCallId: sibling.id, content: "本轮改为先向用户问一句，这一条没有执行。" });
+        }
         break;
       }
       if (input.external?.tools.some((tool) => tool.name === call.name)) {
@@ -443,6 +479,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           continue;
         }
         externalCalls += 1;
+        // 外部程序是别人写的进程：慢的时候几十秒，不发一帧就等于界面以为它卡在模型思考上
+        input.onProgress?.({ type: "calling_external" });
         const outcome = await input.external.call(call.name, call.argumentsJson);
         mcpCalls.push(outcome.audit);
         messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
@@ -485,16 +523,19 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       messages.push({ role: "tool", toolCallId: call.id, content: repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content });
     }
-    // 问了就收尾：这一份不写检查点（刀 1 没有「等用户回答再接着算」的语义，留着快照只会在下次误续跑）
+    // 问了就收尾：等回答的那一档在下面单独留一份快照（见 `await_user`），这一轮的正文就是那句问句
     if (asked) break;
     // 一个 super-step 落一份快照：进程在这之后被杀掉，下一次同线程同问题的请求就从这里接上
     input.checkpoint?.save(inputHash, snapshot());
-    input.onProgress?.({ type: "thinking", round: rounds + 1 });
+    input.onProgress?.({ type: "thinking" });
     compactTurnContext(messages);
     completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     usage = addUsage(usage, completion.usage);
   }
-  if (interrupted) {
+  if (asked) {
+    // 等回答的这一档：留快照并把「挂着的调用 id + 模型与系统提示的指纹」写在行上，点选项才认领得到、换模型就认不上
+    input.checkpoint?.save(inputHash, snapshot(), "await_user", { promptHash, pendingToolCallId: asked.toolCallId });
+  } else if (interrupted) {
     // 中断不是「答完了」：留一份写明原因的快照，用户点重试就是同一句重发，输入哈希相同 ⇒ 从这里接上，读过的不重付
     input.checkpoint?.save(inputHash, snapshot(), "interrupted");
   } else {
@@ -503,7 +544,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   }
   // 提问这一轮交出去的成品就是问句：正文 = 问句 + 可选项，落库、回放、journal 三处仍读同一份文本
   if (asked) completion = { ...completion, text: askBody(asked) };
-  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }), ...(interrupted === undefined ? {} : { interrupted }) };
+  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }), ...(interrupted === undefined ? {} : { interrupted }), ...(askClaimed === undefined ? {} : { askClaimed }) };
   } catch (error) {
     // 「读过哪些文件、搜过什么、调过哪些外部工具」是已发生的事实，中止与失败两条路都要把它带出循环
     attachToolLoopAudits(error, audits());

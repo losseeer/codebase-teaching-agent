@@ -108,9 +108,9 @@ describe("mapChat", () => {
     });
     expect(result.reply).toContain("读完文件后的回答");
     expect(progressEvents).toEqual([
-      { type: "thinking", round: 1 },
+      { type: "thinking" },
       { type: "reading", path: "run-turn.ts" },
-      { type: "thinking", round: 2 }
+      { type: "thinking" }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
     /*

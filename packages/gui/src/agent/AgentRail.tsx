@@ -79,7 +79,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text) => { void t.sendMap(text); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text, askId) => { void t.sendMap(text, askId); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} liveAskId={t.liveAsk[scope]} />)}
         {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时逐行顶上——一行一件事，看得见它真读过哪些文件 */}
         {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -181,7 +181,7 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
     // 绑定只认四种情形：目录里选文件 / 选中模块 / 选中环节 / 画布上正打开的那张图
     const binding = t.mapBinding;
-    if (!binding) return t.openDiagram ? `当前图 · ${t.openDiagram.name}` : "未绑定 —— 选中节点 / 文件，或直接让 agent 画一张";
+    if (!binding) return t.openDiagram ? `当前图 · ${t.openDiagram.name}` : "未选中节点 / 文件";
     if (binding.kind === "file") return `文件 · ${binding.path}`;
     return binding.path ? `节点「${binding.title}」 · ${binding.path}` : `节点「${binding.title}」`;
   }
@@ -197,7 +197,7 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 /**
   会话条（当前作用域一份独立列表）：新建 / 切换 / 重命名 / 删除。
   下拉里只列**谈过的**会话（引擎按正文过滤）；点＋只是清空当前线程，第一句话才让引擎发线程 id，
-  「（还没有发言的会话）」这一格只服务历史上建了却没发言的那几条。
+  「（新会话）」这一格只服务历史上建了却没发言的那几条。
   切哪条就按 threadId 回读哪条的历史。删除是软删：列表与正文从此看不见，
   库里的行与 journal 的审计事件（session_deleted）都还在。
  */
@@ -240,8 +240,8 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
           title="只列谈过的会话"
           onChange={(event) => t.switchThread(scope, event.target.value || null)}
         >
-          {!currentId ? <option value="">（未选择会话）</option> : null}
-          {unsent ? <option value={currentId ?? ""}>（还没有发言的会话）</option> : null}
+          {!currentId ? <option value="">（新会话）</option> : null}
+          {unsent ? <option value={currentId ?? ""}>（新会话）</option> : null}
           {list.map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}
         </select>
       </div>
@@ -269,7 +269,7 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
 }
 
 /** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
-function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string) => void; onRetry?: (text: string) => void; answerable?: boolean }): ReactElement {
+function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable, liveAskId }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string, askId?: string) => void; onRetry?: (text: string) => void; answerable?: boolean; liveAskId?: string | null }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;
   const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
@@ -293,11 +293,11 @@ function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable }: { i
   return (
     <div className={`msg msg-${agent ? "agent" : "user"}`}>
       <div className={`msg-bubble${tone}`}>{body}</div>
-      {/* 提问的候选：只在能立刻回答时出现（没有在途回合）。灰着摆这儿等于骗用户点，点下去什么也不发 */}
-      {options?.length && answerable ? (
+      {/* 提问的候选：只有「还等着答的那一句」且没有在途回合时才出现。灰着摆这儿等于骗用户点，点下去什么也不发 */}
+      {options?.length && answerable && item.id === liveAskId ? (
         <div className="msg-asks" role="group" aria-label="选一个答回去">
           {options.map((option) => (
-            <button key={option} type="button" className="btn btn-sm btn-ghost" onClick={() => onAnswer?.(option)}>{option}</button>
+            <button key={option} type="button" className="btn btn-sm btn-ghost" onClick={() => onAnswer?.(option, agent?.askId)}>{option}</button>
           ))}
         </div>
       ) : null}

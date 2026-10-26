@@ -32,7 +32,7 @@ export function turnCheckpointChannel(input: {
 }): TurnCheckpointChannel {
   const { repositoryPath, threadId, scene } = input;
   if (input.enabled === false || !threadId) {
-    return { restore: () => undefined, save: () => undefined, clear: () => undefined };
+    return { restore: () => undefined, claimAsk: () => undefined, save: () => undefined, clear: () => undefined };
   }
   return {
     restore: (inputHash) => {
@@ -49,7 +49,20 @@ export function turnCheckpointChannel(input: {
         return undefined;
       }
     },
-    save: (inputHash, state, stoppedReason) => {
+    claimAsk: (pendingToolCallId, promptHash) => {
+      try {
+        return withDatabase(repositoryPath, (database) => {
+          database.pruneTurnCheckpoints(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
+          const row = database.claimTurnCheckpoint<TurnLoopState>(threadId, scene, pendingToolCallId, promptHash);
+          if (!row || !Array.isArray(row.payload.messages) || !row.payload.messages.length) return undefined;
+          return { round: row.round, state: row.payload };
+        });
+      } catch (error) {
+        traceEngine("degrade", { component: "turn_checkpoint", action: "claim_ask", cause: error instanceof Error ? error.message : String(error) });
+        return undefined;
+      }
+    },
+    save: (inputHash, state, stoppedReason, ask) => {
       // 上限按字节判（`CHECKPOINT_MAX_BYTES`）：`JSON.stringify().length` 数的是 UTF-16 字符，
       // 快照里的源码与中文注释多字节占大头，按字符算会把上限悄悄放宽近三倍。
       const size = Buffer.byteLength(JSON.stringify(state), "utf8");
@@ -64,6 +77,7 @@ export function turnCheckpointChannel(input: {
           round: state.rounds,
           inputHash,
           ...(stoppedReason ? { stoppedReason } : {}),
+          ...(ask ? { promptHash: ask.promptHash, pendingToolCallId: ask.pendingToolCallId } : {}),
           payload: state
         }));
       } catch (error) {

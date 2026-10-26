@@ -22,3 +22,11 @@ export function sanitizeThreadId(value: unknown): string | undefined {
 export function sanitizeDiagramId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
 }
+
+/**
+  「回答上一回合那句提问」的认领句柄：服务商给的调用 id，同样只截长不校验存在性——
+  认不认得上由检查点那一层判（过期、换模型都会认不上，那时老实当新回合跑）。
+*/
+export function sanitizeAskId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : undefined;
+}

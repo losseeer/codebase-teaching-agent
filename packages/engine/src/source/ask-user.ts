@@ -12,6 +12,20 @@ export interface AskUserAudit {
   facet: AskFacet;
   question: string;
   options: string[];
+  /** 挂着未答的那条调用 id：界面点选项时要带它回来，认领才找得到是哪一句提问被回答。 */
+  toolCallId: string;
+}
+
+/** 认领上一回合的提问：挂着的调用 id + 用户选定的那句答句。 */
+export interface AskResume {
+  toolCallId: string;
+  answer: string;
+}
+
+/** 一次认领的结果：`toolCallId` 说清认领的是哪一句，`outcome` 说接上没有（核不上=换模型、过期或已被消费）。 */
+export interface AskClaimAudit {
+  toolCallId: string;
+  outcome: "claimed" | "missed";
 }
 
 const MAX_QUESTION = 40;
@@ -48,7 +62,7 @@ export function askUserToolFor(facets: AskFacet[]): LlmTool {
   校验一次提问。不合法不掀回合——回一句给模型看的实话，它照样能接着作答；
   但一次合法的提问会让循环就地收尾（见 `tool-loop.ts`）。
 */
-export function parseAsk(argumentsJson: string, allowed: AskFacet[]): { ok: true; ask: AskUserAudit } | { ok: false; reason: string } {
+export function parseAsk(argumentsJson: string, allowed: AskFacet[]): { ok: true; ask: Omit<AskUserAudit, "toolCallId"> } | { ok: false; reason: string } {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(argumentsJson || "{}") as Record<string, unknown>;

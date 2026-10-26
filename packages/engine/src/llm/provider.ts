@@ -333,7 +333,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       // 顺序是刻意的：先归因外部中止，再判超时——否则用户点停止会被写成「请求超时」并被重试层重发。
       if (attributed instanceof LlmAbortedError) throw attributed;
       if (attributed instanceof Error && attributed.name === "AbortError") {
-        throw new Error(`模型请求超时（${String(timeoutMs)}ms）：推理模型较慢时可以调大超时时长。`);
+        throw new Error(`模型请求超时。`);
       }
       throw attributed;
     } finally {

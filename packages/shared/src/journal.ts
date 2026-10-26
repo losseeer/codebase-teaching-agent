@@ -56,9 +56,10 @@ export type JournalEventType =
       payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
       判据与离线 `phaseB:eval` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
-  /** 回合内向用户提了一句问（刀 1：只发问、不认领续跑）。一回合最多一条，被挡下的尝试也记。
-      payload = scene + facet(goal|range) + outcome(asked|refused) + options(候选短标签，斜杠分隔) + reason(仅 refused)。
-      提问占比与「问完用户到底答没答」的转化率都从这一行算，是刀 2 认领机制的门禁读数。 */
+  /** 回合内向用户提问的四种结局，一回合最多一条（挡下的尝试也记）。
+      payload = scene + facet(goal|range|null) + outcome(asked|refused|claimed|discarded) + options(候选短标签，斜杠分隔) + tool_call_id(认领的那条调用) + reason。
+      outcome=refused 的 reason 是那句挡下它的判据；discarded 的 reason 是 expired / new_question / claim_missed（换模型或点了第二次）。
+      提问占比与「问完用户到底答没答」的转化率都从这一行算。 */
   | "turn_asked"
   /** 会话线程的生命周期事件：`session_created` 在引擎发 id 建线程时写，
       `session_deleted` 只在软删时写。payload = scope(teach|map|practice) + thread_id + scope_ref/exercise_id + reason。

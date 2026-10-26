@@ -158,9 +158,9 @@ describe("provider-backed code Q&A turn", () => {
     const progress: TeachingProgress[] = [];
     await respondWithProvider(createSession("repo", scope.ref), scope, "入口的输入是什么？", provider, undefined, repository, { onProgress: (event) => progress.push(event) });
     expect(progress).toEqual([
-      { stage: "thinking", round: 1 },
+      { stage: "thinking" },
       { stage: "reading", path: "src/main.ts" },
-      { stage: "thinking", round: 2 }
+      { stage: "thinking" }
     ]);
   });
 });

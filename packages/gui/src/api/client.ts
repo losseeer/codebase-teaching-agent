@@ -33,9 +33,13 @@ export function parseScopedStreamFrame(raw: unknown): ScopedStreamProgress {
 */
 function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
   switch (event.type) {
-    case "thinking": return { type: "thinking", round: Number(event.round ?? 1) };
+    case "thinking": return { type: "thinking" };
     case "reading": return { type: "reading", path: String(event.path ?? "") };
     case "searching": return { type: "searching", query: String(event.query ?? "") };
+    case "loading_skill": return { type: "loading_skill", skill: String(event.skill ?? "") };
+    case "editing_diagram": return { type: "editing_diagram" };
+    case "querying_facts": return { type: "querying_facts" };
+    case "calling_external": return { type: "calling_external" };
     case "progress": return { type: "progress", payload: event.payload };
     case "delta": return { type: "delta", delta: String(event.delta ?? "") };
     default: {
@@ -53,7 +57,7 @@ function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
   后者要让界面出 warn 条和重试入口，前者会被当成一句空话落进线程。
 */
 export type MapDoneFrame =
-  | { reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { facet: string; question: string; options: string[] }; interrupted?: undefined }
+  | { reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { toolCallId: string; facet: string; question: string; options: string[] }; interrupted?: undefined }
   | { reply?: undefined; provider: string; diagram?: { id: string; name: string }; asked?: undefined; interrupted: { reason: string; detail: string } };
 
 export interface StreamTurn {
@@ -292,10 +296,10 @@ export const api = {
       onEvent,
       turn.signal
     ),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、这一回合真画/真改了哪张图、以及这一回合是否在向用户提问）。
+  /** map-chat 流式版：SSE 逐事件回调过程帧（词表见 `shared` 的 `scopedStreamProgressSchema`）与正文增量（delta），resolve 于 done（回复、来源模型、这一回合真画/真改了哪张图、以及这一回合是否在向用户提问）。
       `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。
       done 有两种形状：正常成品带 `reply`；被中断的那一轮没有成品，只有 `interrupted`（界面据此出 warn 条与重试，不能拿空串冒充回复）。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
+  mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number; resumeAsk?: string }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<MapDoneFrame>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
       `diagram? / asked? / interrupted?: undefined`：练习作用域既没有画图工具也没有提问与中断那一档，这几格恒不出现——两条流的 done 形状对齐，

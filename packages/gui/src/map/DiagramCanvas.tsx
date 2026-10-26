@@ -524,8 +524,6 @@ function EmptyCanvas({ onQuickPrompt, disabled }: { onQuickPrompt?: (text: strin
       <h2>一张空画布</h2>
       <p>
         <span>描述你想要的图，由 agent 来画。</span>
-        <span>画好的图出现在这里，并存进左栏图库。</span>
-        <span>图上的位置你可以随便拖。</span>
       </p>
       <div className="dg-quick">
         {QUICK_PROMPTS.map((text) => (

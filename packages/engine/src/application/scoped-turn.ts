@@ -13,6 +13,7 @@ import { turnTextPayload } from "../store/journal.js";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import { mcpCallPayload } from "./turn-audit.js";
+import { CHECKPOINT_TTL_MS } from "./turn-checkpoint.js";
 
 /**
   一次作用域回合的收尾：线程上下文取数、正文落库、运行期不变量复检、审计线记账。
@@ -102,9 +103,10 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
     if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
     persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
   }
-  // 问了什么、被什么挡下：占比与「问完用户答没答」的转化率都从这一行算（刀 2 的门禁读数）
-  if (result.asked) journal.append("turn_asked", { scene: "map_chat", facet: result.asked.facet, outcome: "asked", options: result.asked.options.join(" / "), reason: null }, threadId);
-  else if (result.askRefused) journal.append("turn_asked", { scene: "map_chat", facet: null, outcome: "refused", options: null, reason: result.askRefused }, threadId);
+  // 问了什么、被什么挡下、答了没有：占比与「问完用户答没答」的转化率都从这一行算
+  if (result.asked) journal.append("turn_asked", turnAskedPayload({ facet: result.asked.facet, outcome: "asked", options: result.asked.options.join(" / "), toolCallId: result.asked.toolCallId }), threadId);
+  else if (result.askRefused) journal.append("turn_asked", turnAskedPayload({ outcome: "refused", reason: result.askRefused }), threadId);
+  if (result.askClaimed) journal.append("turn_asked", turnAskedPayload({ outcome: result.askClaimed.outcome === "claimed" ? "claimed" : "discarded", reason: result.askClaimed.outcome === "claimed" ? null : "claim_missed", toolCallId: result.askClaimed.toolCallId }), threadId);
   if (result.usage) journal.append("token_usage", {
     input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
@@ -134,6 +136,64 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   // 上下文装配摘要是另一件事：这条回复是在「折了几条历史、找回几条」的前提下写的（三作用域都有这一行）
   journal.append("turn_context", { scene: "map_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, threadId);
   if (!interrupted) journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
+}
+
+/**
+  `turn_asked` 的一份形状，五种结局共用：asked（问出去）/ refused（被判据挡下）/ claimed（用户答了，接上原回合）
+  / discarded（没接上：换话题、点停止、过期、换模型）。占比与转化率全靠按 outcome 分列，
+  所以这里只许加结局值，不许各调用点自己拼一套字段。
+*/
+export function turnAskedPayload(input: {
+  facet?: string | null;
+  outcome: "asked" | "refused" | "claimed" | "discarded";
+  options?: string | null;
+  reason?: string | null;
+  toolCallId?: string | null;
+}): Record<string, string | null> {
+  return {
+    scene: "map_chat",
+    facet: input.facet ?? null,
+    outcome: input.outcome,
+    options: input.options ?? null,
+    reason: input.reason ?? null,
+    tool_call_id: input.toolCallId ?? null
+  };
+}
+
+/**
+  这条线程尾部连续提问的回合数：达到 2 就这一轮不再给提问通道（第三轮该按默认答并写明假设）。
+  只数有成品的回合（`turn_text` 是一回合的分隔），中断与中止的那几轮没有成品，也不算「问过」。
+*/
+export function consecutiveAskedTurns(events: readonly { type: string; payload: Record<string, unknown> }[]): number {
+  let streak = 0;
+  let askedInTurn = false;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "turn_asked" && event.payload.outcome === "asked") askedInTurn = true;
+    else if (event.type === "turn_text") {
+      if (!askedInTurn) break;
+      streak += 1;
+      askedInTurn = false;
+    }
+  }
+  return streak;
+}
+
+/**
+  开火前结算这条线程上「不会再被回答」的提问：过期与换话题各记一条 `discarded`，行同时删掉（一句提问只结算一次）。
+  不结算就会出现「用户没答，也没任何一行说清它去哪了」——那是这产品最不该留的空读数。
+  认领那一句（带着 `resumingToolCallId` 来的）不在结算之列：它就是要接上那条。
+*/
+export function settleStaleAsks(repository: ImportedRepository, journal: Journal, threadId: string | undefined, resumingToolCallId?: string): void {
+  if (!threadId) return;
+  const database = repository.handle.pin();
+  let settled: { pendingToolCallId: string; cause: "expired" | "new_question" }[];
+  try {
+    settled = database.settlePendingAsks(threadId, "map.chat", Date.now() - CHECKPOINT_TTL_MS, resumingToolCallId);
+  } finally {
+    repository.handle.unpin();
+  }
+  for (const ask of settled) journal.append("turn_asked", turnAskedPayload({ outcome: "discarded", reason: ask.cause, toolCallId: ask.pendingToolCallId }), threadId);
 }
 
 /**

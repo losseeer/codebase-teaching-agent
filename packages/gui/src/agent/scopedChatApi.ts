@@ -9,8 +9,10 @@ export interface ScopedChatApi {
   /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责。 */
   threads: Record<Scope, ThreadItem[]>;
   /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示 / "ask" 向用户提问 / "warn" 这一轮被中断）。
-      `extra`：提问的候选、图卡片，或中断那条上的「重试要重发的原句 + 中断前做过的几件事」。 */
-  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra) => void;
+      `extra`：提问的候选与认领句柄、图卡片，或中断那条上的「重试要重发的原句 + 中断前做过的几件事」。返回落这条气泡的 id。 */
+  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra) => string;
+  /** 还亮着的那排提问按钮属于哪条气泡（一开新回合就换人）；旧提问的按钮不再按得动。 */
+  liveAsk: Record<Scope, string | null>;
 
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：
@@ -71,8 +73,8 @@ export interface ScopedChatApi {
   liveAnswer: string;
   error: string;
   send: () => Promise<void>;
-  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论。`answer` = 用户点了某条提问候选时那句短标签（省略就发输入框里那句）。 */
-  sendMap: (answer?: string) => Promise<void>;
+  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论。`answer` = 用户点了某条提问候选时那句短标签（省略就发输入框里那句）；`resumeAsk` = 它在认领哪一句提问。 */
+  sendMap: (answer?: string, resumeAsk?: string) => Promise<void>;
   sendPractice: (answer?: string) => Promise<void>;
   /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复）。显式展示 LLM 是否参与，不静默回落 */
   replySource: Record<Scope, string>;

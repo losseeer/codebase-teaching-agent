@@ -1,6 +1,7 @@
 /** agent 消息除正文之外可能带的那几样：一次定义，`pushMessage` 与线程项共用一份形状。
-    `card` 这一回合画/改了哪张图；`options` 提问的候选；`retry` 中断后要点着重发的那句原文；`lines` 中断时留在屏上的过程行。 */
-export type MessageExtra = { card?: { diagramId: string; name: string }; options?: string[]; retry?: string; lines?: string[] };
+    `card` 这一回合画/改了哪张图；`options` + `askId` 提问的候选与认领句柄；
+    `retry` 中断后要点着重发的那句原文；`lines` 中断时留在屏上的过程行。 */
+export type MessageExtra = { card?: { diagramId: string; name: string }; options?: string[]; askId?: string; retry?: string; lines?: string[] };
 
 /** thread 一条消息的形态：用户/Agent。
   agent 消息存原文，由 AgentRail 按需走 Markdown 渲染；`variant` 标记非正文消息（错误提示 / 本地提示 / 提问 / 中断）。

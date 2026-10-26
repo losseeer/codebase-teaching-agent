@@ -100,4 +100,30 @@ describe("回合检查点通道", () => {
     withDatabase(repository, (database) => database.saveTurnCheckpoint({ threadId: "t8", scene: "map.chat", round: 1, inputHash: HASH, payload: { rounds: 1 } }));
     expect(channel("t8").restore(HASH)).toBeUndefined();
   });
+
+  it("等回答的那一档不参与哈希续跑：同一句原样重发绝不接上提问快照", () => {
+    const c = channel("t9");
+    c.save(HASH, state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a1" });
+    expect(c.restore(HASH), "点重发、断连重试走的都是哈希这条路：接上「等人回答」的快照等于把没答的提问再发一遍").toBeUndefined();
+    expect(withDatabase(repository, (database) => database.claimTurnCheckpoint<TurnLoopState>("t9", "map.chat", "a1", "prompt-1")), "行还在，只是只许按认领取").toMatchObject({ round: 1 });
+  });
+
+  it("认领只比调用 id 与「模型 + 系统提示」的指纹，不比答句；认领一次即消费", () => {
+    const c = channel("t10");
+    c.save("首问的哈希", state(2, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a1" });
+    expect(c.claimAsk?.("a1", "prompt-1"), "用户给的是选项，不是原问题——按输入哈希找永远找不到").toMatchObject({ round: 2 });
+    expect(c.claimAsk?.("a1", "prompt-1"), "同一条提问不许被点两次接走两份状态").toBeUndefined();
+
+    c.save("另一问的哈希", state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a2" });
+    expect(c.claimAsk?.("a2", "换了模型的指纹"), "换模型后接上旧回合，等于拿另一家的中间状态作答").toBeUndefined();
+    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows, "答了就等于关闭：核不上也要把行消费掉，别让下一回合再结算一次").toBe(0);
+    c.save("又一问", state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a3" });
+    expect(c.claimAsk?.("别的调用 id", "prompt-1"), "对不上挂着的那条调用就不认，绝不退成全清或猜一条").toBeUndefined();
+  });
+
+  it("等回答的残局同样过 TTL：一句没人答的提问不该永久留在库里", () => {
+    channel("t11").save(HASH, state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a1" });
+    expect(channel("t11", "map.chat", -1).claimAsk?.("a1", "prompt-1")).toBeUndefined();
+    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows).toBe(0);
+  });
 });

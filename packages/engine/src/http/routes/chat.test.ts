@@ -230,6 +230,14 @@ describe("宏观设计作用域（SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
+  it("map-chat SSE：读文件与检索各上一帧，不被下一轮 thinking 吃掉", async () => {
+    fx.scripted = ['@@tool search_code {"query":"register"}', '@@tool read_file {"path":"src/main.ts"}', `看 ${MAIN_FILE}:5 的上游。`];
+    const threadId = await fx.newThread("map", "过程帧线程");
+    const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: "哪里是入口？", threadId } });
+    const frames = sseEvents(response.payload).filter((event) => event.type !== "delta").map((event) => event.type);
+    expect(frames).toEqual(["thinking", "searching", "thinking", "reading", "thinking", "done"]);
+  });
+
   it("停止生成：aborted 帧取代 done、正文不落库，journal 只留一行 turn_aborted", async () => {
     // 让 LLM 在途 300ms，好赶在它回来之前打「停止」；这一条测的是路由收尾的分诊，不是 registry 的中止本身
     fx.scripted = [OK_REPLY];
@@ -379,19 +387,57 @@ describe("出字前的本地过筛", () => {
   刀 1 的提问只到「问出去」为止：不写检查点、不认领续跑，下一句按新回合走。
   要守的是三件事——只发一次调用、正文仍是三处同一份、`turn_asked` 能把「问出去」和「被挡下」分开数。
 */
-describe("回合内向用户提问（只问不续，先量占比）", () => {
-  it("问句就是本轮成品：一次调用、done 带候选、三处文本同一份、审计记 asked", async () => {
+describe("回合内向用户提问（问句即成品，点选项才接着算）", () => {
+  it("问句就是本轮成品：一次调用、done 带候选与认领句柄、三处文本同一份、审计记 asked", async () => {
     fx.scripted = ['@@tool ask_user {"facet":"range","question":"这张图画哪一块？","options":["整仓","下单那条"]}'];
     const threadId = await fx.newThread("map", "提问线程");
     const before = fx.sentTools.length;
     const response = await mapChat({ content: "画张架构图", threadId });
-    const done = response.json() as { reply: string; asked?: { facet: string; question: string; options: string[] } };
+    const done = response.json() as { reply: string; asked?: { facet: string; question: string; options: string[]; toolCallId: string } };
     expect(fx.sentTools.length - before, "提问即收尾：不该再发第二次调用").toBe(1);
     expect(done.reply).toBe("这张图画哪一块？\n可选项：整仓 / 下单那条");
-    expect(done.asked).toEqual({ facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] });
+    expect(done.asked).toEqual({ facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"], toolCallId: expect.any(String) });
     expect(fx.assistantMessage(threadId).content).toBe(done.reply);
     expect(fx.lastEvent("turn_text").payload.answer).toBe(done.reply);
-    expect(fx.lastEvent("turn_asked").payload).toMatchObject({ scene: "map_chat", facet: "range", outcome: "asked", options: "整仓 / 下单那条" });
+    expect(fx.lastEvent("turn_asked").payload).toMatchObject({ scene: "map_chat", facet: "range", outcome: "asked", options: "整仓 / 下单那条", tool_call_id: done.asked?.toolCallId });
+  });
+
+  it("点了选项就是认领：答句回灌成那条调用的回执，只发这一趟，审计记 claimed", async () => {
+    fx.scripted = ['@@tool ask_user {"facet":"range","question":"这张图画哪一块？","options":["整仓","下单那条"]}', "整仓三层：接口层、服务层、存储层。"];
+    const threadId = await fx.newThread("map", "认领线程");
+    const first = (await mapChat({ content: "画张架构图", threadId })).json() as { asked?: { toolCallId: string } };
+    const askId = first.asked?.toolCallId ?? "";
+    const before = fx.sentTools.length;
+    const done = (await mapChat({ content: "整仓", threadId, resumeAsk: askId })).json() as { reply: string };
+    expect(fx.sentTools.length - before, "接上那一轮就只发这一趟：已读过的上下文从快照里回来，不重付一遍").toBe(1);
+    const messages = JSON.parse(fx.sentTools[before].raw).messages as { role: string; tool_call_id?: string; content?: string }[];
+    expect(messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: askId, content: "整仓" });
+    expect(messages.find((message) => message.role === "user")?.content, "首轮那条装了代码上下文的 user 消息不能因认领而丢").toContain("学习者的问题：画张架构图");
+    expect(done.reply).toBe("整仓三层：接口层、服务层、存储层。");
+    expect(fx.lastEvent("turn_asked").payload).toMatchObject({ outcome: "claimed", tool_call_id: askId, facet: null, options: null });
+    expect(fx.lastEvent("loop_round").payload).toMatchObject({ resumed_from_round: 1 });
+    expect(fx.assistantMessage(threadId).content).toBe(done.reply);
+  });
+
+  it("换了问题就是另一回合：等回答的快照不参与哈希续跑，那句提问记一条 discarded", async () => {
+    fx.scripted = ['@@tool ask_user {"facet":"range","question":"这张图画哪一块？","options":["整仓","下单那条"]}', "先看 src/main.ts:3 的 registerOrder。"];
+    const threadId = await fx.newThread("map", "改问线程");
+    const first = (await mapChat({ content: "画张架构图", threadId })).json() as { asked?: { toolCallId: string } };
+    const before = fx.sentTools.length;
+    await mapChat({ content: "那这个函数是入口吗", threadId });
+    // 这一句是新问题：等回答的那份快照不许被哈希那条路接走（接上了就是拿上一问的中间状态答这一问）
+    expect(JSON.parse(fx.sentTools[before].raw).messages.filter((message: { role: string }) => message.role === "user")[0].content).toContain("那这个函数是入口吗");
+    const discarded = fx.eventsOf("turn_asked").filter((event) => event.payload.outcome === "discarded");
+    expect(discarded.map((event) => event.payload)).toEqual([{ scene: "map_chat", facet: null, outcome: "discarded", options: null, reason: "new_question", tool_call_id: first.asked?.toolCallId }]);
+  });
+
+  it("认不上就当新回合答：记 discarded(claim_missed)，不报错也不空转（换模型与过期都走这一档）", async () => {
+    fx.scripted = [OK_REPLY];
+    const threadId = await fx.newThread("map", "认不上线程");
+    const done = (await mapChat({ content: "画张图", threadId, resumeAsk: "call_这条线程上没有这句" })).json() as { reply: string };
+    expect(done.reply).toContain("registerOrder");
+    expect(fx.lastEvent("turn_asked").payload).toMatchObject({ outcome: "discarded", reason: "claim_missed", tool_call_id: "call_这条线程上没有这句" });
+    expect(fx.lastEvent("loop_round").payload, "没认领上就没有「续自第几轮」这回事").not.toHaveProperty("resumed_from_round");
   });
 
   it("范围已知就不给这个通道：画布绑定了文件，清单里没有 ask_user", async () => {

@@ -8,7 +8,7 @@ import { type ConversationBlock, renderConversation } from "../llm/conversation.
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
-import type { AskFacet, AskUserAudit } from "../source/ask-user.js";
+import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";
 import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/egress-log.js";
@@ -45,8 +45,10 @@ const TEACHING_MAX_TOOL_ROUNDS = 2;
 const TEACHING_MAX_TOOL_CALLS = 3;
 
 /** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。
-    轮次放宽到 10 之后，真卡点变成「一轮最多读 4 个文件」与预算闸（每轮开火前查），到限那三种结局各写各的读数。 */
-const MAP_MAX_TOOL_ROUNDS = 10;
+    这一档到限是「中断 + 可重试」（不是硬答一句），所以它管的是单次尝试开多久，不是这场对话总共花多少：
+    累计花费用预算闸兜（每轮开火前查），读文件数用 `MAP_MAX_TOOL_CALLS` 兜。放宽到 20 就是允许它多取证十倍轮次，
+    代价按真跑到的轮数付——到限那三种结局各写各的读数。 */
+const MAP_MAX_TOOL_ROUNDS = 20;
 const MAP_MAX_TOOL_CALLS = 4;
 
 const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);
@@ -67,6 +69,23 @@ function conversationBlock(history: ScopedChatTurn[] | undefined, query: string,
 
 /** mapChat 过程事件：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
 export type MapChatProgress = ReadToolProgress;
+
+/**
+  工具循环的帧（`{type}`）→ 教学那条流的载荷（`{stage}`）：两侧取值是同一套词表，这里只换算不判断。
+  写成穷尽 switch：循环里新加一类活动而这里没接，编译就不过——比一条 `else 归到 thinking` 的兜底强，
+  那会把「正在加载技能」一路谎报成「正在思考」。
+*/
+function progressToStage(progress: ReadToolProgress): TeachingProgress {
+  switch (progress.type) {
+    case "thinking": return { stage: "thinking" };
+    case "reading": return { stage: "reading", path: progress.path };
+    case "searching": return { stage: "searching", query: progress.query };
+    case "loading_skill": return { stage: "loading_skill", skill: progress.skill };
+    case "editing_diagram": return { stage: "editing_diagram" };
+    case "querying_facts": return { stage: "querying_facts" };
+    case "calling_external": return { stage: "calling_external" };
+  }
+}
 
 export interface ScopedChatResult {
   reply: string;
@@ -92,6 +111,8 @@ export interface ScopedChatResult {
   askRefused?: string;
   /** 本轮被中断（预算到线或轮次用完）：没有成品，界面据此出 warn 条与重试入口。 */
   interrupted?: TurnInterrupt;
+  /** 这一句是来回答上一回合的提问：`claimed` 接上了，`missed` 没认领上（过期或换了模型）就当新回合跑。 */
+  askClaimed?: AskClaimAudit;
   /** 本轮对话历史的折叠读数：折了几条、又从折叠段找回几条（供 journal 回答「这条回复是在看过多少历史的前提下写的」）。 */
   conversation: { foldedMessages: number; recalledMessages: number };
 }
@@ -168,8 +189,8 @@ export interface RunTurnInput {
   diagram?: SetDiagramToolContext;
   facts?: FactsToolContext;
   skills?: SkillsToolContext;
-  /** 向用户提问的通道（只给宏观设计，且只在本轮缺某一格时给）：不给就没有 `ask_user`。 */
-  ask?: { facets: AskFacet[] };
+  /** 向用户提问的通道（只给宏观设计，且只在本轮缺某一格时给）：不给就没有 `ask_user`；`resume` = 这一句是来回答上一回合的提问。 */
+  ask?: { facets: AskFacet[]; resume?: AskResume };
   external?: ExternalToolContext;
   checkpoint?: TurnCheckpointChannel;
   budgetGuard?: () => string | undefined;
@@ -197,6 +218,8 @@ export interface RunTurnResult {
   askRefused?: string;
   /** 本轮被中断（预算到线或轮次用完）：没有成品。 */
   interrupted?: TurnInterrupt;
+  /** 认领上一回合提问的结果（没带认领就没这一格）。 */
+  askClaimed?: AskClaimAudit;
 }
 
 /**
@@ -240,7 +263,8 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
       ...(result.asked === undefined ? {} : { asked: result.asked }),
       ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
-      ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted })
+      ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
+      ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed })
     };
   }
   // 练习答疑没有文件面，但装了技能就该能取正文：只给 `read_skill`（和外部工具），两轮封顶。
@@ -267,7 +291,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       skillReads: result.skillReads
     };
   }
-  input.onProgress?.({ type: "thinking", round: 1 });
+  input.onProgress?.({ type: "thinking" });
   const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: input.maxTokens, temperature: input.temperature, scene: input.scene, ...(input.signal ? { signal: input.signal } : {}) });
   return { completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] };
 }
@@ -319,7 +343,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
     ...(options.budgetGuard ? { budgetGuard: options.budgetGuard } : {}),
     ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
-    ...(options.onProgress ? { onProgress: (progress: ReadToolProgress): void => { options.onProgress?.(progress.type === "reading" ? { stage: "reading", path: progress.path } : progress.type === "searching" ? { stage: "searching", query: progress.query } : { stage: "thinking", round: progress.round }); } } : {})
+    ...(options.onProgress ? { onProgress: (progress: ReadToolProgress): void => { options.onProgress?.(progressToStage(progress)); } } : {})
   });
   const content = flagTruncatedReply(outcome.completion.text.slice(0, 1_500), outcome.completion.finishReason === "length" || outcome.completion.text.length > 1_500);
   const userMessage: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString() };
@@ -347,7 +371,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
   否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 向用户提问的通道：不给就没有 `ask_user`（只给宏观设计，且本轮确实缺某一格时才给）。 */ ask?: { facets: AskFacet[] }; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 向用户提问的通道：不给就没有 `ask_user`（只给宏观设计）。`resume` = 这一句是用户对上一回合提问的回答，认领上就接着算。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/egress-log.ts） */
@@ -426,6 +450,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(result.asked === undefined ? {} : { asked: result.asked }),
     ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
     ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
+    ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed }),
     conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
   };
 }

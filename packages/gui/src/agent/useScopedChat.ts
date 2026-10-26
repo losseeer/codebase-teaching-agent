@@ -23,10 +23,13 @@ export function useScopedChat(repositoryId: string): ScopedChatApi {
   }, [scope]);
 
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
-const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra): void => {
+const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra): string => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(extra?.card ? { card: extra.card } : {}), ...(extra?.options?.length ? { options: extra.options } : {}), ...(extra?.retry ? { retry: extra.retry } : {}), ...(extra?.lines?.length ? { lines: extra.lines } : {}) }] }));
+  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...extra } as ThreadItem] }));
+  return id;
 };
+/** 还亮着的那排提问按钮属于哪条气泡：一开新回合就换人，旧气泡上的按钮跟着灭（认领只对最后一句提问成立）。 */
+const [liveAsk, setLiveAsk] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
 
 /** 教学作用域：只存 `file:<path>` / `dir:<path>`，不依赖课程树。 */
 const [scopeRef, setScopeRefState] = useState<string | null>(null);
@@ -248,8 +251,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       patchDebt(target, null);
       if (replayStarted) knownRowCount.current[target] += 2; // 库里那一问一答确实存在：基准跟着走，免得日后误判成「补回」
       pushMessage(target, "agent", replayStarted
-        ? "已停止生成。引擎那一轮其实早就算完并落库了（中止的是回放），重新打开会话能看到完整回复。"
-        : "已停止生成，这一轮没有落库。", "hint");
+        ? "已停止生成"
+        : "已停止生成", "hint");
       return;
     }
     if (lostInTransit(reason)) {
@@ -273,7 +276,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // `extra.options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
       settle: async (text, provider, extra) => {
         await finish();
-        pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
+        const pushed = pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
+        // 只有刚问出来的那一颗亮着：再发一句之后，上一句提问的认领就不该再按得动
+        setLiveAsk((prev) => ({ ...prev, [target]: extra?.options?.length ? pushed : null }));
         setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
         clear();
         knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
@@ -533,9 +538,11 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
 
   // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句。
   // `answer` 是用户点了提问按钮时代替输入框发的那一句：输入框里正在打的字不该被它清掉。
-  const sendScoped = async (scope: "map" | "practice", answer?: string): Promise<void> => {
+  // `resumeAsk` 是那句提问的认领句柄：带着它，引擎才把这一句当答案回灌、而不是当新问题从头跑。
+  const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
     const message = (answer ?? content).trim();
     if (!message || !repositoryId) return;
+    setLiveAsk((prev) => ({ ...prev, [scope]: null }));
     // 同 teaching：先结断线那轮的账，再让这一句上屏。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
@@ -554,7 +561,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     recordDebt(scope, threadId);
     const sink = turnSink(scope);
     const onScopedEvent = (event: ScopedStreamProgress): void => {
-      // delta 进打字机队列，剩下三类过程提示（thinking / reading / searching）全部逐行进列表——压成一行时本地那两类只闪几十毫秒，肉眼就只剩「正在思考」
+      // delta 进打字机队列，剩下几类过程帧（想 / 读 / 搜 / 取技能 / 改图 / 查产物 / 外部调用）全部逐行进列表——
+      // 压成一行时本机那几件只闪几十毫秒，肉眼就只剩「正在思考」
       if (event.type === "delta") sink.onDelta(event.delta);
       else logProgress(scope, progressText(event));
     };
@@ -567,6 +575,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
             path: mapFile || undefined,
             // 画布正打开的图：agent 改哪张、删哪条边都按这一格定，认不出就不动
             ...(openDiagram ? { diagramId: openDiagram.id } : {}),
+            // 这一句是来回答上一回合那句提问的：把认领句柄交给引擎
+            ...(resumeAsk ? { resumeAsk } : {}),
             threadId,
             style: settings.style
           }, onScopedEvent, turn)
@@ -577,7 +587,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope] });
         patchDebt(scope, null);
       } else {
-        await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options } : undefined);
+        await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
         // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
         if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
       }
@@ -592,7 +602,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       void refreshThreads(scope);
     }
   };
-  const sendMap = (answer?: string): Promise<void> => sendScoped("map", answer);
+  const sendMap = (answer?: string, resumeAsk?: string): Promise<void> => sendScoped("map", answer, resumeAsk);
   const sendPractice = (answer?: string): Promise<void> => sendScoped("practice", answer);
 
   return {
@@ -604,7 +614,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,
     practiceUnit, setPracticeUnit,
     settings, setSettings: setSettingsState,
-    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendPractice, replySource,
+    content, setContent, sending, stopTurn, progress, liveAnswer, error, send, sendMap, sendPractice, replySource, liveAsk,
     practiceExercise, setPracticeExercise,
   };
 }

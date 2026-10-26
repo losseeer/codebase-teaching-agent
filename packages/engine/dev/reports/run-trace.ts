@@ -21,6 +21,9 @@ function clip(value: unknown, max = 80): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/** `turn_asked` 里 `discarded` 的三种因由，翻成报表上那句话；对不上的一律「未记因由」，不猜。 */
+const DISCARD_REASONS: Record<string, string> = { expired: "过了 TTL", new_question: "换了新问题", claim_missed: "认领不上（换模型或已消费）" };
+
 function eventLine(event: JournalEvent): string {
   const p = event.payload;
   switch (event.type) {
@@ -30,10 +33,13 @@ function eventLine(event: JournalEvent): string {
       // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "turn_asked":
-      // 问出去了还是被挡下了：这两件事在同一线程里常常相邻出现，trace 上必须一眼分得开
-      return p.outcome === "refused"
-        ? `想提问被挡 facet=${p.facet ?? "未记"} 因由:${clip(p.reason, 70)}`
-        : `向用户提问 facet=${p.facet ?? "未记"} 候选=${clip(p.options, 60)}`;
+      // 一句提问的四种结局在同一线程里常常相邻出现，trace 上必须一眼分得开
+      switch (p.outcome) {
+        case "refused": return `想提问被挡 facet=${p.facet ?? "未记"} 因由:${clip(p.reason, 70)}`;
+        case "claimed": return "认领上一句提问，接回那一轮接着算";
+        case "discarded": return `一句提问没人答（${DISCARD_REASONS[String(p.reason ?? "")] ?? "未记因由"}）`;
+        default: return `向用户提问 facet=${p.facet ?? "未记"} 候选=${clip(p.options, 60)}`;
+      }
     case "loop_round":
       return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : p.stopped_by === "rounds" ? " 【轮次用完】" : p.stopped_by === "reads" ? " 【读文件额度用完】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
     case "turn_context":

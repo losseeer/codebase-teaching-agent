@@ -22,10 +22,14 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   引擎 ↔ 界面这条边界上的契约：作用域对话的过程帧解析与界面文案映射。
   */
 describe("作用域对话流的过程帧契约", () => {
-  it("五类已登记的帧都能过，字段原样带出", () => {
-    expect(parseScopedStreamFrame({ type: "thinking", round: 3 })).toEqual({ type: "thinking", round: 3 });
+  it("已登记的帧都能过，字段原样带出", () => {
+    expect(parseScopedStreamFrame({ type: "thinking" })).toEqual({ type: "thinking" });
     expect(parseScopedStreamFrame({ type: "reading", path: "src/a.ts" })).toEqual({ type: "reading", path: "src/a.ts" });
     expect(parseScopedStreamFrame({ type: "searching", query: "缓存" })).toEqual({ type: "searching", query: "缓存" });
+    expect(parseScopedStreamFrame({ type: "loading_skill", skill: "tutor-cost-audit" })).toEqual({ type: "loading_skill", skill: "tutor-cost-audit" });
+    expect(parseScopedStreamFrame({ type: "editing_diagram" })).toEqual({ type: "editing_diagram" });
+    expect(parseScopedStreamFrame({ type: "querying_facts" })).toEqual({ type: "querying_facts" });
+    expect(parseScopedStreamFrame({ type: "calling_external" })).toEqual({ type: "calling_external" });
     expect(parseScopedStreamFrame({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toEqual({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } });
     expect(parseScopedStreamFrame({ type: "delta", delta: "前半段" })).toEqual({ type: "delta", delta: "前半段" });
   });
@@ -45,14 +49,13 @@ describe("作用域对话流的过程帧契约", () => {
   });
 
   it("`{stage}` 形状的进度载荷走 `progress` 那一类，不裸发", () => {
-    expect(() => parseScopedStreamFrame({ stage: "thinking", round: 1 })).toThrow(ContractViolation);
+    expect(() => parseScopedStreamFrame({ stage: "thinking" })).toThrow(ContractViolation);
   });
 });
 
 describe("过程帧的界面文案", () => {
-  it("thinking 第一轮不带轮次，之后带", () => {
-    expect(progressText({ type: "thinking", round: 1 })).toBe("正在思考…");
-    expect(progressText({ type: "thinking", round: 4 })).toBe("正在思考（第 4 轮）…");
+  it("thinking 不报轮数：连着几轮想是同一件事，轮数归引擎的账", () => {
+    expect(progressText({ type: "thinking" })).toBe("正在思考…");
   });
 
   it("reading / searching 缺字段时给通用兜底，不显示空白", () => {
@@ -60,9 +63,17 @@ describe("过程帧的界面文案", () => {
     expect(progressText({ type: "searching", query: "" })).toBe("正在检索代码：关键词 …");
   });
 
+  it("取技能、改图、查产物、打外部程序各说一句人话（这些活动以前是静默的）", () => {
+    expect(progressText({ type: "loading_skill", skill: "tutor-cost-audit" })).toBe("正在加载技能 tutor-cost-audit …");
+    expect(progressText({ type: "loading_skill", skill: "" })).toBe("正在加载已装的做法 …");
+    expect(progressText({ type: "editing_diagram" })).toBe("正在改画布上的图 …");
+    expect(progressText({ type: "querying_facts" })).toBe("正在查询已有产物 …");
+    expect(progressText({ type: "calling_external" })).toBe("正在调用外部工具 …");
+  });
+
   it("教学那条流是 `progress` 包一层 payload：文案与裸帧同一条", () => {
     expect(progressText({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toBe("正在读取 src/b.ts …");
-    expect(progressText({ stage: "thinking", round: 2 })).toBe("正在思考（第 2 轮）…");
+    expect(progressText({ stage: "thinking" })).toBe("正在思考…");
   });
 
   it("整个帧缺席时给「回复生成中…」，不假装知道在哪一步", () => {
