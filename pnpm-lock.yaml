@@ -18,11 +18,26 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  packages/contract:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  packages/domain:
+    devDependencies:
+      vitest:
+        specifier: ^3.1.3
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(tsx@4.23.13)
+
   packages/engine:
     dependencies:
-      '@codebase-tutor/shared':
+      '@codebase-tutor/contract':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../contract
+      '@codebase-tutor/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@fastify/cors':
         specifier: ^11.0.1
         version: 11.3.0
@@ -66,9 +81,12 @@ importers:
 
   packages/gui:
     dependencies:
-      '@codebase-tutor/shared':
+      '@codebase-tutor/contract':
         specifier: workspace:*
-        version: link:../shared
+        version: link:../contract
+      '@codebase-tutor/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@codemirror/lang-java':
         specifier: ^6.0.2
         version: 6.0.2
@@ -120,16 +138,6 @@ importers:
         version: 19.2.7(@types/react@19.2.18)
       vitest:
         specifier: ^3.2.7
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(tsx@4.23.13)
-
-  packages/shared:
-    dependencies:
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      vitest:
-        specifier: ^3.1.3
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(tsx@4.23.13)
 
 packages:
