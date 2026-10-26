@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { hash } from "../ids.js";
+import { hash } from "@codebase-tutor/platform";
 
 /**
   恒定拒读的子树：家目录整片（引擎口令、`.ssh`、多数仓都在这里）加上可移动盘与网络挂载。

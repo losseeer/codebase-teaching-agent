@@ -1,5 +1,5 @@
 import type { TurnCheckpointChannel, TurnLoopState } from "../source/tool-loop.js";
-import { traceEngine } from "../trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 import { withDatabase } from "../store/database.js";
 
 /**

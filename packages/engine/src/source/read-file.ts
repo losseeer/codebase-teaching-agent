@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { isWithin } from "./files.js";
+import { isWithin } from "@codebase-tutor/platform";
 import { maskSecrets } from "../security/secrets.js";
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import type { LlmTool } from "../llm/provider.js";

@@ -1,4 +1,4 @@
-import { id } from "../ids.js";
+import { id } from "@codebase-tutor/platform";
 import type { TeachingProgress } from "@codebase-tutor/contract";
 import type { Exercise, FadedState, RepositoryAnalysis, RepositoryIndex, TutorMessage, TutorSession } from "@codebase-tutor/domain";
 import { policyFor } from "@codebase-tutor/domain";

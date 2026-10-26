@@ -12,7 +12,7 @@
   丢掉它，模型会把对话当成从中间开始的，答到一半去猜「你说的『它』指什么」。
 */
 import { CHARS_PER_TOKEN, CONTEXT_SHARE, contextShare, contextWindowTokens } from "./context-window.js";
-import { segmentForLookup, wordsOf } from "../text/lexical.js";
+import { segmentForLookup, wordsOf } from "@codebase-tutor/platform";
 
 export interface ConversationTurn {
   readonly role: "user" | "assistant";

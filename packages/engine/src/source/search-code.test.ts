@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { SEARCH_CODE_TOOL, buildSearchCorpus, executeSearchCode } from "./search-code.js";
-import { segmentForLookup } from "../text/lexical.js";
+import { segmentForLookup } from "@codebase-tutor/platform";
 
 /** 小型假仓：3 个文件，分别提供路径/符号/职责三种命中面与一个 P2 假阳性诱饵。 */
 const INDEX = {

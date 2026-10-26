@@ -21,7 +21,7 @@ import { dedupeFileReads } from "../../source/read-file.js";
 import { parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { createThread, saveThreadState } from "../../store/chat-store.js";
 import { Journal, readJournal } from "../../store/journal.js";
-import { markThread } from "../../trace/context.js";
+import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance } from "fastify";
 
 /**

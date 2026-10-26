@@ -1,10 +1,10 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { hash } from "../ids.js";
-import { logTargetFromEnv } from "../trace/log-target.js";
+import { hash } from "@codebase-tutor/platform";
+import { logTargetFromEnv } from "@codebase-tutor/platform";
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
-import { currentThreadId, currentTraceId } from "../trace/context.js";
-import { tutorDataDir } from "../tutor-home.js";
+import { currentThreadId, currentTraceId } from "@codebase-tutor/platform";
+import { tutorDataDir } from "@codebase-tutor/platform";
 
 /**
   LLM 调用工作日志：每次 provider.complete 落一条记录。

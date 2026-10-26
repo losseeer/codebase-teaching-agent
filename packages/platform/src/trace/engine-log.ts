@@ -4,7 +4,7 @@ import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-t
 
 import { logTargetFromEnv } from "./log-target.js";
 import { currentTraceId } from "./context.js";
-import { tutorDataDir } from "../tutor-home.js";
+import { tutorDataDir } from "../paths.js";
 
 /**
   引擎工作日志：记录「引擎这个进程在干活」的事件（请求 / 导入 / 重分析 / 降级 / 启动），不记录对话语义。

@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { deriveLearnerProfile } from "../../learner/model.js";
-import { isWithin } from "../../source/files.js";
+import { isWithin } from "@codebase-tutor/platform";
 import { exercises, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../store/journal.js";

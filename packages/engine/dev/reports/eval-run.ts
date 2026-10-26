@@ -11,7 +11,7 @@ import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../../src/depgraph/graph.js";
 import { loadSymbolParser } from "../../src/depgraph/parser.js";
 import { buildSearchCorpus, executeSearchCode } from "../../src/source/search-code.js";
-import { segmentForLookup } from "../../src/text/lexical.js";
+import { segmentForLookup } from "@codebase-tutor/platform";
 import { readJournal } from "../../src/store/journal.js";
 import type { TeachTurn } from "../../src/application/turn-invariants.js";
 import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";

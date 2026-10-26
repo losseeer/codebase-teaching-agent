@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance as _perf } from "node:perf_hooks";
-import { traceEngine } from "./trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   开机原语：读 `.env`、取版本号、记启动分段——只在进程起来时做一次，没有领域含义。

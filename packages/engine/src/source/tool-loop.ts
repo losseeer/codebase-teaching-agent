@@ -3,7 +3,7 @@ import type { ScopedStreamProgress } from "@codebase-tutor/contract";
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";
-import { hash } from "../ids.js";
+import { hash } from "@codebase-tutor/platform";
 import type { McpCallAudit } from "../integrations/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";

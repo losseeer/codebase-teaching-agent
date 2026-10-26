@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, outboundFingerprint, type LlmCallRecord } from "./call-log.js";
 import type { LlmCompletion, LlmProvider } from "./provider.js";
 import { RetryLlmProvider, ThinkingOverrideLlmProvider } from "./provider.js";
-import { runWithTrace } from "../trace/context.js";
+import { runWithTrace } from "@codebase-tutor/platform";
 
 /**
   LLM 工作日志：既要有可机读的落盘（JSONL），也要有控制台单行摘要；

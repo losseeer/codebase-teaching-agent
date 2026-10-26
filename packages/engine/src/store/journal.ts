@@ -3,8 +3,8 @@ import { join } from "node:path";
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/domain";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS } from "@codebase-tutor/domain";
 
-import { id } from "../ids.js";
-import { currentTraceId } from "../trace/context.js";
+import { id } from "@codebase-tutor/platform";
+import { currentTraceId } from "@codebase-tutor/platform";
 
 /**
   `Journal.append` 的白名单，运行时判据（`JournalEventType` 只是编译期类型）。

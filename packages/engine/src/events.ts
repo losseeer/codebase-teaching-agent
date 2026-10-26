@@ -1,6 +1,6 @@
 import type { ServerEvent } from "@codebase-tutor/contract";
 
-import { traceEngine } from "./trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   领域事件总线：没有请求边界的推送（导入进度、产物更新、画布改动）。生产者不是 HTTP，

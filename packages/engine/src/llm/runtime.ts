@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { LoggingLlmProvider } from "./call-log.js";
 import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, type LlmConfigOverrides, type LlmProvider, type ResolvedLlmConfig, type ThinkingEffort } from "./provider.js";
-import { tutorDataDir } from "../tutor-home.js";
+import { tutorDataDir } from "@codebase-tutor/platform";
 
 /**
   LLM 运行时设置（GUI 可改，落盘到 ~/.codebase-tutor/llm-settings.json，重启后仍在）。

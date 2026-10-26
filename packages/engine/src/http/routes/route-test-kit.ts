@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type { ChatThreadMessage } from "@codebase-tutor/contract";
 import type { ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import { repositoryId as deriveRepositoryId } from "../../ids.js";
+import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { flushLlmLog } from "../../llm/call-log.js";
 import { TutorDatabase } from "../../store/database.js";
 import { readJournal } from "../../store/journal.js";

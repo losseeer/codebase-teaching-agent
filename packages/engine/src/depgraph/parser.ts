@@ -3,7 +3,7 @@ import { dirname, extname, join } from "node:path";
 import { Language, Parser, type Tree } from "web-tree-sitter";
 import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/domain";
 
-import { traceEngine } from "../trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   基于语法树的符号抽取。不用逐行文本匹配：类方法会被当成普通函数、接口与类型别名认不出来，

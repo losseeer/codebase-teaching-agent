@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/domain";
 
-import { hash } from "../ids.js";
+import { hash } from "@codebase-tutor/platform";
 import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
-import { wordsOf, tokenHits } from "../text/lexical.js";
+import { wordsOf, tokenHits } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../store/database.js";
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "./l1-slice.js";

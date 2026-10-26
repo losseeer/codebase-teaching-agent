@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { isWithin, readFileLines } from "./files.js";
+import { isWithin, readFileLines } from "@codebase-tutor/platform";
 import { secretMasker } from "../security/secrets.js";
 
 /**

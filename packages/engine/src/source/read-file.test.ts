@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dedupeFileReads, executeReadFile, pathReadBlock, READ_FILE_TOOL, type FileReadRecord } from "./read-file.js";
-import { readFileLines } from "./files.js";
+import { readFileLines } from "@codebase-tutor/platform";
 
 let repoRoot = "";
 /** 仓库之外的一个目录：给「链接指向仓外」那条用例当真目标 */

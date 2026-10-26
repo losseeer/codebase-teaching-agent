@@ -1,6 +1,6 @@
 import type { ImplementationUnit, SymbolInfo } from "@codebase-tutor/domain";
 
-import { readFileLines, symbolBodyLines } from "../source/files.js";
+import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 
 export function buildImplementationUnits(repositoryPath: string, symbols: SymbolInfo[]): ImplementationUnit[] {
   /**

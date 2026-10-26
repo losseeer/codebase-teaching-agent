@@ -2,7 +2,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 
 import { isTestPath } from "../depgraph/roles.js";
 import type { LlmTool } from "../llm/provider.js";
-import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "../text/lexical.js";
+import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "@codebase-tutor/platform";
 
 /**
   search_code 工具（宏观设计 map 与教学 teaching 共用，练习答疑不提供）：

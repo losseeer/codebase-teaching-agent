@@ -13,16 +13,16 @@ import { loadSymbolParser } from "../depgraph/parser.js";
 import { collectFileFacts, saveFileFacts } from "../facts/build.js";
 import { fileStructureOf } from "../depgraph/roles.js";
 import { buildImplementationUnits } from "../implementation/units.js";
-import { catalogRepositoryId, hash, id } from "../ids.js";
+import { catalogRepositoryId, hash, id } from "@codebase-tutor/platform";
 import { scanRepositoryWithDigests, type RepositoryScan } from "../indexer/indexer.js";
-import { tutorDataDir } from "../tutor-home.js";
+import { tutorDataDir } from "@codebase-tutor/platform";
 import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "../depgraph/lsp/enrich.js";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
 import { Journal, journalFootprint } from "../store/journal.js";
 import { RepositoryHandle } from "../store/repository-handle.js";
-import { traceEngine } from "../trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
 type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch">;

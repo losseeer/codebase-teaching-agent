@@ -15,8 +15,8 @@ import { LlmAbortedError } from "../../llm/provider.js";
 import { type MapChatProgress, mapChat, practiceChat } from "../../turn/run-turn.js";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
 import { Journal, readJournal } from "../../store/journal.js";
-import { markThread } from "../../trace/context.js";
-import { traceEngine } from "../../trace/engine-log.js";
+import { markThread } from "@codebase-tutor/platform";
+import { traceEngine } from "@codebase-tutor/platform";
 import { abortTurn } from "../../application/turn-registry.js";
 import type { FastifyInstance } from "fastify";
 

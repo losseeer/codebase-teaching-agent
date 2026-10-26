@@ -1,4 +1,4 @@
-import { hash, repositoryId as deriveRepositoryId } from "../ids.js";
+import { hash, repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { Journal } from "../store/journal.js";
 
 /**

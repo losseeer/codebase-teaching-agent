@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportJob, RepositoryFreshness, ServerEvent } from "@codebase-tutor/contract";
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import { repositoryId as deriveRepositoryId } from "../ids.js";
+import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../store/database.js";
 import { ImportService, type ImportedRepository } from "./importer.js";
 

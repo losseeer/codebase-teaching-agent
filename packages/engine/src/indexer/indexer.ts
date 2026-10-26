@@ -3,11 +3,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/domain";
 
-import { repositoryId, hash } from "../ids.js";
+import { repositoryId, hash } from "@codebase-tutor/platform";
 import { graphExtensions } from "../depgraph/graph.js";
 import { deniedSecretNameReason } from "../source/read-file.js";
 import { createTutorIgnoreMatcher } from "./ignore.js";
-import { traceEngine } from "../trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   索引只收「扩展名白名单」：全量收会一路收进 .png/.mp4/锁文件，既花字节也毁掉热点计数。

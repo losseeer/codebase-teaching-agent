@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { repositoryId as deriveRepositoryId } from "../../ids.js";
+import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
 import { appendMessages, createThread, softDeleteThread } from "../../store/chat-store.js";
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/domain";
 
-import { repositoryId as deriveRepositoryId } from "../ids.js";
+import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../store/database.js";
 import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
 import { collectFileFacts, saveFileFacts } from "./build.js";

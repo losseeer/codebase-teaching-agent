@@ -7,7 +7,7 @@ import { Journal } from "../store/journal.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
 import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
-import { traceEngine } from "../trace/engine-log.js";
+import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
 import type { LlmProvider } from "../llm/provider.js";
 import { turnTextPayload } from "../store/journal.js";

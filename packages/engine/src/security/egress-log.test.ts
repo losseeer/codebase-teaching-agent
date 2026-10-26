@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
-import { repositoryId } from "../ids.js";
+import { repositoryId } from "@codebase-tutor/platform";
 import { readJournal } from "../store/journal.js";
-import { runWithTrace } from "../trace/context.js";
+import { runWithTrace } from "@codebase-tutor/platform";
 import { recordEgress, type EgressSource } from "./egress-log.js";
 
 /**
