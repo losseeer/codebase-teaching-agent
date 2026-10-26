@@ -1,9 +1,10 @@
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+import { flushEngineLog } from "@codebase-tutor/platform";
 
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
@@ -365,6 +366,35 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(result.score).toBe(0.8);
     expect(result.feedbackSource).toBe("llm_judge");
     await expect(service.answer(repository, exercise.id, { text: "再答一次" })).rejects.toThrow("判分需要模型");
+  });
+
+  it("模型把分数写成字符串（\"0.00\"）时照它给的分判，不再整趟失败", async () => {
+    // 真机读数（2026-10-26 dianping-backend）：deepseek 按提示词里「两位小数」的字面意思加了引号，
+    // 判分调用成功、反馈完整，却因为 score 不是 number 被丢成 422——白付这一趟，学习者只看到「再试一次」
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([generationJson, JSON.stringify({ score: "0.00", passed: false, feedback: "回答为“不知道”，未提供任何要点。" })]);
+    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-quote" }, provider);
+    const result = await service.answer(repository, exercise.id, { text: "不知道" }, provider);
+    expect(result.score).toBe(0);
+    expect(result.passed).toBe(false);
+    expect(result.feedback).toContain("未提供任何要点");
+  });
+
+  it("回复里读不出 JSON 时照旧失败，并往引擎日志记一条能归因的形状读数", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([generationJson, "这道题我没法评分。"]);
+    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-prose" }, provider);
+    const log = join(temporaryDirectories[temporaryDirectories.length - 1]!, "engine.jsonl");
+    process.env.TUTOR_ENGINE_LOG = log;
+    try {
+      await expect(service.answer(repository, exercise.id, { text: "随便写点什么" }, provider)).rejects.toThrow("这次判分没成功");
+      await flushEngineLog();
+      expect(readFileSync(log, "utf8")).toContain("exercise_judge_unreadable");
+    } finally {
+      delete process.env.TUTOR_ENGINE_LOG;
+    }
   });
 });
 

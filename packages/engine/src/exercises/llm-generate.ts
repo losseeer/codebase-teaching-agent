@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Exercise, ExerciseKind } from "@codebase-tutor/domain";
+import { traceEngine } from "@codebase-tutor/platform";
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
@@ -220,6 +221,17 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
 }
 
+/**
+  判分读数：`score` 要的是 0~1 的数字，但模型常按「两位小数」的字面意思把它写成字符串（`"0.00"`）。
+  能读成数字就照它给的分判（含越界钳制），读不出就是没判出来——不猜分、不补分。
+*/
+function judgeScore(value: unknown): number | undefined {
+  const raw = typeof value === "string" ? value.trim() : value;
+  if (raw === "" || (typeof raw !== "number" && typeof raw !== "string")) return undefined;
+  const score = Number(raw);
+  return Number.isFinite(score) ? Math.max(0, Math.min(1, Math.round(score * 100) / 100)) : undefined;
+}
+
 /** rubric 判分（LLM-as-Judge + 细则锚点）：拿参考答案与评分细则比对学习者回答，输出结构化分数。 */
 export async function judgeRubricWithLlm(input: { prompt: string; answerKey: string; criteria: { dimension: string; description: string }[]; learnerAnswer: string; provider: LlmProvider }): Promise<{ score: number; passed: boolean; feedback: string; usage?: LlmUsage }> {
   const system = [
@@ -235,10 +247,12 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   });
   const response = await input.provider.complete({ system, user, maxTokens: 500, temperature: 0.1, scene: "practice.judge" });
   const parsed = parseJsonObject(response.text);
-  if (!parsed || typeof parsed.score !== "number" || !Number.isFinite(parsed.score)) {
+  const score = judgeScore(parsed?.score);
+  if (!parsed || score === undefined) {
+    // 读不出分数就是没判出来，不能补一个数；这里只报形状不抄正文——判分反馈会引述源码，日志不该再开一个出网面
+    traceEngine("degrade", { what: "exercise_judge_unreadable", reason: parsed ? `score=${typeof parsed.score}` : "no_json_object", reply_chars: response.text.length });
     throw new Error("这次判分没成功，请再试一次。");
   }
-  const score = Math.max(0, Math.min(1, Number(parsed.score.toFixed(2))));
   const passed = typeof parsed.passed === "boolean" ? parsed.passed : score >= 0.6;
   const feedback = String(parsed.feedback ?? "").trim().slice(0, 300) || (passed ? "回答与参考答案要点基本一致。" : "回答与参考答案存在差距，请对照反馈完善理解。");
   return { score, passed, feedback, usage: response.usage };
