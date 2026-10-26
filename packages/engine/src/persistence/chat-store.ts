@@ -17,7 +17,7 @@ const SCOPES: ChatScope[] = ["teach", "map", "practice"];
 const TITLE_MAX = 120;
 
 /**
-  唯一的一处「开连接 → 用 → 关」在 `store/database.ts` 的 `withDatabase`：这些函数挂在每个对话回合的读写路径上。
+  唯一的一处「开连接 → 用 → 关」在 `persistence/database.ts` 的 `withDatabase`：这些函数挂在每个对话回合的读写路径上。
   */
 
 export function isChatScope(value: unknown): value is ChatScope {

@@ -25,9 +25,9 @@ import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } fr
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../sandbox/isolation.js";
 import { runnerFingerprint } from "../sandbox/profile.js";
-import { TutorDatabase } from "../store/database.js";
-import { Journal, readJournal } from "../store/journal.js";
-import type { RepositoryHandle } from "../store/repository-handle.js";
+import { TutorDatabase } from "../persistence/database.js";
+import { Journal, readJournal } from "../persistence/journal.js";
+import type { RepositoryHandle } from "../persistence/repository-handle.js";
 import { deriveMastery } from "../learner/mastery.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";

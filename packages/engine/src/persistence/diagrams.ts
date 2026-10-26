@@ -4,7 +4,7 @@ import type { Diagram, DiagramBody, DiagramSource, DiagramSummary, DiagramVersio
 import type { TutorDatabase } from "./database.js";
 
 /**
-  画布上的一张图的唯一读写口（表在 store/database-schema.ts 的 diagram，一行 = 一张图）。
+  画布上的一张图的唯一读写口（表在 persistence/database-schema.ts 的 diagram，一行 = 一张图）。
   两条写入路径权限不一样，所以分成两个函数：
 
   - saveGeometry：几何。用户自己拖出来的位置，不存版本、不写审计、不广播——位置不承载对错，进记录线只会淹掉真信号；

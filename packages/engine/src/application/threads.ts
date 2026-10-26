@@ -1,6 +1,6 @@
 import type { ChatThread } from "@codebase-tutor/contract";
 
-import { getThread } from "../store/chat-store.js";
+import { getThread } from "../persistence/chat-store.js";
 import { importer } from "../services.js";
 
 /** 会话线程的归属解析：把线程 id 解析到所属仓的库路径，与 HTTP 无关。 */

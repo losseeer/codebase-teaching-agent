@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TurnLoopState } from "../source/tool-loop.js";
-import { withDatabase } from "../store/database.js";
+import { withDatabase } from "../persistence/database.js";
 import { CHECKPOINT_MAX_BYTES, turnCheckpointChannel } from "../application/turn-checkpoint.js";
 
 /**

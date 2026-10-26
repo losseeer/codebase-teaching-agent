@@ -17,8 +17,8 @@ import { LlmAbortedError } from "../../llm/provider.js";
 import { importer } from "../../services.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
-import { createThread, saveThreadState } from "../../store/chat-store.js";
-import { Journal, readJournal, turnTextPayload } from "../../store/journal.js";
+import { createThread, saveThreadState } from "../../persistence/chat-store.js";
+import { Journal, readJournal, turnTextPayload } from "../../persistence/journal.js";
 import type { ImportedRepository } from "../../importer/importer.js";
 import type { ScopedTurnStream } from "./chat.js";
 

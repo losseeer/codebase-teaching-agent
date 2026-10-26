@@ -9,9 +9,9 @@ import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
 import type { LlmProvider } from "../llm/provider.js";
-import { readJournal } from "../store/journal.js";
-import { TutorDatabase } from "../store/database.js";
-import { RepositoryHandle } from "../store/repository-handle.js";
+import { readJournal } from "../persistence/journal.js";
+import { TutorDatabase } from "../persistence/database.js";
+import { RepositoryHandle } from "../persistence/repository-handle.js";
 import { nestedSandboxUsable } from "../sandbox/capability.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 

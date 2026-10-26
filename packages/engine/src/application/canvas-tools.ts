@@ -2,12 +2,12 @@ import type { FactsToolContext, SetDiagramToolContext } from "../source/tool-loo
 import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 import type { ImportedRepository } from "../importer/importer.js";
-import type { TutorDatabase } from "../store/database.js";
+import type { TutorDatabase } from "../persistence/database.js";
 import type { DiagramWriteContext } from "../diagram/set-diagram.js";
 import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from "../diagram/set-diagram.js";
 import { factsPairChecker } from "../diagram/facts-verify.js";
 import { factsQueryTool } from "../facts/query.js";
-import { Journal } from "../store/journal.js";
+import { Journal } from "../persistence/journal.js";
 import { broadcast } from "../events.js";
 
 /**

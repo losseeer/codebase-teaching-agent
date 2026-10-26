@@ -2,7 +2,7 @@ import type { CostBucket, CostComponent, CostDay, CostSummary } from "@codebase-
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 import { getLlmRuntimeSettings } from "../llm/runtime.js";
-import { readJournal } from "../store/journal.js";
+import { readJournal } from "../persistence/journal.js";
 
 export const defaultMonthlyBudgetUsd = 5;
 

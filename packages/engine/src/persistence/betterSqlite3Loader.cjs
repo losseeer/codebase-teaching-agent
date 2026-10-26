@@ -20,7 +20,7 @@ const { join, dirname, resolve } = require("node:path");
 const NATIVE_DIR_KEY = Symbol.for("codebase-tutor.native-binding-dir");
 function nativeDir() {
   if (!globalThis[NATIVE_DIR_KEY]) {
-    // engine/src/store/betterSqlite3Binding.cjs → ../../native
+    // engine/src/persistence/betterSqlite3Binding.cjs → ../../native
     globalThis[NATIVE_DIR_KEY] = resolve(__dirname, "..", "..", "native");
   }
   return globalThis[NATIVE_DIR_KEY];

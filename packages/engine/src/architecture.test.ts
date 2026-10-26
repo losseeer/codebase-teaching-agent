@@ -79,8 +79,8 @@ describe("分层守卫", () => {
     expect(list(offenders)).toEqual([]);
   });
 
-  it("持久层不许反过来认识领域（store/ 不该 import 管线或应用层）", () => {
-    const offenders = allEdges.filter((edge) => topOf(edge.from) === "store" && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
+  it("持久层不许反过来认识领域（persistence/ 不该 import 管线或应用层）", () => {
+    const offenders = allEdges.filter((edge) => topOf(edge.from) === "persistence" && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
   });
 
@@ -115,13 +115,13 @@ describe("分层守卫", () => {
   });
 
   /**
-    已知这笔债：管线模块还在直接落 `store/`，理想形态是由参数把端口传进来。
+    已知这笔债：管线模块还在直接落 `persistence/`，理想形态是由参数把端口传进来。
     账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
     */
-  const STORE_DEBT_LINES = 6;
+  const PERSISTENCE_DEBT_LINES = 6;
 
-  it(`管线直接落到 store/ 的依赖恰好等于在册条数（现 ${STORE_DEBT_LINES} 条，只能变小）`, () => {
-    const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "store"));
-    expect(found.length, found.length > STORE_DEBT_LINES ? `管线直接落 store 的依赖涨了（${STORE_DEBT_LINES} → ${found.length}）：\n${found.join("\n")}` : `债少了 ${STORE_DEBT_LINES} → ${found.length}，把在册数字改小：\n${found.join("\n")}`).toBe(STORE_DEBT_LINES);
+  it(`管线直接落到 persistence/ 的依赖恰好等于在册条数（现 ${PERSISTENCE_DEBT_LINES} 条，只能变小）`, () => {
+    const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "persistence"));
+    expect(found.length, found.length > PERSISTENCE_DEBT_LINES ? `管线直接落持久层的依赖涨了（${PERSISTENCE_DEBT_LINES} → ${found.length}）：\n${found.join("\n")}` : `债少了 ${PERSISTENCE_DEBT_LINES} → ${found.length}，把在册数字改小：\n${found.join("\n")}`).toBe(PERSISTENCE_DEBT_LINES);
   });
 });

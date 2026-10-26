@@ -3,7 +3,7 @@ import { validateSettings } from "@codebase-tutor/domain";
 
 import { importer } from "../services.js";
 import { traceEngine } from "@codebase-tutor/platform";
-import { appendMessages, createThread, getThread, readMessages, readThreadState, saveThreadState, type NewMessage, type TeachingThreadState } from "../store/chat-store.js";
+import { appendMessages, createThread, getThread, readMessages, readThreadState, saveThreadState, type NewMessage, type TeachingThreadState } from "../persistence/chat-store.js";
 
 /**
   「接着聊」的读写口径：会话线程 ↔ 内存里的 `TutorSession`，以及回合正文与状态快照的落库。

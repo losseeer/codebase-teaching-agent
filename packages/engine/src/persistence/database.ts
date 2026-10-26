@@ -29,7 +29,7 @@ export function withDatabase<T>(repositoryPath: string, run: (database: TutorDat
   }
 }
 
-/** chat_session 的行形状（snake_case 贴着表；域类型转换在 store/chat-store.ts）。 */
+/** chat_session 的行形状（snake_case 贴着表；域类型转换在 persistence/chat-store.ts）。 */
 export interface ChatSessionRow {
   id: string;
   repository_id: string;
@@ -348,7 +348,7 @@ export class TutorDatabase {
 
 
   /**
-    画布上的一张图（store/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
+    画布上的一张图（persistence/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
     列一律 AS 成返回类型上的驼峰名：better-sqlite3 按 SQL 里写的列名交回键，
     类型是断言出来的、编译器不报，键名不一致到运行期才炸。
   */
@@ -372,7 +372,7 @@ export class TutorDatabase {
   }
 
   /**
-    会话持久化（chat_session / chat_message）的语句层；业务出入口是 store/chat-store.ts（id/时间戳生成、入参守卫与领域类型在那里）。
+    会话持久化（chat_session / chat_message）的语句层；业务出入口是 persistence/chat-store.ts（id/时间戳生成、入参守卫与领域类型在那里）。
     软删语义在此层落实：所有读侧带 deleted_at IS NULL，「列表看不见」与「消息行仍在」同时成立。
     */
   insertChatSession(session: { id: string; repositoryId: string; scope: string; scopeRef: string | null; exerciseId: string | null; title: string; at: string }): void {

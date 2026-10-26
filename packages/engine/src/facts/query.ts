@@ -10,7 +10,7 @@ import type {
 } from "@codebase-tutor/domain";
 import { FACT_KINDS } from "@codebase-tutor/domain";
 
-import type { TutorDatabase } from "../store/database.js";
+import type { TutorDatabase } from "../persistence/database.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsToolContext } from "../source/tool-loop.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";

@@ -12,13 +12,13 @@ import type {
   SymbolInfo
 } from "@codebase-tutor/domain";
 
-import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../store/diagrams.js";
-import type { TutorDatabase } from "../store/database.js";
+import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../persistence/diagrams.js";
+import type { TutorDatabase } from "../persistence/database.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
 /**
-  画布上「结构」的唯一写入口。用户只能拖位置（走 `store/diagrams.ts` 的 `saveGeometry`），
+  画布上「结构」的唯一写入口。用户只能拖位置（走 `persistence/diagrams.ts` 的 `saveGeometry`），
   加删节点、连线、分组、改名都只能从这里进——界面上不留第二个写入口，
   两边各写一套校验与审计，用户的修正就会只活在某一边。
 
@@ -29,7 +29,7 @@ import type { FactsPairChecker } from "./facts-verify.js";
   2. 边的可信度只降不升：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
      核不到就降档，并把「为什么不算」写进 `downgraded`（界面上进悬停）。模型永远不能把自己的推断升成事实
      ——与边级证据校验同一个口径。
-  3. 每次结构改动自动存一版；回滚同样是往前追加一版（`store/diagrams.ts`）。
+  3. 每次结构改动自动存一版；回滚同样是往前追加一版（`persistence/diagrams.ts`）。
 */
 
 /** 一次改动回给模型的话：说的是落了什么，不是它想干什么。 */
@@ -295,7 +295,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   /**
     图元的名字：先在改完的结构里查，查不到再回到改之前那一份。
     删掉的东西在改完的结构里已经没有位置了，而版本历史那句「删除 X」要的恰恰是 X 原来叫什么——
-    只写得下 id 的历史读不出东西（`store/diagrams.ts` 给 `note` 那句话定的就是这件事）。
+    只写得下 id 的历史读不出东西（`persistence/diagrams.ts` 给 `note` 那句话定的就是这件事）。
   */
   const labelIn = (items: { id: string; label: string }[], value: string): string | undefined => items.find((item) => item.id === value)?.label;
   const nameOf = (id: string): string => labelIn(body.nodes, id) ?? labelIn(body.groups, id) ?? labelIn(diagram.body.nodes, id) ?? labelIn(diagram.body.groups, id) ?? id;

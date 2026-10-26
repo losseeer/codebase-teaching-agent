@@ -7,7 +7,7 @@
     每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
 
   每张表都要正好归到 `ENGINE_JOURNAL_EVENTS` 或 `UI_JOURNAL_EVENTS` 之一：下面那条编译期对账会查漏归类，
-  `packages/engine/src/store/journal.ts` 的运行时白名单由这两张表派生。
+  `packages/engine/src/persistence/journal.ts` 的运行时白名单由这两张表派生。
   append-only：只许新增，不许改名既有取值，也不删类型——读侧不校验类型，历史事件仍可读，只是不再接受新写入。
 */
 export type JournalEventType =

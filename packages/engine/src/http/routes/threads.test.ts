@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
-import { appendMessages, createThread, softDeleteThread } from "../../store/chat-store.js";
+import { appendMessages, createThread, softDeleteThread } from "../../persistence/chat-store.js";
 
 /**
   会话线程：线程 id 由引擎发，正文落在各自仓的 chat_message 里；仓被移出地址簿之后，线程仍可只凭 threadId 定位（读侧不靠内存挂载）。

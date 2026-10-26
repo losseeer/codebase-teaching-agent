@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { SymbolInfo } from "@codebase-tutor/domain";
 
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
-import { TutorDatabase } from "../store/database.js";
-import { readJournal } from "../store/journal.js";
+import { TutorDatabase } from "../persistence/database.js";
+import { readJournal } from "../persistence/journal.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import {
   buildFileSlices,

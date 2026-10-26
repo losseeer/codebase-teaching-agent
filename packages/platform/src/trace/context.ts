@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
-  请求级 traceId 上下文：`llm/call-log.ts` 与 `store/journal.ts` 在很深的调用栈里落记录，
+  请求级 traceId 上下文：`llm/call-log.ts` 与 `persistence/journal.ts` 在很深的调用栈里落记录，
   从这里读 traceId，不用把参数穿进 server → turn → tool-loop → provider 四五层签名。
 
   传播方式：在 `onRequest` 里 `run(traceId, done)`。Fastify 的钩子链同步串联，`done()` 会同步调用

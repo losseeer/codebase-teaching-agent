@@ -1,10 +1,10 @@
 import { broadcast } from "../../events.js";
 import { diagramFilesByNode, diagramWarnings } from "../../diagram/set-diagram.js";
 import { diagramWriteContextFor } from "../canvas-tools.js";
-import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../store/diagrams.js";
+import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../persistence/diagrams.js";
 /** 几何落盘的一项：节点 id 与它的新位置。*/
 export type DiagramPosition = { id: string; x: number; y: number };
-import { Journal } from "../../store/journal.js";
+import { Journal } from "../../persistence/journal.js";
 import { repositoryOr404 } from "../../services.js";
 
 type Mounted = NonNullable<ReturnType<typeof repositoryOr404>>;
@@ -125,7 +125,7 @@ export function saveGeometryUseCase(repositoryId: string, diagramId: string, pos
   });
 }
 
-/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `store/diagrams.ts` 的 `restoreVersion`）。 */
+/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `persistence/diagrams.ts` 的 `restoreVersion`）。 */
 export function restoreDiagramUseCase(repositoryId: string, diagramId: string, index: number): DiagramResult<{ diagram: NonNullable<ReturnType<typeof restoreVersion>> }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;

@@ -57,7 +57,7 @@ export const DATABASE_SCHEMA_SQL = `
         at INTEGER NOT NULL,
         PRIMARY KEY(repository_id, kind, status)
       );
-      -- 画布上的一张图（store/diagrams.ts 是唯一读写口）。一行 = 一张图，一个仓可以有很多张。
+      -- 画布上的一张图（persistence/diagrams.ts 是唯一读写口）。一行 = 一张图，一个仓可以有很多张。
       -- 图是用户资产，所以自己一张表：按龄清空的缓存语义（上面那张 layer_cache）不适用在这里。
       -- 名字/来源/时间戳单独立列：图库列表只要这几格，不必把整张图的 JSON 解析一遍。
       CREATE TABLE IF NOT EXISTS diagram (

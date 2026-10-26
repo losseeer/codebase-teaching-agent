@@ -1,6 +1,6 @@
 import type { TurnScene } from "@codebase-tutor/contract";
 
-import { Journal } from "../store/journal.js";
+import { Journal } from "../persistence/journal.js";
 import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
 import type { LlmUsage } from "../llm/provider.js";
 import type { CodeSearchRecord } from "../source/search-code.js";

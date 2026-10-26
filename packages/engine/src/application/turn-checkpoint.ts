@@ -1,6 +1,6 @@
 import type { TurnCheckpointChannel, TurnLoopState } from "../source/tool-loop.js";
 import { traceEngine } from "@codebase-tutor/platform";
-import { withDatabase } from "../store/database.js";
+import { withDatabase } from "../persistence/database.js";
 
 /**
   回合检查点通道的装配（照 LangGraph 的 checkpoint：一个 super-step 一份快照，同一线程续跑）。

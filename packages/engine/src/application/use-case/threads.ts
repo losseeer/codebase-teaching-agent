@@ -1,7 +1,7 @@
 import type { ChatThread } from "@codebase-tutor/contract";
 import { repositoryOr404 } from "../../services.js";
-import { createThread, getThread, isChatScope, listThreads, readMessages, renameThread, softDeleteThread } from "../../store/chat-store.js";
-import { Journal } from "../../store/journal.js";
+import { createThread, getThread, isChatScope, listThreads, readMessages, renameThread, softDeleteThread } from "../../persistence/chat-store.js";
+import { Journal } from "../../persistence/journal.js";
 import { locateThread, threadJournalPayload } from "../threads.js";
 
 /**

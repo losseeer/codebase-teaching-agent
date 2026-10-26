@@ -20,8 +20,8 @@ import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "@codebase-tutor/analysis";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
-import { Journal, journalFootprint } from "../store/journal.js";
-import { RepositoryHandle } from "../store/repository-handle.js";
+import { Journal, journalFootprint } from "../persistence/journal.js";
+import { RepositoryHandle } from "../persistence/repository-handle.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
@@ -33,7 +33,7 @@ export interface ImportedRepository {
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
   /**
-    这份产物的连接生命周期（一份 SQLite + 一条审计线）：随挂载创建、随卸载关闭，见 `store/repository-handle.ts`。
+    这份产物的连接生命周期（一份 SQLite + 一条审计线）：随挂载创建、随卸载关闭，见 `persistence/repository-handle.ts`。
     */
   handle: RepositoryHandle;
   watcher?: RepositoryWatcher;
@@ -322,7 +322,7 @@ export class ImportService extends EventEmitter {
     const startedAt = Date.now();
     const repository = this.attach({ path, index, estimate, analysis, handle });
     // 顺带记一次审计线体量：journal 只增不删，行数与字节数是「这条读路径还能不能一直这么跑」的判据
-    // （读侧按字节水位增量解析，见 `store/journal.ts`）。
+    // （读侧按字节水位增量解析，见 `persistence/journal.ts`）。
     const journal = journalFootprint(path);
     traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes, schemaGaps: repository.handle.schemaGaps.length }, { traceId: null, durationMs: Date.now() - startedAt });
     // 形状缺口不是审美问题：那一列被真读到时才会炸，所以开机这一次就把列名喊出来（同一份读数也进上面的 trace）

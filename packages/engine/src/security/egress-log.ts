@@ -1,5 +1,5 @@
 import { hash, repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
-import { Journal } from "../store/journal.js";
+import { Journal } from "../persistence/journal.js";
 
 /**
   源码出网清单：哪些仓内代码片段、以什么形态、进了哪一次模型请求。

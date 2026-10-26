@@ -1,4 +1,4 @@
-import { readJournal } from "../../src/store/journal.js";
+import { readJournal } from "../../src/persistence/journal.js";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**

@@ -2,7 +2,7 @@
 // `gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
 import type { FastifyReply } from "fastify";
 import type { LlmProvider } from "../llm/provider.js";
-import type { RepositoryHandle } from "../store/repository-handle.js";
+import type { RepositoryHandle } from "../persistence/repository-handle.js";
 import { budgetGate } from "../application/paid-turn.js";
 import { teachingLlm } from "../services.js";
 

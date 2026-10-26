@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
-import { TutorDatabase } from "../store/database.js";
+import { TutorDatabase } from "../persistence/database.js";
 import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysis";
 import { collectFileFacts, saveFileFacts } from "./build.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";

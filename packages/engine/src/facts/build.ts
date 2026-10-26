@@ -14,7 +14,7 @@ import { FACT_KINDS, languageCapabilitiesOf } from "@codebase-tutor/domain";
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { TutorDatabase } from "../store/database.js";
+import type { TutorDatabase } from "../persistence/database.js";
 import type { SyntaxNode } from "@codebase-tutor/analysis";
 import { eachFunction } from "@codebase-tutor/analysis";
 import { graphExtensions } from "@codebase-tutor/analysis";

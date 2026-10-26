@@ -6,7 +6,7 @@ import { hash } from "@codebase-tutor/platform";
 import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
-import { TutorDatabase } from "../store/database.js";
+import { TutorDatabase } from "../persistence/database.js";
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "@codebase-tutor/analysis";
 import { recordEgress } from "../security/egress-log.js";

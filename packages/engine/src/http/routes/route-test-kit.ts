@@ -8,9 +8,9 @@ import type { ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex 
 
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { flushLlmLog } from "../../llm/call-log.js";
-import { TutorDatabase } from "../../store/database.js";
-import { readJournal } from "../../store/journal.js";
-import { readMessages } from "../../store/chat-store.js";
+import { TutorDatabase } from "../../persistence/database.js";
+import { readJournal } from "../../persistence/journal.js";
+import { readMessages } from "../../persistence/chat-store.js";
 
 /**
   路由级测试的共用夹具。它管四件事：一份行号可预期的临时仓与地址簿、假 provider、
