@@ -1,5 +1,5 @@
 import { extname } from "node:path";
-import { LANGUAGE_CAPABILITIES, languageOfExtension } from "@codebase-tutor/shared";
+import { LANGUAGE_CAPABILITIES, languageOfExtension } from "@codebase-tutor/domain";
 
 /**
   图认哪些扩展名 = 能力表各条目的 `extensions` 汇总，不在这里另抄一份清单。

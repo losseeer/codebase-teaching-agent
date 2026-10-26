@@ -1,4 +1,4 @@
-import type { RubricCriterion } from "@codebase-tutor/shared";
+import type { RubricCriterion } from "@codebase-tutor/domain";
 
 /**
   LLM 出题守门（propose 之后的确定性一端）：全部确定性检查，任一不过即否决整道题。

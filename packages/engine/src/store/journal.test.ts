@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType, journalFootprint, readJournal, turnTextPayload, TURN_TEXT_LIMIT } from "./journal.js";
 import { runWithTrace } from "../trace/context.js";
-import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/shared";
+import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/domain";
 
 /**
   学习日志：append-only、白名单在运行时（eventTypes）判，不只靠编译期类型。

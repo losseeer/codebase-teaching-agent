@@ -1,4 +1,5 @@
-import type { CallEdge, SymbolInfo } from "@codebase-tutor/shared";
+import type { CallEdge, SymbolInfo } from "@codebase-tutor/domain";
+
 import { javaVisibleTypes, stripJavaNoise } from "./java-types.js";
 
 const ignoredCalls = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "require", "import"]);

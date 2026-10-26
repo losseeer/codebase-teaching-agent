@@ -1,4 +1,5 @@
-import type { CfgFunction, DataflowFunctionFact, DataflowRole, DataflowUse, DataflowVariable } from "@codebase-tutor/shared";
+import type { CfgFunction, DataflowFunctionFact, DataflowRole, DataflowUse, DataflowVariable } from "@codebase-tutor/domain";
+
 import type { SyntaxNode } from "../depgraph/parser.js";
 import type { FunctionScope } from "./cfg.js";
 

@@ -1,4 +1,4 @@
-import type { ScopedStreamProgress, TeachingProgress } from "@codebase-tutor/shared/wire";
+import type { ScopedStreamProgress, TeachingProgress } from "@codebase-tutor/contract";
 
 /** 能变成一行过程提示的帧：`delta` 是正文增量、不进这里，其余各档与教学那层的 `TeachingProgress` 同义。 */
 type ProgressFrame = Exclude<ScopedStreamProgress, { type: "delta" }> | TeachingProgress;

@@ -1,4 +1,5 @@
-import type { ChatThread } from "@codebase-tutor/shared";
+import type { ChatThread } from "@codebase-tutor/contract";
+
 import { getThread } from "../store/chat-store.js";
 import { importer } from "../services.js";
 

@@ -1,4 +1,6 @@
-import type { ChatThread, Exercise, TutorSettings } from "@codebase-tutor/shared/wire";
+import type { ChatThread } from "@codebase-tutor/contract";
+import type { Exercise, TutorSettings } from "@codebase-tutor/domain";
+
 import type { MapBinding, Scope } from "./chatScope";
 import type { MessageExtra, ThreadItem } from "./threadItems";
 

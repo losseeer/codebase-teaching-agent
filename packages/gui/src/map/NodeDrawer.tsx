@@ -1,5 +1,6 @@
-import type { ReactElement } from "react";
-import type { DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
+import type { DiagramNode, DiagramEdge } from "@codebase-tutor/domain";
+
+import type {ReactElement } from "react";
 import { Icon } from "../ui/icons";
 import { ORIGIN_SHORT } from "./diagramView";
 

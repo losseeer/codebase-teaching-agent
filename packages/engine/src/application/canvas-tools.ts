@@ -1,5 +1,6 @@
 import type { FactsToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
-import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
+import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
+
 import type { ImportedRepository } from "../importer/importer.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { DiagramWriteContext } from "../diagram/set-diagram.js";

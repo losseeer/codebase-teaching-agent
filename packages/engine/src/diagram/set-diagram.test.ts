@@ -2,7 +2,8 @@ import { mkdirSync, readdirSync, mkdtempSync, realpathSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { TutorDatabase } from "../store/database.js";
 import { applyStructure, buildDiagram, DIAGRAM_VERSION_LIMIT, listDiagrams, readDiagram, restoreVersion } from "../store/diagrams.js";
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";

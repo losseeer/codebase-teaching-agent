@@ -1,4 +1,6 @@
-import type { CostBucket, CostComponent, CostDay, CostSummary, JournalEvent } from "@codebase-tutor/shared";
+import type { CostBucket, CostComponent, CostDay, CostSummary } from "@codebase-tutor/contract";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { getLlmRuntimeSettings } from "../llm/runtime.js";
 import { readJournal } from "../store/journal.js";
 

@@ -1,4 +1,5 @@
-import type { FileRole } from "@codebase-tutor/shared";
+import type { FileRole } from "@codebase-tutor/domain";
+
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import type { FileSlice } from "./l1-slice.js";

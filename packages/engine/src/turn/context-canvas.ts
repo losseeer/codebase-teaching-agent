@@ -1,5 +1,6 @@
 import { basename, dirname } from "node:path";
-import type { RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import type { SearchCorpus } from "../source/search-code.js";
 

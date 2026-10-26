@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import type { CallEdge, DependencyGraphData, FileEntry, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/shared";
+import type { CallEdge, DependencyGraphData, FileEntry, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/domain";
+
 import { parseBackendStatus, type ParseBackendStatus } from "./parser.js";
 import { extractCalls } from "./call-edges.js";
 import { detectEntrypoints } from "./entrypoints.js";

@@ -1,4 +1,6 @@
-import type { Exercise } from "@codebase-tutor/shared";
+import type { Exercise } from "@codebase-tutor/domain";
+import { validateStyle } from "@codebase-tutor/domain";
+
 import type { AskFacet } from "../../source/ask-user.js";
 import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
@@ -16,7 +18,6 @@ import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
 import { traceEngine } from "../../trace/engine-log.js";
 import { abortTurn } from "../../application/turn-registry.js";
-import { validateStyle } from "@codebase-tutor/shared";
 import type { FastifyInstance } from "fastify";
 
 /**

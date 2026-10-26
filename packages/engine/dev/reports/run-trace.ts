@@ -1,5 +1,5 @@
 import { readJournal } from "../../src/store/journal.js";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**
   只读聚合脚本：按 traceId 把 journal.jsonl 的事件串成「一次请求 = 一段可读轨迹」。

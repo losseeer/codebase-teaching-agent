@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { FileTreeNode } from "@codebase-tutor/shared/wire";
+import type { FileTreeNode } from "@codebase-tutor/domain";
+
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Loading } from "../ui/Loading";

@@ -1,8 +1,9 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ContractViolation } from "@codebase-tutor/shared/wire";
+import { ContractViolation } from "@codebase-tutor/contract";
+
 import { parseScopedStreamFrame } from "./client";
 import { progressText } from "../agent/progressLines";
 
@@ -81,11 +82,17 @@ describe("过程帧的界面文案", () => {
   });
 });
 
-describe("界面只从 wire 边界取契约", () => {
-  it("没有任何界面源码直接 import `@codebase-tutor/shared` 根出口（引擎内部模型不跨进程）", () => {
-    const offenders = sourceFiles(SRC)
-      .filter((file) => /from "@codebase-tutor\/shared"/.test(readFileSync(file, "utf8")))
-      .map((file) => file.slice(SRC.length + 1));
-    expect(offenders, `改从 @codebase-tutor/shared/wire 取：${offenders.join(", ")}`).toEqual([]);
+describe("界面的跨包边界", () => {
+  it("界面只 import domain 与 contract，不许 import 引擎内部包", () => {
+    // 过去靠 wire.ts 那份手工再导出挡越界；现在边界由包本身承担：domain 是零依赖共享内核，contract 是跨进程契约，
+    // 引擎内部（analysis、store、llm 实现）不在界面上出现，出现即说明有人把实现细节搬上了线。
+    const offenders = new Set<string>();
+    for (const file of sourceFiles(SRC)) {
+      for (const match of readFileSync(file, "utf8").matchAll(/from "@codebase-tutor\/([a-z-]+)/g)) {
+        const pkg = match[1];
+        if (pkg !== "domain" && pkg !== "contract") offenders.add(pkg);
+      }
+    }
+    expect([...offenders], `界面不许依赖这些包：${[...offenders].join(", ")}`).toEqual([]);
   });
 });

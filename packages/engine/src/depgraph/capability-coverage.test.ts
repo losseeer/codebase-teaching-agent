@@ -1,10 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-  LANGUAGE_BY_EXTENSION,
-  LANGUAGE_CAPABILITIES,
-  languageCapabilitiesOf,
-  type CapabilityLevel
-} from "@codebase-tutor/shared";
+import { LANGUAGE_BY_EXTENSION, LANGUAGE_CAPABILITIES, languageCapabilitiesOf, type CapabilityLevel } from "@codebase-tutor/domain";
+
 import { graphExtensions } from "./graph.js";
 import { loadSymbolParser } from "./parser.js";
 import { buildFileCfg } from "../facts/cfg.js";

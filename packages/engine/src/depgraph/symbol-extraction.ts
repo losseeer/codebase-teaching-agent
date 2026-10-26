@@ -1,5 +1,6 @@
 import { extname } from "node:path";
-import type { SymbolInfo } from "@codebase-tutor/shared";
+import type { SymbolInfo } from "@codebase-tutor/domain";
+
 import { extractSymbolsFromAst } from "./parser.js";
 import { tsFamilyExtensions } from "./language-extensions.js";
 

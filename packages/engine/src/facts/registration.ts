@@ -1,4 +1,5 @@
-import type { RegistryEntry, RegistryFileFact, RegistryKind } from "@codebase-tutor/shared";
+import type { RegistryEntry, RegistryFileFact, RegistryKind } from "@codebase-tutor/domain";
+
 import { extractRouteEndpoints } from "../depgraph/url-routes.js";
 import { FACTS_VERSION } from "./version.js";
 

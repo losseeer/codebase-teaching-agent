@@ -1,4 +1,5 @@
-import type { SourceAnchor } from "@codebase-tutor/shared";
+import type { SourceAnchor } from "@codebase-tutor/domain";
+
 import { extractMultilineTemplateLines } from "./parser.js";
 
 /**

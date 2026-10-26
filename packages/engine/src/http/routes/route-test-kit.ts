@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { ChatThreadMessage, ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { ChatThreadMessage } from "@codebase-tutor/contract";
+import type { ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { repositoryId as deriveRepositoryId } from "../../ids.js";
 import { flushLlmLog } from "../../llm/call-log.js";
 import { TutorDatabase } from "../../store/database.js";

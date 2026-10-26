@@ -1,4 +1,5 @@
-import type { DependencyGraphData } from "@codebase-tutor/shared";
+import type { DependencyGraphData } from "@codebase-tutor/domain";
+
 import type { DependencyGraph } from "./graph.js";
 
 export function serializeGraph(graph: DependencyGraph): DependencyGraphData {

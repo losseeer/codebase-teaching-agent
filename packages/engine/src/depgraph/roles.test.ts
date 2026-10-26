@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CallEdge, SourceAnchor, SymbolInfo } from "@codebase-tutor/shared";
+import type { CallEdge, SourceAnchor, SymbolInfo } from "@codebase-tutor/domain";
+
 import { classifyFileRoles, fileStructureOf, isTestPath, roleOf, type FileStructure } from "./roles.js";
 
 const ENTRY: SourceAnchor = { path: "main.py", line: 1, label: "入口" };

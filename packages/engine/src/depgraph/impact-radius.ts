@@ -1,4 +1,5 @@
-import type { ImpactResult } from "@codebase-tutor/shared";
+import type { ImpactResult } from "@codebase-tutor/domain";
+
 import type { DependencyGraph } from "./graph.js";
 
 /**

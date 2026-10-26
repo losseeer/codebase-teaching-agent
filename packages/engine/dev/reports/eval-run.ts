@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import type { RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+
 import { loadDotEnv } from "../../src/boot.js";
 import { LATEST_SUMMARY_LIMIT } from "../../src/store/database.js";
 import { indexRepository } from "../../src/indexer/indexer.js";

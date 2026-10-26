@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { repositoryId } from "../ids.js";
 import { readJournal } from "../store/journal.js";
 import { runWithTrace } from "../trace/context.js";

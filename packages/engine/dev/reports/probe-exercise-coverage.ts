@@ -20,8 +20,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import type { ImplementationUnit, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/shared";
-import { languageOfExtension } from "@codebase-tutor/shared";
+import type { ImplementationUnit, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
+import { languageOfExtension } from "@codebase-tutor/domain";
 
 /** 单元上的语言标签（比界面用的 `SupportedLanguage` 少一档 vue/javascript，探针按这一份走，不自造第三套）。 */
 type UnitLanguage = SymbolInfo["language"];

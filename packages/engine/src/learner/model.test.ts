@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { deriveFaded } from "./faded.js";
 import { deriveLearnerProfile } from "./model.js";
 

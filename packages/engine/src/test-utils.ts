@@ -1,4 +1,4 @@
-import type { SymbolInfo } from "@codebase-tutor/shared";
+import type { SymbolInfo } from "@codebase-tutor/domain";
 
 /**
   测试夹具：符号对象字面量在多个测试文件里反复出现同一套 id 模板（`symbol:${path}:${name}:${line}`）

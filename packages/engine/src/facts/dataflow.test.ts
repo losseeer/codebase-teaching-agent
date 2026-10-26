@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { languageCapabilitiesOf, type DataflowFunctionFact, type DataflowVariable } from "@codebase-tutor/shared";
+import { languageCapabilitiesOf, type DataflowFunctionFact, type DataflowVariable } from "@codebase-tutor/domain";
+
 import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
 import { analyzeFile } from "./build.js";
 

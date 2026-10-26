@@ -1,5 +1,6 @@
-import { useRef, useState, type ReactElement } from "react";
-import type { DiagramSummary } from "@codebase-tutor/shared/wire";
+import {useRef, useState, type ReactElement } from "react";
+import type { DiagramSummary } from "@codebase-tutor/domain";
+
 import { Icon } from "../ui/icons";
 import { InlineName, MenuButton, PopMenu, type MenuItem } from "../ui/PopMenu";
 import { relativeTime } from "./diagramView";

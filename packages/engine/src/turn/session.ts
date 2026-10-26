@@ -1,5 +1,6 @@
-import type { TutorSession, TutorSettings } from "@codebase-tutor/shared";
-import { defaultTutorSettings, validateSettings } from "@codebase-tutor/shared";
+import type { TutorSession, TutorSettings } from "@codebase-tutor/domain";
+import { defaultTutorSettings, validateSettings } from "@codebase-tutor/domain";
+
 import { id } from "../ids.js";
 
 export function createSession(repositoryId: string, scopeRef: string, settings: Partial<TutorSettings> = defaultTutorSettings): TutorSession {

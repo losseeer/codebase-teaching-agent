@@ -1,5 +1,17 @@
-import type { CfgFileFact, DataflowFileFact, DataflowFunctionFact, DeclaredType, FactKind, FactSkip, FileEntry, RegistryFileFact, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
-import { FACT_KINDS, languageCapabilitiesOf } from "@codebase-tutor/shared";
+import type {
+  CfgFileFact,
+  DataflowFileFact,
+  DataflowFunctionFact,
+  DeclaredType,
+  FactKind,
+  FactSkip,
+  FileEntry,
+  RegistryFileFact,
+  SymbolInfo,
+  TypeRelationFileFact
+} from "@codebase-tutor/domain";
+import { FACT_KINDS, languageCapabilitiesOf } from "@codebase-tutor/domain";
+
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TutorDatabase } from "../store/database.js";

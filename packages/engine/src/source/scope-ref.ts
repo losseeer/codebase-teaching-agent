@@ -1,4 +1,4 @@
-import type { FileEntry, RepositoryIndex } from "@codebase-tutor/shared";
+import type { FileEntry, RepositoryIndex } from "@codebase-tutor/domain";
 
 /**
   选中作用域：一个文件或一个目录。存成 `file:<path>` / `dir:<path>`，

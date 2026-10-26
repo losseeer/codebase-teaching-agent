@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import type { ScopeRef } from "../source/scope-ref.js";
 import { createSession } from "./session.js";
 import { respondWithProvider, type TeachingProgress } from "./run-turn.js";

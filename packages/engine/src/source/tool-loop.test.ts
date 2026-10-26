@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../llm/provider.js";
 import { LlmAbortedError } from "../llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";

@@ -1,4 +1,4 @@
-import type { SourceAnchor } from "@codebase-tutor/shared";
+import type { SourceAnchor } from "@codebase-tutor/domain";
 
 /**
  * Python 的入口证据写在框架约定里，文件名基本不带信息：FastAPI/Flask 的路由常拆在 api/、routers/ 下，

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { SEARCH_CODE_TOOL, buildSearchCorpus, executeSearchCode } from "./search-code.js";
 import { segmentForLookup } from "../text/lexical.js";
 

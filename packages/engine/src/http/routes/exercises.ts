@@ -1,4 +1,5 @@
-import { type ExerciseAnswer, type ExerciseKind, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/shared";
+import { type ExerciseAnswer, type ExerciseKind, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
+
 import { budgetDegraded } from "../../application/paid-turn.js";
 import { skillsForTurn } from "../../application/scoped-turn.js";
 import { exercises, lightLlm, REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";

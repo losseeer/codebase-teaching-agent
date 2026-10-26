@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
-import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/shared";
+import type { FileEntry, FileTreeNode, Hotspot, RepositoryIndex, UnreadableFile } from "@codebase-tutor/domain";
+
 import { repositoryId, hash } from "../ids.js";
 import { graphExtensions } from "../depgraph/graph.js";
 import { deniedSecretNameReason } from "../source/read-file.js";

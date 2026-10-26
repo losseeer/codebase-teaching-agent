@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
-import type { FileEntry } from "@codebase-tutor/shared";
+import type { FileEntry } from "@codebase-tutor/domain";
+
 import { slash } from "./repo-paths.js";
 
 /**

@@ -1,4 +1,6 @@
-import type { TutorSettings } from "@codebase-tutor/shared";
+import type { TutorSettings } from "@codebase-tutor/domain";
+import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/domain";
+
 import { budgetGate, crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { externalAndSkills, recheckTurn } from "../../application/scoped-turn.js";
 import { persistTeachingTurn, resolveTeachingState } from "../../application/teaching-turn.js";
@@ -20,7 +22,6 @@ import { parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-re
 import { createThread, saveThreadState } from "../../store/chat-store.js";
 import { Journal, readJournal } from "../../store/journal.js";
 import { markThread } from "../../trace/context.js";
-import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/shared";
 import type { FastifyInstance } from "fastify";
 
 /**

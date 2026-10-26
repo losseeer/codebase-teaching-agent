@@ -15,7 +15,7 @@
 */
 
 /** 档名的类型与中文标签都在 shared（线上形状与界面文案的唯一来源），这里只转发一次。 */
-import { EXTERNAL_CATEGORY_LABEL, type ExternalCategory } from "@codebase-tutor/shared";
+import { EXTERNAL_CATEGORY_LABEL, type ExternalCategory } from "@codebase-tutor/domain";
 
 export { EXTERNAL_CATEGORY_LABEL, type ExternalCategory };
 

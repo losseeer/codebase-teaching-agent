@@ -13,7 +13,8 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExerciseLanguage } from "@codebase-tutor/shared";
+import type { ExerciseLanguage } from "@codebase-tutor/domain";
+
 import { isolationBackend, resolveToolchain, seatbeltProfile, type SandboxToolchain } from "./profile.js";
 
 /** 沙箱支持的语言 = 共享层那一档，不在引擎里另立一份（加一门语言要同时改 runner 与隔离探测）。 */

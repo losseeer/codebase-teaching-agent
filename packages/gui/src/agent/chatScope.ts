@@ -1,4 +1,4 @@
-import type { ChatScope } from "@codebase-tutor/shared/wire";
+import type { ChatScope } from "@codebase-tutor/contract";
 
 /**
   Agent 侧栏的 3 个作用域。

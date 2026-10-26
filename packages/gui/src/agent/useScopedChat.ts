@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { ChatThread, Exercise, ScopedStreamProgress, TutorSession, TutorSettings } from "@codebase-tutor/shared/wire";
-import { defaultTutorSettings } from "@codebase-tutor/shared/wire";
+import { TutorSession, TutorSettings, defaultTutorSettings } from "@codebase-tutor/domain";
+import type { ChatThread, ScopedStreamProgress } from "@codebase-tutor/contract";
+import type { Exercise } from "@codebase-tutor/domain";
+
+import {useEffect, useRef, useState } from "react";
 import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/client";
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";

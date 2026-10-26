@@ -1,4 +1,4 @@
-import type { ExerciseKind } from "@codebase-tutor/shared/wire";
+import type { ExerciseKind } from "@codebase-tutor/domain";
 
 /** 中文日期文案：只显示到日；时间戳读不出时明说。 */
 export function dateText(iso: string): string {

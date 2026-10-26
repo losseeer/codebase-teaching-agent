@@ -1,4 +1,5 @@
-import type { FileRole, SymbolInfo } from "@codebase-tutor/shared";
+import type { FileRole, SymbolInfo } from "@codebase-tutor/domain";
+
 import { buildFileEdges, type FileStructure } from "../depgraph/roles.js";
 import { rankSymbolsByCalls, countSymbolsByPath } from "../depgraph/symbol-rank.js";
 

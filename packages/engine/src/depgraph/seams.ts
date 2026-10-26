@@ -1,4 +1,5 @@
-import type { FileEntry, RouteConsumer, RouteProvider, SeamDirection, SeamReport } from "@codebase-tutor/shared";
+import type { FileEntry, RouteConsumer, RouteProvider, SeamDirection, SeamReport } from "@codebase-tutor/domain";
+
 import type { LlmTool } from "../llm/provider.js";
 import { matchRouteSeams, routeEndpointsOfFiles } from "./url-routes.js";
 

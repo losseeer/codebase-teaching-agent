@@ -141,7 +141,7 @@ const packageNameShape = /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 /**
   「解析不到」不等于「是外部包」，这一关挡掉三类东西：
   - `./missing`、`/abs/path`、命中 tsconfig 别名却没落点的都是仓内意图，只是断链，记成外部服务不准确；
-  - 同一个仓里的工作区包（`@codebase-tutor/shared`）：落点算不出是解析能力问题，不是「用了个三方包」；
+  - 同一个仓里的工作区包（`@codebase-tutor/domain`）：落点算不出是解析能力问题，不是「用了个三方包」；
   - 字形根本不是包名的脏捕获：`tsSpecifierPattern` 在 `.tsx` 里真会吃到 `<div className=`、` | ` 这种串，
     只让 `resolveImport` 返回 undefined 不够，名字要留档就必须先验形。
 */

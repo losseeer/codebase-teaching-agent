@@ -1,4 +1,5 @@
-import type { TurnScene } from "@codebase-tutor/shared";
+import type { TurnScene } from "@codebase-tutor/contract";
+
 import { Journal } from "../store/journal.js";
 import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
 import type { LlmUsage } from "../llm/provider.js";

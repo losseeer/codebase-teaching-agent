@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import type { DiagramBody, DiagramEdge, DiagramNode } from "@codebase-tutor/shared/wire";
+import { DiagramEdge, DiagramNode } from "@codebase-tutor/domain";
+import type { DiagramBody } from "@codebase-tutor/domain";
+
+import {describe, expect, it } from "vitest";
 import {
   DEFAULT_VIEW,
   EDGE_ORIGINS,

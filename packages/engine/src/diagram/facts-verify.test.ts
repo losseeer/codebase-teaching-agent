@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DeclaredType, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
+import type { DeclaredType, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
+
 import { TutorDatabase } from "../store/database.js";
 import { factsPairChecker, type FactSources } from "./facts-verify.js";
 

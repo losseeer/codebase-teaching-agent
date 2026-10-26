@@ -6,7 +6,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { languageCapabilitiesOf, type RepositoryIndex, type SymbolInfo } from "@codebase-tutor/shared";
+import { languageCapabilitiesOf, type RepositoryIndex, type SymbolInfo } from "@codebase-tutor/domain";
+
 import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus } from "../../src/depgraph/parser.js";
 import { analyzeFile } from "../../src/facts/build.js";
 import { graphExtensions } from "../../src/depgraph/graph.js";

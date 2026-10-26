@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/shared";
+import type { EngineTraceEvent, EngineTraceKind, TraceScalar } from "@codebase-tutor/domain";
+
 import { logTargetFromEnv } from "./log-target.js";
 import { currentTraceId } from "./context.js";
 import { tutorDataDir } from "../tutor-home.js";

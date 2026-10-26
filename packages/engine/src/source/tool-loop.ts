@@ -1,4 +1,5 @@
-import type { ScopedStreamProgress } from "@codebase-tutor/shared";
+import type { ScopedStreamProgress } from "@codebase-tutor/contract";
+
 import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
 import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
 import { addUsage } from "../llm/usage.js";

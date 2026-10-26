@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { engineLogPath, flushEngineLog, formatEngineTraceLine, traceEngine } from "./engine-log.js";
 import { currentTraceId, runWithTrace } from "./context.js";
-import type { EngineTraceEvent } from "@codebase-tutor/shared";
+import type { EngineTraceEvent } from "@codebase-tutor/domain";
 
 /**
   落盘要逐行可机读、回显只给非 http/boot 的种类；LLM 调用明细不在这一条线（同一事实只写一处，靠 traceId 关联 llm.log）。

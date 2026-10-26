@@ -1,4 +1,4 @@
-import type { FadedState, JournalEvent } from "@codebase-tutor/shared";
+import type { FadedState, JournalEvent } from "@codebase-tutor/domain";
 
 const initial: FadedState = {
   sampleCompleteness: 2,

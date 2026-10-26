@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
-import { STYLE_BAND_LABEL, styleBand } from "@codebase-tutor/shared/wire";
+import { styleBand, STYLE_BAND_LABEL } from "@codebase-tutor/domain";
+
+import {useEffect, useRef, useState, type ReactElement } from "react";
 import { Markdown } from "./Markdown";
 import { LlmSettingsControl } from "./LlmSettings";
 import { ColumnResizer } from "../ui/ColumnResizer";

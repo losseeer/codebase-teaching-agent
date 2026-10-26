@@ -1,6 +1,15 @@
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
-import type { CfgFileFact, CfgFunction, DataflowFileFact, FactKind, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
-import { FACT_KINDS } from "@codebase-tutor/shared";
+import type {
+  CfgFileFact,
+  CfgFunction,
+  DataflowFileFact,
+  FactKind,
+  RegistryEntry,
+  RegistryFileFact,
+  TypeRelationFileFact
+} from "@codebase-tutor/domain";
+import { FACT_KINDS } from "@codebase-tutor/domain";
+
 import type { TutorDatabase } from "../store/database.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsToolContext } from "../source/tool-loop.js";

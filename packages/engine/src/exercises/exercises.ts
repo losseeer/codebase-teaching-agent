@@ -1,6 +1,21 @@
 import { dirname } from "node:path";
-import type { Exercise, ExerciseAnswer, ExerciseFamily, ExerciseKind, ExerciseLanguage, ExerciseResult, ImplementationUnit, MasteryLevel, MasteryRecord, PracticeSummary, RepositoryAnalysis, RepositoryIndex, RubricCriterion } from "@codebase-tutor/shared";
-import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/shared";
+import type {
+  Exercise,
+  ExerciseAnswer,
+  ExerciseFamily,
+  ExerciseKind,
+  ExerciseLanguage,
+  ExerciseResult,
+  ImplementationUnit,
+  MasteryLevel,
+  MasteryRecord,
+  PracticeSummary,
+  RepositoryAnalysis,
+  RepositoryIndex,
+  RubricCriterion
+} from "@codebase-tutor/domain";
+import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/domain";
+
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillsToolContext } from "../source/tool-loop.js";
 import { graphFromData, handledExtensions, impactRadius } from "../depgraph/graph.js";

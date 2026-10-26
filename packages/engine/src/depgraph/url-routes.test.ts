@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RouteProvider } from "@codebase-tutor/shared";
+import type { RouteProvider } from "@codebase-tutor/domain";
+
 import { extractRouteEndpoints, matchRouteSeams, normalizeRoute, routeFileExtensions } from "./url-routes.js";
 
 /**

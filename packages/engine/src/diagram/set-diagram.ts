@@ -1,4 +1,17 @@
-import type { Diagram, DiagramBody, DiagramEdit, DiagramEditRequest, DiagramEdge, DiagramGroup, DiagramNode, JournalEventType, RepositoryAnalysis, RepositoryIndex, SymbolInfo } from "@codebase-tutor/shared";
+import type {
+  Diagram,
+  DiagramBody,
+  DiagramEdit,
+  DiagramEditRequest,
+  DiagramEdge,
+  DiagramGroup,
+  DiagramNode,
+  JournalEventType,
+  RepositoryAnalysis,
+  RepositoryIndex,
+  SymbolInfo
+} from "@codebase-tutor/domain";
+
 import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../store/diagrams.js";
 import type { TutorDatabase } from "../store/database.js";
 import type { LlmTool } from "../llm/provider.js";

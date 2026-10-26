@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { createRouteFixture, MAIN_FILE, OK_REPLY, TAIL, sseEvents, deltasOf, doneEvent, waitFor, type RouteFixture } from "./route-test-kit.js";
 import { readMessages } from "../../store/chat-store.js";
 import { TutorDatabase } from "../../store/database.js";

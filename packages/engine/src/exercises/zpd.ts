@@ -1,4 +1,5 @@
-import type { MasteryLevel, MasteryRecord } from "@codebase-tutor/shared";
+import type { MasteryLevel, MasteryRecord } from "@codebase-tutor/domain";
+
 import { currentMastery } from "../learner/mastery.js";
 
 /** 一个候选题目标：difficulty 是它对应的掌握度档位，value 是题目本体。 */

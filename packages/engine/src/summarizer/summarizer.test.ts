@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SymbolInfo } from "@codebase-tutor/shared";
+import type { SymbolInfo } from "@codebase-tutor/domain";
+
 import { classifyFileRoles, type FileStructure } from "../depgraph/roles.js";
 import { TutorDatabase } from "../store/database.js";
 import { readJournal } from "../store/journal.js";

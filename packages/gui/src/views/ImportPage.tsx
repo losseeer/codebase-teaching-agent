@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import {useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { checkContract, importJobSchema, type ImportJob, type RepositoryCatalogEntry } from "@codebase-tutor/shared/wire";
+import { checkContract, importJobSchema, type ImportJob, type RepositoryCatalogEntry } from "@codebase-tutor/contract";
+
 import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { Icon } from "../ui/icons";

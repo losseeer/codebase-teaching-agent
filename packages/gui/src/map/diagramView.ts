@@ -1,4 +1,4 @@
-import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@codebase-tutor/shared/wire";
+import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@codebase-tutor/domain";
 
 /**
   画布的几何与文案口径（纯函数，无 JSX）：`DiagramCanvas` 与 `DiagramPage` 共用。

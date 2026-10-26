@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { llmLogPath, type LlmCallRecord } from "../../src/llm/call-log.js";
 import { readJournal } from "../../src/store/journal.js";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**
   LLM 数据流审计报表（纯只读、零 token）：回答「这台机器把哪些代码交给了谁」。

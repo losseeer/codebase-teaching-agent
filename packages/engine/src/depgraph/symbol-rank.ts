@@ -1,4 +1,4 @@
-import type { CallEdge, SymbolInfo } from "@codebase-tutor/shared";
+import type { CallEdge, SymbolInfo } from "@codebase-tutor/domain";
 
 /**
   文件内符号排序的统一口径：凡「每文件只留若干个符号」的地方都共用它，避免各处各排一份导致结果不一致。

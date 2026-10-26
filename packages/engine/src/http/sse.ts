@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { ScopedStreamFrame, ServerEvent, TurnScene } from "@codebase-tutor/shared";
+import type { ScopedStreamFrame, ServerEvent, TurnScene } from "@codebase-tutor/contract";
+
 import { Journal } from "../store/journal.js";
 import { subscribeEvents, unsubscribeEvents } from "../events.js";
 import { beginTurn, type TurnHandle } from "../application/turn-registry.js";

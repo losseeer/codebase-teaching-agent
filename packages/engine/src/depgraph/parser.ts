@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { dirname, extname, join } from "node:path";
 import { Language, Parser, type Tree } from "web-tree-sitter";
-import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/shared";
+import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/domain";
+
 import { traceEngine } from "../trace/engine-log.js";
 
 /**

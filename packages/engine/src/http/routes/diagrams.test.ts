@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Diagram, DiagramBody, DiagramSummary } from "@codebase-tutor/shared";
+import type { Diagram, DiagramBody, DiagramSummary } from "@codebase-tutor/domain";
+
 import { createRouteFixture, OK_REPLY, type RouteFixture } from "./route-test-kit.js";
 import { TutorDatabase } from "../../store/database.js";
 import { applyStructure, buildDiagram } from "../../store/diagrams.js";

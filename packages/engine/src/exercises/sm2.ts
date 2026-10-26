@@ -1,4 +1,4 @@
-import type { ReviewSchedule } from "@codebase-tutor/shared";
+import type { ReviewSchedule } from "@codebase-tutor/domain";
 
 const minimumEasiness = 1.3;
 

@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import type { TypeDispatchEdge } from "@codebase-tutor/shared";
+import type { TypeDispatchEdge } from "@codebase-tutor/domain";
 
 /**
   Java 的「接收者类型名 → 仓内文件」可见表：`import` 带进来的（含通配）加上同包——

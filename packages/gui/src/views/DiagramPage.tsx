@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/domain";
+import type { Diagram } from "@codebase-tutor/domain";
+
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Diagram, DiagramNode, DiagramSummary, RepositoryIndex } from "@codebase-tutor/shared/wire";
 import { api, subscribeServerEvents, type DiagramPosition, type DiagramWarning, type SaveState, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Loading } from "../ui/Loading";

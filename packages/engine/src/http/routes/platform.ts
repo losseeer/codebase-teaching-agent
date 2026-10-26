@@ -1,4 +1,5 @@
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { engineVersion } from "../../boot.js";
 import { openEventStream } from "../../http/sse.js";
 import { teachingProviderStatus } from "../../llm/provider.js";

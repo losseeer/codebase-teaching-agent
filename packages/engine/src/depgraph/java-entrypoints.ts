@@ -1,4 +1,4 @@
-import type { SourceAnchor } from "@codebase-tutor/shared";
+import type { SourceAnchor } from "@codebase-tutor/domain";
 
 /**
  * Java/Spring 入口识别：启动类看 @SpringBootApplication，HTTP 路由看 @Controller/@RestController。

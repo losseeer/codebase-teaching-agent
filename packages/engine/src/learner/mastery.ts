@@ -1,4 +1,4 @@
-import type { JournalEvent, MasteryLevel, MasteryMapEntry, MasteryRecord } from "@codebase-tutor/shared";
+import type { JournalEvent, MasteryLevel, MasteryMapEntry, MasteryRecord } from "@codebase-tutor/domain";
 
 /**
   掌握度的推导层：从 journal 的练习结果与「已掌握」事件回放出一条曲线。

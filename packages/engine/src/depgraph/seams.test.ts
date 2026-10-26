@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import type { FileEntry, SeamReport } from "@codebase-tutor/shared";
+import type { FileEntry, SeamReport } from "@codebase-tutor/domain";
+
 import { clearSeamMemo, seamReportFor, type SeamRepository } from "./seams.js";
 
 /**

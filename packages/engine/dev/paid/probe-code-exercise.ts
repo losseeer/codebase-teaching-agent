@@ -10,7 +10,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/domain";
+
 import { loadDotEnv } from "../../src/boot.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/llm/runtime.js";
 import { generateCodeExercise } from "../../src/exercises/code-generate.js";

@@ -1,4 +1,4 @@
-import type { RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
 
 /**
   调用图邻接：把依赖图里的调用边整理成「它调用谁 / 谁调用它 / 同文件符号定义位置」，只给路径与符号名、不给源码。

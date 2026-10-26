@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Exercise, ExerciseKind } from "@codebase-tutor/shared";
+import type { Exercise, ExerciseKind } from "@codebase-tutor/domain";
+
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";

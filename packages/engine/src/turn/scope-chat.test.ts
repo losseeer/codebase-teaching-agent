@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { Exercise, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
 import { buildSearchCorpus } from "../source/search-code.js";
 import { mapChat, practiceChat, type MapChatProgress, type ScopedChatTurn } from "./run-turn.js";

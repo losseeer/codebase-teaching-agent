@@ -29,7 +29,8 @@
     "l1:reburn": "tsx dev/mutate/reburn-l1.ts"
   },
   "dependencies": {
-    "@codebase-tutor/shared": "workspace:*",
+    "@codebase-tutor/contract": "workspace:*",
+    "@codebase-tutor/domain": "workspace:*",
     "@fastify/cors": "^11.0.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vscode/tree-sitter-wasm": "^0.3.1",

@@ -2,7 +2,8 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { FileEntry, RepositoryIndex } from "@codebase-tutor/shared";
+import type { FileEntry, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph } from "../../src/depgraph/graph.js";
 import { loadSymbolParser } from "../../src/depgraph/parser.js";

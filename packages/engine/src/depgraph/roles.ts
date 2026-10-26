@@ -1,4 +1,4 @@
-import type { CallEdge, FileRole, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/shared";
+import type { CallEdge, FileRole, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/domain";
 
 /**
   文件角色的结构分类：只用符号表、调用边、import 边、类型派发边与入口清单，不调模型。

@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/shared";
+import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/domain";
+
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 import { DATABASE_SCHEMA_SQL } from "./database-schema.js";
 import { declaredColumns } from "./declared-columns.js";

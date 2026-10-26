@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { CallEdge, FileEntry, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/shared";
+import type { CallEdge, FileEntry, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
+
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "../../src/depgraph/graph.js";
 import { loadSymbolParser } from "../../src/depgraph/parser.js";

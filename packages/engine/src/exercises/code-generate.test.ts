@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+
 import { buildDependencyGraph, serializeGraph } from "../depgraph/graph.js";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";

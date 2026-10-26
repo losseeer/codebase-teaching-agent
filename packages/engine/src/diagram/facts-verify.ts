@@ -1,4 +1,4 @@
-import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/shared";
+import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 /**
   第四张结构表：已算好的静态产物里的类型关系与运行时绑定。

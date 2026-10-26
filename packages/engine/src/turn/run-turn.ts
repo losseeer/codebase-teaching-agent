@@ -1,6 +1,8 @@
 import { id } from "../ids.js";
-import type { Exercise, FadedState, RepositoryAnalysis, RepositoryIndex, TeachingProgress, TutorMessage, TutorSession } from "@codebase-tutor/shared";
-import { policyFor } from "@codebase-tutor/shared";
+import type { TeachingProgress } from "@codebase-tutor/contract";
+import type { Exercise, FadedState, RepositoryAnalysis, RepositoryIndex, TutorMessage, TutorSession } from "@codebase-tutor/domain";
+import { policyFor } from "@codebase-tutor/domain";
+
 import type { LlmCompletion, LlmProvider, LlmUsage } from "../llm/provider.js";
 import { flagTruncatedReply } from "../llm/provider.js";
 import { CONTEXT_SHARE, contextShare } from "../llm/context-window.js";

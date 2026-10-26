@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RepositoryAnalysis } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+
 import { callNeighborhood, callNeighborhoodSection } from "./neighbors.js";
 
 const analysis = {

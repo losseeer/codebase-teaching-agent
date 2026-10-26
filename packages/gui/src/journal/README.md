@@ -12,7 +12,7 @@
 
 ## 事件 schema（就地冻结）
 
-对齐 `@codebase-tutor/shared` 的 `JournalEventType`。**append-only**：只许新增取值，不许改名或删除既有取值。
+对齐 `@codebase-tutor/domain` 的 `JournalEventType`。**append-only**：只许新增取值，不许改名或删除既有取值。
 
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|

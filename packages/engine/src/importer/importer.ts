@@ -3,16 +3,9 @@ import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
-import type {
-  ImportEstimate,
-  ImportJob,
-  RepositoryAnalysis,
-  RepositoryCatalogEntry,
-  RepositoryFreshness,
-  RepositoryIndex,
-  RepositoryMountReason,
-  ServerEvent
-} from "@codebase-tutor/shared";
+import type { ImportJob, RepositoryCatalogEntry, RepositoryFreshness, RepositoryMountReason, ServerEvent } from "@codebase-tutor/contract";
+import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { buildLlmRuntimeProvider } from "../llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "../depgraph/graph.js";

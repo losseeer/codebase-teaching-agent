@@ -1,4 +1,5 @@
-import type { SourceAnchor } from "@codebase-tutor/shared";
+import type { SourceAnchor } from "@codebase-tutor/domain";
+
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
 import { sliceExcerpt } from "../source/excerpt.js";
 import type { EgressCollector } from "../security/egress-log.js";

@@ -1,5 +1,5 @@
-import type { JournalEvent } from "@codebase-tutor/shared";
-import { policyFor, validateSettings } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+import { policyFor, validateSettings } from "@codebase-tutor/domain";
 
 /**
   表达质量裁判的纯逻辑层（rubric 预登记 + 判分解析 + 证据核验）。

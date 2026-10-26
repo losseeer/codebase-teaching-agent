@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FileRole, ImportEstimate } from "@codebase-tutor/shared";
+import type { FileRole, ImportEstimate } from "@codebase-tutor/domain";
+
 import { hash } from "../ids.js";
 import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";

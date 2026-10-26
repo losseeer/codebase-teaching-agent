@@ -2,7 +2,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/shared";
+import type { CfgFileFact, FileEntry, SymbolInfo, TypeRelationFileFact } from "@codebase-tutor/domain";
+
 import { repositoryId as deriveRepositoryId } from "../ids.js";
 import { TutorDatabase } from "../store/database.js";
 import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";

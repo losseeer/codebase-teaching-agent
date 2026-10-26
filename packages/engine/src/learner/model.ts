@@ -1,4 +1,5 @@
-import type { JournalEvent, LearnerProfile, MasteryMapEntry, RecommendedTutorSettings } from "@codebase-tutor/shared";
+import type { JournalEvent, LearnerProfile, MasteryMapEntry, RecommendedTutorSettings } from "@codebase-tutor/domain";
+
 import { deriveMasteryMap } from "./mastery.js";
 import { deriveFaded } from "./faded.js";
 

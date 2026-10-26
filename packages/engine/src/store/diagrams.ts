@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { Diagram, DiagramBody, DiagramSource, DiagramSummary, DiagramVersion } from "@codebase-tutor/shared";
+import type { Diagram, DiagramBody, DiagramSource, DiagramSummary, DiagramVersion } from "@codebase-tutor/domain";
+
 import type { TutorDatabase } from "./database.js";
 
 /**

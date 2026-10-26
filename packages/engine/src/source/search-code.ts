@@ -1,4 +1,5 @@
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/shared";
+import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+
 import { isTestPath } from "../depgraph/roles.js";
 import type { LlmTool } from "../llm/provider.js";
 import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "../text/lexical.js";

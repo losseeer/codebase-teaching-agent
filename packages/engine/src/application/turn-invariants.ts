@@ -1,4 +1,5 @@
-import { styleBand } from "@codebase-tutor/shared";
+import { styleBand } from "@codebase-tutor/domain";
+
 import { sourceExtensions } from "../indexer/indexer.js";
 import { maskSecrets } from "../security/secrets.js";
 

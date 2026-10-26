@@ -1,5 +1,38 @@
-import { z, type ZodType } from "zod";
-import { checkContract, chatThreadMessageSchema, chatThreadSchema, costSummarySchema, importJobSchema, repositoryCatalogEntrySchema, scopedStreamProgressSchema, serverEventSchema, type Diagram, type DiagramSummary, type ChatScope, type CostSummary, type Exercise, type ExerciseAnswer, type ExerciseKind, type ExerciseResult, type FadedState, type ImportJob, type LearnerProfile, type PracticeSummary, type RepositoryCatalogEntry, type RepositoryFreshness, type RepositoryIndex, type RepositoryMountReason, type ScopedStreamProgress, type ServerEvent, type TutorSession, type TutorSettings } from "@codebase-tutor/shared/wire";
+import {
+  checkContract,
+  chatThreadMessageSchema,
+  chatThreadSchema,
+  costSummarySchema,
+  importJobSchema,
+  repositoryCatalogEntrySchema,
+  scopedStreamProgressSchema,
+  serverEventSchema,
+  type ChatScope,
+  type CostSummary,
+  type ImportJob,
+  type RepositoryCatalogEntry,
+  type RepositoryFreshness,
+  type RepositoryMountReason,
+  type ScopedStreamProgress,
+  type ServerEvent
+} from "@codebase-tutor/contract";
+import {
+  type DiagramSummary,
+  type Exercise,
+  type ExerciseAnswer,
+  type ExerciseKind,
+  type ExerciseResult,
+  type FadedState,
+  type LearnerProfile,
+  type PracticeSummary,
+  type RepositoryIndex,
+  type TutorSession,
+  type TutorSettings,
+  type Diagram
+} from "@codebase-tutor/domain";
+export type { RepositoryCatalogEntry, RepositoryFreshness, ScopedStreamProgress } from "@codebase-tutor/contract";
+
+import {z, type ZodType } from "zod";
 
 /**
  * 当前激活的工作区：被学习的仓库 ID 与路径。所有视图（宏观设计 / 代码教学 / 练习评估 / 成本监控）
@@ -11,13 +44,11 @@ export interface Workspace {
 }
 
 // 形状来自 shared，这里转发一次，视图层统一从 api/client 取类型。
-export type { RepositoryCatalogEntry, RepositoryFreshness } from "@codebase-tutor/shared/wire";
 
 /**
   作用域对话流的过程帧词表来自 `shared`（引擎的 `send` 也按同一份类型收）。
   种类由 shared 定，守卫点是下面的 `toScopedEvent`。
 */
-export type { ScopedStreamProgress } from "@codebase-tutor/shared/wire";
 
 /**
   一帧原始 JSON → 词表里的过程帧：先过 shared 的契约（种类与形状都在那里定），再逐字段兜一下形状。

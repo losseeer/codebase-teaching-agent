@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import type { FileEntry, SourceAnchor } from "@codebase-tutor/shared";
+import type { FileEntry, SourceAnchor } from "@codebase-tutor/domain";
+
 import { cppExtensionPattern, handledExtensions } from "./language-extensions.js";
 import { detectJavaEntrypoints } from "./java-entrypoints.js";
 import { detectNodeEntrypoints } from "./node-entrypoints.js";

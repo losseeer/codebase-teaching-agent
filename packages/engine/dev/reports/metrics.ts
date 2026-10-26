@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { JournalEvent } from "@codebase-tutor/shared";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
 import { readJournal } from "../../src/store/journal.js";
 import { LATEST_SUMMARY_LIMIT } from "../../src/store/database.js";
 

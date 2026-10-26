@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import type { SymbolInfo } from "@codebase-tutor/shared";
+import type { SymbolInfo } from "@codebase-tutor/domain";
+
 import type { DependencyGraph } from "../graph.js";
 import { LspClient } from "./client.js";
 

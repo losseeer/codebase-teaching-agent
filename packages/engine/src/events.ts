@@ -1,4 +1,5 @@
-import type { ServerEvent } from "@codebase-tutor/shared";
+import type { ServerEvent } from "@codebase-tutor/contract";
+
 import { traceEngine } from "./trace/engine-log.js";
 
 /**

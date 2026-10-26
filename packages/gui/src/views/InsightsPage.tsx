@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type ReactElement } from "react";
-import type { CostSummary } from "@codebase-tutor/shared/wire";
+import {useCallback, useEffect, useState, type ReactElement } from "react";
+import type { CostSummary } from "@codebase-tutor/contract";
+
 import { api, type Workspace } from "../api/client";
 import { LlmSettingsControl } from "../agent/LlmSettings";
 import { Icon } from "../ui/icons";

@@ -1,7 +1,9 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/domain";
+import type { Exercise } from "@codebase-tutor/domain";
+
+import {useEffect, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
-import type { Exercise, ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/shared/wire";
 import { api, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Markdown } from "../agent/Markdown";

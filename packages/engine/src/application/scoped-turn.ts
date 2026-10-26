@@ -1,4 +1,5 @@
-import type { ChatScope } from "@codebase-tutor/shared";
+import type { ChatScope } from "@codebase-tutor/contract";
+
 import { externalToolSurface } from "../integrations/clients.js";
 import { listSkills, readSkill, skillsBriefing } from "../integrations/skills.js";
 import { appendMessages, getThread, readMessages } from "../store/chat-store.js";

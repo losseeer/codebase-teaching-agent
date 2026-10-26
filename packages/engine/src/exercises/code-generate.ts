@@ -13,7 +13,8 @@
   下发件因编译挂 / 语法挂退出非 0 时那一行不会印出来，应判成「harness 坏了」而不是「题做对了」——
   把「跑不起来」当「跑出问题」，会出一批要求学习者先修环境的题。
 */
-import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/shared";
+import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
+
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../llm/provider.js";
 import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";

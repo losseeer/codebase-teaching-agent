@@ -1,4 +1,5 @@
-import { LANGUAGE_CAPABILITIES, type FileEntry, type RouteConsumer, type RouteLink, type RouteProvider } from "@codebase-tutor/shared";
+import { LANGUAGE_CAPABILITIES, type FileEntry, type RouteConsumer, type RouteLink, type RouteProvider } from "@codebase-tutor/domain";
+
 import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 
