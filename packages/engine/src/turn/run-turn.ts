@@ -44,8 +44,9 @@ export type { TeachingProgress };
 const TEACHING_MAX_TOOL_ROUNDS = 2;
 const TEACHING_MAX_TOOL_CALLS = 3;
 
-/** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。 */
-const MAP_MAX_TOOL_ROUNDS = 3;
+/** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。
+    轮次放宽到 10 之后，真卡点变成「一轮最多读 4 个文件」与预算闸（每轮开火前查），到限那三种结局各写各的读数。 */
+const MAP_MAX_TOOL_ROUNDS = 10;
 const MAP_MAX_TOOL_CALLS = 4;
 
 const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);

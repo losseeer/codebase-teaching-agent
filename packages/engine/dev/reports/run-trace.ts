@@ -35,7 +35,7 @@ function eventLine(event: JournalEvent): string {
         ? `想提问被挡 facet=${p.facet ?? "未记"} 因由:${clip(p.reason, 70)}`
         : `向用户提问 facet=${p.facet ?? "未记"} 候选=${clip(p.options, 60)}`;
     case "loop_round":
-      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
+      return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : p.stopped_by === "rounds" ? " 【轮次用完】" : p.stopped_by === "reads" ? " 【读文件额度用完】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
     case "turn_context":
       return `历史折=${p.conversation_folded ?? "未记"} 找回=${p.conversation_recalled ?? "未记"} scene=${p.scene ?? "未记"}`;
     case "token_usage":

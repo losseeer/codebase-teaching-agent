@@ -23,6 +23,20 @@ function activityOf(event: ProgressFrame): TeachingProgress {
 }
 
 /**
+  过程提示的累积列表：一行一件事，重复做的折成计数（`正在读取 x ×3`），最多留 6 行。
+  为什么不能是单行覆盖：读文件与检索都是本机几十毫秒的动作，下一帧「正在思考（第 N 轮）」立刻盖掉它，
+  一整轮肉眼就只剩 thinking——用户看到的不是「它做了什么」，而是「它在等」。
+*/
+export function foldProgress(lines: readonly string[], text: string): string[] {
+  const index = lines.findIndex((line) => line === text || line.startsWith(`${text} ×`));
+  if (index < 0) return [...lines, text].slice(-6);
+  const count = Number(lines[index].slice(text.length + 2)) || 1;
+  const next = [...lines];
+  next[index] = `${text} ×${count + 1}`;
+  return next;
+}
+
+/**
   过程提示的中文文案，三个作用域共用一份：文案在这一层定——引擎不该关心中文措辞，GUI 不该猜阶段语义。
   种类由 `shared` 的词表管，漏接编译不过。
   帧整个缺席（引擎没带 payload）时给「回复生成中…」：那是过程提示的措辞档位，不是伪造的事实读数。

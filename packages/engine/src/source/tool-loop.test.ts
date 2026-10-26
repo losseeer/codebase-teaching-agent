@@ -38,6 +38,7 @@ describe("completeWithReadTool", () => {
     ]);
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "问题原文", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 5 });
     expect(result.completion.text).toContain("基于已有上下文回答");
+    expect(result.stoppedBy, "到的是轮数闸，读数就不能与预算或读文件额度混成一档").toBe("rounds");
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
     expect(result.usage).toEqual({ inputTokens: 250, outputTokens: 40 });
     // 收尾轮不再带工具，并以回绝文本应答第二次调用

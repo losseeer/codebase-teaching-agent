@@ -66,8 +66,8 @@ export interface ScopedChatApi {
   sending: boolean;
   /** 停止当前在途回合：既告诉引擎别算了（省 token），也中止自己的连接。没有在途回合时为空操作。 */
   stopTurn: () => void;
-  /** 回复生成过程指示（按作用域）：如「回复生成中…」「正在读取 src/app.ts …」；空串 = 无进行中任务。三作用域都走各自请求的 SSE 事件——引擎发事件、GUI 定文案 */
-  progress: Record<Scope, string>;
+  /** 回复生成过程指示（按作用域，一行一件事，最新在末尾、最多 6 行）：如「正在读取 src/app.ts …」「正在检索代码：限流 …」；空数组 = 无进行中任务。三作用域都走各自请求的 SSE 事件——引擎发事件、GUI 定文案 */
+  progress: Record<Scope, string[]>;
   liveAnswer: string;
   error: string;
   send: () => Promise<void>;

@@ -80,10 +80,12 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
         {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text) => { void t.sendMap(text); }} answerable={!t.sending} />)}
-        {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时顶替 */}
-        {t.sending && t.progress[scope] && !t.liveAnswer ? (
+        {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时逐行顶上——一行一件事，看得见它真读过哪些文件 */}
+        {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
-            <div className="msg-hint">{t.progress[scope]}</div>
+            {t.progress[scope].map((line, index) => (
+              <div key={`${index}-${line}`} className={index === t.progress[scope].length - 1 ? "msg-hint" : "msg-past"}>{line}</div>
+            ))}
           </div>
         ) : null}
         {/* 流式正文气泡：三作用域共用，内容来自各自请求的 SSE delta */}

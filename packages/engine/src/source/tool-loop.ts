@@ -232,8 +232,8 @@ export interface ReadToolLoopResult {
   一个 super-step（一次工具轮）结束时的回合状态——恢复它就是恢复「读到哪儿了」。
   刻意把审计一起装进去：续跑后这一回合仍然要能如实交代它真读过哪些文件。
 */
-/** 回合被什么掐断：`budget` = 预算到线（既不是模型答完，也不是用户停止）。 */
-export type TurnStopReason = "budget";
+/** 回合被什么掐断：`budget` = 预算到线、`rounds` = 工具轮次用完、`reads` = 读文件额度用完（三种都不是模型答完）。 */
+export type TurnStopReason = "budget" | "rounds" | "reads";
 
 export interface TurnLoopState {
   messages: LlmMessage[];
@@ -328,6 +328,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
           : `本次对话的工具轮次已用完（${rounds} 轮）${input.repoPath ? `；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了` : ""}。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
       if (budgetStop) stoppedBy = "budget";
+      else if (rounds >= input.maxRounds) stoppedBy = "rounds";
+      else stoppedBy = "reads";
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: refusal });
       }

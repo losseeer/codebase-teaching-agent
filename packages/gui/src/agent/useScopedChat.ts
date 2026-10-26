@@ -5,7 +5,7 @@ import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
-import { progressText } from "./progressLines";
+import { foldProgress, progressText } from "./progressLines";
 import { threadItemsFrom, type ThreadItem, type ThreadRow } from "./threadItems";
 import { lostInTransit } from "./turnFailure";
 import type { ScopedChatApi } from "./scopedChatApi";
@@ -85,10 +85,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误丢弃即可
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
-  // 回复生成过程指示（按作用域）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
-  const [progress, setProgress] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
-  const setScopeProgress = (target: Scope, text: string): void => {
-    setProgress((prev) => (prev[target] === text ? prev : { ...prev, [target]: text }));
+  // 回复生成过程指示（按作用域，一行一件事）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
+  const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
+  const resetProgress = (target: Scope): void => setProgress((prev) => ({ ...prev, [target]: [] }));
+  const logProgress = (target: Scope, text: string): void => {
+    if (!text) return;
+    setProgress((prev) => ({ ...prev, [target]: foldProgress(prev[target], text) }));
   };
   const { liveAnswer, begin, enqueue, finish, clear, abort, stop } = useTypewriter();
   const [error, setError] = useState("");
@@ -489,7 +491,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
       return;
     }
-    setSending(true); setError(""); setScopeProgress("teaching", "正在准备教学上下文…");
+    setSending(true); setError(""); resetProgress("teaching"); logProgress("teaching", "正在准备教学上下文…");
     const turn = beginTurn("teaching");
     const sink = turnSink("teaching");
     try {
@@ -508,7 +510,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
         if (event.type === "delta") sink.onDelta(event.delta);
-        else if (event.type === "progress") setScopeProgress("teaching", progressText(event.payload));
+        else if (event.type === "progress") logProgress("teaching", progressText(event.payload));
       }, turn);
       setSession(reply.session);
       setSettingsState(reply.session.settings);
@@ -519,7 +521,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } finally {
       endTurn();
       setSending(false);
-      setScopeProgress("teaching", "");
+      resetProgress("teaching");
     }
   };
 
@@ -540,15 +542,15 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
-    setSending(true); setError(""); setScopeProgress(scope, "回复生成中…");
+    setSending(true); setError(""); resetProgress(scope); logProgress(scope, "回复生成中…");
     begin();
     const turn = beginTurn(scope);
     recordDebt(scope, threadId);
     const sink = turnSink(scope);
     const onScopedEvent = (event: ScopedStreamProgress): void => {
-      // delta 进打字机队列，剩下三类过程提示（thinking / reading / searching）全部走 progressText——漏接一类，那行字就停在「回复生成中…」
+      // delta 进打字机队列，剩下三类过程提示（thinking / reading / searching）全部逐行进列表——压成一行时本地那两类只闪几十毫秒，肉眼就只剩「正在思考」
       if (event.type === "delta") sink.onDelta(event.delta);
-      else setScopeProgress(scope, progressText(event));
+      else logProgress(scope, progressText(event));
     };
     try {
       const reply = scope === "map"
@@ -572,7 +574,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       stop();
       endTurn();
       setSending(false);
-      setScopeProgress(scope, "");
+      resetProgress(scope);
       // 回合结束刷新清单：新线程进了列表，当前线程也排到最前（引擎按更新时间倒序）
       void refreshThreads(scope);
     }

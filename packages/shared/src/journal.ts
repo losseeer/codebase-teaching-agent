@@ -70,7 +70,7 @@ export type JournalEventType =
   | "loop_round"
   /** 回合的上下文装配摘要：一回合一条，三作用域都有（practice 没有工具轮，也有这一行）。
       payload = scene + conversation_folded（本轮折掉几条历史）+ conversation_recalled（按词法找回几条）
-      + 可选 resumed_from_round（从第几轮检查点续上）与 stopped_by（budget = 预算到线）。
+      + 可选 resumed_from_round（从第几轮检查点续上）与 stopped_by（budget = 预算到线 / rounds = 工具轮次用完 / reads = 读文件额度用完）。
       与 `loop_round` 分家：那边记「工具做了几次」，这边记「这条回复是在多大的上下文里写的」。 */
   | "turn_context"
   /** 回合被用户主动停止：payload = scene(teach|map_chat|practice_chat) + turn_id +
