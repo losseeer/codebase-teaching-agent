@@ -5,8 +5,8 @@ import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/
 import { useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
-import { foldProgress, progressText } from "./progressLines";
-import { threadItemsFrom, type ThreadItem, type ThreadRow } from "./threadItems";
+import { foldProgress, interruptText, progressText } from "./progressLines";
+import { threadItemsFrom, type MessageExtra, type ThreadItem, type ThreadRow } from "./threadItems";
 import { lostInTransit } from "./turnFailure";
 import type { ScopedChatApi } from "./scopedChatApi";
 
@@ -23,9 +23,9 @@ export function useScopedChat(repositoryId: string): ScopedChatApi {
   }, [scope]);
 
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
-const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask", card?: { diagramId: string; name: string }, options?: string[]): void => {
+const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}), ...(options?.length ? { options } : {}) }] }));
+  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(extra?.card ? { card: extra.card } : {}), ...(extra?.options?.length ? { options: extra.options } : {}), ...(extra?.retry ? { retry: extra.retry } : {}), ...(extra?.lines?.length ? { lines: extra.lines } : {}) }] }));
 };
 
 /** 教学作用域：只存 `file:<path>` / `dir:<path>`，不依赖课程树。 */
@@ -87,10 +87,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   // 回复生成过程指示（按作用域，一行一件事）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
   const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
-  const resetProgress = (target: Scope): void => setProgress((prev) => ({ ...prev, [target]: [] }));
+  /** 同一份行的镜像：中断发生在异步回合收尾那一刻，闭包里的 state 还是旧的一份，要拿当下这几行只能靠 ref。 */
+  const progressLines = useRef<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
+  const resetProgress = (target: Scope): void => {
+    progressLines.current[target] = [];
+    setProgress((prev) => ({ ...prev, [target]: [] }));
+  };
   const logProgress = (target: Scope, text: string): void => {
     if (!text) return;
-    setProgress((prev) => ({ ...prev, [target]: foldProgress(prev[target], text) }));
+    progressLines.current[target] = foldProgress(progressLines.current[target], text);
+    setProgress((prev) => ({ ...prev, [target]: progressLines.current[target] }));
   };
   const { liveAnswer, begin, enqueue, finish, clear, abort, stop } = useTypewriter();
   const [error, setError] = useState("");
@@ -260,14 +266,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     「回放是否已开始」只活在这个闭包里：分诊发生在 catch 里，而那一个布尔决定提示文案说不说「引擎其实算完了」。
     结账顺序：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
   */
-  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, options?: string[]) => Promise<void>; fail: (reason: unknown) => void } => {
+  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<void>; fail: (reason: unknown) => void } => {
     let replayStarted = false;
     return {
       onDelta: (delta) => { replayStarted = true; enqueue(delta); },
-      // `options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
-      settle: async (text, provider, options) => {
+      // `extra.options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
+      settle: async (text, provider, extra) => {
         await finish();
-        pushMessage(target, "agent", text, options?.length ? "ask" : undefined, undefined, options);
+        pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
         setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
         clear();
         knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
@@ -565,9 +571,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
-      await sink.settle(reply.reply, reply.provider, reply.asked?.options);
-      // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
-      if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" });
+      if (reply.interrupted) {
+        // 中断的一轮没有成品：库里那一问也没落库，所以补账基准不动（与用户主动停止同一口径）。
+        // warn 条要带上它中断前做过的事——只给一句「已中断」，用户无从判断是该重试还是该换个问法。
+        pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope] });
+        patchDebt(scope, null);
+      } else {
+        await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options } : undefined);
+        // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
+        if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
+      }
     } catch (reason) {
       sink.fail(reason);
     } finally {

@@ -47,6 +47,15 @@ function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
 
 /** 一次流式回合的客户端句柄：`turnId` 让引擎能按 id 中止在途的那一轮，`signal` 中止自己的连接。
     两者要分开用——只断连接引擎分不清「用户点停止」和「网络波动」，它会照常把这一轮算完并落库（断线补账靠这个）。 */
+/**
+  宏观设计回合 done 帧的两种形状：正常成品（`reply`）与被中断（`interrupted`，没有成品）。
+  写成判别联合而不是把所有格都可选，是因为「空回复」与「这一轮没有回复」是两件事——
+  后者要让界面出 warn 条和重试入口，前者会被当成一句空话落进线程。
+*/
+export type MapDoneFrame =
+  | { reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { facet: string; question: string; options: string[] }; interrupted?: undefined }
+  | { reply?: undefined; provider: string; diagram?: { id: string; name: string }; asked?: undefined; interrupted: { reason: string; detail: string } };
+
 export interface StreamTurn {
   turnId?: string;
   signal?: AbortSignal;
@@ -284,14 +293,15 @@ export const api = {
       turn.signal
     ),
   /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、这一回合真画/真改了哪张图、以及这一回合是否在向用户提问）。
-      `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
+      `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。
+      done 有两种形状：正常成品带 `reply`；被中断的那一轮没有成品，只有 `interrupted`（界面据此出 warn 条与重试，不能拿空串冒充回复）。 */
   mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { facet: string; question: string; options: string[] } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
+    sseStream<MapDoneFrame>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
-      `diagram? / asked?: undefined`：练习作用域既没有画图工具也没有提问通道，那两格恒不出现——两条流的 done 形状对齐，
+      `diagram? / asked? / interrupted?: undefined`：练习作用域既没有画图工具也没有提问与中断那一档，这几格恒不出现——两条流的 done 形状对齐，
       调用方（`useScopedChat` 的 sendScoped）合成一个变量读时不必再分岔。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string; diagram?: undefined; asked?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
+    sseStream<{ reply: string; provider: string; diagram?: undefined; asked?: undefined; interrupted?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方丢弃错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };

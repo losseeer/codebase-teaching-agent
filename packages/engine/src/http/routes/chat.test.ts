@@ -426,6 +426,21 @@ describe("回合内向用户提问（只问不续，先量占比）", () => {
   });
 });
 
+describe("到限中断（只有宏观设计这一档会走到）", () => {
+  it("到限中断：没有成品就不落正文，done 只带原因，轮数读数照记", async () => {
+    // 脚本用完后夹具会重复最后一条 ⇒ 模型每轮都要工具，10 轮到顶
+    fx.scripted = ['@@tool search_code {"query":"zzz-不存在"}'];
+    const threadId = await fx.newThread("map", "中断线程");
+    const response = await mapChat({ content: "画张整仓的架构图", threadId });
+    const done = response.json() as { reply?: string; interrupted?: { reason: string; detail: string } };
+    expect(done.interrupted?.reason).toBe("rounds");
+    expect("reply" in done, "空回复与「这一轮没有回复」是两件事：后者不能让界面落一条空气泡").toBe(false);
+    expect(fx.eventsOf("turn_text").filter((event) => event.sessionId === threadId), "中断的一轮没有成品可落").toHaveLength(0);
+    expect(fx.lastEvent("loop_round").payload.stopped_by).toBe("rounds");
+    await fx.verifyLlmLog({ expectAborted: false, scenes: ["map.chat"] });
+  });
+});
+
 /**
   跨仓能力只在工具面上发生。要钉的是两件事：地址簿里有第二个仓时模型才看得见 `cross_repo_link` 与仓名，
   只剩一个仓时工具清单不变——多给一个用不上的 schema 字段就是每轮多付 token，

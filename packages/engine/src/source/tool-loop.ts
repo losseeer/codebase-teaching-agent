@@ -77,6 +77,11 @@ export interface ReadToolLoopInput {
     闸门管的是「别再往上加轮次」，把已经读到的东西咽回去不算答完。
   */
   budgetGuard?: () => string | undefined;
+  /**
+    预算到线或轮次用完就中断（不出成品、留快照、由用户点重试），而不是回绝后硬答一句。
+    只有长回合的宏观设计开这一档：问答类上限本来就低，到限时「基于已读到的答一句」比白跑一趟有价值。
+  */
+  interruptAtLimit?: boolean;
 }
 
 /** 技能通道：清单（`brief`）与取正文的通道必须同时给或同时不给——只给一半就是让模型找一个不存在的工具。 */
@@ -226,6 +231,8 @@ export interface ReadToolLoopResult {
   asked?: AskUserAudit;
   /** 模型试过提问但被判据挡下的最后一句原因（参数不合法、超字、本轮已问过）：审计要分得清「没问」和「问不出来」。 */
   askRefused?: string;
+  /** 本轮被中断（预算到线或轮次用完）：没有成品，`detail` 就是界面那句话的原因，快照留着等用户点重试。 */
+  interrupted?: TurnInterrupt;
 }
 
 /**
@@ -234,6 +241,12 @@ export interface ReadToolLoopResult {
 */
 /** 回合被什么掐断：`budget` = 预算到线、`rounds` = 工具轮次用完、`reads` = 读文件额度用完（三种都不是模型答完）。 */
 export type TurnStopReason = "budget" | "rounds" | "reads";
+
+/** 长回合到限时的中断结论：本轮不出成品，`detail` 是给用户看的那一句原因（也是重试气泡上那句话的来源）。 */
+export interface TurnInterrupt {
+  reason: "budget" | "rounds";
+  detail: string;
+}
 
 export interface TurnLoopState {
   messages: LlmMessage[];
@@ -277,6 +290,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let externalCalls = 0;
   let asked: AskUserAudit | undefined;
   let askRefused: string | undefined;
+  let interrupted: TurnInterrupt | undefined;
   let usage: LlmUsage | undefined;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
   const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, crossReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
@@ -318,7 +332,19 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     const budgetStop = input.budgetGuard?.();
     // 读文件额度只在有文件面时才算：出题与练习答疑没有 read_file，`maxCalls` 给 0 不该被读成「额度用完」。
     const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= input.maxCalls;
-    if (budgetStop || rounds >= input.maxRounds || fileQuotaSpent) {
+    const roundsSpent = rounds >= input.maxRounds;
+    // 长回合到限就中断（不出成品，交给用户点重试）：只有宏观设计开这一档——问答类上限本来就低，
+    // 到限硬答一句比白跑一趟划算，而 10 轮还没完通常意味着它陷在取证里，硬答出来的东西更不可信。
+    if (input.interruptAtLimit && (budgetStop || roundsSpent)) {
+      messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
+      const detail = budgetStop ?? `工具轮次已用完（${rounds} 轮）`;
+      // 未应答的 tool_call 先回一句实话再存快照：带着悬挂调用的消息数组下次发出去会被协议层直接拒
+      for (const call of completion.toolCalls) messages.push({ role: "tool", toolCallId: call.id, content: `这一轮在这里中断：${detail}。接着做就从这里继续，已读过的内容不必重读。` });
+      interrupted = { reason: budgetStop ? "budget" : "rounds", detail };
+      stoppedBy = budgetStop ? "budget" : "rounds";
+      break;
+    }
+    if (budgetStop || roundsSpent || fileQuotaSpent) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
       // 到闸时说的是**真正到限的那一项**。轮次用完时读文件额度常常还剩着，两种情况混成同一句「读文件上限」，
       // 模型只会把这句错话转述给学习者（实测读数：3 轮 / 只读了 2 个文件，上限是 4）。
@@ -328,7 +354,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
           : `本次对话的工具轮次已用完（${rounds} 轮）${input.repoPath ? `；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了` : ""}。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
       if (budgetStop) stoppedBy = "budget";
-      else if (rounds >= input.maxRounds) stoppedBy = "rounds";
+      else if (roundsSpent) stoppedBy = "rounds";
       else stoppedBy = "reads";
       for (const call of completion.toolCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: refusal });
@@ -468,11 +494,16 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
     usage = addUsage(usage, completion.usage);
   }
-  // 答完了：留着检查点只会在下次误续跑一个已经结束的回合
-  input.checkpoint?.clear();
+  if (interrupted) {
+    // 中断不是「答完了」：留一份写明原因的快照，用户点重试就是同一句重发，输入哈希相同 ⇒ 从这里接上，读过的不重付
+    input.checkpoint?.save(inputHash, snapshot(), "interrupted");
+  } else {
+    // 答完了：留着检查点只会在下次误续跑一个已经结束的回合
+    input.checkpoint?.clear();
+  }
   // 提问这一轮交出去的成品就是问句：正文 = 问句 + 可选项，落库、回放、journal 三处仍读同一份文本
   if (asked) completion = { ...completion, text: askBody(asked) };
-  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }) };
+  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }), ...(interrupted === undefined ? {} : { interrupted }) };
   } catch (error) {
     // 「读过哪些文件、搜过什么、调过哪些外部工具」是已发生的事实，中止与失败两条路都要把它带出循环
     attachToolLoopAudits(error, audits());

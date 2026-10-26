@@ -11,6 +11,8 @@ import { withDatabase } from "../store/database.js";
   三条保留规则（检查点膨胀是 LangGraph 的同款代价，靠这三条压住）：
   - 回合正常收尾 → 删；用户主动停止 → 删（那一轮按作废收尾，替他续跑是违背意图）；
   - 只有异常退出留下 `stopped_reason=error` 的残局，供同线程同问题的下一次请求接上；
+    预算到线或轮次用完的中断另留一档 `interrupted`：同样等同一句重发，因为它也没有成品；
+    刀 2 的 `await_user`（等用户回答一句提问）不许被哈希那条路命中，那时 `restore` 要按这一格分档；
   - 超过 `CHECKPOINT_TTL_MS` 的残局在任何一次读写前顺手清掉；单份快照超过 `CHECKPOINT_MAX_BYTES` 干脆不存。
 */
 

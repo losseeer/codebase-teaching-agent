@@ -9,7 +9,7 @@ import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskFacet, AskUserAudit } from "../source/ask-user.js";
-import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnStopReason } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/egress-log.js";
 import type { ScopeRef } from "../source/scope-ref.js";
@@ -90,6 +90,8 @@ export interface ScopedChatResult {
   asked?: AskUserAudit;
   /** 模型试着提问但被判据挡下的原因（参数不合法、超字、本轮已问过）：审计里「没问」与「问不出来」是两件事。 */
   askRefused?: string;
+  /** 本轮被中断（预算到线或轮次用完）：没有成品，界面据此出 warn 条与重试入口。 */
+  interrupted?: TurnInterrupt;
   /** 本轮对话历史的折叠读数：折了几条、又从折叠段找回几条（供 journal 回答「这条回复是在看过多少历史的前提下写的」）。 */
   conversation: { foldedMessages: number; recalledMessages: number };
 }
@@ -171,6 +173,8 @@ export interface RunTurnInput {
   external?: ExternalToolContext;
   checkpoint?: TurnCheckpointChannel;
   budgetGuard?: () => string | undefined;
+  /** 预算到线或轮次用完就中断（不出成品、留快照等重试）：只有宏观设计开这一档，见工具循环。 */
+  interruptAtLimit?: boolean;
   signal?: AbortSignal;
   /** 工具循环的原始过程事件：map 直接透传给 SSE，teaching 在外面包一层措辞再给 GUI。 */
   onProgress?: (progress: ReadToolProgress) => void;
@@ -191,6 +195,8 @@ export interface RunTurnResult {
   asked?: AskUserAudit;
   /** 提问被判据挡下的原因（没挡上就没这一格）。 */
   askRefused?: string;
+  /** 本轮被中断（预算到线或轮次用完）：没有成品。 */
+  interrupted?: TurnInterrupt;
 }
 
 /**
@@ -217,6 +223,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(input.ask ? { ask: input.ask } : {}),
       ...(input.external ? { external: input.external } : {}),
       ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
+      ...(input.interruptAtLimit ? { interruptAtLimit: true } : {}),
       ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
       ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       ...(input.signal ? { signal: input.signal } : {})
@@ -232,7 +239,8 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
       ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
       ...(result.asked === undefined ? {} : { asked: result.asked }),
-      ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused })
+      ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
+      ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted })
     };
   }
   // 练习答疑没有文件面，但装了技能就该能取正文：只给 `read_skill`（和外部工具），两轮封顶。
@@ -393,11 +401,12 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
-    ...(input.skills ? { skills: input.skills } : {}),
     ...(input.ask ? { ask: input.ask } : {}),
     ...(input.external ? { external: input.external } : {}),
     ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
     ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
+    // 宏观设计是唯一开中断的作用域：上限 10 轮，到限硬答一句不如让用户点重试
+    interruptAtLimit: true,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
@@ -416,6 +425,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
     ...(result.asked === undefined ? {} : { asked: result.asked }),
     ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
+    ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
     conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
   };
 }

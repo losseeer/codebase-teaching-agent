@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldProgress } from "./progressLines";
+import { foldProgress, interruptText } from "./progressLines";
 
 /**
   过程提示的累积口径。为什么要有这一份：读文件与检索都在本机几十毫秒内完成，
@@ -33,5 +33,10 @@ describe("foldProgress（过程提示逐行累积）", () => {
     let lines = foldProgress(["正在思考（第 1 轮）…"], "正在读取 a.ts …");
     lines = foldProgress(lines, "正在读取 a.ts …");
     expect(lines).toEqual(["正在思考（第 1 轮）…", "正在读取 a.ts … ×2"]);
+  });
+
+  it("两种中断两句话：预算用完不能写成「耗时过长」", () => {
+    expect(interruptText("budget")).toBe("本月预算已用完，已中断");
+    expect(interruptText("rounds")).toBe("执行耗时过长，已中断");
   });
 });

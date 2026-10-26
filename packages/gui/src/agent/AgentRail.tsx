@@ -79,7 +79,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text) => { void t.sendMap(text); }} answerable={!t.sending} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text) => { void t.sendMap(text); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} />)}
         {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时逐行顶上——一行一件事，看得见它真读过哪些文件 */}
         {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -269,11 +269,11 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
 }
 
 /** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
-function ThreadEntry({ item, onOpenDiagram, onAnswer, answerable }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string) => void; answerable?: boolean }): ReactElement {
+function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string) => void; onRetry?: (text: string) => void; answerable?: boolean }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;
   const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
-  const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : variant === "ask" ? " ask" : "";
+  const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : variant === "ask" ? " ask" : variant === "warn" ? " warn" : "";
   const card = agent?.card;
   const options = agent?.options;
   // 卡片消息：agent 这一回合画/改了一张图。正文为空时只出卡片，不撑一个空气泡出来。
@@ -300,6 +300,16 @@ function ThreadEntry({ item, onOpenDiagram, onAnswer, answerable }: { item: Thre
             <button key={option} type="button" className="btn btn-sm btn-ghost" onClick={() => onAnswer?.(option)}>{option}</button>
           ))}
         </div>
+      ) : null}
+      {/* 中断那一轮做过的事留在 warn 条下面：只说「已中断」等于让用户猜是该重试还是该换个问法 */}
+      {agent?.lines?.length ? (
+        <div className="col">
+          {agent.lines.map((line, index) => <div key={`${index}-${line}`} className="msg-past">{line}</div>)}
+        </div>
+      ) : null}
+      {/* 重试只在能立刻发的时候出现（同提问候选一条规矩）；点它就是原样重发那一句，引擎从留下的检查点接上 */}
+      {agent?.retry && answerable ? (
+        <button type="button" className="btn btn-sm btn-ghost" title="原样再发一次，接着上次读到的地方继续" onClick={() => onRetry?.(agent.retry ?? "")}>重试</button>
       ) : null}
       {card ? (
         <button type="button" className="dg-card" title={`在画布打开「${card.name}」`} onClick={() => onOpenDiagram?.({ id: card.diagramId, name: card.name })}>

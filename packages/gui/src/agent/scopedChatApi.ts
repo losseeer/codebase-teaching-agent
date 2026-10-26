@@ -1,6 +1,6 @@
 import type { ChatThread, Exercise, TutorSettings } from "@codebase-tutor/shared/wire";
 import type { MapBinding, Scope } from "./chatScope";
-import type { ThreadItem } from "./threadItems";
+import type { MessageExtra, ThreadItem } from "./threadItems";
 
 export interface ScopedChatApi {
   scope: Scope;
@@ -8,9 +8,9 @@ export interface ScopedChatApi {
 
   /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责。 */
   threads: Record<Scope, ThreadItem[]>;
-  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示 / "ask" 向用户提问）。
-      `options` 只在 variant 为 "ask" 时有值：正文里已写着同一串候选，这一格多的是一排可点的按钮。 */
-  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask", card?: { diagramId: string; name: string }, options?: string[]) => void;
+  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示 / "ask" 向用户提问 / "warn" 这一轮被中断）。
+      `extra`：提问的候选、图卡片，或中断那条上的「重试要重发的原句 + 中断前做过的几件事」。 */
+  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask" | "warn", extra?: MessageExtra) => void;
 
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：

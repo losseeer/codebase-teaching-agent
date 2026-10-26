@@ -611,6 +611,83 @@ describe("回合检查点与预算闸门", () => {
   });
 });
 
+describe("到限中断（宏观设计那一档：不出成品，留快照等重试）", () => {
+  /** 每趟都要真带一个工具调用：`fx.scripted` 那种一次性的脚本撑不到第 10 轮。 */
+  function loopingProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
+    const calls: LlmCompletionInput[] = [];
+    return {
+      calls,
+      provider: {
+        name: "looping",
+        modelVersion: "looping:v1",
+        async complete(input) {
+          calls.push(input);
+          return { text: "", toolCalls: [{ id: `c${calls.length}`, name: "search_code", argumentsJson: JSON.stringify({ query: "zzz-不存在" }) }], finishReason: "tool_calls" as const };
+        }
+      }
+    };
+  }
+  function spyChannel(log: string[], seen: TurnLoopState[]): TurnCheckpointChannel {
+    return { restore: () => undefined, save: (_hash, state, reason) => { log.push(reason ?? "progress"); seen.push(state); }, clear: () => { log.push("clear"); } };
+  }
+
+  it("轮次用完：不再发收尾那一趟，快照留着并写明原因", async () => {
+    const { provider, calls } = loopingProvider();
+    const log: string[] = [];
+    const seen: TurnLoopState[] = [];
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 4, interruptAtLimit: true, checkpoint: spyChannel(log, seen) });
+    expect(calls.length, "中断就不该再有收尾那一趟调用（那一趟是过去硬答一句的钱）").toBe(4);
+    expect(result.interrupted).toMatchObject({ reason: "rounds" });
+    expect(result.stoppedBy).toBe("rounds");
+    expect(log.at(-1), "最后一份快照要写明是中断，报表才知道这行残局该被同一句重发接上").toBe("interrupted");
+    expect(log, "中断不删快照：删了就没得重试").not.toContain("clear");
+    const saved = seen[seen.length - 1].messages;
+    const last = saved[saved.length - 1];
+    expect(last.role, "未应答的 tool_call 必须先回一句实话，否则下次发出去是非法请求").toBe("tool");
+    expect(String(last.content)).toContain("这一轮在这里中断");
+  });
+
+  it("预算到线：同一档结局、同一个原因位", async () => {
+    const { provider, calls } = loopingProvider();
+    const log: string[] = [];
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 10, maxCalls: 4, interruptAtLimit: true, budgetGuard: () => "本仓本月预算（5）已经用完。", checkpoint: spyChannel(log, []) });
+    expect(calls.length).toBe(1);
+    expect(result.interrupted?.reason).toBe("budget");
+    expect(result.interrupted?.detail).toContain("预算");
+    expect(log).toEqual(["interrupted"]);
+  });
+
+  it("中断之后同一句重发：从留下的快照接上，不从头再读一遍", async () => {
+    const states = new Map<string, { round: number; state: TurnLoopState }>();
+    const channel: TurnCheckpointChannel = {
+      restore: (key) => states.get(key),
+      save: (key, state) => { states.set(key, { round: state.rounds, state }); },
+      clear: () => { states.clear(); }
+    };
+    const once = loopingProvider();
+    await completeWithReadTool({ provider: once.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    expect(states.size, "中断该留下一份快照").toBe(1);
+    const again = loopingProvider();
+    const resumed = await completeWithReadTool({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    expect(resumed.resumedFromRound, "同一句、同一模型、同一份系统提示 ⇒ 接得上，用户点重试不该是从头再来").toBe(1);
+    expect(again.calls.length, "接上就只发这一趟").toBe(1);
+    const carried = again.calls[0].messages ?? [];
+    expect(carried.some((message) => message.role === "tool" && message.content.includes("这一轮在这里中断")), "续跑的请求里得带着中断那一句，否则模型不知道自己是接着做的").toBe(true);
+    expect(carried[0].content, "首轮那条装了上下文的 user 消息不能因续跑而丢").toBe("画张图");
+  });
+
+  it("不开这一档就还是老结局：回绝掉挂着的调用，再发一趟不带工具的收尾", async () => {
+    const { provider, calls } = loopingProvider();
+    const log: string[] = [];
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, checkpoint: spyChannel(log, []) });
+    expect(calls.length, "两趟取证 + 回绝后收尾那一趟").toBe(4);
+    expect(calls[3].tools, "收尾那一趟不带工具").toBeUndefined();
+    expect(result.interrupted).toBeUndefined();
+    expect(result.stoppedBy).toBe("rounds");
+    expect(log, "不开这一档就照旧：两轮取证各存一份，答完清掉").toEqual(["progress", "progress", "clear"]);
+  });
+});
+
 describe("completeWithOptionalSkills（出题与练习答疑的技能通道）", () => {
   const skills = { brief: "可用技能：demo —— 一套出题做法", bodyOf: (name: string) => (name === "demo" ? "做法：先判考点，再写一行断言。" : undefined) };
 

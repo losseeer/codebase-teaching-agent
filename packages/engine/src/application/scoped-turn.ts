@@ -94,10 +94,14 @@ export function recheckTurn(input: {
 /** map_chat 回合的统一收尾（JSON 与 SSE 两条路由共用）：复检 → 正文落库 → 审计线，三处读同一份文本。 */
 export function finishMapChatTurn(repository: ImportedRepository, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
   const journal = new Journal(repository.path, repository.index.repositoryId);
-  result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
-  // 选项是即将显示给用户、点了还会变成下一句正文的文本：与正文同过一道出境前密钥筛，不留第二条通路
-  if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
-  persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
+  // 中断的回合没有成品：不复检、不落正文、不写 turn_text（与用户主动停止同一口径），但已经发生的账照记
+  const interrupted = Boolean(result.interrupted);
+  if (!interrupted) {
+    result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
+    // 选项是即将显示给用户、点了还会变成下一句正文的文本：与正文同过一道出境前密钥筛，不留第二条通路
+    if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
+    persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
+  }
   // 问了什么、被什么挡下：占比与「问完用户答没答」的转化率都从这一行算（刀 2 的门禁读数）
   if (result.asked) journal.append("turn_asked", { scene: "map_chat", facet: result.asked.facet, outcome: "asked", options: result.asked.options.join(" / "), reason: null }, threadId);
   else if (result.askRefused) journal.append("turn_asked", { scene: "map_chat", facet: null, outcome: "refused", options: null, reason: result.askRefused }, threadId);
@@ -129,7 +133,7 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   }, threadId);
   // 上下文装配摘要是另一件事：这条回复是在「折了几条历史、找回几条」的前提下写的（三作用域都有这一行）
   journal.append("turn_context", { scene: "map_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, threadId);
-  journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
+  if (!interrupted) journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
 
 /**

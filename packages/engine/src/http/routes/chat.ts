@@ -79,8 +79,15 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
       throw new LlmAbortedError();
     }
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
-    replayTypewriter(send, result.reply);
-    send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}), ...(result.asked ? { asked: result.asked } : {}) });
+    // 图卡片两条路都要给：中断前可能已经落了几笔改图，那些是真发生过的事
+    const diagramFrame = writtenDiagram ? { diagram: writtenDiagram } : {};
+    if (result.interrupted) {
+      // 不出成品的一轮：不回放正文，只把原因交给界面那条 warn 条（带重试）
+      send({ type: "done", interrupted: result.interrupted, provider: result.provider, ...diagramFrame });
+    } else {
+      replayTypewriter(send, result.reply);
+      send({ type: "done", reply: result.reply, provider: result.provider, ...diagramFrame, ...(result.asked ? { asked: result.asked } : {}) });
+    }
   } catch (error) {
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, provider: provider.modelVersion, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {

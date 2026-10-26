@@ -23,6 +23,14 @@ function activityOf(event: ProgressFrame): TeachingProgress {
 }
 
 /**
+  中断那一轮的标题。两种原因必须两句话：预算用完说成「耗时过长」是把一件事伪装成另一件事，
+  用户会以为是模型太慢而再点一次重试，然后再撞一次同一道预算闸。
+*/
+export function interruptText(reason: string): string {
+  return reason === "budget" ? "本月预算已用完，已中断" : "执行耗时过长，已中断";
+}
+
+/**
   过程提示的累积列表：一行一件事，重复做的折成计数（`正在读取 x ×3`），最多留 6 行。
   为什么不能是单行覆盖：读文件与检索都是本机几十毫秒的动作，下一帧「正在思考（第 N 轮）」立刻盖掉它，
   一整轮肉眼就只剩 thinking——用户看到的不是「它做了什么」，而是「它在等」。
