@@ -188,13 +188,13 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  // 出网清单：候选摘录是带行号的整段源码。`to` 按摘录里真的有几行算（4,000 字符上限可能在中间中止）
+  // 出网清单：候选摘录是带行号的源码窗口。`to` 用构造时算好的实际末行——窗口里折过注释、也可能被字符上限截断，行数不再等于行跨度
   recordEgress({
     repositoryPath: input.repositoryPath,
     scene: "practice.generate",
     sources: input.candidates.map((candidate) => {
       const from = candidate.startLine ?? 1;
-      return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt, masked: candidate.masked };
+      return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: candidate.endLine ?? from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt, masked: candidate.masked };
     })
   });
   const response = await completeWithOptionalSkills({
@@ -271,19 +271,55 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
   }
 }
 
-/** 规则侧候选摘录构造：带行号前缀，LLM 的锚点行号以此为基准，守门可校验。
-    offset 是摘录起始行（符号定位窗口：相关符号往往不在文件头部），行号仍用文件真实行号。 */
-export function buildTagCandidate(repositoryPath: string, path: string, maxLines = 80, offset = 1): GuardCandidate | undefined {
+/** 规则侧候选摘录：只认「整行是注释」的行，行尾注释不猜——那行代码本身是素材。 */
+const COMMENT_LINE = /^\s*(\/\/|#|--|\/\*|[*])/;
+/** 连续到第 4 行才折：三行以下的注释常常正是题目要问的东西。 */
+const MIN_COMMENT_RUN = 4;
+
+/**
+  规则侧候选摘录构造：按符号边界开窗（固定 80 行硬窗会把锚点旁边的无关函数一起端进去），
+  并把窗口内连续 ≥4 行的整段注释折成一行标注。带行号前缀，LLM 的锚点行号以此为基准，守门可校验。
+  折叠处不给行号：那几行没出网，模型引用不到，守门也不该让它当成锚点。
+  符号比 maxLines 长时截到上限并在末尾说明截到哪，不静默丢。
+ */
+export function buildTagCandidate(repositoryPath: string, path: string, span: { start: number; end?: number }, maxLines = 80): GuardCandidate | undefined {
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
-    const start = Math.max(0, offset - 1);
+    const start = Math.min(Math.max(1, Math.floor(span.start) || 1), lines.length);
+    const symbolEnd = span.end !== undefined && span.end >= start ? Math.min(span.end, lines.length) : undefined;
+    // 窗口两头：符号末尾行与 maxLines 取更近的那个——只看 maxLines 就等于把锚点旁边的无关函数也端进来
+    const stop = Math.min(symbolEnd ?? lines.length, start + maxLines - 1, lines.length);
     const masker = secretMasker();
+    const kept: string[] = [];
+    const maxChars = 4_000;
+    let used = 0;
+    // 实际出门的最后一行：折叠掉的注释与字符上限之后截断的行都不算，出网清单要报的就是这一格
+    let lastEmitted = start - 1;
+    for (let index = start - 1; index < stop;) {
+      if (COMMENT_LINE.test(lines[index] ?? "")) {
+        let runEnd = index;
+        while (runEnd + 1 < stop && COMMENT_LINE.test(lines[runEnd + 1] ?? "")) runEnd += 1;
+        if (runEnd - index + 1 >= MIN_COMMENT_RUN) {
+          kept.push(`…（第 ${index + 1}-${runEnd + 1} 行是注释，省略 ${runEnd - index + 1} 行）`);
+          index = runEnd + 1;
+          continue;
+        }
+      }
+      const row = `${index + 1}| ${masker.take(lines[index] ?? "")}`;
+      if (kept.length && used + row.length + 1 > maxChars) break;
+      kept.push(row);
+      used += row.length + 1;
+      lastEmitted = index + 1;
+      index += 1;
+    }
+    if (symbolEnd !== undefined && symbolEnd > lastEmitted) kept.push(`…（该符号到第 ${symbolEnd} 行才结束，摘录只给到第 ${lastEmitted} 行）`);
     return {
       path,
       lineCount: lines.length,
-      startLine: start + 1,
+      startLine: start,
+      endLine: lastEmitted,
       // 逐行过筛：整段源码在这一条路上同样是原文出网
-      excerpt: lines.slice(start, start + maxLines).map((line, index) => `${start + index + 1}| ${masker.take(line)}`).join("\n").slice(0, 4_000),
+      excerpt: kept.join("\n"),
       masked: masker.masked
     };
   } catch {

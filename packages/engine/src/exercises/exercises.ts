@@ -690,21 +690,21 @@ function selectTagCandidates(repository: PracticeRepository, tag: string, limit 
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, limit);
   return scored.flatMap(({ path }) => {
-    const candidate = buildTagCandidate(repository.path, path, 80, windowOffset(symbolsByPath.get(path) ?? [], tokens));
+    const candidate = buildTagCandidate(repository.path, path, windowSpan(symbolsByPath.get(path) ?? [], tokens));
     return candidate ? [candidate] : [];
   });
 }
 
-/** 摘录窗口起点：名字命中任一词元的符号里取分最高者（同分取更靠前的），从其起始行开窗；无命中回落第 1 行。 */
-function windowOffset(symbols: SymbolInfo[], tokens: string[]): number {
-  let best: { score: number; line: number } | undefined;
+/** 摘录窗口：名字命中任一词元的符号里取分最高者（同分取更靠前的），按它的真实行区间开窗——固定行数的硬窗会把锚点旁边的无关函数一起端进去；无命中回落从第 1 行起的默认窗口。 */
+function windowSpan(symbols: SymbolInfo[], tokens: string[]): { start: number; end?: number } {
+  let best: { score: number; symbol: SymbolInfo } | undefined;
   for (const symbol of symbols) {
     const name = symbol.name.toLowerCase();
     const score = tokens.reduce((total, token) => total + (name.includes(token) ? 1 : 0), 0);
     if (!score) continue;
-    if (!best || score > best.score || (score === best.score && symbol.line < best.line)) best = { score, line: symbol.line };
+    if (!best || score > best.score || (score === best.score && symbol.line < best.symbol.line)) best = { score, symbol };
   }
-  return best ? Math.max(1, best.line) : 1;
+  return best ? { start: best.symbol.line, end: best.symbol.endLine } : { start: 1 };
 }
 
 

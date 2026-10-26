@@ -18,6 +18,11 @@ export interface GuardCandidate {
   lineCount: number;
   /** 摘录的起始行号（符号定位窗口不从第 1 行开始时使用；默认 1）。锚点必须落在 [startLine, lineCount] 内。 */
   startLine?: number;
+  /**
+    摘录实际给到的最后一行（文件真实行号）。窗口里折掉注释后，行数与行跨度不再相等，
+    出网清单要报「哪一段源码出门」就得靠这一格，不能拿摘录行数倒推。
+    */
+  endLine?: number;
   /** 摘录里隐去了几处疑似密钥（出网前的同一道筛，见 `security/secrets.ts`）。报表要拿它分清「扫过且干净」与「没扫」。 */
   masked?: number;
 }
