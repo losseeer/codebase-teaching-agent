@@ -53,11 +53,6 @@ export function doneEvent(events: Record<string, unknown>[]): Record<string, unk
 /** llm.log 里属于「会话回合」的那三档：只有这些行必须带 threadId。 */
 const TURN_SCENES = new Set(["map.chat", "practice.chat", "teaching.turn"]);
 
-/** 决策调用（动作提议 / 意图分类）单独回：它的正文只被解析成动作标签，喂对话正文进去会被解析成一个真动作。 */
-function decisionCall(raw: string): boolean {
-  return raw.includes("动作决策器") || raw.includes("意图分类");
-}
-
 export interface RouteFixture {
   readonly root: string;
   readonly repoDir: string;
@@ -111,8 +106,7 @@ export function createRouteFixture(): RouteFixture {
   } as RouteFixture;
   let fetchCalls = 0;
 
-  function replyFor(raw: string): string {
-    if (decisionCall(raw)) return "（测试：本轮不给动作提议）";
+  function replyFor(): string {
     const next = fx.scripted.shift();
     if (next) fx.spoken = next;
     return fx.spoken;
@@ -140,7 +134,7 @@ export function createRouteFixture(): RouteFixture {
       const stopped = await fx.app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId: fx.stopInside.turnId } });
       expect(stopped.json()).toMatchObject({ stopped: true });
     }
-    const text = replyFor(raw);
+    const text = replyFor();
     // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具实际被拒的是什么，从此能端到端验
     const call = /^@@tool (\S+) (.*)$/s.exec(text);
     const payload = {

@@ -125,7 +125,7 @@ app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: u
   if (!isUiJournalEventType(type)) {
     const owned = isEngineOwnedEventType(type);
     return reply.code(400).send(owned
-      ? { error: "这类事件由引擎在状态机、工具循环与装配里写，界面接口不收（同一事实只写一处）。", reason: "engine_owned_event" }
+      ? { error: "这类事件由引擎在工具循环与装配里写，界面接口不收（同一事实只写一处）。", reason: "engine_owned_event" }
       : { error: "事件类型不在 journal 契约内。", reason: "unknown_event" });
   }
   if (payload !== undefined && (typeof payload !== "object" || payload === null || Array.isArray(payload))) {

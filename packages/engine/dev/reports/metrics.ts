@@ -146,8 +146,16 @@ for (const repo of perRepo) {
   emit(`- code_search：${of("code_search").length} 次（原始计数）`);
   emit(`- file_read：${reads.length} 条（归并后），其中 denied ${pct(reads.length - readOk.length, reads.length)}`);
 
-  // hint_depth / action_veto / unit_mastered 已经没有生产者：下面的计数是历史存量，不是「事件掉了」
-  emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "hint_depth", "action_veto", "unit_mastered", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);
+  // 落点核验早就不属于「未测」：每轮出答复前都在环复检一遍并记这条事件，这里只是把它读出来。
+  const invariants = of("turn_invariant");
+  const broken = invariants.filter((event) => event.payload.failed);
+  emit(invariants.length
+    ? `- 回合不变量复检（在环、零 token）：${invariants.length} 轮，失守 ${broken.length} 轮${broken.length ? `（${[...new Set(broken.map((event) => String(event.payload.failed)))].join("、")}）` : ""}；三作用域都判，离线机检那台架目前只喂 teach`
+    : "- 回合不变量复检：未执行（journal 里没有 turn_invariant 记录——这条埋点上线前的老回合不补）");
+
+  // 退役那三档（hint_depth / action_veto / unit_mastered）不再计数：这里报的是「当前还在产的事件」，
+  // 历史存量要单看某一条回合，走 run-trace。
+  emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);
 
   // 练习链路：送达(exercise_generated)→提交(exercise_submitted, UI 侧)→判分通过(exercise_result)；断在哪一步看拒绝的阶段分布
   {
@@ -198,6 +206,5 @@ for (const repo of perRepo) {
 emit();
 emit("## 5. 明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
 emit("- 每教会一个节点的平均成本：分母 `unit_mastered` 现在没有产出方（问答回合不再经过教学状态机）→ 这条指标没有口径；要问「一次问答多少成本」看第 2 节的 teach 场景行；");
-emit("- 表达质量归因（文件:行号 落点核验）：回合文本不落盘（按设计），走离线评测档。");
 emit();
 console.log(out.join("\n"));
