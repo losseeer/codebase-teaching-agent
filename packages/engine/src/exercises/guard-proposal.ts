@@ -2,10 +2,14 @@ import type { RubricCriterion } from "@codebase-tutor/shared";
 
 /**
   LLM 出题守门（propose 之后的确定性一端）：全部确定性检查，任一不过即否决整道题。
-  ① 契约检查——字段齐全、长度受控；
+  ① 契约检查——字段齐全，以及只有「明显不是题面」的废件；
   ② 事实检查——锚点必须落在出题时提供的候选摘录集合内（防幻觉，拦「该拒不拒、硬编无关题」）；
   ③ 泄漏检查——题面不得包含参考答案片段。
   守门与判分锚点同源：rubric 的 answerKey/criteria 存引擎缓存，题面只有通过守门才落库。
+
+  题面与标题的字数不在这里否决：拒题等于用户白付这一趟调用，而「长」本身不是缺陷——长题面由界面折叠兜住。
+  只留一条防废件的上限：模型把整个文件抄进题面时，那不是题目，是解析跑偏的产物。
+  参考答案与评分细则仍受控：那两头是判分依据，不是给人读的散文，超限的题判不稳。
   */
 
 export interface GuardCandidate {
@@ -32,8 +36,8 @@ export interface GuardIssue {
   message: string;
 }
 
-const MAX_TITLE = 40;
-const MAX_PROMPT = 600;
+/** 题面废件线：超过这个长度不像「一道题的说明」，像把整份源码抄了进来。 */
+const MAX_PROMPT = 4_000;
 const MAX_ANSWER_KEY = 2_000;
 const MAX_CRITERIA = 6;
 
@@ -42,9 +46,8 @@ export function guardLlmProposal(proposal: LlmExerciseProposal, candidates: Guar
   const byPath = new Map(candidates.map((candidate) => [candidate.path, candidate]));
 
   if (!proposal.title?.trim()) issues.push({ check: "contract", message: "题面标题为空" });
-  else if (proposal.title.length > MAX_TITLE) issues.push({ check: "contract", message: `题面标题超长（>${MAX_TITLE} 字）` });
   if (!proposal.prompt?.trim()) issues.push({ check: "contract", message: "题面描述为空" });
-  else if (proposal.prompt.length > MAX_PROMPT) issues.push({ check: "contract", message: `题面描述超长（>${MAX_PROMPT} 字）` });
+  else if (proposal.prompt.length > MAX_PROMPT) issues.push({ check: "contract", message: `题面描述长得不像题面（>${MAX_PROMPT} 字），像把源码整份抄进来了` });
   if (!proposal.answerKey?.trim()) issues.push({ check: "contract", message: "参考答案为空" });
   else if (proposal.answerKey.length > MAX_ANSWER_KEY) issues.push({ check: "contract", message: "参考答案超长" });
 

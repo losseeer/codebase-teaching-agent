@@ -340,6 +340,9 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .exercise-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .exercise-title { font-size: var(--fs-16); font-weight: 650; line-height: 1.45; margin: 0; }
 .exercise-prompt { font-size: var(--fs-13); line-height: 1.7; color: var(--ink); margin: 0; }
+/* 长题面默认收起六行，由「展开 / 收起」这一颗按钮放开：题面长度不在引擎侧否决，显示这一头在这里兜。 */
+.exercise-prompt.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+.prompt-toggle { margin-top: 6px; }
 .option-row {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 10px 14px;

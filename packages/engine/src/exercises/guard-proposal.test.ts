@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { guardLlmProposal, type GuardCandidate, type LlmExerciseProposal } from "./guard-proposal.js";
+import { clipProposalTitle, MAX_PROPOSAL_TITLE } from "./llm-generate.js";
 
 const candidates: GuardCandidate[] = [
   { path: "src/config.ts", excerpt: "1| export function clamp(value: number) {\n2|   return value;", lineCount: 2 },
@@ -59,5 +60,28 @@ describe("候选摘录窗口（startLine）", () => {
   it("锚点行号在文件范围内但低于窗口起点时否决", () => {
     const issues = guardLlmProposal(proposal({ anchors: [{ path: "src/deep.ts", line: 10 }] }), windowed);
     expect(issues.some((issue) => issue.check === "fact")).toBe(true);
+  });
+});
+
+/** 长度口径的两端都在这一条链上：守门只拦废件，标题上限由出题侧解析时截（拒题等于让用户白付这一趟调用）。 */
+describe("题面长度：只否决废件，不否决长题", () => {
+  it("900 字的题面（旧口径 600 字会整题否决）现在放行", () => {
+    expect(guardLlmProposal(proposal({ prompt: "若".repeat(900) }), candidates)).toEqual([]);
+  });
+
+  it("超过 4000 字的题面按废件否决", () => {
+    const issues = guardLlmProposal(proposal({ prompt: "若".repeat(4_001) }), candidates);
+    expect(issues.some((issue) => issue.check === "contract" && issue.message.includes("不像题面"))).toBe(true);
+  });
+
+  it("参考答案与评分细则条数仍受控：那是判分依据，不是给人读的散文", () => {
+    expect(guardLlmProposal(proposal({ answerKey: "答".repeat(2_001) }), candidates).some((issue) => issue.message.includes("参考答案超长"))).toBe(true);
+    const many = Array.from({ length: 7 }, (_, index) => ({ dimension: `维度${index}`, description: "说明" }));
+    expect(guardLlmProposal(proposal({ criteria: many }), candidates).some((issue) => issue.message.includes("评分维度太多"))).toBe(true);
+  });
+
+  it("标题超长不再否决，改由出题侧截到稳定上限", () => {
+    expect(guardLlmProposal(proposal({ title: "标".repeat(200) }), candidates)).toEqual([]);
+    expect(clipProposalTitle(`  ${"标".repeat(200)}  `)).toHaveLength(MAX_PROPOSAL_TITLE);
   });
 });

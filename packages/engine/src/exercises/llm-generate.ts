@@ -304,8 +304,15 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+/** 题面标题的显示上限：标题只进列表与下拉，超长在这里截，不再整题否决（拒题＝白付这一趟调用）。 */
+export const MAX_PROPOSAL_TITLE = 60;
+export function clipProposalTitle(title: string): string {
+  return title.trim().slice(0, MAX_PROPOSAL_TITLE);
+}
+
 function normalizeProposal(parsed: Record<string, unknown>): LlmProposal | undefined {
-  const title = String(parsed.title ?? "").trim();
+  // 标题只用于列表与会话下拉：超长不再整题否决（拒题＝白付这一趟），在这里截到稳定上限
+  const title = clipProposalTitle(String(parsed.title ?? ""));
   const prompt = String(parsed.prompt ?? "").trim();
   const answerKey = String(parsed.answerKey ?? "").trim();
   const targetTitle = String(parsed.targetTitle ?? "").trim();

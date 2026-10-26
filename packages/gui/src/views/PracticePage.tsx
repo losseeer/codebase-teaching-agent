@@ -319,7 +319,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                   </div>
                 ) : null}
 
-                <p className="exercise-prompt">{exercise.prompt}</p>
+                <ExercisePrompt key={exercise.id} text={exercise.prompt} />
 
                 <section className="card clip code-card">
                   <div className="code-context row between">
@@ -506,5 +506,23 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
       </div>
       <div className="d-due">{failed ? "刚才出题没成功 · 悬停看原因" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
     </button>
+  );
+}
+
+/**
+  题面：引擎不再按长度否决题目，长题面在这里兜住——超过 6 行或 240 字才给「展开」，默认收起。
+  折叠只看这一条题面，是新题就重新收起：把展开态存进本地偏好，会让下一道题沿用上一道的开关，读起来像随机行为。
+ */
+function ExercisePrompt({ text }: { text: string }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 240 || text.split("\n").length > 6;
+  if (!long) return <p className="exercise-prompt">{text}</p>;
+  return (
+    <>
+      <p className={`exercise-prompt${open ? "" : " clamped"}`}>{text}</p>
+      <button type="button" className="btn btn-ghost btn-sm prompt-toggle" aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
+        {open ? "收起" : "展开"}
+      </button>
+    </>
   );
 }
