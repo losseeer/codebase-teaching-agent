@@ -1,5 +1,5 @@
 import type { JournalEvent } from "@codebase-tutor/domain";
-import { repositoryOr404, REPOSITORY_NOT_MOUNTED } from "../../services.js";
+import { repositoryOr404 } from "../../services.js";
 import { Journal, isEngineOwnedEventType, isUiJournalEventType } from "../../store/journal.js";
 
 /**

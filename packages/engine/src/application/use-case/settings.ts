@@ -5,7 +5,7 @@ import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getL
 /** 思考档位取值：以运行时那份清单为唯一真源，不在这里另抄一份。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../llm/thinking.js";
-import { REPOSITORY_NOT_MOUNTED, repositoryOr404, teachingLlm } from "../../services.js";
+import { repositoryOr404, teachingLlm } from "../../services.js";
 
 /**
   配置与成本面的用例：运行时 LLM 设置（全局，含密钥掩码）、每仓预算、成本读数。
