@@ -10,6 +10,7 @@ import { CROSS_REPO_LINK_TOOL } from "../depgraph/seams.js";
 import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
 import { QUERY_FACTS_TOOL } from "../facts/query.js";
 import { READ_SKILL_TOOL } from "../integrations/skills.js";
+import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskFacet, type AskUserAudit } from "./ask-user.js";
 
 /**
   read_file / search_code 工具循环（宏观设计 map 与教学 teaching 两个作用域共用）：
@@ -58,6 +59,11 @@ export interface ReadToolLoopInput {
   facts?: FactsToolContext;
   /** 技能正文的取用通道。不传 = 工具清单里没有 `read_skill`，系统提示词也不该出现技能清单。 */
   skills?: SkillsToolContext;
+  /**
+    回合内向用户提问的通道：只在本轮上下文确实缺某一格时才给（服务层算缺哪一格）。
+    不给 = 清单里没有 `ask_user`，回合行为与从前逐字一致。一次回合最多问一次（循环内的本地判据）。
+  */
+  ask?: { facets: AskFacet[] };
   /**
     外部 MCP 工具面，默认不给：每条外部工具的 schema 都要进每一轮请求的 token，
     还会改变请求前缀的形状（前缀缓存按请求头部算）。服务层只在配置文件里真有启用的 server 时才传。
@@ -132,7 +138,7 @@ export interface FactsToolContext {
 }
 
 /** 按「给了哪些通道」现做工具清单：跨仓参数与 cross_repo_link 只在真有对端时出现；没有仓库根时文件面一个都不给。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross" | "diagram" | "skills" | "external" | "facts">): LlmTool[] {
+function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross" | "diagram" | "skills" | "external" | "facts" | "ask">): LlmTool[] {
   const { cross, diagram, skills, external } = input;
   const names = cross ? Object.keys(cross.roots) : [];
   const withRepo = (tool: LlmTool, extra: string): LlmTool => {
@@ -149,6 +155,8 @@ function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross"
     if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
     if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
   }
+  // 提问排在取证之后、写侧之前：先把能自己查的查了，确实缺的那一格才开口问
+  if (input.ask?.facets.length) tools.push(askUserToolFor(input.ask.facets));
   // 写侧工具只在服务层给了闭包时才出现：教学与练习作用域都不该有改图能力
   if (diagram) tools.push(SET_DIAGRAM_TOOL);
   if (skills) tools.push(READ_SKILL_TOOL);
@@ -211,6 +219,13 @@ export interface ReadToolLoopResult {
   resumedFromRound?: number;
   /** 回合被预算闸掐断过；没这个字段就是正常答完或轮数/额度用尽。 */
   stoppedBy?: TurnStopReason;
+  /**
+    本轮向用户提了一个问题并就地收尾：`completion.text` 已是「问句 + 可选项」那一行，
+    这一格给的是结构化的那一份（done 载荷与审计都读它）。
+  */
+  asked?: AskUserAudit;
+  /** 模型试过提问但被判据挡下的最后一句原因（参数不合法、超字、本轮已问过）：审计要分得清「没问」和「问不出来」。 */
+  askRefused?: string;
 }
 
 /**
@@ -260,6 +275,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let succeededReads = 0;
   let crossReads = 0;
   let externalCalls = 0;
+  let asked: AskUserAudit | undefined;
+  let askRefused: string | undefined;
   let usage: LlmUsage | undefined;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
   const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, crossReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
@@ -370,6 +387,26 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         messages.push({ role: "tool", toolCallId: call.id, content: found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
         continue;
       }
+      if (call.name === ASK_USER_TOOL_NAME) {
+        if (!input.ask?.facets.length) {
+          messages.push({ role: "tool", toolCallId: call.id, content: "这一轮没有向用户提问的通道（缺的那一格上下文里已经有了）。请直接作答。" });
+          continue;
+        }
+        const attempt = parseAsk(call.argumentsJson, input.ask.facets);
+        if (!attempt.ok) {
+          askRefused = attempt.reason;
+          messages.push({ role: "tool", toolCallId: call.id, content: attempt.reason });
+          continue;
+        }
+        if (asked) {
+          askRefused = "一个回合最多问一次";
+          messages.push({ role: "tool", toolCallId: call.id, content: "本轮已经问过一句了，不能再问第二句。请基于已读到的内容作答，把没核实的部分写明。" });
+          continue;
+        }
+        // 提问即收尾：这句之后不回灌 tool_result、不再发第二次调用，未应答的 tool_call 就留在 messages 末尾
+        asked = attempt.ask;
+        break;
+      }
       if (input.external?.tools.some((tool) => tool.name === call.name)) {
         const cap = input.external.maxCalls ?? 3;
         if (externalCalls >= cap) {
@@ -420,6 +457,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       messages.push({ role: "tool", toolCallId: call.id, content: repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content });
     }
+    // 问了就收尾：这一份不写检查点（刀 1 没有「等用户回答再接着算」的语义，留着快照只会在下次误续跑）
+    if (asked) break;
     // 一个 super-step 落一份快照：进程在这之后被杀掉，下一次同线程同问题的请求就从这里接上
     input.checkpoint?.save(inputHash, snapshot());
     input.onProgress?.({ type: "thinking", round: rounds + 1 });
@@ -429,7 +468,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   }
   // 答完了：留着检查点只会在下次误续跑一个已经结束的回合
   input.checkpoint?.clear();
-  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }) };
+  // 提问这一轮交出去的成品就是问句：正文 = 问句 + 可选项，落库、回放、journal 三处仍读同一份文本
+  if (asked) completion = { ...completion, text: askBody(asked) };
+  return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }) };
   } catch (error) {
     // 「读过哪些文件、搜过什么、调过哪些外部工具」是已发生的事实，中止与失败两条路都要把它带出循环
     attachToolLoopAudits(error, audits());

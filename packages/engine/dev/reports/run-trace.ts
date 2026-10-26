@@ -29,6 +29,11 @@ function eventLine(event: JournalEvent): string {
     case "turn_invariant":
       // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
+    case "turn_asked":
+      // 问出去了还是被挡下了：这两件事在同一线程里常常相邻出现，trace 上必须一眼分得开
+      return p.outcome === "refused"
+        ? `想提问被挡 facet=${p.facet ?? "未记"} 因由:${clip(p.reason, 70)}`
+        : `向用户提问 facet=${p.facet ?? "未记"} 候选=${clip(p.options, 60)}`;
     case "loop_round":
       return `工具轮=${p.tool_rounds ?? "未记"} 读=${p.tool_reads ?? "未记"} 搜=${p.tool_searches ?? "未记"}${p.aborted ? " 【中止】" : ""}${p.stopped_by === "budget" ? " 【预算到线】" : ""}${p.resumed_from_round !== undefined ? ` 【续自第 ${p.resumed_from_round} 轮】` : ""}`;
     case "turn_context":

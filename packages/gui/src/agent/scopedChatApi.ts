@@ -8,8 +8,9 @@ export interface ScopedChatApi {
 
   /** Agent 侧栏 thread 状态：3 作用域各独立，内存态（跨路由共享；正文真源在引擎库）。写入器只有 `pushMessage`——清空由线程边界负责。 */
   threads: Record<Scope, ThreadItem[]>;
-  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示）。 */
-  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }) => void;
+  /** `text` 存原文（不预 escape）；agent 消息可选 variant（"error" 错误 / "hint" 本地提示 / "ask" 向用户提问）。
+      `options` 只在 variant 为 "ask" 时有值：正文里已写着同一串候选，这一格多的是一排可点的按钮。 */
+  pushMessage: (scope: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask", card?: { diagramId: string; name: string }, options?: string[]) => void;
 
   /**
     会话线程（三作用域各一份独立列表，真源在引擎库里）：
@@ -70,9 +71,9 @@ export interface ScopedChatApi {
   liveAnswer: string;
   error: string;
   send: () => Promise<void>;
-  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论 */
-  sendMap: () => Promise<void>;
-  sendPractice: () => Promise<void>;
+  /** 作用域对话：宏观设计 / 练习评估的单轮 LLM 讨论。`answer` = 用户点了某条提问候选时那句短标签（省略就发输入框里那句）。 */
+  sendMap: (answer?: string) => Promise<void>;
+  sendPractice: (answer?: string) => Promise<void>;
   /** 最近一条回复的来源（按作用域记录；"local-heuristic-v1" = 启发式回落；空串 = 本作用域尚无回复）。显式展示 LLM 是否参与，不静默回落 */
   replySource: Record<Scope, string>;
   /** 当前练习对象（练习评估作用域的对话上下文；由 PracticePage 写入） */

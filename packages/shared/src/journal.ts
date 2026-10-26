@@ -56,6 +56,10 @@ export type JournalEventType =
       payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
       判据与离线 `phaseB:eval` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
+  /** 回合内向用户提了一句问（刀 1：只发问、不认领续跑）。一回合最多一条，被挡下的尝试也记。
+      payload = scene + facet(goal|range) + outcome(asked|refused) + options(候选短标签，斜杠分隔) + reason(仅 refused)。
+      提问占比与「问完用户到底答没答」的转化率都从这一行算，是刀 2 认领机制的门禁读数。 */
+  | "turn_asked"
   /** 会话线程的生命周期事件：`session_created` 在引擎发 id 建线程时写，
       `session_deleted` 只在软删时写。payload = scope(teach|map|practice) + thread_id + scope_ref/exercise_id + reason。
       删除是产品线的动作，journal 这条线只留「发生过删除」这一事实，不删任何既有事件行。 */
@@ -132,13 +136,13 @@ export type JournalEventType =
   `POST /api/repositories/:id/journal` 只认 UI 侧那张。理由是证据价值本身——
   `.tutor/journal.jsonl` 承担着「哪些代码出过门」这类账（`file_read` / `code_egress` / `token_usage`），
   而这条接口是本机任何进程都能调的：能塞一行就能编一段账，能编账的审计线就不是审计线。
-  引擎侧那张由引擎在状态机、工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
+  引擎侧那张由引擎在工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
 */
 export const ENGINE_JOURNAL_EVENTS = [
   "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
   "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
-  "turn_text", "turn_invariant", "loop_round", "turn_context", "turn_aborted", "exercise_run",
+  "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
   // architecture_layer_overridden 仅为历史行保留
   "architecture_layer_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"

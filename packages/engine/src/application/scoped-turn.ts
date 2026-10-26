@@ -95,7 +95,12 @@ export function recheckTurn(input: {
 export function finishMapChatTurn(repository: ImportedRepository, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
   const journal = new Journal(repository.path, repository.index.repositoryId);
   result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
+  // 选项是即将显示给用户、点了还会变成下一句正文的文本：与正文同过一道出境前密钥筛，不留第二条通路
+  if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
   persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
+  // 问了什么、被什么挡下：占比与「问完用户答没答」的转化率都从这一行算（刀 2 的门禁读数）
+  if (result.asked) journal.append("turn_asked", { scene: "map_chat", facet: result.asked.facet, outcome: "asked", options: result.asked.options.join(" / "), reason: null }, threadId);
+  else if (result.askRefused) journal.append("turn_asked", { scene: "map_chat", facet: null, outcome: "refused", options: null, reason: result.askRefused }, threadId);
   if (result.usage) journal.append("token_usage", {
     input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"

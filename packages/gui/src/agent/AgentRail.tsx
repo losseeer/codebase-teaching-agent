@@ -79,7 +79,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text) => { void t.sendMap(text); }} answerable={!t.sending} />)}
         {/* 回复生成过程指示：有流式正文时让位（避免双重提示），只有进度时顶替 */}
         {t.sending && t.progress[scope] && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -267,12 +267,13 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
 }
 
 /** thread 单条消息：用户消息纯文本气泡；agent 正文走 Markdown；error/hint 变体不进 Markdown。 */
-function ThreadEntry({ item, onOpenDiagram }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void }): ReactElement {
+function ThreadEntry({ item, onOpenDiagram, onAnswer, answerable }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string) => void; answerable?: boolean }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;
   const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
-  const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : "";
+  const tone = variant === "error" ? " error" : variant === "hint" ? " hint" : variant === "ask" ? " ask" : "";
   const card = agent?.card;
+  const options = agent?.options;
   // 卡片消息：agent 这一回合画/改了一张图。正文为空时只出卡片，不撑一个空气泡出来。
   if (card && !agent?.text) {
     return (
@@ -290,6 +291,14 @@ function ThreadEntry({ item, onOpenDiagram }: { item: ThreadItem; onOpenDiagram?
   return (
     <div className={`msg msg-${agent ? "agent" : "user"}`}>
       <div className={`msg-bubble${tone}`}>{body}</div>
+      {/* 提问的候选：只在能立刻回答时出现（没有在途回合）。灰着摆这儿等于骗用户点，点下去什么也不发 */}
+      {options?.length && answerable ? (
+        <div className="msg-asks" role="group" aria-label="选一个答回去">
+          {options.map((option) => (
+            <button key={option} type="button" className="btn btn-sm btn-ghost" onClick={() => onAnswer?.(option)}>{option}</button>
+          ))}
+        </div>
+      ) : null}
       {card ? (
         <button type="button" className="dg-card" title={`在画布打开「${card.name}」`} onClick={() => onOpenDiagram?.({ id: card.diagramId, name: card.name })}>
           <span className="dg-card-thumb">图</span>

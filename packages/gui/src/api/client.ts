@@ -283,15 +283,15 @@ export const api = {
       onEvent,
       turn.signal
     ),
-  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、以及这一回合真画/真改了哪张图）。
+  /** map-chat 流式版：SSE 逐事件回调过程指示（thinking / reading / searching）与正文增量（delta），resolve 于 done（回复、来源模型、这一回合真画/真改了哪张图、以及这一回合是否在向用户提问）。
       `diagramId` = 画布上正打开的那张图，agent 的结构改动按这一格定，认不出就不动——所以这一格必须由界面送当下真实打开的那张。 */
   mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
+    sseStream<{ reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { facet: string; question: string; options: string[] } }>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问：与 map-chat 同款 SSE（done/error/delta）；线程无效是 409、练习或仓库失效是 404，都走普通 JSON。
-      `diagram?: undefined`：练习作用域没有画图工具，那一格恒不出现——两条流的 done 形状对齐，
+      `diagram? / asked?: undefined`：练习作用域既没有画图工具也没有提问通道，那两格恒不出现——两条流的 done 形状对齐，
       调用方（`useScopedChat` 的 sendScoped）合成一个变量读时不必再分岔。 */
   practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
-    sseStream<{ reply: string; provider: string; diagram?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
+    sseStream<{ reply: string; provider: string; diagram?: undefined; asked?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 「停止生成」的带外通知：告诉引擎这一轮不要算了。404 = 那一轮已经结束，对界面来说同样是「停下来了」，所以调用方丢弃错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })
 };

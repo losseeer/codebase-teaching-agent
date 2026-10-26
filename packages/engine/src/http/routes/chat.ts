@@ -1,4 +1,5 @@
 import type { Exercise } from "@codebase-tutor/shared";
+import type { AskFacet } from "../../source/ask-user.js";
 import { factsToolFor, setDiagramToolFor } from "../../application/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../../application/paid-turn.js";
 import { turnCheckpointChannel } from "../../application/turn-checkpoint.js";
@@ -59,6 +60,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
       style: validateStyle(request.body?.style),
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
+      // 缺哪一格由上下文判：画布已选中文件或绑定路径 = 范围不缺，这一轮连问的通道都不给。
+      // 「缺意图」那一格引擎无从判，交给模型按工具里写死的判据核——所以只有范围真缺时才下发。
+      ...(sanitizeScopePaths(request.body?.scopePaths)?.length || request.body?.path ? {} : { ask: { facets: ["range", "goal"] as AskFacet[] } }),
       threadId: turn.threadId,
       onProgress: (progress: MapChatProgress) => send(progress),
       diagram: diagramContext,
@@ -76,7 +80,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
     }
     finishMapChatTurn(repository, provider, turn.threadId, content, result, crossFiles);
     replayTypewriter(send, result.reply);
-    send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}) });
+    send({ type: "done", reply: result.reply, provider: result.provider, ...(writtenDiagram ? { diagram: writtenDiagram } : {}), ...(result.asked ? { asked: result.asked } : {}) });
   } catch (error) {
     failScopedTurn({ send, repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", turnHandle, provider: provider.modelVersion, threadId: turn.threadId, error, fallbackError: "LLM 对话失败" });
   } finally {

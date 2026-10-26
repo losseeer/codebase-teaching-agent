@@ -153,6 +153,16 @@ for (const repo of perRepo) {
     ? `- 回合不变量复检（在环、零 token）：${invariants.length} 轮，失守 ${broken.length} 轮${broken.length ? `（${[...new Set(broken.map((event) => String(event.payload.failed)))].join("、")}）` : ""}；三作用域都判，离线机检那台架目前只喂 teach`
     : "- 回合不变量复检：未执行（journal 里没有 turn_invariant 记录——这条埋点上线前的老回合不补）");
 
+  // 提问占比（刀 1 唯一要的读数）：分母是宏观设计的回合数，问出去与被挡下分开算
+  {
+    const asks = of("turn_asked");
+    const mapTurns = of("turn_text").filter((event) => event.payload.scene === "map_chat").length;
+    const asked = asks.filter((event) => event.payload.outcome === "asked");
+    const byFacet = ["goal", "range"].map((facet) => `${facet} ${asked.filter((event) => event.payload.facet === facet).length}`).join("、");
+    emit(mapTurns
+      ? `- 向用户提问占比：${pct(asked.length, mapTurns)}｜按格：${byFacet}｜被判据挡下 ${asks.length - asked.length} 次`      : "- 向用户提问占比：未执行（journal 里没有 map_chat 回合）");
+  }
+
   // 退役那三档（hint_depth / action_veto / unit_mastered）不再计数：这里报的是「当前还在产的事件」，
   // 历史存量要单看某一条回合，走 run-trace。
   emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);

@@ -406,6 +406,9 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .msg-streaming::after { content: "▍"; opacity: 0.4; }
 .msg-bubble.error { border-color: var(--danger-border); color: var(--danger); }
 .msg-bubble.hint { border-color: var(--border); color: var(--ink-3); font-style: italic; }
+/* agent 在向用户提问：正文已是问句 + 可选项，下面那排按钮点一下就答回去 */
+.msg-bubble.ask { border-color: var(--brand-600); background: var(--brand-050); }
+.msg-asks { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 
 /* 回复正文的 Markdown：气泡已给底色，内层只做排版 */
 .msg-bubble .md > :first-child { margin-top: 0; }

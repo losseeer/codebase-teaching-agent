@@ -23,9 +23,9 @@ export function useScopedChat(repositoryId: string): ScopedChatApi {
   }, [scope]);
 
 const [threads, setThreads] = useState<Record<Scope, ThreadItem[]>>({ map: [], teaching: [], practice: [] });
-const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint", card?: { diagramId: string; name: string }): void => {
+const pushMessage = (target: Scope, role: "user" | "agent", text: string, variant?: "error" | "hint" | "ask", card?: { diagramId: string; name: string }, options?: string[]): void => {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}) }] }));
+  setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...(card ? { card } : {}), ...(options?.length ? { options } : {}) }] }));
 };
 
 /** 教学作用域：只存 `file:<path>` / `dir:<path>`，不依赖课程树。 */
@@ -258,13 +258,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     「回放是否已开始」只活在这个闭包里：分诊发生在 catch 里，而那一个布尔决定提示文案说不说「引擎其实算完了」。
     结账顺序：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
   */
-  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined) => Promise<void>; fail: (reason: unknown) => void } => {
+  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, options?: string[]) => Promise<void>; fail: (reason: unknown) => void } => {
     let replayStarted = false;
     return {
       onDelta: (delta) => { replayStarted = true; enqueue(delta); },
-      settle: async (text, provider) => {
+      // `options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
+      settle: async (text, provider, options) => {
         await finish();
-        pushMessage(target, "agent", text);
+        pushMessage(target, "agent", text, options?.length ? "ask" : undefined, undefined, options);
         setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
         clear();
         knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
@@ -522,14 +523,15 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句
-  const sendScoped = async (scope: "map" | "practice"): Promise<void> => {
-    const message = content.trim();
+  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句。
+  // `answer` 是用户点了提问按钮时代替输入框发的那一句：输入框里正在打的字不该被它清掉。
+  const sendScoped = async (scope: "map" | "practice", answer?: string): Promise<void> => {
+    const message = (answer ?? content).trim();
     if (!message || !repositoryId) return;
     // 同 teaching：先结断线那轮的账，再让这一句上屏。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
-    setContent("");
+    if (answer === undefined) setContent("");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
@@ -561,7 +563,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
-      await sink.settle(reply.reply, reply.provider);
+      await sink.settle(reply.reply, reply.provider, reply.asked?.options);
       // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
       if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" });
     } catch (reason) {
@@ -575,8 +577,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       void refreshThreads(scope);
     }
   };
-  const sendMap = (): Promise<void> => sendScoped("map");
-  const sendPractice = (): Promise<void> => sendScoped("practice");
+  const sendMap = (answer?: string): Promise<void> => sendScoped("map", answer);
+  const sendPractice = (answer?: string): Promise<void> => sendScoped("practice", answer);
 
   return {
     scope, setScope,

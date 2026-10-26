@@ -8,6 +8,7 @@ import { type ConversationBlock, renderConversation } from "../llm/conversation.
 import { callNeighborhoodSection } from "../depgraph/neighbors.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
+import type { AskFacet, AskUserAudit } from "../source/ask-user.js";
 import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../security/egress-log.js";
@@ -84,6 +85,10 @@ export interface ScopedChatResult {
   mcpCalls?: McpCallAudit[];
   /** mapChat 专用：本回合取过的技能正文（供 server 记 journal skill_read）。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
+  /** 本轮向用户提了一个问题（正文已是「问句 + 可选项」）：done 载荷与 `turn_asked` 都读这一格。 */
+  asked?: AskUserAudit;
+  /** 模型试着提问但被判据挡下的原因（参数不合法、超字、本轮已问过）：审计里「没问」与「问不出来」是两件事。 */
+  askRefused?: string;
   /** 本轮对话历史的折叠读数：折了几条、又从折叠段找回几条（供 journal 回答「这条回复是在看过多少历史的前提下写的」）。 */
   conversation: { foldedMessages: number; recalledMessages: number };
 }
@@ -160,6 +165,8 @@ export interface RunTurnInput {
   diagram?: SetDiagramToolContext;
   facts?: FactsToolContext;
   skills?: SkillsToolContext;
+  /** 向用户提问的通道（只给宏观设计，且只在本轮缺某一格时给）：不给就没有 `ask_user`。 */
+  ask?: { facets: AskFacet[] };
   external?: ExternalToolContext;
   checkpoint?: TurnCheckpointChannel;
   budgetGuard?: () => string | undefined;
@@ -179,6 +186,10 @@ export interface RunTurnResult {
   skillReads: { skill: string; chars: number; found: boolean }[];
   resumedFromRound?: number;
   stoppedBy?: TurnStopReason;
+  /** 本轮以「向用户提问」收尾（`completion.text` 已是问句 + 可选项）。 */
+  asked?: AskUserAudit;
+  /** 提问被判据挡下的原因（没挡上就没这一格）。 */
+  askRefused?: string;
 }
 
 /**
@@ -202,6 +213,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(input.diagram ? { diagram: input.diagram } : {}),
       ...(input.facts ? { facts: input.facts } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
+      ...(input.ask ? { ask: input.ask } : {}),
       ...(input.external ? { external: input.external } : {}),
       ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
       ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
@@ -217,7 +229,9 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       mcpCalls: result.mcpCalls,
       skillReads: result.skillReads,
       ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
-      ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy })
+      ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
+      ...(result.asked === undefined ? {} : { asked: result.asked }),
+      ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused })
     };
   }
   // 练习答疑没有文件面，但装了技能就该能取正文：只给 `read_skill`（和外部工具），两轮封顶。
@@ -324,7 +338,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
   否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 向用户提问的通道：不给就没有 `ask_user`（只给宏观设计，且本轮确实缺某一格时才给）。 */ ask?: { facets: AskFacet[] }; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/egress-log.ts） */
@@ -378,6 +392,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
+    ...(input.skills ? { skills: input.skills } : {}),
+    ...(input.ask ? { ask: input.ask } : {}),
     ...(input.external ? { external: input.external } : {}),
     ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
     ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
@@ -397,6 +413,8 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(result.skillReads.length ? { skillReads: result.skillReads } : {}),
     ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
     ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
+    ...(result.asked === undefined ? {} : { asked: result.asked }),
+    ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
     conversation: { foldedMessages: conversation.foldedMessages, recalledMessages: conversation.recalledMessages }
   };
 }

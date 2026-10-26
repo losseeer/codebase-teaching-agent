@@ -65,7 +65,8 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     await mapChat({ content: "这仓分几层？", threadId });
     // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有，但那扇门照旧在——
     // 缺席由它自己说出来，模型才不会从「工具不在清单里」反推出「这轮画不了」
-    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "set_diagram", "query_facts"]);
+    // `ask_user` 在列是正常的：它是引擎自己那一侧的通道，判据是「本轮缺不缺范围」，跟装没装外部能力无关（下面那两格才是）
+    expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "ask_user", "set_diagram", "query_facts"]);
     expect(fx.sentTools[before].raw, "一行产物都没有时，上下文要直接说没有，别让模型自己试出来").toContain("本仓还没有静态产物");
   });
 
@@ -371,6 +372,57 @@ describe("出字前的本地过筛", () => {
     const invariant = fx.lastEvent("turn_invariant");
     expect(invariant.payload.masked_secrets).toBe(1);
     expect(invariant.payload.masked_paths).toBe(1);
+  });
+});
+
+/**
+  刀 1 的提问只到「问出去」为止：不写检查点、不认领续跑，下一句按新回合走。
+  要守的是三件事——只发一次调用、正文仍是三处同一份、`turn_asked` 能把「问出去」和「被挡下」分开数。
+*/
+describe("回合内向用户提问（只问不续，先量占比）", () => {
+  it("问句就是本轮成品：一次调用、done 带候选、三处文本同一份、审计记 asked", async () => {
+    fx.scripted = ['@@tool ask_user {"facet":"range","question":"这张图画哪一块？","options":["整仓","下单那条"]}'];
+    const threadId = await fx.newThread("map", "提问线程");
+    const before = fx.sentTools.length;
+    const response = await mapChat({ content: "画张架构图", threadId });
+    const done = response.json() as { reply: string; asked?: { facet: string; question: string; options: string[] } };
+    expect(fx.sentTools.length - before, "提问即收尾：不该再发第二次调用").toBe(1);
+    expect(done.reply).toBe("这张图画哪一块？\n可选项：整仓 / 下单那条");
+    expect(done.asked).toEqual({ facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] });
+    expect(fx.assistantMessage(threadId).content).toBe(done.reply);
+    expect(fx.lastEvent("turn_text").payload.answer).toBe(done.reply);
+    expect(fx.lastEvent("turn_asked").payload).toMatchObject({ scene: "map_chat", facet: "range", outcome: "asked", options: "整仓 / 下单那条" });
+  });
+
+  it("范围已知就不给这个通道：画布绑定了文件，清单里没有 ask_user", async () => {
+    fx.scripted = [OK_REPLY];
+    const threadId = await fx.newThread("map", "已选范围");
+    fx.sentTools.length = 0;
+    const response = await mapChat({ content: "这个模块分几层？", threadId, path: MAIN_FILE });
+    expect(response.statusCode).toBe(200);
+    expect(fx.sentTools[0].names, "范围已经在请求体里了，再问一次就是把用户已经答过的话重问一遍").not.toContain("ask_user");
+  });
+
+  it("候选太长就挡下：回合照旧答完，审计记 refused 与因由", async () => {
+    fx.scripted = ['@@tool ask_user {"facet":"range","question":"画哪一块？","options":["把整条下单链路和它的异步任务都画上"]}', "那就先画整仓三层。"];
+    const threadId = await fx.newThread("map", "挡下线程");
+    const response = await mapChat({ content: "画张图", threadId });
+    expect((response.json() as { reply: string }).reply).toBe("那就先画整仓三层。");
+    const refused = fx.lastEvent("turn_asked");
+    expect(refused.payload.outcome).toBe("refused");
+    expect(String(refused.payload.reason)).toContain("按钮放不下");
+    expect(refused.payload.facet ?? null, "没问成的尝试不该报出一格 facet").toBe(null);
+  });
+
+  it("问句里的疑似密钥在正文与候选两处都隐去：按钮不是第二条通路", async () => {
+    fx.scripted = ['@@tool ask_user {"facet":"goal","question":"凭据写在 sk-abcdefghijklmnop1234，先看哪层？","options":["接口层","服务层"]}'];
+    const threadId = await fx.newThread("map", "过筛提问");
+    const done = (await mapChat({ content: "这仓的凭据在哪？", threadId })).json() as { reply: string; asked?: { question: string; options: string[] } };
+    expect(done.reply).toContain("[疑似密钥，已隐去]");
+    expect(done.reply).not.toContain("sk-abcdefghijklmnop");
+    expect(done.asked?.question).toContain("[疑似密钥，已隐去]");
+    expect(done.asked?.question).not.toContain("sk-abcdefghijklmnop");
+    expect(fx.lastEvent("turn_asked").payload.options).toBe("接口层 / 服务层");
   });
 });
 

@@ -637,3 +637,72 @@ describe("completeWithOptionalSkills（出题与练习答疑的技能通道）",
     expect(result.skillReads).toEqual([{ skill: "demo", chars: 15, found: true }]);
   });
 });
+
+describe("ask_user（回合内提问：问句即本轮正文，就地收尾）", () => {
+  const facets = ["range", "goal"] as ("range" | "goal")[];
+  const askCall = (id: string, args: Record<string, unknown>): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "ask_user", argumentsJson: JSON.stringify(args) }], finishReason: "tool_calls" });
+  /** 记录检查点动作的假通道：刀 1 要求提问这一轮一个字都不写。 */
+  function spyCheckpoint(log: string[]): TurnCheckpointChannel {
+    return { restore: () => undefined, save: (_hash, _state, reason) => { log.push(reason ?? "progress"); }, clear: () => { log.push("clear"); } };
+  }
+  const base = { provider: undefined as unknown as LlmProvider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 4, maxCalls: 4 };
+
+  it("问一句就不再发第二次调用；正文是「问句 + 可选项」；检查点不写", async () => {
+    const { provider, calls } = scriptedProvider([askCall("a1", { facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] })]);
+    const log: string[] = [];
+    const result = await completeWithReadTool({ ...base, provider, ask: { facets }, checkpoint: spyCheckpoint(log) });
+    expect(calls.length, "提问就是本轮成品，不该再烧一趟调用").toBe(1);
+    expect(result.completion.text).toBe("这张图画哪一块？\n可选项：整仓 / 下单那条");
+    expect(result.asked).toEqual({ facet: "range", question: "这张图画哪一块？", options: ["整仓", "下单那条"] });
+    expect(calls[0].messages ?? [], "没回灌 tool_result，也没第二条请求可查").toEqual([]);
+    expect(log, "刀 1 没有「等用户回答再接着算」的语义：留着快照只会在下次误续跑一个已经收尾的回合").toEqual(["clear"]);
+  });
+
+  it("一句里塞两个提问：只认第一个，第二句不但不执行也不再发调用", async () => {
+    const { provider, calls } = scriptedProvider([{
+      text: "",
+      toolCalls: [
+        { id: "a1", name: "ask_user", argumentsJson: JSON.stringify({ facet: "goal", question: "要给谁看？", options: ["新人", "评审"] }) },
+        { id: "a2", name: "ask_user", argumentsJson: JSON.stringify({ facet: "range", question: "画哪一块？", options: ["整仓"] }) }
+      ],
+      finishReason: "tool_calls"
+    }]);
+    const result = await completeWithReadTool({ ...base, provider, ask: { facets } });
+    expect(calls.length).toBe(1);
+    expect(result.asked?.question, "一轮最多问一句").toBe("要给谁看？");
+  });
+
+  it("候选太长就挡下：回一句实话，模型照样能答完，原因进审计", async () => {
+    const { provider, calls } = scriptedProvider([
+      askCall("a1", { facet: "range", question: "画哪一块？", options: ["把整条下单链路和它的异步任务都画上"] }),
+      { text: "那就先画整仓三层。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ ...base, provider, ask: { facets } });
+    expect(result.asked, "超限的提问不成立").toBeUndefined();
+    expect(result.askRefused).toContain("按钮放不下");
+    expect(calls.length, "挡下之后回合继续，不是一报错就散").toBe(2);
+    expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("按钮放不下")), "挡下的理由必须回给模型，不然它只会重复试").toBe(true);
+    expect(result.completion.text).toBe("那就先画整仓三层。");
+  });
+
+  it("问本轮并不缺的那一格：挡下", async () => {
+    const { provider, calls } = scriptedProvider([
+      askCall("a1", { facet: "goal", question: "要给谁看？", options: ["新人"] }),
+      { text: "按分层给。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ ...base, provider, ask: { facets: ["range"] } });
+    expect(result.askRefused).toContain("本轮能问的只有 range");
+    expect(result.asked).toBeUndefined();
+  });
+
+  it("没给提问通道时，工具清单里没有它；模型硬调就回一句「这一轮没有这个通道」", async () => {
+    const { provider, calls } = scriptedProvider([
+      askCall("a1", { facet: "range", question: "画哪一块？", options: ["整仓"] }),
+      { text: "整仓三层。", finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ ...base, provider });
+    expect(calls[0].tools?.some((tool) => tool.name === "ask_user"), "默认关 = 清单里一个字节都不多").toBe(false);
+    expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("没有向用户提问的通道"))).toBe(true);
+    expect(result.asked).toBeUndefined();
+  });
+});

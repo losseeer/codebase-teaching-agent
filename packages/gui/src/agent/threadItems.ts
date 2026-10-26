@@ -7,8 +7,10 @@ export type ThreadItem =
   /**
     `card`：这一回合 agent 画（或改）了一张图，消息下面挂一张可点开的图卡片。
     挂在消息上而不是全局提示条上——用户事后回来还能找到「哪句话画出了哪张图」。
+    `options`：这一回合 agent 在向用户提问（`variant: "ask"`），正文已是问句 + 可选项，
+    这一格给的是同一份候选做成按钮；点一下等于把那句短标签当下一句话发出去。
   */
-  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint"; card?: { diagramId: string; name: string } };
+  | { kind: "agent"; id: string; text: string; variant?: "error" | "hint" | "ask"; card?: { diagramId: string; name: string }; options?: string[] };
 
 /** 线程正文一行的最小形状：teaching 的 TutorMessage 与 map/practice 的 ChatThreadMessage 都能对上（断线补账只比条数）。 */
 export type ThreadRow = { id: string; role: string; content: string };
