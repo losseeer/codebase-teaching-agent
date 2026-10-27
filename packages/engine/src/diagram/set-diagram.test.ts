@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import { TutorDatabase } from "../persistence/database.js";
+import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { buildDiagram, DIAGRAM_VERSION_LIMIT, diagramId } from "@codebase-tutor/domain";
-import { applyStructure, diagramStoreFor, listDiagrams, readDiagram, restoreVersion } from "../persistence/diagrams.js";
+import { applyStructure, diagramStoreFor, listDiagrams, readDiagram, restoreVersion } from "../adapter/outbound/persistence/diagrams.js";
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
 
 /**

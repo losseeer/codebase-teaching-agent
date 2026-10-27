@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import type { ImportJob, RepositoryCatalogEntry, RepositoryFreshness, RepositoryMountReason, ServerEvent } from "@codebase-tutor/contract";
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import { buildLlmRuntimeProvider } from "../llm/runtime.js";
+import { buildLlmRuntimeProvider } from "../adapter/outbound/llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { buildDependencyGraph, graphFromData, impactRadius, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
@@ -20,8 +20,8 @@ import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "@codebase-tutor/analysis";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
-import { Journal, journalFootprint } from "../persistence/journal.js";
-import { RepositoryHandle } from "../persistence/repository-handle.js";
+import { Journal, journalFootprint } from "../adapter/outbound/persistence/journal.js";
+import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */

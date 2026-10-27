@@ -1,9 +1,9 @@
 import type { ExercisePorts } from "../application/port/exercise-ports.js";
 import type { PracticeRepository } from "../exercises/exercises.js";
 import { deriveMastery } from "../learner/mastery.js";
-import type { TutorDatabase } from "../persistence/database.js";
-import { readJournal } from "../persistence/journal.js";
-import type { RepositoryHandle } from "../persistence/repository-handle.js";
+import type { TutorDatabase } from "../adapter/outbound/persistence/database.js";
+import { readJournal } from "../adapter/outbound/persistence/journal.js";
+import type { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 
 /**
   练习这条路的装配层：把「这一仓的库现在开着」翻译成练习侧要的四个口，用完就收回。

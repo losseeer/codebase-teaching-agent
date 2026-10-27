@@ -73,7 +73,7 @@ echo "本机 Node ABI: $(node -p 'process.versions.modules')"
 # 自检走与 persistence/database.ts 相同的那条路：loadAddon() 解析出 binding，再交给 better-sqlite3 开一个内存库。跑不通就退非 0，别报「装好了」。
 echo
 echo "=== loader 自检 ==="
-LOADER="$(dirname "$NATIVE_DIR")/src/persistence/betterSqlite3Loader.cjs"
+LOADER="$(dirname "$NATIVE_DIR")/src/adapter/outbound/persistence/betterSqlite3Loader.cjs"
 node -e '
   const { loadAddon } = require(process.argv[1]);
   const Database = require("better-sqlite3");

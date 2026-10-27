@@ -1,5 +1,5 @@
-import { LLM_PROVIDERS, THINKING_EFFORTS } from "../../../../llm/runtime.js";
-import { TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../../../llm/provider.js";
+import { LLM_PROVIDERS, THINKING_EFFORTS } from "../../../outbound/llm/runtime.js";
+import { TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../../outbound/llm/provider.js";
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../../../application/use-case/settings.js";
 import type { FastifyInstance, FastifyReply } from "fastify";

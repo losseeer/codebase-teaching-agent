@@ -3,13 +3,13 @@ import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/domain";
 
 import { hash } from "@codebase-tutor/platform";
-import type { LlmUsage } from "../llm/provider.js";
-import { maskSecrets, secretMasker } from "../security/secrets.js";
+import type { LlmUsage } from "../adapter/outbound/llm/provider.js";
+import { maskSecrets, secretMasker } from "../adapter/outbound/security/secrets.js";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
 import type { SummaryStore } from "../application/port/summary-store.js";
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "@codebase-tutor/analysis";
-import { recordEgress } from "../security/egress-log.js";
+import { recordEgress } from "../adapter/outbound/security/egress-log.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMARY_STEP, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**

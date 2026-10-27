@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { TeachingPolicy, TutorMessage } from "@codebase-tutor/domain";
 
-import { HISTORY_KEEP_EARLIEST_MESSAGES, HISTORY_KEEP_RECENT_MESSAGES } from "../llm/conversation.js";
+import { HISTORY_KEEP_EARLIEST_MESSAGES, HISTORY_KEEP_RECENT_MESSAGES } from "../adapter/outbound/llm/conversation.js";
 import type { ScopeRef } from "../source/scope-ref.js";
 import { assembleContext } from "./context-teaching.js";
 

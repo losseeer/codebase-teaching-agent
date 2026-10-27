@@ -1,7 +1,7 @@
 import { basename, dirname } from "node:path";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 
-import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
 import type { SearchCorpus } from "../source/search-code.js";
 
 /** 宏观设计（map）作用域的装配段：项目结构全景、画布选中模块的作用域清单、依赖邻域。 */

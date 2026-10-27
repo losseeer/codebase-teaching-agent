@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { LlmCallRecord } from "../../src/llm/call-log.js";
+import type { LlmCallRecord } from "../../src/adapter/outbound/llm/call-log.js";
 import { currentPricing, priceComponents, pricingIsConfigured, pricingSourceOf } from "../../src/cost/cost.js";
 
 /**

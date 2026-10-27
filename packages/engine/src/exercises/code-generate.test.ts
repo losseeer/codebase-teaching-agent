@@ -8,11 +8,11 @@ import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
-import type { LlmProvider } from "../llm/provider.js";
-import { readJournal } from "../persistence/journal.js";
-import { TutorDatabase } from "../persistence/database.js";
-import { RepositoryHandle } from "../persistence/repository-handle.js";
-import { nestedSandboxUsable } from "../sandbox/capability.js";
+import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
+import { readJournal } from "../adapter/outbound/persistence/journal.js";
+import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
+import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
+import { nestedSandboxUsable } from "../adapter/outbound/sandbox/capability.js";
 import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 

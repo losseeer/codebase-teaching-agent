@@ -1,10 +1,10 @@
 import { readRepositorySettings } from "../paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
-import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../llm/provider.js";
-import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../llm/runtime.js";
+import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../adapter/outbound/llm/provider.js";
+import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
 /** 思考档位取值：以运行时那份清单为唯一真源，不在这里另抄一份。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
-import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../llm/thinking.js";
+import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../adapter/outbound/llm/thinking.js";
 import { repositoryOr404, teachingLlm } from "../../infrastructure/composition-root.js";
 
 /**

@@ -1,11 +1,11 @@
 import type { RepositoryAnalysis, RepositoryIndex, TeachingPolicy, TutorMessage } from "@codebase-tutor/domain";
 
 import { callNeighborhoodSection } from "@codebase-tutor/analysis";
-import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
-import { type ConversationTurn, renderConversation } from "../llm/conversation.js";
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
+import { type ConversationTurn, renderConversation } from "../adapter/outbound/llm/conversation.js";
 import { sliceExcerpt } from "../source/excerpt.js";
 import { scopeFiles, type ScopeRef } from "../source/scope-ref.js";
-import type { EgressCollector } from "../security/egress-log.js";
+import type { EgressCollector } from "../adapter/outbound/security/egress-log.js";
 
 const EXCERPT_BEFORE = 7;
 const EXCERPT_AFTER = 10;

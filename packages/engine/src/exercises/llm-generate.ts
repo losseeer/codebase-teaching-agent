@@ -4,10 +4,10 @@ import type { Exercise, ExerciseKind } from "@codebase-tutor/domain";
 import { traceEngine } from "@codebase-tutor/platform";
 
 import { defineAnalysisStep } from "../analysis-step.js";
-import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { LlmProvider, LlmUsage } from "../adapter/outbound/llm/provider.js";
 import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
-import { recordEgress, type EgressSource } from "../security/egress-log.js";
-import { secretMasker } from "../security/secrets.js";
+import { recordEgress, type EgressSource } from "../adapter/outbound/security/egress-log.js";
+import { secretMasker } from "../adapter/outbound/security/secrets.js";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**

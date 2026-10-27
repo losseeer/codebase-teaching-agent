@@ -5,10 +5,10 @@ import { loadDotEnv } from "../../src/boot.js";
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { graphFromData } from "@codebase-tutor/analysis";
 import { fileStructureOf } from "@codebase-tutor/analysis";
-import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/llm/runtime.js";
+import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/adapter/outbound/llm/runtime.js";
 import { createSummaryProvider, LocalSummaryProvider } from "../../src/summarizer/summary-provider.js";
 import { summarizeFiles } from "../../src/summarizer/summarizer.js";
-import { TutorDatabase } from "../../src/persistence/database.js";
+import { TutorDatabase } from "../../src/adapter/outbound/persistence/database.js";
 
 /**
   全仓重做 L1 摘要：口径 bump 之后让全仓摘要换新走的正规产品写入通道。

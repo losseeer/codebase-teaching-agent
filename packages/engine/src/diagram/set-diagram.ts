@@ -14,7 +14,7 @@ import type {
 import { DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, buildDiagram, diagramId, normalizeDiagramName, versionStamp } from "@codebase-tutor/domain";
 import { id } from "@codebase-tutor/platform";
 import type { DiagramStore } from "../application/port/diagram-store.js";
-import type { LlmTool } from "../llm/provider.js";
+import type { LlmTool } from "../adapter/outbound/llm/provider.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
 /**

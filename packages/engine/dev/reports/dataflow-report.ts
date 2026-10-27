@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { llmLogPath, type LlmCallRecord } from "../../src/llm/call-log.js";
-import { readJournal } from "../../src/persistence/journal.js";
+import { llmLogPath, type LlmCallRecord } from "../../src/adapter/outbound/llm/call-log.js";
+import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**

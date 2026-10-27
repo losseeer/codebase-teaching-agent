@@ -1,16 +1,16 @@
 import type { ChatScope } from "@codebase-tutor/contract";
 
-import { externalToolSurface } from "../integrations/clients.js";
-import { listSkills, readSkill, skillsBriefing } from "../integrations/skills.js";
-import { appendMessages, getThread, readMessages } from "../persistence/chat-store.js";
-import { Journal } from "../persistence/journal.js";
+import { externalToolSurface } from "../adapter/outbound/integrations/clients.js";
+import { listSkills, readSkill, skillsBriefing } from "../adapter/outbound/integrations/skills.js";
+import { appendMessages, getThread, readMessages } from "../adapter/outbound/persistence/chat-store.js";
+import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
 import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
-import type { LlmProvider } from "../llm/provider.js";
-import { turnTextPayload } from "../persistence/journal.js";
+import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
+import { turnTextPayload } from "../adapter/outbound/persistence/journal.js";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import { mcpCallPayload } from "./turn-audit.js";

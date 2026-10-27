@@ -8,7 +8,7 @@ import type { ImportJob, RepositoryFreshness, ServerEvent } from "@codebase-tuto
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
-import { TutorDatabase } from "../persistence/database.js";
+import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { ImportService, type ImportedRepository } from "./importer.js";
 
 /** 构造一个带完整 .tutor 持久化数据的最小仓库目录（走 TutorDatabase 真实写库）。 */

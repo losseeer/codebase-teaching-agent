@@ -12,13 +12,13 @@ import { assembleContext } from "../../turn/context-teaching.js";
 import { createSession } from "../../turn/session.js";
 import { respondWithProvider } from "../../turn/run-turn.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
-import type { LlmProvider } from "../../llm/provider.js";
-import { LlmAbortedError } from "../../llm/provider.js";
+import type { LlmProvider } from "../../adapter/outbound/llm/provider.js";
+import { LlmAbortedError } from "../../adapter/outbound/llm/provider.js";
 import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
-import { createThread, saveThreadState } from "../../persistence/chat-store.js";
-import { Journal, readJournal, turnTextPayload } from "../../persistence/journal.js";
+import { createThread, saveThreadState } from "../../adapter/outbound/persistence/chat-store.js";
+import { Journal, readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
 import type { ImportedRepository } from "../../importer/importer.js";
 import type { ScopedTurnStream } from "./chat.js";
 

@@ -77,7 +77,7 @@
 
 ## 相关
 
-- 引擎侧实现：`packages/engine/src/persistence/journal.ts`（白名单 + append）、
+- 引擎侧实现：`packages/engine/src/adapter/outbound/persistence/journal.ts`（白名单 + append）、
   `packages/engine/src/server.ts` 里的 `POST /api/repositories/:repositoryId/journal`。
 - 引擎自身的工作日志在别处：`~/.codebase-tutor/engine.jsonl`（请求 / 导入 / 重分析 / 降级 / 启动）
   与 `~/.codebase-tutor/llm.log`（LLM 调用明细），两者靠 `traceId` 与 journal 关联——

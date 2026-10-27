@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DeclaredType, RegistryEntry, RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
-import { TutorDatabase } from "../persistence/database.js";
+import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { factsPairChecker, type FactSources } from "./facts-verify.js";
 
 /**

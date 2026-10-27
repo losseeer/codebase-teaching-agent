@@ -1,5 +1,5 @@
-import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../integrations/clients.js";
-import { listSkills, skillDirectories } from "../../integrations/skills.js";
+import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../adapter/outbound/integrations/clients.js";
+import { listSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
 
 /**
   外部能力面的读数口（零 token）：装了哪些技能、配置文件里有哪些 server、这轮真并进请求的工具清单，以及连不上的原因。

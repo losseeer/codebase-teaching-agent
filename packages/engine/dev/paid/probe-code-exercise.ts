@@ -13,9 +13,9 @@ import { DatabaseSync } from "node:sqlite";
 import type { ExerciseKind, RepositoryAnalysis } from "@codebase-tutor/domain";
 
 import { loadDotEnv } from "../../src/boot.js";
-import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/llm/runtime.js";
+import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/adapter/outbound/llm/runtime.js";
 import { generateCodeExercise } from "../../src/exercises/code-generate.js";
-import { ensureIsolation } from "../../src/sandbox/isolation.js";
+import { ensureIsolation } from "../../src/adapter/outbound/sandbox/isolation.js";
 import { resolve } from "node:path";
 
 const repositoryPath = resolve(process.argv[2] ?? "");

@@ -7,8 +7,8 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 import type { ScopeRef } from "../source/scope-ref.js";
 import { createSession } from "./session.js";
 import { respondWithProvider, type TeachingProgress } from "./run-turn.js";
-import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../llm/provider.js";
-import { LlmAbortedError } from "../llm/provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../adapter/outbound/llm/provider.js";
+import { LlmAbortedError } from "../adapter/outbound/llm/provider.js";
 
 const scope: ScopeRef = { kind: "file", path: "src/main.ts", ref: "file:src/main.ts" };
 const index = {

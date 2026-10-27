@@ -1,8 +1,8 @@
 import { budgetExceeded, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { formatSeamReport, seamReportFor } from "../seams/seams.js";
-import { Journal } from "../persistence/journal.js";
-import { LATEST_SUMMARY_LIMIT } from "../persistence/summary-repository.js";
-import type { RepositoryHandle } from "../persistence/repository-handle.js";
+import { Journal } from "../adapter/outbound/persistence/journal.js";
+import { LATEST_SUMMARY_LIMIT } from "../adapter/outbound/persistence/summary-repository.js";
+import type { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { buildSearchCorpus, type SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext } from "../source/tool-loop.js";
 import type { ImportedRepository } from "../importer/importer.js";

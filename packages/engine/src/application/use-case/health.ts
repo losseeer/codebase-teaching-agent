@@ -1,7 +1,7 @@
 import { engineVersion } from "../../boot.js";
-import { teachingProviderStatus } from "../../llm/provider.js";
-import { getLlmRuntimeSettings } from "../../llm/runtime.js";
-import { isolationStatus, reprobeIsolation } from "../../sandbox/isolation.js";
+import { teachingProviderStatus } from "../../adapter/outbound/llm/provider.js";
+import { getLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
+import { isolationStatus, reprobeIsolation } from "../../adapter/outbound/sandbox/isolation.js";
 import { lightLlm, teachingLlm } from "../../infrastructure/composition-root.js";
 import { createSummaryProvider } from "../../summarizer/summary-provider.js";
 

@@ -1,16 +1,16 @@
 import type { ScopedStreamProgress } from "@codebase-tutor/contract";
 
-import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../llm/provider.js";
-import { LlmAbortedError, isLlmAborted } from "../llm/provider.js";
-import { addUsage } from "../llm/usage.js";
+import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../adapter/outbound/llm/provider.js";
+import { LlmAbortedError, isLlmAborted } from "../adapter/outbound/llm/provider.js";
+import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
-import type { McpCallAudit } from "../integrations/clients.js";
+import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
 import { CROSS_REPO_LINK_TOOL } from "../seams/seams.js";
 import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
 import { QUERY_FACTS_TOOL } from "../facts/query.js";
-import { READ_SKILL_TOOL } from "../integrations/skills.js";
+import { READ_SKILL_TOOL } from "../adapter/outbound/integrations/skills.js";
 import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskClaimAudit, type AskFacet, type AskResume, type AskUserAudit } from "./ask-user.js";
 
 /**

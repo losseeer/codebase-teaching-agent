@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../llm/provider.js";
-import { LlmAbortedError } from "../llm/provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../adapter/outbound/llm/provider.js";
+import { LlmAbortedError } from "../adapter/outbound/llm/provider.js";
 import { buildSearchCorpus } from "./search-code.js";
 import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithOptionalSkills, completeWithReadTool, toolLoopAuditsOf, type ReadToolProgress, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
 

@@ -1,8 +1,8 @@
 import type { SourceAnchor } from "@codebase-tutor/domain";
 
-import { CONTEXT_SHARE, contextShare, contextShareLines } from "../llm/context-window.js";
+import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
 import { sliceExcerpt } from "../source/excerpt.js";
-import type { EgressCollector } from "../security/egress-log.js";
+import type { EgressCollector } from "../adapter/outbound/security/egress-log.js";
 
 /** 带行号源码摘录的装配段：map 与 practice 两个作用域共用（规则见 source/excerpt.ts）。 */
 

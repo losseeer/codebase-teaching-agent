@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { isWithin, readFileLines } from "@codebase-tutor/platform";
-import { secretMasker } from "../security/secrets.js";
+import { secretMasker } from "../adapter/outbound/security/secrets.js";
 
 /**
   锚点取码：把「锚点」解析成一段可嵌入 prompt 的源码窗口。锚点只标明位置，代码版式不规整时

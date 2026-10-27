@@ -1,7 +1,7 @@
 import { ExerciseService } from "../exercises/exercises.js";
 import { ImportService } from "../importer/importer.js";
-import { buildLlmRuntimeProvider, getLlmRuntimeSettings, restoreLlmRuntimeSettings } from "../llm/runtime.js";
-import type { LlmProvider } from "../llm/provider.js";
+import { buildLlmRuntimeProvider, getLlmRuntimeSettings, restoreLlmRuntimeSettings } from "../adapter/outbound/llm/runtime.js";
+import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
 import { tboot } from "../boot.js";
 
 /**

@@ -16,14 +16,14 @@
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
 
 import { defineAnalysisStep } from "../analysis-step.js";
-import type { LlmProvider, LlmUsage } from "../llm/provider.js";
+import type { LlmProvider, LlmUsage } from "../adapter/outbound/llm/provider.js";
 import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
-import { recordEgress } from "../security/egress-log.js";
-import { maskSecrets, secretMasker } from "../security/secrets.js";
-import { runSandbox, SandboxUnavailableError } from "../sandbox/isolation.js";
-import { assertSafePath, type SandboxFile, type SandboxRun } from "../sandbox/runner.js";
+import { recordEgress } from "../adapter/outbound/security/egress-log.js";
+import { maskSecrets, secretMasker } from "../adapter/outbound/security/secrets.js";
+import { runSandbox, SandboxUnavailableError } from "../adapter/outbound/sandbox/isolation.js";
+import { assertSafePath, type SandboxFile, type SandboxRun } from "../adapter/outbound/sandbox/runner.js";
 
 export interface CodeFile {
   path: string;

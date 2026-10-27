@@ -6,13 +6,13 @@ import { DatabaseSync } from "node:sqlite";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 
 import { loadDotEnv } from "../../src/boot.js";
-import { LATEST_SUMMARY_LIMIT } from "../../src/persistence/summary-repository.js";
+import { LATEST_SUMMARY_LIMIT } from "../../src/adapter/outbound/persistence/summary-repository.js";
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 import { buildSearchCorpus, executeSearchCode } from "../../src/source/search-code.js";
 import { segmentForLookup } from "@codebase-tutor/platform";
-import { readJournal } from "../../src/persistence/journal.js";
+import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import type { TeachTurn } from "../../src/application/turn-invariants.js";
 import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";
 

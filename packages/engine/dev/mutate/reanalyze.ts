@@ -13,7 +13,7 @@ import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph, graphFromData, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 import { classifyFileRoles, fileStructureOf } from "@codebase-tutor/analysis";
-import { TutorDatabase } from "../../src/persistence/database.js";
+import { TutorDatabase } from "../../src/adapter/outbound/persistence/database.js";
 
 const repositoryPath = (() => {
   const arg = process.argv.slice(2).find((value) => !value.startsWith("-"));

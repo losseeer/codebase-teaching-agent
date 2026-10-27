@@ -16,15 +16,15 @@ import type {
 } from "@codebase-tutor/domain";
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/domain";
 
-import type { LlmProvider } from "../llm/provider.js";
+import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
 import type { SkillsToolContext } from "../source/tool-loop.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
-import { ensureIsolation, runSandbox } from "../sandbox/isolation.js";
-import { runnerFingerprint } from "../sandbox/profile.js";
+import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
+import { runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
 import type { ExercisePorts } from "../application/port/exercise-ports.js";
 import type { AuditSink } from "../application/port/audit-sink.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";

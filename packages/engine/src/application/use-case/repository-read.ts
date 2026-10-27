@@ -5,7 +5,7 @@ import { isWithin } from "@codebase-tutor/platform";
 import { exercises, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
-import { readJournal } from "../../persistence/journal.js";
+import { readJournal } from "../../adapter/outbound/persistence/journal.js";
 
 /**
   仓库只读产物的用例：索引、练习摘要、学习者画像、导入报告、源码。

@@ -1,8 +1,8 @@
 // 三条作用域对话共用的闸门：单轮 LLM 讨论，没有本地兜底；预算已达上限或未配置 LLM 时显式 422，不静默回落。
 // `gate` 由调用方在开火前算好传进来，避免同一次请求读两趟成本。
 import type { FastifyReply } from "fastify";
-import type { LlmProvider } from "../../../llm/provider.js";
-import type { RepositoryHandle } from "../../../persistence/repository-handle.js";
+import type { LlmProvider } from "../../outbound/llm/provider.js";
+import type { RepositoryHandle } from "../../outbound/persistence/repository-handle.js";
 import { budgetGate } from "../../../application/paid-turn.js";
 import { teachingLlm } from "../../../infrastructure/composition-root.js";
 

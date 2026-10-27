@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Journal } from "../persistence/journal.js";
+import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, priceComponents, pricingIsConfigured, pricingSourceOf, summarizeCost, type Pricing } from "./cost.js";
-import { setLlmRuntimeSettings } from "../llm/runtime.js";
+import { setLlmRuntimeSettings } from "../adapter/outbound/llm/runtime.js";
 
 /** 测试一律显式传 pricing：不依赖机器上的环境变量，算式才对得上。 */
 

@@ -72,7 +72,8 @@ describe("分层守卫", () => {
   });
 
   it("装配层（infrastructure/）不指向入站层，也不指向 HTTP 装配", () => {
-    const offenders = allEdges.filter((edge) => short(edge.from).startsWith("infrastructure/") && (short(edge.to).startsWith("adapter/") || short(edge.to) === "server.ts"));
+    // 指向 `adapter/outbound/` 是这一层的本职：端口在这里接到具体适配器
+    const offenders = allEdges.filter((edge) => short(edge.from).startsWith("infrastructure/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts"));
     expect(list(offenders), `装配层反过来认识传输层：${list(offenders).join(", ")}`).toEqual([]);
   });
 
@@ -88,24 +89,37 @@ describe("分层守卫", () => {
     expect(list(offenders)).toEqual([]);
   });
 
-  it("持久层不许反过来认识领域（persistence/ 不该 import 管线或应用层）", () => {
-    const offenders = allEdges.filter((edge) => topOf(edge.from) === "persistence" && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
+  it("持久层不许反过来认识领域（adapter/outbound/persistence 不该 import 管线或应用层）", () => {
+    const offenders = allEdges.filter((edge) => short(edge.from).startsWith("adapter/outbound/persistence/") && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
   });
 
   /**
-    应用层只该认端口，不该认具体适配器（`persistence/` `llm/` `sandbox/` `integrations/` `security/`）。
+    出站适配器（`adapter/outbound/`：持久层、模型调用、沙箱、外部工具、来源与密钥筛）是这一轮才落地的目录名，
+    这条规则就是让它名副其实的那一格：适配器只被装配层与内层调用，自己谁都不认识——
+    实测过零条边，所以判成恒为 0；一旦有适配器 import 回应用层，就是「端口又被人从后面绕进来了」。
+    */
+  it("出站适配器不认识应用层、入站层与装配层", () => {
+    const offenders = allEdges.filter((edge) => {
+      if (!short(edge.from).startsWith("adapter/outbound/")) return false;
+      const to = short(edge.to);
+      return to.startsWith("application/") || to.startsWith("adapter/inbound/") || to.startsWith("infrastructure/") || to === "server.ts";
+    });
+    expect(list(offenders), `适配器反向指向内层：${list(offenders).join(", ")}`).toEqual([]);
+  });
+
+  /**
+    应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
     这一条还是**在册预算**而不是恒为 0：37 条边（type-only 也算，多一处定义就多一处失真）散在 16 个文件里，
     结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那六个口就是这么长出来的。
     数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
     从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
     */
   it("应用层指向具体适配器的边数只能减少（在册预算 37）", () => {
-    const ADAPTERS = new Set(["persistence", "llm", "sandbox", "integrations", "security"]);
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
       if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
-      return ADAPTERS.has(topOf(edge.to));
+      return short(edge.to).startsWith("adapter/outbound/");
     });
     expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(37);
   });
@@ -147,13 +161,13 @@ describe("分层守卫", () => {
   });
 
   /**
-    这笔债结清了（10-27）：管线模块不再直接落 `persistence/`，一律经参数把端口传进来
+    这笔债结清了（10-27）：管线模块不再直接落 `adapter/outbound/persistence/`，一律经参数把端口传进来
     （`application/port/` 那五个口：SummaryStore / ExerciseStore / ProgressStore / AuditSink / DiagramStore，
     适配器由装配层在 `pin()` 的范围内构造）。
     所以这条从「恰好等于在册条数、只能变小」升级成恒为 0——再多一条就是回潮，不是记账。
     */
   it("分析管线不直接落持久层（已结清，恒为 0）", () => {
-    const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "persistence"));
+    const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && short(edge.to).startsWith("adapter/outbound/persistence/")));
     expect(found, `管线还在直接落持久层：\n${found.join("\n")}`).toEqual([]);
   });
 });

@@ -14,14 +14,28 @@
  * 不污染 better-sqlite3 本身的代码（pnpm install 不会覆盖）。
  */
 "use strict";
-const { existsSync } = require("node:fs");
-const { join, dirname, resolve } = require("node:path");
+const { existsSync, readFileSync } = require("node:fs");
+const { join, dirname } = require("node:path");
 
 const NATIVE_DIR_KEY = Symbol.for("codebase-tutor.native-binding-dir");
+/**
+ * native/ 在引擎包根。往上按 package.json 的包名找那一层，不写死层数——
+ * 写死的层数一搬家就静默指到别处，候选 2（pnpm 装的那份）会替它圆场，ABI 不匹配的日子就过下去了。
+ * 找不到就返回 null，让候选 2 明着接管。
+ */
 function nativeDir() {
-  if (!globalThis[NATIVE_DIR_KEY]) {
-    // engine/src/persistence/betterSqlite3Binding.cjs → ../../native
-    globalThis[NATIVE_DIR_KEY] = resolve(__dirname, "..", "..", "native");
+  if (globalThis[NATIVE_DIR_KEY] === undefined) {
+    let directory = __dirname;
+    let found = null;
+    for (let up = 0; up < 8 && !found; up += 1) {
+      try {
+        if (/"name":\s*"@codebase-tutor\/engine"/.test(readFileSync(join(directory, "package.json"), "utf8"))) found = join(directory, "native");
+      } catch {
+        // 这一层没有 package.json，继续往上就是正常路径
+      }
+      directory = dirname(directory);
+    }
+    globalThis[NATIVE_DIR_KEY] = found;
   }
   return globalThis[NATIVE_DIR_KEY];
 }
@@ -55,9 +69,11 @@ function resolveBindingPath() {
 
   // 1. engine 自带 native/（推荐，pnpm install 不覆盖）
   const engineDir = nativeDir();
-  const enginePath = existsSync(join(engineDir, wantName))
-    ? join(engineDir, wantName)
-    : existsSync(join(engineDir, fallback)) ? join(engineDir, fallback) : null;
+  const enginePath = !engineDir
+    ? null
+    : existsSync(join(engineDir, wantName))
+      ? join(engineDir, wantName)
+      : existsSync(join(engineDir, fallback)) ? join(engineDir, fallback) : null;
   if (enginePath && tryDlopen(enginePath)) return enginePath;
 
   // 2. 回退：pnpm 安装的 better-sqlite3 build/Release
