@@ -4,7 +4,7 @@ import type { Exercise } from "@codebase-tutor/domain";
 
 import {useEffect, useRef, useState } from "react";
 import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/client";
-import { useTypewriter } from "./useTypewriter";
+import { type Typewriter, useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
 import { foldProgress, interruptText, progressText } from "./progressLines";
@@ -67,29 +67,52 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   /** 引擎的在途教学会话：只在本 hook 内部用（切作用域要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>(defaultTutorSettings);
-  const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
-  // 在途回合：turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。
-  const activeTurn = useRef<{ scope: Scope; turnId: string; controller: AbortController } | null>(null);
+  /**
+    输入框草稿按作用域各存一份。曾经是一份全局 `content`：在画布里打了一半的字，切到练习页按下回车
+    就把那句发进了练习答疑——草稿属于哪个作用域，必须由数据形状说了算，而不是由「按下回车时看板的是哪一页」决定。
+    对外仍交当前作用域那一份（`content` / `setContent`），三个页面的用法不必跟着改。
+    */
+  const [drafts, setDrafts] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
+  // 异步路径读草稿只能靠渲染期镜像：`await` 之后用户可能已经翻页，闭包里的 `scope` 是旧的那一页
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const draftOf = (target: Scope): string => draftsRef.current[target];
+  const setDraft = (target: Scope, value: string): void => setDrafts((prev) => ({ ...prev, [target]: value }));
+  const content = drafts[scope];
+  const setContent = (next: string): void => setDraft(scope, next);
+  /** 在途与否也按作用域各记一份：宏观设计正在生成时，练习页不该被同一颗「正在发送」挡住发不出去。 */
+  const [sendingByScope, setSendingByScope] = useState<Record<Scope, boolean>>({ map: false, teaching: false, practice: false });
+  const sending = sendingByScope[scope];
+  const markSending = (target: Scope, value: boolean): void => setSendingByScope((prev) => ({ ...prev, [target]: value }));
+  const [errorsByScope, setErrorByScope] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
+  const error = errorsByScope[scope];
+  const setError = (target: Scope, message: string): void => setErrorByScope((prev) => ({ ...prev, [target]: message }));
+  // 在途回合：每个作用域各一条（一条全局的「这一轮」会被后开的覆盖，停止与「是不是用户自己停的」就都判错人）。
+  // turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。
+  const activeTurn = useRef<Partial<Record<Scope, { turnId: string; controller: AbortController }>>>({});
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
     const turnId = crypto.randomUUID();
-    activeTurn.current = { scope: target, turnId, controller };
+    activeTurn.current = { ...activeTurn.current, [target]: { turnId, controller } };
     return { turnId, signal: controller.signal };
   };
-  const endTurn = (): void => {
-    activeTurn.current = null;
+  const endTurn = (target: Scope): void => {
+    if (!activeTurn.current[target]) return;
+    const next = { ...activeTurn.current };
+    delete next[target];
+    activeTurn.current = next;
   };
   /** 这一轮是不是用户自己停的：必须在 catch 里读（finally 会清掉在途引用）。 */
-  const stoppedByUser = (target: Scope): boolean =>
-    activeTurn.current?.scope === target && activeTurn.current.controller.signal.aborted;
-  const stopTurn = (): void => {
-    const turn = activeTurn.current;
+  const stoppedByUser = (target: Scope): boolean => activeTurn.current[target]?.controller.signal.aborted === true;
+  /** 停止当前作用域那一轮：别的作用域正在生成的那一条不受影响。 */
+  const stopTurnFor = (target: Scope): void => {
+    const turn = activeTurn.current[target];
     if (!turn) return;
     turn.controller.abort();
     // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误丢弃即可
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
+  const stopTurn = (): void => stopTurnFor(scope);
   // 回复生成过程指示（按作用域，一行一件事）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
   const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
   /** 同一份行的镜像：中断发生在异步回合收尾那一刻，闭包里的 state 还是旧的一份，要拿当下这几行只能靠 ref。 */
@@ -103,8 +126,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     progressLines.current[target] = foldProgress(progressLines.current[target], text);
     setProgress((prev) => ({ ...prev, [target]: progressLines.current[target] }));
   };
-  const { liveAnswer, begin, enqueue, finish, clear, abort, stop } = useTypewriter();
-  const [error, setError] = useState("");
+  // 三个作用域各一台打字机：共用一条队列时，两个作用域同时生成会把两段的 delta 吐进同一个气泡
+  const mapTypewriter = useTypewriter();
+  const teachingTypewriter = useTypewriter();
+  const practiceTypewriter = useTypewriter();
+  const typewriter: Record<Scope, Typewriter> = { map: mapTypewriter, teaching: teachingTypewriter, practice: practiceTypewriter };
+  const liveAnswer = typewriter[scope].liveAnswer;
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const [chatThreads, setChatThreads] = useState<Record<Scope, ChatThread[]>>({ map: [], teaching: [], practice: [] });
   /** 引擎认下来、但清单不收的那一条（还没发言的新会话）：切作用域与开机恢复都要靠它认回当前会话。 */
@@ -231,7 +258,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const reconcilePending = (): void => {
     for (const target of SCOPES) {
       // 在途回合的正文还没落库：这时回读等于用旧正文覆盖侧栏（而且这一轮的欠账本来就等着 settle 去清）
-      if (hasDebt(target) && activeTurn.current?.scope !== target) void loadThread(target, currentThreadRef.current[target]!);
+      if (hasDebt(target) && !activeTurn.current[target]) void loadThread(target, currentThreadRef.current[target]!);
     }
   };
   // 处理器只装一次，通过 ref 调最新闭包：loadThread 读的是渲染期的 scopeRef
@@ -247,7 +274,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       `replayStarted` 由 `turnSink` 的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被中止的那一轮正文其实已经在库里。
       分诊前先放弃打字机队列：半途的 delta 不该继续往 `liveAnswer` 里吐。 */
   const triageTurnFailure = (target: Scope, reason: unknown, replayStarted: boolean): void => {
-    abort();
+    typewriter[target].abort();
     const detail = reason instanceof Error ? reason.message : String(reason);
     if (stoppedByUser(target)) {
       patchDebt(target, null);
@@ -262,7 +289,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       return;
     }
     patchDebt(target, null);
-    setError(detail);
+    setError(target, detail);
     pushMessage(target, "agent", `发送失败：${detail}`, "error");
   };
 
@@ -274,15 +301,15 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<void>; fail: (reason: unknown) => void } => {
     let replayStarted = false;
     return {
-      onDelta: (delta) => { replayStarted = true; enqueue(delta); },
+      onDelta: (delta) => { replayStarted = true; typewriter[target].enqueue(delta); },
       // `extra.options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
       settle: async (text, provider, extra) => {
-        await finish();
+        await typewriter[target].finish();
         const pushed = pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
         // 只有刚问出来的那一颗亮着：再发一句之后，上一句提问的认领就不该再按得动
         setLiveAsk((prev) => ({ ...prev, [target]: extra?.options?.length ? pushed : null }));
         setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
-        clear();
+        typewriter[target].clear();
         knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
         patchDebt(target, null);
       },
@@ -395,7 +422,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 不把它插进清单：清单只列谈过的会话，还没发言的这一条由 ThreadBar 单独占一格显示。
       return thread.id;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "新建会话失败");
+      setError(scope, reason instanceof Error ? reason.message : "新建会话失败");
       return null;
     }
   };
@@ -412,7 +439,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       setChatThreads((prev) => ({ ...prev, [scope]: list }));
       chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "重命名失败");
+      setError(scope, reason instanceof Error ? reason.message : "重命名失败");
       void refreshThreads(scope);
     }
   };
@@ -424,7 +451,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch (reason) {
       // 404 说明引擎那边早就不存在了：目标状态本就达到，按已删除收尾，不该再报一次错
       if (!isNotFound(reason)) {
-        setError(reason instanceof Error ? reason.message : "删除会话失败");
+        setError(scope, reason instanceof Error ? reason.message : "删除会话失败");
         return;
       }
     }
@@ -476,7 +503,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (!repositoryId || !scopeRef) return;
     // 教学回合在途时不动线程：清栏或回读都会拿库里那份旧正文覆盖侧栏，刚推上屏的问题就没了。
     // 代价：途中换的作用域要等回合结束后下一次清单变化才对齐（这一轮的提问仍带着原 session 走，不会串到别的文件）。
-    if (activeTurn.current?.scope === "teaching") return;
+    if (activeTurn.current.teaching) return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
     const currentThread = current ? list.find((item) => item.id === current) : undefined;
@@ -494,17 +521,17 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   }, [repositoryId, scopeRef, chatThreads.teaching, unsentThread.teaching, session?.id]);
 
   const send = async (): Promise<void> => {
-    if (!content.trim()) return;
+    const message = draftOf("teaching").trim();
+    if (!message) return;
     // 用户说出口的话一定先上屏：下面的守卫（没选作用域）只补一条提示，不丢弃这一句。
-    const message = content;
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
-    setContent("");
+    setDraft("teaching", "");
     if (!scopeRef) {
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
       return;
     }
-    setSending(true); setError(""); resetProgress("teaching"); logProgress("teaching", "正在准备教学上下文…");
+    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", "正在准备教学上下文…");
     const turn = beginTurn("teaching");
     const sink = turnSink("teaching");
     try {
@@ -518,7 +545,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         void refreshThreads("teaching");
       }
       if (!active) return;
-      begin();
+      typewriter.teaching.begin();
       recordDebt("teaching", active.id);
       // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
@@ -532,8 +559,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch (reason) {
       sink.fail(reason);
     } finally {
-      endTurn();
-      setSending(false);
+      endTurn("teaching");
+      markSending("teaching", false);
       resetProgress("teaching");
     }
   };
@@ -542,13 +569,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   // `answer` 是用户点了提问按钮时代替输入框发的那一句：输入框里正在打的字不该被它清掉。
   // `resumeAsk` 是那句提问的认领句柄：带着它，引擎才把这一句当答案回灌、而不是当新问题从头跑。
   const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
-    const message = (answer ?? content).trim();
+    const message = (answer ?? draftOf(scope)).trim();
     if (!message || !repositoryId) return;
     setLiveAsk((prev) => ({ ...prev, [scope]: null }));
     // 同 teaching：先结断线那轮的账，再让这一句上屏。
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
-    if (answer === undefined) setContent("");
+    if (answer === undefined) setDraft(scope, "");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
@@ -557,8 +584,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
-    setSending(true); setError(""); resetProgress(scope); logProgress(scope, "回复生成中…");
-    begin();
+    markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, "回复生成中…");
+    typewriter[scope].begin();
     const turn = beginTurn(scope);
     recordDebt(scope, threadId);
     const sink = turnSink(scope);
@@ -596,9 +623,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch (reason) {
       sink.fail(reason);
     } finally {
-      stop();
-      endTurn();
-      setSending(false);
+      typewriter[scope].stop();
+      endTurn(scope);
+      markSending(scope, false);
       resetProgress(scope);
       // 回合结束刷新清单：新线程进了列表，当前线程也排到最前（引擎按更新时间倒序）
       void refreshThreads(scope);
