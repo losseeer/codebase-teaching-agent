@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendMessages, countMessagesRaw, createThread, getThread, isChatScope, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
+import { appendMessages, countMessagesRaw, createThread, getThread, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
+import { isChatScope } from "@codebase-tutor/contract";
 
 /**
   会话持久化出入口（产品数据线）的口径用例。

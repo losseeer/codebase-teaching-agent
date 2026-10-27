@@ -2,7 +2,6 @@ import type { ChatScope } from "@codebase-tutor/contract";
 
 import { externalToolSurface } from "../adapter/outbound/integrations/clients.js";
 import { listSkills, readSkill, skillsBriefing } from "../adapter/outbound/integrations/skills.js";
-import { appendMessages, getThread, readMessages } from "../adapter/outbound/persistence/chat-store.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
 import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
@@ -13,6 +12,7 @@ import { turnTextPayload } from "@codebase-tutor/domain";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import type { AuditSink } from "./port/audit-sink.js";
+import type { ChatStore } from "./port/chat-store.js";
 import { mcpCallPayload } from "./turn-audit.js";
 import { CHECKPOINT_TTL_MS } from "./turn-checkpoint.js";
 
@@ -29,18 +29,18 @@ export function scopedThreadTurn(repository: ImportedRepository, threadId: strin
   if (!threadId) return { threadId: undefined, history: [] };
   const thread = scopedThread(repository, threadId, scope);
   if (!thread) return undefined;
-  return { threadId: thread.id, ...threadScopedHistory(repository.path, thread.id) };
+  return { threadId: thread.id, ...threadScopedHistory(repository.chatStore, thread.id) };
 }
 
 /**
   回合正文落库（用户问 + 助手答，全文不截断）：这是产品线，与 journal 的 `turn_text`（审计线，2000 字截断）
   是有意的双写——一份供模型下一轮读，一份供指标与裁判读。软删线程不会动这里的行，只让它查不到。
   `threadId` 缺席 = 单次提问，按设计不落库；线程在但写不进去（本轮期间被软删、库写不动）是真丢正文，
-  必须留下一条能在 engine.jsonl 查到的读数（`chat-store.appendMessages` 的契约同样要求显式失败）。
+  必须留下一条能在 engine.jsonl 查到的读数（`ChatStore.appendMessages` 的契约同样要求显式失败）。
 */
-export function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "practice_chat", threadId: string | undefined, question: string, answer: string): void {
+export function persistScopedTurn(store: ChatStore, scene: "map_chat" | "practice_chat", threadId: string | undefined, question: string, answer: string): void {
   if (!threadId) return;
-  if (appendMessages(repositoryPath, threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }])) return;
+  if (store.appendMessages(threadId, [{ role: "user", content: question }, { role: "assistant", content: answer }])) return;
   traceEngine("degrade", { what: "turn_body_dropped", scene, thread_id: threadId });
   console.warn(`[engine] ${scene} 这一轮的正文没能写进线程 ${threadId}（线程已被删除或库写不动）；journal 的 turn_text 仍在，产品线缺这一行`);
 }
@@ -102,7 +102,7 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
     result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
     // 选项是即将显示给用户、点了还会变成下一句正文的文本：与正文同过一道出境前密钥筛，不留第二条通路
     if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
-    persistScopedTurn(repository.path, "map_chat", threadId, question, result.reply);
+    persistScopedTurn(repository.chatStore, "map_chat", threadId, question, result.reply);
   }
   // 问了什么、被什么挡下、答了没有：占比与「问完用户答没答」的转化率都从这一行算
   if (result.asked) journal.append("turn_asked", turnAskedPayload({ facet: result.asked.facet, outcome: "asked", options: result.asked.options.join(" / "), toolCallId: result.asked.toolCallId }), threadId);
@@ -237,8 +237,8 @@ export async function externalAndSkills(): Promise<{ skills?: SkillsToolContext;
   进模型上下文的必须是库里能考据的正文，不接受客户端回传的 history：
   客户端临时拼的窗口既可能是旧的、也可能被改。
 */
-export function threadScopedHistory(repositoryPath: string, threadId: string | undefined): { history: ScopedChatTurn[] } {
-  const messages = threadId ? readMessages(repositoryPath, threadId) : [];
+export function threadScopedHistory(store: ChatStore, threadId: string | undefined): { history: ScopedChatTurn[] } {
+  const messages = threadId ? store.readMessages(threadId) : [];
   return { history: messages.map((message) => ({ role: message.role, content: message.content })) };
 }
 
@@ -248,7 +248,7 @@ export function threadScopedHistory(repositoryPath: string, threadId: string | u
 */
 export function scopedThread(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope) {
   if (!threadId) return undefined;
-  const thread = getThread(repository.path, threadId);
+  const thread = repository.chatStore.getThread(threadId);
   if (!thread || thread.repositoryId !== repository.index.repositoryId || thread.scope !== scope) return undefined;
   return thread;
 }

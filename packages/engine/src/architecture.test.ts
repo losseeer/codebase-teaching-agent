@@ -52,6 +52,12 @@ const short = (path: string): string => path.slice(SRC.length + 1);
 const topOf = (path: string): string => short(path).split("/")[0] ?? "";
 const list = (edges: Edge[]): string[] => edges.map((edge) => `${short(edge.from)} → ${short(edge.to)}`).sort();
 
+/**
+  那三条「不许指向应用层」的规则共用这一格放行判据：`application/port/` 是内层**声明**的接口（零依赖、永不 import 实现方），
+  管线与适配器认它不等于认识应用层——口子只开到这个目录为止，多引一个应用层文件照样红。
+  */
+const isPortEdge = (to: string): boolean => to.startsWith("application/port/");
+
 /** 比字符串前先剥注释：本仓块注释续行不以 `*` 开头，按行首粗滤会把注释正文里提到的名字当成代码。 */
 function codeOnly(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -81,16 +87,20 @@ describe("分层守卫", () => {
     const offenders = allEdges.filter((edge) => {
       if (!PIPELINES.has(topOf(edge.from))) return false;
       const to = short(edge.to);
-      // 端口是管线自己声明的需求：零依赖、只有接口，引它不等于「管线认识应用层」。
-      // 口子只开到这个目录为止，多引一个应用层文件照样红。
-      if (to.startsWith("application/port/")) return false;
+      if (isPortEdge(to)) return false;
       return to.startsWith("adapter/inbound/") || to.startsWith("application/") || to.startsWith("infrastructure/") || to === "server.ts";
     });
     expect(list(offenders)).toEqual([]);
   });
 
-  it("持久层不许反过来认识领域（adapter/outbound/persistence 不该 import 管线或应用层）", () => {
-    const offenders = allEdges.filter((edge) => short(edge.from).startsWith("adapter/outbound/persistence/") && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
+  it("持久层不许反过来认识领域（adapter/outbound/persistence 不该 import 管线或应用层的业务代码）", () => {
+    // `application/port/` 那格与管线、出站适配器同一口径：认内层声明的接口不等于认识应用层
+    const offenders = allEdges.filter((edge) => {
+      if (!short(edge.from).startsWith("adapter/outbound/persistence/")) return false;
+      const to = short(edge.to);
+      if (isPortEdge(to)) return false;
+      return PIPELINES.has(topOf(edge.to)) || to.startsWith("application/");
+    });
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
   });
 
@@ -98,13 +108,13 @@ describe("分层守卫", () => {
     出站适配器（`adapter/outbound/`：持久层、模型调用、沙箱、外部工具、来源与密钥筛）是这一轮才落地的目录名，
     这条规则就是让它名副其实的那一格：适配器只被装配层与内层调用，自己谁都不认识——
     实测过零条边，所以判成恒为 0；一旦有适配器 import 回应用层，就是「端口又被人从后面绕进来了」。
-    口子与管线那条同一口径：`application/port/` 是内层声明的接口，实现方认它是方向正确的（`provider.ts` 里那几个类要 `implements`）。
+    实现方认端口那一格照常放行（`provider.ts` 里几个类要 `implements`，`chat-store.ts` 要认 `NewMessage` 的形状）。
     */
   it("出站适配器不认识应用层、入站层与装配层", () => {
     const offenders = allEdges.filter((edge) => {
       if (!short(edge.from).startsWith("adapter/outbound/")) return false;
       const to = short(edge.to);
-      if (to.startsWith("application/port/")) return false;
+      if (isPortEdge(to)) return false;
       return to.startsWith("application/") || to.startsWith("adapter/inbound/") || to.startsWith("infrastructure/") || to === "server.ts";
     });
     expect(list(offenders), `适配器反向指向内层：${list(offenders).join(", ")}`).toEqual([]);
@@ -112,22 +122,23 @@ describe("分层守卫", () => {
 
   /**
     应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
-    这一条还是**在册预算**而不是恒为 0：26 条边（type-only 也算，多一处定义就多一处失真）散在 15 个文件里，
-    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那七个口就是这么长出来的。
+    这一条还是**在册预算**而不是恒为 0：21 条边（type-only 也算，多一处定义就多一处失真）散在 13 个文件里，
+    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那八个口就是这么长出来的。
     数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
     从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
-    10-27 四笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34，
-    `diagrams` / `paid-turn` / `scoped-turn` 三份不再自己按路径 new）；模型调用的协议类型与 `LlmProvider` 接口进
-    `application/port/llm-provider.ts`（34 → 28）；审计线的纯规则（事件白名单与 `turn_text` 拼形）进 `packages/domain`（28 → 26）。
-    留下的 `journal.ts` 边只有一种了：**读侧**（`readJournal` 整本回放），那是「谁来给审计线开读」这一格要处理的。
+    10-27 五笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34）；
+    模型调用的协议类型与 `LlmProvider` 接口进 `application/port/llm-provider.ts`（34 → 28）；
+    审计线的纯规则（事件白名单与 `turn_text` 拼形）进 `packages/domain`（28 → 26）；
+    会话线程收成 `ChatStore` 端口（26 → 21，挂载项交出 `repository.chatStore`，未挂载的扫描走 `importer.chatStore(path)`）。
+    剩下的最大一格是 `journal.ts` 那五条**读侧**边（`readJournal` 整本回放），下一格就是它。
     */
-  it("应用层指向具体适配器的边数只能减少（在册预算 26）", () => {
+  it("应用层指向具体适配器的边数只能减少（在册预算 21）", () => {
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
       if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
       return short(edge.to).startsWith("adapter/outbound/");
     });
-    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(26);
+    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(21);
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {

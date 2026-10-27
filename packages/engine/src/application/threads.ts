@@ -1,6 +1,5 @@
 import type { ChatThread } from "@codebase-tutor/contract";
 
-import { getThread } from "../adapter/outbound/persistence/chat-store.js";
 import { importer } from "../infrastructure/composition-root.js";
 
 /** 会话线程的归属解析：把线程 id 解析到所属仓的库路径，与 HTTP 无关。 */
@@ -13,12 +12,12 @@ import { importer } from "../infrastructure/composition-root.js";
 */
 export function locateThread(threadId: string): { repositoryPath: string; repositoryId: string; thread: ChatThread } | undefined {
   for (const repository of importer.mountedRepositories()) {
-    const thread = getThread(repository.path, threadId);
+    const thread = repository.chatStore.getThread(threadId);
     if (thread) return { repositoryPath: repository.path, repositoryId: repository.index.repositoryId, thread };
   }
   for (const entry of importer.catalog()) {
     if (entry.mounted || !entry.exists) continue;
-    const thread = getThread(entry.repositoryPath, threadId);
+    const thread = importer.chatStore(entry.repositoryPath).getThread(threadId);
     if (thread) return { repositoryPath: entry.repositoryPath, repositoryId: thread.repositoryId, thread };
   }
   return undefined;

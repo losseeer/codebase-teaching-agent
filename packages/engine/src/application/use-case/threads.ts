@@ -1,6 +1,5 @@
-import type { ChatThread } from "@codebase-tutor/contract";
-import { repositoryOr404 } from "../../infrastructure/composition-root.js";
-import { createThread, getThread, isChatScope, listThreads, readMessages, renameThread, softDeleteThread } from "../../adapter/outbound/persistence/chat-store.js";
+import { isChatScope, type ChatThread, type ChatThreadMessage } from "@codebase-tutor/contract";
+import { importer, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { Journal } from "../../adapter/outbound/persistence/journal.js";
 import { locateThread, threadJournalPayload } from "../threads.js";
 
@@ -24,7 +23,7 @@ const MAX_EXERCISE_ID = 200;
 
 function mounted(repositoryId: string) {
   const repository = repositoryOr404(repositoryId);
-  return repository ? { path: repository.path, repositoryId: repository.index.repositoryId, audit: repository.audit } : undefined;
+  return repository ? { path: repository.path, repositoryId: repository.index.repositoryId, audit: repository.audit, chatStore: repository.chatStore } : undefined;
 }
 
 /**
@@ -37,9 +36,9 @@ export function listScopeThreads(repositoryId: string, scopeQuery: string | unde
   const scope = isChatScope(scopeQuery) ? scopeQuery : undefined;
   if (!scope) return fail("scope-invalid");
   const asked = typeof currentQuery === "string" ? currentQuery : "";
-  const found = asked ? getThread(repository.path, asked) : undefined;
+  const found = asked ? repository.chatStore.getThread(asked) : undefined;
   const current = found && found.repositoryId === repository.repositoryId && found.scope === scope ? found : null;
-  return { ok: true, value: { threads: listThreads(repository.path, repository.repositoryId, scope), current } };
+  return { ok: true, value: { threads: repository.chatStore.listThreads(repository.repositoryId, scope), current } };
 }
 
 export function createThreadUseCase(repositoryId: string, input: { scope?: string; scopeRef?: string; exerciseId?: string; title?: string }): ThreadsResult<{ thread: ChatThread }> {
@@ -50,30 +49,30 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
   const scopeRef = input.scopeRef?.trim().slice(0, MAX_SCOPE_REF);
   const exerciseId = input.exerciseId?.trim().slice(0, MAX_EXERCISE_ID);
   const title = input.title;
-  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.repositoryId, scope, ...(scopeRef ? { scopeRef } : {}), ...(exerciseId ? { exerciseId } : {}), ...(title ? { title } : {}) });
+  const thread = repository.chatStore.createThread({ repositoryId: repository.repositoryId, scope, ...(scopeRef ? { scopeRef } : {}), ...(exerciseId ? { exerciseId } : {}), ...(title ? { title } : {}) });
   repository.audit.append("session_created", threadJournalPayload(thread, "created"), thread.id);
   return { ok: true, value: { thread } };
 }
 
 /** 线程正文（产品线）：界面刷新或引擎重启后按 threadId 取回对话展示。软删线程读不到——读侧恒带 `deleted_at IS NULL`。 */
-export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ReturnType<typeof readMessages> }> {
+export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");
-  return { ok: true, value: { thread: located.thread, messages: readMessages(located.repositoryPath, located.thread.id) } };
+  return { ok: true, value: { thread: located.thread, messages: importer.chatStore(located.repositoryPath).readMessages(located.thread.id) } };
 }
 
 export function renameThreadUseCase(threadId: string, title: string | undefined): ThreadsResult<{ thread: ChatThread }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");
   if (!title?.trim()) return fail("title-empty");
-  const thread = renameThread(located.repositoryPath, located.thread.id, title);
+  const thread = importer.chatStore(located.repositoryPath).renameThread(located.thread.id, title);
   return thread ? { ok: true, value: { thread } } : fail("thread-missing");
 }
 
 /** 教学会话没有常驻内存态：按 sessionId 每次从这两张表现装配，所以这里没有要清的在途东西。 */
 export function deleteThreadUseCase(threadId: string): ThreadsResult<{ threadId: string }> {
   const located = locateThread(threadId);
-  if (!located || !softDeleteThread(located.repositoryPath, located.thread.id)) return fail("thread-missing");
+  if (!located || !importer.chatStore(located.repositoryPath).softDeleteThread(located.thread.id)) return fail("thread-missing");
   new Journal(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
   return { ok: true, value: { threadId: located.thread.id } };
 }

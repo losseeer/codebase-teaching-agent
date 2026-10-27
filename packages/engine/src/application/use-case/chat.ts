@@ -191,7 +191,7 @@ export function loadPracticeExercise(repositoryId: string, prepared: CheckedPrac
     repository.handle.unpin();
   }
   if (!stored) return fail("exercise-missing");
-  return { ok: true, value: { ...prepared, ...threadScopedHistory(repository.path, prepared.threadId), exercise: stored.exercise } };
+  return { ok: true, value: { ...prepared, ...threadScopedHistory(repository.chatStore, prepared.threadId), exercise: stored.exercise } };
 }
 
 /** 练习答疑这一趟：与 map-chat/stream 同款 SSE，GUI 三作用域的流式解析共用一条路径。 */
@@ -215,7 +215,7 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
   const journal = repository.audit;
   // 运行期复检（零 token）先于落库与回放：练习答疑同样会引用仓库里的代码位置，尾注要进同一份正文
   result.reply = recheckTurn({ repository, journal, ...(turn.threadId ? { sessionId: turn.threadId } : {}), scene: "practice_chat", question: turn.question, answer: result.reply }).answer;
-  persistScopedTurn(repository.path, "practice_chat", turn.threadId, turn.question, result.reply);
+  persistScopedTurn(repository.chatStore, "practice_chat", turn.threadId, turn.question, result.reply);
   if (result.usage) journal.append("token_usage", {
     input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"

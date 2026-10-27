@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import type { ImportJob, RepositoryCatalogEntry, RepositoryFreshness, RepositoryMountReason, ServerEvent } from "@codebase-tutor/contract";
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 import type { AuditSink } from "../application/port/audit-sink.js";
+import type { ChatStore } from "../application/port/chat-store.js";
 
 import { buildLlmRuntimeProvider } from "../adapter/outbound/llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
@@ -21,12 +22,13 @@ import { RepositoryWatcher, type WatchStatus } from "../indexer/watcher.js";
 import { enrichWithLsp } from "@codebase-tutor/analysis";
 import { createSummaryProvider } from "../summarizer/summary-provider.js";
 import { summarizeFiles } from "../summarizer/summarizer.js";
+import { chatStoreFor } from "../adapter/outbound/persistence/chat-store.js";
 import { Journal, journalFootprint } from "../adapter/outbound/persistence/journal.js";
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
-type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit">;
+type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit" | "chatStore">;
 
 export interface ImportedRepository {
   path: string;
@@ -42,6 +44,12 @@ export interface ImportedRepository {
     不再各自按路径去 new 一条线——路径与仓 id 的配对只在这一处发生一次，写错的余地就没有了。
     */
   audit: AuditSink;
+  /**
+    这一仓的会话线程读写口（形状见 `application/port/chat-store.ts`）。与 `audit` 同一处置：挂载那一刻交出，
+    用例侧只认接口，不再 import 持久层那串按路径开库的自由函数。
+    没挂载的仓要读自己留下的线程时，走 `ImportService.chatStore(path)`——同一份实现、同一个形状。
+    */
+  chatStore: ChatStore;
   watcher?: RepositoryWatcher;
   /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
   freshness: RepositoryFreshness;
@@ -257,6 +265,14 @@ export class ImportService extends EventEmitter {
   }
 
   /**
+    会话线程的读写口按**库路径**交出：挂载集有上限，被 LRU 驱逐的仓只是不在内存，它留下的线程照旧要读得到。
+    用例侧因此只认 `application/port/chat-store.ts` 那一个接口，不再 import 持久层那份自由函数清单。
+    */
+  chatStore(repositoryPath: string): ChatStore {
+    return chatStoreFor(repositoryPath);
+  }
+
+  /**
     地址簿清单：不读任何产物（除一次 statSync 判目录还在不在），所以引擎启动、GUI 打开切换器都不花钱。
     `mounted` 的条目带上挂载时算好的新鲜度；未挂载的条目 `artifactsReady` 留空——探它就得读它的 db，
     而「用户没点它」正是懒挂载要省掉的那笔。
@@ -381,6 +397,7 @@ export class ImportService extends EventEmitter {
     const mounted: ImportedRepository = {
       ...repository,
       audit: repository.handle.journal,
+      chatStore: chatStoreFor(repository.path),
       watcher,
       watch,
       freshness: judgeFreshness(repository.path, repository.index, repository.analysis)
@@ -680,7 +697,7 @@ export class ImportService extends EventEmitter {
       current.handle.db.state.saveAnalysis(next.analysis);
       // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
-      this.repositories.set(repositoryId, { ...next, audit: next.handle.journal, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
+      this.repositories.set(repositoryId, { ...next, audit: next.handle.journal, chatStore: current.chatStore, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
       // 只记条数与结果，不把路径数组写入日志（payload 口径只允许标量）
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });

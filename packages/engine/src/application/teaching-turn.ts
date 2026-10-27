@@ -3,7 +3,7 @@ import { validateSettings } from "@codebase-tutor/domain";
 
 import { importer } from "../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
-import { appendMessages, createThread, getThread, readMessages, readThreadState, saveThreadState, type NewMessage, type TeachingThreadState } from "../adapter/outbound/persistence/chat-store.js";
+import type { ChatStore, NewMessage, TeachingThreadState } from "./port/chat-store.js";
 
 /**
   「接着聊」的读写口径：会话线程 ↔ 内存里的 `TutorSession`，以及回合正文与状态快照的落库。
@@ -26,9 +26,10 @@ export function resolveTeachingState(sessionId: string): TutorSession | undefine
 
 /** 教学线程 → TutorSession：正文取原文（不截断），状态取回合收尾写的快照。 */
 export function restoreThreadAsSession(repositoryPath: string, repositoryId: string, sessionId: string): TutorSession | undefined {
-  const thread = getThread(repositoryPath, sessionId);
+  const store = importer.chatStore(repositoryPath);
+  const thread = store.getThread(sessionId);
   if (!thread || thread.repositoryId !== repositoryId || thread.scope !== "teach" || !thread.scopeRef) return undefined;
-  const state = readThreadState(repositoryPath, sessionId);
+  const state = store.readThreadState(sessionId);
   if (!state) return undefined;
   const settings = validateSettings(state.settings);
   return {
@@ -37,7 +38,7 @@ export function restoreThreadAsSession(repositoryPath: string, repositoryId: str
     scopeRef: thread.scopeRef,
     style: settings.style,
     settings,
-    messages: readMessages(repositoryPath, sessionId) as TutorMessage[],
+    messages: store.readMessages(sessionId) as TutorMessage[],
     createdAt: thread.createdAt
   };
 }
@@ -46,13 +47,13 @@ export function restoreThreadAsSession(repositoryPath: string, repositoryId: str
   教学回合落库：正文（user + assistant 全文，不截断）+ 回合结束后的状态快照。
   线程行不在就按同一个 id 补建再写：正文是产品数据，不可恢复；静默跳过会让 GUI 重启后看到空会话。
 */
-export function persistTeachingTurn(repositoryPath: string, repositoryId: string, scopeRef: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
-  if (!appendMessages(repositoryPath, sessionId, messages)) {
-    createThread({ repositoryPath, repositoryId, scope: "teach", id: sessionId, scopeRef, title });
-    if (!appendMessages(repositoryPath, sessionId, messages)) {
+export function persistTeachingTurn(store: ChatStore, repositoryId: string, scopeRef: string, title: string, sessionId: string, messages: NewMessage[], state: TeachingThreadState): void {
+  if (!store.appendMessages(sessionId, messages)) {
+    store.createThread({ repositoryId, scope: "teach", id: sessionId, scopeRef, title });
+    if (!store.appendMessages(sessionId, messages)) {
       // 补建线程之后还是写不进，这一轮正文就没了（GUI 重启看到的是空会话）。不可恢复的丢必须出声。
       traceEngine("degrade", { component: "teaching_turn", action: "persist", cause: `线程补建后正文仍写不进（session ${sessionId}）` });
     }
   }
-  saveThreadState(repositoryPath, sessionId, state);
+  store.saveThreadState(sessionId, state);
 }

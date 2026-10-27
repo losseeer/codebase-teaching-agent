@@ -105,6 +105,11 @@ export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 export const chatScopeSchema = z.enum(["teach", "map", "practice"]);
 export type ChatScope = z.infer<typeof chatScopeSchema>;
 
+/** 运行时判据：请求体里那串 `scope` 是不是这三者之一（`ChatScope` 那个类型只管编译期）。清单以此 schema 为唯一一处。 */
+export function isChatScope(value: unknown): value is ChatScope {
+  return chatScopeSchema.safeParse(value).success;
+}
+
 /** 一个对话线程的头（正文在 chat_message；软删只体现在 `deletedAt`，列表读侧过滤）。 */
 export const chatThreadSchema = z.object({
   id: z.string(),

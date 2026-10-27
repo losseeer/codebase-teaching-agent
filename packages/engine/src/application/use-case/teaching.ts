@@ -17,7 +17,6 @@ import { LlmAbortedError } from "../port/llm-provider.js";
 import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
-import { createThread, saveThreadState } from "../../adapter/outbound/persistence/chat-store.js";
 import { readJournal } from "../../adapter/outbound/persistence/journal.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
@@ -74,8 +73,8 @@ export function createTeachingSession(input: {
     : learnerProfile.recommended.settings;
   const session = createSession(repository.index.repositoryId, scope.ref, settings);
   // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
-  const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, scopeRef: scope.ref, title: scopeTitle(scope) });
-  saveThreadState(repository.path, session.id, { settings: session.settings });
+  const thread = repository.chatStore.createThread({ repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, scopeRef: scope.ref, title: scopeTitle(scope) });
+  repository.chatStore.saveThreadState(session.id, { settings: session.settings });
   const journal = repository.audit;
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
   journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
@@ -186,7 +185,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     style: outcome.session.settings.style
   }).answer;
   // 回合正文 + 设置快照落库：GUI 重启后接着聊、以及「这一轮用的是哪档设置」都从这里取
-  persistTeachingTurn(repository.path, repository.index.repositoryId, scope.ref, scopeTitle(scope), outcome.session.id, [
+  persistTeachingTurn(repository.chatStore, repository.index.repositoryId, scope.ref, scopeTitle(scope), outcome.session.id, [
     { role: "user", content: question },
     { role: "assistant", content: outcome.assistant.content }
   ], { settings: outcome.session.settings });

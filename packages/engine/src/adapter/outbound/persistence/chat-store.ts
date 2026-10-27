@@ -1,5 +1,5 @@
 import type { ChatScope, ChatThread, ChatThreadMessage } from "@codebase-tutor/contract";
-import type { TutorSettings } from "@codebase-tutor/domain";
+import type { NewMessage, TeachingThreadState } from "../../../application/port/chat-store.js";
 
 import { id } from "@codebase-tutor/platform";
 import { type ChatMessageRow, type ChatSessionRow } from "./chat-repository.js";
@@ -12,18 +12,14 @@ import { withDatabase } from "./database.js";
   - 仓库归属用 repository_id（= sha256(realpath) 前缀，确定性可重算）。仓库被移动/改名时老行查不到，表现同「会话自然过期」。
 
   每个函数自开自闭一个 TutorDatabase（DB 句柄不作长驻），开闭都走 withDatabase，不在各函数里手写 close()。
+  用例侧拿的是 `chatStoreFor(path)` 那个绑定单库的口，形状由 `application/port/chat-store.ts` 声明。
   */
 
-const SCOPES: ChatScope[] = ["teach", "map", "practice"];
 const TITLE_MAX = 120;
 
 /**
   唯一的一处「开连接 → 用 → 关」在 `persistence/database.ts` 的 `withDatabase`：这些函数挂在每个对话回合的读写路径上。
   */
-
-export function isChatScope(value: unknown): value is ChatScope {
-  return typeof value === "string" && (SCOPES as string[]).includes(value);
-}
 
 function threadOf(row: ChatSessionRow): ChatThread {
   return {
@@ -92,12 +88,6 @@ export function listThreads(repositoryPath: string, repositoryId: string, scope:
   return rows.map(threadOf);
 }
 
-export interface NewMessage {
-  role: "user" | "assistant";
-  content: string;
-  error?: string;
-}
-
 /**
   追加消息并续期 `updated_at`（会话列表的排序键）。
   线程不存在或已软删返回 `false`——写入被静默丢弃是不可接受的，调用方（路由）要据此报错而不是继续。
@@ -123,14 +113,10 @@ export function appendMessages(repositoryPath: string, threadId: string, message
 }
 
 /**
-  问答线程的状态快照：只剩设置这一个节点（只有 scope='teach' 的线程写；历史行里的多余键读侧忽略，不迁移）。
+  读状态快照（形状见 `application/port/chat-store.ts` 的 `TeachingThreadState`；只有 scope='teach' 的线程写，
+  历史行里的多余键读侧忽略，不迁移）。宽松读：只保证形状对（settings 在场），逐字段归型留给 validateSettings。
   读侧不做兜底：settings 不齐就返回 undefined，调用方按「这轮没有可续的状态」处理——不把「没记」伪装成默认值。
   */
-export interface TeachingThreadState {
-  settings: TutorSettings;
-}
-
-/** 宽松读：只保证形状对（settings 在场）；逐字段归型留给 validateSettings。 */
 export function readThreadState(repositoryPath: string, threadId: string): TeachingThreadState | undefined {
   const row = withDatabase(repositoryPath, (database) => database.chats.session(threadId));
   if (!row?.state_json) return undefined;
@@ -181,4 +167,23 @@ export function softDeleteThread(repositoryPath: string, threadId: string): bool
 /** 机检与脚本用：正文行数，走未过滤的计数，所以软删线程的行仍然数得到——用来证明「删除没动原文」。 */
 export function countMessagesRaw(repositoryPath: string, threadId: string): number {
   return withDatabase(repositoryPath, (database) => database.chats.countMessages(threadId));
+}
+
+/**
+  按库路径交出一个绑定这一库的读写口（用例侧认的那份形状在 `application/port/chat-store.ts`）。
+  这里不写 `implements` 也不 import 那个端口：持久层认端口声明是方向问题，交给注入点的赋值去判——
+  漏一格或签名不合，`importService.chatStore` 那行的返回类型当场报错。
+  */
+export function chatStoreFor(repositoryPath: string) {
+  return {
+    createThread: (input: Omit<Parameters<typeof createThread>[0], "repositoryPath">) => createThread({ ...input, repositoryPath }),
+    getThread: (threadId: string) => getThread(repositoryPath, threadId),
+    listThreads: (repositoryId: string, scope: ChatScope, limit?: number) => listThreads(repositoryPath, repositoryId, scope, limit),
+    appendMessages: (threadId: string, messages: NewMessage[]) => appendMessages(repositoryPath, threadId, messages),
+    readThreadState: (threadId: string) => readThreadState(repositoryPath, threadId),
+    saveThreadState: (threadId: string, state: TeachingThreadState) => saveThreadState(repositoryPath, threadId, state),
+    readMessages: (threadId: string, limit?: number) => readMessages(repositoryPath, threadId, limit),
+    renameThread: (threadId: string, title: string) => renameThread(repositoryPath, threadId, title),
+    softDeleteThread: (threadId: string) => softDeleteThread(repositoryPath, threadId)
+  };
 }
