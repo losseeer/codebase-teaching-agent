@@ -1,6 +1,6 @@
 import type { JournalEvent } from "@codebase-tutor/domain";
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
-import { Journal, isEngineOwnedEventType, isUiJournalEventType } from "../../adapter/outbound/persistence/journal.js";
+import { isEngineOwnedEventType, isUiJournalEventType } from "../../adapter/outbound/persistence/journal.js";
 
 /**
   界面动作事件的入账用例：每一次切节点、打开文件、切换主题、提交练习都要有 journal 事件可查。
@@ -45,5 +45,5 @@ export function ingestUiEventUseCase(repositoryId: string, input: { type?: unkno
   if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.length > MAX_SESSION_ID)) {
     return { ok: false, failure: { kind: "session-id-invalid" } };
   }
-  return { ok: true, value: new Journal(repository.path, repository.index.repositoryId).append(type, scalars as JournalEvent["payload"], sessionId as string | undefined) };
+  return { ok: true, value: repository.audit.append(type, scalars as JournalEvent["payload"], sessionId as string | undefined) };
 }

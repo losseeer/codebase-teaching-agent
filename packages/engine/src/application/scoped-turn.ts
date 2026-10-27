@@ -3,7 +3,6 @@ import type { ChatScope } from "@codebase-tutor/contract";
 import { externalToolSurface } from "../adapter/outbound/integrations/clients.js";
 import { listSkills, readSkill, skillsBriefing } from "../adapter/outbound/integrations/skills.js";
 import { appendMessages, getThread, readMessages } from "../adapter/outbound/persistence/chat-store.js";
-import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
 import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
@@ -13,6 +12,7 @@ import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
 import { turnTextPayload } from "../adapter/outbound/persistence/journal.js";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
+import type { AuditSink } from "./port/audit-sink.js";
 import { mcpCallPayload } from "./turn-audit.js";
 import { CHECKPOINT_TTL_MS } from "./turn-checkpoint.js";
 
@@ -56,7 +56,7 @@ export function persistScopedTurn(repositoryPath: string, scene: "map_chat" | "p
 */
 export function recheckTurn(input: {
   repository: ImportedRepository;
-  journal: Journal;
+  journal: AuditSink;
   sessionId?: string;
   scene: "teach" | "map_chat" | "practice_chat";
   /**
@@ -95,7 +95,7 @@ export function recheckTurn(input: {
 
 /** map_chat 回合的统一收尾（JSON 与 SSE 两条路由共用）：复检 → 正文落库 → 审计线，三处读同一份文本。 */
 export function finishMapChatTurn(repository: ImportedRepository, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
-  const journal = new Journal(repository.path, repository.index.repositoryId);
+  const journal = repository.audit;
   // 中断的回合没有成品：不复检、不落正文、不写 turn_text（与用户主动停止同一口径），但已经发生的账照记
   const interrupted = Boolean(result.interrupted);
   if (!interrupted) {
@@ -185,7 +185,7 @@ export function consecutiveAskedTurns(events: readonly { type: string; payload: 
   不结算就会出现「用户没答，也没任何一行说清它去哪了」——那是这产品最不该留的空读数。
   认领那一句（带着 `resumingToolCallId` 来的）不在结算之列：它就是要接上那条。
 */
-export function settleStaleAsks(repository: ImportedRepository, journal: Journal, threadId: string | undefined, resumingToolCallId?: string): void {
+export function settleStaleAsks(repository: ImportedRepository, journal: AuditSink, threadId: string | undefined, resumingToolCallId?: string): void {
   if (!threadId) return;
   const database = repository.handle.pin();
   let settled: { pendingToolCallId: string; cause: "expired" | "new_question" }[];

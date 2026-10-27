@@ -1,6 +1,5 @@
 import { budgetExceeded, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { formatSeamReport, seamReportFor } from "../seams/seams.js";
-import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { LATEST_SUMMARY_LIMIT } from "../adapter/outbound/persistence/summary-repository.js";
 import type { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { buildSearchCorpus, type SearchCorpus } from "../source/search-code.js";
@@ -118,7 +117,7 @@ export function crossRepoFor(repository: ImportedRepository, handedOut: Map<stri
       for (const link of report.outbound.links) register(other, link.provider.path);
       for (const link of report.inbound.links) register(other, link.consumer.path);
       // 这是一次读了两个仓源码的动作：配上几条、跟谁配的必须由工具留痕
-      new Journal(repository.path, repository.index.repositoryId).append("repository_paired", { other_repository_id: other.index.repositoryId, outbound: report.outbound.matched, inbound: report.inbound.matched, via: "tool" });
+      repository.audit.append("repository_paired", { other_repository_id: other.index.repositoryId, outbound: report.outbound.matched, inbound: report.inbound.matched, via: "tool" });
       return formatSeamReport(name, report, filter);
     },
     maxCrossReads: 2,

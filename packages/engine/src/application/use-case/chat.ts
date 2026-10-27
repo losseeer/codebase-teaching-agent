@@ -22,7 +22,7 @@ import {
   threadScopedHistory
 } from "../scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
-import { Journal, readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
+import { readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
@@ -108,7 +108,7 @@ export async function runMapChat(
   if (!repository) throw new Error(REPOSITORY_NOT_MOUNTED);
   const crossFiles = new Map<string, number>();
   const overlayDatabase = repository.handle.pin();
-  const threadJournal = new Journal(repository.path, repository.index.repositoryId);
+  const threadJournal = repository.audit;
   try {
     // 开火前先结算这条线程上不会再被回答的提问（过期 / 换话题），认领不算换话题
     settleStaleAsks(repository, threadJournal, turn.threadId, input.resumeAsk);
@@ -211,7 +211,7 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
     recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "practice_chat", provider: provider.modelVersion, outcome: "aborted", ...(turn.threadId ? { threadId: turn.threadId } : {}), audits: auditsFromResult(result) });
     throw new LlmAbortedError();
   }
-  const journal = new Journal(repository.path, repository.index.repositoryId);
+  const journal = repository.audit;
   // 运行期复检（零 token）先于落库与回放：练习答疑同样会引用仓库里的代码位置，尾注要进同一份正文
   result.reply = recheckTurn({ repository, journal, ...(turn.threadId ? { sessionId: turn.threadId } : {}), scene: "practice_chat", question: turn.question, answer: result.reply }).answer;
   persistScopedTurn(repository.path, "practice_chat", turn.threadId, turn.question, result.reply);

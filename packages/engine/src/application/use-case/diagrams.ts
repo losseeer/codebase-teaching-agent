@@ -5,7 +5,6 @@ import { normalizeDiagramName } from "@codebase-tutor/domain";
 import { createBlankDiagram, deleteDiagram, listDiagrams, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../adapter/outbound/persistence/diagrams.js";
 /** 几何落盘的一项：节点 id 与它的新位置。*/
 export type DiagramPosition = { id: string; x: number; y: number };
-import { Journal } from "../../adapter/outbound/persistence/journal.js";
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
 
 type Mounted = NonNullable<ReturnType<typeof repositoryOr404>>;
@@ -59,7 +58,7 @@ export function createDiagramUseCase(repositoryId: string, name?: string): Diagr
   if (!repository) return missing;
   return withDatabase(repository, (database) => {
     const diagram = createBlankDiagram(database, repository.index.repositoryId, name);
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_created", {
+    repository.audit.append("diagram_created", {
       diagram: diagram.id, name: diagram.name, source: diagram.source, nodes: diagram.body.nodes.length, edges: diagram.body.edges.length, downgraded: 0, via: "user"
     });
     broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "created" } });
@@ -92,7 +91,7 @@ export function renameDiagramUseCase(repositoryId: string, diagramId: string, ra
     }
     const renamed = renameDiagram(database, diagram, rawName);
     if (!renamed) return { ok: false, failure: wanted ? { kind: "name-unchanged", name: diagram.name } : { kind: "name-empty" } } as const;
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_renamed", { diagram: renamed.id, from: diagram.name, to: renamed.name });
+    repository.audit.append("diagram_renamed", { diagram: renamed.id, from: diagram.name, to: renamed.name });
     broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: renamed.id, action: "renamed" } });
     return { ok: true, value: { diagram: renamed } } as const;
   });
@@ -106,7 +105,7 @@ export function deleteDiagramUseCase(repositoryId: string, diagramId: string): D
     const diagram = readDiagram(database, repository.index.repositoryId, diagramId);
     if (!diagram) return { ok: false, failure: { kind: "diagram-missing" } } as const;
     deleteDiagram(database, diagram);
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_deleted", { diagram: diagram.id, name: diagram.name, versions: diagram.versions.length });
+    repository.audit.append("diagram_deleted", { diagram: diagram.id, name: diagram.name, versions: diagram.versions.length });
     broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: diagram.id, action: "deleted" } });
     return { ok: true, value: { deleted: true, diagramId: diagram.id } } as const;
   });
@@ -135,7 +134,7 @@ export function restoreDiagramUseCase(repositoryId: string, diagramId: string, i
     if (!diagram) return { ok: false, failure: { kind: "diagram-missing" } } as const;
     const restored = restoreVersion(database, diagram, index);
     if (!restored) return { ok: false, failure: { kind: "version-missing", index, total: diagram.versions.length } } as const;
-    new Journal(repository.path, repository.index.repositoryId).append("diagram_restored", { diagram: restored.id, to: index, note: restored.versions[restored.versions.length - 1]?.note ?? "" });
+    repository.audit.append("diagram_restored", { diagram: restored.id, to: index, note: restored.versions[restored.versions.length - 1]?.note ?? "" });
     broadcast({ type: "diagram_updated", payload: { repositoryId: repository.index.repositoryId, diagramId: restored.id, action: "restored" } });
     return { ok: true, value: { diagram: restored } } as const;
   });

@@ -18,7 +18,7 @@ import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { createThread, saveThreadState } from "../../adapter/outbound/persistence/chat-store.js";
-import { Journal, readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
+import { readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
 import type { ImportedRepository } from "../../importer/importer.js";
 import type { ScopedTurnStream } from "./chat.js";
 
@@ -75,7 +75,7 @@ export function createTeachingSession(input: {
   // 会话即线程：id 由 createSession 生成后原样落库，GUI 存的就是这个 id
   const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, scopeRef: scope.ref, title: scopeTitle(scope) });
   saveThreadState(repository.path, session.id, { settings: session.settings });
-  const journal = new Journal(repository.path, repository.index.repositoryId);
+  const journal = repository.audit;
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
   journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
   return {
@@ -171,7 +171,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", provider: provider.modelVersion, outcome: "aborted", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
     throw new LlmAbortedError();
   }
-  const journal = new Journal(repository.path, repository.index.repositoryId);
+  const journal = repository.audit;
   // 运行期复检（零 token）先于落库与回放：引用核不上就在正文尾部补一行明示，
   // 让落库的正文、回放的正文、journal 的 turn_text 是同一份
   outcome.assistant.content = recheckTurn({

@@ -24,7 +24,7 @@ const MAX_EXERCISE_ID = 200;
 
 function mounted(repositoryId: string) {
   const repository = repositoryOr404(repositoryId);
-  return repository ? { path: repository.path, repositoryId: repository.index.repositoryId } : undefined;
+  return repository ? { path: repository.path, repositoryId: repository.index.repositoryId, audit: repository.audit } : undefined;
 }
 
 /**
@@ -51,7 +51,7 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
   const exerciseId = input.exerciseId?.trim().slice(0, MAX_EXERCISE_ID);
   const title = input.title;
   const thread = createThread({ repositoryPath: repository.path, repositoryId: repository.repositoryId, scope, ...(scopeRef ? { scopeRef } : {}), ...(exerciseId ? { exerciseId } : {}), ...(title ? { title } : {}) });
-  new Journal(repository.path, repository.repositoryId).append("session_created", threadJournalPayload(thread, "created"), thread.id);
+  repository.audit.append("session_created", threadJournalPayload(thread, "created"), thread.id);
   return { ok: true, value: { thread } };
 }
 

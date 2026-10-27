@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import type { ImportJob, RepositoryCatalogEntry, RepositoryFreshness, RepositoryMountReason, ServerEvent } from "@codebase-tutor/contract";
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+import type { AuditSink } from "../application/port/audit-sink.js";
 
 import { buildLlmRuntimeProvider } from "../adapter/outbound/llm/runtime.js";
 import { budgetExceeded, budgetGateNotice, defaultMonthlyBudgetUsd } from "../cost/cost.js";
@@ -25,7 +26,7 @@ import { RepositoryHandle } from "../adapter/outbound/persistence/repository-han
 import { traceEngine } from "@codebase-tutor/platform";
 
 /** `analyze` 的产物：还没有挂载态——监听死活与新鲜度都是 `attach` 那一刻才存在的东西。 */
-type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch">;
+type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit">;
 
 export interface ImportedRepository {
   path: string;
@@ -36,6 +37,11 @@ export interface ImportedRepository {
     这份产物的连接生命周期（一份 SQLite + 一条审计线）：随挂载创建、随卸载关闭，见 `persistence/repository-handle.ts`。
     */
   handle: RepositoryHandle;
+  /**
+    这条仓的审计线写入口（`handle.journal` 那份，随挂载同生同死）：用例侧只认 `application/port/audit-sink.ts` 那个接口，
+    不再各自按路径去 new 一条线——路径与仓 id 的配对只在这一处发生一次，写错的余地就没有了。
+    */
+  audit: AuditSink;
   watcher?: RepositoryWatcher;
   /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）。只用于如实报告，不触发任何重分析。 */
   freshness: RepositoryFreshness;
@@ -374,6 +380,7 @@ export class ImportService extends EventEmitter {
     const { watcher, watch } = paused ? { watcher: undefined, watch: { started: false, dead: false } } : this.startWatcher(repository);
     const mounted: ImportedRepository = {
       ...repository,
+      audit: repository.handle.journal,
       watcher,
       watch,
       freshness: judgeFreshness(repository.path, repository.index, repository.analysis)
@@ -673,7 +680,7 @@ export class ImportService extends EventEmitter {
       current.handle.db.state.saveAnalysis(next.analysis);
       // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
-      this.repositories.set(repositoryId, { ...next, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
+      this.repositories.set(repositoryId, { ...next, audit: next.handle.journal, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
       // 只记条数与结果，不把路径数组写入日志（payload 口径只允许标量）
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });

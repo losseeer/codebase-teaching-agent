@@ -8,7 +8,6 @@ import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from
 import { factsPairChecker } from "../diagram/facts-verify.js";
 import { factsQueryTool } from "../facts/query.js";
 import { diagramStoreFor } from "../adapter/outbound/persistence/diagrams.js";
-import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { broadcast } from "../events.js";
 
 /**
@@ -28,7 +27,7 @@ export function diagramWriteContextFor(repository: ImportedRepository, database:
     index: repository.index,
     analysis: repository.analysis,
     // 带上线程 id：审计要能从这次改动回到那一轮对话
-    journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
+    journal: { append: (type, payload) => repository.audit.append(type, payload, sessionId) },
     // 第四张结构表：产物层里的类型关系与运行时绑定（Spring 这类仓里「注入」那条线代码中没有直接调用）
     facts: factsPairChecker({
       typeRelations: () => database.facts.listByKind<TypeRelationFileFact>(repository.index.repositoryId, "typeRelations"),
