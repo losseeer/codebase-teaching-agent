@@ -2,8 +2,8 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "@codebase-tutor/platform";
-import { exercises, repositoryOr404 } from "../../services.js";
-import { practiceView, withExercisePorts } from "../exercise-ports.js";
+import { exercises, repositoryOr404 } from "../../infrastructure/composition-root.js";
+import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../persistence/journal.js";
 

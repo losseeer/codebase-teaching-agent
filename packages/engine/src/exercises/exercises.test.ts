@@ -15,7 +15,7 @@ import { readJournal } from "../persistence/journal.js";
 import { RepositoryHandle } from "../persistence/repository-handle.js";
 import { resetIsolationForTest, stubIsolationForTest } from "../sandbox/isolation.js";
 import { selectZpdTarget } from "./zpd.js";
-import { exercisePortsFor } from "../application/exercise-ports.js";
+import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
 

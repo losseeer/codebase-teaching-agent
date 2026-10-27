@@ -4,7 +4,7 @@ import type { ScopedStreamFrame, TurnScene } from "@codebase-tutor/contract";
 import type { AskFacet } from "../../source/ask-user.js";
 import type { LlmProvider } from "../../llm/provider.js";
 import { LlmAbortedError } from "../../llm/provider.js";
-import { factsToolFor, setDiagramToolFor } from "../canvas-tools.js";
+import { factsToolFor, setDiagramToolFor } from "../../infrastructure/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../paid-turn.js";
 import { turnCheckpointChannel } from "../turn-checkpoint.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../turn-audit.js";
@@ -23,7 +23,7 @@ import {
 } from "../scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
 import { Journal, readJournal, turnTextPayload } from "../../persistence/journal.js";
-import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**

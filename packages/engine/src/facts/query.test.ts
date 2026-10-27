@@ -10,7 +10,7 @@ import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysi
 import { collectFileFacts, saveFileFacts } from "./build.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 import { factsQueryTool } from "./query.js";
-import { factsToolFor } from "../application/canvas-tools.js";
+import { factsToolFor } from "../infrastructure/canvas-tools.js";
 import type { ImportedRepository } from "../importer/importer.js";
 
 /**

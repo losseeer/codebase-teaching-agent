@@ -1,7 +1,7 @@
 import type { TutorMessage, TutorSession } from "@codebase-tutor/domain";
 import { validateSettings } from "@codebase-tutor/domain";
 
-import { importer } from "../services.js";
+import { importer } from "../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import { appendMessages, createThread, getThread, readMessages, readThreadState, saveThreadState, type NewMessage, type TeachingThreadState } from "../persistence/chat-store.js";
 

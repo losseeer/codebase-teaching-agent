@@ -1,9 +1,9 @@
 import type { Exercise, ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
 import { budgetDegraded } from "../paid-turn.js";
-import { practiceView, withExercisePorts } from "../exercise-ports.js";
+import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { skillsForTurn } from "../scoped-turn.js";
-import { exercises, lightLlm, repositoryOr404 } from "../../services.js";
+import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
 
 /**
   练习题的用例：出题、判分、按需讲评。

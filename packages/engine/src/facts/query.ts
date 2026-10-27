@@ -104,7 +104,7 @@ function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: 
 }
 
 /**
-  产物查询门的实现（装配在 `application/canvas-tools.ts`：路由只认装配层，不直接 import 领域模块）。
+  产物查询门的实现（装配在 `infrastructure/canvas-tools.ts`：路由只认装配层，不直接 import 领域模块）。
   `target` 在 cfg/dataflow 里是函数名，在 typeRelations/registry 里是类型名或条目名。
 */
 export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsToolContext {

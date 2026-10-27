@@ -57,7 +57,7 @@ type PracticeTarget<T> = ZpdTarget<T> & { kind: ExerciseKind };
 
 /**
   练习这一侧看到的仓：读的三样 + 能做的四个口。
-  `ports` 由装配层（`application/exercise-ports.ts`）在 `pin()` 的范围内构造——库句柄、审计线写入口、
+  `ports` 由装配层（`infrastructure/exercise-ports.ts`）在 `pin()` 的范围内构造——库句柄、审计线写入口、
   引用计数都不进这里，出题与判分拿到手的永远是「已经开好的能力」。
   它跟着仓一起传，服务方法的参数表因此不必为端口多占一格：一次动作的输入就是这一份仓视图。
 */

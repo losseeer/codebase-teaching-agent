@@ -20,7 +20,7 @@ export type FactsPairChecker = (fromFiles: string[], toFiles: string[]) => FactE
 const key = (from: string, to: string): string => `${from}\u0000${to}`;
 
 /**
-  取两类产物的通道由装配层给（`application/canvas-tools.ts`）：这一层不认 SQLite，
+  取两类产物的通道由装配层给（`infrastructure/canvas-tools.ts`）：这一层不认 SQLite，
   「管线不许直接落 persistence/」那条分层守卫的在册清单不会因为多一张表而变长。
 */
 export interface FactSources {

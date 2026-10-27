@@ -13,7 +13,7 @@ import { readJournal } from "../persistence/journal.js";
 import { TutorDatabase } from "../persistence/database.js";
 import { RepositoryHandle } from "../persistence/repository-handle.js";
 import { nestedSandboxUsable } from "../sandbox/capability.js";
-import { exercisePortsFor } from "../application/exercise-ports.js";
+import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
 /**

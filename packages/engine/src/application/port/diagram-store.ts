@@ -1,7 +1,7 @@
 import type { Diagram, DiagramBody, DiagramSummary } from "@codebase-tutor/domain";
 
 /**
-  画布那张图的存取口，**绑定在一个仓上**（适配器由 `application/canvas-tools.ts` 就地闭包出这一仓的库句柄与仓 id，
+  画布那张图的存取口，**绑定在一个仓上**（适配器由 `infrastructure/canvas-tools.ts` 就地闭包出这一仓的库句柄与仓 id，
   所以这里每一格都不必再带 repositoryId）。
   `diagram/set-diagram.ts` 是画布结构的唯一写入口，它要的只是这五格——不认识 SQLite，也不认识行形状。
   实现方不 import 这个接口（「持久层反过来认识领域」是守卫要拦的），结构对齐由注入点的赋值检查。

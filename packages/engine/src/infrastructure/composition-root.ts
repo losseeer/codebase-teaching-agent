@@ -1,13 +1,15 @@
-import { ExerciseService } from "./exercises/exercises.js";
-import { ImportService } from "./importer/importer.js";
-import { buildLlmRuntimeProvider, getLlmRuntimeSettings, restoreLlmRuntimeSettings } from "./llm/runtime.js";
-import type { LlmProvider } from "./llm/provider.js";
-import { tboot } from "./boot.js";
+import { ExerciseService } from "../exercises/exercises.js";
+import { ImportService } from "../importer/importer.js";
+import { buildLlmRuntimeProvider, getLlmRuntimeSettings, restoreLlmRuntimeSettings } from "../llm/runtime.js";
+import type { LlmProvider } from "../llm/provider.js";
+import { tboot } from "../boot.js";
 
 /**
   引擎的运行中单例（组合根）：路由与用例模块都从这里拿，不能从 `server.ts` 拿——
   否则「HTTP 装配」反过来成为业务模块的依赖源，拆出去的路由全要 import 回 server。
   `server.ts` 因此只做建 fastify、挂钩子、注册路由、listen。
+  同目录另两份是端口装配（`exercise-ports.ts` / `canvas-tools.ts`）：「认识具体适配器、把端口凑齐」这件事集中在这一层，
+  用例侧只认 `application/port/` 那些接口——现在还有 37 条边直接伸进适配器，那条在册预算记着这笔债与方向。
   */
 
 export const importer = new ImportService();

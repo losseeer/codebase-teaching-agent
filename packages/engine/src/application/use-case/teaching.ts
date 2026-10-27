@@ -14,7 +14,7 @@ import { respondWithProvider } from "../../turn/run-turn.js";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import type { LlmProvider } from "../../llm/provider.js";
 import { LlmAbortedError } from "../../llm/provider.js";
-import { importer } from "../../services.js";
+import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { createThread, saveThreadState } from "../../persistence/chat-store.js";

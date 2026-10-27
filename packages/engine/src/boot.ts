@@ -6,7 +6,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   开机原语：读 `.env`、取版本号、记启动分段——只在进程起来时做一次，没有领域含义。
-  `T0`（imports 解析完的时刻）与 `tboot` 同处一文，装配层（`services.ts`）才能也记分段。
+  `T0`（imports 解析完的时刻）与 `tboot` 同处一文，装配层（`infrastructure/composition-root.ts`）才能也记分段。
   */
 const T0 = _perf.now();
 

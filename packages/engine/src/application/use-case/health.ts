@@ -2,7 +2,7 @@ import { engineVersion } from "../../boot.js";
 import { teachingProviderStatus } from "../../llm/provider.js";
 import { getLlmRuntimeSettings } from "../../llm/runtime.js";
 import { isolationStatus, reprobeIsolation } from "../../sandbox/isolation.js";
-import { lightLlm, teachingLlm } from "../../services.js";
+import { lightLlm, teachingLlm } from "../../infrastructure/composition-root.js";
 import { createSummaryProvider } from "../../summarizer/summary-provider.js";
 
 /**

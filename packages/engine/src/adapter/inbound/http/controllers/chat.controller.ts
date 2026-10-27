@@ -4,7 +4,7 @@ import { type ChatFailure, loadPracticeExercise, prepareMapChat, preparePractice
 import { sanitizeAskId, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../dto.js";
 import { scopedChatProviderOr422 } from "../budget-gate.js";
 import { beginScopedStream, failScopedTurn, replayTypewriter } from "../stream.js";
-import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../../../services.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../../../infrastructure/composition-root.js";
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 

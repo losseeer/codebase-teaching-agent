@@ -1,4 +1,4 @@
-import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { MAX_FILE_BYTES } from "../../../../source/read-file.js";
 import { readIndexUseCase, readImportReportUseCase, readLearnerProfileUseCase, readPracticeSummaryUseCase, readSourceFileUseCase, type ReadFailure } from "../../../../application/use-case/repository-read.js";
 import type { FastifyReply } from "fastify";

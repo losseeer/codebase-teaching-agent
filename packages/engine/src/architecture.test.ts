@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
-  分层守卫：把 import 方向规则写成测试——谁都不许 import 回 `server.ts`，
-  应用层不指向传输层，管线与持久层单向，跨包不互 import。
-  「管线只认端口、不直接落库」那条以前靠只能下调的条数预算记账，10-27 起已结清、判成恒为 0。
+  分层守卫：把 import 方向规则写成测试——谁都不许 import 回 HTTP 装配 `server.ts`，
+  应用层不指向传输层，装配层（`infrastructure/`）不指向入站层，管线与持久层单向，跨包不互 import。
+  一条债结清就把判据收紧成恒为 0（「管线只认端口、不直接落库」10-27 结清）；
+  没结清的记成只许下调的在册预算（「应用层认识具体适配器」37 条）。
 */
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
@@ -57,7 +58,7 @@ function codeOnly(text: string): string {
 }
 
 describe("分层守卫", () => {
-  it("没有模块 import 回组合根 server.ts（这一条撑住整个拆层）", () => {
+  it("没有模块 import 回 HTTP 装配 server.ts（这一条撑住整个拆层）", () => {
     expect(list(allEdges.filter((edge) => short(edge.to) === "server.ts"))).toEqual([]);
   });
 
@@ -70,18 +71,19 @@ describe("分层守卫", () => {
     expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts")))).toEqual([]);
   });
 
-  it("组合根 services.ts 不指向入站层", () => {
-    expect(list(allEdges.filter((edge) => short(edge.from) === "services.ts" && short(edge.to).startsWith("adapter/")))).toEqual([]);
+  it("装配层（infrastructure/）不指向入站层，也不指向 HTTP 装配", () => {
+    const offenders = allEdges.filter((edge) => short(edge.from).startsWith("infrastructure/") && (short(edge.to).startsWith("adapter/") || short(edge.to) === "server.ts"));
+    expect(list(offenders), `装配层反过来认识传输层：${list(offenders).join(", ")}`).toEqual([]);
   });
 
-  it("分析管线不指向传输层，也不指向应用层——只有 application/port 例外（那是内层的接口）", () => {
+  it("分析管线不指向传输层与应用层，也不指向装配层——只有 application/port 例外（那是内层的接口）", () => {
     const offenders = allEdges.filter((edge) => {
       if (!PIPELINES.has(topOf(edge.from))) return false;
       const to = short(edge.to);
       // 端口是管线自己声明的需求：零依赖、只有接口，引它不等于「管线认识应用层」。
       // 口子只开到这个目录为止，多引一个应用层文件照样红。
       if (to.startsWith("application/port/")) return false;
-      return to.startsWith("adapter/inbound/") || to.startsWith("application/") || to === "services.ts" || to === "server.ts";
+      return to.startsWith("adapter/inbound/") || to.startsWith("application/") || to.startsWith("infrastructure/") || to === "server.ts";
     });
     expect(list(offenders)).toEqual([]);
   });
@@ -89,6 +91,23 @@ describe("分层守卫", () => {
   it("持久层不许反过来认识领域（persistence/ 不该 import 管线或应用层）", () => {
     const offenders = allEdges.filter((edge) => topOf(edge.from) === "persistence" && (PIPELINES.has(topOf(edge.to)) || short(edge.to).startsWith("application/")));
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
+  });
+
+  /**
+    应用层只该认端口，不该认具体适配器（`persistence/` `llm/` `sandbox/` `integrations/` `security/`）。
+    这一条还是**在册预算**而不是恒为 0：37 条边（type-only 也算，多一处定义就多一处失真）散在 16 个文件里，
+    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那六个口就是这么长出来的。
+    数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
+    从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
+    */
+  it("应用层指向具体适配器的边数只能减少（在册预算 37）", () => {
+    const ADAPTERS = new Set(["persistence", "llm", "sandbox", "integrations", "security"]);
+    const found = allEdges.filter((edge) => {
+      const from = short(edge.from);
+      if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
+      return ADAPTERS.has(topOf(edge.to));
+    });
+    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(37);
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {

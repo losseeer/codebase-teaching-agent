@@ -1,11 +1,11 @@
 /**
   HTTP 装配与开机：Fastify 实例、CORS、三道请求钩子（trace / 来源闸 / 懒挂载）、路由注册、优雅关停。
-  正文都不在这里——路由在 `adapter/inbound/http/controllers/`，单例在 `services.ts`，用例在 `application/`。
+  正文都不在这里——路由在 `adapter/inbound/http/controllers/`，单例在 `infrastructure/composition-root.ts`，用例在 `application/`。
  */
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { tboot } from "./boot.js";
-import { importer } from "./services.js";
+import { importer } from "./infrastructure/composition-root.js";
 import { broadcast } from "./events.js";
 import { budgetGateNotice } from "./cost/cost.js";
 import { id } from "@codebase-tutor/platform";

@@ -1,4 +1,4 @@
-import type { ExercisePorts } from "./port/exercise-ports.js";
+import type { ExercisePorts } from "../application/port/exercise-ports.js";
 import type { PracticeRepository } from "../exercises/exercises.js";
 import { deriveMastery } from "../learner/mastery.js";
 import type { TutorDatabase } from "../persistence/database.js";

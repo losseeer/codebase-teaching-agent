@@ -1,5 +1,5 @@
 import type { ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
-import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { answerExerciseUseCase, explainExerciseUseCase, nextExerciseUseCase, type ExerciseFailure } from "../../../../application/use-case/exercises.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 

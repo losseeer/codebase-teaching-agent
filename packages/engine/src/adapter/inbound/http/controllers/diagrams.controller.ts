@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { createDiagramUseCase, deleteDiagramUseCase, listDiagramsUseCase, readDiagramUseCase, renameDiagramUseCase, restoreDiagramUseCase, saveGeometryUseCase, type DiagramFailure } from "../../../../application/use-case/diagrams.js";
 
 /**

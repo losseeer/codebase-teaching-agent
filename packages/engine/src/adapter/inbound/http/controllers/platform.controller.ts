@@ -3,7 +3,7 @@ import { externalSurfaceUseCase } from "../../../../application/use-case/integra
 import { healthUseCase, reprobeSandboxUseCase } from "../../../../application/use-case/health.js";
 import { getImportJobUseCase, forgetRepositoryUseCase, listCatalogUseCase, mountRepositoryUseCase, setWatchingUseCase, submitImportUseCase, type RepositoryFailure } from "../../../../application/use-case/repositories.js";
 import { ingestUiEventUseCase, type IngestFailure } from "../../../../application/use-case/journal-ingest.js";
-import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**

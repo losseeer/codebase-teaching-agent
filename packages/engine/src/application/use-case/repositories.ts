@@ -1,4 +1,4 @@
-import { importer } from "../../services.js";
+import { importer } from "../../infrastructure/composition-root.js";
 
 /**
   仓库生命周期与导入任务的用例：地址簿清单、显式挂载、移出、编辑期免打扰开关、提交与查询导入任务。
