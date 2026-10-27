@@ -6,7 +6,7 @@ import { hash } from "@codebase-tutor/platform";
 import type { LlmUsage } from "../llm/provider.js";
 import { maskSecrets, secretMasker } from "../security/secrets.js";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
-import { TutorDatabase } from "../persistence/database.js";
+import type { SummaryStore } from "../port/summary-store.js";
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
 import { buildFileSlices, extractHeaderComment, type FileSlice } from "@codebase-tutor/analysis";
 import { recordEgress } from "../security/egress-log.js";
@@ -92,14 +92,17 @@ function maskSliceForSend(slice: FileSlice): { copy: FileSlice; masked: number }
 
 export async function summarizeFiles(input: {
   structure: FileStructure;
-  database: TutorDatabase;
+  /** L1 摘要的存取口（`port/summary-store.ts`）：这里只要「按键取一份、写一份」，不认识 SQLite 句柄。 */
+  store: SummaryStore;
+  /** 这批切片所属仓的路径：注释档要读盘、出网清单要登记，两者必须与存储同一个仓边界。 */
+  repositoryPath: string;
   provider: SummaryProvider;
   /** 「摘要参考注释」开关（每仓设置，默认关）。开=切片附 headerComment，键前缀走 slice-v2c。 */
   withHeaderComments?: boolean;
   /** 每一批发给模型的用量回调：导入的钱要进 journal，不然月预算闸门看不到它。 */
   onUsage?: (usage: LlmUsage | undefined) => void;
 }): Promise<{ summaries: FileSummary[]; estimate: ImportEstimate }> {
-  const { structure, database, provider } = input;
+  const { structure, store, repositoryPath, provider } = input;
   const withHeaderComments = input.withHeaderComments ?? false;
   const roles = classifyFileRoles(structure);
   const slices = buildFileSlices(structure, roles);
@@ -108,7 +111,7 @@ export async function summarizeFiles(input: {
     // 读不到（文件刚被删/权限）就静默跳过该文件：缺一段注释不值得让整次导入失败。
     for (const slice of slices.values()) {
       try {
-        const text = readFileSync(join(database.repositoryPath, slice.path), "utf8");
+        const text = readFileSync(join(repositoryPath, slice.path), "utf8");
         const headerComment = extractHeaderComment(slice.path, text);
         if (headerComment) slice.headerComment = headerComment;
       } catch {
@@ -129,7 +132,7 @@ export async function summarizeFiles(input: {
   const pending: FileSlice[] = [];
   for (const slice of ordered) {
     const key = cacheKeyOf(slice, provider.modelVersion, withHeaderComments);
-    const cached = database.summaries.get<StoredSummary>(key);
+    const cached = store.get<StoredSummary>(key);
     if (cached) {
       cachedFiles += 1;
       // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对、零模型消耗，
@@ -138,7 +141,7 @@ export async function summarizeFiles(input: {
       const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
       // 命中也回写（刷新 created_at）：下游语料取「每路径最新一行」，双档键各写一行——
       // 不刷新则从注释档切回关档时，旧行会一直伪装成现行摘要。回写是纯本地写，零成本。
-      database.summaries.put(key, migrated);
+      store.put(key, migrated);
       byPath.set(cached.path, { ...migrated, cached: true });
       continue;
     }
@@ -154,7 +157,7 @@ export async function summarizeFiles(input: {
     // 放在 try 之前：端点失败也是真发出去了，`llm.log` 里那行 `ok=false` 会说明有没有拿到结果。
     // 确定性档不记：它一个字都不发出去（口径见 SummaryProvider.sendsCodeToEndpoint）。
     if (provider.sendsCodeToEndpoint) recordEgress({
-      repositoryPath: database.repositoryPath,
+      repositoryPath,
       scene: "map.summary",
       sources: sending.map((item, index) => ({
         kind: "l1-slice" as const,
@@ -192,7 +195,7 @@ export async function summarizeFiles(input: {
       };
       // 兜底文本只写确定性档的键、不写模型档的键：写了的话下次同输入即永久命中，
       // 结构文本会伪装成模型产物、`fallbackFiles` 读数归零。落确定性档键则下次同输入仍会重试模型。
-      database.summaries.put(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
+      store.put(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
       // 估算口径按实际发出去的那份算，隐去过就该比切片原文短
       inputCharacters += JSON.stringify(sending[index].copy).length;

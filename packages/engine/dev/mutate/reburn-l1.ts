@@ -47,7 +47,8 @@ if (provider instanceof LocalSummaryProvider) {
 const started = Date.now();
 const { summaries, estimate } = await summarizeFiles({
   structure: fileStructureOf(index.files, graphFromData(analysis.graph)),
-  database,
+  store: database.summaries,
+  repositoryPath: database.repositoryPath,
   provider,
   withHeaderComments
 });

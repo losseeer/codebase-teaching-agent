@@ -6,6 +6,7 @@ import type { SymbolInfo } from "@codebase-tutor/domain";
 
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
 import { TutorDatabase } from "../persistence/database.js";
+import type { SummaryStore } from "../port/summary-store.js";
 import { readJournal } from "../persistence/journal.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import {
@@ -72,10 +73,32 @@ describe("文件切片（L1 的输入）", () => {
 });
 
 describe("文件摘要表（L1）", () => {
+  /**
+    端口存在的理由要能被用例证明：把 `store` 换成一个 Map 装的假件，摘要流水线必须照样跑完
+    首次计算与缓存命中两条分支——否则「只认 SummaryStore」只是注释里的一句话。
+    这里一个 SQLite 都不开（判据：整条用例没有 `TutorDatabase`）。
+    */
+  it("摘要流水线换个存储也跑得通：内存 Map 假件能吃下首次计算与命中两条分支", async () => {
+    const rows = new Map<string, string>();
+    const store: SummaryStore = {
+      // 泛型签名要照着端口写：假件把读出的形状定死成 `{path, summary}` 就等于换了个契约
+      get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
+        return rows.has(cacheKey) ? JSON.parse(rows.get(cacheKey)!) as T : undefined;
+      },
+      put(cacheKey: string, value: { path: string; summary: string }): void { rows.set(cacheKey, JSON.stringify(value)); }
+    };
+    const provider = new LocalSummaryProvider();
+    const first = await summarizeFiles({ structure: STRUCTURE, store, repositoryPath: mkdtempSync(join(tmpdir(), "summarize-port-")), provider });
+    expect(first.summaries).toHaveLength(STRUCTURE.files.length);
+    expect(rows.size, "落库走的是这个口").toBeGreaterThanOrEqual(STRUCTURE.files.length);
+    const second = await summarizeFiles({ structure: STRUCTURE, store, repositoryPath: "unused", provider });
+    expect(second.estimate.cachedFiles, "命中判据也来自同一个口").toBe(STRUCTURE.files.length);
+  });
+
   it("产出摘要 + 结构角色 + 覆盖率，并落库；重复调用全命中缓存", async () => {
     const database = tempDatabase();
     const provider = new LocalSummaryProvider();
-    const first = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const first = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(first.summaries.map((summary) => summary.path)).toEqual(["business.py", "main.py", "svc.py", "util.py"]);
     const main = first.summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("core");
@@ -85,7 +108,7 @@ describe("文件摘要表（L1）", () => {
     // 兜底档的摘要格式：路径 + 结构角色 + 主要符号名（简短，因为它会进检索语料）
     expect(main.summary).toBe("main.py：执行主干；定义 main");
 
-    const second = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
     expect(second.summaries.every((summary) => summary.cached)).toBe(true);
     // 命中的记录与该次算出的完全一致，只有「本次是否命中缓存」这一位不同
@@ -100,7 +123,7 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-1",
       summarizeMany: async (slices) => slices.map((slice) => ({ summary: `${slice.path} 负责一些事情。`, role: "infra" as const }))
     };
-    const { summaries } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const { summaries } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const main = summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("infra");
     expect(main.roleSource).toBe("provider");
@@ -111,16 +134,16 @@ describe("文件摘要表（L1）", () => {
   it("输入的切片变了（依赖或符号变）缓存即失效，不必再单独追踪文件内容", async () => {
     const database = tempDatabase();
     const provider = new LocalSummaryProvider();
-    await summarizeFiles({ structure: STRUCTURE, database, provider });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const changed: FileStructure = { ...STRUCTURE, imports: { ...STRUCTURE.imports, "main.py": ["svc.py", "business.py"] } };
-    const after = await summarizeFiles({ structure: changed, database, provider });
+    const after = await summarizeFiles({ structure: changed, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(after.estimate.summarizedFiles).toBe(2); // main.py 的切片变了；business.py 的 dependedOnBy 也变了
     expect(after.estimate.cachedFiles).toBe(2);
   });
 
   it("估算口径是切片字符数，不是整份正文", async () => {
     const database = tempDatabase();
-    const { estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider: new LocalSummaryProvider() });
+    const { estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: new LocalSummaryProvider() });
     expect(estimate.estimatedInputTokens).toBeGreaterThan(0);
     expect(estimate.estimatedInputTokens).toBeLessThan(200);
   });
@@ -128,7 +151,7 @@ describe("文件摘要表（L1）", () => {
   it("没有符号的文件也能给出切片（空条目、角色仍按结构判）", async () => {
     const database = tempDatabase();
     const structure: FileStructure = { ...STRUCTURE, files: [{ path: "empty.py", lines: 1 }], symbols: [], calls: [], imports: {}, entrypoints: [] };
-    const { summaries } = await summarizeFiles({ structure, database, provider: new LocalSummaryProvider() });
+    const { summaries } = await summarizeFiles({ structure, store: database.summaries, repositoryPath: database.repositoryPath, provider: new LocalSummaryProvider() });
     expect(summaries[0]).toMatchObject({ path: "empty.py", role: "tool", coverage: { checked: 0, mentioned: 0, low: false } });
   });
 
@@ -145,7 +168,7 @@ describe("文件摘要表（L1）", () => {
         return slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。`, role: "core" as const } : undefined);
       }
     };
-    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(batches).toEqual([4]); // 4 个文件一次调用（上限 8）
     expect(estimate).toMatchObject({ summarizedFiles: 4, fallbackFiles: 3, provider: "stub" });
     expect(summaries[0].roleSource).toBe("provider"); // business.py 排在路径序首位，拿到了模型结果
@@ -161,7 +184,7 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-throw",
       summarizeMany: async () => { throw new Error("端点 429"); }
     };
-    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(estimate).toMatchObject({ summarizedFiles: 4, fallbackFiles: 4 });
     expect(summaries.every((summary) => summary.summary.length > 0)).toBe(true);
   });
@@ -174,7 +197,7 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-1",
       summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
     };
-    await summarizeFiles({ structure: STRUCTURE, database, provider: partial });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: partial });
     // 第二次同输入：模型档的键必须仍不命中，否则兜底文本会永久伪装成模型产物、
     // fallbackFiles 归零——账面与读数上看不出任何降级发生过
     const calls: number[] = [];
@@ -184,7 +207,7 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-1",
       summarizeMany: async (slices) => { calls.push(slices.length); return slices.map((slice) => ({ summary: `${slice.path} 模型重写。` })); }
     };
-    const again = await summarizeFiles({ structure: STRUCTURE, database, provider: second });
+    const again = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: second });
     expect(again.estimate.fallbackFiles).toBe(0);
     expect(calls).toEqual([3]); // 上次兜底的那三条重新问了模型；只有真拿到模型结果的那条命中缓存
     expect(again.summaries.map((item) => item.summary)).toContain("svc.py 模型重写。");
@@ -206,7 +229,7 @@ describe("文件摘要表（L1）", () => {
       files: Array.from({ length: 10 }, (_, index) => ({ path: `f${index}.py`, lines: 1 })),
       symbols: [], calls: [], imports: {}, entrypoints: []
     };
-    await summarizeFiles({ structure, database, provider });
+    await summarizeFiles({ structure, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(batches).toEqual([8, 2]);
   });
 });
@@ -235,7 +258,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
   async function coverageFor(names: string[], summary: string) {
     const database = tempDatabase();
     const provider: SummaryProvider = { sendsCodeToEndpoint: true, name: "stub", modelVersion: "stub-1", summarizeMany: async () => [{ summary }] };
-    const { summaries } = await summarizeFiles({ structure: singleFileStructure(names), database, provider });
+    const { summaries } = await summarizeFiles({ structure: singleFileStructure(names), store: database.summaries, repositoryPath: database.repositoryPath, provider });
     return summaries[0].coverage;
   }
 
@@ -272,7 +295,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
       coverage: { checked: 2, mentioned: 0, low: true }
     };
     database.summaries.put(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
-    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const svc = summaries.find((summary) => summary.path === "svc.py")!;
     // 确定性摘要本来就以符号名开头，新判据下两条都锚上
     expect(svc.coverage).toEqual({ checked: 2, mentioned: 2, low: false, rule: "anchor-v2" });
@@ -280,7 +303,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
     // 修正后的行真的落库了：再跑一次不需要任何迁移
     expect(database.summaries.get<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
-    const second = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
   });
 });
@@ -351,7 +374,7 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
         return slices.map(() => ({ summary: "main 负责入口。" }));
       }
     };
-    await summarizeFiles({ structure: STRUCTURE, database, provider: spy, withHeaderComments: true });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: spy, withHeaderComments: true });
     const main = captured.find((slice) => slice.path === "main.py")!;
     expect(main.headerComment).toBe("入口装配：加载配置并启动服务");
     expect(captured.find((slice) => slice.path === "svc.py")!.headerComment).toBeUndefined();
@@ -360,14 +383,14 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
   it("两档各占各的键空间：互不污染，切回原档仍全量命中", async () => {
     const database = tempRepoWithSource();
     const provider = new LocalSummaryProvider();
-    const off = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const off = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(off.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
-    const on = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    const on = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     // 开档全是新键：一条都不该命中关档刚写的行
     expect(on.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
-    const onAgain = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    const onAgain = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(onAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
-    const offAgain = await summarizeFiles({ structure: STRUCTURE, database, provider });
+    const offAgain = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(offAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
   });
 });
@@ -392,14 +415,14 @@ describe("L1 的密钥隐去", () => {
         return slices.map((slice) => ({ summary: `${slice.path} 用了 sk-abcdefghijklmnop1234 这个凭据。` }));
       }
     };
-    const first = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    const first = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     const sent = seen.join("");
     expect(sent).toContain("[疑似密钥，已隐去]");
     expect(sent).not.toContain("sk-abcdefghijklmnop");
     const stored = first.summaries.find((summary) => summary.path === "main.py")!;
     expect(stored.summary).not.toContain("sk-abcdefghijklmnop");
     // 键没翻：同输入再跑一趟必须全命中（翻掉就是 4 个文件全部付费重生成）
-    const second = await summarizeFiles({ structure: STRUCTURE, database, provider, withHeaderComments: true });
+    const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(second.estimate.cachedFiles).toBe(4);
     // 过筛只发生在发出去的副本上：学习者仓库里的文件一个字节都不该被我们改过
     expect(readFileSync(join(database.repositoryPath, "main.py"), "utf8")).toContain("sk-abcdefghijklmnop1234");
@@ -421,7 +444,7 @@ describe("L1 出网清单", () => {
 
   it("真发出去的那批逐文件一条：指针与指纹齐全，切片的符号名不进审计线", async () => {
     const database = tempDatabase();
-    await summarizeFiles({ structure: STRUCTURE, database, provider: modelProvider() });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: modelProvider() });
 
     const rows = rowsOf(database.repositoryPath);
     expect(rows.map((row) => row.payload.path)).toEqual(["business.py", "main.py", "svc.py", "util.py"]);
@@ -434,13 +457,13 @@ describe("L1 出网清单", () => {
   it("缓存命中不再计入审计；确定性档（不发请求）一条都不记", async () => {
     const database = tempDatabase();
     const provider = modelProvider();
-    await summarizeFiles({ structure: STRUCTURE, database, provider });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(rowsOf(database.repositoryPath)).toHaveLength(4);
-    await summarizeFiles({ structure: STRUCTURE, database, provider });
+    await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(rowsOf(database.repositoryPath), "四个文件全命中缓存，没有新的出网").toHaveLength(4);
 
     const local = tempDatabase();
-    await summarizeFiles({ structure: STRUCTURE, database: local, provider: new LocalSummaryProvider() });
+    await summarizeFiles({ structure: STRUCTURE, store: local.summaries, repositoryPath: local.repositoryPath, provider: new LocalSummaryProvider() });
     expect(rowsOf(local.repositoryPath)).toEqual([]);
   });
 });

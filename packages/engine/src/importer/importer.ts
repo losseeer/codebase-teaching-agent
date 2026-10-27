@@ -566,7 +566,8 @@ export class ImportService extends EventEmitter {
     const summaryJournal = new Journal(repositoryPath, index.repositoryId);
     const { estimate } = await summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
-      database: handle.db,
+      store: handle.db.summaries,
+      repositoryPath: handle.db.repositoryPath,
       provider,
       withHeaderComments,
       // 每一批发出去的钱当场入账：闸门与成本页只认 journal，漏这一路等于导入可以无限超预算

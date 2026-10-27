@@ -117,8 +117,10 @@ describe("分层守卫", () => {
   /**
     已知这笔债：管线模块还在直接落 `persistence/`，理想形态是由参数把端口传进来。
     账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
+    10-27 还掉第一条：摘要流水线改吃 `port/summary-store.ts` 的 `SummaryStore`（importer 与重算脚本注入适配器），
+    剩下的主要是 exercises 与 diagram 两处。
     */
-  const PERSISTENCE_DEBT_LINES = 6;
+  const PERSISTENCE_DEBT_LINES = 5;
 
   it(`管线直接落到 persistence/ 的依赖恰好等于在册条数（现 ${PERSISTENCE_DEBT_LINES} 条，只能变小）`, () => {
     const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "persistence"));
