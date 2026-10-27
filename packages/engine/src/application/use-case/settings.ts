@@ -157,8 +157,8 @@ export function saveBudgetUseCase(repositoryId: string, monthlyBudgetUsd: unknow
   if (typeof monthlyBudgetUsd !== "number" || !Number.isFinite(monthlyBudgetUsd) || monthlyBudgetUsd < 0) return { ok: false, failure: { kind: "budget-invalid" } };
   const database = repository.handle.pin();
   try {
-    const stored = database.getSettings<{ monthlyBudgetUsd?: number; refinement?: unknown }>(repository.index.repositoryId) ?? {};
-    database.saveSettings(repository.index.repositoryId, { ...stored, monthlyBudgetUsd });
+    const stored = database.state.settings<{ monthlyBudgetUsd?: number; refinement?: unknown }>(repository.index.repositoryId) ?? {};
+    database.state.saveSettings(repository.index.repositoryId, { ...stored, monthlyBudgetUsd });
   } finally {
     repository.handle.unpin();
   }

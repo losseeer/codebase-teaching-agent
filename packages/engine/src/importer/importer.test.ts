@@ -30,9 +30,9 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
   };
   const estimate: ImportEstimate = { cachedFiles: 0, summarizedFiles: 1, estimatedInputTokens: 0, estimatedCostUsd: 0, provider: "none", modelVersion: "fixture-v1" };
   const database = new TutorDatabase(repoDir);
-  database.saveIndex(index);
-  database.saveEstimate(repositoryId, estimate);
-  database.saveAnalysis(analysis);
+  database.state.saveIndex(index);
+  database.state.saveEstimate(repositoryId, estimate);
+  database.state.saveAnalysis(analysis);
   database.close();
   return { repoDir, repositoryId };
 }
@@ -59,8 +59,8 @@ function gitInitAndCommit(repository: string): string {
 /** 把 db 里的 analysis 换成指定 stamp / HEAD（模拟「产物是在这个状态下算出来的」）。 */
 function rewriteAnalysis(repoDir: string, repositoryId: string, patch: Partial<RepositoryAnalysis>): void {
   const database = new TutorDatabase(repoDir);
-  const stored = database.getAnalysis(repositoryId)!;
-  database.saveAnalysis({ ...stored, ...patch });
+  const stored = database.state.analysis(repositoryId)!;
+  database.state.saveAnalysis({ ...stored, ...patch });
   database.close();
 }
 
@@ -158,7 +158,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     expect(first.contentChanged).toBe(true);
     // 只报告：产物里写的还是那个旧 stamp，引擎没顺带替用户重算
     const database = new TutorDatabase(repo.repoDir);
-    expect(database.getAnalysis(repo.repositoryId)?.versionStamp).toBe("content:fixture");
+    expect(database.state.analysis(repo.repositoryId)?.versionStamp).toBe("content:fixture");
     database.close();
 
     // 把产物「假装」是在当前内容下算的：非 git 仓没有 HEAD 可比，只能退化成 unknown
@@ -220,7 +220,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     expect(service.getRepository(repo.repositoryId)).toBeUndefined();
     expect(service.catalog()).toHaveLength(0);
     const database = new TutorDatabase(repo.repoDir);
-    expect(database.getAnalysis(repo.repositoryId)?.repositoryId).toBe(repo.repositoryId);
+    expect(database.state.analysis(repo.repositoryId)?.repositoryId).toBe(repo.repositoryId);
     database.close();
     expect(existsSync(join(repo.repoDir, ".tutor"))).toBe(true);
   });
@@ -313,7 +313,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     expect(mounted.analysis.lastIncrementalUpdate?.changedPaths).toEqual(["src/b.ts", "src/c.ts"]);
     // 合并后的那轮也落进了 SQLite（重启后不丢）
     const database = new TutorDatabase(repoDir);
-    expect(database.getAnalysis(repositoryId)?.versionStamp).toBe("content:round2");
+    expect(database.state.analysis(repositoryId)?.versionStamp).toBe("content:round2");
     database.close();
   });
 
@@ -347,7 +347,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
     expect(service.getRepository(beta.repositoryId)).toBeDefined();
     const database = new TutorDatabase(alpha.repoDir);
-    expect(database.getAnalysis(alpha.repositoryId)?.versionStamp).toBe("content:fixture"); // 脏结果也没写库
+    expect(database.state.analysis(alpha.repositoryId)?.versionStamp).toBe("content:fixture"); // 脏结果也没写库
     database.close();
     service.getRepository(beta.repositoryId)?.watcher?.close();
   });
@@ -375,7 +375,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     expect(afterFirst.analysis.versionStamp, "真内容变了那一轮照旧换产物").not.toBe("content:fixture");
     expect(updates).toHaveLength(1);
     const database = new TutorDatabase(repoDir);
-    const storedFirst = database.getAnalysis(repositoryId)!.lastIncrementalUpdate;
+    const storedFirst = database.state.analysis(repositoryId)!.lastIncrementalUpdate;
     database.close();
 
     // 第二轮：磁盘一字未动
@@ -383,7 +383,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     expect(service.getRepository(repositoryId)!.analysis, "内容没变就不该换掉挂载中那份分析").toBe(afterFirst.analysis);
     expect(updates, "没变化就不该再广播一次「仓更新了」").toHaveLength(1);
     const reopened = new TutorDatabase(repoDir);
-    expect(reopened.getAnalysis(repositoryId)!.lastIncrementalUpdate, "库里那份也不该被 noop 轮改写").toEqual(storedFirst);
+    expect(reopened.state.analysis(repositoryId)!.lastIncrementalUpdate, "库里那份也不该被 noop 轮改写").toEqual(storedFirst);
     reopened.close();
   });
 });

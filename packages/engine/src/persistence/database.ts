@@ -1,12 +1,13 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 import { ChatRepository } from "./chat-repository.js";
 import { CheckpointRepository } from "./checkpoint-repository.js";
+import { DiagramRepository } from "./diagram-repository.js";
 import { ExerciseRepository } from "./exercise-repository.js";
 import { FactRepository } from "./fact-repository.js";
 import { ReviewRepository } from "./review-repository.js";
+import { StateRepository } from "./state-repository.js";
 import { SummaryRepository } from "./summary-repository.js";
 
 import { loadAddon } from "./betterSqlite3Loader.cjs";
@@ -36,14 +37,21 @@ const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
 
 export class TutorDatabase {
   private readonly db: Database.Database;
-  /** 一道题的题行与它的复习排期：各是一张表的唯一读写口（`persistence/exercise-repository.ts` / `review-repository.ts`）。 */
+  /**
+    八张表按聚合各交一个 repository，每张表只有那一个读写口：
+    `state`（repository_state 的四格）· `summaries`（L1）· `facts`（static_fact）·
+    `exercises`（exercise_cache）· `reviews`（review_schedule）· `checkpoints`（turn_checkpoint）·
+    `diagrams`（diagram）· `chats`（chat_session / chat_message）。
+    这一类自己只管开库、迁移、列对账与关。
+    */
+  readonly state: StateRepository;
+  readonly summaries: SummaryRepository;
+  readonly facts: FactRepository;
   readonly exercises: ExerciseRepository;
   readonly reviews: ReviewRepository;
   readonly checkpoints: CheckpointRepository;
+  readonly diagrams: DiagramRepository;
   readonly chats: ChatRepository;
-  /** L1 摘要与四类文件级静态产物：各自一张表的唯一读写口。 */
-  readonly summaries: SummaryRepository;
-  readonly facts: FactRepository;
   /** 开库所在的路径（只为把告警说成「哪个仓的库」，不参与任何判据）。 */
   readonly repositoryPathLabel: string;
   /**
@@ -59,12 +67,14 @@ export class TutorDatabase {
     this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
     this.db.pragma("journal_mode = WAL");
     // 只能在 `db` 装上之后建：早一行交出去的就是 undefined
+    this.state = new StateRepository(this.db);
+    this.summaries = new SummaryRepository(this.db);
+    this.facts = new FactRepository(this.db);
     this.exercises = new ExerciseRepository(this.db);
     this.reviews = new ReviewRepository(this.db);
     this.checkpoints = new CheckpointRepository(this.db);
+    this.diagrams = new DiagramRepository(this.db);
     this.chats = new ChatRepository(this.db);
-    this.summaries = new SummaryRepository(this.db);
-    this.facts = new FactRepository(this.db);
     try {
       this.migrate();
     } catch (error) {
@@ -126,93 +136,8 @@ export class TutorDatabase {
     }
   }
 
-  saveIndex(index: RepositoryIndex): void {
-    this.upsert(index.repositoryId, { index: JSON.stringify(index) });
-  }
-
-  saveEstimate(repositoryId: string, estimate: ImportEstimate): void {
-    this.upsert(repositoryId, { estimate: JSON.stringify(estimate) });
-  }
-
-  saveAnalysis(analysis: RepositoryAnalysis): void {
-    this.upsert(analysis.repositoryId, { analysis: JSON.stringify(analysis) });
-  }
-
-  getIndex(repositoryId: string): RepositoryIndex | undefined {
-    const value = this.getJsonColumn(repositoryId, "index_json");
-    return value ? JSON.parse(value) as RepositoryIndex : undefined;
-  }
-
-  getEstimate(repositoryId: string): ImportEstimate | undefined {
-    const value = this.getJsonColumn(repositoryId, "estimate_json");
-    return value ? JSON.parse(value) as ImportEstimate : undefined;
-  }
-
-  getAnalysis(repositoryId: string): RepositoryAnalysis | undefined {
-    const value = this.getJsonColumn(repositoryId, "analysis_json");
-    return value ? JSON.parse(value) as RepositoryAnalysis : undefined;
-  }
-
-  getSettings<T extends Record<string, unknown>>(repositoryId: string): T | undefined {
-    const value = this.getJsonColumn(repositoryId, "settings_json");
-    return value ? JSON.parse(value) as T : undefined;
-  }
-
-  saveSettings(repositoryId: string, settings: Record<string, unknown>): void {
-    this.upsert(repositoryId, { settings: JSON.stringify(settings) });
-  }
-
-  /**
-    画布上的一张图（persistence/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
-    列一律 AS 成返回类型上的驼峰名：better-sqlite3 按 SQL 里写的列名交回键，
-    类型是断言出来的、编译器不报，键名不一致到运行期才炸。
-  */
-  listDiagramRows(repositoryId: string): { diagramId: string; name: string; source: string; createdAt: number; updatedAt: number; payload: string }[] {
-    return this.db.prepare("SELECT diagram_id AS diagramId, name, source, created_at AS createdAt, updated_at AS updatedAt, payload FROM diagram WHERE repository_id = ? ORDER BY updated_at DESC").all(repositoryId) as
-      { diagramId: string; name: string; source: string; createdAt: number; updatedAt: number; payload: string }[];
-  }
-
-  getDiagramRow(repositoryId: string, diagramId: string): { name: string; source: string; createdAt: number; updatedAt: number; payload: string } | undefined {
-    return this.db.prepare("SELECT name, source, created_at AS createdAt, updated_at AS updatedAt, payload FROM diagram WHERE repository_id = ? AND diagram_id = ?").get(repositoryId, diagramId) as
-      | { name: string; source: string; createdAt: number; updatedAt: number; payload: string } | undefined;
-  }
-
-  putDiagramRow(repositoryId: string, diagramId: string, row: { name: string; source: string; createdAt: number; updatedAt: number; payload: unknown }): void {
-    this.db.prepare("INSERT OR REPLACE INTO diagram(repository_id, diagram_id, name, source, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(repositoryId, diagramId, row.name, row.source, row.createdAt, row.updatedAt, JSON.stringify(row.payload));
-  }
-
-  deleteDiagramRow(repositoryId: string, diagramId: string): void {
-    this.db.prepare("DELETE FROM diagram WHERE repository_id = ? AND diagram_id = ?").run(repositoryId, diagramId);
-  }
-
   close(): void {
     this.db.close();
-  }
-
-  /**
-    一次只取要的那一列：analysis_json 是大仓里最重的一块，整行捞取会让轻读付重代价。
-    列名取自这张表固定的四个，不接受外部字符串，拼进 SQL 不构成注入面。
-    */
-  private getJsonColumn(repositoryId: string, column: "index_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
-    const row = this.db.prepare(`SELECT ${column} AS value FROM repository_state WHERE repository_id = ?`).get(repositoryId) as { value: string | null } | undefined;
-    return row?.value;
-  }
-
-  /**
-    只写这次给出来的那几列：ON CONFLICT DO UPDATE 只碰给了值的列，其余留在原地不动。
-    列名从这张表固定的四个键里查，外部字符串进不了 SQL。
-    */
-  private upsert(repositoryId: string, patch: { index?: string; estimate?: string; analysis?: string; settings?: string }): void {
-    const columnOf = { index: "index_json", estimate: "estimate_json", analysis: "analysis_json", settings: "settings_json" } as const;
-    const keys = (Object.keys(columnOf) as (keyof typeof columnOf)[]).filter((key) => patch[key] !== undefined);
-    if (!keys.length) return;
-    const columns = keys.map((key) => columnOf[key]).join(", ");
-    const assignments = keys.map((key) => `${columnOf[key]} = excluded.${columnOf[key]}`).join(", ");
-    this.db.prepare(`INSERT INTO repository_state(repository_id, updated_at, ${columns})
-      VALUES (?, ?, ${keys.map(() => "?").join(", ")})
-      ON CONFLICT(repository_id) DO UPDATE SET updated_at = excluded.updated_at, ${assignments}`)
-      .run(repositoryId, new Date().toISOString(), ...keys.map((key) => patch[key]));
   }
 }
 

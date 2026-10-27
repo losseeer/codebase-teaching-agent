@@ -30,7 +30,7 @@ await loadSymbolParser();
 
 const index = indexRepository(repositoryPath);
 const database = new TutorDatabase(repositoryPath);
-const analysis = database.getAnalysis(index.repositoryId);
+const analysis = database.state.analysis(index.repositoryId);
 if (!analysis) throw new Error(`仓库 ${repositoryPath} 尚无分析记录（先走 GUI 导入）`);
 
 const before = graphFromData(analysis.graph);
@@ -79,7 +79,7 @@ console.log(`调用边：新增 ${added.length} 条、消失 ${removed.length} �
 for (const pair of added.slice(0, 8)) console.log(`  + ${pair}`);
 for (const pair of removed.slice(0, 8)) console.log(`  - ${pair}`);
 if (process.argv.includes("--write")) {
-  database.saveAnalysis({ ...analysis, graph: serializeGraph(graph) });
+  database.state.saveAnalysis({ ...analysis, graph: serializeGraph(graph) });
   console.log("已回写 analysis_json（--write）");
 } else {
   console.log("演练模式：未回写。确认读数后加 --write");

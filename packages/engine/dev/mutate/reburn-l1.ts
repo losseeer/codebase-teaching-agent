@@ -33,11 +33,11 @@ const repositoryPath = (() => {
 
 const index = indexRepository(repositoryPath);
 const database = new TutorDatabase(repositoryPath);
-const analysis = database.getAnalysis(index.repositoryId);
+const analysis = database.state.analysis(index.repositoryId);
 if (!analysis) throw new Error(`仓库 ${repositoryPath} 尚无分析记录（先走 GUI 导入）`);
 
 // 「摘要参考注释」是每仓设置（默认关）：这里沿用当前开关状态，与导入路径同口径
-const withHeaderComments = database.getSettings<{ summaryHeaderComments?: boolean }>(index.repositoryId)?.summaryHeaderComments === true;
+const withHeaderComments = database.state.settings<{ summaryHeaderComments?: boolean }>(index.repositoryId)?.summaryHeaderComments === true;
 const light = buildLlmRuntimeProvider("light");
 const provider = createSummaryProvider({ llm: light, withHeaderComments });
 if (provider instanceof LocalSummaryProvider) {

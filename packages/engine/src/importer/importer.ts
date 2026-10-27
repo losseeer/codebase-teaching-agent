@@ -308,9 +308,9 @@ export class ImportService extends EventEmitter {
     let handle: RepositoryHandle | undefined;
     try {
       handle = new RepositoryHandle(path, repositoryId);
-      index = handle.db.getIndex(repositoryId);
-      analysis = handle.db.getAnalysis(repositoryId);
-      estimate = handle.db.getEstimate(repositoryId);
+      index = handle.db.state.index(repositoryId);
+      analysis = handle.db.state.analysis(repositoryId);
+      estimate = handle.db.state.estimate(repositoryId);
     } catch {
       handle?.close();
       return { ok: false, reason: "artifacts_incomplete", message: `${path} 的分析结果读不出来（文件损坏或权限不足），需要重新导入。` };
@@ -538,15 +538,15 @@ export class ImportService extends EventEmitter {
     const index = scan.index;
     // versionStamp 是全量源码内容哈希：内容不变 → 值不变，是「润色结果可否复用」的判据
     const versionStamp = contentVersion(repositoryPath, index, scan.digests);
-    handle.db.saveIndex(index);
+    handle.db.state.saveIndex(index);
     progress("summarizing", 40, "正在生成文件摘要并检查缓存");
     // 每仓设置先读出来：`summaryHeaderComments` 决定 L1 切片/提示词是否带注释档（默认关），预算后面还要用同一份。
-    let storedSettings = handle.db.getSettings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
+    let storedSettings = handle.db.state.settings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
     // 导入页的显式选择是该仓摘要口径唯一的写入时点；读-合并-写保住其它键，
     // 之后的增量重分析/重导入不再带选择，只读这份落库值。
     if (summaryHeaderComments !== undefined) {
       storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
-      handle.db.saveSettings(index.repositoryId, storedSettings);
+      handle.db.state.saveSettings(index.repositoryId, storedSettings);
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
     /**
@@ -591,8 +591,8 @@ export class ImportService extends EventEmitter {
       // 记下分析时的 HEAD：懒挂载要靠它区分「内容没变但分析点在另一个提交上」与真的过期
       ...(analysisHead ? { gitHead: analysisHead } : {})
     };
-    handle.db.saveEstimate(index.repositoryId, estimate);
-    handle.db.saveAnalysis(analysis);
+    handle.db.state.saveEstimate(index.repositoryId, estimate);
+    handle.db.state.saveAnalysis(analysis);
     // 静态产物层（控制流图等）：纯本地计算、零 token，失败绝不能让这次导入失败——
     // 但必须说出口，否则「这一类产物没有」会被后面读成「这个仓的函数都没分支」
     try {
@@ -669,7 +669,7 @@ export class ImportService extends EventEmitter {
         return;
       }
       next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths, at: new Date().toISOString() };
-      current.handle.db.saveAnalysis(next.analysis);
+      current.handle.db.state.saveAnalysis(next.analysis);
       // 新鲜度重算一遍：这一轮就是照着当前磁盘内容算的，正常会判 fresh；
       // 要是这几十秒里又改了文件，如实报脏，下一次访问会再排一轮——不假装它是新的。
       this.repositories.set(repositoryId, { ...next, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });

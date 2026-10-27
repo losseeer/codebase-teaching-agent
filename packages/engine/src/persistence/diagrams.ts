@@ -61,7 +61,7 @@ function parseRow(row: { payload: string }): ParsedRow | undefined {
 }
 
 function put(database: TutorDatabase, diagram: Diagram): void {
-  database.putDiagramRow(diagram.repositoryId, diagram.id, {
+  database.diagrams.put(diagram.repositoryId, diagram.id, {
     name: diagram.name,
     source: diagram.source,
     createdAt: Date.parse(diagram.createdAt) || Date.now(),
@@ -71,7 +71,7 @@ function put(database: TutorDatabase, diagram: Diagram): void {
 }
 
 export function readDiagram(database: TutorDatabase, repositoryId: string, diagramId: string): Diagram | undefined {
-  const row = database.getDiagramRow(repositoryId, diagramId);
+  const row = database.diagrams.byId(repositoryId, diagramId);
   const parsed = row ? parseRow(row) : undefined;
   if (!row || !parsed) return undefined;
   return {
@@ -89,7 +89,7 @@ export function readDiagram(database: TutorDatabase, repositoryId: string, diagr
 /** 图库列表：只回摘要（名字、谁建的、几版、多少图元），不拖结构进左栏。 */
 export function listDiagrams(database: TutorDatabase, repositoryId: string): DiagramSummary[] {
   const out: DiagramSummary[] = [];
-  for (const row of database.listDiagramRows(repositoryId)) {
+  for (const row of database.diagrams.list(repositoryId)) {
     const parsed = parseRow(row);
     if (!parsed) continue;
     out.push({
@@ -197,5 +197,5 @@ export function restoreVersion(database: TutorDatabase, diagram: Diagram, index:
 }
 
 export function deleteDiagram(database: TutorDatabase, diagram: Diagram): void {
-  database.deleteDiagramRow(diagram.repositoryId, diagram.id);
+  database.diagrams.remove(diagram.repositoryId, diagram.id);
 }

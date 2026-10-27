@@ -126,7 +126,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
     expect(listed.diagrams.map((item) => item.id)).not.toContain(doomed.id);
     const database = new TutorDatabase(fx.repoDir);
     try {
-      expect(database.getDiagramRow(fx.repositoryId, doomed.id), "只删行：别留一张读不出来的半个图").toBeUndefined();
+      expect(database.diagrams.byId(fx.repositoryId, doomed.id), "只删行：别留一张读不出来的半个图").toBeUndefined();
     } finally {
       database.close();
     }

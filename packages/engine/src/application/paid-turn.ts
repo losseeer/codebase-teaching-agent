@@ -23,7 +23,7 @@ export function readRepositorySettings(handle: RepositoryHandle): RepositorySett
   // pin/unpin 按计数可重入，嵌套在已经 pin 的请求里也安全。
   const database = handle.pin();
   try {
-    const settings = database.getSettings<{ monthlyBudgetUsd?: number }>(handle.repositoryId);
+    const settings = database.state.settings<{ monthlyBudgetUsd?: number }>(handle.repositoryId);
     return {
       monthlyBudgetUsd: typeof settings?.monthlyBudgetUsd === "number" && settings.monthlyBudgetUsd >= 0 ? settings.monthlyBudgetUsd : defaultMonthlyBudgetUsd
     };

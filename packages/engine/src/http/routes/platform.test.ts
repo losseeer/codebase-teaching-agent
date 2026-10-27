@@ -65,7 +65,7 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
     await new Promise((resolve) => setTimeout(resolve, 3_000));
 
     const database = new TutorDatabase(fx.repoDir);
-    const analysis = database.getAnalysis(fx.repositoryId);
+    const analysis = database.state.analysis(fx.repositoryId);
     database.close();
     expect(analysis, "产物读不出来就没法比对").toBeDefined();
     // 重分析一跑，versionStamp 就从「手工造的 content:fixture」翻成真实内容哈希，锚点同时消失

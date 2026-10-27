@@ -174,9 +174,9 @@ export function createRouteFixture(): RouteFixture {
     };
     const estimate: ImportEstimate = { cachedFiles: 0, summarizedFiles: 1, estimatedInputTokens: 0, estimatedCostUsd: 0, provider: "none", modelVersion: "fixture-v1" };
     const database = new TutorDatabase(repoDir);
-    database.saveIndex(index);
-    database.saveEstimate(fx.repositoryId, estimate);
-    database.saveAnalysis(analysis);
+    database.state.saveIndex(index);
+    database.state.saveEstimate(fx.repositoryId, estimate);
+    database.state.saveAnalysis(analysis);
     // 练习答疑要求题目在缓存里（题面由 fixture 给定，不走出题路径）
     fx.exerciseId = "ex-fixture";
     database.exercises.put(fx.repositoryId, "content:fixture", "impact_analysis", "unit-1", {
