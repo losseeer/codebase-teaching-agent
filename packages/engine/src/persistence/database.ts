@@ -1,11 +1,13 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 import { ChatRepository } from "./chat-repository.js";
 import { CheckpointRepository } from "./checkpoint-repository.js";
 import { ExerciseRepository } from "./exercise-repository.js";
+import { FactRepository } from "./fact-repository.js";
 import { ReviewRepository } from "./review-repository.js";
+import { SummaryRepository } from "./summary-repository.js";
 
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 import { DATABASE_SCHEMA_SQL } from "./database-schema.js";
@@ -16,10 +18,6 @@ const schemaVersion = 8;
 // 预加载对应当前 Node ABI 的 native binding，避免默认解析路径触发 ABI mismatch。
 // runtime 接受 addon 对象而 @types 只声明 string，故 cast。
 const nativeBinding = loadAddon() as unknown as string;
-
-/** getLatestFileSummaries 的默认行数上限；同时导出给调用方做达到上限的判据，避免各处字面量分叉。 */
-export const LATEST_SUMMARY_LIMIT = 2_000;
-
 /**
   唯一的一处「开连接 → 用 → 关」。写在 try/finally：这些调用挂在每个对话回合的读写路径上，
   尾置的 close() 一被异常跳过就攒文件描述符，攒够把进程拖到 EMFILE。
@@ -33,7 +31,6 @@ export function withDatabase<T>(repositoryPath: string, run: (database: TutorDat
   }
 }
 
-
 /** 声明里的约束列：ADD COLUMN 加不出这些，缺了必须写真迁移（带回填的那种）。 */
 const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
 
@@ -44,6 +41,9 @@ export class TutorDatabase {
   readonly reviews: ReviewRepository;
   readonly checkpoints: CheckpointRepository;
   readonly chats: ChatRepository;
+  /** L1 摘要与四类文件级静态产物：各自一张表的唯一读写口。 */
+  readonly summaries: SummaryRepository;
+  readonly facts: FactRepository;
   /** 开库所在的路径（只为把告警说成「哪个仓的库」，不参与任何判据）。 */
   readonly repositoryPathLabel: string;
   /**
@@ -63,6 +63,8 @@ export class TutorDatabase {
     this.reviews = new ReviewRepository(this.db);
     this.checkpoints = new CheckpointRepository(this.db);
     this.chats = new ChatRepository(this.db);
+    this.summaries = new SummaryRepository(this.db);
+    this.facts = new FactRepository(this.db);
     try {
       this.migrate();
     } catch (error) {
@@ -158,96 +160,6 @@ export class TutorDatabase {
 
   saveSettings(repositoryId: string, settings: Record<string, unknown>): void {
     this.upsert(repositoryId, { settings: JSON.stringify(settings) });
-  }
-
-  /**
-    写一批文件级静态产物。replaceAll 表示这批是该产物的全集（删掉已消失文件的行）；
-    不传则只按文件增改，其余文件的产物保持有效。
-  */
-  saveFileFacts(repositoryId: string, kind: FactKind, rows: { path: string; payload: unknown }[], options?: { replaceAll?: boolean }): void {
-    const insert = this.db.prepare("INSERT OR REPLACE INTO static_fact(repository_id, kind, path, payload, at) VALUES (?, ?, ?, ?, ?)");
-    const at = Date.now();
-    const tx = this.db.transaction((batch: { path: string; payload: unknown }[]) => {
-      if (options?.replaceAll) this.db.prepare("DELETE FROM static_fact WHERE repository_id = ? AND kind = ?").run(repositoryId, kind);
-      for (const row of batch) insert.run(repositoryId, kind, row.path, JSON.stringify(row.payload), at);
-    });
-    tx(rows);
-  }
-
-  getFileFact<T>(repositoryId: string, kind: FactKind, path: string): T | undefined {
-    const row = this.db.prepare("SELECT payload FROM static_fact WHERE repository_id = ? AND kind = ? AND path = ?").get(repositoryId, kind, path) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) as T : undefined;
-  }
-
-  /** 整类产物按文件路径归堆（读侧与报表用；一行一文件，不必解析整仓的大 JSON）。 */
-  listFileFacts<T>(repositoryId: string, kind: FactKind): Map<string, T> {
-    const rows = this.db.prepare("SELECT path, payload FROM static_fact WHERE repository_id = ? AND kind = ? ORDER BY path").all(repositoryId, kind) as { path: string; payload: string }[];
-    return new Map(rows.map((row) => [row.path, JSON.parse(row.payload) as T]));
-  }
-
-  /** 某类产物各占多少文件、总共多少字节——「这项没做过」与「做了但都是空」在这里分开。 */
-  factCoverage(repositoryId: string): { kind: FactKind; files: number; bytes: number }[] {
-    const rows = this.db.prepare("SELECT kind, COUNT(*) AS files, SUM(LENGTH(payload)) AS bytes FROM static_fact WHERE repository_id = ? GROUP BY kind ORDER BY kind").all(repositoryId) as { kind: string; files: number; bytes: number }[];
-    return rows.map((row) => ({ kind: row.kind as FactKind, files: row.files, bytes: row.bytes ?? 0 }));
-  }
-
-  /** 各批产物的计算时间（`lastAt` 是这一类最近一次重算）：给读侧说清「读数比代码旧多久」。 */
-  factStamps(repositoryId: string): { kind: FactKind; files: number; firstAt: number; lastAt: number }[] {
-    const rows = this.db.prepare("SELECT kind, COUNT(*) AS files, MIN(at) AS first_at, MAX(at) AS last_at FROM static_fact WHERE repository_id = ? GROUP BY kind ORDER BY kind").all(repositoryId) as { kind: string; files: number; first_at: number; last_at: number }[];
-    return rows.map((row) => ({ kind: row.kind as FactKind, files: row.files, firstAt: row.first_at, lastAt: row.last_at }));
-  }
-
-  dropFileFacts(repositoryId: string, kind: FactKind, paths: string[]): void {
-    if (!paths.length) return;
-    const del = this.db.prepare("DELETE FROM static_fact WHERE repository_id = ? AND kind = ? AND path = ?");
-    const tx = this.db.transaction((batch: string[]) => {
-      for (const path of batch) del.run(repositoryId, kind, path);
-    });
-    tx(paths);
-  }
-
-  /**
-    文件摘要记录（L1）。summary 列是不透明 TEXT，内容是 JSON；读不出来就当未命中重算，不猜、不补默认值。
-  */
-  getFileSummary<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
-    const row = this.db.prepare("SELECT summary FROM summaries WHERE cache_key = ?").get(cacheKey) as { summary: string } | undefined;
-    if (!row) return undefined;
-    try {
-      const parsed = JSON.parse(row.summary) as T;
-      return parsed && typeof parsed === "object" && typeof parsed.path === "string" && typeof parsed.summary === "string" ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** `summaries.created_at` 每次写入都取当下（缓存命中也回写）：它是「最近一次被确认 / 刷新的时间」，不是首次生成时间。 */
-  putFileSummary(cacheKey: string, value: { path: string; summary: string }): void {
-    this.db.prepare("INSERT OR REPLACE INTO summaries(cache_key, summary, created_at) VALUES (?, ?, ?)")
-      .run(cacheKey, JSON.stringify(value), new Date().toISOString());
-  }
-
-  /**
-    每个文件最新的摘要（缓存键含切片与模型版本，同一文件有多行）；按写入时间倒序取每个路径的首次出现。
-    limit 兜住只追加表的全表扫描；取不到 = 该文件没有已确认的职责，调用方按未知处理。
-  */
-  getLatestFileSummaries(limit = LATEST_SUMMARY_LIMIT): { path: string; summary: string; role?: string; coverageLow?: boolean }[] {
-    const rows = this.db.prepare("SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ?").all(limit) as { summary: string }[];
-    const latest = new Map<string, { path: string; summary: string; role?: string; coverageLow?: boolean }>();
-    for (const row of rows) {
-      try {
-        const parsed = JSON.parse(row.summary) as { path?: unknown; summary?: unknown; role?: unknown; coverage?: { low?: unknown } };
-        if (typeof parsed.path !== "string" || typeof parsed.summary !== "string" || latest.has(parsed.path)) continue;
-        latest.set(parsed.path, {
-          path: parsed.path,
-          summary: parsed.summary,
-          ...(typeof parsed.role === "string" ? { role: parsed.role } : {}),
-          ...(typeof parsed.coverage?.low === "boolean" ? { coverageLow: parsed.coverage.low } : {})
-        });
-      } catch {
-        // 非 JSON 行：跳过，当作没有这条摘要
-      }
-    }
-    return [...latest.values()];
   }
 
   /**

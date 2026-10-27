@@ -29,8 +29,8 @@ export function diagramWriteContextFor(repository: ImportedRepository, database:
     journal: { append: (type, payload) => new Journal(repository.path, repository.index.repositoryId).append(type, payload, sessionId) },
     // 第四张结构表：产物层里的类型关系与运行时绑定（Spring 这类仓里「注入」那条线代码中没有直接调用）
     facts: factsPairChecker({
-      typeRelations: () => database.listFileFacts<TypeRelationFileFact>(repository.index.repositoryId, "typeRelations"),
-      registry: () => database.listFileFacts<RegistryFileFact>(repository.index.repositoryId, "registry")
+      typeRelations: () => database.facts.listByKind<TypeRelationFileFact>(repository.index.repositoryId, "typeRelations"),
+      registry: () => database.facts.listByKind<RegistryFileFact>(repository.index.repositoryId, "registry")
     }),
     onApplied: (event) => broadcast({ type: "diagram_updated", payload: { repositoryId: event.repositoryId, diagramId: event.diagramId, action: event.action } })
   };

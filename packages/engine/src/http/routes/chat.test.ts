@@ -77,7 +77,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     process.env.TUTOR_SKILLS_DIR = empty;
     const database = new TutorDatabase(fx.repoDir);
     try {
-      database.saveFileFacts(fx.repositoryId, "cfg", [{ path: "src/main.ts", payload: { path: "src/main.ts", language: "typescript", backend: "ast", version: "test", functions: [] } }]);
+      database.facts.save(fx.repositoryId, "cfg", [{ path: "src/main.ts", payload: { path: "src/main.ts", language: "typescript", backend: "ast", version: "test", functions: [] } }]);
     } finally {
       database.close();
     }

@@ -95,9 +95,9 @@ const entryLine = (path: string, entry: RegistryEntry): string =>
   `${path}:${entry.line} ${entry.kind} ${entry.name}${entry.target ? ` → ${entry.target}` : ""}${entry.method ? ` ${entry.method}` : ""}（${entry.via}）`;
 
 function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: string): string {
-  const stored = db.getFileFact<{ version?: string }>(repositoryId, kind, path);
+  const stored = db.facts.read<{ version?: string }>(repositoryId, kind, path);
   if (stored && stored.version !== FACTS_VERSION) return `这个文件的 ${kind} 产物是旧判据算的（产物 version=${stored.version ?? "没写过版本"}，当前 ${FACTS_VERSION}），不作为现行读数给出；要用它先重新分析这个仓。`;
-  const covered = db.factCoverage(repositoryId).some((row) => row.kind === kind);
+  const covered = db.facts.coverage(repositoryId).some((row) => row.kind === kind);
   return covered
     ? `这类产物（${kind}）在本仓有行，但这个文件不在其中：可能它没有可执行体，也可能路径写错了。`
     : `本仓还没有 ${kind} 这类产物（从没算过，或产物比代码旧）。不要据此回答「仓库里没有这个关系」——先让用户重新分析。`;
@@ -110,7 +110,7 @@ function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: 
 export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsToolContext {
   // 判据改过版（`FACTS_VERSION` 翻过）的旧行不再当现行读数交给模型：那是另一套判据算出来的结果
   const rowsOf = <T>(kind: FactKind, path: string): T | undefined => {
-    const fact = db.getFileFact<T & { version?: string }>(repositoryId, kind, path);
+    const fact = db.facts.read<T & { version?: string }>(repositoryId, kind, path);
     return fact?.version === FACTS_VERSION ? fact : undefined;
   };
   // 整类扫描要解析这一类每一行 JSON（一个仓 2~4 MB）：这扇门只活一个回合，按类别缓存一次
@@ -118,7 +118,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
   const scan = <T>(kind: FactKind): Map<string, T> => {
     const cached = scanned.get(kind) as Map<string, T> | undefined;
     if (cached) return cached;
-    const loaded = db.listFileFacts<T & { version?: string }>(repositoryId, kind);
+    const loaded = db.facts.listByKind<T & { version?: string }>(repositoryId, kind);
     // 「全仓找」这条路与按 path 取读必须同一道版本闸，否则旧判据产物从 scan 那边照样进模型
     for (const [factPath, fact] of loaded) if (fact?.version !== FACTS_VERSION) loaded.delete(factPath);
     scanned.set(kind, loaded as Map<string, unknown>);
@@ -126,9 +126,9 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
   };
 
   const coverage = (): string[] => {
-    const stamps = db.factStamps(repositoryId);
+    const stamps = db.facts.stamps(repositoryId);
     if (!stamps.length) return ["本仓没有任何静态产物（还没导入完成，或导入时这一层没算成）。"];
-    const counts = db.factCoverage(repositoryId);
+    const counts = db.facts.coverage(repositoryId);
     return [
       `静态产物（按文件存，一次给一个指针）：${counts.map((row) => `${row.kind} ${row.files} 文件/${Math.round(row.bytes / 1024)} KB`).join("、")}`,
       `批次时间：${stamps.map((row) => `${row.kind} ${at(row.lastAt)}`).join("、")}。产物比代码旧时读数会漂，别当成实时的。`,
@@ -138,7 +138,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 
   return {
     inventory: (() => {
-      const counts = db.factCoverage(repositoryId);
+      const counts = db.facts.coverage(repositoryId);
       return counts.length ? `静态产物在册：${counts.map((row) => `${row.kind} ${row.files} 文件`).join("、")}。要用结构证据（分支、类型关系、注册绑定）就先调 query_facts，别凭印象说。` : "本仓还没有静态产物：结构类问题只能靠 read_file 读源码回答，并要说明没做过静态核对。";
     })(),
     apply: (argumentsJson: string) => {

@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 
 import { loadDotEnv } from "../../src/boot.js";
-import { LATEST_SUMMARY_LIMIT } from "../../src/persistence/database.js";
+import { LATEST_SUMMARY_LIMIT } from "../../src/persistence/summary-repository.js";
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";

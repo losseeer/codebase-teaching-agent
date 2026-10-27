@@ -102,5 +102,5 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
 export function saveFileFacts(db: TutorDatabase, repositoryId: string, rows: FileFactRow[]): void {
   const grouped = new Map<FactKind, { path: string; payload: unknown }[]>();
   for (const row of rows) grouped.set(row.kind, [...(grouped.get(row.kind) ?? []), { path: row.path, payload: row.payload }]);
-  for (const kind of FACT_KINDS) db.saveFileFacts(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
+  for (const kind of FACT_KINDS) db.facts.save(repositoryId, kind, grouped.get(kind) ?? [], { replaceAll: true });
 }

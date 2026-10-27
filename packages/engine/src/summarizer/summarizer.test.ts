@@ -271,7 +271,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
       roleSource: "structure",
       coverage: { checked: 2, mentioned: 0, low: true }
     };
-    database.putFileSummary(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
+    database.summaries.put(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
     const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, database, provider });
     const svc = summaries.find((summary) => summary.path === "svc.py")!;
     // 确定性摘要本来就以符号名开头，新判据下两条都锚上
@@ -279,7 +279,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     expect(svc.cached).toBe(true);
     expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
     // 修正后的行真的落库了：再跑一次不需要任何迁移
-    expect(database.getFileSummary<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
+    expect(database.summaries.get<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
     const second = await summarizeFiles({ structure: STRUCTURE, database, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
   });

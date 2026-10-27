@@ -333,7 +333,7 @@ export class ExerciseService {
     const targetUnitId = `llm:${tagKey}:${nonce}`;
     const journal = repository.handle.journal;
     // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
-    const summaries = new Map(database.getLatestFileSummaries().map((row) => [row.path, row.summary]));
+    const summaries = new Map(database.summaries.latest().map((row) => [row.path, row.summary]));
     const matched = selectTagCandidates(repository, tag, 3, summaries);
     // 词法零命中不再直接拒题：改从仓库全景挑素材（有摘要 / 改动热点 / 有可讲的函数），仍是一次调用、仍带行号锚点，守门照旧可核
     const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);

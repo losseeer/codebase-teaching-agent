@@ -43,18 +43,18 @@ describe("静态产物落库", () => {
 
       const db = new TutorDatabase(root);
       saveFileFacts(db, repositoryId, collectFileFacts(root, files, symbols));
-      const facts = db.listFileFacts<CfgFileFact>(repositoryId, "cfg");
+      const facts = db.facts.listByKind<CfgFileFact>(repositoryId, "cfg");
       expect([...facts.keys()]).toEqual(["src/alpha.ts", "src/beta.ts"]);
       expect(facts.get("src/alpha.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "branch", "straight", "straight", "exit", "exit"]);
       expect(facts.get("src/beta.ts")?.functions[0]?.blocks.map((block) => block.kind)).toEqual(["entry", "exit"]);
       expect(facts.get("src/alpha.ts")?.version).toBe(FACTS_VERSION);
-      const coverage = db.factCoverage(repositoryId);
+      const coverage = db.facts.coverage(repositoryId);
       expect(coverage.find((row) => row.kind === "cfg")?.files).toBe(2);
       expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出各类产物").toBe(2);
       expect(coverage.find((row) => row.kind === "typeRelations")?.files).toBe(2);
       // 没算过的类别不报行，读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
       expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "registry", "typeRelations"]);
-      const typed = db.getFileFact<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
+      const typed = db.facts.read<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
       expect(typed?.types.map((item) => item.name)).toEqual(["Box"]);
       expect(typed?.types[0]?.kind).toBe("class");
       db.close();
@@ -74,10 +74,10 @@ describe("静态产物落库", () => {
       const symbols = [...symbolsOf("src/one.ts", code), ...symbolsOf("src/two.ts", code)];
       const db = new TutorDatabase(root);
       saveFileFacts(db, repositoryId, collectFileFacts(root, [entry("src/one.ts", 1), entry("src/two.ts", 1)], symbols));
-      expect(db.getFileFact<CfgFileFact>(repositoryId, "cfg", "src/two.ts")?.backend).toBe("ast");
+      expect(db.facts.read<CfgFileFact>(repositoryId, "cfg", "src/two.ts")?.backend).toBe("ast");
       saveFileFacts(db, repositoryId, collectFileFacts(root, [entry("src/one.ts", 1)], symbolsOf("src/one.ts", code)));
-      expect(db.getFileFact(repositoryId, "cfg", "src/two.ts")).toBeUndefined();
-      expect(db.factCoverage(repositoryId).find((row) => row.kind === "cfg")?.files).toBe(1);
+      expect(db.facts.read(repositoryId, "cfg", "src/two.ts")).toBeUndefined();
+      expect(db.facts.coverage(repositoryId).find((row) => row.kind === "cfg")?.files).toBe(1);
       db.close();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -92,7 +92,7 @@ describe("静态产物落库", () => {
       const rows = collectFileFacts(root, [entry("src/gone.ts", 5)], [{ id: "symbol:src/gone.ts:gone:1", name: "gone", kind: "function", path: "src/gone.ts", line: 1, endLine: 5, parameters: [], language: "typescript" }]);
       expect(rows).toEqual([]);
       saveFileFacts(db, repositoryId, rows);
-      expect(db.factCoverage(repositoryId)).toEqual([]);
+      expect(db.facts.coverage(repositoryId)).toEqual([]);
       db.close();
     } finally {
       rmSync(root, { recursive: true, force: true });

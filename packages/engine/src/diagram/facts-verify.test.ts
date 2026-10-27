@@ -35,13 +35,13 @@ function seeded(rows: Row[]): { db: TutorDatabase; root: string; sources: FactSo
   const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-verify-")));
   mkdirSync(join(root, "case"), { recursive: true });
   const db = new TutorDatabase(root);
-  for (const row of rows) db.saveFileFacts(REPO, row.kind, [{ path: row.path, payload: row.payload }]);
+  for (const row of rows) db.facts.save(REPO, row.kind, [{ path: row.path, payload: row.payload }]);
   return {
     db,
     root,
     sources: {
-      typeRelations: () => db.listFileFacts<TypeRelationFileFact>(REPO, "typeRelations"),
-      registry: () => db.listFileFacts<RegistryFileFact>(REPO, "registry")
+      typeRelations: () => db.facts.listByKind<TypeRelationFileFact>(REPO, "typeRelations"),
+      registry: () => db.facts.listByKind<RegistryFileFact>(REPO, "registry")
     }
   };
 }

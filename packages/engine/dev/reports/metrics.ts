@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 import { readJournal } from "../../src/persistence/journal.js";
-import { LATEST_SUMMARY_LIMIT } from "../../src/persistence/database.js";
+import { LATEST_SUMMARY_LIMIT } from "../../src/persistence/summary-repository.js";
 
 /**
   在线聚合脚本（零 LLM、纯只读）：产出指标集里「可算」项与验收读数的基线报告（markdown 到 stdout）。

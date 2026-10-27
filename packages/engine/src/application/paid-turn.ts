@@ -1,7 +1,7 @@
 import { budgetExceeded, defaultMonthlyBudgetUsd } from "../cost/cost.js";
 import { formatSeamReport, seamReportFor } from "../depgraph/seams.js";
 import { Journal } from "../persistence/journal.js";
-import { LATEST_SUMMARY_LIMIT } from "../persistence/database.js";
+import { LATEST_SUMMARY_LIMIT } from "../persistence/summary-repository.js";
 import type { RepositoryHandle } from "../persistence/repository-handle.js";
 import { buildSearchCorpus, type SearchCorpus } from "../source/search-code.js";
 import type { CrossRepoContext } from "../source/tool-loop.js";
@@ -64,8 +64,8 @@ export function turnBudgetGuard(handle: RepositoryHandle): () => string | undefi
 export function latestFileSummaries(handle: RepositoryHandle): Map<string, string> {
   const database = handle.pin();
   try {
-    // 达到读取上限不是静默少文件：缺口必须在日志里点名（上限只有一份定义，在 persistence/database.ts）
-    const rows = database.getLatestFileSummaries(LATEST_SUMMARY_LIMIT);
+    // 达到读取上限不是静默少文件：缺口必须在日志里点名（上限只有一份定义，在 persistence/summary-repository.ts）
+    const rows = database.summaries.latest(LATEST_SUMMARY_LIMIT);
     if (rows.length >= LATEST_SUMMARY_LIMIT) console.warn(`[engine] ${handle.repositoryPath} 的摘要行数达到读取上限 ${LATEST_SUMMARY_LIMIT}，超出的旧路径本次没有摘要可用（流程证据与检索语料会缺这些文件）`);
     return new Map(rows.map((row) => [row.path, row.summary]));
   } finally {

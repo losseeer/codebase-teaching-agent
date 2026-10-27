@@ -129,7 +129,7 @@ export async function summarizeFiles(input: {
   const pending: FileSlice[] = [];
   for (const slice of ordered) {
     const key = cacheKeyOf(slice, provider.modelVersion, withHeaderComments);
-    const cached = database.getFileSummary<StoredSummary>(key);
+    const cached = database.summaries.get<StoredSummary>(key);
     if (cached) {
       cachedFiles += 1;
       // 判据换了就对存量行就地重算：覆盖率是「切片 + 摘要文本」的纯字符串比对、零模型消耗，
@@ -138,7 +138,7 @@ export async function summarizeFiles(input: {
       const migrated: StoredSummary = JSON.stringify(coverage) === JSON.stringify(cached.coverage) ? cached : { ...cached, coverage };
       // 命中也回写（刷新 created_at）：下游语料取「每路径最新一行」，双档键各写一行——
       // 不刷新则从注释档切回关档时，旧行会一直伪装成现行摘要。回写是纯本地写，零成本。
-      database.putFileSummary(key, migrated);
+      database.summaries.put(key, migrated);
       byPath.set(cached.path, { ...migrated, cached: true });
       continue;
     }
@@ -192,7 +192,7 @@ export async function summarizeFiles(input: {
       };
       // 兜底文本只写确定性档的键、不写模型档的键：写了的话下次同输入即永久命中，
       // 结构文本会伪装成模型产物、`fallbackFiles` 读数归零。落确定性档键则下次同输入仍会重试模型。
-      database.putFileSummary(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
+      database.summaries.put(cacheKeyOf(slice, fromModel ? provider.modelVersion : local.modelVersion, withHeaderComments), stored);
       summarizedFiles += 1;
       // 估算口径按实际发出去的那份算，隐去过就该比切片原文短
       inputCharacters += JSON.stringify(sending[index].copy).length;
