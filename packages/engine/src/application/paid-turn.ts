@@ -1,5 +1,5 @@
 import { budgetExceeded, defaultMonthlyBudgetUsd } from "../cost/cost.js";
-import { formatSeamReport, seamReportFor } from "../depgraph/seams.js";
+import { formatSeamReport, seamReportFor } from "../seams/seams.js";
 import { Journal } from "../persistence/journal.js";
 import { LATEST_SUMMARY_LIMIT } from "../persistence/summary-repository.js";
 import type { RepositoryHandle } from "../persistence/repository-handle.js";

@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { indexRepository } from "../indexer/indexer.js";
+import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 
 /** 临时目录造小仓库：新语言的解析规则用独立夹具，不进 frozen fixture 的共享快照。 */

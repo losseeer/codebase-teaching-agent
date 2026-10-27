@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
-import { indexRepository } from "../indexer/indexer.js";
+import { indexRepository } from "../indexer.js";
 import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus, resetSymbolParserForTest } from "@codebase-tutor/analysis";
 
 /**

@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { indexRepository } from "../indexer/indexer.js";
+import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { graphFromData, serializeGraph } from "@codebase-tutor/analysis";
 

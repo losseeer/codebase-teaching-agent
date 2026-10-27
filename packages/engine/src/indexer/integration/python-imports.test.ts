@@ -2,10 +2,10 @@ import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { indexRepository } from "../indexer/indexer.js";
+import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 
-const pyFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/pydemo-repo");
+const pyFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../../test-fixtures/pydemo-repo");
 
 describe("dependency graph — Python 模块解析", () => {
   it("resolves dotted module names to repository files (绝对导入) and treats main.py as an entrypoint", () => {

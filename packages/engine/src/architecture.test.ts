@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 
-const PIPELINES = new Set(["diagram", "exercises", "depgraph", "summarizer", "implementation", "turn", "indexer", "learner", "source"]);
+const PIPELINES = new Set(["diagram", "exercises", "seams", "summarizer", "implementation", "turn", "indexer", "learner", "source"]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

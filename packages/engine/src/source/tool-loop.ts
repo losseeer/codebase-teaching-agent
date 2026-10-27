@@ -7,7 +7,7 @@ import { hash } from "@codebase-tutor/platform";
 import type { McpCallAudit } from "../integrations/clients.js";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
-import { CROSS_REPO_LINK_TOOL } from "../depgraph/seams.js";
+import { CROSS_REPO_LINK_TOOL } from "../seams/seams.js";
 import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
 import { QUERY_FACTS_TOOL } from "../facts/query.js";
 import { READ_SKILL_TOOL } from "../integrations/skills.js";

@@ -2,12 +2,12 @@ import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { indexRepository } from "../indexer/indexer.js";
+import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { classifyFileRoles, fileStructureOf } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
-const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/javademo-repo");
+const javaFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../../test-fixtures/javademo-repo");
 
 /** 临时目录造小仓库：新语言的解析规则用独立夹具，不进 frozen fixture 的共享快照。 */
 async function withRepo<T>(name: string, fileMap: Record<string, string>, run: (dir: string) => T): Promise<T> {
