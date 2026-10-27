@@ -4,7 +4,7 @@ import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "
 import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
-import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
+import type { McpCallAudit } from "@codebase-tutor/domain";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
 import { CROSS_REPO_LINK_TOOL } from "../seams/seams.js";

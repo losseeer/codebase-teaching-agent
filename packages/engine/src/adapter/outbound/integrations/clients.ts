@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { McpCallAudit } from "@codebase-tutor/domain";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { hash } from "@codebase-tutor/platform";
 import { maskSecrets } from "../security/secrets.js";
@@ -51,22 +52,6 @@ interface RawServerEntry {
   type?: unknown;
   url?: unknown;
   headers?: unknown;
-}
-
-/** 一次外部调用的审计形状（`mcp_call` 事件的 payload）。 */
-export interface McpCallAudit {
-  server: string;
-  tool: string;
-  /** 发给 server 的参数：只记字符数与指纹，正文不落盘。 */
-  argsChars: number;
-  argsHash: string;
-  /** 交回模型的字符数（密钥筛与上限裁完之后）。 */
-  resultChars: number;
-  /** 密钥筛隐去了几处。`0` = 扫过零命中，与「没扫」是两个读数。 */
-  masked: number;
-  ok: boolean;
-  ms: number;
-  error?: string;
 }
 
 export interface ExternalSurface {

@@ -15,7 +15,7 @@ import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolP
 import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../adapter/outbound/security/egress-log.js";
 import type { ScopeRef } from "../source/scope-ref.js";
-import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
+import type { McpCallAudit } from "@codebase-tutor/domain";
 import { assembleContext } from "./context-teaching.js";
 import { graphNeighborhood, joinList, mapContextCap, scopeSection, structurePanorama } from "./context-canvas.js";
 import { excerptForAnchor, excerptsWithinBudget } from "./context-excerpt.js";

@@ -6,7 +6,7 @@ import type { LlmUsage } from "./port/llm-provider.js";
 import type { AuditSink } from "./port/audit-sink.js";
 import type { CodeSearchRecord } from "../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../source/tool-loop.js";
-import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
+import type { McpCallAudit } from "@codebase-tutor/domain";
 
 /**
   回合的审计线写法（谁看过什么、调过哪些外部工具）。放在应用层而不是 HTTP 层：
