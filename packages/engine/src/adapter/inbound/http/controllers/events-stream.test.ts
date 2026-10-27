@@ -87,7 +87,7 @@ beforeAll(async () => {
 
   // 必须早于 import server：provider 在构造时就把 fetch 绑成了实例字段
   vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("测试环境不出网"); }));
-  ({ app } = await import("../../server.js"));
+  ({ app } = await import("../../../../server.js"));
   await app.listen({ port: 0, host: "127.0.0.1" });
 });
 

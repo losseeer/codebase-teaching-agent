@@ -7,10 +7,10 @@ import type { ChatThreadMessage } from "@codebase-tutor/contract";
 import type { ImportEstimate, JournalEvent, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
-import { flushLlmLog } from "../../llm/call-log.js";
-import { TutorDatabase } from "../../persistence/database.js";
-import { readJournal } from "../../persistence/journal.js";
-import { readMessages } from "../../persistence/chat-store.js";
+import { flushLlmLog } from "../../../llm/call-log.js";
+import { TutorDatabase } from "../../../persistence/database.js";
+import { readJournal } from "../../../persistence/journal.js";
+import { readMessages } from "../../../persistence/chat-store.js";
 
 /**
   路由级测试的共用夹具。它管四件事：一份行号可预期的临时仓与地址簿、假 provider、
@@ -104,7 +104,7 @@ export function createRouteFixture(): RouteFixture {
     stopInside: undefined as RouteFixture["stopInside"],
     sentTools: [] as { names: string[]; raw: string }[],
     usedThreads: new Set<string>(),
-    echoServerFixture: join(import.meta.dirname, "..", "..", "integrations", "fixtures", "echo-server.mjs")
+    echoServerFixture: join(import.meta.dirname, "..", "..", "..", "integrations", "fixtures", "echo-server.mjs")
   } as RouteFixture;
   let fetchCalls = 0;
 
@@ -198,7 +198,7 @@ export function createRouteFixture(): RouteFixture {
 
     // 必须早于 import server（理由见本文件开头的夹具说明）
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
-    ({ app: fx.app } = await import("../../server.js"));
+    ({ app: fx.app } = await import("../../../server.js"));
   };
 
   fx.teardown = async () => {

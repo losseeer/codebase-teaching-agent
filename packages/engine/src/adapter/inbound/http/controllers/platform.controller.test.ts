@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/domain";
 
-import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-kit.js";
-import { isolationBackend } from "../../sandbox/profile.js";
-import { TutorDatabase } from "../../persistence/database.js";
+import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-test-kit.js";
+import { isolationBackend } from "../../../../sandbox/profile.js";
+import { TutorDatabase } from "../../../../persistence/database.js";
 
 /**
   引擎自己的面：界面动作事件出口的形状守卫、来源闸（不可信 Origin 一行 handler 都不许跑）、

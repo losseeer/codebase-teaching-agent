@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
-import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
-import { defaultMonthlyBudgetUsd } from "../../cost/cost.js";
+import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
+import { defaultMonthlyBudgetUsd } from "../../../../cost/cost.js";
 
 /**
   预算闸门：已达上限时付费分支一律不放行（出题、推荐入口、流程重问各回一句各自的原因），只读路由照旧免费。

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { REPOSITORY_NOT_MOUNTED } from "../../services.js";
-import { createDiagramUseCase, deleteDiagramUseCase, listDiagramsUseCase, readDiagramUseCase, renameDiagramUseCase, restoreDiagramUseCase, saveGeometryUseCase, type DiagramFailure } from "../../application/use-case/diagrams.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { createDiagramUseCase, deleteDiagramUseCase, listDiagramsUseCase, readDiagramUseCase, renameDiagramUseCase, restoreDiagramUseCase, saveGeometryUseCase, type DiagramFailure } from "../../../../application/use-case/diagrams.js";
 
 /**
   画布这组路由的入站翻译：注册在根实例上，所以懒挂载钩子与来源闸照常生效。

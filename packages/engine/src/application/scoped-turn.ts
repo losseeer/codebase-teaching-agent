@@ -23,7 +23,7 @@ import { CHECKPOINT_TTL_MS } from "./turn-checkpoint.js";
 
 /**
   作用域回合的线程上下文三件套：核归属 → 从库里取历史。`threadId` 缺席即「单次提问」（不带历史、不落库）。
-  收的是已经过入参守卫的 threadId：解析原始 body 是传输层（`http/input.ts`）的事，这一层不猜请求体的形状。
+  收的是已经过入参守卫的 threadId：解析原始 body 是传输层（`adapter/inbound/http/dto.ts`）的事，这一层不猜请求体的形状。
 */
 export function scopedThreadTurn(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[] } | undefined {
   if (!threadId) return { threadId: undefined, history: [] };

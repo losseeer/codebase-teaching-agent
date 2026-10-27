@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Diagram, DiagramBody, DiagramSummary } from "@codebase-tutor/domain";
 
-import { createRouteFixture, OK_REPLY, type RouteFixture } from "./route-test-kit.js";
-import { TutorDatabase } from "../../persistence/database.js";
+import { createRouteFixture, OK_REPLY, type RouteFixture } from "../controller-test-kit.js";
+import { TutorDatabase } from "../../../../persistence/database.js";
 import { buildDiagram, diagramId } from "@codebase-tutor/domain";
-import { applyStructure } from "../../persistence/diagrams.js";
+import { applyStructure } from "../../../../persistence/diagrams.js";
 
 /**
   画图工作区：图库的建/改名/删/恢复、几何只写位置（不存版本、不广播、不审计）、结构一律归 agent 的 `set_diagram`。

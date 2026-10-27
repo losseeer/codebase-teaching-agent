@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createRouteFixture, type RouteFixture } from "./route-test-kit.js";
+import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
 
 /**
   练习路由这一层的闸门读数：题型拒收。

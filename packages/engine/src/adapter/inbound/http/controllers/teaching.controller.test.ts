@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createRouteFixture, MAIN_FILE, TAIL, sseEvents, deltasOf, doneEvent, type RouteFixture } from "./route-test-kit.js";
+import { createRouteFixture, MAIN_FILE, TAIL, sseEvents, deltasOf, doneEvent, type RouteFixture } from "../controller-test-kit.js";
 
 /**
   教学作用域（SSE）的回合收尾：会话即线程，回合正文/用量/设置快照都落库，中止那一路按「作废」收尾。

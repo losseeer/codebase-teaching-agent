@@ -1,6 +1,6 @@
 /**
   HTTP 装配与开机：Fastify 实例、CORS、三道请求钩子（trace / 来源闸 / 懒挂载）、路由注册、优雅关停。
-  正文都不在这里——路由在 `http/routes/`，单例在 `services.ts`，用例在 `application/`。
+  正文都不在这里——路由在 `adapter/inbound/http/controllers/`，单例在 `services.ts`，用例在 `application/`。
  */
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -17,14 +17,14 @@ import { flushEngineLog, traceEngine } from "@codebase-tutor/platform";
 import { flushLlmLog } from "./llm/call-log.js";
 import { closeExternalTools } from "./integrations/clients.js";
 import { installBundledSkills } from "./integrations/skills.js";
-import { registerPlatformRoutes } from "./http/routes/platform.js";
-import { registerSettingsRoutes } from "./http/routes/settings.js";
-import { registerRepositoryReadRoutes } from "./http/routes/repository-read.js";
-import { registerDiagramRoutes } from "./http/routes/diagrams.js";
-import { registerExerciseRoutes } from "./http/routes/exercises.js";
-import { registerChatRoutes } from "./http/routes/chat.js";
-import { registerTeachingRoutes } from "./http/routes/teaching.js";
-import { registerThreadRoutes } from "./http/routes/threads.js";
+import { registerPlatformRoutes } from "./adapter/inbound/http/controllers/platform.controller.js";
+import { registerSettingsRoutes } from "./adapter/inbound/http/controllers/settings.controller.js";
+import { registerRepositoryReadRoutes } from "./adapter/inbound/http/controllers/repository-read.controller.js";
+import { registerDiagramRoutes } from "./adapter/inbound/http/controllers/diagrams.controller.js";
+import { registerExerciseRoutes } from "./adapter/inbound/http/controllers/exercises.controller.js";
+import { registerChatRoutes } from "./adapter/inbound/http/controllers/chat.controller.js";
+import { registerTeachingRoutes } from "./adapter/inbound/http/controllers/teaching.controller.js";
+import { registerThreadRoutes } from "./adapter/inbound/http/controllers/threads.controller.js";
 
 // .env 先加载：`buildLlmRuntimeProvider` 在运行期随时可能被调用，它要能在设置缺项时读到 TUTOR_LLM_* 那套回落值
 loadDotEnv();
@@ -95,7 +95,7 @@ app.addHook("preHandler", async (request, reply) => {
 importer.on("event", broadcast);
 
 /**
-  路由按面分组住在 `http/routes/`，这里只做注册（顺序不影响匹配——各组路径互不重叠）。
+  路由按面分组住在 `adapter/inbound/http/controllers/`，这里只做注册（顺序不影响匹配——各组路径互不重叠）。
   分组判据之一是会不会花钱：`repository-read` 一组一行模型请求都不发，付费的几组把闸门口径写在各自文件头。
   */
 registerPlatformRoutes(app);

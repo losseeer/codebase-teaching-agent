@@ -4,7 +4,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   领域事件总线：没有请求边界的推送（导入进度、产物更新、画布改动）。生产者不是 HTTP，
-  传输层反过来订阅这里（`http/sse.ts` 注册 sink），方向只有一条：http → events。
+  传输层反过来订阅这里（`adapter/inbound/http/stream.ts` 注册 sink），方向只有一条：入站层 → events。
   ⚠️ 帧不按归属过滤（没有「谁的名单」这个东西）：载荷含目标仓绝对路径，
   这条长连接的可见面等于本机可见面。
   */

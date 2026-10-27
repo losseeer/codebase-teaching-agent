@@ -1,10 +1,10 @@
 import type { TutorSettings } from "@codebase-tutor/domain";
 
-import { createTeachingSession, prepareTeachingTurn, readTeachingSession, runTeachingTurn } from "../../application/use-case/teaching.js";
-import type { TeachingFailure } from "../../application/use-case/teaching.js";
-import { budgetGate } from "../../application/paid-turn.js";
-import { scopedChatProviderOr422 } from "../gate.js";
-import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
+import { createTeachingSession, prepareTeachingTurn, readTeachingSession, runTeachingTurn } from "../../../../application/use-case/teaching.js";
+import type { TeachingFailure } from "../../../../application/use-case/teaching.js";
+import { budgetGate } from "../../../../application/paid-turn.js";
+import { scopedChatProviderOr422 } from "../budget-gate.js";
+import { beginScopedStream, failScopedTurn, replayTypewriter } from "../stream.js";
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 

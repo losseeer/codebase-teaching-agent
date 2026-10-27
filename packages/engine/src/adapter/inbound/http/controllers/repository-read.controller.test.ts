@@ -1,7 +1,7 @@
 import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createRouteFixture, MAIN_FILE, type RouteFixture } from "./route-test-kit.js";
+import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-test-kit.js";
 
 /**
   只读产物那组路由的边界：`GET /source` 只放已索引的文件（索引白名单挡住密钥载体），

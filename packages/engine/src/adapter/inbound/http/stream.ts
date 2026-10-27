@@ -1,10 +1,10 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ScopedStreamFrame, ServerEvent, TurnScene } from "@codebase-tutor/contract";
 
-import { Journal } from "../persistence/journal.js";
-import { subscribeEvents, unsubscribeEvents } from "../events.js";
-import { beginTurn, type TurnHandle } from "../application/turn-registry.js";
-import { recordUnfinishedTurn, toolLoopAuditsOf } from "../application/turn-audit.js";
+import { Journal } from "../../../persistence/journal.js";
+import { subscribeEvents, unsubscribeEvents } from "../../../events.js";
+import { beginTurn, type TurnHandle } from "../../../application/turn-registry.js";
+import { recordUnfinishedTurn, toolLoopAuditsOf } from "../../../application/turn-audit.js";
 
 /**
   SSE 传输层：帧怎么写、连接怎么开、心跳与中止怎么收尾。

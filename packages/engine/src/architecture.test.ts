@@ -61,17 +61,17 @@ describe("分层守卫", () => {
     expect(list(allEdges.filter((edge) => short(edge.to) === "server.ts"))).toEqual([]);
   });
 
-  it("只有 http 层与 server.ts 能碰 fastify", () => {
-    const offenders = files.filter((file) => !short(file).startsWith("http/") && short(file) !== "server.ts" && codeOnly(readFileSync(file, "utf8")).includes("from \"fastify\"")).map(short);
+  it("只有入站适配器与 server.ts 能碰 fastify", () => {
+    const offenders = files.filter((file) => !short(file).startsWith("adapter/inbound/") && short(file) !== "server.ts" && codeOnly(readFileSync(file, "utf8")).includes("from \"fastify\"")).map(short);
     expect(offenders, `这些地方不该出现 fastify：${offenders.join(", ")}`).toEqual([]);
   });
 
-  it("应用层不指向传输层，也不指向 HTTP 装配", () => {
-    expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("http/") || short(edge.to) === "server.ts")))).toEqual([]);
+  it("应用层不指向入站层，也不指向 HTTP 装配", () => {
+    expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts")))).toEqual([]);
   });
 
-  it("组合根 services.ts 不指向传输层", () => {
-    expect(list(allEdges.filter((edge) => short(edge.from) === "services.ts" && short(edge.to).startsWith("http/")))).toEqual([]);
+  it("组合根 services.ts 不指向入站层", () => {
+    expect(list(allEdges.filter((edge) => short(edge.from) === "services.ts" && short(edge.to).startsWith("adapter/")))).toEqual([]);
   });
 
   it("分析管线不指向传输层，也不指向应用层——只有 application/port 例外（那是内层的接口）", () => {
@@ -81,7 +81,7 @@ describe("分层守卫", () => {
       // 端口是管线自己声明的需求：零依赖、只有接口，引它不等于「管线认识应用层」。
       // 口子只开到这个目录为止，多引一个应用层文件照样红。
       if (to.startsWith("application/port/")) return false;
-      return to.startsWith("http/") || to.startsWith("application/") || to === "services.ts" || to === "server.ts";
+      return to.startsWith("adapter/inbound/") || to.startsWith("application/") || to === "services.ts" || to === "server.ts";
     });
     expect(list(offenders)).toEqual([]);
   });

@@ -1,5 +1,5 @@
-import { REPOSITORY_NOT_MOUNTED } from "../../services.js";
-import { createThreadUseCase, deleteThreadUseCase, listScopeThreads, readThreadMessages, renameThreadUseCase, type ThreadsFailure } from "../../application/use-case/threads.js";
+import { REPOSITORY_NOT_MOUNTED } from "../../../../services.js";
+import { createThreadUseCase, deleteThreadUseCase, listScopeThreads, readThreadMessages, renameThreadUseCase, type ThreadsFailure } from "../../../../application/use-case/threads.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TurnLoopState } from "../source/tool-loop.js";
 import { withDatabase } from "../persistence/database.js";
-import { CHECKPOINT_MAX_BYTES, turnCheckpointChannel } from "../application/turn-checkpoint.js";
+import { CHECKPOINT_MAX_BYTES, turnCheckpointChannel } from "./turn-checkpoint.js";
 
 /**
   回合检查点通道的口径（LangGraph 的 checkpoint 语义 + 三条保留规则）。

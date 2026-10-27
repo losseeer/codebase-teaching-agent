@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createRouteFixture, MAIN_FILE, OK_REPLY, type RouteFixture } from "./route-test-kit.js";
+import { createRouteFixture, MAIN_FILE, OK_REPLY, type RouteFixture } from "../controller-test-kit.js";
 
 /**
   读侧不发模型请求：路由树里每一条 GET 都要用真参数走一遍，且假 provider 一次都不被调用。

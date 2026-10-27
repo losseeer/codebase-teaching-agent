@@ -1,10 +1,10 @@
 import { validateStyle } from "@codebase-tutor/domain";
 
-import { type ChatFailure, loadPracticeExercise, prepareMapChat, preparePracticeChat, runMapChat, runPracticeChat, stopTurn } from "../../application/use-case/chat.js";
-import { sanitizeAskId, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../../http/input.js";
-import { scopedChatProviderOr422 } from "../gate.js";
-import { beginScopedStream, failScopedTurn, replayTypewriter } from "../../http/sse.js";
-import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../services.js";
+import { type ChatFailure, loadPracticeExercise, prepareMapChat, preparePracticeChat, runMapChat, runPracticeChat, stopTurn } from "../../../../application/use-case/chat.js";
+import { sanitizeAskId, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../dto.js";
+import { scopedChatProviderOr422 } from "../budget-gate.js";
+import { beginScopedStream, failScopedTurn, replayTypewriter } from "../stream.js";
+import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../../../services.js";
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 

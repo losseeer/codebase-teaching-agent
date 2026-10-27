@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
-import { createRouteFixture, MAIN_FILE, OK_REPLY, TAIL, sseEvents, deltasOf, doneEvent, waitFor, type RouteFixture } from "./route-test-kit.js";
-import { readMessages } from "../../persistence/chat-store.js";
-import { TutorDatabase } from "../../persistence/database.js";
+import { createRouteFixture, MAIN_FILE, OK_REPLY, TAIL, sseEvents, deltasOf, doneEvent, waitFor, type RouteFixture } from "../controller-test-kit.js";
+import { readMessages } from "../../../../persistence/chat-store.js";
+import { TutorDatabase } from "../../../../persistence/database.js";
 
 /**
   宏观设计 / 练习答疑两条作用域的回合收尾，以及喂进回合的外部能力面、跨仓工具面与出网清单。
