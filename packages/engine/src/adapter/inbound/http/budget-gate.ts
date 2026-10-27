@@ -3,7 +3,7 @@
 import type { FastifyReply } from "fastify";
 import type { LlmProvider } from "../../../application/port/llm-provider.js";
 import type { RepositoryHandle } from "../../outbound/persistence/repository-handle.js";
-import { budgetGate } from "../../../application/paid-turn.js";
+import { budgetGate } from "../../../application/orchestration/paid-turn.js";
 import { teachingLlm } from "../../../infrastructure/composition-root.js";
 
 export function scopedChatProviderOr422(reply: FastifyReply, handle: RepositoryHandle, gate?: { monthlyBudgetUsd: number; degraded: boolean }): LlmProvider | undefined {

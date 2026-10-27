@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 /**
   回合检查点（表 `turn_checkpoint`，一个 super-step 一行）：进程被杀或端点报错后，同一线程的同一问题
   从这里接上，已经读过的源码不必再付一遍。
-  这里是这张表唯一的读写口；「什么算同一个问题」「答了就算关闭」这些判据住在 `application/turn-checkpoint.ts`，
+  这里是这张表唯一的读写口；「什么算同一个问题」「答了就算关闭」这些判据住在 `application/runtime/turn-checkpoint.ts`，
   它按线程与场景开合这条通道，不直接落 SQL。
 */
 export class CheckpointRepository {

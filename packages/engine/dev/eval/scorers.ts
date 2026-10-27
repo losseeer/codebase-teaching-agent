@@ -1,4 +1,4 @@
-import { checkTurnInvariants, type InvariantId, type TeachTurn } from "../../src/application/turn-invariants.js";
+import { checkTurnInvariants, type InvariantId, type TeachTurn } from "../../src/application/runtime/turn-invariants.js";
 
 /**
   离线评测的确定性判分器——不发起任何 LLM 调用，判「产出的形态与可定位性」：

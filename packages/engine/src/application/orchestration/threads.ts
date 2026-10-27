@@ -1,6 +1,6 @@
 import type { ChatThread } from "@codebase-tutor/contract";
 
-import { importer } from "../infrastructure/composition-root.js";
+import { importer } from "../../infrastructure/composition-root.js";
 
 /** 会话线程的归属解析：把线程 id 解析到所属仓的库路径，与 HTTP 无关。 */
 

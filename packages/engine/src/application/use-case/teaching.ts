@@ -1,12 +1,12 @@
 import type { FadedState, TutorMessage, TutorSettings, TutorSession } from "@codebase-tutor/domain";
 import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/domain";
 
-import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../paid-turn.js";
-import { externalAndSkills, recheckTurn } from "../scoped-turn.js";
-import { turnCheckpointChannel } from "../turn-checkpoint.js";
-import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../turn-audit.js";
-import { persistTeachingTurn, resolveTeachingState } from "../teaching-turn.js";
-import { threadJournalPayload } from "../threads.js";
+import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
+import { externalAndSkills, recheckTurn } from "../orchestration/scoped-turn.js";
+import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
+import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../runtime/turn-audit.js";
+import { persistTeachingTurn, resolveTeachingState } from "../orchestration/teaching-turn.js";
+import { threadJournalPayload } from "../orchestration/threads.js";
 import { summarizeCost } from "../../cost/cost.js";
 import { assembleContext } from "../../turn/context-teaching.js";
 import { createSession } from "../../turn/session.js";

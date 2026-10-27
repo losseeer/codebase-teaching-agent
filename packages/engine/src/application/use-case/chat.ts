@@ -5,10 +5,10 @@ import type { AskFacet } from "../../source/ask-user.js";
 import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
 import { factsToolFor, setDiagramToolFor } from "../../infrastructure/canvas-tools.js";
-import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../paid-turn.js";
-import { turnCheckpointChannel } from "../turn-checkpoint.js";
-import { auditsFromResult, recordUnfinishedTurn } from "../turn-audit.js";
-import { abortTurn } from "../turn-registry.js";
+import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
+import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
+import { auditsFromResult, recordUnfinishedTurn } from "../runtime/turn-audit.js";
+import { abortTurn } from "../runtime/turn-registry.js";
 import {
   consecutiveAskedTurns,
   externalAndSkills,
@@ -20,7 +20,7 @@ import {
   settleStaleAsks,
   skillsForTurn,
   threadScopedHistory
-} from "../scoped-turn.js";
+} from "../orchestration/scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
@@ -64,7 +64,7 @@ export interface ScopedTurnStream {
 
 /** 「停止生成」的带外入口（三作用域共用）：GUI 点停止时先打这里，再断开自己的 SSE 连接。
     单独一条而不是「连接断了就中止」：客户端消失分不出是用户要停还是网络波动 / 刷新页面，
-    后者引擎必须把这一轮算完并落库（见 application/turn-registry.ts）。
+    后者引擎必须把这一轮算完并落库（见 application/runtime/turn-registry.ts）。
     未命中 = 这一轮已经结束或本来就没登记，回 404，GUI 照常收尾、不当成错误。 */
 export function stopTurn(turnId: unknown): ChatResult<{ scene: TurnScene }> {
   const stopped = abortTurn(turnId);

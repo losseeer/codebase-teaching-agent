@@ -13,7 +13,7 @@ import { loadSymbolParser } from "@codebase-tutor/analysis";
 import { buildSearchCorpus, executeSearchCode } from "../../src/source/search-code.js";
 import { segmentForLookup } from "@codebase-tutor/platform";
 import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
-import type { TeachTurn } from "../../src/application/turn-invariants.js";
+import type { TeachTurn } from "../../src/application/runtime/turn-invariants.js";
 import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";
 
 /**

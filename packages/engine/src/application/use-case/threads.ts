@@ -1,6 +1,6 @@
 import { isChatScope, type ChatThread, type ChatThreadMessage } from "@codebase-tutor/contract";
 import { importer, repositoryOr404 } from "../../infrastructure/composition-root.js";
-import { locateThread, threadJournalPayload } from "../threads.js";
+import { locateThread, threadJournalPayload } from "../orchestration/threads.js";
 
 /**
   会话线程的用例：清单、新建、读正文、改名、软删。

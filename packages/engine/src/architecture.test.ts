@@ -73,6 +73,14 @@ describe("分层守卫", () => {
     expect(offenders, `这些地方不该出现 fastify：${offenders.join(", ")}`).toEqual([]);
   });
 
+  /**
+    应用层里的三个格子：`use-case/`（一个入口面一份用例）、`port/`（内层声明的接口）、
+    以及这一片刚落地的两份回合职责——`orchestration/` 管「什么进模型、模型回来往哪落」
+    （`scoped-turn` / `paid-turn` / `teaching-turn` / `threads`），`runtime/` 管回合的在途机制
+    （登记与停止 `turn-registry`、上下文压缩 `turn-checkpoint`、出境复检 `turn-invariants`、记账 `turn-audit`）。
+    分档判据是「换一个入口面还要不要重写一遍」：要重写的流程住 orchestration，与入口无关的机制住 runtime。
+    名字后缀也照这条读：`X-turn.ts` = 某一类回合的流程，`turn-X.ts` = 回合身上的一个机制。
+    */
   it("应用层不指向入站层，也不指向 HTTP 装配", () => {
     expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts")))).toEqual([]);
   });

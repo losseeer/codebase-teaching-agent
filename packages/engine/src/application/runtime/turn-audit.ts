@@ -1,11 +1,11 @@
 import type { TurnScene } from "@codebase-tutor/contract";
 
-import { importer } from "../infrastructure/composition-root.js";
-import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
-import type { LlmUsage } from "./port/llm-provider.js";
-import type { AuditSink } from "./port/audit-sink.js";
-import type { CodeSearchRecord } from "../source/search-code.js";
-import { toolLoopAuditsOf, type ToolLoopAudits } from "../source/tool-loop.js";
+import { importer } from "../../infrastructure/composition-root.js";
+import { dedupeFileReads, type FileReadRecord } from "../../source/read-file.js";
+import type { LlmUsage } from "../port/llm-provider.js";
+import type { AuditSink } from "../port/audit-sink.js";
+import type { CodeSearchRecord } from "../../source/search-code.js";
+import { toolLoopAuditsOf, type ToolLoopAudits } from "../../source/tool-loop.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 
 /**

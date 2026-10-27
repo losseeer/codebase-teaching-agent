@@ -1,9 +1,9 @@
 import type { TutorMessage, TutorSession } from "@codebase-tutor/domain";
 import { validateSettings } from "@codebase-tutor/domain";
 
-import { importer } from "../infrastructure/composition-root.js";
+import { importer } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
-import type { ChatStore, NewMessage, TeachingThreadState } from "./port/chat-store.js";
+import type { ChatStore, NewMessage, TeachingThreadState } from "../port/chat-store.js";
 
 /**
   「接着聊」的读写口径：会话线程 ↔ 内存里的 `TutorSession`，以及回合正文与状态快照的落库。

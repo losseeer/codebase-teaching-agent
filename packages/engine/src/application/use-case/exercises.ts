@@ -1,8 +1,8 @@
 import type { Exercise, ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
-import { budgetDegraded } from "../paid-turn.js";
+import { budgetDegraded } from "../orchestration/paid-turn.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
-import { skillsForTurn } from "../scoped-turn.js";
+import { skillsForTurn } from "../orchestration/scoped-turn.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
 
 /**

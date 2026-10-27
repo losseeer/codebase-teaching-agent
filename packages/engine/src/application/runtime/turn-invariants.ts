@@ -1,6 +1,6 @@
 import { styleBand } from "@codebase-tutor/domain";
 
-import { sourceExtensions } from "../indexer/indexer.js";
+import { sourceExtensions } from "../../indexer/indexer.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkTurnInvariants, type TeachTurn } from "../../src/application/turn-invariants.js";
+import { checkTurnInvariants, type TeachTurn } from "../../src/application/runtime/turn-invariants.js";
 import { scoreSearchArm, scoreTeachInvariants } from "./scorers.js";
 
 /**

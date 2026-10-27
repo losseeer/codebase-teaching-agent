@@ -1,20 +1,20 @@
 import type { ChatScope } from "@codebase-tutor/contract";
 
-import { externalToolSurface } from "../adapter/outbound/integrations/clients.js";
-import { listSkills, readSkill, skillsBriefing } from "../adapter/outbound/integrations/skills.js";
-import { checkTurnInvariants, invariantTailNotice, screenReply } from "./turn-invariants.js";
-import { dedupeFileReads } from "../source/read-file.js";
-import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
+import { externalToolSurface } from "../../adapter/outbound/integrations/clients.js";
+import { listSkills, readSkill, skillsBriefing } from "../../adapter/outbound/integrations/skills.js";
+import { checkTurnInvariants, invariantTailNotice, screenReply } from "../runtime/turn-invariants.js";
+import { dedupeFileReads } from "../../source/read-file.js";
+import type { ExternalToolContext, SkillsToolContext } from "../../source/tool-loop.js";
 import { traceEngine } from "@codebase-tutor/platform";
-import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
-import type { LlmProvider } from "./port/llm-provider.js";
+import type { ScopedChatResult, ScopedChatTurn } from "../../turn/run-turn.js";
+import type { LlmProvider } from "../port/llm-provider.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
-import { screenNotice } from "./turn-invariants.js";
-import type { ImportedRepository } from "../importer/importer.js";
-import type { AuditSink } from "./port/audit-sink.js";
-import type { ChatStore } from "./port/chat-store.js";
-import { mcpCallPayload } from "./turn-audit.js";
-import { CHECKPOINT_TTL_MS } from "./turn-checkpoint.js";
+import { screenNotice } from "../runtime/turn-invariants.js";
+import type { ImportedRepository } from "../../importer/importer.js";
+import type { AuditSink } from "../port/audit-sink.js";
+import type { ChatStore } from "../port/chat-store.js";
+import { mcpCallPayload } from "../runtime/turn-audit.js";
+import { CHECKPOINT_TTL_MS } from "../runtime/turn-checkpoint.js";
 
 /**
   一次作用域回合的收尾：线程上下文取数、正文落库、运行期不变量复检、审计线记账。
