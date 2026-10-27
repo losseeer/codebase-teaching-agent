@@ -173,6 +173,11 @@ export function diagramStoreFor(database: TutorDatabase, repositoryId: string) {
     read: (diagramId: string) => readDiagram(database, repositoryId, diagramId),
     uniqueName: (wanted: string) => uniqueDiagramName(database, repositoryId, wanted),
     insert: (diagram: Diagram) => insertDrawnDiagram(database, diagram),
-    applyStructure: (diagram: Diagram, body: DiagramBody, note: string) => applyStructure(database, diagram, body, note)
+    applyStructure: (diagram: Diagram, body: DiagramBody, note: string) => applyStructure(database, diagram, body, note),
+    createBlank: (name?: string) => createBlankDiagram(database, repositoryId, name),
+    rename: (diagram: Diagram, name: string) => renameDiagram(database, diagram, name),
+    saveGeometry: (diagram: Diagram, positions: readonly { id: string; x: number; y: number }[]) => saveGeometry(database, diagram, [...positions]),
+    restore: (diagram: Diagram, index: number) => restoreVersion(database, diagram, index),
+    delete: (diagram: Diagram) => deleteDiagram(database, diagram)
   };
 }

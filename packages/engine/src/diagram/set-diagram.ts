@@ -40,7 +40,7 @@ export interface DiagramWriteOutcome {
 }
 
 export interface DiagramWriteContext {
-  /** 这一仓的图库存取口（端口，不是库句柄）：结构写入口要的只是那五格。 */
+  /** 这一仓的图库存取口（端口，不是库句柄）：结构写入口用其中五格，整条画布用例面要十格。 */
   store: DiagramStore;
   repositoryId: string;
   index: RepositoryIndex;
