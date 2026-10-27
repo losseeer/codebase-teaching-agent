@@ -141,3 +141,57 @@ export interface DiagramEditRequest {
   diagram?: string;
   edit: DiagramEdit;
 }
+
+/**
+  一张图的模型规则：上限、名字收口、id 形状、空白形状、版本时间戳的显示档位，与「建一张图」。
+  这一层不碰存储也不碰 node 内置——发号要的随机数由调用方给（`platform` 的 `id()`），
+  所以 `diagramId` 只是一条纯映射。存储侧（`persistence/diagrams.ts`）与画图工具共用这一份，
+  规则在两处定义过一次，就会出现「一处收口了上限、另一处还在按老数字判」。
+*/
+
+/** 一版快照的条数上限：够用户回头看不让图负载无限膨胀。 */
+export const DIAGRAM_VERSION_LIMIT = 20;
+
+/** 图名上限：写侧收口，读侧不必每处再截。 */
+export const DIAGRAM_NAME_LIMIT = 40;
+
+/** 单张图的图元上限：超了让 agent 拆成几张图，图组不该膨胀成全仓清单。 */
+export const DIAGRAM_NODE_LIMIT = 120;
+export const DIAGRAM_EDGE_LIMIT = 240;
+
+/** 图的 id：`dg_` + 16 位十六进制（随机数由调用方发，这里只做形状收口）。 */
+export const diagramId = (uuid: string): string => `dg_${uuid.replace(/-/g, "").slice(0, 16)}`;
+
+/** 名字收口：去空白、压空格、限长；空串返回 ""，默认值由调用方决定（这里不猜）。 */
+export function normalizeDiagramName(raw: string | undefined): string {
+  return (raw ?? "").trim().replace(/\s+/g, " ").slice(0, DIAGRAM_NAME_LIMIT);
+}
+
+/** 一张空白图的形状：三个集合都在，读侧不必再判 undefined。 */
+export const emptyDiagramBody = (): DiagramBody => ({ groups: [], nodes: [], edges: [] });
+
+/** 版本时间戳给人看的那一档（MM-DD HH:mm）：ISO 串进库，界面与 note 里都用这一档。 */
+export function versionStamp(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return at;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+  建一张图（不落盘）：用户点「+」与 agent 一次画完整张图共用这一个构造点。
+  `id` 由调用方发——这一层没有随机数，也不该有。
+*/
+export function buildDiagram(repositoryId: string, input: { id: string; name?: string; source: DiagramSource; body?: DiagramBody }): Diagram {
+  const now = new Date().toISOString();
+  return {
+    repositoryId,
+    id: input.id,
+    name: normalizeDiagramName(input.name) || "未命名图",
+    source: input.source,
+    createdAt: now,
+    updatedAt: now,
+    versions: [],
+    body: input.body ?? emptyDiagramBody()
+  };
+}

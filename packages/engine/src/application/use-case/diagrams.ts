@@ -1,7 +1,8 @@
 import { broadcast } from "../../events.js";
 import { diagramFilesByNode, diagramWarnings } from "../../diagram/set-diagram.js";
 import { diagramWriteContextFor } from "../canvas-tools.js";
-import { createBlankDiagram, deleteDiagram, listDiagrams, normalizeDiagramName, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../persistence/diagrams.js";
+import { normalizeDiagramName } from "@codebase-tutor/domain";
+import { createBlankDiagram, deleteDiagram, listDiagrams, readDiagram, renameDiagram, restoreVersion, saveGeometry } from "../../persistence/diagrams.js";
 /** 几何落盘的一项：节点 id 与它的新位置。*/
 export type DiagramPosition = { id: string; x: number; y: number };
 import { Journal } from "../../persistence/journal.js";

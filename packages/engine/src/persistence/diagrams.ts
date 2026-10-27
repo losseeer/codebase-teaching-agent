@@ -1,48 +1,24 @@
-import { randomUUID } from "node:crypto";
-import type { Diagram, DiagramBody, DiagramSource, DiagramSummary, DiagramVersion } from "@codebase-tutor/domain";
+import type { Diagram, DiagramBody, DiagramSummary, DiagramVersion } from "@codebase-tutor/domain";
+import { buildDiagram, DIAGRAM_VERSION_LIMIT, diagramId, normalizeDiagramName, versionStamp } from "@codebase-tutor/domain";
+import { id } from "@codebase-tutor/platform";
 
 import type { TutorDatabase } from "./database.js";
 
 /**
   画布上的一张图的唯一读写口（表在 persistence/database-schema.ts 的 diagram，一行 = 一张图）。
+  一张图的**规则**不住在这里：上限、图名收口、id 形状、建图与版本时间戳的显示档位都在
+  `@codebase-tutor/domain` 的 diagram.ts——存储侧与画图工具都从那一处取，两边各写一份就会出现
+  「一处收口了上限、另一处还按老数字判」。这里只负责行与版本的读写。
+
   两条写入路径权限不一样，所以分成两个函数：
 
   - saveGeometry：几何。用户自己拖出来的位置，不存版本、不写审计、不广播——位置不承载对错，进记录线只会淹掉真信号；
   - applyStructure：结构。加删节点、连线、分组、改名字，只有 agent 的 set_diagram 走这里，每次都自动存一版。
 
-  版本策略：versions 旧→新，上限 DIAGRAM_VERSION_LIMIT（超了丢最旧的一版）；恢复只追加、不截断历史（判据见 restoreVersion）。
+  版本策略：versions 旧→新，超过 `DIAGRAM_VERSION_LIMIT` 就丢最旧的一版；恢复只追加、不截断历史（判据见 restoreVersion）。
 */
 
-/** 一版快照的条数上限：够用户回头看不让图负载无限膨胀。 */
-export const DIAGRAM_VERSION_LIMIT = 20;
-
-/** 图名上限：写侧收口，读侧不必每处再截。 */
-export const DIAGRAM_NAME_LIMIT = 40;
-
-/** 单张图的图元上限：超了让 agent 拆成几张图，图组不该膨胀成全仓清单。 */
-export const DIAGRAM_NODE_LIMIT = 120;
-export const DIAGRAM_EDGE_LIMIT = 240;
-
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-
-export const emptyDiagramBody = (): DiagramBody => ({ groups: [], nodes: [], edges: [] });
-
-/** 名字收口：去空白、压空格、限长；空串返回 ""，默认值由调用方决定（这里不猜）。 */
-export function normalizeDiagramName(raw: string | undefined): string {
-  return (raw ?? "").trim().replace(/\s+/g, " ").slice(0, DIAGRAM_NAME_LIMIT);
-}
-
-export function newDiagramId(): string {
-  return `dg_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-}
-
-/** 版本时间戳给人看的那一档（MM-DD HH:mm）：ISO 串进库，界面与 note 里都用这一档。 */
-export function versionStamp(at: string): string {
-  const date = new Date(at);
-  if (Number.isNaN(date.getTime())) return at;
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 interface ParsedRow { body: DiagramBody; versions: DiagramVersion[] }
 
@@ -105,24 +81,9 @@ export function listDiagrams(database: TutorDatabase, repositoryId: string): Dia
   return out;
 }
 
-/** 建一张图（不落盘）：createBlankDiagram 与 agent 一次画完整张图共用这一个构造点。 */
-export function buildDiagram(repositoryId: string, input: { name?: string; source: DiagramSource; body?: DiagramBody; id?: string }): Diagram {
-  const now = new Date().toISOString();
-  return {
-    repositoryId,
-    id: input.id ?? newDiagramId(),
-    name: normalizeDiagramName(input.name) || "未命名图",
-    source: input.source,
-    createdAt: now,
-    updatedAt: now,
-    versions: [],
-    body: input.body ?? emptyDiagramBody()
-  };
-}
-
 /** 新建一张图并落盘（用户点「+」）。空白图不存第一版：它还没有结构可回。 */
 export function createBlankDiagram(database: TutorDatabase, repositoryId: string, name?: string): Diagram {
-  const diagram = buildDiagram(repositoryId, { name: uniqueDiagramName(database, repositoryId, normalizeDiagramName(name) || "未命名图"), source: "me" });
+  const diagram = buildDiagram(repositoryId, { id: diagramId(id()), name: uniqueDiagramName(database, repositoryId, normalizeDiagramName(name) || "未命名图"), source: "me" });
   put(database, diagram);
   return diagram;
 }

@@ -11,8 +11,9 @@ import type {
   RepositoryIndex,
   SymbolInfo
 } from "@codebase-tutor/domain";
-
-import { applyStructure, buildDiagram, DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, insertDrawnDiagram, listDiagrams, normalizeDiagramName, readDiagram, uniqueDiagramName, versionStamp } from "../persistence/diagrams.js";
+import { DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, buildDiagram, diagramId, normalizeDiagramName, versionStamp } from "@codebase-tutor/domain";
+import { id } from "@codebase-tutor/platform";
+import { applyStructure, insertDrawnDiagram, listDiagrams, readDiagram, uniqueDiagramName } from "../persistence/diagrams.js";
 import type { TutorDatabase } from "../persistence/database.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsPairChecker } from "./facts-verify.js";
@@ -281,7 +282,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const wanted = normalizeDiagramName(edit.name) || "未命名图";
-    const diagram = buildDiagram(context.repositoryId, { name: uniqueDiagramName(context.database, context.repositoryId, wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
+    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: uniqueDiagramName(context.database, context.repositoryId, wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
     const saved = insertDrawnDiagram(context.database, diagram);
     context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
     context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });

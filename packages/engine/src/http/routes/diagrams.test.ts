@@ -3,7 +3,8 @@ import type { Diagram, DiagramBody, DiagramSummary } from "@codebase-tutor/domai
 
 import { createRouteFixture, OK_REPLY, type RouteFixture } from "./route-test-kit.js";
 import { TutorDatabase } from "../../persistence/database.js";
-import { applyStructure, buildDiagram } from "../../persistence/diagrams.js";
+import { buildDiagram, diagramId } from "@codebase-tutor/domain";
+import { applyStructure } from "../../persistence/diagrams.js";
 
 /**
   画图工作区：图库的建/改名/删/恢复、几何只写位置（不存版本、不广播、不审计）、结构一律归 agent 的 `set_diagram`。
@@ -27,10 +28,12 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   });
 
   /** 从存储层种一张图（带第一版）：结构与名字都由 fixture 定，路由只负责被读。 */
+  let seeded = 0;
   function seed(name: string, body: DiagramBody = fixtureBody()): Diagram {
     const database = new TutorDatabase(fx.repoDir);
     try {
-      const draft = buildDiagram(fx.repositoryId, { name, source: "agent", body });
+      // id 由调用方发（domain 的 buildDiagram 不要随机数）：这里按种图次序编号，读失败信息时也对得上
+      const draft = buildDiagram(fx.repositoryId, { id: diagramId(`route-fixture-${(seeded += 1)}`), name, source: "agent", body });
       return applyStructure(database, draft, draft.body, "fixture 初版");
     } finally {
       database.close();

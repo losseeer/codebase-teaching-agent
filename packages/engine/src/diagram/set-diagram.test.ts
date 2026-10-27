@@ -5,7 +5,8 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { TutorDatabase } from "../persistence/database.js";
-import { applyStructure, buildDiagram, DIAGRAM_VERSION_LIMIT, listDiagrams, readDiagram, restoreVersion } from "../persistence/diagrams.js";
+import { buildDiagram, DIAGRAM_VERSION_LIMIT, diagramId } from "@codebase-tutor/domain";
+import { applyStructure, listDiagrams, readDiagram, restoreVersion } from "../persistence/diagrams.js";
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
 
 /**
@@ -309,7 +310,7 @@ describe("版本历史：存版有上限，恢复只追加", () => {
 
   it("读侧：引用断掉的节点要报出来，画布现场那份清单把正打开那张标出来", () => {
     const f = fixture();
-    const broken = buildDiagram(REPO, { name: "过时的一张", source: "agent", body: { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "重命名前的模块", ref: "file:src/gone.ts", x: 0, y: 0 }], edges: [] } });
+    const broken = buildDiagram(REPO, { id: diagramId("broken"), name: "过时的一张", source: "agent", body: { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "重命名前的模块", ref: "file:src/gone.ts", x: 0, y: 0 }], edges: [] } });
     applyStructure(f.database, broken, broken.body, "agent 初版");
     const stored = readDiagram(f.database, REPO, broken.id)!;
     expect(diagramWarnings(f.context, stored)).toEqual([{ node: "n-gone", reason: expect.stringContaining("核不上") }]);
