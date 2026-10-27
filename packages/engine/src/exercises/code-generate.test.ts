@@ -126,7 +126,7 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(readJournal(repository.path).some((event) => event.type === "code_egress" && event.payload.scene === "practice.generate-code")).toBe(true);
 
     const database = new TutorDatabase(repository.path);
-    const stored = database.getExerciseCacheById<{ expected: { type: string; hidden: unknown[]; solution: { contents: string }[] } }>(repository.index.repositoryId, exercise.id);
+    const stored = database.exercises.byId<{ expected: { type: string; hidden: unknown[]; solution: { contents: string }[] } }>(repository.index.repositoryId, exercise.id);
     database.close();
     expect(stored?.expected.type).toBe("harness");
     expect(stored?.expected.hidden).toEqual([{ path: "tests.ts", contents: TESTS }]);
@@ -225,7 +225,7 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     expect(result.feedback).toContain("1 过 1 挂");
     // 排期按半对推进，不是按零分重置：这条是 SM-2 的输入，判分与排期必须同口径
     const database = new TutorDatabase(repository.path);
-    const schedule = database.getReviewSchedule(repository.index.repositoryId, exerciseId);
+    const schedule = database.reviews.get(repository.index.repositoryId, exerciseId);
     database.close();
     expect(schedule?.exerciseId).toBe(exerciseId);
   });

@@ -110,7 +110,7 @@ describe("M2.1 exercise service", () => {
 
     // 把这道题的到期时间改早 → next() 先还复习队列，而不是另出一题
     const database = new TutorDatabase(repository.path);
-    database.saveReviewSchedule(repository.index.repositoryId, { ...graded.review, dueAt: "2020-01-01T00:00:00.000Z" });
+    database.reviews.save(repository.index.repositoryId, { ...graded.review, dueAt: "2020-01-01T00:00:00.000Z" });
     database.close();
     expect((await service.next(repository)).id).toBe(localization.id);
 
@@ -321,7 +321,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(second.id).not.toBe(first.id);
     // 复习排期与答题都按 id 回查缓存行，所以两代题必须各自留痕
     const database = new TutorDatabase(repository.path);
-    expect(database.getExerciseCacheById(repository.index.repositoryId, first.id)).toBeTruthy();
+    expect(database.exercises.byId(repository.index.repositoryId, first.id)).toBeTruthy();
     database.close();
   });
 

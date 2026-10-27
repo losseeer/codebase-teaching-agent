@@ -1,7 +1,9 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex, ReviewSchedule } from "@codebase-tutor/domain";
+import type { FactKind, ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+import { ExerciseRepository } from "./exercise-repository.js";
+import { ReviewRepository } from "./review-repository.js";
 
 import { loadAddon } from "./betterSqlite3Loader.cjs";
 import { DATABASE_SCHEMA_SQL } from "./database-schema.js";
@@ -58,6 +60,9 @@ const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
 
 export class TutorDatabase {
   private readonly db: Database.Database;
+  /** 一道题的题行与它的复习排期：各是一张表的唯一读写口（`persistence/exercise-repository.ts` / `review-repository.ts`）。 */
+  readonly exercises: ExerciseRepository;
+  readonly reviews: ReviewRepository;
   /** 开库所在的路径（只为把告警说成「哪个仓的库」，不参与任何判据）。 */
   readonly repositoryPathLabel: string;
   /**
@@ -72,6 +77,9 @@ export class TutorDatabase {
     this.repositoryPathLabel = repositoryPath;
     this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
     this.db.pragma("journal_mode = WAL");
+    // 只能在 `db` 装上之后建：早一行交出去的就是 undefined
+    this.exercises = new ExerciseRepository(this.db);
+    this.reviews = new ReviewRepository(this.db);
     try {
       this.migrate();
     } catch (error) {
@@ -329,23 +337,6 @@ export class TutorDatabase {
     return [...latest.values()];
   }
 
-  getExerciseCache<T>(repositoryId: string, contentVersion: string, kind: string, targetUnitId: string): T | undefined {
-    const row = this.db.prepare("SELECT exercise_json FROM exercise_cache WHERE repository_id = ? AND content_version = ? AND kind = ? AND target_unit_id = ?")
-      .get(repositoryId, contentVersion, kind, targetUnitId) as { exercise_json: string } | undefined;
-    return row ? JSON.parse(row.exercise_json) as T : undefined;
-  }
-
-  getExerciseCacheById<T>(repositoryId: string, exerciseId: string): T | undefined {
-    const row = this.db.prepare("SELECT exercise_json FROM exercise_cache WHERE repository_id = ? AND json_extract(exercise_json, '$.exercise.id') = ? ORDER BY created_at DESC LIMIT 1")
-      .get(repositoryId, exerciseId) as { exercise_json: string } | undefined;
-    return row ? JSON.parse(row.exercise_json) as T : undefined;
-  }
-
-  putExerciseCache(repositoryId: string, contentVersion: string, kind: string, targetUnitId: string, exercise: unknown): void {
-    this.db.prepare("INSERT OR REPLACE INTO exercise_cache(repository_id, content_version, kind, target_unit_id, exercise_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(repositoryId, contentVersion, kind, targetUnitId, JSON.stringify(exercise), new Date().toISOString());
-  }
-
 
   /**
     画布上的一张图（persistence/diagrams.ts 是唯一业务读写口，这里只收 SQL）。
@@ -445,21 +436,6 @@ export class TutorDatabase {
   countChatMessages(sessionId: string): number {
     const row = this.db.prepare("SELECT COUNT(*) AS count FROM chat_message WHERE session_id = ?").get(sessionId) as { count: number };
     return row.count;
-  }
-
-  getReviewSchedule(repositoryId: string, exerciseId: string): ReviewSchedule | undefined {
-    const row = this.db.prepare("SELECT schedule_json FROM review_schedule WHERE repository_id = ? AND exercise_id = ?").get(repositoryId, exerciseId) as { schedule_json: string } | undefined;
-    return row ? JSON.parse(row.schedule_json) as ReviewSchedule : undefined;
-  }
-
-  getReviewSchedules(repositoryId: string): ReviewSchedule[] {
-    const rows = this.db.prepare("SELECT schedule_json FROM review_schedule WHERE repository_id = ?").all(repositoryId) as { schedule_json: string }[];
-    return rows.map((row) => JSON.parse(row.schedule_json) as ReviewSchedule);
-  }
-
-  saveReviewSchedule(repositoryId: string, schedule: ReviewSchedule): void {
-    this.db.prepare("INSERT OR REPLACE INTO review_schedule(repository_id, exercise_id, unit_id, schedule_json, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .run(repositoryId, schedule.exerciseId, schedule.unitId, JSON.stringify(schedule), new Date().toISOString());
   }
 
   close(): void {

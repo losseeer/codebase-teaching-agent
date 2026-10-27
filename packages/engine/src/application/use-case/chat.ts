@@ -185,7 +185,7 @@ export function loadPracticeExercise(repositoryId: string, prepared: CheckedPrac
   const database = repository.handle.pin();
   let stored: { exercise: Exercise } | undefined;
   try {
-    stored = database.getExerciseCacheById<{ exercise: Exercise }>(repository.index.repositoryId, prepared.exerciseId);
+    stored = database.exercises.byId<{ exercise: Exercise }>(repository.index.repositoryId, prepared.exerciseId);
   } finally {
     repository.handle.unpin();
   }

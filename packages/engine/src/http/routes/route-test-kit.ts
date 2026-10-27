@@ -179,7 +179,7 @@ export function createRouteFixture(): RouteFixture {
     database.saveAnalysis(analysis);
     // 练习答疑要求题目在缓存里（题面由 fixture 给定，不走出题路径）
     fx.exerciseId = "ex-fixture";
-    database.putExerciseCache(fx.repositoryId, "content:fixture", "impact_analysis", "unit-1", {
+    database.exercises.put(fx.repositoryId, "content:fixture", "impact_analysis", "unit-1", {
       exercise: {
         id: fx.exerciseId, repositoryId: fx.repositoryId, contentVersion: "content:fixture", kind: "impact_analysis",
         targetUnitId: "unit-1", targetTitle: "注册顺序", difficulty: 1, title: "影响分析", prompt: "改这一行会先影响谁？",

@@ -155,7 +155,7 @@ export class ExerciseService {
     const database = repository.handle.pin();
     try {
       const mastery = this.mastery(repository);
-      const dueReviews = database.getReviewSchedules(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
+      const dueReviews = database.reviews.list(repository.index.repositoryId).filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
       return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
     } finally {
       repository.handle.unpin();
@@ -175,11 +175,11 @@ export class ExerciseService {
       if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, database, skills);
       const modelVersion = provider?.modelVersion ?? "deterministic";
       if (!requested.kind && !requested.targetUnitId) {
-        const due = database.getReviewSchedules(repository.index.repositoryId)
+        const due = database.reviews.list(repository.index.repositoryId)
           .filter((schedule) => schedule.dueAt <= new Date().toISOString())
           .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
         for (const schedule of due) {
-          const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
+          const stored = database.exercises.byId<StoredExercise>(repository.index.repositoryId, schedule.exerciseId);
           // 跳过缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 `staleDependencies`
           if (stored && SUPPORTED_EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
             journal.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
@@ -198,7 +198,7 @@ export class ExerciseService {
       const scope = deps.length
         ? fileScope(deps, modelVersion, isCodeKind(target.kind) ? runnerFingerprint() : undefined)
         : exerciseScope(repository.analysis.versionStamp, modelVersion, graphStampOf(repository.analysis));
-      const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
+      const cached = database.exercises.get<StoredExercise>(repository.index.repositoryId, scope, target.kind, target.id);
       if (cached) {
         // 缓存命中也要报当时润色过没有：旧行没这个字段读作 unknown（null），不事后猜测
         journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
@@ -225,7 +225,7 @@ export class ExerciseService {
           scene: "exercise_generate"
         });
       }
-      database.putExerciseCache(repository.index.repositoryId, scope, target.kind, target.id, stored);
+      database.exercises.put(repository.index.repositoryId, scope, target.kind, target.id, stored);
       journal.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, polish, polish_failure: polishFailure });
       return stored.exercise;
     } finally {
@@ -314,7 +314,7 @@ export class ExerciseService {
       polish: "llm",
       polishFailure: null
     };
-    database.putExerciseCache(repository.index.repositoryId, scope, proposal.kind, targetUnitId, stored);
+    database.exercises.put(repository.index.repositoryId, scope, proposal.kind, targetUnitId, stored);
     journal.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, polish: "llm", polish_failure: null });
     return exercise;
   }
@@ -346,7 +346,7 @@ export class ExerciseService {
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
     const scope = fileScope(deps, provider.modelVersion);
-    const cached = database.getExerciseCache<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
+    const cached = database.exercises.get<StoredExercise>(repository.index.repositoryId, scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") {
       journal.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection });
       return cached.exercise;
@@ -392,7 +392,7 @@ export class ExerciseService {
       createdAt: new Date().toISOString()
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
-    database.putExerciseCache(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
+    database.exercises.put(repository.index.repositoryId, scope, "llm_rubric", targetUnitId, stored);
     journal.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection });
     return exercise;
   }
@@ -407,7 +407,7 @@ export class ExerciseService {
     const database = repository.handle.pin();
     let stored: StoredExercise | undefined;
     try {
-      stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
+      stored = database.exercises.byId<StoredExercise>(repository.index.repositoryId, exerciseId);
     } finally {
       repository.handle.unpin();
     }
@@ -438,7 +438,7 @@ export class ExerciseService {
   async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {
     const database = repository.handle.pin();
     try {
-      const stored = database.getExerciseCacheById<StoredExercise>(repository.index.repositoryId, exerciseId);
+      const stored = database.exercises.byId<StoredExercise>(repository.index.repositoryId, exerciseId);
       if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
       const stale = staleDependencies(repository, stored.exercise);
       if (stale.length) throw new Error(`这道题依赖的源码已更新（${stale.join("、")}）；请使用新版本重新生成练习。`);
@@ -466,11 +466,11 @@ export class ExerciseService {
         }
       }
       const now = new Date();
-      const previous = database.getReviewSchedule(repository.index.repositoryId, exerciseId);
+      const previous = database.reviews.get(repository.index.repositoryId, exerciseId);
       const review = scheduleSm2(previous, qualityForScore(graded.score), now);
       review.exerciseId = exerciseId;
       review.unitId = stored.exercise.targetUnitId;
-      database.saveReviewSchedule(repository.index.repositoryId, review);
+      database.reviews.save(repository.index.repositoryId, review);
       journal.append("exercise_result", {
         exercise_id: exerciseId,
         target_unit_id: stored.exercise.targetUnitId,
