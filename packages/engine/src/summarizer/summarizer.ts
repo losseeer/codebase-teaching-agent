@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { FileRole, ImportEstimate } from "@codebase-tutor/domain";
 
 import { hash } from "@codebase-tutor/platform";
-import type { LlmUsage } from "../adapter/outbound/llm/provider.js";
+import type { LlmUsage } from "../application/port/llm-provider.js";
 import { maskSecrets, secretMasker } from "../adapter/outbound/security/secrets.js";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
 import type { SummaryStore } from "../application/port/summary-store.js";

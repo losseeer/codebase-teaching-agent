@@ -11,7 +11,7 @@ import type {
 import { FACT_KINDS } from "@codebase-tutor/domain";
 
 import type { TutorDatabase } from "../adapter/outbound/persistence/database.js";
-import type { LlmTool } from "../adapter/outbound/llm/provider.js";
+import type { LlmTool } from "../application/port/llm-provider.js";
 import type { FactsToolContext } from "../source/tool-loop.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 

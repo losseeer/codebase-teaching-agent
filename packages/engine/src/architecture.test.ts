@@ -98,11 +98,13 @@ describe("分层守卫", () => {
     出站适配器（`adapter/outbound/`：持久层、模型调用、沙箱、外部工具、来源与密钥筛）是这一轮才落地的目录名，
     这条规则就是让它名副其实的那一格：适配器只被装配层与内层调用，自己谁都不认识——
     实测过零条边，所以判成恒为 0；一旦有适配器 import 回应用层，就是「端口又被人从后面绕进来了」。
+    口子与管线那条同一口径：`application/port/` 是内层声明的接口，实现方认它是方向正确的（`provider.ts` 里那几个类要 `implements`）。
     */
   it("出站适配器不认识应用层、入站层与装配层", () => {
     const offenders = allEdges.filter((edge) => {
       if (!short(edge.from).startsWith("adapter/outbound/")) return false;
       const to = short(edge.to);
+      if (to.startsWith("application/port/")) return false;
       return to.startsWith("application/") || to.startsWith("adapter/inbound/") || to.startsWith("infrastructure/") || to === "server.ts";
     });
     expect(list(offenders), `适配器反向指向内层：${list(offenders).join(", ")}`).toEqual([]);
@@ -110,20 +112,21 @@ describe("分层守卫", () => {
 
   /**
     应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
-    这一条还是**在册预算**而不是恒为 0：34 条边（type-only 也算，多一处定义就多一处失真）散在 16 个文件里，
-    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那六个口就是这么长出来的。
+    这一条还是**在册预算**而不是恒为 0：28 条边（type-only 也算，多一处定义就多一处失真）散在 16 个文件里，
+    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那七个口就是这么长出来的。
     数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
     从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
-    10-27 两笔下降：端口装配落 `infrastructure/`（43 → 37），审计线写入口挂到挂载项 `repository.audit` 上（37 → 34，
-    `diagrams` / `paid-turn` / `scoped-turn` 三份不再自己按路径 new）；留下的 `journal.ts` 边是**读侧**（`readJournal`）与 payload 拼形（`turnTextPayload`），那是下一格的活。
+    10-27 三笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34，
+    `diagrams` / `paid-turn` / `scoped-turn` 三份不再自己按路径 new）；模型调用的协议类型与 `LlmProvider` 接口进
+    `application/port/llm-provider.ts`（34 → 28）。留下的 `journal.ts` 边是**读侧**（`readJournal`）与 payload 拼形（`turnTextPayload`），那是两种不同的东西，分开结。
     */
-  it("应用层指向具体适配器的边数只能减少（在册预算 34）", () => {
+  it("应用层指向具体适配器的边数只能减少（在册预算 28）", () => {
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
       if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
       return short(edge.to).startsWith("adapter/outbound/");
     });
-    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(34);
+    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(28);
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {

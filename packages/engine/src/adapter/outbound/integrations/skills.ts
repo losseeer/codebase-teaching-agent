@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { LlmTool } from "../llm/provider.js";
+import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "../security/secrets.js";
 
 /**

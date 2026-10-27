@@ -16,7 +16,7 @@
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
 
 import { defineAnalysisStep } from "../analysis-step.js";
-import type { LlmProvider, LlmUsage } from "../adapter/outbound/llm/provider.js";
+import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";

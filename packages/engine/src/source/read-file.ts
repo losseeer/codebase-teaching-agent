@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { isWithin } from "@codebase-tutor/platform";
 import { maskSecrets } from "../adapter/outbound/security/secrets.js";
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
-import type { LlmTool } from "../adapter/outbound/llm/provider.js";
+import type { LlmTool } from "../application/port/llm-provider.js";
 
 /**
   read_file 工具（宏观设计 map 与教学 teaching 两个作用域共用）：让模型按需拉取源码，

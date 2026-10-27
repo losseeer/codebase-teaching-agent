@@ -3,8 +3,8 @@ import type { TeachingProgress } from "@codebase-tutor/contract";
 import type { Exercise, FadedState, RepositoryAnalysis, RepositoryIndex, TutorMessage, TutorSession } from "@codebase-tutor/domain";
 import { policyFor } from "@codebase-tutor/domain";
 
-import type { LlmCompletion, LlmProvider, LlmUsage } from "../adapter/outbound/llm/provider.js";
-import { flagTruncatedReply } from "../adapter/outbound/llm/provider.js";
+import type { LlmCompletion, LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
+import { flagTruncatedReply } from "../application/port/llm-provider.js";
 import { CONTEXT_SHARE, contextShare } from "../adapter/outbound/llm/context-window.js";
 import { type ConversationBlock, renderConversation } from "../adapter/outbound/llm/conversation.js";
 import { callNeighborhoodSection } from "@codebase-tutor/analysis";

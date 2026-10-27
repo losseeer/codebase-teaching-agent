@@ -4,7 +4,7 @@
   可用 TUTOR_THINKING_STYLES=前缀=样式,前缀=样式 为私有/新模型声明能力（样式：deepseek|openai|anthropic|none）。
   各家族支持哪些取值、能不能关思考，写在下面表项的注释里。
   */
-import type { ThinkingEffort } from "./provider.js";
+import type { ThinkingEffort } from "../../../application/port/llm-provider.js";
 
 export type ThinkingStyle = "deepseek" | "openai" | "anthropic" | "none" | "unknown";
 

@@ -9,7 +9,7 @@ import { flushEngineLog } from "@codebase-tutor/platform";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
-import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../adapter/outbound/llm/provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../application/port/llm-provider.js";
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";

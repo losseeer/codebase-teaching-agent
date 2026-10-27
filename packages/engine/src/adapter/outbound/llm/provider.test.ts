@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLlmProvider, LlmAbortedError, OpenAICompatibleProvider, RetryLlmProvider, resolveLlmConfig, screenOutbound, ThinkingOverrideLlmProvider, type LlmProvider } from "./provider.js";
+import { createLlmProvider, OpenAICompatibleProvider, RetryLlmProvider, resolveLlmConfig, screenOutbound, ThinkingOverrideLlmProvider } from "./provider.js";
+import { LlmAbortedError, type LlmProvider } from "../../../application/port/llm-provider.js";
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });

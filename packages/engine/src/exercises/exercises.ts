@@ -16,7 +16,7 @@ import type {
 } from "@codebase-tutor/domain";
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/domain";
 
-import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
+import type { LlmProvider } from "../application/port/llm-provider.js";
 import type { SkillsToolContext } from "../source/tool-loop.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";

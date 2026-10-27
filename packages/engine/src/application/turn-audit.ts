@@ -2,7 +2,7 @@ import type { TurnScene } from "@codebase-tutor/contract";
 
 import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
-import type { LlmUsage } from "../adapter/outbound/llm/provider.js";
+import type { LlmUsage } from "./port/llm-provider.js";
 import type { CodeSearchRecord } from "../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";

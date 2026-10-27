@@ -1,4 +1,4 @@
-import type { LlmUsage } from "./provider.js";
+import type { LlmUsage } from "../../../application/port/llm-provider.js";
 
 /**
   用量相加的唯一实现（主调用 + 按需深入 / 工具循环各轮 / 动作决策 / 翻译层）。

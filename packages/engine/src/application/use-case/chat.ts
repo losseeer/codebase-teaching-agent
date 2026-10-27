@@ -2,8 +2,8 @@ import type { Exercise } from "@codebase-tutor/domain";
 import type { ScopedStreamFrame, TurnScene } from "@codebase-tutor/contract";
 
 import type { AskFacet } from "../../source/ask-user.js";
-import type { LlmProvider } from "../../adapter/outbound/llm/provider.js";
-import { LlmAbortedError } from "../../adapter/outbound/llm/provider.js";
+import type { LlmProvider } from "../port/llm-provider.js";
+import { LlmAbortedError } from "../port/llm-provider.js";
 import { factsToolFor, setDiagramToolFor } from "../../infrastructure/canvas-tools.js";
 import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../paid-turn.js";
 import { turnCheckpointChannel } from "../turn-checkpoint.js";

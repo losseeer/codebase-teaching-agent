@@ -1,7 +1,7 @@
 import type { ScopedStreamProgress } from "@codebase-tutor/contract";
 
-import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../adapter/outbound/llm/provider.js";
-import { LlmAbortedError, isLlmAborted } from "../adapter/outbound/llm/provider.js";
+import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../application/port/llm-provider.js";
+import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
 import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";

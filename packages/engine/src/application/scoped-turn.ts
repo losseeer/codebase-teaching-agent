@@ -8,7 +8,7 @@ import { dedupeFileReads } from "../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
-import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
+import type { LlmProvider } from "./port/llm-provider.js";
 import { turnTextPayload } from "../adapter/outbound/persistence/journal.js";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";

@@ -1,4 +1,4 @@
-import type { LlmTool } from "../adapter/outbound/llm/provider.js";
+import type { LlmTool } from "../application/port/llm-provider.js";
 
 /**
   回合内向用户提问：只允许问「本轮上下文里确实没有、又决定答复形状」的那一格。

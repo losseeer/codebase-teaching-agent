@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { batchSystemPrompt, LlmSummaryProvider, LocalSummaryProvider, parseBatchReply, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./summary-provider.js";
 import type { FileSlice } from "@codebase-tutor/analysis";
-import type { LlmCompletionInput, LlmProvider } from "../adapter/outbound/llm/provider.js";
+import type { LlmCompletionInput, LlmProvider } from "../application/port/llm-provider.js";
 import { OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../adapter/outbound/llm/provider.js";
 
 /** L1 的输入是结构切片，桩数据按切片形状给。 */

@@ -8,7 +8,7 @@ import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
-import type { LlmProvider } from "../adapter/outbound/llm/provider.js";
+import type { LlmProvider } from "../application/port/llm-provider.js";
 import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";

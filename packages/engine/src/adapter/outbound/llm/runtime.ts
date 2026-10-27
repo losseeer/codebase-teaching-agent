@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { LoggingLlmProvider } from "./call-log.js";
-import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS, type LlmConfigOverrides, type LlmProvider, type ResolvedLlmConfig, type ThinkingEffort } from "./provider.js";
+import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS, type LlmConfigOverrides, type ResolvedLlmConfig } from "./provider.js";
+import type { LlmProvider, ThinkingEffort } from "../../../application/port/llm-provider.js";
 import { tutorDataDir } from "@codebase-tutor/platform";
 
 /**

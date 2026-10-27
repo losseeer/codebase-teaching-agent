@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoggingLlmProvider, flushLlmLog, formatLlmCallLine, llmLogPath, outboundFingerprint, type LlmCallRecord } from "./call-log.js";
-import type { LlmCompletion, LlmProvider } from "./provider.js";
+import type { LlmCompletion, LlmProvider } from "../../../application/port/llm-provider.js";
 import { RetryLlmProvider, ThinkingOverrideLlmProvider } from "./provider.js";
 import { runWithTrace } from "@codebase-tutor/platform";
 

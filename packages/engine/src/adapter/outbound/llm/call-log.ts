@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { hash } from "@codebase-tutor/platform";
 import { logTargetFromEnv } from "@codebase-tutor/platform";
-import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "./provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../../../application/port/llm-provider.js";
 import { currentThreadId, currentTraceId } from "@codebase-tutor/platform";
 import { tutorDataDir } from "@codebase-tutor/platform";
 

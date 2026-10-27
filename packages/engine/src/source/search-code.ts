@@ -1,7 +1,7 @@
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import { isTestPath } from "@codebase-tutor/analysis";
-import type { LlmTool } from "../adapter/outbound/llm/provider.js";
+import type { LlmTool } from "../application/port/llm-provider.js";
 import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "@codebase-tutor/platform";
 
 /**
