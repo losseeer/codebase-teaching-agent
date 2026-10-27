@@ -13,8 +13,7 @@ import type {
 } from "@codebase-tutor/domain";
 import { DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, buildDiagram, diagramId, normalizeDiagramName, versionStamp } from "@codebase-tutor/domain";
 import { id } from "@codebase-tutor/platform";
-import { applyStructure, insertDrawnDiagram, listDiagrams, readDiagram, uniqueDiagramName } from "../persistence/diagrams.js";
-import type { TutorDatabase } from "../persistence/database.js";
+import type { DiagramStore } from "../application/port/diagram-store.js";
 import type { LlmTool } from "../llm/provider.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
@@ -41,7 +40,8 @@ export interface DiagramWriteOutcome {
 }
 
 export interface DiagramWriteContext {
-  database: TutorDatabase;
+  /** 这一仓的图库存取口（端口，不是库句柄）：结构写入口要的只是那五格。 */
+  store: DiagramStore;
   repositoryId: string;
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
@@ -222,16 +222,16 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
 /** 目标图怎么认：给了 id 或唯一名字就用它；只有一张且没指名就用那一张；否则拒（绝不猜一张来改）。 */
 function resolveTarget(context: DiagramWriteContext, requested: string | undefined): { diagram: Diagram } | { error: string } {
   const wanted = (requested ?? "").trim();
-  const all = listDiagrams(context.database, context.repositoryId);
+  const all = context.store.list();
   if (!wanted) {
     if (!all.length) return { error: "这个仓还没有图：先画一张（draw），或在左侧图库点「+」建一张空白图" };
-    if (all.length === 1) return { diagram: readDiagram(context.database, context.repositoryId, all[0]!.id)! };
+    if (all.length === 1) return { diagram: context.store.read(all[0]!.id)! };
     return { error: `画布上没有明确打开的图，而这个仓有 ${all.length} 张：${all.map((item) => item.name).join(" / ")}。说清要改哪一张` };
   }
-  const byId = readDiagram(context.database, context.repositoryId, wanted);
+  const byId = context.store.read(wanted);
   if (byId) return { diagram: byId };
   const named = all.filter((item) => item.name === wanted);
-  if (named.length === 1) return { diagram: readDiagram(context.database, context.repositoryId, named[0]!.id)! };
+  if (named.length === 1) return { diagram: context.store.read(named[0]!.id)! };
   if (named.length > 1) return { error: `有 ${named.length} 张图都叫「${wanted}」，先给它换个名字再改` };
   return { error: `没有「${wanted.slice(0, DIAGRAM_NAME_LIMIT)}」这张图。现在是：${all.map((item) => item.name).join(" / ") || "（一张都没有）"}` };
 }
@@ -282,8 +282,8 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const wanted = normalizeDiagramName(edit.name) || "未命名图";
-    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: uniqueDiagramName(context.database, context.repositoryId, wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
-    const saved = insertDrawnDiagram(context.database, diagram);
+    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
+    const saved = context.store.insert(diagram);
     context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
     context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
     return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版。${downgradeNote(settled.downgraded)}`, diagram: saved };
@@ -347,7 +347,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   function finish(done: DiagramEdit, override: string): DiagramWriteOutcome {
     const settled = settleBody(body, index, context);
     if (typeof settled === "string") return refuse(settled);
-    const saved = applyStructure(context.database, diagram, settled.body, versionNoteOf(done, nameOf));
+    const saved = context.store.applyStructure(diagram, settled.body, versionNoteOf(done, nameOf));
     context.journal.append(done.action === "draw" ? "diagram_created" : "diagram_edited", {
       diagram: saved.id, action: done.action, target: "target" in done ? done.target : "node" in done ? done.node.id : "edge" in done ? done.edge.id : "group" in done ? done.group.id : "",
       nodes: saved.body.nodes.length, edges: saved.body.edges.length, dropped_nodes: Math.max(0, settledBefore - saved.body.nodes.length), downgraded: settled.downgraded, via
@@ -581,10 +581,10 @@ export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagra
   有副作用的工具必须先看得见现状——没有这一段，模型只能猜 id、猜「那条边」是哪条。
 */
 export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?: string): string {
-  const all = listDiagrams(context.database, context.repositoryId);
+  const all = context.store.list();
   if (!all.length) return "画布现场：这个仓还没有图。要画就用 draw 一次画完整张（节点、边、分组都给全），别一格一格试。";
   const lines = all.map((item) => `- ${item.name}（${item.id}，${item.source === "agent" ? "agent 画的" : "用户建的"}，${item.nodes} 节点 / ${item.edges} 边 / ${item.versions} 版，最后改动 ${versionStamp(item.updatedAt)}）${item.id === openDiagramId ? " ← 画布上正打开的这张" : ""}`);
-  const open = openDiagramId ? readDiagram(context.database, context.repositoryId, openDiagramId) : undefined;
+  const open = openDiagramId ? context.store.read(openDiagramId) : undefined;
   const refs = open ? refIndexOf(context.index, context.analysis) : undefined;
   const detail = open
     ? `正打开的「${open.name}」图元清单：\n`

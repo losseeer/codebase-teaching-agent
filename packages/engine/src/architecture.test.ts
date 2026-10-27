@@ -124,10 +124,11 @@ describe("分层守卫", () => {
   /**
     已知这笔债：管线模块还在直接落 `persistence/`，理想形态是由参数把端口传进来。
     账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
-    10-27 还掉第一条：摘要流水线改吃 `port/summary-store.ts` 的 `SummaryStore`（importer 与重算脚本注入适配器），
-    剩下的主要是 exercises 与 diagram 两处。
+    10-27 还掉两条：摘要流水线改吃 `SummaryStore`，画图改吃 `DiagramStore`（适配器在存储侧
+    `diagramStoreFor` 就地闭包，它不 import 端口类型——持久层反过来认识应用层是上面那条守卫拦的）。
+    剩下的三条都在 `exercises/exercises.ts`：database、journal、repository-handle（type-only 也算一条）。
     */
-  const PERSISTENCE_DEBT_LINES = 5;
+  const PERSISTENCE_DEBT_LINES = 3;
 
   it(`管线直接落到 persistence/ 的依赖恰好等于在册条数（现 ${PERSISTENCE_DEBT_LINES} 条，只能变小）`, () => {
     const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "persistence"));

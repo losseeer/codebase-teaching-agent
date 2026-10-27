@@ -6,7 +6,7 @@ import type { Diagram, DiagramBody, JournalEventType, RepositoryAnalysis, Reposi
 
 import { TutorDatabase } from "../persistence/database.js";
 import { buildDiagram, DIAGRAM_VERSION_LIMIT, diagramId } from "@codebase-tutor/domain";
-import { applyStructure, listDiagrams, readDiagram, restoreVersion } from "../persistence/diagrams.js";
+import { applyStructure, diagramStoreFor, listDiagrams, readDiagram, restoreVersion } from "../persistence/diagrams.js";
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
 
 /**
@@ -56,7 +56,7 @@ function fixture(): { database: TutorDatabase; context: DiagramWriteContext; eve
   const events: { type: JournalEventType; payload: Record<string, string | number | boolean | null> }[] = [];
   const applied: string[] = [];
   const context: DiagramWriteContext = {
-    database,
+    store: diagramStoreFor(database, REPO),
     repositoryId: REPO,
     index,
     analysis,

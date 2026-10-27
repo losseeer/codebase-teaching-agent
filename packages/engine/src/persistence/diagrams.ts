@@ -160,3 +160,19 @@ export function restoreVersion(database: TutorDatabase, diagram: Diagram, index:
 export function deleteDiagram(database: TutorDatabase, diagram: Diagram): void {
   database.diagrams.remove(diagram.repositoryId, diagram.id);
 }
+
+/**
+  绑定到一个仓的存取口适配器（`application/port/diagram-store.ts` 那个接口在这里落地）。
+  这里**不 import 那个接口**——持久层反过来认识应用层是守卫要拦的事；形状对不对由注入点
+  （`application/canvas-tools.ts` 把它交给 `DiagramWriteContext.store`）的赋值检查。
+  闭包掉库句柄与仓 id 之后，画图那一侧不必再认识 SQLite、也不必每格都带 repositoryId。
+*/
+export function diagramStoreFor(database: TutorDatabase, repositoryId: string) {
+  return {
+    list: () => listDiagrams(database, repositoryId),
+    read: (diagramId: string) => readDiagram(database, repositoryId, diagramId),
+    uniqueName: (wanted: string) => uniqueDiagramName(database, repositoryId, wanted),
+    insert: (diagram: Diagram) => insertDrawnDiagram(database, diagram),
+    applyStructure: (diagram: Diagram, body: DiagramBody, note: string) => applyStructure(database, diagram, body, note)
+  };
+}

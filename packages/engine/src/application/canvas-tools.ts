@@ -7,6 +7,7 @@ import type { DiagramWriteContext } from "../diagram/set-diagram.js";
 import { applyDiagramEdit, diagramInventoryFor, parseDiagramEditArguments } from "../diagram/set-diagram.js";
 import { factsPairChecker } from "../diagram/facts-verify.js";
 import { factsQueryTool } from "../facts/query.js";
+import { diagramStoreFor } from "../persistence/diagrams.js";
 import { Journal } from "../persistence/journal.js";
 import { broadcast } from "../events.js";
 
@@ -21,7 +22,8 @@ import { broadcast } from "../events.js";
 */
 export function diagramWriteContextFor(repository: ImportedRepository, database: TutorDatabase, sessionId?: string): DiagramWriteContext {
   return {
-    database,
+    // 端口在存储侧就地绑定（闭包掉库句柄与仓 id）：画图那一侧从此不认识 SQLite
+    store: diagramStoreFor(database, repository.index.repositoryId),
     repositoryId: repository.index.repositoryId,
     index: repository.index,
     analysis: repository.analysis,
