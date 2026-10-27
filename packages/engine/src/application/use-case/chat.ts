@@ -22,7 +22,8 @@ import {
   threadScopedHistory
 } from "../scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
-import { readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
+import { readJournal } from "../../adapter/outbound/persistence/journal.js";
+import { turnTextPayload } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
 

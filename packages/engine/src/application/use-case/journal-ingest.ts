@@ -1,6 +1,6 @@
 import type { JournalEvent } from "@codebase-tutor/domain";
+import { isEngineOwnedEventType, isUiJournalEventType } from "@codebase-tutor/domain";
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
-import { isEngineOwnedEventType, isUiJournalEventType } from "../../adapter/outbound/persistence/journal.js";
 
 /**
   界面动作事件的入账用例：每一次切节点、打开文件、切换主题、提交练习都要有 journal 事件可查。

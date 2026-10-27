@@ -1,32 +1,10 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/domain";
-import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS } from "@codebase-tutor/domain";
+import { isJournalEventType } from "@codebase-tutor/domain";
 
 import { id } from "@codebase-tutor/platform";
 import { currentTraceId } from "@codebase-tutor/platform";
-
-/**
-  `Journal.append` 的白名单，运行时判据（`JournalEventType` 只是编译期类型）。
-  两张表并起来是全集，漏归类由 shared 的编译期对账报错。读侧不校验类型：历史事件仍可读，只限制新写入。
-  */
-const eventTypes = new Set<JournalEventType>([...ENGINE_JOURNAL_EVENTS, ...UI_JOURNAL_EVENTS]);
-
-/**
-  界面侧可发射的那一半。`POST /api/repositories/:id/journal` 用它而不是上面的全集：
-  `file_read` / `code_egress` / `token_usage` 这些引擎侧类型是审计证据，不能让被审计方自己填账。
-  引擎自己写走 `Journal.append`（全集合），不受这条限制。
-  */
-const uiEventTypes = new Set<string>(UI_JOURNAL_EVENTS);
-
-export function isUiJournalEventType(value: unknown): value is JournalEventType {
-  return typeof value === "string" && uiEventTypes.has(value);
-}
-
-/** 这个类型是不是「引擎专属」——只为把拒绝理由说准（未知类型与越权类型是两件事）。 */
-export function isEngineOwnedEventType(value: unknown): boolean {
-  return typeof value === "string" && (ENGINE_JOURNAL_EVENTS as readonly string[]).includes(value);
-}
 
 export class Journal {
   private readonly file: string;
@@ -38,7 +16,7 @@ export class Journal {
   }
 
   append(type: JournalEventType, payload: JournalEvent["payload"], sessionId?: string, traceId?: string | null): JournalEvent {
-    if (!eventTypes.has(type)) throw new Error(`Unknown journal event: ${type}`);
+    if (!isJournalEventType(type)) throw new Error(`Unknown journal event: ${type}`);
     const event: JournalEvent = {
       id: id(),
       type,
@@ -52,28 +30,6 @@ export class Journal {
     appendFileSync(this.file, `${JSON.stringify(event)}\n`, "utf8");
     return event;
   }
-}
-
-/**
-  回合文本单边落盘上限：与 `POST .../journal` 的 payload 字符串校验同口径，两处数字必须一起改，
-  所以它住在 journal 旁边而不是通用工具模块里。
- */
-export const TURN_TEXT_LIMIT = 2_000;
-
-/**
-  `turn_text` 事件的 payload 构造：三种对话（teach / map_chat / practice_chat）的问题+回复双边原文进 journal，
-  各截 TURN_TEXT_LIMIT；截断必须留痕（`*_truncated`），丢了字要能看出来。
-  */
-export function turnTextPayload(scene: "teach" | "map_chat" | "practice_chat", question: string, answer: string): Record<string, string | number | boolean> {
-  const q = question.slice(0, TURN_TEXT_LIMIT);
-  const a = answer.slice(0, TURN_TEXT_LIMIT);
-  return {
-    scene,
-    question: q,
-    question_truncated: question.length > q.length,
-    answer: a,
-    answer_truncated: answer.length > a.length
-  };
 }
 
 /**

@@ -112,21 +112,22 @@ describe("分层守卫", () => {
 
   /**
     应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
-    这一条还是**在册预算**而不是恒为 0：28 条边（type-only 也算，多一处定义就多一处失真）散在 16 个文件里，
+    这一条还是**在册预算**而不是恒为 0：26 条边（type-only 也算，多一处定义就多一处失真）散在 15 个文件里，
     结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那七个口就是这么长出来的。
     数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
     从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
-    10-27 三笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34，
+    10-27 四笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34，
     `diagrams` / `paid-turn` / `scoped-turn` 三份不再自己按路径 new）；模型调用的协议类型与 `LlmProvider` 接口进
-    `application/port/llm-provider.ts`（34 → 28）。留下的 `journal.ts` 边是**读侧**（`readJournal`）与 payload 拼形（`turnTextPayload`），那是两种不同的东西，分开结。
+    `application/port/llm-provider.ts`（34 → 28）；审计线的纯规则（事件白名单与 `turn_text` 拼形）进 `packages/domain`（28 → 26）。
+    留下的 `journal.ts` 边只有一种了：**读侧**（`readJournal` 整本回放），那是「谁来给审计线开读」这一格要处理的。
     */
-  it("应用层指向具体适配器的边数只能减少（在册预算 28）", () => {
+  it("应用层指向具体适配器的边数只能减少（在册预算 26）", () => {
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
       if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
       return short(edge.to).startsWith("adapter/outbound/");
     });
-    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(28);
+    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(26);
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {

@@ -9,7 +9,7 @@ import type { ExternalToolContext, SkillsToolContext } from "../source/tool-loop
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../turn/run-turn.js";
 import type { LlmProvider } from "./port/llm-provider.js";
-import { turnTextPayload } from "../adapter/outbound/persistence/journal.js";
+import { turnTextPayload } from "@codebase-tutor/domain";
 import { screenNotice } from "./turn-invariants.js";
 import type { ImportedRepository } from "../importer/importer.js";
 import type { AuditSink } from "./port/audit-sink.js";

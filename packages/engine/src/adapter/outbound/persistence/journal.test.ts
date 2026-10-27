@@ -2,14 +2,13 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Journal, isEngineOwnedEventType, isUiJournalEventType, journalFootprint, readJournal, turnTextPayload, TURN_TEXT_LIMIT } from "./journal.js";
+import { Journal, journalFootprint, readJournal } from "./journal.js";
 import { runWithTrace } from "@codebase-tutor/platform";
-import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, type JournalEventType } from "@codebase-tutor/domain";
+import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, isEngineOwnedEventType, isUiJournalEventType, turnTextPayload, TURN_TEXT_LIMIT, type JournalEventType } from "@codebase-tutor/domain";
 
 /**
-  学习日志：append-only、白名单在运行时（eventTypes）判，不只靠编译期类型。
-  白名单由 shared 两张写入权表并起来生成；要守的是谁有资格写：
-  审计线的引擎侧类型不能从界面接口进来，否则「哪些代码出过门」这条账谁都能填。
+  学习日志：append-only、白名单在运行时判（判据与那两张写入权表都在 `@codebase-tutor/domain`），不只靠编译期类型。
+  要守的是谁有资格写：审计线的引擎侧类型不能从界面接口进来，否则「哪些代码出过门」这条账谁都能填。
   */
 
 describe("学习日志", () => {
@@ -20,7 +19,7 @@ describe("学习日志", () => {
 
   it("UI 侧事件（契约取自 shared 那张事件表）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
-    // 清单取 shared 那张表，不在测试里另抄一份
+    // 清单取 domain 那张表，不在测试里另抄一份
     for (const type of UI_JOURNAL_EVENTS) journal.append(type, { where: "/api/x" });
 
     const events = readJournal(repository);

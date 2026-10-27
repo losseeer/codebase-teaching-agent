@@ -18,7 +18,8 @@ import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { createThread, saveThreadState } from "../../adapter/outbound/persistence/chat-store.js";
-import { readJournal, turnTextPayload } from "../../adapter/outbound/persistence/journal.js";
+import { readJournal } from "../../adapter/outbound/persistence/journal.js";
+import { turnTextPayload } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
 import type { ScopedTurnStream } from "./chat.js";
 
