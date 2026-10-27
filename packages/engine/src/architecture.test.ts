@@ -74,8 +74,15 @@ describe("分层守卫", () => {
     expect(list(allEdges.filter((edge) => short(edge.from) === "services.ts" && short(edge.to).startsWith("http/")))).toEqual([]);
   });
 
-  it("分析管线不指向传输层，也不指向应用层（管线之间另有在册清单）", () => {
-    const offenders = allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && (short(edge.to).startsWith("http/") || short(edge.to).startsWith("application/") || short(edge.to) === "services.ts" || short(edge.to) === "server.ts"));
+  it("分析管线不指向传输层，也不指向应用层——只有 application/port 例外（那是内层的接口）", () => {
+    const offenders = allEdges.filter((edge) => {
+      if (!PIPELINES.has(topOf(edge.from))) return false;
+      const to = short(edge.to);
+      // 端口是管线自己声明的需求：零依赖、只有接口，引它不等于「管线认识应用层」。
+      // 口子只开到这个目录为止，多引一个应用层文件照样红。
+      if (to.startsWith("application/port/")) return false;
+      return to.startsWith("http/") || to.startsWith("application/") || to === "services.ts" || to === "server.ts";
+    });
     expect(list(offenders)).toEqual([]);
   });
 

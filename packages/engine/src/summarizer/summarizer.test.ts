@@ -6,7 +6,7 @@ import type { SymbolInfo } from "@codebase-tutor/domain";
 
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";
 import { TutorDatabase } from "../persistence/database.js";
-import type { SummaryStore } from "../port/summary-store.js";
+import type { SummaryStore } from "../application/port/summary-store.js";
 import { readJournal } from "../persistence/journal.js";
 import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
 import {
