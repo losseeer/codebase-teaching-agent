@@ -17,4 +17,9 @@ export interface SummaryStore {
   get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined;
   /** 整份记录一次写全：`summaries.created_at` 每次写入都取当下，读侧据此认「最近被确认的时间」。 */
   put(cacheKey: string, value: { path: string; summary: string }): void;
+  /**
+    每个文件**最新**的一句职责（按写入时间倒序取每路径首次出现）。出题选料与检索语料都读这一格；
+    行数上限是存储侧对只追加表的自保，读不到就是该文件没有已确认的职责。
+    */
+  latest(): { path: string; summary: string }[];
 }

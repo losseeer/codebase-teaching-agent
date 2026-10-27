@@ -1,6 +1,7 @@
 import type { Exercise, ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
 import { budgetDegraded } from "../paid-turn.js";
+import { practiceView, withExercisePorts } from "../exercise-ports.js";
 import { skillsForTurn } from "../scoped-turn.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../services.js";
 
@@ -9,7 +10,8 @@ import { exercises, lightLlm, repositoryOr404 } from "../../services.js";
   三条纪律住在这里，不在 controller：
   - 判分是纯本地（沙箱真跑），不过预算闸门；出题与讲评才要模型，额度触顶就不给 provider；
   - 「没配模型 / 预算用完 / 模型拒答 / 守门否决」一律以 `declined` 报出来，由传输层给 422，不回落本地模板话；
-  - 非字符串的 `tag` 按没填处理，绝不在请求体上直接 `.trim()`（那会把不合规格的请求记成引擎故障）。
+  - 非字符串的 `tag` 按没填处理，绝不在请求体上直接 `.trim()`（那会把不合规格的请求记成引擎故障）；
+  - 库句柄在这一层开合（`withExercisePorts` + `practiceView`）：练习服务只拿四个端口，不知道 `pin()/unpin()` 这件事存在。
   */
 export type ExerciseFailure =
   | { kind: "repository-missing" }
@@ -31,7 +33,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   if (input.kind && !SUPPORTED_EXERCISE_KINDS.includes(input.kind)) return { ok: false, failure: { kind: "kind-unsupported" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await exercises.next(repository, { kind: input.kind, targetUnitId: input.targetUnitId, family, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, skillsForTurn()) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.next(practiceView(repository, ports), { kind: input.kind, targetUnitId: input.targetUnitId, family, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, skillsForTurn())) };
   } catch (error) {
     return declined(error, "无法生成练习");
   }
@@ -43,7 +45,7 @@ export async function answerExerciseUseCase(repositoryId: string, exerciseId: st
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await exercises.answer(repository, exerciseId, answer ?? {}, provider) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.answer(practiceView(repository, ports), exerciseId, answer ?? {}, provider)) };
   } catch (error) {
     return declined(error, "无法判分");
   }
@@ -55,7 +57,7 @@ export async function explainExerciseUseCase(repositoryId: string, exerciseId: s
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await exercises.explain(repository, exerciseId, answer ?? {}, provider) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.explain(practiceView(repository, ports), exerciseId, answer ?? {}, provider)) };
   } catch (error) {
     return declined(error, "无法生成讲评");
   }

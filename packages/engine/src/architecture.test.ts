@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 /**
   分层守卫：把 import 方向规则写成测试——谁都不许 import 回 `server.ts`，
   应用层不指向传输层，管线与持久层单向，跨包不互 import。
-  尚未达成的那条（管线只认端口、不直接落库）用只能下调的条数预算记在账上。
+  「管线只认端口、不直接落库」那条以前靠只能下调的条数预算记账，10-27 起已结清、判成恒为 0。
 */
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
@@ -122,16 +122,13 @@ describe("分层守卫", () => {
   });
 
   /**
-    已知这笔债：管线模块还在直接落 `persistence/`，理想形态是由参数把端口传进来。
-    账按条数记：恰好等于登记值，改掉一条就把数字调小，变大变小都会被拦下。
-    10-27 还掉两条：摘要流水线改吃 `SummaryStore`，画图改吃 `DiagramStore`（适配器在存储侧
-    `diagramStoreFor` 就地闭包，它不 import 端口类型——持久层反过来认识应用层是上面那条守卫拦的）。
-    剩下的三条都在 `exercises/exercises.ts`：database、journal、repository-handle（type-only 也算一条）。
+    这笔债结清了（10-27）：管线模块不再直接落 `persistence/`，一律经参数把端口传进来
+    （`application/port/` 那五个口：SummaryStore / ExerciseStore / ProgressStore / AuditSink / DiagramStore，
+    适配器由装配层在 `pin()` 的范围内构造）。
+    所以这条从「恰好等于在册条数、只能变小」升级成恒为 0——再多一条就是回潮，不是记账。
     */
-  const PERSISTENCE_DEBT_LINES = 3;
-
-  it(`管线直接落到 persistence/ 的依赖恰好等于在册条数（现 ${PERSISTENCE_DEBT_LINES} 条，只能变小）`, () => {
+  it("分析管线不直接落持久层（已结清，恒为 0）", () => {
     const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && topOf(edge.to) === "persistence"));
-    expect(found.length, found.length > PERSISTENCE_DEBT_LINES ? `管线直接落持久层的依赖涨了（${PERSISTENCE_DEBT_LINES} → ${found.length}）：\n${found.join("\n")}` : `债少了 ${PERSISTENCE_DEBT_LINES} → ${found.length}，把在册数字改小：\n${found.join("\n")}`).toBe(PERSISTENCE_DEBT_LINES);
+    expect(found, `管线还在直接落持久层：\n${found.join("\n")}`).toEqual([]);
   });
 });

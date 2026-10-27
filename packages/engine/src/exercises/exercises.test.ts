@@ -15,6 +15,7 @@ import { readJournal } from "../persistence/journal.js";
 import { RepositoryHandle } from "../persistence/repository-handle.js";
 import { resetIsolationForTest, stubIsolationForTest } from "../sandbox/isolation.js";
 import { selectZpdTarget } from "./zpd.js";
+import { exercisePortsFor } from "../application/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
 
@@ -23,7 +24,11 @@ const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   // 先关连接再删目录：还开着 SQLite 就去 rm 会留下删不净的 -wal/-shm 边文件
-  for (const handle of handles.splice(0)) handle.close();
+  // 每个夹具句柄被 builder pin 过一次：先放开这一次再关，否则 close 会一直挂起、留下 -wal/-shm 边文件
+  for (const handle of handles.splice(0)) {
+    handle.unpin();
+    handle.close();
+  }
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -413,7 +418,9 @@ function testRepository(): PracticeRepository {
     implementations,
     versionStamp: "content-v1"
   };
-  return { path: repositoryPath, index, analysis, handle: openHandle(repositoryPath, index.repositoryId) };
+  const handle = openHandle(repositoryPath, index.repositoryId);
+  // 练习服务只吃端口：夹具在这里把**真存储**装配一次（判分要的就是那两份真行），端口对应的引用由 afterEach 放开
+  return { path: repositoryPath, index, analysis, ports: exercisePortsFor(handle, handle.pin()) };
 }
 
 /**

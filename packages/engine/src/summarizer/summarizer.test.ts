@@ -85,7 +85,8 @@ describe("文件摘要表（L1）", () => {
       get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
         return rows.has(cacheKey) ? JSON.parse(rows.get(cacheKey)!) as T : undefined;
       },
-      put(cacheKey: string, value: { path: string; summary: string }): void { rows.set(cacheKey, JSON.stringify(value)); }
+      put(cacheKey: string, value: { path: string; summary: string }): void { rows.set(cacheKey, JSON.stringify(value)); },
+      latest() { return [...rows.values()].map((row) => JSON.parse(row) as { path: string; summary: string }); }
     };
     const provider = new LocalSummaryProvider();
     const first = await summarizeFiles({ structure: STRUCTURE, store, repositoryPath: mkdtempSync(join(tmpdir(), "summarize-port-")), provider });

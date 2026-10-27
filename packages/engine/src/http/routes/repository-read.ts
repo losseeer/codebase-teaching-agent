@@ -28,7 +28,7 @@ export function registerRepositoryReadRoutes(app: FastifyInstance): void {
   });
 
   app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/practice", async (request, reply) => {
-    const result = readPracticeSummaryUseCase(request.params.repositoryId);
+    const result = await readPracticeSummaryUseCase(request.params.repositoryId);
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 

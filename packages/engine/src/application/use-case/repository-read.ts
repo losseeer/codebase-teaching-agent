@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { deriveLearnerProfile } from "../../learner/model.js";
 import { isWithin } from "@codebase-tutor/platform";
 import { exercises, repositoryOr404 } from "../../services.js";
+import { practiceView, withExercisePorts } from "../exercise-ports.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 import { readJournal } from "../../persistence/journal.js";
 
@@ -35,11 +36,11 @@ export function readIndexUseCase(repositoryId: string): ReadResult<NonNullable<R
   return repository ? { ok: true, value: repository.index } : repositoryMissing;
 }
 
-/** 练习摘要：进度、到期复习与可用题型。 */
-export function readPracticeSummaryUseCase(repositoryId: string): ReadResult<ReturnType<typeof exercises.getSummary>> {
+/** 练习摘要：进度、到期复习与可用题型。库在这一层开合，所以读侧也是异步的（路由本来就是 async handler）。 */
+export async function readPracticeSummaryUseCase(repositoryId: string): Promise<ReadResult<ReturnType<typeof exercises.getSummary>>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return repositoryMissing;
-  return { ok: true, value: exercises.getSummary(repository) };
+  return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.getSummary(practiceView(repository, ports))) };
 }
 
 /** 学习者画像：从 journal 事件回放出的掌握度、支架退场状态与推荐设置。 */
