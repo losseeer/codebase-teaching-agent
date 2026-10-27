@@ -7,7 +7,7 @@ import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
 import { recordEgress, type EgressSource } from "../adapter/outbound/security/egress-log.js";
-import { secretMasker } from "../adapter/outbound/security/secrets.js";
+import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**

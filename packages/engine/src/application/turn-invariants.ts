@@ -1,7 +1,7 @@
 import { styleBand } from "@codebase-tutor/domain";
 
 import { sourceExtensions } from "../indexer/indexer.js";
-import { maskSecrets } from "../adapter/outbound/security/secrets.js";
+import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
   引用核验认得的扩展名 = 索引会收录的那一份名单（`sourceExtensions`：图内语言由能力表派生 ∪ 图外的配置/文档）。

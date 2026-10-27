@@ -4,7 +4,7 @@ import type { FileRole, ImportEstimate } from "@codebase-tutor/domain";
 
 import { hash } from "@codebase-tutor/platform";
 import type { LlmUsage } from "../application/port/llm-provider.js";
-import { maskSecrets, secretMasker } from "../adapter/outbound/security/secrets.js";
+import { maskSecrets, secretMasker } from "@codebase-tutor/domain";
 import { wordsOf, tokenHits } from "@codebase-tutor/platform";
 import type { SummaryStore } from "../application/port/summary-store.js";
 import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis";

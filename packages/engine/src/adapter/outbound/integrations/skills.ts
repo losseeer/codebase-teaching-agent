@@ -2,7 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
-import { maskSecrets } from "../security/secrets.js";
+import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
   技能加载（产品 agent 的「按需取做法」通道），照 Agent Skills 那套公开规格（`SKILL.md` + YAML frontmatter）：

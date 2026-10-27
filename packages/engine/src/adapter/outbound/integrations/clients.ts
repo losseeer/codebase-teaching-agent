@@ -6,7 +6,7 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 import type { McpCallAudit } from "@codebase-tutor/domain";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { hash } from "@codebase-tutor/platform";
-import { maskSecrets } from "../security/secrets.js";
+import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
   MCP 客户端：把外部 MCP server 的工具接进产品 agent 的工具循环。

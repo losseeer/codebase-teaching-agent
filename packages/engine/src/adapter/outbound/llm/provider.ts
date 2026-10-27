@@ -1,6 +1,6 @@
 import type { LlmUsage, LlmToolCall, LlmMessage, LlmCompletionInput, ThinkingEffort, LlmCompletion, LlmProvider, TeachingProviderStatus } from "../../../application/port/llm-provider.js";
 import { LlmAbortedError, isLlmAborted } from "../../../application/port/llm-provider.js";
-import { maskSecrets } from "../security/secrets.js";
+import { maskSecrets } from "@codebase-tutor/domain";
 import { applyThinking } from "./thinking.js";
 
 /**

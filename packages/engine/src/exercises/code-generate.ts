@@ -21,7 +21,7 @@ import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 import { recordEgress } from "../adapter/outbound/security/egress-log.js";
-import { maskSecrets, secretMasker } from "../adapter/outbound/security/secrets.js";
+import { maskSecrets, secretMasker } from "@codebase-tutor/domain";
 import { runSandbox, SandboxUnavailableError } from "../adapter/outbound/sandbox/isolation.js";
 import { assertSafePath, type SandboxFile, type SandboxRun } from "../adapter/outbound/sandbox/runner.js";
 

@@ -6,6 +6,9 @@
 
   只收高信号形态：误伤 `YOUR_KEY`、`token = config.get("x")` 这类讲解代码的字样，等于毁掉教学正文的可读性。
   命中一律换成固定占位文本，原文绝不落任何日志。
+
+  为什么住内核而不是出站目录：这是文本形状的策略判断，不碰文件也不碰网络；九个消费方里六个在内层
+  （取码、摘录、出题、摘要、回合复检），为了拿一个筛子伸进 `adapter/outbound/` 就等于把判据挂在传输层上。
  */
 export const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}/g, // OpenAI / DeepSeek 一类的 key 形态
