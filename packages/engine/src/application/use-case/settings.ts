@@ -1,7 +1,7 @@
 import { readRepositorySettings } from "../paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
-import { resolveLlmConfig, teachingProviderStatus } from "../../llm/provider.js";
-import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, publicLlmSettings, setLlmRuntimeSettings } from "../../llm/runtime.js";
+import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../llm/provider.js";
+import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../llm/runtime.js";
 /** 思考档位取值：以运行时那份清单为唯一真源，不在这里另抄一份。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../llm/thinking.js";
@@ -16,6 +16,8 @@ import { repositoryOr404, teachingLlm } from "../../services.js";
     而闸门按「钱 ≥ 预算」判断，NaN 恒为 false ⇒ 静默变成「永不超支」；判据与落盘恢复共用 `normalizeRate`；
   - 接口地址只认 http(s)：填了 file:// 之类的协议会在 fetch 时以晦涩错误失败，不如在保存时就拒绝；
   - 密钥里的空白几乎总是粘贴带进来的换行，存下来只会变成「401 但看不出为什么」；
+  - 超时按区间拒（1 秒~5 分钟）而不是钳下来收下：填 999999 的人以为自己有很多时间，实际连不上时要连等两发；
+    这一档原本是只能改 `.env` 再重启的旋钮，而模型侧那句「可以调大超时时长」一直在指它；
   - 思考档位与新服务商/模型的兼容性提前校验，不支持的组合在保存时就拒，而不是等每次对话调用时报错。
     `off` 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里拒掉。
   */
@@ -27,6 +29,7 @@ export type SettingsFailure =
   | { kind: "url-protocol" }
   | { kind: "api-key-blank" }
   | { kind: "pricing-invalid"; label: string }
+  | { kind: "timeout-invalid" }
   | { kind: "model-thinking-incompatible"; model: string; thinking: string; supported: string[] }
   | { kind: "budget-missing" }
   | { kind: "budget-invalid" };
@@ -54,17 +57,21 @@ function describeThinking(model: string) {
   */
 export function llmSettingsView(): Record<string, unknown> {
   const fallback = resolveLlmConfig({});
+  const effective = effectiveLlmConfig;
   const active = teachingProviderStatus(teachingLlm());
   return {
     ...publicLlmSettings(),
-    envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey) },
+    // 超时这里给的是「.env 那一份解析完的结果」：界面要能说清留空时实际生效的是多少毫秒
+    envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey), timeoutMs: fallback.timeoutMs },
     pricing: currentPricing(),
     pricingSources: { input: pricingSourceOf("input"), output: pricingSourceOf("output"), cacheHit: pricingSourceOf("cacheHit") },
     activeModel: active.model,
     activeProvider: active.provider,
     activeMode: active.mode,
-    // 能力按「实际生效的模型 slug」解析（运行时覆盖优先，回落 .env），与 provider 工厂同一套解析
-    thinkingCapability: describeThinking(effectiveLlmConfig().model)
+    // 生效超时与能力都按「运行时覆盖优先，回落 .env」这一套解析，与 provider 工厂同一口径
+    activeTimeoutMs: effective().timeoutMs,
+    timeoutRange: { minMs: TIMEOUT_MIN_MS, maxMs: TIMEOUT_MAX_MS },
+    thinkingCapability: describeThinking(effective().model)
   };
 }
 
@@ -77,6 +84,8 @@ export interface LlmSettingsPatch {
   inputUsdPerMillion?: string;
   outputUsdPerMillion?: string;
   cacheHitUsdPerMillion?: string;
+  /** 单次请求的超时（毫秒）；空串 = 回落 .env 的 `TUTOR_LLM_TIMEOUT_MS`。 */
+  timeoutMs?: string;
 }
 
 /** 更新服务商/模型/端点/密钥/思考档位/单价：校验通过才落盘并立即重建 provider，留空 = 回落 .env。 */
@@ -111,6 +120,9 @@ export function updateLlmSettingsUseCase(patch: LlmSettingsPatch): SettingsResul
     pricingPatch[key] = normalized;
   }
 
+  const timeoutMs = patch.timeoutMs === undefined ? undefined : normalizeTimeoutMs(patch.timeoutMs);
+  if (patch.timeoutMs !== undefined && timeoutMs === undefined) return { ok: false, failure: { kind: "timeout-invalid" } };
+
   if (body.thinking && body.thinking !== "auto") {
     const model = resolveLlmConfig({ ...getLlmRuntimeSettings(), ...(provider === undefined ? {} : { provider }), ...(typeof body.model === "string" ? { model: body.model } : {}) }).model;
     if (!isThinkingEffortSupported(model, body.thinking as ThinkingEffort)) {
@@ -123,6 +135,7 @@ export function updateLlmSettingsUseCase(patch: LlmSettingsPatch): SettingsResul
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(apiKey === undefined ? {} : { apiKey }),
     ...pricingPatch,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     thinking: body.thinking as ThinkingEffort
   });
   // 响应带生效状态与能力声明：界面换模型/换服务商后无需再 GET 一次就能刷新思考档位的可用状态。

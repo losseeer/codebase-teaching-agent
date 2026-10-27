@@ -428,9 +428,28 @@ export interface LlmConfigOverrides {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  /** 单次请求的超时（毫秒）：数字或数字串都收，空串与脏值按「没填」回落 .env。 */
+  timeoutMs?: string;
 }
 
 const trimmed = (value?: string): string => value?.trim() ?? "";
+
+/** 超时的合法区间与默认值：界面保存、.env 回落、落盘恢复三处共用这一份判据，不各写一套上下限。 */
+export const TIMEOUT_MIN_MS = 1_000;
+export const TIMEOUT_MAX_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 12_000;
+
+/**
+  一次请求的超时：GUI 运行时覆盖 → `.env` 的 `TUTOR_LLM_TIMEOUT_MS` → 默认 12s，最后钳进 [1s, 5min]。
+  空串、非数字、负数一律算「没填」而不是算 0——0ms 会让每一发真实请求当场判成超时。
+  上限压在 5 分钟是因为重试层会再补一发：不设上限时一个连不上的端点能把一次问答挂到十分钟。
+*/
+export function resolveTimeoutMs(override: string | undefined, env: string | undefined): number {
+  // 逐层取第一个「读得出的正数」：空串与脏串都算没填、继续往下回落，不当成 0——0ms 会让每一发真实请求当场判成超时
+  const picked = [trimmed(override), trimmed(env)].find((raw) => Number.isFinite(Number(raw)) && Number(raw) > 0);
+  const value = picked === undefined ? DEFAULT_TIMEOUT_MS : Number(picked);
+  return Math.min(TIMEOUT_MAX_MS, Math.max(TIMEOUT_MIN_MS, value));
+}
 
 /**
   一份配置的三层回落：GUI 运行时覆盖 → .env（只有 TUTOR_LLM_* 一套）→ 该协议默认。
@@ -443,7 +462,7 @@ export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLl
   const apiKey = trimmed(overrides.apiKey);
   const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel();
   // 留空与非法值都回落到默认：`Number("")` 是 0，而 0ms 定时器会把每一发真实请求当场判成超时（重试层再补一发，全部模型路径瘫痪）
-  const timeoutMs = Math.max(1_000, Number(process.env.TUTOR_LLM_TIMEOUT_MS) || 12_000);
+  const timeoutMs = resolveTimeoutMs(overrides.timeoutMs, process.env.TUTOR_LLM_TIMEOUT_MS);
   return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
 }
 

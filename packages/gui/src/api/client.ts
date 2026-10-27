@@ -155,6 +155,8 @@ export interface LlmEnvFallback {
   model: string;
   baseUrl: string;
   hasApiKey: boolean;
+  /** .env 那一份解析完的超时（毫秒）：留空时实际生效的就是它，界面上要能说出来。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -182,6 +184,10 @@ export interface LlmSettings {
   inputUsdPerMillion?: string;
   outputUsdPerMillion?: string;
   cacheHitUsdPerMillion?: string;
+  /** 单次请求的超时（毫秒，空串 = 用 .env）；`activeTimeoutMs` 是现在真生效的那一份。 */
+  timeoutMs?: string;
+  activeTimeoutMs?: number;
+  timeoutRange?: { minMs: number; maxMs: number };
   /** 现在真在用的三档（人民币 / 百万 token；引擎每次算账现读，改完不用重启） */
   pricing?: { inputPerMillionUsd: number; cacheHitPerMillionUsd?: number; outputPerMillionUsd: number };
   /** 每一档由谁给出：填过 = runtime，否则 .env，两层都没有 = unset */
@@ -202,6 +208,7 @@ export type LlmSettingsPatch = Partial<{
   inputUsdPerMillion: string;
   outputUsdPerMillion: string;
   cacheHitUsdPerMillion: string;
+  timeoutMs: string;
 }>;
 
 /** 带状态码的 HTTP 失败：调用方要区分「404 = 东西真没有」和「连不上 / 5xx = 引擎暂时不在」，两者的用户处置完全不同。

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { LoggingLlmProvider } from "./call-log.js";
-import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, type LlmConfigOverrides, type LlmProvider, type ResolvedLlmConfig, type ThinkingEffort } from "./provider.js";
+import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS, type LlmConfigOverrides, type LlmProvider, type ResolvedLlmConfig, type ThinkingEffort } from "./provider.js";
 import { tutorDataDir } from "@codebase-tutor/platform";
 
 /**
@@ -27,6 +27,12 @@ export interface LlmRuntimeSettings {
   inputUsdPerMillion: string;
   outputUsdPerMillion: string;
   cacheHitUsdPerMillion: string;
+  /**
+    单次请求的超时（毫秒），同样是为了「改完立刻生效」：超时本来就是慢模型的手感旋钮，
+    要重启才生效的旋钮等于没有（错误文案那句「可以调大超时时长」原先只能去改 .env）。
+    空串 = 回落 `TUTOR_LLM_TIMEOUT_MS`；区间与判据见 provider.ts 的 `resolveTimeoutMs`。
+    */
+  timeoutMs: string;
 }
 
 /** GUI 可选的服务商协议（与 provider.ts 的工厂分支一一对应）；空串另意为「回落 .env」。 */
@@ -43,7 +49,7 @@ const TEXT_KEYS = ["provider", "model", "baseUrl", "apiKey"] as const;
 
 const DEFAULT_SETTINGS: LlmRuntimeSettings = {
   provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto",
-  inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: ""
+  inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "", timeoutMs: ""
 };
 
 /**
@@ -57,6 +63,20 @@ export function normalizeRate(value: unknown): string | undefined {
   if (!trimmed) return "";
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) && parsed >= 0 ? trimmed : undefined;
+}
+
+/**
+  超时输入的判据（只管形状与区间，不管币种与重试）：空串 = 回落 .env；其余必须是 [1s, 5min] 的整数毫秒。
+  越界不当「钳一下就好」收下：填 999999 的人以为自己有很多时间，实际会连不上时也等满两发；
+  当场拒回去，区间和界面文案说的是同一件事。数字与字符串都收（界面传文本框，文件里可能写的是数字）。
+  */
+export function normalizeTimeoutMs(value: unknown): string | undefined {
+  const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : undefined;
+  if (raw === undefined) return undefined;
+  if (!raw) return "";
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < TIMEOUT_MIN_MS || parsed > TIMEOUT_MAX_MS) return undefined;
+  return raw;
 }
 
 /** 默认 ~/.codebase-tutor/llm-settings.json，测试用 TUTOR_LLM_SETTINGS_FILE 指向临时文件。 */
@@ -97,6 +117,8 @@ export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, 
     const normalized = partial[key] === undefined ? undefined : normalizeRate(partial[key]);
     if (normalized !== undefined) settings[key] = normalized;
   }
+  const timeoutMs = partial.timeoutMs === undefined ? undefined : normalizeTimeoutMs(partial.timeoutMs);
+  if (timeoutMs !== undefined) settings.timeoutMs = timeoutMs;
   if (partial.thinking !== undefined) settings.thinking = partial.thinking;
   persist();
   return getLlmRuntimeSettings();
@@ -119,6 +141,9 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
       const normalized = normalizeRate(parsed[key]);
       if (normalized !== undefined) next[key] = normalized;
     }
+    // 超时按同一份判据收：不合格就丢掉该项（回落 .env），不把「999999」这种自己钳不动的值带进内存
+    const timeoutMs = normalizeTimeoutMs(parsed.timeoutMs);
+    if (timeoutMs !== undefined) next.timeoutMs = timeoutMs;
     settings = next;
   } catch (error) {
     // 损坏的设置文件按未配置处理：保留内存态，下次保存会整体覆盖。不出声的话，文件里明明还留着可用密钥，界面却读成「没配模型」
@@ -135,7 +160,7 @@ export function effectiveLlmConfig(): Omit<ResolvedLlmConfig, "apiKey"> & { hasA
 
 /** 当前设置作为工厂覆盖项（空串字段由 provider.ts 的三层回落处理）。 */
 function toOverrides(current: LlmRuntimeSettings): LlmConfigOverrides {
-  return { provider: current.provider, model: current.model, baseUrl: current.baseUrl, apiKey: current.apiKey };
+  return { provider: current.provider, model: current.model, baseUrl: current.baseUrl, apiKey: current.apiKey, timeoutMs: current.timeoutMs };
 }
 
 function persist(): void {

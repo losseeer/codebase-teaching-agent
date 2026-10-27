@@ -70,6 +70,18 @@ describe("OpenAICompatibleProvider", () => {
   });
 
 
+  it("GUI 填的超时优先于 .env；越界钳进区间而不是照收", () => {
+    const saved = process.env.TUTOR_LLM_TIMEOUT_MS;
+    process.env.TUTOR_LLM_TIMEOUT_MS = "60000";
+    expect(resolveLlmConfig({ timeoutMs: "180000" }).timeoutMs).toBe(180_000);
+    expect(resolveLlmConfig({ timeoutMs: "" }).timeoutMs, "空串 = 没填，回落 .env").toBe(60_000);
+    expect(resolveLlmConfig({ timeoutMs: "abc" }).timeoutMs, "脏串同样按没填回落，不当 0").toBe(60_000);
+    expect(resolveLlmConfig({ timeoutMs: "999999" }).timeoutMs, "超过上限按上限生效（路由先拒，这里是第二道）").toBe(300_000);
+    expect(resolveLlmConfig({ timeoutMs: "1" }).timeoutMs, "低于下限不给放行").toBe(1_000);
+    if (saved === undefined) delete process.env.TUTOR_LLM_TIMEOUT_MS;
+    else process.env.TUTOR_LLM_TIMEOUT_MS = saved;
+  });
+
   it("TUTOR_LLM_TIMEOUT_MS 留空或写坏都退回默认，不接受 0：0ms 会把每一发真实请求当场判成超时", () => {
     const saved = process.env.TUTOR_LLM_TIMEOUT_MS;
     process.env.TUTOR_LLM_TIMEOUT_MS = "";

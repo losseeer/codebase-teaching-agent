@@ -1,4 +1,5 @@
 import { LLM_PROVIDERS, THINKING_EFFORTS } from "../../llm/runtime.js";
+import { TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../llm/provider.js";
 import { REPOSITORY_NOT_MOUNTED } from "../../services.js";
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../application/use-case/settings.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -17,6 +18,7 @@ const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply =
     case "url-protocol": return reply.code(422).send({ error: "接口地址只接受 http:// 或 https://" });
     case "api-key-blank": return reply.code(422).send({ error: "API Key 不能含空格或换行" });
     case "pricing-invalid": return reply.code(422).send({ error: `${failure.label}得是不小于 0 的数字（人民币 / 百万 token），留空表示用 .env 的值`, reason: "pricing_invalid" });
+    case "timeout-invalid": return reply.code(422).send({ error: `超时时长得是 ${String(TIMEOUT_MIN_MS)} 到 ${String(TIMEOUT_MAX_MS)} 之间的整数毫秒（留空表示用 .env 的值）`, reason: "timeout_invalid" });
     case "model-thinking-incompatible": return reply.code(422).send({ error: `模型 ${failure.model} 不支持思考档位 "${failure.thinking}"（支持：${failure.supported.length ? failure.supported.join("/") : "无"}）` });
     case "budget-missing": return reply.code(400).send({ error: "请提供 monthlyBudgetUsd" });
     case "budget-invalid": return reply.code(400).send({ error: "预算必须是非负数字" });
@@ -27,7 +29,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   /** GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明）。这份配置是全局的，所以是管理面。 */
   app.get("/api/llm/settings", async () => llmSettingsView());
 
-  app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string } }>("/api/llm/settings", async (request, reply) => {
+  app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string; timeoutMs?: string } }>("/api/llm/settings", async (request, reply) => {
     const result = updateLlmSettingsUseCase(request.body ?? {});
     return result.ok ? result.value : rejected(reply, result.failure);
   });

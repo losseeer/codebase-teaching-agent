@@ -123,7 +123,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
               {llm?.thinkingCapability ? <p className="field-note">{thinkingHint(llm.thinkingCapability)}</p> : null}
               {llm?.activeMode === "local" ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{status.hint}</span></div> : null}
 
-              <div className="section-title">连接（装机时改一次）</div>
+              <div className="section-title">连接</div>
               <SelectSetting
                 label="服务商"
                 value={llm?.provider ?? ""}
@@ -142,6 +142,15 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 placeholder={llm?.envFallback.baseUrl || "协议默认"}
                 disabled={!llm}
                 onCommit={(baseUrl) => updateLlm({ baseUrl })}
+              />
+              <TextSetting
+                label="超时"
+                numeric
+                value={llm?.timeoutMs ?? ""}
+                placeholder={timeoutPlaceholder(llm)}
+                disabled={!llm}
+                note="单位毫秒，超时后引擎再发一次"
+                onCommit={(timeoutMs) => updateLlm({ timeoutMs })}
               />
               <SecretSetting
                 saved={llm?.apiKeyMasked ?? ""}
@@ -213,6 +222,12 @@ const THINKING_STYLE_HINT: Record<string, string> = {
 };
 
 /** 单价一个节点的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
+/** 超时留空时说明清楚用的是 .env 的哪一份：填的是毫秒，读的时候换成秒更好对答（慢模型一句回答要一分多钟）。 */
+function timeoutPlaceholder(llm: LlmSettings | null): string {
+  const env = llm?.envFallback.timeoutMs;
+  return env ? `.env ${String(Math.round(env / 1000))} 秒` : "未配置";
+}
+
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
   const value = llm?.pricing ? money(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";

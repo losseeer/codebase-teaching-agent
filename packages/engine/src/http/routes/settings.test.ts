@@ -60,3 +60,36 @@ describe("预算已达上限时不放行付费分支", () => {
     await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
   });
 });
+
+describe("请求超时的运行时旋钮", () => {
+  /**
+    这一档原本只能改 `.env` 再重启，而模型侧那句「推理模型较慢时可以调大超时时长」一直在指它——
+    说得出却动不了的旋钮等于没有。慢的读数是真的：本机一次 map.chat 的第二发常见 30~60 秒，
+    60 秒一发加一发重试会把正常回合判成失败。
+    */
+  it("PUT 合法值立刻生效，留空回到 .env 那一份", async () => {
+    const before = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { timeoutMs?: string; activeTimeoutMs?: number; timeoutRange?: { minMs: number; maxMs: number } };
+    expect(before.activeTimeoutMs, "没填时生效的是 .env/默认那一份").toBeGreaterThan(0);
+    expect(before.timeoutRange?.maxMs, "区间随设置一起下发，界面的说法与判据同源").toBe(300_000);
+
+    const raised = await fx.app.inject({ method: "PUT", url: "/api/llm/settings", payload: { timeoutMs: "180000" } });
+    expect(raised.statusCode).toBe(200);
+    const raisedBody = raised.json() as { timeoutMs: string; activeTimeoutMs: number };
+    expect(raisedBody.timeoutMs).toBe("180000");
+    expect(raisedBody.activeTimeoutMs, "改完不用重启：这一格就是下一次请求真正用的值").toBe(180_000);
+
+    const cleared = await fx.app.inject({ method: "PUT", url: "/api/llm/settings", payload: { timeoutMs: "" } });
+    expect((cleared.json() as { activeTimeoutMs: number }).activeTimeoutMs).toBe(before.activeTimeoutMs);
+  });
+
+  it("越界或读不出数字就当场拒，不改内存态", async () => {
+    const before = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { activeTimeoutMs: number };
+    for (const raw of ["999999", "500", "abc", "-1"]) {
+      const refused = await fx.app.inject({ method: "PUT", url: "/api/llm/settings", payload: { timeoutMs: raw } });
+      expect(refused.statusCode, `${raw} 不是合法超时`).toBe(422);
+      expect((refused.json() as { reason: string }).reason).toBe("timeout_invalid");
+    }
+    const after = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { activeTimeoutMs: number };
+    expect(after.activeTimeoutMs, "拒掉的值不能留下来生效").toBe(before.activeTimeoutMs);
+  });
+});
