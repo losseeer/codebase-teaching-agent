@@ -281,6 +281,8 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       scene: input.scene,
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.external ? { external: input.external } : {}),
+      // 过程事件也要能出来：练习答疑没有文件面，但「正在取哪份技能正文」这一行本来就该看得见（与宏观设计同一帧词表）
+      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       ...(input.signal ? { signal: input.signal } : {})
     });
     return {
@@ -457,7 +459,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext; /** 过程事件（取技能正文那一类）：与 map-chat 同一帧词表，由调用方并进自己那条 SSE。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -470,7 +472,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
-  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, maxTokens: 700, temperature: 0.3, scene: "practice.chat", ...(input.skills ? { skills: input.skills } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, maxTokens: 700, temperature: 0.3, scene: "practice.chat", ...(input.skills ? { skills: input.skills } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   return {
     reply: flagTruncatedReply(result.completion.text, result.completion.finishReason === "length"),
     provider: input.provider.name,

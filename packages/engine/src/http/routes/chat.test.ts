@@ -134,6 +134,10 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     expect(fx.sentTools[before].raw).toContain("tutor-fixture：测试用做法");
     expect(fx.sentTools[before + 1].raw).toContain("读 ~/.codebase-tutor/llm.log");
     expect(fx.lastEvent("skill_read").payload).toMatchObject({ skill: "tutor-fixture", found: true });
+    // 过程帧要跟着出来：练习答疑没有文件面，但「正在取哪份技能正文」这一步本来就发生了，
+    // 报不出来时界面只剩一行「回复生成中」，看着像卡死
+    const frames = sseEvents(response.payload).map((event) => event.type);
+    expect(frames, "loading_skill 要在正文之前到").toContain("loading_skill");
   });
 
   it("练习答疑没装技能：还是那一趟单轮调用，一个字都没多", async () => {

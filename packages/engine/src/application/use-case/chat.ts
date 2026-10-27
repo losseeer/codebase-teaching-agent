@@ -203,6 +203,8 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
     repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider, style,
     ...(turn.threadId ? { threadId: turn.threadId } : {}),
     ...(skills ? { skills } : {}),
+    // 过程帧与 map-chat 并进同一条流：练习答疑能做的工具动作少，但能报的每一步都要报得出来，不然界面只剩一行「生成中」
+    onProgress: (progress: MapChatProgress) => stream.send(progress),
     ...(stream.signal ? { signal: stream.signal } : {})
   });
   if (stream.signal?.aborted) {
