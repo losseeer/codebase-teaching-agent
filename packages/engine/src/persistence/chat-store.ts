@@ -2,7 +2,8 @@ import type { ChatScope, ChatThread, ChatThreadMessage } from "@codebase-tutor/c
 import type { TutorSettings } from "@codebase-tutor/domain";
 
 import { id } from "@codebase-tutor/platform";
-import { type ChatMessageRow, type ChatSessionRow, withDatabase } from "./database.js";
+import { type ChatMessageRow, type ChatSessionRow } from "./chat-repository.js";
+import { withDatabase } from "./database.js";
 
 /**
   会话持久化的唯一出入口（产品数据线，不是审计线）。三条口径：
@@ -67,7 +68,7 @@ export function createThread(input: { repositoryPath: string; repositoryId: stri
     createdAt: now,
     updatedAt: now
   };
-  withDatabase(input.repositoryPath, (database) => database.insertChatSession({
+  withDatabase(input.repositoryPath, (database) => database.chats.insertSession({
     id: thread.id,
     repositoryId: thread.repositoryId,
     scope: thread.scope,
@@ -81,13 +82,13 @@ export function createThread(input: { repositoryPath: string; repositoryId: stri
 
 /** 线程头（含已软删的也会返回 `undefined`——调用方按「不存在」处理，不给 GUI 区分两种形态的机会）。 */
 export function getThread(repositoryPath: string, threadId: string): ChatThread | undefined {
-  const row = withDatabase(repositoryPath, (database) => database.getChatSession(threadId));
+  const row = withDatabase(repositoryPath, (database) => database.chats.session(threadId));
   return row && !row.deleted_at ? threadOf(row) : undefined;
 }
 
-/** 会话列表：按最近更新在前，**只含已有正文的线程**（判据在 `database.listChatSessions`，一处）。 */
+/** 会话列表：按最近更新在前，**只含已有正文的线程**（判据在 `persistence/chat-repository.ts` 的 `sessions`，一处）。 */
 export function listThreads(repositoryPath: string, repositoryId: string, scope: ChatScope, limit = 100): ChatThread[] {
-  const rows = withDatabase(repositoryPath, (database) => database.listChatSessions(repositoryId, scope, limit));
+  const rows = withDatabase(repositoryPath, (database) => database.chats.sessions(repositoryId, scope, limit));
   return rows.map(threadOf);
 }
 
@@ -103,11 +104,11 @@ export interface NewMessage {
   */
 export function appendMessages(repositoryPath: string, threadId: string, messages: NewMessage[]): boolean {
   return withDatabase(repositoryPath, (database) => {
-    const session = database.getChatSession(threadId);
+    const session = database.chats.session(threadId);
     if (!session || session.deleted_at) return false;
     const now = new Date().toISOString();
     for (const message of messages) {
-      database.insertChatMessage({
+      database.chats.insertMessage({
         id: id(),
         sessionId: threadId,
         role: message.role,
@@ -116,7 +117,7 @@ export function appendMessages(repositoryPath: string, threadId: string, message
         error: message.error ?? null
       });
     }
-    database.touchChatSession(threadId, now);
+    database.chats.touchSession(threadId, now);
     return true;
   });
 }
@@ -131,7 +132,7 @@ export interface TeachingThreadState {
 
 /** 宽松读：只保证形状对（settings 在场）；逐字段归型留给 validateSettings。 */
 export function readThreadState(repositoryPath: string, threadId: string): TeachingThreadState | undefined {
-  const row = withDatabase(repositoryPath, (database) => database.getChatSession(threadId));
+  const row = withDatabase(repositoryPath, (database) => database.chats.session(threadId));
   if (!row?.state_json) return undefined;
   let parsed: unknown;
   try {
@@ -148,16 +149,16 @@ export function readThreadState(repositoryPath: string, threadId: string): Teach
 /** 全量覆盖状态快照（回合收尾时写；不改 `updated_at`，那由 appendMessages 负责）。已软删线程返回 false。 */
 export function saveThreadState(repositoryPath: string, threadId: string, state: TeachingThreadState): boolean {
   return withDatabase(repositoryPath, (database) => {
-    const row = database.getChatSession(threadId);
+    const row = database.chats.session(threadId);
     if (!row || row.deleted_at) return false;
-    database.updateChatSessionState(threadId, JSON.stringify(state));
+    database.chats.saveState(threadId, JSON.stringify(state));
     return true;
   });
 }
 
 /** 全量或尾窗正文：`limit` 取最近 limit 条（仍按时间正序返回）。已软删的线程返回空数组。 */
 export function readMessages(repositoryPath: string, threadId: string, limit?: number): ChatThreadMessage[] {
-  const rows = withDatabase(repositoryPath, (database) => database.listChatMessages(threadId, limit));
+  const rows = withDatabase(repositoryPath, (database) => database.chats.messages(threadId, limit));
   return rows.map(messageOf);
 }
 
@@ -166,18 +167,18 @@ export function renameThread(repositoryPath: string, threadId: string, title: st
   const trimmed = title.trim().slice(0, TITLE_MAX);
   if (!trimmed) return undefined;
   const row = withDatabase(repositoryPath, (database) => {
-    const changed = database.renameChatSession(threadId, trimmed, new Date().toISOString());
-    return changed ? database.getChatSession(threadId) : undefined;
+    const changed = database.chats.renameSession(threadId, trimmed, new Date().toISOString());
+    return changed ? database.chats.session(threadId) : undefined;
   });
   return row && !row.deleted_at ? threadOf(row) : undefined;
 }
 
 /** 软删：返回是否真的删掉了一条未删线程（重复删第二次返回 false，供路由回 404）。 */
 export function softDeleteThread(repositoryPath: string, threadId: string): boolean {
-  return withDatabase(repositoryPath, (database) => database.softDeleteChatSession(threadId, new Date().toISOString())) > 0;
+  return withDatabase(repositoryPath, (database) => database.chats.softDelete(threadId, new Date().toISOString())) > 0;
 }
 
 /** 机检与脚本用：正文行数，走未过滤的计数，所以软删线程的行仍然数得到——用来证明「删除没动原文」。 */
 export function countMessagesRaw(repositoryPath: string, threadId: string): number {
-  return withDatabase(repositoryPath, (database) => database.countChatMessages(threadId));
+  return withDatabase(repositoryPath, (database) => database.chats.countMessages(threadId));
 }
