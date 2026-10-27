@@ -1,6 +1,5 @@
 import { isChatScope, type ChatThread, type ChatThreadMessage } from "@codebase-tutor/contract";
 import { importer, repositoryOr404 } from "../../infrastructure/composition-root.js";
-import { Journal } from "../../adapter/outbound/persistence/journal.js";
 import { locateThread, threadJournalPayload } from "../threads.js";
 
 /**
@@ -73,6 +72,6 @@ export function renameThreadUseCase(threadId: string, title: string | undefined)
 export function deleteThreadUseCase(threadId: string): ThreadsResult<{ threadId: string }> {
   const located = locateThread(threadId);
   if (!located || !importer.chatStore(located.repositoryPath).softDeleteThread(located.thread.id)) return fail("thread-missing");
-  new Journal(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
+  importer.audit(located.repositoryPath, located.repositoryId).append("session_deleted", threadJournalPayload(located.thread, "user_deleted"), located.thread.id);
   return { ok: true, value: { threadId: located.thread.id } };
 }

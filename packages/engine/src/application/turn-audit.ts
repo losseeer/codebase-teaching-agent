@@ -1,8 +1,9 @@
 import type { TurnScene } from "@codebase-tutor/contract";
 
-import { Journal } from "../adapter/outbound/persistence/journal.js";
+import { importer } from "../infrastructure/composition-root.js";
 import { dedupeFileReads, type FileReadRecord } from "../source/read-file.js";
 import type { LlmUsage } from "./port/llm-provider.js";
+import type { AuditSink } from "./port/audit-sink.js";
 import type { CodeSearchRecord } from "../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../source/tool-loop.js";
 import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
@@ -13,7 +14,7 @@ import type { McpCallAudit } from "../adapter/outbound/integrations/clients.js";
 */
 
 /** 没走完的回合（用户停止或端点报错）也要落的那一发账：钱已经花了，账上不能没有。 */
-function appendUsage(journal: Journal, input: { provider: string; scene: TurnScene; threadId?: string; outcome: "aborted" | "failed"; usage?: LlmUsage }): void {
+function appendUsage(journal: AuditSink, input: { provider: string; scene: TurnScene; threadId?: string; outcome: "aborted" | "failed"; usage?: LlmUsage }): void {
   const usage = input.usage;
   if (!usage || (!usage.inputTokens && !usage.outputTokens)) return;
   journal.append("token_usage", {
@@ -38,7 +39,7 @@ export function auditsFromResult(result: { fileReads?: FileReadRecord[]; codeSea
 */
 export function recordUnfinishedTurn(input: { repositoryPath: string; repositoryId: string; scene: TurnScene; provider: string; outcome: "aborted" | "failed"; threadId?: string; audits?: ToolLoopAudits }): void {
   const audits = input.audits;
-  const journal = new Journal(input.repositoryPath, input.repositoryId);
+  const journal = importer.audit(input.repositoryPath, input.repositoryId);
   appendUsage(journal, { ...input, usage: audits?.usage });
   if (!audits || (!audits.fileReads.length && !audits.codeSearches.length && !audits.skillReads.length && !audits.mcpCalls.length)) return;
   for (const read of dedupeFileReads(audits.fileReads)) {

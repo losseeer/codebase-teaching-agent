@@ -33,6 +33,19 @@ export class Journal {
 }
 
 /**
+  按库路径交出一条审计线（写 + 读，形状见 `application/port/audit-sink.ts` 的 `AuditLine`）。
+  与 `chatStoreFor` 同一处置：这里不 import 那个端口，漏一格或签名不合由注入点（`importer.audit`）的返回类型当场报错。
+  未挂载的仓也要能记自己那一笔（按 threadId 找回仓、后台收尾的回合账），所以这一格只认路径与仓 id。
+  */
+export function auditLineFor(repositoryPath: string, repositoryId: string) {
+  const journal = new Journal(repositoryPath, repositoryId);
+  return {
+    append: (type: JournalEventType, payload: JournalEvent["payload"], sessionId?: string) => journal.append(type, payload, sessionId),
+    read: () => readJournal(repositoryPath)
+  };
+}
+
+/**
   按字节水位增量解析的读缓存。依据：journal 是 append-only，已解析前缀永不改变，每行以 `\n` 收尾；
   付费分支每次都读整本再挑，全量重读重解析是纯粹重复劳动。
   防护判据写在 readJournal 的分派处（inode/截断、半行、LRU、等长改写）。

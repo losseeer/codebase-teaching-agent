@@ -122,23 +122,25 @@ describe("分层守卫", () => {
 
   /**
     应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
-    这一条还是**在册预算**而不是恒为 0：21 条边（type-only 也算，多一处定义就多一处失真）散在 13 个文件里，
+    这一条还是**在册预算**而不是恒为 0：16 条边（type-only 也算，多一处定义就多一处失真）散在 9 个文件里，
     结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那八个口就是这么长出来的。
     数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
     从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
-    10-27 五笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34）；
+    10-27 六笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34）；
     模型调用的协议类型与 `LlmProvider` 接口进 `application/port/llm-provider.ts`（34 → 28）；
     审计线的纯规则（事件白名单与 `turn_text` 拼形）进 `packages/domain`（28 → 26）；
-    会话线程收成 `ChatStore` 端口（26 → 21，挂载项交出 `repository.chatStore`，未挂载的扫描走 `importer.chatStore(path)`）。
-    剩下的最大一格是 `journal.ts` 那五条**读侧**边（`readJournal` 整本回放），下一格就是它。
+    会话线程收成 `ChatStore` 端口（26 → 21）；审计线的读侧与未挂载的写侧收成 `AuditLine`（21 → 16，
+    挂载项那一格现在同时会写与读，未挂载的仓由 `importer.audit(path, repositoryId)` 现开）。
+    剩下的三格：`integrations` 的外部工具面与技能清单（5 条）、`health`/`settings` 直接读 provider 配置（5 条）、
+    零散的句柄类型与密钥筛（6 条）。
     */
-  it("应用层指向具体适配器的边数只能减少（在册预算 21）", () => {
+  it("应用层指向具体适配器的边数只能减少（在册预算 16）", () => {
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
       if (!from.startsWith("application/") || from.startsWith("application/port/")) return false;
       return short(edge.to).startsWith("adapter/outbound/");
     });
-    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(21);
+    expect(list(found), `应用层还认识这些适配器：\n${list(found).join("\n")}`).toHaveLength(16);
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {

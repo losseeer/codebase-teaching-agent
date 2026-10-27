@@ -5,7 +5,6 @@ import { isWithin } from "@codebase-tutor/platform";
 import { exercises, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
-import { readJournal } from "../../adapter/outbound/persistence/journal.js";
 
 /**
   仓库只读产物的用例：索引、练习摘要、学习者画像、导入报告、源码。
@@ -47,7 +46,7 @@ export async function readPracticeSummaryUseCase(repositoryId: string): Promise<
 export function readLearnerProfileUseCase(repositoryId: string): ReadResult<ReturnType<typeof deriveLearnerProfile>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return repositoryMissing;
-  return { ok: true, value: deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path)) };
+  return { ok: true, value: deriveLearnerProfile(repository.index.repositoryId, repository.audit.read()) };
 }
 
 /** 导入报告：索引结果加上当初那份导入预估。 */

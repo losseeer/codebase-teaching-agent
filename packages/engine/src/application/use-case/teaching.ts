@@ -17,7 +17,6 @@ import { LlmAbortedError } from "../port/llm-provider.js";
 import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
-import { readJournal } from "../../adapter/outbound/persistence/journal.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
 import type { ScopedTurnStream } from "./chat.js";
@@ -67,7 +66,7 @@ export function createTeachingSession(input: {
   if (!scope) return fail("scope-format");
   if (!scopeAvailable(scope, repository.index)) return fail("scope-empty");
   const explicit = Boolean(input.settings && Object.keys(input.settings).length) || input.style !== undefined;
-  const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path));
+  const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, repository.audit.read());
   const settings = explicit
     ? validateSettings({ ...defaultTutorSettings, ...input.settings, style: input.settings?.style ?? input.style })
     : learnerProfile.recommended.settings;
@@ -131,7 +130,7 @@ export function prepareTeachingTurn(sessionId: string, input: { content?: string
       scope,
       question,
       styleChanged,
-      faded: deriveLearnerProfile(repository.index.repositoryId, readJournal(repository.path)).faded
+      faded: deriveLearnerProfile(repository.index.repositoryId, repository.audit.read()).faded
     }
   };
 }

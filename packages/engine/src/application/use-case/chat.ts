@@ -22,7 +22,6 @@ import {
   threadScopedHistory
 } from "../scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
-import { readJournal } from "../../adapter/outbound/persistence/journal.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
@@ -113,7 +112,7 @@ export async function runMapChat(
   try {
     // 开火前先结算这条线程上不会再被回答的提问（过期 / 换话题），认领不算换话题
     settleStaleAsks(repository, threadJournal, turn.threadId, input.resumeAsk);
-    const threadEvents = readJournal(repository.path).filter((event) => event.sessionId === turn.threadId);
+    const threadEvents = repository.audit.read().filter((event) => event.sessionId === turn.threadId);
     // 连续两回合都在问 ⇒ 这一轮不给提问通道（第三句该按默认答并写明假设）；范围已知的回合本来就不缺那一格
     const askGiven = !(input.scopePaths?.length || input.path) && consecutiveAskedTurns(threadEvents) < 2;
     let writtenDiagram: { id: string; name: string } | undefined;
