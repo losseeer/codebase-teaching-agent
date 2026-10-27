@@ -803,7 +803,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
         claimAsk: (pendingToolCallId, promptHash) => {
           const hit = rows.find((row) => row.pendingToolCallId === pendingToolCallId);
           if (!hit) return undefined;
-          // 取到即删（与 `claimTurnCheckpoint` 同口径）：答了就等于关闭，核不上也不该留给下一回合再结算
+          // 取到即删（与 `persistence/checkpoint-repository.ts` 的 `claim` 同口径）：答了就等于关闭，核不上也不该留给下一回合再结算
           rows.splice(rows.indexOf(hit), 1);
           return hit.promptHash === promptHash ? { round: hit.state.rounds, state: hit.state } : undefined;
         },

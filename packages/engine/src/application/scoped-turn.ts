@@ -190,7 +190,7 @@ export function settleStaleAsks(repository: ImportedRepository, journal: Journal
   const database = repository.handle.pin();
   let settled: { pendingToolCallId: string; cause: "expired" | "new_question" }[];
   try {
-    settled = database.settlePendingAsks(threadId, "map.chat", Date.now() - CHECKPOINT_TTL_MS, resumingToolCallId);
+    settled = database.checkpoints.settleAsks(threadId, "map.chat", Date.now() - CHECKPOINT_TTL_MS, resumingToolCallId);
   } finally {
     repository.handle.unpin();
   }

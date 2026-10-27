@@ -38,8 +38,8 @@ export function turnCheckpointChannel(input: {
     restore: (inputHash) => {
       try {
         return withDatabase(repositoryPath, (database) => {
-          database.pruneTurnCheckpoints(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
-          const row = database.latestTurnCheckpoint<TurnLoopState>(threadId, scene, inputHash);
+          database.checkpoints.prune(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
+          const row = database.checkpoints.latest<TurnLoopState>(threadId, scene, inputHash);
           // 残局里的 messages 必须还能用：形状对不上（改了消息结构后的旧行）就当没有，别拿半截状态去发请求
           if (!row || !Array.isArray(row.payload.messages) || !row.payload.messages.length) return undefined;
           return { round: row.round, state: row.payload };
@@ -52,8 +52,8 @@ export function turnCheckpointChannel(input: {
     claimAsk: (pendingToolCallId, promptHash) => {
       try {
         return withDatabase(repositoryPath, (database) => {
-          database.pruneTurnCheckpoints(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
-          const row = database.claimTurnCheckpoint<TurnLoopState>(threadId, scene, pendingToolCallId, promptHash);
+          database.checkpoints.prune(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
+          const row = database.checkpoints.claim<TurnLoopState>(threadId, scene, pendingToolCallId, promptHash);
           if (!row || !Array.isArray(row.payload.messages) || !row.payload.messages.length) return undefined;
           return { round: row.round, state: row.payload };
         });
@@ -71,7 +71,7 @@ export function turnCheckpointChannel(input: {
         return;
       }
       try {
-        withDatabase(repositoryPath, (database) => database.saveTurnCheckpoint({
+        withDatabase(repositoryPath, (database) => database.checkpoints.save({
           threadId,
           scene,
           round: state.rounds,
@@ -86,7 +86,7 @@ export function turnCheckpointChannel(input: {
     },
     clear: () => {
       try {
-        withDatabase(repositoryPath, (database) => database.clearTurnCheckpoints(threadId, scene));
+        withDatabase(repositoryPath, (database) => database.checkpoints.clear(threadId, scene));
       } catch (error) {
         traceEngine("degrade", { component: "turn_checkpoint", action: "clear", cause: error instanceof Error ? error.message : String(error) });
       }

@@ -58,7 +58,7 @@ describe("回合检查点通道", () => {
   it("异常退出写下原因，读回来仍认得出这是残局", () => {
     const c = channel("t4");
     c.save(HASH, state(1, "首问"), "error");
-    expect(withDatabase(repository, (database) => database.latestTurnCheckpoint<TurnLoopState>("t4", "map.chat", HASH))?.stoppedReason).toBe("error");
+    expect(withDatabase(repository, (database) => database.checkpoints.latest<TurnLoopState>("t4", "map.chat", HASH))?.stoppedReason).toBe("error");
   });
 
   it("过期的残局在下一次读时被清掉：隔了半天的续跑多半已经换话题", () => {
@@ -66,7 +66,7 @@ describe("回合检查点通道", () => {
     c.save(HASH, state(1, "首问"));
     expect(c.restore(HASH)).toBeDefined();
     expect(channel("t5", "map.chat", -1).restore(HASH), "TTL 调到负数就是全都算过期").toBeUndefined();
-    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows, "过期行要真删掉，不是读的时候跳过").toBe(0);
+    expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows, "过期行要真删掉，不是读的时候跳过").toBe(0);
   });
 
   it("场景之间不串：同一个线程在宏观设计与代码问答里各有一份进度", () => {
@@ -79,7 +79,7 @@ describe("回合检查点通道", () => {
     const huge = state(1, "x".repeat(CHECKPOINT_MAX_BYTES + 10));
     c.save(HASH, huge);
     expect(c.restore(HASH)).toBeUndefined();
-    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows).toBe(0);
+    expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows).toBe(0);
 
     // 上限写的是字节，就得按字节判：汉字一份字符 ≈ 三个字节，字符数看着没超上限的快照其实早已超标
     const cjkHash = `${HASH}-cjk`;
@@ -97,7 +97,7 @@ describe("回合检查点通道", () => {
   });
 
   it("形状对不上的旧残局（改了消息结构之后的历史行）不拿来发请求", () => {
-    withDatabase(repository, (database) => database.saveTurnCheckpoint({ threadId: "t8", scene: "map.chat", round: 1, inputHash: HASH, payload: { rounds: 1 } }));
+    withDatabase(repository, (database) => database.checkpoints.save({ threadId: "t8", scene: "map.chat", round: 1, inputHash: HASH, payload: { rounds: 1 } }));
     expect(channel("t8").restore(HASH)).toBeUndefined();
   });
 
@@ -105,7 +105,7 @@ describe("回合检查点通道", () => {
     const c = channel("t9");
     c.save(HASH, state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a1" });
     expect(c.restore(HASH), "点重发、断连重试走的都是哈希这条路：接上「等人回答」的快照等于把没答的提问再发一遍").toBeUndefined();
-    expect(withDatabase(repository, (database) => database.claimTurnCheckpoint<TurnLoopState>("t9", "map.chat", "a1", "prompt-1")), "行还在，只是只许按认领取").toMatchObject({ round: 1 });
+    expect(withDatabase(repository, (database) => database.checkpoints.claim<TurnLoopState>("t9", "map.chat", "a1", "prompt-1")), "行还在，只是只许按认领取").toMatchObject({ round: 1 });
   });
 
   it("认领只比调用 id 与「模型 + 系统提示」的指纹，不比答句；认领一次即消费", () => {
@@ -116,7 +116,7 @@ describe("回合检查点通道", () => {
 
     c.save("另一问的哈希", state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a2" });
     expect(c.claimAsk?.("a2", "换了模型的指纹"), "换模型后接上旧回合，等于拿另一家的中间状态作答").toBeUndefined();
-    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows, "答了就等于关闭：核不上也要把行消费掉，别让下一回合再结算一次").toBe(0);
+    expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows, "答了就等于关闭：核不上也要把行消费掉，别让下一回合再结算一次").toBe(0);
     c.save("又一问", state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a3" });
     expect(c.claimAsk?.("别的调用 id", "prompt-1"), "对不上挂着的那条调用就不认，绝不退成全清或猜一条").toBeUndefined();
   });
@@ -124,6 +124,6 @@ describe("回合检查点通道", () => {
   it("等回答的残局同样过 TTL：一句没人答的提问不该永久留在库里", () => {
     channel("t11").save(HASH, state(1, "首问"), "await_user", { promptHash: "prompt-1", pendingToolCallId: "a1" });
     expect(channel("t11", "map.chat", -1).claimAsk?.("a1", "prompt-1")).toBeUndefined();
-    expect(withDatabase(repository, (database) => database.turnCheckpointStats()).rows).toBe(0);
+    expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows).toBe(0);
   });
 });
