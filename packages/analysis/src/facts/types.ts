@@ -1,6 +1,6 @@
 import type { DeclaredType, FactSkip, SymbolInfo, TypeRelationEdge, TypeRelationFileFact, TypeRelationKind } from "@codebase-tutor/domain";
 
-import type { SyntaxNode } from "../depgraph/parser.js";
+import type { SyntaxNode } from "../extraction/parser.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**

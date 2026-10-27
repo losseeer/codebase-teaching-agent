@@ -1,6 +1,6 @@
 import type { CfgBlock, CfgEdge, CfgEdgeKind, CfgFileFact, CfgFunction, FactSkip, SymbolInfo } from "@codebase-tutor/domain";
 
-import { declarationNameOf, withSyntaxTrees, type GrammarName, type SyntaxNode } from "../depgraph/parser.js";
+import { declarationNameOf, withSyntaxTrees, type GrammarName, type SyntaxNode } from "../extraction/parser.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**

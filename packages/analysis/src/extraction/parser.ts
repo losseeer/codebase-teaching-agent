@@ -131,7 +131,7 @@ export function loadSymbolParser(): Promise<ParseBackendStatus> {
     } catch (error) {
       const reason = `语法解析器加载失败（${error instanceof Error ? error.message : String(error)}），本次分析已回落逐行文本匹配`;
       status = { backend: "regex", reason };
-      traceEngine("degrade", { component: "depgraph.parser", reason }, { traceId: null });
+      traceEngine("degrade", { component: "parser", reason }, { traceId: null });
     }
     return status;
   })();

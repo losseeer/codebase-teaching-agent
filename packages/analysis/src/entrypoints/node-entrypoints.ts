@@ -1,6 +1,6 @@
 import type { SourceAnchor } from "@codebase-tutor/domain";
 
-import { extractMultilineTemplateLines } from "./parser.js";
+import { extractMultilineTemplateLines } from "../extraction/parser.js";
 
 /**
  * Node/TS 侧的框架入口：Express / Fastify / Koa / NestJS。

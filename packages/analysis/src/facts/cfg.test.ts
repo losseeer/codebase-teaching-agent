@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { languageCapabilitiesOf, type CfgBlock, type CfgFileFact, type CfgFunction } from "@codebase-tutor/domain";
 
-import { extractSymbolsFromAst, loadSymbolParser } from "../depgraph/parser.js";
+import { extractSymbolsFromAst, loadSymbolParser } from "../extraction/parser.js";
 import { buildFileCfg } from "./cfg.js";
 
 /**

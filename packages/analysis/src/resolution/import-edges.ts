@@ -1,5 +1,5 @@
 import { coveredByGoModule, coveredByPackageRoot, packageIdentity } from "./external-names.js";
-import { cppExtensionPattern, tsSpecifierPattern } from "./language-extensions.js";
+import { cppExtensionPattern, tsSpecifierPattern } from "../ingestion/language-extensions.js";
 import { extractJavaSpecifiers, javaSourceRootOf, resolveJavaImport } from "./java-types.js";
 import { extractCppIncludes, resolveCppInclude } from "./cpp-imports.js";
 import { extractCSharpSpecifiers, resolveCSharpImport } from "./csharp-imports.js";

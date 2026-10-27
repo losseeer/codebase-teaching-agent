@@ -7,7 +7,7 @@ import type { FileSlice } from "@codebase-tutor/analysis";
 /**
   文件职责摘要的提供方（L1）契约：
   - 输入是结构切片（`FileSlice`），不是整份正文：只留按重要性排序的符号签名与依赖方向。
-  - 输出是 {summary, role?}；角色本由结构规则给出（`depgraph/roles.ts`），模型给的角色是
+  - 输出是 {summary, role?}；角色本由结构规则给出（analysis 包的 `extraction/roles.ts`），模型给的角色是
     可选覆盖——给了就用，没给就沿用结构结论。
   - 接口是批量的：一次调用处理多条切片，把导入期的往返次数降到 1/8，重复的系统提示只付一次。
   - 返回值按下标对齐入参，某一条 `undefined` 表示没拿到结果、由调用方回落——

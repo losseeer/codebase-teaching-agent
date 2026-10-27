@@ -1,12 +1,12 @@
 import type { RegistryEntry, RegistryFileFact, RegistryKind } from "@codebase-tutor/domain";
 
-import { extractRouteEndpoints } from "../depgraph/url-routes.js";
+import { extractRouteEndpoints } from "../entrypoints/url-routes.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
   注册与配置索引：运行时才连上的关系（注解注入、`app.use`、`META-INF/services` 清单），依赖图看不见。
   1. 配置文件只记键名，绝不记值：产物落在被学习仓自己的 `.tutor/` 里，是盘上明文。
-  2. 路由不另写判据：复用 `depgraph/url-routes.ts` 的识别结果，与接缝表说同一条路由。
+  2. 路由不另写判据：复用 `entrypoints/url-routes.ts` 的识别结果，与接缝表说同一条路由。
   3. 每条都带 `via`（Spring 注解 / 构造注入 / app.use / SPI 清单 / pom 模块…），区分编译器级与正则猜测。
 */
 

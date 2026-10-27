@@ -91,6 +91,12 @@ describe("分层守卫", () => {
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
   });
 
+  it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {
+    // 那句话写在 analysis 的 index.ts 头上，这条测试负责让它是真的：深路径引进来，包内怎么重组都不自由
+    const offenders = files.filter((file) => /from "@codebase-tutor\/analysis\//.test(readFileSync(file, "utf8"))).map(short);
+    expect(offenders, `绕过 index.ts 的深路径 import：${offenders.join(", ")}`).toEqual([]);
+  });
+
   it("跨包方向：引擎与界面都不许被对方 import", () => {
     const hits = files.filter((file) => /from "@codebase-tutor\/(gui|engine)"/.test(readFileSync(file, "utf8"))).map(short);
     expect(hits, `跨包 import（共享的东西住 shared）：${hits.join(", ")}`).toEqual([]);

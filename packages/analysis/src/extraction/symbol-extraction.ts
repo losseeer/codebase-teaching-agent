@@ -2,7 +2,7 @@ import { extname } from "node:path";
 import type { SymbolInfo } from "@codebase-tutor/domain";
 
 import { extractSymbolsFromAst } from "./parser.js";
-import { tsFamilyExtensions } from "./language-extensions.js";
+import { tsFamilyExtensions } from "../ingestion/language-extensions.js";
 
 /**
   符号抽取：优先语法树；解析器未就绪或该扩展名没有语法时回落逐行匹配。

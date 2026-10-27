@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import type { SymbolInfo } from "@codebase-tutor/domain";
 
-import type { DependencyGraph } from "../graph.js";
+import type { DependencyGraph } from "../../graph/graph.js";
 import { LspClient } from "./client.js";
 
 export async function enrichWithLsp(repositoryPath: string, graph: DependencyGraph): Promise<DependencyGraph> {

@@ -1,7 +1,7 @@
 import type { FileRole, SymbolInfo } from "@codebase-tutor/domain";
 
-import { buildFileEdges, type FileStructure } from "../depgraph/roles.js";
-import { rankSymbolsByCalls, countSymbolsByPath } from "../depgraph/symbol-rank.js";
+import { buildFileEdges, type FileStructure } from "../extraction/roles.js";
+import { rankSymbolsByCalls, countSymbolsByPath } from "../extraction/symbol-rank.js";
 
 /**
   L1 的输入是文件切片，不是整份正文：只保留按重要性排序的符号条目（签名而非正文）、

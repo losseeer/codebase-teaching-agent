@@ -3,17 +3,17 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { CallEdge, DependencyGraphData, FileEntry, SourceAnchor, SymbolInfo, TypeDispatchEdge } from "@codebase-tutor/domain";
 
-import { parseBackendStatus, type ParseBackendStatus } from "./parser.js";
-import { extractCalls } from "./call-edges.js";
-import { detectEntrypoints } from "./entrypoints.js";
-import { packageRoots } from "./external-names.js";
-import { collectGoFiles, collectGoModules } from "./go-imports.js";
-import { collectJavaTypes, extractJavaDispatch } from "./java-types.js";
-import { collectCSharpNamespaces } from "./csharp-imports.js";
-import { extractSymbols } from "./symbol-extraction.js";
-import { handledExtensions, tsFamilyExtensions } from "./language-extensions.js";
-import { resolveFileImports } from "./import-edges.js";
-import { collectPathAliases, collectWorkspacePackages } from "./repo-manifest.js";
+import { parseBackendStatus, type ParseBackendStatus } from "../extraction/parser.js";
+import { extractCalls } from "../resolution/call-edges.js";
+import { detectEntrypoints } from "../entrypoints/entrypoints.js";
+import { packageRoots } from "../resolution/external-names.js";
+import { collectGoFiles, collectGoModules } from "../resolution/go-imports.js";
+import { collectJavaTypes, extractJavaDispatch } from "../resolution/java-types.js";
+import { collectCSharpNamespaces } from "../resolution/csharp-imports.js";
+import { extractSymbols } from "../extraction/symbol-extraction.js";
+import { handledExtensions, tsFamilyExtensions } from "../ingestion/language-extensions.js";
+import { resolveFileImports } from "../resolution/import-edges.js";
+import { collectPathAliases, collectWorkspacePackages } from "../resolution/repo-manifest.js";
 
 
 export interface DependencyGraph {

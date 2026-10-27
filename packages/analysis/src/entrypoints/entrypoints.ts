@@ -2,11 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import type { FileEntry, SourceAnchor } from "@codebase-tutor/domain";
 
-import { cppExtensionPattern, handledExtensions } from "./language-extensions.js";
+import { cppExtensionPattern, handledExtensions } from "../ingestion/language-extensions.js";
 import { detectJavaEntrypoints } from "./java-entrypoints.js";
 import { detectNodeEntrypoints } from "./node-entrypoints.js";
 import { detectPythonEntrypoints } from "./python-entrypoints.js";
-import { isTestPath } from "./roles.js";
+import { isTestPath } from "../extraction/roles.js";
 
 export function detectEntrypoints(repositoryPath: string, files: FileEntry[], contents: Map<string, string>): SourceAnchor[] {
   // Spring 仓的入口只写在注解里，常规规则（package.json、惯用文件名）一条都碰不到；注解命中优先入列

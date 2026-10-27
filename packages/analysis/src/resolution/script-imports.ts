@@ -1,5 +1,5 @@
 import { dirname, extname, join, normalize } from "node:path";
-import { nodeNextTargets, specifierExtensions } from "./language-extensions.js";
+import { nodeNextTargets, specifierExtensions } from "../ingestion/language-extensions.js";
 import type { PathAlias, WorkspacePackage } from "./repo-manifest.js";
 
 /** 通用说明符解析：只服务走到这里的脚本家族（TS / Vue）。py/java/go/rs/cs/cpp 都在 `resolveFileImports` 里被各自的分派截走，不会到这里。 */
