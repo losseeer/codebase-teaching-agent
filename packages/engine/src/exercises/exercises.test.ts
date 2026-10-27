@@ -240,6 +240,9 @@ describe("M2.1 learner scheduling", () => {
 });
 
 describe("沙箱这一关走在扣钱之前", () => {
+  // 预算按环境给，判据不动：这一条要建临时仓、开一份真 SQLite、走真实出题路径，再写一条 decline 账。
+  // 10-27 CI 上默认 5000ms 档两轮红在这条（本地同一文件 tests 1.45s，下一份提交的 CI 又绿）：
+  // 抖动与耗时上限分不开，就先给它一条显式预算，别让它替判据报错。
   it("隔离不可用 ⇒ 代码题直接拒，provider 一次都没被打", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -258,7 +261,7 @@ describe("沙箱这一关走在扣钱之前", () => {
     } finally {
       resetIsolationForTest();
     }
-  });
+  }, 15_000);
 });
 
 describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
