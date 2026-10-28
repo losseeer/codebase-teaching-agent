@@ -1,25 +1,10 @@
 /**
-  学习日志事件类型。分两类：
-
-  - 引擎侧（学习语义）：`ENGINE_JOURNAL_EVENTS`（含 turn_text / turn_invariant / code_egress 等审计事件），
-    由引擎在工具循环 / 判分 / 成本核算里写。
-  - UI 侧（交互动作）：flow_node_selected 起至 repository_switched；由 GUI 经 `POST /api/repositories/:id/journal` 写。
-    每次切节点、打开文件、切换模块、提交练习都必须有事件可查。
-
-  每张表都要正好归到 `ENGINE_JOURNAL_EVENTS` 或 `UI_JOURNAL_EVENTS` 之一：下面那条编译期对账会查漏归类，
-  `packages/engine/src/persistence/journal.ts` 的运行时白名单由这两张表派生。
-  append-only：只许新增，不许改名既有取值，也不删类型——读侧不校验类型，历史事件仍可读，只是不再接受新写入。
+  学习日志的事件类型。引擎侧写 `ENGINE_JOURNAL_EVENTS`，界面侧经 `POST /api/repositories/:id/journal` 写 `UI_JOURNAL_EVENTS`。
+  每个类型必须正好归入一边；运行时白名单由这两张表派生。
 */
 export type JournalEventType =
   // 引擎侧
-  /** 历史事件：教学状态机撤除后不再写。类型保留不删——append-only 那条纪律，
-      历史仓里的这些行仍要能被归类；新行不再产生。 */
-  | "unit_mastered"
-  | "hint_depth"
-  | "dependency_event"
-  | "unassisted_test"
-  | "action_veto"
-  /** 判分结果与风格切换：仍由练习判分与教学会话写入。 */
+  /** 判分结果与风格切换。 */
   | "exercise_result"
   | "style_shift"
   /**
@@ -102,11 +87,6 @@ export type JournalEventType =
   */
   | "repository_paired"
   /**
-    历史事件：分层视图的人工改层/改层名，随分层视图退役后不再写。
-    类型保留不删——历史仓里的这些行仍要能被归类。
-  */
-  | "architecture_layer_overridden"
-  /**
     源码出网清单（LLM 数据流审计）。引擎侧写，一行 = 一段进过模型请求的仓内源码。
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
     与 llm.log 靠 `traceId + scene` 关联。字段语义以 engine `security/egress-log.ts` 的注释为准，不在此复述。
@@ -140,13 +120,12 @@ export type JournalEventType =
   引擎侧那张由引擎在工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
 */
 export const ENGINE_JOURNAL_EVENTS = [
-  "unit_mastered", "exercise_result", "hint_depth", "dependency_event", "style_shift", "unassisted_test",
-  "action_veto", "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
+  "exercise_result", "style_shift",
+  "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
-  // architecture_layer_overridden 仅为历史行保留
-  "architecture_layer_overridden", "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
+  "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [

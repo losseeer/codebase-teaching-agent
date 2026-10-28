@@ -46,14 +46,6 @@ export const CAPABILITY_CELLS = ["symbolExtraction", "dependencyEdge", "entrypoi
 
 export type CapabilityCell = (typeof CAPABILITY_CELLS)[number];
 
-
-/** 三档的中文显示名。`unsupported` 直说「没有规则」，不用「未支持」这种看着像「差一点就支持」的说法。 */
-export const CAPABILITY_LEVEL_LABEL: Record<CapabilityLevel, string> = {
-  exact: "可信",
-  approximate: "近似",
-  unsupported: "没有规则"
-};
-
 export interface LanguageCapabilities {
   /** 语言 id，与本表的键一致；界面显示用 `displayName`，别直接露这个。 */
   language: string;

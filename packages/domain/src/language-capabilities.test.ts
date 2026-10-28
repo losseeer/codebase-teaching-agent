@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   CAPABILITY_CELLS,
-  CAPABILITY_LEVEL_LABEL,
   LANGUAGE_CAPABILITIES,
   UNKNOWN_LANGUAGE_CAPABILITIES,
   languageCapabilitiesOf,
@@ -35,8 +34,6 @@ describe("语言能力表：每个节点都要有明确取值", () => {
         expect(entry.notes[cell], `${language}.${cell} 缺说明`).toBeTruthy();
       }
     }
-    // 三档都要有中文名，否则界面出现「未定义」
-    expect(Object.keys(CAPABILITY_LEVEL_LABEL).sort()).toEqual([...LEVELS].sort());
   });
 
   it("已知写法能查到；未知语言回落 unsupported，不假装是 approximate", () => {

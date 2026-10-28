@@ -6,9 +6,7 @@ import { engineLogPath, flushEngineLog, formatEngineTraceLine, traceEngine } fro
 import { currentTraceId, runWithTrace } from "./context.js";
 import type { EngineTraceEvent } from "@codebase-tutor/domain";
 
-/**
-  落盘要逐行可机读、回显只给非 http/boot 的种类；LLM 调用明细不在这一条线（同一事实只写一处，靠 traceId 关联 llm.log）。
-  */
+/** 落盘逐行可机读、回显只给非 http/boot 种类。 */
 
 describe("traceId 上下文的传播", () => {
   it("排队回调继承「挂上去那一刻」的上下文；出了上下文回 null", async () => {
@@ -16,8 +14,7 @@ describe("traceId 上下文的传播", () => {
       await Promise.resolve();
       return Promise.resolve().then(() => currentTraceId());
     });
-    // 这一条钉住 `importer.submit` 的排队语义：导入是这么排队的，所以它几分钟内的 journal / llm.log 行
-    // 都带着来源请求的 reqId——那是「这一次导入花了哪些钱」唯一的关联键，断开就没法回查。
+    // 排队回调继承请求上下文：导入期的行带来源 reqId
     expect(seen).toBe("req-A");
     expect(currentTraceId(), "监听器叫醒的重分析没有请求上下文，读数是 null").toBeNull();
   });
@@ -66,7 +63,7 @@ describe("引擎工作日志", () => {
     runWithTrace("req-1", () => traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached" }));
     runWithTrace("req-2", () => traceEngine("degrade", { scope: "teaching", cause: "monthly_budget_reached" }));
     await flushEngineLog();
-    // 认证闸撤了之后两条都必须把 actor 这列写成 null（列在，值没有——别让它整个消失）
+    // actor 列恒在；无身份时为 null
     expect(readLines()).toEqual([{
       at: expect.any(String),
       kind: "degrade",

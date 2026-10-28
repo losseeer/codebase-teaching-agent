@@ -1,17 +1,8 @@
 import { z } from "zod";
 
 /**
-  引擎与界面之间的运行时契约：把「形状」变成一样能在运行时被核对的东西。
-  TS 类型在运行时不存在，边界两侧各写一份接口时，引擎改个字段名或换个取值，界面拿到 `undefined` 照样渲染，
-  既不报错也不留痕。
-
-  - 类型从 schema 反推（`z.infer`），没有两份声明可以互相漂移；
-  - 界面在边界上校验：引擎回来的东西不符形状就当场报错，而不是把 `undefined` 画上屏；
-  - 引擎照旧按这些类型构造，编不过 = schema 与产出的分歧在编译期就暴露。
-
-  刻意只覆盖「跨进程流动的热形状」：地址簿、导入任务、事件流帧、会话线程、成本读数。
-  课程树 / 图 / 练习这些大而递归的产物仍由 `index.ts` 声明（它们由引擎整体产出、字段多且深，
-  一次性套 schema 的收益低于把两侧都改一遍的风险），要扩就按同样的写法往里加。
+  引擎与界面之间的运行时契约：类型由 schema 反推（z.infer），界面在边界校验形状，不符即抛错。
+  只覆盖跨进程的热形状：地址簿、导入任务、事件流帧、会话线程、成本读数；课程树/图/练习在 index.ts 声明。
 */
 
 /* ------------------------------------------------------------------ */
@@ -32,25 +23,21 @@ export const importJobSchema = z.object({
   createdAt: z.string(),
   completedAt: z.string().optional(),
   error: z.string().optional(),
-  /** 导入时选择的摘要口径：true=「参考注释导入」（slice-v2c 档），false=普通导入；undefined=不改该仓既有设置。
-      显式值会写进该仓 settings（读-合并-写）；换口径只能重新导入。 */
+  /** 是否参考注释导入；显式值写入该仓 settings，换口径需重新导入。 */
   summaryHeaderComments: z.boolean().optional()
 });
 export type ImportJob = z.infer<typeof importJobSchema>;
 
 /**
-  挂载在引擎内存里的仓库的新鲜度判定（只报告，不触发任何重分析）：
-  - `contentChanged` = 磁盘内容与产物记录的 `versionStamp` 不一致（真的过期了）；
-  - `changedFiles` = 与落库 `contentHash` 不一致的文件数（告诉用户「改动集中在哪几处」，比只说「脏了」有用）；
-  - HEAD 变了但内容哈希没变（切分支回到同一份内容、或提交移动但工作树相同）判 `drifted`——产物仍可用，只是要知道分析点在别的提交上；
-  - 产物没记 HEAD 时判 `unknown`，界面明说「只比对了文件内容」。
+  挂载仓库的新鲜度判定（只报告，不触发重分析）：
+  stale = 磁盘内容与 versionStamp 不一致；drifted = HEAD 变了但内容哈希没变；unknown = 产物没记 HEAD。
 */
 export const repositoryFreshnessVerdictSchema = z.enum(["fresh", "drifted", "stale", "unknown"]);
 export type RepositoryFreshnessVerdict = z.infer<typeof repositoryFreshnessVerdictSchema>;
 
 export const repositoryFreshnessSchema = z.object({
   verdict: repositoryFreshnessVerdictSchema,
-  /** 产物生成时间（`analysis.generatedAt`），界面据此说「这是几天前的分析」 */
+  /** 产物生成时间 */
   analyzedAt: z.string(),
   versionStamp: z.string(),
   contentChanged: z.boolean(),
@@ -67,34 +54,25 @@ export const repositoryCatalogEntrySchema = z.object({
   /** 目录名，界面显示用 */
   name: z.string(),
   mounted: z.boolean(),
-  /** 目录还在吗（不存在时保留条目并如实标注，由用户决定移除） */
+  /** 目录是否还在；不存在时条目保留并如实标注 */
   exists: z.boolean(),
-  /** 产物是否已就绪（`.tutor/tutor.db` 里四件套齐不齐）；未挂载时不探测 */
+  /** 产物是否就绪（`.tutor/tutor.db` 四件套）；未挂载时不探测 */
   artifactsReady: z.boolean().optional(),
   freshness: repositoryFreshnessSchema.optional(),
-  /**
-    增量监听此刻活着吗（只挂着的仓有值）。false = 这个仓不会自动跟上磁盘改动，
-    上面那份 `freshness` 只到挂载那一刻为止——不报这条，界面就会一直拿一次旧判定说「产物是新的」。
-  */
+  /** 增量监听是否活着；仅挂载的仓有值 */
   watching: z.boolean().optional(),
-  /** 监听起不来或中途死掉的报错原文，配合 `watching: false` 看 */
+  /** 监听启动失败或中途死亡的报错原文 */
   watchError: z.string().optional(),
-  /**
-    监听是不是被人为挂起的（编辑期免打扰）。必须与 `watching: false` 分开：同为「不会自动跟上磁盘」，
-    但一个是引擎坏了要修，另一个是用户按下的、到点会自己恢复的开关。
-  */
+  /** 监听是否被人为挂起；与 watching:false（引擎故障）区分 */
   watchPaused: z.boolean().optional(),
-  /** 挂起到什么时候（ISO 串）；到点自动恢复并重算一次新鲜度 */
+  /** 挂起到何时（ISO 串）；到点自动恢复 */
   watchPausedUntil: z.string().optional(),
-  /**
-    预算闸门此刻是否失效（只在失效时有值）。挂在地址簿而不是等用户进了仓才在成本页说：
-    单价没配 ⇒ 闸门判不出超支 ⇒ 下一次导入就是在无上限花钱，这句话必须出现在花钱之前那页。
-  */
+  /** 预算闸门失效时的警告文本；仅失效时有值 */
   budgetGateNotice: z.string().optional()
 });
 export type RepositoryCatalogEntry = z.infer<typeof repositoryCatalogEntrySchema>;
 
-/** 懒挂载失败的原因：GUI 要靠它分清「清掉工作区」还是「留着让用户处置」。 */
+/** 懒挂载失败的原因；GUI 据此区分清工作区还是留给用户处置。 */
 export const repositoryMountReasonSchema = z.enum(["not_in_catalog", "directory_missing", "artifacts_incomplete"]);
 export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 
@@ -105,12 +83,12 @@ export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 export const chatScopeSchema = z.enum(["teach", "map", "practice"]);
 export type ChatScope = z.infer<typeof chatScopeSchema>;
 
-/** 运行时判据：请求体里那串 `scope` 是不是这三者之一（`ChatScope` 那个类型只管编译期）。清单以此 schema 为唯一一处。 */
+/** 运行时判断 scope 取值合法；ChatScope 类型只管编译期。 */
 export function isChatScope(value: unknown): value is ChatScope {
   return chatScopeSchema.safeParse(value).success;
 }
 
-/** 一个对话线程的头（正文在 chat_message；软删只体现在 `deletedAt`，列表读侧过滤）。 */
+/** 对话线程的头；正文在 chat_message，软删由列表读侧过滤。 */
 export const chatThreadSchema = z.object({
   id: z.string(),
   repositoryId: z.string(),
@@ -124,7 +102,7 @@ export const chatThreadSchema = z.object({
 });
 export type ChatThread = z.infer<typeof chatThreadSchema>;
 
-/** 线程里的一条消息：`error` 非空表示这轮失败（失败也入库，GUI 才能重现「当时报错」的气泡）。 */
+/** 线程的一条消息；error 非空 = 这一轮失败，失败也入库。 */
 export const chatThreadMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),
@@ -143,7 +121,7 @@ export const costComponentSchema = z.object({
   label: z.enum(["未命中输入", "命中输入（缓存）", "输出"]),
   tokens: z.number(),
   ratePerMillionUsd: z.number(),
-  /** true = 命中价没单独配置，按输入价计（不打折的理由见 engine `cost/cost.ts` 的 `Pricing` 注释，不在此复述） */
+  /** true = 未配置命中价，按输入价计 */
   rateFallback: z.boolean(),
   estimatedCostUsd: z.number()
 });
@@ -158,7 +136,7 @@ export const costBucketSchema = z.object({
 });
 export type CostBucket = z.infer<typeof costBucketSchema>;
 
-/** 按自然日聚合的用量（取 journal `at` 的前 10 位），画近期条形用。 */
+/** 按自然日聚合的用量（取 journal `at` 的前 10 位）。 */
 export const costDaySchema = z.object({
   date: z.string(),
   inputTokens: z.number(),
@@ -183,10 +161,7 @@ export const costSummarySchema = z.object({
   turns: z.number(),
   /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
   costComponents: z.array(costComponentSchema),
-  /**
-    false = 三档单价全未配置 ⇒ 金额恒 0、`mode` 恒为 "normal"——预算闸门根本没在管事，不是「没超预算」。
-    界面必须把这个节点说成「预算闸门未生效」，不能只报 ¥0.0000。判据在 engine `cost/cost.ts`（`pricingIsConfigured`）。
-  */
+  /** 三档单价全未配置时为 false：金额恒 0，预算闸门不生效。判据在 engine cost/cost.ts。 */
   pricingConfigured: z.boolean(),
   /** 因预算已达上限而走本地规则（不付 token）的回合数 */
   degradedTurns: z.number(),
@@ -200,15 +175,11 @@ export type CostSummary = z.infer<typeof costSummarySchema>;
 /* 流式帧：作用域对话流与全局事件流                                    */
 /* ------------------------------------------------------------------ */
 
-/** 回合场景名：三条作用域对话流共用，与 journal 的 `scene`、引擎回合登记表同一套词。 */
+/** 回合场景名：与 journal 的 scene、引擎回合登记表同一套词。 */
 export const turnSceneSchema = z.enum(["teach", "map_chat", "practice_chat"]);
 export type TurnScene = z.infer<typeof turnSceneSchema>;
 
-/**
-  教学回合的过程提示（`{stage}` 形状）：引擎 `harness` 发它，文案由界面定（引擎不关心中文措辞，界面不猜阶段语义）。
-  读文件、检索、取技能、改图、查产物、打外部程序各成一档——没有帧的活动在界面上就是「没发生过」，用户只会看到一串「正在思考」。
-  思考不带轮数：轮数是引擎自己的成本读数（journal 的 `loop_round`），不是给用户看的进度。
-  */
+/** 教学回合过程提示；文案由界面定，思考帧不带轮数。 */
 export const teachingProgressSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("thinking") }),
   z.object({ stage: z.literal("reading"), path: z.string() }),
@@ -221,13 +192,8 @@ export const teachingProgressSchema = z.discriminatedUnion("stage", [
 export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
 
 /**
-  作用域对话流（三处 per-request SSE）的过程帧与正文帧词表。这是引擎与界面之间的唯一词表：
-  - 引擎要发新的一类帧，必须先加进这里（`server.ts` 的 `send` 按这份联合类型收，编不出没登记的帧）；
-  - 界面的映射带穷尽守卫（`never` 断言），漏接一类直接编译不过；
-  - 界面在每一帧上跑这份 schema，形状不对就当场抛，不会让「正在检索…」永远挂着。
-
-  刻意不含 `done` 的成品载荷：三条流的 done 形状各不相同（teach 带 session/policy/cost，map 带 diagram），
-  那部分仍由各自的返回体声明；这里只锁过程帧的种类与形状。
+  作用域对话流的过程帧与正文帧词表，引擎与界面的唯一登记处：
+  新帧类必须先加在这里，两侧各有编译期穷尽守卫；done 载荷不在内，由各自返回体声明。
 */
 export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thinking") }),
@@ -250,11 +216,8 @@ export type ScopedStreamFrame =
   | { type: "done"; [key: string]: unknown };
 
 /**
-  全局事件流（`GET /api/events`）的广播事件：导入进度与仓库更新。对话的 delta/progress 不走这里——
-  它们在各自请求的响应流里。
-  - `repository.updated`：产物或覆盖层变了，界面该重取的那个节点；
-  - `diagram_updated`：画布上的一张图变了（agent 画完 / 结构改动 / 改名 / 删除 / 恢复）。
-  界面据此重取图库与当前图——几何拖动不广播，那是用户自己正在拖的东西，再推一帧给他就是抢鼠标。
+  全局事件流的广播事件；对话的 delta/progress 在各自响应流里。
+  repository.updated = 产物变化；diagram_updated = 图库或当前图变化；几何拖动不广播。
 */
 export const serverEventSchema = z.object({
   type: z.enum(["import.progress", "repository.updated", "diagram_updated"]),
@@ -266,10 +229,7 @@ export type ServerEvent = z.infer<typeof serverEventSchema>;
 /* 边界上的校验口                                                      */
 /* ------------------------------------------------------------------ */
 
-/**
-  一次契约失败：带得上「哪个契约、哪一格、引擎给的是什么」。
-  契约分歧的表现是界面上一个 `undefined`，这里把它变成一次带路径的异常，能在控制台与错误气泡里读出来。
-*/
+/** 契约失败：带契约名与不符的字段路径。 */
 export class ContractViolation extends Error {
   constructor(contract: string, issues: string[]) {
     super(`${contract} 的形状不符：${issues.join("；")}`);
