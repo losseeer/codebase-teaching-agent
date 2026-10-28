@@ -67,7 +67,7 @@ describe("M2.1 exercise service", () => {
     expect(result.passed).toBe(true);
 
     const targetChanged = { ...repository, index: { ...repository.index, files: bumpedFiles } };
-    await expect(service.answer(targetChanged, exercise.id, { selectedIds: [targetPath] })).rejects.toThrow("这道题的源码变了");
+    await expect(service.answer(targetChanged, exercise.id, { selectedIds: [targetPath] })).rejects.toThrow("该练习依赖的源码已更新");
   });
 
   it("出题缓存按「模型 + 题面口径」分作用域：换模型会重跑一次，而不是复用旧题面", async () => {
@@ -106,7 +106,7 @@ describe("M2.1 exercise service", () => {
   it("点出不了题的旧记录不说「请先重新导入仓库」，journal 记 target_stale", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
-    await expect(service.next(repository, { targetUnitId: "workflow:src/pay.ts" })).rejects.toThrow(/这条练习记录出不了题/);
+    await expect(service.next(repository, { targetUnitId: "workflow:src/pay.ts" })).rejects.toThrow(/该练习记录无法出题/);
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)!;
     expect(declined.payload).toMatchObject({ stage: "target_stale", family: "comprehension" });
     // 同一份产物里别的单元照样出得出题。
@@ -253,7 +253,7 @@ describe("沙箱这一关走在扣钱之前", () => {
     };
     stubIsolationForTest({ level: "unavailable", backend: "seatbelt", checks: [], probedAt: new Date().toISOString(), durationMs: 0, reason: "探测没过（测试注入）" });
     try {
-      await expect(service.next(repository, { kind: "patch_edit", targetUnitId: unit.id }, provider)).rejects.toThrow("代码题现在跑不了");
+      await expect(service.next(repository, { kind: "patch_edit", targetUnitId: unit.id }, provider)).rejects.toThrow("代码题当前不可用");
       // 隔离不可用时不允许发出出题调用。
       expect(sent).toEqual([]);
       expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload).toMatchObject({ stage: "sandbox_unavailable", family: "code" });
@@ -348,7 +348,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "当前仓库没有与该主题相关的代码素材。" })]);
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型觉得这个主题出不了题");
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型判定该主题无法出题");
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1);
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", reason: "当前仓库没有与该主题相关的代码素材。" });
   });
@@ -359,7 +359,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const hallucinated = JSON.parse(generationJson);
     hallucinated.anchors = [{ path: "src/invented.ts", line: 1 }];
     const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型出的题不合格");
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("题目校验未通过");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
   });
 

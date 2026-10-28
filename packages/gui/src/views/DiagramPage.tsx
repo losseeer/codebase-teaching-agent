@@ -135,7 +135,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     setListError("");
     api.listDiagrams(repositoryId)
       .then((result) => { if (current) setDiagrams(result.diagrams); })
-      .catch((reason: unknown) => { if (current) setListError(failureText("图库读不到", reason)); })
+      .catch((reason: unknown) => { if (current) setListError(failureText("图库读取失败", reason)); })
       .finally(() => { if (current) setListLoading(false); });
     return () => { current = false; };
   }, [repositoryId, visible, galleryNonce, t.dataVersion]);
@@ -243,7 +243,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
       setSaveState("saved");
     } catch (reason: unknown) {
       setSaveState("failed");
-      setSaveError(failureText("位置没记下", reason));
+      setSaveError(failureText("位置保存失败", reason));
     } finally {
       geometryInFlight.current = false;
       if (pendingPositions.current.size) scheduleGeometry();

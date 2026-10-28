@@ -142,8 +142,8 @@ export class ExerciseService {
       const family = requested.family ?? "comprehension";
       const tag = requested.tagId ?? "";
       // 指定了记录却挑不出单元，与该仓没有可生成的题，是两种原因。
-      if (requested.targetUnitId) this.decline(repository, "target_stale", family, tag, `按单元 ${requested.targetUnitId} 挑不出可出题的单元（题型已停用，或那个文件不在当前分析结果里）。`, "这条练习记录出不了题了，换一张卡片试试。");
-      this.decline(repository, "no_target", family, tag, "分析结果里没有任何可出题的单元。", "这个仓现在出不了题，先重新分析一次。");
+      if (requested.targetUnitId) this.decline(repository, "target_stale", family, tag, `按单元 ${requested.targetUnitId} 挑不出可出题的单元（题型已停用，或那个文件不在当前分析结果里）。`, "该练习记录无法出题，请更换其他记录。");
+      this.decline(repository, "no_target", family, tag, "分析结果里没有任何可出题的单元。", "当前分析结果无可出题内容，请重新分析该仓库。");
     }
     const deps = exerciseDeps(repository, target.kind, target.value);
     const scope = deps.length
@@ -188,12 +188,12 @@ export class ExerciseService {
   private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], skills?: SkillsToolContext): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
-      this.decline(repository, "no_provider", "code", "", "代码题的题面、缺陷与测试都由模型设计，判分靠运行测试；当前没配模型，或本月预算已用完。", "代码题要用模型，现在用不了。");
+      this.decline(repository, "no_provider", "code", "", "代码题的题面、缺陷与测试都由模型设计，判分靠运行测试；当前没配模型，或本月预算已用完。", "代码题需要模型，当前不可用。");
     }
     // 沙箱探测走在付费之前：非 `enforced` 直接拒，不发模型调用。
     const isolation = await ensureIsolation();
     if (isolation.level !== "enforced") {
-      this.decline(repository, "sandbox_unavailable", "code", "", `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`, "代码题现在跑不了，先做别的题。");
+      this.decline(repository, "sandbox_unavailable", "code", "", `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`, "代码题当前不可用。");
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
@@ -211,7 +211,7 @@ export class ExerciseService {
       });
     }
     if (!generation.ok) {
-      this.decline(repository, generation.stage, "code", "", generation.reason, "代码题没出成，再试一次。");
+      this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
     }
     if (generation.usage) repository.ports.audit.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
@@ -256,7 +256,7 @@ export class ExerciseService {
   private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, skills?: SkillsToolContext): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
-    if (!provider) throw new Error("出题用的模型现在用不了：没配模型，或本月预算已用完。");
+    if (!provider) throw new Error("出题模型当前不可用：未配置模型或本月预算已用完。");
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
@@ -268,7 +268,7 @@ export class ExerciseService {
     const selection = matched.length ? "tag" : "panorama";
     if (!candidates.length) {
       // 零素材也要留痕：分得清「没走到模型」与「被模型拒绝」。
-      this.decline(repository, "no_candidates", "llm", tag, `词法命中与仓库全景都挑不出可出题的源码文件（主题「${tag}」）。`, `这个仓里找不到「${tag}」相关的代码，换一个主题试试。`);
+      this.decline(repository, "no_candidates", "llm", tag, `词法命中与仓库全景都挑不出可出题的源码文件（主题「${tag}」）。`, `未找到与「${tag}」相关的源码，请更换主题。`);
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
@@ -281,7 +281,7 @@ export class ExerciseService {
     const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider, ...(skills ? { skills } : {}) });
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
     if (!generation.ok) {
-      this.decline(repository, "llm_generate", "llm", tag, generation.reason, "模型觉得这个主题出不了题，换一个试试。");
+      this.decline(repository, "llm_generate", "llm", tag, generation.reason, "模型判定该主题无法出题，请更换主题。");
     }
     if (generation.usage) repository.ports.audit.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
@@ -292,7 +292,7 @@ export class ExerciseService {
     });
     const issues = guardLlmProposal(generation.proposal, candidates);
     if (issues.length) {
-      this.decline(repository, "guard", "llm", tag, `模型出的题不合格：${issues.map((issue) => issue.message).join("；")}。`, "模型出的题不合格，再试一次。");
+      this.decline(repository, "guard", "llm", tag, `模型出的题不合格：${issues.map((issue) => issue.message).join("；")}。`, "题目校验未通过，请重试。");
     }
     const proposal = generation.proposal;
     const exercise: Exercise = {
@@ -323,13 +323,13 @@ export class ExerciseService {
   /** 按需讲评：只对代码题开放，只回一段话，不改 `passed` / `score`。 */
   async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
     // 讲评不做时效校验：吃的是缓存行里冻结的测试与这次运行的输出。
-    if (!provider) throw new Error("现在给不了讲解。");
+    if (!provider) throw new Error("讲解需要模型，当前不可用。");
     const stored = repository.ports.store.byId<StoredExercise>(exerciseId);
-    if (!stored) throw new Error("这道题不在了，重新生成一张。");
-    if (stored.expected.type !== "harness") throw new Error("只有代码题有讲解。");
+    if (!stored) throw new Error("该练习不存在，请重新生成。");
+    if (stored.expected.type !== "harness") throw new Error("仅代码题支持讲解。");
     const slotPaths = new Set((stored.exercise.code?.files ?? []).map((file) => file.path));
     const learnerFiles = (answer.files ?? []).filter((file) => slotPaths.has(file.path) && file.contents.trim());
-    if (!learnerFiles.length) throw new Error("还没收到代码，没法讲解。");
+    if (!learnerFiles.length) throw new Error("未收到代码，无法讲解。");
     const explained = await explainCodeAttempt({
       repositoryPath: repository.path,
       title: stored.exercise.title,
@@ -350,9 +350,9 @@ export class ExerciseService {
 
   async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {
     const stored = repository.ports.store.byId<StoredExercise>(exerciseId);
-    if (!stored) throw new Error("这道题不在了，重新生成一张。");
+    if (!stored) throw new Error("该练习不存在，请重新生成。");
     const stale = staleDependencies(repository, stored.exercise);
-    if (stale.length) throw new Error("这道题的源码变了，重新生成一张。");
+    if (stale.length) throw new Error("该练习依赖的源码已更新，请重新生成。");
     let graded = stored.expected.type === "rubric"
       ? await gradeRubric(stored, answer, provider, repository.ports.audit)
       : await grade(stored, answer, repository.ports.audit, repository.path);
@@ -480,7 +480,7 @@ type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "target
 async function grade(stored: StoredExercise, answer: ExerciseAnswer, audit: AuditSink, repositoryPath: string): Promise<GradeOutcome> {
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
   if (stored.expected.type === "harness") return gradeHarness(stored, answer, audit, repositoryPath);
-  throw new Error("这道题判不了，重新生成一张。");
+  throw new Error("该练习无法判分，请重新生成。");
 }
 
 /** 代码题判分：只由沙箱里冻结的那组测试决定，模型不参与，判分路径不读仓库源码。 */
@@ -520,7 +520,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, audi
 
 /** rubric 判分：模型拿参考答案与细则比对学习者回答，`automatic: false`。 */
 async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined, audit: AuditSink): Promise<GradeOutcome> {
-  if (!provider) throw new Error("这道题的判分需要模型：当前没配模型，或本月预算已用完。");
+  if (!provider) throw new Error("该题判分需要模型，当前不可用。");
   const learnerAnswer = (answer.text ?? "").trim();
   if (!learnerAnswer) {
     return { score: 0, passed: false, automatic: false, feedbackSource: "llm_judge", feedback: "回答为空；请写下你的分析后再提交。" };

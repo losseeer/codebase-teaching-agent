@@ -267,12 +267,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       return;
     }
     if (lostInTransit(reason)) {
-      console.warn(`[gui] 回合结果没送达`, detail);
-      pushMessage(target, "agent", "这句回复没送达，回到会话时会自动补回。", "error");
+      console.warn("[gui] 回合结果未送达", detail);
+      pushMessage(target, "agent", "回复未送达，恢复连接后自动补回。", "error");
       return;
     }
     patchDebt(target, null);
-    const shown = failureText("这句没发出去，再试一次。", reason);
+    const shown = failureText("发送失败，请重试。", reason);
     setError(target, shown);
     pushMessage(target, "agent", shown, "error");
   };
@@ -335,7 +335,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       setThreads((prev) => ({ ...prev, [scope]: [] }));
       // 正文没读回来就不留旧 session，避免下一问发进上一条线程
       if (scope === "teaching") setSession(null);
-      pushMessage(scope, "agent", "这段历史暂时读不到，可稍后再试或新建会话。", "hint");
+      pushMessage(scope, "agent", "历史暂时不可读，请稍后重试或新建会话。", "hint");
     }
   };
 
@@ -396,7 +396,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 未发言的线程不入清单，由 unsentThread 单列显示
       return thread.id;
     } catch (reason) {
-      setError(scope, failureText("会话没建起来", reason));
+      setError(scope, failureText("新建会话失败", reason));
       return null;
     }
   };
@@ -413,7 +413,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       setChatThreads((prev) => ({ ...prev, [scope]: list }));
       chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
     } catch (reason) {
-      setError(scope, failureText("名字没改掉", reason));
+      setError(scope, failureText("重命名失败", reason));
       void refreshThreads(scope);
     }
   };
@@ -425,7 +425,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch (reason) {
       // 404 = 引擎侧已不存在，视为删除成功
       if (!isNotFound(reason)) {
-        setError(scope, failureText("会话没删掉", reason));
+        setError(scope, failureText("删除会话失败", reason));
         return;
       }
     }

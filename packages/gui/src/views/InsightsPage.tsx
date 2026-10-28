@@ -42,7 +42,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
     setError("");
     api.getCost(workspace.repositoryId)
       .then((summary) => { setCost(summary); setBudget(String(summary.monthlyBudgetUsd)); setSavedAt(new Date().toLocaleTimeString()); })
-      .catch((reason: unknown) => setError(failureText("成本读不到", reason)));
+      .catch((reason: unknown) => setError(failureText("成本读取失败", reason)));
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
   // 空串经 Number() 变 0，等于把月预算上限设成 0，必须挡住
@@ -55,7 +55,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       setSavedAt(new Date().toLocaleTimeString());
       setError("");
     } catch (reason) {
-      setError(failureText("预算没保存", reason));
+      setError(failureText("预算保存失败", reason));
     }
   };
 

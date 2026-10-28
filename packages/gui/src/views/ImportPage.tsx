@@ -64,14 +64,14 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         const progress = checkContract(importJobSchema, event.payload, "import.progress");
         if (progress.id === jobId) setJob(progress);
       } catch (error) {
-        setError(failureText("进度读不到，刷新一下", error));
+        setError(failureText("进度读取失败，请刷新", error));
       }
     });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
         // 404 = 引擎里已无此任务，重试读不回来
         if (isNotFound(reason)) setOrphaned(true);
-        else setError(failureText("进度读不到", reason));
+        else setError(failureText("进度读取失败", reason));
       }),
       5000
     );
@@ -93,7 +93,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     if (!pathToUse || jobActive) return;
     setPath(pathToUse); // 输入框同步显示正在分析的仓
     setError(""); setReport(null); setOrphaned(false);
-    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(failureText("分析没开始", reason)); }
+    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(failureText("分析发起失败", reason)); }
   };
 
   const submit = async (): Promise<void> => startImport(path);
@@ -153,7 +153,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
             {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
             {orphaned ? (
               <div className="banner banner-warn">
-                <Icon name="alert" /><span className="banner-text">这一轮分析停了，重新点一次会接着跑。</span>
+                <Icon name="alert" /><span className="banner-text">分析已中断，已完成部分保留，可重新发起。</span>
               </div>
             ) : null}
 
@@ -176,7 +176,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                     );
                   })}
                 </div>
-                {failed ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">这一轮分析没跑完，重新点一次。</span></div> : null}
+                {failed ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">分析失败，请重新发起。</span></div> : null}
               </div>
             ) : null}
 

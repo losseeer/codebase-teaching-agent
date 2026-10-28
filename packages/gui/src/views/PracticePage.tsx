@@ -92,7 +92,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
   const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
-    api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(failureText("练习进度读不到", reason)));
+    api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(failureText("练习进度读取失败", reason)));
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
@@ -121,7 +121,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       t.setPracticeExercise(next);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
-      const message = failureText("这道题没出来", reason);
+      const message = failureText("出题失败", reason);
       setError(message);
       if (failingUnit) setFailedUnit({ unitId: failingUnit, reason: message });
     } finally {
@@ -163,7 +163,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       refreshSummary();
       t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${next.feedback}`);
     } catch (reason) {
-      setError(failureText("答案没提交上", reason));
+      setError(failureText("答案提交失败", reason));
     } finally {
       setLoading(false);
     }
@@ -494,14 +494,14 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
     <button
       type="button"
       className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
-      title={failed ? "刚才没出成题" : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
+      title={failed ? "出题失败" : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
       onClick={onPick}
     >
       <div className="d-head">
         <span className="grow">{unitName(record.unitId)}</span>
         <span className={`d-score ${record.successes > 0 ? "pass" : "fail"}`}>{record.level}/5</span>
       </div>
-      <div className="d-due">{failed ? "刚才没出成题" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
+      <div className="d-due">{failed ? "出题失败" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
     </button>
   );
 }
