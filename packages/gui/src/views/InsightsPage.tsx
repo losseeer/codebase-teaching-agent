@@ -10,18 +10,36 @@ import { PageTopbar } from "./WorkspaceChrome";
 // 读数全部来自引擎对本月 `token_usage` 事件的聚合（`cost/cost.ts`），这里只做呈现与分桶明细，不二次估算；
 // 单价未配时金额恒为 0，这一事实必须显式说出来。
 
-/** 场景取值 → 界面叫法。取值清单是引擎 `JournalEventType["token_usage"]` 的 scene 白名单，两边同步。 */
+/** 现在还在产这个数的档 → 界面叫法。取值以引擎写 `token_usage` 的调用点为准。 */
 const SCENE_LABEL: Record<string, string> = {
   teach: "代码教学",
   map_chat: "宏观设计对话",
   practice_chat: "练习评估对话",
-  exercise_generate: "练习生成",
-  exercise_llm_generate: "练习生成",
+  exercise_generate: "出题（题面改写）",
+  exercise_llm_generate: "出题（整题由模型）",
   exercise_generate_code: "代码题生成",
+  exercise_judge: "练习判分",
   exercise_explain: "讲评",
   exercise_feedback_polish: "反馈润色",
   unknown: "未标注"
 };
+
+/**
+  账本里出现过、引擎已不再产出的档：这些是**已停用步骤的历史行**，改名或删行都是造假（事实线不回填），
+  但混在「这个月钱花在哪」里会被读成还在花钱，所以标出来。
+*/
+const RETIRED_SCENE_LABEL: Record<string, string> = {
+  course_map: "课程地图",
+  flow_map: "流程全景",
+  module_entries: "模块入口",
+  architecture_map: "架构全景",
+  "map.redraft": "整图重画"
+};
+
+/** 已停用的档排到最后：那是本月账本里的历史行，不是「钱现在花在哪」。 */
+const isRetiredScene = (key: string): boolean => key in RETIRED_SCENE_LABEL;
+/** 没登记的场景不猜中文：原样显示引擎账本上的键，比编一个名字诚实（报表要能与之对上）。 */
+const sceneLabel = (key: string): string => SCENE_LABEL[key] ?? (isRetiredScene(key) ? `${RETIRED_SCENE_LABEL[key]}（已停用）` : key);
 
 // 金额一律按人民币显示（¥）：字段名里的 `Usd` / `USD_PER_MILLION` 是存量键名
 // （已落进 `llm-settings.json`、`repository_state.settings_json` 与接口契约，不能改），
@@ -163,9 +181,9 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 <table className="table">
                   <thead><tr><th>场景</th><th className="num">回合</th><th className="num">输入</th><th className="num">输出</th></tr></thead>
                   <tbody>
-                    {cost.byScene.map((row, index) => (
+                    {[...cost.byScene].sort((a, b) => Number(isRetiredScene(a.label)) - Number(isRetiredScene(b.label))).map((row, index) => (
                       <tr key={`${row.label}-${String(index)}`}>
-                        <td title={row.label}>{SCENE_LABEL[row.label] ?? row.label}</td>
+                        <td title={row.label}>{sceneLabel(row.label)}</td>
                         <td className="num">{row.turns}</td>
                         <td className="num">{tokensText(row.inputTokens)}</td>
                         <td className="num">{tokensText(row.outputTokens)}</td>

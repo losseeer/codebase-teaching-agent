@@ -16,6 +16,7 @@ import {
   boxOf,
   edgePoints,
   fitView,
+  groupRects,
   notePreview,
   relativeTime,
   safeFileName,
@@ -42,15 +43,55 @@ describe("节点盒子的兜底", () => {
     expect(boxOf(boxes([["a", { w: 300, h: 90 }]]), "a")).toEqual({ w: 300, h: 90 });
   });
 
-  it("边画在两端节点的中心；长标签的节点按量到的高度算中心", () => {
+  it("边从卡片的那一面进出：横向为主时接左右边，折线正交", () => {
     const diagram = body([node("a", 0, 0), node("b", 400, 200)]);
-    expect(edgePoints(diagram, edge("a", "b"), boxes([["a", { w: 200, h: 100 }], ["b", { w: 100, h: 50 }]]))).toEqual({ x1: 100, y1: 50, x2: 450, y2: 225 });
+    expect(edgePoints(diagram, edge("a", "b"), boxes([["a", { w: 200, h: 100 }], ["b", { w: 100, h: 50 }]])))
+      .toEqual([{ x: 200, y: 50 }, { x: 300, y: 50 }, { x: 300, y: 225 }, { x: 400, y: 225 }]);
+  });
+
+  it("竖向为主时接底边与顶边：线不许压在两端卡片身上", () => {
+    const diagram = body([node("a", 60, 160), node("b", 60, 280)]);
+    const points = edgePoints(diagram, edge("a", "b"), boxes([["a", { w: 132, h: 90 }], ["b", { w: 132, h: 90 }]])) ?? [];
+    expect(points[0]).toEqual({ x: 126, y: 250 });
+    expect(points.at(-1)).toEqual({ x: 126, y: 280 });
+    expect(points.every((point) => point.x === 126), "同一列的上下两级该是一条竖线，不该有横段").toBe(true);
+  });
+
+  it("反向的边接顶边与底边（依赖方向不改变走线规则）", () => {
+    const diagram = body([node("a", 60, 280), node("b", 60, 160)]);
+    const points = edgePoints(diagram, edge("a", "b"), boxes([["a", { w: 132, h: 90 }], ["b", { w: 132, h: 90 }]])) ?? [];
+    expect(points[0]).toEqual({ x: 126, y: 280 });
+    expect(points.at(-1)).toEqual({ x: 126, y: 250 });
   });
 
   it("端点缺一律不画：agent 刚删掉那个节点时不画到空气里", () => {
     const diagram = body([node("a", 0, 0)]);
     expect(edgePoints(diagram, edge("a", "gone"), new Map())).toBeNull();
     expect(edgePoints(diagram, edge("gone", "a"), new Map())).toBeNull();
+  });
+});
+
+describe("分组框实际画多大", () => {
+  const group = (id: string, x: number, y: number, w: number, h: number): DiagramBody["groups"][number] => ({ id, label: id, x, y, w, h });
+
+  it("模型给的框高装不下量出来的卡片时，只放大到真能包住成员", () => {
+    const diagram = body([node("n1", 60, 160)], [], [group("g1", 20, 140, 900, 80)]);
+    const [rect] = groupRects(diagram, boxes([["n1", { w: 132, h: 96 }]]));
+    // 卡片底 256 比框底 220 低 36：框要长到 256 + 12 的呼吸位，宽与左边界不动（900 已经够）
+    expect(rect).toMatchObject({ x: 20, y: 140, w: 900 });
+    expect(rect?.h).toBe(268 - 140);
+  });
+
+  it("写了 group 归属的节点即使坐标在框外也拉进来；不在框里的不误收", () => {
+    const diagram = body([{ ...node("n1", 60, 900), group: "g1" }, node("n2", 2000, 2000)], [], [group("g1", 20, 140, 900, 80)]);
+    const [rect] = groupRects(diagram, boxes([["n1", { w: 132, h: 48 }], ["n2", { w: 132, h: 48 }]]));
+    expect(rect?.y + rect?.h).toBe(900 + 48 + 12);
+    expect(rect?.x + rect?.w, "离群的那个节点不该被这个框收走").toBeLessThan(2000);
+  });
+
+  it("空框与没有成员时原样保留（用户手动拖大的框不被缩小）", () => {
+    const [rect] = groupRects(body([], [], [group("g1", 20, 140, 900, 300)]), new Map());
+    expect(rect).toMatchObject({ x: 20, y: 140, w: 900, h: 300 });
   });
 });
 

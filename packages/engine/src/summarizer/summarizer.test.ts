@@ -8,7 +8,7 @@ import { classifyFileRoles, type FileStructure } from "@codebase-tutor/analysis"
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import type { SummaryStore } from "../application/port/summary-store.js";
 import { readJournal } from "../adapter/outbound/persistence/journal.js";
-import { LocalSummaryProvider, type SummaryProvider } from "./summary-provider.js";
+import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, type SummaryProvider } from "./summary-provider.js";
 import {
   buildFileSlices,
   extractHeaderComment,
@@ -94,6 +94,32 @@ describe("文件摘要表（L1）", () => {
     expect(rows.size, "落库走的是这个口").toBeGreaterThanOrEqual(STRUCTURE.files.length);
     const second = await summarizeFiles({ structure: STRUCTURE, store, repositoryPath: "unused", provider });
     expect(second.estimate.cachedFiles, "命中判据也来自同一个口").toBe(STRUCTURE.files.length);
+  });
+
+  /**
+    进度读数：L1 是整次导入最慢的一段（换模型后全仓重摘要要跑几十分钟）。
+    只在开头报一个固定值的话，「正在花钱」与「卡死了」在界面上长得一样，所以每一批都得动一次。
+  */
+  it("逐批回报进度：批次之间在动，全命中的那轮也立刻报满", async () => {
+    const database = tempDatabase();
+    // 比一批多两条 ⇒ 必定走满两个批次，读数才证明得出「批与批之间也在动」
+    const totalFiles = SUMMARY_BATCH_SIZE + 2;
+    const many: FileStructure = {
+      files: Array.from({ length: totalFiles }, (_, index) => ({ path: `f${index}.py`, lines: 10 })),
+      symbols: Array.from({ length: totalFiles }, (_, index) => makeSymbol(`f${index}.py`, `fn${index}`, { line: 1, endLine: 3, language: "python" })),
+      calls: [],
+      imports: {},
+      entrypoints: []
+    };
+    const provider = new LocalSummaryProvider();
+    const seen: [number, number][] = [];
+    await summarizeFiles({ structure: many, store: database.summaries, repositoryPath: database.repositoryPath, provider, onProgress: (done, total) => { seen.push([done, total]); } });
+    expect(seen.map(([done]) => done)).toEqual([0, SUMMARY_BATCH_SIZE, totalFiles]);
+    expect(new Set(seen.map(([, total]) => total)).size, "一次运行里总数不能变").toBe(1);
+
+    const again: number[] = [];
+    await summarizeFiles({ structure: many, store: database.summaries, repositoryPath: database.repositoryPath, provider, onProgress: (done) => { again.push(done); } });
+    expect(again, "全命中时一条也不发模型，但仍要报一次，否则进度停在起点就是假卡住").toEqual([totalFiles]);
   });
 
   it("产出摘要 + 结构角色 + 覆盖率，并落库；重复调用全命中缓存", async () => {

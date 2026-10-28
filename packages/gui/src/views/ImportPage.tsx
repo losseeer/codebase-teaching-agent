@@ -2,7 +2,7 @@ import {useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { checkContract, importJobSchema, type ImportJob, type RepositoryCatalogEntry } from "@codebase-tutor/contract";
 
-import { api, subscribeServerEvents, type Workspace } from "../api/client";
+import { api, isNotFound, subscribeServerEvents, type Workspace } from "../api/client";
 import { emit } from "../journal";
 import { Icon } from "../ui/icons";
 import { dateText } from "../ui/labels";
@@ -38,6 +38,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [commentMode, setCommentMode] = useState(false);
   const [job, setJob] = useState<ImportJob | null>(null);
   const [error, setError] = useState("");
+  /** 引擎里已经没有这个任务了（进程换过就会这样）：进度条不能继续停在最后一帧数字上装「还在跑」。 */
+  const [orphaned, setOrphaned] = useState(false);
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   /** 打开着操作菜单的那一行（连同它的锚点按钮，菜单靠锚点定位）。 */
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
@@ -52,7 +54,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const jobId = job?.id;
   /** 终态判定的唯一出口：轮询与按钮禁用共用它。 */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
-  const jobActive = Boolean(job && !isSettled(job.phase));
+  const jobActive = Boolean(job && !isSettled(job.phase) && !orphaned);
   useEffect(() => {
     if (!jobActive || !jobId) return;
     const stop = subscribeServerEvents((event) => {
@@ -67,7 +69,11 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
       }
     });
     const interval = window.setInterval(
-      () => api.getImport(jobId).then(setJob).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取任务进度")),
+      () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
+        // 404 专档：任务不在引擎里了（进程换过），这不是网络错误，重试也读不回来
+        if (isNotFound(reason)) setOrphaned(true);
+        else setError(reason instanceof Error ? reason.message : "无法读取任务进度");
+      }),
       5000
     );
     return () => { window.clearInterval(interval); stop(); };
@@ -87,7 +93,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     const pathToUse = target.trim();
     if (!pathToUse || jobActive) return;
     setPath(pathToUse); // 输入框要显示正在分析的是哪个仓，不能只藏在任务里
-    setError(""); setReport(null);
+    setError(""); setReport(null); setOrphaned(false);
     try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
   };
 
@@ -109,7 +115,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
 
   return (
     <>
-      <PageTopbar crumb={<><b>导入仓库</b><span className="faint">本地优先 · 代码不出机器</span></>} />
+      <PageTopbar crumb={<><b>导入仓库</b><span className="faint"></span></>} />
       <section className="page page-import">
         <div className="import-wrap">
           <div className="import-hero">
@@ -146,8 +152,13 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
               : "只看代码结构，最省 token。"}</p>
 
             {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
+            {orphaned ? (
+              <div className="banner banner-warn" title="引擎换过一次进程（改代码重启就会这样），内存里的那份任务不在了">
+                <Icon name="alert" /><span className="banner-text">这一轮分析停了，进度读不到。已算好的部分留在仓库里，重新点一次会接着跑。</span>
+              </div>
+            ) : null}
 
-            {job ? (
+            {job && !orphaned ? (
               <div className="col gap-3" aria-live="polite">
                 <div className="row between fs-12 muted"><span>{job.message}</span><strong className="mono">{job.progress}%</strong></div>
                 <div className="progress"><div style={{ width: `${job.progress}%` }} /></div>
@@ -190,9 +201,9 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
             <div className="col gap-3">
               <div className="row between">
                 <div className="section-title">已导入仓库 · {catalog.length} 个</div>
-                <span className="fs-11 faint" title="切换不重新分析、不产生费用">点一下切过去，不用重填路径</span>
+                <span className="fs-11 faint" title="切换不重新分析、不产生费用"></span>
               </div>
-              {/* 闸门失效是进程级事实，与哪条仓无关，全页只说一次 */}
+              {/* 闸门失效是进程级事实，与代码仓库无关 */}
               {gateNotice ? <div className="banner banner-warn"><Icon name="alert" /><span className="banner-text">{gateNotice}</span></div> : null}
               <div className="addr-list">
                 {catalog.map((item) => {

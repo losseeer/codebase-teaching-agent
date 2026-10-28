@@ -325,6 +325,37 @@ describe("版本历史：存版有上限，恢复只追加", () => {
   });
 });
 
+describe("applyDiagramEdit：名字这一格也有判据", () => {
+  it("draw 不给 name：拒写——图库靠名字认图，「未命名图」下次谁都找不回它", () => {
+    expect(parseDiagramEditArguments('{"edit":{"action":"draw","body":{"groups":[],"nodes":[],"edges":[]}}}').error).toContain("draw 要给 name");
+  });
+
+  it("节点名末尾搬了个计数：拒写并说清该放哪一格", () => {
+    const f = fixture();
+    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "计数名", body: { groups: [], nodes: [moduleNode("n-api", "file:src/api.ts", "控制器（14）", 0, 0)], edges: [] } } }, "agent");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toContain("把文件数写进名字里");
+    expect(listDiagrams(f.database, REPO), "被拒的这一次不该留下一张半成品图").toEqual([]);
+    f.database.close();
+  });
+
+  it("同一张图里节点名重复：拒写（id 唯一不够，读者点的是名字）", () => {
+    const f = fixture();
+    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "重名", body: { groups: [], nodes: [moduleNode("n-a", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-b", "file:src/core.ts", "接口层", 0, 200)], edges: [] } } }, "agent");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toContain("节点名字重复");
+    f.database.close();
+  });
+
+  it("规模写进 sub 是合法形状：判据只管名字那一格，不拦数字", () => {
+    const f = fixture();
+    const node = { ...moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), sub: "14 个文件" };
+    const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "规模在 sub", body: { groups: [], nodes: [node], edges: [] } } }, "agent");
+    expect(outcome.ok, outcome.text).toBe(true);
+    f.database.close();
+  });
+});
+
 describe("parseDiagramEditArguments：白名单就是白名单", () => {
   it("摊平写法也认；未知字段不看但在回话里点名", () => {
     const nested = parseDiagramEditArguments('{"diagram":"一张图","edit":{"action":"remove_edge","target":"e-1"}}');

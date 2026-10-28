@@ -162,18 +162,25 @@ function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, inde
 const clampCoord = (value: number): number => (Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0);
 const clampText = (value: string | undefined, limit: number): string | undefined => (value === undefined ? undefined : value.trim().slice(0, limit));
 
+/** 名字末尾拖一个括号计数（「控制器（14 个）」）：那是清单的一行，不是节点名。规模那格由 `sub` 承载。 */
+const TRAILING_COUNT = /[（(]\s*\d+\s*[)）]\s*$/;
+
 /** 整张图的结构校验：id 唯一、边两端存在、分组存在、几何收口、边按证据定档。返回字符串 = 拒写并说清哪一格。 */
 function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteContext): { body: DiagramBody; downgraded: number } | string {
   const { analysis } = context;
   if (body.nodes.length > DIAGRAM_NODE_LIMIT) return `这张图有 ${body.nodes.length} 个节点，超过 ${DIAGRAM_NODE_LIMIT} 个：画布不是用来装全仓的，拆成几张图（图库就是为这个存在的）`;
   if (body.edges.length > DIAGRAM_EDGE_LIMIT) return `边超过 ${DIAGRAM_EDGE_LIMIT} 条：这张图已经读不出东西了，只画主要关系`;
   const seen = new Set<string>();
+  const labels = new Set<string>();
   const nodes: DiagramNode[] = [];
   for (const node of body.nodes) {
     const label = clampText(node.label, 60) ?? "";
     if (!node.id || !label) return "每个节点都要有 id 和一个说得出口的名字";
     if (seen.has(node.id)) return `节点 id 重复：${node.id}`;
     seen.add(node.id);
+    if (TRAILING_COUNT.test(label)) return `节点「${label}」把文件数写进名字里了：规模放 sub 那一格，名字只写职责（读者要点开它看说明，不是在数个数）`;
+    if (labels.has(label)) return `节点名字重复：「${label}」在这张图上出现两次，读者与引擎都分不清点的是哪一个`;
+    labels.add(label);
     let files: string[] | undefined;
     if (node.kind === "module") {
       if (!node.ref) return `节点「${label}」没写 ref：模块节点必须指到 file:/dir:/symbol:/group: 之一`;
@@ -281,8 +288,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   if (edit.action === "draw") {
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
-    const wanted = normalizeDiagramName(edit.name) || "未命名图";
-    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(wanted), source: via === "agent" ? "agent" : "me", body: settled.body });
+    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(normalizeDiagramName(edit.name)), source: via === "agent" ? "agent" : "me", body: settled.body });
     const saved = context.store.insert(diagram);
     context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
     context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
@@ -514,8 +520,9 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
   if (action === "draw") {
     const body = bodyFrom(source.body, ignored);
     if (typeof body === "string") return { ignored, error: body };
-    const name = optionalText(source.name, DIAGRAM_NAME_LIMIT);
-    edit = { action: "draw", ...(name ? { name } : {}), body };
+    const name = optionalText(source.name, DIAGRAM_NAME_LIMIT) ?? "";
+    if (!name) return { ignored, error: "draw 要给 name：图库里的图靠名字认（人和模型都是），「未命名图」下次谁都找不回它" };
+    edit = { action: "draw", name, body };
   } else if (action === "add_node") {
     const node = nodeFrom(source.node, ignored);
     if (typeof node === "string") return { ignored, error: node };
@@ -607,7 +614,7 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：给 name 与 body={groups,nodes,edges}，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
+  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：`name` 与 body={groups,nodes,edges} 都必填，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
   parameters: {
     type: "object",
     properties: {

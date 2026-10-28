@@ -72,7 +72,7 @@ describe("mapChat", () => {
     expect(result.usage?.inputTokens).toBe(10);
     const user = calls[0].user;
     expect(user).toContain("项目结构全景");
-    expect(user).toContain("src/utils/（1）：normalize.ts"); // 全景按目录分组列出已分析文件
+    expect(user).toContain("src/utils/ 共 1 个文件：normalize.ts"); // 全景按目录分组列出已分析文件（计数不写进名字位）
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 1 个已分析文件");
     expect(user).toContain("src/app.ts");
     expect(user).toContain("src/config.ts"); // 一度邻居

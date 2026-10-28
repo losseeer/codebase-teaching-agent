@@ -1,9 +1,11 @@
 import type { JournalEvent, MasteryLevel, MasteryMapEntry, MasteryRecord } from "@codebase-tutor/domain";
+import { isLiveExerciseUnit } from "@codebase-tutor/domain";
 
 /**
   掌握度的推导层：从 journal 的练习结果与「已掌握」事件回放出一条曲线。
   放这里而不是 exercises/——`learner/model.ts`（学习者画像）与练习选题都要用它，
   真源只有 journal，两处都是消费者。
+  只收今天还认得的单元：已停用题型的 id 回放出来是一张点不开的卡片（见 `isLiveExerciseUnit`）。
   */
 
 export function deriveMastery(events: JournalEvent[]): MasteryRecord[] {
@@ -12,7 +14,7 @@ export function deriveMastery(events: JournalEvent[]): MasteryRecord[] {
     const unitId = typeof event.payload.unit_id === "string"
       ? event.payload.unit_id
       : typeof event.payload.target_unit_id === "string" ? event.payload.target_unit_id : undefined;
-    if (!unitId || (event.type !== "exercise_result" && event.type !== "unit_mastered")) continue;
+    if (!unitId || !isLiveExerciseUnit(unitId) || (event.type !== "exercise_result" && event.type !== "unit_mastered")) continue;
     // `unit_mastered` 已没有生产者，但这里仍读它：历史上学通过是一次真实通过，不是会过期的信号。
     const current = records.get(unitId) ?? { unitId, level: 0 as MasteryLevel, attempts: 0, successes: 0 };
     const passed = event.type === "unit_mastered" || event.payload.passed === true;

@@ -606,6 +606,12 @@ export class ImportService extends EventEmitter {
           input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
           cache_hit_tokens: usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map.summary"
         });
+      },
+      // 逐批回报：L1 是整次导入最慢的一段（换模型后全仓重摘要要跑几十分钟），
+      // 只报一个固定值的话「正在花钱」与「卡死了」在界面上长得一样，用户无法分辨。
+      onProgress: (done, total) => {
+        const value = 40 + Math.round((35 * done) / Math.max(1, total));
+        progress("summarizing", value, `正在生成文件摘要（${done}/${total}）`);
       }
     });
     progress("summarizing", 75, "正在整理模块与代码单元");

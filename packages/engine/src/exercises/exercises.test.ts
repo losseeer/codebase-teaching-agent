@@ -104,6 +104,20 @@ describe("M2.1 exercise service", () => {
     expect(last.payload).toMatchObject({ source: "rule", polish: "llm", polish_failure: null });
   });
 
+  /**
+    点「本主题已练」里的一条旧记录，与整仓真的一道题都出不了，是两种成因：
+    后者让人去重新导入，前者重导入也没用。混成一句就是把人往死路里指挥。
+  */
+  it("点出不了题的旧记录不说「请先重新导入仓库」，journal 记 target_stale", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    await expect(service.next(repository, { targetUnitId: "workflow:src/pay.ts" })).rejects.toThrow(/这条练习记录已经出不了题/);
+    const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)!;
+    expect(declined.payload).toMatchObject({ stage: "target_stale", family: "comprehension" });
+    // 同一份产物里别的单元照样出得出题 ⇒ 上面那句不能写成「请先重新导入仓库」
+    await expect(service.next(repository, { kind: "impact_analysis" })).resolves.toMatchObject({ kind: "impact_analysis" });
+  });
+
   it("到期复习题优先返回同一道，set_match 按「答对 / 答漏 / 答多」精确判分", async () => {
     const repository = testRepository();
     const service = new ExerciseService();

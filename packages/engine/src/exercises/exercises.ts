@@ -184,8 +184,12 @@ export class ExerciseService {
     const mastery = repository.ports.progress.mastery();
     const target = this.pickTarget(repository, requested, mastery);
     if (!target) {
-      const reason = "当前分析结果没有可生成的练习。请先重新导入仓库。";
-      repository.ports.audit.append("exercise_declined", { family: requested.family ?? "comprehension", tag: requested.tagId ?? "", reason, stage: "no_target" });
+      // 点了某张练习记录却挑不出单元 ≠ 整仓没题：前者是那条记录本身已经出不了题
+      // （题型下线了、或那个文件不在当前分析结果里），说「请先重新导入仓库」会把人引向一条不解决问题的路。
+      const reason = requested.targetUnitId
+        ? "这条练习记录已经出不了题（题型已停用，或那个文件不在当前分析结果里）。换一张卡片试试。"
+        : "当前分析结果没有可生成的练习。请先重新导入仓库。";
+      repository.ports.audit.append("exercise_declined", { family: requested.family ?? "comprehension", tag: requested.tagId ?? "", reason, stage: requested.targetUnitId ? "target_stale" : "no_target" });
       throw new Error(reason);
     }
     const deps = exerciseDeps(repository, target.kind, target.value);

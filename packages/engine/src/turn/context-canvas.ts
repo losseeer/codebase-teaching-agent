@@ -23,9 +23,11 @@ function structurePanorama(analysis: RepositoryAnalysis): string {
   const lines = [...directories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([directory, names]) => {
     const perDirectory = panoramaPerDirectoryCap();
     const shown = names.length > perDirectory ? `${names.slice(0, perDirectory).join("、")}…等 ${names.length} 个` : names.join("、");
-    return directory ? `- ${directory}/（${names.length}）：${shown}` : `- （根目录）：${shown}`;
+    // 计数写成「共 N 个文件」而不是「（N）」：括号紧跟目录名时读起来像名字的一部分，
+    // 模型会把它搬进节点名（实测落盘过「控制器（14 个）」这种节点）。
+    return directory ? `- ${directory}/ 共 ${names.length} 个文件：${shown}` : `- （根目录）共 ${names.length} 个文件：${shown}`;
   });
-  return `项目结构全景（${paths.length} 个已分析文件，按目录分组）：\n${lines.join("\n")}`;
+  return `项目结构全景（${paths.length} 个已分析文件，按目录分组；目录名只用来定位与写 ref，节点名写职责）：\n${lines.join("\n")}`;
 }
 
 /** 架构图作用域段最多逐个列出的文件数：大仓模块可上百文件，超出部分明示总数而非全量灌进上下文。 */

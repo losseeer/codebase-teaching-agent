@@ -101,6 +101,11 @@ export async function summarizeFiles(input: {
   withHeaderComments?: boolean;
   /** 每一批发给模型的用量回调：导入的钱要进 journal，不然月预算闸门看不到它。 */
   onUsage?: (usage: LlmUsage | undefined) => void;
+  /**
+    每批落库后回报「已完成 / 总数」（缓存命中的那些算已完成）。进度条在 L1 这一段必须动：
+    大仓整段要跑几十分钟，只报一个固定值就等于「卡住了」，而用户无法区分它是在花钱还是死了。
+  */
+  onProgress?: (done: number, total: number) => void;
 }): Promise<{ summaries: FileSummary[]; estimate: ImportEstimate }> {
   const { structure, store, repositoryPath, provider } = input;
   const withHeaderComments = input.withHeaderComments ?? false;
@@ -147,6 +152,9 @@ export async function summarizeFiles(input: {
     }
     pending.push(slice);
   }
+  // 缓存扫描本身就是一段时间（大仓几百个键要逐个比），扫完先给一次读数：
+  // 全命中的仓这里就是 100%，不该等到后面的固定值才被说成「跑完了」。
+  input.onProgress?.(cachedFiles, ordered.length);
 
   for (let offset = 0; offset < pending.length; offset += SUMMARY_BATCH_SIZE) {
     const batch = pending.slice(offset, offset + SUMMARY_BATCH_SIZE);
@@ -201,6 +209,7 @@ export async function summarizeFiles(input: {
       inputCharacters += JSON.stringify(sending[index].copy).length;
       byPath.set(slice.path, { ...stored, cached: false });
     }
+    input.onProgress?.(cachedFiles + offset + batch.length, ordered.length);
   }
 
   return {

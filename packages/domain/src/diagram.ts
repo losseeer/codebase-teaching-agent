@@ -125,7 +125,8 @@ export interface DiagramSummary {
   「把这条箭头变粗」「加一个模块」这类要求在类型层面就没有落点，不是运行时的漏洞。
 */
 export type DiagramEdit =
-  | { action: "draw"; name?: string; body: DiagramBody }
+  /** `draw` 的 `name` 必填：图库里的图靠名字被认出来（人和模型都是），缺名字的图等于第二次找不到它。 */
+  | { action: "draw"; name: string; body: DiagramBody }
   | { action: "add_node"; node: DiagramNode }
   | { action: "remove_node"; target: string }
   | { action: "add_edge"; edge: DiagramEdge }

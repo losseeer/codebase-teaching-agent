@@ -128,8 +128,6 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
 
         {/* 权限说明只在这一处（画布不重复）：结构归 agent，几何归你。 */}
         <p className="dg-drawer-foot">
-          <span>加删节点、连线：在对话里说。</span>
-          <span>拖动位置：自由，且不存版本。</span>
         </p>
       </div>
     </aside>

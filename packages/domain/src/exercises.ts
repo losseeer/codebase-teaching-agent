@@ -15,6 +15,13 @@ export const EXERCISE_KINDS: ExerciseKind[] = ["change_localization", "impact_an
 export const CODE_EXERCISE_KINDS: ExerciseKind[] = ["patch_edit", "author_function"];
 /** 当前引擎真能出、真能判的全部题型（路由 400 校验、复习队列回放、round-robin 选题共用这一份，不再各写清单）。 */
 export const SUPPORTED_EXERCISE_KINDS: ExerciseKind[] = [...EXERCISE_KINDS, ...CODE_EXERCISE_KINDS];
+/**
+  练习单元 id 的第一段就是它的题型出处：`impact:` 影响分析、`implementation:` 定位与代码题、`llm:` 主题题。
+  这一段之外的 id（如 9 月流程题留下的 `workflow:`）今天的引擎既出不出题也判不了分，
+  所以回放掌握度时不再当作当前信号——journal 里那些行照旧留着，那是账本。
+*/
+const LIVE_UNIT_PREFIXES = ["impact:", "implementation:", "llm:"];
+export const isLiveExerciseUnit = (unitId: string): boolean => LIVE_UNIT_PREFIXES.some((prefix) => unitId.startsWith(prefix));
 /** 练习题族：comprehension=程序理解题（规则出题、确定性判分），code=沙箱代码题（模型出题、跑测试判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
 export type ExerciseFamily = "comprehension" | "code" | "llm";
 export type ExerciseInputMode = "text" | "multi_select" | "open" | "code";

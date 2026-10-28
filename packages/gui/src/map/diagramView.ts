@@ -81,14 +81,58 @@ export function boxOf(boxes: NodeBoxes, id: string): Size {
   return boxes.get(id) ?? { w: NODE_W, h: NODE_H };
 }
 
-/** 一条边的两个端点 = 两端节点的中心。缺任一端（agent 刚删掉那个节点）就不画。 */
-export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxes): { x1: number; y1: number; x2: number; y2: number } | null {
+/**
+  一条边的走线：从源卡片的那一面出发，横平竖直地走到目标卡片的那一面（缺任一端就不画）。
+  为什么不画中心到中心的直线：直线会压在两端卡片身上，还会横穿路上任何一张卡片与分组框——
+  用户看到的就成「一团斜线盖着几个框」，读不出依赖关系。方向按主轴选：竖着走接顶/底边，横着走接左/右边。
+*/
+export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxes): { x: number; y: number }[] | null {
   const from = body.nodes.find((node) => node.id === edge.from);
   const to = body.nodes.find((node) => node.id === edge.to);
   if (!from || !to) return null;
   const a = boxOf(boxes, from.id);
   const b = boxOf(boxes, to.id);
-  return { x1: from.x + a.w / 2, y1: from.y + a.h / 2, x2: to.x + b.w / 2, y2: to.y + b.h / 2 };
+  const ax = from.x + a.w / 2;
+  const ay = from.y + a.h / 2;
+  const bx = to.x + b.w / 2;
+  const by = to.y + b.h / 2;
+  if (Math.abs(by - ay) >= Math.abs(bx - ax)) {
+    const startY = by >= ay ? from.y + a.h : from.y;
+    const endY = by >= ay ? to.y : to.y + b.h;
+    const midY = startY + (endY - startY) / 2;
+    return [{ x: ax, y: startY }, { x: ax, y: midY }, { x: bx, y: midY }, { x: bx, y: endY }];
+  }
+  const startX = bx >= ax ? from.x + a.w : from.x;
+  const endX = bx >= ax ? to.x : to.x + b.w;
+  const midX = startX + (endX - startX) / 2;
+  return [{ x: startX, y: ay }, { x: midX, y: ay }, { x: midX, y: by }, { x: endX, y: by }];
+}
+
+/** 分组框宣称「框住的是节点」，那它就得真包住：这是卡片与框之间留的呼吸位。 */
+const GROUP_PAD = 12;
+
+/**
+  分组框实际画多大：模型给的 `w`/`h` 是它自己估的（常见 80），而卡片高度是按文字量出来的（带 sub 或便签会到 90 以上），
+  照原值画就出现「卡片压出框外」。这里只**放大**到真能装下成员（按 `group` 归属，或几何上已经落在框里的），
+  绝不缩小——用户手动拖大的框不被推翻。
+*/
+export function groupRects(body: DiagramBody, boxes: NodeBoxes): { id: string; label: string; x: number; y: number; w: number; h: number }[] {
+  return body.groups.map((group) => {
+    let minX = group.x;
+    let minY = group.y;
+    let maxX = group.x + group.w;
+    let maxY = group.y + group.h;
+    for (const node of body.nodes) {
+      const inside = node.group === group.id || (node.x >= group.x && node.y >= group.y && node.x < group.x + group.w && node.y < group.y + group.h);
+      if (!inside) continue;
+      const size = boxOf(boxes, node.id);
+      minX = Math.min(minX, node.x - GROUP_PAD);
+      minY = Math.min(minY, node.y - GROUP_PAD);
+      maxX = Math.max(maxX, node.x + size.w + GROUP_PAD);
+      maxY = Math.max(maxY, node.y + size.h + GROUP_PAD);
+    }
+    return { id: group.id, label: group.label, x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  });
 }
 
 /**

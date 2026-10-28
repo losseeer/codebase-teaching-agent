@@ -102,6 +102,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   // 出题分派：理解题走规则出题族，自定义主题 chip 走 LLM 出题族（family 对用户不可见）。
   // 「换一题」对 LLM 题是 variantNonce+1（出新题、旧题保留），对规则题按 targetUnitId 重出。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
+    // 一次只发一趟：卡片那条路径没有 disabled，连点会并发多个 POST（LLM 题就是并发付费）
+    if (loading) return;
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     const isLlmFamily = activeModule !== COMPREHENSION_THEME_ID;
     const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;

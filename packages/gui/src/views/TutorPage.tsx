@@ -181,7 +181,6 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         <aside className={`teach-side ${paneClass(0)}`}>
           <div className="row between">
             <h3 className="section-title">项目目录</h3>
-            <span className="fs-11 faint" title="点文件或目录即可开始">选中即教学域</span>
           </div>
           {fileTreeError ? <p className="entry-empty">{fileTreeError}</p> : <RepoTree nodes={fileTree} onOpenFile={openFile} onOpenDir={openDir} activePath={source?.path} activeDir={activeDir} />}
         </aside>

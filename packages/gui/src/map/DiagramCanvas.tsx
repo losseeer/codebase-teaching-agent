@@ -7,7 +7,7 @@ import { Icon } from "../ui/icons";
 import { InlineName, PopMenu, type MenuItem } from "../ui/PopMenu";
 import {
   DEFAULT_VIEW, EDGE_ORIGINS, ORIGIN_SHORT, ZOOM_MAX, ZOOM_MIN,
-  edgePoints, fitView, notePreview, relativeTime, safeFileName, subLineOf, versionTime, worldSizeOf, zoomAt,
+  edgePoints, fitView, groupRects, notePreview, relativeTime, safeFileName, subLineOf, versionTime, worldSizeOf, zoomAt,
   type NodeBoxes, type Size, type View
 } from "./diagramView";
 
@@ -413,17 +413,17 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
                 return (
                   <g key={edge.id}>
                     <title>{`${ORIGIN_SHORT[edge.origin]}${edge.downgraded ? " · 依据偏弱" : ""}`}</title>
-                    <path className={`dg-edge edge-${edge.origin}`} d={`M ${points.x1} ${points.y1} L ${points.x2} ${points.y2}`} markerEnd={`url(#dg-arrow-${edge.origin})`} />
+                    <path className={`dg-edge edge-${edge.origin}`} d={points.map((point, at) => `${at === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ")} markerEnd={`url(#dg-arrow-${edge.origin})`} />
                   </g>
                 );
               })}
             </svg>
 
-            {renderedBody?.groups.map((group) => (
+            {renderedBody ? groupRects(renderedBody, measured).map((group) => (
               <div key={group.id} className="dg-group" style={{ left: group.x, top: group.y, width: group.w, height: group.h }} title={`分组框「${group.label}」：框住的是节点，不是关系`}>
                 <span className="dg-group-label">{group.label}</span>
               </div>
-            ))}
+            )) : null}
 
             {renderedBody?.nodes.map((node) => {
               const stale = staleReasons.get(node.id);

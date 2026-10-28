@@ -107,7 +107,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 disabled={!llm}
                 hint={THINKING_STYLE_HINT[llm?.thinkingCapability?.style ?? "unknown"]}
                 ariaLabel="思考模式与强度"
-                note="按模型能力声明生效；轻任务恒关思考"
                 onChange={(thinking) => updateLlm({ thinking: thinking as ThinkingEffort })}
                 options={[
                   { value: "auto", label: "自动（模型默认）" },
@@ -149,14 +148,13 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                 value={llm?.timeoutMs ?? ""}
                 placeholder={timeoutPlaceholder(llm)}
                 disabled={!llm}
-                note="单位毫秒，超时后引擎再发一次"
+                note="单位毫秒"
                 onCommit={(timeoutMs) => updateLlm({ timeoutMs })}
               />
               <SecretSetting
                 saved={llm?.apiKeyMasked ?? ""}
                 placeholder={llm?.envFallback.hasApiKey ? ".env 已配置" : "未配置"}
                 disabled={!llm}
-                note="只存本机"
                 onSave={(apiKey) => updateLlm({ apiKey })}
                 onClear={() => updateLlm({ apiKey: "" })}
               />
@@ -189,7 +187,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
-              <span className="modal-note" title="设置保存在本机用户目录">改完即生效；留空则用 .env 的配置</span>
               <button type="button" className="btn btn-primary" onClick={() => setOpen(false)}>完成</button>
             </div>
           </div>
@@ -225,13 +222,13 @@ const THINKING_STYLE_HINT: Record<string, string> = {
 /** 超时留空时说明清楚用的是 .env 的哪一份：填的是毫秒，读的时候换成秒更好对答（慢模型一句回答要一分多钟）。 */
 function timeoutPlaceholder(llm: LlmSettings | null): string {
   const env = llm?.envFallback.timeoutMs;
-  return env ? `.env ${String(Math.round(env / 1000))} 秒` : "未配置";
+  return env ? `默认 ${String(Math.round(env / 1000))} 秒` : "未配置";
 }
 
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
   const value = llm?.pricing ? money(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
-  return fromEnv ? `.env ${value}` : "未配置";
+  return fromEnv ? `默认 ${value}` : "未配置";
 }
 
 /** 三档里是不是至少有一档真的在计价（判据与引擎 `pricingIsConfigured` 同一口径：全空 ⇒ 钱恒为 0）。 */
