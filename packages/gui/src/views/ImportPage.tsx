@@ -163,7 +163,9 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 <div className="progress"><div style={{ width: `${job.progress}%` }} /></div>
                 <div className="phase-list">
                   {PHASES.map((phase, index) => {
-                    const state = failed && index === 0 ? "" : activeIndex < 0 ? "" : index < activeIndex ? "done" : index === activeIndex ? "active" : "";
+                    // completed 是终态：四档都算走完，最后一档不再转圈
+                    const finished = job.phase === "completed" || index < activeIndex;
+                    const state = activeIndex < 0 ? "" : finished ? "done" : index === activeIndex ? "active" : "";
                     return (
                       <div className={`phase ${state}`} key={phase.key}>
                         <span className="phase-dot">
