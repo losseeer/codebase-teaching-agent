@@ -15,8 +15,7 @@ describe("M2.3 learner model", () => {
 
   it("recommends supportive macro settings for low mastery and focused practice for high mastery", () => {
     const low = deriveLearnerProfile("repo", [
-      event("exercise_result", "2026-10-01T00:00:00.000Z", { target_unit_id: "impact:src/a.py", passed: false, score: 0 }, "s1"),
-      event("dependency_event", "2026-10-01T00:01:00.000Z", { unit_id: "impact:src/a.py" }, "s1")
+      event("exercise_result", "2026-10-01T00:00:00.000Z", { target_unit_id: "impact:src/a.py", passed: false, score: 0 }, "s1")
     ]);
     expect(low.recommended.settings).toMatchObject({ style: 100, pedagogy: "socratic", depth: "macro" });
 
@@ -26,15 +25,13 @@ describe("M2.3 learner model", () => {
   });
 
   it("fades one clue after mastery and replenishes it after failure", () => {
-    const mastered = deriveFaded([
-      event("unit_mastered", "2026-01-01T00:00:00.000Z", { unit_id: "unit" }),
-      event("unit_mastered", "2026-01-02T00:00:00.000Z", { unit_id: "unit" })
-    ]);
+    const pass = (at: string) => event("exercise_result", at, { target_unit_id: "impact:src/a.py", passed: true, score: 1 });
+    const mastered = deriveFaded([pass("2026-01-01T00:00:00.000Z"), pass("2026-01-02T00:00:00.000Z")]);
     expect(mastered).toMatchObject({ mastered: true, sampleCompleteness: 0, hintDepth: 3, transition: "fade" });
     const recovered = deriveFaded([
-      event("unit_mastered", "2026-01-01T00:00:00.000Z", { unit_id: "unit" }),
-      event("unit_mastered", "2026-01-02T00:00:00.000Z", { unit_id: "unit" }),
-      event("exercise_result", "2026-01-03T00:00:00.000Z", { target_unit_id: "unit", passed: false, score: 0 })
+      pass("2026-01-01T00:00:00.000Z"),
+      pass("2026-01-02T00:00:00.000Z"),
+      event("exercise_result", "2026-01-03T00:00:00.000Z", { target_unit_id: "impact:src/a.py", passed: false, score: 0 })
     ]);
     expect(recovered).toMatchObject({ sampleCompleteness: 1, hintDepth: 3, stylePlainness: 2, transition: "replenish" });
   });
@@ -48,7 +45,7 @@ describe("M2.3 learner model", () => {
     const profile = deriveLearnerProfile("repo", [
       event("exercise_result", "2026-09-21T12:35:05.000Z", { target_unit_id: "workflow:src/pay.py", passed: true, score: 1 }),
       event("exercise_result", "2026-10-01T00:00:00.000Z", { target_unit_id: "impact:src/a.py", passed: true, score: 1 }),
-      event("unit_mastered", "2026-10-02T00:00:00.000Z", { unit_id: "implementation:symbol:src/b.py:run:3" })
+      event("exercise_result", "2026-10-02T00:00:00.000Z", { target_unit_id: "implementation:symbol:src/b.py:run:3", passed: true, score: 1 })
     ]);
     expect(profile.mastery.map((record) => record.unitId)).toEqual(["impact:src/a.py", "implementation:symbol:src/b.py:run:3"]);
   });

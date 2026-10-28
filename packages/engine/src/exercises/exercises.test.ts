@@ -23,8 +23,7 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
-  // 先关连接再删目录：还开着 SQLite 就去 rm 会留下删不净的 -wal/-shm 边文件
-  // 每个夹具句柄被 builder pin 过一次：先放开这一次再关，否则 close 会一直挂起、留下 -wal/-shm 边文件
+  // 先放开 builder 那次 pin 再关连接，然后删目录：否则留下删不净的 -wal/-shm 边文件。
   for (const handle of handles.splice(0)) {
     handle.unpin();
     handle.close();
@@ -41,12 +40,12 @@ describe("M2.1 exercise service", () => {
     expect(second.id).toBe(first.id);
     expect(second.createdAt).toBe(first.createdAt);
 
-    // 无关文件的改动只翻转全仓 versionStamp，不碰目标文件的 contentHash → 命中缓存，不作废旧题
+    // 无关文件的改动只翻转全仓 versionStamp：应命中缓存。
     const unrelatedChange = { ...repository, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
     const reused = await service.next(unrelatedChange, { kind: "change_localization" });
     expect(reused.id).toBe(first.id);
 
-    // 目标文件自身变了 → 重算，新题带上自己的依赖哈希
+    // 目标文件自身变了：应重算。
     const targetPath = first.anchors[0]!.path;
     const bumpedFiles = repository.index.files.map((file) => file.path === targetPath ? { ...file, contentHash: "bumped" } : file);
     const targetChange = { ...repository, index: { ...repository.index, files: bumpedFiles }, analysis: { ...repository.analysis, versionStamp: "content-v2" } };
@@ -75,7 +74,7 @@ describe("M2.1 exercise service", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     let polishAttempts = 0;
-    // 润色调用一律失败 → refineExerciseWithLlm 回落启发式题面；调用次数就是「这一层重算了几次」的读数
+    // 润色调用一律失败：回落启发式题面。
     const provider = (modelVersion: string): LlmProvider => ({
       name: "fake", modelVersion,
       complete: async () => { polishAttempts += 1; throw new Error("unavailable"); }
@@ -85,15 +84,14 @@ describe("M2.1 exercise service", () => {
     expect(polishAttempts).toBe(1);
     await service.next(repository, { kind: "change_localization" }, provider("model-b"));
     expect(polishAttempts).toBe(2);
-    // 静态题的答案与判分不出自模型，所以两档作用域共用同一个 id 是安全的
-    // 下面两条 journal 读数要求三种成因分档记，不把润色失败混进成功记录
+    // 三种成因要分档记：润色失败不混进成功记录。
     const generated = readJournal(repository.path).filter((event) => event.type === "exercise_generated");
     expect(generated.map((event) => event.payload.polish)).toEqual(["failed", "failed", "failed"]);
     expect(generated.map((event) => event.payload.polish_failure)).toEqual(["provider_error", "provider_error", "provider_error"]);
-    // 第二条走的是缓存命中：失败形状跟着那一行走，命中时照样知道当时坏在哪
+    // 第二条走缓存命中：失败形状跟着那一行走。
     expect(generated[1].payload.source).toBe("cache");
 
-    // 另一头也要能看出来：模型真的改写过的题，记的是 polish:"llm"，而不是同样一句「rule」
+    // 模型改写成功的题记 polish:"llm"。
     const working: LlmProvider = {
       name: "fake", modelVersion: "model-c",
       complete: async () => ({ text: JSON.stringify({ title: "模型改写的题面", prompt: "模型改写的题干" }), usage: { inputTokens: 800, outputTokens: 120 } })
@@ -104,17 +102,14 @@ describe("M2.1 exercise service", () => {
     expect(last.payload).toMatchObject({ source: "rule", polish: "llm", polish_failure: null });
   });
 
-  /**
-    点「本主题已练」里的一条旧记录，与整仓真的一道题都出不了，是两种成因：
-    后者让人去重新导入，前者重导入也没用。混成一句就是把人往死路里指挥。
-  */
+  /** 指定记录出不了题与整仓没有可生成的题，是两种成因。 */
   it("点出不了题的旧记录不说「请先重新导入仓库」，journal 记 target_stale", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
     await expect(service.next(repository, { targetUnitId: "workflow:src/pay.ts" })).rejects.toThrow(/这条练习记录已经出不了题/);
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)!;
     expect(declined.payload).toMatchObject({ stage: "target_stale", family: "comprehension" });
-    // 同一份产物里别的单元照样出得出题 ⇒ 上面那句不能写成「请先重新导入仓库」
+    // 同一份产物里别的单元照样出得出题。
     await expect(service.next(repository, { kind: "impact_analysis" })).resolves.toMatchObject({ kind: "impact_analysis" });
   });
 
@@ -127,7 +122,7 @@ describe("M2.1 exercise service", () => {
     const graded = await service.answer(repository, localization.id, { selectedIds: [expectedPath!] });
     expect(graded.passed).toBe(true);
 
-    // 把这道题的到期时间改早 → next() 先还复习队列，而不是另出一题
+    // 到期时间改早后，next() 先还复习队列。
     const database = new TutorDatabase(repository.path);
     database.reviews.save(repository.index.repositoryId, { ...graded.review, dueAt: "2020-01-01T00:00:00.000Z" });
     database.close();
@@ -139,16 +134,12 @@ describe("M2.1 exercise service", () => {
   });
 
   it("非 JS 仓的 set_match 题：正解必须在选项里，干扰项也得是同族源码", async () => {
-    /**
-      验证「正解必须出现在选项里」：若正解也先过手写的扩展名白名单，非 JS 仓会给出
-      「怎么选都不过」的题。夹具把正解排在字典序末尾、同包塞满竞争者，是为了让这条测试咬得住：
-      只放宽干扰项池过不了它，必须有「正解不被扩展名筛掉」这条不变量在。
-      */
+    /** 正解必须出现在选项里：夹具把正解排在字典序末尾、同包塞满竞争者。 */
     const repository = testRepository();
     const service = new ExerciseService();
     const answer = "src/main/java/com/demo/ZebraOrderService.java";
     const dependee = "src/main/java/com/demo/A0Component.java";
-    // 同包再放 17 个 Java 文件当竞争者：选项上限 8，正解按字典序排在末尾，靠干扰项池「顺带捞到」是捞不回来的
+    // 同包再放 17 个 Java 文件当竞争者：选项上限 8。
     const neighbours = Array.from({ length: 17 }, (_, index) => `src/main/java/com/demo/B${index}Component.java`);
     const javaFiles = [answer, dependee, ...neighbours].map((path) => ({ path, extension: ".java", bytes: 40, lines: 12, contentHash: `h-${path}` }));
     const javaRepository: PracticeRepository = {
@@ -166,7 +157,7 @@ describe("M2.1 exercise service", () => {
 
     const impact = await service.next(javaRepository, { kind: "impact_analysis", targetUnitId: `impact:${answer}` });
     expect(optionIdsOf(impact)).toContain(answer);
-    // 照着依赖图真答一次必须能过——「选项里没有正解」的题在这一条上会直接现形
+    // 照着依赖图真答一次必须能过。
     expect((await service.answer(javaRepository, impact.id, { selectedIds: [answer, dependee] })).passed).toBe(true);
 
     const source = repository.analysis.implementations[0]!;
@@ -175,7 +166,7 @@ describe("M2.1 exercise service", () => {
     const localization = await service.next(localizationRepository, { kind: "change_localization", targetUnitId: javaUnit.id });
     const localizationIds = optionIdsOf(localization);
     expect(localizationIds).toContain(answer);
-    // 干扰项来自依赖图那套扩展名（能力表派生），不是本模块手写的 JS 清单
+    // 干扰项来自能力表派生的扩展名。
     expect(localizationIds.every((id) => id.endsWith(".java"))).toBe(true);
     expect((await service.answer(localizationRepository, localization.id, { selectedIds: [answer] })).passed).toBe(true);
   });
@@ -209,7 +200,7 @@ describe("M2.1 exercise service", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const small = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
-    // 模拟只改图的情形：源代码内容没动（versionStamp 不变），引擎多认出一条依赖边
+    // 源码内容没动、只多认一条依赖边。
     const widenedGraph: RepositoryAnalysis["graph"] = {
       ...repository.analysis.graph,
       imports: { ...repository.analysis.graph.imports, "src/widened-consumer.js": ["src/config.js"] }
@@ -217,13 +208,9 @@ describe("M2.1 exercise service", () => {
     const widened: PracticeRepository = { ...repository, analysis: { ...repository.analysis, graph: widenedGraph } };
     expect(widened.analysis.versionStamp).toBe(repository.analysis.versionStamp);
     const large = await service.next(widened, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
-    // 回到旧图必须命中原来那一行（被新行覆盖就等于拿旧图的答案出当前题）
+    // 回到旧图必须命中原来那一行。
     const back = await service.next(repository, { kind: "impact_analysis", targetUnitId: "impact:src/config.js" });
-    /**
-      判据是 journal 里的命中序列，不是时间戳：静态题的 id 不含图指纹，两行的 createdAt
-      可能落在同一毫秒，比时间戳会不稳。真正要钉的是「换图必须未命中、回旧图必须命中」，
-      `exercise_generated.source` 就是这条读数的出处。
-      */
+    /** 判据是 journal 里的 `exercise_generated.source` 序列，不是时间戳。 */
     const sourcesOf = (): unknown[] => readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source);
     expect(sourcesOf()).toEqual(["rule", "rule", "cache"]);
     expect(back.createdAt).toBe(small.createdAt);
@@ -254,9 +241,7 @@ describe("M2.1 learner scheduling", () => {
 });
 
 describe("沙箱这一关走在扣钱之前", () => {
-  // 预算按环境给，判据不动：这一条要建临时仓、开一份真 SQLite、走真实出题路径，再写一条 decline 账。
-  // 10-27 CI 上默认 5000ms 档两轮红在这条（本地同一文件 tests 1.45s，下一份提交的 CI 又绿）：
-  // 抖动与耗时上限分不开，就先给它一条显式预算，别让它替判据报错。
+  // 这条要建临时仓、开真 SQLite、走真实出题路径，给它一条显式超时预算。
   it("隔离不可用 ⇒ 代码题直接拒，provider 一次都没被打", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -269,7 +254,7 @@ describe("沙箱这一关走在扣钱之前", () => {
     stubIsolationForTest({ level: "unavailable", backend: "seatbelt", checks: [], probedAt: new Date().toISOString(), durationMs: 0, reason: "探测没过（测试注入）" });
     try {
       await expect(service.next(repository, { kind: "patch_edit", targetUnitId: unit.id }, provider)).rejects.toThrow("沙箱当前不可用");
-      // 改之前这一段是先烧一次 ≈6k token 的出题调用、再在 runSandbox 抛错——「整域禁用」就成了只写在 README 里的话
+      // 隔离不可用时不允许发出出题调用。
       expect(sent).toEqual([]);
       expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload).toMatchObject({ stage: "sandbox_unavailable", family: "code" });
     } finally {
@@ -329,7 +314,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
-    // 每次「送达」都留痕：记录要分得清 llm 新生成与缓存复用
+    // 每次送达都留痕：分得清新生成与缓存复用。
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_generated").map((event) => event.payload.source)).toEqual(["llm", "cache", "llm"]);
   });
 
@@ -341,7 +326,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const second = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, { ...provider, modelVersion: "other-model" });
     expect(calls).toHaveLength(2);
     expect(second.id).not.toBe(first.id);
-    // 复习排期与答题都按 id 回查缓存行，所以两代题必须各自留痕
+    // 两代题必须各自留痕：排期与答题都按 id 回查缓存行。
     const database = new TutorDatabase(repository.path);
     expect(database.exercises.byId(repository.index.repositoryId, first.id)).toBeTruthy();
     database.close();
@@ -391,8 +376,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
   });
 
   it("模型把分数写成字符串（\"0.00\"）时照它给的分判，不再整趟失败", async () => {
-    // 真机读数（2026-10-26 dianping-backend）：deepseek 按提示词里「两位小数」的字面意思加了引号，
-    // 判分调用成功、反馈完整，却因为 score 不是 number 被丢成 422——白付这一趟，学习者只看到「再试一次」
+    // 模型会把 score 写成字符串（`"0.00"`）。
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([generationJson, JSON.stringify({ score: "0.00", passed: false, feedback: "回答为“不知道”，未提供任何要点。" })]);
@@ -436,13 +420,11 @@ function testRepository(): PracticeRepository {
     versionStamp: "content-v1"
   };
   const handle = openHandle(repositoryPath, index.repositoryId);
-  // 练习服务只吃端口：夹具在这里把**真存储**装配一次（判分要的就是那两份真行），端口对应的引用由 afterEach 放开
+  // 夹具在这里装配一次真存储；引用由 afterEach 放开。
   return { path: repositoryPath, index, analysis, ports: exercisePortsFor(handle, handle.pin()) };
 }
 
-/**
-  夹具也要真句柄：`PracticeRepository.handle` 是挂载项唯一的连接入口，出题与判分都经它读写产物库。
-  */
+/** 夹具也要真句柄：出题与判分都经它读写产物库。 */
 const handles: RepositoryHandle[] = [];
 function openHandle(repositoryPath: string, repositoryId: string): RepositoryHandle {
   const handle = new RepositoryHandle(repositoryPath, repositoryId);

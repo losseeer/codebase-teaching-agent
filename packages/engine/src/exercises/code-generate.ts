@@ -1,17 +1,7 @@
 /**
-  代码题出题与自证链。
-
-  形状契约：一律把目标函数连替身一起摘出来跑，沙箱不看仓库；这道题的全部可执行内容都由模型交出
-  （题面 + 下发件 + 测试 + 替身），而「这道题值不值得出」只能由真跑证明，不能由提示词承诺。
-
-  自证就两跑（不是三跑）：
-  - solution 必须全过——对 patch_edit 这就是仓库里那段真实现，「原码全过」与「参考解全过」是同一件事，不必再花一趟；
-  - given（下发给学习者的那一版：缺陷版 / 空骨架）必须至少挂一条测试。
-  两跑同时成立才说明：题不是白送的、测试不是空的、而且确实存在一个能过的答案。
-
-  测试结论只认一行 `TESTS <通过数> <失败数>`（契约见下面的提示词），不认异常：
-  下发件因编译挂 / 语法挂退出非 0 时那一行不会印出来，应判成「harness 坏了」而不是「题做对了」——
-  把「跑不起来」当「跑出问题」，会出一批要求学习者先修环境的题。
+  代码题出题与自证链：可执行内容全部由模型交出，沙箱不看仓库，题值不值得出由真跑证明。
+  自证两跑：solution 必须全过，given 必须至少挂一条测试。
+  测试结论只认一行 `TESTS <通过数> <失败数>`，不认异常。
 */
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
 
@@ -35,23 +25,18 @@ export interface CodeProposal {
   title: string;
   prompt: string;
   language: ExerciseLanguage;
-  /** 下发给学习者编辑的那一组文件（patch_edit = 带缺陷的实现；author_function = 骨架） */
+  /** 下发给学习者编辑的那一组文件。 */
   given: CodeFile[];
-  /** 应该全过的那一组文件（patch_edit = 仓库真源码摘出的那一版；author_function = 参考解） */
+  /** 应该全过的那一组文件。 */
   solution: CodeFile[];
   /** 测试与替身：判分用，不下发 */
   hidden: CodeFile[];
   entry: string;
-  /** 缺陷一句话说清「现在哪里不对」；引擎留档，讲评与排查用，不出现在题面 */
+  /** 缺陷一句话说明；引擎留档，不出现在题面。 */
   defect: string;
 }
 
-/**
-  拒题的四档，按「断在哪一段」分：`provider_error` 端点没给东西（没钱、超时、被拒），
-  `proposal_shape` 给了但形状不合，`harness_validation` 形状合但沙箱证不出这题可解，
-  `sandbox_unavailable` 没有可用的隔离环境。
-  四档混成一档就会把「充值」说成「改提示词」——修复方向不同的失败必须可分辨。
-*/
+/** 拒题的四档，按断在哪一段分；修复方向不同的失败必须可分辨。 */
 export type DeclineStage = "provider_error" | "proposal_shape" | "sandbox_unavailable" | "harness_validation";
 
 export interface HarnessRun {
@@ -59,7 +44,7 @@ export interface HarnessRun {
   verdict?: { passed: number; failed: number };
   exitCode: number | null;
   timedOut: boolean;
-  /** 沙箱本身跑完了（编译成功、没超时）；与「测试全过」是两件事 */
+  /** 沙箱本身跑完了（编译成功、没超时）。 */
   ran: boolean;
 }
 
@@ -72,7 +57,7 @@ const MAX_PROMPT = 700;
 const MAX_FILE_BYTES = 24_000;
 const MAX_FILES_PER_SLOT = 3;
 
-/** 三语言各自的「测试怎么报结论」模板：契约由引擎定死，不让模型自由发挥，否则读数没法统一判。 */
+/** 三语言各自的测试报结论格式，由引擎定死。 */
 const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
   typescript: "测试文件（例如 `tests.ts`，入口就是它）自己依次调用各条断言，每条**通过就 pass+1、抛异常就 fail+1 并把原因打到 stderr**；结尾必须打印一行 `TESTS <pass> <fail>`，且 fail>0 时设 `process.exitCode = 1`。跨文件 import **必须写真实扩展名 `.ts`**（沙箱里的 node 不做 `.js`→`.ts` 的重写）。",
   python: '测试文件（例如 `tests.py`，入口就是它）自己依次跑各条断言，每条**用 try/except 包住：过了 pass+1，抛了 fail+1**；结尾 `print(f"TESTS {pass} {fail}")`，fail>0 时 `sys.exit(1)`。只用标准库。',
@@ -104,19 +89,14 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
   ].join("\n");
 }
 
-/**
-  代码题这一步的口径登记。版本号与 llm 出题那一步共用同一个字符串（`EXERCISE_STEP.contractVersion`）：
-  三条出题路径（规则题、代码题、LLM 题）在 `exercises.ts` 的 `fileScope` 里拼同一个作用域轴，
-  分两处写会漂移成两个版本号，一处 bump 会让另一处的旧题面继续命中。
-  提示词按「题型 × 语言」全枚举：`TEST_CONTRACT` 加语言或改某语言的测试形状都会变指纹。
-*/
+/** 代码题这一步的口径登记；版本号与 llm 出题那一步共用同一个。 */
 defineAnalysisStep({
   layer: "exercise-code-generate",
   contractVersion: EXERCISE_STEP.contractVersion,
   prompts: [() => (["patch_edit", "author_function"] as const).flatMap((kind) => (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => systemPrompt(kind, language))).join("\n")]
 });
 
-/** 出题侧读源码：文件头部的 import 段 + 符号体，两边都过密钥筛，并如实登记出网。 */
+/** 出题侧读源码：文件头 import 段 + 符号体，两边都过密钥筛并登记出网。 */
 export function unitSource(repositoryPath: string, unit: ImplementationUnit): { imports: string; body: string; sources: { path: string; from: number; to: number; text: string; masked: number }[] } | undefined {
   const lines = readFileLines(repositoryPath, unit.symbol.path);
   if (!lines) return undefined;
@@ -177,7 +157,7 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect } };
 }
 
-/** 只认这一行：`TESTS <通过> <失败>`。没有它 = 测试没跑完，不拿「非 0 退出」冒充「测出问题」。 */
+/** 只认这一行：`TESTS <通过> <失败>`；没有它 = 测试没跑完。 */
 export function verdictOf(run: SandboxRun): { passed: number; failed: number } | undefined {
   const lines = run.stdout.trimEnd().split("\n");
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -195,15 +175,12 @@ function overlay(hidden: CodeFile[], variant: CodeFile[]): SandboxFile[] {
 
 async function harnessRun(proposal: CodeProposal, label: "solution" | "given", repositoryPath: string): Promise<HarnessRun> {
   const variant = label === "solution" ? proposal.solution : proposal.given;
-  // 仓的根必须点名拒读：判分与自证只吃这些字符串，沙箱里的代码读到 `.tutor/tutor.db` 就是读到标准答案
+  // 仓的根必须点名拒读：沙箱里的代码读到 `.tutor/tutor.db` 就是读到标准答案。
   const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant), repositoryPath });
   return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok };
 }
 
-/**
-  两跑自证。这里不吞异常：沙箱不可用（隔离探测没过）要原样上抛，由调用方记成 `sandbox_unavailable`
-  并把代码题整域关掉——折进「出题失败」的普通原因里等于把闸门失效说成模型不争气。
-*/
+/** 两跑自证；沙箱不可用要原样上抛，由调用方记成 `sandbox_unavailable`。 */
 export async function validateHarness(proposal: CodeProposal, repositoryPath: string): Promise<{ ok: boolean; reason?: string; runs: HarnessRun[] }> {
   const runs: HarnessRun[] = [];
   const solution = await harnessRun(proposal, "solution", repositoryPath);
@@ -219,7 +196,7 @@ export async function validateHarness(proposal: CodeProposal, repositoryPath: st
   return { ok: true, runs };
 }
 
-/** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现，防止模型把原码改花了还自称「原样」。 */
+/** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现。 */
 function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   const needle = body.trim().replace(/\s+/g, " ");
   if (!needle) return false;
@@ -245,14 +222,13 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
         imports: source.imports,
         source: source.body.slice(0, MAX_FILE_BYTES)
       }),
-      // 出题要的正文比聊天重得多（下发件 + 参考解 + 测试 + 替身，四份源码），上限按这个给；
-      // 推理模型的思考 token 也计在这个数里（provider 再加 6000 余量）。
+      // 出题要交四份源码，思考 token 也计在这个数里。
       maxTokens: 6_000,
       scene: "practice.generate-code",
       ...(input.skills ? { skills: input.skills } : {})
     });
   } catch (error) {
-    // 端点失败单列一档：402/超时/被拒都不是「模型交出来的题不对」，混进形状档就会把人引去修提示词
+    // 端点失败单列一档，不与形状档混。
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
   const parsed = parseJsonObject(response.text);
@@ -279,12 +255,9 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
 }
 
 /**
-  按需讲评：默认不花钱，只有学习者在判完之后主动点一次才发这一趟。
-  - 先重跑一次沙箱拿失败原因（测试文件的 stderr 是模型自己写的 `FAIL <标签>`，唯一具体的证据），
-    重跑不花钱也不碰仓库；讲评因此是对着这份代码的这一次运行说的，不是对着缓存里的题面猜的。
-  - 出网登记用 `sandbox-output`：出门的是学习者写的代码与运行输出，不是仓内源码，
-    但同样可能带着学习者粘进去的密钥，所以照过密钥筛、照记 `code_egress`。
-  - 不返回任何判分字段：passed/score 归沙箱，这里只出一段话。
+  按需讲评：判完之后由学习者点一次才发这一趟，先重跑沙箱拿失败原因。
+  出网登记用 `sandbox-output`，学习者代码照过密钥筛。
+  不返回判分字段：passed / score 归沙箱。
 */
 export async function explainCodeAttempt(input: {
   repositoryPath: string;
@@ -299,7 +272,7 @@ export async function explainCodeAttempt(input: {
   const verdict = verdictOf(run);
   const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
   const sources = input.learnerFiles.map((file) => {
-    // 逐文件各自计数：masked 是「这一段扫过、隐了几处」，一个累加器不能摊到多段上（0 与「没扫」是两个读数，见 egress-log.ts）
+    // 逐文件各自计数：一个累加器不能摊到多段上。
     const screened = maskSecrets(file.contents);
     return { kind: "sandbox-output" as const, path: file.path, from: 1, to: screened.text.split("\n").length, text: screened.text, masked: screened.masked };
   });

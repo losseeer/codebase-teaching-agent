@@ -11,12 +11,9 @@ import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 
 /**
-  练习题生成的 LLM 润色层（单轮调用）：
-  - 输入：静态分析产出的结构化练习（题型 / 目标单元 / 锚点源码摘录）
-  - 输出：仅重写 title（题面标题）与 prompt（题面描述），让题目更贴近真实代码细节
-  - 不改 kind / anchors / inputMode / gradingMode / options —— 判分锚点与标准答案保持静态，
-    保证 execution / set_match / rubric 三种判分路径不受 LLM 输出影响
-  - 任何失败都原样返回输入练习；与其余调用点共用同一套 `TUTOR_LLM_*` 配置（见 llm/provider.ts）
+  练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。
+  kind / anchors / inputMode / gradingMode / options 不改，判分锚点与标准答案保持静态。
+  任何失败都原样返回输入练习。
   */
 
 const MAX_TITLE = 24;
@@ -25,17 +22,14 @@ const MAX_EXCERPT_LINES = 60;
 
 export interface RefinedExercise {
   exercise: Exercise;
-  /** 只有模型真的改写了题面时才有；回落那几条一律不给，免得记录把降级读成调用成功 */
+  /** 只有模型真的改写了题面时才有。 */
   usage?: LlmUsage;
-  /**
-    题面是不是模型真的改写的：润色失败回落启发式题面，调用方要把三种成因分开记；
-    回落原因一并交出去，才知道该修端点还是修解析。
-    */
+  /** 题面是否由模型改写；回落原因一并交出去。 */
   polished: boolean;
   polishFailure?: "no_excerpt" | "unparsable" | "provider_error";
 }
 
-/** 各题型的题面任务描述与防泄漏约束——理解题与主观题的判分锚点永远是静态分析产出，题面不得暗示它们。 */
+/** 各题型的题面任务描述与防泄漏约束：题面不得暗示判分锚点。 */
 const kindRules: Record<ExerciseKind, string> = {
   change_localization: "题面描述一次假设的修改需求（改行为/修缺陷/换实现），要求学习者从候选项中定位应改动的位置；题面不得暗示哪些候选文件或目录是正确答案。",
   impact_analysis: "题面描述一次假设的修改，要求学习者列出会受影响的调用方或用户路径；题面不得点名任何受影响文件。",
@@ -44,10 +38,7 @@ const kindRules: Record<ExerciseKind, string> = {
   llm_rubric: "题面围绕给定主题描述一个开放的分析任务，要求学习者用自己的话作答；题面不得包含或暗示参考答案。"
 };
 
-/**
-  题面润色这一步的提示词（按题型取 `kindRules` 那一条红线）。提出来成函数是为了让口径登记的指纹
-  能把全部题型的文案一次覆盖（见 `EXERCISE_STEP` 的 prompts）。
-*/
+/** 题面润色的提示词：按题型取 `kindRules` 那一条。 */
 function refineSystemPrompt(kind: ExerciseKind): string {
   return [
     "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
@@ -66,7 +57,7 @@ function refineSystemPrompt(kind: ExerciseKind): string {
 export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider): Promise<RefinedExercise> {
   try {
     const excerpt = sourceExcerpt(repositoryPath, exercise);
-    // 摘录读不出来＝这道题连源码都没给模型看，题面必然是规则拼的——不记一笔就没人知道润色没跑
+    // 摘录读不出来时，题面必然出自规则拼接。
     if (!excerpt) return { exercise, polished: false, polishFailure: "no_excerpt" };
 
     const system = refineSystemPrompt(exercise.kind);
@@ -91,13 +82,13 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
   }
 }
 
-/** 出题/润色用的源码摘录：除了正文还带「哪条路径的哪几行确实发出去了」，供出网清单登记（`security/egress-log.ts`）。 */
+/** 出题/润色用的源码摘录：正文 + 实际发出去的路径与行区间。 */
 interface ExerciseExcerpt {
   path: string;
   from: number;
   to: number;
   text: string;
-  /** 这段摘录隐去了几处疑似密钥（0 = 扫过且干净）。报表要靠它区分「扫过且为 0」与「没扫」。 */
+  /** 这段摘录隐去了几处疑似密钥（0 = 扫过且干净）。 */
   masked: number;
   truncated?: boolean;
 }
@@ -114,12 +105,12 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    // 与锚点摘录、L1、read_file 同一道出网前筛（`security/secrets.ts`）：这段是源码原文，出网前必须过筛。
+    // 与锚点摘录、L1、read_file 同一道出网前筛。
     const masker = secretMasker();
     const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
-    // `to` 按真的进请求的那几行算：4,000 字符上限也可能在中间中止，最后几行没出门就不能算进去
+    // `to` 按真正进请求的那几行算。
     const sentLines = text.split("\n").length;
     return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
@@ -136,11 +127,7 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
   return { ...exercise, title, prompt };
 }
 
-/**
-  LLM 出题（llm 族，单轮调用）：规则侧只提供候选源码摘录与用户主题标签，
-  「能否出题」的判定与出题合并在同一轮——无意义标签 / 素材不足时模型拒绝并给出面向学习者的理由。
-  返回的 proposal 仍需过 exercises/guard-proposal.ts 的确定性守门才允许落库。
-  */
+/** LLM 出题（llm 族，单轮调用）：能否出题与出题同轮；proposal 仍需过确定性守门才落库。 */
 export type LlmGeneration =
   | { ok: false; reason: string; skillReads: SkillReadAudit[] }
   | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[] };
@@ -169,14 +156,7 @@ const GENERATION_SYSTEM_PROMPT = [
   "- criteria 给 2-4 条可操作的评分维度；answerKey 要具体到能让另一位评分者据此判分。"
 ].join("\n");
 
-/**
-  出题层的输入口径版本，进出题缓存的作用域键（见 `ExerciseService.exerciseScope`）。
-  版本号只留给不进提示词文案的那类失效——生成逻辑本身变了（比如正确答案怎么进选项池），
-  已冻结进缓存的坏题不会自愈，只能整体作废重来。
-  「题面提示词、`kindRules`、裁剪上限」不用手 bump：它们都被插进提示词文案，改任何一处
-  下面的指纹就变，守卫测试当场拦（见 `analysis-step.ts`）。
-  代码族另外挂 `#runner=<指纹>`（见 `exercises.ts` 的 `fileScope`），那一轴不在本版本号里。
-  */
+/** 出题层的输入口径版本，进出题缓存的作用域键；提示词文案由指纹守卫，不靠手 bump。 */
 export const EXERCISE_STEP = defineAnalysisStep({
   layer: "exercise-generate",
   contractVersion: "exercise-v3",
@@ -190,7 +170,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  // 出网清单：候选摘录是带行号的源码窗口。`to` 用构造时算好的实际末行——窗口里折过注释、也可能被字符上限截断，行数不再等于行跨度
+  // `to` 用构造时算好的实际末行。
   recordEgress({
     repositoryPath: input.repositoryPath,
     scene: "practice.generate",
@@ -201,7 +181,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   });
   const response = await completeWithOptionalSkills({
     provider: input.provider,
-    // 清单由技能通道自己并进系统提示词：这一趟没有 read_file，能取的就是技能正文（两轮封顶）
+    // 清单由技能通道并进系统提示词。
     system: GENERATION_SYSTEM_PROMPT,
     user,
     maxTokens: 1_200,
@@ -221,10 +201,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
 }
 
-/**
-  判分读数：`score` 要的是 0~1 的数字，但模型常按「两位小数」的字面意思把它写成字符串（`"0.00"`）。
-  能读成数字就照它给的分判（含越界钳制），读不出就是没判出来——不猜分、不补分。
-*/
+/** 判分读数：能读成数字就照它给的分判（含越界钳制），读不出返回 `undefined`。 */
 function judgeScore(value: unknown): number | undefined {
   const raw = typeof value === "string" ? value.trim() : value;
   if (raw === "" || (typeof raw !== "number" && typeof raw !== "string")) return undefined;
@@ -232,7 +209,7 @@ function judgeScore(value: unknown): number | undefined {
   return Number.isFinite(score) ? Math.max(0, Math.min(1, Math.round(score * 100) / 100)) : undefined;
 }
 
-/** rubric 判分（LLM-as-Judge + 细则锚点）：拿参考答案与评分细则比对学习者回答，输出结构化分数。 */
+/** rubric 判分：拿参考答案与评分细则比对学习者回答，输出结构化分数。 */
 export async function judgeRubricWithLlm(input: { prompt: string; answerKey: string; criteria: { dimension: string; description: string }[]; learnerAnswer: string; provider: LlmProvider }): Promise<{ score: number; passed: boolean; feedback: string; usage?: LlmUsage }> {
   const system = [
     "你是编程练习的评分器。依据参考答案与评分细则，逐步比对学习者的回答并打分。",
@@ -249,7 +226,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   const parsed = parseJsonObject(response.text);
   const score = judgeScore(parsed?.score);
   if (!parsed || score === undefined) {
-    // 读不出分数就是没判出来，不能补一个数；这里只报形状不抄正文——判分反馈会引述源码，日志不该再开一个出网面
+    // 读不出分数就是没判出来，不补一个数；这里只报形状不抄正文。
     traceEngine("degrade", { what: "exercise_judge_unreadable", reason: parsed ? `score=${typeof parsed.score}` : "no_json_object", reply_chars: response.text.length });
     throw new Error("这次判分没成功，请再试一次。");
   }
@@ -258,7 +235,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   return { score, passed, feedback, usage: response.usage };
 }
 
-/** 程序理解题的反馈润色：规则判分结果不变，只把反馈改写成解释性文字。任何失败返回 undefined，调用方保留规则原文。 */
+/** 反馈润色：规则判分结果不变，只改写反馈；失败返回 undefined。 */
 export async function polishFeedbackWithLlm(input: { repositoryPath: string; exercise: Exercise; learnerAnswer: string; graded: { passed: boolean; score: number; feedback: string }; provider: LlmProvider }): Promise<{ feedback: string; usage?: LlmUsage } | undefined> {
   try {
     const excerpt = sourceExcerpt(input.repositoryPath, input.exercise);
@@ -286,29 +263,24 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
   }
 }
 
-/** 规则侧候选摘录：只认「整行是注释」的行，行尾注释不猜——那行代码本身是素材。 */
+/** 规则侧候选摘录：只认整行是注释的行。 */
 const COMMENT_LINE = /^\s*(\/\/|#|--|\/\*|[*])/;
-/** 连续到第 4 行才折：三行以下的注释常常正是题目要问的东西。 */
+/** 连续到第几行才折叠注释。 */
 const MIN_COMMENT_RUN = 4;
 
-/**
-  规则侧候选摘录构造：按符号边界开窗（固定 80 行硬窗会把锚点旁边的无关函数一起端进去），
-  并把窗口内连续 ≥4 行的整段注释折成一行标注。带行号前缀，LLM 的锚点行号以此为基准，守门可校验。
-  折叠处不给行号：那几行没出网，模型引用不到，守门也不该让它当成锚点。
-  符号比 maxLines 长时截到上限并在末尾说明截到哪，不静默丢。
- */
+/** 规则侧候选摘录构造：按符号边界开窗，连续 ≥4 行整段注释折成一行标注，折叠处不给行号。 */
 export function buildTagCandidate(repositoryPath: string, path: string, span: { start: number; end?: number }, maxLines = 80): GuardCandidate | undefined {
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
     const start = Math.min(Math.max(1, Math.floor(span.start) || 1), lines.length);
     const symbolEnd = span.end !== undefined && span.end >= start ? Math.min(span.end, lines.length) : undefined;
-    // 窗口两头：符号末尾行与 maxLines 取更近的那个——只看 maxLines 就等于把锚点旁边的无关函数也端进来
+    // 窗口两头取更近的那个。
     const stop = Math.min(symbolEnd ?? lines.length, start + maxLines - 1, lines.length);
     const masker = secretMasker();
     const kept: string[] = [];
     const maxChars = 4_000;
     let used = 0;
-    // 实际出门的最后一行：折叠掉的注释与字符上限之后截断的行都不算，出网清单要报的就是这一格
+    // 实际出门的最后一行：折叠与截断的行都不算。
     let lastEmitted = start - 1;
     for (let index = start - 1; index < stop;) {
       if (COMMENT_LINE.test(lines[index] ?? "")) {
@@ -333,7 +305,7 @@ export function buildTagCandidate(repositoryPath: string, path: string, span: { 
       lineCount: lines.length,
       startLine: start,
       endLine: lastEmitted,
-      // 逐行过筛：整段源码在这一条路上同样是原文出网
+      // 逐行过筛：这一条路同样是原文出网。
       excerpt: kept.join("\n"),
       masked: masker.masked
     };
@@ -355,14 +327,14 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
-/** 题面标题的显示上限：标题只进列表与下拉，超长在这里截，不再整题否决（拒题＝白付这一趟调用）。 */
+/** 题面标题的显示上限（字符）。 */
 export const MAX_PROPOSAL_TITLE = 60;
 export function clipProposalTitle(title: string): string {
   return title.trim().slice(0, MAX_PROPOSAL_TITLE);
 }
 
 function normalizeProposal(parsed: Record<string, unknown>): LlmProposal | undefined {
-  // 标题只用于列表与会话下拉：超长不再整题否决（拒题＝白付这一趟），在这里截到稳定上限
+
   const title = clipProposalTitle(String(parsed.title ?? ""));
   const prompt = String(parsed.prompt ?? "").trim();
   const answerKey = String(parsed.answerKey ?? "").trim();

@@ -35,32 +35,21 @@ const isCodeKind = (kind: ExerciseKind): boolean => CODE_EXERCISE_KINDS.includes
 type ExpectedAnswer =
   | { type: "set"; expectedIds: string[] }
   | { type: "rubric"; answerKey: string; criteria: RubricCriterion[] }
-  /**
-    出题时冻结的那一组判分文件：`hidden`（测试 + 替身）与 `solution`（参考解）都不下发；
-    学习者交上来的只替换 `exercise.code.files` 那几个路径。判分路径因此不读仓库源码，也不依赖模型。
-    */
+  /** 出题时冻结的判分文件；`hidden` 与 `solution` 都不下发，学习者只替换 `exercise.code.files` 那几个路径。 */
   | { type: "harness"; language: ExerciseLanguage; entry: string; hidden: CodeFile[]; solution: CodeFile[]; defect: string };
 
 interface StoredExercise {
   exercise: Exercise;
   expected: ExpectedAnswer;
-  /**
-    题面来源：`llm` 模型改写成功 / `failed` 试了但回落启发式 / `not_configured` 没配模型。
-    默认（旧行）= 当时没记，读作 unknown，不事后猜。
-    */
+  /** 题面来源：`llm` 改写成功 / `failed` 回落启发式 / `not_configured` 没配模型；缺省读作 unknown。 */
   polish?: "llm" | "failed" | "not_configured";
-  /** 失败形状（`no_excerpt` / `unparsable` / `provider_error`）；跟着缓存行走，命中时才知道当时坏在哪 */
+  /** 失败形状（`no_excerpt` / `unparsable` / `provider_error`），跟着缓存行存。 */
   polishFailure?: string | null;
 }
 
 type PracticeTarget<T> = ZpdTarget<T> & { kind: ExerciseKind };
 
-/**
-  练习这一侧看到的仓：读的三样 + 能做的四个口。
-  `ports` 由装配层（`infrastructure/exercise-ports.ts`）在 `pin()` 的范围内构造——库句柄、审计线写入口、
-  引用计数都不进这里，出题与判分拿到手的永远是「已经开好的能力」。
-  它跟着仓一起传，服务方法的参数表因此不必为端口多占一格：一次动作的输入就是这一份仓视图。
-*/
+/** 练习这一侧看到的仓：路径 + 索引 + 分析 + 装配层在 `pin()` 范围内构造的端口。 */
 export interface PracticeRepository {
   path: string;
   index: RepositoryIndex;
@@ -70,32 +59,15 @@ export interface PracticeRepository {
 
 const kinds: ExerciseKind[] = SUPPORTED_EXERCISE_KINDS;
 
-/**
-  出题缓存的作用域（填进 `exercise_cache.content_version` 那一列）。
-
-  失效轴 = 决定这道题内容的输入，分两档粒度：
-  - 文件粒度：题面与标准答案只由目标文件决定时（change_localization / 代码题族 / llm 族），
-    作用域带目标文件自己的 `contentHash`——改无关文件不会让整仓出题失效；
-  - 全仓粒度：答案取决于整张依赖图的 impact_analysis，作用域仍用全仓 `versionStamp`
-    （任一文件的 imports 变化都可能改答案，文件粒度在这里是假粒度）。
-
-  旧索引文件没有 `contentHash` 时以 `repo:<versionStamp>` 充当该文件哈希，自动退回全仓粒度，
-  不会出现「该失效没失效」。
-
-  换模型（同一份代码在另一个模型上不是同一道题）、改题面提示词（口径版本）对两档都生效。
-  图指纹（`graphStampOf`）只对全仓那一档：impact 答案出自 `impactRadius`，图可以在源码不动时被
-  引擎判据换掉——图一变旧缓存行自动失效。这里只改缓存键：`exercise.contentVersion` 仍是真实的
-  `versionStamp`，作答校验走 `contentHashes`（见 `staleDependencies`）。
- */
+/** 出题缓存的作用域（填进 `exercise_cache.content_version`）。 */
 function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
+  // 失效轴 = 决定这道题内容的输入：文件粒度带目标文件的 `contentHash`，全仓粒度用 `versionStamp`。
+  // 旧索引缺 `contentHash` 时以 `repo:<versionStamp>` 充当该文件哈希，退回全仓粒度。
+  // 模型档与题面口径版本对两档都生效；图指纹只对全仓那一档。
   return `${versionStamp}#${graphStamp}#${EXERCISE_STEP.contractVersion}#${modelVersion}`;
 }
 
-/**
-  图的指纹：入口清单 + import 边 + 跨文件调用边 + 类型派发边各取「参与判据的部分」排序后哈希。
-  不数行号、不数符号：它们不影响 impact 答案，进键会让每次无关改动都重新出题。
-  按 `analysis` 对象记忆化：一个请求里多处算键时不重复遍历整张图。
-*/
+/** 图的指纹：入口清单 + import 边 + 跨文件调用边 + 类型派发边排序后哈希；不数行号与符号。 */
 const graphStamps = new WeakMap<RepositoryAnalysis, string>();
 function graphStampOf(analysis: RepositoryAnalysis): string {
   const memo = graphStamps.get(analysis);
@@ -109,22 +81,18 @@ function graphStampOf(analysis: RepositoryAnalysis): string {
   return stamp;
 }
 
-/** 文件粒度作用域的「文件部分」：path@hash 逗号串。id 与缓存作用域共用它，保证二者同生同灭。 */
+/** 文件粒度作用域的文件部分：path@hash 逗号串；id 与缓存作用域共用它。 */
 function depsFingerprint(deps: { path: string; hash: string }[]): string {
   return deps.map((dep) => `${dep.path}@${dep.hash}`).join(",");
 }
 
-/**
-  文件粒度作用域：依赖文件指纹 + 题面口径版本 + 模型档（代码题再挂 runner 指纹）。
-  三条出题路径（规则题、代码题、LLM 题）共用这一个构造。
-  runner 指纹只对代码族加：理解题与主观题的答案不出自沙箱，换运行时不该作废它们的旧题；
-  代码题的「缺陷版必挂」自证是在具体 runner 上验出来的，runner 一变就得重验。
-*/
+/** 文件粒度作用域：依赖文件指纹 + 题面口径版本 + 模型档；三条出题路径共用。 */
 function fileScope(deps: { path: string; hash: string }[], modelVersion: string, runner?: string): string {
+  // runner 指纹只对代码族加：代码题的自证是在具体 runner 上验出来的。
   return `${depsFingerprint(deps)}#${EXERCISE_STEP.contractVersion}#${modelVersion}${runner ? `#runner=${runner}` : ""}`;
 }
 
-/** 一道题依赖的文件清单及其哈希。查不到 contentHash（旧索引）时以全仓 versionStamp 兜底。 */
+/** 一道题依赖的文件清单及其哈希；缺 `contentHash` 时以全仓 `versionStamp` 充当。 */
 function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value: unknown): { path: string; hash: string }[] {
   const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
   if (kind === "impact_analysis") return [];
@@ -132,18 +100,10 @@ function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value:
   return [{ path: unit.symbol.path, hash: hashOf(unit.symbol.path) }];
 }
 
-/**
-  作答时效校验：带 `contentHashes` 的新题逐文件核对，返回已过期的依赖清单（空 = 仍可用）——
-  只有这道题依赖的文件变了才拒绝作答，无关文件的修改不打扰已有题目；
-  旧题（无此字段）维持全仓 versionStamp 比对，过期时返回一个非路径占位符。
-*/
+/** 作答时效校验：返回已过期的依赖清单，空 = 仍可用。 */
 function staleDependencies(repository: PracticeRepository, exercise: Exercise): string[] {
   if (exercise.contentHashes?.length) {
-    /**
-      出题时记的是哪一档，就按哪一档比对：老索引没有逐文件 `contentHash`，记的是兜底串
-      `repo:<versionStamp>`；拿逐文件哈希去比兜底串永远不等，这道题会此后再也答不了。
-      反过来兜底档只该问「全仓动过没有」。
-    */
+    // 按出题时记的那一档比对：全仓串只问全仓是否动过。
     const wholeRepo = `repo:${repository.analysis.versionStamp}`;
     const byPath = new Map(repository.index.files.map((file) => [file.path, file.contentHash]));
     return exercise.contentHashes
@@ -160,11 +120,7 @@ export class ExerciseService {
     return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
   }
 
-  /**
-    生成练习：目标单元与标准答案始终由静态分析产出（可判分）；
-    传入 provider 时对题面 title/prompt 做一轮 LLM 润色（失败/未配置则用启发式题面）。
-    family="llm" 走 LLM 出题族（tag 主题出题，一轮调用可拒绝，rubric 判分）。
-    */
+  /** 生成练习：目标单元与标准答案由静态分析产出；传入 provider 时润色题面。 */
   async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, skills?: SkillsToolContext): Promise<Exercise> {
     if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, skills);
     const modelVersion = provider?.modelVersion ?? "deterministic";
@@ -174,8 +130,7 @@ export class ExerciseService {
         .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
       for (const schedule of due) {
         const stored = repository.ports.store.byId<StoredExercise>(schedule.exerciseId);
-        // 跳过缓存里已不再支持的题型（如已移除的选型辩护）；时效判定见 `staleDependencies`
-        if (stored && SUPPORTED_EXERCISE_KINDS.includes(stored.exercise.kind) && !staleDependencies(repository, stored.exercise).length) {
+        if (stored && !staleDependencies(repository, stored.exercise).length) {
           repository.ports.audit.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
           return stored.exercise;
         }
@@ -184,8 +139,7 @@ export class ExerciseService {
     const mastery = repository.ports.progress.mastery();
     const target = this.pickTarget(repository, requested, mastery);
     if (!target) {
-      // 点了某张练习记录却挑不出单元 ≠ 整仓没题：前者是那条记录本身已经出不了题
-      // （题型下线了、或那个文件不在当前分析结果里），说「请先重新导入仓库」会把人引向一条不解决问题的路。
+      // 指定了记录却挑不出单元，与该仓没有可生成的题，是两种原因。
       const reason = requested.targetUnitId
         ? "这条练习记录已经出不了题（题型已停用，或那个文件不在当前分析结果里）。换一张卡片试试。"
         : "当前分析结果没有可生成的练习。请先重新导入仓库。";
@@ -198,16 +152,13 @@ export class ExerciseService {
       : exerciseScope(repository.analysis.versionStamp, modelVersion, graphStampOf(repository.analysis));
     const cached = repository.ports.store.get<StoredExercise>(scope, target.kind, target.id);
     if (cached) {
-      // 缓存命中也要报当时润色过没有：旧行没这个字段读作 unknown（null），不事后猜测
+      // 缓存命中也要报当时润色过没有。
       repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
       return cached.exercise;
     }
     if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, skills);
     let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
-    /**
-      题面来源按三种成因分开记（模型改写成功 / 试了但失败 / 未配置模型），失败时把失败形状一起写，
-      缓存命中上报时才分得清题面出自谁。
-      */
+    // 题面来源按成因分开记，失败时把失败形状一起写。
     let polish: StoredExercise["polish"] = "not_configured";
     let polishFailure: string | null = null;
     if (provider) {
@@ -228,12 +179,7 @@ export class ExerciseService {
     return stored.exercise;
   }
 
-  /**
-    代码族出题（`patch_edit` / `author_function`）：模型交「题面 + 下发件 + 参考解 + 测试 + 替身」，
-    引擎在沙箱里跑两趟自证（参考解必过、下发件必挂）才允许落库——没自证过的题不出。
-    每次真跑都写一行 `exercise_run`，被拒的也算：要分得开「没走到沙箱」与「沙箱说这题不行」。
-    没配模型/预算已达上限时直接拒（与对话作用域同一纪律，不回落本地题面）。
-    */
+  /** 代码族出题：模型交题面与判分件，引擎在沙箱自证两跑（参考解必过、下发件必挂）后才落库。 */
   private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], skills?: SkillsToolContext): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
@@ -241,12 +187,7 @@ export class ExerciseService {
       repository.ports.audit.append("exercise_declined", { family: "code", tag: "", reason, stage: "no_provider" });
       throw new Error(reason);
     }
-    /**
-      沙箱这一关必须走在付费之前：README 承诺「隔离探测不过则代码题整域禁用」，
-      而 `runSandbox` 的 `SandboxUnavailableError` 要到模型已经出完一份题（≈6k token）才抛——
-      在那台永远出不了题的机器上，每点一次「下一道题」都扣一次钱，账面还看着「沙箱不可用」。
-      这里先探（探过就认缓存，不重复起 canary），不是 `enforced` 就直接拒，一行模型调用都不发。
-    */
+    // 沙箱探测走在付费之前：非 `enforced` 直接拒，不发模型调用。
     const isolation = await ensureIsolation();
     if (isolation.level !== "enforced") {
       const reason = `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`;
@@ -256,12 +197,9 @@ export class ExerciseService {
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
     const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, ...(skills ? { skills } : {}) });
-    // 取过哪份出题技能先留痕：拒题的趟也真取过正文，账上不能只写「模型没出题」
+    // 取过的出题技能先留痕。
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
-    /**
-      自证两跑逐条留痕，失败趟也要有行：`exercise_run` 是「沙箱真跑了」的唯一证据，
-      只在成功时写会让「沙箱挂了」和「模型没出题」在记录里长成同一个样子。
-    */
+    /** 自证两跑逐条留痕，失败趟也要有行。 */
     const language = generation.ok ? generation.proposal.language : unit.symbol.language;
     for (const run of generation.runs) {
       repository.ports.audit.append("exercise_run", {
@@ -284,7 +222,7 @@ export class ExerciseService {
     });
     const proposal = generation.proposal;
     const exercise: Exercise = {
-      // 与 LLM 族同理：答案（那组测试）出自模型，换模型/换 runner 就是另一道题，id 必须含 scope
+      // id 含 scope：答案出自模型，换模型或换 runner 就是另一道题。
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
       contentVersion: repository.analysis.versionStamp,
@@ -305,7 +243,7 @@ export class ExerciseService {
     const stored: StoredExercise = {
       exercise,
       expected: { type: "harness", language: proposal.language, entry: proposal.entry, hidden: proposal.hidden, solution: proposal.solution, defect: proposal.defect },
-      // 代码题的题面整份出自模型，这里记 llm 表示「没有规则版可回落」
+
       polish: "llm",
       polishFailure: null
     };
@@ -314,11 +252,7 @@ export class ExerciseService {
     return exercise;
   }
 
-  /**
-    LLM 出题族：id = hash(repoId + 出题作用域 + tagId + variantNonce)，nonce=0 复用缓存题，
-    换一题传 variantNonce+1 生成新题（旧题保留在缓存/复习记录里）。
-    一轮调用内由 LLM 判定「能否出题」——拒绝理由与守门否决都记 journal（exercise_declined），不静默。
-    */
+  /** LLM 出题族：一轮调用内由模型判定能否出题，拒绝与守门否决都记 `exercise_declined`。 */
   private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, skills?: SkillsToolContext): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
@@ -326,14 +260,14 @@ export class ExerciseService {
     const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm:${tagKey}:${nonce}`;
-    // 候选选择提前到缓存查找之前：题面与答案全出自模型看到的摘录，作用域要按候选文件自己的哈希算
+    // 候选选择提前到缓存查找之前：作用域按候选文件自己的哈希算。
     const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
     const matched = selectTagCandidates(repository, tag, 3, summaries);
-    // 词法零命中不再直接拒题：改从仓库全景挑素材（有摘要 / 改动热点 / 有可讲的函数），仍是一次调用、仍带行号锚点，守门照旧可核
+    // 词法零命中时改从仓库全景挑素材，守门照旧。
     const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);
     const selection = matched.length ? "tag" : "panorama";
     if (!candidates.length) {
-      // 零素材也要留痕：记录要分得清「没走到模型」与「被模型拒绝」，才知道该修选料还是修提示词
+      // 零素材也要留痕：分得清「没走到模型」与「被模型拒绝」。
       repository.ports.audit.append("exercise_declined", { family: "llm", tag, reason: `词法命中与仓库全景都挑不出可出题的源码文件（主题「${tag}」）。`, stage: "no_candidates" });
       throw new Error(`这个仓库现在找不到能出题的代码：「${tag}」。换一个更具体的主题，或先让它完成一次分析。`);
     }
@@ -366,8 +300,7 @@ export class ExerciseService {
     }
     const proposal = generation.proposal;
     const exercise: Exercise = {
-      // id 里用 scope 而不是裸 versionStamp：LLM 题的题面与答案全出自模型，换模型就是另一道题，
-      // 两者不能共用一个 id（判分与复习排期都按 id 回查缓存行）。
+      // id 含 scope 而非裸 versionStamp：换模型就是另一道题，判分与排期都按 id 回查缓存行。
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:llm_rubric:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
       contentVersion: repository.analysis.versionStamp,
@@ -391,12 +324,9 @@ export class ExerciseService {
     return exercise;
   }
 
-  /**
-    按需讲评：默认不花钱，判完之后由学习者点一次才发这一趟。
-    只对代码题开放，且只回一段话——`passed`/`score` 归沙箱，这里一个字都不改（LLM 永不改判分结论）。
-    不做时效校验是有意的：讲评吃的是冻结在缓存行里的那组测试与这次运行的输出，跟仓库现在长什么样无关。
-    */
+  /** 按需讲评：只对代码题开放，只回一段话，不改 `passed` / `score`。 */
   async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
+    // 讲评不做时效校验：吃的是缓存行里冻结的测试与这次运行的输出。
     if (!provider) throw new Error("讲评需要模型：当前没配模型，或本月预算已用完。");
     const stored = repository.ports.store.byId<StoredExercise>(exerciseId);
     if (!stored) throw new Error("练习不存在或已被清理；请重新生成练习。");
@@ -430,11 +360,7 @@ export class ExerciseService {
     let graded = stored.expected.type === "rubric"
       ? await gradeRubric(stored, answer, provider, repository.ports.audit)
       : await grade(stored, answer, repository.ports.audit, repository.path);
-    /**
-      程序理解题（规则判分）：反馈解释交 LLM 润色；润色失败保留规则原文并显式标注 feedbackSource="rule"。
-      代码题不在这里花钱——它的反馈就是测试计数，「讲一遍」按需由界面点一次才发一趟（见 explain），
-      每次提交都自动润色等于把「按需」写回「默认」。
-    */
+    // 规则判分的题反馈交 LLM 润色，失败时保留原文并标注 feedbackSource="rule"。
     if (provider && graded.automatic && stored.exercise.gradingMode !== "execution") {
       const learnerAnswer = answer.text?.trim() || (answer.selectedIds ?? []).join(", ");
       const polished = await polishFeedbackWithLlm({ repositoryPath: repository.path, exercise: stored.exercise, learnerAnswer, graded, provider });
@@ -484,8 +410,7 @@ export class ExerciseService {
 
   private targets(repository: PracticeRepository, kind: ExerciseKind): PracticeTarget<unknown>[] {
     if (isCodeKind(kind)) {
-      // 代码族两型共用同一批候选：patch_edit 拿它的真实现改缺陷，author_function 照它的签名重写一份等价实现。
-      // 语言闸门在这里，沙箱不支持的语言不进候选，而不是出题时才报「跑不起来」。
+      // 代码族两型共用同一批候选；沙箱不支持的语言在这里就不进候选。
       const supported = new Set(["typescript", "python", "java"]);
       return repository.analysis.implementations
         .filter((unit) => supported.has(unit.symbol.language))
@@ -544,9 +469,7 @@ function impactExercise(repository: PracticeRepository, changedPath: string, dif
 }
 
 function baseExercise(repository: PracticeRepository, kind: ExerciseKind, targetUnitId: string, targetTitle: string, difficulty: MasteryLevel, deps: { path: string; hash: string }[], input: Pick<Exercise, "title" | "prompt" | "anchors" | "inputMode" | "gradingMode" | "options">): Exercise {
-  // id 只含文件哈希部分（不含模型/口径版本）：静态题（change_localization / impact_analysis）的答案出自静态分析，
-  // 换模型只换题面措辞，共用 id 不串答案；
-  // deps 为空（impact_analysis / 旧索引兜底）时沿用全仓 versionStamp 的旧 id 形状
+  // 静态题的答案出自静态分析：id 只含文件哈希部分，换模型不串答案；deps 为空时沿用全仓 `versionStamp`。
   const idBase = deps.length ? depsFingerprint(deps) : repository.analysis.versionStamp;
   const id = `exercise:${hash(`${repository.index.repositoryId}:${idBase}:${kind}:${targetUnitId}`).slice(0, 20)}`;
   return {
@@ -561,18 +484,10 @@ type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "target
 async function grade(stored: StoredExercise, answer: ExerciseAnswer, audit: AuditSink, repositoryPath: string): Promise<GradeOutcome> {
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);
   if (stored.expected.type === "harness") return gradeHarness(stored, answer, audit, repositoryPath);
-  // 旧缓存行（`{ type: "output" }`，已退役题型的口径）落在这里：当前出题路径不会再写它们；
-  // 真读到了要明说「重新生成」，不能默默判错。
-  throw new Error("该练习类型已不再支持；请重新生成练习。");
+  throw new Error("这道题的判分形状不认识，请重新生成。");
 }
 
-/**
-  代码题判分：只由沙箱里那组冻结测试决定，模型一律不参与（`automatic: true` 的语义就在这里成立）。
-  - 学习者交的文件只替换下发时那几个 path，测试与替身仍是出题时冻结的那一份 ⇒ 判分路径不读仓库源码；
-  - 认「TESTS 通过 失败」那一行，不认异常：跑不出结论（没编译过、测试自己崩了）判 0 分并把 stderr 摘要如实交出去，
-    它与「测试挂了」是两件事——混起来学习者会去改一个根本不存在的断言；
-  - 分数 = 通过数 / 总断言数，与 `gradeSet` 同一个口径（分母是两边的并集，不是只数答对的）。
-*/
+/** 代码题判分：只由沙箱里冻结的那组测试决定，模型不参与，判分路径不读仓库源码。 */
 async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, audit: AuditSink, repositoryPath: string): Promise<GradeOutcome> {
   const expected = stored.expected as Extract<ExpectedAnswer, { type: "harness" }>;
   const slotPaths = new Set((stored.exercise.code?.files ?? []).map((file) => file.path));
@@ -583,7 +498,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, audi
   const files = [...expected.hidden.map((file) => ({ ...file })), ...submitted.map((file) => ({ path: file.path, contents: file.contents }))];
   const run = await runSandbox({ language: expected.language, entry: expected.entry, files, repositoryPath });
   const verdict = verdictOf(run);
-  // journal 的 outcome 与返回给界面的 passed 取同一个布尔值：`TESTS 0 0`（一条断言都没有）时两者必须同向
+  // journal 的 outcome 与返回的 passed 取同一个布尔值。
   const passed = verdict ? verdict.failed === 0 && verdict.passed >= 1 && run.ok : false;
   audit.append("exercise_run", {
     stage: "grade", label: "learner", language: expected.language, exercise_id: stored.exercise.id,
@@ -607,7 +522,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, audi
   };
 }
 
-/** rubric 判分（LLM 族）：LLM 拿参考答案与评分细则比对学习者回答；结果 automatic=false，绝不伪装成确定性判分。 */
+/** rubric 判分：模型拿参考答案与细则比对学习者回答，`automatic: false`。 */
 async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined, audit: AuditSink): Promise<GradeOutcome> {
   if (!provider) throw new Error("这道题的判分需要模型：当前没配模型，或本月预算已用完。");
   const learnerAnswer = (answer.text ?? "").trim();
@@ -633,8 +548,7 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
   const missingIds = expected.filter((id) => !selectedSet.has(id));
   const unexpectedIds = [...selectedSet].filter((id) => !expectedSet.has(id)).sort();
   const passed = missingIds.length === 0 && unexpectedIds.length === 0;
-  // 分母取两边的并集（答对 + 答漏 + 答多）：判分与答案口径必须在同一条式子里。
-  // 若只在期望项齐全时算分，会出现期望为空却多选了、score=1 而 passed=false，排期按满分推进、界面却显示没过。
+  // 分母取两边的并集：判分与答案口径在同一条式子里。
   const union = expectedSet.size + unexpectedIds.length;
   const score = union ? matchedIds.length / union : 1;
   return {
@@ -649,10 +563,7 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
   };
 }
 
-/**
-  规则侧候选选择：按主题标签的词元对文件路径与文件内符号名打分（路径命中 30 / 符号命中 20 / 热点 ≤10），
-  取前 3 个文件构造带行号的摘录交给 LLM。相关性不足时 LLM 会在出题轮内拒绝——这里是「有素材可给」，不是「保证可出题」。
-  */
+/** 规则侧候选选择：按主题词元对路径 / 符号 / 摘要打分，取前 limit 个文件构造摘录。 */
 function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3, summaries: Map<string, string> = new Map()): GuardCandidate[] {
   const lowered = tag.toLowerCase();
   const tokens = [...new Set([lowered, ...lowered.split(/[\s,，、/·:：_-]+/).filter((token) => token.length >= 2)])];
@@ -664,13 +575,13 @@ function selectTagCandidates(repository: PracticeRepository, tag: string, limit 
   }
   const hotspots = new Map(repository.index.hotspots.map((hotspot) => [hotspot.path, hotspot.changes]));
   const scored = repository.index.files
-    // 能出题的素材 = 进了依赖图的源码，扩展名判据由能力表派生（与 sourceOptions 同一份判据）
+    // 扩展名判据由能力表派生，与 `sourceOptions` 同一份。
     .filter((file) => handledExtensions.has(file.extension))
     .map((file) => {
       const path = file.path;
       const symbols = (symbolsByPath.get(path) ?? []).map((symbol) => symbol.name.toLowerCase()).join(" ");
       const summary = (summaries.get(path) ?? "").toLowerCase();
-      // 相关性闸门：路径/符号/摘要任一命中才算候选；零相关时按热点塞文件会产出与主题无关的候选
+      // 相关性闸门：路径 / 符号 / 摘要任一命中才算候选。
       let matches = 0;
       let score = 0;
       for (const token of tokens) {
@@ -690,12 +601,9 @@ function selectTagCandidates(repository: PracticeRepository, tag: string, limit 
   });
 }
 
-/**
-  全景选料：主题词在路径、符号名与摘要上都没命中时的兜底。判据只用已有产物——有 L1 摘要、改动热点、
-  有可讲的函数，三者打分排序；开窗用该文件里最大的那个函数，不再硬开 80 行。
-  同一份产物下结果必须确定：否则每次出题都是新的缓存作用域，缓存等于没有。
- */
+/** 全景选料：主题词零命中时按 L1 摘要、改动热点、可讲函数打分选料。 */
 function panoramaCandidates(repository: PracticeRepository, summaries: Map<string, string>, limit = 3): GuardCandidate[] {
+  // 同一份产物下结果必须确定：选料不稳定会让每次出题都是新的缓存作用域。
   const bodyOf = new Map<string, SymbolInfo>();
   for (const symbol of repository.analysis.graph.symbols) {
     if (symbol.kind !== "function" && symbol.kind !== "method") continue;
@@ -722,7 +630,7 @@ function panoramaCandidates(repository: PracticeRepository, summaries: Map<strin
   });
 }
 
-/** 摘录窗口：名字命中任一词元的符号里取分最高者（同分取更靠前的），按它的真实行区间开窗——固定行数的硬窗会把锚点旁边的无关函数一起端进去；无命中回落从第 1 行起的默认窗口。 */
+/** 摘录窗口：按命中词元最多的符号的真实行区间开窗；无命中时从第 1 行起。 */
 function windowSpan(symbols: SymbolInfo[], tokens: string[]): { start: number; end?: number } {
   let best: { score: number; symbol: SymbolInfo } | undefined;
   for (const symbol of symbols) {
@@ -740,14 +648,10 @@ function prioritizedImpactPaths(result: ReturnType<typeof impactRadius>, changed
 }
 
 function sourceOptions(repository: PracticeRepository, preferredPaths: string[], limit = 8) {
-  /**
-    正解必须出现在选项里：正解只按「在不在索引里」认，扩展名闸门只管干扰项从哪儿捞。
-    若正解也先过手写的扩展名白名单，非 JS 仓的答案路径会被当成「非源码」筛掉——
-    学习者怎么选都不过，`missingIds` 永远非空。
-    */
+  // 正解只按「在不在索引里」认；扩展名闸门只管干扰项从哪儿捞。
   const indexed = new Set(repository.index.files.map((file) => file.path));
   const preferred = [...new Set(preferredPaths)].filter((path) => indexed.has(path)).slice(0, limit);
-  // 干扰项池的扩展名由共享能力表派生（`handledExtensions` 就是建图那一句判据），不在这里手写一份
+  // 干扰项池的扩展名由共享能力表派生。
   const sourcePaths = repository.index.files.filter((file) => handledExtensions.has(file.extension)).map((file) => file.path);
   const preferredSet = new Set(preferred);
   const related = relatedPaths(repository, preferred);

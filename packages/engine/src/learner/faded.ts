@@ -10,11 +10,11 @@ const initial: FadedState = {
 };
 
 function isSuccess(event: JournalEvent): boolean {
-  return event.type === "unit_mastered" || (event.type === "exercise_result" && event.payload.passed === true && Number(event.payload.score ?? 1) >= 0.8);
+  return event.type === "exercise_result" && event.payload.passed === true && Number(event.payload.score ?? 1) >= 0.8;
 }
 
 function isFailure(event: JournalEvent): boolean {
-  return event.type === "dependency_event" || (event.type === "exercise_result" && event.payload.passed === false);
+  return event.type === "exercise_result" && event.payload.passed === false;
 }
 
 /**
