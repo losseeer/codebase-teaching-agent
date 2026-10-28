@@ -89,9 +89,7 @@ describe("整仓自环与「每个文件一个源码根」", () => {
       "util/Keys.java": "package com.demo.util;\n\npublic class Keys {\n  public static void check() {}\n}\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // 扁平布局没有 src/main|test，源码根兜底必须给仓根而不是文件自身：
-      // 返回文件自身时每个文件都自成一个编译范围，`requireSameRoot` 恒不成立，
-      // 同包可见与通配展开整条静默失效（读数上只是「这仓边少」）。
+      // 扁平布局没有 src/main|test：源码根要回落到仓根，否则同包可见与通配展开静默失效。
       expect(graph.imports.get("App.java"), "包通配要在扁平布局里按正文引用落点").toEqual(["util/Keys.java"]);
       expect(graph.calls.some((call) => call.callerPath === "App.java" && call.calleePath === "Service.java"), "Java 同包不 import 也互相可见").toBe(true);
     }));

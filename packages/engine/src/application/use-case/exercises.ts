@@ -7,12 +7,9 @@ import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/compo
 
 /**
   练习题的用例：出题、判分、按需讲评。
-  三条纪律住在这里，不在 controller：
-  - 判分是纯本地（沙箱真跑），不过预算闸门；出题与讲评才要模型，额度触顶就不给 provider；
-  - 「没配模型 / 预算用完 / 模型拒答 / 守门否决」一律以 `declined` 报出来，由传输层给 422，不回落本地模板话；
-  - 非字符串的 `tag` 按没填处理，绝不在请求体上直接 `.trim()`（那会把不合规格的请求记成引擎故障）；
-  - 库句柄在这一层开合（`withExercisePorts` + `practiceView`）：练习服务只拿四个端口，不知道 `pin()/unpin()` 这件事存在。
-  */
+  判分是沙箱本地真跑、不过预算闸门；出题与讲评要模型，额度触顶时不给 provider。
+  失败一律以 `declined` 报出，不回落本地模板话；库句柄在这一层开合。
+*/
 export type ExerciseFailure =
   | { kind: "repository-missing" }
   | { kind: "tag-required" }

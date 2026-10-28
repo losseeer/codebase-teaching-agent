@@ -3,14 +3,9 @@ import { isEngineOwnedEventType, isUiJournalEventType } from "@codebase-tutor/do
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
 
 /**
-  界面动作事件的入账用例：每一次切节点、打开文件、切换主题、提交练习都要有 journal 事件可查。
-
-  契约要点（这几条是审计能不能信这条线的前提，不许在传输层放宽）：
-  - 只收界面侧那张表（`UI_JOURNAL_EVENTS`，成员以那张表为准）。`file_read` / `code_egress` / `token_usage`
-    是审计证据，而这条接口本机任何进程都调得到，照全集合放行等于让被审计的一方自己填账；
-  - `payload` 仅允许标量（`string | number | boolean | null`）：结构化对象会随版本漂移；
-  - `sessionId` 只校验是字符串且有长度上限，不做存在性校验：journal 是 append-only 事件流，
-    sessionId 是关联属性而非外键。超长会永久占进审计线，所以拒掉而不是截断。
+  界面动作事件的入账用例：切节点、打开文件、切换主题、提交练习都要有 journal 事件可查。
+  只收 `UI_JOURNAL_EVENTS` 那张表的成员；`payload` 仅允许标量。
+  `sessionId` 只校验类型与长度上限，超长拒掉而不是截断。
   */
 export type IngestFailure =
   | { kind: "repository-missing" }

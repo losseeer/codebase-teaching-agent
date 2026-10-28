@@ -6,9 +6,8 @@ import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import type { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 
 /**
-  练习这条路的装配层：把「这一仓的库现在开着」翻译成练习侧要的四个口，用完就收回。
-  住在这里而不是练习模块里，是因为它要同时认识持久层（四张表的 repository）、learner（掌握度从审计线推）
-  与连接生命周期（引用计数）——这三样都不该出现在出题与判分的逻辑里。
+  练习这条路的装配层：把「这一仓的库现在开着」翻译成练习侧要的四个口。
+  它同时认识持久层、learner 与连接生命周期，这三样不该出现在出题与判分的逻辑里。
 */
 export function exercisePortsFor(handle: RepositoryHandle, database: TutorDatabase): ExercisePorts {
   const repositoryId = handle.repositoryId;
@@ -40,11 +39,7 @@ export function practiceView(repository: { path: string; index: PracticeReposito
   return { path: repository.path, index: repository.index, analysis: repository.analysis, ports };
 }
 
-/**
-  在 `pin()` 的范围内构造端口、交给回调，回调落地才 `unpin()`。
-  引用计数不进端口：出题/判分/讲评各方法以前自己开自己关，四处 try/finally 各写一遍，
-  现在这一层一处管完，服务方法只管用口。
-*/
+/** 在 `pin()` 的范围内构造端口、交给回调，回调落地才 `unpin()`。 */
 export async function withExercisePorts<T>(handle: RepositoryHandle, run: (ports: ExercisePorts) => T | Promise<T>): Promise<T> {
   const database = handle.pin();
   try {

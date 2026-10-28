@@ -6,8 +6,7 @@ import type { FastifyInstance } from "fastify";
 
 /**
   仓库只读产物的入站翻译：索引、练习摘要、学习者画像、导入报告、源码。
-  放行顺序、名单判据、体积上限这些都在 `application/use-case/repository-read.ts`；
-  这里只把失败种类翻成状态码——越界是 400（请求本身不合法），不给读与读不到是 404，超体积是 413。
+  判据在 `application/use-case/repository-read.ts`，这里只把失败种类翻成状态码。
   */
 const rejected = (reply: FastifyReply, failure: ReadFailure): FastifyReply => {
   switch (failure.kind) {

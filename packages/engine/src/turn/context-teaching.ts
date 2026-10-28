@@ -11,23 +11,19 @@ const EXCERPT_BEFORE = 7;
 const EXCERPT_AFTER = 10;
 const MAX_EXCERPTS = 3;
 const MAX_SCOPE_FILES = 60;
-/** 预算分配留白：避免拼接后正好越界触发尾部截断 */
+/** 预算分配留白（字符）。 */
 const BUDGET_MARGIN = 200;
-/*
-  下面几档都从上下文窗口按份额派生（唯一真源在 `llm/context-window.ts`）：
-  窗口是唯一手填的数，这里只声明「哪一类内容占多少」。
-*/
+/* 下面几档都按上下文窗口份额派生；窗口是唯一手填的数。 */
 const maximumCharactersCap = () => contextShare(CONTEXT_SHARE.teachingContext);
-/** 符号边界可信上限（行）：超过即只取符号开头（花括号计数得到的 endLine 可能虚高） */
+/** 符号边界可信上限（行）：超过即只取符号开头。 */
 const symbolLineCap = () => contextShareLines(CONTEXT_SHARE.symbolLines);
 const excerptBlockCap = () => contextShare(CONTEXT_SHARE.excerptBlock);
-/** 对话历史的份额上限：摘录在这一份里保底，长线程不会把源码正文挤光。 */
+/** 对话历史的份额上限：摘录在这一份里保底。 */
 const excerptReserve = () => contextShare(CONTEXT_SHARE.anchorExcerpts);
 
 /**
- * 有界教学上下文：作用域（文件/目录）+ 调用邻接 + 文件开头的真实源码摘录 + 对话历史。
- * 作用域只决定“从哪儿开始看”，具体事实由依赖图与 static_fact 提供，不再依赖课程树。
- * 历史怎么进上下文由 `llm/conversation.ts` 判（装得下就整段原文，装不下折成最近几条 + 最早几条 + 占位）。
+ * 有界教学上下文：作用域（文件 / 目录）+ 调用邻接 + 锚点源码摘录 + 对话历史。
+ * 作用域只决定从哪儿开始看；历史进多少由 `llm/conversation.ts` 判。
  */
 export interface TeachingContextInput {
   scope: ScopeRef;
@@ -37,12 +33,12 @@ export interface TeachingContextInput {
   query?: string;
   repositoryPath?: string;
   index?: RepositoryIndex;
-  /** 依赖图：提供时注入「调用关系」（跨文件调用方/被调方 + 同文件符号位置）——只给路径清单，不给源码 */
+  /** 依赖图：提供时注入调用关系，只给路径清单不给源码。 */
   analysis?: RepositoryAnalysis;
   maximumCharacters?: number;
-  /** 出网登记：本函数把哪几段源码放进上下文，就往后推几条；由真要发请求的调用方在发出前计入审计。 */
+  /** 出网登记：本函数把哪几段源码放进上下文就往后推几条。 */
   egress?: EgressCollector;
-  /** 对话历史的折叠读数往这里落一份：回合审计要回答「这条回复是在看过几条历史的前提下写的」。 */
+  /** 对话历史的折叠读数落在这里。 */
   conversationAudit?: { foldedMessages: number; recalledMessages: number };
 }
 

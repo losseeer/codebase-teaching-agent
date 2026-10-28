@@ -1,16 +1,5 @@
-/**
-  对话历史进上下文的那道压缩（三个对话作用域共用：代码问答、宏观设计、练习答疑）。
-
-  两条折叠触发：占到窗口的 `HISTORY_COMPACT_AT_RATIO`（学习者说的「当前上下文超过 m%」），
-  或者这段历史装不进本轮分给它的空间——后者是兜住「长线程把源码摘录挤光」的形状。
-  折的时候只完整保留最近 `HISTORY_KEEP_RECENT_MESSAGES` 条与最早 `HISTORY_KEEP_EARLIEST_MESSAGES` 条，
-  中间一律换成一句占位。学习者若引用了被折叠的内容（「你前面说的那个事务边界」），
-  本轮提问里的词会在这段折叠语料上算 BM25，把最相关的几条原文找回来贴在占位那一行下面——
-  找回来的是真原文，不是重新编一段。
-
-  为什么留「最早几条」：开场那一轮说的通常是目标与范围，后面的追问全挂在它上面；
-  丢掉它，模型会把对话当成从中间开始的，答到一半去猜「你说的『它』指什么」。
-*/
+/** 对话历史进上下文前的压缩：占用达 `HISTORY_COMPACT_AT_RATIO` 或超出本轮空间时，只留最早与最近若干条，中间换成占位行。
+    本轮提问在折叠段上算 BM25，命中的原文追在占位行后面。 */
 import { CHARS_PER_TOKEN, CONTEXT_SHARE, contextShare, contextWindowTokens } from "./context-window.js";
 import { segmentForLookup, wordsOf } from "@codebase-tutor/platform";
 
@@ -19,15 +8,15 @@ export interface ConversationTurn {
   readonly content: string;
 }
 
-/** m：占到窗口的这个比例就开始折叠对话。 */
+/** 窗口占用达到这个比例就开始折叠对话。 */
 export const HISTORY_COMPACT_AT_RATIO = 0.8;
-/** a：折叠后仍完整保留的最近条数。 */
+/** 折叠后完整保留的最近条数。 */
 export const HISTORY_KEEP_RECENT_MESSAGES = 6;
-/** b：折叠后仍完整保留的最早条数。 */
+/** 折叠后完整保留的最早条数。 */
 export const HISTORY_KEEP_EARLIEST_MESSAGES = 2;
-/** 找回几条封顶：折叠段再长，本轮用得上的通常就那么两三段。 */
+/** 找回条数上限。 */
 const RECALLED_MAX_MESSAGES = 3;
-/** 相关度下限：低于这个分说明本轮没引用折叠内容，别硬塞。 */
+/** 找回的 BM25 相关度下限。 */
 const RECALL_MIN_SCORE = 1.2;
 const BM25_TERM_FREQUENCY_SATURATION = 1.2;
 const BM25_LENGTH_NORMALIZATION = 0.75;
@@ -35,13 +24,13 @@ const BM25_LENGTH_NORMALIZATION = 0.75;
 export interface ConversationBlock {
   /** 直接拼进请求的那一段；没有可用历史时为空串。 */
   text: string;
-  /** 真被折掉的条数（找回来的不算折掉；0 = 本轮没折）。 */
+  /** 被折掉的条数，不含找回的。 */
   foldedMessages: number;
-  /** 从折叠段按词法相关度找回来的条数。 */
+  /** 从折叠段按词法相关度找回的条数。 */
   recalledMessages: number;
 }
 
-/** 词元：ASCII 按 camelCase 与标点切词，中文按二分词窗口——与 `source/search_code` 的兜底档同一份口径。 */
+/** 词元：ASCII 按 camelCase 与标点切词，中文按二分词窗口。 */
 function termsOf(text: string): string[] {
   const terms: string[] = [];
   for (const chunk of segmentForLookup(text).split(/\s+/)) {
@@ -52,7 +41,7 @@ function termsOf(text: string): string[] {
   return terms;
 }
 
-/** Okapi BM25：一条消息当一篇文档（一个线程几十条，不必再切片）。 */
+/** Okapi BM25：一条消息当一篇文档。 */
 function bm25Scores(queryTerms: string[], documents: string[][]): number[] {
   if (!queryTerms.length || !documents.length) return documents.map(() => 0);
   const lengths = documents.map((terms) => terms.length);
@@ -85,18 +74,18 @@ function rendered(turns: readonly ConversationTurn[], labels: { user: string; as
 
 const HEADER = "最近对话（此前轮次，按时间序，用于理解追问的指代；当时的聚焦范围可能与当前不同）";
 
-/** 这段历史原样进上下文要占多少字符（折叠判据看的是它，不是渲染后的长度）。 */
+/** 这段历史原样进上下文占的字符数。 */
 export function conversationCharacters(turns: readonly ConversationTurn[]): number {
   return turns.reduce((sum, turn) => sum + turn.content.length, 0);
 }
 
 export function renderConversation(input: {
   turns: readonly ConversationTurn[];
-  /** 本轮提问：在折叠段里找回被引用内容靠它。 */
+  /** 本轮提问，用于折叠段的关键词找回。 */
   query: string;
-  /** 除对话以外本轮已经占用的字符数（系统提示词 + 代码上下文）。 */
+  /** 除对话以外本轮已占用的字符数。 */
   usedCharacters: number;
-  /** 本轮分给这段对话的空间；省略 = 按窗口的对话份额算。装不下就折，不等窗口告急。 */
+  /** 本轮分给这段对话的空间；省略 = 按窗口的对话份额算。 */
   budgetCharacters?: number;
   labels?: { user: string; assistant: string };
 }): ConversationBlock {
@@ -131,12 +120,7 @@ export function renderConversation(input: {
   };
 }
 
-/**
-  按「最早几条 → 折叠说明 → 找回的几条 → 最近几条」拼成一段，再按本轮给的空间收口。
-  装不下时从最可有可无的那端撤起：先撤开场的最早几条，再撤「最近」里靠前的，
-  折叠说明与刚问过的那一条不撤——它们分别是「这段历史少了什么」和「本轮真正要接的话」。
-  全撤完还装不下才按字符切尾，并把「是切的」写在明处。
-*/
+/** 按「最早 → 折叠说明 → 找回 → 最近」拼成一段；超预算时先撤可撤的行，再按字符切尾。 */
 function assemble(lines: { front: string[]; note: string[]; recalled: string[]; back: string[] }, budget: number): string {
   const entries = [
     ...lines.front.map((text) => ({ text, droppable: true })),

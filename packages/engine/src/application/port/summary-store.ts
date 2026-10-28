@@ -1,25 +1,14 @@
 /**
-  端口（ports）：模块「需要外部能力」这件事的形状，只声明它真正调用的那几格。
-  这一层是内层：`http → application（除 port）→ 管线 → application/port → domain` 里，
-  只有它是所有内侧模块都能直接依赖的——管线要声明自己的存储与模型口，而守卫禁止管线认识应用层，
-  所以守卫为此单开一个口子（`architecture.test.ts` 那条规则里写明只许 `application/port`）。
-  这里的文件零依赖（最多引 domain 的类型），也不 import 任何实现方：
-  实现（`persistence/*-repository.ts`、`llm/provider.ts`、`sandbox/*`）反过来不必认识这里，
-  结构对齐由注入点（use-case / importer）的赋值检查。
+  端口（ports）：模块需要外部能力时的形状，只声明真正调用的那几格。
+  这一层零依赖（最多引 domain 的类型），不 import 任何实现方，实现方也不必认识这里。
+  分层守卫为它单开口子：内侧模块只许依赖 `application/port`。
 */
 
-/**
-  L1 文件摘要的存取口。实现是 `persistence/summary-repository.ts`（表 `summaries`），
-  但摘要流水线不该认识 SQLite 句柄：它只需要「按键取一份、写一份」。
-  缓存键的组成（切片指纹 × 模型版本 × 口径开关）仍由摘要侧算——那是它的判断，不是存储的细节。
-*/
+/** L1 文件摘要的存取口：只声明按键取一份、写一份。 */
 export interface SummaryStore {
   get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined;
   /** 整份记录一次写全：`summaries.created_at` 每次写入都取当下，读侧据此认「最近被确认的时间」。 */
   put(cacheKey: string, value: { path: string; summary: string }): void;
-  /**
-    每个文件**最新**的一句职责（按写入时间倒序取每路径首次出现）。出题选料与检索语料都读这一格；
-    行数上限是存储侧对只追加表的自保，读不到就是该文件没有已确认的职责。
-    */
+  /** 每个文件最新的一句职责；行数上限是存储侧的自保。 */
   latest(): { path: string; summary: string }[];
 }

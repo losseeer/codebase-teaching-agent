@@ -1,13 +1,9 @@
 import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 /**
-  第四张结构表：已算好的静态产物里的类型关系与运行时绑定。
-  Spring 这类仓里「控制器 → 服务实现」这条线在 import、调用、类型派发三张表里常常都没有：
-  代码里没有直接调用行（容器塞进来的），接口与实现之间也没有 import 方向上的重合，
-  只核那三张表会把模型按事实画的边降成 `inferred`。
-
-  档位口径与那三张表一致：只用来确认模型报的那一档，绝不上抬（`settleEdge` 自己会挑高档）。
-  `toFile` 空着的边（仓外类型、标准库、同名多解）在这里一条都不算——反查不到落点就不能当证据。
+  第四张结构表：静态产物里的类型关系与运行时绑定。
+  容器注入与接口实现之间常常没有 import 或调用行，只核前三张表会把按事实画的边降成 `inferred`。
+  档位口径与那三张表一致：只确认、绝不上抬；`toFile` 空着的边一条都不算。
 */
 
 export interface FactEvidence {
@@ -19,10 +15,7 @@ export type FactsPairChecker = (fromFiles: string[], toFiles: string[]) => FactE
 
 const key = (from: string, to: string): string => `${from}\u0000${to}`;
 
-/**
-  取两类产物的通道由装配层给（`infrastructure/canvas-tools.ts`）：这一层不认 SQLite，
-  「管线不许直接落 persistence/」那条分层守卫的在册清单不会因为多一张表而变长。
-*/
+/** 取两类产物的通道由装配层给：这一层不认 SQLite。 */
 export interface FactSources {
   typeRelations: () => Map<string, TypeRelationFileFact>;
   registry: () => Map<string, RegistryFileFact>;

@@ -7,15 +7,10 @@ import { practiceView, withExercisePorts } from "../../infrastructure/exercise-p
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 
 /**
-  仓库只读产物的用例：索引、练习摘要、学习者画像、导入报告、源码。
-  一组一条纪律：一行模型请求都不发、一分钱都不花（对照 `read-routes-never-bill`）。付费的几组各自在 exercises / chat / teaching 里。
-
-  源码查看的放行顺序不能换：先判边界（请求本身不合法）、再判名单与软链接、再判是否收录、最后才看体积。
-  只放已索引的文件，不是「仓库里的任何文件」：`.env`、私钥这类载体本来就不在索引扩展名白名单里，
-  按索引集合放行等于借用同一份边界；裸 `readFileSync` 会绕过名单，让不带 Origin 的本机调用方
-  读出被学习仓库里的密钥——这一道没有认证闸，是已接受的代价。
-  浏览器里的跨源请求受来源闸约束：非可信 Origin 当场 403，用例一行都不跑（判据见 `security/origins.ts`）。
-  */
+  仓库只读产物的用例：索引、练习摘要、学习者画像、导入报告、源码；不发模型请求。
+  源码查看的顺序固定：边界 → 名单与软链接 → 是否收录 → 体积；只放已索引的文件。
+  跨源请求受来源闸约束。
+*/
 export type ReadFailure =
   | { kind: "repository-missing" }
   | { kind: "source-not-found" }

@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
-  分层守卫：把 import 方向规则写成测试——谁都不许 import 回 HTTP 装配 `server.ts`，
-  应用层不指向传输层，装配层（`infrastructure/`）不指向入站层，管线与持久层单向，跨包不互 import。
-  一条债结清就把判据收紧成恒为 0（「管线只认端口、不直接落库」10-27 结清）；
-  没结清的记成只许下调的在册预算（「应用层认识具体适配器」37 条）。
+  分层守卫：把 import 方向规则写成测试。
+  结清的债判成恒为 0；没结清的记成只许下调的在册预算。
 */
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
@@ -24,7 +22,7 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** 一条 import 边：`typeOnly` 区分「编译期就擦掉」的依赖（不构成运行时环，也不算 I-O 耦合）。 */
+/** 一条 import 边；`typeOnly` = 编译期擦除的依赖。 */
 interface Edge {
   from: string;
   to: string;
@@ -52,13 +50,10 @@ const short = (path: string): string => path.slice(SRC.length + 1);
 const topOf = (path: string): string => short(path).split("/")[0] ?? "";
 const list = (edges: Edge[]): string[] => edges.map((edge) => `${short(edge.from)} → ${short(edge.to)}`).sort();
 
-/**
-  那三条「不许指向应用层」的规则共用这一格放行判据：`application/port/` 是内层**声明**的接口（零依赖、永不 import 实现方），
-  管线与适配器认它不等于认识应用层——口子只开到这个目录为止，多引一个应用层文件照样红。
-  */
+/** 三条「不许指向应用层」的规则共用这一格放行判据：口子只开到 `application/port/` 为止。 */
 const isPortEdge = (to: string): boolean => to.startsWith("application/port/");
 
-/** 比字符串前先剥注释：本仓块注释续行不以 `*` 开头，按行首粗滤会把注释正文里提到的名字当成代码。 */
+/** 比字符串前先剥注释：注释正文里的名字不该当成代码。 */
 function codeOnly(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
@@ -74,19 +69,15 @@ describe("分层守卫", () => {
   });
 
   /**
-    应用层里的三个格子：`use-case/`（一个入口面一份用例）、`port/`（内层声明的接口）、
-    以及这一片刚落地的两份回合职责——`orchestration/` 管「什么进模型、模型回来往哪落」
-    （`scoped-turn` / `paid-turn` / `teaching-turn` / `threads`），`runtime/` 管回合的在途机制
-    （登记与停止 `turn-registry`、上下文压缩 `turn-checkpoint`、出境复检 `turn-invariants`、记账 `turn-audit`）。
-    分档判据是「换一个入口面还要不要重写一遍」：要重写的流程住 orchestration，与入口无关的机制住 runtime。
-    名字后缀也照这条读：`X-turn.ts` = 某一类回合的流程，`turn-X.ts` = 回合身上的一个机制。
+    应用层的格子：`use-case/`、`port/`、`orchestration/`（回合流程）、`runtime/`（回合机制）。
+    分档判据是换一个入口面还要不要重写一遍；命名后缀照这条读。
     */
   it("应用层不指向入站层，也不指向 HTTP 装配", () => {
     expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts")))).toEqual([]);
   });
 
   it("装配层（infrastructure/）不指向入站层，也不指向 HTTP 装配", () => {
-    // 指向 `adapter/outbound/` 是这一层的本职：端口在这里接到具体适配器
+    // 装配层指向 `adapter/outbound/` 是本职。
     const offenders = allEdges.filter((edge) => short(edge.from).startsWith("infrastructure/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts"));
     expect(list(offenders), `装配层反过来认识传输层：${list(offenders).join(", ")}`).toEqual([]);
   });
@@ -102,7 +93,7 @@ describe("分层守卫", () => {
   });
 
   it("持久层不许反过来认识领域（adapter/outbound/persistence 不该 import 管线或应用层的业务代码）", () => {
-    // `application/port/` 那格与管线、出站适配器同一口径：认内层声明的接口不等于认识应用层
+    // `application/port/` 与管线、出站适配器同一口径。
     const offenders = allEdges.filter((edge) => {
       if (!short(edge.from).startsWith("adapter/outbound/persistence/")) return false;
       const to = short(edge.to);
@@ -113,10 +104,8 @@ describe("分层守卫", () => {
   });
 
   /**
-    出站适配器（`adapter/outbound/`：持久层、模型调用、沙箱、外部工具、来源与密钥筛）是这一轮才落地的目录名，
-    这条规则就是让它名副其实的那一格：适配器只被装配层与内层调用，自己谁都不认识——
-    实测过零条边，所以判成恒为 0；一旦有适配器 import 回应用层，就是「端口又被人从后面绕进来了」。
-    实现方认端口那一格照常放行（`provider.ts` 里几个类要 `implements`，`chat-store.ts` 要认 `NewMessage` 的形状）。
+    出站适配器只被装配层与内层调用，自己谁都不认识；实测零条边，判成恒为 0。
+    实现方认端口那一格照常放行。
     */
   it("出站适配器不认识应用层、入站层与装配层", () => {
     const offenders = allEdges.filter((edge) => {
@@ -129,21 +118,8 @@ describe("分层守卫", () => {
   });
 
   /**
-    应用层只该认端口，不该认具体适配器（`adapter/outbound/` 下的持久层、模型调用、沙箱、外部工具、来源与密钥筛）。
-    这一条还是**在册预算**而不是恒为 0：13 条边（type-only 也算，多一处定义就多一处失真）散在 6 个文件里，
-    结清的方式是一类适配器一类适配器地换成参数注入——`application/port/` 那八个口就是这么长出来的。
-    数字只许下调：某片搬完后守卫会主动报「债少了，把数字改小」。
-    从组合根（`infrastructure/composition-root.ts`）拿单例不算这笔债：那是装配层交给应用层的入口，不是适配器。
-    10-27 九笔下降：端口装配落 `infrastructure/`（43 → 37）；审计线写入口挂到挂载项 `repository.audit` 上（37 → 34）；
-    模型调用的协议类型与 `LlmProvider` 接口进 `application/port/llm-provider.ts`（34 → 28）；
-    审计线的纯规则（事件白名单与 `turn_text` 拼形）进 `packages/domain`（28 → 26）；
-    会话线程收成 `ChatStore` 端口（26 → 21）；审计线的读侧与未挂载的写侧收成 `AuditLine`（21 → 16，
-    挂载项那一格现在同时会写与读，未挂载的仓由 `importer.audit(path, repositoryId)` 现开）；
-    `McpCallAudit` 这条审计形状进 `packages/domain`（16 → 15）；密钥筛整段进 `packages/domain/secret-filter.ts`（15 → 14）；
-    画布用例面回到 `DiagramStore` 端口（14 → 13：`use-case/diagrams.ts` 不再自己 `handle.pin()` 拿 `TutorDatabase`，
-    引用计数与写上下文装配收进 `infrastructure/diagram-context.ts`，返回类型也不再是 `ReturnType<typeof 持久层函数>`）。
-    剩下两格：`health` / `settings` / `integrations` 与回合装配直接读配置或外部工具面（10 条）、持久层那三处零散句柄与类型（3 条）。
-    管线那一侧同形状的债更大（19 条指向 `adapter/outbound/`：`egress-log` 6 条、`context-window` 5 条、沙箱 4 条、其余零散），下一格从那一侧结。
+    应用层只该认端口，不该认具体适配器；这条是在册预算，边数只许下调。
+    结清方式是一类适配器一类换成参数注入；从组合根拿单例不算这笔债。
     */
   it("应用层指向具体适配器的边数只能减少（在册预算 13）", () => {
     const found = allEdges.filter((edge) => {
@@ -155,7 +131,7 @@ describe("分层守卫", () => {
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {
-    // 那句话写在 analysis 的 index.ts 头上，这条测试负责让它是真的：深路径引进来，包内怎么重组都不自由
+    // 不许深路径 import `@codebase-tutor/analysis`。
     const offenders = files.filter((file) => /from "@codebase-tutor\/analysis\//.test(readFileSync(file, "utf8"))).map(short);
     expect(offenders, `绕过 index.ts 的深路径 import：${offenders.join(", ")}`).toEqual([]);
   });
@@ -190,12 +166,7 @@ describe("分层守卫", () => {
     expect(cycles, `出现循环依赖：${cycles.join(" ｜ ")}`).toEqual([]);
   });
 
-  /**
-    这笔债结清了（10-27）：管线模块不再直接落 `adapter/outbound/persistence/`，一律经参数把端口传进来
-    （`application/port/` 那五个口：SummaryStore / ExerciseStore / ProgressStore / AuditSink / DiagramStore，
-    适配器由装配层在 `pin()` 的范围内构造）。
-    所以这条从「恰好等于在册条数、只能变小」升级成恒为 0——再多一条就是回潮，不是记账。
-    */
+  /** 管线不直接落持久层，一律经参数传端口；这条判成恒为 0。 */
   it("分析管线不直接落持久层（已结清，恒为 0）", () => {
     const found = list(allEdges.filter((edge) => PIPELINES.has(topOf(edge.from)) && short(edge.to).startsWith("adapter/outbound/persistence/")));
     expect(found, `管线还在直接落持久层：\n${found.join("\n")}`).toEqual([]);

@@ -2,17 +2,9 @@ import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**
-  只读聚合脚本：按 traceId 把 journal.jsonl 的事件串成「一次请求 = 一段可读轨迹」。
-  journal 是 append-only 事件流，逐行看是散的；复盘一次对话的完整执行轨迹
-  （用户问了什么 → 守门裁决 → 读了哪些文件 → 回了什么）要靠 traceId 分组重放。
-
-  用法：pnpm run-trace -- <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]
-  - 不带 --trace 时按时间倒序列出最近 N 次请求（traceId 为 null 的后台事件归入「后台」组）；
-  - --session 只看一个会话线程（chat_session.id = journal 的 sessionId）经历过的事件，仍按 traceId 分段：
-    一个会话跨多次请求，按线程过滤才看得到「新建 → 每轮读了什么 → 软删」的完整生命周期；
-  - --json 输出分组后的原始事件，供进一步机检。
-
-  口径纪律与 metrics.ts 一致：缺字段落「未记」，不用默认值伪装；本脚本纯只读，不写任何文件。
+  只读聚合脚本：按 traceId 把 journal.jsonl 串成「一次请求 = 一段可读轨迹」。
+  缺字段落「未记」，不写任何文件。
+  用法：`pnpm run-trace -- <仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]`
 */
 
 function clip(value: unknown, max = 80): string {
@@ -55,10 +47,6 @@ function eventLine(event: JournalEvent): string {
       return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
-    case "action_veto":
-      return `提议=${p.proposed ?? "未记"} 被守门否决，强制=${p.enforced ?? "未记"}`;
-    case "hint_depth":
-      return `深度=${p.depth ?? "未记"} stage=${p.stage ?? "未记"}（unit=${clip(p.unit_id, 24)}）`;
     case "session_created":
     case "session_deleted":
       return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} scopeRef=${clip(p.scope_ref, 40)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;

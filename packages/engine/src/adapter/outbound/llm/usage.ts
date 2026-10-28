@@ -1,10 +1,6 @@
 import type { LlmUsage } from "../../../application/port/llm-provider.js";
 
-/**
-  用量相加的唯一实现（主调用 + 按需深入 / 工具循环各轮 / 动作决策 / 翻译层）。
-  四个字段都要搬：只搬 in/out 会把「前缀缓存命中」悄悄变成「未命中」。
-  两边都没上报某缓存字段时才不带它——别用 `?? 0` 把「没上报」说成「没命中」。
-*/
+/** 用量相加：缓存字段两边都缺才不带，单边有就累加。 */
 export function addUsage(left: LlmUsage | undefined, right: LlmUsage | undefined): LlmUsage | undefined {
   if (!left) return right;
   if (!right) return left;

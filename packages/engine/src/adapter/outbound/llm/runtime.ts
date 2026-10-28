@@ -5,47 +5,31 @@ import { createLlmProvider, resolveLlmConfig, ThinkingOverrideLlmProvider, TIMEO
 import type { LlmProvider, ThinkingEffort } from "../../../application/port/llm-provider.js";
 import { tutorDataDir } from "@codebase-tutor/platform";
 
-/**
-  LLM 运行时设置（GUI 可改，落盘到 ~/.codebase-tutor/llm-settings.json，重启后仍在）。
-  只有一套配置：
-  - provider / model / baseUrl / apiKey：空串 = 该项回落 .env；
-  - thinking：深任务（三作用域对话）的思考档位，"auto" = 不发思考字段。
-  「轻任务 / 教学对话」是运行时角色而非两份配置，见 buildLlmRuntimeProvider。
-
-  密钥口径：apiKey 明文只存在于本模块的内存态与那个 0600 的文件里，对外响应一律走 publicLlmSettings()（只有掩码）。
-  */
+/** LLM 运行时设置：GUI 可改，落盘 `~/.codebase-tutor/llm-settings.json`，空串 = 该项回落 `.env`。 */
 export interface LlmRuntimeSettings {
   provider: string;
   model: string;
   baseUrl: string;
   apiKey: string;
   thinking: "auto" | ThinkingEffort;
-  /**
-    三档单价的数值口径以 cost/cost.ts 的 Pricing 为准，这里不复述。
-    放进这份配置而不是只留环境变量，是为了改完立刻生效：cost.ts 每次算账都现读这里，
-    环境变量那条路是模块加载时算一次的常量、非重启不可。空串 = 该项回落 .env。
-    */
+  /** 单价，单位 USD/百万 token；空串 = 回落 `.env`。 */
   inputUsdPerMillion: string;
   outputUsdPerMillion: string;
   cacheHitUsdPerMillion: string;
-  /**
-    单次请求的超时（毫秒），同样是为了「改完立刻生效」：超时本来就是慢模型的手感旋钮，
-    要重启才生效的旋钮等于没有（错误文案那句「可以调大超时时长」原先只能去改 .env）。
-    空串 = 回落 `TUTOR_LLM_TIMEOUT_MS`；区间与判据见 provider.ts 的 `resolveTimeoutMs`。
-    */
+  /** 单次请求超时（毫秒）；空串 = 回落 `TUTOR_LLM_TIMEOUT_MS`。 */
   timeoutMs: string;
 }
 
-/** GUI 可选的服务商协议（与 provider.ts 的工厂分支一一对应）；空串另意为「回落 .env」。 */
+/** GUI 可选的服务商协议；空串 = 回落 `.env`。 */
 export const LLM_PROVIDERS = ["openai-compatible", "openai"] as const;
 
-/** 可选思考档位（"auto" = 不发字段）；PUT 校验与磁盘恢复都按这份清单，错误文案不会再和判据走散。 */
+/** 可选思考档位；`"auto"` = 不发字段。 */
 export const THINKING_EFFORTS = ["auto", "off", "low", "high", "max"] as const;
 
-/** 单价那几项的键名：PUT 逐键校验、落盘恢复与界面共用这份清单。 */
+/** 单价项的键名清单。 */
 export const PRICING_KEYS = ["inputUsdPerMillion", "outputUsdPerMillion", "cacheHitUsdPerMillion"] as const;
 
-/** 回落 .env 的文本字段（provider/model/baseUrl/apiKey）：部分更新与磁盘恢复共用这份清单。 */
+/** 回落 `.env` 的文本字段清单。 */
 const TEXT_KEYS = ["provider", "model", "baseUrl", "apiKey"] as const;
 
 const DEFAULT_SETTINGS: LlmRuntimeSettings = {
@@ -53,10 +37,7 @@ const DEFAULT_SETTINGS: LlmRuntimeSettings = {
   inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "", timeoutMs: ""
 };
 
-/**
-  单价输入的判据（只管形状、不管币种）：空串（= 回落 .env）或有限非负数才收，其余一律 undefined 让调用方回 422。
-  数字与字符串都收——界面传文本框，配置文件里可能写的是数字。
-  */
+/** 单价输入的形状校验：空串或有限非负数才收，其余返回 `undefined`。 */
 export function normalizeRate(value: unknown): string | undefined {
   if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? String(value) : undefined;
   if (typeof value !== "string") return undefined;
@@ -66,11 +47,7 @@ export function normalizeRate(value: unknown): string | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? trimmed : undefined;
 }
 
-/**
-  超时输入的判据（只管形状与区间，不管币种与重试）：空串 = 回落 .env；其余必须是 [1s, 5min] 的整数毫秒。
-  越界不当「钳一下就好」收下：填 999999 的人以为自己有很多时间，实际会连不上时也等满两发；
-  当场拒回去，区间和界面文案说的是同一件事。数字与字符串都收（界面传文本框，文件里可能写的是数字）。
-  */
+/** 超时输入校验：空串或 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]` 内的整数毫秒才收，越界不收。 */
 export function normalizeTimeoutMs(value: unknown): string | undefined {
   const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : undefined;
   if (raw === undefined) return undefined;
@@ -80,7 +57,7 @@ export function normalizeTimeoutMs(value: unknown): string | undefined {
   return raw;
 }
 
-/** 默认 ~/.codebase-tutor/llm-settings.json，测试用 TUTOR_LLM_SETTINGS_FILE 指向临时文件。 */
+/** 设置文件路径；测试用 `TUTOR_LLM_SETTINGS_FILE` 指向临时文件。 */
 function settingsFile(): string {
   return process.env.TUTOR_LLM_SETTINGS_FILE ?? join(tutorDataDir(), "llm-settings.json");
 }
@@ -97,23 +74,20 @@ export function publicLlmSettings(): Omit<LlmRuntimeSettings, "apiKey"> & { apiK
   return { ...rest, apiKeyMasked: maskSecret(apiKey), hasApiKey: apiKey.length > 0 };
 }
 
-/**
-  密钥掩码：只露头尾各一小段，中间用定长星号（长度不敏感，避免把 key 长度也泄露出去）。
-  空串 = 没有运行时密钥（GUI 占位符改用 .env 侧的掩码或「未配置」）。
-  */
+/** 密钥掩码：头尾各留一小段，中间定长星号；空串 = 没有运行时密钥。 */
 export function maskSecret(secret: string): string {
   if (!secret) return "";
   if (secret.length <= 8) return "*".repeat(secret.length);
   return `${secret.slice(0, 3)}${"*".repeat(8)}${secret.slice(-4)}`;
 }
 
-/** 部分更新（未提供的字段保持不变，空串 = 清除该项并回落 .env）；文本字段 trim，thinking 合法性由路由层先校验。 */
+/** 部分更新：未提供的字段保持不变，空串 = 清除该项并回落 `.env`。 */
 export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, "thinking">> & { thinking?: LlmRuntimeSettings["thinking"] }): LlmRuntimeSettings {
   for (const key of TEXT_KEYS) {
     const value = partial[key];
     if (typeof value === "string") settings[key] = value.trim();
   }
-  // 单价走 normalizeRate 而不是直接 trim：路由层已先验一遍，这里是第二道，不让新调用点绕过校验写进脏串
+  // 单价经 normalizeRate 再校验一遍，不让新调用点绕过校验写入脏串
   for (const key of PRICING_KEYS) {
     const normalized = partial[key] === undefined ? undefined : normalizeRate(partial[key]);
     if (normalized !== undefined) settings[key] = normalized;
@@ -125,7 +99,7 @@ export function setLlmRuntimeSettings(partial: Partial<Omit<LlmRuntimeSettings, 
   return getLlmRuntimeSettings();
 }
 
-/** 启动时从磁盘恢复（引擎 boot 里必须早于 buildLlmRuntimeProvider）。文件缺失/损坏按「未配置」处理，不阻断启动。 */
+/** 启动时从磁盘恢复，须早于 `buildLlmRuntimeProvider`；文件缺失或损坏按未配置处理。 */
 export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
   const file = settingsFile();
   if (!existsSync(file)) return getLlmRuntimeSettings();
@@ -137,17 +111,17 @@ export function restoreLlmRuntimeSettings(): LlmRuntimeSettings {
     }
     const thinking = parsed.thinking;
     if (typeof thinking === "string" && (THINKING_EFFORTS as readonly string[]).includes(thinking)) next.thinking = thinking as LlmRuntimeSettings["thinking"];
-    // 单价按同一份判据收：不合格就丢掉该项（回落 .env），不把脏串带进内存
+    // 单价按同一份形状校验收：不合格丢掉该项，回落 .env
     for (const key of PRICING_KEYS) {
       const normalized = normalizeRate(parsed[key]);
       if (normalized !== undefined) next[key] = normalized;
     }
-    // 超时按同一份判据收：不合格就丢掉该项（回落 .env），不把「999999」这种自己钳不动的值带进内存
+    // 超时同理：不合格丢掉该项
     const timeoutMs = normalizeTimeoutMs(parsed.timeoutMs);
     if (timeoutMs !== undefined) next.timeoutMs = timeoutMs;
     settings = next;
   } catch (error) {
-    // 损坏的设置文件按未配置处理：保留内存态，下次保存会整体覆盖。不出声的话，文件里明明还留着可用密钥，界面却读成「没配模型」
+    // 损坏的设置文件按未配置处理，保留内存态，下次保存整体覆盖
     console.warn(`[llm] 设置文件解析失败，按未配置处理：path=${file} error=${String(error)}`);
   }
   return getLlmRuntimeSettings();
@@ -169,22 +143,18 @@ function persist(): void {
   try {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    // mode 只在创建时生效：文件若已存在且是 644（别的工具写过），这里补一次
+    // mode 只在创建时生效，已存在的文件在这里补一次
     chmodSync(file, 0o600);
   } catch (error) {
-    // 落盘失败不影响本次会话生效：内存态与 provider 已经更新。但要让用户知道重启会回落 .env，否则会以为界面里已经存住了
+    // 落盘失败不影响本次会话，重启后回落 .env
     console.warn(`[llm] 设置没能落盘（本次会话仍生效，重启后回落 .env）：path=${file} error=${String(error)}`);
   }
 }
 
-/** 同一套配置的两个运行时角色；llm.log 的 tier 仍按角色记账，方便区分深浅任务的成本。 */
+/** 同一套配置的两个运行时角色。 */
 export type LlmRole = "teaching" | "light";
 
-/** 两个运行时角色的思考口径：
-  - "teaching"：三作用域对话等深任务——思考档位随运行时设置；
-  - "light"：推荐入口 / 题面润色 / 命名 / L1 摘要等单轮浅任务——思考强制 "off"
-    （这是行为约定，不是第二份配置；浅任务开思考只是多花 reasoning token）。
-  */
+/** 按角色装配 provider：`"light"` 强制关思考，`"teaching"` 用运行时设置里的档位。 */
 export function buildLlmRuntimeProvider(role: LlmRole): LlmProvider | undefined {
   const raw = createLlmProvider(toOverrides(settings));
   return raw ? new ThinkingOverrideLlmProvider(new LoggingLlmProvider(raw, role), role === "light" ? "off" : settings.thinking) : undefined;

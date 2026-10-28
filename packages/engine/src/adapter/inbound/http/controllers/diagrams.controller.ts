@@ -3,9 +3,8 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import { createDiagramUseCase, deleteDiagramUseCase, listDiagramsUseCase, readDiagramUseCase, renameDiagramUseCase, restoreDiagramUseCase, saveGeometryUseCase, type DiagramFailure } from "../../../../application/use-case/diagrams.js";
 
 /**
-  画布这组路由的入站翻译：注册在根实例上，所以懒挂载钩子与来源闸照常生效。
-  这里只做两件事——把请求体收成用例要的形状（`positions` 的逐项取形、`index` 是不是整数），
-  再把用例报回来的失败种类一对一翻成状态码与文案。谁该拒、拒几次、记不记审计，全在 `application/use-case/diagrams.ts`。
+  画布这组路由的入站翻译：注册在根实例上，懒挂载钩子与来源闸照常生效。
+  这里只做取形与把失败种类翻成状态码，判断在 `application/use-case/diagrams.ts`。
   */
 const rejected = (reply: FastifyReply, failure: DiagramFailure): FastifyReply => {
   switch (failure.kind) {

@@ -4,11 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildLlmRuntimeProvider, effectiveLlmConfig, getLlmRuntimeSettings, maskSecret, normalizeRate, publicLlmSettings, restoreLlmRuntimeSettings, setLlmRuntimeSettings } from "./runtime.js";
 
-/**
-  运行时 LLM 设置的三件事：部分更新语义（留空 = 清除并回落 .env）、落盘/重启恢复、密钥只在对外视图里以掩码出现。
-  外加单价那这三个字段：它同样「界面上改、立即生效」，但判据更硬——脏值会一路流进预算闸门（见 cost.test.ts）。
-  设置文件按 TUTOR_LLM_SETTINGS_FILE 指向临时目录——默认落点是用户的产品数据，测试不许碰。
-  */
+/** 运行时 LLM 设置：部分更新语义（留空 = 清除并回落 `.env`）、落盘与重启恢复、密钥只以掩码出现在对外视图。
+    设置文件按 `TUTOR_LLM_SETTINGS_FILE` 指向临时目录，不碰默认落点。 */
 const ENV_KEYS = ["TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_PROVIDER", "TUTOR_LLM_MODEL", "TUTOR_OPENAI_URL", "OPENAI_API_KEY", "TUTOR_OLLAMA_URL", "TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
 
 const BLANK = { provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" as const, inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" };
@@ -24,8 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // 先把内存态清干净再删 TUTOR_LLM_SETTINGS_FILE：反过来的话这次清理会写到默认落点 ~/.codebase-tutor/，
-  // 等于测试在用户机上凭空造了一份 LLM 设置文件（写出来的第一轮就踩过这个）
+  // 先清内存态再删 TUTOR_LLM_SETTINGS_FILE，否则这次清理会写到默认落点
   setLlmRuntimeSettings(BLANK);
   for (const key of ENV_KEYS) delete process.env[key];
 });
@@ -53,7 +49,7 @@ describe("落盘与启动恢复", () => {
     const persisted = readFileSync(settingsFile, "utf8");
     expect(persisted).toContain("sk-gui-key");
 
-    // 模拟重启：清空内存态，再把上一轮落盘的内容放回原处，由 restore 从磁盘重建
+    // 模拟重启：清空内存态后由 restore 从磁盘重建
     setLlmRuntimeSettings({ provider: "", model: "", baseUrl: "", apiKey: "", thinking: "auto" });
     writeFileSync(settingsFile, persisted, "utf8");
     expect(restoreLlmRuntimeSettings()).toMatchObject({ provider: "openai-compatible", model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1", apiKey: "sk-gui-key", thinking: "high" });
@@ -106,7 +102,7 @@ describe("对外视图与生效配置", () => {
     setLlmRuntimeSettings({ model: "gui-model", apiKey: "gui-key" });
     expect(effectiveLlmConfig()).toMatchObject({ model: "gui-model", baseUrl: "https://env.example.com/v1", hasApiKey: true });
 
-    // 换成官方 openai 且 .env 也没写端点：才回到该协议默认
+    // 官方 openai 且 .env 未写端点时，才回到该协议默认
     delete process.env.TUTOR_OPENAI_URL;
     setLlmRuntimeSettings({ provider: "openai", baseUrl: "" });
     expect(effectiveLlmConfig()).toMatchObject({ provider: "openai", model: "gui-model", baseUrl: "https://api.openai.com/v1", hasApiKey: true });
@@ -150,8 +146,7 @@ describe("单价三档（界面上配、立即生效）", () => {
     const saved = readFileSync(settingsFile, "utf8");
     expect(JSON.parse(saved) as Record<string, unknown>).toMatchObject({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1", cacheHitUsdPerMillion: "0.028" });
 
-    // 模拟重启：清空内存态（注意这会把文件一起覆盖，所以先把上面那份内容写回去充当「上次保存的配置」），
-    // 再走 boot 里那一步 restore——验的是「磁盘上的单价能不能活到下一个进程」
+    // 模拟重启：清空内存态后把上一份内容写回文件，再由 restore 从磁盘读回
     setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
     writeFileSync(settingsFile, saved, "utf8");
     expect(restoreLlmRuntimeSettings()).toMatchObject({ inputUsdPerMillion: "0.28", outputUsdPerMillion: "1.1", cacheHitUsdPerMillion: "0.028" });
@@ -164,7 +159,7 @@ describe("单价三档（界面上配、立即生效）", () => {
     expect(restored.inputUsdPerMillion).toBe("");
     expect(restored.outputUsdPerMillion).toBe("");
     expect(restored.cacheHitUsdPerMillion).toBe("0.028");
-    // 丢掉之后 .env 那条回落链还在（单价的优先级只有两层，别在内存里再造第三层）
+    // 丢掉该项后 .env 的回落链仍在
     expect(process.env.TUTOR_INPUT_USD_PER_MILLION).toBe("0.4");
   });
 

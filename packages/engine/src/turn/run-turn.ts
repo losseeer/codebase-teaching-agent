@@ -22,61 +22,39 @@ import { excerptForAnchor, excerptsWithinBudget } from "./context-excerpt.js";
 import { exerciseQaSystemPrompt, overviewSystemPrompt, teachingSystemPrompt } from "./prompts.js";
 
 /**
-  回合装配与开火的单入口：三个作用域（代码教学 / 宏观设计 map / 练习答疑 practice）各自的入口先装配上下文，
-  再全部交给 `runTurn`——这里是工具循环（`source/tool-loop.ts`）之外唯一发射 provider 的地方。
-
-  作用域对话（宏观设计 map / 练习评估 practice）：单轮 LLM 开放讨论——不是教学状态机（无阶段/提示阶梯），
-  判分权不涉及。上下文全部来自静态分析事实（依赖图、画布上送的文件清单、练习题面 + 源码摘录）；
-  练习的标准答案/锚点不进入上下文（防泄题：模型不该知道判分答案），也不提供 read_file 工具。
-  map 额外注入项目结构全景与依赖/调用邻接——全局视野对全局问题必要，且路径/边清单成本远低于源码全文；
-  更深的代码由模型经 read_file 按需拉取，server 传入 search 语料时才另开放 search_code（只回位置与职责，不占读文件额度）。
-  系统提示词统一由 `turn/prompts.ts` 构建（与代码教学共用 styleBrief 口径与作用域边界），本文件不自带副本；
-  style 由 server 路由从请求里取用户当前风格档位后传入（默认 50 = 普通档）。
-  上下文必须承认自己看到的是多大一片：作用域清单与已分析集交集为空时不注入作用域段，只在全景里作答。
+  三个作用域（teaching / map / practice）装配上下文后的统一发射入口，也是工具循环之外唯一调 provider 的地方。
+  练习的标准答案与锚点不进上下文，practice 也不给 read_file。
+  作用域清单与已分析集交集为空时不注入作用域段。
   */
 
-/**
-  问答回合的过程事件：一个回合里模型实际做的事（读代码 / 检索 / 组织回复）。
-  server 把它经本请求的 SSE 响应流发为 `progress` 事件，GUI 显示成 Agent 侧栏里的过程提示行。
-  形状已上收 `shared`（`TeachingProgress`）：过程帧的种类是引擎与界面的共同契约，不由两边各抄一遍字面量。
-  */
+/** 问答回合的过程事件；形状上收 `shared` 的 `TeachingProgress`。 */
 export type { TeachingProgress };
 
-/** 问答回合的工具循环预算：比宏观设计更紧——这一域要的是「看一眼那一行」，不是通读实现。 */
+/** 代码问答的工具循环上限：2 轮、3 次读文件。 */
 const TEACHING_MAX_TOOL_ROUNDS = 2;
 const TEACHING_MAX_TOOL_CALLS = 3;
 
-/** 工具循环两头都设上限：控制推理模型的逐轮 reasoning 成本与延迟。
-    这一档到限是「中断 + 可重试」（不是硬答一句），所以它管的是单次尝试开多久，不是这场对话总共花多少：
-    累计花费用预算闸兜（每轮开火前查），读文件数用 `MAP_MAX_TOOL_CALLS` 兜。放宽到 20 就是允许它多取证十倍轮次，
-    代价按真跑到的轮数付——到限那三种结局各写各的读数。 */
+/** 宏观设计的单次尝试工具轮上限；累计花费由预算闸管，读文件数由 `MAP_MAX_TOOL_CALLS` 管。 */
 const MAP_MAX_TOOL_ROUNDS = 20;
 const MAP_MAX_TOOL_CALLS = 4;
 
 const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);
 
-/** 同一线程里此前几轮的问答原文，由引擎按 threadId 从库里取；追问的指代（「这一点展开讲」）要靠它解析。 */
+/** 同一线程里此前几轮的问答原文，按 threadId 从库里取。 */
 export interface ScopedChatTurn {
   role: "user" | "assistant";
   content: string;
 }
 
-/**
-  历史窗口不再在这里定：整段线程交给 `llm/conversation.ts` 按窗口占用决定折不折。
-  占位与找回的口径三作用域共用一份，代码问答那边改一个比例，这边跟着变。
-*/
+/** 历史窗口在 `llm/conversation.ts` 定：这里只按窗口占用装配。 */
 function conversationBlock(history: ScopedChatTurn[] | undefined, query: string, usedCharacters: number): ConversationBlock {
   return renderConversation({ turns: history ?? [], query, usedCharacters });
 }
 
-/** mapChat 过程事件：供 SSE 端点透传给 GUI 显示「回复生成中 / 正在读取 xx」。 */
+/** mapChat 过程事件。 */
 export type MapChatProgress = ReadToolProgress;
 
-/**
-  工具循环的帧（`{type}`）→ 教学那条流的载荷（`{stage}`）：两侧取值是同一套词表，这里只换算不判断。
-  写成穷尽 switch：循环里新加一类活动而这里没接，编译就不过——比一条 `else 归到 thinking` 的兜底强，
-  那会把「正在加载技能」一路谎报成「正在思考」。
-*/
+/** 工具循环的帧（`{type}`）→ 教学流的载荷（`{stage}`）：穷尽 switch，两侧共用一套词表。 */
 function progressToStage(progress: ReadToolProgress): TeachingProgress {
   switch (progress.type) {
     case "thinking": return { stage: "thinking" };
@@ -93,29 +71,29 @@ export interface ScopedChatResult {
   reply: string;
   provider: string;
   usage?: LlmUsage;
-  /** mapChat 专用：本次对话的 read_file 调用审计（供 server 逐条记 journal）。 */
+  /** mapChat 专用：本次对话的 read_file 调用审计。 */
   fileReads?: FileReadRecord[];
-  /** mapChat 专用：本次对话的 search_code 调用审计（供 server 逐条记 journal code_search）。 */
+  /** mapChat 专用：本次对话的 search_code 调用审计。 */
   codeSearches?: CodeSearchRecord[];
-  /** mapChat 专用：工具循环实际轮数（供 server 记 journal loop_round）。 */
+  /** mapChat 专用：工具循环实际轮数。 */
   toolRounds: number;
-  /** 本回合从第几轮的检查点接上来续跑的；没续跑就没这个字段。 */
+  /** 本回合从第几轮检查点续跑；没续跑就没这个字段。 */
   resumedFromRound?: number;
-  /** 回合被预算闸掐断过（不是模型答完，也不是用户停止）。 */
+  /** 回合被预算闸或额度掐断的原因。 */
   stoppedBy?: TurnStopReason;
-  /** mapChat 专用：本回合打过的外部工具（供 server 逐条记 journal mcp_call，失败也在里面）。 */
+  /** mapChat 专用：本回合打过的外部工具，失败也在里面。 */
   mcpCalls?: McpCallAudit[];
-  /** mapChat 专用：本回合取过的技能正文（供 server 记 journal skill_read）。 */
+  /** mapChat 专用：本回合取过的技能正文。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
-  /** 本轮向用户提了一个问题（正文已是「问句 + 可选项」）：done 载荷与 `turn_asked` 都读这一格。 */
+  /** 本轮向用户提了一个问题；正文已是「问句 + 可选项」。 */
   asked?: AskUserAudit;
-  /** 模型试着提问但被判据挡下的原因（参数不合法、超字、本轮已问过）：审计里「没问」与「问不出来」是两件事。 */
+  /** 提问被挡下的原因（参数不合法、超字、本轮已问过）。 */
   askRefused?: string;
-  /** 本轮被中断（预算到线或轮次用完）：没有成品，界面据此出 warn 条与重试入口。 */
+  /** 本轮被中断（预算或轮次到限）：没有成品。 */
   interrupted?: TurnInterrupt;
-  /** 这一句是来回答上一回合的提问：`claimed` 接上了，`missed` 没认领上（过期或换了模型）就当新回合跑。 */
+  /** 本句是对上一回合提问的回答与认领结局（`claimed` / `missed`）。 */
   askClaimed?: AskClaimAudit;
-  /** 本轮对话历史的折叠读数：折了几条、又从折叠段找回几条（供 journal 回答「这条回复是在看过多少历史的前提下写的」）。 */
+  /** 本轮对话历史的折叠读数：折了几条、找回几条。 */
   conversation: { foldedMessages: number; recalledMessages: number };
 }
 
@@ -123,67 +101,67 @@ function clip(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}\n…（上下文过长已截断）` : text;
 }
 
-/** 代码问答回合的产出：一轮就是「装配上下文 → 工具循环 → 模型回答一次」。 */
+/** 代码问答回合的产出：装配上下文 → 工具循环 → 模型回答一次。 */
 export interface TutorReply {
   session: TutorSession;
   assistant: TutorMessage;
   provider: string;
   usage?: LlmUsage;
-  /** 本轮 read_file 调用审计（供 server 逐条记 journal file_read）。 */
+  /** 本轮 read_file 调用审计。 */
   fileReads?: FileReadRecord[];
-  /** 本轮 search_code 调用审计（供 server 逐条记 journal code_search）。 */
+  /** 本轮 search_code 调用审计。 */
   codeSearches?: CodeSearchRecord[];
-  /** 工具循环实际轮数（无仓库路径的单轮调用为 0）。 */
+  /** 工具循环实际轮数；单轮调用为 0。 */
   toolRounds?: number;
-  /** 本轮打过的外部工具（供 server 逐条记 journal mcp_call，失败也在里面）。 */
+  /** 本轮打过的外部工具，失败也在里面。 */
   mcpCalls?: McpCallAudit[];
-  /** 本轮取过的技能正文（供 server 记 journal skill_read）。 */
+  /** 本轮取过的技能正文。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
-  /** 本轮对话历史的折叠读数（供 server 记 journal loop_round）。 */
+  /** 本轮对话历史的折叠读数。 */
   conversation: { foldedMessages: number; recalledMessages: number };
-  /** 本回合从第几轮的检查点接上来续跑；没续跑就没这个字段。 */
+  /** 本回合从第几轮检查点续跑。 */
   resumedFromRound?: number;
-  /** 回合被预算闸掐断过。 */
+  /** 回合被预算闸或额度掐断的原因。 */
   stoppedBy?: TurnStopReason;
 }
 
 export interface RespondOptions {
-  /** 索引：提供时目录作用域可以列出目录内文件。 */
+  /** 索引：提供时目录作用域可列出目录内文件。 */
   index?: RepositoryIndex;
-  /** 依赖图：提供时上下文注入调用邻接（谁调用它 / 它调用谁 / 同文件符号位置）。 */
+  /** 依赖图：提供时上下文注入调用邻接。 */
   analysis?: RepositoryAnalysis;
-  /** search_code 语料（server 侧用 index+analysis+L1 摘要构建）：提供时开放检索工具。 */
+  /** search_code 语料：提供时开放检索工具。 */
   search?: SearchCorpus;
-  /** 跨仓上下文（地址簿里还有别的仓时由 server 装配）：给 read_file/search_code 的 repo 参数与 cross_repo_link。 */
+  /** 跨仓上下文：给 read_file/search_code 的 repo 参数与 cross_repo_link。 */
   cross?: CrossRepoContext;
-  /** 过程事件回调（可选；用于把「正在读 xx 文件」推给 GUI）。 */
+  /** 过程事件回调。 */
   onProgress?: (progress: TeachingProgress) => void;
-  /** 外部中止信号（只有用户点「停止生成」会置位）：贯穿工具循环。 */
+  /** 外部中止信号：贯穿工具循环。 */
   signal?: AbortSignal;
-  /** 每轮开火前的预算闸门（应用层给）：到线就只再做一次收尾调用。 */
+  /** 每轮工具调用前的预算闸门。 */
   budgetGuard?: () => string | undefined;
-  /** 回合检查点通道：没线程就给空操作通道。 */
+  /** 回合检查点通道。 */
   checkpoint?: TurnCheckpointChannel;
-  /** 技能清单与取正文通道：不给就没有 read_skill。 */
+  /** 技能清单与取正文通道；不给就没有 read_skill。 */
   skills?: SkillsToolContext;
-  /** 外部 MCP 工具面：不给就没有任何 `mcp__` 前缀的工具。 */
+  /** 外部 MCP 工具面；不给就没有 `mcp__` 前缀的工具。 */
   external?: ExternalToolContext;
 }
 
 export interface RunTurnInput {
-  /** 作用域：map 与 teaching（有仓库路径时）走工具循环；practice 与没有仓库路径的 teaching 单轮调用。 */
+  /** 作用域：map 与有仓库路径的 teaching 走工具循环，其余单轮调用。 */
   scope: "teaching" | "map" | "practice";
   provider: LlmProvider;
-  /** 装配好的系统提示词与本轮用户消息：文本由各作用域入口现拼，本函数不再加工。 */
+  /** 装配好的系统提示词与本轮用户消息；本函数不再加工文本。 */
   system: string;
   user: string;
   maxTokens: number;
   temperature: number;
-  /** LLM 工作日志的场景标签（teaching.turn / map.chat / practice.chat），透传给每一轮调用。 */
+  /** LLM 工作日志的场景标签，透传给每一轮调用。 */
   scene: string;
-  /** 已分析仓库根：read_file 只能在此范围内读取；省略即不走工具循环。 */
+  /** 已分析仓库根：read_file 只在此范围内读取；省略即不走工具循环。 */
   repositoryPath?: string;
-  /** 工具循环的轮数与读文件上限：只在走循环时有意义。 */
+  /** 工具循环的轮数与读文件上限。 */
   maxRounds?: number;
   maxCalls?: number;
   search?: SearchCorpus;
@@ -191,22 +169,22 @@ export interface RunTurnInput {
   diagram?: SetDiagramToolContext;
   facts?: FactsToolContext;
   skills?: SkillsToolContext;
-  /** 向用户提问的通道（只给宏观设计，且只在本轮缺某一格时给）：不给就没有 `ask_user`；`resume` = 这一句是来回答上一回合的提问。 */
+  /** 提问通道（只给宏观设计）；`resume` 表示本句是回答上一回合的提问。 */
   ask?: { facets: AskFacet[]; resume?: AskResume };
   external?: ExternalToolContext;
   checkpoint?: TurnCheckpointChannel;
   budgetGuard?: () => string | undefined;
-  /** 预算到线或轮次用完就中断（不出成品、留快照等重试）：只有宏观设计开这一档，见工具循环。 */
+  /** 到限就中断（不出成品、留快照等重试）；只给宏观设计开。 */
   interruptAtLimit?: boolean;
   signal?: AbortSignal;
-  /** 工具循环的原始过程事件：map 直接透传给 SSE，teaching 在外面包一层措辞再给 GUI。 */
+  /** 工具循环的原始过程事件。 */
   onProgress?: (progress: ReadToolProgress) => void;
 }
 
 export interface RunTurnResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
-  /** 工具循环实际轮数（单轮调用为 0）。 */
+  /** 工具循环实际轮数；单轮调用为 0。 */
   rounds: number;
   fileReads: FileReadRecord[];
   codeSearches: CodeSearchRecord[];
@@ -214,20 +192,17 @@ export interface RunTurnResult {
   skillReads: { skill: string; chars: number; found: boolean }[];
   resumedFromRound?: number;
   stoppedBy?: TurnStopReason;
-  /** 本轮以「向用户提问」收尾（`completion.text` 已是问句 + 可选项）。 */
+  /** 本轮以向用户提问收尾。 */
   asked?: AskUserAudit;
-  /** 提问被判据挡下的原因（没挡上就没这一格）。 */
+  /** 提问被挡下的原因；没挡上就没这一格。 */
   askRefused?: string;
-  /** 本轮被中断（预算到线或轮次用完）：没有成品。 */
+  /** 本轮被中断（预算或轮次到限）：没有成品。 */
   interrupted?: TurnInterrupt;
-  /** 认领上一回合提问的结果（没带认领就没这一格）。 */
+  /** 认领上一回合提问的结果；没带认领就没这一格。 */
   askClaimed?: AskClaimAudit;
 }
 
-/**
-  回合的唯一开火处：有仓库路径且该作用域用工具时走 read_file/search_code 工具循环
-  （上下文只给锚点摘录与调用邻接，深度由模型按需拉取）；没有仓库路径时退回单轮调用——工具读不到任何文件，不如不给。
-  `usage` 取工具循环的累计值而不是最后一趟的，否则多轮回合的 token 会被少记。 */
+/** 回合的唯一发射处：有仓库路径且作用域用工具时走工具循环，否则单轮调用。 */
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   if (input.scope !== "practice" && input.repositoryPath) {
     const result = await completeWithReadTool({
@@ -269,8 +244,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed })
     };
   }
-  // 练习答疑没有文件面，但装了技能就该能取正文：只给 `read_skill`（和外部工具），两轮封顶。
-  // 没装技能时这条不成立，行为与单轮调用逐字一致——「默认关 = 不加」在这里同样生效。
+  // 练习答疑没有文件面，只给 `read_skill` 与外部工具，两轮封顶。
   if (input.scope === "practice" && (input.skills || input.external)) {
     const result = await completeWithSkillTool({
       provider: input.provider,
@@ -281,7 +255,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       scene: input.scene,
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.external ? { external: input.external } : {}),
-      // 过程事件也要能出来：练习答疑没有文件面，但「正在取哪份技能正文」这一行本来就该看得见（与宏观设计同一帧词表）
+
       ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       ...(input.signal ? { signal: input.signal } : {})
     });
@@ -300,16 +274,10 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   return { completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] };
 }
 
-/**
-  一轮代码问答：provider 必填——没有模型可调用时这条路由直接拒（见 server.ts 的 422 分支），
-  不回一段本地启发式文案。「看起来答完了、其实没走模型」是最难查的事故形状。
-*/
+/** 一轮代码问答：provider 必填，不回本地启发式文案。 */
 export async function respondWithProvider(session: TutorSession, scope: ScopeRef, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   const policy = policyFor(session.settings);
-  /**
-    上下文里放了哪几段仓内源码——由 `assembleContext` 顺带登记，发一次记一次：
-    计入审计点贴在发送前、不放在装配里（理由见 `turn/context-teaching.ts` 的 egress 注释）。
-    */
+  /** 上下文里放了哪几段仓内源码，由 `assembleContext` 登记。 */
   const egress: EgressCollector = [];
   const conversationAudit = { foldedMessages: 0, recalledMessages: 0 };
   const context = assembleContext({
@@ -325,7 +293,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   const readToolAvailable = Boolean(repositoryPath);
   const searchToolAvailable = readToolAvailable && Boolean(options.search);
   const system = teachingSystemPrompt({ policy, faded, readToolAvailable, searchToolAvailable });
-  // 清单贴在上下文尾部而非系统提示词里：系统提示词是前缀缓存的固定段，装卸一份技能就改它等于把每仓缓存全翻一遍。
+  // 清单贴在上下文尾部：系统提示词是缓存键的固定段，不该随技能装卸变。
   const skillsBrief = options.skills ? `\n\n${options.skills.brief}` : "";
   const user = `学习者本轮输入：${learnerContent}\n\n可审计代码上下文：\n${context}${skillsBrief}`;
   if (repositoryPath) recordEgress({ repositoryPath, scene: "teaching.turn", sessionId: session.id, sources: egress, sent: user });
@@ -368,27 +336,20 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   };
 }
 
-/**
-  map 作用域的一轮对话。
-  写工具（`set_diagram` 改画布上的结构）只给这一个作用域：
-  教学与练习两张脸面对的是代码与题目，画布不在它们面前，给了就是让模型去改用户此刻看不见的东西。
-  每个写工具都配一份现状文本进上下文（`inventory`）——有副作用的工具必须先看得见现在是什么，
-  否则它只能猜 id（与 `set_diagram` 的画布现场同源）。
-*/
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布上那张图的结构改动（另一个写工具，同样只给 map）：`inventory` 是那份「画布现场」，给了工具就必须给现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门：画结构类回答的证据源。不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道：不给就没有 read_skill 这个工具。 */ skills?: SkillsToolContext; /** 向用户提问的通道：不给就没有 `ask_user`（只给宏观设计）。`resume` = 这一句是用户对上一回合提问的回答，认领上就接着算。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面：不给就没有任何 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道：不给就是纯内存回合（单次提问、没线程）。 */ checkpoint?: TurnCheckpointChannel; /** 每轮开火前的预算闸门（见工具循环）。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+/** map 作用域的一轮对话；写工具（`set_diagram`）只给这一个作用域，并配一份现状文本进上下文。 */
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 画布那张图的结构改动；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读门；不给就没有 query_facts。 */ facts?: FactsToolContext; /** 技能清单与取正文通道；不给就没有 read_skill。 */ skills?: SkillsToolContext; /** 提问通道（只给宏观设计）；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面；不给就没有 mcp__ 前缀的工具。 */ external?: ExternalToolContext; /** 回合检查点通道；不给就是纯内存回合。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算闸门。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
-  /** 本回合放进上下文的源码原文，发出前落进出网清单（见 security/egress-log.ts） */
+  /** 本回合放进上下文的源码原文，发出前落进出网清单。 */
   const egress: EgressCollector = [];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
-  // 画布上送的文件清单（选中模块时）：只作为作用域提示，未知路径由交集丢弃
+  // 画布上送的文件清单：只作作用域提示，未知路径由交集丢弃。
   const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
   if (scope) sections.push(scope);
-  // 画布现场（有哪几张图、正打开那张的图元 id）：`set_diagram` 必须先把现状给它，
-  // 否则「把这条边删掉」这句话在它手上没有答案——只能猜一个 id。
+  // 画布现场：`set_diagram` 需要先看到图元 id。
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
-  // 产物在册情况一句话（哪几类、各多少文件）：没有这句，模型会以为「没提过的东西就不存在」而不去查
+  // 产物在册情况：哪几类、各多少文件。
   if (input.facts?.inventory) sections.push(input.facts.inventory);
   const target = path;
   if (target) {
@@ -404,11 +365,10 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     if (bound) sections.push(bound);
   }
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", mapContextCap());
-  // 技能清单贴在上下文尾部而不是系统提示词里：系统提示词是前缀缓存的固定段，
-  // 每装/卸一份技能就改它等于把每仓的缓存全翻一遍（清单本来就在回合级现算）。
+  // 技能清单贴在上下文尾部：系统提示词是缓存键的固定段。
   const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
   const system = overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) });
-  // 折叠判据看的是「本轮已经占掉多少」：系统提示词 + 代码上下文 + 技能清单，对话历史是最后进来的一半
+  // 折叠判据看本轮已占用的字符数：系统提示词 + 代码上下文 + 技能清单。
   const conversation = conversationBlock(input.history, input.content, system.length + context.length + skillsBrief.length);
   const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${conversation.text}学习者的问题：${input.content}`;
 
@@ -433,12 +393,12 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.external ? { external: input.external } : {}),
     ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
     ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
-    // 宏观设计是唯一开中断的作用域：上限 10 轮，到限硬答一句不如让用户点重试
+    // 宏观设计是唯一开中断的作用域。
     interruptAtLimit: true,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
   });
-  // token 达到预算上限被中止时明示边界（不静默半截句）
+  // 达到输出上限被截断时要明示边界。
   const reply = flagTruncatedReply(result.completion.text, result.completion.finishReason === "length") || "（模型未返回内容，请重试。）";
   return {
     reply,
@@ -459,7 +419,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext; /** 过程事件（取技能正文那一类）：与 map-chat 同一帧词表，由调用方并进自己那条 SSE。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件：与 map-chat 同一帧词表。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];

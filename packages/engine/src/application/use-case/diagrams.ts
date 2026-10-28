@@ -9,18 +9,8 @@ import { repositoryOr404 } from "../../infrastructure/composition-root.js";
 
 /**
   画布的用例：列、建、读、改名、删、几何落盘、恢复某一版。
-  图是产物实体，不是某一页的渲染结果：一个仓可以有很多张，住在 `diagram` 表里。
-
-  权限划分在这里说清楚，controller 只把结果翻成状态码：
-
-  - 几何：位置不承载对错，所以不存版本、不写审计、不广播——拖动频次高，进任何一条记录线都会淹掉真信号，
-    广播那一帧还会抢鼠标；
-  - 结构（加删节点、连线、分组）：界面对结构只能读，写只能经 agent 的 `set_diagram` 一个入口
-    （`diagram/set-diagram.ts`），避免两条写路径各写一套校验与记账；
-  - 建、改名、删、恢复动的是这张图这个实体而不是它的结构，所以由界面直发，各自记一行审计、广播一帧。
-
-  读侧全是纯读：没有任何一步会发模型请求（`diagramWarnings` / `diagramFilesByNode` 只比对索引与依赖图）。
-  */
+  几何不存版本、不写审计、不广播；结构只能经 agent 的 `set_diagram` 写；建 / 改名 / 删 / 恢复由界面直发并各记一行审计。
+*/
 export type DiagramFailure =
   | { kind: "repository-missing" }
   | { kind: "diagram-missing" }

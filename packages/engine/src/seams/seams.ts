@@ -4,11 +4,9 @@ import type { LlmTool } from "../application/port/llm-provider.js";
 import { matchRouteSeams, routeEndpointsOfFiles } from "@codebase-tutor/analysis";
 
 /**
-  跨仓 HTTP 接缝的读侧：把两个仓的「路由清单」配成边，回答「点这个按钮之后代码在哪」。
-  只做跨仓：真实语料每仓单语言，同仓配对配不出任何东西。
-
-  不落库、不进任何缓存键：清单由读文件实时计算 + 进程内 memo（键含 `versionStamp`，内容一变自然失效），
-  已导入的仓库不需要重新导入。算一次要读两个仓的源码，因此只在用户显式选了「相关仓」时才算。
+  跨仓 HTTP 接缝的读侧：把两个仓的路由清单配成边。
+  只做跨仓；不落库、不进缓存键，进程内 memo 的键含 `versionStamp`。
+  算一次要读两个仓的源码，只在用户显式选了「相关仓」时才算。
 */
 
 export interface SeamRepository {
@@ -68,11 +66,7 @@ export function clearSeamMemo(): void {
 /** 一次回给模型的行数上限；更多只会变成模型抄进答案的清单。 */
 const MODEL_ROWS = 12;
 
-/**
-  把配对结果压成给模型看的清单（`cross_repo_link` 的返回值）。
-  每行都带「文件:行」——模型的下一步是拿它去 read_file，给模块名没用。
-  证据强度照实区分：按后缀配上的（网关前缀那一类）与一条串配到多个落点的，都不算「配上了」。
-  */
+/** 把配对结果压成给模型看的清单；每行都带「文件:行」。 */
 export function formatSeamReport(otherName: string, report: SeamReport, filter = ""): string {
   const needle = filter.trim().toLowerCase();
   const rows = (direction: SeamReport["outbound"], caption: string): string => {

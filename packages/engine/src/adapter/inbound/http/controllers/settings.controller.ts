@@ -6,8 +6,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
   配置与成本面的入站翻译：GET/PUT 运行时 LLM 设置、GET 成本读数、PUT 每仓预算。
-  哪些值可以存下来（单价、协议、思考档兼容性、预算非负）全在 `application/use-case/settings.ts`，
-  这里只把失败种类翻成状态码与那句面向使用者的文案。
+  取值能不能存全在 `application/use-case/settings.ts`，这里只把失败种类翻成状态码与文案。
   */
 const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply => {
   switch (failure.kind) {
@@ -26,7 +25,7 @@ const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply =
 };
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
-  /** GUI 运行时 LLM 设置：读取（含 .env 回落值、预设模型清单与生效模型的思考能力声明）。这份配置是全局的，所以是管理面。 */
+  /** 运行时 LLM 设置的读取：含 `.env` 回落值、预设模型清单与生效模型的思考能力声明。 */
   app.get("/api/llm/settings", async () => llmSettingsView());
 
   app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string; timeoutMs?: string } }>("/api/llm/settings", async (request, reply) => {

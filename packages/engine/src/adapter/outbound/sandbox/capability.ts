@@ -1,23 +1,14 @@
 import { spawnSync } from "node:child_process";
 
 /**
-  「这台机器能不能真的起一次 Seatbelt」——同步、只跑一个 `/usr/bin/true`，给测试当分档用。
-  容器与受限 CI 里嵌套 `sandbox-exec` 会被拒（`sandbox_apply: Operation not permitted`），
-  真跑用例全红但那不是产品缺陷；反过来无条件跳过，支持沙箱的机器上也拿不到隔离证据。所以分档：
-  - 能用 ⇒ 集成用例照跑照红（红就是缺陷）；
-  - 不能用 ⇒ 集成用例自我跳过并在输出里点名「环境不支持 ≠ 通过」，
-    产品侧的 fail-closed 由不依赖沙箱的那几条钉住（探测没过时 `runSandbox` 必须抛，见 sandbox.test.ts）。
-
-  判据用一次真跑，不看 `sandbox-exec` 在不在：文件在却起不来（嵌套被禁、策略拦）正是要区分的情况。
+  探测本机能否真起一次 Seatbelt：同步跑一个 `/usr/bin/true`，结果缓存。判据是真跑，不看可执行文件是否存在。
+  集成用例按结果分档：能用则照跑，不能用则自我跳过并说明环境不支持。
 */
 let cached: { usable: boolean; detail: string } | undefined;
 
 export function nestedSandboxUsable(): { usable: boolean; detail: string } {
   if (cached) return cached;
-  /**
-    只给测试与受限 CI 用的显式挡板：`TUTOR_TEST_FORCE_UNSUPPORTED=1` 直接按「起不了沙箱」处理。
-    它买不到假通过：走这条时集成用例自我跳过，而「探测没过 ⇒ 整域拒」那几条照跑。
-  */
+  /** 测试与受限 CI 用的显式挡板：置 1 时按「起不了沙箱」处理。 */
   if (process.env.TUTOR_TEST_FORCE_UNSUPPORTED === "1") {
     cached = { usable: false, detail: "测试注入：按「本机起不了嵌套 sandbox-exec」处理" };
     return cached;

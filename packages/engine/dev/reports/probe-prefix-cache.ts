@@ -3,20 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
-  前缀缓存基线（只读 llm.log，零请求）：回答「端点的隐式前缀缓存现在还剩多少可用」。
-  如果相邻两次请求的间隔普遍超过它的存活时间（TTL），那「把易变段挪到末尾、固定段前置」这类拼接改造
-  就省不到钱——先看数再决定改不改，别反过来。
-
-  间隔有两个口径，第 2 节是真值、第 3 节是代理值：
-  - 同一线程的相邻两轮（threadId 相同、traceId 不同）：学习者看完回答再追问的那段时间，这才是和 TTL 打架的数字。
-    一次回合内部的多次调用不算：它们隔着不到一秒，混进来只会把间隔压成 0 制造假繁荣。
-  - 同场景的相邻调用：不需要 threadId 就能算，用来覆盖没有 threadId 的历史行。
-    它会把两个不同会话的相邻提问当成一次「间隔」，所以只能当下限参考。
-
-  threadId 是后补进 llm.log 的（trace/context.ts 的 markThread）：之前的行没有这个字段，
-  在第 2 节里自然缩出样本——不是 bug，是样本起点。
-
-  用法：pnpm cache:probe [llm.log 路径]
+  前缀缓存基线（只读 llm.log，零请求）：端点的隐式前缀缓存还剩多少可用。
+  间隔按同线程相邻两轮算；同场景相邻调用只当下限参考；一次回合内部的多次调用不算。
+  用法：`pnpm cache:probe [llm.log 路径]`
 */
 
 const file = process.argv.slice(2).find((value) => !value.startsWith("-"));
@@ -71,12 +60,7 @@ for (const [scene, list] of byScene) {
   gaps.set(scene, series);
 }
 
-/**
-  线程维度：一次回合 = 一个 traceId（教学回合内部就有「动作提议 + 措辞」两趟调用），
-  所以先按 traceId 折成回合，再算相邻回合的间隔。
-  命中只取该回合第一趟调用——它的 prompt 里才装着上一轮的对话；同回合第二趟的命中
-  是回合内部的复用，与「缓存能不能撑过学习者的思考时间」这个问题无关。
-  */
+/** 一次回合 = 一个 traceId：先按 traceId 折成回合，再算相邻回合的间隔。 */
 const byThread = new Map<string, LogRow[]>();
 for (const row of calls) {
   if (!row.threadId) continue;

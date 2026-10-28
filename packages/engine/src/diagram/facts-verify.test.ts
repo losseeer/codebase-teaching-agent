@@ -8,10 +8,8 @@ import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { factsPairChecker, type FactSources } from "./facts-verify.js";
 
 /**
-  第四张结构表（画布的边靠产物里的类型关系与运行时绑定来确认）。
-  要拦的事故：「代码里没有那一行调用」被当成「这条线是猜的」——Spring 的注入、接口与实现之间没有调用行，
-  另外三张表都核不到，模型按事实画的边会被降成 `inferred`。
-  反方向也要拦：反查不到落点的边（仓外类型、同名多解）不能当证据。
+  第四张结构表：画布的边靠产物里的类型关系与运行时绑定来确认。
+  要拦两类事故：代码里没有调用行被当成猜测；反查不到落点的边被当成证据。
 */
 
 const REPO = "repo_facts_verify";

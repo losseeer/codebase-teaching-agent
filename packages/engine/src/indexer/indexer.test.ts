@@ -6,10 +6,8 @@ import { graphExtensions } from "@codebase-tutor/analysis";
 import { indexRepository, isIngestedPath, nonGraphExtensions, sourceExtensions } from "./indexer.js";
 
 /**
-  扫描期的兜底口径：一个文件读不出来，只让它自己缺席。
-  用户边用边改是常态，读到一半文件被删/被移动就让整次导入失败，而「重新导入」对那种文件治不好，
-  等于把一次偶发抖动放大成整个功能不可用。但缺席必须记名：
-  静默少索引一批文件，`totalFiles` 与「哪些文件没摘要」这些读数会一起说不实。
+  扫描期的缺席口径：一个文件读不出来只让它自己缺席，不整次导入失败。
+  缺席要记名：`totalFiles` 与「哪些文件没摘要」跟着它。
   */
 
 describe("indexRepository 扫描期兜底", () => {

@@ -10,15 +10,8 @@ import { applyStructure, diagramStoreFor, listDiagrams, readDiagram, restoreVers
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
 
 /**
-  画布「结构」这唯一写入口的测试。每一条都对着一条会被踩的线：
-
-  - 查无此人不落笔：`kind:"module"` 的节点指不到索引里的文件/目录/符号就整次拒写，
-    因为读者会拿着图上那个名字去代码里找它（半张真图比一张假图好，但一张拼出来的假图谁都会照着讲）；
-  - 边的可信度只降不升：模型报低了引擎不替它抬（抬等于替它吹），报高了引擎一定降并把为什么写在边上；
-  - 删一个节点要连带清掉挂在它身上的边、删一个框要清掉节点上的归属：留着就是指向空气的图元；
-  - 版本历史只追加：存版有上限、回滚也是往前追加一版，谁都不许把已经落过的那几版抹掉。
-
-  零 token：这一层不发模型请求（`refIndexOf` 那两张表由索引与依赖图现算）。
+  画布结构写入口的测试，每条对着一条会被踩的线。
+  查无此人不落笔；边的可信度只降不升；删节点连带清边、删框连带清归属；版本历史只追加。
 */
 
 const REPO = "repo_diagram_fixture";
@@ -89,10 +82,11 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
     const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "假节点", body: { groups: [], nodes: [{ id: "n-ghost", kind: "module", label: "查无此人", ref: "file:不存在的那一个.ts", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(outcome.ok).toBe(false);
     expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("不在本仓索引里");
-    // 旧课程树的引用已退役：不能当成「一次普通核不上」轻轻放过，回话要给出新写法
+    // 认不出的 ref 前缀要单独拒，并给出可用写法
     const retired = applyDiagramEdit(f.context, { edit: { action: "draw", name: "旧引用", body: { groups: [], nodes: [{ id: "n-old", kind: "module", label: "旧模块", ref: "module:src", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(retired.ok).toBe(false);
-    expect(retired.text).toContain("已退役");
+    expect(retired.text).toContain("不是可用的 ref");
+    expect(retired.text).toContain("file:");
     expect(listDiagrams(f.database, REPO), "被拒的这一次连一张空图都不该留下").toEqual([]);
     expect(f.events).toEqual([]);
     expect(f.applied).toEqual([]);

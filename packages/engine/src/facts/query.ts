@@ -16,12 +16,11 @@ import type { FactsToolContext } from "../source/tool-loop.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
-  把 `static_fact` 里的四类产物交给模型的只读门。
-  - 只读、不计费、不重算：只搬运已算好的读数。
-  - 按指针给：`path` 与 `target` 决定给多少，一次最多回这么多字；整仓产物是 2~4 MB，不整份进上下文。
+  `static_fact` 四类产物交给模型的只读门：只读、不计费、不重算。
+  按 `path` 与 `target` 给，一次最多回预算内的字数。
 */
 
-/* 一次查询的预算按窗口份额派生：整仓产物是 2~4 MB，不整份进上下文，但也不该手填一个小数字把读数切没。 */
+/* 一次查询的字数预算按上下文窗口份额派生。 */
 function budgetChars(): number {
   return contextShare(CONTEXT_SHARE.factsQuery);
 }
@@ -43,10 +42,7 @@ function arg(argumentsJson: string, key: string): string {
 
 const at = (ms: number): string => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 
-/**
-  截断前先声明还剩多少：那条声明是读数的一部分。
-  条数只按 `items` 算，表头与尾部提示不占「没列出」的名额。
-*/
+/** 截断前先声明还剩多少；条数只按 `items` 算。 */
 function emit(heads: string[], items: string[], tails: string[] = []): string {
   const chars = budgetChars();
   const cap = Math.max(1, budgetLines() - heads.length - tails.length);
@@ -68,7 +64,7 @@ function blockLine(functionGraph: CfgFunction): string {
 const skips = (fact: { skipped?: { name: string; reason: string }[] }): string[] =>
   (fact.skipped ?? []).map((item) => `未成图：${item.name} —— ${item.reason}`);
 
-/** 每份产物先报「用什么算的」：backend 为 none 时后面的空读数是「没算出来」，不是「仓库里没有」。 */
+/** 每份产物先报 backend：backend 为 none 时空读数表示没算出来。 */
 const head = (fact: { language: string; backend: string; skipped?: { reason: string }[] }): string =>
   `语言 ${fact.language}，backend ${fact.backend}${fact.backend === "none" && fact.skipped ? `（${fact.skipped.map((item) => item.reason).join("；")}）` : ""}`;
 
@@ -76,7 +72,7 @@ interface Named {
   name: string;
 }
 
-/** 先按名字全等，再退到包含：模型报的名字常常是 `handle` 而产物里是 `handleOrder`。 */
+/** 先按名字全等，再退到包含。 */
 const pick = <T extends Named>(items: T[], target: string): T | undefined =>
   target ? items.find((item) => item.name === target) ?? items.find((item) => item.name.toLowerCase().includes(target.toLowerCase())) : undefined;
 
@@ -103,23 +99,20 @@ function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: 
     : `本仓还没有 ${kind} 这类产物（从没算过，或产物比代码旧）。不要据此回答「仓库里没有这个关系」——先让用户重新分析。`;
 }
 
-/**
-  产物查询门的实现（装配在 `infrastructure/canvas-tools.ts`：路由只认装配层，不直接 import 领域模块）。
-  `target` 在 cfg/dataflow 里是函数名，在 typeRelations/registry 里是类型名或条目名。
-*/
+/** 产物查询门的实现；`target` 在 cfg/dataflow 是函数名，在 typeRelations/registry 是类型名或条目名。 */
 export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsToolContext {
-  // 判据改过版（`FACTS_VERSION` 翻过）的旧行不再当现行读数交给模型：那是另一套判据算出来的结果
+  // `FACTS_VERSION` 翻过之后的旧行不当现行读数。
   const rowsOf = <T>(kind: FactKind, path: string): T | undefined => {
     const fact = db.facts.read<T & { version?: string }>(repositoryId, kind, path);
     return fact?.version === FACTS_VERSION ? fact : undefined;
   };
-  // 整类扫描要解析这一类每一行 JSON（一个仓 2~4 MB）：这扇门只活一个回合，按类别缓存一次
+  // 整类扫描按类别缓存一次：这扇门只活一个回合。
   const scanned = new Map<FactKind, Map<string, unknown>>();
   const scan = <T>(kind: FactKind): Map<string, T> => {
     const cached = scanned.get(kind) as Map<string, T> | undefined;
     if (cached) return cached;
     const loaded = db.facts.listByKind<T & { version?: string }>(repositoryId, kind);
-    // 「全仓找」这条路与按 path 取读必须同一道版本闸，否则旧判据产物从 scan 那边照样进模型
+    // 全仓扫描与按 path 取读共用同一道版本闸。
     for (const [factPath, fact] of loaded) if (fact?.version !== FACTS_VERSION) loaded.delete(factPath);
     scanned.set(kind, loaded as Map<string, unknown>);
     return loaded;
@@ -165,7 +158,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
             lines.push(...fact.entries.filter((entry) => `${entry.name} ${entry.target ?? ""}`.toLowerCase().includes(needle)).map((entry) => entryLine(file, entry)));
           }
         } else {
-          // cfg 与 dataflow 的函数清单形状一致（都有 name/startLine），这里只报文件与行号，展开要带 path
+          // cfg 与 dataflow 的函数清单形状一致。
           const names = kind === "cfg" ? [...scan<CfgFileFact>(kind).entries()] : [...scan<DataflowFileFact>(kind).entries()];
           for (const [file, fact] of names) {
             lines.push(...fact.functions.filter((item) => item.name.toLowerCase().includes(needle)).map((item) => `${file}:${item.startLine} ${item.name}`));
@@ -219,10 +212,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
   };
 }
 
-/**
-  静态产物的只读门，与 `set_diagram` 配对：那边写图，这边给证据。
-  不重算任何东西——绘图阶段的职责边界就是只消费导入时已算好的产物。
-*/
+/** 静态产物的只读门：与 `set_diagram` 配对，那边写图、这边给证据，不重算。 */
 export const QUERY_FACTS_TOOL: LlmTool = {
   name: "query_facts",
   description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",

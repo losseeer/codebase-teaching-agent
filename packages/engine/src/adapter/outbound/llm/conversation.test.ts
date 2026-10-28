@@ -10,7 +10,7 @@ import { CHARS_PER_TOKEN, contextWindowTokens } from "./context-window.js";
 
 const ENV_KEY = "TUTOR_CONTEXT_WINDOW_TOKENS";
 const previous = process.env[ENV_KEY];
-/** 10000 token 的窗口 = 40000 字符：折叠阈值 32000 字符、对话份额默认 2000 字符，两条触发都能单独构造。 */
+/** 10000 token 窗口 = 40000 字符：两条折叠触发都能单独构造。 */
 const WINDOW = "10000";
 afterEach(() => {
   if (previous === undefined) delete process.env[ENV_KEY];
@@ -86,9 +86,9 @@ describe("renderConversation", () => {
       turn("assistant", filler("中段四答")),
       turn("user", "最近的问题")
     ];
-    // 保留窗口之外的那几条才是折叠段：最早 2 条 + 最近 6 条以外的中间部分
+    // 折叠段 = 最早与最近保留窗口之外的部分
     const middleCount = turns.length - HISTORY_KEEP_EARLIEST_MESSAGES - HISTORY_KEEP_RECENT_MESSAGES;
-    // 靠占用窗口触发折叠（本轮空间本来就宽裕），找回的那条才不会被收口时撤掉
+    // 用窗口占用触发折叠，本轮空间留得宽裕
     const usedCharacters = contextWindowTokens() * CHARS_PER_TOKEN * HISTORY_COMPACT_AT_RATIO + 1;
     const cited = renderConversation({ turns, query: "蓝绿发布锚点在哪一行？", usedCharacters });
     expect(cited.text).toContain("蓝绿发布锚点：它落在 registry.ts");
@@ -102,10 +102,7 @@ describe("renderConversation", () => {
 
   it("找回条数封顶：折叠段里多处相关时只带最相关的几条回来", () => {
     process.env[ENV_KEY] = WINDOW;
-    /*
-      折叠段里放十行，其中六行提到同一个说法：相关行必须比整段少，否则每行都命中等于没有信号，
-      BM25 的 idf 会把它们全判成不相关（这是词法检索的本性，不是夹具要绕的坑）。
-    */
+    /* 相关行必须比整段少，否则 BM25 的 idf 会把它们全判成不相关。 */
     const middle = Array.from({ length: 10 }, (_, index) =>
       index % 5 < 3 ? turn("assistant", `第${index}处 蓝绿发布锚点 的说明${"注".repeat(30)}`) : turn("assistant", filler(`中${index}`)));
     const turns = [

@@ -5,9 +5,7 @@ import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
 import { appendMessages, createThread, softDeleteThread } from "../../../outbound/persistence/chat-store.js";
 
-/**
-  会话线程：线程 id 由引擎发，正文落在各自仓的 chat_message 里；仓被移出地址簿之后，线程仍可只凭 threadId 定位（读侧不靠内存挂载）。
- */
+/** 会话线程：线程 id 由引擎发，正文落在各自仓的 chat_message 里；仓移出地址簿后仍可凭 threadId 定位。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -20,7 +18,7 @@ describe("未挂载仓库的线程仍可定位", () => {
     expect(registryFile, "地址簿要指向临时文件").toBeTruthy();
     const original = readFileSync(registryFile!, "utf8");
 
-    // 第二个仓：只建目录并写它自己的库——它不进挂载路径（这几条路由只需要库路径，产物在不在都一样读）
+    // 第二个仓：只建目录并写它自己的库，不进挂载路径
     const archivedDir = join(fx.root, "archived");
     mkdirSync(archivedDir, { recursive: true });
     const archivedId = deriveRepositoryId(archivedDir);
@@ -29,7 +27,7 @@ describe("未挂载仓库的线程仍可定位", () => {
     expect(appendMessages(archivedDir, thread.id, [{ role: "user", content: "上次问到哪了？" }])).toBe(true);
 
     try {
-      // 前提要钉住：它确实没挂在内存里，否则测的还是老那条路
+      // 前提：它确实没挂在内存里
       const catalog = await fx.app.inject({ method: "GET", url: "/api/repositories" });
       const entry = (catalog.json() as { repositories: { repositoryPath: string; mounted: boolean }[] }).repositories
         .find((item) => item.repositoryPath === archivedDir);
@@ -41,7 +39,7 @@ describe("未挂载仓库的线程仍可定位", () => {
 
       expect((await fx.app.inject({ method: "PATCH", url: `/api/threads/${thread.id}`, payload: { title: "改了名" } })).statusCode).toBe(200);
       expect((await fx.app.inject({ method: "DELETE", url: `/api/threads/${thread.id}` })).statusCode).toBe(200);
-      // 删掉之后才该是 404：软删的线程读侧恒带 `deleted_at IS NULL`
+      // 软删的线程读侧恒带 `deleted_at IS NULL`
       expect((await fx.app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` })).statusCode).toBe(404);
     } finally {
       writeFileSync(registryFile!, original, "utf8");
@@ -50,7 +48,7 @@ describe("未挂载仓库的线程仍可定位", () => {
   });
 });
 
-/** 会话下拉的取数口径：只列谈过的会话，但当前打开着的那条空壳要被认下来。 */
+/** 会话下拉的取数口径：只列有正文的会话，当前打开的空会话仍要认下来。 */
 describe("线程清单的收录口径", () => {
   it("零消息的会话不进列表；?current 认下正打开的那条，删掉或不属于这个作用域才回 null", async () => {
     const unsent = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "刚点新建" });
@@ -72,7 +70,7 @@ describe("线程清单的收录口径", () => {
   });
 });
 
-/** 界面上「删除当前会话」的真实走法：POST 建一条还没发言的，再经 DELETE 路由删掉。 */
+/** 「删除当前会话」的走法：POST 建一条没发言的，再经 DELETE 路由删掉。 */
 describe("删除还没发言的会话", () => {
   for (const scope of ["map", "practice", "teach"] as const) {
     it(`${scope}：刚建的空壳要删得掉，删过第二次才 404`, async () => {

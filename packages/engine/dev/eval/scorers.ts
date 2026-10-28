@@ -89,11 +89,7 @@ export interface TeachInvariantScore {
   checks: InvariantCheck[];
 }
 
-/**
-  只判设计上写了保证、且文本层可核对的两条不变量（出处见 INVARIANTS 表）；
-  「先要求说明推理再给结论」「不自造词」这类需要语义理解的留给质检裁判。
-  逐条判定在 `checkTurnInvariants`——运行期复检也走它，这里只按条目聚合。
-  */
+/** 只判写了保证、且文本层可核对的两条不变量；逐条判定在 `checkTurnInvariants`。 */
 export function scoreTeachInvariants(turns: TeachTurn[], files: Map<string, number>): TeachInvariantScore {
   const checks = new Map<string, InvariantCheck>(INVARIANTS.map((item) => [item.id, { ...item, applicable: 0, pass: 0, misses: [] }]));
   let skippedTruncated = 0;

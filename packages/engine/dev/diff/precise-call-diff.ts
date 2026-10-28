@@ -7,18 +7,9 @@ import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
-  符号级调用边的差值（文件级 import 差值由 `pnpm graph:diff` 量）。
-  要回答的问题：引擎那条「按方法名 + 已导入文件」配调用边的规则，值不值得升级成 L1 的接收者类型消歧——
-  这需要一个独立参照，而且参照必须宁可少报也不能错报，否则差值就是噪声。
-
-  参照口径（故意保守，是下界）：只认「显式以类型名作接收者」的调用 `Type.method(...)`，并且要求
-  ① 该 `Type` 在发起文件里可见（直接 import、通配 import 的整包、或同包）；
-  ② 该 `Type` 所在文件里确实声明了同名方法（跳过构造器与关键字）。
-  于是两条读法不对称：
-  - 参照有、引擎没有 ⇒ 引擎确实漏了，这是可以拿去修 L1 的靶子。
-  - 引擎有、参照没有 ⇒ 只是这条规则确认不了：通过变量、接口、继承的调用本来就不在下界里，不能当假阳性引用。
-
-  零 token、零新依赖、只读被分析仓。用法：pnpm calls:diff [仓库路径]
+  符号级调用边的差值（文件级 import 差值由 `pnpm graph:diff` 量）：判断配边规则值不值得升级成接收者类型消歧。
+  参照口径是下界：只认「显式类型名作接收者 + 该类型在发起文件可见 + 该文件声明了同名方法」的调用。
+  零 token、只读。用法：`pnpm calls:diff [仓库路径]`
 */
 
 const repositoryPath = resolve(process.argv.slice(2).find((value) => !value.startsWith("-")) ?? "");

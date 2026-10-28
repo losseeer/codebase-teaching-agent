@@ -111,14 +111,14 @@ describe("executeSearchCode 打分与词边界", () => {
       ["src/io/FileService.java", "负责缓存读写"],
       ["src/test/java/io/FileServiceTest.java", "缓存读写测试，验证命中行为"]
     ]));
-    // 原始分测试文件更高（缓存+2、测试+2 vs 缓存+2）——封顶 1 分后必须让位
+    // 测试文件原始分更高，封顶 1 分后让位。
     const both = executeSearchCode(corpus, JSON.stringify({ query: "缓存 测试" }));
     expect(both.audit.topPaths[0]).toBe("src/io/FileService.java");
-    // 只有测试演示过的概念：兜底给出、明说它是测试文件，而不是假零
+    // 只有测试文件命中时照样给出，并明说它是测试文件。
     const only = executeSearchCode(corpus, JSON.stringify({ query: "命中行为" }));
     expect(only.audit.topPaths).toEqual(["src/test/java/io/FileServiceTest.java"]);
     expect(only.content).toContain("测试文件");
-    // 兜底分与真实弱命中并列（都是 1）时，测试仍靠后
+    // 与真实弱命中并列（都是 1）时，测试仍靠后。
     const tieCorpus = buildSearchCorpus(
       { files: [{ path: "src/io/a/CacheService.java", extension: ".java", bytes: 1, lines: 10 }, { path: "src/test/java/io/ZzTest.java", extension: ".java", bytes: 1, lines: 8 }] } as unknown as RepositoryIndex,
       { graph: { imports: { "src/io/a/CacheService.java": [], "src/test/java/io/ZzTest.java": [] }, symbols: [] } } as unknown as RepositoryAnalysis,

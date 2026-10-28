@@ -24,7 +24,6 @@ describe("OpenAICompatibleProvider", () => {
       return jsonResponse(chatBody("ok", "stop"));
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
-    // 这道闸防的正是「新增装配路径忘了过筛」——出题的源码摘录原文就是这类载荷
     await provider.complete({
       system: "你是代码教学产品",
       messages: [{ role: "user", content: "const awsKey = \"AKIAIOSFODNN7EXAMPLE\";" }]
@@ -40,7 +39,7 @@ describe("OpenAICompatibleProvider", () => {
     const screened = screenOutbound(dirty);
     expect(screened).not.toBe(dirty);
     expect(screened.user).not.toContain("sk-abcdefghijklmnopqrstuvwxyz0123456789");
-    // 已经筛过的再过一次必须完全不动：掩码串不会被二次命中
+    // 已过筛的文本再过一次原样返回
     expect(screenOutbound(screened)).toBe(screened);
   });
 
@@ -229,7 +228,7 @@ describe("OpenAICompatibleProvider", () => {
         reject(error);
       });
     })) as typeof fetch;
-    // timeoutMs 故意给足：这里要证明的是「外部中止 ≠ 超时」，不是竞态
+    // timeoutMs 给足，避免与超时判据混淆
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl, timeoutMs: 5_000 });
     const pending = provider.complete({ system: "s", user: "u", signal: controller.signal });
     controller.abort();
@@ -255,9 +254,7 @@ describe("createLlmProvider（单一配置）", () => {
     }) as typeof fetch);
   }
 
-  /**
-    钉住「只认 TUTOR_LLM_* 与通用密钥名」：已删的别名不再是配置来源，防止将来为兼容旧 .env 把别名接回去。
-    */
+  /** 只认 `TUTOR_LLM_*` 与通用密钥名，不读别名。 */
   it("只认 TUTOR_LLM_* 与通用密钥名；已删的别名一个都不读", async () => {
     process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
     process.env.TUTOR_TEACHING_MODEL = "legacy-model";
@@ -317,12 +314,11 @@ describe("createLlmProvider（单一配置）", () => {
     process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
     process.env.OPENAI_API_KEY = "env-key";
     expect(createLlmProvider({ provider: "  ", model: "", baseUrl: "", apiKey: "" })?.modelVersion).toContain("env-model");
-    // 服务商仍是 .env 的 openai-compatible，但密钥换成 GUI 填的
     expect(createLlmProvider({ apiKey: "gui-key" })).toBeDefined();
   });
 
   it("官方 openai 缺密钥就不建实例；兼容端点允许无密钥", () => {
-    // 显式清空两侧密钥：这台机器上 export 了 OPENAI_API_KEY 时「缺 key 不建实例」的断言仍要成立
+    // 清空两侧密钥，避免本机 env 干扰断言
     for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TUTOR_OPENAI_API_KEY"]) delete process.env[key];
     expect(createLlmProvider({ provider: "openai" })).toBeUndefined();
     expect(createLlmProvider({ provider: "openai-compatible" })).toBeDefined();
@@ -510,10 +506,7 @@ describe("RetryLlmProvider", () => {
   });
 });
 
-/**
-  推理预算升档：这一族失败是思考量把输出预算挤空，不是超时，值得「换一档预算再发一次」而不是原样重发。
-  Response 的 body 只能读一次，所以这里给的是工厂函数而不是现成响应。
-  */
+/** 推理预算升档的用例；Response body 只能读一次，所以脚本给的是工厂函数。 */
 describe("OpenAICompatibleProvider 的推理预算升档", () => {
   function scripted(bodies: Array<() => Response>) {
     const sent: number[] = [];

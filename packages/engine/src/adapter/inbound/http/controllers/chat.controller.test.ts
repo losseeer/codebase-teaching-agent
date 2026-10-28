@@ -8,19 +8,16 @@ import { readMessages } from "../../../outbound/persistence/chat-store.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
 
 /**
-  宏观设计 / 练习答疑两条作用域的回合收尾，以及喂进回合的外部能力面、跨仓工具面与出网清单。
-  要守的顺序是 recheckTurn → 落库 → 回放：谁把顺序换回去，落库正文和学习者看到的正文就会差那行尾注。
-  每条路径都断言三件事：不抛错、`turn_invariant` 一定落 journal（合格也记，分母才成立）、
-  三处文本同一份（响应/回放正文 == chat_message 正文 == journal 的 `turn_text.answer`）。
-  假 provider 与临时仓由 `route-test-kit.ts` 提供，零 token。
- */
+  宏观设计与练习答疑的回合收尾，含外部能力面、跨仓工具面与出网清单。
+  守的顺序是 recheckTurn → 落库 → 回放；每条路径断言三处文本同一份（响应 == chat_message == journal 的 `turn_text.answer`）。
+*/
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
 afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
-/** map 对话只有 SSE 一条产品路径：测试里要拿整段回复时，从 done 帧取，不另开一条 JSON 路由。 */
+/** map 对话只有 SSE 一条路径：整段回复从 done 帧取。 */
 async function mapChat(payload: Record<string, unknown>) {
   const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload });
   if (response.statusCode !== 200) return { statusCode: response.statusCode, payload: response.payload, json: () => response.json() };
@@ -31,7 +28,7 @@ describe("外部能力面进回合：技能与 MCP（默认关，装了才给）
   const skillsDir = join(fx.root, "skills");
   const fixture = fx.echoServerFixture;
 
-  /** 装一份技能 + 一个 stdio 夹具 server（都指临时目录，`~/.codebase-tutor` 一个字都不碰）。 */
+  /** 装一份技能 + 一个 stdio 夹具 server，都指临时目录。 */
   function install(): void {
     mkdirSync(join(skillsDir, "tutor-fixture"), { recursive: true });
     writeFileSync(join(skillsDir, "tutor-fixture", "SKILL.md"), `---
@@ -55,8 +52,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
   });
 
   it("没装时工具清单逐字不变——默认关是靠不加，不是靠开关", async () => {
-    // 「没装」指确实空着的目录：不指这个变量时加载器会去家目录那两处，
-    // 于是这台机器装过什么就决定了这条用例断言什么
+    // 「没装」指确实空着的目录，不看家目录
     const empty = join(fx.root, "skills-empty");
     mkdirSync(empty, { recursive: true });
     process.env.TUTOR_SKILLS_DIR = empty;
@@ -64,9 +60,6 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const threadId = await fx.newThread("map", "没装外部能力");
     const before = fx.sentTools.length;
     await mapChat({ content: "这仓分几层？", threadId });
-    // 这个夹具仓是手捏出来的产物（没跑过分析），`static_fact` 一行都没有，但那扇门照旧在——
-    // 缺席由它自己说出来，模型才不会从「工具不在清单里」反推出「这轮画不了」
-    // `ask_user` 在列是正常的：它是引擎自己那一侧的通道，判据是「本轮缺不缺范围」，跟装没装外部能力无关（下面那两格才是）
     expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "ask_user", "set_diagram", "query_facts"]);
     expect(fx.sentTools[before].raw, "一行产物都没有时，上下文要直接说没有，别让模型自己试出来").toContain("本仓还没有静态产物");
   });
@@ -98,17 +91,17 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const response = await mapChat({ content: "按那份做法看一下", threadId });
     expect(response.statusCode).toBe(200);
 
-    // ① 清单真的进了请求（模型看得见名字与描述，不是只在界面里挂着）
+    // ① 清单进了请求
     expect(fx.sentTools[before].names).toContain("read_skill");
     expect(fx.sentTools[before].names).toContain("mcp__fixture__echo");
     expect(fx.sentTools[before].raw).toContain("tutor-fixture：测试用做法");
     expect(fx.sentTools[before].raw).toContain("别凭名字猜内容");
 
-    // ② 工具真被执行：正文回喂进第二趟、外部正文回喂进第三趟
+    // ② 工具执行：正文回喂进后续两趟
     expect(fx.sentTools[before + 1].raw).toContain("读 ~/.codebase-tutor/llm.log");
     expect(fx.sentTools[before + 2].raw).toContain("读到 nothing");
 
-    // ③ 两条审计各落一行，且 mcp_call 里只有指针没有正文
+    // ③ 两条审计各落一行，mcp_call 只记指针
     const skill = fx.lastEvent("skill_read");
     expect(skill.payload).toMatchObject({ skill: "tutor-fixture", found: true });
     expect(String(skill.payload.chars)).not.toBe("0");
@@ -118,7 +111,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
 
     const loop = fx.lastEvent("loop_round");
     expect(loop.payload).toMatchObject({ tool_external: 1, tool_skills: 1 });
-    // 上下文折叠同属回合审计，但住在另一行：loop_round 只管工具做了几次
+    // 上下文折叠记在 turn_context，不在 loop_round
     expect(fx.lastEvent("turn_context").payload).toMatchObject({ scene: "map_chat", conversation_folded: 0, conversation_recalled: 0 });
   });
 
@@ -129,13 +122,12 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const before = fx.sentTools.length;
     const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/practice-chat`, payload: { content: "这题怎么想？", exerciseId: fx.exerciseId, threadId } });
     expect(response.statusCode).toBe(200);
-    // 这一路没有仓库文件面：能取的就是技能正文，工具清单里不该混进 read_file
+    // 这一路没有仓库文件面，工具清单里不该混进 read_file
     expect(fx.sentTools[before].names).toEqual(["read_skill"]);
     expect(fx.sentTools[before].raw).toContain("tutor-fixture：测试用做法");
     expect(fx.sentTools[before + 1].raw).toContain("读 ~/.codebase-tutor/llm.log");
     expect(fx.lastEvent("skill_read").payload).toMatchObject({ skill: "tutor-fixture", found: true });
-    // 过程帧要跟着出来：练习答疑没有文件面，但「正在取哪份技能正文」这一步本来就发生了，
-    // 报不出来时界面只剩一行「回复生成中」，看着像卡死
+    // 取技能正文也要发过程帧
     const frames = sseEvents(response.payload).map((event) => event.type);
     expect(frames, "loading_skill 要在正文之前到").toContain("loading_skill");
   });
@@ -214,7 +206,7 @@ describe("宏观设计作用域（SSE）", () => {
     expect(call?.names, "画布是只读的，结构改动只有 agent 这一条路——不能要求先在左栏点进某个模块").toContain("set_diagram");
     expect(call?.raw, "改图工具必须先看得见现状：有哪几张图、正打开那张的图元 id").toContain("画布现场");
 
-    // 反面对照：练习答疑没有画布，也就没有写能力——放宽不能顺着作用域漏出去
+    // 反面对照：练习答疑没有画布写能力
     fx.scripted = [OK_REPLY];
     const practiceThread = await fx.newThread("practice", "对照线程", fx.exerciseId);
     fx.sentTools.length = 0;
@@ -244,11 +236,11 @@ describe("宏观设计作用域（SSE）", () => {
   });
 
   it("停止生成：aborted 帧取代 done、正文不落库，journal 只留一行 turn_aborted", async () => {
-    // 让 LLM 在途 300ms，好赶在它回来之前打「停止」；这一条测的是路由收尾的分诊，不是 registry 的中止本身
+    // 让 LLM 在途 300ms，这条测的是路由收尾的分诊
     fx.scripted = [OK_REPLY];
     fx.holdMs = 300;
     const threadId = await fx.newThread("map", "中止线程");
-    const turnId = "abort-test-turn"; // 8~64 位 URL-safe，与 GUI 的 crypto.randomUUID 同一档
+    const turnId = "abort-test-turn"; // 8~64 位 URL-safe
     const pending = fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: "这句话会被中止", threadId, turnId } });
     await new Promise((resolve) => setTimeout(resolve, 60)); // 让回合登记上再打停止
     const stopped = await fx.app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
@@ -265,30 +257,20 @@ describe("宏观设计作用域（SSE）", () => {
     const aborted = fx.lastEvent("turn_aborted");
     expect(aborted.payload).toMatchObject({ scene: "map_chat", turn_id: turnId, aborted_by: "user_stop" });
     expect(aborted.sessionId).toBe(threadId);
-    // 作废的回合没有成品：库里既没有助手正文，也不该有这一轮的 turn_text（否则 GUI 回来会看到一条自己中止的回复）
+    // 作废的回合不落正文，也不落 turn_text
     expect(readMessages(fx.repoDir, threadId).some((message) => message.role === "assistant")).toBe(false);
     expect(fx.eventsOf("turn_text").some((event) => event.sessionId === threadId)).toBe(false);
   });
 
-  /**
-    作废的回合不落正文，但已发生的事实要照落：这一轮真读过 src/main.ts、真发过两趟 LLM，
-    跟着正文一起丢掉，journal 上这一轮就成了「什么都没干」的假账。
-    中止有两种落法，带的审计数组在两个不同地方，所以各测一条：
-    ① 落在最后一趟 LLM 在途 → 异常一路抛上来，数组挂在异常上；
-    ② 落在最后一趟回来之后 → 循环已正常返回，数组在返回值里。
-    */
+  /** 中止的回合仍要落已发生的工具与调用审计；两种中止落点各测一条。 */
   function expectAbortedAudit(threadId: string, events: Record<string, unknown>[], marker: string): void {
-    // 失败信息自带现场：本回合发了几趟、脚本还剩几段、帧序列、file_read 行数，
-    // 否则分不清是「工具没执行」「没落账」还是「落了但线程号不对」
+    // 失败信息带上现场：请求趟数、脚本余量、帧序列、file_read 行数
     const reads = fx.eventsOf("file_read").filter((event) => event.sessionId === threadId);
     const allReads = fx.eventsOf("file_read");
-    /** 每一趟请求里工具到底回了什么：读到了正文、还是「未知工具 / 未知仓库 / 额度用尽」这类不落账的分支。 */
+    /** 每趟请求里工具的回话。 */
     const toolReplies = fx.sentTools.filter((entry) => entry.raw.includes(marker)).map((entry) => ["未知工具", "未知仓库", "读文件上限", "跨仓读取最多"].find((word) => entry.raw.includes(word)) ?? (entry.raw.includes("// line 1") ? "读到正文" : "没读到")).join(" | ");
     const scene = `本回合请求 ${fx.requestsOf(marker)} 趟（工具回话：${toolReplies}）/ 脚本剩余 ${fx.scripted.length} 段 / 帧 ${events.map((event) => event.type).join("→")} / journal 里 file_read 共 ${allReads.length} 行（本线程 ${reads.length} 行，线程号 ${[...new Set(allReads.map((event) => String(event.sessionId)))].join(" ") || "无"}）`;
-    /**
-      先问「工具到底执行了没有」：第二趟请求里必须带着 `read_file` 回填的正文（`// line 1` 是那 20 行注释的第一行）。
-      带着 ⇒ 真读过，问题在落账；没带 ⇒ 问题在工具循环，此时「账上该有一行」这个期待本身就不成立。
-      */
+    /** 第二趟请求里必须带着 read_file 的回填正文；没带就是工具没执行，不是落账问题。 */
     expect(fx.sentTools.some((entry) => entry.raw.includes(marker) && entry.raw.includes("// line 1")), `第二趟请求里没有 read_file 的回填正文 ⇒ 工具没执行，不是落账问题（${scene}）`).toBe(true);
     expect(events.some((event) => event.type === "aborted"), `没收到 aborted 帧（${scene}）`).toBe(true);
     expect(events.some((event) => event.type === "done"), `中止的回合不该回放 done（${scene}）`).toBe(false);
@@ -308,12 +290,11 @@ describe("宏观设计作用域（SSE）", () => {
   it("① 停止落在最后一趟在途：异常带着本轮读过的文件上来，收尾照样落账", async () => {
     const question = "这句会被中止但要记账·在途";
     fx.scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
-    fx.holdMs = 1_200; // 第二趟留足在途窗口，停止一定撞在请求还活着的时候
+    fx.holdMs = 1_200; // 第二趟留足在途窗口
     const threadId = await fx.newThread("map", "中止补账·在途");
     const turnId = "abort-audit-inflight";
     const pending = fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
-    // 等的是「第一趟已回来、read_file 真执行过、第二趟已经发出」这个事件（判据=本回合第二发请求登记上），
-    // 不是墙上时间：固定 sleep 会抢在 fx.holdMs 之前打完停止，中止于是落在第一轮工具之前，账上本来就没东西
+    // 等第二趟请求登记上，不用固定 sleep
     await waitFor(() => fx.requestsOf(question) >= 2, "第一趟回来、read_file 执行完、第二趟请求发出");
     const stopped = await fx.app.inject({ method: "POST", url: "/api/turns/stop", payload: { turnId } });
     expect(stopped.json()).toMatchObject({ stopped: true, scene: "map_chat" });
@@ -325,7 +306,7 @@ describe("宏观设计作用域（SSE）", () => {
     fx.scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
     const threadId = await fx.newThread("map", "中止补账·收尾");
     const turnId = "abort-audit-late";
-    // 第二趟请求返回之前把停止打进去：signal 已置位但这一趟照样回正文，路由收尾时才判作废
+    // 停止落在第二趟返回之前
     fx.stopInside = { turnId, marker: question, atCall: 2, seen: 0 };
     const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
     fx.stopInside = undefined;
@@ -388,10 +369,7 @@ describe("出字前的本地过筛", () => {
   });
 });
 
-/**
-  刀 1 的提问只到「问出去」为止：不写检查点、不认领续跑，下一句按新回合走。
-  要守的是三件事——只发一次调用、正文仍是三处同一份、`turn_asked` 能把「问出去」和「被挡下」分开数。
-*/
+/** 回合内提问只问出去：不写检查点、不认领续跑；`turn_asked` 分开数「问出去」与「被挡下」。 */
 describe("回合内向用户提问（问句即成品，点选项才接着算）", () => {
   it("问句就是本轮成品：一次调用、done 带候选与认领句柄、三处文本同一份、审计记 asked", async () => {
     fx.scripted = ['@@tool ask_user {"facet":"range","question":"这张图画哪一块？","options":["整仓","下单那条"]}'];
@@ -430,7 +408,7 @@ describe("回合内向用户提问（问句即成品，点选项才接着算）"
     const first = (await mapChat({ content: "画张架构图", threadId })).json() as { asked?: { toolCallId: string } };
     const before = fx.sentTools.length;
     await mapChat({ content: "那这个函数是入口吗", threadId });
-    // 这一句是新问题：等回答的那份快照不许被哈希那条路接走（接上了就是拿上一问的中间状态答这一问）
+    // 新问题不许接走等回答的那份快照
     expect(JSON.parse(fx.sentTools[before].raw).messages.filter((message: { role: string }) => message.role === "user")[0].content).toContain("那这个函数是入口吗");
     const discarded = fx.eventsOf("turn_asked").filter((event) => event.payload.outcome === "discarded");
     expect(discarded.map((event) => event.payload)).toEqual([{ scene: "map_chat", facet: null, outcome: "discarded", options: null, reason: "new_question", tool_call_id: first.asked?.toolCallId }]);
@@ -479,7 +457,7 @@ describe("回合内向用户提问（问句即成品，点选项才接着算）"
 
 describe("到限中断（只有宏观设计这一档会走到）", () => {
   it("到限中断：没有成品就不落正文，done 只带原因，轮数读数照记", async () => {
-    // 脚本用完后夹具会重复最后一条 ⇒ 模型每轮都要工具，10 轮到顶
+    // 脚本用完后夹具重复最后一条，每轮都要工具
     fx.scripted = ['@@tool search_code {"query":"zzz-不存在"}'];
     const threadId = await fx.newThread("map", "中断线程");
     const response = await mapChat({ content: "画张整仓的架构图", threadId });
@@ -492,11 +470,7 @@ describe("到限中断（只有宏观设计这一档会走到）", () => {
   });
 });
 
-/**
-  跨仓能力只在工具面上发生。要钉的是两件事：地址簿里有第二个仓时模型才看得见 `cross_repo_link` 与仓名，
-  只剩一个仓时工具清单不变——多给一个用不上的 schema 字段就是每轮多付 token，
-  还会诱使模型去猜一个不存在的对端仓。全程零 token（fetch 被 stub 到 127.0.0.1:9）。
-  */
+/** 跨仓只在工具面上发生：有第二个仓时才有 `cross_repo_link` 与仓名，只剩一个仓时工具清单不变。 */
 
 describe("跨仓工具面随地址簿变", () => {
   it("有第二个仓才给 cross_repo_link 与 repo 参数；没有时清单不变", async () => {
@@ -529,12 +503,9 @@ describe("跨仓工具面随地址簿变", () => {
   });
 });
 /**
-  源码出网清单（`code_egress`）。这条线只有打真路由才算验过，要同时证明三件事：
-  1. 装配里真放了源码的那次调用才计入审计，且一一对得上形态（锚点摘录 / 整文件切片 / 流程窗口 / 出题摘录）；
-  2. 行里有指纹而没有正文——审计线自己不能变成第二个泄露面（`.tutor/` 是随仓可带走的东西）；
-  3. 同一段代码在两次调用里各出一次门，就记两条，不合并成一条好看的数。
-  零 token：fetch 仍被 stub 到 127.0.0.1:9。
-  */
+  源码出网清单（`code_egress`）：装配里真放了源码的那次调用才计入，形态一一对得上。
+  行里有指纹而没有正文；同一段代码出两次门就记两条，不合并。
+*/
 
 describe("源码出网清单", () => {
   const egress = () => fx.eventsOf("code_egress");
@@ -553,7 +524,7 @@ describe("源码出网清单", () => {
       expect(String(row.payload.hash)).toMatch(/^[0-9a-f]{12}$/);
       expect(Number(row.payload.chars)).toBeGreaterThan(0);
       expect(row.sessionId).toBe(threadId);
-      // fixture 里锚点第 3 行的真实内容是 `// line 3`：出现在任何一行里都说明正文被抄进了审计线
+      // 锚点第 3 行的真实内容是 "// line 3"：出现在任何一行里都说明正文被抄进了审计线
       expect(JSON.stringify(row)).not.toContain("// line 3");
     }
     expect(sentFields(rows[0])).toEqual(["chars", "hash", "kind", "lines", "path", "scene"]);
@@ -580,18 +551,14 @@ describe("源码出网清单", () => {
     const scenes = new Set(rows.map((row) => row.payload.scene));
     // 教学回合只剩措辞那一趟调用
     expect([...scenes].sort()).toEqual(["teaching.turn"]);
-    // 真的带着那段摘录出门：不是只记了一条「本轮看过 src/main.ts」
+    // 摘录正文真的进了请求，不只是记了一条「本轮看过」
     for (const scene of scenes) expect(rows.filter((row) => row.payload.scene === scene).map((row) => row.payload.path)).toContain(MAIN_FILE);
     expect(rows.every((row) => row.sessionId === sessionId)).toBe(true);
     expect(rows.some((row) => JSON.stringify(row).includes("// line 3"))).toBe(false);
   });
 });
 
-/**
-  上面那两条出网用例依赖挂载中的产物不被换掉：本文件的密钥用例往仓里写过 `.env` 与 `credentials.json`，
-  这类写入若触发全量重分析，产物里的 `MAIN_FILE` 索引项会被真实扫描结果取代，出网装配就读不到摘录了。
-  口径：只有「可能改变收录集」的改动才触发重分析（收录判据见 indexer 的 isIngestedPath）。
-*/
+/** 出网用例依赖挂载中的产物不被换掉：往仓里写 `.env` 不该触发重分析。 */
 describe("LLM 工作日志的账面一致性", () => {
   it("每次 provider 调用追加一行，threadId 与本文件用过的线程全等，失败只允许是中止", async () => {
     await fx.verifyLlmLog({ expectAborted: true, scenes: ["map.chat", "practice.chat"] });

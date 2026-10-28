@@ -6,10 +6,7 @@ import { TutorDatabase } from "../../../outbound/persistence/database.js";
 import { buildDiagram, diagramId } from "@codebase-tutor/domain";
 import { applyStructure } from "../../../outbound/persistence/diagrams.js";
 
-/**
-  画图工作区：图库的建/改名/删/恢复、几何只写位置（不存版本、不广播、不审计）、结构一律归 agent 的 `set_diagram`。
-  界面对结构只能读，这一组用例钉的就是「界面发不出结构改动」。
- */
+/** 画图工作区：图库的建/改名/删/恢复、几何只写位置、结构归 agent 的 `set_diagram`。这组用例钉「界面发不出结构改动」。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -27,12 +24,12 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
     edges: [{ id: "e-1", from: "n-src", to: "n-doc", origin: "inferred" }]
   });
 
-  /** 从存储层种一张图（带第一版）：结构与名字都由 fixture 定，路由只负责被读。 */
+  /** 从存储层种一张图（带第一版）：结构与名字由 fixture 定。 */
   let seeded = 0;
   function seed(name: string, body: DiagramBody = fixtureBody()): Diagram {
     const database = new TutorDatabase(fx.repoDir);
     try {
-      // id 由调用方发（domain 的 buildDiagram 不要随机数）：这里按种图次序编号，读失败信息时也对得上
+      // id 由调用方发：这里按种图次序编号
       const draft = buildDiagram(fx.repositoryId, { id: diagramId(`route-fixture-${(seeded += 1)}`), name, source: "agent", body });
       return applyStructure(database, draft, draft.body, "fixture 初版");
     } finally {

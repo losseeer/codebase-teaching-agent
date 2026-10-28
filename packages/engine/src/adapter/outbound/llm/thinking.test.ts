@@ -78,7 +78,7 @@ describe("resolveThinkingCapability", () => {
       style: "deepseek",
       efforts: { off: "disabled", low: "low", high: "high", max: "max" }
     });
-    // 环境声明覆盖内置表（deepseek-v4 → openai 样式）
+    // 环境声明覆盖内置表
     expect(resolveThinkingCapability("deepseek-v4-flash").style).toBe("openai");
   });
 
@@ -102,15 +102,13 @@ describe("resolveThinkingCapability", () => {
   });
 
   it("isThinkingEffortSupported：off 对 none/unknown 恒可用，与 applyThinking 豁免一致", () => {
-    // unknown 模型：off 可用（= 不发字段），强度档不可用
     expect(isThinkingEffortSupported("mystery-model", "off")).toBe(true);
     expect(isThinkingEffortSupported("mystery-model", "low")).toBe(false);
     expect(isThinkingEffortSupported("mystery-model", "auto")).toBe(true);
-    // none 样式同款豁免；表内模型按 efforts 判定
     expect(isThinkingEffortSupported("deepseek-chat", "off")).toBe(true);
     expect(isThinkingEffortSupported("deepseek-chat", "high")).toBe(false);
     expect(isThinkingEffortSupported("deepseek-v4-flash", "max")).toBe(true);
-    // 关不掉思考的模型 off 仍然拒绝
+    // 关不掉思考的模型仍然拒绝 off
     expect(isThinkingEffortSupported("gpt-5", "off")).toBe(false);
     expect(isThinkingEffortSupported("kimi-k3", "off")).toBe(false);
   });

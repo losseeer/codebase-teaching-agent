@@ -5,8 +5,8 @@ import { performance as _perf } from "node:perf_hooks";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**
-  开机原语：读 `.env`、取版本号、记启动分段——只在进程起来时做一次，没有领域含义。
-  `T0`（imports 解析完的时刻）与 `tboot` 同处一文，装配层（`infrastructure/composition-root.ts`）才能也记分段。
+  开机原语：读 `.env`、取版本号、记启动分段。
+  `T0` 与 `tboot` 同处一文，装配层才能也记分段。
   */
 const T0 = _perf.now();
 
@@ -17,21 +17,20 @@ export function tboot(label: string): void {
   traceEngine("boot", { phase: label }, { traceId: null, durationMs });
 }
 
-/** engine version: 单源 = packages/engine/package.json. 读不到时回落到 0.0.0。 */
+/** engine 版本号单源 = packages/engine/package.json；读不到回落 0.0.0。 */
 export const engineVersion: string = (() => {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
     return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
   } catch (error) {
-    // 版本只用于 /api/health 的回显；读不到就报 0.0.0，但必须留一行原因，否则排障时会把一个装坏的包读成「引擎很旧」
+    // 版本只用于 /api/health 回显；读不到要留一行原因。
     console.warn(`[boot] 读不到 engine 的 package.json version，健康检查将回显 0.0.0：${String(error)}`);
     return "0.0.0";
   }
 })();
 /**
-  .env 解析，语义与 dotenv 一致：只填 process.env 里不存在的键，shell 显式 export 的值优先。
-  解析规则覆盖常规写法：`#` 注释、`export KEY=VALUE` 前缀、单/双引号包裹、
-  `=` 后空格、行尾 `#` 注释（仅对未加引号的值生效）。
+  .env 解析：只填 process.env 里不存在的键，shell 显式 export 的优先。
+  支持 `#` 注释、`export` 前缀、单双引号、行尾注释。
   */
 
 export function parseDotEnv(text: string): Record<string, string> {
@@ -50,10 +49,7 @@ export function parseDotEnv(text: string): Record<string, string> {
       value = value.slice(1, -1);
       if (quote === `"`) value = value.replace(/\\n/g, "\n").replace(/\\"/g, `"`).replace(/\\\\/g, "\\");
     } else {
-      /**
-        未加引号的值：`#` 起头 = 空值加说明（模板里的常见写法）；
-        截行尾注释只认 ` #`，那个空格要留着，否则 URL 的 `#fragment` 会被剪掉。
-      */
+      /** 未加引号的值：`#` 起头按空值；行尾注释只认 ` #`，否则会剪掉 URL 的 `#fragment`。 */
       if (value.startsWith("#")) value = "";
       else {
         const hash = value.indexOf(" #");
@@ -92,14 +88,14 @@ export function findDotEnvPath(): string | undefined {
   return walkUp(dirname(fileURLToPath(import.meta.url))) ?? walkUp(process.cwd());
 }
 
-/** 启动时调用一次：加载本工具项目根的 .env（不是被分析仓的；存在即加载，静默——配置文件缺失是常态而非错误）。 */
+/** 启动时调用一次：加载本项目根的 .env；文件不存在时静默。 */
 export function loadDotEnv(): void {
   const path = findDotEnvPath();
   if (!path) return;
   try {
     applyDotEnv(parseDotEnv(readFileSync(path, "utf8")));
   } catch (error) {
-    // 缺失走上面那句 `if (!path)`；文件读得到却解析不动必须出声，否则 TUTOR_LLM_*、来源闸、单价全按「没配置」生效，排查方向只剩猜
+    // 读得到却解析不动时必须出声：否则所有配置按未配置生效。
     console.warn(`[boot] .env 读到了却用不上，按未配置处理：path=${path} error=${String(error)}`);
   }
 }

@@ -5,8 +5,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
   练习题的入站翻译：出题、判分、按需讲评三条端点。
-  「要不要 provider、额度触顶怎么办、题型支不支持」这些判断在 `application/use-case/exercises.ts`；
-  这里只把失败种类翻成状态码——被拒的题给 422 并原样带出拒题理由，不拼本地模板话。
+  判断在 `application/use-case/exercises.ts`，这里只把失败种类翻成状态码。
   */
 const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply => {
   switch (failure.kind) {

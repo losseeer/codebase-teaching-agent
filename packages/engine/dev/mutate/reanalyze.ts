@@ -65,10 +65,7 @@ console.log(`升为主干 ${promoted.length} 个：${promoted.slice(0, 10).map((
 const demoted = index.files.filter((file) => newRoles.get(file.path) !== "core" && oldRoles.get(file.path) === "core").map((file) => file.path);
 console.log(`从主干落下 ${demoted.length} 个：${demoted.slice(0, 10).map((path) => path.split("/").pop()).join(" ")}`);
 
-/**
-  调用边的逐条差值：`calls:diff` 的参照是下界，判不了变量接收者这一类，
-  所以改判据时必须把「少了哪几条、多了哪几条」摊出来人眼看一遍，不能只看总数。
-*/
+/** 调用边的逐条差值：参照是下界，改判据时要把多出来和少掉的都摊开看。 */
 const pairOf = (edge: { callerPath: string; calleePath: string; calleeSymbol?: string }): string =>
   `${edge.callerPath} → ${edge.calleePath}${edge.calleeSymbol ? `#${edge.calleeSymbol.split(":").at(-2)}` : ""}`;
 const oldPairs = new Set(before.calls.map(pairOf));

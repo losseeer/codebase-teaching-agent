@@ -8,18 +8,15 @@ import { beginScopedStream, failScopedTurn, replayTypewriter } from "../stream.j
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-/**
-  教学会话的建立与回合（SSE）：判断在 `application/use-case/teaching.ts`，这一层只剩取形、
-  开火闸门、流的开与关，以及把失败种类翻成状态码与原来那句话。
-*/
+/** 教学会话的建立与回合（SSE）：取形、开火闸门、流的开与关、失败翻成状态码。 */
 export function registerTeachingRoutes(app: FastifyInstance): void {
-/** 建会话（会话即线程）：201 带首屏上下文、画像推荐与策略读数。 */
+/** 建会话（会话即线程），回 201。 */
 app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
   const created = createTeachingSession({
     repositoryId: request.body?.repositoryId,
     scopeRef: request.body?.scopeRef,
     settings: request.body?.settings,
-    // 老客户端把风格档位平铺在 body 根上：只有真是数字才算「显式填了」
+    // 兼容把 style 平铺在 body 根上的客户端：只认数字
     style: typeof request.body?.style === "number" ? request.body.style : undefined
   });
   if (!created.ok) return reject(reply, created.failure);
@@ -40,13 +37,12 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   });
   if (!prepared.ok) return reject(reply, prepared.failure);
   const { repository, session } = prepared.value;
-  // 教学侧的 sessionId 就是 chat_session 的线程 id，llm.log 直接沿用它做线程聚合
+  // 教学侧的 sessionId 即 chat_session 的线程 id
   markThread(session.id);
-  // 与 map/practice 同一条闸门：没配模型、或本月预算已达到上限就在开火前 422，这一域没有本地兜底那一档
+  // 与 map/practice 同一条闸门：开火前判预算与模型配置
   const gate = budgetGate(repository.handle);
   const provider = scopedChatProviderOr422(reply, repository.handle, gate);
   if (!provider) return reply;
-  // 与 map/practice 同款 SSE：过程提示与 delta 回放并入本请求的响应流
   const { send, turnHandle } = beginScopedStream(request, reply, "teach", request.body?.turnId);
   try {
     const outcome = await runTeachingTurn(prepared.value, provider, { send, ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) }, gate.monthlyBudgetUsd);
@@ -60,7 +56,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   reply.raw.end();
 });
 
-/** 失败种类 → 状态码与原来那句话，一字未改（逐种列全，少一种编译不过）。 */
+/** 失败种类 → 状态码与文案；逐种列全，少一种编译不过。 */
 function reject(reply: FastifyReply, failure: TeachingFailure): FastifyReply {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: failure.message, reason: failure.reason });

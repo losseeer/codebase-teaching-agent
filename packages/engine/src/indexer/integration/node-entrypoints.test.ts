@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
-import { isServedEntrypoint } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 const nodeFixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../../test-fixtures/nodedemo-repo");
@@ -18,8 +17,8 @@ describe("Node/TS 框架入口（Express / Fastify / Koa / Nest）", () => {
     expect(graph.entrypoints).toContainEqual({ path: "nestshop/orders/orders.controller.ts", line: 6, label: "HTTP 路由 (NestJS)" });
     // 启动语句缩在函数里也算证据：那行是真代码
     expect(graph.entrypoints).toContainEqual({ path: "legacy/serve.ts", line: 8, label: "HTTP 服务启动 (Express)" });
-    // 认出来的四条全是「外部会打到它」那一类：架构视图的 entry 档位与模块分级都靠这个判定
-    expect(graph.entrypoints.filter(isServedEntrypoint)).toHaveLength(4);
+    // 认出来的四条全是「外部会打到它」那一类
+    expect(graph.entrypoints.filter((item) => /HTTP|启动类/.test(item.label ?? ""))).toHaveLength(4);
     // 一个文件只留一条：`fastifyapp/server.ts` 既有路由又有 listen，不能变成两条入口
     expect(graph.entrypoints.filter((item) => item.path === "fastifyapp/server.ts")).toHaveLength(1);
   });

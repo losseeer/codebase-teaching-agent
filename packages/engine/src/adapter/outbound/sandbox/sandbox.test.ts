@@ -6,12 +6,8 @@ import { resolveToolchain, seatbeltProfile } from "./profile.js";
 import { homedir } from "node:os";
 
 /**
-  沙箱测试的重点不是「跑起来了」，而是恶意样本真被系统挡下、挡不下的时候整域禁用——
-  断言全部读真跑出来的 stdout，不接受「profile 看起来对」。
-  容器与受限 CI 里嵌套 `sandbox-exec` 起不来（`sandbox_apply: Operation not permitted`），
-  那种环境下集成用例自我跳过并点名「环境不支持」——跳过不等于通过，隔离证据只在能跑的机器上取。
-  不依赖真跑的那几条（文件名判据、profile 规则顺序、探测没过时整域拒）永远照跑，
-  其中「探测没过 ⇒ `runSandbox` 抛」正是受限环境里仍然成立的那半条安全保证。
+  沙箱测试读真跑出来的 stdout 断言，不接受「profile 看起来对」。
+  嵌套 `sandbox-exec` 起不来的环境里集成用例自我跳过并点名环境不支持；不依赖真跑的几条永远照跑。
 */
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[sandbox] 本机起不了嵌套 sandbox-exec（${capability.detail}）：集成用例按「环境不支持」跳过，这不是通过，是取不到证据`);
@@ -20,20 +16,14 @@ const requireSandbox = (ctx: TestContext): void => { if (!capability.usable) ctx
 describe("沙箱隔离探测", () => {
   let status: IsolationStatus;
 
-  // 每一项 canary 都要起真进程，整份测试只真跑一次，后面都读同一份结果
+  // canary 要起真进程，整份测试只真跑一次
   beforeAll(async () => { resetIsolationForTest(); status = await reprobeIsolation(); }, 180_000);
   afterEach(() => resetIsolationForTest());
 
-  /**
-    名单是「有哪几项」的读数，所以硬性约束顺序与个数：加一项减一项都要在这里显式改，
-    免得探测悄悄少跑一项而测试还绿着。（每项的真伪由下面几条分别读 stdout 断言，不看这里。）
-    这份名单只在探测真跑起来的机器上存在：`isolationBackend()` 判这台机器没有隔离后端时
-    探测直接短路返回零项（Linux CI 就是这种）。那是「一条 canary 都没跑」，不是跑完且全过——
-    先按有没有 canary 分档，再谈名单；拿零项去比 11 个名字，红的是环境，不是产品。
-    */
+  /** 名单的顺序与个数在这里钉住：增删一项都要显式改。 */
   it("逐项检查全过才算 enforced：三语言跑得起来、读家目录/仓/外连/fork 被拒、死循环与超量输出被兜住", (ctx) => {
     if (!status.checks.length) {
-      // 零项只允许出现在「根本没有后端」这一支，且必须判 unavailable 并说清原因（fail-closed 的另一种形态）
+      // 零项只出现在没有后端那一支，且必须判 unavailable
       expect(status.level, "一条 canary 都没跑却报出别的等级，就是凭空造证据").toBe("unavailable");
       expect(status.reason.length, "界面直接显示这句白话原因，不能空").toBeGreaterThan(0);
       console.warn(`[sandbox] 本机没有隔离后端（${status.reason}）：逐项证据取不到，跳过 ≠ 通过`);
@@ -43,11 +33,10 @@ describe("沙箱隔离探测", () => {
       "run-typescript", "run-python", "run-java",
       "read-home", "read-repo", "read-repo-via-symlink", "network", "fork", "timeout-kill", "output-cap", "memory-cap"
     ]);
-    // 这条等价律不分环境（零项那支已经在上面跳过）：判成 enforced 必须每一项都过，一项没过就必须判 unavailable
+    // 判成 enforced 必须每项都过；一项没过必须判 unavailable
     expect(status.level === "enforced", `级别与逐项读数不一致：${status.level} / 没过的是 ${status.checks.filter((check) => !check.passed).map((check) => check.name).join("、") || "无"}`).toBe(status.checks.every((check) => check.passed));
     if (!capability.usable) {
-      // 起不了嵌套 sandbox-exec 的 macOS，或被 `TUTOR_TEST_FORCE_UNSUPPORTED` 挡板的机器：结论只由等价律管，
-      // 这里不再断言「一定过」——但挡板不许漏进产品那半条仍然成立：探测真跑了 11 项，就是没被挡板短路
+      // 环境不支持的机器上结论只由上面那条等价律管，这里不再断言「一定过」
       ctx.skip();
     }
     expect(status.checks.filter((check) => !check.passed).map((check) => `${check.name}: ${check.detail}`)).toEqual([]);
@@ -61,12 +50,7 @@ describe("沙箱隔离探测", () => {
     expect(readHome?.detail).toContain("BLOCKED");
   });
 
-  /**
-    仓不一定在家目录里（`POST /imports` 收任意绝对路径），所以「读不到仓」不能靠家目录那份名单顺带盖住。
-    这两条的对照都拿一个家目录之外的临时目录当「装在 /opt 的仓」，里面有 `.tutor/tutor.db`（标准答案与 hidden 测试）。
-    断言 `control === "leaked"` 是这条用例的要点：沙箱外读不到就说明样本或目录本身有问题，
-    那时沙箱内的 "BLOCKED" 什么也没证明。
-    */
+  /** 对照组必须真读得到，否则沙箱内的 BLOCKED 不算证据。 */
   it("仓在家目录之外也读不到，经符号链接绕行也一样（对照组必须真读得到）", (ctx) => {
     requireSandbox(ctx);
     for (const name of ["read-repo", "read-repo-via-symlink"]) {

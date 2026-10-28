@@ -25,9 +25,7 @@ if (!repositoryPath) {
   process.exit(0);
 }
 
-// 开机顺序与 server.ts 一致：先 .env、再 GUI 存下来的运行时覆盖，缺这一步会把「探针没跑」报成「这台机器不能跑」。
-// 角色必须是 light，与练习路由拿到的那一份同一个（server.ts 的 `lightLlmProvider`）：
-// 不带角色的裸配置里 thinking 默认开着，max_tokens 会被 reasoning 吃光，探针量到的是另一套配置。
+// 开机顺序与 server.ts 一致；角色必须是 light，与练习路由拿到的同一份。
 loadDotEnv();
 restoreLlmRuntimeSettings();
 const provider = buildLlmRuntimeProvider("light");
@@ -59,8 +57,7 @@ console.log(`\n- 模型：${provider.modelVersion}｜候选单元 ${candidates.l
 const isolationProbe = await ensureIsolation();
 console.log(`- 隔离：${isolationProbe.level}（${isolationProbe.reason}）`);
 if (isolationProbe.level !== "enforced") {
-  // 与产品同一道闸门：`nextCode` 现在在发模型请求之前就拒。探针跟着它走，否则这里会白烧一次出题调用，
-  // 报出来的还是「沙箱不可用」——花钱的探针不能替产品撒谎。
+  // 与产品同一道闸门：`nextCode` 在发模型请求之前就拒，探针跟着它走。
   console.log("\n沙箱不可用，这一趟不发模型请求（零花费）。");
   process.exit(0);
 }
@@ -74,8 +71,7 @@ for (const run of generation.runs) {
 }
 if (!generation.ok) {
   console.log(`\n拒题（stage=${generation.stage}，${elapsed}ms）：${generation.reason}`);
-  // 这里不能 process.exit：调用已经发生，`call-log` 用的是异步 appendFile，立刻退出会把这一笔从 llm.log 里截掉。
-  // 通则：必须发生的收尾不能排在退出之后；前面的 exit 只因零调用才安全。
+  // 这里不能 process.exit：`call-log` 用异步 appendFile，立刻退出会截掉这一笔。
 } else {
 const proposal = generation.proposal;
 console.log(`\n两跑自证通过（${elapsed}ms）：${proposal.title}`);

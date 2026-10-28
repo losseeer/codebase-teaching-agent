@@ -54,9 +54,7 @@ const note = (reason: string): void => void skips.set(reason, (skips.get(reason)
 const allSymbols: SymbolInfo[] = [];
 const parsed = new Map<string, { content: string; symbols: SymbolInfo[] }>();
 
-// 两趟：先把全仓符号收齐，再逐文件算产物。符号现读现算（`extractSymbolsFromAst`），不取库里的
-// `analysis.graph.symbols`：那是上次导入时的行号，比今天的文件会造出一堆假「对不上」。
-// 落点反查必须拿整仓符号表，只给当前文件那一份几乎全都查不到声明——与产品同口径，读数才可比。
+// 符号现读现算：落点反查要拿整仓符号表。
 for (const file of index.files) {
   // 与产品同一道闸门：没有语法的文件（配置、样式、文档）不进产物层，
   // 把它们算进「没规则」那一栏会让两边对不上

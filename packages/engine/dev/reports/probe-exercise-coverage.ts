@@ -1,18 +1,7 @@
 /**
-  练习沙箱覆盖面探针（零 token、只读）：回答「改代码 / 写代码 + 沙箱跑测试」这类题现在能给几门语言出、
-  首发哪几门、要不要额外做转译。
-
-  判分要真跑代码，就得把「这个单元」连它能解析到的依赖一起写入沙箱：
-  一个文件的 import 若全部落在「标准库 ∪ 仓内文件」，挂只读快照 + 该语言的模块解析就够跑；
-  只要有一条落在外部包（npm / pip / Maven classpath），跑起来就变成「装依赖」，成本与失败面完全不是一个量级。
-  所以这里量的不是「语言支持得好不好」，而是不装东西能不能跑。
-
-  分档（自包含 / 仓内闭包 / 需外部包 / 判不准 / 需容器）是探针口径：现读文件正文把每条 import 说明符抽出来再分类。
-  引擎产物里只存「解析成功的仓内目标」，外部包 import 天生不可见，所以这一层必须自己抽；
-  它只用来定首发语言集，不进产品判据。
-
-  只读：DB 以 readOnly 打开，仓库文件只 readFileSync，不写任何产物。
-  用法：pnpm sandbox:coverage
+  练习沙箱覆盖面探针（零 token、只读）：沙箱不装外部依赖时能给几门语言出代码题。
+  import 全落在「标准库 ∪ 仓内文件」就能跑；有外部包就要装依赖。分档由探针自己抽 import 说明符，不进产品判据。
+  用法：`pnpm sandbox:coverage`
 */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
@@ -23,28 +12,17 @@ import { DatabaseSync } from "node:sqlite";
 import type { ImplementationUnit, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
 import { languageOfExtension } from "@codebase-tutor/domain";
 
-/** 单元上的语言标签（比界面用的 `SupportedLanguage` 少一档 vue/javascript，探针按这一份走，不自造第三套）。 */
+/** 单元上的语言标签；探针按这一份走。 */
 type UnitLanguage = SymbolInfo["language"];
 
-/**
-  `.vue` 在符号上没有专属标签，存量产物里一律记成 `other`：照 tag 分派会把整个 `<script>` 块的 import 抽成空表。
-  这里按扩展名回查共享能力表拿真实语言，其它情况照原 tag（`languageOfExtension` 只吃扩展名，所以在这里截尾段）。
-*/
+/** 单元的语言标签：`.vue` 在产物里记成 `other`，按扩展名回查共享能力表。 */
 function languageOfUnit(unit: ImplementationUnit): UnitLanguage | string {
   if (unit.symbol.language !== "other") return unit.symbol.language;
   const dot = unit.symbol.path.lastIndexOf(".");
   return dot >= 0 ? languageOfExtension(unit.symbol.path.slice(dot)) ?? "other" : "other";
 }
 
-/**
-  一个单元所在文件的 import 整体落在哪一档：
-  - `self-contained` 除标准库外不 import 任何东西 → 单文件进沙箱就能跑。
-  - `closure`        import 全在「标准库 ∪ 仓内文件」→ 快照 + 模块解析能跑。
-  - `external`       至少一条落在外部包 → 要装依赖才能跑。
-  - `unknown`        有分不出类的说明符且没有确认的外部包 → 探针判不准，不替它乐观。
-  另记两维：`callers`（图里有仓内调用方，出题时找得到真实用法）与 `container`
-  （所在文件有字段注入或挂在 IoC 容器上，离开容器实例化不出来）。
-*/
+/** import 落点分档：`self-contained` / `closure` / `external` / `unknown`（判不准不替它乐观）。 */
 type Tier = "self-contained" | "closure" | "external" | "unknown";
 type Verdict = "stdlib" | "in-repo" | "external" | "unknown";
 
@@ -66,7 +44,7 @@ function emptyRow(language: UnitLanguage): Row {
   return { language, units: 0, tiers: { "self-contained": 0, closure: 0, external: 0, unknown: 0 }, callers: 0, container: 0, kinds: {}, externalPackages: new Set() };
 }
 
-// ==== 仓内路径全集：一次目录扫描，供「说明符落点在不在仓里」用 ====
+// 仓内路径全集：一次目录扫描。
 
 function walkRepo(root: string): string[] {
   const out: string[] = [];
@@ -85,10 +63,7 @@ function walkRepo(root: string): string[] {
   return out;
 }
 
-/**
-  点号后缀全集：`src/main/java/com/x/y/Z.java` 产出 `com.x.y.Z`、`x.y.Z`、`y.Z`、`Z`。
-  Java 的全限定名与 Python 的点号模块名共用这一份目录推导。
-*/
+/** 点号后缀全集：Java 全限定名与 Python 点号模块名共用这一份目录推导。 */
 function dottedSuffixes(paths: string[]): Set<string> {
   const set = new Set<string>();
   for (const path of paths) {
@@ -102,7 +77,7 @@ function dottedSuffixes(paths: string[]): Set<string> {
   return set;
 }
 
-// ==== Python 标准库顶层名从本机解释器现取（手写清单一定会过期） ====
+// Python 标准库顶层名从本机解释器现取。
 
 function pythonStdlib(): Set<string> {
   const probe = spawnSync("python3", ["-c", "import sys,json;print(json.dumps(sorted(sys.stdlib_module_names)))"], { encoding: "utf8", timeout: 8_000 });
@@ -111,12 +86,12 @@ function pythonStdlib(): Set<string> {
 }
 
 const STDLIB_PY = pythonStdlib();
-/** javax 只有这几族在 JDK 内；servlet / validation / annotation 都要外部 jar，不能一概算标准库。 */
+/** javax 里只有这几族在 JDK 内。 */
 const JAVA_JAVAX_STDLIB = ["javax.swing", "javax.net", "javax.crypto", "javax.script", "javax.tools", "javax.imageio", "javax.sound", "javax.naming", "javax.sql", "javax.management"];
 const CPP_STD_HEADERS = new Set(["algorithm", "array", "atomic", "cassert", "chrono", "cmath", "condition_variable", "cstddef", "cstdint", "cstdio", "cstdlib", "cstring", "deque", "exception", "filesystem", "fstream", "functional", "future", "initializer_list", "iomanip", "iostream", "istream", "iterator", "limits", "list", "map", "memory", "mutex", "numeric", "optional", "ostream", "queue", "random", "ranges", "set", "shared_mutex", "span", "stack", "stdexcept", "string", "string_view", "thread", "tuple", "type_traits", "unordered_map", "unordered_set", "utility", "variant", "vector",
   "assert.h", "ctype.h", "errno.h", "math.h", "stdarg.h", "stdbool.h", "stddef.h", "stdint.h", "stdio.h", "stdlib.h", "string.h", "time.h", "unistd.h"]);
 
-// ==== import 说明符抽取：每语言一条规则，只问「正文写了什么」，不管引擎解析到哪 ====
+// import 说明符抽取：每语言一条规则，只看正文。
 
 const TS_PATTERNS = [
   /^\s*import\s+(?:type\s+)?(?:[^'"(]*?\sfrom\s+)?["']([^"']+)["']/gm,
@@ -158,7 +133,7 @@ function classify(language: string, specifier: string, filePath: string, fileSet
     fileSet.has(base) || extensions.some((extension) => fileSet.has(`${base}${extension}`)) || extensions.some((extension) => fileSet.has(`${base}/index${extension}`));
 
   if (language === "typescript" || language === "javascript" || language === "vue") {
-    // ESM 的 TS 源码按规矩写 `./foo.js`，磁盘上却是 `foo.ts`：不补这一手，相对导入会整批落进「判不准」。
+    // ESM 的 TS 源码写 `./foo.js`，磁盘上是 `foo.ts`。
     const asTypeScript = (base: string): string => base.replace(/\.(js|mjs|cjs|jsx)$/, "");
     if (specifier.startsWith(".")) {
       const base = asTypeScript(join(dirname(filePath), specifier));
@@ -205,10 +180,7 @@ function goModuleOf(root: string): string | undefined {
   return readFileSync(file, "utf8").match(/^module\s+(\S+)/m)?.[1];
 }
 
-/**
-  本机能不能起这门语言的解释器/编译器：覆盖率再高，工具链缺了就出不了题。
-  只跑 `--version`，不执行任何仓内代码。
-*/
+/** 本机工具链探测：只跑 `--version`，不执行仓内代码。 */
 const TOOLCHAIN: Record<string, { command: string; args: string[] }> = {
   typescript: { command: "node", args: ["--version"] },
   javascript: { command: "node", args: ["--version"] },
@@ -240,7 +212,7 @@ function tierOf(verdicts: Verdict[], specifierCount: number): Tier {
   return verdicts.includes("in-repo") ? "closure" : "self-contained";
 }
 
-// ==== 主流程 ====
+// 主流程。
 
 const registry = resolve(join(homedir(), ".codebase-tutor", "repositories.json"));
 const repositories: string[] = existsSync(registry) ? (JSON.parse(readFileSync(registry, "utf8")) as { repositories?: string[] }).repositories ?? [] : process.argv.slice(2);
@@ -275,10 +247,7 @@ for (const repositoryPath of repositories) {
     return text;
   };
 
-  /**
-    被调用侧的两种形态都收：`calleeSymbol` 在产物里存的是符号 id（`symbol:<path>:<name>:<line>`），
-    实现单元手上同时有 id 和 name；只按 name 拼键会整列判成 0。
-    */
+  /** 被调用侧同时收符号 id 与 name：只按 name 拼键会整列判成 0。 */
   const calleeIds = new Set<string>();
   const calleeNames = new Set<string>();
   for (const edge of analysis.graph.calls ?? []) {
@@ -308,7 +277,7 @@ for (const repositoryPath of repositories) {
   perRepo.push({ repository: label, reason: "", rows: [...rows.values()].sort((left, right) => right.units - left.units) });
 }
 
-// ==== 输出 ====
+// 输出。
 
 const percent = (part: number, whole: number): string => whole ? `${Math.round((part / whole) * 100)}%` : "—";
 

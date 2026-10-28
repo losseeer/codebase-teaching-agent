@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { configuredOrigins, isTrustedOrigin } from "./origins.js";
 
-/**
-  来源闸判据的测试。「默认只信哪两类」与「这是唯一的 Web 闸」写在 `origins.ts`，不在这里重述。
-  这里钉的是那条边界的两侧：没有 Origin 头的调用方与回环来源放行，其余一律不信——
-  含把回环名当前缀的 `localhost.evil.example` 这种写法。
-  */
+/** 来源闸的边界两侧：无 Origin 与回环来源放行，其余不信。 */
 
 describe("isTrustedOrigin", () => {
   it("没有 Origin 头就算本机调用方（curl、进程管理器、同源请求）", () => {
     expect(isTrustedOrigin(undefined, [])).toBe(true);
-    // 空值头（`Origin:` 后面什么都没有）浏览器发不出来，与本机 curl 同形：按「无来源」放行，不当成攻击面
+    // 空值头浏览器发不出来，与本机 curl 同形，按无来源放行
     expect(isTrustedOrigin("", [])).toBe(true);
   });
 

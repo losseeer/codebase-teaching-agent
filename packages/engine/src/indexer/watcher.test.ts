@@ -7,15 +7,9 @@ import { changeWanted, changedAfter, ingestSetDiffers, isArtifactEcho, Repositor
 import { listIngestedPaths } from "./indexer.js";
 
 /**
-  监听这一层的三条口径：
-  ① 起不来要如实交出死活，不能让界面一路报 fresh；
-  ② 自己写的产物不能叫醒自己（`.tutor` 恒定不回声，哪怕用户把 `.tutorignore` 写成放行 `.tutor`）；
-  ③ FSWatcher 必须有 error 监听——它是 EventEmitter，运行中报错而没人听会把整台引擎带走。
-
-  ⚠️ 测试口径：判据（`changeWanted`）用纯函数确定性测，真 fs 事件只留一条端到端兜底、
-  并且把等待窗口放到 10 秒——整包并行跑时几十路 `fs.watch` 同时投递，几秒等不到一个 change。
-  时序不能当判据的依据：代价大的规则必须每次都能被稳定测到。
-  */
+  监听这一层的三条口径：起不来要如实交出死活、产物不回声、FSWatcher 必须有 error 监听。
+  `changeWanted` 用纯函数确定性测；真 fs 事件只留一条端到端用例，等待窗口 10 秒。
+*/
 
 const temporaryDirectories: string[] = [];
 
@@ -23,8 +17,7 @@ function repository(extraIgnoreLines: string[] = []): string {
   const dir = mkdtempSync(join(tmpdir(), "tutor-watcher-"));
   temporaryDirectories.push(dir);
   mkdirSync(join(dir, "src"), { recursive: true });
-  // 只有测试要「用户自己写过一份」时才落那个文件：写了空文件就等于替引擎把默认播种取代了
-  // （默认那一份带 node_modules/ 与 .tutor/，正是第二条用例要读的东西）
+  // 只有需要用户自己写过一份时才落 `.tutorignore`：空文件会取代默认播种。
   if (extraIgnoreLines.length) writeFileSync(join(dir, ".tutorignore"), `${extraIgnoreLines.join("\n")}\n`, "utf8");
   writeFileSync(join(dir, "src/keep.ts"), "export const keep = 1;\n", "utf8");
   return dir;
@@ -35,7 +28,7 @@ afterEach(() => {
     try {
       chmodSync(dir, 0o755);
     } catch {
-      // 目录可能没建成
+      // 目录可能没建成。
     }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -54,9 +47,9 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
   it("用户显式放行 `.tutor/**` 时：索引层收它，监听层照样不回声", () => {
     const dir = repository(["!.tutor/**"]);
     const matcher = createTutorIgnoreMatcher(dir);
-    // 这一条是索引层的既有设计（ignore.test.ts 钉着），说明「放行」确实生效了
+    // 索引层确实放行了。
     expect(matcher.ignores(".tutor/tutor.db"), "前提：用户放行后匹配器认为产物该被索引").toBe(false);
-    // 但监听层不跟：自触发循环的代价是整仓反复重扫
+    // 监听层不跟。
     expect(changeWanted(".tutor/tutor.db", matcher)).toBe(false);
     expect(changeWanted(".tutor/journal.jsonl", matcher)).toBe(false);
     expect(changeWanted(".tutor", matcher)).toBe(false);
@@ -72,10 +65,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     expect(changeWanted("src/keep.ts", matcher)).toBe(true);
   });
 
-  /**
-    判据位：`file` 那一档按收录集筛——「非忽略、非产物」还不够，只有「可能改变收录集」的改动才叫醒。
-    否则往仓里放一张图片、一份 `.env` 都会排一整轮重分析：产物被真实扫描换掉、缓存键重算、润色可能重跑。
-    */
+  /** `file` 那一档按收录集筛：只有可能改变收录集的改动才叫醒。 */
   it("事件类型是 file 的那一支按收录集筛：非收录扩展名与密钥载体名都不算源码改动", () => {
     const dir = repository();
     const matcher = createTutorIgnoreMatcher(dir);
@@ -83,7 +73,7 @@ describe("RepositoryWatcher 的取舍判据（确定性）", () => {
     expect(changeWanted(".env", matcher, "file"), "`.env` 从来不在扩展名白名单里").toBe(false);
     expect(changeWanted("assets/logo.png", matcher, "file")).toBe(false);
     expect(changeWanted("credentials.json", matcher, "file"), "读层判它「不开放读取」，索引不收它，写入也就不该叫醒重分析").toBe(false);
-    // 目录与「判不出来」两档不能照这个筛：批量删除时系统常常只报父目录那一条
+    // 目录与「判不出来」两档不按收录集筛。
     expect(changeWanted("src", matcher, "directory")).toBe(true);
     expect(changeWanted("src/gone.md", matcher, "gone")).toBe(true);
     expect(changeWanted("node_modules", matcher, "directory"), "忽略目录整片不叫醒").toBe(false);
@@ -163,14 +153,12 @@ describe("RepositoryWatcher 的死活（起不来要交出状态、中途报错�
     const arrived = await waitFor(() => batches.flat().includes("src/keep.ts"), 20_000);
     watcher.close();
     if (!arrived) {
-      // 真 fs 事件在多路 vitest 并行时能迟到二十秒以上。这条只是兜底：判据本身由上面那组纯函数用例
-      // 确定性钉住，所以这里自我跳过并报一声，而不是留一条会自己红的测试。
+      // 真 fs 事件在并行负载下可能迟到很久：这条只作补充，判据由上面的纯函数用例覆盖。
       console.warn("[watcher] 20 秒内没收到真 fs 事件，端到端兜底跳过（判据见上一组纯函数用例）");
       ctx.skip();
     }
     expect(batches.flat().filter((path) => isArtifactEcho(path))).toEqual([]);
-    // ⚠️ 这条的超时必须大于上面 20 秒的等待：vitest 默认 5 秒会先把测试判红，
-    // 于是「慢就自跳过」这条路根本走不到。
+    // 超时必须大于上面 20 秒的等待，否则自跳过这条路走不到。
   }, 25_000);
 
   it("端到端：非收录文件的写入（含它顶一下的仓根目录 mtime）一路都不叫醒", async (ctx) => {

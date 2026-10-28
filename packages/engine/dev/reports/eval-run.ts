@@ -17,11 +17,8 @@ import type { TeachTurn } from "../../src/application/runtime/turn-invariants.js
 import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";
 
 /**
-  评测 runner：零 token 确定性判分。
-  全程只读：产物取自 <repo>/.tutor/tutor.db，索引/依赖图在本地重算，不碰引擎、不写任何文件。
-  LLM 真跑与表达质量裁判是另开的脚本。
-
-  用法：pnpm phaseB:eval [仓库路径]（默认取 repositories.json 里最近使用的那条）
+  评测 runner：零 token 确定性判分，全程只读。LLM 真跑与表达质量裁判是另开的脚本。
+  用法：`pnpm phaseB:eval [仓库路径]`
 */
 
 loadDotEnv();

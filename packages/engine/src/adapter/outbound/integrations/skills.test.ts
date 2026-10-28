@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { bundledSkillSource, installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills.js";
 
-/**
-  技能加载的回归：清单是每轮都进上下文的那一半，正文与附属文件是按需的那一半。
-  这里判的都是「装歪了要不要看得见」——静默跳过一份不合规的技能，等于用户以为自己装了。
-*/
+/** 技能加载回归：清单与正文两半；装歪的技能要带原因露出来。 */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-skills-")));
 const second = join(root, "second");
@@ -126,11 +123,7 @@ describe("取正文与附属文件", () => {
   });
 });
 
-/**
-  出厂预置技能的播种：把引擎包里的 `skills/` 复制到 `TUTOR_SKILLS_DIR` 第一处。
-  要拦的事故有两个方向——冲掉用户改过的那份，和把坏形状搬进用户目录（之后每轮多一条噪音，
-  且没人说得清是谁搬进来的）。两条各测一条，外加「源目录指得对」这条自证。
-*/
+/** 出厂预置技能播种：不覆盖同名、不搬坏形状。 */
 describe("出厂预置技能播种", () => {
   const seedRoot = join(root, "seed");
   const source = join(seedRoot, "src");
@@ -145,11 +138,11 @@ describe("出厂预置技能播种", () => {
     const seeded = installBundledSkills({ sourceDir: source, targetDir: target });
     expect(seeded.installed).toEqual(["tutor-cost-audit"]);
     expect(readFileSync(join(target, "tutor-cost-audit", "references", "lines.md"), "utf8")).toContain("两条账的落点");
-    // 坏形状连原因一起回，但没搬；顶层的 README.md 是文件，加载器本来就不看它
+    // 坏形状带原因返回，但不搬
     expect(seeded.skipped.map((entry) => entry.dir)).toEqual([expect.stringContaining("Broken_Name")]);
     expect(seeded.skipped[0].reason).toContain("name 不合规格");
     expect(existsSync(join(target, "Broken_Name"))).toBe(false);
-    // 装完就该被加载器认出来：播种与读取是同一套判据，不是两份规则
+    // 播种与读取用同一套判据
     expect(listSkills([target]).skills.map((entry) => entry.name)).toEqual(["tutor-cost-audit"]);
   });
 
@@ -170,7 +163,7 @@ describe("出厂预置技能播种", () => {
     expect(seeded.installed.sort()).toEqual([
       "diagram-architecture", "diagram-flow", "diagram-sequence", "exercise-code-concepts", "project-visualization", "teach-code-concepts"
     ]);
-    // 清单每轮都进上下文：这一句钉住「出厂技能不能写成解释性长文」
+    // 出厂技能的描述不能写成长文
     for (const skill of listSkills([join(seedRoot, "bundled-target")]).skills) {
       expect(skill.description.length, skill.name).toBeLessThan(300);
       expect(readSkill(skill.name, "SKILL.md", [join(seedRoot, "bundled-target")]), skill.name).toContain("证据");

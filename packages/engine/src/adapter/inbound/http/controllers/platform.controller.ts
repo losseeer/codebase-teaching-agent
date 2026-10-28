@@ -7,9 +7,8 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
-  引擎自己的运维面：地址簿、挂载与免打扰开关、外部能力面读数、健康与沙箱、事件流、导入任务、界面动作事件出口。
-  判断都在 `application/use-case/{repositories,integrations,health,journal-ingest}.ts`，这里只做三件事：
-  取形、把失败种类翻成状态码、以及唯一一条纯传输的 `/api/events`（开局、心跳、断开摘除都在 `adapter/inbound/http/stream.ts`）。
+  引擎运维面：地址簿、挂载与免打扰开关、外部能力面读数、健康与沙箱、事件流、导入任务、界面动作事件出口。
+  判断都在 `application/use-case/` 那一侧，这里只做取形、把失败种类翻成状态码，以及纯传输的 `/api/events`。
   */
 const rejectedRepo = (reply: FastifyReply, failure: RepositoryFailure): FastifyReply => {
   switch (failure.kind) {
@@ -43,8 +42,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
 
   app.delete<{ Params: { repositoryId: string }; Querystring: { artifacts?: string } }>("/api/repositories/:repositoryId", async (request) => forgetRepositoryUseCase(request.params.repositoryId, request.query.artifacts === "1"));
 
-  // 不必在这里再判一次「仓在不在」：URL 带 `:repositoryId` 的路由都由懒挂载钩子先把仓挂上，
-  // 地址簿里没有 / 目录没了 / 产物不全在那一步就已经 404
+  // URL 带 `:repositoryId` 的路由都由懒挂载钩子先挂上，失效在那一步已回 404
   app.post<{ Params: { repositoryId: string }; Body: { paused?: unknown; ttlMs?: unknown } }>("/api/repositories/:repositoryId/watch", async (request) => {
     const paused = request.body?.paused !== false;
     const ttlMs = typeof request.body?.ttlMs === "number" ? request.body.ttlMs : undefined;

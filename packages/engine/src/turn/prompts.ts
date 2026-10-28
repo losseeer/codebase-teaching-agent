@@ -2,33 +2,21 @@ import type { FadedState, TeachingPolicy } from "@codebase-tutor/domain";
 import { styleBand, validateStyle } from "@codebase-tutor/domain";
 
 /**
-  集中式 LLM 提示词构建器。所有需要「遵循语言风格」的对话提示词都从这里取，
-  保证 style → 风格指令的映射只有一处口径。风格是离散三档（GUI 三选一：通俗/普通/严肃，
-  值 100/50/0，learner 推荐同）；0~100 的其他取值按 shared 的 styleBand 阈值归到最近一档（≤33 严肃 / ≥67 通俗）。
-
-  - teachingSystemPrompt：代码教学对话（respondWithProvider 调用）
-  - overviewSystemPrompt：宏观设计对话（map 作用域，mapChat 调用）
-  - exerciseQaSystemPrompt：练习答疑对话（practice 作用域，practiceChat 调用）
-  三个作用域的作用域边界也都在这里定义（宏观设计只讲流程与结构、代码教学只讲实现、练习答疑只依据题面），
-  mapChat 与 practiceChat 不自带提示词副本。
+  集中式 LLM 提示词构建器：style → 风格指令的映射只有一处口径。
+  风格是三档（100/50/0），0~100 的其他取值按 shared 的 styleBand 归到最近一档。
+  三个作用域的提示词与作用域边界都在这里定义。
   */
 
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
   faded?: FadedState;
-  /** 上下文附带 read_file 工具时声明其用法与护栏（默认不声明，模型不会以为能自己读文件） */
+  /** 上下文附带 read_file 时声明其用法与护栏。 */
   readToolAvailable?: boolean;
-  /** 附带 search_code（词法定位文件）时声明「先搜后读」纪律；仅在 readToolAvailable 时有意义。 */
+  /** 附带 search_code 时声明「先搜后读」纪律；仅在 readToolAvailable 时有意义。 */
   searchToolAvailable?: boolean;
 }
 
-/**
-  三档语言风格指令：
-  - 通俗：允许并鼓励用类比、举例等手法把原理讲直观；
-  - 普通：中性准确（默认档）；
-  - 严肃：工程评审式专业严谨，明确不用类比。
-  两端各留一句「不要做什么」，防止通俗变油滑、严肃变啰嗦。
-  */
+/** 三档语言风格指令：通俗 / 普通（默认）/ 严肃。 */
 export function styleBrief(style: number): string {
   const band = styleBand(validateStyle(style));
   if (band === "plain") {
@@ -43,10 +31,7 @@ export function styleBrief(style: number): string {
   return "普通风格：准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。";
 }
 
-/**
-  代码问答作用域的 system prompt：证据只到上下文摘录与工具取回的内容，边界只讲实现。
-  教学法（policy.constraints）是用户设的风格档，由 `policyFor` 展开；`socratic` 档下模型仍会先要学习者说推理。
-*/
+/** 代码问答作用域的 system prompt：证据只到上下文摘录与工具取回的内容。 */
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
   const { policy, faded, readToolAvailable, searchToolAvailable } = input;
   return [
@@ -73,8 +58,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "",
     "【语言风格】",
     styleBrief(policy.level),
-    // 分母写真实上限（shared `FadedState` 的字面量联合：样例完整度 0|1|2、提示深度 0..3、通俗化 0|1|2）。
-    // 曾经统一写 /5，于是满档读数被模型看成「2/5 = 还差得远」，反过来少给讲解。
+    // 分母写真实上限：样例完整度 /2、提示深度 /3、通俗化 /2。
     ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
@@ -87,17 +71,13 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 }
 
 export interface OverviewPromptInput {
-  /** 语言风格档位（0~100，GUI 只出 100/50/0 三档）：宏观设计对话与代码教学共用，语义见 shared 的 styleBand。 */
+  /** 语言风格档位（0~100，GUI 只出三档）：宏观设计与代码教学共用。 */
   style: number;
-  /** 附带 search_code（词法定位文件）时声明「先搜后读」纪律（全景目录有截断，清单没有 ≠ 文件不存在）。 */
+  /** 附带 search_code 时声明「先搜后读」纪律。 */
   searchAvailable?: boolean;
 }
 
-/**
-  宏观设计对话（map 作用域）的 system prompt。
-  作用域边界（与 teachingSystemPrompt 互补）：这里只讲流程与逻辑、只点核心文件与核心函数，
-  实现细节留给代码教学；证据只来自注入的结构事实与 read_file 取回的内容。
-  */
+/** 宏观设计对话（map 作用域）的 system prompt：只讲流程与结构，实现细节留给代码教学。 */
 export function overviewSystemPrompt(input: OverviewPromptInput): string {
   return [
     "你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的宏观设计视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。",
@@ -127,14 +107,11 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
 }
 
 export interface ExerciseQaPromptInput {
-  /** 语言风格档位（0~100，GUI 只出 100/50/0 三档）：练习答疑与代码教学共用，语义见 shared 的 styleBand。 */
+  /** 语言风格档位（0~100，GUI 只出三档）：练习答疑与代码教学共用。 */
   style: number;
 }
 
-/**
-  练习答疑对话（practice 作用域）的 system prompt。
-  判分标准与标准答案不进入上下文（防泄题），所以提示词里不能声称知道答案，也不评价选项对错。
-  */
+/** 练习答疑对话（practice 作用域）的 system prompt：判分标准与标准答案不进入上下文。 */
 export function exerciseQaSystemPrompt(input: ExerciseQaPromptInput): string {
   return [
     "你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。",

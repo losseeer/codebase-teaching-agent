@@ -8,15 +8,9 @@ import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import { LATEST_SUMMARY_LIMIT } from "../../src/adapter/outbound/persistence/summary-repository.js";
 
 /**
-  在线聚合脚本（零 LLM、纯只读）：产出指标集里「可算」项与验收读数的基线报告（markdown 到 stdout）。
-
-  口径纪律：
-  - 缺字段一律落「未记」，不得用默认值兜底——「没记」伪装成 0 会把口径问题读成产品结论；
-  - 数据源缺失（引擎离线、表为空）的指标输出「未执行 + 原因」，而不是空数字；
-  - 锚点有效率/解析覆盖率走只读 GET（引擎在线时）；token 账单以 llm.log 为调用层真源、
-    journal token_usage 为产品账本，两栏并列不混算。
-
-  用法：pnpm phase0:metrics   （TUTOR_METRICS_ENGINE 可改引擎地址；不可达时相关项自动「未执行」）
+  在线聚合脚本（零 LLM、只读）：产出指标集里可算项的基线报告（markdown 到 stdout）。
+  缺字段一律落「未记」；数据源缺失输出「未执行 + 原因」，不用默认值补。
+  用法：`pnpm phase0:metrics`（`TUTOR_METRICS_ENGINE` 可改引擎地址）
 */
 
 const tutorHome = join(homedir(), ".codebase-tutor");
@@ -168,8 +162,6 @@ for (const repo of perRepo) {
     if (asked) emit(`- 提问之后：认领 ${outcome("claimed").length}／作废 ${outcome("discarded").length}（${causes}）｜转化率 ${pct(outcome("claimed").length, asked)}`);
   }
 
-  // 退役那三档（hint_depth / action_veto / unit_mastered）不再计数：这里报的是「当前还在产的事件」，
-  // 历史存量要单看某一条回合，走 run-trace。
   emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);
 
   // 练习链路：送达(exercise_generated)→提交(exercise_submitted, UI 侧)→判分通过(exercise_result)；断在哪一步看拒绝的阶段分布
@@ -189,7 +181,7 @@ for (const repo of perRepo) {
       */
     const unlabelled = declined.filter((event) => typeof event.payload.family !== "string").length;
     const byFamily = ["comprehension", "code", "llm"].map((family) => `${family} ${count(declined, "family", family)}`).join("、") + `、未标族别 ${unlabelled}`;
-    // 沙箱真跑了几趟（自证两趟 + 每次判分一趟）：这是「判分确实执行过代码」的证据
+    /** 同一档可能出自两族：按族拆开列；旧行没有 `family` 键时单列「未标族别」。 */
     const runs = of("exercise_run");
     const runOutcome = ["accepted", "passed", "failed", "no-verdict"].map((outcome) => `${outcome} ${count(runs, "outcome", outcome)}`).join("、");
     emit(`- 沙箱运行：${runs.length} 趟（自证 ${count(runs, "stage", "validate-proposal")}、判分 ${count(runs, "stage", "grade")}）；结论 ${runOutcome}；超时 ${runs.filter((event) => event.payload.timed_out === true).length}、没印 TESTS 结论 ${runs.filter((event) => event.payload.verdict_passed === null).length}`);
@@ -220,6 +212,5 @@ for (const repo of perRepo) {
 
 emit();
 emit("## 5. 明确「未测」的项（口径已定、数据源未埋，逐条对应待办）");
-emit("- 每教会一个节点的平均成本：分母 `unit_mastered` 现在没有产出方（问答回合不再经过教学状态机）→ 这条指标没有口径；要问「一次问答多少成本」看第 2 节的 teach 场景行；");
 emit();
 console.log(out.join("\n"));

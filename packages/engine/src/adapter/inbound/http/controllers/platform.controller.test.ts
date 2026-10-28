@@ -7,10 +7,7 @@ import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-
 import { isolationBackend } from "../../../outbound/sandbox/profile.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
 
-/**
-  引擎自己的面：界面动作事件出口的形状守卫、来源闸（不可信 Origin 一行 handler 都不许跑）、
-  编辑期免打扰开关、沙箱重探，以及「非收录文件的写入不该换掉挂载中的产物」。夹具与假 provider 见 `route-test-kit.ts`。
- */
+/** 引擎运维面用例：动作事件出口的形状守卫、来源闸、免打扰开关、沙箱重探，以及非收录文件写入不该换掉挂载产物。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -33,10 +30,7 @@ describe("POST /journal 的入参守卫", () => {
     expect(fx.eventsOf("file_opened").length).toBe(before);
   });
 
-  /**
-    审计线不能由被审计的一方填：这条接口本机任何进程都调得到，
-    按「全部事件类型」放行就能伪造一行 `code_egress`（哪些代码出过门）或 `token_usage`（花了多少钱）。
-    */
+  /** 被审计的一方不能从这条接口写引擎侧事件类型。 */
   it("引擎侧类型从这条接口写不进来：400 且区分「越权」与「未知」", async () => {
     for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted", "repository_paired"]) {
       const before = fx.eventsOf(type).length;
@@ -68,20 +62,13 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
     const analysis = database.state.analysis(fx.repositoryId);
     database.close();
     expect(analysis, "产物读不出来就没法比对").toBeDefined();
-    // 重分析一跑，versionStamp 就从「手工造的 content:fixture」翻成真实内容哈希，锚点同时消失
+    // 重分析会把 versionStamp 换成真实内容哈希
     expect(analysis!.versionStamp, `非收录文件的写入不该触发重分析；这轮被 ${JSON.stringify(analysis!.lastIncrementalUpdate?.changedPaths ?? null)} 叫醒`).toBe("content:fixture");
     expect(analysis!.graph.symbols.map((symbol) => symbol.path), "符号表不该被换成真实扫描的空结果").toContain(MAIN_FILE);
   });
 });
 
-/**
-  来源闸。CORS 若反射任意来源，只听 127.0.0.1 也挡不住：浏览器里任意网页都能把请求打到这个地址，
-  发请求不需要跨域权限，只有读响应才需要。它是唯一的 Web 闸，只管「哪个页面能碰这台引擎」，
-  不管「本机哪个进程能碰」。
-
-  这一组用例把三件事分开钉住：① 非可信来源被拒在执行之前（不只是不给 CORS 头）；
-  ② 回环来源与不带 Origin 的本机调用方照常能用；③ 放宽只有一个口子（TUTOR_ALLOWED_ORIGINS）。
-*/
+/** 来源闸：非可信来源被拒在执行之前；回环与不带 Origin 的本机调用照常；放宽只有 `TUTOR_ALLOWED_ORIGINS` 一个口子。 */
 
 describe("来源闸：默认只服务本机浏览器", () => {
   const EVIL = "http://evil.example";
@@ -113,8 +100,7 @@ describe("来源闸：默认只服务本机浏览器", () => {
   });
 
   it("连 /api/health 也不白给：这道闸免的是「不带 Origin 的本机调用」，不是「任意网页」", async () => {
-    // 健康读数里有服务商、模型名、沙箱闸门状态，不该让任意网页白拿；
-    // 进程管理器与本机 curl 不带 Origin，照样走得通
+    // 健康读数含服务商、模型名与沙箱状态，不给任意网页
     const refused = await fromEvil("GET", "/api/health");
     expect(refused.statusCode).toBe(403);
     expect(refused.payload).not.toContain("fixture-model");
@@ -134,7 +120,7 @@ describe("来源闸：默认只服务本机浏览器", () => {
     try {
       expect((await fromEvil("GET", "/api/repositories")).statusCode).toBe(200);
       expect((await fx.app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "https://tutor.corp.dev:8443" } })).statusCode).toBe(200);
-      // 端口是来源的一部分：清单里那条带 8443，不带端口的同一个主机名不算命中（别把精确匹配读成前缀匹配）
+      // 端口是来源的一部分：精确匹配不是前缀匹配
       expect((await fx.app.inject({ method: "GET", url: "/api/repositories", headers: { origin: "https://tutor.corp.dev" } })).statusCode).toBe(403);
       expect((await fx.app.inject({ method: "GET", url: "/api/repositories", headers: { origin: `${EVIL}.evil.example` } })).statusCode).toBe(403);
     } finally {
@@ -144,14 +130,11 @@ describe("来源闸：默认只服务本机浏览器", () => {
   });
 });
 
-/**
-  两个控制口的路由级验收：挂起监听（改仓期间不要重分析）与沙箱重探（修好环境后不必重启进程）。
-  两条都不花钱：前者不触发任何调用，后者打的是探测进程自己起的回环监听。
-  */
+/** 挂起监听与沙箱重探两条路由：都不发模型请求。 */
 
 describe("编辑期免打扰与沙箱重探", () => {
   afterEach(() => {
-    // 挂起态不能留给后面的用例：它会让这个仓的增量监听在别的用例里静默缺席
+    // 挂起态不留给后面的用例
     fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/watch`, payload: { paused: false } });
   });
 
@@ -180,13 +163,7 @@ describe("编辑期免打扰与沙箱重探", () => {
     expect((missing.json() as { reason?: string }).reason, "这条路由不重复实现「仓在不在」的判断，口径与其余带 :fx.repositoryId 的路由同一处").toBe("not_in_catalog");
   });
 
-  /**
-    断言与环境无关：能判的都要判准，但「判成什么」允许随环境变——能跑嵌套 `sandbox-exec` 的机器上是
-    enforced，受限 CI 上是 unavailable，两者都是合法读数（环境不支持不能报成通过）。
-    与环境无关的是形状：等级、白话原因、时间戳、逐项布尔。逐项 canary 只在这台机器有隔离后端时才存在，
-    `isolationBackend()` 判没有时探测直接短路，那种读数是「零项 + unavailable + 一句原因」。
-    超时给到 30 秒：这一发要起十来个沙箱子进程，本身 2.7~4.5 秒，全量并行时会超出默认时限。
-    */
+  /** 形状固定、等级允许随环境变；重探要起十来个沙箱子进程，超时给到 30 秒。 */
   it("POST /api/sandbox/reprobe 返回重新探测的读数，字段形状与开机那份一致", async () => {
     const response = await fx.app.inject({ method: "POST", url: "/api/sandbox/reprobe" });
     expect(response.statusCode).toBe(200);
@@ -196,13 +173,13 @@ describe("编辑期免打扰与沙箱重探", () => {
     if (isolationBackend().available) {
       expect(body.sandbox.checks.length, "有后端的机器上一次重探必须给出逐项 canary，而不是一个总判断").toBeGreaterThan(3);
     } else {
-      // 没有后端却报出 canary，那是编的；报了 enforced 更是要命（整域禁用的闸门被绕过）
+      // 没有后端就不该有 canary
       expect(body.sandbox.checks, "零 canary 才是这台机器的实话").toEqual([]);
       expect(body.sandbox.level).toBe("unavailable");
     }
     expect(body.sandbox.checks.every((check) => typeof check.passed === "boolean")).toBe(true);
     expect(new Date(body.sandbox.probedAt).getTime()).toBeGreaterThanOrEqual(Date.now() - 60_000);
-    // 与开机那份同源：/api/health 的 sandbox 必须已经是重探之后的读数
+    // /api/health 的 sandbox 必须是重探之后的读数
     const health = (await fx.app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
     expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
   }, 30_000);

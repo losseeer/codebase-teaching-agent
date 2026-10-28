@@ -13,22 +13,18 @@ import { readJournal } from "../../outbound/persistence/journal.js";
 import { readMessages } from "../../outbound/persistence/chat-store.js";
 
 /**
-  路由级测试的共用夹具。它管四件事：一份行号可预期的临时仓与地址簿、假 provider、
-  journal/chat_message 的读回口径，以及「每一次 provider 调用都带得上线程」这条账面核对。
-  产品数据一条都不碰：注册表、llm.log、llm-settings 全指到本夹具自己的临时目录，
-  而且必须早于 import server（provider 在构造时就把 fetch 绑成了实例字段）。
-
-  零 token：服务商指向 127.0.0.1:9（打不到的端口），一切正文由 `scripted` 给定。
-  每个用例文件各拿一个实例——`process.env`、`sentTools`、`usedThreads` 都不跨文件串。
-  */
+  路由级测试的共用夹具：临时仓与地址簿、假 provider、journal/chat_message 读回、线程账面核对。
+  产品数据全部指到夹具自己的临时目录，且必须早于 import server。
+  零 token：服务商端口不可达，正文由 `scripted` 给定；每个用例文件各一个实例。
+*/
 
 export const MAIN_FILE = "src/main.ts";
-/** 引用核得上时的默认正文：带问句、带真引用、带长标识符，三条不变量都能过。 */
+/** 引用核得上时的默认正文：带问句、带真引用、带长标识符。 */
 export const OK_REPLY = `先看 ${MAIN_FILE}:3 的 registerOrder，你觉得哪一步会先执行？`;
-/** 尾注里独有的词（文案全文住在 application/runtime/turn-invariants.ts，这里只判「有没有出现」） */
+/** 尾注里独有的词，只判有没有出现。 */
 export const TAIL = "未能核实";
 
-/** 轮询到条件成立；到点不成就带着「在等什么」失败。 */
+/** 轮询到条件成立；超时则带着「在等什么」失败。 */
 export async function waitFor(predicate: () => boolean, why: string, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -58,21 +54,21 @@ const TURN_SCENES = new Set(["map.chat", "practice.chat", "teaching.turn"]);
 export interface RouteFixture {
   readonly root: string;
   readonly repoDir: string;
-  /** 仓与地址簿建好之后才 import server；没挂上就用 = 用例当场红。 */
+  /** 仓与地址簿建好之后才 import server。 */
   app: FastifyInstance;
   repositoryId: string;
   exerciseId: string;
-  /** 假 provider 的脚本：每次非决策调用 shift 一条。绝不回空正文——重试层会把空 content 当失败重发，脚本会整体串位。 */
+  /** 假 provider 的脚本：每次非决策调用 shift 一条；不回空正文。 */
   scripted: string[];
   /** 脚本用完之后反复回的那一条。 */
   spoken: string;
-  /** 让假 provider 在途一会儿：「停止生成」的用例得赶在 LLM 返回之前打进 `/api/turns/stop`。 */
+  /** 让假 provider 在途一会儿。 */
   holdMs: number;
-  /** 在本回合第 N 趟请求返回之前替用户点停止。计数只认带 `marker`（这一回合的问题原文）的请求——全局调用序号会被别处多发的一发挪走。 */
+  /** 在本回合第 N 趟请求返回前替用户点停止；计数只认带 `marker` 的请求。 */
   stopInside: { turnId: string; marker: string; atCall: number; seen: number } | undefined;
-  /** 每次请求实际带上的工具清单（跨仓那档要验的是它随不随地址簿变长）。 */
+  /** 每次请求实际带上的工具清单。 */
   readonly sentTools: { names: string[]; raw: string }[];
-  /** 本文件真正用过的线程 id（teach 的 sessionId 也算线程）：与 llm.log 里的 threadId 集合做全等比对。 */
+  /** 本文件用过的线程 id，与 llm.log 的 threadId 集合做全等比对。 */
   readonly usedThreads: Set<string>;
   readonly echoServerFixture: string;
   fetchCalls(): number;
@@ -117,13 +113,13 @@ export function createRouteFixture(): RouteFixture {
   async function fakeFetch(_url: unknown, init?: { body?: string; signal?: AbortSignal }): Promise<Response> {
     fetchCalls += 1;
     const raw = String(init?.body ?? "{}");
-    // 先登记再在途：这一行代表「请求已经发出去了」，用例靠它判断自己该在什么时刻打停止
+    // 先登记再在途
     try {
       const parsed = JSON.parse(raw) as { tools?: { function?: { name?: string } }[] };
       fx.sentTools.push({ names: (parsed.tools ?? []).map((tool) => tool.function?.name ?? "").filter(Boolean), raw });
     } catch { /* 非 JSON 的请求体不进这份清单 */ }
     if (fx.holdMs) {
-      // 真在途、真被 signal 打断：provider 会把它归因成 LlmAbortedError，于是测得到「异常携带」那半条补账路径
+      // 在途可被 signal 打断
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, fx.holdMs);
         init?.signal?.addEventListener("abort", () => {
@@ -137,7 +133,7 @@ export function createRouteFixture(): RouteFixture {
       expect(stopped.json()).toMatchObject({ stopped: true });
     }
     const text = replyFor();
-    // `@@tool 工具名 {json}` 这种脚本前缀让假 provider 回一次工具调用：副作用工具实际被拒的是什么，从此能端到端验
+    // 脚本前缀 `@@tool 工具名 {json}` 让假 provider 回一次工具调用
     const call = /^@@tool (\S+) (.*)$/s.exec(text);
     const payload = {
       choices: [{ message: call ? { content: "", tool_calls: [{ id: `call_${fetchCalls}`, type: "function", function: { name: call[1], arguments: call[2] } }] } : { content: text }, finish_reason: call ? "tool_calls" : "stop" }],
@@ -150,7 +146,7 @@ export function createRouteFixture(): RouteFixture {
   fx.requestsOf = (marker: string) => fx.sentTools.filter((entry) => entry.raw.includes(marker)).length;
 
   fx.mount = async () => {
-    // 临时仓：一个文件、一行一条注释，行号可预期（src/main.ts:3 判「在范围内」）
+    // 临时仓：一个文件、一行一条注释，行号可预期
     mkdirSync(join(repoDir, "src"), { recursive: true });
     fx.repositoryId = deriveRepositoryId(repoDir);
     const source = Array.from({ length: 20 }, (_unused, index) => `// line ${index + 1}`).join("\n");
@@ -177,7 +173,7 @@ export function createRouteFixture(): RouteFixture {
     database.state.saveIndex(index);
     database.state.saveEstimate(fx.repositoryId, estimate);
     database.state.saveAnalysis(analysis);
-    // 练习答疑要求题目在缓存里（题面由 fixture 给定，不走出题路径）
+    // 练习答疑要求题目在缓存里
     fx.exerciseId = "ex-fixture";
     database.exercises.put(fx.repositoryId, "content:fixture", "impact_analysis", "unit-1", {
       exercise: {
@@ -188,7 +184,7 @@ export function createRouteFixture(): RouteFixture {
     });
     database.close();
 
-    // 引擎的产品数据落点全部改指临时目录（各自的 env 注释见对应模块）
+    // 引擎的产品数据落点全部改指临时目录
     process.env.TUTOR_REGISTRY_FILE = join(root, "registry.json");
     writeFileSync(process.env.TUTOR_REGISTRY_FILE, `${JSON.stringify({ repositories: [repoDir] }, null, 2)}\n`, "utf8");
     process.env.TUTOR_LLM_SETTINGS_FILE = join(root, "llm-settings.json");
@@ -196,7 +192,7 @@ export function createRouteFixture(): RouteFixture {
     process.env.TUTOR_LLM_LOG = join(root, "llm.log");
     process.env.TUTOR_ENGINE_LOG = "off";
 
-    // 必须早于 import server（理由见本文件开头的夹具说明）
+    // 必须早于 import server
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
     ({ app: fx.app } = await import("../../../server.js"));
   };
@@ -241,15 +237,14 @@ export function createRouteFixture(): RouteFixture {
     await flushLlmLog();
     const lines = readFileSync(join(root, "llm.log"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(lines.length).toBe(fetchCalls);
-    // 问答回合每个回合只发一趟措辞调用，没有别的教学档
+    // 问答回合不发教学档调用
     expect(new Set(lines.map((line) => line.scene))).not.toContain("teaching.action");
     for (const scene of options.scenes ?? []) expect(lines.map((line) => line.scene), `llm.log 里少了 ${scene} 这一档`).toContain(scene);
-    // 中止的用例会把请求真打断（provider 收 AbortError），那是唯一允许的 fail 行；其余任何失败都是回归
+    // 唯一允许的失败行是中止；其余都算回归
     const failed = lines.filter((line) => line.ok !== true);
     if (options.expectAborted) expect(failed.length, "中止用例应该各留下一行 fail（一行都没有就是那条用例空转了）").toBeGreaterThan(0);
     expect(failed.every((line) => String(line.error).includes("已被中止")), `llm.log 里出现了非中止的失败：${JSON.stringify(failed.map((line) => line.error))}`).toBe(true);
-    // 回合那一档的线程集合 == 本文件真正问过的线程集合；
-    // 只筛这三档，是因为分析类调用（摘要等）本来就不属于任何会话线程
+    // 只筛这三档：分析类调用不属于会话线程
     const turnLines = lines.filter((line) => TURN_SCENES.has(String(line.scene)));
     expect(new Set(turnLines.map((line) => line.threadId))).toEqual(fx.usedThreads);
     expect(turnLines.every((line) => typeof line.threadId === "string" && line.threadId.length > 0), "有回合调用没带 threadId：前缀缓存按线程算间隔就读不到").toBe(true);

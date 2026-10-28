@@ -23,12 +23,7 @@ import { analyzeFileTypes } from "@codebase-tutor/analysis";
 import { analyzeFileRegistry, registryEligible } from "@codebase-tutor/analysis";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
-/**
-  静态产物层的总装：一个文件解析一次，产出所有类别的读数。
-  语法树解析是全仓最贵的一步，各产物又要靠同一份块 id 对齐，所以合在同一趟里算。
-  产物确定性重算，不进 `analysis_json`、不进 `backendStamp`、不参与缓存键。
-  源码在这里再读一次：图那边读完就丢了内容。
-*/
+/** 静态产物层的总装：一个文件解析一次，各类别读数在同一趟里算，产物确定性重算。 */
 export interface FileFactRow {
   kind: FactKind;
   path: string;

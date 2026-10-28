@@ -6,31 +6,18 @@ import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbo
 import type { LlmTool } from "../application/port/llm-provider.js";
 
 /**
-  read_file 工具（宏观设计 map 与教学 teaching 两个作用域共用）：让模型按需拉取源码，
-  补足「结构全景/调用邻接 + 锚点摘录」之外的深度。练习答疑作用域不提供该工具——
-  它会绕过「判分答案与锚点不进上下文」的防泄题约束。
-
-  护栏（全部强制，非可选项）：
-  1. 路径必须落在仓库内，绝对路径与穿越一律拒绝，链接目标再按 realpath 复核一次；
-  2. 拒读名单：环境变量文件（模板类除外）、密钥与凭据载体、.git / node_modules / .tutor 目录、二进制后缀；
-  3. 单次窗口上限（行数与字符数），字符数是真正的闸：超预算就少给整行，首行写实得区间与续读 offset；
-  4. 一切拒绝与失败都以文本结果返回给模型（可自行改参数重试），不抛异常中断对话。
-
-  ⚠️ 名单按文件名判定，挡得住「.env / 私钥文件」这类约定位置，挡不住把口令写进配置正文的情况——
-  那是内容判定，不在本模块职责内。
+  read_file 工具：宏观设计与教学两个作用域共用，练习答疑不提供。
+  三关强制：仓内路径（含 realpath 复核）、拒读名单、单次窗口预算。
+  拒绝与失败都以文本结果返回给模型，不抛异常。
   */
 
-/*
-  单次读取的预算从上下文窗口按份额派生（`llm/context-window.ts` 是唯一真源），这里不再手填字符数。
-  `MAX_FILE_BYTES` 是进程级安全阀，与上下文预算无关：它挡的是「一次 readFileSync 把内存打死」，
-  所以窗口调到多大它都不跟着长。
-*/
+/* 单次读取的字符与行预算由上下文窗口份额派生；`MAX_FILE_BYTES` 是进程级安全阀，不随窗口变。 */
 export const MAX_FILE_BYTES = 2_000_000;
 
 const DENIED_DIRECTORIES = new Set([".git", "node_modules", ".tutor"]);
-/** 模板类 env 文件只列键名、不含密钥，而且是理解配置的入口 → 放行。 */
+/** 模板类 env 文件只列键名，放行。 */
 const ENV_TEMPLATE_SUFFIXES = [".example", ".sample", ".template", ".dist"];
-/** 这些载体要么没扩展名、要么扩展名太通用，只能按文件名挡：全小写比较。 */
+/** 按文件名挡的凭据载体：全小写比较。 */
 const DENIED_BASENAMES = new Set([
   // OpenSSH 私钥默认无扩展名
   "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
@@ -62,30 +49,27 @@ export const READ_FILE_TOOL: LlmTool = {
   }
 };
 
-/** read_file 审计记录（无论成败；由调用方逐条记 journal file_read）。 */
+/** read_file 审计记录，无论成败。 */
 export interface FileReadRecord {
   path: string;
   /** 本次实际返回的行数，不是请求的行数。 */
   lines?: number;
-  /** 本次返回里被隐去的密钥形态命中数（0 = 扫过且干净）；只记数量，原文不进任何日志。 */
+  /** 本次返回里被隐去的密钥命中数；只记数量。 */
   masked?: number;
-  /** 请求的行没给全（被字符预算截住，或某一行本身就超预算被切）。首行说明实得区间与续读 offset。 */
+  /** 请求的行没给全；首行说明实得区间与续读 offset。 */
   truncated: boolean;
   denied: boolean;
   error?: string;
 }
 
 export interface ReadFileOutcome {
-  /** 直接回送入模型的内容（成功=带行号摘录，失败=拒绝/错误说明）。 */
+  /** 回送入模型的内容：成功为带行号摘录，失败为拒绝说明。 */
   content: string;
-  /** 审计信息；拒绝与失败时 path 仍尽量记录原始请求值。 */
+  /** 审计信息；拒绝与失败时 path 记原始请求值。 */
   audit: FileReadRecord;
 }
 
-/**
-  journal 落盘前的归并：同 path 留一条——成功优先于拒绝；同为成功取实得行数最大的一条；
-  全为拒绝保留首条（错误原因不丢）；顺序保持首次出现。
-*/
+/** 同 path 归并成一条：成功优先，其次取实得行数最大，全为拒绝时保留首条。 */
 export function dedupeFileReads(records: FileReadRecord[]): FileReadRecord[] {
   const best = new Map<string, FileReadRecord>();
   for (const record of records) {
@@ -106,13 +90,10 @@ function extensionOf(path: string): string {
   return index < 0 ? "" : path.slice(index).toLowerCase();
 }
 
-/**
-  名字层面的拒绝判据（.env 两头查、无扩展名的凭据载体、密钥/二进制后缀）；返回拒绝理由，`undefined` = 放行。
-  字面路径与软链接的目标共用这一份：链接名干净不代表内容干净（`docs/note.md -> ../../.env`）。
-  */
+/** 名字层面的拒绝判据；字面路径与软链接目标共用这一份。 */
 function deniedNameReason(base: string): string | undefined {
   const extension = extensionOf(base);
-  // 前缀挡住 .env/.env.local，后缀挡住 prod.env/local.env 这类写法
+  // 前缀挡 .env/.env.local，后缀挡 prod.env 这类写法。
   const isEnvTemplate = ENV_TEMPLATE_SUFFIXES.some((suffix) => base.toLowerCase().endsWith(suffix));
   if ((base.startsWith(".env") || extension === ".env") && !isEnvTemplate) return "环境变量文件可能包含密钥，禁止读取";
   if (DENIED_BASENAMES.has(base.toLowerCase())) return "该文件通常是密钥/凭据载体，不开放读取";
@@ -120,31 +101,19 @@ function deniedNameReason(base: string): string | undefined {
   return undefined;
 }
 
-/**
-  名单判据的对外一份：HTTP 侧（`GET /source`）与工具侧（`read_file`）必须同一口径。
-  这里只判目录与名字；软链接复核归 `pathReadBlock` 那条路（界面给不出链接目标的路径）。
-  */
+/** 名单判据的对外一份：HTTP 侧与工具侧同一口径；只判目录与名字。 */
 export function deniedPathReason(relativePath: string): string | undefined {
   const segments = relativePath.split("/");
   if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return "该目录不开放读取";
   return deniedNameReason(segments[segments.length - 1] ?? "");
 }
 
-/**
-  只判名字那一半（不含目录规则）的对外读数，给索引层：读层拒读的文件不该进收录集。
-  目录那一半刻意留在外面——`.tutorignore` 已经管住 `.git/`、`node_modules/`，
-  而用户显式反排除 `.tutor` 时索引层照办是既有设计（`ignore.test.ts` 钉着）。
-  */
+/** 只判名字那一半（不含目录规则）的对外读数，给索引层。 */
 export function deniedSecretNameReason(relativePath: string): string | undefined {
   return deniedNameReason(relativePath.replaceAll("\\", "/").split("/").at(-1) ?? "");
 }
 
-/**
-  「这个仓内路径到底能不能给原文」——边界、名字名单、软链接三关一次判完的对外一份，
-  工具侧（`read_file`）与 HTTP 侧（`GET /source`）共用，两条口径不许各写一遍。
-  软链接那一关是必需的：前两道判的是字面路径，而 `fs` 读的是解析后的目标。
-  返回 `undefined` 表示放行；返回的那句直接给调用方（界面 / 模型）看。
-  */
+/** 边界、名字名单、软链接三关一次判完；返回那句拒绝理由直接给调用方看。 */
 export function pathReadBlock(repositoryPath: string, relativePath: string): string | undefined {
   if (isAbsolute(relativePath) || relativePath.startsWith("~")) return "只允许仓库内相对路径";
   const relative = relativePath.replaceAll("\\", "/");
@@ -158,12 +127,11 @@ export function pathReadBlock(repositoryPath: string, relativePath: string): str
     if (!isWithin(realRoot, real)) return "符号链接指向仓库之外";
     const segments = real.slice(realRoot.length + 1).split("/");
     if (segments.some((segment) => DENIED_DIRECTORIES.has(segment))) return "符号链接指向不开放的目录";
-    // 链接目标的名字再过一遍同一份判据（指到 `.env`、指到 `credentials.json` 都算绕过）
+    // 链接目标的名字再过一遍同一份判据。
     const targetReason = deniedNameReason(segments[segments.length - 1] ?? "");
     return targetReason ? `符号链接指向禁读文件：${targetReason}` : undefined;
   } catch {
-    // 链接目标解析不出来（文件已删、链接断了、权限不够）不在这里判：这一层只管政策，
-    // 「读不出来」交给调用方那层的 try 如实说，免得把「文件不存在」说成「我不给读」
+    // 链接目标解析不出来不在这里判：这一层只管政策。
     return undefined;
   }
 }
@@ -185,13 +153,13 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
   });
   if (isAbsolute(rawPath) || rawPath.startsWith("~")) return deny("只允许仓库内相对路径");
   const absolute = join(repoPath, rawPath);
-  // 下面那句抬头与审计行都用归一化后的路径（`\` 换成 `/`），审计线才与索引里的 path 同形
+  // 抬头与审计行用归一化路径，与索引里的 path 同形。
   const relative = rawPath.replaceAll("\\", "/");
   const blocked = pathReadBlock(repoPath, rawPath);
   if (blocked) return deny(blocked);
   try {
     const stat = statSync(absolute);
-    // 只读普通文件：命名管道与设备节点的同步读没有 EOF，一次就把整个单线程引擎冻住（不抛异常，下面的 catch 兜不住）
+    // 只读普通文件：命名管道与设备节点的同步读没有 EOF，会冻住单线程引擎。
     if (!stat.isFile()) return deny("不是普通文件（目录、命名管道或设备节点）");
     if (stat.size > MAX_FILE_BYTES) return deny(`文件过大（${stat.size} 字节）`);
     const lines = readFileSync(absolute, "utf8").split(/\r?\n/);
@@ -202,8 +170,7 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
     const limit = Math.min(budgetLines, wanted);
     const start = Math.min(offset, Math.max(1, lines.length));
     const requestedEnd = Math.min(lines.length, start - 1 + limit);
-    // 逐行装进字符预算：宁可少给几行，也不把一行切一半 —— 否则首行那句「第 X-Y 行」就不成立，
-    // 模型会以为自己看到了没给它的行。
+    // 逐行装进字符预算：宁可少给几行，也不把一行切一半。
     const kept: string[] = [];
     let used = 0;
     for (let index = start - 1; index < requestedEnd; index += 1) {
@@ -212,23 +179,17 @@ export function executeReadFile(repoPath: string, argumentsJson: string): ReadFi
       kept.push(rendered);
       used += rendered.length + 1;
     }
-    // 极端情况：单行本身就超预算（压缩过的 JS/JSON）→ 只能按字符切，并在首行说明该行只给了前半段
+    // 单行本身超预算时按字符切，并在首行说明。
     let numbered = kept.join("\n");
     const cutMidLine = numbered.length > budgetChars;
     if (cutMidLine) numbered = numbered.slice(0, budgetChars);
     const end = start + kept.length - 1;
     const truncated = end < requestedEnd || cutMidLine;
     const total = end < lines.length ? `，共 ${lines.length} 行` : "";
-    /**
-      续读建议一律指向 `end + 1`：单行被字符上限切开时，那一行的后半段永远给不出来（下一次同样只拿到前半段），
-      把 offset 指回它自己等于建议模型原地转圈。
-      */
+    // 续读建议一律指向 `end + 1`。
     const hint = truncated ? `，已达单次读取预算${cutMidLine ? `（第 ${end} 行本身超长，只给到开头，整行读不全）` : ""}，继续读请用 offset=${end + 1}` : "";
-    /**
-      入口这道过筛：正文要进发往远端的 prompt，硬编码在普通源文件里的真 key 是名单挡不住的（它叫 `config.ts`）。
-      首行必须说明「这里被隐去了 N 处」——不写的话模型会以为文件本来就少了几段，
-      于是去猜那段密钥、或者对用户说「输出被截断」。
-    */
+    // 入口过筛：正文要进发往远端的 prompt。
+    // 首行必须说明隐去了几处。
     const screened = maskSecrets(numbered);
     const maskedNote = screened.masked ? `，另有 ${screened.masked} 处疑似密钥已隐去（不要尝试补全）` : "";
     const header = `文件 ${relative}（第 ${start}-${end} 行${total}${hint}${maskedNote}）`;

@@ -3,18 +3,9 @@ import { isWithin, readFileLines } from "@codebase-tutor/platform";
 import { secretMasker } from "@codebase-tutor/domain";
 
 /**
-  锚点取码：把「锚点」解析成一段可嵌入 prompt 的源码窗口。锚点只标明位置，代码版式不规整时
-  锚点上下若干行常常与锚点本身无关，因此按下面规则取，而不是固定 ±N 行：
-
-  1. 符号边界优先——锚点带可信 endLine（> line 且跨度不超过 maxSymbolLines）时，只取符号自身的行区间；
-  2. 窗口兜底——endLine 缺失或非法（endLine 由花括号计数得到，字符串/注释里的花括号会干扰）时回落固定窗口；
-  3. 超长符号——跨度超过 maxSymbolLines 时取符号开头到上限（比对称窗口更贴近符号本身）并标记截断；
-  4. 单块字符上限——无论哪种模式都截断到 maxChars，防止一个超大符号吃掉整个上下文预算。
-
-  截断与省略由调用方在文本里明示（不静默丢信息）；路径越界或读不到返回 undefined，由调用方决定如何提示。
-
-  这里是「仓内源码原文进请求」的最后一个共用收尾（教学上下文与两处对话都用它），所以密钥隐去也落在这里：
-  `read_file` 有筛而锚点摘录没筛，等于绕开闸门。隐去后的文本变短，不影响字符预算（预算按原文算，是上界）。
+  锚点取码：把锚点解析成一段可嵌入 prompt 的源码窗口。
+  符号边界可信时按符号行区间取，否则回落固定窗口；跨度与字符超上限时截断并标记。
+  这里是仓内源码原文进请求前的最后一道密钥筛；读不到或越界返回 undefined。
   */
 
 export interface ExcerptAnchor {
@@ -24,13 +15,13 @@ export interface ExcerptAnchor {
 }
 
 export interface ExcerptOptions {
-  /** 窗口模式：锚点行之前取多少行 */
+  /** 窗口模式：锚点行之前取多少行。 */
   before: number;
-  /** 窗口模式：锚点行之后取多少行 */
+  /** 窗口模式：锚点行之后取多少行。 */
   after: number;
-  /** 符号边界可信上限（行） */
+  /** 符号边界可信上限（行）。 */
   maxSymbolLines: number;
-  /** 单块字符上限 */
+  /** 单块字符上限。 */
   maxChars: number;
 }
 
@@ -46,9 +37,9 @@ export interface ExcerptSlice {
   /** 因符号/窗口行数或字符上限被截断 */
   truncated: boolean;
   mode: "symbol" | "window";
-  /** 符号模式下的真实符号末尾行（调用方可据此提示「符号共 N 行」） */
+  /** 符号模式下的真实符号末尾行。 */
   symbolEnd?: number;
-  /** 本窗口里被隐去的疑似密钥处数；没命中就没有这个字段，出网清单也不报数 */
+  /** 本窗口里被隐去的疑似密钥处数；没命中就没有这个字段。 */
   masked?: number;
 }
 
@@ -56,7 +47,7 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
   const relative = anchor.path.replaceAll("\\", "/");
   const absolute = join(repositoryPath, relative);
   if (!isWithin(repositoryPath, absolute)) return undefined;
-  // 读行口径与 read_file 同源（含「非普通文件不读」：命名管道的同步读没有 EOF，会把单线程引擎冻住）
+  // 读行口径与 read_file 同源。
   const all = readFileLines(repositoryPath, relative);
   if (!all) return undefined;
   const totalLines = all.length;

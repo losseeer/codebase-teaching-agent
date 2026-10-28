@@ -7,10 +7,7 @@ import type { LlmCompletion, LlmProvider } from "../../../application/port/llm-p
 import { RetryLlmProvider, ThinkingOverrideLlmProvider } from "./provider.js";
 import { runWithTrace } from "@codebase-tutor/platform";
 
-/**
-  LLM 工作日志：既要有可机读的落盘（JSONL），也要有控制台单行摘要；
-  失败必须照记并原样抛出——日志不允许把失败伪装成成功。
-  */
+/** LLM 工作日志：JSONL 落盘 + 控制台单行摘要；失败照记并原样抛出。 */
 
 function fakeProvider(handler: (input: unknown) => Promise<LlmCompletion>): LlmProvider {
   return { name: "test provider", modelVersion: "openai:test-model", complete: handler as LlmProvider["complete"] };
@@ -120,10 +117,7 @@ describe("LLM 工作日志", () => {
     expect(logged.some((line) => line.includes("fail") && line.includes("LLM returned 500"))).toBe(true);
   });
 
-  /**
-    重试读数：日志包在重试层外面，一次逻辑调用只落一行，第几次成、每次多久只能由 RetryLlmProvider
-    挂在结果/错误上带出来。
-    */
+  /** 重试读数由 RetryLlmProvider 挂在结果与错误上带出来；日志在外层，一次逻辑调用只落一行。 */
   it("重试层带出来的 attempts 与 attemptMs 原样落行，并在控制台单行上屏", async () => {
     const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 2, attemptMs: [60_000, 1_500] })), "light");
     await provider.complete({ system: "s", user: "u", scene: "map.refine" });
@@ -159,7 +153,7 @@ describe("LLM 工作日志", () => {
   });
 
   it("按生产装配顺序（Logging 在 Retry 外面）走一遍：重试发生过，行里就读得出来", async () => {
-    // 单独测 Retry 或单独测 Logging 都证不了这个字段能穿过装配边界，这里按生产顺序 Logging → Retry 组一次真的。
+    // 按生产顺序 Logging → Retry 组一次，证明字段能穿过装配边界
     let count = 0;
     const flaky: LlmProvider = {
       name: "flaky",
@@ -177,7 +171,6 @@ describe("LLM 工作日志", () => {
     const entry = JSON.parse(readFileSync(logFile, "utf8").trim()) as LlmCallRecord;
     expect(entry).toMatchObject({ ok: true, scene: "map.refine", attempts: 2 });
     expect(entry.attemptMs).toHaveLength(2);
-    // 总墙钟不等于任何单次：这一行同时给出「一共多久」与「每次多久」
     expect(entry.ms).toBeGreaterThanOrEqual(0);
     expect(logged.some((line) => line.includes("retry 2"))).toBe(true);
   });
@@ -200,7 +193,7 @@ describe("LLM 工作日志", () => {
   });
 
   it("档位注入在日志外层时，记到的是实际下发的档位（不是调用方没写时的 auto）", async () => {
-    // runtime 的组装顺序：ThinkingOverride(Logging(raw))——反过来会把 "off" 记成 "auto"
+    // 组装顺序：ThinkingOverride(Logging(raw))
     const provider = new ThinkingOverrideLlmProvider(new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "light"), "off");
     await provider.complete({ system: "s", user: "u" });
     await flushLlmLog();
@@ -217,7 +210,6 @@ describe("LLM 工作日志", () => {
     const entries = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as LlmCallRecord);
     expect(entries[0]).toMatchObject({ scene: "teaching.turn", traceId: "req-42", actor: null });
     expect(entries[1]).toMatchObject({ scene: "map.refine", traceId: null, actor: null });
-    // 指纹落进行里：审计者要在本地重跑一次装配、比这一列才知道「出去的是不是这份」
     expect(entries[0].outbound).toMatchObject({ chars: expect.any(Number) });
     expect(entries[0].outbound.hash).toMatch(/^[0-9a-f]{12}$/);
   });
@@ -225,20 +217,18 @@ describe("LLM 工作日志", () => {
   it("出网载荷指纹：正文差一个字就换哈希，工具结果与工具清单都算进去", () => {
     const base = { system: "提示词", user: "问题" };
     const first = outboundFingerprint(base);
-    expect(outboundFingerprint(base)).toEqual(first); // 同一次装配重跑两次必须给同一个指纹，否则没法核对
+    expect(outboundFingerprint(base)).toEqual(first);
     expect(outboundFingerprint({ ...base, user: "问题？" })).not.toEqual(first);
 
-    // read_file 的内容是在下一轮出门的：它作为 tool 消息进 messages，指纹必须认得到
     const withTool = { system: "提示词", messages: [{ role: "user" as const, content: "问题" }, { role: "tool" as const, content: "文件 src/main.ts（第 1-20 行）：\nsecret" }] };
     expect(outboundFingerprint(withTool).chars).toBeGreaterThan(first.chars);
     expect(outboundFingerprint({ ...withTool, messages: withTool.messages.slice(0, 1) }).hash).not.toBe(outboundFingerprint(withTool).hash);
 
-    // 工具清单也占输入：跨仓那档多一个 cross_repo_link，文本一字不变也得算成不同载荷
+    // 工具清单也占输入
     const tool = { name: "read_file", description: "读文件", parameters: { path: { type: "string" } } };
     const withoutTools = outboundFingerprint({ ...base, tools: [] });
     const withTools = outboundFingerprint({ ...base, tools: [tool] });
     expect(withTools.hash).not.toBe(withoutTools.hash);
-    // 工具描述确实进请求体（provider.ts:215 把 name+description+parameters 一起发），所以改描述就是改载荷
     expect(outboundFingerprint({ ...base, tools: [{ ...tool, description: "读文件（带行号）" }] }).hash).not.toBe(withTools.hash);
   });
 });

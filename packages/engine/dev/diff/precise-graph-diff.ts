@@ -9,23 +9,9 @@ import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
-  编译器级精确模块图只当评测证据，引擎运行时一行都不读它。
-  要回答的问题只有一个：引擎那套静态启发式离「编译器自己怎么解析 import」差多少——
-  差得大才值得在引擎里维护第二条取图路径，差得小说明缺口是某条具体规则，不是工具链级别的事。
-
-  两种语言各用「不依赖构建」的确定性事实当精确档：
-  - Java：JLS 规定 `package` 声明加顶层类型名就足以确定仓内全限定名的落点（javac 解析 import 用的正是这份事实），
-    所以不需要 gradle/maven，零依赖、零 token、纯 CPU。
-  - TS/TSX：直接调用 `typescript` 包自己的解析器 `resolveModuleName`（尊重 tsconfig 的 paths 别名与扩展名规则），
-    这是 tsc 判定模块边的同一套代码。`typescript` 只是仓库自带的 devDependency，不新增依赖。
-
-  口径纪律（不然读数会误导人）：
-  - 只比两侧都认识的仓内文件，否则「引擎没索引 .vue」这类覆盖差会被算成边差；
-  - 精确图按 JLS 的可见性把 `import a.b.*` 展成该包全部仓内类，这是上界（javac 只链接真正被用到的那几个），
-    所以「精确有、引擎没有」的条数是差距上限，不能当精确值引用；
-  - 三方与 JDK 的 import 不构成仓内边，两侧都丢。
-
-  用法：pnpm graph:diff [仓库路径]（默认 = 本引擎仓，跑 TS 档）
+  编译器级精确模块图只当评测证据，引擎运行时不读它：量静态启发式与编译器解析模块边的差距。
+  Java 用 `package` 声明加顶层类型名推全限定名；TS/TSX 用 `typescript` 自己的 `resolveModuleName`。
+  只比两侧都认识的仓内文件；通配展开取上界；三方与 JDK import 两侧都丢。用法：`pnpm graph:diff [仓库路径]`
 */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -101,10 +87,7 @@ if (javaFiles.length) {
   }
   const precise = new Map<string, Set<string>>();
   let wildcards = 0;
-  /**
-    通配展开要按源码根收窄：Maven 布局下 `src/test/java` 与 `src/main/java` 下的 package 可以完全同名，
-    但主源码在编译期看不见测试源码根；把测试类算进通配展开会造出 javac 永远不会产生的边。
-    */
+  /** 通配展开按源码根收窄：主源码看不见测试源码根。 */
   const sourceRootOf = (path: string): string => {
     const match = /(^|\/)src\/(main|test)\//.exec(path);
     return match ? `${path.slice(0, match.index)}src/${match[2]}` : path;

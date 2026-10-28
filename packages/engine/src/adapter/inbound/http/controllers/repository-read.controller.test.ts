@@ -3,10 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-test-kit.js";
 
-/**
-  只读产物那组路由的边界：`GET /source` 只放已索引的文件（索引白名单挡住密钥载体），
-  越界与软链接各判一次。挂载态下的取舍在单测里看不出来，所以这组打到路由。
- */
+/** 只读产物路由的边界：`GET /source` 只放已索引的文件，越界与软链接各判一次。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -14,8 +11,7 @@ afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
 describe("GET /source 的取文件边界", () => {
-  // ⚠️ 本文件后面的用例靠 beforeAll 手工造的产物（锚点在 src/main.ts:3）跑。往 fx.repoDir 写文件这件事本身
-  // 不该惊动重分析（收录判据见 indexer 的 isIngestedPath，#163 那条用例钉着），但挪动用例顺序前先想清楚这一条。
+  // 后面的用例靠 beforeAll 手工造的产物跑；往 repoDir 写文件不该触发重分析
   it("索引里的文件照给；越界 400，未收录（含 .env）404", async () => {
     writeFileSync(join(fx.repoDir, ".env"), "OPENAI_API_KEY=sk-never-serve-me\n", "utf8");
 
@@ -41,12 +37,7 @@ describe("GET /source 的取文件边界", () => {
     expect((response.json() as { line: number }).line).toBe(1);
   });
 
-  /**
-    路由这一侧也判链接目标（`pathReadBlock`，与 `read_file` 同一份判据），否则仓里放一个名字无害的
-    链接就只绕过了界面这道闸。夹具取名 `evidence.txt` 是有讲究的：`.png` 先被扩展名名单拦下、
-    走不到链接判定；`.ts` / `.md` 属收录扩展名，写进仓就会排一轮重分析换掉挂载中的产物；
-    `.txt` 既不在拒读名单也不在收录集，只剩链接这一关可验。
-    */
+  /** 链接目标在这条路由上也判；夹具取 `.txt` 才只走得到链接判定这一关。 */
   it("仓里的符号链接指向仓外时，这条路由也给不出原文", async () => {
     const sentinel = "OUTSIDE-SENTINEL-must-not-be-served";
     writeFileSync(join(fx.root, "outside-target.txt"), `${sentinel}\n`, "utf8");

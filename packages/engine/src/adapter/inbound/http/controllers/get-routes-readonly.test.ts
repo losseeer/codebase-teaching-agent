@@ -1,12 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, OK_REPLY, type RouteFixture } from "../controller-test-kit.js";
 
-/**
-  读侧不发模型请求：路由树里每一条 GET 都要用真参数走一遍，且假 provider 一次都不被调用。
-  清单从 Fastify 的路由树现取，新增一条 GET 就自动进这一轮断言，不靠有人记得维护白名单。
-  条数自报并设下限：解析器与 Fastify 的输出脱钩时会报 0 条，而「0 条、0 次调用」长得像全绿。
-  底下那条控制组用一次真对话证明计数器真的会动——没有它，上面的 0 不构成结论。
- */
+/** 读侧不发模型请求：路由树里每条 GET 都用真参数走一遍，假 provider 调用数为 0。
+    清单从 Fastify 路由树现取；条数设下限，并有控制组证明计数器会动。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -33,7 +29,7 @@ function getRoutePaths(): string[] {
 }
 
 describe("GET 路由全部只读", () => {
-  /** 事件流是长连接，`inject` 不会返回；它按设计不开火（转的是别的回合已经产生的事件），单独记一条排除并显式报覆盖面。 */
+  /** 事件流是长连接，`inject` 不会返回，按设计单独排除。 */
   const LONG_LIVED = new Set(["/api/events"]);
 
   it("路由树里每条 GET 都走一遍：provider 调用计数为 0", async () => {

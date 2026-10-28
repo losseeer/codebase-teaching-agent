@@ -18,21 +18,12 @@ import type { LlmTool } from "../application/port/llm-provider.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
 /**
-  画布上「结构」的唯一写入口。用户只能拖位置（走 `persistence/diagrams.ts` 的 `saveGeometry`），
-  加删节点、连线、分组、改名都只能从这里进——界面上不留第二个写入口，
-  两边各写一套校验与审计，用户的修正就会只活在某一边。
-
-  三件事在这一层同时守住，缺一层都会漏：
-
-  1. `kind:"module"` 的节点必须指得着真东西：`ref` 是文件、目录、符号或带文件清单的分组，
-     由索引与依赖图核对。核不上就整次拒写并回一句「该改谁」——画一个查无此人的节点，读者会去代码里找它。
-  2. 边的可信度只降不升：模型可以报 `static` / `code`，引擎拿 import、调用、类型派发三张表去核，
-     核不到就降档，并把「为什么不算」写进 `downgraded`（界面上进悬停）。模型永远不能把自己的推断升成事实
-     ——与边级证据校验同一个口径。
-  3. 每次结构改动自动存一版；回滚同样是往前追加一版（`persistence/diagrams.ts`）。
+  画布上「结构」的唯一写入口；用户只拖位置，其余改动都从这里进。
+  `module` 节点的 `ref` 由索引与依赖图核对，核不上整次拒写；边的 `origin` 只降不升。
+  每次结构改动自动存一版。
 */
 
-/** 一次改动回给模型的话：说的是落了什么，不是它想干什么。 */
+/** 一次改动回给模型的话。 */
 export interface DiagramWriteOutcome {
   ok: boolean;
   text: string;
@@ -40,24 +31,21 @@ export interface DiagramWriteOutcome {
 }
 
 export interface DiagramWriteContext {
-  /** 这一仓的图库存取口（端口，不是库句柄）：结构写入口用其中五格，整条画布用例面要十格。 */
+  /** 这一仓的图库存取口。 */
   store: DiagramStore;
   repositoryId: string;
   index: RepositoryIndex;
   analysis: RepositoryAnalysis;
   journal: { append: (type: JournalEventType, payload: Record<string, string | number | boolean | null>) => void };
   onApplied?: (event: { repositoryId: string; diagramId: string; action: string }) => void;
-  /**
-    第四张结构表（产物层里的类型关系与运行时绑定）。缺省时核边只看 import / 调用 / 类型派发三张表；
-    给了它，「控制器注入服务接口」这类代码里没有那一行调用的真关系才不会被降成猜测。
-  */
+  /** 第四张结构表（产物层里的类型关系与运行时绑定）；缺省时核边只看三张表。 */
   facts?: FactsPairChecker;
 }
 
-/** 可信度排序：核出来更低就降到那一档，绝不上抬。 */
+/** 可信度排序：只降不升。 */
 const ORIGIN_RANK: Record<DiagramEdge["origin"], number> = { inferred: 0, code: 1, static: 2 };
 
-/** 节点可指的东西：索引里的文件/目录、依赖图里的符号，或带显式文件清单的分组。 */
+/** 节点可指的东西：索引里的文件 / 目录、依赖图里的符号、或带文件清单的分组。 */
 interface RefIndex {
   files: Set<string>;
   symbols: SymbolInfo[];
@@ -76,7 +64,7 @@ function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error
   const value = ref.trim();
   if (!value) return { error: "ref 是空的" };
   if (value.startsWith("module:") || value.startsWith("arch:")) {
-    return { error: `${value.slice(0, 80)} 是旧课程树/分层的引用，已退役；改成 file:/dir:/symbol:/group:` };
+    return { error: `${value.slice(0, 80)} 不是可用的 ref；改用 file:/dir:/symbol:/group:` };
   }
   if (value.startsWith("group:")) return { files: [] };
   if (value.startsWith("file:")) {
@@ -98,12 +86,12 @@ function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error
     const found = index.symbols.some((symbol) => symbol.path === path && symbol.name === name);
     return found ? { files: [path] } : { error: `符号 ${path.slice(0, 60)}#${name.slice(0, 40)} 不在依赖图里` };
   }
-  // 裸路径按文件处理，方便模型直接写索引里看到过的路径
+  // 裸路径按文件处理。
   const path = normalizeRefPath(value);
   return index.files.has(path) ? { files: [path] } : { error: `${value.slice(0, 80)} 既不是 file:/dir:/symbol:/group:，也不在本仓索引里` };
 }
 
-/** 一个节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析；便签没有。 */
+/** 一个节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析。 */
 function filesOfNode(node: DiagramNode, index: RefIndex): string[] {
   if (node.kind !== "module") return [];
   if (node.files?.length) return node.files.filter((path) => index.files.has(path));
@@ -112,7 +100,7 @@ function filesOfNode(node: DiagramNode, index: RefIndex): string[] {
   return "files" in resolved ? resolved.files : [];
 }
 
-/** 这一对文件之间，结构表里最高能核到哪一档（含依据那一句）。 */
+/** 这一对文件之间结构表能核到哪一档，含依据。 */
 function verifyPair(fromFiles: string[], toFiles: string[], analysis: RepositoryAnalysis): { origin: "static" | "code"; detail: string } | undefined {
   const imports = analysis.graph.imports ?? {};
   const from = new Set(fromFiles);
@@ -123,7 +111,7 @@ function verifyPair(fromFiles: string[], toFiles: string[], analysis: Repository
   return undefined;
 }
 
-/** 只查「反方向有没有」：用来把「方向对不上」这句说实话，而不是含糊成「核不到」。 */
+/** 反方向有没有 import 边。 */
 function reverseImport(fromFiles: string[], toFiles: string[], analysis: RepositoryAnalysis): string | undefined {
   const imports = analysis.graph.imports ?? {};
   const from = new Set(fromFiles);
@@ -131,10 +119,7 @@ function reverseImport(fromFiles: string[], toFiles: string[], analysis: Reposit
   return undefined;
 }
 
-/**
-  把模型报的那条边按引擎核出来的档位改一遍，只会往下改。
-  便签参与的边一律 `inferred`：便签不是代码，四张结构表里都没有它，硬标 static 就是撒谎。
-*/
+/** 按核出来的档位改模型报的边，只往下改；便签参与的边一律 `inferred`。 */
 function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, index: RefIndex, context: DiagramWriteContext): { edge: DiagramEdge; downgraded: boolean } {
   const { analysis } = context;
   const from = nodesById.get(edge.from);
@@ -148,11 +133,11 @@ function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, inde
   }
   const graph = verifyPair(fromFiles, toFiles, analysis);
   const fact = context.facts?.(fromFiles, toFiles);
-  // 取核得最高那一档作依据；两张都没有才算 inferred。这里只挑高档用于「不降它」，不上抬模型自己报低的那一档
+  // 取核得最高那一档作依据；两张都没有才算 inferred。
   const verified = graph && fact ? (ORIGIN_RANK[graph.origin] >= ORIGIN_RANK[fact.origin] ? graph : fact) : graph ?? fact;
   const rank = verified ? ORIGIN_RANK[verified.origin] : 0;
   if (rank >= claim) {
-    // 核得到且不比它报的低：按它报的那一档留（模型报 code 而其实是 static 也不上抬——上抬等于替它吹）
+    // 核得到且不比它报的低：按它报的那一档留。
     return { edge: { ...edge, evidence: verified?.detail ?? edge.evidence }, downgraded: false };
   }
   const reason = verified ? `只核得到 ${verified.origin}（${verified.detail}）` : `import、调用、类型派发与产物里的类型关系、运行时绑定都核不到这一对${reverseImport(fromFiles, toFiles, analysis) ? `，只有反向那条（${reverseImport(fromFiles, toFiles, analysis)}）` : ""}`;
@@ -162,10 +147,10 @@ function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, inde
 const clampCoord = (value: number): number => (Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0);
 const clampText = (value: string | undefined, limit: number): string | undefined => (value === undefined ? undefined : value.trim().slice(0, limit));
 
-/** 名字末尾拖一个括号计数（「控制器（14 个）」）：那是清单的一行，不是节点名。规模那格由 `sub` 承载。 */
+/** 名字末尾的括号计数（「控制器（14 个）」）：规模由 `sub` 承载。 */
 const TRAILING_COUNT = /[（(]\s*\d+\s*[)）]\s*$/;
 
-/** 整张图的结构校验：id 唯一、边两端存在、分组存在、几何收口、边按证据定档。返回字符串 = 拒写并说清哪一格。 */
+/** 整张图的结构校验：id 唯一、边两端存在、分组存在、几何收口、边按证据定档；返回字符串 = 拒写原因。 */
 function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteContext): { body: DiagramBody; downgraded: number } | string {
   const { analysis } = context;
   if (body.nodes.length > DIAGRAM_NODE_LIMIT) return `这张图有 ${body.nodes.length} 个节点，超过 ${DIAGRAM_NODE_LIMIT} 个：画布不是用来装全仓的，拆成几张图（图库就是为这个存在的）`;
@@ -226,7 +211,7 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
   return { body: { groups: groups.map((group) => ({ ...group, label: clampText(group.label, 40)!, x: clampCoord(group.x), y: clampCoord(group.y), w: Math.max(40, Math.round(group.w)), h: Math.max(40, Math.round(group.h)) })), nodes, edges }, downgraded };
 }
 
-/** 目标图怎么认：给了 id 或唯一名字就用它；只有一张且没指名就用那一张；否则拒（绝不猜一张来改）。 */
+/** 目标图怎么认：给了 id 或唯一名字就用它；只有一张且没指名就用那一张；否则拒。 */
 function resolveTarget(context: DiagramWriteContext, requested: string | undefined): { diagram: Diagram } | { error: string } {
   const wanted = (requested ?? "").trim();
   const all = context.store.list();
@@ -247,7 +232,7 @@ const refuse = (reason: string): DiagramWriteOutcome => ({ ok: false, text: `没
 
 const downgradeNote = (count: number): string => (count ? `其中 ${count} 条边核不到依据、已降档（边上写着为什么）。` : "");
 
-/** 版本历史里那一行人话：动作 + 目标名，读的人不用猜。 */
+/** 版本历史里那一行：动作 + 目标名。 */
 function versionNoteOf(edit: DiagramEdit, nameOf: (id: string) => string): string {
   switch (edit.action) {
     case "draw": return "agent 初版";
@@ -262,7 +247,7 @@ function versionNoteOf(edit: DiagramEdit, nameOf: (id: string) => string): strin
   }
 }
 
-/** 一次动作改的是图上哪一格（回话里要念出它的名字，不能只报 id）。 */
+/** 一次动作改的是图上哪一格。 */
 function editTargetId(edit: DiagramEdit): string {
   if ("target" in edit) return edit.target;
   if ("node" in edit) return edit.node.id;
@@ -271,16 +256,13 @@ function editTargetId(edit: DiagramEdit): string {
   return "";
 }
 
-/** 一次动作的中文说法，回给模型用。 */
+/** 一次动作的中文说法。 */
 const ACTION_LABEL: Record<DiagramEdit["action"], string> = {
   draw: "画好", add_node: "加了节点", remove_node: "删了节点", add_edge: "连了边", remove_edge: "删了边",
   add_group: "加了分组", remove_group: "删了分组", relabel: "改了名", move: "挪了位置"
 };
 
-/**
-  落一次结构改动。`via` 目前只有 `agent`（用户的改名/删除/恢复走各自的路由，它们不动结构），
-  留着这一格是为了让审计里「谁改的」永远说得清。
-*/
+/** 落一次结构改动；`via` 记在审计里表示谁改的。 */
 export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramEditRequest, via: "agent" | "user" = "agent"): DiagramWriteOutcome {
   const edit = request.edit;
   const index = refIndexOf(context.index, context.analysis);
@@ -299,11 +281,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   if ("error" in target) return refuse(target.error);
   const diagram = target.diagram;
   const body: DiagramBody = { groups: [...diagram.body.groups], nodes: [...diagram.body.nodes], edges: [...diagram.body.edges] };
-  /**
-    图元的名字：先在改完的结构里查，查不到再回到改之前那一份。
-    删掉的东西在改完的结构里已经没有位置了，而版本历史那句「删除 X」要的恰恰是 X 原来叫什么——
-    只写得下 id 的历史读不出东西（`persistence/diagrams.ts` 给 `note` 那句话定的就是这件事）。
-  */
+  /** 图元名字：先查改完的结构，查不到再查改之前那份（删除动作要念出原名）。 */
   const labelIn = (items: { id: string; label: string }[], value: string): string | undefined => items.find((item) => item.id === value)?.label;
   const nameOf = (id: string): string => labelIn(body.nodes, id) ?? labelIn(body.groups, id) ?? labelIn(diagram.body.nodes, id) ?? labelIn(diagram.body.groups, id) ?? id;
   const settledBefore = body.nodes.length;
@@ -330,7 +308,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   } else if (edit.action === "remove_group") {
     if (!body.groups.some((group) => group.id === edit.target)) return refuse(`图上没有 ${edit.target} 这个分组`);
     body.groups = body.groups.filter((group) => group.id !== edit.target);
-    // 框没了，节点上还写着它的 id：一并清掉，否则界面上会出现一个指向空气的分组
+    // 框没了：节点上的归属 id 一并清掉。
     body.nodes = body.nodes.map((node) => (node.group === edit.target ? { ...node, group: undefined } : node));
   } else if (edit.action === "relabel") {
     const label = clampText(edit.label, 60);
@@ -349,7 +327,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 
   return finish(edit, "");
 
-  /** 校验 + 落盘 + 记账 + 广播，一次做完（每个分支都从这儿出去，免得哪条漏了审计）。 */
+  /** 校验 + 落盘 + 记账 + 广播：每个分支都从这儿出去。 */
   function finish(done: DiagramEdit, override: string): DiagramWriteOutcome {
     const settled = settleBody(body, index, context);
     if (typeof settled === "string") return refuse(settled);
@@ -368,19 +346,11 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 }
 
 /**
-  ==== `set_diagram` 的参数层（写入口的前门）====
-
-  模型发回来的是一段 JSON 字符串，而且写法不固定：契约里 `edit` 嵌一层，实际常有把它摊平到顶层的。
-  两种写法都收（同一处校验，不让模型因为形状不对重跑一轮），但字段一格都不多认：
-  白名单之外的键不看，只在回话里点名（「不报错也不采纳」比「原样塞进产物」好，
-  后者会把模型随手编的字段变成图上的一项读数）。
-
-  两处刻意不留口子：
-  - 边上的 `downgraded` 不在白名单里。降档说明只能由引擎写，模型自己填一句等于替自己说「这条边成立」；
-  - `origin` 三档必须写出来且只认这三档。报低了引擎不会替它抬（见 `settleEdge`），所以虚报在这儿没有收益。
+  `set_diagram` 的参数层：`edit` 嵌一层与摊平到顶层两种写法都收，白名单之外的键不采纳、只在回话里点名。
+  `downgraded` 只能由引擎写；`origin` 三档必须写出来且只认这三档。
 */
 
-/** 九种动作各自的字段清单：这里能表达的形状就只有这九种。 */
+/** 九种动作各自的字段清单。 */
 const EDIT_FIELDS: Record<DiagramEdit["action"], readonly string[]> = {
   draw: ["action", "name", "body"],
   add_node: ["action", "node"],
@@ -398,13 +368,13 @@ const EDGE_FIELDS = ["id", "from", "to", "origin", "label", "evidence"];
 const GROUP_FIELDS = ["id", "label", "x", "y", "w", "h"];
 const BODY_FIELDS = ["groups", "nodes", "edges"];
 
-/** 必填的短文本：非字符串一律按没给（不给就拒，别替模型编一个 id 或名字）。 */
+/** 必填的短文本：非字符串一律按没给。 */
 const textOf = (value: unknown, limit: number): string => (typeof value === "string" ? value.trim().slice(0, limit) : "");
-/** 可选文本：分得清「没给这个键」与「给了空串」——relabel 拿空串清正文，这两件事不能混。 */
+/** 可选文本：分得清「没给这个键」与「给了空串」。 */
 const optionalText = (value: unknown, limit: number): string | undefined => (typeof value === "string" ? value.trim().slice(0, limit) : undefined);
-/** 坐标与尺寸：非有限值收成 0，越界的由 `settleBody` 再夹一次。 */
+/** 坐标与尺寸：非有限值收成 0。 */
 const coordOf = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-/** 把容器里没列进白名单的键登记进 `ignored`，回话里点名（带容器名才读得懂是哪一格多余的）。 */
+/** 把白名单外的键登记进 `ignored`，带容器名。 */
 function noteExtras(entry: Record<string, unknown>, allowed: readonly string[], where: string, ignored: string[]): void {
   for (const key of Object.keys(entry)) if (!allowed.includes(key)) ignored.push(`${where}.${key}`);
 }
@@ -421,7 +391,7 @@ function nodeFrom(raw: unknown, ignored: string[]): DiagramNode | string {
   const group = optionalText(entry.group, 60);
   const base: DiagramNode = { id, kind: entry.kind, label, x: coordOf(entry.x), y: coordOf(entry.y) };
   if (entry.kind === "module") {
-    // 这里只判「写没写」，指得着指不着由 `settleBody` 按索引与依赖图判：只有一份判据
+    // 这里只判「写没写」；指得着指不着由 `settleBody` 判。
     const ref = textOf(entry.ref, 200);
     if (!ref) return "kind=module 的节点要写 ref：file:<路径> / dir:<目录> / symbol:<路径>#<符号> / group:<id>";
     const files = Array.isArray(entry.files)
@@ -459,7 +429,7 @@ function groupFrom(raw: unknown, ignored: string[]): DiagramGroup | string {
   return { id, label, x: coordOf(entry.x), y: coordOf(entry.y), w: coordOf(entry.w), h: coordOf(entry.h) };
 }
 
-/** `draw` 的整张结构：三个数组都按缺省当空表处理（只画节点不带边是常见情形），但每一格都过一遍上面的字段挑选。 */
+/** `draw` 的整张结构：三个数组缺省当空表，每一格都过字段挑选。 */
 function bodyFrom(raw: unknown, ignored: string[]): DiagramBody | string {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "draw 要给 body：{ groups, nodes, edges }，一次把整张图画完";
   const entry = raw as Record<string, unknown>;
@@ -486,10 +456,7 @@ function bodyFrom(raw: unknown, ignored: string[]): DiagramBody | string {
   return { groups, nodes, edges };
 }
 
-/**
-  翻一次工具参数。回 `error` 就是这一步没做（调用方据此不落盘），句子要说清缺哪一格——
-  这句话会作为 `role:"tool"` 回喂给模型，它下一轮就按这个改。
-*/
+/** 翻一次工具参数；回 `error` 就不落盘，句子会作为 tool 结果回喂给模型。 */
 export function parseDiagramEditArguments(raw: string): { request?: DiagramEditRequest; ignored: string[]; error?: string } {
   let parsed: unknown;
   try {
@@ -506,7 +473,7 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
   const fields = EDIT_FIELDS[action as DiagramEdit["action"]];
   const ignored: string[] = [];
   if (!fields) return { ignored, error: `未知 action「${action.slice(0, 40)}」：只有 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move 这九种` };
-  // 摊平写法下顶层那些既不是 diagram、也不属于本动作的键同样算多余字段（收下来不看，但要告诉模型看了什么）
+  // 摊平写法下顶层多余的键同样登记进 ignored。
   for (const key of Object.keys(top)) {
     if (key === "diagram") continue;
     if (source === top ? !fields.includes(key) : key !== "edit") ignored.push(key);
@@ -553,10 +520,7 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
   return { request: { ...(requested ? { diagram: requested } : {}), edit }, ignored: [...new Set(ignored)] };
 }
 
-/**
-  读侧的诚实检查：图上的模块节点还指得着索引里的文件/目录/符号吗？
-  文件会改名、目录会删，而图是历史产物——引用断了要说出来，不能画一个查无此人的节点。
-*/
+/** 读侧检查：图上的模块节点还指得着索引里的文件 / 目录 / 符号吗。 */
 export function diagramWarnings(context: DiagramWriteContext, diagram: Diagram): { node: string; reason: string }[] {
   const index = refIndexOf(context.index, context.analysis);
   const out: { node: string; reason: string }[] = [];
@@ -572,7 +536,7 @@ export function diagramWarnings(context: DiagramWriteContext, diagram: Diagram):
   return out;
 }
 
-/** 读侧给界面的文件关联：节点 id → 它覆盖的已索引文件。界面抽屉直接用这份。 */
+/** 读侧给界面的文件关联：节点 id → 它覆盖的已索引文件。 */
 export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagram): Record<string, { path: string; line: number }[]> {
   const index = refIndexOf(context.index, context.analysis);
   const out: Record<string, { path: string; line: number }[]> = {};
@@ -583,10 +547,7 @@ export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagra
   return out;
 }
 
-/**
-  给模型的「画布现场」：有哪几张图、正打开的那张有哪些图元。
-  有副作用的工具必须先看得见现状——没有这一段，模型只能猜 id、猜「那条边」是哪条。
-*/
+/** 给模型的「画布现场」：有哪几张图、正打开那张有哪些图元。 */
 export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?: string): string {
   const all = context.store.list();
   if (!all.length) return "画布现场：这个仓还没有图。要画就用 draw 一次画完整张（节点、边、分组都给全），别一格一格试。";
@@ -606,12 +567,7 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
   return `画布现场：\n${lines.join("\n")}\n${detail}\n改哪张就在 diagram 里给它的 id 或名字；结构改动只有 set_diagram 这一条路，位置用户自己拖，不用你代劳。`;
 }
 
-/**
-  画布上「结构」的写入口（全仓唯一有副作用的工具）。
-  四条纪律写死在描述里而不是留在提示词里劝：位置是用户的（`move` 只在用户开口时代挪一格）；
-  `module` 节点必须带真 `ref`，核不上整次拒写；边的 `origin` 由引擎拿结构表核，只降不升，降完把原因写在边上；
-  `draw` 一次交整张图。
-*/
+/** 画布结构的写入口工具定义（全仓唯一有副作用的工具）。 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
   description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：`name` 与 body={groups,nodes,edges} 都必填，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",

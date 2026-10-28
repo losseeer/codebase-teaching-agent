@@ -9,13 +9,7 @@ import { readJournal } from "../persistence/journal.js";
 import { runWithTrace } from "@codebase-tutor/platform";
 import { recordEgress, type EgressSource } from "./egress-log.js";
 
-/**
-  出网清单的计入审计口径，四条判据都得钉住：
-  - 一行都不带正文（带了指纹就没意义了，日志本身变成第二个泄露面）；
-  - 空清单不落空行，被上层预算裁掉的段不算出网（虚报比漏报更糟）；
-  - 仓 id 由路径推导，与导入时写进索引的同一套算法，不另造一套；
-  - traceId 跟着请求上下文走——报表靠它把 journal 与 llm.log 接起来。
-  */
+/** 出网清单的计入审计口径：不带正文、被裁掉的段不算出网、仓 id 由路径推导、traceId 跟请求上下文。 */
 
 const repositories: string[] = [];
 const SECRET_TEXT = 'export const token = "sk-abcdefghijklmnopqrstuvwx";';
@@ -70,7 +64,6 @@ describe("源码出网清单计入审计", () => {
     expect(clean?.payload.masked).toBe(0);
     expect(clean?.payload.truncated).toBeUndefined();
     expect(dirty?.payload).toMatchObject({ masked: 2, truncated: true });
-    // 被隐去过的段，其正文（含密钥原样）绝不落进审计线
     expect(JSON.stringify(dirty)).not.toContain("sk-abcdefghijklmnop");
   });
 
@@ -79,7 +72,7 @@ describe("源码出网清单计入审计", () => {
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [] });
     expect(rows(repository)).toHaveLength(0);
 
-    // 模拟外层上下文预算把尾部整段裁掉：第二段没出门，就不能算出网
+    // 外层上下文预算把尾部整段裁掉时，第二段不算出网
     const kept = source({ path: "src/kept.ts", text: "const kept = 1;" });
     const cut = source({ path: "src/cut.ts", text: "const cut = 2;" });
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [kept, cut], sent: `代码上下文：\n${kept.text}\n\n问题：这段干什么？` });
@@ -99,7 +92,7 @@ describe("源码出网清单计入审计", () => {
     const [inRequest, inBackground] = rows(repository);
     expect(inRequest?.traceId).toBe("req-egress-1");
     expect(inRequest?.repositoryId).toBe(repositoryId(repository));
-    // 后台任务（导入期摘要）没有请求上下文，照旧记 null——不编一个 id 出来
+    // 后台任务没有请求上下文，记 null
     expect(inBackground?.traceId).toBeNull();
     expect(readFileSync(join(repository, ".tutor", "journal.jsonl"), "utf8").trim().split("\n")).toHaveLength(2);
   });

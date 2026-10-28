@@ -1,9 +1,8 @@
 import type { LlmTool } from "../application/port/llm-provider.js";
 
 /**
-  回合内向用户提问：只允许问「本轮上下文里确实没有、又决定答复形状」的那一格。
-  上下文或请求体已经给出的（画布选中节点、绑定文件、线程绑的题目）一律算不缺——
-  把「不确定」当缺意图是最常见的过度提问，所以判据写在引擎这侧：能自己查到的都不许问。
+  回合内向用户提问：只允许问本轮上下文里确实没有、又决定答复形状的那一格。
+  判据写在引擎这侧：上下文或请求体已经给出的都算不缺。
 */
 export type AskFacet = "goal" | "range";
 
@@ -58,10 +57,7 @@ export function askUserToolFor(facets: AskFacet[]): LlmTool {
   };
 }
 
-/**
-  校验一次提问。不合法不掀回合——回一句给模型看的实话，它照样能接着作答；
-  但一次合法的提问会让循环就地收尾（见 `tool-loop.ts`）。
-*/
+/** 校验一次提问：不合法时回一句给模型看的话，不掀回合。 */
 export function parseAsk(argumentsJson: string, allowed: AskFacet[]): { ok: true; ask: Omit<AskUserAudit, "toolCallId"> } | { ok: false; reason: string } {
   let parsed: Record<string, unknown>;
   try {

@@ -8,19 +8,9 @@ import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinking
 import { repositoryOr404, teachingLlm } from "../../infrastructure/composition-root.js";
 
 /**
-  配置与成本面的用例：运行时 LLM 设置（全局，含密钥掩码）、每仓预算、成本读数。
-  三条共用同一套口径：单价、预算、`pricingSourceOf` 的来源说明。
-
-  哪些值可以存下来，是这里的判断而不是传输层的：
-  - 单价三档必须当场拒——这两个值一路流进成本读数与预算闸门，存进 "-3" 或 "abc" 就算出负钱或 NaN，
-    而闸门按「钱 ≥ 预算」判断，NaN 恒为 false ⇒ 静默变成「永不超支」；判据与落盘恢复共用 `normalizeRate`；
-  - 接口地址只认 http(s)：填了 file:// 之类的协议会在 fetch 时以晦涩错误失败，不如在保存时就拒绝；
-  - 密钥里的空白几乎总是粘贴带进来的换行，存下来只会变成「401 但看不出为什么」；
-  - 超时按区间拒（1 秒~5 分钟）而不是钳下来收下：填 999999 的人以为自己有很多时间，实际连不上时要连等两发；
-    这一档原本是只能改 `.env` 再重启的旋钮，而模型侧那句「可以调大超时时长」一直在指它；
-  - 思考档位与新服务商/模型的兼容性提前校验，不支持的组合在保存时就拒，而不是等每次对话调用时报错。
-    `off` 豁免：none/unknown 模型的 off = 不发字段（恒可表达，与 applyThinking 语义一致），不能被这里拒掉。
-  */
+  配置与成本面的用例：运行时 LLM 设置（含密钥掩码）、每仓预算、成本读数。
+  哪些值能存下来在这里判：单价当场拒非法值、接口地址只认 http(s)、超时按区间拒、思考档位提前校验兼容性。
+*/
 export type SettingsFailure =
   | { kind: "repository-missing" }
   | { kind: "thinking-unsupported"; thinking: string }
