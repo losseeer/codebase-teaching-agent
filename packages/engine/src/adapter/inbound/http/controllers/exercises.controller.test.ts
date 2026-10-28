@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
 
-/** 练习路由这一层的闸门读数：题型拒收。沙箱实跑与付费前拒住在 exercises/ 那两组用例。 */
+/** 练习路由层的拒收用例：题型不支持。沙箱实跑与付费前拒收在 `exercises/` 的用例里。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });

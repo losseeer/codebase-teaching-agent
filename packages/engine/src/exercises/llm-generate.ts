@@ -14,7 +14,7 @@ import type { GuardCandidate } from "./guard-proposal.js";
   练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。
   kind / anchors / inputMode / gradingMode / options 不改，判分锚点与标准答案保持静态。
   任何失败都原样返回输入练习。
-  */
+*/
 
 const MAX_TITLE = 24;
 const MAX_PROMPT = 300;
@@ -24,7 +24,7 @@ export interface RefinedExercise {
   exercise: Exercise;
   /** 只有模型真的改写了题面时才有。 */
   usage?: LlmUsage;
-  /** 题面是否由模型改写；回落原因一并交出去。 */
+  /** 题面是否由模型改写。 */
   polished: boolean;
   polishFailure?: "no_excerpt" | "unparsable" | "provider_error";
 }
@@ -38,7 +38,7 @@ const kindRules: Record<ExerciseKind, string> = {
   llm_rubric: "题面围绕给定主题描述一个开放的分析任务，要求学习者用自己的话作答；题面不得包含或暗示参考答案。"
 };
 
-/** 题面润色的提示词：按题型取 `kindRules` 那一条。 */
+/** 题面润色的系统提示词。 */
 function refineSystemPrompt(kind: ExerciseKind): string {
   return [
     "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
@@ -57,7 +57,7 @@ function refineSystemPrompt(kind: ExerciseKind): string {
 export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider): Promise<RefinedExercise> {
   try {
     const excerpt = sourceExcerpt(repositoryPath, exercise);
-    // 摘录读不出来时，题面必然出自规则拼接。
+    // 没有摘录就不改写题面
     if (!excerpt) return { exercise, polished: false, polishFailure: "no_excerpt" };
 
     const system = refineSystemPrompt(exercise.kind);
@@ -93,7 +93,7 @@ interface ExerciseExcerpt {
   truncated?: boolean;
 }
 
-/** 摘录 → 出网清单的一条（润色与反馈两处共用）。 */
+/** 摘录转成出网清单的一条。 */
 function excerptSource(excerpt: ExerciseExcerpt): EgressSource {
   return { kind: "exercise-excerpt", path: excerpt.path, from: excerpt.from, to: excerpt.to, text: excerpt.text, masked: excerpt.masked, truncated: excerpt.truncated };
 }
@@ -105,12 +105,11 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const lines = readFileSync(join(repositoryPath, anchor.path), "utf8").split("\n");
     const from = Math.max(0, anchor.line - 1);
     const to = Math.min(lines.length, anchor.endLine ? Math.max(anchor.endLine, anchor.line + 5) : anchor.line + MAX_EXCERPT_LINES);
-    // 与锚点摘录、L1、read_file 同一道出网前筛。
     const masker = secretMasker();
     const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
     const text = joined.slice(0, 4_000);
-    // `to` 按真正进请求的那几行算。
+    // to 按实际进请求的行数算
     const sentLines = text.split("\n").length;
     return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
   } catch {
@@ -127,7 +126,7 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
   return { ...exercise, title, prompt };
 }
 
-/** LLM 出题（llm 族，单轮调用）：能否出题与出题同轮；proposal 仍需过确定性守门才落库。 */
+/** LLM 出题的结果类型；proposal 仍需过确定性守门。 */
 export type LlmGeneration =
   | { ok: false; reason: string; skillReads: SkillReadAudit[] }
   | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[] };
@@ -156,7 +155,7 @@ const GENERATION_SYSTEM_PROMPT = [
   "- criteria 给 2-4 条可操作的评分维度；answerKey 要具体到能让另一位评分者据此判分。"
 ].join("\n");
 
-/** 出题层的输入口径版本，进出题缓存的作用域键；提示词文案由指纹守卫，不靠手 bump。 */
+/** 出题层的输入口径版本，进出题缓存键。 */
 export const EXERCISE_STEP = defineAnalysisStep({
   layer: "exercise-generate",
   contractVersion: "exercise-v3",
@@ -170,7 +169,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     excerpt: candidate.excerpt
   }));
   const user = JSON.stringify({ tag: input.tag, candidates: excerpts });
-  // `to` 用构造时算好的实际末行。
+  // to 取构造时算好的实际末行
   recordEgress({
     repositoryPath: input.repositoryPath,
     scene: "practice.generate",
@@ -181,7 +180,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   });
   const response = await completeWithOptionalSkills({
     provider: input.provider,
-    // 清单由技能通道并进系统提示词。
+    // 技能清单由 completeWithOptionalSkills 并进系统提示词
     system: GENERATION_SYSTEM_PROMPT,
     user,
     maxTokens: 1_200,
@@ -201,7 +200,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
 }
 
-/** 判分读数：能读成数字就照它给的分判（含越界钳制），读不出返回 `undefined`。 */
+/** 判分数字解析：可解析则钳到 0-1，否则返回 `undefined`。 */
 function judgeScore(value: unknown): number | undefined {
   const raw = typeof value === "string" ? value.trim() : value;
   if (raw === "" || (typeof raw !== "number" && typeof raw !== "string")) return undefined;
@@ -226,7 +225,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   const parsed = parseJsonObject(response.text);
   const score = judgeScore(parsed?.score);
   if (!parsed || score === undefined) {
-    // 读不出分数就是没判出来，不补一个数；这里只报形状不抄正文。
+    // 读不出分数就不补值，只记录形状
     traceEngine("degrade", { what: "exercise_judge_unreadable", reason: parsed ? `score=${typeof parsed.score}` : "no_json_object", reply_chars: response.text.length });
     throw new Error("这次判分没成功，请再试一次。");
   }
@@ -268,19 +267,19 @@ const COMMENT_LINE = /^\s*(\/\/|#|--|\/\*|[*])/;
 /** 连续到第几行才折叠注释。 */
 const MIN_COMMENT_RUN = 4;
 
-/** 规则侧候选摘录构造：按符号边界开窗，连续 ≥4 行整段注释折成一行标注，折叠处不给行号。 */
+/** 按符号边界构造候选摘录，整段注释折成一行标注。 */
 export function buildTagCandidate(repositoryPath: string, path: string, span: { start: number; end?: number }, maxLines = 80): GuardCandidate | undefined {
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
     const start = Math.min(Math.max(1, Math.floor(span.start) || 1), lines.length);
     const symbolEnd = span.end !== undefined && span.end >= start ? Math.min(span.end, lines.length) : undefined;
-    // 窗口两头取更近的那个。
+    // 窗口末尾取两头中更近的那个
     const stop = Math.min(symbolEnd ?? lines.length, start + maxLines - 1, lines.length);
     const masker = secretMasker();
     const kept: string[] = [];
     const maxChars = 4_000;
     let used = 0;
-    // 实际出门的最后一行：折叠与截断的行都不算。
+    // lastEmitted 只记实际输出的最后一行
     let lastEmitted = start - 1;
     for (let index = start - 1; index < stop;) {
       if (COMMENT_LINE.test(lines[index] ?? "")) {
@@ -305,7 +304,6 @@ export function buildTagCandidate(repositoryPath: string, path: string, span: { 
       lineCount: lines.length,
       startLine: start,
       endLine: lastEmitted,
-      // 逐行过筛：这一条路同样是原文出网。
       excerpt: kept.join("\n"),
       masked: masker.masked
     };

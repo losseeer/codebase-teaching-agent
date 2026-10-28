@@ -1,10 +1,7 @@
 import type { JournalEvent, MasteryLevel, MasteryMapEntry, MasteryRecord } from "@codebase-tutor/domain";
 import { isLiveExerciseUnit } from "@codebase-tutor/domain";
 
-/**
-  掌握度的推导层：从 journal 的练习结果与「已掌握」事件回放曲线；真源只有 journal。
-  只收今天还认得的单元。
-  */
+/** 掌握度从 journal 的 `exercise_result` 事件回放，真源只有 journal。 */
 
 export function deriveMastery(events: JournalEvent[]): MasteryRecord[] {
   const records = new Map<string, MasteryRecord>();
@@ -32,7 +29,7 @@ export function currentMastery(records: MasteryRecord[]): MasteryLevel {
   return mostRecent?.level ?? 1;
 }
 
-/** `deriveMastery` 的加料版：补一个成功率，给画像的设置推荐用。 */
+/** 在 `deriveMastery` 的结果上补成功率。 */
 export function deriveMasteryMap(events: JournalEvent[]): MasteryMapEntry[] {
   return deriveMastery(events).map((record) => ({ ...record, successRate: record.attempts ? record.successes / record.attempts : 0 }));
 }

@@ -42,14 +42,12 @@ describe("completeWithReadTool", () => {
     expect(result.stoppedBy, "到的是轮数闸，读数就不能与预算或读文件额度混成一档").toBe("rounds");
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
     expect(result.usage).toEqual({ inputTokens: 250, outputTokens: 40 });
-    // 收尾轮不再带工具。
     expect(calls[2].tools).toBeUndefined();
     const refusal = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("工具轮次已用完"));
     expect(refusal?.content, "到限的是轮数，回话就不能说成读文件上限——模型会把这句转述给学习者").toContain("读文件额度还剩 4 次");
-    // 收尾这一次是最后一次调用：读到的正文必须原样在场。
+    // 收尾轮读到的正文原样在场
     const readBody = calls[2].messages?.find((message) => message.role === "tool" && message.content.startsWith("文件 "));
     expect(readBody?.content, "到闸收尾把正文抽成占位符，这一回合就交不出东西").not.toContain("已折叠");
-    // 首轮 user 消息始终在 messages[0]。
     expect(calls[1].messages?.[0]).toMatchObject({ role: "user" });
     expect(calls[1].messages?.[0].content).toBe("问题原文");
   });
@@ -64,7 +62,7 @@ describe("completeWithReadTool", () => {
     expect(result.completion.text).toBe("收尾。");
     const unknown = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("未知工具"));
     expect(unknown?.content).toContain("只支持 read_file");
-    expect(result.fileReads).toHaveLength(1); // 未知工具不计入读取审计
+    expect(result.fileReads).toHaveLength(1);
   });
 
   it("额度在同一轮里花完也逐条挡：轮首那次判据只挡得到下一轮", async () => {
@@ -73,7 +71,6 @@ describe("completeWithReadTool", () => {
       { text: "看完了。", finishReason: "stop" }
     ]);
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
-    // 两条都发在同一个回合里：只读到 1 个。
     expect(result.fileReads).toHaveLength(1);
     const blocked = calls[1].messages?.find((message) => message.role === "tool" && message.content.includes("读文件上限"));
     expect(blocked?.content, "第二条读取要照实回绝，不能悄悄真读").toBeDefined();
@@ -114,7 +111,6 @@ describe("completeWithReadTool 的用量汇总", () => {
       { text: "读完的回答。", usage: { inputTokens: 9_000, outputTokens: 20, promptCacheHitTokens: 8_000 }, finishReason: "stop" }
     ]);
     const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
-    // 两边都没上报 cache_hit 时该字段整个缺席，而不是 0。
     expect(result.usage).toEqual({ inputTokens: 17_000, outputTokens: 30, promptCacheHitTokens: 15_000 });
   });
 });
@@ -146,7 +142,6 @@ describe("completeWithReadTool 的中止", () => {
     expect(calls).toHaveLength(1);
   });
 
-  /** 回合作废时，本轮已发生的工具调用要随异常带出去。 */
   it("最后一趟 LLM 在途被中止：异常上带着本轮已发生的读文件、技能与外部调用", async () => {
     const externalTool = { name: "mcp__docs__lookup", description: "【外部 docs】查一份文档", parameters: { type: "object" as const, properties: {} } };
     const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 6, masked: 0, ok: true, ms: 1 };
@@ -196,7 +191,6 @@ describe("completeWithReadTool 的中止", () => {
       modelVersion: "scripted:v1",
       complete: async () => {
         n += 1;
-        // 第一趟读一个、被拒一个；第二趟时用户已点停止。
         if (n === 1) {
           return { text: "", finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: ".env" }) }] };
         }
@@ -208,7 +202,6 @@ describe("completeWithReadTool 的中止", () => {
       .then(() => undefined, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(LlmAbortedError);
     expect(n, "中止后不该把第二趟的工具调用真执行掉").toBe(2);
-    // 被拒读的那次也要留痕。
     expect(toolLoopAuditsOf(error)?.fileReads.map((read) => `${read.path}:${read.denied ? "拒" : "读"}`)).toEqual(["read-file.ts:读", ".env:拒"]);
   });
 });
@@ -232,7 +225,6 @@ describe("completeWithReadTool 的 search_code 集成", () => {
     const searchResult = calls[1].messages?.find((message) => message.role === "tool");
     expect(searchResult?.content).toContain('search_code "read"');
     expect(searchResult?.content).toContain("read-file.ts");
-    // maxCalls=1 只被那次成功的 read 用掉。
     expect(result.codeSearches).toEqual([{ query: "read", hits: 1, topPaths: ["read-file.ts"] }]);
     expect(result.fileReads).toHaveLength(1);
     expect(result.completion.text).toBe("先搜后读的回答。");
@@ -252,7 +244,6 @@ describe("completeWithReadTool 的 search_code 集成", () => {
   });
 });
 
-/** 跨仓那一档：换根时守卫照用、未知仓名照实回、没有第二个仓时工具清单不变。 */
 describe("completeWithReadTool 的跨仓访问", () => {
   const other = mkdtempSync(join(tmpdir(), "tutor-cross-"));
   writeFileSync(join(other, "ShopController.java"), "class ShopController {\n  save() {}\n}\n", "utf8");
@@ -310,7 +301,6 @@ describe("completeWithReadTool 的跨仓访问", () => {
       { text: "收尾。", finishReason: "stop" }
     ]);
     await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 4, maxCalls: 5, cross: { ...cross, onHandedOut: (repo, path) => handed.push(`${repo}/${path}`) } });
-    // 只有真读到的对端文件进这份登记。
     expect(handed).toEqual(["other/ShopController.java"]);
   });
 
@@ -364,7 +354,6 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       skills: { brief: "可用技能：\n- empty-skill：一份还没写正文的技能。", bodyOf: (name) => (name === "empty-skill" ? "" : undefined) }
     });
     expect(blank.skillReads).toEqual([{ skill: "empty-skill", chars: 0, found: true }]);
-    // found:false 必须照样记。
     expect(result.skillReads).toEqual([
       { skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true },
       { skill: "不存在的技能", chars: 0, found: false }
@@ -406,7 +395,6 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       external: { tools: [externalTool], call: async () => ({ text: "外部正文", audit }) },
       onProgress: (frame) => frames.push(frame)
     });
-    // 一轮一件活动：帧序是「想 → 做 → 想 → 做」。
     expect(frames).toEqual([
       { type: "thinking" }, { type: "loading_skill", skill: "demo" },
       { type: "thinking" }, { type: "editing_diagram" },
@@ -447,7 +435,6 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
   });
 });
 
-/** 回合内压缩：既不能逐轮重付同一份正文，也不能让模型以为自己没读过。 */
 describe("compactTurnContext", () => {
   /** 一条真实的读取结果形状：抬头写明文件与行区间。 */
   const readBody = (path: string) => `文件 ${path}（第 1-200 行，共 400 行，已达单次读取预算，继续读请用 offset=201）：\n${"1| const value = 1;\n".repeat(200)}`;
@@ -514,7 +501,6 @@ describe("compactTurnContext", () => {
   });
 });
 
-/** 回合检查点与每轮调用前的预算复查：收尾要清、用户停止要清、到线不许继续加轮。 */
 describe("回合检查点与预算闸门", () => {
   const emptyState = (rounds: number): TurnLoopState => ({
     messages: [
@@ -577,7 +563,6 @@ describe("回合检查点与预算闸门", () => {
     // 额度 2：残局已用掉 1 次，这一轮用掉第 2 次后收尾。
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts", "tool-loop.ts"]);
     expect(result.rounds).toBe(2);
-    // 两趟调用：续跑的一轮与答完的一趟，首轮不重放。
     expect(calls).toHaveLength(2);
   });
 

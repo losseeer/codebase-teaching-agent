@@ -6,7 +6,7 @@ import { Journal } from "../adapter/outbound/persistence/journal.js";
 import { budgetGateNotice, currentPricing, defaultMonthlyBudgetUsd, priceComponents, pricingIsConfigured, pricingSourceOf, summarizeCost, type Pricing } from "./cost.js";
 import { setLlmRuntimeSettings } from "../adapter/outbound/llm/runtime.js";
 
-/** 测试一律显式传 pricing：不依赖机器上的环境变量，算式才对得上。 */
+/** 单价由测试显式传入，不读机器上的环境变量。 */
 
 const pricing: Pricing = { inputPerMillionUsd: 0.3, cacheHitPerMillionUsd: 0.03, outputPerMillionUsd: 0.6 };
 
@@ -20,7 +20,6 @@ describe("summarizeCost", () => {
     const journal = new Journal(repository, "repo_1");
     journal.append("token_usage", { input_tokens: 900, output_tokens: 100, cache_hit_tokens: 400, provider: "deepseek-chat", scene: "teach" }, "thread_a");
     journal.append("token_usage", { input_tokens: 200, output_tokens: 50, cache_hit_tokens: 0, provider: "kimi-k2", scene: "map_chat" }, "thread_b");
-    // 预算已达上限那一回合不付 token：provider 记本地规则、mode 记 degraded
     journal.append("token_usage", { input_tokens: 0, output_tokens: 0, cache_hit_tokens: 0, provider: "local-heuristic-v1", scene: "teach", mode: "degraded", cause: "monthly_budget_reached" }, "thread_a");
 
     const summary = summarizeCost(repository, defaultMonthlyBudgetUsd, undefined, pricing);
@@ -30,8 +29,7 @@ describe("summarizeCost", () => {
     expect(summary.billedInputTokens).toBe(700);
     expect(summary.outputTokens).toBe(150);
     expect(summary.degradedTurns).toBe(1);
-    // 界面那两行就是这一对差：降级那一行有 mode 标记、又被算进 turns，所以减一次；
-    // 一个回合若留两行（正常行 + 降级行），没付钱的 teach 回合就会混进「计费回合」里。
+    // 降级那一行也计入 turns，相减才是付了 token 的回合数。
     expect(summary.turns - summary.degradedTurns).toBe(2);
     expect(summary.byScene).toEqual([
       { label: "teach", turns: 2, inputTokens: 900, outputTokens: 100 },
@@ -91,9 +89,7 @@ describe("summarizeCost", () => {
   });
 });
 
-/**
-  这句告警是「闸门静默失效」那一整族唯一的出口，所以它的触发条件本身要有测试：配了任一档就该闭嘴，全没配才说话。
-  */
+/** 单价全没配时的闸门告警；配上任一档即不再告警。 */
 describe("budgetGateNotice", () => {
   it("三档全没配 → 说清算不出花费、额度上限不会触发", () => {
     const notice = budgetGateNotice({ inputPerMillionUsd: 0, outputPerMillionUsd: 0 });
@@ -106,16 +102,13 @@ describe("budgetGateNotice", () => {
   });
 });
 
-/**
-  钉的是「现读」契约：界面上改价后，成本读数与预算闸门必须认新价，不能按模块加载时算一次的旧值走。
-  两层回落链本身见 currentPricing。
-  */
+/** 单价按当下配置现读，不按模块加载时算一次的值。 */
 describe("currentPricing（现读两层回落）", () => {
   const RATE_ENV = ["TUTOR_INPUT_USD_PER_MILLION", "TUTOR_OUTPUT_USD_PER_MILLION", "TUTOR_CACHE_HIT_USD_PER_MILLION"];
   let pricingDir = "";
 
   beforeEach(() => {
-    // 单价随 llm-settings.json 落盘：必须把它指到临时目录，否则测试会写用户那份 ~/.codebase-tutor/
+    // llm-settings.json 指到临时目录，不写用户那份 ~/.codebase-tutor/。
     pricingDir = mkdtempSync(join(tmpdir(), "tutor-pricing-"));
     process.env.TUTOR_LLM_SETTINGS_FILE = join(pricingDir, "llm-settings.json");
     setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
@@ -123,7 +116,7 @@ describe("currentPricing（现读两层回落）", () => {
   });
 
   afterEach(() => {
-    // 顺序要紧：先清内存态（它会落盘到临时文件），再撤掉 TUTOR_LLM_SETTINGS_FILE，否则这次清理写到默认落点
+    // 顺序不能换：先清内存态（它会落盘），再撤 TUTOR_LLM_SETTINGS_FILE。
     setLlmRuntimeSettings({ inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: "" });
     for (const key of RATE_ENV) delete process.env[key];
     delete process.env.TUTOR_LLM_SETTINGS_FILE;

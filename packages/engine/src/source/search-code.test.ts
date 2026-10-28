@@ -4,7 +4,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 import { SEARCH_CODE_TOOL, buildSearchCorpus, executeSearchCode } from "./search-code.js";
 import { segmentForLookup } from "@codebase-tutor/platform";
 
-/** 小型假仓：3 个文件，分别提供路径/符号/职责三种命中面与一个 P2 假阳性诱饵。 */
+/** 小型假仓：3 个文件，覆盖路径、符号、职责三种命中面。 */
 const INDEX = {
   repositoryId: "r1",
   repositoryPath: "/fake",
@@ -168,13 +168,14 @@ describe("executeSearchCode 边界行为", () => {
         symbols: paths.map((path, i) => ({ id: `w${i}`, name: `S${i}Service`, kind: "class", path, line: 1 }))
       }
     } as unknown as RepositoryAnalysis;
-    const fatSummaries = new Map(paths.map((path) => [path, `缓存${"读写".repeat(200)}`])); // 建库时被长度上限裁住
+    // 摘要在建库时被长度上限裁短。
+    const fatSummaries = new Map(paths.map((path) => [path, `缓存${"读写".repeat(200)}`]));
     const wideCorpus = buildSearchCorpus(wideIndex, wideAnalysis, fatSummaries);
     const { content, audit } = executeSearchCode(wideCorpus, JSON.stringify({ query: "缓存", limit: 15 }));
     expect(audit.hits).toBe(20);
     expect(content.length).toBeLessThan(3_000);
     expect(content).toContain("超出结果预算");
-    // 抬头那句条数必须等于真给出的条目行：省略提示那一行不算一条结果
+    // 抬头的条数等于实际给出的条目行数。
     const claimed = Number(/返回前 (\d+) 条/.exec(content)?.[1] ?? -1);
     expect(claimed).toBe(content.split("\n").filter((line) => line.startsWith("- ")).length);
   });
@@ -210,7 +211,7 @@ describe("整句中文：兜底最后一级与它的两道闸", () => {
       repositoryId: "r9",
       graph: { imports: Object.fromEntries(paths.map((path) => [path, []])), calls: [], symbols: [], entrypoints: [], semanticBackend: "static", lspStatus: [] }
     } as unknown as RepositoryAnalysis;
-    // 四条摘要都含「文件」⇒ 文档频率 4/4 超上限（max(3, ⌊4×12%⌋)=3）被当通用词丢掉；其余片段无人命中
+    // 四条摘要都含「文件」⇒ 文档频率超上限，被当通用词丢掉；其余片段无人命中。
     const summaries = new Map<string, string>([
       ["src/a/Up.java", "文件上传"], ["src/a/Down.java", "文件下载"], ["src/a/Parse.java", "文件解析"], ["src/a/Keep.java", "文件缓存读写"]
     ]);
@@ -244,7 +245,8 @@ describe("整句中文：兜底最后一级与它的两道闸", () => {
     ]));
     const result = executeSearchCode(twoFace, JSON.stringify({ query: "一对一的私信验签是怎么做" }));
     expect(result.audit.segmented).toBe(true);
-    expect(result.audit.topPaths).toEqual(["src/a/Chat.java"]);   // 私信 + 验签 两处不重叠 ⇒ 进；一对 + 对一 同一处 ⇒ 不进
+    // 私信 + 验签 两处不重叠 ⇒ 进；一对 + 对一 出自同一处 ⇒ 不进。
+    expect(result.audit.topPaths).toEqual(["src/a/Chat.java"]);
     expect(result.content).toContain("私信");
     expect(result.content).not.toContain("Pair.java");
   });

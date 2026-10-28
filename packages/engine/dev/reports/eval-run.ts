@@ -17,7 +17,8 @@ import type { TeachTurn } from "../../src/application/runtime/turn-invariants.js
 import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";
 
 /**
-  评测 runner：零 token 确定性判分，全程只读。LLM 真跑与表达质量裁判是另开的脚本。
+  评测 runner：零 token 确定性判分，全程只读。
+  LLM 真跑与表达质量裁判在 phaseB:judge。
   用法：`pnpm phaseB:eval [仓库路径]`
 */
 
@@ -32,7 +33,8 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
+  // 地址簿按最近使用在后排序。
+  return list.at(-1)!;
 })();
 
 function pct(numerator: number, denominator: number): string {
@@ -51,21 +53,22 @@ if (!existsSync(databaseFile)) {
 }
 const database = new DatabaseSync(databaseFile, { readOnly: true });
 
-// L1 摘要按「同文件最新一行」取，行数上限与产品语料同一份常量：口径比产品宽，hit@5 就是虚高
+// 摘要按同文件最新一行取，行数上限与产品语料共用一份常量。
 const summaries = new Map<string, string>();
 for (const row of database.prepare(`SELECT summary FROM summaries ORDER BY created_at DESC LIMIT ${LATEST_SUMMARY_LIMIT}`).all() as { summary: string }[]) {
   try {
     const parsed = JSON.parse(row.summary) as { path?: string; summary?: string };
     if (typeof parsed.path === "string" && typeof parsed.summary === "string" && !summaries.has(parsed.path)) summaries.set(parsed.path, parsed.summary);
-  } catch { /* 非 JSON 行跳过 */ }
+  } catch {
+    // 非 JSON 行跳过。
+  }
 }
 database.close();
 
 const caseDirectory = join(here, "..", "eval", "cases");
 const caseFiles = readdirSync(caseDirectory).filter((name) => name.endsWith(".json"));
 
-// 摘要含标识符率：slice-v2 口径（「至少点出一个真实英文标识符」）的直接读数；
-// 连续 ≥5 位字母数字串才算，泛化短词（get、api）不计——与判分器同为零 token。
+// 摘要含标识符率：连续 ≥5 位字母数字串才算，泛化短词不计。
 const withIdentifier = [...summaries.values()].filter((text) => /[A-Za-z][A-Za-z0-9]{4,}/.test(text)).length;
 
 emit("# B 档评测报告（零 token 确定性判分）");
@@ -86,8 +89,8 @@ const analysis: RepositoryAnalysis = {
 const corpusWith = buildSearchCorpus(index, analysis, summaries);
 const corpusWithout = buildSearchCorpus(index, analysis, new Map());
 let anyCaseRan = false;
-// 用例集按「仓库路径包含 repository 名」匹配，包含关系会串仓：只有被更具体（字符串更长且包含本条）的
-// 用例集盖住时才让位，同名的兄弟集都要跑。
+// 用例集按仓库路径是否包含 repository 名匹配。
+// 被更具体（更长且包含本条）的用例集盖住时才让位。
 const caseDocs = caseFiles.map((name) => ({ name, doc: JSON.parse(readFileSync(join(caseDirectory, name), "utf8")) as { repository: string; cases: SearchCase[] } }));
 const matched = caseDocs.filter((entry) => repositoryPath.toLowerCase().includes(entry.doc.repository.toLowerCase()));
 const takenOver = (entry: { name: string; doc: { repository: string } }): string | undefined => {
@@ -118,8 +121,8 @@ for (const { name, doc } of caseDocs) {
   }
   anyCaseRan = true;
   const holdoutIds = new Set(doc.cases.filter((item) => item.holdout).map((item) => item.id));
-  // 词法三臂对照：摘要在上（产品现状）/ 无摘要 / 摘要在上 + 中文整句切词
-  // 第三臂只在查询侧动手（`segmentForLookup`），语料与打分一字不变：量的是词法输掉的部分里有多少只是没切词。
+  // 三臂对照：摘要在上 / 无摘要 / 摘要在上且查询侧切词。
+  // 第三臂只改查询侧，语料与打分不变。
   const arms = armSet(doc.cases);
   emit();
   emit(`### ${name}`);
@@ -132,7 +135,7 @@ for (const { name, doc } of caseDocs) {
     emit(`| ${holdoutIds.has(arms[0].arm.perCase[i]!.id) ? `${arms[0].arm.perCase[i]!.id}（留）` : arms[0].arm.perCase[i]!.id} | ${cells.join(" | ")} |`);
   }
   emit();
-  // 调优例与留出例分列报数：只有调优例涨 = 「对着考纲出题」的证据；两边同涨才是口径真的变好
+  // 调优例与留出例分列报数。
   const cohorts = [
     { label: "调优", cases: doc.cases.filter((item) => !item.holdout) },
     { label: "留出", cases: doc.cases.filter((item) => item.holdout) }
@@ -141,7 +144,7 @@ for (const { name, doc } of caseDocs) {
     const cohortArms = armSet(cohort.cases);
     const rate = (arm: ScoredArm) => `hit@5 ${pct(arm.hitRate.numerator, arm.hitRate.denominator)}，平均 recall ${((arm.meanRecall || 0) * 100).toFixed(1)}%`;
     for (const entry of cohortArms) emit(`- 「${cohort.label}」${entry.label}：${rate(entry.arm)}`);
-    // 负例分臂报数：合并计数会把「只有一档误命中」读成「所有档都误命中」
+    // 负例误命中按臂分列。
     if (cohortArms[0].arm.negatives.length) {
       const parts = cohortArms.map((entry) => {
         const wrong = entry.arm.negatives.filter((item) => item.wrongHits.length > 0);
@@ -171,7 +174,7 @@ if (!teachTurns.length) {
 emit();
 console.log(out.join("\n"));
 
-/** 从 journal 事件流装配问答回合的机检视图：style 取回合前最后一次 style_shift。 */
+/** 从 journal 事件装配机检视图；style 取回合前最后一次 style_shift。 */
 function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[] {
   const bySession = new Map<string, typeof events>();
   for (const event of events) {

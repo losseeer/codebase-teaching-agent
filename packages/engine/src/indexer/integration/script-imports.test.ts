@@ -4,7 +4,7 @@ import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
-/** 临时目录造小仓库：新语言的解析规则用独立夹具，不进 frozen fixture 的共享快照。 */
+/** 在临时目录写出一个小仓库，跑完删除。 */
 async function withRepo<T>(name: string, fileMap: Record<string, string>, run: (dir: string) => T): Promise<T> {
   const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -34,7 +34,7 @@ describe("依赖边 — Vue SFC 与 tsconfig paths 别名", () => {
       "src/main.ts": "import App from \"./App.vue\";\nimport { useUser } from \"@/stores/user\";\n\ncreateApp(App).mount(\"#app\");\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // 声明顺序：相对 → 别名 → 第三方；vue 无落点被丢弃
+      // imports 数组按源码里的声明顺序给出
       expect(graph.imports.get("src/App.vue")).toEqual(["src/components/Header.vue", "src/stores/user.ts"]);
       expect(graph.imports.get("src/main.ts")).toEqual(["src/App.vue", "src/stores/user.ts"]);
       const load = graph.symbols.find((symbol) => symbol.name === "load");
@@ -57,7 +57,7 @@ describe("依赖边 — Vue SFC 与 tsconfig paths 别名", () => {
       "src/stores/user.ts": "export const useUser = () => ({});\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // exact 别名（无 `*`）不支持；`@another/` 与 `@/` 前缀不同不误配；只有 `@/` 命中
+      // 别名只认带 `*` 的通配形式
       expect(graph.imports.get("src/App.vue")).toEqual(["src/stores/user.ts"]);
     }));
 

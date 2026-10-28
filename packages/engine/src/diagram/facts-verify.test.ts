@@ -7,10 +7,7 @@ import type { DeclaredType, RegistryEntry, RegistryFileFact, TypeRelationFileFac
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { factsPairChecker, type FactSources } from "./facts-verify.js";
 
-/**
-  第四张结构表：画布的边靠产物里的类型关系与运行时绑定来确认。
-  要拦两类事故：代码里没有调用行被当成猜测；反查不到落点的边被当成证据。
-*/
+/** 证据表用例：类型关系与运行时绑定能确认哪些画布边、哪些不能。 */
 
 const REPO = "repo_facts_verify";
 
@@ -28,7 +25,7 @@ const registry = (path: string, entries: RegistryEntry[]): Row => ({
   payload: { path, language: "java", backend: "ast", version: "test", entries }
 });
 
-/** 一个用例一套现场：产物写进临时库，取行的通道照 `canvas-tools` 那一侧的接法给。 */
+/** 每个用例一套现场：把产物写进临时库，并给出取行的通道。 */
 function seeded(rows: Row[]): { db: TutorDatabase; root: string; sources: FactSources } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-verify-")));
   mkdirSync(join(root, "case"), { recursive: true });

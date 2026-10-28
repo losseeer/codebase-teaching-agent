@@ -11,7 +11,7 @@ import { reprobeIsolation } from "../adapter/outbound/sandbox/isolation.js";
 import { budgetGateNotice } from "../cost/cost.js";
 import { importer } from "./composition-root.js";
 
-/** 释放挂载仓库的监听与句柄；`app.close()` 不会替我们关 `fs.FSWatcher`。 */
+/** 关闭挂载仓库的文件监听与数据库句柄。 */
 export async function releaseMountedRepositories(): Promise<void> {
   for (const repository of importer.mountedRepositories()) {
     repository.watcher?.close();
@@ -19,15 +19,15 @@ export async function releaseMountedRepositories(): Promise<void> {
   }
 }
 
-/** 把已排队的两条日志写完：`appendLine` 走异步队列，直接 exit 会丢收尾行。 */
+/** 等两条日志队列里已排队的行写完。 */
 export async function flushAuditLines(): Promise<void> {
   await Promise.all([flushEngineLog(), flushLlmLog()]);
 }
 
-/** 开机打印该看见的读数：访问控制口径、沙箱闸门、出厂技能、预算闸门。 */
+/** 开机打印访问控制、沙箱隔离、出厂技能与预算闸门的读数。 */
 export function runStartupReadings(): void {
   console.log("[engine] 访问控制：无认证闸（本机任意进程都能调）｜来源闸生效（只信回环与 TUTOR_ALLOWED_ORIGINS，非可信来源 403）");
-  /** 沙箱隔离探测放后台跑，结果开机就报；不过则代码题整域禁用。 */
+  // 沙箱隔离探测放后台跑，不 await，结果就绪后打印。
   void reprobeIsolation().then((sandbox) => {
     console.log(`[engine] 沙箱：${sandbox.level === "enforced" ? `强制隔离已验（${sandbox.checks.length} 项 canary 全过 · ${sandbox.backend} · ${sandbox.durationMs}ms）` : `未通过——代码题域禁用：${sandbox.reason}`}`);
     if (sandbox.level !== "enforced") {
@@ -44,7 +44,7 @@ export function runStartupReadings(): void {
     // 装不上只影响预置技能，不影响开机。
     console.warn(`[engine] 出厂技能没装：${error instanceof Error ? error.message : String(error)}`);
   }
-  // 单价全没配就是预算闸门失效：开机就要看得见。
+  // 单价全没配时预算闸门不会生效。
   const gateNotice = budgetGateNotice();
   if (gateNotice) {
     console.warn(`[engine] ${gateNotice}`);
@@ -52,7 +52,7 @@ export function runStartupReadings(): void {
   }
 }
 
-/** 信号收尾：先跑 `close()` 再按 0 退出；收尾带 1.5s 上限，长连接不能拖住退出。 */
+/** SIGINT/SIGTERM 收尾：跑 `close()` 再按 0 退出，收尾最长等 1.5s。 */
 export function installShutdownHandler(options: { close(): Promise<void> }): void {
   let shuttingDown = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -65,7 +65,7 @@ export function installShutdownHandler(options: { close(): Promise<void> }): voi
       console.log(`[engine] 收到 ${signal}，开始收尾（监听 / 库句柄 / 外部 MCP 子进程）`);
       const done = (): void => process.exit(0);
       const guard = setTimeout(done, 1_500);
-      // 收尾超时直接 exit 时，先把已排队的日志写完。
+      // 收尾超时直接 exit 之前，先把已排队的日志写完。
       void flushAuditLines();
       options.close().then(() => { clearTimeout(guard); done(); }, (error: unknown) => { clearTimeout(guard); console.error(`[engine] 收尾没跑完（外部 MCP 子进程或日志 flush 抛错）：${String(error)}`); done(); });
     });

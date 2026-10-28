@@ -2,19 +2,19 @@ import type { RubricCriterion } from "@codebase-tutor/domain";
 
 /**
   LLM 出题守门（确定性一端）：任一不过即否决整道题。
-  ① 契约：字段齐全；② 事实：锚点必须落在候选摘录集合内；③ 泄漏：题面不得含参考答案片段。
-  题面与标题的字数不在这里否决；answerKey 与 criteria 仍受长度上限。
-  */
+  三类检查：契约（字段齐全与长度上限）、事实（锚点落在候选摘录内）、泄漏（题面含参考答案片段）。
+  标题字数不检查。
+*/
 
 export interface GuardCandidate {
   path: string;
   excerpt: string;
   lineCount: number;
-  /** 摘录的起始行号（符号定位窗口不从第 1 行开始时使用；默认 1）。锚点必须落在 [startLine, lineCount] 内。 */
+  /** 摘录的起始行，默认 1；锚点行号要落在 [startLine, lineCount] 内。 */
   startLine?: number;
   /** 摘录实际给到的最后一行（文件真实行号）。 */
   endLine?: number;
-  /** 摘录里隐去了几处疑似密钥（出网前的同一道筛，见 `security/secrets.ts`）。报表要拿它分清「扫过且干净」与「没扫」。 */
+  /** 摘录里隐去的疑似密钥处数。 */
   masked?: number;
 }
 
@@ -32,7 +32,7 @@ export interface GuardIssue {
   message: string;
 }
 
-/** 题面废件线：超过这个长度不像「一道题的说明」，像把整份源码抄了进来。 */
+/** 题面、参考答案的字数上限与评分维度条数上限。 */
 const MAX_PROMPT = 4_000;
 const MAX_ANSWER_KEY = 2_000;
 const MAX_CRITERIA = 6;

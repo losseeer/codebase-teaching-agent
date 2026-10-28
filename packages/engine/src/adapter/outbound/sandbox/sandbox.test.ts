@@ -5,10 +5,8 @@ import { runRaw } from "./runner.js";
 import { resolveToolchain, seatbeltProfile } from "./profile.js";
 import { homedir } from "node:os";
 
-/**
-  沙箱测试读真跑出来的 stdout 断言，不接受「profile 看起来对」。
-  嵌套 `sandbox-exec` 起不来的环境里集成用例自我跳过并点名环境不支持；不依赖真跑的几条永远照跑。
-*/
+/** 沙箱测试读真跑出来的 stdout 断言，不接受「profile 看起来对」。
+    嵌套 `sandbox-exec` 起不来的环境里集成用例跳过并点名环境不支持。 */
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[sandbox] 本机起不了嵌套 sandbox-exec（${capability.detail}）：集成用例按「环境不支持」跳过，这不是通过，是取不到证据`);
 const requireSandbox = (ctx: TestContext): void => { if (!capability.usable) ctx.skip(); };
@@ -36,7 +34,7 @@ describe("沙箱隔离探测", () => {
     // 判成 enforced 必须每项都过；一项没过必须判 unavailable
     expect(status.level === "enforced", `级别与逐项读数不一致：${status.level} / 没过的是 ${status.checks.filter((check) => !check.passed).map((check) => check.name).join("、") || "无"}`).toBe(status.checks.every((check) => check.passed));
     if (!capability.usable) {
-      // 环境不支持的机器上结论只由上面那条等价律管，这里不再断言「一定过」
+      // 环境不支持时只靠上面的等价律，不断言一定过
       ctx.skip();
     }
     expect(status.checks.filter((check) => !check.passed).map((check) => `${check.name}: ${check.detail}`)).toEqual([]);

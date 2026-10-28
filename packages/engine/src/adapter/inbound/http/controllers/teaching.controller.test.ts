@@ -1,10 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, TAIL, sseEvents, deltasOf, doneEvent, type RouteFixture } from "../controller-test-kit.js";
 
-/**
-  教学作用域（SSE）的回合收尾：会话即线程，回合正文/用量/设置快照都落库，中止那一路按「作废」收尾。
-  夹具与假 provider 见 `route-test-kit.ts`，零 token。
- */
+/** 教学作用域（SSE）：会话即线程，回合正文落库并与 done.message 一致，不变量复检进 journal。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });

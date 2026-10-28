@@ -1,7 +1,5 @@
-/**
-  思考参数能力表：按模型前缀查表，先命中先赢；表外模型 auto/off 不发字段、显式档位报错。
-  私有或新模型用 `TUTOR_THINKING_STYLES=前缀=样式` 声明能力（样式：deepseek|openai|anthropic|none）。
-  */
+/** 思考参数能力表：按模型前缀查表，先命中先赢。
+    表外模型用 `TUTOR_THINKING_STYLES=前缀=样式` 声明能力（样式：deepseek|openai|anthropic|none）。 */
 import type { ThinkingEffort } from "../../../application/port/llm-provider.js";
 
 export type ThinkingStyle = "deepseek" | "openai" | "anthropic" | "none" | "unknown";
@@ -33,7 +31,7 @@ const BUILTIN_CAPABILITIES: { prefix: string; capability: ThinkingCapability }[]
   { prefix: "gpt-5.4", capability: { style: "openai", efforts: { off: "none", low: "low", high: "high", max: "xhigh" } } },
   { prefix: "gpt-5.3", capability: { style: "openai", efforts: { off: "none", low: "low", high: "high", max: "xhigh" } } },
   { prefix: "gpt-5.2", capability: { style: "openai", efforts: { off: "none", low: "low", high: "high", max: "xhigh" } } },
-  // GPT-5 初代与 o 系列：只有 low/medium/high，思考关不掉
+  // GPT-5 初代与 o 系列：只有 low/high，思考关不掉
   { prefix: "gpt-5", capability: { style: "openai", efforts: { low: "low", high: "high" } } },
   { prefix: "o1", capability: { style: "openai", efforts: { low: "low", high: "high" } } },
   { prefix: "o3", capability: { style: "openai", efforts: { low: "low", high: "high" } } },
@@ -59,7 +57,7 @@ const BUILTIN_CAPABILITIES: { prefix: string; capability: ThinkingCapability }[]
 /** `TUTOR_THINKING_STYLES` 的解析缓存。 */
 let envOverrides: { prefix: string; capability: ThinkingCapability }[] | undefined;
 
-/** 重置思考能力的环境变量解析缓存，供测试改环境变量后重读。 */
+/** 重置思考能力的环境变量解析缓存。 */
 export function resetThinkingEnvCacheForTests(): void {
   envOverrides = undefined;
 }

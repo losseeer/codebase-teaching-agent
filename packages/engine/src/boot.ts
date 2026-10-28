@@ -6,7 +6,6 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   开机原语：读 `.env`、取版本号、记启动分段。
-  `T0` 与 `tboot` 同处一文，装配层才能也记分段。
   */
 const T0 = _perf.now();
 
@@ -17,21 +16,17 @@ export function tboot(label: string): void {
   traceEngine("boot", { phase: label }, { traceId: null, durationMs });
 }
 
-/** engine 版本号单源 = packages/engine/package.json；读不到回落 0.0.0。 */
+/** engine 版本号的唯一来源是 packages/engine/package.json；读不到时为 0.0.0。 */
 export const engineVersion: string = (() => {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
     return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version as string;
   } catch (error) {
-    // 版本只用于 /api/health 回显；读不到要留一行原因。
     console.warn(`[boot] 读不到 engine 的 package.json version，健康检查将回显 0.0.0：${String(error)}`);
     return "0.0.0";
   }
 })();
-/**
-  .env 解析：只填 process.env 里不存在的键，shell 显式 export 的优先。
-  支持 `#` 注释、`export` 前缀、单双引号、行尾注释。
-  */
+/** 解析 .env 文本：支持 `#` 注释、`export` 前缀、单双引号、行尾注释。 */
 
 export function parseDotEnv(text: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -49,7 +44,7 @@ export function parseDotEnv(text: string): Record<string, string> {
       value = value.slice(1, -1);
       if (quote === `"`) value = value.replace(/\\n/g, "\n").replace(/\\"/g, `"`).replace(/\\\\/g, "\\");
     } else {
-      /** 未加引号的值：`#` 起头按空值；行尾注释只认 ` #`，否则会剪掉 URL 的 `#fragment`。 */
+      /** 未加引号的值：`#` 起头按空值；行尾注释只认 ` #`。 */
       if (value.startsWith("#")) value = "";
       else {
         const hash = value.indexOf(" #");
@@ -61,7 +56,7 @@ export function parseDotEnv(text: string): Record<string, string> {
   return result;
 }
 
-/** 把 parsed 里 process.env 尚未定义的键填进去；返回实际注入的键名列表（调试/测试用）。 */
+/** 只填 process.env 里尚未定义的键，shell 显式 export 的优先；返回实际注入的键名。 */
 export function applyDotEnv(parsed: Record<string, string>): string[] {
   const injected: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
@@ -73,7 +68,7 @@ export function applyDotEnv(parsed: Record<string, string>): string[] {
   return injected;
 }
 
-/** 从模块位置逐级向上找 .env（src/、dist/ 深度都可能变），找不到再从 cwd 向上找。 */
+/** 从模块位置逐级向上找 .env，找不到再从 cwd 向上找。 */
 export function findDotEnvPath(): string | undefined {
   const walkUp = (start: string): string | undefined => {
     let dir = start;
@@ -95,7 +90,7 @@ export function loadDotEnv(): void {
   try {
     applyDotEnv(parseDotEnv(readFileSync(path, "utf8")));
   } catch (error) {
-    // 读得到却解析不动时必须出声：否则所有配置按未配置生效。
+    // 读得到却解析不动时必须出声
     console.warn(`[boot] .env 读到了却用不上，按未配置处理：path=${path} error=${String(error)}`);
   }
 }

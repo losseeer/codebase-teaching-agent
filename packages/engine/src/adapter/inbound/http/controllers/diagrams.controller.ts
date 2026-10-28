@@ -3,9 +3,8 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import { createDiagramUseCase, deleteDiagramUseCase, listDiagramsUseCase, readDiagramUseCase, renameDiagramUseCase, restoreDiagramUseCase, saveGeometryUseCase, type DiagramFailure } from "../../../../application/use-case/diagrams.js";
 
 /**
-  画布这组路由的入站翻译：注册在根实例上，懒挂载钩子与来源闸照常生效。
-  这里只做取形与把失败种类翻成状态码，判断在 `application/use-case/diagrams.ts`。
-  */
+  画布路由的入站翻译：把失败种类映射成状态码，判断在 `application/use-case/diagrams.ts`。
+*/
 const rejected = (reply: FastifyReply, failure: DiagramFailure): FastifyReply => {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });

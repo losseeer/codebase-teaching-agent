@@ -40,7 +40,6 @@ function normalizeTitle(title: string | undefined, scope: ChatScope): string {
   return scope === "teach" ? "新的教学会话" : scope === "map" ? "新的宏观设计对话" : "新的练习对话";
 }
 
-// 传入 id 则沿用，否则现生成。
 export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; scopeRef?: string; exerciseId?: string; id?: string }): ChatThread {
   const now = new Date().toISOString();
   const thread: ChatThread = {

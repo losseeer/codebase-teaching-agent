@@ -10,10 +10,7 @@ import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysi
 import { collectFileFacts, saveFileFacts } from "./build.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
-/**
-  这里验接线，图算得对不对由 `cfg.test.ts` 管：
-  算出来的东西真进了 `static_fact`、按文件一行、文件消失后不留旧行。
-*/
+/** 静态产物落库的接线用例：产物真进 `static_fact`、按文件一行、文件消失后不留旧行。 */
 
 beforeAll(async () => {
   await loadSymbolParser();
@@ -52,7 +49,7 @@ describe("静态产物落库", () => {
       expect(coverage.find((row) => row.kind === "cfg")?.files).toBe(2);
       expect(coverage.find((row) => row.kind === "dataflow")?.files, "一次解析要同时产出各类产物").toBe(2);
       expect(coverage.find((row) => row.kind === "typeRelations")?.files).toBe(2);
-      // 没算过的类别不报行，读侧据此说「这项没有」，而不是拿 0 个文件冒充「都算过、都是空」
+      // 没算过的类别不出现在 coverage 行里
       expect(coverage.map((row) => row.kind).sort()).toEqual(["cfg", "dataflow", "registry", "typeRelations"]);
       const typed = db.facts.read<TypeRelationFileFact>(repositoryId, "typeRelations", "src/alpha.ts");
       expect(typed?.types.map((item) => item.name)).toEqual(["Box"]);

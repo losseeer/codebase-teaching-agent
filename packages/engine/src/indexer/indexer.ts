@@ -10,16 +10,15 @@ import { createTutorIgnoreMatcher } from "@codebase-tutor/analysis";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**
-  索引只收扩展名白名单；真正落地的口径是 `isIngestedPath`。
-  图内扩展名由能力表派生，表外那一组进索引但不进依赖图。
+  索引只收扩展名白名单内的文件，判定入口是 `isIngestedPath`。
+  `nonGraphExtensions` 里的扩展名进索引但不进依赖图。
 */
 const nonGraphExtensions = [".rb", ".php", ".svelte", ".json", ".mod", ".md", ".yml", ".yaml"];
 const sourceExtensions = new Set([...graphExtensions, ...nonGraphExtensions]);
 
-// 这两份清单导出给单测；graphExtensions 由 capability-coverage.test 自己取。
 export { nonGraphExtensions, sourceExtensions };
 
-/** 「这条路径会不会进收录集」：索引与监听共用；三道 = 扩展名白名单、`.tutorignore`、密钥载体名。目录规则不在这里判。 */
+/** 路径是否进收录集：只查扩展名白名单、`.tutorignore` 与密钥载体名，不判目录规则。 */
 export function isIngestedPath(relativePath: string, matcher?: { ignores(path: string, isDirectory?: boolean): boolean }): boolean {
   const path = relativePath.replaceAll("\\", "/");
   if (!sourceExtensions.has(extname(path).toLowerCase())) return false;
@@ -27,7 +26,7 @@ export function isIngestedPath(relativePath: string, matcher?: { ignores(path: s
   return matcher ? !matcher.ignores(path) : true;
 }
 
-/** 「这个仓现在收录哪些路径」：只列名字不读内容，给监听层比对收录集用。 */
+/** 列出仓内当前收录的路径，只列名不读内容。 */
 export function listIngestedPaths(repositoryPath: string, matcher: { ignores(path: string, isDirectory?: boolean): boolean; shouldTraverse(relativeDirectory: string): boolean }): string[] {
   const found: string[] = [];
   const visit = (directory: string, prefix: string): void => {
@@ -35,7 +34,8 @@ export function listIngestedPaths(repositoryPath: string, matcher: { ignores(pat
     try {
       entries = readdirSync(directory, { withFileTypes: true });
     } catch {
-      return; // 读到一半目录没了：这一支就当没有，调用方按「收录集变了」处理
+      // 目录读不到时这一支按缺席处理。
+      return;
     }
     for (const entry of entries) {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -49,14 +49,14 @@ export function listIngestedPaths(repositoryPath: string, matcher: { ignores(pat
   return found;
 }
 
-/** 一次扫描的两样产出：索引本体，以及算 `versionStamp` 要用的完整内容哈希（按仓内相对路径）。 */
+/** 一次扫描的产出：索引本体与每个文件的完整内容哈希。 */
 export type RepositoryScan = { index: RepositoryIndex; digests: Map<string, string> };
 
-/** 扫一遍仓，除了索引还交出每个文件的完整内容哈希，供算 `versionStamp`。 */
+/** 扫一遍仓，返回索引与内容哈希。 */
 export function scanRepositoryWithDigests(repositoryPath: string): RepositoryScan {
   const files: FileEntry[] = [];
   const digests = new Map<string, string>();
-  /** 单个文件读不出来只让它自己缺席，但缺席要记名。 */
+  /** 读不出来的文件缺席并在此记名。 */
   const unreadable: UnreadableFile[] = [];
   const ignore = createTutorIgnoreMatcher(repositoryPath);
   const visit = (directory: string): void => {
@@ -76,7 +76,7 @@ export function scanRepositoryWithDigests(repositoryPath: string): RepositorySca
         }
         const digest = hash(content);
         digests.set(path, digest);
-        // 落库只留 16 位前缀：出题作用域与缓存键吃的都是它。
+        // 落库的内容哈希只保留 16 位前缀。
         files.push({ path, extension: extname(entry.name), bytes: Buffer.byteLength(content), lines: content.split("\n").length, contentHash: digest.slice(0, 16) });
       }
     }
@@ -99,7 +99,7 @@ export function scanRepositoryWithDigests(repositoryPath: string): RepositorySca
   };
 }
 
-/** 只要索引的那一层包装。 */
+/** 只返回索引部分的包装。 */
 export function indexRepository(repositoryPath: string): RepositoryIndex {
   return scanRepositoryWithDigests(repositoryPath).index;
 }
@@ -129,7 +129,7 @@ function toTree(files: FileEntry[]): FileTreeNode[] {
   return root.children!;
 }
 
-/** 热点统计与索引同一套排除规则：被忽略的路径不该出现。 */
+/** 热点统计与索引共用同一套排除规则。 */
 function gitHotspots(repositoryPath: string, ignore: ReturnType<typeof createTutorIgnoreMatcher>): Hotspot[] {
   if (!existsSync(join(repositoryPath, ".git"))) return [];
   try {
@@ -142,7 +142,7 @@ function gitHotspots(repositoryPath: string, ignore: ReturnType<typeof createTut
     return [...changes.entries()].map(([path, count]) => ({ path, changes: count }))
       .sort((a, b) => b.changes - a.changes || a.path.localeCompare(b.path)).slice(0, 30);
   } catch (error) {
-    // git 跑起来却没交出可读历史时也要出声；没 git 走上面那条 return。
+    // git 存在但历史读不出时记一条降级。
     traceEngine("degrade", { component: "hotspots", cause: error instanceof Error ? error.message : String(error) });
     return [];
   }

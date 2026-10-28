@@ -1,14 +1,11 @@
 import { spawnSync } from "node:child_process";
 
-/**
-  探测本机能否真起一次 Seatbelt：同步跑一个 `/usr/bin/true`，结果缓存。判据是真跑，不看可执行文件是否存在。
-  集成用例按结果分档：能用则照跑，不能用则自我跳过并说明环境不支持。
-*/
+/** 探测本机能否真起一次 Seatbelt：同步跑一个 `/usr/bin/true`，结果缓存。 */
 let cached: { usable: boolean; detail: string } | undefined;
 
 export function nestedSandboxUsable(): { usable: boolean; detail: string } {
   if (cached) return cached;
-  /** 测试与受限 CI 用的显式挡板：置 1 时按「起不了沙箱」处理。 */
+  /** `TUTOR_TEST_FORCE_UNSUPPORTED=1` 时直接按不可用返回。 */
   if (process.env.TUTOR_TEST_FORCE_UNSUPPORTED === "1") {
     cached = { usable: false, detail: "测试注入：按「本机起不了嵌套 sandbox-exec」处理" };
     return cached;

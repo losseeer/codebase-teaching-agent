@@ -7,10 +7,10 @@ import { dedupeFileReads, executeReadFile, pathReadBlock, READ_FILE_TOOL, type F
 import { readFileLines } from "@codebase-tutor/platform";
 
 let repoRoot = "";
-/** 仓库之外的一个目录：给「链接指向仓外」那条用例当真目标 */
+/** 仓库之外的目录，只作软链接的目标。 */
 let outsideRoot = "";
 
-/** 只放一条命名管道的临时目录；mkfifo 不可用的机器上，用它跑的两条用例记为 skipped 而不是静默通过。 */
+/** 只放一条命名管道的临时目录；mkfifo 不可用时，用它跑的两条用例记为 skipped。 */
 const pipeDir = mkdtempSync(join(tmpdir(), "tutor-pipe-"));
 const hasMkfifo = spawnSync("mkfifo", [join(pipeDir, "pipe.txt")]).status === 0;
 
@@ -29,7 +29,7 @@ beforeAll(() => {
   writeFileSync(join(repoRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   mkdirSync(join(repoRoot, "src"));
   writeFileSync(join(repoRoot, "src/app.ts"), Array.from({ length: 300 }, (_, index) => `export const line${index + 1} = ${index + 1};`).join("\n"));
-  // 700 行极短行（400 行仍远低于字符预算 → 单独验行数钳制）与 700 行长行（验字符预算）
+  // 700 行短行验行数钳制，700 行长行验字符预算
   writeFileSync(join(repoRoot, "src/long.ts"), Array.from({ length: 700 }, (_, index) => `x${index + 1} = 1;`).join("\n"));
   writeFileSync(join(repoRoot, "src/dense.ts"), Array.from({ length: 700 }, (_, index) => `export const value${index + 1} = compute(${index}, "${"x".repeat(60)}", ${index * 3}, ${index * 7});`).join("\n"));
   writeFileSync(join(repoRoot, "server.key"), "-----BEGIN PRIVATE KEY-----");
@@ -38,7 +38,7 @@ beforeAll(() => {
   writeFileSync(join(repoRoot, "node_modules/pkg/index.js"), "module.exports = 1;");
   mkdirSync(join(repoRoot, ".git"));
   writeFileSync(join(repoRoot, ".git/config"), "[core]");
-  // 绕过面：链接名无害、目标是仓内密钥或仓外文件——只判字面路径的闸会放行，必须复核链接目标
+  // 链接名无害、目标是仓内密钥或仓外文件，需复核链接目标
   writeFileSync(join(outsideRoot, "secret.txt"), "OUTSIDE-SECRET\n");
   symlinkSync(join(repoRoot, ".env"), join(repoRoot, "notes.md"));
   symlinkSync(join(outsideRoot, "secret.txt"), join(repoRoot, "escape.ts"));
@@ -113,7 +113,7 @@ describe("executeReadFile 护栏", () => {
     }
   });
 
-  /** 界面侧与工具侧共用同一份判据：两条口径不一致时，一个名字无害的链接就能只绕过界面那道闸。 */
+  /** 界面侧与工具侧共用同一份读取判据。 */
   it("pathReadBlock 与 read_file 同一判据：链接目标也过边界与名单，存在性交给调用方", () => {
     expect(pathReadBlock(repoRoot, "src/app.ts"), "正常源码放行").toBeUndefined();
     expect(pathReadBlock(repoRoot, "../outside.ts")).toContain("越出仓库范围");
@@ -121,7 +121,7 @@ describe("executeReadFile 护栏", () => {
     expect(pathReadBlock(repoRoot, "credentials.json")).toContain("不开放读取");
     expect(pathReadBlock(repoRoot, "notes.md"), "链接指向仓内 .env 也算绕过名单").toContain("符号链接指向禁读文件");
     expect(pathReadBlock(repoRoot, "escape.ts"), "链接指向仓外文件").toContain("符号链接指向仓库之外");
-    // 文件不存在不是这一层判的事：否则界面会把「没了」说成「我不给读」
+    // 文件不存在不由这一层判定
     expect(pathReadBlock(repoRoot, "src/gone.ts")).toBeUndefined();
   });
 
@@ -139,10 +139,7 @@ describe("executeReadFile 护栏", () => {
     expect(outcome.content).not.toContain("line15");
   });
 
-  /*
-    两条预算用例都把窗口钉死成 40_000 token，于是行数预算 = 40_000 × 4 字符/token × 8% ÷ 40 平均行长 = 320 行，
-    字符预算 = 12_800。数字写在测试里而不是调实现算出来：改了份额就该红，红得有意义。
-  */
+  // 窗口固定在 40_000 token：行数预算 320 行，字符预算 12_800
   const WINDOW = "40000";
 
   it("limit 超出行预算时被钳到那一行预算，首行给出文件总行数（钳制 ≠ 截断）", () => {
@@ -203,7 +200,8 @@ describe("read_file 的密钥隐去", () => {
     expect(withSecret.content).toContain("[疑似密钥，已隐去]");
     expect(withSecret.content).toContain("另有 1 处疑似密钥已隐去（不要尝试补全）");
     expect(withSecret.content).not.toContain("sk-abcdefghijklmnop");
-    expect(withSecret.content).toContain("YOUR_KEY"); // 占位符不是密钥，改了才毁掉教学正文
+    // YOUR_KEY 是占位符，不算密钥
+    expect(withSecret.content).toContain("YOUR_KEY");
     writeFileSync(join(repoRoot, "src/clean.ts"), "export const a = 1;\n", "utf8");
     expect(executeReadFile(repoRoot, JSON.stringify({ path: "src/clean.ts" })).audit.masked).toBeUndefined();
   });

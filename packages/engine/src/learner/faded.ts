@@ -17,10 +17,7 @@ function isFailure(event: JournalEvent): boolean {
   return event.type === "exercise_result" && event.payload.passed === false;
 }
 
-/**
- * Derives the remaining support clues. A successful mastery event fades one
- * dimension at a time; a failure restores support in the reverse order.
- */
+/** 按练习结果推导剩余辅助档位：掌握通过逐档递减，失败按相反顺序回补。 */
 export function deriveFaded(events: JournalEvent[]): FadedState {
   const state: FadedState = { ...initial };
   const relevant = [...events].sort((left, right) => left.at.localeCompare(right.at));

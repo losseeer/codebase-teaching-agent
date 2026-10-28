@@ -1,6 +1,6 @@
 /**
-  练习沙箱覆盖面探针（零 token、只读）：沙箱不装外部依赖时能给几门语言出代码题。
-  import 全落在「标准库 ∪ 仓内文件」就能跑；有外部包就要装依赖。分档由探针自己抽 import 说明符，不进产品判据。
+  练习沙箱覆盖面探针（零 token、只读）：按 import 落点分档，统计不装依赖就能出代码题的语言。
+  分档由探针自己抽 import 说明符，不进产品判据。
   用法：`pnpm sandbox:coverage`
 */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -12,17 +12,17 @@ import { DatabaseSync } from "node:sqlite";
 import type { ImplementationUnit, RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
 import { languageOfExtension } from "@codebase-tutor/domain";
 
-/** 单元上的语言标签；探针按这一份走。 */
+/** 单元上的语言标签。 */
 type UnitLanguage = SymbolInfo["language"];
 
-/** 单元的语言标签：`.vue` 在产物里记成 `other`，按扩展名回查共享能力表。 */
+/** 单元的语言标签；`.vue` 在产物里记成 `other`，按扩展名回查。 */
 function languageOfUnit(unit: ImplementationUnit): UnitLanguage | string {
   if (unit.symbol.language !== "other") return unit.symbol.language;
   const dot = unit.symbol.path.lastIndexOf(".");
   return dot >= 0 ? languageOfExtension(unit.symbol.path.slice(dot)) ?? "other" : "other";
 }
 
-/** import 落点分档：`self-contained` / `closure` / `external` / `unknown`（判不准不替它乐观）。 */
+/** import 落点的分档。 */
 type Tier = "self-contained" | "closure" | "external" | "unknown";
 type Verdict = "stdlib" | "in-repo" | "external" | "unknown";
 
@@ -44,7 +44,7 @@ function emptyRow(language: UnitLanguage): Row {
   return { language, units: 0, tiers: { "self-contained": 0, closure: 0, external: 0, unknown: 0 }, callers: 0, container: 0, kinds: {}, externalPackages: new Set() };
 }
 
-// 仓内路径全集：一次目录扫描。
+// 仓内路径全集。
 
 function walkRepo(root: string): string[] {
   const out: string[] = [];
@@ -63,7 +63,7 @@ function walkRepo(root: string): string[] {
   return out;
 }
 
-/** 点号后缀全集：Java 全限定名与 Python 点号模块名共用这一份目录推导。 */
+/** 由目录路径推导的点号后缀集合。 */
 function dottedSuffixes(paths: string[]): Set<string> {
   const set = new Set<string>();
   for (const path of paths) {
@@ -86,12 +86,12 @@ function pythonStdlib(): Set<string> {
 }
 
 const STDLIB_PY = pythonStdlib();
-/** javax 里只有这几族在 JDK 内。 */
+/** JDK 内置的 javax 包名前缀。 */
 const JAVA_JAVAX_STDLIB = ["javax.swing", "javax.net", "javax.crypto", "javax.script", "javax.tools", "javax.imageio", "javax.sound", "javax.naming", "javax.sql", "javax.management"];
 const CPP_STD_HEADERS = new Set(["algorithm", "array", "atomic", "cassert", "chrono", "cmath", "condition_variable", "cstddef", "cstdint", "cstdio", "cstdlib", "cstring", "deque", "exception", "filesystem", "fstream", "functional", "future", "initializer_list", "iomanip", "iostream", "istream", "iterator", "limits", "list", "map", "memory", "mutex", "numeric", "optional", "ostream", "queue", "random", "ranges", "set", "shared_mutex", "span", "stack", "stdexcept", "string", "string_view", "thread", "tuple", "type_traits", "unordered_map", "unordered_set", "utility", "variant", "vector",
   "assert.h", "ctype.h", "errno.h", "math.h", "stdarg.h", "stdbool.h", "stddef.h", "stdint.h", "stdio.h", "stdlib.h", "string.h", "time.h", "unistd.h"]);
 
-// import 说明符抽取：每语言一条规则，只看正文。
+// import 说明符抽取：每语言一条规则，只读正文。
 
 const TS_PATTERNS = [
   /^\s*import\s+(?:type\s+)?(?:[^'"(]*?\sfrom\s+)?["']([^"']+)["']/gm,
@@ -133,7 +133,7 @@ function classify(language: string, specifier: string, filePath: string, fileSet
     fileSet.has(base) || extensions.some((extension) => fileSet.has(`${base}${extension}`)) || extensions.some((extension) => fileSet.has(`${base}/index${extension}`));
 
   if (language === "typescript" || language === "javascript" || language === "vue") {
-    // ESM 的 TS 源码写 `./foo.js`，磁盘上是 `foo.ts`。
+    // ESM 的 TS 源码写 `./foo.js`，磁盘上是 `foo.ts`
     const asTypeScript = (base: string): string => base.replace(/\.(js|mjs|cjs|jsx)$/, "");
     if (specifier.startsWith(".")) {
       const base = asTypeScript(join(dirname(filePath), specifier));
@@ -247,7 +247,7 @@ for (const repositoryPath of repositories) {
     return text;
   };
 
-  /** 被调用侧同时收符号 id 与 name：只按 name 拼键会整列判成 0。 */
+  /** 被调用侧的符号 id 与 name 两份集合。 */
   const calleeIds = new Set<string>();
   const calleeNames = new Set<string>();
   for (const edge of analysis.graph.calls ?? []) {

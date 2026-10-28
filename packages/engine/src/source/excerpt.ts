@@ -4,8 +4,8 @@ import { secretMasker } from "@codebase-tutor/domain";
 
 /**
   锚点取码：把锚点解析成一段可嵌入 prompt 的源码窗口。
-  符号边界可信时按符号行区间取，否则回落固定窗口；跨度与字符超上限时截断并标记。
-  这里是仓内源码原文进请求前的最后一道密钥筛；读不到或越界返回 undefined。
+  符号边界可信时按符号行区间取，否则按锚点行前后取固定窗口；超行或超字符上限时截断并标记。
+  仓内源码原文进请求前的最后一道密钥筛；读不到或越界返回 undefined。
   */
 
 export interface ExcerptAnchor {
@@ -39,7 +39,7 @@ export interface ExcerptSlice {
   mode: "symbol" | "window";
   /** 符号模式下的真实符号末尾行。 */
   symbolEnd?: number;
-  /** 本窗口里被隐去的疑似密钥处数；没命中就没有这个字段。 */
+  /** 本窗口里被隐去的疑似密钥处数。 */
   masked?: number;
 }
 
@@ -47,7 +47,6 @@ export function sliceExcerpt(repositoryPath: string, anchor: ExcerptAnchor, opti
   const relative = anchor.path.replaceAll("\\", "/");
   const absolute = join(repositoryPath, relative);
   if (!isWithin(repositoryPath, absolute)) return undefined;
-  // 读行口径与 read_file 同源。
   const all = readFileLines(repositoryPath, relative);
   if (!all) return undefined;
   const totalLines = all.length;

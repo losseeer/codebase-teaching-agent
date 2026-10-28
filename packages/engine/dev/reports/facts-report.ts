@@ -1,7 +1,6 @@
 /**
-  零 token、只读：对已导入的仓现场跑一遍函数级分析（控制流图 + 数据流），只打印读数、不写任何东西。
+  零 token、只读：对已导入的仓现场跑一遍函数级分析（控制流图 + 数据流 + 类型关系 + 注册索引），只打印读数。
   用法：pnpm facts:report /absolute/path/to/repository
-  接进导入流程之前要先数清代价：要给多少个文件出图、一个仓的产物有多大、哪些函数画不出来。
 */
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -54,10 +53,9 @@ const note = (reason: string): void => void skips.set(reason, (skips.get(reason)
 const allSymbols: SymbolInfo[] = [];
 const parsed = new Map<string, { content: string; symbols: SymbolInfo[] }>();
 
-// 符号现读现算：落点反查要拿整仓符号表。
+// 两趟：先收齐整仓符号表，落点反查要用
 for (const file of index.files) {
-  // 与产品同一道闸门：没有语法的文件（配置、样式、文档）不进产物层，
-  // 把它们算进「没规则」那一栏会让两边对不上
+  // 与产品同一过滤：既不在 graphExtensions 也不在 registryEligible 的文件不进产物层
   if (!graphExtensions.includes(file.extension.toLowerCase()) && !registryEligible(file.path, false)) continue;
   const absolute = join(repositoryPath, file.path);
   if (!existsSync(absolute)) {
@@ -82,7 +80,7 @@ for (const [path, entry] of [...parsed.entries()].sort()) {
   const facts = analyzeFile(path, content, symbols, language, allSymbols);
   const cfg = facts.cfg;
   if (!graphExtensions.includes(path.slice(path.lastIndexOf(".")).toLowerCase())) {
-    // 清单与 SPI：没有语法树，只有注册索引这一类产物
+    // 无语法树的文件只出注册索引产物
     registryEntries += facts.registry.entries.length;
     bytes += JSON.stringify(facts.registry).length;
     for (const entry of facts.registry.entries) registryKinds.set(entry.kind, (registryKinds.get(entry.kind) ?? 0) + 1);

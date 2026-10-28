@@ -9,15 +9,15 @@ import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
-  编译器级精确模块图只当评测证据，引擎运行时不读它：量静态启发式与编译器解析模块边的差距。
-  Java 用 `package` 声明加顶层类型名推全限定名；TS/TSX 用 `typescript` 自己的 `resolveModuleName`。
-  只比两侧都认识的仓内文件；通配展开取上界；三方与 JDK import 两侧都丢。用法：`pnpm graph:diff [仓库路径]`
+  编译器级精确模块图与静态启发式取图的边差对照，只作评测证据。
+  Java 按 package 声明与顶层类型名推全限定名；TS/TSX 用 typescript 的 `resolveModuleName`。
+  口径：只比两侧都索引的仓内文件，通配展开取上界，三方与 JDK import 不计。用法：`pnpm graph:diff [仓库路径]`
 */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryPath = resolve(process.argv.slice(2).find((value) => !value.startsWith("-")) ?? resolve(here, "..", "..", "..", ".."));
 const index: RepositoryIndex = indexRepository(repositoryPath);
-// 与产品同一条取图路径：先装语法解析器（AST 档），否则引擎在这里退化成逐行正则，差值就不是「启发式 vs 编译器」了
+// 与产品同一条取图路径：先装语法解析器。
 await loadSymbolParser();
 const graph = buildDependencyGraph(repositoryPath, index.files);
 
@@ -87,7 +87,7 @@ if (javaFiles.length) {
   }
   const precise = new Map<string, Set<string>>();
   let wildcards = 0;
-  /** 通配展开按源码根收窄：主源码看不见测试源码根。 */
+  /** 通配展开按源码根收窄，主源码根与测试源码根分开。 */
   const sourceRootOf = (path: string): string => {
     const match = /(^|\/)src\/(main|test)\//.exec(path);
     return match ? `${path.slice(0, match.index)}src/${match[2]}` : path;
@@ -129,7 +129,7 @@ if (tsFiles.length) {
   const configPaths: string[] = [];
   const rootConfig = ts.findConfigFile(repositoryPath, ts.sys.fileExists, "tsconfig.json");
   if (rootConfig) configPaths.push(rootConfig);
-  // monorepo：根上常常没有 tsconfig，各包自己有一份——按 packages/*/tsconfig.json 补齐，否则 TS 档整段没读数
+  // 根上没有 tsconfig 时按 packages/*/tsconfig.json 补齐。
   else if (existsSync(join(repositoryPath, "packages"))) {
     for (const entry of readdirSync(join(repositoryPath, "packages"), { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;

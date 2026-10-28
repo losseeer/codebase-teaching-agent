@@ -39,7 +39,6 @@ describe("OpenAICompatibleProvider", () => {
     const screened = screenOutbound(dirty);
     expect(screened).not.toBe(dirty);
     expect(screened.user).not.toContain("sk-abcdefghijklmnopqrstuvwxyz0123456789");
-    // 已过筛的文本再过一次原样返回
     expect(screenOutbound(screened)).toBe(screened);
   });
 
@@ -228,7 +227,6 @@ describe("OpenAICompatibleProvider", () => {
         reject(error);
       });
     })) as typeof fetch;
-    // timeoutMs 给足，避免与超时判据混淆
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl, timeoutMs: 5_000 });
     const pending = provider.complete({ system: "s", user: "u", signal: controller.signal });
     controller.abort();
@@ -254,7 +252,6 @@ describe("createLlmProvider（单一配置）", () => {
     }) as typeof fetch);
   }
 
-  /** 只认 `TUTOR_LLM_*` 与通用密钥名，不读别名。 */
   it("只认 TUTOR_LLM_* 与通用密钥名；已删的别名一个都不读", async () => {
     process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
     process.env.TUTOR_TEACHING_MODEL = "legacy-model";
@@ -318,7 +315,6 @@ describe("createLlmProvider（单一配置）", () => {
   });
 
   it("官方 openai 缺密钥就不建实例；兼容端点允许无密钥", () => {
-    // 清空两侧密钥，避免本机 env 干扰断言
     for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TUTOR_OPENAI_API_KEY"]) delete process.env[key];
     expect(createLlmProvider({ provider: "openai" })).toBeUndefined();
     expect(createLlmProvider({ provider: "openai-compatible" })).toBeDefined();
@@ -467,7 +463,7 @@ describe("RetryLlmProvider", () => {
     expect(calls()).toBe(3);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as unknown as { attempts?: number }).attempts).toBe(3);
-    expect(JSON.stringify({ e: caught })).toBe('{"e":{}}'); // 只有 message/stack 是惯例可枚举的：这两个字段读数不该混进去
+    expect(JSON.stringify({ e: caught })).toBe('{"e":{}}');
     expect(Object.keys(caught)).toEqual([]);
   });
 
@@ -506,7 +502,7 @@ describe("RetryLlmProvider", () => {
   });
 });
 
-/** 推理预算升档的用例；Response body 只能读一次，所以脚本给的是工厂函数。 */
+// Response 的 body 只能读一次，夹具按工厂函数逐次新建
 describe("OpenAICompatibleProvider 的推理预算升档", () => {
   function scripted(bodies: Array<() => Response>) {
     const sent: number[] = [];

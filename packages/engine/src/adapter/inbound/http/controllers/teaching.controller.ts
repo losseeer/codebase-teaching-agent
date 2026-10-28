@@ -8,9 +8,8 @@ import { beginScopedStream, failScopedTurn, replayTypewriter } from "../stream.j
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-/** 教学会话的建立与回合（SSE）：取形、开火闸门、流的开与关、失败翻成状态码。 */
+/** 教学会话的建立与回合（SSE）：取形、预算闸门、流的开与关、失败 → 状态码。 */
 export function registerTeachingRoutes(app: FastifyInstance): void {
-/** 建会话（会话即线程），回 201。 */
 app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
   const created = createTeachingSession({
     repositoryId: request.body?.repositoryId,
@@ -39,7 +38,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   const { repository, session } = prepared.value;
   // 教学侧的 sessionId 即 chat_session 的线程 id
   markThread(session.id);
-  // 与 map/practice 同一条闸门：开火前判预算与模型配置
+  // 与 map/practice 共用一条预算与模型配置闸门
   const gate = budgetGate(repository.handle);
   const provider = scopedChatProviderOr422(reply, repository.handle, gate);
   if (!provider) return reply;
@@ -56,7 +55,7 @@ app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: P
   reply.raw.end();
 });
 
-/** 失败种类 → 状态码与文案；逐种列全，少一种编译不过。 */
+/** 失败种类 → 状态码与文案；分支必须穷尽。 */
 function reject(reply: FastifyReply, failure: TeachingFailure): FastifyReply {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: failure.message, reason: failure.reason });

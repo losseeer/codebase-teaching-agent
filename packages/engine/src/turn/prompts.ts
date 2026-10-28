@@ -2,9 +2,8 @@ import type { FadedState, TeachingPolicy } from "@codebase-tutor/domain";
 import { styleBand, validateStyle } from "@codebase-tutor/domain";
 
 /**
-  集中式 LLM 提示词构建器：style → 风格指令的映射只有一处口径。
-  风格是三档（100/50/0），0~100 的其他取值按 shared 的 styleBand 归到最近一档。
-  三个作用域的提示词与作用域边界都在这里定义。
+  LLM 提示词构建器：三个作用域的 system prompt 与风格档位映射。
+  风格三档（100/50/0），其他取值按 `styleBand` 归到最近一档。
   */
 
 export interface TeachingPromptInput {
@@ -12,7 +11,7 @@ export interface TeachingPromptInput {
   faded?: FadedState;
   /** 上下文附带 read_file 时声明其用法与护栏。 */
   readToolAvailable?: boolean;
-  /** 附带 search_code 时声明「先搜后读」纪律；仅在 readToolAvailable 时有意义。 */
+  /** 附带 search_code 时声明先搜后读；仅在 readToolAvailable 时有意义。 */
   searchToolAvailable?: boolean;
 }
 
@@ -58,7 +57,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "",
     "【语言风格】",
     styleBrief(policy.level),
-    // 分母写真实上限：样例完整度 /2、提示深度 /3、通俗化 /2。
+    // 分母取各维的真实上限
     ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
@@ -71,9 +70,9 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 }
 
 export interface OverviewPromptInput {
-  /** 语言风格档位（0~100，GUI 只出三档）：宏观设计与代码教学共用。 */
+  /** 语言风格档位（0~100，界面只出三档）。 */
   style: number;
-  /** 附带 search_code 时声明「先搜后读」纪律。 */
+  /** 附带 search_code 时声明先搜后读。 */
   searchAvailable?: boolean;
 }
 
@@ -107,7 +106,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
 }
 
 export interface ExerciseQaPromptInput {
-  /** 语言风格档位（0~100，GUI 只出三档）：练习答疑与代码教学共用。 */
+  /** 语言风格档位（0~100，界面只出三档）。 */
   style: number;
 }
 

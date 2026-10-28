@@ -1,9 +1,8 @@
 import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 /**
-  第四张结构表：静态产物里的类型关系与运行时绑定。
-  容器注入与接口实现之间常常没有 import 或调用行，只核前三张表会把按事实画的边降成 `inferred`。
-  档位口径与那三张表一致：只确认、绝不上抬；`toFile` 空着的边一条都不算。
+  证据表：静态产物里的类型关系与运行时绑定。
+  只确认、绝不上抬。
 */
 
 export interface FactEvidence {
@@ -39,7 +38,7 @@ export function factsPairChecker(sources: FactSources): FactsPairChecker {
     for (const [path, fact] of sources.registry()) {
       for (const entry of fact.entries) {
         if (entry.kind !== "di-binding" || !entry.name) continue;
-        // 注入点所在文件 → 声明那个接口/类型的文件；同名多解时每一个都是候选落点，取不到就不写
+        // 注入点文件 → 声明该类型的文件；同名多解时每个都是候选落点。
         for (const target of declared.get(entry.name) ?? []) {
           if (target === path) continue;
           rows.set(key(path, target), `运行时绑定：${path}:${entry.line} 注入 ${entry.name}（${entry.via}）`);

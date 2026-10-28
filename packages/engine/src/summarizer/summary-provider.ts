@@ -5,27 +5,28 @@ import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js"
 import type { FileSlice } from "@codebase-tutor/analysis";
 
 /**
-  文件职责摘要的提供方（L1）契约：输入结构切片，输出 {summary, role?}，模型给的角色是可选覆盖。
-  接口是批量的；返回值按下标对齐入参，某条 `undefined` 表示没拿到结果、由调用方补齐。
+  文件职责摘要（L1）提供方的契约：输入结构切片，输出 SummaryResult。
+  批量接口，返回值按下标对齐入参。
+  某条为 `undefined` 表示该项没有结果，由调用方补齐。
 */
 
 export interface SummaryResult {
   summary: string;
-  /** 模型给出的角色；不是那五个之一时视为没给。 */
+  /** 模型给出的角色；不在 FILE_ROLES 内时视为没给。 */
   role?: FileRole;
 }
 
 export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
-  /** 这份摘要档会不会把切片内容发到端点；出网清单只有 `true` 才计入。 */
+  /** 该档是否把切片内容发到端点。 */
   readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
   /** 最近一次调用拿到的用量；没调用过为 undefined。 */
   lastUsage?: LlmUsage;
 }
 
-/** 一次调用塞几条切片。 */
+/** 一次批量调用的切片条数。 */
 export const SUMMARY_BATCH_SIZE = 8;
 
 /** 单条摘要的字符上限。 */
@@ -53,10 +54,10 @@ const BATCH_SYSTEM_PROMPT_LINES = [
   '严格输出 JSON 数组，长度与输入一致，每项：{"path":"原样返回路径","summary":"…","role":"core|support|infra|tool|test"}。不要输出 JSON 以外的任何文字。'
 ];
 
-/** 「摘要参考注释」开时追加的一行；关着的仓提示词不变。 */
+/** 开启「摘要参考注释」时追加的一行提示。 */
 const HEADER_COMMENT_PROMPT_LINE = "部分切片可能带 headerComment 字段（文件头注释摘录）：中文概念词可以从中取，但英文标识符仍以符号名为准；注释与符号冲突时以符号为准，勿抄注释里的样板话。";
 
-/** 批量系统提示词：导出供测试断言关档时的形状。 */
+/** 批量系统提示词。 */
 export function batchSystemPrompt(withHeaderComments: boolean): string {
   const lines = [...BATCH_SYSTEM_PROMPT_LINES];
   if (withHeaderComments) lines.splice(4, 0, HEADER_COMMENT_PROMPT_LINE);
@@ -65,11 +66,11 @@ export function batchSystemPrompt(withHeaderComments: boolean): string {
 
 const BATCH_SYSTEM_PROMPT = batchSystemPrompt(false);
 
-/** L1 摘要的口径登记：`slice-v2` 为默认档，`slice-v2c` 为开「摘要参考注释」的仓，两档键前缀分流。 */
+/** L1 摘要的口径登记：默认档与参考注释档分属两个契约版本。 */
 export const SUMMARY_STEP = defineAnalysisStep({ layer: "summary-slice", contractVersion: "slice-v2", prompts: [batchSystemPrompt(false)] });
 export const SUMMARY_COMMENTS_STEP = defineAnalysisStep({ layer: "summary-slice-comments", contractVersion: "slice-v2c", prompts: [batchSystemPrompt(true)] });
 
-/** 解析批量回复：按路径建索引；读不出的项不返回，整体失败返回空表。 */
+/** 解析批量回复并按路径建索引；无法解析时返回空表。 */
 export function parseBatchReply(text: string): Map<string, SummaryResult> {
   const results = new Map<string, SummaryResult>();
   const stripped = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -95,7 +96,7 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
   return results;
 }
 
-/** 确定性档：不调模型，摘要由结构切片拼出，离线可复现。 */
+/** 确定性档：不调用模型，摘要由结构切片拼出。 */
 export class LocalSummaryProvider implements SummaryProvider {
   readonly modelVersion = "local-heuristic-v1";
   readonly name = "local deterministic fallback";
@@ -114,7 +115,7 @@ export class LocalSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 走项目的轻量档：批量调用，单次失败由调用方按条补齐。 */
+/** 轻量档：批量调用，失败项由调用方补齐。 */
 export class LlmSummaryProvider implements SummaryProvider {
   readonly name = "light tier LLM";
   readonly sendsCodeToEndpoint = true;
@@ -142,10 +143,10 @@ export class LlmSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 本地 Ollama 档：逐条调用，与批量档共用同一套提示与解析。 */
+/** 本地 Ollama 档：逐条调用，与批量档共用提示与解析。 */
 class OllamaSummaryProvider implements SummaryProvider {
   readonly name = "Ollama local model";
-  /** 端点在本机也算发到模型。 */
+  /** 本机端点同样计入出网。 */
   readonly sendsCodeToEndpoint = true;
 
   constructor(private readonly model = process.env.TUTOR_OLLAMA_MODEL ?? "llama3.2", private readonly endpoint = process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434") {}
@@ -170,7 +171,6 @@ class OllamaSummaryProvider implements SummaryProvider {
         const body = await response.json() as { response?: string };
         results.push(body.response?.trim() ? parseBatchReply(body.response).get(slice.path) : undefined);
       } catch {
-        // 本地模型不可用时这一条没结果，由调用方补齐。
         results.push(undefined);
       } finally {
         clearTimeout(timer);
@@ -180,7 +180,7 @@ class OllamaSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 选择摘要档：ollama → 本地档；off/none/local → 确定性档；默认有轻量档用轻量档，否则确定性档。 */
+/** 按 TUTOR_SUMMARY_PROVIDER 选择摘要档。 */
 export function createSummaryProvider(input: { llm?: LlmProvider; withHeaderComments?: boolean } = {}): SummaryProvider {
   const mode = (process.env.TUTOR_SUMMARY_PROVIDER ?? "").trim().toLowerCase();
   if (mode === "ollama") return new OllamaSummaryProvider();

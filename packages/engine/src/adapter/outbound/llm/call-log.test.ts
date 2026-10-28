@@ -117,7 +117,7 @@ describe("LLM 工作日志", () => {
     expect(logged.some((line) => line.includes("fail") && line.includes("LLM returned 500"))).toBe(true);
   });
 
-  /** 重试读数由 RetryLlmProvider 挂在结果与错误上带出来；日志在外层，一次逻辑调用只落一行。 */
+  /** 重试次数与耗时由 RetryLlmProvider 挂在结果与错误上带出来；日志在外层，一次逻辑调用落一行。 */
   it("重试层带出来的 attempts 与 attemptMs 原样落行，并在控制台单行上屏", async () => {
     const provider = new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok", attempts: 2, attemptMs: [60_000, 1_500] })), "light");
     await provider.complete({ system: "s", user: "u", scene: "map.refine" });
@@ -153,7 +153,7 @@ describe("LLM 工作日志", () => {
   });
 
   it("按生产装配顺序（Logging 在 Retry 外面）走一遍：重试发生过，行里就读得出来", async () => {
-    // 按生产顺序 Logging → Retry 组一次，证明字段能穿过装配边界
+    // 按生产顺序 Logging → Retry 组装
     let count = 0;
     const flaky: LlmProvider = {
       name: "flaky",
@@ -193,7 +193,6 @@ describe("LLM 工作日志", () => {
   });
 
   it("档位注入在日志外层时，记到的是实际下发的档位（不是调用方没写时的 auto）", async () => {
-    // 组装顺序：ThinkingOverride(Logging(raw))
     const provider = new ThinkingOverrideLlmProvider(new LoggingLlmProvider(fakeProvider(async () => ({ text: "ok" })), "light"), "off");
     await provider.complete({ system: "s", user: "u" });
     await flushLlmLog();
@@ -224,7 +223,6 @@ describe("LLM 工作日志", () => {
     expect(outboundFingerprint(withTool).chars).toBeGreaterThan(first.chars);
     expect(outboundFingerprint({ ...withTool, messages: withTool.messages.slice(0, 1) }).hash).not.toBe(outboundFingerprint(withTool).hash);
 
-    // 工具清单也占输入
     const tool = { name: "read_file", description: "读文件", parameters: { path: { type: "string" } } };
     const withoutTools = outboundFingerprint({ ...base, tools: [] });
     const withTools = outboundFingerprint({ ...base, tools: [tool] });

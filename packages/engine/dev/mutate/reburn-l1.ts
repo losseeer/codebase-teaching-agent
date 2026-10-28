@@ -11,7 +11,8 @@ import { summarizeFiles } from "../../src/summarizer/summarizer.js";
 import { TutorDatabase } from "../../src/adapter/outbound/persistence/database.js";
 
 /**
-  全仓重做 L1 摘要：走正规产品写入通道换新摘要；写入前先断言 provider 是模型档。
+  全仓重做 L1 摘要，走产品写入通道。
+  写入前断言 provider 是模型档。
   用法：`pnpm l1:reburn [仓库路径]`
 */
 
@@ -25,7 +26,8 @@ const repositoryPath = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
+  // 地址簿按最近使用在后排序。
+  return list.at(-1)!;
 })();
 
 const index = indexRepository(repositoryPath);
@@ -33,7 +35,7 @@ const database = new TutorDatabase(repositoryPath);
 const analysis = database.state.analysis(index.repositoryId);
 if (!analysis) throw new Error(`仓库 ${repositoryPath} 尚无分析记录（先走 GUI 导入）`);
 
-// 「摘要参考注释」是每仓设置（默认关）：这里沿用当前开关状态，与导入路径同口径
+// 「摘要参考注释」是每仓设置，这里沿用当前状态。
 const withHeaderComments = database.state.settings<{ summaryHeaderComments?: boolean }>(index.repositoryId)?.summaryHeaderComments === true;
 const light = buildLlmRuntimeProvider("light");
 const provider = createSummaryProvider({ llm: light, withHeaderComments });

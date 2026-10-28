@@ -1,13 +1,6 @@
 /**
   外部包名的词典覆盖率读数（零 token、只读、不发请求）。
-
-  「只覆盖真实遇到的包」需要一条可复算的通道：这里给出哪些包已经认得、哪些仍未识别。
-  往词典加条目的顺序：先在这里看到它反复出现，再确认它是边界之外的包而不是仓内解析失败。
-
-  用法：
-    pnpm arch:externals                全地址簿
-    pnpm arch:externals <仓库路径>      只看一个仓
-    pnpm arch:externals --unmatched    只列未识别的身份（按出现次数排）
+  用法：`pnpm arch:externals [仓库路径] [--unmatched]`
 */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -35,7 +28,7 @@ const grand = new Map<ExternalCategory, number>();
 for (const repositoryPath of repositories) {
   const index = indexRepository(repositoryPath);
   const graph = buildDependencyGraph(repositoryPath, index.files);
-  // 与产品同一条聚合口径：架构路由用的就是 groupExternals，脚本自己再算一遍迟早漂移
+  // 聚合口径与产品侧共用 groupExternals。
   const groups = groupExternals(Object.fromEntries(graph.externals));
   const identities = [...new Set(groups.flatMap((group) => group.identities))].length;
   const known = groups.filter((group) => group.category !== "other").length;

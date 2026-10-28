@@ -1,5 +1,5 @@
-// 三条作用域对话共用的预算闸门：预算达上限或未配置 LLM 时回 422，不静默降级。
-// `gate` 由调用方在开火前算好传入。
+// 作用域对话共用的预算闸门：预算达上限或未配置 LLM 时回 422。
+// `gate` 未传时按当前仓的账面现算。
 import type { FastifyReply } from "fastify";
 import type { LlmProvider } from "../../../application/port/llm-provider.js";
 import type { RepositoryHandle } from "../../outbound/persistence/repository-handle.js";

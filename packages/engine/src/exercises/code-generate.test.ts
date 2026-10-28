@@ -17,18 +17,17 @@ import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 
 /**
-  代码题是集成用例：假 provider 交手工 harness（零模型调用），自证、判分、讲评都真起沙箱。
-  环境不支持嵌套 `sandbox-exec` 时整片跳过并在输出里点名。
+  代码题的集成用例：假 provider 交手工 harness（零模型调用），自证、判分、讲评都真起沙箱。
+  环境不支持嵌套 `sandbox-exec` 时整片跳过。
 */
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/frozen-demo-repo");
 const temporaryDirectories: string[] = [];
-/** 夹具的真句柄：收尾先关连接再删目录。 */
+/** 测试开过的真句柄，收尾统一释放。 */
 const handles: RepositoryHandle[] = [];
 
 afterEach(() => {
-  // 先放开 builder 那次 pin 再关连接：否则 close 会挂起。
   for (const handle of handles.splice(0)) {
     handle.unpin();
     handle.close();
@@ -51,21 +50,21 @@ function testRepository(): PracticeRepository {
     versionStamp: "content-v1"
   };
   const handle = openHandle(repositoryPath, index.repositoryId);
-  // 夹具在这里装配一次真存储；引用由 afterEach 放开。
+  // 真存储在这里装配一次，句柄由 afterEach 释放
   return { path: repositoryPath, index, analysis, ports: exercisePortsFor(handle, handle.pin()) };
 }
 
-/** 夹具用真句柄：出题与判分都经这份连接读写产物库。 */
+/** 打开夹具的真句柄，登记给 afterEach。 */
 function openHandle(repositoryPath: string, repositoryId: string): RepositoryHandle {
   const handle = new RepositoryHandle(repositoryPath, repositoryId);
   handles.push(handle);
   return handle;
 }
 
-/** 真源码那一份：patch_edit 的 solution 必须逐字含它。 */
+/** solution 必须与仓内真源码逐字一致。 */
 const REAL_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || "hello";\n}\n';
 const DEFECTIVE_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || "hallo";\n}\n';
-/** 语法有错的源码：跑不出 TESTS 结论。 */
+/** 语法错误、跑不出结论的源码。 */
 const UNPARSABLE_SOURCE = 'export function loadGreeting(environment) {\n  return environment.GREETING || ;\n}\n';
 
 const TESTS = `import { loadGreeting } from "./target.ts";
@@ -120,7 +119,6 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(exercise.inputMode).toBe("code");
     expect(exercise.gradingMode).toBe("execution");
     expect(exercise.family).toBe("code");
-    // 下发件是缺陷版；测试与参考解不在 exercise 上。
     expect(exercise.code?.files).toEqual([{ path: "target.ts", contents: DEFECTIVE_SOURCE }]);
     expect(exercise.code?.entry).toBe("tests.ts");
     expect(JSON.stringify(exercise)).not.toContain("TESTS");
@@ -168,7 +166,6 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: drifted }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
       .rejects.toThrow(/对不上/);
-    // 没跑到沙箱：不该有 exercise_run。
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_run")).toHaveLength(0);
   });
 
@@ -187,7 +184,6 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const second = await service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider);
     expect(second.id).toBe(first.id);
     expect(provider.calls.count).toBe(1);
-    // 目标文件内容变了：旧题不复用。
     const bumpedFiles = repository.index.files.map((file) => file.path === "src/config.js" ? { ...file, contentHash: "bumped" } : file);
     const changed = { ...repository, index: { ...repository.index, files: bumpedFiles } };
     const regenerated = await service.next(changed, { kind: "patch_edit", targetUnitId: targetUnit(changed) }, provider);
@@ -213,7 +209,6 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     expect(result.automatic).toBe(true);
     expect(result.feedbackSource).toBe("sandbox");
     expect(result.feedback).toContain("测试全过");
-    // 判分这一侧不该有模型调用。
     expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_feedback_polish")).toHaveLength(0);
     const run = readJournal(repository.path).filter((event) => event.type === "exercise_run").at(-1);
     expect(run?.payload.stage).toBe("grade");
@@ -228,7 +223,6 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     expect(result.passed).toBe(false);
     expect(result.score).toBeCloseTo(0.5, 2);
     expect(result.feedback).toContain("1 过 1 挂");
-    // 排期按半对推进，不按零分重置。
     const database = new TutorDatabase(repository.path);
     const schedule = database.reviews.get(repository.index.repositoryId, exerciseId);
     database.close();
@@ -263,7 +257,7 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
   });
 
   it("老索引出的题，索引后来长出逐文件哈希也不该被永远判过期：兜底档只按全仓比", async () => {
-    /** 写侧记 `repo:<versionStamp>` 时，读侧要按同一档回看。 */
+    /** 写侧记 `repo:<versionStamp>`，读侧按同一口径回看。 */
     const repository = testRepository();
     const service = new ExerciseService();
     const bare = { ...repository, index: { ...repository.index, files: repository.index.files.map((file) => ({ path: file.path, extension: file.extension, bytes: file.bytes, lines: file.lines })) } };
@@ -271,7 +265,7 @@ describe.skipIf(!capability.usable)("代码题判分", { timeout: 60_000 }, () =
     const exercise = await service.next(bare, { kind: "patch_edit", targetUnitId: targetUnit(bare) }, provider);
     expect(exercise.contentHashes?.[0]?.hash, "无逐文件哈希时应落兜底档").toMatch(/^repo:/);
 
-    // 同一份内容与 versionStamp，索引现在带上逐文件哈希。
+    // 内容与 versionStamp 相同，索引带上了逐文件哈希
     expect(repository.analysis.versionStamp).toBe(bare.analysis.versionStamp);
     const result = await service.answer(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] });
     expect(result.passed, JSON.stringify(result.feedback)).toBe(true);
@@ -299,7 +293,6 @@ describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }
     const egress = readJournal(repository.path).filter((event) => event.type === "code_egress" && event.payload.scene === "practice.explain");
     expect(egress.map((event) => [event.payload.kind, event.payload.path])).toEqual([["sandbox-output", "target.ts"]]);
     expect(readJournal(repository.path).filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_explain")).toHaveLength(1);
-    // 讲评不改判分：不多 exercise_result，也不回传判分字段。
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_result").length).toBe(before);
     expect(Object.keys(result).sort()).toEqual(["explanation"]);
   });
@@ -322,7 +315,7 @@ describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }
     await service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: withSecret }] }, explain);
     const row = readJournal(repository.path).filter((event) => event.type === "code_egress").at(-1);
     expect(Number(row?.payload.masked)).toBeGreaterThan(0);
-    // 文本不落盘；出网行的 chars 是隐去之后那段。
+    // 出网行的 chars 是隐去之后那一段的长度
     expect(JSON.stringify(row)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz012345");
   });
 });

@@ -4,18 +4,15 @@ import { fileURLToPath } from "node:url";
 import { hash } from "@codebase-tutor/platform";
 
 /**
-  一个 LLM 分析步骤的登记 = 这一层的口径版本号 + 喂给模型的全部固定文案，二者绑在一起登记。
-  登记的用途是指纹守卫：提示词逐条算指纹落 `analysis-step.lock.json`，文案变了而没显式
-  `pnpm analysis:lock` 就红——作废旧产物必须是人的决定，不由编辑动作自动触发。
-  各层实际怎么算自己的缓存键，由那一层自己决定（`summarizer` 按切片、`exercises` 按目标单元），
-  这里不代持构造：曾经有过的统一键构造器随它的两个消费方一起退了。
+  一个 LLM 分析步骤的登记 = 该层口径版本号 + 喂给模型的全部固定文案。
+  提示词逐条算指纹写入 `analysis-step.lock.json`，由 `pnpm analysis:lock` 显式更新。
 */
 
-/** 提示词可以按参数生成（代码题按题型与语言分档），登记成 thunk 让指纹仍能确定复算。 */
+/** 可按参数生成的提示词登记成 thunk。 */
 export type AnalysisStepPrompt = string | (() => string);
 
 export interface AnalysisStepDefinition {
-  /** 层名，也是锁文件里的主键。重名直接抛：同名两层会互相顶掉指纹。 */
+  /** 层名，也是锁文件的主键；重名直接抛。 */
   readonly layer: string;
   readonly contractVersion: string;
   /** 该步骤发给模型的全部固定文案。 */
@@ -38,7 +35,7 @@ export interface AnalysisStepFingerprint {
 
 const steps = new Map<string, AnalysisStep>();
 
-/** 指纹算法：逐条解析 thunk 后用 NUL 行分隔（文案里不会出现 U+0000，拼接不会吞掉边界）。 */
+/** 指纹算法：逐条解析 thunk 后以 NUL 分隔拼接。 */
 export function promptDigestOf(prompts: readonly AnalysisStepPrompt[]): string {
   const text = prompts.map((prompt) => (typeof prompt === "string" ? prompt : prompt())).join("\n\u0000");
   return hash(text).slice(0, 16);
@@ -55,7 +52,7 @@ export function defineAnalysisStep(definition: AnalysisStepDefinition): Analysis
   return step;
 }
 
-/** 已登记的步骤，按层排序（锁文件与 diff 都必须与登记顺序无关）。 */
+/** 已登记的步骤，按层排序；锁文件与登记顺序无关。 */
 export function analysisSteps(): readonly AnalysisStep[] {
   return [...steps.values()].sort((a, b) => a.layer.localeCompare(b.layer));
 }
@@ -64,7 +61,7 @@ export function stepFingerprints(): AnalysisStepFingerprint[] {
   return analysisSteps().map((step) => ({ layer: step.layer, contractVersion: step.contractVersion, promptDigest: step.promptDigest }));
 }
 
-/** 锁文件跟着这份源码走：它是要进版本控制的比对基准，不是运行时产物。 */
+/** 锁文件是进版本控制的比对基准，不是运行时产物。 */
 export const ANALYSIS_STEP_LOCK_FILE = join(dirname(fileURLToPath(import.meta.url)), "analysis-step.lock.json");
 
 export function readLockedFingerprints(): AnalysisStepFingerprint[] {
@@ -73,7 +70,7 @@ export function readLockedFingerprints(): AnalysisStepFingerprint[] {
   return (parsed as AnalysisStepFingerprint[]).slice().sort((a, b) => a.layer.localeCompare(b.layer));
 }
 
-/** 重写锁文件并返回写进去的步骤数（脚本 `pnpm analysis:lock` 用）。 */
+/** 重写锁文件，返回写入的步骤数。 */
 export function writeLockedFingerprints(): number {
   const fingerprints = stepFingerprints();
   writeFileSync(ANALYSIS_STEP_LOCK_FILE, `${JSON.stringify(fingerprints, null, 2)}\n`, "utf8");

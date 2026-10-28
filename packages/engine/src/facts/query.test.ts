@@ -14,9 +14,8 @@ import { factsToolFor } from "../infrastructure/canvas-tools.js";
 import type { ImportedRepository } from "../importer/importer.js";
 
 /**
-  两个不能越的方向：
-  - 「没算过」不能说成「仓库里没有」，模型会据此给出否定的结论；
-  - 整份产物（含配置文件的值）不能原样吐出去：`.tutor` 是明文盘。
+  「没算过」与「仓里没有」分开报。
+  配置文件的值不输出。
 */
 
 const ALPHA = `export class Box {\n  size = 0;\n}\nexport function pick(a: number) {\n  if (a > 1) { return 1; }\n  return 0;\n}\n`;
@@ -28,7 +27,7 @@ function entry(path: string, lines = 5): FileEntry {
   return { path, extension: path.slice(path.lastIndexOf(".")), bytes: 100, lines };
 }
 
-/** 真分析出来的小仓（不是手捏 payload），返回库、仓 id 与调用门的入口。 */
+/** 真分析出来的小仓，返回库、仓 id 与查询门调用。 */
 function fixture(): { root: string; db: TutorDatabase; id: string; call: (args: Record<string, string>) => string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "facts-query-")));
   mkdirSync(join(root, "src"), { recursive: true });
@@ -132,7 +131,7 @@ describe("产物查询门", () => {
     const f = fixture();
     try {
       expect(f.call({ kind: "cfg", path: "src/missing.ts" })).toContain("这个文件不在其中");
-      // 库里只有 cfg 一类：registry 一行都没有，门要说「先重新分析」而不是「没有条目」
+      // registry 一类整批没算过时要说「先重新分析」。
       const partial = new TutorDatabase(f.root);
       const cfgOnly = collectFileFacts(f.root, [entry("src/alpha.ts")], extractSymbolsFromAst("src/alpha.ts", ALPHA) ?? []).filter((row) => row.kind === "cfg");
       const id2 = "repo_partial";
@@ -193,8 +192,8 @@ describe("产物查询门", () => {
       const tool = factsQueryTool(f.db, id2);
       const listed = (text: string) => text.split("\n").filter((line) => /^f\d+@/.test(line)).length;
 
-      // 窗口 8_000 token ⇒ 单次查询只有 1_600 字符 / 40 行的预算。少列几条不在断言里写死：
-      // 那个数由表头与尾部提示占的行数决定，写死等于把份额抄进测试第二遍，改份额时只会红得莫名其妙。
+      // 窗口 8_000 token ⇒ 单次查询预算 1_600 字符 / 40 行。
+      // 省略条数不写死：它随表头与尾部提示占的行数变化。
       process.env.TUTOR_CONTEXT_WINDOW_TOKENS = "8000";
       const tight = tool.apply(JSON.stringify({ kind: "cfg", path: "bulk.ts" }));
       const omitted = Number(/另有 (\d+) 条没列出/.exec(tight)?.[1] ?? -1);

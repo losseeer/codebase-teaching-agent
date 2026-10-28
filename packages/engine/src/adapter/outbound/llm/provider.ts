@@ -3,7 +3,7 @@ import { LlmAbortedError, isLlmAborted } from "../../../application/port/llm-pro
 import { maskSecrets } from "@codebase-tutor/domain";
 import { applyThinking } from "./thinking.js";
 
-/** 出网前对 system、user、messages 过一遍密钥掩码。 */
+/** 出网前对 system、user、messages 过一遍密钥筛。 */
 export function screenOutbound(input: LlmCompletionInput): LlmCompletionInput {
   const system = maskSecrets(input.system);
   const user = typeof input.user === "string" ? maskSecrets(input.user) : { text: input.user, masked: 0 };
@@ -33,9 +33,10 @@ export function screenOutbound(input: LlmCompletionInput): LlmCompletionInput {
 }
 
 
-/** 超时与外部中止共用一个 fetch signal；dispose 必须调用，否则长生命周期 signal 上会堆积监听器。 */
+/** 超时与外部中止共用一个 fetch signal。 */
 interface LinkedFetchSignal {
   signal: AbortSignal;
+  /** 必须调用以摘除监听器。 */
   dispose(): void;
 }
 
@@ -44,27 +45,27 @@ function linkFetchSignal(timeoutMs: number, external?: AbortSignal): LinkedFetch
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const relay = (): void => controller.abort();
   if (external) {
-    // 已置位的 signal 加监听器不会回调，必须直接 abort
+    // 已置位的 signal 上加监听器不会回调
     if (external.aborted) controller.abort();
     else external.addEventListener("abort", relay, { once: true });
   }
   return { signal: controller.signal, dispose: () => { clearTimeout(timer); external?.removeEventListener("abort", relay); } };
 }
 
-/** 外部信号已置位时把 AbortError 换成哨兵，其余原样返回。 */
+/** 外部信号已置位时把 AbortError 换成 `LlmAbortedError`。 */
 function attributeAbort(error: unknown, signal?: AbortSignal): unknown {
   if (error instanceof LlmAbortedError) return error;
   if (signal?.aborted && error instanceof Error && error.name === "AbortError") return new LlmAbortedError();
   return error;
 }
 
-/** 非 2xx 的统一出口：状态码挂到错误上，服务商回因过密钥筛后截 300 字。 */
+/** 非 2xx 响应转为带 `httpStatus` 的错误。 */
 async function httpFailure(response: Response, label: string): Promise<Error> {
   let reason = "";
   try {
     reason = maskSecrets(await response.text()).text.replace(/\s+/g, " ").trim().slice(0, 300);
   } catch {
-    // 原因读不出来就只报状态码
+    // 响应体读不出来时只报状态码
   }
   const error = new Error(`${label}（HTTP ${String(response.status)}）${reason ? `：${reason}` : ""}`);
   Object.defineProperty(error, "httpStatus", { value: response.status, configurable: true });
@@ -110,7 +111,7 @@ function toOpenAiMessage(message: LlmMessage): Record<string, unknown> {
       function: { name: call.name, arguments: call.argumentsJson }
     }));
   }
-  // DeepSeek thinking 模式 + tools 要求 reasoning_content 逐轮原样回传。
+  // provider 要求 reasoning_content 逐轮原样回传
   if (message.reasoningContent) payload.reasoning_content = message.reasoningContent;
   return payload;
 }
@@ -119,14 +120,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
   readonly name = "OpenAI-compatible teaching model";
   readonly modelVersion: string;
   private readonly fetchImpl: typeof fetch;
-  /** 推理模型的 reasoning token 计入 max_tokens，请求上限额外加一档余量；`TUTOR_LLM_REASONING_HEADROOM` 可调，0 = 关闭。 */
+  /** 推理 token 余量，加到 max_tokens 上。 */
   private readonly reasoningHeadroom: number;
 
   constructor(private readonly options: FetchProviderOptions) {
     this.modelVersion = `openai:${options.model}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
     const raw = process.env.TUTOR_LLM_REASONING_HEADROOM?.trim();
-    // 空串按默认 6000；显式填 0 才是关闭
+    // 空串按默认 6000，显式填 0 才是关闭
     const headroom = raw ? Number(raw) : 6_000;
     this.reasoningHeadroom = Number.isFinite(headroom) && headroom > 0 ? Math.floor(headroom) : 0;
   }
@@ -136,7 +137,6 @@ export class OpenAICompatibleProvider implements LlmProvider {
     const base = input.maxTokens ?? 700;
     const first = await this.attemptOnce(input, base + this.reasoningHeadroom);
     if (!first.truncated) return first.completion;
-    // 截断且正文为空时按两档余量重发一次；余量为 0 时不重发，直接抛错
     if (!this.reasoningHeadroom) throw OpenAICompatibleProvider.truncatedError(base, 0, false);
     const second = await this.attemptOnce(input, base + this.reasoningHeadroom * 2);
     if (second.truncated) throw OpenAICompatibleProvider.truncatedError(base + this.reasoningHeadroom * 2, this.reasoningHeadroom, true);
@@ -147,7 +147,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     return new Error(`LLM 补全${escalated ? "两发都" : ""}被 max_tokens=${String(budget)} 截断且正文为空：推理模型的思考 token 计入这个上限。当前余量 TUTOR_LLM_REASONING_HEADROOM=${String(headroom)}——再调大它，或改用非推理模型。`);
   }
 
-  /** 发一发并解析；截断时返回 `truncated` 而不抛。 */
+  /** 发送一次请求并解析；截断时返回 `truncated` 而不抛错。 */
   private async attemptOnce(input: LlmCompletionInput, budget: number): Promise<{ truncated: true } | { truncated: false; completion: LlmCompletion }> {
     const messages: Record<string, unknown>[] = [{ role: "system", content: input.system }];
     if (input.messages?.length) {
@@ -161,7 +161,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       max_tokens: budget,
       messages
     };
-    // 思考参数按模型能力声明组装；不支持的档位抛错
+    // 不支持的思考档位由 applyThinking 抛错
     if (input.thinking) applyThinking(payload, this.options.model, input.thinking);
     if (input.tools?.length) {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
@@ -195,7 +195,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     };
   }
 
-  /** 发一发并取回 JSON；超时与外部中止覆盖到正文读完，`dispose()` 在 `finally`。 */
+  /** 发送一次请求并取回 JSON；超时与外部中止覆盖到正文读完。 */
   private async requestJson(url: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
     const timeoutMs = this.options.timeoutMs ?? 12_000;
     const linked = linkFetchSignal(timeoutMs, signal);
@@ -210,7 +210,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       return await response.json();
     } catch (error) {
       const attributed = attributeAbort(error, signal);
-      // 先归因外部中止，再判超时
+      // 外部中止优先于超时归因
       if (attributed instanceof LlmAbortedError) throw attributed;
       if (attributed instanceof Error && attributed.name === "AbortError") {
         throw new Error(`模型请求超时（${String(timeoutMs)}ms）：推理模型较慢时可以调大超时时长。`);
@@ -222,7 +222,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 }
 
-/** Retries transient provider failures before the harness takes its local path. */
+/** 包装 provider，对瞬时失败重试。 */
 export class RetryLlmProvider implements LlmProvider {
   readonly name: string;
   readonly modelVersion: string;
@@ -243,7 +243,7 @@ export class RetryLlmProvider implements LlmProvider {
         return { ...completion, attempts: attempt + 1, attemptMs };
       } catch (error) {
         attemptMs.push(Date.now() - started);
-        // 中止优先于可重试判定；判据带 signal，不只看错误
+        // 外部中止不进重试判定
         if (isLlmAborted(error, input.signal)) throw markAttempts(error instanceof LlmAbortedError ? error : new LlmAbortedError(), attempt + 1, attemptMs);
         if (isNonRetryable(error)) throw markAttempts(error, attempt + 1, attemptMs);
         lastError = markAttempts(error, attempt + 1, attemptMs);
@@ -254,7 +254,7 @@ export class RetryLlmProvider implements LlmProvider {
   }
 }
 
-/** 把尝试次数与每趟耗时挂到错误对象上。 */
+/** 把尝试次数与每次耗时挂到错误对象上。 */
 function markAttempts(error: unknown, attempts: number, attemptMs: number[]): unknown {
   if (error instanceof Error) {
     Object.defineProperty(error, "attempts", { value: attempts, configurable: true });
@@ -269,7 +269,7 @@ function isNonRetryable(error: unknown): boolean {
   return code !== undefined && code >= 400 && code < 500 && code !== 408 && code !== 429;
 }
 
-/** 状态码优先取错误上挂的 `httpStatus`，其次扫文案。 */
+/** 状态码优先取错误上的 `httpStatus`，再从错误消息解析。 */
 function httpStatusOf(error: unknown): number | undefined {
   const attached = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
   if (typeof attached === "number") return attached;
@@ -313,9 +313,9 @@ export const TIMEOUT_MIN_MS = 1_000;
 export const TIMEOUT_MAX_MS = 300_000;
 const DEFAULT_TIMEOUT_MS = 12_000;
 
-/** 单次请求超时：GUI 覆盖 → `.env` → 默认 12s，再钳进 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]`。 */
+/** 单次请求超时：GUI 覆盖 → `.env` → 默认值，再钳进 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]`。 */
 export function resolveTimeoutMs(override: string | undefined, env: string | undefined): number {
-  // 取第一个读得出的正数；空串与脏串按未填处理，不当成 0
+  // 取第一个读得出的正数，空串与脏串按未填处理
   const picked = [trimmed(override), trimmed(env)].find((raw) => Number.isFinite(Number(raw)) && Number(raw) > 0);
   const value = picked === undefined ? DEFAULT_TIMEOUT_MS : Number(picked);
   return Math.min(TIMEOUT_MAX_MS, Math.max(TIMEOUT_MIN_MS, value));
@@ -327,14 +327,13 @@ export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLl
   const baseUrl = trimmed(overrides.baseUrl);
   const apiKey = trimmed(overrides.apiKey);
   const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel();
-  // 留空与非法值回落默认，不当成 0
   const timeoutMs = resolveTimeoutMs(overrides.timeoutMs, process.env.TUTOR_LLM_TIMEOUT_MS);
   return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
 }
 
 /** 一份 LLM 配置的最终生效值。 */
 export interface ResolvedLlmConfig {
-  /** 空串 = 未配置，此时 `createLlmProvider` 返回 `undefined`。 */
+  /** 空串 = 未配置。 */
   provider: string;
   model: string;
   baseUrl: string;
@@ -345,14 +344,14 @@ export interface ResolvedLlmConfig {
 function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
   const { provider, model, baseUrl, apiKey, timeoutMs } = config;
   if (provider === "openai" || provider === "openai-compatible") {
-    // 官方 openai 协议无 key 不建实例；兼容端点允许无 key 本地跑
+    // openai 协议需要 key，兼容端点可以不填
     if (provider === "openai" && !apiKey) return undefined;
     return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: baseUrl, apiKey, model, timeoutMs }));
   }
   return undefined;
 }
 
-/** LLM 工厂：配置未落地时返回 `undefined`。 */
+/** provider 工厂；provider 未配置时返回 `undefined`。 */
 export function createLlmProvider(overrides?: LlmConfigOverrides): LlmProvider | undefined {
   const config = resolveLlmConfig(overrides);
   return config.provider ? createProvider(config) : undefined;

@@ -6,10 +6,7 @@ import { ingestUiEventUseCase, type IngestFailure } from "../../../../applicatio
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-/**
-  引擎运维面：地址簿、挂载与免打扰开关、外部能力面读数、健康与沙箱、事件流、导入任务、界面动作事件出口。
-  判断都在 `application/use-case/` 那一侧，这里只做取形、把失败种类翻成状态码，以及纯传输的 `/api/events`。
-  */
+/** 引擎运维面路由：地址簿、挂载与监听开关、外部能力面读数、健康与沙箱、事件流、导入任务、界面动作事件出口。 */
 const rejectedRepo = (reply: FastifyReply, failure: RepositoryFailure): FastifyReply => {
   switch (failure.kind) {
     case "not-mounted": return reply.code(404).send({ error: failure.message, reason: failure.reason });
@@ -42,7 +39,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
 
   app.delete<{ Params: { repositoryId: string }; Querystring: { artifacts?: string } }>("/api/repositories/:repositoryId", async (request) => forgetRepositoryUseCase(request.params.repositoryId, request.query.artifacts === "1"));
 
-  // URL 带 `:repositoryId` 的路由都由懒挂载钩子先挂上，失效在那一步已回 404
+  // 带 `:repositoryId` 的路由由懒挂载钩子先挂上，未挂载在该步已回 404
   app.post<{ Params: { repositoryId: string }; Body: { paused?: unknown; ttlMs?: unknown } }>("/api/repositories/:repositoryId/watch", async (request) => {
     const paused = request.body?.paused !== false;
     const ttlMs = typeof request.body?.ttlMs === "number" ? request.body.ttlMs : undefined;

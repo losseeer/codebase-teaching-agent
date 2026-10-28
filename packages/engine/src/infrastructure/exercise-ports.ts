@@ -6,13 +6,12 @@ import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import type { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 
 /**
-  练习这条路的装配层：把「这一仓的库现在开着」翻译成练习侧要的四个口。
-  它同时认识持久层、learner 与连接生命周期，这三样不该出现在出题与判分的逻辑里。
+  练习侧端口装配：由一个已挂载的仓句柄交出 store、progress、summaries、audit 四个口。
 */
 export function exercisePortsFor(handle: RepositoryHandle, database: TutorDatabase): ExercisePorts {
   const repositoryId = handle.repositoryId;
   return {
-    // 端口都绑在这个仓上：闭包掉 repositoryId，练习侧每格少带一个参数，也少一次传错的机会
+    // repositoryId 由闭包带上，端口方法不带仓参数
     store: {
       get: <T>(scope: string, kind: string, targetUnitId: string) => database.exercises.get<T>(repositoryId, scope, kind, targetUnitId),
       byId: <T>(exerciseId: string) => database.exercises.byId<T>(repositoryId, exerciseId),
@@ -29,12 +28,11 @@ export function exercisePortsFor(handle: RepositoryHandle, database: TutorDataba
       put: (cacheKey, value) => database.summaries.put(cacheKey, value),
       latest: () => database.summaries.latest()
     },
-    // 审计线跟着挂载走：它是这条仓的 append-only 线，不是一次性句柄
     audit: handle.journal
   };
 }
 
-/** 练习侧的仓视图：读的那三样原样带过去，能力那格由这次的端口填。 */
+/** 仓视图＝path/index/analysis 加这次的端口。 */
 export function practiceView(repository: { path: string; index: PracticeRepository["index"]; analysis: PracticeRepository["analysis"] }, ports: ExercisePorts): PracticeRepository {
   return { path: repository.path, index: repository.index, analysis: repository.analysis, ports };
 }
@@ -43,7 +41,7 @@ export function practiceView(repository: { path: string; index: PracticeReposito
 export async function withExercisePorts<T>(handle: RepositoryHandle, run: (ports: ExercisePorts) => T | Promise<T>): Promise<T> {
   const database = handle.pin();
   try {
-    // 必须 await：这些方法全是异步的，同步收尾等于在模型还没答完时就把库关了
+    // run 可能返回 Promise，await 之后才走到 unpin
     return await run(exercisePortsFor(handle, database));
   } finally {
     handle.unpin();

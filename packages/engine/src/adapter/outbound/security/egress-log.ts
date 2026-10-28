@@ -1,13 +1,11 @@
 import { hash, repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { Journal } from "../persistence/journal.js";
 
-/**
-  源码出网清单：哪些仓内代码片段、以什么形态、进了哪一次模型请求。
-  只记指针与指纹（`chars + hash`），不记正文。
-  一行 = 一段源码，只在真的发出时写；未发出的分支不记，端点失败照记。
-*/
+/** 源码出网清单：哪些仓内代码片段、以什么形态、进了哪一次模型请求。
+    只记指针与指纹（`chars + hash`），不记正文。
+    一行 = 一段源码，只在真的发出时写；未发出的分支不记，端点失败照记。 */
 
-/** 出网形态：按装配路径分档。 */
+/** 出网形态：按装配路径区分。 */
 export type EgressKind =
   /** L1 文件摘要用的结构切片：行数、符号名与参数、依赖方向，不含整份正文。 */
   | "l1-slice"
@@ -35,7 +33,7 @@ export interface EgressSource {
   truncated?: boolean;
 }
 
-/** 装配侧收集待发段落，发出前交 `recordEgress` 计入审计。 */
+/** 装配侧收集待发段落的清单。 */
 export type EgressCollector = EgressSource[];
 
 /** 计入审计：一次装配写 N 行；给了 `sent` 就只登记其中确实还存在的那些段。 */
@@ -55,7 +53,7 @@ export function recordEgress(input: { repositoryPath: string; scene: string; ses
       lines: `${source.from}-${source.to}`,
       chars: source.text.length,
       hash: hash(source.text).slice(0, 12),
-      // masked: 0 要照样写：扫过零命中与没扫是两个读数
+      // masked 为 0 也要写：区分扫过零命中与没扫
       ...(source.masked === undefined ? {} : { masked: source.masked }),
       ...(source.truncated ? { truncated: true } : {})
     }, input.sessionId);

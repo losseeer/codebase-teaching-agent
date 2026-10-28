@@ -1,8 +1,5 @@
-/**
-  沙箱 runner：把「一小组文件 + 一个入口」在强制隔离下真跑一次，返回 stdout/stderr/退出状态；不含判分语义。
-  异步 spawn；超时杀整个进程组（`detached` + `kill(-pid)`）；输出到量后继续排空但丢弃。
-  `baseline` 不裹 `sandbox-exec`，用真 HOME 跑。
-*/
+/** 沙箱 runner：把一组文件加一个入口在强制隔离下真跑一次，返回 stdout/stderr/退出状态；不含判分语义。
+    超时杀整个进程组（`detached` + `kill(-pid)`）；输出到量后继续排空但丢弃。`baseline` 不裹 `sandbox-exec`，用真 HOME 跑。 */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +8,6 @@ import type { ExerciseLanguage } from "@codebase-tutor/domain";
 
 import { isolationBackend, resolveToolchain, seatbeltProfile, type SandboxToolchain } from "./profile.js";
 
-/** 沙箱支持的语言，取自共享层。 */
 export type SandboxLanguage = ExerciseLanguage;
 
 export interface SandboxFile {
@@ -28,11 +24,11 @@ export interface SandboxRunOptions {
   timeoutMs?: number;
   memoryMb?: number;
   maxOutputBytes?: number;
-  /** 故意放宽 profile 的某一项，供隔离探测做对照。 */
+  /** 故意放宽 profile 的某一项。 */
   profileOverride?: { allowNetwork?: boolean; allowFork?: boolean };
-  /** 额外点名拒读的子树；被学习仓的根走这里，产品入口 `runSandbox` 强制带上。 */
+  /** 额外点名拒读的子树；被学习仓的根走这里。 */
   denyRead?: string[];
-  /** 不进沙箱跑一遍，供隔离探测当对照组。 */
+  /** 不进沙箱跑一遍，当对照组。 */
   baseline?: boolean;
 }
 
@@ -157,7 +153,6 @@ function launch(command: string, args: string[], context: LaunchContext): Promis
 
 function sandboxEnv(workdir: string, toolchain: SandboxToolchain): Record<string, string> {
   const binDirs = [...new Set([dirname(toolchain.node), dirname(toolchain.python), dirname(toolchain.javac), dirname(toolchain.java), "/usr/bin", "/bin"])];
-  // HOME 指进沙箱目录
   return { PATH: binDirs.join(":"), HOME: workdir, TMPDIR: workdir, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
 }
 
@@ -167,10 +162,10 @@ function createWorkdir(): string {
   return mkdtempSync(join(root, "run-"));
 }
 
-/** 真跑一次；不查隔离状态，对外入口是 `runSandbox`。 */
+/** 真跑一次；不查隔离状态。 */
 export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const { language, entry, baseline = false } = options;
-  /** 形状校验先于隔离检查：文件名是否合法与环境无关。 */
+  /** 形状校验先于隔离检查。 */
   const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
   const backend = isolationBackend();
   if (!backend.available && !baseline) throw new Error(`沙箱不可用：${backend.reason}`);
@@ -183,7 +178,7 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const started = Date.now();
   try {
     for (const file of files) {
-      /** 路径可带子目录，父目录先建出来。 */
+      /** 路径可带子目录。 */
       const target = join(workdir, file.path);
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, file.contents, "utf8");

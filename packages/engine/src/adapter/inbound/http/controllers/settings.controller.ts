@@ -6,8 +6,8 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
   配置与成本面的入站翻译：GET/PUT 运行时 LLM 设置、GET 成本读数、PUT 每仓预算。
-  取值能不能存全在 `application/use-case/settings.ts`，这里只把失败种类翻成状态码与文案。
-  */
+  取值与保存在 `application/use-case/settings.ts`，这里只做失败种类 → 状态码与文案。
+*/
 const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply => {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
@@ -25,7 +25,7 @@ const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply =
 };
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
-  /** 运行时 LLM 设置的读取：含 `.env` 回落值、预设模型清单与生效模型的思考能力声明。 */
+  /** 运行时 LLM 设置的读取：含 `.env` 缺省值、预设模型清单与生效模型的思考能力声明。 */
   app.get("/api/llm/settings", async () => llmSettingsView());
 
   app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string; timeoutMs?: string } }>("/api/llm/settings", async (request, reply) => {

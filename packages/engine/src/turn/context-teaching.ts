@@ -15,34 +15,31 @@ const MAX_SCOPE_FILES = 60;
 const BUDGET_MARGIN = 200;
 /* 下面几档都按上下文窗口份额派生；窗口是唯一手填的数。 */
 const maximumCharactersCap = () => contextShare(CONTEXT_SHARE.teachingContext);
-/** 符号边界可信上限（行）：超过即只取符号开头。 */
+/** 单个符号摘录的行数上限：超出只取符号开头。 */
 const symbolLineCap = () => contextShareLines(CONTEXT_SHARE.symbolLines);
 const excerptBlockCap = () => contextShare(CONTEXT_SHARE.excerptBlock);
-/** 对话历史的份额上限：摘录在这一份里保底。 */
+/** 对话预算里为源码摘录留出的字数。 */
 const excerptReserve = () => contextShare(CONTEXT_SHARE.anchorExcerpts);
 
-/**
- * 有界教学上下文：作用域（文件 / 目录）+ 调用邻接 + 锚点源码摘录 + 对话历史。
- * 作用域只决定从哪儿开始看；历史进多少由 `llm/conversation.ts` 判。
- */
+/** 有界教学上下文：作用域 + 调用邻接 + 锚点摘录 + 对话历史，总量受 `maximumCharacters` 约束。 */
 export interface TeachingContextInput {
   scope: ScopeRef;
   policy: TeachingPolicy;
   history: TutorMessage[];
-  /** 本轮提问：历史被折叠时按它从折叠段里词法找回被引用的那几条。 */
+  /** 本轮提问：历史被折叠时按它从折叠段里找回被引用的那几条。 */
   query?: string;
   repositoryPath?: string;
   index?: RepositoryIndex;
   /** 依赖图：提供时注入调用关系，只给路径清单不给源码。 */
   analysis?: RepositoryAnalysis;
   maximumCharacters?: number;
-  /** 出网登记：本函数把哪几段源码放进上下文就往后推几条。 */
+  /** 源码摘录的出网登记收集器。 */
   egress?: EgressCollector;
-  /** 对话历史的折叠读数落在这里。 */
+  /** 折叠与找回的条数写回这里。 */
   conversationAudit?: { foldedMessages: number; recalledMessages: number };
 }
 
-/** 对话块只吃学习者与导师两类；TutorMessage 还留着 `system` 位，出现了就不进这段历史。 */
+/** 丢掉 `system` 位，只留学习者与导师两类。 */
 function learnerTurns(history: TutorMessage[]): ConversationTurn[] {
   return history.flatMap((message) => (message.role === "system" ? [] : [{ role: message.role, content: message.content }]));
 }

@@ -6,16 +6,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 /**
-  `GET /api/events` 的真连接测试；这条路由住在 `platform.ts`，用例也住在它旁边。
-  必须听真 socket：`app.inject()` 把响应整体缓冲到结束才交出来，而这条路由永不结束，看不出「只有 writeHead、没有第一帧」。
-  零 token：fetch 打到不可达端点，地址簿与日志都在临时目录。
+  `GET /api/events` 的测试；路由在 `platform.controller.ts`。
+  用真 socket 连接，不用 `app.inject()`。
   */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-sse-")));
 const repoDir = join(root, "repo");
 let app: FastifyInstance | undefined;
 
-/** 一条开着的订阅：拿到响应头就算建立，之后每来一帧记一次。 */
+/** 一条已建立的事件流订阅。 */
 interface Stream {
   statusCode: number;
   contentType: string | undefined;
@@ -49,7 +48,7 @@ function openStream(port: number, path: string): Promise<Stream> {
         }
         stream.frames.push(chunk);
       });
-      // 连接被服务端收尾：把已建立的 stream 返回去
+      // 服务端结束连接时也把 stream 交回去。
       response.on("end", () => { if (!settled) { settled = true; resolve(stream); } });
     });
     request.on("error", (error) => { if (!settled) reject(error); settled = true; });
@@ -57,7 +56,7 @@ function openStream(port: number, path: string): Promise<Stream> {
   });
 }
 
-/** 等某一帧出现，超时即失败。 */
+/** 等某一帧出现；超时返回 `undefined`。 */
 async function waitForFrame(stream: Stream, predicate: (frame: string) => boolean, timeoutMs = 8_000): Promise<string | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -80,7 +79,7 @@ beforeAll(async () => {
   process.env.TUTOR_LLM_LOG = join(root, "llm.log");
   process.env.TUTOR_ENGINE_LOG = "off";
 
-  // 必须早于 import server：provider 在构造时就把 fetch 绑成实例字段
+  // 必须早于 import server：provider 构造时就把 fetch 绑成实例字段。
   vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("测试环境不出网"); }));
   ({ app } = await import("../../../../server.js"));
   await app.listen({ port: 0, host: "127.0.0.1" });
@@ -108,7 +107,7 @@ describe("全局事件流的真连接", () => {
     try {
       expect(stream.statusCode).toBe(200);
       expect(stream.contentType).toContain("text/event-stream");
-      // 首帧是注释帧，读流循环只认 `data: ` 行
+      // 首帧是注释帧。
       expect(stream.firstChunk).toBe(": open\n\n");
       expect(stream.msToFirst).toBeLessThan(1_000);
     } finally {
@@ -134,7 +133,7 @@ describe("全局事件流的真连接", () => {
     const alive = await openStream(port(), "/api/events");
     try {
       dead.close();
-      // 等 close 事件在引擎侧走完（移除订阅者）
+      // 等引擎侧 close 事件走完（订阅者移除）再提交。
       await new Promise((resolve) => setTimeout(resolve, 150));
       const submitted = await app!.inject({ method: "POST", url: "/api/imports", payload: { path: repoDir } });
       const jobId = (submitted.json() as { id: string }).id;

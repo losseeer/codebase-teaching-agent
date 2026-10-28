@@ -4,15 +4,12 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeExternalTools, externalToolSurface, mcpConfigFile, readMcpConfigs, resetExternalTools } from "./clients.js";
 
-/**
-  MCP 客户端回归：全部打本机 stdio 子进程夹具，不发模型请求。
-  配置文件一律写临时目录（`TUTOR_MCP_SETTINGS_FILE`），不碰 `~/.codebase-tutor/mcp.json`。
-*/
+/** MCP 客户端回归：连本机 stdio 子进程夹具，不请求模型；配置写在临时目录（`TUTOR_MCP_SETTINGS_FILE`）。 */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-mcp-")));
 const FIXTURE = join(import.meta.dirname, "fixtures", "echo-server.mjs");
 
-/** 每个用例一个新文件：连接池按 server 名缓存，同名会串到上一个用例上。 */
+/** 每个用例一个新文件：连接池按 server 名缓存。 */
 function configure(mcpServers: Record<string, unknown>): void {
   const file = join(root, `mcp-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(file, JSON.stringify({ mcpServers }, null, 2), "utf8");

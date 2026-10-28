@@ -47,7 +47,7 @@ export function analyzeFile(path: string, content: string, symbols: SymbolInfo[]
     typeSkips.push(...(fact.skipped ?? []));
   };
   const cfg = eachFunction(path, content, symbols, language, (scope) => void flows.push(analyzeFunctionDataflow(scope)), onRoot);
-  // backend 跟着图走：没有语法树就没有任何一份产物，skipped 里的原因对三类产物同时成立
+  // 无语法树时三类产物一起空，skipped 原因共用
   const shared = { path, language, backend: cfg.backend, version: FACTS_VERSION };
   return {
     cfg,
@@ -62,7 +62,7 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
   const byPath = new Map<string, SymbolInfo[]>();
   for (const symbol of symbols) byPath.set(symbol.path, [...(byPath.get(symbol.path) ?? []), symbol]);
   for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
-    // 没有对应语法就不产行，读侧才分得开「没算过」与「算过、是空的」
+    // 无对应语法的文件不产行：「没算过」与「算过但为空」在库里是两种形状
     if (!graphExtensions.includes(file.extension.toLowerCase())) continue;
     let content: string;
     try {
@@ -77,7 +77,7 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
     rows.push({ kind: "typeRelations", path: file.path, payload: facts.types });
     rows.push({ kind: "registry", path: file.path, payload: facts.registry });
   }
-  // 构建清单与 SPI 这类非源码文件只产注册索引：哪些文件在一起编译、接口运行时绑到哪个实现，只有它们能回答
+  // 构建清单与 SPI 等非源码文件只产注册索引
   for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
     if (graphExtensions.includes(file.extension.toLowerCase()) || !registryEligible(file.path, false)) continue;
     try {
@@ -90,10 +90,7 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
   return rows;
 }
 
-/**
-  整批落库，按类别各存一次 `replaceAll`：这一批就是当前源码算出的全集，
-  留下的旧行会被读成「这个文件有产物、但是空的」。
-*/
+/** 整批落库：每个类别一次 `replaceAll`，这一批就是当前源码算出的全集。 */
 export function saveFileFacts(db: TutorDatabase, repositoryId: string, rows: FileFactRow[]): void {
   const grouped = new Map<FactKind, { path: string; payload: unknown }[]>();
   for (const row of rows) grouped.set(row.kind, [...(grouped.get(row.kind) ?? []), { path: row.path, payload: row.payload }]);

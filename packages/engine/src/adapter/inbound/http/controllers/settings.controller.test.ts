@@ -24,7 +24,7 @@ describe("预算已达上限时不放行付费分支", () => {
     expect(String((refused.json() as { error: string }).error)).toContain("预算");
     expect(fx.fetchCalls(), "达到预算上限后不该把请求打到模型上").toBe(callsBefore);
 
-    // 对照组：预算不是 0 时闸门放行
+    // 预算不为 0 时闸门放行
     const reopened = await fx.app.inject({ method: "PUT", url: `/api/repositories/${fx.repositoryId}/settings`, payload: { monthlyBudgetUsd: defaultMonthlyBudgetUsd } });
     expect((reopened.json() as { mode: string }).mode).toBe("normal");
   });
@@ -41,7 +41,7 @@ describe("预算已达上限时不放行付费分支", () => {
     expect(response.statusCode).toBe(422);
     expect(String((response.json() as { error: string }).error)).toContain("预算");
     expect(fx.fetchCalls(), "达到预算上限后这一轮不该打到模型上").toBe(callsBefore);
-    // 没开火就不记账
+    // 未发出请求就不产生用量
     expect(fx.eventsOf("token_usage").filter((event) => event.sessionId === sessionId)).toEqual([]);
     expect(fx.eventsOf("turn_text").filter((event) => event.sessionId === sessionId)).toEqual([]);
   });
@@ -53,7 +53,6 @@ describe("预算已达上限时不放行付费分支", () => {
 });
 
 describe("请求超时的运行时旋钮", () => {
-  /** 超时档位改完即时生效，留空回到 `.env` 那一份。 */
   it("PUT 合法值立刻生效，留空回到 .env 那一份", async () => {
     const before = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { timeoutMs?: string; activeTimeoutMs?: number; timeoutRange?: { minMs: number; maxMs: number } };
     expect(before.activeTimeoutMs, "没填时生效的是 .env/默认那一份").toBeGreaterThan(0);

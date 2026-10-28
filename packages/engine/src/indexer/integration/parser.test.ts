@@ -7,8 +7,8 @@ import { indexRepository } from "../indexer.js";
 import { extractSymbolsFromAst, loadSymbolParser, parseBackendStatus, resetSymbolParserForTest } from "@codebase-tutor/analysis";
 
 /**
-  语法树符号抽取：这里验证的是逐行文本匹配做不到的事——类方法、接口/类型别名、装饰器包裹的函数、精确的最后一行。
-  另有两例守回落路径：解析器没就绪时必须交出 undefined（交空数组会被误读成「这文件真没符号」）。
+  语法树符号抽取用例。
+  解析器未就绪时 extractSymbolsFromAst 返回 undefined，建图侧据此回落逐行匹配。
 */
 
 describe("语法树符号抽取", () => {
@@ -18,19 +18,19 @@ describe("语法树符号抽取", () => {
 
   it("Python：类方法标为方法、装饰器函数取 def 所在行、最后一行精确", () => {
     const source = [
-      "import os", // 1
-      "", // 2
-      "@deco", // 3
-      "def outer(a, b):", // 4
-      "    return a", // 5
-      "", // 6
-      "class Service:", // 7
-      "    def __init__(self, name):", // 8
-      "        self.name = name", // 9
-      "", // 10
-      "    async def fetch(self, key):", // 11
-      "        return key", // 12
-      "" // 13
+      "import os",
+      "",
+      "@deco",
+      "def outer(a, b):",
+      "    return a",
+      "",
+      "class Service:",
+      "    def __init__(self, name):",
+      "        self.name = name",
+      "",
+      "    async def fetch(self, key):",
+      "        return key",
+      ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("svc.py", source);
     expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}-${symbol.endLine}`)).toEqual([
@@ -45,23 +45,23 @@ describe("语法树符号抽取", () => {
 
   it("TypeScript：接口/类型别名/枚举单独成类，类方法标为方法，导出外壳被穿透", () => {
     const source = [
-      "export interface Options { a: string }", // 1
-      "export type Cb = (x: number) => void;", // 2
-      "export enum Kind { A, B }", // 3
-      "export function run(a: string): number {", // 4
-      "  return 1;", // 5
-      "}", // 6
-      "export const helper = async (x: number) => {", // 7
-      "  return x * 2;", // 8
-      "};", // 9
-      "export default class Service {", // 10
-      "  private n = 1;", // 11
-      "  constructor(private readonly o: Options) {}", // 12
-      "  async fetch(key: string): Promise<string> {", // 13
-      "    return key;", // 14
-      "  }", // 15
-      '  static make(): Service { return new Service({ a: "x" }); }', // 16
-      "}" // 17
+      "export interface Options { a: string }",
+      "export type Cb = (x: number) => void;",
+      "export enum Kind { A, B }",
+      "export function run(a: string): number {",
+      "  return 1;",
+      "}",
+      "export const helper = async (x: number) => {",
+      "  return x * 2;",
+      "};",
+      "export default class Service {",
+      "  private n = 1;",
+      "  constructor(private readonly o: Options) {}",
+      "  async fetch(key: string): Promise<string> {",
+      "    return key;",
+      "  }",
+      '  static make(): Service { return new Service({ a: "x" }); }',
+      "}"
     ].join("\n");
     const symbols = extractSymbolsFromAst("svc.ts", source);
     expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}-${symbol.endLine}`)).toEqual([
@@ -75,20 +75,20 @@ describe("语法树符号抽取", () => {
       "fetch:method:13-15",
       "make:method:16-16"
     ]);
-    // 类字段不是可执行体，不进符号表（否则会挤占清单名额）
+    // 类字段不进符号表
     expect(symbols?.some((symbol) => symbol.name === "n")).toBe(false);
     expect(symbols?.find((symbol) => symbol.name === "constructor")?.parameters).toEqual(["private readonly o: Options"]);
   });
 
   it("JavaScript：箭头函数、类与类方法都能识别", () => {
     const source = [
-      "function boot() {", // 1
-      "  return 1;", // 2
-      "}", // 3
-      "class Widget {", // 4
-      "  render() { return 2; }", // 5
-      "}", // 6
-      "const go = () => 3;", // 7
+      "function boot() {",
+      "  return 1;",
+      "}",
+      "class Widget {",
+      "  render() { return 2; }",
+      "}",
+      "const go = () => 3;",
     ].join("\n");
     const symbols = extractSymbolsFromAst("app.js", source);
     expect(symbols?.map((symbol) => `${symbol.name}:${symbol.kind}:${symbol.line}-${symbol.endLine}`)).toEqual([
@@ -106,31 +106,31 @@ describe("语法树符号抽取", () => {
     const graph = buildDependencyGraph(dir, index.files);
     expect(graph.parseBackend).toBe("ast");
     expect(graph.symbols.map((symbol) => `${symbol.name}:${symbol.line}-${symbol.endLine}`)).toEqual(["main:1-2", "helper:4-5"]);
-    // 符号区间准了，调用归属才准：helper() 出现在第 2 行，落在 main 的区间里
     const call = graph.calls.find((edge) => edge.calleePath === "main.py" && edge.line === 2);
     expect(call?.callerSymbol).toContain("main");
   });
 
   it("逐行匹配回落的能力上限：findEndLine 在四种声明形态下的边界", async () => {
-    resetSymbolParserForTest(); // 强制走逐行匹配路径
+    resetSymbolParserForTest();
     const dir = mkdtempSync(join(tmpdir(), "regex-endline-"));
     const source = [
-      "const a = (x) => x + 1;", // 表达式体单行箭头：区间止于本行
-      "const b = (x) => {", // 常规花括号多行箭头
+      "const a = (x) => x + 1;",
+      "const b = (x) => {",
       "  return x + 2;",
       "};",
-      "const c = (x) =>", // `=>` 收尾、块在下一行：区间要覆盖到块
+      // `=>` 收尾，块在下一行
+      "const c = (x) =>",
       "  { return x + 3; };",
-      "function d(x) { return x; }" // 单行花括号函数：区间止于本行
+      "function d(x) { return x; }"
     ].join("\n");
     writeFileSync(join(dir, "m.ts"), source);
     const index = indexRepository(dir);
     const graph = buildDependencyGraph(dir, index.files);
-    expect(graph.parseBackend).toBe("regex"); // 确认真走了回落路径，否则本例测不到 findEndLine
+    expect(graph.parseBackend).toBe("regex");
     expect(graph.symbols.map((symbol) => `${symbol.name}:${symbol.line}-${symbol.endLine}`)).toEqual([
       "a:1-1", "b:2-4", "c:5-6", "d:7-7"
     ]);
-    await loadSymbolParser(); // 还原全局解析器状态，避免影响后续用例
+    await loadSymbolParser();
   });
 
   it("没有对应语法的扩展名返回 undefined，交给逐行匹配", () => {
@@ -153,23 +153,23 @@ describe("新增语言符号抽取（Go/Rust/C）", () => {
   it("Go：type_declaration 展开到 type_spec（struct/interface 记 class、别名记 type），方法升为 method", async () => {
     await loadSymbolParser();
     const source = [
-      "package main", // 1
-      "", // 2
-      "type Config struct {", // 3
-      "\tName string", // 4
-      "}", // 5
-      "", // 6
-      "type Handler interface {", // 7
-      "\tHandle()", // 8
-      "}", // 9
-      "", // 10
-      "type Alias int", // 11
-      "", // 12
-      "func (c *Config) Name() string {", // 13
-      "\treturn c.Name", // 14
-      "}", // 15
-      "", // 16
-      "func main() {}", // 17
+      "package main",
+      "",
+      "type Config struct {",
+      "\tName string",
+      "}",
+      "",
+      "type Handler interface {",
+      "\tHandle()",
+      "}",
+      "",
+      "type Alias int",
+      "",
+      "func (c *Config) Name() string {",
+      "\treturn c.Name",
+      "}",
+      "",
+      "func main() {}",
       ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("main.go", source);
@@ -186,13 +186,13 @@ describe("新增语言符号抽取（Go/Rust/C）", () => {
   it("Rust：impl 体内的 fn 升为 method；struct/trait 有位置", async () => {
     await loadSymbolParser();
     const source = [
-      "pub struct Point { x: i32 }", // 1
-      "", // 2
-      "impl Point {", // 3
-      "\tpub fn zero() -> Point { Point { x: 0 } }", // 4
-      "}", // 5
-      "", // 6
-      "fn helper() {}", // 7
+      "pub struct Point { x: i32 }",
+      "",
+      "impl Point {",
+      "\tpub fn zero() -> Point { Point { x: 0 } }",
+      "}",
+      "",
+      "fn helper() {}",
       ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("src/geom.rs", source);
@@ -207,11 +207,11 @@ describe("新增语言符号抽取（Go/Rust/C）", () => {
   it("C：function_definition 没有 name 字段，名字从 declarator 链取", async () => {
     await loadSymbolParser();
     const source = [
-      "int add(int a, int b) {", // 1
-      "\treturn a + b;", // 2
-      "}", // 3
-      "", // 4
-      "int *make(int v) { return 0; }", // 5
+      "int add(int a, int b) {",
+      "\treturn a + b;",
+      "}",
+      "",
+      "int *make(int v) { return 0; }",
       ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("calc.c", source);
@@ -227,19 +227,20 @@ describe("Vue SFC 符号抽取", () => {
   it("script setup 块的符号带全文件行号，模板与样式不进语法树", async () => {
     await loadSymbolParser();
     const source = [
-      "<template>", // 1
-      "  <div>{{ user.name }}</div>", // 2
-      "</template>", // 3
-      "", // 4
-      "<script setup>", // 5
-      "const load = async () => {", // 6
-      "  return fetchUser();", // 7
-      "};", // 8
-      "</script>", // 9
-      "", // 10
-      "<style scoped>", // 11
-      ".box { class function weird( }", // 12 — 样式里的花括号/伪代码不得干扰
-      "</style>", // 13
+      "<template>",
+      "  <div>{{ user.name }}</div>",
+      "</template>",
+      "",
+      "<script setup>",
+      "const load = async () => {",
+      "  return fetchUser();",
+      "};",
+      "</script>",
+      "",
+      // 样式块里的花括号与伪声明不进语法树
+      "<style scoped>",
+      ".box { class function weird( }",
+      "</style>",
       ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("src/App.vue", source);
@@ -250,13 +251,13 @@ describe("Vue SFC 符号抽取", () => {
   it("lang=\"ts\" 走 TS 语法：接口成 type；多块各自定位", async () => {
     await loadSymbolParser();
     const source = [
-      "<script lang=\"ts\">", // 1
-      "export interface Row { id: number }", // 2
-      "</script>", // 3
-      "", // 4
-      "<script setup lang=\"ts\">", // 5
-      "export default function boot() {}", // 6
-      "</script>", // 7
+      "<script lang=\"ts\">",
+      "export interface Row { id: number }",
+      "</script>",
+      "",
+      "<script setup lang=\"ts\">",
+      "export default function boot() {}",
+      "</script>",
       ""
     ].join("\n");
     const symbols = extractSymbolsFromAst("src/Grid.vue", source);

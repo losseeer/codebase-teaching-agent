@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { bundledSkillSource, installBundledSkills, listSkills, readSkill, skillDirectories, skillsBriefing } from "./skills.js";
 
-/** 技能加载回归：清单与正文两半；装歪的技能要带原因露出来。 */
+/** 技能加载回归：清单与正文两半；不合规格的技能带原因返回。 */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tutor-skills-")));
 const second = join(root, "second");
@@ -112,7 +112,7 @@ describe("取正文与附属文件", () => {
 
   it("没这份技能回 undefined（工具据此照实回话，不编正文）", () => {
     expect(readSkill("no-such", undefined, [root])).toBeUndefined();
-    expect(readSkill("../../etc", undefined, [root])).toBeUndefined(); // 名字不合规格，连试都不试
+    expect(readSkill("../../etc", undefined, [root])).toBeUndefined();
   });
 
   it("超长正文截断并留一句声明，不静默裁", () => {
@@ -123,7 +123,7 @@ describe("取正文与附属文件", () => {
   });
 });
 
-/** 出厂预置技能播种：不覆盖同名、不搬坏形状。 */
+/** 出厂预置技能播种：不覆盖同名，不合规格的不搬。 */
 describe("出厂预置技能播种", () => {
   const seedRoot = join(root, "seed");
   const source = join(seedRoot, "src");
@@ -138,11 +138,10 @@ describe("出厂预置技能播种", () => {
     const seeded = installBundledSkills({ sourceDir: source, targetDir: target });
     expect(seeded.installed).toEqual(["tutor-cost-audit"]);
     expect(readFileSync(join(target, "tutor-cost-audit", "references", "lines.md"), "utf8")).toContain("两条账的落点");
-    // 坏形状带原因返回，但不搬
     expect(seeded.skipped.map((entry) => entry.dir)).toEqual([expect.stringContaining("Broken_Name")]);
     expect(seeded.skipped[0].reason).toContain("name 不合规格");
     expect(existsSync(join(target, "Broken_Name"))).toBe(false);
-    // 播种与读取用同一套判据
+    // 播种与读取用同一套形状校验
     expect(listSkills([target]).skills.map((entry) => entry.name)).toEqual(["tutor-cost-audit"]);
   });
 
@@ -163,7 +162,6 @@ describe("出厂预置技能播种", () => {
     expect(seeded.installed.sort()).toEqual([
       "diagram-architecture", "diagram-flow", "diagram-sequence", "exercise-code-concepts", "project-visualization", "teach-code-concepts"
     ]);
-    // 出厂技能的描述不能写成长文
     for (const skill of listSkills([join(seedRoot, "bundled-target")]).skills) {
       expect(skill.description.length, skill.name).toBeLessThan(300);
       expect(readSkill(skill.name, "SKILL.md", [join(seedRoot, "bundled-target")]), skill.name).toContain("证据");

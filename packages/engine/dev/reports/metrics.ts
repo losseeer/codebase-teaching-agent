@@ -8,8 +8,8 @@ import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import { LATEST_SUMMARY_LIMIT } from "../../src/adapter/outbound/persistence/summary-repository.js";
 
 /**
-  在线聚合脚本（零 LLM、只读）：产出指标集里可算项的基线报告（markdown 到 stdout）。
-  缺字段一律落「未记」；数据源缺失输出「未执行 + 原因」，不用默认值补。
+  只读聚合脚本（不调用 LLM）：把可算的指标输出为 markdown 报告。
+  缺字段落「未记」，数据源缺失落「未执行 + 原因」，不用默认值补。
   用法：`pnpm phase0:metrics`（`TUTOR_METRICS_ENGINE` 可改引擎地址）
 */
 
@@ -43,7 +43,7 @@ function percentile(values: number[], q: number): string {
   return String(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]);
 }
 
-/** 同一 endpoint 的不同仓库/会话实例归一为一条曲线。 */
+/** 把 URL 里的仓库 id 与会话 id 归一成同一个路由。 */
 function normalizeUrl(url: string): string {
   return url
     .replaceAll(/repo_[0-9a-f]+/gi, ":repoId")
@@ -97,10 +97,9 @@ const failedTotal = llmRows.filter((row) => row.ok === false).length;
 emit();
 emit(`- 调用失败率（全局）：${pct(failedTotal, llmRows.length)}；llm.log 行数 ${llmRows.length}${llmRows.length ? "" : "（文件缺失 → 本节日志不存在，非零调用）"}`);
 
-// ---------- 3. 接口延迟与引擎事件 ----------
 emit();
 emit("## 3. 接口延迟 p50/p95（engine.jsonl kind:http，按路由归一）");
-// 历史 engine.jsonl 里仍有 /companion/ 行，过滤掉再进延迟曲线
+// /companion/ 的行不进延迟曲线。
 const http = engineRows.filter((row) => row.kind === "http" && typeof row.durationMs === "number"
   && !(row.detail?.url ?? "").includes("/companion/"));
 const byRoute = new Map<string, number[]>();
@@ -141,14 +140,14 @@ for (const repo of perRepo) {
   emit(`- code_search：${of("code_search").length} 次（原始计数）`);
   emit(`- file_read：${reads.length} 条（归并后），其中 denied ${pct(reads.length - readOk.length, reads.length)}`);
 
-  // 落点核验早就不属于「未测」：每轮出答复前都在环复检一遍并记这条事件，这里只是把它读出来。
+  // 每轮答复前复检不变量并落 turn_invariant 事件。
   const invariants = of("turn_invariant");
   const broken = invariants.filter((event) => event.payload.failed);
   emit(invariants.length
     ? `- 回合不变量复检（在环、零 token）：${invariants.length} 轮，失守 ${broken.length} 轮${broken.length ? `（${[...new Set(broken.map((event) => String(event.payload.failed)))].join("、")}）` : ""}；三作用域都判，离线机检那台架目前只喂 teach`
     : "- 回合不变量复检：未执行（journal 里没有 turn_invariant 记录——这条埋点上线前的老回合不补）");
 
-  // 提问占比与转化率：分母是宏观设计的回合数；问出去的那些用户到底答没答，是这套机制的去留判据
+  // 提问占比的分母是 map_chat 回合数。
   {
     const asks = of("turn_asked");
     const mapTurns = of("turn_text").filter((event) => event.payload.scene === "map_chat").length;
@@ -164,7 +163,7 @@ for (const repo of perRepo) {
 
   emit(`- 学习语义事件完整度：${["exercise_generated", "exercise_result", "exercise_declined"].map((type) => `${type}=${of(type).length}`).join("、")}`);
 
-  // 练习链路：送达(exercise_generated)→提交(exercise_submitted, UI 侧)→判分通过(exercise_result)；断在哪一步看拒绝的阶段分布
+  // 练习链路：送达 → 提交 → 判分。
   {
     const generated = of("exercise_generated");
     const submitted = of("exercise_submitted");
@@ -173,15 +172,11 @@ for (const repo of perRepo) {
     const declined = of("exercise_declined");
     const count = (list: { payload: Record<string, unknown> }[], key: string, value: string) => list.filter((event) => String(event.payload[key]) === value).length;
     const bySource = ["llm", "cache", "rule", "review", "code"].map((source) => `${source} ${count(generated, "source", source)}`).join("、");
-    // 沙箱那两档必须单列：「模型没出成题」和「出成题但沙箱证不出这题可解」是两件事，混成一列会误导去改提示词
+    // 沙箱未就绪与自证失败单列，不与出题失败混计。
     const byStage = ["no_candidates", "no_target", "llm_generate", "guard", "no_provider", "provider_error", "proposal_shape", "sandbox_unavailable", "harness_validation"].map((stage) => `${stage} ${count(declined, "stage", stage)}`).join("、");
-    /**
-      同一档可能出自两族（`no_target` 由共用的选题路径写出），所以按族拆开列。
-      旧行 payload 没有 `family` 键：单独列成「未标族别」，不悄悄算进任何一族——缺读数与读数为 0 是两件事。
-      */
+    // 同一档可能出自两族，按 family 分列；没有 family 键的单列为「未标族别」。
     const unlabelled = declined.filter((event) => typeof event.payload.family !== "string").length;
     const byFamily = ["comprehension", "code", "llm"].map((family) => `${family} ${count(declined, "family", family)}`).join("、") + `、未标族别 ${unlabelled}`;
-    /** 同一档可能出自两族：按族拆开列；旧行没有 `family` 键时单列「未标族别」。 */
     const runs = of("exercise_run");
     const runOutcome = ["accepted", "passed", "failed", "no-verdict"].map((outcome) => `${outcome} ${count(runs, "outcome", outcome)}`).join("、");
     emit(`- 沙箱运行：${runs.length} 趟（自证 ${count(runs, "stage", "validate-proposal")}、判分 ${count(runs, "stage", "grade")}）；结论 ${runOutcome}；超时 ${runs.filter((event) => event.payload.timed_out === true).length}、没印 TESTS 结论 ${runs.filter((event) => event.payload.verdict_passed === null).length}`);
@@ -198,10 +193,12 @@ for (const repo of perRepo) {
       try {
         const parsed = JSON.parse(row.summary) as { path?: string; coverage?: { low?: boolean; rule?: string } };
         if (typeof parsed.path === "string" && !latest.has(parsed.path)) latest.set(parsed.path, { coverageLow: parsed.coverage?.low, rule: parsed.coverage?.rule });
-      } catch { /* 非 JSON 行跳过 */ }
+      } catch {
+        // 非 JSON 行跳过。
+      }
     }
     const low = [...latest.values()].filter((row) => row.coverageLow === true).length;
-    // anchor-v2：命中缓存的行会被就地重算并打上 rule 标记；两种判据混杂期间分开报
+    // rule=anchor-v2 标记就地重算过的行。
     const v2 = [...latest.values()].filter((row) => row.rule === "anchor-v2");
     const lowV2 = v2.filter((row) => row.coverageLow === true).length;
     emit(`- L1 摘要（按文件最新行）：${latest.size} 个文件，coverageLow=${low}（${pct(low, latest.size)}，仅作读数、不再扣下游用途）；其中 anchor-v2 判据已重算 ${v2.length} 行、判低 ${lowV2}${latest.size - v2.length ? `（其余 ${latest.size - v2.length} 行仍是旧判据结论，待下次访问就地重算）` : ""}`);

@@ -5,9 +5,8 @@ import type { FastifyReply } from "fastify";
 import type { FastifyInstance } from "fastify";
 
 /**
-  仓库只读产物的入站翻译：索引、练习摘要、学习者画像、导入报告、源码。
-  判据在 `application/use-case/repository-read.ts`，这里只把失败种类翻成状态码。
-  */
+  仓库只读产物的入站翻译：索引、练习摘要、学习者画像、导入报告、源码，失败种类在此翻成状态码。
+*/
 const rejected = (reply: FastifyReply, failure: ReadFailure): FastifyReply => {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });

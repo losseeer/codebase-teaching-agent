@@ -1,9 +1,6 @@
 import type { FileEntry, RepositoryIndex } from "@codebase-tutor/domain";
 
-/**
-  选中作用域：一个文件或一个目录。存成 `file:<path>` / `dir:<path>`，
-  既做线程绑定键，也做上下文装配的入口；不依赖任何课程树。
-*/
+/** 选中作用域：一个文件或一个目录，ref 形如 `file:<path>` / `dir:<path>`。 */
 export interface ScopeRef {
   kind: "file" | "dir";
   path: string;

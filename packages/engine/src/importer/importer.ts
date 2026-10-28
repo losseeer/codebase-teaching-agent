@@ -27,7 +27,7 @@ import { auditLineFor, Journal, journalFootprint } from "../adapter/outbound/per
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { traceEngine } from "@codebase-tutor/platform";
 
-/** `analyze` 的产物：不含挂载态字段（监听与新鲜度在 `attach` 时才存在）。 */
+/** `analyze` 的产物，不含挂载态字段。 */
 type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit" | "chatStore">;
 
 export interface ImportedRepository {
@@ -35,27 +35,27 @@ export interface ImportedRepository {
   index: RepositoryIndex;
   estimate: ImportEstimate;
   analysis: RepositoryAnalysis;
-  /** 这份产物的连接生命周期（一份 SQLite + 一条审计线），随挂载创建、随卸载关闭。 */
+  /** 这一仓的 SQLite 连接与审计线生命周期，随挂载创建、随卸载关闭。 */
   handle: RepositoryHandle;
-  /** 这条仓的审计线（写 + 读）；路径与仓 id 的配对只在挂载这一处发生。 */
+  /** 这一仓的审计线；路径与仓 id 在这里配对。 */
   audit: AuditLine;
-  /** 这一仓的会话线程读写口；与 `audit` 同一处置，挂载那一刻交出。 */
+  /** 这一仓的会话线程读写口，挂载那一刻交出。 */
   chatStore: ChatStore;
   watcher?: RepositoryWatcher;
-  /** 挂载那一刻算出的新鲜度（内容哈希 + git HEAD）；只报告，不触发重分析。 */
+  /** 挂载那一刻算出的新鲜度；只报告，不触发重分析。 */
   freshness: RepositoryFreshness;
-  /** fs 监听的死活，随挂载结果一起交出；监听没起来时 `freshness` 只到挂载那一刻为止。 */
+  /** fs 监听状态，随挂载结果一起交出。 */
   watch: WatchStatus;
 }
 
-/** 挂载注册表（地址簿）路径；默认 ~/.codebase-tutor/repositories.json，`TUTOR_REGISTRY_FILE` 可覆盖。 */
+/** 挂载地址簿的路径，`TUTOR_REGISTRY_FILE` 可覆盖。 */
 function registryFile(): string {
   return process.env.TUTOR_REGISTRY_FILE ?? join(tutorDataDir(), "repositories.json");
 }
 
 function preserveCorruptRegistry(file: string): string {
   const backup = `${file}.corrupt`;
-  try { copyFileSync(file, backup); } catch { /* 备份写不动也要继续走告警 */ }
+  try { copyFileSync(file, backup); } catch { /* 备份写不动也继续按空清单处理 */ }
   return backup;
 }
 
@@ -65,7 +65,7 @@ function readRegistry(): string[] {
   try {
     text = readFileSync(file, "utf8");
   } catch (error) {
-    // ENOENT 是常态；读不动时先留原件再按空处理。
+    // 读不动时先留一份原件，再按空清单处理
     if ((error as { code?: string }).code === "ENOENT") return [];
     preserveCorruptRegistry(file);
     console.warn(`[registry] 地址簿读不动，本轮按空处理：file=${file} error=${String(error)}`);
@@ -89,7 +89,7 @@ function readRegistry(): string[] {
 function writeRegistry(paths: string[]): void {
   const file = registryFile();
   mkdirSync(dirname(file), { recursive: true });
-  // 先写临时文件再改名覆盖，避免半个 JSON。
+  // 先写临时文件再改名覆盖，写入保持原子
   const temp = `${file}.tmp`;
   writeFileSync(temp, `${JSON.stringify({ repositories: paths }, null, 2)}\n`, "utf8");
   renameSync(temp, file);
@@ -113,7 +113,7 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/** 同时挂载（一个 fs 监听 + 一份产物内存态）的上限；每次读 `TUTOR_MAX_MOUNTED`，便于测试换档。 */
+/** 同时挂载的仓数上限，每次读 `TUTOR_MAX_MOUNTED`。 */
 function maxMounted(): number {
   return Math.max(1, Number(process.env.TUTOR_MAX_MOUNTED ?? 3) || 3);
 }
@@ -131,8 +131,8 @@ function gitHeadOf(repositoryPath: string): string | undefined {
 /** 一次遍历算出当前内容哈希与相对落库 contentHash 的变化文件数。 */
 function stampAndDiff(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): { versionStamp: string; changedFiles: number } {
   let changedFiles = 0;
-  // 拼法必须与 `contentVersion` / 索引器一致（utf8 读、path:hash），否则新鲜度永远比不中。
-  // 拼进 stamp 的是完整 64 位哈希，不是索引里的 16 位前缀。
+  // 拼接方式必须与索引器一致：utf8 读、`path:hash`
+  // 拼进 stamp 的是完整 64 位哈希，不是索引里的 16 位前缀
   const contents = index.files.map((file) => {
     let digest = "unreadable";
     const scanned = digests?.get(file.path);
@@ -143,7 +143,8 @@ function stampAndDiff(repositoryPath: string, index: RepositoryIndex, digests?: 
     try {
       digest = hash(readFileSync(join(repositoryPath, file.path), "utf8"));
     } catch {
-      changedFiles += 1; // 读不到按「已改动」计
+      // 读不到的文件按已改动计
+      changedFiles += 1;
       return `${file.path}:${digest}`;
     }
     if (file.contentHash && !digest.startsWith(file.contentHash)) changedFiles += 1;
@@ -201,7 +202,7 @@ export class ImportService extends EventEmitter {
   private queue = Promise.resolve();
   /** 每个仓库至多一轮重分析在途；running 期间新路径先累积，本轮结束后合并跑。 */
   private readonly reanalysisQueues = new Map<string, { running: Promise<void>; pending: Set<string> }>();
-  /** 监听被挂起的仓（编辑期免打扰）；放在挂载态之外，需要活过驱逐与重新挂载。 */
+  /** 挂起监听的仓；独立于挂载态，驱逐与重新挂载都不丢这条登记。 */
   private readonly watchPaused = new Map<string, { until: number; timer?: ReturnType<typeof setTimeout> }>();
 
 
@@ -209,7 +210,6 @@ export class ImportService extends EventEmitter {
     const repositoryPath = validateRepositoryPath(inputPath);
     const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString(), ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) };
     this.jobs.set(job.id, job);
-    // 排队回调继承挂上去那一刻的请求上下文：这一轮导入的花费只靠这个 reqId 关联。
     this.queue = this.queue.then(() => this.run(job.id)).catch(() => undefined);
     return job;
   }
@@ -227,12 +227,12 @@ export class ImportService extends EventEmitter {
     return [...this.repositories.values()];
   }
 
-  /** 会话线程读写口按库路径交出：被 LRU 驱逐的仓仍要读得到它留下的线程。 */
+  /** 按库路径交出会话线程读写口；被驱逐的仓仍能读到它留下的线程。 */
   chatStore(repositoryPath: string): ChatStore {
     return chatStoreFor(repositoryPath);
   }
 
-  /** 未挂载仓的审计线：按 threadId 找回仓、后台收尾的回合账都从这一格写。 */
+  /** 按库路径与仓 id 交出审计线，不要求已挂载。 */
   audit(repositoryPath: string, repositoryId: string): AuditLine {
     return auditLineFor(repositoryPath, repositoryId);
   }
@@ -241,7 +241,7 @@ export class ImportService extends EventEmitter {
   catalog(): RepositoryCatalogEntry[] {
     const paths = readRegistry();
     for (const repository of this.repositories.values()) if (!paths.includes(repository.path)) paths.push(repository.path);
-    // 预算闸门读数只依赖进程环境变量，未挂载时也要出现在清单上。
+    // 闸门读数只依赖进程环境变量，未挂载的条目也带上
     const gateNotice = budgetGateNotice();
     return paths.map((path) => {
       const repositoryId = catalogRepositoryId(path);
@@ -280,7 +280,7 @@ export class ImportService extends EventEmitter {
     let index: RepositoryIndex | undefined;
     let analysis: RepositoryAnalysis | undefined;
     let estimate: ImportEstimate | undefined;
-    /** 句柄从这里起交给挂载项；这一带任何一步失败都由当前的 `close()` 收尾。 */
+    /** 句柄从这里交给挂载项；这一带失败都由下面的 catch 关闭它。 */
     let handle: RepositoryHandle | undefined;
     try {
       handle = new RepositoryHandle(path, repositoryId);
@@ -300,7 +300,7 @@ export class ImportService extends EventEmitter {
 
     const journal = journalFootprint(path);
     traceEngine("mount", { repositoryId, phase: "lazy", verdict: repository.freshness.verdict, changedFiles: repository.freshness.changedFiles, mounted: this.repositories.size, journalLines: journal.lines, journalBytes: journal.bytes, schemaGaps: repository.handle.schemaGaps.length }, { traceId: null, durationMs: Date.now() - startedAt });
-    // 缺列在挂载这一次就报出来：只有真读到那一列才会炸。
+    // 缺列在挂载这一次报出来
     if (repository.handle.schemaGaps.length) console.warn(`[engine] ${path} 的产物库缺列：${repository.handle.schemaGaps.join("、")}——需要一条一次性迁移，光改声明补不上。`);
     return { ok: true, repository };
   }
@@ -310,7 +310,7 @@ export class ImportService extends EventEmitter {
     const path = readRegistry().find((item) => catalogRepositoryId(item) === repositoryId);
     this.unmountOne(repositoryId);
     dropFromRegistry(repositoryId);
-    // artifacts：removed 删了、absent 本来没有、refused 没敢删或删不动。
+    // artifacts：removed 已删除、absent 本来没有、refused 未删除
     if (!deleteArtifacts) return {};
     if (!path || !isAbsolute(path)) return { artifacts: "refused" };
     try {
@@ -329,14 +329,14 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  /** 挂载一个仓库并开监听；按 LRU 驱逐超出 `maxMounted()` 的最久未用项，只关监听与移出内存，磁盘产物不动。 */
+  /** 挂载一个仓库并开监听；LRU 驱逐只移出内存，磁盘产物不动。 */
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;
     const previous = this.repositories.get(repositoryId);
     previous?.watcher?.close();
-    // 换句柄时关掉旧的；增量重分析传入同一份，那种情况不动它。
+    // 换句柄时才关旧的；增量重分析传入同一份句柄
     if (previous && previous.handle !== repository.handle) previous.handle.close();
-    // 挂起中：不开监听，产物与内存照用。
+    // 挂起中的仓不开监听
     const paused = this.watchPaused.has(repositoryId);
     if (paused) traceEngine("mount", { repositoryId, phase: "watch_skipped_paused" }, { traceId: null });
     const { watcher, watch } = paused ? { watcher: undefined, watch: { started: false, dead: false } } : this.startWatcher(repository);
@@ -354,18 +354,18 @@ export class ImportService extends EventEmitter {
     return mounted;
   }
 
-  /** 记一次「刚用过」：挪到 LRU 末尾。 */
+  /** 把该仓挪到 LRU 末尾。 */
   private touch(repositoryId: string): void {
     const position = this.lru.indexOf(repositoryId);
     if (position >= 0) this.lru.splice(position, 1);
     this.lru.push(repositoryId);
   }
 
-  /** 起一条 fs 监听并返回它的终态（attach 与恢复共用）。 */
+  /** 起一条 fs 监听并返回它的状态。 */
   private startWatcher(repository: AnalyzedRepository): { watcher: RepositoryWatcher; watch: WatchStatus } {
     const repositoryId = repository.index.repositoryId;
     const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
-      // 监听起来后中途死掉时不再给事件，需要单独记账。
+      // 监听起来后不再发事件，中途死亡要单独记一笔
       traceEngine("mount", { repositoryId, phase: "watch_died", error: message.slice(0, 200) }, { traceId: null });
       console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
     });
@@ -383,7 +383,8 @@ export class ImportService extends EventEmitter {
     const previous = this.watchPaused.get(repositoryId);
     if (previous?.timer) clearTimeout(previous.timer);
     const timer = setTimeout(() => this.resumeWatching(repositoryId), until - Date.now());
-    timer.unref?.(); // 挂起定时器不该钉住进程
+    // 定时器不该钉住进程
+    timer.unref?.();
     this.watchPaused.set(repositoryId, { until, timer });
     const mounted = this.repositories.get(repositoryId);
     mounted?.watcher?.close();
@@ -395,7 +396,7 @@ export class ImportService extends EventEmitter {
     return { paused: true, until };
   }
 
-  /** 恢复监听（手动或到点自动）。没挂载的仓只清登记——下次 attach 会按常规自己起。 */
+  /** 恢复监听；未挂载的仓只清登记，下次挂载时按常规起。 */
   resumeWatching(repositoryId: string): { paused: boolean; woken: boolean } {
     const previous = this.watchPaused.get(repositoryId);
     if (previous?.timer) clearTimeout(previous.timer);
@@ -405,7 +406,7 @@ export class ImportService extends EventEmitter {
     const started = this.startWatcher(mounted);
     mounted.watcher = started.watcher;
     mounted.watch = started.watch;
-    // 挂起期间磁盘可能已变：新鲜度要重算。
+    // 挂起期间磁盘可能已经变了，新鲜度重算
     mounted.freshness = judgeFreshness(mounted.path, mounted.index, mounted.analysis);
     traceEngine("mount", { repositoryId, phase: "watch_resumed", freshness: mounted.freshness.verdict, changedWhilePaused: mounted.freshness.changedFiles }, { traceId: null });
     return { paused: false, woken: true };
@@ -422,7 +423,7 @@ export class ImportService extends EventEmitter {
     return { paused: true, until: entry.until };
   }
 
-  /** 驱逐 = 关它的 fs 监听 + 从内存移除；不清 L2 缓存（键含 `repositoryId` 与本层输入哈希，换仓不会误命中）。 */
+  /** 驱逐：关该仓的 fs 监听并从内存移除；不清 L2 层缓存。 */
   private evictBeyondLru(): void {
     while (this.lru.length > maxMounted()) {
       const oldest = this.lru.shift();
@@ -436,7 +437,7 @@ export class ImportService extends EventEmitter {
   private unmountOne(repositoryId: string): void {
     const repository = this.repositories.get(repositoryId);
     repository?.watcher?.close();
-    // 句柄按引用计数关闭：在途请求未清零时不真关。
+    // 句柄按引用计数关闭，在途请求未清零时不真关
     repository?.handle.close();
     this.repositories.delete(repositoryId);
     const position = this.lru.indexOf(repositoryId);
@@ -452,16 +453,15 @@ export class ImportService extends EventEmitter {
       const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
       const { index, estimate, analysis, handle } = imported;
 
-      // 新导入的仓进地址簿（最近使用在后）并就地挂载；句柄沿用 analyze 那一份，不再开第二个连接。
+      // 就地挂载，句柄沿用 analyze 那一份，不再开第二个连接
       this.attach({ path: job.repositoryPath, index, estimate, analysis, handle });
       job.repositoryId = index.repositoryId;
       try {
         rememberRepository(job.repositoryPath);
       } catch (error) {
-        // 地址簿写失败不影响导入结果，只提示。
+        // 地址簿写失败不影响导入结果
         console.warn(`[import] 仓库地址簿写入失败：${error instanceof Error ? error.message : String(error)}`);
       }
-      // 读不到的文件要在完成消息里点名。
       const unreadableNote = imported.index.unreadable?.length ? `（${imported.index.unreadable.length} 个文件读不到，已跳过：${imported.index.unreadable.slice(0, 3).map((file) => file.path).join("、")}${imported.index.unreadable.length > 3 ? " 等" : ""}）` : "";
       this.update(job, "completed", 100, `导入完成：${index.totalFiles} 个文件，${analysis.implementations.length} 个实现单元${unreadableNote}`);
       job.completedAt = new Date().toISOString();
@@ -475,7 +475,7 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  /** 句柄生命周期：新建档失败时就地关一次；复用挂载句柄时绝不由这一层关，唯一入口是卸载。 */
+  /** 句柄生命周期：新建失败就地关一次；复用挂载句柄时只由卸载关。 */
   private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, existing?: RepositoryHandle): Promise<AnalyzedRepository> {
     const handle = existing ?? new RepositoryHandle(repositoryPath, catalogRepositoryId(repositoryPath));
     try {
@@ -488,28 +488,28 @@ export class ImportService extends EventEmitter {
 
   private async analyzeWith(repositoryPath: string, handle: RepositoryHandle, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在读取文件结构");
-    // 增量重分析传入的扫描结果直接接手，不重复扫仓。
+    // 增量重分析传入的扫描结果直接接手
     const scan = preScanned ?? scanRepositoryWithDigests(repositoryPath);
     const index = scan.index;
-    // versionStamp = 全量源码内容哈希，内容不变则值不变。
+    // versionStamp 是全量源码内容哈希，内容不变则值不变
     const versionStamp = contentVersion(repositoryPath, index, scan.digests);
     handle.db.state.saveIndex(index);
     progress("summarizing", 40, "正在生成文件摘要并检查缓存");
-    // 每仓设置先读出来：summaryHeaderComments 决定 L1 是否带注释档，预算后面还要用同一份。
+    // 摘要口径与预算共用这一份每仓设置
     let storedSettings = handle.db.state.settings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
-    // 导入页的显式选择是该仓摘要口径唯一的写入点；读-合并-写保住其它键。
+    // 摘要口径只由导入页写入；读-合并-写保住其它键
     if (summaryHeaderComments !== undefined) {
       storedSettings = { ...(storedSettings ?? {}), summaryHeaderComments };
       handle.db.state.saveSettings(index.repositoryId, storedSettings);
     }
     const withHeaderComments = summaryHeaderComments ?? storedSettings?.summaryHeaderComments === true;
-    // 该仓预算取落库值，取不到才用默认；这一处必须与闸门同一份。
+    // 预算取该仓落库值，取不到用默认
     const budgetUsd = storedSettings?.monthlyBudgetUsd ?? defaultMonthlyBudgetUsd;
-    // 单价未配时花费恒为 0，闸门放行这一状态要作为读数交出。
+    // 单价未配时花费为 0，闸门视为未超线
     const lightProvider = budgetExceeded(repositoryPath, budgetUsd) ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
-    // 顺序固定：L1 摘要的输入是结构切片，必须先建图。
-    // 语法解析器异步加载，须在建图前就绪；失败不抛错，由 graph 记录回落原因。
+    // 顺序固定：L1 摘要的输入是结构切片，必须先建图
+    // 语法解析器异步加载，须在建图前就绪；失败不抛错，由 graph 记录回落原因
     await loadSymbolParser();
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
     const summaryJournal = new Journal(repositoryPath, index.repositoryId);
@@ -519,7 +519,7 @@ export class ImportService extends EventEmitter {
       repositoryPath: handle.db.repositoryPath,
       provider,
       withHeaderComments,
-      // 每一批花费当场入账 journal。
+      // 每一批花费写入 journal
       onUsage: (usage) => {
         if (!usage || (!usage.inputTokens && !usage.outputTokens)) return;
         summaryJournal.append("token_usage", {
@@ -527,7 +527,7 @@ export class ImportService extends EventEmitter {
           cache_hit_tokens: usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map.summary"
         });
       },
-      // L1 是导入最慢的一段，逐批回报进度。
+      // 摘要逐批回报进度
       onProgress: (done, total) => {
         const value = 40 + Math.round((35 * done) / Math.max(1, total));
         progress("summarizing", value, `正在生成文件摘要（${done}/${total}）`);
@@ -543,12 +543,12 @@ export class ImportService extends EventEmitter {
       graph: serializeGraph(graph),
       implementations,
       versionStamp,
-      // 记下分析时的 HEAD，供懒挂载区分 drifted 与 stale。
+      // 记下分析时的 git HEAD
       ...(analysisHead ? { gitHead: analysisHead } : {})
     };
     handle.db.state.saveEstimate(index.repositoryId, estimate);
     handle.db.state.saveAnalysis(analysis);
-    // 静态产物层零 token：失败降级但不阻断导入，并记 degrade。
+    // 静态产物层不发模型请求；失败只降级，不阻断导入
     try {
       saveFileFacts(handle.db, index.repositoryId, collectFileFacts(repositoryPath, index.files, graph.symbols));
     } catch (error) {
@@ -585,13 +585,13 @@ export class ImportService extends EventEmitter {
     }
   }
 
-  /** 一轮重分析；不 reject——它跑在后台队列里，抛出会变成未处理拒绝。 */
+  /** 一轮重分析；跑在后台队列里，不 reject。 */
   private async reanalyzeOnce(repositoryId: string, changedPaths: string[]): Promise<void> {
     const current = this.repositories.get(repositoryId);
     if (!current) return;
     const startedAt = Date.now();
     let impactedPaths: string[] = [];
-    /** 整轮重分析跨多个 await；期间驱逐或移出地址簿都不能关掉这份连接。 */
+    /** 整轮跨多个 await；期间驱逐或移出地址簿都不能关掉这份连接。 */
     current.handle.pin();
     try {
       /** 先重扫收录集与每文件内容哈希，再决定要不要跑整轮。 */
@@ -603,17 +603,17 @@ export class ImportService extends EventEmitter {
       impactedPaths = impactRadius(graphFromData(current.analysis.graph), changedPaths).impactedPaths;
 
       const next = await this.analyze(current.path, () => undefined, undefined, rescan, current.handle);
-      // 回写前确认挂载项没被换掉，避免用旧快照覆盖内存与 SQLite。
+      // 回写前确认挂载项没被换掉
       if (this.repositories.get(repositoryId) !== current) {
         traceEngine("reindex", { repositoryId, changed: changedPaths.length, ok: false, error: "unmounted-during-run" }, { traceId: null, durationMs: Date.now() - startedAt });
         return;
       }
       next.analysis.lastIncrementalUpdate = { changedPaths, impactedPaths, at: new Date().toISOString() };
       current.handle.db.state.saveAnalysis(next.analysis);
-      // 新鲜度按当前磁盘内容重算；这几十秒里又改了文件就如实报脏。
+      // 新鲜度按当前磁盘内容重算
       this.repositories.set(repositoryId, { ...next, audit: current.audit, chatStore: current.chatStore, watcher: current.watcher, watch: current.watcher?.watchStatus ?? current.watch, freshness: judgeFreshness(current.path, next.index, next.analysis) });
       this.publish({ type: "repository.updated", payload: { repositoryId, changedPaths, impactedPaths } });
-      // journal payload 只允许标量，不写路径数组。
+      // journal payload 只允许标量
       traceEngine("reindex", { repositoryId, changed: changedPaths.length, impacted: impactedPaths.length, ok: true }, { traceId: null, durationMs: Date.now() - startedAt });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -682,7 +682,7 @@ function expandHome(input: string): string {
   return input;
 }
 
-/** 练习缓存版本跟随源码内容，不跟随导入时间。 */
+/** 内容版本只跟随源码内容，不跟随导入时间。 */
 function contentVersion(repositoryPath: string, index: RepositoryIndex, digests?: Map<string, string>): string {
   return stampAndDiff(repositoryPath, index, digests).versionStamp;
 }

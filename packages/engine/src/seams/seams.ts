@@ -6,14 +6,13 @@ import { matchRouteSeams, routeEndpointsOfFiles } from "@codebase-tutor/analysis
 /**
   跨仓 HTTP 接缝的读侧：把两个仓的路由清单配成边。
   只做跨仓；不落库、不进缓存键，进程内 memo 的键含 `versionStamp`。
-  算一次要读两个仓的源码，只在用户显式选了「相关仓」时才算。
 */
 
 export interface SeamRepository {
   repositoryId: string;
   path: string;
   files: FileEntry[];
-  /** 分析产物的内容戳：清单 memo 的键之一 */
+  /** 分析产物的内容戳；清单 memo 的键之一。 */
   versionStamp: string;
 }
 
@@ -24,7 +23,7 @@ function endpointsOf(repository: SeamRepository): { providers: RouteProvider[]; 
   const key = `${repository.repositoryId}:${repository.versionStamp}`;
   const hit = memo.get(key);
   if (hit) {
-    // Map 的迭代序就是新近序：先删再放等于把这条推到最新
+    // Map 的迭代序就是插入序：先删再放等于把这条推到最新。
     memo.delete(key);
     memo.set(key, hit);
     return hit;
@@ -46,7 +45,7 @@ function directionOf(consumers: RouteConsumer[], providers: RouteProvider[]): Se
   return { links, scanned: consumers.length, matched: matchedKeys.size, ambiguous: ambiguousKeys.size };
 }
 
-/** 双向：本仓调相关仓（outbound）与相关仓调本仓（inbound），两个方向的学习者问题不同。 */
+/** 两个方向各配一次：本仓调对端（outbound）与对端调本仓（inbound）。 */
 export function seamReportFor(repository: SeamRepository, other: SeamRepository): SeamReport {
   const mine = endpointsOf(repository);
   const theirs = endpointsOf(other);
@@ -63,7 +62,7 @@ export function clearSeamMemo(): void {
   memo.clear();
 }
 
-/** 一次回给模型的行数上限；更多只会变成模型抄进答案的清单。 */
+/** 一次清单最多回给模型的接缝行数。 */
 const MODEL_ROWS = 12;
 
 /** 把配对结果压成给模型看的清单；每行都带「文件:行」。 */
@@ -83,7 +82,7 @@ export function formatSeamReport(otherName: string, report: SeamReport, filter =
   ].join("\n");
 }
 
-/** 跨仓接缝查询工具：把「点这个按钮之后代码在哪个仓的哪一行」这条零 token 的证据交给模型。 */
+/** `cross_repo_link` 的工具定义。 */
 export const CROSS_REPO_LINK_TOOL: LlmTool = {
   name: "cross_repo_link",
   description: "查询当前仓库与另一个仓库之间按 URL 配好的 HTTP 接缝：本仓调用的地址落在对端哪个文件哪一行，以及对端提供了哪些地址被本仓调用。回答跨仓「这个请求打到哪里去」时先调用它拿准确落点，不要靠猜 URL 字符串。",

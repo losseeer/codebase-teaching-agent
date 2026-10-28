@@ -134,7 +134,7 @@ describe("增量读缓存：只在文件真的变了时才多读", () => {
     const rewritten = readFileSync(file(), "utf8").replace("甲", "丙");
     expect(Buffer.byteLength(rewritten)).toBe(Buffer.byteLength(readFileSync(file(), "utf8")));
     writeFileSync(file(), rewritten, "utf8");
-    // 显式推后 mtime，不依赖文件系统的改写时序
+    // 显式推后 mtime
     const stamp = new Date(Date.now() + 1_000);
     utimesSync(file(), stamp, stamp);
     expect(readJournal(repository).map((event) => event.payload.question)).toEqual(["丙", "乙"]);

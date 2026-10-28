@@ -72,13 +72,13 @@ describe("mapChat", () => {
     expect(result.usage?.inputTokens).toBe(10);
     const user = calls[0].user;
     expect(user).toContain("项目结构全景");
-    expect(user).toContain("src/utils/ 共 1 个文件：normalize.ts"); // 全景按目录分组列出已分析文件（计数不写进名字位）
+    expect(user).toContain("src/utils/ 共 1 个文件：normalize.ts");
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 1 个已分析文件");
     expect(user).toContain("src/app.ts");
-    expect(user).toContain("src/config.ts"); // 一度邻居
-    expect(user).toContain("src/paths.ts"); // 二度下游：config.ts 的 import
-    expect(user).toContain("src/boot.ts"); // 一度上游
-    expect(user).toContain("src/ui/theme.ts"); // 二度上游：boot.ts 的被 import
+    expect(user).toContain("src/config.ts");
+    expect(user).toContain("src/paths.ts");
+    expect(user).toContain("src/boot.ts");
+    expect(user).toContain("src/ui/theme.ts");
     expect(user).toContain("为什么要分层？");
   });
 
@@ -114,18 +114,15 @@ describe("mapChat", () => {
       { type: "thinking" }
     ]);
     expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 50 });
-    /*
-      不给 limit 就一次读到字符预算为止（预算按窗口派生，1M 窗口下整份源码都在里面）：
-      实得行数必须等于文件真实行数，且 truncated=false —— 这条钉住「默认只给 150 行」那个旧行为没回来。
-    */
+    // 不给 limit 时按默认窗口预算读到文件末尾
     const wholeFileLines = readFileSync(join(import.meta.dirname, "run-turn.ts"), "utf8").split(/\r?\n/).length;
     const reads = result.fileReads ?? [];
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({ path: "run-turn.ts", lines: wholeFileLines, truncated: false, denied: false });
     const second = calls[1];
     expect(second.messages?.[0]).toMatchObject({ role: "user" });
-    expect(second.messages?.[0].content).toContain("项目结构全景"); // 回归：工具轮次后不得丢失代码上下文
-    expect(second.messages?.[0].content).toContain("run-turn.ts 里定义了什么？"); // 回归：不得丢失原始提问
+    expect(second.messages?.[0].content).toContain("项目结构全景");
+    expect(second.messages?.[0].content).toContain("run-turn.ts 里定义了什么？");
     expect(second.messages?.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "read_file")).toBe(true);
     const toolResult = second.messages?.find((m) => m.role === "tool");
     expect(toolResult?.content).toContain("1| ");
@@ -159,7 +156,6 @@ describe("mapChat", () => {
     });
     expect(result.reply).toContain("按产物说的回答");
     expect(calls[0].tools?.map((tool) => tool.name)).toContain("query_facts");
-    // 有副作用的工具要先看见现状，只读的门同理：产物在册情况得进上下文，否则模型不知道有什么可查
     expect(calls[0].user ?? calls[0].messages?.[0]?.content ?? "").toContain("静态产物在册");
     const second = calls[1];
     expect(second.messages?.find((m) => m.role === "tool")?.content).toContain("复杂度 2");
@@ -186,24 +182,18 @@ describe("mapChat", () => {
     const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider, style: 50 });
     expect(result.reply).toContain("三轮后的回答");
     /*
-      保留窗口是 2 轮（`TOOL_CONTEXT_KEEP_ROUNDS`）：第 4 次请求带着 3 轮历史，最早那轮该折掉。
-      别拿 calls[1]、calls[2] 判「更早的请求长什么样」——它们与本条引用的是同一个 messages 数组，
-      就地折叠会同时改到所有已记录的请求上。
+      保留窗口 2 轮（`TOOL_CONTEXT_KEEP_ROUNDS`）：第 4 次请求带 3 轮历史，最早一轮已折叠。
+      各次请求引用同一个 messages 数组，折叠就地生效。
     */
     const fourth = calls[3];
     const toolResults = fourth.messages?.filter((m) => m.role === "tool") ?? [];
     expect(toolResults).toHaveLength(3);
-    // 最早一轮：正文换占位符，但「哪个文件、第几到第几行」留着
     expect(toolResults[0].content).toContain("已折叠");
     expect(toolResults[0].content).toContain("文件 run-turn.ts");
     expect(toolResults[0].content.split("\n").length).toBeLessThanOrEqual(3);
     expect(toolResults[0].content.length).toBeLessThan(400);
-    /*
-      判「这一条是原文」不能靠「不含某个短语」：夹具读的就是本文件，占位符里那串字本来就在源码里。
-      改判形状——整份原文有几百行，被折叠过的只剩抬头加一句说明。
-    */
+    // 夹具读的文件之一是本测试文件，按行数区分原文与折叠
     for (const kept of toolResults.slice(1)) expect(kept.content.split("\n").length).toBeGreaterThan(200);
-    // 早期 assistant 的 reasoningContent 丢弃；最近一轮保留（协议要求 tool 轮回传）
     const assistants = fourth.messages?.filter((m) => m.role === "assistant") ?? [];
     expect(assistants.slice(0, 2).every((m) => m.reasoningContent === undefined)).toBe(true);
     expect(assistants[2].reasoningContent).toBe("思考A3");
@@ -229,7 +219,7 @@ describe("mapChat", () => {
     const user = calls[0].user;
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
     expect(user).toContain("src/app.ts（120 行）：装配应用入口");
-    expect(user).not.toContain("README.md"); // 未分析的提示路径不参与交集
+    expect(user).not.toContain("README.md");
   });
 
   it("作用域清单全部未分析 → 不注入作用域段，按全局视野作答", async () => {
@@ -265,7 +255,6 @@ describe("mapChat", () => {
     expect(user).toContain("长".repeat(500));
     expect(user.indexOf("最近对话")).toBeLessThan(user.indexOf("学习者的问题：第二点再展开讲"));
     expect(user.indexOf("最近对话")).toBeGreaterThan(user.indexOf("项目结构全景"));
-    // 空内容轮不生成行：整块只有 学习者/助手 两行
     expect(user.match(/(学习者|助手): /g)?.filter((line) => line === "助手: ").length).toBe(1);
   });
 
@@ -281,7 +270,7 @@ describe("mapChat", () => {
 
   it("历史装不下本轮空间时才折：留最早与最近、中间换占位，本轮引用到的那条按词法找回", async () => {
     const previous = process.env.TUTOR_CONTEXT_WINDOW_TOKENS;
-    // 10000 token = 40000 字符，对话份额 5% = 2000 字符：下面这份历史约 2200 字符，超出本轮分给它的安全空间
+    // 窗口 10000 token 时对话份额约 2000 字符，下面的历史约 2200 字符
     process.env.TUTOR_CONTEXT_WINDOW_TOKENS = "10000";
     try {
       const { provider, calls } = fakeProvider();
@@ -328,7 +317,6 @@ describe("practiceChat", () => {
     expect(user).toContain("修改定位");
     expect(user).toContain("src/app.ts");
     expect(user).toContain("为什么不是 config.ts？");
-    // 学习者安全：expected / answerKey 不允许进入 prompt
     expect(user).not.toContain("expectedIds");
     expect(user).not.toContain("answerKey");
     expect(result.reply).toContain("基于上下文");

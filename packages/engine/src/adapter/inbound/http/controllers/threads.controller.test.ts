@@ -27,7 +27,7 @@ describe("未挂载仓库的线程仍可定位", () => {
     expect(appendMessages(archivedDir, thread.id, [{ role: "user", content: "上次问到哪了？" }])).toBe(true);
 
     try {
-      // 前提：它确实没挂在内存里
+      // 前提：它没挂在内存里
       const catalog = await fx.app.inject({ method: "GET", url: "/api/repositories" });
       const entry = (catalog.json() as { repositories: { repositoryPath: string; mounted: boolean }[] }).repositories
         .find((item) => item.repositoryPath === archivedDir);
@@ -48,7 +48,7 @@ describe("未挂载仓库的线程仍可定位", () => {
   });
 });
 
-/** 会话下拉的取数口径：只列有正文的会话，当前打开的空会话仍要认下来。 */
+/** 线程清单的收录口径：只列有正文的会话；`?current` 指定的空线程也返回。 */
 describe("线程清单的收录口径", () => {
   it("零消息的会话不进列表；?current 认下正打开的那条，删掉或不属于这个作用域才回 null", async () => {
     const unsent = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "刚点新建" });
@@ -70,7 +70,7 @@ describe("线程清单的收录口径", () => {
   });
 });
 
-/** 「删除当前会话」的走法：POST 建一条没发言的，再经 DELETE 路由删掉。 */
+/** 删除当前会话：POST 建一条无正文的线程，再走 DELETE 路由。 */
 describe("删除还没发言的会话", () => {
   for (const scope of ["map", "practice", "teach"] as const) {
     it(`${scope}：刚建的空壳要删得掉，删过第二次才 404`, async () => {

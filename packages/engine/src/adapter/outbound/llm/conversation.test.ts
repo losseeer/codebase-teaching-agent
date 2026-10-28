@@ -10,7 +10,7 @@ import { CHARS_PER_TOKEN, contextWindowTokens } from "./context-window.js";
 
 const ENV_KEY = "TUTOR_CONTEXT_WINDOW_TOKENS";
 const previous = process.env[ENV_KEY];
-/** 10000 token 窗口 = 40000 字符：两条折叠触发都能单独构造。 */
+/** 10000 token 窗口 = 40000 字符。 */
 const WINDOW = "10000";
 afterEach(() => {
   if (previous === undefined) delete process.env[ENV_KEY];
@@ -19,9 +19,9 @@ afterEach(() => {
 
 const turn = (role: "user" | "assistant", content: string) => ({ role, content });
 const filler = (label: string) => `${label}${"聊".repeat(140)}`;
-/** 十条不超预算的历史：只在按窗口判时才够格触发折叠。 */
+/** 十条、总量在预算内的历史。 */
 const modest = Array.from({ length: 10 }, (_, index) => turn(index % 2 ? "assistant" : "user", filler(`甲${index}`)));
-/** 同样的条数但每条都长：按本轮空间判时先触发。 */
+/** 同样条数、每条更长的历史。 */
 const verbose = Array.from({ length: 10 }, (_, index) => turn(index % 2 ? "assistant" : "user", filler(`乙${index}${"细".repeat(200)}`)));
 
 describe("renderConversation", () => {
@@ -88,7 +88,6 @@ describe("renderConversation", () => {
     ];
     // 折叠段 = 最早与最近保留窗口之外的部分
     const middleCount = turns.length - HISTORY_KEEP_EARLIEST_MESSAGES - HISTORY_KEEP_RECENT_MESSAGES;
-    // 用窗口占用触发折叠，本轮空间留得宽裕
     const usedCharacters = contextWindowTokens() * CHARS_PER_TOKEN * HISTORY_COMPACT_AT_RATIO + 1;
     const cited = renderConversation({ turns, query: "蓝绿发布锚点在哪一行？", usedCharacters });
     expect(cited.text).toContain("蓝绿发布锚点：它落在 registry.ts");
@@ -102,7 +101,7 @@ describe("renderConversation", () => {
 
   it("找回条数封顶：折叠段里多处相关时只带最相关的几条回来", () => {
     process.env[ENV_KEY] = WINDOW;
-    /* 相关行必须比整段少，否则 BM25 的 idf 会把它们全判成不相关。 */
+    /* 相关行数必须少于整段行数。 */
     const middle = Array.from({ length: 10 }, (_, index) =>
       index % 5 < 3 ? turn("assistant", `第${index}处 蓝绿发布锚点 的说明${"注".repeat(30)}`) : turn("assistant", filler(`中${index}`)));
     const turns = [

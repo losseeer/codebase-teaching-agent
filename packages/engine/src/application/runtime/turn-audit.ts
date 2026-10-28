@@ -8,12 +8,9 @@ import type { CodeSearchRecord } from "../../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../../source/tool-loop.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 
-/**
-  回合的审计线写法（谁看过什么、调过哪些外部工具）。放在应用层而不是 HTTP 层：
-  中止的回合也要记账，这条判据与传输无关，三作用域的 SSE 收尾与 `failScopedTurn` 共用同一份实现。
-*/
+/** 回合的审计线写法：谁读过什么、调过哪些外部工具、花了多少 token。 */
 
-/** 没走完的回合（用户停止或端点报错）也要落的那一发账：钱已经花了，账上不能没有。 */
+/** 未走完的回合（用户停止或端点报错）已发生调用的 token 记账。 */
 function appendUsage(journal: AuditSink, input: { provider: string; scene: TurnScene; threadId?: string; outcome: "aborted" | "failed"; usage?: LlmUsage }): void {
   const usage = input.usage;
   if (!usage || (!usage.inputTokens && !usage.outputTokens)) return;
@@ -23,20 +20,17 @@ function appendUsage(journal: AuditSink, input: { provider: string; scene: TurnS
   }, input.threadId);
 }
 
-/** `mcp_call` 一行的形状（三作用域与讲评共用）。 */
+/** `mcp_call` 一行的形状。 */
 export function mcpCallPayload(call: McpCallAudit): Record<string, string | number | boolean | null> {
   return { server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars, masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {}) };
 }
 
-/** 回合返回值里那几组审计的形状（三作用域共用；字段缺失时补空数组）。 */
+/** 回合返回值里那几组审计的形状；字段缺失时补空数组。 */
 export function auditsFromResult(result: { fileReads?: FileReadRecord[]; codeSearches?: CodeSearchRecord[]; skillReads?: { skill: string; chars: number; found: boolean }[]; mcpCalls?: McpCallAudit[]; toolRounds?: number; usage?: LlmUsage }): ToolLoopAudits {
   return { fileReads: result.fileReads ?? [], codeSearches: result.codeSearches ?? [], skillReads: result.skillReads ?? [], mcpCalls: result.mcpCalls ?? [], rounds: result.toolRounds ?? 0, usage: result.usage };
 }
 
-/**
-  没走完的回合（用户停止或端点报错）的旁证：成品作废，但「读过哪些文件、搜过什么、调过哪些外部工具」
-  与「已经花掉的 token」都是已发生的事实，照旧落审计线并标来源。
-*/
+/** 未走完的回合（用户停止或端点报错）的旁证：读过的文件、搜过的查询、外部调用与已用的 token 照旧落审计线。 */
 export function recordUnfinishedTurn(input: { repositoryPath: string; repositoryId: string; scene: TurnScene; provider: string; outcome: "aborted" | "failed"; threadId?: string; audits?: ToolLoopAudits }): void {
   const audits = input.audits;
   const journal = importer.audit(input.repositoryPath, input.repositoryId);

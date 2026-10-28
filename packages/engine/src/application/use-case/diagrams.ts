@@ -23,16 +23,16 @@ export type DiagramResult<T> = { ok: true; value: T } | { ok: false; failure: Di
 
 const missing: DiagramResult<never> = { ok: false, failure: { kind: "repository-missing" } };
 
-// 句柄的 pin/unpin 与写上下文装配都在 `infrastructure/diagram-context.ts`；这一层只认 `context.store` 那十格。
+// pin/unpin 与写上下文装配在 `infrastructure/diagram-context.ts`；这一层只认 `context.store`。
 
-/** 图库列表：只回摘要，不拖整张图的结构进左栏。 */
+/** 图库列表：只回摘要，不含结构。 */
 export function listDiagramsUseCase(repositoryId: string): DiagramResult<{ diagrams: DiagramSummary[] }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
   return { ok: true, value: { diagrams: withDiagramContext(repository, (context) => context.store.list()) } };
 }
 
-/** 新建一张空白图：名字撞了由 `uniqueDiagramName` 加序号——图库与 agent 都靠名字认图，不允许两张同名。 */
+/** 新建一张空白图；名字撞了加序号，图库内不允许同名。 */
 export function createDiagramUseCase(repositoryId: string, name?: string): DiagramResult<{ diagram: Diagram }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
@@ -46,19 +46,18 @@ export function createDiagramUseCase(repositoryId: string, name?: string): Diagr
   });
 }
 
-/** 单张图 + 读侧的引用复检：图上的模块节点还指得着现在的索引吗（图是历史产物，文件会改名、目录会删）。 */
+/** 单张图 + 读侧复检：图上的模块节点是否还能对上现在的索引。 */
 export function readDiagramUseCase(repositoryId: string, diagramId: string): DiagramResult<{ diagram: Diagram; warnings: ReturnType<typeof diagramWarnings>; filesByNode: ReturnType<typeof diagramFilesByNode> }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
   return withDiagramContext(repository, (context) => {
     const diagram = context.store.read(diagramId);
     if (!diagram) return { ok: false, failure: { kind: "diagram-missing" } } as const;
-    // 复检用的写上下文就是 `withDiagramContext` 交出来的那一份，不必第二次构造
     return { ok: true, value: { diagram, warnings: diagramWarnings(context, diagram), filesByNode: diagramFilesByNode(context, diagram) } } as const;
   });
 }
 
-/** 改名：不存版本（它不动结构）。「一个字都没改」与「图库里已经有这个名字」是两条不同的 400。 */
+/** 改名不存版本；未改动与重名是两条不同的失败。 */
 export function renameDiagramUseCase(repositoryId: string, diagramId: string, rawName: string): DiagramResult<{ diagram: Diagram }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
@@ -77,7 +76,7 @@ export function renameDiagramUseCase(repositoryId: string, diagramId: string, ra
   });
 }
 
-/** 删掉一张图：版本历史一起没，所以这一行审计要留得住名字与版数。 */
+/** 删除一张图，版本历史一并删除；审计记下名字与版数。 */
 export function deleteDiagramUseCase(repositoryId: string, diagramId: string): DiagramResult<{ deleted: true; diagramId: string }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
@@ -91,10 +90,7 @@ export function deleteDiagramUseCase(repositoryId: string, diagramId: string): D
   });
 }
 
-/**
-  几何落盘：认不出来的节点 id 由 `saveGeometry` 一个个跳过（图上没有的东西不该因为一次陈旧拖拽被造出来），
-  所以这里不为「有几个 id 没落上」而拒。
-  */
+/** 几何落盘：认不出的节点 id 由 `saveGeometry` 跳过，这里不因此拒绝。 */
 export function saveGeometryUseCase(repositoryId: string, diagramId: string, positions: DiagramPosition[]): DiagramResult<{ diagram: Diagram }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
@@ -105,7 +101,7 @@ export function saveGeometryUseCase(repositoryId: string, diagramId: string, pos
   });
 }
 
-/** 恢复某一版：恢复动作本身也存一版（为什么不能截断历史见 `persistence/diagrams.ts` 的 `restoreVersion`）。 */
+/** 恢复某一版；恢复动作本身也存一版。 */
 export function restoreDiagramUseCase(repositoryId: string, diagramId: string, index: number): DiagramResult<{ diagram: Diagram }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;

@@ -8,11 +8,9 @@ import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { hash } from "@codebase-tutor/platform";
 import { maskSecrets } from "@codebase-tutor/domain";
 
-/**
-  MCP 客户端：把外部 MCP server 的工具接进工具循环，只做产品读外部这一个方向。
-  默认关闭：没有配置文件就一条外部工具都不给，工具清单与系统提示词逐字不变。
-  正文不进日志：外部调用只记 `chars + hash`；返回内容进模型前先过一次密钥筛。
-*/
+/** MCP 客户端：把外部 MCP server 的工具接进工具循环，只做读外部这一个方向。
+    默认关闭：没有配置文件就不给外部工具，工具清单与系统提示词逐字不变。
+    正文不进日志：外部调用只记 `chars + hash`；返回内容进模型前先过密钥筛。 */
 
 export interface McpServerConfig {
   /** 配置里 `mcpServers` 的键名，进工具名前缀：`mcp__<name>__<tool>`。 */
@@ -170,7 +168,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: tr
   return outcome;
 }
 
-/** 现做本轮的外部工具面；没有配置文件就返回 `undefined`。 */
+/** 组装本轮的外部工具面；没有配置文件就返回 `undefined`。 */
 export async function externalToolSurface(): Promise<ExternalSurface | undefined> {
   const { servers, skipped } = readMcpConfigs();
   // 配置里删掉的 server 先收尾
@@ -199,7 +197,6 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
     }
     const entry = await cached;
     if (!entry) { errors.push({ server: config.name, reason: "连不上（子进程起不来或 initialize 失败）" }); pool.delete(config.name); continue; }
-    // 白名单每轮现裁
     const allowed = allowedNames(config);
     const tools = allowed ? entry.tools.filter((tool) => allowed.has(entry.origin.get(tool.name) ?? tool.name)) : entry.tools;
     if (!tools.length) errors.push({ server: config.name, reason: allowed ? "连上了但它报的工具都不在白名单里" : "连上了，它一个工具都没报" });
@@ -226,7 +223,7 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
       const outcome = await withTimeout(entry.client.callTool({ name: entry.origin.get(name) as string, arguments: args }), limit);
       const ms = Date.now() - started;
       if (!outcome.ok) {
-        // 调用失败说明这条连接已死：关连接并摘池，子进程由 close() 收尾
+        // 调用失败时关连接并摘池，子进程由 close() 收尾
         if (outcome.reason === "failed") {
           void entry.client.close().catch(() => undefined);
           pool.delete(entry.server);

@@ -16,7 +16,7 @@ import type { FactsToolContext } from "../source/tool-loop.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
-  `static_fact` 四类产物交给模型的只读门：只读、不计费、不重算。
+  `static_fact` 四类产物的只读门：只读、不计费、不重算。
   按 `path` 与 `target` 给，一次最多回预算内的字数。
 */
 
@@ -106,7 +106,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
     const fact = db.facts.read<T & { version?: string }>(repositoryId, kind, path);
     return fact?.version === FACTS_VERSION ? fact : undefined;
   };
-  // 整类扫描按类别缓存一次：这扇门只活一个回合。
+  // 整类扫描按类别缓存一次；查询门实例只服务一个回合。
   const scanned = new Map<FactKind, Map<string, unknown>>();
   const scan = <T>(kind: FactKind): Map<string, T> => {
     const cached = scanned.get(kind) as Map<string, T> | undefined;
@@ -212,7 +212,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
   };
 }
 
-/** 静态产物的只读门：与 `set_diagram` 配对，那边写图、这边给证据，不重算。 */
+/** `query_facts` 的工具定义。 */
 export const QUERY_FACTS_TOOL: LlmTool = {
   name: "query_facts",
   description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",

@@ -1,8 +1,5 @@
-/**
-  沙箱 profile：macOS 用 Seatbelt（`/usr/bin/sandbox-exec`），Linux 无实现时代码题域按不可用处理。
-  读侧形状是「默认放行 + 点名拒读」：整片 deny 会让 `sandbox-exec` 自己在 execvp 阶段 SIGABRT。
-  写侧是整片拒 + 白名单放行。
-*/
+/** 沙箱 profile：macOS 用 Seatbelt（`/usr/bin/sandbox-exec`），其他平台按不可用处理。
+    读侧是「默认放行 + 点名拒读」；写侧是整片拒 + 白名单放行。 */
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -36,7 +33,7 @@ function searchPath(name: string, pathValue: string): string | undefined {
   return undefined;
 }
 
-/** 解释器位置全部实时计算，不写死清单。 */
+/** 解释器位置按 PATH 实时计算。 */
 export function resolveToolchain(env: NodeJS.ProcessEnv = process.env): Partial<SandboxToolchain> {
   const pathValue = env.PATH ?? "";
   const resolve = (name: string): string | undefined => {
@@ -102,7 +99,7 @@ export function seatbeltProfile(workdir: string, toolchain: Partial<SandboxToolc
   return rules.join("\n");
 }
 
-/** 本机有没有可用的强制隔离；目前只有 darwin 有实现。 */
+/** 本机有没有可用的强制隔离；只有 darwin 有实现。 */
 export function isolationBackend(): { platform: NodeJS.Platform; available: boolean; reason: string } {
   const platform = process.platform;
   if (platform !== "darwin") return { platform, available: false, reason: `没有 ${platform} 的隔离后端实现（只写了 macOS Seatbelt），代码题域按不可用处理` };
@@ -117,7 +114,7 @@ export function runnerFingerprint(): string {
   const toolchain = resolveToolchain();
   const probe = (command: string | undefined, args: string[]): string => {
     if (!command) return "missing";
-    // javac -version 把版本写在 stderr，用 spawnSync 取
+    // javac -version 把版本写在 stderr
     const result = spawnSync(command, args, { encoding: "utf8", timeout: 5_000 });
     if (result.error) return `error ${result.error.message.slice(0, 40)}`;
     return (result.stdout || result.stderr || "").trim().split("\n")[0];

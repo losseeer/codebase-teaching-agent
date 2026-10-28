@@ -4,7 +4,7 @@ import { indexRepository } from "../indexer.js";
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
 import { graphFromData, serializeGraph } from "@codebase-tutor/analysis";
 
-/** 临时目录造小仓库：新语言的解析规则用独立夹具，不进 frozen fixture 的共享快照。 */
+/** 在临时目录里按 fileMap 造一个小仓库。 */
 async function withRepo<T>(name: string, fileMap: Record<string, string>, run: (dir: string) => T): Promise<T> {
   const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -21,9 +21,8 @@ async function withRepo<T>(name: string, fileMap: Record<string, string>, run: (
 }
 
 /**
-  `externals` 这个字段（架构视图的「系统边界之外」）。它一份边都不该多出来，
-  所以下面每个用例都同时钉两件事：外部名记对了，以及 `imports` 一字未变——
-  外部名一旦被当边连进图，影响范围、角色分层、流程证据全会跟着变，那就不是加一栏而是改图。
+  externals 只记外部包名，不产生边。
+  每个用例同时断言外部名与 imports 的边集合。
 */
 describe("外部包名采集（留名不留边）", () => {
   it("四种语言各自采到裸包名，且一条边都不许多", async () =>
@@ -36,7 +35,7 @@ describe("外部包名采集（留名不留边）", () => {
       "cmd/main.go": "package main\n\nimport (\n\t\"fmt\"\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() { fmt.Println(gin.Version) }\n"
     }, (dir) => {
       const graph = buildDependencyGraph(dir, indexRepository(dir).files);
-      // 身份切法见 `packageIdentity`：npm 取第一段、Python 取第一段、Java 取前四段、Go 域名式取前三段
+      // 包名切法见 packageIdentity。
       expect(graph.externals.get("src/app.ts")).toEqual(["axios", "react-dom"]);
       expect(graph.externals.get("app/main.py")).toEqual(["flask", "redis"]);
       expect(graph.externals.get("src/Main.java")).toEqual(["com.fasterxml.jackson.databind"]);
@@ -48,11 +47,7 @@ describe("外部包名采集（留名不留边）", () => {
       expect([...graph.externals.keys()].sort(), "没有外部名的文件不写键").toEqual(["app/main.py", "cmd/main.go", "src/Main.java", "src/app.ts"]);
     }));
 
-  /**
-    判据是「命中仓内包根就算断链」，不是「这条 import 能不能落到某个类」：
-    `com.mycompany.shortlink` 这类项目自己的包根在边界之内，即便某个类当时不在索引里，
-    把它报成「边界之外的依赖」也不准确。
-  */
+  // 命中仓内包根即算断链，不看单个类是否在索引里。
   it("命中项目自己的包根时不记外部名，即便那个类没被索引", async () =>
     await withRepo("externals-inrepo-root", {
       "src/com/mycompany/core/Widget.java": "package com.mycompany.core;\npublic class Widget {}\n",
@@ -63,11 +58,7 @@ describe("外部包名采集（留名不留边）", () => {
       expect(graph.externals.has("src/com/mycompany/app/App.java"), "落不到的 `Missing` 是仓内断链，不是外部依赖").toBe(false);
     }));
 
-  /**
-    两类「解析不到」都不是外部包：仓内意图（相对路径 / 命中别名 / 工作区包）与脏捕获。
-    `tsSpecifierPattern` 在 `.tsx` 里会抓到 `<div className=`、` | ` 这种根本不是模块名的串，
-    只让落点返回 undefined 不够，名字要留档就必须先验形。
-  */
+  // 仓内意图与脏捕获都不记外部名；外部名要先过包名字形校验。
   it("相对路径、别名与工作区包不算外部；不是包名字形的脏捕获也不记", async () =>
     await withRepo("externals-shape", {
       "package.json": '{ "name": "fixture", "workspaces": ["packages/*"] }\n',
@@ -89,7 +80,7 @@ describe("外部包名采集（留名不留边）", () => {
       expect(data.externals).toEqual({ "src/a.ts": ["axios"] });
       const back = graphFromData(data);
       expect(back.externals.get("src/a.ts")).toEqual(["axios"]);
-      // 缺这个字段的产物读回来是空表而不是 undefined：调用方不用各自判空
+      // 缺 externals 字段的产物读回来是空表。
       const legacy = graphFromData({ ...data, externals: undefined });
       expect(legacy.externals.size).toBe(0);
     }));

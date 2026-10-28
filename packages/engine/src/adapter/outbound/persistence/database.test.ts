@@ -53,7 +53,7 @@ describe("产物库形状对账", () => {
   it("缺的是加不出的列（NOT NULL 没默认值）：不崩开库，但把缺口交出来", () => {
     new TutorDatabase(repository).close();
     surgery("ALTER TABLE chat_session DROP COLUMN title;");
-    /** 开库不抛：缺口作为 `schemaGaps` 读数交出。 */
+    /** 开库不抛：缺口经 `schemaGaps` 交出。 */
     const database = new TutorDatabase(repository);
     expect(database.schemaGaps).toContain("chat_session.title");
     database.close();

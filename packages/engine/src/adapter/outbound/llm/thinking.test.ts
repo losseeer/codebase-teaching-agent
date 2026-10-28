@@ -78,7 +78,6 @@ describe("resolveThinkingCapability", () => {
       style: "deepseek",
       efforts: { off: "disabled", low: "low", high: "high", max: "max" }
     });
-    // 环境声明覆盖内置表
     expect(resolveThinkingCapability("deepseek-v4-flash").style).toBe("openai");
   });
 

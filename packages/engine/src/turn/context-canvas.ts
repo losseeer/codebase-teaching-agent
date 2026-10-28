@@ -10,7 +10,7 @@ const mapContextCap = () => contextShare(CONTEXT_SHARE.mapContext);
 /** 全景里一个目录最多列多少个文件名：超出只报总数，目录本身不丢。 */
 const panoramaPerDirectoryCap = () => Math.max(1, Math.floor(contextShareLines(CONTEXT_SHARE.panorama, 60) / 4));
 
-/** 全量路径清单：按目录分组（目录 → 文件名列表），根目录文件单列。来自依赖图已分析文件集。 */
+/** 已分析文件按目录分组的路径清单；根目录文件单列。 */
 function structurePanorama(analysis: RepositoryAnalysis): string {
   const paths = Object.keys(analysis.graph.imports).sort();
   if (!paths.length) return "";
@@ -23,14 +23,12 @@ function structurePanorama(analysis: RepositoryAnalysis): string {
   const lines = [...directories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([directory, names]) => {
     const perDirectory = panoramaPerDirectoryCap();
     const shown = names.length > perDirectory ? `${names.slice(0, perDirectory).join("、")}…等 ${names.length} 个` : names.join("、");
-    // 计数写成「共 N 个文件」而不是「（N）」：括号紧跟目录名时读起来像名字的一部分，
-    // 模型会把它搬进节点名（实测落盘过「控制器（14 个）」这种节点）。
     return directory ? `- ${directory}/ 共 ${names.length} 个文件：${shown}` : `- （根目录）共 ${names.length} 个文件：${shown}`;
   });
   return `项目结构全景（${paths.length} 个已分析文件，按目录分组；目录名只用来定位与写 ref，节点名写职责）：\n${lines.join("\n")}`;
 }
 
-/** 架构图作用域段最多逐个列出的文件数：大仓模块可上百文件，超出部分明示总数而非全量灌进上下文。 */
+/** 作用域段逐个列出的文件数上限；超出的只报总数。 */
 const MAX_SCOPE_LISTED = 60;
 
 /** 已分析文件全集：与目录全景同源（imports 的空数组键也算「被分析过」）。 */
@@ -40,11 +38,7 @@ function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
   return paths;
 }
 
-/**
-  画布选中模块的作用域段。文件清单由 GUI 随请求上送；
-  这里与已分析集求交后列「路径（行数）：L1 职责」。
-  与 search_code 同源同口径（复用其语料的 lines/summary 字段），交集为空返回空串（= 没解析到作用域）。
-*/
+/** 画布选中模块的作用域段：清单与已分析集求交后列「路径（行数）：摘要」，交集为空回空串。 */
 function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undefined, scopePaths: string[]): string {
   const analyzed = analyzedPathSet(analysis);
   const files = [...new Set(scopePaths)].filter((candidate) => analyzed.has(candidate)).sort();

@@ -3,20 +3,17 @@ import { importer, repositoryOr404 } from "../../infrastructure/composition-root
 import { locateThread, threadJournalPayload } from "../orchestration/threads.js";
 
 /**
-  会话线程的用例：清单、新建、读正文、改名、软删。
-  用例只报结果，不报 HTTP——状态码与响应体形状是传输层的事，由 controller 一对一翻译过去。
-
-  线程 id 一律由引擎发（`createThread` 里的 UUID），界面只持有与回传：
-  凡是要进模型上下文的东西都得能在库里考据到，客户端临时拼的窗口正文不算。
-  删除是软删：`chat_session` 打 `deleted_at`，`chat_message` 原文一行不动，journal 追加一条 `session_deleted`。
-  */
+  会话线程的用例：清单、新建、读正文、改名、软删；状态码与响应形状在传输层。
+  线程 id 由引擎生成，界面只持有与回传。
+  删除是软删：`chat_session` 打 `deleted_at`，`chat_message` 原文不动，journal 追加 `session_deleted`。
+*/
 export type ThreadsFailure = "repository-missing" | "scope-invalid" | "thread-missing" | "title-empty";
 
 export type ThreadsResult<T> = { ok: true; value: T } | { ok: false; failure: ThreadsFailure };
 
 const fail = (failure: ThreadsFailure): { ok: false; failure: ThreadsFailure } => ({ ok: false, failure });
 
-/** 归属对象的长度上限：产物会重新分析，这里只截长不校验存在性（指针对象可能已经不在今天的索引里）。 */
+/** scopeRef 与 exerciseId 的长度上限：只截长，不校验存在性。 */
 const MAX_SCOPE_REF = 400;
 const MAX_EXERCISE_ID = 200;
 
@@ -25,10 +22,7 @@ function mounted(repositoryId: string) {
   return repository ? { path: repository.path, repositoryId: repository.index.repositoryId, audit: repository.audit, chatStore: repository.chatStore } : undefined;
 }
 
-/**
-  清单只收谈过的会话，所以「还没发言的新会话」不在里面。`current` 这一格让界面能区分
-  「这条空会话还在」与「这条已被删掉/本来不属于这儿」——没有它，新建之后的任何一次刷新都会把刚建的那条当残留剪掉。
-  */
+/** 清单只收有正文的会话；`current` 单列那条还没发言的新会话。 */
 export function listScopeThreads(repositoryId: string, scopeQuery: string | undefined, currentQuery: string | undefined): ThreadsResult<{ threads: ChatThread[]; current: ChatThread | null }> {
   const repository = mounted(repositoryId);
   if (!repository) return fail("repository-missing");
@@ -53,7 +47,7 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
   return { ok: true, value: { thread } };
 }
 
-/** 线程正文（产品线）：界面刷新或引擎重启后按 threadId 取回对话展示。软删线程读不到——读侧恒带 `deleted_at IS NULL`。 */
+/** 按 threadId 取线程与正文；已软删的读不到。 */
 export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");
@@ -68,7 +62,7 @@ export function renameThreadUseCase(threadId: string, title: string | undefined)
   return thread ? { ok: true, value: { thread } } : fail("thread-missing");
 }
 
-/** 教学会话没有常驻内存态：按 sessionId 每次从这两张表现装配，所以这里没有要清的在途东西。 */
+/** 软删线程并记 `session_deleted`；会话无常驻内存态。 */
 export function deleteThreadUseCase(threadId: string): ThreadsResult<{ threadId: string }> {
   const located = locateThread(threadId);
   if (!located || !importer.chatStore(located.repositoryPath).softDeleteThread(located.thread.id)) return fail("thread-missing");

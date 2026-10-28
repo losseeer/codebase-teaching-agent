@@ -7,8 +7,8 @@ import type { FileEntry, SeamReport } from "@codebase-tutor/domain";
 import { clearSeamMemo, seamReportFor, type SeamRepository } from "./seams.js";
 
 /**
-  跨仓接缝配对：两个临时小仓当 fixture（一个是 Vue/TS 前端形态、一个是 Spring 后端形态）。
-  钉的是「配得上、方向不混、后缀匹配要标出来」——这三件事任何一件错，界面上就会给出误导性的链。
+  跨仓接缝配对：两个临时小仓当 fixture（Vue/TS 前端形态 + Spring 后端形态）。
+  覆盖：配得上、方向不混、后缀匹配单独标出。
 */
 
 function repo(name: string, files: Record<string, string>): SeamRepository {
@@ -59,10 +59,10 @@ describe("跨仓 HTTP 接缝", () => {
     const report = seamReportFor(consumer, provider);
     expect(report.outbound.matched).toBe(2);
     expect(report.outbound.links.filter((link) => link.via === "exact").map((link) => link.route)).toEqual(["/probe/ping"]);
-    // 网关前缀那一类只能靠后缀整段匹配，必须标成 suffix，不混进整段相等
+    // 带网关前缀的只能后缀匹配，标成 suffix
     expect(report.outbound.links.filter((link) => link.via === "suffix").map((link) => `${link.route}→${link.provider.path}`)).toEqual(["/api/probe/health→src/main/java/com/demo/PingController.java"]);
     expect(report.outbound.links[0].provider.line).toBe(6);
-    // 反向不该有：后端没有调用串
+    // 后端没有调用串，反向为空
     expect(report.inbound.scanned).toBe(0);
     expect(report.inbound.links).toEqual([]);
   });
@@ -73,16 +73,15 @@ describe("跨仓 HTTP 接缝", () => {
     roots.push(consumer.path, provider.path);
     expect(seamReportFor(consumer, provider).outbound.matched).toBe(2);
 
-    // 磁盘上把控制器删空但戳没变：读的仍是内存里那份清单（按需算 + 按内容戳缓存的既定取舍）。
-    // 真实链路里删文件会触发重新分析、翻 versionStamp，不会停在过期清单上
+    // 磁盘改了但戳没变：读的仍是内存里那份清单
     writeFileSync(join(provider.path, "src/main/java/com/demo/PingController.java"), "package com.demo;\n\npublic class Gone {\n}\n", "utf8");
     expect(seamReportFor(consumer, provider).outbound.matched).toBe(2);
-    // 换了戳（等于重新分析过一次）：立刻按新内容重算，一条也配不上
+    // 换戳即重新分析，立刻按新内容重算
     expect(seamReportFor(consumer, { ...provider, versionStamp: "v2" }).outbound.matched).toBe(0);
   });
 });
 
-/** `cross_repo_link` 回给模型的清单：每行都要带「文件:行」，证据强度也要照实标。 */
+/** 清单文本每行带「文件:行」，匹配方式照实标。 */
 describe("formatSeamReport", () => {
   it("列出双向落点、后缀匹配与歧义，filter 能收窄", async () => {
     const { formatSeamReport } = await import("./seams.js");

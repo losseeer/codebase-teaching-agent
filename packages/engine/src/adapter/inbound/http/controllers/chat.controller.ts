@@ -8,19 +8,14 @@ import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../../../infrastruct
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-/**
-  宏观设计与练习答疑两条流式对话路由，外加带外的「停止生成」。
-  能回干净 JSON 的判断都排在切 SSE 之前。
- */
+/** 宏观设计与练习答疑两条流式对话路由，外加「停止生成」。 */
 export function registerChatRoutes(app: FastifyInstance): void {
-/** 停止生成：这一轮不在途就回 404。 */
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
   const stopped = stopTurn(request.body?.turnId);
   if (!stopped.ok) return reject(reply, stopped.failure);
   return { stopped: true, scene: stopped.value.scene };
 });
 
-/** map-chat 流式：SSE 推送过程事件与正文回放。 */
 app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown; resumeAsk?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const threadId = sanitizeThreadId(request.body?.threadId);
   const prepared = prepareMapChat(request.params.repositoryId, { ...(request.body?.content === undefined ? {} : { content: request.body.content }), ...(threadId ? { threadId } : {}) });
@@ -41,10 +36,9 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
       ...(diagramId ? { diagramId } : {}),
       ...(resumeAsk ? { resumeAsk } : {})
     }, provider, { send, ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
-    // 中断前可能已经落了几笔改图
+    // 中断前可能已经写入改图结果
     const diagramFrame = outcome.diagram ? { diagram: outcome.diagram } : {};
     if (outcome.interrupted) {
-      // 不出成品的一轮不回放正文
       send({ type: "done", interrupted: outcome.interrupted, provider: outcome.provider, ...diagramFrame });
     } else {
       replayTypewriter(send, outcome.reply);
@@ -67,7 +61,6 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   if (!repository) return reject(reply, "repository-missing");
   const provider = scopedChatProviderOr422(reply, repository.handle);
   if (!provider) return reply;
-  // 练习查询排在 hijack 之前
   const turn = loadPracticeExercise(request.params.repositoryId, checked.value);
   if (!turn.ok) return reject(reply, turn.failure);
   const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
@@ -83,7 +76,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   reply.raw.end();
 });
 
-/** 失败种类 → 状态码与文案；逐种列全，少一种编译不过。 */
+/** 失败种类 → 状态码与文案；分支必须穷尽。 */
 function reject(reply: FastifyReply, failure: ChatFailure): FastifyReply {
   switch (failure) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });

@@ -1,7 +1,7 @@
 /**
-  代码题出题与自证链：可执行内容全部由模型交出，沙箱不看仓库，题值不值得出由真跑证明。
-  自证两跑：solution 必须全过，given 必须至少挂一条测试。
-  测试结论只认一行 `TESTS <通过数> <失败数>`，不认异常。
+  代码题出题与自证链：可执行内容由模型交出，沙箱不看仓库。
+  自证两跑：solution 全过，given 至少一条测试失败。
+  测试结论只认一行 `TESTS <通过数> <失败数>`。
 */
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
 
@@ -29,14 +29,14 @@ export interface CodeProposal {
   given: CodeFile[];
   /** 应该全过的那一组文件。 */
   solution: CodeFile[];
-  /** 测试与替身：判分用，不下发 */
+  /** 判分用、不下发给学习者的文件。 */
   hidden: CodeFile[];
   entry: string;
-  /** 缺陷一句话说明；引擎留档，不出现在题面。 */
+  /** 缺陷的一句话说明，不进题面。 */
   defect: string;
 }
 
-/** 拒题的四档，按断在哪一段分；修复方向不同的失败必须可分辨。 */
+/** 拒题的档位，按失败发生在哪一段分。 */
 export type DeclineStage = "provider_error" | "proposal_shape" | "sandbox_unavailable" | "harness_validation";
 
 export interface HarnessRun {
@@ -89,7 +89,7 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
   ].join("\n");
 }
 
-/** 代码题这一步的口径登记；版本号与 llm 出题那一步共用同一个。 */
+/** 代码题这一步的口径登记。 */
 defineAnalysisStep({
   layer: "exercise-code-generate",
   contractVersion: EXERCISE_STEP.contractVersion,
@@ -175,12 +175,12 @@ function overlay(hidden: CodeFile[], variant: CodeFile[]): SandboxFile[] {
 
 async function harnessRun(proposal: CodeProposal, label: "solution" | "given", repositoryPath: string): Promise<HarnessRun> {
   const variant = label === "solution" ? proposal.solution : proposal.given;
-  // 仓的根必须点名拒读：沙箱里的代码读到 `.tutor/tutor.db` 就是读到标准答案。
+  // 沙箱必须点名拒读仓根
   const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant), repositoryPath });
   return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok };
 }
 
-/** 两跑自证；沙箱不可用要原样上抛，由调用方记成 `sandbox_unavailable`。 */
+/** 两跑自证，沙箱不可用时上抛。 */
 export async function validateHarness(proposal: CodeProposal, repositoryPath: string): Promise<{ ok: boolean; reason?: string; runs: HarnessRun[] }> {
   const runs: HarnessRun[] = [];
   const solution = await harnessRun(proposal, "solution", repositoryPath);
@@ -222,13 +222,13 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
         imports: source.imports,
         source: source.body.slice(0, MAX_FILE_BYTES)
       }),
-      // 出题要交四份源码，思考 token 也计在这个数里。
+      // 思考 token 也计在 maxTokens 里
       maxTokens: 6_000,
       scene: "practice.generate-code",
       ...(input.skills ? { skills: input.skills } : {})
     });
   } catch (error) {
-    // 端点失败单列一档，不与形状档混。
+    // 端点失败单列一档
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
   const parsed = parseJsonObject(response.text);
@@ -254,11 +254,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
 }
 
-/**
-  按需讲评：判完之后由学习者点一次才发这一趟，先重跑沙箱拿失败原因。
-  出网登记用 `sandbox-output`，学习者代码照过密钥筛。
-  不返回判分字段：passed / score 归沙箱。
-*/
+/** 按需讲评的一趟调用，先重跑沙箱拿失败原因。 */
 export async function explainCodeAttempt(input: {
   repositoryPath: string;
   title: string;
@@ -272,7 +268,7 @@ export async function explainCodeAttempt(input: {
   const verdict = verdictOf(run);
   const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
   const sources = input.learnerFiles.map((file) => {
-    // 逐文件各自计数：一个累加器不能摊到多段上。
+    // 每个文件各自计数
     const screened = maskSecrets(file.contents);
     return { kind: "sandbox-output" as const, path: file.path, from: 1, to: screened.text.split("\n").length, text: screened.text, masked: screened.masked };
   });

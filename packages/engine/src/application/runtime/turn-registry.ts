@@ -1,23 +1,16 @@
 /**
-  在途回合注册表——「停止生成」的落点。
-
-  客户端消失对引擎来说有两种截然相反的原因，而连接层分不出（点停止同样会把 fetch 断掉）：
-  - 用户点了「停止」：立刻中止 LLM 调用；
-  - 网络波动 / 刷新页面：继续算完并落库，用户回到应用时才能补上这一轮的回复。
-  所以「停止」是一条带外的显式请求，按客户端生成的 turnId 找到这一轮的 AbortController；
-  SSE 断开本身一律按第二种处理。
-
-  生命周期：路由 beginTurn → finally dispose；abortTurn 命中即摘除。表里只有进行中的回合，不会累积。
-  */
+  在途回合注册表：「停止生成」按 turnId 找到该回合的 AbortController。
+  SSE 断开不等于停止，回合继续算完并落库。
+  生命周期：beginTurn 登记，dispose 摘除；表里只有进行中的回合。
+*/
 import type { TurnScene } from "@codebase-tutor/contract";
 
-/** 场景名已上收到 `shared`（SSE 帧词表里的 `aborted` 要用同一个词），这里再导出一次，别处的 import 路径不变。 */
 export type { TurnScene };
 
 export interface TurnHandle {
-  /** 校验后的 turnId（journal 留痕用）；客户端没给或格式非法时为 undefined。 */
+  /** 校验后的 turnId；客户端没给或格式非法时缺省。 */
   readonly turnId?: string;
-  /** 未登记（没传 turnId 或撞号）时为 undefined——该回合照常执行，只是不可中止。 */
+  /** 未登记（没传 turnId 或撞号）时为 undefined。 */
   readonly signal?: AbortSignal;
   dispose(): void;
 }
@@ -30,7 +23,6 @@ interface ActiveTurn {
 
 const active = new Map<string, ActiveTurn>();
 
-/** turnId 是客户端给的：只接受 8~64 位 URL-safe 串（GUI 用 crypto.randomUUID）才当 map key 用。 */
 export function sanitizeTurnId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -39,8 +31,7 @@ export function sanitizeTurnId(value: unknown): string | undefined {
 
 export function beginTurn(turnId: unknown, scene: TurnScene): TurnHandle {
   const id = sanitizeTurnId(turnId);
-  // 撞号（同一 turnId 已有在途回合）不覆盖：两个并发回合共享一个 id 时，宁可让后一个不可中止，
-  // 也不能让它的 dispose 把前一个的登记移除——那会让先起的回合再也停不下来。
+  // 撞号时不覆盖既有登记
   if (!id || active.has(id)) return { ...(id ? { turnId: id } : {}), dispose: () => undefined };
   const turn: ActiveTurn = { controller: new AbortController(), scene, startedAt: Date.now() };
   active.set(id, turn);
@@ -53,10 +44,7 @@ export function beginTurn(turnId: unknown, scene: TurnScene): TurnHandle {
 
 export type AbortResult = { aborted: false; reason: "not_found" } | { aborted: true; scene: TurnScene; waitedMs: number; turnId: string };
 
-/**
-  中止指定回合。没中止只有一种：`not_found` = 这一轮已经结束或本来就没登记，调用方回 404，GUI 照常收尾、不报错。
-  这台机器上谁都能停任何回合。
-  */
+/** 中止已登记的在途回合，并摘除登记。 */
 export function abortTurn(turnId: unknown): AbortResult {
   const id = sanitizeTurnId(turnId);
   const turn = id ? active.get(id) : undefined;

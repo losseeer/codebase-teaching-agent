@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import { styleBrief } from "./prompts.js";
 
 /**
-  语言风格是离散三档（通俗 100 / 普通 50 / 严肃 0，GUI 三选一、learner 推荐同）。
-  0~100 的其他取值按 styleBand 归到最近一档——所以全值域只允许出现 3 种提示词，
-  这组断言守的就是「不会因为怪值冒出第四种风格」。
-  */
+  语言风格分三档（通俗 100 / 普通 50 / 严肃 0），
+  0~100 内的其他取值由 styleBand 归到最近一档。
+*/
 describe("styleBrief 的三档风格", () => {
   it("全值域只产生 3 种风格指令，且三档互不相同", () => {
     const briefs = new Set<string>();

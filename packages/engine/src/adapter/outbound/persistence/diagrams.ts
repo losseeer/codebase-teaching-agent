@@ -109,7 +109,7 @@ export function renameDiagram(database: TutorDatabase, diagram: Diagram, name: s
   return renamed;
 }
 
-/** 只改节点的 x/y：不碰 versions，不推 updatedAt；坐标收为非负整数，只认图上存在的节点。 */
+/** 只改节点的 x/y：不碰 versions，不推 updatedAt。 */
 export function saveGeometry(database: TutorDatabase, diagram: Diagram, positions: { id: string; x: number; y: number }[]): Diagram {
   const byId = new Map(positions.map((item) => [item.id, item]));
   const nodes = diagram.body.nodes.map((node) => {

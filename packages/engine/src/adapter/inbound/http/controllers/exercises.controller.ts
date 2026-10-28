@@ -4,9 +4,8 @@ import { answerExerciseUseCase, explainExerciseUseCase, nextExerciseUseCase, typ
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
-  练习题的入站翻译：出题、判分、按需讲评三条端点。
-  判断在 `application/use-case/exercises.ts`，这里只把失败种类翻成状态码。
-  */
+  练习题路由的入站翻译：出题、判分、讲评三条端点，失败种类在此翻成状态码。
+*/
 const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply => {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });

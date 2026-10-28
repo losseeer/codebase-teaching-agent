@@ -4,7 +4,7 @@ import type { FileSlice } from "@codebase-tutor/analysis";
 import type { LlmCompletionInput, LlmProvider } from "../application/port/llm-provider.js";
 import { OpenAICompatibleProvider, RetryLlmProvider, teachingProviderStatus } from "../adapter/outbound/llm/provider.js";
 
-/** L1 的输入是结构切片，桩数据按切片形状给。 */
+/** 构造结构切片桩数据。 */
 function sliceOf(path = "src/main.ts"): FileSlice {
   return {
     path,
@@ -71,7 +71,6 @@ describe("摘要档", () => {
     const on = batchSystemPrompt(true);
     expect(off).not.toContain("headerComment");
     expect(on).toContain("headerComment");
-    // 从「开」档里剔除新增行应精确还原「关」档——保证开关只增不改
     expect(on.split("\n").filter((line) => !line.includes("headerComment")).join("\n")).toBe(off);
   });
 

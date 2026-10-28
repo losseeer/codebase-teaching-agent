@@ -13,7 +13,7 @@ describe("parseDotEnv", () => {
     expect(parsed).toEqual({ TUTOR_LLM_PROVIDER: "openai", TUTOR_LLM_MODEL: "gpt-4o-mini" });
   });
 
-  /** 模板里 `KEY=   # 说明` 是常见写法：等号后只剩一段注释，须解析成空值而不是把注释当配置值。 */
+  /** `KEY=   # 说明` 的等号后只剩注释：应解析成空值。 */
   it("空值加行内注释 = 空值，注释不进值里", () => {
     const parsed = parseDotEnv([
       "TUTOR_LLM_PROVIDER=              # openai | anthropic | ollama；留空 = 不启用模型",
@@ -30,7 +30,7 @@ describe("parseDotEnv", () => {
       "export FOO=bar # 行内注释",
       "QUOTED=\"hello world\"",
       "SINGLE='it''s fine'".replace("''", "'"),
-      "URL=https://api.example.com/v1#fragment", // URL 的 # 不是注释
+      "URL=https://api.example.com/v1#fragment",
       "EMPTY="
     ].join("\n"));
     expect(parsed.FOO).toBe("bar");

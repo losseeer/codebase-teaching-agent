@@ -7,8 +7,8 @@ import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/compo
 
 /**
   练习题的用例：出题、判分、按需讲评。
-  判分是沙箱本地真跑、不过预算闸门；出题与讲评要模型，额度触顶时不给 provider。
-  失败一律以 `declined` 报出，不回落本地模板话；库句柄在这一层开合。
+  判分在本地沙箱真跑，provider 只用于 rubric 评分与反馈润色；出题与讲评需要模型。
+  预算到线时 provider 传 undefined；失败一律以 `declined` 报出，不回落到本地模板话术。
 */
 export type ExerciseFailure =
   | { kind: "repository-missing" }
@@ -20,7 +20,7 @@ export type ExerciseResult<T> = { ok: true; value: T } | { ok: false; failure: E
 
 const declined = (error: unknown, fallback: string): ExerciseResult<never> => ({ ok: false, failure: { kind: "declined", message: error instanceof Error ? error.message : fallback, fallback } });
 
-/** 出题：`family` 决定走规则题还是 LLM 族；额度触顶时传 undefined provider，由服务侧拒。 */
+/** 出题：`family` 决定走规则题还是 LLM 族；预算到线时 provider 为 undefined。 */
 export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
@@ -36,7 +36,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   }
 }
 
-/** 判分：本地沙箱真跑，不发模型请求；只有讲评润色那一步会碰 provider。 */
+/** 判分：执行类题在本地沙箱真跑；rubric 评分与反馈润色可走 provider。 */
 export async function answerExerciseUseCase(repositoryId: string, exerciseId: string, answer: ExerciseAnswer): Promise<ExerciseResult<Awaited<ReturnType<typeof exercises.answer>>>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
@@ -48,7 +48,7 @@ export async function answerExerciseUseCase(repositoryId: string, exerciseId: st
   }
 }
 
-/** 按需讲评（代码题）：判分已经落库，这一趟只补一段解释；没模型就照实拒，不拼本地模板话。 */
+/** 按需讲评：只补一段解释，判分结果已在库里；没有 provider 时直接拒绝。 */
 export async function explainExerciseUseCase(repositoryId: string, exerciseId: string, answer: ExerciseAnswer): Promise<ExerciseResult<Awaited<ReturnType<typeof exercises.explain>>>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };

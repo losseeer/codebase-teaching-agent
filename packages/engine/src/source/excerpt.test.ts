@@ -10,7 +10,7 @@ afterEach(() => {
   for (const repository of repositories.splice(0)) rmSync(repository, { recursive: true, force: true });
 });
 
-/** 19 行 fixture：alpha 占 3-6 行，7-16 行为空行（模拟「锚点附近没有相关内容」），beta 占 17-19 行 */
+/** 19 行 fixture：alpha 占 3-6 行，beta 占 17-19 行，中间为空行。 */
 function fixtureRepository(): string {
   const repository = mkdtempSync(join(tmpdir(), "codebase-tutor-excerpt-"));
   repositories.push(repository);
@@ -57,7 +57,6 @@ describe("sliceExcerpt", () => {
   it("endLine 缺失或非法时回落固定窗口", () => {
     const repository = fixtureRepository();
     expect(sliceExcerpt(repository, { path: "src/a.ts", line: 17 }, options)).toMatchObject({ from: 15, to: 19, mode: "window" });
-    // endLine 不大于 line（花括号计数退化）同样视为不可信
     expect(sliceExcerpt(repository, { path: "src/a.ts", line: 17, endLine: 17 }, options)).toMatchObject({ from: 15, to: 19, mode: "window" });
   });
 
@@ -89,7 +88,7 @@ describe("sliceExcerpt", () => {
     expect(sent).toContain("[疑似密钥，已隐去]");
     expect(sent).not.toContain("sk-abcdefghijklmnop");
     expect(slice?.masked).toBe(1);
-    // 窗口里没密钥时不该凭空缺字段——出网清单按「有隐去才报数」口径
+    // 无隐去时不返回 masked 字段
     expect(sliceExcerpt(fixtureRepository(), { path: "src/a.ts", line: 3, endLine: 6 }, options)?.masked).toBeUndefined();
   });
 });

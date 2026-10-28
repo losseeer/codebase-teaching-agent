@@ -50,10 +50,10 @@ const short = (path: string): string => path.slice(SRC.length + 1);
 const topOf = (path: string): string => short(path).split("/")[0] ?? "";
 const list = (edges: Edge[]): string[] => edges.map((edge) => `${short(edge.from)} → ${short(edge.to)}`).sort();
 
-/** 三条「不许指向应用层」的规则共用这一格放行判据：口子只开到 `application/port/` 为止。 */
+/** 各条反向依赖规则共用的放行例外：只到 `application/port/`。 */
 const isPortEdge = (to: string): boolean => to.startsWith("application/port/");
 
-/** 比字符串前先剥注释：注释正文里的名字不该当成代码。 */
+/** 文本比对前先剥掉注释。 */
 function codeOnly(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
@@ -68,10 +68,7 @@ describe("分层守卫", () => {
     expect(offenders, `这些地方不该出现 fastify：${offenders.join(", ")}`).toEqual([]);
   });
 
-  /**
-    应用层的格子：`use-case/`、`port/`、`orchestration/`（回合流程）、`runtime/`（回合机制）。
-    分档判据是换一个入口面还要不要重写一遍；命名后缀照这条读。
-    */
+  /** 应用层的格子：`use-case/`、`port/`、`orchestration/`、`runtime/`。 */
   it("应用层不指向入站层，也不指向 HTTP 装配", () => {
     expect(list(allEdges.filter((edge) => short(edge.from).startsWith("application/") && (short(edge.to).startsWith("adapter/inbound/") || short(edge.to) === "server.ts")))).toEqual([]);
   });
@@ -93,7 +90,7 @@ describe("分层守卫", () => {
   });
 
   it("持久层不许反过来认识领域（adapter/outbound/persistence 不该 import 管线或应用层的业务代码）", () => {
-    // `application/port/` 与管线、出站适配器同一口径。
+    // `application/port/` 在这里同样放行
     const offenders = allEdges.filter((edge) => {
       if (!short(edge.from).startsWith("adapter/outbound/persistence/")) return false;
       const to = short(edge.to);
@@ -103,10 +100,7 @@ describe("分层守卫", () => {
     expect(list(offenders), `持久层反向依赖领域：${list(offenders).join(", ")}`).toEqual([]);
   });
 
-  /**
-    出站适配器只被装配层与内层调用，自己谁都不认识；实测零条边，判成恒为 0。
-    实现方认端口那一格照常放行。
-    */
+  /** 出站适配器不 import 其它层；实测零条边，判成恒为 0。 */
   it("出站适配器不认识应用层、入站层与装配层", () => {
     const offenders = allEdges.filter((edge) => {
       if (!short(edge.from).startsWith("adapter/outbound/")) return false;
@@ -117,10 +111,7 @@ describe("分层守卫", () => {
     expect(list(offenders), `适配器反向指向内层：${list(offenders).join(", ")}`).toEqual([]);
   });
 
-  /**
-    应用层只该认端口，不该认具体适配器；这条是在册预算，边数只许下调。
-    结清方式是一类适配器一类换成参数注入；从组合根拿单例不算这笔债。
-    */
+  /** 应用层只该认端口，不该认具体适配器；这条是在册预算，边数只许下调。 */
   it("应用层指向具体适配器的边数只能减少（在册预算 13）", () => {
     const found = allEdges.filter((edge) => {
       const from = short(edge.from);
@@ -131,7 +122,6 @@ describe("分层守卫", () => {
   });
 
   it("`packages/analysis` 只有一个公共面：不许深路径 import 包内文件", () => {
-    // 不许深路径 import `@codebase-tutor/analysis`。
     const offenders = files.filter((file) => /from "@codebase-tutor\/analysis\//.test(readFileSync(file, "utf8"))).map(short);
     expect(offenders, `绕过 index.ts 的深路径 import：${offenders.join(", ")}`).toEqual([]);
   });

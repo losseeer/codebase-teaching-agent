@@ -2,7 +2,7 @@ import { readRepositorySettings } from "../orchestration/paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
 import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../adapter/outbound/llm/provider.js";
 import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
-/** 思考档位取值：以运行时那份清单为唯一真源，不在这里另抄一份。 */
+/** 思考档位取值 = 运行时清单的成员。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../adapter/outbound/llm/thinking.js";
 import { repositoryOr404, teachingLlm } from "../../infrastructure/composition-root.js";
@@ -34,31 +34,26 @@ const PRICING_LABELS: Record<(typeof PRICING_KEYS)[number], string> = {
 
 const missingRepo: SettingsResult<never> = { ok: false, failure: { kind: "repository-missing" } };
 
-/** 生效模型的思考能力声明（按实际生效 slug 解析，随设置读写一起回给界面）。 */
+/** 生效模型的思考能力声明。 */
 function describeThinking(model: string) {
   const capability = resolveThinkingCapability(model);
   return { model, style: capability.style, efforts: supportedThinkingEfforts(capability) };
 }
 
-/**
-  GET/PUT 共用的响应装配：运行时设置（密钥只以掩码出现）+ .env 回落值 + 生效状态 + 思考能力声明。
-  envFallback 用「无任何覆盖」解析一次，得到纯 .env（+ 协议默认）的口径，界面才能把空字段说明成「留空 = 用 .env 的 xxx」。
-  换到「缺密钥」的组合时建不出 provider（activeMode=local），这不算失败，把状态如实回出去。
-  */
+/** GET/PUT 共用的响应装配：运行时设置（密钥只出掩码）+ .env 回落值 + 生效状态 + 思考能力声明。 */
 export function llmSettingsView(): Record<string, unknown> {
   const fallback = resolveLlmConfig({});
   const effective = effectiveLlmConfig;
   const active = teachingProviderStatus(teachingLlm());
   return {
     ...publicLlmSettings(),
-    // 超时这里给的是「.env 那一份解析完的结果」：界面要能说清留空时实际生效的是多少毫秒
     envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey), timeoutMs: fallback.timeoutMs },
     pricing: currentPricing(),
     pricingSources: { input: pricingSourceOf("input"), output: pricingSourceOf("output"), cacheHit: pricingSourceOf("cacheHit") },
     activeModel: active.model,
     activeProvider: active.provider,
     activeMode: active.mode,
-    // 生效超时与能力都按「运行时覆盖优先，回落 .env」这一套解析，与 provider 工厂同一口径
+    // 生效超时与能力按「运行时覆盖优先，回落 .env」解析，与 provider 工厂同一口径。
     activeTimeoutMs: effective().timeoutMs,
     timeoutRange: { minMs: TIMEOUT_MIN_MS, maxMs: TIMEOUT_MAX_MS },
     thinkingCapability: describeThinking(effective().model)
@@ -128,7 +123,6 @@ export function updateLlmSettingsUseCase(patch: LlmSettingsPatch): SettingsResul
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     thinking: body.thinking as ThinkingEffort
   });
-  // 响应带生效状态与能力声明：界面换模型/换服务商后无需再 GET 一次就能刷新思考档位的可用状态。
   return { ok: true, value: llmSettingsView() };
 }
 
@@ -139,7 +133,7 @@ export function readCostUseCase(repositoryId: string, sessionId?: string): Setti
   return { ok: true, value: summarizeCost(repository.path, readRepositorySettings(repository.handle).monthlyBudgetUsd, sessionId) };
 }
 
-/** 改每仓月预算：读-合并-写，`settings_json` 里还存着 refinement 标记等内部键，整体覆盖会把它们清除。 */
+/** 改每仓月预算：读-合并-写，保留 `settings_json` 里的内部键。 */
 export function saveBudgetUseCase(repositoryId: string, monthlyBudgetUsd: unknown): SettingsResult<Record<string, unknown>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missingRepo;

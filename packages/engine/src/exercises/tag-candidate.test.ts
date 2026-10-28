@@ -5,8 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildTagCandidate } from "./llm-generate.js";
 
 /**
-  规则侧候选摘录的取码口径：窗口跟着符号边界走，长注释块折成一行标注，
-  而行号与「实际出门到哪一行」必须仍是文件真实行号——出网清单与守门都读这两格。
+  规则侧候选摘录的取码口径：窗口跟着符号边界走，长注释块折成一行标注。
+  startLine 与 endLine 始终是文件真实行号。
  */
 const root = mkdtempSync(join(tmpdir(), "tutor-tag-candidate-"));
 

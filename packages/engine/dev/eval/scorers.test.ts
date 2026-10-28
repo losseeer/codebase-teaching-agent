@@ -3,8 +3,8 @@ import { checkTurnInvariants, type TeachTurn } from "../../src/application/runti
 import { scoreSearchArm, scoreTeachInvariants } from "./scorers.js";
 
 /**
-  确定性判分器单测：全部零 token、纯函数，守判分口径本身——
-  引用落地认「整路径/裸文件名/行号越界」，检索臂算 hit/recall 与负例误命中。
+  判分器是纯函数、不请求模型：引用落地判「整路径/裸文件名/行号越界」，
+  检索臂算 hit/recall 与负例误命中。
 */
 
 describe("检索 gold 命中", () => {

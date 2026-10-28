@@ -3,9 +3,8 @@ import { createThreadUseCase, deleteThreadUseCase, listScopeThreads, readThreadM
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
-  会话线程的入站翻译（作用域 `teach | map | practice`）：入参交给用例，结果翻成状态码与响应体。
-  业务判断住在 `application/use-case/threads.ts`。
-  */
+  会话线程（作用域 `teach | map | practice`）的入站翻译：参数交给用例，失败种类翻成状态码。
+*/
 const REJECTED: Record<ThreadsFailure, { status: 400 | 404; error: string }> = {
   "repository-missing": { status: 404, error: REPOSITORY_NOT_MOUNTED },
   "scope-invalid": { status: 400, error: "scope 只能是 teach / map / practice" },

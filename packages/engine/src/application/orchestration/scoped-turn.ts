@@ -40,13 +40,12 @@ export function recheckTurn(input: {
   journal: AuditSink;
   sessionId?: string;
   scene: "teach" | "map_chat" | "practice_chat";
-  /** 本回合由引擎递给模型的对端路径（裸路径 → 总行数）；只有登记过的算数。 */
+  /** 本回合引擎给出的对端路径（裸路径 → 总行数）；核验只认登记过的。 */
   crossFiles?: Map<string, number>;
   question: string;
   answer: string;
   style?: number;
 }): { answer: string; failed: string[] } {
-  // 先过筛再复检：判的是用户将会看到的那一份。
   const screened = screenReply(input.answer);
   const verdict = checkTurnInvariants({
     sessionId: input.sessionId ?? "unscoped",
@@ -78,7 +77,6 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   const interrupted = Boolean(result.interrupted);
   if (!interrupted) {
     result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
-    // 选项与正文同过一道出境前密钥筛。
     if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
     persistScopedTurn(repository.chatStore, "map_chat", threadId, question, result.reply);
   }
@@ -90,7 +88,6 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
     input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens,
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
   }, threadId);
-  // 同一轮对同一路径的重复读取归并为一条。
   for (const read of dedupeFileReads(result.fileReads ?? [])) {
     journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, threadId);
   }
@@ -98,10 +95,9 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   for (const search of result.codeSearches ?? []) {
     journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, threadId);
   }
-  // 外部工具与技能：一条调用一行，失败也记。
+  // 失败的外部调用也要入账。
   for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
   for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
-  // 降级轮次要留痕可聚合。
   journal.append("loop_round", {
     scene: "map_chat",
     tool_rounds: result.toolRounds,
@@ -112,7 +108,6 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
     ...(result.resumedFromRound === undefined ? {} : { resumed_from_round: result.resumedFromRound }),
     ...(result.stoppedBy === undefined ? {} : { stopped_by: result.stoppedBy })
   }, threadId);
-  // 上下文装配读数：这条回复是在折了几条历史、找回几条的前提下写的。
   journal.append("turn_context", { scene: "map_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, threadId);
   if (!interrupted) journal.append("turn_text", turnTextPayload("map_chat", question, result.reply), threadId);
 }
@@ -151,7 +146,7 @@ export function consecutiveAskedTurns(events: readonly { type: string; payload: 
   return streak;
 }
 
-/** 本轮请求前结算线程上不会再被回答的提问：各记一条 `discarded` 并删行，一句只结算一次。 */
+/** 结算不会再被回答的提问：各记一条 `discarded` 并删行。 */
 export function settleStaleAsks(repository: ImportedRepository, journal: AuditSink, threadId: string | undefined, resumingToolCallId?: string): void {
   if (!threadId) return;
   const database = repository.handle.pin();
@@ -187,7 +182,7 @@ export async function externalAndSkills(): Promise<{ skills?: SkillsToolContext;
   return { ...(skills ? { skills } : {}), ...(external ? { external } : {}) };
 }
 
-/** 线程正文 → 本轮历史：整段交出，进多少由 `llm/conversation.ts` 按窗口占用决定。 */
+/** 线程正文 → 本轮历史：整段返回，取多少条由 `llm/conversation.ts` 按窗口占用决定。 */
 export function threadScopedHistory(store: ChatStore, threadId: string | undefined): { history: ScopedChatTurn[] } {
   const messages = threadId ? store.readMessages(threadId) : [];
   return { history: messages.map((message) => ({ role: message.role, content: message.content })) };

@@ -3,23 +3,23 @@ import { traceEngine } from "@codebase-tutor/platform";
 import { withDatabase } from "../../adapter/outbound/persistence/database.js";
 
 /**
-  回合检查点通道的装配：一个工具轮一份快照，同一线程续跑；通道形状住应用层，持久层只管一行 JSON。
+  回合检查点通道的装配：一个工具轮一份快照，同一线程续跑。
   残局只在异常退出、预算或轮次中断、等用户回答三种情况下留下；正常收尾与用户主动停止都删行。
   超过 `CHECKPOINT_TTL_MS` 的残局在任何读写前清掉；单份快照超过 `CHECKPOINT_MAX_BYTES` 不存。
 */
 
-/** 残局多久就没人认：隔了半天的「接着上次想」多半已经换话题，续错比不续更糟。 */
+/** 残局的保留时长，超过即在任何读写前清掉。 */
 export const CHECKPOINT_TTL_MS = 6 * 60 * 60 * 1000;
-/** 单份快照的字节上限：一次 read_file 现在能回几十万字，超了就不存（续跑是可选优化，不该把库撑爆）。 */
+/** 单份快照的字节上限，超过则本轮不存。 */
 export const CHECKPOINT_MAX_BYTES = 4_000_000;
 
 export function turnCheckpointChannel(input: {
   repositoryPath: string;
   threadId: string;
   scene: string;
-  /** 没线程就没有续跑的对象：单次提问走这条，通道所有动作都是空操作。 */
+  /** 为 `false` 或没有线程时，通道的每个动作都是空操作。 */
   enabled?: boolean;
-  /** 残局保留多久；省略 = `CHECKPOINT_TTL_MS`。用例要靠它把「过期」变成可判的动作，而不是等时钟走。 */
+  /** 残局保留时长；省略 = `CHECKPOINT_TTL_MS`。 */
   ttlMs?: number;
 }): TurnCheckpointChannel {
   const { repositoryPath, threadId, scene } = input;
@@ -32,7 +32,7 @@ export function turnCheckpointChannel(input: {
         return withDatabase(repositoryPath, (database) => {
           database.checkpoints.prune(Date.now() - (input.ttlMs ?? CHECKPOINT_TTL_MS));
           const row = database.checkpoints.latest<TurnLoopState>(threadId, scene, inputHash);
-          // 残局里的 messages 必须还能用：形状对不上（改了消息结构后的旧行）就当没有，别拿半截状态去发请求
+          // messages 形状对不上的旧行，当作没有残局。
           if (!row || !Array.isArray(row.payload.messages) || !row.payload.messages.length) return undefined;
           return { round: row.round, state: row.payload };
         });
@@ -55,7 +55,7 @@ export function turnCheckpointChannel(input: {
       }
     },
     save: (inputHash, state, stoppedReason, ask) => {
-      // 上限按字节判：快照里多字节字符占大头，按字符算会悄悄放宽近三倍。
+      // 上限按字节判，不按字符数。
       const size = Buffer.byteLength(JSON.stringify(state), "utf8");
       if (size > CHECKPOINT_MAX_BYTES) {
         traceEngine("degrade", { component: "turn_checkpoint", action: "skip", cause: `快照 ${size} 字节超过上限 ${CHECKPOINT_MAX_BYTES}，这一轮没存` });

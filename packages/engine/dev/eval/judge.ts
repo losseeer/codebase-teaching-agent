@@ -2,14 +2,9 @@ import type { JournalEvent } from "@codebase-tutor/domain";
 import { policyFor, validateSettings } from "@codebase-tutor/domain";
 
 /**
-  表达质量裁判的纯逻辑层（rubric 预登记 + 判分解析 + 证据核验）。
-  真发 LLM 调用在 packages/engine/dev/paid/judge-turns.ts；这里一条都不发，保证判分口径可单测。
-
-  口径纪律：
-  - 证据必须逐字来自被评回复（压平空白后做子串匹配）；引用不存在 = 判分驳回、该维记 0 并单独计数。
-  - 裁判只看转录、看不到源码：「接地」维判锚定具体性（点名到文件/符号/行号），
-    事实真伪由机检层负责，两者不越界。
-  - 教学法契合只对 teach 回合判（map_chat/practice_chat 不吃 policy 约束）。
+  表达质量裁判的纯逻辑层：rubric 预登记、判分解析、证据核验；不发起 LLM 调用。
+  证据须逐字来自被评回复（压平空白后子串匹配），否则该维驳回并记 0。
+  裁判只看转录、看不到源码：「接地」判锚定具体性，事实真伪由机检层负责。
 */
 
 export type JudgeScene = "teach" | "map_chat" | "practice_chat";
@@ -20,15 +15,15 @@ export interface JudgeTurn {
   scene: JudgeScene;
   question: string;
   answer: string;
-  /** journal 侧 answer_truncated 留痕：被截断的回复「易读」按 1 封顶（机械执行）。 */
+  /** 回复被截断；「易读」维按 1 封顶。 */
   answerTruncated?: boolean;
-  /** teach 专属：该回合生效时的策略约束（来自 style_shift 快照，经 policyFor 展开）。 */
+  /** teach 回合生效时的策略约束，由 style_shift 快照展开。 */
   constraints: string[];
 }
 
 export interface JudgeAxis {
   key: string;
-  /** 0-2 分定义的全文——同时是交给裁判的判据文本，预登记后不随跑批改动。 */
+  /** 0-2 分的维度定义，同时作为发给裁判的文本。 */
   rubric: string;
 }
 
@@ -72,7 +67,7 @@ export function buildJudgePrompt(turn: JudgeTurn, prior: JudgeTurn[]): string {
 export interface AxisVerdict {
   score: number;
   evidence: string;
-  /** 驳回原因（证据不逐字 / 分数非法 / 维度缺失）；undefined = 判分成立。 */
+  /** 驳回原因；undefined 表示判分成立。 */
   rejected?: string;
 }
 
@@ -85,7 +80,7 @@ export interface TurnVerdict {
 
 const squash = (text: string): string => text.replace(/\s+/g, "");
 
-/** 解析裁判回包并核验证据：任何维度缺证据/证据非逐字/分数越界，都驳回并记 0。 */
+/** 解析裁判回包并核验证据，不成立的维度驳回并记 0。 */
 export function parseJudgeResponse(text: string, turn: JudgeTurn): TurnVerdict {
   const verdict: TurnVerdict = { turn, priorCount: 0, axes: {}, parseFailed: true };
   const start = text.indexOf("{");
@@ -131,7 +126,7 @@ export function parseJudgeResponse(text: string, turn: JudgeTurn): TurnVerdict {
 
 const SCENES = new Set<JudgeScene>(["teach", "map_chat", "practice_chat"]);
 
-/** 从 journal 事件流组装待判回合（全场景）：同会话按时间排序，teach 回合附 style_shift 快照展开的策略约束。 */
+/** 从 journal 事件流组装待判回合，按时间排序。 */
 export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]; truncatedAnswers: number } {
   const styleShifts = new Map<string, JournalEvent[]>();
   const turns: JudgeTurn[] = [];
@@ -148,7 +143,7 @@ export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]
     const answer = typeof event.payload.answer === "string" ? event.payload.answer : "";
     if (!scene || !SCENES.has(scene) || !question || !answer) continue;
     if (event.payload.answer_truncated === true) truncatedAnswers += 1;
-    // map_chat/practice_chat 无会话概念、落盘不带 sessionId：按场景各自成桶，前情不跨场景
+    // map_chat/practice_chat 落盘不带 sessionId，按场景各自成桶
     const sessionKey = event.sessionId || `scene:${scene}`;
     let constraints: string[] = [];
     if (scene === "teach") {
@@ -166,7 +161,7 @@ export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]
   return { turns: turns.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)), truncatedAnswers };
 }
 
-/** 该回合的同会话前情（时间上更早的最近 2 轮，跨场景都算）。 */
+/** 同会话中该回合之前最近的 2 轮。 */
 export function priorTurns(turns: JudgeTurn[], turn: JudgeTurn): JudgeTurn[] {
   return turns.filter((item) => item.sessionId === turn.sessionId && item.at < turn.at).slice(-2);
 }

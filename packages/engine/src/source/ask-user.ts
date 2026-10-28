@@ -1,17 +1,17 @@
 import type { LlmTool } from "../application/port/llm-provider.js";
 
 /**
-  回合内向用户提问：只允许问本轮上下文里确实没有、又决定答复形状的那一格。
-  判据写在引擎这侧：上下文或请求体已经给出的都算不缺。
+  回合内向用户提问：只问本轮上下文里确实没有、又影响答复形状的那一格。
+  缺不缺由引擎判定：上下文或请求体已给出的算不缺。
 */
 export type AskFacet = "goal" | "range";
 
-/** 一次成立的提问：正文由它拼出，选项同时随回合回给界面做成可点按钮。 */
+/** 校验通过的提问：正文由它拼出，选项随回合一起回给调用方。 */
 export interface AskUserAudit {
   facet: AskFacet;
   question: string;
   options: string[];
-  /** 挂着未答的那条调用 id：界面点选项时要带它回来，认领才找得到是哪一句提问被回答。 */
+  /** 待答提问的工具调用 id；认领时用它配对。 */
   toolCallId: string;
 }
 
@@ -21,7 +21,7 @@ export interface AskResume {
   answer: string;
 }
 
-/** 一次认领的结果：`toolCallId` 说清认领的是哪一句，`outcome` 说接上没有（核不上=换模型、过期或已被消费）。 */
+/** 一次认领的结果：接上过记 claimed，没接上记 missed。 */
 export interface AskClaimAudit {
   toolCallId: string;
   outcome: "claimed" | "missed";
@@ -31,10 +31,10 @@ const MAX_QUESTION = 40;
 const MAX_LABEL = 8;
 const MAX_OPTIONS = 4;
 
-/** 工具名（循环按它判分支，改这里要同时改循环）。 */
+/** 工具名；循环按它判分支。 */
 export const ASK_USER_TOOL_NAME = "ask_user";
 
-/** 按码点数（一个汉字算一个），不按 UTF-16 长度。 */
+/** 按码点计数，一个汉字算一个。 */
 const chars = (text: string): number => [...text].length;
 
 export function askUserToolFor(facets: AskFacet[]): LlmTool {
@@ -80,7 +80,7 @@ export function parseAsk(argumentsJson: string, allowed: AskFacet[]): { ok: true
   return { ok: true, ask: { facet: facet as AskFacet, question, options } };
 }
 
-/** 问句 + 候选行：这一份就是本轮的正文，落库、回放、journal 三处读同一份。 */
+/** 由提问拼出本轮正文：问句 + 候选行。 */
 export function askBody(ask: AskUserAudit): string {
   return `${ask.question}\n可选项：${ask.options.join(" / ")}`;
 }

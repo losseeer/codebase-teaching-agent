@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { configuredOrigins, isTrustedOrigin } from "./origins.js";
 
-/** 来源闸的边界两侧：无 Origin 与回环来源放行，其余不信。 */
+/** 来源闸判定：无 Origin 与回环来源放行，其余按显式清单精确匹配。 */
 
 describe("isTrustedOrigin", () => {
   it("没有 Origin 头就算本机调用方（curl、进程管理器、同源请求）", () => {
     expect(isTrustedOrigin(undefined, [])).toBe(true);
-    // 空值头浏览器发不出来，与本机 curl 同形，按无来源放行
+    // 空串按无 Origin 处理
     expect(isTrustedOrigin("", [])).toBe(true);
   });
 

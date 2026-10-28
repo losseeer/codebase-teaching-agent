@@ -1,10 +1,6 @@
 /**
-  真模型出题探针（付费、可复跑）：回答「模型到底交不交得出能在沙箱里两跑自证的题」。
-  假 provider 只能证明引擎这一侧的判据对，出不出成题是模型那一侧的事，只有真打一次端点才知道。
-
-  只读产品数据（`tutor.db` 以 readOnly 开），不落练习缓存；源码确实出过门，
-  所以 `code_egress` 那一行审计照写，不因为来源是探针就少记。
-
+  真模型出题探针（付费）：打一次端点，看模型能否交出沙箱两跑自证的题。
+  只读 `tutor.db`，不落练习缓存；源码出境照记 `code_egress` 审计行。
   用法：pnpm probe:code-exercise /absolute/path/to/repository [patch_edit|author_function]
 */
 import { existsSync } from "node:fs";
@@ -25,7 +21,7 @@ if (!repositoryPath) {
   process.exit(0);
 }
 
-// 开机顺序与 server.ts 一致；角色必须是 light，与练习路由拿到的同一份。
+// 开机顺序照 server.ts；角色取 light，与练习路由同一档。
 loadDotEnv();
 restoreLlmRuntimeSettings();
 const provider = buildLlmRuntimeProvider("light");
@@ -44,7 +40,7 @@ const analysis = JSON.parse(row.analysis_json) as RepositoryAnalysis;
 
 const supported = new Set(["typescript", "python", "java"]);
 const candidates = analysis.implementations.filter((unit) => supported.has(unit.symbol.language));
-// 挑一个「有参数、体量适中」的函数：太短的表达式没缺陷可放，太长的模型容易把原码改花
+// 候选：函数/方法里取行跨度最接近 8 行的一个。
 const chosen = candidates
   .filter((unit) => unit.symbol.kind === "function" || unit.symbol.kind === "method")
   .sort((left, right) => Math.abs((left.symbol.endLine - left.symbol.line) - 8) - Math.abs((right.symbol.endLine - right.symbol.line) - 8))

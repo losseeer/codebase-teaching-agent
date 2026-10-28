@@ -1,6 +1,6 @@
 /**
   HTTP 装配：Fastify 实例、CORS、请求钩子（trace / 来源闸 / 懒挂载）、事件桥与 controller 注册。
-  监听、开机读数与收尾属进程生命周期，在 `infrastructure/bootstrap.ts`。
+  本文件不监听端口；监听在 `server.ts`。
 */
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -22,17 +22,15 @@ import { registerThreadRoutes } from "./controllers/threads.controller.js";
 
 export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    // traceId 即 reqId，pino 请求行、trace 事件、llm.log 与 journal 共用
     genReqId: () => id(),
     logger: { level: process.env.LOG_LEVEL ?? "warn" }
   });
-  // CORS 先于来源闸注册：钩子按注册顺序跑，403 的响应也要带 access-control-allow-origin
+  // CORS 必须先于来源闸注册
   await app.register(cors, { origin: (origin, callback) => callback(null, Boolean(origin && isTrustedOrigin(origin))) });
   tboot("cors registered");
-  // 请求级 trace 上下文：后续钩子与 handler 继承该 store
   app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
 
-  /** 来源闸：不可信的 `Origin` 当场 403，handler 一行都不执行。 */
+  /** 来源闸：`Origin` 不可信时回 403。 */
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
     if (!origin || request.method === "OPTIONS" || isTrustedOrigin(origin)) return;
@@ -45,7 +43,7 @@ export async function createApp(): Promise<FastifyInstance> {
   });
   tboot("Fastify constructed");
 
-  /** 懒挂载钩子：`/api/repositories/:repositoryId/*` 的请求先确保该仓已挂进内存；失败回 404 + `reason`。 */
+  /** 懒挂载钩子：带 `repositoryId` 的请求先确保该仓挂进内存，失败回 404。 */
   app.addHook("preHandler", async (request, reply) => {
     const repositoryId = (request.params as { repositoryId?: unknown })?.repositoryId;
     if (typeof repositoryId !== "string" || !repositoryId) return;
@@ -55,10 +53,8 @@ export async function createApp(): Promise<FastifyInstance> {
     return reply.code(404).send({ error: result.message, reason: result.reason });
   });
 
-  // 事件桥：仓库侧事件广播给 /api/events
   importer.on("event", broadcast);
 
-  // 路由按面分组注册
   registerPlatformRoutes(app);
   registerSettingsRoutes(app);
   registerRepositoryReadRoutes(app);

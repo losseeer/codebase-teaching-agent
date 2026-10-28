@@ -6,8 +6,8 @@ import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../../../ap
 import { currentThreadId, currentTraceId } from "@codebase-tutor/platform";
 import { tutorDataDir } from "@codebase-tutor/platform";
 
-/** LLM 调用工作日志：每次 `provider.complete` 落一条 JSONL，追加到 `TUTOR_LLM_LOG`（默认 `~/.codebase-tutor/llm.log`）。
-    该变量设为 off/none/0 时只打控制台；失败照记并原样抛出。覆盖所有走 `LlmProvider` 的调用。 */
+/** LLM 调用日志：每次 `provider.complete` 落一条 JSONL，追加到 `TUTOR_LLM_LOG`。
+    该变量设为 off/none/0 时只打控制台；失败照记并原样抛出。 */
 
 export type LlmCallTier = "teaching" | "light";
 
@@ -27,7 +27,7 @@ export interface LlmCallRecord {
   traceId: string | null;
   /** 会话线程 id；无线程的调用与后台任务为 null。 */
   threadId: string | null;
-  /** 调用方身份，当前恒为 null。 */
+  /** 调用方身份；恒为 null。 */
   actor: string | null;
   /** 出网载荷指纹：实际发出的文本字符数与哈希前 12 位。 */
   outbound: { chars: number; hash: string };
@@ -37,7 +37,7 @@ export interface LlmCallRecord {
   cacheHitTokens?: number;
   finishReason?: string;
   error?: string;
-  /** 第几次尝试给出该结论；1 = 一次就成/败。 */
+  /** 第几次尝试产生该记录；1 = 一次成功或失败。 */
   attempts?: number;
   /** 每次尝试各自的墙钟（ms）。 */
   attemptMs?: number[];
@@ -45,7 +45,7 @@ export interface LlmCallRecord {
   headroomEscalated?: true;
 }
 
-/** 从结果或错误对象上取重试计数与每趟耗时。 */
+/** 从结果或错误对象上取尝试次数与每次耗时。 */
 function attemptStats(value: unknown): { attempts?: number; attemptMs?: number[] } {
   const record = value as { attempts?: unknown; attemptMs?: unknown } | undefined;
   const attempts = typeof record?.attempts === "number" && record.attempts >= 1 ? Math.trunc(record.attempts) : undefined;
@@ -74,10 +74,10 @@ export function outboundFingerprint(input: LlmCompletionInput): { chars: number;
   return { chars: text.length, hash: hash(text).slice(0, 12) };
 }
 
-/** 串行写入队列：并发调用不交错，单次写失败不污染后续写入。 */
+/** 串行写入队列：并发写入不交错，失败不中断后续写入。 */
 let writeQueue: Promise<void> = Promise.resolve();
 
-/** 等待已排队的日志写完（测试与关停时用）。 */
+/** 等待已排队的日志写完。 */
 export async function flushLlmLog(): Promise<void> {
   await writeQueue;
 }
@@ -88,7 +88,7 @@ function appendLine(target: string, line: string): void {
       await mkdir(dirname(target), { recursive: true });
       await appendFile(target, line, "utf8");
     })
-    // 日志写入失败只告警，不影响主流程
+    // 日志写入失败只告警
     .catch((error: unknown) => {
       console.warn(`[llm] 日志写入失败（${target}）：${error instanceof Error ? error.message : String(error)}`);
     });
@@ -111,7 +111,7 @@ export function logLlmCall(record: LlmCallRecord): void {
   if (target) appendLine(target, `${JSON.stringify(record)}\n`);
 }
 
-/** 记录 tier 与 scene 的包装；必须放在 ThinkingOverride 内层，否则下发的档位会被记成 `"auto"`。 */
+/** 记录 tier 与 scene 的包装；须放在 ThinkingOverride 内层。 */
 export class LoggingLlmProvider implements LlmProvider {
   readonly name: string;
   readonly modelVersion: string;

@@ -5,8 +5,7 @@ import { extractSymbolsFromAst, loadSymbolParser } from "@codebase-tutor/analysi
 import { analyzeFile } from "./build.js";
 
 /**
-  断言盯住「把到不了的定义算成能到」：只按「同一函数里赋过值」报，
-  分支与循环里就会满是假到达，而这份产物用来说明「这个值从哪来」。
+  到达定义：一条定义当且仅当存在执行路径能从它走到使用点时，才算到达那次使用。
 */
 
 beforeAll(async () => {

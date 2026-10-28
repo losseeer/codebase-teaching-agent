@@ -4,9 +4,8 @@ import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 /**
-  LLM 数据流审计报表（只读、零 token）：这台机器把哪些代码交给了谁。
-  两条线靠 `traceId + scene` 关联：仓的 journal（`code_egress` + `file_read`）与 `~/.codebase-tutor/llm.log`。
-  后台任务没有 traceId，不能按仓归属；只有装进请求的源码原文才落清单。
+  LLM 数据流审计报表（只读、零 token）：journal 的出网清单与 llm.log 的调用记录按 traceId + scene 关联。
+  后台任务的调用不带 traceId，不按仓归属。
   用法：`pnpm dataflow:report -- <仓路径> [--since <ISO>] [--limit 20] [--json]`
   */
 
@@ -17,10 +16,10 @@ interface EgressRow {
   path: string;
   lines: string;
   chars: number;
-  /** 这一段自己的哈希前 12 位；tool-read 档没有。 */
+  /** 本段文本自己的哈希前 12 位。 */
   hash: string | undefined;
   masked: number;
-  /** 这一段有没有「隐去」读数可说；口径见 `MASKED_SINCE`。 */
+  /** 该行是否带「隐去」读数。 */
   maskedRecorded: boolean;
   truncated: boolean;
   traceId: string | null;
@@ -34,7 +33,7 @@ interface FileStat {
   maxChars: number;
   totalChars: number;
   masked: number;
-  /** 有几段没有「隐去」读数可说。 */
+  /** 缺少「隐去」读数的段数。 */
   maskedUnknown: number;
   scenes: Set<string>;
   kinds: Set<string>;
@@ -46,7 +45,7 @@ function scalarOf(row: JournalEvent, key: string): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
-/** journal 是 append-only 且无行版本号，「隐去处数」只能按日期判起点。 */
+/** masked 读数自该日期起才写入 journal。 */
 const MASKED_SINCE = "2026-10-11";
 
 /** 两条出网来源合并成一张清单：`code_egress` + `file_read`。 */
@@ -55,7 +54,7 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
   for (const event of events) {
     if (event.type === "code_egress") {
       const chars = Number(scalarOf(event, "chars") ?? 0);
-      // 这里的 hash 是这一段文本自己的；llm.log 的是整串请求体的。
+      // journal 的 hash 属于单段文本，llm.log 的 hash 属于整串请求体
       const maskedValue = scalarOf(event, "masked");
       const hashValue = scalarOf(event, "hash");
       rows.push({
@@ -76,19 +75,18 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
       continue;
     }
     if (event.type !== "file_read") continue;
-    // 被拒与读失败的调用没拿到内容，不进清单。
     if (event.payload.denied === true || typeof event.payload.error === "string") continue;
     const lines = Number(scalarOf(event, "lines") ?? 0);
     rows.push({
       at: event.at,
       scene: "tool-loop",
       kind: "tool-read",
-      // 跨仓那档的 path 带「对端仓名/」前缀。
+      // 跨仓读取的 path 带「对端仓名/」前缀
       path: String(scalarOf(event, "path") ?? "未记"),
       lines: `${lines} 行`,
-      // file_read 那行记的是行数不是字符数：这个字段留 0（报表里显示为「未量」），不编一个字符数
+      // file_read 只记行数，chars 留 0
       chars: 0,
-      // 工具循环那一档没有「这一段文本」的哈希可记，所以不参与逐段比对
+      // 工具循环档没有单段文本的哈希
       hash: undefined,
       masked: Number(scalarOf(event, "masked") ?? 0) || 0,
       maskedRecorded: event.at >= MASKED_SINCE,
@@ -107,7 +105,6 @@ function loadLlmRows(since: string | undefined): LlmCallRecord[] {
   const rows: LlmCallRecord[] = [];
   for (const line of readFileSync(target, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    // 一行坏数据不该让整张报表消失。
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -171,7 +168,7 @@ function main(): void {
   const attributable = allLlm.filter((row) => row.traceId && traceIds.has(row.traceId));
   const background = allLlm.filter((row) => !row.traceId);
   const scoped = attributable;
-  /** 窗口要同时掐清单与 llm.log。 */
+  // --since 同时作用于出网清单与 llm.log
   const rows = allRows.filter((row) => !since || row.at >= since);
 
   const files = [...byFile(rows).values()].sort((a, b) => b.hits - a.hits || b.totalChars - a.totalChars || a.path.localeCompare(b.path));
@@ -186,7 +183,7 @@ function main(): void {
     providers.set(key, bucket);
   }
   const scenesWithCalls = new Set(scoped.map((row) => row.scene));
-  // 判这一趟有没有源码出网要算上 tool-read。
+  // tool-read 也算该场景有源码出网
   const coveredScenes = new Set(rows.map((row) => row.scene));
   const toolTraces = new Set(rows.filter((row) => row.via === "tool-read" && row.traceId).map((row) => row.traceId as string));
   for (const call of scoped) if (call.traceId && toolTraces.has(call.traceId)) coveredScenes.add(call.scene);
@@ -202,7 +199,6 @@ function main(): void {
       since: since ?? null,
       egress: { segments: rows.length, files: files.length, chars: rows.reduce((total, row) => total + row.chars, 0), masked: maskedTotal, truncated: rows.filter((row) => row.truncated).length },
       byFile: files,
-      // 逐段清单不带 --limit。
       segments: rows,
       calls: { attributable: scoped.length, providers: [...providers.entries()].map(([name, value]) => ({ name, ...value })), backgroundUnattributed: background.length },
       scenesWithoutInventory: noInventory

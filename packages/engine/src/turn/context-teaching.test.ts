@@ -6,8 +6,8 @@ import type { ScopeRef } from "../source/scope-ref.js";
 import { assembleContext } from "./context-teaching.js";
 
 /**
-  对话历史进教学上下文的两档：窗口还宽就整段原文（不逐行截断），
-  装不下本轮分给它的空间就折——最近几条 + 最早几条 + 一句占位（口径在 `llm/conversation.ts`）。
+  对话历史进教学上下文有两种形态：窗口装得下时保留整段原文，
+  装不下时只留最近几条与最早几条，中间换成占位。
 */
 
 const scope: ScopeRef = { kind: "file", path: "src/main.ts", ref: "file:src/main.ts" };
@@ -37,7 +37,7 @@ describe("assembleContext 的对话历史", () => {
   });
 
   it("窗口配小到装不下时折叠：留最近几条与最早几条，中间换成占位", () => {
-    // 32000 token = 128000 字符：教学上限 3%（3840）里先给摘录留 2%（2560），对话只剩约 1000 字符
+    // 32000 token 折算后本轮留给对话历史的预算约 1000 字符
     process.env[ENV_KEY] = "32000";
     const history = [
       msg("user", "开场问题：这个仓怎么分层", 1),

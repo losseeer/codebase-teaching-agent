@@ -7,8 +7,8 @@ import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudgeResponse, priorTurns, type TurnVerdict } from "../eval/judge.js";
 
 /**
-  表达质量裁判：真发 LLM 调用、消耗 token 的独立脚本，与零 token 的 phaseB:eval 分开。
-  判 rubric 预登记的四维：接续 / 接地 / 易读 + 教学法契合（仅 teach）；证据必须逐字来自被评回复。
+  表达质量裁判：调用模型判分的脚本，判接续 / 接地 / 易读 与教学法契合（仅 teach）四维。
+  证据必须逐字来自被评回复。
   用法：`pnpm phaseB:judge [仓库路径]`
 */
 
@@ -22,7 +22,8 @@ const here = (() => {
   if (!existsSync(registry)) throw new Error("未给仓库路径，且 repositories.json 不存在");
   const list = (JSON.parse(readFileSync(registry, "utf8")).repositories ?? []) as string[];
   if (!list.length) throw new Error("repositories.json 为空");
-  return list.at(-1)!;  // 地址簿顺序 = 最近使用在后
+  // 地址簿按最近使用在后排序。
+  return list.at(-1)!;
 })();
 
 const out: string[] = [];

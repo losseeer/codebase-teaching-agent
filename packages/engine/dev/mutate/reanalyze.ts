@@ -1,9 +1,6 @@
 /**
-  零 token 的重分析：按当前引擎代码重算依赖图，只回写 `analysis_json` 里的 graph。
-  引擎没有「重新分析」这条产品路由：改了建图判据后不落这一步，产物里留的还是旧图。
-  它只动图：不重算摘要、不改 versionStamp（内容没变就不该虚报新鲜度）。
-  跑完接着跑 `pnpm l1:reburn`，切片变了的文件由它自己挑出来重做。
-
+  零 token 的重分析：按当前代码重算依赖图，只回写 `analysis_json` 的 graph（不重算摘要、不改 versionStamp）。
+  默认演练模式，回写要加 `--write`；跑完可接着跑 `pnpm l1:reburn`。
   ⚠️ 别在引擎在线时跑：SQLite 单写者，回写会撞锁。
 */
 import { existsSync, readFileSync } from "node:fs";
@@ -25,7 +22,7 @@ const repositoryPath = (() => {
   return list.at(-1)!;
 })();
 
-// 语法树不加载就没有 Java 符号，调用边会整片消失——重分析绝不能静默降级成这条
+// 建图前必须加载语法树，缺它就没有 Java 符号与调用边。
 await loadSymbolParser();
 
 const index = indexRepository(repositoryPath);
@@ -65,7 +62,7 @@ console.log(`升为主干 ${promoted.length} 个：${promoted.slice(0, 10).map((
 const demoted = index.files.filter((file) => newRoles.get(file.path) !== "core" && oldRoles.get(file.path) === "core").map((file) => file.path);
 console.log(`从主干落下 ${demoted.length} 个：${demoted.slice(0, 10).map((path) => path.split("/").pop()).join(" ")}`);
 
-/** 调用边的逐条差值：参照是下界，改判据时要把多出来和少掉的都摊开看。 */
+/** 一条调用边的比对键：「调用方 → 被调方#方法」。 */
 const pairOf = (edge: { callerPath: string; calleePath: string; calleeSymbol?: string }): string =>
   `${edge.callerPath} → ${edge.calleePath}${edge.calleeSymbol ? `#${edge.calleeSymbol.split(":").at(-2)}` : ""}`;
 const oldPairs = new Set(before.calls.map(pairOf));

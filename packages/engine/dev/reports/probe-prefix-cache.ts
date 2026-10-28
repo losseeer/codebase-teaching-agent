@@ -37,7 +37,7 @@ const rows = readFileSync(logPath, "utf8").split("\n").filter(Boolean).map((line
   try { return JSON.parse(line) as LogRow; } catch { return null; }
 }).filter((row): row is LogRow => !!row && !!row.at);
 
-// embedding 不计前缀缓存，混进来只会把命中率稀释成噪声
+// embedding 调用不计前缀缓存
 const calls = rows.filter((row) => row.ok !== false && row.scene !== "embed" && (row.inputTokens ?? 0) > 0);
 const chronoOf = (list: LogRow[]): LogRow[] => [...list].sort((left, right) => String(left.at).localeCompare(String(right.at)));
 
@@ -74,7 +74,7 @@ for (const [threadId, list] of byThread) {
   const turns: Turn[] = [];
   const seen = new Set<string>();
   for (const row of chronoOf(list)) {
-    // 无 traceId 的行按时间戳各算一轮（后台任务串进线程，理论上不该出现，出现了也不合并）
+    // 无 traceId 的行按时间戳各算一轮，不合并
     const key = row.traceId ?? String(row.at);
     if (seen.has(key)) continue;
     seen.add(key);

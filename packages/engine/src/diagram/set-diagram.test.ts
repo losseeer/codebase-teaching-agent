@@ -10,8 +10,8 @@ import { applyStructure, diagramStoreFor, listDiagrams, readDiagram, restoreVers
 import { applyDiagramEdit, diagramInventoryFor, diagramWarnings, parseDiagramEditArguments, type DiagramWriteContext } from "./set-diagram.js";
 
 /**
-  画布结构写入口的测试，每条对着一条会被踩的线。
-  查无此人不落笔；边的可信度只降不升；删节点连带清边、删框连带清归属；版本历史只追加。
+  画布结构写入口的测试。
+  覆盖：ref 核不上拒写、边可信度只降不升、删除连带清理、版本历史只追加。
 */
 
 const REPO = "repo_diagram_fixture";
@@ -27,7 +27,7 @@ const index = {
   fileTree: [], hotspots: []
 } as RepositoryIndex;
 
-/** import 链只有一条：api → core → db。边上报的其它说法都得在这里撞墙。 */
+/** fixture 的 import 链只有一条：api → core → db。 */
 const analysis = {
   repositoryId: REPO, generatedAt: "2026-10-18T00:00:00.000Z", versionStamp: "content:fixture",
   graph: {
@@ -42,7 +42,7 @@ const analysis = {
 
 const moduleNode = (id: string, ref: string, label: string, x: number, y: number): DiagramBody["nodes"][number] => ({ id, kind: "module", label, ref, x, y });
 
-/** 一个用例一套（库连接 + 审计与广播的假实现）：断言「一行都没写」时才需要干净的现场。 */
+/** 每个用例一套库连接与审计、广播的假实现。 */
 function fixture(): { database: TutorDatabase; context: DiagramWriteContext; events: { type: JournalEventType; payload: Record<string, string | number | boolean | null> }[]; applied: string[] } {
   const directory = mkdtempSync(join(root, "case-"));
   const database = new TutorDatabase(directory);
@@ -59,7 +59,7 @@ function fixture(): { database: TutorDatabase; context: DiagramWriteContext; eve
   return { database, context, events, applied };
 }
 
-/** 种一张已经画好的图（走 draw 本身，顺带验初版会留一版历史）。 */
+/** 用 draw 种一张两节点的图。 */
 function seeded(context: DiagramWriteContext): Diagram {
   const outcome = applyDiagramEdit(context, { edit: { action: "draw", name: "主线", body: { groups: [], nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-core", "file:src/core.ts", "编排", 0, 200)], edges: [] } } }, "agent");
   expect(outcome.ok, outcome.text).toBe(true);
@@ -67,7 +67,7 @@ function seeded(context: DiagramWriteContext): Diagram {
 }
 
 afterEach(() => {
-  // 每个用例一套临时仓：清掉用例目录但留着 root（下一个 fixture 还要在里面 mkdtemp）
+  // 清掉用例目录，保留 root 供下一个 fixture 建目录。
   mkdirSync(root, { recursive: true });
   for (const entry of readdirSync(root)) rmSync(join(root, entry), { recursive: true, force: true });
 });
@@ -82,7 +82,7 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
     const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "假节点", body: { groups: [], nodes: [{ id: "n-ghost", kind: "module", label: "查无此人", ref: "file:不存在的那一个.ts", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(outcome.ok).toBe(false);
     expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("不在本仓索引里");
-    // 认不出的 ref 前缀要单独拒，并给出可用写法
+    // 认不出的 ref 前缀单独拒，并给出可用写法。
     const retired = applyDiagramEdit(f.context, { edit: { action: "draw", name: "旧引用", body: { groups: [], nodes: [{ id: "n-old", kind: "module", label: "旧模块", ref: "module:src", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(retired.ok).toBe(false);
     expect(retired.text).toContain("不是可用的 ref");
@@ -118,7 +118,7 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
     }, "agent");
     expect(outcome.ok, outcome.text).toBe(true);
     const byId = new Map(outcome.diagram!.body.nodes.map((node) => [node.id, node]));
-    // 单引用节点只留 ref，文件清单在读侧由同一份解析器现算；只有 group 需要把 files 落进结构
+    // 单引用节点只存 ref；只有 group 节点存 files。
     expect(byId.get("n-file")!.ref).toBe("file:src/api.ts");
     expect(byId.get("n-dir")!.ref).toBe("dir:src");
     expect(byId.get("n-sym")!.ref).toBe("symbol:src/api.ts#registerOrder");
@@ -133,7 +133,8 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
   it("两张图又没说改哪一张：拒，而不是挑一张来改", () => {
     const f = fixture();
     const first = seeded(f.context);
-    seeded(f.context); // 第二张同名图会被加序号：从此「不说改哪张」就没有唯一答案
+    // 同名图会被加序号，因此这里有两张图。
+    seeded(f.context);
     const refused = applyDiagramEdit(f.context, { edit: { action: "add_node", node: moduleNode("n-extra", "file:src/db.ts", "存储", 400, 400) } }, "agent");
     expect(refused.ok, `两张图且没指名改哪一张：${refused.text}`).toBe(false);
     expect(refused.text).toContain("说清要改哪一张");
@@ -172,15 +173,15 @@ describe("applyDiagramEdit：边的可信度只降不升", () => {
           groups: [],
           nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0), moduleNode("n-core", "file:src/core.ts", "编排", 200, 0), moduleNode("n-db", "file:src/db.ts", "存储", 400, 0), { id: "n-note", kind: "note", label: "便签", x: 600, y: 0, text: "猜的" }],
           edges: [
-            // 真有 import：static 站得住
+            // api → core 有 import：static 成立
             { id: "e-true", from: "n-api", to: "n-core", origin: "static" },
-            // 其实是 static 却只报 code：引擎按它报的那一档留（上抬等于替它吹）
+            // 实际是 static 却报 code：按报的那一档留
             { id: "e-low", from: "n-core", to: "n-db", origin: "code" },
-            // 三张表里都没有这一对：降
+            // 结构表里没有这一对：降为 inferred
             { id: "e-none", from: "n-api", to: "n-db", origin: "static" },
-            // 只有反方向那条：降，且要把「反向」这句说实话
+            // 只有反方向的 import：降为 inferred
             { id: "e-flip", from: "n-db", to: "n-core", origin: "static" },
-            // 便签不参与结构表：任何声称都不成立
+            // 便签端点没有可比对的结构表
             { id: "e-note", from: "n-api", to: "n-note", origin: "code", evidence: "模型自述：它觉得页面会写库" }
           ]
         }
@@ -204,7 +205,7 @@ describe("applyDiagramEdit：边的可信度只降不升", () => {
 
   it("第四张表补上时，注入那条线就不该被降成猜测；方向反了照样降（第四张表也不替它圆）", () => {
     const f = fixture();
-    // 真产物由 `facts-verify.test.ts` 对着库验；这里喂一份等价判据，只验「settleEdge 会不会用它」
+    // 这里注入一份等价判据，只验 settleEdge 会不会用它。
     const context: DiagramWriteContext = { ...f.context, facts: (fromFiles, toFiles) => (fromFiles.includes("src/api.ts") && toFiles.includes("src/db.ts") ? { origin: "static", detail: "运行时绑定：src/api.ts:7 注入 DbService" } : undefined) };
     const outcome = applyDiagramEdit(context, {
       edit: {
@@ -368,7 +369,7 @@ describe("parseDiagramEditArguments：白名单就是白名单", () => {
     expect(parseDiagramEditArguments('{"edit":{"action":"add_edge","edge":{"id":"e-2","from":"n-1"}}}').error).toContain("from、to");
     expect(parseDiagramEditArguments('{"edit":{"action":"relabel","target":"n-1"}}').error).toContain("label / sub / text");
     expect(parseDiagramEditArguments('{"edit":{"action":"add_node","node":{"id":"n-9","kind":"module","label":"少了 ref"}}}').error).toContain("ref");
-    // 边上那一格由引擎写：模型自己填的降档说明落在白名单之外，会被点名忽略
+    // downgraded 由引擎写，模型填的会被记进 ignored。
     const smuggled = parseDiagramEditArguments('{"edit":{"action":"add_edge","edge":{"id":"e-3","from":"n-1","to":"n-2","origin":"static","downgraded":"其实成立"}}}');
     expect(smuggled.ignored).toContain("edge.downgraded");
     expect(JSON.stringify(smuggled.request)).not.toContain("其实成立");

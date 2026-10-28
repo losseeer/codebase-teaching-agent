@@ -19,7 +19,7 @@ import {
 import { summarizeFiles, summaryCacheKey } from "./summarizer.js";
 import { makeSymbol } from "../test-utils.js";
 
-/** main.py → svc.py（调用 run）→ util.py；另外 business.py 只依赖 util.py，不挨着入口。 */
+/** main.py → svc.py（调用 run）→ util.py；business.py 只依赖 util.py。 */
 const STRUCTURE: FileStructure = {
   files: [{ path: "main.py", lines: 10 }, { path: "svc.py", lines: 20 }, { path: "util.py", lines: 6 }, { path: "business.py", lines: 4 }],
   symbols: [
@@ -48,7 +48,6 @@ describe("文件切片（L1 的输入）", () => {
       dependsOn: ["svc.py"],
       dependedOnBy: []
     });
-    // 依赖方向是双向的，类只给名字不给参数。
     expect(slices.get("svc.py")?.dependedOnBy).toEqual(["main.py"]);
     expect(slices.get("svc.py")?.dependsOn).toEqual(["util.py"]);
     expect(slices.get("svc.py")?.entries.map((entry) => entry.signature)).toEqual(["run(x)", "Helper"]);
@@ -73,11 +72,9 @@ describe("文件切片（L1 的输入）", () => {
 });
 
 describe("文件摘要表（L1）", () => {
-  /** 把 `store` 换成内存假件：首次计算与缓存命中两条分支都要跑通。 */
   it("摘要流水线换个存储也跑得通：内存 Map 假件能吃下首次计算与命中两条分支", async () => {
     const rows = new Map<string, string>();
     const store: SummaryStore = {
-      // 泛型签名照着端口写。
       get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
         return rows.has(cacheKey) ? JSON.parse(rows.get(cacheKey)!) as T : undefined;
       },
@@ -92,10 +89,8 @@ describe("文件摘要表（L1）", () => {
     expect(second.estimate.cachedFiles, "命中判据也来自同一个口").toBe(STRUCTURE.files.length);
   });
 
-  /** L1 是导入最慢的一段：每一批都要动一次进度。 */
   it("逐批回报进度：批次之间在动，全命中的那轮也立刻报满", async () => {
     const database = tempDatabase();
-    // 比一批多两条：走满两个批次。
     const totalFiles = SUMMARY_BATCH_SIZE + 2;
     const many: FileStructure = {
       files: Array.from({ length: totalFiles }, (_, index) => ({ path: `f${index}.py`, lines: 10 })),
@@ -125,13 +120,11 @@ describe("文件摘要表（L1）", () => {
     expect(main.roleSource).toBe("structure");
     expect(main.coverage).toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
     expect(main.cached).toBe(false);
-    // 确定性档的摘要格式：路径 + 角色 + 主要符号名。
     expect(main.summary).toBe("main.py：执行主干；定义 main");
 
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
     expect(second.summaries.every((summary) => summary.cached)).toBe(true);
-    // 命中的记录与该次算出的只差 cached 一位。
     expect(second.summaries.find((summary) => summary.path === "main.py")).toEqual({ ...main, cached: true });
   });
 
@@ -147,7 +140,6 @@ describe("文件摘要表（L1）", () => {
     const main = summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("infra");
     expect(main.roleSource).toBe("provider");
-    // 切片最靠前的一条没被提到：低覆盖。
     expect(main.coverage).toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
   });
 
@@ -157,7 +149,8 @@ describe("文件摘要表（L1）", () => {
     await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const changed: FileStructure = { ...STRUCTURE, imports: { ...STRUCTURE.imports, "main.py": ["svc.py", "business.py"] } };
     const after = await summarizeFiles({ structure: changed, store: database.summaries, repositoryPath: database.repositoryPath, provider });
-    expect(after.estimate.summarizedFiles).toBe(2); // main.py 的切片变了；business.py 的 dependedOnBy 也变了
+    // 切片变化影响 main.py 与 business.py 两条
+    expect(after.estimate.summarizedFiles).toBe(2);
     expect(after.estimate.cachedFiles).toBe(2);
   });
 
@@ -184,14 +177,14 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-1",
       summarizeMany: async (slices) => {
         batches.push(slices.length);
-        // 只回第一条，其余留空：调用方应逐条补齐。
         return slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。`, role: "core" as const } : undefined);
       }
     };
     const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
-    expect(batches).toEqual([4]); // 4 个文件一次调用（上限 8）
+    expect(batches).toEqual([4]);
     expect(estimate).toMatchObject({ summarizedFiles: 4, fallbackFiles: 3, provider: "stub" });
-    expect(summaries[0].roleSource).toBe("provider"); // business.py 排在路径序首位，拿到了模型结果
+    // business.py 按路径序排在首位
+    expect(summaries[0].roleSource).toBe("provider");
     expect(summaries.slice(1).every((summary) => summary.roleSource === "structure")).toBe(true);
     expect(summaries.every((summary) => summary.summary.length > 0)).toBe(true);
   });
@@ -218,7 +211,6 @@ describe("文件摘要表（L1）", () => {
       summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
     };
     await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: partial });
-    // 第二次同输入：模型档的键必须仍不命中。
     const calls: number[] = [];
     const second: SummaryProvider = {
       sendsCodeToEndpoint: true,
@@ -228,7 +220,8 @@ describe("文件摘要表（L1）", () => {
     };
     const again = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: second });
     expect(again.estimate.fallbackFiles).toBe(0);
-    expect(calls).toEqual([3]); // 上次兜底的那三条重新问了模型；只有真拿到模型结果的那条命中缓存
+    // 上次未拿到模型结果的三条这次重新发送
+    expect(calls).toEqual([3]);
     expect(again.summaries.map((item) => item.summary)).toContain("svc.py 模型重写。");
   });
 
@@ -253,7 +246,7 @@ describe("文件摘要表（L1）", () => {
   });
 });
 
-/** 单文件结构：符号按声明序进切片前 3 条。 */
+/** 单文件结构夹具：符号按给定名字的声明序生成。 */
 function singleFileStructure(names: string[]): FileStructure {
   return {
     files: [{ path: "src/billing.ts", lines: 10 }],
@@ -305,7 +298,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     const database = tempDatabase();
     const provider = new LocalSummaryProvider();
     const slice = buildFileSlices(STRUCTURE, classifyFileRoles(STRUCTURE)).get("svc.py")!;
-    // 手写一条旧口径记录：coverage 没有 rule 字段。
+    // coverage 不带 rule 字段的存量记录
     const legacyRow = {
       path: "svc.py",
       summary: "svc.py：支撑逻辑；定义 run、Helper 等 2 个符号",
@@ -316,11 +309,10 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     database.summaries.put(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
     const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const svc = summaries.find((summary) => summary.path === "svc.py")!;
-    // 确定性摘要以符号名开头：两条都锚上。
+    // 本地生成的摘要以符号名开头
     expect(svc.coverage).toEqual({ checked: 2, mentioned: 2, low: false, rule: "anchor-v2" });
     expect(svc.cached).toBe(true);
     expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
-    // 修正后的行真的落库了。
     expect(database.summaries.get<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
@@ -405,7 +397,6 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
     const off = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(off.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
     const on = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
-    // 开档全是新键：不该命中关档刚写的行。
     expect(on.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
     const onAgain = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(onAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
@@ -414,7 +405,7 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
   });
 });
 
-/** L1 的密钥隐去：只筛发出去的那份与存回来的摘要，缓存键不动。 */
+/** L1 的密钥隐去：只筛发出的切片与存回的摘要，缓存键不动。 */
 describe("L1 的密钥隐去", () => {
   it("切片发出去前被隐去、摘要回存前也被隐去，且缓存键不受影响", async () => {
     const database = tempDatabase();
@@ -426,7 +417,7 @@ describe("L1 的密钥隐去", () => {
       modelVersion: "stub-secret-1",
       summarizeMany: async (slices) => {
         seen.push(JSON.stringify(slices));
-        // 模型把字面量原样抄回来：回存这一侧也得挡。
+        // 假件把密钥原样写进摘要
         return slices.map((slice) => ({ summary: `${slice.path} 用了 sk-abcdefghijklmnop1234 这个凭据。` }));
       }
     };
@@ -436,15 +427,14 @@ describe("L1 的密钥隐去", () => {
     expect(sent).not.toContain("sk-abcdefghijklmnop");
     const stored = first.summaries.find((summary) => summary.path === "main.py")!;
     expect(stored.summary).not.toContain("sk-abcdefghijklmnop");
-    // 键没翻：同输入再跑一趟必须全命中。
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(second.estimate.cachedFiles).toBe(4);
-    // 过筛只发生在发出去的副本上。
+    // 隐去只发生在发出的副本上
     expect(readFileSync(join(database.repositoryPath, "main.py"), "utf8")).toContain("sk-abcdefghijklmnop1234");
   });
 });
 
-/** L1 出网清单：逐文件登记实际发出的切片；缓存命中与确定性档不发请求，因此不记。 */
+/** L1 出网清单：按文件登记实际发出的切片。 */
 describe("L1 出网清单", () => {
   const modelProvider = (): SummaryProvider => ({
     sendsCodeToEndpoint: true,

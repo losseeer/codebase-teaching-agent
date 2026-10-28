@@ -2,11 +2,7 @@ import type { JournalEvent } from "@codebase-tutor/domain";
 import { isEngineOwnedEventType, isUiJournalEventType } from "@codebase-tutor/domain";
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
 
-/**
-  界面动作事件的入账用例：切节点、打开文件、切换主题、提交练习都要有 journal 事件可查。
-  只收 `UI_JOURNAL_EVENTS` 那张表的成员；`payload` 仅允许标量。
-  `sessionId` 只校验类型与长度上限，超长拒掉而不是截断。
-  */
+/** 界面动作事件入账：只收 `UI_JOURNAL_EVENTS` 的成员，`payload` 仅标量，超长值与超长 `sessionId` 都拒。 */
 export type IngestFailure =
   | { kind: "repository-missing" }
   | { kind: "engine-owned-event" }

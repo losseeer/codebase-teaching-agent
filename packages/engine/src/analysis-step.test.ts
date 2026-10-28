@@ -5,12 +5,11 @@ import { loadedAnalysisStepCount } from "./analysis-steps.register.js";
 import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFingerprints } from "./analysis-step.js";
 
 /**
-  口径登记的守卫：L2 缓存键只含口径版本号、不含提示词文本，改文案不翻版本时旧答案永久命中。
-  本测试红只有两种出路，都要显式操作：该让旧产物作废就翻 `contractVersion` 再跑 `pnpm analysis:lock`；
-  不值得作废（纯措辞润色）就直接跑 `pnpm analysis:lock` 并在 commit 里说明。
+  口径登记的守卫：L2 缓存键只含口径版本号、不含提示词文本。
+  红时两条出路：翻 `contractVersion` 后跑 `pnpm analysis:lock`，或直接跑 `pnpm analysis:lock` 并在 commit 里说明。
 */
 
-/** 本目录（源码根）：扫描与清单比对都以它为基准，路径写法才和 `analysis-steps.register.ts` 里的导入一致。 */
+/** 源码根目录：扫描与清单比对的路径基准。 */
 const SRC_DIR = resolve(new URL(".", import.meta.url).pathname);
 
 /** 清单模块里列出的副作用导入，形如 `./foo/bar.js`。 */

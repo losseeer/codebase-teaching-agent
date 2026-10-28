@@ -1,9 +1,6 @@
 import type { SymbolInfo } from "@codebase-tutor/domain";
 
-/**
-  测试夹具：符号对象字面量在多个测试文件里反复出现同一套 id 模板（`symbol:${path}:${name}:${line}`）
-  与默认值（`kind:"function"`、`parameters:[]`）。这里集中一份，各测试只补差异字段（line/endLine/language/kind/parameters）。
-  */
+/** 测试夹具：集中符号对象的 id 模板与默认值，各测试只补差异字段。 */
 export function makeSymbol(
   path: string,
   name: string,

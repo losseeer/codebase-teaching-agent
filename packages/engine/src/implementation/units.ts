@@ -3,11 +3,7 @@ import type { ImplementationUnit, SymbolInfo } from "@codebase-tutor/domain";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 
 export function buildImplementationUnits(repositoryPath: string, symbols: SymbolInfo[]): ImplementationUnit[] {
-  /**
-    逐文件读一次并留底：一次导入里符号成百、文件上百，按符号逐个开文件会把同一份正文重复读几十遍。
-    读不到（索引之后文件被删、权限不对）只让这一个符号缺席——与扫描层同一条口径：
-    一个文件的不可读不该掀掉整次导入，微观单元是加分项。
-    */
+  /** 同一文件的正文在一次构建内只读一次，读不到时该文件的符号缺席。 */
   const linesOf = new Map<string, string[] | undefined>();
   const read = (path: string): string[] | undefined => {
     if (!linesOf.has(path)) linesOf.set(path, readFileLines(repositoryPath, path));

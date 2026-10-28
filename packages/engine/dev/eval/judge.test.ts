@@ -3,10 +3,7 @@ import type { JournalEvent } from "@codebase-tutor/domain";
 
 import { assembleJudgeTurns, axesFor, buildJudgePrompt, parseJudgeResponse, priorTurns, type JudgeTurn } from "./judge.js";
 
-/**
-  判分纯逻辑层单测：零 token。守判分口径本身——
-  证据核验（逐字/压平空白）、驳回记 0、维度按场景伸缩、前情只取同会话最近 2 轮、teach 约束跟 style_shift 快照走。
-*/
+/** 判分纯逻辑层的单测（不发模型请求）：证据核验、驳回记 0、维度按场景伸缩、前情取同会话最近 2 轮。 */
 
 const turnOf = (over: Partial<JudgeTurn> = {}): JudgeTurn => ({
   sessionId: "s1",
@@ -103,7 +100,7 @@ describe("journal 事件流组装", () => {
     expect(turns.map((turn) => [turn.scene, turn.at])).toEqual([["teach", "2"], ["teach", "4"], ["map_chat", "5"]]);
     expect(truncatedAnswers).toBe(1);
     expect(turns[0]?.constraints.join("")).toContain("说明推理");
-    // 第三条 style_shift（通俗/解释型）生效后：不再要求苏格拉底式提问，约束段仍要非空
+    // 第三条 style_shift 生效后不再要求苏格拉底式提问，约束段仍非空
     expect(turns[1]?.constraints.length).toBeGreaterThan(0);
     expect(turns[1]?.constraints.join("")).not.toContain("说明推理");
     expect(turns[2]?.constraints).toEqual([]);

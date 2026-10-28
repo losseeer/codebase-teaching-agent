@@ -6,12 +6,12 @@ import { subscribeEvents, unsubscribeEvents } from "../../../events.js";
 import { beginTurn, type TurnHandle } from "../../../application/runtime/turn-registry.js";
 import { recordUnfinishedTurn, toolLoopAuditsOf } from "../../../application/runtime/turn-audit.js";
 
-/** SSE 传输层：写帧、开连接、心跳与中止收尾。两条流的词表都在 shared：`ServerEvent` 与 `ScopedStreamFrame`。 */
+/** SSE 传输层：写帧、开连接、心跳与中止收尾。 */
 
-/** 事件流心跳间隔：必须小于常见反向代理的空闲超时。 */
+/** 事件流心跳间隔：小于反向代理的空闲超时。 */
 const EVENT_STREAM_PING_MS = 25_000;
 
-/** SSE 单帧写出：客户端硬断时 `writableEnded` 仍为 false，故同时判 `destroyed`。 */
+/** 客户端硬断时 `writableEnded` 仍为 false。 */
 function sseFrame(reply: FastifyReply, frame: string): void {
   if (reply.raw.writableEnded || reply.raw.destroyed) return;
   reply.raw.write(frame);
@@ -21,7 +21,7 @@ function sseWriter<TFrame>(reply: FastifyReply): (event: TFrame) => void {
   return (event) => sseFrame(reply, `data: ${JSON.stringify(event)}\n\n`);
 }
 
-/** 建立 SSE：写头并立刻发一帧注释把响应头推到网路上；头里自带 CORS（`hijack()` 后不再经 cors 插件）。 */
+/** 建立 SSE：写响应头并立刻发一帧注释。 */
 export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyRequest, reply: FastifyReply): (event: TFrame) => void {
   const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
   reply.raw.writeHead(200, {
@@ -34,7 +34,6 @@ export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyReques
   return sseWriter<TFrame>(reply);
 }
 
-/** 全局事件流的一条订阅：开局、心跳、断开摘除。 */
 export function openEventStream(request: FastifyRequest, reply: FastifyReply): void {
   reply.hijack();
   const connectionId = String(request.id);
@@ -48,23 +47,22 @@ export function openEventStream(request: FastifyRequest, reply: FastifyReply): v
   });
 }
 
-/** 打字机回放的块长，三作用域共用。 */
+/** 打字机回放的块长。 */
 const TYPEWRITER_CHUNK = 72;
 
-// s 标志让 `.` 匹配换行
 function chunk(content: string, width: number): string[] { return content.match(new RegExp(`.{1,${width}}`, "gs")) ?? [content]; }
 
 export function replayTypewriter(send: (event: ScopedStreamFrame) => void, text: string): void {
   for (const delta of chunk(text, TYPEWRITER_CHUNK)) send({ type: "delta", delta });
 }
 
-/** 开一轮作用域对话流：hijack → 首帧 → 登记回合；`dispose()` 要留在调用方的 finally。 */
+/** 开一轮作用域对话流；`turnHandle.dispose()` 由调用方在 finally 调用。 */
 export function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: ScopedStreamFrame) => void; turnHandle: TurnHandle } {
   reply.hijack();
   return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene) };
 }
 
-/** 回合失败收尾：先判中止再判出错；中止写 `turn_aborted`，不写正文。 */
+/** 回合失败收尾：中止写 `turn_aborted`，不写正文。 */
 export function failScopedTurn(input: {
   send: (event: ScopedStreamFrame) => void;
   repositoryPath: string;

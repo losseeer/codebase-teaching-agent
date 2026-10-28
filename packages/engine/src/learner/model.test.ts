@@ -36,11 +36,7 @@ describe("M2.3 learner model", () => {
     expect(recovered).toMatchObject({ sampleCompleteness: 1, hintDepth: 3, stylePlainness: 2, transition: "replenish" });
   });
 
-  /**
-    已停用题型留下的练习记录（9 月流程题的 `workflow:`）不再进掌握度回放：
-    回放出来就是一张点不开的卡片，而画像与练习选题都只按今天还出得出题的单元说话。
-    journal 里那几行不动——那是账本。
-  */
+  // journal 里的 workflow 练习记录只留档，不进掌握度回放
   it("只回放今天还认得的单元：workflow 记录退出，impact 与 implementation 留着", () => {
     const profile = deriveLearnerProfile("repo", [
       event("exercise_result", "2026-09-21T12:35:05.000Z", { target_unit_id: "workflow:src/pay.py", passed: true, score: 1 }),

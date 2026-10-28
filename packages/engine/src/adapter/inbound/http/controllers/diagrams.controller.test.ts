@@ -6,7 +6,7 @@ import { TutorDatabase } from "../../../outbound/persistence/database.js";
 import { buildDiagram, diagramId } from "@codebase-tutor/domain";
 import { applyStructure } from "../../../outbound/persistence/diagrams.js";
 
-/** 画图工作区：图库的建/改名/删/恢复、几何只写位置、结构归 agent 的 `set_diagram`。这组用例钉「界面发不出结构改动」。 */
+/** 画图工作区路由：图库的建/改名/删/恢复、几何只写位置、结构只由 `set_diagram` 写。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -29,7 +29,7 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
   function seed(name: string, body: DiagramBody = fixtureBody()): Diagram {
     const database = new TutorDatabase(fx.repoDir);
     try {
-      // id 由调用方发：这里按种图次序编号
+      // id 按种图次序编号
       const draft = buildDiagram(fx.repositoryId, { id: diagramId(`route-fixture-${(seeded += 1)}`), name, source: "agent", body });
       return applyStructure(database, draft, draft.body, "fixture 初版");
     } finally {

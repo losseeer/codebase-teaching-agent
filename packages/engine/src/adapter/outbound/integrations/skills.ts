@@ -5,9 +5,9 @@ import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
-  技能加载：按 Agent Skills 规格读 `SKILL.md` + YAML frontmatter（必填 `name`、`description`；`name` ≤64 且等于目录名，`description` ≤1024）。
-  三级加载：清单每轮进上下文，正文与目录内附属文件由 `read_skill` 按需取。
-  只读用户自己装的目录，不扫被学习仓；目录不存在就一条技能都不给。
+  技能加载：读 SKILL.md 的 YAML frontmatter，name ≤64 且等于目录名，description ≤1024。
+  清单每轮进上下文，正文与附属文件由 read_skill 按需取。
+  只读用户自己装的目录，不扫被学习仓。
 */
 
 export interface SkillBrief {
@@ -40,7 +40,7 @@ export function skillDirectories(): string[] {
   return [join(homedir(), ".codebase-tutor", "skills"), join(homedir(), ".claude", "skills")];
 }
 
-/** 出厂预置技能在引擎包内的 `skills/`；按 `package.json` 的包名往上找，不写死层数。 */
+/** 出厂预置技能在引擎包内的 `skills/`，按 package.json 的包名往上找。 */
 export function bundledSkillSource(): string | undefined {
   let directory = import.meta.dirname;
   for (let up = 0; up < 6; up += 1) {
@@ -57,7 +57,7 @@ export function bundledSkillSource(): string | undefined {
   return undefined;
 }
 
-/** 播种结果，`kept` = 目标目录里同名已存在、因此没动的那几份。 */
+/** 播种结果，kept 是目标目录里同名已存在的项。 */
 export interface SkillSeed {
   target: string;
   installed: string[];
@@ -86,7 +86,7 @@ export function installBundledSkills(input?: { sourceDir?: string; targetDir?: s
   return seed;
 }
 
-/** 取 frontmatter（文件开头两条 `---` 之间）里的单层 `key: value`。只支持这个形状，多余的一律当没写。 */
+/** 取 frontmatter（开头两条 `---` 之间）的单层 `key: value`；其余形状当没写。 */
 function frontmatter(text: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!match) return {};
@@ -155,7 +155,7 @@ function scan(directory: string, taken: Set<string>): { skills: SkillBrief[]; sk
       }
     });
   } catch {
-    return { skills, skipped }; // 这处目录不存在/读不了：没装，不报错也不编一份空清单
+    return { skills, skipped };
   }
   for (const dir of entries.sort()) {
     if (taken.size >= SKILL_MAX) { skipped.push({ dir, reason: `清单已满 ${SKILL_MAX} 份` }); continue; }
@@ -215,14 +215,14 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
   return undefined;
 }
 
-/** 上下文里那段技能清单，附「先调 `read_skill` 取正文再照做」。 */
+/** 上下文里那段技能清单，附「先调 `read_skill` 取正文」。 */
 export function skillsBriefing(skills: SkillBrief[]): string {
   if (!skills.length) return "";
   const lines = skills.map((skill) => `- ${skill.name}：${skill.description}`);
   return `可用技能（每份都是一套写好的做法，含命令与红线）：\n${lines.join("\n")}\n要用哪一份就先调 read_skill 取正文（做法里提到的附属文件用同一个工具的 file 参数取），别凭名字猜内容。`;
 }
 
-/** 技能正文与附属文件的取用工具；清单常驻上下文，正文按需拉取。 */
+/** 技能正文与附属文件的取用工具声明。 */
 export const READ_SKILL_TOOL: LlmTool = {
   name: "read_skill",
   description: "按名字取一份技能的完整正文（系统提示词里那张清单上的名字）。做法、命令与红线都在正文里——只凭名字猜内容会猜错。正文提到的附属文件（脚本、参照表之类）用 file 参数按相对该技能目录的路径取。",

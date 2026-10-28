@@ -6,10 +6,7 @@ import type { TurnLoopState } from "../../source/tool-loop.js";
 import { withDatabase } from "../../adapter/outbound/persistence/database.js";
 import { CHECKPOINT_MAX_BYTES, turnCheckpointChannel } from "./turn-checkpoint.js";
 
-/**
-  回合检查点通道的口径（LangGraph 的 checkpoint 语义 + 三条保留规则）。
-  这里只管「存得下、认得出同一问题、收尾就清掉、过期会瘦」；什么时候写由工具循环的用例守。
-*/
+/** 回合检查点通道：写入与读回、按提问哈希认同一问题、收尾清空、过期删除。 */
 
 const state = (rounds: number, marker: string): TurnLoopState => ({
   messages: [{ role: "user", content: marker }, { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{}" }] }, { role: "tool", toolCallId: "c1", content: "文件 a.ts（第 1-2 行）：\n1| x" }],
@@ -81,7 +78,7 @@ describe("回合检查点通道", () => {
     expect(c.restore(HASH)).toBeUndefined();
     expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows).toBe(0);
 
-    // 上限写的是字节，就得按字节判：汉字一份字符 ≈ 三个字节，字符数看着没超上限的快照其实早已超标
+    // 上限按字节判；一个汉字约占三个字节。
     const cjkHash = `${HASH}-cjk`;
     const cjk = state(1, "汉".repeat(Math.ceil(CHECKPOINT_MAX_BYTES / 2)));
     expect(Buffer.byteLength(JSON.stringify(cjk), "utf8")).toBeGreaterThan(CHECKPOINT_MAX_BYTES);

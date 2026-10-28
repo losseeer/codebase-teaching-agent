@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-test-kit.js";
 
-/** 只读产物路由的边界：`GET /source` 只放已索引的文件，越界与软链接各判一次。 */
+/** GET /source 的边界：只放行已索引文件，越界与仓外软链接各判一次。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -11,7 +11,7 @@ afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
 describe("GET /source 的取文件边界", () => {
-  // 后面的用例靠 beforeAll 手工造的产物跑；往 repoDir 写文件不该触发重分析
+  // 往 repoDir 写文件不触发重分析
   it("索引里的文件照给；越界 400，未收录（含 .env）404", async () => {
     writeFileSync(join(fx.repoDir, ".env"), "OPENAI_API_KEY=sk-never-serve-me\n", "utf8");
 
@@ -37,7 +37,7 @@ describe("GET /source 的取文件边界", () => {
     expect((response.json() as { line: number }).line).toBe(1);
   });
 
-  /** 链接目标在这条路由上也判；夹具取 `.txt` 才只走得到链接判定这一关。 */
+  /** 仓外软链接在索引检查之前判定。 */
   it("仓里的符号链接指向仓外时，这条路由也给不出原文", async () => {
     const sentinel = "OUTSIDE-SENTINEL-must-not-be-served";
     writeFileSync(join(fx.root, "outside-target.txt"), `${sentinel}\n`, "utf8");
@@ -47,6 +47,6 @@ describe("GET /source 的取文件边界", () => {
     expect(response.statusCode).toBe(404);
     expect((response.json() as { error?: string }).error).toContain("符号链接指向仓库之外");
     expect(response.payload).not.toContain(sentinel);
-    rmSync(join(fx.repoDir, "evidence.txt"), { force: true }); // 只摘链接，仓外那份真目标不动
+    rmSync(join(fx.repoDir, "evidence.txt"), { force: true });
   });
 });

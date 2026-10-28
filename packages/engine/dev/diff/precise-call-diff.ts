@@ -7,9 +7,9 @@ import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { loadSymbolParser } from "@codebase-tutor/analysis";
 
 /**
-  符号级调用边的差值（文件级 import 差值由 `pnpm graph:diff` 量）：判断配边规则值不值得升级成接收者类型消歧。
-  参照口径是下界：只认「显式类型名作接收者 + 该类型在发起文件可见 + 该文件声明了同名方法」的调用。
-  零 token、只读。用法：`pnpm calls:diff [仓库路径]`
+  符号级调用边差值脚本，与一份确定性参照对齐；只读、零 token。
+  参照口径是下界：显式类型名作接收者、该类型在发起文件可见、发起文件声明同名方法。
+  用法：`pnpm calls:diff [仓库路径]`（文件级 import 差值由 `pnpm graph:diff` 量）
 */
 
 const repositoryPath = resolve(process.argv.slice(2).find((value) => !value.startsWith("-")) ?? "");
@@ -29,7 +29,7 @@ const analysis: Pick<RepositoryAnalysis, "graph"> = { graph: serializeGraph(grap
 
 const textOf = (path: string): string => readFileSync(join(repositoryPath, path), "utf8");
 
-// 1) 每个文件里声明的方法名（包内私有类的方法也算在这个文件上，因为落点就是文件）
+// 1) 每个文件里声明的方法名，落点按文件计
 const methodDeclPattern = /^\s*(?:(?:public|private|protected|static|final|synchronized|abstract|default|native|strictfp)\s+)*(?!class|interface|enum|record|if|for|while|switch|catch|return|new|throw|else|do|try|synchronized)([\w<>\[\],.?]+(?:<[^>]*>)?\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?:throws [\w., ]+)?\{?\s*$/;
 const methodsByFile = new Map<string, Set<string>>();
 const simpleNameOf = (path: string): string => path.split("/").pop()!.replace(/\.java$/, "");
@@ -39,7 +39,8 @@ for (const file of javaFiles) {
     const match = methodDeclPattern.exec(line);
     if (!match) continue;
     const name = match[2]!;
-    if (name === simpleNameOf(file.path)) continue; // 构造器不算「被调用的方法名」
+    // 构造器不算被调用的方法名
+    if (name === simpleNameOf(file.path)) continue;
     declared.add(name);
   }
   methodsByFile.set(file.path, declared);
@@ -83,7 +84,7 @@ function visibleTypesOf(path: string): Map<string, string> {
     const direct = typeByFqn.get(match[1]!) ?? typeByFqn.get(match[1]!.split(".").slice(0, -1).join("."));
     if (direct) add(direct);
   }
-  // 同包可见（Java 不需要 import）：引擎目前没有这一路
+  // 同包类型不需要 import 也可见
   for (const sibling of byPackage.get(packageOf.get(path) ?? "") ?? []) {
     if (sourceRootOf(sibling) === sourceRootOf(path)) add(sibling);
   }
@@ -123,7 +124,6 @@ const referenceKeys = new Map<string, RefEdge>(reference.map((edge) => [`${edge.
 const both = [...referenceKeys.keys()].filter((key) => engine.has(key));
 const onlyReference = [...referenceKeys.keys()].filter((key) => !engine.has(key));
 const unconfirmed = [...engine].filter((key) => !referenceKeys.has(key));
-// 「参照有、引擎没有」按成因拆两类：同包调用 vs 跨包（通配落点之外的漏配）
 const samePackageMisses = onlyReference.filter((key) => referenceKeys.get(key)?.samePackage);
 const crossPackageMisses = onlyReference.filter((key) => !referenceKeys.get(key)?.samePackage);
 const shortKey = (key: string): string => key.replace(/[^→:]*\//g, "").replace(/\.java/g, "");

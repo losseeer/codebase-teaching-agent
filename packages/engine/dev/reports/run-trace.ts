@@ -13,7 +13,7 @@ function clip(value: unknown, max = 80): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** `turn_asked` 里 `discarded` 的三种因由，翻成报表上那句话；对不上的一律「未记因由」，不猜。 */
+/** `discarded` 的三种因由文案；未列出的落「未记因由」。 */
 const DISCARD_REASONS: Record<string, string> = { expired: "过了 TTL", new_question: "换了新问题", claim_missed: "认领不上（换模型或已消费）" };
 
 function eventLine(event: JournalEvent): string {
@@ -22,10 +22,9 @@ function eventLine(event: JournalEvent): string {
     case "turn_text":
       return `问「${clip(p.question, 60)}」答「${clip(p.answer, 80)}」${p.answer_truncated ? "（答截断）" : ""}${p.question_truncated ? "（问截断）" : ""}`;
     case "turn_invariant":
-      // 运行时复检的原始素材：合格也有一条，所以「这一轮该判几条、失守几条」在 trace 里直接可见
+      // 复检合格也发一条，此时只有该判数
       return `不变量复检 该判=${clip(p.applicable, 46) || "无"}${p.failed ? ` 【失守:${clip(p.failed, 30)}】证据 ${clip(p.evidence, 90)}` : " 全过"}`;
     case "turn_asked":
-      // 一句提问的四种结局在同一线程里常常相邻出现，trace 上必须一眼分得开
       switch (p.outcome) {
         case "refused": return `想提问被挡 facet=${p.facet ?? "未记"} 因由:${clip(p.reason, 70)}`;
         case "claimed": return "认领上一句提问，接回那一轮接着算";
@@ -43,7 +42,7 @@ function eventLine(event: JournalEvent): string {
     case "code_search":
       return `搜「${clip(p.query, 60)}」命中=${p.hits ?? "未记"} 前几落点：${clip(p.top_paths, 60)}`;
     case "code_egress":
-      // 出网清单：与 token_usage 那行成对看——这条说「哪几行源码进了请求」，那条说「这次调用付了多少钱」
+      // 每次请求带出去的源码行清单
       return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
     case "repository_paired":
       return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;

@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 export class CheckpointRepository {
   constructor(private readonly db: Database.Database) {}
 
-  /** 每个 round 一行；未走完的那次写 `stoppedReason`，等待答句的那档才同时写 `promptHash` 与 `pendingToolCallId`。 */
+  /** 一个 round 一行；等待答句那档才同时写 `promptHash` 与 `pendingToolCallId`。 */
   save(input: { threadId: string; scene: string; round: number; inputHash: string; promptHash?: string; stoppedReason?: string; pendingToolCallId?: string; payload: unknown }): void {
     this.db.prepare("INSERT OR REPLACE INTO turn_checkpoint(thread_id, scene, round, input_hash, prompt_hash, stopped_reason, pending_tool_call_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(input.threadId, input.scene, input.round, input.inputHash, input.promptHash ?? null, input.stoppedReason ?? null, input.pendingToolCallId ?? null, JSON.stringify(input.payload), Date.now());

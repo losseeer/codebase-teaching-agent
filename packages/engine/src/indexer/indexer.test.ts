@@ -6,8 +6,8 @@ import { graphExtensions } from "@codebase-tutor/analysis";
 import { indexRepository, isIngestedPath, nonGraphExtensions, sourceExtensions } from "./indexer.js";
 
 /**
-  扫描期的缺席口径：一个文件读不出来只让它自己缺席，不整次导入失败。
-  缺席要记名：`totalFiles` 与「哪些文件没摘要」跟着它。
+  扫描期口径：单个文件读失败只让它自己缺席。
+  缺席文件记名进 `unreadable`。
   */
 
 describe("indexRepository 扫描期兜底", () => {
@@ -33,14 +33,13 @@ describe("indexRepository 扫描期兜底", () => {
   });
 
   it("读不到的文件被跳过并记名，导入照常产出其余文件", function run() {
-    // root 身份下 chmod 拦不住读（macOS 的 root 无视权限位），这台机器上这条测不出东西，直接跳过而不是假装通过
+    // macOS 下 root 无视权限位，此时 chmod 拦不住读，跳过本用例
     if (unreadableAsRoot) return;
     const index = indexRepository(root);
     expect(index.files.map((file) => file.path)).toEqual(["src/ok.ts"]);
     expect(index.totalFiles).toBe(1);
     expect(index.unreadable).toHaveLength(1);
     expect(index.unreadable?.[0]?.path).toBe("src/gone.ts");
-    // 原因要说得出口：只报「少了」等于让人去查一个查不到的东西
     expect(index.unreadable?.[0]?.reason).toMatch(/EACCES|Permission|operation not permitted/i);
   });
 
@@ -57,8 +56,7 @@ describe("indexRepository 扫描期兜底", () => {
 
 /**
   扫描白名单的构成：索引范围 = graphExtensions ∪ nonGraphExtensions，前者由能力表派生。
-  这里要拦的不是「两边相不相等」（同义反复），而是派生别把范围改小、两组别打架：
-  漏一项就少索引一类文件、摘要与热点读数一起跟着说不实；重叠则说明同一扩展名既想进图又想当配置。
+  这里拦的是派生把范围改小、以及两组重叠。
 */
 describe("indexRepository 的扩展名白名单构成", () => {
   it("图内与表外两组不重叠", () => {
@@ -79,11 +77,7 @@ describe("indexRepository 的扩展名白名单构成", () => {
     }
   });
 
-  /**
-    白名单之外还有第二道：读层判「不开放读取」的密钥载体名不该进收录集。
-    `credentials.json` 的扩展名 `.json` 属于收录类型，于是它的路径与行数进了产物、文件树里点得到，
-    而 `GET /source` 拒读它；「摘要参考注释」开关一开，`summarizer` 会照着 slice 的路径把正文读出来。
-    */
+  /** 第二道闸：读层判「不开放读取」的密钥载体名不进收录集。 */
   it("密钥载体名不进收录集，普通配置文件照收（`.json` 这一类的两种命运）", () => {
     const dir = mkdtempSync(join(tmpdir(), "tutor-indexer-denied-"));
     mkdirSync(join(dir, "src"), { recursive: true });
@@ -92,7 +86,7 @@ describe("indexRepository 的扩展名白名单构成", () => {
     writeFileSync(join(dir, "src/env.example"), "OPENAI_API_KEY=\n", "utf8");
     writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=sk-not-indexed\n", "utf8");
     expect(indexRepository(dir).files.map((file) => file.path)).toEqual(["src/package.json"]);
-    // 判据本身：模板类 env 只列键名，属于「可读」那一边，所以也不被名字闸挡住
+    // `.example` 由扩展名白名单筛掉，不经名字闸
     expect(isIngestedPath("src/env.example"), ".example 是模板，扩展名本来就不收录").toBe(false);
     expect(isIngestedPath("credentials.json")).toBe(false);
     expect(isIngestedPath("deploy/credentials.json")).toBe(false);

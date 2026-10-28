@@ -26,7 +26,6 @@ describe("引用落地", () => {
 
   it("依赖图认识的语言都在核验射程里；图外的 Ruby/PHP 与文档也不许被悄悄缩小", () => {
     const score = scoreReferences(["见 src/parser.cpp:88 与 Order.cs:2 与 app.rb:12；样式在 theme.css:1 不算代码引用"], FILES);
-    // 清单手写的那几年，.cpp/.cs 压根不进分母：编一条假引用也不会被拦
     expect(score.problems.map((problem) => problem.raw)).toEqual(["src/parser.cpp:88", "Order.cs:2", "app.rb:12"]);
   });
 });
@@ -68,9 +67,7 @@ describe("运行期运行时复检（同样的两条在回合收尾判）", () =
   });
 });
 
-/**
-  出字前的本地过筛单测：两头都钉住——漏筛＝密钥随正文下发/入库，误筛＝把正常讲代码的回复改坏。
- */
+/** 出字前的本地过筛：既不漏筛密钥，也不误改正常讲代码的回复。 */
 describe("screenReply", () => {
   it("隐去密钥形态与仓库外绝对路径，并只记数量与样例", () => {
     const screened = screenReply("配置里的 sk-abcdefghijklmnop1234 就是凭据；它读的是 /Users/devsecczk/.ssh/id_rsa 那份文件。");

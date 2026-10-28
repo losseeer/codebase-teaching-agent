@@ -9,7 +9,7 @@ import { readJournal } from "../persistence/journal.js";
 import { runWithTrace } from "@codebase-tutor/platform";
 import { recordEgress, type EgressSource } from "./egress-log.js";
 
-/** 出网清单的计入审计口径：不带正文、被裁掉的段不算出网、仓 id 由路径推导、traceId 跟请求上下文。 */
+/** 出网审计行的写入口径：payload 不含正文，只登记实际发送的段。 */
 
 const repositories: string[] = [];
 const SECRET_TEXT = 'export const token = "sk-abcdefghijklmnopqrstuvwx";';
@@ -53,8 +53,8 @@ describe("源码出网清单计入审计", () => {
       repositoryPath: repository,
       scene: "practice.polish",
       sources: [
-        source({ path: "src/unswept.ts" }), // 装配方没给读数 = 这道路没过筛
-        source({ path: "src/clean.ts", masked: 0 }), // 过了筛、零命中——必须留得下这个 0
+        source({ path: "src/unswept.ts" }),
+        source({ path: "src/clean.ts", masked: 0 }),
         source({ path: "src/dirty.ts", text: SECRET_TEXT, masked: 2, truncated: true })
       ]
     });
@@ -72,14 +72,14 @@ describe("源码出网清单计入审计", () => {
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [] });
     expect(rows(repository)).toHaveLength(0);
 
-    // 外层上下文预算把尾部整段裁掉时，第二段不算出网
+    // 未出现在 sent 文本中的段不计入出网。
     const kept = source({ path: "src/kept.ts", text: "const kept = 1;" });
     const cut = source({ path: "src/cut.ts", text: "const cut = 2;" });
     recordEgress({ repositoryPath: repository, scene: "map.chat", sources: [kept, cut], sent: `代码上下文：\n${kept.text}\n\n问题：这段干什么？` });
     const list = rows(repository);
     expect(list.map((event) => event.payload.path)).toEqual(["src/kept.ts"]);
 
-    // 空正文不能被 `includes("")` 恒真放进来
+    // 空正文段不计入出网。
     recordEgress({ repositoryPath: repository, scene: "map.flow", sources: [source({ text: "" })], sent: "任何一份待发文本" });
     expect(rows(repository)).toHaveLength(1);
   });
@@ -92,7 +92,7 @@ describe("源码出网清单计入审计", () => {
     const [inRequest, inBackground] = rows(repository);
     expect(inRequest?.traceId).toBe("req-egress-1");
     expect(inRequest?.repositoryId).toBe(repositoryId(repository));
-    // 后台任务没有请求上下文，记 null
+    // 无请求上下文时 traceId 记 null。
     expect(inBackground?.traceId).toBeNull();
     expect(readFileSync(join(repository, ".tutor", "journal.jsonl"), "utf8").trim().split("\n")).toHaveLength(2);
   });

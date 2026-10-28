@@ -7,7 +7,7 @@ import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-
 import { isolationBackend } from "../../../outbound/sandbox/profile.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
 
-/** 引擎运维面用例：动作事件出口的形状守卫、来源闸、免打扰开关、沙箱重探，以及非收录文件写入不该换掉挂载产物。 */
+/** 引擎运维面路由用例：/journal 入参守卫、来源闸、监听开关、沙箱重探、非收录文件写入。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -30,7 +30,6 @@ describe("POST /journal 的入参守卫", () => {
     expect(fx.eventsOf("file_opened").length).toBe(before);
   });
 
-  /** 被审计的一方不能从这条接口写引擎侧事件类型。 */
   it("引擎侧类型从这条接口写不进来：400 且区分「越权」与「未知」", async () => {
     for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted", "repository_paired"]) {
       const before = fx.eventsOf(type).length;
@@ -68,7 +67,7 @@ describe("非收录文件的写入不该换掉挂载中的产物", () => {
   });
 });
 
-/** 来源闸：非可信来源被拒在执行之前；回环与不带 Origin 的本机调用照常；放宽只有 `TUTOR_ALLOWED_ORIGINS` 一个口子。 */
+/** 来源闸：非可信来源在 handler 之前被拒；放宽只经 `TUTOR_ALLOWED_ORIGINS`。 */
 
 describe("来源闸：默认只服务本机浏览器", () => {
   const EVIL = "http://evil.example";
@@ -100,7 +99,7 @@ describe("来源闸：默认只服务本机浏览器", () => {
   });
 
   it("连 /api/health 也不白给：这道闸免的是「不带 Origin 的本机调用」，不是「任意网页」", async () => {
-    // 健康读数含服务商、模型名与沙箱状态，不给任意网页
+    // 健康读数含服务商、模型名与沙箱状态
     const refused = await fromEvil("GET", "/api/health");
     expect(refused.statusCode).toBe(403);
     expect(refused.payload).not.toContain("fixture-model");
@@ -130,11 +129,10 @@ describe("来源闸：默认只服务本机浏览器", () => {
   });
 });
 
-/** 挂起监听与沙箱重探两条路由：都不发模型请求。 */
+/** 挂起监听与沙箱重探两条路由。 */
 
 describe("编辑期免打扰与沙箱重探", () => {
   afterEach(() => {
-    // 挂起态不留给后面的用例
     fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/watch`, payload: { paused: false } });
   });
 
@@ -163,7 +161,7 @@ describe("编辑期免打扰与沙箱重探", () => {
     expect((missing.json() as { reason?: string }).reason, "这条路由不重复实现「仓在不在」的判断，口径与其余带 :fx.repositoryId 的路由同一处").toBe("not_in_catalog");
   });
 
-  /** 形状固定、等级允许随环境变；重探要起十来个沙箱子进程，超时给到 30 秒。 */
+  /** 沙箱读数：形状固定，等级随环境变。 */
   it("POST /api/sandbox/reprobe 返回重新探测的读数，字段形状与开机那份一致", async () => {
     const response = await fx.app.inject({ method: "POST", url: "/api/sandbox/reprobe" });
     expect(response.statusCode).toBe(200);
@@ -173,13 +171,11 @@ describe("编辑期免打扰与沙箱重探", () => {
     if (isolationBackend().available) {
       expect(body.sandbox.checks.length, "有后端的机器上一次重探必须给出逐项 canary，而不是一个总判断").toBeGreaterThan(3);
     } else {
-      // 没有后端就不该有 canary
       expect(body.sandbox.checks, "零 canary 才是这台机器的实话").toEqual([]);
       expect(body.sandbox.level).toBe("unavailable");
     }
     expect(body.sandbox.checks.every((check) => typeof check.passed === "boolean")).toBe(true);
     expect(new Date(body.sandbox.probedAt).getTime()).toBeGreaterThanOrEqual(Date.now() - 60_000);
-    // /api/health 的 sandbox 必须是重探之后的读数
     const health = (await fx.app.inject({ method: "GET", url: "/api/health" })).json() as { sandbox: { probedAt: string } };
     expect(health.sandbox.probedAt).toBe(body.sandbox.probedAt);
   }, 30_000);

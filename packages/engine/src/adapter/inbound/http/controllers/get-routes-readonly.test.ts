@@ -29,7 +29,7 @@ function getRoutePaths(): string[] {
 }
 
 describe("GET 路由全部只读", () => {
-  /** 事件流是长连接，`inject` 不会返回，按设计单独排除。 */
+  /** 事件流是长连接，`inject` 不返回，故排除在外。 */
   const LONG_LIVED = new Set(["/api/events"]);
 
   it("路由树里每条 GET 都走一遍：provider 调用计数为 0", async () => {
