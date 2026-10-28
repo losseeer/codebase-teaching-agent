@@ -1,10 +1,7 @@
 import { dirname, join, normalize } from "node:path";
 import { slash } from "./repo-paths.js";
 
-/**
- * Rust 的仓内依赖两种：`mod x;`（声明子模块，对应 x.rs 或 x/mod.rs）与 `use crate::a::b;`。
- * `use x::{c, d}` 取路径前缀即可；外部 crate（`use serde::…`）不经 crate/self/super 打头，天然不落点。
- */
+/** Rust 仓内依赖两种：`mod x;` 对应 x.rs 或 x/mod.rs，`use crate::a::b;` 取路径前缀。 */
 export function extractRustSpecifiers(content: string): string[] {
   const specifiers: string[] = [];
   for (const line of content.split("\n")) {
@@ -37,3 +34,4 @@ export function resolveRustImport(from: string, specifier: string, available: Se
     current = current.slice(0, cut);
   }
 }
+

@@ -6,26 +6,20 @@ import { languageOfExtension, type SymbolInfo } from "@codebase-tutor/domain";
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**
-  基于语法树的符号抽取。不用逐行文本匹配：类方法会被当成普通函数、接口与类型别名认不出来，
-  函数体结束行只能靠数大括号猜（代码里出现含大括号的字符串或注释就猜错），
-  而 `endLine` 是锚点高亮、调用归属、微观讲解切片的共同依据。
-
-  实现用 WASM 版解析器（`web-tree-sitter` + VS Code 预编译的语法文件），不引入原生模块：
-  原生预编译二进制跟 Node 版本绑。
-
-  加载失败不抛给调用方：回落逐行匹配，但原因必须写进图数据的 `parseBackendReason` 并记一条 `degrade`
-  工作日志，不允许静默降级。
+  基于语法树的符号抽取：`endLine` 是锚点高亮、调用归属与讲解切片的共同依据。
+  解析器或语法不可用时回落逐行匹配，原因写入 `parseBackendReason` 并记一条 `degrade` 日志。
+  本层是唯一的语法树出口，控制流图与切片都从这里取树。
 */
 
 export type ParseBackend = "ast" | "regex";
 
 export interface ParseBackendStatus {
   backend: ParseBackend;
-  /** 回落原因（backend === "regex" 时必有） */
+  /** 回落原因，`backend === "regex"` 时必有。 */
   reason?: string;
 }
 
-/** 只覆盖依赖图真正处理的扩展名（其余语言走不进这里）；wasm 全部来自 `@vscode/tree-sitter-wasm`。 */
+/** 依赖图处理的语法与对应 wasm 文件，来自 `@vscode/tree-sitter-wasm`。 */
 const GRAMMAR_FILES = {
   python: "tree-sitter-python.wasm",
   java: "tree-sitter-java.wasm",
@@ -40,7 +34,7 @@ const GRAMMAR_FILES = {
 
 export type GrammarName = keyof typeof GRAMMAR_FILES;
 
-/** 语法选择按扩展名：`.jsx` 用 tsx 语法（JSX 是它的子集，纯 JS 语法解析不了 JSX）。 */
+/** 按扩展名选语法：`.jsx` 走 tsx 语法。 */
 function grammarOf(path: string): GrammarName | undefined {
   if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
@@ -54,10 +48,7 @@ function grammarOf(path: string): GrammarName | undefined {
   return undefined;
 }
 
-/**
-  `SymbolInfo.language` 的口径与索引层一致、与用哪种语法解析无关：「扩展名 → 语言」这一步用共享能力表。
-  表里的 `vue` 不在这个联合类型里（SFC 的符号取自 `<script>` 块），显式映射成 other 而不是默默漏掉。
-  */
+/** 扩展名到语言的映射用共享能力表；`vue` 显式映射为 `other`。 */
 function languageOf(path: string): SymbolInfo["language"] {
   const language = languageOfExtension(extname(path));
   if (!language || language === "vue") return "other";
@@ -66,11 +57,7 @@ function languageOf(path: string): SymbolInfo["language"] {
 
 export type SyntaxNode = NonNullable<ReturnType<Parser["parse"]>>["rootNode"];
 
-/**
-  解析一份源码并交出一棵语法树供遍历，遍历完立即 `tree.delete()`：树留在 WASM 堆上，GC 收不掉，
-  一个仓两千个文件就是两千棵。
-  这一层是唯一的解析出口：符号抽取、模板串行号、控制流图都从这里要树。
-*/
+/** 解析并交出语法树，遍历完立即 `tree.delete()`（WASM 堆内存，GC 收不掉）。 */
 export function withSyntaxTrees<T>(path: string, content: string, visit: (root: SyntaxNode, grammar: GrammarName) => T): T[] | undefined {
   if (!parser) return undefined;
   if (path.endsWith(".vue")) {
@@ -110,13 +97,7 @@ export function parseBackendStatus(): ParseBackendStatus {
   return status;
 }
 
-/**
-  加载解析器与语法文件（幂等：并发调用共享同一次加载）。
-
-  必须在建图之前 await 一次——解析器的初始化是异步的，而建图是同步的；
-  没加载就建图会走逐行匹配，属于「能跑但结果更差」，所以由调用方显式决定何时加载，
-  而不是在建图里偷偷 await。
-*/
+/** 加载解析器与语法文件（幂等）；必须在建图前 await 一次。 */
 export function loadSymbolParser(): Promise<ParseBackendStatus> {
   loading ??= (async (): Promise<ParseBackendStatus> => {
     try {
@@ -138,7 +119,7 @@ export function loadSymbolParser(): Promise<ParseBackendStatus> {
   return loading;
 }
 
-/** 仅测试用：把状态复位，便于分别验证「加载成功」与「加载失败回落」两条路径。 */
+/** 仅测试用：复位解析器状态。 */
 export function resetSymbolParserForTest(): void {
   loading = undefined;
   grammars.clear();
@@ -148,37 +129,35 @@ export function resetSymbolParserForTest(): void {
 
 const TS_FUNCTION_NODES = new Set(["function_declaration", "generator_function_declaration"]);
 const TS_CLASS_NODES = new Set(["class_declaration", "abstract_class_declaration", "record_declaration"]);
-/** 接口/类型别名/枚举：不是可执行体，但是理解文件职责的重要名字（工程上常比函数名更能说明用途）。 */
+/** 接口/类型别名/枚举：非可执行体，仍作为符号收录。 */
 const TS_TYPE_NODES = new Set(["interface_declaration", "type_alias_declaration", "enum_declaration"]);
 const TS_VARIABLE_NODES = new Set(["lexical_declaration", "variable_declaration"]);
 const TS_FUNCTION_VALUES = new Set(["arrow_function", "function_expression", "generator_function"]);
 
-/** 声明节点的 kind；认不出来返回 undefined。方法用节点类型直接判定，不依赖外层是不是类（对象字面量里的简写方法也是方法）。 */
+/** 声明节点类型到 kind 的映射，认不出来返回 undefined。 */
 function kindOf(type: string, inClass: boolean): SymbolInfo["kind"] | undefined {
   if (TS_FUNCTION_NODES.has(type)) return "function";
   if (TS_CLASS_NODES.has(type)) return "class";
-  // Java：class/record/interface/enum 与 TS 同名节点共享上面的集合；方法与构造器是 Java 独有类型
+  // Java：方法与构造器是 Java 独有的节点类型
   if (type === "method_declaration" || type === "constructor_declaration") return "method";
   if (type === "method_definition") return "method";
   if (TS_TYPE_NODES.has(type)) return "type";
   if (type === "class_definition") return "class";
   if (type === "function_definition") return inClass ? "method" : "function";
-  // Go：function_declaration/method_declaration 与前序语言共享；type_declaration 的名字在 type_spec 里，单独展开
-  // C#：struct 与类同权重（可执行体、有成员）；接口/枚举/记录已共享 TS 集合
+  // Go：type_declaration 的名字在 type_spec 里，由 collectSymbols 展开
   if (type === "struct_declaration") return "class";
-  // Rust：fn/struct/trait/enum/mod；impl 无名（体成员由递归收进来，inClass 让其升为 method）
+  // Rust：impl 无名，体成员由递归收进来并升为 method
   if (type === "function_item") return inClass ? "method" : "function";
   if (type === "struct_item" || type === "union_item") return "class";
   if (type === "trait_item" || type === "enum_item" || type === "mod_item") return "type";
-  // C/C++：class/struct 是值类型家族（class_specifier 有 name 字段），enum 只有声明价值
   if (type === "class_specifier" || type === "struct_specifier") return "class";
   if (type === "enum_specifier") return "type";
   return undefined;
 }
 
-/** C 系 function_definition 没有 name 字段，名字藏在 declarator 链的末端（`int *foo(void)` → declarator(pointer_declarator(function_declarator(identifier)))）。 */
+/** C 系 function_definition 无 name 字段，名字在 declarator 链末端。 */
 function declaratorName(node: SyntaxNode): string | undefined {
-  // C 的函数名节点就叫 identifier；C++ 才有 qualified_identifier/destructor_name 这些带后缀的变体
+  // C 用 identifier，C++ 另有 qualified_identifier、destructor_name 变体
   const isNameNode = (type: string): boolean => type === "identifier" || type === "destructor_name" || type.endsWith("_identifier");
   let current: SyntaxNode | null | undefined = node.childForFieldName("declarator");
   const seen = new Set<number>();
@@ -192,27 +171,24 @@ function declaratorName(node: SyntaxNode): string | undefined {
   return undefined;
 }
 
-/** 「进入这些节点后，体内的函数定义算成员方法」：TS/Java/Python 类 + C++ 的 class/struct + Rust 的 impl/trait。 */
+/** 进入这些节点后，体内的函数定义算成员方法。 */
 const CONTAINER_BODIES = new Set<string>([...TS_CLASS_NODES, "class_definition", "class", "class_specifier", "struct_specifier", "impl_item", "trait_item"]);
 
-/** 参数原文列表：取参数节点的具名子节点，带类型标注/默认值/可见性修饰都原样保留。 */
+/** 参数原文：具名子节点文本原样保留，含类型标注与默认值。 */
 function parameterTexts(node: SyntaxNode): string[] {
   const list = node.childForFieldName("parameters");
   if (!list) return [];
   return list.namedChildren.map((child) => child.text.trim()).filter(Boolean);
 }
 
-/** `export_statement`（TS）与 `decorated_definition`（Python）只是外壳，真正的声明在里面。 */
+/** TS 的 `export_statement` 与 Python 的 `decorated_definition` 是外壳，声明在内层。 */
 function unwrap(node: SyntaxNode): SyntaxNode | undefined {
   if (node.type === "export_statement") return node.childForFieldName("declaration") ?? undefined;
   if (node.type === "decorated_definition") return node.childForFieldName("definition") ?? undefined;
   return undefined;
 }
 
-/**
-  一个声明节点的名字：优先 `name` 字段，C 系没有就沿 declarator 链找。
-  符号表与控制流图共用这一份判据；C 的函数名不在独立字段里，少了 declarator 兜底就等于整个仓的 C 函数没有名字。
-*/
+/** 声明节点的名字：优先 `name` 字段，缺失则沿 declarator 链查找。 */
 export function declarationNameOf(node: SyntaxNode): string | undefined {
   return node.childForFieldName("name")?.text.trim() || declaratorName(node);
 }
@@ -222,20 +198,20 @@ function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): Sym
   if (!name) return undefined;
   const line = node.startPosition.row + 1;
   return {
-    // id 格式是线上契约：写进 analysis_json 并被调用边按 calleeSymbol 引用，不能改
+    // id 格式是持久化契约，调用边按 calleeSymbol 引用
     id: `symbol:${path}:${name}:${line}`,
     name,
     kind,
     path,
     line,
-    // 语法树的 endPosition 是最后一行（含）
+    // tree-sitter 的 endPosition 落在最后一行（含）
     endLine: node.endPosition.row + 1,
     parameters: parameterTexts(node),
     language: languageOf(path)
   };
 }
 
-/** 变量声明里的箭头函数/函数表达式/类表达式：`const f = () => {}` 也算符号。 */
+/** 变量声明指向的函数或类表达式也算符号。 */
 function collectVariableDeclarators(node: SyntaxNode, path: string, out: SymbolInfo[]): void {
   for (const declarator of node.namedChildren) {
     if (declarator.type !== "variable_declarator") continue;
@@ -245,7 +221,6 @@ function collectVariableDeclarators(node: SyntaxNode, path: string, out: SymbolI
     if (!kind) continue;
     const name = declarator.childForFieldName("name")?.text.trim();
     if (!name) continue;
-    // 具名声明用变量名定位，区间取「声明行 → 值的结束行」，与直接写 function 的观感一致
     out.push({
       id: `symbol:${path}:${name}:${declarator.startPosition.row + 1}`,
       name,
@@ -265,7 +240,7 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
     collectSymbols(inner, path, inClass, out);
     return;
   }
-  // Go 的 type_declaration 只是外壳：名字在各自 type_spec 里，kind 按类型本体区分（struct/interface 是可执行体家族）
+  // Go 的 type_declaration 是外壳，名字在各自的 type_spec 里
   if (node.type === "type_declaration") {
     for (const spec of node.namedChildren) {
       if (spec.type !== "type_spec") continue;
@@ -292,15 +267,12 @@ function collectSymbols(node: SyntaxNode, path: string, inClass: boolean, out: S
     if (symbol) out.push(symbol);
   }
   if (TS_VARIABLE_NODES.has(node.type)) collectVariableDeclarators(node, path, out);
-  // 进到类体之后，Python 的 def、Rust 的 fn、C/C++ 的成员函数就是方法；TS 的方法由节点类型直接判定，不依赖这个标志
+  // 进入类体后，Python 的 def、Rust 的 fn、C/C++ 成员函数算方法
   const childInClass = inClass || CONTAINER_BODIES.has(node.type);
   for (const child of node.namedChildren) collectSymbols(child, path, childInClass, out);
 }
 
-/**
-  Vue 单文件组件没有专属语法，但 `<script>` 块本体就是 JS/TS：把块外的行换成空行原地垫出来，
-  再走现有 tsx/js 语法。模板/样式不会误进语法树，块内节点的 `startPosition.row` 天然就是全文件行号。
-*/
+/** Vue SFC 无专属语法：`<script>` 块按 tsx/js 解析，块外行以空行占位保持行号。 */
 function vueScriptBlocks(content: string): { start: number; end: number; ts: boolean }[] {
   const lines = content.split("\n");
   const blocks: { start: number; end: number; ts: boolean }[] = [];
@@ -317,25 +289,17 @@ function vueScriptBlocks(content: string): { start: number; end: number; ts: boo
   return blocks;
 }
 
-/**
-  垫出来的空行数刻意是 `start-1`：`split("\n")` 的各行不带换行符，`join("\n")` 会在垫子与正文之间
-  再补一个，合起来正好 `start` 个换行，块内第一行仍落在原文件的第 start 行，节点行号不用二次换算。
-*/
+/** 垫 `start - 1` 个空行，`join("\n")` 补齐后块内首行落在原文件行号。 */
 function padVueBlock(content: string, block: { start: number; end: number }): string {
   const lines = content.split("\n");
   return ["\n".repeat(Math.max(0, block.start - 1)), ...lines.slice(block.start, block.end), "\n".repeat(lines.length - block.end)].join("\n");
 }
 
-/**
-  跨行模板字符串占的行号（tree-sitter 认出来的，不自己扫引号，判据只出树一份）。
-  入口判据得知道「这一行是代码还是展示内容」：把示例源码整段写进模板字符串当演示数据是常见写法，
-  逐行看那些 `const app = Fastify(...)` 与真代码一模一样，按行匹配会把演示数据标成服务入口。
-  返回 undefined 表示解析器没就绪或该语言没有语法，与 `extractSymbolsFromAst` 同一口径。
-*/
+/** 跨行模板字符串占用的行号；解析器未就绪或该语言无语法时返回 undefined。 */
 export function extractMultilineTemplateLines(path: string, content: string): Set<number> | undefined {
   const lines = new Set<number>();
   const found = withSyntaxTrees(path, content, (root) => {
-    // tree-sitter 的 TS/JS 语法里模板串是 template_string；`string` 是普通引号串（单行，不需要占行号）
+    // 模板串节点是 `template_string`，普通引号串为单行
     const walk = (node: SyntaxNode): void => {
       if (node.type === "template_string" && node.startPosition.row !== node.endPosition.row) {
         for (let line = node.startPosition.row + 1; line <= node.endPosition.row; line += 1) lines.add(line);
@@ -347,10 +311,7 @@ export function extractMultilineTemplateLines(path: string, content: string): Se
   return found ? lines : undefined;
 }
 
-/**
-  用语法树抽符号。解析器未就绪或该扩展名没有语法时返回 undefined（调用方据此回落逐行匹配），
-  而不是返回空数组——空数组是「这个文件真没有符号」，两者语义不同。
-*/
+/** 语法树抽符号；未就绪或该扩展名无语法时返回 undefined，空数组表示文件确无符号。 */
 export function extractSymbolsFromAst(path: string, content: string): SymbolInfo[] | undefined {
   const perTree = withSyntaxTrees(path, content, (root) => {
     const symbols: SymbolInfo[] = [];
@@ -359,3 +320,4 @@ export function extractSymbolsFromAst(path: string, content: string): SymbolInfo
   });
   return perTree?.flat();
 }
+

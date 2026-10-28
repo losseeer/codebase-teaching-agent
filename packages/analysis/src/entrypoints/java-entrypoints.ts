@@ -1,9 +1,6 @@
 import type { SourceAnchor } from "@codebase-tutor/domain";
 
-/**
- * Java/Spring 入口识别：启动类看 @SpringBootApplication，HTTP 路由看 @Controller/@RestController。
- * 锚点落在类声明行（跳过注解块），GUI 跳转直达正文；@ControllerAdvice 不算入口（词边界已排除）。
- */
+/** Java/Spring 入口：启动类看 `@SpringBootApplication`，HTTP 路由看 `@Controller`/`@RestController`，锚点在类声明行。 */
 export function detectJavaEntrypoints(contents: Map<string, string>): SourceAnchor[] {
   const classDecl = /^\s*(?:(?:public|private|protected|final|abstract|sealed|static)\s+)*(?:class|interface|enum|record)\s+\w+/;
   const boot: SourceAnchor[] = [];
@@ -24,7 +21,7 @@ export function detectJavaEntrypoints(contents: Map<string, string>): SourceAnch
     }
     const controllerIndex = lines.findIndex((line) => /^\s*@(?:Rest)?Controller\b/.test(line));
     if (controllerIndex < 0) continue;
-    // 类级 @RequestMapping 前缀从注解行扫到类声明为止，路径即视图上可直接报的挂载点
+    // 类级 @RequestMapping 前缀从注解行扫到类声明为止
     let prefix = "";
     for (let index = controllerIndex; index < lines.length; index += 1) {
       if (classDecl.test(lines[index])) break;
@@ -38,3 +35,4 @@ export function detectJavaEntrypoints(contents: Map<string, string>): SourceAnch
   }
   return [...boot, ...controllers];
 }
+

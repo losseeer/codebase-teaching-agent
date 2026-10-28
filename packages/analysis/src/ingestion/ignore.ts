@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const configName = ".tutorignore";
 
-// This seed is materialized in each imported repository. Matching only reads .tutorignore.
+// 默认清单会播种进每个导入的仓；匹配只读 .tutorignore
 const defaultTutorIgnoreContents = `# Codebase Tutor analysis exclusions.
 # Supports comments, *, ?, **, directory suffixes and ! re-inclusion rules. A pattern containing "/" matches at any depth — gitignore would anchor it to this file's directory.
 
@@ -52,10 +52,7 @@ interface IgnoreRule {
 export interface TutorIgnoreMatcher {
   ignores(relativePath: string, isDirectory?: boolean): boolean;
   shouldTraverse(relativeDirectory: string): boolean;
-  /**
-    那份文件读到的内容：监听层靠它区分「用户真改了配置」与「引擎自己播种了默认那一份」。
-    播种也是写文件、也给 `fs.watch` 一条事件，而按 mtime 判先后在这条路上不稳（同一毫秒内既播种又改文件是常态）。
-    */
+  /** 配置文件读到的内容，供监听层区分用户改动与引擎播种。 */
   signature: string;
 }
 
@@ -90,15 +87,14 @@ export function isTutorIgnoreFile(relativePath: string): boolean {
 }
 
 export function ensureTutorIgnore(repositoryPath: string): void {
-  // 仓目录本身不在了就没得播种：用户把被学习的仓删了或挪走了，这时写默认清单会抛 ENOENT。
-  // 调用方常常是 fs 监听回调——那里没人接异常，一次事件就能把进程带倒。
+  // 仓目录已不在时跳过播种，监听回调里抛异常会带倒进程
   if (!existsSync(repositoryPath)) return;
   const path = join(repositoryPath, configName);
   if (existsSync(path)) return;
   try {
     writeFileSync(path, defaultTutorIgnoreContents, { encoding: "utf8", flag: "wx" });
   } catch (error) {
-    // EEXIST = 有人抢先写了默认那一份；ENOENT = 检查与写之间目录消失了。两种都不是故障
+    // EEXIST 与 ENOENT 都不是故障
     if (!(error instanceof Error && "code" in error && (error.code === "EEXIST" || error.code === "ENOENT"))) throw error;
   }
 }
@@ -107,7 +103,7 @@ function readTutorIgnore(repositoryPath: string): string[] {
   const path = join(repositoryPath, configName);
   if (!existsSync(path)) return [];
   try { return readFileSync(path, "utf8").split(/\r?\n/); }
-  // 读不到规则还接着扫，等于把排除掉的目录全收进索引并送去摘要（按文件计费）：抛出去，导入与监听两侧都要看见原因
+  // 读不到规则就抛错：静默继续会把已排除的目录全收进索引
   catch (error) { throw new Error(`读不动 ${path}，无法确定该排除哪些目录：${String(error)}`); }
 }
 
@@ -166,3 +162,4 @@ function canMatchDescendant(rule: IgnoreRule, directory: string): boolean {
 function normalize(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
 }
+

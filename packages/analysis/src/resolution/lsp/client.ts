@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 type JsonRpcMessage = { id?: number; method?: string; result?: unknown; error?: { message?: string } };
 
-/** Small JSON-RPC transport for local stdio language servers. */
+/** 本地 stdio 语言服务的 JSON-RPC 传输。 */
 export class LspClient {
   private process?: ChildProcessWithoutNullStreams;
   private sequence = 0;
@@ -56,7 +56,7 @@ export class LspClient {
       if (!Number.isFinite(length) || this.buffer.length < marker + 4 + length) return;
       const body = this.buffer.subarray(marker + 4, marker + 4 + length).toString("utf8");
       this.buffer = this.buffer.subarray(marker + 4 + length);
-      try { this.handle(JSON.parse(body) as JsonRpcMessage); } catch { /* Ignore malformed server output. */ }
+      try { this.handle(JSON.parse(body) as JsonRpcMessage); } catch { /* 忽略格式错误的服务端输出 */ }
     }
   }
 
@@ -75,3 +75,4 @@ export class LspClient {
     this.pending.clear();
   }
 }
+

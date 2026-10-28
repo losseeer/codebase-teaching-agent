@@ -4,29 +4,25 @@ import type { SyntaxNode } from "../extraction/parser.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  类型之间的关系：谁继承谁、谁实现谁、字段指向哪个类型、泛型实参是谁、方法收什么返回什么。
-  与依赖图的 `dispatch` 边分开放：那边只到文件为止，这边要类型名级别的全貌。
-  落点靠名字反查：查到唯一一份才写 `toFile`；多份写 `ambiguous` 列出候选；查不到什么都不写，
-  那是仓外类型或标准库，不是「这个类型不存在」。
+  类型之间的关系：继承、实现、字段类型、泛型实参、方法参数与返回类型。
+  与依赖图的 `dispatch` 边分开放：那边到文件为止，这边到类型名。
+  落点靠名字全仓反查：唯一命中写 `toFile`，多份写 `ambiguous`，查不到不写。
 */
 
 const MAX_RELATIONS = 60;
 
-/** 声明了具名类型的节点，各语言名字不同。 */
+/** 声明具名类型的节点类型。 */
 const DECLARATION = /^(abstract_)?(class|interface|enum|record|struct|trait|union)_(declaration|item|specifier)$|^class_definition$|^type_spec$|^type_alias$|^type_definition$|^type_item$|^struct_specifier$|^class_specifier$|^enum_specifier$|^impl_item$|^impl$|^enum_declaration$/;
 const TYPE_NODE = /^(type_identifier|qualified_identifier|generic_type|user_type|scoped_type_identifier|named_type|nullable_type|array_type|slice_type|map_type|pointer_type|reference_type|optional_type|function_type|constructor_type|union_type|intersection_type|literal_type|type|abstract_class_modifier)$/;
-/**
-  语言自带的关键字与原始类型，不进这张表。刻意区分大小写并只列关键字：
-  `List` / `Map` / `Order` 是真实的类型引用，只是反查不到仓内文件，那是 `toFile` 空着的事。
-*/
+/** 语言关键字与原始类型，不计为类型引用。匹配区分大小写。 */
 const SCALAR = /^(any|unknown|never|void|null|undefined|bool|boolean|byte|sbyte|short|int|integer|long|float|double|decimal|char|rune|string|str|number|object|dynamic|self|Self|this|This|unit|bigint|symbol|error|Error|Exception|Throwable)$/;
-/** 类型名本身住在哪里（拿到名字就要停，不再往里当普通类型走）。 */
+/** 类型名所在的节点：取到名字即停，不再深入。 */
 const NAME_NODE = /^(type_identifier|identifier|field_identifier|name|path|type)$/;
 
 function contextOf(node: SyntaxNode): TypeRelationKind | undefined {
   const type = node.type;
   if (/^type_arguments$/.test(type)) return "generic-argument";
-  // 顺序有讲究：Java 的 super_interfaces 同时含 super 与 interfaces，先判 extends 会把它认成继承
+  // Java 的 super_interfaces 同时含 extends 与 interfaces，implements 须先判
   if (/implements|interfaces|base_list|^trait$/.test(type)) return "implements";
   if (/heritage|superclass|extends/.test(type)) return "extends";
   if (/return_type/.test(type)) return "returns";
@@ -37,7 +33,7 @@ function contextOf(node: SyntaxNode): TypeRelationKind | undefined {
   return undefined;
 }
 
-/** 一个类型节点的名字：去掉泛型实参与命名空间前缀，只留读者认得的那个名字。 */
+/** 类型节点的名字：去掉泛型实参与命名空间前缀。 */
 function typeNameOf(node: SyntaxNode): string | undefined {
   if (node.type === "generic_type") return node.childForFieldName("type")?.text ?? node.namedChildren.at(0)?.text;
   if (node.type === "user_type") return node.namedChildren.at(-1)?.text;
@@ -50,7 +46,7 @@ function isScalar(name: string): boolean {
   return SCALAR.test(name);
 }
 
-/** 这个声明自己带来的类型形参（`<T>`、`<K, V: Clone>`）：它们是占位名，不是指向某个类型的边。 */
+/** 声明自带的类型形参：占位名，不成边。 */
 function typeParametersOf(node: SyntaxNode): Set<string> {
   const out = new Set<string>();
   const walk = (current: SyntaxNode, depth: number): void => {
@@ -69,12 +65,12 @@ function typeParametersOf(node: SyntaxNode): Set<string> {
   return out;
 }
 
-/** 收集一个声明节点里的类型引用；不钻进嵌套的声明（那是另一个类型的事）。 */
+/** 收集声明节点内的类型引用，不进入嵌套声明。 */
 function collectRelations(node: SyntaxNode, declared: string, resolve: (name: string) => { file?: string; ambiguous?: string[] }): TypeRelationEdge[] {
   const params = typeParametersOf(node);
   const edges: TypeRelationEdge[] = [];
   const seen = new Set<string>();
-  /** 已按字段单独处理过的子树，不再走通用递归 */
+  /** 已按字段处理过的子树，不再走通用递归。 */
   const handled = new Set<number>();
   const add = (name: string, kind: TypeRelationKind, via: string, at: SyntaxNode): void => {
     if (isScalar(name) || name === declared || params.has(name)) return;
@@ -89,8 +85,7 @@ function collectRelations(node: SyntaxNode, declared: string, resolve: (name: st
     if (depth > 12 || edges.length >= MAX_RELATIONS) return;
     const own = contextOf(current);
     const next = own ?? context;
-    // 继承/实现子句里类型名常常直接就是一个 identifier（TS 的 extends_clause 是 identifier + type_arguments），
-    // 不是 TYPE_NODE；只在已经站在继承语境里时认，否则类名、方法名、变量名都会被当成类型引用收走
+    // 继承/实现子句的类型名常是 identifier 而非 TYPE_NODE，只在继承语境里认
     if (next && (next === "extends" || next === "implements") && /^(identifier|type_identifier|qualified_identifier|scoped_identifier|path)$/.test(current.type)) {
       const name = typeNameOf(current);
       if (name) add(name, next, current.type, current);
@@ -101,8 +96,7 @@ function collectRelations(node: SyntaxNode, declared: string, resolve: (name: st
       if (name) add(name, own, current.type, current);
       return;
     }
-    // 返回类型：TS 挂在 return_type 字段（有时没有字段名），Java/Rust/Go 挂在 type 字段；
-    // 不先按字段取出来，就会被当成没有语境的类型引用丢掉
+    // 返回类型：TS 挂 return_type 字段，Java/Rust/Go 挂 type 字段
     if (FUNCTIONISH.test(current.type)) {
       const returned = current.childForFieldName("return_type") ?? current.childForFieldName("type");
       if (returned) {
@@ -110,7 +104,7 @@ function collectRelations(node: SyntaxNode, declared: string, resolve: (name: st
         walk(returned, "returns", depth + 1);
       }
     }
-    // Rust 的 impl Trait for Type：trait 挂在 trait 字段上，节点名里没有 implements 字样
+    // Rust 的 impl：trait 挂在 trait 字段，节点名不含 implements
     if (current.type === "impl_item" || current.type === "impl") {
       const trait = current.childForFieldName("trait");
       if (trait) {
@@ -161,7 +155,7 @@ function declarationKind(node: SyntaxNode): DeclaredType["kind"] {
   return "class";
 }
 
-/** 一个文件的类型关系。`allSymbols` 是整仓符号表：落点靠全仓反查，只看当前文件会把跨文件类型都说成查不到。 */
+/** 一个文件的类型关系；`allSymbols` 须为整仓符号表，落点靠全仓反查。 */
 export function analyzeFileTypes(path: string, root: SyntaxNode, language: string, allSymbols: SymbolInfo[]): TypeRelationFileFact {
   const index = new Map<string, string[]>();
   for (const symbol of allSymbols) {
@@ -196,7 +190,7 @@ export function analyzeFileTypes(path: string, root: SyntaxNode, language: strin
         relations: relations.sort((left, right) => left.line - right.line),
         ...(relations.length >= MAX_RELATIONS ? { truncated: true } : {})
       });
-      // 嵌套声明自己会被走一遍，不在父类型里重复收
+      // 嵌套声明由各自遍历处理，不在父类型里重复收
       for (const child of node.namedChildren) walk(child, depth + 1);
       return;
     }
@@ -212,3 +206,4 @@ export function analyzeFileTypes(path: string, root: SyntaxNode, language: strin
     ...(skipped.length ? { skipped } : {})
   };
 }
+

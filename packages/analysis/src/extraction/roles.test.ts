@@ -18,7 +18,7 @@ describe("文件角色分类（结构规则）", () => {
     expect(isTestPath("src/__tests__/a.test.ts")).toBe(true);
     expect(isTestPath("conftest.py")).toBe(true);
     expect(isTestPath("src/testing/test_x.py")).toBe(true);
-    // 边界：只按「目录段」与明确的文件名约定判，不猜 `testing.py` 这种孤立文件名
+    // 只按目录段与文件名约定判，不猜 `testing.py` 这类孤立文件名
     expect(isTestPath("src/testing.py")).toBe(false);
     expect(isTestPath("src/latest.py")).toBe(false);
     const roles = classifyFileRoles(structureOf({
@@ -37,7 +37,7 @@ describe("文件角色分类（结构规则）", () => {
     }));
     expect(roles.get("main.py")).toBe("core");
     expect(roles.get("svc.py")).toBe("core");
-    // 被入口依赖不改变「它是设施」这个事实：配置模块该按设施读，不该混进执行主干
+    // 设施判定排在入口依赖之前：配置模块仍按 infra 算
     expect(roles.get("core/config.py")).toBe("infra");
     expect(roles.get("util.py")).toBe("support");
     expect(roles.get("lonely.py")).toBe("tool");
@@ -78,11 +78,11 @@ describe("文件角色分类（结构规则）", () => {
       entrypoints: [ENTRY]
     }));
     expect(roles.get("svc/IOrderService.java")).toBe("core");
-    // 控制器注入接口、运行时打到实现：同一拍执行，所以实现算主干
+    // 接口与实现在同一拍执行，实现算 core
     expect(roles.get("svc/OrderServiceImpl.java")).toBe("core");
-    // 实现下面的 Mapper 是第二跳，不算主干（透传只沿派生走，不沿普通依赖延伸）
+    // 实现下面的 Mapper 是第二跳，不算 core：透传只沿派生关系走
     expect(roles.get("svc/OrderMapper.java")).toBe("support");
-    // Base 与 Standalone 谁都不挨着入口，但这一对不是孤立文件，不能算末端工具
+    // 有派生关系的两个文件不算孤立，不进 tool
     expect(roles.get("svc/Standalone.java")).toBe("support");
     expect(roles.get("svc/Base.java")).toBe("support");
   });
@@ -94,7 +94,7 @@ describe("文件角色分类（结构规则）", () => {
       imports: { "main.py": [], "worker.py": ["deep_report.py"] },
       entrypoints: [ENTRY, second]
     }));
-    // deep_report.py 只被第二个入口依赖，仍然算主干
+    // 只被第二个入口依赖仍算 core
     expect(withTwo.get("deep_report.py")).toBe("core");
   });
 
@@ -110,3 +110,4 @@ describe("文件角色分类（结构规则）", () => {
     expect(built.entrypoints).toEqual([ENTRY]);
   });
 });
+

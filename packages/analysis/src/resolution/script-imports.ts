@@ -2,15 +2,14 @@ import { dirname, extname, join, normalize } from "node:path";
 import { nodeNextTargets, specifierExtensions } from "../ingestion/language-extensions.js";
 import type { PathAlias, WorkspacePackage } from "./repo-manifest.js";
 
-/** 通用说明符解析：只服务走到这里的脚本家族（TS / Vue）。py/java/go/rs/cs/cpp 都在 `resolveFileImports` 里被各自的分派截走，不会到这里。 */
+/** 说明符解析：只服务 TS/Vue 家族，其余语言在 `resolveFileImports` 里各自分派。 */
 export function resolveImport(from: string, specifier: string, available: Set<string>, packages: Map<string, WorkspacePackage>, aliases: PathAlias[]): string | undefined {
-  // 落点候选只试发起文件那门语言的扩展名，理由见 `specifierExtensions`
+  // 落点候选只试发起文件语言的扩展名，见 `specifierExtensions`
   const candidates = specifierExtensions(from);
   const tryResolve = (candidate: string): string | undefined => {
     const normalized = normalize(candidate).replaceAll("\\", "/");
     const direct = [normalized];
-    // TypeScript 的 NodeNext 约定：源码里写的是运行时的后缀，实际文件是 TS 的那一个。
-    // 后缀对子是固定的（.js↔.ts、.mjs↔.mts、.cjs↔.cts），所以按表逐项映射，不只写 `.js` 那一支。
+    // NodeNext 约定：源码写运行时后缀，实际文件是 TS 的那一个，按表逐项映射
     const extension = extname(normalized);
     const rewritten = nodeNextTargets[extension];
     if (rewritten) {
@@ -34,9 +33,10 @@ export function resolveImport(from: string, specifier: string, available: Set<st
     }
     return tryResolve(join(pkg.dir, specifier.slice(name.length + 1)));
   }
-  // 工作区包没命中再试 tsconfig paths 别名（`@/stores/user` → `src/stores/user`）；仍未命中就丢弃
+  // 工作区包没命中再试 tsconfig paths 别名
   const alias = aliases.find((item) => specifier.startsWith(item.prefix));
   if (!alias) return undefined;
   const rest = specifier.slice(alias.prefix.length);
   return alias.dirs.map((dir) => tryResolve(join(dir, rest))).find((hit) => hit !== undefined);
 }
+

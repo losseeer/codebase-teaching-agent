@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeFileRegistry } from "./registration.js";
 
-/**
-  两个方向：
-  1. 配置值不能进产物（`.tutor/` 是盘上明文）。
-  2. 「没认出来」不能说成「没有」：认不出来的登记可以不写条目，但不能反过来编一条。
-*/
+/** 两个方向：配置值不进产物；「没认出来」不说成「没有」。 */
 
 const registry = (path: string, code: string[]): string[] => {
   const fact = analyzeFileRegistry(path, code.join("\n"), path.endsWith(".java") ? "java" : "typescript", true);
@@ -95,3 +91,4 @@ describe("注册与配置索引", () => {
     expect(fact.entries.some((entry) => entry.name === "start")).toBe(true);
   });
 });
+

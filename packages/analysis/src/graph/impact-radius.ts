@@ -2,12 +2,7 @@ import type { ImpactResult } from "@codebase-tutor/domain";
 
 import type { DependencyGraph } from "./graph.js";
 
-/**
-  改这些文件会波及谁：沿 import 边与跨文件调用边反向往上走。
-  同文件内的调用不算波及关系：图里同文件调用边是常态，不过滤的话每个改动文件都会给自己
-  贡献一条「X 影响 X」的边，影响范围的箭头清单被自环占满。
-  与 `roles.ts` 的 `buildFileEdges` 同一条口径（那里是 `key === value` 直接不建）。
-*/
+/** 改这些文件会波及谁：沿 import 边与跨文件调用边反向走，同文件调用不算波及。 */
 export function impactRadius(graph: DependencyGraph, changedPaths: string[]): ImpactResult {
   const reverse = new Map<string, { from: string; kind: "import" | "call" }[]>();
   for (const [from, targets] of graph.imports) {
@@ -35,3 +30,4 @@ export function impactRadius(graph: DependencyGraph, changedPaths: string[]): Im
   }
   return { changedPaths, impactedPaths: [...impacted].sort(), edges };
 }
+

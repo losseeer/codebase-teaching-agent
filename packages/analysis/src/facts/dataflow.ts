@@ -4,20 +4,18 @@ import type { SyntaxNode } from "../extraction/parser.js";
 import type { FunctionScope } from "./cfg.js";
 
 /**
-  函数内的数据流：每个变量的定义点、使用点，以及每次使用能被哪些定义到达。
-  用到达定义（沿控制流图的边做前向不动点）；只按「同一函数里赋过值」收口，在分支之间会给出假到达。
-
-  只做函数内这一层：跨过程要别名分析（`obj.field` 指向谁），动态语言在静态前提下精度不足。
-  变量粒度是名字：`a.b = 1` 记成对 `a` 的一次写。
+  函数内数据流：每个变量的定义点、使用点，以及每次使用能被哪些定义到达。
+  到达定义沿控制流图的边做前向不动点。
+  只做函数内一层；变量粒度是名字，`a.b = 1` 记成对 `a` 的一次写。
 */
 
 const MAX_VARIABLES = 200;
 const MAX_USES = 60;
 const MAX_ROUNDS = 60;
 
-/** 赋值、声明、参数、自增、解构——这些都是「写」。 */
+/** 写操作节点：赋值、声明、参数、自增、解构。 */
 const WRITE_NODE = /assignment|declarator|let_declaration|short_var_declaration|parameter|inc_statement|increment_statement|destructured|equals_value_clause/;
-/** 成员访问：点后面那个名字不是对变量的使用。 */
+/** 成员访问节点：点后的属性名不算变量使用。 */
 const MEMBERISH = /^(member_expression|member_chain_expression|attribute|member_access_expression|field_expression|navigation_expression)$/;
 const TARGET_FIELDS = ["name", "left", "pattern", "declarator", "argument", "operand"];
 
@@ -38,7 +36,7 @@ function findIdentifier(node: SyntaxNode, depth = 0): SyntaxNode | undefined {
   return undefined;
 }
 
-/** 被写的那个名字：先按各语法的字段名找，再退到子树里第一个标识符（解构模式取头一个）。 */
+/** 被写的名字：先按字段名找，再取子树首个标识符。 */
 function targetOf(node: SyntaxNode): SyntaxNode | undefined {
   for (const field of TARGET_FIELDS) {
     const target = node.childForFieldName(field);
@@ -92,7 +90,7 @@ function collectSites(body: SyntaxNode, skipName: SyntaxNode | undefined): { def
   return { defs, reads };
 }
 
-/** 站点归块：取行区间最小的包含块（分支块比外层块精确），同一行上的构造会落进同一块。 */
+/** 站点归块：取行区间最小的包含块。 */
 function blockFor(graph: CfgFunction, line: number): number {
   let best: { id: number; span: number } | undefined;
   for (const block of graph.blocks) {
@@ -105,7 +103,7 @@ function blockFor(graph: CfgFunction, line: number): number {
 
 export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionFact {
   const { cfg } = scope;
-  // 从整个函数节点起手而不是只走体：参数是入口处的一次定义，漏掉会把所有对参数的读报成不可达
+  // 从整个函数节点起手，参数算入口处的一次定义
   const { defs, reads } = collectSites(scope.node, scope.node.childForFieldName("name") ?? undefined);
   const sites = [...defs, ...reads];
   for (const site of sites) site.block = blockFor(cfg, site.line);
@@ -146,8 +144,7 @@ export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionF
 
   const reachingLines = (site: Site): number[] => {
     const alive = new Set<string>(incoming.get(site.block) ?? []);
-    // 块内 gen 只留这个块最后一次定义，所以「写在读之前、读完又写一次」这种直线写法里，读之前那次会被挤掉，
-    // 报成「读不到可达定义」。按使用点行号单独捞一次块内定义。
+    // 块内 gen 只留最后一次定义，这里按使用点行号补捞块内定义
     let lastBefore: Site | undefined;
     for (const other of defs) {
       if (other.block === site.block && other.name === site.name && other.line <= site.line && (lastBefore === undefined || other.line > lastBefore.line)) lastBefore = other;
@@ -191,3 +188,4 @@ export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionF
     ...(truncated ? { truncated: true } : {})
   };
 }
+

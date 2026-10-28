@@ -4,10 +4,7 @@ import type { FileEntry } from "@codebase-tutor/domain";
 
 import { slash } from "./repo-paths.js";
 
-/**
- * Go 的 import 路径指向「包」（目录）而非文件：go.mod 的 `module X` 前缀决定仓内边界，
- * 命中后落点为该目录下全部非测试 .go —— 依赖粒度本来就是整个包。
- */
+/** Go 的 import 指向包目录：go.mod 的 `module` 前缀划仓内边界，命中后落该目录下全部非测试 .go 文件。 */
 export function collectGoModules(repositoryPath: string, files: FileEntry[]): Map<string, string> {
   const modules = new Map<string, string>();
   for (const file of files) {
@@ -60,3 +57,4 @@ export function resolveGoImport(specifier: string, goModules: Map<string, string
   }
   return [];
 }
+

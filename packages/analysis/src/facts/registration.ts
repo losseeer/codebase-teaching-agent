@@ -4,15 +4,14 @@ import { extractRouteEndpoints } from "../entrypoints/url-routes.js";
 import { FACTS_VERSION } from "./version.js";
 
 /**
-  注册与配置索引：运行时才连上的关系（注解注入、`app.use`、`META-INF/services` 清单），依赖图看不见。
-  1. 配置文件只记键名，绝不记值：产物落在被学习仓自己的 `.tutor/` 里，是盘上明文。
-  2. 路由不另写判据：复用 `entrypoints/url-routes.ts` 的识别结果，与接缝表说同一条路由。
-  3. 每条都带 `via`（Spring 注解 / 构造注入 / app.use / SPI 清单 / pom 模块…），区分编译器级与正则猜测。
+  注册与配置索引：运行时才连上的关系（注解注入、`app.use`、SPI 清单）。
+  配置文件只记键名，不记值。
+  路由判据复用 `entrypoints/url-routes.ts`，每条带 `via` 说明识别来源。
 */
 
 const MAX_ENTRIES = 200;
 
-/** 认作「登记动作」的注解：出现即说明这个类/方法是容器要管的。 */
+/** 表示「容器接管此类或方法」的注解。 */
 const SPRING_COMPONENT = /@(Service|Component|Repository|Controller|RestController|Configuration|Mapper|FeignClient|Aspect)\b/;
 const SPRING_INJECT = /@(Autowired|Resource|Inject|Qualifier)\b/;
 const DI_CALL = /\.Add(Scoped|Singleton|Transient|KeyedScoped|KeyedSingleton|KeyedTransient)\s*(?:<([^>]+)>)?\s*\(([^)]*)\)/g;
@@ -21,7 +20,7 @@ const GO_REGISTER = /\b(?:http\.HandleFunc|http\.Handle|(?:mux|router|r|e|engine
 const PY_REGISTER = /\b(?:app|router|blueprint)\s*\.\s*(register_blueprint|include_router|add_url_rule|mount)\s*\(\s*([A-Za-z_][\w.]*)/g;
 const RUST_REGISTER = /\.(?:route|layer|nest)\s*\(\s*["'`]([^"'`]*)["'`]/g;
 
-/** 构建清单与配置文件的白名单：只有这些非源码文件进注册索引。 */
+/** 清单与配置文件白名单：仅这些非源码文件进注册索引。 */
 const MANIFEST_KEYS: Record<string, { pattern: RegExp; kind: RegistryKind; via: string; group: number }[]> = {
   "package.json": [
     { pattern: /^\s{2}"(main|module|type|bin|exports|workspaces)"\s*:/, kind: "manifest", via: "package.json 字段名", group: 1 },
@@ -45,7 +44,7 @@ const MANIFEST_KEYS: Record<string, { pattern: RegExp; kind: RegistryKind; via: 
   "requirements.txt": [{ pattern: /^\s*([A-Za-z0-9_.-]+)/, kind: "manifest", via: "依赖声明行（只取包名）", group: 1 }],
 };
 
-/** 这个文件要不要进注册索引（代码文件与清单文件都要，其余不读）。 */
+/** 是否进注册索引：代码文件与清单文件都要。 */
 export function registryEligible(path: string, inGraph: boolean): boolean {
   return inGraph || isManifest(path);
 }
@@ -61,7 +60,7 @@ const clean = (value: string | undefined): string | undefined => {
   return trimmed && trimmed.length <= 120 ? trimmed : undefined;
 };
 
-/** Java/C# 的字段注入与构造注入：接口名 → 字段名，运行时由容器绑到实现。 */
+/** Java/C# 的字段注入与构造注入：接口名映射到字段名。 */
 function injectionEntries(lines: string[], language: string): RegistryEntry[] {
   const rows: RegistryEntry[] = [];
   const declaration = language === "java"
@@ -93,7 +92,7 @@ function injectionEntries(lines: string[], language: string): RegistryEntry[] {
   return rows;
 }
 
-/** yml 的键是分层的：按缩进把父级拼回全名，否则不同段的同名叶子会被并成一个。 */
+/** yml 键按缩进把父级拼回全名。 */
 function yamlKeys(lines: string[]): RegistryEntry[] {
   const rows: RegistryEntry[] = [];
   const stack: { indent: number; key: string }[] = [];
@@ -105,7 +104,7 @@ function yamlKeys(lines: string[]): RegistryEntry[] {
     const key = match[2];
     while (stack.length && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
     push(rows, { kind: "config-key", name: [...stack.map((item) => item.key), key].join("."), via: "配置键（值不进产物）", line: offset + 1 });
-    // 冒号后为空表示这是父级，下一层缩进的键挂在它下面
+    // 冒号后为空表示父级，下一层缩进的键挂在它下面
     if (!line.slice(match[0].length).trim()) stack.push({ indent, key });
   });
   return rows;
@@ -141,16 +140,13 @@ function manifestEntries(path: string, lines: string[]): RegistryEntry[] {
   return rows;
 }
 
-/** 清单类文件名（与 MANIFEST_KEYS 同一份键 + 几个按后缀认的）。 */
+/** 清单类文件名：MANIFEST_KEYS 的键加按后缀识别的几类。 */
 function isManifest(path: string): boolean {
   const tail = path.split("/").pop() ?? path;
   return path.includes("META-INF/services/") || Object.hasOwn(MANIFEST_KEYS, tail) || /\.(csproj|sln)$/.test(tail) || (/\.(yml|yaml|properties)$/.test(tail) && /^(application|config|bootstrap)/.test(tail));
 }
 
-/**
-  一个文件的注册与配置索引。清单类文件没有语法树，`backend` 记为 `none`，
-  但条目是真读数，识别来源由 `via` 说明。
-*/
+/** 一个文件的注册与配置索引；清单文件没有语法树，`backend` 记为 `none`。 */
 export function analyzeFileRegistry(path: string, content: string, language: string, isCode: boolean): RegistryFileFact {
   const lines = content.split("\n");
   const entries: RegistryEntry[] = [];
@@ -207,3 +203,4 @@ export function analyzeFileRegistry(path: string, content: string, language: str
     ...(entries.length >= MAX_ENTRIES ? { skipped: [{ name: path, reason: `登记条目达到 ${MAX_ENTRIES} 条上限，只留前面这些` }] } : {})
   };
 }
+

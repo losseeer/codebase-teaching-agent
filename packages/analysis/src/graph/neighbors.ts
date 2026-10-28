@@ -1,29 +1,26 @@
 import type { RepositoryAnalysis, SymbolInfo } from "@codebase-tutor/domain";
 
-/**
-  调用图邻接：把依赖图里的调用边整理成「它调用谁 / 谁调用它 / 同文件符号定义位置」，只给路径与符号名、不给源码。
-  锚点摘录回答「代码长什么样」，这里回答「该去哪儿找」——相关代码常在别的文件里。
-  */
+/** 调用图邻接：把调用边整理成「它调用谁 / 谁调用它 / 同文件符号位置」，只给路径与符号名。 */
 
 const MAX_CALL_ENTRIES = 8;
 const MAX_LOCAL_SYMBOLS = 12;
 
 export interface CallNeighborhood {
-  /** 本文件里的符号调用了谁（文件:符号，去重后按字典序） */
+  /** 本文件符号调用了谁，`文件:符号`，去重后字典序。 */
   callsOut: string[];
   /** 谁调用了本文件里的符号（文件:符号，去重后按字典序） */
   callsIn: string[];
-  /** 去重前的目标总数，超过上限时调用方据此提示「等 N 项」 */
+  /** 去重前的目标总数，供「等 N 项」提示。 */
   callsOutTotal: number;
   callsInTotal: number;
-  /** 同文件符号定义位置（用于定位，不含源码） */
+  /** 同文件符号定义位置，不含源码。 */
   localSymbols: { name: string; kind: SymbolInfo["kind"]; line: number; endLine: number }[];
 }
 
 export function callNeighborhood(analysis: RepositoryAnalysis, path: string): CallNeighborhood {
   const symbols = analysis.graph.symbols;
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
-  // callerSymbol / calleeSymbol 是符号 id（symbol:路径:名字:行号），这里翻译成 路径:名字；查不到就退回路径
+  // 符号 id 翻译成 路径:名字，查不到退回路径
   const label = (symbolId: string | undefined, fallbackPath: string): string => {
     const symbol = symbolId ? byId.get(symbolId) : undefined;
     return symbol ? `${symbol.path}:${symbol.name}` : fallbackPath;
@@ -48,7 +45,7 @@ export function callNeighborhood(analysis: RepositoryAnalysis, path: string): Ca
   };
 }
 
-/** 渲染成 prompt 段落；没有可说的内容时返回空串（调用方跳过该段）。 */
+/** 渲染成 prompt 段落；无内容时返回空串。 */
 export function callNeighborhoodSection(analysis: RepositoryAnalysis, path: string): string {
   const neighborhood = callNeighborhood(analysis, path);
   const lines: string[] = [];
@@ -65,3 +62,4 @@ export function callNeighborhoodSection(analysis: RepositoryAnalysis, path: stri
   }
   return lines.length ? `调用关系（${path}）：\n${lines.join("\n")}` : "";
 }
+

@@ -4,10 +4,7 @@ import { languageCapabilitiesOf, type CfgBlock, type CfgFileFact, type CfgFuncti
 import { extractSymbolsFromAst, loadSymbolParser } from "../extraction/parser.js";
 import { buildFileCfg } from "./cfg.js";
 
-/**
-  每条断言只问「这条边在源码里真的走得通吗」，不问块数：
-  多开一个汇合块就会改块数，走不通的边却永远是错的。
-*/
+/** 断言只问这条边在源码里是否走得通，不问块数。 */
 
 beforeAll(async () => {
   await loadSymbolParser();
@@ -247,7 +244,7 @@ function expectWellFormed(graph: CfgFunction): void {
 }
 
 describe("逐语言的构造覆盖", () => {
-  // 样例源码放模块层，建图必须留在 it 里面：describe 体在收集阶段就跑，那时 beforeAll 的解析器还没加载
+  // 建图留在 it 里：describe 体在收集阶段就跑，那时解析器还没加载
   const PYTHON = lines(
     "def pick(a):",
     "    if a:",
@@ -508,3 +505,4 @@ describe("逐语言的构造覆盖", () => {
     expect(vue.startLine).toBeGreaterThanOrEqual(2);
   });
 });
+

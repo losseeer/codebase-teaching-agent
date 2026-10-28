@@ -1,7 +1,4 @@
-/**
- * C# 的 `using A.B.C;` 指向命名空间而非文件：全仓建「命名空间 → 声明它的文件」索引
- * （块式与文件式 `namespace X;` 都收），逐级去尾命中后连到该命名空间下的全部文件。
- */
+/** C# 的 using 指向命名空间：全仓建「命名空间 → 文件」索引，块式与文件式声明都收。 */
 export function extractCSharpSpecifiers(content: string): string[] {
   const specifiers: string[] = [];
   for (const line of content.split("\n")) {
@@ -34,3 +31,4 @@ export function resolveCSharpImport(specifier: string, namespaces: Map<string, s
     current = current.slice(0, cut);
   }
 }
+

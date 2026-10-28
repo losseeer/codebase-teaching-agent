@@ -4,21 +4,14 @@ import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 
 /**
-  跨语言接缝（route seam）：HTTP 路由字符串是前端与后端之间唯一共享的标识符，它不产生语法级依赖边，
-  整仓依赖图（L0）看不见这条链；这里补的是「点了按钮之后代码在哪」这一问。
-
-  纯函数、零 LLM、零 I/O（除最后那个读文件的入口）：输入是 `路径 → 文件内容`，输出是「谁调了哪条路由、落在哪个文件」。
-  做成纯函数是为了让接缝判定在没有仓库上下文时也能被单测钉住。
-
-  两条保守口径，直接影响误判率：
-  - 参数一律折成 `{*}`（`{id}` / `:id` / `${id}` / Django 的 `<int:id>`），否则 `/blog/likes/12` 这类形态永远对不上。
-  - 后缀匹配单独标 `via: "suffix"`：网关或 axios 的 baseURL 会给前端路径加 `/api` 这类前缀，整段相等判不住。
-    后缀只在「按 / 分段完整落在尾部」时成立；它是二档证据，必须让调用方知道，不能和整段相等混成一个数。
+  跨语言路由接缝：HTTP 路由字符串是前后端共享的标识符，不产生语法级依赖边。
+  输入「路径 → 文件内容」，输出「谁调了哪条路由、落在哪个文件」。
+  参数一律折成 `{*}`；后缀匹配单独标 `via: "suffix"`，与整段相等分作两档证据。
 */
 
 const PARAMETER = "{*}";
 
-/** 路由归一化：补前导斜杠、去查询串、折参数、折重复斜杠；末尾斜杠去掉（两边都去，避免 /x 与 /x/ 判成两条）。 */
+/** 路由归一化：补前导斜杠、去查询串与片段、折参数、折重复斜杠、去末尾斜杠。 */
 export function normalizeRoute(input: string): string {
   const clean = input.split("?")[0].split("#")[0];
   const withoutParams = clean
@@ -33,7 +26,7 @@ export function normalizeRoute(input: string): string {
 }
 
 const segments = (route: string): string[] => route.split("/").filter(Boolean);
-/** 后缀匹配：提供方按整段落在消费方尾部（`/shop/list` 配 `/api/shop/list`），不做子串匹配。 */
+/** 后缀匹配：提供方整段落在消费方尾部，不做子串匹配。 */
 function suffixMatched(provider: string, consumer: string): boolean {
   const tail = segments(provider);
   const head = segments(consumer);
@@ -67,7 +60,7 @@ function springProviders(path: string, content: string): RouteProvider[] {
     if (classLine >= 0 && index <= classLine) return; // 类级注解本身不构成一条路由
     for (const match of line.matchAll(annotationPattern)) {
       const literals = stringLiterals(match[2] ?? "");
-      if (!literals.length) continue; // 不带路径的 `@GetMapping` 落不出具体串，宁可不产也不猜一条基路径出去
+      if (!literals.length) continue;
       for (const literal of literals) {
         const route = normalizeRoute(`${prefix}${normalizeRoute(literal)}`);
         const key = `${route}@${path}`;
@@ -104,7 +97,7 @@ function pythonProviders(path: string, content: string): RouteProvider[] {
 const consumerPattern = /(?:fetch|axios(?:\.\w+)?|\brequest(?:\.\w+)?|\.axios|\bget|\bpost|\bput|\bdelete|url)\s*[:(=]?\s*["'`]([^"'`]+)["'`]/g;
 const looksLikeRoute = (candidate: string): boolean => candidate.startsWith("/") && candidate.length > 1 && !candidate.startsWith("//") && /\//.test(candidate.slice(1));
 
-/** 消费方（TS/TSX/JS/Vue）：抓「看起来是绝对路径」的字符串字面量，原始值一并留着。 */
+/** 消费方：抓绝对路径形态的字符串字面量，保留原始值。 */
 function jsConsumers(path: string, content: string): RouteConsumer[] {
   const found: RouteConsumer[] = [];
   content.split("\n").forEach((line, index) => {
@@ -118,13 +111,12 @@ function jsConsumers(path: string, content: string): RouteConsumer[] {
 }
 
 /**
-  哪些扩展名参与接缝判定，只列一次：提供方/消费方的分派与读文件的闸门都从这两组派生。
-  同一个问题写两份清单时，加了新语言的规则却漏改另一处，新语言的路由就永远读不出来，读数上看不出这件事。
-  扩展名取自共享能力表（`vue` 也算消费方：SFC 的 `<script>` 里就是 fetch/axios）。
+  参与接缝判定的扩展名，取自共享能力表。
+  提供方与消费方的分派、读文件的闸门都用这两组。
 */
 const providerExtensions = new Set([...LANGUAGE_CAPABILITIES.java.extensions, ...LANGUAGE_CAPABILITIES.python.extensions]);
 const consumerExtensions = new Set([...LANGUAGE_CAPABILITIES.typescript.extensions, ...LANGUAGE_CAPABILITIES.vue.extensions]);
-/** 值得为接缝打开的文件（其余连读都不读）。 */
+/** 需要为接缝读取的扩展名。 */
 export const routeFileExtensions: readonly string[] = [...providerExtensions, ...consumerExtensions];
 
 /** 从一批文件内容里抽出提供方（Java + Python）与消费方（JS 家族）。 */
@@ -132,7 +124,6 @@ export function extractRouteEndpoints(contents: Map<string, string>): { provider
   const providers: RouteProvider[] = [];
   const consumers: RouteConsumer[] = [];
   for (const [path, content] of contents) {
-    // 无后缀路径的 extname 是空串，不在任何集合里，自然跳过
     const extension = extname(path).toLowerCase();
     if (extension === ".java") providers.push(...springProviders(path, content));
     else if (extension === ".py") providers.push(...pythonProviders(path, content));
@@ -141,10 +132,7 @@ export function extractRouteEndpoints(contents: Map<string, string>): { provider
   return { providers, consumers };
 }
 
-/**
-  配对：整段相等优先，配不上再看后缀。每条边都带 `via`，
-  以及「这条消费方字符串一共配到几个提供方」——歧义数是要报给用户的数，不是内部细节。
-*/
+/** 配对：整段相等优先，配不上再看后缀；每条边带 `via` 与歧义数。 */
 export function matchRouteSeams(providers: RouteProvider[], consumers: RouteConsumer[]): RouteLink[] {
   const byRoute = new Map<string, RouteProvider[]>();
   for (const provider of providers) {
@@ -164,7 +152,7 @@ export function matchRouteSeams(providers: RouteProvider[], consumers: RouteCons
   return links;
 }
 
-/** 读文件版的入口（与 `buildDependencyGraph` 同一套用法：仓路径 + 索引到的文件清单）。 */
+/** 读文件版入口：仓路径加索引到的文件清单。 */
 export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
   const handled = new Set(routeFileExtensions);
   const contents = new Map<string, string>();
@@ -173,8 +161,9 @@ export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]
     try {
       contents.set(file.path, readFileSync(join(repositoryPath, file.path), "utf8"));
     } catch {
-      // 读不到就当没有：接缝是加分项，任何一支文件缺失都不能让整张图出不来
+      // 读失败的文件跳过，不中断配对
     }
   }
   return extractRouteEndpoints(contents);
 }
+

@@ -3,10 +3,7 @@ import type { RouteProvider } from "@codebase-tutor/domain";
 
 import { extractRouteEndpoints, matchRouteSeams, normalizeRoute, routeFileExtensions } from "./url-routes.js";
 
-/**
-  接缝判据的单测：真值来自写死的文本样例，不靠跑真仓看效果。
-  重点钉三件容易错的事：参数折叠形态、类级基路径的相接、后缀匹配不能被当成整段相等。
-*/
+/** 接缝判据单测：真值来自写死的文本样例，钉参数折叠、基路径相接与后缀匹配。 */
 
 describe("route seam — 归一化", () => {
   it("四种参数写法折成同一个占位", () => {
@@ -108,3 +105,4 @@ describe("route seam — 读文件的闸门与分派同源", () => {
     expect(consumers.map((consumer) => consumer.route)).toEqual(["/probe/ping", "/probe/pong"]);
   });
 });
+

@@ -1,6 +1,6 @@
 /**
   代码分析流水线：解析、符号与边、入口、图、静态事实。
-  引擎只许从这一个出口取东西（深路径 import 由分层守卫拦）；要 DB 句柄或模型提供者的编排留在引擎侧。
+  引擎只从这一个出口取用；DB 句柄与模型编排留在引擎侧。
 */
 
 export * from "./resolution/call-edges.js";
@@ -39,3 +39,4 @@ export * from "./facts/types.js";
 export * from "./facts/version.js";
 export * from "./ingestion/ignore.js";
 export * from "./summarization/l1-slice.js";
+

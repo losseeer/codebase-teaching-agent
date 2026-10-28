@@ -18,29 +18,21 @@ import { collectPathAliases, collectWorkspacePackages } from "../resolution/repo
 
 export interface DependencyGraph {
   imports: Map<string, string[]>;
-  /**
-    文件 → 它 import 了但仓内解析不到的裸包名（图上「边界之外」那一栏）。
-    刻意与 `imports` 分家：这里没有一个字是边，`impactRadius`、角色分层、出题缓存键都不看它。
-    没采到外部名的语言（Rust 的 `use serde::` 与 C/C++ 的 `<...>` 头）不写键，读侧按「未采集」处理。
-  */
+  /** 仓内解析不到的裸包名；不是依赖边，`impactRadius` 与角色分层都不看它。 */
   externals: Map<string, string[]>;
   calls: CallEdge[];
-  /** 类型派发边（Java/C# 的 extends/implements 落点）；详见 shared 的 `TypeDispatchEdge` 注释。 */
+  /** 类型派发边（Java/C# 的 extends/implements 落点）。 */
   dispatch: TypeDispatchEdge[];
   symbols: SymbolInfo[];
   entrypoints: SourceAnchor[];
   semanticBackend: "lsp" | "static";
   lspStatus: DependencyGraphData["lspStatus"];
-  /** 符号抽取走的哪条路（`ast` 准确 / `regex` 回落）；回落原因见 `parseBackendReason`。 */
+  /** 符号抽取走的路：`ast` 或 `regex` 回落。 */
   parseBackend: ParseBackendStatus["backend"];
   parseBackendReason?: string;
 }
 
-/**
- * Produces an import graph plus project-local call graph. The static analyzer is
- * deliberately complete enough for the fallback path; LSP availability is surfaced
- * separately so callers never mistake a degraded result for semantic certainty.
- */
+/** 建导入图、调用图、符号表与入口清单；解析后端与 LSP 状态一并外露。 */
 export function buildDependencyGraph(repositoryPath: string, files: FileEntry[]): DependencyGraph {
   const available = new Set(files.map((file) => file.path));
   const packages = collectWorkspacePackages(repositoryPath, files);
@@ -52,8 +44,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
     contents.set(file.path, content);
     symbols.push(...extractSymbols(file.path, content));
   }
-  // Java 的 import 指向「全限定类名」、Go 的 import 指向「包目录」、C# 的 using 指向「命名空间」，
-  // 都要先建全仓索引才能落点，故内容先读全再解析依赖
+  // Java/Go/C# 的落点都要先建全仓索引，故内容先读全再解析依赖
   const javaTypes = collectJavaTypes(contents);
   const goModules = collectGoModules(repositoryPath, files);
   const goFilesByDir = collectGoFiles(files);
@@ -64,7 +55,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
   for (const [path, content] of contents) {
     const resolved = resolveFileImports(path, content, { available, packages, javaTypes, javaRoots: packageRoots(javaTypes.keys()), goModules, goFilesByDir, csNamespaces, csRoots: packageRoots(csNamespaces.keys()), aliases });
     imports.set(path, resolved.paths);
-    // 没有外部名的文件不写键：Map 里少一条 = 「这个文件不 import 任何仓外的东西」，是真结论
+    // 无外部名的文件不写键，缺键即「无仓外引用」
     if (resolved.externals.length) externals.set(path, resolved.externals);
   }
   const calls = extractCalls(contents, symbols, imports, javaTypes);
@@ -89,7 +80,7 @@ export function buildDependencyGraph(repositoryPath: string, files: FileEntry[])
 }
 
 function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {
-  // java 没有接入 LSP（符号来自 tree-sitter），不进探测列表
+  // Java 未接入 LSP，不进探测列表
   const languages = new Set(files.map((file) => file.extension === ".py" ? "python" as const : tsFamilyExtensions.has(file.extension) ? "typescript" as const : undefined).filter((value): value is "typescript" | "python" => Boolean(value)));
   return [...languages].map((language) => {
     const command = language === "typescript" ? "typescript-language-server" : "pylsp";
@@ -101,3 +92,4 @@ function detectLspStatus(files: FileEntry[]): DependencyGraphData["lspStatus"] {
     }
   });
 }
+

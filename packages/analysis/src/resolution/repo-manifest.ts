@@ -15,7 +15,7 @@ export interface PathAlias {
   dirs: string[];
 }
 
-/** 去掉 JSON 里的注释与尾逗号：tsconfig 惯例是带注释的 JSONC，状态机走字符是为了不错误影响字符串内的 `//`（如 `http://`）。 */
+/** 去掉 JSONC 的注释与尾逗号，按字符扫描以避开字符串内的 `//`。 */
 function stripJsonComments(source: string): string {
   let out = "";
   let inString = false;
@@ -49,10 +49,7 @@ function stripJsonComments(source: string): string {
   return out;
 }
 
-/**
- * 仓库根 tsconfig 的 `compilerOptions.baseUrl + paths` → 别名前缀表（Vue/TS 项目 `@/x` 这类导入的唯一仓内依据）。
- * 只读根 tsconfig、只收通配条目（`"x/*"`）；exact 别名与 extends 继承的 paths 不在此列，解析不到就丢弃。
- */
+/** 根 tsconfig 的 `baseUrl` + `paths` 转别名前缀表，只收通配条目。 */
 export function collectPathAliases(repositoryPath: string): PathAlias[] {
   const manifest = join(repositoryPath, "tsconfig.json");
   if (!existsSync(manifest)) return [];
@@ -73,7 +70,7 @@ export function collectPathAliases(repositoryPath: string): PathAlias[] {
   return [];
 }
 
-/** 收集仓库内各 package.json 的 name → 包目录/入口（monorepo 工作区包，供裸说明符解析）。 */
+/** 各 package.json 的 name 到包目录与入口，供裸说明符解析。 */
 export function collectWorkspacePackages(repositoryPath: string, files: FileEntry[]): Map<string, WorkspacePackage> {
   const packages = new Map<string, WorkspacePackage>();
   for (const file of files) {
@@ -87,3 +84,4 @@ export function collectWorkspacePackages(repositoryPath: string, files: FileEntr
   }
   return packages;
 }
+
