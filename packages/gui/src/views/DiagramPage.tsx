@@ -16,10 +16,9 @@ import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } fro
 import { emit } from "../journal";
 import { showToast, toastFailure } from "../ui/toast";
 
-// 宏观设计 = agent 画图工作区，两栏：左栏是图库（搜索 / 新建 / 一张图一行 + ⋯ 菜单）与项目目录
-// （沿用 `RepoTree` 与栏宽拖拽）两个 tab，右栏是画布那一列（`DiagramCanvas`）。
-// 这一页的请求全是免费读（列图库 / 读一张图 / 改名 / 删 / 几何 PUT / 恢复版本），一次都不碰模型。
-// 两条写路径分家：界面只写几何，结构改动只有对话里的 agent 一条路（`set_diagram`），不给加删节点的按钮。
+// 宏观设计 = agent 画图工作区：左栏图库与项目目录两个 tab，右栏画布。
+// 本页请求全是免费读，不碰模型。
+// 界面只写几何；结构改动只经对话里的 agent（set_diagram），无增删节点按钮。
 
 /** 按仓记「正打开哪张图 + 左栏停在哪个 tab」。 */
 const MAP_MEMORY_KEY = "codebase-tutor.map-memory";
@@ -34,7 +33,7 @@ function readMapMemory(repositoryId: string): MapMemory {
   try {
     raw = localStorage.getItem(MAP_MEMORY_KEY);
   } catch {
-    return EMPTY_MEMORY; // 存储不可用：本次会话照常工作，只是不记得上次开到哪张
+    return EMPTY_MEMORY; // 存储不可用时照常工作
   }
   if (!raw) return EMPTY_MEMORY;
   let parsed: unknown = null;
@@ -61,7 +60,7 @@ function writeMapMemory(repositoryId: string, memory: MapMemory): void {
     map[repositoryId] = memory;
     localStorage.setItem(MAP_MEMORY_KEY, JSON.stringify(map));
   } catch {
-    /* 写失败不打断用户：下次进来重新选 */
+    /* 写失败不打断操作 */
   }
 }
 
@@ -106,14 +105,13 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
 
   useEffect(() => { writeMapMemory(repositoryId, { openId, railTab }); }, [repositoryId, openId, railTab]);
 
-  /* ---------- 与对话栏之间的两格：正打开的图（送出去）与卡片点开的图（收进来） ---------- */
-  // 这一页是 `openDiagram` 的唯一写入方：绑定行显示「当前图：X」，map-chat 也把它当作用域上送。
-  // 对话栏卡片反过来通过 `pendingDiagramOpen` 投递一次「点开这张」，取完即清。
+  /* ---------- 与对话栏之间的两格：打开的图与卡片点开的图 ---------- */
+  // 本页是 openDiagram 唯一写入方；卡片经 pendingDiagramOpen 投递开图，取完即清
   useEffect(() => {
     if (!openId) { if (t.openDiagram) t.setOpenDiagram(null); return; }
     const summary = diagrams.find((item) => item.id === openId);
     const name = diagram?.id === openId ? diagram.name : summary?.name;
-    if (!name) return; // 名字还没到位：等下一拍，不送假名字给模型
+    if (!name) return; // 名字未到位先等一拍，不上送假名字
     if (t.openDiagram?.id === openId && t.openDiagram.name === name) return;
     t.setOpenDiagram({ id: openId, name });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,7 +175,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     return () => { current = false; };
   }, [repositoryId, openId, visible, diagramNonce, t.dataVersion, applyDiagram]);
 
-  /** 换仓：上一仓欠下的位置队列整条作废（那些节点 id 不属于本仓的图）。 */
+  /** 换仓：上一仓的欠下位置队列作废。 */
   useEffect(() => {
     pendingPositions.current.clear();
     queueOwner.current = null;
@@ -214,14 +212,14 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
 
   /* ---------- 几何落盘：去抖 + 在途合并，乐观更新本地那份 ---------- */
   const pendingPositions = useRef(new Map<string, DiagramPosition>());
-  /** 这批位置属于哪张图：切图前先把上一张欠的那趟写给原图，不能顺着新的 openId 落错地方。 */
+  /** 这批位置属于哪张图；切图前先写给原图。 */
   const queueOwner = useRef<string | null>(null);
   const geometryTimer = useRef(0);
   const geometryInFlight = useRef(false);
   const diagramIdForGeometry = useRef<string | null>(openId);
   diagramIdForGeometry.current = openId;
 
-  /** 用 ref 拆开去抖计时器与发送函数的互相引用。 */
+  /** 去抖计时器与发送函数经 ref 衔接。 */
   const sendNow = useRef<() => void>(() => undefined);
   const scheduleGeometry = useCallback((): void => {
     window.clearTimeout(geometryTimer.current);
@@ -239,7 +237,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     setSaveError("");
     try {
       const { diagram: written } = await api.saveDiagramGeometry(repositoryId, diagramId, entries);
-      // 保存读数只说真发生过的写入：位置用本地那份（已是拖完的），名字/来源/时间取引擎回读
+      // 名字/来源/时间取引擎回读，位置保留本地拖完的那份
       setDiagram((current) => (current && current.id === written.id ? { ...current, name: written.name, source: written.source, updatedAt: written.updatedAt } : current));
       setDiagrams((current) => current.map((item) => (item.id === written.id ? { ...item, name: written.name, updatedAt: written.updatedAt } : item)));
       setSaveState("saved");
@@ -253,13 +251,13 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
   }, [repositoryId, scheduleGeometry]);
   sendNow.current = (): void => { void sendGeometry(); };
 
-  /** 切图或删图前把上一张欠的位置送出去，不让拖动静默丢掉。 */
+  /** 切图或删图前先送出上一张欠的位置。 */
   const flushQueuedGeometry = useCallback((): void => {
     window.clearTimeout(geometryTimer.current);
     sendNow.current();
   }, []);
 
-  /** 拖动结束：位置先落到本地那份，再排队一次 PUT；不重取整张图，也不产生版本。 */
+  /** 拖动结束：先写本地，再排队一次 PUT；不重取整图、不产生版本。 */
   const handleNodeMove = useCallback((commit: DragCommit): void => {
     const diagramId = diagramIdForGeometry.current;
     if (!diagramId) return;
@@ -349,7 +347,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     })();
   }, [repositoryId, refreshGallery]);
 
-  /** 图库里点「版本历史」：没打开的图先取，取完再让画布弹菜单。 */
+  /** 图库点「版本历史」：未打开的图先取回再弹菜单。 */
   const openVersions = useCallback((item: DiagramSummary): void => {
     if (item.id === openIdRef.current) { setVersionsSignal((value) => value + 1); return; }
     versionsWantedFor.current = item.id;
@@ -383,7 +381,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     emit(repositoryId, "file_anchored", { path, source: "anchor" });
   }, [repositoryId, t]);
 
-  /** 绑定这一格给对话：核得上就带上它关联的文件清单，核不上就解绑退回全局视野。 */
+  /** 绑定节点给对话：核得上带文件清单，核不上退回全局视野。 */
   const bindNode = useCallback((node: DiagramNode): void => {
     const files = filesOf(node);
     if (files.length) {
@@ -411,7 +409,6 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     if (node) emit(repositoryId, "flow_node_selected", { node_id: node.id, title: node.label.slice(0, 120), view: "canvas" });
   }, [repositoryId]);
 
-  /** App 接了对话栏就用它，没接就填进本地输入框；两条路都不发请求，发送归用户。 */
   const quickPrompt = useCallback((text: string): void => {
     const handler = onQuickPromptRef.current;
     if (handler) { handler(text); return; }
@@ -514,7 +511,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
   );
 }
 
-/** 新建后先在本地插一条摘要，数字全部来自引擎刚返回的那张图。 */
+/** 新建后本地插一条摘要，数字取引擎返回的图。 */
 function createdSummary(diagram: Diagram): DiagramSummary {
   return {
     id: diagram.id,
@@ -527,7 +524,7 @@ function createdSummary(diagram: Diagram): DiagramSummary {
   };
 }
 
-/** 顶层目录的语义标注：说明这批文件是干什么的，不是文件数。 */
+/** 顶层目录的语义标注。 */
 const GROUP_LABELS: { pattern: RegExp; label: string }[] = [
   { pattern: /^(src|lib|app|apps|packages|core|internal|server|client|service|services)$/i, label: "核心代码" },
   { pattern: /^(tests?|spec|specs|__tests__|e2e)$/i, label: "行为证据" },

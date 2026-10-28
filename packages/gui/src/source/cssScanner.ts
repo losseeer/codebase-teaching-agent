@@ -66,7 +66,7 @@ export function scanCss(line: string, state: ScanState): Token[] {
       }
     }
 
-    // CSS 的标识符可含连字符（pane-header / -webkit-box），不能用通用 IDENTIFIER 先切
+    // CSS 标识符可含连字符，不能先用通用 IDENTIFIER 切
     const word = /^-?[A-Za-z_][A-Za-z0-9_-]*/.exec(rest);
     if (word) {
       const text = word[0];
@@ -82,7 +82,7 @@ export function scanCss(line: string, state: ScanState): Token[] {
       } else if (sawColon) {
         out.plain(text);
       } else {
-        // 选择器位置（元素 / 嵌套选择器）
+    // 选择器位置
         out.push(text, "type");
       }
       index += text.length;

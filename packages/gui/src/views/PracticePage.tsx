@@ -18,10 +18,9 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { loadActiveTheme, loadPracticeThemes, saveActiveTheme, savePracticeThemes, COMPREHENSION_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
-// 练习评估工作区（两栏）：左 = 主题 chips + 本主题已练卡片 + 防泄题脚注，
-// 右 = 空态 → 出题中 → 题面与作答件（按 `inputMode`）→ 判分面板。
-// 顶栏只报 `api.getPractice` 的真读数，没读到就明说；出题中只说「正在出题」，不画假进度。
-// 判分说法只由 `result.gradingMode` 决定，复习读数只取 `result.review` 里真存在的字段。
+// 练习评估工作区两栏：左 = 主题 chips 与本主题已练卡片，右 = 出题与判分。
+// 顶栏只报 getPractice 的真读数；出题中不画假进度。
+// 判分说法只由 result.gradingMode 决定，复习读数只取 result.review 里存在的字段。
 
 function gradingLabel(mode: ExerciseGradingMode): string {
   if (mode === "execution") return "跑测试判分";
@@ -35,8 +34,8 @@ function llmUnitNonce(unitId: string): number | null {
   return Number.isFinite(nonce) ? nonce : null;
 }
 
-/** 规则题单元 id 的族别段 → 中文短名（单元 id 第一段是 `impact` / `workflow` / `implementation` 或 `change-localization`）。 */
-const FAMILY_WORD: Record<string, string> = { impact: "影响面", workflow: "流程", implementation: "实现", change: "定位" };
+/** 规则题单元 id 的首段 → 中文短名。 */
+const FAMILY_WORD: Record<string, string> = { impact: "影响面", implementation: "实现" };
 
 function unitName(unitId: string): string {
   if (unitId.startsWith("llm:")) {
@@ -44,8 +43,7 @@ function unitName(unitId: string): string {
     return `主题练习 #${nonce !== null ? nonce + 1 : unitId}`;
   }
   const [head, ...rest] = unitId.split(":");
-  const word = FAMILY_WORD[head] ?? FAMILY_WORD[head.split("-")[0] ?? head] ?? "";
-  // 取最像路径的那一段的文件名；没有路径就取最后一段非纯数字
+  const word = FAMILY_WORD[head] ?? "";
   const pathLike = rest.find((segment) => segment.includes("/"));
   const tail = pathLike ? pathLike.split("/").pop() ?? "" : rest.filter((segment) => segment && !/^\d+$/.test(segment)).pop() ?? head;
   return word ? `${tail} · ${word}` : tail || unitId;
@@ -71,10 +69,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [text, setText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  /** 代码题的工作副本：换题就整份重置成引擎下发的 `exercise.code.files` */
+  /** 代码题工作副本；换题即重置。 */
   const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
   const [activeCodePath, setActiveCodePath] = useState("");
-  /** 讲评是按需的第二趟：点过一次才出现，发的是被判的那一版代码，不是当前编辑器里的草稿 */
+  /** 讲评为按需第二趟；提交的是被判版本，不是编辑器草稿 */
   const [submittedFiles, setSubmittedFiles] = useState<{ path: string; contents: string }[]>([]);
   const [explanation, setExplanation] = useState("");
   const [explaining, setExplaining] = useState(false);
@@ -91,18 +89,16 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
 
-  /** 进度读取：成功也要清掉旧错误；视图常驻挂载靠 hidden 切换，只在 tab 被打开过之后读一次。
-      生成与提交后仍走 `refreshSummary()` 主动刷新。 */
+  /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
   const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
     api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
-  // 出题分派：理解题走规则出题族，自定义主题 chip 走 LLM 出题族（family 对用户不可见）。
-  // 「换一题」对 LLM 题是 variantNonce+1（出新题、旧题保留），对规则题按 targetUnitId 重出。
+  // 出题分派：理解题走规则族，自定义主题走 LLM 族；LLM 题「换一题」是 variantNonce+1，旧题保留。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
-    // 一次只发一趟：卡片那条路径没有 disabled，连点会并发多个 POST（LLM 题就是并发付费）
+    // 一次只发一趟，连点不并发 POST
     if (loading) return;
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
     const isLlmFamily = activeModule !== COMPREHENSION_THEME_ID;
@@ -148,7 +144,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   }, [exercise?.id]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  /** 重复点同一 chip（id 未变）不记事件；`list` 供新增/删除主题传入尚未提交的新列表，否则 label 取到旧值。 */
+  /** 重复点同一 chip 不记事件；list 传入新增/删除时尚未提交的新列表。 */
   const switchModule = (id: string, list: PracticeTheme[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
@@ -157,7 +153,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const submit = async (): Promise<void> => {
     if (!exercise) return;
     setLoading(true); setError("");
-    // 提交动作先记；判分结果由 journal 的 exercise_result 记。
+    // 提交动作先记；判分结果由 exercise_result 记
     emit(repositoryId, "exercise_submitted", { exercise_id: exercise.id, kind: exercise.kind, module: activeModule, target_unit: exercise.targetUnitId });
     try {
       const answer = exercise.inputMode === "multi_select" ? { selectedIds } : exercise.inputMode === "code" ? { files: codeFiles } : { text };
@@ -192,7 +188,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名主题";
   const anchor = exercise?.anchors[0];
-  /** 面板只渲染前 MAX_RENDER_LINES 行，锚点行落在范围外就不能说「已高亮」。 */
+  /** 面板只渲染前 MAX_RENDER_LINES 行；锚点行在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
     ? anchorRenderable
@@ -207,7 +203,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     ? `${(summary.mastery.reduce((sum, record) => sum + record.level, 0) / summary.mastery.length).toFixed(1)} / 5`
     : summary ? "暂无记录" : "读数未到";
   const repositoryName = workspace.repositoryPath.split("/").filter(Boolean).pop() ?? repositoryId;
-  /** 判分后的选项着色只认这三个真数组：`matched`+`missing` 是标准答案项，`unexpected` 是多选的项。 */
+  /** 判分后选项着色依据：matched+missing 为标准答案项，unexpected 为多选项。 */
   const expectedOptionIds = result && result.gradingMode === "set_match"
     ? new Set([...(result.matchedIds ?? []), ...(result.missingIds ?? [])])
     : null;
@@ -275,7 +271,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="banner banner-danger">
                 <Icon name="alert" size={14} />
                 <span className="banner-text">{error}</span>
-                {/* 「重新导入 / 源码已更新」两类原因是产物与实际文件脱节，出路只有去导入页重跑 */}
+                {/* 产物与文件脱节类原因：出路是去导入页重跑 */}
                 {/重新导入|已更新/.test(error) ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
                 ) : null}
@@ -436,7 +432,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
 function GradedPanel({ exercise, result, explanation, explaining, onExplain, onRedo }: { exercise: Exercise; result: ExerciseResult; explanation: string; explaining: boolean; onExplain: () => void; onRedo: () => void }): ReactElement {
   const optionLabel = (id: string): string => exercise.options?.find((item) => item.id === id)?.label ?? id;
-  /** 逐条判定行只有两种真数据可列：集合匹配的三类 id，与沙箱那条总体判定（沙箱不下发逐条断言名）。 */
+  /** 逐条判定行两种来源：set_match 的 id 数组；execution 只有总体判定。 */
   const rows: { passed: boolean; label: string }[] = result.gradingMode === "execution"
     ? [{ passed: result.passed, label: result.passed ? "测试全部通过" : "测试没有全部通过" }]
     : result.gradingMode === "set_match"
@@ -491,10 +487,7 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
   );
 }
 
-/**
-  左栏的已练卡片：`.d-score` 报掌握度档位（0–5），配色按有没有通过记录走。
-  `dueAt` 只存在于 `ExerciseResult.review`，其余卡片如实显示上次练习时间，不编日期。
- */
+/** 已练卡片：报掌握度档位；复习日期只存在于判分结果的 review。 */
 function DoneCard({ record, selected, dueAt, failed, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; failed: string | null; onPick: () => void }): ReactElement {
   const last = record.lastPracticedAt ? dateText(record.lastPracticedAt) : "";
   return (
@@ -513,10 +506,7 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
   );
 }
 
-/**
-  题面：引擎不再按长度否决题目，长题面在这里兜住——超过 6 行或 240 字才给「展开」，默认收起。
-  折叠只看这一条题面，是新题就重新收起：把展开态存进本地偏好，会让下一道题沿用上一道的开关，读起来像随机行为。
- */
+/** 题面：超 6 行或 240 字才出展开按钮；折叠状态不跨题保留。 */
 function ExercisePrompt({ text }: { text: string }): ReactElement {
   const [open, setOpen] = useState(false);
   const long = text.length > 240 || text.split("\n").length > 6;

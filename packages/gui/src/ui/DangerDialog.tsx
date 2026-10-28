@@ -1,14 +1,10 @@
 import { useEffect, useRef, type ReactElement } from "react";
 
-/**
-  破坏性动作的确认弹窗：一条说明加出路——取消、可选的「不删也能办的另一条出路」、要点名才点的删除。
-  删除做成独立按钮，默认焦点落在非破坏的那一颗：回车不许直接删。
-  弹窗里写明删的是哪一份东西，删除不可恢复这句话固定在按钮上方。
-  */
+/** 破坏性动作确认弹窗：默认焦点落在非破坏按钮。 */
 export function DangerDialog({ title, body, keepLabel, deleteLabel, onKeep, onDelete, onClose }: {
   title: string;
   body: string;
-  /** 只在「保留另一份东西」确实是一种出路时给；没有就只出取消与删除两颗。 */
+  /** 「保留不删」出路存在时才给。 */
   keepLabel?: string;
   onKeep?: () => void;
   deleteLabel: string;

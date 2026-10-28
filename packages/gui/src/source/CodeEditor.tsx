@@ -7,15 +7,15 @@ import { python } from "@codemirror/lang-python";
 import { java } from "@codemirror/lang-java";
 import type { ExerciseLanguage } from "@codebase-tutor/domain";
 
-// 练习页代码编辑器：CodeMirror 6，只装高亮与基础交互，不装 lint / 补全 / 语法检查——
-// 判分只认沙箱里那组测试（见 engine `exercises/code-generate.ts`），编辑器给出的「看起来对」不是判据。
+// 练习页代码编辑器：CodeMirror 6，只装高亮与基础交互。
+// 判分只认沙箱测试，编辑器不带 lint / 补全 / 语法检查。
 export interface CodeEditorFile {
   path: string;
   contents: string;
 }
 
 function languageExtension(path: string, declared: ExerciseLanguage) {
-  // 文件名优先，声明的语言档兜底。
+  // 文件名优先，声明语言为辅
   if (path.endsWith(".py")) return python();
   if (path.endsWith(".java")) return java();
   if (path.endsWith(".ts") || path.endsWith(".tsx") || path.endsWith(".js") || path.endsWith(".jsx")) return javascript({ typescript: path.endsWith(".ts") || path.endsWith(".tsx") });
@@ -24,7 +24,7 @@ function languageExtension(path: string, declared: ExerciseLanguage) {
 
 export function CodeEditor({ file, language, resetKey, ariaLabel, onChange }: { file: CodeEditorFile; language: ExerciseLanguage; resetKey: string; ariaLabel: string; onChange: (contents: string) => void }): ReactElement {
   const host = useRef<HTMLDivElement>(null);
-  // onChange 走 ref：编辑器只在换题/换文件时重建，键入过程中重建会丢光标与撤销栈。
+  // onChange 走 ref：键入过程中不重建编辑器，避免丢光标与撤销栈
   const emit = useRef(onChange);
   emit.current = onChange;
 
@@ -44,7 +44,7 @@ export function CodeEditor({ file, language, resetKey, ariaLabel, onChange }: { 
       }),
       parent: host.current
     });
-    // 卸载必须 destroy：CodeMirror 在 document 上挂了键盘与剪贴板监听。
+    // 卸载必须 destroy：CodeMirror 挂在 document 上的监听要一并解除
     return () => view.destroy();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- file.contents 只作初始文档读一次，换题信号是 resetKey
   }, [resetKey, file.path, language]);

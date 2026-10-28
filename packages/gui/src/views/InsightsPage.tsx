@@ -6,11 +6,11 @@ import { LlmSettingsControl } from "../agent/LlmSettings";
 import { Icon } from "../ui/icons";
 import { PageTopbar } from "./WorkspaceChrome";
 
-// 成本监控页：预算卡 → 指标 tiles → 逐日条形 → 场景 / Provider / 计价三表。
-// 读数全部来自引擎对本月 `token_usage` 事件的聚合（`cost/cost.ts`），这里只做呈现与分桶明细，不二次估算；
-// 单价未配时金额恒为 0，这一事实必须显式说出来。
+// 成本监控页：预算卡 → 指标 tiles → 逐日条形 → 三表。
+// 读数全来自引擎本月 token_usage 聚合，本页不二次估算。
+// 单价未配时金额恒为 0，必须显式说出来。
 
-/** 现在还在产这个数的档 → 界面叫法。取值以引擎写 `token_usage` 的调用点为准。 */
+/** 场景 → 界面叫法；取值以引擎写 token_usage 的调用点为准。 */
 const SCENE_LABEL: Record<string, string> = {
   teach: "代码教学",
   map_chat: "宏观设计对话",
@@ -24,26 +24,10 @@ const SCENE_LABEL: Record<string, string> = {
   unknown: "未标注"
 };
 
-/**
-  账本里出现过、引擎已不再产出的档：这些是**已停用步骤的历史行**，改名或删行都是造假（事实线不回填），
-  但混在「这个月钱花在哪」里会被读成还在花钱，所以标出来。
-*/
-const RETIRED_SCENE_LABEL: Record<string, string> = {
-  course_map: "课程地图",
-  flow_map: "流程全景",
-  module_entries: "模块入口",
-  architecture_map: "架构全景",
-  "map.redraft": "整图重画"
-};
+/** 未登记的场景原样显示引擎键名。 */
+const sceneLabel = (key: string): string => SCENE_LABEL[key] ?? key;
 
-/** 已停用的档排到最后：那是本月账本里的历史行，不是「钱现在花在哪」。 */
-const isRetiredScene = (key: string): boolean => key in RETIRED_SCENE_LABEL;
-/** 没登记的场景不猜中文：原样显示引擎账本上的键，比编一个名字诚实（报表要能与之对上）。 */
-const sceneLabel = (key: string): string => SCENE_LABEL[key] ?? (isRetiredScene(key) ? `${RETIRED_SCENE_LABEL[key]}（已停用）` : key);
-
-// 金额一律按人民币显示（¥）：字段名里的 `Usd` / `USD_PER_MILLION` 是存量键名
-// （已落进 `llm-settings.json`、`repository_state.settings_json` 与接口契约，不能改），
-// 引擎算出来的数原样带 ¥，不做汇率乘除。
+/** 金额显示为人民币；Usd 是存量键名，不做汇率换算。 */
 const usd = (value: number): string => `¥${value.toFixed(4)}`;
 const tokensText = (value: number): string => value.toLocaleString();
 
@@ -52,7 +36,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   const [budget, setBudget] = useState("5");
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  /** 每次拉取先清掉上一回合的错误，读取成功后不留残留红字。 */
+  /** 每次拉取先清上一轮错误。 */
   const refresh = useCallback((): void => {
     setError("");
     api.getCost(workspace.repositoryId)
@@ -60,8 +44,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取成本"));
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
-  // 引擎只收「有限非负数」：`Number("") === 0`，空串会被当成把月预算改成 0，
-  // 那一档让此后所有付费分支都判为达到预算上限。
+  // 空串经 Number() 变 0，等于把月预算上限设成 0，必须挡住
   const budgetNumber = Number(budget);
   const budgetValid = budget.trim() !== "" && Number.isFinite(budgetNumber) && budgetNumber >= 0;
   const saveBudget = async (): Promise<void> => {
@@ -76,8 +59,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
   };
 
   const pricingConfigured = cost?.pricingConfigured ?? true;
-  /** 读数没拿到（首帧或拉取失败）时 `cost` 是 null，此时不能出现任何「正常」字样：
-      闸门生效与否、金额、剩余都来自那一次读取。 */
+  /** cost 为 null（首帧或拉取失败）时不得显示「正常」字样。 */
   const readoutReady = cost !== null;
   const usedRatio = cost && cost.monthlyBudgetUsd > 0 ? Math.min(1, cost.estimatedCostUsd / cost.monthlyBudgetUsd) : 0;
   const overBudget = readoutReady && pricingConfigured && cost.mode === "degraded";
@@ -181,7 +163,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
                 <table className="table">
                   <thead><tr><th>场景</th><th className="num">回合</th><th className="num">输入</th><th className="num">输出</th></tr></thead>
                   <tbody>
-                    {[...cost.byScene].sort((a, b) => Number(isRetiredScene(a.label)) - Number(isRetiredScene(b.label))).map((row, index) => (
+                    {[...cost.byScene].map((row, index) => (
                       <tr key={`${row.label}-${String(index)}`}>
                         <td title={row.label}>{sceneLabel(row.label)}</td>
                         <td className="num">{row.turns}</td>

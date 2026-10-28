@@ -9,9 +9,9 @@ import { dateText } from "../ui/labels";
 import { MenuButton, PopMenu, type MenuItem } from "../ui/PopMenu";
 import { PageTopbar } from "./WorkspaceChrome";
 
-// 导入仓库页：绝对路径 → 分相进度 → 成本报告 → 已导入仓库清单。
-// 完成后通过 `onImported` 把 workspace 交给 App，再跳宏观设计。
-// 这一页是唯一还能改工作区的地方（侧栏收起时全局切换器不在视野内），所以必须能直接切到已导入的仓。
+// 导入仓库页：路径 → 分相进度 → 成本报告 → 已导入仓库清单。
+// 完成后经 onImported 把 workspace 交给 App，再跳宏观设计。
+// 本页可直接切换到已导入的仓。
 
 interface Props {
   onImported: (workspace: Workspace) => void;
@@ -38,28 +38,27 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [commentMode, setCommentMode] = useState(false);
   const [job, setJob] = useState<ImportJob | null>(null);
   const [error, setError] = useState("");
-  /** 引擎里已经没有这个任务了（进程换过就会这样）：进度条不能继续停在最后一帧数字上装「还在跑」。 */
+  /** 引擎里已无此任务：停止显示进度，如实报读不到。 */
   const [orphaned, setOrphaned] = useState(false);
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
-  /** 打开着操作菜单的那一行（连同它的锚点按钮，菜单靠锚点定位）。 */
+  /** 开着操作菜单的行（菜单靠锚点按钮定位）。 */
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
   const navigate = useNavigate();
-  /** 预算闸门失效提示：引擎按进程环境给出、每条都带同一句，取一条代表即可。 */
+  /** 预算闸门失效提示；各条文案相同，取第一条。 */
   const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
   /** 工作区切换只记一次：完成态会被轮询与广播重复渲染。 */
   const switchLogged = useRef(false);
 
-  // 进度主通道是 /api/events 的 SSE 事件流（读流与重连见 `subscribeServerEvents`）；
-  // 5s 轮询只做断线兜底，靠全量 GET 追上终态，不承担实时性。
+  // 进度主通道是 /api/events 的 SSE；5s 轮询只兜底断线，不担实时
   const jobId = job?.id;
-  /** 终态判定的唯一出口：轮询与按钮禁用共用它。 */
+  /** 终态判定的唯一出口：轮询与按钮禁用共用。 */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
   const jobActive = Boolean(job && !isSettled(job.phase) && !orphaned);
   useEffect(() => {
     if (!jobActive || !jobId) return;
     const stop = subscribeServerEvents((event) => {
       if (event.type !== "import.progress") return;
-      // 进度帧过一遍契约再落地：这是导入进度的唯一实时通道，读不懂就在页面上说明，不静默继续画进度条。
+      // 进度帧先过契约再落地；读不懂就在页面明示
       try {
         const progress = checkContract(importJobSchema, event.payload, "import.progress");
         if (progress.id === jobId) setJob(progress);
@@ -70,7 +69,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
-        // 404 专档：任务不在引擎里了（进程换过），这不是网络错误，重试也读不回来
+        // 404 = 引擎里已无此任务，重试读不回来
         if (isNotFound(reason)) setOrphaned(true);
         else setError(reason instanceof Error ? reason.message : "无法读取任务进度");
       }),
@@ -88,11 +87,11 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     }
   }, [job?.phase, job?.repositoryId]);
 
-  /** 发起一次分析：清单那排的「重新分析」与上方按钮共用这一条路径，区别只在路径从哪来。 */
+  /** 发起分析：上方按钮与清单的「重新分析」共用此路径。 */
   const startImport = async (target: string): Promise<void> => {
     const pathToUse = target.trim();
     if (!pathToUse || jobActive) return;
-    setPath(pathToUse); // 输入框要显示正在分析的是哪个仓，不能只藏在任务里
+    setPath(pathToUse); // 输入框同步显示正在分析的仓
     setError(""); setReport(null); setOrphaned(false);
     try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
   };
@@ -144,7 +143,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 {commentMode ? <span className="badge badge-warn">更费 token</span> : null}
               </label>
             </div>
-            {/* 正文一句结论，「为什么 / 怎么改」进悬停 */}
+            {/* 详细解释进悬停 */}
             <p className="field-note" title={commentMode
               ? "注释写得多的仓库里的中文概念词会一起进摘要，也因此更费 token。"
               : "要连注释一起分析请在导入前选「详细导入」；导入后改设置需重新导入。"}>{commentMode
@@ -186,7 +185,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                   <div className="card report-cell"><div className="num">{report.index.totalFiles}</div><div className="lbl">可分析文件</div></div>
                   <div className="card report-cell"><div className="num">{report.estimate.cachedFiles}</div><div className="lbl">摘要已缓存</div></div>
                   <div className="card report-cell"><div className="num">{(report.estimate.estimatedInputTokens / 1000).toFixed(1)}k</div><div className="lbl">预估输入 tokens</div></div>
-                  {/* 单价未配时金额恒为 0，写 ¥0.00 是假读数 */}
+                  {/* 单价未配置时显示未计价，不报 ¥0.00 */}
                   <div className="card report-cell"><div className="num">{report.estimate.estimatedCostUsd > 0 ? `¥${report.estimate.estimatedCostUsd.toFixed(2)}` : "未计价"}</div><div className="lbl">预估本次成本</div></div>
                 </div>
                 <div className="row">
@@ -203,13 +202,13 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 <div className="section-title">已导入仓库 · {catalog.length} 个</div>
                 <span className="fs-11 faint" title="切换不重新分析、不产生费用"></span>
               </div>
-              {/* 闸门失效是进程级事实，与代码仓库无关 */}
+              {/* 闸门失效是进程级事实 */}
               {gateNotice ? <div className="banner banner-warn"><Icon name="alert" /><span className="banner-text">{gateNotice}</span></div> : null}
               <div className="addr-list">
                 {catalog.map((item) => {
                   const isCurrent = item.repositoryId === workspace?.repositoryId;
                   const verdict = item.freshness?.verdict;
-                  // 挂起（用户按下的开关）与监听失败是两种状态：后者要修，都得在界面上说清。
+                  // 人为挂起与监听失败是两种状态，界面分开显示
                   const paused = item.mounted && item.watchPaused === true;
                   const watching = item.mounted && item.watching === false && !paused;
                   const meta = [

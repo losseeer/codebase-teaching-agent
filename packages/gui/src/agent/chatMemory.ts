@@ -1,25 +1,22 @@
 import type { ChatScope } from "@codebase-tutor/contract";
 
 /**
-  Agent 侧栏的本地持久化（localStorage / sessionStorage）与补账节奏常量。
-  真源在引擎库，这里只记「这个浏览器上次停在哪」与「断线那轮的欠账」。
+  Agent 侧栏的 localStorage/sessionStorage 持久化与断线回读节奏常量。
+  真源在引擎库，这里只记浏览器上次的位置与待回读记录。
   */
 
-/** 会话线程记忆的键（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。 */
+/** 会话线程记忆键（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。 */
 const SESSION_STORAGE_KEY = "codebase-tutor.teaching-sessions";
-/** 断线补账欠账的键（sessionStorage）：`repositoryId → 作用域 → { threadId, count }`。 */
+/** 待回读记录键（sessionStorage）：`repositoryId → 作用域 → { threadId, count }`。 */
 const DEBT_STORAGE_KEY = "codebase-tutor.turn-debt";
 
-/** 断线那一轮的欠账：threadId + 记账时库里的正文条数。 */
+/** 断线轮的待回读记录：threadId + 记账时的正文条数。 */
 export interface TurnDebt {
   threadId: string;
   count: number;
 }
 
-/**
-  补账的回读节奏（毫秒）：断线那一刻引擎多半还在算，前几次「正文没多」不算失败；
-  三档都没等到才认定那一轮未落库。总等待约 100s，够一轮教学回合算完。
-  */
+/** 断线回读的延迟表（毫秒），逐档重试。 */
 export const RECHECK_DELAYS = [12_000, 30_000, 60_000] as const;
 
 export interface ThreadMemory {
@@ -50,12 +47,12 @@ export function readDebtMap(): Record<string, Partial<Record<ChatScope, TurnDebt
   }
 }
 
-/** 欠账写回 sessionStorage；存不下（禁用存储或格式坏）就退回「本轮不补账」，发送本身不受影响。 */
+/** 欠账写回 sessionStorage；存不下即无回读记录。 */
 export function writeDebtMap(map: Record<string, Partial<Record<ChatScope, TurnDebt>>>): void {
   try {
     sessionStorage.setItem(DEBT_STORAGE_KEY, JSON.stringify(map));
   } catch {
-    /* 存不下就退回「本轮不补账」 */
+    /* 存不下即无回读记录 */
   }
 }
 
@@ -65,7 +62,7 @@ export function readThreadMemory(): ThreadMemoryMap {
     if (typeof parsed !== "object" || parsed === null) return {};
     const out: ThreadMemoryMap = {};
     for (const [repositoryId, scopes] of Object.entries(parsed)) {
-      if (typeof scopes !== "object" || scopes === null) continue; // 形状不符（值为字符串）时跳过
+      if (typeof scopes !== "object" || scopes === null) continue;
       const entry: Partial<Record<ChatScope, ThreadMemory>> = {};
       for (const scope of ["teach", "map", "practice"] as const) {
         const value = (scopes as Record<string, unknown>)[scope];
@@ -84,13 +81,13 @@ export function readThreadMemory(): ThreadMemoryMap {
   }
 }
 
-/** 写线程记忆（localStorage 不可用时静默跳过：记忆只是「上次停在哪」的便利，真源在引擎库里）。 */
+/** 写线程记忆；localStorage 不可用时静默跳过。 */
 export function writeThreadMemory(repositoryId: string, scope: ChatScope, next: ThreadMemory): void {
   try {
     const map = readThreadMemory();
     map[repositoryId] = { ...map[repositoryId], [scope]: next };
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(map));
   } catch {
-    /* localStorage 不可用时记忆只在当前页面内有效，不影响发送 */
+    /* 存储失败时记忆仅本页有效 */
   }
 }

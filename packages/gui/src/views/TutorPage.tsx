@@ -14,10 +14,7 @@ import { emit } from "../journal";
 import { showToast } from "../ui/toast";
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
-/**
-  代码教学工作区：左栏只放项目目录，右栏是源码 tabs。
-  教学作用域 = 左栏选中的文件或目录（`file:<path>` / `dir:<path>`）；不再经过课程树。
-*/
+/** 代码教学工作区：左栏项目目录，右栏源码 tabs。 */
 export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
@@ -47,7 +44,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     const seq = ++sourceSeq.current;
     try {
       const next = await api.getSource(repositoryId, path, line);
-      // 连点两个文件时迟到那份不落格：右栏内容、页签与教学作用域都要跟着最后一次点击走，否则发问绑到错的作用域
+      // 迟到的响应不落格：右栏与作用域跟随最后一次点击
       if (seq !== sourceSeq.current) return;
       setSource(next);
       const isNewFile = !openedPaths.current.includes(path);
@@ -65,7 +62,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     } catch { showToast(`读不到 · ${path}`); }
   }, [repositoryId, t]);
 
-  /** 目录也能当教学作用域：agent 会拿到这个目录下已分析的文件清单。 */
+  /** 目录也可作教学作用域。 */
   const openDir = (path: string): void => {
     t.setScopeRef(path ? `dir:${path}` : "dir:.");
     setSource(null);
@@ -94,7 +91,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     setSource({ ...source, line });
   };
 
-  // 外部（线程切换）改了作用域：文件就打开它，目录就清空源码视图；同一锚点不重复拉。
+  // 外部改了作用域：文件打开、目录清空源码视图；同一锚点不重复拉
   useEffect(() => {
     if (!t.scopeRef) { lastAutoAnchor.current = null; return; }
     if (!t.scopeRef.startsWith("file:")) { setSource(null); return; }

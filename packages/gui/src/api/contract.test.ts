@@ -19,9 +19,7 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/**
-  引擎 ↔ 界面这条边界上的契约：作用域对话的过程帧解析与界面文案映射。
-  */
+/** 作用域对话流的过程帧解析与界面文案映射。 */
 describe("作用域对话流的过程帧契约", () => {
   it("已登记的帧都能过，字段原样带出", () => {
     expect(parseScopedStreamFrame({ type: "thinking" })).toEqual({ type: "thinking" });
@@ -36,7 +34,6 @@ describe("作用域对话流的过程帧契约", () => {
   });
 
   it("引擎多发一个没声明的字段：不炸，但不带进界面", () => {
-    // 加字段不报错（向后兼容），未声明的字段也不带进界面
     expect(parseScopedStreamFrame({ type: "delta", delta: "x", extraFutureField: 1 })).toEqual({ type: "delta", delta: "x" });
   });
 
@@ -84,8 +81,6 @@ describe("过程帧的界面文案", () => {
 
 describe("界面的跨包边界", () => {
   it("界面只 import domain 与 contract，不许 import 引擎内部包", () => {
-    // 过去靠 wire.ts 那份手工再导出挡越界；现在边界由包本身承担：domain 是零依赖共享内核，contract 是跨进程契约，
-    // 引擎内部（analysis、store、llm 实现）不在界面上出现，出现即说明有人把实现细节搬上了线。
     const offenders = new Set<string>();
     for (const file of sourceFiles(SRC)) {
       for (const match of readFileSync(file, "utf8").matchAll(/from "@codebase-tutor\/([a-z-]+)/g)) {

@@ -27,10 +27,7 @@ import {
   type NodeBoxes
 } from "./diagramView";
 
-/**
-  画布几何与读数口径都是纯函数。
-  拖动与渲染的时序要真浏览器才能验，这里锁的是判据本身。
- */
+/** 画布几何与读数口径均为纯函数。 */
 
 const node = (id: string, x: number, y: number, kind: DiagramNode["kind"] = "module", sub?: string): DiagramNode => ({ id, kind, label: id, x, y, ...(sub === undefined ? {} : { sub }), ref: kind === "module" ? id : undefined });
 const body = (nodes: DiagramNode[], edges: DiagramEdge[] = [], groups: DiagramBody["groups"] = []): DiagramBody => ({ nodes, edges, groups });
@@ -77,7 +74,7 @@ describe("分组框实际画多大", () => {
   it("模型给的框高装不下量出来的卡片时，只放大到真能包住成员", () => {
     const diagram = body([node("n1", 60, 160)], [], [group("g1", 20, 140, 900, 80)]);
     const [rect] = groupRects(diagram, boxes([["n1", { w: 132, h: 96 }]]));
-    // 卡片底 256 比框底 220 低 36：框要长到 256 + 12 的呼吸位，宽与左边界不动（900 已经够）
+    // 框长到卡片底 256 + 留白 12；左与宽不动
     expect(rect).toMatchObject({ x: 20, y: 140, w: 900 });
     expect(rect?.h).toBe(268 - 140);
   });

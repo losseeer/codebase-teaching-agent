@@ -1,8 +1,6 @@
 import type { ReactElement } from "react";
 
-/**
-  图标集：内联 SVG，lucide 风格 16px。
- */
+/** 图标集：内联 SVG，lucide 风格 16px。 */
 const PATHS = {
   import: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
   map: <><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></>,

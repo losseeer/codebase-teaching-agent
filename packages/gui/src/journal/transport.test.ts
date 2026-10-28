@@ -1,13 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushJournalQueue, queueJournalEvent, type JournalPost } from "./transport";
 
-/**
-  界面动作事件那条投递线守的是「发不出去的时候怎么办」：
-  - 网络失败/5xx 留队等补发（事件不能丢）；
-  - 4xx 当场丢弃并点名（重试也不会成功，留着只会挤掉真能补发的那条）；
-  - 所有发送排在同一条串行链上——「顺序即 append 顺序」是审计线的生命线。
-  这几条只能靠假 fetch 的顺序与状态码来验。
- */
+/** 投递失败口径：网络错与 5xx 留队补发，4xx 丢弃，发送串行。 */
 
 const RETRY_KEY = "codebase-tutor.journal-retry";
 const post = (index: number): JournalPost => ({ repositoryId: "repo_x", type: "file_opened", payload: { path: `src/${String(index)}.ts` }, sessionId: "s1" });

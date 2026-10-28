@@ -4,10 +4,7 @@ import { COMPREHENSION_THEME_ID, type PracticeTheme } from "./practiceThemeState
 import { Icon } from "../ui/icons";
 import { DangerDialog } from "../ui/DangerDialog";
 
-/**
-  练习页左栏：固定「程序理解题」+ 用户自建主题。只是本地标签，不走课程树，也没有分级。
-  面板主体（本模块已练、练习上下文）由调用方以 children 注入。
-*/
+/** 练习页左栏主题面板：固定「程序理解题」+ 自建主题，本地标签；面板主体由 children 注入。 */
 export function PracticeThemes({
   header,
   modules,

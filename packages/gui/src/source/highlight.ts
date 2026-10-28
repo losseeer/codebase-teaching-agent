@@ -7,12 +7,9 @@ import { scanMarkdown } from "./markdownScanner";
 import { scanMarkup } from "./markupScanner";
 
 /**
-  源码语法高亮：零依赖的逐行 tokenizer（词法扫描，非 AST 解析）。
-  不用 highlight.js / Shiki：面板按「每行一个 <code>」渲染，整块高亮后再按行切分会切断跨行标签；本地优先也不引入 WASM 运行时。
-
-  能力边界（如实声明）：逐行扫描 + 少量跨行状态（块注释、多行字符串 / 模板串、markdown 围栏）；
-  不做正则字面量、字符串插值内部、嵌套语言的细分（HTML 内 <script> 按标记语言规则处理）；
-  识别不了的扩展名回落纯文本（整行不着色），不猜语言。
+  源码语法高亮：零依赖的逐行 tokenizer，非 AST 解析。
+  跨行只保持少量状态；不做正则字面量、字符串插值与嵌套语言的细分。
+  未知扩展名回落纯文本，不猜语言。
   */
 
 /** 语言族（同族共享扫描器）。 */

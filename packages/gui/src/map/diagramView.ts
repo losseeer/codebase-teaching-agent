@@ -1,20 +1,17 @@
 import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@codebase-tutor/domain";
 
-/**
-  画布的几何与文案口径（纯函数，无 JSX）：`DiagramCanvas` 与 `DiagramPage` 共用。
-  「节点高度靠量」「视野由调用方持有」两条判据见 `DiagramCanvas` 的头注释。
-*/
+/** 画布几何与文案口径（纯函数），DiagramCanvas 与 DiagramPage 共用。 */
 
-/** 节点定宽；高度不写死（靠量，见上）。 */
+/** 节点定宽；高度靠量。 */
 export const NODE_W = 132;
-/** 量不到盒子时的兜底高度。 */
+/** 量不到盒子时的默认高度。 */
 export const NODE_H = 48;
-/** 世界层最小尺寸：网格与边的坐标系铺到这里，节点再往右下拖就自动扩（`.dg-world` 的 inline 尺寸）。 */
+/** 世界层最小尺寸；节点拖向更右/下时自动扩大。 */
 export const WORLD_MIN_W = 2400;
 export const WORLD_MIN_H = 1600;
 export const ZOOM_MIN = 0.35;
 export const ZOOM_MAX = 2.5;
-/** 适应内容时最多放这么大：一张只有三个节点的图不该被撑满整屏。 */
+/** 适应内容的缩放上限：小图不撑满整屏。 */
 const FIT_ZOOM_MAX = 1.2;
 /** 适应内容时四周留白。 */
 const FIT_PAD = 40;
@@ -37,9 +34,7 @@ export const DEFAULT_VIEW: View = { x: 40, y: 20, z: 1 };
 
 export const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
-/**
-  边级可信度三档的说法。`ORIGIN_SHORT` 图例与抽屉都用，措辞只在这里定一次。
-*/
+/** 边级可信度三档的统一措辞（图例与抽屉共用）。 */
 export const ORIGIN_SHORT: Record<DiagramEdgeOrigin, string> = {
   static: "依赖图可证明",
   code: "源码正文读过",
@@ -62,7 +57,7 @@ export function relativeTime(iso: string): string {
   return versionTime(iso);
 }
 
-/** 版本条目用绝对时间（恢复到哪一版要能核对，相对时间办不到）。 */
+/** 版本条目用绝对时间。 */
 export function versionTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -70,7 +65,7 @@ export function versionTime(iso: string): string {
   return `${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
 }
 
-/** 下载文件名里不能出现这些字符，图名却是用户自己起的。 */
+/** 图名来自用户，需清洗下载文件名的非法字符。 */
 export function safeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "");
   return cleaned || "diagram";

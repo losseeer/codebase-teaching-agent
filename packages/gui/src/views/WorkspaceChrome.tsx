@@ -2,10 +2,9 @@ import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { Icon } from "../ui/icons";
 import { patchLayout, useLayout } from "../ui/ColumnResizer";
 
-// 页面外框：
-// - `PageTopbar`：每页顶部一行——左侧当前上下文（面包屑），右侧该页动作 + 对话栏开关
-// - `RailToggle`：直接读写布局偏好（模块级 store），不从 App 逐层传 props
-// - `MobileSwitcher` + `useMobilePanes`：窄屏（<=720px）时两栏折叠成一行 pane 切换；工作区切换在侧栏导航，不在这里
+// 页面外框：PageTopbar 每页顶部一行，右侧放该页动作与对话栏开关。
+// RailToggle 直接读写布局偏好，不逐层传 props。
+// MobileSwitcher + useMobilePanes：窄屏时两栏折叠成一行 pane 切换。
 
 export type WorkspaceId = "map" | "teaching" | "practice";
 
@@ -46,10 +45,7 @@ export function MobileSwitcher({ labels, active, onSelect }: { labels: string[];
   );
 }
 
-/**
-  移动端 pane 切换：返回 `[activeIndex, classNameFor, setActive]`。
-  桌面端（>720px）所有 pane 可见；`pane-hidden-mobile` 仅在移动端媒体查询里生效。
- */
+/** 移动端 pane 切换：返回 [activeIndex, classNameFor, setActive]；桌面端全部可见。 */
 export function useMobilePanes(): [number, (index: number) => string, (index: number) => void] {
   const [active, setActive] = useState(0);
   useEffect(() => {

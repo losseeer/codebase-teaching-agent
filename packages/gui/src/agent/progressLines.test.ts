@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { foldProgress, interruptText, progressText } from "./progressLines";
 
-/**
-  过程提示的累积口径。为什么要有这一份：读文件与检索都在本机几十毫秒内完成，
-  单行覆盖式的提示下一帧就被「正在思考」盖掉，一整轮肉眼只剩 thinking——
-  那一格该说的是「它做过什么、现在在做哪一件」，不是「它在等」，也不是账单。
-*/
+/** 过程提示行的累积口径。 */
 describe("foldProgress（过程提示逐行累积）", () => {
   it("一行一件事，按到达顺序排，最新在末尾", () => {
     let lines: string[] = [];

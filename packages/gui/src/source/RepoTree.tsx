@@ -3,12 +3,7 @@ import type { FileTreeNode } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
 
-/**
-  仓库文件树：按真实目录层级渲染，首层目录默认展开。
-  - `lineOf`：可选的「文件路径 → 行数」表，提供时在文件行右侧显示行数
-  - `badge`：可选的目录徽标，用于给顶层目录标注语义分组
-  - `activePath`：高亮当前选中的文件
- */
+/** 仓库文件树：按目录层级渲染，首层目录默认展开。 */
 export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, lineOf, badge }: {
   nodes: FileTreeNode[];
   onOpenFile: (path: string) => void;

@@ -12,12 +12,7 @@ import { threadItemsFrom, type MessageExtra, type ThreadItem, type ThreadRow } f
 import { lostInTransit } from "./turnFailure";
 import type { ScopedChatApi } from "./scopedChatApi";
 
-/**
-  三作用域共用的单一状态源（App.tsx 调用一次，返回值以 `chat` prop 铺给三个页面 + AgentRail）：
-  页面只读绑定与选择（scopeRef / settings / mapScopePaths / practiceUnit），写入都经 AgentRail。
-  命名口径：本对象管线程（threadId / ThreadItem / chatThreads），`session` 是引擎的 TutorSession（教学作用域的在途状态）；
-  同一条教学会话三个名字——库里 `chat_session` 行 = GUI 的 threadId = 引擎的 sessionId。
-  */
+/** 三作用域共用的单一状态源。 */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
   const [scope, setScope] = useState<Scope>(loadInitialScope);
   useEffect(() => {
@@ -30,16 +25,16 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
   setThreads((prev) => ({ ...prev, [target]: [...prev[target], { kind: role, id, text, ...(variant ? { variant } : {}), ...extra } as ThreadItem] }));
   return id;
 };
-/** 还亮着的那排提问按钮属于哪条气泡：一开新回合就换人，旧气泡上的按钮跟着灭（认领只对最后一句提问成立）。 */
+/** 最后一句提问的气泡 id；开新回合即失效。 */
 const [liveAsk, setLiveAsk] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
 
-/** 教学作用域：只存 `file:<path>` / `dir:<path>`，不依赖课程树。 */
+/** 教学作用域：`file:<path>` 或 `dir:<path>`。 */
 const [scopeRef, setScopeRefState] = useState<string | null>(null);
 const setScopeRef = (ref: string | null): void => setScopeRefState(ref);
 const scopeLabel = scopeRef
   ? (scopeRef.startsWith("dir:") ? (scopeRef.slice(4) === "." ? "仓库根目录" : scopeRef.slice(4)) : scopeRef.slice(5).split("/").pop() ?? scopeRef)
   : "";
-// 产物数据代数：重新导入 / watcher 重分析 / agent 改图后递增，画布与源码树据此重取。
+// 产物数据版本：重导入、重分析、改图后递增。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadRepositoryData = (): void => setDataVersion((version) => version + 1);
 useEffect(() => {
@@ -50,45 +45,40 @@ useEffect(() => {
   }, controller.signal);
   return () => { stop(); controller.abort(); };
 }, [repositoryId]);
-// 画布选中节点时上送的文件清单：只作为 map-chat 的作用域提示。
+// 画布选中节点的文件清单，仅作 map-chat 作用域提示。
 const [mapScopePaths, setMapScopePaths] = useState<string[]>([]);
 const setMapScope = (scopePaths: string[]): void => setMapScopePaths(scopePaths);
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
-// 画布上正打开的那张图：绑定行读它，map-chat 也把它当作用域上送，
-// 这样「把这条边删掉」指的是用户眼前那张，而不是模型从图库里猜一张。
+// 画布当前打开的图，随 map-chat 上送。
 const [openDiagram, setOpenDiagram] = useState<{ id: string; name: string } | null>(null);
-// 对话里的图卡片被点开：页面取走这一格去开图，取完清空（一次性的投递，不当事件总线用）
+// 一次性投递：页面取走后清空。
 const [pendingDiagramOpen, setPendingDiagramOpen] = useState<{ id: string; name: string } | null>(null);
 const requestOpenDiagram = (diagram: { id: string; name: string }): void => setPendingDiagramOpen(diagram);
 const clearDiagramOpen = (): void => setPendingDiagramOpen(null);
 const [practiceUnit, setPracticeUnit] = useState("");
 useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); setMapBinding(null); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
-  /** 引擎的在途教学会话：只在本 hook 内部用（切作用域要重置、发问要带 id）。不对外暴露——GUI 的口径是线程，不是 session。 */
+  /** 引擎的在途教学会话，不对外暴露。 */
+  // 同一条教学会话三个名字：库里 chat_session 行 = GUI threadId = 引擎 sessionId。
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>(defaultTutorSettings);
-  /**
-    输入框草稿按作用域各存一份。曾经是一份全局 `content`：在画布里打了一半的字，切到练习页按下回车
-    就把那句发进了练习答疑——草稿属于哪个作用域，必须由数据形状说了算，而不是由「按下回车时看板的是哪一页」决定。
-    对外仍交当前作用域那一份（`content` / `setContent`），三个页面的用法不必跟着改。
-    */
+  /** 输入框草稿按作用域各存一份。 */
   const [drafts, setDrafts] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
-  // 异步路径读草稿只能靠渲染期镜像：`await` 之后用户可能已经翻页，闭包里的 `scope` 是旧的那一页
+  // 渲染期镜像：异步路径需读最新草稿。
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const draftOf = (target: Scope): string => draftsRef.current[target];
   const setDraft = (target: Scope, value: string): void => setDrafts((prev) => ({ ...prev, [target]: value }));
   const content = drafts[scope];
   const setContent = (next: string): void => setDraft(scope, next);
-  /** 在途与否也按作用域各记一份：宏观设计正在生成时，练习页不该被同一颗「正在发送」挡住发不出去。 */
+  /** 在途状态按作用域各记一份。 */
   const [sendingByScope, setSendingByScope] = useState<Record<Scope, boolean>>({ map: false, teaching: false, practice: false });
   const sending = sendingByScope[scope];
   const markSending = (target: Scope, value: boolean): void => setSendingByScope((prev) => ({ ...prev, [target]: value }));
   const [errorsByScope, setErrorByScope] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const error = errorsByScope[scope];
   const setError = (target: Scope, message: string): void => setErrorByScope((prev) => ({ ...prev, [target]: message }));
-  // 在途回合：每个作用域各一条（一条全局的「这一轮」会被后开的覆盖，停止与「是不是用户自己停的」就都判错人）。
-  // turnId 与 signal 为什么必须分开用，见 api/client.ts 的 `StreamTurn` 注释。
+  // 在途回合按作用域各一条。
   const activeTurn = useRef<Partial<Record<Scope, { turnId: string; controller: AbortController }>>>({});
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
@@ -102,20 +92,20 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     delete next[target];
     activeTurn.current = next;
   };
-  /** 这一轮是不是用户自己停的：必须在 catch 里读（finally 会清掉在途引用）。 */
+  /** 是否用户主动停止；只能在 catch 里读（finally 会清掉在途引用）。 */
   const stoppedByUser = (target: Scope): boolean => activeTurn.current[target]?.controller.signal.aborted === true;
-  /** 停止当前作用域那一轮：别的作用域正在生成的那一条不受影响。 */
+  /** 停止当前作用域的在途回合。 */
   const stopTurnFor = (target: Scope): void => {
     const turn = activeTurn.current[target];
     if (!turn) return;
     turn.controller.abort();
-    // 404 = 引擎那一轮已经算完了（我们只是没读到 done）：界面同样算停下来，错误丢弃即可
+    // 404 = 该轮已结束，按停下来处理
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
   const stopTurn = (): void => stopTurnFor(scope);
-  // 回复生成过程指示（按作用域，一行一件事）：三作用域都走各自请求的 SSE 事件，引擎发事件、GUI 定文案
+  // 过程指示行：按作用域各一组，一行一件事。
   const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
-  /** 同一份行的镜像：中断发生在异步回合收尾那一刻，闭包里的 state 还是旧的一份，要拿当下这几行只能靠 ref。 */
+  /** progress 行的渲染期镜像，供异步收尾读取。 */
   const progressLines = useRef<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
   const resetProgress = (target: Scope): void => {
     progressLines.current[target] = [];
@@ -126,7 +116,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     progressLines.current[target] = foldProgress(progressLines.current[target], text);
     setProgress((prev) => ({ ...prev, [target]: progressLines.current[target] }));
   };
-  // 三个作用域各一台打字机：共用一条队列时，两个作用域同时生成会把两段的 delta 吐进同一个气泡
   const mapTypewriter = useTypewriter();
   const teachingTypewriter = useTypewriter();
   const practiceTypewriter = useTypewriter();
@@ -134,10 +123,10 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const liveAnswer = typewriter[scope].liveAnswer;
   const [replySource, setReplySource] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const [chatThreads, setChatThreads] = useState<Record<Scope, ChatThread[]>>({ map: [], teaching: [], practice: [] });
-  /** 引擎认下来、但清单不收的那一条（还没发言的新会话）：切作用域与开机恢复都要靠它认回当前会话。 */
+  /** 引擎认下来但未发言的会话，不进清单。 */
   const [unsentThread, setUnsentThread] = useState<Partial<Record<Scope, ChatThread>>>({});
   const [currentThreadId, setCurrentThreadId] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
-  // 渲染期镜像：切线程、清选择这些动作要读「此刻的当前线程」，setState 的异步值不可用
+  // 渲染期镜像：同步读取此刻的当前线程与清单。
   const currentThreadRef = useRef(currentThreadId);
   currentThreadRef.current = currentThreadId;
   const chatThreadsRef = useRef(chatThreads);
@@ -145,23 +134,23 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const [practiceExercise, setPracticeExerciseState] = useState<Exercise | null>(null);
   const setPracticeExercise = (exercise: Exercise | null): void => {
     setPracticeExerciseState(exercise);
-    // 换题即换线程：旧题的问答留在旧线程里（列表可切回），当前线程清空、下次追问时新建并绑到新题。
+    // 换题即换线程：当前线程清空，下次追问新建。
     if (currentThreadRef.current.practice) switchThread("practice", null);
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
 
   useEffect(() => {
     if (!repositoryId) return;
-    // 取消守卫：快速切换仓库/卸载后，旧仓库的画像不得写回状态
+    // 取消守卫：旧仓库的响应不得写回状态
     let cancelled = false;
-    // 这一发唯一的用处：把没被用户动过的设置档种子成推荐值。画像本身界面不显示（成本与明细都在 InsightsPage 自己取数）
+    // 仅在设置未被用户改动时以推荐值种子
     api.getLearner(repositoryId).then((profile) => {
       if (cancelled) return;
       setSettingsState((curr) => curr.style === 50 && curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
-    }).catch(() => { /* 取不到画像就保持当前档，不猜 */ });
+    }).catch(() => { /* 取不到画像保持当前设置 */ });
     return () => { cancelled = true; };
   }, [repositoryId]);
-  /** 写记忆：静默兜底与取舍见 chatMemory.ts 的 `writeThreadMemory`。 */
+  /** 写线程记忆；失败静默，见 chatMemory.ts。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
     if (!repositoryId) return;
     const chatScope = CHAT_SCOPE[scope];
@@ -170,43 +159,38 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
 
   // ==== 断线补账 ====
-  /** 各作用域当前线程「已知的库里正文条数」，补账时的比对基准：回读正文时覆盖，回合成功 +2（一问一答原子落库）。 */
+  /** 当前线程已知的库里正文条数，回读核对的比对基准。 */
   const knownRowCount = useRef<Record<Scope, number>>({ map: 0, teaching: 0, practice: 0 });
-  /** 欠账回读进行到第几趟，和挂着的定时器句柄；两者都由 patchDebt 统一作废（记账/结账即重置）。 */
+  /** 回读重试计数与定时器句柄；由 patchDebt 统一作废。 */
   const reconcileAttempts = useRef<Record<Scope, number>>({ map: 0, teaching: 0, practice: 0 });
   const recheckTimers = useRef<Record<Scope, number | null>>({ map: null, teaching: null, practice: null });
-  /**
-    补账结论是一句「本地提示」，库里没有正文对应物：回读线程会把侧栏整个重写一遍，
-    靠 pushMessage 递出去的这句会在第二次回读时消失。
-    所以按线程存一份，place 每次铺正文都把它补回最后一项；记账（新一轮开始）时作废。
-    */
+  /** 补拉结论只存在于本地，库里没有对应正文：回读上屏时按线程补回最后一项。 */
   const backfillNotice = useRef<Record<Scope, { threadId: string; item: ThreadItem } | null>>({ map: null, teaching: null, practice: null });
   const patchNotice = (target: Scope, threadId: string, text: string): void => {
     backfillNotice.current[target] = { threadId, item: { kind: "agent", id: `backfill-${threadId}`, text, variant: "hint" } };
   };
-  /** 欠账写在 sessionStorage 而不是内存：整页刷新同样是「断线回来」，而刷新会带走一切内存态。 */
+  /** 欠账存 sessionStorage：整页刷新后仍在。 */
   const readDebt = (target: Scope): TurnDebt | null => readDebtMap()[repositoryId]?.[CHAT_SCOPE[target]] ?? null;
   const patchDebt = (target: Scope, debt: TurnDebt | null): void => {
     resetRecheck(target);
-    if (debt) backfillNotice.current[target] = null; // 新一轮开始：上一轮的补账结论不再相关
+    if (debt) backfillNotice.current[target] = null; // 新一轮作废上一轮的补拉结论
     if (!repositoryId) return;
     const map = readDebtMap();
     map[repositoryId] = { ...map[repositoryId], [CHAT_SCOPE[target]]: debt ?? undefined };
     writeDebtMap(map);
   };
-  /** 发请求前记下欠账，基准是「此刻已知的库里正文条数」——回来时按它判断引擎有没有替我们算完。 */
+  /** 发请求前记欠账，基准取当前已知正文条数。 */
   const recordDebt = (target: Scope, threadId: string): void => {
     patchDebt(target, { threadId, count: knownRowCount.current[target] });
   };
-  /** 有没有等着补的账：欠的必须正是当前线程，否则切回来的那条不该被旧事打扰。 */
+  /** 有欠账且欠在正是当前线程。 */
   const hasDebt = (target: Scope): boolean => {
     const debt = readDebt(target);
     const threadId = currentThreadRef.current[target];
     return !!debt && !!threadId && debt.threadId === threadId;
   };
 
-  /** 正文到位后结账：比记下欠账时多 → 那一轮补回来了；没多 → 引擎可能还在算（断线时它往往没算完），
-      先别急着下结论，按退避再回读几趟；最后一趟仍没有才说明白。 */
+  /** 回读后核对欠账：条数增加则销账；未增加先按退避重试，重试耗尽才提示重问。 */
   const reconcile = (target: Scope, threadId: string, rows: readonly ThreadRow[]): void => {
     knownRowCount.current[target] = rows.length;
     const debt = readDebt(target);
@@ -226,7 +210,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     scheduleRecheck(target, wait);
   };
 
-  /** 欠账的回读重试：同一作用域同一时刻只挂一趟，新回合记账时一律作废重算。 */
+  /** 回读重试：同一作用域同时只挂一趟。 */
   const scheduleRecheck = (target: Scope, delayMs: number): void => {
     if (recheckTimers.current[target] !== null) return;
     recheckTimers.current[target] = window.setTimeout(() => {
@@ -248,20 +232,19 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     };
   }, []);
 
-  /** 发送前先结断线那轮的账：回读正文会重写侧栏，必须赶在用户新消息上屏之前跑完。 */
+  /** 结算断线轮；必须早于新消息上屏（回读会重写侧栏）。 */
   const settlePendingTurn = async (target: Scope): Promise<void> => {
     if (!hasDebt(target)) return;
     await loadThread(target, currentThreadRef.current[target]!);
   };
 
-  /** 网络恢复时最可能已经落库：把有欠账的作用域各回读一次。 */
+  /** 网络恢复时，把有欠账的作用域各回读一次。 */
   const reconcilePending = (): void => {
     for (const target of SCOPES) {
-      // 在途回合的正文还没落库：这时回读等于用旧正文覆盖侧栏（而且这一轮的欠账本来就等着 settle 去清）
+      // 在途回合正文未落库，跳过回读
       if (hasDebt(target) && !activeTurn.current[target]) void loadThread(target, currentThreadRef.current[target]!);
     }
   };
-  // 处理器只装一次，通过 ref 调最新闭包：loadThread 读的是渲染期的 scopeRef
   const reconcilePendingRef = useRef(reconcilePending);
   reconcilePendingRef.current = reconcilePending;
   useEffect(() => {
@@ -270,15 +253,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
-  /** 回合失败的分诊：用户停止（清账——这一轮不该落库）／断线（欠账原样留着，等引擎算完补回）／引擎明说失败（清账，没有可补的）／其余按原因报错。
-      `replayStarted` 由 `turnSink` 的闭包给出：true 表示已经收到过 delta——回合是「算完→落库→分块回放」，回放被中止的那一轮正文其实已经在库里。
-      分诊前先放弃打字机队列：半途的 delta 不该继续往 `liveAnswer` 里吐。 */
+  /** 回合失败分诊：用户停止清账；断线留欠账待回读；引擎报错清账并提示。 */
   const triageTurnFailure = (target: Scope, reason: unknown, replayStarted: boolean): void => {
     typewriter[target].abort();
     const detail = reason instanceof Error ? reason.message : String(reason);
     if (stoppedByUser(target)) {
       patchDebt(target, null);
-      if (replayStarted) knownRowCount.current[target] += 2; // 库里那一问一答确实存在：基准跟着走，免得日后误判成「补回」
+      if (replayStarted) knownRowCount.current[target] += 2; // 该轮已落库，基准同步
       pushMessage(target, "agent", replayStarted
         ? "已停止生成"
         : "已停止生成", "hint");
@@ -293,35 +274,32 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     pushMessage(target, "agent", `发送失败：${detail}`, "error");
   };
 
-  /**
-    一次流式回合的共用三动作（三作用域同一份）：delta 落点、成功结账、失败分诊。
-    「回放是否已开始」只活在这个闭包里：分诊发生在 catch 里，而那一个布尔决定提示文案说不说「引擎其实算完了」。
-    结账顺序：等打字机排空 → 正文上屏 → 清 liveAnswer → 销欠账。
-  */
+  /** 一次流式回合的三动作：delta 落点、成功结账、失败分诊。 */
   const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<void>; fail: (reason: unknown) => void } => {
+    // replayStarted=收到过 delta，即该轮引擎已算完并落库
     let replayStarted = false;
     return {
       onDelta: (delta) => { replayStarted = true; typewriter[target].enqueue(delta); },
-      // `extra.options` 非空 = 这一回合是 agent 在向用户提问：正文仍是同一份（问句 + 可选项），多的是一排按钮
+      // extra.options 非空 = 本回合是 agent 在向用户提问
       settle: async (text, provider, extra) => {
         await typewriter[target].finish();
         const pushed = pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
-        // 只有刚问出来的那一颗亮着：再发一句之后，上一句提问的认领就不该再按得动
+        // 仅最新一句提问可认领
         setLiveAsk((prev) => ({ ...prev, [target]: extra?.options?.length ? pushed : null }));
         setReplySource((prev) => ({ ...prev, [target]: provider ?? "" }));
         typewriter[target].clear();
-        knownRowCount.current[target] += 2; // 一问一答原子落库，补账基准跟着走
+        knownRowCount.current[target] += 2; // 一问一答原子落库
         patchDebt(target, null);
       },
       fail: (reason) => triageTurnFailure(target, reason, replayStarted)
     };
   };
 
-  /** 按 threadId 拉回正文并铺到侧栏：teaching 走 /api/sessions（连 stage/settings 一起回），map/practice 走线程正文。 */
+  /** 按 id 回读正文并上屏：teaching 走 /api/sessions，map/practice 走线程正文。 */
   const loadThread = async (scope: Scope, threadId: string): Promise<void> => {
     const place = (messages: readonly ThreadRow[]): void => {
-      if (currentThreadRef.current[scope] !== threadId) return; // 期间又切走了：迟到的旧响应不落进新线程
-      reconcile(scope, threadId, messages); // 先结账：补账结论要作为最后一项跟着这一份正文一起上屏
+      if (currentThreadRef.current[scope] !== threadId) return; // 迟到的旧响应不落进新线程
+      reconcile(scope, threadId, messages); // 先核对，补拉结论随这份正文一起上屏
       const items = threadItemsFrom(messages);
       const notice = backfillNotice.current[scope];
       if (notice?.threadId === threadId) items.push(notice.item);
@@ -331,17 +309,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (scope === "teaching") {
         const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
         if (thread && !thread.scopeRef) {
-          // 旧课程树时代的线程没有文件/目录作用域：直接断，不假装还能接着聊
+          // 无作用域绑定的线程不可续聊
           setCurrentThread("teaching", null);
           pushMessage("teaching", "agent", "这条会话沿用的是旧的目录结构，请重新选一个文件或目录。", "hint");
           return;
         }
-        // 教学线程绑作用域：点开的线程若属于别的文件/目录，先把左栏指向那个作用域
+        // 教学线程绑作用域：左栏随所点线程切换
         if (thread?.scopeRef && thread.scopeRef !== scopeRef) setScopeRefState(thread.scopeRef);
         const restored = await api.getSession(threadId);
         if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
-        // 迟到的旧响应不落格（`place()` 里同一道守卫）：三个 setter 不看它的话，A 线程的会话会盖住正在看的 B，
-        // 下一问就顺着 session 发进 A 里
+        // 迟到的旧响应不落格（place() 有同一道守卫）
         if (currentThreadRef.current.teaching !== threadId) return;
         setScopeRefState(restored.scopeRef);
         setSession(restored);
@@ -353,20 +330,20 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch {
       if (currentThreadRef.current[scope] !== threadId) return;
       setThreads((prev) => ({ ...prev, [scope]: [] }));
-      // 正文没读回来就不能留着旧 session：否则标题是这一条、下一问发进上一条线程
+      // 正文没读回来就不留旧 session，避免下一问发进上一条线程
       if (scope === "teaching") setSession(null);
       pushMessage(scope, "agent", "这段历史暂时读不到，可稍后再试或新建会话。", "hint");
     }
   };
 
-  /** 只改「当前线程是哪条」，不动侧栏已展示的对话——发送时惰性新建线程走这条，免得清除刚敲进去的那句。 */
+  /** 只改当前线程 id，不动侧栏已展示的对话。 */
   const markCurrentThread = (scope: Scope, threadId: string): void => {
     setCurrentThreadId((prev) => ({ ...prev, [scope]: threadId }));
     currentThreadRef.current = { ...currentThreadRef.current, [scope]: threadId };
     patchMemory(scope, { currentId: threadId });
   };
 
-  /** 切当前线程并回读正文；`load=false` 用于刚建好的空线程（没必要回读一遍空清单）。 */
+  /** 切当前线程并回读正文；null 清空侧栏。 */
   const setCurrentThread = (scope: Scope, threadId: string | null): void => {
     if (threadId) markCurrentThread(scope, threadId);
     else {
@@ -379,16 +356,10 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   const switchThread = (scope: Scope, threadId: string | null): void => setCurrentThread(scope, threadId);
 
-  /**
-    拉某作用域的线程清单（引擎为准，按更新时间倒序）：引擎只列**谈过的**会话，
-    `current` 回认我们正打开着但还没发言的那条。
-    剪枝只在「引擎说这条已经不存在」时发生——清单里没有它不等于它没了，只等于它还没第一句话；
-    拿清单当唯一依据会把刚点「新建」还没发言的那条剪掉。
-  */
+  /** 拉线程清单（引擎为准，按更新时间倒序）；`current` 回认未发言的当前会话。 */
   const refreshThreads = async (scope: Scope): Promise<{ threads: ChatThread[]; current: ChatThread | null }> => {
     if (!repositoryId) return { threads: [], current: null };
-    // 发请求前先记住「此刻开着哪条」：引擎的 `current` 问的是这一条，剪枝也只能据它判。
-    // 用 await 之后的值会剪错——新建会话的回合里，响应落地时当前线程已经换成刚建的那条了。
+    // 须在发请求前快照当前线程：await 之后的值会剪错
     const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId ?? null;
     const opened = currentThreadRef.current[scope] ?? remembered;
     let list: ChatThread[];
@@ -398,7 +369,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       list = fetched.threads;
       current = fetched.current;
     } catch {
-      // 引擎重启后仓库要先重新导入，清单暂时拿不到：保留上次所见，不清空选择
+      // 清单暂时拿不到：保留上次所见，不清空选择
       return { threads: chatThreadsRef.current[scope], current: null };
     }
     setChatThreads((prev) => ({ ...prev, [scope]: list }));
@@ -409,17 +380,17 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return { threads: list, current };
   };
 
-  /** 建线程（引擎发 id，标题取首问）：只在真有第一句话时叫。点＋不建线程——建了没人发言，就是库里躺一条清单选不中的空壳。 */
+  /** 建线程（引擎发 id，标题取首问）；仅在确有第一句话时调用。 */
   const createThreadFor = async (scope: "map" | "practice", firstQuestion?: string): Promise<string | null> => {
     if (!repositoryId) return null;
-    const title = firstQuestion?.trim().slice(0, 60) || undefined; // 首问当标题：列表里一眼认得出这条会话在聊什么
+    const title = firstQuestion?.trim().slice(0, 60) || undefined;
     try {
       const { thread } = await api.createThread(repositoryId, {
         scope: CHAT_SCOPE[scope],
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
         ...(title ? { title } : {})
       });
-      // 不把它插进清单：清单只列谈过的会话，还没发言的这一条由 ThreadBar 单独占一格显示。
+      // 未发言的线程不入清单，由 unsentThread 单列显示
       return thread.id;
     } catch (reason) {
       setError(scope, reason instanceof Error ? reason.message : "新建会话失败");
@@ -427,7 +398,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  /** 「新建会话」按钮：清空当前线程与侧栏，线程 id 等第一句话由引擎发。 */
+  /** 清空当前线程与侧栏；线程 id 待首句时由引擎发。 */
   const newThread = (scope: Scope): void => {
     setCurrentThread(scope, null);
   };
@@ -444,12 +415,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  /** 软删：库里的正文与审计日志都留着，只是从列表消失；删的正是当前线程时回到「还没有线程」。 */
+  /** 软删：正文与审计日志留库，仅从列表消失；删的是当前线程则回到无线程态。 */
   const removeThread = async (scope: Scope, threadId: string): Promise<void> => {
     try {
       await api.deleteThread(threadId);
     } catch (reason) {
-      // 404 说明引擎那边早就不存在了：目标状态本就达到，按已删除收尾，不该再报一次错
+      // 404 = 引擎侧已不存在，视为删除成功
       if (!isNotFound(reason)) {
         setError(scope, reason instanceof Error ? reason.message : "删除会话失败");
         return;
@@ -458,14 +429,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const list = chatThreadsRef.current[scope].filter((item) => item.id !== threadId);
     setChatThreads((prev) => ({ ...prev, [scope]: list }));
     chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
-    // 清单本就不收没发言的线程，这一格只能在这里摘掉：留着它，教学的节点效应会当场把已删的那条重新选成当前会话
+    // 未发言线程不在清单里，只能在此摘除
     setUnsentThread((prev) => (prev[scope]?.id === threadId ? { ...prev, [scope]: null } : prev));
     patchMemory(scope, { ids: list.map((item) => item.id) });
     if (currentThreadRef.current[scope] === threadId) setCurrentThread(scope, null);
   };
 
-  // 仓库切换 / 首次挂载：三个作用域各拉一次清单；map 与 practice 按记忆（或清单最新一条）落到当前线程，
-  // teaching 的当前线程由下面的节点效应按「该节点最近一次会话」决定。
+  // 挂载/换仓库：三作用域各拉一次清单；map 与 practice 按记忆落当前线程，teaching 由下面的作用域效应决定。
   useEffect(() => {
     if (!repositoryId) {
       setChatThreads({ map: [], teaching: [], practice: [] });
@@ -480,7 +450,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         const { threads: list, current } = await refreshThreads(scope);
         if (cancelled) return;
         const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId;
-        // 记住的那条还活着就回到它（还没发言也算活着——引擎用 current 认它）；否则退回清单第一条
+        // 记住的线程仍有效则回到它（未发言的由 current 认活），否则退回清单第一条
         const stillOpen = remembered && (current?.id === remembered || list.some((item) => item.id === remembered));
         setCurrentThread(scope, stillOpen ? remembered : (list[0]?.id ?? null));
       }
@@ -490,25 +460,22 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return () => { cancelled = true; };
   }, [repositoryId]);
 
-  // 切作用域顺带刷一次该作用域的清单：另一个作用域里新建的线程要立刻可见，删除了的也不该再显示
+  // 切作用域时刷新该作用域清单
   useEffect(() => {
     if (repositoryId) void refreshThreads(scope);
   }, [repositoryId, scope]);
 
-  // 换作用域 = 挂回该文件/目录最近一次教学线程；没有会话时留空，下一次发送经 createSession 新建。
-  // 清单可能比本地状态滞后一拍（新建后还没回表），这时什么都不做：中途清掉当前线程会打断正在进行的回合，也会把 session 一起清空。
-  // 已经停在这条线程上时也不再回读：loadThread 会用库里的旧正文覆盖侧栏，而新会话的第一问可能还没落库。
-  // 真被别处删掉的线程由 refreshThreads 剪枝。
+  // 换作用域 = 挂回该文件/目录最近一次教学线程；没有则留空，发送时新建。
+  // 清单可能滞后一拍，此时不动线程；已停在目标线程也不再回读。
   useEffect(() => {
     if (!repositoryId || !scopeRef) return;
-    // 教学回合在途时不动线程：清栏或回读都会拿库里那份旧正文覆盖侧栏，刚推上屏的问题就没了。
-    // 代价：途中换的作用域要等回合结束后下一次清单变化才对齐（这一轮的提问仍带着原 session 走，不会串到别的文件）。
+    // 教学回合在途时不动线程：清栏或回读都会覆盖侧栏
     if (activeTurn.current.teaching) return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
     const currentThread = current ? list.find((item) => item.id === current) : undefined;
     if (current && !currentThread) {
-      // 清单里没有它 = 这条会话还没发言（引擎只列谈过的）。什么都不做会留着旧会话，除非教学 session 自己说它绑的不是这个作用域。
+      // 清单只列已发言的会话；缺席 = 还没发言
       if (session && session.scopeRef !== scopeRef) setCurrentThread("teaching", null);
       return;
     }
@@ -523,7 +490,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const send = async (): Promise<void> => {
     const message = draftOf("teaching").trim();
     if (!message) return;
-    // 用户说出口的话一定先上屏：下面的守卫（没选作用域）只补一条提示，不丢弃这一句。
+    // 用户说出口的话先上屏：缺作用域的守卫只补提示，不丢弃这句
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
     setDraft("teaching", "");
@@ -539,22 +506,20 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (!active) {
         const created = await api.createSession(repositoryId, scopeRef, settings);
         active = created.session;
-        // 会话即线程：id 由引擎发，本地只记「当前停在这条」，清单回头拉一次让它出现在列表里
+        // 会话即线程：id 由引擎发
         markCurrentThread("teaching", active.id);
-        knownRowCount.current.teaching = 0; // 新建线程是空的：补账基准从这里起算
+        knownRowCount.current.teaching = 0;
         void refreshThreads("teaching");
       }
       if (!active) return;
       typewriter.teaching.begin();
       recordDebt("teaching", active.id);
-      // 教学回合 SSE：progress 过程提示与 delta 回放并入请求响应流
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
         if (event.type === "delta") sink.onDelta(event.delta);
         else if (event.type === "progress") logProgress("teaching", progressText(event.payload));
       }, turn);
       setSession(reply.session);
       setSettingsState(reply.session.settings);
-      // reply.cost 不进状态：成本监控页按整月自己取数，单次回合这一格没人显示
       await sink.settle(reply.message.content, reply.provider);
     } catch (reason) {
       sink.fail(reason);
@@ -565,14 +530,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  // 作用域对话（宏观设计 / 练习评估）：不走教学状态机；历史由引擎按 threadId 自取，正文由它落库——GUI 只上送这一句。
-  // `answer` 是用户点了提问按钮时代替输入框发的那一句：输入框里正在打的字不该被它清掉。
-  // `resumeAsk` 是那句提问的认领句柄：带着它，引擎才把这一句当答案回灌、而不是当新问题从头跑。
+  // 作用域对话：不走教学状态机；历史由引擎按 threadId 自取，GUI 只上送这一句。
+  // answer = 点提问按钮时代替输入框发送的那句；resumeAsk = 该提问的认领句柄，引擎据此把这句当答案回灌。
   const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
     const message = (answer ?? draftOf(scope)).trim();
     if (!message || !repositoryId) return;
     setLiveAsk((prev) => ({ ...prev, [scope]: null }));
-    // 同 teaching：先结断线那轮的账，再让这一句上屏。
+    // 同 teaching：先结算欠账再上新消息
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
     if (answer === undefined) setDraft(scope, "");
@@ -580,7 +544,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
     }
-    // 线程保障：没有当前线程就惰性新建（标题取首问）。没有线程等于没有历史——上一轮会被静默丢掉。
+    // 线程即历史：缺当前线程时惰性新建
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
@@ -590,8 +554,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     recordDebt(scope, threadId);
     const sink = turnSink(scope);
     const onScopedEvent = (event: ScopedStreamProgress): void => {
-      // delta 进打字机队列，剩下几类过程帧（想 / 读 / 搜 / 取技能 / 改图 / 查产物 / 外部调用）全部逐行进列表——
-      // 压成一行时本机那几件只闪几十毫秒，肉眼就只剩「正在思考」
       if (event.type === "delta") sink.onDelta(event.delta);
       else logProgress(scope, progressText(event));
     };
@@ -599,25 +561,21 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       const reply = scope === "map"
         ? await api.mapChatStream(repositoryId, {
             content: message,
-            // 画布选中节点：带上它关联的文件清单，引擎按这份清单解析作用域
             ...(mapScopePaths.length ? { scopePaths: mapScopePaths } : {}),
             path: mapFile || undefined,
-            // 画布正打开的图：agent 改哪张、删哪条边都按这一格定，认不出就不动
             ...(openDiagram ? { diagramId: openDiagram.id } : {}),
-            // 这一句是来回答上一回合那句提问的：把认领句柄交给引擎
             ...(resumeAsk ? { resumeAsk } : {}),
             threadId,
             style: settings.style
           }, onScopedEvent, turn)
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
       if (reply.interrupted) {
-        // 中断的一轮没有成品：库里那一问也没落库，所以补账基准不动（与用户主动停止同一口径）。
-        // warn 条要带上它中断前做过的事——只给一句「已中断」，用户无从判断是该重试还是该换个问法。
+        // 中断轮未落库，补账基准不动
         pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope] });
         patchDebt(scope, null);
       } else {
         await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
-        // 这一回合真画/真改了图 → 消息下面挂一张卡片。图本身已经在图库里了，卡片给的是「回到那句话画的那张」这条路。
+        // 本回合改过图则在消息下挂图卡片
         if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
       }
     } catch (reason) {
@@ -627,7 +585,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       endTurn(scope);
       markSending(scope, false);
       resetProgress(scope);
-      // 回合结束刷新清单：新线程进了列表，当前线程也排到最前（引擎按更新时间倒序）
       void refreshThreads(scope);
     }
   };

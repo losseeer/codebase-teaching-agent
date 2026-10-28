@@ -1,8 +1,4 @@
-/**
-  轻量 toast 总线：主题配置 / 文件打开等操作的轻提示。
-  - `showToast(msg)`：任意模块直接调用（无需 context / prop drilling）
-  - `<ToastHost />`：挂在 App 根部，订阅并渲染
-  */
+/** 轻量 toast：showToast 任意模块可调；ToastHost 挂在 App 根部订阅渲染。 */
 
 import { useEffect, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
@@ -15,9 +11,7 @@ export function showToast(message: string): void {
   listener?.(message);
 }
 
-/**
-  操作失败的弹窗：只报状态、不解释原因；引擎带回的原因进 console。
-  */
+/** 操作失败只报状态；原因进 console。 */
 export function toastFailure(status: string, reason?: unknown): void {
   if (reason !== undefined) console.warn(`[gui] ${status}`, reason instanceof Error ? reason.message : String(reason));
   showToast(status);
@@ -28,7 +22,7 @@ export function subscribeToast(fn: Listener): () => void {
   return () => { if (listener === fn) listener = null; };
 }
 
-/** 渲染 toast 的宿主组件：挂在 App 根部一次即可，淡出后再卸载节点。 */
+/** 渲染 toast 的宿主组件，挂在 App 根部。 */
 export function ToastHost(): ReactElement | null {
   const [message, setMessage] = useState('');
   const [fading, setFading] = useState(false);

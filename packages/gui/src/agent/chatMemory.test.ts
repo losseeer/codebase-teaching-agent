@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readDebtMap, readThreadMemory, RECHECK_DELAYS, writeDebtMap, writeThreadMemory } from "./chatMemory";
 
 /**
-  侧栏的两份本地记忆：「这个浏览器上次停在哪个会话」与「断线那一轮还欠着账」。
-  真源在引擎库，判据只有一条：读坏数据不许崩，也不许把坏数据当好数据送去补账。
-  补账节奏那三条延时是产品读数（总等待约 100s），钉在这里。
+  侧栏本地记忆：上次位置与断线轮回读记录。
+  判据：坏数据不崩、不当好数据用。
  */
 
 function fakeStorage(initial: Record<string, string> = {}): Storage {

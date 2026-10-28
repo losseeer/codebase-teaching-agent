@@ -4,7 +4,7 @@ import type {ReactElement } from "react";
 import { Icon } from "../ui/icons";
 import { ORIGIN_SHORT } from "./diagramView";
 
-/** 文件路径只露文件名：抽屉只有 `--drawer-w` 宽，整条路径读不完，全路径进 title。 */
+/** 取文件名部分；整条路径进 title。 */
 function fileTail(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
@@ -22,23 +22,17 @@ export interface DrawerFile {
   label?: string;
 }
 
-/** 一条出边连同它的去向节点名：抽屉拿不到整张图，去向标签由调用方算好递进来。 */
+/** 出边加去向节点名，由调用方算好传入。 */
 export type DrawerEdge = { edge: DiagramEdge; toLabel: string };
 
-/**
-  依据那一句怎么落笔：`static`/`code` 是行级事实（路径:行号），照原样给、只按长度截；
-  `inferred` 那格的真内容就是模型自述，所以正文只说这一档意味着什么，原话整段留在悬停里。
-*/
+/** 依据行：static/code 按长度截，inferred 只显示可信度。 */
 function evidenceLine(edge: DiagramEdge): string {
   if (edge.origin === "inferred") return ORIGIN_SHORT[edge.origin];
   const head = (edge.evidence || "").split(/[；;]/)[0].trim();
   return head.length > 46 ? `${head.slice(0, 46)}…` : head || "这条关系没有记录依据";
 }
 
-/**
-  节点抽屉：说明 / 关联文件 / 出边 / 两个动作 / 那行权限说明。
-  它是读数面板、不是编辑器：这里没有改结构的入口（加删节点、连线只走对话里的 agent），位置也不在这一格。
-*/
+/** 节点抽屉：读数面板，无结构编辑入口。 */
 export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenFile, onGotoTeach, onBind }: {
   node: DiagramNode;
   outgoing: DrawerEdge[];
@@ -126,7 +120,7 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
           <button type="button" className="btn btn-ghost btn-sm" title="把这个节点设为对话的教学域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
 
-        {/* 权限说明只在这一处（画布不重复）：结构归 agent，几何归你。 */}
+        {/* */}
         <p className="dg-drawer-foot">
         </p>
       </div>

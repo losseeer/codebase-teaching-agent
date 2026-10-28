@@ -2,22 +2,17 @@ import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "
 import { createPortal } from "react-dom";
 import { Icon } from "../ui/icons";
 
-/**
-  挂在按钮下方的小菜单。三条约定：
-  - 走 portal：图库那一条是可滚的（`.gallery-list`），装在栏里会被 `overflow` 裁掉半截；
-  - 贴到视口下沿就往上翻、贴到右沿就往里收，保证菜单项都在框内；
-  - 点外面、Esc、滚动都关。
-*/
+/** 按钮下方的小菜单：portal 渲染防裁剪，贴边翻转，点外/Esc/滚动即关。 */
 export interface MenuItem {
   label: ReactNode;
-  /** 补充说明放 title，菜单正文只留一行短语。 */
+  /** 补充说明放 title。 */
   title?: string;
   danger?: boolean;
   disabled?: boolean;
   onSelect: () => void;
 }
 
-/** 空列表 = 这格此刻没什么可给（例如版本还没取到）：不渲染菜单也不渲染遮罩。 */
+/** 空列表时菜单与遮罩都不渲染。 */
 export function PopMenu({ anchor, items, onClose, ariaLabel }: {
   anchor: HTMLElement | null;
   items: MenuItem[];
@@ -35,7 +30,7 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") onClose();
     };
-    // 捕获阶段：菜单项自己也要靠这一下收起（onSelect 之后 React 重渲染，遮罩先消失）
+    // 捕获阶段：点菜单项自身也收起
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onClose, true);
@@ -74,10 +69,7 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
   );
 }
 
-/**
-  「⋯」那颗菜单按钮：hover 才现身，但键盘聚焦时必须现身——
-  只用 opacity 的话，Tab 过来的人会按下看不见的按钮。
-*/
+/** 「⋯」菜单按钮：hover 现身，键盘聚焦时必须现身。 */
 export function MenuButton({ label, open, onToggle, className }: {
   label: string;
   open: boolean;
@@ -97,10 +89,7 @@ export function MenuButton({ label, open, onToggle, className }: {
   );
 }
 
-/**
-  就地改名：点图名变输入框，Enter 提交、Esc 取消、离开焦点提交。
-  空标题一律不提交。
-*/
+/** 就地改名：Enter/失焦提交，Esc 取消，空标题不提交。 */
 export function InlineName({ value, placeholder, ariaLabel, onCommit, onClose }: {
   value: string;
   placeholder?: string;

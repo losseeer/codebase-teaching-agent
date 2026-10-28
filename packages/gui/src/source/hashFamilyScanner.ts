@@ -17,7 +17,7 @@ export function scanHashStyle(line: string, config: HashStyleConfig, state: Scan
   const out = createCollector();
   let index = 0;
 
-  // 双引号内 shell 仍会展开变量，故把 `$VAR` 单独着色；单引号内是字面量，整段字符串色
+  // 双引号内仍展开变量，$VAR 单独着色；单引号是字面量
   const pushString = (text: string, quote: string): void => {
     if (!text) return;
     if (!config.variables || quote !== '"') {

@@ -3,21 +3,13 @@ import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch, typ
 import { toastFailure } from "../ui/toast";
 import { Icon } from "../ui/icons";
 
-/**
-  模型入口与配置弹窗：除模型与思考档位，还管装机时才改的服务商 / 接口地址 / API Key。两条不变项：
-  - 胶囊自带状态：未配模型（服务商或密钥没配齐）时变警示态并直说原因；
-  - 改完即生效：每个字段失焦 / 换选就 PUT 引擎并落盘，弹窗里没有「保存」这个动作，只有「完成」（关闭）——
-    关掉窗口不等于放弃修改。
-  */
+/** 模型入口与配置弹窗：字段失焦即 PUT 生效，无「保存」动作。 */
 export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?: "pill" | "button"; styleLabel?: string }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
   const [open, setOpen] = useState(false);
-  /**
-    被引擎拒掉的那一句（422：档位与模型不兼容、接口地址不是 http(s)…）留在表单里就地说，
-    不进弹窗——操作结果只报状态，而「该改哪个格子」必须挨着那个格子。
-    */
+  /** 被引擎拒绝（422）的原因，就地显示在表单里。 */
   const [rejected, setRejected] = useState<string | null>(null);
-  /** 「还没读回来」与「读不到」是两个读数：合成一个就一直假装进行中。 */
+  /** 区分「还没读回来」与「读不到」。 */
   const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
@@ -38,7 +30,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
   const updateLlm = (partial: LlmSettingsPatch): void => {
     if (!llm) return;
     const previous = llm;
-    // 密钥不做乐观更新：本地态里只存掩码，明文交给引擎响应（它返回的是掩码后的完整设置）
+    // 密钥不做乐观更新：本地只存掩码，明文以引擎响应为准
     setLlm({ ...llm, provider: partial.provider ?? llm.provider, model: partial.model ?? llm.model, baseUrl: partial.baseUrl ?? llm.baseUrl, thinking: partial.thinking ?? llm.thinking });
     api.updateLlmSettings(partial)
       .then((next) => {
@@ -48,7 +40,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
       .catch((error: unknown) => {
         setLlm(previous);
         const reason = error instanceof Error ? error.message : "";
-        // 引擎带回的具体原因留在表单里，弹窗只报「设置没保存」
+        // 拒因存进表单，弹窗只报状态
         setRejected(reason || "设置没保存");
         toastFailure("设置没保存", error);
       });
@@ -113,8 +105,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
                   ...(["off", "low", "high", "max"] as const).map((effort) => ({
                     value: effort,
                     label: THINKING_EFFORT_LABEL[effort],
-                    // 引擎按模型查表下发能力声明；没有该字段时全部可选。
-                    // off 对 none/unknown 样式恒可选（= 不发字段），与引擎 PUT 校验的豁免一致。
+                    // 未下发能力声明时全部可选；off 恒可选（= 不发字段）
                     disabled: llm?.thinkingCapability ? !effortSelectable(llm.thinkingCapability, effort) : false
                   }))
                 ]}
@@ -196,7 +187,7 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
   );
 }
 
-/** 服务商候选：与引擎对齐的口径见 `LlmProviderKind`（api/client.ts）；「默认（沿用 .env）」的空选项由调用处拼。 */
+/** 服务商候选；「默认」空选项由调用处拼。 */
 const PROVIDER_CHOICES = [
   { value: "openai-compatible", label: "OpenAI 兼容" },
   { value: "openai", label: "OpenAI 官方" }
@@ -209,7 +200,7 @@ const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
   max: "最大"
 };
 
-/** 各思考能力样式的悬停提示（引擎按模型 slug 解析出的样式）。 */
+/** 各思考能力样式的悬停提示。 */
 const THINKING_STYLE_HINT: Record<string, string> = {
   deepseek: "DeepSeek：思考开关 + 强度档（V4 默认开启思考）",
   openai: "OpenAI：强度档（GPT-5 / o 系 / Gemini 兼容层）",
@@ -218,30 +209,27 @@ const THINKING_STYLE_HINT: Record<string, string> = {
   unknown: "这个模型没有已知的思考档位，只能选自动或关闭"
 };
 
-/** 单价一个节点的占位提示：留空时把 .env 的那个数摆出来，用户才知道「空着」意味着什么。 */
-/** 超时留空时说明清楚用的是 .env 的哪一份：填的是毫秒，读的时候换成秒更好对答（慢模型一句回答要一分多钟）。 */
+/** 超时占位：留空时说明用的是 .env 的哪一份（显示单位换成秒）。 */
 function timeoutPlaceholder(llm: LlmSettings | null): string {
   const env = llm?.envFallback.timeoutMs;
   return env ? `默认 ${String(Math.round(env / 1000))} 秒` : "未配置";
 }
 
+/** 单价占位：留空时展示 .env 的值。 */
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
   const value = llm?.pricing ? money(key === "input" ? llm.pricing.inputPerMillionUsd : key === "output" ? llm.pricing.outputPerMillionUsd : llm.pricing.cacheHitPerMillionUsd) : "";
   return fromEnv ? `默认 ${value}` : "未配置";
 }
 
-/** 三档里是不是至少有一档真的在计价（判据与引擎 `pricingIsConfigured` 同一口径：全空 ⇒ 钱恒为 0）。 */
+/** 三档里是否至少一档在计价；口径与引擎 pricingIsConfigured 一致。 */
 function pricingLive(llm: LlmSettings): boolean {
   const p = llm.pricing;
   if (!p) return false;
   return p.inputPerMillionUsd > 0 || (p.cacheHitPerMillionUsd ?? 0) > 0 || p.outputPerMillionUsd > 0;
 }
 
-/**
-  计价读数一行：现在按哪三个数算、每一档由谁给出（来源判据见 api/client.ts 的 `PricingSource`）。
-  三档全空时预算闸门也不管事（引擎拿到的金额恒为 0）。
-  */
+/** 计价读数一行：三个数与各档来源。 */
 function pricingReadout(llm: LlmSettings): string {
   const p = llm.pricing;
   if (!p) return "单价读数未返回";
@@ -250,15 +238,12 @@ function pricingReadout(llm: LlmSettings): string {
   return `按 输入 ${money(p.inputPerMillionUsd)}（${source("input")}）· 命中 ${money(p.cacheHitPerMillionUsd)}（${source("cacheHit")}）· 输出 ${money(p.outputPerMillionUsd)}（${source("output")}）计价`;
 }
 
-/** ¥2.000 这种写法；命中价没配时写「按输入价」。 */
+/** 金额格式化；undefined 显示「按输入价」。 */
 function money(value: number | undefined): string {
   return value === undefined ? "按输入价" : `¥${value.toFixed(3)}`;
 }
 
-/**
-  胶囊与弹窗标题共用的生效状态。`pill` 是窄位用的短名（去掉 `openai:` 这类协议前缀），
-  `text` 是弹窗里的完整一行，`title` 挂协议全名供悬停排查。
-  */
+/** 胶囊与弹窗共用的生效状态；pill 为短名，title 带协议全名。 */
 function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: string; text: string; title: string; hint: string; thinking: string; local: boolean } {
   const thinking = llm?.thinking === "auto" || !llm?.thinking ? "自动" : THINKING_EFFORT_LABEL[llm.thinking];
   if (!llm) {
@@ -274,7 +259,7 @@ function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: st
   return { pill: slug, text: `${protocol} · ${slug}`, title: `${llm.activeProvider ?? ""} · ${llm.activeModel ?? ""}`, hint: "", thinking, local: false };
 }
 
-/** 思考能力提示行：说清这个模型能选哪些档（置灰的 option 在部分浏览器不浮出说明）。 */
+/** 说明该模型可选哪些思考档。 */
 function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>): string {
   const styleName: Record<string, string> = {
     deepseek: "DeepSeek 格式",
@@ -293,7 +278,7 @@ function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapabilit
   return effort === "off" && (capability.style === "none" || capability.style === "unknown");
 }
 
-/** 文本型设置项（模型 slug / 接口地址 / 单价）：本地草稿 + 失焦或回车提交，不每敲一个字就打一次 PUT。 */
+/** 文本设置项：本地草稿，失焦或回车提交。 */
 function TextSetting({ label, value, placeholder, list, hint, note, numeric, disabled, onCommit }: { label: string; value: string; placeholder: string; list?: string; hint?: string; note?: string; numeric?: boolean; disabled: boolean; onCommit: (next: string) => void }): ReactElement {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
@@ -330,10 +315,7 @@ function SelectSetting({ label, value, options, disabled, hint, note, ariaLabel,
   );
 }
 
-/**
-  API Key 是只写项：引擎从不回显明文，所以「输入框为空」不能当成「清除」。
-  留空提交 = 不改动；清除只走那颗 ✕ 按钮。
-  */
+/** API Key 只写项：引擎从不回显明文；留空提交 = 不改动，清除只走 ✕ 按钮。 */
 function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; note?: string; onSave: (key: string) => void; onClear: () => void }): ReactElement {
   const [draft, setDraft] = useState("");
   const commit = (): void => { if (draft.trim()) onSave(draft.trim()); setDraft(""); };

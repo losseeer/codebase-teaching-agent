@@ -1,32 +1,25 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 
-/**
-  可调宽度的栏 + 对话栏收起状态：存 localStorage 的用户偏好，不是产品数据。
-  读不到/读坏了用默认值，存储被禁（隐私模式）时功能照常、只是下次进来不记得；读写全兜住（抛到渲染路径上就是白屏）。
-  宽度存像素而不是比例：比例在「窗口变窄 + 侧栏收起」两种情况下会算出完全不同的栏宽。
-  */
+/** 栏宽与对话栏收起的用户偏好，存 localStorage；宽度按像素存，不按比例。 */
 export interface LayoutPrefs {
   /** Agent 对话栏（最右一栏）宽度 */
   railWidth: number;
-  /** 对话栏是否收起（收起时整条不渲染，不是留一条窄边） */
+  /** 对话栏是否收起（收起时整条不渲染） */
   railCollapsed: boolean;
-  /** 三个工作区共用的左侧列表栏宽度（教学的「仓库文件」、宏观的「项目目录」、练习的「练习模块」） */
+  /** 三工作区共用的左侧列表栏宽度 */
   filePaneWidth: number;
 }
 
 export const LAYOUT_DEFAULTS: LayoutPrefs = { railWidth: 348, railCollapsed: false, filePaneWidth: 264 };
 
-/** 下限按内容还能不能用定：再窄就换行成竖条、路径全成省略号。 */
+/** 上下限：再窄会换行成竖条。 */
 const RANGES = { railWidth: { min: 268, max: 620 }, filePaneWidth: { min: 168, max: 520 } } as const;
 const LAYOUT_KEY = "codebase-tutor.layout";
 
-/**
-  窗口窄时渲染层要再夹一遍，但这一层不回写偏好——
-  否则「拖宽后临时缩窗口」会永久改掉用户原本要的宽度，放大窗口也回不来。
-*/
-const MAIN_FLOOR_PX = 420; // 对话栏变宽时，主区至少留这么多
-const SOURCE_FLOOR_PX = 260; // 文件栏变宽时，源码栏至少留这么多
-/** 主区左边固定要吃掉的宽度：展开态侧栏 232 + 工作区左右留白 32。对话栏夹算时必须扣掉它。 */
+// 视口夹只作用于渲染，不回写偏好：临时窄窗口不该改掉用户存的宽度
+const MAIN_FLOOR_PX = 420; // 对话栏变宽时主区最小宽度
+const SOURCE_FLOOR_PX = 260; // 文件栏变宽时源码栏最小宽度
+/** 主区左侧固定开销：侧栏 232 + 留白 32，对话栏夹算需扣除。 */
 const FIXED_LEFT_PX = 232 + 32;
 
 type WidthField = "railWidth" | "filePaneWidth";
@@ -50,14 +43,14 @@ function readLayout(): LayoutPrefs {
   try {
     raw = localStorage.getItem(LAYOUT_KEY);
   } catch {
-    return LAYOUT_DEFAULTS; // 存储不可用：本次会话照常工作，用默认宽度
+    return LAYOUT_DEFAULTS; // 存储不可用：用默认宽度
   }
   if (!raw) return LAYOUT_DEFAULTS;
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    parsed = null; // 坏数据按「没存过」处理，下面照旧落一次干净值
+    parsed = null; // 坏数据按「没存过」处理
   }
   const value = (parsed ?? {}) as Partial<LayoutPrefs>;
   return {
@@ -67,7 +60,7 @@ function readLayout(): LayoutPrefs {
   };
 }
 
-/** 用户手上的值（落盘的那份），与当前视口下真正该渲染的宽度。 */
+/** 用户存的偏好 与 当前视口下该渲染的宽度。 */
 let preference: LayoutPrefs = readLayout();
 let current: LayoutPrefs = { ...preference };
 
@@ -84,7 +77,7 @@ function recompute(): void {
 
 const listeners = new Set<() => void>();
 
-/** 改一份偏好并落盘。交进来的是「用户想要的值」，视口夹那一层由 recompute 负责。 */
+/** 改一份偏好并落盘；视口夹由 recompute 负责。 */
 export function patchLayout(patch: Partial<LayoutPrefs>): void {
   preference = {
     railWidth: typeof patch.railWidth === "number" ? rangeClamp("railWidth", patch.railWidth) : preference.railWidth,
@@ -94,7 +87,7 @@ export function patchLayout(patch: Partial<LayoutPrefs>): void {
   try {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(preference));
   } catch {
-    /* 存不下只是下次进来不记得这次拖动 */
+    /* 存下失败只是下次不记得 */
   }
   recompute();
 }
@@ -104,10 +97,7 @@ if (typeof window !== "undefined") {
   recompute();
 }
 
-/**
-  当前生效宽度。键盘连按（以及同一帧里到多次的事件）要拿它累加，
-  不能拿组件闭包里那份 `width`——React 还没重渲染时那一份是旧的。
-  */
+/** 当前生效宽度；重渲染前闭包里的 width 是旧值，累加要用它。 */
 function widthOf(field: WidthField): number {
   return field === "railWidth" ? current.railWidth : current.filePaneWidth;
 }
@@ -117,31 +107,23 @@ function subscribe(listener: () => void): () => void {
   return () => { listeners.delete(listener); };
 }
 
-/** 当前视口下该渲染成多宽（不是用户存的那份，见上面两层夹的注释）。 */
+/** 当前视口下的渲染宽度（视口夹之后的值，不是存盘值）。 */
 export function useLayout(): LayoutPrefs {
   return useSyncExternalStore(subscribe, () => current, () => current);
 }
 
-/** 给容器用的 CSS 变量表：栏宽只有 CSS 知道怎么落到 grid-template-columns 上。 */
 export function layoutVars(layout: LayoutPrefs): CSSProperties {
   return { "--rail-w": `${layout.railWidth}px`, "--file-pane-w": `${layout.filePaneWidth}px` } as CSSProperties;
 }
 
-/**
-  一条可拖的竖向分隔条，绝对定位压在某一栏的左边界上（所以它不占栅格列）。
-  三种调法：拖动、方向键（键盘可达，Shift 加速）、双击回到默认。
-  */
+/** 可拖竖向分隔条，绝对定位压在栏的左边界；支持拖动、方向键（Shift 加速）、双击回默认。 */
 export function ColumnResizer({ field, label, growOn }: { field: WidthField; label: string; growOn: "left" | "right" }): ReactElement {
   const [dragging, setDragging] = useState(false);
   const start = useRef({ x: 0, width: 0 });
   const sign = growOn === "right" ? 1 : -1;
   const width = useLayout()[field];
 
-  /**
-    一次拖拽的全部生命周期都在这一个 effect 里：进入时上全局光标态、离开时一定移除。
-    监听挂 `window` 而不是分隔条自己，也不用 pointer capture：
-    拖出窗口、在浏览器边框外松手、中途切到别的 app 时事件不会送回那个小条，光标态就会一直挂在 body 上。
-    */
+  // 监听挂 window 而非分隔条：拖出窗口或在别处松手也能结束拖拽、清掉光标态
   useEffect(() => {
     if (!dragging) return;
     const move = (event: PointerEvent): void => {
@@ -164,7 +146,7 @@ export function ColumnResizer({ field, label, growOn }: { field: WidthField; lab
 
   const set = (next: number): void => { patchLayout({ [field]: next } as Partial<LayoutPrefs>); };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    // preventDefault：否则起手就选中一段文字，拖动过程一路跟着刷蓝
+    // preventDefault：否则起手选中文字
     event.preventDefault();
     start.current = { x: event.clientX, width };
     setDragging(true);

@@ -12,13 +12,8 @@ import {
 } from "./diagramView";
 
 /**
-  agent 画图工作区的画布那一列。三件事决定它的形状：
-  - 结构不在这里改：界面上没有「加节点 / 删连线」那颗按钮，结构改动只有对话里 agent 的 `set_diagram` 单写入口，
-    画布只接受两件事——拖动位置、改名；所以这一列一次付费请求都不发（图库、图本体、几何写入、恢复版本全是本地读写，摸不到模型）。
-  - 视野是状态，不是每次渲染重算的：只在「打开另一张图 / 内容变空 / 点 ⤢ / 恢复某个版本」这几种情况下 fit，其余时刻不动。
-    工作区常驻挂载、藏着时宽度为 0，所以视野按图 id 存一份 `viewCache`：切回来还是用户离开时那格。
-  - 边的端点靠量出来的盒子：节点定宽 132，高度随标签换行、角色小字、便签正文变；
-    盒子由 `ResizeObserver`（图元挂上时补量一次）提供，是边与包围盒的锚点来源，箭头永远指着节点正中。
+  画图工作区的画布列：界面只拖动与改名，结构改动仅经 agent 的 set_diagram，本列请求全是本地读写。
+  视野按图 id 缓存，仅在换图 / 变空 / 手动触发时 fit；边端点取 ResizeObserver 量出的节点盒子。
 */
 
 interface DragState {
@@ -36,7 +31,7 @@ interface DragState {
   dy?: number;
 }
 
-/** 一次拖完的交付：位置交给外层落盘，整份 body 交回给状态（省一次重取，也免得结构被过期副本盖掉）。 */
+/** 一次拖完的交付：位置交外层落盘，整份 body 交回状态。 */
 export interface DragCommit {
   positions: DiagramPosition[];
   body: DiagramBody;
@@ -51,9 +46,9 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   saveError: string;
   loading: boolean;
   error: string;
-  /** 变化一次就重新适应内容（恢复版本之后要用它：那张图的 id 没变，走不到「换图就 fit」那条路）。 */
+  /** 重新适应内容的信号：图 id 未变但内容变（如恢复版本）时用它。 */
   fitNonce: number;
-  /** 变化一次就把版本菜单弹开（图库里点另一张图的「版本历史」：先取图、取完再弹，菜单才不会是上一张的）。 */
+  /** 弹版本菜单的信号：图取回后才弹。 */
   versionsSignal: number;
   onQuickPrompt?: (text: string) => void;
   onRename: (name: string) => void;
@@ -73,7 +68,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   const body = diagram?.body ?? null;
   const bodyRef = useRef<DiagramBody | null>(body);
   bodyRef.current = body;
-  /** 空图（一个节点都没有）：视野就是默认值，没什么可 fit 的。 */
+  /** 空图：视野用默认值。 */
   const blank = !body || !body.nodes.length;
 
   const viewCache = useRef(new Map<string, View>()).current;
@@ -87,7 +82,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
 
   const boxesRef = useRef<NodeBoxes>(new Map());
   const [measured, setMeasured] = useState<NodeBoxes>(boxesRef.current);
-  /** 这张图里还没量到盒子的那些 id：欠着的时候不能宣布 fit 完成，否则 fit 之后来一次 resize，视野自己跳。 */
+  /** 尚未量到盒子的节点 id；未量完不能宣布 fit 完成，否则后续 resize 会让视野跳。 */
   const pendingBoxes = useRef<Set<string>>(new Set());
 
   const measureNow = useCallback((element: HTMLElement): void => {
@@ -107,10 +102,9 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     for (const entry of entries) measureNow(entry.target as HTMLElement);
   })), [measureNow]);
 
-  // 组件都卸载了，就不该再有测量回调打进来：观察者在离场时一律断开。
   useEffect(() => () => { observer?.disconnect(); }, [observer]);
 
-  /** 在 transform 的 scale 里面，offsetWidth 量的仍是世界坐标那份未缩放尺寸——正是边与包围盒要的那份。 */
+  /** scale 内的 offsetWidth 仍是未缩放的世界尺寸。 */
   const attachNode = useCallback((element: HTMLDivElement | null): void => {
     if (!element) return;
     measureNow(element);
@@ -126,8 +120,8 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (!element || !current || !current.nodes.length) return;
     const width = element.clientWidth;
     const height = element.clientHeight;
-    if (!width || !height) return; // 工作区正藏着（宽度 0）：等 ResizeObserver 那一趟再来
-    if (current.nodes.some((node) => pendingBoxes.current.has(node.id))) return; // 还有节点没量到
+    if (!width || !height) return; // 宽度 0：交给 ResizeObserver 再跑
+    if (current.nodes.some((node) => pendingBoxes.current.has(node.id))) return; // 仍有节点未量到
     const next = fitView(current, boxesRef.current, { w: width, h: height });
     pendingFit.current = false;
     viewRef.current = next;
@@ -152,7 +146,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     return map;
   }, [warnings]);
 
-  /** 换图 / 图变空：视野回缓存或默认值，并补一次 fit。同一张图的重渲染不走这条路。 */
+  /** 换图 / 图变空：视野用缓存或默认值，并补一次 fit；同一张图的重渲染不走这里。 */
   useEffect(() => {
     setSelectedId(null);
     onSelect(null);
@@ -173,11 +167,11 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
       pendingFit.current = true;
       window.requestAnimationFrame(runFit);
     }
-    // 输入是 diagramId / blank 这两个真信号；bodyRef 与那几个回调每次渲染都换引用，列进依赖会变成自指循环
+    // 依赖只列 diagramId/blank：其余引用每次渲染都换，列进去会成循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagramId, blank]);
 
-  /** 视口从 0 变到有宽度（工作区刚显示）、或尺寸被抽屉挤过：欠着的那次 fit 在这里落地。 */
+  /** 视口宽度从 0 变有、或尺寸变化：欠着的 fit 在这里落地。 */
   const visibleSize = useRef<Size>({ w: 0, h: 0 });
   useEffect(() => {
     const element = viewportRef.current;
@@ -197,7 +191,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     return () => resizeObserver.disconnect();
   }, [runFit]);
 
-  /** 盒子量到了就补一次 fit（首帧量不到，fit 才有这一趟收尾）。 */
+  /** 盒子量到后补一次 fit（首帧量不到）。 */
   useLayoutEffect(() => { runFit(); }, [measured, runFit]);
 
   /* ---------- agent 动过结构：新出现的节点闪一下 ---------- */
@@ -215,11 +209,10 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     setFlash(arrived);
     const timer = window.setTimeout(() => setFlash([]), 2400);
     return () => window.clearTimeout(timer);
-    // structure 是 node/edge/group 三个计数拼出来的，它就是这件事的输入
+    // structure 由三个计数派生，即本效应的输入
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagram?.id, structure]);
 
-  /** 恢复版本之后外层会 bump 一次：那张图的 id 没变，走不到「换图就 fit」那条路，视野得自己跟上。 */
   const seenFitNonce = useRef(0);
   useEffect(() => {
     if (fitNonce === seenFitNonce.current) return;
@@ -227,7 +220,6 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (fitNonce > 0) requestFit();
   }, [fitNonce, requestFit]);
 
-  /** 图库里点另一张图的「版本历史」：外层先把那张图取回来，再 bump 这一格，菜单弹的才是这张图的版本。 */
   const seenVersionsSignal = useRef(0);
   useEffect(() => {
     if (versionsSignal === seenVersionsSignal.current) return;
@@ -237,7 +229,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
 
   const zoomBy = (factor: number): void => applyView(zoomAt(viewRef.current, centerAnchor(viewportRef.current), factor));
 
-  /** 滚轮必须走原生监听：React 的 onWheel 是 passive 注册的，preventDefault 拦不住页面滚动。 */
+  /** 滚轮走原生监听：React 的 onWheel 是 passive 注册，preventDefault 无效。 */
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
@@ -477,13 +469,13 @@ const exportItems = (onExport: () => void): MenuItem[] => [
   { label: "JSON（图元数据）", title: "导出 body：节点、边、分组框与坐标。画布上的位置就是这里的一份。", onSelect: onExport }
 ];
 
-/** ＋/－ 那颗按钮的锚点：画布正中（滚轮那条路用的是光标位置）。 */
+/** 缩放按钮的锚点：画布正中。 */
 function centerAnchor(element: HTMLDivElement | null): { x: number; y: number } {
   if (!element) return { x: 0, y: 0 };
   return { x: element.clientWidth / 2, y: element.clientHeight / 2 };
 }
 
-/** 拖动中的那点位移只活在画布本地：边跟着走，松手才交给外层落盘（省下每帧一次父子通信）。 */
+/** 拖动位移只活在画布本地，松手才交外层落盘。 */
 function withDragOffsets(body: DiagramBody | null, dragging: DragState | null): DiagramBody | null {
   if (!body) return null;
   if (!dragging || dragging.kind !== "node" || !dragging.id || dragging.dx === undefined || dragging.dy === undefined) return body;
@@ -491,7 +483,7 @@ function withDragOffsets(body: DiagramBody | null, dragging: DragState | null): 
   return { ...body, nodes: body.nodes.map((node) => (node.id === id ? { ...node, x: dx, y: dy } : node)) };
 }
 
-/** 保存状态那一格：`synced` 与 `saved` 都表示「画布 = 盘上那份」，所以共用一个 ✓（完整口径与 failed 必须显形见 api/client.ts 的 `SaveState`）。 */
+/** synced 与 saved 都表示画布与盘上一致，共用 ✓。 */
 const SAVE_LABEL: Record<SaveState, string> = {
   synced: "✓ 已保存",
   queued: "位置待存",
@@ -519,7 +511,7 @@ function SavePill({ state, error }: { state: SaveState; error: string }): ReactE
   );
 }
 
-/** 空画布的冷启动：说清这是谁在画、你能做什么；三颗快捷指令只是把话递进对话栏，发送那一下归用户。 */
+/** 空画布引导：快捷指令只填入对话栏，发送由用户触发。 */
 function EmptyCanvas({ onQuickPrompt, disabled }: { onQuickPrompt?: (text: string) => void; disabled: boolean }): ReactElement {
   return (
     <div className="dg-empty">
