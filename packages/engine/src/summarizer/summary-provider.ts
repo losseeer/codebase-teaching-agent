@@ -5,13 +5,8 @@ import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js"
 import type { FileSlice } from "@codebase-tutor/analysis";
 
 /**
-  文件职责摘要的提供方（L1）契约：
-  - 输入是结构切片（`FileSlice`），不是整份正文：只留按重要性排序的符号签名与依赖方向。
-  - 输出是 {summary, role?}；角色本由结构规则给出（analysis 包的 `extraction/roles.ts`），模型给的角色是
-    可选覆盖——给了就用，没给就沿用结构结论。
-  - 接口是批量的：一次调用处理多条切片，把导入期的往返次数降到 1/8，重复的系统提示只付一次。
-  - 返回值按下标对齐入参，某一条 `undefined` 表示没拿到结果、由调用方回落——
-    批量里坏一条不该丢掉其余。
+  文件职责摘要的提供方（L1）契约：输入结构切片，输出 {summary, role?}，模型给的角色是可选覆盖。
+  接口是批量的；返回值按下标对齐入参，某条 `undefined` 表示没拿到结果、由调用方补齐。
 */
 
 export interface SummaryResult {
@@ -23,20 +18,17 @@ export interface SummaryResult {
 export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
-  /**
-    这份摘要档会不会把切片内容发到端点。出网清单（`security/egress-log.ts`）只有 `true` 才计入审计：
-    确定性档一个字都不发出去，把它的逐文件装配记成「源码出网」就是虚报，虚报的账面比漏报更难查。
-    */
+  /** 这份摘要档会不会把切片内容发到端点；出网清单只有 `true` 才计入。 */
   readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
-  /** 最近一次调用拿到的用量（没调用过 = undefined）：导入这一路的钱要靠它进账。 */
+  /** 最近一次调用拿到的用量；没调用过为 undefined。 */
   lastUsage?: LlmUsage;
 }
 
-/** 一次调用塞几条切片：太多则单次失败牵连面大，太少则往返次数又上去了。 */
+/** 一次调用塞几条切片。 */
 export const SUMMARY_BATCH_SIZE = 8;
 
-/** 约束回复长度：摘要会进检索语料与上下文，长了就是长尾成本。 */
+/** 单条摘要的字符上限。 */
 const MAX_SUMMARY_CHARS = 200;
 const BATCH_MAX_TOKENS = 1_200;
 const BATCH_SCENE = "map.summary";
@@ -61,10 +53,10 @@ const BATCH_SYSTEM_PROMPT_LINES = [
   '严格输出 JSON 数组，长度与输入一致，每项：{"path":"原样返回路径","summary":"…","role":"core|support|infra|tool|test"}。不要输出 JSON 以外的任何文字。'
 ];
 
-/** 「摘要参考注释」开时追加的一行（只在开着的仓出现——关着的仓提示词逐字节不变）。 */
+/** 「摘要参考注释」开时追加的一行；关着的仓提示词不变。 */
 const HEADER_COMMENT_PROMPT_LINE = "部分切片可能带 headerComment 字段（文件头注释摘录）：中文概念词可以从中取，但英文标识符仍以符号名为准；注释与符号冲突时以符号为准，勿抄注释里的样板话。";
 
-/** 导出便于测试断言「关=逐字节旧提示词」，以及 Ollama 档共用同一基础提示。 */
+/** 批量系统提示词：导出供测试断言关档时的形状。 */
 export function batchSystemPrompt(withHeaderComments: boolean): string {
   const lines = [...BATCH_SYSTEM_PROMPT_LINES];
   if (withHeaderComments) lines.splice(4, 0, HEADER_COMMENT_PROMPT_LINE);
@@ -73,21 +65,11 @@ export function batchSystemPrompt(withHeaderComments: boolean): string {
 
 const BATCH_SYSTEM_PROMPT = batchSystemPrompt(false);
 
-/**
-  L1 摘要这一步的口径 = 上面的批量提示词 + 版本号（绑在一起登记，见 `analysis-step.ts`）。
-  - `slice-v2`：缓存键口径版本。摘要提示词要求「点出真实英文标识符 + 带学习者会说的中文概念词」；
-    切片或角色规则的语义变了才翻版本让旧产物作废——翻一次是全仓付费重生成，由翻版本这个动作把关。
-  - `slice-v2c`：打开「摘要参考注释」开关（每仓设置，默认关）的仓走这一档。
-    开关同时切换提示词与切片字段，键前缀必须分流；关着的仓保持 slice-v2，输入逐字节不变、照常命中。
-  */
+/** L1 摘要的口径登记：`slice-v2` 为默认档，`slice-v2c` 为开「摘要参考注释」的仓，两档键前缀分流。 */
 export const SUMMARY_STEP = defineAnalysisStep({ layer: "summary-slice", contractVersion: "slice-v2", prompts: [batchSystemPrompt(false)] });
 export const SUMMARY_COMMENTS_STEP = defineAnalysisStep({ layer: "summary-slice-comments", contractVersion: "slice-v2c", prompts: [batchSystemPrompt(true)] });
 
-/**
-  解析批量回复：按路径建索引（不按下标硬对，模型偶尔会漏项或换序）。
-  读不出的项直接不返回，由调用方按「这一条没拿到结果」回落；解析整体失败返回空表。
-  单独导出是为了能直接测这段容错，而不是只能靠桩服务绕一圈。
-*/
+/** 解析批量回复：按路径建索引；读不出的项不返回，整体失败返回空表。 */
 export function parseBatchReply(text: string): Map<string, SummaryResult> {
   const results = new Map<string, SummaryResult>();
   const stripped = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -113,17 +95,13 @@ export function parseBatchReply(text: string): Map<string, SummaryResult> {
   return results;
 }
 
-/**
-  确定性兜底：不调模型，摘要完全由结构切片拼出（离线可复现、不消耗 token）。
-  ⚠️ 摘要要短：它进检索语料当文件职责，这里长一句，每次检索与装配就多背一份钱。
-  详细信息由切片承载，摘要只说「属于哪层 + 认出哪些主要符号」。
-*/
+/** 确定性档：不调模型，摘要由结构切片拼出，离线可复现。 */
 export class LocalSummaryProvider implements SummaryProvider {
   readonly modelVersion = "local-heuristic-v1";
   readonly name = "local deterministic fallback";
   readonly sendsCodeToEndpoint = false;
 
-  /** 契约比接口更紧：确定性档对每一条都给结果（调用方据此把它当补齐手段）。 */
+  /** 确定性档对每一条都给结果。 */
   async summarizeMany(slices: FileSlice[]): Promise<SummaryResult[]> {
     return slices.map((slice) => {
       const names = slice.entries.slice(0, 3).map((entry) => entry.name);
@@ -136,7 +114,7 @@ export class LocalSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 走项目自己的轻量档（L1 的语义来源）。批量调用，单次失败由调用方按条回落。 */
+/** 走项目的轻量档：批量调用，单次失败由调用方按条补齐。 */
 export class LlmSummaryProvider implements SummaryProvider {
   readonly name = "light tier LLM";
   readonly sendsCodeToEndpoint = true;
@@ -164,10 +142,10 @@ export class LlmSummaryProvider implements SummaryProvider {
   }
 }
 
-/** 本地 Ollama（`TUTOR_SUMMARY_PROVIDER=ollama` 时启用）：逐条调用，与批量档共用同一套提示与解析。 */
+/** 本地 Ollama 档：逐条调用，与批量档共用同一套提示与解析。 */
 class OllamaSummaryProvider implements SummaryProvider {
   readonly name = "Ollama local model";
-  /** 端点在本机也算「发到模型」：出网清单记的是「源码进过某 provider 的请求」，报表靠 provider 名分辨是哪一档。 */
+  /** 端点在本机也算发到模型。 */
   readonly sendsCodeToEndpoint = true;
 
   constructor(private readonly model = process.env.TUTOR_OLLAMA_MODEL ?? "llama3.2", private readonly endpoint = process.env.TUTOR_OLLAMA_URL ?? "http://127.0.0.1:11434") {}
@@ -192,7 +170,7 @@ class OllamaSummaryProvider implements SummaryProvider {
         const body = await response.json() as { response?: string };
         results.push(body.response?.trim() ? parseBatchReply(body.response).get(slice.path) : undefined);
       } catch {
-        // 本地模型不可用就这一条没结果，由调用方回落；不因为一条坏掉中断整批
+        // 本地模型不可用时这一条没结果，由调用方补齐。
         results.push(undefined);
       } finally {
         clearTimeout(timer);
@@ -202,13 +180,7 @@ class OllamaSummaryProvider implements SummaryProvider {
   }
 }
 
-/**
-  选择摘要档：
-  - `TUTOR_SUMMARY_PROVIDER=ollama` → 本地 Ollama
-  - `TUTOR_SUMMARY_PROVIDER=off|none|local` → 确定性档（不调模型的显式开关）
-  - 未设置（默认）→ 有轻量档就用轻量档，没有就退确定性档
-  默认用模型是因为 L1 的价值就在语义摘要；费用闸门在调用方——预算降级时传不进 llm，自然落到确定性档。
-*/
+/** 选择摘要档：ollama → 本地档；off/none/local → 确定性档；默认有轻量档用轻量档，否则确定性档。 */
 export function createSummaryProvider(input: { llm?: LlmProvider; withHeaderComments?: boolean } = {}): SummaryProvider {
   const mode = (process.env.TUTOR_SUMMARY_PROVIDER ?? "").trim().toLowerCase();
   if (mode === "ollama") return new OllamaSummaryProvider();

@@ -11,7 +11,7 @@ import { repositoryId as deriveRepositoryId } from "@codebase-tutor/platform";
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { ImportService, type ImportedRepository } from "./importer.js";
 
-/** 构造一个带完整 .tutor 持久化数据的最小仓库目录（走 TutorDatabase 真实写库）。 */
+/** 构造带完整 .tutor 数据的最小仓库目录（真实写库）。 */
 function makePersistedRepo(root: string, name: string): { repoDir: string; repositoryId: string } {
   const repoDir = realpathSync(mkdtempSync(join(root, `${name}-`)));
   mkdirSync(join(repoDir, "src"), { recursive: true });
@@ -37,8 +37,7 @@ function makePersistedRepo(root: string, name: string): { repoDir: string; repos
   return { repoDir, repositoryId };
 }
 
-/** 测试期不写引擎工作日志：默认落点是 `~/.codebase-tutor/engine.jsonl`，那是产品数据，
-    测试回合的 reindex 事件混进去之后，事后排查就分不清哪条来自真实用户操作。 */
+/** 测试期不写引擎工作日志：默认落点是产品数据。 */
 beforeEach(() => {
   process.env.TUTOR_ENGINE_LOG = "off";
 });
@@ -47,7 +46,7 @@ afterEach(() => {
   delete process.env.TUTOR_ENGINE_LOG;
 });
 
-/** 测试用 git 仓：新鲜度判定的 HEAD 轴需要真提交，非 git 仓只能验到 unknown/stale。 */
+/** 测试用 git 仓：新鲜度的 HEAD 轴需要真提交。 */
 function gitInitAndCommit(repository: string): string {
   const run = (...args: string[]): string => execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
   run("init", "-q");
@@ -56,7 +55,7 @@ function gitInitAndCommit(repository: string): string {
   return run("rev-parse", "HEAD");
 }
 
-/** 把 db 里的 analysis 换成指定 stamp / HEAD（模拟「产物是在这个状态下算出来的」）。 */
+/** 把 db 里的 analysis 换成指定 stamp / HEAD。 */
 function rewriteAnalysis(repoDir: string, repositoryId: string, patch: Partial<RepositoryAnalysis>): void {
   const database = new TutorDatabase(repoDir);
   const stored = database.state.analysis(repositoryId)!;
@@ -87,7 +86,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** 记下 watcher 好收尾；测试里不让真实文件事件驱动重分析。 */
+  /** 记下 watcher 好收尾。 */
   function quiet(service: ImportService, repositoryId: string): ImportedRepository {
     const repository = service.getRepository(repositoryId)!;
     repository.watcher?.close();
@@ -102,11 +101,11 @@ describe("ImportService 地址簿与懒挂载", () => {
 
     const service = new ImportService();
     const catalog = service.catalog();
-    // 重复条目去重；目录不存在的条目保留并如实标注（由用户决定移除，不悄悄丢）
+    // 重复条目去重；目录不存在的条目保留并标注。
     expect(catalog.map((item) => item.name.split("-")[0])).toEqual(["alpha", "beta", "gone"]);
     expect(catalog.map((item) => item.exists)).toEqual([true, true, false]);
     expect(catalog.every((item) => !item.mounted)).toBe(true);
-    // 未挂载的条目不探产物——探它就得读它的 db
+    // 未挂载的条目不探产物。
     expect(catalog.every((item) => item.artifactsReady === undefined)).toBe(true);
     expect(service.mountedRepositories()).toHaveLength(0);
   });
@@ -114,7 +113,7 @@ describe("ImportService 地址簿与懒挂载", () => {
   it("懒挂载：不在地址簿 / 目录没了 / 产物不全，三种失败各有 reason，且都不触发重分析", () => {
     const ok = makePersistedRepo(root, "ok");
     const missing = makePersistedRepo(root, "missing");
-    // 有目录、有文件，但从来没被分析过（没有 .tutor 产物）
+    // 有目录有文件，但没有 .tutor 产物。
     const bare = realpathSync(mkdtempSync(join(root, "bare-")));
     mkdirSync(join(bare, "src"), { recursive: true });
     writeFileSync(join(bare, "src", "main.ts"), "export const main = () => 1;\n");
@@ -122,7 +121,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     writeRegistry([ok.repoDir, missing.repoDir, bare]);
 
     const service = new ImportService();
-    // 目录真实存在、但从来没入簿：GUI 拿到的 workspace 指向它时必须说清「不在地址簿」，而不是假装能挂
+    // 目录存在但从未入簿：应报「不在地址簿」。
     const outside = service.ensureMounted(deriveRepositoryId(root));
     expect(!outside.ok && outside.reason).toBe("not_in_catalog");
 
@@ -141,7 +140,7 @@ describe("ImportService 地址簿与懒挂载", () => {
   it("新鲜度只报告不重算：stale → 补上真 stamp 变 unknown（非 git 仓）→ git 仓里对得上才 fresh，HEAD 移动而内容不变是 drifted", () => {
     const repo = makePersistedRepo(root, "alpha");
     writeRegistry([repo.repoDir]);
-    /** 每个阶段都新起一个 service：模拟「进程重启后首次访问」，判定只在挂载时发生一次，不需要 unmount 原语 */
+    /** 每个阶段新起一个 service：模拟进程重启后首次访问。 */
     const judge = (): RepositoryFreshness => {
       const service = new ImportService();
       const result = service.ensureMounted(repo.repositoryId);
@@ -152,26 +151,26 @@ describe("ImportService 地址簿与懒挂载", () => {
       return freshness;
     };
 
-    // db 里是假的 "content:fixture"，磁盘内容对不上 → 判过期，并给出当前真 stamp
+    // db 里的 stamp 与磁盘对不上：判过期。
     const first = judge();
     expect(first.verdict).toBe("stale");
     expect(first.contentChanged).toBe(true);
-    // 只报告：产物里写的还是那个旧 stamp，引擎没顺带替用户重算
+    // 只报告：引擎不替用户重算。
     const database = new TutorDatabase(repo.repoDir);
     expect(database.state.analysis(repo.repositoryId)?.versionStamp).toBe("content:fixture");
     database.close();
 
-    // 把产物「假装」是在当前内容下算的：非 git 仓没有 HEAD 可比，只能退化成 unknown
+    // 非 git 仓没有 HEAD 可比：退化成 unknown。
     rewriteAnalysis(repo.repoDir, repo.repositoryId, { versionStamp: first.versionStamp });
     expect(judge().verdict).toBe("unknown");
     expect(judge().contentChanged).toBe(false);
 
-    // git 仓 + 产物记了当时的 HEAD：对上才是 fresh
+    // git 仓且产物记了 HEAD：对上才是 fresh。
     const head = gitInitAndCommit(repo.repoDir);
     rewriteAnalysis(repo.repoDir, repo.repositoryId, { gitHead: head });
     expect(judge().verdict).toBe("fresh");
 
-    // 挪动 HEAD 但工作树内容不变（空提交）：产物仍可用，只是要知道分析点在别的提交上
+    // 空提交挪动 HEAD、内容不变：应判 drifted。
     execFileSync("git", ["-C", repo.repoDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "moved"], { encoding: "utf8" });
     const drifted = judge();
     expect(drifted.verdict).toBe("drifted");
@@ -190,7 +189,7 @@ describe("ImportService 地址簿与懒挂载", () => {
     service.ensureMounted(alpha.repositoryId);
     service.ensureMounted(beta.repositoryId);
     quiet(service, beta.repositoryId);
-    // 先用一次 alpha，让它比 beta 更新鲜 → 挂 gamma 时该驱逐的是 beta
+    // 先用一次 alpha：挂 gamma 时该驱逐 beta。
     service.ensureMounted(alpha.repositoryId);
     service.ensureMounted(gamma.repositoryId);
     quiet(service, alpha.repositoryId);
@@ -199,13 +198,13 @@ describe("ImportService 地址簿与懒挂载", () => {
     expect(service.getRepository(alpha.repositoryId)).toBeDefined();
     expect(service.getRepository(gamma.repositoryId)).toBeDefined();
     expect(service.getRepository(beta.repositoryId)).toBeUndefined();
-    // 驱逐不等于遗忘：地址簿照旧列它，再访问就重新挂
+    // 驱逐后地址簿照旧列它，再访问就重新挂。
     expect(service.catalog().find((item) => item.repositoryId === beta.repositoryId)?.mounted).toBe(false);
     expect(service.ensureMounted(beta.repositoryId).ok).toBe(true);
     quiet(service, beta.repositoryId);
-    // 上限仍然守住：挂回 beta 把它挤出去的是最久未用的 alpha
+    // 挂回 beta 时被驱逐的是最久未用的 alpha。
     expect(service.mountedRepositories().length).toBe(2);
-    // 挂载/驱逐都不改写地址簿——它是用户资产，不是进程状态
+    // 挂载与驱逐都不改写地址簿。
     const book = JSON.parse(readFileSync(registryFile, "utf8")) as { repositories: string[] };
     expect(book.repositories).toEqual([alpha.repoDir, beta.repoDir, gamma.repoDir]);
   });
@@ -249,7 +248,7 @@ describe("ImportService 地址簿与懒挂载", () => {
 });
 
 
-/** 私有成员的可访问形状（只用于测试注入在途回合与断言轮次）。 */
+/** 私有成员的可访问形状，供测试用。 */
 type ImportServiceProbe = {
   analyze: (repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void) => Promise<ImportedRepository>;
   reanalyzeIncrementally: (repositoryId: string, changedPaths: string[]) => Promise<void>;
@@ -274,7 +273,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** 把仓库写进地址簿并逐个懒挂载；调用方自行 close watcher——回合由测试显式驱动，不靠真实文件事件。 */
+  /** 把仓库写进地址簿并逐个懒挂载；调用方自行 close watcher。 */
   function mountInto(service: ImportService, ...repoDirs: string[]): number {
     writeFileSync(registryFile, `${JSON.stringify({ repositories: repoDirs })}\n`);
     for (const path of repoDirs) service.ensureMounted(deriveRepositoryId(path));
@@ -305,13 +304,13 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     releaseFirst();
     await Promise.all([firstRound, second, third]);
 
-    // 三轮变更只跑两轮：后两轮合并成第二轮
+    // 三轮变更只跑两轮。
     expect(spy).toHaveBeenCalledTimes(2);
     const mounted = service.getRepository(repositoryId)!;
-    // 最终状态来自最后一轮，而不是「先启动、后完成」的那轮
+    // 最终状态来自最后一轮。
     expect(mounted.analysis.versionStamp).toBe("content:round2");
     expect(mounted.analysis.lastIncrementalUpdate?.changedPaths).toEqual(["src/b.ts", "src/c.ts"]);
-    // 合并后的那轮也落进了 SQLite（重启后不丢）
+    // 合并后的那轮也落进 SQLite。
     const database = new TutorDatabase(repoDir);
     expect(database.state.analysis(repositoryId)?.versionStamp).toBe("content:round2");
     database.close();
@@ -336,14 +335,14 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
 
     const inFlight = (service as unknown as ImportServiceProbe).reanalyzeIncrementally(alpha.repositoryId, ["src/a.ts"]);    await tick();
 
-    // 挂 beta：上限 1 → alpha 被 LRU 驱逐（watcher 已 close、内存里没了）
+    // 上限 1 时挂 beta：alpha 被驱逐。
     service.ensureMounted(beta.repositoryId);
     expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
 
     release();
     await inFlight;
 
-    // 旧回合不得把 alpha 复活进内存映射
+    // 旧回合不得把 alpha 复活进内存映射。
     expect(service.getRepository(alpha.repositoryId)).toBeUndefined();
     expect(service.getRepository(beta.repositoryId)).toBeDefined();
     const database = new TutorDatabase(alpha.repoDir);
@@ -352,12 +351,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     service.getRepository(beta.repositoryId)?.watcher?.close();
   });
 
-  /**
-    服务层这一半边：监听被「非内容事件」叫醒是常态（往仓根放一张图片会顶一下仓根的 mtime；
-    macOS 建流时还会把目录近期历史倒还一遍），而重分析不问缘由地跑完就回写：
-    产物对象被换、SQLite 被重写、`repository.updated` 广播出去，界面以为刚重算过。
-    按内容哈希判：这一轮扫出来的 `versionStamp` 与挂载中那份相同，就什么都没发生（只留一行 noop 读数）。
-    */
+  /** 按内容哈希判：这一轮扫出的 `versionStamp` 与挂载中那份相同时只留一行 noop 读数。 */
   it("内容没变的一轮不回写产物、不换内存那份分析、也不广播", async () => {
     const { repoDir, repositoryId } = makePersistedRepo(root, "alpha");
     const service = new ImportService();
@@ -369,7 +363,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     });
 
     const probe = service as unknown as ImportServiceProbe;
-    // 第一轮：手工造的 `content:fixture` 与磁盘真值不同 ⇒ 该回写、该广播
+    // 第一轮：stamp 与磁盘真值不同，该回写、该广播。
     await probe.reanalyzeIncrementally(repositoryId, ["src/main.ts"]);
     const afterFirst = service.getRepository(repositoryId)!;
     expect(afterFirst.analysis.versionStamp, "真内容变了那一轮照旧换产物").not.toBe("content:fixture");
@@ -378,7 +372,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
     const storedFirst = database.state.analysis(repositoryId)!.lastIncrementalUpdate;
     database.close();
 
-    // 第二轮：磁盘一字未动
+    // 第二轮：磁盘未动。
     await probe.reanalyzeIncrementally(repositoryId, ["README.md"]);
     expect(service.getRepository(repositoryId)!.analysis, "内容没变就不该换掉挂载中那份分析").toBe(afterFirst.analysis);
     expect(updates, "没变化就不该再广播一次「仓更新了」").toHaveLength(1);
@@ -388,11 +382,7 @@ describe("ImportService 重分析在途守卫（同一仓不并发两轮）", ()
   });
 });
 
-/**
-  编辑期免打扰：引擎在学它自己的仓，改代码的人与正在被学习的是同一批文件，一轮编辑就会叫醒一次重分析。
-  这一组不测「文件事件到底来没来」（那是 watcher.test.ts 的活，真实事件在并行负载下本来就飘），
-  只钉这个开关的三条可判定性质：关掉的就是那条监听、状态看得见、挂起活过驱逐。
-  */
+/** 这一组只钉三条性质：关掉的就是那条监听、状态看得见、挂起活过驱逐。 */
 describe("ImportService 编辑期免打扰：按仓挂起 fs 监听", () => {
   let root: string;
   let registryFile: string;

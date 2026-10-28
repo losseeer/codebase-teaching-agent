@@ -48,7 +48,7 @@ describe("文件切片（L1 的输入）", () => {
       dependsOn: ["svc.py"],
       dependedOnBy: []
     });
-    // 依赖方向是双向的，且类只给名字不给参数
+    // 依赖方向是双向的，类只给名字不给参数。
     expect(slices.get("svc.py")?.dependedOnBy).toEqual(["main.py"]);
     expect(slices.get("svc.py")?.dependsOn).toEqual(["util.py"]);
     expect(slices.get("svc.py")?.entries.map((entry) => entry.signature)).toEqual(["run(x)", "Helper"]);
@@ -73,15 +73,11 @@ describe("文件切片（L1 的输入）", () => {
 });
 
 describe("文件摘要表（L1）", () => {
-  /**
-    端口存在的理由要能被用例证明：把 `store` 换成一个 Map 装的假件，摘要流水线必须照样跑完
-    首次计算与缓存命中两条分支——否则「只认 SummaryStore」只是注释里的一句话。
-    这里一个 SQLite 都不开（判据：整条用例没有 `TutorDatabase`）。
-    */
+  /** 把 `store` 换成内存假件：首次计算与缓存命中两条分支都要跑通。 */
   it("摘要流水线换个存储也跑得通：内存 Map 假件能吃下首次计算与命中两条分支", async () => {
     const rows = new Map<string, string>();
     const store: SummaryStore = {
-      // 泛型签名要照着端口写：假件把读出的形状定死成 `{path, summary}` 就等于换了个契约
+      // 泛型签名照着端口写。
       get<T extends { path: string; summary: string }>(cacheKey: string): T | undefined {
         return rows.has(cacheKey) ? JSON.parse(rows.get(cacheKey)!) as T : undefined;
       },
@@ -96,13 +92,10 @@ describe("文件摘要表（L1）", () => {
     expect(second.estimate.cachedFiles, "命中判据也来自同一个口").toBe(STRUCTURE.files.length);
   });
 
-  /**
-    进度读数：L1 是整次导入最慢的一段（换模型后全仓重摘要要跑几十分钟）。
-    只在开头报一个固定值的话，「正在花钱」与「卡死了」在界面上长得一样，所以每一批都得动一次。
-  */
+  /** L1 是导入最慢的一段：每一批都要动一次进度。 */
   it("逐批回报进度：批次之间在动，全命中的那轮也立刻报满", async () => {
     const database = tempDatabase();
-    // 比一批多两条 ⇒ 必定走满两个批次，读数才证明得出「批与批之间也在动」
+    // 比一批多两条：走满两个批次。
     const totalFiles = SUMMARY_BATCH_SIZE + 2;
     const many: FileStructure = {
       files: Array.from({ length: totalFiles }, (_, index) => ({ path: `f${index}.py`, lines: 10 })),
@@ -132,13 +125,13 @@ describe("文件摘要表（L1）", () => {
     expect(main.roleSource).toBe("structure");
     expect(main.coverage).toEqual({ checked: 1, mentioned: 1, low: false, rule: "anchor-v2" });
     expect(main.cached).toBe(false);
-    // 兜底档的摘要格式：路径 + 结构角色 + 主要符号名（简短，因为它会进检索语料）
+    // 确定性档的摘要格式：路径 + 角色 + 主要符号名。
     expect(main.summary).toBe("main.py：执行主干；定义 main");
 
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
     expect(second.summaries.every((summary) => summary.cached)).toBe(true);
-    // 命中的记录与该次算出的完全一致，只有「本次是否命中缓存」这一位不同
+    // 命中的记录与该次算出的只差 cached 一位。
     expect(second.summaries.find((summary) => summary.path === "main.py")).toEqual({ ...main, cached: true });
   });
 
@@ -154,7 +147,7 @@ describe("文件摘要表（L1）", () => {
     const main = summaries.find((summary) => summary.path === "main.py")!;
     expect(main.role).toBe("infra");
     expect(main.roleSource).toBe("provider");
-    // 切片里最靠前的一条是 main，摘要没提它（路径剥掉后连 "main" 都找不到）→ 低覆盖
+    // 切片最靠前的一条没被提到：低覆盖。
     expect(main.coverage).toEqual({ checked: 1, mentioned: 0, low: true, rule: "anchor-v2" });
   });
 
@@ -191,7 +184,7 @@ describe("文件摘要表（L1）", () => {
       modelVersion: "stub-1",
       summarizeMany: async (slices) => {
         batches.push(slices.length);
-        // 只回第一条，其余留空 —— 调用方应逐条补齐，而不是丢掉整批
+        // 只回第一条，其余留空：调用方应逐条补齐。
         return slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。`, role: "core" as const } : undefined);
       }
     };
@@ -225,8 +218,7 @@ describe("文件摘要表（L1）", () => {
       summarizeMany: async (slices) => slices.map((slice, index) => index === 0 ? { summary: `${slice.path} 负责入口。` } : undefined)
     };
     await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider: partial });
-    // 第二次同输入：模型档的键必须仍不命中，否则兜底文本会永久伪装成模型产物、
-    // fallbackFiles 归零——账面与读数上看不出任何降级发生过
+    // 第二次同输入：模型档的键必须仍不命中。
     const calls: number[] = [];
     const second: SummaryProvider = {
       sendsCodeToEndpoint: true,
@@ -261,7 +253,7 @@ describe("文件摘要表（L1）", () => {
   });
 });
 
-/** 单文件结构：符号按声明序进切片前 3 条，专门用来喂自定义摘要测覆盖率判据。 */
+/** 单文件结构：符号按声明序进切片前 3 条。 */
 function singleFileStructure(names: string[]): FileStructure {
   return {
     files: [{ path: "src/billing.ts", lines: 10 }],
@@ -313,7 +305,7 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     const database = tempDatabase();
     const provider = new LocalSummaryProvider();
     const slice = buildFileSlices(STRUCTURE, classifyFileRoles(STRUCTURE)).get("svc.py")!;
-    // 手写一条旧口径记录：coverage 没有 rule 字段，且「mentioned=0 → low」是按整名默写判的
+    // 手写一条旧口径记录：coverage 没有 rule 字段。
     const legacyRow = {
       path: "svc.py",
       summary: "svc.py：支撑逻辑；定义 run、Helper 等 2 个符号",
@@ -324,11 +316,11 @@ describe("覆盖率判据（anchor-v2：特征词锚定 + any-of）", () => {
     database.summaries.put(summaryCacheKey(slice, provider.modelVersion, false), legacyRow);
     const { summaries, estimate } = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     const svc = summaries.find((summary) => summary.path === "svc.py")!;
-    // 确定性摘要本来就以符号名开头，新判据下两条都锚上
+    // 确定性摘要以符号名开头：两条都锚上。
     expect(svc.coverage).toEqual({ checked: 2, mentioned: 2, low: false, rule: "anchor-v2" });
     expect(svc.cached).toBe(true);
     expect(estimate).toMatchObject({ cachedFiles: 1, summarizedFiles: 3 });
-    // 修正后的行真的落库了：再跑一次不需要任何迁移
+    // 修正后的行真的落库了。
     expect(database.summaries.get<{ path: string; summary: string; coverage?: { rule?: string } }>(summaryCacheKey(slice, provider.modelVersion, false))?.coverage?.rule).toBe("anchor-v2");
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(second.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
@@ -377,7 +369,7 @@ describe("extractHeaderComment（「摘要参考注释」开时取文件首段�
 });
 
 describe("「摘要参考注释」开关：双档键分流与读盘附着", () => {
-  /** 落一个真实 main.py（其余结构里的文件不在盘上：读盘失败须静默跳过而不是抛错）。 */
+  /** 落一个真实 main.py：其余文件不在盘上。 */
   function tempRepoWithSource(): TutorDatabase {
     const dir = mkdtempSync(join(tmpdir(), "summarize-h-"));
     writeFileSync(join(dir, "main.py"), '# 入口装配：加载配置并启动服务\n\nimport svc\n\ndef main():\n    svc.run(1)\n');
@@ -413,7 +405,7 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
     const off = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider });
     expect(off.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
     const on = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
-    // 开档全是新键：一条都不该命中关档刚写的行
+    // 开档全是新键：不该命中关档刚写的行。
     expect(on.estimate).toMatchObject({ cachedFiles: 0, summarizedFiles: 4 });
     const onAgain = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(onAgain.estimate).toMatchObject({ cachedFiles: 4, summarizedFiles: 0 });
@@ -422,11 +414,7 @@ describe("「摘要参考注释」开关：双档键分流与读盘附着", () =
   });
 });
 
-/**
-  L1 的密钥隐去：只筛「发出去的那份」与「存回来的摘要」，缓存键不动——
-  键是 `hash(切片本身)`，让隐去参与键计算会让全仓摘要整体失配、等于全量付费重生成。
-  这条用例同时钉两件事：出门的正文里没有原 key；第二次跑仍然全命中缓存。
-*/
+/** L1 的密钥隐去：只筛发出去的那份与存回来的摘要，缓存键不动。 */
 describe("L1 的密钥隐去", () => {
   it("切片发出去前被隐去、摘要回存前也被隐去，且缓存键不受影响", async () => {
     const database = tempDatabase();
@@ -438,7 +426,7 @@ describe("L1 的密钥隐去", () => {
       modelVersion: "stub-secret-1",
       summarizeMany: async (slices) => {
         seen.push(JSON.stringify(slices));
-        // 模型把看到的字面量原样抄回来——回存这一侧也得挡
+        // 模型把字面量原样抄回来：回存这一侧也得挡。
         return slices.map((slice) => ({ summary: `${slice.path} 用了 sk-abcdefghijklmnop1234 这个凭据。` }));
       }
     };
@@ -448,18 +436,15 @@ describe("L1 的密钥隐去", () => {
     expect(sent).not.toContain("sk-abcdefghijklmnop");
     const stored = first.summaries.find((summary) => summary.path === "main.py")!;
     expect(stored.summary).not.toContain("sk-abcdefghijklmnop");
-    // 键没翻：同输入再跑一趟必须全命中（翻掉就是 4 个文件全部付费重生成）
+    // 键没翻：同输入再跑一趟必须全命中。
     const second = await summarizeFiles({ structure: STRUCTURE, store: database.summaries, repositoryPath: database.repositoryPath, provider, withHeaderComments: true });
     expect(second.estimate.cachedFiles).toBe(4);
-    // 过筛只发生在发出去的副本上：学习者仓库里的文件一个字节都不该被我们改过
+    // 过筛只发生在发出去的副本上。
     expect(readFileSync(join(database.repositoryPath, "main.py"), "utf8")).toContain("sk-abcdefghijklmnop1234");
   });
 });
 
-/**
-  L1 出网清单的覆盖面：全仓每个文件都有一份结构切片发给模型，「哪些文件被外部模型看过」在这条线上必须逐文件可查。
-  反过来，缓存命中与确定性档根本没发请求，把它们也记进去就是把本地计算虚报成出网。
-*/
+/** L1 出网清单：逐文件登记实际发出的切片；缓存命中与确定性档不发请求，因此不记。 */
 describe("L1 出网清单", () => {
   const modelProvider = (): SummaryProvider => ({
     sendsCodeToEndpoint: true,
