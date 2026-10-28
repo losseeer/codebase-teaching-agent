@@ -6,10 +6,7 @@ import { Journal, journalFootprint, readJournal } from "./journal.js";
 import { runWithTrace } from "@codebase-tutor/platform";
 import { ENGINE_JOURNAL_EVENTS, UI_JOURNAL_EVENTS, isEngineOwnedEventType, isUiJournalEventType, turnTextPayload, TURN_TEXT_LIMIT, type JournalEventType } from "@codebase-tutor/domain";
 
-/**
-  学习日志：append-only、白名单在运行时判（判据与那两张写入权表都在 `@codebase-tutor/domain`），不只靠编译期类型。
-  要守的是谁有资格写：审计线的引擎侧类型不能从界面接口进来，否则「哪些代码出过门」这条账谁都能填。
-  */
+/** 学习日志：append-only，写入白名单在运行时由 domain 的两张表判定。 */
 
 describe("学习日志", () => {
   let repository: string;
@@ -19,7 +16,6 @@ describe("学习日志", () => {
 
   it("UI 侧事件（契约取自 shared 那张事件表）能写入并读回", () => {
     const journal = new Journal(repository, "repo_1");
-    // 清单取 domain 那张表，不在测试里另抄一份
     for (const type of UI_JOURNAL_EVENTS) journal.append(type, { where: "/api/x" });
 
     const events = readJournal(repository);
@@ -29,18 +25,16 @@ describe("学习日志", () => {
 
   it("白名单由两张表并起来；接口只收界面侧那一份，引擎侧类型只能由引擎自己 append", () => {
     const journal = new Journal(repository, "repo_1");
-    // 引擎侧类型照旧能写（那是内部路径），但不在这条接口的受理范围里
     journal.append("code_egress", { scene: "map.chat", kind: "anchor-excerpt", path: "a.ts", lines: "1-2", chars: 2, hash: "abcdef123456" });
     journal.append("token_usage", { scene: "teach", input_tokens: 10 });
     expect(readJournal(repository)).toHaveLength(2);
 
     expect(isUiJournalEventType("file_opened")).toBe(true);
-    expect(isUiJournalEventType("code_egress")).toBe(false);   // 被审计的一方不能自己填「哪些代码出过门」
+    expect(isUiJournalEventType("code_egress")).toBe(false);
     expect(isUiJournalEventType("token_usage")).toBe(false);
     expect(isUiJournalEventType("not_a_real_event")).toBe(false);
     expect(isEngineOwnedEventType("code_egress")).toBe(true);
-    expect(isEngineOwnedEventType("not_a_real_event")).toBe(false); // 未知 ≠ 引擎专属，拒绝理由要分得清
-    // 两张表并起来就是 append 的全集：漏归表的话这里直接抛
+    expect(isEngineOwnedEventType("not_a_real_event")).toBe(false);
     for (const type of [...ENGINE_JOURNAL_EVENTS, ...UI_JOURNAL_EVENTS]) expect(() => journal.append(type, {})).not.toThrow();
     expect(() => journal.append("not_a_real_event" as JournalEventType, {})).toThrow("Unknown journal event: not_a_real_event");
   });
@@ -102,11 +96,7 @@ describe("回合文本落盘（turn_text）", () => {
   });
 });
 
-/**
-  增量读缓存（`readJournal` 的水位那套）。这一条线是付费判据与审计的唯一来源，
-  读到错账比读得慢严重得多，所以四种「文件已经不是刚才那份」的形态要各自钉住：
-  追加、半行、等长原地改写、截断。
-  */
+/** 增量读缓存：追加、半行、等长改写、截断四种形态各自钉住。 */
 describe("增量读缓存：只在文件真的变了时才多读", () => {
   let repository: string;
   const file = () => join(repository, ".tutor", "journal.jsonl");
@@ -129,7 +119,7 @@ describe("增量读缓存：只在文件真的变了时才多读", () => {
     const half = JSON.stringify({ id: "x", type: "token_usage", at: "2026-10-18T00:00:00.000Z", repositoryId: "repo_1", payload: { scene: "teach", input_tokens: 8 } });
     appendFileSync(file(), half.slice(0, 40), "utf8");
     expect(readJournal(repository)).toHaveLength(1);
-    // 写完剩余部分并收尾换行：journal 的行一律以 `\n` 结束（写侧只有 `appendFileSync(... + "\n")` 一条路）
+    // 补完剩余字节并加换行收尾
     appendFileSync(file(), `${half.slice(40)}\n`, "utf8");
     const events = readJournal(repository);
     expect(events.map((event) => event.payload.input_tokens)).toEqual([7, 8]);
@@ -140,11 +130,11 @@ describe("增量读缓存：只在文件真的变了时才多读", () => {
     journal.append("turn_text", turnTextPayload("teach", "甲", "回复一"));
     journal.append("turn_text", turnTextPayload("teach", "乙", "回复二"));
     expect(readJournal(repository).map((event) => event.payload.question)).toEqual(["甲", "乙"]);
-    // 等长改写：把「甲」换成同样占 3 字节的「丙」，文件长度一动不动
+    // 等长改写：「丙」与「甲」同为 3 字节，文件长度不变
     const rewritten = readFileSync(file(), "utf8").replace("甲", "丙");
     expect(Buffer.byteLength(rewritten)).toBe(Buffer.byteLength(readFileSync(file(), "utf8")));
     writeFileSync(file(), rewritten, "utf8");
-    // 显式把 mtime 往前推一秒：同一毫秒内改完的话，文件系统给的秒/纳秒精度不够时这条会退化（不该指望测试机器给 ns）
+    // 显式推后 mtime，不依赖文件系统的改写时序
     const stamp = new Date(Date.now() + 1_000);
     utimesSync(file(), stamp, stamp);
     expect(readJournal(repository).map((event) => event.payload.question)).toEqual(["丙", "乙"]);

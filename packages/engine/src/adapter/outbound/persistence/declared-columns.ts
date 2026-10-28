@@ -1,9 +1,7 @@
-/** 表级约束行（不是列声明）：`PRIMARY KEY(a, b)` 那种整行要跳过。 */
+/** 表级约束行，不是列声明：整行跳过。 */
 const TABLE_CONSTRAINT = /^(PRIMARY|UNIQUE|CHECK|FOREIGN|CONSTRAINT)\b/i;
 
-/**
-  声明文本 → 每张表的列清单。边界取「到第一个 `;` 为止」：建表语句内部没有分号，这个切法安全。
-  */
+/** 声明文本 → 每张表的列清单，语句边界取到第一个 `;`。 */
 export function declaredColumns(schema: string): { table: string; column: string; declaration: string }[] {
   const clean = schema.replace(/--[^\n]*/g, "");
   const out: { table: string; column: string; declaration: string }[] = [];

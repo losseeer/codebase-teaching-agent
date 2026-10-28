@@ -1,11 +1,7 @@
 import type Database from "better-sqlite3";
 import type { ImportEstimate, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-/**
-  一份产物的四格状态（表 `repository_state`）：索引、导入估算、依赖图产物、每仓设置。
-  四格各自独立写：一次重分析只换 `index_json` / `analysis_json`，不该顺手重写估算与设置——
-  所以「只写这次给出来的那几列」是这张表的根本语义，判分与读侧看到的设置才不会被一次重烧悄悄改掉。
-*/
+/** 表 `repository_state` 的四格状态：索引、导入估算、依赖图产物、每仓设置。 */
 export class StateRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -45,19 +41,13 @@ export class StateRepository {
     return value ? JSON.parse(value) as T : undefined;
   }
 
-  /**
-    一次只取要的那一列：analysis_json 是大仓里最重的一块，整行捞取会让轻读付重代价。
-    列名取自这张表固定的四个，不接受外部字符串，拼进 SQL 不构成注入面。
-    */
+  /** 一次只取一列；列名取自这张表固定的四列。 */
   private jsonColumn(repositoryId: string, column: "index_json" | "estimate_json" | "analysis_json" | "settings_json"): string | null | undefined {
     const row = this.db.prepare(`SELECT ${column} AS value FROM repository_state WHERE repository_id = ?`).get(repositoryId) as { value: string | null } | undefined;
     return row?.value;
   }
 
-  /**
-    只写这次给出来的那几列：ON CONFLICT DO UPDATE 只碰给了值的列，其余留在原地不动。
-    列名从这张表固定的四个键里查，外部字符串进不了 SQL。
-    */
+  /** 只写这次给值的列，其余列留在原地；列名取自这张表固定的四列。 */
   private upsert(repositoryId: string, patch: { index?: string; estimate?: string; analysis?: string; settings?: string }): void {
     const columnOf = { index: "index_json", estimate: "estimate_json", analysis: "analysis_json", settings: "settings_json" } as const;
     const keys = (Object.keys(columnOf) as (keyof typeof columnOf)[]).filter((key) => patch[key] !== undefined);

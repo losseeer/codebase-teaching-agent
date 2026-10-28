@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { ExerciseKind } from "@codebase-tutor/domain";
+import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
 import { ChatRepository } from "./chat-repository.js";
 import { CheckpointRepository } from "./checkpoint-repository.js";
 import { DiagramRepository } from "./diagram-repository.js";
@@ -14,15 +16,11 @@ import { loadAddon } from "./betterSqlite3Loader.cjs";
 import { DATABASE_SCHEMA_SQL } from "./database-schema.js";
 import { declaredColumns } from "./declared-columns.js";
 
-const schemaVersion = 8;
+const schemaVersion = 9;
 
-// 预加载对应当前 Node ABI 的 native binding，避免默认解析路径触发 ABI mismatch。
-// runtime 接受 addon 对象而 @types 只声明 string，故 cast。
+// runtime 接受 addon 对象，@types 只声明 string
 const nativeBinding = loadAddon() as unknown as string;
-/**
-  唯一的一处「开连接 → 用 → 关」。写在 try/finally：这些调用挂在每个对话回合的读写路径上，
-  尾置的 close() 一被异常跳过就攒文件描述符，攒够把进程拖到 EMFILE。
-  */
+/** 开连接、使用、关闭；异常路径也关闭。 */
 export function withDatabase<T>(repositoryPath: string, run: (database: TutorDatabase) => T): T {
   const database = new TutorDatabase(repositoryPath);
   try {
@@ -32,18 +30,13 @@ export function withDatabase<T>(repositoryPath: string, run: (database: TutorDat
   }
 }
 
-/** 声明里的约束列：ADD COLUMN 加不出这些，缺了必须写真迁移（带回填的那种）。 */
+/** 带约束的列声明：ADD COLUMN 无法添加。 */
 const NOT_ADDABLE = /\b(PRIMARY|UNIQUE|REFERENCES|CHECK)\b/i;
 
+/** 产物库句柄：开库、迁移、列对账、关闭；每张表一个读写口。 */
 export class TutorDatabase {
   private readonly db: Database.Database;
-  /**
-    八张表按聚合各交一个 repository，每张表只有那一个读写口：
-    `state`（repository_state 的四格）· `summaries`（L1）· `facts`（static_fact）·
-    `exercises`（exercise_cache）· `reviews`（review_schedule）· `checkpoints`（turn_checkpoint）·
-    `diagrams`（diagram）· `chats`（chat_session / chat_message）。
-    这一类自己只管开库、迁移、列对账与关。
-    */
+  /** 每张表各自的读写口。 */
   readonly state: StateRepository;
   readonly summaries: SummaryRepository;
   readonly facts: FactRepository;
@@ -52,12 +45,9 @@ export class TutorDatabase {
   readonly checkpoints: CheckpointRepository;
   readonly diagrams: DiagramRepository;
   readonly chats: ChatRepository;
-  /** 开库所在的路径（只为把告警说成「哪个仓的库」，不参与任何判据）。 */
+  /** 告警文案里的仓库路径。 */
   readonly repositoryPathLabel: string;
-  /**
-    对账没能补上的列（`表.列`）。空数组 = 这份库的形状等于声明。
-    交出来而不是抛，是不把用户的存量库变成打不开的东西；挂载时这条读数会进 `engine.jsonl`。
-    */
+  /** 列对账未补上的列，形如 `表.列`。 */
   readonly schemaGaps: string[] = [];
 
   constructor(readonly repositoryPath: string) {
@@ -66,7 +56,6 @@ export class TutorDatabase {
     this.repositoryPathLabel = repositoryPath;
     this.db = new Database(join(tutorDir, "tutor.db"), { nativeBinding });
     this.db.pragma("journal_mode = WAL");
-    // 只能在 `db` 装上之后建：早一行交出去的就是 undefined
     this.state = new StateRepository(this.db);
     this.summaries = new SummaryRepository(this.db);
     this.facts = new FactRepository(this.db);
@@ -78,7 +67,6 @@ export class TutorDatabase {
     try {
       this.migrate();
     } catch (error) {
-      // 迁移失败时实例还没交出去，调用方无从 close：schema 版本过高或 ALTER 撞车时每试一次就漏一对 WAL 描述符，攒到 EMFILE
       this.db.close();
       throw error;
     }
@@ -93,7 +81,6 @@ export class TutorDatabase {
       return;
     }
     if (current.version < 2) {
-      // 与 v<7 同一判据：走过 CREATE 或上次只跑了一条 ALTER 的库已带这两列，无守卫的 ADD COLUMN 会抛 duplicate column，之后每次开库都失败
       const stateColumns = new Set((this.db.prepare("PRAGMA table_info(repository_state)").all() as { name: string }[]).map((column) => column.name));
       if (!stateColumns.has("analysis_json")) this.db.exec("ALTER TABLE repository_state ADD COLUMN analysis_json TEXT;");
       if (!stateColumns.has("settings_json")) this.db.exec("ALTER TABLE repository_state ADD COLUMN settings_json TEXT;");
@@ -104,24 +91,30 @@ export class TutorDatabase {
     if (current.version < 5) this.db.prepare("UPDATE schema_version SET version = ?").run(5);
     if (current.version < 6) this.db.prepare("UPDATE schema_version SET version = ?").run(6);
     if (current.version < 7) {
-      // 走过上面 CREATE 的库已带这一列，无守卫的 ALTER 会抛 duplicate column
       const hasState = (this.db.prepare("PRAGMA table_info(chat_session)").all() as { name: string }[]).some((column) => column.name === "state_json");
       if (!hasState) this.db.exec("ALTER TABLE chat_session ADD COLUMN state_json TEXT;");
       this.db.prepare("UPDATE schema_version SET version = ?").run(schemaVersion);
     }
     if (current.version < 8) this.db.prepare("UPDATE schema_version SET version = ?").run(8);
-    // 列对账必须放在版本梯子之后，否则梯子里的 ALTER 会撞 duplicate column
+    if (current.version < 9) {
+      // 删除多余的表与列、不支持的题型缓存行、孤儿复排计划
+      for (const table of ["layer_cache", "diagram_artifact", "companion_suggestions", "learner_mastery", "search_vector"]) this.db.exec(`DROP TABLE IF EXISTS ${table};`);
+      for (const [table, column] of [["repository_state", "course_json"], ["chat_session", "course_node_id"], ["chat_message", "stage"]] as const) {
+        const present = (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((candidate) => candidate.name === column);
+        if (present) this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column};`);
+      }
+      const retired = (this.db.prepare("SELECT DISTINCT kind FROM exercise_cache").all() as { kind: string }[]).filter((row) => !SUPPORTED_EXERCISE_KINDS.includes(row.kind as ExerciseKind));
+      for (const row of retired) this.db.prepare("DELETE FROM exercise_cache WHERE kind = ?").run(row.kind);
+      this.db.exec("DELETE FROM review_schedule WHERE exercise_id NOT IN (SELECT json_extract(exercise_json, '$.exercise.id') FROM exercise_cache);");
+      this.db.prepare("UPDATE schema_version SET version = ?").run(9);
+    }
     this.reconcileColumns(schema);
     if (current.version > schemaVersion) {
       throw new Error(`Unsupported .tutor schema version ${current.version}`);
     }
   }
 
-  /**
-    列对账：以声明文本为唯一源，把「声明里有、表里还没有」的列补上；幂等，不依赖版本号是否翻对。
-    补不上的（带约束、或 NOT NULL 又没默认值）记进 schemaGaps 并告警，不抛：
-    崩在开库上等于锁死用户已有的学习记录，留给读取点失败才能带上具体列名。
-    */
+  /** 列对账：声明里有、表里还没有的列补上；补不上的记进 schemaGaps 并告警。 */
   private reconcileColumns(schema: string): void {
     for (const declared of declaredColumns(schema)) {
       const present = (this.db.prepare(`PRAGMA table_info(${declared.table})`).all() as { name: string }[]).some((column) => column.name === declared.column);
@@ -129,7 +122,7 @@ export class TutorDatabase {
       if (NOT_ADDABLE.test(declared.declaration) || (/\bNOT NULL\b/i.test(declared.declaration) && !/\bDEFAULT\b/i.test(declared.declaration))) {
         const gap = `${declared.table}.${declared.column}`;
         this.schemaGaps.push(gap);
-        console.warn(`[engine] ${this.repositoryPathLabel ?? "产物库"} 缺列 ${gap}，而它的声明是「${declared.declaration}」：ADD COLUMN 加不出这种列，需要写一条一次性迁移（建新表、回填、换名）。`);
+        console.warn(`[engine] ${this.repositoryPathLabel ?? "产物库"} 缺列 ${gap}（声明「${declared.declaration}」），需要一次性迁移补上。`);
         continue;
       }
       this.db.exec(`ALTER TABLE ${declared.table} ADD COLUMN ${declared.declaration.replace(/\s+/g, " ").trim()}`);

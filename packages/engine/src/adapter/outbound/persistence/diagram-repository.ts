@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-/** 一张图的行形状。`payload` 是整份图（节点 / 连线 / 版本历史）的 JSON，解析成领域类型在 `persistence/diagrams.ts`。 */
+/** 一张图的行形状；`payload` 存整份图的 JSON。 */
 export interface DiagramRow {
   name: string;
   source: string;
@@ -14,12 +14,7 @@ export interface DiagramListRow extends DiagramRow {
   diagramId: string;
 }
 
-/**
-  画布上的一张图（表 `diagram`）。这张表只是存储：一张图的业务形状（名字去空白与撞名加序号、
-  版本只能往前追加、恢复同样是追加一版）全在 `persistence/diagrams.ts`，那里是唯一业务读写口，这里只收 SQL。
-  列一律 AS 成返回类型上的驼峰名：better-sqlite3 按 SQL 里写的列名交回键，
-  类型是断言出来的、编译器不报，键名不一致到运行期才炸。
-*/
+/** 表 `diagram` 的语句层；列一律 `AS` 成驼峰名以对上返回类型的键名。 */
 export class DiagramRepository {
   constructor(private readonly db: Database.Database) {}
 

@@ -5,11 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendMessages, countMessagesRaw, createThread, getThread, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
 import { isChatScope } from "@codebase-tutor/contract";
 
-/**
-  会话持久化出入口（产品数据线）的口径用例。
-  核心不变量：产品删除是软的——软删后列表与正文读侧都看不见，但消息行必须还在库里（审计与评测数据源不该被动）。
-  其余用例守读侧过滤、尾窗方向与顺序。
-  */
+/** 会话持久化出入口的口径用例：软删后读侧看不见，消息行仍在库里。 */
 
 describe("会话持久化", () => {
   let repository: string;
@@ -59,7 +55,6 @@ describe("会话持久化", () => {
   it("清单只收谈过的会话：新建后没发言的那条不进列表，行留在库里", () => {
     const unsent = openThread({ title: "刚点新建" });
     expect(listThreads(repository, "repo_1", "map").map((thread) => thread.id)).toEqual([]);
-    // 行本身不删：界面还指着这个 id，正文一落库它就进清单
     expect(getThread(repository, unsent.id)?.title).toBe("刚点新建");
     appendMessages(repository, unsent.id, [{ role: "user", content: "第一问" }]);
     expect(listThreads(repository, "repo_1", "map").map((thread) => thread.id)).toEqual([unsent.id]);
@@ -73,9 +68,7 @@ describe("会话持久化", () => {
     expect(listThreads(repository, "repo_1", "map")).toEqual([]);
     expect(getThread(repository, thread.id)).toBeUndefined();
     expect(readMessages(repository, thread.id)).toEqual([]);
-    // 原文没被产品删除动过——这条是本轮的核心判据
     expect(countMessagesRaw(repository, thread.id)).toBe(1);
-    // 第二次删同一条：没有未删线程可改，路由据此回 404
     expect(softDeleteThread(repository, thread.id)).toBe(false);
   });
 
@@ -90,7 +83,7 @@ describe("会话持久化", () => {
     const a = openThread({ title: "A" });
     const b = openThread({ title: "B" });
     appendMessages(repository, a.id, [{ role: "user", content: "a1" }]);
-    // updated_at 是毫秒时间戳：不留间隔的话两次写入同毫秒，排序并列就成了掷硬币
+    // updated_at 是毫秒时间戳：同毫秒写入会让排序并列
     await new Promise((resolve) => setTimeout(resolve, 5));
     appendMessages(repository, b.id, [{ role: "user", content: "b1" }]);
     expect(listThreads(repository, "repo_1", "map").map((thread) => thread.title)).toEqual(["B", "A"]);
@@ -101,7 +94,6 @@ describe("会话持久化", () => {
 
     const teach = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "teach", scopeRef: "file:src/main.ts" });
     appendMessages(repository, teach.id, [{ role: "user", content: "教学第一问" }]);
-    // 作用域隔离：map 的列表里不会混进教学会话
     expect(listThreads(repository, "repo_1", "map").some((thread) => thread.id === teach.id)).toBe(false);
   });
 
@@ -112,17 +104,17 @@ describe("会话持久化", () => {
     expect(saveThreadState(repository, thread.id, state)).toBe(true);
     expect(readThreadState(repository, thread.id)).toEqual(state);
 
-    // 「没记」不能伪装成默认值：调用方要靠 undefined 判定这轮没有可续的设置
+    // settings 缺失时读回 undefined，不给默认值
     expect(saveThreadState(repository, thread.id, {} as unknown as typeof state)).toBe(true);
     expect(readThreadState(repository, thread.id)).toBeUndefined();
 
-    // 撤掉教学状态机之前的老快照：stage/fallbackCount 两个键留在库里，读侧只取 settings（不迁移历史行）
+    // 快照里的多余键读侧忽略，只取 settings
     const legacy = { stage: "verify", fallbackCount: 2, settings: state.settings };
     expect(saveThreadState(repository, thread.id, legacy as unknown as typeof state)).toBe(true);
     expect(readThreadState(repository, thread.id)).toEqual(state);
 
     softDeleteThread(repository, thread.id);
-    // 软删后拒收新的快照写入；已存的那份留在行里——「这个会话已删」是线程读侧挡的，不是靠清字段
+    // 软删后拒写新快照；已存的那份留在行里
     expect(saveThreadState(repository, thread.id, state)).toBe(false);
     expect(readThreadState(repository, thread.id)).toEqual(state);
   });
