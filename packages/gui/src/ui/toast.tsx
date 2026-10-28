@@ -11,10 +11,15 @@ export function showToast(message: string): void {
   listener?.(message);
 }
 
+/** 界面只报状态，原因进 console。 */
+export function failureText(status: string, reason?: unknown): string {
+  if (reason !== undefined) console.warn(`[gui] ${status}`, reason instanceof Error ? reason.message : String(reason));
+  return status;
+}
+
 /** 操作失败只报状态；原因进 console。 */
 export function toastFailure(status: string, reason?: unknown): void {
-  if (reason !== undefined) console.warn(`[gui] ${status}`, reason instanceof Error ? reason.message : String(reason));
-  showToast(status);
+  showToast(failureText(status, reason));
 }
 
 export function subscribeToast(fn: Listener): () => void {

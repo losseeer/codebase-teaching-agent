@@ -14,7 +14,7 @@ import { DiagramCanvas, type DragCommit } from "../map/DiagramCanvas";
 import { GalleryPane } from "../map/GalleryPane";
 import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } from "../map/NodeDrawer";
 import { emit } from "../journal";
-import { showToast, toastFailure } from "../ui/toast";
+import { failureText, showToast, toastFailure } from "../ui/toast";
 
 // 宏观设计 = agent 画图工作区：左栏图库与项目目录两个 tab，右栏画布。
 // 本页请求全是免费读，不碰模型。
@@ -135,7 +135,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     setListError("");
     api.listDiagrams(repositoryId)
       .then((result) => { if (current) setDiagrams(result.diagrams); })
-      .catch((reason: unknown) => { if (current) setListError(reason instanceof Error ? reason.message : "图库读取失败"); })
+      .catch((reason: unknown) => { if (current) setListError(failureText("图库读不到", reason)); })
       .finally(() => { if (current) setListLoading(false); });
     return () => { current = false; };
   }, [repositoryId, visible, galleryNonce, t.dataVersion]);
@@ -243,7 +243,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
       setSaveState("saved");
     } catch (reason: unknown) {
       setSaveState("failed");
-      setSaveError(reason instanceof Error ? reason.message : "位置写入失败");
+      setSaveError(failureText("位置没记下", reason));
     } finally {
       geometryInFlight.current = false;
       if (pendingPositions.current.size) scheduleGeometry();

@@ -5,6 +5,7 @@ import { api, type Workspace } from "../api/client";
 import { LlmSettingsControl } from "../agent/LlmSettings";
 import { Icon } from "../ui/icons";
 import { PageTopbar } from "./WorkspaceChrome";
+import { failureText } from "../ui/toast";
 
 // 成本监控页：预算卡 → 指标 tiles → 逐日条形 → 三表。
 // 读数全来自引擎本月 token_usage 聚合，本页不二次估算。
@@ -41,7 +42,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
     setError("");
     api.getCost(workspace.repositoryId)
       .then((summary) => { setCost(summary); setBudget(String(summary.monthlyBudgetUsd)); setSavedAt(new Date().toLocaleTimeString()); })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取成本"));
+      .catch((reason: unknown) => setError(failureText("成本读不到", reason)));
   }, [workspace.repositoryId]);
   useEffect(refresh, [refresh]);
   // 空串经 Number() 变 0，等于把月预算上限设成 0，必须挡住
@@ -54,7 +55,7 @@ export function InsightsPage({ workspace }: { workspace: Workspace }): ReactElem
       setSavedAt(new Date().toLocaleTimeString());
       setError("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法保存预算");
+      setError(failureText("预算没保存", reason));
     }
   };
 

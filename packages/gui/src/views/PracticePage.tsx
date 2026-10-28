@@ -13,7 +13,7 @@ import { ColumnResizer } from "../ui/ColumnResizer";
 import { PracticeThemes, PracticeSectionLabel } from "./PracticeThemes";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
-import { showToast } from "../ui/toast";
+import { failureText, showToast } from "../ui/toast";
 import { useEverVisible } from "../ui/useEverVisible";
 import { loadActiveTheme, loadPracticeThemes, saveActiveTheme, savePracticeThemes, COMPREHENSION_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
@@ -79,7 +79,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  /** 最近一次出题失败的节点（单元 id + 引擎原话）：对应卡片转警示态。 */
+  /** 最近一次没出成题的单元 id（原因只进 console）：对应卡片转警示态。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   const [modules, setModules] = useState<PracticeTheme[]>(loadPracticeThemes);
@@ -92,7 +92,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
   const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
-    api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取练习进度"));
+    api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(failureText("练习进度读不到", reason)));
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
@@ -121,7 +121,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       t.setPracticeExercise(next);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "无法生成练习";
+      const message = failureText("这道题没出来", reason);
       setError(message);
       if (failingUnit) setFailedUnit({ unitId: failingUnit, reason: message });
     } finally {
@@ -163,7 +163,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       refreshSummary();
       t.pushMessage("practice", "agent", `判分完成：${next.passed ? "已通过" : "继续完善"}（${Math.round(next.score * 100)}%）· ${next.feedback}`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法提交答案");
+      setError(failureText("答案没提交上", reason));
     } finally {
       setLoading(false);
     }
@@ -494,14 +494,14 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
     <button
       type="button"
       className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
-      title={failed ? `刚才这个节点出题失败：${failed}` : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
+      title={failed ? "刚才没出成题" : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
       onClick={onPick}
     >
       <div className="d-head">
         <span className="grow">{unitName(record.unitId)}</span>
         <span className={`d-score ${record.successes > 0 ? "pass" : "fail"}`}>{record.level}/5</span>
       </div>
-      <div className="d-due">{failed ? "刚才出题没成功 · 悬停看原因" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
+      <div className="d-due">{failed ? "刚才没出成题" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
     </button>
   );
 }

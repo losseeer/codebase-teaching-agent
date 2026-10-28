@@ -4,6 +4,7 @@ import type { Exercise } from "@codebase-tutor/domain";
 
 import {useEffect, useRef, useState } from "react";
 import { api, isNotFound, subscribeServerEvents, type StreamTurn } from "../api/client";
+import { failureText } from "../ui/toast";
 import { type Typewriter, useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
@@ -266,12 +267,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       return;
     }
     if (lostInTransit(reason)) {
-      pushMessage(target, "agent", `回复没能送达（${detail}）。引擎通常仍会把这一轮算完并落库——回到会话或网络恢复时会自动补回。`, "error");
+      console.warn(`[gui] 回合结果没送达`, detail);
+      pushMessage(target, "agent", "这句回复没送达，回到会话时会自动补回。", "error");
       return;
     }
     patchDebt(target, null);
-    setError(target, detail);
-    pushMessage(target, "agent", `发送失败：${detail}`, "error");
+    const shown = failureText("这句没发出去，再试一次。", reason);
+    setError(target, shown);
+    pushMessage(target, "agent", shown, "error");
   };
 
   /** 一次流式回合的三动作：delta 落点、成功结账、失败分诊。 */
@@ -393,7 +396,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 未发言的线程不入清单，由 unsentThread 单列显示
       return thread.id;
     } catch (reason) {
-      setError(scope, reason instanceof Error ? reason.message : "新建会话失败");
+      setError(scope, failureText("会话没建起来", reason));
       return null;
     }
   };
@@ -410,7 +413,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       setChatThreads((prev) => ({ ...prev, [scope]: list }));
       chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
     } catch (reason) {
-      setError(scope, reason instanceof Error ? reason.message : "重命名失败");
+      setError(scope, failureText("名字没改掉", reason));
       void refreshThreads(scope);
     }
   };
@@ -422,7 +425,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     } catch (reason) {
       // 404 = 引擎侧已不存在，视为删除成功
       if (!isNotFound(reason)) {
-        setError(scope, reason instanceof Error ? reason.message : "删除会话失败");
+        setError(scope, failureText("会话没删掉", reason));
         return;
       }
     }

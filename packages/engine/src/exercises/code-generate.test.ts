@@ -141,12 +141,13 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const service = new ExerciseService();
     const provider = fakeProvider(() => proposalJson({ given: REAL_SOURCE, solution: REAL_SOURCE }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
-      .rejects.toThrow(/不改也能全过/);
+      .rejects.toThrow(/代码题没出成/);
     const runs = readJournal(repository.path).filter((event) => event.type === "exercise_run");
     expect(runs).toHaveLength(2);
     expect(runs.every((event) => event.payload.verdict_failed === 0)).toBe(true);
     const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
     expect(declined?.payload.stage).toBe("harness_validation");
+    expect(declined?.payload.reason).toContain("不改也能全过");
   });
 
   it("下发件靠语法错误「失败」不算自证通过：没印 TESTS 结论就拒，不把编译挂当行为缺陷", async () => {
@@ -154,7 +155,7 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const service = new ExerciseService();
     const provider = fakeProvider(() => proposalJson({ given: UNPARSABLE_SOURCE, solution: REAL_SOURCE }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
-      .rejects.toThrow(/没收到代码文件|没跑完|跑不出|语法/);
+      .rejects.toThrow(/代码题没出成/);
     const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
     expect(declined?.payload.stage).toBe("harness_validation");
   });
@@ -165,14 +166,14 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const drifted = 'export function loadGreeting(environment) {\n  return environment.GREETING ?? "hello";\n}\n';
     const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: drifted }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
-      .rejects.toThrow(/对不上/);
+      .rejects.toThrow(/代码题没出成/);
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_run")).toHaveLength(0);
   });
 
   it("没配模型时直接拒，不回落本地题面", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
-    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) })).rejects.toThrow(/代码题需要模型/);
+    await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) })).rejects.toThrow(/代码题要用模型/);
     expect(readJournal(repository.path).find((event) => event.type === "exercise_declined")?.payload.stage).toBe("no_provider");
   });
 
@@ -299,12 +300,12 @@ describe.skipIf(!capability.usable)("代码题按需讲评", { timeout: 60_000 }
 
   it("没配模型就 422 一句话，不回落本地模板", async () => {
     const { repository, service, exercise } = await prepared("不该被用到");
-    await expect(service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] }, undefined)).rejects.toThrow("讲评需要模型");
+    await expect(service.explain(repository, exercise.id, { files: [{ path: "target.ts", contents: REAL_SOURCE }] }, undefined)).rejects.toThrow("现在给不了讲解");
   });
 
   it("没收到代码就拒：讲评无从说起；非代码题也没有这一趟", async () => {
     const { repository, service, exercise, explain } = await prepared("不该被用到");
-    await expect(service.explain(repository, exercise.id, { files: [] }, explain)).rejects.toThrow("没有收到代码");
+    await expect(service.explain(repository, exercise.id, { files: [] }, explain)).rejects.toThrow("还没收到代码");
     const localized = await service.next(repository, { kind: "change_localization" }, explain);
     await expect(service.explain(repository, localized.id, { selectedIds: ["src/config.js"] }, explain)).rejects.toThrow("只有代码题");
   });

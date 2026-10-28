@@ -7,6 +7,7 @@ import { emit } from "../journal";
 import { Icon } from "../ui/icons";
 import { dateText } from "../ui/labels";
 import { MenuButton, PopMenu, type MenuItem } from "../ui/PopMenu";
+import { failureText } from "../ui/toast";
 import { PageTopbar } from "./WorkspaceChrome";
 
 // 导入仓库页：路径 → 分相进度 → 成本报告 → 已导入仓库清单。
@@ -63,15 +64,14 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         const progress = checkContract(importJobSchema, event.payload, "import.progress");
         if (progress.id === jobId) setJob(progress);
       } catch (error) {
-        console.error("[gui] 导入进度帧不符契约", error);
-        setError("导入进度读不出来，请刷新；详情看控制台");
+        setError(failureText("进度读不到，刷新一下", error));
       }
     });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
         // 404 = 引擎里已无此任务，重试读不回来
         if (isNotFound(reason)) setOrphaned(true);
-        else setError(reason instanceof Error ? reason.message : "无法读取任务进度");
+        else setError(failureText("进度读不到", reason));
       }),
       5000
     );
@@ -93,7 +93,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     if (!pathToUse || jobActive) return;
     setPath(pathToUse); // 输入框同步显示正在分析的仓
     setError(""); setReport(null); setOrphaned(false);
-    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(reason instanceof Error ? reason.message : "导入失败"); }
+    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(failureText("分析没开始", reason)); }
   };
 
   const submit = async (): Promise<void> => startImport(path);
@@ -152,8 +152,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
 
             {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
             {orphaned ? (
-              <div className="banner banner-warn" title="引擎换过一次进程（改代码重启就会这样），内存里的那份任务不在了">
-                <Icon name="alert" /><span className="banner-text">这一轮分析停了，进度读不到。已算好的部分留在仓库里，重新点一次会接着跑。</span>
+              <div className="banner banner-warn">
+                <Icon name="alert" /><span className="banner-text">这一轮分析停了，重新点一次会接着跑。</span>
               </div>
             ) : null}
 
@@ -176,7 +176,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                     );
                   })}
                 </div>
-                {failed && job.error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">失败原因：{job.error}</span></div> : null}
+                {failed ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">这一轮分析没跑完，重新点一次。</span></div> : null}
               </div>
             ) : null}
 
