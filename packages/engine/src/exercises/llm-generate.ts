@@ -9,6 +9,7 @@ import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext
 import { recordEgress, type EgressSource } from "../adapter/outbound/security/egress-log.js";
 import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
+import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
 
 /**
   练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。
@@ -126,9 +127,9 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
   return { ...exercise, title, prompt };
 }
 
-/** LLM 出题的结果类型；proposal 仍需过确定性守门。 */
+/** LLM 出题的结果类型；proposal 仍需过确定性守门。被拒的那趟同样花了钱，失败支路也带 usage。 */
 export type LlmGeneration =
-  | { ok: false; reason: string; skillReads: SkillReadAudit[] }
+  | { ok: false; reason: string; usage?: LlmUsage; skillReads: SkillReadAudit[] }
   | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[] };
 
 export interface LlmProposal {
@@ -138,12 +139,17 @@ export interface LlmProposal {
   criteria: { dimension: string; description: string }[];
   anchors: { path: string; line: number; endLine?: number }[];
   targetTitle: string;
+  /** 命中的主题档；注入了分解表才有。 */
+  topicTier?: string;
+  /** 该档里被考的那个可考点原文。 */
+  examPoint?: string;
 }
 
 const GENERATION_SYSTEM_PROMPT = [
   "你是代码教学产品的出题人。基于用户给定的主题标签和若干候选源码摘录（带行号），出一道考察对该主题理解的开放式源码分析题。",
   "",
-  "出题前先判断可行性：如果标签无意义、或候选摘录与标签主题无关、或素材不足以支撑一道有明确参考答案的题，直接拒绝出题。",
+  "出题前先判断可行性：标签无意义、摘录里读不出任何可考点、或素材撑不起一道有明确参考答案的题，就拒绝出题。",
+  "拒绝理由要写清找过哪些可考点；「某个性质在沙箱里跑不出真实结果」只限制问哪一层，不构成拒题。",
   "",
   "严格输出 JSON，二选一：",
   "拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话拒绝理由，说明为什么当前仓库出不了这个主题的题>\"}",
@@ -155,14 +161,18 @@ const GENERATION_SYSTEM_PROMPT = [
   "- criteria 给 2-4 条可操作的评分维度；answerKey 要具体到能让另一位评分者据此判分。"
 ].join("\n");
 
-/** 出题层的输入口径版本，进出题缓存键。 */
+/**
+  出题层的输入口径版本，进出题缓存键。
+  指纹只锁引擎自己写的文案：主题分解表由技能内容注入，随用户装的技能变，不进锁。
+*/
 export const EXERCISE_STEP = defineAnalysisStep({
   layer: "exercise-generate",
   contractVersion: "exercise-v3",
   prompts: [GENERATION_SYSTEM_PROMPT, () => (Object.keys(kindRules) as ExerciseKind[]).map((kind) => refineSystemPrompt(kind)).join("\n")]
 });
 
-export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; skills?: SkillsToolContext }): Promise<LlmGeneration> {
+export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; skills?: SkillsToolContext; topics?: TopicIndex }): Promise<LlmGeneration> {
+  const topics = input.topics ?? NO_TOPICS;
   const excerpts = input.candidates.map((candidate) => ({
     path: candidate.path,
     lineCount: candidate.lineCount,
@@ -181,7 +191,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   const response = await completeWithOptionalSkills({
     provider: input.provider,
     // 技能清单由 completeWithOptionalSkills 并进系统提示词
-    system: GENERATION_SYSTEM_PROMPT,
+    system: topics.prompt ? `${GENERATION_SYSTEM_PROMPT}\n\n${topics.prompt}` : GENERATION_SYSTEM_PROMPT,
     user,
     maxTokens: 1_200,
     temperature: 0.4,
@@ -189,14 +199,14 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     ...(input.skills ? { skills: input.skills } : {})
   });
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, skillReads: response.skillReads, reason: "模型给的题目读不出来，请重试。" };
+  if (!parsed) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型给的题目读不出来，请重试。" };
   if (parsed.ok === false) {
     const reason = String(parsed.reason ?? "").trim();
-    return { ok: false, skillReads: response.skillReads, reason: reason || "当前仓库没有适合该主题的出题素材。" };
+    return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: reason || "当前仓库没有适合该主题的出题素材。" };
   }
-  if (parsed.ok !== true) return { ok: false, skillReads: response.skillReads, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
-  const proposal = normalizeProposal(parsed);
-  if (!proposal) return { ok: false, skillReads: response.skillReads, reason: "模型给的题目字段不完整，请重试。" };
+  if (parsed.ok !== true) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
+  const proposal = normalizeProposal(parsed, topics);
+  if (!proposal) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型给的题目字段不完整，请重试。" };
   return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
 }
 
@@ -331,8 +341,7 @@ export function clipProposalTitle(title: string): string {
   return title.trim().slice(0, MAX_PROPOSAL_TITLE);
 }
 
-function normalizeProposal(parsed: Record<string, unknown>): LlmProposal | undefined {
-
+function normalizeProposal(parsed: Record<string, unknown>, topics: TopicIndex): LlmProposal | undefined {
   const title = clipProposalTitle(String(parsed.title ?? ""));
   const prompt = String(parsed.prompt ?? "").trim();
   const answerKey = String(parsed.answerKey ?? "").trim();
@@ -351,5 +360,13 @@ function normalizeProposal(parsed: Record<string, unknown>): LlmProposal | undef
     return anchor;
   }).filter((item) => item.path && Number.isInteger(item.line) && item.line > 0);
   if (!title || !prompt || !answerKey || !criteria.length || !anchors.length) return undefined;
-  return { title, prompt, answerKey, criteria, anchors, targetTitle: targetTitle || title };
+  // 注入了分解表才要求档位；表外的值当 off，不补一个看着合理的档。
+  const topicTier = topics.tiers.length ? validTierOf(topics, String(parsed.topic_tier ?? "")) : undefined;
+  const examPoint = String(parsed.exam_point ?? "").trim().slice(0, 60);
+  return {
+    title, prompt, answerKey, criteria, anchors,
+    targetTitle: targetTitle || title,
+    ...(topicTier ? { topicTier } : {}),
+    ...(topicTier && examPoint ? { examPoint } : {})
+  };
 }

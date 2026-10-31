@@ -21,6 +21,8 @@ import type { SkillsToolContext } from "../source/tool-loop.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
+import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
+import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
 import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
@@ -179,8 +181,8 @@ export class ExerciseService {
   }
 
   /** 界面只看 `shown` 那一句，详细成因只写进 journal 的 exercise_declined。 */
-  private decline(repository: PracticeRepository, stage: string, family: ExerciseFamily, tag: string, reason: string, shown: string): never {
-    repository.ports.audit.append("exercise_declined", { family, tag, reason, stage });
+  private decline(repository: PracticeRepository, stage: string, family: ExerciseFamily, tag: string, reason: string, shown: string, extra?: Record<string, string>): never {
+    repository.ports.audit.append("exercise_declined", { family, tag, reason, stage, ...(extra ?? {}) });
     throw new Error(shown);
   }
 
@@ -210,9 +212,7 @@ export class ExerciseService {
         outcome: generation.ok ? "accepted" : generation.stage
       });
     }
-    if (!generation.ok) {
-      this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
-    }
+    // 被自证挡掉的那一趟同样花了钱：账走在拒绝之前。
     if (generation.usage) repository.ports.audit.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
       output_tokens: generation.usage.outputTokens,
@@ -220,6 +220,9 @@ export class ExerciseService {
       provider: provider.modelVersion,
       scene: "exercise_generate_code"
     });
+    if (!generation.ok) {
+      this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
+    }
     const proposal = generation.proposal;
     const exercise: Exercise = {
       // id 含 scope：答案出自模型，换模型或换 runner 就是另一道题。
@@ -266,23 +269,31 @@ export class ExerciseService {
     // 词法零命中时改从仓库全景挑素材，守门照旧。
     const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);
     const selection = matched.length ? "tag" : "panorama";
-    if (!candidates.length) {
+    // 配置键、建表语句、依赖清单不在收录集里，机制级考点要有它们才读得到东西。
+    const clues = [...new Set([...tagTokens(tag), ...excerptClues(candidates)])];
+    const mechanism = mechanismCandidate(repository.path, clues, new Set(candidates.map((item) => item.path)));
+    const pool = mechanism ? [...candidates, mechanism.candidate] : candidates;
+    if (!pool.length) {
       // 零素材也要留痕：分得清「没走到模型」与「被模型拒绝」。
-      this.decline(repository, "no_candidates", "llm", tag, `词法命中与仓库全景都挑不出可出题的源码文件（主题「${tag}」）。`, `未找到与「${tag}」相关的源码，请更换主题。`);
+      this.decline(repository, "no_candidates", "llm", tag, `词法命中、仓库全景与机制声明面都挑不出可出题的文件（主题「${tag}」）。`, `未找到与「${tag}」相关的源码，请更换主题。`);
     }
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
-    const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
+    const deps = pool.map((candidate) => ({ path: candidate.path, hash: mechanism && candidate.path === mechanism.candidate.path ? mechanism.digest : hashOf(candidate.path) }));
+    // 分解表由技能内容现场抽出，但档位与可考点不进这个键：那是模型这一次的判法，进了键就每次判得不一样都重付一遍。
     const scope = fileScope(deps, provider.modelVersion);
+    const topics = skills ? topicIndex(skills.bodyOf) : NO_TOPICS;
+    const extra: Record<string, string> = {
+      ...(topics.tiers.length ? { tiers_offered: topics.tiers.map((tier) => tier.id).join(",") } : {}),
+      ...(mechanism ? { mechanism_file: mechanism.candidate.path } : {})
+    };
     const cached = repository.ports.store.get<StoredExercise>(scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") {
-      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection });
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, ...extra });
       return cached.exercise;
     }
-    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates, provider, ...(skills ? { skills } : {}) });
+    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, ...(skills ? { skills } : {}) });
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
-    if (!generation.ok) {
-      this.decline(repository, "llm_generate", "llm", tag, generation.reason, "模型判定该主题无法出题，请更换主题。");
-    }
+    // 被拒的那一趟同样花了钱，账要先落，再看拒绝。
     if (generation.usage) repository.ports.audit.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
       output_tokens: generation.usage.outputTokens,
@@ -290,9 +301,12 @@ export class ExerciseService {
       provider: provider.modelVersion,
       scene: "exercise_llm_generate"
     });
-    const issues = guardLlmProposal(generation.proposal, candidates);
+    if (!generation.ok) {
+      this.decline(repository, "llm_generate", "llm", tag, generation.reason, "模型判定该主题无法出题，请更换主题。", extra);
+    }
+    const issues = guardLlmProposal(generation.proposal, pool);
     if (issues.length) {
-      this.decline(repository, "guard", "llm", tag, `模型出的题不合格：${issues.map((issue) => issue.message).join("；")}。`, "题目校验未通过，请重试。");
+      this.decline(repository, "guard", "llm", tag, `模型出的题不合格：${issues.map((issue) => issue.message).join("；")}。`, "题目校验未通过，请重试。", extra);
     }
     const proposal = generation.proposal;
     const exercise: Exercise = {
@@ -316,7 +330,11 @@ export class ExerciseService {
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
     repository.ports.store.put(scope, "llm_rubric", targetUnitId, stored);
-    repository.ports.audit.append("exercise_generated", { source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection });
+    repository.ports.audit.append("exercise_generated", {
+      source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection, ...extra,
+      ...(proposal.topicTier ? { topic_tier: proposal.topicTier } : {}),
+      ...(proposal.examPoint ? { exam_point: proposal.examPoint } : {})
+    });
     return exercise;
   }
 
@@ -561,8 +579,7 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
 
 /** 规则侧候选选择：按主题词元对路径 / 符号 / 摘要打分，取前 limit 个文件构造摘录。 */
 function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3, summaries: Map<string, string> = new Map()): GuardCandidate[] {
-  const lowered = tag.toLowerCase();
-  const tokens = [...new Set([lowered, ...lowered.split(/[\s,，、/·:：_-]+/).filter((token) => token.length >= 2)])];
+  const tokens = tagTokens(tag);
   const symbolsByPath = new Map<string, SymbolInfo[]>();
   for (const symbol of repository.analysis.graph.symbols) {
     const list = symbolsByPath.get(symbol.path) ?? [];

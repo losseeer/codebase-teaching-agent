@@ -49,7 +49,7 @@ export interface HarnessRun {
 }
 
 export type CodeGeneration =
-  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; skillReads: SkillReadAudit[] }
+  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[] }
   | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[] };
 
 const MAX_TITLE = 40;
@@ -232,25 +232,25 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], skillReads: response.skillReads };
-  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], skillReads: response.skillReads };
+  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], usage: response.usage, skillReads: response.skillReads };
+  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], usage: response.usage, skillReads: response.skillReads };
 
   const normalized = normalizeProposal({ ...parsed, kind: input.kind, language });
-  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], skillReads: response.skillReads };
+  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], usage: response.usage, skillReads: response.skillReads };
   const proposal = normalized.proposal;
-  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], skillReads: response.skillReads };
+  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], usage: response.usage, skillReads: response.skillReads };
   if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
-    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], skillReads: response.skillReads };
+    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], usage: response.usage, skillReads: response.skillReads };
   }
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
     validation = await validateHarness(proposal, input.repositoryPath);
   } catch (error) {
-    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], skillReads: response.skillReads };
+    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], usage: response.usage, skillReads: response.skillReads };
     throw error;
   }
-  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, skillReads: response.skillReads };
+  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
   return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
 }
 

@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,12 +9,13 @@ import { flushEngineLog } from "@codebase-tutor/platform";
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
 import { buildImplementationUnits } from "../implementation/units.js";
 import { indexRepository } from "../indexer/indexer.js";
-import type { LlmCompletion, LlmCompletionInput, LlmProvider } from "../application/port/llm-provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { resetIsolationForTest, stubIsolationForTest } from "../adapter/outbound/sandbox/isolation.js";
 import { selectZpdTarget } from "./zpd.js";
+import type { SkillsToolContext } from "../source/tool-loop.js";
 import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
@@ -278,7 +279,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
   });
   const judgeJson = JSON.stringify({ score: 0.8, passed: true, feedback: "要点基本答到，缺少对调用方职责的说明。" });
 
-  function fakeProvider(responses: string[]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
+  function fakeProvider(responses: string[], usage?: LlmUsage): { provider: LlmProvider; calls: LlmCompletionInput[] } {
     const calls: LlmCompletionInput[] = [];
     let index = 0;
     return {
@@ -290,7 +291,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
           calls.push(input);
           const text = responses[Math.min(index, responses.length - 1)];
           index += 1;
-          return { text };
+          return { text, ...(usage ? { usage } : {}) };
         }
       }
     };
@@ -353,6 +354,71 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", reason: "当前仓库没有与该主题相关的代码素材。" });
   });
 
+  /** 只喂这一份分解表进技能通道；正文与附属文件都在内存里。 */
+  function topicSkills(): SkillsToolContext {
+    const files: Record<string, string> = {
+      "SKILL.md": ["| 主题 | 附属文件 | 最常出的缺陷形状 |", "| --- | --- | --- |", "| 传输与序列化 | `cn.md` | 超时/重试缺一个 |"].join("\n"),
+      "cn.md": [
+        "## 能摘出来考的（含替身怎么给）",
+        "",
+        "| 考点 | 摘法 | 测试怎么断 |",
+        "| --- | --- | --- |",
+        "| 超时与重试参数装配 | 摘装配那段 | 断言生效值 |",
+        "| 去重与幂等键 | 摘算键那段 | 断言同键 |",
+        "",
+        "## 不要出成题的",
+        "",
+        "真实网络延迟、丢包。"
+      ].join("\n")
+    };
+    return { brief: "", bodyOf: (_name, file = "SKILL.md") => files[file] };
+  }
+
+  it("分解表注入进上下文：模型一次技能都没读，档位与可考点也落进 journal", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const tiered = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
+    const { provider, calls } = fakeProvider([tiered]);
+    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-cn" }, provider, topicSkills());
+    expect(calls[0].system).toContain("主题分解表");
+    expect(calls[0].system, "可考点要连名字一起给，不能只给档名").toContain("超时与重试参数装配");
+    expect(calls[0].system).toContain("不得以");
+    expect(readJournal(repository.path).some((event) => event.type === "skill_read"), "这条路径不该依赖模型自己去读技能").toBe(false);
+    const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
+    expect(generated?.payload).toMatchObject({ topic_tier: "cn", exam_point: "超时与重试参数装配" });
+  });
+
+  it("模型填了表里没有的档：只当档外，不替它挑一个像的档", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const invented = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "计算机网络", exam_point: "TCP 三次握手" });
+    const { provider } = fakeProvider([invented]);
+    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-off" }, provider, topicSkills());
+    const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
+    expect(generated?.payload.topic_tier).toBe("off");
+  });
+
+  it("档位与可考点不进缓存键：模型两次判得不一样也不重付", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const first = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
+    const second = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "off", exam_point: "", title: "另一道判法不同的题" });
+    const { provider, calls } = fakeProvider([first, second]);
+    const made = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicSkills());
+    const reused = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicSkills());
+    expect(calls).toHaveLength(1);
+    expect(reused.id).toBe(made.id);
+  });
+
+  it("模型拒题时留下它被给过哪几档", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "摘录里没有可读的超时与重试装配。" })]);
+    await expect(service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-decl" }, provider, topicSkills())).rejects.toThrow("模型判定该主题无法出题");
+    const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1);
+    expect(declined?.payload).toMatchObject({ stage: "llm_generate", tiers_offered: "cn" });
+  });
+
   it("LLM 返回幻觉锚点时被守门否决", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -361,6 +427,31 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
     await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("题目校验未通过");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
+  });
+
+  it("机制声明面补进候选：配置键那段也进摘录、进出网清单、进作用域哈希", async () => {
+    const repository = testRepository();
+    mkdirSync(join(repository.path, "infra"), { recursive: true });
+    writeFileSync(join(repository.path, "infra", "pool.properties"), "redis.pool.max-wait=200ms\nredis.timeout=3000ms\n");
+    const service = new ExerciseService();
+    const { provider, calls } = fakeProvider([generationJson]);
+    const exercise = await service.next(repository, { family: "llm", tag: "max-wait config", tagId: "custom-mech" }, provider);
+    expect(calls[0].user, "声明面要真的进那次请求").toContain("infra/pool.properties");
+    expect(exercise.contentHashes).toContainEqual(expect.objectContaining({ path: "infra/pool.properties" }));
+    const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
+    expect(generated?.payload.mechanism_file).toBe("infra/pool.properties");
+  });
+
+  it("模型拒题那一趟的钱照样落账：账走在拒绝之前", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "摘录里读不出任何可考点。" })], { inputTokens: 1200, outputTokens: 400 });
+    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-bill" }, provider)).rejects.toThrow("模型判定该主题无法出题");
+    const events = readJournal(repository.path);
+    const billed = events.filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_llm_generate");
+    expect(billed).toHaveLength(1);
+    expect(billed[0]?.payload).toMatchObject({ input_tokens: 1200, output_tokens: 400 });
+    expect(events.filter((event) => event.type === "exercise_declined")).toHaveLength(1);
   });
 
   it("rubric 判分走 LLM 比对，automatic=false；未配置 provider 时显式报错", async () => {
