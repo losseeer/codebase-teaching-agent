@@ -28,7 +28,7 @@ export function RailToggle(): ReactElement {
       className="icon-btn"
       title={layout.railCollapsed ? "展开对话栏" : "收起对话栏"}
       aria-label={layout.railCollapsed ? "展开对话栏" : "收起对话栏"}
-      onClick={() => patchLayout({ railCollapsed: !layout.railCollapsed })}
+      onClick={() => patchLayout({ railOpen: layout.railCollapsed })}
     ><Icon name="panelRight" /></button>
   );
 }

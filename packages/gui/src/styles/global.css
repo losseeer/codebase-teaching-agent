@@ -112,9 +112,11 @@ h1, h2, h3, h4, p { margin-top: 0; }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.topbar .crumb { font-size: var(--fs-12); color: var(--ink-2); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.topbar .crumb { font-size: var(--fs-12); color: var(--ink-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 2px; min-width: 0; }
 .topbar .crumb b { color: var(--ink); font-weight: 600; }
-.topbar .crumb .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 每一段整体换行，不在段内断字；长路径那一段自己带省略号 */
+.topbar .crumb > * { white-space: nowrap; }
+.topbar .crumb .mono { overflow: hidden; text-overflow: ellipsis; }
 .topbar .spacer { flex: 1; }
 .route-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .route-content > * { flex: 1; min-height: 0; }
@@ -285,7 +287,7 @@ h1, h2, h3, h4, p { margin-top: 0; }
 
 /* 横幅 */
 .banner {
-  display: flex; align-items: flex-start; gap: 8px;
+  display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap;
   padding: 10px 14px;
   border-radius: var(--r-md);
   font-size: var(--fs-12);
@@ -293,7 +295,8 @@ h1, h2, h3, h4, p { margin-top: 0; }
 }
 .banner-warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-border); }
 .banner-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
-.banner .banner-text { flex: 1; min-width: 0; }
+/* 正文保住 240px 读得下去，装不下就让按钮整颗换到下一行，别把中文压成一字一行 */
+.banner .banner-text { flex: 1 1 240px; min-width: 0; }
 .banner .banner-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .banner button { border: 1px solid currentColor; border-radius: var(--r-sm); padding: 3px 9px; color: inherit; background: transparent; font-size: var(--fs-11); }
 .banner button:hover { background: var(--surface); }
@@ -572,8 +575,9 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .field-inline { display: flex; align-items: center; gap: var(--sp-2); }
 
 /* ---------- Toast ---------- */
+/* 挂顶不挂底：底部是各页 sticky 操作条的地盘，压住「提交判分」这种按钮不算提示算拦路 */
 .toast-host {
-  position: fixed; bottom: 20px; left: 50%;
+  position: fixed; top: calc(var(--topbar-h) + var(--sp-3)); left: 50%;
   transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   z-index: 200;
@@ -650,8 +654,8 @@ body.col-resizing { cursor: col-resize; user-select: none; }
   .app .brand-name, .app .brand-sub, .app .nav-label { display: none; }
   .app .nav-item { justify-content: center; gap: 0; }
   .drawer { width: 100%; max-width: 100%; }
-  .page-map, .page-teach, .page-practice { grid-template-columns: minmax(0, 1fr); }
-  /* 窄屏两栏折成一栏：收哪个节点由 .pane-hidden-mobile 说了算，这里不再整块藏左栏 */
+  /* 窄屏两栏折成一栏：收哪个节点由 .pane-hidden-mobile 说了算，这里不再整块藏左栏；
+     工作区自身的单列改在 pages.css 里覆盖（那一档的栏宽定义也在 pages.css）。 */
   .ws-pane.pane-hidden-mobile { display: none; }
   .col-resizer { display: none; }
   .mobile-switcher { display: flex; gap: 6px; padding: var(--sp-2) var(--sp-4); background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; }

@@ -333,10 +333,11 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .done-card.failed { border-color: var(--warn-border); background: var(--warn-bg); }
 .done-card.failed .d-due { color: var(--warn-ink); }
 
-.practice-main { overflow-y: auto; min-width: 0; }
-.practice-wrap { max-width: 1080px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }
-/* 题目与作答并排：读题、写答案、提交这一条动线要在一屏内走完；窄屏回落单列 */
-.practice-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: var(--sp-5); align-items: start; }
+/* 容器查询按这一栏的实际宽度判档：侧栏 / 对话栏 / 可调列表栏都吃视口，媒体查询量不到。 */
+.practice-main { overflow-y: auto; min-width: 0; container-type: inline-size; }
+.practice-wrap { max-width: 760px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }
+/* 读题、写答案、提交这一条动线要在一屏内走完；栏宽不够时回落单列，题面绝不被挤成竖条。 */
+.practice-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
 .practice-topic, .practice-answer { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .practice-actions { position: sticky; bottom: 0; z-index: 2; display: flex; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-2); background: var(--bg); border-top: 1px solid var(--border); }
 .exercise-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-11); color: var(--ink-3); }
@@ -359,10 +360,12 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   background: var(--surface);
 }
 .option-row:hover { border-color: var(--brand-600); }
-.option-row.checked { border-color: var(--brand-700); background: var(--brand-050); }
+.option-row.picked { border-color: var(--brand-700); background: var(--brand-050); }
 .option-row.correct { border-color: var(--ok); background: var(--ok-bg); }
 .option-row.wrong { border-color: var(--danger); background: var(--danger-bg); }
 .option-row:disabled { opacity: 1; }
+/* 选项多是整条文件路径，没有可断的空格：允许在任意字符处折行，别把路径裁掉一截。 */
+.option-row code { overflow-wrap: anywhere; }
 .option-box {
   width: 16px; height: 16px; flex: none; margin-top: 2px;
   border: 1.5px solid var(--border-strong);
@@ -371,12 +374,14 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   color: var(--on-primary); font-size: 11px;
   transition: background var(--t-fast), border var(--t-fast);
 }
-.option-row.checked .option-box { background: var(--brand-700); border-color: var(--brand-700); }
-.option-row.correct .option-box { background: var(--ok); border-color: var(--ok); }
-.option-row.wrong .option-box { background: var(--danger); border-color: var(--danger); }
+/* 勾只反映选没选，边框与底色才反映对错：漏选的标准项留空框，不能画成已选。 */
+.option-row.picked .option-box { background: var(--brand-700); border-color: var(--brand-700); }
+.option-row.correct.picked .option-box { background: var(--ok); border-color: var(--ok); }
+.option-row.wrong.picked .option-box { background: var(--danger); border-color: var(--danger); }
+.option-row.correct:not(.picked) .option-box { border-color: var(--ok); border-style: dashed; }
 
 .ans-textarea {
-  width: 100%; min-height: 110px; resize: vertical;
+  width: 100%; min-height: 180px; resize: vertical;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   padding: 12px 14px;
@@ -404,10 +409,12 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .tabs.light .tab .tab-close:hover { background: var(--danger-bg); color: var(--danger); }
 .code-context { padding: var(--sp-3) var(--sp-4); background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .code-context .cc-name { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--brand-700); }
-/* 题面对应的代码只作参照：整块限高，长文件在内部滚，别把作答件推出首屏；
+/* 题面对应的代码只作参照：限高跟着视口走，长文件在内部滚，别把作答件推出首屏；
+   长行折起来看，不横向滚 —— 横向滚在这块里等于把行尾内容藏掉；
    这一层点它不换锚点，所以收回可点光标（`.src-line` 默认带 pointer） */
-.code-card { display: flex; flex-direction: column; max-height: 340px; }
-.code-card .src-line { cursor: default; }
+.code-card { display: flex; flex-direction: column; max-height: min(340px, 45vh); }
+.code-card .src-line { cursor: default; min-width: 0; }
+.code-card .src-line .ln-content { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .feedback-panel { border-radius: var(--r-lg); padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
 .feedback-pass { background: var(--ok-bg); border: 1px solid var(--pass-border); }
@@ -417,7 +424,8 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .feedback-fail .feedback-head { color: var(--danger); }
 .feedback-panel p { margin: 0; font-size: var(--fs-13); line-height: 1.65; color: var(--ink); }
 .test-table { font-size: var(--fs-12); }
-.test-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-family: var(--font-mono); font-size: var(--fs-11); }
+.test-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-family: var(--font-mono); font-size: var(--fs-11); }
+.test-row > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .test-row .t-status { font-weight: 700; width: 44px; flex: 0 0 auto; }
 .test-row.pass .t-status { color: var(--ok); }
 .test-row.fail .t-status { color: var(--danger); }
@@ -488,11 +496,17 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .palette .pal-item .pal-path { margin-left: auto; font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ==================== 窄屏退让 ==================== */
+/* 练习栏够宽才并排：判据是这一栏的实际宽度，不是视口。 */
+@container (min-width: 860px) {
+  .practice-wrap { max-width: 1080px; }
+  .practice-cols { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
+}
 @media (max-width: 1180px) {
   .report-grid, .tiles { grid-template-columns: repeat(2, 1fr); }
-  .practice-cols { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
+  /* 三个工作区的栏宽定义都在本文件，窄屏折成一栏也必须写在这里才压得住（global.css 在本文件之前加载）。 */
+  .page-map, .page-teach, .page-practice { grid-template-columns: minmax(0, 1fr); }
   .import-wrap, .insights-wrap, .practice-wrap { padding-left: var(--sp-4); padding-right: var(--sp-4); }
   .flow-skeleton { width: 100%; }
   .dg-toolbar { padding: 8px 10px; }

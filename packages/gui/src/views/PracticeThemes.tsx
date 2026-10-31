@@ -81,7 +81,7 @@ export function PracticeThemes({
 
       {configOpen && (
         <div className="side-block module-config">
-          <div className="cfg-head">自定义出题主题<span>新主题由 LLM 出题</span></div>
+          <div className="cfg-head">自定义出题主题<span>新主题由 LLM 出题 · 所有仓库共用</span></div>
           {modules.map((item) => (
             <div className="cfg-row" key={item.id}>
               <input className="text-input" value={item.label} aria-label="主题名称" onChange={(event) => onRename(item.id, event.target.value)} />

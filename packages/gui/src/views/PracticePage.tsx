@@ -1,7 +1,7 @@
 import { ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/domain";
 import type { Exercise } from "@codebase-tutor/domain";
 
-import {useEffect, useState, type ReactElement } from "react";
+import {useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
 import { api, type Workspace } from "../api/client";
@@ -81,6 +81,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [error, setError] = useState("");
   /** 最近一次没出成题的单元 id（原因只进 console）：对应卡片转警示态。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
+  /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
+  const [budgetTight, setBudgetTight] = useState(false);
   const [source, setSource] = useState<SourcePayload | null>(null);
   /** 题面吃多段代码时，正在看哪一段。 */
   const [anchorIndex, setAnchorIndex] = useState(0);
@@ -102,7 +104,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
-    setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]);
+    setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     const isLlmFamily = activeModule !== COMPREHENSION_THEME_ID;
     const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
@@ -126,6 +128,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       const message = failureText("出题失败", reason);
       setError(message);
       if (failingUnit) setFailedUnit({ unitId: failingUnit, reason: message });
+      // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
+      api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
       setLoading(false);
     }
@@ -148,11 +152,21 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setActiveCodePath(slot?.files[0]?.path ?? "");
   }, [exercise?.id]);
 
+  /** 判分结果常落在首屏之外：出来时只滚到刚好看得到它，不替用户决定看什么。 */
+  const graded = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (result) graded.current?.scrollIntoView({ block: "nearest" }); }, [result]);
+
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  /** 换主题 = 换题面来源：上一主题的题、作答与判分结果不能留在这一栏里，否则「再试一次」会以新主题的名义重提旧题。 */
+  const clearExercise = (): void => {
+    setExercise(null); setResult(null); setText(""); setSelectedIds([]); setFailedUnit(null); setAnchorIndex(0);
+    t.setPracticeUnit(""); t.setPracticeExercise(null);
+  };
   /** 重复点同一 chip 不记事件；list 传入新增/删除时尚未提交的新列表。 */
   const switchModule = (id: string, list: PracticeTheme[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
+    clearExercise();
     emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? id).slice(0, 120) });
   };
   const submit = async (): Promise<void> => {
@@ -279,6 +293,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 {/重新导入|已更新/.test(error) ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
                 ) : null}
+                {budgetTight ? (
+                  <span className="banner-actions"><button type="button" onClick={() => navigate("/insights")}>去成本监控</button></span>
+                ) : null}
               </div>
             ) : null}
 
@@ -351,19 +368,22 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     <div className="col">
                       {exercise.options?.map((option) => {
                         const expected = expectedOptionIds?.has(option.id) ?? false;
-                        const cls = result ? (expected ? "correct" : wrongOptionIds.has(option.id) ? "wrong" : "") : selectedIds.includes(option.id) ? "checked" : "";
+                        const picked = selectedIds.includes(option.id);
+                        const cls = result ? (expected ? "correct" : wrongOptionIds.has(option.id) ? "wrong" : "") : "";
+                        const note = result ? (expected ? (picked ? "标准答案，已选" : "标准答案，漏选") : picked ? "多选了这一项" : null) : null;
                         return (
                           <button
                             type="button"
                             key={option.id}
-                            className={`option-row ${cls}`}
+                            className={`option-row ${cls}${picked ? " picked" : ""}`}
                             disabled={!!result}
                             onClick={() => toggle(option.id)}
-                            title={result ? (expected ? (result.matchedIds?.includes(option.id) ? "标准答案项，你选了" : "标准答案项，你没选") : wrongOptionIds.has(option.id) ? "你多选的项" : "不在标准答案里，也没选") : undefined}
+                            title={note ?? undefined}
                           >
-                            <span className="option-box">{cls === "correct" || cls === "checked" ? <Icon name="check" size={11} /> : null}</span>
+                            <span className="option-box">{picked ? <Icon name="check" size={11} /> : null}</span>
                             <span className="grow col"><code>{option.label}</code>{option.detail ? <small className="fs-11 faint">{option.detail}</small> : null}</span>
-                            {result && expected ? <span className="badge badge-ok push-right">正确项</span> : null}
+                            {result && expected && !picked ? <span className="badge badge-warn push-right">漏选</span> : null}
+                            {result && !expected && picked ? <span className="badge badge-danger push-right">多选</span> : null}
                           </button>
                         );
                       })}
@@ -408,10 +428,16 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                       className="ans-textarea"
                       value={text}
                       onChange={(event) => setText(event.target.value)}
-                      rows={4}
+                      rows={8}
                       aria-label="练习答案"
                       placeholder={answerPlaceholder(exercise.kind, exercise.gradingMode)}
                     />
+                  ) : null}
+
+                  {result ? (
+                    <div ref={graded}>
+                      <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
+                    </div>
                   ) : null}
 
                   <div className="practice-actions">
@@ -425,13 +451,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                       className="btn btn-ghost"
                       onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
                       disabled={loading}
-                      title={exercise.kind === "llm_rubric" ? "旧题与记录留着" : "按这段代码再出一题"}
+                      title={exercise.kind === "llm_rubric" ? "换一题不影响旧题记录" : "按这段代码再出一题"}
                     ><Icon name="rotate" size={14} />换一题</button>
                   </div>
-
-                  {result ? (
-                    <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
-                  ) : null}
                 </div>
               </div>
             ) : null}
