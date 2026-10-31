@@ -82,6 +82,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 最近一次没出成题的单元 id（原因只进 console）：对应卡片转警示态。 */
   const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
+  /** 题面吃多段代码时，正在看哪一段。 */
+  const [anchorIndex, setAnchorIndex] = useState(0);
   const [modules, setModules] = useState<PracticeTheme[]>(loadPracticeThemes);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveTheme(repositoryId, modules));
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
@@ -129,16 +131,19 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
+  /** 题面吃多段代码时只预览选中的那一段，切段就是换一次锚点。 */
+  const shownIndex = exercise ? Math.min(anchorIndex, Math.max(0, exercise.anchors.length - 1)) : 0;
+  const anchor = exercise?.anchors[shownIndex];
   useEffect(() => {
-    const anchor = exercise?.anchors[0];
     if (!anchor) { setSource(null); return; }
     let current = true;
     api.getSource(repositoryId, anchor.path, anchor.line).then((next) => { if (current) setSource(next); }).catch(() => { if (current) setSource(null); });
     return () => { current = false; };
-  }, [exercise?.id, repositoryId]);
+  }, [anchor?.path, anchor?.line, repositoryId]);
 
   useEffect(() => {
     const slot = exercise?.code;
+    setAnchorIndex(0);
     setCodeFiles(slot ? slot.files.map((file) => ({ ...file })) : []);
     setActiveCodePath(slot?.files[0]?.path ?? "");
   }, [exercise?.id]);
@@ -187,7 +192,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     .filter((record) => isComprehensionChip ? !record.unitId.startsWith("llm:") : record.unitId.startsWith(`llm:${activeModule}:`))
     .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
   const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名主题";
-  const anchor = exercise?.anchors[0];
   /** 面板只渲染前 MAX_RENDER_LINES 行；锚点行在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
@@ -298,41 +302,49 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             ) : null}
 
             {exercise ? (
-              <>
-                <div className="exercise-head">
-                  <span className="badge badge-neutral">{exerciseKindLabel(exercise.kind)}</span>
-                  <span className="badge badge-info ellipsis" >目标单元 · {exercise.targetTitle || unitName(exercise.targetUnitId)}</span>
-                  <span className="badge badge-neutral" title="难度档位由引擎按单元的结构复杂度给出（0–5）">难度 {exercise.difficulty}/5</span>
-                  {result ? <span className={`badge ${result.passed ? "badge-ok" : "badge-danger"}`}>{result.passed ? "通过" : "未通过"} · {Math.round(result.score * 100)} 分</span> : null}
+              <div className="practice-cols">
+                <div className="practice-topic">
+                  <div className="exercise-meta">
+                    <span>{exerciseKindLabel(exercise.kind)}</span>
+                    <span aria-hidden>·</span>
+                    <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
+                  </div>
+                  <h2 className="exercise-title">{exercise.title}</h2>
+
+                  {exercise.anchors.length > 1 ? (
+                    <div className="row-wrap">
+                      <span className="fs-11 faint">题面用到的代码：</span>
+                      {exercise.anchors.map((item, index) => (
+                        <button
+                          type="button"
+                          key={`${item.path}:${item.line}`}
+                          className="anchor-chip"
+                          aria-pressed={index === shownIndex}
+                          title={`${item.path}:${item.line}`}
+                          onClick={() => setAnchorIndex(index)}
+                        >
+                          <Icon name="file" size={12} />
+                          {item.path.split("/").pop()}:{item.line}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <ExercisePrompt key={exercise.id} text={exercise.prompt} />
+
+                  <section className="card clip code-card">
+                    <div className="code-context row between">
+                      <span className="cc-name">{anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}</span>
+                      <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
+                    </div>
+                    <SourceView source={source} emptyHint="生成练习后显示题面对应的代码" />
+                  </section>
                 </div>
-                <h2 className="exercise-title">{exercise.title}</h2>
 
-                {exercise.anchors.length ? (
-                  <div className="row-wrap">
-                    <span className="fs-11 faint">相关代码锚点：</span>
-                    {exercise.anchors.map((item) => (
-                      <span className="anchor-chip" key={`${item.path}:${item.line}`} title={`${item.path}:${item.line}${item.label ? ` · ${item.label}` : ""}`}>
-                        <Icon name="file" size={12} />
-                        {item.path.split("/").pop()}:{item.line}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-
-                <ExercisePrompt key={exercise.id} text={exercise.prompt} />
-
-                <section className="card clip code-card">
-                  <div className="code-context row between">
-                    <span className="cc-name">{anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}</span>
-                    <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
-                  </div>
-                  <SourceView source={source} emptyHint="生成练习后显示题面对应的代码" />
-                </section>
-
-                <div className="col">
+                <div className="practice-answer">
                   <div className="row between">
                     <span className="section-title">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
-                    <span className="fs-11 faint" title={`判分：${gradingLabel(exercise.gradingMode)}｜代码改过就要重新出题`}>{gradingLabel(exercise.gradingMode)}</span>
+                    <span className="fs-11 faint" title="改过代码后要重新出题">{gradingLabel(exercise.gradingMode)}</span>
                   </div>
 
                   {exercise.inputMode === "multi_select" ? (
@@ -360,7 +372,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
                   {exercise.inputMode === "code" && exercise.code ? (
                     <div className="col">
-                      <p className="fs-11 faint" title="提交后运行测试判分">代码包</p>
+                      <p className="fs-11 faint">要改的文件</p>
                       {codeFiles.length > 1 ? (
                         <div className="tabs light" role="tablist" aria-label="下发代码文件">
                           {codeFiles.map((file) => (
@@ -401,27 +413,27 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                       placeholder={answerPlaceholder(exercise.kind, exercise.gradingMode)}
                     />
                   ) : null}
-                </div>
 
-                <div className="row">
-                  {result ? null : (
-                    <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={!canSubmit} title="提交会记一条审计">
-                      {loading ? <span className="spin"><Icon name="rotate" size={15} /></span> : <Icon name="check" size={15} />}提交判分
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
-                    disabled={loading}
-                    title={exercise.kind === "llm_rubric" ? "换一道新题，旧题与记录留着" : "按这个单元重新出题"}
-                  ><Icon name="rotate" size={14} />换一题</button>
-                </div>
+                  <div className="practice-actions">
+                    {result ? null : (
+                      <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={!canSubmit}>
+                        {loading ? <span className="spin"><Icon name="rotate" size={15} /></span> : <Icon name="check" size={15} />}提交判分
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
+                      disabled={loading}
+                      title={exercise.kind === "llm_rubric" ? "旧题与记录留着" : "按这段代码再出一题"}
+                    ><Icon name="rotate" size={14} />换一题</button>
+                  </div>
 
-                {result ? (
-                  <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
-                ) : null}
-              </>
+                  {result ? (
+                    <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
+                  ) : null}
+                </div>
+              </div>
             ) : null}
           </div>
         </div>
@@ -443,7 +455,6 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
         ]
       : [];
   const sm2 = [`间隔 ${result.review.intervalDays} 天`, `第 ${result.review.repetitions} 次复习`];
-  if (result.review.lastReviewedAt) sm2.push(`上次作答 ${dateText(result.review.lastReviewedAt)}`);
 
   return (
     <div className={`feedback-panel ${result.passed ? "feedback-pass" : "feedback-fail"}`}>
@@ -494,12 +505,12 @@ function DoneCard({ record, selected, dueAt, failed, onPick }: { record: Mastery
     <button
       type="button"
       className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
-      title={failed ? "出题失败" : `${record.unitId} · ${record.attempts} 次练习里 ${record.successes} 次通过 · 点击按这个单元重新出题`}
+      title={failed ? "出题失败" : `${record.attempts} 次练习里 ${record.successes} 次通过`}
       onClick={onPick}
     >
       <div className="d-head">
         <span className="grow">{unitName(record.unitId)}</span>
-        <span className={`d-score ${record.successes > 0 ? "pass" : "fail"}`}>{record.level}/5</span>
+        <span className={`d-score ${record.level >= 3 ? "pass" : record.level >= 1 ? "warn" : "fail"}`}>{record.level}/5</span>
       </div>
       <div className="d-due">{failed ? "出题失败" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
     </button>

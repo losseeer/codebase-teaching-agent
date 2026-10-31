@@ -296,9 +296,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 
 /* ==================== 练习评估 ==================== */
 .page-practice { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
-/* 题面锚点 chip 在这一页只报「这道题吃的是哪一段代码」：原型那条点了会跳去教学页，这一页没有那条跨工作区接线，
-   所以指针不装作能点（global.css 给 .anchor-chip 的是 cursor:pointer）。 */
-.practice-wrap .anchor-chip { cursor: default; }
 .practice-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .chip-list { display: flex; flex-direction: column; gap: 4px; }
 .chip {
@@ -328,6 +325,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .done-card .d-score { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-12); font-weight: 700; }
 .done-card .d-score.pass { color: var(--ok); }
 .done-card .d-score.fail { color: var(--danger); }
+.done-card .d-score.warn { color: var(--warn-ink); }
 .done-card .d-due { font-size: 10px; color: var(--ink-3); }
 .done-card { cursor: pointer; text-align: left; width: 100%; transition: border var(--t-fast); }
 .done-card:hover { border-color: var(--brand-600); }
@@ -336,8 +334,12 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .done-card.failed .d-due { color: var(--warn-ink); }
 
 .practice-main { overflow-y: auto; min-width: 0; }
-.practice-wrap { max-width: 720px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }
-.exercise-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.practice-wrap { max-width: 1080px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }
+/* 题目与作答并排：读题、写答案、提交这一条动线要在一屏内走完；窄屏回落单列 */
+.practice-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: var(--sp-5); align-items: start; }
+.practice-topic, .practice-answer { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+.practice-actions { position: sticky; bottom: 0; z-index: 2; display: flex; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-2); background: var(--bg); border-top: 1px solid var(--border); }
+.exercise-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-11); color: var(--ink-3); }
 .exercise-title { font-size: var(--fs-16); font-weight: 650; line-height: 1.45; margin: 0; }
 .exercise-prompt { font-size: var(--fs-13); line-height: 1.7; color: var(--ink); margin: 0; }
 /* 长题面默认收起六行，由「展开 / 收起」这一颗按钮放开：题面长度不在引擎侧否决，显示这一头在这里兜。 */
@@ -488,6 +490,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 /* ==================== 窄屏退让 ==================== */
 @media (max-width: 1180px) {
   .report-grid, .tiles { grid-template-columns: repeat(2, 1fr); }
+  .practice-cols { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
   .import-wrap, .insights-wrap, .practice-wrap { padding-left: var(--sp-4); padding-right: var(--sp-4); }
