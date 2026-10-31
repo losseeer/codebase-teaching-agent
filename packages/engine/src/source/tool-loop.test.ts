@@ -7,7 +7,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../application/port/llm-provider.js";
 import { LlmAbortedError } from "../application/port/llm-provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithOptionalSkills, completeWithReadTool, toolLoopAuditsOf, type ReadToolProgress, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
+import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, withSkillsBrief, toolLoopAuditsOf, type ReadToolProgress, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
 
 /** repoPath 指向本目录：内含稳定存在的真实文件。 */
 const repoPath = import.meta.dirname;
@@ -725,31 +725,31 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
   });
 });
 
-describe("completeWithOptionalSkills（出题与练习答疑的技能通道）", () => {
+describe("技能面与文件面的开关（出题、答疑与问答共用一条循环）", () => {
   const skills = { brief: "可用技能：demo —— 一套出题做法", bodyOf: (name: string) => (name === "demo" ? "做法：先判考点，再写一行断言。" : undefined) };
 
-  it("没给技能通道就是单轮：请求里没有工具，也没有第二趟", async () => {
-    const { provider, calls } = scriptedProvider([{ text: "题面。", usage: { inputTokens: 10, outputTokens: 5 }, finishReason: "stop" }]);
-    const result = await completeWithOptionalSkills({ provider, system: "s", user: "u", maxTokens: 600, temperature: 0.4, scene: "practice.generate" });
-    expect(calls.length).toBe(1);
-    expect(calls[0].tools, "没装技能就不该多出任何工具").toBeUndefined();
-    expect(calls[0].system).toBe("s");
-    expect(result.skillReads).toEqual([]);
-    expect(result.text).toBe("题面。");
-  });
-
-  it("给了技能：清单并进系统提示、只开放 read_skill，取完正文再答", async () => {
+  it("没给仓根时只开放 read_skill，清单并进系统提示", async () => {
     const { provider, calls } = scriptedProvider([
       { text: "", toolCalls: [{ id: "c1", name: "read_skill", argumentsJson: JSON.stringify({ name: "demo" }) }], usage: { inputTokens: 100, outputTokens: 5 }, finishReason: "tool_calls" },
       { text: "按做法出的题。", usage: { inputTokens: 120, outputTokens: 40 }, finishReason: "stop" }
     ]);
-    const result = await completeWithOptionalSkills({ provider, system: "s", user: "u", maxTokens: 600, temperature: 0.4, scene: "practice.generate", skills });
+    const result = await completeWithReadTool({ provider, system: withSkillsBrief("s", skills), user: "u", temperature: 0.4, scene: "practice.generate", skills });
     expect(calls[0].system).toContain("可用技能：demo");
-    expect((calls[0].tools ?? []).map((tool) => tool.name), "这一路没有仓库文件面，能取的只有技能正文").toEqual(["read_skill"]);
+    expect((calls[0].tools ?? []).map((tool) => tool.name)).toEqual(["read_skill"]);
     expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("先判考点"))).toBe(true);
-    expect(result.text).toBe("按做法出的题。");
-    expect(result.usage).toEqual({ inputTokens: 220, outputTokens: 45 });
+    expect(result.completion.text).toBe("按做法出的题。");
     expect(result.skillReads).toEqual([{ skill: "demo", chars: 15, found: true }]);
+  });
+
+  it("给了仓根就有文件面，读过的文件逐条留记录", async () => {
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "src/config.js" }) }], usage: { inputTokens: 80, outputTokens: 4 }, finishReason: "tool_calls" },
+      { text: "读完才敢出这题。", usage: { inputTokens: 160, outputTokens: 30 }, finishReason: "stop" }
+    ]);
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", temperature: 0.4, scene: "practice.generate" });
+    expect((calls[0].tools ?? []).map((tool) => tool.name)).toContain("read_file");
+    expect(result.fileReads.map((read) => read.path)).toEqual(["src/config.js"]);
+    expect(result.completion.text).toBe("读完才敢出这题。");
   });
 });
 

@@ -12,7 +12,7 @@ import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";
 import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
-import { completeWithReadTool, completeWithSkillTool } from "../source/tool-loop.js";
+import { completeWithReadTool } from "../source/tool-loop.js";
 import { recordEgress, type EgressCollector } from "../adapter/outbound/security/egress-log.js";
 import type { ScopeRef } from "../source/scope-ref.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
@@ -29,14 +29,6 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt, teachingSystemPrompt } fr
 
 /** 问答回合的过程事件。 */
 export type { TeachingProgress };
-
-/** teaching 作用域的工具轮数与读文件上限。 */
-const TEACHING_MAX_TOOL_ROUNDS = 2;
-const TEACHING_MAX_TOOL_CALLS = 3;
-
-/** map 作用域的工具轮数与读文件上限。 */
-const MAP_MAX_TOOL_ROUNDS = 20;
-const MAP_MAX_TOOL_CALLS = 4;
 
 const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);
 
@@ -149,21 +141,19 @@ export interface RespondOptions {
 }
 
 export interface RunTurnInput {
-  /** 作用域：map 与 teaching 可走文件面，practice 只走技能面。 */
+  /** 作用域只决定落库与埋点的口径，工具面一律同一条件：有仓就可取证。 */
   scope: "teaching" | "map" | "practice";
   provider: LlmProvider;
   /** 装配好的系统提示词与本轮用户消息，不再加工。 */
   system: string;
   user: string;
-  maxTokens: number;
+  /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
+  maxTokens?: number;
   temperature: number;
   /** 场景标签，透传给每一轮调用。 */
   scene: string;
   /** 已分析仓库根：read_file 只在此范围内读取。 */
   repositoryPath?: string;
-  /** 工具循环的轮数与读文件上限。 */
-  maxRounds?: number;
-  maxCalls?: number;
   search?: SearchCorpus;
   cross?: CrossRepoContext;
   diagram?: SetDiagramToolContext;
@@ -204,7 +194,7 @@ export interface RunTurnResult {
 
 /** 回合的唯一发射处：按作用域与通道选工具循环或单轮调用。 */
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
-  if (input.scope !== "practice" && input.repositoryPath) {
+  if (input.repositoryPath) {
     const result = await completeWithReadTool({
       provider: input.provider,
       repoPath: input.repositoryPath,
@@ -212,8 +202,6 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       user: input.user,
       maxTokens: input.maxTokens,
       temperature: input.temperature,
-      maxRounds: input.maxRounds as number,
-      maxCalls: input.maxCalls as number,
       scene: input.scene,
       ...(input.search ? { search: input.search } : {}),
       ...(input.cross ? { cross: input.cross } : {}),
@@ -242,30 +230,6 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
       ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
       ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed })
-    };
-  }
-  if (input.scope === "practice" && (input.skills || input.external)) {
-    const result = await completeWithSkillTool({
-      provider: input.provider,
-      system: input.system,
-      user: input.user,
-      maxTokens: input.maxTokens,
-      temperature: input.temperature,
-      scene: input.scene,
-      ...(input.skills ? { skills: input.skills } : {}),
-      ...(input.external ? { external: input.external } : {}),
-
-      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
-      ...(input.signal ? { signal: input.signal } : {})
-    });
-    return {
-      completion: result.completion,
-      ...(result.usage ? { usage: result.usage } : {}),
-      rounds: result.rounds,
-      fileReads: result.fileReads,
-      codeSearches: result.codeSearches,
-      mcpCalls: result.mcpCalls,
-      skillReads: result.skillReads
     };
   }
   input.onProgress?.({ type: "thinking" });
@@ -301,10 +265,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
     provider,
     system,
     user,
-    maxTokens: 700,
     temperature: 0.2,
-    maxRounds: TEACHING_MAX_TOOL_ROUNDS,
-    maxCalls: TEACHING_MAX_TOOL_CALLS,
     scene: "teaching.turn",
     ...(repositoryPath ? { repositoryPath } : {}),
     ...(options.search ? { search: options.search } : {}),
@@ -316,7 +277,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.onProgress ? { onProgress: (progress: ReadToolProgress): void => { options.onProgress?.(progressToStage(progress)); } } : {})
   });
-  const content = flagTruncatedReply(outcome.completion.text.slice(0, 1_500), outcome.completion.finishReason === "length" || outcome.completion.text.length > 1_500);
+  const content = flagTruncatedReply(outcome.completion.text, outcome.completion.finishReason === "length");
   const userMessage: TutorMessage = { id: id(), role: "user", content: learnerContent, createdAt: new Date().toISOString() };
   const assistant: TutorMessage = { id: id(), role: "assistant", content, createdAt: new Date().toISOString() };
   return {
@@ -377,10 +338,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     provider,
     system,
     user: userMessage,
-    maxTokens: 1_000,
     temperature: 0.3,
-    maxRounds: MAP_MAX_TOOL_ROUNDS,
-    maxCalls: MAP_MAX_TOOL_CALLS,
     scene: "map.chat",
     repositoryPath: input.repoPath,
     ...(input.search ? { search: input.search } : {}),
@@ -429,7 +387,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
-  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, maxTokens: 700, temperature: 0.3, scene: "practice.chat", ...(input.skills ? { skills: input.skills } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, temperature: 0.3, scene: "practice.chat", repositoryPath: input.repoPath, ...(input.skills ? { skills: input.skills } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   return {
     reply: flagTruncatedReply(result.completion.text, result.completion.finishReason === "length"),
     provider: input.provider.name,

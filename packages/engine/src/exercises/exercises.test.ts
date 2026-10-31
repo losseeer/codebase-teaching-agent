@@ -15,7 +15,7 @@ import { readJournal } from "../adapter/outbound/persistence/journal.js";
 import { RepositoryHandle } from "../adapter/outbound/persistence/repository-handle.js";
 import { resetIsolationForTest, stubIsolationForTest } from "../adapter/outbound/sandbox/isolation.js";
 import { selectZpdTarget } from "./zpd.js";
-import type { SkillsToolContext } from "../source/tool-loop.js";
+import type { ExerciseFaces } from "./turn-faces.js";
 import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
 import { scheduleSm2 } from "./sm2.js";
@@ -354,8 +354,8 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", reason: "当前仓库没有与该主题相关的代码素材。" });
   });
 
-  /** 只喂这一份分解表进技能通道；正文与附属文件都在内存里。 */
-  function topicSkills(): SkillsToolContext {
+  /** 只喂这一份分解表进取证面；正文与附属文件都在内存里。 */
+  function topicFaces(): ExerciseFaces {
     const files: Record<string, string> = {
       "SKILL.md": ["| 主题 | 附属文件 | 最常出的缺陷形状 |", "| --- | --- | --- |", "| 传输与序列化 | `cn.md` | 超时/重试缺一个 |"].join("\n"),
       "cn.md": [
@@ -371,7 +371,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
         "真实网络延迟、丢包。"
       ].join("\n")
     };
-    return { brief: "", bodyOf: (_name, file = "SKILL.md") => files[file] };
+    return { skills: { brief: "", bodyOf: (_name, file = "SKILL.md") => files[file] } };
   }
 
   it("分解表注入进上下文：模型一次技能都没读，档位与可考点也落进 journal", async () => {
@@ -379,7 +379,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const service = new ExerciseService();
     const tiered = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
     const { provider, calls } = fakeProvider([tiered]);
-    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-cn" }, provider, topicSkills());
+    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-cn" }, provider, topicFaces());
     expect(calls[0].system).toContain("主题分解表");
     expect(calls[0].system, "可考点要连名字一起给，不能只给档名").toContain("超时与重试参数装配");
     expect(calls[0].system).toContain("不得以");
@@ -393,7 +393,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const service = new ExerciseService();
     const invented = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "计算机网络", exam_point: "TCP 三次握手" });
     const { provider } = fakeProvider([invented]);
-    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-off" }, provider, topicSkills());
+    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-off" }, provider, topicFaces());
     const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
     expect(generated?.payload.topic_tier).toBe("off");
   });
@@ -404,8 +404,8 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const first = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
     const second = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "off", exam_point: "", title: "另一道判法不同的题" });
     const { provider, calls } = fakeProvider([first, second]);
-    const made = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicSkills());
-    const reused = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicSkills());
+    const made = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
+    const reused = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
     expect(calls).toHaveLength(1);
     expect(reused.id).toBe(made.id);
   });
@@ -414,7 +414,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "摘录里没有可读的超时与重试装配。" })]);
-    await expect(service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-decl" }, provider, topicSkills())).rejects.toThrow("模型判定该主题无法出题");
+    await expect(service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-decl" }, provider, topicFaces())).rejects.toThrow("模型判定该主题无法出题");
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1);
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", tiers_offered: "cn" });
   });

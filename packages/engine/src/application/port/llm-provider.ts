@@ -33,6 +33,9 @@ export interface LlmMessage {
   reasoningContent?: string;
 }
 
+/** 没写输出预算的场景共用这个缺省：按主流端点的最大输出档给。 */
+export const DEFAULT_MAX_TOKENS = 8_000;
+
 export interface LlmCompletionInput {
   system: string;
   /** 单轮调用的用户消息；有 messages 时省略。 */
@@ -40,6 +43,7 @@ export interface LlmCompletionInput {
   /** 工具循环的既有对话；提供时忽略 user。 */
   messages?: LlmMessage[];
   tools?: LlmTool[];
+  /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
   maxTokens?: number;
   temperature?: number;
   /** 思考模式档位；省略时不发思考字段。 */

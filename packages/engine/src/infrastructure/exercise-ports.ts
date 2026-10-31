@@ -38,11 +38,11 @@ export function practiceView(repository: { path: string; index: PracticeReposito
 }
 
 /** 在 `pin()` 的范围内构造端口、交给回调，回调落地才 `unpin()`。 */
-export async function withExercisePorts<T>(handle: RepositoryHandle, run: (ports: ExercisePorts) => T | Promise<T>): Promise<T> {
+export async function withExercisePorts<T>(handle: RepositoryHandle, run: (ports: ExercisePorts, database: TutorDatabase) => T | Promise<T>): Promise<T> {
   const database = handle.pin();
   try {
     // run 可能返回 Promise，await 之后才走到 unpin
-    return await run(exercisePortsFor(handle, database));
+    return await run(exercisePortsFor(handle, database), database);
   } finally {
     handle.unpin();
   }

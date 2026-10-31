@@ -5,11 +5,13 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
-import { completeWithOptionalSkills, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
+import { completeWithReadTool, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
+import type { FileReadRecord } from "../source/read-file.js";
 import { recordEgress, type EgressSource } from "../adapter/outbound/security/egress-log.js";
 import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
+import type { ExerciseFaces } from "./turn-faces.js";
 
 /**
   练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。
@@ -19,7 +21,8 @@ import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
 
 const MAX_TITLE = 24;
 const MAX_PROMPT = 300;
-const MAX_EXCERPT_LINES = 60;
+/** 一趟调用能带的摘录行数。 */
+const MAX_EXCERPT_LINES = 240;
 
 export interface RefinedExercise {
   exercise: Exercise;
@@ -74,7 +77,7 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
     });
 
     recordEgress({ repositoryPath, scene: "practice.polish", sources: [excerptSource(excerpt)] });
-    const response = await provider.complete({ system, user, maxTokens: 600, temperature: 0.3, scene: "practice.polish" });
+    const response = await provider.complete({ system, user, temperature: 0.3, scene: "practice.polish" });
     const refined = parseRefinement(response.text, exercise);
     if (!refined) return { exercise, polished: false, polishFailure: "unparsable" };
     return { exercise: refined, usage: response.usage, polished: true };
@@ -109,7 +112,7 @@ function sourceExcerpt(repositoryPath: string, exercise: Exercise): ExerciseExce
     const masker = secretMasker();
     const shown = lines.slice(from, Math.min(to, from + MAX_EXCERPT_LINES)).map((line) => masker.take(line));
     const joined = shown.join("\n");
-    const text = joined.slice(0, 4_000);
+    const text = joined.slice(0, 20_000);
     // to 按实际进请求的行数算
     const sentLines = text.split("\n").length;
     return { path: anchor.path, from: from + 1, to: from + sentLines, text, masked: masker.masked, truncated: sentLines < shown.length || joined.length > text.length || undefined };
@@ -129,8 +132,8 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
 
 /** LLM 出题的结果类型；proposal 仍需过确定性守门。被拒的那趟同样花了钱，失败支路也带 usage。 */
 export type LlmGeneration =
-  | { ok: false; reason: string; usage?: LlmUsage; skillReads: SkillReadAudit[] }
-  | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[] };
+  | { ok: false; reason: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] }
+  | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
 
 export interface LlmProposal {
   title: string;
@@ -171,7 +174,7 @@ export const EXERCISE_STEP = defineAnalysisStep({
   prompts: [GENERATION_SYSTEM_PROMPT, () => (Object.keys(kindRules) as ExerciseKind[]).map((kind) => refineSystemPrompt(kind)).join("\n")]
 });
 
-export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; skills?: SkillsToolContext; topics?: TopicIndex }): Promise<LlmGeneration> {
+export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; topics?: TopicIndex; faces?: ExerciseFaces }): Promise<LlmGeneration> {
   const topics = input.topics ?? NO_TOPICS;
   const excerpts = input.candidates.map((candidate) => ({
     path: candidate.path,
@@ -188,26 +191,28 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
       return { kind: "exercise-excerpt" as const, path: candidate.path, from, to: candidate.endLine ?? from + candidate.excerpt.split("\n").length - 1, text: candidate.excerpt, masked: candidate.masked };
     })
   });
-  const response = await completeWithOptionalSkills({
+  // 与问答回合同一条循环：有仓就能自己读文件、检索、查静态产物，轮数与读文件数取缺省
+  const faces = input.faces ?? {};
+  const baseSystem = topics.prompt ? `${GENERATION_SYSTEM_PROMPT}\n\n${topics.prompt}` : GENERATION_SYSTEM_PROMPT;
+  const loop = await completeWithReadTool({
+    ...faces,
     provider: input.provider,
-    // 技能清单由 completeWithOptionalSkills 并进系统提示词
-    system: topics.prompt ? `${GENERATION_SYSTEM_PROMPT}\n\n${topics.prompt}` : GENERATION_SYSTEM_PROMPT,
+    system: withSkillsBrief(baseSystem, faces.skills),
     user,
-    maxTokens: 1_200,
     temperature: 0.4,
-    scene: "practice.generate",
-    ...(input.skills ? { skills: input.skills } : {})
+    scene: "practice.generate"
   });
+  const response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型给的题目读不出来，请重试。" };
+  if (!parsed) return { ok: false, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads, reason: "模型给的题目读不出来，请重试。" };
   if (parsed.ok === false) {
     const reason = String(parsed.reason ?? "").trim();
-    return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: reason || "当前仓库没有适合该主题的出题素材。" };
+    return { ok: false, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads, reason: reason || "当前仓库没有适合该主题的出题素材。" };
   }
-  if (parsed.ok !== true) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
+  if (parsed.ok !== true) return { ok: false, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads, reason: "模型说它出不了这个题，或返回的内容缺判断标记；换个主题再试。" };
   const proposal = normalizeProposal(parsed, topics);
-  if (!proposal) return { ok: false, usage: response.usage, skillReads: response.skillReads, reason: "模型给的题目字段不完整，请重试。" };
-  return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads };
+  if (!proposal) return { ok: false, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads, reason: "模型给的题目字段不完整，请重试。" };
+  return { ok: true, proposal, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
 }
 
 /** 判分数字解析：可解析则钳到 0-1，否则返回 `undefined`。 */
@@ -219,7 +224,7 @@ function judgeScore(value: unknown): number | undefined {
 }
 
 /** rubric 判分：拿参考答案与评分细则比对学习者回答，输出结构化分数。 */
-export async function judgeRubricWithLlm(input: { prompt: string; answerKey: string; criteria: { dimension: string; description: string }[]; learnerAnswer: string; provider: LlmProvider }): Promise<{ score: number; passed: boolean; feedback: string; usage?: LlmUsage }> {
+export async function judgeRubricWithLlm(input: { prompt: string; answerKey: string; criteria: { dimension: string; description: string }[]; learnerAnswer: string; provider: LlmProvider; faces?: ExerciseFaces }): Promise<{ score: number; passed: boolean; feedback: string; usage?: LlmUsage; fileReads: FileReadRecord[] }> {
   const system = [
     "你是编程练习的评分器。依据参考答案与评分细则，逐步比对学习者的回答并打分。",
     "严格输出 JSON：{\"score\":<0到1之间的两位小数>,\"passed\":<true|false>,\"feedback\":\"<≤200字中文反馈，指出答对了什么、差在哪里>\"}",
@@ -231,7 +236,9 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
     criteria: input.criteria,
     learnerAnswer: input.learnerAnswer
   });
-  const response = await input.provider.complete({ system, user, maxTokens: 500, temperature: 0.1, scene: "practice.judge" });
+  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, system, user, temperature: 0.1, scene: "practice.judge" });
+  const response = { text: loop.completion.text, usage: loop.usage };
+  const fileReads = loop.fileReads;
   const parsed = parseJsonObject(response.text);
   const score = judgeScore(parsed?.score);
   if (!parsed || score === undefined) {
@@ -241,7 +248,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
   }
   const passed = typeof parsed.passed === "boolean" ? parsed.passed : score >= 0.6;
   const feedback = String(parsed.feedback ?? "").trim().slice(0, 300) || (passed ? "回答与参考答案要点基本一致。" : "回答与参考答案存在差距，请对照反馈完善理解。");
-  return { score, passed, feedback, usage: response.usage };
+  return { score, passed, feedback, usage: response.usage, fileReads };
 }
 
 /** 反馈润色：规则判分结果不变，只改写反馈；失败返回 undefined。 */
@@ -262,7 +269,7 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
       sourceExcerpt: excerpt.text
     });
     recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.feedback", sources: [excerptSource(excerpt)] });
-    const response = await input.provider.complete({ system, user, maxTokens: 300, temperature: 0.3, scene: "practice.feedback" });
+    const response = await input.provider.complete({ system, user, temperature: 0.3, scene: "practice.feedback" });
     const parsed = parseJsonObject(response.text);
     const feedback = String(parsed?.feedback ?? "").trim();
     if (!feedback) return undefined;
@@ -278,7 +285,7 @@ const COMMENT_LINE = /^\s*(\/\/|#|--|\/\*|[*])/;
 const MIN_COMMENT_RUN = 4;
 
 /** 按符号边界构造候选摘录，整段注释折成一行标注。 */
-export function buildTagCandidate(repositoryPath: string, path: string, span: { start: number; end?: number }, maxLines = 80): GuardCandidate | undefined {
+export function buildTagCandidate(repositoryPath: string, path: string, span: { start: number; end?: number }, maxLines = 240): GuardCandidate | undefined {
   try {
     const lines = readFileSync(join(repositoryPath, path), "utf8").split("\n");
     const start = Math.min(Math.max(1, Math.floor(span.start) || 1), lines.length);
@@ -287,7 +294,7 @@ export function buildTagCandidate(repositoryPath: string, path: string, span: { 
     const stop = Math.min(symbolEnd ?? lines.length, start + maxLines - 1, lines.length);
     const masker = secretMasker();
     const kept: string[] = [];
-    const maxChars = 4_000;
+    const maxChars = 20_000;
     let used = 0;
     // lastEmitted 只记实际输出的最后一行
     let lastEmitted = start - 1;

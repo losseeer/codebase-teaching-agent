@@ -3,7 +3,7 @@ import type { ChatScope } from "@codebase-tutor/contract";
 import { externalToolSurface } from "../../adapter/outbound/integrations/clients.js";
 import { listSkills, readSkill, skillsBriefing } from "../../adapter/outbound/integrations/skills.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "../runtime/turn-invariants.js";
-import { dedupeFileReads } from "../../source/read-file.js";
+import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
 import type { ExternalToolContext, SkillsToolContext } from "../../source/tool-loop.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../../turn/run-turn.js";
@@ -89,7 +89,7 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "map_chat"
   }, threadId);
   for (const read of dedupeFileReads(result.fileReads ?? [])) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, threadId);
+    journal.append("file_read", fileReadAuditPayload(read), threadId);
   }
 
   for (const search of result.codeSearches ?? []) {

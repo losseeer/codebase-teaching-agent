@@ -31,7 +31,6 @@ export const SUMMARY_BATCH_SIZE = 8;
 
 /** 单条摘要的字符上限。 */
 const MAX_SUMMARY_CHARS = 200;
-const BATCH_MAX_TOKENS = 1_200;
 const BATCH_SCENE = "map.summary";
 
 const FILE_ROLES: FileRole[] = ["core", "support", "infra", "tool", "test"];
@@ -133,7 +132,6 @@ export class LlmSummaryProvider implements SummaryProvider {
     const response = await this.llm.complete({
       system: batchSystemPrompt(this.withHeaderComments),
       user: JSON.stringify(slices),
-      maxTokens: BATCH_MAX_TOKENS,
       temperature: 0,
       scene: BATCH_SCENE
     });

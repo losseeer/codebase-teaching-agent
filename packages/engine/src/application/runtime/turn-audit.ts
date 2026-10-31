@@ -1,7 +1,7 @@
 import type { TurnScene } from "@codebase-tutor/contract";
 
 import { importer } from "../../infrastructure/composition-root.js";
-import { dedupeFileReads, type FileReadRecord } from "../../source/read-file.js";
+import { dedupeFileReads, type FileReadRecord, fileReadAuditPayload } from "../../source/read-file.js";
 import type { LlmUsage } from "../port/llm-provider.js";
 import type { AuditSink } from "../port/audit-sink.js";
 import type { CodeSearchRecord } from "../../source/search-code.js";
@@ -37,7 +37,7 @@ export function recordUnfinishedTurn(input: { repositoryPath: string; repository
   appendUsage(journal, { ...input, usage: audits?.usage });
   if (!audits || (!audits.fileReads.length && !audits.codeSearches.length && !audits.skillReads.length && !audits.mcpCalls.length)) return;
   for (const read of dedupeFileReads(audits.fileReads)) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, input.threadId);
+    journal.append("file_read", fileReadAuditPayload(read), input.threadId);
   }
   for (const search of audits.codeSearches) {
     journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, input.threadId);

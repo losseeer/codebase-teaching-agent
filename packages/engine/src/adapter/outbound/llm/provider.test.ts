@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLlmProvider, OpenAICompatibleProvider, RetryLlmProvider, resolveLlmConfig, screenOutbound, ThinkingOverrideLlmProvider } from "./provider.js";
-import { LlmAbortedError, type LlmProvider } from "../../../application/port/llm-provider.js";
+import { DEFAULT_MAX_TOKENS, LlmAbortedError, type LlmProvider } from "../../../application/port/llm-provider.js";
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
@@ -534,11 +534,11 @@ describe("OpenAICompatibleProvider 的推理预算升档", () => {
     expect(sent).toEqual([6700, 12700]);
   });
 
-  it("余量关成 0 ⇒ 只发一发就抛：同一份预算原样重发没有意义，不做", async () => {
+  it("没写预算用缺省档，且余量关成 0 时只发一发就抛：同一份预算原样重发没有意义", async () => {
     process.env.TUTOR_LLM_REASONING_HEADROOM = "0";
     const { fetchImpl, sent } = scripted([() => jsonResponse(chatBody("", "length"))]);
-    await expect(new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u" })).rejects.toThrow("max_tokens=700");
-    expect(sent).toEqual([700]);
+    await expect(new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl }).complete({ system: "s", user: "u" })).rejects.toThrow(`max_tokens=${String(DEFAULT_MAX_TOKENS)}`);
+    expect(sent).toEqual([DEFAULT_MAX_TOKENS]);
   });
 
   it("正文没被截断时行为一字不变：单发、不升档、不留痕", async () => {

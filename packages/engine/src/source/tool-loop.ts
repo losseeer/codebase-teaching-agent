@@ -28,12 +28,14 @@ export interface ReadToolLoopInput {
   repoPath?: string;
   system: string;
   user: string;
-  maxTokens: number;
+  /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
+  maxTokens?: number;
   /** 省略时用 provider 的默认采样温度。 */
   temperature?: number;
-  maxRounds: number;
-  /** 一个回合内成功读取的文件数上限。 */
-  maxCalls: number;
+  /** 工具轮数上限；省略取 `DEFAULT_TOOL_ROUNDS`。 */
+  maxRounds?: number;
+  /** 一个回合内成功读取的文件数上限；省略取 `DEFAULT_FILE_READS`。 */
+  maxCalls?: number;
   onProgress?: (progress: ReadToolProgress) => void;
   /** 场景标签，透传给每一轮 LLM 调用。 */
   scene?: string;
@@ -75,7 +77,7 @@ export interface ExternalToolContext {
   tools: LlmTool[];
   /** 不许抛异常：外部 server 的超时与失败须先转成给模型看的文本。 */
   call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
-  /** 一个回合的外部调用次数上限，默认 3。 */
+  /** 一个回合的外部调用次数上限；省略取 `DEFAULT_EXTERNAL_CALLS`。 */
   maxCalls?: number;
 }
 
@@ -87,7 +89,7 @@ export interface CrossRepoContext {
   corpusOf?: (repoName: string) => SearchCorpus | undefined;
   /** 取当前仓与对端仓之间的接缝清单。 */
   links?: (repoName: string, filter: string) => string;
-  /** 跨仓读取的独立上限。 */
+  /** 跨仓读取的独立上限；省略取 `DEFAULT_CROSS_READS`。 */
   maxCrossReads?: number;
   /** 每递出一份对端内容回调一次，参数为仓名与仓内路径。 */
   onHandedOut?: (repoName: string, path: string) => void;
@@ -227,8 +229,16 @@ export interface TurnCheckpointChannel {
   clear: () => void;
 }
 
+/** 缺省上限按「实际碰不到」给：真闸是每轮的预算检查，不是这些数字。 */
+export const DEFAULT_TOOL_ROUNDS = 100;
+export const DEFAULT_FILE_READS = 100;
+const DEFAULT_EXTERNAL_CALLS = 100;
+const DEFAULT_CROSS_READS = 100;
+
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
+  const maxRounds = input.maxRounds ?? DEFAULT_TOOL_ROUNDS;
+  const maxCalls = input.maxCalls ?? DEFAULT_FILE_READS;
   const tools = toolsFor(input);
   const available = tools.map((tool) => tool.name).join(" 与 ");
   const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
@@ -293,8 +303,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     if (input.signal?.aborted) throw new LlmAbortedError();
     const budgetStop = input.budgetGuard?.();
     // 没有文件面时不占读文件额度
-    const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= input.maxCalls;
-    const roundsSpent = input.interruptAtLimit ? attemptRounds >= input.maxRounds : rounds >= input.maxRounds;
+    const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= maxCalls;
+    const roundsSpent = input.interruptAtLimit ? attemptRounds >= maxRounds : rounds >= maxRounds;
 
     if (input.interruptAtLimit && (budgetStop || roundsSpent)) {
       messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
@@ -311,7 +321,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         ? `${budgetStop}请基于已读到的正文直接回答，缺什么就照实说缺什么。`
         : fileQuotaSpent
           ? "已达到本次对话的读文件上限，请基于已有上下文直接回答。"
-          : `本次对话的工具轮次已用完（${rounds} 轮）${input.repoPath ? `；读文件额度还剩 ${input.maxCalls - succeededReads} 次，但没有下一轮了` : ""}。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
+          : `本次对话的工具轮次已用完（${rounds} 轮）${input.repoPath ? `；读文件额度还剩 ${maxCalls - succeededReads} 次，但没有下一轮了` : ""}。请基于已读到的正文直接回答，缺什么就照实说缺什么。`;
       if (budgetStop) stoppedBy = "budget";
       else if (roundsSpent) stoppedBy = "rounds";
       else stoppedBy = "reads";
@@ -401,7 +411,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         break;
       }
       if (input.external?.tools.some((tool) => tool.name === call.name)) {
-        const cap = input.external.maxCalls ?? 3;
+        const cap = input.external.maxCalls ?? DEFAULT_EXTERNAL_CALLS;
         if (externalCalls >= cap) {
 
           messages.push({ role: "tool", toolCallId: call.id, content: `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。` });
@@ -429,12 +439,13 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           : "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。" });
         continue;
       }
-      if (repo && crossReads >= (input.cross?.maxCrossReads ?? 2)) {
-        messages.push({ role: "tool", toolCallId: call.id, content: `跨仓读取最多 ${input.cross?.maxCrossReads ?? 2} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。` });
+      const crossCap = input.cross?.maxCrossReads ?? DEFAULT_CROSS_READS;
+      if (repo && crossReads >= crossCap) {
+        messages.push({ role: "tool", toolCallId: call.id, content: `跨仓读取最多 ${crossCap} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。` });
         continue;
       }
       // 读文件额度在每条调用上判一次，轮首那次只挡下一轮
-      if (succeededReads >= input.maxCalls) {
+      if (succeededReads >= maxCalls) {
         messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
         continue;
       }
@@ -485,9 +496,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   }
 }
 
-/** 只开放 read_skill 的最小循环，两轮 = 取一份正文 + 作答。 */
-export function completeWithSkillTool(input: Omit<ReadToolLoopInput, "repoPath" | "maxRounds" | "maxCalls" | "search" | "cross" | "diagram" | "facts">): Promise<ReadToolLoopResult> {
-  return completeWithReadTool({ ...input, maxRounds: 2, maxCalls: 0 });
+/** 技能清单并进系统提示词；没有通道就原样返回。 */
+export function withSkillsBrief(system: string, skills?: SkillsToolContext): string {
+  return skills ? `${system}\n\n${skills.brief}` : system;
 }
 
 /** 一次技能取用的审计记录，found 为 false 表示名字不在清单上。 */
@@ -495,38 +506,6 @@ export interface SkillReadAudit {
   skill: string;
   chars: number;
   found: boolean;
-}
-
-/** 有技能通道时走 read_skill 循环，没有时单轮直发。 */
-export async function completeWithOptionalSkills(input: {
-  provider: LlmProvider;
-  system: string;
-  user: string;
-  maxTokens: number;
-  temperature?: number;
-  scene: string;
-  skills?: SkillsToolContext;
-}): Promise<{ text: string; usage?: LlmUsage; skillReads: SkillReadAudit[] }> {
-  if (!input.skills) {
-    const response = await input.provider.complete({
-      system: input.system,
-      user: input.user,
-      maxTokens: input.maxTokens,
-      ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
-      scene: input.scene
-    });
-    return { text: response.text, usage: response.usage, skillReads: [] };
-  }
-  const loop = await completeWithSkillTool({
-    provider: input.provider,
-    user: input.user,
-    maxTokens: input.maxTokens,
-    ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
-    scene: input.scene,
-    system: `${input.system}\n\n${input.skills.brief}`,
-    skills: input.skills
-  });
-  return { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads };
 }
 
 /** 取 read_skill 参数里的 name，解析失败回空串。 */

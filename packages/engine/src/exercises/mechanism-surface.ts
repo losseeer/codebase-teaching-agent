@@ -31,7 +31,7 @@ const MAX_FILES = 400;
 /** 超过这个体积的文件不读。 */
 const MAX_FILE_BYTES = 200_000;
 /** 一块摘录最多几行。 */
-const MAX_BLOCK_LINES = 60;
+const MAX_BLOCK_LINES = 240;
 /** 线索词元最短长度：太短的只剩关键字。 */
 const MIN_CLUE_LENGTH = 5;
 /** 语言关键字与恒泛词：它们命中哪个声明面都不说明问题。 */

@@ -15,7 +15,7 @@ import { deriveLearnerProfile } from "../../learner/model.js";
 import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
 import { importer } from "../../infrastructure/composition-root.js";
-import { dedupeFileReads } from "../../source/read-file.js";
+import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
@@ -178,7 +178,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
   if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
   journal.append("turn_text", turnTextPayload("teach", question, outcome.assistant.content), session.id);
   for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
-    journal.append("file_read", { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null }, session.id);
+    journal.append("file_read", fileReadAuditPayload(read), session.id);
   }
   for (const search of outcome.codeSearches ?? []) {
     journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);

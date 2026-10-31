@@ -7,7 +7,9 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domai
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
-import { completeWithOptionalSkills, toolLoopAuditsOf, type SkillReadAudit, type SkillsToolContext } from "../source/tool-loop.js";
+import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
+import type { FileReadRecord } from "../source/read-file.js";
+import type { ExerciseFaces } from "./turn-faces.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 import { recordEgress } from "../adapter/outbound/security/egress-log.js";
@@ -49,8 +51,8 @@ export interface HarnessRun {
 }
 
 export type CodeGeneration =
-  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[] }
-  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[] };
+  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] }
+  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
 const MAX_PROMPT = 700;
@@ -203,18 +205,21 @@ function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   return proposal.solution.some((file) => file.contents.replace(/\s+/g, " ").includes(needle));
 }
 
-export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; skills?: SkillsToolContext }): Promise<CodeGeneration> {
+export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces }): Promise<CodeGeneration> {
   const source = unitSource(input.repositoryPath, input.unit);
   if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [], skillReads: [] };
   const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
   if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [], skillReads: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
-  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[] };
+  // 与问答回合同一条循环：出题这一趟也能自己读文件、检索、查静态产物
+  const faces = input.faces ?? {};
+  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
   try {
-    response = await completeWithOptionalSkills({
+    const loop = await completeWithReadTool({
+      ...faces,
       provider: input.provider,
-      system: systemPrompt(input.kind, language),
+      system: withSkillsBrief(systemPrompt(input.kind, language), faces.skills),
       user: JSON.stringify({
         kind: input.kind,
         language,
@@ -222,36 +227,34 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
         imports: source.imports,
         source: source.body.slice(0, MAX_FILE_BYTES)
       }),
-      // 思考 token 也计在 maxTokens 里
-      maxTokens: 6_000,
-      scene: "practice.generate-code",
-      ...(input.skills ? { skills: input.skills } : {})
+      scene: "practice.generate-code"
     });
+    response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
   } catch (error) {
     // 端点失败单列一档
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
   const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], usage: response.usage, skillReads: response.skillReads };
-  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], usage: response.usage, skillReads: response.skillReads };
+  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
 
   const normalized = normalizeProposal({ ...parsed, kind: input.kind, language });
-  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], usage: response.usage, skillReads: response.skillReads };
+  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   const proposal = normalized.proposal;
-  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], usage: response.usage, skillReads: response.skillReads };
+  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
-    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], usage: response.usage, skillReads: response.skillReads };
+    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   }
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
     validation = await validateHarness(proposal, input.repositoryPath);
   } catch (error) {
-    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], usage: response.usage, skillReads: response.skillReads };
+    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
     throw error;
   }
-  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
-  return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads };
+  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
 }
 
 /** 按需讲评的一趟调用，先重跑沙箱拿失败原因。 */
@@ -262,7 +265,8 @@ export async function explainCodeAttempt(input: {
   harness: { language: ExerciseLanguage; entry: string; hidden: CodeFile[]; defect: string };
   learnerFiles: CodeFile[];
   provider: LlmProvider;
-}): Promise<{ explanation: string; usage?: LlmUsage; verdict: { passed: number; failed: number } | undefined }> {
+  faces?: ExerciseFaces;
+}): Promise<{ explanation: string; usage?: LlmUsage; verdict: { passed: number; failed: number } | undefined; fileReads: FileReadRecord[] }> {
   const files = [...input.harness.hidden.map((file) => ({ ...file })), ...input.learnerFiles.map((file) => ({ ...file }))];
   const run = await runSandbox({ language: input.harness.language, entry: input.harness.entry, files, repositoryPath: input.repositoryPath });
   const verdict = verdictOf(run);
@@ -288,8 +292,8 @@ export async function explainCodeAttempt(input: {
     verdict: verdict ? `${verdict.passed} 条通过 / ${verdict.failed} 条失败${run.timedOut ? "，且运行超时被终止" : ""}` : "测试没跑完（没印出 TESTS 结论）",
     testOutput: failing || "（无输出）"
   });
-  const response = await input.provider.complete({ system, user, maxTokens: 400, temperature: 0.3, scene: "practice.explain" });
-  return { explanation: response.text.trim().slice(0, 400), usage: response.usage, verdict };
+  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, system, user, temperature: 0.3, scene: "practice.explain" });
+  return { explanation: loop.completion.text.trim().slice(0, 400), usage: loop.usage, verdict, fileReads: loop.fileReads };
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {

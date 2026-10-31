@@ -17,7 +17,8 @@ import type {
 import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/domain";
 
 import type { LlmProvider } from "../application/port/llm-provider.js";
-import type { SkillsToolContext } from "../source/tool-loop.js";
+import type { ExerciseFaces } from "./turn-faces.js";
+import { fileReadAuditPayload } from "../source/read-file.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
@@ -123,8 +124,8 @@ export class ExerciseService {
   }
 
   /** 生成练习：目标单元与标准答案由静态分析产出；传入 provider 时润色题面。 */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, skills?: SkillsToolContext): Promise<Exercise> {
-    if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, skills);
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
+    if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, faces);
     const modelVersion = provider?.modelVersion ?? "deterministic";
     if (!requested.kind && !requested.targetUnitId) {
       const due = repository.ports.progress.list()
@@ -157,7 +158,7 @@ export class ExerciseService {
       repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
       return cached.exercise;
     }
-    if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, skills);
+    if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, faces);
     let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
     // 题面来源按成因分开记，失败时把失败形状一起写。
     let polish: StoredExercise["polish"] = "not_configured";
@@ -187,7 +188,7 @@ export class ExerciseService {
   }
 
   /** 代码族出题：模型交题面与判分件，引擎在沙箱自证两跑（参考解必过、下发件必挂）后才落库。 */
-  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], skills?: SkillsToolContext): Promise<Exercise> {
+  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], faces?: ExerciseFaces): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
       this.decline(repository, "no_provider", "code", "", "代码题的题面、缺陷与测试都由模型设计，判分靠运行测试；当前没配模型，或本月预算已用完。", "代码题需要模型，当前不可用。");
@@ -199,9 +200,10 @@ export class ExerciseService {
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
-    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, ...(skills ? { skills } : {}) });
-    // 取过的出题技能先留痕。
+    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces });
+    // 取过的出题技能与读过的文件都先留痕：这一趟能自己取证，就得看得见它取了什么。
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
+    for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     /** 自证两跑逐条留痕，失败趟也要有行。 */
     const language = generation.ok ? generation.proposal.language : unit.symbol.language;
     for (const run of generation.runs) {
@@ -256,7 +258,7 @@ export class ExerciseService {
   }
 
   /** LLM 出题族：一轮调用内由模型判定能否出题，拒绝与守门否决都记 `exercise_declined`。 */
-  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, skills?: SkillsToolContext): Promise<Exercise> {
+  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
     if (!provider) throw new Error("出题模型当前不可用：未配置模型或本月预算已用完。");
@@ -281,7 +283,7 @@ export class ExerciseService {
     const deps = pool.map((candidate) => ({ path: candidate.path, hash: mechanism && candidate.path === mechanism.candidate.path ? mechanism.digest : hashOf(candidate.path) }));
     // 分解表由技能内容现场抽出，但档位与可考点不进这个键：那是模型这一次的判法，进了键就每次判得不一样都重付一遍。
     const scope = fileScope(deps, provider.modelVersion);
-    const topics = skills ? topicIndex(skills.bodyOf) : NO_TOPICS;
+    const topics = faces?.skills ? topicIndex(faces.skills.bodyOf) : NO_TOPICS;
     const extra: Record<string, string> = {
       ...(topics.tiers.length ? { tiers_offered: topics.tiers.map((tier) => tier.id).join(",") } : {}),
       ...(mechanism ? { mechanism_file: mechanism.candidate.path } : {})
@@ -291,8 +293,9 @@ export class ExerciseService {
       repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, ...extra });
       return cached.exercise;
     }
-    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, ...(skills ? { skills } : {}) });
+    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, faces });
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
+    for (const read of generation.fileReads) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     // 被拒的那一趟同样花了钱，账要先落，再看拒绝。
     if (generation.usage) repository.ports.audit.append("token_usage", {
       input_tokens: generation.usage.inputTokens,
@@ -339,7 +342,7 @@ export class ExerciseService {
   }
 
   /** 按需讲评：只对代码题开放，只回一段话，不改 `passed` / `score`。 */
-  async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined): Promise<{ explanation: string }> {
+  async explain(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider: LlmProvider | undefined, faces?: ExerciseFaces): Promise<{ explanation: string }> {
     // 讲评不做时效校验：吃的是缓存行里冻结的测试与这次运行的输出。
     if (!provider) throw new Error("讲解需要模型，当前不可用。");
     const stored = repository.ports.store.byId<StoredExercise>(exerciseId);
@@ -354,8 +357,10 @@ export class ExerciseService {
       prompt: stored.exercise.prompt,
       harness: stored.expected,
       learnerFiles,
-      provider
+      provider,
+      faces
     });
+    for (const read of explained.fileReads) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     if (explained.usage) repository.ports.audit.append("token_usage", {
       input_tokens: explained.usage.inputTokens,
       output_tokens: explained.usage.outputTokens,
@@ -366,13 +371,13 @@ export class ExerciseService {
     return { explanation: explained.explanation };
   }
 
-  async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider): Promise<ExerciseResult> {
+  async answer(repository: PracticeRepository, exerciseId: string, answer: ExerciseAnswer, provider?: LlmProvider, faces?: ExerciseFaces): Promise<ExerciseResult> {
     const stored = repository.ports.store.byId<StoredExercise>(exerciseId);
     if (!stored) throw new Error("该练习不存在，请重新生成。");
     const stale = staleDependencies(repository, stored.exercise);
     if (stale.length) throw new Error("该练习依赖的源码已更新，请重新生成。");
     let graded = stored.expected.type === "rubric"
-      ? await gradeRubric(stored, answer, provider, repository.ports.audit)
+      ? await gradeRubric(stored, answer, provider, repository.ports.audit, faces)
       : await grade(stored, answer, repository.ports.audit, repository.path);
     // 规则判分的题反馈交 LLM 润色，失败时保留原文并标注 feedbackSource="rule"。
     if (provider && graded.automatic && stored.exercise.gradingMode !== "execution") {
@@ -537,7 +542,7 @@ async function gradeHarness(stored: StoredExercise, answer: ExerciseAnswer, audi
 }
 
 /** rubric 判分：模型拿参考答案与细则比对学习者回答，`automatic: false`。 */
-async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined, audit: AuditSink): Promise<GradeOutcome> {
+async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provider: LlmProvider | undefined, audit: AuditSink, faces?: ExerciseFaces): Promise<GradeOutcome> {
   if (!provider) throw new Error("该题判分需要模型，当前不可用。");
   const learnerAnswer = (answer.text ?? "").trim();
   if (!learnerAnswer) {
@@ -549,8 +554,10 @@ async function gradeRubric(stored: StoredExercise, answer: ExerciseAnswer, provi
     answerKey: expected.answerKey,
     criteria: expected.criteria,
     learnerAnswer,
-    provider
+    provider,
+    faces
   });
+  for (const read of judged.fileReads) audit.append("file_read", fileReadAuditPayload(read));
   if (judged.usage) audit.append("token_usage", { input_tokens: judged.usage.inputTokens, output_tokens: judged.usage.outputTokens, cache_hit_tokens: judged.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "exercise_judge" });
   return { score: judged.score, passed: judged.passed, automatic: false, feedbackSource: "llm_judge", feedback: judged.feedback };
 }

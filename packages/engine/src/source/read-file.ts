@@ -50,6 +50,11 @@ export const READ_FILE_TOOL: LlmTool = {
 };
 
 /** read_file 审计记录，无论成败。 */
+/** 一次读文件落进审计线的载荷：四个调用点共用这一份映射。 */
+export function fileReadAuditPayload(read: FileReadRecord): Record<string, string | number | boolean | null> {
+  return { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null };
+}
+
 export interface FileReadRecord {
   path: string;
   /** 本次实际返回的行数，不是请求的行数。 */

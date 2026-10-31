@@ -1,5 +1,5 @@
 import type { LlmUsage, LlmToolCall, LlmMessage, LlmCompletionInput, ThinkingEffort, LlmCompletion, LlmProvider, TeachingProviderStatus } from "../../../application/port/llm-provider.js";
-import { LlmAbortedError, isLlmAborted } from "../../../application/port/llm-provider.js";
+import { DEFAULT_MAX_TOKENS, LlmAbortedError, isLlmAborted } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 import { applyThinking } from "./thinking.js";
 
@@ -134,7 +134,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
     input = screenOutbound(input);
-    const base = input.maxTokens ?? 700;
+    const base = input.maxTokens ?? DEFAULT_MAX_TOKENS;
     const first = await this.attemptOnce(input, base + this.reasoningHeadroom);
     if (!first.truncated) return first.completion;
     if (!this.reasoningHeadroom) throw OpenAICompatibleProvider.truncatedError(base, 0, false);
