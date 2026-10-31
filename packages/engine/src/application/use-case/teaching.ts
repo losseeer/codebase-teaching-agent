@@ -47,8 +47,6 @@ export function createTeachingSession(input: {
   repositoryId?: string;
   scopeRef?: string;
   settings?: Partial<TutorSettings>;
-  /** 风格档位；只有数字算已填。 */
-  style?: number;
 }): TeachingResult<{
   session: TutorSession;
   recommendedSettings: ReturnType<typeof deriveLearnerProfile>["recommended"];
@@ -62,10 +60,10 @@ export function createTeachingSession(input: {
   const scope = parseScopeRef(input.scopeRef ?? "");
   if (!scope) return fail("scope-format");
   if (!scopeAvailable(scope, repository.index)) return fail("scope-empty");
-  const explicit = Boolean(input.settings && Object.keys(input.settings).length) || input.style !== undefined;
+  const explicit = Boolean(input.settings && Object.keys(input.settings).length);
   const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, repository.audit.read());
   const settings = explicit
-    ? validateSettings({ ...defaultTutorSettings, ...input.settings, style: input.settings?.style ?? input.style })
+    ? validateSettings({ ...defaultTutorSettings, ...input.settings })
     : learnerProfile.recommended.settings;
   const session = createSession(repository.index.repositoryId, scope.ref, settings);
   // 会话 id 原样作为线程 id 落库
@@ -73,7 +71,6 @@ export function createTeachingSession(input: {
   repository.chatStore.saveThreadState(session.id, { settings: session.settings });
   const journal = repository.audit;
   journal.append("session_created", threadJournalPayload(thread, "created"), session.id);
-  journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "session_created" }, session.id);
   return {
     ok: true,
     value: {
@@ -98,13 +95,11 @@ export interface PreparedTeachingTurn {
   session: TutorSession;
   scope: ScopeRef;
   question: string;
-  /** 这一回合改了风格 / 教学法 / 深度中的任一项。 */
-  styleChanged: boolean;
   faded: FadedState;
 }
 
 /** 回合发起前的校验与装配。 */
-export function prepareTeachingTurn(sessionId: string, input: { content?: string; settings?: Partial<TutorSettings>; style?: number }): TeachingResult<PreparedTeachingTurn> {
+export function prepareTeachingTurn(sessionId: string, input: { content?: string; settings?: Partial<TutorSettings> }): TeachingResult<PreparedTeachingTurn> {
   const current = resolveTeachingState(sessionId);
   const question = input.content?.trim();
   if (!current || !question) return fail("session-invalid");
@@ -113,16 +108,14 @@ export function prepareTeachingTurn(sessionId: string, input: { content?: string
   const repository = mounted.repository;
   const scope = parseScopeRef(current.scopeRef);
   if (!scope || !scopeAvailable(scope, repository.index)) return fail("scope-gone");
-  const settings = validateSettings({ ...current.settings, ...input.settings, style: input.settings?.style ?? input.style ?? current.settings.style });
-  const styleChanged = JSON.stringify(settings) !== JSON.stringify(current.settings);
+  const settings = validateSettings({ ...current.settings, ...input.settings });
   return {
     ok: true,
     value: {
       repository,
-      session: { ...current, style: settings.style, settings },
+      session: { ...current, settings },
       scope,
       question,
-      styleChanged,
       faded: deriveLearnerProfile(repository.index.repositoryId, repository.audit.read()).faded
     }
   };
@@ -167,13 +160,11 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     crossFiles,
     question,
     answer: outcome.assistant.content,
-    style: outcome.session.settings.style
   }).answer;
   persistTeachingTurn(repository.chatStore, repository.index.repositoryId, scope.ref, scopeTitle(scope), outcome.session.id, [
     { role: "user", content: question },
     { role: "assistant", content: outcome.assistant.content }
   ], { settings: outcome.session.settings });
-  if (turn.styleChanged) journal.append("style_shift", { style: session.settings.style, pedagogy: session.settings.pedagogy, depth: session.settings.depth, trigger: "manual" }, session.id);
   // 端点回报 usage 时才记 token_usage
   if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
   journal.append("turn_text", turnTextPayload("teach", question, outcome.assistant.content), session.id);

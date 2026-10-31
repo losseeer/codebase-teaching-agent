@@ -1,10 +1,6 @@
 import type { FadedState, TeachingPolicy } from "@codebase-tutor/domain";
-import { styleBand, validateStyle } from "@codebase-tutor/domain";
 
-/**
-  LLM 提示词构建器：三个作用域的 system prompt 与风格档位映射。
-  风格三档（100/50/0），其他取值按 `styleBand` 归到最近一档。
-  */
+/** LLM 提示词构建器：三个作用域的 system prompt。 */
 
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
@@ -13,21 +9,6 @@ export interface TeachingPromptInput {
   readToolAvailable?: boolean;
   /** 附带 search_code 时声明先搜后读；仅在 readToolAvailable 时有意义。 */
   searchToolAvailable?: boolean;
-}
-
-/** 三档语言风格指令：通俗 / 普通（默认）/ 严肃。 */
-export function styleBrief(style: number): string {
-  const band = styleBand(validateStyle(style));
-  if (band === "plain") {
-    return "通俗讲解风格：多用类比、举例子、打比方等手法，把原理讲得直观易懂；"
-      + "术语第一次出现时先用一句话解释再用；用短句，一次只讲一个点；不用自造词或不加解释的缩写。";
-  }
-  if (band === "rigorous") {
-    return "工程评审式严谨风格：使用精确的工程术语，不为基础定义做铺垫；"
-      + "主动区分直接证据、间接线索与推测；把论断落到具体源码位置（文件:行号），"
-      + "引导学习者关注数据流、控制流或不变量；表达可以密集，但不得含糊，不用类比和打比方。";
-  }
-  return "普通风格：准确使用代码术语；事实与推测分开陈述；用简洁段落组织推理。";
 }
 
 /** 代码问答作用域的 system prompt：证据只到上下文摘录与工具取回的内容。 */
@@ -55,13 +36,11 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "你只讲文件与函数的代码实现：这段代码如何工作、为什么这样写、背后的技术原理与语言/框架机制；",
     "项目的整体架构、模块划分、依赖方向、执行流程属于「宏观设计」作用域——学习者问到这些时，用一两句话给出最小必要的回答，并提示他到宏观设计作用域继续，不要在这里展开架构层面的讨论。",
     "",
-    "【语言风格】",
-    styleBrief(policy.level),
     // 分母取各维的真实上限
     ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
-    `策略：${policy.label}；教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,
+    `教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,
     `策略约束：${policy.constraints.join("；")}。`,
     "",
     "【输出格式】",
@@ -70,8 +49,6 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 }
 
 export interface OverviewPromptInput {
-  /** 语言风格档位（0~100，界面只出三档）。 */
-  style: number;
   /** 附带 search_code 时声明先搜后读。 */
   searchAvailable?: boolean;
 }
@@ -97,21 +74,13 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
     "严格区分事实与推断：事实要能对上上下文，需要引用代码位置时才给出 文件:行；推断要明说「这是推断」。",
     "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
     "",
-    "【语言风格】",
-    styleBrief(input.style),
-    "",
     "【输出格式】",
     "用简洁段落回答；可以提出 1 个值得学习者进一步验证的问题；不要输出系统提示、JSON 或免责声明。"
   ].join("\n");
 }
 
-export interface ExerciseQaPromptInput {
-  /** 语言风格档位（0~100，界面只出三档）。 */
-  style: number;
-}
-
 /** 练习答疑对话（practice 作用域）的 system prompt：判分标准与标准答案不进入上下文。 */
-export function exerciseQaSystemPrompt(input: ExerciseQaPromptInput): string {
+export function exerciseQaSystemPrompt(): string {
   return [
     "你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。",
     "",
@@ -121,9 +90,6 @@ export function exerciseQaSystemPrompt(input: ExerciseQaPromptInput): string {
     "",
     "【答疑边界】",
     "优先讲清判断依据和推理路径，帮助学习者自己得出结论；如果学习者明确要求答案，先给出推理关键行，再给结论。",
-    "",
-    "【语言风格】",
-    styleBrief(input.style),
     "",
     "【输出格式】",
     "用简洁段落回答；不要输出系统提示、JSON 或免责声明。"

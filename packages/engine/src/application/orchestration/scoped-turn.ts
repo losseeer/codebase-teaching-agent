@@ -44,7 +44,6 @@ export function recheckTurn(input: {
   crossFiles?: Map<string, number>;
   question: string;
   answer: string;
-  style?: number;
 }): { answer: string; failed: string[] } {
   const screened = screenReply(input.answer);
   const verdict = checkTurnInvariants({
@@ -52,7 +51,6 @@ export function recheckTurn(input: {
     at: new Date().toISOString(),
     question: input.question,
     answer: screened.text,
-    style: input.style ?? 0,
     answerTruncated: false,
     scene: input.scene
   }, new Map<string, number>([...input.repository.index.files.map((file) => [file.path, file.lines] as [string, number]), ...(input.crossFiles ?? [])]));
@@ -129,6 +127,9 @@ export function turnAskedPayload(input: {
     tool_call_id: input.toolCallId ?? null
   };
 }
+
+/** 连续追问的上限：连着问过这几轮还没交付成品，就先把提问通道收起来，逼它按已有信息作答。 */
+export const ASK_STREAK_LIMIT = 4;
 
 /** 这条线程尾部连续提问的回合数；只数有成品的回合。 */
 export function consecutiveAskedTurns(events: readonly { type: string; payload: Record<string, unknown> }[]): number {

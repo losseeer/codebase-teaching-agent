@@ -879,6 +879,27 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
     expect(result.completion.text).toBe("那就先画整仓三层。");
   });
 
+  it("放宽后的上限：问句 80 字、候选 16 字 × 5 个照收，各超一个字才挡", async () => {
+    const wide = (question: string, label: string, count: number) => ({ facet: "range", question, options: Array.from({ length: count }, () => label) });
+
+    const accepted = await completeWithReadTool({ ...base, provider: scriptedProvider([askCall("a1", wide("问".repeat(80), "选".repeat(16), 5))]).provider, ask: { facets } });
+    expect(accepted.asked?.options, "16 字 × 5 个仍是排得开的按钮").toHaveLength(5);
+
+    const longQuestion = await completeWithReadTool({ ...base, provider: scriptedProvider([
+      askCall("a1", wide("问".repeat(81), "选".repeat(16), 1)),
+      { text: "按整仓画。", finishReason: "stop" }
+    ]).provider, ask: { facets } });
+    expect(longQuestion.asked).toBeUndefined();
+    expect(longQuestion.askRefused).toContain("超过 80 字");
+
+    const longLabel = await completeWithReadTool({ ...base, provider: scriptedProvider([
+      askCall("a1", wide("问", "选".repeat(17), 1)),
+      { text: "按整仓画。", finishReason: "stop" }
+    ]).provider, ask: { facets } });
+    expect(longLabel.asked).toBeUndefined();
+    expect(longLabel.askRefused).toContain("按钮放不下");
+  });
+
   it("问本轮并不缺的那一格：挡下", async () => {
     const { provider, calls } = scriptedProvider([
       askCall("a1", { facet: "goal", question: "要给谁看？", options: ["新人"] }),

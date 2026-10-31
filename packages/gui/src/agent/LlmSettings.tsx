@@ -4,7 +4,7 @@ import { toastFailure } from "../ui/toast";
 import { Icon } from "../ui/icons";
 
 /** 模型入口与配置弹窗：字段失焦即 PUT 生效，无「保存」动作。 */
-export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?: "pill" | "button"; styleLabel?: string }): ReactElement {
+export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "button" }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
   const [open, setOpen] = useState(false);
   /** 被引擎拒绝（422）的原因，就地显示在表单里。 */
@@ -62,7 +62,6 @@ export function LlmSettingsControl({ variant = "pill", styleLabel }: { variant?:
           <Icon name={status.local ? "alert" : "zap"} size={12} />
           <span className="pill-name">{status.pill}</span>
           <span>思考 {status.thinking}</span>
-          {styleLabel ? <span>风格 {styleLabel}</span> : null}
         </button>
       ) : (
         <button

@@ -174,7 +174,7 @@ if (!teachTurns.length) {
 emit();
 console.log(out.join("\n"));
 
-/** 从 journal 事件装配机检视图；style 取回合前最后一次 style_shift。 */
+/** 从 journal 事件装配机检视图。 */
 function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[] {
   const bySession = new Map<string, typeof events>();
   for (const event of events) {
@@ -186,17 +186,14 @@ function assembleTeachTurns(events: ReturnType<typeof readJournal>): TeachTurn[]
   const turns: TeachTurn[] = [];
   for (const [sessionId, list] of bySession) {
     const chrono = [...list].sort((a, b) => a.at.localeCompare(b.at));
-    const shifts = chrono.filter((e) => e.type === "style_shift");
     for (const event of chrono) {
       if (event.type !== "turn_text" || event.payload.scene !== "teach") continue;
       const at = event.at;
-      const shift = [...shifts].reverse().find((s) => s.at <= at) ?? shifts[0];
       turns.push({
         sessionId,
         at,
         question: String(event.payload.question ?? ""),
         answer: String(event.payload.answer ?? ""),
-        style: typeof shift?.payload.style === "number" ? shift.payload.style : 50,
         answerTruncated: event.payload.answer_truncated === true
       });
     }

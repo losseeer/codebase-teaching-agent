@@ -1,5 +1,3 @@
-import type { StyleLevel } from "./style-band.js";
-
 export type Pedagogy = "socratic" | "explanatory" | "practice";
 export type DecompositionDepth = "macro" | "micro";
 
@@ -8,15 +6,12 @@ export type DecompositionDepth = "macro" | "micro";
   库里与 journal 的历史行仍带着阶段与阶梯的取值，读侧不再解释它们（字段留在 SQLite 列里不迁移）。
 */
 export interface TeachingPolicy {
-  level: StyleLevel;
-  label: string;
   constraints: string[];
   pedagogy: Pedagogy;
   depth: DecompositionDepth;
 }
 
 export interface TutorSettings {
-  style: StyleLevel;
   pedagogy: Pedagogy;
   depth: DecompositionDepth;
 }
@@ -33,7 +28,6 @@ export interface TutorSession {
   repositoryId: string;
   /** 教学作用域：`file:<仓内路径>` 或 `dir:<仓内目录>`。 */
   scopeRef: string;
-  style: StyleLevel;
   settings: TutorSettings;
   messages: TutorMessage[];
   createdAt: string;

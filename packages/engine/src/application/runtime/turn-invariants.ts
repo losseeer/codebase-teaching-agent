@@ -1,4 +1,3 @@
-import { styleBand } from "@codebase-tutor/domain";
 
 import { sourceExtensions } from "../../indexer/indexer.js";
 import { maskSecrets } from "@codebase-tutor/domain";
@@ -55,8 +54,6 @@ export interface TeachTurn {
   at: string;
   question: string;
   answer: string;
-  /** 该回合生效的风格档（回合前最近一次 style_shift 快照）。 */
-  style: number;
   /** 落盘时被截断的回复不参与引用核验。 */
   answerTruncated: boolean;
   /** 默认 = teach；`anchor-binding` 只在 teach 判，其余作用域只判引用核验。 */
@@ -127,7 +124,7 @@ export function checkTurnInvariants(turn: TeachTurn, files: Map<string, number>)
       }
     }
   }
-  if (teach && styleBand(turn.style) !== "plain") {
+  if (teach) {
     applicable.push("anchor-binding");
     if (!/[A-Za-z][A-Za-z0-9]{4,}/.test(turn.answer)) {
       failed.push("anchor-binding");

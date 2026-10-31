@@ -297,7 +297,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
 }
 
 /** map 作用域的一轮对话，带图结构写工具与现状快照。 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文。 */
@@ -327,7 +327,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", mapContextCap());
   // 技能清单贴在上下文尾部，不进系统提示词
   const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
-  const system = overviewSystemPrompt({ style: input.style, searchAvailable: Boolean(input.search) });
+  const system = overviewSystemPrompt({ searchAvailable: Boolean(input.search) });
   // 历史折叠按本轮已占用的字符数：系统提示词 + 代码上下文 + 技能清单
   const conversation = conversationBlock(input.history, input.content, system.length + context.length + skillsBrief.length);
   const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${conversation.text}学习者的问题：${input.content}`;
@@ -374,7 +374,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; style: number; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -383,7 +383,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   }
   excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false, egress).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), practiceContextCap());
-  const system = `${exerciseQaSystemPrompt({ style: input.style })}${input.skills ? `\n\n${input.skills.brief}` : ""}`;
+  const system = `${exerciseQaSystemPrompt()}${input.skills ? `\n\n${input.skills.brief}` : ""}`;
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });

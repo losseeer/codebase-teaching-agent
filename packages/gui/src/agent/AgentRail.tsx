@@ -1,4 +1,3 @@
-import { styleBand, STYLE_BAND_LABEL } from "@codebase-tutor/domain";
 
 import {useEffect, useRef, useState, type ReactElement } from "react";
 import { Markdown } from "./Markdown";
@@ -31,7 +30,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
 
-  const activeBand = styleBand(t.settings.style);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
   const bound = boundFor(scope, t);
   const unbound = bound.startsWith("未绑定") || bound === "未定位锚点" || bound === "未开始练习";
@@ -46,23 +44,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
           <span className={`scope-text ${unbound ? "unbound" : ""}`}>
             {SCOPE_LABEL[scope]} · <b>{bound}</b>
           </span>
-        </div>
-
-        {/* 语言风格三档 */}
-        <div className="segmented" role="radiogroup" aria-label="语言风格">
-          {STYLE_CHOICES.map((choice) => (
-            <button
-              key={choice.value}
-              type="button"
-              role="radio"
-              aria-checked={activeBand === choice.band}
-              className={activeBand === choice.band ? "active" : ""}
-              title={choice.hint}
-              onClick={() => t.setSettings({ ...t.settings, style: choice.value })}
-            >
-              {choice.label}
-            </button>
-          ))}
         </div>
 
         <ThreadBar scope={scope} t={t} />
@@ -94,7 +75,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-foot">
         {/* 模型设置胶囊入口 */}
-        <LlmSettingsControl styleLabel={STYLE_BAND_LABEL[activeBand]} />
+        <LlmSettingsControl />
         {t.error ? <p className="error-message">{t.error}</p> : null}
         <form
           className="composer"
@@ -131,13 +112,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     </aside>
   );
 }
-
-/** 三档语言风格，值对应 styleBand 阈值。 */
-const STYLE_CHOICES = [
-  { value: 100, band: "plain" as const, label: "通俗", hint: "多用类比和例子，把原理讲得直观易懂" },
-  { value: 50, band: "neutral" as const, label: "普通", hint: "中性、准确，术语照常使用" },
-  { value: 0, band: "rigorous" as const, label: "严肃", hint: "工程术语、严谨论证，不用类比" }
-] as const;
 
 function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string; canSend: boolean; onSend: () => Promise<void> } {
   const canSend = !t.sending && t.content.trim().length > 0;

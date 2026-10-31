@@ -294,10 +294,10 @@ export const api = {
       turn.signal
     ),
   /** map-chat SSE：done 两种形状（reply 或 interrupted）。diagramId = 画布当前打开的图。 */
-  mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; style: number; resumeAsk?: string }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
+  mapChatStream: (repositoryId: string, payload: { content: string; scopePaths?: string[]; path?: string; threadId?: string; diagramId?: string; resumeAsk?: string }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<MapDoneFrame>(`/api/repositories/${repositoryId}/map-chat/stream`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 练习追问 SSE：与 map-chat 同款；diagram/asked/interrupted 恒不出现，done 形状与两条流对齐。 */
-  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string; style: number }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
+  practiceChat: (repositoryId: string, payload: { content: string; exerciseId: string; threadId?: string }, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ reply: string; provider: string; diagram?: undefined; asked?: undefined; interrupted?: undefined }>(`/api/repositories/${repositoryId}/practice-chat`, { ...payload, ...(turn.turnId ? { turnId: turn.turnId } : {}) }, onEvent, turn.signal),
   /** 停止生成的带外通知；404 = 该轮已结束，调用方丢弃错误即可。 */
   stopTurn: (turnId: string) => request<{ stopped: boolean }>("/api/turns/stop", { method: "POST", body: JSON.stringify({ turnId }) })

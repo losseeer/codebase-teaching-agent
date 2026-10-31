@@ -6,7 +6,6 @@ export type JournalEventType =
   // 引擎侧
   /** 判分结果与风格切换。 */
   | "exercise_result"
-  | "style_shift"
   /**
     练习未送达事件。payload 必带 `family`（comprehension|code|llm）与 `stage`：
     `no_target` 这一档是共用的选题路径写出的，两族都可能命中，没有族别就没法把「代码题被沙箱拒了」
@@ -120,7 +119,7 @@ export type JournalEventType =
   引擎侧那张由引擎在工具循环、装配与成本核算里自己写，界面不得发射（同一事实只写一处）。
 */
 export const ENGINE_JOURNAL_EVENTS = [
-  "exercise_result", "style_shift",
+  "exercise_result",
   "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",

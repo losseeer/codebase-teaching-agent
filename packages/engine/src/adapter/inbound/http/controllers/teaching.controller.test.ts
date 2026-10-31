@@ -58,17 +58,17 @@ describe("教学作用域（SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
-  it("teach：通俗档不再判「点名标识符」，引用照判（档位只运行时内生效才算数）", async () => {
-    const sessionId = await openSession({ style: 80 });
-    const answer = `这一步就是把请求交给注册表，你先看 ${MAIN_FILE}:3 那一行？`;
+  it("teach：引用与点名标识符两条都判（这一档是问答域的设计承诺）", async () => {
+    const sessionId = await openSession({});
+    const answer = `这一步就是把请求交给 OrderRegistry 注册，你先看 ${MAIN_FILE}:3 那一行？`;
     fx.scripted = [answer];
-    const response = await fx.app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "换个通俗点的说法" } });
+    const response = await fx.app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "换个说法" } });
     const { reply } = replyOf(response.payload);
 
     const invariant = fx.lastEvent("turn_invariant");
     const applicable = String(invariant.payload.applicable);
     expect(applicable).toContain("reference-grounding");
-    expect(applicable).not.toContain("anchor-binding");
+    expect(applicable).toContain("anchor-binding");
     expect(invariant.payload.failed ?? null).toBe(null);
     expect(reply).toBe(answer);
   });

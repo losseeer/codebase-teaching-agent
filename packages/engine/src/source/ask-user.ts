@@ -27,9 +27,10 @@ export interface AskClaimAudit {
   outcome: "claimed" | "missed";
 }
 
-const MAX_QUESTION = 40;
-const MAX_LABEL = 8;
-const MAX_OPTIONS = 4;
+/** 问句、候选标签、候选个数的上限：再长就拆短，或直接作答并写明假设。 */
+const MAX_QUESTION = 80;
+const MAX_LABEL = 16;
+const MAX_OPTIONS = 5;
 
 /** 工具名；循环按它判分支。 */
 export const ASK_USER_TOOL_NAME = "ask_user";
@@ -40,7 +41,7 @@ const chars = (text: string): number => [...text].length;
 export function askUserToolFor(facets: AskFacet[]): LlmTool {
   return {
     name: ASK_USER_TOOL_NAME,
-    description: `本轮缺哪一格就问哪一格（当前缺：${facets.join(" / ")}）。goal=这次到底要产出什么没定；range=范围（画哪几个模块、哪个入口）没定。只在上下文与用户那句话都给不出这一格时才用，能查到的都不许问。question 写一句不超过 ${MAX_QUESTION} 字的人话，options 给 ${MAX_OPTIONS} 个以内的短标签（每个不超过 ${MAX_LABEL} 字）。问句就是本轮的答复：调用它之后本轮不再读文件、不再改图，也不必再写正文。`,
+    description: `本轮仅针对当前缺失项提问（当前缺失：${facets.join(" / ")}）。goal 指本次要产出的目标尚未确定；range 指范围（涉及哪些模块、哪个入口）尚未确定。仅当上下文和用户原话均无法确定该缺失项时使用；可通过已有信息查到的内容不得提问。question 为一个不超过 ${MAX_QUESTION} 字的自然语言问句；options 提供不超过 ${MAX_OPTIONS} 个短标签，每个不超过 ${MAX_LABEL} 字。本轮答复即该问句：调用后不再读取文件、不再修改图表，也无需输出正文。`,
     parameters: {
       type: "object",
       properties: {

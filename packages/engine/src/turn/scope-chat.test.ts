@@ -65,7 +65,6 @@ describe("mapChat", () => {
       path: "src/app.ts",
       content: "为什么要分层？",
       provider,
-      style: 50
     });
     expect(result.reply).toContain("基于上下文");
     expect(result.provider).toBe("fake-provider");
@@ -104,7 +103,6 @@ describe("mapChat", () => {
       path: "src/app.ts",
       content: "run-turn.ts 里定义了什么？",
       provider,
-      style: 50,
       onProgress: (progress) => progressEvents.push(progress)
     });
     expect(result.reply).toContain("读完文件后的回答");
@@ -151,7 +149,6 @@ describe("mapChat", () => {
       path: "src/app.ts",
       content: "这个函数的分支长什么样？",
       provider,
-      style: 50,
       facts: { inventory: "静态产物在册：cfg 3 文件。", apply: () => "语言 typescript，backend ast\npick@3-5 复杂度 2，块 6、边 6" }
     });
     expect(result.reply).toContain("按产物说的回答");
@@ -179,7 +176,7 @@ describe("mapChat", () => {
         return script[index++] ?? script[script.length - 1];
       }
     };
-    const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider, style: 50 });
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "两个文件的实现差异？", provider, });
     expect(result.reply).toContain("三轮后的回答");
     /*
       保留窗口 2 轮（`TOOL_CONTEXT_KEEP_ROUNDS`）：第 4 次请求带 3 轮历史，最早一轮已折叠。
@@ -207,7 +204,7 @@ describe("mapChat", () => {
         return { text: "这句话说到一半就被", usage: { inputTokens: 10, outputTokens: 1_000 }, finishReason: "length" };
       }
     };
-    const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "讲详细点", provider, style: 50 });
+    const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "讲详细点", provider, });
     expect(result.reply).toBe("这句话说到一半就被\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）");
   });
 
@@ -215,7 +212,7 @@ describe("mapChat", () => {
     const { provider, calls } = fakeProvider();
     const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;
     const search = buildSearchCorpus(index, analysis, new Map([["src/app.ts", "装配应用入口"], ["src/config.ts", "读取并校验配置"]]));
-    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, style: 50, search });
+    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, search });
     const user = calls[0].user;
     expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
     expect(user).toContain("src/app.ts（120 行）：装配应用入口");
@@ -224,7 +221,7 @@ describe("mapChat", () => {
 
   it("作用域清单全部未分析 → 不注入作用域段，按全局视野作答", async () => {
     const { provider, calls } = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, style: 50 });
+    await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, });
     expect(calls[0].user).toContain("项目结构全景");
     expect(calls[0].user).not.toContain("当前作用域");
   });
@@ -233,7 +230,7 @@ describe("mapChat", () => {
     const { provider, calls } = fakeProvider();
     const files = Array.from({ length: 65 }, (_, i) => `src/mod/f${i}.ts`);
     const wide = { ...analysis, graph: { ...analysis.graph, imports: Object.fromEntries(files.map((file) => [file, []])) } } as unknown as RepositoryAnalysis;
-    await mapChat({ repoPath: import.meta.dirname, analysis: wide, scopePaths: files, content: "问", provider, style: 50 });
+    await mapChat({ repoPath: import.meta.dirname, analysis: wide, scopePaths: files, content: "问", provider, });
     const user = calls[0].user;
     expect(user).toContain("含 65 个已分析文件");
     expect(user).toContain("其余 5 个文件未列出");
@@ -242,7 +239,7 @@ describe("mapChat", () => {
   it("最近对话窗口：按时间序注入在代码上下文与问题之间，历史原文不逐轮截断，空内容不生成行", async () => {
     const { provider, calls } = fakeProvider();
     await mapChat({
-      repoPath: import.meta.dirname, analysis, content: "第二点再展开讲", provider, style: 50,
+      repoPath: import.meta.dirname, analysis, content: "第二点再展开讲", provider,
       history: [
         { role: "user", content: "这个模块的分层有哪些？" },
         { role: "assistant", content: "长".repeat(500) },
@@ -261,10 +258,10 @@ describe("mapChat", () => {
   it("窗口还宽时历史整段留着（不再只取最后 6 条）；无历史不注入空段", async () => {
     const { provider, calls } = fakeProvider();
     const turns = Array.from({ length: 8 }, (_, i): ScopedChatTurn => ({ role: i % 2 ? "assistant" : "user", content: `轮次${i}` }));
-    await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", history: turns, provider, style: 50 });
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "问", history: turns, provider, });
     for (const turn of turns) expect(calls[0].user).toContain(turn.content);
     const fresh = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: fresh.provider, style: 50 });
+    await mapChat({ repoPath: import.meta.dirname, analysis, content: "首问", provider: fresh.provider, });
     expect(fresh.calls[0].user).not.toContain("最近对话");
   });
 
@@ -288,7 +285,7 @@ describe("mapChat", () => {
         { role: "user", content: "最近的问题" },
         { role: "assistant", content: "最近的回答" }
       ];
-      const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "蓝绿发布锚点在哪一行？", history, provider, style: 50 });
+      const result = await mapChat({ repoPath: import.meta.dirname, analysis, content: "蓝绿发布锚点在哪一行？", history, provider, });
       const user = calls[0].user ?? "";
       expect(user).toContain("开场：这个仓怎么分层");
       expect(user).toContain("最近的回答");
@@ -311,7 +308,6 @@ describe("practiceChat", () => {
       exercise,
       content: "为什么不是 config.ts？",
       provider,
-      style: 50
     });
     const user = calls[0].user;
     expect(user).toContain("修改定位");
@@ -325,7 +321,7 @@ describe("practiceChat", () => {
   it("最近对话注入在题面上下文与追问之间；无历史不注入空段", async () => {
     const { provider, calls } = fakeProvider();
     await practiceChat({
-      repoPath: import.meta.dirname, exercise, content: "为什么不是 app.ts？", provider, style: 50,
+      repoPath: import.meta.dirname, exercise, content: "为什么不是 app.ts？", provider,
       history: [{ role: "user", content: "这题选什么？" }, { role: "assistant", content: "建议选 config.ts，因为装配从它读起。" }]
     });
     const user = calls[0].user ?? "";
@@ -334,25 +330,21 @@ describe("practiceChat", () => {
     expect(user.indexOf("最近对话")).toBeGreaterThan(user.indexOf("练习上下文："));
     expect(user.indexOf("最近对话")).toBeLessThan(user.indexOf("学习者的追问："));
     const fresh = fakeProvider();
-    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "问", provider: fresh.provider, style: 50 });
+    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "问", provider: fresh.provider, });
     expect(fresh.calls[0].user).not.toContain("最近对话");
   });
 });
 
-describe("作用域 prompt 单源（风格档位进入系统提示词）", () => {
-  it("map：风格档位进入 system prompt，与代码教学共用同一份 styleBrief", async () => {
+describe("作用域 prompt 单源", () => {
+  it("map：系统提示词讲清作用域边界", async () => {
     const { provider, calls } = fakeProvider();
-    await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "一次请求怎么走？", provider, style: 90 });
-    expect(calls[0].system).toContain("通俗讲解风格");
-    expect(calls[0].system).toContain("类比");
+    await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "一次请求怎么走？", provider });
     expect(calls[0].system).toContain("宏观设计");
   });
 
-  it("practice：低档位走严谨侧，且仍不透露判分标准", async () => {
+  it("practice：不透露判分标准", async () => {
     const { provider, calls } = fakeProvider();
-    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "为什么？", provider, style: 10 });
-    expect(calls[0].system).toContain("工程评审式严谨风格");
-    expect(calls[0].system).toContain("直接证据");
+    await practiceChat({ repoPath: import.meta.dirname, exercise, content: "为什么？", provider });
     expect(calls[0].system).toContain("判分标准没有提供给你");
   });
 });

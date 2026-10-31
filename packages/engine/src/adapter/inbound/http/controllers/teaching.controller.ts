@@ -10,13 +10,11 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 /** 教学会话的建立与回合（SSE）：取形、预算闸门、流的开与关、失败 → 状态码。 */
 export function registerTeachingRoutes(app: FastifyInstance): void {
-app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<TutorSettings>; style?: unknown } }>("/api/sessions", async (request, reply) => {
+app.post<{ Body: { repositoryId?: string; scopeRef?: string; settings?: Partial<TutorSettings> } }>("/api/sessions", async (request, reply) => {
   const created = createTeachingSession({
     repositoryId: request.body?.repositoryId,
     scopeRef: request.body?.scopeRef,
     settings: request.body?.settings,
-    // 兼容把 style 平铺在 body 根上的客户端：只认数字
-    style: typeof request.body?.style === "number" ? request.body.style : undefined
   });
   if (!created.ok) return reject(reply, created.failure);
   return reply.code(201).send(created.value);
@@ -28,11 +26,10 @@ app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (re
   return read.value.session;
 });
 
-app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; style?: unknown; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
+app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
   const prepared = prepareTeachingTurn(request.params.sessionId, {
     content: request.body?.content,
     settings: request.body?.settings,
-    style: typeof request.body?.style === "number" ? request.body.style : undefined
   });
   if (!prepared.ok) return reject(reply, prepared.failure);
   const { repository, session } = prepared.value;

@@ -147,7 +147,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     // 仅在设置未被用户改动时以推荐值种子
     api.getLearner(repositoryId).then((profile) => {
       if (cancelled) return;
-      setSettingsState((curr) => curr.style === 50 && curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
+      setSettingsState((curr) => curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
     }).catch(() => { /* 取不到画像保持当前设置 */ });
     return () => { cancelled = true; };
   }, [repositoryId]);
@@ -568,10 +568,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
             path: mapFile || undefined,
             ...(openDiagram ? { diagramId: openDiagram.id } : {}),
             ...(resumeAsk ? { resumeAsk } : {}),
-            threadId,
-            style: settings.style
+            threadId
           }, onScopedEvent, turn)
-        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId, style: settings.style }, onScopedEvent, turn);
+        : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId }, onScopedEvent, turn);
       if (reply.interrupted) {
         // 中断轮未落库，补账基准不动
         pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope] });

@@ -30,7 +30,7 @@ describe("检索 gold 命中", () => {
 describe("不变量机检（批量回合上的两条判据）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
-    ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
+    ({ sessionId: "s", at: "2026-09-22T12:00:00.000Z", question: "问", answer: "答", answerTruncated: false, ...over });
 
   it("引用核落地：假路径回合进 misses；无引用的回合不适用；截断行只计数", () => {
     const score = scoreTeachInvariants([
@@ -46,14 +46,14 @@ describe("不变量机检（批量回合上的两条判据）", () => {
     expect(score.skippedTruncated).toBe(1);
   });
 
-  it("点名标识符只判非通俗档；短标识符（<5 字符）不算点名", () => {
+  it("点名标识符每个 teach 回合都判；短标识符（<5 字符）不算点名", () => {
     const score = scoreTeachInvariants([
-      turn({ style: 50, answer: "RedisKey 这里为什么加前缀？" }),
-      turn({ style: 50, answer: "为什么要加前缀？" }),
-      turn({ style: 90, answer: "咱们打个比方，锁就像门闩，你说呢？" })
+      turn({ answer: "RedisKey 这里为什么加前缀？" }),
+      turn({ answer: "为什么要加前缀？" }),
+      turn({ answer: "咱们打个比方，锁就像门闩，你说呢？" })
     ], files);
     const binding = score.checks.find((check) => check.id === "anchor-binding");
-    expect(binding?.applicable).toBe(2);
+    expect(binding?.applicable).toBe(3);
     expect(binding?.pass).toBe(1);
   });
 
@@ -65,7 +65,7 @@ describe("不变量机检（批量回合上的两条判据）", () => {
 describe("运行期运行时复检（同样的两条在回合收尾判）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
-    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
+    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", answerTruncated: false, ...over });
 
   it("离线聚合与运行时单回合判分同源：分母之和必须逐条相等（两份实现迟早漂移，这条钉住）", () => {
     const turns = [

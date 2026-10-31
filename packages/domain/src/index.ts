@@ -17,7 +17,6 @@ export * from "./repository-index.js";
 export * from "./route-seams.js";
 export * from "./secret-filter.js";
 export * from "./static-facts.js";
-export * from "./style-band.js";
 export * from "./teaching-policy.js";
 export * from "./tool-audit.js";
 export * from "./tutor-settings.js";

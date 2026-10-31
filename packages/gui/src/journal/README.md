@@ -17,16 +17,13 @@
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
 | 宏观设计 | 图库、项目目录、画布节点 | `flow_node_selected`（画布节点选中沿用此事件名） · `file_anchored` | 不写 LLM 调用 |
-| 代码教学 | 源码 tab、目录锚点 | `file_opened` · `line_located` | 不直接改源码、不写 `style_shift` |
+| 代码教学 | 源码 tab、目录锚点 | `file_opened` · `line_located` | 不直接改源码 |
 | 练习评估 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 | 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |
 
-### 两条边界（易混，写在这里免得再踩）
+### 一条边界（易混，写在这里免得再踩）
 
-1. **`style_shift` 由引擎写，前端不发射。** 契约表「不做」列已点名；引擎在两处写它
-   （`session_created` 与 `manual`），前端再写一遍就是同一事实双写、必然漂移。
-   此处与早前「接入点」清单里的 `TutorPage: 风格滑杆 → style_shift` 冲突，**以契约表为准**。
-2. **引擎侧事件前端不得发射，而且 2026-10-12 起这条不再是口头约定**：`POST /api/repositories/:id/journal`
+1. **引擎侧事件前端不得发射，而且 2026-10-12 起这条不再是口头约定**：`POST /api/repositories/:id/journal`
    只受理 shared 的 `UI_JOURNAL_EVENTS`，其余（`file_read` / `code_egress` / `token_usage` /
    `turn_text` / `unit_mastered` / `hint_depth` / `exercise_result` …）一律 400 + `reason: "engine_owned_event"`。
    理由是证据价值：`journal.jsonl` 现在承担着「哪些代码出过门、花了多少钱」这类账，

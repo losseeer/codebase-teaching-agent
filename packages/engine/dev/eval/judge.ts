@@ -1,5 +1,4 @@
 import type { JournalEvent } from "@codebase-tutor/domain";
-import { policyFor, validateSettings } from "@codebase-tutor/domain";
 
 /**
   表达质量裁判的纯逻辑层：rubric 预登记、判分解析、证据核验；不发起 LLM 调用。
@@ -17,8 +16,6 @@ export interface JudgeTurn {
   answer: string;
   /** 回复被截断；「易读」维按 1 封顶。 */
   answerTruncated?: boolean;
-  /** teach 回合生效时的策略约束，由 style_shift 快照展开。 */
-  constraints: string[];
 }
 
 export interface JudgeAxis {
@@ -54,11 +51,6 @@ export function buildJudgePrompt(turn: JudgeTurn, prior: JudgeTurn[]): string {
   lines.push(`学员：${turn.question}`);
   lines.push(`助手：${turn.answer}`);
   lines.push("");
-  if (turn.scene === "teach") {
-    lines.push("【教学策略约束】（该回合生成时生效的教学设置）：");
-    for (const constraint of turn.constraints) lines.push(`- ${constraint}`);
-    lines.push("");
-  }
   lines.push("【维度与判据】");
   for (const axis of axesFor(turn.scene)) lines.push(`- ${axis.key}：${axis.rubric}`);
   return lines.join("\n");
@@ -128,15 +120,9 @@ const SCENES = new Set<JudgeScene>(["teach", "map_chat", "practice_chat"]);
 
 /** 从 journal 事件流组装待判回合，按时间排序。 */
 export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]; truncatedAnswers: number } {
-  const styleShifts = new Map<string, JournalEvent[]>();
   const turns: JudgeTurn[] = [];
   let truncatedAnswers = 0;
   for (const event of events) {
-    if (event.type === "style_shift") {
-      const list = styleShifts.get(event.sessionId ?? "") ?? [];
-      list.push(event);
-      styleShifts.set(event.sessionId ?? "", list);
-    }
     if (event.type !== "turn_text") continue;
     const scene = event.payload.scene as JudgeScene | undefined;
     const question = typeof event.payload.question === "string" ? event.payload.question : "";
@@ -145,18 +131,7 @@ export function assembleJudgeTurns(events: JournalEvent[]): { turns: JudgeTurn[]
     if (event.payload.answer_truncated === true) truncatedAnswers += 1;
     // map_chat/practice_chat 落盘不带 sessionId，按场景各自成桶
     const sessionKey = event.sessionId || `scene:${scene}`;
-    let constraints: string[] = [];
-    if (scene === "teach") {
-      const shifts = styleShifts.get(event.sessionId ?? "") ?? [];
-      const source = [...shifts].reverse().find((shift) => shift.at <= event.at) ?? shifts[0];
-      const settings = validateSettings({
-        style: source?.payload.style,
-        pedagogy: source?.payload.pedagogy,
-        depth: source?.payload.depth
-      } as never);
-      constraints = policyFor(settings).constraints;
-    }
-    turns.push({ sessionId: sessionKey, at: event.at, scene, question, answer, answerTruncated: event.payload.answer_truncated === true, constraints });
+    turns.push({ sessionId: sessionKey, at: event.at, scene, question, answer, answerTruncated: event.payload.answer_truncated === true });
   }
   return { turns: turns.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)), truncatedAnswers };
 }

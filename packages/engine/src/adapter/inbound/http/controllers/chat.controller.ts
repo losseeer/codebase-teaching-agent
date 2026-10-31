@@ -1,4 +1,3 @@
-import { validateStyle } from "@codebase-tutor/domain";
 
 import { type ChatFailure, loadPracticeExercise, prepareMapChat, preparePracticeChat, runMapChat, runPracticeChat, stopTurn } from "../../../../application/use-case/chat.js";
 import { sanitizeAskId, sanitizeDiagramId, sanitizeScopePaths, sanitizeThreadId } from "../dto.js";
@@ -16,7 +15,7 @@ app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, repl
   return { stopped: true, scene: stopped.value.scene };
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; style?: unknown; turnId?: unknown; diagramId?: unknown; resumeAsk?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePaths?: string[]; path?: string; threadId?: unknown; turnId?: unknown; diagramId?: unknown; resumeAsk?: unknown } }>("/api/repositories/:repositoryId/map-chat/stream", async (request, reply) => {
   const threadId = sanitizeThreadId(request.body?.threadId);
   const prepared = prepareMapChat(request.params.repositoryId, { ...(request.body?.content === undefined ? {} : { content: request.body.content }), ...(threadId ? { threadId } : {}) });
   if (!prepared.ok) return reject(reply, prepared.failure);
@@ -32,7 +31,6 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
     const outcome = await runMapChat(request.params.repositoryId, prepared.value, {
       ...(request.body?.scopePaths ? { scopePaths: sanitizeScopePaths(request.body.scopePaths) } : {}),
       ...(request.body?.path === undefined ? {} : { path: request.body.path }),
-      style: validateStyle(request.body?.style),
       ...(diagramId ? { diagramId } : {}),
       ...(resumeAsk ? { resumeAsk } : {})
     }, provider, { send, ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
@@ -52,7 +50,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; scopePath
   reply.raw.end();
 });
 
-app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; style?: unknown; turnId?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
+app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseId?: string; threadId?: unknown; turnId?: unknown } }>("/api/repositories/:repositoryId/practice-chat", async (request, reply) => {
   const threadId = sanitizeThreadId(request.body?.threadId);
   const checked = preparePracticeChat(request.params.repositoryId, { ...(request.body?.content === undefined ? {} : { content: request.body.content }), ...(threadId ? { threadId } : {}), ...(request.body?.exerciseId ? { exerciseId: request.body.exerciseId } : {}) });
   if (!checked.ok) return reject(reply, checked.failure);
@@ -65,7 +63,7 @@ app.post<{ Params: { repositoryId: string }; Body: { content?: string; exerciseI
   if (!turn.ok) return reject(reply, turn.failure);
   const { send, turnHandle } = beginScopedStream(request, reply, "practice_chat", request.body?.turnId);
   try {
-    const outcome = await runPracticeChat(request.params.repositoryId, turn.value, validateStyle(request.body?.style), provider, { send, ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
+    const outcome = await runPracticeChat(request.params.repositoryId, turn.value, provider, { send, ...(turnHandle.signal ? { signal: turnHandle.signal } : {}) });
     replayTypewriter(send, outcome.reply);
     send({ type: "done", reply: outcome.reply, provider: outcome.provider });
   } catch (error) {

@@ -33,7 +33,7 @@ describe("引用落地", () => {
 describe("运行期运行时复检（同样的两条在回合收尾判）", () => {
   const files = new Map([["src/graph/nodes.py", 20]]);
   const turn = (over: Partial<TeachTurn>): TeachTurn =>
-    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", style: 50, answerTruncated: false, ...over });
+    ({ sessionId: "s", at: "2026-10-04T12:00:00.000Z", question: "问", answer: "答", answerTruncated: false, ...over });
 
   it("单回合结论：该判几条 / 哪条失守 / 证据只挂失守那条", () => {
     const verdict = checkTurnInvariants(turn({ answer: "见 src/graph/ghost.py:8，为什么？" }), files);

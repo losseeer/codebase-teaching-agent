@@ -341,8 +341,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       if (call.name === CROSS_REPO_LINK_TOOL.name) {
 
         const repo = readArg(call.argumentsJson, "repo");
-        const content = !input.cross?.links ? "当前没有可配对的其他仓。"
-          : !crossNames.includes(repo) ? `未知仓库「${repo}」；可配对的其他仓：${crossNames.join(" / ")}`
+        const content = !input.cross?.links ? "当前没有可配对的其他仓库。"
+          : !crossNames.includes(repo) ? `未知仓库「${repo}」；可配对的其他仓库：${crossNames.join(" / ")}`
             : input.cross.links(repo, readArg(call.argumentsJson, "filter"));
         messages.push({ role: "tool", toolCallId: call.id, content });
         continue;
@@ -353,7 +353,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         if (!corpus) {
 
           messages.push({ role: "tool", toolCallId: call.id, content: repo
-            ? `仓「${repo}」没有可检索的产物（可能还没导入完成），但可以用 read_file 带 repo="${repo}" 直接读它的文件。`
+            ? `仓库「${repo}」没有可检索的产物（可能还没导入完成），但可以用 read_file 带 repo="${repo}" 直接读它的文件。`
             : "当前作用域未开放 search_code。" });
           continue;
         }

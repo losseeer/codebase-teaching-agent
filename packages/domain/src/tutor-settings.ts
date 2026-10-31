@@ -1,18 +1,8 @@
 import type { DecompositionDepth, Pedagogy, TeachingPolicy, TutorSettings } from "./teaching-policy.js";
-import { STYLE_BAND_LABEL, styleBand, type StyleLevel } from "./style-band.js";
 
-export const defaultTutorSettings: TutorSettings = { style: 50, pedagogy: "socratic", depth: "macro" };
+export const defaultTutorSettings: TutorSettings = { pedagogy: "socratic", depth: "macro" };
 
-export function policyFor(settingsOrStyle: TutorSettings | StyleLevel, overrides: Partial<Omit<TutorSettings, "style">> = {}): TeachingPolicy {
-  const settings: TutorSettings = typeof settingsOrStyle === "number"
-    ? { style: validateStyle(settingsOrStyle), pedagogy: overrides.pedagogy ?? defaultTutorSettings.pedagogy, depth: overrides.depth ?? defaultTutorSettings.depth }
-    : validateSettings(settingsOrStyle);
-  const label = STYLE_BAND_LABEL[styleBand(settings.style)];
-  const language = styleBand(settings.style) === "plain"
-    ? ["使用短句和常见术语", "可用类比、举例子等手法帮助理解，但不自造词", "先解释术语，再使用它", "一次只引导一个观察点"]
-    : styleBand(settings.style) === "rigorous"
-      ? ["使用精确的工程术语", "要求指出数据流、控制流或不变量", "区分直接证据、间接线索和推测", "避免重复基础定义"]
-      : ["准确使用代码术语", "将问题绑定到当前源码锚点", "明确区分事实与推断", "用简洁段落组织推理"];
+export function policyFor(settings: TutorSettings): TeachingPolicy {
   const pedagogy = settings.pedagogy === "socratic"
     ? ["在给出结论前先要求学习者说明推理", "每轮保留一个可验证的问题"]
     : settings.pedagogy === "explanatory"
@@ -21,17 +11,11 @@ export function policyFor(settingsOrStyle: TutorSettings | StyleLevel, overrides
   const depth = settings.depth === "macro"
     ? ["优先解释执行路径、模块边界和调用路径"]
     : ["优先解释函数输入、输出、守卫、边界和陷阱"];
-  return { level: settings.style, label, constraints: [...language, ...pedagogy, ...depth], pedagogy: settings.pedagogy, depth: settings.depth };
-}
-
-export function validateStyle(value: unknown): StyleLevel {
-  const numeric = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(numeric)) return defaultTutorSettings.style;
-  return Math.round(Math.max(0, Math.min(100, numeric)));
+  return { constraints: [...pedagogy, ...depth], pedagogy: settings.pedagogy, depth: settings.depth };
 }
 
 export function validateSettings(value: Partial<TutorSettings> | undefined): TutorSettings {
   const pedagogy: Pedagogy = value?.pedagogy === "explanatory" || value?.pedagogy === "practice" ? value.pedagogy : "socratic";
   const depth: DecompositionDepth = value?.depth === "micro" ? "micro" : "macro";
-  return { style: validateStyle(value?.style), pedagogy, depth };
+  return { pedagogy, depth };
 }

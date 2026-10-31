@@ -31,7 +31,6 @@ export function restoreThreadAsSession(repositoryPath: string, repositoryId: str
     id: thread.id,
     repositoryId: thread.repositoryId,
     scopeRef: thread.scopeRef,
-    style: settings.style,
     settings,
     messages: store.readMessages(sessionId) as TutorMessage[],
     createdAt: thread.createdAt

@@ -202,23 +202,6 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .switch input:checked ~ .track { background: var(--brand-700); }
 .switch input:checked ~ .thumb { transform: translateX(14px); }
 
-/* segmented（语言风格三档） */
-.segmented {
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 2px;
-  gap: 2px;
-}
-.segmented button {
-  padding: 4px 0;
-  border-radius: var(--r-sm);
-  font-size: var(--fs-12); color: var(--ink-2);
-  transition: background var(--t-fast), color var(--t-fast);
-}
-.segmented button:hover:not(.active) { color: var(--ink); }
-.segmented button.active { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-sm); }
 
 /* 下拉面板 */
 .pop {

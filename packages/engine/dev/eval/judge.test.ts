@@ -11,7 +11,6 @@ const turnOf = (over: Partial<JudgeTurn> = {}): JudgeTurn => ({
   scene: "teach",
   question: "这一步为什么先校验再写库？",
   answer: "你先说说看：如果跳过校验，UserController.java:42 会发生什么？",
-  constraints: ["在给出结论前先要求学习者说明推理", "每轮保留一个可验证的问题"],
   ...over
 });
 
@@ -60,14 +59,11 @@ describe("证据核验与驳回", () => {
 });
 
 describe("维度按场景伸缩与前情", () => {
-  it("teach 判四维、非教学场景只判三维；提示词带约束段", () => {
+  it("teach 判四维、非教学场景只判三维；提示词带前情", () => {
     expect(axesFor("teach").map((axis) => axis.key)).toEqual(["接续", "接地", "易读", "教学法契合"]);
     expect(axesFor("practice_chat").map((axis) => axis.key)).toEqual(["接续", "接地", "易读"]);
     const prompt = buildJudgePrompt(turnOf(), [turnOf({ at: "2026-09-22T00:00:00Z", question: "前一问", answer: "前一答" })]);
-    expect(prompt).toContain("教学策略约束");
-    expect(prompt).toContain("在给出结论前先要求学习者说明推理");
     expect(prompt).toContain("前一答");
-    expect(buildJudgePrompt(turnOf({ scene: "map_chat" }), [])).not.toContain("教学策略约束");
   });
 
   it("前情只取同会话、时间更早的最近 2 轮", () => {
@@ -88,22 +84,15 @@ describe("journal 事件流组装", () => {
     id: `e-${type}-${at}`, type: type as JournalEvent["type"], at, repositoryId: "repo_x", sessionId, payload
   });
 
-  it("turn_text 全场景入选；teach 取生效的 style_shift 快照展开约束；缺问或缺答的行跳过", () => {
+  it("turn_text 全场景入选；缺问或缺答的行跳过", () => {
     const { turns, truncatedAnswers } = assembleJudgeTurns([
-      event("style_shift", { style: 10, pedagogy: "socratic", depth: "macro" }, "1", "s1"),
       event("turn_text", { scene: "teach", question: "q", answer: "a" }, "2", "s1"),
-      event("style_shift", { style: 80, pedagogy: "explanatory", depth: "micro" }, "3", "s1"),
       event("turn_text", { scene: "teach", question: "q2", answer: "a2", answer_truncated: true }, "4", "s1"),
       event("turn_text", { scene: "map_chat", question: "mq", answer: "ma" }, "5", "s1"),
       event("turn_text", { scene: "teach", question: "", answer: "空问题不进样本" }, "6", "s1")
     ]);
     expect(turns.map((turn) => [turn.scene, turn.at])).toEqual([["teach", "2"], ["teach", "4"], ["map_chat", "5"]]);
     expect(truncatedAnswers).toBe(1);
-    expect(turns[0]?.constraints.join("")).toContain("说明推理");
-    // 第三条 style_shift 生效后不再要求苏格拉底式提问，约束段仍非空
-    expect(turns[1]?.constraints.length).toBeGreaterThan(0);
-    expect(turns[1]?.constraints.join("")).not.toContain("说明推理");
-    expect(turns[2]?.constraints).toEqual([]);
   });
 
   it("无 sessionId 的回合按场景各自成桶：前情不跨场景串话", () => {
@@ -116,12 +105,11 @@ describe("journal 事件流组装", () => {
     expect(priorTurns(turns, turns[2]).map((item) => item.question)).toEqual(["m1"]);
   });
 
-  it("无快照的 teach 回合回落默认设置；场景标签非法的整行忽略", () => {
+  it("场景标签非法的整行忽略", () => {
     const { turns } = assembleJudgeTurns([
       event("turn_text", { scene: "teach", question: "q", answer: "a" }, "9", "s9"),
       event("turn_text", { scene: "nonsense", question: "q", answer: "a" }, "10", "s9")
     ]);
     expect(turns).toHaveLength(1);
-    expect(turns[0]?.constraints.length).toBeGreaterThan(0);
   });
 });

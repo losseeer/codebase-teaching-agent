@@ -10,6 +10,7 @@ import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../runtime/turn-audit.js";
 import { abortTurn } from "../runtime/turn-registry.js";
 import {
+  ASK_STREAK_LIMIT,
   consecutiveAskedTurns,
   externalAndSkills,
   finishMapChatTurn,
@@ -87,7 +88,7 @@ export function prepareMapChat(repositoryId: string, input: { content?: string; 
 export async function runMapChat(
   repositoryId: string,
   turn: PreparedTurn,
-  input: { scopePaths?: string[]; path?: string; style: number; diagramId?: string; resumeAsk?: string },
+  input: { scopePaths?: string[]; path?: string; diagramId?: string; resumeAsk?: string },
   provider: LlmProvider,
   stream: ScopedTurnStream
 ): Promise<ScopedTurnOutcome> {
@@ -100,11 +101,10 @@ export async function runMapChat(
     // 发起前结算这条线程上不会再被回答的提问
     settleStaleAsks(repository, threadJournal, turn.threadId, input.resumeAsk);
     const threadEvents = repository.audit.read().filter((event) => event.sessionId === turn.threadId);
-    const askGiven = !(input.scopePaths?.length || input.path) && consecutiveAskedTurns(threadEvents) < 2;
+    const askGiven = !(input.scopePaths?.length || input.path) && consecutiveAskedTurns(threadEvents) < ASK_STREAK_LIMIT;
     let writtenDiagram: { id: string; name: string } | undefined;
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, scopePaths: input.scopePaths, path: input.path, content: turn.question, history: turn.history, provider,
-      style: input.style,
       search: searchCorpusFor(repository),
       cross: crossRepoFor(repository, crossFiles),
       // 认领的那一句必须带 resume 进循环
@@ -178,12 +178,12 @@ export function loadPracticeExercise(repositoryId: string, prepared: CheckedPrac
 }
 
 /** 练习答疑这一趟：与 map-chat 同一条 SSE 协议。 */
-export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, style: number, provider: LlmProvider, stream: ScopedTurnStream): Promise<ScopedTurnOutcome> {
+export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, provider: LlmProvider, stream: ScopedTurnStream): Promise<ScopedTurnOutcome> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) throw new Error(REPOSITORY_NOT_MOUNTED);
   const skills = skillsForTurn();
   const result = await practiceChat({
-    repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider, style,
+    repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider,
     ...(turn.threadId ? { threadId: turn.threadId } : {}),
     ...(skills ? { skills } : {}),
     onProgress: (progress: MapChatProgress) => stream.send(progress),
