@@ -5,4 +5,8 @@ export interface ExerciseStore {
   /** 按题 id 取；同题跨作用域多行时取最近写入的那份。 */
   byId<T>(exerciseId: string): T | undefined;
   put(scope: string, kind: string, targetUnitId: string, stored: unknown): void;
+  /** 本题库全部行，最近写入的在前。 */
+  list<T>(): T[];
+  /** 按题 id 删掉它的全部作用域行；返回删掉的条数。 */
+  remove(exerciseId: string): number;
 }

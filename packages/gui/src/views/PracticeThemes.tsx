@@ -1,10 +1,61 @@
 import { useState, type ReactElement, type ReactNode } from "react";
+import type { Exercise, ExerciseType, ReviewSchedule } from "@codebase-tutor/domain";
 import { showToast } from "../ui/toast";
-import { COMPREHENSION_THEME_ID, type PracticeTheme } from "./practiceThemeState";
+import { type PracticeTheme } from "./practiceThemeState";
 import { Icon } from "../ui/icons";
 import { DangerDialog } from "../ui/DangerDialog";
+import { dateText, exerciseKindLabel } from "../ui/labels";
 
-/** 练习页左栏主题面板：固定「程序理解题」+ 自建主题，本地标签；面板主体由 children 注入。 */
+/** 题型三档：题型决定链路，主题只筛目标。 */
+const EXERCISE_TYPES: { id: ExerciseType; label: string; hint: string }[] = [
+  { id: "comprehension", label: "程序理解", hint: "读懂代码：影响分析 / 修改定位，规则出题、判分确定" },
+  { id: "analysis", label: "程序分析", hint: "用自己的话分析，按评分细则判分；需要选一个考察主题" },
+  { id: "design", label: "程序设计", hint: "在编辑器里改代码或写代码，跑测试判分；需要选一个考察主题" }
+];
+const DESIGN_KINDS = [{ id: "patch_edit", label: "改代码" }, { id: "author_function", label: "写代码" }] as const;
+
+/** 左栏第一块：选题型（程序设计再选改代码 / 写代码）。 */
+export function PracticeTypePicker({ value, onChange, designKind, onDesignKind }: {
+  value: ExerciseType;
+  onChange: (type: ExerciseType) => void;
+  designKind: "patch_edit" | "author_function";
+  onDesignKind: (kind: "patch_edit" | "author_function") => void;
+}): ReactElement {
+  return (
+    <section className="chip-block">
+      <h3 className="section-title">题型</h3>
+      <div className="chip-row" role="tablist" aria-label="题型">
+        {EXERCISE_TYPES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={item.id === value}
+            className={`chip chipped ${item.id === value ? "active" : ""}`}
+            title={item.hint}
+            onClick={() => onChange(item.id)}
+          >{item.label}</button>
+        ))}
+      </div>
+      {value === "design" ? (
+        <div className="chip-row sub" role="radiogroup" aria-label="设计题形式">
+          {DESIGN_KINDS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="radio"
+              aria-checked={item.id === designKind}
+              className={`chip chipped small ${item.id === designKind ? "active" : ""}`}
+              onClick={() => onDesignKind(item.id)}
+            >{item.label}</button>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** 左栏第二块：考察知识（「全仓」+ 自建主题），配置面板由这里开合。 */
 export function PracticeThemes({
   header,
   modules,
@@ -28,11 +79,9 @@ export function PracticeThemes({
 }): ReactElement {
   const [configOpen, setConfigOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
-  const removable = (item: PracticeTheme): boolean => item.custom === true && item.id !== COMPREHENSION_THEME_ID;
   const [pending, setPending] = useState<{ remove?: PracticeTheme; reset?: true } | null>(null);
 
   const remove = (item: PracticeTheme): void => {
-    if (item.id === COMPREHENSION_THEME_ID) return;
     onRemove(item.id);
     showToast(`已删除主题「${item.label}」`);
   };
@@ -81,15 +130,15 @@ export function PracticeThemes({
 
       {configOpen && (
         <div className="side-block module-config">
-          <div className="cfg-head">自定义出题主题<span>新主题由 LLM 出题 · 所有仓库共用</span></div>
-          {modules.map((item) => (
+          <div className="cfg-head">考察知识<span>新主题由 LLM 出题 · 所有仓库共用</span></div>
+          {modules.filter((item) => item.custom).map((item) => (
             <div className="cfg-row" key={item.id}>
               <input className="text-input" value={item.label} aria-label="主题名称" onChange={(event) => onRename(item.id, event.target.value)} />
-              {removable(item) && <button type="button" className="icon-btn" aria-label={`删除 ${item.label}`} title={`删除 ${item.label}`} onClick={() => setPending({ remove: item })}><Icon name="x" size={13} /></button>}
+              <button type="button" className="icon-btn" aria-label={`删除 ${item.label}`} title={`删除 ${item.label}`} onClick={() => setPending({ remove: item })}><Icon name="x" size={13} /></button>
             </div>
           ))}
           <div className="cfg-add">
-            <input className="text-input" value={draftName} placeholder="新增出题主题…" aria-label="新增主题名称" onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); add(); } }} />
+            <input className="text-input" value={draftName} placeholder="新增考察主题…" aria-label="新增主题名称" onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); add(); } }} />
             <button type="button" className="btn btn-ghost btn-sm" onClick={add}>添加</button>
           </div>
           <div className="cfg-foot">
@@ -122,7 +171,31 @@ export function PracticeThemes({
   );
 }
 
-/** 「本模块已练 / 练习上下文」共用的小节标题。 */
-export function PracticeSectionLabel({ label, note, tip }: { label: string; note?: string; tip?: string }): ReactElement {
-  return <div className="section-title row">{label}{note ? <span className="faint fs-11" title={tip}>{note}</span> : null}</div>;
+/** 左栏第三块：题库。点一行就把那道题摆到右栏，不重新出题。 */
+export function PracticeBank({ entries, activeId, onOpen, onDelete }: {
+  entries: { exercise: Exercise; review?: ReviewSchedule }[];
+  activeId?: string;
+  onOpen: (exercise: Exercise) => void;
+  onDelete: (exercise: Exercise) => void;
+}): ReactElement {
+  return (
+    <section className="chip-block">
+      <h3 className="section-title row">题库<span className="faint fs-11">{entries.length} 道</span></h3>
+      {entries.length ? (
+        <div className="col bank-list">
+          {entries.map(({ exercise, review }) => (
+            <div key={exercise.id} className={`bank-row${exercise.id === activeId ? " active" : ""}`}>
+              <button type="button" className="bank-main" onClick={() => onOpen(exercise)} title={review ? `下次复习 ${dateText(review.dueAt)}` : "还没判过分"}>
+                <span className="bank-title">{exercise.title}</span>
+                <span className="bank-meta">{exerciseKindLabel(exercise.kind)} · {exercise.tag || "全仓"}{review ? ` · 下次 ${dateText(review.dueAt)}` : ""}</span>
+              </button>
+              <button type="button" className="icon-btn" aria-label={`删除「${exercise.title}」`} title="从题库删除" onClick={() => onDelete(exercise)}><Icon name="x" size={13} /></button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="entry-empty">题库还是空的，生成一道题就会出现在这里。</p>
+      )}
+    </section>
+  );
 }

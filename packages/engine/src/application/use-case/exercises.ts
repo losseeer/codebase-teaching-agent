@@ -1,4 +1,4 @@
-import type { Exercise, ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
+import type { Exercise, ExerciseAnswer, ExerciseBankEntry, ExerciseKind } from "@codebase-tutor/domain";
 import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
 import { budgetDegraded, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
@@ -35,20 +35,33 @@ function exerciseFaces(repository: ImportedRepository, database: Parameters<type
   };
 }
 
-/** 出题：`family` 决定走规则题还是 LLM 族；预算到线时 provider 为 undefined。 */
-export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
+/** 出题：题型决定链路（理解题/分析题/设计题），主题只筛目标；预算到线时 provider 为 undefined。 */
+export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
-  const family = input.family === "llm" ? "llm" as const : "comprehension" as const;
   const tag = typeof input.tag === "string" ? input.tag : "";
-  if (family === "llm" && !tag.trim()) return { ok: false, failure: { kind: "tag-required" } };
   if (input.kind && !SUPPORTED_EXERCISE_KINDS.includes(input.kind)) return { ok: false, failure: { kind: "kind-unsupported" } };
+  if (input.kind === "llm_rubric" && !tag.trim()) return { ok: false, failure: { kind: "tag-required" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, targetUnitId: input.targetUnitId, family, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined)) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined)) };
   } catch (error) {
     return declined(error, "无法生成练习");
   }
+}
+
+/** 题库：这个仓存着的题与复习排期，纯读不花钱。 */
+export async function listExercisesUseCase(repositoryId: string): Promise<ExerciseResult<ExerciseBankEntry[]>> {
+  const repository = repositoryOr404(repositoryId);
+  if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
+  return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.bank(practiceView(repository, ports))) };
+}
+
+/** 删题：题与复习排期一起删。 */
+export async function deleteExerciseUseCase(repositoryId: string, exerciseId: string): Promise<ExerciseResult<{ deleted: number }>> {
+  const repository = repositoryOr404(repositoryId);
+  if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
+  return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.remove(practiceView(repository, ports), exerciseId)) };
 }
 
 /** 判分：执行类题在本地沙箱真跑；rubric 评分与反馈润色走模型。 */

@@ -1,21 +1,27 @@
-/** 练习页自建出题主题：浏览器本地标签，不来自课程树。 */
+/** 练习页的选择状态：考察主题（浏览器本地标签）与题型。 */
+
+import type { ExerciseType } from "@codebase-tutor/domain";
 
 export interface PracticeTheme {
   id: string;
   label: string;
   hint: string;
-  /** 用户自建主题（可删除）；默认「程序理解题」不是自建。 */
+  /** 用户自建主题（可删除）；「全仓」不是自建。 */
   custom?: boolean;
 }
 
-export const PRACTICE_DEFAULT_THEMES: PracticeTheme[] = [
-  { id: "comprehension", label: "程序理解题", hint: "规则出题 · 改代码 / 修改定位 / 影响分析，判分确定" }
-];
+/** 「全仓」＝不限定考察主题；理解题与设计题允许不选题。 */
+export const ALL_THEME_ID = "all";
 
-export const COMPREHENSION_THEME_ID = "comprehension";
+export const PRACTICE_DEFAULT_THEMES: PracticeTheme[] = [
+  { id: ALL_THEME_ID, label: "全仓", hint: "不限定考察主题，按掌握度选题" }
+];
 
 const PRACTICE_KEY = "codebase-tutor.practice-modules";
 const ACTIVE_KEY_PREFIX = "codebase-tutor.module.";
+const TYPE_KEY = "codebase-tutor.practice-type";
+/** 旧清单里「程序理解题」那张卡曾兼任题型开关，改造后等价于「全仓」。 */
+const LEGACY_ANY_THEME = "comprehension";
 
 const readJson = <T>(key: string, fallback: T): T => {
   try {
@@ -40,13 +46,24 @@ export function savePracticeThemes(modules: PracticeTheme[]): void {
   writeJson(PRACTICE_KEY, modules.filter((item) => item.custom === true));
 }
 
-/** 上次停在哪个主题；主题已不存在时回落第一个。 */
+/** 上次停在哪个主题；主题已不存在（或旧口径）时回落「全仓」。 */
 export function loadActiveTheme(repositoryId: string, modules: PracticeTheme[]): string {
   const saved = readJson<string | null>(ACTIVE_KEY_PREFIX + "practice." + repositoryId, null);
-  if (saved && modules.some((item) => item.id === saved)) return saved;
-  return modules[0]?.id ?? "";
+  const normalized = saved === LEGACY_ANY_THEME ? ALL_THEME_ID : saved;
+  if (normalized && modules.some((item) => item.id === normalized)) return normalized;
+  return modules[0]?.id ?? ALL_THEME_ID;
 }
 
 export function saveActiveTheme(repositoryId: string, id: string): void {
   writeJson(ACTIVE_KEY_PREFIX + "practice." + repositoryId, id);
+}
+
+/** 题型三档是全局偏好：换仓库不必重选。 */
+export function loadPracticeType(): ExerciseType {
+  const saved = readJson<string>(TYPE_KEY, "comprehension");
+  return saved === "analysis" || saved === "design" ? saved : "comprehension";
+}
+
+export function savePracticeType(type: ExerciseType): void {
+  writeJson(TYPE_KEY, type);
 }

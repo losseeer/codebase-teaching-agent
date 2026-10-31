@@ -301,7 +301,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    const first = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
+    const first = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag" }, provider);
     expect(first.kind).toBe("llm_rubric");
     expect(first.family).toBe("llm");
     expect(first.inputMode).toBe("open");
@@ -309,10 +309,10 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     expect(first.tag).toBe("config");
     expect(first.anchors[0]?.path).toBe("src/config.js");
     expect(calls).toHaveLength(1);
-    const reused = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
+    const reused = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag" }, provider);
     expect(reused.id).toBe(first.id);
     expect(calls).toHaveLength(1);
-    const variant = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
+    const variant = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag", variantNonce: 1 }, provider);
     expect(variant.id).not.toBe(first.id);
     expect(calls).toHaveLength(2);
     // 每次送达都留痕：分得清新生成与缓存复用。
@@ -323,8 +323,8 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    const first = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
-    const second = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, { ...provider, modelVersion: "other-model" });
+    const first = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag" }, provider);
+    const second = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag" }, { ...provider, modelVersion: "other-model" });
     expect(calls).toHaveLength(2);
     expect(second.id).not.toBe(first.id);
     // 两代题必须各自留痕：排期与答题都按 id 回查缓存行。
@@ -337,7 +337,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    const exercise = await service.next(repository, { family: "llm", tag: "kubernetes", tagId: "custom-unrelated" }, provider);
+    const exercise = await service.next(repository, { kind: "llm_rubric", tag: "kubernetes", tagId: "custom-unrelated" }, provider);
     expect(calls, "词法零命中不再直接拒题：全景挑得出的素材照样出题").toHaveLength(1);
     expect(exercise.kind).toBe("llm_rubric");
     const events = readJournal(repository.path);
@@ -349,7 +349,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "当前仓库没有与该主题相关的代码素材。" })]);
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型判定该主题无法出题");
+    await expect(service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("模型判定该主题无法出题");
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1);
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", reason: "当前仓库没有与该主题相关的代码素材。" });
   });
@@ -379,7 +379,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const service = new ExerciseService();
     const tiered = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
     const { provider, calls } = fakeProvider([tiered]);
-    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-cn" }, provider, topicFaces());
+    await service.next(repository, { kind: "llm_rubric", tag: "计算机网络", tagId: "custom-cn" }, provider, topicFaces());
     expect(calls[0].system).toContain("主题分解表");
     expect(calls[0].system, "可考点要连名字一起给，不能只给档名").toContain("超时与重试参数装配");
     expect(calls[0].system).toContain("不得以");
@@ -393,7 +393,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const service = new ExerciseService();
     const invented = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "计算机网络", exam_point: "TCP 三次握手" });
     const { provider } = fakeProvider([invented]);
-    await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-off" }, provider, topicFaces());
+    await service.next(repository, { kind: "llm_rubric", tag: "计算机网络", tagId: "custom-off" }, provider, topicFaces());
     const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
     expect(generated?.payload.topic_tier).toBe("off");
   });
@@ -404,8 +404,8 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const first = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "cn", exam_point: "超时与重试参数装配" });
     const second = JSON.stringify({ ...JSON.parse(generationJson), topic_tier: "off", exam_point: "", title: "另一道判法不同的题" });
     const { provider, calls } = fakeProvider([first, second]);
-    const made = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
-    const reused = await service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
+    const made = await service.next(repository, { kind: "llm_rubric", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
+    const reused = await service.next(repository, { kind: "llm_rubric", tag: "计算机网络", tagId: "custom-key" }, provider, topicFaces());
     expect(calls).toHaveLength(1);
     expect(reused.id).toBe(made.id);
   });
@@ -414,7 +414,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "摘录里没有可读的超时与重试装配。" })]);
-    await expect(service.next(repository, { family: "llm", tag: "计算机网络", tagId: "custom-decl" }, provider, topicFaces())).rejects.toThrow("模型判定该主题无法出题");
+    await expect(service.next(repository, { kind: "llm_rubric", tag: "计算机网络", tagId: "custom-decl" }, provider, topicFaces())).rejects.toThrow("模型判定该主题无法出题");
     const declined = readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1);
     expect(declined?.payload).toMatchObject({ stage: "llm_generate", tiers_offered: "cn" });
   });
@@ -425,7 +425,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const hallucinated = JSON.parse(generationJson);
     hallucinated.anchors = [{ path: "src/invented.ts", line: 1 }];
     const { provider } = fakeProvider([JSON.stringify(hallucinated)]);
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("题目校验未通过");
+    await expect(service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-x" }, provider)).rejects.toThrow("题目校验未通过");
     expect(readJournal(repository.path).some((event) => event.type === "exercise_declined" && event.payload.stage === "guard")).toBe(true);
   });
 
@@ -435,7 +435,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     writeFileSync(join(repository.path, "infra", "pool.properties"), "redis.pool.max-wait=200ms\nredis.timeout=3000ms\n");
     const service = new ExerciseService();
     const { provider, calls } = fakeProvider([generationJson]);
-    const exercise = await service.next(repository, { family: "llm", tag: "max-wait config", tagId: "custom-mech" }, provider);
+    const exercise = await service.next(repository, { kind: "llm_rubric", tag: "max-wait config", tagId: "custom-mech" }, provider);
     expect(calls[0].user, "声明面要真的进那次请求").toContain("infra/pool.properties");
     expect(exercise.contentHashes).toContainEqual(expect.objectContaining({ path: "infra/pool.properties" }));
     const generated = readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "llm");
@@ -446,7 +446,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([JSON.stringify({ ok: false, reason: "摘录里读不出任何可考点。" })], { inputTokens: 1200, outputTokens: 400 });
-    await expect(service.next(repository, { family: "llm", tag: "config", tagId: "custom-bill" }, provider)).rejects.toThrow("模型判定该主题无法出题");
+    await expect(service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-bill" }, provider)).rejects.toThrow("模型判定该主题无法出题");
     const events = readJournal(repository.path);
     const billed = events.filter((event) => event.type === "token_usage" && event.payload.scene === "exercise_llm_generate");
     expect(billed).toHaveLength(1);
@@ -458,7 +458,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([generationJson, judgeJson]);
-    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-tag" }, provider);
+    const exercise = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-tag" }, provider);
     const result = await service.answer(repository, exercise.id, { text: "返回原值，边界交给调用方。" }, provider);
     expect(result.automatic).toBe(false);
     expect(result.passed).toBe(true);
@@ -472,7 +472,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([generationJson, JSON.stringify({ score: "0.00", passed: false, feedback: "回答为“不知道”，未提供任何要点。" })]);
-    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-quote" }, provider);
+    const exercise = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-quote" }, provider);
     const result = await service.answer(repository, exercise.id, { text: "不知道" }, provider);
     expect(result.score).toBe(0);
     expect(result.passed).toBe(false);
@@ -483,7 +483,7 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     const repository = testRepository();
     const service = new ExerciseService();
     const { provider } = fakeProvider([generationJson, "这道题我没法评分。"]);
-    const exercise = await service.next(repository, { family: "llm", tag: "config", tagId: "custom-prose" }, provider);
+    const exercise = await service.next(repository, { kind: "llm_rubric", tag: "config", tagId: "custom-prose" }, provider);
     const log = join(temporaryDirectories[temporaryDirectories.length - 1]!, "engine.jsonl");
     process.env.TUTOR_ENGINE_LOG = log;
     try {
@@ -493,6 +493,47 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
     } finally {
       delete process.env.TUTOR_ENGINE_LOG;
     }
+  });
+});
+
+describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
+  it("理解题带主题：目标落在主题命中的文件上，题面仍由静态分析出", async () => {
+    const repository = testRepository();
+    const exercise = await new ExerciseService().next(repository, { kind: "change_localization", tag: "config", tagId: "custom-config" });
+    expect(exercise.kind).toBe("change_localization");
+    expect(exercise.anchors[0]!.path).toBe("src/config.js");
+  });
+
+  it("主题在本仓筛不出可出题单元：明说这个主题出不了题，不退化成全仓出题", async () => {
+    const repository = testRepository();
+    await expect(new ExerciseService().next(repository, { kind: "change_localization", tag: "kubernetes", tagId: "custom-k8s" }))
+      .rejects.toThrow("这个主题在当前仓库找不到可出题的代码");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_candidates", family: "comprehension" });
+  });
+
+  it("设计题带主题：走沙箱链路，没配模型就拒在花钱之前", async () => {
+    const repository = testRepository();
+    await expect(new ExerciseService().next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-config" }))
+      .rejects.toThrow("代码题需要模型");
+    // 族别是 code 才说明真的进了设计题链路，而不是被当成理解题出掉。
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_provider", family: "code" });
+  });
+
+  it("题库：列出存着的题，删题后题与复习排期一起没了", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const exercise = await service.next(repository, { kind: "change_localization" });
+    expect(service.bank(repository).map((entry) => entry.exercise.id)).toEqual([exercise.id]);
+
+    await service.answer(repository, exercise.id, { selectedIds: [exercise.anchors[0]!.path] });
+    expect(service.bank(repository)[0]!.review?.exerciseId).toBe(exercise.id);
+
+    expect(service.remove(repository, exercise.id).deleted).toBe(1);
+    expect(service.bank(repository)).toEqual([]);
+    expect(repository.ports.progress.get(exercise.id)).toBeUndefined();
+    await expect(service.answer(repository, exercise.id, { selectedIds: [] })).rejects.toThrow("该练习不存在");
   });
 });
 

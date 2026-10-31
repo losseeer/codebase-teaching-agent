@@ -5,5 +5,6 @@ export interface ProgressStore {
   list(): ReviewSchedule[];
   get(exerciseId: string): ReviewSchedule | undefined;
   save(schedule: ReviewSchedule): void;
+  remove(exerciseId: string): void;
   mastery(): MasteryRecord[];
 }

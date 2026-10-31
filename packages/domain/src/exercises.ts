@@ -9,12 +9,22 @@ import type { MasteryLevel, ReviewSchedule } from "./learner-profile.js";
   - `llm_rubric`：开放分析题，rubric 判分。
 */
 export type ExerciseKind = "change_localization" | "impact_analysis" | "patch_edit" | "author_function" | "llm_rubric";
-/** 规则出题族题型：题面/选项/标准答案全部由静态分析产出（server 校验 / 缓存命中校验共用这一份）。 */
-export const EXERCISE_KINDS: ExerciseKind[] = ["change_localization", "impact_analysis"];
-/** 要进沙箱真跑的族：学习者交的是代码，判分只由测试是否全过决定。 */
-export const CODE_EXERCISE_KINDS: ExerciseKind[] = ["patch_edit", "author_function"];
-/** 当前引擎真能出、真能判的全部题型（路由 400 校验、复习队列回放、round-robin 选题共用这一份，不再各写清单）。 */
-export const SUPPORTED_EXERCISE_KINDS: ExerciseKind[] = [...EXERCISE_KINDS, ...CODE_EXERCISE_KINDS];
+/** 用户在界面上选的题型三档：理解题吃静态分析，分析题走 rubric，设计题要跑测试。 */
+export type ExerciseType = "comprehension" | "analysis" | "design";
+/** 题型 → 具体题型。路由、校验、界面分组只用这一份。 */
+export const EXERCISE_TYPE_KINDS: Record<ExerciseType, ExerciseKind[]> = {
+  comprehension: ["impact_analysis", "change_localization"],
+  analysis: ["llm_rubric"],
+  design: ["patch_edit", "author_function"]
+};
+/** 当前引擎真能出、真能判的全部题型（路由 400 校验、复习队列回放共用这一份）。 */
+export const SUPPORTED_EXERCISE_KINDS: ExerciseKind[] = Object.values(EXERCISE_TYPE_KINDS).flat();
+/** 一道题的题型档位；未登记的 kind 一律按理解题处理（旧缓存行只可能是理解题）。 */
+export function exerciseTypeOf(kind: ExerciseKind): ExerciseType {
+  if (EXERCISE_TYPE_KINDS.design.includes(kind)) return "design";
+  if (EXERCISE_TYPE_KINDS.analysis.includes(kind)) return "analysis";
+  return "comprehension";
+}
 /**
   练习单元 id 的第一段就是它的题型出处：`impact:` 影响分析、`implementation:` 定位与代码题、`llm:` 主题题。
   这一段之外的 id（如 9 月流程题留下的 `workflow:`）今天的引擎既出不出题也判不了分，
@@ -74,6 +84,12 @@ export interface Exercise {
       旧缓存记录无此字段，回落 `contentVersion` 全仓比对。 */
   contentHashes?: { path: string; hash: string }[];
   createdAt: string;
+}
+
+/** 题库一行：题本身 + 它的复习排期（还没判过分就没有）。 */
+export interface ExerciseBankEntry {
+  exercise: Exercise;
+  review?: ReviewSchedule;
 }
 
 export interface ExerciseAnswer {

@@ -1,5 +1,5 @@
-import { ExerciseGradingMode, ExerciseKind, ExerciseResult, MasteryRecord, PracticeSummary } from "@codebase-tutor/domain";
-import type { Exercise } from "@codebase-tutor/domain";
+import { ExerciseGradingMode, ExerciseKind, ExerciseResult, exerciseTypeOf, PracticeSummary } from "@codebase-tutor/domain";
+import type { Exercise, ExerciseBankEntry, ExerciseType } from "@codebase-tutor/domain";
 
 import {useEffect, useRef, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
@@ -10,17 +10,18 @@ import { Markdown } from "../agent/Markdown";
 import { dateText, exerciseKindLabel } from "../ui/labels";
 import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer } from "../ui/ColumnResizer";
-import { PracticeThemes, PracticeSectionLabel } from "./PracticeThemes";
+import { PracticeThemes, PracticeTypePicker, PracticeBank } from "./PracticeThemes";
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
 import { failureText, showToast } from "../ui/toast";
 import { useEverVisible } from "../ui/useEverVisible";
-import { loadActiveTheme, loadPracticeThemes, saveActiveTheme, savePracticeThemes, COMPREHENSION_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
+import { DangerDialog } from "../ui/DangerDialog";
+import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, ALL_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
-// 练习评估工作区两栏：左 = 主题 chips 与本主题已练卡片，右 = 出题与判分。
+// 练习评估工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
+// 题型决定链路（理解题吃静态分析、分析题走 rubric、设计题进沙箱），主题只筛目标单元。
 // 顶栏只报 getPractice 的真读数；出题中不画假进度。
-// 判分说法只由 result.gradingMode 决定，复习读数只取 result.review 里存在的字段。
 
 function gradingLabel(mode: ExerciseGradingMode): string {
   if (mode === "execution") return "跑测试判分";
@@ -32,21 +33,6 @@ function gradingLabel(mode: ExerciseGradingMode): string {
 function llmUnitNonce(unitId: string): number | null {
   const nonce = Number(unitId.split(":")[2] ?? 0);
   return Number.isFinite(nonce) ? nonce : null;
-}
-
-/** 规则题单元 id 的首段 → 中文短名。 */
-const FAMILY_WORD: Record<string, string> = { impact: "影响面", implementation: "实现" };
-
-function unitName(unitId: string): string {
-  if (unitId.startsWith("llm:")) {
-    const nonce = llmUnitNonce(unitId);
-    return `主题练习 #${nonce !== null ? nonce + 1 : unitId}`;
-  }
-  const [head, ...rest] = unitId.split(":");
-  const word = FAMILY_WORD[head] ?? "";
-  const pathLike = rest.find((segment) => segment.includes("/"));
-  const tail = pathLike ? pathLike.split("/").pop() ?? "" : rest.filter((segment) => segment && !/^\d+$/.test(segment)).pop() ?? head;
-  return word ? `${tail} · ${word}` : tail || unitId;
 }
 
 /** 换一题 = 旧 nonce + 1；解析不出按 0 起算。 */
@@ -79,19 +65,29 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  /** 最近一次没出成题的单元 id（原因只进 console）：对应卡片转警示态。 */
-  const [failedUnit, setFailedUnit] = useState<{ unitId: string; reason: string } | null>(null);
   /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
   const [budgetTight, setBudgetTight] = useState(false);
+  /** 题库：这个仓存着的题 + 复习排期，纯读不花钱。 */
+  const [bank, setBank] = useState<ExerciseBankEntry[]>([]);
+  const [pendingDelete, setPendingDelete] = useState<Exercise | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
   /** 题面吃多段代码时，正在看哪一段。 */
   const [anchorIndex, setAnchorIndex] = useState(0);
   const [modules, setModules] = useState<PracticeTheme[]>(loadPracticeThemes);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveTheme(repositoryId, modules));
+  const [exerciseType, setExerciseType] = useState<ExerciseType>(loadPracticeType);
+  const [designKind, setDesignKind] = useState<"patch_edit" | "author_function">("patch_edit");
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
+  useEffect(() => { savePracticeType(exerciseType); }, [exerciseType]);
+
+  /** 题型 → 具体题型：理解题交给引擎按掌握度轮换，分析题与设计题点名。主题只筛目标。 */
+  const kind: ExerciseKind | undefined = exerciseType === "analysis" ? "llm_rubric" : exerciseType === "design" ? designKind : undefined;
+  const theme = activeModule === ALL_THEME_ID ? undefined : modules.find((item) => item.id === activeModule);
+  /** 分析题与设计题都靠主题选素材；只选了「全仓」时不给发。 */
+  const needsTheme = exerciseType !== "comprehension" && !theme;
 
   /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
   const everVisible = useEverVisible(visible);
@@ -100,34 +96,31 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
-  // 出题分派：理解题走规则族，自定义主题走 LLM 族；LLM 题「换一题」是 variantNonce+1，旧题保留。
+  /** 题库读一次：题与复习排期都在引擎侧。 */
+  const refreshBank = (): void => {
+    api.listExercises(repositoryId).then((next) => setBank(next.exercises)).catch((reason: unknown) => setError(failureText("题库读取失败", reason)));
+  };
+  useEffect(() => { if (everVisible) refreshBank(); }, [repositoryId, everVisible]);
+
+  // 出题：题型决定链路，主题只筛目标单元；「换一题」= 换目标或换 nonce，旧题留在题库里。
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
-    const isLlmFamily = activeModule !== COMPREHENSION_THEME_ID;
-    const failingUnit = isLlmFamily ? `llm:${activeModule}:${variantNonce ?? 0}` : targetUnitId;
     try {
-      const next = await api.createExercise(repositoryId, isLlmFamily
-        ? {
-            family: "llm",
-            tag: modules.find((item) => item.id === activeModule)?.label ?? activeModule,
-            tagId: activeModule,
-            ...(variantNonce !== undefined ? { variantNonce } : {})
-          }
-        : {
-            family: "comprehension",
-            ...(targetUnitId ? { targetUnitId } : {})
-          });
+      const next = await api.createExercise(repositoryId, {
+        ...(kind ? { kind } : {}),
+        ...(theme ? { tag: theme.label, tagId: theme.id } : {}),
+        ...(targetUnitId ? { targetUnitId } : {}),
+        ...(variantNonce !== undefined ? { variantNonce } : {})
+      });
       setExercise(next);
-      setFailedUnit(null);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
+      refreshBank();
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
-      const message = failureText("出题失败", reason);
-      setError(message);
-      if (failingUnit) setFailedUnit({ unitId: failingUnit, reason: message });
+      setError(failureText("出题失败", reason));
       // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
@@ -157,9 +150,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   useEffect(() => { if (result) graded.current?.scrollIntoView({ block: "nearest" }); }, [result]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  /** 换主题 = 换题面来源：上一主题的题、作答与判分结果不能留在这一栏里，否则「再试一次」会以新主题的名义重提旧题。 */
+  /** 换主题 / 换题型 = 换题面来源：上一道题的作答与判分结果不能留在这一栏里。 */
   const clearExercise = (): void => {
-    setExercise(null); setResult(null); setText(""); setSelectedIds([]); setFailedUnit(null); setAnchorIndex(0);
+    setExercise(null); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0);
     t.setPracticeUnit(""); t.setPracticeExercise(null);
   };
   /** 重复点同一 chip 不记事件；list 传入新增/删除时尚未提交的新列表。 */
@@ -168,6 +161,35 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setActiveModule(id);
     clearExercise();
     emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? id).slice(0, 120) });
+  };
+  /** 换题型同样清场：题面形态变了，旧题留在这一栏就是错位。 */
+  const switchType = (next: ExerciseType): void => {
+    if (next === exerciseType) return;
+    setExerciseType(next);
+    clearExercise();
+  };
+  /** 从题库打开：直接摆出存着的那道题，不重新出题、不花钱；左栏跟着切到这道题的题型与主题。 */
+  const openBank = (next: Exercise): void => {
+    const type = exerciseTypeOf(next.kind);
+    setExerciseType(type);
+    if (type === "design") setDesignKind(next.kind === "author_function" ? "author_function" : "patch_edit");
+    const hit = next.tag ? modules.find((item) => item.label === next.tag) : undefined;
+    if (hit) setActiveModule(hit.id);
+    setExercise(next); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0); setError("");
+    t.setPracticeUnit(next.title); t.setPracticeExercise(next);
+  };
+  /** 删题：题与复习排期一起删；握在手里的正是它时一并清掉。 */
+  const removeExercise = async (target: Exercise): Promise<void> => {
+    setPendingDelete(null);
+    try {
+      await api.deleteExercise(repositoryId, target.id);
+    } catch (reason) {
+      setError(failureText("删除失败", reason));
+      return;
+    }
+    if (exercise?.id === target.id) clearExercise();
+    refreshBank(); refreshSummary();
+    showToast("已从题库删除");
   };
   const submit = async (): Promise<void> => {
     if (!exercise) return;
@@ -201,11 +223,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
-  const isComprehensionChip = activeModule === COMPREHENSION_THEME_ID;
-  const moduleMastery = (summary?.mastery ?? [])
-    .filter((record) => isComprehensionChip ? !record.unitId.startsWith("llm:") : record.unitId.startsWith(`llm:${activeModule}:`))
-    .sort((left, right) => (right.lastPracticedAt ?? "").localeCompare(left.lastPracticedAt ?? ""));
-  const moduleLabel = modules.find((item) => item.id === activeModule)?.label ?? "未命名主题";
+  const themeLabel = theme?.label ?? "全仓";
   /** 面板只渲染前 MAX_RENDER_LINES 行；锚点行在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
@@ -226,7 +244,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     ? new Set([...(result.matchedIds ?? []), ...(result.missingIds ?? [])])
     : null;
   const wrongOptionIds = new Set(result?.unexpectedIds ?? []);
-  const moduleHint = modules.find((item) => item.id === activeModule)?.hint ?? "";
+  const themeHint = theme?.hint ?? "";
+  /** 空态文案里的题型短名。 */
+  const typeWord = exerciseType === "analysis" ? "分析" : exerciseType === "design" ? "设计" : "理解";
 
   return (
     <>
@@ -247,40 +267,35 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
 
         <aside className={`practice-side ${paneClass(0)}`}>
+          <PracticeTypePicker value={exerciseType} onChange={switchType} designKind={designKind} onDesignKind={(next) => { setDesignKind(next); clearExercise(); }} />
           <PracticeThemes
-            header="练习主题"
+            header="考察知识"
             modules={modules}
             activeId={activeModule}
             onSelectModule={switchModule}
             onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
             onAdd={(label) => {
               const id = `custom-${Date.now().toString(36)}`;
-              const next = [...modules, { id, label, hint: "自定义主题 · 生成练习时由 LLM 出题", custom: true }];
+              const next = [...modules, { id, label, hint: "自建考察主题 · 出题时按它筛代码", custom: true }];
               setModules(next);
               switchModule(id, next);
             }}
             onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
-            onReset={() => { const next = PRACTICE_DEFAULT_THEMES.map((item) => ({ ...item })); setModules(next); switchModule(COMPREHENSION_THEME_ID, next); }}
+            onReset={() => { const next = PRACTICE_DEFAULT_THEMES.map((item) => ({ ...item })); setModules(next); switchModule(ALL_THEME_ID, next); }}
           >
-            {moduleHint ? <p className="field-note" title="主题可在「＋ 配置」里自定义">{moduleHint}</p> : null}
-            <PracticeSectionLabel label="本主题已练" note={`${moduleMastery.length} 项`} tip="点卡片可按同一主题重新出题" />
-            {moduleMastery.length ? (
-              <div className="col">
-                {moduleMastery.map((record) => (
-                  <DoneCard
-                    key={record.unitId}
-                    record={record}
-                    selected={exercise?.targetUnitId === record.unitId}
-                    dueAt={result && result.targetUnitId === record.unitId ? result.review.dueAt : undefined}
-                    failed={failedUnit?.unitId === record.unitId ? failedUnit.reason : null}
-                    onPick={() => void(record.unitId.startsWith("llm:") ? generate(undefined, llmNonce(record.unitId)) : generate(record.unitId))}
-                  />
-                ))}
-              </div>
-            ) : (
-              <p className="entry-empty" title="右侧「生成练习」出题">{isComprehensionChip ? "还没有练习记录。" : "这个主题还没有题。"}</p>
-            )}
+            {themeHint ? <p className="field-note" title="主题可在配置面板里改名 / 新增 / 删除">{themeHint}</p> : null}
+            {needsTheme ? <p className="field-note warn" title="分析题与设计题按主题挑代码">这个题型要先选一个考察主题。</p> : null}
           </PracticeThemes>
+          <PracticeBank entries={bank} activeId={exercise?.id} onOpen={openBank} onDelete={setPendingDelete} />
+          {pendingDelete ? (
+            <DangerDialog
+              title="从题库删除"
+              body={`「${pendingDelete.title}」与它的复习排期会一起删掉；历史练习记录保留。`}
+              deleteLabel="删除这道题"
+              onDelete={() => void removeExercise(pendingDelete)}
+              onClose={() => setPendingDelete(null)}
+            />
+          ) : null}
         </aside>
 
         <div className={`practice-main ${paneClass(1)}`}>
@@ -302,9 +317,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             {!exercise && loading ? (
               <div className="card card-pad col">
                 <div className="section-title">正在出题</div>
-                <div className="phase active" title={isComprehensionChip ? "按代码结构出题，涉及具体代码时先验证题目可用" : "按这个主题出题"}>
+                <div className="phase active" title={exerciseType === "design" ? "设计题会先在沙箱里自证再下发" : "按代码结构与主题出题"}>
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>
-                  <span className="fs-12">{isComprehensionChip ? "正在出题" : "正在按主题出题"}</span>
+                  <span className="fs-12">{theme ? `正在按「${themeLabel}」出题` : "正在出题"}</span>
                 </div>
                 <div className="flow-skeleton" aria-hidden><span /><span /><span /></div>
               </div>
@@ -313,8 +328,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             {!exercise && !loading ? (
               <div className="empty">
                 <div className="empty-icon"><Icon name="practice" size={34} /></div>
-                <div>{isComprehensionChip ? "这个主题还没有练习" : `「${moduleLabel}」还没有题`}</div>
-                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading} title={isComprehensionChip ? "按代码结构出题" : "按这个主题出题"}><Icon name="play" size={14} /> 生成练习</button>
+                <div>{needsTheme ? "先选一个考察主题" : `还没有${typeWord}题`}</div>
+                <button type="button" className="btn btn-accent" onClick={() => void generate()} disabled={loading || needsTheme} title={needsTheme ? "分析题与设计题按主题挑代码" : "按当前题型与主题出题"}><Icon name="play" size={14} /> 生成练习</button>
               </div>
             ) : null}
 
@@ -517,25 +532,6 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
         </div>
       ) : null}
     </div>
-  );
-}
-
-/** 已练卡片：报掌握度档位；复习日期只存在于判分结果的 review。 */
-function DoneCard({ record, selected, dueAt, failed, onPick }: { record: MasteryRecord; selected: boolean; dueAt?: string; failed: string | null; onPick: () => void }): ReactElement {
-  const last = record.lastPracticedAt ? dateText(record.lastPracticedAt) : "";
-  return (
-    <button
-      type="button"
-      className={`done-card${selected ? " selected" : ""}${failed ? " failed" : ""}`}
-      title={failed ? "出题失败" : `${record.attempts} 次练习里 ${record.successes} 次通过`}
-      onClick={onPick}
-    >
-      <div className="d-head">
-        <span className="grow">{unitName(record.unitId)}</span>
-        <span className={`d-score ${record.level >= 3 ? "pass" : record.level >= 1 ? "warn" : "fail"}`}>{record.level}/5</span>
-      </div>
-      <div className="d-due">{failed ? "出题失败" : dueAt ? `下次复习 ${dateText(dueAt)}` : last ? `上次练习 ${last}` : "尚无练习记录"}</div>
-    </button>
   );
 }
 

@@ -1,10 +1,10 @@
 import type { ExerciseAnswer, ExerciseKind } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
-import { answerExerciseUseCase, explainExerciseUseCase, nextExerciseUseCase, type ExerciseFailure } from "../../../../application/use-case/exercises.js";
+import { answerExerciseUseCase, deleteExerciseUseCase, explainExerciseUseCase, listExercisesUseCase, nextExerciseUseCase, type ExerciseFailure } from "../../../../application/use-case/exercises.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
-  练习题路由的入站翻译：出题、判分、讲评三条端点，失败种类在此翻成状态码。
+  练习题路由的入站翻译：题库、出题、判分、讲评四条端点，失败种类在此翻成状态码。
 */
 const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply => {
   switch (failure.kind) {
@@ -16,9 +16,19 @@ const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply =
 };
 
 export function registerExerciseRoutes(app: FastifyInstance): void {
-  app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: unknown; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+  app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+    const result = await listExercisesUseCase(request.params.repositoryId);
+    return result.ok ? reply.send({ exercises: result.value }) : rejected(reply, result.failure);
+  });
+
+  app.delete<{ Params: { repositoryId: string; exerciseId: string } }>("/api/repositories/:repositoryId/exercises/:exerciseId", async (request, reply) => {
+    const result = await deleteExerciseUseCase(request.params.repositoryId, request.params.exerciseId);
+    return result.ok ? reply.send(result.value) : rejected(reply, result.failure);
+  });
+
+  app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
     const body = request.body ?? {};
-    const result = await nextExerciseUseCase(request.params.repositoryId, { kind: body.kind, targetUnitId: body.targetUnitId, family: body.family, tag: body.tag, tagId: body.tagId, variantNonce: body.variantNonce });
+    const result = await nextExerciseUseCase(request.params.repositoryId, { kind: body.kind, targetUnitId: body.targetUnitId, tag: body.tag, tagId: body.tagId, variantNonce: body.variantNonce });
     return result.ok ? reply.code(201).send(result.value) : rejected(reply, result.failure);
   });
 

@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 import type {
   Exercise,
   ExerciseAnswer,
+  ExerciseBankEntry,
   ExerciseFamily,
   ExerciseKind,
   ExerciseLanguage,
@@ -14,7 +15,7 @@ import type {
   RepositoryIndex,
   RubricCriterion
 } from "@codebase-tutor/domain";
-import { CODE_EXERCISE_KINDS, SUPPORTED_EXERCISE_KINDS, type SymbolInfo } from "@codebase-tutor/domain";
+import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type SymbolInfo } from "@codebase-tutor/domain";
 
 import type { LlmProvider } from "../application/port/llm-provider.js";
 import type { ExerciseFaces } from "./turn-faces.js";
@@ -33,7 +34,12 @@ import type { AuditSink } from "../application/port/audit-sink.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
 
-const isCodeKind = (kind: ExerciseKind): boolean => CODE_EXERCISE_KINDS.includes(kind);
+/** 沙箱代码题：题目自带测试与参考解，出题要模型，判分要真跑。 */
+const isCodeKind = (kind: ExerciseKind): boolean => exerciseTypeOf(kind) === "design";
+/** 题型 → 落账用的族别（journal 与旧缓存沿用 comprehension/code/llm 这套词）。 */
+const familyOf = (kind: ExerciseKind): ExerciseFamily => isCodeKind(kind) ? "code" : exerciseTypeOf(kind) === "analysis" ? "llm" : "comprehension";
+/** 主题筛目标时看多少个命中文件：只筛不发给模型，比 LLM 那趟的 3 个宽。 */
+const THEME_FILES = 12;
 
 type ExpectedAnswer =
   | { type: "set"; expectedIds: string[] }
@@ -60,7 +66,8 @@ export interface PracticeRepository {
   ports: ExercisePorts;
 }
 
-const kinds: ExerciseKind[] = SUPPORTED_EXERCISE_KINDS;
+/** 不点题型时的轮换范围：分析题必须带主题，不进这条兜底。 */
+const kinds: ExerciseKind[] = [...EXERCISE_TYPE_KINDS.comprehension, ...EXERCISE_TYPE_KINDS.design];
 
 /** 出题缓存的作用域（填进 `exercise_cache.content_version`）。 */
 function exerciseScope(versionStamp: string, modelVersion: string, graphStamp: string): string {
@@ -103,6 +110,11 @@ function exerciseDeps(repository: PracticeRepository, kind: ExerciseKind, value:
   return [{ path: unit.symbol.path, hash: hashOf(unit.symbol.path) }];
 }
 
+/** 目标单元落在哪个文件上：主题筛目标时按文件比。 */
+function targetPath(kind: ExerciseKind, value: unknown): string {
+  return kind === "impact_analysis" ? String(value) : (value as ImplementationUnit).symbol.path;
+}
+
 /** 作答时效校验：返回已过期的依赖清单，空 = 仍可用。 */
 function staleDependencies(repository: PracticeRepository, exercise: Exercise): string[] {
   if (exercise.contentHashes?.length) {
@@ -123,11 +135,36 @@ export class ExerciseService {
     return { repositoryId: repository.index.repositoryId, contentVersion: repository.analysis.versionStamp, dueReviews, mastery };
   }
 
-  /** 生成练习：目标单元与标准答案由静态分析产出；传入 provider 时润色题面。 */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; family?: ExerciseFamily; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
-    if (requested.family === "llm") return await this.nextLlm(repository, requested, provider, faces);
+  /** 题库：这个仓存着的全部题，各自带上复习排期；界面按题型与主题分组展示。 */
+  bank(repository: PracticeRepository): ExerciseBankEntry[] {
+    const reviews = new Map(repository.ports.progress.list().map((schedule) => [schedule.exerciseId, schedule]));
+    // 规则题的 id 只由（仓, 题型, 单元）决定：同一单元在不同作用域键下会各存一行，题库里只留最近那份。
+    const newest = new Map<string, StoredExercise>();
+    for (const stored of repository.ports.store.list<StoredExercise>()) {
+      if (!newest.has(stored.exercise.id)) newest.set(stored.exercise.id, stored);
+    }
+    return [...newest.values()].map((stored) => {
+      const review = reviews.get(stored.exercise.id);
+      return review ? { exercise: stored.exercise, review } : { exercise: stored.exercise };
+    });
+  }
+
+  /** 删题：题与复习排期一起删；journal 是账本，历史行不动，掌握度仍按历史算。 */
+  remove(repository: PracticeRepository, exerciseId: string): { deleted: number } {
+    const deleted = repository.ports.store.remove(exerciseId);
+    repository.ports.progress.remove(exerciseId);
+    return { deleted };
+  }
+
+  /** 出题：题型决定链路——理解题吃静态分析，分析题走 rubric，设计题进沙箱；主题只筛目标单元，不改链路。 */
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
+    const tag = (requested.tag ?? "").trim();
+    // 只给主题不给题型的老调用：按分析题处理
+    const kind = requested.kind ?? (tag ? "llm_rubric" : undefined);
+    if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces);
+    const theme = tag ? this.themeFiles(repository, tag) : undefined;
     const modelVersion = provider?.modelVersion ?? "deterministic";
-    if (!requested.kind && !requested.targetUnitId) {
+    if (!kind && !requested.targetUnitId) {
       const due = repository.ports.progress.list()
         .filter((schedule) => schedule.dueAt <= new Date().toISOString())
         .sort((left, right) => left.dueAt.localeCompare(right.dueAt));
@@ -140,12 +177,12 @@ export class ExerciseService {
       }
     }
     const mastery = repository.ports.progress.mastery();
-    const target = this.pickTarget(repository, requested, mastery);
+    const target = this.pickTarget(repository, { kind, targetUnitId: requested.targetUnitId }, mastery, theme);
     if (!target) {
-      const family = requested.family ?? "comprehension";
-      const tag = requested.tagId ?? "";
-      // 指定了记录却挑不出单元，与该仓没有可生成的题，是两种原因。
+      const family = familyOf(kind ?? "impact_analysis");
+      // 指定了记录却挑不出单元、主题筛不出单元、整仓没有单元，是三种原因。
       if (requested.targetUnitId) this.decline(repository, "target_stale", family, tag, `按单元 ${requested.targetUnitId} 挑不出可出题的单元（题型已停用，或那个文件不在当前分析结果里）。`, "该练习记录无法出题，请更换其他记录。");
+      if (theme) this.decline(repository, "no_candidates", family, tag, `主题「${tag}」命中的文件里没有可出题的函数或路径。`, "这个主题在当前仓库找不到可出题的代码，请换个主题。");
       this.decline(repository, "no_target", family, tag, "分析结果里没有任何可出题的单元。", "当前分析结果无可出题内容，请重新分析该仓库。");
     }
     const deps = exerciseDeps(repository, target.kind, target.value);
@@ -413,12 +450,19 @@ export class ExerciseService {
     return { ...graded, exerciseId, repositoryId: repository.index.repositoryId, targetUnitId: stored.exercise.targetUnitId, kind: stored.exercise.kind, gradingMode: stored.exercise.gradingMode, reviewedAt: now.toISOString(), review };
   }
 
-  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[]): PracticeTarget<unknown> | undefined {
+  /** 主题命中的文件集合；空集也是答案（该主题在本仓出不了题），不退化成全仓出题。 */
+  private themeFiles(repository: PracticeRepository, tag: string): Set<string> {
+    const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
+    return new Set(selectTagCandidates(repository, tag, THEME_FILES, summaries).map((candidate) => candidate.path));
+  }
+
+  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[], theme?: Set<string>): PracticeTarget<unknown> | undefined {
     const availableKinds = requested.kind ? [requested.kind] : kinds;
     const attemptCount = mastery.reduce((sum, record) => sum + record.attempts, 0);
     const orderedKinds = requested.kind ? availableKinds : [...availableKinds.slice(attemptCount % availableKinds.length), ...availableKinds.slice(0, attemptCount % availableKinds.length)];
     for (const kind of orderedKinds) {
-      const targets = this.targets(repository, kind);
+      const targets = this.targets(repository, kind)
+        .filter((target) => !theme || theme.has(targetPath(kind, target.value)));
       const restricted = requested.targetUnitId ? targets.filter((target) => target.id === requested.targetUnitId) : targets;
       if (requested.targetUnitId && restricted.length) return restricted[0];
       const selected = selectZpdTarget(restricted, mastery) as PracticeTarget<unknown> | undefined;

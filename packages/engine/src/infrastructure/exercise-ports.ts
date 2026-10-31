@@ -15,12 +15,15 @@ export function exercisePortsFor(handle: RepositoryHandle, database: TutorDataba
     store: {
       get: <T>(scope: string, kind: string, targetUnitId: string) => database.exercises.get<T>(repositoryId, scope, kind, targetUnitId),
       byId: <T>(exerciseId: string) => database.exercises.byId<T>(repositoryId, exerciseId),
-      put: (scope, kind, targetUnitId, stored) => database.exercises.put(repositoryId, scope, kind, targetUnitId, stored)
+      put: (scope, kind, targetUnitId, stored) => database.exercises.put(repositoryId, scope, kind, targetUnitId, stored),
+      list: <T>() => database.exercises.list<T>(repositoryId),
+      remove: (exerciseId) => database.exercises.remove(repositoryId, exerciseId)
     },
     progress: {
       list: () => database.reviews.list(repositoryId),
       get: (exerciseId) => database.reviews.get(repositoryId, exerciseId),
       save: (schedule) => database.reviews.save(repositoryId, schedule),
+      remove: (exerciseId) => database.reviews.remove(repositoryId, exerciseId),
       mastery: () => deriveMastery(readJournal(handle.repositoryPath))
     },
     summaries: {

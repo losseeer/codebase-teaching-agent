@@ -22,4 +22,17 @@ export class ExerciseRepository {
     this.db.prepare("INSERT OR REPLACE INTO exercise_cache(repository_id, content_version, kind, target_unit_id, exercise_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(repositoryId, contentVersion, kind, targetUnitId, JSON.stringify(exercise), new Date().toISOString());
   }
+
+  /** 题库：这个仓存着的全部行，最近写入的在前。 */
+  list<T>(repositoryId: string): T[] {
+    const rows = this.db.prepare("SELECT exercise_json FROM exercise_cache WHERE repository_id = ? ORDER BY created_at DESC")
+      .all(repositoryId) as { exercise_json: string }[];
+    return rows.map((row) => JSON.parse(row.exercise_json) as T);
+  }
+
+  /** 删题：同一道题可能在不同作用域键下各存一份，全删。 */
+  remove(repositoryId: string, exerciseId: string): number {
+    return this.db.prepare("DELETE FROM exercise_cache WHERE repository_id = ? AND json_extract(exercise_json, '$.exercise.id') = ?")
+      .run(repositoryId, exerciseId).changes;
+  }
 }

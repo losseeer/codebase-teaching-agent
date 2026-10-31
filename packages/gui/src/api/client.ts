@@ -20,6 +20,7 @@ import {
   type DiagramSummary,
   type Exercise,
   type ExerciseAnswer,
+  type ExerciseBankEntry,
   type ExerciseKind,
   type ExerciseResult,
   type FadedState,
@@ -264,7 +265,10 @@ export const api = {
   restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
   getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
-  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; family?: "comprehension" | "llm"; tag?: string; tagId?: string; variantNonce?: number } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
+  /** 题库：这个仓存着的题与复习排期，纯读。 */
+  listExercises: (repositoryId: string) => request<{ exercises: ExerciseBankEntry[] }>(`/api/repositories/${repositoryId}/exercises`),
+  deleteExercise: (repositoryId: string, exerciseId: string) => request<{ deleted: number }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}`, { method: "DELETE" }),
+  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   /** 代码题按需讲评：判分后点一次才发这一趟 LLM 调用。 */
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
