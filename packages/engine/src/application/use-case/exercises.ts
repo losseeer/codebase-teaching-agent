@@ -1,5 +1,5 @@
-import type { Exercise, ExerciseAnswer, ExerciseBankEntry, ExerciseKind } from "@codebase-tutor/domain";
-import { SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
+import type { Exercise, ExerciseAnswer, ExerciseBankEntry, ExerciseKind, ExerciseType } from "@codebase-tutor/domain";
+import { EXERCISE_TYPE_KINDS, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
 import { budgetDegraded, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
@@ -36,15 +36,16 @@ function exerciseFaces(repository: ImportedRepository, database: Parameters<type
 }
 
 /** 出题：题型决定链路（理解题/分析题/设计题），主题只筛目标；预算到线时 provider 为 undefined。 */
-export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
+export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const tag = typeof input.tag === "string" ? input.tag : "";
   if (input.kind && !SUPPORTED_EXERCISE_KINDS.includes(input.kind)) return { ok: false, failure: { kind: "kind-unsupported" } };
+  if (input.type && !(input.type in EXERCISE_TYPE_KINDS)) return { ok: false, failure: { kind: "kind-unsupported" } };
   if (input.kind === "llm_rubric" && !tag.trim()) return { ok: false, failure: { kind: "tag-required" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined)) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined)) };
   } catch (error) {
     return declined(error, "无法生成练习");
   }

@@ -16,7 +16,7 @@ import { emit } from "../journal";
 import { failureText, showToast } from "../ui/toast";
 import { useEverVisible } from "../ui/useEverVisible";
 import { DangerDialog } from "../ui/DangerDialog";
-import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, ALL_THEME_ID, PRACTICE_DEFAULT_THEMES, type PracticeTheme } from "./practiceThemeState";
+import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
 // 练习评估工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
@@ -85,8 +85,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
   /** 题型 → 具体题型：理解题交给引擎按掌握度轮换，分析题与设计题点名。主题只筛目标。 */
   const kind: ExerciseKind | undefined = exerciseType === "analysis" ? "llm_rubric" : exerciseType === "design" ? designKind : undefined;
-  const theme = activeModule === ALL_THEME_ID ? undefined : modules.find((item) => item.id === activeModule);
-  /** 分析题与设计题都靠主题选素材；只选了「全仓」时不给发。 */
+  /** 没选主题就是空串：理解题照旧按掌握度出题，分析题与设计题要求先选。 */
+  const theme = modules.find((item) => item.id === activeModule);
   const needsTheme = exerciseType !== "comprehension" && !theme;
 
   /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
@@ -109,6 +109,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     try {
       const next = await api.createExercise(repositoryId, {
+        type: exerciseType,
         ...(kind ? { kind } : {}),
         ...(theme ? { tag: theme.label, tagId: theme.id } : {}),
         ...(targetUnitId ? { targetUnitId } : {}),
@@ -160,7 +161,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     if (id === activeModule) return;
     setActiveModule(id);
     clearExercise();
-    emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? id).slice(0, 120) });
+    emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? (id || "不限定主题")).slice(0, 120) });
   };
   /** 换题型同样清场：题面形态变了，旧题留在这一栏就是错位。 */
   const switchType = (next: ExerciseType): void => {
@@ -223,7 +224,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
-  const themeLabel = theme?.label ?? "全仓";
+  const themeLabel = theme?.label ?? "";
   /** 面板只渲染前 MAX_RENDER_LINES 行；锚点行在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
@@ -281,7 +282,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               switchModule(id, next);
             }}
             onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
-            onReset={() => { const next = PRACTICE_DEFAULT_THEMES.map((item) => ({ ...item })); setModules(next); switchModule(ALL_THEME_ID, next); }}
+            onReset={() => { setModules([]); switchModule(""); }}
           >
             {themeHint ? <p className="field-note" title="主题可在配置面板里改名 / 新增 / 删除">{themeHint}</p> : null}
             {needsTheme ? <p className="field-note warn" title="分析题与设计题按主题挑代码">这个题型要先选一个考察主题。</p> : null}

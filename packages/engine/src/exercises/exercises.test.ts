@@ -497,11 +497,15 @@ describe("LLM 出题族（tag 出题 + rubric 判分 + 缓存）", () => {
 });
 
 describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
-  it("理解题带主题：目标落在主题命中的文件上，题面仍由静态分析出", async () => {
+  it("理解题带主题：窗口只含理解题，目标落在主题命中的文件上", async () => {
     const repository = testRepository();
-    const exercise = await new ExerciseService().next(repository, { kind: "change_localization", tag: "config", tagId: "custom-config" });
-    expect(exercise.kind).toBe("change_localization");
-    expect(exercise.anchors[0]!.path).toBe("src/config.js");
+    const service = new ExerciseService();
+    // 只给题型、不给具体 kind：引擎在理解题两型里轮换，不许轮出一道改代码题
+    for (let round = 0; round < 2; round += 1) {
+      const exercise = await service.next(repository, { type: "comprehension", tag: "config", tagId: "custom-config" });
+      expect(["impact_analysis", "change_localization"]).toContain(exercise.kind);
+      expect(exercise.anchors[0]!.path).toBe("src/config.js");
+    }
   });
 
   it("主题在本仓筛不出可出题单元：明说这个主题出不了题，不退化成全仓出题", async () => {

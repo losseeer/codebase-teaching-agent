@@ -6,22 +6,14 @@ export interface PracticeTheme {
   id: string;
   label: string;
   hint: string;
-  /** 用户自建主题（可删除）；「全仓」不是自建。 */
   custom?: boolean;
 }
-
-/** 「全仓」＝不限定考察主题；理解题与设计题允许不选题。 */
-export const ALL_THEME_ID = "all";
-
-export const PRACTICE_DEFAULT_THEMES: PracticeTheme[] = [
-  { id: ALL_THEME_ID, label: "全仓", hint: "不限定考察主题，按掌握度选题" }
-];
 
 const PRACTICE_KEY = "codebase-tutor.practice-modules";
 const ACTIVE_KEY_PREFIX = "codebase-tutor.module.";
 const TYPE_KEY = "codebase-tutor.practice-type";
-/** 旧清单里「程序理解题」那张卡曾兼任题型开关，改造后等价于「全仓」。 */
-const LEGACY_ANY_THEME = "comprehension";
+/** 旧清单里的两张「默认主题」卡都不是考察知识：一张曾兼任题型开关，一张是「全仓」。 */
+const LEGACY_THEME_IDS = ["comprehension", "all"];
 
 const readJson = <T>(key: string, fallback: T): T => {
   try {
@@ -38,20 +30,18 @@ const writeJson = (key: string, value: unknown): void => {
 
 export function loadPracticeThemes(): PracticeTheme[] {
   const stored = readJson<PracticeTheme[]>(PRACTICE_KEY, []);
-  const custom = Array.isArray(stored) ? stored.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
-  return [...PRACTICE_DEFAULT_THEMES.map((item) => ({ ...item })), ...custom];
+  return Array.isArray(stored) ? stored.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
 }
 
 export function savePracticeThemes(modules: PracticeTheme[]): void {
   writeJson(PRACTICE_KEY, modules.filter((item) => item.custom === true));
 }
 
-/** 上次停在哪个主题；主题已不存在（或旧口径）时回落「全仓」。 */
+/** 上次停在哪个主题；主题已删（或停在旧默认卡上）就是不选主题。 */
 export function loadActiveTheme(repositoryId: string, modules: PracticeTheme[]): string {
   const saved = readJson<string | null>(ACTIVE_KEY_PREFIX + "practice." + repositoryId, null);
-  const normalized = saved === LEGACY_ANY_THEME ? ALL_THEME_ID : saved;
-  if (normalized && modules.some((item) => item.id === normalized)) return normalized;
-  return modules[0]?.id ?? ALL_THEME_ID;
+  if (saved && !LEGACY_THEME_IDS.includes(saved) && modules.some((item) => item.id === saved)) return saved;
+  return modules[0]?.id ?? "";
 }
 
 export function saveActiveTheme(repositoryId: string, id: string): void {

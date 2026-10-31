@@ -55,7 +55,7 @@ export function PracticeTypePicker({ value, onChange, designKind, onDesignKind }
   );
 }
 
-/** 左栏第二块：考察知识（「全仓」+ 自建主题），配置面板由这里开合。 */
+/** 左栏第二块：考察知识（全是自建主题），配置面板由这里开合。 */
 export function PracticeThemes({
   header,
   modules,
@@ -96,7 +96,7 @@ export function PracticeThemes({
 
   const reset = (): void => {
     onReset();
-    showToast("已恢复默认主题");
+    showToast("已清空主题");
   };
 
   const customCount = modules.filter((item) => item.custom).length;
@@ -110,22 +110,26 @@ export function PracticeThemes({
             <Icon name="settings" size={14} />
           </button>
         </div>
-        <div className="chip-list" role="tablist" aria-label={`${header}切换`}>
-          {modules.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={item.id === activeId}
-              className={`chip ${item.id === activeId ? "active" : ""}`}
-              title={item.hint}
-              onClick={() => onSelectModule(item.id)}
-            >
-              <span className="chip-name">{item.label}</span>
-              {item.custom ? <span className="chip-count">自建</span> : null}
-            </button>
-          ))}
-        </div>
+        {modules.length ? (
+          <div className="chip-list" role="tablist" aria-label={`${header}切换`}>
+            {modules.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={item.id === activeId}
+                className={`chip ${item.id === activeId ? "active" : ""}`}
+                title={item.hint}
+                onClick={() => onSelectModule(item.id)}
+              >
+                <span className="chip-name">{item.label}</span>
+                <span className="chip-count">自建</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="entry-empty">还没有考察主题，点右上角配置添加。</p>
+        )}
       </section>
 
       {configOpen && (
@@ -142,7 +146,7 @@ export function PracticeThemes({
             <button type="button" className="btn btn-ghost btn-sm" onClick={add}>添加</button>
           </div>
           <div className="cfg-foot">
-            <button type="button" className="cfg-reset" onClick={() => setPending({ reset: true })}>恢复默认</button>
+            <button type="button" className="cfg-reset" onClick={() => setPending({ reset: true })}>清空主题</button>
             <span className="faint fs-11">改动即时生效并本地保存</span>
           </div>
         </div>
@@ -159,7 +163,7 @@ export function PracticeThemes({
           />
         ) : (
           <DangerDialog
-            title="恢复默认主题"
+            title="清空主题"
             body={`会删掉 ${String(customCount)} 个自建主题，找不回来。`}
             deleteLabel={`删掉 ${String(customCount)} 个自建主题`}
             onDelete={() => { setPending(null); reset(); }}
@@ -187,7 +191,7 @@ export function PracticeBank({ entries, activeId, onOpen, onDelete }: {
             <div key={exercise.id} className={`bank-row${exercise.id === activeId ? " active" : ""}`}>
               <button type="button" className="bank-main" onClick={() => onOpen(exercise)} title={review ? `下次复习 ${dateText(review.dueAt)}` : "还没判过分"}>
                 <span className="bank-title">{exercise.title}</span>
-                <span className="bank-meta">{exerciseKindLabel(exercise.kind)} · {exercise.tag || "全仓"}{review ? ` · 下次 ${dateText(review.dueAt)}` : ""}</span>
+                <span className="bank-meta">{exerciseKindLabel(exercise.kind)} · {exercise.tag || "不限主题"}{review ? ` · 下次 ${dateText(review.dueAt)}` : ""}</span>
               </button>
               <button type="button" className="icon-btn" aria-label={`删除「${exercise.title}」`} title="从题库删除" onClick={() => onDelete(exercise)}><Icon name="x" size={13} /></button>
             </div>

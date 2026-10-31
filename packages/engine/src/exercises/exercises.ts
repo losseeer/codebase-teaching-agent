@@ -15,7 +15,7 @@ import type {
   RepositoryIndex,
   RubricCriterion
 } from "@codebase-tutor/domain";
-import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type SymbolInfo } from "@codebase-tutor/domain";
+import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type ExerciseType, type SymbolInfo } from "@codebase-tutor/domain";
 
 import type { LlmProvider } from "../application/port/llm-provider.js";
 import type { ExerciseFaces } from "./turn-faces.js";
@@ -157,10 +157,10 @@ export class ExerciseService {
   }
 
   /** 出题：题型决定链路——理解题吃静态分析，分析题走 rubric，设计题进沙箱；主题只筛目标单元，不改链路。 */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
-    // 只给主题不给题型的老调用：按分析题处理
-    const kind = requested.kind ?? (tag ? "llm_rubric" : undefined);
+    // 点了题型就以题型为准（理解/设计交给窗口内轮换）；没点题型才沿用「有主题就是分析题」的老规则。
+    const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces);
     const theme = tag ? this.themeFiles(repository, tag) : undefined;
     const modelVersion = provider?.modelVersion ?? "deterministic";
@@ -177,7 +177,7 @@ export class ExerciseService {
       }
     }
     const mastery = repository.ports.progress.mastery();
-    const target = this.pickTarget(repository, { kind, targetUnitId: requested.targetUnitId }, mastery, theme);
+    const target = this.pickTarget(repository, { kind, type: requested.type, targetUnitId: requested.targetUnitId }, mastery, theme);
     if (!target) {
       const family = familyOf(kind ?? "impact_analysis");
       // 指定了记录却挑不出单元、主题筛不出单元、整仓没有单元，是三种原因。
@@ -456,8 +456,9 @@ export class ExerciseService {
     return new Set(selectTagCandidates(repository, tag, THEME_FILES, summaries).map((candidate) => candidate.path));
   }
 
-  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; targetUnitId?: string }, mastery: MasteryRecord[], theme?: Set<string>): PracticeTarget<unknown> | undefined {
-    const availableKinds = requested.kind ? [requested.kind] : kinds;
+  private pickTarget(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string }, mastery: MasteryRecord[], theme?: Set<string>): PracticeTarget<unknown> | undefined {
+    // 点了题型就只在这一档里轮换：理解题不能轮出一道改代码题。
+    const availableKinds = requested.kind ? [requested.kind] : requested.type ? EXERCISE_TYPE_KINDS[requested.type] : kinds;
     const attemptCount = mastery.reduce((sum, record) => sum + record.attempts, 0);
     const orderedKinds = requested.kind ? availableKinds : [...availableKinds.slice(attemptCount % availableKinds.length), ...availableKinds.slice(0, attemptCount % availableKinds.length)];
     for (const kind of orderedKinds) {
