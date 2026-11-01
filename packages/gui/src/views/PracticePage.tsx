@@ -40,6 +40,11 @@ function llmNonce(unitId: string): number {
   return llmUnitNonce(unitId) ?? 0;
 }
 
+/** 合成单元（模型出的题，不对应仓库里的某个函数）：`llm:<主题>` 与参考模式的 `llm-code:<主题>`。 */
+function isSyntheticUnit(unitId: string): boolean {
+  return unitId.startsWith("llm:") || unitId.startsWith("llm-code:");
+}
+
 /** 回答框的提示按题型与判分口径给。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
@@ -465,9 +470,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      onClick={() => void(exercise.kind === "llm_rubric" ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
+                      onClick={() => void(isSyntheticUnit(exercise.targetUnitId) ? generate(undefined, llmNonce(exercise.targetUnitId) + 1) : generate(exercise.targetUnitId))}
                       disabled={loading}
-                      title={exercise.kind === "llm_rubric" ? "换一题不影响旧题记录" : "按这段代码再出一题"}
+                      title={isSyntheticUnit(exercise.targetUnitId) ? "换一题不影响旧题记录" : "按这段代码再出一题"}
                     ><Icon name="rotate" size={14} />换一题</button>
                   </div>
                 </div>

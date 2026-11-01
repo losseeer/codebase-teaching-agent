@@ -45,7 +45,7 @@ function tierRows(body: string): { id: string; label: string; file: string; defe
 }
 
 /** 某一节标题下的正文。 */
-function section(text: string, heading: string): string {
+export function skillSection(text: string, heading: string): string {
   const start = text.split("\n").findIndex((line) => line.trim().startsWith("## ") && line.includes(heading));
   if (start < 0) return "";
   const rest = text.split("\n").slice(start + 1);
@@ -86,8 +86,8 @@ export function topicIndex(bodyOf: (name: string, file?: string) => string | und
   const tiers = tierRows(body).flatMap((row) => {
     const attached = bodyOf(TOPIC_SKILL, row.file);
     if (!attached) return [];
-    const points = pointNames(section(attached, "能摘出来考的"));
-    return points.length ? [{ ...row, points, offLimits: section(attached, "不要出成题的") }] : [];
+    const points = pointNames(skillSection(attached, "能摘出来考的"));
+    return points.length ? [{ ...row, points, offLimits: skillSection(attached, "不要出成题的") }] : [];
   });
   return tiers.length ? { tiers, prompt: promptOf(tiers) } : NO_TOPICS;
 }

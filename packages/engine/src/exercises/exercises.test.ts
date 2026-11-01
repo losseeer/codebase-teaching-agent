@@ -539,6 +539,26 @@ describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
     expect(repository.ports.progress.get(exercise.id)).toBeUndefined();
     await expect(service.answer(repository, exercise.id, { selectedIds: [] })).rejects.toThrow("该练习不存在");
   });
+
+  it("技能声明 reference：设计题不再从主题命中里挑单元，零命中也不拒", async () => {
+    const repository = testRepository();
+    const faces: ExerciseFaces = {
+      skills: { brief: "", bodyOf: (_name, file = "SKILL.md") => file === "SKILL.md" ? ["## 出题策略", "", "当前策略：`reference`"].join("\n") : undefined }
+    };
+    // 同一条主题在 unit 策略下会先拒 no_candidates；reference 策略走到模型那一步，没配模型才拒 no_provider
+    await expect(new ExerciseService().next(repository, { kind: "patch_edit", tag: "kubernetes", tagId: "custom-k8s" }, undefined, faces))
+      .rejects.toThrow("代码题需要模型");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_provider", family: "code" });
+  });
+
+  it("技能没声明 reference：设计题仍按单元出，主题零命中就拒", async () => {
+    const repository = testRepository();
+    await expect(new ExerciseService().next(repository, { kind: "patch_edit", tag: "kubernetes", tagId: "custom-k8s" }))
+      .rejects.toThrow("这个主题在当前仓库找不到可出题的代码");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_candidates", family: "code" });
+  });
 });
 
 function testRepository(): PracticeRepository {

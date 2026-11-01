@@ -24,8 +24,9 @@ import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
+import { DEFAULT_EXERCISE_STRATEGY, exerciseStrategyOf } from "./exercise-strategy.js";
 import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
-import { explainCodeAttempt, generateCodeExercise, verdictOf, type CodeFile } from "./code-generate.js";
+import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
 import { runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
@@ -162,6 +163,11 @@ export class ExerciseService {
     // 点了题型就以题型为准（理解/设计交给窗口内轮换）；没点题型才沿用「有主题就是分析题」的老规则。
     const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces);
+    // 出题策略由技能声明：reference 下代码题不再从仓库摘单元，改由模型自定题目、源码只作参考。
+    const strategy = faces?.skills ? exerciseStrategyOf(faces.skills.bodyOf) : DEFAULT_EXERCISE_STRATEGY;
+    if (kind && isCodeKind(kind) && strategy === "reference") {
+      return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind, variantNonce: requested.variantNonce }, provider, faces);
+    }
     const theme = tag ? this.themeFiles(repository, tag) : undefined;
     const modelVersion = provider?.modelVersion ?? "deterministic";
     if (!kind && !requested.targetUnitId) {
@@ -238,27 +244,7 @@ export class ExerciseService {
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
     const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces });
-    // 取过的出题技能与读过的文件都先留痕：这一趟能自己取证，就得看得见它取了什么。
-    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
-    for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
-    /** 自证两跑逐条留痕，失败趟也要有行。 */
-    const language = generation.ok ? generation.proposal.language : unit.symbol.language;
-    for (const run of generation.runs) {
-      repository.ports.audit.append("exercise_run", {
-        stage: "validate-proposal", label: run.label, language,
-        verdict_passed: run.verdict?.passed ?? null, verdict_failed: run.verdict?.failed ?? null,
-        exit_code: run.exitCode, timed_out: run.timedOut,
-        outcome: generation.ok ? "accepted" : generation.stage
-      });
-    }
-    // 被自证挡掉的那一趟同样花了钱：账走在拒绝之前。
-    if (generation.usage) repository.ports.audit.append("token_usage", {
-      input_tokens: generation.usage.inputTokens,
-      output_tokens: generation.usage.outputTokens,
-      cache_hit_tokens: generation.usage.promptCacheHitTokens ?? null,
-      provider: provider.modelVersion,
-      scene: "exercise_generate_code"
-    });
+    this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : unit.symbol.language, provider);
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
     }
@@ -291,6 +277,96 @@ export class ExerciseService {
     };
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
     repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, polish: "llm", polish_failure: null });
+    return exercise;
+  }
+
+  /** 代码题那一趟的证据账：技能、读过的文件、自证两跑、用量；被拒的趟也要有行。 */
+  private auditCodeGeneration(repository: PracticeRepository, generation: CodeGeneration, language: string, provider: LlmProvider): void {
+    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
+    for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
+    for (const run of generation.runs) {
+      repository.ports.audit.append("exercise_run", {
+        stage: "validate-proposal", label: run.label, language,
+        verdict_passed: run.verdict?.passed ?? null, verdict_failed: run.verdict?.failed ?? null,
+        exit_code: run.exitCode, timed_out: run.timedOut,
+        outcome: generation.ok ? "accepted" : generation.stage
+      });
+    }
+    // 被自证挡掉的那一趟同样花了钱：账走在拒绝之前。
+    if (generation.usage) repository.ports.audit.append("token_usage", {
+      input_tokens: generation.usage.inputTokens,
+      output_tokens: generation.usage.outputTokens,
+      cache_hit_tokens: generation.usage.promptCacheHitTokens ?? null,
+      provider: provider.modelVersion,
+      scene: "exercise_generate_code"
+    });
+  }
+
+  /** 参考模式出代码题：源码只作参考，题目由模型自定；沙箱自证与证据账照旧。 */
+  private async nextReferenceCode(repository: PracticeRepository, requested: { tag: string; tagId?: string; kind: ExerciseKind; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces): Promise<Exercise> {
+    const tag = requested.tag.trim();
+    if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
+    if (!provider) {
+      this.decline(repository, "no_provider", "code", tag, "代码题的题面、缺陷与测试都由模型设计；当前没配模型，或本月预算已用完。", "代码题需要模型，当前不可用。");
+    }
+    // 沙箱探测走在付费之前：非 `enforced` 直接拒，不发模型调用。
+    const isolation = await ensureIsolation();
+    if (isolation.level !== "enforced") {
+      this.decline(repository, "sandbox_unavailable", "code", tag, `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`, "代码题当前不可用。");
+    }
+    const kind = requested.kind === "author_function" ? "author_function" : "patch_edit";
+    const nonce = Math.max(0, Math.floor(requested.variantNonce ?? 0));
+    const tagKey = (requested.tagId ?? "").trim() || tag;
+    const targetUnitId = `llm-code:${tagKey}:${nonce}`;
+    const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
+    const matched = selectTagCandidates(repository, tag, 6, summaries);
+    // 源码只作参考：主题零命中也能出题，改从全景挑参考素材。
+    const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);
+    const selection = matched.length ? "tag" : "panorama";
+    const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
+    const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
+    // 键不带单元：题目由模型自定，只认「被当成参考的这批文件」
+    const scope = deps.length ? `${fileScope(deps, provider.modelVersion, runnerFingerprint())}#reference` : `reference#${repository.analysis.versionStamp}#${provider.modelVersion}`;
+    const cached = repository.ports.store.get<StoredExercise>(scope, kind, targetUnitId);
+    if (cached) {
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference" });
+      return cached.exercise;
+    }
+    const reference = candidates.map((candidate) => `## ${candidate.path}\n${candidate.excerpt}`).join("\n\n").slice(0, 24_000);
+    const generation = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces });
+    this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : "unknown", provider);
+    if (!generation.ok) {
+      this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
+    }
+    const proposal = generation.proposal;
+    const exercise: Exercise = {
+      id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
+      repositoryId: repository.index.repositoryId,
+      contentVersion: repository.analysis.versionStamp,
+      ...(deps.length ? { contentHashes: deps } : {}),
+      kind: proposal.kind,
+      targetUnitId,
+      targetTitle: proposal.defect || tag,
+      // 题目不在真实代码上，引擎量不出难度：按中档记，题面自述的难度不进读数
+      difficulty: 3,
+      title: proposal.title,
+      prompt: proposal.prompt,
+      anchors: [],
+      inputMode: "code",
+      gradingMode: "execution",
+      family: "code",
+      tag,
+      code: { language: proposal.language, files: proposal.given, entry: proposal.entry },
+      createdAt: new Date().toISOString()
+    };
+    const stored: StoredExercise = {
+      exercise,
+      expected: { type: "harness", language: proposal.language, entry: proposal.entry, hidden: proposal.hidden, solution: proposal.solution, defect: proposal.defect },
+      polish: "llm",
+      polishFailure: null
+    };
+    repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
+    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
     return exercise;
   }
 

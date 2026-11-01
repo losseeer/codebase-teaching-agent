@@ -91,11 +91,43 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
   ].join("\n");
 }
 
+/** 参考模式：源码只作参考，题目自足；语言由模型声明。 */
+function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
+  return [
+    `你是代码练习的出题人。这一次由你定题：围绕给定主题出一道具自足的代码题——${kind === "patch_edit" ? "一段带真实缺陷的实现，学习者改到测试全过" : "给签名与示例，学习者从零写出实现"}。`,
+    "",
+    "仓库代码只作参考：可以从候选摘录里取材（例如用同一套领域概念、同一种数据结构），但**题目必须自足**——给定件与测试不 import 仓库文件、不依赖仓库运行、不假设仓库里存在任何符号。",
+    "",
+    "铁律：",
+    "- 沙箱里没有任何第三方依赖：只用该语言标准库；被测代码需要的辅助件由你写进 hidden。",
+    "- 判分只由测试是否全过决定，所以测试必须逐条断言、逐条计数，最后印一行结论。",
+    "- 三语言各自的测试形状（按你选的语言照做）：",
+    ...(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => `  ${language}：${TEST_CONTRACT[language]}`),
+    "- 测试要打在行为上（给定输入 → 期望输出/副作用），不要打在实现细节上。",
+    kind === "patch_edit"
+      ? "- 缺陷必须是行为级的真实错误（边界、比较符、单位、分支漏一条），一处即可；禁止用语法错误、拼错的标识符、删掉整个函数来「制造缺陷」。"
+      : "- 骨架里只留签名与 TODO，不留任何可用实现；题面要给足输入输出形状与至少两个示例。",
+    "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
+    "",
+    "严格输出 JSON（不要任何其他文字）：",
+    `{"ok":true,"language":"typescript|python|java","title":"≤${MAX_TITLE}字","prompt":"≤${MAX_PROMPT}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
+    `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
+    `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
+    "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
+    "",
+    "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。"
+  ].join("\n");
+}
+
 /** 代码题这一步的口径登记。 */
 defineAnalysisStep({
   layer: "exercise-code-generate",
   contractVersion: EXERCISE_STEP.contractVersion,
-  prompts: [() => (["patch_edit", "author_function"] as const).flatMap((kind) => (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => systemPrompt(kind, language))).join("\n")]
+  prompts: [() => [
+    ...(["patch_edit", "author_function"] as const).flatMap((kind) => (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => systemPrompt(kind, language))),
+    ...(["patch_edit", "author_function"] as const).map(referenceSystemPrompt)
+  ].join("\n")]
 });
 
 /** 出题侧读源码：文件头 import 段 + 符号体，两边都过密钥筛并登记出网。 */
@@ -234,27 +266,73 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     // 端点失败单列一档
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
-  const parsed = parseJsonObject(response.text);
-  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
-  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? "模型认为这个单元出不了代码题。").trim() || "模型拒绝出题。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。" });
+}
 
-  const normalized = normalizeProposal({ ...parsed, kind: input.kind, language });
-  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+/** 参考模式：源码只作参考，模型自己定题；语言也由模型声明。 */
+export async function generateCodeExerciseFromReference(input: {
+  repositoryPath: string;
+  tag: string;
+  kind: "patch_edit" | "author_function";
+  /** 参考素材：候选文件与摘录（只作参考，不要求逐字使用）。 */
+  reference: string;
+  provider: LlmProvider;
+  faces?: ExerciseFaces;
+}): Promise<CodeGeneration> {
+  const faces = input.faces ?? {};
+  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
+  try {
+    const loop = await completeWithReadTool({
+      ...faces,
+      provider: input.provider,
+      system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
+      user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
+      scene: "practice.generate-code"
+    });
+    response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
+  } catch (error) {
+    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
+  }
+  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。" });
+}
+
+/** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
+async function finishProposal(
+  response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] },
+  context: {
+    kind: "patch_edit" | "author_function";
+    repositoryPath: string;
+    /** 单元模式：语言由单元定；参考模式不给，语言由模型声明。 */
+    language?: ExerciseLanguage;
+    /** 单元模式：改代码题的参考解必须逐字含这段源码。 */
+    solutionBody?: string;
+    refusal: string;
+  }
+): Promise<CodeGeneration> {
+  const audits = { usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  const parsed = parseJsonObject(response.text);
+  if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], ...audits };
+  if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? context.refusal).trim() || "模型拒绝出题。", runs: [], ...audits };
+
+  const normalized = normalizeProposal({ ...parsed, kind: context.kind, ...(context.language ? { language: context.language } : {}) });
+  if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], ...audits };
   const proposal = normalized.proposal;
-  if (proposal.language !== language) return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${language}）不一致。`, runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
-  if (proposal.kind === "patch_edit" && !solutionMatchesSource(proposal, source.body)) {
-    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  if (context.language && proposal.language !== context.language) {
+    return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${context.language}）不一致。`, runs: [], ...audits };
+  }
+  if (proposal.kind === "patch_edit" && context.solutionBody && !solutionMatchesSource(proposal, context.solutionBody)) {
+    return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], ...audits };
   }
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
-    validation = await validateHarness(proposal, input.repositoryPath);
+    validation = await validateHarness(proposal, context.repositoryPath);
   } catch (error) {
-    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+    if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], ...audits };
     throw error;
   }
-  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
-  return { ok: true, proposal, runs: validation.runs, usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
+  if (!validation.ok) return { ok: false, stage: "harness_validation", reason: validation.reason ?? "自证未通过。", runs: validation.runs, ...audits };
+  return { ok: true, proposal, runs: validation.runs, ...audits };
 }
 
 /** 按需讲评的一趟调用，先重跑沙箱拿失败原因。 */
