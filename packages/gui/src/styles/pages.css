@@ -292,6 +292,11 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 /* ==================== 练习评估 ==================== */
 .page-practice { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .practice-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+/* 源码弹窗：宽一点，源码跟随弹窗内容滚，不再套一层内滚。
+   .code-card 的限高定义在后面，这里按作用域提一档优先级并禁止收缩，否则卡片被截断且滚不动。 */
+.source-modal { width: min(900px, calc(100vw - 48px)); }
+.source-modal .code-card { flex: none; max-height: none; }
+.source-modal .code-card .source-view { flex: none; overflow: visible; }
 .chip {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 10px;
@@ -329,10 +334,9 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .bank-title { font-size: var(--fs-12); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bank-meta { font-size: 10px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 容器查询按这一栏的实际宽度判档：侧栏 / 对话栏 / 可调列表栏都吃视口，媒体查询量不到。 */
-.practice-main { overflow-y: auto; min-width: 0; container-type: inline-size; }
+/* 参考源码搬进左栏后，主区只剩题面 + 作答：一条竖列读到底，窄栏不再分两列。 */
+.practice-main { overflow-y: auto; min-width: 0; }
 .practice-wrap { max-width: 760px; margin: 0 auto; padding: var(--sp-6) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-4); }
-/* 读题、写答案、提交这一条动线要在一屏内走完；栏宽不够时回落单列，题面绝不被挤成竖条。 */
 .practice-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
 .practice-topic, .practice-answer { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .practice-actions { position: sticky; bottom: 0; z-index: 2; display: flex; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-2); background: var(--bg); border-top: 1px solid var(--border); }
@@ -346,13 +350,13 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .prompt-toggle { margin-top: 6px; }
 .option-row {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 14px;
+  padding: 7px 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   cursor: pointer;
   transition: border var(--t-fast), background var(--t-fast);
   font-size: var(--fs-13);
-  line-height: 1.55;
+  line-height: 1.45;
   text-align: left;
   width: 100%;
   background: var(--surface);
@@ -494,11 +498,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .palette .pal-item .pal-path { margin-left: auto; font-size: 10px; color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ==================== 窄屏退让 ==================== */
-/* 练习栏够宽才并排：判据是这一栏的实际宽度，不是视口。 */
-@container (min-width: 860px) {
-  .practice-wrap { max-width: 1080px; }
-  .practice-cols { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
-}
 @media (max-width: 1180px) {
   .report-grid, .tiles { grid-template-columns: repeat(2, 1fr); }
 }

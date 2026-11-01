@@ -194,11 +194,12 @@ export function PracticeThemes({
   );
 }
 
-/** 左栏第三块：题库。待复习常展开，其余默认收 3 条；点一行把题摆到右栏。 */
-export function PracticeBank({ entries, activeId, onOpen, onDelete }: {
+/** 左栏第三块：题库。待复习常展开，其余默认收 3 条；点一行看题面预览。 */
+export function PracticeBank({ entries, activeId, onOpen, onStart, onDelete }: {
   entries: ExerciseBankEntry[];
   activeId?: string;
   onOpen: (exercise: Exercise) => void;
+  onStart: (exercise: Exercise) => void;
   onDelete: (exercise: Exercise) => void;
 }): ReactElement {
   const [expanded, setExpanded] = useState(false);
@@ -207,7 +208,7 @@ export function PracticeBank({ entries, activeId, onOpen, onDelete }: {
   const rest = entries.filter((entry) => !(entry.review && entry.review.dueAt <= now));
   const shown = expanded ? rest : rest.slice(0, BANK_PREVIEW);
   const row = (entry: ExerciseBankEntry, showDate: boolean): ReactElement => (
-    <BankRow key={entry.exercise.id} entry={entry} active={entry.exercise.id === activeId} showDate={showDate} onOpen={onOpen} onDelete={onDelete} />
+    <BankRow key={entry.exercise.id} entry={entry} active={entry.exercise.id === activeId} showDate={showDate} onOpen={onOpen} onStart={onStart} onDelete={onDelete} />
   );
   return (
     <section className="chip-block">
@@ -239,12 +240,13 @@ export function PracticeBank({ entries, activeId, onOpen, onDelete }: {
   );
 }
 
-/** 题库里的一行：点题面打开，删除收进末尾的菜单。 */
-function BankRow({ entry, active, showDate, onOpen, onDelete }: {
+/** 题库里的一行：点题面看预览；开始答题与删除收进末尾的菜单。 */
+function BankRow({ entry, active, showDate, onOpen, onStart, onDelete }: {
   entry: ExerciseBankEntry;
   active: boolean;
   showDate: boolean;
   onOpen: (exercise: Exercise) => void;
+  onStart: (exercise: Exercise) => void;
   onDelete: (exercise: Exercise) => void;
 }): ReactElement {
   const { exercise, review } = entry;
@@ -263,7 +265,10 @@ function BankRow({ entry, active, showDate, onOpen, onDelete }: {
         <PopMenu
           anchor={more}
           ariaLabel={`「${exercise.title}」操作`}
-          items={[{ label: "删除", danger: true, onSelect: () => { setMore(null); onDelete(exercise); } }]}
+          items={[
+            { label: "开始答题", onSelect: () => { setMore(null); onStart(exercise); } },
+            { label: "删除", danger: true, onSelect: () => { setMore(null); onDelete(exercise); } }
+          ]}
           onClose={() => setMore(null)}
         />
       ) : null}

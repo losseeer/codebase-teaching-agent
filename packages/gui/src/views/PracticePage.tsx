@@ -86,6 +86,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveTheme(repositoryId, modules));
   const [exerciseType, setExerciseType] = useState<ExerciseType>(loadPracticeType);
   const [designKind, setDesignKind] = useState<"patch_edit" | "author_function">("patch_edit");
+  /** 答题态：进入后左栏借用给题面，源码走弹窗；未进入时左栏照常选题/题库。 */
+  const [answering, setAnswering] = useState(false);
+  /** 参考源码弹窗。 */
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
@@ -131,6 +135,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       // 途中换了主题或题型：这题已经进题库，但不摆到当前这一栏
       if (token !== generationToken.current) return;
       setExercise(next);
+      setAnswering(false);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
@@ -155,6 +160,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   }, [anchor?.path, anchor?.line, repositoryId]);
 
   useEffect(() => {
+    if (!sourceOpen) return;
+    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") setSourceOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sourceOpen]);
+
+  useEffect(() => {
     const slot = exercise?.code;
     setAnchorIndex(0);
     setCodeFiles(slot ? slot.files.map((file) => ({ ...file })) : []);
@@ -169,6 +181,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 换主题 / 换题型 = 换题面来源：上一道题的作答与判分结果不能留在这一栏里。 */
   const clearExercise = (): void => {
     generationToken.current += 1;
+    setAnswering(false); setSourceOpen(false);
     setExercise(null); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0);
     t.setPracticeUnit(""); t.setPracticeExercise(null);
   };
@@ -185,7 +198,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setExerciseType(next);
     clearExercise();
   };
-  /** 从题库打开：直接摆出存着的那道题，不重新出题、不花钱；左栏跟着切到这道题的题型与主题。 */
+  /** 从题库打开：先摆出题面预览，答案区等「开始答题」；不重新出题、不花钱。 */
   const openBank = (next: Exercise): void => {
     const type = exerciseTypeOf(next.kind);
     setExerciseType(type);
@@ -193,7 +206,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     const hit = next.tag ? modules.find((item) => item.label === next.tag) : undefined;
     if (hit) setActiveModule(hit.id);
     setExercise(next); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0); setError("");
+    setAnswering(false);
     t.setPracticeUnit(next.title); t.setPracticeExercise(next);
+  };
+  /** 从题库直接开始答题：摆出题面并打开答案区。 */
+  const startBank = (next: Exercise): void => {
+    openBank(next);
+    setAnswering(true);
   };
   /** 删题：题与复习排期一起删；握在手里的正是它时一并清掉。 */
   const removeExercise = async (target: Exercise): Promise<void> => {
@@ -248,6 +267,24 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       : `相关代码超出预览上限（第 ${anchor.line} 行）`
     : "生成练习后显示相关代码";
   const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
+  /** 参考源码卡：预览时放主区，答题时放进弹窗；弹窗里的高度与滚动由 `.source-modal` 作用域接管。 */
+  const sourceCard = (): ReactElement => (
+    <section className="card clip code-card">
+      <div className="code-context row between">
+        <button
+          type="button"
+          className="cc-name cc-link"
+          disabled={!anchor}
+          title="在代码教学中打开这个文件"
+          onClick={() => { if (anchor) navigate(`/app?workspace=teaching&file=${encodeURIComponent(anchor.path)}&line=${String(anchor.line)}`); }}
+        >
+          {anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}
+        </button>
+        <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
+      </div>
+      <SourceView source={source} emptyHint="相关代码还没读到" />
+    </section>
+  );
   const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : exercise?.inputMode === "code" ? codeFiles.length > 0 : text.trim().length > 0);
   const activeCodeFile = codeFiles.find((file) => file.path === activeCodePath);
   /** 掌握度页顶只报均值：`PracticeSummary.mastery` 每条带 level。 */
@@ -278,31 +315,54 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         </>}
         showRailToggle
       />
-      <MobileSwitcher labels={["练习主题", "练习上下文"]} active={paneActive} onSelect={setPaneActive} />
+      <MobileSwitcher labels={!exercise ? ["练习主题", "练习上下文"] : answering ? ["题目", "作答"] : ["选题", "预览"]} active={paneActive} onSelect={setPaneActive} />
       <div className="page page-practice">
         <ColumnResizer field="filePaneWidth" label="列表栏" growOn="right" />
 
         <aside className={`practice-side ${paneClass(0)}`}>
-          <PracticeTypePicker value={exerciseType} onChange={switchType} designKind={designKind} onDesignKind={(next) => { setDesignKind(next); clearExercise(); }} />
-          <PracticeThemes
-            header="考察知识"
-            modules={modules}
-            activeId={activeModule}
-            onSelectModule={switchModule}
-            onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
-            onAdd={(label) => {
-              const id = `custom-${Date.now().toString(36)}`;
-              const next = [...modules, { id, label, hint: "", custom: true }];
-              setModules(next);
-              switchModule(id, next);
-            }}
-            onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
-            onReset={() => { setModules([]); switchModule(""); }}
-          >
-            {themeHint ? <p className="field-note" title="主题可在配置面板里改名 / 新增 / 删除">{themeHint}</p> : null}
-            {needsTheme ? <p className="field-note warn" title="分析题与设计题按主题挑代码">这个题型要先选一个考察主题。</p> : null}
-          </PracticeThemes>
-          <PracticeBank entries={bank} activeId={exercise?.id} onOpen={openBank} onDelete={setPendingDelete} />
+          {answering && exercise ? (
+            <section className="chip-block">
+              <div className="row between">
+                <h3 className="section-title">题目</h3>
+                <button type="button" className="btn btn-ghost btn-sm" title="回到题目预览" onClick={() => setAnswering(false)}>退出答题</button>
+              </div>
+              <div className="exercise-meta">
+                <span>{exerciseKindLabel(exercise.kind)}</span>
+                <span aria-hidden>·</span>
+                <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
+              </div>
+              <h2 className="exercise-title">{exercise.title}</h2>
+              <div className="exercise-prompt"><Markdown content={exercise.prompt} /></div>
+              {exercise.anchors.length ? (
+                <button type="button" className="btn btn-ghost btn-sm" title={anchor ? `${anchor.path}:${anchor.line}` : "参考源码"} onClick={() => setSourceOpen(true)}>
+                  <Icon name="file" size={13} />查看源码
+                </button>
+              ) : null}
+            </section>
+          ) : (
+            <>
+              <PracticeTypePicker value={exerciseType} onChange={switchType} designKind={designKind} onDesignKind={(next) => { setDesignKind(next); clearExercise(); }} />
+              <PracticeThemes
+                header="考察知识"
+                modules={modules}
+                activeId={activeModule}
+                onSelectModule={switchModule}
+                onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
+                onAdd={(label) => {
+                  const id = `custom-${Date.now().toString(36)}`;
+                  const next = [...modules, { id, label, hint: "", custom: true }];
+                  setModules(next);
+                  switchModule(id, next);
+                }}
+                onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
+                onReset={() => { setModules([]); switchModule(""); }}
+              >
+                {themeHint ? <p className="field-note" title="主题可在配置面板里改名 / 新增 / 删除">{themeHint}</p> : null}
+                {needsTheme ? <p className="field-note warn" title="分析题与设计题按主题挑代码">这个题型要先选一个考察主题。</p> : null}
+              </PracticeThemes>
+              <PracticeBank entries={bank} activeId={exercise?.id} onOpen={openBank} onStart={startBank} onDelete={setPendingDelete} />
+            </>
+          )}
           {pendingDelete ? (
             <DangerDialog
               title="从题库删除"
@@ -351,142 +411,113 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
             {exercise ? (
               <div className="practice-cols">
-                <div className="practice-topic">
-                  <div className="exercise-meta">
-                    <span>{exerciseKindLabel(exercise.kind)}</span>
-                    <span aria-hidden>·</span>
-                    <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
-                  </div>
-                  <h2 className="exercise-title">{exercise.title}</h2>
-
-                  {exercise.anchors.length > 1 ? (
-                    <div className="row-wrap">
-                      <span className="fs-11 faint">题面用到的代码：</span>
-                      {exercise.anchors.map((item, index) => (
-                        <button
-                          type="button"
-                          key={`${item.path}:${item.line}`}
-                          className="anchor-chip"
-                          aria-pressed={index === shownIndex}
-                          title={`${item.path}:${item.line}`}
-                          onClick={() => setAnchorIndex(index)}
-                        >
-                          <Icon name="file" size={12} />
-                          {item.path.split("/").pop()}:{item.line}
-                        </button>
-                      ))}
+                {!answering ? (
+                  <div className="practice-topic">
+                    <div className="exercise-meta">
+                      <span>{exerciseKindLabel(exercise.kind)}</span>
+                      <span aria-hidden>·</span>
+                      <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
                     </div>
-                  ) : null}
-
-                  <ExercisePrompt key={exercise.id} text={exercise.prompt} />
-
-                  {exercise.anchors.length ? (
-                    <section className="card clip code-card">
-                      <div className="code-context row between">
-                        <button
-                          type="button"
-                          className="cc-name cc-link"
-                          disabled={!anchor}
-                          title="在代码教学中打开这个文件"
-                          onClick={() => { if (anchor) navigate(`/app?workspace=teaching&file=${encodeURIComponent(anchor.path)}&line=${String(anchor.line)}`); }}
-                        >
-                          {anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}
-                        </button>
-                        <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
-                      </div>
-                      <SourceView source={source} emptyHint="相关代码还没读到" />
-                    </section>
-                  ) : (
-                    <p className="entry-empty">这道题没有关联的仓库代码。</p>
-                  )}
-                </div>
+                    <h2 className="exercise-title">{exercise.title}</h2>
+                    <ExercisePrompt key={exercise.id} text={exercise.prompt} />
+                    {exercise.anchors.length ? sourceCard() : <p className="entry-empty">这道题没有关联的仓库代码。</p>}
+                  </div>
+                ) : null}
 
                 <div className="practice-answer">
-                  <div className="row between">
-                    <span className="section-title">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
-                    <span className="fs-11 faint" title="改过代码后要重新出题">{gradingLabel(exercise.gradingMode)}</span>
-                  </div>
+                  {answering ? (
+                    <>
+                      <div className="row between">
+                        <span className="section-title">{exercise.inputMode === "code" ? "你的代码" : "你的回答"}</span>
+                        <span className="fs-11 faint" title="改过代码后要重新出题">{gradingLabel(exercise.gradingMode)}</span>
+                      </div>
 
-                  {exercise.inputMode === "multi_select" ? (
-                    <div className="col">
-                      {exercise.options?.map((option) => {
-                        const expected = expectedOptionIds?.has(option.id) ?? false;
-                        const picked = selectedIds.includes(option.id);
-                        const cls = result ? (expected ? "correct" : wrongOptionIds.has(option.id) ? "wrong" : "") : "";
-                        const note = result ? (expected ? (picked ? "标准答案，已选" : "标准答案，漏选") : picked ? "多选了这一项" : null) : null;
-                        return (
-                          <button
-                            type="button"
-                            key={option.id}
-                            className={`option-row ${cls}${picked ? " picked" : ""}`}
-                            disabled={!!result}
-                            onClick={() => toggle(option.id)}
-                            title={note ?? undefined}
-                          >
-                            <span className="option-box">{picked ? <Icon name="check" size={11} /> : null}</span>
-                            <span className="grow col"><code>{option.label}</code>{option.detail ? <small className="fs-11 faint">{option.detail}</small> : null}</span>
-                            {result && expected && !picked ? <span className="badge badge-warn push-right">漏选</span> : null}
-                            {result && !expected && picked ? <span className="badge badge-danger push-right">多选</span> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  {exercise.inputMode === "code" && exercise.code ? (
-                    <div className="col">
-                      <p className="fs-11 faint">要改的文件</p>
-                      {codeFiles.length > 1 ? (
-                        <div className="tabs light" role="tablist" aria-label="下发代码文件">
-                          {codeFiles.map((file) => (
-                            <button
-                              type="button"
-                              key={file.path}
-                              role="tab"
-                              aria-selected={file.path === activeCodePath}
-                              className={file.path === activeCodePath ? "tab active" : "tab"}
-                              title={file.path}
-                              onClick={() => setActiveCodePath(file.path)}
-                            >
-                              <Icon name="file" size={12} />
-                              <code>{file.path.split("/").pop()}</code>
-                            </button>
-                          ))}
+                      {exercise.inputMode === "multi_select" ? (
+                        <div className="col">
+                          {exercise.options?.map((option) => {
+                            const expected = expectedOptionIds?.has(option.id) ?? false;
+                            const picked = selectedIds.includes(option.id);
+                            const cls = result ? (expected ? "correct" : wrongOptionIds.has(option.id) ? "wrong" : "") : "";
+                            const note = result ? (expected ? (picked ? "标准答案，已选" : "标准答案，漏选") : picked ? "多选了这一项" : null) : null;
+                            return (
+                              <button
+                                type="button"
+                                key={option.id}
+                                className={`option-row ${cls}${picked ? " picked" : ""}`}
+                                disabled={!!result}
+                                onClick={() => toggle(option.id)}
+                                title={note ?? undefined}
+                              >
+                                <span className="option-box">{picked ? <Icon name="check" size={11} /> : null}</span>
+                                <span className="grow col"><code>{option.label}</code>{option.detail ? <small className="fs-11 faint">{option.detail}</small> : null}</span>
+                                {result && expected && !picked ? <span className="badge badge-warn push-right">漏选</span> : null}
+                                {result && !expected && picked ? <span className="badge badge-danger push-right">多选</span> : null}
+                              </button>
+                            );
+                          })}
                         </div>
                       ) : null}
-                      {activeCodeFile ? (
-                        <CodeEditor
-                          file={activeCodeFile}
-                          language={exercise.code.language}
-                          resetKey={`${exercise.id}:${activeCodePath}`}
-                          ariaLabel={exercise.code.files.length > 1 ? "练习代码编辑器" : `编辑 ${activeCodePath}`}
-                          onChange={(contents) => setCodeFiles((current) => current.map((file) => (file.path === activeCodePath ? { ...file, contents } : file)))}
+
+                      {exercise.inputMode === "code" && exercise.code ? (
+                        <div className="col">
+                          <p className="fs-11 faint">要改的文件</p>
+                          {codeFiles.length > 1 ? (
+                            <div className="tabs light" role="tablist" aria-label="下发代码文件">
+                              {codeFiles.map((file) => (
+                                <button
+                                  type="button"
+                                  key={file.path}
+                                  role="tab"
+                                  aria-selected={file.path === activeCodePath}
+                                  className={file.path === activeCodePath ? "tab active" : "tab"}
+                                  title={file.path}
+                                  onClick={() => setActiveCodePath(file.path)}
+                                >
+                                  <Icon name="file" size={12} />
+                                  <code>{file.path.split("/").pop()}</code>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                          {activeCodeFile ? (
+                            <CodeEditor
+                              file={activeCodeFile}
+                              language={exercise.code.language}
+                              resetKey={`${exercise.id}:${activeCodePath}`}
+                              ariaLabel={exercise.code.files.length > 1 ? "练习代码编辑器" : `编辑 ${activeCodePath}`}
+                              onChange={(contents) => setCodeFiles((current) => current.map((file) => (file.path === activeCodePath ? { ...file, contents } : file)))}
+                            />
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {exercise.inputMode !== "multi_select" && exercise.inputMode !== "code" ? (
+                        <textarea
+                          className="ans-textarea"
+                          value={text}
+                          onChange={(event) => setText(event.target.value)}
+                          rows={8}
+                          aria-label="练习答案"
+                          placeholder={answerPlaceholder(exercise.kind, exercise.gradingMode)}
                         />
                       ) : null}
-                    </div>
-                  ) : null}
 
-                  {exercise.inputMode !== "multi_select" && exercise.inputMode !== "code" ? (
-                    <textarea
-                      className="ans-textarea"
-                      value={text}
-                      onChange={(event) => setText(event.target.value)}
-                      rows={8}
-                      aria-label="练习答案"
-                      placeholder={answerPlaceholder(exercise.kind, exercise.gradingMode)}
-                    />
-                  ) : null}
-
-                  {result ? (
-                    <div ref={graded}>
-                      <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
-                    </div>
+                      {result ? (
+                        <div ref={graded}>
+                          <GradedPanel exercise={exercise} result={result} explanation={explanation} explaining={explaining} onExplain={() => void explain()} onRedo={() => { setResult(null); setExplanation(""); setSubmittedFiles([]); }} />
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
 
                   <div className="practice-actions">
-                    {result ? null : (
+                    {answering ? (result ? null : (
                       <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={!canSubmit}>
                         {loading ? <span className="spin"><Icon name="rotate" size={15} /></span> : <Icon name="check" size={15} />}提交判分
+                      </button>
+                    )) : (
+                      <button type="button" className="btn btn-primary" onClick={() => setAnswering(true)}>
+                        <Icon name="play" size={14} />开始答题
                       </button>
                     )}
                     <button
@@ -503,6 +534,36 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           </div>
         </div>
       </div>
+      {sourceOpen && exercise?.anchors.length ? (
+        <div className="modal-mask" onClick={() => setSourceOpen(false)}>
+          <div className="modal source-modal" role="dialog" aria-modal="true" aria-label="参考源码" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>参考源码</h3>
+              <button type="button" className="icon-btn" aria-label="关闭" title="关闭" onClick={() => setSourceOpen(false)}><Icon name="x" size={14} /></button>
+            </div>
+            <div className="modal-body">
+              {exercise.anchors.length > 1 ? (
+                <div className="row-wrap">
+                  {exercise.anchors.map((item, index) => (
+                    <button
+                      type="button"
+                      key={`${item.path}:${item.line}`}
+                      className="anchor-chip"
+                      aria-pressed={index === shownIndex}
+                      title={`${item.path}:${item.line}`}
+                      onClick={() => setAnchorIndex(index)}
+                    >
+                      <Icon name="file" size={12} />
+                      {item.path.split("/").pop()}:{item.line}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {sourceCard()}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
