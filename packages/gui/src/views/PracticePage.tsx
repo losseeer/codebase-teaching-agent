@@ -69,6 +69,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [explaining, setExplaining] = useState(false);
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
+  /** 这一趟出题锁定的主题名：途中换主题不跟着变。 */
+  const [pendingTheme, setPendingTheme] = useState("");
+  /** 换主题或题型就让在途那趟作废。 */
+  const generationToken = useRef(0);
   const [error, setError] = useState("");
   /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
   const [budgetTight, setBudgetTight] = useState(false);
@@ -111,6 +115,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
+    const token = ++generationToken.current;
+    // 出题途中换主题不跟着变：这一趟锁的是发请求时选中的那个
+    setPendingTheme(theme?.label ?? "");
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     try {
       const next = await api.createExercise(repositoryId, {
@@ -120,17 +127,20 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         ...(targetUnitId ? { targetUnitId } : {}),
         ...(variantNonce !== undefined ? { variantNonce } : {})
       });
+      refreshBank();
+      // 途中换了主题或题型：这题已经进题库，但不摆到当前这一栏
+      if (token !== generationToken.current) return;
       setExercise(next);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
-      refreshBank();
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
+      if (token !== generationToken.current) return;
       setError(failureText("出题失败", reason));
       // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
-      setLoading(false);
+      setLoading(false); setPendingTheme("");
     }
   };
 
@@ -158,6 +168,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   /** 换主题 / 换题型 = 换题面来源：上一道题的作答与判分结果不能留在这一栏里。 */
   const clearExercise = (): void => {
+    generationToken.current += 1;
     setExercise(null); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0);
     t.setPracticeUnit(""); t.setPracticeExercise(null);
   };
@@ -229,7 +240,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
-  const themeLabel = theme?.label ?? "";
   /** 面板只渲染前 MAX_RENDER_LINES 行；锚点行在范围外就不能说「已高亮」。 */
   const anchorRenderable = anchor ? isLineRendered(anchor.line) : true;
   const codeNote = anchor
@@ -282,7 +292,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
             onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
             onAdd={(label) => {
               const id = `custom-${Date.now().toString(36)}`;
-              const next = [...modules, { id, label, hint: "自建考察主题 · 出题时按它筛代码", custom: true }];
+              const next = [...modules, { id, label, hint: "", custom: true }];
               setModules(next);
               switchModule(id, next);
             }}
@@ -325,7 +335,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 <div className="section-title">正在出题</div>
                 <div className="phase active" title={exerciseType === "design" ? "设计题会先在沙箱里自证再下发" : "按代码结构与主题出题"}>
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>
-                  <span className="fs-12">{theme ? `正在按「${themeLabel}」出题` : "正在出题"}</span>
+                  <span className="fs-12">{pendingTheme ? `正在按「${pendingTheme}」出题` : "正在出题"}</span>
                 </div>
                 <div className="flow-skeleton" aria-hidden><span /><span /><span /></div>
               </div>
