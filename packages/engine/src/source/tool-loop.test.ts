@@ -7,7 +7,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../application/port/llm-provider.js";
 import { LlmAbortedError } from "../application/port/llm-provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, withSkillsBrief, toolLoopAuditsOf, type ReadToolProgress, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
+import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, withSkillsBrief, toolLoopAuditsOf, type ReadToolProgress, type ToolTraceStep, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
 
 /** repoPath 指向本目录：内含稳定存在的真实文件。 */
 const repoPath = import.meta.dirname;
@@ -50,6 +50,22 @@ describe("completeWithReadTool", () => {
     expect(readBody?.content, "到闸收尾把正文抽成占位符，这一回合就交不出东西").not.toContain("已折叠");
     expect(calls[1].messages?.[0]).toMatchObject({ role: "user" });
     expect(calls[1].messages?.[0].content).toBe("问题原文");
+  });
+
+  it("轨迹帧按调用配对：模型与工具各有 start/ok，工具结果只给摘要", async () => {
+    const { provider } = scriptedProvider([
+      readCall("c1", "read-file.ts"),
+      { text: "答完了。", usage: { inputTokens: 30, outputTokens: 5 }, finishReason: "stop" }
+    ]);
+    const steps: ToolTraceStep[] = [];
+    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 3, onTrace: (step) => steps.push(step) });
+    expect(steps.filter((step) => step.kind === "model").map((step) => step.status)).toEqual(["start", "ok", "start", "ok"]);
+    const tool = steps.filter((step) => step.kind === "tool");
+    expect(tool.map((step) => step.status)).toEqual(["start", "ok"]);
+    expect(tool.map((step) => step.stepId)).toEqual(["c1", "c1"]);
+    expect(tool[0].label).toContain("read-file.ts");
+    expect(tool[1].detail).toContain("行");
+    expect(tool[1].detail, "轨迹只给读数，不把读到的源码正文带出去").not.toContain("export");
   });
 
   it("累计文件数用尽时同样收尾；未知工具回喂明确提示", async () => {

@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, Link, useLocation, useNavigate, useSearchParam
 import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspace } from "./api/client";
 import { ApiError, api, isNotFound } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
+import { AgentTraceBall } from "./agent/AgentTraceBall";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
 import { DiagramPage } from "./views/DiagramPage";
@@ -276,6 +277,7 @@ export function App(): ReactElement {
             <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
           </Routes>
         </div>
+        <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} />
       </main>
       {railRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />

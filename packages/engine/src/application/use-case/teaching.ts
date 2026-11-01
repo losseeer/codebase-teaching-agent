@@ -141,6 +141,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     cross: crossRepoFor(repository, crossFiles),
     checkpoint: turnCheckpointChannel({ repositoryPath: repository.path, threadId: session.id, scene: "teaching.turn" }),
     budgetGuard: turnBudgetGuard(repository.handle),
+    trace: { repositoryId: repository.index.repositoryId, threadId: session.id, prompt: question },
     onProgress: (progress) => stream.send({ type: "progress", payload: progress }),
     ...(await externalAndSkills()),
     ...(stream.signal ? { signal: stream.signal } : {})

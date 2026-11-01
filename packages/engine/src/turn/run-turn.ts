@@ -11,8 +11,9 @@ import { callNeighborhoodSection } from "@codebase-tutor/analysis";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";
-import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
+import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, ToolTraceStep, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool } from "../source/tool-loop.js";
+import { emitAgentTrace } from "./agent-trace.js";
 import { recordEgress, type EgressCollector } from "../adapter/outbound/security/egress-log.js";
 import type { ScopeRef } from "../source/scope-ref.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
@@ -138,6 +139,15 @@ export interface RespondOptions {
   skills?: SkillsToolContext;
   /** 外部 MCP 工具面。 */
   external?: ExternalToolContext;
+  /** 运行轨迹的归属；不传则不发轨迹。 */
+  trace?: TurnTraceContext;
+}
+
+/** 运行轨迹的归属与提问摘要。 */
+export interface TurnTraceContext {
+  repositoryId: string;
+  threadId?: string;
+  prompt?: string;
 }
 
 export interface RunTurnInput {
@@ -169,6 +179,8 @@ export interface RunTurnInput {
   signal?: AbortSignal;
   /** 工具循环的原始过程事件。 */
   onProgress?: (progress: ReadToolProgress) => void;
+  /** 运行轨迹的归属；不传则不发轨迹。 */
+  trace?: TurnTraceContext;
 }
 
 export interface RunTurnResult {
@@ -194,47 +206,95 @@ export interface RunTurnResult {
 
 /** 回合的唯一发射处：按作用域与通道选工具循环或单轮调用。 */
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
-  if (input.repositoryPath) {
-    const result = await completeWithReadTool({
-      provider: input.provider,
-      repoPath: input.repositoryPath,
-      system: input.system,
-      user: input.user,
-      maxTokens: input.maxTokens,
-      temperature: input.temperature,
-      scene: input.scene,
-      ...(input.search ? { search: input.search } : {}),
-      ...(input.cross ? { cross: input.cross } : {}),
-      ...(input.diagram ? { diagram: input.diagram } : {}),
-      ...(input.facts ? { facts: input.facts } : {}),
-      ...(input.skills ? { skills: input.skills } : {}),
-      ...(input.ask ? { ask: input.ask } : {}),
-      ...(input.external ? { external: input.external } : {}),
-      ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
-      ...(input.interruptAtLimit ? { interruptAtLimit: true } : {}),
-      ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
-      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
-      ...(input.signal ? { signal: input.signal } : {})
+  const trace = input.trace;
+  const runId = trace ? id() : undefined;
+  const startedAt = Date.now();
+  const emit = (step: ToolTraceStep | { kind: "turn"; status: "start" | "ok" | "error" | "aborted"; label: string; detail?: string; ms?: number; inputTokens?: number; outputTokens?: number; finishReason?: string; model?: string }): void => {
+    if (!trace || !runId) return;
+    emitAgentTrace({ repositoryId: trace.repositoryId, runId, ...(trace.threadId ? { threadId: trace.threadId } : {}), scene: input.scene, ...step });
+  };
+  const prompt = trace?.prompt?.trim();
+  emit({ kind: "turn", status: "start", label: prompt ? prompt.slice(0, 80) : "开始处理", ...(prompt ? { detail: prompt.slice(0, 500) } : {}), model: input.provider.modelVersion });
+  const finish = (result: RunTurnResult): RunTurnResult => {
+    const parts: string[] = [];
+    if (result.asked) parts.push(`问：${result.asked.question.slice(0, 120)}`);
+    if (result.rounds) parts.push(`${result.rounds} 轮工具`);
+    if (result.fileReads.length) parts.push(`读 ${result.fileReads.length} 个文件`);
+    if (result.codeSearches.length) parts.push(`检索 ${result.codeSearches.length} 次`);
+    if (result.skillReads.length) parts.push(`技能 ${result.skillReads.length} 份`);
+    if (result.mcpCalls.length) parts.push(`外部 ${result.mcpCalls.length} 次`);
+    if (result.usage) parts.push(`输入 ${result.usage.inputTokens} / 输出 ${result.usage.outputTokens}`);
+    if (result.asked) {
+      emit({ kind: "tool", status: "ok", stepId: result.asked.toolCallId, tool: "ask_user", label: "向你提问", round: result.rounds, detail: result.asked.question.slice(0, 200) });
+    }
+    emit({
+      kind: "turn",
+      status: result.stoppedBy ? "aborted" : "ok",
+      label: result.asked ? "等你回答" : result.stoppedBy ? "提前结束" : "回合完成",
+      ...(parts.length ? { detail: parts.join(" · ") } : {}),
+      ms: Date.now() - startedAt,
+      ...(result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : {}),
+      ...(result.completion.finishReason ? { finishReason: result.completion.finishReason } : {})
     });
-    return {
-      completion: result.completion,
-      ...(result.usage ? { usage: result.usage } : {}),
-      rounds: result.rounds,
-      fileReads: result.fileReads,
-      codeSearches: result.codeSearches,
-      mcpCalls: result.mcpCalls,
-      skillReads: result.skillReads,
-      ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
-      ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
-      ...(result.asked === undefined ? {} : { asked: result.asked }),
-      ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
-      ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
-      ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed })
-    };
+    return result;
+  };
+  try {
+    if (input.repositoryPath) {
+      const result = await completeWithReadTool({
+        provider: input.provider,
+        repoPath: input.repositoryPath,
+        system: input.system,
+        user: input.user,
+        maxTokens: input.maxTokens,
+        temperature: input.temperature,
+        scene: input.scene,
+        ...(input.search ? { search: input.search } : {}),
+        ...(input.cross ? { cross: input.cross } : {}),
+        ...(input.diagram ? { diagram: input.diagram } : {}),
+        ...(input.facts ? { facts: input.facts } : {}),
+        ...(input.skills ? { skills: input.skills } : {}),
+        ...(input.ask ? { ask: input.ask } : {}),
+        ...(input.external ? { external: input.external } : {}),
+        ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
+        ...(input.interruptAtLimit ? { interruptAtLimit: true } : {}),
+        ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
+        ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+        onTrace: emit,
+        ...(input.signal ? { signal: input.signal } : {})
+      });
+      return finish({
+        completion: result.completion,
+        ...(result.usage ? { usage: result.usage } : {}),
+        rounds: result.rounds,
+        fileReads: result.fileReads,
+        codeSearches: result.codeSearches,
+        mcpCalls: result.mcpCalls,
+        skillReads: result.skillReads,
+        ...(result.resumedFromRound === undefined ? {} : { resumedFromRound: result.resumedFromRound }),
+        ...(result.stoppedBy === undefined ? {} : { stoppedBy: result.stoppedBy }),
+        ...(result.asked === undefined ? {} : { asked: result.asked }),
+        ...(result.askRefused === undefined ? {} : { askRefused: result.askRefused }),
+        ...(result.interrupted === undefined ? {} : { interrupted: result.interrupted }),
+        ...(result.askClaimed === undefined ? {} : { askClaimed: result.askClaimed })
+      });
+    }
+    input.onProgress?.({ type: "thinking" });
+    const stepId = "m1";
+    emit({ kind: "model", status: "start", stepId, label: "模型思考中", round: 1, model: input.provider.modelVersion });
+    const modelStartedAt = Date.now();
+    let completion: LlmCompletion;
+    try {
+      completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: input.maxTokens, temperature: input.temperature, scene: input.scene, ...(input.signal ? { signal: input.signal } : {}) });
+    } catch (error) {
+      emit({ kind: "model", status: "error", stepId, label: "模型调用失败", round: 1, model: input.provider.modelVersion, ms: Date.now() - modelStartedAt, ...(error instanceof Error ? { detail: error.message } : {}) });
+      throw error;
+    }
+    emit({ kind: "model", status: "ok", stepId, label: "模型回复", round: 1, model: input.provider.modelVersion, ms: Date.now() - modelStartedAt, ...(completion.usage ? { inputTokens: completion.usage.inputTokens, outputTokens: completion.usage.outputTokens } : {}), ...(completion.finishReason ? { finishReason: completion.finishReason } : {}) });
+    return finish({ completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] });
+  } catch (error) {
+    emit({ kind: "turn", status: input.signal?.aborted ? "aborted" : "error", label: input.signal?.aborted ? "已停止" : "回合失败", detail: error instanceof Error ? error.message : "未知错误", ms: Date.now() - startedAt });
+    throw error;
   }
-  input.onProgress?.({ type: "thinking" });
-  const completion = await input.provider.complete({ system: input.system, user: input.user, maxTokens: input.maxTokens, temperature: input.temperature, scene: input.scene, ...(input.signal ? { signal: input.signal } : {}) });
-  return { completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] };
 }
 
 /** 装配上下文并发一个代码问答回合。 */
@@ -274,6 +334,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
     ...(options.external ? { external: options.external } : {}),
     ...(options.budgetGuard ? { budgetGuard: options.budgetGuard } : {}),
     ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}),
+    ...(options.trace ? { trace: options.trace } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.onProgress ? { onProgress: (progress: ReadToolProgress): void => { options.onProgress?.(progressToStage(progress)); } } : {})
   });
@@ -297,7 +358,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
 }
 
 /** map 作用域的一轮对话，带图结构写工具与现状快照。 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文。 */
@@ -350,6 +411,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     ...(input.external ? { external: input.external } : {}),
     ...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
     ...(input.budgetGuard ? { budgetGuard: input.budgetGuard } : {}),
+    ...(input.trace ? { trace: input.trace } : {}),
     interruptAtLimit: true,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {})
@@ -374,7 +436,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; threadId?: string; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; threadId?: string; trace?: TurnTraceContext; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -387,7 +449,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });
-  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, temperature: 0.3, scene: "practice.chat", repositoryPath: input.repoPath, ...(input.skills ? { skills: input.skills } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+  const result = await runTurn({ scope: "practice", provider: input.provider, system, user, temperature: 0.3, scene: "practice.chat", repositoryPath: input.repoPath, ...(input.skills ? { skills: input.skills } : {}), ...(input.trace ? { trace: input.trace } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {}), ...(input.signal ? { signal: input.signal } : {}) });
   return {
     reply: flagTruncatedReply(result.completion.text, result.completion.finishReason === "length"),
     provider: input.provider.name,

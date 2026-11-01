@@ -1,6 +1,6 @@
 import type { ScopedStreamProgress } from "@codebase-tutor/contract";
 
-import type { LlmCompletion, LlmMessage, LlmProvider, LlmTool, LlmUsage } from "../application/port/llm-provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmTool, LlmToolCall, LlmUsage } from "../application/port/llm-provider.js";
 import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
@@ -22,6 +22,22 @@ import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskClaimAud
 /** 工具循环发出的过程帧类型。 */
 export type ReadToolProgress = Exclude<ScopedStreamProgress, { type: "delta" } | { type: "progress" }>;
 
+/** 一次模型或工具调用的轨迹帧；归属由装配层补。 */
+export interface ToolTraceStep {
+  kind: "model" | "tool";
+  status: "start" | "ok" | "error";
+  stepId: string;
+  label: string;
+  detail?: string;
+  round: number;
+  tool?: string;
+  model?: string;
+  ms?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  finishReason?: string;
+}
+
 export interface ReadToolLoopInput {
   provider: LlmProvider;
   /** 仓库根：read_file 只在此范围内读取。 */
@@ -37,6 +53,8 @@ export interface ReadToolLoopInput {
   /** 一个回合内成功读取的文件数上限；省略取 `DEFAULT_FILE_READS`。 */
   maxCalls?: number;
   onProgress?: (progress: ReadToolProgress) => void;
+  /** 模型与工具调用的轨迹帧。 */
+  onTrace?: (step: ToolTraceStep) => void;
   /** 场景标签，透传给每一轮 LLM 调用。 */
   scene?: string;
   /** 提供时开放 search_code 工具。 */
@@ -267,6 +285,35 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const inputHash = hash(`${provider.modelVersion}:${system}:${input.user}`);
   // 由模型与系统提示组成的指纹，不含提问
   const promptHash = hash(`${provider.modelVersion}:${system}`);
+  let modelCalls = 0;
+  let callStartedAt = 0;
+  const askModel = async (args: LlmCompletionInput, label: string): Promise<LlmCompletion> => {
+    const stepId = `m${++modelCalls}`;
+    const round = rounds + 1;
+    input.onTrace?.({ kind: "model", status: "start", stepId, label, round, model: provider.modelVersion });
+    const startedAt = Date.now();
+    try {
+      const result = await provider.complete(args);
+      input.onTrace?.({
+        kind: "model", status: "ok", stepId, label: "模型回复", round, model: provider.modelVersion,
+        ms: Date.now() - startedAt,
+        ...(result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : {}),
+        ...(result.finishReason ? { finishReason: result.finishReason } : {})
+      });
+      return result;
+    } catch (error) {
+      input.onTrace?.({ kind: "model", status: "error", stepId, label: "模型调用失败", round, model: provider.modelVersion, ms: Date.now() - startedAt, ...(error instanceof Error ? { detail: error.message } : {}) });
+      throw error;
+    }
+  };
+  const reply = (call: LlmToolCall, content: string, note?: { detail?: string; ok?: boolean }): void => {
+    messages.push({ role: "tool", toolCallId: call.id, content });
+    input.onTrace?.({
+      kind: "tool", status: note?.ok === false ? "error" : "ok", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds,
+      detail: note?.detail ?? (note?.ok === false ? content.slice(0, 120) : `返回 ${content.length} 字`),
+      ms: Date.now() - callStartedAt
+    });
+  };
   try {
 
     const claimed = input.ask?.resume ? input.checkpoint?.claimAsk?.(input.ask.resume.toolCallId, promptHash) : undefined;
@@ -287,10 +334,10 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
 
       input.onProgress?.({ type: "thinking" });
       compactTurnContext(messages);
-      completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
+      completion = await askModel({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal }, "续跑");
     } else {
       input.onProgress?.({ type: "thinking" });
-      completion = await provider.complete({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
+      completion = await askModel({ system, user: input.user, tools, maxTokens, temperature, scene: input.scene, signal: input.signal }, "模型思考中");
     }
   } catch (error) {
     attachToolLoopAudits(error, audits());
@@ -330,7 +377,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       input.onProgress?.({ type: "thinking" });
       compactTurnContext(messages, { keepToolResults: true });
-      completion = await provider.complete({ system, messages, maxTokens, temperature, scene: input.scene, signal: input.signal });
+      completion = await askModel({ system, messages, maxTokens, temperature, scene: input.scene, signal: input.signal }, "到限收尾");
       usage = addUsage(usage, completion.usage);
       break;
     }
@@ -338,13 +385,15 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     attemptRounds += 1;
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
+      callStartedAt = Date.now();
+      input.onTrace?.({ kind: "tool", status: "start", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds });
       if (call.name === CROSS_REPO_LINK_TOOL.name) {
 
         const repo = readArg(call.argumentsJson, "repo");
         const content = !input.cross?.links ? "当前没有可配对的其他仓库。"
           : !crossNames.includes(repo) ? `未知仓库「${repo}」；可配对的其他仓库：${crossNames.join(" / ")}`
             : input.cross.links(repo, readArg(call.argumentsJson, "filter"));
-        messages.push({ role: "tool", toolCallId: call.id, content });
+        reply(call, content);
         continue;
       }
       if (call.name === SEARCH_CODE_TOOL.name && (input.search || input.cross?.corpusOf)) {
@@ -352,26 +401,26 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const corpus = repo ? input.cross?.corpusOf?.(repo) : input.search;
         if (!corpus) {
 
-          messages.push({ role: "tool", toolCallId: call.id, content: repo
+          reply(call, repo
             ? `仓库「${repo}」没有可检索的产物（可能还没导入完成），但可以用 read_file 带 repo="${repo}" 直接读它的文件。`
-            : "当前作用域未开放 search_code。" });
+            : "当前作用域未开放 search_code。", { ok: false });
           continue;
         }
         input.onProgress?.({ type: "searching", query: readQueryHint(call.argumentsJson) });
         const outcome = executeSearchCode(corpus, call.argumentsJson);
         codeSearches.push(repo ? { ...outcome.audit, query: `${outcome.audit.query}（仓 ${repo}）` } : outcome.audit);
-        messages.push({ role: "tool", toolCallId: call.id, content: outcome.content });
+        reply(call, outcome.content, { detail: `${outcome.audit.hits} 处命中` });
         continue;
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {
 
         input.onProgress?.({ type: "editing_diagram" });
-        messages.push({ role: "tool", toolCallId: call.id, content: input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。" });
+        reply(call, input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。");
         continue;
       }
       if (call.name === QUERY_FACTS_TOOL.name) {
         input.onProgress?.({ type: "querying_facts" });
-        messages.push({ role: "tool", toolCallId: call.id, content: input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。" });
+        reply(call, input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。");
         continue;
       }
       if (call.name === READ_SKILL_TOOL.name && input.skills) {
@@ -382,23 +431,23 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         // undefined 表示没有这份技能，空串表示有技能但正文为空
         const found = body !== undefined;
         skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found });
-        messages.push({ role: "tool", toolCallId: call.id, content: found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。` });
+        reply(call, found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。`, { detail: found ? `${body?.length ?? 0} 字` : "未找到", ok: found });
         continue;
       }
       if (call.name === ASK_USER_TOOL_NAME) {
         if (!input.ask?.facets.length) {
-          messages.push({ role: "tool", toolCallId: call.id, content: "这一轮没有向用户提问的通道（缺的那一格上下文里已经有了）。请直接作答。" });
+          reply(call, "这一轮没有向用户提问的通道（缺的那一格上下文里已经有了）。请直接作答。", { ok: false });
           continue;
         }
         const attempt = parseAsk(call.argumentsJson, input.ask.facets);
         if (!attempt.ok) {
           askRefused = attempt.reason;
-          messages.push({ role: "tool", toolCallId: call.id, content: attempt.reason });
+          reply(call, attempt.reason, { ok: false });
           continue;
         }
         if (asked) {
           askRefused = "一个回合最多问一次";
-          messages.push({ role: "tool", toolCallId: call.id, content: "本轮已经问过一句了，不能再问第二句。请基于已读到的内容作答，把没核实的部分写明。" });
+          reply(call, "本轮已经问过一句了，不能再问第二句。请基于已读到的内容作答，把没核实的部分写明。", { ok: false });
           continue;
         }
         // 提问后本循环结束，这条调用不回灌 tool_result，等认领
@@ -414,7 +463,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         const cap = input.external.maxCalls ?? DEFAULT_EXTERNAL_CALLS;
         if (externalCalls >= cap) {
 
-          messages.push({ role: "tool", toolCallId: call.id, content: `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。` });
+          reply(call, `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。`, { ok: false });
           continue;
         }
         externalCalls += 1;
@@ -422,11 +471,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         input.onProgress?.({ type: "calling_external" });
         const outcome = await input.external.call(call.name, call.argumentsJson);
         mcpCalls.push(outcome.audit);
-        messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
+        reply(call, outcome.text, { detail: `${outcome.audit.resultChars} 字`, ok: outcome.audit.ok });
         continue;
       }
       if (call.name !== READ_FILE_TOOL.name) {
-        messages.push({ role: "tool", toolCallId: call.id, content: `未知工具 ${call.name}；只支持 ${available}。` });
+        reply(call, `未知工具 ${call.name}；只支持 ${available}。`, { ok: false });
         continue;
       }
       const repo = readArg(call.argumentsJson, "repo");
@@ -434,19 +483,19 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       const roots = input.cross?.roots;
       const root = repo ? (roots && Object.hasOwn(roots, repo) ? roots[repo] : undefined) : input.repoPath;
       if (!root) {
-        messages.push({ role: "tool", toolCallId: call.id, content: input.repoPath
+        reply(call, input.repoPath
           ? `未知仓库「${repo}」；可访问：当前仓${crossNames.length ? ` / ${crossNames.join(" / ")}` : "（地址簿里没有其他仓，跨仓请省略 repo 参数）"}。`
-          : "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。" });
+          : "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。", { ok: false });
         continue;
       }
       const crossCap = input.cross?.maxCrossReads ?? DEFAULT_CROSS_READS;
       if (repo && crossReads >= crossCap) {
-        messages.push({ role: "tool", toolCallId: call.id, content: `跨仓读取最多 ${crossCap} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。` });
+        reply(call, `跨仓读取最多 ${crossCap} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。`, { ok: false });
         continue;
       }
       // 读文件额度在每条调用上判一次，轮首那次只挡下一轮
       if (succeededReads >= maxCalls) {
-        messages.push({ role: "tool", toolCallId: call.id, content: "已达到本次对话的读文件上限，请基于已有上下文直接回答。" });
+        reply(call, "已达到本次对话的读文件上限，请基于已有上下文直接回答。", { ok: false });
         continue;
       }
       input.onProgress?.({ type: "reading", path: repo ? `${repo}/${readPathHint(call.argumentsJson)}` : readPathHint(call.argumentsJson) });
@@ -460,14 +509,14 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
           input.cross?.onHandedOut?.(repo, outcome.audit.path);
         }
       }
-      messages.push({ role: "tool", toolCallId: call.id, content: repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content });
+      reply(call, repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content, { detail: outcome.audit.denied ? "拒绝读取" : `${outcome.audit.lines ?? 0} 行 · ${outcome.content.length} 字`, ok: !outcome.audit.denied });
     }
     // 提问后本循环结束
     if (asked) break;
     input.checkpoint?.save(inputHash, snapshot());
     input.onProgress?.({ type: "thinking" });
     compactTurnContext(messages);
-    completion = await provider.complete({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal });
+    completion = await askModel({ system, messages, tools, maxTokens, temperature, scene: input.scene, signal: input.signal }, "模型思考中");
     usage = addUsage(usage, completion.usage);
   }
   if (asked) {
@@ -546,6 +595,20 @@ function readQueryHint(argumentsJson: string): string {
     return typeof parsed.query === "string" ? parsed.query : "";
   } catch {
     return "";
+  }
+}
+
+/** 工具调用的轨迹标题。 */
+function toolLabel(call: LlmToolCall): string {
+  switch (call.name) {
+    case READ_FILE_TOOL.name: return `读取 ${readPathHint(call.argumentsJson)}`.trim();
+    case SEARCH_CODE_TOOL.name: return `检索 ${readQueryHint(call.argumentsJson)}`.trim();
+    case READ_SKILL_TOOL.name: return `加载技能 ${readSkillHint(call.argumentsJson)}`.trim();
+    case SET_DIAGRAM_TOOL.name: return "修改图表";
+    case QUERY_FACTS_TOOL.name: return "查询产物";
+    case CROSS_REPO_LINK_TOOL.name: return "配对仓库";
+    case ASK_USER_TOOL_NAME: return "向你提问";
+    default: return `调用 ${call.name}`;
   }
 }
 

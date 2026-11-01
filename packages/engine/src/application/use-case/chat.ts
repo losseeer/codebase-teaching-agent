@@ -112,6 +112,7 @@ export async function runMapChat(
         ? { ask: { facets: askGiven ? (["range", "goal"] as AskFacet[]) : [], resume: { toolCallId: input.resumeAsk, answer: turn.question } } }
         : askGiven ? { ask: { facets: ["range", "goal"] as AskFacet[] } } : {}),
       threadId: turn.threadId,
+      trace: { repositoryId: repository.index.repositoryId, ...(turn.threadId ? { threadId: turn.threadId } : {}), prompt: turn.question },
       onProgress: (progress: MapChatProgress) => stream.send(progress),
       diagram: setDiagramToolFor(repository, overlayDatabase, turn.threadId, input.diagramId, (diagram) => { writtenDiagram = diagram; }),
       facts: factsToolFor(repository, overlayDatabase),
@@ -185,6 +186,7 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
   const result = await practiceChat({
     repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider,
     ...(turn.threadId ? { threadId: turn.threadId } : {}),
+    trace: { repositoryId: repository.index.repositoryId, ...(turn.threadId ? { threadId: turn.threadId } : {}), prompt: turn.question },
     ...(skills ? { skills } : {}),
     onProgress: (progress: MapChatProgress) => stream.send(progress),
     ...(stream.signal ? { signal: stream.signal } : {})

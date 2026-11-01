@@ -220,10 +220,33 @@ export type ScopedStreamFrame =
   repository.updated = 产物变化；diagram_updated = 图库或当前图变化；几何拖动不广播。
 */
 export const serverEventSchema = z.object({
-  type: z.enum(["import.progress", "repository.updated", "diagram_updated", "exercise.progress"]),
+  type: z.enum(["import.progress", "repository.updated", "diagram_updated", "exercise.progress", "agent.trace"]),
   payload: z.record(z.string(), z.unknown())
 });
 export type ServerEvent = z.infer<typeof serverEventSchema>;
+
+/** 运行轨迹的一帧：只记行为与读数，不记模型正文与工具返回原文。 */
+export const agentTracePayloadSchema = z.object({
+  repositoryId: z.string(),
+  runId: z.string(),
+  threadId: z.string().optional(),
+  seq: z.number(),
+  at: z.string(),
+  scene: z.string(),
+  kind: z.enum(["turn", "model", "tool"]),
+  status: z.enum(["start", "ok", "error", "aborted"]),
+  label: z.string(),
+  detail: z.string().optional(),
+  stepId: z.string().optional(),
+  round: z.number().optional(),
+  tool: z.string().optional(),
+  model: z.string().optional(),
+  ms: z.number().optional(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  finishReason: z.string().optional()
+});
+export type AgentTracePayload = z.infer<typeof agentTracePayloadSchema>;
 
 /* ------------------------------------------------------------------ */
 /* 边界上的校验口                                                      */

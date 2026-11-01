@@ -103,7 +103,7 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .app.sidebar-collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 
 /* ---------- 主区 ---------- */
-.main { min-width: 0; height: 100%; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
+.main { min-width: 0; height: 100%; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); position: relative; }
 .topbar {
   height: var(--topbar-h);
   flex: none;
@@ -551,6 +551,57 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .modal-body { flex: 1; overflow-y: auto; padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
 .modal-foot { flex: none; padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; align-items: center; gap: var(--sp-2); }
 .modal-foot .modal-note { margin-right: auto; font-size: var(--fs-11); color: var(--ink-3); }
+
+/* ---------- 运行轨迹 ---------- */
+.trace-ball {
+  position: absolute; right: 20px; bottom: 20px; z-index: 30;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--brand-700); color: #fff;
+  box-shadow: var(--shadow-lg);
+  transition: transform var(--t-fast), background var(--t-fast);
+}
+.trace-ball:hover { transform: translateY(-1px); background: var(--brand-600); }
+.trace-ball.running { animation: trace-pulse 1.8s ease-in-out infinite; }
+.trace-ball-dot {
+  position: absolute; top: 6px; right: 6px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+@keyframes trace-pulse {
+  50% { box-shadow: 0 0 0 7px rgba(26, 107, 82, 0.14); }
+}
+.modal.trace-modal { width: min(760px, calc(100vw - 48px)); }
+.trace-runs { display: flex; flex-wrap: wrap; gap: 6px; }
+.trace-run-chip {
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font-size: var(--fs-11); color: var(--ink-2);
+}
+.trace-run-chip:hover { border-color: var(--brand-600); color: var(--brand-700); }
+.trace-run-chip.active { border-color: var(--brand-700); background: var(--brand-050); color: var(--brand-700); }
+.trace-run-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); color: var(--ink-2); min-width: 0; }
+.trace-run-scene { font-weight: 600; color: var(--ink); flex: none; }
+.trace-run-status { flex: none; }
+.trace-run-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.trace-group { display: flex; flex-direction: column; gap: 6px; }
+.trace-group-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-11); font-weight: 600; color: var(--ink-2); }
+.trace-count { font-weight: 400; color: var(--ink-3); }
+.trace-step { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.trace-step-btn { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; }
+.trace-step-btn:hover { background: var(--surface-2); }
+.trace-step .trace-step-status { flex: none; display: grid; place-items: center; width: 12px; height: 12px; }
+.trace-step-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
+.trace-step-meta { flex: none; font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); }
+.trace-chevron { flex: none; display: grid; place-items: center; color: var(--ink-3); transition: transform var(--t-fast); }
+.trace-chevron.open { transform: rotate(180deg); }
+.trace-step-detail { padding: 0 10px 9px 30px; font-size: var(--fs-12); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.trace-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.trace-dot.running { background: var(--accent); }
+.trace-dot.ok { background: var(--brand-600); }
+.trace-dot.error { background: var(--danger); }
+.trace-dot.aborted { background: var(--ink-3); }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label, .field .lbl { font-size: var(--fs-12); font-weight: 600; color: var(--ink-2); }
