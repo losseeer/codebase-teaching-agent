@@ -57,7 +57,9 @@ export type CodeGeneration =
   | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
-const MAX_PROMPT = 700;
+/** 题面长度以提示词里的目标值为准；这里只做超长的硬截断兜底。 */
+const PROMPT_TARGET = 800;
+const MAX_PROMPT = 1_600;
 const MAX_FILE_BYTES = 24_000;
 const MAX_FILES_PER_SLOT = 3;
 
@@ -81,9 +83,10 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
       ? "- 缺陷必须是**行为级**的真实错误（边界、比较符、单位、分支漏一条），一处即可；禁止用语法错误、拼错的标识符、删掉整个函数来「制造缺陷」——那会让学习者在改编译器而不是改逻辑。"
       : "- 骨架里只留签名与 `TODO`，不留任何可用实现；题面要给足输入输出形状与至少两个示例。",
     "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
+    "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`；示例写 1–2 个「调用 → 期望返回」，注意事项只写可核对的约束。",
     "",
     "严格输出 JSON（不要任何其他文字）：",
-    `{"ok":true,"language":"${language}","title":"≤${MAX_TITLE}字","prompt":"≤${MAX_PROMPT}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `{"ok":true,"language":"${language}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
@@ -101,6 +104,9 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     "仓库代码只作参考：可以从候选摘录里取材（例如用同一套领域概念、同一种数据结构），但**题目必须自足**——给定件与测试不 import 仓库文件、不依赖仓库运行、不假设仓库里存在任何符号。",
     "- 用户载荷里的 `reference` 为空，表示本仓没有与主题直接相关的代码：照常按主题出题，不要编造仓库文件；要取材就先用 `search_code` 找文件，再用 `read_file` 读。",
     "",
+    "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`。描述写背景 + 要改/写哪个函数 + 判定看什么行为；示例写 1–2 个「调用 → 期望返回」（类题用操作序列），不要复刻隐藏断言；注意事项只写可核对的约束（语言/标准库、能否改签名、边界条件），不写性能要求，也不点出缺陷所在的那一行。",
+    "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示。",
+    "",
     "铁律：",
     "- 沙箱里没有任何第三方依赖：只用该语言标准库；被测代码需要的辅助件由你写进 hidden。",
     "- 判分只由测试是否全过决定，所以测试必须逐条断言、逐条计数，最后印一行结论。",
@@ -113,7 +119,7 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
     "",
     "严格输出 JSON（不要任何其他文字）：",
-    `{"ok":true,"language":"typescript|python|java","title":"≤${MAX_TITLE}字","prompt":"≤${MAX_PROMPT}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `{"ok":true,"language":"typescript|python|java","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,

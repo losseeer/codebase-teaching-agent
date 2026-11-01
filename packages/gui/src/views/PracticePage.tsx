@@ -1,7 +1,7 @@
 import { ExerciseGradingMode, ExerciseKind, ExerciseResult, exerciseTypeOf, PracticeSummary } from "@codebase-tutor/domain";
 import type { Exercise, ExerciseBankEntry, ExerciseType } from "@codebase-tutor/domain";
 
-import {useEffect, useRef, useState, type ReactElement } from "react";
+import {useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
 import { api, type Workspace } from "../api/client";
@@ -43,6 +43,11 @@ function llmNonce(unitId: string): number {
 /** 合成单元（模型出的题，不对应仓库里的某个函数）：`llm:<主题>` 与参考模式的 `llm-code:<主题>`。 */
 function isSyntheticUnit(unitId: string): boolean {
   return unitId.startsWith("llm:") || unitId.startsWith("llm-code:");
+}
+
+/** 参考模式的设计题：源码只作参考，题面里的「相关文件」由 anchors 渲染成跳转链接。 */
+function isReferenceUnit(unitId: string): boolean {
+  return unitId.startsWith("llm-code:");
 }
 
 /** 回答框的提示按题型与判分口径给。 */
@@ -100,6 +105,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const kind: ExerciseKind | undefined = exerciseType === "analysis" ? "llm_rubric" : exerciseType === "design" ? designKind : undefined;
   /** 没选主题就是空串：理解题照旧按掌握度出题，分析题与设计题要求先选。 */
   const theme = modules.find((item) => item.id === activeModule);
+  /** 参考模式的设计题：相关文件进题面，不再铺源码卡/弹窗。 */
+  const referenceDesign = exercise ? isReferenceUnit(exercise.targetUnitId) : false;
   const needsTheme = exerciseType !== "comprehension" && !theme;
 
   /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
@@ -153,11 +160,11 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const shownIndex = exercise ? Math.min(anchorIndex, Math.max(0, exercise.anchors.length - 1)) : 0;
   const anchor = exercise?.anchors[shownIndex];
   useEffect(() => {
-    if (!anchor) { setSource(null); return; }
+    if (!anchor || referenceDesign) { setSource(null); return; }
     let current = true;
     api.getSource(repositoryId, anchor.path, anchor.line).then((next) => { if (current) setSource(next); }).catch(() => { if (current) setSource(null); });
     return () => { current = false; };
-  }, [anchor?.path, anchor?.line, repositoryId]);
+  }, [anchor?.path, anchor?.line, repositoryId, referenceDesign]);
 
   useEffect(() => {
     if (!sourceOpen) return;
@@ -298,6 +305,26 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     : null;
   const wrongOptionIds = new Set(result?.unexpectedIds ?? []);
   const themeHint = theme?.hint ?? "";
+  /** 参考模式的设计题把相关文件写进题面，开答题后只看链接、不开源码弹窗。 */
+  const relatedFiles = referenceDesign && exercise?.anchors.length ? (
+    <div className="related-files">
+      <h2>相关文件</h2>
+      <div className="row-wrap">
+        {exercise.anchors.map((item) => (
+          <button
+            key={`${item.path}:${item.line}`}
+            type="button"
+            className="anchor-chip"
+            title={`${item.path}:${item.line}`}
+            onClick={() => navigate(`/app?workspace=teaching&file=${encodeURIComponent(item.path)}&line=${String(item.line)}`)}
+          >
+            <Icon name="file" size={12} />
+            {item.path.split("/").pop()}:{item.line}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : null;
   /** 空态文案里的题型短名。 */
   const typeWord = exerciseType === "analysis" ? "分析" : exerciseType === "design" ? "设计" : "理解";
 
@@ -332,8 +359,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
               </div>
               <h2 className="exercise-title">{exercise.title}</h2>
-              <div className="exercise-prompt"><Markdown content={exercise.prompt} /></div>
-              {exercise.anchors.length ? (
+              <div className="exercise-prompt">{promptBody(exercise.prompt, relatedFiles ?? undefined)}</div>
+              {!referenceDesign && exercise.anchors.length ? (
                 <button type="button" className="btn btn-ghost btn-sm" title={anchor ? `${anchor.path}:${anchor.line}` : "参考源码"} onClick={() => setSourceOpen(true)}>
                   <Icon name="file" size={13} />查看源码
                 </button>
@@ -419,8 +446,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                       <span title="按代码复杂度定档">难度 {exercise.difficulty}/5</span>
                     </div>
                     <h2 className="exercise-title">{exercise.title}</h2>
-                    <ExercisePrompt key={exercise.id} text={exercise.prompt} />
-                    {exercise.anchors.length ? sourceCard() : <p className="entry-empty">这道题没有关联的仓库代码。</p>}
+                    <ExercisePrompt key={exercise.id} text={exercise.prompt} related={relatedFiles ?? undefined} />
+                    {!referenceDesign ? (exercise.anchors.length ? sourceCard() : <p className="entry-empty">这道题没有关联的仓库代码。</p>) : null}
                   </div>
                 ) : null}
 
@@ -534,7 +561,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           </div>
         </div>
       </div>
-      {sourceOpen && exercise?.anchors.length ? (
+      {sourceOpen && exercise?.anchors.length && !referenceDesign ? (
         <div className="modal-mask" onClick={() => setSourceOpen(false)}>
           <div className="modal source-modal" role="dialog" aria-modal="true" aria-label="参考源码" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
@@ -625,16 +652,24 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
 }
 
 /** 题面走 Markdown 渲染；超 6 行或 240 字才出展开按钮，折叠状态不跨题保留。 */
-function ExercisePrompt({ text }: { text: string }): ReactElement {
+function ExercisePrompt({ text, related }: { text: string; related?: ReactNode }): ReactElement {
   const [open, setOpen] = useState(false);
-  const long = text.length > 240 || text.split("\n").length > 6;
-  if (!long) return <div className="exercise-prompt"><Markdown content={text} /></div>;
+  const long = text.length > 700 || text.split("\n").length > 14;
+  if (!long) return <div className="exercise-prompt">{promptBody(text, related)}</div>;
   return (
     <>
-      <div className={`exercise-prompt${open ? "" : " clamped"}`}><Markdown content={text} /></div>
+      <div className={`exercise-prompt${open ? "" : " clamped"}`}>{promptBody(text, related)}</div>
       <button type="button" className="btn btn-ghost btn-sm prompt-toggle" aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
         {open ? "收起" : "展开"}
       </button>
     </>
   );
+}
+
+/** 题面三节（问题描述 / 示例 / 注意事项）；「相关文件」插在示例之前，由界面渲染。 */
+function promptBody(text: string, related?: ReactNode): ReactElement {
+  if (!related) return <Markdown content={text} />;
+  const match = /\n#{2,4}\s*(?:输入输出)?示例/.exec(text);
+  if (!match) return <><Markdown content={text} />{related}</>;
+  return <><Markdown content={text.slice(0, match.index)} />{related}<Markdown content={text.slice(match.index)} /></>;
 }
