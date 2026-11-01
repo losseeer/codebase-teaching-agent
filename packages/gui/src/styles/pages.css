@@ -237,9 +237,12 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .origin-static { background: var(--ok-bg); color: var(--ok); }
 .origin-code { background: var(--info-bg); color: var(--info-ink); }
 .origin-inferred { background: var(--warn-bg); color: var(--warn-ink); }
-.flow-skeleton { width: 380px; max-width: 100%; display: flex; flex-direction: column; gap: 8px; }
-.flow-skeleton span { height: 46px; border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: linear-gradient(90deg, var(--surface-2) 25%, var(--brand-050) 50%, var(--surface-2) 75%); background-size: 320px 100%; animation: flow-skeleton 1.4s linear infinite; }
-@keyframes flow-skeleton { from { background-position: -160px 0; } to { background-position: 160px 0; } }
+/* 出题阶段清单：已发生的步骤逐条留下，最后一条在跑 */
+.gen-steps { display: flex; flex-direction: column; gap: 4px; }
+.gen-step { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-3); }
+.gen-step > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gen-step.active { color: var(--ink); }
+.gen-step-icon { width: 14px; display: inline-flex; justify-content: center; flex: none; }
 
 /* ==================== 代码教学 ==================== */
 .page-teach { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
@@ -510,7 +513,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   /* 三个工作区的栏宽定义都在本文件，窄屏折成一栏也必须写在这里才压得住（global.css 在本文件之前加载）。 */
   .page-map, .page-teach, .page-practice { grid-template-columns: minmax(0, 1fr); }
   .import-wrap, .insights-wrap, .practice-wrap { padding-left: var(--sp-4); padding-right: var(--sp-4); }
-  .flow-skeleton { width: 100%; }
   .dg-toolbar { padding: 8px 10px; }
   .dg-overlay { left: 8px; bottom: 8px; }
 }

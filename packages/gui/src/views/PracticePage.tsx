@@ -64,6 +64,14 @@ function generationStageLabel(stage: string | undefined): string {
   }
 }
 
+/** 阶段行的短文案：文件名 / 检索词作为补充。 */
+function generationStepText(step: { stage: string; detail?: string }): string {
+  if (step.stage === "reading" && step.detail) return `读取 ${step.detail.split("/").pop() ?? "文件"}`;
+  if (step.stage === "searching" && step.detail) return `检索「${step.detail}」`;
+  if (step.stage === "loading_skill" && step.detail) return `查看技能 ${step.detail}`;
+  return generationStageLabel(step.stage);
+}
+
 /** 回答框的提示按题型与判分口径给。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
@@ -90,8 +98,12 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [loading, setLoading] = useState(false);
   /** 这一趟出题锁定的主题名：途中换主题不跟着变。 */
   const [pendingTheme, setPendingTheme] = useState("");
-  /** 出题阶段帧（来自全局事件流），detail 只进 tooltip。 */
-  const [genStage, setGenStage] = useState<{ stage: string; detail?: string } | null>(null);
+  /** 出题已发生的阶段（最多留 6 条），最后一条是当前动作。 */
+  const [genTrail, setGenTrail] = useState<{ stage: string; detail?: string }[]>([]);
+  /** 出题中：与判分共用的 loading 分开，加载条只认这一路。 */
+  const [generating, setGenerating] = useState(false);
+  /** 出题已用时：只在加载时每秒走一格。 */
+  const [elapsed, setElapsed] = useState(0);
   /** 换主题或题型就让在途那趟作废。 */
   const generationToken = useRef(0);
   const [error, setError] = useState("");
@@ -116,6 +128,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
   useEffect(() => { savePracticeType(exerciseType); }, [exerciseType]);
+  // 出题是阻塞请求：给一个已经用掉的秒数，别让等待没有刻度
+  useEffect(() => {
+    if (!generating) return;
+    setElapsed(0);
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [generating]);
 
   /** 题型 → 具体题型：理解题交给引擎按掌握度轮换，分析题与设计题点名。主题只筛目标。 */
   const kind: ExerciseKind | undefined = exerciseType === "analysis" ? "llm_rubric" : exerciseType === "design" ? designKind : undefined;
@@ -145,15 +164,20 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     const token = ++generationToken.current;
     // 出题途中换主题不跟着变：这一趟锁的是发请求时选中的那个
     setPendingTheme(theme?.label ?? "");
-    setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
+    setLoading(true); setGenerating(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     // 阶段帧走全局事件流，按 jobId 认领这一趟
     const jobId = crypto.randomUUID();
-    setGenStage(null);
+    setGenTrail([]);
     const stopProgress = subscribeServerEvents((event) => {
       if (event.type !== "exercise.progress") return;
       const payload = event.payload as { repositoryId?: unknown; jobId?: unknown; stage?: unknown; detail?: unknown };
       if (payload.repositoryId !== repositoryId || payload.jobId !== jobId || typeof payload.stage !== "string") return;
-      setGenStage({ stage: payload.stage, ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}) });
+      const step = { stage: payload.stage, ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}) };
+      setGenTrail((trail) => {
+        const last = trail.at(-1);
+        if (last?.stage === step.stage && last.detail === step.detail) return trail;
+        return [...trail, step].slice(-6);
+      });
     });
     try {
       const next = await api.createExercise(repositoryId, {
@@ -179,7 +203,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
       stopProgress();
-      setLoading(false); setPendingTheme(""); setGenStage(null);
+      setLoading(false); setGenerating(false); setPendingTheme(""); setGenTrail([]);
     }
   };
 
@@ -332,6 +356,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     : null;
   const wrongOptionIds = new Set(result?.unexpectedIds ?? []);
   const themeHint = theme?.hint ?? "";
+  /** 出题阶段清单的最后一条就是当前动作。 */
+  const genCurrent = genTrail.at(-1);
   /** 参考模式的设计题把相关文件写进题面，开答题后只看链接、不开源码弹窗。 */
   const relatedFiles = referenceDesign && exercise?.anchors.length ? (
     <div className="related-files">
@@ -444,22 +470,38 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               </div>
             ) : null}
 
-            {loading && exercise ? (
-              <div className="gen-progress" title={genStage?.detail}>
+            {generating && exercise ? (
+              <div className="gen-progress" title={genCurrent?.detail}>
                 <span className="spin"><Icon name="rotate" size={12} /></span>
-                <span className="fs-11">{generationStageLabel(genStage?.stage)}</span>
+                <span className="fs-11">{generationStageLabel(genCurrent?.stage)} · {elapsed} 秒</span>
               </div>
             ) : null}
 
-            {!exercise && loading ? (
+            {!exercise && generating ? (
               <div className="card card-pad col">
-                <div className="section-title">正在出题</div>
+                <div className="row between">
+                  <div className="section-title">正在出题</div>
+                  <span className="fs-11 faint" title="从点下生成开始计时">{`已用 ${elapsed} 秒`}</span>
+                </div>
                 <div className="phase active" title={exerciseType === "design" ? "设计题会先在沙箱里自证再下发" : "按代码结构与主题出题"}>
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>
                   <span className="fs-12">{pendingTheme ? `正在按「${pendingTheme}」出题` : "正在出题"}</span>
                 </div>
-                {genStage ? <div className="fs-11 faint" title={genStage.detail}>{generationStageLabel(genStage.stage)}</div> : null}
-                <div className="flow-skeleton" aria-hidden><span /><span /><span /></div>
+                {genTrail.length ? (
+                  <div className="gen-steps">
+                    {genTrail.map((step, index) => {
+                      const current = index === genTrail.length - 1;
+                      return (
+                        <div key={`${step.stage}:${step.detail ?? ""}:${String(index)}`} className={`gen-step${current ? " active" : ""}`} title={step.detail}>
+                          <span className="gen-step-icon">{current ? <span className="spin"><Icon name="rotate" size={11} /></span> : <Icon name="check" size={11} />}</span>
+                          <span className="fs-11">{generationStepText(step)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="fs-11 faint">等待模型响应</div>
+                )}
               </div>
             ) : null}
 
