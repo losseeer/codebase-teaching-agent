@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 
@@ -33,9 +33,9 @@ const PAYLOAD_CHARS = 12_000;
 /** 规格：≤64、以小写字母或数字开头结尾、中间允许连字符（连续连字符另外单独判）。 */
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
-/** 技能目录：`TUTOR_SKILLS_DIR`（`:` 或 `,` 分隔多处）；没配就认家目录里那两处。 */
+/** 技能目录：`TUTOR_SKILLS_DIR`（`path.delimiter` 或 `,` 分隔多处）；没配就认家目录里那两处。 */
 export function skillDirectories(): string[] {
-  const configured = (process.env.TUTOR_SKILLS_DIR ?? "").split(/[:,]/).map((item) => item.trim()).filter(Boolean);
+  const configured = (process.env.TUTOR_SKILLS_DIR ?? "").split(new RegExp(`[${delimiter},]`)).map((item) => item.trim()).filter(Boolean);
   if (configured.length) return configured;
   return [join(homedir(), ".codebase-tutor", "skills"), join(homedir(), ".claude", "skills")];
 }
