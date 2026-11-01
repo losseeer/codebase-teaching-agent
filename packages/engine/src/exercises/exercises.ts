@@ -339,6 +339,11 @@ export class ExerciseService {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
     }
     const proposal = generation.proposal;
+    // 参考模式下模型自己点名参考过哪几处：只认池里的路径，别让幻觉路径进锚点
+    const referencePaths = new Set(candidates.map((candidate) => candidate.path));
+    const anchors = (proposal.anchors ?? [])
+      .filter((anchor) => referencePaths.has(anchor.path))
+      .map((anchor) => ({ path: anchor.path, line: anchor.line, ...(anchor.endLine ? { endLine: anchor.endLine } : {}), label: "参考代码" }));
     const exercise: Exercise = {
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
@@ -351,7 +356,7 @@ export class ExerciseService {
       difficulty: 3,
       title: proposal.title,
       prompt: proposal.prompt,
-      anchors: [],
+      anchors,
       inputMode: "code",
       gradingMode: "execution",
       family: "code",

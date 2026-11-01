@@ -24,7 +24,6 @@ export function DangerDialog({ title, body, keepLabel, deleteLabel, onKeep, onDe
         <div className="modal-head"><h3>{title}</h3></div>
         <div className="modal-body"><p className="field-note">{body}</p></div>
         <div className="modal-foot">
-          <span className="modal-note">删除后找不回来</span>
           <button type="button" className="btn btn-ghost btn-sm" ref={onKeep ? undefined : safe} onClick={onClose}>取消</button>
           {onKeep && keepLabel ? <button type="button" className="btn btn-ghost btn-sm" ref={safe} onClick={onKeep}>{keepLabel}</button> : null}
           <button type="button" className="btn btn-danger-ghost btn-sm" onClick={onDelete}>{deleteLabel}</button>

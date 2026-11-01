@@ -41,15 +41,30 @@ export class SandboxUnavailableError extends Error {
 const NOT_PROBED: IsolationStatus = { level: "unknown", backend: isolationBackend().reason, checks: [], probedAt: null, durationMs: 0, reason: "还没跑过隔离探测" };
 
 let current: IsolationStatus = NOT_PROBED;
+/** 结论写入缓存的时刻；不过的结论只在这个时间窗内算数。 */
+let cachedAt = 0;
 let inFlight: Promise<IsolationStatus> | undefined;
+
+/**
+  不过的结论只认一小段：机器忙的时候 canary 会被墙钟误杀（不是上限没兜住），
+  这种抖动不该把代码题按整个进程生命周期关掉。过的结论一直算数。
+*/
+const UNAVAILABLE_TTL_MS = 60_000;
+
+/** 该不该重探：没探过要探；过的一直算数；不过的过了窗就重探。 */
+export function needsReprobe(status: IsolationStatus, decidedAt: number, now: number): boolean {
+  if (status.level === "unknown") return true;
+  if (status.level === "enforced") return false;
+  return now - decidedAt >= UNAVAILABLE_TTL_MS;
+}
 
 export function isolationStatus(): IsolationStatus {
   return current;
 }
 
-/** 并发请求共享同一次探测；成功与失败都缓存。 */
+/** 并发请求共享同一次探测；结论在 `needsReprobe` 允许的范围内复用。 */
 export function ensureIsolation(): Promise<IsolationStatus> {
-  if (current.level !== "unknown") return Promise.resolve(current);
+  if (!needsReprobe(current, cachedAt, Date.now())) return Promise.resolve(current);
   inFlight ??= reprobeIsolation();
   return inFlight;
 }
@@ -57,11 +72,12 @@ export function ensureIsolation(): Promise<IsolationStatus> {
 /** 重跑探测并覆盖缓存；两种结局都要清 `inFlight`。 */
 export function reprobeIsolation(): Promise<IsolationStatus> {
   inFlight ??= probeIsolation().then(
-    (status) => { current = status; return status; },
+    (status) => { current = status; cachedAt = Date.now(); return status; },
     (error: unknown) => {
-      // 探测自身异常也判成不可用并缓存
+      // 探测自身异常也判成不可用并缓存（同受 TTL 约束）
       const reason = error instanceof Error ? error.message : String(error);
       current = { level: "unavailable", backend: isolationBackend().reason, checks: [], probedAt: new Date().toISOString(), durationMs: 0, reason: `隔离探测没跑成：${reason}` };
+      cachedAt = Date.now();
       return current;
     }
   ).finally(() => { inFlight = undefined; });
@@ -70,11 +86,13 @@ export function reprobeIsolation(): Promise<IsolationStatus> {
 
 export function resetIsolationForTest(): void {
   current = NOT_PROBED;
+  cachedAt = 0;
   inFlight = undefined;
 }
 
 export function stubIsolationForTest(status: IsolationStatus): void {
   current = status;
+  cachedAt = Date.now();
   inFlight = undefined;
 }
 
@@ -186,8 +204,12 @@ export async function probeIsolation(): Promise<IsolationStatus> {
   const spillRun = await runRaw({ maxOutputBytes: 4_096, timeoutMs: 4_000, language: "typescript", entry: "spill.ts", files: [{ path: "spill.ts", contents: 'for (let i = 0; i < 40_000; i += 1) console.log("x".repeat(64));\n' }] });
   push("output-cap", spillRun.truncated && !spillRun.timedOut, "not-run", `truncated=${spillRun.truncated} bytes=${spillRun.stdout.length} timedOut=${spillRun.timedOut}`);
 
-  const memoryRun = await runRaw({ memoryMb: 32, timeoutMs: 4_000, language: "typescript", entry: "mem.ts", files: [{ path: "mem.ts", contents: 'const buckets = [];\nwhile (true) buckets.push("x".repeat(1 << 20));\n' }] });
-  push("memory-cap", memoryRun.steps[0]?.exitCode !== 0 && !memoryRun.timedOut, "not-run", `exit=${memoryRun.steps[0]?.exitCode ?? "-"} ${memoryRun.stderr.trim().split("\n")[0]?.slice(0, 60) ?? ""}`);
+  // 这条 canary 正常 0.5s 内就被 V8 干掉；机器忙时会被墙钟误杀，那不是「上限没兜住」。
+  // 第一次超时就给一次更宽的预算，仍超时才判失败（fail-closed 不变）。
+  const memoryCanary = (timeoutMs: number) => runRaw({ memoryMb: 32, timeoutMs, language: "typescript", entry: "mem.ts", files: [{ path: "mem.ts", contents: 'const buckets = [];\nwhile (true) buckets.push("x".repeat(1 << 20));\n' }] });
+  let memoryRun = await memoryCanary(4_000);
+  if (memoryRun.timedOut) memoryRun = await memoryCanary(15_000);
+  push("memory-cap", memoryRun.steps[0]?.exitCode !== 0 && !memoryRun.timedOut, "not-run", `exit=${memoryRun.steps[0]?.exitCode ?? "-"} timedOut=${memoryRun.timedOut} ${memoryRun.stderr.trim().split("\n")[0]?.slice(0, 60) ?? ""}`);
 
   const failed = checks.filter((check) => !check.passed).map((check) => check.name);
   const unproven = checks.filter((check) => check.control === "also-blocked").map((check) => check.name);

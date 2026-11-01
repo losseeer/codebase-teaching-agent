@@ -109,6 +109,19 @@ function targetUnit(repository: PracticeRepository): string {
 }
 
 describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_000 }, () => {
+  it("参考模式：模型点名的参考文件落成锚点，池外路径丢掉", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const reply = JSON.stringify({
+      ...JSON.parse(proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE })),
+      anchors: [{ path: "src/config.js", line: 1, endLine: 3 }, { path: "src/nowhere.js", line: 2 }]
+    });
+    const faces = { skills: { brief: "", bodyOf: (_name: string, file = "SKILL.md") => file === "SKILL.md" ? ["## 出题策略", "", "当前策略：`reference`"].join("\n") : undefined } };
+    const exercise = await service.next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-config" }, fakeProvider(() => reply), faces);
+    expect(exercise.targetUnitId).toBe("llm-code:custom-config:0");
+    expect(exercise.anchors).toEqual([{ path: "src/config.js", line: 1, endLine: 3, label: "参考代码" }]);
+  });
+
   it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {
     const repository = testRepository();
     const service = new ExerciseService();

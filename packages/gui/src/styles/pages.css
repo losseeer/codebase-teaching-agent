@@ -337,9 +337,11 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .practice-actions { position: sticky; bottom: 0; z-index: 2; display: flex; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-2); background: var(--bg); border-top: 1px solid var(--border); }
 .exercise-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-11); color: var(--ink-3); }
 .exercise-title { font-size: var(--fs-16); font-weight: 650; line-height: 1.45; margin: 0; }
+/* 题面按 Markdown 渲染：排版规则在 global.css 的 `.md` 那一组，这里只管字号与行高 */
 .exercise-prompt { font-size: var(--fs-13); line-height: 1.7; color: var(--ink); margin: 0; }
-/* 长题面默认收起六行，由「展开 / 收起」这一颗按钮放开：题面长度不在引擎侧否决，显示这一头在这里兜。 */
-.exercise-prompt.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+/* 长题面默认收起六行，由「展开 / 收起」这一颗按钮放开：题面长度不在引擎侧否决，显示这一头在这里兜。
+   用限高而不是 line-clamp——Markdown 里有列表与代码块，line-clamp 只对纯文本行可靠。 */
+.exercise-prompt.clamped { max-height: 10.2em; overflow: hidden; }
 .prompt-toggle { margin-top: 6px; }
 .option-row {
   display: flex; align-items: flex-start; gap: 10px;
@@ -386,17 +388,17 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   background: var(--surface);
 }
 .ans-textarea:focus { border-color: var(--brand-600); }
+/* 编辑器外壳只负责深底与边框：内边距与配色交给 CodeMirror 主题（CodeEditor.tsx 的 islandTheme） */
 .ans-editor {
-  width: 100%; min-height: 220px; resize: vertical;
+  width: 100%;
   background: var(--code-bg); color: var(--code-ink);
   border: 1px solid var(--code-line);
   border-radius: var(--r-md);
-  padding: 12px 14px;
-  font-family: var(--font-mono); font-size: var(--fs-12);
-  line-height: 1.62;
-  outline: none;
+  overflow: hidden;
 }
-.ans-editor:focus { border-color: var(--brand-600); }
+.ans-editor .cm-editor { max-height: 520px; }
+.ans-editor .cm-scroller { overflow: auto; padding: 0 var(--sp-3); }
+.ans-editor:focus-within { border-color: var(--brand-600); }
 /* 代码题多文件 tabs：源码岛是深底，这里的 tabs 跟着浅底走，并压住编辑器上边线 */
 .tabs.light { border-bottom: 1px solid var(--border); }
 .tabs.light .tab { margin-bottom: -1px; }
@@ -507,3 +509,8 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   .dg-toolbar { padding: 8px 10px; }
   .dg-overlay { left: 8px; bottom: 8px; }
 }
+
+/* 练习上下文里的文件路径：点了跳到代码教学并打开那份文件 */
+.cc-link { border: 0; background: none; padding: 0; font: inherit; color: var(--brand-700); cursor: pointer; text-align: left; }
+.cc-link:hover { text-decoration: underline; }
+.cc-link:disabled { color: var(--ink-3); cursor: default; text-decoration: none; }

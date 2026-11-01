@@ -104,6 +104,13 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
 
   const [searchParams] = useSearchParams();
   const isActiveWorkspace = (searchParams.get("workspace") ?? "map") === "teaching";
+  const linkedFile = searchParams.get("file") ?? "";
+  const linkedLine = Number(searchParams.get("line")) || 1;
+  useEffect(() => {
+    if (!linkedFile) return;
+    // loadSource 自己按路径去重标签：已经开着就只是切过去并定位到那一行
+    void loadSource(linkedFile, linkedLine, { toast: false, trigger: "manual" });
+  }, [linkedFile, linkedLine, loadSource]);
   useEffect(() => {
     if (!isActiveWorkspace) { setPaletteOpen(false); return; }
     const onKey = (event: KeyboardEvent): void => {

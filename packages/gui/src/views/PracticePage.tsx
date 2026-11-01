@@ -370,13 +370,25 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
                   <ExercisePrompt key={exercise.id} text={exercise.prompt} />
 
-                  <section className="card clip code-card">
-                    <div className="code-context row between">
-                      <span className="cc-name">{anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}</span>
-                      <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
-                    </div>
-                    <SourceView source={source} emptyHint="生成练习后显示题面对应的代码" />
-                  </section>
+                  {exercise.anchors.length ? (
+                    <section className="card clip code-card">
+                      <div className="code-context row between">
+                        <button
+                          type="button"
+                          className="cc-name cc-link"
+                          disabled={!anchor}
+                          title="在代码教学中打开这个文件"
+                          onClick={() => { if (anchor) navigate(`/app?workspace=teaching&file=${encodeURIComponent(anchor.path)}&line=${String(anchor.line)}`); }}
+                        >
+                          {anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}
+                        </button>
+                        <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
+                      </div>
+                      <SourceView source={source} emptyHint="相关代码还没读到" />
+                    </section>
+                  ) : (
+                    <p className="entry-empty">这道题没有关联的仓库代码。</p>
+                  )}
                 </div>
 
                 <div className="practice-answer">
@@ -541,14 +553,14 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
   );
 }
 
-/** 题面：超 6 行或 240 字才出展开按钮；折叠状态不跨题保留。 */
+/** 题面走 Markdown 渲染；超 6 行或 240 字才出展开按钮，折叠状态不跨题保留。 */
 function ExercisePrompt({ text }: { text: string }): ReactElement {
   const [open, setOpen] = useState(false);
   const long = text.length > 240 || text.split("\n").length > 6;
-  if (!long) return <p className="exercise-prompt">{text}</p>;
+  if (!long) return <div className="exercise-prompt"><Markdown content={text} /></div>;
   return (
     <>
-      <p className={`exercise-prompt${open ? "" : " clamped"}`}>{text}</p>
+      <div className={`exercise-prompt${open ? "" : " clamped"}`}><Markdown content={text} /></div>
       <button type="button" className="btn btn-ghost btn-sm prompt-toggle" aria-expanded={open} onClick={() => setOpen((prev) => !prev)}>
         {open ? "收起" : "展开"}
       </button>

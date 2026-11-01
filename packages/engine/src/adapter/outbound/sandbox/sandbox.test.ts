@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, type TestContext } from "vitest";
 import { nestedSandboxUsable } from "./capability.js";
-import { isolationStatus, reprobeIsolation, resetIsolationForTest, runSandbox, SandboxUnavailableError, stubIsolationForTest, type IsolationStatus } from "./isolation.js";
+import { isolationStatus, needsReprobe, reprobeIsolation, resetIsolationForTest, runSandbox, SandboxUnavailableError, stubIsolationForTest, type IsolationStatus } from "./isolation.js";
 import { runRaw } from "./runner.js";
 import { resolveToolchain, seatbeltProfile } from "./profile.js";
 import { homedir } from "node:os";
@@ -10,6 +10,17 @@ import { homedir } from "node:os";
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[sandbox] 本机起不了嵌套 sandbox-exec（${capability.detail}）：集成用例按「环境不支持」跳过，这不是通过，是取不到证据`);
 const requireSandbox = (ctx: TestContext): void => { if (!capability.usable) ctx.skip(); };
+
+describe("探测结论的缓存窗", () => {
+  const status = (level: IsolationStatus["level"]): IsolationStatus => ({ level, backend: "test", checks: [], probedAt: null, durationMs: 0, reason: "test" });
+
+  it("过的结论一直算数；没探过要探；不过的只在窗内算数", () => {
+    expect(needsReprobe(status("unknown"), 0, 0), "没探过").toBe(true);
+    expect(needsReprobe(status("enforced"), 0, 10 * 60_000), "过的结论不该被时间窗推翻").toBe(false);
+    expect(needsReprobe(status("unavailable"), 1_000, 1_000 + 59_999), "窗内沿用").toBe(false);
+    expect(needsReprobe(status("unavailable"), 1_000, 1_000 + 60_000), "过窗重探：机器抖动不该粘住整个进程").toBe(true);
+  });
+});
 
 describe("沙箱隔离探测", () => {
   let status: IsolationStatus;

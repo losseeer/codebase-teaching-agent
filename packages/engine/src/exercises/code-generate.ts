@@ -36,6 +36,8 @@ export interface CodeProposal {
   entry: string;
   /** 缺陷的一句话说明，不进题面。 */
   defect: string;
+  /** 参考模式：出题时主要参考了仓库里的哪几处代码（可空）。 */
+  anchors?: { path: string; line: number; endLine?: number }[];
 }
 
 /** 拒题的档位，按失败发生在哪一段分。 */
@@ -113,10 +115,12 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     `{"ok":true,"language":"typescript|python|java","title":"≤${MAX_TITLE}字","prompt":"≤${MAX_PROMPT}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
-    `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
+    `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
+    `"anchors":[{"path":"<参考文件里出现的路径>","line":起始行,"endLine":结束行}]}`,
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
     "",
-    "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。"
+    "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。",
+    "`anchors` 最多 3 条：只填你真正取材过的参考文件（路径必须与参考摘录里的路径逐字一致），行号取摘录里标出的那一段；一处都没参考就填空数组。"
   ].join("\n");
 }
 
@@ -188,7 +192,17 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   const entry = String(parsed.entry ?? "").trim();
   if (!hidden.some((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry)) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
   if (hidden.some((file) => given.some((slot) => slot.path === file.path))) return { issue: "hidden 与 given 有同名文件：下发件会被测试盖掉" };
-  return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect } };
+  const anchors = Array.isArray(parsed.anchors)
+    ? (parsed.anchors as unknown[]).flatMap((item) => {
+        const record = (item ?? {}) as Record<string, unknown>;
+        const path = typeof record.path === "string" ? record.path.trim() : "";
+        const line = Math.floor(Number(record.line));
+        if (!path || !Number.isFinite(line) || line < 1) return [];
+        const endLine = Math.floor(Number(record.endLine));
+        return [{ path, line, ...(Number.isFinite(endLine) && endLine > line ? { endLine } : {}) }];
+      }).slice(0, 3)
+    : [];
+  return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect, ...(anchors.length ? { anchors } : {}) } };
 }
 
 /** 只认这一行：`TESTS <通过> <失败>`；没有它 = 测试没跑完。 */
