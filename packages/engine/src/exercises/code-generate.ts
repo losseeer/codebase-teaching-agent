@@ -99,6 +99,7 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     `你是代码练习的出题人。这一次由你定题：围绕给定主题出一道具自足的代码题——${kind === "patch_edit" ? "一段带真实缺陷的实现，学习者改到测试全过" : "给签名与示例，学习者从零写出实现"}。`,
     "",
     "仓库代码只作参考：可以从候选摘录里取材（例如用同一套领域概念、同一种数据结构），但**题目必须自足**——给定件与测试不 import 仓库文件、不依赖仓库运行、不假设仓库里存在任何符号。",
+    "- 用户载荷里的 `reference` 为空，表示本仓没有与主题直接相关的代码：照常按主题出题，不要编造仓库文件；要取材就先用 `search_code` 找文件，再用 `read_file` 读。",
     "",
     "铁律：",
     "- 沙箱里没有任何第三方依赖：只用该语言标准库；被测代码需要的辅助件由你写进 hidden。",
@@ -116,11 +117,11 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
-    `"anchors":[{"path":"<参考文件里出现的路径>","line":起始行,"endLine":结束行}]}`,
+    `"anchors":[{"path":"<参考摘录或读过文件的路径>","line":起始行,"endLine":结束行}]}`,
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
     "",
     "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。",
-    "`anchors` 最多 3 条：只填你真正取材过的参考文件（路径必须与参考摘录里的路径逐字一致），行号取摘录里标出的那一段；一处都没参考就填空数组。"
+    "`anchors` 最多 3 条：只填你真正取材过的文件（路径必须来自参考摘录，或这一趟 `read_file` 读过的文件），行号指向你取用的那一段；一处都没参考就填空数组。"
   ].join("\n");
 }
 

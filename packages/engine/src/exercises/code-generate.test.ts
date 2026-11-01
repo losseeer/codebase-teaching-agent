@@ -15,6 +15,7 @@ import { RepositoryHandle } from "../adapter/outbound/persistence/repository-han
 import { nestedSandboxUsable } from "../adapter/outbound/sandbox/capability.js";
 import { exercisePortsFor } from "../infrastructure/exercise-ports.js";
 import { ExerciseService, type PracticeRepository } from "./exercises.js";
+import type { ExerciseFaces } from "./turn-faces.js";
 
 /**
   代码题的集成用例：假 provider 交手工 harness（零模型调用），自证、判分、讲评都真起沙箱。
@@ -92,14 +93,23 @@ function proposalJson(input: HarnessInput): string {
   });
 }
 
-function fakeProvider(reply: () => string): LlmProvider & { calls: { count: number } } {
-  const handle = { count: 0 };
+function fakeProvider(reply: () => string): LlmProvider & { calls: { count: number; lastUser?: string } } {
+  const handle: { count: number; lastUser?: string } = { count: 0 };
   const provider: LlmProvider & { calls: typeof handle } = {
     name: "fake", modelVersion: "model-fake",
     calls: handle,
-    complete: async () => { handle.count += 1; return { text: reply(), usage: { inputTokens: 900, outputTokens: 300 } }; }
+    complete: async (input) => {
+      handle.count += 1;
+      handle.lastUser = input.user;
+      return { text: reply(), usage: { inputTokens: 900, outputTokens: 300 } };
+    }
   };
   return provider;
+}
+
+/** 技能声明 reference 的取证面。 */
+function referenceFaces(): ExerciseFaces {
+  return { skills: { brief: "", bodyOf: (_name: string, file = "SKILL.md") => file === "SKILL.md" ? ["## 出题策略", "", "当前策略：`reference`"].join("\n") : undefined } };
 }
 
 function targetUnit(repository: PracticeRepository): string {
@@ -116,10 +126,21 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
       ...JSON.parse(proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE })),
       anchors: [{ path: "src/config.js", line: 1, endLine: 3 }, { path: "src/nowhere.js", line: 2 }]
     });
-    const faces = { skills: { brief: "", bodyOf: (_name: string, file = "SKILL.md") => file === "SKILL.md" ? ["## 出题策略", "", "当前策略：`reference`"].join("\n") : undefined } };
+    const faces = referenceFaces();
     const exercise = await service.next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-config" }, fakeProvider(() => reply), faces);
     expect(exercise.targetUnitId).toBe("llm-code:custom-config:0");
     expect(exercise.anchors).toEqual([{ path: "src/config.js", line: 1, endLine: 3, label: "参考代码" }]);
+  });
+
+  it("参考模式主题零命中：不塞全景摘录，模型自己检索", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const provider = fakeProvider(() => proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const exercise = await service.next(repository, { kind: "patch_edit", tag: "kubernetes", tagId: "custom-zero" }, provider, referenceFaces());
+    expect(exercise.targetUnitId).toBe("llm-code:custom-zero:0");
+    expect(exercise.anchors).toEqual([]);
+    expect(JSON.parse(provider.calls.lastUser ?? "{}").reference).toBe("");
+    expect(readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "code")?.payload.selection).toBe("none");
   });
 
   it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {

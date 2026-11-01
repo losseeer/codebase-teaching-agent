@@ -319,10 +319,9 @@ export class ExerciseService {
     const tagKey = (requested.tagId ?? "").trim() || tag;
     const targetUnitId = `llm-code:${tagKey}:${nonce}`;
     const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
-    const matched = selectTagCandidates(repository, tag, 6, summaries);
-    // 源码只作参考：主题零命中也能出题，改从全景挑参考素材。
-    const candidates = matched.length ? matched : panoramaCandidates(repository, summaries);
-    const selection = matched.length ? "tag" : "panorama";
+    // 主题零命中就不预塞素材：题本来就自足，模型要取材自己检索。
+    const candidates = selectTagCandidates(repository, tag, 6, summaries);
+    const selection = candidates.length ? "tag" : "none";
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
     // 键不带单元：题目由模型自定，只认「被当成参考的这批文件」
@@ -339,10 +338,13 @@ export class ExerciseService {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
     }
     const proposal = generation.proposal;
-    // 参考模式下模型自己点名参考过哪几处：只认池里的路径，别让幻觉路径进锚点
-    const referencePaths = new Set(candidates.map((candidate) => candidate.path));
+    // 锚点只认这一趟真看过的代码：预注入的摘录，或模型自己 read_file 读到的
+    const readPaths = new Set([
+      ...candidates.map((candidate) => candidate.path),
+      ...(generation.fileReads ?? []).filter((read) => !read.denied && !read.error).map((read) => read.path)
+    ]);
     const anchors = (proposal.anchors ?? [])
-      .filter((anchor) => referencePaths.has(anchor.path))
+      .filter((anchor) => readPaths.has(anchor.path))
       .map((anchor) => ({ path: anchor.path, line: anchor.line, ...(anchor.endLine ? { endLine: anchor.endLine } : {}), label: "参考代码" }));
     const exercise: Exercise = {
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
