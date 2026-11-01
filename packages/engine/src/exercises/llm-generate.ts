@@ -11,8 +11,7 @@ import { recordEgress, type EgressSource } from "../adapter/outbound/security/eg
 import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
-import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
-import { forwardToolProgress } from "./turn-faces.js";
+import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
 
 /**
   练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。

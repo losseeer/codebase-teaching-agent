@@ -121,14 +121,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [designKind, setDesignKind] = useState<"patch_edit" | "author_function">("patch_edit");
   /** 答题态：进入后左栏借用给题面，源码走弹窗；未进入时左栏照常选题/题库。 */
   const [answering, setAnswering] = useState(false);
-  /** 参考源码弹窗。 */
   const [sourceOpen, setSourceOpen] = useState(false);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
 
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
   useEffect(() => { savePracticeType(exerciseType); }, [exerciseType]);
-  // 出题是阻塞请求：给一个已经用掉的秒数，别让等待没有刻度
+  // 出题是阻塞请求：显示已用秒数。
   useEffect(() => {
     if (!generating) return;
     setElapsed(0);
@@ -325,7 +324,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       : `相关代码超出预览上限（第 ${anchor.line} 行）`
     : "生成练习后显示相关代码";
   const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
-  /** 参考源码卡：预览时放主区，答题时放进弹窗；弹窗里的高度与滚动由 `.source-modal` 作用域接管。 */
+  /** 参考源码卡：预览放主区，答题放弹窗。 */
   const sourceCard = (): ReactElement => (
     <section className="card clip code-card">
       <div className="code-context row between">
@@ -356,9 +355,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     : null;
   const wrongOptionIds = new Set(result?.unexpectedIds ?? []);
   const themeHint = theme?.hint ?? "";
-  /** 出题阶段清单的最后一条就是当前动作。 */
   const genCurrent = genTrail.at(-1);
-  /** 参考模式的设计题把相关文件写进题面，开答题后只看链接、不开源码弹窗。 */
   const relatedFiles = referenceDesign && exercise?.anchors.length ? (
     <div className="related-files">
       <h2>相关文件</h2>

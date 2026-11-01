@@ -112,8 +112,6 @@ export function PracticeThemes({
     showToast("已清空主题");
   };
 
-  const customCount = modules.filter((item) => item.custom).length;
-
   return (
     <div className="side-col">
       <section className="chip-block">
@@ -183,8 +181,8 @@ export function PracticeThemes({
         ) : (
           <DangerDialog
             title="清空主题"
-            body={`会删掉 ${String(customCount)} 个自建主题，找不回来。`}
-            deleteLabel={`删掉 ${String(customCount)} 个自建主题`}
+            body={`会删掉 ${String(modules.length)} 个自建主题，找不回来。`}
+            deleteLabel={`删掉 ${String(modules.length)} 个自建主题`}
             onDelete={() => { setPending(null); reset(); }}
             onClose={() => setPending(null)}
           />

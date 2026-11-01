@@ -6,7 +6,7 @@ import type { ReadToolLoopInput, ReadToolProgress } from "../source/tool-loop.js
 */
 export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal">;
 
-/** 出题进度帧：stage 是稳定键，detail 只进 tooltip，不摆进提示行。 */
+/** 出题进度帧：stage 是稳定键，detail 给 tooltip。 */
 export interface ExerciseProgress {
   stage: string;
   detail?: string;
