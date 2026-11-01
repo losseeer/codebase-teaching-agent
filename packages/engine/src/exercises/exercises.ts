@@ -352,9 +352,8 @@ export class ExerciseService {
       ...candidates.map((candidate) => candidate.path),
       ...(generation.fileReads ?? []).filter((read) => !read.denied && !read.error).map((read) => read.path)
     ]);
-    const anchors = (proposal.anchors ?? [])
-      .filter((anchor) => readPaths.has(anchor.path))
-      .map((anchor) => ({ path: anchor.path, line: anchor.line, ...(anchor.endLine ? { endLine: anchor.endLine } : {}), label: "参考代码" }));
+    const accepted = (proposal.anchors ?? []).filter((anchor) => readPaths.has(anchor.path));
+    const anchors = accepted.map((anchor) => ({ path: anchor.path, line: anchor.line, ...(anchor.endLine ? { endLine: anchor.endLine } : {}), label: "参考代码" }));
     const exercise: Exercise = {
       id: `exercise:${hash(`${repository.index.repositoryId}:${scope}:${proposal.kind}:${targetUnitId}`).slice(0, 20)}`,
       repositoryId: repository.index.repositoryId,
@@ -383,6 +382,14 @@ export class ExerciseService {
     };
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
     repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
+    // 锚点的 why 只进 journal：一条一个，记下取用了它的什么，供事后判强弱
+    for (const anchor of accepted) {
+      repository.ports.audit.append("exercise_anchor", {
+        target_unit: targetUnitId, tag, path: anchor.path, line: anchor.line,
+        ...(anchor.endLine ? { end_line: anchor.endLine } : {}),
+        ...(anchor.why ? { why: anchor.why } : {})
+      });
+    }
     return exercise;
   }
 

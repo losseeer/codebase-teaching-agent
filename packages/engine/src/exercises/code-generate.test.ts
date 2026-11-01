@@ -124,7 +124,7 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const service = new ExerciseService();
     const reply = JSON.stringify({
       ...JSON.parse(proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE })),
-      anchors: [{ path: "src/config.js", line: 1, endLine: 3 }, { path: "src/nowhere.js", line: 2 }]
+      anchors: [{ path: "src/config.js", line: 1, endLine: 3, why: "借用了默认值的回填写法" }, { path: "src/nowhere.js", line: 2 }]
     });
     const faces = referenceFaces();
     const stages: string[] = [];
@@ -132,6 +132,9 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(exercise.targetUnitId).toBe("llm-code:custom-config:0");
     expect(exercise.anchors).toEqual([{ path: "src/config.js", line: 1, endLine: 3, label: "参考代码" }]);
     expect(stages, "出题阶段帧要覆盖模型调用与沙箱自证").toEqual(expect.arrayContaining(["proposing", "validating"]));
+    const anchorEvents = readJournal(repository.path).filter((event) => event.type === "exercise_anchor");
+    expect(anchorEvents, "why 落 journal，一条锚点一行").toHaveLength(1);
+    expect(anchorEvents[0]?.payload).toMatchObject({ path: "src/config.js", line: 1, end_line: 3, why: "借用了默认值的回填写法" });
   });
 
   it("参考模式主题零命中：不塞全景摘录，模型自己检索", async () => {

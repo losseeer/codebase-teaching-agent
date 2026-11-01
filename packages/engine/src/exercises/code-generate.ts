@@ -36,8 +36,8 @@ export interface CodeProposal {
   entry: string;
   /** 缺陷的一句话说明，不进题面。 */
   defect: string;
-  /** 参考模式：出题时主要参考了仓库里的哪几处代码（可空）。 */
-  anchors?: { path: string; line: number; endLine?: number }[];
+  /** 参考模式：出题时主要参考了仓库里的哪几处代码（可空；why 只进 journal）。 */
+  anchors?: { path: string; line: number; endLine?: number; why?: string }[];
 }
 
 /** 拒题的档位，按失败发生在哪一段分。 */
@@ -123,11 +123,11 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
-    `"anchors":[{"path":"<参考摘录或读过文件的路径>","line":起始行,"endLine":结束行}]}`,
+    `"anchors":[{"path":"<参考摘录或读过文件的路径>","line":起始行,"endLine":结束行,"why":"<取用了它的什么，≤30 字>"}]}`,
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
     "",
     "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。",
-    "`anchors` 最多 3 条：只填你真正取材过的文件（路径必须来自参考摘录，或这一趟 `read_file` 读过的文件），行号指向你取用的那一段；一处都没参考就填空数组。"
+    "`anchors` 最多 3 条：只要从某个参考文件（摘录里给的，或这一趟 `read_file` 读过的）取了概念、数据结构或行为，就至少点名一条；只填真正取材过的，行号指向被取用的那一段。每条都要写 `why`：一句话说明取用了它的什么（锁顺序、退避公式、字段形状）；写不出 why 就不要点这条。确实一处都没参考才填空数组。"
   ].join("\n");
 }
 
@@ -206,7 +206,8 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
         const line = Math.floor(Number(record.line));
         if (!path || !Number.isFinite(line) || line < 1) return [];
         const endLine = Math.floor(Number(record.endLine));
-        return [{ path, line, ...(Number.isFinite(endLine) && endLine > line ? { endLine } : {}) }];
+        const why = typeof record.why === "string" ? record.why.trim().slice(0, 60) : "";
+        return [{ path, line, ...(Number.isFinite(endLine) && endLine > line ? { endLine } : {}), ...(why ? { why } : {}) }];
       }).slice(0, 3)
     : [];
   return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect, ...(anchors.length ? { anchors } : {}) } };

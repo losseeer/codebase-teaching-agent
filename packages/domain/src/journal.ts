@@ -14,6 +14,8 @@ export type JournalEventType =
   | "exercise_declined"
   /** 练习送达事件（转化率的分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
   | "exercise_generated"
+  /** 参考模式采纳的锚点，一条一条记：path / line / end_line / why（取用了它的什么，不进题面）。 */
+  | "exercise_anchor"
   | "token_usage"
   | "file_read"
   | "code_search"
@@ -120,7 +122,7 @@ export type JournalEventType =
 */
 export const ENGINE_JOURNAL_EVENTS = [
   "exercise_result",
-  "exercise_declined", "exercise_generated", "token_usage", "file_read", "code_search",
+  "exercise_declined", "exercise_generated", "exercise_anchor", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "repository_paired", "code_egress",
