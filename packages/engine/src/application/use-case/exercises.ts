@@ -7,6 +7,8 @@ import { skillsForTurn } from "../orchestration/scoped-turn.js";
 import { factsToolFor } from "../../infrastructure/canvas-tools.js";
 import type { ExerciseFaces } from "../../exercises/turn-faces.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
+import { broadcast } from "../../events.js";
+import type { ExerciseProgress } from "../../exercises/turn-faces.js";
 
 /**
   练习题的用例：出题、判分、按需讲评。
@@ -36,7 +38,7 @@ function exerciseFaces(repository: ImportedRepository, database: Parameters<type
 }
 
 /** 出题：题型决定链路（理解题/分析题/设计题），主题只筛目标；预算到线时 provider 为 undefined。 */
-export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number }): Promise<ExerciseResult<Exercise>> {
+export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number; jobId?: string }): Promise<ExerciseResult<Exercise>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const tag = typeof input.tag === "string" ? input.tag : "";
@@ -44,8 +46,13 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   if (input.type && !(input.type in EXERCISE_TYPE_KINDS)) return { ok: false, failure: { kind: "kind-unsupported" } };
   if (input.kind === "llm_rubric" && !tag.trim()) return { ok: false, failure: { kind: "tag-required" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
+  const jobId = input.jobId?.trim() || undefined;
+  // 出题是阻塞请求：阶段帧走全局事件流，客户端按 jobId 认领
+  const progress = jobId
+    ? (event: ExerciseProgress): void => broadcast({ type: "exercise.progress", payload: { repositoryId, jobId, stage: event.stage, ...(event.detail ? { detail: event.detail.slice(0, 200) } : {}) } })
+    : undefined;
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined)) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined, progress)) };
   } catch (error) {
     return declined(error, "无法生成练习");
   }

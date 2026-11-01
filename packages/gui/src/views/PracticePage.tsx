@@ -4,7 +4,7 @@ import type { Exercise, ExerciseBankEntry, ExerciseType } from "@codebase-tutor/
 import {useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
-import { api, type Workspace } from "../api/client";
+import { api, subscribeServerEvents, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Markdown } from "../agent/Markdown";
 import { dateText, exerciseKindLabel } from "../ui/labels";
@@ -50,6 +50,20 @@ function isReferenceUnit(unitId: string): boolean {
   return unitId.startsWith("llm-code:");
 }
 
+/** 出题阶段的中文短语：detail 只进 title。 */
+function generationStageLabel(stage: string | undefined): string {
+  switch (stage) {
+    case "searching": return "检索仓库";
+    case "reading": return "读取源文件";
+    case "loading_skill": return "查看出题技能";
+    case "querying_facts": return "查看代码结构";
+    case "proposing": return "模型出题中";
+    case "validating": return "沙箱自证中";
+    case "polishing": return "润色题面";
+    default: return "正在出题";
+  }
+}
+
 /** 回答框的提示按题型与判分口径给。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
@@ -76,6 +90,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [loading, setLoading] = useState(false);
   /** 这一趟出题锁定的主题名：途中换主题不跟着变。 */
   const [pendingTheme, setPendingTheme] = useState("");
+  /** 出题阶段帧（来自全局事件流），detail 只进 tooltip。 */
+  const [genStage, setGenStage] = useState<{ stage: string; detail?: string } | null>(null);
   /** 换主题或题型就让在途那趟作废。 */
   const generationToken = useRef(0);
   const [error, setError] = useState("");
@@ -130,13 +146,23 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     // 出题途中换主题不跟着变：这一趟锁的是发请求时选中的那个
     setPendingTheme(theme?.label ?? "");
     setLoading(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
+    // 阶段帧走全局事件流，按 jobId 认领这一趟
+    const jobId = crypto.randomUUID();
+    setGenStage(null);
+    const stopProgress = subscribeServerEvents((event) => {
+      if (event.type !== "exercise.progress") return;
+      const payload = event.payload as { repositoryId?: unknown; jobId?: unknown; stage?: unknown; detail?: unknown };
+      if (payload.repositoryId !== repositoryId || payload.jobId !== jobId || typeof payload.stage !== "string") return;
+      setGenStage({ stage: payload.stage, ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}) });
+    });
     try {
       const next = await api.createExercise(repositoryId, {
         type: exerciseType,
         ...(kind ? { kind } : {}),
         ...(theme ? { tag: theme.label, tagId: theme.id } : {}),
         ...(targetUnitId ? { targetUnitId } : {}),
-        ...(variantNonce !== undefined ? { variantNonce } : {})
+        ...(variantNonce !== undefined ? { variantNonce } : {}),
+        jobId
       });
       refreshBank();
       // 途中换了主题或题型：这题已经进题库，但不摆到当前这一栏
@@ -152,7 +178,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
-      setLoading(false); setPendingTheme("");
+      stopProgress();
+      setLoading(false); setPendingTheme(""); setGenStage(null);
     }
   };
 
@@ -417,6 +444,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               </div>
             ) : null}
 
+            {loading && exercise ? (
+              <div className="gen-progress" title={genStage?.detail}>
+                <span className="spin"><Icon name="rotate" size={12} /></span>
+                <span className="fs-11">{generationStageLabel(genStage?.stage)}</span>
+              </div>
+            ) : null}
+
             {!exercise && loading ? (
               <div className="card card-pad col">
                 <div className="section-title">正在出题</div>
@@ -424,6 +458,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>
                   <span className="fs-12">{pendingTheme ? `正在按「${pendingTheme}」出题` : "正在出题"}</span>
                 </div>
+                {genStage ? <div className="fs-11 faint" title={genStage.detail}>{generationStageLabel(genStage.stage)}</div> : null}
                 <div className="flow-skeleton" aria-hidden><span /><span /><span /></div>
               </div>
             ) : null}

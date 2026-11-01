@@ -127,9 +127,11 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
       anchors: [{ path: "src/config.js", line: 1, endLine: 3 }, { path: "src/nowhere.js", line: 2 }]
     });
     const faces = referenceFaces();
-    const exercise = await service.next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-config" }, fakeProvider(() => reply), faces);
+    const stages: string[] = [];
+    const exercise = await service.next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-config" }, fakeProvider(() => reply), faces, (event) => stages.push(event.stage));
     expect(exercise.targetUnitId).toBe("llm-code:custom-config:0");
     expect(exercise.anchors).toEqual([{ path: "src/config.js", line: 1, endLine: 3, label: "参考代码" }]);
+    expect(stages, "出题阶段帧要覆盖模型调用与沙箱自证").toEqual(expect.arrayContaining(["proposing", "validating"]));
   });
 
   it("参考模式主题零命中：不塞全景摘录，模型自己检索", async () => {

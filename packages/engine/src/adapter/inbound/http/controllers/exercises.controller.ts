@@ -26,9 +26,9 @@ export function registerExerciseRoutes(app: FastifyInstance): void {
     return result.ok ? reply.send(result.value) : rejected(reply, result.failure);
   });
 
-  app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
+  app.post<{ Params: { repositoryId: string }; Body: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number; jobId?: string } }>("/api/repositories/:repositoryId/exercises", async (request, reply) => {
     const body = request.body ?? {};
-    const result = await nextExerciseUseCase(request.params.repositoryId, { kind: body.kind, type: body.type, targetUnitId: body.targetUnitId, tag: body.tag, tagId: body.tagId, variantNonce: body.variantNonce });
+    const result = await nextExerciseUseCase(request.params.repositoryId, { kind: body.kind, type: body.type, targetUnitId: body.targetUnitId, tag: body.tag, tagId: body.tagId, variantNonce: body.variantNonce, jobId: typeof body.jobId === "string" ? body.jobId : undefined });
     return result.ok ? reply.code(201).send(result.value) : rejected(reply, result.failure);
   });
 

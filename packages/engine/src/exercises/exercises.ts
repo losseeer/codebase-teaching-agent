@@ -18,7 +18,7 @@ import type {
 import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type ExerciseType, type SymbolInfo } from "@codebase-tutor/domain";
 
 import type { LlmProvider } from "../application/port/llm-provider.js";
-import type { ExerciseFaces } from "./turn-faces.js";
+import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { fileReadAuditPayload } from "../source/read-file.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
@@ -166,15 +166,15 @@ export class ExerciseService {
   }
 
   /** 出题：题型决定链路——理解题吃静态分析，分析题走 rubric，设计题进沙箱；主题只筛目标单元，不改链路。 */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     // 点了题型就以题型为准（理解/设计交给窗口内轮换）；没点题型才沿用「有主题就是分析题」的老规则。
     const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
-    if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces);
+    if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces, progress);
     // 出题策略由技能声明：reference 下代码题不再从仓库摘单元，改由模型自定题目、源码只作参考。
     const strategy = faces?.skills ? exerciseStrategyOf(faces.skills.bodyOf) : DEFAULT_EXERCISE_STRATEGY;
     if (kind && isCodeKind(kind) && strategy === "reference") {
-      return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind, variantNonce: requested.variantNonce }, provider, faces);
+      return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind, variantNonce: requested.variantNonce }, provider, faces, progress);
     }
     const theme = tag ? this.themeFiles(repository, tag) : undefined;
     const modelVersion = provider?.modelVersion ?? "deterministic";
@@ -209,12 +209,13 @@ export class ExerciseService {
       repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
       return cached.exercise;
     }
-    if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, faces);
+    if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, faces, progress);
     let stored = this.createExercise(repository, target.kind, target.value, target.difficulty, deps);
     // 题面来源按成因分开记，失败时把失败形状一起写。
     let polish: StoredExercise["polish"] = "not_configured";
     let polishFailure: string | null = null;
     if (provider) {
+      progress?.({ stage: "polishing" });
       const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
       polish = refined.polished ? "llm" : "failed";
       polishFailure = refined.polishFailure ?? null;
@@ -239,7 +240,7 @@ export class ExerciseService {
   }
 
   /** 代码族出题：模型交题面与判分件，引擎在沙箱自证两跑（参考解必过、下发件必挂）后才落库。 */
-  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], faces?: ExerciseFaces): Promise<Exercise> {
+  private async nextCode(repository: PracticeRepository, target: PracticeTarget<unknown>, provider: LlmProvider | undefined, scope: string, deps: { path: string; hash: string }[], faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const targetUnitId = target.id;
     if (!provider) {
       this.decline(repository, "no_provider", "code", "", "代码题的题面、缺陷与测试都由模型设计，判分靠运行测试；当前没配模型，或本月预算已用完。", "代码题需要模型，当前不可用。");
@@ -251,7 +252,7 @@ export class ExerciseService {
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
     const unit = target.value as ImplementationUnit;
-    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces });
+    const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces, onProgress: progress });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : unit.symbol.language, provider);
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
@@ -311,7 +312,7 @@ export class ExerciseService {
   }
 
   /** 参考模式出代码题：源码只作参考，题目由模型自定；沙箱自证与证据账照旧。 */
-  private async nextReferenceCode(repository: PracticeRepository, requested: { tag: string; tagId?: string; kind: ExerciseKind; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces): Promise<Exercise> {
+  private async nextReferenceCode(repository: PracticeRepository, requested: { tag: string; tagId?: string; kind: ExerciseKind; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = requested.tag.trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
     if (!provider) {
@@ -340,7 +341,7 @@ export class ExerciseService {
       return cached.exercise;
     }
     const reference = candidates.map((candidate) => `## ${candidate.path}\n${candidate.excerpt}`).join("\n\n").slice(0, 24_000);
-    const generation = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces });
+    const generation = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces, onProgress: progress });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : "unknown", provider);
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
@@ -386,7 +387,7 @@ export class ExerciseService {
   }
 
   /** LLM 出题族：一轮调用内由模型判定能否出题，拒绝与守门否决都记 `exercise_declined`。 */
-  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces): Promise<Exercise> {
+  private async nextLlm(repository: PracticeRepository, requested: { tag?: string; tagId?: string; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     if (!tag) throw new Error("出题需要先填主题名称；请在「＋ 配置」里填写。");
     if (!provider) throw new Error("出题模型当前不可用：未配置模型或本月预算已用完。");
@@ -421,7 +422,7 @@ export class ExerciseService {
       repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, ...extra });
       return cached.exercise;
     }
-    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, faces });
+    const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, faces, onProgress: progress });
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
     for (const read of generation.fileReads) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     // 被拒的那一趟同样花了钱，账要先落，再看拒绝。

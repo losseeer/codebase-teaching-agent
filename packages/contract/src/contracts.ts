@@ -220,7 +220,7 @@ export type ScopedStreamFrame =
   repository.updated = 产物变化；diagram_updated = 图库或当前图变化；几何拖动不广播。
 */
 export const serverEventSchema = z.object({
-  type: z.enum(["import.progress", "repository.updated", "diagram_updated"]),
+  type: z.enum(["import.progress", "repository.updated", "diagram_updated", "exercise.progress"]),
   payload: z.record(z.string(), z.unknown())
 });
 export type ServerEvent = z.infer<typeof serverEventSchema>;

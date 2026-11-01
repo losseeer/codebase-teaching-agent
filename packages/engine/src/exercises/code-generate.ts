@@ -9,7 +9,7 @@ import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
 import type { FileReadRecord } from "../source/read-file.js";
-import type { ExerciseFaces } from "./turn-faces.js";
+import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 import { recordEgress } from "../adapter/outbound/security/egress-log.js";
@@ -258,7 +258,7 @@ function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   return proposal.solution.some((file) => file.contents.replace(/\s+/g, " ").includes(needle));
 }
 
-export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces }): Promise<CodeGeneration> {
+export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<CodeGeneration> {
   const source = unitSource(input.repositoryPath, input.unit);
   if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [], skillReads: [] };
   const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
@@ -267,6 +267,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
   // 与问答回合同一条循环：出题这一趟也能自己读文件、检索、查静态产物
   const faces = input.faces ?? {};
+  input.onProgress?.({ stage: "proposing" });
   let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
   try {
     const loop = await completeWithReadTool({
@@ -280,6 +281,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
         imports: source.imports,
         source: source.body.slice(0, MAX_FILE_BYTES)
       }),
+      onProgress: forwardToolProgress(input.onProgress),
       scene: "practice.generate-code"
     });
     response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
@@ -287,7 +289,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     // 端点失败单列一档
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
-  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。" });
+  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress });
 }
 
 /** 参考模式：源码只作参考，模型自己定题；语言也由模型声明。 */
@@ -299,8 +301,10 @@ export async function generateCodeExerciseFromReference(input: {
   reference: string;
   provider: LlmProvider;
   faces?: ExerciseFaces;
+  onProgress?: ExerciseProgressSink;
 }): Promise<CodeGeneration> {
   const faces = input.faces ?? {};
+  input.onProgress?.({ stage: "proposing" });
   let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
   try {
     const loop = await completeWithReadTool({
@@ -308,13 +312,14 @@ export async function generateCodeExerciseFromReference(input: {
       provider: input.provider,
       system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
       user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
+      onProgress: forwardToolProgress(input.onProgress),
       scene: "practice.generate-code"
     });
     response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
   } catch (error) {
     return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
   }
-  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。" });
+  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress });
 }
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
@@ -328,6 +333,7 @@ async function finishProposal(
     /** 单元模式：改代码题的参考解必须逐字含这段源码。 */
     solutionBody?: string;
     refusal: string;
+    onProgress?: ExerciseProgressSink;
   }
 ): Promise<CodeGeneration> {
   const audits = { usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
@@ -347,6 +353,7 @@ async function finishProposal(
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
+    context.onProgress?.({ stage: "validating" });
     validation = await validateHarness(proposal, context.repositoryPath);
   } catch (error) {
     if (error instanceof SandboxUnavailableError) return { ok: false, stage: "sandbox_unavailable", reason: error.message, runs: [], ...audits };

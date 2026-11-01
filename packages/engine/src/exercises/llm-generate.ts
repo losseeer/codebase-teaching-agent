@@ -11,7 +11,8 @@ import { recordEgress, type EgressSource } from "../adapter/outbound/security/eg
 import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
-import type { ExerciseFaces } from "./turn-faces.js";
+import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
+import { forwardToolProgress } from "./turn-faces.js";
 
 /**
   练习题生成的 LLM 润色层（单轮调用）：只重写 title 与 prompt。
@@ -175,7 +176,7 @@ export const EXERCISE_STEP = defineAnalysisStep({
   prompts: [GENERATION_SYSTEM_PROMPT, () => (Object.keys(kindRules) as ExerciseKind[]).map((kind) => refineSystemPrompt(kind)).join("\n")]
 });
 
-export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; topics?: TopicIndex; faces?: ExerciseFaces }): Promise<LlmGeneration> {
+export async function generateExerciseWithLlm(input: { repositoryPath: string; tag: string; candidates: GuardCandidate[]; provider: LlmProvider; topics?: TopicIndex; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<LlmGeneration> {
   const topics = input.topics ?? NO_TOPICS;
   const excerpts = input.candidates.map((candidate) => ({
     path: candidate.path,
@@ -195,12 +196,14 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   // 与问答回合同一条循环：有仓就能自己读文件、检索、查静态产物，轮数与读文件数取缺省
   const faces = input.faces ?? {};
   const baseSystem = topics.prompt ? `${GENERATION_SYSTEM_PROMPT}\n\n${topics.prompt}` : GENERATION_SYSTEM_PROMPT;
+  input.onProgress?.({ stage: "proposing" });
   const loop = await completeWithReadTool({
     ...faces,
     provider: input.provider,
     system: withSkillsBrief(baseSystem, faces.skills),
     user,
     temperature: 0.4,
+    onProgress: forwardToolProgress(input.onProgress),
     scene: "practice.generate"
   });
   const response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
