@@ -125,6 +125,20 @@ describe("沙箱运行", () => {
     expect(run.stdout).toContain("TESTS 1 0");
   }, 60_000);
 
+  it("Python 入口 import 同目录模块：`-I` 会把工作目录移出 sys.path，runner 要补回入口目录", async ({ skip }) => {
+    if (!capability.usable) skip();
+    const run = await runRaw({
+      language: "python",
+      entry: "tests.py",
+      files: [
+        { path: "target.py", contents: "def add(a, b):\n    return a + b\n" },
+        { path: "tests.py", contents: 'from target import add\nok = add(2, 3) == 5\nprint(f"TESTS {1 if ok else 0} {0 if ok else 1}")\n' }
+      ]
+    });
+    expect(run.ok).toBe(true);
+    expect(run.stdout).toContain("TESTS 1 0");
+  }, 60_000);
+
   it("Java 文件名带包目录被拒：public class 与文件名必须同名，否则 javac 挂在无关的错误上", async () => {
     await expect(runRaw({ language: "java", entry: "Solution", files: [{ path: "src/Solution.java", contents: "public class Solution {}\n" }] })).rejects
       .toThrow("类名.java");

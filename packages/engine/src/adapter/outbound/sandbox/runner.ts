@@ -85,14 +85,17 @@ function toolchainOrThrow(): SandboxToolchain {
 function planFor(language: SandboxLanguage, entry: string, memoryMb: number, toolchain: SandboxToolchain): StepPlan[] {
   if (language === "typescript") return [{ command: toolchain.node, args: [`--max-old-space-size=${memoryMb}`, "--no-warnings", entry] }];
   if (language === "python") {
-    /** `-I` = 隔离模式；macOS 上下调 python 的 `RLIMIT_AS` 会失败，设限失败即放过。 */
-    const bootstrap = `import resource, runpy, sys
+    /** `-I` = 隔离模式；macOS 上下调 python 的 `RLIMIT_AS` 会失败，设限失败即放过。
+        `-I` 同时把工作目录从 `sys.path` 里拿掉：入口同目录的 target 会 import 不到，这里补回入口所在目录。 */
+    const bootstrap = `import os, resource, runpy, sys
 try:
     resource.setrlimit(resource.RLIMIT_AS, (${memoryMb} * 1024 * 1024, resource.getrlimit(resource.RLIMIT_AS)[1]))
 except (ValueError, OSError):
     pass
-sys.argv = [${JSON.stringify(entry)}]
-runpy.run_path(${JSON.stringify(entry)}, run_name="__main__")
+_entry = ${JSON.stringify(entry)}
+sys.path.insert(0, os.path.dirname(os.path.abspath(_entry)))
+sys.argv = [_entry]
+runpy.run_path(_entry, run_name="__main__")
 `;
     return [{ command: toolchain.python, args: ["-I", "-c", bootstrap] }];
   }
