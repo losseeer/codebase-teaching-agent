@@ -147,6 +147,14 @@ export class ExerciseService {
     return [...newest.values()].map((stored) => {
       const review = reviews.get(stored.exercise.id);
       return review ? { exercise: stored.exercise, review } : { exercise: stored.exercise };
+    }).sort((left, right) => {
+      // 有排期的按到期升序在前；没排期的按最近生成，别让题库按插入顺序排
+      const leftDue = left.review?.dueAt;
+      const rightDue = right.review?.dueAt;
+      if (leftDue && rightDue) return leftDue.localeCompare(rightDue);
+      if (leftDue) return -1;
+      if (rightDue) return 1;
+      return right.exercise.createdAt.localeCompare(left.exercise.createdAt);
     });
   }
 

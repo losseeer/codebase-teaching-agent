@@ -14,10 +14,6 @@
 .icon-btn.on { background: var(--brand-100); color: var(--brand-700); }
 .side-col { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .tier-groups, .chip-block { display: flex; flex-direction: column; gap: var(--sp-3); }
-.side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
-.cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: var(--fs-11); font-weight: 700; color: var(--brand-700); }
-.cfg-head span { color: var(--ink-3); font-size: 10px; font-weight: 400; }
-.cfg-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: var(--sp-1); }
 .cfg-reset { color: var(--info-ink); font-size: var(--fs-11); text-decoration: underline; }
 .entry-empty { margin: 0; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); padding: var(--sp-3); color: var(--ink-3); font-size: var(--fs-11); line-height: 1.6; }
 .entry-more { border: 1px dashed var(--border-strong); border-radius: var(--r-sm); padding: 6px 8px; background: var(--surface-2); color: var(--brand-700); text-align: center; font-size: var(--fs-11); cursor: pointer; width: 100%; }
@@ -248,7 +244,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 /* ==================== 代码教学 ==================== */
 .page-teach { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .teach-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
-.side-block { border-top: 1px solid var(--border); padding-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfg-row, .cfg-add { display: flex; align-items: center; gap: 5px; }
 .cfg-row .text-input, .cfg-add .text-input { padding: 5px 8px; font-size: var(--fs-11); border-radius: var(--r-sm); }
 
@@ -297,7 +292,6 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 /* ==================== 练习评估 ==================== */
 .page-practice { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .practice-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
-.chip-list { display: flex; flex-direction: column; gap: 4px; }
 .chip {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 10px;
@@ -312,15 +306,22 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .chip:hover { background: var(--brand-050); }
 .chip.active { background: var(--brand-100); color: var(--brand-700); font-weight: 600; border-color: var(--border); }
 .chip .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip .chip-count { margin-left: auto; font-size: 10px; color: var(--ink-3); flex: 0 0 auto; }
 /* 题型：横向几档，窄了自动换行；设计题的改代码 / 写代码缩进一行 */
 .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip.chipped { width: auto; padding: 5px 10px; justify-content: center; }
 .chip.chipped.small { padding: 3px 9px; font-size: var(--fs-11); }
 .chip-row.sub { margin-top: 6px; padding-left: 2px; }
+/* 主题多到一行放不下时收成下拉：标签截断，箭头始终可见 */
+.theme-select { max-width: 100%; }
+.theme-select .chip-name { min-width: 0; }
 
-/* 题库：一行一道题，点题面看题，右侧删 */
-.bank-list { gap: 4px; }
+/* 题库：到期优先，其余默认收 3 条，删除收进行尾菜单 */
+.bank-group { display: flex; flex-direction: column; gap: 4px; }
+.bank-group + .bank-group { margin-top: var(--sp-3); }
+.bank-group-head { display: flex; align-items: baseline; gap: 5px; padding: 0 2px; font-size: 10px; font-weight: 600; color: var(--ink-3); }
+.bank-group-head span { font-weight: 400; }
+.bank-more { align-self: flex-start; padding: 3px 2px; border: 0; background: none; color: var(--brand-700); font-size: var(--fs-11); cursor: pointer; }
+.bank-more:hover { text-decoration: underline; }
 .bank-row { display: flex; align-items: center; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); transition: border var(--t-fast); }
 .bank-row:hover { border-color: var(--brand-600); }
 .bank-row.active { border-color: var(--brand-700); background: var(--brand-050); }

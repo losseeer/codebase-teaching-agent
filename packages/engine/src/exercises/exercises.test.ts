@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RepositoryAnalysis } from "@codebase-tutor/domain";
+import type { RepositoryAnalysis, ReviewSchedule } from "@codebase-tutor/domain";
 import { flushEngineLog } from "@codebase-tutor/platform";
 
 import { buildDependencyGraph, serializeGraph } from "@codebase-tutor/analysis";
@@ -538,6 +538,18 @@ describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
     expect(service.bank(repository)).toEqual([]);
     expect(repository.ports.progress.get(exercise.id)).toBeUndefined();
     await expect(service.answer(repository, exercise.id, { selectedIds: [] })).rejects.toThrow("该练习不存在");
+  });
+
+  it("题库排序：有排期的按到期升序在前，没排期的押后", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const first = await service.next(repository, { kind: "change_localization" });
+    const second = await service.next(repository, { kind: "impact_analysis" });
+    const schedule = (exerciseId: string, dueAt: string): ReviewSchedule => ({ exerciseId, unitId: "unit", repetitions: 1, intervalDays: 1, easinessFactor: 2.5, dueAt });
+    repository.ports.progress.save(schedule(first.id, "2030-01-02T00:00:00.000Z"));
+    expect(service.bank(repository).map((entry) => entry.exercise.id), "有排期的排在没排期的前面").toEqual([first.id, second.id]);
+    repository.ports.progress.save(schedule(second.id, "2030-01-01T00:00:00.000Z"));
+    expect(service.bank(repository).map((entry) => entry.exercise.id), "都有排期时按到期升序").toEqual([second.id, first.id]);
   });
 
   it("技能声明 reference：设计题不再从主题命中里挑单元，零命中也不拒", async () => {
