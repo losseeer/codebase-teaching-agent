@@ -12,7 +12,8 @@ import { FACT_KINDS } from "@codebase-tutor/domain";
 
 import type { TutorDatabase } from "../adapter/outbound/persistence/database.js";
 import type { LlmTool } from "../application/port/llm-provider.js";
-import type { FactsToolContext } from "../source/tool-loop.js";
+import type { FactsToolContext } from "../source/tools/types.js";
+import type { ToolDefinition } from "../source/tools/types.js";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
 /**
@@ -224,5 +225,23 @@ export const QUERY_FACTS_TOOL: LlmTool = {
       target: { type: "string", description: "函数名、类型名或条目名，取决于 kind" }
     },
     required: []
+  }
+};
+
+export const QUERY_FACTS_DEFINITION: ToolDefinition = {
+  name: QUERY_FACTS_TOOL.name,
+  summary: QUERY_FACTS_TOOL.description,
+  schema: QUERY_FACTS_TOOL.parameters,
+  exposure: "always",
+  effect: "read",
+  origin: { kind: "internal" },
+  scope: "all",
+  available: (ctx) => Boolean(ctx.facts),
+  unavailable: "这个作用域没开放静态产物查询。",
+  describe: () => ({ label: "查询产物" }),
+  invoke: (args, ctx) => {
+    if (!ctx.facts) return { text: "这个作用域没开放静态产物查询。", ok: false };
+    ctx.onProgress?.({ type: "querying_facts" });
+    return { text: ctx.facts.apply(JSON.stringify(args)) };
   }
 };

@@ -1,7 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, resolve, sep } from "node:path";
-import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
@@ -221,17 +220,3 @@ export function skillsBriefing(skills: SkillBrief[]): string {
   const lines = skills.map((skill) => `- ${skill.name}：${skill.description}`);
   return `可用技能（每份都是一套写好的做法，含命令与红线）：\n${lines.join("\n")}\n要用哪一份就先调 read_skill 取正文（做法里提到的附属文件用同一个工具的 file 参数取），别凭名字猜内容。`;
 }
-
-/** 技能正文与附属文件的取用工具声明。 */
-export const READ_SKILL_TOOL: LlmTool = {
-  name: "read_skill",
-  description: "按名字读取技能正文；附属文件用 file 指定相对路径。",
-  parameters: {
-    type: "object",
-    properties: {
-      name: { type: "string", description: "技能清单中的名字" },
-      file: { type: "string", description: "可选：技能目录内的相对路径，省略时读取 SKILL.md" }
-    },
-    required: ["name"]
-  }
-};

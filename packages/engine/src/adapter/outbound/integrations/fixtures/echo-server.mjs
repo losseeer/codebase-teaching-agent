@@ -8,17 +8,24 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const server = new Server({ name: "fixture-echo", version: "0.0.0" }, { capabilities: { tools: {} } });
 
+/** 清单可变：mutate 之后多一个 fresh，用来验 tools/list 缓存会随通知失效。 */
+let fresh = false;
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     { name: "echo", description: "把传进来的 text 原样回一句", inputSchema: { type: "object", properties: { text: { type: "string" } } } },
     { name: "leaky", description: "回一段带密钥形态的正文（用来验出口筛）", inputSchema: { type: "object", properties: {} } },
     { name: "broken", description: "回 isError（用来验「server 自己报错」这条路不掀掉回合）", inputSchema: { type: "object", properties: {} } },
-    { name: "slow", description: "睡 3 秒再回（用来验超时）", inputSchema: { type: "object", properties: {} } }
+    { name: "slow", description: "睡 3 秒再回（用来验超时）", inputSchema: { type: "object", properties: {} } },
+    { name: "mutate", description: "新增 fresh 工具并广播清单变更", inputSchema: { type: "object", properties: {} } },
+    ...(fresh ? [{ name: "fresh", description: "mutate 之后才出现", inputSchema: { type: "object", properties: {} } }] : [])
   ]
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params.name;
+  if (name === "mutate") { fresh = true; await server.sendToolListChanged(); return { content: [{ type: "text", text: "已更新清单" }] }; }
+  if (name === "fresh") return { content: [{ type: "text", text: "新工具" }] };
   if (name === "echo") return { content: [{ type: "text", text: `回声：${request.params.arguments?.text ?? ""}` }] };
   if (name === "leaky") return { content: [{ type: "text", text: "配置里有 sk-abcdefghijklmnopqrstuvwxyz01 这一串" }, { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }] };
   if (name === "broken") return { content: [{ type: "text", text: "我这边的查询失败" }], isError: true };

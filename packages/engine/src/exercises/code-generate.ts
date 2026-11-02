@@ -7,7 +7,8 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domai
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
-import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
+import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief } from "../source/tool-loop.js";
+import type { SkillReadRecord } from "../source/tools/types.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
@@ -56,8 +57,8 @@ export interface HarnessRun {
 }
 
 export type CodeGeneration =
-  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] }
-  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] };
+  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] }
+  | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
 /** 题面长度以提示词里的目标值为准；这里只做超长的硬截断兜底。 */
@@ -259,7 +260,7 @@ export async function validateHarness(proposal: CodeProposal, repositoryPath: st
 interface ProposalResponse {
   text: string;
   usage?: LlmUsage;
-  skillReads: SkillReadAudit[];
+  skillReads: SkillReadRecord[];
   fileReads: FileReadRecord[];
 }
 
@@ -273,6 +274,7 @@ async function requestProposal(input: { provider: LlmProvider; system: string; u
   const loop = await completeWithReadTool({
     ...(input.faces ?? {}),
     provider: input.provider,
+    scope: input.faces?.scope ?? "practice",
     system: input.system,
     user: input.user,
     temperature: input.temperature,
@@ -282,7 +284,7 @@ async function requestProposal(input: { provider: LlmProvider; system: string; u
   return { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
 }
 
-function providerFailure(error: unknown, first?: { usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] }): CodeGeneration {
+function providerFailure(error: unknown, first?: { usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] }): CodeGeneration {
   const audits = toolLoopAuditsOf(error);
   return {
     ok: false,
@@ -407,7 +409,7 @@ export async function generateCodeExerciseFromReference(input: {
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
 async function finishProposal(
-  response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] },
+  response: { text: string; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads: FileReadRecord[] },
   context: {
     kind: "patch_edit" | "author_function";
     repositoryPath: string;
@@ -481,7 +483,7 @@ export async function explainCodeAttempt(input: {
     verdict: verdict ? `${verdict.passed} 条通过 / ${verdict.failed} 条失败${run.timedOut ? "，且运行超时被终止" : ""}` : "测试没跑完（没印出 TESTS 结论）",
     testOutput: failing || "（无输出）"
   });
-  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, system, user, temperature: 0.3, scene: "practice.explain" });
+  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, scope: input.faces?.scope ?? "practice", system, user, temperature: 0.3, scene: "practice.explain" });
   return { explanation: loop.completion.text.trim().slice(0, 400), usage: loop.usage, verdict, fileReads: loop.fileReads };
 }
 

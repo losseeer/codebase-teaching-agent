@@ -1,44 +1,41 @@
-import type { ScopedStreamProgress } from "@codebase-tutor/contract";
-
-import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmTool, LlmToolCall, LlmUsage } from "../application/port/llm-provider.js";
+import type { AgentScope } from "@codebase-tutor/contract";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
 import type { McpCallAudit } from "@codebase-tutor/domain";
-import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
-import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
-import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
-import { QUERY_FACTS_TOOL } from "../facts/query.js";
-import { READ_SKILL_TOOL } from "../adapter/outbound/integrations/skills.js";
-import { askBody, askUserToolFor, ASK_USER_TOOL_NAME, parseAsk, type AskClaimAudit, type AskFacet, type AskResume, type AskUserAudit } from "./ask-user.js";
+import type { FileReadRecord } from "./read-file.js";
+import type { CodeSearchRecord, SearchCorpus } from "./search-code.js";
+import { askBody, type AskClaimAudit, type AskFacet, type AskResume, type AskUserAudit } from "./ask-user.js";
+import { registryFor } from "./tools/registry.js";
+import { exposeTools, toolIndexBrief } from "./tools/exposure.js";
+import { catalogOf } from "./tools/catalog.js";
+import { ToolInvoker } from "./tools/invoker.js";
+import {
+  toLlmTool,
+  toolSchemaHash,
+  type ExternalToolContext,
+  type FactsToolContext,
+  type ReadToolProgress,
+  type SetDiagramToolContext,
+  type SkillReadRecord,
+  type SkillsToolContext,
+  type ToolContext,
+  type ToolDefinition,
+  type ToolOutcome,
+  type ToolTraceStep
+} from "./tools/types.js";
 
 /**
-  read_file / search_code 工具循环，按传入的通道组合工具面。
+  工具循环：每回合按通道装配注册表与暴露面，调用一律经 `ToolInvoker`。
   上限是工具轮数与累计成功的读取数；用尽时回绝未应答的 tool_call，再做一轮不带工具的收尾。
   messages[0] 恒为首轮 user 消息。
 */
 
-/** 工具循环发出的过程帧类型。 */
-export type ReadToolProgress = Exclude<ScopedStreamProgress, { type: "delta" } | { type: "progress" }>;
-
-/** 一次模型或工具调用的轨迹帧；归属由装配层补。 */
-export interface ToolTraceStep {
-  kind: "model" | "tool";
-  status: "start" | "ok" | "error";
-  stepId: string;
-  label: string;
-  detail?: string;
-  round: number;
-  tool?: string;
-  model?: string;
-  ms?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  finishReason?: string;
-}
-
 export interface ReadToolLoopInput {
   provider: LlmProvider;
+  /** 本轮作用区：只决定工具面过滤。 */
+  scope: AgentScope;
   /** 仓库根：read_file 只在此范围内读取。 */
   repoPath?: string;
   system: string;
@@ -78,63 +75,11 @@ export interface ReadToolLoopInput {
   interruptAtLimit?: boolean;
 }
 
-/** 技能通道：清单文本与正文取用函数。 */
-export interface SkillsToolContext {
-  /** 进上下文的技能清单文本。 */
-  brief: string;
-  /** 取技能正文或该目录下的附属文件；`file` 省略时取 SKILL.md，返回 `undefined` 表示不存在。 */
-  bodyOf: (name: string, file?: string) => string | undefined;
-}
-
-/** 外部 MCP 工具的清单与调用通道。 */
-export interface ExternalToolContext {
-  /** 已带 `mcp__<server>__<tool>` 前缀的工具清单。 */
-  tools: LlmTool[];
-  /** 不许抛异常：外部 server 的超时与失败须先转成给模型看的文本。 */
-  call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
-  /** 一个回合的外部调用次数上限；省略取 `DEFAULT_EXTERNAL_CALLS`。 */
-  maxCalls?: number;
-}
-
-/** set_diagram 的执行通道，返回落盘结果或拒写原因。 */
-export interface SetDiagramToolContext {
-  apply: (argumentsJson: string) => string;
-  /** 画布现场快照。 */
-  inventory?: string;
-}
-
-/** 静态产物的查询通道。 */
-export interface FactsToolContext {
-  /** 静态产物在册情况，随上下文常驻。 */
-  inventory?: string;
-  apply: (argumentsJson: string) => string;
-}
-
-/** 按已给的通道构造工具清单。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "diagram" | "skills" | "external" | "facts" | "ask">): LlmTool[] {
-  const { diagram, skills, external } = input;
-  const tools: LlmTool[] = [];
-  if (input.repoPath) {
-    tools.push(READ_FILE_TOOL);
-    if (input.search) tools.push(SEARCH_CODE_TOOL);
-  }
-
-  if (input.ask?.facets.length) tools.push(askUserToolFor(input.ask.facets));
-
-  if (diagram) tools.push(SET_DIAGRAM_TOOL);
-  if (skills) tools.push(READ_SKILL_TOOL);
-
-  if (input.repoPath && input.facts) tools.push(QUERY_FACTS_TOOL);
-
-  if (external?.tools.length) tools.push(...external.tools);
-  return tools;
-}
-
 /** 随异常带出的工具调用与用量记录。 */
 export interface ToolLoopAudits {
   fileReads: FileReadRecord[];
   codeSearches: CodeSearchRecord[];
-  skillReads: { skill: string; chars: number; found: boolean }[];
+  skillReads: SkillReadRecord[];
   mcpCalls: McpCallAudit[];
   rounds: number;
   /** 抛出前已累计的 token 用量。 */
@@ -161,7 +106,7 @@ export interface ReadToolLoopResult {
   /** 本回合的 search_code 调用审计，不合并去重。 */
   codeSearches: CodeSearchRecord[];
   /** 取过的技能记录，未命中的也记。 */
-  skillReads: { skill: string; chars: number; found: boolean }[];
+  skillReads: SkillReadRecord[];
   /** 外部 MCP 工具的实际调用，一条一次，失败也记。 */
   mcpCalls: McpCallAudit[];
   /** 本回合从检查点续跑时的起始轮次。 */
@@ -195,7 +140,7 @@ export interface TurnLoopState {
   externalCalls: number;
   fileReads: FileReadRecord[];
   codeSearches: CodeSearchRecord[];
-  skillReads: { skill: string; chars: number; found: boolean }[];
+  skillReads: SkillReadRecord[];
   mcpCalls: McpCallAudit[];
 }
 
@@ -215,15 +160,13 @@ export const DEFAULT_FILE_READS = 100;
 const DEFAULT_EXTERNAL_CALLS = 100;
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
-  const { provider, system, maxTokens, temperature } = input;
+  const { provider, maxTokens, temperature } = input;
   const maxRounds = input.maxRounds ?? DEFAULT_TOOL_ROUNDS;
   const maxCalls = input.maxCalls ?? DEFAULT_FILE_READS;
-  const tools = toolsFor(input);
-  const available = tools.map((tool) => tool.name).join(" 与 ");
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
   const fileReads: FileReadRecord[] = [];
   const codeSearches: CodeSearchRecord[] = [];
-  const skillReads: { skill: string; chars: number; found: boolean }[] = [];
+  const skillReads: SkillReadRecord[] = [];
   const mcpCalls: McpCallAudit[] = [];
   let rounds = 0;
   /** 本次请求内的工具轮数，与跨续跑累计的 rounds 分开计。 */
@@ -237,15 +180,57 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let usage: LlmUsage | undefined;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
   const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
+
+  const baseContext: ToolContext = {
+    scope: input.scope,
+    ...(input.repoPath ? { repoPath: input.repoPath } : {}),
+    ...(input.search ? { search: input.search } : {}),
+    ...(input.diagram ? { diagram: input.diagram } : {}),
+    ...(input.facts ? { facts: input.facts } : {}),
+    ...(input.skills ? { skills: input.skills } : {}),
+    ...(input.ask ? { ask: input.ask } : {}),
+    ...(input.external ? { external: input.external } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.onProgress ? { onProgress: input.onProgress } : {})
+  };
+  const registry = registryFor(baseContext);
+  // 暴露面每回合只算一次：tools 数组与按需目录都不在中途变化
+  const exposure = exposeTools(registry, baseContext);
+  const system = `${input.system}${toolIndexBrief(exposure)}`;
+  const tools = exposure.always.map(toLlmTool);
+  let context = baseContext;
+  const catalog = catalogOf(exposure.onDemand, (name) => registry.find(name, context));
+  context = { ...baseContext, catalog };
+  const invoker = new ToolInvoker(registry, exposure);
+  const schemaKey = hash(toolSchemaHash(registry.entries(baseContext).map((entry) => entry.definition)));
+  const promptHash = hash(`${provider.modelVersion}:${system}:${schemaKey}`);
+  const inputHash = hash(`${promptHash}:${input.user}`);
+
+  const guard = (definition: ToolDefinition): string | undefined => {
+    if (definition.cost === "read" && succeededReads >= maxCalls) return "已达到本次对话的读文件上限，请基于已有上下文直接回答。";
+    if (definition.cost === "external") {
+      const cap = input.external?.maxCalls ?? DEFAULT_EXTERNAL_CALLS;
+      if (externalCalls >= cap) return `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。`;
+    }
+    return undefined;
+  };
+  const collect = (outcome: ToolOutcome): void => {
+    for (const read of outcome.audits?.fileReads ?? []) {
+      fileReads.push(read);
+      if (!read.denied) succeededReads += 1;
+    }
+    for (const search of outcome.audits?.codeSearches ?? []) codeSearches.push(search);
+    for (const skill of outcome.audits?.skillReads ?? []) skillReads.push(skill);
+    for (const call of outcome.audits?.mcpCalls ?? []) {
+      mcpCalls.push(call);
+      externalCalls += 1;
+    }
+  };
+
   let resumedFromRound: number | undefined;
   let stoppedBy: TurnStopReason | undefined;
   let completion: LlmCompletion;
-  // 输入指纹覆盖模型、系统提示与提问，续跑要求三者一致
-  const inputHash = hash(`${provider.modelVersion}:${system}:${input.user}`);
-  // 由模型与系统提示组成的指纹，不含提问
-  const promptHash = hash(`${provider.modelVersion}:${system}`);
   let modelCalls = 0;
-  let callStartedAt = 0;
   const askModel = async (args: LlmCompletionInput, label: string): Promise<LlmCompletion> => {
     const stepId = `m${++modelCalls}`;
     const round = rounds + 1;
@@ -264,15 +249,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       input.onTrace?.({ kind: "model", status: "error", stepId, label: "模型调用失败", round, model: provider.modelVersion, ms: Date.now() - startedAt, ...(error instanceof Error ? { detail: error.message } : {}) });
       throw error;
     }
-  };
-  const reply = (call: LlmToolCall, content: string, note?: { detail?: string; ok?: boolean }): void => {
-    messages.push({ role: "tool", toolCallId: call.id, content });
-    const failed = note?.ok === false;
-    input.onTrace?.({
-      kind: "tool", status: failed ? "error" : "ok", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds,
-      detail: note?.detail ?? (failed ? content.slice(0, 120) : undefined),
-      ms: Date.now() - callStartedAt
-    });
   };
   try {
 
@@ -344,95 +320,20 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     attemptRounds += 1;
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
-      callStartedAt = Date.now();
-      input.onTrace?.({ kind: "tool", status: "start", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds });
-      if (call.name === SEARCH_CODE_TOOL.name && input.search) {
-        input.onProgress?.({ type: "searching", query: readQueryHint(call.argumentsJson) });
-        const outcome = executeSearchCode(input.search, call.argumentsJson);
-        codeSearches.push(outcome.audit);
-        reply(call, outcome.content, { detail: outcome.audit.topPaths.join("、") || (outcome.audit.hits ? "有命中" : "无命中") });
-        continue;
-      }
-      if (call.name === SET_DIAGRAM_TOOL.name) {
-
-        input.onProgress?.({ type: "editing_diagram" });
-        reply(call, input.diagram?.apply(call.argumentsJson) ?? "这个作用域没有改这张图的权力。");
-        continue;
-      }
-      if (call.name === QUERY_FACTS_TOOL.name) {
-        input.onProgress?.({ type: "querying_facts" });
-        reply(call, input.facts?.apply(call.argumentsJson) ?? "这个作用域没开放静态产物查询。");
-        continue;
-      }
-      if (call.name === READ_SKILL_TOOL.name && input.skills) {
-        const skill = readSkillHint(call.argumentsJson);
-        const file = readSkillFileHint(call.argumentsJson);
-        input.onProgress?.({ type: "loading_skill", skill });
-        const body = input.skills.bodyOf(skill, file);
-        // undefined 表示没有这份技能，空串表示有技能但正文为空
-        const found = body !== undefined;
-        skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found });
-        reply(call, found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。`, { detail: found ? "已加载" : "未找到", ok: found });
-        continue;
-      }
-      if (call.name === ASK_USER_TOOL_NAME) {
-        if (!input.ask?.facets.length) {
-          reply(call, "这一轮没有向用户提问的通道（缺的那一格上下文里已经有了）。请直接作答。", { ok: false });
-          continue;
-        }
-        const attempt = parseAsk(call.argumentsJson, input.ask.facets);
-        if (!attempt.ok) {
-          askRefused = attempt.reason;
-          reply(call, attempt.reason, { ok: false });
-          continue;
-        }
-        if (asked) {
-          askRefused = "一个回合最多问一次";
-          reply(call, "本轮已经问过一句了，不能再问第二句。请基于已读到的内容作答，把没核实的部分写明。", { ok: false });
-          continue;
-        }
+      const { outcome } = await invoker.invoke(call, context, { round: rounds, ...(input.onTrace ? { onTrace: input.onTrace } : {}) }, guard);
+      collect(outcome);
+      if (outcome.askRefused) askRefused = outcome.askRefused;
+      if (outcome.stop?.reason === "await_user") {
         // 提问后本循环结束，这条调用不回灌 tool_result，等认领
-        asked = { ...attempt.ask, toolCallId: call.id };
+        asked = { ...outcome.stop.asked, toolCallId: call.id };
         // 每条 tool_call 都要有配对的 tool 消息
-        const answered = new Set(messages.map((message) => message.toolCallId));
+        const answered = new Set(messages.filter((message) => message.role === "tool").map((message) => message.toolCallId));
         for (const sibling of completion.toolCalls) {
           if (sibling.id !== call.id && !answered.has(sibling.id)) messages.push({ role: "tool", toolCallId: sibling.id, content: "本轮改为先向用户问一句，这一条没有执行。" });
         }
         break;
       }
-      if (input.external?.tools.some((tool) => tool.name === call.name)) {
-        const cap = input.external.maxCalls ?? DEFAULT_EXTERNAL_CALLS;
-        if (externalCalls >= cap) {
-
-          reply(call, `外部工具一个回合最多打 ${cap} 次，额度已用完。请基于已拿到的外部内容回答，并说明哪些部分没核实。`, { ok: false });
-          continue;
-        }
-        externalCalls += 1;
-
-        input.onProgress?.({ type: "calling_external" });
-        const outcome = await input.external.call(call.name, call.argumentsJson);
-        mcpCalls.push(outcome.audit);
-        reply(call, outcome.text, { ...(outcome.audit.masked > 0 ? { detail: "已隐去敏感内容" } : {}), ok: outcome.audit.ok });
-        continue;
-      }
-      if (call.name !== READ_FILE_TOOL.name) {
-        reply(call, `未知工具 ${call.name}；只支持 ${available}。`, { ok: false });
-        continue;
-      }
-      if (!input.repoPath) {
-        reply(call, "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。", { ok: false });
-        continue;
-      }
-      // 读文件额度在每条调用上判一次，轮首那次只挡下一轮
-      if (succeededReads >= maxCalls) {
-        reply(call, "已达到本次对话的读文件上限，请基于已有上下文直接回答。", { ok: false });
-        continue;
-      }
-      input.onProgress?.({ type: "reading", path: readPathHint(call.argumentsJson) });
-      const outcome = executeReadFile(input.repoPath, call.argumentsJson);
-      fileReads.push(outcome.audit);
-      if (!outcome.audit.denied) succeededReads += 1;
-      reply(call, outcome.content, { detail: outcome.audit.denied ? "拒绝读取" : outcome.audit.truncated ? "已读取 · 截断" : "已读取", ok: !outcome.audit.denied });
+      messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
     }
     // 提问后本循环结束
     if (asked) break;
@@ -471,67 +372,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
 /** 技能清单并进系统提示词；没有通道就原样返回。 */
 export function withSkillsBrief(system: string, skills?: SkillsToolContext): string {
   return skills ? `${system}\n\n${skills.brief}` : system;
-}
-
-/** 一次技能取用的审计记录，found 为 false 表示名字不在清单上。 */
-export interface SkillReadAudit {
-  skill: string;
-  chars: number;
-  found: boolean;
-}
-
-/** 取 read_skill 参数里的 name，解析失败回空串。 */
-function readSkillHint(argumentsJson: string): string {
-  try {
-    const parsed = JSON.parse(argumentsJson || "{}") as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name.trim() : "";
-  } catch {
-    return "";
-  }
-}
-
-/** 取 read_skill 参数里的 file，未给时回 undefined。 */
-function readSkillFileHint(argumentsJson: string): string | undefined {
-  try {
-    const parsed = JSON.parse(argumentsJson || "{}") as { file?: unknown };
-    const file = typeof parsed.file === "string" ? parsed.file.trim() : "";
-    return file || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 取 read_file 参数里的 path，仅用于进度提示。 */
-function readPathHint(argumentsJson: string): string {
-  try {
-    const parsed = JSON.parse(argumentsJson || "{}") as { path?: unknown };
-    return typeof parsed.path === "string" ? parsed.path : "";
-  } catch {
-    return "";
-  }
-}
-
-/** 取 search_code 参数里的 query，仅用于进度提示。 */
-function readQueryHint(argumentsJson: string): string {
-  try {
-    const parsed = JSON.parse(argumentsJson || "{}") as { query?: unknown };
-    return typeof parsed.query === "string" ? parsed.query : "";
-  } catch {
-    return "";
-  }
-}
-
-/** 工具调用的轨迹标题。 */
-function toolLabel(call: LlmToolCall): string {
-  switch (call.name) {
-    case READ_FILE_TOOL.name: return `读取 ${readPathHint(call.argumentsJson)}`.trim();
-    case SEARCH_CODE_TOOL.name: return `检索 ${readQueryHint(call.argumentsJson)}`.trim();
-    case READ_SKILL_TOOL.name: return `加载技能 ${readSkillHint(call.argumentsJson)}`.trim();
-    case SET_DIAGRAM_TOOL.name: return "修改图表";
-    case QUERY_FACTS_TOOL.name: return "查询产物";
-    case ASK_USER_TOOL_NAME: return "向你提问";
-    default: return `调用 ${call.name}`;
-  }
 }
 
 /** 工具结果完整保留的最近轮数。 */

@@ -74,8 +74,31 @@ describe("连上与清单", () => {
     const surface = await externalToolSurface();
     expect(surface?.tools.map((tool) => tool.name)).toEqual(["mcp__docs__echo", "mcp__docs__leaky"]);
     expect(surface?.tools[0].description).toContain("【外部 docs】");
+    expect(surface?.groups.map((group) => group.id)).toEqual(["mcp:docs"]);
+    expect(surface?.groups[0].tools[0]).toMatchObject({
+      name: "mcp__docs__echo",
+      exposure: "auto",
+      effect: "external",
+      cost: "external",
+      origin: { kind: "mcp", server: "docs" }
+    });
     expect(surface?.errors).toEqual([]);
   });
+
+  it("server 广播清单变更后，缓存的 tools/list 跟着换（不重连也看得到新工具）", async () => {
+    configure({ live: stdio() });
+    const first = await externalToolSurface();
+    expect(first?.tools.map((tool) => tool.name)).not.toContain("mcp__live__fresh");
+    await first?.call("mcp__live__mutate", "{}");
+    let names: string[] = [];
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const next = await externalToolSurface();
+      names = next?.tools.map((tool) => tool.name) ?? [];
+      if (names.includes("mcp__live__fresh")) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(names).toContain("mcp__live__fresh");
+  }, 10_000);
 
   it("allowedTools 写完整 id 也认（Claude Code 那套 mcp__server__tool 写法）", async () => {
     configure({ docs: stdio(["mcp__docs__echo"]) });

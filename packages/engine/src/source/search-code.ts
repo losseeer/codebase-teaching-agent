@@ -2,6 +2,7 @@ import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain
 
 import { isTestPath } from "@codebase-tutor/analysis";
 import type { LlmTool } from "../application/port/llm-provider.js";
+import type { ToolDefinition } from "./tools/types.js";
 import { themeTokens, tokenHits, wordsOf, segmentForLookup } from "@codebase-tutor/platform";
 
 /**
@@ -42,6 +43,33 @@ export const SEARCH_CODE_TOOL: LlmTool = {
     required: ["query"]
   }
 };
+
+export const SEARCH_CODE_DEFINITION: ToolDefinition = {
+  name: SEARCH_CODE_TOOL.name,
+  summary: SEARCH_CODE_TOOL.description,
+  schema: SEARCH_CODE_TOOL.parameters,
+  exposure: "always",
+  effect: "read",
+  origin: { kind: "internal" },
+  scope: "all",
+  available: (ctx) => Boolean(ctx.search),
+  describe: (args) => ({ label: `检索 ${queryOf(args)}`.trim() }),
+  invoke: (args, ctx) => {
+    if (!ctx.search) return { text: "当前作用域未开放 search_code。", ok: false };
+    ctx.onProgress?.({ type: "searching", query: queryOf(args) });
+    const outcome = executeSearchCode(ctx.search, JSON.stringify(args));
+    return {
+      text: outcome.content,
+      detail: outcome.audit.topPaths.join("、") || (outcome.audit.hits ? "有命中" : "无命中"),
+      audits: { codeSearches: [outcome.audit] }
+    };
+  }
+};
+
+function queryOf(args: unknown): string {
+  const query = (args as { query?: unknown } | null)?.query;
+  return typeof query === "string" ? query : "";
+}
 
 /** 一次检索的审计记录，不含正文。 */
 export interface CodeSearchRecord {

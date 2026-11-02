@@ -1,4 +1,4 @@
-import type { LlmTool } from "../application/port/llm-provider.js";
+import type { ToolDefinition } from "./tools/types.js";
 
 /**
   回合内向用户提问：只问本轮上下文里确实没有、又影响答复形状的那一格。
@@ -35,28 +35,41 @@ const MAX_OPTIONS = 5;
 /** 工具名；循环按它判分支。 */
 export const ASK_USER_TOOL_NAME = "ask_user";
 
+export const ASK_USER_DEFINITION: ToolDefinition = {
+  name: ASK_USER_TOOL_NAME,
+  summary: "缺少目标或范围时向用户提问；每回合最多一次。",
+  schema: {
+    type: "object",
+    properties: {
+      facet: { type: "string", enum: ["goal", "range"], description: "缺的是哪一格。" },
+      question: { type: "string", description: `问用户的那一句，不超过 ${MAX_QUESTION} 字。` },
+      options: {
+        type: "array",
+        description: `给用户的候选答案，1–${MAX_OPTIONS} 个，每个不超过 ${MAX_LABEL} 字。`,
+        items: { type: "string" }
+      }
+    },
+    required: ["facet", "question", "options"]
+  },
+  exposure: "always",
+  effect: "read",
+  origin: { kind: "internal" },
+  scope: ["map"],
+  conditional: true,
+  available: (ctx) => Boolean(ctx.ask?.facets.length),
+  unavailable: "这一轮没有向用户提问的通道。",
+  describe: () => ({ label: "向你提问" }),
+  invoke: (args, ctx) => {
+    const facets = ctx.ask?.facets ?? [];
+    if (!facets.length) return { text: "这一轮没有向用户提问的通道（缺的那一格上下文里已经有了）。请直接作答。", ok: false };
+    const attempt = parseAsk(JSON.stringify(args), facets);
+    if (!attempt.ok) return { text: attempt.reason, ok: false, askRefused: attempt.reason };
+    return { text: askBody({ ...attempt.ask, toolCallId: "" }), stop: { reason: "await_user", asked: attempt.ask } };
+  }
+};
+
 /** 按码点计数，一个汉字算一个。 */
 const chars = (text: string): number => [...text].length;
-
-export function askUserToolFor(facets: AskFacet[]): LlmTool {
-  return {
-    name: ASK_USER_TOOL_NAME,
-    description: `仅针对当前缺失项提问（当前缺失：${facets.join(" / ")}）。goal 表示目标未定，range 表示范围（模块或入口）未定；仅在上下文与用户原话均无法确定时使用，可查到的内容不得提问。question 不超过 ${MAX_QUESTION} 字；options 提供 1–${MAX_OPTIONS} 个短标签，每个不超过 ${MAX_LABEL} 字。调用后本轮结束，不再读文件或改图，也无需输出正文。`,
-    parameters: {
-      type: "object",
-      properties: {
-        facet: { type: "string", enum: facets.length ? facets : ["goal", "range"], description: "缺的是哪一格。" },
-        question: { type: "string", description: `问用户的那一句，不超过 ${MAX_QUESTION} 字。` },
-        options: {
-          type: "array",
-          description: `给用户的候选答案，1–${MAX_OPTIONS} 个，每个不超过 ${MAX_LABEL} 字（用户点了就当下一句话回答）。`,
-          items: { type: "string" }
-        }
-      },
-      required: ["facet", "question", "options"]
-    }
-  };
-}
 
 /** 校验一次提问：不合法时回一句给模型看的话，不掀回合。 */
 export function parseAsk(argumentsJson: string, allowed: AskFacet[]): { ok: true; ask: Omit<AskUserAudit, "toolCallId"> } | { ok: false; reason: string } {

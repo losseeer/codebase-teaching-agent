@@ -3,8 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
+import type { ToolDefinition, ToolGroup } from "../../../source/tools/types.js";
+import { toLlmTool } from "../../../source/tools/types.js";
 import { hash } from "@codebase-tutor/platform";
 import { maskSecrets } from "@codebase-tutor/domain";
 
@@ -42,6 +45,8 @@ interface RawServerEntry {
 export interface ExternalSurface {
   /** 已带 `mcp__server__tool` 前缀、可以直接进 provider 请求的清单。 */
   tools: LlmTool[];
+  /** 一台 server 一组，交给注册表统一过滤与暴露。 */
+  groups: ToolGroup[];
   /** 连不上或被跳过的 server 与原因。 */
   errors: { server: string; reason: string }[];
   /** 调一次；永不抛，失败返回给模型的文本与审计记录。 */
@@ -101,13 +106,20 @@ export function readMcpConfigs(file = mcpConfigFile()): { servers: McpServerConf
   return { servers, skipped };
 }
 
+interface ListedTool {
+  /** 暴露名：`mcp__<server>__<tool>`。 */
+  name: string;
+  /** server 侧的原始工具名。 */
+  origin: string;
+  description?: string;
+  schema: Record<string, unknown>;
+}
+
 interface Connected {
   client: Client;
   server: string;
   /** 这台 server 报上来的全部工具；白名单每轮现裁。 */
-  tools: LlmTool[];
-  /** 暴露名 → server 侧的原始工具名。 */
-  origin: Map<string, string>;
+  tools: ListedTool[];
   /** 建这条连接时的启动配置指纹；变化就要重连。 */
   signature: string;
 }
@@ -126,6 +138,19 @@ function allowedNames(config: McpServerConfig): Set<string> | undefined {
   return new Set(config.allowedTools.map((entry) => (entry.startsWith(prefix) ? entry.slice(prefix.length) : entry)));
 }
 
+async function listTools(client: Client, server: string): Promise<ListedTool[]> {
+  const listed = await client.listTools();
+  return listed.tools.map((tool) => {
+    const { $schema: _ignored, ...schema } = (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>;
+    return {
+      name: `mcp__${server}__${tool.name}`,
+      origin: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      schema
+    };
+  });
+}
+
 async function connect(config: McpServerConfig): Promise<Connected | undefined> {
   const client = new Client({ name: "codebase-tutor-engine", version: "0.1.0" });
   const transport = new StdioClientTransport({
@@ -136,16 +161,17 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
   });
   try {
     await client.connect(transport);
-    const listed = await client.listTools();
-    const tools: LlmTool[] = [];
-    const origin = new Map<string, string>();
-    for (const tool of listed.tools) {
-      const name = `mcp__${config.name}__${tool.name}`;
-      const { $schema: _ignored, ...parameters } = (tool.inputSchema ?? { type: "object" }) as Record<string, unknown>;
-      tools.push({ name, description: tool.description ? `【外部 ${config.name}】${tool.description}` : `【外部 ${config.name}】${tool.name}`, parameters: parameters as LlmTool["parameters"] });
-      origin.set(name, tool.name);
-    }
-    return { client, server: config.name, tools, origin, signature: configSignature(config) };
+    const entry: Connected = { client, server: config.name, tools: [], signature: configSignature(config) };
+    // server 报清单变了就重取；取不动时保留上一份，不把工具面清空。
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      try {
+        entry.tools = await listTools(client, config.name);
+      } catch {
+        // 保留旧清单
+      }
+    });
+    entry.tools = await listTools(client, config.name);
+    return entry;
   } catch {
     await client.close().catch(() => undefined);
     return undefined;
@@ -179,7 +205,7 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
     void pending.then((entry) => entry?.client.close().catch(() => undefined), () => undefined);
   }
   if (!servers.length && !skipped.length) return undefined;
-  const connected: Connected[] = [];
+  const connected: { entry: Connected; tools: ListedTool[] }[] = [];
   const errors = skipped.map((entry) => ({ server: entry.server, reason: entry.reason }));
   for (const config of servers) {
     const signature = configSignature(config);
@@ -198,52 +224,73 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
     const entry = await cached;
     if (!entry) { errors.push({ server: config.name, reason: "连不上（子进程起不来或 initialize 失败）" }); pool.delete(config.name); continue; }
     const allowed = allowedNames(config);
-    const tools = allowed ? entry.tools.filter((tool) => allowed.has(entry.origin.get(tool.name) ?? tool.name)) : entry.tools;
+    const tools = allowed ? entry.tools.filter((tool) => allowed.has(tool.origin)) : entry.tools;
     if (!tools.length) errors.push({ server: config.name, reason: allowed ? "连上了但它报的工具都不在白名单里" : "连上了，它一个工具都没报" });
-    connected.push({ client: entry.client, server: entry.server, tools, origin: new Map(tools.map((tool) => [tool.name, entry.origin.get(tool.name) as string])), signature: entry.signature });
+    connected.push({ entry, tools });
   }
-  const tools = connected.flatMap((entry) => entry.tools);
-  if (!tools.length) return errors.length ? { tools: [], errors, call: async (name, argumentsJson) => { const base = { server: name.split("__")[1] ?? "-", tool: name, ...previewOf(argumentsJson) }; return { text: "外部工具当前不可用。", audit: { ...base, resultChars: 0, masked: 0, ok: false, ms: 0, error: "no_tool" } }; } } : undefined;
-  return {
-    tools,
-    errors,
-    call: async (name, argumentsJson) => {
-      const entry = connected.find((candidate) => candidate.origin.has(name));
-      const started = Date.now();
-      const base = { server: entry?.server ?? name.split("__")[1] ?? "-", tool: entry?.origin.get(name) ?? name, ...previewOf(argumentsJson) };
-      if (!entry) return { text: `未知外部工具「${name}」。`, audit: { ...base, resultChars: 0, masked: 0, ok: false, ms: Date.now() - started, error: "unknown_tool" } };
-      let args: Record<string, unknown> = {};
-      try {
-        args = (argumentsJson ? JSON.parse(argumentsJson) : {}) as Record<string, unknown>;
-      } catch {
-        const text = `给外部工具「${entry.server}/${entry.origin.get(name)}」的参数不是合法 JSON，这次没执行。`;
-        return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms: Date.now() - started, error: "bad_arguments" } };
-      }
-      const limit = timeoutMs();
-      const outcome = await withTimeout(entry.client.callTool({ name: entry.origin.get(name) as string, arguments: args }), limit);
-      const ms = Date.now() - started;
-      if (!outcome.ok) {
-        // 调用失败时关连接并摘池，子进程由 close() 收尾
-        if (outcome.reason === "failed") {
-          void entry.client.close().catch(() => undefined);
-          pool.delete(entry.server);
-        }
-        const text = outcome.reason === "timeout"
-          ? `外部工具「${entry.server}/${entry.origin.get(name)}」${limit / 1000}s 没回话（这台 server 是外部程序，可能卡住了）。请基于已有信息回答，并说明这一项没核实。`
-          : `外部工具「${entry.server}/${entry.origin.get(name)}」这条连接没打通（子进程退了或已经断了）。这一项没核实，请基于已有信息回答。`;
-        return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms, error: outcome.reason } };
-      }
-      const result = outcome.value;
-      const parts = (result.content ?? []) as { type?: string; text?: string }[];
-      const texts = parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text as string);
-      const dropped = parts.length - texts.length;
-      const flagged = Boolean((result as { isError?: boolean }).isError);
-      const raw = `${flagged ? "外部工具回了错误：\n" : ""}${texts.join("\n")}${dropped > 0 ? `\n…（另有 ${dropped} 段非文本内容未交回）` : ""}`;
-      const clipped = raw.length > RESULT_CHARS ? `${raw.slice(0, RESULT_CHARS)}\n…（外部返回已截断，原 ${raw.length} 字。）` : raw;
-      const masked = maskSecrets(clipped);
-      return { text: masked.text, audit: { ...base, resultChars: masked.text.length, masked: masked.masked, ok: !flagged, ms, ...(flagged ? { error: "server_reported_error" } : {}) } };
+  const call = async (name: string, argumentsJson: string): Promise<{ text: string; audit: McpCallAudit }> => {
+    const hit = connected.find((candidate) => candidate.tools.some((tool) => tool.name === name));
+    const tool = hit?.tools.find((candidate) => candidate.name === name);
+    const started = Date.now();
+    const base = { server: hit?.entry.server ?? name.split("__")[1] ?? "-", tool: tool?.origin ?? name, ...previewOf(argumentsJson) };
+    if (!hit || !tool) return { text: `未知外部工具「${name}」。`, audit: { ...base, resultChars: 0, masked: 0, ok: false, ms: Date.now() - started, error: "unknown_tool" } };
+    let args: Record<string, unknown> = {};
+    try {
+      args = (argumentsJson ? JSON.parse(argumentsJson) : {}) as Record<string, unknown>;
+    } catch {
+      const text = `给外部工具「${hit.entry.server}/${tool.origin}」的参数不是合法 JSON，这次没执行。`;
+      return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms: Date.now() - started, error: "bad_arguments" } };
     }
+    const limit = timeoutMs();
+    const outcome = await withTimeout(hit.entry.client.callTool({ name: tool.origin, arguments: args }), limit);
+    const ms = Date.now() - started;
+    if (!outcome.ok) {
+      // 调用失败时关连接并摘池，子进程由 close() 收尾
+      if (outcome.reason === "failed") {
+        void hit.entry.client.close().catch(() => undefined);
+        pool.delete(hit.entry.server);
+      }
+      const text = outcome.reason === "timeout"
+        ? `外部工具「${hit.entry.server}/${tool.origin}」${limit / 1000}s 没回话（这台 server 是外部程序，可能卡住了）。请基于已有信息回答，并说明这一项没核实。`
+        : `外部工具「${hit.entry.server}/${tool.origin}」这条连接没打通（子进程退了或已经断了）。这一项没核实，请基于已有信息回答。`;
+      return { text, audit: { ...base, resultChars: text.length, masked: 0, ok: false, ms, error: outcome.reason } };
+    }
+    const result = outcome.value;
+    const parts = (result.content ?? []) as { type?: string; text?: string }[];
+    const texts = parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text as string);
+    const dropped = parts.length - texts.length;
+    const flagged = Boolean((result as { isError?: boolean }).isError);
+    const raw = `${flagged ? "外部工具回了错误：\n" : ""}${texts.join("\n")}${dropped > 0 ? `\n…（另有 ${dropped} 段非文本内容未交回）` : ""}`;
+    const clipped = raw.length > RESULT_CHARS ? `${raw.slice(0, RESULT_CHARS)}\n…（外部返回已截断，原 ${raw.length} 字。）` : raw;
+    const masked = maskSecrets(clipped);
+    return { text: masked.text, audit: { ...base, resultChars: masked.text.length, masked: masked.masked, ok: !flagged, ms, ...(flagged ? { error: "server_reported_error" } : {}) } };
   };
+  const groups: ToolGroup[] = connected.map(({ entry, tools }): ToolGroup => ({
+    id: `mcp:${entry.server}`,
+    summary: `外部工具（${entry.server}）`,
+    scope: "all",
+    available: () => true,
+    tools: tools.map((tool): ToolDefinition => ({
+      name: tool.name,
+      summary: `【外部 ${entry.server}】${tool.description ?? tool.origin}`,
+      tags: [entry.server],
+      schema: tool.schema,
+      exposure: "auto",
+      effect: "external",
+      origin: { kind: "mcp", server: entry.server },
+      cost: "external",
+      describe: () => ({ label: `调用 ${entry.server}/${tool.origin}` }),
+      invoke: async (args, ctx) => {
+        ctx.onProgress?.({ type: "calling_external" });
+        const { text, audit } = await call(tool.name, JSON.stringify(args));
+        return { text, ok: audit.ok, ...(audit.masked > 0 ? { detail: "已隐去敏感内容" } : {}), audits: { mcpCalls: [audit] } };
+      }
+    }))
+  })).filter((group) => group.tools.length > 0);
+  const definitions = groups.flatMap((group) => group.tools);
+  const tools = definitions.map(toLlmTool);
+  if (!tools.length) return errors.length ? { tools: [], groups: [], errors, call: async (name) => { const base = { server: name.split("__")[1] ?? "-", tool: name, ...previewOf("{}") }; return { text: "外部工具当前不可用。", audit: { ...base, resultChars: 0, masked: 0, ok: false, ms: 0, error: "no_tool" } }; } } : undefined;
+  return { tools, groups, errors, call };
 }
 
 /** 关连接并清池。 */

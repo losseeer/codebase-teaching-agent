@@ -4,7 +4,7 @@ import { externalToolSurface } from "../../adapter/outbound/integrations/clients
 import { listSkills, readSkill, skillsBriefing } from "../../adapter/outbound/integrations/skills.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "../runtime/turn-invariants.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
-import type { ExternalToolContext, SkillsToolContext } from "../../source/tool-loop.js";
+import type { ExternalToolContext, SkillsToolContext } from "../../source/tools/types.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../../turn/run-turn.js";
 import type { LlmProvider } from "../port/llm-provider.js";
@@ -171,7 +171,7 @@ export function skillsForTurn(): SkillsToolContext | undefined {
 export async function externalForTurn(): Promise<ExternalToolContext | undefined> {
   const surface = await externalToolSurface();
   if (!surface?.tools.length) return undefined;
-  return { tools: surface.tools, call: surface.call };
+  return { groups: surface.groups, call: surface.call };
 }
 
 /** 技能与外部工具面一次取齐；都缺省时回空对象。 */

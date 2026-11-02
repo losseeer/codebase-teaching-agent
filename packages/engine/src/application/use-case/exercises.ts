@@ -8,7 +8,7 @@ import { practiceView, withExercisePorts } from "../../infrastructure/exercise-p
 import { skillsForTurn } from "../orchestration/scoped-turn.js";
 import { factsToolFor } from "../../infrastructure/canvas-tools.js";
 import type { ExerciseFaces } from "../../exercises/turn-faces.js";
-import type { ToolTraceStep } from "../../source/tool-loop.js";
+import type { ToolTraceStep } from "../../source/tools/types.js";
 import { emitAgentTrace } from "../../turn/agent-trace.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { ExerciseDeclinedError } from "../port/exercise-decline.js";
@@ -37,6 +37,7 @@ const declined = (error: unknown, fallback: string, code?: ExerciseDeclineCode):
 function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1], onTrace?: (step: ToolTraceStep) => void): ExerciseFaces {
   const skills = skillsForTurn();
   return {
+    scope: "practice",
     repoPath: repository.path,
     search: searchCorpusFor(repository),
     facts: factsToolFor(repository, database),

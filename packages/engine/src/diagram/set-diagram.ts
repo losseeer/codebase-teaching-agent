@@ -15,6 +15,7 @@ import { DIAGRAM_EDGE_LIMIT, DIAGRAM_NAME_LIMIT, DIAGRAM_NODE_LIMIT, buildDiagra
 import { id } from "@codebase-tutor/platform";
 import type { DiagramStore } from "../application/port/diagram-store.js";
 import type { LlmTool } from "../application/port/llm-provider.js";
+import type { ToolDefinition } from "../source/tools/types.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 
 /**
@@ -586,5 +587,23 @@ export const SET_DIAGRAM_TOOL: LlmTool = {
       edit: { type: "object", description: "一次改动：action 与对应字段；action=help 返回完整约定" }
     },
     required: ["edit"]
+  }
+};
+
+export const SET_DIAGRAM_DEFINITION: ToolDefinition = {
+  name: SET_DIAGRAM_TOOL.name,
+  summary: SET_DIAGRAM_TOOL.description,
+  schema: SET_DIAGRAM_TOOL.parameters,
+  exposure: "always",
+  effect: "write",
+  origin: { kind: "internal" },
+  scope: ["map"],
+  available: (ctx) => Boolean(ctx.diagram),
+  unavailable: "这个作用域没有改这张图的权力。",
+  describe: () => ({ label: "修改图表" }),
+  invoke: (args, ctx) => {
+    if (!ctx.diagram) return { text: "这个作用域没有改这张图的权力。", ok: false };
+    ctx.onProgress?.({ type: "editing_diagram" });
+    return { text: ctx.diagram.apply(JSON.stringify(args)) };
   }
 };

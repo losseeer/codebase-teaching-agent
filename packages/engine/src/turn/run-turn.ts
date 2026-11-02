@@ -11,7 +11,8 @@ import { callNeighborhoodSection } from "@codebase-tutor/analysis";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";
-import type { ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, ToolTraceStep, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
+import type { ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, ToolTraceStep } from "../source/tools/types.js";
+import type { TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool } from "../source/tool-loop.js";
 import { emitAgentTrace } from "./agent-trace.js";
 import { recordEgress, type EgressCollector } from "../adapter/outbound/security/egress-log.js";
@@ -24,7 +25,7 @@ import { exerciseQaSystemPrompt, overviewSystemPrompt, teachingSystemPrompt } fr
 
 /**
   teaching / map / practice 三个作用域的统一发射入口。
-  练习的标准答案与锚点不进上下文，practice 也不给 read_file。
+  练习的标准答案与锚点不进上下文；作用域同时决定工具面过滤。
   作用域清单与已分析集交集为空时不注入作用域段。
   */
 
@@ -149,7 +150,7 @@ export interface TurnTraceContext {
 }
 
 export interface RunTurnInput {
-  /** 作用域只决定落库与埋点的口径，工具面一律同一条件：有仓就可取证。 */
+  /** 作用区：过滤工具面，并决定落库与埋点的口径。 */
   scope: "teaching" | "map" | "practice";
   provider: LlmProvider;
   /** 装配好的系统提示词与本轮用户消息，不再加工。 */
@@ -239,6 +240,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     if (input.repositoryPath) {
       const result = await completeWithReadTool({
         provider: input.provider,
+        scope: input.scope,
         repoPath: input.repositoryPath,
         system: input.system,
         user: input.user,

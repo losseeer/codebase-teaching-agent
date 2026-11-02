@@ -4,6 +4,7 @@ import { isWithin } from "@codebase-tutor/platform";
 import { maskSecrets } from "@codebase-tutor/domain";
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
 import type { LlmTool } from "../application/port/llm-provider.js";
+import type { ToolDefinition } from "./tools/types.js";
 
 /**
   read_file 工具：读取仓内文本文件的指定行窗口。
@@ -48,6 +49,39 @@ export const READ_FILE_TOOL: LlmTool = {
     required: ["path"]
   }
 };
+
+export const READ_FILE_DEFINITION: ToolDefinition = {
+  name: READ_FILE_TOOL.name,
+  summary: READ_FILE_TOOL.description,
+  schema: READ_FILE_TOOL.parameters,
+  exposure: "always",
+  effect: "read",
+  origin: { kind: "internal" },
+  scope: "all",
+  cost: "read",
+  available: (ctx) => Boolean(ctx.repoPath),
+  unavailable: (ctx) => ctx.skills
+    ? "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。"
+    : "这一轮没有开放文件读取。",
+  describe: (args) => ({ label: `读取 ${pathOf(args)}`.trim() }),
+  invoke: (args, ctx) => {
+    if (!ctx.repoPath) return { text: "这一轮没有开放文件读取。", ok: false };
+    const path = pathOf(args);
+    ctx.onProgress?.({ type: "reading", path });
+    const outcome = executeReadFile(ctx.repoPath, JSON.stringify(args));
+    return {
+      text: outcome.content,
+      ok: !outcome.audit.denied,
+      detail: outcome.audit.denied ? "拒绝读取" : outcome.audit.truncated ? "已读取 · 截断" : "已读取",
+      audits: { fileReads: [outcome.audit] }
+    };
+  }
+};
+
+function pathOf(args: unknown): string {
+  const path = (args as { path?: unknown } | null)?.path;
+  return typeof path === "string" ? path : "";
+}
 
 /** read_file 审计记录，无论成败。 */
 /** 一次读文件落进审计线的载荷：四个调用点共用这一份映射。 */

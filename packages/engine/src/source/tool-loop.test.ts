@@ -1,13 +1,41 @@
 import { describe, expect, it } from "vitest";
-import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
+import type { McpCallAudit, RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
-import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../application/port/llm-provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmTool } from "../application/port/llm-provider.js";
 import { LlmAbortedError } from "../application/port/llm-provider.js";
 import { buildSearchCorpus } from "./search-code.js";
-import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, withSkillsBrief, toolLoopAuditsOf, type ReadToolProgress, type ToolTraceStep, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
+import { TOOL_CONTEXT_KEEP_ROUNDS, compactTurnContext, completeWithReadTool, withSkillsBrief, toolLoopAuditsOf, type ReadToolLoopInput, type TurnCheckpointChannel, type TurnLoopState } from "./tool-loop.js";
+import type { ReadToolProgress, ToolDefinition, ToolTraceStep } from "./tools/types.js";
+import { toLlmTool } from "./tools/types.js";
 
 /** repoPath 指向本目录：内含稳定存在的真实文件。 */
 const repoPath = import.meta.dirname;
+
+/** 这些用例只关心取证面，作用区统一按 map。 */
+const runLoop = (input: Omit<ReadToolLoopInput, "scope">) => completeWithReadTool({ scope: "map", ...input });
+
+/** 测试用的外部工具面：一台 server 一组，与 MCP 适配器投影同形。 */
+function externalFor(tool: LlmTool, call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>, options: { maxCalls?: number } = {}) {
+  const definition: ToolDefinition = {
+    name: tool.name,
+    summary: tool.description,
+    schema: tool.parameters,
+    exposure: "always",
+    effect: "external",
+    origin: { kind: "mcp", server: "docs" },
+    cost: "external",
+    invoke: async (args, ctx) => {
+      ctx.onProgress?.({ type: "calling_external" });
+      const outcome = await call(tool.name, JSON.stringify(args));
+      return { text: outcome.text, ok: outcome.audit.ok, ...(outcome.audit.masked > 0 ? { detail: "已隐去敏感内容" } : {}), audits: { mcpCalls: [outcome.audit] } };
+    }
+  };
+  return {
+    groups: [{ id: "mcp:docs", summary: "外部工具", scope: "all" as const, available: () => true, tools: [definition] }],
+    call,
+    ...(options.maxCalls === undefined ? {} : { maxCalls: options.maxCalls })
+  };
+}
 
 function scriptedProvider(script: LlmCompletion[]): { provider: LlmProvider; calls: LlmCompletionInput[] } {
   const calls: LlmCompletionInput[] = [];
@@ -34,7 +62,7 @@ describe("completeWithReadTool", () => {
       readCall("c2", "read-file.ts"),
       { text: "基于已有上下文回答。", usage: { inputTokens: 50, outputTokens: 20 }, finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "问题原文", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 5 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "问题原文", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 5 });
     expect(result.completion.text).toContain("基于已有上下文回答");
     expect(result.stoppedBy, "到的是轮数闸，读数就不能与预算或读文件额度混成一档").toBe("rounds");
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
@@ -55,7 +83,7 @@ describe("completeWithReadTool", () => {
       { text: "答完了。", usage: { inputTokens: 30, outputTokens: 5 }, finishReason: "stop" }
     ]);
     const steps: ToolTraceStep[] = [];
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 3, onTrace: (step) => steps.push(step) });
+    await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 3, onTrace: (step) => steps.push(step) });
     expect(steps.filter((step) => step.kind === "model").map((step) => step.status)).toEqual(["start", "ok", "start", "ok"]);
     const tool = steps.filter((step) => step.kind === "tool");
     expect(tool.map((step) => step.status)).toEqual(["start", "ok"]);
@@ -71,7 +99,7 @@ describe("completeWithReadTool", () => {
       readCall("c3", "read-file.ts"),
       { text: "收尾。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 1 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 1 });
     expect(result.completion.text).toBe("收尾。");
     const unknown = calls[2].messages?.find((message) => message.role === "tool" && message.content.includes("未知工具"));
     expect(unknown?.content).toContain("只支持 read_file");
@@ -83,7 +111,7 @@ describe("completeWithReadTool", () => {
       { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }, { id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: "tool-loop.ts" }) }], finishReason: "tool_calls" },
       { text: "看完了。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
     expect(result.fileReads).toHaveLength(1);
     const blocked = calls[1].messages?.find((message) => message.role === "tool" && message.content.includes("读文件上限"));
     expect(blocked?.content, "第二条读取要照实回绝，不能悄悄真读").toBeDefined();
@@ -95,7 +123,7 @@ describe("completeWithReadTool", () => {
       readCall("c1", ".env"),
       { text: "改看别的文件。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
     expect(result.fileReads).toHaveLength(1);
     expect(result.fileReads[0]).toMatchObject({ path: ".env", denied: true });
     expect(result.completion.text).toContain("改看别的文件");
@@ -107,7 +135,7 @@ describe("completeWithReadTool", () => {
       readCall("c2", "read-file.ts"),
       { text: "看完了。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1 });
     expect(result.completion.text).toBe("看完了。");
     // 两次都进审计，只有成功那次占额度。
     expect(result.fileReads.map((read) => read.denied)).toEqual([true, false]);
@@ -123,7 +151,7 @@ describe("completeWithReadTool 的用量汇总", () => {
       { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }], usage: { inputTokens: 8_000, outputTokens: 10, promptCacheHitTokens: 7_000 }, finishReason: "tool_calls" },
       { text: "读完的回答。", usage: { inputTokens: 9_000, outputTokens: 20, promptCacheHitTokens: 8_000 }, finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
     expect(result.usage).toEqual({ inputTokens: 17_000, outputTokens: 30, promptCacheHitTokens: 15_000 });
   });
 });
@@ -132,7 +160,7 @@ describe("completeWithReadTool 的中止", () => {
   it("signal 透传到每一轮调用", async () => {
     const controller = new AbortController();
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "答完。", finishReason: "stop" }]);
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
+    await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => call.signal === controller.signal)).toBe(true);
   });
@@ -140,7 +168,7 @@ describe("completeWithReadTool 的中止", () => {
   it("轮次之间被中止 → 抛 LlmAbortedError，不再开新一轮（也不落收尾调用）", async () => {
     const controller = new AbortController();
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
-    const pending = completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
+    const pending = runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toBeInstanceOf(LlmAbortedError);
     expect(calls).toHaveLength(1);
@@ -150,7 +178,7 @@ describe("completeWithReadTool 的中止", () => {
     const controller = new AbortController();
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
     controller.abort();
-    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal }))
+    await expect(runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal }))
       .rejects.toBeInstanceOf(LlmAbortedError);
     expect(calls).toHaveLength(1);
   });
@@ -178,10 +206,10 @@ describe("completeWithReadTool 的中止", () => {
         throw new LlmAbortedError();
       }
     };
-    const error = await completeWithReadTool({
+    const error = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
       skills: { brief: "可用技能：\n- tutor-cost-audit：对账", bodyOf: (name) => (name === "tutor-cost-audit" ? "第一步：看 llm.log。" : undefined) },
-      external: { tools: [externalTool], call: async () => ({ text: "外部正文。", audit }) }
+      external: externalFor(externalTool, async () => ({ text: "外部正文。", audit }))
     }).then(() => undefined, (caught: unknown) => caught);
     expect(error, "中止没上抛").toBeInstanceOf(LlmAbortedError);
     expect(toolLoopAuditsOf(error)).toMatchObject({
@@ -211,7 +239,7 @@ describe("completeWithReadTool 的中止", () => {
         return { text: "", finishReason: "tool_calls", toolCalls: [{ id: "c3", name: "read_file", argumentsJson: JSON.stringify({ path: "tool-loop.ts" }) }] };
       }
     };
-    const error = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5, signal: controller.signal })
+    const error = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5, signal: controller.signal })
       .then(() => undefined, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(LlmAbortedError);
     expect(n, "中止后不该把第二趟的工具调用真执行掉").toBe(2);
@@ -233,7 +261,7 @@ describe("completeWithReadTool 的 search_code 集成", () => {
       readCall("c2", "read-file.ts"),
       { text: "先搜后读的回答。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1, search: corpus });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 1, search: corpus });
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "search_code"]);
     const searchResult = calls[1].messages?.find((message) => message.role === "tool");
     expect(searchResult?.content).toContain('search_code "read"');
@@ -248,7 +276,7 @@ describe("completeWithReadTool 的 search_code 集成", () => {
       searchCall("c1", "read"),
       { text: "收尾。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
     const unknown = calls[1].messages?.find((message) => message.role === "tool");
     expect(unknown?.content).toContain("未知工具 search_code");
@@ -262,7 +290,7 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
 
   it("什么都不传时工具清单逐字不变（默认关闭不是靠开关，是靠不加）", async () => {
     const { provider, calls } = scriptedProvider([{ text: "答。", finishReason: "stop" }]);
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2 });
+    await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2 });
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
   });
 
@@ -271,7 +299,7 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       { text: "", toolCalls: [{ id: "s1", name: "read_skill", argumentsJson: JSON.stringify({ name: "tutor-cost-audit" }) }, { id: "s2", name: "read_skill", argumentsJson: JSON.stringify({ name: "不存在的技能" }) }], finishReason: "tool_calls" },
       { text: "照做法答。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({
+    const result = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2,
       skills: { brief: "可用技能：\n- tutor-cost-audit：对账", bodyOf: (name) => (name === "tutor-cost-audit" ? "第一步：看 llm.log。" : undefined) }
     });
@@ -280,7 +308,7 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     expect(messages.find((message) => message.toolCallId === "s1")?.content).toContain("看 llm.log");
     expect(messages.find((message) => message.toolCallId === "s2")?.content).toContain("没有「不存在的技能」这份技能");
     // 正文为空与没装是两件事：found 仍为 true。
-    const blank = await completeWithReadTool({
+    const blank = await runLoop({
       provider: scriptedProvider([{ text: "", toolCalls: [{ id: "b1", name: "read_skill", argumentsJson: JSON.stringify({ name: "empty-skill" }) }], finishReason: "tool_calls" }, { text: "答。", finishReason: "stop" }]).provider,
       repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2,
       skills: { brief: "可用技能：\n- empty-skill：一份还没写正文的技能。", bodyOf: (name) => (name === "empty-skill" ? "" : undefined) }
@@ -299,9 +327,9 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       { text: "", toolCalls: [{ id: "r1", name: "read_file", argumentsJson: JSON.stringify({ path: "read-file.ts" }) }], finishReason: "tool_calls" },
       { text: "答。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({
+    const result = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 1,
-      external: { tools: [externalTool], call: async () => ({ text: "外部正文。", audit }) }
+      external: externalFor(externalTool, async () => ({ text: "外部正文。", audit }))
     });
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "mcp__docs__lookup"]);
     expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toBe("外部正文。");
@@ -313,18 +341,18 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     const audit = { server: "docs", tool: "lookup", argsChars: 2, argsHash: "000000000000", resultChars: 4, masked: 0, ok: true, ms: 1 };
     const { provider } = scriptedProvider([
       { text: "", toolCalls: [{ id: "k1", name: "read_skill", argumentsJson: JSON.stringify({ name: "demo" }) }], finishReason: "tool_calls" },
-      { text: "", toolCalls: [{ id: "d1", name: "set_diagram", argumentsJson: "{}" }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "d1", name: "set_diagram", argumentsJson: JSON.stringify({ edit: { action: "help" } }) }], finishReason: "tool_calls" },
       { text: "", toolCalls: [{ id: "f1", name: "query_facts", argumentsJson: "{}" }], finishReason: "tool_calls" },
       { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
       { text: "答完。", finishReason: "stop" }
     ]);
     const frames: ReadToolProgress[] = [];
-    await completeWithReadTool({
+    await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 6, maxCalls: 5,
       skills: { brief: "可用技能：demo", bodyOf: () => "做法。" },
       diagram: { apply: () => "已落成一张图。" },
       facts: { apply: () => "在册：分层。" },
-      external: { tools: [externalTool], call: async () => ({ text: "外部正文", audit }) },
+      external: externalFor(externalTool, async () => ({ text: "外部正文", audit })),
       onProgress: (frame) => frames.push(frame)
     });
     expect(frames).toEqual([
@@ -343,9 +371,9 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       { text: "", toolCalls: [{ id: "e2", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
       { text: "答。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({
+    const result = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
-      external: { tools: [externalTool], maxCalls: 1, call: async () => { fired += 1; return { text: "外部正文。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 6, masked: 0, ok: true, ms: 1 } }; } }
+      external: externalFor(externalTool, async () => { fired += 1; return { text: "外部正文。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 6, masked: 0, ok: true, ms: 1 } }; }, { maxCalls: 1 })
     });
     expect((calls[2].messages ?? []).find((message) => message.toolCallId === "e2")?.content).toContain("最多打 1 次");
     expect(fired).toBe(1);
@@ -357,13 +385,46 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       { text: "", toolCalls: [{ id: "e1", name: "mcp__docs__lookup", argumentsJson: "{}" }], finishReason: "tool_calls" },
       { text: "带保留答。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({
+    const result = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 2,
-      external: { tools: [externalTool], call: async () => ({ text: "外部工具没连上。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 8, masked: 0, ok: false, ms: 1, error: "timeout" } }) }
+      external: externalFor(externalTool, async () => ({ text: "外部工具没连上。", audit: { server: "docs", tool: "lookup", argsChars: 2, argsHash: "0", resultChars: 8, masked: 0, ok: false, ms: 1, error: "timeout" } }))
     });
     expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toContain("没连上");
     expect(result.completion.text).toBe("带保留答。");
     expect(result.mcpCalls[0].ok).toBe(false);
+  });
+});
+
+describe("按需工具（schema 超预算时收进目录）", () => {
+  it("tools 数组只留常驻面：目录进 system，先 inspect 再用 tool_call 执行", async () => {
+    const audit = { server: "srv", tool: "big", argsChars: 2, argsHash: "000000000000", resultChars: 6, masked: 0, ok: true, ms: 1 };
+    const surfaceCall = async () => ({ text: "外部正文。", audit });
+    const definition: ToolDefinition = {
+      name: "mcp__srv__big",
+      summary: "一个参数很多的外部工具",
+      schema: { type: "object", properties: { pad: { type: "string", description: "x".repeat(9_000) } } },
+      exposure: "auto",
+      effect: "external",
+      origin: { kind: "mcp", server: "srv" },
+      cost: "external",
+      invoke: async (args) => {
+        const outcome = await surfaceCall();
+        return { text: outcome.text, ok: outcome.audit.ok, audits: { mcpCalls: [outcome.audit] } };
+      }
+    };
+    const external = { tools: [toLlmTool(definition)], groups: [{ id: "mcp:srv", summary: "外部工具", scope: "all" as const, available: () => true, tools: [definition] }], call: surfaceCall };
+    const { provider, calls } = scriptedProvider([
+      { text: "", toolCalls: [{ id: "i1", name: "tool_inspect", argumentsJson: JSON.stringify({ name: "mcp__srv__big" }) }], finishReason: "tool_calls" },
+      { text: "", toolCalls: [{ id: "c1", name: "tool_call", argumentsJson: JSON.stringify({ name: "mcp__srv__big", arguments: { q: "x" } }) }], finishReason: "tool_calls" },
+      { text: "答完。", finishReason: "stop" }
+    ]);
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 4, maxCalls: 3, external });
+    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "tool_inspect", "tool_call"]);
+    expect(calls[0].system, "目录不大时内联进 system，模型不必先搜").toContain("mcp__srv__big");
+    expect(calls[1].messages?.find((message) => message.toolCallId === "i1")?.content).toContain("参数很多");
+    expect((calls[2].messages ?? []).find((message) => message.toolCallId === "c1")?.content).toBe("外部正文。");
+    expect(result.mcpCalls).toEqual([audit]);
+    expect(result.completion.text).toBe("答完。");
   });
 });
 
@@ -454,7 +515,7 @@ describe("回合检查点与预算闸门", () => {
   it("每完成一轮存一份快照，答完就清空", async () => {
     const tracker = fakeChannel();
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "答完。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
     expect(tracker.saved()).toEqual([{ round: 1 }]);
     expect(tracker.cleared(), "答完了还留着残局，下一次就会误续一个已经结束的回合").toBe(1);
     expect(result.resumedFromRound).toBeUndefined();
@@ -464,7 +525,7 @@ describe("回合检查点与预算闸门", () => {
   it("有残局就从那一轮接着开火：不重放首轮，已读到的正文直接在场", async () => {
     const tracker = fakeChannel({ round: 1, state: emptyState(1) });
     const { provider, calls } = scriptedProvider([{ text: "接上了。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "换了一份新的首问原文", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "换了一份新的首问原文", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel });
     expect(calls).toHaveLength(1);
     expect(calls[0].user, "续跑不带 user：首轮已经在 messages[0] 里，再给一份会重复付一遍上下文").toBeUndefined();
     expect(calls[0].messages?.[0].content).toBe("首问原文");
@@ -477,7 +538,7 @@ describe("回合检查点与预算闸门", () => {
   it("残局里的读文件额度跟着状态回来：续跑不会把已经用掉的额度重新花一遍", async () => {
     const tracker = fakeChannel({ round: 1, state: emptyState(1) });
     const { provider, calls } = scriptedProvider([readCall("c2", "tool-loop.ts"), { text: "答完。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 2, checkpoint: tracker.channel });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 2, checkpoint: tracker.channel });
     // 额度 2：残局已用掉 1 次，这一轮用掉第 2 次后收尾。
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts", "tool-loop.ts"]);
     expect(result.rounds).toBe(2);
@@ -496,7 +557,7 @@ describe("回合检查点与预算闸门", () => {
         throw new Error("端点 500");
       }
     };
-    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel })).rejects.toThrow("端点 500");
+    await expect(runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 3, maxCalls: 5, checkpoint: tracker.channel })).rejects.toThrow("端点 500");
     expect(tracker.saved()).toEqual([{ round: 1 }, { round: 1, stoppedReason: "error" }]);
     expect(tracker.cleared(), "残局就是给人续的，清了等于白死一次").toBe(0);
   });
@@ -506,7 +567,7 @@ describe("回合检查点与预算闸门", () => {
     const controller = new AbortController();
     controller.abort();
     const { provider } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "不该出现。", finishReason: "stop" }]);
-    await expect(completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal, checkpoint: tracker.channel }))
+    await expect(runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 1, maxCalls: 1, signal: controller.signal, checkpoint: tracker.channel }))
       .rejects.toBeInstanceOf(LlmAbortedError);
     expect(tracker.saved(), "中止不留残局：替他续跑是违背他的意图").toEqual([]);
     expect(tracker.cleared()).toBe(1);
@@ -515,7 +576,7 @@ describe("回合检查点与预算闸门", () => {
   it("每轮开火前查预算：到线就不再执行工具，收尾那句说的是预算不是读文件上限", async () => {
     let asked = 0;
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "收尾。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({
+    const result = await runLoop({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
       budgetGuard: () => { asked += 1; return asked === 1 ? "本仓库本月预算（5）已经用完，这是本次对话的最后一趟调用。" : undefined; }
     });
@@ -571,7 +632,7 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
     const { provider, calls } = loopingProvider();
     const log: string[] = [];
     const seen: TurnLoopState[] = [];
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 4, interruptAtLimit: true, checkpoint: spyChannel(log, seen) });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 4, interruptAtLimit: true, checkpoint: spyChannel(log, seen) });
     expect(calls.length, "中断就不该再有收尾那一趟调用（那一趟是过去硬答一句的钱）").toBe(4);
     expect(result.interrupted).toMatchObject({ reason: "rounds" });
     expect(result.stoppedBy).toBe("rounds");
@@ -586,7 +647,7 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
   it("预算到线：同一档结局、同一个原因位", async () => {
     const { provider, calls } = loopingProvider();
     const log: string[] = [];
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 10, maxCalls: 4, interruptAtLimit: true, budgetGuard: () => "本仓库本月预算（5）已经用完。", checkpoint: spyChannel(log, []) });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 10, maxCalls: 4, interruptAtLimit: true, budgetGuard: () => "本仓库本月预算（5）已经用完。", checkpoint: spyChannel(log, []) });
     expect(calls.length).toBe(1);
     expect(result.interrupted?.reason).toBe("budget");
     expect(result.interrupted?.detail).toContain("预算");
@@ -601,10 +662,10 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
       clear: () => { states.clear(); }
     };
     const once = loopingProvider();
-    await completeWithReadTool({ provider: once.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    await runLoop({ provider: once.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(states.size, "中断该留下一份快照").toBe(1);
     const again = resumingProvider();
-    const resumed = await completeWithReadTool({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    const resumed = await runLoop({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 1, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(resumed.resumedFromRound, "同一句、同一模型、同一份系统提示 ⇒ 接得上，用户点重试不该是从头再来").toBe(1);
     const carried = again.calls[0].messages ?? [];
     expect(carried.some((message) => message.role === "tool" && message.content.includes("这一轮在这里中断")), "续跑的请求里得带着中断那一句，否则模型不知道自己是接着做的").toBe(true);
@@ -619,11 +680,11 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
       save: (key, state) => { states.set(key, { round: state.rounds, state }); },
       clear: () => { states.clear(); }
     };
-    const stopped = await completeWithReadTool({ provider: loopingProvider().provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    const stopped = await runLoop({ provider: loopingProvider().provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(stopped.interrupted?.reason).toBe("rounds");
 
     const again = resumingProvider();
-    const resumed = await completeWithReadTool({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
+    const resumed = await runLoop({ provider: again.provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, interruptAtLimit: true, checkpoint: channel });
     expect(resumed.resumedFromRound, "接上的正是中断那一轮之后").toBe(2);
     // 中断那次已把累计轮数顶满：闸门按本次请求内的轮数判。
     expect(resumed.interrupted, "重试是「再给一次机会」，不是「再撞一次同一道闸」").toBeUndefined();
@@ -634,7 +695,7 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
   it("不开这一档就还是老结局：回绝掉挂着的调用，再发一趟不带工具的收尾", async () => {
     const { provider, calls } = loopingProvider();
     const log: string[] = [];
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, checkpoint: spyChannel(log, []) });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 4, checkpoint: spyChannel(log, []) });
     expect(calls.length, "两趟取证 + 回绝后收尾那一趟").toBe(4);
     expect(calls[3].tools, "收尾那一趟不带工具").toBeUndefined();
     expect(result.interrupted).toBeUndefined();
@@ -651,7 +712,7 @@ describe("技能面与文件面的开关（出题、答疑与问答共用一条�
       { text: "", toolCalls: [{ id: "c1", name: "read_skill", argumentsJson: JSON.stringify({ name: "demo" }) }], usage: { inputTokens: 100, outputTokens: 5 }, finishReason: "tool_calls" },
       { text: "按做法出的题。", usage: { inputTokens: 120, outputTokens: 40 }, finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, system: withSkillsBrief("s", skills), user: "u", temperature: 0.4, scene: "practice.generate", skills });
+    const result = await runLoop({ provider, system: withSkillsBrief("s", skills), user: "u", temperature: 0.4, scene: "practice.generate", skills });
     expect(calls[0].system).toContain("可用技能：demo");
     expect((calls[0].tools ?? []).map((tool) => tool.name)).toEqual(["read_skill"]);
     expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("先判考点"))).toBe(true);
@@ -664,7 +725,7 @@ describe("技能面与文件面的开关（出题、答疑与问答共用一条�
       { text: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: JSON.stringify({ path: "src/config.js" }) }], usage: { inputTokens: 80, outputTokens: 4 }, finishReason: "tool_calls" },
       { text: "读完才敢出这题。", usage: { inputTokens: 160, outputTokens: 30 }, finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", temperature: 0.4, scene: "practice.generate" });
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", temperature: 0.4, scene: "practice.generate" });
     expect((calls[0].tools ?? []).map((tool) => tool.name)).toContain("read_file");
     expect(result.fileReads.map((read) => read.path)).toEqual(["src/config.js"]);
     expect(result.completion.text).toBe("读完才敢出这题。");
@@ -704,7 +765,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
   it("问一句就不再发第二次调用；正文是「问句 + 可选项」；只留一份等回答的快照", async () => {
     const { provider, calls } = scriptedProvider([askCall("a1", question)]);
     const store = fakeStore();
-    const result = await completeWithReadTool({ ...base, provider, ask: { facets }, checkpoint: store.channel });
+    const result = await runLoop({ ...base, provider, ask: { facets }, checkpoint: store.channel });
     expect(calls.length, "提问就是本轮成品，不该再烧一趟调用").toBe(1);
     expect(result.completion.text).toBe("这张图画哪一块？\n可选项：整仓 / 下单那条");
     expect(result.asked).toEqual({ ...question, toolCallId: "a1" });
@@ -714,10 +775,10 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
   it("认领一句提问：答句回灌到挂着的那条调用，接着算而不是从头再来", async () => {
     const store = fakeStore();
     const first = scriptedProvider([askCall("a1", question)]);
-    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    await runLoop({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
 
     const again = scriptedProvider([{ text: "那就画下单那条。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "下单那条" } }, checkpoint: store.channel });
+    const result = await runLoop({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "下单那条" } }, checkpoint: store.channel });
     expect(result.askClaimed).toEqual({ toolCallId: "a1", outcome: "claimed" });
     expect(result.resumedFromRound, "认领回到的正是问出那句的那一轮").toBe(1);
     expect(again.calls.length, "接上之后只发这一趟：已读过的上下文不该重付").toBe(1);
@@ -730,9 +791,9 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
   it("同一句原样重发绝不接上「等回答」的快照", async () => {
     const store = fakeStore();
     const first = scriptedProvider([askCall("a1", question)]);
-    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    await runLoop({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
     const again = scriptedProvider([{ text: "按整仓画。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ ...base, provider: again.provider, ask: { facets }, checkpoint: store.channel });
+    const result = await runLoop({ ...base, provider: again.provider, ask: { facets }, checkpoint: store.channel });
     expect(result.resumedFromRound, "重发走的是哈希那条路：接到一句没人答的提问上，模型会以为自己已经问过了").toBeUndefined();
     expect(again.calls[0].user).toBe("画张图");
   });
@@ -740,9 +801,9 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
   it("换了模型就不认领：老实重跑，并把「没认上」报出去", async () => {
     const store = fakeStore();
     const first = scriptedProvider([askCall("a1", question)]);
-    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    await runLoop({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
     const otherModel: LlmProvider = { name: "scripted", modelVersion: "scripted:v2", complete: async () => ({ text: "整仓三层。", finishReason: "stop" }) };
-    const result = await completeWithReadTool({ ...base, provider: otherModel, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
+    const result = await runLoop({ ...base, provider: otherModel, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
     expect(result.askClaimed).toEqual({ toolCallId: "a1", outcome: "missed" });
     expect(result.resumedFromRound, "另一家模型的中间状态接过来就是答非所问").toBeUndefined();
     expect(result.completion.text).toBe("整仓三层。");
@@ -758,10 +819,10 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
       ],
       finishReason: "tool_calls"
     }]);
-    await completeWithReadTool({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
+    await runLoop({ ...base, provider: first.provider, ask: { facets }, checkpoint: store.channel });
 
     const again = scriptedProvider([{ text: "整仓三层。", finishReason: "stop" }]);
-    await completeWithReadTool({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
+    await runLoop({ ...base, provider: again.provider, ask: { facets, resume: { toolCallId: "a1", answer: "整仓" } }, checkpoint: store.channel });
     const carried = again.calls[0].messages ?? [];
     const asked = carried.flatMap((message) => message.toolCalls ?? []).map((call) => call.id).sort();
     const replies = carried.filter((message) => message.role === "tool").map((message) => message.toolCallId).sort();
@@ -779,7 +840,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
       ],
       finishReason: "tool_calls"
     }]);
-    const result = await completeWithReadTool({ ...base, provider, ask: { facets } });
+    const result = await runLoop({ ...base, provider, ask: { facets } });
     expect(calls.length).toBe(1);
     expect(result.asked?.question, "一轮最多问一句").toBe("要给谁看？");
   });
@@ -789,7 +850,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
       askCall("a1", { facet: "range", question: "画哪一块？", options: ["把整条下单链路和它的异步任务都画上"] }),
       { text: "那就先画整仓三层。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ ...base, provider, ask: { facets } });
+    const result = await runLoop({ ...base, provider, ask: { facets } });
     expect(result.asked, "超限的提问不成立").toBeUndefined();
     expect(result.askRefused).toContain("按钮放不下");
     expect(calls.length, "挡下之后回合继续，不是一报错就散").toBe(2);
@@ -800,17 +861,17 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
   it("放宽后的上限：问句 80 字、候选 16 字 × 5 个照收，各超一个字才挡", async () => {
     const wide = (question: string, label: string, count: number) => ({ facet: "range", question, options: Array.from({ length: count }, () => label) });
 
-    const accepted = await completeWithReadTool({ ...base, provider: scriptedProvider([askCall("a1", wide("问".repeat(80), "选".repeat(16), 5))]).provider, ask: { facets } });
+    const accepted = await runLoop({ ...base, provider: scriptedProvider([askCall("a1", wide("问".repeat(80), "选".repeat(16), 5))]).provider, ask: { facets } });
     expect(accepted.asked?.options, "16 字 × 5 个仍是排得开的按钮").toHaveLength(5);
 
-    const longQuestion = await completeWithReadTool({ ...base, provider: scriptedProvider([
+    const longQuestion = await runLoop({ ...base, provider: scriptedProvider([
       askCall("a1", wide("问".repeat(81), "选".repeat(16), 1)),
       { text: "按整仓画。", finishReason: "stop" }
     ]).provider, ask: { facets } });
     expect(longQuestion.asked).toBeUndefined();
     expect(longQuestion.askRefused).toContain("超过 80 字");
 
-    const longLabel = await completeWithReadTool({ ...base, provider: scriptedProvider([
+    const longLabel = await runLoop({ ...base, provider: scriptedProvider([
       askCall("a1", wide("问", "选".repeat(17), 1)),
       { text: "按整仓画。", finishReason: "stop" }
     ]).provider, ask: { facets } });
@@ -823,7 +884,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
       askCall("a1", { facet: "goal", question: "要给谁看？", options: ["新人"] }),
       { text: "按分层给。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ ...base, provider, ask: { facets: ["range"] } });
+    const result = await runLoop({ ...base, provider, ask: { facets: ["range"] } });
     expect(result.askRefused).toContain("本轮能问的只有 range");
     expect(result.asked).toBeUndefined();
   });
@@ -833,7 +894,7 @@ describe("ask_user（回合内提问：问句即本轮正文，快照留着等�
       askCall("a1", { facet: "range", question: "画哪一块？", options: ["整仓"] }),
       { text: "整仓三层。", finishReason: "stop" }
     ]);
-    const result = await completeWithReadTool({ ...base, provider });
+    const result = await runLoop({ ...base, provider });
     expect(calls[0].tools?.some((tool) => tool.name === "ask_user"), "默认关 = 清单里一个字节都不多").toBe(false);
     expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("没有向用户提问的通道"))).toBe(true);
     expect(result.asked).toBeUndefined();

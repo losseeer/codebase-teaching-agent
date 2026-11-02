@@ -1,4 +1,4 @@
-import type { FactsToolContext, SetDiagramToolContext } from "../source/tool-loop.js";
+import type { FactsToolContext, SetDiagramToolContext } from "../source/tools/types.js";
 import type { RegistryFileFact, TypeRelationFileFact } from "@codebase-tutor/domain";
 
 import type { ImportedRepository } from "../importer/importer.js";

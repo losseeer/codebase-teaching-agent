@@ -5,7 +5,8 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
-import { completeWithReadTool, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
+import { completeWithReadTool, withSkillsBrief } from "../source/tool-loop.js";
+import type { SkillReadRecord } from "../source/tools/types.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { recordEgress, type EgressSource } from "../adapter/outbound/security/egress-log.js";
 import { secretMasker } from "@codebase-tutor/domain";
@@ -132,8 +133,8 @@ function parseRefinement(text: string, exercise: Exercise): Exercise | undefined
 
 /** LLM 出题的结果类型；proposal 仍需过确定性守门。被拒的那趟同样花了钱，失败支路也带 usage。 */
 export type LlmGeneration =
-  | { ok: false; reason: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] }
-  | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
+  | { ok: false; reason: string; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads: FileReadRecord[] }
+  | { ok: true; proposal: LlmProposal; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads: FileReadRecord[] };
 
 export interface LlmProposal {
   title: string;
@@ -199,6 +200,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
   const loop = await completeWithReadTool({
     ...faces,
     provider: input.provider,
+    scope: faces.scope ?? "practice",
     system: withSkillsBrief(baseSystem, faces.skills),
     user,
     temperature: 0.4,
@@ -239,7 +241,7 @@ export async function judgeRubricWithLlm(input: { prompt: string; answerKey: str
     criteria: input.criteria,
     learnerAnswer: input.learnerAnswer
   });
-  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, system, user, temperature: 0.1, scene: "practice.judge" });
+  const loop = await completeWithReadTool({ ...input.faces, provider: input.provider, scope: input.faces?.scope ?? "practice", system, user, temperature: 0.1, scene: "practice.judge" });
   const response = { text: loop.completion.text, usage: loop.usage };
   const fileReads = loop.fileReads;
   const parsed = parseJsonObject(response.text);

@@ -1,10 +1,12 @@
-import type { ReadToolLoopInput, ReadToolProgress } from "../source/tool-loop.js";
+import type { AgentScope } from "@codebase-tutor/contract";
+import type { ReadToolLoopInput } from "../source/tool-loop.js";
+import type { ReadToolProgress } from "../source/tools/types.js";
 
 /**
   出题、判分、讲评这几趟共用的取证面。
   形状直接取自工具循环的入参：这几趟与问答回合走同一条循环，不再各有一套特例。
 */
-export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal" | "onTrace">;
+export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal" | "onTrace"> & { scope?: AgentScope };
 
 /** 出题进度帧：stage 是稳定键，detail 给 tooltip。 */
 export interface ExerciseProgress {
