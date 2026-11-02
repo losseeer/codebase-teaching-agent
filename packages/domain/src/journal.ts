@@ -17,7 +17,7 @@ export type JournalEventType =
     带 tag 时一并记。已发生的模型回合另由 exercise_model_reply 留痕，花费另记 token_usage。
   */
   | "exercise_aborted"
-  /** 练习送达事件（转化率的分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
+  /** 练习送达事件（转化率的分母）：payload.source = llm|cache|rule|review，另带 title 供轨迹按题名标注。 */
   | "exercise_generated"
   /** 参考模式采纳的锚点，一条一条记：path / line / end_line / why（取用了它的什么，不进题面）。 */
   | "exercise_anchor"

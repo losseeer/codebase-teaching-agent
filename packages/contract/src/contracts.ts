@@ -294,6 +294,8 @@ export const traceHistoryRunSchema = z.object({
   status: z.enum(["ok", "error", "aborted"]),
   startedAt: z.string(),
   endedAt: z.string().optional(),
+  /** 出题运行的题目标签；对话运行不给（标题由当前会话决定）。 */
+  title: z.string().optional(),
   summary: z.string().optional(),
   steps: z.array(agentTracePayloadSchema)
 });

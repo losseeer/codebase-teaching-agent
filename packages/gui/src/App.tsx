@@ -281,7 +281,7 @@ export function App(): ReactElement {
             <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
           </Routes>
         </div>
-        {workspaceRoute ? <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} /> : null}
+        {workspaceRoute ? <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} threadId={chat.currentThreadId[traceScope]} /> : null}
       </main>
       {workspaceRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />

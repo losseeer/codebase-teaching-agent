@@ -186,7 +186,7 @@ export class ExerciseService {
       for (const schedule of due) {
         const stored = repository.ports.store.byId<StoredExercise>(schedule.exerciseId);
         if (stored && !staleDependencies(repository, stored.exercise).length) {
-          repository.ports.audit.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId });
+          repository.ports.audit.append("exercise_generated", { source: "review", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, title: stored.exercise.title });
           return stored.exercise;
         }
       }
@@ -208,7 +208,7 @@ export class ExerciseService {
     const cached = repository.ports.store.get<StoredExercise>(scope, target.kind, target.id);
     if (cached) {
       // 缓存命中也要报当时润色过没有。
-      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: cached.exercise.targetUnitId, title: cached.exercise.title, polish: cached.polish ?? null, polish_failure: cached.polishFailure ?? null });
       return cached.exercise;
     }
     if (isCodeKind(target.kind)) return await this.nextCode(repository, target, provider, scope, deps, faces, progress);
@@ -232,7 +232,7 @@ export class ExerciseService {
     }
     if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, target.kind, target.id, stored);
-    repository.ports.audit.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, polish, polish_failure: polishFailure });
+    repository.ports.audit.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, title: stored.exercise.title, polish, polish_failure: polishFailure });
     return stored.exercise;
   }
 
@@ -289,7 +289,7 @@ export class ExerciseService {
       polishFailure: null
     };
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
-    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, polish: "llm", polish_failure: null });
+    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, title: exercise.title, polish: "llm", polish_failure: null });
     return exercise;
   }
 
@@ -345,7 +345,7 @@ export class ExerciseService {
     const scope = deps.length ? `${fileScope(deps, provider.modelVersion, runnerFingerprint())}#reference` : `reference#${repository.analysis.versionStamp}#${provider.modelVersion}`;
     const cached = repository.ports.store.get<StoredExercise>(scope, kind, targetUnitId);
     if (cached) {
-      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference" });
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, title: cached.exercise.title, tag, selection, strategy: "reference" });
       return cached.exercise;
     }
     const reference = candidates.map((candidate) => `## ${candidate.path}\n${candidate.excerpt}`).join("\n\n").slice(0, 24_000);
@@ -390,7 +390,7 @@ export class ExerciseService {
     };
     if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
-    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
+    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, title: exercise.title, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
     // 锚点的 why 只进 journal：一条一个，记下取用了它的什么，供事后判强弱
     for (const anchor of accepted) {
       repository.ports.audit.append("exercise_anchor", {
@@ -435,7 +435,7 @@ export class ExerciseService {
     };
     const cached = repository.ports.store.get<StoredExercise>(scope, "llm_rubric", targetUnitId);
     if (cached && cached.exercise.kind === "llm_rubric") {
-      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, tag, selection, ...extra });
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, title: cached.exercise.title, tag, selection, ...extra });
       return cached.exercise;
     }
     const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, faces, onProgress: progress });
@@ -480,7 +480,7 @@ export class ExerciseService {
     if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, "llm_rubric", targetUnitId, stored);
     repository.ports.audit.append("exercise_generated", {
-      source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection, ...extra,
+      source: "llm", kind: exercise.kind, target_unit: targetUnitId, title: exercise.title, tag, selection, ...extra,
       ...(proposal.topicTier ? { topic_tier: proposal.topicTier } : {}),
       ...(proposal.examPoint ? { exam_point: proposal.examPoint } : {})
     });

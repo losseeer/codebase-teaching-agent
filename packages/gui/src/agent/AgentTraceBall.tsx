@@ -4,7 +4,7 @@ import type { AgentScope, AgentSurface, AgentToolEntry } from "@codebase-tutor/c
 import { Icon } from "../ui/icons";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
-import { inScope, practiceAgentLabel } from "./traceScope";
+import { inScope } from "./traceScope";
 import { useTraceHistory } from "./useTraceHistory";
 
 const SCENE_LABEL: Record<string, string> = { "teaching.turn": "代码问答", "map.chat": "架构全景", "practice.chat": "练习答疑", "practice.generate": "出题" };
@@ -50,32 +50,26 @@ function mergeRuns(live: TraceRun[], history: TraceRun[]): TraceRun[] {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
 
-interface RunGroup {
-  key: string;
-  label: string;
-  runs: TraceRun[];
+/** 会话轨迹：对话只看当前会话；练习保留不属于会话的出题运行。 */
+function inSession(run: TraceRun, scope: AgentScope, threadId?: string | null): boolean {
+  if (scope === "practice" && run.scene === "practice.generate") return true;
+  return Boolean(threadId) && run.threadId === threadId;
 }
 
-/** 已结束的运行按 agent 分堆：练习区分出题与答疑，其余工作区只有一堆。 */
-function historyGroups(runs: TraceRun[], scope: AgentScope): RunGroup[] {
-  const byTime = [...runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-  if (scope !== "practice") return byTime.length ? [{ key: "all", label: "", runs: byTime }] : [];
-  const groups: RunGroup[] = [];
-  for (const run of byTime) {
-    const label = practiceAgentLabel(run.scene) ?? "其他";
-    const group = groups.find((item) => item.key === label);
-    if (group) group.runs.push(run);
-    else groups.push({ key: label, label, runs: [run] });
-  }
-  return groups;
+/** 出题记录用题目名；没有题名的旧行/失败行用状态加时刻区分。 */
+function generationLabel(run: TraceRun): string {
+  const title = run.title?.trim() || /题目「(.+?)」/.exec(run.summary ?? "")?.[1]?.trim();
+  if (title) return title.length > 24 ? `${title.slice(0, 24)}…` : title;
+  const status = run.status === "running" ? "生成中" : run.status === "aborted" ? "已取消" : run.status === "error" ? "出题失败" : "出题";
+  return `${status} · ${shortTime(run.startedAt)}`;
 }
 
-/** 悬浮球：打开当前仓、当前工作区的运行轨迹。 */
-export function AgentTraceBall({ repositoryId, scope }: { repositoryId: string | null; scope: AgentScope }): ReactElement | null {
+/** 悬浮球：打开当前仓、当前工作区的运行轨迹；对话轨迹跟随当前会话。 */
+export function AgentTraceBall({ repositoryId, scope, threadId }: { repositoryId: string | null; scope: AgentScope; threadId?: string | null }): ReactElement | null {
   const { runs } = useAgentTrace(repositoryId);
   const [open, setOpen] = useState(false);
   if (!repositoryId) return null;
-  const scoped = runs.filter((run) => inScope(run.scene, scope));
+  const scoped = runs.filter((run) => inScope(run.scene, scope) && inSession(run, scope, threadId));
   const running = scoped.some((run) => run.status === "running");
   return (
     <>
@@ -83,17 +77,17 @@ export function AgentTraceBall({ repositoryId, scope }: { repositoryId: string |
         <Icon name="zap" size={18} />
         {running ? <span className="trace-ball-dot" /> : null}
       </button>
-      {open ? <TraceModal runs={scoped} repositoryId={repositoryId} scope={scope} onClose={() => setOpen(false)} /> : null}
+      {open ? <TraceModal runs={scoped} repositoryId={repositoryId} scope={scope} threadId={threadId} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
-function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; onClose: () => void }): ReactElement {
+function TraceModal({ runs, repositoryId, scope, threadId, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; threadId?: string | null; onClose: () => void }): ReactElement {
   const [tab, setTab] = useState<TraceTab>("trace");
-  const [selectedId, setSelectedId] = useState<string>();
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [generationId, setGenerationId] = useState<string>();
   const { surface, error, loading } = useAgentSurface(repositoryId, scope);
-  const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope);
+  // 练习区要保留 repo 级的出题历史，所以这里不按会话过滤，取回后再筛
+  const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope, 100, scope === "practice" ? undefined : threadId);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
@@ -103,11 +97,14 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [onClose]);
-  const merged = mergeRuns(runs, historyRuns);
-  const running = merged.filter((run) => run.status === "running");
-  const ended = merged.filter((run) => run.status !== "running");
-  const groups = historyGroups(ended, scope);
-  const selected = merged.find((run) => run.runId === selectedId) ?? running[0];
+  const sessionHistory = historyRuns.filter((run) => inSession(run, scope, threadId));
+  const merged = mergeRuns(runs, sessionHistory).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  const chatRuns = merged.filter((run) => run.scene !== "practice.generate");
+  const generationRuns = scope === "practice"
+    ? merged.filter((run) => run.scene === "practice.generate").sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    : [];
+  const selectedGeneration = generationRuns.find((run) => run.runId === generationId) ?? generationRuns.find((run) => run.status === "running") ?? generationRuns[0];
+  const waitingForSession = scope !== "practice" && !threadId;
   const tabs: { id: TraceTab; label: string }[] = [
     { id: "trace", label: "轨迹" },
     { id: "skills", label: "技能" },
@@ -128,50 +125,39 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
         </div>
         <div className="modal-body" id="trace-panel" role="tabpanel" aria-labelledby={`trace-tab-${tab}`}>
           {tab === "trace" ? (
+            waitingForSession ? (
+              <p className="field-note">选择一条会话后显示它的轨迹。</p>
+            ) : historyLoading && !merged.length ? (
+              <p className="field-note">正在读取轨迹…</p>
+            ) : !chatRuns.length && !generationRuns.length ? (
+              <p className="field-note">{historyError ? `轨迹读取失败：${historyError}` : "这条会话还没有回合。"}</p>
+            ) : (
             <>
-              <div className="trace-run-bar">
-                {running.length ? (
-                  <div className="trace-run-group">
-                    <span className="trace-run-group-label">进行中</span>
-                    {running.map((run) => (
-                      <button key={run.runId} type="button" className={`trace-run-chip running${run.runId === selected?.runId ? " active" : ""}`} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
-                        <span className="trace-run-live" />
-                        {scope === "practice" ? `${practiceAgentLabel(run.scene) ?? "出题"} · ` : ""}{shortTime(run.startedAt)}
-                      </button>
-                    ))}
+              {generationRuns.length ? (
+                <section className="trace-generation">
+                  <div className="trace-generation-head">
+                    <span className="trace-run-group-label">出题记录</span>
+                    <select className="select trace-generation-select" aria-label="选择出题记录" value={selectedGeneration?.runId ?? ""} onChange={(event) => setGenerationId(event.target.value)}>
+                      {generationRuns.map((run) => <option key={run.runId} value={run.runId}>{generationLabel(run)}</option>)}
+                    </select>
                   </div>
-                ) : <span className="trace-run-idle">当前没有运行中的agent</span>}
-                <button type="button" className={`trace-history-toggle${historyOpen ? " open" : ""}`} aria-expanded={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
-                  历史{ended.length ? ` ${ended.length}` : ""}
-                </button>
-                {selected && selected.status !== "running" ? (
-                  <button type="button" className="trace-live-back" onClick={() => { setSelectedId(undefined); setHistoryOpen(false); }}>回到实时</button>
-                ) : null}
-              </div>
-              {historyOpen ? (
-                <div className="trace-history-panel">
-                  {!groups.length ? <p className="field-note">{historyLoading ? "正在读取历史…" : "没有历史记录。"}</p> : null}
-                  {groups.map((group) => (
-                    <div key={group.key} className="trace-run-group">
-                      {group.label ? <span className="trace-run-group-label">{group.label}</span> : null}
-                      {group.runs.map((run) => (
-                        <button key={run.runId} type="button" className={`trace-run-chip${run.runId === selected?.runId ? " active" : ""}`} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
-                          {shortTime(run.startedAt)}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                  {selectedGeneration ? <RunView run={selectedGeneration} compact /> : null}
+                </section>
+              ) : null}
+              {chatRuns.length ? (
+                <div className="trace-session">
+                  {chatRuns.map((run) => <RunView key={run.runId} run={run} compact />)}
                 </div>
               ) : null}
-              {historyError ? <p className="field-note">历史读取失败：{historyError}</p> : null}
-              {selected ? <RunView run={selected} /> : null}
+              {historyError ? <p className="field-note">轨迹读取失败：{historyError}</p> : null}
             </>
+            )
           ) : null}
           {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} /> : null}
           {tab === "tools" ? <ToolsView surface={surface} error={error} loading={loading} /> : null}
         </div>
         <div className="modal-foot">
-          <span className="modal-note">{tab === "trace" ? "实时 + 历史轨迹" : ""}</span>
+          <span className="modal-note">{tab === "trace" ? "当前会话 + 出题记录" : ""}</span>
           <button type="button" className="btn" onClick={onClose}>关闭</button>
         </div>
       </div>
@@ -213,7 +199,7 @@ function Timeline({ run }: { run: TraceRun }): ReactElement | null {
   );
 }
 
-function RunView({ run }: { run: TraceRun }): ReactElement {
+function RunView({ run, compact = false }: { run: TraceRun; compact?: boolean }): ReactElement {
   const steps = [...run.steps].sort((a, b) => a.at.localeCompare(b.at));
   return (
     <>
@@ -222,7 +208,7 @@ function RunView({ run }: { run: TraceRun }): ReactElement {
         <span className="trace-run-scene">{sceneLabel(run.scene)}</span>
         <span className="trace-run-status">{STATUS_LABEL[run.status]}</span>
       </div>
-      {run.historical ? <p className="field-note">历史回合按 journal 汇总。</p> : null}
+      {!compact && run.historical ? <p className="field-note">历史回合按 journal 汇总。</p> : null}
       <Timeline run={run} />
       <div className="trace-steps">
         {steps.map((step) => <TraceRow key={step.stepId ?? `${step.kind}-${step.seq}`} step={step} />)}

@@ -11,6 +11,8 @@ export interface TraceRun {
   status: "running" | "ok" | "error" | "aborted";
   startedAt: string;
   endedAt?: string;
+  /** 出题运行的题目标签；对话运行不给。 */
+  title?: string;
   summary?: string;
   steps: AgentTracePayload[];
   /** 来自 journal 的汇总回放，不是本次打开期间的实时帧。 */

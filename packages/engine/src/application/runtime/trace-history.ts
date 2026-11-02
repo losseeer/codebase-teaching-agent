@@ -210,6 +210,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
     runId,
     scene,
     ...(threadId ? { threadId } : {}),
+    ...(generated && typeof generated.payload.title === "string" && generated.payload.title.trim() ? { title: generated.payload.title.trim() } : {}),
     status,
     startedAt: ordered[0].at,
     endedAt: ordered[ordered.length - 1].at,

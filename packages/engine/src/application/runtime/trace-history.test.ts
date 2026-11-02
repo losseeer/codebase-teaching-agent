@@ -80,9 +80,9 @@ describe("journal 回合历史", () => {
       ev("file_read", "g1", "2026-11-02T03:05:01.000Z", { path: "src/a.ts", lines: 10, truncated: false, denied: false }),
       ev("token_usage", "g1", "2026-11-02T03:05:02.000Z", { scene: "exercise_generate_code", input_tokens: 30, output_tokens: 10, provider: "model:v1" }),
       ev("exercise_model_reply", "g1", "2026-11-02T03:05:03.000Z", { scene: "practice.generate", reply: "{\"title\":\"模型出的题\"}", reply_truncated: false }),
-      ev("exercise_generated", "g1", "2026-11-02T03:05:04.000Z", { family: "code", kind: "patch_edit", source: "llm", target_unit: "unit-1" })
+      ev("exercise_generated", "g1", "2026-11-02T03:05:04.000Z", { family: "code", kind: "patch_edit", source: "llm", target_unit: "unit-1", title: "修复注册顺序" })
     ], "repo", 10).runs[0];
-    expect(generated).toMatchObject({ runId: "g1", scene: "practice.generate", status: "ok" });
+    expect(generated).toMatchObject({ runId: "g1", scene: "practice.generate", status: "ok", title: "修复注册顺序" });
     expect(generated.summary).toContain("已出题");
     expect(generated.summary).toContain("输入 30 / 输出 10");
     expect(generated.steps.find((step) => step.kind === "turn")?.label).toBe("出题");

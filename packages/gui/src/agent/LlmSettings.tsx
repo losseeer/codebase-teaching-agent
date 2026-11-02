@@ -41,8 +41,8 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
         setLlm(previous);
         const reason = error instanceof Error ? error.message : "";
         // 拒因存进表单，弹窗只报状态
-        setRejected(reason || "设置没保存");
-        toastFailure("设置没保存", error);
+        setRejected(reason || "保存失败");
+        toastFailure("保存失败", error);
       });
   };
 
