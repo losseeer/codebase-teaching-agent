@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes, Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import type { AgentScope } from "@codebase-tutor/contract";
 import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspace } from "./api/client";
 import { ApiError, api, isNotFound } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
@@ -219,6 +220,9 @@ export function App(): ReactElement {
     : null;
   // 对话栏只挂在有对话可谈的路由；导入页与成本页不显示
   const location = useLocation();
+  const [query] = useSearchParams();
+  const workspaceParam = query.get("workspace");
+  const traceScope: AgentScope = workspaceParam === "teaching" || workspaceParam === "practice" ? workspaceParam : "map";
   const railRoute = !!workspace && !["/import", "/insights"].includes(location.pathname);
   const layout = useLayout();
   const showRail = railRoute && !layout.railCollapsed;
@@ -277,7 +281,7 @@ export function App(): ReactElement {
             <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
           </Routes>
         </div>
-        <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} />
+        <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} />
       </main>
       {railRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />

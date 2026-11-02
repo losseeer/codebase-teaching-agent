@@ -240,6 +240,10 @@ export const agentTracePayloadSchema = z.object({
   stepId: z.string().optional(),
   round: z.number().optional(),
   tool: z.string().optional(),
+  /** 工具调用的参数摘要（路径、检索词、技能名），不记完整参数。 */
+  target: z.string().optional(),
+  /** 工具结果正文的字符数；正文本身不进轨迹。 */
+  resultChars: z.number().optional(),
   model: z.string().optional(),
   ms: z.number().optional(),
   inputTokens: z.number().optional(),
@@ -247,6 +251,32 @@ export const agentTracePayloadSchema = z.object({
   finishReason: z.string().optional()
 });
 export type AgentTracePayload = z.infer<typeof agentTracePayloadSchema>;
+
+/** 只读能力面的作用区。 */
+export const agentScopeSchema = z.enum(["teaching", "map", "practice"]);
+export type AgentScope = z.infer<typeof agentScopeSchema>;
+
+/** 一个内部或外部工具面的静态条目。 */
+export const agentToolEntrySchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  available: z.boolean(),
+  /** 满足额外条件才出现（提问通道、外部工具连接）。 */
+  conditional: z.boolean().optional(),
+  reason: z.string().optional(),
+  external: z.boolean().optional()
+});
+export type AgentToolEntry = z.infer<typeof agentToolEntrySchema>;
+
+/** `GET /api/repositories/:id/agent-surface` 的返回体：技能清单与当前作用区的工具面。 */
+export const agentSurfaceSchema = z.object({
+  scope: agentScopeSchema,
+  directories: z.array(z.string()),
+  skills: z.array(z.object({ name: z.string(), description: z.string(), directory: z.string() })),
+  skillSkipped: z.array(z.object({ dir: z.string(), reason: z.string() })),
+  tools: z.array(agentToolEntrySchema)
+});
+export type AgentSurface = z.infer<typeof agentSurfaceSchema>;
 
 /* ------------------------------------------------------------------ */
 /* 边界上的校验口                                                      */

@@ -1,5 +1,17 @@
 import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../adapter/outbound/integrations/clients.js";
-import { listSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
+import { listSkills, READ_SKILL_TOOL, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
+
+/** 只读能力面的静态读数：技能清单与 MCP 是否配置；不连 server、不发模型。 */
+export function staticIntegrationsUseCase() {
+  const skills = listSkills();
+  return {
+    skills: skills.skills,
+    skillSkipped: skills.skipped,
+    skillDirectories: skillDirectories(),
+    mcpConfigured: readMcpConfigs().servers.length > 0,
+    readSkillTool: READ_SKILL_TOOL
+  };
+}
 
 /** 外部能力面的读数口（零 token）：技能清单、MCP 配置、本轮工具清单与连接失败原因；读时会把没连上的 server 拉起一次。 */
 export async function externalSurfaceUseCase() {

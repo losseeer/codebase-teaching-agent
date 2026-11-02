@@ -194,8 +194,13 @@ export function createRouteFixture(): RouteFixture {
 
   fx.teardown = async () => {
     await fx.app?.close();
+    // 挂载仓的库句柄与监听先关；Windows 上文件还开着时 rmSync 会 EBUSY
+    if (fx.app) {
+      const { importer } = await import("../../../infrastructure/composition-root.js");
+      importer.closeAll();
+    }
     vi.unstubAllGlobals();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG"]) delete process.env[key];
   };
 

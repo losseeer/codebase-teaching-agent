@@ -64,7 +64,9 @@ describe("completeWithReadTool", () => {
     expect(tool.map((step) => step.status)).toEqual(["start", "ok"]);
     expect(tool.map((step) => step.stepId)).toEqual(["c1", "c1"]);
     expect(tool[0].label).toContain("read-file.ts");
+    expect(tool[0].target, "参数摘要只留路径，不留整段参数").toBe("read-file.ts");
     expect(tool[1].detail).toContain("行");
+    expect(tool[1].resultChars, "结果大小要能单独聚合").toBeGreaterThan(0);
     expect(tool[1].detail, "轨迹只给读数，不把读到的源码正文带出去").not.toContain("export");
   });
 

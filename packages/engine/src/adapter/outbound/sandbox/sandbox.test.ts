@@ -164,7 +164,7 @@ describe("沙箱运行", () => {
   }, 60_000);
 });
 
-describe("profile 组装", () => {
+describe.skipIf(process.platform === "win32")("profile 组装", () => {
   it("解释器根按本机实时计算：家目录先整片拒读、再放行解释器所在子树，顺序反了就等于没拦", () => {
     const toolchain = resolveToolchain();
     const profile = seatbeltProfile("/private/tmp/sbx-run-1", toolchain);

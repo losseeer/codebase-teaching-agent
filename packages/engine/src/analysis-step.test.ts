@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadedAnalysisStepCount } from "./analysis-steps.register.js";
 import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFingerprints } from "./analysis-step.js";
@@ -10,7 +11,7 @@ import { ANALYSIS_STEP_LOCK_FILE, analysisSteps, readLockedFingerprints, stepFin
 */
 
 /** 源码根目录：扫描与清单比对的路径基准。 */
-const SRC_DIR = resolve(new URL(".", import.meta.url).pathname);
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** 清单模块里列出的副作用导入，形如 `./foo/bar.js`。 */
 function barrelImports(): string[] {
@@ -24,7 +25,7 @@ function stepDefiningFiles(): string[] {
     for (const entry of readdirSync(dir)) {
       const path = join(dir, entry);
       if (statSync(path).isDirectory()) walk(path);
-      else if (path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith("analysis-step.ts") && readFileSync(path, "utf8").includes("defineAnalysisStep(")) found.push(`./${path.slice(SRC_DIR.length + 1).replace(/\.ts$/, ".js")}`);
+      else if (path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith("analysis-step.ts") && readFileSync(path, "utf8").includes("defineAnalysisStep(")) found.push(`./${relative(SRC_DIR, path).split(sep).join("/").replace(/\.ts$/, ".js")}`);
     }
   };
   walk(SRC_DIR);
@@ -67,6 +68,7 @@ describe("口径登记的提示词指纹守卫", () => {
   });
 
   it("锁文件就是当前指纹的排序结果，不含登记顺序", () => {
-    expect(readFileSync(ANALYSIS_STEP_LOCK_FILE, "utf8")).toBe(`${JSON.stringify(stepFingerprints(), null, 2)}\n`);
+    // Windows 的 autocrlf 会把签出的 LF 变成 CRLF；这里只比规范化后的文本
+    expect(readFileSync(ANALYSIS_STEP_LOCK_FILE, "utf8").replace(/\r\n/g, "\n")).toBe(`${JSON.stringify(stepFingerprints(), null, 2)}\n`);
   });
 });

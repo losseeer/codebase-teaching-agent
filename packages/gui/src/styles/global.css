@@ -602,6 +602,28 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .trace-dot.ok { background: var(--brand-600); }
 .trace-dot.error { background: var(--danger); }
 .trace-dot.aborted { background: var(--ink-3); }
+.trace-tabs { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 var(--sp-5); border-bottom: 1px solid var(--border); }
+.trace-tab { padding: 9px 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: var(--fs-12); color: var(--ink-2); }
+.trace-tab:hover { color: var(--ink); }
+.trace-tab.active { color: var(--brand-700); border-bottom-color: var(--brand-700); font-weight: 600; }
+.trace-scope { margin-left: auto; font-size: var(--fs-11); color: var(--ink-3); }
+.surface-group { display: flex; flex-direction: column; gap: 6px; }
+.surface-row { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.surface-row-btn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; text-align: left; }
+.surface-row-btn:hover { background: var(--surface-2); }
+.surface-row-btn.static { cursor: default; }
+.surface-row-btn.static:hover { background: transparent; }
+.surface-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.surface-row-title { font-size: var(--fs-12); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.surface-row-title.mono { font-family: var(--font-mono); font-weight: 500; }
+.surface-row-sub { font-size: var(--fs-11); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.surface-row-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; max-width: 46%; }
+.surface-badge { font-size: var(--fs-11); padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-3); white-space: nowrap; }
+.surface-badge.ok { color: var(--brand-700); border-color: var(--brand-100); background: var(--brand-050); }
+.surface-badge.warn { color: var(--accent-ink); border-color: var(--accent-soft); background: var(--accent-soft); }
+.surface-badge.off { color: var(--ink-3); background: var(--surface-2); }
+.surface-row-meta { font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.surface-row-detail { padding: 0 10px 9px; font-size: var(--fs-12); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label, .field .lbl { font-size: var(--fs-12); font-weight: 600; color: var(--ink-2); }

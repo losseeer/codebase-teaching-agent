@@ -329,6 +329,13 @@ export class ImportService extends EventEmitter {
     }
   }
 
+  /** 关闭所有挂载与监听，清内存；地址簿与磁盘产物不动。 */
+  closeAll(): void {
+    for (const repositoryId of [...this.repositories.keys()]) this.unmountOne(repositoryId);
+    for (const entry of this.watchPaused.values()) if (entry.timer) clearTimeout(entry.timer);
+    this.watchPaused.clear();
+  }
+
   /** 挂载一个仓库并开监听；LRU 驱逐只移出内存，磁盘产物不动。 */
   private attach(repository: AnalyzedRepository): ImportedRepository {
     const repositoryId = repository.index.repositoryId;

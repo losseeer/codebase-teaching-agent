@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -46,7 +46,7 @@ const files = sourceFiles(SRC);
 const allEdges = files.flatMap(edgesOf);
 const valueEdges = allEdges.filter((edge) => !edge.typeOnly);
 
-const short = (path: string): string => path.slice(SRC.length + 1);
+const short = (path: string): string => relative(SRC, path).split(sep).join("/");
 const topOf = (path: string): string => short(path).split("/")[0] ?? "";
 const list = (edges: Edge[]): string[] => edges.map((edge) => `${short(edge.from)} → ${short(edge.to)}`).sort();
 
