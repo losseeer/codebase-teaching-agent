@@ -144,7 +144,7 @@ for (const repo of perRepo) {
   const invariants = of("turn_invariant");
   const broken = invariants.filter((event) => event.payload.failed);
   emit(invariants.length
-    ? `- 回合不变量复检（在环、零 token）：${invariants.length} 轮，失守 ${broken.length} 轮${broken.length ? `（${[...new Set(broken.map((event) => String(event.payload.failed)))].join("、")}）` : ""}；三作用域都判，离线机检那台架目前只喂 teach`
+    ? `- 回合不变量复检（在环、零 token）：${invariants.length} 轮，失守 ${broken.length} 轮${broken.length ? `（${[...new Set(broken.map((event) => String(event.payload.failed)))].join("、")}）` : ""}；三工作区都判，离线机检那台架目前只喂 teach`
     : "- 回合不变量复检：未执行（journal 里没有 turn_invariant 记录——这条埋点上线前的老回合不补）");
 
   // 提问占比的分母是 map_chat 回合数。

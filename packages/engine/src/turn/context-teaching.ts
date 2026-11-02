@@ -21,7 +21,7 @@ const excerptBlockCap = () => contextShare(CONTEXT_SHARE.excerptBlock);
 /** 对话预算里为源码摘录留出的字数。 */
 const excerptReserve = () => contextShare(CONTEXT_SHARE.anchorExcerpts);
 
-/** 有界教学上下文：作用域 + 调用邻接 + 锚点摘录 + 对话历史，总量受 `maximumCharacters` 约束。 */
+/** 有界教学上下文：教学域 + 调用邻接 + 锚点摘录 + 对话历史，总量受 `maximumCharacters` 约束。 */
 export interface TeachingContextInput {
   scope: ScopeRef;
   policy: TeachingPolicy;
@@ -50,7 +50,7 @@ export function assembleContext(input: TeachingContextInput): string {
   const files = input.index ? scopeFiles(scope, input.index) : [];
   const listed = files.slice(0, MAX_SCOPE_FILES).map((file) => file.path);
   const head = [
-    `当前作用域: ${scope.kind === "file" ? "文件" : "目录"} ${scope.path}`,
+    `当前教学域: ${scope.kind === "file" ? "文件" : "目录"} ${scope.path}`,
     scope.kind === "dir" ? `目录内已分析文件（${files.length}）：\n${listed.join("\n") || "（空）"}${files.length > MAX_SCOPE_FILES ? `\n…其余 ${files.length - MAX_SCOPE_FILES} 个未列出` : ""}` : "",
     `风格约束: ${policy.constraints.join("；")}`,
     input.analysis && files[0] ? callNeighborhoodSection(input.analysis, files[0].path) : ""

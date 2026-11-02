@@ -33,11 +33,11 @@ function messageOf(row: ChatMessageRow): ChatThreadMessage {
   };
 }
 
-/** 标题截到 120 字；为空则落作用域占位名。 */
+/** 标题截到 120 字；为空则落工作区占位名。 */
 function normalizeTitle(title: string | undefined, scope: ChatScope): string {
   const trimmed = title?.trim();
   if (trimmed) return trimmed.slice(0, TITLE_MAX);
-  return scope === "teach" ? "新的教学会话" : scope === "map" ? "新的宏观设计对话" : "新的练习对话";
+  return scope === "teach" ? "新的代码问答会话" : scope === "map" ? "新的架构全景会话" : "新的练习答疑会话";
 }
 
 export function createThread(input: { repositoryPath: string; repositoryId: string; scope: ChatScope; title?: string; scopeRef?: string; exerciseId?: string; id?: string }): ChatThread {

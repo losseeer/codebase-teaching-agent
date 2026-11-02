@@ -26,7 +26,7 @@ export interface TutorMessage {
 export interface TutorSession {
   id: string;
   repositoryId: string;
-  /** 教学作用域：`file:<仓内路径>` 或 `dir:<仓内目录>`。 */
+  /** 教学域：`file:<仓内路径>` 或 `dir:<仓内目录>`。 */
   scopeRef: string;
   settings: TutorSettings;
   messages: TutorMessage[];

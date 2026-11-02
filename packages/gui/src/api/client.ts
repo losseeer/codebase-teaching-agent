@@ -72,7 +72,7 @@ function toScopedEvent(event: ScopedStreamProgress): ScopedStreamProgress {
   }
 }
 
-/** 宏观设计回合 done 帧的两种形状：正常成品（reply）或被中断（interrupted，无成品）。 */
+/** 架构全景回合 done 帧的两种形状：正常成品（reply）或被中断（interrupted，无成品）。 */
 export type MapDoneFrame =
   | { reply: string; provider: string; diagram?: { id: string; name: string }; asked?: { toolCallId: string; facet: string; question: string; options: string[] }; interrupted?: undefined }
   | { reply?: undefined; provider: string; diagram?: { id: string; name: string }; asked?: undefined; interrupted: { reason: string; detail: string } };
@@ -252,9 +252,9 @@ export const api = {
   /** 移出地址簿；只动引擎登记，不碰仓库里的 .tutor/。 */
   forgetRepository: (repositoryId: string, artifacts = false) => request<{ repositories: RepositoryCatalogEntry[]; artifacts?: "removed" | "absent" | "refused" }>(`/api/repositories/${repositoryId}${artifacts ? "?artifacts=1" : ""}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
-  /** 只读能力面：技能清单与当前作用区的工具面；不发模型。 */
+  /** 只读能力面：技能清单与当前工作区的工具面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}`),
-  /** 历史回放：journal 按 traceId 汇总的当前作用区回合；纯读。 */
+  /** 历史回放：journal 按 traceId 汇总的当前工作区回合；纯读。 */
   getTraceHistory: (repositoryId: string, scope: AgentScope, limit = 20) => checked<TraceHistory>("trace-history", traceHistorySchema, `/api/repositories/${repositoryId}/trace?limit=${limit}&scope=${scope}`),
   /** 导入报告：索引概况 + 本次 token/金额估算。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string } }>(`/api/repositories/${repositoryId}/report`),
@@ -286,7 +286,7 @@ export const api = {
   getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
   createSession: (repositoryId: string, scopeRef: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, scopeRef, ...(settings ? { settings } : {}) }) }),
-  /** 按 id 取教学会话；未命中时引擎从 chat_session + chat_message 重建。 */
+  /** 按 id 取代码问答会话；未命中时引擎从 chat_session + chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   // 会话线程真源在引擎的 chat_session / chat_message；删除是软删：行仍在库，列表与正文不可见。
   /** 会话清单：threads 只含已发言的会话；current 回认界面正打开的那条（未发言也认）。 */
@@ -295,7 +295,7 @@ export const api = {
   getThreadMessages: (threadId: string) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages`),
   renameThread: (threadId: string, title: string) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteThread: (threadId: string) => checked("threadDelete", z.object({ deleted: z.boolean(), threadId: z.string() }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
-  /** 教学回合 SSE：逐事件回调 progress 与 delta，done 固化为返回值（session/message/cost/provider）。 */
+  /** 代码问答回合 SSE：逐事件回调 progress 与 delta，done 固化为返回值（session/message/cost/provider）。 */
   sendMessageStream: (sessionId: string, content: string, settings: TutorSettings, onEvent: (event: ScopedStreamProgress) => void, turn: StreamTurn = {}) =>
     sseStream<{ session: TutorSession; message: { content: string }; cost: CostSummary; provider: string }>(
       `/api/sessions/${sessionId}/messages`,

@@ -80,6 +80,7 @@ export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 /* 会话线程                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 线程列表按工作区分：teach / map / practice。存储值固定，别为文案改名。 */
 export const chatScopeSchema = z.enum(["teach", "map", "practice"]);
 export type ChatScope = z.infer<typeof chatScopeSchema>;
 
@@ -93,7 +94,7 @@ export const chatThreadSchema = z.object({
   id: z.string(),
   repositoryId: z.string(),
   scope: chatScopeSchema,
-  /** 教学作用域：`file:<仓内路径>` 或 `dir:<仓内目录>`；map / practice 线程可不填。 */
+  /** 教学域：`file:<仓内路径>` 或 `dir:<仓内目录>`；map / practice 线程可不填。 */
   scopeRef: z.string().optional(),
   exerciseId: z.string().optional(),
   title: z.string(),
@@ -172,7 +173,7 @@ export const costSummarySchema = z.object({
 export type CostSummary = z.infer<typeof costSummarySchema>;
 
 /* ------------------------------------------------------------------ */
-/* 流式帧：作用域对话流与全局事件流                                    */
+/* 流式帧：工作区对话流与全局事件流                                    */
 /* ------------------------------------------------------------------ */
 
 /** 回合场景名：与 journal 的 scene、引擎回合登记表同一套词。 */
@@ -192,7 +193,7 @@ export const teachingProgressSchema = z.discriminatedUnion("stage", [
 export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
 
 /**
-  作用域对话流的过程帧与正文帧词表，引擎与界面的唯一登记处：
+  工作区对话流的过程帧与正文帧词表，引擎与界面的唯一登记处：
   新帧类必须先加在这里，两侧各有编译期穷尽守卫；done 载荷不在内，由各自返回体声明。
 */
 export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
@@ -248,7 +249,7 @@ export const agentTracePayloadSchema = z.object({
 });
 export type AgentTracePayload = z.infer<typeof agentTracePayloadSchema>;
 
-/** 只读能力面的作用区。 */
+/** 只读能力面的工作区。与 `ChatScope` 的 teach 是两套内部词表，存储值不改。 */
 export const agentScopeSchema = z.enum(["teaching", "map", "practice"]);
 export type AgentScope = z.infer<typeof agentScopeSchema>;
 
@@ -264,7 +265,7 @@ export const agentToolEntrySchema = z.object({
 });
 export type AgentToolEntry = z.infer<typeof agentToolEntrySchema>;
 
-/** `GET /api/repositories/:id/agent-surface` 的返回体：技能清单与当前作用区的工具面。 */
+/** `GET /api/repositories/:id/agent-surface` 的返回体：技能清单与当前工作区的工具面。 */
 export const agentSurfaceSchema = z.object({
   scope: agentScopeSchema,
   directories: z.array(z.string()),

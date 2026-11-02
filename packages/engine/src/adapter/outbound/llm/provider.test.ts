@@ -25,7 +25,7 @@ describe("OpenAICompatibleProvider", () => {
     }) as typeof fetch;
     const provider = new OpenAICompatibleProvider({ ...OPTIONS, fetchImpl });
     await provider.complete({
-      system: "你是代码教学产品",
+      system: "你是代码学习产品",
       messages: [{ role: "user", content: "const awsKey = \"AKIAIOSFODNN7EXAMPLE\";" }]
     });
     expect(raw).not.toContain("AKIAIOSFODNN7EXAMPLE");

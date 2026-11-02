@@ -28,9 +28,9 @@ export interface ScopedChatApi {
   /** 软删；AgentRail 侧有二次确认弹窗。 */
   removeThread: (scope: Scope, threadId: string) => Promise<void>;
 
-  /** 教学作用域：`file:<path>` / `dir:<path>`；null = 还没选。 */
+  /** 教学域：`file:<path>` / `dir:<path>`；null = 还没选。 */
   scopeRef: string | null;
-  /** 作用域显示名（文件名 / 目录名 / 仓库根目录）。 */
+  /** 教学域显示名（文件名 / 目录名 / 仓库根目录）。 */
   scopeLabel: string;
   setScopeRef: (ref: string | null) => void;
   /** 产物数据版本：重导入 / 产物更新时递增。 */
@@ -38,7 +38,7 @@ export interface ScopedChatApi {
   /** 强制重发产物相关请求。 */
   reloadRepositoryData: () => void;
 
-  /** map-chat 的作用域提示文件清单；由 DiagramPage 写入。 */
+  /** map-chat 的选中范围文件清单；由 DiagramPage 写入。 */
   mapScopePaths: string[];
   setMapScope: (scopePaths: string[]) => void;
   /** 绑定行数据（只读展示）；null = 未绑定 */
@@ -55,7 +55,7 @@ export interface ScopedChatApi {
   requestOpenDiagram: (diagram: { id: string; name: string }) => void;
   clearDiagramOpen: () => void;
 
-  /** 练习作用域绑定（练习 #N · 文件）；由 PracticePage 写入 */
+  /** 练习工作区绑定（练习 #N · 文件）；由 PracticePage 写入 */
   practiceUnit: string;
   setPracticeUnit: (label: string) => void;
   settings: TutorSettings;
@@ -73,9 +73,9 @@ export interface ScopedChatApi {
   /** answer = 提问候选那句短标签（省略则发输入框内容）；resumeAsk = 认领的提问句柄。 */
   sendMap: (answer?: string, resumeAsk?: string) => Promise<void>;
   sendPractice: (answer?: string) => Promise<void>;
-  /** 最近一条回复的来源；空串 = 本作用域尚无回复；显式展示 LLM 是否参与。 */
+  /** 最近一条回复的来源；空串 = 本工作区尚无回复；显式展示 LLM 是否参与。 */
   replySource: Record<Scope, string>;
-  /** 当前练习对象（练习评估作用域的对话上下文）；由 PracticePage 写入 */
+  /** 当前练习对象（练习工作区的对话上下文）；由 PracticePage 写入 */
   practiceExercise: Exercise | null;
   setPracticeExercise: (exercise: Exercise | null) => void;
 }

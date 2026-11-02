@@ -12,7 +12,7 @@ const SCENE_MAP: Record<string, string> = {
   exercise_llm_generate: "practice.generate"
 };
 
-/** 历史接口的作用区过滤。 */
+/** 历史接口的工作区过滤。 */
 const SCOPE_SCENES: Record<AgentScope, readonly string[]> = {
   teaching: ["teaching.turn"],
   map: ["map.chat"],
@@ -100,11 +100,11 @@ function toolStep(event: JournalEvent): HistoryStep | undefined {
     }
     case "diagram_created": {
       if (p.source !== "agent") return undefined;
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: "新建" };
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改架构图", detail: "新建" };
     }
     case "diagram_edited": {
       if (p.via !== "agent") return undefined;
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: text(p.action, 40) || "修改" };
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改架构图", detail: text(p.action, 40) || "修改" };
     }
     default:
       return undefined;

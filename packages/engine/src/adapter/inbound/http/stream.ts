@@ -56,7 +56,7 @@ export function replayTypewriter(send: (event: ScopedStreamFrame) => void, text:
   for (const delta of chunk(text, TYPEWRITER_CHUNK)) send({ type: "delta", delta });
 }
 
-/** 开一轮作用域对话流；`turnHandle.dispose()` 由调用方在 finally 调用。 */
+/** 开一轮工作区对话流；`turnHandle.dispose()` 由调用方在 finally 调用。 */
 export function beginScopedStream(request: FastifyRequest, reply: FastifyReply, scene: TurnScene, turnId: unknown): { send: (event: ScopedStreamFrame) => void; turnHandle: TurnHandle } {
   reply.hijack();
   return { send: openSseStream(request, reply), turnHandle: beginTurn(turnId, scene) };

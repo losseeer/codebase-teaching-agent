@@ -65,7 +65,7 @@ describe("回合检查点通道", () => {
     expect(withDatabase(repository, (database) => database.checkpoints.stats()).rows, "过期行要真删掉，不是读的时候跳过").toBe(0);
   });
 
-  it("场景之间不串：同一个线程在宏观设计与代码问答里各有一份进度", () => {
+  it("场景之间不串：同一个线程在架构全景与代码问答里各有一份进度", () => {
     channel("t6", "map.chat").save(HASH, state(1, "首问"));
     expect(channel("t6", "teaching.turn").restore(HASH)).toBeUndefined();
   });

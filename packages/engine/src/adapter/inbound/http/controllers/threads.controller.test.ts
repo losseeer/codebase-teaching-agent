@@ -50,7 +50,7 @@ describe("未挂载仓库的线程仍可定位", () => {
 
 /** 线程清单的收录口径：只列有正文的会话；`?current` 指定的空线程也返回。 */
 describe("线程清单的收录口径", () => {
-  it("零消息的会话不进列表；?current 认下正打开的那条，删掉或不属于这个作用域才回 null", async () => {
+  it("零消息的会话不进列表；?current 认下正打开的那条，删掉或不属于这个工作区才回 null", async () => {
     const unsent = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "刚点新建" });
     const talked = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "谈过的" });
     expect(appendMessages(fx.repoDir, talked.id, [{ role: "user", content: "谈过一句" }])).toBe(true);

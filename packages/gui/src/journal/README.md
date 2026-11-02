@@ -6,7 +6,7 @@
 ## 当前状态
 
 **已落地**（2026-09-17）：本模块由 `emit.ts` / `events.ts` / `transport.ts` / `index.ts` 组成，
-四个工作区已接入，事件经 `POST /api/repositories/:id/journal` 写入该仓库的 `.tutor/journal.jsonl`。
+三个学习工作区与导入页已接入，事件经 `POST /api/repositories/:id/journal` 写入该仓库的 `.tutor/journal.jsonl`。
 
 此前（v0.1）前端不发射任何 journal 事件、引擎端只记学习事件；那段「契约已固化但未落地」的状态已经结束。
 
@@ -16,9 +16,9 @@
 
 | 工作区 | 读 | 写（journal 事件） | 不做 |
 |---|---|---|---|
-| 宏观设计 | 图库、项目目录、画布节点 | `flow_node_selected`（画布节点选中沿用此事件名） · `file_anchored` | 不写 LLM 调用 |
-| 代码教学 | 源码 tab、目录锚点 | `file_opened` · `line_located` | 不直接改源码 |
-| 练习评估 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
+| 架构全景 | 图库、项目目录、画布节点 | `flow_node_selected`（画布节点选中沿用此事件名） · `file_anchored` | 不写 LLM 调用 |
+| 代码问答 | 源码 tab、目录锚点 | `file_opened` · `line_located` | 不直接改源码 |
+| 练习 | 题目实例、评分标准、ZPD | `exercise_generated`（引擎送达） · `exercise_submitted` · `exercise_result` | 不替代用户答、判分不开恩 |
 | 导入仓库 | 导入任务与预估 | `repository_switched` | 不在导入中写学习事件 |
 
 ### 一条边界（易混，写在这里免得再踩）

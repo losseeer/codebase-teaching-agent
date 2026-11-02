@@ -14,7 +14,7 @@ import { emit } from "../journal";
 import { showToast } from "../ui/toast";
 import { SourceView, type SourcePayload } from "../source/SourceView";
 
-/** 代码教学工作区：左栏项目目录，右栏源码 tabs。 */
+/** 代码问答工作区：左栏项目目录，右栏源码 tabs。 */
 export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean }): ReactElement {
   const repositoryId = workspace.repositoryId;
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
@@ -44,7 +44,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     const seq = ++sourceSeq.current;
     try {
       const next = await api.getSource(repositoryId, path, line);
-      // 迟到的响应不落格：右栏与作用域跟随最后一次点击
+      // 迟到的响应不落格：右栏与教学域跟随最后一次点击
       if (seq !== sourceSeq.current) return;
       setSource(next);
       const isNewFile = !openedPaths.current.includes(path);
@@ -62,7 +62,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     } catch { showToast(`读不到 · ${path}`); }
   }, [repositoryId, t]);
 
-  /** 目录也可作教学作用域。 */
+  /** 目录也可作教学域。 */
   const openDir = (path: string): void => {
     t.setScopeRef(path ? `dir:${path}` : "dir:.");
     setSource(null);
@@ -91,7 +91,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     setSource({ ...source, line });
   };
 
-  // 外部改了作用域：文件打开、目录清空源码视图；同一锚点不重复拉
+  // 外部改了教学域：文件打开、目录清空源码视图；同一锚点不重复拉
   useEffect(() => {
     if (!t.scopeRef) { lastAutoAnchor.current = null; return; }
     if (!t.scopeRef.startsWith("file:")) { setSource(null); return; }
@@ -170,13 +170,13 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         crumb={<>
           <b>{repositoryName}</b>
           <span className="faint">/</span>
-          <span>代码教学</span>
+          <span>代码问答</span>
           <span className="faint">·</span>
           <span className="muted" title={t.scopeRef ? t.scopeLabel : "还没选文件"}>
             {t.scopeRef ? t.scopeLabel : "还没选文件"}
           </span>
         </>}
-        actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点目录可按整个目录教学">⌘P 快速打开</span>}
+        actions={<span className="fs-11 faint mono" title="⌘P 搜文件；点目录可按整个目录问答">⌘P 快速打开</span>}
         showRailToggle
       />
       <MobileSwitcher labels={["项目目录", "实时源码"]} active={paneActive} onSelect={setPaneActive} />

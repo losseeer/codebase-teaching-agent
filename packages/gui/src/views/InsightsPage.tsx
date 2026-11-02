@@ -13,9 +13,9 @@ import { failureText } from "../ui/toast";
 
 /** 场景 → 界面叫法；取值以引擎写 token_usage 的调用点为准。 */
 const SCENE_LABEL: Record<string, string> = {
-  teach: "代码教学",
-  map_chat: "宏观设计对话",
-  practice_chat: "练习评估对话",
+  teach: "代码问答",
+  map_chat: "架构全景对话",
+  practice_chat: "练习答疑",
   exercise_generate: "出题（题面改写）",
   exercise_llm_generate: "出题（整题由模型）",
   exercise_generate_code: "代码题生成",

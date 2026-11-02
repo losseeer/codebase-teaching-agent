@@ -50,7 +50,7 @@ describe("provider-backed code Q&A turn", () => {
     // 会话形状里没有 stage / fallbackCount 这类回合状态字段
     expect(result.session).not.toHaveProperty("stage");
     expect(result.session).not.toHaveProperty("fallbackCount");
-    expect(prompt).toContain("当前作用域: 文件 src/main.ts");
+    expect(prompt).toContain("当前教学域: 文件 src/main.ts");
     expect(prompt).toContain("src/main.ts:1-3");
     expect(prompt).toContain("1: export const main = () => readConfig();");
     expect(prompt).toContain("通俗化 1/2");
@@ -82,7 +82,7 @@ describe("provider-backed code Q&A turn", () => {
     const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async (input) => { prompt = `${input.system}\n${input.user}`; return { text: "好", usage: { inputTokens: 5, outputTokens: 1 } }; } };
     await respondWithProvider(createSession("repo", scope.ref), scope, "继续", provider, undefined, join(tmpdir(), "codebase-tutor-run-turn-missing"));
     expect(prompt).not.toContain("--- src/main.ts:");
-    expect(prompt).toContain("当前作用域: 文件 src/main.ts");
+    expect(prompt).toContain("当前教学域: 文件 src/main.ts");
   });
 
   it("模型可以要求 read_file 补足摘录之外的实现细节，并回报读取审计", async () => {
@@ -110,7 +110,7 @@ describe("provider-backed code Q&A turn", () => {
     expect(result.toolRounds).toBe(1);
     expect(calls[0].tools?.[0]?.name).toBe("read_file");
     expect(calls[0].system).toContain("read_file 只能读仓库内的源码与配置");
-    expect(calls[1].messages?.[0].content).toContain("当前作用域: 文件 src/main.ts");
+    expect(calls[1].messages?.[0].content).toContain("当前教学域: 文件 src/main.ts");
     expect(calls[1].messages?.[0].content).toContain("入口的输入是什么？");
     expect(calls[1].messages?.some((message) => message.role === "tool")).toBe(true);
   });

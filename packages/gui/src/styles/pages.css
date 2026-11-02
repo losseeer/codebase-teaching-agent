@@ -6,7 +6,7 @@
 .page { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
 .tree-row.more { color: var(--brand-700); }
 
-/* ---------- 左栏共件（教学 / 练习 / 宏观共用） ---------- */
+/* ---------- 左栏共件（代码问答 / 练习 / 架构全景共用） ---------- */
 /* 列表栏与主区之间那条拖宽条：绝对定位压在 grid 的第一列边界上，所以它不占列。
    宽度只有 CSS 知道（--file-pane-w 由外壳提供），left 因此跟着变量走。 */
 .page > .col-resizer { left: var(--file-pane-w, 264px); z-index: 31; }
@@ -75,7 +75,7 @@
 .addr-meta { font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .addr-badges { margin-left: auto; display: flex; gap: 6px; flex: 0 0 auto; }
 
-/* ==================== 宏观设计（agent 画图工作区） ==================== */
+/* ==================== 架构全景（agent 画图工作区） ==================== */
 /* 两栏：左 = 图库 / 项目目录 可切换的一条栏，右 = 画布那一列。
    栏宽仍然走 `--file-pane-w`（与教学页、练习页同一条列表栏，拖一次三个工作区一起跟）。 */
 .page-map { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
@@ -244,7 +244,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .gen-step.active { color: var(--ink); }
 .gen-step-icon { width: 14px; display: inline-flex; justify-content: center; flex: none; }
 
-/* ==================== 代码教学 ==================== */
+/* ==================== 代码问答 ==================== */
 .page-teach { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .teach-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 .cfg-row, .cfg-add { display: flex; align-items: center; gap: 5px; }
@@ -292,7 +292,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .source-view .op { color: var(--hl-op); }
 .source-view .tag { color: var(--hl-tag); }
 
-/* ==================== 练习评估 ==================== */
+/* ==================== 练习 ==================== */
 .page-practice { display: grid; grid-template-columns: var(--file-pane-w, 264px) minmax(0, 1fr); }
 .practice-side { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
 /* 源码弹窗：宽一点，源码跟随弹窗内容滚，不再套一层内滚。
@@ -517,7 +517,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   .dg-overlay { left: 8px; bottom: 8px; }
 }
 
-/* 练习上下文里的文件路径：点了跳到代码教学并打开那份文件 */
+/* 练习上下文里的文件路径：点了跳到代码问答并打开那份文件 */
 .cc-link { border: 0; background: none; padding: 0; font: inherit; color: var(--brand-700); cursor: pointer; text-align: left; }
 .cc-link:hover { text-decoration: underline; }
 .cc-link:disabled { color: var(--ink-3); cursor: default; text-decoration: none; }

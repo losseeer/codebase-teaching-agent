@@ -1,6 +1,6 @@
 import type { FileEntry, RepositoryIndex } from "@codebase-tutor/domain";
 
-/** 选中作用域：一个文件或一个目录，ref 形如 `file:<path>` / `dir:<path>`。 */
+/** 选中的文件或目录，ref 形如 `file:<path>` / `dir:<path>`。 */
 export interface ScopeRef {
   kind: "file" | "dir";
   path: string;

@@ -35,7 +35,7 @@ describe("线程记忆（localStorage）", () => {
     }
   });
 
-  it("旧形状（值是字符串而不是按作用域分的对象）在这一层被认出并跳过", () => {
+  it("旧形状（值是字符串而不是按工作区分的对象）在这一层被认出并跳过", () => {
     localStorage.setItem("codebase-tutor.teaching-sessions", JSON.stringify({ repo_old: "上一个会话 id", repo_new: { map: { currentId: "t1", ids: ["t1"] } } }));
     const memory = readThreadMemory();
     expect(memory.repo_old).toBeUndefined();
@@ -47,7 +47,7 @@ describe("线程记忆（localStorage）", () => {
     expect(readThreadMemory().r?.teach).toEqual({ currentId: null, ids: ["a", "b"] });
   });
 
-  it("写进去再读回来是同一份，且不同仓、不同作用域互不覆盖", () => {
+  it("写进去再读回来是同一份，且不同仓、不同工作区互不覆盖", () => {
     writeThreadMemory("r1", "map", { currentId: "m1", ids: ["m1", "m0"] });
     writeThreadMemory("r1", "practice", { currentId: null, ids: [] });
     writeThreadMemory("r2", "teach", { currentId: "t9", ids: ["t9"] });

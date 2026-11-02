@@ -579,7 +579,7 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
 /** 画布结构写入口的工具定义。 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "修改画布上的图结构；先传 {\"edit\":{\"action\":\"help\"}} 查看动作与字段约定。",
+  description: "修改画布上的架构图结构；先传 {\"edit\":{\"action\":\"help\"}} 查看动作与字段约定。",
   parameters: {
     type: "object",
     properties: {
@@ -599,10 +599,10 @@ export const SET_DIAGRAM_DEFINITION: ToolDefinition = {
   origin: { kind: "internal" },
   scope: ["map"],
   available: (ctx) => Boolean(ctx.diagram),
-  unavailable: "这个作用域没有改这张图的权力。",
-  describe: () => ({ label: "修改图表" }),
+  unavailable: "这个工作区没有修改架构图的权力。",
+  describe: () => ({ label: "修改架构图" }),
   invoke: (args, ctx) => {
-    if (!ctx.diagram) return { text: "这个作用域没有改这张图的权力。", ok: false };
+    if (!ctx.diagram) return { text: "这个工作区没有修改架构图的权力。", ok: false };
     ctx.onProgress?.({ type: "editing_diagram" });
     return { text: ctx.diagram.apply(JSON.stringify(args)) };
   }

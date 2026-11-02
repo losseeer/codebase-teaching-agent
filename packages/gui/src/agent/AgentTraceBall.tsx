@@ -7,8 +7,8 @@ import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
 import { inScope, practiceAgentLabel } from "./traceScope";
 import { useTraceHistory } from "./useTraceHistory";
 
-const SCENE_LABEL: Record<string, string> = { "teaching.turn": "教学", "map.chat": "画布", "practice.chat": "答疑", "practice.generate": "出题" };
-const SCOPE_LABEL: Record<AgentScope, string> = { map: "画布", teaching: "教学", practice: "练习" };
+const SCENE_LABEL: Record<string, string> = { "teaching.turn": "代码问答", "map.chat": "架构全景", "practice.chat": "练习答疑", "practice.generate": "出题" };
+const SCOPE_LABEL: Record<AgentScope, string> = { map: "架构全景", teaching: "代码问答", practice: "练习" };
 const STATUS_LABEL: Record<TraceRun["status"], string> = { running: "进行中", ok: "完成", error: "失败", aborted: "提前结束" };
 const FINISH_LABEL: Record<string, string> = { stop: "结束", length: "截断", tool_calls: "调工具" };
 
@@ -56,7 +56,7 @@ interface RunGroup {
   runs: TraceRun[];
 }
 
-/** 已结束的运行按 agent 分堆：练习区分出题与答疑，其余作用区只有一堆。 */
+/** 已结束的运行按 agent 分堆：练习区分出题与答疑，其余工作区只有一堆。 */
 function historyGroups(runs: TraceRun[], scope: AgentScope): RunGroup[] {
   const byTime = [...runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   if (scope !== "practice") return byTime.length ? [{ key: "all", label: "", runs: byTime }] : [];
@@ -70,7 +70,7 @@ function historyGroups(runs: TraceRun[], scope: AgentScope): RunGroup[] {
   return groups;
 }
 
-/** 悬浮球：打开当前仓、当前作用区的运行轨迹。 */
+/** 悬浮球：打开当前仓、当前工作区的运行轨迹。 */
 export function AgentTraceBall({ repositoryId, scope }: { repositoryId: string | null; scope: AgentScope }): ReactElement | null {
   const { runs } = useAgentTrace(repositoryId);
   const [open, setOpen] = useState(false);
@@ -124,7 +124,7 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
           {tabs.map((item) => (
             <button key={item.id} id={`trace-tab-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls="trace-panel" className={`trace-tab${tab === item.id ? " active" : ""}`} onClick={() => setTab(item.id)}>{item.label}</button>
           ))}
-          <span className="trace-scope" title="当前作用区">{SCOPE_LABEL[scope]}</span>
+          <span className="trace-scope" title="当前工作区">{SCOPE_LABEL[scope]}</span>
         </div>
         <div className="modal-body" id="trace-panel" role="tabpanel" aria-labelledby={`trace-tab-${tab}`}>
           {tab === "trace" ? (

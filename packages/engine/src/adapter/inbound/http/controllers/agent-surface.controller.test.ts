@@ -5,7 +5,7 @@ import type { AgentSurface } from "@codebase-tutor/contract";
 
 import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
 
-/** 只读能力面：静态注册表按作用区给可用性，读侧不发模型。 */
+/** 只读能力面：静态注册表按工作区给可用性，读侧不发模型。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -31,7 +31,7 @@ async function surface(scope: string): Promise<AgentSurface> {
 }
 
 describe("GET /agent-surface 的只读能力面", () => {
-  it("按作用区给可用性：地图开画布与产物查询，练习只剩文件与技能", async () => {
+  it("按工作区给可用性：架构全景开画布与产物查询，练习只剩文件与技能", async () => {
     emptySkills();
     const before = fx.fetchCalls();
     const map = await surface("map");
@@ -45,7 +45,7 @@ describe("GET /agent-surface 的只读能力面", () => {
     expect(byName.get("read_skill")).toMatchObject({ available: false, reason: "没有装载技能" });
 
     const practice = await surface("practice");
-    expect(practice.tools.find((tool) => tool.name === "search_code")).toMatchObject({ available: false, reason: "练习答疑不开放检索" });
+    expect(practice.tools.find((tool) => tool.name === "search_code")).toMatchObject({ available: false, reason: "练习工作区不开放检索" });
     expect(practice.tools.find((tool) => tool.name === "set_diagram")?.available).toBe(false);
     expect(practice.tools.find((tool) => tool.name === "read_file")?.available).toBe(true);
   });

@@ -1,7 +1,7 @@
 import type { SourceAnchor } from "./repository-index.js";
 
 /**
-  会话持久化的作用域：三种对话各自独立成列表（teach 绑课程节点，practice 绑练习题，map 可不绑）。
+  会话持久化的工作区：三种对话各自独立成列表（teach 绑课程节点，practice 绑练习题，map 可不绑）。
   与 journal 的 `turn_text.scene`（teach / map_chat / practice_chat）是两套口径——前者是产品域的会话归属，
   后者是审计线的事件标签，不强行统一。
   */

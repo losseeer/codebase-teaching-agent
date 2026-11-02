@@ -114,9 +114,9 @@ export function NodeDrawer({ node, outgoing, files, resolution, onClose, onOpenF
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={isNote || resolution.state !== "ok"}
-            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个节点的第一个文件去代码教学" : "这个节点的引用已失效，没有可去的教学域"}
+            title={isNote ? "便签不指向代码节点" : resolution.state === "ok" ? "带着这个节点的第一个文件去代码问答" : "这个节点的引用已失效，没有可去的教学域"}
             onClick={onGotoTeach}
-          ><Icon name="book" size={13} />去代码教学</button>
+          ><Icon name="book" size={13} />去代码问答</button>
           <button type="button" className="btn btn-ghost btn-sm" title="把这个节点设为对话的教学域" onClick={onBind}><Icon name="zap" size={13} />绑定到对话</button>
         </div>
 

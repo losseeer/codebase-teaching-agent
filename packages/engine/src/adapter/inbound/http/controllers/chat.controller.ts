@@ -7,7 +7,7 @@ import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../../../infrastruct
 import { markThread } from "@codebase-tutor/platform";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-/** 宏观设计与练习答疑两条流式对话路由，外加「停止生成」。 */
+/** 架构全景与练习答疑两条流式对话路由，外加「停止生成」。 */
 export function registerChatRoutes(app: FastifyInstance): void {
 app.post<{ Body: { turnId?: unknown } }>("/api/turns/stop", async (request, reply) => {
   const stopped = stopTurn(request.body?.turnId);

@@ -16,10 +16,10 @@ describe("会话持久化", () => {
   const openThread = (input?: { scope?: "teach" | "map" | "practice"; title?: string; scopeRef?: string }) =>
     createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: input?.scope ?? "map", ...(input?.title ? { title: input.title } : {}), ...(input?.scopeRef ? { scopeRef: input.scopeRef } : {}) });
 
-  it("创建的线程可读回，未给标题时落作用域占位名", () => {
+  it("创建的线程可读回，未给标题时落工作区占位名", () => {
     const thread = openThread({ title: "  秒杀链路怎么走  " });
     expect(getThread(repository, thread.id)?.title).toBe("秒杀链路怎么走");
-    expect(openThread({ scope: "practice" }).title).toBe("新的练习对话");
+    expect(openThread({ scope: "practice" }).title).toBe("新的练习答疑会话");
     expect(getThread(repository, "nope")).toBeUndefined();
   });
 
@@ -79,7 +79,7 @@ describe("会话持久化", () => {
     expect(countMessagesRaw(repository, thread.id)).toBe(0);
   });
 
-  it("列表按最近更新在前；改名与按作用域找回", async () => {
+  it("列表按最近更新在前；改名与按工作区找回", async () => {
     const a = openThread({ title: "A" });
     const b = openThread({ title: "B" });
     appendMessages(repository, a.id, [{ role: "user", content: "a1" }]);

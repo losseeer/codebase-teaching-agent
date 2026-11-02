@@ -56,7 +56,7 @@ const exercise = {
 } as unknown as Exercise;
 
 describe("mapChat", () => {
-  it("上下文包含作用域文件与依赖关系，回复与 usage 透传", async () => {
+  it("上下文包含教学域文件与依赖关系，回复与 usage 透传", async () => {
     const { provider, calls } = fakeProvider();
     const result = await mapChat({
       repoPath: import.meta.dirname,
@@ -72,7 +72,7 @@ describe("mapChat", () => {
     const user = calls[0].user;
     expect(user).toContain("项目结构全景");
     expect(user).toContain("src/utils/ 共 1 个文件：normalize.ts");
-    expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 1 个已分析文件");
+    expect(user).toContain("当前选中范围：学习者在架构图选中的模块，含 1 个已分析文件");
     expect(user).toContain("src/app.ts");
     expect(user).toContain("src/config.ts");
     expect(user).toContain("src/paths.ts");
@@ -208,25 +208,25 @@ describe("mapChat", () => {
     expect(result.reply).toBe("这句话说到一半就被\n\n（回复因达到输出长度上限被截断，说「继续」可以接着讲。）");
   });
 
-  it("画布上送作用域：只注入已分析路径的「当前作用域」清单（含 L1 职责），未分析路径被丢弃", async () => {
+  it("画布上送选中范围：只注入已分析路径的「当前选中范围」清单（含 L1 职责），未分析路径被丢弃", async () => {
     const { provider, calls } = fakeProvider();
     const index = { repositoryId: "repo_test", files: [{ path: "src/app.ts", lines: 120 }, { path: "src/config.ts", lines: 30 }] } as unknown as RepositoryIndex;
     const search = buildSearchCorpus(index, analysis, new Map([["src/app.ts", "装配应用入口"], ["src/config.ts", "读取并校验配置"]]));
     await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["src/app.ts", "src/config.ts", "README.md"], content: "这个模块依赖谁？", provider, search });
     const user = calls[0].user;
-    expect(user).toContain("当前作用域：学习者在架构图选中的模块，含 2 个已分析文件");
+    expect(user).toContain("当前选中范围：学习者在架构图选中的模块，含 2 个已分析文件");
     expect(user).toContain("src/app.ts（120 行）：装配应用入口");
     expect(user).not.toContain("README.md");
   });
 
-  it("作用域清单全部未分析 → 不注入作用域段，按全局视野作答", async () => {
+  it("选中范围清单全部未分析 → 不注入选中范围段，按全局视野作答", async () => {
     const { provider, calls } = fakeProvider();
     await mapChat({ repoPath: import.meta.dirname, analysis, scopePaths: ["nowhere/x.ts", "nowhere/y.ts", "nowhere/x.ts"], content: "问", provider, });
     expect(calls[0].user).toContain("项目结构全景");
-    expect(calls[0].user).not.toContain("当前作用域");
+    expect(calls[0].user).not.toContain("当前选中范围");
   });
 
-  it("作用域文件数超上限 → 逐个列前 60 并明示余量与 search_code 出口", async () => {
+  it("选中范围内的文件数超上限 → 逐个列前 60 并明示余量与 search_code 出口", async () => {
     const { provider, calls } = fakeProvider();
     const files = Array.from({ length: 65 }, (_, i) => `src/mod/f${i}.ts`);
     const wide = { ...analysis, graph: { ...analysis.graph, imports: Object.fromEntries(files.map((file) => [file, []])) } } as unknown as RepositoryAnalysis;
@@ -335,11 +335,11 @@ describe("practiceChat", () => {
   });
 });
 
-describe("作用域 prompt 单源", () => {
-  it("map：系统提示词讲清作用域边界", async () => {
+describe("工作区 prompt 单源", () => {
+  it("map：系统提示词讲清工作区边界", async () => {
     const { provider, calls } = fakeProvider();
     await mapChat({ repoPath: import.meta.dirname, analysis, path: "src/app.ts", content: "一次请求怎么走？", provider });
-    expect(calls[0].system).toContain("宏观设计");
+    expect(calls[0].system).toContain("架构全景");
   });
 
   it("practice：不透露判分标准", async () => {

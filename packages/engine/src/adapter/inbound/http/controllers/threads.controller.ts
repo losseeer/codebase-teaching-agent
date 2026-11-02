@@ -3,7 +3,7 @@ import { createThreadUseCase, deleteThreadUseCase, listScopeThreads, readThreadM
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
-  会话线程（作用域 `teach | map | practice`）的入站翻译：参数交给用例，失败种类翻成状态码。
+  会话线程（工作区 `teach | map | practice`）的入站翻译：参数交给用例，失败种类翻成状态码。
 */
 const REJECTED: Record<ThreadsFailure, { status: 400 | 404; error: string }> = {
   "repository-missing": { status: 404, error: REPOSITORY_NOT_MOUNTED },

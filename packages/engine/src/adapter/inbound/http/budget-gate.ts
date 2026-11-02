@@ -1,4 +1,4 @@
-// 作用域对话共用的预算闸门：预算达上限或未配置 LLM 时回 422。
+// 工作区对话共用的预算闸门：预算达上限或未配置 LLM 时回 422。
 // `gate` 未传时按当前仓的账面现算。
 import type { FastifyReply } from "fastify";
 import type { LlmProvider } from "../../../application/port/llm-provider.js";

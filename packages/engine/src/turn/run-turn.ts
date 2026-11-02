@@ -24,9 +24,9 @@ import { excerptForAnchor, excerptsWithinBudget } from "./context-excerpt.js";
 import { exerciseQaSystemPrompt, overviewSystemPrompt, teachingSystemPrompt } from "./prompts.js";
 
 /**
-  teaching / map / practice 三个作用域的统一发射入口。
-  练习的标准答案与锚点不进上下文；作用域同时决定工具面过滤。
-  作用域清单与已分析集交集为空时不注入作用域段。
+  teaching / map / practice 三个工作区的统一发射入口。
+  练习的标准答案与锚点不进上下文；工作区同时决定工具面过滤。
+  选中范围清单与已分析集交集为空时不注入选中范围段。
   */
 
 /** 问答回合的过程事件。 */
@@ -120,7 +120,7 @@ export interface TutorReply {
 }
 
 export interface RespondOptions {
-  /** 索引：提供时目录作用域可列出目录内文件。 */
+  /** 索引：提供时教学域可列出目录内文件。 */
   index?: RepositoryIndex;
   /** 依赖图：提供时上下文注入调用邻接。 */
   analysis?: RepositoryAnalysis;
@@ -150,7 +150,7 @@ export interface TurnTraceContext {
 }
 
 export interface RunTurnInput {
-  /** 作用区：过滤工具面，并决定落库与埋点的口径。 */
+  /** 工作区：过滤工具面，并决定落库与埋点的口径。 */
   scope: "teaching" | "map" | "practice";
   provider: LlmProvider;
   /** 装配好的系统提示词与本轮用户消息，不再加工。 */
@@ -202,7 +202,7 @@ export interface RunTurnResult {
   askClaimed?: AskClaimAudit;
 }
 
-/** 回合的唯一发射处：按作用域与通道选工具循环或单轮调用。 */
+/** 回合的唯一发射处：按工作区与通道选工具循环或单轮调用。 */
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   const trace = input.trace;
   const runId = trace ? currentTraceId() ?? id() : undefined;
@@ -354,7 +354,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   };
 }
 
-/** map 作用域的一轮对话，带图结构写工具与现状快照。 */
+/** 架构全景工作区的一轮对话，带图结构写工具与现状快照。 */
 export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
@@ -362,7 +362,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   const egress: EgressCollector = [];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
-  // 画布上送的文件清单只作作用域提示
+  // 画布上送的文件清单只作选中范围提示
   const scope = input.scopePaths?.length ? scopeSection(analysis, input.search, input.scopePaths) : "";
   if (scope) sections.push(scope);
   // 画布现场快照：set_diagram 需要图元 id

@@ -20,7 +20,7 @@ import { DangerDialog } from "../ui/DangerDialog";
 import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 
-// 练习评估工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
+// 练习工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
 // 题型决定链路（理解题吃静态分析、分析题走 rubric、设计题进沙箱），主题只筛目标单元。
 // 顶栏只报 getPractice 的真读数；出题中不画假进度。
 
@@ -339,7 +339,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           type="button"
           className="cc-name cc-link"
           disabled={!anchor}
-          title="在代码教学中打开这个文件"
+          title="在代码问答中打开这个文件"
           onClick={() => { if (anchor) navigate(`/app?workspace=teaching&file=${encodeURIComponent(anchor.path)}&line=${String(anchor.line)}`); }}
         >
           {anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}
@@ -391,7 +391,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         crumb={<>
           <b>{repositoryName}</b>
           <span className="faint">/</span>
-          <span>练习评估</span>
+          <span>练习</span>
           <span className="faint">·</span>
           <span title={summary ? `${summary.mastery.length} 个单元练过` : "练习进度还没读到"}>待复习 {summary ? <><b className="num-warn">{summary.dueReviews}</b> 个</> : "读数未到"}</span>
           <span className="faint">·</span>

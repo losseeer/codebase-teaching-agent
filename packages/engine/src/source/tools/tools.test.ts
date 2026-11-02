@@ -47,7 +47,7 @@ function invokerFor(tools: ToolDefinition[], context: ToolContext) {
 describe("注册表的过滤", () => {
   const map = ctx({ repoPath: "/tmp/repo", search: undefined, ask: { facets: ["range"] }, diagram: { apply: () => "ok" }, facts: { apply: () => "ok" } });
 
-  it("作用区与可用性一起判：map 有图与提问，practice 没有", () => {
+  it("工作区与可用性一起判：map 有图与提问，practice 没有", () => {
     const names = (context: ToolContext) => INTERNAL_REGISTRY.entries(context).map((entry) => entry.definition.name);
     expect(names(map)).toEqual(["read_file", "ask_user", "set_diagram", "query_facts"]);
     expect(names({ ...map, scope: "practice" })).toEqual(["read_file", "query_facts"]);
@@ -59,7 +59,7 @@ describe("注册表的过滤", () => {
     expect(INTERNAL_REGISTRY.known("read_file")?.name).toBe("read_file");
   });
 
-  it("检索与静态产物按通道给，不按作用区写死", () => {
+  it("检索与静态产物按通道给，不按工作区写死", () => {
     const search = { entries: [] } as unknown as ToolContext["search"];
     const names = INTERNAL_REGISTRY.entries(ctx({ scope: "practice", repoPath: "/tmp/repo", search, facts: { apply: () => "ok" } })).map((entry) => entry.definition.name);
     expect(names).toEqual(["read_file", "search_code", "query_facts"]);

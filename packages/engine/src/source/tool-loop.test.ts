@@ -11,7 +11,7 @@ import { toLlmTool } from "./tools/types.js";
 /** repoPath 指向本目录：内含稳定存在的真实文件。 */
 const repoPath = import.meta.dirname;
 
-/** 这些用例只关心取证面，作用区统一按 map。 */
+/** 这些用例只关心取证面，工作区统一按 map。 */
 const runLoop = (input: Omit<ReadToolLoopInput, "scope">) => completeWithReadTool({ scope: "map", ...input });
 
 /** 测试用的外部工具面：一台 server 一组，与 MCP 适配器投影同形。 */
@@ -589,7 +589,7 @@ describe("回合检查点与预算闸门", () => {
   });
 });
 
-describe("到限中断（宏观设计那一档：不出成品，留快照等重试）", () => {
+describe("到限中断（架构全景那一档：不出成品，留快照等重试）", () => {
   /** 每趟都带一个工具调用：要能撑到第 10 轮。 */
   function loopingProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
     const calls: LlmCompletionInput[] = [];

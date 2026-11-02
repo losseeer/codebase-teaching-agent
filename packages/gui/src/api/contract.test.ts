@@ -19,8 +19,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** 作用域对话流的过程帧解析与界面文案映射。 */
-describe("作用域对话流的过程帧契约", () => {
+/** 工作区对话流的过程帧解析与界面文案映射。 */
+describe("工作区对话流的过程帧契约", () => {
   it("已登记的帧都能过，字段原样带出", () => {
     expect(parseScopedStreamFrame({ type: "thinking" })).toEqual({ type: "thinking" });
     expect(parseScopedStreamFrame({ type: "reading", path: "src/a.ts" })).toEqual({ type: "reading", path: "src/a.ts" });
@@ -64,12 +64,12 @@ describe("过程帧的界面文案", () => {
   it("取技能、改图、查产物、打外部程序各说一句人话（这些活动以前是静默的）", () => {
     expect(progressText({ type: "loading_skill", skill: "tutor-cost-audit" })).toBe("正在加载技能 tutor-cost-audit …");
     expect(progressText({ type: "loading_skill", skill: "" })).toBe("正在加载已装的做法 …");
-    expect(progressText({ type: "editing_diagram" })).toBe("正在改画布上的图 …");
+    expect(progressText({ type: "editing_diagram" })).toBe("正在修改画布上的架构图 …");
     expect(progressText({ type: "querying_facts" })).toBe("正在查询已有产物 …");
     expect(progressText({ type: "calling_external" })).toBe("正在调用外部工具 …");
   });
 
-  it("教学那条流是 `progress` 包一层 payload：文案与裸帧同一条", () => {
+  it("代码问答那条流是 `progress` 包一层 payload：文案与裸帧同一条", () => {
     expect(progressText({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toBe("正在读取 src/b.ts …");
     expect(progressText({ stage: "thinking" })).toBe("正在思考…");
   });

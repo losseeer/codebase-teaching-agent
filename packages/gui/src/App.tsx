@@ -244,14 +244,14 @@ export function App(): ReactElement {
           <span className="brand-mark">码</span>
           <span className="brand-titles">
             <span className="brand-name">Codebase Tutor</span>
-            <span className="brand-sub">本地优先 · 代码教学 Agent</span>
+            <span className="brand-sub">本地优先 · 代码问答 Agent</span>
           </span>
         </div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavItem to="/import" icon="import" label="导入仓库" />
-          <WorkspaceNavItem id="map" icon="map" label="宏观设计" disabled={!workspace} />
-          <WorkspaceNavItem id="teaching" icon="book" label="代码教学" disabled={!workspace} />
-          <WorkspaceNavItem id="practice" icon="practice" label="练习评估" disabled={!workspace} />
+          <WorkspaceNavItem id="map" icon="map" label="架构全景" disabled={!workspace} />
+          <WorkspaceNavItem id="teaching" icon="book" label="代码问答" disabled={!workspace} />
+          <WorkspaceNavItem id="practice" icon="practice" label="练习" disabled={!workspace} />
           <NavItem to="/insights" icon="gauge" label="成本监控" disabled={!workspace} />
         </nav>
         {/* 切仓入口只在导入页，侧栏不放仓库切换器 */}

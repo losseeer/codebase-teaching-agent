@@ -95,7 +95,7 @@ describe("journal 回合历史", () => {
     expect(declined.steps.find((step) => step.kind === "turn")?.detail).toContain("操作系统");
   });
 
-  it("历史按作用区过滤：练习区同时给出题与答疑", () => {
+  it("历史按工作区过滤：练习区同时给出题与答疑", () => {
     const events = [
       ev("turn_text", "t1", "2026-11-02T03:07:01.000Z", { scene: "teach", question: "问一", answer: "答一" }),
       ev("turn_text", "t2", "2026-11-02T03:07:02.000Z", { scene: "map_chat", question: "问二", answer: "答二" }),

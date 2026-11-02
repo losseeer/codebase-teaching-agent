@@ -56,7 +56,7 @@ export interface TeachTurn {
   answer: string;
   /** 落盘时被截断的回复不参与引用核验。 */
   answerTruncated: boolean;
-  /** 默认 = teach；`anchor-binding` 只在 teach 判，其余作用域只判引用核验。 */
+  /** 默认 = teach；`anchor-binding` 只在 teach 判，其余工作区只判引用核验。 */
   scene?: "teach" | "map_chat" | "practice_chat";
 }
 

@@ -11,7 +11,7 @@ import { failureText } from "../ui/toast";
 import { PageTopbar } from "./WorkspaceChrome";
 
 // 导入仓库页：路径 → 分相进度 → 成本报告 → 已导入仓库清单。
-// 完成后经 onImported 把 workspace 交给 App，再跳宏观设计。
+// 完成后经 onImported 把 workspace 交给 App，再跳架构全景。
 // 本页可直接切换到已导入的仓。
 
 interface Props {
@@ -191,7 +191,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                   <div className="card report-cell"><div className="num">{report.estimate.estimatedCostUsd > 0 ? `¥${report.estimate.estimatedCostUsd.toFixed(2)}` : "未计价"}</div><div className="lbl">预估本次成本</div></div>
                 </div>
                 <div className="row">
-                  <button type="button" className="btn btn-accent" onClick={() => navigate("/app?workspace=map")}>进入宏观设计 <Icon name="arrowRight" /></button>
+                  <button type="button" className="btn btn-accent" onClick={() => navigate("/app?workspace=map")}>进入架构全景 <Icon name="arrowRight" /></button>
                   <span className="fs-12 faint mono">{report.index.repositoryPath}/.tutor/</span>
                 </div>
               </div>

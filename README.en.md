@@ -12,17 +12,17 @@
 
 Give it a repository path and it reads the repository into a structure it can talk about, then answers questions about that repository.
 
-Static analysis is the base: a symbol-level dependency graph plus per-file summaries, and four deterministic artifacts (control-flow graphs, intra-function data flow, type relations, registry and config index) stored in the `.tutor/` `static_fact` table — they enter no cache key, so adding an analysis class never re-bills an imported repository. Question answering and diagram edits go through one agent that searches, reads files and queries those artifacts itself rather than guessing; diagram modules point directly at files, directories or symbols. Exercise generation is not part of that loop: the exercise route makes a single model call.
+Static analysis is the base: a symbol-level dependency graph plus per-file summaries, and four deterministic artifacts (control-flow graphs, intra-function data flow, type relations, registry and config index) stored in the `.tutor/` `static_fact` table — they enter no cache key, so adding an analysis class never re-bills an imported repository. Question answering and diagram edits go through one agent that searches, reads files and queries those artifacts itself rather than guessing; diagram modules point directly at files, directories or symbols. Exercise generation, grading and Q&A walk the same evidence loop: with a repository mounted the model can read files, search and query those artifacts itself.
 
 Everything runs on your machine and artifacts stay in the analysed repository's `.tutor/`. It starts without a model configured; with a model it bills per repository, and the monthly budget stops calls before they are sent.
 
 ## Features
 
 - Import any local repository: indexing, graph and summaries in one pass, with `.tutorignore` for exclusions
-- The teaching pane is just the repository tree: selecting a file or directory sets the teaching scope, and the thread is bound to it
-- Architecture canvas is a gallery plus an infinite canvas: your drags and renames are saved, node and edge changes are proposed by the agent from code evidence and written directly, with every structural edit versioned and restorable
+- The code Q&A workspace is just the repository tree: selecting a file or directory sets the teaching domain, and the thread is bound to it
+- The architecture overview is a gallery plus an infinite canvas: your drags and renames are saved, node and edge changes are proposed by the agent from code evidence and written directly, with every structural edit versioned and restorable
 - Exercises in three families: rule-generated comprehension questions are graded deterministically; LLM-generated comprehension questions are graded by a model matching your answer against the rubric and reference answer (`automatic=false`); code questions are drafted by the model and graded by running tests in a sandbox; mastery and pending reviews follow your answers
-- Chat spans design / teaching / practice scopes with separate threads, streamed output and a stop action
+- Chat spans the architecture overview, code Q&A and practice workspaces with separate threads, streamed output and a stop action
 - The cost page reports aggregate amounts bucketed by scene, provider and day; every `LlmProvider` call is logged as one line in `~/.codebase-tutor/llm.log` with its scene and tokens (local Ollama summaries fetch on their own and never reach this line); browsing structure, diagrams and capability lists costs nothing
 - Multiple repositories mounted at once, file watching, impact analysis after changes, with chat history and audit events on disk
 - External tools (MCP) are off by default: with no server in the config file not one tool is added; for an added server, omitting `allowedTools` hands every tool it reports to the model, and writing it admits only the tools on the list. Skills follow the industry directory convention and are read from `~/.codebase-tutor/skills` and `~/.claude/skills` (never from the repository under study); secrets in a skill body are stripped

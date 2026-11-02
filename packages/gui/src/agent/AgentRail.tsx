@@ -23,7 +23,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
-  // 切作用域不是用户上翻，恢复跟随
+  // 切工作区不是用户上翻，恢复跟随
   useEffect(() => { stickToBottom.current = true; }, [scope]);
   useEffect(() => {
     const el = threadRef.current;
@@ -123,12 +123,12 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
     };
   }
   if (scope === "map") {
-    return { placeholder: "讨论这个项目的宏观设计…", canSend, onSend: t.sendMap };
+    return { placeholder: "讨论这个项目的架构全景…", canSend, onSend: t.sendMap };
   }
   return { placeholder: "对这道练习追问…", canSend, onSend: t.sendPractice };
 }
 
-/** 空线程的一句话指引，按作用域不同。 */
+/** 空线程的一句话指引，按工作区不同。 */
 function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
   const hint = scope === "map"
     ? "点模块、环节或目录里的文件，我围绕它展开。"
@@ -143,7 +143,7 @@ function EmptyTurn({ scope }: { scope: Scope }): ReactElement {
   );
 }
 
-/** 绑定行 = 当前作用域的当前位置，不累积历史。 */
+/** 绑定行 = 当前选中的位置，不累积历史。 */
 function boundFor(scope: Scope, t: ScopedChatApi): string {
   if (scope === "map") {
     const binding = t.mapBinding;
@@ -161,7 +161,7 @@ function boundFor(scope: Scope, t: ScopedChatApi): string {
 }
 
 /**
-  会话条：新建/切换/重命名/软删，每作用域一份独立列表。
+  会话条：新建/切换/重命名/软删，每工作区一份独立列表。
   下拉只列已发言会话；未发言的占「（新会话）」一格。
  */
 function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactElement {

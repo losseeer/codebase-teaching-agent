@@ -29,7 +29,7 @@ import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/co
 import { traceEngine } from "@codebase-tutor/platform";
 
 /**
-  宏观设计与练习答疑两个对话用例，以及带外的「停止生成」。
+  架构全景与练习答疑两个对话用例，以及带外的「停止生成」。
   能回干净 JSON 的检查都在流开始之前跑完，之后的失败只能变成流里的一帧。
   用例只依赖写过程事件的函数与中止信号。
 */

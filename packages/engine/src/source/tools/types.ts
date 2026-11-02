@@ -115,11 +115,11 @@ export interface ToolDefinition {
   effect: ToolEffect;
   origin: ToolOrigin;
   version?: string;
-  /** 作用区；缺省 all。界面能力面据此过滤。 */
+  /** 工作区；缺省 all。界面能力面据此过滤。 */
   scope?: AgentScope[] | "all";
   /** 需要的能力面；界面能力面据此标注不可用。 */
   requires?: "skills" | "external";
-  /** 只在地图作用区且条件满足时出现。 */
+  /** 只在架构全景工作区且条件满足时出现。 */
   conditional?: boolean;
   /** 读文件 / 外部调用的每回合额度类别。 */
   cost?: "read" | "external";

@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRouteFixture, MAIN_FILE, TAIL, sseEvents, deltasOf, doneEvent, type RouteFixture } from "../controller-test-kit.js";
 
-/** 教学作用域（SSE）：会话即线程，回合正文落库并与 done.message 一致，不变量复检进 journal。 */
+/** 代码问答工作区（SSE）：会话即线程，回合正文落库并与 done.message 一致，不变量复检进 journal。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
 afterAll(async () => { await fx.teardown(); });
 beforeEach(() => { fx.reset(); });
 
-describe("教学作用域（SSE）", () => {
+describe("代码问答工作区（SSE）", () => {
   async function openSession(settings?: Record<string, unknown>): Promise<string> {
     const created = await fx.app.inject({ method: "POST", url: "/api/sessions", payload: { repositoryId: fx.repositoryId, scopeRef: `file:${MAIN_FILE}`, ...(settings ? { settings } : {}) } });
     const id = (created.json() as { session: { id: string } }).session.id;

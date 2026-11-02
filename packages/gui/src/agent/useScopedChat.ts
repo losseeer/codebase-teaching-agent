@@ -13,7 +13,7 @@ import { threadItemsFrom, type MessageExtra, type ThreadItem, type ThreadRow } f
 import { lostInTransit } from "./turnFailure";
 import type { ScopedChatApi } from "./scopedChatApi";
 
-/** 三作用域共用的单一状态源。 */
+/** 三工作区共用的单一状态源。 */
 export function useScopedChat(repositoryId: string): ScopedChatApi {
   const [scope, setScope] = useState<Scope>(loadInitialScope);
   useEffect(() => {
@@ -29,7 +29,7 @@ const pushMessage = (target: Scope, role: "user" | "agent", text: string, varian
 /** 最后一句提问的气泡 id；开新回合即失效。 */
 const [liveAsk, setLiveAsk] = useState<Record<Scope, string | null>>({ map: null, teaching: null, practice: null });
 
-/** 教学作用域：`file:<path>` 或 `dir:<path>`。 */
+/** 教学域：`file:<path>` 或 `dir:<path>`。 */
 const [scopeRef, setScopeRefState] = useState<string | null>(null);
 const setScopeRef = (ref: string | null): void => setScopeRefState(ref);
 const scopeLabel = scopeRef
@@ -46,7 +46,7 @@ useEffect(() => {
   }, controller.signal);
   return () => { stop(); controller.abort(); };
 }, [repositoryId]);
-// 画布选中节点的文件清单，仅作 map-chat 作用域提示。
+// 画布选中节点的文件清单，仅作 map-chat 选中范围提示。
 const [mapScopePaths, setMapScopePaths] = useState<string[]>([]);
 const setMapScope = (scopePaths: string[]): void => setMapScopePaths(scopePaths);
 const [mapFile, setMapFile] = useState("");
@@ -59,11 +59,11 @@ const requestOpenDiagram = (diagram: { id: string; name: string }): void => setP
 const clearDiagramOpen = (): void => setPendingDiagramOpen(null);
 const [practiceUnit, setPracticeUnit] = useState("");
 useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); setMapBinding(null); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
-  /** 引擎的在途教学会话，不对外暴露。 */
-  // 同一条教学会话三个名字：库里 chat_session 行 = GUI threadId = 引擎 sessionId。
+  /** 引擎的在途代码问答会话，不对外暴露。 */
+  // 同一条代码问答会话三个名字：库里 chat_session 行 = GUI threadId = 引擎 sessionId。
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>(defaultTutorSettings);
-  /** 输入框草稿按作用域各存一份。 */
+  /** 输入框草稿按工作区各存一份。 */
   const [drafts, setDrafts] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   // 渲染期镜像：异步路径需读最新草稿。
   const draftsRef = useRef(drafts);
@@ -72,14 +72,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const setDraft = (target: Scope, value: string): void => setDrafts((prev) => ({ ...prev, [target]: value }));
   const content = drafts[scope];
   const setContent = (next: string): void => setDraft(scope, next);
-  /** 在途状态按作用域各记一份。 */
+  /** 在途状态按工作区各记一份。 */
   const [sendingByScope, setSendingByScope] = useState<Record<Scope, boolean>>({ map: false, teaching: false, practice: false });
   const sending = sendingByScope[scope];
   const markSending = (target: Scope, value: boolean): void => setSendingByScope((prev) => ({ ...prev, [target]: value }));
   const [errorsByScope, setErrorByScope] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const error = errorsByScope[scope];
   const setError = (target: Scope, message: string): void => setErrorByScope((prev) => ({ ...prev, [target]: message }));
-  // 在途回合按作用域各一条。
+  // 在途回合按工作区各一条。
   const activeTurn = useRef<Partial<Record<Scope, { turnId: string; controller: AbortController }>>>({});
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
@@ -95,7 +95,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   /** 是否用户主动停止；只能在 catch 里读（finally 会清掉在途引用）。 */
   const stoppedByUser = (target: Scope): boolean => activeTurn.current[target]?.controller.signal.aborted === true;
-  /** 停止当前作用域的在途回合。 */
+  /** 停止当前工作区的在途回合。 */
   const stopTurnFor = (target: Scope): void => {
     const turn = activeTurn.current[target];
     if (!turn) return;
@@ -104,7 +104,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
   const stopTurn = (): void => stopTurnFor(scope);
-  // 过程指示行：按作用域各一组，一行一件事。
+  // 过程指示行：按工作区各一组，一行一件事。
   const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
   /** progress 行的渲染期镜像，供异步收尾读取。 */
   const progressLines = useRef<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
@@ -211,7 +211,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     scheduleRecheck(target, wait);
   };
 
-  /** 回读重试：同一作用域同时只挂一趟。 */
+  /** 回读重试：同一工作区同时只挂一趟。 */
   const scheduleRecheck = (target: Scope, delayMs: number): void => {
     if (recheckTimers.current[target] !== null) return;
     recheckTimers.current[target] = window.setTimeout(() => {
@@ -239,7 +239,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     await loadThread(target, currentThreadRef.current[target]!);
   };
 
-  /** 网络恢复时，把有欠账的作用域各回读一次。 */
+  /** 网络恢复时，把有欠账的工作区各回读一次。 */
   const reconcilePending = (): void => {
     for (const target of SCOPES) {
       // 在途回合正文未落库，跳过回读
@@ -312,12 +312,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (scope === "teaching") {
         const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
         if (thread && !thread.scopeRef) {
-          // 无作用域绑定的线程不可续聊
+          // 无教学域绑定的线程不可续聊
           setCurrentThread("teaching", null);
           pushMessage("teaching", "agent", "这条会话沿用的是旧的目录结构，请重新选一个文件或目录。", "hint");
           return;
         }
-        // 教学线程绑作用域：左栏随所点线程切换
+        // 代码问答线程绑教学域：左栏随所点线程切换
         if (thread?.scopeRef && thread.scopeRef !== scopeRef) setScopeRefState(thread.scopeRef);
         const restored = await api.getSession(threadId);
         if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
@@ -438,7 +438,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (currentThreadRef.current[scope] === threadId) setCurrentThread(scope, null);
   };
 
-  // 挂载/换仓库：三作用域各拉一次清单；map 与 practice 按记忆落当前线程，teaching 由下面的作用域效应决定。
+  // 挂载/换仓库：三工作区各拉一次清单；map 与 practice 按记忆落当前线程，teaching 由下面的工作区效应决定。
   useEffect(() => {
     if (!repositoryId) {
       setChatThreads({ map: [], teaching: [], practice: [] });
@@ -463,16 +463,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return () => { cancelled = true; };
   }, [repositoryId]);
 
-  // 切作用域时刷新该作用域清单
+  // 切工作区时刷新该工作区清单
   useEffect(() => {
     if (repositoryId) void refreshThreads(scope);
   }, [repositoryId, scope]);
 
-  // 换作用域 = 挂回该文件/目录最近一次教学线程；没有则留空，发送时新建。
+  // 换教学域 = 挂回该文件/目录最近一次代码问答线程；没有则留空，发送时新建。
   // 清单可能滞后一拍，此时不动线程；已停在目标线程也不再回读。
   useEffect(() => {
     if (!repositoryId || !scopeRef) return;
-    // 教学回合在途时不动线程：清栏或回读都会覆盖侧栏
+    // 代码问答回合在途时不动线程：清栏或回读都会覆盖侧栏
     if (activeTurn.current.teaching) return;
     const list = chatThreadsRef.current.teaching;
     const current = currentThreadRef.current.teaching;
@@ -493,7 +493,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const send = async (): Promise<void> => {
     const message = draftOf("teaching").trim();
     if (!message) return;
-    // 用户说出口的话先上屏：缺作用域的守卫只补提示，不丢弃这句
+    // 用户说出口的话先上屏：缺教学域的守卫只补提示，不丢弃这句
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
     setDraft("teaching", "");
@@ -501,7 +501,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
       return;
     }
-    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", "正在准备教学上下文…");
+    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", "正在准备问答上下文…");
     const turn = beginTurn("teaching");
     const sink = turnSink("teaching");
     try {
@@ -533,7 +533,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  // 作用域对话：不走教学状态机；历史由引擎按 threadId 自取，GUI 只上送这一句。
+  // 工作区对话：历史由引擎按 threadId 自取，GUI 只上送这一句。
   // answer = 点提问按钮时代替输入框发送的那句；resumeAsk = 该提问的认领句柄，引擎据此把这句当答案回灌。
   const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
     const message = (answer ?? draftOf(scope)).trim();

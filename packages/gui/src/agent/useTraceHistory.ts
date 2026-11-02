@@ -4,7 +4,7 @@ import type { AgentScope } from "@codebase-tutor/contract";
 import { api } from "../api/client";
 import type { TraceRun } from "./useAgentTrace";
 
-/** 历史回放：只取当前作用区、journal 汇总的最近回合；弹窗打开时读一次。 */
+/** 历史回放：只取当前工作区、journal 汇总的最近回合；弹窗打开时读一次。 */
 export function useTraceHistory(repositoryId: string | null, scope: AgentScope, limit = 20): { runs: TraceRun[]; error: string | null; loading: boolean } {
   const [runs, setRuns] = useState<TraceRun[]>([]);
   const [error, setError] = useState<string | null>(null);

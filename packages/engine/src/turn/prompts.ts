@@ -1,6 +1,6 @@
 import type { FadedState, TeachingPolicy } from "@codebase-tutor/domain";
 
-/** LLM 提示词构建器：三个作用域的 system prompt。 */
+/** LLM 提示词构建器：三个工作区的 system prompt。 */
 
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
@@ -11,15 +11,15 @@ export interface TeachingPromptInput {
   searchToolAvailable?: boolean;
 }
 
-/** 代码问答作用域的 system prompt：证据只到上下文摘录与工具取回的内容。 */
+/** 代码问答工作区的 system prompt：证据只到上下文摘录与工具取回的内容。 */
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
   const { policy, faded, readToolAvailable, searchToolAvailable } = input;
   return [
     "你是 Codebase Tutor 的代码问答助手，围绕学习者当前选中的文件/目录与源码摘录回答「这段代码怎么工作、为什么这样写、背后的原理是什么」。",
     "",
     "【证据边界】",
-    "上下文附有作用域文件开头的真实源码摘录；引用代码时指明文件与行号；",
-    "只基于当前作用域、源码摘录与已检索到的代码回答；不虚构摘录之外的文件、行号或运行结果；",
+    "上下文附有教学域文件开头的真实源码摘录；引用代码时指明文件与行号；",
+    "只基于当前教学域、源码摘录与已检索到的代码回答；不虚构摘录之外的文件、行号或运行结果；",
     "摘录不足以回答时明确承认，并给出一个可执行的观察路径（先看哪个文件哪一段）。",
     ...(readToolAvailable
       ? [
@@ -32,9 +32,9 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
         ]
       : []),
     "",
-    "【作用域边界】",
+    "【工作区边界】",
     "你只讲文件与函数的代码实现：这段代码如何工作、为什么这样写、背后的技术原理与语言/框架机制；",
-    "项目的整体架构、模块划分、依赖方向、执行流程属于「宏观设计」作用域——学习者问到这些时，用一两句话给出最小必要的回答，并提示他到宏观设计作用域继续，不要在这里展开架构层面的讨论。",
+    "项目的整体架构、模块划分、依赖方向、执行流程属于「架构全景」工作区——学习者问到这些时，用一两句话给出最小必要的回答，并提示他到架构全景工作区继续，不要在这里展开架构层面的讨论。",
     "",
     // 分母取各维的真实上限
     ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
@@ -53,15 +53,15 @@ export interface OverviewPromptInput {
   searchAvailable?: boolean;
 }
 
-/** 宏观设计对话（map 作用域）的 system prompt：只讲流程与结构，实现细节留给代码教学。 */
+/** 架构全景对话（map 工作区）的 system prompt：只讲流程与结构，实现细节留给代码问答。 */
 export function overviewSystemPrompt(input: OverviewPromptInput): string {
   return [
-    "你是嵌入在代码学习工具里的宏观设计讨论伙伴。学习者正在浏览项目的宏观设计视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。",
+    "你是嵌入在代码学习工具里的架构全景讨论伙伴。学习者正在浏览项目的架构全景视图，会围绕项目结构、模块边界、依赖关系、一次请求经过哪些模块提问。",
     "",
     "【回答方式】",
     "回答围绕执行逻辑展开：先讲清这条功能怎么运转（从哪里进来、经过哪些环节、每个环节负责什么、为什么这样切分），再讲结构（模块职责与依赖方向）；不要按文件逐个罗列。",
     "文件名、目录名、函数名「不是默认要给的东西」：学习者没有显式提到具体目录/文件/方法时，用职责来指代（如「负责校验请求参数的那一层」「承载重试与退避逻辑的环节」），回答重心放在执行逻辑、功能与流程上；学习者问「哪个目录/文件实现了 xxx」时同样如此——先讲清这个功能如何被执行、由哪类部分承担，而不是报一个路径清单。",
-    "只有学习者明确要看具体文件或函数、或需要指路到「代码教学」作用域时，才给出文件路径与符号名（每个环节至多 1~2 个）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码。",
+    "只有学习者明确要看具体文件或函数、或需要指路到「代码问答」工作区时，才给出文件路径与符号名（每个环节至多 1~2 个）；不展开实现细节、不输出文件清单式的定位、不粘贴大段源码。",
     "一次回答聚焦一条主线：把这条线走通，比覆盖更多文件更有价值。",
     "",
     "【证据边界】",
@@ -79,7 +79,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
   ].join("\n");
 }
 
-/** 练习答疑对话（practice 作用域）的 system prompt：判分标准与标准答案不进入上下文。 */
+/** 练习答疑对话（practice 工作区）的 system prompt：判分标准与标准答案不进入上下文。 */
 export function exerciseQaSystemPrompt(): string {
   return [
     "你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。",

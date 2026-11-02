@@ -8,7 +8,7 @@ import { readMessages } from "../../../outbound/persistence/chat-store.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
 
 /**
-  宏观设计与练习答疑的回合收尾，含外部能力面与出网清单。
+  架构全景与练习答疑的回合收尾，含外部能力面与出网清单。
   顺序是 recheckTurn → 落库 → 回放；每条路径断言三处文本同一份（响应 == chat_message == journal 的 `turn_text.answer`）。
 */
 const fx: RouteFixture = createRouteFixture();
@@ -153,7 +153,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
   });
 });
 
-describe("宏观设计作用域（SSE）", () => {
+describe("架构全景工作区（SSE）", () => {
   it("map-chat：合格回合也写 turn_invariant，响应正文＝库里正文＝turn_text", async () => {
     fx.scripted = [OK_REPLY];
     const threadId = await fx.newThread("map", "合格线程");
@@ -303,9 +303,9 @@ describe("宏观设计作用域（SSE）", () => {
   });
 });
 
-/** 练习答疑：与 map-chat 同款 SSE 收尾，线程绑题、作用域记 practice_chat。 */
+/** 练习答疑：与 map-chat 同款 SSE 收尾，线程绑题、工作区记 practice_chat。 */
 
-describe("练习答疑作用域（SSE）", () => {
+describe("练习答疑工作区（SSE）", () => {
   it("practice-chat：复检先于落库与回放，正文三处一致", async () => {
     fx.scripted = [`先跑 ${MAIN_FILE}:3 这条路，你觉得断点打在哪一行？`];
     const threadId = await fx.newThread("practice", "练习线程", fx.exerciseId);
@@ -443,7 +443,7 @@ describe("回合内向用户提问（问句即成品，点选项才接着算）"
   });
 });
 
-describe("到限中断（只有宏观设计这一档会走到）", () => {
+describe("到限中断（只有架构全景这一档会走到）", () => {
   it("到限中断：没有成品就不落正文，done 只带原因，轮数读数照记", async () => {
     // 夹具脚本用完后重复最后一条，因此每轮都有工具调用
     fx.scripted = ['@@tool search_code {"query":"zzz-不存在"}'];
@@ -467,7 +467,7 @@ describe("源码出网清单", () => {
   const egress = () => fx.eventsOf("code_egress");
   const sentFields = (row: JournalEvent) => Object.keys(row.payload).sort();
 
-  it("宏观设计回合：锚点摘录逐段计入审计，带线程 id，且不含源码正文", async () => {
+  it("架构全景回合：锚点摘录逐段计入审计，带线程 id，且不含源码正文", async () => {
     const before = egress().length;
     const threadId = await fx.newThread("map", "出网线程");
     const response = await mapChat({ content: "这一节先看哪里？", threadId, path: MAIN_FILE });

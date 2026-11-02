@@ -2,7 +2,7 @@ import type { ToolContext, ToolDefinition, ToolExposure, ToolIndexEntry, ToolReg
 import { TOOL_CALL_DEFINITION, TOOL_INSPECT_DEFINITION, TOOL_SEARCH_DEFINITION } from "./catalog.js";
 
 /**
-  暴露层：按作用区与可用性过滤，再按 schema 体积决定 auto 工具常驻还是收进目录。
+  暴露层：按工作区与可用性过滤，再按 schema 体积决定 auto 工具常驻还是收进目录。
   纯函数；同一回合只算一次，tools 数组不在中途变化。
 */
 

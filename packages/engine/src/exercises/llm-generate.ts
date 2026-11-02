@@ -46,7 +46,7 @@ const kindRules: Record<ExerciseKind, string> = {
 /** 题面润色的系统提示词。 */
 function refineSystemPrompt(kind: ExerciseKind): string {
   return [
-    "你是代码教学产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
+    "你是代码学习产品的出题编辑。基于给定的题型、目标单元与源码摘录，重写练习题面，让它贴近真实代码细节、读起来像一道精心设计的手工题。",
     "",
     `本题型的任务与红线：${kindRules[kind]}`,
     "",
@@ -150,7 +150,7 @@ export interface LlmProposal {
 }
 
 const GENERATION_SYSTEM_PROMPT = [
-  "你是代码教学产品的出题人。基于用户给定的主题标签和若干候选源码摘录（带行号），出一道考察对该主题理解的开放式源码分析题。",
+  "你是代码学习产品的出题人。基于用户给定的主题标签和若干候选源码摘录（带行号），出一道考察对该主题理解的开放式源码分析题。",
   "",
   "出题前先判断可行性：标签无意义、摘录里读不出任何可考点、或素材撑不起一道有明确参考答案的题，就拒绝出题。",
   "拒绝理由要写清找过哪些可考点；「某个性质在沙箱里跑不出真实结果」只限制问哪一层，不构成拒题。",
@@ -262,7 +262,7 @@ export async function polishFeedbackWithLlm(input: { repositoryPath: string; exe
     const excerpt = sourceExcerpt(input.repositoryPath, input.exercise);
     if (!excerpt) return undefined;
     const system = [
-      "你是代码教学产品的反馈编辑。规则判分已给出结论（通过与否、得分、原始反馈），请把它改写成一段解释性反馈：说明为什么对，或错在哪里、该怎么想。",
+      "你是代码学习产品的反馈编辑。规则判分已给出结论（通过与否、得分、原始反馈），请把它改写成一段解释性反馈：说明为什么对，或错在哪里、该怎么想。",
       "- ≤160 字中文；引用的代码事实必须来自给定摘录；不得改动判分结论本身。",
       "严格输出 JSON：{\"feedback\":\"…\"}，不要输出任何其他文字。"
     ].join("\n");

@@ -126,7 +126,7 @@ describe("renderConversation", () => {
     expect(block.text).not.toContain("被切了尾的");
   });
 
-  it("标签跟着作用域换：代码问答里对方是导师", () => {
+  it("标签跟着工作区换：代码问答里对方是导师", () => {
     process.env[ENV_KEY] = WINDOW;
     const block = renderConversation({ turns: [turn("user", "首问"), turn("assistant", "首答")], query: "追问", usedCharacters: 0, labels: { user: "学习者", assistant: "导师" } });
     expect(block.text).toContain("导师: 首答");

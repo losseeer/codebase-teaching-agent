@@ -4,7 +4,7 @@ import type { RepositoryAnalysis } from "@codebase-tutor/domain";
 import { CONTEXT_SHARE, contextShare, contextShareLines } from "../adapter/outbound/llm/context-window.js";
 import type { SearchCorpus } from "../source/search-code.js";
 
-/** 宏观设计（map）作用域的装配段：项目结构全景、画布选中模块的作用域清单、依赖邻域。 */
+/** 架构全景（map）工作区的装配段：项目结构全景、画布选中模块的选中范围清单、依赖邻域。 */
 
 const mapContextCap = () => contextShare(CONTEXT_SHARE.mapContext);
 /** 全景里一个目录最多列多少个文件名：超出只报总数，目录本身不丢。 */
@@ -28,7 +28,7 @@ function structurePanorama(analysis: RepositoryAnalysis): string {
   return `项目结构全景（${paths.length} 个已分析文件，按目录分组；目录名只用来定位与写 ref，节点名写职责）：\n${lines.join("\n")}`;
 }
 
-/** 作用域段逐个列出的文件数上限；超出的只报总数。 */
+/** 选中范围段逐个列出的文件数上限；超出的只报总数。 */
 const MAX_SCOPE_LISTED = 60;
 
 /** 已分析文件全集：与目录全景同源（imports 的空数组键也算「被分析过」）。 */
@@ -38,7 +38,7 @@ function analyzedPathSet(analysis: RepositoryAnalysis): Set<string> {
   return paths;
 }
 
-/** 画布选中模块的作用域段：清单与已分析集求交后列「路径（行数）：摘要」，交集为空回空串。 */
+/** 画布选中模块的选中范围段：清单与已分析集求交后列「路径（行数）：摘要」，交集为空回空串。 */
 function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undefined, scopePaths: string[]): string {
   const analyzed = analyzedPathSet(analysis);
   const files = [...new Set(scopePaths)].filter((candidate) => analyzed.has(candidate)).sort();
@@ -50,7 +50,7 @@ function scopeSection(analysis: RepositoryAnalysis, search: SearchCorpus | undef
     return `- ${file}${meta}${entry?.summary ? `：${entry.summary}` : ""}`;
   });
   const tail = files.length > MAX_SCOPE_LISTED ? `\n…其余 ${files.length - MAX_SCOPE_LISTED} 个文件未列出，需要时可用 search_code 定位。` : "";
-  return `当前作用域：学习者在架构图选中的模块，含 ${files.length} 个已分析文件：\n${lines.join("\n")}${tail}`;
+  return `当前选中范围：学习者在架构图选中的模块，含 ${files.length} 个已分析文件：\n${lines.join("\n")}${tail}`;
 }
 
 /** 依赖图中某文件的邻域：一度（直接 import / 被 import）+ 二度（import 的 import / 被被 import），去重排序。 */

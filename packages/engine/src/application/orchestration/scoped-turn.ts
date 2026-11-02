@@ -16,9 +16,9 @@ import type { ChatStore } from "../port/chat-store.js";
 import { mcpCallPayload } from "../runtime/turn-audit.js";
 import { CHECKPOINT_TTL_MS } from "../runtime/turn-checkpoint.js";
 
-/** 一次作用域回合的收尾：线程上下文取数、正文落库、不变量复检、审计线记账。 */
+/** 一次工作区回合的收尾：线程上下文取数、正文落库、不变量复检、审计线记账。 */
 
-/** 作用域回合的线程上下文：核归属后从库里取历史；`threadId` 缺席即单次提问。 */
+/** 工作区回合的线程上下文：核归属后从库里取历史；`threadId` 缺席即单次提问。 */
 export function scopedThreadTurn(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope): { threadId: string | undefined; history: ScopedChatTurn[] } | undefined {
   if (!threadId) return { threadId: undefined, history: [] };
   const thread = scopedThread(repository, threadId, scope);
@@ -187,7 +187,7 @@ export function threadScopedHistory(store: ChatStore, threadId: string | undefin
   return { history: messages.map((message) => ({ role: message.role, content: message.content })) };
 }
 
-/** 取线程并核归属：不在库里、已软删、属于别的仓或别的作用域一律 `undefined`。 */
+/** 取线程并核归属：不在库里、已软删、属于别的仓或别的工作区一律 `undefined`。 */
 export function scopedThread(repository: ImportedRepository, threadId: string | undefined, scope: ChatScope) {
   if (!threadId) return undefined;
   const thread = repository.chatStore.getThread(threadId);

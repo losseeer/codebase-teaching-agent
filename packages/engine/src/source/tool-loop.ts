@@ -34,7 +34,7 @@ import {
 
 export interface ReadToolLoopInput {
   provider: LlmProvider;
-  /** 本轮作用区：只决定工具面过滤。 */
+  /** 本轮工作区：只决定工具面过滤。 */
   scope: AgentScope;
   /** 仓库根：read_file 只在此范围内读取。 */
   repoPath?: string;

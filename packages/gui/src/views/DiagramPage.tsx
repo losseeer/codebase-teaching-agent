@@ -16,7 +16,7 @@ import { NodeDrawer, type DrawerEdge, type DrawerFile, type NodeResolution } fro
 import { emit } from "../journal";
 import { failureText, showToast, toastFailure } from "../ui/toast";
 
-// 宏观设计 = agent 画图工作区：左栏图库与项目目录两个 tab，右栏画布。
+// 架构全景 = agent 画图工作区：左栏图库与项目目录两个 tab，右栏画布。
 // 本页请求全是免费读，不碰模型。
 // 界面只写几何；结构改动只经对话里的 agent（set_diagram），无增删节点按钮。
 
@@ -199,7 +199,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     return () => controller.abort();
   }, [repositoryId, refreshGallery]);
 
-  /* ---------- 项目目录（栏宽与教学页共用同一条拖拽） ---------- */
+  /* ---------- 项目目录（栏宽与代码问答页共用同一条拖拽） ---------- */
   useEffect(() => {
     if (!visible || railTab !== "tree" || index) return;
     let current = true;
@@ -436,7 +436,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     return map;
   }, [index]);
 
-  const topbar = <PageTopbar crumb={<><b>{repositoryName}</b><span className="faint">/</span><span>宏观设计</span></>} showRailToggle />;
+  const topbar = <PageTopbar crumb={<><b>{repositoryName}</b><span className="faint">/</span><span>架构全景</span></>} showRailToggle />;
 
   return (
     <>

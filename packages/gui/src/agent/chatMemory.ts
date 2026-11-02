@@ -5,9 +5,9 @@ import type { ChatScope } from "@codebase-tutor/contract";
   真源在引擎库，这里只记浏览器上次的位置与待回读记录。
   */
 
-/** 会话线程记忆键（localStorage）：`repositoryId → 作用域 → { currentId, ids }`。 */
+/** 会话线程记忆键（localStorage）：`repositoryId → 工作区 → { currentId, ids }`。 */
 const SESSION_STORAGE_KEY = "codebase-tutor.teaching-sessions";
-/** 待回读记录键（sessionStorage）：`repositoryId → 作用域 → { threadId, count }`。 */
+/** 待回读记录键（sessionStorage）：`repositoryId → 工作区 → { threadId, count }`。 */
 const DEBT_STORAGE_KEY = "codebase-tutor.turn-debt";
 
 /** 断线轮的待回读记录：threadId + 记账时的正文条数。 */
