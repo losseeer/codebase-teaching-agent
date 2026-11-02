@@ -41,6 +41,9 @@ describe("GET /trace 的 journal 回放", () => {
       expect(tools[0].label).toContain("src/main.ts");
       expect(run.steps.find((step) => step.kind === "model")?.inputTokens).toBeGreaterThan(0);
       expect(run.steps.find((step) => step.kind === "turn")?.label).toContain("这个模块");
+
+      const practice = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/trace?limit=5&scope=practice` });
+      expect(traceHistorySchema.parse(practice.json()).runs, "别的作用区不该出现在当前作用区的历史里").toHaveLength(0);
     } finally {
       unsubscribeEvents("trace-history-test");
     }

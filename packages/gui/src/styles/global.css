@@ -573,14 +573,34 @@ h1, h2, h3, h4, p { margin-top: 0; }
   50% { box-shadow: 0 0 0 7px rgba(26, 107, 82, 0.14); }
 }
 .modal.trace-modal { width: min(760px, calc(100vw - 48px)); }
-.trace-runs { display: flex; flex-wrap: wrap; gap: 6px; }
+.trace-run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trace-run-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trace-run-group-label { min-width: 3em; font-size: var(--fs-11); font-weight: 600; color: var(--ink-3); }
+.trace-run-idle { font-size: var(--fs-11); color: var(--ink-3); }
+.trace-history-toggle {
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px dashed var(--border); font-size: var(--fs-11); color: var(--ink-2);
+}
+.trace-history-toggle:hover, .trace-history-toggle.open { border-color: var(--brand-600); color: var(--brand-700); }
+.trace-live-back { font-size: var(--fs-11); color: var(--brand-700); }
+.trace-history-panel {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface-2);
+}
 .trace-run-chip {
+  display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 9px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--surface-2);
   font-size: var(--fs-11); color: var(--ink-2);
 }
 .trace-run-chip:hover { border-color: var(--brand-600); color: var(--brand-700); }
+.trace-run-chip.running { border-color: var(--brand-600); color: var(--brand-700); }
 .trace-run-chip.active { border-color: var(--brand-700); background: var(--brand-050); color: var(--brand-700); }
+.trace-run-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: trace-live-pulse 1.6s ease-in-out infinite; }
+@keyframes trace-live-pulse {
+  50% { box-shadow: 0 0 0 4px rgba(26, 107, 82, 0.14); }
+}
 .trace-run-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); color: var(--ink-2); min-width: 0; }
 .trace-run-scene { font-weight: 600; color: var(--ink); flex: none; }
 .trace-run-status { flex: none; }

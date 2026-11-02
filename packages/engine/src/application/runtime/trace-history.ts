@@ -1,9 +1,26 @@
-import type { AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
+import type { AgentScope, AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
 import type { JournalEvent } from "@codebase-tutor/domain";
 
 /** journal 回合历史：按 traceId 汇总出审计线能还原的步骤；不发模型、不改任何文件。 */
 
-const SCENE_MAP: Record<string, string> = { teach: "teaching.turn", map_chat: "map.chat", practice_chat: "practice.chat" };
+const SCENE_MAP: Record<string, string> = {
+  teach: "teaching.turn",
+  map_chat: "map.chat",
+  practice_chat: "practice.chat",
+  exercise_generate: "practice.generate",
+  exercise_generate_code: "practice.generate",
+  exercise_llm_generate: "practice.generate"
+};
+
+/** 历史接口的作用区过滤。 */
+const SCOPE_SCENES: Record<AgentScope, readonly string[]> = {
+  teaching: ["teaching.turn"],
+  map: ["map.chat"],
+  practice: ["practice.chat", "practice.generate"]
+};
+
+/** 出题没有回合文本，靠这两类事件认成一次运行。 */
+const GENERATION_EVENTS = new Set(["exercise_generated", "exercise_declined"]);
 
 type HistoryStep = Omit<AgentTracePayload, "repositoryId" | "runId" | "scene" | "at" | "seq">;
 
@@ -24,10 +41,11 @@ function sceneOf(events: readonly JournalEvent[]): string | undefined {
     const scene = event.payload.scene;
     if (typeof scene === "string" && SCENE_MAP[scene]) return SCENE_MAP[scene];
   }
-  return undefined;
+  return events.some((event) => GENERATION_EVENTS.has(event.type)) ? "practice.generate" : undefined;
 }
 
 function isTurnEvent(event: JournalEvent): boolean {
+  if (GENERATION_EVENTS.has(event.type)) return true;
   if (event.type === "turn_text" || event.type === "turn_aborted") return true;
   if (event.type === "loop_round" || event.type === "turn_context" || event.type === "token_usage") {
     return typeof event.payload.scene === "string" && Boolean(SCENE_MAP[event.payload.scene]);
@@ -103,13 +121,16 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const ordered = [...events].sort((a, b) => a.at.localeCompare(b.at));
   const scene = sceneOf(ordered);
   if (!scene || !ordered.some(isTurnEvent)) return undefined;
+  const generation = scene === "practice.generate";
+  const generated = ordered.find((event) => event.type === "exercise_generated");
+  const declined = ordered.find((event) => event.type === "exercise_declined");
   const turnText = ordered.find((event) => event.type === "turn_text");
   const loop = [...ordered].reverse().find((event) => event.type === "loop_round");
   const usage = [...ordered].reverse().find((event) => event.type === "token_usage");
   const invariant = ordered.find((event) => event.type === "turn_invariant" && Boolean(event.payload.failed));
   const stopped = loop?.payload.stopped_by;
   const aborted = ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted" || stopped === "budget" || stopped === "rounds" || stopped === "reads";
-  const status: TraceHistoryRun["status"] = aborted ? "aborted" : loop?.payload.outcome === "failed" ? "error" : "ok";
+  const status: TraceHistoryRun["status"] = aborted ? "aborted" : declined || loop?.payload.outcome === "failed" ? "error" : "ok";
   const threadId = ordered.find((event) => event.sessionId)?.sessionId;
   const inputTokens = num(usage?.payload.input_tokens);
   const outputTokens = num(usage?.payload.output_tokens);
@@ -122,6 +143,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const question = clip(text(turnText?.payload.question, 2_000), 400);
 
   const parts: string[] = [];
+  if (generation) parts.push(generated ? "已出题" : declined ? "未出题" : "出题");
   if (rounds) parts.push(`${rounds} 轮工具`);
   if (reads) parts.push(`读 ${reads} 个文件`);
   if (searches) parts.push(`检索 ${searches} 次`);
@@ -138,12 +160,13 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const push = (step: HistoryStep & { at: string }): void => {
     steps.push({ repositoryId, runId, scene, seq: seq++, ...step });
   };
+  const declineReason = declined ? text(declined.payload.reason, 400) : "";
   push({
     kind: "turn",
     status,
     stepId: "journal-input",
-    label: question ? text(question, 80) : "开始处理",
-    ...(question ? { detail: question } : {}),
+    label: question ? text(question, 80) : generation ? "出题" : "开始处理",
+    ...(question || declineReason ? { detail: question || declineReason } : {}),
     ...(provider ? { model: provider } : {}),
     at: ordered[0].at
   });
@@ -176,7 +199,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   };
 }
 
-export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string): TraceHistory {
+export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string, scope?: AgentScope): TraceHistory {
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
     if (!event.traceId) continue;
@@ -185,10 +208,11 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
     if (list) list.push(event);
     else groups.set(event.traceId, [event]);
   }
+  const allowed = scope ? SCOPE_SCENES[scope] : undefined;
   const runs: TraceHistoryRun[] = [];
   for (const [runId, list] of groups) {
     const run = buildRun(runId, list, repositoryId);
-    if (run) runs.push(run);
+    if (run && (!allowed || allowed.includes(run.scene))) runs.push(run);
   }
   return { runs: runs.sort((a, b) => (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt)).slice(0, Math.max(0, limit)) };
 }

@@ -64,7 +64,7 @@ describe("journal 回合历史", () => {
 
   it("不是回合的 trace 组跳过；limit 只取最近的几条", () => {
     const events = [
-      ev("exercise_generated", "t0", "2026-11-02T03:02:00.000Z", { family: "code", source: "llm" }),
+      ev("file_opened", "t0", "2026-11-02T03:02:00.000Z", { path: "src/a.ts" }),
       ev("turn_text", "t1", "2026-11-02T03:02:01.000Z", { scene: "teach", question: "问一", answer: "答一" }),
       ev("loop_round", "t1", "2026-11-02T03:02:02.000Z", { scene: "teach", tool_rounds: 0 }),
       ev("turn_text", "t2", "2026-11-02T03:02:03.000Z", { scene: "teach", question: "问二", answer: "答二" }),
@@ -73,6 +73,38 @@ describe("journal 回合历史", () => {
     const history = buildTraceHistory(events, "repo", 1);
     expect(history.runs.map((run) => run.runId)).toEqual(["t2"]);
     expect(history.runs[0].scene).toBe("teaching.turn");
+  });
+
+  it("出题按 journal 汇总成一次运行；被拒的那趟标失败", () => {
+    const generated = buildTraceHistory([
+      ev("file_read", "g1", "2026-11-02T03:05:01.000Z", { path: "src/a.ts", lines: 10, truncated: false, denied: false }),
+      ev("token_usage", "g1", "2026-11-02T03:05:02.000Z", { scene: "exercise_generate_code", input_tokens: 30, output_tokens: 10, provider: "model:v1" }),
+      ev("exercise_generated", "g1", "2026-11-02T03:05:03.000Z", { family: "code", kind: "patch_edit", source: "llm", target_unit: "unit-1" })
+    ], "repo", 10).runs[0];
+    expect(generated).toMatchObject({ runId: "g1", scene: "practice.generate", status: "ok" });
+    expect(generated.summary).toContain("已出题");
+    expect(generated.summary).toContain("输入 30 / 输出 10");
+    expect(generated.steps.find((step) => step.kind === "turn")?.label).toBe("出题");
+    expect(generated.steps.find((step) => step.tool === "read_file")).toBeDefined();
+
+    const declined = buildTraceHistory([
+      ev("exercise_declined", "g2", "2026-11-02T03:06:01.000Z", { family: "llm", stage: "no_theme_hits", reason: "主题「操作系统」在源码里没有命中" })
+    ], "repo", 10).runs[0];
+    expect(declined).toMatchObject({ runId: "g2", scene: "practice.generate", status: "error" });
+    expect(declined.summary).toContain("未出题");
+    expect(declined.steps.find((step) => step.kind === "turn")?.detail).toContain("操作系统");
+  });
+
+  it("历史按作用区过滤：练习区同时给出题与答疑", () => {
+    const events = [
+      ev("turn_text", "t1", "2026-11-02T03:07:01.000Z", { scene: "teach", question: "问一", answer: "答一" }),
+      ev("turn_text", "t2", "2026-11-02T03:07:02.000Z", { scene: "map_chat", question: "问二", answer: "答二" }),
+      ev("turn_text", "t3", "2026-11-02T03:07:03.000Z", { scene: "practice_chat", question: "问三", answer: "答三" }),
+      ev("exercise_generated", "g1", "2026-11-02T03:07:04.000Z", { family: "llm", source: "llm", target_unit: "unit-1" })
+    ];
+    expect(buildTraceHistory(events, "repo", 10, undefined, "teaching").runs.map((run) => run.runId)).toEqual(["t1"]);
+    expect(buildTraceHistory(events, "repo", 10, undefined, "map").runs.map((run) => run.runId)).toEqual(["t2"]);
+    expect(buildTraceHistory(events, "repo", 10, undefined, "practice").runs.map((run) => run.runId).sort()).toEqual(["g1", "t3"]);
   });
 
   it("失败回合标 error；线程过滤只取指定 session", () => {

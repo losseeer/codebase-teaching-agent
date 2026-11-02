@@ -4,9 +4,10 @@ import type { AgentScope, AgentSurface, AgentToolEntry } from "@codebase-tutor/c
 import { Icon } from "../ui/icons";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
+import { inScope, practiceAgentLabel } from "./traceScope";
 import { useTraceHistory } from "./useTraceHistory";
 
-const SCENE_LABEL: Record<string, string> = { "teaching.turn": "教学", "map.chat": "画布", "practice.chat": "练习" };
+const SCENE_LABEL: Record<string, string> = { "teaching.turn": "教学", "map.chat": "画布", "practice.chat": "答疑", "practice.generate": "出题" };
 const SCOPE_LABEL: Record<AgentScope, string> = { map: "画布", teaching: "教学", practice: "练习" };
 const STATUS_LABEL: Record<TraceRun["status"], string> = { running: "进行中", ok: "完成", error: "失败", aborted: "提前结束" };
 const FINISH_LABEL: Record<string, string> = { stop: "结束", length: "截断", tool_calls: "调工具" };
@@ -22,7 +23,9 @@ const sceneLabel = (scene: string): string => SCENE_LABEL[scene] ?? scene;
 
 function shortTime(at: string): string {
   const date = new Date(at);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (Number.isNaN(date.getTime())) return "";
+  const time = date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toDateString() === new Date().toDateString() ? time : `${date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })} ${time}`;
 }
 
 function duration(ms?: number): string {
@@ -49,31 +52,53 @@ function stepMeta(step: TraceStep): string {
 function mergeRuns(live: TraceRun[], history: TraceRun[]): TraceRun[] {
   const seen = new Set(live.map((run) => run.runId));
   return [...live, ...history.filter((run) => !seen.has(run.runId))]
-    .sort((a, b) => (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt));
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
 
-/** 悬浮球：打开当前仓的运行轨迹。 */
+interface RunGroup {
+  key: string;
+  label: string;
+  runs: TraceRun[];
+}
+
+/** 已结束的运行按 agent 分堆：练习区分出题与答疑，其余作用区只有一堆。 */
+function historyGroups(runs: TraceRun[], scope: AgentScope): RunGroup[] {
+  const byTime = [...runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  if (scope !== "practice") return byTime.length ? [{ key: "all", label: "", runs: byTime }] : [];
+  const groups: RunGroup[] = [];
+  for (const run of byTime) {
+    const label = practiceAgentLabel(run.scene) ?? "其他";
+    const group = groups.find((item) => item.key === label);
+    if (group) group.runs.push(run);
+    else groups.push({ key: label, label, runs: [run] });
+  }
+  return groups;
+}
+
+/** 悬浮球：打开当前仓、当前作用区的运行轨迹。 */
 export function AgentTraceBall({ repositoryId, scope }: { repositoryId: string | null; scope: AgentScope }): ReactElement | null {
   const { runs } = useAgentTrace(repositoryId);
   const [open, setOpen] = useState(false);
   if (!repositoryId) return null;
-  const running = runs[0]?.status === "running";
+  const scoped = runs.filter((run) => inScope(run.scene, scope));
+  const running = scoped.some((run) => run.status === "running");
   return (
     <>
       <button type="button" className={`trace-ball${running ? " running" : ""}`} aria-label="运行轨迹" title="运行轨迹" onClick={() => setOpen(true)}>
         <Icon name="zap" size={18} />
         {running ? <span className="trace-ball-dot" /> : null}
       </button>
-      {open ? <TraceModal runs={runs} repositoryId={repositoryId} scope={scope} onClose={() => setOpen(false)} /> : null}
+      {open ? <TraceModal runs={scoped} repositoryId={repositoryId} scope={scope} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
 function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; onClose: () => void }): ReactElement {
   const [tab, setTab] = useState<TraceTab>("trace");
-  const [selectedId, setSelectedId] = useState(runs[0]?.runId);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const { surface, error, loading } = useAgentSurface(repositoryId, scope);
-  const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId);
+  const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope);
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
@@ -84,7 +109,10 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [onClose]);
   const merged = mergeRuns(runs, historyRuns);
-  const selected = merged.find((run) => run.runId === selectedId) ?? merged[0];
+  const running = merged.filter((run) => run.status === "running");
+  const ended = merged.filter((run) => run.status !== "running");
+  const groups = historyGroups(ended, scope);
+  const selected = merged.find((run) => run.runId === selectedId) ?? running[0];
   const tabs: { id: TraceTab; label: string }[] = [
     { id: "trace", label: "轨迹" },
     { id: "skills", label: "技能" },
@@ -104,19 +132,44 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
           <span className="trace-scope" title="当前作用区">{SCOPE_LABEL[scope]}</span>
         </div>
         <div className="modal-body" id="trace-panel" role="tabpanel" aria-labelledby={`trace-tab-${tab}`}>
-          {tab === "trace" && merged.length > 1 ? (
-            <div className="trace-runs" aria-label="最近几次运行">
-              {merged.map((run) => (
-                <button key={run.runId} type="button" className={`trace-run-chip${run.runId === selected?.runId ? " active" : ""}`} title={run.historical ? `来自 journal：${run.summary ?? "回合汇总"}` : run.summary ?? ""} onClick={() => setSelectedId(run.runId)}>
-                  {run.historical ? "历史 · " : ""}{sceneLabel(run.scene)} · {shortTime(run.historical ? run.endedAt ?? run.startedAt : run.startedAt)}
-                </button>
-              ))}
-            </div>
-          ) : null}
           {tab === "trace" ? (
             <>
+              <div className="trace-run-bar">
+                {running.length ? (
+                  <div className="trace-run-group">
+                    <span className="trace-run-group-label">进行中</span>
+                    {running.map((run) => (
+                      <button key={run.runId} type="button" className={`trace-run-chip running${run.runId === selected?.runId ? " active" : ""}`} title={run.summary ?? ""} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
+                        <span className="trace-run-live" />
+                        {scope === "practice" ? `${practiceAgentLabel(run.scene) ?? "出题"} · ` : ""}{shortTime(run.startedAt)}
+                      </button>
+                    ))}
+                  </div>
+                ) : <span className="trace-run-idle">当前没有进行中的运行</span>}
+                <button type="button" className={`trace-history-toggle${historyOpen ? " open" : ""}`} aria-expanded={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
+                  历史{ended.length ? ` ${ended.length}` : ""}
+                </button>
+                {selected && selected.status !== "running" ? (
+                  <button type="button" className="trace-live-back" onClick={() => { setSelectedId(undefined); setHistoryOpen(false); }}>回到实时</button>
+                ) : null}
+              </div>
+              {historyOpen ? (
+                <div className="trace-history-panel">
+                  {!groups.length ? <p className="field-note">{historyLoading ? "正在读取历史…" : "没有历史记录。"}</p> : null}
+                  {groups.map((group) => (
+                    <div key={group.key} className="trace-run-group">
+                      {group.label ? <span className="trace-run-group-label">{group.label}</span> : null}
+                      {group.runs.map((run) => (
+                        <button key={run.runId} type="button" className={`trace-run-chip${run.runId === selected?.runId ? " active" : ""}`} title={run.summary ?? ""} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
+                          {shortTime(run.startedAt)}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {historyError ? <p className="field-note">历史读取失败：{historyError}</p> : null}
-              {selected ? <RunView run={selected} /> : historyLoading ? <p className="field-note">正在读取历史…</p> : <p className="field-note">还没有运行记录。</p>}
+              {selected ? <RunView run={selected} /> : null}
             </>
           ) : null}
           {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} /> : null}

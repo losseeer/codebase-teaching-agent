@@ -11,7 +11,7 @@ const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply =
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
     case "tag-required": return reply.code(400).send({ error: "出题需要先填主题名称" });
     case "kind-unsupported": return reply.code(400).send({ error: "不支持的练习题型" });
-    case "declined": return reply.code(422).send({ error: failure.message || failure.fallback });
+    case "declined": return reply.code(422).send({ error: failure.message || failure.fallback, ...(failure.code ? { code: failure.code } : {}) });
   }
 };
 

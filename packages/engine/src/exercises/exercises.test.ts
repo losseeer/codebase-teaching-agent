@@ -508,9 +508,17 @@ describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
     }
   });
 
-  it("主题在本仓筛不出可出题单元：明说这个主题出不了题，不退化成全仓出题", async () => {
+  it("主题在源码里零命中：单独判 no_theme_hits，不冒充有命中", async () => {
     const repository = testRepository();
     await expect(new ExerciseService().next(repository, { kind: "change_localization", tag: "kubernetes", tagId: "custom-k8s" }))
+      .rejects.toThrow("改用分析题或设计题");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_theme_hits", family: "comprehension" });
+  });
+
+  it("主题有命中但没有可出题的函数或路径：仍判 no_candidates", async () => {
+    const repository = testRepository({ "src/constants.js": "export const RETRY_LIMIT = 3;\n" });
+    await expect(new ExerciseService().next(repository, { kind: "change_localization", tag: "constants", tagId: "custom-constants" }))
       .rejects.toThrow("这个主题在当前仓库找不到可出题的代码");
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
       .toMatchObject({ stage: "no_candidates", family: "comprehension" });
@@ -567,17 +575,22 @@ describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
   it("技能没声明 reference：设计题仍按单元出，主题零命中就拒", async () => {
     const repository = testRepository();
     await expect(new ExerciseService().next(repository, { kind: "patch_edit", tag: "kubernetes", tagId: "custom-k8s" }))
-      .rejects.toThrow("这个主题在当前仓库找不到可出题的代码");
+      .rejects.toThrow("改用分析题或设计题");
     expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
-      .toMatchObject({ stage: "no_candidates", family: "code" });
+      .toMatchObject({ stage: "no_theme_hits", family: "code" });
   });
 });
 
-function testRepository(): PracticeRepository {
+function testRepository(extra: Record<string, string> = {}): PracticeRepository {
   const directory = mkdtempSync(join(tmpdir(), "codebase-tutor-exercises-"));
   temporaryDirectories.push(directory);
   const repositoryPath = join(directory, "fixture");
   cpSync(fixture, repositoryPath, { recursive: true, filter: (source) => !source.endsWith("/.tutor") && !source.includes("/.tutor/") });
+  for (const [path, content] of Object.entries(extra)) {
+    const target = join(repositoryPath, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content, "utf8");
+  }
   const index = indexRepository(repositoryPath);
   const graph = buildDependencyGraph(repositoryPath, index.files);
   const implementations = buildImplementationUnits(repositoryPath, graph.symbols);

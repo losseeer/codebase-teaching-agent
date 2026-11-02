@@ -13,6 +13,7 @@ import {
   type AgentSurface,
   type ChatScope,
   type CostSummary,
+  type ExerciseDeclineCode,
   type ImportJob,
   type RepositoryCatalogEntry,
   type RepositoryFreshness,
@@ -193,9 +194,9 @@ export type LlmSettingsPatch = Partial<{
   timeoutMs: string;
 }>;
 
-/** 带状态码的 HTTP 失败；仓库类 404 带 reason（不在地址簿 / 目录没了 / 产物不全）。 */
+/** 带状态码的 HTTP 失败；仓库类 404 带 reason，出题被拒带 code。 */
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string, readonly reason?: RepositoryMountReason) {
+  constructor(readonly status: number, message: string, readonly reason?: RepositoryMountReason, readonly code?: ExerciseDeclineCode) {
     super(message);
     this.name = "ApiError";
   }
@@ -206,8 +207,8 @@ export const isNotFound = (error: unknown): boolean => error instanceof ApiError
 async function requestRaw(path: string, init?: RequestInit): Promise<unknown> {
   // 仅带 body 时声明 JSON Content-Type：Fastify 会以 400 拒「json 头 + 空 body」的无体请求
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
-  const body = await response.json() as { error?: string; reason?: RepositoryMountReason };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason);
+  const body = await response.json() as { error?: string; reason?: RepositoryMountReason; code?: ExerciseDeclineCode };
+  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason, body.code);
   return body;
 }
 
@@ -253,8 +254,8 @@ export const api = {
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   /** 只读能力面：技能清单与当前作用区的工具面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}`),
-  /** 历史回放：journal 按 traceId 汇总的最近回合；纯读。 */
-  getTraceHistory: (repositoryId: string, limit = 20) => checked<TraceHistory>("trace-history", traceHistorySchema, `/api/repositories/${repositoryId}/trace?limit=${limit}`),
+  /** 历史回放：journal 按 traceId 汇总的当前作用区回合；纯读。 */
+  getTraceHistory: (repositoryId: string, scope: AgentScope, limit = 20) => checked<TraceHistory>("trace-history", traceHistorySchema, `/api/repositories/${repositoryId}/trace?limit=${limit}&scope=${scope}`),
   /** 导入报告：索引概况 + 本次 token/金额估算。 */
   getReport: (repositoryId: string) => request<{ index: RepositoryIndex; estimate: { cachedFiles: number; summarizedFiles: number; estimatedInputTokens: number; estimatedCostUsd: number; provider: string } }>(`/api/repositories/${repositoryId}/report`),
   /** 按文件路径取实时源码。 */

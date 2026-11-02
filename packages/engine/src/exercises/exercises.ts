@@ -31,6 +31,7 @@ import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
 import { runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
 import type { ExercisePorts } from "../application/port/exercise-ports.js";
+import { ExerciseDeclinedError } from "../application/port/exercise-decline.js";
 import type { AuditSink } from "../application/port/audit-sink.js";
 import { selectZpdTarget, type ZpdTarget } from "./zpd.js";
 import { qualityForScore, scheduleSm2 } from "./sm2.js";
@@ -194,9 +195,10 @@ export class ExerciseService {
     const target = this.pickTarget(repository, { kind, type: requested.type, targetUnitId: requested.targetUnitId }, mastery, theme);
     if (!target) {
       const family = familyOf(kind ?? "impact_analysis");
-      // 指定了记录却挑不出单元、主题筛不出单元、整仓没有单元，是三种原因。
+      // 指定了记录却挑不出单元、主题零命中、主题有命中但没有可出题单元、整仓没有单元，是四种原因。
       if (requested.targetUnitId) this.decline(repository, "target_stale", family, tag, `按单元 ${requested.targetUnitId} 挑不出可出题的单元（题型已停用，或那个文件不在当前分析结果里）。`, "该练习记录无法出题，请更换其他记录。");
-      if (theme) this.decline(repository, "no_candidates", family, tag, `主题「${tag}」命中的文件里没有可出题的函数或路径。`, "这个主题在当前仓库找不到可出题的代码，请换个主题。");
+      if (theme?.size) this.decline(repository, "no_candidates", family, tag, `主题「${tag}」命中的文件里没有可出题的函数或路径。`, "这个主题在当前仓库找不到可出题的代码，请换个主题。");
+      if (theme) this.decline(repository, "no_theme_hits", family, tag, `主题「${tag}」在源码路径、符号与摘要里都没有词法命中（候选文件 0 个）。`, "这个主题在源码里没有命中；当前题型需要先定位到具体文件，请改用分析题或设计题。");
       this.decline(repository, "no_target", family, tag, "分析结果里没有任何可出题的单元。", "当前分析结果无可出题内容，请重新分析该仓库。");
     }
     const deps = exerciseDeps(repository, target.kind, target.value);
@@ -236,7 +238,7 @@ export class ExerciseService {
   /** 界面只看 `shown` 那一句，详细成因只写进 journal 的 exercise_declined。 */
   private decline(repository: PracticeRepository, stage: string, family: ExerciseFamily, tag: string, reason: string, shown: string, extra?: Record<string, string>): never {
     repository.ports.audit.append("exercise_declined", { family, tag, reason, stage, ...(extra ?? {}) });
-    throw new Error(shown);
+    throw new ExerciseDeclinedError(stage, shown);
   }
 
   /** 代码族出题：模型交题面与判分件，引擎在沙箱自证两跑（参考解必过、下发件必挂）后才落库。 */

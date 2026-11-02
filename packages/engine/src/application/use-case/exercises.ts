@@ -1,12 +1,17 @@
 import type { Exercise, ExerciseAnswer, ExerciseBankEntry, ExerciseKind, ExerciseType } from "@codebase-tutor/domain";
 import { EXERCISE_TYPE_KINDS, SUPPORTED_EXERCISE_KINDS } from "@codebase-tutor/domain";
+import { currentTraceId, id } from "@codebase-tutor/platform";
+import type { ExerciseDeclineCode } from "@codebase-tutor/contract";
 import type { ImportedRepository } from "../../importer/importer.js";
 import { budgetDegraded, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { skillsForTurn } from "../orchestration/scoped-turn.js";
 import { factsToolFor } from "../../infrastructure/canvas-tools.js";
 import type { ExerciseFaces } from "../../exercises/turn-faces.js";
+import type { ToolTraceStep } from "../../source/tool-loop.js";
+import { emitAgentTrace } from "../../turn/agent-trace.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
+import { ExerciseDeclinedError } from "../port/exercise-decline.js";
 import { broadcast } from "../../events.js";
 import type { ExerciseProgress } from "../../exercises/turn-faces.js";
 
@@ -19,21 +24,39 @@ export type ExerciseFailure =
   | { kind: "repository-missing" }
   | { kind: "tag-required" }
   | { kind: "kind-unsupported" }
-  | { kind: "declined"; message: string; fallback: string };
+  | { kind: "declined"; message: string; fallback: string; code?: ExerciseDeclineCode };
 
 export type ExerciseResult<T> = { ok: true; value: T } | { ok: false; failure: ExerciseFailure };
 
-const declined = (error: unknown, fallback: string): ExerciseResult<never> => ({ ok: false, failure: { kind: "declined", message: error instanceof Error ? error.message : fallback, fallback } });
+/** 内部阶段 → 公开错误码；只登记界面需要据此给出路的那些。 */
+const DECLINE_CODES: Partial<Record<string, ExerciseDeclineCode>> = { no_theme_hits: "theme_not_found" };
+
+const declined = (error: unknown, fallback: string, code?: ExerciseDeclineCode): ExerciseResult<never> => ({ ok: false, failure: { kind: "declined", message: error instanceof Error ? error.message : fallback, fallback, ...(code ? { code } : {}) } });
 
 /** 一次练习回合的取证面：检索语料与静态产物都按这次的仓现建。 */
-function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1]): ExerciseFaces {
+function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1], onTrace?: (step: ToolTraceStep) => void): ExerciseFaces {
   const skills = skillsForTurn();
   return {
     repoPath: repository.path,
     search: searchCorpusFor(repository),
     facts: factsToolFor(repository, database),
     ...(skills ? { skills } : {}),
-    budgetGuard: turnBudgetGuard(repository.handle)
+    budgetGuard: turnBudgetGuard(repository.handle),
+    ...(onTrace ? { onTrace } : {})
+  };
+}
+
+/** 出题这趟的运行轨迹：起止帧由用例发，模型与工具帧随工具循环回传。 */
+function generationTrace(repositoryId: string, label: string): { onTrace: (step: ToolTraceStep) => void; finish: (outcome: string, ok: boolean) => void } {
+  const runId = currentTraceId() ?? id();
+  const startedAt = Date.now();
+  const emit = (step: ToolTraceStep | { kind: "turn"; status: "ok" | "error"; label: string; detail?: string; ms?: number }): void => {
+    emitAgentTrace({ repositoryId, runId, scene: "practice.generate", ...step });
+  };
+  emitAgentTrace({ repositoryId, runId, scene: "practice.generate", kind: "turn", status: "start", label, detail: label });
+  return {
+    onTrace: (step) => emit(step),
+    finish: (outcome, ok) => emit({ kind: "turn", status: ok ? "ok" : "error", label: ok ? "出题完成" : "出题失败", detail: outcome, ms: Date.now() - startedAt })
   };
 }
 
@@ -51,10 +74,15 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   const progress = jobId
     ? (event: ExerciseProgress): void => broadcast({ type: "exercise.progress", payload: { repositoryId, jobId, stage: event.stage, ...(event.detail ? { detail: event.detail.slice(0, 200) } : {}) } })
     : undefined;
+  const trace = generationTrace(repository.index.repositoryId, tag ? `出题 · ${tag}` : "出题");
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database) : undefined, progress)) };
+    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database, trace.onTrace) : undefined, progress));
+    trace.finish(`题目「${value.title}」`, true);
+    return { ok: true, value };
   } catch (error) {
-    return declined(error, "无法生成练习");
+    trace.finish(error instanceof Error ? error.message : "出题失败", false);
+    const code = error instanceof ExerciseDeclinedError ? DECLINE_CODES[error.stage] : undefined;
+    return declined(error, "无法生成练习", code);
   }
 }
 

@@ -1,10 +1,11 @@
 import { ExerciseGradingMode, ExerciseKind, ExerciseResult, exerciseTypeOf, PracticeSummary } from "@codebase-tutor/domain";
 import type { Exercise, ExerciseBankEntry, ExerciseType } from "@codebase-tutor/domain";
+import type { ExerciseDeclineCode } from "@codebase-tutor/contract";
 
 import {useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { CodeEditor, type CodeEditorFile } from "../source/CodeEditor";
-import { api, subscribeServerEvents, type Workspace } from "../api/client";
+import { api, ApiError, subscribeServerEvents, type Workspace } from "../api/client";
 import type { ScopedChatApi } from "../agent/scopedChatApi";
 import { Markdown } from "../agent/Markdown";
 import { dateText, exerciseKindLabel } from "../ui/labels";
@@ -107,6 +108,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   /** 换主题或题型就让在途那趟作废。 */
   const generationToken = useRef(0);
   const [error, setError] = useState("");
+  const [generateReason, setGenerateReason] = useState<ExerciseDeclineCode | null>(null);
   /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
   const [budgetTight, setBudgetTight] = useState(false);
   /** 题库：这个仓存着的题 + 复习排期，纯读不花钱。 */
@@ -157,12 +159,15 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   useEffect(() => { if (everVisible) refreshBank(); }, [repositoryId, everVisible]);
 
   // 出题：题型决定链路，主题只筛目标单元；「换一题」= 换目标或换 nonce，旧题留在题库里。
-  const generate = async (targetUnitId?: string, variantNonce?: number): Promise<void> => {
+  const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
     const token = ++generationToken.current;
+    const type = typeOverride ?? exerciseType;
+    const requestKind: ExerciseKind | undefined = type === "analysis" ? "llm_rubric" : type === "design" ? designKind : undefined;
     // 出题途中换主题不跟着变：这一趟锁的是发请求时选中的那个
     setPendingTheme(theme?.label ?? "");
+    setGenerateReason(null);
     setLoading(true); setGenerating(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     // 阶段帧走全局事件流，按 jobId 认领这一趟
     const jobId = crypto.randomUUID();
@@ -180,8 +185,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     });
     try {
       const next = await api.createExercise(repositoryId, {
-        type: exerciseType,
-        ...(kind ? { kind } : {}),
+        type,
+        ...(requestKind ? { kind: requestKind } : {}),
         ...(theme ? { tag: theme.label, tagId: theme.id } : {}),
         ...(targetUnitId ? { targetUnitId } : {}),
         ...(variantNonce !== undefined ? { variantNonce } : {}),
@@ -197,6 +202,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
       if (token !== generationToken.current) return;
+      setGenerateReason(reason instanceof ApiError && reason.code === "theme_not_found" ? "theme_not_found" : null);
       setError(failureText("出题失败", reason));
       // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
@@ -253,6 +259,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const switchType = (next: ExerciseType): void => {
     if (next === exerciseType) return;
     setExerciseType(next);
+    setGenerateReason(null);
     clearExercise();
   };
   /** 从题库打开：先摆出题面预览，答案区等「开始答题」；不重新出题、不花钱。 */
@@ -460,6 +467,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 {/* 产物与文件脱节类原因：出路是去导入页重跑 */}
                 {/重新导入|已更新/.test(error) ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
+                ) : null}
+                {generateReason === "theme_not_found" && exerciseType !== "analysis" ? (
+                  <span className="banner-actions"><button type="button" onClick={() => { switchType("analysis"); void generate(undefined, undefined, "analysis"); }}>改用分析题</button></span>
                 ) : null}
                 {budgetTight ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/insights")}>去成本监控</button></span>

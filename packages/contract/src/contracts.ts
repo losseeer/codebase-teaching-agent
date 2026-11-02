@@ -290,6 +290,10 @@ export type TraceHistoryRun = z.infer<typeof traceHistoryRunSchema>;
 export const traceHistorySchema = z.object({ runs: z.array(traceHistoryRunSchema) });
 export type TraceHistory = z.infer<typeof traceHistorySchema>;
 
+/** 出题被拒的公开错误码；界面按它给出路，内部阶段名不进这里。 */
+export const exerciseDeclineCodeSchema = z.enum(["theme_not_found"]);
+export type ExerciseDeclineCode = z.infer<typeof exerciseDeclineCodeSchema>;
+
 /* ------------------------------------------------------------------ */
 /* 边界上的校验口                                                      */
 /* ------------------------------------------------------------------ */

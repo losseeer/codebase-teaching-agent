@@ -33,8 +33,8 @@ export function registerRepositoryReadRoutes(app: FastifyInstance): void {
     return surface ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   });
 
-  app.get<{ Params: { repositoryId: string }; Querystring: { limit?: string; threadId?: string } }>("/api/repositories/:repositoryId/trace", async (request, reply) => {
-    const history = traceHistoryUseCase(request.params.repositoryId, request.query.limit, request.query.threadId);
+  app.get<{ Params: { repositoryId: string }; Querystring: { limit?: string; threadId?: string; scope?: string } }>("/api/repositories/:repositoryId/trace", async (request, reply) => {
+    const history = traceHistoryUseCase(request.params.repositoryId, request.query.limit, request.query.threadId, request.query.scope);
     return history ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   });
 
