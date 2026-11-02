@@ -9,6 +9,7 @@ import { searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js"
 import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../runtime/turn-audit.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
+import { skillReadAuditPayload } from "../../source/tools/types.js";
 import { abortTurn } from "../runtime/turn-registry.js";
 import {
   ASK_STREAK_LIMIT,
@@ -203,7 +204,7 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
     cache_hit_tokens: result.usage.promptCacheHitTokens ?? null, provider: provider.modelVersion, scene: "practice_chat"
   }, turn.threadId);
   // found 为 false 的技能读取也入账
-  for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, turn.threadId);
+  for (const skill of result.skillReads ?? []) journal.append("skill_read", skillReadAuditPayload(skill), turn.threadId);
   for (const read of dedupeFileReads(result.fileReads ?? [])) journal.append("file_read", fileReadAuditPayload(read), turn.threadId);
   // 练习答疑不写 loop_round；技能与文件读取分别记在 skill_read / file_read
   journal.append("turn_context", { scene: "practice_chat", conversation_folded: result.conversation.foldedMessages, conversation_recalled: result.conversation.recalledMessages }, turn.threadId);

@@ -36,6 +36,12 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** 审计行可能在整趟结束后才落盘；有发生时刻就按它还原每一步。 */
+function occurredAt(event: JournalEvent): string {
+  const value = event.payload.occurred_at;
+  return typeof value === "string" && value ? value : event.at;
+}
+
 function sceneOf(events: readonly JournalEvent[]): string | undefined {
   for (const event of events) {
     const scene = event.payload.scene;
@@ -146,9 +152,13 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
           const reply = text(event.payload.reply, TURN_TEXT_LIMIT);
           const detail = text(event.payload.detail, 600);
           const finishReason = typeof event.payload.finish_reason === "string" ? event.payload.finish_reason : undefined;
+          const attempt = num(event.payload.attempt);
+          // 自证失败会重出一版；两条最终回复都留在轨迹里，标清首轮/修复
+          const note = finishReason === "stop" && attempt !== undefined ? (attempt > 1 ? "修复重出" : "首轮出题") : "";
+          const shownDetail = detail ? `${detail}${event.payload.detail_truncated === true ? "…" : ""}` : note;
           return {
             ...(reply ? { reply: `${reply}${event.payload.reply_truncated === true ? "…" : ""}` } : {}),
-            ...(detail ? { detail: `${detail}${event.payload.detail_truncated === true ? "…" : ""}` } : {}),
+            ...(shownDetail ? { detail: shownDetail } : {}),
             ...(finishReason ? { finishReason } : {}),
             at: event.at
           };
@@ -203,7 +213,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   });
   for (const event of ordered) {
     const step = toolStep(event);
-    if (step) push({ ...step, at: event.at });
+    if (step) push({ ...step, at: occurredAt(event) });
   }
 
   return {

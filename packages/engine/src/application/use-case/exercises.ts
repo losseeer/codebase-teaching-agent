@@ -17,6 +17,9 @@ import { isLlmAborted } from "../port/llm-provider.js";
 import { abortGeneration, beginGeneration } from "../runtime/generation-registry.js";
 import { toolLoopAuditsOf } from "../../source/tool-loop.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
+import { codeSearchAuditPayload } from "../../source/search-code.js";
+import { skillReadAuditPayload } from "../../source/tools/types.js";
+import { mcpCallPayload } from "../runtime/turn-audit.js";
 import { broadcast } from "../../events.js";
 import type { ExerciseProgress } from "../../exercises/turn-faces.js";
 
@@ -110,12 +113,9 @@ function recordAbortedGeneration(repository: ImportedRepository, tag: string, pr
   }
   if (audits) {
     for (const read of dedupeFileReads(audits.fileReads)) repository.audit.append("file_read", fileReadAuditPayload(read));
-    for (const search of audits.codeSearches) repository.audit.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true });
-    for (const skill of audits.skillReads) repository.audit.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found });
-    for (const call of audits.mcpCalls) repository.audit.append("mcp_call", {
-      server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars,
-      masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {})
-    });
+    for (const search of audits.codeSearches) repository.audit.append("code_search", codeSearchAuditPayload(search));
+    for (const skill of audits.skillReads) repository.audit.append("skill_read", skillReadAuditPayload(skill));
+    for (const call of audits.mcpCalls) repository.audit.append("mcp_call", mcpCallPayload(call));
   }
   repository.audit.append("exercise_aborted", { scene: "practice.generate", reason: "user_cancel", waited_ms: waitedMs, ...(tag ? { tag } : {}) });
 }

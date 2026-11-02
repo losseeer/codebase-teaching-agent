@@ -227,14 +227,16 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     return undefined;
   };
   const collect = (outcome: ToolOutcome): void => {
+    // 审计行可能在整趟结束后才落盘；把真实发生时刻带上，历史轨迹才能按发生顺序排。
+    const occurredAt = new Date().toISOString();
     for (const read of outcome.audits?.fileReads ?? []) {
-      fileReads.push(read);
+      fileReads.push({ ...read, occurredAt: read.occurredAt ?? occurredAt });
       if (!read.denied) succeededReads += 1;
     }
-    for (const search of outcome.audits?.codeSearches ?? []) codeSearches.push(search);
-    for (const skill of outcome.audits?.skillReads ?? []) skillReads.push(skill);
+    for (const search of outcome.audits?.codeSearches ?? []) codeSearches.push({ ...search, occurredAt: search.occurredAt ?? occurredAt });
+    for (const skill of outcome.audits?.skillReads ?? []) skillReads.push({ ...skill, occurredAt: skill.occurredAt ?? occurredAt });
     for (const call of outcome.audits?.mcpCalls ?? []) {
-      mcpCalls.push(call);
+      mcpCalls.push({ ...call, occurredAt: call.occurredAt ?? occurredAt });
       externalCalls += 1;
     }
   };

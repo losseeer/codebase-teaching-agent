@@ -163,6 +163,13 @@ export interface SkillReadRecord {
   skill: string;
   chars: number;
   found: boolean;
+  /** 实际取技能的时刻；journal 晚写时据此还原轨迹顺序。 */
+  occurredAt?: string;
+}
+
+/** `skill_read` 一行的形状。 */
+export function skillReadAuditPayload(read: SkillReadRecord): Record<string, string | number | boolean> {
+  return { skill: read.skill, chars: read.chars, found: read.found, ...(read.occurredAt ? { occurred_at: read.occurredAt } : {}) };
 }
 
 export interface ToolOutcome {

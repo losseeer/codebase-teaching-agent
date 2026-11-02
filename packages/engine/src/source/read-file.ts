@@ -86,7 +86,7 @@ function pathOf(args: unknown): string {
 /** read_file 审计记录，无论成败。 */
 /** 一次读文件落进审计线的载荷：四个调用点共用这一份映射。 */
 export function fileReadAuditPayload(read: FileReadRecord): Record<string, string | number | boolean | null> {
-  return { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null };
+  return { path: read.path, lines: read.lines ?? null, truncated: read.truncated, denied: read.denied, masked: read.masked ?? 0, error: read.error ?? null, ...(read.occurredAt ? { occurred_at: read.occurredAt } : {}) };
 }
 
 export interface FileReadRecord {
@@ -99,6 +99,8 @@ export interface FileReadRecord {
   truncated: boolean;
   denied: boolean;
   error?: string;
+  /** 实际读完的时刻；journal 晚写时据此还原轨迹顺序。 */
+  occurredAt?: string;
 }
 
 export interface ReadFileOutcome {

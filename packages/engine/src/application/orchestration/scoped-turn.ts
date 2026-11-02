@@ -4,7 +4,8 @@ import { externalToolSurface } from "../../adapter/outbound/integrations/clients
 import { listSkills, readSkill, skillsBriefing } from "../../adapter/outbound/integrations/skills.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "../runtime/turn-invariants.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
-import type { ExternalToolContext, SkillsToolContext } from "../../source/tools/types.js";
+import { codeSearchAuditPayload } from "../../source/search-code.js";
+import { skillReadAuditPayload, type ExternalToolContext, type SkillsToolContext } from "../../source/tools/types.js";
 import { traceEngine } from "@codebase-tutor/platform";
 import type { ScopedChatResult, ScopedChatTurn } from "../../turn/run-turn.js";
 import type { LlmProvider } from "../port/llm-provider.js";
@@ -89,11 +90,11 @@ export function finishMapChatTurn(repository: ImportedRepository, provider: LlmP
   }
 
   for (const search of result.codeSearches ?? []) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, threadId);
+    journal.append("code_search", codeSearchAuditPayload(search), threadId);
   }
   // 失败的外部调用也要入账。
   for (const call of result.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), threadId);
-  for (const skill of result.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, threadId);
+  for (const skill of result.skillReads ?? []) journal.append("skill_read", skillReadAuditPayload(skill), threadId);
   journal.append("loop_round", {
     scene: "map_chat",
     tool_rounds: result.toolRounds,

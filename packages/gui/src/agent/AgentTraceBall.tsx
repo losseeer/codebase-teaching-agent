@@ -248,7 +248,8 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
   const reply = step.reply?.trim() ? step.reply : undefined;
   const detail = step.detail;
   const expandable = Boolean(reply || detail);
-  const label = step.kind === "model" && step.status === "ok" && reply ? replyPreview(reply) : step.label;
+  const attempt = step.kind === "model" && step.status === "ok" && reply && (detail === "首轮出题" || detail === "修复重出") ? detail : "";
+  const label = step.kind === "model" && step.status === "ok" && reply ? `${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}` : step.label;
   const content = (
     <>
       <StepStatus step={step} />

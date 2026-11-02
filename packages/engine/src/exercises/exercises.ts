@@ -20,6 +20,7 @@ import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type ExerciseType, type SymbolInfo
 import type { LlmProvider } from "../application/port/llm-provider.js";
 import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { fileReadAuditPayload } from "../source/read-file.js";
+import { skillReadAuditPayload } from "../source/tools/types.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
@@ -295,7 +296,7 @@ export class ExerciseService {
 
   /** 代码题那一趟的证据账：技能、读过的文件、自证两跑、用量；被拒的趟也要有行。 */
   private auditCodeGeneration(repository: PracticeRepository, generation: CodeGeneration, language: string, provider: LlmProvider): void {
-    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
+    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", skillReadAuditPayload(read));
     for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     for (const run of generation.runs) {
       // 每跑按自己的结论记账：修复回合通过时，首轮失败那两行不能记成已接受
@@ -439,7 +440,7 @@ export class ExerciseService {
       return cached.exercise;
     }
     const generation = await generateExerciseWithLlm({ repositoryPath: repository.path, tag, candidates: pool, provider, topics, faces, onProgress: progress });
-    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
+    for (const read of generation.skillReads) repository.ports.audit.append("skill_read", skillReadAuditPayload(read));
     for (const read of generation.fileReads) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     // 被拒的那一趟同样花了钱，账要先落，再看拒绝。
     if (generation.usage) repository.ports.audit.append("token_usage", {

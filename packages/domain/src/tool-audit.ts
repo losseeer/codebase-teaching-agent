@@ -16,4 +16,6 @@ export interface McpCallAudit {
   ok: boolean;
   ms: number;
   error?: string;
+  /** 实际调用的时刻；journal 晚写时据此还原轨迹顺序。 */
+  occurredAt?: string;
 }

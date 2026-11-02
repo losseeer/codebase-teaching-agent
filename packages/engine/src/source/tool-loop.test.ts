@@ -272,7 +272,7 @@ describe("completeWithReadTool 的 search_code 集成", () => {
     const searchResult = calls[1].messages?.find((message) => message.role === "tool");
     expect(searchResult?.content).toContain('search_code "read"');
     expect(searchResult?.content).toContain("read-file.ts");
-    expect(result.codeSearches).toEqual([{ query: "read", hits: 1, topPaths: ["read-file.ts"] }]);
+    expect(result.codeSearches).toEqual([{ query: "read", hits: 1, topPaths: ["read-file.ts"], occurredAt: expect.any(String) }]);
     expect(result.fileReads).toHaveLength(1);
     expect(result.completion.text).toBe("先搜后读的回答。");
   });
@@ -319,10 +319,10 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
       repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 2, maxCalls: 2,
       skills: { brief: "可用技能：\n- empty-skill：一份还没写正文的技能。", bodyOf: (name) => (name === "empty-skill" ? "" : undefined) }
     });
-    expect(blank.skillReads).toEqual([{ skill: "empty-skill", chars: 0, found: true }]);
+    expect(blank.skillReads).toEqual([{ skill: "empty-skill", chars: 0, found: true, occurredAt: expect.any(String) }]);
     expect(result.skillReads).toEqual([
-      { skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true },
-      { skill: "不存在的技能", chars: 0, found: false }
+      { skill: "tutor-cost-audit", chars: "第一步：看 llm.log。".length, found: true, occurredAt: expect.any(String) },
+      { skill: "不存在的技能", chars: 0, found: false, occurredAt: expect.any(String) }
     ]);
   });
 
@@ -340,7 +340,7 @@ describe("外部能力面（技能与 MCP），默认关闭", () => {
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "mcp__docs__lookup"]);
     expect((calls[1].messages ?? []).find((message) => message.toolCallId === "e1")?.content).toBe("外部正文。");
     expect(result.fileReads.map((read) => read.path)).toEqual(["read-file.ts"]);
-    expect(result.mcpCalls).toEqual([audit]);
+    expect(result.mcpCalls).toEqual([{ ...audit, occurredAt: expect.any(String) }]);
   });
 
   it("每一类工具活动都各自上一帧：技能、改图、查产物、外部调用都不该是静默的", async () => {
@@ -429,7 +429,7 @@ describe("按需工具（schema 超预算时收进目录）", () => {
     expect(calls[0].system, "目录不大时内联进 system，模型不必先搜").toContain("mcp__srv__big");
     expect(calls[1].messages?.find((message) => message.toolCallId === "i1")?.content).toContain("参数很多");
     expect((calls[2].messages ?? []).find((message) => message.toolCallId === "c1")?.content).toBe("外部正文。");
-    expect(result.mcpCalls).toEqual([audit]);
+    expect(result.mcpCalls).toEqual([{ ...audit, occurredAt: expect.any(String) }]);
     expect(result.completion.text).toBe("答完。");
   });
 });
@@ -723,7 +723,7 @@ describe("技能面与文件面的开关（出题、答疑与问答共用一条�
     expect((calls[0].tools ?? []).map((tool) => tool.name)).toEqual(["read_skill"]);
     expect(calls[1].messages?.some((message) => message.role === "tool" && message.content.includes("先判考点"))).toBe(true);
     expect(result.completion.text).toBe("按做法出的题。");
-    expect(result.skillReads).toEqual([{ skill: "demo", chars: 15, found: true }]);
+    expect(result.skillReads).toEqual([{ skill: "demo", chars: 15, found: true, occurredAt: expect.any(String) }]);
   });
 
   it("给了仓根就有文件面，读过的文件逐条留记录", async () => {

@@ -135,6 +135,23 @@ describe("journal 回合历史", () => {
     expect(run.steps.find((step) => step.kind === "model")?.reply).toContain("查到了一半的素材");
   });
 
+  it("journal 晚写的工具行按发生时刻还原顺序", () => {
+    const run = buildTraceHistory([
+      ev("file_read", "t9", "2026-11-02T03:00:10.000Z", { path: "src/a.ts", lines: 1, truncated: false, denied: false, occurred_at: "2026-11-02T03:00:01.000Z" }),
+      ev("turn_text", "t9", "2026-11-02T03:00:05.000Z", { scene: "teach", question: "问", answer: "答" }),
+      ev("loop_round", "t9", "2026-11-02T03:00:11.000Z", { scene: "teach", tool_rounds: 1 })
+    ], "repo", 10).runs[0];
+    expect(run.steps.find((step) => step.tool === "read_file")?.at).toBe("2026-11-02T03:00:01.000Z");
+  });
+
+  it("出题修复回合在历史里标明修复重出", () => {
+    const run = buildTraceHistory([
+      ev("exercise_model_reply", "g6", "2026-11-02T03:11:01.000Z", { scene: "practice.generate", attempt: 2, reply: "{\"title\":\"修复后的题\"}", reply_truncated: false, finish_reason: "stop" }),
+      ev("exercise_generated", "g6", "2026-11-02T03:11:02.000Z", { family: "code", source: "code", target_unit: "unit-1" })
+    ], "repo", 10).runs[0];
+    expect(run.steps.find((step) => step.kind === "model")?.detail).toBe("修复重出");
+  });
+
   it("历史按工作区过滤：练习区同时给出题与答疑", () => {
     const events = [
       ev("turn_text", "t1", "2026-11-02T03:07:01.000Z", { scene: "teach", question: "问一", answer: "答一" }),

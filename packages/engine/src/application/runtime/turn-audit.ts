@@ -4,8 +4,9 @@ import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads, type FileReadRecord, fileReadAuditPayload } from "../../source/read-file.js";
 import type { LlmUsage } from "../port/llm-provider.js";
 import type { AuditSink } from "../port/audit-sink.js";
-import type { CodeSearchRecord } from "../../source/search-code.js";
+import { codeSearchAuditPayload, type CodeSearchRecord } from "../../source/search-code.js";
 import { toolLoopAuditsOf, type ToolLoopAudits } from "../../source/tool-loop.js";
+import { skillReadAuditPayload } from "../../source/tools/types.js";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 
 /** 回合的审计线写法：谁读过什么、调过哪些外部工具、花了多少 token。 */
@@ -22,7 +23,7 @@ function appendUsage(journal: AuditSink, input: { provider: string; scene: TurnS
 
 /** `mcp_call` 一行的形状。 */
 export function mcpCallPayload(call: McpCallAudit): Record<string, string | number | boolean | null> {
-  return { server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars, masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {}) };
+  return { server: call.server, tool: call.tool, args_chars: call.argsChars, args_hash: call.argsHash, result_chars: call.resultChars, masked: call.masked, ok: call.ok, ms: call.ms, ...(call.error ? { error: call.error } : {}), ...(call.occurredAt ? { occurred_at: call.occurredAt } : {}) };
 }
 
 /** 回合返回值里那几组审计的形状；字段缺失时补空数组。 */
@@ -40,10 +41,10 @@ export function recordUnfinishedTurn(input: { repositoryPath: string; repository
     journal.append("file_read", fileReadAuditPayload(read), input.threadId);
   }
   for (const search of audits.codeSearches) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, input.threadId);
+    journal.append("code_search", codeSearchAuditPayload(search), input.threadId);
   }
   for (const call of audits.mcpCalls) journal.append("mcp_call", mcpCallPayload(call), input.threadId);
-  for (const skill of audits.skillReads) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, input.threadId);
+  for (const skill of audits.skillReads) journal.append("skill_read", skillReadAuditPayload(skill), input.threadId);
   journal.append("loop_round", { scene: input.scene, aborted: input.outcome === "aborted", outcome: input.outcome, tool_rounds: audits.rounds, tool_reads: audits.fileReads.length, tool_searches: audits.codeSearches.length, tool_external: audits.mcpCalls.length, tool_skills: audits.skillReads.length }, input.threadId);
 }
 

@@ -79,6 +79,13 @@ export interface CodeSearchRecord {
   topPaths: string[];
   /** 结果来自中文切词回退。 */
   segmented?: boolean;
+  /** 实际检索的时刻；journal 晚写时据此还原轨迹顺序。 */
+  occurredAt?: string;
+}
+
+/** `code_search` 一行的形状；`occurred_at` 只在真实发生时刻与落账时刻不同时有意义。 */
+export function codeSearchAuditPayload(search: CodeSearchRecord): Record<string, string | number | boolean> {
+  return { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true, ...(search.occurredAt ? { occurred_at: search.occurredAt } : {}) };
 }
 
 interface CorpusEntry {

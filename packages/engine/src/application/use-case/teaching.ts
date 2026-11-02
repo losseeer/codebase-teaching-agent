@@ -17,6 +17,8 @@ import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
 import { importer } from "../../infrastructure/composition-root.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
+import { codeSearchAuditPayload } from "../../source/search-code.js";
+import { skillReadAuditPayload } from "../../source/tools/types.js";
 import { type ScopeRef, parseScopeRef, scopeAvailable, scopeTitle } from "../../source/scope-ref.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import type { ImportedRepository } from "../../importer/importer.js";
@@ -177,10 +179,10 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     journal.append("file_read", fileReadAuditPayload(read), session.id);
   }
   for (const search of outcome.codeSearches ?? []) {
-    journal.append("code_search", { query: search.query, hits: search.hits, top_paths: search.topPaths.join("、"), segmented: search.segmented === true }, session.id);
+    journal.append("code_search", codeSearchAuditPayload(search), session.id);
   }
   for (const call of outcome.mcpCalls ?? []) journal.append("mcp_call", mcpCallPayload(call), session.id);
-  for (const skill of outcome.skillReads ?? []) journal.append("skill_read", { skill: skill.skill, chars: skill.chars, found: skill.found }, session.id);
+  for (const skill of outcome.skillReads ?? []) journal.append("skill_read", skillReadAuditPayload(skill), session.id);
   journal.append("loop_round", {
     scene: "teach",
     tool_rounds: outcome.toolRounds ?? 0,
