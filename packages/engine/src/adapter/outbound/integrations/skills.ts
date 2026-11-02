@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join, resolve, sep } from "node:path";
 import type { LlmTool } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
 
@@ -122,7 +122,7 @@ function validName(name: string): boolean {
 function readAttached(skillRoot: string, file: string): string | undefined {
   if (resolve(file) === file || file.startsWith("~")) return undefined;
   const target = join(skillRoot, file);
-  if (!target.startsWith(skillRoot + "/")) return undefined;
+  if (!target.startsWith(skillRoot + sep)) return undefined;
   let real: string;
   let base: string;
   try {
@@ -131,7 +131,7 @@ function readAttached(skillRoot: string, file: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (!real.startsWith(`${base}/`)) return undefined;
+  if (!real.startsWith(`${base}${sep}`)) return undefined;
   try {
     if (!statSync(real).isFile()) return undefined;
     const text = readFileSync(real, "utf8");
