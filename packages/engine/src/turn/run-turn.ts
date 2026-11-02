@@ -1,4 +1,4 @@
-import { id } from "@codebase-tutor/platform";
+import { currentTraceId, id } from "@codebase-tutor/platform";
 import type { TeachingProgress } from "@codebase-tutor/contract";
 import type { Exercise, FadedState, RepositoryAnalysis, RepositoryIndex, TutorMessage, TutorSession } from "@codebase-tutor/domain";
 import { policyFor } from "@codebase-tutor/domain";
@@ -207,7 +207,7 @@ export interface RunTurnResult {
 /** 回合的唯一发射处：按作用域与通道选工具循环或单轮调用。 */
 export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   const trace = input.trace;
-  const runId = trace ? id() : undefined;
+  const runId = trace ? currentTraceId() ?? id() : undefined;
   const startedAt = Date.now();
   const emit = (step: ToolTraceStep | { kind: "turn"; status: "start" | "ok" | "error" | "aborted"; label: string; detail?: string; ms?: number; inputTokens?: number; outputTokens?: number; finishReason?: string; model?: string }): void => {
     if (!trace || !runId) return;
@@ -225,7 +225,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     if (result.mcpCalls.length) parts.push(`外部 ${result.mcpCalls.length} 次`);
     if (result.usage) parts.push(`输入 ${result.usage.inputTokens} / 输出 ${result.usage.outputTokens}`);
     if (result.asked) {
-      emit({ kind: "tool", status: "ok", stepId: result.asked.toolCallId, tool: "ask_user", label: "向你提问", round: result.rounds, target: "ask_user", resultChars: result.asked.question.length, detail: result.asked.question.slice(0, 200) });
+      emit({ kind: "tool", status: "ok", stepId: result.asked.toolCallId, tool: "ask_user", label: "向你提问", round: result.rounds, detail: result.asked.question.slice(0, 200) });
     }
     emit({
       kind: "turn",

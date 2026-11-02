@@ -1,12 +1,13 @@
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { MAX_FILE_BYTES } from "../../../../source/read-file.js";
 import { agentSurfaceUseCase } from "../../../../application/use-case/agent-surface.js";
+import { traceHistoryUseCase } from "../../../../application/use-case/trace-history.js";
 import { readIndexUseCase, readImportReportUseCase, readLearnerProfileUseCase, readPracticeSummaryUseCase, readSourceFileUseCase, type ReadFailure } from "../../../../application/use-case/repository-read.js";
 import type { FastifyReply } from "fastify";
 import type { FastifyInstance } from "fastify";
 
 /**
-  仓库只读产物的入站翻译：索引、练习摘要、学习者画像、导入报告、源码；另有一条只读能力面。
+  仓库只读产物的入站翻译：索引、练习摘要、学习者画像、导入报告、源码；另含能力面与历史轨迹。
   失败种类在此翻成状态码。
 */
 const rejected = (reply: FastifyReply, failure: ReadFailure): FastifyReply => {
@@ -30,6 +31,11 @@ export function registerRepositoryReadRoutes(app: FastifyInstance): void {
   app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string } }>("/api/repositories/:repositoryId/agent-surface", async (request, reply) => {
     const surface = agentSurfaceUseCase(request.params.repositoryId, request.query.scope);
     return surface ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
+  });
+
+  app.get<{ Params: { repositoryId: string }; Querystring: { limit?: string; threadId?: string } }>("/api/repositories/:repositoryId/trace", async (request, reply) => {
+    const history = traceHistoryUseCase(request.params.repositoryId, request.query.limit, request.query.threadId);
+    return history ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   });
 
   app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/practice", async (request, reply) => {

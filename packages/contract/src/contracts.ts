@@ -240,10 +240,6 @@ export const agentTracePayloadSchema = z.object({
   stepId: z.string().optional(),
   round: z.number().optional(),
   tool: z.string().optional(),
-  /** 工具调用的参数摘要（路径、检索词、技能名），不记完整参数。 */
-  target: z.string().optional(),
-  /** 工具结果正文的字符数；正文本身不进轨迹。 */
-  resultChars: z.number().optional(),
   model: z.string().optional(),
   ms: z.number().optional(),
   inputTokens: z.number().optional(),
@@ -277,6 +273,22 @@ export const agentSurfaceSchema = z.object({
   tools: z.array(agentToolEntrySchema)
 });
 export type AgentSurface = z.infer<typeof agentSurfaceSchema>;
+
+/** 历史回放：journal 按 traceId 汇总出的一回合；步骤只还原审计线记下的部分。 */
+export const traceHistoryRunSchema = z.object({
+  runId: z.string(),
+  scene: z.string(),
+  threadId: z.string().optional(),
+  status: z.enum(["ok", "error", "aborted"]),
+  startedAt: z.string(),
+  endedAt: z.string().optional(),
+  summary: z.string().optional(),
+  steps: z.array(agentTracePayloadSchema)
+});
+export type TraceHistoryRun = z.infer<typeof traceHistoryRunSchema>;
+
+export const traceHistorySchema = z.object({ runs: z.array(traceHistoryRunSchema) });
+export type TraceHistory = z.infer<typeof traceHistorySchema>;
 
 /* ------------------------------------------------------------------ */
 /* 边界上的校验口                                                      */

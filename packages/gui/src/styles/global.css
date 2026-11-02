@@ -591,6 +591,8 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .trace-step { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
 .trace-step-btn { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; }
 .trace-step-btn:hover { background: var(--surface-2); }
+.trace-step-btn.static { cursor: default; }
+.trace-step-btn.static:hover { background: transparent; }
 .trace-step .trace-step-status { flex: none; display: grid; place-items: center; width: 12px; height: 12px; }
 .trace-step-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
 .trace-step-meta { flex: none; font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); }
@@ -617,12 +619,11 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .surface-row-title { font-size: var(--fs-12); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .surface-row-title.mono { font-family: var(--font-mono); font-weight: 500; }
 .surface-row-sub { font-size: var(--fs-11); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.surface-row-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; max-width: 46%; }
+.surface-row-side { flex: none; display: flex; align-items: center; }
 .surface-badge { font-size: var(--fs-11); padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-3); white-space: nowrap; }
 .surface-badge.ok { color: var(--brand-700); border-color: var(--brand-100); background: var(--brand-050); }
 .surface-badge.warn { color: var(--accent-ink); border-color: var(--accent-soft); background: var(--accent-soft); }
 .surface-badge.off { color: var(--ink-3); background: var(--surface-2); }
-.surface-row-meta { font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .surface-row-detail { padding: 0 10px 9px; font-size: var(--fs-12); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .field { display: flex; flex-direction: column; gap: 5px; }

@@ -1,0 +1,194 @@
+import type { AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
+import type { JournalEvent } from "@codebase-tutor/domain";
+
+/** journal 回合历史：按 traceId 汇总出审计线能还原的步骤；不发模型、不改任何文件。 */
+
+const SCENE_MAP: Record<string, string> = { teach: "teaching.turn", map_chat: "map.chat", practice_chat: "practice.chat" };
+
+type HistoryStep = Omit<AgentTracePayload, "repositoryId" | "runId" | "scene" | "at" | "seq">;
+
+function text(value: unknown, max: number): string {
+  return typeof value === "string" ? value.slice(0, max) : "";
+}
+
+function clip(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function sceneOf(events: readonly JournalEvent[]): string | undefined {
+  for (const event of events) {
+    const scene = event.payload.scene;
+    if (typeof scene === "string" && SCENE_MAP[scene]) return SCENE_MAP[scene];
+  }
+  return undefined;
+}
+
+function isTurnEvent(event: JournalEvent): boolean {
+  if (event.type === "turn_text" || event.type === "turn_aborted") return true;
+  if (event.type === "loop_round" || event.type === "turn_context" || event.type === "token_usage") {
+    return typeof event.payload.scene === "string" && Boolean(SCENE_MAP[event.payload.scene]);
+  }
+  return false;
+}
+
+function toolStep(event: JournalEvent): HistoryStep | undefined {
+  const p = event.payload;
+  switch (event.type) {
+    case "file_read": {
+      const path = clip(text(p.path, 200), 200);
+      const denied = p.denied === true;
+      const error = text(p.error, 120);
+      const lines = num(p.lines);
+      const parts = [denied ? "拒绝读取" : error || `${lines ?? 0} 行`];
+      if (p.truncated === true) parts.push("截断");
+      const masked = num(p.masked) ?? 0;
+      if (masked > 0) parts.push(`隐去 ${masked} 处`);
+      return { kind: "tool", status: denied || error ? "error" : "ok", stepId: event.id, tool: "read_file", label: `读取 ${text(path, 120)}`.trim(), detail: parts.join(" · ") };
+    }
+    case "code_search": {
+      const query = clip(text(p.query, 200), 120);
+      const hits = num(p.hits) ?? 0;
+      const top = text(p.top_paths, 160);
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "search_code", label: `检索 ${query}`.trim(), detail: `${hits} 处命中${top ? ` · ${top}` : ""}` };
+    }
+    case "skill_read": {
+      const skill = clip(text(p.skill, 120), 120);
+      const found = p.found === true;
+      const chars = num(p.chars) ?? 0;
+      return { kind: "tool", status: found ? "ok" : "error", stepId: event.id, tool: "read_skill", label: `加载技能 ${skill}`.trim(), detail: found ? `${chars} 字` : "未找到" };
+    }
+    case "mcp_call": {
+      const server = text(p.server, 40);
+      const tool = text(p.tool, 80);
+      const name = server && tool ? `mcp__${server}__${tool}` : tool;
+      const ok = p.ok === true;
+      const resultChars = num(p.result_chars);
+      const masked = num(p.masked) ?? 0;
+      const ms = num(p.ms);
+      return {
+        kind: "tool", status: ok ? "ok" : "error", stepId: event.id, tool: name || "mcp__unknown", label: `调用 ${name || "外部工具"}`.trim(),
+        detail: `${resultChars ?? 0} 字${masked ? ` · 隐去 ${masked} 处` : ""}${ok ? "" : " · 失败"}`,
+        ...(ms !== undefined ? { ms } : {})
+      };
+    }
+    case "turn_asked": {
+      const outcome = text(p.outcome, 20);
+      if (outcome !== "asked" && outcome !== "refused") return undefined;
+      const options = text(p.options, 160);
+      const reason = text(p.reason, 160);
+      return { kind: "tool", status: outcome === "asked" ? "ok" : "error", stepId: event.id, tool: "ask_user", label: outcome === "asked" ? "向你提问" : "提问被挡", detail: outcome === "asked" ? (options || "已提问") : (reason || "被挡") };
+    }
+    case "repository_paired": {
+      const other = text(p.other_repository_id, 80);
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "cross_repo_link", label: "配对仓库", detail: `${other ? `${other} · ` : ""}出 ${num(p.outbound) ?? 0} / 入 ${num(p.inbound) ?? 0}` };
+    }
+    case "diagram_created": {
+      if (p.source !== "agent") return undefined;
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: `新建 · ${num(p.nodes) ?? 0} 节点 / ${num(p.edges) ?? 0} 条边${num(p.downgraded) ? ` · 降档 ${num(p.downgraded)}` : ""}` };
+    }
+    case "diagram_edited": {
+      if (p.via !== "agent") return undefined;
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: `${text(p.action, 40) || "修改"} · ${num(p.nodes) ?? 0} 节点 / ${num(p.edges) ?? 0} 条边${num(p.downgraded) ? ` · 降档 ${num(p.downgraded)}` : ""}` };
+    }
+    default:
+      return undefined;
+  }
+}
+
+function buildRun(runId: string, events: JournalEvent[], repositoryId: string): TraceHistoryRun | undefined {
+  const ordered = [...events].sort((a, b) => a.at.localeCompare(b.at));
+  const scene = sceneOf(ordered);
+  if (!scene || !ordered.some(isTurnEvent)) return undefined;
+  const turnText = ordered.find((event) => event.type === "turn_text");
+  const loop = [...ordered].reverse().find((event) => event.type === "loop_round");
+  const usage = [...ordered].reverse().find((event) => event.type === "token_usage");
+  const invariant = ordered.find((event) => event.type === "turn_invariant" && Boolean(event.payload.failed));
+  const stopped = loop?.payload.stopped_by;
+  const aborted = ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted" || stopped === "budget" || stopped === "rounds" || stopped === "reads";
+  const status: TraceHistoryRun["status"] = aborted ? "aborted" : loop?.payload.outcome === "failed" ? "error" : "ok";
+  const threadId = ordered.find((event) => event.sessionId)?.sessionId;
+  const inputTokens = num(usage?.payload.input_tokens);
+  const outputTokens = num(usage?.payload.output_tokens);
+  const provider = typeof usage?.payload.provider === "string" ? usage.payload.provider : undefined;
+  const reads = num(loop?.payload.tool_reads) ?? ordered.filter((event) => event.type === "file_read").length;
+  const searches = num(loop?.payload.tool_searches) ?? ordered.filter((event) => event.type === "code_search").length;
+  const skills = num(loop?.payload.tool_skills) ?? ordered.filter((event) => event.type === "skill_read").length;
+  const external = num(loop?.payload.tool_external) ?? ordered.filter((event) => event.type === "mcp_call").length;
+  const rounds = num(loop?.payload.tool_rounds);
+  const question = clip(text(turnText?.payload.question, 2_000), 400);
+
+  const parts: string[] = [];
+  if (rounds) parts.push(`${rounds} 轮工具`);
+  if (reads) parts.push(`读 ${reads} 个文件`);
+  if (searches) parts.push(`检索 ${searches} 次`);
+  if (skills) parts.push(`技能 ${skills} 份`);
+  if (external) parts.push(`外部 ${external} 次`);
+  if (inputTokens !== undefined || outputTokens !== undefined) parts.push(`输入 ${inputTokens ?? 0} / 输出 ${outputTokens ?? 0}`);
+  if (stopped === "budget") parts.push("预算到线");
+  else if (stopped === "rounds") parts.push("轮次用完");
+  else if (stopped === "reads") parts.push("读取额度用完");
+  if (invariant) parts.push("复检失守");
+
+  const steps: AgentTracePayload[] = [];
+  let seq = 0;
+  const push = (step: HistoryStep & { at: string }): void => {
+    steps.push({ repositoryId, runId, scene, seq: seq++, ...step });
+  };
+  push({
+    kind: "turn",
+    status,
+    stepId: "journal-input",
+    label: question ? text(question, 80) : "开始处理",
+    ...(question ? { detail: question } : {}),
+    ...(provider ? { model: provider } : {}),
+    at: ordered[0].at
+  });
+  if (usage) {
+    push({
+      kind: "model",
+      status: "ok",
+      stepId: "journal-model",
+      label: "模型回复",
+      ...(provider ? { model: provider } : {}),
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      at: usage.at
+    });
+  }
+  for (const event of ordered) {
+    const step = toolStep(event);
+    if (step) push({ ...step, at: event.at });
+  }
+
+  return {
+    runId,
+    scene,
+    ...(threadId ? { threadId } : {}),
+    status,
+    startedAt: ordered[0].at,
+    endedAt: ordered[ordered.length - 1].at,
+    ...(parts.length ? { summary: parts.join(" · ") } : {}),
+    steps
+  };
+}
+
+export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string): TraceHistory {
+  const groups = new Map<string, JournalEvent[]>();
+  for (const event of events) {
+    if (!event.traceId) continue;
+    if (threadId && event.sessionId !== threadId) continue;
+    const list = groups.get(event.traceId);
+    if (list) list.push(event);
+    else groups.set(event.traceId, [event]);
+  }
+  const runs: TraceHistoryRun[] = [];
+  for (const [runId, list] of groups) {
+    const run = buildRun(runId, list, repositoryId);
+    if (run) runs.push(run);
+  }
+  return { runs: runs.sort((a, b) => (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt)).slice(0, Math.max(0, limit)) };
+}

@@ -7,7 +7,7 @@ import { api } from "../api/client";
 export function useAgentSurface(repositoryId: string | null, scope: AgentScope): { surface: AgentSurface | null; error: string | null; loading: boolean } {
   const [surface, setSurface] = useState<AgentSurface | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(repositoryId));
   useEffect(() => {
     if (!repositoryId) {
       setSurface(null);
@@ -16,6 +16,7 @@ export function useAgentSurface(repositoryId: string | null, scope: AgentScope):
       return;
     }
     let live = true;
+    setSurface(null);
     setLoading(true);
     setError(null);
     void api.getAgentSurface(repositoryId, scope)

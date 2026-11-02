@@ -13,6 +13,8 @@ export interface TraceRun {
   endedAt?: string;
   summary?: string;
   steps: AgentTracePayload[];
+  /** 来自 journal 的汇总回放，不是本次打开期间的实时帧。 */
+  historical?: boolean;
 }
 
 export type TraceStep = AgentTracePayload;

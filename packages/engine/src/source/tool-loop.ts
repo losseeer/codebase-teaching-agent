@@ -31,8 +31,6 @@ export interface ToolTraceStep {
   detail?: string;
   round: number;
   tool?: string;
-  target?: string;
-  resultChars?: number;
   model?: string;
   ms?: number;
   inputTokens?: number;
@@ -314,7 +312,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     input.onTrace?.({
       kind: "tool", status: failed ? "error" : "ok", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds,
       detail: note?.detail ?? (failed ? content.slice(0, 120) : `返回 ${content.length} 字`),
-      ...(failed ? {} : { resultChars: content.length }),
       ms: Date.now() - callStartedAt
     });
   };
@@ -390,8 +387,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
       callStartedAt = Date.now();
-      const target = toolTarget(call);
-      input.onTrace?.({ kind: "tool", status: "start", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds, ...(target ? { target } : {}) });
+      input.onTrace?.({ kind: "tool", status: "start", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds });
       if (call.name === CROSS_REPO_LINK_TOOL.name) {
 
         const repo = readArg(call.argumentsJson, "repo");
@@ -614,29 +610,6 @@ function toolLabel(call: LlmToolCall): string {
     case CROSS_REPO_LINK_TOOL.name: return "配对仓库";
     case ASK_USER_TOOL_NAME: return "向你提问";
     default: return `调用 ${call.name}`;
-  }
-}
-
-/** 工具调用的参数摘要：路径、检索词或技能名。 */
-function toolTarget(call: LlmToolCall): string | undefined {
-  switch (call.name) {
-    case READ_FILE_TOOL.name: {
-      const repo = readArg(call.argumentsJson, "repo");
-      const path = readPathHint(call.argumentsJson);
-      return path ? (repo ? `${repo}/${path}` : path) : undefined;
-    }
-    case SEARCH_CODE_TOOL.name: {
-      const repo = readArg(call.argumentsJson, "repo");
-      const query = readQueryHint(call.argumentsJson);
-      return query ? (repo ? `${repo}:${query}` : query) : undefined;
-    }
-    case READ_SKILL_TOOL.name: {
-      const skill = readSkillHint(call.argumentsJson);
-      const file = readSkillFileHint(call.argumentsJson);
-      return skill ? (file ? `${skill}/${file}` : skill) : undefined;
-    }
-    case ASK_USER_TOOL_NAME: return "ask_user";
-    default: return undefined;
   }
 }
 
