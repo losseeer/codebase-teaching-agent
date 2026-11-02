@@ -148,6 +148,29 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "code")?.payload.selection).toBe("none");
   });
 
+  it("自证失败后带着失败输出重发一次；首轮失败行不冒充已接受", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const replies = [
+      proposalJson({ given: UNPARSABLE_SOURCE, solution: DEFECTIVE_SOURCE }),
+      proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE })
+    ];
+    const provider = fakeProvider(() => replies.shift() ?? proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE }));
+    const exercise = await service.next(repository, { kind: "patch_edit", tag: "config", tagId: "custom-repair" }, provider, referenceFaces());
+    expect(exercise.targetUnitId).toBe("llm-code:custom-repair:0");
+    expect(provider.calls.count, "首轮自证失败要再发一次修复回合").toBe(2);
+    const repair = provider.calls.lastUser ?? "";
+    expect(repair).toContain("参考解没过");
+    expect(repair).toContain("没给问候时用默认值");
+    expect(repair).toContain("\"previous\"");
+
+    const runs = readJournal(repository.path).filter((event) => event.type === "exercise_run").map((event) => event.payload);
+    expect(runs.map((run) => run.label)).toEqual(["solution", "solution", "given"]);
+    expect(runs.map((run) => run.outcome)).toEqual(["harness_validation", "accepted", "accepted"]);
+    const usage = readJournal(repository.path).filter((event) => event.type === "token_usage").reduce((sum, event) => sum + Number(event.payload.input_tokens ?? 0), 0);
+    expect(usage, "两趟的用量要合到一张账上").toBe(1800);
+  });
+
   it("两跑都成立才落库：题面下发的是缺陷版，判分文件留在引擎缓存里", async () => {
     const repository = testRepository();
     const service = new ExerciseService();
@@ -181,9 +204,11 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const provider = fakeProvider(() => proposalJson({ given: REAL_SOURCE, solution: REAL_SOURCE }));
     await expect(service.next(repository, { kind: "patch_edit", targetUnitId: targetUnit(repository) }, provider))
       .rejects.toThrow(/代码题生成失败/);
+    expect(provider.calls.count, "自证失败只修一次，不无限重发").toBe(2);
     const runs = readJournal(repository.path).filter((event) => event.type === "exercise_run");
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(4);
     expect(runs.every((event) => event.payload.verdict_failed === 0)).toBe(true);
+    expect(runs.map((event) => event.payload.outcome)).toEqual(["accepted", "harness_validation", "accepted", "harness_validation"]);
     const declined = readJournal(repository.path).find((event) => event.type === "exercise_declined");
     expect(declined?.payload.stage).toBe("harness_validation");
     expect(declined?.payload.reason).toContain("不改也能全过");

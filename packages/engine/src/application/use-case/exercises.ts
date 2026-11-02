@@ -50,12 +50,18 @@ function exerciseFaces(repository: ImportedRepository, database: Parameters<type
 function generationTrace(repositoryId: string, label: string): { onTrace: (step: ToolTraceStep) => void; finish: (outcome: string, ok: boolean) => void } {
   const runId = currentTraceId() ?? id();
   const startedAt = Date.now();
+  let attempt = 0;
+  let current = 0;
   const emit = (step: ToolTraceStep | { kind: "turn"; status: "ok" | "error"; label: string; detail?: string; ms?: number }): void => {
     emitAgentTrace({ repositoryId, runId, scene: "practice.generate", ...step });
   };
   emitAgentTrace({ repositoryId, runId, scene: "practice.generate", kind: "turn", status: "start", label, detail: label });
   return {
-    onTrace: (step) => emit(step),
+    // 修复回合会重新从 m1 开始编号，按轮次加前缀避免覆盖上一轮的模型帧
+    onTrace: (step) => {
+      if (step.kind === "model" && step.status === "start" && step.stepId === "m1") current = ++attempt;
+      emit({ ...step, stepId: `${current}:${step.stepId}` });
+    },
     finish: (outcome, ok) => emit({ kind: "turn", status: ok ? "ok" : "error", label: ok ? "出题完成" : "出题失败", detail: outcome, ms: Date.now() - startedAt })
   };
 }

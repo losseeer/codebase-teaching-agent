@@ -8,6 +8,7 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domai
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief, type SkillReadAudit } from "../source/tool-loop.js";
+import { addUsage } from "../adapter/outbound/llm/usage.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
@@ -50,6 +51,8 @@ export interface HarnessRun {
   timedOut: boolean;
   /** 沙箱本身跑完了（编译成功、没超时）。 */
   ran: boolean;
+  /** 失败时的输出尾部，只给修复回合看，不进界面。 */
+  output?: string;
 }
 
 export type CodeGeneration =
@@ -75,7 +78,7 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
     `你是代码练习的出题人。要出一道**学习者真在编辑器里写代码、由沙箱真跑测试判分**的题：${kind === "patch_edit" ? "给一段有真实缺陷的实现，让他改到测试全过" : "给签名与示例，让他从零写出实现"}。`,
     "",
     "铁律：",
-    "- 沙箱里**没有任何第三方依赖**：只用该语言标准库；被测代码需要的仓内符号，由你写成最小替身（stub）放进 `hidden`。",
+    "- 沙箱里**没有任何第三方依赖**：只用该语言标准库；被测代码需要的仓库内符号，由你写成最小替身（stub）放进 `hidden`。",
     "- 判分只由测试是否全过决定，所以测试必须**逐条断言、逐条计数**，最后印一行结论。",
     `- 本语言的测试形状：${TEST_CONTRACT[language]}`,
     "- 测试要打在行为上（给定输入 → 期望输出/副作用），不要打在实现细节上（不要断言源码文本、不要断言调用次数这类脆弱项）。",
@@ -102,7 +105,7 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     `你是代码练习的出题人。这一次由你定题：围绕给定主题出一道具自足的代码题——${kind === "patch_edit" ? "一段带真实缺陷的实现，学习者改到测试全过" : "给签名与示例，学习者从零写出实现"}。`,
     "",
     "仓库代码只作参考：可以从候选摘录里取材（例如用同一套领域概念、同一种数据结构），但**题目必须自足**——给定件与测试不 import 仓库文件、不依赖仓库运行、不假设仓库里存在任何符号。",
-    "- 动手写题之前先确认本仓有没有可参考的落脚：读一下本主题的技能文件，再用 2–4 个英文/代码关键词（别拿中文主题原样搜）调用 `search_code`，命中的文件用 `read_file` 看一眼。`reference` 为空只说明引擎没预选到，不代表本仓没有；自己检索也没有命中时，再按主题写自足的题，不要编造仓库文件。",
+    "- 动手写题之前先确认本仓库有没有可参考的落脚：读一下本主题的技能文件，再用 2–4 个英文/代码关键词（别拿中文主题原样搜）调用 `search_code`，命中的文件用 `read_file` 看一眼。`reference` 为空只说明引擎没预选到，不代表本仓库没有；自己检索也没有命中时，再按主题写自足的题，不要编造仓库文件。",
     "",
     "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`。描述写背景 + 要改/写哪个函数 + 判定看什么行为；示例写 1–2 个「调用 → 期望返回」（类题用操作序列），不要复刻隐藏断言；注意事项只写可核对的约束（语言/标准库、能否改签名、边界条件），不写性能要求，也不点出缺陷所在的那一行。",
     "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示。",
@@ -233,7 +236,8 @@ async function harnessRun(proposal: CodeProposal, label: "solution" | "given", r
   const variant = label === "solution" ? proposal.solution : proposal.given;
   // 沙箱必须点名拒读仓根
   const run = await runSandbox({ language: proposal.language, entry: proposal.entry, files: overlay(proposal.hidden, variant), repositoryPath });
-  return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok };
+  const output = [run.stderr, run.stdout].filter(Boolean).join("\n").trim().slice(-4_000);
+  return { label, verdict: verdictOf(run), exitCode: run.steps.at(-1)?.exitCode ?? null, timedOut: run.timedOut, ran: run.ok, ...(output ? { output } : {}) };
 }
 
 /** 两跑自证，沙箱不可用时上抛。 */
@@ -250,6 +254,97 @@ export async function validateHarness(proposal: CodeProposal, repositoryPath: st
   if (!given.verdict) return { ok: false, reason: "发出去的代码那次运行没有测试结论，可能连语法都没过；这种题不能出", runs };
   if (given.verdict.failed < 1) return { ok: false, reason: `发出去的代码不改也能全过（${given.verdict.passed} 项通过），这道题没有可练的内容`, runs };
   return { ok: true, runs };
+}
+
+interface ProposalResponse {
+  text: string;
+  usage?: LlmUsage;
+  skillReads: SkillReadAudit[];
+  fileReads: FileReadRecord[];
+}
+
+/** 自证失败后的修复口径：只修实现与测试的不一致，不许靠删断言过关。 */
+const REPAIR_INSTRUCTION = [
+  "上一份出题在沙箱自证里没有通过。请修正实现或测试中的不一致，重新输出一份完整 JSON（不要只输出改动片段）。",
+  "参考解必须让全部测试通过，下发件必须至少有一条测试失败；不得删除、跳过或放宽断言来迁就参考解。"
+].join("\n");
+
+async function requestProposal(input: { provider: LlmProvider; system: string; user: string; temperature: number; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<ProposalResponse> {
+  const loop = await completeWithReadTool({
+    ...(input.faces ?? {}),
+    provider: input.provider,
+    system: input.system,
+    user: input.user,
+    temperature: input.temperature,
+    onProgress: forwardToolProgress(input.onProgress),
+    scene: "practice.generate-code"
+  });
+  return { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
+}
+
+function providerFailure(error: unknown, first?: { usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads?: FileReadRecord[] }): CodeGeneration {
+  const audits = toolLoopAuditsOf(error);
+  return {
+    ok: false,
+    stage: "provider_error",
+    reason: `出题时模型调用失败：${(error as Error).message}`,
+    runs: [],
+    ...(first?.usage ? { usage: first.usage } : {}),
+    skillReads: [...(first?.skillReads ?? []), ...(audits?.skillReads ?? [])],
+    ...(first?.fileReads ? { fileReads: first.fileReads } : {})
+  };
+}
+
+/** 把上一份 JSON、失败原因与测试输出交给模型，并保留原始出题输入。 */
+function repairUser(original: string, previous: string, failure: Extract<CodeGeneration, { ok: false }>): string {
+  const output = failure.runs.find((run) => run.label === "solution")?.output ?? failure.runs[0]?.output ?? "";
+  return [
+    original,
+    "",
+    REPAIR_INSTRUCTION,
+    "",
+    JSON.stringify({
+      previous: previous.length > 40_000 ? `${previous.slice(0, 40_000)}\n…（上一份已截断）` : previous,
+      failure: failure.reason ?? "自证未通过",
+      ...(output ? { testOutput: output } : {})
+    })
+  ].join("\n");
+}
+
+function combineGeneration(first: CodeGeneration, second: CodeGeneration): CodeGeneration {
+  const merged = {
+    usage: addUsage(first.usage, second.usage),
+    skillReads: [...first.skillReads, ...second.skillReads],
+    fileReads: [...(first.fileReads ?? []), ...(second.fileReads ?? [])],
+    runs: [...first.runs, ...second.runs]
+  };
+  return second.ok ? { ...second, ...merged } : { ...second, ...merged, reason: `${second.reason}（修复一次后仍未通过）` };
+}
+
+/** 首轮 + 最多一次修复：只有自证失败才重发，形状/端点故障不重试。 */
+async function generateWithRepair(input: {
+  provider: LlmProvider;
+  system: string;
+  user: string;
+  temperature: number;
+  faces?: ExerciseFaces;
+  onProgress?: ExerciseProgressSink;
+  finish: (response: ProposalResponse) => Promise<CodeGeneration>;
+}): Promise<CodeGeneration> {
+  let first: ProposalResponse;
+  try {
+    first = await requestProposal(input);
+  } catch (error) {
+    return providerFailure(error);
+  }
+  const result = await input.finish(first);
+  if (result.ok || result.stage !== "harness_validation") return result;
+  try {
+    const repaired = await requestProposal({ ...input, user: repairUser(input.user, first.text, result) });
+    return combineGeneration(result, await input.finish(repaired));
+  } catch (error) {
+    return combineGeneration(result, providerFailure(error));
+  }
 }
 
 /** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现。 */
@@ -269,28 +364,21 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   // 与问答回合同一条循环：出题这一趟也能自己读文件、检索、查静态产物
   const faces = input.faces ?? {};
   input.onProgress?.({ stage: "proposing" });
-  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
-  try {
-    const loop = await completeWithReadTool({
-      ...faces,
-      provider: input.provider,
-      system: withSkillsBrief(systemPrompt(input.kind, language), faces.skills),
-      user: JSON.stringify({
-        kind: input.kind,
-        language,
-        target: { path: input.unit.symbol.path, symbol: input.unit.symbol.name, line: input.unit.symbol.line, parameters: input.unit.symbol.parameters },
-        imports: source.imports,
-        source: source.body.slice(0, MAX_FILE_BYTES)
-      }),
-      onProgress: forwardToolProgress(input.onProgress),
-      scene: "practice.generate-code"
-    });
-    response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
-  } catch (error) {
-    // 端点失败单列一档
-    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
-  }
-  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress });
+  return await generateWithRepair({
+    provider: input.provider,
+    system: withSkillsBrief(systemPrompt(input.kind, language), faces.skills),
+    user: JSON.stringify({
+      kind: input.kind,
+      language,
+      target: { path: input.unit.symbol.path, symbol: input.unit.symbol.name, line: input.unit.symbol.line, parameters: input.unit.symbol.parameters },
+      imports: source.imports,
+      source: source.body.slice(0, MAX_FILE_BYTES)
+    }),
+    temperature: 0.4,
+    ...(input.faces ? { faces: input.faces } : {}),
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress })
+  });
 }
 
 /** 参考模式：源码只作参考，模型自己定题；语言也由模型声明。 */
@@ -306,21 +394,15 @@ export async function generateCodeExerciseFromReference(input: {
 }): Promise<CodeGeneration> {
   const faces = input.faces ?? {};
   input.onProgress?.({ stage: "proposing" });
-  let response: { text: string; usage?: LlmUsage; skillReads: SkillReadAudit[]; fileReads: FileReadRecord[] };
-  try {
-    const loop = await completeWithReadTool({
-      ...faces,
-      provider: input.provider,
-      system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
-      user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
-      onProgress: forwardToolProgress(input.onProgress),
-      scene: "practice.generate-code"
-    });
-    response = { text: loop.completion.text, usage: loop.usage, skillReads: loop.skillReads, fileReads: loop.fileReads };
-  } catch (error) {
-    return { ok: false, stage: "provider_error", reason: `出题时模型调用失败：${(error as Error).message}`, runs: [], skillReads: toolLoopAuditsOf(error)?.skillReads ?? [] };
-  }
-  return await finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress });
+  return await generateWithRepair({
+    provider: input.provider,
+    system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
+    user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
+    temperature: 0.4,
+    ...(input.faces ? { faces: input.faces } : {}),
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress })
+  });
 }
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */

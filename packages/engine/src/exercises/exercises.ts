@@ -296,11 +296,15 @@ export class ExerciseService {
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", { skill: read.skill, chars: read.chars, found: read.found });
     for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
     for (const run of generation.runs) {
+      // 每跑按自己的结论记账：修复回合通过时，首轮失败那两行不能记成已接受
+      const accepted = run.label === "solution"
+        ? Boolean(run.verdict && run.verdict.passed > 0 && run.verdict.failed === 0 && run.exitCode === 0)
+        : Boolean(run.verdict && run.verdict.failed > 0);
       repository.ports.audit.append("exercise_run", {
         stage: "validate-proposal", label: run.label, language,
         verdict_passed: run.verdict?.passed ?? null, verdict_failed: run.verdict?.failed ?? null,
         exit_code: run.exitCode, timed_out: run.timedOut,
-        outcome: generation.ok ? "accepted" : generation.stage
+        outcome: accepted ? "accepted" : "harness_validation"
       });
     }
     // 被自证挡掉的那一趟同样花了钱：账走在拒绝之前。
