@@ -14,7 +14,7 @@ export * from "./language-capabilities.js";
 export * from "./learner-profile.js";
 export * from "./repository-analysis.js";
 export * from "./repository-index.js";
-export * from "./route-seams.js";
+export * from "./route-endpoints.js";
 export * from "./secret-filter.js";
 export * from "./static-facts.js";
 export * from "./teaching-policy.js";

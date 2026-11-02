@@ -40,11 +40,11 @@ describe("journal 回合历史", () => {
 
     const tools = run.steps.filter((step) => step.kind === "tool");
     expect(tools.map((step) => step.tool)).toEqual(["ask_user", "read_file", "search_code", "read_skill", "mcp__fixture__echo"]);
-    expect(tools.find((step) => step.tool === "read_file")).toMatchObject({ detail: "20 行", status: "ok" });
+    expect(tools.find((step) => step.tool === "read_file")).toMatchObject({ detail: "已读取", status: "ok" });
     expect(tools.find((step) => step.tool === "read_file")?.label).toContain("src/main.ts");
-    expect(tools.find((step) => step.tool === "search_code")).toMatchObject({ label: "检索 register", detail: "2 处命中 · src/a.ts、src/b.ts" });
-    expect(tools.find((step) => step.tool === "read_skill")).toMatchObject({ label: "加载技能 tutor-fixture", detail: "1200 字" });
-    expect(tools.find((step) => step.tool === "mcp__fixture__echo")).toMatchObject({ detail: "12 字", ms: 8, status: "ok" });
+    expect(tools.find((step) => step.tool === "search_code")).toMatchObject({ label: "检索 register", detail: "src/a.ts、src/b.ts" });
+    expect(tools.find((step) => step.tool === "read_skill")).toMatchObject({ label: "加载技能 tutor-fixture", detail: "已加载" });
+    expect(tools.find((step) => step.tool === "mcp__fixture__echo")).toMatchObject({ detail: "已返回", ms: 8, status: "ok" });
   });
 
   it("中止的练习回合没有 turn_text 也能回放：状态、场景与已发生读取", () => {

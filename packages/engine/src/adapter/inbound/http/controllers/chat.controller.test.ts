@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import type { JournalEvent } from "@codebase-tutor/domain";
@@ -8,7 +8,7 @@ import { readMessages } from "../../../outbound/persistence/chat-store.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
 
 /**
-  宏观设计与练习答疑的回合收尾，含外部能力面、跨仓工具面与出网清单。
+  宏观设计与练习答疑的回合收尾，含外部能力面与出网清单。
   顺序是 recheckTurn → 落库 → 回放；每条路径断言三处文本同一份（响应 == chat_message == journal 的 `turn_text.answer`）。
 */
 const fx: RouteFixture = createRouteFixture();
@@ -61,7 +61,7 @@ description: 测试用做法：先看 llm.log 再决定要不要花钱。
     const before = fx.sentTools.length;
     await mapChat({ content: "这仓分几层？", threadId });
     expect(fx.sentTools[before].names).toEqual(["read_file", "search_code", "ask_user", "set_diagram", "query_facts"]);
-    expect(fx.sentTools[before].raw, "一行产物都没有时，上下文要直接说没有，别让模型自己试出来").toContain("本仓还没有静态产物");
+    expect(fx.sentTools[before].raw, "一行产物都没有时，上下文要直接说没有，别让模型自己试出来").toContain("本仓库还没有静态产物");
   });
 
   it("盘上有产物时，那份「在册情况」也真进了请求", async () => {
@@ -259,7 +259,7 @@ describe("宏观设计作用域（SSE）", () => {
     const reads = fx.eventsOf("file_read").filter((event) => event.sessionId === threadId);
     const allReads = fx.eventsOf("file_read");
     /** 每趟请求里出现的工具返回内容。 */
-    const toolReplies = fx.sentTools.filter((entry) => entry.raw.includes(marker)).map((entry) => ["未知工具", "未知仓库", "读文件上限", "跨仓读取最多"].find((word) => entry.raw.includes(word)) ?? (entry.raw.includes("// line 1") ? "读到正文" : "没读到")).join(" | ");
+    const toolReplies = fx.sentTools.filter((entry) => entry.raw.includes(marker)).map((entry) => ["未知工具", "未知仓库", "读文件上限"].find((word) => entry.raw.includes(word)) ?? (entry.raw.includes("// line 1") ? "读到正文" : "没读到")).join(" | ");
     const scene = `本回合请求 ${fx.requestsOf(marker)} 趟（工具回话：${toolReplies}）/ 脚本剩余 ${fx.scripted.length} 段 / 帧 ${events.map((event) => event.type).join("→")} / journal 里 file_read 共 ${allReads.length} 行（本线程 ${reads.length} 行，线程号 ${[...new Set(allReads.map((event) => String(event.sessionId)))].join(" ") || "无"}）`;
     expect(fx.sentTools.some((entry) => entry.raw.includes(marker) && entry.raw.includes("// line 1")), `第二趟请求里没有 read_file 的回填正文 ⇒ 工具没执行，不是落账问题（${scene}）`).toBe(true);
     expect(events.some((event) => event.type === "aborted"), `没收到 aborted 帧（${scene}）`).toBe(true);
@@ -458,39 +458,6 @@ describe("到限中断（只有宏观设计这一档会走到）", () => {
   });
 });
 
-/** 跨仓能力只在工具面上出现：挂了第二个仓才给 `cross_repo_link` 与仓名。 */
-
-describe("跨仓工具面随地址簿变", () => {
-  it("有第二个仓才给 cross_repo_link 与 repo 参数；没有时清单不变", async () => {
-    const registryFile = process.env.TUTOR_REGISTRY_FILE;
-    expect(registryFile).toBeTruthy();
-    const original = readFileSync(registryFile!, "utf8");
-    const peerDir = join(fx.root, "peer-repo");
-    mkdirSync(peerDir, { recursive: true });
-    const threadId = await fx.newThread("map", "跨仓工具面");
-    const ask = () => mapChat({ content: "这个请求打到哪个仓去了？", threadId });
-
-    try {
-      fx.sentTools.length = 0;
-      expect((await ask()).statusCode).toBe(200);
-      const alone = fx.sentTools[fx.sentTools.length - 1];
-      expect(alone.names).toContain("search_code");
-      expect(alone.names).not.toContain("cross_repo_link");
-      expect(alone.raw).not.toContain("peer-repo");
-
-      writeFileSync(registryFile!, `${JSON.stringify({ repositories: [fx.repoDir, peerDir] }, null, 2)}\n`, "utf8");
-      fx.sentTools.length = 0;
-      expect((await ask()).statusCode).toBe(200);
-      const withPeer = fx.sentTools[fx.sentTools.length - 1];
-      expect(withPeer.names).toContain("cross_repo_link");
-      // 仓名要出现在 read_file/search_code 的参数说明里
-      expect(withPeer.raw).toContain("peer-repo");
-    } finally {
-      writeFileSync(registryFile!, original, "utf8");
-      rmSync(peerDir, { recursive: true, force: true });
-    }
-  });
-});
 /**
   源码出网清单（`code_egress`）：装配里真放了源码的那次调用才计入。
   行里只有指纹，没有源码正文。

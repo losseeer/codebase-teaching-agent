@@ -5,7 +5,7 @@ import type { AskFacet } from "../../source/ask-user.js";
 import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
 import { factsToolFor, setDiagramToolFor } from "../../infrastructure/canvas-tools.js";
-import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
+import { searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
 import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
 import { auditsFromResult, recordUnfinishedTurn } from "../runtime/turn-audit.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
@@ -95,7 +95,6 @@ export async function runMapChat(
 ): Promise<ScopedTurnOutcome> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) throw new Error(REPOSITORY_NOT_MOUNTED);
-  const crossFiles = new Map<string, number>();
   const overlayDatabase = repository.handle.pin();
   const threadJournal = repository.audit;
   try {
@@ -107,7 +106,6 @@ export async function runMapChat(
     const result = await mapChat({
       repoPath: repository.path, analysis: repository.analysis, scopePaths: input.scopePaths, path: input.path, content: turn.question, history: turn.history, provider,
       search: searchCorpusFor(repository),
-      cross: crossRepoFor(repository, crossFiles),
       // 认领的那一句必须带 resume 进循环
       ...(input.resumeAsk
         ? { ask: { facets: askGiven ? (["range", "goal"] as AskFacet[]) : [], resume: { toolCallId: input.resumeAsk, answer: turn.question } } }
@@ -128,7 +126,7 @@ export async function runMapChat(
       recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", provider: provider.modelVersion, outcome: "aborted", threadId: turn.threadId, audits: auditsFromResult(result) });
       throw new LlmAbortedError();
     }
-    finishMapChatTurn(repository, provider, turn.threadId, turn.question, result, crossFiles);
+    finishMapChatTurn(repository, provider, turn.threadId, turn.question, result);
     return {
       reply: result.reply,
       provider: result.provider,

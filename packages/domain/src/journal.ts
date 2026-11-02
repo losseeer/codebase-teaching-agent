@@ -82,12 +82,6 @@ export type JournalEventType =
   | "exercise_submitted"
   | "repository_switched"
   /**
-    把本仓与地址簿里的另一个仓配对（跨仓 HTTP 接缝）。引擎侧写：这条读的是两个仓的源码，
-    配上几条是要能查的数。只有 agent 调 `cross_repo_link` 时才会发生（`via: "tool"`）。
-    payload：`other_repository_id` / `outbound` / `inbound`（两个方向各自配上的条数）。
-  */
-  | "repository_paired"
-  /**
     源码出网清单（LLM 数据流审计）。引擎侧写，一行 = 一段进过模型请求的仓内源码。
     记指针与指纹（`scene`/`kind`/`path`/`lines`/`chars`/`hash`，另带 `masked`/`truncated`），不记正文；
     与 llm.log 靠 `traceId + scene` 关联。字段语义以 engine `security/egress-log.ts` 的注释为准，不在此复述。
@@ -125,7 +119,7 @@ export const ENGINE_JOURNAL_EVENTS = [
   "exercise_declined", "exercise_generated", "exercise_anchor", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
-  "session_created", "session_deleted", "repository_paired", "code_egress",
+  "session_created", "session_deleted", "code_egress",
   "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
 ] as const satisfies readonly JournalEventType[];
 

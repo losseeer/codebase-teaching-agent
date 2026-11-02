@@ -12,7 +12,6 @@ const state = (rounds: number, marker: string): TurnLoopState => ({
   messages: [{ role: "user", content: marker }, { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{}" }] }, { role: "tool", toolCallId: "c1", content: "文件 a.ts（第 1-2 行）：\n1| x" }],
   rounds,
   succeededReads: 1,
-  crossReads: 0,
   externalCalls: 0,
   fileReads: [{ path: "a.ts", lines: 2, truncated: false, denied: false }],
   codeSearches: [],

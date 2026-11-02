@@ -31,7 +31,7 @@ describe("POST /journal 的入参守卫", () => {
   });
 
   it("引擎侧类型从这条接口写不进来：400 且区分「越权」与「未知」", async () => {
-    for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted", "repository_paired"]) {
+    for (const type of ["file_read", "code_egress", "token_usage", "turn_text", "turn_invariant", "session_deleted"]) {
       const before = fx.eventsOf(type).length;
       const refused = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/journal`, payload: { type, payload: { path: MAIN_FILE } } });
       expect(refused.statusCode, `${type} 是引擎侧类型`).toBe(400);

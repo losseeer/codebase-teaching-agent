@@ -11,7 +11,7 @@ import { callNeighborhoodSection } from "@codebase-tutor/analysis";
 import type { FileReadRecord } from "../source/read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "../source/search-code.js";
 import type { AskClaimAudit, AskFacet, AskResume, AskUserAudit } from "../source/ask-user.js";
-import type { CrossRepoContext, ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, ToolTraceStep, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
+import type { ExternalToolContext, FactsToolContext, ReadToolProgress, SetDiagramToolContext, SkillsToolContext, ToolTraceStep, TurnCheckpointChannel, TurnInterrupt, TurnStopReason } from "../source/tool-loop.js";
 import { completeWithReadTool } from "../source/tool-loop.js";
 import { emitAgentTrace } from "./agent-trace.js";
 import { recordEgress, type EgressCollector } from "../adapter/outbound/security/egress-log.js";
@@ -125,8 +125,6 @@ export interface RespondOptions {
   analysis?: RepositoryAnalysis;
   /** search_code 语料：提供时开放检索工具。 */
   search?: SearchCorpus;
-  /** 跨仓上下文：给 read_file/search_code 的 repo 参数与 cross_repo_link。 */
-  cross?: CrossRepoContext;
   /** 过程事件回调。 */
   onProgress?: (progress: TeachingProgress) => void;
   /** 外部中止信号：贯穿工具循环。 */
@@ -165,7 +163,6 @@ export interface RunTurnInput {
   /** 已分析仓库根：read_file 只在此范围内读取。 */
   repositoryPath?: string;
   search?: SearchCorpus;
-  cross?: CrossRepoContext;
   diagram?: SetDiagramToolContext;
   facts?: FactsToolContext;
   skills?: SkillsToolContext;
@@ -249,7 +246,6 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
         temperature: input.temperature,
         scene: input.scene,
         ...(input.search ? { search: input.search } : {}),
-        ...(input.cross ? { cross: input.cross } : {}),
         ...(input.diagram ? { diagram: input.diagram } : {}),
         ...(input.facts ? { facts: input.facts } : {}),
         ...(input.skills ? { skills: input.skills } : {}),
@@ -329,7 +325,6 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
     scene: "teaching.turn",
     ...(repositoryPath ? { repositoryPath } : {}),
     ...(options.search ? { search: options.search } : {}),
-    ...(options.cross ? { cross: options.cross } : {}),
     ...(options.skills ? { skills: options.skills } : {}),
     ...(options.external ? { external: options.external } : {}),
     ...(options.budgetGuard ? { budgetGuard: options.budgetGuard } : {}),
@@ -358,7 +353,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
 }
 
 /** map 作用域的一轮对话，带图结构写工具与现状快照。 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; cross?: CrossRepoContext; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   /** 本回合放进上下文的源码原文。 */
@@ -403,7 +398,6 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
     scene: "map.chat",
     repositoryPath: input.repoPath,
     ...(input.search ? { search: input.search } : {}),
-    ...(input.cross ? { cross: input.cross } : {}),
     ...(input.diagram ? { diagram: input.diagram } : {}),
     ...(input.facts ? { facts: input.facts } : {}),
     ...(input.skills ? { skills: input.skills } : {}),

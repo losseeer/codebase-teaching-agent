@@ -1,7 +1,7 @@
 import type { FadedState, TutorMessage, TutorSettings, TutorSession } from "@codebase-tutor/domain";
 import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/domain";
 
-import { crossRepoFor, searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
+import { searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js";
 import { externalAndSkills, recheckTurn } from "../orchestration/scoped-turn.js";
 import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
 import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../runtime/turn-audit.js";
@@ -133,12 +133,10 @@ export type TeachingTurnOutcome = {
 /** 跑一个教学回合，返回 done 帧的载荷。 */
 export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmProvider, stream: ScopedTurnStream, monthlyBudgetUsd: number): Promise<TeachingTurnOutcome> {
   const { repository, session, scope, question } = turn;
-  const crossFiles = new Map<string, number>();
   const outcome = await respondWithProvider(session, scope, question, provider, turn.faded, repository.path, {
     index: repository.index,
     analysis: repository.analysis,
     search: searchCorpusFor(repository),
-    cross: crossRepoFor(repository, crossFiles),
     checkpoint: turnCheckpointChannel({ repositoryPath: repository.path, threadId: session.id, scene: "teaching.turn" }),
     budgetGuard: turnBudgetGuard(repository.handle),
     trace: { repositoryId: repository.index.repositoryId, threadId: session.id, prompt: question },
@@ -158,7 +156,6 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     journal,
     sessionId: outcome.session.id,
     scene: "teach",
-    crossFiles,
     question,
     answer: outcome.assistant.content,
   }).answer;

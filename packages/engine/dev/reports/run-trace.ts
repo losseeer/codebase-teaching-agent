@@ -44,8 +44,6 @@ function eventLine(event: JournalEvent): string {
     case "code_egress":
       // 每次请求带出去的源码行清单
       return `出网 ${p.kind ?? "未记"} ${clip(p.path, 46)} ${p.lines ?? "未记"} · ${p.chars ?? 0} 字 指纹 ${p.hash ?? "未记"}${p.masked ? ` 【隐去 ${p.masked} 处】` : ""}${p.truncated ? " 【截断】" : ""}`;
-    case "repository_paired":
-      return `跨仓接缝 配对对象=${clip(p.other_repository_id, 24)} 本仓调它=${p.outbound ?? "未记"} 它调本仓=${p.inbound ?? "未记"}`;
     case "session_created":
     case "session_deleted":
       return `${event.type === "session_created" ? "新建" : "软删"}线程 scope=${p.scope ?? "未记"} scopeRef=${clip(p.scope_ref, 40)} exercise=${clip(p.exercise_id, 24)} reason=${p.reason ?? "未记"}`;

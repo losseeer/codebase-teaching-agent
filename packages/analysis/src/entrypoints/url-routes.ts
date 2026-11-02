@@ -1,12 +1,11 @@
-import { LANGUAGE_CAPABILITIES, type FileEntry, type RouteConsumer, type RouteLink, type RouteProvider } from "@codebase-tutor/domain";
+import { LANGUAGE_CAPABILITIES, type RouteConsumer, type RouteProvider } from "@codebase-tutor/domain";
 
-import { readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname } from "node:path";
 
 /**
-  跨语言路由接缝：HTTP 路由字符串是前后端共享的标识符，不产生语法级依赖边。
-  输入「路径 → 文件内容」，输出「谁调了哪条路由、落在哪个文件」。
-  参数一律折成 `{*}`；后缀匹配单独标 `via: "suffix"`，与整段相等分作两档证据。
+  路由端点识别：HTTP 路由字符串是前后端共享的标识符，不产生语法级依赖边。
+  输入「路径 → 文件内容」，输出提供方（Java/Python）与消费方（JS 家族）的路由端点。
+  参数一律折成 `{*}`。
 */
 
 const PARAMETER = "{*}";
@@ -23,15 +22,6 @@ export function normalizeRoute(input: string): string {
   const withSlash = withoutParams.startsWith("/") ? withoutParams : `/${withoutParams}`;
   const trimmed = withSlash.length > 1 ? withSlash.replace(/\/$/, "") : withSlash;
   return trimmed === "" ? "/" : trimmed;
-}
-
-const segments = (route: string): string[] => route.split("/").filter(Boolean);
-/** 后缀匹配：提供方整段落在消费方尾部，不做子串匹配。 */
-function suffixMatched(provider: string, consumer: string): boolean {
-  const tail = segments(provider);
-  const head = segments(consumer);
-  if (!tail.length || tail.length > head.length) return false;
-  return tail.every((segment, index) => segment === head[head.length - tail.length + index]);
 }
 
 const annotationPattern = /@(Request|Get|Post|Put|Delete|Patch)Mapping\s*\(([^)]*)\)/g;
@@ -116,8 +106,6 @@ function jsConsumers(path: string, content: string): RouteConsumer[] {
 */
 const providerExtensions = new Set([...LANGUAGE_CAPABILITIES.java.extensions, ...LANGUAGE_CAPABILITIES.python.extensions]);
 const consumerExtensions = new Set([...LANGUAGE_CAPABILITIES.typescript.extensions, ...LANGUAGE_CAPABILITIES.vue.extensions]);
-/** 需要为接缝读取的扩展名。 */
-export const routeFileExtensions: readonly string[] = [...providerExtensions, ...consumerExtensions];
 
 /** 从一批文件内容里抽出提供方（Java + Python）与消费方（JS 家族）。 */
 export function extractRouteEndpoints(contents: Map<string, string>): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
@@ -130,40 +118,5 @@ export function extractRouteEndpoints(contents: Map<string, string>): { provider
     else if (consumerExtensions.has(extension)) consumers.push(...jsConsumers(path, content));
   }
   return { providers, consumers };
-}
-
-/** 配对：整段相等优先，配不上再看后缀；每条边带 `via` 与歧义数。 */
-export function matchRouteSeams(providers: RouteProvider[], consumers: RouteConsumer[]): RouteLink[] {
-  const byRoute = new Map<string, RouteProvider[]>();
-  for (const provider of providers) {
-    const list = byRoute.get(provider.route);
-    if (list) list.push(provider);
-    else byRoute.set(provider.route, [provider]);
-  }
-  const links: RouteLink[] = [];
-  for (const consumer of consumers) {
-    const exact = byRoute.get(consumer.route) ?? [];
-    const suffix = exact.length ? [] : providers.filter((provider) => provider.route !== consumer.route && suffixMatched(provider.route, consumer.route));
-    const candidates = exact.length ? exact : suffix;
-    for (const provider of candidates) {
-      links.push({ route: consumer.route, consumer, provider, via: exact.length ? "exact" : "suffix", ambiguousWith: candidates.length });
-    }
-  }
-  return links;
-}
-
-/** 读文件版入口：仓路径加索引到的文件清单。 */
-export function routeEndpointsOfFiles(repositoryPath: string, files: FileEntry[]): { providers: RouteProvider[]; consumers: RouteConsumer[] } {
-  const handled = new Set(routeFileExtensions);
-  const contents = new Map<string, string>();
-  for (const file of files) {
-    if (!handled.has(file.extension)) continue;
-    try {
-      contents.set(file.path, readFileSync(join(repositoryPath, file.path), "utf8"));
-    } catch {
-      // 读失败的文件跳过，不中断配对
-    }
-  }
-  return extractRouteEndpoints(contents);
 }
 

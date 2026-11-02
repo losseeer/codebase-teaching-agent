@@ -37,12 +37,11 @@ describe("GET /agent-surface 的只读能力面", () => {
     const map = await surface("map");
     expect(fx.fetchCalls(), "读侧不发模型").toBe(before);
     expect(map.scope).toBe("map");
-    expect(map.tools.map((tool) => tool.name)).toEqual(["read_file", "search_code", "cross_repo_link", "ask_user", "set_diagram", "read_skill", "query_facts", "外部工具"]);
+    expect(map.tools.map((tool) => tool.name)).toEqual(["read_file", "search_code", "ask_user", "set_diagram", "read_skill", "query_facts", "外部工具"]);
     const byName = new Map(map.tools.map((tool) => [tool.name, tool]));
     expect(byName.get("set_diagram")?.available).toBe(true);
     expect(byName.get("query_facts")?.available).toBe(true);
     expect(byName.get("ask_user")).toMatchObject({ available: true, conditional: true });
-    expect(byName.get("cross_repo_link")).toMatchObject({ available: false, reason: "地址簿里没有其他仓" });
     expect(byName.get("read_skill")).toMatchObject({ available: false, reason: "没有装载技能" });
 
     const practice = await surface("practice");

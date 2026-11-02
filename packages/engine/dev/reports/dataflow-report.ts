@@ -81,7 +81,6 @@ function egressRowsOf(events: JournalEvent[]): EgressRow[] {
       at: event.at,
       scene: "tool-loop",
       kind: "tool-read",
-      // 跨仓读取的 path 带「对端仓名/」前缀
       path: String(scalarOf(event, "path") ?? "未记"),
       lines: `${lines} 行`,
       // file_read 只记行数，chars 留 0
@@ -226,13 +225,6 @@ function main(): void {
     console.log(`   ${clip(file.path, 44).padEnd(44)} ${String(file.hits).padStart(5)} ${chars.padStart(9)} ${masked.padStart(5)}  ${clip([...file.kinds].join("/"), 24).padEnd(24)} ${[...file.scenes].join(",").slice(0, 46)}`);
   }
   console.log("   （「隐去」列：数字＝隐去处数；0＝那一路扫过且没命中；-＝登记方没带这个读数（工具循环那档或未扫的路径），不能读成「干净」。「未量」＝工具循环只记了行数，没记字符数。）");
-
-  const paired = events.filter((event) => event.type === "repository_paired");
-  if (paired.length) {
-    const partners = new Set(paired.map((event) => String(event.payload.other_repository_id ?? "未记")));
-    console.log(`\n── 跨仓配对 ${paired.length} 次（配一次读两个仓），对端仓 id：${[...partners].join(" / ")}`);
-    console.log("   跨仓读到的文件在上面的清单里带「模型用的仓名/」前缀（配对记录里的 other_repository_id 是仓 id，两者不同名）；按仓授权生效时，名单外的对端连仓名都不下发。");
-  }
 
   if (background.length) {
     const byScene = new Map<string, number>();

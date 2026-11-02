@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { RouteProvider } from "@codebase-tutor/domain";
 
-import { extractRouteEndpoints, matchRouteSeams, normalizeRoute, routeFileExtensions } from "./url-routes.js";
+import { extractRouteEndpoints, normalizeRoute } from "./url-routes.js";
 
-/** 接缝判据单测：真值来自写死的文本样例，钉参数折叠、基路径相接与后缀匹配。 */
+/** 路由端点单测：真值来自写死的文本样例，钉参数折叠与基路径相接。 */
 
 describe("route seam — 归一化", () => {
   it("四种参数写法折成同一个占位", () => {
@@ -63,40 +63,8 @@ describe("route seam — 消费方", () => {
   });
 });
 
-describe("route seam — 配对", () => {
-  const providers: RouteProvider[] = [
-    { route: "/shop/search", path: "ShopController.java", line: 10, framework: "spring" },
-    { route: "/user/{*}", path: "UserController.java", line: 20, framework: "spring" },
-    { route: "/user", path: "UserController.java", line: 24, framework: "spring" }
-  ];
-
-  it("整段相等优先，配不上才走后缀（via 必须区分，二者证据强度不同）", () => {
-    const consumers = extractRouteEndpoints(new Map([["a.ts", "request.get('/shop/search');\nrequest.get('/api/user');\n"]])).consumers;
-    const links = matchRouteSeams(providers, consumers);
-    expect(links.map((link) => `${link.route}:${link.via}`)).toEqual(["/shop/search:exact", "/api/user:suffix"]);
-    expect(links[1]?.provider.route).toBe("/user");
-  });
-
-  it("字面量段与占位段不互配：/user/code 不该配到 /user/{*}", () => {
-    const consumers = extractRouteEndpoints(new Map([["a.ts", "request.post('/user/code');\n"]])).consumers;
-    expect(matchRouteSeams(providers, consumers)).toEqual([]);
-  });
-
-  it("一条消费串配到多个提供方时全部给出并带上歧义数，不静默取第一个", () => {
-    const duplicated: RouteProvider[] = [
-      { route: "/blog/list", path: "A.java", line: 1, framework: "spring" },
-      { route: "/blog/list", path: "B.java", line: 2, framework: "spring" }
-    ];
-    const consumers = extractRouteEndpoints(new Map([["a.ts", "request.get('/blog/list');\n"]])).consumers;
-    const links = matchRouteSeams(duplicated, consumers);
-    expect(links).toHaveLength(2);
-    expect(links.every((link) => link.ambiguousWith === 2)).toBe(true);
-  });
-});
-
-describe("route seam — 读文件的闸门与分派同源", () => {
-  it("`.mjs` / `.cjs` 也是消费方：闸门清单必须含这两类后缀，否则它们根本不进读文件路径", () => {
-    expect(routeFileExtensions, "闸门清单必须认得 ES/CJS 后缀").toEqual(expect.arrayContaining([".mjs", ".cjs", ".java", ".py", ".vue"]));
+describe("route endpoints — 读文件的闸门与分派同源", () => {
+  it("`.mjs` / `.cjs` 也是消费方", () => {
     const { consumers } = extractRouteEndpoints(new Map([
       ["src/api.mjs", "request.get('/probe/ping');\n"],
       ["src/legacy.cjs", "fetch('/probe/pong');\n"]

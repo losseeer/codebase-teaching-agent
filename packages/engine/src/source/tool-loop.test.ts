@@ -1,7 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { RepositoryAnalysis, RepositoryIndex } from "@codebase-tutor/domain";
 
 import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider } from "../application/port/llm-provider.js";
@@ -64,8 +61,8 @@ describe("completeWithReadTool", () => {
     expect(tool.map((step) => step.status)).toEqual(["start", "ok"]);
     expect(tool.map((step) => step.stepId)).toEqual(["c1", "c1"]);
     expect(tool[0].label).toContain("read-file.ts");
-    expect(tool[1].detail).toContain("行");
-    expect(tool[1].detail, "轨迹只给读数，不把读到的源码正文带出去").not.toContain("export");
+    expect(tool[1].detail).toBe("已读取");
+    expect(tool[1].detail, "轨迹只给状态，不把读到的源码正文带出去").not.toContain("export");
   });
 
   it("累计文件数用尽时同样收尾；未知工具回喂明确提示", async () => {
@@ -260,87 +257,6 @@ describe("completeWithReadTool 的 search_code 集成", () => {
   });
 });
 
-describe("completeWithReadTool 的跨仓访问", () => {
-  const other = mkdtempSync(join(tmpdir(), "tutor-cross-"));
-  writeFileSync(join(other, "ShopController.java"), "class ShopController {\n  save() {}\n}\n", "utf8");
-  writeFileSync(join(other, ".env"), "SECRET=leak\n", "utf8");
-  afterAll(() => { rmSync(other, { recursive: true, force: true }); });
-  const cross = { roots: { other }, links: (name: string) => `仓 ${name} 的接缝：/api/shop/save → ShopController.java:2` };
-  const crossRead = (id: string, path: string, repo: string): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "read_file", argumentsJson: JSON.stringify({ path, repo }) }], finishReason: "tool_calls" });
-
-  it("带 repo 就读对端仓，审计与正文都带上仓名", async () => {
-    const { provider, calls } = scriptedProvider([crossRead("c1", "ShopController.java", "other"), { text: "对端在 ShopController。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
-    expect(result.fileReads.map((read) => read.path)).toEqual(["other/ShopController.java"]);
-    const toolMessage = calls[1].messages?.find((message) => message.role === "tool");
-    expect(toolMessage?.content).toContain("【来自仓 other】");
-    expect(toolMessage?.content).toContain("save()");
-  });
-
-  it("守卫跟着目标根走：对端仓的 .env 照样拒读", async () => {
-    const { provider } = scriptedProvider([crossRead("c1", ".env", "other"), { text: "收尾。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
-    expect(result.fileReads[0].denied).toBe(true);
-    expect(result.fileReads[0].path).toBe("other/.env");
-  });
-
-  it("`__proto__` 这类原型属性名不算仓库：回喂未知仓库清单，不抛异常终止回合", async () => {
-    const { provider, calls } = scriptedProvider([crossRead("c1", "ShopController.java", "__proto__"), { text: "收尾。", finishReason: "stop" }]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
-    const tool = calls[1].messages?.find((message) => message.role === "tool");
-    expect(tool?.content).toContain("未知仓库「__proto__」");
-    expect(result.fileReads).toHaveLength(0);
-  });
-
-  it("未知仓名回喂可用清单且不占额度；跨仓读另有独立上限", async () => {
-    const { provider, calls } = scriptedProvider([
-      crossRead("c1", "ShopController.java", "nope"),
-      { text: "", toolCalls: [{ id: "c2", name: "read_file", argumentsJson: JSON.stringify({ path: "ShopController.java", repo: "other" }) }, { id: "c3", name: "read_file", argumentsJson: JSON.stringify({ path: "ShopController.java", repo: "other" }) }], finishReason: "tool_calls" },
-      { text: "收尾。", finishReason: "stop" }
-    ]);
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 3, maxCalls: 5, cross: { ...cross, maxCrossReads: 1 } });
-    const unknown = calls[1].messages?.find((message) => message.role === "tool");
-    expect(unknown?.content).toContain("未知仓库「nope」");
-    expect(unknown?.content).toContain("other");
-    // 跨仓额度只够一条真实读取。
-    expect(result.fileReads.filter((read) => !read.denied)).toHaveLength(1);
-    const capped = calls[2].messages?.filter((message) => message.role === "tool");
-    expect(capped?.some((message) => message.content.includes("跨仓读取最多 1 个文件"))).toBe(true);
-  });
-
-  it("跨仓读成功才回报递出去的路径（供复检留痕）；本仓读与拒读都不回报", async () => {
-    const handed: string[] = [];
-    const { provider } = scriptedProvider([
-      crossRead("c1", "ShopController.java", "other"),
-      crossRead("c2", ".env", "other"),
-      readCall("c3", "read-file.ts"),
-      { text: "收尾。", finishReason: "stop" }
-    ]);
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 4, maxCalls: 5, cross: { ...cross, onHandedOut: (repo, path) => handed.push(`${repo}/${path}`) } });
-    expect(handed).toEqual(["other/ShopController.java"]);
-  });
-
-  it("cross_repo_link 回清单文本；没给 links 就不开放这个工具", async () => {
-    const { provider, calls } = scriptedProvider([
-      { text: "", toolCalls: [{ id: "c1", name: "cross_repo_link", argumentsJson: JSON.stringify({ repo: "other" }) }], finishReason: "tool_calls" },
-      { text: "落点在 ShopController.java:2。", finishReason: "stop" }
-    ]);
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
-    expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file", "cross_repo_link"]);
-    expect(calls[1].messages?.find((message) => message.role === "tool")?.content).toContain("/api/shop/save");
-    const without = scriptedProvider([{ text: "收尾。", finishReason: "stop" }]);
-    await completeWithReadTool({ provider: without.provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5 });
-    expect(without.calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
-    expect(JSON.stringify(without.calls[0].tools)).not.toContain("repo");
-  });
-
-  it("有跨仓时 read_file 的 schema 里带上可用仓名", async () => {
-    const { provider, calls } = scriptedProvider([{ text: "收尾。", finishReason: "stop" }]);
-    await completeWithReadTool({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 5, cross });
-    expect(JSON.stringify(calls[0].tools)).toContain("可用值：other");
-  });
-});
-
 describe("外部能力面（技能与 MCP），默认关闭", () => {
   const externalTool = { name: "mcp__docs__lookup", description: "【外部 docs】查一份文档", parameters: { type: "object" as const, properties: {} } };
 
@@ -502,19 +418,6 @@ describe("compactTurnContext", () => {
     expect(tools(messages).map((message) => message.content)).toEqual(bodies);
     expect(assistants(messages).map((message) => message.reasoningContent)).toEqual([undefined, `推理${TOOL_CONTEXT_KEEP_ROUNDS}`]);
   });
-
-  it("跨仓结果的抬头是两行：折叠后仓名与文件行区间都还在", () => {
-    const oldest: LlmMessage[] = [
-      { role: "assistant", content: "", reasoningContent: "推理0", toolCalls: [{ id: "cX", name: "read_file", argumentsJson: JSON.stringify({ path: "Shop.java", repo: "other" }) }] },
-      { role: "tool", toolCallId: "cX", content: `【来自仓 other】\n${readBody("Shop.java")}` }
-    ];
-    const messages = [...oldest, ...roundsOf(TOOL_CONTEXT_KEEP_ROUNDS)];
-    compactTurnContext(messages);
-    const folded = tools(messages)[0];
-    expect(folded.content).toContain("已折叠");
-    expect(folded.content).toContain("【来自仓 other】");
-    expect(folded.content).toContain("文件 Shop.java");
-  });
 });
 
 describe("回合检查点与预算闸门", () => {
@@ -526,7 +429,6 @@ describe("回合检查点与预算闸门", () => {
     ],
     rounds,
     succeededReads: 1,
-    crossReads: 0,
     externalCalls: 0,
     fileReads: [{ path: "read-file.ts", lines: 3, truncated: false, denied: false }],
     codeSearches: [],
@@ -615,12 +517,12 @@ describe("回合检查点与预算闸门", () => {
     const { provider, calls } = scriptedProvider([readCall("c1", "read-file.ts"), { text: "收尾。", finishReason: "stop" }]);
     const result = await completeWithReadTool({
       provider, repoPath, system: "s", user: "u", maxTokens: 100, temperature: 0, maxRounds: 5, maxCalls: 5,
-      budgetGuard: () => { asked += 1; return asked === 1 ? "本仓本月预算（5）已经用完，这是本次对话的最后一趟调用。" : undefined; }
+      budgetGuard: () => { asked += 1; return asked === 1 ? "本仓库本月预算（5）已经用完，这是本次对话的最后一趟调用。" : undefined; }
     });
     expect(result.fileReads, "到线那一轮不该再把工具调用执行掉").toEqual([]);
     expect(result.stoppedBy).toBe("budget");
     const refusal = (calls[1].messages ?? []).find((message) => message.role === "tool");
-    expect(refusal?.content).toContain("本仓本月预算");
+    expect(refusal?.content).toContain("本仓库本月预算");
     expect(refusal?.content, "错话说成「读文件上限」会被模型原样转述给学习者").not.toContain("读文件上限");
     expect(calls[1].tools, "收尾轮不带工具").toBeUndefined();
   });
@@ -684,7 +586,7 @@ describe("到限中断（宏观设计那一档：不出成品，留快照等重�
   it("预算到线：同一档结局、同一个原因位", async () => {
     const { provider, calls } = loopingProvider();
     const log: string[] = [];
-    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 10, maxCalls: 4, interruptAtLimit: true, budgetGuard: () => "本仓本月预算（5）已经用完。", checkpoint: spyChannel(log, []) });
+    const result = await completeWithReadTool({ provider, repoPath, system: "s", user: "画张图", maxTokens: 700, temperature: 0, maxRounds: 10, maxCalls: 4, interruptAtLimit: true, budgetGuard: () => "本仓库本月预算（5）已经用完。", checkpoint: spyChannel(log, []) });
     expect(calls.length).toBe(1);
     expect(result.interrupted?.reason).toBe("budget");
     expect(result.interrupted?.detail).toContain("预算");

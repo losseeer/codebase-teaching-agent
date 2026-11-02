@@ -60,36 +60,34 @@ function toolStep(event: JournalEvent): HistoryStep | undefined {
       const path = clip(text(p.path, 200), 200);
       const denied = p.denied === true;
       const error = text(p.error, 120);
-      const lines = num(p.lines);
-      const parts = [denied ? "拒绝读取" : error || `${lines ?? 0} 行`];
-      if (p.truncated === true) parts.push("截断");
       const masked = num(p.masked) ?? 0;
-      if (masked > 0) parts.push(`隐去 ${masked} 处`);
+      const parts = [denied ? "拒绝读取" : error || "已读取"];
+      if (p.truncated === true) parts.push("截断");
+      if (masked > 0) parts.push("已隐去敏感内容");
       return { kind: "tool", status: denied || error ? "error" : "ok", stepId: event.id, tool: "read_file", label: `读取 ${text(path, 120)}`.trim(), detail: parts.join(" · ") };
     }
     case "code_search": {
       const query = clip(text(p.query, 200), 120);
-      const hits = num(p.hits) ?? 0;
       const top = text(p.top_paths, 160);
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "search_code", label: `检索 ${query}`.trim(), detail: `${hits} 处命中${top ? ` · ${top}` : ""}` };
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "search_code", label: `检索 ${query}`.trim(), detail: top || (num(p.hits) ? "有命中" : "无命中") };
     }
     case "skill_read": {
       const skill = clip(text(p.skill, 120), 120);
       const found = p.found === true;
-      const chars = num(p.chars) ?? 0;
-      return { kind: "tool", status: found ? "ok" : "error", stepId: event.id, tool: "read_skill", label: `加载技能 ${skill}`.trim(), detail: found ? `${chars} 字` : "未找到" };
+      return { kind: "tool", status: found ? "ok" : "error", stepId: event.id, tool: "read_skill", label: `加载技能 ${skill}`.trim(), detail: found ? "已加载" : "未找到" };
     }
     case "mcp_call": {
       const server = text(p.server, 40);
       const tool = text(p.tool, 80);
       const name = server && tool ? `mcp__${server}__${tool}` : tool;
       const ok = p.ok === true;
-      const resultChars = num(p.result_chars);
       const masked = num(p.masked) ?? 0;
       const ms = num(p.ms);
+      const parts = [ok ? "已返回" : "失败"];
+      if (masked > 0) parts.push("已隐去敏感内容");
       return {
         kind: "tool", status: ok ? "ok" : "error", stepId: event.id, tool: name || "mcp__unknown", label: `调用 ${name || "外部工具"}`.trim(),
-        detail: `${resultChars ?? 0} 字${masked ? ` · 隐去 ${masked} 处` : ""}${ok ? "" : " · 失败"}`,
+        detail: parts.join(" · "),
         ...(ms !== undefined ? { ms } : {})
       };
     }
@@ -100,17 +98,13 @@ function toolStep(event: JournalEvent): HistoryStep | undefined {
       const reason = text(p.reason, 160);
       return { kind: "tool", status: outcome === "asked" ? "ok" : "error", stepId: event.id, tool: "ask_user", label: outcome === "asked" ? "向你提问" : "提问被挡", detail: outcome === "asked" ? (options || "已提问") : (reason || "被挡") };
     }
-    case "repository_paired": {
-      const other = text(p.other_repository_id, 80);
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "cross_repo_link", label: "配对仓库", detail: `${other ? `${other} · ` : ""}出 ${num(p.outbound) ?? 0} / 入 ${num(p.inbound) ?? 0}` };
-    }
     case "diagram_created": {
       if (p.source !== "agent") return undefined;
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: `新建 · ${num(p.nodes) ?? 0} 节点 / ${num(p.edges) ?? 0} 条边${num(p.downgraded) ? ` · 降档 ${num(p.downgraded)}` : ""}` };
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: "新建" };
     }
     case "diagram_edited": {
       if (p.via !== "agent") return undefined;
-      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: `${text(p.action, 40) || "修改"} · ${num(p.nodes) ?? 0} 节点 / ${num(p.edges) ?? 0} 条边${num(p.downgraded) ? ` · 降档 ${num(p.downgraded)}` : ""}` };
+      return { kind: "tool", status: "ok", stepId: event.id, tool: "set_diagram", label: "修改图表", detail: text(p.action, 40) || "修改" };
     }
     default:
       return undefined;

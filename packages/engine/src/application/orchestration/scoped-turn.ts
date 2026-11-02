@@ -40,8 +40,6 @@ export function recheckTurn(input: {
   journal: AuditSink;
   sessionId?: string;
   scene: "teach" | "map_chat" | "practice_chat";
-  /** 本回合引擎给出的对端路径（裸路径 → 总行数）；核验只认登记过的。 */
-  crossFiles?: Map<string, number>;
   question: string;
   answer: string;
 }): { answer: string; failed: string[] } {
@@ -53,7 +51,7 @@ export function recheckTurn(input: {
     answer: screened.text,
     answerTruncated: false,
     scene: input.scene
-  }, new Map<string, number>([...input.repository.index.files.map((file) => [file.path, file.lines] as [string, number]), ...(input.crossFiles ?? [])]));
+  }, new Map<string, number>(input.repository.index.files.map((file) => [file.path, file.lines] as [string, number])));
   input.journal.append("turn_invariant", {
     scene: input.scene,
     applicable: verdict.applicable.join("、") || null,
@@ -69,12 +67,12 @@ export function recheckTurn(input: {
 }
 
 /** map_chat 回合的统一收尾：复检 → 正文落库 → 审计线，三处读同一份文本。 */
-export function finishMapChatTurn(repository: ImportedRepository, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult, crossFiles: Map<string, number>): void {
+export function finishMapChatTurn(repository: ImportedRepository, provider: LlmProvider, threadId: string | undefined, question: string, result: ScopedChatResult): void {
   const journal = repository.audit;
   // 中断的回合没有成品：不复检、不落正文，但已经发生的账照记。
   const interrupted = Boolean(result.interrupted);
   if (!interrupted) {
-    result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply, crossFiles }).answer;
+    result.reply = recheckTurn({ repository, journal, sessionId: threadId, scene: "map_chat", question, answer: result.reply }).answer;
     if (result.asked) result.asked = { ...result.asked, question: screenReply(result.asked.question).text, options: result.asked.options.map((option) => screenReply(option).text) };
     persistScopedTurn(repository.chatStore, "map_chat", threadId, question, result.reply);
   }

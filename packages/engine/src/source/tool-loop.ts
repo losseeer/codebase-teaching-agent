@@ -7,7 +7,6 @@ import { hash } from "@codebase-tutor/platform";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 import { READ_FILE_TOOL, executeReadFile, type FileReadRecord } from "./read-file.js";
 import { SEARCH_CODE_TOOL, executeSearchCode, type CodeSearchRecord, type SearchCorpus } from "./search-code.js";
-import { CROSS_REPO_LINK_TOOL } from "../seams/seams.js";
 import { SET_DIAGRAM_TOOL } from "../diagram/set-diagram.js";
 import { QUERY_FACTS_TOOL } from "../facts/query.js";
 import { READ_SKILL_TOOL } from "../adapter/outbound/integrations/skills.js";
@@ -61,8 +60,6 @@ export interface ReadToolLoopInput {
   search?: SearchCorpus;
   /** 外部中止信号，透传给每一轮 LLM 调用。 */
   signal?: AbortSignal;
-  /** 跨仓访问上下文；不传表示只有当前仓。 */
-  cross?: CrossRepoContext;
   /** 画布图结构的写入通道。 */
   diagram?: SetDiagramToolContext;
   /** 静态产物的只读查询通道。 */
@@ -99,20 +96,6 @@ export interface ExternalToolContext {
   maxCalls?: number;
 }
 
-/** 跨仓访问上下文。 */
-export interface CrossRepoContext {
-  /** 仓名到仓库根路径的映射。 */
-  roots: Record<string, string>;
-  /** 按仓名取检索语料，`undefined` 表示该仓不可检索。 */
-  corpusOf?: (repoName: string) => SearchCorpus | undefined;
-  /** 取当前仓与对端仓之间的接缝清单。 */
-  links?: (repoName: string, filter: string) => string;
-  /** 跨仓读取的独立上限；省略取 `DEFAULT_CROSS_READS`。 */
-  maxCrossReads?: number;
-  /** 每递出一份对端内容回调一次，参数为仓名与仓内路径。 */
-  onHandedOut?: (repoName: string, path: string) => void;
-}
-
 /** set_diagram 的执行通道，返回落盘结果或拒写原因。 */
 export interface SetDiagramToolContext {
   apply: (argumentsJson: string) => string;
@@ -128,22 +111,12 @@ export interface FactsToolContext {
 }
 
 /** 按已给的通道构造工具清单。 */
-function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross" | "diagram" | "skills" | "external" | "facts" | "ask">): LlmTool[] {
-  const { cross, diagram, skills, external } = input;
-  const names = cross ? Object.keys(cross.roots) : [];
-  const withRepo = (tool: LlmTool, extra: string): LlmTool => {
-    const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
-    return {
-      ...tool,
-      description: `${tool.description} 跨仓时给 repo 参数（${extra}），省略即当前仓。`,
-      parameters: { ...tool.parameters, properties: { ...properties, repo: { type: "string", description: `其他仓的名字，可选；本仓请省略。可用值：${names.join(" / ")}` } } }
-    };
-  };
+function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "diagram" | "skills" | "external" | "facts" | "ask">): LlmTool[] {
+  const { diagram, skills, external } = input;
   const tools: LlmTool[] = [];
   if (input.repoPath) {
-    tools.push(names.length ? withRepo(READ_FILE_TOOL, "读对端实现") : READ_FILE_TOOL);
-    if (input.search) tools.push(names.length ? withRepo(SEARCH_CODE_TOOL, "在对端仓里定位文件") : SEARCH_CODE_TOOL);
-    if (cross?.links) tools.push(CROSS_REPO_LINK_TOOL);
+    tools.push(READ_FILE_TOOL);
+    if (input.search) tools.push(SEARCH_CODE_TOOL);
   }
 
   if (input.ask?.facets.length) tools.push(askUserToolFor(input.ask.facets));
@@ -155,16 +128,6 @@ function toolsFor(input: Pick<ReadToolLoopInput, "repoPath" | "search" | "cross"
 
   if (external?.tools.length) tools.push(...external.tools);
   return tools;
-}
-
-/** 取参数里的一个字符串字段；解析失败回空串。 */
-function readArg(argumentsJson: string, key: string): string {
-  try {
-    const parsed = JSON.parse(argumentsJson || "{}") as Record<string, unknown>;
-    return typeof parsed[key] === "string" ? (parsed[key] as string).trim() : "";
-  } catch {
-    return "";
-  }
 }
 
 /** 随异常带出的工具调用与用量记录。 */
@@ -229,7 +192,6 @@ export interface TurnLoopState {
   messages: LlmMessage[];
   rounds: number;
   succeededReads: number;
-  crossReads: number;
   externalCalls: number;
   fileReads: FileReadRecord[];
   codeSearches: CodeSearchRecord[];
@@ -251,7 +213,6 @@ export interface TurnCheckpointChannel {
 export const DEFAULT_TOOL_ROUNDS = 100;
 export const DEFAULT_FILE_READS = 100;
 const DEFAULT_EXTERNAL_CALLS = 100;
-const DEFAULT_CROSS_READS = 100;
 
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, system, maxTokens, temperature } = input;
@@ -259,7 +220,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   const maxCalls = input.maxCalls ?? DEFAULT_FILE_READS;
   const tools = toolsFor(input);
   const available = tools.map((tool) => tool.name).join(" 与 ");
-  const crossNames = input.cross ? Object.keys(input.cross.roots) : [];
   const messages: LlmMessage[] = [{ role: "user", content: input.user }];
   const fileReads: FileReadRecord[] = [];
   const codeSearches: CodeSearchRecord[] = [];
@@ -269,7 +229,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   /** 本次请求内的工具轮数，与跨续跑累计的 rounds 分开计。 */
   let attemptRounds = 0;
   let succeededReads = 0;
-  let crossReads = 0;
   let externalCalls = 0;
   let asked: AskUserAudit | undefined;
   let askRefused: string | undefined;
@@ -277,7 +236,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let interrupted: TurnInterrupt | undefined;
   let usage: LlmUsage | undefined;
   const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
-  const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, crossReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
+  const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
   let resumedFromRound: number | undefined;
   let stoppedBy: TurnStopReason | undefined;
   let completion: LlmCompletion;
@@ -311,7 +270,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     const failed = note?.ok === false;
     input.onTrace?.({
       kind: "tool", status: failed ? "error" : "ok", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds,
-      detail: note?.detail ?? (failed ? content.slice(0, 120) : `返回 ${content.length} 字`),
+      detail: note?.detail ?? (failed ? content.slice(0, 120) : undefined),
       ms: Date.now() - callStartedAt
     });
   };
@@ -325,7 +284,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       if (claimed && input.ask?.resume) messages.push({ role: "tool", toolCallId: input.ask.resume.toolCallId, content: input.ask.resume.answer });
       rounds = restored.state.rounds;
       succeededReads = restored.state.succeededReads;
-      crossReads = restored.state.crossReads;
       externalCalls = restored.state.externalCalls;
       fileReads.push(...restored.state.fileReads);
       codeSearches.push(...restored.state.codeSearches);
@@ -388,29 +346,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     for (const call of completion.toolCalls) {
       callStartedAt = Date.now();
       input.onTrace?.({ kind: "tool", status: "start", stepId: call.id, tool: call.name, label: toolLabel(call), round: rounds });
-      if (call.name === CROSS_REPO_LINK_TOOL.name) {
-
-        const repo = readArg(call.argumentsJson, "repo");
-        const content = !input.cross?.links ? "当前没有可配对的其他仓库。"
-          : !crossNames.includes(repo) ? `未知仓库「${repo}」；可配对的其他仓库：${crossNames.join(" / ")}`
-            : input.cross.links(repo, readArg(call.argumentsJson, "filter"));
-        reply(call, content);
-        continue;
-      }
-      if (call.name === SEARCH_CODE_TOOL.name && (input.search || input.cross?.corpusOf)) {
-        const repo = readArg(call.argumentsJson, "repo");
-        const corpus = repo ? input.cross?.corpusOf?.(repo) : input.search;
-        if (!corpus) {
-
-          reply(call, repo
-            ? `仓库「${repo}」没有可检索的产物（可能还没导入完成），但可以用 read_file 带 repo="${repo}" 直接读它的文件。`
-            : "当前作用域未开放 search_code。", { ok: false });
-          continue;
-        }
+      if (call.name === SEARCH_CODE_TOOL.name && input.search) {
         input.onProgress?.({ type: "searching", query: readQueryHint(call.argumentsJson) });
-        const outcome = executeSearchCode(corpus, call.argumentsJson);
-        codeSearches.push(repo ? { ...outcome.audit, query: `${outcome.audit.query}（仓 ${repo}）` } : outcome.audit);
-        reply(call, outcome.content, { detail: `${outcome.audit.hits} 处命中` });
+        const outcome = executeSearchCode(input.search, call.argumentsJson);
+        codeSearches.push(outcome.audit);
+        reply(call, outcome.content, { detail: outcome.audit.topPaths.join("、") || (outcome.audit.hits ? "有命中" : "无命中") });
         continue;
       }
       if (call.name === SET_DIAGRAM_TOOL.name) {
@@ -432,7 +372,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         // undefined 表示没有这份技能，空串表示有技能但正文为空
         const found = body !== undefined;
         skillReads.push({ skill: file ? `${skill}/${file}` : skill, chars: body?.length ?? 0, found });
-        reply(call, found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。`, { detail: found ? `${body?.length ?? 0} 字` : "未找到", ok: found });
+        reply(call, found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${skill}」这份技能${file ? `或它目录里的 ${file}` : ""}；清单上的名字以外都不要用。`, { detail: found ? "已加载" : "未找到", ok: found });
         continue;
       }
       if (call.name === ASK_USER_TOOL_NAME) {
@@ -472,26 +412,15 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         input.onProgress?.({ type: "calling_external" });
         const outcome = await input.external.call(call.name, call.argumentsJson);
         mcpCalls.push(outcome.audit);
-        reply(call, outcome.text, { detail: `${outcome.audit.resultChars} 字`, ok: outcome.audit.ok });
+        reply(call, outcome.text, { ...(outcome.audit.masked > 0 ? { detail: "已隐去敏感内容" } : {}), ok: outcome.audit.ok });
         continue;
       }
       if (call.name !== READ_FILE_TOOL.name) {
         reply(call, `未知工具 ${call.name}；只支持 ${available}。`, { ok: false });
         continue;
       }
-      const repo = readArg(call.argumentsJson, "repo");
-      // 仓名来自模型，用 hasOwn 挡掉原型属性名
-      const roots = input.cross?.roots;
-      const root = repo ? (roots && Object.hasOwn(roots, repo) ? roots[repo] : undefined) : input.repoPath;
-      if (!root) {
-        reply(call, input.repoPath
-          ? `未知仓库「${repo}」；可访问：当前仓${crossNames.length ? ` / ${crossNames.join(" / ")}` : "（地址簿里没有其他仓，跨仓请省略 repo 参数）"}。`
-          : "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。", { ok: false });
-        continue;
-      }
-      const crossCap = input.cross?.maxCrossReads ?? DEFAULT_CROSS_READS;
-      if (repo && crossReads >= crossCap) {
-        reply(call, `跨仓读取最多 ${crossCap} 个文件，额度已用完。请基于已读到的对端内容回答，并说明哪些部分没核实。`, { ok: false });
+      if (!input.repoPath) {
+        reply(call, "这一轮没有开放文件读取，只有技能正文可取（read_skill）。请照清单取正文后直接作答。", { ok: false });
         continue;
       }
       // 读文件额度在每条调用上判一次，轮首那次只挡下一轮
@@ -499,18 +428,11 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
         reply(call, "已达到本次对话的读文件上限，请基于已有上下文直接回答。", { ok: false });
         continue;
       }
-      input.onProgress?.({ type: "reading", path: repo ? `${repo}/${readPathHint(call.argumentsJson)}` : readPathHint(call.argumentsJson) });
-      const outcome = executeReadFile(root, call.argumentsJson);
-      // file_read 审计只有一个 path 字段，跨仓读取时在前面加仓名
-      fileReads.push(repo ? { ...outcome.audit, path: `${repo}/${outcome.audit.path}` } : outcome.audit);
-      if (!outcome.audit.denied) {
-        succeededReads += 1;
-        if (repo) {
-          crossReads += 1;
-          input.cross?.onHandedOut?.(repo, outcome.audit.path);
-        }
-      }
-      reply(call, repo ? `【来自仓 ${repo}】\n${outcome.content}` : outcome.content, { detail: outcome.audit.denied ? "拒绝读取" : `${outcome.audit.lines ?? 0} 行 · ${outcome.content.length} 字`, ok: !outcome.audit.denied });
+      input.onProgress?.({ type: "reading", path: readPathHint(call.argumentsJson) });
+      const outcome = executeReadFile(input.repoPath, call.argumentsJson);
+      fileReads.push(outcome.audit);
+      if (!outcome.audit.denied) succeededReads += 1;
+      reply(call, outcome.content, { detail: outcome.audit.denied ? "拒绝读取" : outcome.audit.truncated ? "已读取 · 截断" : "已读取", ok: !outcome.audit.denied });
     }
     // 提问后本循环结束
     if (asked) break;
@@ -607,7 +529,6 @@ function toolLabel(call: LlmToolCall): string {
     case READ_SKILL_TOOL.name: return `加载技能 ${readSkillHint(call.argumentsJson)}`.trim();
     case SET_DIAGRAM_TOOL.name: return "修改图表";
     case QUERY_FACTS_TOOL.name: return "查询产物";
-    case CROSS_REPO_LINK_TOOL.name: return "配对仓库";
     case ASK_USER_TOOL_NAME: return "向你提问";
     default: return `调用 ${call.name}`;
   }
