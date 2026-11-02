@@ -226,7 +226,7 @@ export const serverEventSchema = z.object({
 });
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 
-/** 运行轨迹的一帧：只记行为与读数，不记模型正文与工具返回原文。 */
+/** 运行轨迹的一帧：行为与读数；模型回复只留截断正文，工具返回原文不记。 */
 export const agentTracePayloadSchema = z.object({
   repositoryId: z.string(),
   runId: z.string(),
@@ -238,6 +238,8 @@ export const agentTracePayloadSchema = z.object({
   status: z.enum(["start", "ok", "error", "aborted"]),
   label: z.string(),
   detail: z.string().optional(),
+  /** 模型这一轮的回复正文，截断后随轨迹展示。 */
+  reply: z.string().optional(),
   stepId: z.string().optional(),
   round: z.number().optional(),
   tool: z.string().optional(),

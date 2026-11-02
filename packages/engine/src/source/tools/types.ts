@@ -17,6 +17,8 @@ export interface ToolTraceStep {
   stepId: string;
   label: string;
   detail?: string;
+  /** 模型这一轮的回复正文；工具帧不填。 */
+  reply?: string;
   round: number;
   tool?: string;
   model?: string;

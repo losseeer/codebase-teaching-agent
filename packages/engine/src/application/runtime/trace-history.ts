@@ -1,5 +1,5 @@
 import type { AgentScope, AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
-import type { JournalEvent } from "@codebase-tutor/domain";
+import { TURN_TEXT_LIMIT, type JournalEvent } from "@codebase-tutor/domain";
 
 /** journal 回合历史：按 traceId 汇总出审计线能还原的步骤；不发模型、不改任何文件。 */
 
@@ -135,6 +135,8 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const external = num(loop?.payload.tool_external) ?? ordered.filter((event) => event.type === "mcp_call").length;
   const rounds = num(loop?.payload.tool_rounds);
   const question = clip(text(turnText?.payload.question, 2_000), 400);
+  const answer = text(turnText?.payload.answer, TURN_TEXT_LIMIT);
+  const reply = answer ? `${answer}${turnText?.payload.answer_truncated === true ? "…" : ""}` : undefined;
 
   const parts: string[] = [];
   if (generation) parts.push(generated ? "已出题" : declined ? "未出题" : "出题");
@@ -164,16 +166,17 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
     ...(provider ? { model: provider } : {}),
     at: ordered[0].at
   });
-  if (usage) {
+  if (usage || reply) {
     push({
       kind: "model",
       status: "ok",
       stepId: "journal-model",
       label: "模型回复",
+      ...(reply ? { reply } : {}),
       ...(provider ? { model: provider } : {}),
       ...(inputTokens !== undefined ? { inputTokens } : {}),
       ...(outputTokens !== undefined ? { outputTokens } : {}),
-      at: usage.at
+      at: turnText?.at ?? usage?.at ?? ordered[0].at
     });
   }
   for (const event of ordered) {

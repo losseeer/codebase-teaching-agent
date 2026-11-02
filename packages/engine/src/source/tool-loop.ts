@@ -241,6 +241,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       input.onTrace?.({
         kind: "model", status: "ok", stepId, label: "模型回复", round, model: provider.modelVersion,
         ms: Date.now() - startedAt,
+        ...(result.text ? { reply: result.text } : {}),
         ...(result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : {}),
         ...(result.finishReason ? { finishReason: result.finishReason } : {})
       });

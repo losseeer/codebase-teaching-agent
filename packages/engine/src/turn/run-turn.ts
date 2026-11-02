@@ -287,7 +287,7 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
       emit({ kind: "model", status: "error", stepId, label: "模型调用失败", round: 1, model: input.provider.modelVersion, ms: Date.now() - modelStartedAt, ...(error instanceof Error ? { detail: error.message } : {}) });
       throw error;
     }
-    emit({ kind: "model", status: "ok", stepId, label: "模型回复", round: 1, model: input.provider.modelVersion, ms: Date.now() - modelStartedAt, ...(completion.usage ? { inputTokens: completion.usage.inputTokens, outputTokens: completion.usage.outputTokens } : {}), ...(completion.finishReason ? { finishReason: completion.finishReason } : {}) });
+    emit({ kind: "model", status: "ok", stepId, label: "模型回复", round: 1, model: input.provider.modelVersion, ms: Date.now() - modelStartedAt, ...(completion.text ? { reply: completion.text } : {}), ...(completion.usage ? { inputTokens: completion.usage.inputTokens, outputTokens: completion.usage.outputTokens } : {}), ...(completion.finishReason ? { finishReason: completion.finishReason } : {}) });
     return finish({ completion, ...(completion.usage ? { usage: completion.usage } : {}), rounds: 0, fileReads: [], codeSearches: [], mcpCalls: [], skillReads: [] });
   } catch (error) {
     emit({ kind: "turn", status: input.signal?.aborted ? "aborted" : "error", label: input.signal?.aborted ? "已停止" : "回合失败", detail: error instanceof Error ? error.message : "未知错误", ms: Date.now() - startedAt });

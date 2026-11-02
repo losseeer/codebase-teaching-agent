@@ -3,6 +3,7 @@ import { externalSurfaceUseCase } from "../../../../application/use-case/integra
 import { healthUseCase, reprobeSandboxUseCase } from "../../../../application/use-case/health.js";
 import { getImportJobUseCase, forgetRepositoryUseCase, listCatalogUseCase, mountRepositoryUseCase, setWatchingUseCase, submitImportUseCase, type RepositoryFailure } from "../../../../application/use-case/repositories.js";
 import { ingestUiEventUseCase, type IngestFailure } from "../../../../application/use-case/journal-ingest.js";
+import { pickLocalDirectory } from "../../../../infrastructure/folder-picker.js";
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
@@ -62,6 +63,13 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   app.get<{ Params: { jobId: string } }>("/api/imports/:jobId", async (request, reply) => {
     const result = getImportJobUseCase(request.params.jobId);
     return result.ok ? result.value : rejectedRepo(reply, result.failure);
+  });
+
+  app.post("/api/imports/pick-directory", async (_request, reply) => {
+    const result = await pickLocalDirectory();
+    if (result.ok) return { path: result.path };
+    if (result.reason === "canceled") return { canceled: true };
+    return reply.code(result.reason === "unavailable" ? 501 : 500).send({ error: result.message ?? "目录选择失败。", reason: `picker_${result.reason}` });
   });
 
   app.post<{ Params: { repositoryId: string }; Body: { type?: unknown; payload?: unknown; sessionId?: unknown } }>("/api/repositories/:repositoryId/journal", async (request, reply) => {

@@ -630,6 +630,8 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .trace-chevron { flex: none; display: grid; place-items: center; color: var(--ink-3); transition: transform var(--t-fast); }
 .trace-chevron.open { transform: rotate(180deg); }
 .trace-step-detail { padding: 0 10px 9px 30px; font-size: var(--fs-12); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.trace-step-reply { white-space: pre-wrap; }
+.trace-step-note { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); color: var(--ink-3); font-size: var(--fs-11); }
 .trace-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
 .trace-dot.running { background: var(--accent); }
 .trace-dot.ok { background: var(--brand-600); }

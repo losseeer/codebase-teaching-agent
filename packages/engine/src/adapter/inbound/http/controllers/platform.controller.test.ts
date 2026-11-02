@@ -1,11 +1,15 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { UI_JOURNAL_EVENTS } from "@codebase-tutor/domain";
 
 import { createRouteFixture, MAIN_FILE, type RouteFixture } from "../controller-test-kit.js";
 import { isolationBackend } from "../../../outbound/sandbox/profile.js";
 import { TutorDatabase } from "../../../outbound/persistence/database.js";
+
+/** 系统目录窗口在测试里打桩：只验路由把三种结局翻成什么响应。 */
+const pickDirectory = vi.hoisted(() => vi.fn());
+vi.mock("../../../../infrastructure/folder-picker.js", () => ({ pickLocalDirectory: pickDirectory }));
 
 /** 引擎运维面路由用例：/journal 入参守卫、来源闸、监听开关、沙箱重探、非收录文件写入。 */
 const fx: RouteFixture = createRouteFixture();
@@ -126,6 +130,36 @@ describe("来源闸：默认只服务本机浏览器", () => {
       delete process.env.TUTOR_ALLOWED_ORIGINS;
     }
     expect((await fromEvil("GET", "/api/repositories")).statusCode, "清单一撤就恢复默认关").toBe(403);
+  });
+});
+
+describe("POST /api/imports/pick-directory", () => {
+  beforeEach(() => { pickDirectory.mockReset(); });
+
+  it("选中返回路径；取消不是错误", async () => {
+    pickDirectory.mockResolvedValueOnce({ ok: true, path: "/Users/me/repo" });
+    const picked = await fx.app.inject({ method: "POST", url: "/api/imports/pick-directory" });
+    expect(picked.statusCode).toBe(200);
+    expect(picked.json()).toEqual({ path: "/Users/me/repo" });
+
+    pickDirectory.mockResolvedValueOnce({ ok: false, reason: "canceled" });
+    const canceled = await fx.app.inject({ method: "POST", url: "/api/imports/pick-directory" });
+    expect(canceled.statusCode, "用户取消不是失败").toBe(200);
+    expect(canceled.json()).toEqual({ canceled: true });
+  });
+
+  it("选择窗口不可用：501 + 可读原因，界面可退回手输", async () => {
+    pickDirectory.mockResolvedValueOnce({ ok: false, reason: "unavailable", message: "这台机器没有可用的目录选择窗口，请手动输入路径。" });
+    const response = await fx.app.inject({ method: "POST", url: "/api/imports/pick-directory" });
+    expect(response.statusCode).toBe(501);
+    expect(response.json()).toMatchObject({ error: "这台机器没有可用的目录选择窗口，请手动输入路径。", reason: "picker_unavailable" });
+  });
+
+  it("选择窗口执行失败：500，不冒充取消", async () => {
+    pickDirectory.mockResolvedValueOnce({ ok: false, reason: "failed", message: "目录选择窗口打不开，可以手动输入路径。" });
+    const response = await fx.app.inject({ method: "POST", url: "/api/imports/pick-directory" });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ error: "目录选择窗口打不开，可以手动输入路径。", reason: "picker_failed" });
   });
 });
 

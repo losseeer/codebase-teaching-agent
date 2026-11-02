@@ -231,26 +231,40 @@ function RunView({ run }: { run: TraceRun }): ReactElement {
   );
 }
 
+/** 模型行折叠时先露回复的第一行，点开再看全文。 */
+function replyPreview(reply: string): string {
+  const line = reply.split("\n").map((item) => item.trim()).find(Boolean) ?? "";
+  return line.length > 60 ? `${line.slice(0, 60)}…` : line;
+}
+
 function TraceRow({ step }: { step: TraceStep }): ReactElement {
   const [open, setOpen] = useState(false);
+  const reply = step.reply?.trim() ? step.reply : undefined;
   const detail = step.detail;
+  const expandable = Boolean(reply || detail);
+  const label = step.kind === "model" && step.status === "ok" && reply ? replyPreview(reply) : step.label;
   const content = (
     <>
       <StepStatus step={step} />
       <span className={`trace-step-kind ${step.kind}`}>{step.kind === "turn" ? "回合" : step.kind === "model" ? "模型" : "工具"}</span>
-      <span className="trace-step-label" title={step.label}>{step.label}</span>
+      <span className="trace-step-label" title={step.label}>{label}</span>
       <span className="trace-step-meta">{stepMeta(step)}</span>
-      {detail ? <span className={`trace-chevron${open ? " open" : ""}`}><Icon name="chevronDown" size={12} /></span> : null}
+      {expandable ? <span className={`trace-chevron${open ? " open" : ""}`}><Icon name="chevronDown" size={12} /></span> : null}
     </>
   );
   return (
     <div className="trace-step">
-      {detail ? (
+      {expandable ? (
         <button type="button" className="trace-step-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{content}</button>
       ) : (
         <div className="trace-step-btn static">{content}</div>
       )}
-      {detail && open ? <div className="trace-step-detail">{detail}</div> : null}
+      {expandable && open ? (
+        <div className="trace-step-detail">
+          {reply ? <div className="trace-step-reply">{reply}</div> : null}
+          {detail ? <div className={reply ? "trace-step-note" : undefined}>{detail}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

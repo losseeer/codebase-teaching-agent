@@ -39,6 +39,8 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [commentMode, setCommentMode] = useState(false);
   const [job, setJob] = useState<ImportJob | null>(null);
   const [error, setError] = useState("");
+  /** 系统目录窗口开着：避免连点开多个窗口。 */
+  const [picking, setPicking] = useState(false);
   /** 引擎里已无此任务：停止显示进度，如实报读不到。 */
   const [orphaned, setOrphaned] = useState(false);
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
@@ -98,6 +100,21 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
 
   const submit = async (): Promise<void> => startImport(path);
 
+  /** 系统窗口只回路径；取消不报错，手动输入仍可用。 */
+  const chooseDirectory = async (): Promise<void> => {
+    if (picking || jobActive) return;
+    setPicking(true);
+    setError("");
+    try {
+      const picked = await api.pickDirectory();
+      if (picked.path) setPath(picked.path);
+    } catch (reason) {
+      setError(failureText("选择目录失败", reason));
+    } finally {
+      setPicking(false);
+    }
+  };
+
   const activeIndex = job ? PHASES.findIndex((phase) => phase.key === job.phase) : -1;
   const failed = job?.phase === "failed";
 
@@ -119,7 +136,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
         <div className="import-wrap">
           <div className="import-hero">
             <h1>导入一个代码仓库</h1>
-            <p title="分析结果写在仓库内的 .tutor/，随仓库走">输入本机仓库的绝对路径，分析结果只写进仓库内的 <code className="mono">.tutor/</code>。</p>
+            <p title="分析结果写在仓库内的 .tutor/，随仓库走">选择或输入本机仓库的绝对路径，分析结果只写进仓库内的 <code className="mono">.tutor/</code>。</p>
           </div>
 
           <div className="card card-pad col gap-4">
@@ -127,7 +144,10 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
               <label htmlFor="repo-path">仓库绝对路径</label>
               <div className="import-path-row">
                 <input id="repo-path" className="text-input" value={path} onChange={(event) => setPath(event.target.value)} placeholder="/absolute/path/to/repo" spellCheck={false} />
-                <button type="button" className="btn btn-primary" onClick={submit} disabled={!path.trim() || jobActive}>
+                <button type="button" className="btn btn-ghost" onClick={() => void chooseDirectory()} disabled={picking || jobActive} title="在系统窗口里选择本地目录">
+                  <Icon name="folder" />{picking ? "选择中…" : "选择目录"}
+                </button>
+                <button type="button" className="btn btn-primary" onClick={submit} disabled={!path.trim() || jobActive || picking}>
                   <Icon name="import" />{jobActive ? "导入中" : "开始导入"}
                 </button>
               </div>

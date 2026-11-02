@@ -24,8 +24,9 @@
 .import-wrap { max-width: 880px; width: 100%; margin: 0 auto; padding: var(--sp-8) var(--sp-5) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-5); }
 .import-hero h1 { font-size: var(--fs-26); font-weight: 700; letter-spacing: -0.01em; margin-bottom: var(--sp-2); }
 .import-hero p { color: var(--ink-2); line-height: 1.6; max-width: 560px; margin: 0; }
-.import-path-row { display: flex; gap: var(--sp-2); }
-.import-path-row .text-input { font-family: var(--font-mono); font-size: var(--fs-13); }
+.import-path-row { display: flex; gap: var(--sp-2); align-items: center; }
+.import-path-row .text-input { flex: 1; min-width: 0; width: auto; font-family: var(--font-mono); font-size: var(--fs-13); }
+.import-path-row .btn { flex: none; }
 .import-opts { display: flex; align-items: center; gap: var(--sp-3); }
 .import-opts label { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); color: var(--ink-2); cursor: pointer; }
 .import-opts .badge { flex: 0 0 auto; }
@@ -513,6 +514,9 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
   /* 三个工作区的栏宽定义都在本文件，窄屏折成一栏也必须写在这里才压得住（global.css 在本文件之前加载）。 */
   .page-map, .page-teach, .page-practice { grid-template-columns: minmax(0, 1fr); }
   .import-wrap, .insights-wrap, .practice-wrap { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+  .import-path-row { flex-wrap: wrap; }
+  .import-path-row .text-input { flex-basis: 100%; }
+  .import-path-row .btn { flex: 1; }
   .dg-toolbar { padding: 8px 10px; }
   .dg-overlay { left: 8px; bottom: 8px; }
 }

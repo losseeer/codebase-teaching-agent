@@ -244,6 +244,8 @@ export const api = {
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
+  /** 打开本机系统的目录选择窗口；取消不是错误。 */
+  pickDirectory: () => request<{ path?: string; canceled?: boolean }>("/api/imports/pick-directory", { method: "POST" }),
   getImport: (jobId: string) => checked<ImportJob>("import", importJobSchema, `/api/imports/${jobId}`),
   /** 地址簿：只列不读产物。 */
   listRepositories: () => checked("repositories", z.object({ repositories: z.array(repositoryCatalogEntrySchema) }), "/api/repositories"),

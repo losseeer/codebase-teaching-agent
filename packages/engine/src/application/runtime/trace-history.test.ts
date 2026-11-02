@@ -36,7 +36,7 @@ describe("journal 回合历史", () => {
     const input = run.steps.find((step) => step.kind === "turn");
     expect(input).toMatchObject({ label: "这个模块先看哪里？", detail: "这个模块先看哪里？", status: "ok", model: "model:v1" });
     const model = run.steps.find((step) => step.kind === "model");
-    expect(model).toMatchObject({ inputTokens: 100, outputTokens: 20, model: "model:v1" });
+    expect(model).toMatchObject({ inputTokens: 100, outputTokens: 20, model: "model:v1", reply: "先看 main.ts。" });
 
     const tools = run.steps.filter((step) => step.kind === "tool");
     expect(tools.map((step) => step.tool)).toEqual(["ask_user", "read_file", "search_code", "read_skill", "mcp__fixture__echo"]);
