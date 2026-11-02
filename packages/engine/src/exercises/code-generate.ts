@@ -7,6 +7,7 @@ import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domai
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
+import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { completeWithReadTool, toolLoopAuditsOf, withSkillsBrief } from "../source/tool-loop.js";
 import type { SkillReadRecord } from "../source/tools/types.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
@@ -337,14 +338,19 @@ async function generateWithRepair(input: {
   try {
     first = await requestProposal(input);
   } catch (error) {
+    if (isLlmAborted(error, input.faces?.signal)) throw error;
     return providerFailure(error);
   }
   const result = await input.finish(first);
+  if (input.faces?.signal?.aborted) throw new LlmAbortedError();
   if (result.ok || result.stage !== "harness_validation") return result;
   try {
     const repaired = await requestProposal({ ...input, user: repairUser(input.user, first.text, result) });
-    return combineGeneration(result, await input.finish(repaired));
+    const combined = combineGeneration(result, await input.finish(repaired));
+    if (input.faces?.signal?.aborted) throw new LlmAbortedError();
+    return combined;
   } catch (error) {
+    if (isLlmAborted(error, input.faces?.signal)) throw error;
     return combineGeneration(result, providerFailure(error));
   }
 }
@@ -379,7 +385,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     temperature: 0.4,
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 
@@ -403,7 +409,7 @@ export async function generateCodeExerciseFromReference(input: {
     temperature: 0.4,
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 
@@ -419,6 +425,8 @@ async function finishProposal(
     solutionBody?: string;
     refusal: string;
     onProgress?: ExerciseProgressSink;
+    /** 用户取消时不再开新的沙箱运行。 */
+    signal?: AbortSignal;
   }
 ): Promise<CodeGeneration> {
   const audits = { usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
@@ -438,6 +446,7 @@ async function finishProposal(
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
+    if (context.signal?.aborted) throw new LlmAbortedError();
     context.onProgress?.({ stage: "validating" });
     validation = await validateHarness(proposal, context.repositoryPath);
   } catch (error) {

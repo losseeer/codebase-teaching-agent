@@ -107,6 +107,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [elapsed, setElapsed] = useState(0);
   /** 换主题或题型就让在途那趟作废。 */
   const generationToken = useRef(0);
+  /** 在途出题：取消时按 jobId 让引擎停下，并断开前端等待。 */
+  const activeGeneration = useRef<{ jobId: string; controller: AbortController } | null>(null);
   const [error, setError] = useState("");
   const [generateReason, setGenerateReason] = useState<ExerciseDeclineCode | null>(null);
   /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
@@ -158,6 +160,18 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   };
   useEffect(() => { if (everVisible) refreshBank(); }, [repositoryId, everVisible]);
 
+  /** 取消在途出题：引擎按 jobId 停，前端同时断开等待；结果按新 token 丢弃。 */
+  const cancelGenerate = (): void => {
+    const active = activeGeneration.current;
+    if (!active) return;
+    activeGeneration.current = null;
+    generationToken.current += 1;
+    void api.cancelExerciseGeneration(repositoryId, active.jobId).catch(() => { /* 已结束就没事 */ });
+    active.controller.abort();
+    setLoading(false); setGenerating(false); setPendingTheme(""); setGenTrail([]);
+    showToast("已取消出题");
+  };
+
   // 出题：题型决定链路，主题只筛目标单元；「换一题」= 换目标或换 nonce，旧题留在题库里。
   const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
@@ -171,6 +185,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setLoading(true); setGenerating(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
     // 阶段帧走全局事件流，按 jobId 认领这一趟
     const jobId = crypto.randomUUID();
+    const controller = new AbortController();
+    activeGeneration.current = { jobId, controller };
     setGenTrail([]);
     const stopProgress = subscribeServerEvents((event) => {
       if (event.type !== "exercise.progress") return;
@@ -191,7 +207,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         ...(targetUnitId ? { targetUnitId } : {}),
         ...(variantNonce !== undefined ? { variantNonce } : {}),
         jobId
-      });
+      }, controller.signal);
       refreshBank();
       // 途中换了主题或题型：这题已经进题库，但不摆到当前这一栏
       if (token !== generationToken.current) return;
@@ -207,6 +223,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
     } finally {
+      if (activeGeneration.current?.jobId === jobId) activeGeneration.current = null;
       stopProgress();
       setLoading(false); setGenerating(false); setPendingTheme(""); setGenTrail([]);
     }
@@ -481,6 +498,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="gen-progress" title={genCurrent?.detail}>
                 <span className="spin"><Icon name="rotate" size={12} /></span>
                 <span className="fs-11">{generationStageLabel(genCurrent?.stage)} · {elapsed} 秒</span>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={cancelGenerate}>取消</button>
               </div>
             ) : null}
 
@@ -488,7 +506,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="card card-pad col">
                 <div className="row between">
                   <div className="section-title">正在出题</div>
-                  <span className="fs-11 faint" title="从点下生成开始计时">{`已用 ${elapsed} 秒`}</span>
+                  <div className="row">
+                    <span className="fs-11 faint" title="从点下生成开始计时">{`已用 ${elapsed} 秒`}</span>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={cancelGenerate}>取消</button>
+                  </div>
                 </div>
                 <div className="phase active" title={exerciseType === "design" ? "设计题会先在沙箱里自证再下发" : "按代码结构与主题出题"}>
                   <span className="phase-dot"><span className="spin"><Icon name="rotate" size={12} /></span></span>

@@ -19,8 +19,8 @@ const SCOPE_SCENES: Record<AgentScope, readonly string[]> = {
   practice: ["practice.chat", "practice.generate"]
 };
 
-/** 出题没有回合文本，靠这两类事件认成一次运行。 */
-const GENERATION_EVENTS = new Set(["exercise_generated", "exercise_declined"]);
+/** 出题没有回合文本，靠这三类事件认成一次运行。 */
+const GENERATION_EVENTS = new Set(["exercise_generated", "exercise_declined", "exercise_aborted"]);
 
 type HistoryStep = Omit<AgentTracePayload, "repositoryId" | "runId" | "scene" | "at" | "seq">;
 
@@ -118,12 +118,13 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const generation = scene === "practice.generate";
   const generated = ordered.find((event) => event.type === "exercise_generated");
   const declined = ordered.find((event) => event.type === "exercise_declined");
+  const canceled = ordered.find((event) => event.type === "exercise_aborted");
   const turnText = ordered.find((event) => event.type === "turn_text");
   const loop = [...ordered].reverse().find((event) => event.type === "loop_round");
   const usage = [...ordered].reverse().find((event) => event.type === "token_usage");
   const invariant = ordered.find((event) => event.type === "turn_invariant" && Boolean(event.payload.failed));
   const stopped = loop?.payload.stopped_by;
-  const aborted = ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted" || stopped === "budget" || stopped === "rounds" || stopped === "reads";
+  const aborted = Boolean(canceled) || ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted" || stopped === "budget" || stopped === "rounds" || stopped === "reads";
   const status: TraceHistoryRun["status"] = aborted ? "aborted" : declined || loop?.payload.outcome === "failed" ? "error" : "ok";
   const threadId = ordered.find((event) => event.sessionId)?.sessionId;
   const inputTokens = num(usage?.payload.input_tokens);
@@ -136,10 +137,28 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const rounds = num(loop?.payload.tool_rounds);
   const question = clip(text(turnText?.payload.question, 2_000), 400);
   const answer = text(turnText?.payload.answer, TURN_TEXT_LIMIT);
-  const reply = answer ? `${answer}${turnText?.payload.answer_truncated === true ? "…" : ""}` : undefined;
+  // 对话回合只有最终答复；出题按每次模型调用各回放一条，中间回合也看得到
+  const replayed: { reply?: string; detail?: string; finishReason?: string; at: string }[] = answer
+    ? [{ reply: `${answer}${turnText?.payload.answer_truncated === true ? "…" : ""}`, at: turnText?.at ?? ordered[0].at }]
+    : ordered
+        .filter((event) => event.type === "exercise_model_reply")
+        .map((event) => {
+          const reply = text(event.payload.reply, TURN_TEXT_LIMIT);
+          const detail = text(event.payload.detail, 600);
+          const finishReason = typeof event.payload.finish_reason === "string" ? event.payload.finish_reason : undefined;
+          return {
+            ...(reply ? { reply: `${reply}${event.payload.reply_truncated === true ? "…" : ""}` } : {}),
+            ...(detail ? { detail: `${detail}${event.payload.detail_truncated === true ? "…" : ""}` } : {}),
+            ...(finishReason ? { finishReason } : {}),
+            at: event.at
+          };
+        })
+        .filter((item) => item.reply || item.detail);
+  // token 是整趟的合计；只有一条模型回合时才挂在它上面，多条时不冒充单次读数
+  const showTokens = replayed.length <= 1;
 
   const parts: string[] = [];
-  if (generation) parts.push(generated ? "已出题" : declined ? "未出题" : "出题");
+  if (generation) parts.push(canceled ? "已取消出题" : generated ? "已出题" : declined ? "未出题" : "出题");
   if (rounds) parts.push(`${rounds} 轮工具`);
   if (reads) parts.push(`读 ${reads} 个文件`);
   if (searches) parts.push(`检索 ${searches} 次`);
@@ -166,19 +185,22 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
     ...(provider ? { model: provider } : {}),
     at: ordered[0].at
   });
-  if (usage || reply) {
+  const modelSteps = replayed.length ? replayed : usage ? [{ at: usage.at }] : [];
+  modelSteps.forEach((item, index) => {
     push({
       kind: "model",
       status: "ok",
-      stepId: "journal-model",
-      label: "模型回复",
-      ...(reply ? { reply } : {}),
+      stepId: replayed.length ? `journal-model-${index + 1}` : "journal-model",
+      label: item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
+      ...(item.reply ? { reply: item.reply } : {}),
+      ...(item.detail ? { detail: item.detail } : {}),
+      ...(item.finishReason ? { finishReason: item.finishReason } : {}),
       ...(provider ? { model: provider } : {}),
-      ...(inputTokens !== undefined ? { inputTokens } : {}),
-      ...(outputTokens !== undefined ? { outputTokens } : {}),
-      at: turnText?.at ?? usage?.at ?? ordered[0].at
+      ...(showTokens && inputTokens !== undefined ? { inputTokens } : {}),
+      ...(showTokens && outputTokens !== undefined ? { outputTokens } : {}),
+      at: item.at
     });
-  }
+  });
   for (const event of ordered) {
     const step = toolStep(event);
     if (step) push({ ...step, at: event.at });

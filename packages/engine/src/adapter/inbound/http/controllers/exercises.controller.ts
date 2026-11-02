@@ -1,6 +1,6 @@
 import type { ExerciseAnswer, ExerciseKind, ExerciseType } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
-import { answerExerciseUseCase, deleteExerciseUseCase, explainExerciseUseCase, listExercisesUseCase, nextExerciseUseCase, type ExerciseFailure } from "../../../../application/use-case/exercises.js";
+import { answerExerciseUseCase, cancelExerciseGenerationUseCase, deleteExerciseUseCase, explainExerciseUseCase, listExercisesUseCase, nextExerciseUseCase, type ExerciseFailure } from "../../../../application/use-case/exercises.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -11,6 +11,7 @@ const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply =
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
     case "tag-required": return reply.code(400).send({ error: "出题需要先填主题名称" });
     case "kind-unsupported": return reply.code(400).send({ error: "不支持的练习题型" });
+    case "aborted": return reply.code(499).send({ error: "出题已取消" });
     case "declined": return reply.code(422).send({ error: failure.message || failure.fallback, ...(failure.code ? { code: failure.code } : {}) });
   }
 };
@@ -30,6 +31,10 @@ export function registerExerciseRoutes(app: FastifyInstance): void {
     const body = request.body ?? {};
     const result = await nextExerciseUseCase(request.params.repositoryId, { kind: body.kind, type: body.type, targetUnitId: body.targetUnitId, tag: body.tag, tagId: body.tagId, variantNonce: body.variantNonce, jobId: typeof body.jobId === "string" ? body.jobId : undefined });
     return result.ok ? reply.code(201).send(result.value) : rejected(reply, result.failure);
+  });
+
+  app.post<{ Params: { repositoryId: string; jobId: string } }>("/api/repositories/:repositoryId/exercises/:jobId/cancel", async (request, reply) => {
+    return reply.send(cancelExerciseGenerationUseCase(request.params.repositoryId, request.params.jobId));
   });
 
   app.post<{ Params: { repositoryId: string; exerciseId: string }; Body: ExerciseAnswer }>("/api/repositories/:repositoryId/exercises/:exerciseId/answer", async (request, reply) => {

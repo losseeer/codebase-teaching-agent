@@ -1,8 +1,9 @@
 import type { AgentScope } from "@codebase-tutor/contract";
-import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
+import type { LlmCompletion, LlmCompletionInput, LlmMessage, LlmProvider, LlmToolCall, LlmUsage } from "../application/port/llm-provider.js";
 import { LlmAbortedError, isLlmAborted } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { hash } from "@codebase-tutor/platform";
+import { maskSecrets } from "@codebase-tutor/domain";
 import type { McpCallAudit } from "@codebase-tutor/domain";
 import type { FileReadRecord } from "./read-file.js";
 import type { CodeSearchRecord, SearchCorpus } from "./search-code.js";
@@ -84,6 +85,8 @@ export interface ToolLoopAudits {
   rounds: number;
   /** 抛出前已累计的 token 用量。 */
   usage?: LlmUsage;
+  /** 这一趟的场景标签，供中止后的记账落对 scene。 */
+  scene?: string;
 }
 
 const auditsKey = Symbol("codebaseTutor.toolLoopAudits");
@@ -159,6 +162,15 @@ export const DEFAULT_TOOL_ROUNDS = 100;
 export const DEFAULT_FILE_READS = 100;
 const DEFAULT_EXTERNAL_CALLS = 100;
 
+/** 模型只发工具调用时没有正文：把这次调用摊开，轨迹里能核对它要做什么。 */
+function callsDetail(calls: LlmToolCall[]): string {
+  const lines = calls.slice(0, 5).map((call) => {
+    const args = maskSecrets(call.argumentsJson).text.replace(/\s+/g, " ").trim();
+    return `${call.name} ${args.length > 160 ? `${args.slice(0, 160)}…` : args}`.trim();
+  });
+  return [`本轮调用 ${calls.length} 个工具`, ...lines, ...(calls.length > 5 ? [`…另有 ${calls.length - 5} 个`] : [])].join("\n");
+}
+
 export async function completeWithReadTool(input: ReadToolLoopInput): Promise<ReadToolLoopResult> {
   const { provider, maxTokens, temperature } = input;
   const maxRounds = input.maxRounds ?? DEFAULT_TOOL_ROUNDS;
@@ -178,7 +190,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   let askClaimed: AskClaimAudit | undefined;
   let interrupted: TurnInterrupt | undefined;
   let usage: LlmUsage | undefined;
-  const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage });
+  const audits = (): ToolLoopAudits => ({ fileReads, codeSearches, skillReads, mcpCalls, rounds, usage, scene: input.scene });
   const snapshot = (): TurnLoopState => ({ messages, rounds, succeededReads, externalCalls, fileReads, codeSearches, skillReads, mcpCalls });
 
   const baseContext: ToolContext = {
@@ -238,10 +250,12 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     const startedAt = Date.now();
     try {
       const result = await provider.complete(args);
+      const calls = result.toolCalls ?? [];
       input.onTrace?.({
-        kind: "model", status: "ok", stepId, label: "模型回复", round, model: provider.modelVersion,
+        kind: "model", status: "ok", stepId, label: result.text ? "模型回复" : calls.length ? "调用工具" : "模型回复", round, model: provider.modelVersion,
         ms: Date.now() - startedAt,
         ...(result.text ? { reply: result.text } : {}),
+        ...(calls.length ? { detail: callsDetail(calls) } : {}),
         ...(result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : {}),
         ...(result.finishReason ? { finishReason: result.finishReason } : {})
       });

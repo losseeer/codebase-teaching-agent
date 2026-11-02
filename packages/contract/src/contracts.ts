@@ -84,6 +84,15 @@ export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 export const chatScopeSchema = z.enum(["teach", "map", "practice"]);
 export type ChatScope = z.infer<typeof chatScopeSchema>;
 
+/** 新会话标题取首句前几个字。 */
+export const THREAD_TITLE_CHARS = 5;
+
+/** 首句按码点截断成标题；空白归一，空输入回空串。 */
+export function threadTitleFromQuestion(question: string): string {
+  const line = question.replace(/\s+/g, " ").trim();
+  return [...line].slice(0, THREAD_TITLE_CHARS).join("");
+}
+
 /** 运行时判断 scope 取值合法；ChatScope 类型只管编译期。 */
 export function isChatScope(value: unknown): value is ChatScope {
   return chatScopeSchema.safeParse(value).success;

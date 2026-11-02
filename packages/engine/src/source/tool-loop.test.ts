@@ -91,7 +91,12 @@ describe("completeWithReadTool", () => {
     expect(tool[0].label).toContain("read-file.ts");
     expect(tool[1].detail).toBe("已读取");
     expect(tool[1].detail, "轨迹只给状态，不把读到的源码正文带出去").not.toContain("export");
-    expect(steps.filter((step) => step.kind === "model" && step.status === "ok").at(-1)?.reply).toBe("答完了。");
+    const models = steps.filter((step) => step.kind === "model" && step.status === "ok");
+    expect(models.at(0)).toMatchObject({ label: "调用工具", finishReason: "tool_calls" });
+    expect(models.at(0)?.reply).toBeUndefined();
+    expect(models.at(0)?.detail).toContain("read_file");
+    expect(models.at(0)?.detail).toContain("read-file.ts");
+    expect(models.at(-1)?.reply).toBe("答完了。");
   });
 
   it("累计文件数用尽时同样收尾；未知工具回喂明确提示", async () => {

@@ -231,9 +231,29 @@ function RunView({ run }: { run: TraceRun }): ReactElement {
   );
 }
 
-/** 模型行折叠时先露回复的第一行，点开再看全文。 */
+/** 模型行折叠时先露回复的第一行；出题的 JSON 回复取标题。 */
 function replyPreview(reply: string): string {
-  const line = reply.split("\n").map((item) => item.trim()).find(Boolean) ?? "";
+  const text = reply.trim();
+  const unfenced = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  try {
+    const parsed = JSON.parse(unfenced) as { title?: unknown } | null;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+      return title ? `出题：${title.slice(0, 40)}` : "（JSON 输出）";
+    }
+  } catch {
+    // 截断的 JSON 解析不了：标题通常在正文前段，单独抽出来当预览
+    const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(unfenced)?.[1];
+    if (title) {
+      try {
+        return `出题：${(JSON.parse(`"${title}"`) as string).slice(0, 40)}`;
+      } catch {
+        return `出题：${title.slice(0, 40)}`;
+      }
+    }
+    if (/^[{[]/.test(unfenced)) return "（JSON 输出，已截断）";
+  }
+  const line = text.split("\n").map((item) => item.trim()).find(Boolean) ?? "";
   return line.length > 60 ? `${line.slice(0, 60)}…` : line;
 }
 

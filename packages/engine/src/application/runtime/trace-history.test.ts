@@ -79,12 +79,14 @@ describe("journal 回合历史", () => {
     const generated = buildTraceHistory([
       ev("file_read", "g1", "2026-11-02T03:05:01.000Z", { path: "src/a.ts", lines: 10, truncated: false, denied: false }),
       ev("token_usage", "g1", "2026-11-02T03:05:02.000Z", { scene: "exercise_generate_code", input_tokens: 30, output_tokens: 10, provider: "model:v1" }),
-      ev("exercise_generated", "g1", "2026-11-02T03:05:03.000Z", { family: "code", kind: "patch_edit", source: "llm", target_unit: "unit-1" })
+      ev("exercise_model_reply", "g1", "2026-11-02T03:05:03.000Z", { scene: "practice.generate", reply: "{\"title\":\"模型出的题\"}", reply_truncated: false }),
+      ev("exercise_generated", "g1", "2026-11-02T03:05:04.000Z", { family: "code", kind: "patch_edit", source: "llm", target_unit: "unit-1" })
     ], "repo", 10).runs[0];
     expect(generated).toMatchObject({ runId: "g1", scene: "practice.generate", status: "ok" });
     expect(generated.summary).toContain("已出题");
     expect(generated.summary).toContain("输入 30 / 输出 10");
     expect(generated.steps.find((step) => step.kind === "turn")?.label).toBe("出题");
+    expect(generated.steps.find((step) => step.kind === "model")?.reply).toContain("模型出的题");
     expect(generated.steps.find((step) => step.tool === "read_file")).toBeDefined();
 
     const declined = buildTraceHistory([
@@ -93,6 +95,44 @@ describe("journal 回合历史", () => {
     expect(declined).toMatchObject({ runId: "g2", scene: "practice.generate", status: "error" });
     expect(declined.summary).toContain("未出题");
     expect(declined.steps.find((step) => step.kind === "turn")?.detail).toContain("操作系统");
+  });
+
+  it("出题的多条模型回复逐条回放，不合并成最后一条", () => {
+    const run = buildTraceHistory([
+      ev("exercise_model_reply", "g3", "2026-11-02T03:08:01.000Z", { scene: "practice.generate", attempt: 1, step_id: "m1", round: 1, reply: "先检索注册点", reply_truncated: false }),
+      ev("token_usage", "g3", "2026-11-02T03:08:02.000Z", { scene: "exercise_llm_generate", input_tokens: 50, output_tokens: 20, provider: "model:v1" }),
+      ev("exercise_model_reply", "g3", "2026-11-02T03:08:03.000Z", { scene: "practice.generate", attempt: 1, step_id: "m2", round: 2, reply: "再修一处锚点", reply_truncated: false }),
+      ev("exercise_generated", "g3", "2026-11-02T03:08:04.000Z", { family: "llm", source: "llm", target_unit: "unit-1" })
+    ], "repo", 10).runs[0];
+    const models = run.steps.filter((step) => step.kind === "model");
+    expect(models.map((step) => step.reply)).toEqual(["先检索注册点", "再修一处锚点"]);
+    expect(models.map((step) => step.stepId)).toEqual(["journal-model-1", "journal-model-2"]);
+    expect(models.every((step) => step.inputTokens === undefined && step.outputTokens === undefined)).toBe(true);
+    expect(run.summary).toContain("输入 50 / 输出 20");
+  });
+
+  it("出题只有工具调用的回合也在历史里留行，并标明调用了什么", () => {
+    const run = buildTraceHistory([
+      ev("exercise_model_reply", "g4", "2026-11-02T03:09:01.000Z", { scene: "practice.generate", attempt: 1, step_id: "m1", round: 1, detail: "本轮调用 1 个工具\nread_skill {\"name\":\"exercise-code-concepts\"}", detail_truncated: false, finish_reason: "tool_calls" }),
+      ev("exercise_model_reply", "g4", "2026-11-02T03:09:02.000Z", { scene: "practice.generate", attempt: 1, step_id: "m2", round: 2, reply: "{\"title\":\"模型出的题\"}", reply_truncated: false, finish_reason: "stop" }),
+      ev("exercise_generated", "g4", "2026-11-02T03:09:03.000Z", { family: "llm", source: "llm", target_unit: "unit-1" })
+    ], "repo", 10).runs[0];
+    const models = run.steps.filter((step) => step.kind === "model");
+    expect(models.map((step) => step.label)).toEqual(["调用工具", "模型回复"]);
+    expect(models[0]).toMatchObject({ finishReason: "tool_calls" });
+    expect(models[0].reply).toBeUndefined();
+    expect(models[0].detail).toContain("read_skill");
+    expect(models[1].reply).toContain("模型出的题");
+  });
+
+  it("出题取消在历史里标提前结束，已发生的模型回合保留", () => {
+    const run = buildTraceHistory([
+      ev("exercise_model_reply", "g5", "2026-11-02T03:10:01.000Z", { scene: "practice.generate", attempt: 1, step_id: "m1", round: 1, reply: "查到了一半的素材", reply_truncated: false, finish_reason: "stop" }),
+      ev("exercise_aborted", "g5", "2026-11-02T03:10:02.000Z", { scene: "practice.generate", reason: "user_cancel", waited_ms: 1200 })
+    ], "repo", 10).runs[0];
+    expect(run).toMatchObject({ runId: "g5", scene: "practice.generate", status: "aborted" });
+    expect(run.summary).toContain("已取消出题");
+    expect(run.steps.find((step) => step.kind === "model")?.reply).toContain("查到了一半的素材");
   });
 
   it("历史按工作区过滤：练习区同时给出题与答疑", () => {

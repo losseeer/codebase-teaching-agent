@@ -1,5 +1,6 @@
 import { TutorSession, TutorSettings, defaultTutorSettings } from "@codebase-tutor/domain";
 import type { ChatThread, ScopedStreamProgress } from "@codebase-tutor/contract";
+import { threadTitleFromQuestion } from "@codebase-tutor/contract";
 import type { Exercise } from "@codebase-tutor/domain";
 
 import {useEffect, useRef, useState } from "react";
@@ -383,10 +384,10 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return { threads: list, current };
   };
 
-  /** 建线程（引擎发 id，标题取首问）；仅在确有第一句话时调用。 */
+  /** 建线程（引擎发 id，标题取首问前 5 字）；仅在确有第一句话时调用。 */
   const createThreadFor = async (scope: "map" | "practice", firstQuestion?: string): Promise<string | null> => {
     if (!repositoryId) return null;
-    const title = firstQuestion?.trim().slice(0, 60) || undefined;
+    const title = firstQuestion ? threadTitleFromQuestion(firstQuestion) : "";
     try {
       const { thread } = await api.createThread(repositoryId, {
         scope: CHAT_SCOPE[scope],

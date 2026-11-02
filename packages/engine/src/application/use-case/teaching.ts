@@ -1,3 +1,4 @@
+import { threadTitleFromQuestion } from "@codebase-tutor/contract";
 import type { FadedState, TutorMessage, TutorSettings, TutorSession } from "@codebase-tutor/domain";
 import { defaultTutorSettings, policyFor, validateSettings } from "@codebase-tutor/domain";
 
@@ -108,6 +109,12 @@ export function prepareTeachingTurn(sessionId: string, input: { content?: string
   const repository = mounted.repository;
   const scope = parseScopeRef(current.scopeRef);
   if (!scope || !scopeAvailable(scope, repository.index)) return fail("scope-gone");
+  // 新会话的标题先取教学域；首问落下后改成用户原话的前 5 字
+  if (!current.messages.length) {
+    const thread = repository.chatStore.getThread(sessionId);
+    const title = threadTitleFromQuestion(question);
+    if (thread && title && thread.title === scopeTitle(scope)) repository.chatStore.renameThread(sessionId, title);
+  }
   const settings = validateSettings({ ...current.settings, ...input.settings });
   return {
     ok: true,

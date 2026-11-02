@@ -5,6 +5,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 import { defineAnalysisStep } from "../analysis-step.js";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
+import { isLlmAborted } from "../application/port/llm-provider.js";
 import { completeWithReadTool, withSkillsBrief } from "../source/tool-loop.js";
 import type { SkillReadRecord } from "../source/tools/types.js";
 import type { FileReadRecord } from "../source/read-file.js";
@@ -59,7 +60,7 @@ function refineSystemPrompt(kind: ExerciseKind): string {
   ].join("\n");
 }
 
-export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider): Promise<RefinedExercise> {
+export async function refineExerciseWithLlm(repositoryPath: string, exercise: Exercise, provider: LlmProvider, signal?: AbortSignal): Promise<RefinedExercise> {
   try {
     const excerpt = sourceExcerpt(repositoryPath, exercise);
     // 没有摘录就不改写题面
@@ -78,11 +79,12 @@ export async function refineExerciseWithLlm(repositoryPath: string, exercise: Ex
     });
 
     recordEgress({ repositoryPath, scene: "practice.polish", sources: [excerptSource(excerpt)] });
-    const response = await provider.complete({ system, user, temperature: 0.3, scene: "practice.polish" });
+    const response = await provider.complete({ system, user, temperature: 0.3, scene: "practice.polish", ...(signal ? { signal } : {}) });
     const refined = parseRefinement(response.text, exercise);
     if (!refined) return { exercise, polished: false, polishFailure: "unparsable" };
     return { exercise: refined, usage: response.usage, polished: true };
-  } catch {
+  } catch (error) {
+    if (isLlmAborted(error, signal)) throw error;
     return { exercise, polished: false, polishFailure: "provider_error" };
   }
 }

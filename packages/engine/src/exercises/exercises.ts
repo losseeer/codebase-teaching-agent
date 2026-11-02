@@ -218,7 +218,7 @@ export class ExerciseService {
     let polishFailure: string | null = null;
     if (provider) {
       progress?.({ stage: "polishing" });
-      const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider);
+      const refined = await refineExerciseWithLlm(repository.path, stored.exercise, provider, faces?.signal);
       polish = refined.polished ? "llm" : "failed";
       polishFailure = refined.polishFailure ?? null;
       stored = { ...stored, exercise: refined.exercise, polish, polishFailure };
@@ -230,6 +230,7 @@ export class ExerciseService {
         scene: "exercise_generate"
       });
     }
+    if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, target.kind, target.id, stored);
     repository.ports.audit.append("exercise_generated", { source: "rule", kind: stored.exercise.kind, target_unit: stored.exercise.targetUnitId, polish, polish_failure: polishFailure });
     return stored.exercise;
@@ -256,6 +257,7 @@ export class ExerciseService {
     const unit = target.value as ImplementationUnit;
     const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces, onProgress: progress });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : unit.symbol.language, provider);
+    if (faces?.signal?.aborted) throw new Error("出题已取消");
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", "", generation.reason, "代码题生成失败，请重试。");
     }
@@ -386,6 +388,7 @@ export class ExerciseService {
       polish: "llm",
       polishFailure: null
     };
+    if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
     repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
     // 锚点的 why 只进 journal：一条一个，记下取用了它的什么，供事后判强弱
@@ -474,6 +477,7 @@ export class ExerciseService {
       createdAt: new Date().toISOString()
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
+    if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, "llm_rubric", targetUnitId, stored);
     repository.ports.audit.append("exercise_generated", {
       source: "llm", kind: exercise.kind, target_unit: targetUnitId, tag, selection, ...extra,

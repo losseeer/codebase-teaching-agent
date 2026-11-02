@@ -346,6 +346,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .practice-actions { position: sticky; bottom: 0; z-index: 2; display: flex; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-2); background: var(--bg); border-top: 1px solid var(--border); }
 /* 换一题时的阶段提示：出题是阻塞请求，阶段帧来自全局事件流 */
 .gen-progress { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--ink-2); }
+.gen-progress .btn { margin-left: auto; }
 .exercise-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-11); color: var(--ink-3); }
 .exercise-title { font-size: var(--fs-16); font-weight: 650; line-height: 1.45; margin: 0; }
 /* 题面按 Markdown 渲染：排版规则在 global.css 的 `.md` 那一组，这里只管字号与行高 */

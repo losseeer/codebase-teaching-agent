@@ -12,10 +12,22 @@ export type JournalEventType =
     和「这个仓里挑不出单元」分在一个数里读。没带这个键的历史行按「未标族别」单列。
   */
   | "exercise_declined"
+  /**
+    出题被用户取消（不是失败，也不是拒题）：payload = scene / reason(user_cancel) / waited_ms，
+    带 tag 时一并记。已发生的模型回合另由 exercise_model_reply 留痕，花费另记 token_usage。
+  */
+  | "exercise_aborted"
   /** 练习送达事件（转化率的分母）：payload.source = llm|cache|rule|review；拒绝侧另有 exercise_declined。 */
   | "exercise_generated"
   /** 参考模式采纳的锚点，一条一条记：path / line / end_line / why（取用了它的什么，不进题面）。 */
   | "exercise_anchor"
+  /**
+    出题这趟每次模型调用的轨迹内容，一次调用一条。
+    payload = attempt（第几轮修复）/ step_id / round / finish_reason，
+    有正文带 reply（≤2000 字），只有工具调用时带 detail（本轮调用了什么）。
+    reply_truncated / detail_truncated 标出是否截断；不进判分与缓存键。
+  */
+  | "exercise_model_reply"
   | "token_usage"
   | "file_read"
   | "code_search"
@@ -116,7 +128,7 @@ export type JournalEventType =
 */
 export const ENGINE_JOURNAL_EVENTS = [
   "exercise_result",
-  "exercise_declined", "exercise_generated", "exercise_anchor", "token_usage", "file_read", "code_search",
+  "exercise_declined", "exercise_aborted", "exercise_generated", "exercise_anchor", "exercise_model_reply", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "code_egress",

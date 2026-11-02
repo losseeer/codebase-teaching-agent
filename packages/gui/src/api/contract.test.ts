@@ -2,7 +2,7 @@ import {readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ContractViolation } from "@codebase-tutor/contract";
+import { ContractViolation, threadTitleFromQuestion } from "@codebase-tutor/contract";
 
 import { parseScopedStreamFrame } from "./client";
 import { progressText } from "../agent/progressLines";
@@ -76,6 +76,14 @@ describe("过程帧的界面文案", () => {
 
   it("整个帧缺席时给「回复生成中…」，不假装知道在哪一步", () => {
     expect(progressText(undefined)).toBe("回复生成中…");
+  });
+});
+
+describe("会话标题", () => {
+  it("取首句前 5 字，空白归一", () => {
+    expect(threadTitleFromQuestion("解释一下当前目录")).toBe("解释一下当");
+    expect(threadTitleFromQuestion("  hi   there  ")).toBe("hi th");
+    expect(threadTitleFromQuestion("")).toBe("");
   });
 });
 

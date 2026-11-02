@@ -43,6 +43,15 @@ describe("代码问答工作区（SSE）", () => {
     expect(fx.lastEvent("turn_text").payload.answer).toBe(reply);
   });
 
+  it("teach：首问落下后标题改成用户原话前 5 字", async () => {
+    const sessionId = await openSession();
+    fx.scripted = ["先看 registerOrder。"];
+    await fx.app.inject({ method: "POST", url: `/api/sessions/${sessionId}/messages`, payload: { content: "解释一下当前目录" } });
+    const list = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/threads?scope=teach` });
+    const threads = (list.json() as { threads: { id: string; title: string }[] }).threads;
+    expect(threads.find((thread) => thread.id === sessionId)?.title).toBe("解释一下当");
+  });
+
   it("teach：假引用失守，尾注进正文也进库里那一份", async () => {
     const sessionId = await openSession();
     fx.scripted = ["直接讲结论，registerOrder 的作用与 src/missing.ts:1 无关。"];

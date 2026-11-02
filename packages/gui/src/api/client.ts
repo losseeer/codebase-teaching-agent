@@ -281,7 +281,9 @@ export const api = {
   /** 题库：这个仓存着的题与复习排期，纯读。 */
   listExercises: (repositoryId: string) => request<{ exercises: ExerciseBankEntry[] }>(`/api/repositories/${repositoryId}/exercises`),
   deleteExercise: (repositoryId: string, exerciseId: string) => request<{ deleted: number }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}`, { method: "DELETE" }),
-  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number; jobId?: string } = {}) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options) }),
+  createExercise: (repositoryId: string, options: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number; jobId?: string } = {}, signal?: AbortSignal) => request<Exercise>(`/api/repositories/${repositoryId}/exercises`, { method: "POST", body: JSON.stringify(options), ...(signal ? { signal } : {}) }),
+  /** 取消一趟在途出题；已结束时返回 canceled=false。 */
+  cancelExerciseGeneration: (repositoryId: string, jobId: string) => request<{ canceled: boolean }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
   /** 代码题按需讲评：判分后点一次才发这一趟 LLM 调用。 */
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
