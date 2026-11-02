@@ -58,7 +58,7 @@ function reject(reply: FastifyReply, failure: TeachingFailure): FastifyReply {
     case "repository-missing": return reply.code(404).send({ error: failure.message, reason: failure.reason });
     case "session-missing": return reply.code(404).send({ error: "会话不存在" });
     case "session-invalid": return reply.code(400).send({ error: "会话或消息无效" });
-    case "scope-format": return reply.code(400).send({ error: "教学域格式不对：需要 file:<仓内路径> 或 dir:<仓内目录>" });
+    case "scope-format": return reply.code(400).send({ error: "教学域格式不对：需要 file:<仓库内路径> 或 dir:<仓库内目录>" });
     case "scope-empty": return reply.code(404).send({ error: "这里暂时没有可问的代码；请换一个文件或目录。" });
     case "scope-gone": return reply.code(404).send({ error: "这个教学域已不可用；请重新选择一个文件或目录。" });
   }

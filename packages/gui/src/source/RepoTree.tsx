@@ -19,7 +19,7 @@ export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, 
     return initial;
   });
   const [fullyShown, setFullyShown] = useState<Set<string>>(() => new Set());
-  if (!nodes.length) return <p className="entry-empty">文件树加载中，或这个仓没有文件索引。</p>;
+  if (!nodes.length) return <p className="entry-empty">文件树加载中，或这个仓库没有文件索引。</p>;
   const LIMIT = 8;
   const render = (items: FileTreeNode[], depth: number): ReactElement[] => {
     const rows: ReactElement[] = [];

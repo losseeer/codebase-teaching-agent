@@ -128,7 +128,7 @@ export function App(): ReactElement {
               // 仓不在清单 = 本地选择真失效：清掉并明示
               updateWorkspace(null);
               setWorkspaceReady(true);
-              showToast("仓不在已导入清单 · 需重新导入");
+              showToast("仓库不在已导入清单 · 需重新导入");
               return;
             }
             // 目录挪走/产物不全：仓库没丢，保留 workspace 交用户处置
@@ -218,14 +218,14 @@ export function App(): ReactElement {
   const banner = workspace && freshness && (freshness.verdict === "stale" || freshness.verdict === "drifted") && !acknowledged(freshness, workspace.repositoryId)
     ? <FreshnessBanner repositoryPath={workspace.repositoryPath} freshness={freshness} onAcknowledge={() => { acknowledge(freshness, workspace.repositoryId); setFreshness(null); }} onReanalyze={() => navigate("/import")} />
     : null;
-  // 对话栏只挂在有对话可谈的路由；导入页与成本页不显示
+  // 对话栏与悬浮球只挂在工作区路由；导入页与成本页不显示
   const location = useLocation();
   const [query] = useSearchParams();
   const workspaceParam = query.get("workspace");
   const traceScope: AgentScope = workspaceParam === "teaching" || workspaceParam === "practice" ? workspaceParam : "map";
-  const railRoute = !!workspace && !["/import", "/insights"].includes(location.pathname);
+  const workspaceRoute = !!workspace && !["/import", "/insights"].includes(location.pathname);
   const layout = useLayout();
-  const showRail = railRoute && !layout.railCollapsed;
+  const showRail = workspaceRoute && !layout.railCollapsed;
   return (
     <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}${showRail ? "" : " rail-hidden"}`} style={layoutVars(layout)}>
       {forgetTarget ? (
@@ -281,9 +281,9 @@ export function App(): ReactElement {
             <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
           </Routes>
         </div>
-        <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} />
+        {workspaceRoute ? <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} /> : null}
       </main>
-      {railRoute ? <AgentRail chat={chat} /> : null}
+      {workspaceRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />
     </div>
   );
@@ -338,7 +338,7 @@ function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze
       {/* 路径与哈希细节进 title 悬停 */}
       <span className="banner-text" title={`${repositoryPath}｜${stale
         ? `${freshness.changedFiles > 0 ? freshness.changedFiles : "若干"} 个文件的当前内容与上次分析时不一致`
-        : `HEAD 从 ${short(freshness.headAtAnalysis)} 挪到 ${short(freshness.headNow)}${!freshness.headAtAnalysis ? "（这个仓没有可用的 git HEAD 记录，引擎只比对了文件内容）" : ""}`}`}>
+        : `HEAD 从 ${short(freshness.headAtAnalysis)} 挪到 ${short(freshness.headNow)}${!freshness.headAtAnalysis ? "（这个仓库没有可用的 git HEAD 记录，引擎只比对了文件内容）" : ""}`}`}>
         <b>{stale ? "分析已过期" : "提交已移动，内容与分析时一致"}</b>{" "}
         {stale
           ? `${ageOf(freshness.analyzedAt)}跑的分析，${freshness.changedFiles > 0 ? `${freshness.changedFiles} 个文件` : "有些文件"}已经变了 · 看到的是旧结论`

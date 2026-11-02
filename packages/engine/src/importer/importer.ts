@@ -374,7 +374,7 @@ export class ImportService extends EventEmitter {
     const watcher = new RepositoryWatcher(repository.path, (changedPaths) => void this.reanalyzeIncrementally(repositoryId, changedPaths), undefined, (message) => {
       // 监听起来后不再发事件，中途死亡要单独记一笔
       traceEngine("mount", { repositoryId, phase: "watch_died", error: message.slice(0, 200) }, { traceId: null });
-      console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
+      console.warn(`[engine] ${repository.path} 的增量监听中途停了：${message}。此后这个仓库的产物不会再自动跟上新改动，改完代码请手动重新导入。`);
     });
     const watch = watcher.start();
     if (!watch.started) {

@@ -16,7 +16,7 @@ const rejected = (reply: FastifyReply, failure: ReadFailure): FastifyReply => {
     case "source-not-found": return reply.code(404).send({ error: "未找到源码" });
     case "source-out-of-bounds": return reply.code(400).send({ error: "源码路径越出仓库边界" });
     case "source-blocked": return reply.code(404).send({ error: `该文件不开放读取：${failure.reason}` });
-    case "source-not-indexed": return reply.code(404).send({ error: "该文件不在本仓索引里（未收录的类型与密钥/凭据文件不提供源码）" });
+    case "source-not-indexed": return reply.code(404).send({ error: "该文件不在本仓库索引里（未收录的类型与密钥/凭据文件不提供源码）" });
     case "source-too-big": return reply.code(413).send({ error: `文件 ${String(failure.size)} 字节，超过 ${String(MAX_FILE_BYTES)} 字节上限，没有加载` });
     case "source-unreadable": return reply.code(404).send({ error: "无法读取该源码文件" });
   }
