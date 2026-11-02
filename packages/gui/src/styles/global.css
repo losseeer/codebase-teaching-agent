@@ -604,16 +604,27 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .trace-run-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12); color: var(--ink-2); min-width: 0; }
 .trace-run-scene { font-weight: 600; color: var(--ink); flex: none; }
 .trace-run-status { flex: none; }
-.trace-run-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
-.trace-group { display: flex; flex-direction: column; gap: 6px; }
+.trace-timeline { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.trace-timeline-row { display: flex; align-items: center; gap: 8px; height: 10px; }
+.trace-timeline-label { width: 2.4em; flex: none; font-size: var(--fs-11); color: var(--ink-3); }
+.trace-timeline-track { position: relative; flex: 1; height: 7px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.trace-timeline-block { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--brand-600); }
+.trace-timeline-row.turn .trace-timeline-block { background: var(--info-ink); }
+.trace-timeline-row.tool .trace-timeline-block { background: var(--warn-ink); }
+.trace-timeline-block.error { background: var(--danger); }
 .trace-group-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-11); font-weight: 600; color: var(--ink-2); }
 .trace-count { font-weight: 400; color: var(--ink-3); }
+.trace-steps { display: flex; flex-direction: column; gap: 6px; }
 .trace-step { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
 .trace-step-btn { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; }
 .trace-step-btn:hover { background: var(--surface-2); }
 .trace-step-btn.static { cursor: default; }
 .trace-step-btn.static:hover { background: transparent; }
 .trace-step .trace-step-status { flex: none; display: grid; place-items: center; width: 12px; height: 12px; }
+.trace-step-kind { flex: none; padding: 0 5px; border-radius: 4px; font-size: var(--fs-11); line-height: 16px; }
+.trace-step-kind.turn { background: var(--info-bg); color: var(--info-ink); }
+.trace-step-kind.model { background: var(--brand-050); color: var(--brand-700); }
+.trace-step-kind.tool { background: var(--warn-bg); color: var(--warn-ink); }
 .trace-step-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
 .trace-step-meta { flex: none; font-size: var(--fs-11); color: var(--ink-3); font-family: var(--font-mono); }
 .trace-chevron { flex: none; display: grid; place-items: center; color: var(--ink-3); transition: transform var(--t-fast); }

@@ -33,17 +33,12 @@ function duration(ms?: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function tokenCount(step: TraceStep): string {
-  return step.inputTokens === undefined && step.outputTokens === undefined ? "" : `${step.inputTokens ?? 0}→${step.outputTokens ?? 0}`;
-}
-
 function stepMeta(step: TraceStep): string {
   if (step.kind === "turn") return [step.model ?? "", STATUS_LABEL[step.status === "start" ? "running" : step.status]].filter(Boolean).join(" · ");
   const round = step.round === undefined ? "" : step.kind === "model" ? `第 ${step.round} 次` : `第 ${step.round} 轮`;
   return [
     round,
     duration(step.ms),
-    tokenCount(step),
     step.finishReason ? FINISH_LABEL[step.finishReason] ?? step.finishReason : ""
   ].filter(Boolean).join(" · ");
 }
@@ -139,13 +134,13 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
                   <div className="trace-run-group">
                     <span className="trace-run-group-label">进行中</span>
                     {running.map((run) => (
-                      <button key={run.runId} type="button" className={`trace-run-chip running${run.runId === selected?.runId ? " active" : ""}`} title={run.summary ?? ""} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
+                      <button key={run.runId} type="button" className={`trace-run-chip running${run.runId === selected?.runId ? " active" : ""}`} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
                         <span className="trace-run-live" />
                         {scope === "practice" ? `${practiceAgentLabel(run.scene) ?? "出题"} · ` : ""}{shortTime(run.startedAt)}
                       </button>
                     ))}
                   </div>
-                ) : <span className="trace-run-idle">当前没有进行中的运行</span>}
+                ) : <span className="trace-run-idle">当前没有运行中的agent</span>}
                 <button type="button" className={`trace-history-toggle${historyOpen ? " open" : ""}`} aria-expanded={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
                   历史{ended.length ? ` ${ended.length}` : ""}
                 </button>
@@ -160,7 +155,7 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
                     <div key={group.key} className="trace-run-group">
                       {group.label ? <span className="trace-run-group-label">{group.label}</span> : null}
                       {group.runs.map((run) => (
-                        <button key={run.runId} type="button" className={`trace-run-chip${run.runId === selected?.runId ? " active" : ""}`} title={run.summary ?? ""} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
+                        <button key={run.runId} type="button" className={`trace-run-chip${run.runId === selected?.runId ? " active" : ""}`} onClick={() => { setSelectedId(run.runId); setHistoryOpen(false); }}>
                           {shortTime(run.startedAt)}
                         </button>
                       ))}
@@ -176,7 +171,7 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
           {tab === "tools" ? <ToolsView surface={surface} error={error} loading={loading} /> : null}
         </div>
         <div className="modal-foot">
-          <span className="modal-note">{tab === "trace" ? "实时 + 历史记录" : "只读 · 来自引擎注册表"}</span>
+          <span className="modal-note">{tab === "trace" ? "实时 + 历史轨迹" : ""}</span>
           <button type="button" className="btn" onClick={onClose}>关闭</button>
         </div>
       </div>
@@ -184,33 +179,55 @@ function TraceModal({ runs, repositoryId, scope, onClose }: { runs: TraceRun[]; 
   );
 }
 
+/** 步数太少时不画缩略条：一排碎块没有信息量。 */
+const MIN_TIMELINE_STEPS = 6;
+const TIMELINE_ROWS: { kind: TraceStep["kind"]; label: string }[] = [
+  { kind: "turn", label: "回合" },
+  { kind: "model", label: "模型" },
+  { kind: "tool", label: "工具" }
+];
+
+/** 三行缩略时间条：按时间跨度把一步画成一段，用来看等模型与跑工具各自的分布。 */
+function Timeline({ run }: { run: TraceRun }): ReactElement | null {
+  if (run.steps.length < MIN_TIMELINE_STEPS) return null;
+  const at = (step: TraceStep): number => new Date(step.at).getTime();
+  const start = Math.min(...run.steps.map(at));
+  const end = Math.max(...run.steps.map((step) => at(step) + (step.ms ?? 0)));
+  const span = end - start;
+  if (!Number.isFinite(span) || span <= 0) return null;
+  return (
+    <div className="trace-timeline" aria-label="时间概览">
+      {TIMELINE_ROWS.map((row) => (
+        <div key={row.kind} className={`trace-timeline-row ${row.kind}`}>
+          <span className="trace-timeline-label">{row.label}</span>
+          <span className="trace-timeline-track">
+            {run.steps.filter((step) => step.kind === row.kind).map((step) => {
+              const left = Math.max(0, Math.min(99, ((at(step) - start) / span) * 100));
+              const width = Math.min(100 - left, Math.max(((step.ms ?? 0) / span) * 100, 1));
+              return <span key={step.stepId ?? `${step.kind}-${step.seq}`} className={`trace-timeline-block${step.status === "error" ? " error" : ""}`} style={{ left: `${left}%`, width: `${width}%` }} title={step.label} />;
+            })}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RunView({ run }: { run: TraceRun }): ReactElement {
-  const input = run.steps.filter((step) => step.kind === "turn");
-  const models = run.steps.filter((step) => step.kind === "model");
-  const tools = run.steps.filter((step) => step.kind === "tool");
+  const steps = [...run.steps].sort((a, b) => a.at.localeCompare(b.at));
   return (
     <>
       <div className="trace-run-head">
         <span className={`trace-dot ${run.status}`} />
         <span className="trace-run-scene">{sceneLabel(run.scene)}</span>
         <span className="trace-run-status">{STATUS_LABEL[run.status]}</span>
-        <span className="trace-run-summary" title={run.summary}>{run.summary ?? ""}</span>
       </div>
       {run.historical ? <p className="field-note">历史回合按 journal 汇总。</p> : null}
-      <TraceGroup title="输入" steps={input} />
-      <TraceGroup title="模型" steps={models} />
-      <TraceGroup title="工具" steps={tools} />
+      <Timeline run={run} />
+      <div className="trace-steps">
+        {steps.map((step) => <TraceRow key={step.stepId ?? `${step.kind}-${step.seq}`} step={step} />)}
+      </div>
     </>
-  );
-}
-
-function TraceGroup({ title, steps }: { title: string; steps: TraceStep[] }): ReactElement | null {
-  if (!steps.length) return null;
-  return (
-    <section className="trace-group">
-      <div className="trace-group-head"><span>{title}</span><span className="trace-count">{steps.length}</span></div>
-      {steps.map((step) => <TraceRow key={step.stepId ?? `${step.kind}-${step.seq}`} step={step} />)}
-    </section>
   );
 }
 
@@ -220,6 +237,7 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
   const content = (
     <>
       <StepStatus step={step} />
+      <span className={`trace-step-kind ${step.kind}`}>{step.kind === "turn" ? "回合" : step.kind === "model" ? "模型" : "工具"}</span>
       <span className="trace-step-label" title={step.label}>{step.label}</span>
       <span className="trace-step-meta">{stepMeta(step)}</span>
       {detail ? <span className={`trace-chevron${open ? " open" : ""}`}><Icon name="chevronDown" size={12} /></span> : null}
