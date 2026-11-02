@@ -144,7 +144,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const question = clip(text(turnText?.payload.question, 2_000), 400);
   const answer = text(turnText?.payload.answer, TURN_TEXT_LIMIT);
   // 对话回合只有最终答复；出题按每次模型调用各回放一条，中间回合也看得到
-  const replayed: { reply?: string; detail?: string; finishReason?: string; at: string }[] = answer
+  const replayed: { reply?: string; detail?: string; finishReason?: string; ms?: number; at: string }[] = answer
     ? [{ reply: `${answer}${turnText?.payload.answer_truncated === true ? "…" : ""}`, at: turnText?.at ?? ordered[0].at }]
     : ordered
         .filter((event) => event.type === "exercise_model_reply")
@@ -153,6 +153,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
           const detail = text(event.payload.detail, 600);
           const finishReason = typeof event.payload.finish_reason === "string" ? event.payload.finish_reason : undefined;
           const attempt = num(event.payload.attempt);
+          const ms = num(event.payload.ms);
           // 自证失败会重出一版；两条最终回复都留在轨迹里，标清首轮/修复
           const note = finishReason === "stop" && attempt !== undefined ? (attempt > 1 ? "修复重出" : "首轮出题") : "";
           const shownDetail = detail ? `${detail}${event.payload.detail_truncated === true ? "…" : ""}` : note;
@@ -160,6 +161,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
             ...(reply ? { reply: `${reply}${event.payload.reply_truncated === true ? "…" : ""}` } : {}),
             ...(shownDetail ? { detail: shownDetail } : {}),
             ...(finishReason ? { finishReason } : {}),
+            ...(ms !== undefined ? { ms } : {}),
             at: event.at
           };
         })
@@ -205,6 +207,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
       ...(item.reply ? { reply: item.reply } : {}),
       ...(item.detail ? { detail: item.detail } : {}),
       ...(item.finishReason ? { finishReason: item.finishReason } : {}),
+      ...(item.ms !== undefined ? { ms: item.ms } : {}),
       ...(provider ? { model: provider } : {}),
       ...(showTokens && inputTokens !== undefined ? { inputTokens } : {}),
       ...(showTokens && outputTokens !== undefined ? { outputTokens } : {}),

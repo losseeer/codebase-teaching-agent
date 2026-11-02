@@ -85,7 +85,8 @@ function generationTrace(repositoryId: string, label: string, audit: AuditSink):
             round: step.round,
             ...(reply ? { reply, reply_truncated: (maskedReply?.text.length ?? 0) > reply.length, masked: maskedReply?.masked ?? 0 } : {}),
             ...(detail ? { detail, detail_truncated: (step.detail?.length ?? 0) > detail.length } : {}),
-            ...(step.finishReason ? { finish_reason: step.finishReason } : {})
+            ...(step.finishReason ? { finish_reason: step.finishReason } : {}),
+            ...(step.ms !== undefined ? { ms: step.ms } : {})
           });
         }
       }

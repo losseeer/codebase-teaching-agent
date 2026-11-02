@@ -177,8 +177,10 @@ const TIMELINE_ROWS: { kind: TraceStep["kind"]; label: string }[] = [
 function Timeline({ run }: { run: TraceRun }): ReactElement | null {
   if (run.steps.length < MIN_TIMELINE_STEPS) return null;
   const at = (step: TraceStep): number => new Date(step.at).getTime();
-  const start = Math.min(...run.steps.map(at));
-  const end = Math.max(...run.steps.map((step) => at(step) + (step.ms ?? 0)));
+  // 一步的 at 是结束时刻，ms 是耗时；画条要从开始时刻起算，否则整段会往后错位。
+  const begin = (step: TraceStep): number => at(step) - (step.ms ?? 0);
+  const start = Math.min(...run.steps.map(begin));
+  const end = Math.max(...run.steps.map(at));
   const span = end - start;
   if (!Number.isFinite(span) || span <= 0) return null;
   return (
@@ -188,7 +190,7 @@ function Timeline({ run }: { run: TraceRun }): ReactElement | null {
           <span className="trace-timeline-label">{row.label}</span>
           <span className="trace-timeline-track">
             {run.steps.filter((step) => step.kind === row.kind).map((step) => {
-              const left = Math.max(0, Math.min(99, ((at(step) - start) / span) * 100));
+              const left = Math.max(0, Math.min(99, ((begin(step) - start) / span) * 100));
               const width = Math.min(100 - left, Math.max(((step.ms ?? 0) / span) * 100, 1));
               return <span key={step.stepId ?? `${step.kind}-${step.seq}`} className={`trace-timeline-block${step.status === "error" ? " error" : ""}`} style={{ left: `${left}%`, width: `${width}%` }} title={step.label} />;
             })}
