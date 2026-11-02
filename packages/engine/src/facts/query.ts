@@ -92,11 +92,11 @@ const entryLine = (path: string, entry: RegistryEntry): string =>
 
 function missing(kind: FactKind, db: TutorDatabase, repositoryId: string, path: string): string {
   const stored = db.facts.read<{ version?: string }>(repositoryId, kind, path);
-  if (stored && stored.version !== FACTS_VERSION) return `这个文件的 ${kind} 产物是旧判据算的（产物 version=${stored.version ?? "没写过版本"}，当前 ${FACTS_VERSION}），不作为现行读数给出；要用它先重新分析这个仓。`;
+  if (stored && stored.version !== FACTS_VERSION) return `这个文件的 ${kind} 产物是旧判据算的（产物 version=${stored.version ?? "没写过版本"}，当前 ${FACTS_VERSION}），不作为现行读数给出；要用它先重新分析这个仓库。`;
   const covered = db.facts.coverage(repositoryId).some((row) => row.kind === kind);
   return covered
-    ? `这类产物（${kind}）在本仓有行，但这个文件不在其中：可能它没有可执行体，也可能路径写错了。`
-    : `本仓还没有 ${kind} 这类产物（从没算过，或产物比代码旧）。不要据此回答「仓库里没有这个关系」——先让用户重新分析。`;
+    ? `这类产物（${kind}）在本仓库有行，但这个文件不在其中：可能它没有可执行体，也可能路径写错了。`
+    : `本仓库还没有 ${kind} 这类产物（从没算过，或产物比代码旧）。不要据此回答「仓库里没有这个关系」——先让用户重新分析。`;
 }
 
 /** 产物查询门的实现；`target` 在 cfg/dataflow 是函数名，在 typeRelations/registry 是类型名或条目名。 */
@@ -120,19 +120,19 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 
   const coverage = (): string[] => {
     const stamps = db.facts.stamps(repositoryId);
-    if (!stamps.length) return ["本仓没有任何静态产物（还没导入完成，或导入时这一层没算成）。"];
+    if (!stamps.length) return ["本仓库没有任何静态产物（还没导入完成，或导入时这一层没算成）。"];
     const counts = db.facts.coverage(repositoryId);
     return [
       `静态产物（按文件存，一次给一个指针）：${counts.map((row) => `${row.kind} ${row.files} 文件/${Math.round(row.bytes / 1024)} KB`).join("、")}`,
       `批次时间：${stamps.map((row) => `${row.kind} ${at(row.lastAt)}`).join("、")}。产物比代码旧时读数会漂，别当成实时的。`,
-      "取法：path 给文件；cfg/dataflow 再加 target（函数名）出块与边、定义与使用；typeRelations/registry 加 target（类型名或条目名）全仓找。"
+      "取法：path 给文件；cfg/dataflow 再加 target（函数名）出块与边、定义与使用；typeRelations/registry 加 target（类型名或条目名）全仓库找。"
     ];
   };
 
   return {
     inventory: (() => {
       const counts = db.facts.coverage(repositoryId);
-      return counts.length ? `静态产物在册：${counts.map((row) => `${row.kind} ${row.files} 文件`).join("、")}。要用结构证据（分支、类型关系、注册绑定）就先调 query_facts，别凭印象说。` : "本仓还没有静态产物：结构类问题只能靠 read_file 读源码回答，并要说明没做过静态核对。";
+      return counts.length ? `静态产物在册：${counts.map((row) => `${row.kind} ${row.files} 文件`).join("、")}。要用结构证据（分支、类型关系、注册绑定）就先调 query_facts，别凭印象说。` : "本仓库还没有静态产物：结构类问题只能靠 read_file 读源码回答，并要说明没做过静态核对。";
     })(),
     apply: (argumentsJson: string) => {
       const raw = arg(argumentsJson, "kind");
@@ -142,7 +142,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
       if (!KINDS.has(raw)) return `kind 只认 ${FACT_KINDS.join(" / ")}；不给 kind 就回覆盖率清单。`;
       const kind = raw as FactKind;
 
-      if (!path && !target) return emit([], coverage(), [`（这次要的是 ${kind}：给 path 取一个文件的读数，或给 target 全仓找。）`]);
+      if (!path && !target) return emit([], coverage(), [`（这次要的是 ${kind}：给 path 取一个文件的读数，或给 target 全仓库找。）`]);
 
       const needle = target.toLowerCase();
       if (target && !path) {
@@ -164,7 +164,7 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
             lines.push(...fact.functions.filter((item) => item.name.toLowerCase().includes(needle)).map((item) => `${file}:${item.startLine} ${item.name}`));
           }
         }
-        return lines.length ? emit([], lines) : `全仓没有名字含「${target}」的 ${kind} 读数。这不能证明关系不存在：可能是动态派发、反射、宏或产物比代码旧。`;
+        return lines.length ? emit([], lines) : `全仓库没有名字含「${target}」的 ${kind} 读数。这不能证明关系不存在：可能是动态派发、反射、宏或产物比代码旧。`;
       }
 
       if (kind === "cfg") {
@@ -215,13 +215,13 @@ export function factsQueryTool(db: TutorDatabase, repositoryId: string): FactsTo
 /** `query_facts` 的工具定义。 */
 export const QUERY_FACTS_TOOL: LlmTool = {
   name: "query_facts",
-  description: "查这个仓已经算好的静态分析产物（只搬已有读数，不会重新分析）。不给 kind 就回覆盖率清单：哪几类在册、各多少文件、算于何时——规划要画什么之前先调它。kind 四选一：cfg（函数内的节点、边、圈复杂度、出口）、dataflow（变量在哪行定义、哪些行读到、哪些读不到定义）、typeRelations（继承/实现/字段/参数/返回/泛型这些边，以及反查到的仓内文件）、registry（路由登记、依赖注入绑定、SPI 清单、构建清单里的键）。path 给一个文件取它那份；target 全仓找（cfg/dataflow 填函数名，typeRelations/registry 填类型名或条目名）。画架构图、流程图、时序图前先来这里取证据，别凭印象连线。「查不到不等于仓库里没有」：动态派发、反射、宏与异步事件不在产物里，那种关系要照实说「未证实」。",
+  description: "查询仓库已算好的静态产物，不触发重新分析；省略 kind 返回覆盖率清单。",
   parameters: {
     type: "object",
     properties: {
-      kind: { type: "string", description: "cfg / dataflow / typeRelations / registry；省略就回覆盖率清单" },
-      path: { type: "string", description: "仓内相对路径，如 src/order/Service.java" },
-      target: { type: "string", description: "函数名（cfg、dataflow）或类型名/条目名（typeRelations、registry）" }
+      kind: { type: "string", description: "产物类别；省略时返回覆盖率清单" },
+      path: { type: "string", description: "仓库内相对路径" },
+      target: { type: "string", description: "函数名、类型名或条目名，取决于 kind" }
     },
     required: []
   }

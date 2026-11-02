@@ -81,7 +81,7 @@ describe("applyDiagramEdit：查无此人不落笔", () => {
     const f = fixture();
     const outcome = applyDiagramEdit(f.context, { edit: { action: "draw", name: "假节点", body: { groups: [], nodes: [{ id: "n-ghost", kind: "module", label: "查无此人", ref: "file:不存在的那一个.ts", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(outcome.ok).toBe(false);
-    expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("不在本仓索引里");
+    expect(outcome.text, "拒写要说出该改谁，模型才有一步可走").toContain("不在本仓库索引里");
     // 认不出的 ref 前缀单独拒，并给出可用写法。
     const retired = applyDiagramEdit(f.context, { edit: { action: "draw", name: "旧引用", body: { groups: [], nodes: [{ id: "n-old", kind: "module", label: "旧模块", ref: "module:src", x: 10, y: 10 }], edges: [] } } }, "agent");
     expect(retired.ok).toBe(false);
@@ -361,6 +361,15 @@ describe("parseDiagramEditArguments：白名单就是白名单", () => {
     const flat = parseDiagramEditArguments('{"action":"move","target":"n-1","x":12,"y":7,"color":"red"}');
     expect(flat.request!.edit).toEqual({ action: "move", target: "n-1", x: 12, y: 7 });
     expect(flat.ignored).toEqual(["color"]);
+  });
+
+  it("action=help 返回完整约定，且不生成写请求", () => {
+    const help = parseDiagramEditArguments('{"edit":{"action":"help"}}');
+    expect(help.request).toBeUndefined();
+    expect(help.error).toBeUndefined();
+    expect(help.help).toContain("draw");
+    expect(help.help).toContain("kind=module");
+    expect(help.help).toContain("origin");
   });
 
   it("九种之外的动作与缺字段都拒，且拒得出一句下一步", () => {

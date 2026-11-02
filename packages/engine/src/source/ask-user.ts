@@ -41,7 +41,7 @@ const chars = (text: string): number => [...text].length;
 export function askUserToolFor(facets: AskFacet[]): LlmTool {
   return {
     name: ASK_USER_TOOL_NAME,
-    description: `本轮仅针对当前缺失项提问（当前缺失：${facets.join(" / ")}）。goal 指本次要产出的目标尚未确定；range 指范围（涉及哪些模块、哪个入口）尚未确定。仅当上下文和用户原话均无法确定该缺失项时使用；可通过已有信息查到的内容不得提问。question 为一个不超过 ${MAX_QUESTION} 字的自然语言问句；options 提供不超过 ${MAX_OPTIONS} 个短标签，每个不超过 ${MAX_LABEL} 字。本轮答复即该问句：调用后不再读取文件、不再修改图表，也无需输出正文。`,
+    description: `仅针对当前缺失项提问（当前缺失：${facets.join(" / ")}）。goal 表示目标未定，range 表示范围（模块或入口）未定；仅在上下文与用户原话均无法确定时使用，可查到的内容不得提问。question 不超过 ${MAX_QUESTION} 字；options 提供 1–${MAX_OPTIONS} 个短标签，每个不超过 ${MAX_LABEL} 字。调用后本轮结束，不再读文件或改图，也无需输出正文。`,
     parameters: {
       type: "object",
       properties: {

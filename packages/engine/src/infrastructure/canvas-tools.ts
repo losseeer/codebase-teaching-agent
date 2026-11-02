@@ -42,6 +42,7 @@ export function setDiagramToolFor(repository: ImportedRepository, database: Tuto
     inventory: diagramInventoryFor(context(), openDiagramId),
     apply: (argumentsJson: string) => {
       const parsed = parseDiagramEditArguments(argumentsJson);
+      if (parsed.help) return parsed.help;
       const note = parsed.ignored.length ? `（多余字段 ${[...new Set(parsed.ignored)].join(" / ")} 已忽略：这一层只认那九种动作各自的字段，边上「降过档」那一格由引擎写）` : "";
       if (parsed.error) return `没改：${parsed.error}。${note}`;
       const outcome = applyDiagramEdit(context(), parsed.request!, "agent");

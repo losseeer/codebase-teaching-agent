@@ -137,7 +137,7 @@ describe("产物查询门", () => {
       const id2 = "repo_partial";
       saveFileFacts(partial, id2, cfgOnly);
       const text = factsQueryTool(partial, id2).apply(JSON.stringify({ kind: "registry", path: "src/gamma.ts" }));
-      expect(text).toContain("本仓还没有 registry 这类产物");
+      expect(text).toContain("本仓库还没有 registry 这类产物");
       expect(text).toContain("不要据此回答");
       partial.close();
     } finally {
@@ -217,8 +217,8 @@ describe("产物查询门", () => {
     try {
       const repository = { index: { repositoryId: deriveRepositoryId(root) } } as unknown as ImportedRepository;
       const door = factsToolFor(repository, db);
-      expect(door.inventory, "缺席要说成缺席，不能靠工具不在清单里让模型反推").toContain("本仓还没有静态产物");
-      expect(door.apply(JSON.stringify({ kind: "cfg", path: "src/main.ts" }))).toContain("本仓还没有 cfg 这类产物");
+      expect(door.inventory, "缺席要说成缺席，不能靠工具不在清单里让模型反推").toContain("本仓库还没有静态产物");
+      expect(door.apply(JSON.stringify({ kind: "cfg", path: "src/main.ts" }))).toContain("本仓库还没有 cfg 这类产物");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

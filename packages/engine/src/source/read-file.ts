@@ -37,13 +37,13 @@ const DENIED_EXTENSIONS = new Set([
 
 export const READ_FILE_TOOL: LlmTool = {
   name: "read_file",
-  description: "读取当前项目内一个文本文件（源码/配置）的指定行窗口，返回带行号的内容；首行会说明本次实际返回的行区间与文件总行数，内容没给全时会附上继续读的 offset。用于查看项目结构全景之外的实现细节。禁止用于读取密钥或仓库外路径。",
+  description: "读取仓库内文本文件的指定行窗口，返回带行号的内容；未读完时给出续读 offset。禁止读取密钥与仓库外路径。",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "仓库内相对路径，如 src/app.ts" },
-      offset: { type: "integer", description: "起始行号（1 起），默认 1" },
-      limit: { type: "integer", description: "读取行数：不给就一次读到单次字符预算为止（整份源码通常装得下）；给数字则按行窗口读。两种情况都受同一份字符预算约束，装不下时首行会说明并给出续读的 offset" }
+      offset: { type: "integer", description: "起始行号（从 1 开始），默认 1" },
+      limit: { type: "integer", description: "读取行数；省略时读到单次字符预算上限，超出时首行给出续读 offset" }
     },
     required: ["path"]
   }

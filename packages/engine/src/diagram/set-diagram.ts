@@ -69,7 +69,7 @@ function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error
   if (value.startsWith("group:")) return { files: [] };
   if (value.startsWith("file:")) {
     const path = normalizeRefPath(value.slice("file:".length));
-    return index.files.has(path) ? { files: [path] } : { error: `文件 ${path.slice(0, 80)} 不在本仓索引里` };
+    return index.files.has(path) ? { files: [path] } : { error: `文件 ${path.slice(0, 80)} 不在本仓库索引里` };
   }
   if (value.startsWith("dir:")) {
     const path = normalizeRefPath(value.slice("dir:".length));
@@ -80,14 +80,14 @@ function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error
   if (value.startsWith("symbol:")) {
     const body = value.slice("symbol:".length);
     const hash = body.lastIndexOf("#");
-    if (hash <= 0) return { error: "symbol 引用要写成 symbol:<仓内路径>#<符号名>" };
+    if (hash <= 0) return { error: "symbol 引用要写成 symbol:<仓库内路径>#<符号名>" };
     const path = normalizeRefPath(body.slice(0, hash));
     const name = body.slice(hash + 1).trim();
     const found = index.symbols.some((symbol) => symbol.path === path && symbol.name === name);
     return found ? { files: [path] } : { error: `符号 ${path.slice(0, 60)}#${name.slice(0, 40)} 不在依赖图里` };
   }
   const path = normalizeRefPath(value);
-  return index.files.has(path) ? { files: [path] } : { error: `${value.slice(0, 80)} 既不是 file:/dir:/symbol:/group:，也不在本仓索引里` };
+  return index.files.has(path) ? { files: [path] } : { error: `${value.slice(0, 80)} 既不是 file:/dir:/symbol:/group:，也不在本仓库索引里` };
 }
 
 /** 一个节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析。 */
@@ -150,7 +150,7 @@ const TRAILING_COUNT = /[（(]\s*\d+\s*[)）]\s*$/;
 /** 整张图的结构校验；返回字符串表示拒写原因。 */
 function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteContext): { body: DiagramBody; downgraded: number } | string {
   const { analysis } = context;
-  if (body.nodes.length > DIAGRAM_NODE_LIMIT) return `这张图有 ${body.nodes.length} 个节点，超过 ${DIAGRAM_NODE_LIMIT} 个：画布不是用来装全仓的，拆成几张图（图库就是为这个存在的）`;
+  if (body.nodes.length > DIAGRAM_NODE_LIMIT) return `这张图有 ${body.nodes.length} 个节点，超过 ${DIAGRAM_NODE_LIMIT} 个：画布不是用来装下整个仓库的，拆成几张图（图库就是为这个存在的）`;
   if (body.edges.length > DIAGRAM_EDGE_LIMIT) return `边超过 ${DIAGRAM_EDGE_LIMIT} 条：这张图已经读不出东西了，只画主要关系`;
   const seen = new Set<string>();
   const labels = new Set<string>();
@@ -172,7 +172,7 @@ function settleBody(body: DiagramBody, index: RefIndex, context: DiagramWriteCon
       }
       const explicit = node.files?.map(normalizeRefPath).filter((path) => index.files.has(path)) ?? [];
       if (node.ref.startsWith("group:") && !explicit.length) return `「${label}」是 group 节点，必须给 files 清单（至少一个已索引文件）`;
-      if (node.files?.length && !explicit.length) return `「${label}」给的 files 一个都不在本仓索引里`;
+      if (node.files?.length && !explicit.length) return `「${label}」给的 files 一个都不在本仓库索引里`;
       if (explicit.length) files = explicit;
     } else if (node.kind !== "note") {
       return `节点类型只有 module 与 note 两种，收到「${String(node.kind)}」`;
@@ -213,9 +213,9 @@ function resolveTarget(context: DiagramWriteContext, requested: string | undefin
   const wanted = (requested ?? "").trim();
   const all = context.store.list();
   if (!wanted) {
-    if (!all.length) return { error: "这个仓还没有图：先画一张（draw），或在左侧图库点「+」建一张空白图" };
+    if (!all.length) return { error: "这个仓库还没有图：先画一张（draw），或在左侧图库点「+」建一张空白图" };
     if (all.length === 1) return { diagram: context.store.read(all[0]!.id)! };
-    return { error: `画布上没有明确打开的图，而这个仓有 ${all.length} 张：${all.map((item) => item.name).join(" / ")}。说清要改哪一张` };
+    return { error: `画布上没有明确打开的图，而这个仓库有 ${all.length} 张：${all.map((item) => item.name).join(" / ")}。说清要改哪一张` };
   }
   const byId = context.store.read(wanted);
   if (byId) return { diagram: byId };
@@ -393,7 +393,7 @@ function nodeFrom(raw: unknown, ignored: string[]): DiagramNode | string {
     const files = Array.isArray(entry.files)
       ? entry.files.flatMap((item): string[] => (typeof item === "string" && item.trim() ? [item.trim().replaceAll("\\", "/").slice(0, 400)] : [])).slice(0, 500)
       : undefined;
-    if (entry.files !== undefined && !files) return "node.files 要是字符串数组（仓内相对路径）";
+    if (entry.files !== undefined && !files) return "node.files 要是字符串数组（仓库内相对路径）";
     return { ...base, ...(sub ? { sub } : {}), ...(group ? { group } : {}), ref, ...(files?.length ? { files } : {}) };
   }
   const text = optionalText(entry.text, 500);
@@ -452,8 +452,19 @@ function bodyFrom(raw: unknown, ignored: string[]): DiagramBody | string {
   return { groups, nodes, edges };
 }
 
-/** 解析一次工具参数；返回 `error` 时不落盘。 */
-export function parseDiagramEditArguments(raw: string): { request?: DiagramEditRequest; ignored: string[]; error?: string } {
+/** set_diagram 的完整约定：只经 action=help 或写错时返回，常驻描述只留一句。 */
+export const DIAGRAM_TOOL_HELP = [
+  "set_diagram 约定：",
+  "- 动作：draw（给 name 与 body={groups,nodes,edges}）、add_node（给 node）、remove_node（给 target）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target）、relabel（给 target 与 label/sub/text）、move（给 target、x、y）。",
+  "- 字段：node={id,kind:module|note,label,x,y,sub?,group?,ref?,text?}、edge={id,from,to,origin:static|code,label?,evidence?}、group={id,label,x,y,w,h}。",
+  "- kind=module 的节点必须带 ref：file:<仓库内路径>、dir:<仓库内目录>、symbol:<仓库内路径>#<符号名>、group:<id>；分组还要给 files 清单。引擎按索引与依赖图核对，指不到会拒绝。",
+  "- origin 只填 static 或 code；引擎逐条核验，核不到会降为 inferred 并写明原因。不要自行填写 inferred 或 downgraded。",
+  "- diagram 省略时使用本仓库唯一的一张图；图元 id 取上下文中的画布现场。",
+  "- 位置由用户决定：除非用户明确要求，不移动已有节点。"
+].join("\n");
+
+/** 解析一次工具参数；返回 `help` 或 `error` 时不落盘。 */
+export function parseDiagramEditArguments(raw: string): { request?: DiagramEditRequest; help?: string; ignored: string[]; error?: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw || "{}");
@@ -464,11 +475,12 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
   const top = parsed as Record<string, unknown>;
   const nested = top.edit && typeof top.edit === "object" && !Array.isArray(top.edit) ? (top.edit as Record<string, unknown>) : undefined;
   const source = nested ?? (typeof top.action === "string" ? top : undefined);
-  if (!source) return { ignored: Object.keys(top).filter((key) => key !== "diagram" && key !== "edit"), error: "缺 edit：这一格写 action 与它自己的字段，要改哪张图写在 diagram 里" };
+  if (!source) return { ignored: Object.keys(top).filter((key) => key !== "diagram" && key !== "edit"), error: "缺 edit：动作、字段与图的约定传 {\"edit\":{\"action\":\"help\"}} 查看" };
   const action = textOf(source.action, 24);
+  if (action === "help") return { help: DIAGRAM_TOOL_HELP, ignored: [] };
   const fields = EDIT_FIELDS[action as DiagramEdit["action"]];
   const ignored: string[] = [];
-  if (!fields) return { ignored, error: `未知 action「${action.slice(0, 40)}」：只有 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move 这九种` };
+  if (!fields) return { ignored, error: `未知 action「${action.slice(0, 40)}」：只有 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move 这九种；完整约定传 {"edit":{"action":"help"}} 查看` };
   // 摊平写法下顶层多余的键同样登记进 ignored。
   for (const key of Object.keys(top)) {
     if (key === "diagram") continue;
@@ -546,7 +558,7 @@ export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagra
 /** 画布现场文本：现有的图清单与正打开那张的图元。 */
 export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?: string): string {
   const all = context.store.list();
-  if (!all.length) return "画布现场：这个仓还没有图。要画就用 draw 一次画完整张（节点、边、分组都给全），别一格一格试。";
+  if (!all.length) return "画布现场：这个仓库还没有图。要画就用 draw 一次提交完整节点、边与分组，不逐格提交。";
   const lines = all.map((item) => `- ${item.name}（${item.id}，${item.source === "agent" ? "agent 画的" : "用户建的"}，${item.nodes} 节点 / ${item.edges} 边 / ${item.versions} 版，最后改动 ${versionStamp(item.updatedAt)}）${item.id === openDiagramId ? " ← 画布上正打开的这张" : ""}`);
   const open = openDiagramId ? context.store.read(openDiagramId) : undefined;
   const refs = open ? refIndexOf(context.index, context.analysis) : undefined;
@@ -566,12 +578,12 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
 /** 画布结构写入口的工具定义。 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
-  description: "改画布上那一张图的结构，只有九种动作：draw（一次画完整张图：`name` 与 body={groups,nodes,edges} 都必填，会新建一张图进图库）、add_node（给 node）、remove_node（给 target，连带删掉挂在它身上的边）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target，框里节点的归属一并清掉）、relabel（给 target 与 label/sub/text）、move（给 target 与 x、y）。三条硬规矩：① 位置是用户的：除非用户明确让你摆，别去挪东西（用户自己拖不存版本）；② kind=module 的节点必须带 ref：file:<仓内路径> / dir:<仓内目录> / symbol:<仓内路径>#<符号名> / group:<id>，group 还要给 files 清单；引擎按索引与依赖图核对，指不到就不落笔——画一个查无此人的节点，读者会去代码里找它；③ 边的 origin 你报 static 或 code：引擎会拿 import、调用、类型派发，再加上产物里的类型关系与运行时绑定（依赖注入、SPI 这类代码中没有直接调用的那一类）逐条核，核不到就降成 inferred 并把为什么写在边上（它只会降不会升，也别试图自己写 downgraded，这一项由引擎填）。要改哪张图就写 diagram（id 或名字），省略＝只有一张时的那张；上下文里那份「画布现场」列了现有的图与正打开那张的全部图元 id，照着它写，别猜 id。",
+  description: "修改画布上的图结构；先传 {\"edit\":{\"action\":\"help\"}} 查看动作与字段约定。",
   parameters: {
     type: "object",
     properties: {
-      diagram: { type: "string", description: "要改的那张图：id 或名字。省略时如果这个仓只有一张图就用它，认不出会被拒并列出图库" },
-      edit: { type: "object", description: "一次改动：{ action, ...该动作的字段 }。action 取 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move；node={id,kind:module|note,label,x,y,sub?,group?,module 再带 ref,note 再带 text}，edge={id,from,to,origin:static|code|inferred,label?,evidence?}，group={id,label,x,y,w,h}，body={groups,nodes,edges}" }
+      diagram: { type: "string", description: "要改的那张图：id 或名字；省略时使用本仓库唯一的一张图" },
+      edit: { type: "object", description: "一次改动：action 与对应字段；action=help 返回完整约定" }
     },
     required: ["edit"]
   }

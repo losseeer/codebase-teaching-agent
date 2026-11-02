@@ -225,12 +225,12 @@ export function skillsBriefing(skills: SkillBrief[]): string {
 /** 技能正文与附属文件的取用工具声明。 */
 export const READ_SKILL_TOOL: LlmTool = {
   name: "read_skill",
-  description: "按名字取一份技能的完整正文（系统提示词里那张清单上的名字）。做法、命令与红线都在正文里——只凭名字猜内容会猜错。正文提到的附属文件（脚本、参照表之类）用 file 参数按相对该技能目录的路径取。",
+  description: "按名字读取技能正文；附属文件用 file 指定相对路径。",
   parameters: {
     type: "object",
     properties: {
-      name: { type: "string", description: "清单上的技能名字" },
-      file: { type: "string", description: "可选：技能目录内的相对路径，省略就取 SKILL.md 正文" }
+      name: { type: "string", description: "技能清单中的名字" },
+      file: { type: "string", description: "可选：技能目录内的相对路径，省略时读取 SKILL.md" }
     },
     required: ["name"]
   }
