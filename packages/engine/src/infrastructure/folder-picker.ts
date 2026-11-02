@@ -103,6 +103,7 @@ async function pickLinux(run: CommandRunner): Promise<DirectoryPickResult> {
 
 async function pickWindows(run: CommandRunner): Promise<DirectoryPickResult> {
   const script = [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;",
     "Add-Type -AssemblyName System.Windows.Forms;",
     "$d = New-Object System.Windows.Forms.FolderBrowserDialog;",
     "$d.Description = '选择要导入的代码仓库';",
