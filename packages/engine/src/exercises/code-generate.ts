@@ -68,11 +68,12 @@ const MAX_PROMPT = 1_600;
 const MAX_FILE_BYTES = 24_000;
 const MAX_FILES_PER_SLOT = 3;
 
-/** 三语言各自的测试报结论格式，由引擎定死。 */
+/** 各语言各自的测试报结论格式，由引擎定死。 */
 const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
   typescript: "测试文件（例如 `tests.ts`，入口就是它）自己依次调用各条断言，每条**通过就 pass+1、抛异常就 fail+1 并把原因打到 stderr**；结尾必须打印一行 `TESTS <pass> <fail>`，且 fail>0 时设 `process.exitCode = 1`。跨文件 import **必须写真实扩展名 `.ts`**（沙箱里的 node 不做 `.js`→`.ts` 的重写）。",
   python: '测试文件（例如 `tests.py`，入口就是它）自己依次跑各条断言，每条**用 try/except 包住：过了 pass+1，抛了 fail+1**；结尾 `print(f"TESTS {pass} {fail}")`，fail>0 时 `sys.exit(1)`。只用标准库。',
-  java: '入口是一个带 `public static void main` 的类（例如 `Tests`，文件名必须与类名同名且不带包目录）。每条断言用 try/catch 包住计数，结尾 `System.out.println("TESTS " + pass + " " + fail);` 并在 fail>0 时 `System.exit(1)`。只用 JDK。'
+  java: '入口是一个带 `public static void main` 的类（例如 `Tests`，文件名必须与类名同名且不带包目录）。每条断言用 try/catch 包住计数，结尾 `System.out.println("TESTS " + pass + " " + fail);` 并在 fail>0 时 `System.exit(1)`。只用 JDK。',
+  go: '测试文件（例如 `tests.go`，入口就是它）与实现文件同属 `package main` 且都放在根目录（不要建子目录）；**实现文件不得再定义 `func main`，main 只写在测试文件里**。每条断言用 if 分支计数（通过 pass++，失败 fail++ 并把原因打到 stderr），结尾 `fmt.Printf("TESTS %d %d\\n", pass, fail)`，fail>0 时 `os.Exit(1)`。只用标准库。'
 };
 
 function systemPrompt(kind: "patch_edit" | "author_function", language: ExerciseLanguage): string {
@@ -124,7 +125,7 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
     "",
     "严格输出 JSON（不要任何其他文字）：",
-    `{"ok":true,"language":"typescript|python|java","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `{"ok":true,"language":"${(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).join("|")}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
@@ -132,7 +133,8 @@ function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
     "",
     "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。",
-    "`anchors` 最多 3 条：只要从某个参考文件（摘录里给的，或这一趟 `read_file` 读过的）取了概念、数据结构或行为，就至少点名一条；只填真正取材过的，行号指向被取用的那一段。每条都要写 `why`：一句话说明取用了它的什么（锁顺序、退避公式、字段形状）；写不出 why 就不要点这条。确实一处都没参考才填空数组。"
+    "`anchors` 最多 3 条：只要从某个参考文件（摘录里给的，或这一趟 `read_file` 读过的）取了概念、数据结构或行为，就至少点名一条；只填真正取材过的，行号指向被取用的那一段。每条都要写 `why`：一句话说明取用了它的什么（锁顺序、退避公式、字段形状）；写不出 why 就不要点这条。确实一处都没参考才填空数组。",
+    "文件路径必须用所选语言的扩展名：typescript 用 `.ts`、python 用 `.py`、java 用 `.java`、go 用 `.go`，且 go 的所有文件都要在同一个 `package main` 里。"
   ].join("\n");
 }
 
@@ -189,7 +191,7 @@ function samePathSet(left: CodeFile[], right: CodeFile[]): boolean {
 
 function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodeProposal; issue?: string } {
   const language = String(parsed.language ?? "").trim() as ExerciseLanguage;
-  if (!["typescript", "python", "java"].includes(language)) return { issue: `语言不在沙箱支持范围内：${language || "（空）"}` };
+  if (!["typescript", "python", "java", "go"].includes(language)) return { issue: `语言不在沙箱支持范围内：${language || "（空）"}` };
   const kind = String(parsed.kind ?? "").trim();
   if (kind !== "patch_edit" && kind !== "author_function") return { issue: `题型字段不对：${kind || "（空）"}` };
   const title = String(parsed.title ?? "").trim().slice(0, MAX_TITLE);
@@ -202,10 +204,13 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   if (!given || !solution || !hidden) return { issue: "given/solution/hidden 三组文件形状不合法（空、超限、或文件名不合该语言形状）" };
   if (!samePathSet(given, solution)) return { issue: "given 与 solution 的文件集合必须完全一致（学习者改的就是这一组）" };
   let entry = String(parsed.entry ?? "").trim();
-  const test = hidden.find((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry);
+  const test = hidden.find((file) => file.path === entry || file.path.replace(/\.(ts|py|java|go)$/, "") === entry);
   if (!test) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
   // Java 的入口是类名，改文件名会与类名脱钩；其余语言给撞名的测试文件确定性改名。
-  if (language !== "java" && given.some((slot) => slot.path === test.path)) entry = test.path = `tests.${language === "typescript" ? "ts" : "py"}`;
+  if (language !== "java" && given.some((slot) => slot.path === test.path)) {
+    const extension = language === "typescript" ? "ts" : language === "python" ? "py" : "go";
+    entry = test.path = `tests.${extension}`;
+  }
   const clash = hidden.find((file) => given.some((slot) => slot.path === file.path));
   if (clash) return { issue: `hidden 与 given 有同名文件（${clash.path}）：下发件会被测试盖掉` };
   const anchors = Array.isArray(parsed.anchors)
@@ -389,7 +394,7 @@ function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
 export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink; repair?: RepairPolicy }): Promise<CodeGeneration> {
   const source = unitSource(input.repositoryPath, input.unit);
   if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [], skillReads: [] };
-  const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
+  const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : input.unit.symbol.language === "go" ? "go" : undefined;
   if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [], skillReads: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });

@@ -19,7 +19,7 @@ export interface SandboxFile {
 export interface SandboxRunOptions {
   language: SandboxLanguage;
   files: SandboxFile[];
-  /** typescript/python：入口文件名（`main.ts`）；java：入口类名（`Solution`） */
+  /** typescript/python/go：入口文件名（`main.ts`）；java：入口类名（`Solution`） */
   entry: string;
   timeoutMs?: number;
   memoryMb?: number;
@@ -52,11 +52,11 @@ export interface SandboxRun {
   durationMs: number;
   /** 本次是否真跑在强制隔离下。 */
   isolated: boolean;
-  /** 本次是否真的有内存上限；python 在 macOS 上为 `false`。 */
+  /** 本次是否真的有内存上限；python 与 go 在 macOS 上为 `false`。 */
   memoryGuarded: boolean;
 }
 
-const DEFAULTS = { timeoutMs: 8_000, memoryMb: 128, maxOutputBytes: 64_000 };
+const DEFAULTS = { timeoutMs: 8_000, memoryMb: 128, maxOutputBytes: 64_000, goTimeoutMs: 20_000 };
 
 interface StepPlan {
   command: string;
@@ -69,20 +69,22 @@ export function assertSafePath(path: string, language: SandboxLanguage): string 
   const normalized = path.trim();
   if (!normalized || normalized.startsWith("/") || normalized.includes("\\") || normalized.includes("..")) throw new Error(`非法的沙箱文件名：${path}`);
   if (!/^[A-Za-z0-9._/-]+$/.test(normalized)) throw new Error(`非法的沙箱文件名：${path}`);
-  const extension: Record<SandboxLanguage, string> = { typescript: ".ts", python: ".py", java: ".java" };
+  const extension: Record<SandboxLanguage, string> = { typescript: ".ts", python: ".py", java: ".java", go: ".go" };
   if (!normalized.endsWith(extension[language])) throw new Error(`${language} 的沙箱文件必须以 ${extension[language]} 结尾：${path}`);
   if (language === "java" && !/^[A-Za-z][A-Za-z0-9_]*\.java$/.test(normalized)) throw new Error(`Java 文件名必须是「类名.java」且不带包目录（public class 与文件名同名）：${path}`);
   return normalized;
 }
 
-function toolchainOrThrow(): SandboxToolchain {
+function toolchainOrThrow(language: SandboxLanguage): SandboxToolchain {
   const toolchain = resolveToolchain();
   const missing = (["node", "python", "javac", "java"] as const).filter((key) => !toolchain[key]);
   if (missing.length) throw new Error(`沙箱缺解释器：${missing.join("、")}（PATH 里找不到 node/python3/javac/java）`);
+  // Go 是可选语言：没装 Go 只拒 Go 代码题，不拖垮其余三语言。
+  if (language === "go" && !toolchain.go) throw new Error("沙箱缺 Go 工具链：PATH 里找不到 go");
   return toolchain as SandboxToolchain;
 }
 
-function planFor(language: SandboxLanguage, entry: string, memoryMb: number, toolchain: SandboxToolchain): StepPlan[] {
+function planFor(language: SandboxLanguage, entry: string, memoryMb: number, toolchain: SandboxToolchain, files: SandboxFile[]): StepPlan[] {
   if (language === "typescript") return [{ command: toolchain.node, args: [`--max-old-space-size=${memoryMb}`, "--no-warnings", entry] }];
   if (language === "python") {
     /** `-I` = 隔离模式；macOS 上下调 python 的 `RLIMIT_AS` 会失败，设限失败即放过。
@@ -98,6 +100,10 @@ sys.argv = [_entry]
 runpy.run_path(_entry, run_name="__main__")
 `;
     return [{ command: toolchain.python, args: ["-I", "-c", bootstrap] }];
+  }
+  if (language === "go") {
+    // 显式列出全部文件：`go run` 不扫描工作目录，隐藏测试与实现一起进同一个 main 包。
+    return [{ command: toolchain.go, args: ["run", ...files.map((file) => file.path)] }];
   }
   return [
     { command: toolchain.javac, args: ["-encoding", "UTF-8", "-d", "."], appendSourceList: true },
@@ -155,8 +161,19 @@ function launch(command: string, args: string[], context: LaunchContext): Promis
 }
 
 function sandboxEnv(workdir: string, toolchain: SandboxToolchain): Record<string, string> {
-  const binDirs = [...new Set([dirname(toolchain.node), dirname(toolchain.python), dirname(toolchain.javac), dirname(toolchain.java), "/usr/bin", "/bin"])];
-  return { PATH: binDirs.join(":"), HOME: workdir, TMPDIR: workdir, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
+  const goDir = toolchain.go ? [dirname(toolchain.go)] : [];
+  const binDirs = [...new Set([dirname(toolchain.node), dirname(toolchain.python), dirname(toolchain.javac), dirname(toolchain.java), ...goDir, "/usr/bin", "/bin"])];
+  return {
+    PATH: binDirs.join(":"),
+    HOME: workdir,
+    TMPDIR: workdir,
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    // Go 不用模块模式：题目文件都在同一个临时目录，不需要 go.mod 与联网取依赖。
+    GO111MODULE: "off",
+    CGO_ENABLED: "0",
+    ...(toolchain.goRoot ? { GOROOT: toolchain.goRoot } : {})
+  };
 }
 
 function createWorkdir(): string {
@@ -172,10 +189,11 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
   const backend = isolationBackend();
   if (!backend.available && !baseline) throw new Error(`沙箱不可用：${backend.reason}`);
-  const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
+  // Go 首跑要编译标准库依赖链，默认预算比其余语言宽；显式 timeoutMs 仍可覆盖。
+  const timeoutMs = options.timeoutMs ?? (language === "go" ? DEFAULTS.goTimeoutMs : DEFAULTS.timeoutMs);
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULTS.maxOutputBytes;
-  const toolchain = toolchainOrThrow();
-  const plans = planFor(language, entry, options.memoryMb ?? DEFAULTS.memoryMb, toolchain);
+  const toolchain = toolchainOrThrow(language);
+  const plans = planFor(language, entry, options.memoryMb ?? DEFAULTS.memoryMb, toolchain, files);
 
   const workdir = createWorkdir();
   const started = Date.now();
@@ -188,7 +206,9 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
     }
 
     const env = baseline ? { ...process.env, TMPDIR: workdir } : sandboxEnv(workdir, toolchain);
-    const context: LaunchContext = { workdir, profile: seatbeltProfile(workdir, toolchain, { ...options.profileOverride, denyRead: options.denyRead }), timeoutMs, maxOutputBytes, env, isolated: !baseline };
+    // Go 的编译器/链接器是 `go` 命令的子进程；只有 Go 需要放开 fork，读写与网络仍按同一套拒绝。
+    const allowFork = options.profileOverride?.allowFork ?? language === "go";
+    const context: LaunchContext = { workdir, profile: seatbeltProfile(workdir, toolchain, { ...options.profileOverride, allowFork, denyRead: options.denyRead }), timeoutMs, maxOutputBytes, env, isolated: !baseline };
 
     const steps: SandboxStep[] = [];
     let stdout = "";
@@ -212,7 +232,7 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
     return {
       language, steps, ok: !timedOut && steps.length === plans.length && steps.every((step) => step.exitCode === 0),
       stdout, stderr, timedOut, truncated, durationMs: Date.now() - started, isolated: !baseline,
-      memoryGuarded: language !== "python"
+      memoryGuarded: language !== "python" && language !== "go"
     };
   } finally {
     rmSync(workdir, { recursive: true, force: true });

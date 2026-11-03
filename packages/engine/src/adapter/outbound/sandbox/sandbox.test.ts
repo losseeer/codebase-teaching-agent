@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, type TestContext } from "vitest";
 import { nestedSandboxUsable } from "./capability.js";
 import { isolationStatus, needsReprobe, reprobeIsolation, resetIsolationForTest, runSandbox, SandboxUnavailableError, stubIsolationForTest, type IsolationStatus } from "./isolation.js";
-import { runRaw } from "./runner.js";
+import { assertSafePath, runRaw } from "./runner.js";
 import { resolveToolchain, seatbeltProfile } from "./profile.js";
 import { homedir } from "node:os";
 
@@ -105,6 +105,31 @@ describe("沙箱运行", () => {
     });
     expect(java.stdout.trim()).toBe("10");
   }, 60_000);
+
+  it("Go 也能跑代码题的测试形状（本机没装 Go 时跳过并点名）", async ({ skip }) => {
+    if (!capability.usable) skip();
+    if (!resolveToolchain().go) {
+      console.warn("[sandbox] 本机 PATH 里没有 go：Go 代码题用例跳过");
+      skip();
+    }
+    const run = await runRaw({
+      language: "go",
+      entry: "tests.go",
+      timeoutMs: 30_000,
+      files: [
+        { path: "target.go", contents: "package main\n\nfunc twice(n int) int {\n\treturn n * 2\n}\n" },
+        { path: "tests.go", contents: 'package main\n\nimport (\n\t"fmt"\n\t"os"\n)\n\nfunc main() {\n\tpass, fail := 0, 0\n\tif twice(21) == 42 {\n\t\tpass++\n\t} else {\n\t\tfail++\n\t}\n\tfmt.Printf("TESTS %d %d\\n", pass, fail)\n\tif fail > 0 {\n\t\tos.Exit(1)\n\t}\n}\n' }
+      ]
+    });
+    expect(run.ok).toBe(true);
+    expect(run.stdout).toContain("TESTS 1 0");
+  }, 60_000);
+
+  it("Go 沙箱文件必须用 .go 扩展名", async () => {
+    expect(assertSafePath("tests.go", "go")).toBe("tests.go");
+    await expect(runRaw({ language: "go", entry: "tests.go", files: [{ path: "tests.ts", contents: "package main\n" }] })).rejects
+      .toThrow("go 的沙箱文件必须以 .go 结尾");
+  });
 
   it("路径穿越的文件名在进沙箱之前就被拒", async () => {
     await expect(runRaw({ language: "typescript", entry: "x.ts", files: [{ path: "../../escape.ts", contents: "console.log(1);" }] })).rejects

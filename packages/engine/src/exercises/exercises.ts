@@ -604,7 +604,7 @@ export class ExerciseService {
   private targets(repository: PracticeRepository, kind: ExerciseKind): PracticeTarget<unknown>[] {
     if (isCodeKind(kind)) {
       // 代码族两型共用同一批候选；沙箱不支持的语言在这里就不进候选。
-      const supported = new Set(["typescript", "python", "java"]);
+      const supported = new Set(["typescript", "python", "java", "go"]);
       return repository.analysis.implementations
         .filter((unit) => supported.has(unit.symbol.language))
         .map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));

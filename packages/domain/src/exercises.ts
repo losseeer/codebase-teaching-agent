@@ -38,13 +38,13 @@ export type ExerciseInputMode = "text" | "multi_select" | "open" | "code";
 /** `execution` 意味着「沙箱真跑测试」，判分只由测试是否全过决定。 */
 export type ExerciseGradingMode = "execution" | "set_match" | "rubric";
 /** 沙箱支持的语言。就是这一份清单——加一门语言要同时给 runner（怎么起）与探测（能不能真拦住），否则整域禁用。 */
-export type ExerciseLanguage = "typescript" | "python" | "java";
+export type ExerciseLanguage = "typescript" | "python" | "java" | "go";
 /** 下发给界面编辑器的可编辑文件（`patch_edit` 给的是带缺陷的那一份，`author_function` 给的是骨架）。
     判分用的测试与替身不在这里，它们只留在引擎缓存行里。 */
 export interface ExerciseCodeSlot {
   language: ExerciseLanguage;
   files: { path: string; contents: string }[];
-  /** typescript/python：入口文件名；java：入口类名 */
+  /** typescript/python/go：入口文件名；java：入口类名 */
   entry: string;
 }
 /** rubric 判分的评分细则维度（LLM 出题时一并产出，存于引擎缓存，不下发 GUI）。 */

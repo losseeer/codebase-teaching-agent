@@ -19,6 +19,10 @@ export interface SandboxToolchain {
   python: string;
   javac: string;
   java: string;
+  /** Go 工具链；没装时不存在，只有 Go 代码题会拒。 */
+  go: string;
+  /** Go 标准库与工具二进制所在的 GOROOT。 */
+  goRoot: string;
   /** `sys.prefix` 那一份，stdlib 与 site-packages 在其下。 */
   pythonPrefix: string;
   javaHome: string;
@@ -45,13 +49,17 @@ export function resolveToolchain(env: NodeJS.ProcessEnv = process.env): Partial<
   const python = resolve("python3");
   const javac = resolve("javac");
   const java = resolve("java");
+  const go = resolve("go");
   const pythonPrefix = python ? dirname(dirname(python)) : undefined;
   const javaHome = env.JAVA_HOME ?? (java ? dirname(dirname(java)) : undefined);
+  const goRoot = go ? dirname(dirname(go)) : undefined;
   const toolchain: Partial<SandboxToolchain> = {};
   if (node) toolchain.node = node;
   if (python) toolchain.python = python;
   if (javac) toolchain.javac = javac;
   if (java) toolchain.java = java;
+  if (go) toolchain.go = go;
+  if (goRoot) toolchain.goRoot = goRoot;
   if (pythonPrefix) toolchain.pythonPrefix = pythonPrefix;
   if (javaHome) toolchain.javaHome = javaHome;
   return toolchain;
@@ -66,6 +74,8 @@ function interpreterReadRoots(toolchain: Partial<SandboxToolchain>): string[] {
   if (toolchain.java) roots.add(realpathSafe(dirname(toolchain.java)));
   if (toolchain.javaHome) roots.add(realpathSafe(toolchain.javaHome));
   if (toolchain.javac) roots.add(realpathSafe(dirname(toolchain.javac)));
+  if (toolchain.go) roots.add(realpathSafe(dirname(toolchain.go)));
+  if (toolchain.goRoot) roots.add(realpathSafe(toolchain.goRoot));
   return [...roots].filter((root) => root && existsSync(root));
 }
 

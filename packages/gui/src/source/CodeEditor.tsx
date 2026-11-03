@@ -7,6 +7,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { python } from "@codemirror/lang-python";
 import { java } from "@codemirror/lang-java";
+import { go } from "@codemirror/lang-go";
 import type { ExerciseLanguage } from "@codebase-tutor/domain";
 
 // 练习页代码编辑器：CodeMirror 6，只装高亮与基础交互。
@@ -48,8 +49,9 @@ function languageExtension(path: string, declared: ExerciseLanguage) {
   // 文件名优先，声明语言为辅
   if (path.endsWith(".py")) return python();
   if (path.endsWith(".java")) return java();
+  if (path.endsWith(".go")) return go();
   if (path.endsWith(".ts") || path.endsWith(".tsx") || path.endsWith(".js") || path.endsWith(".jsx")) return javascript({ typescript: path.endsWith(".ts") || path.endsWith(".tsx") });
-  return declared === "python" ? python() : declared === "java" ? java() : javascript({ typescript: true });
+  return declared === "python" ? python() : declared === "java" ? java() : declared === "go" ? go() : javascript({ typescript: true });
 }
 
 export function CodeEditor({ file, language, resetKey, ariaLabel, onChange }: { file: CodeEditorFile; language: ExerciseLanguage; resetKey: string; ariaLabel: string; onChange: (contents: string) => void }): ReactElement {
