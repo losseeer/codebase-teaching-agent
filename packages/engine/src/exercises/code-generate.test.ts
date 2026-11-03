@@ -149,19 +149,14 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "code")?.payload.selection).toBe("none");
   });
 
-  it("修复策略可把形状错误也重试，默认策略不重试形状错误", async () => {
+  it("形状错误默认也修复一次", async () => {
     const repository = testRepository();
     const invalid = JSON.stringify({ ok: true, title: "" });
     const valid = proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE });
-    const defaultProvider = fakeProvider(() => invalid);
-    const defaultResult = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "config", kind: "patch_edit", reference: "", provider: defaultProvider, faces: referenceFaces() });
-    expect(defaultResult).toMatchObject({ ok: false, stage: "proposal_shape" });
-    expect(defaultProvider.calls.count).toBe(1);
-
-    const retryProvider = fakeProvider(() => retryProvider.calls.count === 1 ? invalid : valid);
-    const retried = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "config", kind: "patch_edit", reference: "", provider: retryProvider, faces: referenceFaces(), repair: { maxRetries: 2, retryShape: true } });
-    expect(retried.ok).toBe(true);
-    expect(retryProvider.calls.count).toBe(2);
+    const provider = fakeProvider(() => provider.calls.count === 1 ? invalid : valid);
+    const result = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "config", kind: "patch_edit", reference: "", provider, faces: referenceFaces() });
+    expect(result.ok).toBe(true);
+    expect(provider.calls.count).toBe(2);
   });
 
   it("自证失败后带着失败输出重发一次；首轮失败行不冒充已接受", async () => {

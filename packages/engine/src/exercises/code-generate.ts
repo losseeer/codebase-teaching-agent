@@ -203,7 +203,8 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   if (!samePathSet(given, solution)) return { issue: "given 与 solution 的文件集合必须完全一致（学习者改的就是这一组）" };
   const entry = String(parsed.entry ?? "").trim();
   if (!hidden.some((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry)) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
-  if (hidden.some((file) => given.some((slot) => slot.path === file.path))) return { issue: "hidden 与 given 有同名文件：下发件会被测试盖掉" };
+  const clash = hidden.find((file) => given.some((slot) => slot.path === file.path));
+  if (clash) return { issue: `hidden 与 given 有同名文件（${clash.path}）：下发件会被测试盖掉` };
   const anchors = Array.isArray(parsed.anchors)
     ? (parsed.anchors as unknown[]).flatMap((item) => {
         const record = (item ?? {}) as Record<string, unknown>;
@@ -314,7 +315,7 @@ function repairUser(original: string, previous: string, failure: Extract<CodeGen
   ].join("\n");
 }
 
-/** 修复策略：默认只对自证失败重试一次；实验可放宽到形状错误与更多次。 */
+/** 修复策略：默认对自证失败与形状错误各重试一次；实验可再放宽次数。 */
 export interface RepairPolicy {
   /** 首轮之后最多重试几次。 */
   maxRetries: number;
@@ -322,7 +323,7 @@ export interface RepairPolicy {
   retryShape: boolean;
 }
 
-const DEFAULT_REPAIR: RepairPolicy = { maxRetries: 1, retryShape: false };
+const DEFAULT_REPAIR: RepairPolicy = { maxRetries: 1, retryShape: true };
 
 /** 合并多次尝试的用量与审计；失败理由带上实际修复次数。 */
 function combineAttempts(attempts: CodeGeneration[]): CodeGeneration {
