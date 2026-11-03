@@ -102,7 +102,9 @@ async function pickLinux(run: CommandRunner): Promise<DirectoryPickResult> {
 }
 
 async function pickWindows(run: CommandRunner): Promise<DirectoryPickResult> {
+  // 必须用无 BOM 的 UTF-8；带 BOM 时写出的路径首字符会多出 U+FEFF。
   const script = [
+    "$utf8 = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $utf8;",
     "Add-Type -AssemblyName System.Windows.Forms;",
     "$d = New-Object System.Windows.Forms.FolderBrowserDialog;",
     "$d.Description = '选择要导入的代码仓库';",
