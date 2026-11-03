@@ -177,13 +177,13 @@ describe("journal 回合历史", () => {
     expect(scoped.runs.map((run) => run.runId)).toEqual(["t3"]);
   });
 
-  it("预算到线也算提前结束，不冒充完成", () => {
+  it("预算到线是受限收尾，不冒充中止也不冒充完成", () => {
     const events = [
       ev("turn_text", "t4", "2026-11-02T03:04:01.000Z", { scene: "map_chat", question: "问三", answer: "答三" }),
       ev("loop_round", "t4", "2026-11-02T03:04:02.000Z", { scene: "map_chat", tool_rounds: 3, tool_reads: 1, stopped_by: "budget" })
     ];
     const run = buildTraceHistory(events, "repo", 10).runs[0];
-    expect(run.status).toBe("aborted");
+    expect(run.status).toBe("limited");
     expect(run.summary).toContain("预算到线");
   });
 });

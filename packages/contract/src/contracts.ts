@@ -244,7 +244,7 @@ export const agentTracePayloadSchema = z.object({
   at: z.string(),
   scene: z.string(),
   kind: z.enum(["turn", "model", "tool"]),
-  status: z.enum(["start", "ok", "error", "aborted"]),
+  status: z.enum(["start", "ok", "error", "aborted", "limited"]),
   label: z.string(),
   detail: z.string().optional(),
   /** 模型这一轮的回复正文，截断后随轨迹展示。 */
@@ -264,6 +264,10 @@ export type AgentTracePayload = z.infer<typeof agentTracePayloadSchema>;
 export const agentScopeSchema = z.enum(["teaching", "map", "practice"]);
 export type AgentScope = z.infer<typeof agentScopeSchema>;
 
+/** 练习工作区里实际走模型的那几种操作；能力清单按它的取证面给。 */
+export const practiceOperationSchema = z.enum(["chat", "generate", "grade", "explain"]);
+export type PracticeOperation = z.infer<typeof practiceOperationSchema>;
+
 /** 一个内部或外部工具面的静态条目。 */
 export const agentToolEntrySchema = z.object({
   name: z.string(),
@@ -279,6 +283,8 @@ export type AgentToolEntry = z.infer<typeof agentToolEntrySchema>;
 /** `GET /api/repositories/:id/agent-surface` 的返回体：技能清单与当前工作区的工具面。 */
 export const agentSurfaceSchema = z.object({
   scope: agentScopeSchema,
+  /** 练习工作区的当前操作；其他工作区不给。 */
+  operation: practiceOperationSchema.optional(),
   directories: z.array(z.string()),
   skills: z.array(z.object({ name: z.string(), description: z.string(), directory: z.string() })),
   skillSkipped: z.array(z.object({ dir: z.string(), reason: z.string() })),
@@ -291,7 +297,7 @@ export const traceHistoryRunSchema = z.object({
   runId: z.string(),
   scene: z.string(),
   threadId: z.string().optional(),
-  status: z.enum(["ok", "error", "aborted"]),
+  status: z.enum(["ok", "error", "aborted", "limited"]),
   startedAt: z.string(),
   endedAt: z.string().optional(),
   /** 出题运行的题目标签；对话运行不给（标题由当前会话决定）。 */

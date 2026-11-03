@@ -1,6 +1,6 @@
 import { ExerciseGradingMode, ExerciseKind, ExerciseResult, exerciseTypeOf, PracticeSummary } from "@codebase-tutor/domain";
 import type { Exercise, ExerciseBankEntry, ExerciseType } from "@codebase-tutor/domain";
-import type { ExerciseDeclineCode } from "@codebase-tutor/contract";
+import type { ExerciseDeclineCode, PracticeOperation } from "@codebase-tutor/contract";
 
 import {useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
@@ -19,6 +19,7 @@ import { useEverVisible } from "../ui/useEverVisible";
 import { DangerDialog } from "../ui/DangerDialog";
 import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
+import { useSetPracticeOperation } from "../agent/practiceOperation";
 
 // 练习工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
 // 题型决定链路（理解题吃静态分析、分析题走 rubric、设计题进沙箱），主题只筛目标单元。
@@ -127,6 +128,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [answering, setAnswering] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
+  const operation: PracticeOperation = generating ? "generate" : explaining ? "explain" : exercise ? (answering ? "grade" : "chat") : "generate";
+  useSetPracticeOperation(operation);
 
   useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);

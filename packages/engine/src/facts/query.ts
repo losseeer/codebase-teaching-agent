@@ -237,10 +237,10 @@ export const QUERY_FACTS_DEFINITION: ToolDefinition = {
   origin: { kind: "internal" },
   scope: "all",
   available: (ctx) => Boolean(ctx.facts),
-  unavailable: "这个工作区没开放静态产物查询。",
+  unavailable: "当前操作没有开放静态产物查询。",
   describe: () => ({ label: "查询产物" }),
   invoke: (args, ctx) => {
-    if (!ctx.facts) return { text: "这个工作区没开放静态产物查询。", ok: false };
+    if (!ctx.facts) return { text: "当前操作没有开放静态产物查询。", ok: false };
     ctx.onProgress?.({ type: "querying_facts" });
     return { text: ctx.facts.apply(JSON.stringify(args)) };
   }

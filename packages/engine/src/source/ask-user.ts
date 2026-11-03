@@ -55,7 +55,6 @@ export const ASK_USER_DEFINITION: ToolDefinition = {
   effect: "read",
   origin: { kind: "internal" },
   scope: ["map"],
-  conditional: true,
   available: (ctx) => Boolean(ctx.ask?.facets.length),
   unavailable: "这一轮没有向用户提问的通道。",
   describe: () => ({ label: "向你提问" }),

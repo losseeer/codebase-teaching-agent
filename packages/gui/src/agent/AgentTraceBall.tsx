@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
-import type { AgentScope, AgentSurface, AgentToolEntry } from "@codebase-tutor/contract";
+import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from "@codebase-tutor/contract";
 
 import { Icon } from "../ui/icons";
+import { usePracticeOperation } from "./practiceOperation";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
 import { inScope } from "./traceScope";
@@ -9,7 +10,8 @@ import { useTraceHistory } from "./useTraceHistory";
 
 const SCENE_LABEL: Record<string, string> = { "teaching.turn": "代码问答", "map.chat": "架构全景", "practice.chat": "练习答疑", "practice.generate": "出题" };
 const SCOPE_LABEL: Record<AgentScope, string> = { map: "架构全景", teaching: "代码问答", practice: "练习" };
-const STATUS_LABEL: Record<TraceRun["status"], string> = { running: "进行中", ok: "完成", error: "失败", aborted: "提前结束" };
+const PRACTICE_OPERATION_LABEL: Record<PracticeOperation, string> = { chat: "答疑", generate: "出题", grade: "判分", explain: "讲评" };
+const STATUS_LABEL: Record<TraceRun["status"], string> = { running: "进行中", ok: "完成", error: "失败", aborted: "提前结束", limited: "受限" };
 const FINISH_LABEL: Record<string, string> = { stop: "结束", length: "截断", tool_calls: "调工具" };
 
 type TraceTab = "trace" | "skills" | "tools";
@@ -60,13 +62,14 @@ function inSession(run: TraceRun, scope: AgentScope, threadId?: string | null): 
 function generationLabel(run: TraceRun): string {
   const title = run.title?.trim() || /题目「(.+?)」/.exec(run.summary ?? "")?.[1]?.trim();
   if (title) return title.length > 24 ? `${title.slice(0, 24)}…` : title;
-  const status = run.status === "running" ? "生成中" : run.status === "aborted" ? "已取消" : run.status === "error" ? "出题失败" : "出题";
+  const status = run.status === "running" ? "生成中" : run.status === "aborted" ? "已取消" : run.status === "error" ? "出题失败" : run.status === "limited" ? "受限" : "出题";
   return `${status} · ${shortTime(run.startedAt)}`;
 }
 
 /** 悬浮球：打开当前仓、当前工作区的运行轨迹；对话轨迹跟随当前会话。 */
 export function AgentTraceBall({ repositoryId, scope, threadId }: { repositoryId: string | null; scope: AgentScope; threadId?: string | null }): ReactElement | null {
   const { runs } = useAgentTrace(repositoryId);
+  const practiceOperation = usePracticeOperation();
   const [open, setOpen] = useState(false);
   if (!repositoryId) return null;
   const scoped = runs.filter((run) => inScope(run.scene, scope) && inSession(run, scope, threadId));
@@ -77,15 +80,15 @@ export function AgentTraceBall({ repositoryId, scope, threadId }: { repositoryId
         <Icon name="zap" size={18} />
         {running ? <span className="trace-ball-dot" /> : null}
       </button>
-      {open ? <TraceModal runs={scoped} repositoryId={repositoryId} scope={scope} threadId={threadId} onClose={() => setOpen(false)} /> : null}
+      {open ? <TraceModal runs={scoped} repositoryId={repositoryId} scope={scope} threadId={threadId} practiceOperation={scope === "practice" ? practiceOperation : undefined} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
-function TraceModal({ runs, repositoryId, scope, threadId, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; threadId?: string | null; onClose: () => void }): ReactElement {
+function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; threadId?: string | null; practiceOperation?: PracticeOperation; onClose: () => void }): ReactElement {
   const [tab, setTab] = useState<TraceTab>("trace");
   const [generationId, setGenerationId] = useState<string>();
-  const { surface, error, loading } = useAgentSurface(repositoryId, scope);
+  const { surface, error, loading } = useAgentSurface(repositoryId, scope, practiceOperation);
   // 练习区要保留 repo 级的出题历史，所以这里不按会话过滤，取回后再筛
   const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope, 100, scope === "practice" ? undefined : threadId);
   useEffect(() => {
@@ -121,7 +124,7 @@ function TraceModal({ runs, repositoryId, scope, threadId, onClose }: { runs: Tr
           {tabs.map((item) => (
             <button key={item.id} id={`trace-tab-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls="trace-panel" className={`trace-tab${tab === item.id ? " active" : ""}`} onClick={() => setTab(item.id)}>{item.label}</button>
           ))}
-          <span className="trace-scope" title="当前工作区">{SCOPE_LABEL[scope]}</span>
+          <span className="trace-scope" title="当前工作区">{SCOPE_LABEL[scope]}{practiceOperation ? ` · ${PRACTICE_OPERATION_LABEL[practiceOperation]}` : ""}</span>
         </div>
         <div className="modal-body" id="trace-panel" role="tabpanel" aria-labelledby={`trace-tab-${tab}`}>
           {tab === "trace" ? (
@@ -280,7 +283,7 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
 
 function StepStatus({ step }: { step: TraceStep }): ReactElement {
   if (step.status === "start") return <span className="spin trace-step-status"><Icon name="rotate" size={11} /></span>;
-  const tone = step.status === "ok" ? "ok" : step.status === "aborted" ? "aborted" : "error";
+  const tone = step.status === "ok" ? "ok" : step.status === "aborted" ? "aborted" : step.status === "limited" ? "limited" : "error";
   return <span className={`trace-dot ${tone} trace-step-status`} />;
 }
 

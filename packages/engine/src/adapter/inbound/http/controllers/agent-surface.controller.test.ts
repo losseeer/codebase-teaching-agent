@@ -5,7 +5,7 @@ import type { AgentSurface } from "@codebase-tutor/contract";
 
 import { createRouteFixture, type RouteFixture } from "../controller-test-kit.js";
 
-/** 只读能力面：静态注册表按工作区给可用性，读侧不发模型。 */
+/** 只读能力面：注册表按工作区与练习操作给可用性，读侧不发模型。 */
 const fx: RouteFixture = createRouteFixture();
 
 beforeAll(async () => { await fx.mount(); });
@@ -24,30 +24,49 @@ function emptySkills(): string {
   return dir;
 }
 
-async function surface(scope: string): Promise<AgentSurface> {
-  const response = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/agent-surface?scope=${scope}` });
+async function surface(scope: string, operation?: string): Promise<AgentSurface> {
+  const query = operation ? `scope=${scope}&operation=${operation}` : `scope=${scope}`;
+  const response = await fx.app.inject({ method: "GET", url: `/api/repositories/${fx.repositoryId}/agent-surface?${query}` });
   expect(response.statusCode).toBe(200);
   return response.json() as AgentSurface;
 }
 
 describe("GET /agent-surface 的只读能力面", () => {
-  it("按工作区给可用性：架构全景开画布与产物查询，练习只剩文件与技能", async () => {
+  it("按工作区与练习操作给可用性：出题开检索与产物，答疑只剩文件与技能", async () => {
     emptySkills();
     const before = fx.fetchCalls();
     const map = await surface("map");
     expect(fx.fetchCalls(), "读侧不发模型").toBe(before);
     expect(map.scope).toBe("map");
+    expect(map.operation).toBeUndefined();
     expect(map.tools.map((tool) => tool.name)).toEqual(["read_file", "search_code", "ask_user", "set_diagram", "read_skill", "query_facts", "外部工具"]);
     const byName = new Map(map.tools.map((tool) => [tool.name, tool]));
     expect(byName.get("set_diagram")?.available).toBe(true);
     expect(byName.get("query_facts")?.available).toBe(true);
     expect(byName.get("ask_user")).toMatchObject({ available: true, conditional: true });
-    expect(byName.get("read_skill")).toMatchObject({ available: false, reason: "没有装载技能" });
+    expect(byName.get("read_skill")).toMatchObject({ available: false, reason: "没有装载技能。" });
 
-    const practice = await surface("practice");
-    expect(practice.tools.find((tool) => tool.name === "search_code")).toMatchObject({ available: false, reason: "练习工作区不开放检索" });
-    expect(practice.tools.find((tool) => tool.name === "set_diagram")?.available).toBe(false);
-    expect(practice.tools.find((tool) => tool.name === "read_file")?.available).toBe(true);
+    const chat = await surface("practice", "chat");
+    expect(chat.operation).toBe("chat");
+    expect(chat.tools.find((tool) => tool.name === "search_code")).toMatchObject({ available: false, reason: "当前操作没有开放检索。" });
+    expect(chat.tools.find((tool) => tool.name === "query_facts")).toMatchObject({ available: false, reason: "当前操作没有开放静态产物查询。" });
+    expect(chat.tools.find((tool) => tool.name === "set_diagram")?.available).toBe(false);
+    expect(chat.tools.find((tool) => tool.name === "read_file")?.available).toBe(true);
+
+    const generate = await surface("practice", "generate");
+    expect(generate.operation).toBe("generate");
+    expect(generate.tools.find((tool) => tool.name === "search_code")?.available).toBe(true);
+    expect(generate.tools.find((tool) => tool.name === "query_facts")?.available).toBe(true);
+  });
+
+  it("判分与讲评和出题共用同一套取证面", async () => {
+    emptySkills();
+    for (const operation of ["grade", "explain"]) {
+      const practice = await surface("practice", operation);
+      expect(practice.operation).toBe(operation);
+      expect(practice.tools.find((tool) => tool.name === "search_code")?.available).toBe(true);
+      expect(practice.tools.find((tool) => tool.name === "query_facts")?.available).toBe(true);
+    }
   });
 
   it("装了技能后 read_skill 亮起，清单与目录来自注册表", async () => {

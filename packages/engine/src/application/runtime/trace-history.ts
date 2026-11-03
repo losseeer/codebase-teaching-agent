@@ -130,8 +130,9 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const usage = [...ordered].reverse().find((event) => event.type === "token_usage");
   const invariant = ordered.find((event) => event.type === "turn_invariant" && Boolean(event.payload.failed));
   const stopped = loop?.payload.stopped_by;
-  const aborted = Boolean(canceled) || ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted" || stopped === "budget" || stopped === "rounds" || stopped === "reads";
-  const status: TraceHistoryRun["status"] = aborted ? "aborted" : declined || loop?.payload.outcome === "failed" ? "error" : "ok";
+  const limited = stopped === "budget" || stopped === "rounds" || stopped === "reads";
+  const aborted = Boolean(canceled) || ordered.some((event) => event.type === "turn_aborted") || loop?.payload.aborted === true || loop?.payload.outcome === "aborted";
+  const status: TraceHistoryRun["status"] = aborted ? "aborted" : declined || loop?.payload.outcome === "failed" ? "error" : limited ? "limited" : "ok";
   const threadId = ordered.find((event) => event.sessionId)?.sessionId;
   const inputTokens = num(usage?.payload.input_tokens);
   const outputTokens = num(usage?.payload.output_tokens);

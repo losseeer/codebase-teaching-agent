@@ -8,7 +8,8 @@ import { budgetDegraded, searchCorpusFor, turnBudgetGuard } from "../orchestrati
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { skillsForTurn } from "../orchestration/scoped-turn.js";
 import { factsToolFor } from "../../infrastructure/canvas-tools.js";
-import type { ExerciseFaces } from "../../exercises/turn-faces.js";
+import type { PracticeOperation } from "@codebase-tutor/contract";
+import { PRACTICE_FACE_PLAN, type ExerciseFaces } from "../../exercises/turn-faces.js";
 import type { ToolTraceStep } from "../../source/tools/types.js";
 import { emitAgentTrace } from "../../turn/agent-trace.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
@@ -42,15 +43,16 @@ const DECLINE_CODES: Partial<Record<string, ExerciseDeclineCode>> = { no_theme_h
 
 const declined = (error: unknown, fallback: string, code?: ExerciseDeclineCode): ExerciseResult<never> => ({ ok: false, failure: { kind: "declined", message: error instanceof Error ? error.message : fallback, fallback, ...(code ? { code } : {}) } });
 
-/** 一次练习回合的取证面：检索语料与静态产物都按这次的仓现建。 */
-function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1], onTrace?: (step: ToolTraceStep) => void, signal?: AbortSignal): ExerciseFaces {
+/** 一次练习回合的取证面：按操作计划装配，检索语料与静态产物都按这次的仓现建。 */
+function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1], operation: PracticeOperation, onTrace?: (step: ToolTraceStep) => void, signal?: AbortSignal): ExerciseFaces {
+  const plan = PRACTICE_FACE_PLAN[operation];
   const skills = skillsForTurn();
   return {
     scope: "practice",
     repoPath: repository.path,
-    search: searchCorpusFor(repository),
-    facts: factsToolFor(repository, database),
-    ...(skills ? { skills } : {}),
+    ...(plan.search ? { search: searchCorpusFor(repository) } : {}),
+    ...(plan.facts ? { facts: factsToolFor(repository, database) } : {}),
+    ...(plan.skills && skills ? { skills } : {}),
     budgetGuard: turnBudgetGuard(repository.handle),
     ...(onTrace ? { onTrace } : {}),
     ...(signal ? { signal } : {})
@@ -139,7 +141,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   const generation = beginGeneration(repositoryId, input.jobId);
   const startedAt = Date.now();
   try {
-    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database, trace.onTrace, generation.signal) : undefined, progress));
+    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database, "generate", trace.onTrace, generation.signal) : undefined, progress));
     trace.finish(`题目「${value.title}」`, "ok");
     return { ok: true, value };
   } catch (error) {
@@ -181,7 +183,7 @@ export async function answerExerciseUseCase(repositoryId: string, exerciseId: st
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.answer(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database) : undefined)) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.answer(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database, "grade") : undefined)) };
   } catch (error) {
     return declined(error, "无法判分");
   }
@@ -193,7 +195,7 @@ export async function explainExerciseUseCase(repositoryId: string, exerciseId: s
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.explain(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database) : undefined)) };
+    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.explain(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database, "explain") : undefined)) };
   } catch (error) {
     return declined(error, "无法生成讲评");
   }

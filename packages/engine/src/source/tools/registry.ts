@@ -88,11 +88,6 @@ export class ToolRegistry {
 
 export const INTERNAL_REGISTRY = new ToolRegistry(INTERNAL_GROUPS);
 
-/** 界面能力面：内部工具按注册表顺序展开，不连接 MCP。 */
-export function internalDefinitions(): ToolDefinition[] {
-  return INTERNAL_GROUPS.flatMap((group) => group.tools);
-}
-
 /** 本轮注册表：内部分组 + MCP 适配器给出的分组。 */
 export function registryFor(ctx: ToolContext): ToolRegistry {
   return new ToolRegistry([...INTERNAL_GROUPS, ...(ctx.external?.groups ?? [])]);

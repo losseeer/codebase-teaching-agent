@@ -28,8 +28,8 @@ export function registerRepositoryReadRoutes(app: FastifyInstance): void {
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 
-  app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string } }>("/api/repositories/:repositoryId/agent-surface", async (request, reply) => {
-    const surface = agentSurfaceUseCase(request.params.repositoryId, request.query.scope);
+  app.get<{ Params: { repositoryId: string }; Querystring: { scope?: string; operation?: string } }>("/api/repositories/:repositoryId/agent-surface", async (request, reply) => {
+    const surface = agentSurfaceUseCase(request.params.repositoryId, request.query.scope, request.query.operation);
     return surface ?? reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
   });
 

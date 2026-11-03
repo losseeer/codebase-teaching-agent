@@ -740,7 +740,7 @@ function gradeSet(expected: string[], selected: string[]): GradeOutcome {
 }
 
 /** 规则侧候选选择：按主题词元对路径 / 符号 / 摘要打分，取前 limit 个文件构造摘录。 */
-function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3, summaries: Map<string, string> = new Map()): GuardCandidate[] {
+export function selectTagCandidates(repository: PracticeRepository, tag: string, limit = 3, summaries: Map<string, string> = new Map()): GuardCandidate[] {
   const tokens = tagTokens(tag);
   const symbolsByPath = new Map<string, SymbolInfo[]>();
   for (const symbol of repository.analysis.graph.symbols) {

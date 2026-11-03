@@ -25,6 +25,7 @@ import {
   threadScopedHistory
 } from "../orchestration/scoped-turn.js";
 import { type MapChatProgress, type ScopedChatResult, type ScopedChatTurn, mapChat, practiceChat } from "../../turn/run-turn.js";
+import { PRACTICE_FACE_PLAN } from "../../exercises/turn-faces.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
@@ -182,7 +183,8 @@ export function loadPracticeExercise(repositoryId: string, prepared: CheckedPrac
 export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, provider: LlmProvider, stream: ScopedTurnStream): Promise<ScopedTurnOutcome> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) throw new Error(REPOSITORY_NOT_MOUNTED);
-  const skills = skillsForTurn();
+  // 答疑除文件读取外只开技能；与能力清单共用同一份计划。
+  const skills = PRACTICE_FACE_PLAN.chat.skills ? skillsForTurn() : undefined;
   const result = await practiceChat({
     repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider,
     ...(turn.threadId ? { threadId: turn.threadId } : {}),

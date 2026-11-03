@@ -277,7 +277,7 @@ describe("completeWithReadTool 的 search_code 集成", () => {
     expect(result.completion.text).toBe("先搜后读的回答。");
   });
 
-  it("未传语料时 search_code 是未知工具（工具清单与提示都只认 read_file）", async () => {
+  it("未传语料时 search_code 不在清单，回喂明确的不可用原因", async () => {
     const { provider, calls } = scriptedProvider([
       searchCall("c1", "read"),
       { text: "收尾。", finishReason: "stop" }
@@ -285,8 +285,8 @@ describe("completeWithReadTool 的 search_code 集成", () => {
     const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 2, maxCalls: 3 });
     expect(calls[0].tools?.map((tool) => tool.name)).toEqual(["read_file"]);
     const unknown = calls[1].messages?.find((message) => message.role === "tool");
-    expect(unknown?.content).toContain("未知工具 search_code");
-    expect(unknown?.content).toContain("只支持 read_file。");
+    expect(unknown?.content).toContain("当前操作没有开放检索。");
+    expect(unknown?.content).not.toContain("未知工具");
     expect(result.codeSearches).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ export interface TraceRun {
   runId: string;
   scene: string;
   threadId?: string;
-  status: "running" | "ok" | "error" | "aborted";
+  status: "running" | "ok" | "error" | "aborted" | "limited";
   startedAt: string;
   endedAt?: string;
   /** 出题运行的题目标签；对话运行不给。 */

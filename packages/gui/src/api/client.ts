@@ -15,6 +15,7 @@ import {
   type CostSummary,
   type ExerciseDeclineCode,
   type ImportJob,
+  type PracticeOperation,
   type RepositoryCatalogEntry,
   type RepositoryFreshness,
   type RepositoryMountReason,
@@ -254,8 +255,8 @@ export const api = {
   /** 移出地址簿；只动引擎登记，不碰仓库里的 .tutor/。 */
   forgetRepository: (repositoryId: string, artifacts = false) => request<{ repositories: RepositoryCatalogEntry[]; artifacts?: "removed" | "absent" | "refused" }>(`/api/repositories/${repositoryId}${artifacts ? "?artifacts=1" : ""}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
-  /** 只读能力面：技能清单与当前工作区的工具面；不发模型。 */
-  getAgentSurface: (repositoryId: string, scope: AgentScope) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}`),
+  /** 只读能力面：技能清单与当前操作的工具面；不发模型。 */
+  getAgentSurface: (repositoryId: string, scope: AgentScope, operation?: PracticeOperation) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}${operation ? `&operation=${operation}` : ""}`),
   /** 历史回放：journal 按 traceId 汇总；给 threadId 时只取该会话，出题另按工作区取。纯读。 */
   getTraceHistory: (repositoryId: string, scope: AgentScope, limit = 20, threadId?: string | null) => checked<TraceHistory>("trace-history", traceHistorySchema, `/api/repositories/${repositoryId}/trace?limit=${limit}&scope=${scope}${threadId ? `&threadId=${encodeURIComponent(threadId)}` : ""}`),
   /** 导入报告：索引概况 + 本次 token/金额估算。 */

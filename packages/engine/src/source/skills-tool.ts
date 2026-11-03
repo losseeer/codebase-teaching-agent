@@ -24,7 +24,6 @@ export const READ_SKILL_DEFINITION: ToolDefinition = {
   effect: "read",
   origin: { kind: "internal" },
   scope: "all",
-  requires: "skills",
   available: (ctx) => Boolean(ctx.skills),
   unavailable: "没有装载技能。",
   describe: (args) => ({ label: `加载技能 ${requiredString(args, "name")}`.trim() }),

@@ -53,9 +53,10 @@ export const SEARCH_CODE_DEFINITION: ToolDefinition = {
   origin: { kind: "internal" },
   scope: "all",
   available: (ctx) => Boolean(ctx.search),
+  unavailable: "当前操作没有开放检索。",
   describe: (args) => ({ label: `检索 ${queryOf(args)}`.trim() }),
   invoke: (args, ctx) => {
-    if (!ctx.search) return { text: "当前工作区未开放 search_code。", ok: false };
+    if (!ctx.search) return { text: "当前操作没有开放检索。", ok: false };
     ctx.onProgress?.({ type: "searching", query: queryOf(args) });
     const outcome = executeSearchCode(ctx.search, JSON.stringify(args));
     return {

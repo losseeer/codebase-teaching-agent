@@ -314,17 +314,32 @@ function repairUser(original: string, previous: string, failure: Extract<CodeGen
   ].join("\n");
 }
 
-function combineGeneration(first: CodeGeneration, second: CodeGeneration): CodeGeneration {
-  const merged = {
-    usage: addUsage(first.usage, second.usage),
-    skillReads: [...first.skillReads, ...second.skillReads],
-    fileReads: [...(first.fileReads ?? []), ...(second.fileReads ?? [])],
-    runs: [...first.runs, ...second.runs]
-  };
-  return second.ok ? { ...second, ...merged } : { ...second, ...merged, reason: `${second.reason}（修复一次后仍未通过）` };
+/** 修复策略：默认只对自证失败重试一次；实验可放宽到形状错误与更多次。 */
+export interface RepairPolicy {
+  /** 首轮之后最多重试几次。 */
+  maxRetries: number;
+  /** 形状错误是否也重试。 */
+  retryShape: boolean;
 }
 
-/** 首轮 + 最多一次修复：只有自证失败才重发，形状/端点故障不重试。 */
+const DEFAULT_REPAIR: RepairPolicy = { maxRetries: 1, retryShape: false };
+
+/** 合并多次尝试的用量与审计；失败理由带上实际修复次数。 */
+function combineAttempts(attempts: CodeGeneration[]): CodeGeneration {
+  const last = attempts.at(-1)!;
+  const usage = attempts.reduce<LlmUsage | undefined>((sum, attempt) => addUsage(sum, attempt.usage), undefined);
+  const merged = {
+    usage,
+    skillReads: attempts.flatMap((attempt) => attempt.skillReads),
+    fileReads: attempts.flatMap((attempt) => attempt.fileReads ?? []),
+    runs: attempts.flatMap((attempt) => attempt.runs)
+  };
+  if (last.ok) return { ...last, ...merged };
+  const repairs = attempts.length - 1;
+  return { ...last, ...merged, reason: repairs > 0 ? `${last.reason}（修复 ${repairs} 次后仍未通过）` : last.reason };
+}
+
+/** 首轮 + 修复：默认只在自证失败时重发；实验策略可同时重试形状错误。 */
 async function generateWithRepair(input: {
   provider: LlmProvider;
   system: string;
@@ -333,25 +348,30 @@ async function generateWithRepair(input: {
   faces?: ExerciseFaces;
   onProgress?: ExerciseProgressSink;
   finish: (response: ProposalResponse) => Promise<CodeGeneration>;
+  repair?: RepairPolicy;
 }): Promise<CodeGeneration> {
-  let first: ProposalResponse;
+  const policy = input.repair ?? DEFAULT_REPAIR;
+  const attempts: CodeGeneration[] = [];
+  let previous = "";
   try {
-    first = await requestProposal(input);
+    let response = await requestProposal(input);
+    previous = response.text;
+    let result = await input.finish(response);
+    attempts.push(result);
+    while (!result.ok && attempts.length <= policy.maxRetries) {
+      const retryable = result.stage === "harness_validation" || (policy.retryShape && result.stage === "proposal_shape");
+      if (!retryable) break;
+      const repaired = await requestProposal({ ...input, user: repairUser(input.user, previous, result) });
+      previous = repaired.text;
+      result = await input.finish(repaired);
+      attempts.push(result);
+      if (input.faces?.signal?.aborted) throw new LlmAbortedError();
+    }
+    return combineAttempts(attempts);
   } catch (error) {
     if (isLlmAborted(error, input.faces?.signal)) throw error;
-    return providerFailure(error);
-  }
-  const result = await input.finish(first);
-  if (input.faces?.signal?.aborted) throw new LlmAbortedError();
-  if (result.ok || result.stage !== "harness_validation") return result;
-  try {
-    const repaired = await requestProposal({ ...input, user: repairUser(input.user, first.text, result) });
-    const combined = combineGeneration(result, await input.finish(repaired));
-    if (input.faces?.signal?.aborted) throw new LlmAbortedError();
-    return combined;
-  } catch (error) {
-    if (isLlmAborted(error, input.faces?.signal)) throw error;
-    return combineGeneration(result, providerFailure(error));
+    const failure = providerFailure(error);
+    return attempts.length ? combineAttempts([...attempts, failure]) : failure;
   }
 }
 
@@ -362,7 +382,7 @@ function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   return proposal.solution.some((file) => file.contents.replace(/\s+/g, " ").includes(needle));
 }
 
-export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<CodeGeneration> {
+export async function generateCodeExercise(input: { repositoryPath: string; unit: ImplementationUnit; kind: "patch_edit" | "author_function"; provider: LlmProvider; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink; repair?: RepairPolicy }): Promise<CodeGeneration> {
   const source = unitSource(input.repositoryPath, input.unit);
   if (!source) return { ok: false, stage: "proposal_shape", reason: "读不出这个单元的源码正文。", runs: [], skillReads: [] };
   const language = input.unit.symbol.language === "typescript" ? "typescript" : input.unit.symbol.language === "python" ? "python" : input.unit.symbol.language === "java" ? "java" : undefined;
@@ -385,6 +405,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     temperature: 0.4,
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    ...(input.repair ? { repair: input.repair } : {}),
     finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
@@ -399,6 +420,7 @@ export async function generateCodeExerciseFromReference(input: {
   provider: LlmProvider;
   faces?: ExerciseFaces;
   onProgress?: ExerciseProgressSink;
+  repair?: RepairPolicy;
 }): Promise<CodeGeneration> {
   const faces = input.faces ?? {};
   input.onProgress?.({ stage: "proposing" });
@@ -409,6 +431,7 @@ export async function generateCodeExerciseFromReference(input: {
     temperature: 0.4,
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    ...(input.repair ? { repair: input.repair } : {}),
     finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }

@@ -5,6 +5,7 @@ import type { RepositoryCatalogEntry, RepositoryFreshness, Workspace as _Workspa
 import { ApiError, api, isNotFound } from "./api/client";
 import { AgentRail } from "./agent/AgentRail";
 import { AgentTraceBall } from "./agent/AgentTraceBall";
+import { PracticeOperationProvider } from "./agent/practiceOperation";
 import { useScopedChat } from "./agent/useScopedChat";
 import { ImportPage } from "./views/ImportPage";
 import { DiagramPage } from "./views/DiagramPage";
@@ -266,23 +267,25 @@ export function App(): ReactElement {
           </div>
         </div>
       </aside>
-      <main className="main">
-        {banner}
-        <div className="route-content">
-          <Routes>
-            {/* 根路径固定落导入页 */}
-            <Route path="/" element={<Navigate to="/import" replace />} />
-            <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadRepositoryData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} onForget={forgetRepository} />} />
-            <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
-            <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
-            <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
-            <Route path="/tutor" element={<Navigate to="/app?workspace=teaching" replace />} />
-            <Route path="/practice" element={<Navigate to="/app?workspace=practice" replace />} />
-            <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
-          </Routes>
-        </div>
-        {workspaceRoute ? <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} threadId={chat.currentThreadId[traceScope]} /> : null}
-      </main>
+      <PracticeOperationProvider>
+        <main className="main">
+          {banner}
+          <div className="route-content">
+            <Routes>
+              {/* 根路径固定落导入页 */}
+              <Route path="/" element={<Navigate to="/import" replace />} />
+              <Route path="/import" element={<ImportPage onImported={(next) => { updateWorkspace(next); chat.reloadRepositoryData(); }} workspace={workspace} catalog={catalog} onSwitchRepository={switchRepository} onOpenRepository={openRepository} onForget={forgetRepository} />} />
+              <Route path="/insights" element={guard(workspace, workspaceReady, <InsightsPage workspace={workspace!} />, pending)} />
+              <Route path="/app" element={guard(workspace, workspaceReady, <Workbench workspace={workspace!} chat={chat} />, pending)} />
+              <Route path="/course" element={<Navigate to="/app?workspace=map" replace />} />
+              <Route path="/tutor" element={<Navigate to="/app?workspace=teaching" replace />} />
+              <Route path="/practice" element={<Navigate to="/app?workspace=practice" replace />} />
+              <Route path="*" element={workspace ? (workspaceReady ? <Navigate to="/app?workspace=map" replace /> : pending) : <Navigate to="/import" replace />} />
+            </Routes>
+          </div>
+          {workspaceRoute ? <AgentTraceBall repositoryId={workspace?.repositoryId ?? null} scope={traceScope} threadId={chat.currentThreadId[traceScope]} /> : null}
+        </main>
+      </PracticeOperationProvider>
       {workspaceRoute ? <AgentRail chat={chat} /> : null}
       <ToastHost />
     </div>
