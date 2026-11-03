@@ -56,6 +56,37 @@ describe("M2.1 exercise service", () => {
     expect(regenerated.contentHashes).toContainEqual({ path: targetPath, hash: "bumped" });
   });
 
+  it("作答事件按排期判定 attempt_kind：首次 → 重试 → 到期复习", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const exercise = await service.next(repository, { kind: "change_localization" });
+    const targetPath = exercise.anchors[0]!.path;
+    const first = await service.answer(repository, exercise.id, { selectedIds: [targetPath] });
+    expect(first.attemptKind).toBe("first");
+    const retry = await service.answer(repository, exercise.id, { selectedIds: [targetPath] });
+    expect(retry.attemptKind).toBe("retry");
+    // 把排期改成已到期，下一次就是复习
+    const schedule = repository.ports.progress.get(exercise.id)!;
+    repository.ports.progress.save({ ...schedule, dueAt: new Date(Date.now() - 1_000).toISOString() });
+    const review = await service.answer(repository, exercise.id, { selectedIds: [targetPath] });
+    expect(review.attemptKind).toBe("review");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_result").map((event) => event.payload.attempt_kind))
+      .toEqual(["first", "retry", "review"]);
+  });
+
+  it("有主题的题把 topic_id 与 tag 带进作答事件与结果", async () => {
+    const repository = testRepository();
+    const service = new ExerciseService();
+    const base = await service.next(repository, { kind: "change_localization" });
+    const targetPath = base.anchors[0]!.path;
+    const topicExercise = { ...base, id: "ex-topic", topicId: "custom-a", tag: "并发控制", contentVersion: repository.analysis.versionStamp };
+    repository.ports.store.put("topic-scope", "change_localization", "topic-unit", { exercise: topicExercise, expected: { type: "set", expectedIds: [targetPath] } });
+    const result = await service.answer(repository, "ex-topic", { selectedIds: [targetPath] });
+    expect(result).toMatchObject({ topicId: "custom-a", attemptKind: "first" });
+    const event = readJournal(repository.path).filter((entry) => entry.type === "exercise_result").at(-1)!;
+    expect(event.payload).toMatchObject({ topic_id: "custom-a", tag: "并发控制", attempt_kind: "first" });
+  });
+
   it("作答时效按依赖文件判定：无关文件更新仍可作答，目标文件更新才拒绝", async () => {
     const repository = testRepository();
     const service = new ExerciseService();

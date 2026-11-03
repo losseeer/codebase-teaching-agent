@@ -17,7 +17,7 @@ import { emit } from "../journal";
 import { failureText, showToast } from "../ui/toast";
 import { useEverVisible } from "../ui/useEverVisible";
 import { DangerDialog } from "../ui/DangerDialog";
-import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, type PracticeTheme } from "./practiceThemeState";
+import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, topicToTheme, type PracticeTheme } from "./practiceThemeState";
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 import { useSetPracticeOperation } from "../agent/practiceOperation";
 
@@ -131,9 +131,33 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const operation: PracticeOperation = generating ? "generate" : explaining ? "explain" : exercise ? (answering ? "grade" : "chat") : "generate";
   useSetPracticeOperation(operation);
 
-  useEffect(() => { savePracticeThemes(modules); }, [modules]);
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
   useEffect(() => { savePracticeType(exerciseType); }, [exerciseType]);
+  /** 首次加载：本地旧主题 POST 到引擎，成功后清本地；随后以引擎主题为准。 */
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const legacy = loadPracticeThemes();
+      if (legacy.length) {
+        try {
+          for (const item of legacy) await api.createTopic({ id: item.id, label: item.label, hint: item.hint });
+          savePracticeThemes([]);
+        } catch {
+          // 迁移失败保留本地，下次打开再试
+        }
+      }
+      try {
+        const { topics } = await api.listTopics();
+        if (!active) return;
+        const next = topics.map(topicToTheme);
+        setModules(next);
+        setActiveModule((current) => (current && next.some((item) => item.id === current) ? current : loadActiveTheme(repositoryId, next)));
+      } catch {
+        // 引擎读数失败时继续用本地主题，练习本身不因此不可用
+      }
+    })();
+    return () => { active = false; };
+  }, [repositoryId]);
   // 出题是阻塞请求：显示已用秒数。
   useEffect(() => {
     if (!generating) return;
@@ -371,10 +395,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   );
   const canSubmit = !loading && (exercise?.inputMode === "multi_select" ? selectedIds.length > 0 : exercise?.inputMode === "code" ? codeFiles.length > 0 : text.trim().length > 0);
   const activeCodeFile = codeFiles.find((file) => file.path === activeCodePath);
-  /** 掌握度页顶只报均值：`PracticeSummary.mastery` 每条带 level。 */
-  const masteryAvg = summary && summary.mastery.length
-    ? `${(summary.mastery.reduce((sum, record) => sum + record.level, 0) / summary.mastery.length).toFixed(1)} / 5`
-    : summary ? "暂无记录" : "读数未到";
   const repositoryName = workspace.repositoryPath.split("/").filter(Boolean).pop() ?? repositoryId;
   /** 判分后选项着色依据：matched+missing 为标准答案项，unexpected 为多选项。 */
   const expectedOptionIds = result && result.gradingMode === "set_match"
@@ -413,9 +433,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           <span className="faint">/</span>
           <span>练习</span>
           <span className="faint">·</span>
-          <span title={summary ? `${summary.mastery.length} 个单元练过` : "练习进度还没读到"}>待复习 {summary ? <><b className="num-warn">{summary.dueReviews}</b> 个</> : "读数未到"}</span>
-          <span className="faint">·</span>
-          <span title={summary && summary.mastery.length ? `${summary.mastery.length} 个单元的平均掌握度` : "暂无答题记录"}>掌握度 {masteryAvg}</span>
+          <span title="到期需要复习的题目数">待复习 {summary ? <><b className="num-warn">{summary.dueReviews}</b> 个</> : "读数未到"}</span>
         </>}
         showRailToggle
       />
@@ -451,15 +469,28 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
                 modules={modules}
                 activeId={activeModule}
                 onSelectModule={switchModule}
-                onRename={(id, label) => setModules(modules.map((item) => (item.id === id ? { ...item, label: label.trim() || "未命名主题" } : item)))}
-                onAdd={(label) => {
-                  const id = `custom-${Date.now().toString(36)}`;
-                  const next = [...modules, { id, label, hint: "", custom: true }];
-                  setModules(next);
-                  switchModule(id, next);
+                onRename={(id, label) => {
+                  const nextLabel = label.trim() || "未命名主题";
+                  setModules(modules.map((item) => (item.id === id ? { ...item, label: nextLabel } : item)));
+                  void api.updateTopic(id, { label: nextLabel }).catch((reason: unknown) => showToast(failureText("主题改名失败", reason)));
                 }}
-                onRemove={(id) => setModules(modules.filter((item) => item.id !== id))}
-                onReset={() => { setModules([]); switchModule(""); }}
+                onAdd={(label) => {
+                  void api.createTopic({ label }).then(({ topic }) => {
+                    const next = [...modules, topicToTheme(topic)];
+                    setModules(next);
+                    switchModule(topic.id, next);
+                  }).catch((reason: unknown) => showToast(failureText("新增主题失败", reason)));
+                }}
+                onRemove={(id) => {
+                  setModules(modules.filter((item) => item.id !== id));
+                  void api.deleteTopic(id).catch((reason: unknown) => showToast(failureText("删除主题失败", reason)));
+                }}
+                onReset={() => {
+                  const removed = modules.map((item) => item.id);
+                  setModules([]);
+                  switchModule("");
+                  for (const id of removed) void api.deleteTopic(id).catch((reason: unknown) => showToast(failureText("删除主题失败", reason)));
+                }}
               >
                 {themeHint ? <p className="field-note" title="主题可在配置面板里改名 / 新增 / 删除">{themeHint}</p> : null}
                 {needsTheme ? <p className="field-note warn" title="分析题与设计题按主题挑代码">这个题型要先选一个考察主题。</p> : null}

@@ -9,7 +9,7 @@ import { installBundledSkills } from "../adapter/outbound/integrations/skills.js
 import { flushLlmLog } from "../adapter/outbound/llm/call-log.js";
 import { reprobeIsolation } from "../adapter/outbound/sandbox/isolation.js";
 import { budgetGateNotice } from "../cost/cost.js";
-import { importer } from "./composition-root.js";
+import { importer, learnerStore } from "./composition-root.js";
 
 /** 关闭挂载仓库的文件监听与数据库句柄。 */
 export async function releaseMountedRepositories(): Promise<void> {
@@ -17,6 +17,7 @@ export async function releaseMountedRepositories(): Promise<void> {
     repository.watcher?.close();
     repository.handle.close();
   }
+  learnerStore.close();
 }
 
 /** 等两条日志队列里已排队的行写完。 */

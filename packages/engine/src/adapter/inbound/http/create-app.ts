@@ -14,6 +14,7 @@ import { isTrustedOrigin } from "../../outbound/security/origins.js";
 import { registerChatRoutes } from "./controllers/chat.controller.js";
 import { registerDiagramRoutes } from "./controllers/diagrams.controller.js";
 import { registerExerciseRoutes } from "./controllers/exercises.controller.js";
+import { registerLearnerRoutes } from "./controllers/learner.controller.js";
 import { registerPlatformRoutes } from "./controllers/platform.controller.js";
 import { registerRepositoryReadRoutes } from "./controllers/repository-read.controller.js";
 import { registerSettingsRoutes } from "./controllers/settings.controller.js";
@@ -58,6 +59,7 @@ export async function createApp(): Promise<FastifyInstance> {
   registerPlatformRoutes(app);
   registerSettingsRoutes(app);
   registerRepositoryReadRoutes(app);
+  registerLearnerRoutes(app);
   registerDiagramRoutes(app);
   registerExerciseRoutes(app);
   registerChatRoutes(app);

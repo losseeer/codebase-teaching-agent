@@ -1,8 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { deriveLearnerProfile } from "../../learner/model.js";
+import type { RepoLearningRecord } from "@codebase-tutor/domain";
+import { deriveRepoLearningRecord } from "../../learner/model.js";
 import { isWithin } from "@codebase-tutor/platform";
-import { exercises, repositoryOr404 } from "../../infrastructure/composition-root.js";
+import { exercises, learnerStore, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { practiceView, withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { MAX_FILE_BYTES, pathReadBlock } from "../../source/read-file.js";
 
@@ -36,11 +37,22 @@ export async function readPracticeSummaryUseCase(repositoryId: string): Promise<
   return { ok: true, value: await withExercisePorts(repository.handle, (ports) => exercises.getSummary(practiceView(repository, ports))) };
 }
 
-/** 学习者画像：从 journal 事件回放出的掌握度、支架退场状态与推荐设置。 */
-export function readLearnerProfileUseCase(repositoryId: string): ReadResult<ReturnType<typeof deriveLearnerProfile>> {
+/** 仓库学习档案：从 journal 回放加权掌握度，并附上本仓到期复习数。 */
+export async function readRepoLearningRecordUseCase(repositoryId: string): Promise<ReadResult<RepoLearningRecord>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return repositoryMissing;
-  return { ok: true, value: deriveLearnerProfile(repository.index.repositoryId, repository.audit.read()) };
+  const reviews = await withExercisePorts(repository.handle, (ports) => ports.progress.list());
+  const now = new Date();
+  return {
+    ok: true,
+    value: deriveRepoLearningRecord(
+      repository.index.repositoryId,
+      repository.audit.read(),
+      reviews.filter((schedule) => schedule.dueAt <= now.toISOString()).length,
+      now,
+      learnerStore.modelVersion
+    )
+  };
 }
 
 /** 导入报告：索引结果加导入预估。 */

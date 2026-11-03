@@ -5,6 +5,8 @@ import type { FadedState, TeachingPolicy } from "@codebase-tutor/domain";
 export interface TeachingPromptInput {
   policy: TeachingPolicy;
   faded?: FadedState;
+  /** 学习快照：有它时替代辅助档位，不注入教学档位。 */
+  learnerSnapshot?: string;
   /** 上下文附带 read_file 时声明其用法与护栏。 */
   readToolAvailable?: boolean;
   /** 附带 search_code 时声明先搜后读；仅在 readToolAvailable 时有意义。 */
@@ -13,7 +15,7 @@ export interface TeachingPromptInput {
 
 /** 代码问答工作区的 system prompt：证据只到上下文摘录与工具取回的内容。 */
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
-  const { policy, faded, readToolAvailable, searchToolAvailable } = input;
+  const { policy, faded, learnerSnapshot, readToolAvailable, searchToolAvailable } = input;
   return [
     "你是 Codebase Tutor 的代码问答助手，围绕学习者当前选中的文件/目录与源码摘录回答「这段代码怎么工作、为什么这样写、背后的原理是什么」。",
     "",
@@ -36,8 +38,11 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "你只讲文件与函数的代码实现：这段代码如何工作、为什么这样写、背后的技术原理与语言/框架机制；",
     "项目的整体架构、模块划分、依赖方向、执行流程属于「架构全景」工作区——学习者问到这些时，用一两句话给出最小必要的回答，并提示他到架构全景工作区继续，不要在这里展开架构层面的讨论。",
     "",
-    // 分母取各维的真实上限
-    ...(faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
+    // 记忆快照只报事实；教学档位不进来，讲法由教学策略与技能决定。
+    ...(learnerSnapshot
+      ? [`学习者学习快照：\n${learnerSnapshot}`]
+      // 分母取各维的真实上限
+      : faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
     `教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,

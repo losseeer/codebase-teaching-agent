@@ -27,7 +27,7 @@ app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (re
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {
-  const prepared = prepareTeachingTurn(request.params.sessionId, {
+  const prepared = await prepareTeachingTurn(request.params.sessionId, {
     content: request.body?.content,
     settings: request.body?.settings,
   });

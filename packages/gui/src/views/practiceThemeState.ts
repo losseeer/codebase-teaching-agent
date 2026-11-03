@@ -1,6 +1,6 @@
-/** 练习页的选择状态：考察主题（浏览器本地标签）与题型。 */
+/** 练习页的选择状态：考察主题（用户级、引擎落库）与题型。 */
 
-import type { ExerciseType } from "@codebase-tutor/domain";
+import type { ExerciseType, Topic } from "@codebase-tutor/domain";
 
 export interface PracticeTheme {
   id: string;
@@ -28,6 +28,7 @@ const writeJson = (key: string, value: unknown): void => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 持久化失败不影响本次会话 */ }
 };
 
+/** 旧版存在浏览器本地的主题：首次加载时迁到引擎，成功后清空。 */
 export function loadPracticeThemes(): PracticeTheme[] {
   const stored = readJson<PracticeTheme[]>(PRACTICE_KEY, []);
   return Array.isArray(stored) ? stored.filter((item) => item?.custom === true && typeof item.id === "string" && typeof item.label === "string") : [];
@@ -35,6 +36,10 @@ export function loadPracticeThemes(): PracticeTheme[] {
 
 export function savePracticeThemes(modules: PracticeTheme[]): void {
   writeJson(PRACTICE_KEY, modules.filter((item) => item.custom === true));
+}
+
+export function topicToTheme(topic: Topic): PracticeTheme {
+  return { id: topic.id, label: topic.label, hint: topic.hint, custom: true };
 }
 
 /** 上次停在哪个主题；主题已删（或停在旧默认卡上）就是不选主题。 */

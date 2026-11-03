@@ -1,4 +1,5 @@
-import { importer } from "../../infrastructure/composition-root.js";
+import { importer, learnerStore } from "../../infrastructure/composition-root.js";
+import { syncRepositoryContributions, touchRepositoryMeta } from "./learner.js";
 
 /**
   仓库生命周期与导入任务的用例：地址簿清单、挂载、移出、增量监听开关、提交与查询导入任务。
@@ -21,12 +22,15 @@ export function listCatalogUseCase() {
 export function mountRepositoryUseCase(repositoryId: string): RepositoryResult<{ repositoryId: string; repositoryPath: string; freshness: unknown }> {
   const result = importer.ensureMounted(repositoryId);
   if (!result.ok) return { ok: false, failure: { kind: "not-mounted", message: result.message, reason: result.reason } };
+  touchRepositoryMeta(result.repository);
+  syncRepositoryContributions(result.repository);
   return { ok: true, value: { repositoryId: result.repository.index.repositoryId, repositoryPath: result.repository.path, freshness: result.repository.freshness } };
 }
 
 /** 把某仓移出地址簿并就地卸载；`withArtifacts` 才连 `.tutor/` 里的产物一起删。 */
 export function forgetRepositoryUseCase(repositoryId: string, withArtifacts: boolean) {
-  return { repositories: importer.catalog(), ...importer.forget(repositoryId, withArtifacts) };
+  const forgotten = learnerStore.forgetRepository(repositoryId);
+  return { repositories: importer.catalog(), ...importer.forget(repositoryId, withArtifacts), ...forgotten };
 }
 
 /** 挂起或恢复某仓的增量监听；`paused` 为假即恢复。 */

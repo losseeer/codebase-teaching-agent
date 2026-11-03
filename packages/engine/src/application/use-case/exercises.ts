@@ -14,6 +14,7 @@ import type { ToolTraceStep } from "../../source/tools/types.js";
 import { emitAgentTrace } from "../../turn/agent-trace.js";
 import { exercises, lightLlm, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { ExerciseDeclinedError } from "../port/exercise-decline.js";
+import { recordExerciseContribution, touchRepositoryMeta } from "./learner.js";
 import { isLlmAborted } from "../port/llm-provider.js";
 import { abortGeneration, beginGeneration } from "../runtime/generation-registry.js";
 import { toolLoopAuditsOf } from "../../source/tool-loop.js";
@@ -183,7 +184,11 @@ export async function answerExerciseUseCase(repositoryId: string, exerciseId: st
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const provider = budgetDegraded(repository.handle) ? undefined : lightLlm();
   try {
-    return { ok: true, value: await withExercisePorts(repository.handle, (ports, database) => exercises.answer(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database, "grade") : undefined)) };
+    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.answer(practiceView(repository, ports), exerciseId, answer ?? {}, provider, provider ? exerciseFaces(repository, database, "grade") : undefined));
+    // 跨仓学习画像的原始证据：一行一次判分，主题 id 由题目缓存带出。
+    touchRepositoryMeta(repository);
+    recordExerciseContribution(value);
+    return { ok: true, value };
   } catch (error) {
     return declined(error, "无法判分");
   }

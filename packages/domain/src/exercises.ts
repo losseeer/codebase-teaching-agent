@@ -1,5 +1,5 @@
 import type { SourceAnchor } from "./repository-index.js";
-import type { MasteryLevel, ReviewSchedule } from "./learner-profile.js";
+import type { AttemptKind, MasteryLevel, ReviewSchedule } from "./learner-profile.js";
 
 /**
   题型五档：
@@ -30,7 +30,7 @@ export function exerciseTypeOf(kind: ExerciseKind): ExerciseType {
   这一段之外的 id（如 9 月流程题留下的 `workflow:`）今天的引擎既出不出题也判不了分，
   所以回放掌握度时不再当作当前信号——journal 里那些行照旧留着，那是账本。
 */
-const LIVE_UNIT_PREFIXES = ["impact:", "implementation:", "llm:"];
+const LIVE_UNIT_PREFIXES = ["impact:", "implementation:", "llm:", "llm-code:"];
 export const isLiveExerciseUnit = (unitId: string): boolean => LIVE_UNIT_PREFIXES.some((prefix) => unitId.startsWith(prefix));
 /** 练习题族：comprehension=程序理解题（规则出题、确定性判分），code=沙箱代码题（模型出题、跑测试判分），llm=LLM 出题（rubric 判分）。family 是实现层概念，对用户不可见。 */
 export type ExerciseFamily = "comprehension" | "code" | "llm";
@@ -80,6 +80,8 @@ export interface Exercise {
   family?: ExerciseFamily;
   /** llm 族：用户配置的出题主题标签（题面语义提示）。 */
   tag?: string;
+  /** 有主题的题才有：指向全局 topic 表的 id；unit 模式没有。 */
+  topicId?: string;
   /** 这道题的内容由哪些文件决定（题面 + 标准答案）；作答时逐文件核对哈希，无关文件的修改不打扰已有题目。
       旧缓存记录无此字段，回落 `contentVersion` 全仓比对。 */
   contentHashes?: { path: string; hash: string }[];
@@ -115,6 +117,10 @@ export interface ExerciseResult {
   matchedIds?: string[];
   missingIds?: string[];
   unexpectedIds?: string[];
+  /** 本次作答的判定依据：首次 / 重试 / 到期复习；由作答时的排期决定。 */
+  attemptKind: AttemptKind;
+  /** 有主题的题才有；跨仓 contribution 按它聚合。 */
+  topicId?: string;
   reviewedAt: string;
   review: ReviewSchedule;
 }

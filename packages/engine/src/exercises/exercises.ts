@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import type {
+  AttemptKind,
   Exercise,
   ExerciseAnswer,
   ExerciseBankEntry,
@@ -380,6 +381,7 @@ export class ExerciseService {
       gradingMode: "execution",
       family: "code",
       tag,
+      ...(requested.tagId?.trim() ? { topicId: requested.tagId.trim() } : {}),
       code: { language: proposal.language, files: proposal.given, entry: proposal.entry },
       createdAt: new Date().toISOString()
     };
@@ -475,6 +477,7 @@ export class ExerciseService {
       gradingMode: "rubric",
       family: "llm",
       tag,
+      ...(requested.tagId?.trim() ? { topicId: requested.tagId.trim() } : {}),
       createdAt: new Date().toISOString()
     };
     const stored: StoredExercise = { exercise, expected: { type: "rubric", answerKey: proposal.answerKey, criteria: proposal.criteria } };
@@ -543,21 +546,37 @@ export class ExerciseService {
     }
     const now = new Date();
     const previous = repository.ports.progress.get(exerciseId);
+    const attemptKind: AttemptKind = previous === undefined ? "first" : previous.dueAt <= now.toISOString() ? "review" : "retry";
     const review = scheduleSm2(previous, qualityForScore(graded.score), now);
     review.exerciseId = exerciseId;
     review.unitId = stored.exercise.targetUnitId;
     repository.ports.progress.save(review);
-    repository.ports.audit.append("exercise_result", {
+    const appended = repository.ports.audit.append("exercise_result", {
       exercise_id: exerciseId,
       target_unit_id: stored.exercise.targetUnitId,
       kind: stored.exercise.kind,
       score: graded.score,
       passed: graded.passed,
       grading_mode: stored.exercise.gradingMode,
+      attempt_kind: attemptKind,
+      ...(stored.exercise.topicId ? { topic_id: stored.exercise.topicId } : {}),
+      ...(stored.exercise.tag ? { tag: stored.exercise.tag } : {}),
       generation_source: stored.exercise.family === "llm" ? "llm_proposed" : "static",
       feedback_source: graded.feedbackSource ?? "rule"
     });
-    return { ...graded, exerciseId, repositoryId: repository.index.repositoryId, targetUnitId: stored.exercise.targetUnitId, kind: stored.exercise.kind, gradingMode: stored.exercise.gradingMode, reviewedAt: now.toISOString(), review };
+    return {
+      ...graded,
+      exerciseId,
+      repositoryId: repository.index.repositoryId,
+      targetUnitId: stored.exercise.targetUnitId,
+      kind: stored.exercise.kind,
+      gradingMode: stored.exercise.gradingMode,
+      attemptKind,
+      ...(stored.exercise.topicId ? { topicId: stored.exercise.topicId } : {}),
+      // 与 journal 行共用同一时间戳：跨仓 contribution 按它做幂等去重。
+      reviewedAt: appended.at,
+      review
+    };
   }
 
   /** 主题命中的文件集合；空集也是答案（该主题在本仓出不了题），不退化成全仓出题。 */
@@ -653,7 +672,7 @@ function baseExercise(repository: PracticeRepository, kind: ExerciseKind, target
   };
 }
 
-type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "reviewedAt" | "review">;
+type GradeOutcome = Omit<ExerciseResult, "exerciseId" | "repositoryId" | "targetUnitId" | "kind" | "gradingMode" | "attemptKind" | "topicId" | "reviewedAt" | "review">;
 
 async function grade(stored: StoredExercise, answer: ExerciseAnswer, audit: AuditSink, repositoryPath: string): Promise<GradeOutcome> {
   if (stored.expected.type === "set") return gradeSet(stored.expected.expectedIds, answer.selectedIds ?? []);

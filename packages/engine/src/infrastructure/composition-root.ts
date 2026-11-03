@@ -1,6 +1,7 @@
 import { ExerciseService } from "../exercises/exercises.js";
 import { ImportService } from "../importer/importer.js";
 import { buildLlmRuntimeProvider, getLlmRuntimeSettings, restoreLlmRuntimeSettings } from "../adapter/outbound/llm/runtime.js";
+import { LearnerStore } from "../adapter/outbound/persistence/learner-store.js";
 import type { LlmProvider } from "../application/port/llm-provider.js";
 import { tboot } from "../boot.js";
 
@@ -15,6 +16,10 @@ tboot(`ImportService（地址簿 ${importer.catalog().length} 条，挂载 0 条
 
 export const exercises = new ExerciseService();
 tboot("ExerciseService");
+
+/** 全局学习库：主题、跨仓贡献与仓库元信息；与仓内 `.tutor` 产物分家。 */
+export const learnerStore = new LearnerStore();
+tboot("LearnerStore");
 
 /** LLM 运行时设置：GUI 可改并落盘，空项回落 `.env`。 */
 restoreLlmRuntimeSettings();

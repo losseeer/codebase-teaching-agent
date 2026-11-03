@@ -32,9 +32,11 @@ import {
   type ExerciseType,
   type ExerciseResult,
   type FadedState,
-  type LearnerProfile,
   type PracticeSummary,
+  type RecommendedTutorSettings,
   type RepositoryIndex,
+  type RepoLearningRecord,
+  type Topic,
   type TutorSession,
   type TutorSettings,
   type Diagram
@@ -278,7 +280,14 @@ export const api = {
   /** 回到某一版快照（index 按 versions 下标，旧→新）；引擎会再存一版，历史不截断。 */
   restoreDiagram: (repositoryId: string, diagramId: string, index: number) => request<{ diagram: Diagram }>(`/api/repositories/${repositoryId}/diagrams/${encodeURIComponent(diagramId)}/restore`, { method: "POST", body: JSON.stringify({ index }) }),
   getPractice: (repositoryId: string) => request<PracticeSummary>(`/api/repositories/${repositoryId}/practice`),
-  getLearner: (repositoryId: string) => request<LearnerProfile>(`/api/repositories/${repositoryId}/learner`),
+  /** 仓库学习档案：加权掌握度与到期复习数。 */
+  getLearner: (repositoryId: string) => request<RepoLearningRecord>(`/api/repositories/${repositoryId}/learner`),
+  /** 用户级主题：所有仓库共用，删除是软删。 */
+  listTopics: () => request<{ topics: Topic[] }>("/api/topics"),
+  createTopic: (input: { id?: string; label: string; hint?: string }) => request<{ topic: Topic }>("/api/topics", { method: "POST", body: JSON.stringify(input) }),
+  updateTopic: (topicId: string, patch: { label?: string; hint?: string }) => request<{ topic: Topic }>(`/api/topics/${encodeURIComponent(topicId)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTopic: (topicId: string) => request<{ deleted: boolean }>(`/api/topics/${encodeURIComponent(topicId)}`, { method: "DELETE" }),
+  mergeTopics: (topicId: string, targetId: string) => request<{ topic: Topic }>(`/api/topics/${encodeURIComponent(topicId)}/merge`, { method: "POST", body: JSON.stringify({ targetId }) }),
   /** 题库：这个仓存着的题与复习排期，纯读。 */
   listExercises: (repositoryId: string) => request<{ exercises: ExerciseBankEntry[] }>(`/api/repositories/${repositoryId}/exercises`),
   deleteExercise: (repositoryId: string, exerciseId: string) => request<{ deleted: number }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}`, { method: "DELETE" }),
@@ -290,7 +299,7 @@ export const api = {
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
-  createSession: (repositoryId: string, scopeRef: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: LearnerProfile["recommended"]; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, scopeRef, ...(settings ? { settings } : {}) }) }),
+  createSession: (repositoryId: string, scopeRef: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: RecommendedTutorSettings; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, scopeRef, ...(settings ? { settings } : {}) }) }),
   /** 按 id 取代码问答会话；未命中时引擎从 chat_session + chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   // 会话线程真源在引擎的 chat_session / chat_message；删除是软删：行仍在库，列表与正文不可见。

@@ -173,7 +173,7 @@ export function PracticeThemes({
         pending.remove ? (
           <DangerDialog
             title="删除这个主题"
-            body={`「${pending.remove.label}」只存这台浏览器里，删掉找不回来。`}
+            body={`「${pending.remove.label}」会从所有仓库的选择器里消失；历史练习记录保留。`}
             deleteLabel={`删除「${pending.remove.label}」`}
             onDelete={() => { const item = pending.remove!; setPending(null); remove(item); }}
             onClose={() => setPending(null)}
@@ -181,7 +181,7 @@ export function PracticeThemes({
         ) : (
           <DangerDialog
             title="清空主题"
-            body={`会删掉 ${String(modules.length)} 个自建主题，找不回来。`}
+            body={`会从所有仓库的选择器里移除 ${String(modules.length)} 个主题；历史练习记录保留。`}
             deleteLabel={`删掉 ${String(modules.length)} 个自建主题`}
             onDelete={() => { setPending(null); reset(); }}
             onClose={() => setPending(null)}

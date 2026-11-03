@@ -12,10 +12,14 @@ import { summarizeCost } from "../../cost/cost.js";
 import { assembleContext } from "../../turn/context-teaching.js";
 import { createSession } from "../../turn/session.js";
 import { respondWithProvider } from "../../turn/run-turn.js";
-import { deriveLearnerProfile } from "../../learner/model.js";
+import { deriveRepoLearningRecord } from "../../learner/model.js";
+import { recommendSettings } from "../../learner/teaching-profile.js";
+import { deriveFaded } from "../../learner/faded.js";
+import { buildLearnerSnapshot } from "../../learner/snapshot.js";
 import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
-import { importer } from "../../infrastructure/composition-root.js";
+import { importer, learnerStore } from "../../infrastructure/composition-root.js";
+import { withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
 import { codeSearchAuditPayload } from "../../source/search-code.js";
 import { skillReadAuditPayload } from "../../source/tools/types.js";
@@ -52,7 +56,7 @@ export function createTeachingSession(input: {
   settings?: Partial<TutorSettings>;
 }): TeachingResult<{
   session: TutorSession;
-  recommendedSettings: ReturnType<typeof deriveLearnerProfile>["recommended"];
+  recommendedSettings: ReturnType<typeof recommendSettings>;
   faded: FadedState;
   policy: ReturnType<typeof policyFor>;
   context: string;
@@ -64,10 +68,12 @@ export function createTeachingSession(input: {
   if (!scope) return fail("scope-format");
   if (!scopeAvailable(scope, repository.index)) return fail("scope-empty");
   const explicit = Boolean(input.settings && Object.keys(input.settings).length);
-  const learnerProfile = deriveLearnerProfile(repository.index.repositoryId, repository.audit.read());
+  const events = repository.audit.read();
+  const record = deriveRepoLearningRecord(repository.index.repositoryId, events);
+  const recommended = recommendSettings(record.mastery);
   const settings = explicit
     ? validateSettings({ ...defaultTutorSettings, ...input.settings })
-    : learnerProfile.recommended.settings;
+    : recommended.settings;
   const session = createSession(repository.index.repositoryId, scope.ref, settings);
   // 会话 id 原样作为线程 id 落库
   const thread = repository.chatStore.createThread({ repositoryId: repository.index.repositoryId, scope: "teach", id: session.id, scopeRef: scope.ref, title: scopeTitle(scope) });
@@ -78,8 +84,8 @@ export function createTeachingSession(input: {
     ok: true,
     value: {
       session,
-      recommendedSettings: learnerProfile.recommended,
-      faded: learnerProfile.faded,
+      recommendedSettings: recommended,
+      faded: deriveFaded(events),
       policy: policyFor(session.settings),
       context: assembleContext({ scope, policy: policyFor(session.settings), history: [], repositoryPath: repository.path, index: repository.index, analysis: repository.analysis })
     }
@@ -98,11 +104,12 @@ export interface PreparedTeachingTurn {
   session: TutorSession;
   scope: ScopeRef;
   question: string;
-  faded: FadedState;
+  /** 注入 system prompt 的紧凑学习快照；不含教学档位。 */
+  learnerSnapshot: string;
 }
 
 /** 回合发起前的校验与装配。 */
-export function prepareTeachingTurn(sessionId: string, input: { content?: string; settings?: Partial<TutorSettings> }): TeachingResult<PreparedTeachingTurn> {
+export async function prepareTeachingTurn(sessionId: string, input: { content?: string; settings?: Partial<TutorSettings> }): Promise<TeachingResult<PreparedTeachingTurn>> {
   const current = resolveTeachingState(sessionId);
   const question = input.content?.trim();
   if (!current || !question) return fail("session-invalid");
@@ -118,6 +125,11 @@ export function prepareTeachingTurn(sessionId: string, input: { content?: string
     if (thread && title && thread.title === scopeTitle(scope)) repository.chatStore.renameThread(sessionId, title);
   }
   const settings = validateSettings({ ...current.settings, ...input.settings });
+  const events = repository.audit.read();
+  const reviews = await withExercisePorts(repository.handle, (ports) => ports.progress.list());
+  const dueReviews = reviews.filter((schedule) => schedule.dueAt <= new Date().toISOString()).length;
+  const record = deriveRepoLearningRecord(repository.index.repositoryId, events, dueReviews);
+  const topicLabels = Object.fromEntries(learnerStore.listTopics().map((topic) => [topic.id, topic.label]));
   return {
     ok: true,
     value: {
@@ -125,7 +137,7 @@ export function prepareTeachingTurn(sessionId: string, input: { content?: string
       session: { ...current, settings },
       scope,
       question,
-      faded: deriveLearnerProfile(repository.index.repositoryId, repository.audit.read()).faded
+      learnerSnapshot: buildLearnerSnapshot({ record, events, topicLabels })
     }
   };
 }
@@ -142,7 +154,8 @@ export type TeachingTurnOutcome = {
 /** 跑一个教学回合，返回 done 帧的载荷。 */
 export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmProvider, stream: ScopedTurnStream, monthlyBudgetUsd: number): Promise<TeachingTurnOutcome> {
   const { repository, session, scope, question } = turn;
-  const outcome = await respondWithProvider(session, scope, question, provider, turn.faded, repository.path, {
+  const outcome = await respondWithProvider(session, scope, question, provider, undefined, repository.path, {
+    learnerSnapshot: turn.learnerSnapshot,
     index: repository.index,
     analysis: repository.analysis,
     search: searchCorpusFor(repository),

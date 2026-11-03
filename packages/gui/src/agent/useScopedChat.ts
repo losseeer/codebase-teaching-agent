@@ -141,17 +141,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
 
-  useEffect(() => {
-    if (!repositoryId) return;
-    // 取消守卫：旧仓库的响应不得写回状态
-    let cancelled = false;
-    // 仅在设置未被用户改动时以推荐值种子
-    api.getLearner(repositoryId).then((profile) => {
-      if (cancelled) return;
-      setSettingsState((curr) => curr.pedagogy === "socratic" && curr.depth === "macro" ? profile.recommended.settings : curr);
-    }).catch(() => { /* 取不到画像保持当前设置 */ });
-    return () => { cancelled = true; };
-  }, [repositoryId]);
   /** 写线程记忆；失败静默，见 chatMemory.ts。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
     if (!repositoryId) return;
@@ -510,6 +499,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (!active) {
         const created = await api.createSession(repositoryId, scopeRef, settings);
         active = created.session;
+        // 仅在设置未被用户改动时以教学层推荐值种子（记忆结构本身不再返回推荐档）
+        if (settings.pedagogy === "socratic" && settings.depth === "macro") setSettingsState(created.recommendedSettings.settings);
         // 会话即线程：id 由引擎发
         markCurrentThread("teaching", active.id);
         knownRowCount.current.teaching = 0;

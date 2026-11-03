@@ -2,7 +2,7 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import { MAX_FILE_BYTES } from "../../../../source/read-file.js";
 import { agentSurfaceUseCase } from "../../../../application/use-case/agent-surface.js";
 import { traceHistoryUseCase } from "../../../../application/use-case/trace-history.js";
-import { readIndexUseCase, readImportReportUseCase, readLearnerProfileUseCase, readPracticeSummaryUseCase, readSourceFileUseCase, type ReadFailure } from "../../../../application/use-case/repository-read.js";
+import { readIndexUseCase, readImportReportUseCase, readRepoLearningRecordUseCase, readPracticeSummaryUseCase, readSourceFileUseCase, type ReadFailure } from "../../../../application/use-case/repository-read.js";
 import type { FastifyReply } from "fastify";
 import type { FastifyInstance } from "fastify";
 
@@ -44,7 +44,7 @@ export function registerRepositoryReadRoutes(app: FastifyInstance): void {
   });
 
   app.get<{ Params: { repositoryId: string } }>("/api/repositories/:repositoryId/learner", async (request, reply) => {
-    const result = readLearnerProfileUseCase(request.params.repositoryId);
+    const result = await readRepoLearningRecordUseCase(request.params.repositoryId);
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 

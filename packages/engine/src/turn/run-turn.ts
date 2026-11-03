@@ -140,6 +140,8 @@ export interface RespondOptions {
   external?: ExternalToolContext;
   /** 运行轨迹的归属；不传则不发轨迹。 */
   trace?: TurnTraceContext;
+  /** 学习快照：由教学层生成并注入 system prompt；不含教学档位。 */
+  learnerSnapshot?: string;
 }
 
 /** 运行轨迹的归属与提问摘要。 */
@@ -313,7 +315,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   });
   const readToolAvailable = Boolean(repositoryPath);
   const searchToolAvailable = readToolAvailable && Boolean(options.search);
-  const system = teachingSystemPrompt({ policy, faded, readToolAvailable, searchToolAvailable });
+  const system = teachingSystemPrompt({ policy, faded, learnerSnapshot: options.learnerSnapshot, readToolAvailable, searchToolAvailable });
   // 技能清单贴在上下文尾部，不进系统提示词
   const skillsBrief = options.skills ? `\n\n${options.skills.brief}` : "";
   const user = `学习者本轮输入：${learnerContent}\n\n可审计代码上下文：\n${context}${skillsBrief}`;

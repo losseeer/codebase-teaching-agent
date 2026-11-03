@@ -186,6 +186,8 @@ export function createRouteFixture(): RouteFixture {
     writeFileSync(process.env.TUTOR_LLM_SETTINGS_FILE, `${JSON.stringify({ provider: "openai-compatible", model: "fixture-model", baseUrl: "http://127.0.0.1:9/v1", apiKey: "fixture-key", thinking: "auto" }, null, 2)}\n`, "utf8");
     process.env.TUTOR_LLM_LOG = join(root, "llm.log");
     process.env.TUTOR_ENGINE_LOG = "off";
+    // 全局学习库隔离到临时目录：路由测试不碰本机 ~/.codebase-tutor/learner.db
+    process.env.TUTOR_LEARNER_DB = join(root, "learner.db");
 
     // 必须早于 import server
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
@@ -201,7 +203,7 @@ export function createRouteFixture(): RouteFixture {
     }
     vi.unstubAllGlobals();
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG"]) delete process.env[key];
+    for (const key of ["TUTOR_REGISTRY_FILE", "TUTOR_LLM_SETTINGS_FILE", "TUTOR_LLM_LOG", "TUTOR_ENGINE_LOG", "TUTOR_LEARNER_DB"]) delete process.env[key];
   };
 
   fx.reset = () => {
