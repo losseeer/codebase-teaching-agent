@@ -159,6 +159,15 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(provider.calls.count).toBe(2);
   });
 
+  it("测试文件撞名时引擎确定性改名，不叫模型重出", async () => {
+    const repository = testRepository();
+    const provider = fakeProvider(() => JSON.stringify({ ...JSON.parse(proposalJson({ given: DEFECTIVE_SOURCE, solution: REAL_SOURCE })), hidden: [{ path: "target.ts", contents: TESTS }], entry: "target.ts" }));
+    const result = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "config", kind: "patch_edit", reference: "", provider, faces: referenceFaces() });
+    expect(result.ok).toBe(true);
+    expect(provider.calls.count).toBe(1);
+    if (result.ok) expect([result.proposal.entry, result.proposal.hidden[0]?.path]).toEqual(["tests.ts", "tests.ts"]);
+  });
+
   it("自证失败后带着失败输出重发一次；首轮失败行不冒充已接受", async () => {
     const repository = testRepository();
     const service = new ExerciseService();

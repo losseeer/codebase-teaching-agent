@@ -201,8 +201,11 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   const hidden = shapeFiles(parsed.hidden, language);
   if (!given || !solution || !hidden) return { issue: "given/solution/hidden 三组文件形状不合法（空、超限、或文件名不合该语言形状）" };
   if (!samePathSet(given, solution)) return { issue: "given 与 solution 的文件集合必须完全一致（学习者改的就是这一组）" };
-  const entry = String(parsed.entry ?? "").trim();
-  if (!hidden.some((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry)) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
+  let entry = String(parsed.entry ?? "").trim();
+  const test = hidden.find((file) => file.path === entry || file.path.replace(/\.(ts|py|java)$/, "") === entry);
+  if (!test) return { issue: `入口 ${entry || "（空）"} 不在 hidden 的测试文件里` };
+  // Java 的入口是类名，改文件名会与类名脱钩；其余语言给撞名的测试文件确定性改名。
+  if (language !== "java" && given.some((slot) => slot.path === test.path)) entry = test.path = `tests.${language === "typescript" ? "ts" : "py"}`;
   const clash = hidden.find((file) => given.some((slot) => slot.path === file.path));
   if (clash) return { issue: `hidden 与 given 有同名文件（${clash.path}）：下发件会被测试盖掉` };
   const anchors = Array.isArray(parsed.anchors)
