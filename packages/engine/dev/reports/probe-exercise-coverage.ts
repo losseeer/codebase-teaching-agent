@@ -1,7 +1,7 @@
 /**
   练习沙箱覆盖面探针（零 token、只读）：按 import 落点分档，统计不装依赖就能出代码题的语言。
   分档由探针自己抽 import 说明符，不进产品判据。
-  用法：`pnpm sandbox:coverage`
+  用法：`pnpm probe:sandbox`
 */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";

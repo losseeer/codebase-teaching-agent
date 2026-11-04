@@ -10,7 +10,7 @@ import { LATEST_SUMMARY_LIMIT } from "../../src/adapter/outbound/persistence/sum
 /**
   只读聚合脚本（不调用 LLM）：把可算的指标输出为 markdown 报告。
   缺字段落「未记」，数据源缺失落「未执行 + 原因」，不用默认值补。
-  用法：`pnpm phase0:metrics`（`TUTOR_METRICS_ENGINE` 可改引擎地址）
+  用法：`pnpm eval:metrics`（`TUTOR_METRICS_ENGINE` 可改引擎地址）
 */
 
 const tutorHome = join(homedir(), ".codebase-tutor");

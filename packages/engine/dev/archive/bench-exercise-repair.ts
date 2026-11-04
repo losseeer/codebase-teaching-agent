@@ -1,8 +1,7 @@
 /**
-  出题修复策略实验（付费）：同一主题跑 A/B 两臂，记录成功率、耗时与 token。
-  A = 现状：形状错误不修复，自证失败最多修复一次。
-  B = 形状错误与自证失败都可修复，最多两次修复。
-  用法：pnpm experiment:exercise-repair [--pairs 5] [--dry]
+  已归档的出题修复策略实验（付费）：同一主题跑 A/B 两臂，记录成功率、耗时与 token。
+  不再提供 pnpm 入口，也不作为当前基线；历史结果见 `docs/实验结果.md`。
+  如需恢复比较，按 `probe:exercise-repair` 重新登记，不要直接使用本文件作为实验入口。
 */
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

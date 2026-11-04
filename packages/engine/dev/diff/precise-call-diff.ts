@@ -9,12 +9,12 @@ import { loadSymbolParser } from "@codebase-tutor/analysis";
 /**
   符号级调用边差值脚本，与一份确定性参照对齐；只读、零 token。
   参照口径是下界：显式类型名作接收者、该类型在发起文件可见、发起文件声明同名方法。
-  用法：`pnpm calls:diff [仓库路径]`（文件级 import 差值由 `pnpm graph:diff` 量）
+  用法：`pnpm probe:calls [仓库路径]`（文件级 import 差值由 `pnpm probe:graph` 量）
 */
 
 const repositoryPath = resolve(process.argv.slice(2).find((value) => !value.startsWith("-")) ?? "");
 if (!repositoryPath) {
-  console.log("用法：pnpm calls:diff <仓库路径>（目前只出 Java 档）");
+  console.log("用法：pnpm probe:calls <仓库路径>（目前只出 Java 档）");
   process.exit(1);
 }
 const index = indexRepository(repositoryPath);

@@ -1,29 +1,15 @@
-import type { AttemptKind, JournalEvent, MasteryLevel, MasteryRecord, UnitMastery } from "@codebase-tutor/domain";
+import type { JournalEvent, MasteryLevel, MasteryRecord, UnitMastery } from "@codebase-tutor/domain";
 import { isLiveExerciseUnit } from "@codebase-tutor/domain";
 
+import { attemptKindOf } from "./attempt-kind.js";
 import { attemptDelta, clampScore, confidenceOf, levelOf } from "./weights.js";
 
 /** 掌握度从 journal 的 `exercise_result` 事件回放，真源只有 journal。 */
-
-const ATTEMPT_KINDS: AttemptKind[] = ["first", "retry", "review"];
 
 function unitIdOf(event: JournalEvent): string | undefined {
   return typeof event.payload.unit_id === "string"
     ? event.payload.unit_id
     : typeof event.payload.target_unit_id === "string" ? event.payload.target_unit_id : undefined;
-}
-
-/**
-  旧 journal 没有 `attempt_kind`：同一 `exercise_id` 第一次出现记 first，之后记 retry。
-  到期复习无法从旧行反推，统一按非复习处理——那是旧数据缺的字段，不猜。
-*/
-function attemptKindOf(event: JournalEvent, seenExercises: Set<string>): AttemptKind {
-  const recorded = event.payload.attempt_kind;
-  if (typeof recorded === "string" && (ATTEMPT_KINDS as string[]).includes(recorded)) return recorded as AttemptKind;
-  const key = typeof event.payload.exercise_id === "string" ? event.payload.exercise_id : event.id;
-  if (seenExercises.has(key)) return "retry";
-  seenExercises.add(key);
-  return "first";
 }
 
 export function deriveMastery(events: JournalEvent[]): UnitMastery[] {

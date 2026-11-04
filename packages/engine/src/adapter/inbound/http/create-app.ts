@@ -29,7 +29,7 @@ export async function createApp(): Promise<FastifyInstance> {
   // CORS 必须先于来源闸注册
   await app.register(cors, { origin: (origin, callback) => callback(null, Boolean(origin && isTrustedOrigin(origin))) });
   tboot("cors registered");
-  app.addHook("onRequest", (request, _reply, done) => { runWithTrace(request.id, done); });
+  app.addHook("onRequest", (request, reply, done) => { reply.header("x-trace-id", request.id); runWithTrace(request.id, done); });
 
   /** 来源闸：`Origin` 不可信时回 403。 */
   app.addHook("onRequest", async (request, reply) => {

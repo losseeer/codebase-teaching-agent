@@ -31,7 +31,7 @@ import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface
 import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
-import { runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
+import { resolveToolchain, runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
 import type { ExercisePorts } from "../application/port/exercise-ports.js";
 import { ExerciseDeclinedError } from "../application/port/exercise-decline.js";
 import type { AuditSink } from "../application/port/audit-sink.js";
@@ -250,13 +250,16 @@ export class ExerciseService {
     if (!provider) {
       this.decline(repository, "no_provider", "code", "", "代码题的题面、缺陷与测试都由模型设计，判分靠运行测试；当前没配模型，或本月预算已用完。", "代码题需要模型，当前不可用。");
     }
+    const unit = target.value as ImplementationUnit;
+    if (unit.symbol.language === "go" && !resolveToolchain().go) {
+      this.decline(repository, "toolchain_unavailable", "code", "", "本机 PATH 里找不到 go，Go 代码题无法在沙箱里自证；这一趟没有调用模型。", "Go 代码题需要 Go 工具链，当前不可用。");
+    }
     // 沙箱探测走在付费之前：非 `enforced` 直接拒，不发模型调用。
     const isolation = await ensureIsolation();
     if (isolation.level !== "enforced") {
       this.decline(repository, "sandbox_unavailable", "code", "", `沙箱当前不可用（${isolation.reason}），代码题整域禁用；这一趟没有调用模型，因此没有花费。`, "代码题当前不可用。");
     }
     const kind = target.kind === "author_function" ? "author_function" : "patch_edit";
-    const unit = target.value as ImplementationUnit;
     const generation = await generateCodeExercise({ repositoryPath: repository.path, unit, kind, provider, faces, onProgress: progress });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : unit.symbol.language, provider);
     if (faces?.signal?.aborted) throw new Error("出题已取消");

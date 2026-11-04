@@ -41,6 +41,10 @@ CONTRIBUTING.md
 .tutorignore.example
 .playwright-mcp/
 
+# Baseline 仓库副本与试跑原始行不入仓
+experiments/baseline/repos/
+experiments/baseline/results/trial-*.jsonl
+
 # Environment & secrets
 .env
 .env.*

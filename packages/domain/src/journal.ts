@@ -52,7 +52,7 @@ export type JournalEventType =
   | "turn_text"
   /** 运行期不变量复检：一回合一条，合格也记（分母要运行时成立）。
       payload = scene(teach|map_chat|practice_chat) + applicable(该回合该判的条目) + failed(失守条目) + evidence(逐条证据摘录)。
-      判据与离线 `phaseB:eval` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
+      判据与离线 `eval:quality` 共用同一个函数，所以「线上说合格、离线算不合格」不可能出现。 */
   | "turn_invariant"
   /** 回合内向用户提问的四种结局，一回合最多一条（挡下的尝试也记）。
       payload = scene + facet(goal|range|null) + outcome(asked|refused|claimed|discarded) + options(候选短标签，斜杠分隔) + tool_call_id(认领的那条调用) + reason。

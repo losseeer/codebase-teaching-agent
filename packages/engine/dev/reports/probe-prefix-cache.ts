@@ -5,7 +5,7 @@ import { join } from "node:path";
 /**
   前缀缓存基线（只读 llm.log，零请求）：端点的隐式前缀缓存还剩多少可用。
   间隔按同线程相邻两轮算；同场景相邻调用只当下限参考；一次回合内部的多次调用不算。
-  用法：`pnpm cache:probe [llm.log 路径]`
+  用法：`pnpm probe:cache [llm.log 路径]`
 */
 
 const file = process.argv.slice(2).find((value) => !value.startsWith("-"));

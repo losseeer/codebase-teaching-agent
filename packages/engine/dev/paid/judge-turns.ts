@@ -9,7 +9,7 @@ import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudge
 /**
   表达质量裁判：调用模型判分的脚本，判接续 / 接地 / 易读 与教学法契合（仅 teach）四维。
   证据必须逐字来自被评回复。
-  用法：`pnpm phaseB:judge [仓库路径]`
+  用法：`pnpm eval:judge [仓库路径]`
 */
 
 loadDotEnv();
@@ -100,5 +100,5 @@ for (const verdict of verdicts) {
 emit();
 emit("## 读数天花板（预登记）");
 emit(`- 本报告的结论上限只到「${verdicts.length} 个回合的描述性统计」：n 为个位数时，均分差异不构成任何口径优劣判断，仅用于发现驳回率异常与明显坏样本。`);
-emit("- 裁判看不到源码：「接地」维只判锚定具体性，锚点事实真伪以 pnpm phaseB:eval 的机检为准。");
+emit("- 裁判看不到源码：「接地」维只判锚定具体性，锚点事实真伪以 pnpm eval:quality 的机检为准。");
 console.log(out.join("\n"));

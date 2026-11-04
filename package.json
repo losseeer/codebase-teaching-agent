@@ -22,9 +22,15 @@
     "test:all": "pnpm test && pnpm test:e2e",
     "postinstall": "pnpm --filter @codebase-tutor/engine run setup:native",
     "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native",
-    "cache:probe": "pnpm --filter @codebase-tutor/engine cache:probe",
-    "graph:diff": "pnpm --filter @codebase-tutor/engine graph:diff",
-    "calls:diff": "pnpm --filter @codebase-tutor/engine calls:diff",
+    "experiment:baseline": "pnpm --filter @codebase-tutor/engine experiment:baseline",
+    "eval:metrics": "pnpm --filter @codebase-tutor/engine eval:metrics",
+    "eval:quality": "pnpm --filter @codebase-tutor/engine eval:quality",
+    "eval:judge": "pnpm --filter @codebase-tutor/engine eval:judge",
+    "probe:code-exercise": "pnpm --filter @codebase-tutor/engine probe:code-exercise",
+    "probe:cache": "pnpm --filter @codebase-tutor/engine probe:cache",
+    "probe:sandbox": "pnpm --filter @codebase-tutor/engine probe:sandbox",
+    "probe:graph": "pnpm --filter @codebase-tutor/engine probe:graph",
+    "probe:calls": "pnpm --filter @codebase-tutor/engine probe:calls",
     "facts:report": "pnpm --filter @codebase-tutor/engine facts:report"
   },
   "devDependencies": {

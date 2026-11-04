@@ -11,7 +11,7 @@ import { loadSymbolParser } from "@codebase-tutor/analysis";
 /**
   编译器级精确模块图与静态启发式取图的边差对照，只作评测证据。
   Java 按 package 声明与顶层类型名推全限定名；TS/TSX 用 typescript 的 `resolveModuleName`。
-  口径：只比两侧都索引的仓内文件，通配展开取上界，三方与 JDK import 不计。用法：`pnpm graph:diff [仓库路径]`
+  口径：只比两侧都索引的仓内文件，通配展开取上界，三方与 JDK import 不计。用法：`pnpm probe:graph [仓库路径]`
 */
 
 const here = dirname(fileURLToPath(import.meta.url));

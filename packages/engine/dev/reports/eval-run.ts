@@ -18,8 +18,8 @@ import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/s
 
 /**
   评测 runner：零 token 确定性判分，全程只读。
-  LLM 真跑与表达质量裁判在 phaseB:judge。
-  用法：`pnpm phaseB:eval [仓库路径]`
+  LLM 真跑与表达质量裁判在 eval:judge。
+  用法：`pnpm eval:quality [仓库路径]`
 */
 
 loadDotEnv();
@@ -157,7 +157,7 @@ for (const { name, doc } of caseDocs) {
 if (!anyCaseRan) emit("- 未执行：没有匹配当前仓库的用例文件。");
 emit();
 
-emit("## 2. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类由 phaseB:judge 裁判）");
+emit("## 2. 教学法不变量机检（判「设计上写了保证、且文本层可核对」的三条；语义类由 eval:judge 裁判）");
 const journalEvents = readJournal(repositoryPath);
 const teachTurns = assembleTeachTurns(journalEvents);
 if (!teachTurns.length) {

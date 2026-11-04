@@ -1,5 +1,6 @@
-import type { AttemptKind, JournalEvent, RepoLearningRecord } from "@codebase-tutor/domain";
+import type { JournalEvent, RepoLearningRecord } from "@codebase-tutor/domain";
 
+import { attemptKindOf } from "./attempt-kind.js";
 import { confidenceOf } from "./weights.js";
 
 /** 系统提示词里的学习快照上限；只注入事实，不注入教学档位。 */
@@ -35,11 +36,6 @@ function unitIdOf(event: JournalEvent): string | undefined {
     : typeof event.payload.target_unit_id === "string" ? event.payload.target_unit_id : undefined;
 }
 
-function attemptKindOf(event: JournalEvent): AttemptKind {
-  const recorded = event.payload.attempt_kind;
-  return recorded === "first" || recorded === "retry" || recorded === "review" ? recorded : "first";
-}
-
 function mention(attempts: number): string {
   const confidence = confidenceOf(attempts);
   return confidence >= 0.8 ? "高" : confidence >= 0.4 ? "中" : "低";
@@ -54,6 +50,7 @@ function daysText(lastAt: string | undefined, now: Date): string {
 
 function groupsFromEvents(events: JournalEvent[], topicLabels: Record<string, string>): SnapshotGroup[] {
   const groups = new Map<string, SnapshotGroup>();
+  const seenExercises = new Set<string>();
   for (const event of [...events].sort((left, right) => left.at.localeCompare(right.at))) {
     if (event.type !== "exercise_result") continue;
     const unitId = unitIdOf(event);
@@ -61,7 +58,7 @@ function groupsFromEvents(events: JournalEvent[], topicLabels: Record<string, st
     const topicId = typeof event.payload.topic_id === "string" ? event.payload.topic_id : topicIdFromUnit(unitId);
     const label = topicId ? topicLabels[topicId] ?? topicId : unitId;
     const passed = event.payload.passed === true;
-    const kind = attemptKindOf(event);
+    const kind = attemptKindOf(event, seenExercises);
     const current = groups.get(label) ?? { label, attempts: 0, firstPasses: 0, reviewPasses: 0 };
     groups.set(label, {
       ...current,

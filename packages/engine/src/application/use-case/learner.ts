@@ -58,9 +58,10 @@ export function syncRepositoryContributions(repository: { index: RepositoryIndex
 
 /** 一行一次 exercise_result；对错与分数都保留原始值，聚合时再算权重。 */
 export function recordExerciseContribution(result: ExerciseResult): Contribution {
+  const topicId = result.topicId ? learnerStore.resolveTopic(result.topicId)?.id ?? result.topicId : undefined;
   return learnerStore.appendContribution({
     repositoryId: result.repositoryId,
-    ...(result.topicId ? { topicId: result.topicId } : {}),
+    ...(topicId ? { topicId } : {}),
     exerciseId: result.exerciseId,
     unitId: result.targetUnitId,
     kind: result.kind,

@@ -28,6 +28,7 @@ export function openSseStream<TFrame = ScopedStreamFrame>(request: FastifyReques
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive",
+    "x-trace-id": String(request.id),
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {})
   });
   sseFrame(reply, ": open\n\n");

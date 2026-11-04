@@ -138,7 +138,7 @@ emit(`   一次逻辑调用只落一行，\`ms\` 是「含全部重试的总墙�
 emit(`   所以带这两个字段的行才有重试读数；表里 \`重试行/带读数行\` 那列的分母就是「真带读数的行数」，缺的行按「没记」算而不按 1 算。`);
 emit(`2. 降级频率：本地兜底与预算降级按设计不发请求，日志里根本没有这个字段。`);
 emit(`   要看降级走 journal：\`exercise_declined\`（九档拒题原因，含预算已达上限），`);
-emit(`   \`pnpm phase0:metrics\` 已经把这一栏按场景聚合。`);
+emit(`   \`pnpm eval:metrics\` 已经把这一栏按场景聚合。`);
 emit(`3. 按仓归属的钱：导入与监听刷新那批调用没有 traceId（带 trace 的 ${withTrace}/${rows.length} 行），`);
 emit(`   那部分 provider/model/token 归不到某个仓——与出网报表同一条读数口径。`);
 emit();
