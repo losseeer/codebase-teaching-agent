@@ -16,8 +16,9 @@ export function deriveCrossRepoLearningProfile(input: {
   const stackStats = new Map<string, { attempts: number; lastAt?: string }>();
 
   for (const contribution of input.contributions) {
-    if (!contribution.topicId || !labels.has(contribution.topicId)) continue;
-    byTopic.set(contribution.topicId, [...(byTopic.get(contribution.topicId) ?? []), contribution]);
+    if (contribution.topicId && labels.has(contribution.topicId)) {
+      byTopic.set(contribution.topicId, [...(byTopic.get(contribution.topicId) ?? []), contribution]);
+    }
     const meta = metaById.get(contribution.repositoryId);
     for (const stack of meta?.stacks ?? []) {
       const current = stackStats.get(stack) ?? { attempts: 0 };
