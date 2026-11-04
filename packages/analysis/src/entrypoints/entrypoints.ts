@@ -57,10 +57,18 @@ function detectMainFunctionEntrypoints(contents: Map<string, string>): SourceAnc
   for (const [path, content] of contents) {
     const rule = rules.find((item) => item.extension.test(path));
     if (!rule) continue;
-    const match = content.match(rule.pattern);
+    const source = rule.label === "Go 主函数" ? stripGoComments(content) : content;
+    const match = source.match(rule.pattern);
     if (!match) continue;
-    anchors.push({ path, line: content.slice(0, match.index ?? 0).split("\n").length, label: rule.label });
+    anchors.push({ path, line: source.slice(0, match.index ?? 0).split("\n").length, label: rule.label });
   }
   return anchors;
+}
+
+/** Go 注释按等长空格清除：文档示例里的 `func main()` 不是入口。 */
+function stripGoComments(content: string): string {
+  return content
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, (line) => " ".repeat(line.length));
 }
 

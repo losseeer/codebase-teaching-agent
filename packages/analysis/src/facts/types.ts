@@ -167,6 +167,7 @@ export function analyzeFileTypes(path: string, root: SyntaxNode, language: strin
   const resolve = (name: string): { file?: string; ambiguous?: string[] } => {
     const list = index.get(name);
     if (!list?.length) return {};
+    if (list.includes(path)) return { file: path };
     if (list.length === 1) return { file: list[0] };
     return { ambiguous: list };
   };
