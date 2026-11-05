@@ -20,8 +20,11 @@ const root = resolve(import.meta.dirname, "../../../..");
 const datasetDir = resolve(root, "experiments/segmented-generate-2026-11");
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
+/** --full 跑全量 30 题；默认只跑先导 6 题。 */
+const full = args.includes("--full");
 const manifest = JSON.parse(readFileSync(join(datasetDir, "manifest.json"), "utf8")) as Manifest;
-const topics = csv(join(datasetDir, manifest.inputs.pilotTopics)) as unknown as PilotTopic[];
+const topicsFile = full ? manifest.inputs.fullTopics : manifest.inputs.pilotTopics;
+const topics = (csv(resolve(datasetDir, topicsFile)) as unknown as PilotTopic[]).filter((topic) => topic.type === "design");
 
 interface Manifest {
   experimentId: string;
@@ -29,7 +32,7 @@ interface Manifest {
   model: { provider: string; name: string; timeoutMs: number; promptVersion: string };
   repos: FrozenRepo[];
   inputs: { pilotTopics: string; fullTopics: string };
-  outputs: { pilot: string; pilotSummary: string };
+  outputs: { pilot: string; pilotSummary: string; exercises: string; summary: string };
   arms: { id: Arm; label: string; mode: "single" | "segmented" }[];
   protocol: Record<string, string>;
   criteria: Record<string, string>;
@@ -50,11 +53,11 @@ interface Row {
 }
 
 const runId = process.env.SEGMENTED_RUN_ID ?? new Date().toISOString().replaceAll(/[-:.TZ]/g, "");
-const outFile = join(datasetDir, manifest.outputs.pilot);
-const summaryFile = join(datasetDir, manifest.outputs.pilotSummary);
+const outFile = join(datasetDir, full ? manifest.outputs.exercises : manifest.outputs.pilot);
+const summaryFile = join(datasetDir, full ? manifest.outputs.summary : manifest.outputs.pilotSummary);
 
 console.log(`# ${manifest.experimentId}（先导）\n`);
-console.log(`- 数据集：${manifest.datasetId}；先导 ${topics.length} 题 × ${manifest.arms.length} 臂`);
+console.log(`- 数据集：${manifest.datasetId}；${full ? "全量" : "先导"} ${topics.length} 题 × ${manifest.arms.length} 臂`);
 console.log(`- 主判据：${manifest.criteria.primary}`);
 console.log(`- 先导闸门：${manifest.criteria.pilotGate}\n`);
 try {
@@ -140,7 +143,14 @@ async function runArm(arm: Arm, repository: ImportedRepository, topic: PilotTopi
   };
 }
 
-function summarize(list: Row[]): Record<string, unknown> {
+interface ArmSummary {
+  attempts: number; success: number; success_rate: number;
+  provider_error: number; harness_validation: number; proposal_shape: number; sandbox_unavailable: number;
+  duration_p50_ms: number; duration_max_ms: number; output_tokens: number;
+  max_segment_output_tokens: number; quality_passed: number;
+}
+
+function summarize(list: Row[]): ArmSummary {
   const ok = list.filter((row) => row.success);
   const failures = list.filter((row) => !row.success);
   const byStage = (stage: string): number => failures.filter((row) => row.failure_stage === stage).length;
@@ -158,6 +168,12 @@ function summarize(list: Row[]): Record<string, unknown> {
     max_segment_output_tokens: Math.max(0, ...list.map((row) => row.max_segment_output_tokens ?? 0)),
     quality_passed: ok.filter((row) => row.quality.passed).length
   };
+}
+
+if (full && existsSync(outFile) && readFileSync(outFile, "utf8").trim()) {
+  console.error(`[segmented] 全量结果文件已有内容：${outFile}；先归档再跑，避免覆盖上一轮。`);
+  rmSync(registryDir, { recursive: true, force: true });
+  process.exit(2);
 }
 
 try {
@@ -187,15 +203,31 @@ const segmentedRows = rows.filter((row) => row.arm === "segmented");
 const summary = { single: summarize(singleRows), segmented: summarize(segmentedRows) };
 const timeoutTopics = topics.filter((topic) => topic.baseline_outcome === "provider_error");
 const rescued = timeoutTopics.filter((topic) => segmentedRows.some((row) => row.topic === topic.topic && row.success));
-const verdict = {
-  baseline_timeout_topics: timeoutTopics.length,
-  rescued_by_segmented: rescued.length,
-  pilot_gate_pass: rescued.length >= 2,
-  primary: { single_provider_error: summary.single.provider_error, segmented_provider_error: summary.segmented.provider_error },
-  secondary: { single_success_rate: summary.single.success_rate, segmented_success_rate: summary.segmented.success_rate },
-  safety: { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation },
-  reference: { single_duration_p50_ms: summary.single.duration_p50_ms, segmented_duration_p50_ms: summary.segmented.duration_p50_ms }
-};
+const primary = { single_provider_error: summary.single.provider_error, segmented_provider_error: summary.segmented.provider_error };
+const secondary = { single_success_rate: summary.single.success_rate, segmented_success_rate: summary.segmented.success_rate };
+const safety = { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation };
+const verdict = full
+  ? {
+      primary,
+      primary_pass: primary.segmented_provider_error < primary.single_provider_error,
+      secondary,
+      secondary_pass: secondary.segmented_success_rate >= secondary.single_success_rate,
+      safety,
+      safety_pass: safety.segmented_harness_validation <= safety.single_harness_validation,
+      reference: { single_duration_p50_ms: summary.single.duration_p50_ms, segmented_duration_p50_ms: summary.segmented.duration_p50_ms },
+      all_pass: primary.segmented_provider_error < primary.single_provider_error
+        && secondary.segmented_success_rate >= secondary.single_success_rate
+        && safety.segmented_harness_validation <= safety.single_harness_validation
+    }
+  : {
+      baseline_timeout_topics: timeoutTopics.length,
+      rescued_by_segmented: rescued.length,
+      pilot_gate_pass: rescued.length >= 2,
+      primary,
+      secondary,
+      safety,
+      reference: { single_duration_p50_ms: summary.single.duration_p50_ms, segmented_duration_p50_ms: summary.segmented.duration_p50_ms }
+    };
 const report = { experimentId: manifest.experimentId, runId, at: new Date().toISOString(), status: failure ? "failed" : "completed", rows: rows.length, ...(failure ? { failure } : {}), summary, verdict };
 writeFileSync(summaryFile, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 console.log(`\n## 先导汇总\n${JSON.stringify(report.summary, null, 2)}\n`);

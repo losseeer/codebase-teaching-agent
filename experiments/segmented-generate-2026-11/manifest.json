@@ -57,7 +57,9 @@
   },
   "outputs": {
     "pilot": "pilot.jsonl",
-    "pilotSummary": "pilot.summary.json"
+    "pilotSummary": "pilot.summary.json",
+    "exercises": "exercises.jsonl",
+    "summary": "summary.json"
   },
   "arms": [
     {
