@@ -55,7 +55,10 @@ function mergeRuns(live: TraceRun[], history: TraceRun[]): TraceRun[] {
 /** 会话轨迹：对话只看当前会话；练习保留不属于会话的出题运行。 */
 function inSession(run: TraceRun, scope: AgentScope, threadId?: string | null): boolean {
   if (scope === "practice" && run.scene === "practice.generate") return true;
-  return Boolean(threadId) && run.threadId === threadId;
+  if (!threadId) return false;
+  // 缺 threadId 的运行来自没写 sessionId 的历史行：它没有归属，不等于属于别的会话。
+  // 直接丢掉会让「前 N 轮轨迹看不见」，所以放行；同一 runId 在 mergeRuns 里仍会去重。
+  return !run.threadId || run.threadId === threadId;
 }
 
 /** 出题记录用题目名；没有题名的旧行/失败行用状态加时刻区分。 */

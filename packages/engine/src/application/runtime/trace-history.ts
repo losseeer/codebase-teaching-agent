@@ -237,7 +237,9 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
     if (!event.traceId) continue;
-    if (threadId && event.sessionId !== threadId) continue;
+    // 缺 sessionId 的历史行不是「属于别的会话」，不能连坐丢掉：
+    // 早期 journal 行没有这个字段，按会话查时它们会整批消失（实测某仓 71 个轨迹组里 60 个如此）。
+    if (threadId && event.sessionId && event.sessionId !== threadId) continue;
     const list = groups.get(event.traceId);
     if (list) list.push(event);
     else groups.set(event.traceId, [event]);

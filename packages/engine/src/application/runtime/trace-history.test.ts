@@ -177,6 +177,18 @@ describe("journal 回合历史", () => {
     expect(scoped.runs.map((run) => run.runId)).toEqual(["t3"]);
   });
 
+  it("按会话过滤时保留没有 sessionId 的历史行：缺归属不等于属于别的会话", () => {
+    // 早期 journal 行没有 sessionId 字段；类型上必填，运行时却是空的，这里如实模拟。
+    const legacy = { ...ev("turn_text", "old", "2026-11-02T03:12:01.000Z", { scene: "map_chat", question: "早先一问", answer: "答" }), sessionId: undefined } as unknown as JournalEvent;
+    const events = [
+      legacy,
+      ev("turn_text", "now", "2026-11-02T03:12:02.000Z", { scene: "map_chat", question: "当前一问", answer: "答" }, "thread-9")
+    ];
+    expect(buildTraceHistory(events, "repo", 10, "thread-9").runs.map((run) => run.runId).sort(), "无 sessionId 的旧回合要留下来，否则前几轮会整批消失").toEqual(["now", "old"]);
+    const other = ev("turn_text", "elsewhere", "2026-11-02T03:12:03.000Z", { scene: "map_chat", question: "别处一问", answer: "答" }, "thread-other");
+    expect(buildTraceHistory([legacy, other], "repo", 10, "thread-9").runs.map((run) => run.runId), "明确属于别的会话仍要过滤").toEqual(["old"]);
+  });
+
   it("预算到线是受限收尾，不冒充中止也不冒充完成", () => {
     const events = [
       ev("turn_text", "t4", "2026-11-02T03:04:01.000Z", { scene: "map_chat", question: "问三", answer: "答三" }),
