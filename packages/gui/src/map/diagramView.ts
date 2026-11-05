@@ -119,6 +119,29 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
 export const EDGE_LANE_GAP = 10;
 
 /**
+  同一水平带上往往有好几条边（同层的 A→B、C→D…），它们算出来的通道 y 完全一样，会叠成一根线。
+  这里按「通道基准 y」分组，组内按边的先后给出错开量；跨行的边各归各的组，不会累加到几百像素。
+*/
+export function sameBandLanes(body: DiagramBody, boxes: NodeBoxes): Map<string, number> {
+  const counters = new Map<number, number>();
+  const lanes = new Map<string, number>();
+  for (const edge of body.edges) {
+    const from = body.nodes.find((node) => node.id === edge.from);
+    const to = body.nodes.find((node) => node.id === edge.to);
+    if (!from || !to) continue;
+    const a = boxOf(boxes, from.id);
+    const b = boxOf(boxes, to.id);
+    const sameBand = Math.abs((to.y + b.h / 2) - (from.y + a.h / 2)) < Math.max(a.h, b.h);
+    if (!sameBand) continue;
+    const key = Math.round(Math.max(from.y + a.h, to.y + b.h));
+    const index = counters.get(key) ?? 0;
+    counters.set(key, index + 1);
+    lanes.set(edge.id, index * EDGE_LANE_GAP);
+  }
+  return lanes;
+}
+
+/**
   同一对节点之间的多条边（含反向的 a→b 与 b→a）会算出完全相同的走线，叠在一起就只剩一条。
   这里按无向对分组、组内按 id 排序后给每条边一个居中的通道号；只有一条边的通道不设偏移。
 */
@@ -197,7 +220,7 @@ export function boundsOf(body: DiagramBody, boxes: NodeBoxes): { minX: number; m
 export function worldSizeOf(body: DiagramBody, boxes: NodeBoxes): { w: number; h: number } {
   const bounds = boundsOf(body, boxes);
   if (!bounds) return { w: WORLD_MIN_W, h: WORLD_MIN_H };
-  const pad = 400;
+  const pad = 240;
   return {
     w: Math.max(WORLD_MIN_W, Math.ceil(bounds.maxX) + pad),
     h: Math.max(WORLD_MIN_H, Math.ceil(bounds.maxY) + pad)

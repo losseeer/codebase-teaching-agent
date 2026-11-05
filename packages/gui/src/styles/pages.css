@@ -163,12 +163,12 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .dg-group { position: absolute; border: 2px dashed color-mix(in srgb, var(--border-strong) 50%, var(--ink-3)); border-radius: var(--r-md); background: transparent; pointer-events: auto; }
 .dg-group-label { position: absolute; top: -9px; left: 12px; background: var(--bg); padding: 0 6px; font-size: 10px; color: var(--ink-3); letter-spacing: 0.04em; }
 .dg-node {
-  /* 宽度按标题自适应：长标题不再挤成四五行的窄条；上限 208 与 auto-layout 的 CELL_W 对齐 */
-  position: absolute; min-width: 132px; max-width: 208px; width: max-content; min-height: 48px;
+  /* 宽度按标题自适应：长标题不再挤成四五行的窄条；上限 232 与 auto-layout 的 CELL_W(264) 对齐 */
+  position: absolute; min-width: 148px; max-width: 232px; width: max-content; min-height: 56px;
   background: var(--surface);
   border: 1.5px solid var(--border-strong); border-radius: var(--r-md);
   box-shadow: var(--shadow-sm);
-  padding: 6px 10px;
+  padding: 10px 12px;
   cursor: grab; user-select: none;
   transition: border var(--t-fast), box-shadow var(--t-fast);
 }
@@ -177,7 +177,7 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .dg-node.note { background: var(--accent-soft); border-style: dashed; }
 /* 引用核不到索引：虚线 + 去色 + 右上角一枚点。画成"还活着"就是在骗读者。 */
 .dg-node.stale { border-style: dashed; opacity: 0.62; border-color: var(--warn-border); }
-.dg-node .dg-label { font-size: var(--fs-12); font-weight: 650; line-height: 1.3; word-break: break-all; }
+.dg-node .dg-label { font-size: var(--fs-12); font-weight: 650; line-height: 1.45; word-break: break-word; }
 .dg-node .dg-sub { font-size: 10px; color: var(--ink-3); margin-top: 1px; }
 .dg-node .dg-note-text { font-size: 10px; color: var(--accent-ink); margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
 .dg-stale-mark { position: absolute; right: 4px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--warn-ink); }

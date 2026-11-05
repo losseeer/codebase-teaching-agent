@@ -9,14 +9,14 @@
 import type { DiagramBody, DiagramGroup, DiagramNode } from "@codebase-tutor/domain";
 
 /** 画布节点是定宽 132、按文字量到 48–100 高；这里给格子留余量，避免标题两行时压住下一行。 */
-const CELL_W = 232;
-const CELL_H = 100;
-const COL_GAP = 24;
-const ROW_GAP = 24;
-const GROUP_TITLE = 40;
-const GROUP_PAD = 24;
-const GROUP_GAP = 40;
-const MAX_COLS = 4;
+const CELL_W = 264;
+const CELL_H = 112;
+const COL_GAP = 32;
+const ROW_GAP = 32;
+const GROUP_TITLE = 32;
+const GROUP_PAD = 28;
+const GROUP_GAP = 28;
+const MAX_COLS = 5;
 const ORIGIN = 80;
 
 /** 坐标高度重复（不同坐标不超过节点数的三分之一）就认为没排过版。 */
