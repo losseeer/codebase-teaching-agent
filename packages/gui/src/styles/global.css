@@ -211,6 +211,11 @@ h1, h2, h3, h4, p { margin-top: 0; }
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
   padding: var(--sp-2);
+  /* 菜单项一多（版本历史几十条）就要能滚：之前既没有 max-height 也没有 overflow，
+     面板直接超出视口被裁掉，根本没有滚动条可拖。 */
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   z-index: 60;
   min-width: 180px;
   max-height: 320px;

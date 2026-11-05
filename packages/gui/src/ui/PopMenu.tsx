@@ -5,6 +5,8 @@ import { Icon } from "../ui/icons";
 /** 按钮下方的小菜单：portal 渲染防裁剪，贴边翻转，点外/Esc/滚动即关。 */
 export interface MenuItem {
   label: ReactNode;
+  /** 列表 key。不给就用下标——label 是节点时不能拿它当 key（会全是同一个字符串）。 */
+  key?: string;
   /** 补充说明放 title。 */
   title?: string;
   danger?: boolean;
@@ -30,31 +32,39 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") onClose();
     };
+    // 菜单内部的滚动不该把菜单关了：面板自己滚一下就被关掉，滚动条等于不能用。
+    const onScroll = (event: Event): void => {
+      if (panel.current?.contains(event.target as Node)) return;
+      onClose();
+    };
     // 捕获阶段：点菜单项自身也收起
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchor, onClose]);
 
   if (!anchor || !items.length) return null;
   const rect = anchor.getBoundingClientRect();
+  // 面板高度上限与 CSS 的 max-height 对齐，贴边时按它算，免得底部被裁。
+  const maxHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.6), 420));
   const style = {
     position: "fixed" as const,
     left: Math.max(8, Math.min(rect.left, window.innerWidth - 252)),
-    top: Math.min(rect.bottom + 6, window.innerHeight - 224),
+    top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - maxHeight - 8)),
     minWidth: 168,
+    maxHeight,
     zIndex: 70
   };
   return createPortal(
     <div className="pop" role="menu" aria-label={ariaLabel} ref={panel} style={style}>
-      {items.map((item) => (
+      {items.map((item, index) => (
         <button
-          key={String(item.label)}
+          key={item.key ?? index}
           type="button"
           role="menuitem"
           className="pop-item"

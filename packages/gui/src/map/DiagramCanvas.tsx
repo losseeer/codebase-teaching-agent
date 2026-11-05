@@ -320,6 +320,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     // 版本数组最后一项通常是当前内容，但拖过位置之后就不再相等——按内容比，别按位置猜。
     const current = diagram ? JSON.stringify(version.body) === JSON.stringify(diagram.body) : false;
     return {
+      key: version.at ?? String(index),
       label: <><b className="mono">{versionTime(version.at)}</b>{` · ${version.note}`}{current ? "（当前）" : ""}</>,
       title: current ? "就是现在这一版；恢复它不会多记一版" : `恢复到 ${versionTime(version.at)} 这一版（内容变了才存一版，历史不截断）`,
       onSelect: () => onRestore(index)
