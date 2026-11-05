@@ -1,7 +1,25 @@
-import {useState, type ReactElement } from "react";
+import {useMemo, useState, type ReactElement } from "react";
 import type { FileTreeNode } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
+
+/**
+  把「某个目录下只有一个子目录」这一层折叠掉：`src` 下只有 `main` 时直接显示成 `src/main`，
+  不多占一层嵌套。折叠后这一行的身份取**子目录**（path 仍是引擎认的真实路径，点击能选到它），
+  展开的内容取子目录的下一层；父目录那一行不再单独出现。
+*/
+export function foldSingleChildDirs(nodes: FileTreeNode[]): FileTreeNode[] {
+  const fold = (node: FileTreeNode): FileTreeNode => {
+    if (node.kind !== "directory" || !node.children?.length) return node;
+    const children = node.children.map(fold);
+    if (children.length === 1 && children[0]!.kind === "directory") {
+      const child = children[0]!;
+      return { ...child, name: `${node.name}/${child.name}` };
+    }
+    return { ...node, children };
+  };
+  return nodes.map(fold);
+}
 
 /** 仓库文件树：按目录层级渲染，首层目录默认展开。 */
 export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, lineOf, badge }: {
@@ -13,9 +31,10 @@ export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, 
   lineOf?: Map<string, number>;
   badge?: (node: FileTreeNode, depth: number) => string | undefined;
 }): ReactElement {
+  const folded = useMemo(() => foldSingleChildDirs(nodes), [nodes]);
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = new Set<string>();
-    nodes.forEach((node) => { if (node.kind === "directory") initial.add(node.path); });
+    folded.forEach((node) => { if (node.kind === "directory") initial.add(node.path); });
     return initial;
   });
   const [fullyShown, setFullyShown] = useState<Set<string>>(() => new Set());
@@ -58,5 +77,5 @@ export function RepoTree({ nodes, onOpenFile, onOpenDir, activePath, activeDir, 
     });
     return rows;
   };
-  return <div className="tree">{render(nodes, 0)}</div>;
+  return <div className="tree">{render(folded, 0)}</div>;
 }
