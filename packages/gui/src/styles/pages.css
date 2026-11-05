@@ -158,7 +158,9 @@ button.dg-name.static { cursor: default; font-weight: 600; color: var(--ink-2); 
 marker .edge-static { fill: var(--ok); stroke: none; }
 marker .edge-code { fill: var(--info-ink); stroke: none; }
 marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
-.dg-group { position: absolute; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--brand-050); pointer-events: auto; }
+/* 纯线框：只有虚线与标签，不铺底色。原来那层 brand-050 会把穿过它的连线染色、压暗，
+   看起来像「线被框剪断」；框只是分组记号，不该挡住关系本身。 */
+.dg-group { position: absolute; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: transparent; pointer-events: auto; }
 .dg-group-label { position: absolute; top: -9px; left: 12px; background: var(--bg); padding: 0 6px; font-size: 10px; color: var(--ink-3); letter-spacing: 0.04em; }
 .dg-node {
   /* 宽度按标题自适应：长标题不再挤成四五行的窄条；上限 208 与 auto-layout 的 CELL_W 对齐 */
