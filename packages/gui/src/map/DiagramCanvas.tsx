@@ -7,7 +7,7 @@ import { Icon } from "../ui/icons";
 import { InlineName, PopMenu, type MenuItem } from "../ui/PopMenu";
 import {
   DEFAULT_VIEW, EDGE_ORIGINS, ORIGIN_SHORT, ZOOM_MAX, ZOOM_MIN,
-  edgePoints, fitView, groupRects, notePreview, relativeTime, safeFileName, subLineOf, versionTime, worldSizeOf, zoomAt,
+  edgeOffsets, edgePoints, fitView, groupRects, notePreview, relativeTime, safeFileName, subLineOf, versionTime, worldSizeOf, zoomAt,
   type NodeBoxes, type Size, type View
 } from "./diagramView";
 
@@ -338,6 +338,8 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
 
   const renderedBody = withDragOffsets(body, dragging);
   const world = renderedBody ? worldSizeOf(renderedBody, measured) : { w: 2400, h: 1600 };
+  /** 同一对节点之间的多条边各占一条通道，否则叠成一条。 */
+  const edgeLanes = renderedBody ? edgeOffsets(renderedBody) : new Map<string, number>();
 
   return (
     <div className="map-main">
@@ -400,7 +402,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
                 ))}
               </defs>
               {renderedBody?.edges.map((edge) => {
-                const points = edgePoints(renderedBody, edge, measured);
+                const points = edgePoints(renderedBody, edge, measured, edgeLanes.get(edge.id) ?? 0);
                 if (!points) return null;
                 return (
                   <g key={edge.id}>

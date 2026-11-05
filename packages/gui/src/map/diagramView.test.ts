@@ -14,6 +14,8 @@ import {
   ZOOM_MIN,
   boundsOf,
   boxOf,
+  EDGE_LANE_GAP,
+  edgeOffsets,
   edgePoints,
   fitView,
   groupRects,
@@ -65,6 +67,29 @@ describe("节点盒子的兜底", () => {
     const diagram = body([node("a", 0, 0)]);
     expect(edgePoints(diagram, edge("a", "gone"), new Map())).toBeNull();
     expect(edgePoints(diagram, edge("gone", "a"), new Map())).toBeNull();
+  });
+
+  it("同一对节点的多条边按通道错开；单条边不引入偏移", () => {
+    const single = body([node("a", 60, 160), node("b", 60, 280)], [edge("a", "b")]);
+    expect(edgeOffsets(single).size, "只有一条边时不该偏移").toBe(0);
+
+    const duplicated = body([node("a", 60, 160), node("b", 60, 280)], [
+      edge("a", "b"),
+      { ...edge("a", "b"), id: "a->b#2" }
+    ]);
+    const lanes = edgeOffsets(duplicated);
+    expect(lanes.size).toBe(2);
+    const box = boxes([["a", { w: 132, h: 90 }], ["b", { w: 132, h: 90 }]]);
+    const first = edgePoints(duplicated, duplicated.edges[0]!, box, lanes.get("a->b")) ?? [];
+    const second = edgePoints(duplicated, duplicated.edges[1]!, box, lanes.get("a->b#2")) ?? [];
+    expect(Math.abs(first[0]!.x - second[0]!.x), "两条边在卡片边上各占一条通道").toBe(EDGE_LANE_GAP);
+  });
+
+  it("反向的两条边（a→b 与 b→a）也走不同通道", () => {
+    const diagram = body([node("a", 60, 160), node("b", 60, 280)], [edge("a", "b"), edge("b", "a")]);
+    const lanes = edgeOffsets(diagram);
+    expect(lanes.size).toBe(2);
+    expect(lanes.get("a->b")).not.toBe(lanes.get("b->a"));
   });
 });
 

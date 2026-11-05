@@ -81,7 +81,7 @@ export function boxOf(boxes: NodeBoxes, id: string): Size {
   为什么不画中心到中心的直线：直线会压在两端卡片身上，还会横穿路上任何一张卡片与分组框——
   用户看到的就成「一团斜线盖着几个框」，读不出依赖关系。方向按主轴选：竖着走接顶/底边，横着走接左/右边。
 */
-export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxes): { x: number; y: number }[] | null {
+export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxes, offset = 0): { x: number; y: number }[] | null {
   const from = body.nodes.find((node) => node.id === edge.from);
   const to = body.nodes.find((node) => node.id === edge.to);
   if (!from || !to) return null;
@@ -91,16 +91,41 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
   const ay = from.y + a.h / 2;
   const bx = to.x + b.w / 2;
   const by = to.y + b.h / 2;
+  // offset 是同一对节点之间第 k 条边的通道偏移：两端一起平移，线仍落在卡片边上，只是并排走。
   if (Math.abs(by - ay) >= Math.abs(bx - ax)) {
     const startY = by >= ay ? from.y + a.h : from.y;
     const endY = by >= ay ? to.y : to.y + b.h;
     const midY = startY + (endY - startY) / 2;
-    return [{ x: ax, y: startY }, { x: ax, y: midY }, { x: bx, y: midY }, { x: bx, y: endY }];
+    return [{ x: ax + offset, y: startY }, { x: ax + offset, y: midY }, { x: bx + offset, y: midY }, { x: bx + offset, y: endY }];
   }
   const startX = bx >= ax ? from.x + a.w : from.x;
   const endX = bx >= ax ? to.x : to.x + b.w;
   const midX = startX + (endX - startX) / 2;
-  return [{ x: startX, y: ay }, { x: midX, y: ay }, { x: midX, y: by }, { x: endX, y: by }];
+  return [{ x: startX, y: ay + offset }, { x: midX, y: ay + offset }, { x: midX, y: by + offset }, { x: endX, y: by + offset }];
+}
+
+/** 同一条通道上相邻两条边之间的距离（px）。卡片宽 132，两侧各排三条仍落在卡片边上。 */
+export const EDGE_LANE_GAP = 10;
+
+/**
+  同一对节点之间的多条边（含反向的 a→b 与 b→a）会算出完全相同的走线，叠在一起就只剩一条。
+  这里按无向对分组、组内按 id 排序后给每条边一个居中的通道号；只有一条边的通道不设偏移。
+*/
+export function edgeOffsets(body: DiagramBody): Map<string, number> {
+  const groups = new Map<string, DiagramEdge[]>();
+  for (const edge of body.edges) {
+    const key = [edge.from, edge.to].sort().join("\u0000");
+    const list = groups.get(key);
+    if (list) list.push(edge);
+    else groups.set(key, [edge]);
+  }
+  const offsets = new Map<string, number>();
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((left, right) => left.id.localeCompare(right.id));
+    sorted.forEach((edge, index) => offsets.set(edge.id, (index - (sorted.length - 1) / 2) * EDGE_LANE_GAP));
+  }
+  return offsets;
 }
 
 /** 分组框宣称「框住的是节点」，那它就得真包住：这是卡片与框之间留的呼吸位。 */
