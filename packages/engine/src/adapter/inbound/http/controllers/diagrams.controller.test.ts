@@ -99,15 +99,29 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
     expect(fx.eventsOf("diagram_created")).toHaveLength(createdBefore);
   });
 
-  it("恢复历史版本也是往前追加一版；下标越界 400，行也确实删得掉", async () => {
+  it("恢复历史版本：内容变了才往前追加一版；下标越界 400，行也确实删得掉", async () => {
     const seeded = seed("要看历史");
+    // 先改一版，让 versions[0] 与当前内容不同，恢复时才有「变化」可言。
+    const editor = new TutorDatabase(fx.repoDir);
+    try {
+      applyStructure(editor, seeded, { ...seeded.body, nodes: [] }, "改了一版");
+    } finally {
+      editor.close();
+    }
     const restored = await fx.app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 0 } });
     expect(restored.statusCode).toBe(200);
     const after = (restored.json() as Single).diagram;
-    expect(after.versions, "恢复本身也存一版，历史只追加不改写").toHaveLength(2);
-    expect(after.versions[1]!.note).toContain("恢复到");
+    expect(after.versions, "恢复的内容与当前不同，就往前追加一版，历史只追加不改写").toHaveLength(3);
+    expect(after.versions[2]!.note).toContain("恢复到");
     expect(after.body, "恢复到的就是那一版的结构").toEqual(seeded.body);
     expect(fx.lastEvent("diagram_restored").payload).toMatchObject({ diagram: seeded.id, to: 0 });
+
+    // 恢复到当前这一版：内容没变就不该凭空多一版——否则点一下就能把版本数刷上去。
+    const same = await fx.app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 2 } });
+    expect(same.statusCode).toBe(200);
+    const afterSame = (same.json() as Single).diagram;
+    expect(afterSame.versions, "恢复到当前这一版等于什么都没做，版本数不该变").toHaveLength(3);
+    expect(afterSame.body).toEqual(after.body);
 
     const outOfRange = await fx.app.inject({ method: "POST", url: `${base()}/${seeded.id}/restore`, payload: { index: 9 } });
     expect(outOfRange.statusCode).toBe(400);
