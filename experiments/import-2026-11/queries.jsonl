@@ -1,0 +1,28 @@
+{"id": "x-short-codec", "query": "短码 Base62 生成", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/codec/ShortCodeGenerator.java"], "holdout": true}
+{"id": "x-idempotency", "query": "幂等 Idempotency-Key", "goldPaths": ["sl-admin/src/main/java/com/xingyan/shortlink/admin/idem/IdempotencyFilter.java"], "holdout": true}
+{"id": "x-quota-decr", "query": "配额 DECR 扣减", "goldPaths": ["sl-jump/src/main/java/com/xingyan/shortlink/jump/AccessCounter.java"], "holdout": true}
+{"id": "x-quota-reconcile", "query": "对账 access_used 回写", "goldPaths": ["sl-admin/src/main/java/com/xingyan/shortlink/admin/recon/AccessQuotaReconciler.java"], "holdout": true}
+{"id": "x-ua-classify", "query": "UA 分类 容器 设备", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/route/UaClassifier.java"], "holdout": true}
+{"id": "x-hmac-sign", "query": "HMAC 签名 canonical", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/security/HmacSigner.java"], "holdout": true}
+{"id": "x-nonce-replay", "query": "nonce 防重放 验签", "goldPaths": ["sl-gateway/src/main/java/com/xingyan/shortlink/gateway/auth/HmacAuthFilter.java"], "holdout": true}
+{"id": "x-kafka-batch", "query": "Kafka 批量消费 offset", "goldPaths": ["sl-consumer/src/main/java/com/xingyan/shortlink/consumer/ClickEventBatchListener.java"], "holdout": true}
+{"id": "x-clickhouse-write", "query": "ClickHouse JSONEachRow 批量写入", "goldPaths": ["sl-consumer/src/main/java/com/xingyan/shortlink/consumer/clickhouse/ClickHouseWriter.java"], "holdout": true}
+{"id": "x-sharding-route", "query": "ShardingSphere 分片 落点", "goldPaths": ["sl-admin/src/test/java/com/xingyan/shortlink/admin/sharding/ShardingRoutingVerificationTest.java"], "holdout": true}
+{"id": "x-attribution-merge", "query": "归因 utm xy_click_id", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/attribution/AttributionParamMerger.java"], "holdout": true}
+{"id": "x-url-admission", "query": "URL 准入 白名单 https", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/admission/UrlAdmissionChecker.java"], "holdout": true}
+{"id": "x-code-pool", "query": "短码池 水位 补池", "goldPaths": ["sl-admin/src/main/java/com/xingyan/shortlink/admin/pool/ShortCodePoolService.java"], "holdout": true}
+{"id": "x-snowflake-clock", "query": "雪花 时钟回退 ID", "goldPaths": ["sl-common/src/main/java/com/xingyan/shortlink/common/id/SnowflakeIdGenerator.java"], "holdout": true}
+{"id": "x-wal-queue", "query": "WAL 本地兜底 投递", "goldPaths": ["sl-jump/src/main/java/com/xingyan/shortlink/jump/event/WalQueue.java"], "holdout": true}
+{"id": "x-rate-limit-exec", "query": "限流 窗口 执行", "goldPaths": ["sl-jump/src/main/java/com/xingyan/shortlink/jump/risk/RateLimiter.java"], "holdout": true}
+{"id": "x-neg-graphql", "query": "graphql 聚合 subscription", "goldPaths": [], "holdout": true}
+{"id": "x-neg-grpc", "query": "grpc protobuf 服务间", "goldPaths": [], "holdout": true}
+{"id": "x-neg-elasticsearch", "query": "elasticsearch 索引 检索", "goldPaths": [], "holdout": true}
+{"id": "x-neg-mongodb", "query": "mongodb 文档 集合", "goldPaths": [], "holdout": true}
+{"id": "x-neg-kubernetes", "query": "kubernetes helm chart", "goldPaths": [], "holdout": true}
+{"id": "x-neg-seata", "query": "seata 全局锁 分支事务", "goldPaths": [], "holdout": true}
+{"id": "x-neg-avro", "query": "avro schema registry", "goldPaths": [], "holdout": true}
+{"id": "x-neg-rabbitmq", "query": "rabbitmq 交换机 绑定", "goldPaths": [], "holdout": true}
+{"id": "x-neg-dead-letter", "query": "死信 rabbitmq dlq", "goldPaths": [], "holdout": true}
+{"id": "x-neg-swagger", "query": "swagger openapi 接口文档", "goldPaths": [], "holdout": true}
+{"id": "x-neg-lombok", "query": "lombok mapstruct 实体", "goldPaths": [], "holdout": true}
+{"id": "x-neg-zipkin", "query": "zipkin jaeger span", "goldPaths": [], "holdout": true}

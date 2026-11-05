@@ -20,6 +20,8 @@ import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMAR
 
 /** 覆盖率检查的最靠前条目数。 */
 const COVERAGE_CHECKED = 3;
+/** 批次并发上限；产品界面不暴露，只由导入接口与环境变量钳制。 */
+const MAX_SUMMARY_CONCURRENCY = 8;
 
 /** 结构词：出现在摘要里不代表认出了文件。 */
 const STRUCTURAL_WORDS = new Set(["test", "tests", "impl", "service", "controller", "utils", "util", "get", "set", "main"]);
@@ -85,6 +87,8 @@ export async function summarizeFiles(input: {
   onUsage?: (usage: LlmUsage | undefined) => void;
   /** 每批落库后回报已完成数与总数，缓存命中算已完成。 */
   onProgress?: (done: number, total: number) => void;
+  /** 并发消费批次的 worker 数；默认 1，内部钳在 1..8。 */
+  concurrency?: number;
 }): Promise<{ summaries: FileSummary[]; estimate: ImportEstimate }> {
   const { structure, store, repositoryPath, provider } = input;
   const withHeaderComments = input.withHeaderComments ?? false;
@@ -130,10 +134,17 @@ export async function summarizeFiles(input: {
   // 缓存扫描完成后先回报一次进度
   input.onProgress?.(cachedFiles, ordered.length);
 
+  // 并发只影响批次消费速度；缓存命中的扫描仍在启动前统一完成。
+  const concurrency = Math.max(1, Math.min(MAX_SUMMARY_CONCURRENCY, Math.floor(input.concurrency ?? 1)));
+  const batches: FileSlice[][] = [];
   for (let offset = 0; offset < pending.length; offset += SUMMARY_BATCH_SIZE) {
-    const batch = pending.slice(offset, offset + SUMMARY_BATCH_SIZE);
-    let results: (SummaryResult | undefined)[];
+    batches.push(pending.slice(offset, offset + SUMMARY_BATCH_SIZE));
+  }
+  let completed = 0;
+  let nextBatch = 0;
 
+  const runBatch = async (batch: FileSlice[], batchIndex: number): Promise<void> => {
+    let results: (SummaryResult | undefined)[] = [];
     const sending = batch.map((slice) => maskSliceForSend(slice));
     // 出网清单按批登记实际发出的那份
     if (provider.sendsCodeToEndpoint) recordEgress({
@@ -151,11 +162,15 @@ export async function summarizeFiles(input: {
     try {
       const sendMasked = sending.reduce((total, item) => total + item.masked, 0);
       if (sendMasked) console.warn(`[summarizer] 本批有 ${sendMasked} 处疑似密钥在发给 ${provider.name} 之前被隐去（切片与缓存键未改动）`);
-      results = await provider.summarizeMany(sending.map((item) => item.copy));
-      input.onUsage?.(provider.lastUsage);
+      const outcome = provider.summarizeManyWithUsage
+        ? await provider.summarizeManyWithUsage(sending.map((item) => item.copy))
+        : { results: await provider.summarizeMany(sending.map((item) => item.copy)) };
+      results = outcome.results;
+      // 并发时用量必须逐批返回；老提供方没有该方法时退回共享字段
+      input.onUsage?.(outcome.usage ?? provider.lastUsage);
     } catch (error) {
-      // 整批失败时本批逐条用本地摘要补齐
-      console.warn(`[summarizer] 第 ${Math.floor(offset / SUMMARY_BATCH_SIZE) + 1} 批调用失败，本批 ${batch.length} 条走确定性档：${error instanceof Error ? error.message : String(error)}`);
+      // 单批失败只影响本批：逐条用本地摘要补齐
+      console.warn(`[summarizer] 第 ${batchIndex + 1} 批调用失败，本批 ${batch.length} 条走确定性档：${error instanceof Error ? error.message : String(error)}`);
       results = [];
     }
     for (let index = 0; index < batch.length; index += 1) {
@@ -178,8 +193,19 @@ export async function summarizeFiles(input: {
       inputCharacters += JSON.stringify(sending[index].copy).length;
       byPath.set(slice.path, { ...stored, cached: false });
     }
-    input.onProgress?.(cachedFiles + offset + batch.length, ordered.length);
-  }
+    completed += batch.length;
+    // 进度按已完成条数单调递增，与批次完成顺序无关
+    input.onProgress?.(cachedFiles + completed, ordered.length);
+  };
+
+  const workers = Array.from({ length: Math.min(concurrency, batches.length) }, async () => {
+    while (true) {
+      const batchIndex = nextBatch++;
+      if (batchIndex >= batches.length) return;
+      await runBatch(batches[batchIndex], batchIndex);
+    }
+  });
+  await Promise.all(workers);
 
   return {
 

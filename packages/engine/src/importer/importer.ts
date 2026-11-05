@@ -30,6 +30,15 @@ import { traceEngine } from "@codebase-tutor/platform";
 /** `analyze` 的产物，不含挂载态字段。 */
 type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit" | "chatStore">;
 
+/** 摘要批次并发：接口参数优先，其次 `TUTOR_SUMMARY_CONCURRENCY`，默认 1；钳在 1..8。 */
+function summaryConcurrencyOf(value?: number): number {
+  const env = Number(process.env.TUTOR_SUMMARY_CONCURRENCY ?? "");
+  const raw = typeof value === "number" && Number.isFinite(value) && value >= 1
+    ? value
+    : Number.isFinite(env) && env >= 1 ? env : 1;
+  return Math.max(1, Math.min(8, Math.floor(raw)));
+}
+
 export interface ImportedRepository {
   path: string;
   index: RepositoryIndex;
@@ -206,9 +215,10 @@ export class ImportService extends EventEmitter {
   private readonly watchPaused = new Map<string, { until: number; timer?: ReturnType<typeof setTimeout> }>();
 
 
-  submit(inputPath: string, summaryHeaderComments?: boolean): ImportJob {
+  submit(inputPath: string, summaryHeaderComments?: boolean, summaryConcurrency?: number): ImportJob {
     const repositoryPath = validateRepositoryPath(inputPath);
-    const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString(), ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) };
+    const concurrency = summaryConcurrencyOf(summaryConcurrency);
+    const job: ImportJob = { id: id(), repositoryPath, phase: "queued", progress: 0, message: "已加入导入队列", createdAt: new Date().toISOString(), ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }), ...(summaryConcurrency === undefined ? {} : { summaryConcurrency: concurrency }) };
     this.jobs.set(job.id, job);
     this.queue = this.queue.then(() => this.run(job.id)).catch(() => undefined);
     return job;
@@ -457,7 +467,7 @@ export class ImportService extends EventEmitter {
     const startedAt = Date.now();
     try {
       this.update(job, "indexing", 10, "正在读取文件结构");
-      const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments);
+      const imported = await this.analyze(job.repositoryPath, (phase, progress, message) => this.update(job, phase, progress, message), job.summaryHeaderComments, undefined, undefined, job.summaryConcurrency);
       const { index, estimate, analysis, handle } = imported;
 
       // 就地挂载，句柄沿用 analyze 那一份，不再开第二个连接
@@ -483,17 +493,17 @@ export class ImportService extends EventEmitter {
   }
 
   /** 句柄生命周期：新建失败就地关一次；复用挂载句柄时只由卸载关。 */
-  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, existing?: RepositoryHandle): Promise<AnalyzedRepository> {
+  private async analyze(repositoryPath: string, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, existing?: RepositoryHandle, summaryConcurrency?: number): Promise<AnalyzedRepository> {
     const handle = existing ?? new RepositoryHandle(repositoryPath, catalogRepositoryId(repositoryPath));
     try {
-      return await this.analyzeWith(repositoryPath, handle, progress, summaryHeaderComments, preScanned);
+      return await this.analyzeWith(repositoryPath, handle, progress, summaryHeaderComments, preScanned, summaryConcurrency);
     } catch (error) {
       if (!existing) handle.close();
       throw error;
     }
   }
 
-  private async analyzeWith(repositoryPath: string, handle: RepositoryHandle, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan): Promise<AnalyzedRepository> {
+  private async analyzeWith(repositoryPath: string, handle: RepositoryHandle, progress: (phase: ImportJob["phase"], value: number, message: string) => void, summaryHeaderComments?: boolean, preScanned?: RepositoryScan, summaryConcurrency?: number): Promise<AnalyzedRepository> {
     progress("indexing", 10, "正在读取文件结构");
     // 增量重分析传入的扫描结果直接接手
     const scan = preScanned ?? scanRepositoryWithDigests(repositoryPath);
@@ -501,7 +511,7 @@ export class ImportService extends EventEmitter {
     // versionStamp 是全量源码内容哈希，内容不变则值不变
     const versionStamp = contentVersion(repositoryPath, index, scan.digests);
     handle.db.state.saveIndex(index);
-    progress("summarizing", 40, "正在生成文件摘要并检查缓存");
+    progress("summarizing", 40, "正在并行生成摘要与结构分析");
     // 摘要口径与预算共用这一份每仓设置
     let storedSettings = handle.db.state.settings<{ monthlyBudgetUsd?: number; summaryHeaderComments?: boolean }>(index.repositoryId);
     // 摘要口径只由导入页写入；读-合并-写保住其它键
@@ -515,17 +525,19 @@ export class ImportService extends EventEmitter {
     // 单价未配时花费为 0，闸门视为未超线
     const lightProvider = budgetExceeded(repositoryPath, budgetUsd) ? undefined : buildLlmRuntimeProvider("light");
     const provider = createSummaryProvider({ llm: lightProvider, withHeaderComments });
-    // 顺序固定：L1 摘要的输入是结构切片，必须先建图
+    // 摘要的输入是结构切片，两条链共用同一份 baseGraph；都完成后才落库与挂载
     // 语法解析器异步加载，须在建图前就绪；失败不抛错，由 graph 记录回落原因
     await loadSymbolParser();
     const baseGraph = buildDependencyGraph(repositoryPath, index.files);
     const summaryJournal = new Journal(repositoryPath, index.repositoryId);
-    const { estimate } = await summarizeFiles({
+    const summaryStartedAt = Date.now();
+    const summaryTask = summarizeFiles({
       structure: fileStructureOf(index.files, baseGraph),
       store: handle.db.summaries,
       repositoryPath: handle.db.repositoryPath,
       provider,
       withHeaderComments,
+      concurrency: summaryConcurrencyOf(summaryConcurrency),
       // 每一批花费写入 journal
       onUsage: (usage) => {
         if (!usage || (!usage.inputTokens && !usage.outputTokens)) return;
@@ -539,11 +551,23 @@ export class ImportService extends EventEmitter {
         const value = 40 + Math.round((35 * done) / Math.max(1, total));
         progress("summarizing", value, `正在生成文件摘要（${done}/${total}）`);
       }
-    });
-    progress("summarizing", 75, "正在整理模块与代码单元");
-    const graph = await enrichWithLsp(repositoryPath, baseGraph);
-    const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
-    const analysisHead = gitHeadOf(repositoryPath);
+    }).then((value) => ({ value, ms: Date.now() - summaryStartedAt }));
+    const structureStartedAt = Date.now();
+    const structureTask = (async () => {
+      const graph = await enrichWithLsp(repositoryPath, baseGraph);
+      const implementations = buildImplementationUnits(repositoryPath, graph.symbols);
+      const analysisHead = gitHeadOf(repositoryPath);
+      return { graph, implementations, analysisHead };
+    })().then((value) => ({ value, ms: Date.now() - structureStartedAt }));
+    const [summaryOutcome, structureOutcome] = await Promise.all([summaryTask, structureTask]);
+    // 两条链并行：总墙钟应接近 max(摘要, 结构)，而不是两者相加
+    traceEngine("import", {
+      phase: "parallel_analysis", repositoryId: index.repositoryId,
+      summaryMs: summaryOutcome.ms, structureMs: structureOutcome.ms
+    }, { traceId: null, durationMs: Math.max(summaryOutcome.ms, structureOutcome.ms) });
+    const estimate = summaryOutcome.value.estimate;
+    progress("summarizing", 90, "正在整理模块与代码单元");
+    const { graph, implementations, analysisHead } = structureOutcome.value;
     const analysis: RepositoryAnalysis = {
       repositoryId: index.repositoryId,
       generatedAt: new Date().toISOString(),

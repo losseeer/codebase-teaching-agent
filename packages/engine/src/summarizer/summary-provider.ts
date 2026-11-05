@@ -16,12 +16,20 @@ export interface SummaryResult {
   role?: FileRole;
 }
 
+export interface SummaryBatchResult {
+  results: (SummaryResult | undefined)[];
+  /** 该批实际用量；并发时逐批返回，避免共享字段串账。 */
+  usage?: LlmUsage;
+}
+
 export interface SummaryProvider {
   readonly modelVersion: string;
   readonly name: string;
   /** 该档是否把切片内容发到端点。 */
   readonly sendsCodeToEndpoint: boolean;
   summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]>;
+  /** 每批结果与用量；支持并发的档必须实现。 */
+  summarizeManyWithUsage?(slices: FileSlice[]): Promise<SummaryBatchResult>;
   /** 最近一次调用拿到的用量；没调用过为 undefined。 */
   lastUsage?: LlmUsage;
 }
@@ -112,6 +120,10 @@ export class LocalSummaryProvider implements SummaryProvider {
       return { summary: `${slice.path}：${ROLE_LABEL[slice.role]}；${detail}` };
     });
   }
+
+  async summarizeManyWithUsage(slices: FileSlice[]): Promise<SummaryBatchResult> {
+    return { results: await this.summarizeMany(slices) };
+  }
 }
 
 /** 轻量档：批量调用，失败项由调用方补齐。 */
@@ -128,7 +140,11 @@ export class LlmSummaryProvider implements SummaryProvider {
   lastUsage?: LlmUsage;
 
   async summarizeMany(slices: FileSlice[]): Promise<(SummaryResult | undefined)[]> {
-    if (!slices.length) return [];
+    return (await this.summarizeManyWithUsage(slices)).results;
+  }
+
+  async summarizeManyWithUsage(slices: FileSlice[]): Promise<SummaryBatchResult> {
+    if (!slices.length) return { results: [] };
     const response = await this.llm.complete({
       system: batchSystemPrompt(this.withHeaderComments),
       user: JSON.stringify(slices),
@@ -137,7 +153,10 @@ export class LlmSummaryProvider implements SummaryProvider {
     });
     this.lastUsage = response.usage;
     const byPath = parseBatchReply(response.text);
-    return slices.map((slice) => byPath.get(slice.path));
+    return {
+      results: slices.map((slice) => byPath.get(slice.path)),
+      ...(response.usage ? { usage: response.usage } : {})
+    };
   }
 }
 
@@ -175,6 +194,10 @@ class OllamaSummaryProvider implements SummaryProvider {
       }
     }
     return results;
+  }
+
+  async summarizeManyWithUsage(slices: FileSlice[]): Promise<SummaryBatchResult> {
+    return { results: await this.summarizeMany(slices) };
   }
 }
 

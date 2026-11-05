@@ -32,6 +32,7 @@
     "probe:sandbox": "pnpm --filter @codebase-tutor/engine probe:sandbox",
     "probe:graph": "pnpm --filter @codebase-tutor/engine probe:graph",
     "probe:calls": "pnpm --filter @codebase-tutor/engine probe:calls",
+    "probe:import-summary": "pnpm --filter @codebase-tutor/engine probe:import-summary",
     "facts:report": "pnpm --filter @codebase-tutor/engine facts:report"
   },
   "devDependencies": {

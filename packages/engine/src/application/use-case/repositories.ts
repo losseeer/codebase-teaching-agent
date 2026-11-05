@@ -41,9 +41,9 @@ export function setWatchingUseCase(repositoryId: string, paused: boolean, ttlMs?
 }
 
 /** 提交一次导入任务（异步）；进度用 `getImportJobUseCase` 查。 */
-export function submitImportUseCase(path: string, summaryHeaderComments?: boolean): RepositoryResult<ReturnType<typeof importer.submit>> {
+export function submitImportUseCase(path: string, summaryHeaderComments?: boolean, summaryConcurrency?: number): RepositoryResult<ReturnType<typeof importer.submit>> {
   try {
-    return { ok: true, value: importer.submit(path, typeof summaryHeaderComments === "boolean" ? summaryHeaderComments : undefined) };
+    return { ok: true, value: importer.submit(path, typeof summaryHeaderComments === "boolean" ? summaryHeaderComments : undefined, summaryConcurrency) };
   } catch (error) {
     return { ok: false, failure: { kind: "import-rejected", message: error instanceof Error ? error.message : "无法提交导入任务" } };
   }

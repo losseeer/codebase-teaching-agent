@@ -1,0 +1,15 @@
+{
+  "datasetId": "import-2026-11",
+  "sourceDatasetId": "baseline-2026-11",
+  "primaryRepo": "Xingyan-ShortLink-Platform",
+  "repos": [
+    { "name": "Xingyan-ShortLink-Platform", "files": 292, "summarySlices": 213, "batches": 27, "role": "primary" },
+    { "name": "dianping-backend", "files": 176, "summarySlices": 156, "batches": 20, "role": "smoke" },
+    { "name": "CleanArchitecture", "files": 255, "summarySlices": 198, "batches": 25, "role": "smoke" },
+    { "name": "gin", "files": 131, "summarySlices": 120, "batches": 15, "role": "smoke" },
+    { "name": "dianping-agent2", "files": 45, "summarySlices": 38, "batches": 5, "role": "smoke" },
+    { "name": "dianping-frontend", "files": 49, "summarySlices": 45, "batches": 6, "role": "smoke" }
+  ],
+  "querySet": "experiments/import-2026-11/queries.jsonl",
+  "frozenAt": "2026-11-05"
+}

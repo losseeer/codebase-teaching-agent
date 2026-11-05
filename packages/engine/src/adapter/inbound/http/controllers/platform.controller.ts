@@ -55,8 +55,11 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
     openEventStream(request, reply);
   });
 
-  app.post<{ Body: { path?: string; summaryHeaderComments?: boolean } }>("/api/imports", async (request, reply) => {
-    const result = submitImportUseCase(request.body?.path ?? "", request.body?.summaryHeaderComments);
+  app.post<{ Body: { path?: string; summaryHeaderComments?: boolean; summaryConcurrency?: number } }>("/api/imports", async (request, reply) => {
+    // 并发只给实验用；非正整数视作没传，由导入服务回落环境变量或默认 1
+    const requested = request.body?.summaryConcurrency;
+    const summaryConcurrency = typeof requested === "number" && Number.isFinite(requested) && requested >= 1 ? Math.floor(requested) : undefined;
+    const result = submitImportUseCase(request.body?.path ?? "", request.body?.summaryHeaderComments, summaryConcurrency);
     return result.ok ? reply.code(202).send(result.value) : rejectedRepo(reply, result.failure);
   });
 

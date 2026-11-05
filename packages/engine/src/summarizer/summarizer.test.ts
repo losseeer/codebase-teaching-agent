@@ -110,6 +110,70 @@ describe("文件摘要表（L1）", () => {
     expect(again, "全命中时一条也不发模型，但仍要报一次，否则进度停在起点就是假卡住").toEqual([totalFiles]);
   });
 
+  it("并发 3 路：每批只处理一次，进度单调，用量按批汇总", async () => {
+    const database = tempDatabase();
+    const totalFiles = SUMMARY_BATCH_SIZE * 3;
+    const many: FileStructure = {
+      files: Array.from({ length: totalFiles }, (_, index) => ({ path: `f${index}.py`, lines: 10 })),
+      symbols: Array.from({ length: totalFiles }, (_, index) => makeSymbol(`f${index}.py`, `fn${index}`, { line: 1, endLine: 3, language: "python" })),
+      calls: [],
+      imports: {},
+      entrypoints: []
+    };
+    const seenBatches: string[][] = [];
+    const usages: number[] = [];
+    const provider: SummaryProvider = {
+      modelVersion: "test-model",
+      name: "test provider",
+      sendsCodeToEndpoint: false,
+      async summarizeMany(slices: FileSlice[]) { return (await this.summarizeManyWithUsage!(slices)).results; },
+      async summarizeManyWithUsage(slices: FileSlice[]) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        seenBatches.push(slices.map((slice) => slice.path));
+        return {
+          results: slices.map((slice) => ({ summary: `${slice.path}：测试摘要`, role: slice.role })),
+          usage: { inputTokens: slices.length, outputTokens: slices.length * 2 }
+        };
+      }
+    };
+    const progress: number[] = [];
+    await summarizeFiles({
+      structure: many, store: database.summaries, repositoryPath: database.repositoryPath, provider, concurrency: 3,
+      onUsage: (usage) => { if (usage) usages.push(usage.inputTokens); },
+      onProgress: (done) => { progress.push(done); }
+    });
+    expect(new Set(seenBatches.flat()).size, "每批只处理一次").toBe(totalFiles);
+    expect(seenBatches.flat().sort()).toEqual(many.files.map((file) => file.path).sort());
+    expect(progress.every((value, index) => index === 0 || value >= progress[index - 1]), "进度单调").toBe(true);
+    expect(progress.at(-1)).toBe(totalFiles);
+    expect(usages.reduce((total, value) => total + value, 0), "总账等于各批之和").toBe(totalFiles);
+  });
+
+  it("并发下单批失败只影响本批：其余批照常落库，失败批走本地兜底", async () => {
+    const database = tempDatabase();
+    const totalFiles = SUMMARY_BATCH_SIZE * 2;
+    const many: FileStructure = {
+      files: Array.from({ length: totalFiles }, (_, index) => ({ path: `f${index}.py`, lines: 10 })),
+      symbols: Array.from({ length: totalFiles }, (_, index) => makeSymbol(`f${index}.py`, `fn${index}`, { line: 1, endLine: 3, language: "python" })),
+      calls: [],
+      imports: {},
+      entrypoints: []
+    };
+    const provider: SummaryProvider = {
+      modelVersion: "test-model",
+      name: "test provider",
+      sendsCodeToEndpoint: false,
+      async summarizeMany(slices: FileSlice[]) { return (await this.summarizeManyWithUsage!(slices)).results; },
+      async summarizeManyWithUsage(slices: FileSlice[]) {
+        if (slices[0]?.path === "f0.py") throw new Error("首批失败");
+        return { results: slices.map((slice) => ({ summary: `${slice.path}：模型摘要` })) };
+      }
+    };
+    const result = await summarizeFiles({ structure: many, store: database.summaries, repositoryPath: database.repositoryPath, provider, concurrency: 2 });
+    expect(result.summaries).toHaveLength(totalFiles);
+    expect(result.estimate.fallbackFiles, "只有失败批的 8 条回落").toBe(SUMMARY_BATCH_SIZE);
+  });
+
   it("产出摘要 + 结构角色 + 覆盖率，并落库；重复调用全命中缓存", async () => {
     const database = tempDatabase();
     const provider = new LocalSummaryProvider();
