@@ -1,0 +1,89 @@
+{
+  "repository": "/Users/dedsecczk/Dev/codebase-teaching-agent/experiments/import-2026-11/repos/xy-1",
+  "files": 213,
+  "summaries": 213,
+  "rows": 213,
+  "queries": 28,
+  "truncated": {
+    "60": 10,
+    "100": 0,
+    "200": 0
+  },
+  "variants": [
+    {
+      "label": "完整",
+      "hit": {
+        "numerator": 12,
+        "denominator": 16
+      },
+      "meanRecall": 0.75,
+      "negatives": 12,
+      "negativeWrongHits": 3,
+      "tuning": {
+        "numerator": 0,
+        "denominator": 0
+      },
+      "holdout": {
+        "numerator": 12,
+        "denominator": 16
+      }
+    },
+    {
+      "label": "≤60",
+      "limit": 60,
+      "hit": {
+        "numerator": 12,
+        "denominator": 16
+      },
+      "meanRecall": 0.75,
+      "negatives": 12,
+      "negativeWrongHits": 3,
+      "tuning": {
+        "numerator": 0,
+        "denominator": 0
+      },
+      "holdout": {
+        "numerator": 12,
+        "denominator": 16
+      }
+    },
+    {
+      "label": "≤100",
+      "limit": 100,
+      "hit": {
+        "numerator": 12,
+        "denominator": 16
+      },
+      "meanRecall": 0.75,
+      "negatives": 12,
+      "negativeWrongHits": 3,
+      "tuning": {
+        "numerator": 0,
+        "denominator": 0
+      },
+      "holdout": {
+        "numerator": 12,
+        "denominator": 16
+      }
+    },
+    {
+      "label": "≤200",
+      "limit": 200,
+      "hit": {
+        "numerator": 12,
+        "denominator": 16
+      },
+      "meanRecall": 0.75,
+      "negatives": 12,
+      "negativeWrongHits": 3,
+      "tuning": {
+        "numerator": 0,
+        "denominator": 0
+      },
+      "holdout": {
+        "numerator": 12,
+        "denominator": 16
+      }
+    }
+  ]
+}
