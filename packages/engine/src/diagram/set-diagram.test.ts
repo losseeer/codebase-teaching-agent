@@ -347,6 +347,18 @@ describe("版本历史：存版有上限，恢复只追加", () => {
     f.database.close();
   });
 
+  it("恢复到当前这一版：内容没变，不该凭空多一版", () => {
+    const f = fixture();
+    const diagram = seeded(f.context);
+    const edited = applyDiagramEdit(f.context, { diagram: diagram.id, edit: { action: "add_node", node: { id: "n-note", kind: "note", label: "便签", x: 0, y: 0, text: "一句话" } } }, "agent");
+    const before = edited.diagram!.versions.length;
+    const last = edited.diagram!.versions.length - 1;
+    const restored = restoreVersion(f.database, edited.diagram!, last)!;
+    expect(restored.versions, "点「恢复到当前」不该把版本数刷上去").toHaveLength(before);
+    expect(restored.body).toEqual(edited.diagram!.body);
+    f.database.close();
+  });
+
   it("读侧：引用断掉的节点要报出来，画布现场那份清单把正打开那张标出来", () => {
     const f = fixture();
     const broken = buildDiagram(REPO, { id: diagramId("broken"), name: "过时的一张", source: "agent", body: { groups: [], nodes: [{ id: "n-gone", kind: "module", label: "重命名前的模块", ref: "file:src/gone.ts", x: 0, y: 0 }], edges: [] } });

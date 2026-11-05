@@ -196,6 +196,7 @@ export function buildDiagram(repositoryId: string, input: { id: string; name?: s
     source: input.source,
     createdAt: now,
     updatedAt: now,
+    // 初版由落盘那层记（insertDiagram），这里不给版本数组。
     versions: [],
     body: input.body ?? emptyDiagramBody()
   };

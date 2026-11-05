@@ -128,6 +128,9 @@ export function saveGeometry(database: TutorDatabase, diagram: Diagram, position
 export function restoreVersion(database: TutorDatabase, diagram: Diagram, index: number): Diagram | undefined {
   const version = diagram.versions[index];
   if (!version) return undefined;
+  // 恢复到的就是当前这一版（版本数组最后一项永远是当前内容）：内容没变就不该凭空多一版。
+  // 否则点一下「恢复到当前」就能把版本数刷上去，版本历史里塞满没有信息量的条目。
+  if (JSON.stringify(version.body) === JSON.stringify(diagram.body)) return diagram;
   const at = new Date().toISOString();
   const versions = [...diagram.versions, { at, note: `恢复到 ${versionStamp(version.at)}`, body: clone(version.body) }];
   const next: Diagram = { ...diagram, body: clone(version.body), versions: versions.slice(-DIAGRAM_VERSION_LIMIT), updatedAt: at };
