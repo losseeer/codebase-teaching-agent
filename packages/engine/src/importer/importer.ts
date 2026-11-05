@@ -35,7 +35,7 @@ function summaryConcurrencyOf(value?: number): number {
   const env = Number(process.env.TUTOR_SUMMARY_CONCURRENCY ?? "");
   const raw = typeof value === "number" && Number.isFinite(value) && value >= 1
     ? value
-    : Number.isFinite(env) && env >= 1 ? env : 1;
+    : Number.isFinite(env) && env >= 1 ? env : 4;
   return Math.max(1, Math.min(8, Math.floor(raw)));
 }
 

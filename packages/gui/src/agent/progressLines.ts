@@ -35,7 +35,7 @@ export function progressText(event: ProgressFrame | undefined): string {
     case "reading": return `正在读取 ${activity.path || "代码文件"} …`;
     case "searching": return `正在检索代码：${activity.query || "关键词"} …`;
     case "loading_skill": return activity.skill ? `正在加载技能 ${activity.skill} …` : "正在加载已装的做法 …";
-    case "editing_diagram": return "正在修改画布上的架构图 …";
+    case "editing_diagram": return "正在修改画布上的图 …";
     case "querying_facts": return "正在查询已有产物 …";
     case "calling_external": return "正在调用外部工具 …";
     case "thinking": return "正在思考…";
