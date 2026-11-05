@@ -1,0 +1,99 @@
+{
+  "experimentId": "segmented-generate-2026-11",
+  "datasetId": "baseline-2026-11#design-30",
+  "frozenAt": "2026-11-06",
+  "description": "单变量消融：出题产出协议是否分段（题面 → 代码 → 测试）。主判据是 provider_error（单次输出撞 240s 超时）导致的失败数，不是耗时——按基线数据，总耗时 ∝ 输出 token，分段不省 token。",
+  "model": {
+    "provider": "openai-compatible",
+    "name": "qwen3.8-flash",
+    "timeoutMs": 240000,
+    "thinking": "auto",
+    "promptVersion": "working-tree-2026-11-04",
+    "settingsSource": "~/.codebase-tutor/llm-settings.json",
+    "summaryProvider": "off"
+  },
+  "digestAlgorithm": null,
+  "repos": [
+    {
+      "name": "dianping-agent2",
+      "language": "python",
+      "sourcePath": "/Users/dedsecczk/Dev/dianping/dianping-agent2",
+      "path": "experiments/baseline-2026-11/repos/dianping-agent2",
+      "commit": "3b4e5267dc9df3510a52e56d685ae456b5db1be3",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified",
+      "contentDigest": "sha256:cb2e205c4a6a76a76908a17b115554717dcd663e09114de9f7e1862618217816",
+      "artifactRepositoryId": "repo_9f4b97533cfadb61"
+    },
+    {
+      "name": "Xingyan-ShortLink-Platform",
+      "language": "java",
+      "sourcePath": "/Users/dedsecczk/Dev/Xingyan-ShortLink-Platform",
+      "path": "experiments/baseline-2026-11/repos/Xingyan-ShortLink-Platform",
+      "commit": "9229754b43c1d680b2646db9e3a22878e06ed261",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified",
+      "contentDigest": "sha256:5176c512b8746fbc9405eebae331f2698c485318c5521abf321e75263735c6c2",
+      "artifactRepositoryId": "repo_f56359c8fdf8c52f"
+    },
+    {
+      "name": "gin",
+      "language": "go",
+      "sourcePath": "/Users/dedsecczk/Dev/codebase-tutor-eval/gin",
+      "path": "experiments/baseline-2026-11/repos/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "design": true,
+      "status": "ready",
+      "license": "MIT",
+      "contentDigest": "sha256:748df628217015bef39f8c1c1a8f0029fd652c1023acb52811edf3dd969bd01c",
+      "artifactRepositoryId": "repo_31666185bd597bc4"
+    }
+  ],
+  "inputs": {
+    "pilotTopics": "pilot-topics.csv",
+    "fullTopics": "../baseline-2026-11/topics.csv"
+  },
+  "outputs": {
+    "pilot": "pilot.jsonl",
+    "pilotSummary": "pilot.summary.json"
+  },
+  "arms": [
+    {
+      "id": "single",
+      "label": "对照：一次整份 JSON（产品现状）",
+      "mode": "single"
+    },
+    {
+      "id": "segmented",
+      "label": "实验：题面 → 代码 → 测试三段产出，失败只重出那一段",
+      "mode": "segmented"
+    }
+  ],
+  "protocol": {
+    "variable": "只改产出协议；模型、素材、题面约束、判分口径、仓副本全同",
+    "pairing": "同一 (repo, topic) × 2 臂，背靠背连跑（端点负载对两臂公平）",
+    "controlRerun": "对照臂同轮重跑，不使用 11-04 存档",
+    "pilot": "先 6 题：基线 4 次 provider_error + 2 次 harness_validation；通过再跑全量 30",
+    "segments": [
+      "prompt",
+      "code",
+      "tests"
+    ],
+    "repairPolicy": "单段臂：自证失败整份重写 1 次（产品现状）；分段臂：只重出该改的那一段 1 次",
+    "judgeIdentical": "两臂的合并产物都交给产品既有的 finishProposal：同一套形状校验与沙箱两跑"
+  },
+  "criteria": {
+    "primary": "provider_error 失败数：分段臂显著少于单段臂（基线 4/6）",
+    "secondary": "总成功率：分段臂 ≥ 单段臂",
+    "safety": "harness_validation 失败数不得上升（分段不得引入新的失败模式）",
+    "reference": [
+      "总耗时",
+      "总 token",
+      "单次最大输出 tokens",
+      "每趟模型调用数"
+    ],
+    "pilotGate": "那 4 道基线超时的题，分段臂至少 2 道成功 → 才值得跑全量 30"
+  }
+}
