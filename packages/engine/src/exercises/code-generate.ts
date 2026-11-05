@@ -76,7 +76,7 @@ const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
   go: '测试文件（例如 `tests.go`，入口就是它）与实现文件同属 `package main` 且都放在根目录（不要建子目录）；**实现文件不得再定义 `func main`，main 只写在测试文件里**。每条断言用 if 分支计数（通过 pass++，失败 fail++ 并把原因打到 stderr），结尾 `fmt.Printf("TESTS %d %d\\n", pass, fail)`，fail>0 时 `os.Exit(1)`。只用标准库。'
 };
 
-function systemPrompt(kind: "patch_edit" | "author_function", language: ExerciseLanguage): string {
+export function systemPrompt(kind: "patch_edit" | "author_function", language: ExerciseLanguage): string {
   return [
     `你是代码练习的出题人。要出一道**学习者真在编辑器里写代码、由沙箱真跑测试判分**的题：${kind === "patch_edit" ? "给一段有真实缺陷的实现，让他改到测试全过" : "给签名与示例，让他从零写出实现"}。`,
     "",
@@ -103,7 +103,7 @@ function systemPrompt(kind: "patch_edit" | "author_function", language: Exercise
 }
 
 /** 参考模式：源码只作参考，题目自足；语言由模型声明。 */
-function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
+export function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
   return [
     `你是代码练习的出题人。这一次由你定题：围绕给定主题出一道具自足的代码题——${kind === "patch_edit" ? "一段带真实缺陷的实现，学习者改到测试全过" : "给签名与示例，学习者从零写出实现"}。`,
     "",
@@ -267,7 +267,7 @@ export async function validateHarness(proposal: CodeProposal, repositoryPath: st
   return { ok: true, runs };
 }
 
-interface ProposalResponse {
+export interface ProposalResponse {
   text: string;
   usage?: LlmUsage;
   skillReads: SkillReadRecord[];
@@ -280,7 +280,7 @@ const REPAIR_INSTRUCTION = [
   "参考解必须让全部测试通过，下发件必须至少有一条测试失败；不得删除、跳过或放宽断言来迁就参考解。"
 ].join("\n");
 
-async function requestProposal(input: { provider: LlmProvider; system: string; user: string; temperature: number; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<ProposalResponse> {
+export async function requestProposal(input: { provider: LlmProvider; system: string; user: string; temperature: number; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<ProposalResponse> {
   const loop = await completeWithReadTool({
     ...(input.faces ?? {}),
     provider: input.provider,
@@ -446,7 +446,7 @@ export async function generateCodeExerciseFromReference(input: {
 }
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
-async function finishProposal(
+export async function finishProposal(
   response: { text: string; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads: FileReadRecord[] },
   context: {
     kind: "patch_edit" | "author_function";
@@ -528,7 +528,7 @@ export async function explainCodeAttempt(input: {
   return { explanation: loop.completion.text.trim().slice(0, 400), usage: loop.usage, verdict, fileReads: loop.fileReads };
 }
 
-function parseJsonObject(text: string): Record<string, unknown> | undefined {
+export function parseJsonObject(text: string): Record<string, unknown> | undefined {
   const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   const start = jsonText.indexOf("{");
   const end = jsonText.lastIndexOf("}");
