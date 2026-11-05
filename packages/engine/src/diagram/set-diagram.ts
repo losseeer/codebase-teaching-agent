@@ -17,6 +17,7 @@ import type { DiagramStore } from "../application/port/diagram-store.js";
 import type { LlmTool } from "../application/port/llm-provider.js";
 import type { ToolDefinition } from "../source/tools/types.js";
 import type { FactsPairChecker } from "./facts-verify.js";
+import { layoutIfUnplaced } from "./auto-layout.js";
 
 /**
   画布结构的唯一写入口，位置以外的改动都从这里进。
@@ -269,18 +270,21 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const wanted = (request.diagram ?? "").trim();
+    // agent 常常整张图不给坐标，落盘前按分组排一次版，否则所有卡片叠在 (0,0)。
+    const laid = layoutIfUnplaced(settled.body);
+    const laidNote = laid.applied ? "（原图没有坐标，已按分组自动排版）" : "";
     if (!wanted) {
-      const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(normalizeDiagramName(edit.name)), source: via === "agent" ? "agent" : "me", body: settled.body });
+      const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(normalizeDiagramName(edit.name)), source: via === "agent" ? "agent" : "me", body: laid.body });
       const saved = context.store.insert(diagram);
       context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
       context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
-      return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版。${downgradeNote(settled.downgraded)}`, diagram: saved };
+      return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版${laidNote}。${downgradeNote(settled.downgraded)}`, diagram: saved };
     }
     // 指名了目标就整张替换：沿用原 id 与名字，上一版进版本历史。
     // 重画一张已经存在的图必须走这里——不带 diagram 的 draw 永远是新建，会多出一张同名（2）。
     const target = resolveTarget(context, wanted);
     if ("error" in target) return refuse(target.error);
-    const saved = context.store.applyStructure(target.diagram, settled.body, via === "agent" ? "agent 重画" : "重画");
+    const saved = context.store.applyStructure(target.diagram, laid.body, via === "agent" ? "agent 重画" : "重画");
     context.journal.append("diagram_edited", {
       diagram: saved.id, action: "draw", target: "",
       nodes: saved.body.nodes.length, edges: saved.body.edges.length,
@@ -288,7 +292,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
       downgraded: settled.downgraded, via
     });
     context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
-    return { ok: true, text: `重画了「${saved.name}」：现在 ${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，上一版在版本历史里。${downgradeNote(settled.downgraded)}`, diagram: saved };
+    return { ok: true, text: `重画了「${saved.name}」：现在 ${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，上一版在版本历史里${laidNote}。${downgradeNote(settled.downgraded)}`, diagram: saved };
   }
 
   const target = resolveTarget(context, request.diagram);
