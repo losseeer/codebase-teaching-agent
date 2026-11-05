@@ -161,7 +161,8 @@ marker .edge-inferred { fill: var(--warn-ink); stroke: none; }
 .dg-group { position: absolute; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg); background: var(--brand-050); pointer-events: auto; }
 .dg-group-label { position: absolute; top: -9px; left: 12px; background: var(--bg); padding: 0 6px; font-size: 10px; color: var(--ink-3); letter-spacing: 0.04em; }
 .dg-node {
-  position: absolute; width: 132px; min-height: 48px;
+  /* 宽度按标题自适应：长标题不再挤成四五行的窄条；上限 208 与 auto-layout 的 CELL_W 对齐 */
+  position: absolute; min-width: 132px; max-width: 208px; width: max-content; min-height: 48px;
   background: var(--surface);
   border: 1.5px solid var(--border-strong); border-radius: var(--r-md);
   box-shadow: var(--shadow-sm);

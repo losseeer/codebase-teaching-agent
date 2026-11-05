@@ -98,6 +98,17 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
     const midY = startY + (endY - startY) / 2;
     return [{ x: ax + offset, y: startY }, { x: ax + offset, y: midY }, { x: bx + offset, y: midY }, { x: bx + offset, y: endY }];
   }
+  // 同一水平带：直线会从两端卡片之间横穿中间那些卡片，看起来像一根线串了糖葫芦。
+  // 改走两卡片下方的通道（底部出、底部进），中间那张卡片就不会被划过去。
+  if (Math.abs(by - ay) < Math.max(a.h, b.h)) {
+    const laneY = Math.max(from.y + a.h, to.y + b.h) + 14 + offset;
+    return [
+      { x: ax, y: from.y + a.h },
+      { x: ax, y: laneY },
+      { x: bx, y: laneY },
+      { x: bx, y: to.y + b.h }
+    ];
+  }
   const startX = bx >= ax ? from.x + a.w : from.x;
   const endX = bx >= ax ? to.x : to.x + b.w;
   const midX = startX + (endX - startX) / 2;

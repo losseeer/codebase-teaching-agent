@@ -9,7 +9,7 @@
 import type { DiagramBody, DiagramGroup, DiagramNode } from "@codebase-tutor/domain";
 
 /** 画布节点是定宽 132、按文字量到 48–100 高；这里给格子留余量，避免标题两行时压住下一行。 */
-const CELL_W = 168;
+const CELL_W = 232;
 const CELL_H = 100;
 const COL_GAP = 24;
 const ROW_GAP = 24;

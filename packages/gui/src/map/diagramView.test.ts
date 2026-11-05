@@ -63,6 +63,15 @@ describe("节点盒子的兜底", () => {
     expect(points.at(-1)).toEqual({ x: 126, y: 250 });
   });
 
+  it("同一水平带的两张卡片：连线绕到它们下方，不横穿中间那张", () => {
+    const diagram = body([node("a", 60, 160), node("c", 230, 160), node("b", 400, 160)]);
+    const points = edgePoints(diagram, edge("a", "b"), boxes([["a", { w: 132, h: 60 }], ["b", { w: 132, h: 60 }]])) ?? [];
+    expect(points[0]).toEqual({ x: 126, y: 220 });
+    expect(points.at(-1)).toEqual({ x: 466, y: 220 });
+    expect(points[1]!.y, "中间段要在卡片底边之下").toBeGreaterThan(220);
+    expect(points[2]!.y).toBe(points[1]!.y);
+  });
+
   it("端点缺一律不画：agent 刚删掉那个节点时不画到空气里", () => {
     const diagram = body([node("a", 0, 0)]);
     expect(edgePoints(diagram, edge("a", "gone"), new Map())).toBeNull();

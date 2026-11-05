@@ -7,10 +7,12 @@ import { resolve } from "node:path";
 
 import { TutorDatabase } from "../../src/adapter/outbound/persistence/database.js";
 import { applyStructure, diagramStoreFor, listDiagrams, readDiagram } from "../../src/adapter/outbound/persistence/diagrams.js";
-import { layoutIfUnplaced } from "../../src/diagram/auto-layout.js";
+import { layoutDiagram, layoutIfUnplaced } from "../../src/diagram/auto-layout.js";
 
 const repoPath = process.argv[2];
 const repositoryId = process.argv[3];
+/** --force：格子尺寸或卡片宽度变过时强排一次，不再看 needsLayout。 */
+const force = process.argv.includes("--force");
 if (!repoPath || !repositoryId) {
   console.error("用法：tsx dev/mutate/relayout-diagrams.ts <仓库绝对路径> <repositoryId>");
   process.exit(2);
@@ -22,7 +24,7 @@ let changed = 0;
 for (const summary of listDiagrams(database, repositoryId)) {
   const full = readDiagram(database, repositoryId, summary.id);
   if (!full) continue;
-  const laid = layoutIfUnplaced(full.body);
+  const laid = force ? { body: layoutDiagram(full.body), applied: true } : layoutIfUnplaced(full.body);
   if (!laid.applied) { console.log(`${summary.name}：已布局，跳过`); continue; }
   applyStructure(database, full, laid.body, "自动排版");
   changed += 1;
