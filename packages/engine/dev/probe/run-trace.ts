@@ -58,7 +58,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const repoPath = args.find((arg) => !arg.startsWith("--"));
   if (!repoPath) {
-    console.error("用法：tsx dev/reports/run-trace.ts <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]");
+    console.error("用法：tsx dev/probe/run-trace.ts <被学习仓路径> [--last 20] [--trace <traceId>] [--session <threadId>] [--json]");
     process.exit(2);
   }
   const lastFlag = args.indexOf("--last");

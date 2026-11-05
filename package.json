@@ -22,6 +22,7 @@
     "test:all": "pnpm test && pnpm test:e2e",
     "postinstall": "pnpm --filter @codebase-tutor/engine run setup:native",
     "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native",
+    "experiment": "pnpm --filter @codebase-tutor/engine experiment",
     "experiment:baseline": "pnpm --filter @codebase-tutor/engine experiment:baseline",
     "eval:metrics": "pnpm --filter @codebase-tutor/engine eval:metrics",
     "eval:quality": "pnpm --filter @codebase-tutor/engine eval:quality",

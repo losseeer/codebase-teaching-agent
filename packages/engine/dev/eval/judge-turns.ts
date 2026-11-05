@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { loadDotEnv } from "../../src/boot.js";
 import { buildLlmRuntimeProvider, restoreLlmRuntimeSettings } from "../../src/adapter/outbound/llm/runtime.js";
 import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
-import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudgeResponse, priorTurns, type TurnVerdict } from "../eval/judge.js";
+import { assembleJudgeTurns, axesFor, buildJudgePrompt, JUDGE_SYSTEM, parseJudgeResponse, priorTurns, type TurnVerdict } from "./judge.js";
 
 /**
   表达质量裁判：调用模型判分的脚本，判接续 / 接地 / 易读 与教学法契合（仅 teach）四维。

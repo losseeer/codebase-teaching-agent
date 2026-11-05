@@ -1,11 +1,11 @@
 /**
-  Baseline 执行器：读 manifest / topics.csv / conversation-questions.csv，按任务串行跑。
+  数据集执行器：读 `--dataset` 目录下的 manifest / topics.csv / conversation-questions.csv，按任务串行跑。
   依赖一个独立引擎进程（TUTOR_BASELINE_ENGINE，默认 http://127.0.0.1:3001）。
   用法：
     pnpm experiment:baseline --dry
     pnpm experiment:baseline --phase=exercises
     pnpm experiment:baseline --phase=conversation
-    pnpm experiment:baseline --task=<taskId>
+    pnpm experiment --dataset=experiments/design-followup-2026-11 --type=design
 */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -14,18 +14,20 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "../../../..");
-const manifestPath = join(root, "experiments/baseline/manifest.json");
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
-const engine = (process.env.TUTOR_BASELINE_ENGINE ?? "http://127.0.0.1:3001").replace(/\/$/, "");
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
+const datasetDir = resolve(root, args.find((arg) => arg.startsWith("--dataset="))?.slice("--dataset=".length) ?? "experiments/baseline-2026-11");
+const manifest = JSON.parse(readFileSync(join(datasetDir, "manifest.json"), "utf8")) as Manifest;
+const engine = (process.env.TUTOR_BASELINE_ENGINE ?? "http://127.0.0.1:3001").replace(/\/$/, "");
 const phase = args.find((arg) => arg.startsWith("--phase="))?.split("=")[1];
 const taskFilter = args.find((arg) => arg.startsWith("--task="))?.slice("--task=".length);
 const sessionFilter = args.find((arg) => arg.startsWith("--session="))?.slice("--session=".length);
 const outArg = args.find((arg) => arg.startsWith("--out="))?.slice("--out=".length);
 const fromArg = args.find((arg) => arg.startsWith("--from="))?.slice("--from=".length);
 const fromIndex = fromArg ? Math.max(0, Number(fromArg)) : 0;
-const outputPath = (fallback: string): string => outArg ? resolve(root, outArg) : join(root, fallback);
+const typeFilter = args.find((arg) => arg.startsWith("--type="))?.slice("--type=".length);
+const outputPath = (fallback: string): string => outArg ? resolve(root, outArg) : join(datasetDir, fallback);
+const experimentId = process.env.BASELINE_EXPERIMENT_ID ?? manifest.experimentId;
 const runId = process.env.BASELINE_RUN_ID ?? new Date().toISOString().replaceAll(/[-:.TZ]/g, "");
 const nonceBase = Number(process.env.BASELINE_NONCE_BASE ?? String(Date.now() % 1_000_000_000));
 
@@ -35,7 +37,7 @@ interface Manifest {
   repos: { name: string; language: string; sourcePath: string; path: string; commit: string; license: string; design: boolean; status: string }[];
   inputs: { conversationQuestions: string; topics: string };
   outputs: { conversation: string; exercises: string; practiceExercises: string; summary: string };
-  rules: { generationFirst: boolean; variantNonce: string; maxAttemptsPerTask: number; includeCacheHits: boolean };
+  rules: { generationFirst: boolean; variantNonce: string; maxAttemptsPerTask: number; includeCacheHits: boolean; monthlyBudgetUsdPerRepo?: number; taskTimeoutMs?: number };
 }
 
 interface TopicRow { repo: string; type: "comprehension" | "analysis" | "design"; topic: string; tag_id: string; note: string }
@@ -51,7 +53,7 @@ function csv(path: string): Record<string, string>[] {
 }
 
 function tasks(): { exercises: TopicRow[]; questions: QuestionRow[] } {
-  return { exercises: csv(join(root, manifest.inputs.topics)) as unknown as TopicRow[], questions: csv(join(root, manifest.inputs.conversationQuestions)) as unknown as QuestionRow[] };
+  return { exercises: csv(join(datasetDir, manifest.inputs.topics)) as unknown as TopicRow[], questions: csv(join(datasetDir, manifest.inputs.conversationQuestions)) as unknown as QuestionRow[] };
 }
 
 function assertInputs(): void {
@@ -172,7 +174,7 @@ async function runExercise(row: TopicRow, index: number, known: Record<string, u
   // 客户端先超时：引擎侧没有留下可关联的 journal 行，按超时计失败。
   const failureStage = facts.failure_stage ?? (requestError?.includes("超过") ? "timeout" : requestError ? "request_error" : undefined);
   return {
-    taskId: taskId(row, "exercise"), experimentId: manifest.experimentId, runId, repo: row.repo,
+    taskId: taskId(row, "exercise"), experimentId, runId, repo: row.repo,
     language: manifest.repos.find((repo) => repo.name === row.repo)?.language, type: row.type, topic: row.topic,
     started_at: started.toISOString(), ended_at: ended.toISOString(), duration_ms: ended.getTime() - started.getTime(),
     traceId, success: Boolean(response) && response!.status >= 200 && response!.status < 300, ...(body.id ? { exerciseId: body.id } : {}),
@@ -218,10 +220,10 @@ async function runQuestion(row: QuestionRow, known: Record<string, unknown>): Pr
   const repo = manifest.repos.find((item) => item.name === row.repo)!;
   const repositoryId = repoIdByName(known, row.repo);
   if (!repositoryId) throw new Error(`${row.repo} 不在引擎地址簿里；先导入 ${row.repo}`);
-  const practiceFile = join(root, manifest.outputs.practiceExercises);
+  const practiceFile = join(datasetDir, manifest.outputs.practiceExercises);
   const practice = existsSync(practiceFile) ? (JSON.parse(readFileSync(practiceFile, "utf8")) as Record<string, { exerciseId?: string; status?: string }>)[row.repo] : undefined;
   if (row.scene === "practice" && (!practice?.exerciseId || practice.status === "not_applicable")) {
-    return { taskId: taskId(row, "conversation"), experimentId: manifest.experimentId, repo: row.repo, scene: row.scene, session_id: row.session_id, turn_index: Number(row.turn_index), success: false, not_applicable: "没有可用练习固定题" };
+    return { taskId: taskId(row, "conversation"), experimentId, repo: row.repo, scene: row.scene, session_id: row.session_id, turn_index: Number(row.turn_index), success: false, not_applicable: "没有可用练习固定题" };
   }
   const started = new Date();
   const trace = { value: undefined as string | null | undefined };
@@ -260,7 +262,7 @@ async function runQuestion(row: QuestionRow, known: Record<string, unknown>): Pr
   }
   const ended = new Date();
   return {
-    taskId: taskId(row, "conversation"), experimentId: manifest.experimentId, runId, repo: row.repo, scene: row.scene,
+    taskId: taskId(row, "conversation"), experimentId, runId, repo: row.repo, scene: row.scene,
     session_id: row.session_id, turn_index: Number(row.turn_index), started_at: started.toISOString(),
     ended_at: ended.toISOString(), duration_ms: ended.getTime() - started.getTime(), traceId: trace.value,
     success: Boolean(done) && !error, ...(done?.provider ? { provider: done.provider } : {}),
@@ -275,11 +277,25 @@ function output(rows: Record<string, unknown>[], target: string, append: boolean
   else writeFileSync(target, text);
 }
 
+/** 预算已耗尽 = 产品侧的付费能力停机；实验不应把空跑的 no_provider 记成任务失败。 */
+async function assertBudget(known: Record<string, unknown>): Promise<void> {
+  const spent: string[] = [];
+  for (const repo of manifest.repos) {
+    const repositoryId = repoIdByName(known, repo.name);
+    if (!repositoryId) continue;
+    const response = await fetch(`${engine}/api/repositories/${repositoryId}/cost`);
+    if (!response.ok) continue;
+    const state = await response.json() as { mode?: string; estimatedCostUsd?: number; monthlyBudgetUsd?: number };
+    if (state.mode === "degraded") spent.push(`${repo.name} 已超预算（$${(state.estimatedCostUsd ?? 0).toFixed(2)} / $${state.monthlyBudgetUsd ?? 0}）`);
+  }
+  if (spent.length) throw new Error(`预算已耗尽，停止这一轮（不计入失败）：\n- ${spent.join("\n- ")}`);
+}
+
 async function main(): Promise<void> {
   assertInputs();
   const { exercises, questions } = tasks();
   if (dry) {
-    console.log(`experiment=${manifest.experimentId} repos=6 topics=${exercises.length} questions=${questions.length} sessions=${new Set(questions.map((row) => `${row.repo}:${row.session_id}`)).size}`);
+    console.log(`experiment=${experimentId} repos=6 topics=${exercises.length} questions=${questions.length} sessions=${new Set(questions.map((row) => `${row.repo}:${row.session_id}`)).size}`);
     console.log(`engine=${engine} model=${manifest.model.name} timeout=${manifest.model.timeoutMs}ms`);
     console.log(`tasks exercise=${exercises.length} conversation=${questions.length}`);
     return;
@@ -307,23 +323,28 @@ async function main(): Promise<void> {
   }
   if (phase === "exercises") {
     const known = await catalog();
+    await assertBudget(known);
     const target = outputPath(manifest.outputs.exercises);
-    // `--from` 续跑：保留已有行，只从第 N 个任务往后追加。
+    // `--from` 续跑：保留已有行，只从第 N 个任务往后追加；`--type` 只跑某一题型子集。
     if (!fromIndex) writeFileSync(target, "");
     for (const [index, row] of exercises.entries()) {
-      if (index < fromIndex) continue;
-      output([await runExercise(row, index, known)], target, true);
+      if (index < fromIndex || (typeFilter && row.type !== typeFilter)) continue;
+      const outcome = await runExercise(row, index, known);
+      output([outcome], target, true);
+      // 跑到一半预算耗尽：立即停机，不把剩下的任务写成空失败。
+      if (outcome.failure_stage === "no_provider") throw new Error(`模型/预算不可用，已在 ${outcome.taskId} 停机；修正后用 --from=${index} 续跑。`);
     }
     return;
   }
   if (phase === "conversation") {
     const known = await catalog();
+    await assertBudget(known);
     const target = outputPath(manifest.outputs.conversation);
     writeFileSync(target, "");
     for (const row of questions) output([await runQuestion(row, known)], target, true);
     return;
   }
-  throw new Error("用法：--dry | --phase=exercises | --phase=conversation | --session=<repo:session> | --task=<taskId>");
+  throw new Error("用法：--dry | --phase=exercises | --type=<题型> | --phase=conversation | --session=<repo:session> | --task=<taskId>");
 }
 
 await main();

@@ -14,7 +14,7 @@ import { buildSearchCorpus, executeSearchCode } from "../../src/source/search-co
 import { segmentForLookup } from "@codebase-tutor/platform";
 import { readJournal } from "../../src/adapter/outbound/persistence/journal.js";
 import type { TeachTurn } from "../../src/application/runtime/turn-invariants.js";
-import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "../eval/scorers.js";
+import { scoreSearchArm, scoreTeachInvariants, type SearchCase } from "./scorers.js";
 
 /**
   评测 runner：零 token 确定性判分，全程只读。

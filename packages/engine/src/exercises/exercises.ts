@@ -174,10 +174,13 @@ export class ExerciseService {
     // 点了题型就以题型为准（理解/设计交给窗口内轮换）；没点题型才沿用「有主题就是分析题」的老规则。
     const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces, progress);
+    // `type=design` 也要先解析成代码题型：只传 type 的客户端否则永远进不了下面的 reference 分支。
+    // 这里只用于策略判断与 reference 路由；unit 路径仍交给 pickTarget 按题型轮换。
+    const strategyKind = kind ?? (requested.type === "design" ? "patch_edit" : undefined);
     // 出题策略由技能声明：reference 下代码题不再从仓库摘单元，改由模型自定题目、源码只作参考。
     const strategy = faces?.skills ? exerciseStrategyOf(faces.skills.bodyOf) : DEFAULT_EXERCISE_STRATEGY;
-    if (kind && isCodeKind(kind) && strategy === "reference") {
-      return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind, variantNonce: requested.variantNonce }, provider, faces, progress);
+    if (strategyKind && isCodeKind(strategyKind) && strategy === "reference") {
+      return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind: strategyKind, variantNonce: requested.variantNonce }, provider, faces, progress);
     }
     const theme = tag ? this.themeFiles(repository, tag) : undefined;
     const modelVersion = provider?.modelVersion ?? "deterministic";

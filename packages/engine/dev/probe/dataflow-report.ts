@@ -145,7 +145,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const repoPath = args.find((arg) => !arg.startsWith("--"));
   if (!repoPath) {
-    console.error("用法：tsx dev/reports/dataflow-report.ts <被学习仓路径> [--since <ISO 日期>] [--limit 20] [--json]");
+    console.error("用法：tsx dev/probe/dataflow-report.ts <被学习仓路径> [--since <ISO 日期>] [--limit 20] [--json]");
     process.exit(2);
   }
   const take = (flag: string): string | undefined => {

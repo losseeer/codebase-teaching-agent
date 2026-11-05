@@ -1,0 +1,25 @@
+{
+  "dianping-agent2": {
+    "exerciseId": "exercise:85258b94036608cbee5a",
+    "status": "ready"
+  },
+  "Xingyan-ShortLink-Platform": {
+    "exerciseId": "exercise:195e89e8893a82baf25b",
+    "status": "ready"
+  },
+  "dianping-backend": {
+    "exerciseId": "exercise:43eba5b0b2ed73600279",
+    "status": "ready"
+  },
+  "dianping-frontend": {
+    "exerciseId": "exercise:4b62fd14f62dd05575d5",
+    "status": "ready"
+  },
+  "gin": {
+    "exerciseId": "exercise:c1ff7bd65fb0d1dc4007",
+    "status": "ready"
+  },
+  "CleanArchitecture": {
+    "status": "not_applicable"
+  }
+}

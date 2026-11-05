@@ -603,6 +603,18 @@ describe("题型 × 主题：题型决定链路，主题只筛目标", () => {
       .toMatchObject({ stage: "no_provider", family: "code" });
   });
 
+  it("技能声明 reference：只传 type=design 也走 reference 路径，不要求主题命中", async () => {
+    const repository = testRepository();
+    const faces: ExerciseFaces = {
+      skills: { brief: "", bodyOf: (_name, file = "SKILL.md") => file === "SKILL.md" ? ["## 出题策略", "", "当前策略：`reference`"].join("\n") : undefined }
+    };
+    // 修复前 type=design 的 kind 是 undefined，会落到 unit 路径并先拒 no_theme_hits
+    await expect(new ExerciseService().next(repository, { type: "design", tag: "kubernetes", tagId: "custom-k8s" }, undefined, faces))
+      .rejects.toThrow("代码题需要模型");
+    expect(readJournal(repository.path).filter((event) => event.type === "exercise_declined").at(-1)?.payload)
+      .toMatchObject({ stage: "no_provider", family: "code" });
+  });
+
   it("技能没声明 reference：设计题仍按单元出，主题零命中就拒", async () => {
     const repository = testRepository();
     await expect(new ExerciseService().next(repository, { kind: "patch_edit", tag: "kubernetes", tagId: "custom-k8s" }))

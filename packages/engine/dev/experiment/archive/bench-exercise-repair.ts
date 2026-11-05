@@ -6,10 +6,10 @@
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ExerciseFaces } from "../../src/exercises/turn-faces.js";
-import type { RepairPolicy } from "../../src/exercises/code-generate.js";
+import type { ExerciseFaces } from "../../../src/exercises/turn-faces.js";
+import type { RepairPolicy } from "../../../src/exercises/code-generate.js";
 
-import { loadDotEnv } from "../../src/boot.js";
+import { loadDotEnv } from "../../../src/boot.js";
 
 const REPOS: { path: string; tags: string[] }[] = [
   // 难仓放前面：额度有限时先保证 agent2/Xingyan 有数据
@@ -70,14 +70,14 @@ const registryFile = join(registryDir, "repositories.json");
 writeFileSync(registryFile, JSON.stringify({ repositories: REPOS.map((repo) => repo.path) }), "utf8");
 process.env.TUTOR_REGISTRY_FILE = registryFile;
 
-const { importer, lightLlm } = await import("../../src/infrastructure/composition-root.js");
-const { ensureIsolation } = await import("../../src/adapter/outbound/sandbox/isolation.js");
-const { generateCodeExerciseFromReference } = await import("../../src/exercises/code-generate.js");
-const { selectTagCandidates } = await import("../../src/exercises/exercises.js");
-const { withExercisePorts, practiceView } = await import("../../src/infrastructure/exercise-ports.js");
-const { skillsForTurn } = await import("../../src/application/orchestration/scoped-turn.js");
-const { searchCorpusFor, turnBudgetGuard } = await import("../../src/application/orchestration/paid-turn.js");
-const { factsToolFor } = await import("../../src/infrastructure/canvas-tools.js");
+const { importer, lightLlm } = await import("../../../src/infrastructure/composition-root.js");
+const { ensureIsolation } = await import("../../../src/adapter/outbound/sandbox/isolation.js");
+const { generateCodeExerciseFromReference } = await import("../../../src/exercises/code-generate.js");
+const { selectTagCandidates } = await import("../../../src/exercises/exercises.js");
+const { withExercisePorts, practiceView } = await import("../../../src/infrastructure/exercise-ports.js");
+const { skillsForTurn } = await import("../../../src/application/orchestration/scoped-turn.js");
+const { searchCorpusFor, turnBudgetGuard } = await import("../../../src/application/orchestration/paid-turn.js");
+const { factsToolFor } = await import("../../../src/infrastructure/canvas-tools.js");
 
 const provider = lightLlm();
 if (!provider) {
@@ -92,7 +92,7 @@ if (isolation.level !== "enforced") {
 
 const rows: Row[] = [];
 
-async function referenceFor(repository: import("../../src/importer/importer.js").ImportedRepository, tag: string): Promise<string> {
+async function referenceFor(repository: import("../../../src/importer/importer.js").ImportedRepository, tag: string): Promise<string> {
   return withExercisePorts(repository.handle, (ports) => {
     const summaries = new Map(ports.summaries.latest().map((row) => [row.path, row.summary]));
     const candidates = selectTagCandidates(practiceView(repository, ports), tag, 6, summaries);
@@ -100,7 +100,7 @@ async function referenceFor(repository: import("../../src/importer/importer.js")
   });
 }
 
-async function runOne(repository: import("../../src/importer/importer.js").ImportedRepository, tag: string, arm: (typeof ARMS)[number]): Promise<Row> {
+async function runOne(repository: import("../../../src/importer/importer.js").ImportedRepository, tag: string, arm: (typeof ARMS)[number]): Promise<Row> {
   const database = repository.handle.pin();
   let modelCalls = 0;
   let toolCalls = 0;

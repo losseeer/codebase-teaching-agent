@@ -1,0 +1,93 @@
+{
+  "experimentId": "baseline-2026-11",
+  "createdAt": "2026-11-04",
+  "model": {
+    "provider": "openai-compatible",
+    "name": "qwen3.8-flash",
+    "timeoutMs": 240000,
+    "thinking": "auto",
+    "promptVersion": "working-tree-2026-11-04",
+    "settingsSource": "~/.codebase-tutor/llm-settings.json",
+    "summaryProvider": "off"
+  },
+  "repos": [
+    {
+      "name": "dianping-agent2",
+      "language": "python",
+      "sourcePath": "/Users/dedsecczk/Dev/dianping/dianping-agent2",
+      "path": "experiments/baseline-2026-11/repos/dianping-agent2",
+      "commit": "3b4e5267dc9df3510a52e56d685ae456b5db1be3",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified"
+    },
+    {
+      "name": "Xingyan-ShortLink-Platform",
+      "language": "java",
+      "sourcePath": "/Users/dedsecczk/Dev/Xingyan-ShortLink-Platform",
+      "path": "experiments/baseline-2026-11/repos/Xingyan-ShortLink-Platform",
+      "commit": "9229754b43c1d680b2646db9e3a22878e06ed261",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified"
+    },
+    {
+      "name": "dianping-backend",
+      "language": "java",
+      "sourcePath": "/Users/dedsecczk/Dev/dianping/dianping-backend",
+      "path": "experiments/baseline-2026-11/repos/dianping-backend",
+      "commit": "b7cac834c9621b0cc001da1f45dea6a6ba9cbd12",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified"
+    },
+    {
+      "name": "dianping-frontend",
+      "language": "typescript",
+      "sourcePath": "/Users/dedsecczk/Dev/dianping/dianping-frontend",
+      "path": "experiments/baseline-2026-11/repos/dianping-frontend",
+      "commit": "0ecde51ced5df7980a46471c1da70b0e87f18680",
+      "design": true,
+      "status": "ready",
+      "license": "unspecified"
+    },
+    {
+      "name": "gin",
+      "language": "go",
+      "sourcePath": "/Users/dedsecczk/Dev/codebase-tutor-eval/gin",
+      "path": "experiments/baseline-2026-11/repos/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "design": true,
+      "status": "ready",
+      "license": "MIT"
+    },
+    {
+      "name": "CleanArchitecture",
+      "language": "csharp",
+      "sourcePath": "/Users/dedsecczk/Dev/codebase-tutor-eval/cleanarchitecture",
+      "path": "experiments/baseline-2026-11/repos/CleanArchitecture",
+      "commit": "4739ae4cbd057ee142bc1e1bdc93c4fea8f0cac5",
+      "design": false,
+      "status": "ready",
+      "license": "MIT"
+    }
+  ],
+  "inputs": {
+    "conversationQuestions": "conversation-questions.csv",
+    "topics": "topics.csv"
+  },
+  "outputs": {
+    "conversation": "conversation.jsonl",
+    "exercises": "exercises.jsonl",
+    "practiceExercises": "practice-exercises.json",
+    "summary": "summary.md"
+  },
+  "rules": {
+    "generationFirst": true,
+    "variantNonce": "unique-per-attempt",
+    "maxAttemptsPerTask": 1,
+    "includeCacheHits": false,
+    "monthlyBudgetUsdPerRepo": 50,
+    "taskTimeoutMs": 1800000
+  }
+}
