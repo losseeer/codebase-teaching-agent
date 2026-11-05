@@ -74,3 +74,10 @@ practice-*.png
 tutor-*.png
 
 .tutorignore
+
+# ─────────────────────────────────────────────────────────────
+# 实验过程产物（2026-11-05）：冒烟明细与冒烟汇总每天都会生成，不入仓。
+# 全量结果（exercises.jsonl / runs.jsonl / queries.jsonl）与 summary.json 仍保留。
+# ─────────────────────────────────────────────────────────────
+experiments/*/smoke*.jsonl
+experiments/*/smoke*.summary.json

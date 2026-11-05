@@ -1,0 +1,31 @@
+repo,type,topic,tag_id,note
+dianping-agent2,design,Graph 状态图编排,exp-agent2-t01,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+dianping-agent2,design,Memory 会话记忆,exp-agent2-t02,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+dianping-agent2,design,LLM 模型调用,exp-agent2-t03,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+dianping-agent2,design,Redis 缓存,exp-agent2-t04,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+dianping-agent2,design,Trajectory 轨迹记录,exp-agent2-t05,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+dianping-agent2,design,Distill 经验蒸馏,exp-agent2-t06,Python/LangGraph 仓；设计题按 Python 沙箱执行。
+Xingyan-ShortLink-Platform,design,Route 路由缓存,exp-xingyan-t01,Java 短链平台；设计题按 Java 沙箱执行。
+Xingyan-ShortLink-Platform,design,Risk 风控规则,exp-xingyan-t02,Java 短链平台；设计题按 Java 沙箱执行。
+Xingyan-ShortLink-Platform,design,Outbox 事务消息,exp-xingyan-t03,Java 短链平台；设计题按 Java 沙箱执行。
+Xingyan-ShortLink-Platform,design,Attribution 归因统计,exp-xingyan-t04,Java 短链平台；设计题按 Java 沙箱执行。
+Xingyan-ShortLink-Platform,design,ShortCode 短码生成,exp-xingyan-t05,Java 短链平台；设计题按 Java 沙箱执行。
+Xingyan-ShortLink-Platform,design,RateLimiter 限流,exp-xingyan-t06,Java 短链平台；设计题按 Java 沙箱执行。
+dianping-backend,design,Seckill 秒杀,exp-backend-t01,Java 后端；设计题按 Java 沙箱执行。
+dianping-backend,design,Voucher 优惠券,exp-backend-t02,Java 后端；设计题按 Java 沙箱执行。
+dianping-backend,design,Outbox 事务消息,exp-backend-t03,Java 后端；设计题按 Java 沙箱执行。
+dianping-backend,design,RateLimit 限流,exp-backend-t04,Java 后端；设计题按 Java 沙箱执行。
+dianping-backend,design,CircuitBreaker 熔断,exp-backend-t05,Java 后端；设计题按 Java 沙箱执行。
+dianping-backend,design,Redisson 分布式锁,exp-backend-t06,Java 后端；设计题按 Java 沙箱执行。
+dianping-frontend,design,Request 请求封装,exp-frontend-t01,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+dianping-frontend,design,Store 状态管理,exp-frontend-t02,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+dianping-frontend,design,Router 路由,exp-frontend-t03,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+dianping-frontend,design,Voucher 优惠券,exp-frontend-t04,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+dianping-frontend,design,Order 订单,exp-frontend-t05,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+dianping-frontend,design,Agent 对话,exp-frontend-t06,TypeScript 前端；设计题按 TypeScript 沙箱执行。
+gin,design,Router 路由匹配,exp-go-t01,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。
+gin,design,Middleware 中间件链,exp-go-t02,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。
+gin,design,Form Binding 表单绑定,exp-go-t03,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。
+gin,design,Path Parameter 路径参数,exp-go-t04,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。
+gin,design,JSON Codec JSON 编解码,exp-go-t05,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。
+gin,design,Static File 静态文件,exp-go-t06,gin 仓；设计题按 Go 沙箱执行，需 Go 工具链。

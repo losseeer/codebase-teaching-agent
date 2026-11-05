@@ -13,6 +13,8 @@
     "analysis:lock": "tsx dev/mutate/lock-analysis-steps.ts",
     "experiment": "tsx dev/experiment/bench.ts",
     "experiment:baseline": "tsx dev/experiment/bench.ts --dataset=experiments/baseline-2026-11",
+    "experiment:design-followup": "tsx dev/experiment/design-followup.ts",
+    "experiment:defect2": "tsx dev/experiment/defect2-tool-budget.ts",
     "eval:metrics": "tsx dev/probe/metrics.ts",
     "run-trace": "tsx dev/probe/run-trace.ts",
     "dataflow:report": "tsx dev/probe/dataflow-report.ts",

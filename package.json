@@ -24,6 +24,8 @@
     "setup:native": "pnpm --filter @codebase-tutor/engine run setup:native",
     "experiment": "pnpm --filter @codebase-tutor/engine experiment",
     "experiment:baseline": "pnpm --filter @codebase-tutor/engine experiment:baseline",
+    "experiment:design-followup": "pnpm --filter @codebase-tutor/engine experiment:design-followup",
+    "experiment:defect2": "pnpm --filter @codebase-tutor/engine experiment:defect2",
     "eval:metrics": "pnpm --filter @codebase-tutor/engine eval:metrics",
     "eval:quality": "pnpm --filter @codebase-tutor/engine eval:quality",
     "eval:judge": "pnpm --filter @codebase-tutor/engine eval:judge",

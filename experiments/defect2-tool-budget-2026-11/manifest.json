@@ -1,0 +1,111 @@
+{
+  "experimentId": "defect2-tool-budget-2026-11",
+  "datasetId": "baseline-2026-11#design-30",
+  "frozenAt": "2026-11-05",
+  "sourceDataset": "experiments/baseline-2026-11",
+  "description": "单变量消融：出题工具轮是否强制只输出 tool_calls（缺陷 2）。两臂都调用同一个产品函数 generateCodeExerciseFromReference，唯一差异是 toolChoiceRequiredRounds。对照臂必须同轮重跑，不使用 11-04 存档。",
+  "model": {
+    "provider": "openai-compatible",
+    "name": "qwen3.8-flash",
+    "timeoutMs": 240000,
+    "thinking": "auto",
+    "promptVersion": "working-tree-2026-11-04",
+    "settingsSource": "~/.codebase-tutor/llm-settings.json"
+  },
+  "digestAlgorithm": "sha256 over sorted relative paths (excluding .tutor, .git, .DS_Store), each as path + NUL + file bytes",
+  "repos": [
+    {
+      "name": "dianping-agent2",
+      "language": "python",
+      "path": "experiments/baseline-2026-11/repos/dianping-agent2",
+      "commit": "3b4e5267dc9df3510a52e56d685ae456b5db1be3",
+      "contentDigest": "sha256:cb2e205c4a6a76a76908a17b115554717dcd663e09114de9f7e1862618217816",
+      "artifactRepositoryId": "repo_9f4b97533cfadb61",
+      "design": true
+    },
+    {
+      "name": "Xingyan-ShortLink-Platform",
+      "language": "java",
+      "path": "experiments/baseline-2026-11/repos/Xingyan-ShortLink-Platform",
+      "commit": "9229754b43c1d680b2646db9e3a22878e06ed261",
+      "contentDigest": "sha256:5176c512b8746fbc9405eebae331f2698c485318c5521abf321e75263735c6c2",
+      "artifactRepositoryId": "repo_f56359c8fdf8c52f",
+      "design": true
+    },
+    {
+      "name": "dianping-backend",
+      "language": "java",
+      "path": "experiments/baseline-2026-11/repos/dianping-backend",
+      "commit": "b7cac834c9621b0cc001da1f45dea6a6ba9cbd12",
+      "contentDigest": "sha256:3a267b4854def95d02d25d11ad33b61192ee6052b02c6f9d7966d3056de49d67",
+      "artifactRepositoryId": "repo_d33286e8d8bb628f",
+      "design": true
+    },
+    {
+      "name": "dianping-frontend",
+      "language": "typescript",
+      "path": "experiments/baseline-2026-11/repos/dianping-frontend",
+      "commit": "0ecde51ced5df7980a46471c1da70b0e87f18680",
+      "contentDigest": "sha256:3bf9992c64772190cc70c8789b3284eeb1f5e4988d310a09c7805d1a218f0bb2",
+      "artifactRepositoryId": "repo_226407a8cf3fba46",
+      "design": true
+    },
+    {
+      "name": "gin",
+      "language": "go",
+      "path": "experiments/baseline-2026-11/repos/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "contentDigest": "sha256:748df628217015bef39f8c1c1a8f0029fd652c1023acb52811edf3dd969bd01c",
+      "artifactRepositoryId": "repo_31666185bd597bc4",
+      "design": true
+    }
+  ],
+  "inputs": { "topics": "topics.csv" },
+  "outputs": {
+    "smoke": "smoke.jsonl",
+    "smokeSummary": "smoke.summary.json",
+    "exercises": "exercises.jsonl",
+    "summary": "summary.json"
+  },
+  "arms": [
+    {
+      "id": "baseline",
+      "label": "对照：工具轮 tool_choice=auto（产品现状）",
+      "toolChoiceRequiredRounds": 0
+    },
+    {
+      "id": "required",
+      "label": "实验：前 3 个带 tools 的轮强制 tool_choice=required，之后恢复 auto",
+      "toolChoiceRequiredRounds": 3
+    }
+  ],
+  "protocol": {
+    "variable": "只改 toolChoiceRequiredRounds。两臂同一冻结副本、同一模型、同一提示词、同一单次超时 240000ms、同一 generateCodeExerciseFromReference 实现。",
+    "pairing": "同一 (repo, topic) × 2 臂；臂顺序按配对序号交替",
+    "controlRerun": "对照臂同轮重跑，不拿 baseline-2026-11 存档当对照（实测同题跨轮波动 24%）",
+    "stages": "--phase=smoke 跑前 3 对 → evaluateGate → 通过才继续跑剩余 27 对（合计 30 对）；冒烟 3 对计入全量结果（同一连续运行），gate 只作止损不筛选数据；未通过非零退出且不跑剩余配对",
+    "smokePairs": 3,
+    "oversizedToolRoundTokens": 4000,
+    "toolRoundBasis": "baseline 每题 tool_calls 轮数中位 4（分布 2–20），取前 3 轮覆盖主要工具轮；长尾题不受额外约束",
+    "qualityGates": [
+      "题面三节完整",
+      "测试断言不少于 2 条（TESTS 行 passed+failed）",
+      "至少 1 条针对缺陷（given 那跑至少 1 条失败）"
+    ]
+  },
+  "gate": {
+    "purpose": "冒烟只作方向性止损，不作结论（n=3 对，按《实验设计》5.3 只报中位数与最大值）",
+    "minRowsPerArm": 3,
+    "maxSuccessDeficit": 1,
+    "maxMedianDurationRatio": 1.1,
+    "requireOversizedNotWorse": true,
+    "systemErrorAborts": ["sandbox_unavailable", "request_error", "no_provider", "quota", "budget", "402"]
+  },
+  "criteria": {
+    "medianDurationDropAtLeast": 0.1,
+    "successRateDropAtMostPp": 5,
+    "tokenIncreaseAtMost": 0.3,
+    "oversizedToolRoundMustDrop": true,
+    "note": "单臂 30 次，按 5.3 不正式报 p95；p95 只作参考读数。绝对耗时不与历史基线横向比较。"
+  }
+}

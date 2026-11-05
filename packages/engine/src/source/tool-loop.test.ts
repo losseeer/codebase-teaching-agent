@@ -56,6 +56,23 @@ function scriptedProvider(script: LlmCompletion[]): { provider: LlmProvider; cal
 const readCall = (id: string, path: string): LlmCompletion => ({ text: "", toolCalls: [{ id, name: "read_file", argumentsJson: JSON.stringify({ path }) }], usage: { inputTokens: 100, outputTokens: 10 }, finishReason: "tool_calls" });
 
 describe("completeWithReadTool", () => {
+  it("toolChoiceRequiredRounds 只在前 N 个带 tools 的轮生效；缺省时产品行为不变", async () => {
+    const { provider, calls } = scriptedProvider([
+      readCall("c1", "read-file.ts"),
+      readCall("c2", "read-file.ts"),
+      { text: "答完了。", usage: { inputTokens: 50, outputTokens: 20 }, finishReason: "stop" }
+    ]);
+    const result = await runLoop({ provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5, toolChoiceRequiredRounds: 2 });
+    expect(result.completion.text).toBe("答完了。");
+    expect(calls[0]?.toolChoice).toBe("required");
+    expect(calls[1]?.toolChoice).toBe("required");
+    expect(calls[2]?.toolChoice).toBeUndefined();
+
+    const plain = scriptedProvider([{ text: "答完了。", finishReason: "stop" }]);
+    await runLoop({ provider: plain.provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5 });
+    expect(plain.calls[0]?.toolChoice).toBeUndefined();
+  });
+
   it("轮数预算用尽时明确回绝未应答的 tool_call，再做一轮不带工具的收尾", async () => {
     const { provider, calls } = scriptedProvider([
       readCall("c1", "read-file.ts"),

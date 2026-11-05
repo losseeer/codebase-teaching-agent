@@ -43,6 +43,8 @@ export interface ReadToolLoopInput {
   user: string;
   /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
   maxTokens?: number;
+  /** [DEV ONLY] 前 N 轮强制工具轮只输出 tool_calls（tool_choice=required）；省略 = 产品现状。 */
+  toolChoiceRequiredRounds?: number;
   /** 省略时用 provider 的默认采样温度。 */
   temperature?: number;
   /** 工具轮数上限；省略取 `DEFAULT_TOOL_ROUNDS`。 */
@@ -251,7 +253,12 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     input.onTrace?.({ kind: "model", status: "start", stepId, label, round, model: provider.modelVersion });
     const startedAt = Date.now();
     try {
-      const result = await provider.complete(args);
+      // [DEV ONLY] 实验开关：前 N 个带 tools 的轮强制 tool_choice=required，
+      // 阻止模型在工具轮吐长正文；之后恢复 auto，让模型能自然收尾输出完整 JSON。
+      const effectiveArgs: LlmCompletionInput = input.toolChoiceRequiredRounds && args.tools?.length && rounds < input.toolChoiceRequiredRounds
+        ? { ...args, toolChoice: "required" }
+        : args;
+      const result = await provider.complete(effectiveArgs);
       const calls = result.toolCalls ?? [];
       input.onTrace?.({
         kind: "model", status: "ok", stepId, label: result.text ? "模型回复" : calls.length ? "调用工具" : "模型回复", round, model: provider.modelVersion,

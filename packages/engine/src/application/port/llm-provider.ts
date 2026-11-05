@@ -43,6 +43,8 @@ export interface LlmCompletionInput {
   /** 工具循环的既有对话；提供时忽略 user。 */
   messages?: LlmMessage[];
   tools?: LlmTool[];
+  /** [DEV ONLY] 工具轮是否强制只输出 tool_calls；省略时由端点决定（当前为 auto）。 */
+  toolChoice?: "auto" | "required";
   /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
   maxTokens?: number;
   temperature?: number;

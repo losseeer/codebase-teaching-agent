@@ -165,7 +165,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     if (input.thinking) applyThinking(payload, this.options.model, input.thinking);
     if (input.tools?.length) {
       payload.tools = input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
-      payload.tool_choice = "auto";
+      payload.tool_choice = input.toolChoice ?? "auto";
     }
     const body = await this.requestJson(`${this.options.endpoint.replace(/\/$/, "")}/chat/completions`, payload, input.signal) as {
       choices?: { message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string }[];

@@ -6,7 +6,7 @@ import type { ReadToolProgress } from "../source/tools/types.js";
   出题、判分、讲评这几趟共用的取证面。
   形状直接取自工具循环的入参：这几趟与问答回合走同一条循环，不再各有一套特例。
 */
-export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal" | "onTrace"> & { scope?: AgentScope };
+export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal" | "onTrace" | "toolChoiceRequiredRounds"> & { scope?: AgentScope };
 
 /** 各练习操作实际装配的取证面；运行时 ExerciseFaces 与只读能力清单共用这一份。 */
 export const PRACTICE_FACE_PLAN: Record<PracticeOperation, { search: boolean; facts: boolean; skills: boolean }> = {

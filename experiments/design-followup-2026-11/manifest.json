@@ -1,0 +1,102 @@
+{
+  "experimentId": "design-followup-2026-11",
+  "datasetId": "baseline-2026-11#design-30",
+  "frozenAt": "2026-11-05",
+  "sourceDataset": "experiments/baseline-2026-11",
+  "frozenBy": "pnpm experiment:design-followup",
+  "description": "复用 baseline-2026-11 数据集的设计题子集（30 次），不新增主题、不重采对照之外的数据。两臂在同一冻结副本、同一模型、同一参考摘录上按任务配对。",
+  "model": {
+    "provider": "openai-compatible",
+    "name": "qwen3.8-flash",
+    "timeoutMs": 240000,
+    "thinking": "auto",
+    "promptVersion": "design-followup-2026-11",
+    "settingsSource": "~/.codebase-tutor/llm-settings.json"
+  },
+  "digestAlgorithm": "sha256 over sorted relative paths (excluding .tutor, .git, .DS_Store), each as path + NUL + file bytes",
+  "artifactIdentityAlgorithm": "artifactRepositoryId = repository_state.repository_id in <repo>/.tutor/tutor.db. The frozen copies were moved from experiments/baseline/repos/, so this id does NOT equal catalogRepositoryId(currentPath); the runner mounts by this id, not by path-derived id. Verified on every --dry run.",
+  "repos": [
+    {
+      "name": "dianping-agent2",
+      "language": "python",
+      "path": "experiments/baseline-2026-11/repos/dianping-agent2",
+      "commit": "3b4e5267dc9df3510a52e56d685ae456b5db1be3",
+      "contentDigest": "sha256:cb2e205c4a6a76a76908a17b115554717dcd663e09114de9f7e1862618217816",
+      "artifactRepositoryId": "repo_9f4b97533cfadb61",
+      "fileCount": 45,
+      "design": true
+    },
+    {
+      "name": "Xingyan-ShortLink-Platform",
+      "language": "java",
+      "path": "experiments/baseline-2026-11/repos/Xingyan-ShortLink-Platform",
+      "commit": "9229754b43c1d680b2646db9e3a22878e06ed261",
+      "contentDigest": "sha256:5176c512b8746fbc9405eebae331f2698c485318c5521abf321e75263735c6c2",
+      "artifactRepositoryId": "repo_f56359c8fdf8c52f",
+      "fileCount": 298,
+      "design": true
+    },
+    {
+      "name": "dianping-backend",
+      "language": "java",
+      "path": "experiments/baseline-2026-11/repos/dianping-backend",
+      "commit": "b7cac834c9621b0cc001da1f45dea6a6ba9cbd12",
+      "contentDigest": "sha256:3a267b4854def95d02d25d11ad33b61192ee6052b02c6f9d7966d3056de49d67",
+      "artifactRepositoryId": "repo_d33286e8d8bb628f",
+      "fileCount": 176,
+      "design": true
+    },
+    {
+      "name": "dianping-frontend",
+      "language": "typescript",
+      "path": "experiments/baseline-2026-11/repos/dianping-frontend",
+      "commit": "0ecde51ced5df7980a46471c1da70b0e87f18680",
+      "contentDigest": "sha256:3bf9992c64772190cc70c8789b3284eeb1f5e4988d310a09c7805d1a218f0bb2",
+      "artifactRepositoryId": "repo_226407a8cf3fba46",
+      "fileCount": 49,
+      "design": true
+    },
+    {
+      "name": "gin",
+      "language": "go",
+      "path": "experiments/baseline-2026-11/repos/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "contentDigest": "sha256:748df628217015bef39f8c1c1a8f0029fd652c1023acb52811edf3dd969bd01c",
+      "artifactRepositoryId": "repo_31666185bd597bc4",
+      "fileCount": 131,
+      "design": true
+    }
+  ],
+  "inputs": { "topics": "topics.csv" },
+  "outputs": { "exercises": "exercises.jsonl", "summary": "summary.json" },
+  "arms": [
+    {
+      "id": "single",
+      "label": "对照：单次生成整份自由 JSON + 整份修复 + 模型写测试（产品现状）",
+      "entry": "generateCodeExerciseFromReference"
+    },
+    {
+      "id": "three-stage",
+      "stages": 2,
+      "label": "实验：两段拆分（首段题面+given/solution 走工具循环，第二段只出测试）+ 逐段结构化校验 + 定向修复 + 引擎测试骨架。三段实现保留为历史臂。",
+      "entry": "generateTwoStage"
+    }
+  ],
+  "rules": {
+    "pairing": "same (repo, topic) × 2 arms; arm order alternates by pair index",
+    "maxAttemptsPerTask": 1,
+    "taskTimeoutMs": 1800000,
+    "qualityGates": [
+      "题面三节完整（问题描述 / 示例 / 注意事项）",
+      "测试断言不少于 2 条（以 TESTS 行的 passed + failed 计，两臂同口径）",
+      "至少 1 条针对缺陷（given 那一跑至少 1 条失败）"
+    ],
+    "isolatedEngine": true,
+    "writesToProductJournal": false
+  },
+  "criteria": {
+    "p95DropAtLeast": 0.2,
+    "successRateDropAtMostPp": 5,
+    "tokenIncreaseAtMost": 0.3
+  }
+}
