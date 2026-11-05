@@ -76,6 +76,50 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+describe("draw 的两种落点：带 diagram 是整张替换，不带是新建", () => {
+  const oneNode = (): DiagramBody => ({ groups: [], nodes: [moduleNode("n-api", "file:src/api.ts", "接口层", 0, 0)], edges: [] });
+
+  it("按名字重画：还是同一张图，版本多一版，不产生「（2）」", () => {
+    const f = fixture();
+    const before = seeded(f.context);
+    const versionsBefore = before.versions.length;
+    const outcome = applyDiagramEdit(f.context, { diagram: "主线", edit: { action: "draw", name: "主线", body: oneNode() } }, "agent");
+    expect(outcome.ok, outcome.text).toBe(true);
+    const all = listDiagrams(f.database, REPO);
+    expect(all, "重画不该多出一张").toHaveLength(1);
+    expect(all[0]!.id).toBe(before.id);
+    const after = readDiagram(f.database, REPO, before.id)!;
+    expect(after.body.nodes, "整张换成新的 body").toHaveLength(1);
+    expect(after.versions.length).toBe(versionsBefore + 1);
+    expect(after.versions.at(-1)?.note).toBe("agent 重画");
+    expect(f.events.at(-1)?.type, "替换记 edited，不是 created").toBe("diagram_edited");
+    expect(f.events.at(-1)?.payload.action).toBe("draw");
+    f.database.close();
+  });
+
+  it("按 id 重画与按名字等价，name 传入也不会改名", () => {
+    const f = fixture();
+    const before = seeded(f.context);
+    const outcome = applyDiagramEdit(f.context, { diagram: before.id, edit: { action: "draw", name: "另起的名字", body: oneNode() } }, "agent");
+    expect(outcome.ok, outcome.text).toBe(true);
+    const after = readDiagram(f.database, REPO, before.id)!;
+    expect(after.body.nodes).toHaveLength(1);
+    expect(after.name, "重画沿用原名字，改名要另走路径").toBe("主线");
+    expect(listDiagrams(f.database, REPO)).toHaveLength(1);
+    f.database.close();
+  });
+
+  it("目标不存在：拒写并说清现在有哪几张，不偷偷新建", () => {
+    const f = fixture();
+    seeded(f.context);
+    const outcome = applyDiagramEdit(f.context, { diagram: "查无此图", edit: { action: "draw", name: "查无此图", body: oneNode() } }, "agent");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toContain("没有「查无此图」");
+    expect(listDiagrams(f.database, REPO), "拒写不该留下第二张").toHaveLength(1);
+    f.database.close();
+  });
+});
+
 describe("applyDiagramEdit：查无此人不落笔", () => {
   it("module 节点的 ref 核不上索引：整次拒写，库里一行都不多、审计一行都不记", () => {
     const f = fixture();

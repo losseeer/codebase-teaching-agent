@@ -268,11 +268,27 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   if (edit.action === "draw") {
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
-    const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(normalizeDiagramName(edit.name)), source: via === "agent" ? "agent" : "me", body: settled.body });
-    const saved = context.store.insert(diagram);
-    context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
+    const wanted = (request.diagram ?? "").trim();
+    if (!wanted) {
+      const diagram = buildDiagram(context.repositoryId, { id: diagramId(id()), name: context.store.uniqueName(normalizeDiagramName(edit.name)), source: via === "agent" ? "agent" : "me", body: settled.body });
+      const saved = context.store.insert(diagram);
+      context.journal.append("diagram_created", { diagram: saved.id, name: saved.name, source: saved.source, nodes: saved.body.nodes.length, edges: saved.body.edges.length, downgraded: settled.downgraded, via });
+      context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
+      return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版。${downgradeNote(settled.downgraded)}`, diagram: saved };
+    }
+    // 指名了目标就整张替换：沿用原 id 与名字，上一版进版本历史。
+    // 重画一张已经存在的图必须走这里——不带 diagram 的 draw 永远是新建，会多出一张同名（2）。
+    const target = resolveTarget(context, wanted);
+    if ("error" in target) return refuse(target.error);
+    const saved = context.store.applyStructure(target.diagram, settled.body, via === "agent" ? "agent 重画" : "重画");
+    context.journal.append("diagram_edited", {
+      diagram: saved.id, action: "draw", target: "",
+      nodes: saved.body.nodes.length, edges: saved.body.edges.length,
+      dropped_nodes: Math.max(0, target.diagram.body.nodes.length - saved.body.nodes.length),
+      downgraded: settled.downgraded, via
+    });
     context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
-    return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版。${downgradeNote(settled.downgraded)}`, diagram: saved };
+    return { ok: true, text: `重画了「${saved.name}」：现在 ${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，上一版在版本历史里。${downgradeNote(settled.downgraded)}`, diagram: saved };
   }
 
   const target = resolveTarget(context, request.diagram);
@@ -573,7 +589,7 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
       + "\n"
       + (open.body.edges.length ? open.body.edges.map((edge) => `  · ${edge.id}: ${edge.from} → ${edge.to} [${edge.origin}]${edge.label ? ` ${edge.label}` : ""}${edge.downgraded ? `（降档：${edge.downgraded}）` : ""}`).join("\n") : "  ·（还没有边）")
     : "";
-  return `画布现场：\n${lines.join("\n")}\n${detail}\n改哪张就在 diagram 里给它的 id 或名字；结构改动只有 set_diagram 这一条路，位置用户自己拖，不用你代劳。`;
+  return `画布现场：\n${lines.join("\n")}\n${detail}\n改哪张就在 diagram 里给它的 id 或名字（draw 带目标 = 整张替换并记一版，不带 = 新建一张）；结构改动只有 set_diagram 这一条路，位置用户自己拖，不用你代劳。`;
 }
 
 /** 画布结构写入口的工具定义。 */
@@ -583,7 +599,7 @@ export const SET_DIAGRAM_TOOL: LlmTool = {
   parameters: {
     type: "object",
     properties: {
-      diagram: { type: "string", description: "要改的那张图：id 或名字；省略时使用本仓库唯一的一张图" },
+      diagram: { type: "string", description: "要改或要重画的那张图：id 或名字。draw 带目标 = 整张替换并记一版，不带 = 新建一张（重复调用会多出一张同名「（2）」）；其余动作省略时使用本仓库唯一的一张图" },
       edit: { type: "object", description: "一次改动：action 与对应字段；action=help 返回完整约定" }
     },
     required: ["edit"]

@@ -137,7 +137,11 @@ export type DiagramEdit =
   /** 几何：agent 替用户挪一格（用户自己拖走另一条免费路由，不进这里、不存版本）。 */
   | { action: "move"; target: string; x: number; y: number };
 
-/** 一次结构改动的落点：改哪张图 + 改什么。`diagram` 缺省时由服务端按「画布上正打开的那张」定，认不出就拒。 */
+/**
+  一次结构改动的落点：改哪张图 + 改什么。
+  `diagram` 缺省时由服务端按「画布上正打开的那张」定，认不出就拒；
+  但 `draw` 例外：带 `diagram` 是整张替换（沿用原 id 与名字、上一版进版本历史），不带才是新建一张。
+*/
 export interface DiagramEditRequest {
   diagram?: string;
   edit: DiagramEdit;
