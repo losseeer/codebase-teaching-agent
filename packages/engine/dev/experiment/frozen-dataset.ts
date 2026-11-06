@@ -40,9 +40,10 @@ export interface Quality {
 
 export function csv(path: string): Record<string, string>[] {
   const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-  const header = lines[0]!.split(",");
+  // python 的 csv 模块写出的行尾是 \r\n；不剥掉的话最后一列表头会带上 \r，取不到值。
+  const header = lines[0]!.replace(/\r$/, "").split(",");
   return lines.slice(1).map((line) => {
-    const cells = line.split(",");
+    const cells = line.replace(/\r$/, "").split(",");
     return Object.fromEntries(header.map((key, index) => [key, cells[index] ?? ""]));
   });
 }
