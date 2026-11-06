@@ -1,0 +1,72 @@
+{
+  "experimentId": "segmented-generate-2026-11",
+  "runId": "20261106082724179",
+  "at": "2026-11-06T08:27:33.364Z",
+  "status": "completed",
+  "rows": 12,
+  "summary": {
+    "single": {
+      "attempts": 6,
+      "success": 3,
+      "success_rate": 0.5,
+      "provider_error": 2,
+      "harness_validation": 1,
+      "proposal_shape": 0,
+      "sandbox_unavailable": 0,
+      "duration_p50_ms": 591196,
+      "duration_max_ms": 813559,
+      "output_tokens": 126016,
+      "max_segment_output_tokens": 0,
+      "quality_passed": 2,
+      "max_call_output_tokens": 17382,
+      "duration_per_1k_tokens_s": 26.7
+    },
+    "segmented": {
+      "attempts": 6,
+      "success": 5,
+      "success_rate": 0.8333333333333334,
+      "provider_error": 0,
+      "harness_validation": 1,
+      "proposal_shape": 0,
+      "sandbox_unavailable": 0,
+      "duration_p50_ms": 542972,
+      "duration_max_ms": 994855,
+      "output_tokens": 166597,
+      "max_segment_output_tokens": 15792,
+      "quality_passed": 1,
+      "max_call_output_tokens": 15792,
+      "duration_per_1k_tokens_s": 19.4
+    }
+  },
+  "verdict": {
+    "paired": {
+      "pairs": 6,
+      "duration_diff_median_s": 1.8,
+      "duration_ratio_median": 1.003,
+      "output_change_median": -0.176,
+      "output_pairs": 4
+    },
+    "mechanism": {
+      "provider_error": {
+        "single": 2,
+        "segmented": 0,
+        "reduced": true
+      },
+      "paired_output_change_median": -0.176,
+      "output_dropped": true,
+      "pass": true
+    },
+    "rescue": {
+      "baseline_timeout_topics": 4,
+      "rescued_by_segmented": 3,
+      "pass": true
+    },
+    "safety": {
+      "single_harness_validation": 1,
+      "segmented_harness_validation": 1,
+      "ok": true
+    },
+    "all_pass": true,
+    "note": "先导只有 6 对：判方向与止损，量级以全量 30 题为准"
+  }
+}

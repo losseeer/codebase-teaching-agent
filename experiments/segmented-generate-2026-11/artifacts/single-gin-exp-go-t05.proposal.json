@@ -1,0 +1,46 @@
+{
+  "kind": "patch_edit",
+  "title": "修好 Basic 认证的凭据切分",
+  "prompt": "## 问题描述\n\n一个内部服务把框架的认证中间件换成了一份手写的极简 Basic 认证校验代码，全部在 `auth.go` 里，对外只有两个函数：\n\n- `Authenticate(accounts Accounts, header string) (string, bool)`：拿请求 `Authorization` 头的值做校验。通过时返回账号表里的用户名和 `true`；任何一步不成立都返回 `\"\"` 和 `false`。\n- `ChallengeHeader(realm string) string`：生成 401 响应的 `WWW-Authenticate` 值。\n\n凭据串的约定：把 `用户名:密码` 整体用标准 base64 编码后放在 `Basic ` 前缀之后。用户名不含冒号、区分大小写，且必须在账号表里存在；**密码是第一个冒号之后的全部内容**——可以包含冒号，也可以是空串；密码按字节全等比较。\n\n现在这份实现只在部分输入下与约定一致，请把它改到完全符合约定，同时保持其它判定步骤（前缀匹配、base64 解码、用户存在性、密码比对）的行为不变。\n\n## 示例\n\n```go\nAuthenticate(Accounts{\"root\": \"pa:ss:word\"}, \"Basic \"+b64(\"root:pa:ss:word\")) // (\"root\", true)\nAuthenticate(Accounts{\"admin\": \"password\"}, \"Basic \"+b64(\"admin:password1\"))  // (\"\", false)\nChallengeHeader(\"\")  // `Basic realm=\"Authorization Required\"`\n```\n\n（`b64` 指 `base64.StdEncoding.EncodeToString`。）\n\n## 注意事项\n\n- 只用 Go 标准库；只允许修改 `auth.go`，不要改 `Authenticate` / `ChallengeHeader` 的签名，也不要改已有常量名，不要新增文件。\n- `Basic ` 前缀大小写不敏感，前缀与载荷之间恰好一个空格；载荷必须能被 `base64.StdEncoding` 成功解码，否则判失败。\n- `header` 为空串、只有前缀、scheme 不匹配、载荷不是合法 base64、载荷里没有冒号，一律返回 `(\"\", false)`。\n- `accounts` 为 `nil` 时也必须返回 `(\"\", false)`，不允许 panic。\n- `ChallengeHeader` 的默认 realm 是 `Authorization Required`，realm 用带引号并转义的形式输出，这部分行为保持原样。\n- 判分只看测试文件对「给定输入 → 返回值」的逐条断言。",
+  "language": "go",
+  "given": [
+    {
+      "path": "auth.go",
+      "contents": "package main\n\nimport (\n\t\"crypto/subtle\"\n\t\"encoding/base64\"\n\t\"strconv\"\n\t\"strings\"\n)\n\n// Accounts 允许登录的账号：键是用户名，值是明文密码。\ntype Accounts map[string]string\n\n// CredentialPrefix 是 Authorization 头里 base64 载荷之前的方案名（含一个尾随空格）。\nconst CredentialPrefix = \"Basic \"\n\n// DefaultRealm 是 realm 为空串时使用的名称。\nconst DefaultRealm = \"Authorization Required\"\n\n// ChallengeHeader 生成 401 响应的 WWW-Authenticate 值：\n// realm 为空串时回落到 DefaultRealm，realm 本身按带引号的转义形式输出。\nfunc ChallengeHeader(realm string) string {\n\tif realm == \"\" {\n\t\trealm = DefaultRealm\n\t}\n\treturn CredentialPrefix + \"realm=\" + strconv.Quote(realm)\n}\n\n// Authenticate 校验 Authorization 头的值。\n// 通过时返回账号表里的用户名与 true；任何一步不成立返回 \"\" 与 false。\nfunc Authenticate(accounts Accounts, header string) (string, bool) {\n\tpayload, ok := credentialPayload(header)\n\tif !ok {\n\t\treturn \"\", false\n\t}\n\tparts := strings.Split(payload, \":\")\n\tif len(parts) != 2 {\n\t\treturn \"\", false\n\t}\n\tuser, password := parts[0], parts[1]\n\tstored, existed := accounts[user]\n\tif !existed {\n\t\treturn \"\", false\n\t}\n\tif subtle.ConstantTimeCompare([]byte(stored), []byte(password)) != 1 {\n\t\treturn \"\", false\n\t}\n\treturn user, true\n}\n\n// credentialPayload 取出前缀之后的 base64 载荷并解码。\n// 前缀大小写不敏感；载荷是前缀之后剩下的全部字符，且必须是合法的标准 base64。\nfunc credentialPayload(header string) (string, bool) {\n\tif len(header) <= len(CredentialPrefix) {\n\t\treturn \"\", false\n\t}\n\tif !strings.EqualFold(header[:len(CredentialPrefix)], CredentialPrefix) {\n\t\treturn \"\", false\n\t}\n\traw, err := base64.StdEncoding.DecodeString(header[len(CredentialPrefix):])\n\tif err != nil {\n\t\treturn \"\", false\n\t}\n\treturn string(raw), true\n}\n"
+    }
+  ],
+  "solution": [
+    {
+      "path": "auth.go",
+      "contents": "package main\n\nimport (\n\t\"crypto/subtle\"\n\t\"encoding/base64\"\n\t\"strconv\"\n\t\"strings\"\n)\n\n// Accounts 允许登录的账号：键是用户名，值是明文密码。\ntype Accounts map[string]string\n\n// CredentialPrefix 是 Authorization 头里 base64 载荷之前的方案名（含一个尾随空格）。\nconst CredentialPrefix = \"Basic \"\n\n// DefaultRealm 是 realm 为空串时使用的名称。\nconst DefaultRealm = \"Authorization Required\"\n\n// ChallengeHeader 生成 401 响应的 WWW-Authenticate 值：\n// realm 为空串时回落到 DefaultRealm，realm 本身按带引号的转义形式输出。\nfunc ChallengeHeader(realm string) string {\n\tif realm == \"\" {\n\t\trealm = DefaultRealm\n\t}\n\treturn CredentialPrefix + \"realm=\" + strconv.Quote(realm)\n}\n\n// Authenticate 校验 Authorization 头的值。\n// 通过时返回账号表里的用户名与 true；任何一步不成立返回 \"\" 与 false。\nfunc Authenticate(accounts Accounts, header string) (string, bool) {\n\tpayload, ok := credentialPayload(header)\n\tif !ok {\n\t\treturn \"\", false\n\t}\n\tidx := strings.IndexByte(payload, ':')\n\tif idx < 0 {\n\t\treturn \"\", false\n\t}\n\tuser, password := payload[:idx], payload[idx+1:]\n\tstored, existed := accounts[user]\n\tif !existed {\n\t\treturn \"\", false\n\t}\n\tif subtle.ConstantTimeCompare([]byte(stored), []byte(password)) != 1 {\n\t\treturn \"\", false\n\t}\n\treturn user, true\n}\n\n// credentialPayload 取出前缀之后的 base64 载荷并解码。\n// 前缀大小写不敏感；载荷是前缀之后剩下的全部字符，且必须是合法的标准 base64。\nfunc credentialPayload(header string) (string, bool) {\n\tif len(header) <= len(CredentialPrefix) {\n\t\treturn \"\", false\n\t}\n\tif !strings.EqualFold(header[:len(CredentialPrefix)], CredentialPrefix) {\n\t\treturn \"\", false\n\t}\n\traw, err := base64.StdEncoding.DecodeString(header[len(CredentialPrefix):])\n\tif err != nil {\n\t\treturn \"\", false\n\t}\n\treturn string(raw), true\n}\n"
+    }
+  ],
+  "hidden": [
+    {
+      "path": "tests.go",
+      "contents": "package main\n\nimport (\n\t\"encoding/base64\"\n\t\"fmt\"\n\t\"os\"\n)\n\nvar passCount, failCount int\n\nfunc record(name string, ok bool, detail string) {\n\tif ok {\n\t\tpassCount++\n\t\treturn\n\t}\n\tfailCount++\n\tfmt.Fprintf(os.Stderr, \"FAIL %s: %s\\n\", name, detail)\n}\n\nfunc b64(s string) string {\n\treturn base64.StdEncoding.EncodeToString([]byte(s))\n}\n\nfunc hdr(cred string) string {\n\treturn \"Basic \" + b64(cred)\n}\n\nfunc checkAuth(name string, accounts Accounts, header string, wantUser string, wantFound bool) {\n\tgotUser, gotFound := Authenticate(accounts, header)\n\tif gotUser == wantUser && gotFound == wantFound {\n\t\trecord(name, true, \"\")\n\t\treturn\n\t}\n\trecord(name, false, fmt.Sprintf(\"Authenticate 返回 (%q, %v)，期望 (%q, %v)\", gotUser, gotFound, wantUser, wantFound))\n}\n\nfunc checkChallenge(name, realm, want string) {\n\tgot := ChallengeHeader(realm)\n\tif got == want {\n\t\trecord(name, true, \"\")\n\t\treturn\n\t}\n\trecord(name, false, fmt.Sprintf(\"ChallengeHeader(%q) 返回 %q，期望 %q\", realm, got, want))\n}\n\nfunc main() {\n\taccounts := Accounts{\"admin\": \"password\", \"foo\": \"bar\"}\n\n\tcheckAuth(\"普通账号通过\", accounts, hdr(\"admin:password\"), \"admin\", true)\n\tcheckAuth(\"多账号里命中正确用户\", accounts, hdr(\"foo:bar\"), \"foo\", true)\n\tcheckAuth(\"密码不符拒绝\", accounts, hdr(\"admin:password1\"), \"\", false)\n\tcheckAuth(\"未知用户拒绝\", accounts, hdr(\"guest:password\"), \"\", false)\n\tcheckAuth(\"空用户名拒绝\", accounts, hdr(\":password\"), \"\", false)\n\tcheckAuth(\"载荷没有冒号拒绝\", accounts, hdr(\"admin\"), \"\", false)\n\tcheckAuth(\"空密码账号通过\", Accounts{\"guest\": \"\"}, hdr(\"guest:\"), \"guest\", true)\n\tcheckAuth(\"密码含冒号通过\", Accounts{\"root\": \"pa:ss:word\"}, hdr(\"root:pa:ss:word\"), \"root\", true)\n\tcheckAuth(\"密码含冒号但结尾不同仍拒绝\", Accounts{\"root\": \"pa:ss:word\"}, hdr(\"root:pa:ss\"), \"\", false)\n\tcheckAuth(\"密码以冒号结尾通过\", Accounts{\"svc\": \"tok:\"}, hdr(\"svc:tok:\"), \"svc\", true)\n\tcheckAuth(\"用户名区分大小写\", Accounts{\"Admin\": \"pw\"}, hdr(\"admin:pw\"), \"\", false)\n\tcheckAuth(\"空请求头拒绝\", accounts, \"\", \"\", false)\n\tcheckAuth(\"只有前缀拒绝\", accounts, \"Basic \", \"\", false)\n\tcheckAuth(\"其它 scheme 拒绝\", accounts, \"Bearer \"+b64(\"admin:password\"), \"\", false)\n\tcheckAuth(\"scheme 大小写不敏感\", accounts, \"basic \"+b64(\"admin:password\"), \"admin\", true)\n\tcheckAuth(\"载荷非法 base64 拒绝\", accounts, \"Basic ###\", \"\", false)\n\tcheckAuth(\"载荷缺 padding 拒绝\", accounts, \"Basic YWRtaW46cGFzc3dvcmQ\", \"\", false)\n\tcheckAuth(\"nil 账号表不 panic\", nil, hdr(\"admin:password\"), \"\", false)\n\n\tcheckChallenge(\"默认 realm\", \"\", `Basic realm=\"Authorization Required\"`)\n\tcheckChallenge(\"自定义 realm\", \"proxy\", `Basic realm=\"proxy\"`)\n\tcheckChallenge(\"realm 里的引号转义\", `My Custom \"Realm\"`, `Basic realm=\"My Custom \\\"Realm\\\"\"`)\n\n\tfmt.Printf(\"TESTS %d %d\\n\", passCount, failCount)\n\tif failCount > 0 {\n\t\tos.Exit(1)\n\t}\n}\n"
+    }
+  ],
+  "entry": "tests.go",
+  "defect": "Authenticate 用 strings.Split 并要求恰好两段，导致密码里含冒号（被分成 3 段以上）的凭据一律判失败；应按第一个冒号切分，冒号之后整体作为密码。",
+  "anchors": [
+    {
+      "path": "auth.go",
+      "line": 91,
+      "endLine": 94,
+      "why": "authorizationHeader: Basic + StdEncoding(user:pass) 载荷格式"
+    },
+    {
+      "path": "auth.go",
+      "line": 48,
+      "endLine": 52,
+      "why": "realm 空值回落 + strconv.Quote 拼 WWW-Authenticate 的形状"
+    },
+    {
+      "path": "auth_test.go",
+      "line": 48,
+      "endLine": 78,
+      "why": "searchCredential 的失败用例：空请求头、近似用户名、尾随空格"
+    }
+  ]
+}

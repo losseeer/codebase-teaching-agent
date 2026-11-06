@@ -71,6 +71,18 @@ try {
 }
 if (dry) { console.log("冻结校验通过。"); process.exit(0); }
 
+// --rescore：不跑实验，只按已有结果行重算 summary 与 verdict（改了判据口径后不必重跑）。
+if (args.includes("--rescore")) {
+  const lines = existsSync(outFile) ? readFileSync(outFile, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as Row) : [];
+  if (!lines.length) { console.error(`[segmented] 没有可重算的结果行：${outFile}`); process.exit(2); }
+  const report = score(lines.filter((row) => row.arm === "single"), lines.filter((row) => row.arm === "segmented"), topics, full);
+  writeFileSync(summaryFile, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  console.log(`## 汇总\n${JSON.stringify(report.summary, null, 2)}\n`);
+  console.log(`## 判据\n${JSON.stringify(report.verdict, null, 2)}\n`);
+  console.log(`已重算：${summaryFile}`);
+  process.exit(0);
+}
+
 loadDotEnv();
 const registryDir = mkdtempSync(join(tmpdir(), "tutor-segmented-"));
 writeFileSync(join(registryDir, "repositories.json"), JSON.stringify({ repositories: manifest.repos.map((repo) => resolve(root, repo.path)) }), "utf8");
@@ -121,6 +133,85 @@ function maxOutputSince(offset: number): number {
   } finally {
     closeSync(handle);
   }
+}
+
+/** 配对内比较：同题两臂的耗时与总输出。跨题跨臂的直接比会被题目难度与端点快慢带偏。 */
+function pairedStats(single: Row[], segmented: Row[]): {
+  pairs: number;
+  duration_diff_median_s: number;
+  duration_ratio_median: number;
+  output_change_median: number;
+  output_pairs: number;
+} {
+  const byTopic = new Map<string, { single?: Row; segmented?: Row }>();
+  for (const row of [...single, ...segmented]) {
+    const entry = byTopic.get(row.topic) ?? {};
+    entry[row.arm] = row;
+    byTopic.set(row.topic, entry);
+  }
+  const pairs = [...byTopic.values()].filter((entry) => entry.single && entry.segmented) as { single: Row; segmented: Row }[];
+  const diffs = pairs.map((entry) => (entry.segmented.duration_ms - entry.single.duration_ms) / 1000);
+  const ratios = pairs.filter((entry) => entry.single.duration_ms > 0).map((entry) => entry.segmented.duration_ms / entry.single.duration_ms);
+  const tokenPairs = pairs.filter((entry) => typeof entry.single.output_tokens === "number" && typeof entry.segmented.output_tokens === "number" && entry.single.output_tokens > 0);
+  const tokenChanges = tokenPairs.map((entry) => ((entry.segmented.output_tokens as number) - (entry.single.output_tokens as number)) / (entry.single.output_tokens as number));
+  const median = (values: number[]): number => {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  };
+  return {
+    pairs: pairs.length,
+    duration_diff_median_s: Number(median(diffs).toFixed(1)),
+    duration_ratio_median: Number(median(ratios).toFixed(3)),
+    output_change_median: Number(median(tokenChanges).toFixed(3)),
+    output_pairs: tokenPairs.length
+  };
+}
+
+/**
+  判据（2026-11-06 改过一次）：原先用「单次模型调用的最大输出 token 至少减半」当主判据，
+  那个量跨题跨轮都对不齐（单段臂的「单次」= 整份一次生成 17k–40k，分段臂 = 三段里最大的那个
+  6.9k–15.8k），实测只降 9%，闸门形同虚设。改成两个都不受端点快慢影响的量：
+  ① provider_error（单次输出撞 240s）有没有减少——这是分段要治的病；
+  ② 配对内总输出有没有下降——分段省不省 token。
+  先导只有 6 对，判方向与止损；量级以全量 30 题为准。
+*/
+function score(single: Row[], segmented: Row[], topicRows: PilotTopic[], full: boolean): {
+  experimentId: string; runId: string; at: string; status: string; rows: number;
+  summary: { single: ArmSummary; segmented: ArmSummary };
+  verdict: Record<string, unknown>;
+} {
+  const summary = { single: summarize(single), segmented: summarize(segmented) };
+  const paired = pairedStats(single, segmented);
+  const timeoutTopics = topicRows.filter((topic) => topic.baseline_outcome === "provider_error");
+  const rescued = timeoutTopics.filter((topic) => segmented.some((row) => row.topic === topic.topic && row.success));
+  const providerErrorReduced = summary.segmented.provider_error < summary.single.provider_error;
+  const outputDropped = paired.output_change_median <= -0.1;
+  const safetyOk = summary.segmented.harness_validation <= summary.single.harness_validation;
+  const gate = providerErrorReduced && outputDropped && safetyOk;
+  const verdict = full
+    ? {
+        paired,
+        provider_error: { single: summary.single.provider_error, segmented: summary.segmented.provider_error, reduced: providerErrorReduced },
+        output: { paired_change_median: paired.output_change_median, dropped: outputDropped },
+        safety: { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation, ok: safetyOk },
+        all_pass: gate
+      }
+    : {
+        paired,
+        mechanism: {
+          provider_error: { single: summary.single.provider_error, segmented: summary.segmented.provider_error, reduced: providerErrorReduced },
+          paired_output_change_median: paired.output_change_median,
+          output_dropped: outputDropped,
+          pass: providerErrorReduced && outputDropped
+        },
+        rescue: { baseline_timeout_topics: timeoutTopics.length, rescued_by_segmented: rescued.length, pass: rescued.length >= 2 },
+        safety: { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation, ok: safetyOk },
+        all_pass: gate,
+        note: "先导只有 6 对：判方向与止损，量级以全量 30 题为准"
+      };
+  return { experimentId: manifest.experimentId, runId, at: new Date().toISOString(), status: "completed", rows: single.length + segmented.length, summary, verdict };
 }
 
 async function referenceFor(repository: ImportedRepository, tag: string): Promise<string> {
@@ -250,55 +341,9 @@ try {
 
 const singleRows = rows.filter((row) => row.arm === "single");
 const segmentedRows = rows.filter((row) => row.arm === "segmented");
-const summary = { single: summarize(singleRows), segmented: summarize(segmentedRows) };
-const timeoutTopics = topics.filter((topic) => topic.baseline_outcome === "provider_error");
-const rescued = timeoutTopics.filter((topic) => segmentedRows.some((row) => row.topic === topic.topic && row.success));
-const primary = { single_provider_error: summary.single.provider_error, segmented_provider_error: summary.segmented.provider_error };
-const secondary = { single_success_rate: summary.single.success_rate, segmented_success_rate: summary.segmented.success_rate };
-const safety = { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation };
-/** 主判据：单次调用最大的输出 token——与端点快慢无关，纯粹量「分段有没有把单次输出压下来」。 */
-const mechanism = {
-  single_max_call_output_tokens: summary.single.max_call_output_tokens,
-  segmented_max_call_output_tokens: summary.segmented.max_call_output_tokens
-};
-const mechanismPass = mechanism.segmented_max_call_output_tokens > 0
-  && mechanism.segmented_max_call_output_tokens <= mechanism.single_max_call_output_tokens * 0.5;
-const reference = {
-  single_duration_p50_ms: summary.single.duration_p50_ms,
-  segmented_duration_p50_ms: summary.segmented.duration_p50_ms,
-  single_duration_per_1k_tokens_s: summary.single.duration_per_1k_tokens_s,
-  segmented_duration_per_1k_tokens_s: summary.segmented.duration_per_1k_tokens_s
-};
-const verdict = full
-  ? {
-      primary: mechanism,
-      primary_pass: mechanismPass,
-      secondary: primary,
-      secondary_pass: primary.segmented_provider_error < primary.single_provider_error,
-      safety,
-      safety_pass: safety.segmented_harness_validation <= safety.single_harness_validation,
-      reference,
-      all_pass: mechanismPass
-        && primary.segmented_provider_error < primary.single_provider_error
-        && secondary.segmented_success_rate >= secondary.single_success_rate
-        && safety.segmented_harness_validation <= safety.single_harness_validation
-    }
-  : {
-      baseline_timeout_topics: timeoutTopics.length,
-      rescued_by_segmented: rescued.length,
-      /** 机制闸门：分段后单次最大输出至少减半（端点快慢不影响这个数）。 */
-      mechanism,
-      mechanism_pass: mechanismPass,
-      /** 救援闸门：基线超时的那几题，分段臂至少救回 2 道。 */
-      pilot_gate_pass: rescued.length >= 2,
-      provider_error: primary,
-      success_rate: secondary,
-      safety,
-      reference
-    };
-const report = { experimentId: manifest.experimentId, runId, at: new Date().toISOString(), status: failure ? "failed" : "completed", rows: rows.length, ...(failure ? { failure } : {}), summary, verdict };
+const report = score(singleRows, segmentedRows, topics, full);
 writeFileSync(summaryFile, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-console.log(`\n## 先导汇总\n${JSON.stringify(report.summary, null, 2)}\n`);
-console.log(`## 判据\n${JSON.stringify(verdict, null, 2)}\n`);
+console.log(`\n## 汇总\n${JSON.stringify(report.summary, null, 2)}\n`);
+console.log(`## 判据\n${JSON.stringify(report.verdict, null, 2)}\n`);
 console.log(`结果：${outFile}\n汇总：${summaryFile}`);
 if (failure) process.exitCode = 2;

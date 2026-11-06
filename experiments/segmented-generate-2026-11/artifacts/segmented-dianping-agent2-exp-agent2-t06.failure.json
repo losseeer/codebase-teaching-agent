@@ -1,0 +1,17 @@
+{
+  "stage": "harness_validation",
+  "reason": "参考解没过：TESTS 7 4",
+  "runs": [
+    {
+      "label": "solution",
+      "verdict": {
+        "passed": 7,
+        "failed": 4
+      },
+      "exitCode": 1,
+      "timedOut": false,
+      "ran": false,
+      "output": "TESTS 7 4"
+    }
+  ]
+}
