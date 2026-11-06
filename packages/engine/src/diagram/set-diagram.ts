@@ -232,9 +232,8 @@ const refuse = (reason: string): DiagramWriteOutcome => ({ ok: false, text: `没
 const downgradeNote = (count: number): string => (count ? `其中 ${count} 条边核不到依据、已降档（边上写着为什么）。` : "");
 
 /** 版本历史里那一行：动作 + 目标名。 */
-function versionNoteOf(edit: DiagramEdit, nameOf: (id: string) => string): string {
+function versionNoteOf(edit: Exclude<DiagramEdit, { action: "draw" }>, nameOf: (id: string) => string): string {
   switch (edit.action) {
-    case "draw": return "agent 初版";
     case "add_node": return `加 ${edit.node.label}`;
     case "remove_node": return `删除 ${nameOf(edit.target)}`;
     case "add_edge": return `连线 ${nameOf(edit.edge.from)} → ${nameOf(edit.edge.to)}`;
@@ -256,8 +255,8 @@ function editTargetId(edit: DiagramEdit): string {
 }
 
 /** 一次动作的中文说法。 */
-const ACTION_LABEL: Record<DiagramEdit["action"], string> = {
-  draw: "画好", add_node: "加了节点", remove_node: "删了节点", add_edge: "连了边", remove_edge: "删了边",
+const ACTION_LABEL: Record<Exclude<DiagramEdit["action"], "draw">, string> = {
+  add_node: "加了节点", remove_node: "删了节点", add_edge: "连了边", remove_edge: "删了边",
   add_group: "加了分组", remove_group: "删了分组", relabel: "改了名", move: "挪了位置"
 };
 
@@ -345,11 +344,11 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   return finish(edit, "");
 
   /** 校验、落盘、记账与广播的公共出口。 */
-  function finish(done: DiagramEdit, override: string): DiagramWriteOutcome {
+  function finish(done: Exclude<DiagramEdit, { action: "draw" }>, override: string): DiagramWriteOutcome {
     const settled = settleBody(body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const saved = context.store.applyStructure(diagram, settled.body, versionNoteOf(done, nameOf));
-    context.journal.append(done.action === "draw" ? "diagram_created" : "diagram_edited", {
+    context.journal.append("diagram_edited", {
       diagram: saved.id, action: done.action, target: "target" in done ? done.target : "node" in done ? done.node.id : "edge" in done ? done.edge.id : "group" in done ? done.group.id : "",
       nodes: saved.body.nodes.length, edges: saved.body.edges.length, dropped_nodes: Math.max(0, settledBefore - saved.body.nodes.length), downgraded: settled.downgraded, via
     });
