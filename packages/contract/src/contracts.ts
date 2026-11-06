@@ -25,7 +25,7 @@ export const importJobSchema = z.object({
   error: z.string().optional(),
   /** 是否参考注释导入；显式值写入该仓 settings，换口径需重新导入。 */
   summaryHeaderComments: z.boolean().optional(),
-  /** 摘要批次并发；实验用，默认 1，内部钳在 1..8。 */
+  /** 摘要批次并发；实验用，默认 4，内部钳在 1..8。 */
   summaryConcurrency: z.number().int().min(1).max(8).optional()
 });
 export type ImportJob = z.infer<typeof importJobSchema>;

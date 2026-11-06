@@ -56,7 +56,7 @@ export function registerPlatformRoutes(app: FastifyInstance): void {
   });
 
   app.post<{ Body: { path?: string; summaryHeaderComments?: boolean; summaryConcurrency?: number } }>("/api/imports", async (request, reply) => {
-    // 并发只给实验用；非正整数视作没传，由导入服务回落环境变量或默认 1
+    // 并发只给实验用；非正整数视作没传，由导入服务回落环境变量或默认 4
     const requested = request.body?.summaryConcurrency;
     const summaryConcurrency = typeof requested === "number" && Number.isFinite(requested) && requested >= 1 ? Math.floor(requested) : undefined;
     const result = submitImportUseCase(request.body?.path ?? "", request.body?.summaryHeaderComments, summaryConcurrency);

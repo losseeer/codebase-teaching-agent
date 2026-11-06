@@ -30,7 +30,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 /** `analyze` 的产物，不含挂载态字段。 */
 type AnalyzedRepository = Omit<ImportedRepository, "watcher" | "freshness" | "watch" | "audit" | "chatStore">;
 
-/** 摘要批次并发：接口参数优先，其次 `TUTOR_SUMMARY_CONCURRENCY`，默认 1；钳在 1..8。 */
+/** 摘要批次并发：接口参数优先，其次 `TUTOR_SUMMARY_CONCURRENCY`，默认 4；钳在 1..8。 */
 function summaryConcurrencyOf(value?: number): number {
   const env = Number(process.env.TUTOR_SUMMARY_CONCURRENCY ?? "");
   const raw = typeof value === "number" && Number.isFinite(value) && value >= 1
