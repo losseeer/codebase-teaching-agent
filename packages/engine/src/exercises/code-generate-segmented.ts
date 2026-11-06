@@ -140,17 +140,17 @@ function parsePlan(parsed: Record<string, unknown>): PlanSegment {
   const targets = Array.isArray(parsed.targets)
     ? parsed.targets.map((item) => str(item, 200)).filter((item) => item.length > 0).slice(0, 3)
     : [];
-  if (!title || !prompt || !language || !targets.length) throw new Error("题面段缺 title / prompt / language / targets。");
+  if (!title || !prompt || !language || !targets.length) throw new SegmentError("shape", "题面段缺 title / prompt / language / targets。");
   return { title, prompt, defect: str(parsed.defect, 200), language, targets };
 }
 
 function parseCode(parsed: Record<string, unknown>): CodeSegment {
   const given = slots(parsed.given);
   const solution = slots(parsed.solution);
-  if (!given || !solution) throw new Error("代码段缺 given 或 solution。");
+  if (!given || !solution) throw new SegmentError("shape", "代码段缺 given 或 solution。");
   const paths = new Set(given.map((file) => file.path));
   if (solution.length !== given.length || solution.some((file) => !paths.has(file.path))) {
-    throw new Error("given 与 solution 的 path 集合必须完全一致。");
+    throw new SegmentError("shape", "given 与 solution 的 path 集合必须完全一致。");
   }
   return { given, solution };
 }
@@ -158,7 +158,7 @@ function parseCode(parsed: Record<string, unknown>): CodeSegment {
 function parseTests(parsed: Record<string, unknown>): TestsSegment {
   const hidden = slots(parsed.hidden);
   const entry = str(parsed.entry, 200);
-  if (!hidden || !entry) throw new Error("测试段缺 hidden 或 entry。");
+  if (!hidden || !entry) throw new SegmentError("shape", "测试段缺 hidden 或 entry。");
   return { hidden, entry };
 }
 
