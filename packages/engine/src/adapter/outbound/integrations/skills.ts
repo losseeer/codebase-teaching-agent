@@ -192,6 +192,21 @@ export function listSkills(directories: string[] = skillDirectories()): SkillLoa
 }
 
 /** 按名字取一份技能的正文或目录内附属文件；取不到返回 `undefined`。 */
+/** 列出某个技能目录下的 Markdown 文件：read_skill 读错文件名时，把这份清单回给模型。 */
+export function listSkillFiles(name: string, directories: string[] = skillDirectories()): string[] {
+  if (!validName(name)) return [];
+  for (const directory of directories) {
+    const skillRoot = join(directory, name);
+    try {
+      if (!statSync(skillRoot).isDirectory()) continue;
+      return readdirSync(skillRoot).filter((entry) => entry.endsWith(".md")).sort();
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
 export function readSkill(name: string, file = "SKILL.md", directories: string[] = skillDirectories()): string | undefined {
   if (!validName(name)) return undefined;
   for (const directory of directories) {
@@ -217,6 +232,11 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
 /** 上下文里那段技能清单，附「先调 `read_skill` 取正文」。 */
 export function skillsBriefing(skills: SkillBrief[]): string {
   if (!skills.length) return "";
-  const lines = skills.map((skill) => `- ${skill.name}：${skill.description}`);
-  return `可用技能（每份都是一套写好的做法，含命令与红线）：\n${lines.join("\n")}\n要用哪一份就先调 read_skill 取正文（做法里提到的附属文件用同一个工具的 file 参数取），别凭名字猜内容。`;
+  // 把附属文件也列出来：不列的话模型只能猜文件名（曾经猜 java.md / checklist.md，
+  // 实际目录里是 cn.md / ds.md / backend.md / os.md，白调两次工具）。
+  const lines = skills.map((skill) => {
+    const attached = listSkillFiles(skill.name).filter((file) => file !== "SKILL.md");
+    return `- ${skill.name}：${skill.description}${attached.length ? `（附属：${attached.join(" / ")}）` : ""}`;
+  });
+  return `可用技能（每份都是一套写好的做法，含命令与红线）：\n${lines.join("\n")}\n要用哪一份就先调 read_skill 取正文（附属文件用同一个工具的 file 参数取），别凭名字猜内容。`;
 }

@@ -1,7 +1,7 @@
 import type { ChatScope } from "@codebase-tutor/contract";
 
 import { externalToolSurface } from "../../adapter/outbound/integrations/clients.js";
-import { listSkills, readSkill, skillsBriefing } from "../../adapter/outbound/integrations/skills.js";
+import { listSkills, readSkill, skillsBriefing, listSkillFiles } from "../../adapter/outbound/integrations/skills.js";
 import { checkTurnInvariants, invariantTailNotice, screenReply } from "../runtime/turn-invariants.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
 import { codeSearchAuditPayload } from "../../source/search-code.js";
@@ -165,7 +165,7 @@ export function skillsForTurn(): SkillsToolContext | undefined {
   const brief = skillsBriefing(load.skills);
   if (!brief) return undefined;
   if (load.skipped.length) traceEngine("degrade", { what: "skill_skipped", skipped: load.skipped.map((item) => `${item.dir}：${item.reason}`).join("、") });
-  return { brief, bodyOf: (name, file) => readSkill(name, file) };
+  return { brief, bodyOf: (name, file) => readSkill(name, file), filesOf: (name) => listSkillFiles(name) };
 }
 
 /** 本轮的外部 MCP 工具面；默认关，连不上时不给工具而不是报错。 */

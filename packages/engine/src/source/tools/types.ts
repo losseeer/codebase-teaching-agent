@@ -34,6 +34,8 @@ export interface SkillsToolContext {
   brief: string;
   /** 取技能正文或该目录下的附属文件；`file` 省略时取 SKILL.md，返回 `undefined` 表示不存在。 */
   bodyOf: (name: string, file?: string) => string | undefined;
+  /** 该技能目录下有哪些 Markdown 文件；读错名字时把清单回给模型，免得它一直猜。 */
+  filesOf?: (name: string) => string[];
 }
 
 /** 外部 MCP 工具的清单与调用通道。 */
