@@ -327,6 +327,12 @@ export async function generateCodeExerciseSegmented(input: {
 
   const testsOut = await runSegment<TestsSegment>(async () => {
     announce("tests");
+    // 段 3 是裸调用，没有工具循环替我们发帧：补一条「开始」，
+    // 否则轨迹会停在上一段的最后一帧，看起来像已经结束了。
+    faces.onTrace?.({
+      kind: "model", status: "start", stepId: "tests-start",
+      label: EXERCISE_SEGMENT_ACTIVE.tests, round: 1, model: input.provider.modelVersion
+    });
     const startedAt = Date.now();
     const response = await input.provider.complete({
       system: withSkillsBrief(testsSystem(input.kind, plan.language), faces.skills),
@@ -344,7 +350,9 @@ export async function generateCodeExerciseSegmented(input: {
     if (!parsed) throw new SegmentError("shape", "测试段返回的不是可解析的 JSON。");
     // 这一段没有工具循环，模型帧要自己发出去，否则轨迹里看不到「写测试」这一步。
     faces.onTrace?.({
-      kind: "model", status: "ok", stepId: "tests-1", label: EXERCISE_SEGMENT_ACTIVE.tests,
+      // stepId 与上面那条「开始」帧一致：界面按 stepId 合并，一条从上到下走完，
+      // 不要变成「正在写测试（转圈）」+「正在写测试（已完成）」两行。
+      kind: "model", status: "ok", stepId: "tests-start", label: EXERCISE_SEGMENT_ACTIVE.tests,
       round: 1, model: input.provider.modelVersion, ms: Date.now() - startedAt,
       ...(response.usage ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens } : {}),
       finishReason: "stop",
