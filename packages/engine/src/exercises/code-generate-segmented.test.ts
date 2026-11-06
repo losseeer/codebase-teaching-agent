@@ -1,7 +1,7 @@
 /** [DEV ONLY] 分段产出的形状校验、开关与「三段都必须带语言形状规范」这条硬要求。 */
 import { afterEach, describe, expect, it } from "vitest";
 import { TEST_CONTRACT } from "./code-generate.js";
-import { codeSystem, promptSystem, segmentedExerciseEnabled, testsSystem } from "./code-generate-segmented.js";
+import { codeSystem, parseCode, promptSystem, segmentedExerciseEnabled, testsSystem } from "./code-generate-segmented.js";
 
 describe("分段产出的 system 必须带着该语言的测试形状", () => {
   it("三段都含 TEST_CONTRACT 的原文：缺了它模型会写裸 assert，判分拿不到结论行", () => {
@@ -14,8 +14,29 @@ describe("分段产出的 system 必须带着该语言的测试形状", () => {
     expect(testsSystem("patch_edit", "python")).toContain("TESTS {pass} {fail}");
   });
 
+  it("题面要求三节齐全，且说明不要写「相关文件」小节", () => {
+    const system = promptSystem("patch_edit");
+    for (const section of ["## 问题描述", "## 示例", "## 注意事项"]) expect(system).toContain(section);
+    expect(system).toContain("不要写「相关文件");
+  });
+
   it("段 2 与段 3 的 system 各自只带一种语言（语言在段 1 定了）", () => {
     expect(codeSystem("patch_edit", "python")).not.toContain(TEST_CONTRACT.go);
+  });
+});
+
+describe("代码段的取材锚点（界面的「相关文件」靠它）", () => {
+  it("system 里要求模型声明 anchors", () => {
+    expect(codeSystem("patch_edit", "python")).toContain("anchors");
+  });
+
+  it("模型给了就照收；不合法的条目丢掉而不是整段作废", () => {
+    const parsed = parseCode({
+      given: [{ path: "a.py", contents: "x" }],
+      solution: [{ path: "a.py", contents: "y" }],
+      anchors: [{ path: "a.py", line: 3, endLine: 9, why: "取用了判定顺序" }, { path: "", line: 1 }, { line: 2 }]
+    });
+    expect(parsed.anchors).toEqual([{ path: "a.py", line: 3, endLine: 9, why: "取用了判定顺序" }]);
   });
 });
 

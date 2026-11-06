@@ -48,9 +48,16 @@ interface PlanSegment {
   language: string;
   targets: string[];
 }
+interface Anchor {
+  path: string;
+  line: number;
+  endLine?: number;
+  why?: string;
+}
 interface CodeSegment {
   given: FileSlot[];
   solution: FileSlot[];
+  anchors: Anchor[];
 }
 interface TestsSegment {
   hidden: FileSlot[];
@@ -58,7 +65,12 @@ interface TestsSegment {
 }
 
 const MAX_TITLE = 40;
-const MAX_PROMPT = 800;
+/** 产品侧 PROMPT_TARGET=800 是目标字数、MAX_PROMPT=1600 才是截断线。这里对齐上限——
+    当成 800 截会把三节里的「注意事项」整段切掉，题面就不成篇了。 */
+const MAX_PROMPT = 1_600;
+
+/** 题面必须齐的三节；缺一节就重出，别把半篇题面发给学习者。 */
+const PROMPT_SECTIONS = ["## 问题描述", "## 示例", "## 注意事项"] as const;
 
 const baseRules = (kind: "patch_edit" | "author_function"): string[] => [
   `你是代码练习的出题人。${kind === "patch_edit" ? "要出一道给学习者改到测试全过的题：一段有真实缺陷的实现。" : "要出一道给学习者从零写实现的题：给签名与示例。"}`,
@@ -73,7 +85,11 @@ const baseRules = (kind: "patch_edit" | "author_function"): string[] => [
 
 const promptStageRules = (): string[] => [
   "这一段只出**题面与目标文件清单**，不要写任何代码。",
-  "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`；示例写 1–2 个「调用 → 期望返回」，注意事项只写可核对的约束。",
+  "题面用 Markdown 按这三节写，**三节缺一不可**：",
+  "  `## 问题描述`：背景 + 要改/写哪个函数 + 判定看什么行为；",
+  "  `## 示例`：1–2 个「调用 → 期望返回」（类题用操作序列），不要复刻隐藏断言；",
+  "  `## 注意事项`：只写可核对的约束（语言/标准库、能否改签名、边界条件），不写性能要求，也不点出缺陷所在的那一行。",
+  "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示（在代码段的 JSON 里给）。",
   "- 各语言的测试形状（你选哪个语言就按哪个写，后面的代码段与测试段会各自遵守）：",
   ...(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => `  ${language}：${TEST_CONTRACT[language]}`),
   '严格输出 JSON（不要任何其他文字）：{"ok":true,"language":"typescript|python|java|go","title":"≤40字","prompt":"≤800字题面","defect":"<缺陷的一句话说明，仅留档>","targets":["<要改或要写的文件路径>"]}',
@@ -83,7 +99,8 @@ const promptStageRules = (): string[] => [
 const codeStageRules = (): string[] => [
   "这一段只出**给定件与参考解**两份文件，不要写测试，也不要写题面。",
   "目标文件的现状自己用 `read_file` 读，不要凭空编接口：这一段允许你检索仓库。",
-  '严格输出 JSON（不要任何其他文字）：{"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"]}',
+  '严格输出 JSON（不要任何其他文字）：{"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],"anchors":[{"path":"<你真正读过、并取用了实现的文件>","line":起始行,"endLine":结束行,"why":"取用了什么，≤30字"}]}',
+  "anchors 最多 3 条，只填真正取材过的文件；一处都没参考就填空数组。产品靠它显示「相关文件」。",
   "两份文件的 **path 集合必须完全一致**；contents 是整份文件源码，不是片段。",
   "同一语言的项目里，除测试件外不要再引入第三方依赖。",
   "预算：两份文件合计不超过 6000 字符，只写必要实现，不要加多余的注释与辅助函数。"
@@ -141,10 +158,12 @@ function parsePlan(parsed: Record<string, unknown>): PlanSegment {
     ? parsed.targets.map((item) => str(item, 200)).filter((item) => item.length > 0).slice(0, 3)
     : [];
   if (!title || !prompt || !language || !targets.length) throw new Error("题面段缺 title / prompt / language / targets。");
+  const missing = PROMPT_SECTIONS.filter((section) => !prompt.includes(section));
+  if (missing.length) throw new Error(`题面缺这几节：${missing.join("、")}——必须按「问题描述 / 示例 / 注意事项」三节写完整。`);
   return { title, prompt, defect: str(parsed.defect, 200), language, targets };
 }
 
-function parseCode(parsed: Record<string, unknown>): CodeSegment {
+export function parseCode(parsed: Record<string, unknown>): CodeSegment {
   const given = slots(parsed.given);
   const solution = slots(parsed.solution);
   if (!given || !solution) throw new Error("代码段缺 given 或 solution。");
@@ -152,7 +171,18 @@ function parseCode(parsed: Record<string, unknown>): CodeSegment {
   if (solution.length !== given.length || solution.some((file) => !paths.has(file.path))) {
     throw new Error("given 与 solution 的 path 集合必须完全一致。");
   }
-  return { given, solution };
+  const anchors: Anchor[] = Array.isArray(parsed.anchors)
+    ? (parsed.anchors as unknown[]).flatMap((item) => {
+        const record = (item ?? {}) as Record<string, unknown>;
+        const path = str(record.path, 200);
+        const line = Math.floor(Number(record.line));
+        if (!path || !Number.isFinite(line) || line < 1) return [];
+        const endLine = Math.floor(Number(record.endLine));
+        const why = str(record.why, 60);
+        return [{ path, line, ...(Number.isFinite(endLine) && endLine > line ? { endLine } : {}), ...(why ? { why } : {}) }];
+      }).slice(0, 3)
+    : [];
+  return { given, solution, anchors };
 }
 
 function parseTests(parsed: Record<string, unknown>): TestsSegment {
@@ -324,6 +354,12 @@ export async function generateCodeExerciseSegmented(input: {
   const tests = testsOut.data!;
   usage = addUsage(usage, testsOut.usage);
 
+  // 「相关文件」靠 anchors：模型在代码段点名取材来源；没点名就用这一趟真读过的文件兜底，
+  // 否则界面那一栏永远是空的（分段刚上线时就是漏了这个字段）。
+  const anchors = code.anchors.length
+    ? code.anchors
+    : codeOut.fileReads.filter((read) => !read.denied && !read.error).slice(0, 3)
+        .map((read) => ({ path: read.path, line: 1, why: "这一趟读过" }));
   const merged = {
     ok: true,
     language: plan.language,
@@ -333,7 +369,8 @@ export async function generateCodeExerciseSegmented(input: {
     given: code.given,
     solution: code.solution,
     hidden: tests.hidden,
-    entry: tests.entry
+    entry: tests.entry,
+    ...(anchors.length ? { anchors } : {})
   };
   const finish = async (body: typeof merged): Promise<CodeGeneration> =>
     await finishProposal(
