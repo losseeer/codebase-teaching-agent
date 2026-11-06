@@ -19,7 +19,6 @@ import { addUsage } from "../adapter/outbound/llm/usage.js";
 import {
   finishProposal,
   parseJsonObject,
-  referenceSystemPrompt,
   requestProposal,
   TEST_CONTRACT,
   type CodeGeneration,
