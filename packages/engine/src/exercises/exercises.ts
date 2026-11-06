@@ -315,7 +315,9 @@ export class ExerciseService {
         stage: "validate-proposal", label: run.label, language,
         verdict_passed: run.verdict?.passed ?? null, verdict_failed: run.verdict?.failed ?? null,
         exit_code: run.exitCode, timed_out: run.timedOut,
-        outcome: accepted ? "accepted" : "harness_validation"
+        outcome: accepted ? "accepted" : "harness_validation",
+        // 失败时把沙箱输出尾巴留一份：不看这里就只能猜「没编译过还是断言不对」。
+        ...(run.output ? { output: run.output.slice(-800) } : {})
       });
     }
     // 被自证挡掉的那一趟同样花了钱：账走在拒绝之前。
@@ -350,7 +352,9 @@ export class ExerciseService {
       ...(input.faces ? { faces: input.faces } : {})
     });
     if (segmented.ok) return segmented;
-    return await generateCodeExerciseFromReference({
+    // 超时不兜底：整份产出更大更慢，只会在同一条上限上再撞一次，白烧一遍时间与 token。
+    if (segmented.stage === "provider_error") return segmented;
+    const whole = await generateCodeExerciseFromReference({
       repositoryPath: input.repositoryPath,
       tag: input.tag,
       kind: input.kind,
@@ -359,6 +363,9 @@ export class ExerciseService {
       ...(input.faces ? { faces: input.faces } : {}),
       ...(input.progress ? { onProgress: input.progress } : {})
     });
+    // 整份也没过时，把分段那次的失败原因一并带出来：否则只看到「整份没过」，
+    // 不知道分段是先卡在哪一步的（两趟都白跑，原因得留全）。
+    return whole.ok ? whole : { ...whole, reason: `${whole.reason}（分段那次：${segmented.reason.slice(0, 160)}）` };
   }
 
   /** 参考模式出代码题：源码只作参考，题目由模型自定；沙箱自证与证据账照旧。 */

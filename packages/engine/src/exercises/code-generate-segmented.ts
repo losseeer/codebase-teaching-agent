@@ -226,7 +226,13 @@ export async function generateCodeExerciseSegmented(input: {
     const prefix = attempt > 1 ? `${segment}-${attempt}` : segment;
     return {
       ...faces,
-      onTrace: (step) => inner({ ...step, stepId: `${prefix}-${step.stepId}`, label: EXERCISE_SEGMENT_LABEL[segment] })
+      // 只有模型帧改成段名；工具帧必须保留工具自己的名字——否则「读技能 / 检索代码」全被盖成
+      // 「出题面」，轨迹里就看不到模型到底调了什么工具（曾经因此误以为前期没加载技能）。
+      onTrace: (step) => inner({
+        ...step,
+        stepId: `${prefix}-${step.stepId}`,
+        ...(step.kind === "model" ? { label: EXERCISE_SEGMENT_LABEL[segment] } : {})
+      })
     };
   };
 
@@ -254,7 +260,7 @@ export async function generateCodeExerciseSegmented(input: {
   const codeOut = await runSegment<CodeSegment>(async (attempt) => {
     const response = await requestProposal({
       provider: input.provider,
-      system: codeSystem(input.kind, plan.language),
+      system: withSkillsBrief(codeSystem(input.kind, plan.language), faces.skills),
       user: JSON.stringify({
         stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
         targets: plan.targets, note: "目标文件的现状自己 read_file 读；接口、函数名、导入路径都要照仓库里的来"
@@ -275,8 +281,9 @@ export async function generateCodeExerciseSegmented(input: {
   fileReads.push(...codeOut.fileReads);
 
   const testsOut = await runSegment<TestsSegment>(async () => {
+    const startedAt = Date.now();
     const response = await input.provider.complete({
-      system: testsSystem(input.kind, plan.language),
+      system: withSkillsBrief(testsSystem(input.kind, plan.language), faces.skills),
       user: JSON.stringify({
         stage: "tests", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
         targets: plan.targets,
@@ -292,7 +299,7 @@ export async function generateCodeExerciseSegmented(input: {
     // 这一段没有工具循环，模型帧要自己发出去，否则轨迹里看不到「写测试」这一步。
     faces.onTrace?.({
       kind: "model", status: "ok", stepId: "tests-1", label: EXERCISE_SEGMENT_LABEL.tests,
-      round: 1, model: input.provider.modelVersion, ms: undefined,
+      round: 1, model: input.provider.modelVersion, ms: Date.now() - startedAt,
       ...(response.usage ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens } : {}),
       finishReason: "stop",
       reply: response.text.slice(0, 4_000)
@@ -336,7 +343,7 @@ export async function generateCodeExerciseSegmented(input: {
       const retry = stage === "code"
         ? await requestProposal({
             provider: input.provider,
-            system: codeSystem(input.kind, plan.language),
+            system: withSkillsBrief(codeSystem(input.kind, plan.language), faces.skills),
             user: JSON.stringify({
               stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
               targets: plan.targets, note: "上一版的参考解没让测试全过，重出这一段"
@@ -345,7 +352,7 @@ export async function generateCodeExerciseSegmented(input: {
             ...(faces ? { faces: facesFor(stage) } : {})
           })
         : await input.provider.complete({
-            system: testsSystem(input.kind, plan.language),
+            system: withSkillsBrief(testsSystem(input.kind, plan.language), faces.skills),
             user: JSON.stringify({
               stage: "tests", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
               targets: plan.targets, solution: code.solution, givenPaths: code.given.map((file) => file.path),
