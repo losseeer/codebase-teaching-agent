@@ -151,7 +151,19 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
       trace.finish("已取消出题", "aborted");
       return { ok: false, failure: { kind: "aborted" } };
     }
-    trace.finish(error instanceof Error ? error.message : "出题失败", "error");
+    const reason = error instanceof Error ? error.message : "出题失败";
+    trace.finish(reason, "error");
+    // 失败也要在 journal 里留一行：悬浮球的轨迹是从 journal 回放的，而 trace.finish 只发实时帧。
+    // 一旦实时连接断过（刷新页面、出题久到重连），那趟出题就会永远显示「运行中」。
+    // 已归类的拒绝（ExerciseDeclinedError）在 decline() 里写过，这里只补没人写的那些。
+    if (!(error instanceof ExerciseDeclinedError)) {
+      repository.audit.append("exercise_declined", {
+        family: "code",
+        tag: tag.trim(),
+        reason: reason.slice(0, 300),
+        stage: "internal_error"
+      });
+    }
     const code = error instanceof ExerciseDeclinedError ? DECLINE_CODES[error.stage] : undefined;
     return declined(error, "无法生成练习", code);
   } finally {
