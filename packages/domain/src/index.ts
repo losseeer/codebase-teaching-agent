@@ -6,6 +6,7 @@
 export * from "./dependency-graph.js";
 export * from "./diagram.js";
 export * from "./engine-trace.js";
+export * from "./exercise-segments.js";
 export * from "./exercises.js";
 export * from "./external-category.js";
 export * from "./import-estimate.js";

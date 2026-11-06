@@ -1,4 +1,5 @@
 import type { AgentScope, AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
+import { EXERCISE_SEGMENT_LABEL, exerciseSegmentOf, type ExerciseSegment } from "@codebase-tutor/domain";
 import { TURN_TEXT_LIMIT, type JournalEvent } from "@codebase-tutor/domain";
 
 /** journal 回合历史：按 traceId 汇总出审计线能还原的步骤；不发模型、不改任何文件。 */
@@ -145,7 +146,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   const question = clip(text(turnText?.payload.question, 2_000), 400);
   const answer = text(turnText?.payload.answer, TURN_TEXT_LIMIT);
   // 对话回合只有最终答复；出题按每次模型调用各回放一条，中间回合也看得到
-  const replayed: { reply?: string; detail?: string; finishReason?: string; ms?: number; at: string }[] = answer
+  const replayed: { reply?: string; detail?: string; finishReason?: string; ms?: number; at: string; stepId?: string; stage?: ExerciseSegment }[] = answer
     ? [{ reply: `${answer}${turnText?.payload.answer_truncated === true ? "…" : ""}`, at: turnText?.at ?? ordered[0].at }]
     : ordered
         .filter((event) => event.type === "exercise_model_reply")
@@ -158,11 +159,16 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
           // 自证失败会重出一版；两条最终回复都留在轨迹里，标清首轮/修复
           const note = finishReason === "stop" && attempt !== undefined ? (attempt > 1 ? "修复重出" : "首轮出题") : "";
           const shownDetail = detail ? `${detail}${event.payload.detail_truncated === true ? "…" : ""}` : note;
+          // 分段产出时 step_id 带着段名（prompt-m1 / code-1 / tests-1），据此把一次出题还原成三段。
+          const stepId = text(event.payload.step_id, 80) || undefined;
+          const stage = exerciseSegmentOf(stepId);
           return {
             ...(reply ? { reply: `${reply}${event.payload.reply_truncated === true ? "…" : ""}` } : {}),
             ...(shownDetail ? { detail: shownDetail } : {}),
             ...(finishReason ? { finishReason } : {}),
             ...(ms !== undefined ? { ms } : {}),
+            ...(stepId ? { stepId } : {}),
+            ...(stage ? { stage } : {}),
             at: event.at
           };
         })
@@ -203,8 +209,9 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
     push({
       kind: "model",
       status: "ok",
-      stepId: replayed.length ? `journal-model-${index + 1}` : "journal-model",
-      label: item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
+      stepId: item.stepId ?? (replayed.length ? `journal-model-${index + 1}` : "journal-model"),
+      // 分段产出的帧用段名做标签（出题面 / 写代码 / 写测试），跟实时轨迹一致。
+      label: item.stage ? EXERCISE_SEGMENT_LABEL[item.stage] : item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
       ...(item.reply ? { reply: item.reply } : {}),
       ...(item.detail ? { detail: item.detail } : {}),
       ...(item.finishReason ? { finishReason: item.finishReason } : {}),

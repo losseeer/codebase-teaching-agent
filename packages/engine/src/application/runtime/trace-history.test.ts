@@ -106,9 +106,23 @@ describe("journal 回合历史", () => {
     ], "repo", 10).runs[0];
     const models = run.steps.filter((step) => step.kind === "model");
     expect(models.map((step) => step.reply)).toEqual(["先检索注册点", "再修一处锚点"]);
-    expect(models.map((step) => step.stepId)).toEqual(["journal-model-1", "journal-model-2"]);
+    // step_id 用原来的那个：分段产出的帧靠它带段名前缀（prompt-m1 / code-1 / tests-1）。
+    expect(models.map((step) => step.stepId)).toEqual(["m1", "m2"]);
     expect(models.every((step) => step.inputTokens === undefined && step.outputTokens === undefined)).toBe(true);
     expect(run.summary).toContain("输入 50 / 输出 20");
+  });
+
+  it("分段产出：按 step_id 的段前缀还原成「出题面 / 写代码 / 写测试」三段", () => {
+    const events = [
+      ev("exercise_model_reply", "s1", "2026-11-02T03:20:01.000Z", { scene: "practice.generate", step_id: "prompt-m1", reply: "题面草案" }),
+      ev("exercise_model_reply", "s1", "2026-11-02T03:20:30.000Z", { scene: "practice.generate", step_id: "code-m1", reply: "given 与 solution" }),
+      ev("exercise_model_reply", "s1", "2026-11-02T03:21:10.000Z", { scene: "practice.generate", step_id: "tests-1", reply: "测试件" }),
+      ev("exercise_generated", "s1", "2026-11-02T03:21:40.000Z", { family: "llm", source: "llm", target_unit: "unit-1" })
+    ];
+    const run = buildTraceHistory(events, "repo", 10).runs[0]!;
+    const models = run.steps.filter((step) => step.kind === "model");
+    expect(models.map((step) => step.label)).toEqual(["出题面", "写代码", "写测试"]);
+    expect(models.map((step) => step.stepId)).toEqual(["prompt-m1", "code-m1", "tests-1"]);
   });
 
   it("出题只有工具调用的回合也在历史里留行，并标明调用了什么", () => {

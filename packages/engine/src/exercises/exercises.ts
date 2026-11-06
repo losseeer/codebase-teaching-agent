@@ -29,6 +29,7 @@ import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
 import { DEFAULT_EXERCISE_STRATEGY, exerciseStrategyOf } from "./exercise-strategy.js";
 import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
 import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
+import { generateCodeExerciseSegmented, segmentedExerciseEnabled } from "./code-generate-segmented.js";
 import { guardLlmProposal, type GuardCandidate } from "./guard-proposal.js";
 import { ensureIsolation, runSandbox } from "../adapter/outbound/sandbox/isolation.js";
 import { resolveToolchain, runnerFingerprint } from "../adapter/outbound/sandbox/profile.js";
@@ -327,6 +328,39 @@ export class ExerciseService {
     });
   }
 
+  /**
+    先走分段产出（题面 → 代码 → 测试），它不成（形状不合、自证不过）就退回整份产出。
+    分段的价值在轨迹与失败定位，不在产物本身——所以兜底必须留着。
+  */
+  private async generateSegmentedOrWhole(input: {
+    repositoryPath: string;
+    tag: string;
+    kind: "patch_edit" | "author_function";
+    reference: string;
+    provider: LlmProvider;
+    faces?: ExerciseFaces;
+    progress?: ExerciseProgressSink;
+  }): Promise<CodeGeneration> {
+    const segmented = await generateCodeExerciseSegmented({
+      repositoryPath: input.repositoryPath,
+      tag: input.tag,
+      kind: input.kind,
+      reference: input.reference,
+      provider: input.provider,
+      ...(input.faces ? { faces: input.faces } : {})
+    });
+    if (segmented.ok) return segmented;
+    return await generateCodeExerciseFromReference({
+      repositoryPath: input.repositoryPath,
+      tag: input.tag,
+      kind: input.kind,
+      reference: input.reference,
+      provider: input.provider,
+      ...(input.faces ? { faces: input.faces } : {}),
+      ...(input.progress ? { onProgress: input.progress } : {})
+    });
+  }
+
   /** 参考模式出代码题：源码只作参考，题目由模型自定；沙箱自证与证据账照旧。 */
   private async nextReferenceCode(repository: PracticeRepository, requested: { tag: string; tagId?: string; kind: ExerciseKind; variantNonce?: number }, provider: LlmProvider | undefined, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = requested.tag.trim();
@@ -357,7 +391,10 @@ export class ExerciseService {
       return cached.exercise;
     }
     const reference = candidates.map((candidate) => `## ${candidate.path}\n${candidate.excerpt}`).join("\n\n").slice(0, 24_000);
-    const generation = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces, onProgress: progress });
+    // 分段产出是快速路径：形状不合或自证不过就退回整份产出——最坏只是慢一点，产物质量不受影响。
+    const generation = segmentedExerciseEnabled()
+      ? await this.generateSegmentedOrWhole({ repositoryPath: repository.path, tag, kind, reference, provider, faces, progress })
+      : await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces, onProgress: progress });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : "unknown", provider);
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");

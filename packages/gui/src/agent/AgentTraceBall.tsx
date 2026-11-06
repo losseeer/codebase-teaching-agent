@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from "@codebase-tutor/contract";
+import { EXERCISE_SEGMENT_LABEL, exerciseSegmentOf } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
 import { usePracticeOperation } from "./practiceOperation";
@@ -257,7 +258,12 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
   const detail = step.detail;
   const expandable = Boolean(reply || detail);
   const attempt = step.kind === "model" && step.status === "ok" && reply && (detail === "首轮出题" || detail === "修复重出") ? detail : "";
-  const label = step.kind === "model" && step.status === "ok" && reply ? `${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}` : step.label;
+  // 分段产出的帧带段名前缀（prompt-m1 / code-1 / tests-1）：标出「出题面 / 写代码 / 写测试」，
+  // 出题过程不再是一段黑箱，失败时也看得出卡在哪一段。
+  const segment = exerciseSegmentOf(step.stepId);
+  const label = step.kind === "model" && step.status === "ok" && reply
+    ? `${segment ? `${EXERCISE_SEGMENT_LABEL[segment]} · ` : ""}${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}`
+    : step.label;
   const content = (
     <>
       <StepStatus step={step} />
