@@ -22,6 +22,6 @@ describe("exerciseSegmentOf", () => {
   });
 
   it("三段都有名字", () => {
-    expect(EXERCISE_SEGMENTS.map((segment) => EXERCISE_SEGMENT_LABEL[segment])).toEqual(["出题面", "写代码", "写测试"]);
+    expect(EXERCISE_SEGMENTS.map((segment) => EXERCISE_SEGMENT_LABEL[segment])).toEqual(["拟题面", "写实现", "写测试"]);
   });
 });

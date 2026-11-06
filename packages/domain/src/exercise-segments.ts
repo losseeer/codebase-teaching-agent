@@ -14,8 +14,10 @@ export type ExerciseSegment = (typeof EXERCISE_SEGMENTS)[number];
 
 /** 每一段在轨迹里显示的名字。改这里等于改用户看到的文案。 */
 export const EXERCISE_SEGMENT_LABEL: Record<ExerciseSegment, string> = {
-  prompt: "出题面",
-  code: "写代码",
+  // 三段统一成「动词 + 名词」的三字短语：轨迹里并排出现时才像一套工序。
+  // 「出题面」不取：它读起来像「出/题面」，而且和回合标题「出题 · 主题」重复。
+  prompt: "拟题面",
+  code: "写实现",
   tests: "写测试"
 };
 

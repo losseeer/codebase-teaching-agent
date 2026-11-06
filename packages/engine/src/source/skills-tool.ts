@@ -26,7 +26,7 @@ export const READ_SKILL_DEFINITION: ToolDefinition = {
   scope: "all",
   available: (ctx) => Boolean(ctx.skills),
   unavailable: "没有装载技能。",
-  describe: (args) => ({ label: `加载技能 ${requiredString(args, "name")}`.trim() }),
+  describe: (args) => ({ label: `读取技能 ${requiredString(args, "name")}`.trim() }),
   invoke: (args, ctx) => {
     if (!ctx.skills) return { text: "没有装载技能。", ok: false };
     const name = requiredString(args, "name");
