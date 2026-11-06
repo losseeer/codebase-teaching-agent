@@ -234,7 +234,9 @@ function replyPreview(reply: string): string {
     const parsed = JSON.parse(unfenced) as { title?: unknown } | null;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
-      return title ? `出题：${title.slice(0, 40)}` : "（JSON 输出）";
+      // 没有 title 就是分段里的产物段（given/solution、hidden）：摘要空着，只留段名，
+      // 不要用「（JSON 输出）」这种没有信息的字占位。
+      return title ? `出题：${title.slice(0, 40)}` : "";
     }
   } catch {
     // 截断的 JSON 解析不了：标题通常在正文前段，单独抽出来当预览
@@ -246,7 +248,8 @@ function replyPreview(reply: string): string {
         return `出题：${title.slice(0, 40)}`;
       }
     }
-    if (/^[{[]/.test(unfenced)) return "（JSON 输出，已截断）";
+    // 截断的 JSON 同样不占位：再往下走会把 `{"given":[{"path":"…` 原样糊到轨迹上，更难看。
+    if (/^[{[]/.test(unfenced)) return "";
   }
   const line = text.split("\n").map((item) => item.trim()).find(Boolean) ?? "";
   return line.length > 60 ? `${line.slice(0, 60)}…` : line;
@@ -258,12 +261,12 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
   const detail = step.detail;
   const expandable = Boolean(reply || detail);
   const attempt = step.kind === "model" && step.status === "ok" && reply && (detail === "首轮出题" || detail === "修复重出") ? detail : "";
-  // 分段产出的帧带段名前缀（prompt-m1 / code-1 / tests-1）：标出「出题面 / 写代码 / 写测试」，
+  // 分段产出的帧带段名前缀（prompt-m1 / code-1 / tests-1）：标出「正在拟题面 / 正在写实现 / 正在写测试」，
   // 出题过程不再是一段黑箱，失败时也看得出卡在哪一段。
   const segment = exerciseSegmentOf(step.stepId);
-  const label = step.kind === "model" && step.status === "ok" && reply
-    ? `${segment ? `${EXERCISE_SEGMENT_ACTIVE[segment]} · ` : ""}${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}`
-    : step.label;
+  // 段名 / 首轮或修复 / 回复摘要，逐段拼接，空的直接跳过（避免留下孤零零的「·」）
+  const modelLabel = [segment ? EXERCISE_SEGMENT_ACTIVE[segment] : "", attempt, reply ? replyPreview(reply) : ""].filter(Boolean).join(" · ");
+  const label = step.kind === "model" && step.status === "ok" && reply && modelLabel ? modelLabel : step.label;
   const content = (
     <>
       <StepStatus step={step} />
