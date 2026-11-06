@@ -92,16 +92,20 @@ const promptStageRules = (): string[] => [
 
 const codeStageRules = (): string[] => [
   "这一段只出**给定件与参考解**两份文件，不要写测试，也不要写题面。",
+  "目标文件的现状自己用 `read_file` 读，不要凭空编接口：这一段允许你检索仓库。",
   '严格输出 JSON（不要任何其他文字）：{"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"]}',
   "两份文件的 **path 集合必须完全一致**；contents 是整份文件源码，不是片段。",
-  "同一语言的项目里，除测试件外不要再引入第三方依赖。"
+  "同一语言的项目里，除测试件外不要再引入第三方依赖。",
+  "预算：两份文件合计不超过 6000 字符，只写必要实现，不要加多余的注释与辅助函数。"
 ];
 
 const testsStageRules = (): string[] => [
   "这一段只出**测试件**（以及必要的替身），不要写题面，也不要写给定件与参考解。",
+  "参考实现已经给你了，测试必须**对着它的函数名、签名与导入路径**写，否则编译不过。",
   '严格输出 JSON（不要任何其他文字）：{"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}',
   "hidden 的文件不得与给定件同名；entry 必须是 hidden 里那个测试文件（java 填类名，不带 .java）。",
-  "测试逐条断言、逐条计数，最后印一行结论。"
+  "测试逐条断言、逐条计数，最后印一行结论。",
+  "**预算：测试文件合计不超过 4000 字符**——只写必要的断言与最少量的导入，不要写多余的辅助函数、注释和样板。"
 ];
 
 const str = (value: unknown, limit: number): string => (typeof value === "string" ? value.trim().slice(0, limit) : "");
@@ -237,15 +241,18 @@ export async function generateCodeExerciseSegmented(input: {
   fileReads.push(...planOut.fileReads);
 
   const codeOut = await runSegment<CodeSegment>("code", async () => {
-    const response = await input.provider.complete({
+    // 段 2 也走工具循环：目标文件的现状让它自己 read_file，不靠段 1 转述（转述会把源码带进段 1 的输出）。
+    const response = await requestProposal({
+      provider: input.provider,
       system: [...baseRules(input.kind), ...codeStageRules()].join("\n"),
-      user: JSON.stringify({ stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect, targets: plan.targets }),
+      user: JSON.stringify({ stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect, targets: plan.targets, note: "目标文件的现状自己 read_file 读；接口、函数名、导入路径都要照仓库里的来" }),
       temperature,
-      scene: "practice.generate-code"
+      ...(input.faces ? { faces: input.faces } : {}),
+      ...(input.onProgress ? { onProgress: input.onProgress } : {})
     });
     const parsed = parseJsonObject(response.text);
     if (!parsed) throw new SegmentError("proposal_shape", "代码段返回的不是可解析的 JSON。");
-    return { data: parseCode(parsed), usage: response.usage, skillReads: [], fileReads: [] };
+    return { data: parseCode(parsed), usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   }, segments, maxRetries);
   if (codeOut.failure) {
     return {
@@ -259,7 +266,8 @@ export async function generateCodeExerciseSegmented(input: {
   const testsOut = await runSegment<TestsSegment>("tests", async () => {
     const response = await input.provider.complete({
       system: [...baseRules(input.kind), ...testsStageRules()].join("\n"),
-      user: JSON.stringify({ stage: "tests", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect, targets: plan.targets, note: "entry 必须是 hidden 里的测试文件名" }),
+      // 段 3 必须拿到段 2 的实现全文：测试要照它的函数名与签名写，否则编译不过（上一轮就是这里断的）。
+      user: JSON.stringify({ stage: "tests", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect, targets: plan.targets, solution: code.solution, note: "solution 是参考实现的全文，测试要对着它写" }),
       temperature,
       scene: "practice.generate-code"
     });
@@ -306,11 +314,12 @@ export async function generateCodeExerciseSegmented(input: {
     const started = Date.now();
     try {
       const retry = stage === "code"
-        ? await input.provider.complete({
+        ? await requestProposal({
+            provider: input.provider,
             system: [...baseRules(input.kind), ...codeStageRules()].join("\n"),
             user: JSON.stringify({ stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect, targets: plan.targets, note: "上一版的参考解没让测试全过，重出这一段" }),
             temperature,
-            scene: "practice.generate-code"
+            ...(input.faces ? { faces: input.faces } : {})
           })
         : await input.provider.complete({
             system: [...baseRules(input.kind), ...testsStageRules()].join("\n"),

@@ -4,7 +4,7 @@
   两臂背靠背连跑：端点负载对两臂公平，否则「超时率」这个主判据没有可比性。
   判分口径完全一致——两臂的最终产物都走产品既有的 finishProposal（同一套形状校验 + 沙箱两跑）。
 */
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -49,6 +49,8 @@ interface Row {
   input_tokens: number | "缺失"; output_tokens: number | "缺失";
   model_calls: number; segments?: SegmentEvent[];
   max_segment_output_tokens?: number;
+  /** 这一趟里单次模型调用最大的输出 token；与端点快慢无关，用来量「单次输出有多大」。 */
+  max_call_output_tokens: number;
   quality: { prompt_sections_complete: boolean; assertion_count: number; defect_targeted: boolean; passed: boolean };
 }
 
@@ -72,7 +74,8 @@ loadDotEnv();
 const registryDir = mkdtempSync(join(tmpdir(), "tutor-segmented-"));
 writeFileSync(join(registryDir, "repositories.json"), JSON.stringify({ repositories: manifest.repos.map((repo) => resolve(root, repo.path)) }), "utf8");
 process.env.TUTOR_REGISTRY_FILE = join(registryDir, "repositories.json");
-process.env.TUTOR_LLM_LOG ??= join(datasetDir, "llm.log");
+const llmLog = process.env.TUTOR_LLM_LOG ?? join(datasetDir, "llm.log");
+process.env.TUTOR_LLM_LOG = llmLog;
 
 const { lightLlm } = await import("../../src/infrastructure/composition-root.js");
 const { ensureIsolation } = await import("../../src/adapter/outbound/sandbox/isolation.js");
@@ -91,6 +94,33 @@ const mounted = new Map<string, ImportedRepository>();
 const rows: Row[] = [];
 let stopped = false;
 let failure: string | undefined;
+
+/** llm.log 里只记成功的调用；超时的那次没记录，所以「单次最大输出」只统计成功返回的那些。 */
+function llmLogSize(): number {
+  try { return existsSync(llmLog) ? statSync(llmLog).size : 0; } catch { return 0; }
+}
+
+function maxOutputSince(offset: number): number {
+  if (!existsSync(llmLog)) return 0;
+  const size = statSync(llmLog).size;
+  if (size <= offset) return 0;
+  const handle = openSync(llmLog, "r");
+  try {
+    const buffer = Buffer.alloc(size - offset);
+    readSync(handle, buffer, 0, buffer.length, offset);
+    let max = 0;
+    for (const line of buffer.toString("utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line) as { outputTokens?: number };
+        max = Math.max(max, row.outputTokens ?? 0);
+      } catch { /* 半行或坏行不影响别的 */ }
+    }
+    return max;
+  } finally {
+    closeSync(handle);
+  }
+}
 
 async function referenceFor(repository: ImportedRepository, tag: string): Promise<string> {
   return withExercisePorts(repository.handle, (ports) => {
@@ -115,6 +145,7 @@ function facesFor(repository: ImportedRepository): ExerciseFaces {
 async function runArm(arm: Arm, repository: ImportedRepository, topic: PilotTopic): Promise<Row> {
   const reference = await referenceFor(repository, topic.tag_id);
   const faces = facesFor(repository);
+  const logOffset = llmLogSize();
   const started = new Date();
   let generation: CodeGeneration;
   let segments: SegmentEvent[] | undefined;
@@ -138,6 +169,7 @@ async function runArm(arm: Arm, repository: ImportedRepository, topic: PilotTopi
     input_tokens: usage?.inputTokens ?? "缺失",
     output_tokens: usage?.outputTokens ?? "缺失",
     model_calls: segments ? segments.length : 1,
+    max_call_output_tokens: maxOutputSince(logOffset),
     ...(segments ? { segments, max_segment_output_tokens: Math.max(...segments.map((item) => item.outputTokens ?? 0)) } : {}),
     quality: qualityOf(generation)
   };
@@ -148,6 +180,10 @@ interface ArmSummary {
   provider_error: number; harness_validation: number; proposal_shape: number; sandbox_unavailable: number;
   duration_p50_ms: number; duration_max_ms: number; output_tokens: number;
   max_segment_output_tokens: number; quality_passed: number;
+  /** 单次模型调用最大的输出 token（两臂可比，不受端点快慢影响）。 */
+  max_call_output_tokens: number;
+  /** 归一化耗时：总秒 ÷ 千 token。抵消端点吞吐波动，看分段有没有额外开销。 */
+  duration_per_1k_tokens_s: number;
 }
 
 function summarize(list: Row[]): ArmSummary {
@@ -166,12 +202,18 @@ function summarize(list: Row[]): ArmSummary {
     duration_max_ms: durations.length ? durations[durations.length - 1] : 0,
     output_tokens: list.reduce((acc, row) => acc + (row.output_tokens === "缺失" ? 0 : row.output_tokens), 0),
     max_segment_output_tokens: Math.max(0, ...list.map((row) => row.max_segment_output_tokens ?? 0)),
-    quality_passed: ok.filter((row) => row.quality.passed).length
+    quality_passed: ok.filter((row) => row.quality.passed).length,
+    max_call_output_tokens: Math.max(0, ...list.map((row) => row.max_call_output_tokens ?? 0)),
+    duration_per_1k_tokens_s: (() => {
+      const tokens = list.reduce((acc, row) => acc + (row.output_tokens === "缺失" ? 0 : row.output_tokens), 0);
+      const seconds = list.reduce((acc, row) => acc + row.duration_ms, 0) / 1000;
+      return tokens > 0 ? Number((seconds / (tokens / 1000)).toFixed(1)) : 0;
+    })()
   };
 }
 
-if (full && existsSync(outFile) && readFileSync(outFile, "utf8").trim()) {
-  console.error(`[segmented] 全量结果文件已有内容：${outFile}；先归档再跑，避免覆盖上一轮。`);
+if (existsSync(outFile) && readFileSync(outFile, "utf8").trim()) {
+  console.error(`[segmented] 结果文件已有内容：${outFile}；先归档再跑，避免把两轮混在一起。`);
   rmSync(registryDir, { recursive: true, force: true });
   process.exit(2);
 }
@@ -206,27 +248,45 @@ const rescued = timeoutTopics.filter((topic) => segmentedRows.some((row) => row.
 const primary = { single_provider_error: summary.single.provider_error, segmented_provider_error: summary.segmented.provider_error };
 const secondary = { single_success_rate: summary.single.success_rate, segmented_success_rate: summary.segmented.success_rate };
 const safety = { single_harness_validation: summary.single.harness_validation, segmented_harness_validation: summary.segmented.harness_validation };
+/** 主判据：单次调用最大的输出 token——与端点快慢无关，纯粹量「分段有没有把单次输出压下来」。 */
+const mechanism = {
+  single_max_call_output_tokens: summary.single.max_call_output_tokens,
+  segmented_max_call_output_tokens: summary.segmented.max_call_output_tokens
+};
+const mechanismPass = mechanism.segmented_max_call_output_tokens > 0
+  && mechanism.segmented_max_call_output_tokens <= mechanism.single_max_call_output_tokens * 0.5;
+const reference = {
+  single_duration_p50_ms: summary.single.duration_p50_ms,
+  segmented_duration_p50_ms: summary.segmented.duration_p50_ms,
+  single_duration_per_1k_tokens_s: summary.single.duration_per_1k_tokens_s,
+  segmented_duration_per_1k_tokens_s: summary.segmented.duration_per_1k_tokens_s
+};
 const verdict = full
   ? {
-      primary,
-      primary_pass: primary.segmented_provider_error < primary.single_provider_error,
-      secondary,
-      secondary_pass: secondary.segmented_success_rate >= secondary.single_success_rate,
+      primary: mechanism,
+      primary_pass: mechanismPass,
+      secondary: primary,
+      secondary_pass: primary.segmented_provider_error < primary.single_provider_error,
       safety,
       safety_pass: safety.segmented_harness_validation <= safety.single_harness_validation,
-      reference: { single_duration_p50_ms: summary.single.duration_p50_ms, segmented_duration_p50_ms: summary.segmented.duration_p50_ms },
-      all_pass: primary.segmented_provider_error < primary.single_provider_error
+      reference,
+      all_pass: mechanismPass
+        && primary.segmented_provider_error < primary.single_provider_error
         && secondary.segmented_success_rate >= secondary.single_success_rate
         && safety.segmented_harness_validation <= safety.single_harness_validation
     }
   : {
       baseline_timeout_topics: timeoutTopics.length,
       rescued_by_segmented: rescued.length,
+      /** 机制闸门：分段后单次最大输出至少减半（端点快慢不影响这个数）。 */
+      mechanism,
+      mechanism_pass: mechanismPass,
+      /** 救援闸门：基线超时的那几题，分段臂至少救回 2 道。 */
       pilot_gate_pass: rescued.length >= 2,
-      primary,
-      secondary,
+      provider_error: primary,
+      success_rate: secondary,
       safety,
-      reference: { single_duration_p50_ms: summary.single.duration_p50_ms, segmented_duration_p50_ms: summary.segmented.duration_p50_ms }
+      reference
     };
 const report = { experimentId: manifest.experimentId, runId, at: new Date().toISOString(), status: failure ? "failed" : "completed", rows: rows.length, ...(failure ? { failure } : {}), summary, verdict };
 writeFileSync(summaryFile, `${JSON.stringify(report, null, 2)}\n`, "utf8");

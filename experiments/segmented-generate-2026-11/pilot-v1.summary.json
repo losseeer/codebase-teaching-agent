@@ -1,0 +1,58 @@
+{
+  "experimentId": "segmented-generate-2026-11",
+  "runId": "20261105170521831",
+  "at": "2026-11-05T19:16:59.117Z",
+  "status": "completed",
+  "rows": 12,
+  "summary": {
+    "single": {
+      "attempts": 6,
+      "success": 3,
+      "success_rate": 0.5,
+      "provider_error": 2,
+      "harness_validation": 1,
+      "proposal_shape": 0,
+      "sandbox_unavailable": 0,
+      "duration_p50_ms": 529431,
+      "duration_max_ms": 572087,
+      "output_tokens": 131442,
+      "max_segment_output_tokens": 0,
+      "quality_passed": 3
+    },
+    "segmented": {
+      "attempts": 6,
+      "success": 0,
+      "success_rate": 0,
+      "provider_error": 4,
+      "harness_validation": 2,
+      "proposal_shape": 0,
+      "sandbox_unavailable": 0,
+      "duration_p50_ms": 800392,
+      "duration_max_ms": 1205418,
+      "output_tokens": 128520,
+      "max_segment_output_tokens": 23535,
+      "quality_passed": 0
+    }
+  },
+  "verdict": {
+    "baseline_timeout_topics": 0,
+    "rescued_by_segmented": 0,
+    "pilot_gate_pass": false,
+    "primary": {
+      "single_provider_error": 2,
+      "segmented_provider_error": 4
+    },
+    "secondary": {
+      "single_success_rate": 0.5,
+      "segmented_success_rate": 0
+    },
+    "safety": {
+      "single_harness_validation": 1,
+      "segmented_harness_validation": 2
+    },
+    "reference": {
+      "single_duration_p50_ms": 529431,
+      "segmented_duration_p50_ms": 800392
+    }
+  }
+}

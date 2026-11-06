@@ -84,18 +84,24 @@
       "tests"
     ],
     "repairPolicy": "单段臂：自证失败整份重写 1 次（产品现状）；分段臂：只重出该改的那一段 1 次",
-    "judgeIdentical": "两臂的合并产物都交给产品既有的 finishProposal：同一套形状校验与沙箱两跑"
+    "judgeIdentical": "两臂的合并产物都交给产品既有的 finishProposal：同一套形状校验与沙箱两跑",
+    "segmentsV2": [
+      "prompt（工具循环，检索仓库并定题面与目标文件）",
+      "code（工具循环，自己 read_file 目标文件，出 given+solution）",
+      "tests（裸调用，输入带 solution 全文，出 hidden）"
+    ]
   },
   "criteria": {
-    "primary": "provider_error 失败数：分段臂显著少于单段臂（基线 4/6）",
-    "secondary": "总成功率：分段臂 ≥ 单段臂",
-    "safety": "harness_validation 失败数不得上升（分段不得引入新的失败模式）",
+    "primary": "单次模型调用的最大输出 token：分段臂 ≤ 对照臂的一半。这个数与端点快慢无关，纯粹量「分段有没有把单次输出压下来」——上一轮之所以测不出，是因为主判据用的是超时失败数，而端点吞吐在两臂之间波动，噪声盖过了差异。",
+    "secondary": "provider_error（单次输出撞 240s 上限）失败数：分段臂更少。两臂 timeoutMs 保持同一值。",
+    "safety": "harness_validation 失败数不得上升——段间契约补上后不该再有新的失败模式。",
     "reference": [
       "总耗时",
-      "总 token",
-      "单次最大输出 tokens",
+      "总输出 token",
+      "归一化耗时（总秒 ÷ 千 token，抵消端点吞吐波动）",
       "每趟模型调用数"
     ],
-    "pilotGate": "那 4 道基线超时的题，分段臂至少 2 道成功 → 才值得跑全量 30"
+    "pilotGate": "机制闸门：单次最大输出至少减半；救援闸门：那 4 道基线超时的题分段臂至少救回 2 道。两闸门都过才值得跑全量 30。",
+    "v1Lesson": "v1 轮（pilot-v1.*）里分段臂 6 题全败，原因是实现有两处缺陷：段 2 不知道目标文件现状、段 3 不知道段 2 写了什么（段间契约断裂），段 3 的 17k tokens 仍在 240s 临界点。v2 已补契约并给段 3 设输出预算。"
   }
 }
