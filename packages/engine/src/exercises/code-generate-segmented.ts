@@ -67,6 +67,16 @@ interface TestsSegment {
   entry: string;
 }
 
+/**
+  工具轮预算。硬上限 25：基线 30 道设计题里所有成功趟都 ≤21 轮，而今天失控那趟跑到 54 轮——
+  循环那边默认是 100，出题从不传，等于没有上限。软预算 15：成功趟的 p90，用来给模型打进度条。
+  两个数都是从已有日志推的，不是拍脑袋。
+*/
+const PLAN_HARD_ROUNDS = 25;
+const PLAN_SOFT_ROUNDS = 15;
+/** 连续几轮没有新文件才算「无进展」：成功的趟从没到过 2，失控那趟到过 7。 */
+const PLAN_NO_PROGRESS_ROUNDS = 2;
+
 const MAX_TITLE = 40;
 /** 产品侧 PROMPT_TARGET=800 是目标字数、MAX_PROMPT=1600 才是截断线。这里对齐上限——
     当成 800 截会把三节里的「注意事项」整段切掉，题面就不成篇了。 */
@@ -273,13 +283,38 @@ export async function generateCodeExerciseSegmented(input: {
   const skillReads: ProposalResponse["skillReads"] = [];
   const fileReads: ProposalResponse["fileReads"] = [];
 
+  /** 每一段的工具循环都带上硬上限与进度条；无进展按段各记各的。 */
+  const noProgress: Record<"prompt" | "code" | "tests", number> = { prompt: 0, code: 0, tests: 0 };
+  const briefFor = (segment: ExerciseSegment) => (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }): string => {
+    if (state.newFiles === 0) noProgress[segment] += 1;
+    else noProgress[segment] = 0;
+    const left = PLAN_SOFT_ROUNDS - state.round;
+    const parts = [`已用 ${state.round} 轮（软预算 ${PLAN_SOFT_ROUNDS}，硬上限 ${state.maxRounds}），已读 ${state.filesRead} 个不同文件`];
+    if (state.newFiles === 0) parts.push("本轮没有新增文件");
+    if (noProgress[segment] >= PLAN_NO_PROGRESS_ROUNDS) {
+      parts.push(`连续 ${noProgress[segment]} 轮没拿到新信息——再搜也是同一批文件，换方向或者现在就收口`);
+    }
+    if (left <= 0) parts.push("已过软预算，下一步必须直接产出，不要再调工具");
+    else if (left <= 5) parts.push(`还剩 ${left} 轮，够用但要开始收口`);
+    if (left <= 5 || noProgress[segment] >= PLAN_NO_PROGRESS_ROUNDS) {
+      parts.push(segment === "prompt" ? "该定下来的：题面三节、目标文件路径" : "该定下来的：给定件与参考解");
+    }
+    return `（进度：${parts.join("；")}。）`;
+  };
+
   /** 段前缀：模型帧的 stepId 带上段名，轨迹里就能分清这是哪一段。段内重出要带序号，否则 stepId 会撞。 */
   const facesFor = (segment: ExerciseSegment, attempt = 1): ExerciseFaces => {
     const inner = faces.onTrace;
-    if (!inner) return faces;
+    const scoped: ExerciseFaces = {
+      ...faces,
+      maxRounds: PLAN_HARD_ROUNDS,
+      budgetBrief: briefFor(segment),
+      ...(inner ? {} : {})
+    };
+    if (!inner) return scoped;
     const prefix = attempt > 1 ? `${segment}-${attempt}` : segment;
     return {
-      ...faces,
+      ...scoped,
       // 只有模型帧改成段名；工具帧必须保留工具自己的名字——否则「读技能 / 检索代码」全被盖成
       // 「出题面」，轨迹里就看不到模型到底调了什么工具（曾经因此误以为前期没加载技能）。
       onTrace: (step) => inner({

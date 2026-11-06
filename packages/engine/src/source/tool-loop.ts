@@ -54,6 +54,12 @@ export interface ReadToolLoopInput {
   onProgress?: (progress: ReadToolProgress) => void;
   /** 模型与工具调用的轨迹帧。 */
   onTrace?: (step: ToolTraceStep) => void;
+  /**
+    每一轮工具跑完后，把「进度条」拼在最后一条工具结果末尾交给模型：已用/剩余轮次、
+    已读多少个不同文件、本轮有没有新增。预算紧时提示收口，连续几轮没有新信息时提示换方向。
+    做成回调而不是写死，是因为不同场景的预算口径不一样（出题 15 轮，对话另算）。
+  */
+  budgetBrief?: (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }) => string | undefined;
   /** 场景标签，透传给每一轮 LLM 调用。 */
   scene?: string;
   /** 提供时开放 search_code 工具。 */
@@ -342,6 +348,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     rounds += 1;
     attemptRounds += 1;
+    const filesBefore = new Set(fileReads.map((read) => read.path));
     messages.push({ role: "assistant", content: completion.text, toolCalls: completion.toolCalls, reasoningContent: completion.reasoningContent });
     for (const call of completion.toolCalls) {
       const { outcome } = await invoker.invoke(call, context, { round: rounds, ...(input.onTrace ? { onTrace: input.onTrace } : {}) }, guard);
@@ -361,6 +368,17 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     // 提问后本循环结束
     if (asked) break;
+    // 进度条拼在最后一条工具结果末尾（不改消息结构，只加文字，端点兼容性最好）
+    const brief = input.budgetBrief?.({
+      round: rounds,
+      maxRounds,
+      filesRead: new Set(fileReads.map((read) => read.path)).size,
+      newFiles: new Set(fileReads.filter((read) => !filesBefore.has(read.path)).map((read) => read.path)).size
+    });
+    if (brief) {
+      const last = messages[messages.length - 1];
+      if (last?.role === "tool") messages[messages.length - 1] = { ...last, content: `${last.content}\n\n${brief}` };
+    }
     input.checkpoint?.save(inputHash, snapshot());
     input.onProgress?.({ type: "thinking" });
     compactTurnContext(messages);

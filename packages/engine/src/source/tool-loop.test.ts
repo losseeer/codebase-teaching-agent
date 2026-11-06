@@ -73,6 +73,23 @@ describe("completeWithReadTool", () => {
     expect(plain.calls[0]?.toolChoice).toBeUndefined();
   });
 
+  it("budgetBrief 每轮把进度拼在最后一条工具结果末尾，不新增消息", async () => {
+    const { provider, calls } = scriptedProvider([
+      readCall("c1", "read-file.ts"),
+      { text: "答完了。", usage: { inputTokens: 30, outputTokens: 5 }, finishReason: "stop" }
+    ]);
+    const seen: { round: number; filesRead: number; newFiles: number }[] = [];
+    await runLoop({
+      provider, repoPath, system: "s", user: "u", maxTokens: 700, temperature: 0, maxRounds: 5, maxCalls: 5,
+      budgetBrief: (state) => { seen.push(state); return "（进度：测试）"; }
+    });
+    expect(seen, "一轮工具跑完才报一次进度").toHaveLength(1);
+    expect(seen[0]).toMatchObject({ round: 1, filesRead: 1, newFiles: 1 });
+    const tool = (calls[1]?.messages ?? []).filter((message) => message.role === "tool");
+    expect(tool, "进度拼在既有的 tool 消息里，不额外加一条——多一条消息会和 tool_call 配对逻辑打架").toHaveLength(1);
+    expect(tool[0]?.content).toContain("（进度：测试）");
+  });
+
   it("轮数预算用尽时明确回绝未应答的 tool_call，再做一轮不带工具的收尾", async () => {
     const { provider, calls } = scriptedProvider([
       readCall("c1", "read-file.ts"),
