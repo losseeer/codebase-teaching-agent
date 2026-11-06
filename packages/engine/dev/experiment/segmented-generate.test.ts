@@ -37,3 +37,16 @@ describe("repairSegmentOf", () => {
     expect(repairSegmentOf([run("solution", 0), run("given", 1)])).toBe("tests");
   });
 });
+
+describe("三段的 system 必须带着该语言的测试形状", () => {
+  it("段 1/2/3 都含 TEST_CONTRACT 的原文：缺了它模型会写裸 assert，判分拿不到结论行", async () => {
+    const { TEST_CONTRACT } = await import("../../src/exercises/code-generate.js");
+    const { codeSystem, promptSystem, testsSystem } = await import("./segmented-generate.js");
+    expect(promptSystem("patch_edit"), "段 1 语言由它声明，四种都要带").toContain(TEST_CONTRACT.python);
+    expect(codeSystem("patch_edit", "python")).toContain(TEST_CONTRACT.python);
+    expect(testsSystem("patch_edit", "python")).toContain(TEST_CONTRACT.python);
+    expect(testsSystem("patch_edit", "go")).toContain(TEST_CONTRACT.go);
+    // 形状规范里那句「结论行」是判分唯一认的东西，不能被改写掉
+    expect(testsSystem("patch_edit", "python")).toContain("TESTS {pass} {fail}");
+  });
+});

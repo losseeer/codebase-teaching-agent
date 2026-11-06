@@ -69,7 +69,7 @@ const MAX_FILE_BYTES = 24_000;
 const MAX_FILES_PER_SLOT = 3;
 
 /** 各语言各自的测试报结论格式，由引擎定死。 */
-const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
+export const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
   typescript: "测试文件（例如 `tests.ts`，入口就是它）自己依次调用各条断言，每条**通过就 pass+1、抛异常就 fail+1 并把原因打到 stderr**；结尾必须打印一行 `TESTS <pass> <fail>`，且 fail>0 时设 `process.exitCode = 1`。跨文件 import **必须写真实扩展名 `.ts`**（沙箱里的 node 不做 `.js`→`.ts` 的重写）。",
   python: '测试文件（例如 `tests.py`，入口就是它）自己依次跑各条断言，每条**用 try/except 包住：过了 pass+1，抛了 fail+1**；结尾 `print(f"TESTS {pass} {fail}")`，fail>0 时 `sys.exit(1)`。只用标准库。',
   java: '入口是一个带 `public static void main` 的类（例如 `Tests`，文件名必须与类名同名且不带包目录）。每条断言用 try/catch 包住计数，结尾 `System.out.println("TESTS " + pass + " " + fail);` 并在 fail>0 时 `System.exit(1)`。只用 JDK。',

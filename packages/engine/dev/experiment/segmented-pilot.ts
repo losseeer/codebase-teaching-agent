@@ -4,7 +4,7 @@
   两臂背靠背连跑：端点负载对两臂公平，否则「超时率」这个主判据没有可比性。
   判分口径完全一致——两臂的最终产物都走产品既有的 finishProposal（同一套形状校验 + 沙箱两跑）。
 */
-import { appendFileSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -57,6 +57,7 @@ interface Row {
 const runId = process.env.SEGMENTED_RUN_ID ?? new Date().toISOString().replaceAll(/[-:.TZ]/g, "");
 const outFile = join(datasetDir, full ? manifest.outputs.exercises : manifest.outputs.pilot);
 const summaryFile = join(datasetDir, full ? manifest.outputs.summary : manifest.outputs.pilotSummary);
+const artifactDir = join(datasetDir, "artifacts");
 
 console.log(`# ${manifest.experimentId}（先导）\n`);
 console.log(`- 数据集：${manifest.datasetId}；${full ? "全量" : "先导"} ${topics.length} 题 × ${manifest.arms.length} 臂`);
@@ -157,6 +158,13 @@ async function runArm(arm: Arm, repository: ImportedRepository, topic: PilotTopi
     segments = out.segments;
   }
   const ended = new Date();
+  // 产物与自证输出落盘：失败时能直接看到编译错误，不必猜（v1/v2 两次都缺这一手，只能靠推理）。
+  try {
+    const stem = `${arm}-${topic.repo}-${topic.tag_id}`;
+    mkdirSync(artifactDir, { recursive: true });
+    if (generation.ok) writeFileSync(join(artifactDir, `${stem}.proposal.json`), `${JSON.stringify(generation.proposal, null, 2)}\n`, "utf8");
+    else writeFileSync(join(artifactDir, `${stem}.failure.json`), `${JSON.stringify({ stage: generation.stage, reason: generation.reason, runs: generation.runs }, null, 2)}\n`, "utf8");
+  } catch { /* 落盘失败不打断实验 */ }
   const usage = generation.usage;
   return {
     experimentId: manifest.experimentId, datasetId: manifest.datasetId, runId, at: ended.toISOString(),
