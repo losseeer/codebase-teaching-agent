@@ -71,8 +71,8 @@ function generationStepText(step: { stage: string; detail?: string }): string {
   if (step.stage === "reading" && step.detail) return `读取 ${step.detail.split("/").pop() ?? "文件"}`;
   if (step.stage === "searching" && step.detail) return `检索「${step.detail}」`;
   if (step.stage === "loading_skill" && step.detail) return `读取技能 ${step.detail}`;
-  // 分段出题的段播报：出题面 / 写代码 / 写测试
-  if (step.stage === "proposing" && step.detail) return `正在${step.detail}`;
+  // 分段出题的段播报自带进行时（「正在拟题面」），不要再加一个「正在」。
+  if (step.stage === "proposing" && step.detail) return step.detail;
   return generationStageLabel(step.stage);
 }
 

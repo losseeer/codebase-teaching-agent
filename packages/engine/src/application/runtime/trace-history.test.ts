@@ -112,7 +112,7 @@ describe("journal 回合历史", () => {
     expect(run.summary).toContain("输入 50 / 输出 20");
   });
 
-  it("分段产出：按 step_id 的段前缀还原成「出题面 / 写代码 / 写测试」三段", () => {
+  it("分段产出：按 step_id 的段前缀还原成「正在拟题面 / 正在写实现 / 正在写测试」三段", () => {
     const events = [
       ev("exercise_model_reply", "s1", "2026-11-02T03:20:01.000Z", { scene: "practice.generate", step_id: "prompt-m1", reply: "题面草案" }),
       ev("exercise_model_reply", "s1", "2026-11-02T03:20:30.000Z", { scene: "practice.generate", step_id: "code-m1", reply: "given 与 solution" }),
@@ -121,7 +121,7 @@ describe("journal 回合历史", () => {
     ];
     const run = buildTraceHistory(events, "repo", 10).runs[0]!;
     const models = run.steps.filter((step) => step.kind === "model");
-    expect(models.map((step) => step.label)).toEqual(["出题面", "写代码", "写测试"]);
+    expect(models.map((step) => step.label)).toEqual(["正在拟题面", "正在写实现", "正在写测试"]);
     expect(models.map((step) => step.stepId)).toEqual(["prompt-m1", "code-m1", "tests-1"]);
   });
 

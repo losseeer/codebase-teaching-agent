@@ -1,7 +1,7 @@
 /** 出题分段帧的识别规则。 */
 import { describe, expect, it } from "vitest";
 
-import { EXERCISE_SEGMENT_LABEL, EXERCISE_SEGMENTS, exerciseSegmentOf } from "./exercise-segments.js";
+import { EXERCISE_SEGMENT_ACTIVE, EXERCISE_SEGMENT_LABEL, EXERCISE_SEGMENTS, exerciseSegmentOf } from "./exercise-segments.js";
 
 describe("exerciseSegmentOf", () => {
   it("从 stepId 的段前缀认出是哪一段", () => {
@@ -21,7 +21,8 @@ describe("exerciseSegmentOf", () => {
     expect(exerciseSegmentOf(undefined)).toBeUndefined();
   });
 
-  it("三段都有名字", () => {
+  it("三段各有一套名字：名词性给文案，进行时给进度与轨迹", () => {
     expect(EXERCISE_SEGMENTS.map((segment) => EXERCISE_SEGMENT_LABEL[segment])).toEqual(["拟题面", "写实现", "写测试"]);
+    expect(EXERCISE_SEGMENTS.map((segment) => EXERCISE_SEGMENT_ACTIVE[segment])).toEqual(["正在拟题面", "正在写实现", "正在写测试"]);
   });
 });

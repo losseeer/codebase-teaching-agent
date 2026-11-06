@@ -1,5 +1,5 @@
 import type { AgentScope, AgentTracePayload, TraceHistory, TraceHistoryRun } from "@codebase-tutor/contract";
-import { EXERCISE_SEGMENT_LABEL, exerciseSegmentOf, type ExerciseSegment } from "@codebase-tutor/domain";
+import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf, type ExerciseSegment } from "@codebase-tutor/domain";
 import { TURN_TEXT_LIMIT, type JournalEvent } from "@codebase-tutor/domain";
 
 /** journal 回合历史：按 traceId 汇总出审计线能还原的步骤；不发模型、不改任何文件。 */
@@ -211,7 +211,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
       status: "ok",
       stepId: item.stepId ?? (replayed.length ? `journal-model-${index + 1}` : "journal-model"),
       // 分段产出的帧用段名做标签（出题面 / 写代码 / 写测试），跟实时轨迹一致。
-      label: item.stage ? EXERCISE_SEGMENT_LABEL[item.stage] : item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
+      label: item.stage ? EXERCISE_SEGMENT_ACTIVE[item.stage] : item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
       ...(item.reply ? { reply: item.reply } : {}),
       ...(item.detail ? { detail: item.detail } : {}),
       ...(item.finishReason ? { finishReason: item.finishReason } : {}),

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from "@codebase-tutor/contract";
-import { EXERCISE_SEGMENT_LABEL, exerciseSegmentOf } from "@codebase-tutor/domain";
+import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
 import { usePracticeOperation } from "./practiceOperation";
@@ -262,7 +262,7 @@ function TraceRow({ step }: { step: TraceStep }): ReactElement {
   // 出题过程不再是一段黑箱，失败时也看得出卡在哪一段。
   const segment = exerciseSegmentOf(step.stepId);
   const label = step.kind === "model" && step.status === "ok" && reply
-    ? `${segment ? `${EXERCISE_SEGMENT_LABEL[segment]} · ` : ""}${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}`
+    ? `${segment ? `${EXERCISE_SEGMENT_ACTIVE[segment]} · ` : ""}${attempt ? `${attempt} · ` : ""}${replyPreview(reply)}`
     : step.label;
   const content = (
     <>

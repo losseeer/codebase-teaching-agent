@@ -13,7 +13,7 @@
   ③ 三段的 system 都要带各语言的测试形状规范（`TEST_CONTRACT`），缺了模型会写成裸 `assert`，
      断言一抛脚本就中断，stdout 里没有结论行，判分拿不到结果。
 */
-import { EXERCISE_SEGMENT_LABEL, type ExerciseLanguage, type ExerciseSegment } from "@codebase-tutor/domain";
+import { EXERCISE_SEGMENT_ACTIVE, EXERCISE_SEGMENT_LABEL, type ExerciseLanguage, type ExerciseSegment } from "@codebase-tutor/domain";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import {
@@ -233,14 +233,14 @@ export async function generateCodeExerciseSegmented(input: {
       onTrace: (step) => inner({
         ...step,
         stepId: `${prefix}-${step.stepId}`,
-        ...(step.kind === "model" ? { label: EXERCISE_SEGMENT_LABEL[segment] } : {})
+        ...(step.kind === "model" ? { label: EXERCISE_SEGMENT_ACTIVE[segment] } : {})
       })
     };
   };
 
   /** 每段开始时播报一次：界面据此把「出题面 / 写代码 / 写测试」显示成当前步骤。 */
   const announce = (segment: ExerciseSegment): void => {
-    input.onProgress?.({ stage: "proposing", detail: EXERCISE_SEGMENT_LABEL[segment] });
+    input.onProgress?.({ stage: "proposing", detail: EXERCISE_SEGMENT_ACTIVE[segment] });
   };
 
   const planOut = await runSegment<PlanSegment>(async (attempt) => {
@@ -310,7 +310,7 @@ export async function generateCodeExerciseSegmented(input: {
     if (!parsed) throw new SegmentError("shape", "测试段返回的不是可解析的 JSON。");
     // 这一段没有工具循环，模型帧要自己发出去，否则轨迹里看不到「写测试」这一步。
     faces.onTrace?.({
-      kind: "model", status: "ok", stepId: "tests-1", label: EXERCISE_SEGMENT_LABEL.tests,
+      kind: "model", status: "ok", stepId: "tests-1", label: EXERCISE_SEGMENT_ACTIVE.tests,
       round: 1, model: input.provider.modelVersion, ms: Date.now() - startedAt,
       ...(response.usage ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens } : {}),
       finishReason: "stop",

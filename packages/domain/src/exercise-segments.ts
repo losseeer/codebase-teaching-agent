@@ -21,6 +21,16 @@ export const EXERCISE_SEGMENT_LABEL: Record<ExerciseSegment, string> = {
   tests: "写测试"
 };
 
+/**
+  同一段的进行时：进度条与轨迹帧上显示「正在拟题面」，让人看得出这一步还没走完。
+  名词性那套留给「重出『写测试』段仍没过」这类文案——那里塞「正在」会读成病句。
+*/
+export const EXERCISE_SEGMENT_ACTIVE: Record<ExerciseSegment, string> = {
+  prompt: "正在拟题面",
+  code: "正在写实现",
+  tests: "正在写测试"
+};
+
 /** 从模型帧的 stepId 反推它属于哪一段；不是分段帧就返回 undefined。 */
 export function exerciseSegmentOf(stepId: string | undefined): ExerciseSegment | undefined {
   if (!stepId) return undefined;
