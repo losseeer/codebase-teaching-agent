@@ -92,7 +92,8 @@ const promptStageRules = (): string[] => [
   "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示（在代码段的 JSON 里给）。",
   "- 各语言的测试形状（你选哪个语言就按哪个写，后面的代码段与测试段会各自遵守）：",
   ...(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => `  ${language}：${TEST_CONTRACT[language]}`),
-  '严格输出 JSON（不要任何其他文字）：{"ok":true,"language":"typescript|python|java|go","title":"≤40字","prompt":"≤800字题面","defect":"<缺陷的一句话说明，仅留档>","targets":["<要改或要写的文件路径>"]}',
+  '严格输出 JSON（不要任何其他文字）：{"ok":true,"language":"typescript|python|java|go","title":"≤40字","prompt":"≤800字题面","defect":"<缺陷的一句话说明，仅留档>","targets":["<要改或要写的文件>"]}',
+  "- `targets` 必须是**仓库内的真实相对路径**（带目录，例如 `sl-admin/src/main/java/com/x/BoundedWorkerPool.java`），而且必须是你这一趟用 `read_file` **成功读到过**的文件；只写裸文件名（`BoundedWorkerPool.java`）会让下一段读不到文件。",
   '或拒绝：{"ok":false,"reason":"<面向学习者的一句话：这个主题为什么出不了代码题>"}'
 ];
 
@@ -303,7 +304,10 @@ export async function generateCodeExerciseSegmented(input: {
       system: withSkillsBrief(codeSystem(input.kind, plan.language), faces.skills),
       user: JSON.stringify({
         stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
-        targets: plan.targets, note: "目标文件的现状自己 read_file 读；接口、函数名、导入路径都要照仓库里的来"
+        targets: plan.targets,
+        // 段 1 真正读成功过的路径：targets 写歪了（比如只剩裸文件名）时，这一段照这份清单读。
+        readPaths: planOut.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path).slice(0, 8),
+        note: "目标文件的现状自己 read_file 读；readPaths 是上一段真正读到过的路径，优先用它们；接口、函数名、导入路径都要照仓库里的来"
       }),
       temperature,
       ...(faces ? { faces: facesFor("code", attempt) } : {}),
