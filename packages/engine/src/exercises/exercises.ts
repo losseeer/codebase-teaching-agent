@@ -349,7 +349,8 @@ export class ExerciseService {
       kind: input.kind,
       reference: input.reference,
       provider: input.provider,
-      ...(input.faces ? { faces: input.faces } : {})
+      ...(input.faces ? { faces: input.faces } : {}),
+      ...(input.progress ? { onProgress: input.progress } : {})
     });
     if (segmented.ok) return segmented;
     // 超时不兜底：整份产出更大更慢，只会在同一条上限上再撞一次，白烧一遍时间与 token。

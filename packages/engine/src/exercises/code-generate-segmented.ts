@@ -25,7 +25,7 @@ import {
   type CodeGeneration,
   type ProposalResponse
 } from "./code-generate.js";
-import type { ExerciseFaces } from "./turn-faces.js";
+import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { withSkillsBrief } from "../source/tool-loop.js";
 
 /**
@@ -209,6 +209,8 @@ export async function generateCodeExerciseSegmented(input: {
   reference: string;
   provider: LlmProvider;
   faces?: ExerciseFaces;
+  /** 出题进度：界面靠它显示「正在出题面 / 写代码 / 写测试」，不传就只剩一个转圈。 */
+  onProgress?: ExerciseProgressSink;
   /** 每段最多重出几次（形状错才重）。 */
   maxSegmentRetries?: number;
 }): Promise<CodeGeneration> {
@@ -236,13 +238,20 @@ export async function generateCodeExerciseSegmented(input: {
     };
   };
 
+  /** 每段开始时播报一次：界面据此把「出题面 / 写代码 / 写测试」显示成当前步骤。 */
+  const announce = (segment: ExerciseSegment): void => {
+    input.onProgress?.({ stage: "proposing", detail: EXERCISE_SEGMENT_LABEL[segment] });
+  };
+
   const planOut = await runSegment<PlanSegment>(async (attempt) => {
+    announce("prompt");
     const response = await requestProposal({
       provider: input.provider,
       system: withSkillsBrief(promptSystem(input.kind), faces.skills),
       user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
       temperature,
-      ...(faces ? { faces: facesFor("prompt", attempt) } : {})
+      ...(faces ? { faces: facesFor("prompt", attempt) } : {}),
+      ...(input.onProgress ? { onProgress: input.onProgress } : {})
     });
     const parsed = parseJsonObject(response.text);
     if (!parsed) throw new SegmentError("shape", "题面段返回的不是可解析的 JSON。");
@@ -258,6 +267,7 @@ export async function generateCodeExerciseSegmented(input: {
   fileReads.push(...planOut.fileReads);
 
   const codeOut = await runSegment<CodeSegment>(async (attempt) => {
+    announce("code");
     const response = await requestProposal({
       provider: input.provider,
       system: withSkillsBrief(codeSystem(input.kind, plan.language), faces.skills),
@@ -266,7 +276,8 @@ export async function generateCodeExerciseSegmented(input: {
         targets: plan.targets, note: "目标文件的现状自己 read_file 读；接口、函数名、导入路径都要照仓库里的来"
       }),
       temperature,
-      ...(faces ? { faces: facesFor("code", attempt) } : {})
+      ...(faces ? { faces: facesFor("code", attempt) } : {}),
+      ...(input.onProgress ? { onProgress: input.onProgress } : {})
     });
     const parsed = parseJsonObject(response.text);
     if (!parsed) throw new SegmentError("shape", "代码段返回的不是可解析的 JSON。");
@@ -281,6 +292,7 @@ export async function generateCodeExerciseSegmented(input: {
   fileReads.push(...codeOut.fileReads);
 
   const testsOut = await runSegment<TestsSegment>(async () => {
+    announce("tests");
     const startedAt = Date.now();
     const response = await input.provider.complete({
       system: withSkillsBrief(testsSystem(input.kind, plan.language), faces.skills),

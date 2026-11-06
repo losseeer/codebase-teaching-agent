@@ -71,6 +71,8 @@ function generationStepText(step: { stage: string; detail?: string }): string {
   if (step.stage === "reading" && step.detail) return `读取 ${step.detail.split("/").pop() ?? "文件"}`;
   if (step.stage === "searching" && step.detail) return `检索「${step.detail}」`;
   if (step.stage === "loading_skill" && step.detail) return `查看技能 ${step.detail}`;
+  // 分段出题的段播报：出题面 / 写代码 / 写测试
+  if (step.stage === "proposing" && step.detail) return `正在${step.detail}`;
   return generationStageLabel(step.stage);
 }
 
@@ -221,9 +223,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       if (payload.repositoryId !== repositoryId || payload.jobId !== jobId || typeof payload.stage !== "string") return;
       const step = { stage: payload.stage, ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}) };
       setGenTrail((trail) => {
-        const last = trail.at(-1);
-        if (last?.stage === step.stage && last.detail === step.detail) return trail;
-        return [...trail, step].slice(-6);
+        // 分段出题会按「出题面 → 写代码 → 写测试」播报（proposing + 段名）；
+        // 进入新的一段就把上一段的动作清掉，否则六条上限会把段名挤没。
+        const enteringSegment = step.stage === "proposing" && typeof step.detail === "string";
+        const base = enteringSegment ? [] : trail;
+        const last = base.at(-1);
+        if (last?.stage === step.stage && last.detail === step.detail) return base;
+        return [...base, step].slice(-6);
       });
     });
     try {
