@@ -355,12 +355,16 @@ export class ExerciseService {
     if (segmented.ok) return segmented;
     // 超时不兜底：整份产出更大更慢，只会在同一条上限上再撞一次，白烧一遍时间与 token。
     if (segmented.stage === "provider_error") return segmented;
+    // 兜底沿用分段已经定好的题面，并且只跑一次、不再额外修复重试：
+    // 两趟栽在同一个错上时（实测都是 Java 编译不过），第二次重试纯烧钱。
     const whole = await generateCodeExerciseFromReference({
       repositoryPath: input.repositoryPath,
       tag: input.tag,
       kind: input.kind,
       reference: input.reference,
       provider: input.provider,
+      repair: { maxRetries: 0, retryShape: false },
+      ...(segmented.plan ? { priorPlan: segmented.plan } : {}),
       ...(input.faces ? { faces: input.faces } : {}),
       ...(input.progress ? { onProgress: input.progress } : {})
     });

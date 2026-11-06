@@ -13,6 +13,8 @@
   ③ 三段的 system 都要带各语言的测试形状规范（`TEST_CONTRACT`），缺了模型会写成裸 `assert`，
      断言一抛脚本就中断，stdout 里没有结论行，判分拿不到结果。
 */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { EXERCISE_SEGMENT_ACTIVE, EXERCISE_SEGMENT_LABEL, type ExerciseLanguage, type ExerciseSegment } from "@codebase-tutor/domain";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
@@ -25,6 +27,7 @@ import {
   type CodeGeneration,
   type ProposalResponse
 } from "./code-generate.js";
+import { pathReadBlock } from "../source/read-file.js";
 import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { withSkillsBrief } from "../source/tool-loop.js";
 
@@ -133,6 +136,24 @@ export function codeSystem(kind: "patch_edit" | "author_function", language: str
 /** 段 3（测试）：同上——这一段最容易漏形状规范，漏了测试就跑不出结论行。 */
 export function testsSystem(kind: "patch_edit" | "author_function", language: string): string {
   return [...baseRules(kind), ...testContractOf(language), ...testsStageRules()].join("\n");
+}
+
+/**
+  直接把目标文件的当前内容读给段 2（引擎本地读，不花 token）。
+  走 read_file 同一套安全判据（禁读文件名 / 越出仓库 / 非普通文件），单文件截到 12,000 字符。
+*/
+function targetSnapshots(repositoryPath: string, targets: string[]): { path: string; contents: string }[] {
+  const out: { path: string; contents: string }[] = [];
+  for (const target of targets.slice(0, 3)) {
+    if (pathReadBlock(repositoryPath, target)) continue;
+    try {
+      const text = readFileSync(join(repositoryPath, target), "utf8");
+      out.push({ path: target, contents: text.slice(0, 12_000) });
+    } catch {
+      // 读不到就不给，让模型自己检索
+    }
+  }
+  return out;
 }
 
 const str = (value: unknown, limit: number): string => (typeof value === "string" ? value.trim().slice(0, limit) : "");
@@ -305,9 +326,12 @@ export async function generateCodeExerciseSegmented(input: {
       user: JSON.stringify({
         stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
         targets: plan.targets,
+        // 目标文件的现状由引擎直接给（本地读，不花 token）：段 2 就不用再 read_file 读一遍，
+        // 省一轮工具往返和那一轮的上下文。读不到（targets 写歪了）才留空让它自己检索。
+        targetFiles: targetSnapshots(input.repositoryPath, plan.targets),
         // 段 1 真正读成功过的路径：targets 写歪了（比如只剩裸文件名）时，这一段照这份清单读。
         readPaths: planOut.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path).slice(0, 8),
-        note: "目标文件的现状自己 read_file 读；readPaths 是上一段真正读到过的路径，优先用它们；接口、函数名、导入路径都要照仓库里的来"
+        note: "targetFiles 是目标文件当前的全文，直接用；接口、函数名、导入路径都要照它来。读不到的内容自己 read_file 补。"
       }),
       temperature,
       ...(faces ? { faces: facesFor("code", attempt) } : {}),
@@ -318,7 +342,7 @@ export async function generateCodeExerciseSegmented(input: {
     return { data: parseCode(parsed), usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   }, maxRetries);
   if (codeOut.failure) {
-    return { ok: false, stage: codeOut.failure.stage, reason: codeOut.failure.reason, runs: [], skillReads: [...skillReads], ...(usage ? { usage } : {}) };
+    return { ok: false, stage: codeOut.failure.stage, reason: codeOut.failure.reason, runs: [], skillReads: [...skillReads], ...(usage ? { usage } : {}), plan: { title: plan.title, prompt: plan.prompt, defect: plan.defect } };
   }
   const code = codeOut.data!;
   usage = addUsage(usage, codeOut.usage);
@@ -361,7 +385,7 @@ export async function generateCodeExerciseSegmented(input: {
     return { data: parseTests(parsed), usage: response.usage, skillReads: [], fileReads: [] };
   }, maxRetries);
   if (testsOut.failure) {
-    return { ok: false, stage: testsOut.failure.stage, reason: testsOut.failure.reason, runs: [], skillReads: [...skillReads], ...(usage ? { usage } : {}) };
+    return { ok: false, stage: testsOut.failure.stage, reason: testsOut.failure.reason, runs: [], skillReads: [...skillReads], ...(usage ? { usage } : {}), plan: { title: plan.title, prompt: plan.prompt, defect: plan.defect } };
   }
   const tests = testsOut.data!;
   usage = addUsage(usage, testsOut.usage);

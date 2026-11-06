@@ -58,7 +58,11 @@ export interface HarnessRun {
 }
 
 export type CodeGeneration =
-  | { ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] }
+  | {
+      ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[];
+      /** 分段产出已经把题面定好了、只是自证没过时带出来：兜底路径沿用这份题面，不必从头再想一遍。 */
+      plan?: { title: string; prompt: string; defect: string };
+    }
   | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
@@ -430,13 +434,18 @@ export async function generateCodeExerciseFromReference(input: {
   faces?: ExerciseFaces;
   onProgress?: ExerciseProgressSink;
   repair?: RepairPolicy;
+  /** 上一趟（分段）已经定好的题面：沿用，别重新选题。 */
+  priorPlan?: { title: string; prompt: string; defect: string };
 }): Promise<CodeGeneration> {
   const faces = input.faces ?? {};
   input.onProgress?.({ stage: "proposing" });
   return await generateWithRepair({
     provider: input.provider,
     system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
-    user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
+    user: JSON.stringify({
+      kind: input.kind, theme: input.tag, reference: input.reference,
+      ...(input.priorPlan ? { priorPlan: input.priorPlan, note: "priorPlan 是上一趟已经定好并写好的题面：沿用它的标题与三节结构，把精力放在实现与测试上，不要重新选题。" } : {})
+    }),
     temperature: 0.4,
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
