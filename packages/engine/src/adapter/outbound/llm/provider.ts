@@ -306,7 +306,7 @@ export interface LlmConfigOverrides {
 const trimmed = (value?: string): string => value?.trim() ?? "";
 
 export const TIMEOUT_MIN_MS = 1_000;
-export const TIMEOUT_MAX_MS = 300_000;
+export const TIMEOUT_MAX_MS = 600_000;
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 /** 单次请求超时：GUI 覆盖 → `.env` → 默认值，再钳进 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]`。 */

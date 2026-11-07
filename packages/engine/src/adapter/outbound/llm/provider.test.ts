@@ -75,7 +75,7 @@ describe("OpenAICompatibleProvider", () => {
     expect(resolveLlmConfig({ timeoutMs: "180000" }).timeoutMs).toBe(180_000);
     expect(resolveLlmConfig({ timeoutMs: "" }).timeoutMs, "空串 = 没填，回落 .env").toBe(60_000);
     expect(resolveLlmConfig({ timeoutMs: "abc" }).timeoutMs, "脏串同样按没填回落，不当 0").toBe(60_000);
-    expect(resolveLlmConfig({ timeoutMs: "999999" }).timeoutMs, "超过上限按上限生效（路由先拒，这里是第二道）").toBe(300_000);
+    expect(resolveLlmConfig({ timeoutMs: "999999" }).timeoutMs, "超过上限按上限生效（路由先拒，这里是第二道）").toBe(600_000);
     expect(resolveLlmConfig({ timeoutMs: "1" }).timeoutMs, "低于下限不给放行").toBe(1_000);
     if (saved === undefined) delete process.env.TUTOR_LLM_TIMEOUT_MS;
     else process.env.TUTOR_LLM_TIMEOUT_MS = saved;

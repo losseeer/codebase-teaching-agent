@@ -39,9 +39,7 @@ describe("恢复出厂技能", () => {
     expect(readFileSync(join(target, "built-in", "extra.md"), "utf8")).toBe("出厂附属\n");
     expect(readFileSync(join(target, "built-in", "mine.md"), "utf8")).toBe("我自己加的\n");
     expect(readFileSync(join(target, "my-own", "SKILL.md"), "utf8")).toContain("我自己的");
-    // 被覆盖的目录留了备份
-    expect(result.backupDirs.length).toBe(1);
-    expect(readFileSync(join(result.backupDirs[0]!, "SKILL.md"), "utf8")).toBe("用户改坏的\n");
+
   });
 
   it("用户目录没有该技能时直接装上，不产生备份", () => {
@@ -52,7 +50,6 @@ describe("恢复出厂技能", () => {
     makeSource(source, "built-in");
     const result = restoreBundledSkills({ sourceDir: source, targetDir: target });
     expect(result.restored).toEqual(["built-in"]);
-    expect(result.backupDirs).toEqual([]);
     expect(readFileSync(join(target, "built-in", "SKILL.md"), "utf8")).toContain("出厂正文");
   });
 });

@@ -243,7 +243,7 @@ export const api = {
   forgetRepository: (repositoryId: string, artifacts = false) => request<{ repositories: RepositoryCatalogEntry[]; artifacts?: "removed" | "absent" | "refused" }>(`/api/repositories/${repositoryId}${artifacts ? "?artifacts=1" : ""}`, { method: "DELETE" }),
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   /** 恢复出厂技能：把用户技能目录里出厂技能的副本覆盖回出厂版本（用户自建技能不动，覆盖前先备份）。 */
-  restoreSkills: () => request<{ restored: string[]; backupDirs: string[]; files: number }>("/api/skills/restore", { method: "POST" }),
+  restoreSkills: () => request<{ restored: string[]; files: number }>("/api/skills/restore", { method: "POST" }),
   /** 只读能力面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope, operation?: PracticeOperation) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}${operation ? `&operation=${operation}` : ""}`),
   /** journal 按 traceId 汇总；给 threadId 时只取该会话。纯读。 */

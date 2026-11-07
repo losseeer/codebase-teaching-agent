@@ -27,10 +27,7 @@ export async function externalSurfaceUseCase() {
   };
 }
 
-/**
-  恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。
-  用户自建的技能不动；被覆盖的目录会先备份，返回值里给出备份位置。
-*/
-export function restoreSkillsUseCase(): { restored: string[]; backupDirs: string[]; files: number } {
+/** 恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。用户自建的技能不动。 */
+export function restoreSkillsUseCase(): { restored: string[]; files: number } {
   return restoreBundledSkills();
 }

@@ -9,7 +9,7 @@
 
   用法：
     tsx dev/skill/sync-skills.ts            # 只报告差异，不动文件
-    tsx dev/skill/sync-skills.ts --force    # 真同步：先备份被覆盖的技能目录，再覆盖
+    tsx dev/skill/sync-skills.ts --force    # 真同步：覆盖出厂技能的副本（用户自建技能不动）
 */
 import { diffBundledSkills, restoreBundledSkills } from "../../src/adapter/outbound/integrations/skills.js";
 
@@ -30,11 +30,10 @@ for (const name of diff.missing) console.log(`新增  ${name}`);
 console.log(`\n共 ${diff.entries.length + diff.missing.length} 份技能有差异，涉及 ${diff.files} 个文件。`);
 
 if (!force) {
-  console.log("加 --force 真同步（会先备份被覆盖的技能目录）。");
+  console.log("加 --force 真同步。");
   process.exit(0);
 }
 
 const result = restoreBundledSkills();
 console.log(`已恢复 ${result.restored.length} 份出厂技能（覆盖 ${result.files} 个文件）。`);
-for (const dir of result.backupDirs) console.log(`  备份：${dir}`);
 console.log("注意：SKILL.md 里的「当前策略」也在出厂文件里，会一并恢复成出厂默认。");
