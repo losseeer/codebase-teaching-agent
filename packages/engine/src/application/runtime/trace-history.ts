@@ -205,27 +205,34 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
     at: ordered[0].at
   });
   const modelSteps = replayed.length ? replayed : usage ? [{ at: usage.at }] : [];
+  // model 帧与 tool 帧按发生时刻统一交错——journal 的 tool 事件本来就带 occurred_at，
+  // 分两组装配会把「模型 → 工具 → 模型 → …」还原成「所有模型 + 一整坨工具」，中间态全丢。
+  const timed: { at: string; step: HistoryStep }[] = [];
   modelSteps.forEach((item, index) => {
-    push({
-      kind: "model",
-      status: "ok",
-      stepId: item.stepId ?? (replayed.length ? `journal-model-${index + 1}` : "journal-model"),
-      // 分段产出的帧用段名做标签（出题面 / 写代码 / 写测试），跟实时轨迹一致。
-      label: item.stage ? EXERCISE_SEGMENT_ACTIVE[item.stage] : item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
-      ...(item.reply ? { reply: item.reply } : {}),
-      ...(item.detail ? { detail: item.detail } : {}),
-      ...(item.finishReason ? { finishReason: item.finishReason } : {}),
-      ...(item.ms !== undefined ? { ms: item.ms } : {}),
-      ...(provider ? { model: provider } : {}),
-      ...(showTokens && inputTokens !== undefined ? { inputTokens } : {}),
-      ...(showTokens && outputTokens !== undefined ? { outputTokens } : {}),
-      at: item.at
+    timed.push({
+      at: item.at,
+      step: {
+        kind: "model",
+        status: "ok",
+        stepId: item.stepId ?? (replayed.length ? `journal-model-${index + 1}` : "journal-model"),
+        // 分段产出的帧用段名做标签（出题面 / 写代码 / 写测试），跟实时轨迹一致。
+        label: item.stage ? EXERCISE_SEGMENT_ACTIVE[item.stage] : item.reply ? "模型回复" : item.detail ? "调用工具" : "模型回复",
+        ...(item.reply ? { reply: item.reply } : {}),
+        ...(item.detail ? { detail: item.detail } : {}),
+        ...(item.finishReason ? { finishReason: item.finishReason } : {}),
+        ...(item.ms !== undefined ? { ms: item.ms } : {}),
+        ...(provider ? { model: provider } : {}),
+        ...(showTokens && inputTokens !== undefined ? { inputTokens } : {}),
+        ...(showTokens && outputTokens !== undefined ? { outputTokens } : {})
+      }
     });
   });
   for (const event of ordered) {
     const step = toolStep(event);
-    if (step) push({ ...step, at: occurredAt(event) });
+    if (step) timed.push({ at: occurredAt(event), step });
   }
+  timed.sort((left, right) => left.at.localeCompare(right.at));
+  for (const item of timed) push({ ...item.step, at: item.at });
 
   return {
     runId,

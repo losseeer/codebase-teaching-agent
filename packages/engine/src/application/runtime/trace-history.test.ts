@@ -213,3 +213,24 @@ describe("journal 回合历史", () => {
     expect(run.summary).toContain("预算到线");
   });
 });
+
+describe("回放的中间态顺序", () => {
+  it("出题回放：model 与 tool 帧按发生时刻交错，而不是先所有模型后一整坨工具", () => {
+    const events = [
+      ev("exercise_model_reply", "g1", "2026-11-02T03:10:02.000Z", { scene: "exercise_generate_code", round: 1, attempt: 0, finish_reason: "tool_calls", detail: "本轮调用 2 个工具" }),
+      ev("code_search", "g1", "2026-11-02T03:10:03.000Z", { query: "thread pool", hits: 3, top_paths: "src/p.ts", occurred_at: "2026-11-02T03:10:03.100Z" }),
+      ev("file_read", "g1", "2026-11-02T03:10:04.000Z", { path: "src/p.ts", lines: 40, truncated: false, denied: false, occurred_at: "2026-11-02T03:10:04.100Z" }),
+      ev("exercise_model_reply", "g1", "2026-11-02T03:10:05.000Z", { scene: "exercise_generate_code", round: 2, attempt: 0, finish_reason: "stop", reply: "{\"ok\":true}" }),
+      ev("exercise_generated", "g1", "2026-11-02T03:10:06.000Z", { family: "code", title: "测试题", target_unit: "unit-1" })
+    ];
+    const { runs } = buildTraceHistory(events, "repo", 10);
+    expect(runs).toHaveLength(1);
+    const steps = runs[0]!.steps;
+    expect(steps[0]?.kind).toBe("turn");
+    // 交错：model → tool → tool → model（修之前是 model → model → tool → tool）
+    expect(steps.slice(1).map((step) => step.kind)).toEqual(["model", "tool", "tool", "model"]);
+    expect(steps[1]?.detail).toContain("本轮调用 2 个工具");
+    expect(steps[4]?.finishReason).toBe("stop");
+    expect(steps[3]?.label).toContain("读取 src/p.ts");
+  });
+});
