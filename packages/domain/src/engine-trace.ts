@@ -11,7 +11,7 @@ export type TraceScalar = string | number | boolean | null;
   - boot     启动分段计时
   LLM 调用明细不在此列——它落在 `~/.codebase-tutor/llm.log`，两处靠 traceId 关联（单一事实来源，不双写）。
   */
-export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "turn_stop" | "boot" | "mount" | "exam_notes";
+export type EngineTraceKind = "http" | "import" | "reindex" | "degrade" | "turn_stop" | "boot" | "mount" | "exam_notes" | "exam_plan";
 
 export interface EngineTraceEvent {
   at: string;

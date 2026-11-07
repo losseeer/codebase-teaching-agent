@@ -104,15 +104,14 @@ export function trimNotes(points: ExamNote[]): ExamNote[] {
 /** hash 变则整条作废；同 hash 按 (point,line) 去重合并。 */
 export function mergeExamNotes(existing: ExamNoteFile | undefined, incoming: ExamNote[], hash: string, at: string): ExamNoteFile {
   const base = existing && existing.hash === hash ? existing.points : [];
-  const seen = new Set<string>();
-  const merged: ExamNote[] = [];
+  const byKey = new Map<string, ExamNote>();
   for (const note of [...base, ...incoming]) {
     const key = `${note.point}:${note.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(note);
+    const previous = byKey.get(key);
+    // 同 key 时保留 sourceLevel 更低的（第 1 级笔记置信度高于第 2 级）
+    if (!previous || note.sourceLevel < previous.sourceLevel) byKey.set(key, note);
   }
-  return { hash, at, points: trimNotes(merged) };
+  return { hash, at, points: trimNotes([...byKey.values()]) };
 }
 
 export function emptyStore(): ExamNoteStore {
@@ -160,6 +159,13 @@ export function recordExamNotes(repoPath: string, notes: ExamNote[], at: string)
     store.files[path] = mergeExamNotes(store.files[path], incoming, hash, at);
     written += incoming.length;
   }
-  if (written) saveExamNoteStore(repoPath, store);
+  if (written) {
+    try { saveExamNoteStore(repoPath, store); }
+    catch (error) {
+      // 笔记是诊断数据：写盘失败只留痕，不能冒泡成 provider_error 把整道题判死。
+      console.warn(`[exam-notes] 笔记落盘失败，本趟出题继续：${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    }
+  }
   return written;
 }

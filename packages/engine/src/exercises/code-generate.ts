@@ -11,6 +11,7 @@ import type { SkillReadRecord } from "../source/tools/types.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
+import { examPlanBrief } from "./exam-plan.js";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 import { recordEgress } from "../adapter/outbound/security/egress-log.js";
@@ -282,7 +283,10 @@ export async function requestProposal(input: { provider: LlmProvider; system: st
     ...(input.faces ?? {}),
     provider: input.provider,
     scope: input.faces?.scope ?? "practice",
-    system: input.system,
+    // 分段路径的段 1 已在 user 里下了详细清单，这里不重复；其余代码题路径靠 system 拿到落点概要。
+    system: input.faces?.examPlan && !input.user.includes('"examPoints"')
+      ? `${input.system}\n\n${examPlanBrief(input.faces.examPlan)}`
+      : input.system,
     user: input.user,
     temperature: input.temperature,
     onProgress: forwardToolProgress(input.onProgress),

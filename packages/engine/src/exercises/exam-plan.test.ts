@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SearchCorpus } from "../source/search-code.js";
 import { buildPointIndex, type BodyOf, type LandingContext } from "./exam-points.js";
-import { judgeThemeLandings } from "./exam-plan.js";
+import { examPlanBrief, judgeThemeLandings } from "./exam-plan.js";
 
 const SKILL_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../skills", "exercise-code-concepts");
 const bundledBody: BodyOf = (name, file = "SKILL.md") => {
@@ -95,5 +95,18 @@ describe("主题落点三级回退", () => {
     });
     expect(judged.ok && judged.plan.listedPoints.length).toBe(8);
     expect(judged.ok && judged.plan.listedPoints.every((point) => point.id !== "os.pool-policy")).toBe(true);
+  });
+});
+
+describe("落点概要（所有出题路径共用）", () => {
+  it("第 1 级列出可考点，第 2 级带免责标注，remaining 要提示", () => {
+    const judged = judgeThemeLandings({ theme: "Java特性", index, ctx });
+    expect(judged.ok).toBe(true);
+    if (!judged.ok || !judged.plan.listedPoints.length) return;
+    const brief = examPlanBrief(judged.plan);
+    expect(brief).toContain("本主题命中的可考点");
+    expect(brief).toContain(judged.plan.listedPoints[0]!.id);
+    const withRemaining = examPlanBrief({ ...judged.plan, remaining: 12 });
+    expect(withRemaining).toContain("另有 12 处");
   });
 });

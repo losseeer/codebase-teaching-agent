@@ -61,8 +61,10 @@ export class ExamNotesBudget {
   forRead(path: string): string[] {
     if (this.annotated.has(path) || this.readShown >= MAX_READ_NOTES_PER_TRIP) return [];
     const notes = this.ctx.store.files[path]?.points ?? [];
-    const kept = notes
-      .filter((note) => this.ctx.plan.pointIds.includes(note.point))
+    const related = notes.filter((note) => this.ctx.plan.pointIds.includes(note.point));
+    // 第三指标的真实来源：相关笔记被 read_file 阈值 4 挡掉（段 1 阈值 3 侧数学上恒为 0）。
+    this.droppedByThreshold += related.filter((note) => scoreNote(note, this.ctx) < READ_THRESHOLD).length;
+    const kept = related
       .map((note) => ({ note, score: scoreNote(note, this.ctx) }))
       .filter((item) => item.score >= READ_THRESHOLD)
       .sort((left, right) => right.score - left.score)

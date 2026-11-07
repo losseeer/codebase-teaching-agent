@@ -103,8 +103,9 @@ describe("probe 匹配器", () => {
     expect(landings.some((item) => item.path === "src/pool/ShortCodePool.java")).toBe(true);
   });
 
-  it("signal 给附近有控制流的行加分，孤立调用减分", () => {
-    expect(signalOf(["if (x) {", "  counter.incrementAndGet();", "}"], 1)).toBeGreaterThan(0);
-    expect(signalOf(["counter.incrementAndGet();"], 0)).toBeLessThan(0);
+  it("signal 三项相加：控制流 +3、多调用/赋值+调用 +2、孤立单行 -3", () => {
+    expect(signalOf(["if (x) {", "  counter.incrementAndGet();", "}"], 1)).toBe(0); // 3 - 3
+    expect(signalOf(["counter.incrementAndGet();"], 0)).toBe(-3);
+    expect(signalOf(["if (x) {", "  int y = f(a) + g(b);", "}"], 1)).toBeGreaterThan(0); // 3 + 2
   });
 });

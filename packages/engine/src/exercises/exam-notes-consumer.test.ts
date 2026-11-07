@@ -46,7 +46,18 @@ describe("段 1 user 消费", () => {
     expect(budget.forUser()).toHaveLength(12);
   });
 
-  it("相关的但没过阈值要计数，供调参", () => {
+  it("第三指标来自 read_file 阈值 4：相关但 score=3 的笔记被挡掉要计数", () => {
+    // pointMatch=1 (3 分) + 无候选文件 + 无符号匹配 = 3 < 4
+    const store: ExamNoteStore = {
+      version: 3,
+      files: { "src/Other.java": { hash: "h", at: "2026-11-07T00:00:00Z", points: [note({ path: "src/Other.java", symbol: undefined })] } }
+    };
+    const budget = new ExamNotesBudget(ctxOf(store));
+    expect(budget.forRead("src/Other.java")).toEqual([]);
+    expect(budget.diagnostics().droppedByThreshold).toBe(1);
+  });
+
+  it("段 1 阈值 3 侧：相关笔记恒能过（score≥3）", () => {
     const store = storeOf([note({ path: "src/Other.java", symbol: undefined })]);
     // pointMatch=1 (3 分) 本身就 >=3，这里构造 pointMatch=0 的相关笔记不存在；
     // 直接验证低分笔记不会混进展示列表

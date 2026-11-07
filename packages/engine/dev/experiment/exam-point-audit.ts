@@ -66,19 +66,28 @@ if (process.argv[2] === "--tiers") {
   const report = JSON.parse(readFileSync(samplesFile, "utf8")) as {
     audits: { pointId: string; decision?: string; samples: { group: "A" | "B"; canExam: boolean | null }[] }[];
   };
+  // 观察轮数按条目累计：连续落在 25–50% 观察区 3 轮才降灰区（v8 第 6 章）。
+  let previous: { observeRounds?: Record<string, number> } = {};
+  try { previous = JSON.parse(readFileSync(outFile, "utf8")) as typeof previous; } catch { /* 首轮 */ }
+  const rounds = { ...(previous.observeRounds ?? {}) };
   const decisions: Record<string, TierDecision> = {};
   for (const audit of report.audits) {
-    if (audit.decision === "insufficient") { decisions[audit.pointId] = "insufficient"; continue; }
-    // 一条都没标注时保持观察（仍算启用），绝不把「没标」当成「不可考」。
-    if (!audit.samples.some((sample) => typeof sample.canExam === "boolean")) { decisions[audit.pointId] = "observe"; continue; }
+    if (audit.decision === "insufficient") { decisions[audit.pointId] = "insufficient"; rounds[audit.pointId] = 0; continue; }
+    const marked = audit.samples.filter((sample) => typeof sample.canExam === "boolean");
+    const inGroup = (group: "A" | "B") => marked.filter((sample) => sample.group === group);
+    // 标注不足或 B 组没有样本（命中 10–19 条）时不定档，保持观察。
+    if (marked.length < 5 || !inGroup("B").length) { decisions[audit.pointId] = "observe"; continue; }
     const rate = (group: "A" | "B"): number => {
-      const rows = audit.samples.filter((sample) => sample.group === group && typeof sample.canExam === "boolean");
-      return rows.length ? rows.filter((sample) => sample.canExam === true).length / rows.length : 0;
+      const rows = inGroup(group);
+      return rows.filter((sample) => sample.canExam === true).length / rows.length;
     };
-    decisions[audit.pointId] = decideTier(rate("A"), rate("B"));
+    const aRate = rate("A");
+    const decision = decideTier(aRate, rate("B"), rounds[audit.pointId] ?? 0);
+    rounds[audit.pointId] = aRate >= 0.25 && aRate < 0.5 ? (rounds[audit.pointId] ?? 0) + 1 : 0;
+    decisions[audit.pointId] = decision;
   }
   const tiers = tiersOfDecisions(decisions);
-  writeFileSync(outFile, `${JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), ...tiers }, null, 2)}\n`, "utf8");
+  writeFileSync(outFile, `${JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), observeRounds: rounds, ...tiers }, null, 2)}\n`, "utf8");
   const tally = Object.values(decisions).reduce<Record<string, number>>((acc, decision) => ({ ...acc, [decision]: (acc[decision] ?? 0) + 1 }), {});
   console.log("档位汇总:", tally, "->", outFile);
   process.exit(0);

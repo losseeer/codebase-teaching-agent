@@ -82,6 +82,16 @@ function topPointsByLandings(points: ExamPointDef[], ctx: LandingContext, limit:
     .map((entry) => entry.point);
 }
 
+/** 给模型看的落点概要：推荐清单 + 剩余命中提示 + 第 2 级免责。所有出题路径共用这一份。 */
+export function examPlanBrief(plan: ExamPlan): string {
+  const lines = plan.listedPoints.map((point) => `- ${point.id}（${point.concepts.join("、")}）：${point.probes}`);
+  const head = plan.sourceLevel === 1
+    ? "本主题命中的可考点（优先从这些形状里挑缺陷）："
+    : "本主题未命中技能词表（走概念直检）。以下仅为参考，不代表本仓一定有对应实现：";
+  const remaining = plan.remaining ? `另有 ${plan.remaining} 处同类命中按结构信号排在后面，需要时可继续检索。` : "";
+  return [head, ...lines, remaining].filter(Boolean).join("\n");
+}
+
 export function judgeThemeLandings(input: JudgeInput): JudgeResult {
   const { theme, index, ctx, tiers } = input;
   const concepts = conceptsOfTheme(theme, index.concepts);

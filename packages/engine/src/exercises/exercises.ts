@@ -25,12 +25,12 @@ import { fileReadAuditPayload } from "../source/read-file.js";
 import { buildSearchCorpus } from "../source/search-code.js";
 import { skillReadAuditPayload } from "../source/tools/types.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
-import { hash } from "@codebase-tutor/platform";
+import { hash, traceEngine } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
 import { DEFAULT_EXERCISE_STRATEGY, exerciseStrategyOf } from "./exercise-strategy.js";
 import { buildPointIndex, type LandingContext } from "./exam-points.js";
-import { judgeThemeLandings, loadPointTiers, type JudgeResult } from "./exam-plan.js";
+import { examPlanBrief, judgeThemeLandings, loadPointTiers, type JudgeResult } from "./exam-plan.js";
 import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
 import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
 import { generateCodeExerciseSegmented, segmentedExerciseEnabled } from "./code-generate-segmented.js";
@@ -178,7 +178,16 @@ export class ExerciseService {
           `未找到与「${tag}」相关的源码，请更换主题。`,
           { suggestions: judged.rejection.suggestions.join("、") });
       }
-      if (judged?.ok) faces = { ...faces, examPlan: judged.plan };
+      if (judged?.ok) {
+        faces = { ...faces, examPlan: judged.plan };
+        traceEngine("exam_plan", {
+          theme: tag, sourceLevel: judged.plan.sourceLevel, concepts: judged.plan.concepts.join(","),
+          pointIds: judged.plan.pointIds.join(","), hits: judged.plan.landings.length,
+          remaining: judged.plan.remaining, greyHits: judged.plan.greyHits.join(","),
+          listed: judged.plan.listedPoints.map((point) => point.id).join(","),
+          brief: examPlanBrief(judged.plan).slice(0, 500)
+        }, { traceId: null });
+      }
     }
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces, progress);
     // `type=design` 也要解析成代码题型，否则只传 type 的客户端进不了 reference 分支。
@@ -256,8 +265,9 @@ export class ExerciseService {
   private judgeTheme(repository: PracticeRepository, theme: string, faces: ExerciseFaces): JudgeResult | undefined {
     if (!faces.skills) return undefined;
     const index = buildPointIndex(faces.skills.bodyOf);
-    if (!index.points.length) {
-      console.warn("[exam-plan] 考点词表未加载（技能缺失或表格没有 id 列），本趟跳过主题落点判定。");
+    if (!index.points.length || !Object.keys(index.concepts).length) {
+      // 词表缺一半时不能继续判定：conceptsOfTheme 恒空会把所有主题都判成零落点。
+      console.warn("[exam-plan] 考点表或 concepts.json 未加载（技能缺失、表格没有 id 列、词表解析失败），本趟跳过主题落点判定。");
       return undefined;
     }
     const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));

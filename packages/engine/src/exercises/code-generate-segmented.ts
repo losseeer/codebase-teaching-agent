@@ -366,8 +366,8 @@ export async function generateCodeExerciseSegmented(input: {
     if (notesBudget) {
       const diagnostics = notesBudget.diagnostics();
       traceEngine("exam_notes", {
-        phase: "consume", droppedByThreshold: diagnostics.droppedByThreshold,
-        readShown: diagnostics.readShown, droppedByPointMatch: JSON.stringify(diagnostics.droppedByPointMatch)
+        phase: "consume", notes_dropped_by_threshold: diagnostics.droppedByThreshold,
+        readShown: diagnostics.readShown, notes_dropped_by_pointmatch: JSON.stringify(diagnostics.droppedByPointMatch)
       }, { traceId: null });
     }
     return { data: parsePlan(parsed), usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };

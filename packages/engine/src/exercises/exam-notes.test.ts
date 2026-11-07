@@ -63,6 +63,13 @@ describe("笔记合并与失效", () => {
     expect(merged.points).toHaveLength(2);
   });
 
+  it("同 (point,line) 合并时保留 sourceLevel 更低的笔记", () => {
+    const existing = { hash: "h", at: "2026-11-01T00:00:00Z", points: [note({ line: 1, sourceLevel: 2, why: "低置信" })] };
+    const merged = mergeExamNotes(existing, [note({ line: 1, sourceLevel: 1, why: "高置信" })], "h", "2026-11-07T00:00:00Z");
+    expect(merged.points[0]?.sourceLevel).toBe(1);
+    expect(merged.points[0]?.why).toBe("高置信");
+  });
+
   it("超 12 条先按 point 多样性留，再按最近裁剪", () => {
     const many = Array.from({ length: 20 }, (_, index) => note({ line: index + 1, point: `p${index % 14}` }));
     const trimmed = trimNotes(many);

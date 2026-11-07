@@ -13,6 +13,7 @@ import { recordEgress, type EgressSource } from "../adapter/outbound/security/eg
 import { secretMasker } from "@codebase-tutor/domain";
 import type { GuardCandidate } from "./guard-proposal.js";
 import { NO_TOPICS, validTierOf, type TopicIndex } from "./topic-tiers.js";
+import { examPlanBrief } from "./exam-plan.js";
 import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
 
 /**
@@ -193,7 +194,7 @@ export async function generateExerciseWithLlm(input: { repositoryPath: string; t
     ...faces,
     provider: input.provider,
     scope: faces.scope ?? "practice",
-    system: withSkillsBrief(baseSystem, faces.skills),
+    system: `${withSkillsBrief(baseSystem, faces.skills)}${faces.examPlan ? `\n\n${examPlanBrief(faces.examPlan)}` : ""}`,
     user,
     temperature: 0.4,
     onProgress: forwardToolProgress(input.onProgress),

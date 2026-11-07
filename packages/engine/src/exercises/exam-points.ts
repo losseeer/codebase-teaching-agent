@@ -150,11 +150,13 @@ export interface Landing {
 /** 行级结构信号：附近有控制流加分，孤立单行调用/赋值减分（两者互斥，不互相抵消）。 */
 export function signalOf(lines: string[], index: number): number {
   const near = lines.slice(Math.max(0, index - 3), index + 4).join(" ");
-  const control = /\b(if|for|while|try|catch|synchronized|switch)\b/.test(near);
-  let score = control ? 3 : 0;
-  if ((lines[index]?.match(/\(/g)?.length ?? 0) >= 2) score += 2;
-  const isolated = /^\s*[\w.]+\([^)]*\)\s*;?\s*$/.test(lines[index] ?? "") || /^\s*[\w.]+\s*=\s*[^=]/.test(lines[index] ?? "");
-  if (!control && isolated) score -= 3;
+  // 文档第 3.3 章：三项相加（附近有控制流 +3，多调用/赋值+调用 +2，孤立单行 -3）
+  let score = /\b(if|for|while|try|catch|synchronized)\b/.test(near) ? 3 : 0;
+  const line = lines[index] ?? "";
+  const multiCall = (line.match(/\(/g)?.length ?? 0) >= 2 || (/=/.test(line) && /\w+\(/.test(line));
+  if (multiCall) score += 2;
+  const isolated = /^\s*[\w.]+\([^)]*\)\s*;?\s*$/.test(line) || /^\s*[\w.]+\s*=\s*[^=]/.test(line);
+  if (isolated) score -= 3;
   return score;
 }
 
@@ -170,7 +172,11 @@ function matchTerm(term: string, entry: SearchCorpus["entries"][number], text: s
   const needle = term.slice(term.indexOf(":") + 1);
   if (kind === "sym") {
     const lower = needle.toLowerCase();
-    const symbol = entry.symbols.find((name) => name.toLowerCase() === lower || name.toLowerCase().startsWith(lower));
+    // sym:<Type>[:<method>]：精确匹配符号名，方法名单独匹配，不用前缀（避免 sym:Integer 命中 IntegerCache）。
+    const method = lower.includes(":") ? lower.slice(lower.indexOf(":") + 1) : undefined;
+    const type = method ? lower.slice(0, lower.indexOf(":")) : lower;
+    const symbol = entry.symbols.find((name) => name.toLowerCase() === type)
+      ?? (method ? entry.symbols.find((name) => name.toLowerCase() === method) : undefined);
     if (!symbol) return { hit: false };
     const unit = entry.units.find((item) => item.name === symbol);
     return { hit: true, line: unit?.line, symbol };
