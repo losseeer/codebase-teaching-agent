@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "note": "抽检结论落在这里；三个数组都空 = 全部条目按启用处理。由 dev/experiment/exam-point-audit.ts 产出的样本人工标注后生成。",
+  "enabled": [],
+  "grey": [],
+  "disabled": []
+}

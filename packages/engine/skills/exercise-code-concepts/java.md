@@ -2,17 +2,17 @@
 
 ## 能摘出来考的（含替身怎么给）
 
-| 考点 | 摘法 | 测试怎么断 |
-| --- | --- | --- |
-| `equals` / `hashCode` 不成对 | 摘一个把对象当 `HashMap` 键或放进 `HashSet` 再按值查找的方法 | 造两个「字段相同、引用不同」的对象，断言查找命中；缺陷版只重写 `equals`，`hashCode` 仍用默认，必然查不到 |
-| 可变对象当键 | 摘「用对象做 map 键后又改了它的字段」 | 断言改动后仍能按原值取回（正确做法是不可变键或用值快照）；缺陷版直接改字段，取出为 null |
-| 边界与溢出 | 摘「按区间/容量算结果」的方法 | 用 `Integer.MAX_VALUE`、负数、0 作输入断言；缺陷版写成 `a + b > c` 这类会溢出的比较 |
-| 包装类型 `==` 比较 | 摘「两个 `Integer`/`Long` 比大小」 | 断言 `1000` 与 `1000` 相等（超出 `-128..127` 缓存区间，`==` 为 false，必须 `equals`）；缺陷版用 `==` |
-| `Arrays.asList` 定长 | 摘「把数组转成列表后增删」 | 断言 `add` 成功；缺陷版直接 `Arrays.asList` 返回，`add` 抛 `UnsupportedOperationException` |
-| `subList` / `Arrays.copyOfRange` 是视图 | 摘「截取子列表后改原列表」 | 断言子列表与原列表不再联动（正确做法是拷贝）；缺陷版用 `subList` 视图，改原列表时子列表跟着变 |
-| 字符串拼接与不可变 | 摘「循环里累加字符串或做多次替换」 | 断言结果正确 + 用 `StringBuilder` 后结果一致（性能不判，只判行为）；缺陷版在循环里 `+=` 且逻辑写错 |
-| 空集合 vs null 返回 | 摘「查询类方法」 | 断言无结果时返回空集合而不是 null（调用方直接 `for` 不 NPE）；缺陷版返回 null |
-| 局部变量作用域与阴影 | 摘「内层块重新声明同名变量后误用」 | 断言外层值未被内层覆盖；缺陷版把结果赋给了内层变量 |
+| id | concepts | probes | 考点 | 摘法 | 测试怎么断 |
+| --- | --- | --- | --- | --- | --- |
+| `java.equals-hashcode` | 语言特性,相等,数据结构 | `sym:HashMap; op:hashCode-missing` | `equals` / `hashCode` 不成对 | 摘一个把对象当 `HashMap` 键或放进 `HashSet` 再按值查找的方法 | 造两个「字段相同、引用不同」的对象，断言查找命中；缺陷版只重写 `equals`，`hashCode` 仍用默认，必然查不到 |
+| `java.mutable-key` | 语言特性,数据结构,引用 | `sym:HashMap; op:mutable-key` | 可变对象当键 | 摘「用对象做 map 键后又改了它的字段」 | 断言改动后仍能按原值取回（正确做法是不可变键或用值快照）；缺陷版直接改字段，取出为 null |
+| `java.overflow` | 语言特性,数值,边界 | `sym:Integer; op:overflow` | 边界与溢出 | 摘「按区间/容量算结果」的方法 | 用 `Integer.MAX_VALUE`、负数、0 作输入断言；缺陷版写成 `a + b > c` 这类会溢出的比较 |
+| `java.boxed-equality` | 语言特性,相等 | `sym:Integer & op:Integer==` | 包装类型 `==` 比较 | 摘「两个 `Integer`/`Long` 比大小」 | 断言 `1000` 与 `1000` 相等（超出 `-128..127` 缓存区间，`==` 为 false，必须 `equals`）；缺陷版用 `==` |
+| `java.aslist-fixed` | 语言特性,集合,边界 | `sym:Arrays.asList; op:unsupported-add` | `Arrays.asList` 定长 | 摘「把数组转成列表后增删」 | 断言 `add` 成功；缺陷版直接 `Arrays.asList` 返回，`add` 抛 `UnsupportedOperationException` |
+| `java.sublist-view` | 语言特性,引用,集合 | `sym:List.subList; op:view-not-copied` | `subList` / `Arrays.copyOfRange` 是视图 | 摘「截取子列表后改原列表」 | 断言子列表与原列表不再联动（正确做法是拷贝）；缺陷版用 `subList` 视图，改原列表时子列表跟着变 |
+| `java.string-concat` | 语言特性,字符串 | `text:StringBuilder; op:immutable-loop` | 字符串拼接与不可变 | 摘「循环里累加字符串或做多次替换」 | 断言结果正确 + 用 `StringBuilder` 后结果一致（性能不判，只判行为）；缺陷版在循环里 `+=` 且逻辑写错 |
+| `java.empty-vs-null` | 语言特性,空值,集合 | `op:null-return` | 空集合 vs null 返回 | 摘「查询类方法」 | 断言无结果时返回空集合而不是 null（调用方直接 `for` 不 NPE）；缺陷版返回 null |
+| `java.variable-shadow` | 语言特性,作用域 | `op:shadowed-assignment` | 局部变量作用域与阴影 | 摘「内层块重新声明同名变量后误用」 | 断言外层值未被内层覆盖；缺陷版把结果赋给了内层变量 |
 
 ## 常见误解转成的缺陷
 

@@ -2,17 +2,17 @@
 
 ## 能摘出来考的（含替身怎么给）
 
-| 考点 | 摘法 | 测试怎么断 |
-| --- | --- | --- |
-| 可变默认参数 | 摘「带 `def f(items=[])` 或 `def f(cache={})` 的函数」 | 连续调用两次，断言第二次不含第一次的数据；缺陷版共享同一个默认对象，状态串场 |
-| 闭包晚绑定 | 摘「在循环里造 lambda 或内层函数，之后再调用」 | 断言每个闭包拿到各自那一轮的值；缺陷版全部拿到最后一轮 |
-| `is` 与 `==` | 摘「用 `is` 比较值」的判定 | 造两个内容相同但非同一对象的输入（如 `int("1000")` 与大整数、`list(...)`），断言相等；缺陷版 `is` 在小整数/短字符串上偶尔通过，换个输入就挂 |
-| 生成器只消费一次 | 摘「把生成器传给两个下游」的函数 | 断言两处都拿到数据（正确做法转 list 或重造）；缺陷版第二处拿到空 |
-| `sort()` 返回 None | 摘「链式调用排序结果」 | 断言链式调用可用；缺陷版写 `items = items.sort()`，得到 None |
-| 浅拷贝只一层 | 摘「复制嵌套结构后改内层」 | 断言改副本不影响原对象（正确做法 `copy.deepcopy`）；缺陷版用 `copy.copy` 或 `[:]`，内层仍联动 |
-| 除法与整除 | 摘「按份数算配额/分页」 | 用不能整除的输入断言边界；缺陷版 `/` 与 `//` 混用，或负数向下取整方向搞反 |
-| `try` 的 `else` / `finally` | 摘「异常处理里写返回值」的编排方法 | 断言 `finally` 里的 return 会覆盖 `try` 的；缺陷版以为 `try` 的返回值优先 |
-| 可变对象做 dict 键 / set 元素 | 摘「把 list 塞进 set 或当键」 | 断言可哈希的替代写法（转 tuple）；缺陷版直接塞 list，运行 `TypeError` |
+| id | concepts | probes | 考点 | 摘法 | 测试怎么断 |
+| --- | --- | --- | --- | --- | --- |
+| `python.mutable-default` | 语言特性,引用,集合 | `op:mutable-default` | 可变默认参数 | 摘「带 `def f(items=[])` 或 `def f(cache={})` 的函数」 | 连续调用两次，断言第二次不含第一次的数据；缺陷版共享同一个默认对象，状态串场 |
+| `python.closure-late-bind` | 语言特性,作用域,闭包 | `op:late-binding` | 闭包晚绑定 | 摘「在循环里造 lambda 或内层函数，之后再调用」 | 断言每个闭包拿到各自那一轮的值；缺陷版全部拿到最后一轮 |
+| `python.is-vs-eq` | 语言特性,相等 | `op:is-for-value` | `is` 与 `==` | 摘「用 `is` 比较值」的判定 | 造两个内容相同但非同一对象的输入（如 `int("1000")` 与大整数、`list(...)`），断言相等；缺陷版 `is` 在小整数/短字符串上偶尔通过，换个输入就挂 |
+| `python.generator-once` | 语言特性,生成器 | `op:generator-reused` | 生成器只消费一次 | 摘「把生成器传给两个下游」的函数 | 断言两处都拿到数据（正确做法转 list 或重造）；缺陷版第二处拿到空 |
+| `python.sort-none` | 语言特性,集合,排序 | `sym:sort; op:sort-returns-none` | `sort()` 返回 None | 摘「链式调用排序结果」 | 断言链式调用可用；缺陷版写 `items = items.sort()`，得到 None |
+| `python.shallow-copy` | 语言特性,引用,数据结构 | `sym:copy; op:shallow-copy` | 浅拷贝只一层 | 摘「复制嵌套结构后改内层」 | 断言改副本不影响原对象（正确做法 `copy.deepcopy`）；缺陷版用 `copy.copy` 或 `[:]`，内层仍联动 |
+| `python.division` | 语言特性,数值,边界 | `op:floor-vs-true-division` | 除法与整除 | 摘「按份数算配额/分页」 | 用不能整除的输入断言边界；缺陷版 `/` 与 `//` 混用，或负数向下取整方向搞反 |
+| `python.finally-return` | 语言特性,错误,作用域 | `sym:finally; op:finally-return` | `try` 的 `else` / `finally` | 摘「异常处理里写返回值」的编排方法 | 断言 `finally` 里的 return 会覆盖 `try` 的；缺陷版以为 `try` 的返回值优先 |
+| `python.unhashable-key` | 语言特性,数据结构,相等 | `op:unhashable-key` | 可变对象做 dict 键 / set 元素 | 摘「把 list 塞进 set 或当键」 | 断言可哈希的替代写法（转 tuple）；缺陷版直接塞 list，运行 `TypeError` |
 
 ## 常见误解转成的缺陷
 

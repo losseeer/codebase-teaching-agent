@@ -2,18 +2,18 @@
 
 ## 能摘出来考的（含替身怎么给）
 
-| 考点 | 摘法 | 测试怎么断 |
-| --- | --- | --- |
-| `==` 的隐式转换 | 摘「用宽松相等做判定」的函数 | 造 `0` 与 `"0"`、`null` 与 `undefined`、`[]` 与 `""` 等能触发转换的输入，断言各自相等/不等；缺陷版写 `==`，边界输入全错 |
-| 浮点累加与比较 | 摘「金额/比例累加后判等」 | 断言 `0.1 + 0.2` 能与 `0.3` 判等（正确做法是整数分或容差比较）；缺陷版直接 `===` |
-| `NaN` 不等于自身 | 摘「校验数值是否合法」 | 断言 `NaN` 被识别为非法；缺陷版写 `value === NaN` 或 `value !== NaN`，两个方向都错 |
-| `Array.prototype.sort` 默认字典序 | 摘「对数字数组排序」 | 用 `[10, 9, 100]` 断言升序为 `[9, 10, 100]`；缺陷版不传比较器，得到 `[10, 100, 9]` |
-| `sort` / `reverse` 原地改动 | 摘「排序后继续用原数组」 | 断言原数组未变（正确做法 `[...arr].sort()`）；缺陷版原地排序，后续读到的是排过的 |
-| `async` 里的 `forEach` | 摘「批量异步处理」 | 断言全部完成后才收尾（正确做法 `for...of` 或 `Promise.all`）；缺陷版用 `forEach(async ...)`，外层不等待 |
-| 浅展开只一层 | 摘「展开对象后改嵌套字段」 | 断言改副本不影响原对象（正确做法结构化拷贝）；缺陷版 `{ ...obj }`，内层仍联动 |
-| `for...in` 与 `for...of` | 摘「遍历集合」 | 断言遍历到的是值不是下标/键；缺陷版对数组用 `for...in`，拿到字符串下标，累加变拼接 |
-| `parseInt` 缺基数 | 摘「解析数字」 | 用 `"08"`、`"0x10"` 断言结果；缺陷版不传基数，老引擎按八进制解析 |
-| 可选链与空值兜底 | 摘「深路径取值」 | 断言中间层缺失时返回兜底值而不是抛错；缺陷版逐层 `.` 取值 |
+| id | concepts | probes | 考点 | 摘法 | 测试怎么断 |
+| --- | --- | --- | --- | --- | --- |
+| `typescript.loose-equality` | 语言特性,相等 | `op:loose-equal` | `==` 的隐式转换 | 摘「用宽松相等做判定」的函数 | 造 `0` 与 `"0"`、`null` 与 `undefined`、`[]` 与 `""` 等能触发转换的输入，断言各自相等/不等；缺陷版写 `==`，边界输入全错 |
+| `typescript.float-equal` | 语言特性,数值,相等 | `op:float-strict-equal` | 浮点累加与比较 | 摘「金额/比例累加后判等」 | 断言 `0.1 + 0.2` 能与 `0.3` 判等（正确做法是整数分或容差比较）；缺陷版直接 `===` |
+| `typescript.nan-check` | 语言特性,数值,相等 | `sym:NaN; op:nan-self-equal` | `NaN` 不等于自身 | 摘「校验数值是否合法」 | 断言 `NaN` 被识别为非法；缺陷版写 `value === NaN` 或 `value !== NaN`，两个方向都错 |
+| `typescript.sort-lexical` | 语言特性,排序,集合 | `sym:Array.sort; op:missing-comparator` | `Array.prototype.sort` 默认字典序 | 摘「对数字数组排序」 | 用 `[10, 9, 100]` 断言升序为 `[9, 10, 100]`；缺陷版不传比较器，得到 `[10, 100, 9]` |
+| `typescript.sort-inplace` | 语言特性,引用,排序 | `sym:Array.sort; op:inplace-mutation` | `sort` / `reverse` 原地改动 | 摘「排序后继续用原数组」 | 断言原数组未变（正确做法 `[...arr].sort()`）；缺陷版原地排序，后续读到的是排过的 |
+| `typescript.foreach-async` | 语言特性,异步,集合 | `sym:forEach; op:unawaited-async` | `async` 里的 `forEach` | 摘「批量异步处理」 | 断言全部完成后才收尾（正确做法 `for...of` 或 `Promise.all`）；缺陷版用 `forEach(async ...)`，外层不等待 |
+| `typescript.shallow-spread` | 语言特性,引用,数据结构 | `op:shallow-spread` | 浅展开只一层 | 摘「展开对象后改嵌套字段」 | 断言改副本不影响原对象（正确做法结构化拷贝）；缺陷版 `{ ...obj }`，内层仍联动 |
+| `typescript.forin-of` | 语言特性,集合,作用域 | `sym:for-in; op:forin-index` | `for...in` 与 `for...of` | 摘「遍历集合」 | 断言遍历到的是值不是下标/键；缺陷版对数组用 `for...in`，拿到字符串下标，累加变拼接 |
+| `typescript.parseint-radix` | 语言特性,数值,边界 | `sym:parseInt; op:missing-radix` | `parseInt` 缺基数 | 摘「解析数字」 | 用 `"08"`、`"0x10"` 断言结果；缺陷版不传基数，老引擎按八进制解析 |
+| `typescript.optional-chain` | 语言特性,空值 | `op:missing-null-guard` | 可选链与空值兜底 | 摘「深路径取值」 | 断言中间层缺失时返回兜底值而不是抛错；缺陷版逐层 `.` 取值 |
 
 ## 常见误解转成的缺陷
 

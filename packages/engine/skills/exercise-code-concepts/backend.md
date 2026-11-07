@@ -2,14 +2,14 @@
 
 ## 能摘出来考的（含替身怎么给）
 
-| 考点 | 摘法 | 测试怎么断 |
-| --- | --- | --- |
-| 缓存读写与失效顺序 | 摘「读—回源—写—失效」的编排函数，存储与缓存都给替身 | 用替身记录的调用顺序断言「先写库再失效」 |
-| 幂等去重判定 | 摘「查过去重键后决定执行还是跳过」 | 断言首次执行、重复跳过、键缺失三种路径 |
-| 状态机合法迁移 | 摘「从当前状态 + 事件算出下一状态或拒绝」 | 断言合法迁移与非法迁移被拒 |
-| 事务边界的归属 | 摘「决定哪些写操作必须同成同败」的编排层，用替身记录提交/回滚 | 断言异常时回滚被调用（替身记录，不依赖真数据库） |
-| 分层依赖方向 | 出修改定位题：一次「加个字段并透出到接口」该改哪几层 | 候选项都在索引里，标准答案由依赖图算 |
-| 配置开关分流 | 摘「按开关值选实现」 | 断言开、关、缺省三种输入走哪条 |
+| id | concepts | probes | 考点 | 摘法 | 测试怎么断 |
+| --- | --- | --- | --- | --- | --- |
+| `backend.cache-order` | 缓存,幂等 | `text:cache; text:invalidate; text:evict` | 缓存读写与失效顺序 | 摘「读—回源—写—失效」的编排函数，存储与缓存都给替身 | 用替身记录的调用顺序断言「先写库再失效」 |
+| `backend.idempotency-check` | 幂等 | `text:dedup; text:idempoten` | 幂等去重判定 | 摘「查过去重键后决定执行还是跳过」 | 断言首次执行、重复跳过、键缺失三种路径 |
+| `backend.state-transition` | 状态机,边界 | `text:transition; text:state; op:illegal-transition-unchecked` | 状态机合法迁移 | 摘「从当前状态 + 事件算出下一状态或拒绝」 | 断言合法迁移与非法迁移被拒 |
+| `backend.transaction-boundary` | 事务,错误 | `text:transaction; text:rollback; call:commit ∉ try` | 事务边界的归属 | 摘「决定哪些写操作必须同成同败」的编排层，用替身记录提交/回滚 | 断言异常时回滚被调用（替身记录，不依赖真数据库） |
+| `backend.layer-direction` | 分层 | `text:controller; text:service; text:repository` | 分层依赖方向 | 出修改定位题：一次「加个字段并透出到接口」该改哪几层 | 候选项都在索引里，标准答案由依赖图算 |
+| `backend.config-branch` | 配置,边界 | `text:enabled; text:config; op:default-missing` | 配置开关分流 | 摘「按开关值选实现」 | 断言开、关、缺省三种输入走哪条 |
 
 ## 常见误解转成的缺陷
 
