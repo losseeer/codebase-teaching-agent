@@ -73,6 +73,14 @@ describe("unit 出题：改一笔闸（B2）", () => {
     expect(tooFarFromSolution({ ...proposalBluePrint, given: [{ path: "main.ts", contents: trimmed }], solution: [{ path: "main.ts", contents: source }] })).toBe(false);
   });
 
+  it("多行块注释被剥离；字符串里的 // 与 # 不被当注释切掉", () => {
+    const withJsdoc = ["/**", " * 说明：缓存顺序", " * 第二行", " */", "int f() { return 1; }"].join("\n");
+    expect(changedLines(withJsdoc, "int f() { return 1; }")).toBe(0);
+    expect(changedLines('const u = "http://x";', 'const u = "http://x";')).toBe(0);
+    // 字符串内部真的改了，必须能看出来（正则切注释的做法会看不出来）
+    expect(changedLines('const u = "http://x";', 'const u = "http://y";')).toBe(2);
+  });
+
   it("整份重写判拒", () => {
     const rewritten = [
       "class Cache {", "  private Map<String, Integer> store = new HashMap<>();", "  private int hits;",

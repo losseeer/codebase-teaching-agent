@@ -101,6 +101,8 @@ export function systemPrompt(kind: "patch_edit" | "author_function", language: E
     `"given":[{"path":"target.ts","contents":"<下发给学习者的源码：可以删注释、空行与无关语句，行为必须不变；solution 仍要原样>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
+    `"examPoints":[{"path":"target.ts","line":12,"point":"<技能文件里的考点 id>","why":"≤40 字"}],`,
+    "`examPoints` 是可选字段：这一趟真读过、又能对上考点的那几处才写；没把握就给空数组，不要编。",
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个单元为什么出不了代码题>\"}",
     "",
     "约束：`given` 与 `solution` 的 **path 集合必须完全一致**；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。"
@@ -134,7 +136,9 @@ export function referenceSystemPrompt(kind: "patch_edit" | "author_function"): s
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
+    `"examPoints":[{"path":"target.ts","line":12,"point":"<技能文件里的考点 id>","why":"≤40 字"}],`,
     `"anchors":[{"path":"<参考摘录或读过文件的路径>","line":起始行,"endLine":结束行,"why":"<取用了它的什么，≤30 字>"}]}`,
+    "`examPoints` 是可选字段：这一趟真读过、又能对上考点的那几处才写；没把握就给空数组，不要编。",
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个主题为什么出不了代码题>\"}",
     "",
     "约束：`given` 与 `solution` 的 path 集合必须完全一致；`hidden` 不得与它们同名；`entry` 必须是 `hidden` 里那个测试文件（java 填类名，不带 .java）。每档至多 " + MAX_FILES_PER_SLOT + " 个文件，单文件 ≤ " + MAX_FILE_BYTES + " 字节。",
@@ -415,11 +419,42 @@ async function generateWithRepair(input: {
 }
 
 /** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现。 */
+/**
+  去注释：状态机处理多行块注释，并保护字符串里的 `//`、`#`（正则做法会把 `"https://x"` 切坏，
+  也会让多行 JSDoc 留下来变成「有效行」，导致删注释被误判成整份重写）。
+*/
+function stripComments(text: string): string {
+  let out = "";
+  let index = 0;
+  let quote: string | null = null;
+  let block = false;
+  while (index < text.length) {
+    const ch = text[index]!;
+    const next = text[index + 1];
+    if (block) {
+      if (ch === "*" && next === "/") { block = false; index += 2; } else index += 1;
+      continue;
+    }
+    if (quote) {
+      out += ch;
+      if (ch === "\\") { out += text[index + 1] ?? ""; index += 2; continue; }
+      if (ch === quote) quote = null;
+      index += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") { block = true; index += 2; continue; }
+    if (ch === "/" && next === "/") { while (index < text.length && text[index] !== "\n") index += 1; continue; }
+    if (ch === "#") { while (index < text.length && text[index] !== "\n") index += 1; continue; }
+    if (ch === "\"" || ch === "'" || ch === "`") { quote = ch; out += ch; index += 1; continue; }
+    out += ch;
+    index += 1;
+  }
+  return out;
+}
+
 /** 去注释、去空行、trim：given 允许精简，闸只能在有效代码行上比。 */
 function effectiveLines(text: string): string[] {
-  return text.split("\n")
-    .map((line) => line.replace(/\/\/.*$/, "").replace(/#.*$/, "").replace(/\/\*.*?\*\//g, "").trim())
-    .filter((line) => line.length > 0);
+  return stripComments(text).split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
 /** 行级 LCS 差异行数（删 + 增）。 */
@@ -446,7 +481,9 @@ export function tooFarFromSolution(proposal: CodeProposal): boolean {
   const given = proposal.given.map((file) => file.contents).join("\n");
   const solution = proposal.solution.map((file) => file.contents).join("\n");
   const total = effectiveLines(solution).length;
-  const allowed = Math.max(3, Math.ceil(total * 0.3));
+  // 小文件至少 3 行（删注释/空行的余量），大文件按 10% 且封顶 15 行：
+  // 30% 的话 200 行的 solution 允许改 60 行，「改一笔」就没有意义了。
+  const allowed = Math.max(3, Math.min(15, Math.ceil(total * 0.1)));
   return changedLines(given, solution) > allowed;
 }
 
@@ -476,10 +513,10 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
       source: source.body.slice(0, MAX_FILE_BYTES)
     }),
     temperature: 0.4,
-    ...(input.faces ? { faces: input.faces } : {}),
+    faces,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.repair ? { repair: input.repair } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, faces: input.faces, unitPath: input.unit.symbol.path, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, faces, unitPath: input.unit.symbol.path, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 
@@ -506,10 +543,10 @@ export async function generateCodeExerciseFromReference(input: {
       ...(input.priorPlan ? { priorPlan: input.priorPlan, note: "priorPlan 是上一趟已经定好并写好的题面：沿用它的标题与三节结构，把精力放在实现与测试上，不要重新选题。" } : {})
     }),
     temperature: 0.4,
-    ...(input.faces ? { faces: input.faces } : {}),
+    faces,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.repair ? { repair: input.repair } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, faces: input.faces, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, faces, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 

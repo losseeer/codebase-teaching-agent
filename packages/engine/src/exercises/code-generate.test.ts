@@ -86,7 +86,7 @@ function proposalJson(input: HarnessInput): string {
     ok: true,
     language: "typescript",
     title: "把默认问候改回来",
-    prompt: "下面这个函数在没给 GREETING 时返回了错的字串，改到测试全过。",
+    prompt: "## 问题描述\n下面这个函数在没给 GREETING 时返回了错的字串，改到测试全过。\n\n## 示例\ngreet() => \"hello\"\n\n## 注意事项\n只能用标准库，不要改函数签名。",
     defect: "默认值拼错了：应当是 hello，写成了 hallo。",
     given: [{ path: "target.ts", contents: input.given }],
     solution: [{ path: "target.ts", contents: input.solution }],
