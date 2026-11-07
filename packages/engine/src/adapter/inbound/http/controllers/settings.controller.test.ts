@@ -56,7 +56,8 @@ describe("请求超时的运行时旋钮", () => {
   it("PUT 合法值立刻生效，留空回到 .env 那一份", async () => {
     const before = (await fx.app.inject({ method: "GET", url: "/api/llm/settings" })).json() as { timeoutMs?: string; activeTimeoutMs?: number; timeoutRange?: { minMs: number; maxMs: number } };
     expect(before.activeTimeoutMs, "没填时生效的是 .env/默认那一份").toBeGreaterThan(0);
-    expect(before.timeoutRange?.maxMs, "区间随设置一起下发，界面的说法与判据同源").toBe(300_000);
+    // 与 provider.ts 的 TIMEOUT_MAX_MS 同源：改上限时这条断言必须跟着翻，才能提醒文案同步
+    expect(before.timeoutRange?.maxMs, "区间随设置一起下发，界面的说法与判据同源").toBe(600_000);
 
     const raised = await fx.app.inject({ method: "PUT", url: "/api/llm/settings", payload: { timeoutMs: "180000" } });
     expect(raised.statusCode).toBe(200);

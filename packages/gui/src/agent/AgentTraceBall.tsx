@@ -344,7 +344,7 @@ function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurfa
       ) : null}
       <section className="surface-group">
         <div className="trace-group-head"><span>出厂技能</span></div>
-        <p className="field-note">技能装在用户目录里，可以自己改。改乱了就把出厂那份覆盖回来：只动出厂技能同名目录，你自建的技能和你多放的文件都不碰。SKILL.md 里的「当前策略」也会一并恢复成出厂默认。</p>
+        <p className="field-note">技能存放于用户技能目录~/.codebase-tutor/skills，可自行修改。若修改后出现异常，可用出厂版本覆盖恢复：仅覆盖与出厂技能同名的目录，不影响自建技能及额外文件；覆盖前注意备份</p>
         <button type="button" className="btn btn-danger-ghost btn-sm" disabled={busy} onClick={() => setConfirming(true)}>恢复初始技能</button>
         {note ? <p className="field-note">{note}</p> : null}
       </section>
