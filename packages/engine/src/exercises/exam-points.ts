@@ -74,12 +74,22 @@ export function parsePointTable(bodyOf: BodyOf): ExamPointDef[] {
   return out;
 }
 
+/**
+  概念词表。两种形状都吃：
+  - `{ "concepts": { "并发": [...] } }`（现行格式，带版本与说明）
+  - `{ "并发": [...] }`（顶层直接是概念表）
+  形状认不出来时返回空表——由调用方显式告警并跳过判定，不在这里静默当成「没有概念」。
+*/
 export function loadConceptTable(bodyOf: BodyOf): Record<string, string[]> {
   const raw = bodyOf(TOPIC_SKILL, "concepts.json");
   if (!raw) return {};
   try {
-    const parsed = JSON.parse(raw) as { concepts?: Record<string, string[]> };
-    return parsed.concepts ?? {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const wrapped = parsed.concepts;
+    if (wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)) return wrapped as Record<string, string[]>;
+    const values = Object.values(parsed);
+    if (values.length && values.every((value) => Array.isArray(value))) return parsed as Record<string, string[]>;
+    return {};
   } catch {
     return {};
   }
@@ -95,6 +105,10 @@ export function buildPointIndex(bodyOf: BodyOf): PointIndex {
       list.push(point);
       byConcept.set(concept, list);
     }
+  }
+  if (points.length && !Object.keys(concepts).length) {
+    // 有考点没有概念 = 主题判定必然全落空，这里显式喊出来，别让它悄悄退化成「永远拒绝」。
+    console.warn("[exam-points] 考点表有 " + points.length + " 条，但 concepts.json 没解析出概念；主题判定会被跳过。检查 concepts.json 的形状（顶层是概念表，或包在 concepts 字段里）。");
   }
   return { points, concepts, byConcept };
 }

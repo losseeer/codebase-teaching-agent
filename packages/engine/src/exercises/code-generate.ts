@@ -565,13 +565,13 @@ function recordUnitExamNotes(
     legalIds: new Set(index.points.map((point) => point.id)),
     fileReads: reads,
     pointIds: new Set(input.faces.examPlan?.pointIds ?? []),
-    sourceLevel: input.faces.examPlan?.sourceLevel ?? 1
+    sourceLevel: input.faces.examPlan?.sourceLevel ?? 0
   });
   const saved = recordExamNotes(repositoryPath, validation.accepted, new Date().toISOString());
   traceEngine("exam_notes", {
     path: "whole", written: validation.written, accepted: validation.accepted.length, rejected: validation.rejected,
     legalRate: Number(validation.legalRate.toFixed(3)), relatedRate: Number(validation.relatedRate.toFixed(3)),
-    saved, sourceLevel: input.faces.examPlan?.sourceLevel ?? 1
+    saved, sourceLevel: input.faces.examPlan?.sourceLevel ?? 0
   }, { traceId: null });
 }
 

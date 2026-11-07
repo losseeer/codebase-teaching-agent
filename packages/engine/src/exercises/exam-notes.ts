@@ -20,8 +20,8 @@ export interface ExamNote {
   /** 技能条目 id。 */
   point: string;
   why: string;
-  /** 产出这趟的主题判定级别。 */
-  sourceLevel: 1 | 2;
+  /** 产出这趟的主题判定级别；0 = 这一趟没做落点判定（不是「判定为第 1 级」）。 */
+  sourceLevel: 0 | 1 | 2;
 }
 
 export interface ExamNoteFile {
@@ -42,7 +42,7 @@ export interface ValidationContext {
   fileReads: Set<string>;
   /** 本趟命中的技能条目 id，用于相关接受率。 */
   pointIds: Set<string>;
-  sourceLevel: 1 | 2;
+  sourceLevel: 0 | 1 | 2;
 }
 
 export interface ValidationResult {
@@ -108,8 +108,8 @@ export function mergeExamNotes(existing: ExamNoteFile | undefined, incoming: Exa
   for (const note of [...base, ...incoming]) {
     const key = `${note.point}:${note.line}`;
     const previous = byKey.get(key);
-    // 同 key 时保留 sourceLevel 更低的（第 1 级笔记置信度高于第 2 级）
-    if (!previous || note.sourceLevel < previous.sourceLevel) byKey.set(key, note);
+    // 同 key 时保留更可信的：第 1 级 > 第 2 级 > 没做判定(0)
+    if (!previous || (note.sourceLevel !== 0 && (previous.sourceLevel === 0 || note.sourceLevel < previous.sourceLevel))) byKey.set(key, note);
   }
   return { hash, at, points: trimNotes([...byKey.values()]) };
 }

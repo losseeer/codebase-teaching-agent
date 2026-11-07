@@ -355,13 +355,13 @@ export async function generateCodeExerciseSegmented(input: {
       legalIds,
       fileReads: new Set(response.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path)),
       pointIds: new Set(plan?.pointIds ?? []),
-      sourceLevel: plan?.sourceLevel ?? 1
+      sourceLevel: plan?.sourceLevel ?? 0
     });
     const saved = recordExamNotes(input.repositoryPath, validation.accepted, new Date().toISOString());
     traceEngine("exam_notes", {
       written: validation.written, accepted: validation.accepted.length, rejected: validation.rejected,
       legalRate: Number(validation.legalRate.toFixed(3)), relatedRate: Number(validation.relatedRate.toFixed(3)),
-      saved, sourceLevel: plan?.sourceLevel ?? 1
+      saved, sourceLevel: plan?.sourceLevel ?? 0
     }, { traceId: null });
     if (notesBudget) {
       const diagnostics = notesBudget.diagnostics();
