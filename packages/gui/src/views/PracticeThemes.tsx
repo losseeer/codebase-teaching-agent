@@ -225,7 +225,7 @@ export function PracticeBank({ entries, activeId, onOpen, onStart, onDelete }: {
               {shown.map((entry) => row(entry, true))}
               {rest.length > BANK_PREVIEW ? (
                 <button type="button" className="bank-more" onClick={() => setExpanded((open) => !open)}>
-                  {expanded ? "收起" : `展开其余 ${rest.length} 道`}
+                  {expanded ? "收起" : `展开其余 ${rest.length - BANK_PREVIEW} 道`}
                 </button>
               ) : null}
             </div>
