@@ -98,10 +98,10 @@ const promptStageRules = (primaryLanguage?: string): string[] => [
   '或拒绝：{"ok":false,"reason":"<面向学习者的一句话：这个主题为什么出不了代码题>"}'
 ];
 
-const codeStageRules = (): string[] => [
+const codeStageRules = (language: string): string[] => [
   "这一段只出**给定件与参考解**两份文件，不要写测试，也不要写题面。",
   "目标文件的现状自己用 `read_file` 读，不要凭空编接口：这一段允许你检索仓库。",
-  '严格输出 JSON（不要任何其他文字）：{"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],"anchors":[{"path":"<你真正读过、并取用了实现的文件>","line":起始行,"endLine":结束行,"why":"取用了什么，≤30字"}]}',
+  `严格输出 JSON（不要任何其他文字）：{"given":[{"path":"target.${FILE_EXT[language] ?? "ts"}","contents":"<下发给学习者的整份文件源码>"}],"solution":[{"path":"target.${FILE_EXT[language] ?? "ts"}","contents":"<应当全过的那一份>"}],"anchors":[{"path":"<你真正读过、并取用了实现的文件>","line":起始行,"endLine":结束行,"why":"取用了什么，≤30字"}]}`,
   "anchors 最多 3 条，只填真正取材过的文件；一处都没参考就填空数组。产品靠它显示「相关文件」。",
   "两份文件的 **path 集合必须完全一致**；contents 是整份文件源码，不是片段。",
   "同一语言的项目里，除测试件外不要再引入第三方依赖。",
@@ -127,8 +127,10 @@ export function promptSystem(kind: "patch_edit" | "author_function", primaryLang
 }
 
 /** 段 2（代码）：语言已知，带那一种语言的测试形状。 */
+const FILE_EXT: Record<string, string> = { typescript: "ts", python: "py", java: "java", go: "go" };
+
 export function codeSystem(kind: "patch_edit" | "author_function", language: string): string {
-  return [...baseRules(kind), ...testContractOf(language), ...codeStageRules()].join("\n");
+  return [...baseRules(kind), ...testContractOf(language), ...codeStageRules(language)].join("\n");
 }
 
 /** 段 3：带该语言的测试形状规范，漏了测试就跑不出结论行。 */

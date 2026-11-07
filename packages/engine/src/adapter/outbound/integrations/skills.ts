@@ -231,6 +231,8 @@ function readAttached(skillRoot: string, file: string): string | undefined {
     if (!statSync(real).isFile()) return undefined;
     const text = readFileSync(real, "utf8");
     if (text.includes("\0")) return undefined;
+    // JSON 是结构化数据（概念词表、档位表），截断必坏——不参与正文的那种字数上限。
+    if (file.endsWith(".json")) return mask(text);
     return mask(clip(text, "附属文件"));
   } catch {
     return undefined;

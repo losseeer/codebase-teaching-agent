@@ -269,6 +269,8 @@ export class ExerciseService {
     if (!index.points.length || !Object.keys(index.concepts).length) {
       // 词表缺一半时不能继续判定：conceptsOfTheme 恒空会把所有主题都判成零落点。
       console.warn("[exam-plan] 考点表或 concepts.json 未加载（技能缺失、表格没有 id 列、词表解析失败），本趟跳过主题落点判定。");
+      // 跳过必须留痕：否则「判定没执行」和「判定通过」从日志上无法区分，出题质量回退是静默的。
+      traceEngine("exam_plan", { theme, skipped: true, reason: "concept-table-unavailable" }, { traceId: null });
       return undefined;
     }
     const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
