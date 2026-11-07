@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { restoreBundledSkills } from "./skills.js";
+import { diffBundledSkills, restoreBundledSkills } from "./skills.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -54,5 +54,39 @@ describe("恢复出厂技能", () => {
     expect(result.restored).toEqual(["built-in"]);
     expect(result.backupDirs).toEqual([]);
     expect(readFileSync(join(target, "built-in", "SKILL.md"), "utf8")).toContain("出厂正文");
+  });
+});
+
+describe("出厂技能与用户目录的差异（只读）", () => {
+  it("列出被改过的文件、只在用户目录的文件，以及用户目录里缺的技能", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-diff-"));
+    roots.push(root);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    makeSource(source, "built-in");
+    makeSource(source, "other-built-in");
+    mkdirSync(join(target, "built-in"), { recursive: true });
+    writeFileSync(join(target, "built-in", "SKILL.md"), "用户改坏的\n", "utf8");
+    writeFileSync(join(target, "built-in", "mine.md"), "我自己加的\n", "utf8");
+
+    const diff = diffBundledSkills({ sourceDir: source, targetDir: target });
+    expect(diff.entries).toHaveLength(1);
+    expect(diff.entries[0]?.skill).toBe("built-in");
+    expect(diff.entries[0]?.differs).toContain("SKILL.md");
+    expect(diff.entries[0]?.differs).toContain("extra.md");
+    expect(diff.entries[0]?.extra).toEqual(["mine.md"]);
+    expect(diff.missing).toEqual(["other-built-in"]);
+    // 文件数含缺失技能要装进去的文件：built-in 的 2 个 + other-built-in 的 2 个
+    expect(diff.files).toBe(4);
+  });
+
+  it("完全一致时没有差异", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-diff-"));
+    roots.push(root);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    makeSource(source, "built-in");
+    restoreBundledSkills({ sourceDir: source, targetDir: target });
+    expect(diffBundledSkills({ sourceDir: source, targetDir: target }).entries).toEqual([]);
   });
 });

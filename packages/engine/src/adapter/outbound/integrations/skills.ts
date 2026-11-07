@@ -93,6 +93,58 @@ export function installBundledSkills(input?: { sourceDir?: string; targetDir?: s
   - 覆盖前把被动的技能目录备份到 `<目录>.bak-<时间戳>/`。
   出厂技能本身只读，永不被这个流程写入。
 */
+/** 一份出厂技能与用户目录的差异。 */
+export interface SkillDiffEntry {
+  skill: string;
+  /** 与出厂内容不同的文件（用户改过，或用户目录里缺这个文件）。 */
+  differs: string[];
+  /** 只在用户目录里有的文件（恢复出厂不会删它）。 */
+  extra: string[];
+}
+
+export interface SkillDiff {
+  entries: SkillDiffEntry[];
+  /** 出厂有、用户目录里完全没有的技能。 */
+  missing: string[];
+  /** 差异涉及的文件总数。 */
+  files: number;
+}
+
+/**
+  出厂技能与用户目录的差异（只读，不写盘）。
+  供 CLI 报告与界面提示用；实际覆盖走 restoreBundledSkills。
+*/
+export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillDiff {
+  const target = input?.targetDir ?? skillDirectories()[0];
+  const source = input?.sourceDir ?? bundledSkillSource();
+  if (!source) return { entries: [], missing: [], files: 0 };
+  const entries: SkillDiffEntry[] = [];
+  const missing: string[] = [];
+  let files = 0;
+  for (const skill of listSkills([source]).skills) {
+    const from = join(source, skill.name);
+    const to = join(target, skill.name);
+    if (!existsSync(to)) {
+      missing.push(skill.name);
+      files += filesUnder(from).length;
+      continue;
+    }
+    const fromFiles = filesUnder(from);
+    const toFiles = new Set(filesUnder(to));
+    const differs = fromFiles.filter((name) => !toFiles.has(name) || !sameFileContent(join(from, name), join(to, name)));
+    const extra = [...toFiles].filter((name) => !fromFiles.includes(name));
+    if (!differs.length && !extra.length) continue;
+    entries.push({ skill: skill.name, differs, extra });
+    files += differs.length;
+  }
+  return { entries, missing, files };
+}
+
+/** 两个文件内容是否一致。 */
+function sameFileContent(left: string, right: string): boolean {
+  try { return readFileSync(left, "utf8") === readFileSync(right, "utf8"); } catch { return false; }
+}
+
 export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: string }): { restored: string[]; backupDirs: string[]; files: number } {
   const target = input?.targetDir ?? skillDirectories()[0];
   const source = input?.sourceDir ?? bundledSkillSource();

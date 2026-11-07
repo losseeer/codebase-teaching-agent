@@ -1,83 +1,40 @@
 /**
   同步出厂技能到用户技能目录（dev 用）。
 
-  设计约束：出厂技能（packages/engine/skills）**只读**；出厂在首次启动时把技能 copy 到
-  ~/.codebase-tutor/skills，之后**用户可以自由覆盖**那份副本，引擎不自动回灌。
-  所以「出厂改了怎么生效」只能是一个**显式动作**——就是这条命令。
+  **覆盖逻辑只有一份**：engine 的 `restoreBundledSkills()`。界面上那个「恢复初始技能」按钮
+  走的是同一个函数，这里只是多一层「先看差异、确认再动」的报告。两个入口的行为永远一致。
+
+  设计约束：出厂技能（packages/engine/skills）只读；出厂在首次启动时把技能 copy 到用户目录，
+  之后用户可以自由覆盖那份副本，引擎不自动回灌 —— 所以「出厂改了怎么生效」只能是一个显式动作。
 
   用法：
     tsx dev/skill/sync-skills.ts            # 只报告差异，不动文件
-    tsx dev/skill/sync-skills.ts --force    # 真同步：先整目录备份，再覆盖出厂技能同名目录
-  用户自建的技能（出厂没有的）永远不动。
+    tsx dev/skill/sync-skills.ts --force    # 真同步：先备份被覆盖的技能目录，再覆盖
 */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { diffBundledSkills, restoreBundledSkills } from "../../src/adapter/outbound/integrations/skills.js";
 
-const source = join(import.meta.dirname ?? "", "../../skills");
-const target = join(homedir(), ".codebase-tutor", "skills");
 const force = process.argv.includes("--force");
+const diff = diffBundledSkills();
 
-if (!existsSync(source)) {
-  console.error(`找不到出厂技能目录：${source}`);
-  process.exit(1);
-}
-
-const skills = readdirSync(source).filter((name) => statSync(join(source, name)).isDirectory());
-
-/** 相对路径下的文件内容是否相同。 */
-function sameContent(a: string, b: string): boolean {
-  try { return readFileSync(a, "utf8") === readFileSync(b, "utf8"); } catch { return false; }
-}
-
-function filesOf(root: string, prefix = ""): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(root)) {
-    const path = join(root, name);
-    if (statSync(path).isDirectory()) out.push(...filesOf(path, `${prefix}${name}/`));
-    else out.push(`${prefix}${name}`);
-  }
-  return out;
-}
-
-let changed = 0;
-for (const skill of skills) {
-  const from = join(source, skill);
-  const to = join(target, skill);
-  if (!existsSync(to)) {
-    console.log(`新增  ${skill}`);
-    changed += 1;
-    if (force) {
-      cpSync(from, to, { recursive: true });
-      console.log(`  已写入 ${to}`);
-    }
-    continue;
-  }
-  const fromFiles = filesOf(from);
-  const toFiles = new Set(filesOf(to));
-  const differs = fromFiles.filter((name) => !toFiles.has(name) || !sameContent(join(from, name), join(to, name)));
-  const extra = [...toFiles].filter((name) => !fromFiles.includes(name));
-  if (!differs.length && !extra.length) continue;
-  console.log(`更新  ${skill}`);
-  for (const name of differs) console.log(`  ~ ${name}`);
-  for (const name of extra) console.log(`  + 仅用户目录有：${name}（同步不会删它）`);
-  changed += 1;
-  if (!force) continue;
-  // 逐文件覆盖：出厂有的文件用出厂版本，用户多出来的文件原样保留（用户可以自由扩展）。
-  for (const name of differs) {
-    const targetFile = join(to, name);
-    mkdirSync(dirname(targetFile), { recursive: true });
-    cpSync(join(from, name), targetFile);
-  }
-}
-
-if (!changed) {
+if (!diff.entries.length && !diff.missing.length) {
   console.log("出厂技能与用户目录已经一致。");
-} else if (!force) {
-  console.log(`\n有 ${changed} 个技能存在差异。加 --force 真同步（会先整目录备份）。`);
-} else {
-  const backup = `${target}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  cpSync(target, backup, { recursive: true });
-  console.log(`\n已备份原用户技能目录到：${backup}`);
-  console.log("注意：同步会覆盖用户对出厂技能的修改（含 SKILL.md 里的「当前策略」声明），需要时从备份里改回来。");
+  process.exit(0);
 }
+
+for (const entry of diff.entries) {
+  console.log(`更新  ${entry.skill}`);
+  for (const name of entry.differs) console.log(`  ~ ${name}`);
+  for (const name of entry.extra) console.log(`  + 仅用户目录有：${name}（同步不会删它）`);
+}
+for (const name of diff.missing) console.log(`新增  ${name}`);
+console.log(`\n共 ${diff.entries.length + diff.missing.length} 份技能有差异，涉及 ${diff.files} 个文件。`);
+
+if (!force) {
+  console.log("加 --force 真同步（会先备份被覆盖的技能目录）。");
+  process.exit(0);
+}
+
+const result = restoreBundledSkills();
+console.log(`已恢复 ${result.restored.length} 份出厂技能（覆盖 ${result.files} 个文件）。`);
+for (const dir of result.backupDirs) console.log(`  备份：${dir}`);
+console.log("注意：SKILL.md 里的「当前策略」也在出厂文件里，会一并恢复成出厂默认。");
