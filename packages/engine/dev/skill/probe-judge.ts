@@ -19,7 +19,7 @@ const corpus = buildSearchCorpus(index, analysis as never, new Map());
 const ctx = { corpus, readText: (p: string) => { try { return readFileSync(`${repoPath}/${p}`, "utf8"); } catch { return undefined; } } };
 const judgeIndex = buildPointIndex(bodyOf);
 
-for (const theme of ["高并发", "操作系统", "线程池", "Java特性", "计算机网络"]) {
+for (const theme of ["TCP", "Redis缓存", "MySQL索引", "限流", "ThreadLocal", "死锁", "幂等", "事务隔离级别", "消息队列", "JVM垃圾回收", "设计模式"]) {
   const judged = judgeThemeLandings({ theme, index: judgeIndex, ctx });
   if (judged.ok) {
     console.log(`✓ ${theme}: 第${judged.plan.sourceLevel}级  概念[${judged.plan.concepts.join(",")}]  命中条目[${judged.plan.pointIds.join(",") || "无"}]  落点 ${judged.plan.landings.length} 处  推荐 ${judged.plan.listedPoints.length} 条`);
