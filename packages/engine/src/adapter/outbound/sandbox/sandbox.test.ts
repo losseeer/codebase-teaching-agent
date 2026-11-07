@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, type TestContext } from "vitest";
 import { nestedSandboxUsable } from "./capability.js";
 import { isolationStatus, needsReprobe, reprobeIsolation, resetIsolationForTest, runSandbox, SandboxUnavailableError, stubIsolationForTest, type IsolationStatus } from "./isolation.js";
-import { assertSafePath, runRaw } from "./runner.js";
+import { assertSafePath, liveProcessCount, runRaw } from "./runner.js";
 import { resolveToolchain, seatbeltProfile } from "./profile.js";
 import { homedir } from "node:os";
 
@@ -209,5 +209,19 @@ describe.skipIf(process.platform === "win32")("profile 组装", () => {
     expect(profile).not.toContain("(deny network*)");
     expect(profile).not.toContain("(deny process-fork)");
     expect(profile).toContain("(deny file-read*");
+  });
+});
+
+/** 超时之后不能留下孤儿：清理只靠定时器时，父进程先退就再也杀不到。 */
+describe("超时清理不泄漏进程", () => {
+  it("超时 kill 后登记的进程组归零（baseline 模式，本机没有隔离后端也能跑）", async () => {
+    const before = liveProcessCount();
+    const run = await runRaw({
+      baseline: true, timeoutMs: 800, language: "python", entry: "spin.py",
+      files: [{ path: "spin.py", contents: "while True:\n    pass\n" }]
+    });
+    expect(run.timedOut, "死循环没被判超时，这条测试就没意义").toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(liveProcessCount(), "还有登记在案的子进程组：说明 kill 之后没清干净").toBe(before);
   });
 });

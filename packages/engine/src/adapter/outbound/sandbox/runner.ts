@@ -1,6 +1,6 @@
 /** 沙箱 runner：把一组文件加一个入口在强制隔离下真跑一次，返回 stdout/stderr/退出状态；不含判分语义。
     超时杀整个进程组（`detached` + `kill(-pid)`）；输出到量后继续排空但丢弃。`baseline` 不裹 `sandbox-exec`，用真 HOME 跑。 */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -121,13 +121,60 @@ interface LaunchContext {
   isolated: boolean;
 }
 
+/**
+  活着的子进程组。`detached: true` 让子进程自成会话，父进程一退出它就继续跑；
+  只靠超时定时器清理时，父进程（vitest worker / 被测进程）先退就再也杀不到 ——
+  这是 loop.ts 孤儿进程的真正来源。这里登记起来，父进程正常退出时统一带走。
+*/
+const live = new Set<number>();
+let hooksInstalled = false;
+
+function installExitHooks(): void {
+  if (hooksInstalled) return;
+  hooksInstalled = true;
+  const reap = (): void => {
+    for (const pid of live) {
+      try { process.kill(-pid, "SIGKILL"); } catch { /* 已经退了 */ }
+      try { process.kill(pid, "SIGKILL"); } catch { /* 已经退了 */ }
+    }
+    live.clear();
+  };
+  // exit 钩子里只能做同步调用，process.kill 是同步的。
+  process.once("exit", reap);
+  process.once("SIGINT", () => { reap(); process.exit(130); });
+  process.once("SIGTERM", () => { reap(); process.exit(143); });
+}
+
+/**
+  超时杀进程树：先杀进程组；再按父 pid 补一刀，覆盖子进程另起进程组的平台差异；
+  最后补一拍，覆盖 kill 之后才冒出来的孙进程。
+*/
+function killTree(pid: number): void {
+  try { process.kill(-pid, "SIGKILL"); } catch { /* 已经退了 */ }
+  try { process.kill(pid, "SIGKILL"); } catch { /* 已经退了 */ }
+  try { spawnSync("/usr/bin/pkill", ["-KILL", "-P", String(pid)], { stdio: "ignore" }); } catch { /* 没有 pkill 或不给权限 */ }
+  const retry = setTimeout(() => {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* 已经退了 */ }
+    try { spawnSync("/usr/bin/pkill", ["-KILL", "-P", String(pid)], { stdio: "ignore" }); } catch { /* 同上 */ }
+  }, 50);
+  retry.unref?.();
+}
+
+/** 测试用：当前还有几个登记在案的子进程组。 */
+export function liveProcessCount(): number {
+  return live.size;
+}
+
 interface LaunchResult { exitCode: number | null; signal: string | null; timedOut: boolean; stdout: string; stderr: string; truncated: boolean }
 
 function launch(command: string, args: string[], context: LaunchContext): Promise<LaunchResult> {
   const binary = context.isolated ? "/usr/bin/sandbox-exec" : command;
   const forwarded = context.isolated ? ["-p", context.profile, command, ...args] : args;
   return new Promise((resolveLaunch) => {
+    installExitHooks();
     const child = spawn(binary, forwarded, { cwd: context.workdir, env: context.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    if (child.pid !== undefined) live.add(child.pid);
+    const forget = (): void => { if (child.pid !== undefined) live.delete(child.pid); };
     let stdout = "";
     let stderr = "";
     let truncated = false;
@@ -144,18 +191,22 @@ function launch(command: string, args: string[], context: LaunchContext): Promis
     let timedOut = false;
     const killer = setTimeout(() => {
       timedOut = true;
-      // 负 pid = 整个进程组
-      if (child.pid !== undefined) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* 已经退了 */ } }
+      if (child.pid !== undefined) killTree(child.pid);
     }, context.timeoutMs);
 
     child.on("error", (error) => {
       clearTimeout(killer);
+      forget();
       stderr += `\nsandbox spawn failed: ${error.message}`;
       resolveLaunch({ exitCode: null, signal: null, timedOut, stdout, stderr, truncated });
     });
     child.on("close", (code, signal) => {
       clearTimeout(killer);
-      resolveLaunch({ exitCode: timedOut ? null : code, signal, timedOut, stdout, stderr, truncated });
+      forget();
+      const done = (): void => resolveLaunch({ exitCode: timedOut ? null : code, signal, timedOut, stdout, stderr, truncated });
+      // 超时那次还有一拍补刀（50ms 后重杀孙进程）；这里等它跑完再交还，
+      // 否则 runRaw 的 finally 会先 rmSync 掉目录，进程还在跑「已删除的文件」。
+      if (timedOut) setTimeout(done, 80); else done();
     });
   });
 }
