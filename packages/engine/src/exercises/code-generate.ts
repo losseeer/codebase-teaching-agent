@@ -93,7 +93,7 @@ export function systemPrompt(kind: "patch_edit" | "author_function", language: E
     "",
     "严格输出 JSON（不要任何其他文字）：",
     `{"ok":true,"language":"${language}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
-    `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
+    `"given":[{"path":"target.ts","contents":"<下发给学习者的源码：可以删注释、空行与无关语句，行为必须不变；solution 仍要原样>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts"}`,
     "或拒绝：{\"ok\":false,\"reason\":\"<面向学习者的一句话：这个单元为什么出不了代码题>\"}",
@@ -188,7 +188,7 @@ function samePathSet(left: CodeFile[], right: CodeFile[]): boolean {
   return key(left) === key(right);
 }
 
-function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodeProposal; issue?: string } {
+export function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodeProposal; issue?: string } {
   const language = String(parsed.language ?? "").trim() as ExerciseLanguage;
   if (!["typescript", "python", "java", "go"].includes(language)) return { issue: `语言不在沙箱支持范围内：${language || "（空）"}` };
   const kind = String(parsed.kind ?? "").trim();
@@ -197,6 +197,9 @@ function normalizeProposal(parsed: Record<string, unknown>): { proposal?: CodePr
   const prompt = String(parsed.prompt ?? "").trim().slice(0, MAX_PROMPT);
   const defect = String(parsed.defect ?? "").trim().slice(0, 200);
   if (!title || !prompt) return { issue: "题面标题或描述为空" };
+  // 与分段同一份题面口径：三节缺一节就判形状错，交给重试，不让「只写一段」混过去。
+  const missing = ["## 问题描述", "## 示例", "## 注意事项"].filter((section) => !prompt.includes(section));
+  if (missing.length) return { issue: `题面缺这几节：${missing.join("、")}——必须按「问题描述 / 示例 / 注意事项」三节写完整。` };
   const given = shapeFiles(parsed.given, language);
   const solution = shapeFiles(parsed.solution, language);
   const hidden = shapeFiles(parsed.hidden, language);
@@ -277,6 +280,29 @@ const REPAIR_INSTRUCTION = [
   "上一份出题在沙箱自证里没有通过。请修正实现或测试中的不一致，重新输出一份完整 JSON（不要只输出改动片段）。",
   "参考解必须让全部测试通过，下发件必须至少有一条测试失败；不得删除、跳过或放宽断言来迁就参考解。"
 ].join("\n");
+
+/** 出题的成本闸：硬上限 25 轮、软预算 15 轮，与分段口径一致（分段单独设过，unit/reference 一直用默认 100 轮）。 */
+export const UNIT_HARD_ROUNDS = 25;
+export const UNIT_SOFT_ROUNDS = 15;
+
+export function unitFaces(faces: ExerciseFaces): ExerciseFaces {
+  const inner = faces.budgetBrief;
+  return {
+    ...faces,
+    maxRounds: UNIT_HARD_ROUNDS,
+    budgetBrief: (state) => {
+      const left = UNIT_SOFT_ROUNDS - state.round;
+      const parts = [
+        `已用 ${state.round} 轮（软预算 ${UNIT_SOFT_ROUNDS}，硬上限 ${state.maxRounds}），已读 ${state.filesRead} 个文件`
+      ];
+      if (state.newFiles === 0) parts.push("本轮没有新增文件");
+      if (left <= 0) parts.push("已过软预算，下一步必须直接产出，不要再调工具");
+      else if (left <= 5) parts.push(`还剩 ${left} 轮，够用但要开始收口`);
+      const own = `（进度：${parts.join("；")}。）`;
+      return inner ? `${inner(state)}${own}` : own;
+    }
+  };
+}
 
 export async function requestProposal(input: { provider: LlmProvider; system: string; user: string; temperature: number; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<ProposalResponse> {
   const loop = await completeWithReadTool({
@@ -396,7 +422,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [], skillReads: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
-  const faces = input.faces ?? {};
+  const faces = unitFaces(input.faces ?? {});
   input.onProgress?.({ stage: "proposing" });
   return await generateWithRepair({
     provider: input.provider,
@@ -429,7 +455,7 @@ export async function generateCodeExerciseFromReference(input: {
   /** 上一趟（分段）已经定好的题面：沿用，别重新选题。 */
   priorPlan?: { title: string; prompt: string; defect: string };
 }): Promise<CodeGeneration> {
-  const faces = input.faces ?? {};
+  const faces = unitFaces(input.faces ?? {});
   input.onProgress?.({ stage: "proposing" });
   return await generateWithRepair({
     provider: input.provider,
