@@ -123,3 +123,15 @@ describe("主题文件集合的落点兜底", () => {
     expect(themeWithLandings(undefined, judged.plan)).toBeUndefined();
   });
 });
+
+describe("推荐清单补足不重复", () => {
+  it("命中条目少于 5 条时从启用条目补足，补足后无重复 id", () => {
+    const judged = judgeThemeLandings({ theme: "Java特性", index, ctx });
+    expect(judged.ok).toBe(true);
+    if (!judged.ok) return;
+    const ids = judged.plan.listedPoints.map((point) => point.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    // 补足后的清单必然仍以命中的条目开头
+    expect(ids.slice(0, judged.plan.pointIds.length)).toEqual(judged.plan.pointIds);
+  });
+});
