@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { changedLines, normalizeProposal, systemPrompt, tooFarFromSolution, unitFaces, UNIT_HARD_ROUNDS, UNIT_SOFT_ROUNDS, type CodeProposal } from "./code-generate.js";
+import { changedLines, normalizeProposal, primaryLanguageOf, referenceSystemPrompt, systemPrompt, tooFarFromSolution, unitFaces, UNIT_HARD_ROUNDS, UNIT_SOFT_ROUNDS, type CodeProposal } from "./code-generate.js";
 
 /** 最小合法产出：三节齐全、path 集合一致、entry 指向 hidden 里的测试文件。 */
 const proposal = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -97,5 +97,30 @@ describe("unit 出题：阅读笔记解析（B1）", () => {
     const parsed = normalizeProposal(proposal({ examPoints: [{ path: "main.ts", line: 3, point: "backend.cache-order", why: "缓存顺序" }] }));
     expect(parsed.proposal?.examPoints).toHaveLength(1);
     expect(normalizeProposal(proposal()).proposal?.examPoints).toBeUndefined();
+  });
+});
+
+describe("仓库主语言", () => {
+  it("从检索语料的扩展名分布里取最多的一种；语料为空则不约束", () => {
+    const faces = {
+      search: { entries: [{ path: "src/A.java" }, { path: "src/B.java" }, { path: "src/C.go" }] }
+    } as unknown as Parameters<typeof primaryLanguageOf>[0];
+    expect(primaryLanguageOf(faces)).toBe("java");
+    expect(primaryLanguageOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("prompt 的语言与题面约束", () => {
+  it("reference：有主语言时锁语言，没有则保持四选一", () => {
+    expect(referenceSystemPrompt("patch_edit", "java")).toContain("题目语言必须用 `java`（仓库的主语言）");
+    expect(referenceSystemPrompt("patch_edit", "java")).toContain('\"language\":\"java\"');
+    expect(referenceSystemPrompt("patch_edit")).toContain("typescript|python|java|go");
+  });
+
+  it("三条出题路径都有「说人话」软约束", () => {
+    for (const text of [systemPrompt("patch_edit", "typescript"), referenceSystemPrompt("patch_edit")]) {
+      expect(text).toContain("只知道题面本身");
+      expect(text).toContain("现象式的口号");
+    }
   });
 });

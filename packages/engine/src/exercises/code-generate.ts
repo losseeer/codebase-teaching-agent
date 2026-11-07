@@ -81,6 +81,30 @@ export const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
   go: '测试文件（例如 `tests.go`，入口就是它）与实现文件同属 `package main` 且都放在根目录（不要建子目录）；**实现文件不得再定义 `func main`，main 只写在测试文件里**。每条断言用 if 分支计数（通过 pass++，失败 fail++ 并把原因打到 stderr），结尾 `fmt.Printf("TESTS %d %d\\n", pass, fail)`，fail>0 时 `os.Exit(1)`。只用标准库。'
 };
 
+/** 从技能检索语料的路径扩展名里估仓库主语言；估不出来就不约束语言。 */
+export function primaryLanguageOf(faces?: ExerciseFaces): ExerciseLanguage | undefined {
+  const counts = new Map<string, number>();
+  for (const entry of faces?.search?.entries ?? []) {
+    const ext = entry.path.slice(entry.path.lastIndexOf(".")).toLowerCase();
+    counts.set(ext, (counts.get(ext) ?? 0) + 1);
+  }
+  const byExt: [string, ExerciseLanguage][] = [
+    [".java", "java"], [".go", "go"], [".py", "python"], [".ts", "typescript"], [".tsx", "typescript"]
+  ];
+  return byExt
+    .map(([ext, language]) => ({ language, count: counts.get(ext) ?? 0 }))
+    .sort((left, right) => right.count - left.count)
+    .find((item) => item.count > 0)?.language;
+}
+
+/** 题面写给零上下文的读者：四条「说人话」软约束，三条出题路径共用。 */
+export const PLAIN_LANGUAGE_RULES = [
+  "- 题面是写给一个**只知道题面本身**的人看的：他没看过这个仓库，也不了解任何内部系统。",
+  "- 题面里出现的每个专有名词或对象，第一次出现时必须就地一句话说清它是什么；说人话，别堆术语，别把评审口语和内部黑话直接当题面。",
+  "- 标题用一句话写清「改什么、达成什么」，不要用现象式的口号。",
+  "- 规则只能写在「注意事项」节；示例只演示已经定义过的规则，不得在示例里引入新规则。"
+];
+
 export function systemPrompt(kind: "patch_edit" | "author_function", language: ExerciseLanguage): string {
   return [
     `你是代码练习的出题人。要出一道**学习者真在编辑器里写代码、由沙箱真跑测试判分**的题：${kind === "patch_edit" ? "给一段有真实缺陷的实现，让他改到测试全过" : "给签名与示例，让他从零写出实现"}。`,
@@ -95,6 +119,7 @@ export function systemPrompt(kind: "patch_edit" | "author_function", language: E
       : "- 骨架里只留签名与 `TODO`，不留任何可用实现；题面要给足输入输出形状与至少两个示例。",
     "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
     "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`；示例写 1–2 个「调用 → 期望返回」，注意事项只写可核对的约束。",
+    ...PLAIN_LANGUAGE_RULES,
     "",
     "严格输出 JSON（不要任何其他文字）：",
     `{"ok":true,"language":"${language}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
@@ -110,14 +135,16 @@ export function systemPrompt(kind: "patch_edit" | "author_function", language: E
 }
 
 /** 参考模式：源码只作参考，题目自足；语言由模型声明。 */
-export function referenceSystemPrompt(kind: "patch_edit" | "author_function"): string {
+export function referenceSystemPrompt(kind: "patch_edit" | "author_function", primaryLanguage?: ExerciseLanguage): string {
   return [
     `你是代码练习的出题人。这一次由你定题：围绕给定主题出一道具自足的代码题——${kind === "patch_edit" ? "一段带真实缺陷的实现，学习者改到测试全过" : "给签名与示例，学习者从零写出实现"}。`,
     "",
     "仓库代码只作参考：可以从候选摘录里取材（例如用同一套领域概念、同一种数据结构），但**题目必须自足**——给定件与测试不 import 仓库文件、不依赖仓库运行、不假设仓库里存在任何符号。",
     "- 动手写题之前先确认本仓库有没有可参考的落脚：读一下本主题的技能文件，再用 2–4 个英文/代码关键词（别拿中文主题原样搜）调用 `search_code`，命中的文件用 `read_file` 看一眼。`reference` 为空只说明引擎没预选到，不代表本仓库没有；自己检索也没有命中时，再按主题写自足的题，不要编造仓库文件。",
     "",
+    ...(primaryLanguage ? [`- 题目语言必须用 \`${primaryLanguage}\`（仓库的主语言），不要另选其他语言。`] : []),
     "题面用 Markdown 按这三节写：`## 问题描述`、`## 示例`、`## 注意事项`。描述写背景 + 要改/写哪个函数 + 判定看什么行为；示例写 1–2 个「调用 → 期望返回」（类题用操作序列），不要复刻隐藏断言；注意事项只写可核对的约束（语言/标准库、能否改签名、边界条件），不写性能要求，也不点出缺陷所在的那一行。",
+    ...PLAIN_LANGUAGE_RULES,
     "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示。",
     "",
     "铁律：",
@@ -132,7 +159,7 @@ export function referenceSystemPrompt(kind: "patch_edit" | "author_function"): s
     "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。",
     "",
     "严格输出 JSON（不要任何其他文字）：",
-    `{"ok":true,"language":"${(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).join("|")}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
+    `{"ok":true,"language":"${primaryLanguage ?? (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).join("|")}","title":"≤${MAX_TITLE}字","prompt":"≤${PROMPT_TARGET}字题面","defect":"<缺陷/要求的一句话说明，仅留档>",`,
     `"given":[{"path":"target.ts","contents":"<下发给学习者的整份文件源码>"}],`,
     `"solution":[{"path":"target.ts","contents":"<应当全过的那一份>"}],`,
     `"hidden":[{"path":"tests.ts","contents":"<测试>"},{"path":"stub.ts","contents":"<替身，可无>"}],"entry":"tests.ts",`,
@@ -152,7 +179,7 @@ defineAnalysisStep({
   contractVersion: EXERCISE_STEP.contractVersion,
   prompts: [() => [
     ...(["patch_edit", "author_function"] as const).flatMap((kind) => (Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => systemPrompt(kind, language))),
-    ...(["patch_edit", "author_function"] as const).map(referenceSystemPrompt)
+    ...(["patch_edit", "author_function"] as const).map((kind) => referenceSystemPrompt(kind))
   ].join("\n")]
 });
 
@@ -537,7 +564,7 @@ export async function generateCodeExerciseFromReference(input: {
   input.onProgress?.({ stage: "proposing" });
   return await generateWithRepair({
     provider: input.provider,
-    system: withSkillsBrief(referenceSystemPrompt(input.kind), faces.skills),
+    system: withSkillsBrief(referenceSystemPrompt(input.kind, primaryLanguageOf(faces)), faces.skills),
     user: JSON.stringify({
       kind: input.kind, theme: input.tag, reference: input.reference,
       ...(input.priorPlan ? { priorPlan: input.priorPlan, note: "priorPlan 是上一趟已经定好并写好的题面：沿用它的标题与三节结构，把精力放在实现与测试上，不要重新选题。" } : {})

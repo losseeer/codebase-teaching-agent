@@ -8,6 +8,7 @@ import { EXERCISE_SEGMENT_ACTIVE, EXERCISE_SEGMENT_LABEL, type ExerciseLanguage,
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
 import { buildPointIndex } from "./exam-points.js";
+import { primaryLanguageOf } from "./code-generate.js";
 import { loadExamNoteStore, recordExamNotes, validateExamPoints } from "./exam-notes.js";
 import { ExamNotesBudget } from "./exam-notes-consumer.js";
 import { traceEngine } from "@codebase-tutor/platform";
@@ -80,8 +81,11 @@ const baseRules = (kind: "patch_edit" | "author_function"): string[] => [
   "- 题面不得出现测试断言的原文，也不得点出缺陷所在的那一行。"
 ];
 
-const promptStageRules = (): string[] => [
+const promptStageRules = (primaryLanguage?: string): string[] => [
   "这一段只出**题面与目标文件清单**，不要写任何代码。",
+  ...(primaryLanguage ? [`- 题目语言必须用 \`${primaryLanguage}\`（仓库的主语言），不要另选其他语言。`] : []),
+  "- 题面是写给一个**只知道题面本身**的人看的：他没看过这个仓库，也不了解任何内部系统；每个专有名词第一次出现就地一句话说清它是什么，说人话，别把内部黑话当题面。",
+  "- 标题用一句话写清「改什么、达成什么」，不要用现象式的口号；规则只写在「注意事项」，示例不得引入新规则。",
   "题面用 Markdown 按这三节写，**三节缺一不可**：",
   "  `## 问题描述`：背景 + 要改/写哪个函数 + 判定看什么行为；",
   "  `## 示例`：1–2 个「调用 → 期望返回」（类题用操作序列），不要复刻隐藏断言；",
@@ -89,7 +93,7 @@ const promptStageRules = (): string[] => [
   "- 不要写「相关文件 / 参考代码」小节，也不要在题面里粘贴参考文件路径：参考文件由界面按 anchors 展示（在代码段的 JSON 里给）。",
   "- 各语言的测试形状（你选哪个语言就按哪个写，后面的代码段与测试段会各自遵守）：",
   ...(Object.keys(TEST_CONTRACT) as ExerciseLanguage[]).map((language) => `  ${language}：${TEST_CONTRACT[language]}`),
-  '严格输出 JSON（不要任何其他文字）：{"ok":true,"language":"typescript|python|java|go","title":"≤40字","prompt":"≤800字题面","defect":"<缺陷的一句话说明，仅留档>","targets":["<要改或要写的文件>"]}',
+  '严格输出 JSON（不要任何其他文字）：{"ok":true,"language":"<仓库的主语言，见上方约束>","title":"≤40字","prompt":"≤800字题面","defect":"<缺陷的一句话说明，仅留档>","targets":["<要改或要写的文件>"]}',
   "- `targets` 必须是**仓库内的真实相对路径**（带目录，例如 `sl-admin/src/main/java/com/x/BoundedWorkerPool.java`），而且必须是你这一趟用 `read_file` **成功读到过**的文件；只写裸文件名（`BoundedWorkerPool.java`）会让下一段读不到文件。",
   '或拒绝：{"ok":false,"reason":"<面向学习者的一句话：这个主题为什么出不了代码题>"}'
 ];
@@ -118,8 +122,8 @@ const testContractOf = (language: string): string[] => [
 ];
 
 /** 段 1：语言由它声明，四种语言的测试形状全带上。 */
-export function promptSystem(kind: "patch_edit" | "author_function"): string {
-  return [...baseRules(kind), ...promptStageRules()].join("\n");
+export function promptSystem(kind: "patch_edit" | "author_function", primaryLanguage?: string): string {
+  return [...baseRules(kind), ...promptStageRules(primaryLanguage)].join("\n");
 }
 
 /** 段 2（代码）：语言已知，带那一种语言的测试形状。 */
@@ -329,7 +333,7 @@ export async function generateCodeExerciseSegmented(input: {
     const listed = plan?.listedPoints.map((point) => ({ id: point.id, concepts: point.concepts.join(","), probes: point.probes })) ?? [];
     const response = await requestProposal({
       provider: input.provider,
-      system: withSkillsBrief(promptSystem(input.kind), faces.skills),
+      system: withSkillsBrief(promptSystem(input.kind, primaryLanguageOf(faces)), faces.skills),
       user: JSON.stringify({
         kind: input.kind, theme: input.tag, reference: input.reference,
         examPoints: plan ? {
