@@ -1,7 +1,5 @@
 /**
-  代码题出题与自证链：可执行内容由模型交出，沙箱不看仓库。
-  自证两跑：solution 全过，given 至少一条测试失败。
-  测试结论只认一行 `TESTS <通过数> <失败数>`。
+  代码题：可执行内容由模型交出，沙箱不看仓库。自证两跑：solution 全过、given 至少一条失败；测试结论只认一行 `TESTS <通过数> <失败数>`。
 */
 import type { ExerciseLanguage, ImplementationUnit } from "@codebase-tutor/domain";
 
@@ -30,20 +28,17 @@ export interface CodeProposal {
   title: string;
   prompt: string;
   language: ExerciseLanguage;
-  /** 下发给学习者编辑的那一组文件。 */
   given: CodeFile[];
-  /** 应该全过的那一组文件。 */
   solution: CodeFile[];
   /** 判分用、不下发给学习者的文件。 */
   hidden: CodeFile[];
   entry: string;
-  /** 缺陷的一句话说明，不进题面。 */
+  /** 缺陷说明，不进题面。 */
   defect: string;
-  /** 参考模式：出题时主要参考了仓库里的哪几处代码（可空；why 只进 journal）。 */
+  /** 参考模式：出题时参考了仓库里的哪几处代码（可空；why 只进 journal）。 */
   anchors?: { path: string; line: number; endLine?: number; why?: string }[];
 }
 
-/** 拒题的档位，按失败发生在哪一段分。 */
 export type DeclineStage = "provider_error" | "proposal_shape" | "sandbox_unavailable" | "harness_validation";
 
 export interface HarnessRun {
@@ -51,22 +46,22 @@ export interface HarnessRun {
   verdict?: { passed: number; failed: number };
   exitCode: number | null;
   timedOut: boolean;
-  /** 沙箱本身跑完了（编译成功、没超时）。 */
+  /** 沙箱跑完了（编译成功、没超时）。 */
   ran: boolean;
-  /** 失败时的输出尾部，只给修复回合看，不进界面。 */
+  /** 失败输出尾部，只给修复回合看，不进界面。 */
   output?: string;
 }
 
 export type CodeGeneration =
   | {
       ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[];
-      /** 分段产出已经把题面定好了、只是自证没过时带出来：兜底路径沿用这份题面，不必从头再想一遍。 */
+      /** 分段产出已定好的题面：自证没过时兜底沿用。 */
       plan?: { title: string; prompt: string; defect: string };
     }
   | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
-/** 题面长度以提示词里的目标值为准；这里只做超长的硬截断兜底。 */
+/** 题面目标长度见提示词；这里只做超长的硬截断兜底。 */
 const PROMPT_TARGET = 800;
 const MAX_PROMPT = 1_600;
 const MAX_FILE_BYTES = 24_000;
@@ -142,7 +137,6 @@ export function referenceSystemPrompt(kind: "patch_edit" | "author_function"): s
   ].join("\n");
 }
 
-/** 代码题这一步的口径登记。 */
 defineAnalysisStep({
   layer: "exercise-code-generate",
   contractVersion: EXERCISE_STEP.contractVersion,
@@ -278,7 +272,6 @@ export interface ProposalResponse {
   fileReads: FileReadRecord[];
 }
 
-/** 自证失败后的修复口径：只修实现与测试的不一致，不许靠删断言过关。 */
 const REPAIR_INSTRUCTION = [
   "上一份出题在沙箱自证里没有通过。请修正实现或测试中的不一致，重新输出一份完整 JSON（不要只输出改动片段）。",
   "参考解必须让全部测试通过，下发件必须至少有一条测试失败；不得删除、跳过或放宽断言来迁就参考解。"
@@ -311,7 +304,6 @@ function providerFailure(error: unknown, first?: { usage?: LlmUsage; skillReads:
   };
 }
 
-/** 把上一份 JSON、失败原因与测试输出交给模型，并保留原始出题输入。 */
 function repairUser(original: string, previous: string, failure: Extract<CodeGeneration, { ok: false }>): string {
   const output = failure.runs.find((run) => run.label === "solution")?.output ?? failure.runs[0]?.output ?? "";
   return [
@@ -329,9 +321,7 @@ function repairUser(original: string, previous: string, failure: Extract<CodeGen
 
 /** 修复策略：默认对自证失败与形状错误各重试一次；实验可再放宽次数。 */
 export interface RepairPolicy {
-  /** 首轮之后最多重试几次。 */
   maxRetries: number;
-  /** 形状错误是否也重试。 */
   retryShape: boolean;
 }
 
@@ -402,7 +392,6 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   if (!language) return { ok: false, stage: "proposal_shape", reason: `${input.unit.symbol.language} 的代码题还不支持。`, runs: [], skillReads: [] };
 
   recordEgress({ repositoryPath: input.repositoryPath, scene: "practice.generate-code", sources: source.sources.map((entry) => ({ kind: "exercise-excerpt" as const, ...entry })) });
-  // 与问答回合同一条循环：出题这一趟也能自己读文件、检索、查静态产物
   const faces = input.faces ?? {};
   input.onProgress?.({ stage: "proposing" });
   return await generateWithRepair({
@@ -423,7 +412,6 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
   });
 }
 
-/** 参考模式：源码只作参考，模型自己定题；语言也由模型声明。 */
 export async function generateCodeExerciseFromReference(input: {
   repositoryPath: string;
   tag: string;
@@ -513,7 +501,6 @@ export async function explainCodeAttempt(input: {
   const verdict = verdictOf(run);
   const failing = (run.stderr || "").trim().split("\n").filter(Boolean).slice(0, 12).join("\n").slice(0, 2_000);
   const sources = input.learnerFiles.map((file) => {
-    // 每个文件各自计数
     const screened = maskSecrets(file.contents);
     return { kind: "sandbox-output" as const, path: file.path, from: 1, to: screened.text.split("\n").length, text: screened.text, masked: screened.masked };
   });

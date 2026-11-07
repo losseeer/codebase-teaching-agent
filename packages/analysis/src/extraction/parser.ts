@@ -7,8 +7,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   基于语法树的符号抽取：`endLine` 是锚点高亮、调用归属与讲解切片的共同依据。
-  解析器或语法不可用时回落逐行匹配，原因写入 `parseBackendReason` 并记一条 `degrade` 日志。
-  本层是唯一的语法树出口，控制流图与切片都从这里取树。
+  不可用时回落逐行匹配并记 `degrade` 日志；本层是唯一的语法树出口（控制流图与切片都从这里取树）。
 */
 
 export type ParseBackend = "ast" | "regex";
@@ -19,7 +18,7 @@ export interface ParseBackendStatus {
   reason?: string;
 }
 
-/** 依赖图处理的语法与对应 wasm 文件，来自 `@vscode/tree-sitter-wasm`。 */
+/** wasm 文件来自 `@vscode/tree-sitter-wasm`。 */
 const GRAMMAR_FILES = {
   python: "tree-sitter-python.wasm",
   java: "tree-sitter-java.wasm",
@@ -34,7 +33,7 @@ const GRAMMAR_FILES = {
 
 export type GrammarName = keyof typeof GRAMMAR_FILES;
 
-/** 按扩展名选语法：`.jsx` 走 tsx 语法。 */
+/** `.jsx` 走 tsx 语法。 */
 function grammarOf(path: string): GrammarName | undefined {
   if (path.endsWith(".java")) return "java";
   if (path.endsWith(".py")) return "python";
@@ -48,7 +47,7 @@ function grammarOf(path: string): GrammarName | undefined {
   return undefined;
 }
 
-/** 扩展名到语言的映射用共享能力表；`vue` 显式映射为 `other`。 */
+/** `vue` 显式映射为 `other`。 */
 function languageOf(path: string): SymbolInfo["language"] {
   const language = languageOfExtension(extname(path));
   if (!language || language === "vue") return "other";
@@ -119,7 +118,6 @@ export function loadSymbolParser(): Promise<ParseBackendStatus> {
   return loading;
 }
 
-/** 仅测试用：复位解析器状态。 */
 export function resetSymbolParserForTest(): void {
   loading = undefined;
   grammars.clear();
@@ -134,17 +132,14 @@ const TS_TYPE_NODES = new Set(["interface_declaration", "type_alias_declaration"
 const TS_VARIABLE_NODES = new Set(["lexical_declaration", "variable_declaration"]);
 const TS_FUNCTION_VALUES = new Set(["arrow_function", "function_expression", "generator_function"]);
 
-/** 声明节点类型到 kind 的映射，认不出来返回 undefined。 */
 function kindOf(type: string, inClass: boolean): SymbolInfo["kind"] | undefined {
   if (TS_FUNCTION_NODES.has(type)) return "function";
   if (TS_CLASS_NODES.has(type)) return "class";
-  // Java：方法与构造器是 Java 独有的节点类型
   if (type === "method_declaration" || type === "constructor_declaration") return "method";
   if (type === "method_definition") return "method";
   if (TS_TYPE_NODES.has(type)) return "type";
   if (type === "class_definition") return "class";
   if (type === "function_definition") return inClass ? "method" : "function";
-  // Go：type_declaration 的名字在 type_spec 里，由 collectSymbols 展开
   if (type === "struct_declaration") return "class";
   // Rust：impl 无名，体成员由递归收进来并升为 method
   if (type === "function_item") return inClass ? "method" : "function";
@@ -188,7 +183,6 @@ function unwrap(node: SyntaxNode): SyntaxNode | undefined {
   return undefined;
 }
 
-/** 声明节点的名字：优先 `name` 字段，缺失则沿 declarator 链查找。 */
 export function declarationNameOf(node: SyntaxNode): string | undefined {
   return node.childForFieldName("name")?.text.trim() || declaratorName(node);
 }
@@ -211,7 +205,6 @@ function symbolOf(node: SyntaxNode, path: string, kind: SymbolInfo["kind"]): Sym
   };
 }
 
-/** 变量声明指向的函数或类表达式也算符号。 */
 function collectVariableDeclarators(node: SyntaxNode, path: string, out: SymbolInfo[]): void {
   for (const declarator of node.namedChildren) {
     if (declarator.type !== "variable_declarator") continue;

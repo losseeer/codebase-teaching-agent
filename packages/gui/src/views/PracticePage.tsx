@@ -21,9 +21,8 @@ import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme,
 import { SourceView, isLineRendered, MAX_RENDER_LINES, type SourcePayload } from "../source/SourceView";
 import { useSetPracticeOperation } from "../agent/practiceOperation";
 
-// 练习工作区两栏：左 = 题型 / 考察知识 / 题库，右 = 出题与判分。
 // 题型决定链路（理解题吃静态分析、分析题走 rubric、设计题进沙箱），主题只筛目标单元。
-// 顶栏只报 getPractice 的真读数；出题中不画假进度。
+// 顶栏只报 getPractice 的真读数，出题中不画假进度。
 
 function gradingLabel(mode: ExerciseGradingMode): string {
   if (mode === "execution") return "跑测试判分";
@@ -31,28 +30,26 @@ function gradingLabel(mode: ExerciseGradingMode): string {
   return "与标准答案逐项比对";
 }
 
-/** LLM 出题单元 id 的版本号段（`llm:<tagId>:<nonce>`）；解析不出返回 null，两处判据共用。 */
+/** `llm:<tagId>:<nonce>` 的 nonce 段；解析不出返回 null，两处判据共用。 */
 function llmUnitNonce(unitId: string): number | null {
   const nonce = Number(unitId.split(":")[2] ?? 0);
   return Number.isFinite(nonce) ? nonce : null;
 }
 
-/** 换一题 = 旧 nonce + 1；解析不出按 0 起算。 */
+/** 换一题取旧 nonce + 1，缺失按 0。 */
 function llmNonce(unitId: string): number {
   return llmUnitNonce(unitId) ?? 0;
 }
 
-/** 合成单元（模型出的题，不对应仓库里的某个函数）：`llm:<主题>` 与参考模式的 `llm-code:<主题>`。 */
+/** 合成单元（模型出的题）：`llm:` 前缀，参考模式的 `llm-code:` 也算。 */
 function isSyntheticUnit(unitId: string): boolean {
   return unitId.startsWith("llm:") || unitId.startsWith("llm-code:");
 }
 
-/** 参考模式的设计题：源码只作参考，题面里的「相关文件」由 anchors 渲染成跳转链接。 */
 function isReferenceUnit(unitId: string): boolean {
   return unitId.startsWith("llm-code:");
 }
 
-/** 出题阶段的中文短语：detail 只进 title。 */
 function generationStageLabel(stage: string | undefined): string {
   switch (stage) {
     case "searching": return "检索仓库";
@@ -66,7 +63,6 @@ function generationStageLabel(stage: string | undefined): string {
   }
 }
 
-/** 阶段行的短文案：文件名 / 检索词作为补充。 */
 function generationStepText(step: { stage: string; detail?: string }): string {
   if (step.stage === "reading" && step.detail) return `读取 ${step.detail.split("/").pop() ?? "文件"}`;
   if (step.stage === "searching" && step.detail) return `检索「${step.detail}」`;
@@ -76,7 +72,6 @@ function generationStepText(step: { stage: string; detail?: string }): string {
   return generationStageLabel(step.stage);
 }
 
-/** 回答框的提示按题型与判分口径给。 */
 function answerPlaceholder(kind: ExerciseKind, mode: ExerciseGradingMode): string {
   if (mode === "rubric") return "用自己的话写出你的分析";
   if (kind === "change_localization") return "写出要改的文件与位置（行号或函数名）";
@@ -91,10 +86,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [text, setText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  /** 代码题工作副本；换题即重置。 */
   const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
   const [activeCodePath, setActiveCodePath] = useState("");
-  /** 讲评为按需第二趟；提交的是被判版本，不是编辑器草稿 */
+  /** 讲评是第二趟请求，作用于提交时的版本而非编辑器草稿。 */
   const [submittedFiles, setSubmittedFiles] = useState<{ path: string; contents: string }[]>([]);
   const [explanation, setExplanation] = useState("");
   const [explaining, setExplaining] = useState(false);
@@ -102,31 +96,27 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [loading, setLoading] = useState(false);
   /** 这一趟出题锁定的主题名：途中换主题不跟着变。 */
   const [pendingTheme, setPendingTheme] = useState("");
-  /** 出题已发生的阶段（最多留 6 条），最后一条是当前动作。 */
+  /** 出题阶段（最多留 6 条），最后一条是当前动作。 */
   const [genTrail, setGenTrail] = useState<{ stage: string; detail?: string }[]>([]);
-  /** 出题中：与判分共用的 loading 分开，加载条只认这一路。 */
+  /** 出题中：与判分的 loading 分开，加载条只认这一路。 */
   const [generating, setGenerating] = useState(false);
-  /** 出题已用时：只在加载时每秒走一格。 */
   const [elapsed, setElapsed] = useState(0);
   /** 换主题或题型就让在途那趟作废。 */
   const generationToken = useRef(0);
-  /** 在途出题：取消时按 jobId 让引擎停下，并断开前端等待。 */
   const activeGeneration = useRef<{ jobId: string; controller: AbortController } | null>(null);
   const [error, setError] = useState("");
   const [generateReason, setGenerateReason] = useState<ExerciseDeclineCode | null>(null);
-  /** 出题失败那趟顺手读到的成本读数：只在额度真到线时多给一个去向。 */
+  /** 出题失败后读到的成本读数：仅额度真到线时给出口。 */
   const [budgetTight, setBudgetTight] = useState(false);
-  /** 题库：这个仓存着的题 + 复习排期，纯读不花钱。 */
   const [bank, setBank] = useState<ExerciseBankEntry[]>([]);
   const [pendingDelete, setPendingDelete] = useState<Exercise | null>(null);
   const [source, setSource] = useState<SourcePayload | null>(null);
-  /** 题面吃多段代码时，正在看哪一段。 */
   const [anchorIndex, setAnchorIndex] = useState(0);
   const [modules, setModules] = useState<PracticeTheme[]>(loadPracticeThemes);
   const [activeModule, setActiveModule] = useState<string>(() => loadActiveTheme(repositoryId, modules));
   const [exerciseType, setExerciseType] = useState<ExerciseType>(loadPracticeType);
   const [designKind, setDesignKind] = useState<"patch_edit" | "author_function">("patch_edit");
-  /** 答题态：进入后左栏借用给题面，源码走弹窗；未进入时左栏照常选题/题库。 */
+  /** 答题态：左栏改用题面，源码走弹窗。 */
   const [answering, setAnswering] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [paneActive, paneClass, setPaneActive] = useMobilePanes();
@@ -135,7 +125,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
   useEffect(() => { saveActiveTheme(repositoryId, activeModule); }, [repositoryId, activeModule]);
   useEffect(() => { savePracticeType(exerciseType); }, [exerciseType]);
-  /** 首次加载：本地旧主题 POST 到引擎，成功后清本地；随后以引擎主题为准。 */
+  /** 本地旧主题迁到引擎后清本地，之后以引擎主题为准。 */
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -160,7 +150,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     })();
     return () => { active = false; };
   }, [repositoryId]);
-  // 出题是阻塞请求：显示已用秒数。
   useEffect(() => {
     if (!generating) return;
     setElapsed(0);
@@ -168,28 +157,25 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     return () => window.clearInterval(timer);
   }, [generating]);
 
-  /** 题型 → 具体题型：理解题交给引擎按掌握度轮换，分析题与设计题点名。主题只筛目标。 */
   const kind: ExerciseKind | undefined = exerciseType === "analysis" ? "llm_rubric" : exerciseType === "design" ? designKind : undefined;
-  /** 没选主题就是空串：理解题照旧按掌握度出题，分析题与设计题要求先选。 */
   const theme = modules.find((item) => item.id === activeModule);
-  /** 参考模式的设计题：相关文件进题面，不再铺源码卡/弹窗。 */
+  /** 参考模式：相关文件进题面，不铺源码卡/弹窗。 */
   const referenceDesign = exercise ? isReferenceUnit(exercise.targetUnitId) : false;
   const needsTheme = exerciseType !== "comprehension" && !theme;
 
-  /** 进度读取：tab 首次打开后读一次，成功时清旧错误；生成与提交后主动刷新。 */
+  /** 进度：tab 首次可见时读一次，成功清旧错误。 */
   const everVisible = useEverVisible(visible);
   const refreshSummary = (): void => {
     api.getPractice(repositoryId).then((next) => { setSummary(next); setError(""); }).catch((reason: unknown) => setError(failureText("练习进度读取失败", reason)));
   };
   useEffect(() => { if (everVisible) refreshSummary(); }, [repositoryId, everVisible]);
 
-  /** 题库读一次：题与复习排期都在引擎侧。 */
   const refreshBank = (): void => {
     api.listExercises(repositoryId).then((next) => setBank(next.exercises)).catch((reason: unknown) => setError(failureText("题库读取失败", reason)));
   };
   useEffect(() => { if (everVisible) refreshBank(); }, [repositoryId, everVisible]);
 
-  /** 取消在途出题：引擎按 jobId 停，前端同时断开等待；结果按新 token 丢弃。 */
+  /** 取消：按 jobId 让引擎停、前端断开等待，结果按 token 丢弃。 */
   const cancelGenerate = (): void => {
     const active = activeGeneration.current;
     if (!active) return;
@@ -201,14 +187,13 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     showToast("已取消出题");
   };
 
-  // 出题：题型决定链路，主题只筛目标单元；「换一题」= 换目标或换 nonce，旧题留在题库里。
+  // 换一题 = 换目标或换 nonce，旧题留在题库里。
   const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
     const token = ++generationToken.current;
     const type = typeOverride ?? exerciseType;
     const requestKind: ExerciseKind | undefined = type === "analysis" ? "llm_rubric" : type === "design" ? designKind : undefined;
-    // 出题途中换主题不跟着变：这一趟锁的是发请求时选中的那个
     setPendingTheme(theme?.label ?? "");
     setGenerateReason(null);
     setLoading(true); setGenerating(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
@@ -223,8 +208,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       if (payload.repositoryId !== repositoryId || payload.jobId !== jobId || typeof payload.stage !== "string") return;
       const step = { stage: payload.stage, ...(typeof payload.detail === "string" ? { detail: payload.detail } : {}) };
       setGenTrail((trail) => {
-        // 分段出题会按「出题面 → 写代码 → 写测试」播报（proposing + 段名）；
-        // 进入新的一段就把上一段的动作清掉，否则六条上限会把段名挤没。
+        // 分段播报进入新一段时清空，否则 6 条上限会把段名挤没。
         const enteringSegment = step.stage === "proposing" && typeof step.detail === "string";
         const base = enteringSegment ? [] : trail;
         const last = base.at(-1);
@@ -253,8 +237,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       if (token !== generationToken.current) return;
       setGenerateReason(reason instanceof ApiError && reason.code === "theme_not_found" ? "theme_not_found" : null);
       setError(failureText("出题失败", reason));
-      // 额度到线是出题失败最常见的一种：读一次免费的成本读数，只在真到线时给出去向，界面上不写原因
-      api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => { /* 读数没到就不给入口 */ });
+      // 只读一次免费成本读数，额度真到线才给出口。
+      api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => {  });
     } finally {
       if (activeGeneration.current?.jobId === jobId) activeGeneration.current = null;
       stopProgress();
@@ -262,7 +246,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     }
   };
 
-  /** 题面吃多段代码时只预览选中的那一段，切段就是换一次锚点。 */
   const shownIndex = exercise ? Math.min(anchorIndex, Math.max(0, exercise.anchors.length - 1)) : 0;
   const anchor = exercise?.anchors[shownIndex];
   useEffect(() => {
@@ -286,33 +269,31 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setActiveCodePath(slot?.files[0]?.path ?? "");
   }, [exercise?.id]);
 
-  /** 判分结果常落在首屏之外：出来时只滚到刚好看得到它，不替用户决定看什么。 */
   const graded = useRef<HTMLDivElement>(null);
   useEffect(() => { if (result) graded.current?.scrollIntoView({ block: "nearest" }); }, [result]);
 
   const toggle = (id: string): void => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  /** 换主题 / 换题型 = 换题面来源：上一道题的作答与判分结果不能留在这一栏里。 */
+  /** 换主题或题型要清场：旧作答与判分不能留在这一栏。 */
   const clearExercise = (): void => {
     generationToken.current += 1;
     setAnswering(false); setSourceOpen(false);
     setExercise(null); setResult(null); setText(""); setSelectedIds([]); setAnchorIndex(0);
     t.setPracticeUnit(""); t.setPracticeExercise(null);
   };
-  /** 重复点同一 chip 不记事件；list 传入新增/删除时尚未提交的新列表。 */
+  /** list 是新增/删除时尚未提交的新列表。 */
   const switchModule = (id: string, list: PracticeTheme[] = modules): void => {
     if (id === activeModule) return;
     setActiveModule(id);
     clearExercise();
     emit(repositoryId, "module_switched", { from: activeModule, to: id, label: (list.find((item) => item.id === id)?.label ?? (id || "不限定主题")).slice(0, 120) });
   };
-  /** 换题型同样清场：题面形态变了，旧题留在这一栏就是错位。 */
   const switchType = (next: ExerciseType): void => {
     if (next === exerciseType) return;
     setExerciseType(next);
     setGenerateReason(null);
     clearExercise();
   };
-  /** 从题库打开：先摆出题面预览，答案区等「开始答题」；不重新出题、不花钱。 */
+  /** 打开题库题：只预览，不重新出题、不花钱。 */
   const openBank = (next: Exercise): void => {
     const type = exerciseTypeOf(next.kind);
     setExerciseType(type);
@@ -323,12 +304,10 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setAnswering(false);
     t.setPracticeUnit(next.title); t.setPracticeExercise(next);
   };
-  /** 从题库直接开始答题：摆出题面并打开答案区。 */
   const startBank = (next: Exercise): void => {
     openBank(next);
     setAnswering(true);
   };
-  /** 删题：题与复习排期一起删；握在手里的正是它时一并清掉。 */
   const removeExercise = async (target: Exercise): Promise<void> => {
     setPendingDelete(null);
     try {
@@ -381,7 +360,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       : `相关代码超出预览上限（第 ${anchor.line} 行）`
     : "生成练习后显示相关代码";
   const codeNoteTitle = anchor && !anchorRenderable ? `面板渲染前 ${MAX_RENDER_LINES} 行，该锚点在渲染范围之外` : undefined;
-  /** 参考源码卡：预览放主区，答题放弹窗。 */
   const sourceCard = (): ReactElement => (
     <section className="card clip code-card">
       <div className="code-context row between">
@@ -428,7 +406,6 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       </div>
     </div>
   ) : null;
-  /** 空态文案里的题型短名。 */
   const typeWord = exerciseType === "analysis" ? "分析" : exerciseType === "design" ? "设计" : "理解";
 
   return (
@@ -521,7 +498,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               <div className="banner banner-danger">
                 <Icon name="alert" size={14} />
                 <span className="banner-text">{error}</span>
-                {/* 产物与文件脱节类原因：出路是去导入页重跑 */}
+                {/* 产物与文件脱节：出路是去导入页重跑 */}
                 {/重新导入|已更新/.test(error) ? (
                   <span className="banner-actions"><button type="button" onClick={() => navigate("/import")}>去重新分析</button></span>
                 ) : null}
@@ -796,7 +773,7 @@ function GradedPanel({ exercise, result, explanation, explaining, onExplain, onR
   );
 }
 
-/** 题面走 Markdown 渲染；超 6 行或 240 字才出展开按钮，折叠状态不跨题保留。 */
+/** 题面走 Markdown；折叠状态不跨题保留。 */
 function ExercisePrompt({ text, related }: { text: string; related?: ReactNode }): ReactElement {
   const [open, setOpen] = useState(false);
   const long = text.length > 700 || text.split("\n").length > 14;

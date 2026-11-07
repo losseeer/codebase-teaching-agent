@@ -24,31 +24,25 @@ import { excerptForAnchor, excerptsWithinBudget } from "./context-excerpt.js";
 import { exerciseQaSystemPrompt, overviewSystemPrompt, teachingSystemPrompt } from "./prompts.js";
 
 /**
-  teaching / map / practice 三个工作区的统一发射入口。
   练习的标准答案与锚点不进上下文；工作区同时决定工具面过滤。
   选中范围清单与已分析集交集为空时不注入选中范围段。
   */
 
-/** 问答回合的过程事件。 */
 export type { TeachingProgress };
 
 const practiceContextCap = () => contextShare(CONTEXT_SHARE.practiceContext);
 
-/** 同一线程里此前几轮的问答原文。 */
 export interface ScopedChatTurn {
   role: "user" | "assistant";
   content: string;
 }
 
-/** 按窗口占用装配历史对话段。 */
 function conversationBlock(history: ScopedChatTurn[] | undefined, query: string, usedCharacters: number): ConversationBlock {
   return renderConversation({ turns: history ?? [], query, usedCharacters });
 }
 
-/** mapChat 过程事件。 */
 export type MapChatProgress = ReadToolProgress;
 
-/** 把工具循环的过程帧转成回合进度载荷。 */
 function progressToStage(progress: ReadToolProgress): TeachingProgress {
   switch (progress.type) {
     case "thinking": return { stage: "thinking" };
@@ -65,23 +59,16 @@ export interface ScopedChatResult {
   reply: string;
   provider: string;
   usage?: LlmUsage;
-  /** read_file 调用审计。 */
   fileReads?: FileReadRecord[];
-  /** search_code 调用审计。 */
   codeSearches?: CodeSearchRecord[];
-  /** 工具循环实际轮数。 */
   toolRounds: number;
   /** 本回合从第几轮检查点续跑。 */
   resumedFromRound?: number;
-  /** 回合提前停止的原因。 */
   stoppedBy?: TurnStopReason;
   /** 本回合的外部工具调用记录，含失败。 */
   mcpCalls?: McpCallAudit[];
-  /** 本回合取过的技能正文。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
-  /** 本回合向用户提出的问题。 */
   asked?: AskUserAudit;
-  /** 最近一次提问被拒的原因。 */
   askRefused?: string;
   /** 本回合被中断时的结论，无成品。 */
   interrupted?: TurnInterrupt;
@@ -95,27 +82,22 @@ function clip(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}\n…（上下文过长已截断）` : text;
 }
 
-/** 代码问答回合的产出。 */
 export interface TutorReply {
   session: TutorSession;
   assistant: TutorMessage;
   provider: string;
   usage?: LlmUsage;
-  /** read_file 调用审计。 */
   fileReads?: FileReadRecord[];
-  /** search_code 调用审计。 */
   codeSearches?: CodeSearchRecord[];
   /** 工具循环实际轮数；单轮调用为 0。 */
   toolRounds?: number;
   /** 外部工具调用记录，含失败。 */
   mcpCalls?: McpCallAudit[];
-  /** 取过的技能正文。 */
   skillReads?: { skill: string; chars: number; found: boolean }[];
   /** 历史折叠与找回的条数。 */
   conversation: { foldedMessages: number; recalledMessages: number };
   /** 从第几轮检查点续跑。 */
   resumedFromRound?: number;
-  /** 回合提前停止的原因。 */
   stoppedBy?: TurnStopReason;
 }
 
@@ -126,25 +108,20 @@ export interface RespondOptions {
   analysis?: RepositoryAnalysis;
   /** search_code 语料：提供时开放检索工具。 */
   search?: SearchCorpus;
-  /** 过程事件回调。 */
   onProgress?: (progress: TeachingProgress) => void;
   /** 外部中止信号：贯穿工具循环。 */
   signal?: AbortSignal;
   /** 每轮工具调用前的预算闸门。 */
   budgetGuard?: () => string | undefined;
-  /** 回合检查点通道。 */
   checkpoint?: TurnCheckpointChannel;
-  /** 技能清单与正文取用通道。 */
   skills?: SkillsToolContext;
-  /** 外部 MCP 工具面。 */
   external?: ExternalToolContext;
   /** 运行轨迹的归属；不传则不发轨迹。 */
   trace?: TurnTraceContext;
-  /** 学习快照：由教学层生成并注入 system prompt；不含教学档位。 */
+  /** 由教学层生成并注入 system prompt；不含教学档位。 */
   learnerSnapshot?: string;
 }
 
-/** 运行轨迹的归属与提问摘要。 */
 export interface TurnTraceContext {
   repositoryId: string;
   threadId?: string;
@@ -177,7 +154,6 @@ export interface RunTurnInput {
   /** 到上限时中断回合并保留检查点。 */
   interruptAtLimit?: boolean;
   signal?: AbortSignal;
-  /** 工具循环的原始过程事件。 */
   onProgress?: (progress: ReadToolProgress) => void;
   /** 运行轨迹的归属；不传则不发轨迹。 */
   trace?: TurnTraceContext;
@@ -196,7 +172,6 @@ export interface RunTurnResult {
   stoppedBy?: TurnStopReason;
   /** 本回合以向用户提问收尾。 */
   asked?: AskUserAudit;
-  /** 最近一次提问被拒的原因。 */
   askRefused?: string;
   /** 本回合被中断时的结论，无成品。 */
   interrupted?: TurnInterrupt;
@@ -297,10 +272,9 @@ export async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
   }
 }
 
-/** 装配上下文并发一个代码问答回合。 */
 export async function respondWithProvider(session: TutorSession, scope: ScopeRef, learnerContent: string, provider: LlmProvider, faded?: FadedState, repositoryPath?: string, options: RespondOptions = {}): Promise<TutorReply> {
   const policy = policyFor(session.settings);
-  /** 上下文里放了哪几段仓内源码，由 `assembleContext` 登记。 */
+  /** 上下文里放了哪几段仓内源码。 */
   const egress: EgressCollector = [];
   const conversationAudit = { foldedMessages: 0, recalledMessages: 0 };
   const context = assembleContext({
@@ -360,7 +334,6 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
 export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
-  /** 本回合放进上下文的源码原文。 */
   const egress: EgressCollector = [];
   const panorama = structurePanorama(analysis);
   if (panorama) sections.push(panorama);
@@ -369,7 +342,6 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   if (scope) sections.push(scope);
   // 画布现场快照：set_diagram 需要图元 id
   if (input.diagram?.inventory) sections.push(input.diagram.inventory);
-  // 静态产物在册情况
   if (input.facts?.inventory) sections.push(input.facts.inventory);
   const target = path;
   if (target) {
@@ -388,7 +360,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   // 技能清单贴在上下文尾部，不进系统提示词
   const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
   const system = overviewSystemPrompt({ searchAvailable: Boolean(input.search) });
-  // 历史折叠按本轮已占用的字符数：系统提示词 + 代码上下文 + 技能清单
+  // 已占用字符数 = 系统提示词 + 代码上下文 + 技能清单。
   const conversation = conversationBlock(input.history, input.content, system.length + context.length + skillsBrief.length);
   const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${conversation.text}学习者的问题：${input.content}`;
 

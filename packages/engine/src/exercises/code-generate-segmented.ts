@@ -1,17 +1,6 @@
 /**
-  出题分段产出：题面 → 代码 → 测试。
-
-  为什么分段：一次整份 JSON 要吐 1.8 万 tokens，单次输出容易撞上模型调用的时间上限，
-  而出题过程对用户是**一段黑箱**——失败时也说不清卡在哪一步。分段之后每一段都是一次独立的
-  模型调用，轨迹里逐段可见（出题面 / 写代码 / 写测试），失败能定位到段，段级重出也只重写那一段。
-
-  最终产物仍然是**一道完整的题**、一次性呈现给用户；分段只改变产出节奏。
-
-  三条契约是踩过坑才补齐的，少一条就会整批失败（见每段的注释）：
-  ① 段 2 要自己 `read_file` 看目标文件，不能靠段 1 转述源码（转述会把源码塞进段 1 的输出）；
-  ② 段 3 必须拿到段 2 的实现全文与下发件的文件名，否则测试与实现对不上、编译不过；
-  ③ 三段的 system 都要带各语言的测试形状规范（`TEST_CONTRACT`），缺了模型会写成裸 `assert`，
-     断言一抛脚本就中断，stdout 里没有结论行，判分拿不到结果。
+  出题分段产出：题面 → 代码 → 测试；最终产物仍是一道完整的题。
+  三段的 system 都要带各语言的测试形状规范（`TEST_CONTRACT`），缺了断言一抛就没有结论行。
 */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,10 +19,7 @@ import { pathReadBlock } from "../source/read-file.js";
 import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { withSkillsBrief } from "../source/tool-loop.js";
 
-/**
-  分段产出默认开着：它只改产出节奏，产物仍是一道完整的题，而且不成会自动退回整份产出。
-  想回到旧的整份产出，设 `TUTOR_EXERCISE_SEGMENTED=off`（0 / false / off 都算关）。
-*/
+/** 设 `TUTOR_EXERCISE_SEGMENTED=off`（0 / false / off 都算关）回到整份产出。 */
 export function segmentedExerciseEnabled(): boolean {
   const raw = (process.env.TUTOR_EXERCISE_SEGMENTED ?? "").trim().toLowerCase();
   return !(raw === "0" || raw === "false" || raw === "off" || raw === "no");
@@ -66,22 +52,17 @@ interface TestsSegment {
   entry: string;
 }
 
-/**
-  工具轮预算。硬上限 25：基线 30 道设计题里所有成功趟都 ≤21 轮，而今天失控那趟跑到 54 轮——
-  循环那边默认是 100，出题从不传，等于没有上限。软预算 15：成功趟的 p90，用来给模型打进度条。
-  两个数都是从已有日志推的，不是拍脑袋。
-*/
+/** 工具轮预算：硬上限 25，软预算 15 用来给模型打进度条。 */
 const PLAN_HARD_ROUNDS = 25;
 const PLAN_SOFT_ROUNDS = 15;
-/** 连续几轮没有新文件才算「无进展」：成功的趟从没到过 2，失控那趟到过 7。 */
+/** 连续几轮没有新文件才算「无进展」。 */
 const PLAN_NO_PROGRESS_ROUNDS = 2;
 
 const MAX_TITLE = 40;
-/** 产品侧 PROMPT_TARGET=800 是目标字数、MAX_PROMPT=1600 才是截断线。这里对齐上限——
-    当成 800 截会把三节里的「注意事项」整段切掉，题面就不成篇了。 */
+/** 对齐产品侧 MAX_PROMPT=1600 截断线，不是目标字数 PROMPT_TARGET=800。 */
 const MAX_PROMPT = 1_600;
 
-/** 题面必须齐的三节；缺一节就重出，别把半篇题面发给学习者。 */
+/** 题面必须齐的三节；缺一节就重出。 */
 const PROMPT_SECTIONS = ["## 问题描述", "## 示例", "## 注意事项"] as const;
 
 const baseRules = (kind: "patch_edit" | "author_function"): string[] => [
@@ -127,12 +108,12 @@ const testsStageRules = (): string[] => [
   "**预算：测试文件合计不超过 4000 字符**——只写必要的断言与最少量的导入，不要写多余的辅助函数、注释和样板。"
 ];
 
-/** 这一段语言的测试形状规范：缺了它，模型会写成裸 assert，断言一抛脚本就中断，stdout 里没有结论行。 */
+/** 缺了它模型会写成裸 assert，断言一抛脚本就中断，stdout 里没有结论行。 */
 const testContractOf = (language: string): string[] => [
   `- 本语言的测试形状（必须照做，判分只认最后那行结论）：${TEST_CONTRACT[language as ExerciseLanguage] ?? ""}`
 ];
 
-/** 段 1（题面）：语言由它声明，所以四种语言的测试形状全带上。 */
+/** 段 1：语言由它声明，四种语言的测试形状全带上。 */
 export function promptSystem(kind: "patch_edit" | "author_function"): string {
   return [...baseRules(kind), ...promptStageRules()].join("\n");
 }
@@ -142,15 +123,12 @@ export function codeSystem(kind: "patch_edit" | "author_function", language: str
   return [...baseRules(kind), ...testContractOf(language), ...codeStageRules()].join("\n");
 }
 
-/** 段 3（测试）：同上——这一段最容易漏形状规范，漏了测试就跑不出结论行。 */
+/** 段 3：带该语言的测试形状规范，漏了测试就跑不出结论行。 */
 export function testsSystem(kind: "patch_edit" | "author_function", language: string): string {
   return [...baseRules(kind), ...testContractOf(language), ...testsStageRules()].join("\n");
 }
 
-/**
-  直接把目标文件的当前内容读给段 2（引擎本地读，不花 token）。
-  走 read_file 同一套安全判据（禁读文件名 / 越出仓库 / 非普通文件），单文件截到 12,000 字符。
-*/
+/** 走 read_file 同一套安全判据（禁读文件名 / 越出仓库 / 非普通文件），单文件截到 12,000 字符。 */
 function targetSnapshots(repositoryPath: string, targets: string[]): { path: string; contents: string }[] {
   const out: { path: string; contents: string }[] = [];
   for (const target of targets.slice(0, 3)) {
@@ -238,7 +216,7 @@ interface SegmentOutcome<T> {
   failure?: { stage: "provider_error" | "proposal_shape"; reason: string };
 }
 
-/** 跑一段：形状错可以重出（只重这一段），其余不重试。 */
+/** 形状错只重这一段，其余不重试。 */
 async function runSegment<T>(
   run: (attempt: number) => Promise<{ data: T; usage?: LlmUsage; skillReads: ProposalResponse["skillReads"]; fileReads: ProposalResponse["fileReads"] }>,
   maxRetries: number
@@ -258,19 +236,16 @@ async function runSegment<T>(
   return { skillReads: [], fileReads: [], ...(failure ? { failure } : {}) };
 }
 
-/**
-  按三段产出代码题；产物仍是一道完整的题。
-  形状不合或自证不过时，调用方应退回整份产出的路径（分段是快速路径，不是唯一路径）。
-*/
+/** 按三段产出；形状不合或自证不过时调用方应退回整份产出。 */
 export async function generateCodeExerciseSegmented(input: {
   repositoryPath: string;
   tag: string;
   kind: "patch_edit" | "author_function";
-  /** 参考素材：候选文件与摘录（只作参考，不要求逐字使用）。 */
+  /** 参考素材：候选文件与摘录，不要求逐字使用。 */
   reference: string;
   provider: LlmProvider;
   faces?: ExerciseFaces;
-  /** 出题进度：界面靠它显示「正在出题面 / 写代码 / 写测试」，不传就只剩一个转圈。 */
+  /** 出题进度：界面靠它显示「正在出题面 / 写代码 / 写测试」。 */
   onProgress?: ExerciseProgressSink;
   /** 每段最多重出几次（形状错才重）。 */
   maxSegmentRetries?: number;
@@ -282,7 +257,7 @@ export async function generateCodeExerciseSegmented(input: {
   const skillReads: ProposalResponse["skillReads"] = [];
   const fileReads: ProposalResponse["fileReads"] = [];
 
-  /** 每一段的工具循环都带上硬上限与进度条；无进展按段各记各的。 */
+  /** 无进展按段各记各的。 */
   const noProgress: Record<"prompt" | "code" | "tests", number> = { prompt: 0, code: 0, tests: 0 };
   const briefFor = (segment: ExerciseSegment) => (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }): string => {
     if (state.newFiles === 0) noProgress[segment] += 1;
@@ -301,7 +276,7 @@ export async function generateCodeExerciseSegmented(input: {
     return `（进度：${parts.join("；")}。）`;
   };
 
-  /** 段前缀：模型帧的 stepId 带上段名，轨迹里就能分清这是哪一段。段内重出要带序号，否则 stepId 会撞。 */
+  /** 段内重出要带序号，否则 stepId 会撞。 */
   const facesFor = (segment: ExerciseSegment, attempt = 1): ExerciseFaces => {
     const inner = faces.onTrace;
     const scoped: ExerciseFaces = {
@@ -314,8 +289,7 @@ export async function generateCodeExerciseSegmented(input: {
     const prefix = attempt > 1 ? `${segment}-${attempt}` : segment;
     return {
       ...scoped,
-      // 只有模型帧改成段名；工具帧必须保留工具自己的名字——否则「读技能 / 检索代码」全被盖成
-      // 「出题面」，轨迹里就看不到模型到底调了什么工具（曾经因此误以为前期没加载技能）。
+      // 只有模型帧改成段名，工具帧保留工具自己的名字。
       onTrace: (step) => inner({
         ...step,
         stepId: `${prefix}-${step.stepId}`,
@@ -324,7 +298,6 @@ export async function generateCodeExerciseSegmented(input: {
     };
   };
 
-  /** 每段开始时播报一次：界面据此把「出题面 / 写代码 / 写测试」显示成当前步骤。 */
   const announce = (segment: ExerciseSegment): void => {
     input.onProgress?.({ stage: "proposing", detail: EXERCISE_SEGMENT_ACTIVE[segment] });
   };
@@ -360,10 +333,9 @@ export async function generateCodeExerciseSegmented(input: {
       user: JSON.stringify({
         stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
         targets: plan.targets,
-        // 目标文件的现状由引擎直接给（本地读，不花 token）：段 2 就不用再 read_file 读一遍，
-        // 省一轮工具往返和那一轮的上下文。读不到（targets 写歪了）才留空让它自己检索。
+        // 目标文件现状由引擎本地读，不花 token；读不到才留空让它自己检索。
         targetFiles: targetSnapshots(input.repositoryPath, plan.targets),
-        // 段 1 真正读成功过的路径：targets 写歪了（比如只剩裸文件名）时，这一段照这份清单读。
+        // 段 1 真正读成功过的路径，供 targets 写歪时兜底。
         readPaths: planOut.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path).slice(0, 8),
         note: "targetFiles 是目标文件当前的全文，直接用；接口、函数名、导入路径都要照它来。读不到的内容自己 read_file 补。"
       }),
@@ -385,8 +357,7 @@ export async function generateCodeExerciseSegmented(input: {
 
   const testsOut = await runSegment<TestsSegment>(async () => {
     announce("tests");
-    // 段 3 是裸调用，没有工具循环替我们发帧：补一条「开始」，
-    // 否则轨迹会停在上一段的最后一帧，看起来像已经结束了。
+    // 段 3 是裸调用，没有工具循环替我们发帧，模型帧要自己发。
     faces.onTrace?.({
       kind: "model", status: "start", stepId: "tests-start",
       label: EXERCISE_SEGMENT_ACTIVE.tests, round: 1, model: input.provider.modelVersion
@@ -406,10 +377,8 @@ export async function generateCodeExerciseSegmented(input: {
     });
     const parsed = parseJsonObject(response.text);
     if (!parsed) throw new SegmentError("shape", "测试段返回的不是可解析的 JSON。");
-    // 这一段没有工具循环，模型帧要自己发出去，否则轨迹里看不到「写测试」这一步。
     faces.onTrace?.({
-      // stepId 与上面那条「开始」帧一致：界面按 stepId 合并，一条从上到下走完，
-      // 不要变成「正在写测试（转圈）」+「正在写测试（已完成）」两行。
+      // stepId 与上面那条「开始」帧一致，界面按 stepId 合并成一条。
       kind: "model", status: "ok", stepId: "tests-start", label: EXERCISE_SEGMENT_ACTIVE.tests,
       round: 1, model: input.provider.modelVersion, ms: Date.now() - startedAt,
       ...(response.usage ? { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens } : {}),
@@ -424,8 +393,7 @@ export async function generateCodeExerciseSegmented(input: {
   const tests = testsOut.data!;
   usage = addUsage(usage, testsOut.usage);
 
-  // 「相关文件」靠 anchors：模型在代码段点名取材来源；没点名就用这一趟真读过的文件兜底，
-  // 否则界面那一栏永远是空的（分段刚上线时就是漏了这个字段）。
+  // anchors 缺省时用这一趟真读过的文件兜底。
   const anchors = code.anchors.length
     ? code.anchors
     : codeOut.fileReads.filter((read) => !read.denied && !read.error).slice(0, 3)
@@ -455,7 +423,7 @@ export async function generateCodeExerciseSegmented(input: {
 
   const generation = await finish(merged);
   if (!generation.ok && generation.stage === "harness_validation") {
-    // 自证没过：只重出该改的那一段（参考解没过就重代码，否则重测试），不整份重来。
+    // 参考解没过就重代码段，否则重测试段，不整份重来。
     const solutionRun = generation.runs.find((run) => run.label === "solution");
     const stage: ExerciseSegment = solutionRun?.verdict && solutionRun.verdict.failed > 0 ? "code" : "tests";
     try {

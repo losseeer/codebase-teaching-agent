@@ -1,70 +1,28 @@
-/**
-  ==== 语言能力表（引擎自报口径）====
+/** 语言能力表：每门语言 × 九个能力格，引擎自报口径，与 `packages/engine/src/depgraph/graph.ts` + `parser.ts` 的实现必须同步。
+  纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关）。
+  与 `DependencyGraphData.lspStatus` 是两套口径：本表说引擎自己的规则有多硬，`lspStatus` 说有没有借到外部语义服务。 */
 
-  这是什么：每门语言 × 五个能力格的取值，只回答「引擎现在真的能做到什么程度」。
-  为什么要单独成表：各语言的支持程度本来就不均——符号抽取走真实语法树（多语法，加载失败会回落逐行匹配），
-  import 落点是每语言一条自己的规则（Java 全限定类名、Go 包目录、C# 命名空间、TS 相对路径 + 别名、
-  Python 点号模块、C/C++ 头文件），入口判定只有部分语言有权威规则，构建清单只读了三份
-  （package.json / tsconfig / go.mod）。这些差异只写在引擎代码里时，界面与读数都看不出来，
-  用户拿到一张图没法判断「这条边是编译器级的、还是按文件名猜的」。
-
-  四条纪律，违反任何一条就等于这张表在误导人：
-  1. 它是引擎自报口径，与 `packages/engine/src/depgraph/graph.ts` + `parser.ts` 的实现必须同步：
-     新增一门语言、补了某条规则，就改这张表；别在 GUI 或提示词里另写一份判断。
-  2. 取值照实填，别因为「想让表好看」抬高某一个节点。判据见下面 `CapabilityLevel`。
-  3. 纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关），
-     改这张表不会引发流程或摘要重算。真要挪走这份口径，先确认没有键把它算进去。
-  4. 它跟 `DependencyGraphData.lspStatus` 是两套口径，别混用：本表说「引擎自己的规则有多硬」，
-     `lspStatus` 说「有没有借到外部语义服务补类型与被引用次数」（目前只有 TypeScript 与 Python 会去探测）。
-*/
-
-/**
-  三档的判据（写死在这里，避免引擎、界面、提示词各说一套）：
-  - `exact` 可信：按这门语言/框架的权威规则落点，命中即可信。不足之处只会表现为「没覆盖到、少画一条」，
-    而不是「画了一条错的」。
-  - `approximate` 近似：规则在，但依据是启发式或粒度偏粗——同一条边可能多连几个文件，也可能落到同名文件上。
-  - `unsupported` 未覆盖：没有针对这门语言的专门规则，只剩跨语言的通用兜底（按文件名猜），或这类文件根本不进图。
-
-  未知语言一律回落 `unsupported`，不许按 `approximate` 装「大概能行」——近似必须显式。
-*/
+/** exact = 按权威规则落点，命中即可信（不足只表现为少画一条）；approximate = 启发式或粒度偏粗（可能多连或落到同名文件）；unsupported = 无专门规则，只剩按文件名的通用兜底或不进图。未知语言一律回落 unsupported。 */
 export type CapabilityLevel = "exact" | "approximate" | "unsupported";
 
-/**
-  九个能力格（GUI 与单测都按这份清单遍历，加格要一起改表与测试）：
-  前五格说依赖图，后四格说静态产物层（`static_fact` 表，不参与任何缓存键）。
-  - `symbolExtraction` 符号抽取：函数/类/方法是怎么被认出来的、起止行可不可信
-  - `dependencyEdge` 依赖边落点：一条依赖边指向哪个文件，可信到什么程度
-  - `entrypoint` 入口判定：图上标成「执行入口」的那个文件是怎么定的
-  - `packageResolution` 路径别名与包解析：`@/x`、`crate::x`、`com.a.B` 这类非相对路径靠什么落点
-  - `buildVisibility` 构建可见性：读不读这门语言的构建/清单文件，因而知不知道「哪些文件真在一起编译」
-  - `controlFlow` 控制流图：函数内的分支、循环、跳转边编不编得出来
-  - `dataflow` 函数内数据流：一个变量在哪行被定义、哪些行读到它
-  - `typeRelations` 类型关系：继承/实现/字段/参数/返回值这些边，以及它们指到哪个文件
-  - `registry` 注册与配置索引：路由、依赖注入绑定、SPI 清单、构建清单里的键
-*/
+/** 九个能力格：GUI 与单测都按这份清单遍历，加格要一起改表与测试；前五格说依赖图，后四格说静态产物层（`static_fact` 表，不参与任何缓存键）。 */
 export const CAPABILITY_CELLS = ["symbolExtraction", "dependencyEdge", "entrypoint", "packageResolution", "buildVisibility", "controlFlow", "dataflow", "typeRelations", "registry"] as const;
 
 export type CapabilityCell = (typeof CAPABILITY_CELLS)[number];
 
 export interface LanguageCapabilities {
-  /** 语言 id，与本表的键一致；界面显示用 `displayName`，别直接露这个。 */
+  /** 语言 id，与本表的键一致；界面显示用 `displayName`。 */
   language: string;
   displayName: string;
   /** 依赖图里归到这门语言的扩展名。各条目的这一列汇总成 `LANGUAGE_BY_EXTENSION`，不在别处再列一份。 */
   extensions: string[];
-  /** 各格的取值；类型是必填的 `Record`，漏一个节点编译就过不去。 */
   cells: Record<CapabilityCell, CapabilityLevel>;
-  /** 每个节点一句白话：说清「为什么是这一档」以及「看到这档该当怎么读」。界面提示条直接用它。 */
+  /** 每格一句白话，界面提示条直接用它。 */
   notes: Record<CapabilityCell, string>;
 }
 
-/**
-  表体。取值依据 = 当前实现（graph.ts 的分派 + parser.ts 的语法覆盖 + roles.ts 的测试路径判定），
-  每一个节点都注了降级理由。改动实现后请同步这里，engine 侧有一份单测钉住「本表的扩展名清单
-  与 `DependencyGraph` 实际处理的扩展名清单不漂移」。
-  只用 `satisfies` 不用 `as const`：键的字面量类型留着（`SupportedLanguage` 靠它），
-  但值里的 `extensions` 需要是可写数组，`as const` 会让它变成只读元组而通不过类型检查。
-*/
+/** 取值依据 = 当前实现（graph.ts 的分派 + parser.ts 的语法覆盖 + roles.ts 的测试路径判定）；engine 侧单测钉住本表扩展名清单与 `DependencyGraph` 不漂移。
+  只用 `satisfies` 不用 `as const`：键的字面量类型留着（`SupportedLanguage` 靠它），而 `as const` 会把 `extensions` 变成只读元组而通不过类型检查。 */
 export const LANGUAGE_CAPABILITIES = {
   typescript: {
     language: "typescript",
@@ -226,10 +184,7 @@ export const UNKNOWN_LANGUAGE_CAPABILITIES: LanguageCapabilities = {
   }
 };
 
-/**
-  扩展名 → 语言。由本表各条目的 `extensions` 汇总而成（只有一份来源）。
-  ⚠️ 与 `DependencyGraph` 实际处理的扩展名同一条命：加一门语言要改两处，漂移由 engine 的单测发现。
-*/
+/** 扩展名 → 语言，由本表各条目的 `extensions` 汇总（只有一份来源）；加一门语言要同时改 `DependencyGraph`，漂移由 engine 的单测发现。 */
 export const LANGUAGE_BY_EXTENSION: Readonly<Record<string, SupportedLanguage>> = Object.fromEntries(
   Object.entries(LANGUAGE_CAPABILITIES).flatMap(([language, entry]) => entry.extensions.map((extension): [string, SupportedLanguage] => [extension, language as SupportedLanguage]))
 );
@@ -245,10 +200,7 @@ export function languageOfExtension(extension: string): SupportedLanguage | unde
   return hasOwn(LANGUAGE_BY_EXTENSION, key) ? LANGUAGE_BY_EXTENSION[key] : undefined;
 }
 
-/**
-  查一门语言的能力档：接受语言 id（`java`）、扩展名（`.java` 或 `java`）或带扩展名的路径（`src/a.java`）。
-  未知语言回落 `UNKNOWN_LANGUAGE_CAPABILITIES`（全格 `unsupported`），不假装是 approximate。
-*/
+/** 接受语言 id（`java`）、扩展名（`.java` 或 `java`）或带扩展名的路径（`src/a.java`）；未知语言回落 `UNKNOWN_LANGUAGE_CAPABILITIES`（全格 `unsupported`）。 */
 export function languageCapabilitiesOf(extensionOrLanguage: string): LanguageCapabilities {
   const raw = (extensionOrLanguage ?? "").trim().toLowerCase();
   if (!raw) return UNKNOWN_LANGUAGE_CAPABILITIES;

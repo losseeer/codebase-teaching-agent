@@ -19,13 +19,8 @@ import type { ToolDefinition } from "../source/tools/types.js";
 import type { FactsPairChecker } from "./facts-verify.js";
 import { layoutIfUnplaced } from "./auto-layout.js";
 
-/**
-  画布结构的唯一写入口，位置以外的改动都从这里进。
-  `module` 节点的 `ref` 由索引与依赖图核对，核不上整次拒写。
-  边的 `origin` 只降不升；每次结构改动存一版。
-*/
+/** 画布结构的唯一写入口；`module` 节点的 `ref` 由索引与依赖图核对，核不上整次拒写；边的 `origin` 只降不升，每次结构改动存一版。 */
 
-/** 一次改动的回话文本与最新图。 */
 export interface DiagramWriteOutcome {
   ok: boolean;
   text: string;
@@ -33,7 +28,6 @@ export interface DiagramWriteOutcome {
 }
 
 export interface DiagramWriteContext {
-  /** 这一仓的图库存取口。 */
   store: DiagramStore;
   repositoryId: string;
   index: RepositoryIndex;
@@ -44,10 +38,8 @@ export interface DiagramWriteContext {
   facts?: FactsPairChecker;
 }
 
-/** 可信度排序：只降不升。 */
 const ORIGIN_RANK: Record<DiagramEdge["origin"], number> = { inferred: 0, code: 1, static: 2 };
 
-/** 节点 ref 可指向的文件与符号集合。 */
 interface RefIndex {
   files: Set<string>;
   symbols: SymbolInfo[];
@@ -92,7 +84,7 @@ function resolveRef(ref: string, index: RefIndex): { files: string[] } | { error
   return index.files.has(path) ? { files: [path] } : { error: `${value.slice(0, 80)} 既不是 file:/dir:/symbol:/group:，也不在本仓库索引里` };
 }
 
-/** 一个节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析。 */
+/** 节点覆盖哪些文件：显式 `files` 优先，其次按 ref 解析。 */
 function filesOfNode(node: DiagramNode, index: RefIndex): string[] {
   if (node.kind !== "module") return [];
   if (node.files?.length) return node.files.filter((path) => index.files.has(path));
@@ -112,7 +104,6 @@ function verifyPair(fromFiles: string[], toFiles: string[], analysis: Repository
   return undefined;
 }
 
-/** 反方向有没有 import 边。 */
 function reverseImport(fromFiles: string[], toFiles: string[], analysis: RepositoryAnalysis): string | undefined {
   const imports = analysis.graph.imports ?? {};
   const from = new Set(fromFiles);
@@ -120,7 +111,7 @@ function reverseImport(fromFiles: string[], toFiles: string[], analysis: Reposit
   return undefined;
 }
 
-/** 按核出来的档位改模型报的边，只往下改；便签参与的边一律 `inferred`。 */
+/** 按核出的档位改模型报的边，只降不升；便签参与的边一律 `inferred`。 */
 function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, index: RefIndex, context: DiagramWriteContext): { edge: DiagramEdge; downgraded: boolean } {
   const { analysis } = context;
   const from = nodesById.get(edge.from);
@@ -146,7 +137,7 @@ function settleEdge(edge: DiagramEdge, nodesById: Map<string, DiagramNode>, inde
 const clampCoord = (value: number): number => (Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0);
 const clampText = (value: string | undefined, limit: number): string | undefined => (value === undefined ? undefined : value.trim().slice(0, limit));
 
-/** 名字末尾的括号计数；规模写在 `sub`。 */
+/** 名字末尾的括号计数。 */
 const TRAILING_COUNT = /[（(]\s*\d+\s*[)）]\s*$/;
 
 /** 整张图的结构校验；返回字符串表示拒写原因。 */
@@ -231,7 +222,6 @@ const refuse = (reason: string): DiagramWriteOutcome => ({ ok: false, text: `没
 
 const downgradeNote = (count: number): string => (count ? `其中 ${count} 条边核不到依据、已降档（边上写着为什么）。` : "");
 
-/** 版本历史里那一行：动作 + 目标名。 */
 function versionNoteOf(edit: Exclude<DiagramEdit, { action: "draw" }>, nameOf: (id: string) => string): string {
   switch (edit.action) {
     case "add_node": return `加 ${edit.node.label}`;
@@ -245,7 +235,6 @@ function versionNoteOf(edit: Exclude<DiagramEdit, { action: "draw" }>, nameOf: (
   }
 }
 
-/** 一次动作改的是图上哪一格。 */
 function editTargetId(edit: DiagramEdit): string {
   if ("target" in edit) return edit.target;
   if ("node" in edit) return edit.node.id;
@@ -254,7 +243,6 @@ function editTargetId(edit: DiagramEdit): string {
   return "";
 }
 
-/** 一次动作的中文说法。 */
 const ACTION_LABEL: Record<Exclude<DiagramEdit["action"], "draw">, string> = {
   add_node: "加了节点", remove_node: "删了节点", add_edge: "连了边", remove_edge: "删了边",
   add_group: "加了分组", remove_group: "删了分组", relabel: "改了名", move: "挪了位置"
@@ -269,7 +257,6 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
     const settled = settleBody(edit.body, index, context);
     if (typeof settled === "string") return refuse(settled);
     const wanted = (request.diagram ?? "").trim();
-    // agent 常常整张图不给坐标，落盘前按分组排一次版，否则所有卡片叠在 (0,0)。
     const laid = layoutIfUnplaced(settled.body);
     const laidNote = laid.applied ? "（原图没有坐标，已按分组自动排版）" : "";
     if (!wanted) {
@@ -279,8 +266,6 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
       context.onApplied?.({ repositoryId: context.repositoryId, diagramId: saved.id, action: "draw" });
       return { ok: true, text: `画好了「${saved.name}」：${saved.body.nodes.length} 个节点、${saved.body.edges.length} 条边，已存进图库并留了第一版${laidNote}。${downgradeNote(settled.downgraded)}`, diagram: saved };
     }
-    // 指名了目标就整张替换：沿用原 id 与名字，上一版进版本历史。
-    // 重画一张已经存在的图必须走这里——不带 diagram 的 draw 永远是新建，会多出一张同名（2）。
     const target = resolveTarget(context, wanted);
     if ("error" in target) return refuse(target.error);
     const saved = context.store.applyStructure(target.diagram, laid.body, via === "agent" ? "agent 重画" : "重画");
@@ -298,7 +283,6 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   if ("error" in target) return refuse(target.error);
   const diagram = target.diagram;
   const body: DiagramBody = { groups: [...diagram.body.groups], nodes: [...diagram.body.nodes], edges: [...diagram.body.edges] };
-  /** 图元名字：先查改动后的结构，查不到再查改动前。 */
   const labelIn = (items: { id: string; label: string }[], value: string): string | undefined => items.find((item) => item.id === value)?.label;
   const nameOf = (id: string): string => labelIn(body.nodes, id) ?? labelIn(body.groups, id) ?? labelIn(diagram.body.nodes, id) ?? labelIn(diagram.body.groups, id) ?? id;
   const settledBefore = body.nodes.length;
@@ -343,7 +327,6 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
 
   return finish(edit, "");
 
-  /** 校验、落盘、记账与广播的公共出口。 */
   function finish(done: Exclude<DiagramEdit, { action: "draw" }>, override: string): DiagramWriteOutcome {
     const settled = settleBody(body, index, context);
     if (typeof settled === "string") return refuse(settled);
@@ -361,12 +344,7 @@ export function applyDiagramEdit(context: DiagramWriteContext, request: DiagramE
   }
 }
 
-/**
-  `set_diagram` 的参数层：`edit` 接受嵌套或摊平两种写法，白名单外的键不采纳。
-  `downgraded` 由引擎写入；`origin` 必填且只有三档。
-*/
-
-/** 九种动作各自的字段清单。 */
+/** `set_diagram` 的参数层：`edit` 接受嵌套或摊平两种写法，白名单外的键不采纳。 */
 const EDIT_FIELDS: Record<DiagramEdit["action"], readonly string[]> = {
   draw: ["action", "name", "body"],
   add_node: ["action", "node"],
@@ -384,13 +362,9 @@ const EDGE_FIELDS = ["id", "from", "to", "origin", "label", "evidence"];
 const GROUP_FIELDS = ["id", "label", "x", "y", "w", "h"];
 const BODY_FIELDS = ["groups", "nodes", "edges"];
 
-/** 必填的短文本：非字符串一律按没给。 */
 const textOf = (value: unknown, limit: number): string => (typeof value === "string" ? value.trim().slice(0, limit) : "");
-/** 可选文本：分得清「没给这个键」与「给了空串」。 */
 const optionalText = (value: unknown, limit: number): string | undefined => (typeof value === "string" ? value.trim().slice(0, limit) : undefined);
-/** 坐标与尺寸：非有限值收成 0。 */
 const coordOf = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-/** 把白名单外的键登记进 `ignored`，带容器名。 */
 function noteExtras(entry: Record<string, unknown>, allowed: readonly string[], where: string, ignored: string[]): void {
   for (const key of Object.keys(entry)) if (!allowed.includes(key)) ignored.push(`${where}.${key}`);
 }
@@ -407,7 +381,7 @@ function nodeFrom(raw: unknown, ignored: string[]): DiagramNode | string {
   const group = optionalText(entry.group, 60);
   const base: DiagramNode = { id, kind: entry.kind, label, x: coordOf(entry.x), y: coordOf(entry.y) };
   if (entry.kind === "module") {
-    // 此处只校验 ref 是否给出，能否解析由 settleBody 判定。
+    // 这里只校验 ref 是否给出，能否解析由 settleBody 判定。
     const ref = textOf(entry.ref, 200);
     if (!ref) return "kind=module 的节点要写 ref：file:<路径> / dir:<目录> / symbol:<路径>#<符号> / group:<id>";
     const files = Array.isArray(entry.files)
@@ -472,7 +446,7 @@ function bodyFrom(raw: unknown, ignored: string[]): DiagramBody | string {
   return { groups, nodes, edges };
 }
 
-/** set_diagram 的完整约定：只经 action=help 或写错时返回，常驻描述只留一句。 */
+/** set_diagram 的完整约定：只在 action=help 或写错时返回。 */
 export const DIAGRAM_TOOL_HELP = [
   "set_diagram 约定：",
   "- 动作：draw（给 name 与 body={groups,nodes,edges}）、add_node（给 node）、remove_node（给 target）、add_edge（给 edge）、remove_edge（给 target）、add_group（给 group）、remove_group（给 target）、relabel（给 target 与 label/sub/text）、move（给 target、x、y）。",
@@ -501,7 +475,6 @@ export function parseDiagramEditArguments(raw: string): { request?: DiagramEditR
   const fields = EDIT_FIELDS[action as DiagramEdit["action"]];
   const ignored: string[] = [];
   if (!fields) return { ignored, error: `未知 action「${action.slice(0, 40)}」：只有 draw / add_node / remove_node / add_edge / remove_edge / add_group / remove_group / relabel / move 这九种；完整约定传 {"edit":{"action":"help"}} 查看` };
-  // 摊平写法下顶层多余的键同样登记进 ignored。
   for (const key of Object.keys(top)) {
     if (key === "diagram") continue;
     if (source === top ? !fields.includes(key) : key !== "edit") ignored.push(key);
@@ -564,7 +537,6 @@ export function diagramWarnings(context: DiagramWriteContext, diagram: Diagram):
   return out;
 }
 
-/** 节点 id → 它覆盖的已索引文件。 */
 export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagram): Record<string, { path: string; line: number }[]> {
   const index = refIndexOf(context.index, context.analysis);
   const out: Record<string, { path: string; line: number }[]> = {};
@@ -575,7 +547,7 @@ export function diagramFilesByNode(context: DiagramWriteContext, diagram: Diagra
   return out;
 }
 
-/** 画布现场文本：现有的图清单与正打开那张的图元。 */
+/** 画布现场文本：图清单与正打开那张的图元。 */
 export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?: string): string {
   const all = context.store.list();
   if (!all.length) return "画布现场：这个仓库还没有图。要画就用 draw 一次提交完整节点、边与分组，不逐格提交。";
@@ -595,7 +567,6 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
   return `画布现场：\n${lines.join("\n")}\n${detail}\n改哪张就在 diagram 里给它的 id 或名字（draw 带目标 = 整张替换并记一版，不带 = 新建一张）；结构改动只有 set_diagram 这一条路，位置用户自己拖，不用你代劳。`;
 }
 
-/** 画布结构写入口的工具定义。 */
 export const SET_DIAGRAM_TOOL: LlmTool = {
   name: "set_diagram",
   description: "修改画布上的架构图结构；先传 {\"edit\":{\"action\":\"help\"}} 查看动作与字段约定。",

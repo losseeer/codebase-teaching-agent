@@ -11,14 +11,11 @@ import { toLlmTool } from "../../../source/tools/types.js";
 import { hash } from "@codebase-tutor/platform";
 import { maskSecrets } from "@codebase-tutor/domain";
 
-/** MCP 客户端：把外部 MCP server 的工具接进工具循环，只做读外部这一个方向。
-    默认关闭：没有配置文件就不给外部工具，工具清单与系统提示词逐字不变。
-    正文不进日志：外部调用只记 `chars + hash`；返回内容进模型前先过密钥筛。 */
+/** MCP 客户端：只把外部 MCP server 的工具接进工具循环，只做读外部这一个方向。默认关闭（没有配置文件就不给外部工具）；外部调用只记 `chars + hash` 不进日志，返回内容进模型前先过密钥筛。 */
 
 export interface McpServerConfig {
   /** 配置里 `mcpServers` 的键名，进工具名前缀：`mcp__<name>__<tool>`。 */
   name: string;
-  /** 本地 stdio server 的启动命令。 */
   command: string;
   args?: string[];
   cwd?: string;
@@ -45,9 +42,7 @@ interface RawServerEntry {
 export interface ExternalSurface {
   /** 已带 `mcp__server__tool` 前缀、可以直接进 provider 请求的清单。 */
   tools: LlmTool[];
-  /** 一台 server 一组，交给注册表统一过滤与暴露。 */
   groups: ToolGroup[];
-  /** 连不上或被跳过的 server 与原因。 */
   errors: { server: string; reason: string }[];
   /** 调一次；永不抛，失败返回给模型的文本与审计记录。 */
   call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
@@ -107,9 +102,7 @@ export function readMcpConfigs(file = mcpConfigFile()): { servers: McpServerConf
 }
 
 interface ListedTool {
-  /** 暴露名：`mcp__<server>__<tool>`。 */
   name: string;
-  /** server 侧的原始工具名。 */
   origin: string;
   description?: string;
   schema: Record<string, unknown>;
@@ -124,7 +117,7 @@ interface Connected {
   signature: string;
 }
 
-/** 连接池：按 server 名惰性连一次并缓存 promise；连不上、连接已死或启动配置变了就摘掉该项，下回合重连。 */
+/** 连接池：按 server 名缓存 promise；连不上、连接已死或启动配置变了就摘掉该项，下回合重连。 */
 const pool = new Map<string, Promise<Connected | undefined>>();
 
 function configSignature(config: McpServerConfig): string {
@@ -167,7 +160,6 @@ async function connect(config: McpServerConfig): Promise<Connected | undefined> 
       try {
         entry.tools = await listTools(client, config.name);
       } catch {
-        // 保留旧清单
       }
     });
     entry.tools = await listTools(client, config.name);
@@ -183,7 +175,6 @@ function previewOf(argumentsJson: string): { argsChars: number; argsHash: string
   return { argsChars: text.length, argsHash: hash(text).slice(0, 12) };
 }
 
-/** 区分超时与调用失败两种结果。 */
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; reason: "timeout" | "failed" }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const outcome = await Promise.race([
@@ -197,7 +188,6 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: tr
 /** 组装本轮的外部工具面；没有配置文件就返回 `undefined`。 */
 export async function externalToolSurface(): Promise<ExternalSurface | undefined> {
   const { servers, skipped } = readMcpConfigs();
-  // 配置里删掉的 server 先收尾
   const wanted = new Set(servers.map((config) => config.name));
   for (const [name, pending] of [...pool]) {
     if (wanted.has(name)) continue;
@@ -212,7 +202,6 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
     let cached = pool.get(config.name);
     const existing = await cached;
     if (existing && existing.signature !== signature) {
-      // 启动配置变了就连新的
       void existing.client.close().catch(() => undefined);
       pool.delete(config.name);
       cached = undefined;
@@ -293,7 +282,6 @@ export async function externalToolSurface(): Promise<ExternalSurface | undefined
   return { tools, groups, errors, call };
 }
 
-/** 关连接并清池。 */
 export async function closeExternalTools(): Promise<void> {
   const entries = await Promise.all([...pool.values()]);
   pool.clear();

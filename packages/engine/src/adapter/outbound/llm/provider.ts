@@ -65,7 +65,6 @@ async function httpFailure(response: Response, label: string): Promise<Error> {
   try {
     reason = maskSecrets(await response.text()).text.replace(/\s+/g, " ").trim().slice(0, 300);
   } catch {
-    // 响应体读不出来时只报状态码
   }
   const error = new Error(`${label}（HTTP ${String(response.status)}）${reason ? `：${reason}` : ""}`);
   Object.defineProperty(error, "httpStatus", { value: response.status, configurable: true });
@@ -222,7 +221,6 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 }
 
-/** 包装 provider，对瞬时失败重试。 */
 export class RetryLlmProvider implements LlmProvider {
   readonly name: string;
   readonly modelVersion: string;
@@ -254,7 +252,6 @@ export class RetryLlmProvider implements LlmProvider {
   }
 }
 
-/** 把尝试次数与每次耗时挂到错误对象上。 */
 function markAttempts(error: unknown, attempts: number, attemptMs: number[]): unknown {
   if (error instanceof Error) {
     Object.defineProperty(error, "attempts", { value: attempts, configurable: true });
@@ -308,7 +305,6 @@ export interface LlmConfigOverrides {
 
 const trimmed = (value?: string): string => value?.trim() ?? "";
 
-/** 超时的钳制区间。 */
 export const TIMEOUT_MIN_MS = 1_000;
 export const TIMEOUT_MAX_MS = 300_000;
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -331,7 +327,6 @@ export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLl
   return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
 }
 
-/** 一份 LLM 配置的最终生效值。 */
 export interface ResolvedLlmConfig {
   /** 空串 = 未配置。 */
   provider: string;
@@ -351,7 +346,6 @@ function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
   return undefined;
 }
 
-/** provider 工厂；provider 未配置时返回 `undefined`。 */
 export function createLlmProvider(overrides?: LlmConfigOverrides): LlmProvider | undefined {
   const config = resolveLlmConfig(overrides);
   return config.provider ? createProvider(config) : undefined;

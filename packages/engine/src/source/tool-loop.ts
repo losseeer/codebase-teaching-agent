@@ -28,7 +28,6 @@ import {
 } from "./tools/types.js";
 
 /**
-  工具循环：每回合按通道装配注册表与暴露面，调用一律经 `ToolInvoker`。
   上限是工具轮数与累计成功的读取数；用尽时回绝未应答的 tool_call，再做一轮不带工具的收尾。
   messages[0] 恒为首轮 user 消息。
 */
@@ -43,7 +42,7 @@ export interface ReadToolLoopInput {
   user: string;
   /** 输出预算；省略即取 `DEFAULT_MAX_TOKENS`。 */
   maxTokens?: number;
-  /** [DEV ONLY] 前 N 轮强制工具轮只输出 tool_calls（tool_choice=required）；省略 = 产品现状。 */
+  /** [DEV ONLY] 前 N 个工具轮强制 tool_choice=required；省略 = 产品现状。 */
   toolChoiceRequiredRounds?: number;
   /** 省略时用 provider 的默认采样温度。 */
   temperature?: number;
@@ -52,13 +51,8 @@ export interface ReadToolLoopInput {
   /** 一个回合内成功读取的文件数上限；省略取 `DEFAULT_FILE_READS`。 */
   maxCalls?: number;
   onProgress?: (progress: ReadToolProgress) => void;
-  /** 模型与工具调用的轨迹帧。 */
   onTrace?: (step: ToolTraceStep) => void;
-  /**
-    每一轮工具跑完后，把「进度条」拼在最后一条工具结果末尾交给模型：已用/剩余轮次、
-    已读多少个不同文件、本轮有没有新增。预算紧时提示收口，连续几轮没有新信息时提示换方向。
-    做成回调而不是写死，是因为不同场景的预算口径不一样（出题 15 轮，对话另算）。
-  */
+  /** 每轮工具跑完后拼在最后一条工具结果末尾交给模型的进度条。 */
   budgetBrief?: (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }) => string | undefined;
   /** 场景标签，透传给每一轮 LLM 调用。 */
   scene?: string;
@@ -66,15 +60,12 @@ export interface ReadToolLoopInput {
   search?: SearchCorpus;
   /** 外部中止信号，透传给每一轮 LLM 调用。 */
   signal?: AbortSignal;
-  /** 画布图结构的写入通道。 */
   diagram?: SetDiagramToolContext;
   /** 静态产物的只读查询通道。 */
   facts?: FactsToolContext;
-  /** 技能正文的取用通道。 */
   skills?: SkillsToolContext;
   /** 回合内向用户提问的通道，一个回合最多一次。 */
   ask?: { facets: AskFacet[]; resume?: AskResume };
-  /** 外部 MCP 工具面。 */
   external?: ExternalToolContext;
   /** 回合检查点通道；不传则不落检查点。 */
   checkpoint?: TurnCheckpointChannel;
@@ -93,7 +84,7 @@ export interface ToolLoopAudits {
   rounds: number;
   /** 抛出前已累计的 token 用量。 */
   usage?: LlmUsage;
-  /** 这一趟的场景标签，供中止后的记账落对 scene。 */
+  /** 供中止后的记账落对 scene。 */
   scene?: string;
 }
 
@@ -111,7 +102,6 @@ function attachToolLoopAudits(error: unknown, audits: ToolLoopAudits): void {
 export interface ReadToolLoopResult {
   completion: LlmCompletion;
   usage?: LlmUsage;
-  /** 实际发生的工具调用轮数。 */
   rounds: number;
   fileReads: FileReadRecord[];
   /** 本回合的 search_code 调用审计，不合并去重。 */
@@ -124,9 +114,7 @@ export interface ReadToolLoopResult {
   resumedFromRound?: number;
   /** 回合提前停止的原因，缺省表示正常答完。 */
   stoppedBy?: TurnStopReason;
-  /** 回合内向用户提问时的结构化问句。 */
   asked?: AskUserAudit;
-  /** 最近一次提问被拒的原因。 */
   askRefused?: string;
   /** 回合被中断时的结论，无成品。 */
   interrupted?: TurnInterrupt;
@@ -134,10 +122,8 @@ export interface ReadToolLoopResult {
   askClaimed?: AskClaimAudit;
 }
 
-/** 回合提前停止的原因类别。 */
 export type TurnStopReason = "budget" | "rounds" | "reads";
 
-/** 回合到上限时的中断结论与给用户的原因句。 */
 export interface TurnInterrupt {
   reason: "budget" | "rounds";
   detail: string;
@@ -155,7 +141,7 @@ export interface TurnLoopState {
   mcpCalls: McpCallAudit[];
 }
 
-/** 回合检查点通道：每个工具轮一份快照，同一线程续跑。 */
+/** 每个工具轮一份快照，同一线程续跑。 */
 export interface TurnCheckpointChannel {
   /** 上一回合留下的状态；`inputHash` 不匹配时返回 `undefined`。 */
   restore: (inputHash: string) => { round: number; state: TurnLoopState } | undefined;
@@ -165,12 +151,11 @@ export interface TurnCheckpointChannel {
   clear: () => void;
 }
 
-/** 缺省上限按「实际碰不到」给：真闸是每轮的预算检查，不是这些数字。 */
+/** 真闸是每轮的预算检查，不是这些数字。 */
 export const DEFAULT_TOOL_ROUNDS = 100;
 export const DEFAULT_FILE_READS = 100;
 const DEFAULT_EXTERNAL_CALLS = 100;
 
-/** 模型只发工具调用时没有正文：把这次调用摊开，轨迹里能核对它要做什么。 */
 function callsDetail(calls: LlmToolCall[]): string {
   const lines = calls.slice(0, 5).map((call) => {
     const args = maskSecrets(call.argumentsJson).text.replace(/\s+/g, " ").trim();
@@ -214,7 +199,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     ...(input.onProgress ? { onProgress: input.onProgress } : {})
   };
   const registry = registryFor(baseContext);
-  // 暴露面每回合只算一次：tools 数组与按需目录都不在中途变化
+  // 暴露面每回合只算一次，中途不变。
   const exposure = exposeTools(registry, baseContext);
   const system = `${input.system}${toolIndexBrief(exposure)}`;
   const tools = exposure.always.map(toLlmTool);
@@ -235,7 +220,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     return undefined;
   };
   const collect = (outcome: ToolOutcome): void => {
-    // 审计行可能在整趟结束后才落盘；把真实发生时刻带上，历史轨迹才能按发生顺序排。
+    // 审计行可能整趟结束后才落盘，带上真实发生时刻。
     const occurredAt = new Date().toISOString();
     for (const read of outcome.audits?.fileReads ?? []) {
       fileReads.push({ ...read, occurredAt: read.occurredAt ?? occurredAt });
@@ -259,8 +244,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     input.onTrace?.({ kind: "model", status: "start", stepId, label, round, model: provider.modelVersion });
     const startedAt = Date.now();
     try {
-      // [DEV ONLY] 实验开关：前 N 个带 tools 的轮强制 tool_choice=required，
-      // 阻止模型在工具轮吐长正文；之后恢复 auto，让模型能自然收尾输出完整 JSON。
+      // [DEV ONLY] 前 N 个带 tools 的轮强制 tool_choice=required，之后恢复 auto。
       const effectiveArgs: LlmCompletionInput = input.toolChoiceRequiredRounds && args.tools?.length && rounds < input.toolChoiceRequiredRounds
         ? { ...args, toolChoice: "required" }
         : args;
@@ -355,9 +339,9 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       collect(outcome);
       if (outcome.askRefused) askRefused = outcome.askRefused;
       if (outcome.stop?.reason === "await_user") {
-        // 提问后本循环结束，这条调用不回灌 tool_result，等认领
+        // 这条调用不回灌 tool_result，等认领。
         asked = { ...outcome.stop.asked, toolCallId: call.id };
-        // 每条 tool_call 都要有配对的 tool 消息
+        // 每条 tool_call 都要有配对的 tool 消息。
         const answered = new Set(messages.filter((message) => message.role === "tool").map((message) => message.toolCallId));
         for (const sibling of completion.toolCalls) {
           if (sibling.id !== call.id && !answered.has(sibling.id)) messages.push({ role: "tool", toolCallId: sibling.id, content: "本轮改为先向用户问一句，这一条没有执行。" });
@@ -366,9 +350,8 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       }
       messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
     }
-    // 提问后本循环结束
     if (asked) break;
-    // 进度条拼在最后一条工具结果末尾（不改消息结构，只加文字，端点兼容性最好）
+    // 进度条只加文字，不改消息结构。
     const brief = input.budgetBrief?.({
       round: rounds,
       maxRounds,
@@ -386,32 +369,26 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     usage = addUsage(usage, completion.usage);
   }
   if (asked) {
-    // 挂起提问时把待认领的调用 id 与 promptHash 一并写入检查点
     input.checkpoint?.save(inputHash, snapshot(), "await_user", { promptHash, pendingToolCallId: asked.toolCallId });
   } else if (interrupted) {
-    // 中断的回合保留检查点并写明原因，同一提问可续跑
     input.checkpoint?.save(inputHash, snapshot(), "interrupted");
   } else {
     input.checkpoint?.clear();
   }
-  // 提问回合的成品文本是问句加可选项
   if (asked) completion = { ...completion, text: askBody(asked) };
   return { completion, usage, rounds, fileReads, codeSearches, skillReads, mcpCalls, ...(resumedFromRound === undefined ? {} : { resumedFromRound }), ...(stoppedBy === undefined ? {} : { stoppedBy }), ...(asked === undefined ? {} : { asked }), ...(askRefused === undefined ? {} : { askRefused }), ...(interrupted === undefined ? {} : { interrupted }), ...(askClaimed === undefined ? {} : { askClaimed }) };
   } catch (error) {
-    // 中止与失败都要带出已发生的工具审计
     attachToolLoopAudits(error, audits());
     if (isLlmAborted(error)) {
-      // 用户主动停止的回合不续跑，检查点随之清除
+      // 主动停止的回合不续跑。
       input.checkpoint?.clear();
     } else {
-      // 其它异常保留检查点并记为 error
       input.checkpoint?.save(inputHash, snapshot(), "error");
     }
     throw error;
   }
 }
 
-/** 技能清单并进系统提示词；没有通道就原样返回。 */
 export function withSkillsBrief(system: string, skills?: SkillsToolContext): string {
   return skills ? `${system}\n\n${skills.brief}` : system;
 }
@@ -433,7 +410,7 @@ function headLinesOf(content: string): string {
   return kept.join("\n");
 }
 
-/** 就地压缩回合上下文的消息体积，只改正文与 reasoning，不删消息。 */
+/** 就地压缩，只改正文与 reasoning，不删消息。 */
 export function compactTurnContext(messages: LlmMessage[], options: { keepToolResults?: boolean; keepRounds?: number } = {}): void {
   const keepRounds = Math.max(1, options.keepRounds ?? TOOL_CONTEXT_KEEP_ROUNDS);
   const roundStarts: number[] = [];
@@ -442,11 +419,10 @@ export function compactTurnContext(messages: LlmMessage[], options: { keepToolRe
   }
   if (!roundStarts.length) return;
   const newestRound = roundStarts[roundStarts.length - 1];
-  // 分界线之前的工具结果才折叠
   const foldBoundary = roundStarts[Math.max(0, roundStarts.length - keepRounds)];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    // 最近一次工具调用的 assistant 保留 reasoning：provider 要求原样回传
+    // 最近一次 assistant 的 reasoning 要原样回传给 provider。
     if (message.role === "assistant" && index !== newestRound) message.reasoningContent = undefined;
     if (options.keepToolResults || index >= foldBoundary) continue;
     if (message.role === "tool" && message.content.length > MASK_HEAD_CHARS) {

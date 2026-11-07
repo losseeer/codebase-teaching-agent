@@ -4,16 +4,13 @@ import type { DiagramBody, DiagramEdge, DiagramEdgeOrigin, DiagramNode } from "@
 
 /** 节点定宽；高度靠量。 */
 export const NODE_W = 132;
-/** 量不到盒子时的默认高度。 */
 export const NODE_H = 48;
-/** 世界层最小尺寸；节点拖向更右/下时自动扩大。 */
+/** 世界层最小尺寸；内容更靠右/下时自动扩大。 */
 export const WORLD_MIN_W = 2400;
 export const WORLD_MIN_H = 1600;
 export const ZOOM_MIN = 0.35;
 export const ZOOM_MAX = 2.5;
-/** 适应内容的缩放上限：小图不撑满整屏。 */
 const FIT_ZOOM_MAX = 1.2;
-/** 适应内容时四周留白。 */
 const FIT_PAD = 40;
 
 export interface View {
@@ -27,7 +24,7 @@ export interface Size {
   h: number;
 }
 
-/** 量出来的节点盒子（世界坐标里的未缩放尺寸，与 transform 的 scale 无关）。 */
+/** 节点盒子：世界坐标下的未缩放尺寸（与画布 scale 无关）。 */
 export type NodeBoxes = Map<string, Size>;
 
 export const DEFAULT_VIEW: View = { x: 40, y: 20, z: 1 };
@@ -43,7 +40,7 @@ export const ORIGIN_SHORT: Record<DiagramEdgeOrigin, string> = {
 
 export const EDGE_ORIGINS = Object.keys(ORIGIN_SHORT) as DiagramEdgeOrigin[];
 
-/** ISO 串 → 「刚刚 / N 分钟前 / N 小时前 / N 天前 / 03-04 15:02」。坏串原样显示，不编一个时间。 */
+/** 坏串原样返回，不编一个时间。 */
 export function relativeTime(iso: string): string {
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return iso;
@@ -57,7 +54,6 @@ export function relativeTime(iso: string): string {
   return versionTime(iso);
 }
 
-/** 版本条目用绝对时间。 */
 export function versionTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -65,7 +61,6 @@ export function versionTime(iso: string): string {
   return `${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
 }
 
-/** 图名来自用户，需清洗下载文件名的非法字符。 */
 export function safeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "");
   return cleaned || "diagram";
@@ -76,11 +71,7 @@ export function boxOf(boxes: NodeBoxes, id: string): Size {
   return boxes.get(id) ?? { w: NODE_W, h: NODE_H };
 }
 
-/**
-  一条边的走线：从源卡片的那一面出发，横平竖直地走到目标卡片的那一面（缺任一端就不画）。
-  为什么不画中心到中心的直线：直线会压在两端卡片身上，还会横穿路上任何一张卡片与分组框——
-  用户看到的就成「一团斜线盖着几个框」，读不出依赖关系。方向按主轴选：竖着走接顶/底边，横着走接左/右边。
-*/
+/** 一条边的走线：从源卡片边沿横平竖直走到目标卡片边沿（缺任一端不画），方向按主轴选顶/底或左/右边。 */
 export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxes, offset = 0): { x: number; y: number }[] | null {
   const from = body.nodes.find((node) => node.id === edge.from);
   const to = body.nodes.find((node) => node.id === edge.to);
@@ -98,8 +89,7 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
     const midY = startY + (endY - startY) / 2;
     return [{ x: ax + offset, y: startY }, { x: ax + offset, y: midY }, { x: bx + offset, y: midY }, { x: bx + offset, y: endY }];
   }
-  // 同一水平带：直线会从两端卡片之间横穿中间那些卡片，看起来像一根线串了糖葫芦。
-  // 改走两卡片下方的通道（底部出、底部进），中间那张卡片就不会被划过去。
+  // 同一水平带走两卡片下方的通道，避免直线横穿中间卡片。
   if (Math.abs(by - ay) < Math.max(a.h, b.h)) {
     const laneY = Math.max(from.y + a.h, to.y + b.h) + 14 + offset;
     return [
@@ -118,10 +108,7 @@ export function edgePoints(body: DiagramBody, edge: DiagramEdge, boxes: NodeBoxe
 /** 同一条通道上相邻两条边之间的距离（px）。卡片宽 132，两侧各排三条仍落在卡片边上。 */
 export const EDGE_LANE_GAP = 10;
 
-/**
-  同一水平带上往往有好几条边（同层的 A→B、C→D…），它们算出来的通道 y 完全一样，会叠成一根线。
-  这里按「通道基准 y」分组，组内按边的先后给出错开量；跨行的边各归各的组，不会累加到几百像素。
-*/
+/** 同一水平带的边按通道基准 y 分组错开，避免叠成一根线；跨行的边各归各组。 */
 export function sameBandLanes(body: DiagramBody, boxes: NodeBoxes): Map<string, number> {
   const counters = new Map<number, number>();
   const lanes = new Map<string, number>();
@@ -141,10 +128,7 @@ export function sameBandLanes(body: DiagramBody, boxes: NodeBoxes): Map<string, 
   return lanes;
 }
 
-/**
-  同一对节点之间的多条边（含反向的 a→b 与 b→a）会算出完全相同的走线，叠在一起就只剩一条。
-  这里按无向对分组、组内按 id 排序后给每条边一个居中的通道号；只有一条边的通道不设偏移。
-*/
+/** 同一对节点的多条边（含反向）按无向对分组、按 id 排序后居中错开；单边不偏移。 */
 export function edgeOffsets(body: DiagramBody): Map<string, number> {
   const groups = new Map<string, DiagramEdge[]>();
   for (const edge of body.edges) {
@@ -165,11 +149,7 @@ export function edgeOffsets(body: DiagramBody): Map<string, number> {
 /** 分组框宣称「框住的是节点」，那它就得真包住：这是卡片与框之间留的呼吸位。 */
 const GROUP_PAD = 12;
 
-/**
-  分组框实际画多大：模型给的 `w`/`h` 是它自己估的（常见 80），而卡片高度是按文字量出来的（带 sub 或便签会到 90 以上），
-  照原值画就出现「卡片压出框外」。这里只**放大**到真能装下成员（按 `group` 归属，或几何上已经落在框里的），
-  绝不缩小——用户手动拖大的框不被推翻。
-*/
+/** 分组框只放大到装下成员（按 `group` 归属或已落在框内），绝不缩小，用户拖大的框不被推翻。 */
 export function groupRects(body: DiagramBody, boxes: NodeBoxes): { id: string; label: string; x: number; y: number; w: number; h: number }[] {
   return body.groups.map((group) => {
     let minX = group.x;
@@ -189,10 +169,7 @@ export function groupRects(body: DiagramBody, boxes: NodeBoxes): { id: string; l
   });
 }
 
-/**
-  内容包围盒（含分组框）。空图返回 null，由调用方退回默认视野。
-  节点按量到的尺寸算右下角。
-*/
+/** 内容包围盒（含分组框），空图返回 null；节点按量到的尺寸算右下角。 */
 export function boundsOf(body: DiagramBody, boxes: NodeBoxes): { minX: number; minY: number; maxX: number; maxY: number } | null {
   if (!body.nodes.length && !body.groups.length) return null;
   let minX = Number.POSITIVE_INFINITY;

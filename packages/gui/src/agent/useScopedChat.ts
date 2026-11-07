@@ -36,7 +36,6 @@ const setScopeRef = (ref: string | null): void => setScopeRefState(ref);
 const scopeLabel = scopeRef
   ? (scopeRef.startsWith("dir:") ? (scopeRef.slice(4) === "." ? "仓库根目录" : scopeRef.slice(4)) : scopeRef.slice(5).split("/").pop() ?? scopeRef)
   : "";
-// 产物数据版本：重导入、重分析、改图后递增。
 const [dataVersion, setDataVersion] = useState(0);
 const reloadRepositoryData = (): void => setDataVersion((version) => version + 1);
 useEffect(() => {
@@ -52,7 +51,6 @@ const [mapScopePaths, setMapScopePaths] = useState<string[]>([]);
 const setMapScope = (scopePaths: string[]): void => setMapScopePaths(scopePaths);
 const [mapFile, setMapFile] = useState("");
   const [mapBinding, setMapBinding] = useState<MapBinding | null>(null);
-// 画布当前打开的图，随 map-chat 上送。
 const [openDiagram, setOpenDiagram] = useState<{ id: string; name: string } | null>(null);
 // 一次性投递：页面取走后清空。
 const [pendingDiagramOpen, setPendingDiagramOpen] = useState<{ id: string; name: string } | null>(null);
@@ -60,11 +58,9 @@ const requestOpenDiagram = (diagram: { id: string; name: string }): void => setP
 const clearDiagramOpen = (): void => setPendingDiagramOpen(null);
 const [practiceUnit, setPracticeUnit] = useState("");
 useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); setMapBinding(null); setPracticeUnit(""); setOpenDiagram(null); }, [repositoryId]);
-  /** 引擎的在途代码问答会话，不对外暴露。 */
   // 同一条代码问答会话三个名字：库里 chat_session 行 = GUI threadId = 引擎 sessionId。
   const [session, setSession] = useState<TutorSession | null>(null);
   const [settings, setSettingsState] = useState<TutorSettings>(defaultTutorSettings);
-  /** 输入框草稿按工作区各存一份。 */
   const [drafts, setDrafts] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   // 渲染期镜像：异步路径需读最新草稿。
   const draftsRef = useRef(drafts);
@@ -73,14 +69,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const setDraft = (target: Scope, value: string): void => setDrafts((prev) => ({ ...prev, [target]: value }));
   const content = drafts[scope];
   const setContent = (next: string): void => setDraft(scope, next);
-  /** 在途状态按工作区各记一份。 */
   const [sendingByScope, setSendingByScope] = useState<Record<Scope, boolean>>({ map: false, teaching: false, practice: false });
   const sending = sendingByScope[scope];
   const markSending = (target: Scope, value: boolean): void => setSendingByScope((prev) => ({ ...prev, [target]: value }));
   const [errorsByScope, setErrorByScope] = useState<Record<Scope, string>>({ map: "", teaching: "", practice: "" });
   const error = errorsByScope[scope];
   const setError = (target: Scope, message: string): void => setErrorByScope((prev) => ({ ...prev, [target]: message }));
-  // 在途回合按工作区各一条。
   const activeTurn = useRef<Partial<Record<Scope, { turnId: string; controller: AbortController }>>>({});
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
@@ -96,7 +90,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   /** 是否用户主动停止；只能在 catch 里读（finally 会清掉在途引用）。 */
   const stoppedByUser = (target: Scope): boolean => activeTurn.current[target]?.controller.signal.aborted === true;
-  /** 停止当前工作区的在途回合。 */
   const stopTurnFor = (target: Scope): void => {
     const turn = activeTurn.current[target];
     if (!turn) return;
@@ -105,7 +98,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
   const stopTurn = (): void => stopTurnFor(scope);
-  // 过程指示行：按工作区各一组，一行一件事。
   const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
   /** progress 行的渲染期镜像，供异步收尾读取。 */
   const progressLines = useRef<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
@@ -141,7 +133,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   useEffect(() => { setPracticeExerciseState(null); }, [repositoryId]);
 
-  /** 写线程记忆；失败静默，见 chatMemory.ts。 */
+  /** 写线程记忆；失败静默。 */
   const patchMemory = (scope: Scope, patch: Partial<ThreadMemory>): void => {
     if (!repositoryId) return;
     const chatScope = CHAT_SCOPE[scope];
@@ -149,7 +141,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     writeThreadMemory(repositoryId, chatScope, { ...current, ...patch });
   };
 
-  // ==== 断线补账 ====
   /** 当前线程已知的库里正文条数，回读核对的比对基准。 */
   const knownRowCount = useRef<Record<Scope, number>>({ map: 0, teaching: 0, practice: 0 });
   /** 回读重试计数与定时器句柄；由 patchDebt 统一作废。 */
@@ -174,14 +165,12 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const recordDebt = (target: Scope, threadId: string): void => {
     patchDebt(target, { threadId, count: knownRowCount.current[target] });
   };
-  /** 有欠账且欠在正是当前线程。 */
   const hasDebt = (target: Scope): boolean => {
     const debt = readDebt(target);
     const threadId = currentThreadRef.current[target];
     return !!debt && !!threadId && debt.threadId === threadId;
   };
 
-  /** 回读后核对欠账：条数增加则销账；未增加先按退避重试，重试耗尽才提示重问。 */
   const reconcile = (target: Scope, threadId: string, rows: readonly ThreadRow[]): void => {
     knownRowCount.current[target] = rows.length;
     const debt = readDebt(target);
@@ -201,7 +190,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     scheduleRecheck(target, wait);
   };
 
-  /** 回读重试：同一工作区同时只挂一趟。 */
   const scheduleRecheck = (target: Scope, delayMs: number): void => {
     if (recheckTimers.current[target] !== null) return;
     recheckTimers.current[target] = window.setTimeout(() => {
@@ -229,7 +217,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     await loadThread(target, currentThreadRef.current[target]!);
   };
 
-  /** 网络恢复时，把有欠账的工作区各回读一次。 */
   const reconcilePending = (): void => {
     for (const target of SCOPES) {
       // 在途回合正文未落库，跳过回读
@@ -244,7 +231,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
-  /** 回合失败分诊：用户停止清账；断线留欠账待回读；引擎报错清账并提示。 */
   const triageTurnFailure = (target: Scope, reason: unknown, replayStarted: boolean): void => {
     typewriter[target].abort();
     const detail = reason instanceof Error ? reason.message : String(reason);
@@ -267,7 +253,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     pushMessage(target, "agent", shown, "error");
   };
 
-  /** 一次流式回合的三动作：delta 落点、成功结账、失败分诊。 */
   const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<void>; fail: (reason: unknown) => void } => {
     // replayStarted=收到过 delta，即该轮引擎已算完并落库
     let replayStarted = false;
@@ -288,7 +273,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     };
   };
 
-  /** 按 id 回读正文并上屏：teaching 走 /api/sessions，map/practice 走线程正文。 */
   const loadThread = async (scope: Scope, threadId: string): Promise<void> => {
     const place = (messages: readonly ThreadRow[]): void => {
       if (currentThreadRef.current[scope] !== threadId) return; // 迟到的旧响应不落进新线程
@@ -302,7 +286,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (scope === "teaching") {
         const thread = chatThreadsRef.current.teaching.find((item) => item.id === threadId);
         if (thread && !thread.scopeRef) {
-          // 无教学域绑定的线程不可续聊
           setCurrentThread("teaching", null);
           pushMessage("teaching", "agent", "这条会话沿用的是旧的目录结构，请重新选一个文件或目录。", "hint");
           return;
@@ -311,7 +294,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         if (thread?.scopeRef && thread.scopeRef !== scopeRef) setScopeRefState(thread.scopeRef);
         const restored = await api.getSession(threadId);
         if (restored.repositoryId !== repositoryId) throw new Error("会话不属于当前仓库");
-        // 迟到的旧响应不落格（place() 有同一道守卫）
+        // 迟到的旧响应不落格
         if (currentThreadRef.current.teaching !== threadId) return;
         setScopeRefState(restored.scopeRef);
         setSession(restored);
@@ -349,7 +332,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
   const switchThread = (scope: Scope, threadId: string | null): void => setCurrentThread(scope, threadId);
 
-  /** 拉线程清单（引擎为准，按更新时间倒序）；`current` 回认未发言的当前会话。 */
+  /** 拉线程清单（引擎为准，倒序）；current 回认未发言的当前会话。 */
   const refreshThreads = async (scope: Scope): Promise<{ threads: ChatThread[]; current: ChatThread | null }> => {
     if (!repositoryId) return { threads: [], current: null };
     // 须在发请求前快照当前线程：await 之后的值会剪错
@@ -373,7 +356,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return { threads: list, current };
   };
 
-  /** 建线程（引擎发 id，标题取首问前 5 字）；仅在确有第一句话时调用。 */
+  /** 建线程（引擎发 id）；仅在确有第一句话时调用。 */
   const createThreadFor = async (scope: "map" | "practice", firstQuestion?: string): Promise<string | null> => {
     if (!repositoryId) return null;
     const title = firstQuestion ? threadTitleFromQuestion(firstQuestion) : "";
@@ -383,7 +366,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
         ...(title ? { title } : {})
       });
-      // 未发言的线程不入清单，由 unsentThread 单列显示
       return thread.id;
     } catch (reason) {
       setError(scope, failureText("新建会话失败", reason));
@@ -391,7 +373,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  /** 清空当前线程与侧栏；线程 id 待首句时由引擎发。 */
   const newThread = (scope: Scope): void => {
     setCurrentThread(scope, null);
   };
@@ -408,7 +389,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  /** 软删：正文与审计日志留库，仅从列表消失；删的是当前线程则回到无线程态。 */
+  /** 软删：正文与审计日志留库，仅从列表消失。 */
   const removeThread = async (scope: Scope, threadId: string): Promise<void> => {
     try {
       await api.deleteThread(threadId);
@@ -428,7 +409,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (currentThreadRef.current[scope] === threadId) setCurrentThread(scope, null);
   };
 
-  // 挂载/换仓库：三工作区各拉一次清单；map 与 practice 按记忆落当前线程，teaching 由下面的工作区效应决定。
+  // 挂载/换仓库：各工作区拉清单；teaching 的当前线程由下面的教学域效应决定。
   useEffect(() => {
     if (!repositoryId) {
       setChatThreads({ map: [], teaching: [], practice: [] });
@@ -443,7 +424,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         const { threads: list, current } = await refreshThreads(scope);
         if (cancelled) return;
         const remembered = readThreadMemory()[repositoryId]?.[CHAT_SCOPE[scope]]?.currentId;
-        // 记住的线程仍有效则回到它（未发言的由 current 认活），否则退回清单第一条
         const stillOpen = remembered && (current?.id === remembered || list.some((item) => item.id === remembered));
         setCurrentThread(scope, stillOpen ? remembered : (list[0]?.id ?? null));
       }
@@ -453,12 +433,10 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     return () => { cancelled = true; };
   }, [repositoryId]);
 
-  // 切工作区时刷新该工作区清单
   useEffect(() => {
     if (repositoryId) void refreshThreads(scope);
   }, [repositoryId, scope]);
 
-  // 换教学域 = 挂回该文件/目录最近一次代码问答线程；没有则留空，发送时新建。
   // 清单可能滞后一拍，此时不动线程；已停在目标线程也不再回读。
   useEffect(() => {
     if (!repositoryId || !scopeRef) return;
@@ -499,9 +477,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       if (!active) {
         const created = await api.createSession(repositoryId, scopeRef, settings);
         active = created.session;
-        // 仅在设置未被用户改动时以教学层推荐值种子（记忆结构本身不再返回推荐档）
+        // 仅在设置未被用户改动时以推荐值种子
         if (settings.pedagogy === "socratic" && settings.depth === "macro") setSettingsState(created.recommendedSettings.settings);
-        // 会话即线程：id 由引擎发
         markCurrentThread("teaching", active.id);
         knownRowCount.current.teaching = 0;
         void refreshThreads("teaching");
@@ -525,13 +502,11 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
-  // 工作区对话：历史由引擎按 threadId 自取，GUI 只上送这一句。
-  // answer = 点提问按钮时代替输入框发送的那句；resumeAsk = 该提问的认领句柄，引擎据此把这句当答案回灌。
+  // GUI 只上送这一句，历史由引擎按 threadId 自取；answer 代替输入框发送，resumeAsk 是提问的认领句柄。
   const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
     const message = (answer ?? draftOf(scope)).trim();
     if (!message || !repositoryId) return;
     setLiveAsk((prev) => ({ ...prev, [scope]: null }));
-    // 同 teaching：先结算欠账再上新消息
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
     if (answer === undefined) setDraft(scope, "");
@@ -539,7 +514,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
       return;
     }
-    // 线程即历史：缺当前线程时惰性新建
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
@@ -569,7 +543,6 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         patchDebt(scope, null);
       } else {
         await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
-        // 本回合改过图则在消息下挂图卡片
         if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
       }
     } catch (reason) {

@@ -3,10 +3,7 @@ import type { CfgBlock, CfgEdge, CfgEdgeKind, CfgFileFact, CfgFunction, FactSkip
 import { declarationNameOf, withSyntaxTrees, type GrammarName, type SyntaxNode } from "../extraction/parser.js";
 import { FACTS_VERSION } from "./version.js";
 
-/**
-  函数内控制流图：块是语句序列，边是走向，粒度到语句级。
-  各语法的节点形状差异集中在 SPECS 与取值函数。
-*/
+/** 函数内控制流图：块是语句序列，边是走向，粒度到语句级；各语法的节点形状差异集中在 SPECS 与取值函数。 */
 
 /** 单个函数最多保留的块数，超出则截断并置 `truncated`。 */
 const MAX_BLOCKS = 200;
@@ -38,7 +35,6 @@ interface CfgSpec {
   noFallthroughArms: Set<string>;
   /** true：臂尾自动掉入下一臂；false：仅显式 `fallthrough` 才掉。 */
   implicitFall: boolean;
-  /** 显式掉入下一臂的语句。 */
   fallthroughNodes: Set<string>;
   tryNodes: Set<string>;
   handlerNodes: Set<string>;
@@ -246,15 +242,11 @@ type Cursor = CfgBlock | null;
 interface Frame {
   builder: Builder;
   spec: CfgSpec;
-  /** `break` 的落点。 */
   breakTo?: CfgBlock;
-  /** `continue` 的落点。 */
   continueTo?: CfgBlock;
-  /** `fallthrough` 的落点。 */
   fallTo?: CfgBlock;
   /** 函数出口块，提前离开时走这里。 */
   exit: CfgBlock;
-  /** 标签名到标签块的映射，供 `goto` 接线。 */
   labels: Map<string, CfgBlock>;
   /** 待接线的 `goto`，构建完成后统一连接。 */
   gotos: { from: CfgBlock; label: string; line: number }[];
@@ -304,13 +296,11 @@ class Builder {
     this.edges = this.edges.filter((edge) => !dead.has(edge.from) && !dead.has(edge.to));
   }
 
-  /** 圈复杂度 = 边数 - 块数 + 2。 */
   complexity(): number {
     return Math.max(1, this.edges.length - this.blocks.length + 2);
   }
 }
 
-/** 按顺序尝试字段名，命中即返回。 */
 function fieldOf(node: SyntaxNode, fields: string[]): SyntaxNode | undefined {
   for (const name of fields) {
     const child = node.childForFieldName(name);
@@ -331,12 +321,10 @@ function isBranchShell(node: SyntaxNode): boolean {
   return BRANCH_SHELL.test(node.type);
 }
 
-/** 判定条件：字段缺失时取首个非体、非壳、非注释的具名子节点。 */
 function conditionOf(node: SyntaxNode): SyntaxNode | undefined {
   return fieldOf(node, ["condition", "test", "value"]) ?? node.namedChildren.find((child) => isStatement(child) && !isSequence(child) && !isBranchShell(child) && !looksLikeBody(child));
 }
 
-/** 循环体与函数体：字段缺失时取最后一个具名子节点。 */
 function bodyOf(node: SyntaxNode): SyntaxNode | undefined {
   return fieldOf(node, ["body", "consequent", "consequence", "then"]) ?? node.namedChildren.filter(isStatement).at(-1);
 }
@@ -345,7 +333,6 @@ function looksLikeBody(node: SyntaxNode): boolean {
   return isSequence(node) || node.type === "do";
 }
 
-/** `if` 的 then 体：排除条件、else 壳与括号后的那一个。 */
 function consequentOf(node: SyntaxNode): SyntaxNode | undefined {
   const condition = conditionOf(node);
   return node.namedChildren.find((child) => isStatement(child) && child.id !== condition?.id && !isBranchShell(child) && child.type !== "parenthesized_expression");
@@ -355,7 +342,6 @@ function alternativeOf(node: SyntaxNode): SyntaxNode | undefined {
   return fieldOf(node, ["alternative"]) ?? node.namedChildren.find(isBranchShell);
 }
 
-/** `if` 之后的分支壳（`elif` 链与 `else`），或挂在 alternative 上的那一块。 */
 function elseArmsOf(node: SyntaxNode): SyntaxNode[] {
   const shells = node.namedChildren.filter(isBranchShell);
   if (shells.length) return shells;
@@ -369,7 +355,6 @@ interface IfArm {
   body: SyntaxNode[];
 }
 
-/** 将 `if / elif / else` 链展平为判定序列与可选 else。 */
 function flattenIf(statement: SyntaxNode, spec: CfgSpec): { arms: IfArm[]; otherwise: SyntaxNode | undefined } {
   const arms: IfArm[] = [{ node: statement, body: statementsOf(consequentOf(statement)) }];
   let current: SyntaxNode | undefined = statement;
@@ -390,7 +375,6 @@ function flattenIf(statement: SyntaxNode, spec: CfgSpec): { arms: IfArm[]; other
   return { arms, otherwise };
 }
 
-/** 取节点的语句数组：体、分支壳、单语句归一。 */
 function statementsOf(node: SyntaxNode | undefined): SyntaxNode[] {
   if (!node) return [];
   if (isSequence(node)) return splice(node.namedChildren.filter(isStatement));
@@ -403,7 +387,6 @@ function statementsOf(node: SyntaxNode | undefined): SyntaxNode[] {
   return [node];
 }
 
-/** 递归展开嵌套的语句序列容器。 */
 function splice(children: SyntaxNode[]): SyntaxNode[] {
   const out: SyntaxNode[] = [];
   for (const child of children) {
@@ -447,7 +430,7 @@ function gotoTargetOf(node: SyntaxNode): string | undefined {
   return fieldOf(node, ["label"])?.text.trim() ?? node.namedChildren.at(-1)?.text.trim();
 }
 
-/** 依次执行语句，返回末尾仍存的块；null 表示路径终止。 */
+/** 返回末尾仍存的块；null 表示路径终止。 */
 function run(statements: SyntaxNode[], cursor: Cursor, frame: Frame): Cursor {
   let current = cursor;
   for (const statement of statements) {
@@ -470,7 +453,6 @@ function unwrapStatement(node: SyntaxNode, spec: CfgSpec): SyntaxNode {
   return control ? inner : node;
 }
 
-/** 处理一条语句，返回新的当前块；null 表示路径终止。 */
 function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   const { builder, spec } = frame;
   const statement = unwrapStatement(node, spec);
@@ -518,7 +500,6 @@ function step(node: SyntaxNode, current: CfgBlock, frame: Frame): Cursor {
   return current;
 }
 
-/** 语句子树内是否有提前离开函数的构造，限深 6 层。 */
 function hasPropagate(node: SyntaxNode, spec: CfgSpec, depth = 0): boolean {
   if (depth > 6) return false;
   for (const child of node.namedChildren) {
@@ -614,7 +595,6 @@ function buildSwitch(statement: SyntaxNode, current: CfgBlock, frame: Frame): Cf
     if (tail) builder.link(tail, after, "next");
   });
   if (!arms.length) builder.link(selector, after, "next");
-  // 无 default 时补一条 selector→after 边
   else if (!arms.some(isDefaultArm)) builder.link(selector, after, "false");
   return after;
 }
@@ -730,7 +710,6 @@ function buildOne(carrier: Carrier, path: string, symbol: SymbolInfo | undefined
   };
 }
 
-/** 一个函数的体节点、控制流图与对齐到的符号。 */
 export interface FunctionScope {
   node: SyntaxNode;
   cfg: CfgFunction;

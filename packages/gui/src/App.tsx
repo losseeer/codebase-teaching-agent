@@ -20,7 +20,6 @@ import { layoutVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, toastFailure, ToastHost } from "./ui/toast";
 import { emit, installJournalRetry } from "./journal";
 
-// 类型定义在 api/client，此处转发给子组件。
 export type Workspace = _Workspace;
 
 /** 工作区校验「连不上」时的退避重试（毫秒）；404 不走这条。 */
@@ -41,7 +40,6 @@ function writeSidebarCollapsed(value: boolean): void {
   try {
     localStorage.setItem(SIDEBAR_STORAGE_KEY, value ? "1" : "0");
   } catch {
-    /* 存不下不影响本次会话 */
   }
 }
 
@@ -51,7 +49,7 @@ function readStoredWorkspace(): _Workspace | null {
   try {
     raw = localStorage.getItem(WORKSPACE_STORAGE_KEY);
   } catch {
-    return null; // 存储不可用：本次会话不落 workspace
+    return null;
   }
   if (!raw) return null;
   let parsed: unknown = null;
@@ -72,12 +70,10 @@ function readStoredWorkspace(): _Workspace | null {
   return null;
 }
 
-/** 顶层 Shell：侧栏导航 + 持久 Agent 对话栏 + 路由守卫。 */
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
-  // 待移出的目标：弹窗开着时记着它，删不删文件由弹窗决定
   const [forgetTarget, setForgetTarget] = useState<{ repositoryId: string; name: string } | null>(null);
-  // 地址簿不预挂载：校验 = 一次挂载请求，顺带带回新鲜度判定
+  // 不预挂载仓库：校验即一次挂载请求，顺带带回新鲜度。
   const [workspaceReady, setWorkspaceReady] = useState(() => workspace === null);
   /** 校验放弃（连不上/5xx 耗尽）：本地选择不删。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
@@ -89,11 +85,9 @@ export function App(): ReactElement {
   const navigate = useNavigate();
   const workspaceIdRef = useRef(workspace?.repositoryId);
   useEffect(() => { workspaceIdRef.current = workspace?.repositoryId; }, [workspace?.repositoryId]);
-  // 补发离线期间积压的 journal 事件
   useEffect(() => { installJournalRetry(); }, []);
   const updateWorkspace = (value: _Workspace | null): void => {
     setWorkspace(value);
-    // 存储不可用时照常工作
     try {
       if (value) localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(value));
       else localStorage.removeItem(WORKSPACE_STORAGE_KEY);
@@ -149,7 +143,6 @@ export function App(): ReactElement {
     void probe();
     return () => { current = false; };
   }, [workspace?.repositoryId, probeNonce]);
-  // online 事件后自动重验
   useEffect(() => {
     if (!engineUnreachable) return;
     const retry = (): void => { setProbeNonce((value) => value + 1); };
@@ -165,7 +158,7 @@ export function App(): ReactElement {
       return next;
     });
   };
-  /** 点的正是当前仓：不重挂，只离开导入页。 */
+  /** 点的正是当前仓：不重挂。 */
   const openRepository = (): void => { navigate("/app?workspace=map"); };
 
   /** 切到另一个仓：挂载成功才换，失败不改本地选择。 */
@@ -190,10 +183,8 @@ export function App(): ReactElement {
     })();
   };
 
-  /** 移出清单入口：弹窗确认，删不删文件由弹窗决定。 */
   const forgetRepository = (repositoryId: string, name: string): void => { setForgetTarget({ repositoryId, name }); };
 
-  /** 弹窗落点：移出清单，按需连产物、对话记录与运行日志一起删。 */
   const runForget = (repositoryId: string, name: string, deleteArtifacts: boolean): void => {
     setForgetTarget(null);
     void (async () => {
@@ -219,7 +210,7 @@ export function App(): ReactElement {
   const banner = workspace && freshness && (freshness.verdict === "stale" || freshness.verdict === "drifted") && !acknowledged(freshness, workspace.repositoryId)
     ? <FreshnessBanner repositoryPath={workspace.repositoryPath} freshness={freshness} onAcknowledge={() => { acknowledge(freshness, workspace.repositoryId); setFreshness(null); }} onReanalyze={() => navigate("/import")} />
     : null;
-  // 对话栏与悬浮球只挂在工作区路由；导入页与成本页不显示
+  // 对话栏与悬浮球只在工作区路由出现。
   const location = useLocation();
   const [query] = useSearchParams();
   const workspaceParam = query.get("workspace");
@@ -292,7 +283,6 @@ export function App(): ReactElement {
   );
 }
 
-/** 路由守卫：引擎验证完成（workspaceReady）前渲染占位。 */
 function guard(workspace: _Workspace | null, ready: boolean, content: ReactElement, pending: ReactElement): ReactElement {
   if (!workspace) return <Navigate to="/import" replace />;
   return ready ? content : pending;
@@ -332,7 +322,7 @@ function MountBlocked({ message, repositoryPath, onRetry, onForget }: { message:
   );
 }
 
-/** 过期产物横幅：只转述结论，不做自动重分析。stale=内容变了；drifted=仅提交移动、产物仍可用。 */
+/** 过期横幅：只转述，不自动重分析。stale=内容变了；drifted=仅提交移动、产物仍可用。 */
 function FreshnessBanner({ repositoryPath, freshness, onAcknowledge, onReanalyze }: { repositoryPath: string; freshness: RepositoryFreshness; onAcknowledge: () => void; onReanalyze: () => void }): ReactElement {
   const stale = freshness.verdict === "stale";
   return (
@@ -402,7 +392,7 @@ function NavItem({ to, icon, label, disabled }: { to: string; icon: IconName; la
     : <Link className={`nav-item ${active ? "active" : ""}`} to={to}><Icon name={icon} /><span className="nav-label">{label}</span></Link>;
 }
 
-/** 三个学习工作区的侧栏入口：active 判定 = /app + ?workspace= 参数。 */
+/** active = /app 且 ?workspace= 参数匹配。 */
 function WorkspaceNavItem({ id, icon, label, disabled }: { id: WorkspaceId; icon: IconName; label: string; disabled?: boolean }): ReactElement {
   const [params] = useSearchParams();
   const location = useLocation();

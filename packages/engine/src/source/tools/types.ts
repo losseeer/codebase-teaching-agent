@@ -28,34 +28,27 @@ export interface ToolTraceStep {
   finishReason?: string;
 }
 
-/** 技能正文通道。 */
 export interface SkillsToolContext {
-  /** 进上下文的技能清单文本。 */
   brief: string;
   /** 取技能正文或该目录下的附属文件；`file` 省略时取 SKILL.md，返回 `undefined` 表示不存在。 */
   bodyOf: (name: string, file?: string) => string | undefined;
-  /** 该技能目录下有哪些 Markdown 文件；读错名字时把清单回给模型，免得它一直猜。 */
+  /** 该技能目录下有哪些 Markdown 文件；读错名字时把清单回给模型。 */
   filesOf?: (name: string) => string[];
 }
 
-/** 外部 MCP 工具的清单与调用通道。 */
 export interface ExternalToolContext {
   /** 一台 server 一个分组；名字带 `mcp__<server>__` 前缀。 */
   groups: ToolGroup[];
   /** 不许抛异常：外部 server 的超时与失败须先转成给模型看的文本。 */
   call: (name: string, argumentsJson: string) => Promise<{ text: string; audit: McpCallAudit }>;
-  /** 一个回合的外部调用次数上限；省略取缺省。 */
   maxCalls?: number;
 }
 
-/** set_diagram 的执行通道，返回落盘结果或拒写原因。 */
 export interface SetDiagramToolContext {
   apply: (argumentsJson: string) => string;
-  /** 画布现场快照。 */
   inventory?: string;
 }
 
-/** 静态产物的查询通道。 */
 export interface FactsToolContext {
   /** 静态产物在册情况，随上下文常驻。 */
   inventory?: string;
@@ -144,7 +137,7 @@ export interface ToolExposure {
   onDemand: ToolIndexEntry[];
 }
 
-/** 暴露层与调用器只依赖这三个方法；实现由 registry.ts 提供。 */
+/** 暴露层与调用器只依赖这三个方法。 */
 export interface ToolRegistryLike {
   entries(ctx: ToolContext): { definition: ToolDefinition; group: ToolGroup }[];
   find(name: string, ctx: ToolContext): ToolDefinition | undefined;
@@ -186,7 +179,6 @@ export interface ToolOutcome {
   };
 }
 
-/** 把 LlmTool 转成模型请求里的形状。 */
 export function toLlmTool(definition: ToolDefinition): LlmTool {
   return { name: definition.name, description: definition.summary, parameters: definition.schema };
 }

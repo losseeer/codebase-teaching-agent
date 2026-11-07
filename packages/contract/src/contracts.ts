@@ -1,16 +1,8 @@
 import { z } from "zod";
 
-/**
-  引擎与界面之间的运行时契约：类型由 schema 反推（z.infer），界面在边界校验形状，不符即抛错。
-  只覆盖跨进程的热形状：地址簿、导入任务、事件流帧、会话线程、成本读数；课程树/图/练习在 index.ts 声明。
-*/
-
-/* ------------------------------------------------------------------ */
-/* 地址簿与导入                                                        */
-/* ------------------------------------------------------------------ */
+/** 引擎与界面之间的运行时契约：类型由 schema 反推（z.infer），界面在边界校验形状，不符即抛错。 */
 
 export const jobPhaseSchema = z.enum(["queued", "indexing", "summarizing", "completed", "failed"]);
-export type JobPhase = z.infer<typeof jobPhaseSchema>;
 
 /** 一条导入任务：`GET /api/imports/:jobId` 的返回体，也是 `import.progress` 帧的 payload。 */
 export const importJobSchema = z.object({
@@ -30,12 +22,8 @@ export const importJobSchema = z.object({
 });
 export type ImportJob = z.infer<typeof importJobSchema>;
 
-/**
-  挂载仓库的新鲜度判定（只报告，不触发重分析）：
-  stale = 磁盘内容与 versionStamp 不一致；drifted = HEAD 变了但内容哈希没变；unknown = 产物没记 HEAD。
-*/
+/** 新鲜度判定（只报告，不触发重分析）：stale = 内容与 versionStamp 不一致；drifted = HEAD 变了但内容哈希没变；unknown = 产物没记 HEAD。 */
 export const repositoryFreshnessVerdictSchema = z.enum(["fresh", "drifted", "stale", "unknown"]);
-export type RepositoryFreshnessVerdict = z.infer<typeof repositoryFreshnessVerdictSchema>;
 
 export const repositoryFreshnessSchema = z.object({
   verdict: repositoryFreshnessVerdictSchema,
@@ -78,15 +66,10 @@ export type RepositoryCatalogEntry = z.infer<typeof repositoryCatalogEntrySchema
 export const repositoryMountReasonSchema = z.enum(["not_in_catalog", "directory_missing", "artifacts_incomplete"]);
 export type RepositoryMountReason = z.infer<typeof repositoryMountReasonSchema>;
 
-/* ------------------------------------------------------------------ */
-/* 会话线程                                                            */
-/* ------------------------------------------------------------------ */
-
-/** 线程列表按工作区分：teach / map / practice。存储值固定，别为文案改名。 */
+/** 线程列表按工作区分；存储值固定，别为文案改名。 */
 export const chatScopeSchema = z.enum(["teach", "map", "practice"]);
 export type ChatScope = z.infer<typeof chatScopeSchema>;
 
-/** 新会话标题取首句前几个字。 */
 export const THREAD_TITLE_CHARS = 5;
 
 /** 首句按码点截断成标题；空白归一，空输入回空串。 */
@@ -95,7 +78,6 @@ export function threadTitleFromQuestion(question: string): string {
   return [...line].slice(0, THREAD_TITLE_CHARS).join("");
 }
 
-/** 运行时判断 scope 取值合法；ChatScope 类型只管编译期。 */
 export function isChatScope(value: unknown): value is ChatScope {
   return chatScopeSchema.safeParse(value).success;
 }
@@ -124,11 +106,6 @@ export const chatThreadMessageSchema = z.object({
 });
 export type ChatThreadMessage = z.infer<typeof chatThreadMessageSchema>;
 
-/* ------------------------------------------------------------------ */
-/* 成本读数                                                            */
-/* ------------------------------------------------------------------ */
-
-/** 一个计费档位：输入拆「未命中 / 缓存命中」两档价，输出单独一档。 */
 export const costComponentSchema = z.object({
   label: z.enum(["未命中输入", "命中输入（缓存）", "输出"]),
   tokens: z.number(),
@@ -139,7 +116,7 @@ export const costComponentSchema = z.object({
 });
 export type CostComponent = z.infer<typeof costComponentSchema>;
 
-/** 成本聚合的一个分桶（按场景或按 provider），一条 `token_usage` 记一个回合。 */
+/** 成本分桶（按场景或按 provider）；一条 `token_usage` 记一个回合。 */
 export const costBucketSchema = z.object({
   label: z.string(),
   turns: z.number(),
@@ -183,10 +160,6 @@ export const costSummarySchema = z.object({
 });
 export type CostSummary = z.infer<typeof costSummarySchema>;
 
-/* ------------------------------------------------------------------ */
-/* 流式帧：工作区对话流与全局事件流                                    */
-/* ------------------------------------------------------------------ */
-
 /** 回合场景名：与 journal 的 scene、引擎回合登记表同一套词。 */
 export const turnSceneSchema = z.enum(["teach", "map_chat", "practice_chat"]);
 export type TurnScene = z.infer<typeof turnSceneSchema>;
@@ -203,10 +176,7 @@ export const teachingProgressSchema = z.discriminatedUnion("stage", [
 ]);
 export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
 
-/**
-  工作区对话流的过程帧与正文帧词表，引擎与界面的唯一登记处：
-  新帧类必须先加在这里，两侧各有编译期穷尽守卫；done 载荷不在内，由各自返回体声明。
-*/
+/** 工作区对话流的帧词表唯一登记处：新帧类必须先加在这里，两侧各有编译期穷尽守卫；done 载荷不在内。 */
 export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thinking") }),
   z.object({ type: z.literal("reading"), path: z.string() }),
@@ -220,17 +190,13 @@ export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
 ]);
 export type ScopedStreamProgress = z.infer<typeof scopedStreamProgressSchema>;
 
-/** 一条流的完整帧词表：过程/正文 + 三条出口（done 载荷见上，仍是开放形状）。 */
 export type ScopedStreamFrame =
   | ScopedStreamProgress
   | { type: "error"; error: string }
   | { type: "aborted"; scene: TurnScene }
   | { type: "done"; [key: string]: unknown };
 
-/**
-  全局事件流的广播事件；对话的 delta/progress 在各自响应流里。
-  repository.updated = 产物变化；diagram_updated = 图库或当前图变化；几何拖动不广播。
-*/
+/** 全局广播事件；repository.updated = 产物变化，diagram_updated = 图库或当前图变化，几何拖动不广播。 */
 export const serverEventSchema = z.object({
   type: z.enum(["import.progress", "repository.updated", "diagram_updated", "exercise.progress", "agent.trace"]),
   payload: z.record(z.string(), z.unknown())
@@ -249,7 +215,6 @@ export const agentTracePayloadSchema = z.object({
   status: z.enum(["start", "ok", "error", "aborted", "limited"]),
   label: z.string(),
   detail: z.string().optional(),
-  /** 模型这一轮的回复正文，截断后随轨迹展示。 */
   reply: z.string().optional(),
   stepId: z.string().optional(),
   round: z.number().optional(),
@@ -270,7 +235,6 @@ export type AgentScope = z.infer<typeof agentScopeSchema>;
 export const practiceOperationSchema = z.enum(["chat", "generate", "grade", "explain"]);
 export type PracticeOperation = z.infer<typeof practiceOperationSchema>;
 
-/** 一个内部或外部工具面的静态条目。 */
 export const agentToolEntrySchema = z.object({
   name: z.string(),
   description: z.string(),
@@ -316,11 +280,6 @@ export type TraceHistory = z.infer<typeof traceHistorySchema>;
 export const exerciseDeclineCodeSchema = z.enum(["theme_not_found"]);
 export type ExerciseDeclineCode = z.infer<typeof exerciseDeclineCodeSchema>;
 
-/* ------------------------------------------------------------------ */
-/* 边界上的校验口                                                      */
-/* ------------------------------------------------------------------ */
-
-/** 契约失败：带契约名与不符的字段路径。 */
 export class ContractViolation extends Error {
   constructor(contract: string, issues: string[]) {
     super(`${contract} 的形状不符：${issues.join("；")}`);

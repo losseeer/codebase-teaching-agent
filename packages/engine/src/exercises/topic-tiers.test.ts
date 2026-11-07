@@ -52,9 +52,9 @@ function miniSkill(name: string, file = "SKILL.md"): string | undefined {
 }
 
 describe("主题分解表", () => {
-  it("出厂技能里四档都在，每档都有可考点与判不了的性质", () => {
+  it("出厂技能里领域四档与语言四档都在，每档都有可考点与判不了的性质", () => {
     const index = topicIndex(bundledBody);
-    expect(index.tiers.map((tier) => tier.id)).toEqual(["os", "cn", "ds", "backend"]);
+    expect(index.tiers.map((tier) => tier.id)).toEqual(["os", "cn", "ds", "backend", "java", "go", "python", "typescript"]);
     for (const tier of index.tiers) {
       expect(tier.points.length, `${tier.id} 的可考点`).toBeGreaterThanOrEqual(3);
       expect(tier.offLimits.length, `${tier.id} 的判分边界`).toBeGreaterThan(0);

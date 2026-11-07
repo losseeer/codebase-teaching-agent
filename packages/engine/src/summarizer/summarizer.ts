@@ -13,12 +13,9 @@ import { recordEgress } from "../adapter/outbound/security/egress-log.js";
 import { LocalSummaryProvider, SUMMARY_BATCH_SIZE, SUMMARY_COMMENTS_STEP, SUMMARY_STEP, type SummaryProvider, type SummaryResult } from "./summary-provider.js";
 
 /**
-  文件级摘要表（L1）：每文件一行职责摘要 + 架构角色 + 覆盖率标记。
-  输入是结构切片，缓存键 = hash(切片 + 口径版本 + 模型版本)。
-  按 `SUMMARY_BATCH_SIZE` 批量调用，缺项逐条用本地摘要补齐。
+  文件级摘要表（L1）：每文件一行职责摘要 + 架构角色 + 覆盖率标记。输入是结构切片，缓存键 = hash(切片 + 口径版本 + 模型版本)；按 `SUMMARY_BATCH_SIZE` 批量调用，缺项用本地摘要补齐。
 */
 
-/** 覆盖率检查的最靠前条目数。 */
 const COVERAGE_CHECKED = 3;
 /** 批次并发上限；产品界面不暴露，只由导入接口与环境变量钳制。 */
 const MAX_SUMMARY_CONCURRENCY = 8;
@@ -26,17 +23,12 @@ const MAX_SUMMARY_CONCURRENCY = 8;
 /** 结构词：出现在摘要里不代表认出了文件。 */
 const STRUCTURAL_WORDS = new Set(["test", "tests", "impl", "service", "controller", "utils", "util", "get", "set", "main"]);
 
-/** 特征词锚定的最短词长。 */
 const MIN_ANCHOR_WORD = 4;
 
 export interface SummaryCoverage {
-  /** 参与检查的符号条目数。 */
   checked: number;
-  /** 锚定到摘要文本里的个数。 */
   mentioned: number;
-  /** 查了条目但一个都没锚上。 */
   low: boolean;
-  /** 判定规则版本。 */
   rule?: "anchor-v2";
 }
 
@@ -59,7 +51,6 @@ function cacheKeyOf(slice: FileSlice, modelVersion: string, withHeaderComments: 
   return hash(`${contractVersion}:${modelVersion}:${JSON.stringify(slice)}`);
 }
 
-/** 缓存键函数的对外导出。 */
 export const summaryCacheKey = cacheKeyOf;
 
 /** 隐去只作用于副本，切片原样保留。 */
@@ -76,9 +67,7 @@ function maskSliceForSend(slice: FileSlice): { copy: FileSlice; masked: number }
 
 export async function summarizeFiles(input: {
   structure: FileStructure;
-  /** 摘要的存取口。 */
   store: SummaryStore;
-  /** 这批切片所属仓的路径。 */
   repositoryPath: string;
   provider: SummaryProvider;
   /** 开启时切片附 headerComment。 */
@@ -101,7 +90,6 @@ export async function summarizeFiles(input: {
         const headerComment = extractHeaderComment(slice.path, text);
         if (headerComment) slice.headerComment = headerComment;
       } catch {
-        // 文件不可读时跳过该文件
       }
     }
   }
@@ -114,7 +102,6 @@ export async function summarizeFiles(input: {
   let fallbackFiles = 0;
   let inputCharacters = 0;
 
-  // 命中的不进批次
   const pending: FileSlice[] = [];
   for (const slice of ordered) {
     const key = cacheKeyOf(slice, provider.modelVersion, withHeaderComments);
@@ -131,10 +118,8 @@ export async function summarizeFiles(input: {
     }
     pending.push(slice);
   }
-  // 缓存扫描完成后先回报一次进度
   input.onProgress?.(cachedFiles, ordered.length);
 
-  // 并发只影响批次消费速度；缓存命中的扫描仍在启动前统一完成。
   const concurrency = Math.max(1, Math.min(MAX_SUMMARY_CONCURRENCY, Math.floor(input.concurrency ?? 1)));
   const batches: FileSlice[][] = [];
   for (let offset = 0; offset < pending.length; offset += SUMMARY_BATCH_SIZE) {
@@ -194,7 +179,6 @@ export async function summarizeFiles(input: {
       byPath.set(slice.path, { ...stored, cached: false });
     }
     completed += batch.length;
-    // 进度按已完成条数单调递增，与批次完成顺序无关
     input.onProgress?.(cachedFiles + completed, ordered.length);
   };
 
