@@ -344,14 +344,14 @@ function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurfa
       ) : null}
       <section className="surface-group">
         <div className="trace-group-head"><span>出厂技能</span></div>
-        <p className="field-note">技能装在用户目录里，可以自己改。改乱了就把出厂那份覆盖回来：只动出厂技能同名目录，你自建的技能和你多放的文件都不碰，覆盖前先备份。</p>
+        <p className="field-note">技能装在用户目录里，可以自己改。改乱了就把出厂那份覆盖回来：只动出厂技能同名目录，你自建的技能和你多放的文件都不碰，覆盖前先备份。注意 SKILL.md 里的「当前策略」也会一并恢复成出厂默认。</p>
         <button type="button" className="btn btn-danger-ghost btn-sm" disabled={busy} onClick={() => setConfirming(true)}>恢复初始技能</button>
         {note ? <p className="field-note">{note}</p> : null}
       </section>
       {confirming ? (
         <DangerDialog
           title="恢复出厂技能"
-          body="这会把用户技能目录里出厂技能的文件覆盖回出厂版本，你对这些文件的修改会丢失（覆盖前会自动备份一份）。你自建的技能不受影响。"
+          body="这会把用户技能目录里出厂技能的文件覆盖回出厂版本，你对这些文件的修改会丢失（覆盖前会自动备份一份）。你自建的技能不受影响；SKILL.md 里的「当前策略」也会恢复成出厂默认。"
           deleteLabel="恢复出厂版本"
           onDelete={() => { void restore(); }}
           onClose={() => setConfirming(false)}
