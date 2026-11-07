@@ -395,7 +395,7 @@ export class ExerciseService {
       reference: input.reference,
       provider: input.provider,
       repair: { maxRetries: 0, retryShape: false },
-      ...(segmented.plan ? { priorPlan: segmented.plan } : {}),
+      ...(segmented.plan ? { priorPlan: segmented.plan, frozenPrompt: segmented.plan } : {}),
       ...(input.faces ? { faces: input.faces } : {}),
       ...(input.progress ? { onProgress: input.progress } : {})
     });

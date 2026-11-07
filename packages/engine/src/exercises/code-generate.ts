@@ -551,6 +551,8 @@ export async function generateCodeExerciseFromReference(input: {
   repositoryPath: string;
   tag: string;
   kind: "patch_edit" | "author_function";
+  /** 分段兜底的定稿题面：产出后由引擎覆盖回 title/prompt/defect，模型重写无效。 */
+  frozenPrompt?: { title: string; prompt: string; defect: string };
   /** 参考素材：候选文件与摘录（只作参考，不要求逐字使用）。 */
   reference: string;
   provider: LlmProvider;
@@ -573,7 +575,7 @@ export async function generateCodeExerciseFromReference(input: {
     faces,
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.repair ? { repair: input.repair } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, faces, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, faces, ...(input.frozenPrompt ? { frozenPrompt: input.frozenPrompt } : {}), refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 
@@ -603,6 +605,14 @@ function recordUnitExamNotes(
 }
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
+/** 兜底重出时题面已经定稿（做过落点判定、三节齐全），引擎直接拼回，不给模型改写的机会。 */
+export function applyFrozenPrompt(parsed: Record<string, unknown>, frozen?: { title: string; prompt: string; defect: string }): void {
+  if (!frozen) return;
+  parsed.title = frozen.title;
+  parsed.prompt = frozen.prompt;
+  parsed.defect = frozen.defect;
+}
+
 export async function finishProposal(
   response: { text: string; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads: FileReadRecord[] },
   context: {
@@ -620,12 +630,15 @@ export async function finishProposal(
     faces?: ExerciseFaces;
     /** 单元模式的目标文件：即使模型没 read_file，这段源码也算「读过」。 */
     unitPath?: string;
+    /** 分段兜底的定稿题面：给出时覆盖产出的 title/prompt/defect，模型改写题面无效（题面已做过落点判定）。 */
+    frozenPrompt?: { title: string; prompt: string; defect: string };
   }
 ): Promise<CodeGeneration> {
   const audits = { usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   const parsed = parseJsonObject(response.text);
   if (!parsed) return { ok: false, stage: "proposal_shape", reason: "出题返回的不是可解析的 JSON。", runs: [], ...audits };
   if (parsed.ok === false) return { ok: false, stage: "proposal_shape", reason: String(parsed.reason ?? context.refusal).trim() || "模型拒绝出题。", runs: [], ...audits };
+  applyFrozenPrompt(parsed, context.frozenPrompt);
 
   const normalized = normalizeProposal({ ...parsed, kind: context.kind, ...(context.language ? { language: context.language } : {}) });
   if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], ...audits };

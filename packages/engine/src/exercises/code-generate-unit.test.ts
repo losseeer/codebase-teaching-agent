@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { changedLines, normalizeProposal, primaryLanguageOf, referenceSystemPrompt, systemPrompt, tooFarFromSolution, unitFaces, UNIT_HARD_ROUNDS, UNIT_SOFT_ROUNDS, type CodeProposal } from "./code-generate.js";
+import { applyFrozenPrompt, changedLines, normalizeProposal, primaryLanguageOf, referenceSystemPrompt, systemPrompt, tooFarFromSolution, unitFaces, UNIT_HARD_ROUNDS, UNIT_SOFT_ROUNDS, type CodeProposal } from "./code-generate.js";
 
 /** 最小合法产出：三节齐全、path 集合一致、entry 指向 hidden 里的测试文件。 */
 const proposal = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -122,5 +122,31 @@ describe("prompt 的语言与题面约束", () => {
       expect(text).toContain("只知道题面本身");
       expect(text).toContain("现象式的口号");
     }
+  });
+});
+
+describe("分段兜底的题面冻结", () => {
+  it("frozenPrompt 覆盖模型重写的 title/prompt/defect；未给时不改", () => {
+    const parsed: Record<string, unknown> = { title: "模型重写的口号", prompt: "## 问题描述\n缺了注意事项", defect: "模型编的" };
+    applyFrozenPrompt(parsed, { title: "定稿题", prompt: "## 问题描述\n…\n## 示例\n…\n## 注意事项\n…", defect: "定稿缺陷" });
+    expect(parsed.title).toBe("定稿题");
+    expect(String(parsed.prompt)).toContain("## 注意事项");
+    expect(parsed.defect).toBe("定稿缺陷");
+    const untouched: Record<string, unknown> = { title: "原样" };
+    applyFrozenPrompt(untouched, undefined);
+    expect(untouched.title).toBe("原样");
+  });
+});
+
+describe("分段兜底的题面冻结", () => {
+  it("frozenPrompt 覆盖模型重写的 title/prompt/defect；未给时不改", () => {
+    const parsed: Record<string, unknown> = { title: "模型重写的口号", prompt: "## 问题描述\n缺了注意事项", defect: "模型编的" };
+    applyFrozenPrompt(parsed, { title: "定稿题", prompt: "## 问题描述\n…\n## 示例\n…\n## 注意事项\n…", defect: "定稿缺陷" });
+    expect(parsed.title).toBe("定稿题");
+    expect(String(parsed.prompt)).toContain("## 注意事项");
+    expect(parsed.defect).toBe("定稿缺陷");
+    const untouched: Record<string, unknown> = { title: "原样" };
+    applyFrozenPrompt(untouched, undefined);
+    expect(untouched.title).toBe("原样");
   });
 });
