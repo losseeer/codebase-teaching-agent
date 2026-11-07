@@ -23,7 +23,7 @@ export function mountRepositoryUseCase(repositoryId: string): RepositoryResult<{
   const result = importer.ensureMounted(repositoryId);
   if (!result.ok) return { ok: false, failure: { kind: "not-mounted", message: result.message, reason: result.reason } };
   touchRepositoryMeta(result.repository);
-  syncRepositoryContributions(result.repository);
+  syncRepositoryContributions({ repositoryId: result.repository.index.repositoryId, audit: result.repository.audit });
   return { ok: true, value: { repositoryId: result.repository.index.repositoryId, repositoryPath: result.repository.path, freshness: result.repository.freshness } };
 }
 

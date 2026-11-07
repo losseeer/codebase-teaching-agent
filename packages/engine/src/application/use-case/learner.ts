@@ -3,7 +3,7 @@ import type { Contribution, CrossRepoLearningProfile, ExerciseResult, JournalEve
 
 import { projectContributionsFromEvents } from "../../learner/contribution.js";
 import { deriveCrossRepoLearningProfile } from "../../learner/cross-repo.js";
-import { learnerStore } from "../../infrastructure/composition-root.js";
+import { importer, learnerStore } from "../../infrastructure/composition-root.js";
 
 /**
   学习状态用例：用户级主题 CRUD、跨仓画像、作答 contribution 落库。
@@ -49,11 +49,28 @@ export function touchRepositoryMeta(repository: { path: string; index: Repositor
   旧 journal 回放：按（仓, 题, 单元, 时间, 作答类型）幂等写入，重复挂载不会翻倍。
   这也覆盖升级前的历史练习：新作答与旧行用同一套字段口径。
 */
-export function syncRepositoryContributions(repository: { index: RepositoryIndex; audit: { read(): JournalEvent[] } }): { imported: number } {
-  const repositoryId = repository.index.repositoryId;
+export function syncRepositoryContributions(input: { repositoryId: string; audit: { read(): JournalEvent[] } }): { imported: number } {
+  const repositoryId = input.repositoryId;
   const before = learnerStore.listContributions({ repositoryId }).length;
-  for (const row of projectContributionsFromEvents(repository.audit.read(), repositoryId)) learnerStore.appendContribution(row);
+  for (const row of projectContributionsFromEvents(input.audit.read(), repositoryId)) learnerStore.appendContribution(row);
   return { imported: learnerStore.listContributions({ repositoryId }).length - before };
+}
+
+/**
+  冷启动：把地址簿里每个仓的 journal 判分事件回放成跨仓 contribution。
+  原来只有显式 `mountRepositoryUseCase` 会回放，结果「导入过但从没点过挂载」的仓，
+  journal 里的 exercise_result 一条都进不了 learner.db —— 画像输入恒为空。
+  不设进程级开关：readJournal 有按字节水位的增量缓存，appendContribution 是
+  INSERT OR IGNORE + 确定性 id，重复跑只读新增、不会翻倍；新仓和新判分也能自动进来。
+*/
+export function backfillContributionsFromCatalog(): void {
+  for (const entry of importer.catalog()) {
+    if (!entry.exists) continue;
+    syncRepositoryContributions({
+      repositoryId: entry.repositoryId,
+      audit: importer.audit(entry.repositoryPath, entry.repositoryId)
+    });
+  }
 }
 
 /** 一行一次 exercise_result；对错与分数都保留原始值，聚合时再算权重。 */
@@ -74,6 +91,7 @@ export function recordExerciseContribution(result: ExerciseResult): Contribution
 }
 
 export function readCrossRepoLearningProfileUseCase(): CrossRepoLearningProfile {
+  backfillContributionsFromCatalog();
   return deriveCrossRepoLearningProfile({
     contributions: learnerStore.listContributions(),
     topics: learnerStore.listTopics(),
