@@ -21,7 +21,6 @@ import { addUsage } from "../adapter/outbound/llm/usage.js";
 import {
   finishProposal,
   parseJsonObject,
-  referenceSystemPrompt,
   requestProposal,
   TEST_CONTRACT,
   type CodeGeneration,
@@ -189,19 +188,19 @@ function parsePlan(parsed: Record<string, unknown>): PlanSegment {
   const targets = Array.isArray(parsed.targets)
     ? parsed.targets.map((item) => str(item, 200)).filter((item) => item.length > 0).slice(0, 3)
     : [];
-  if (!title || !prompt || !language || !targets.length) throw new Error("题面段缺 title / prompt / language / targets。");
+  if (!title || !prompt || !language || !targets.length) throw new SegmentError("shape", "题面段缺 title / prompt / language / targets。");
   const missing = PROMPT_SECTIONS.filter((section) => !prompt.includes(section));
-  if (missing.length) throw new Error(`题面缺这几节：${missing.join("、")}——必须按「问题描述 / 示例 / 注意事项」三节写完整。`);
+  if (missing.length) throw new SegmentError("shape", `题面缺这几节：${missing.join("、")}——必须按「问题描述 / 示例 / 注意事项」三节写完整。`);
   return { title, prompt, defect: str(parsed.defect, 200), language, targets };
 }
 
 export function parseCode(parsed: Record<string, unknown>): CodeSegment {
   const given = slots(parsed.given);
   const solution = slots(parsed.solution);
-  if (!given || !solution) throw new Error("代码段缺 given 或 solution。");
+  if (!given || !solution) throw new SegmentError("shape", "代码段缺 given 或 solution。");
   const paths = new Set(given.map((file) => file.path));
   if (solution.length !== given.length || solution.some((file) => !paths.has(file.path))) {
-    throw new Error("given 与 solution 的 path 集合必须完全一致。");
+    throw new SegmentError("shape", "given 与 solution 的 path 集合必须完全一致。");
   }
   const anchors: Anchor[] = Array.isArray(parsed.anchors)
     ? (parsed.anchors as unknown[]).flatMap((item) => {
@@ -220,7 +219,7 @@ export function parseCode(parsed: Record<string, unknown>): CodeSegment {
 function parseTests(parsed: Record<string, unknown>): TestsSegment {
   const hidden = slots(parsed.hidden);
   const entry = str(parsed.entry, 200);
-  if (!hidden || !entry) throw new Error("测试段缺 hidden 或 entry。");
+  if (!hidden || !entry) throw new SegmentError("shape", "测试段缺 hidden 或 entry。");
   return { hidden, entry };
 }
 
