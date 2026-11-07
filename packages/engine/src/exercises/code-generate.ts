@@ -502,7 +502,7 @@ export function changedLines(given: string, solution: string): number {
 
 /**
   「改一笔」闸：给定件与参考解在有效代码行上差太多，说明模型是整份重写而不是留一处缺陷。
-  阈值按 solution 有效行数取 max(3, 30%)，不是固定 3 行——A3 允许删注释/空行/无关语句，
+  阈值按 solution 有效行数取 max(3, 10%) 且封顶 15 行，不是固定 3 行——A3 允许删注释/空行/无关语句，
   固定 3 行会把每次精简都误杀。
 */
 export function tooFarFromSolution(proposal: CodeProposal): boolean {
