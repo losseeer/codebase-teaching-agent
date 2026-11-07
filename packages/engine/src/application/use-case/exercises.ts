@@ -35,14 +35,21 @@ export type ExerciseFailure =
   | { kind: "tag-required" }
   | { kind: "kind-unsupported" }
   | { kind: "aborted" }
-  | { kind: "declined"; message: string; fallback: string; code?: ExerciseDeclineCode };
+  | { kind: "declined"; message: string; fallback: string; code?: ExerciseDeclineCode; suggestions?: string[] };
 
 export type ExerciseResult<T> = { ok: true; value: T } | { ok: false; failure: ExerciseFailure };
 
 /** 内部阶段 → 公开错误码；只登记界面需要据此给出路的那些。 */
 const DECLINE_CODES: Partial<Record<string, ExerciseDeclineCode>> = { no_theme_hits: "theme_not_found" };
 
-const declined = (error: unknown, fallback: string, code?: ExerciseDeclineCode): ExerciseResult<never> => ({ ok: false, failure: { kind: "declined", message: error instanceof Error ? error.message : fallback, fallback, ...(code ? { code } : {}) } });
+const declined = (error: unknown, fallback: string, code?: ExerciseDeclineCode): ExerciseResult<never> => ({
+  ok: false,
+  failure: {
+    kind: "declined", message: error instanceof Error ? error.message : fallback, fallback, ...(code ? { code } : {}),
+    // no_theme_hits 的替代主题词要跟到响应体，否则用户只能反复撞同一个被拒的主题
+    ...(error instanceof ExerciseDeclinedError && error.suggestions.length ? { suggestions: error.suggestions } : {})
+  }
+});
 
 /** 一次练习回合的取证面：按操作计划装配，检索语料与静态产物都按这次的仓现建。 */
 function exerciseFaces(repository: ImportedRepository, database: Parameters<typeof factsToolFor>[1], operation: PracticeOperation, onTrace?: (step: ToolTraceStep) => void, signal?: AbortSignal): ExerciseFaces {

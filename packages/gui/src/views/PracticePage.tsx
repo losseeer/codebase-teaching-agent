@@ -236,7 +236,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     } catch (reason) {
       if (token !== generationToken.current) return;
       setGenerateReason(reason instanceof ApiError && reason.code === "theme_not_found" ? "theme_not_found" : null);
-      setError(failureText("出题失败", reason));
+      // no_theme_hits 时把引擎给的替代主题词亮出来：否则用户只会反复撞同一个被拒的主题
+      const suggestions = reason instanceof ApiError && reason.suggestions?.length ? `（可试试这些主题：${reason.suggestions.join("、")}）` : "";
+      setError(`${failureText("出题失败", reason)}${suggestions}`);
       // 只读一次免费成本读数，额度真到线才给出口。
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => {  });
     } finally {

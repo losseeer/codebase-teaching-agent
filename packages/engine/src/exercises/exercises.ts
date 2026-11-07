@@ -255,7 +255,8 @@ export class ExerciseService {
   /** 界面只看 `shown` 那一句，详细成因只写进 journal 的 exercise_declined。 */
   private decline(repository: PracticeRepository, stage: string, family: ExerciseFamily, tag: string, reason: string, shown: string, extra?: Record<string, string>): never {
     repository.ports.audit.append("exercise_declined", { family, tag, reason, stage, ...(extra ?? {}) });
-    throw new ExerciseDeclinedError(stage, shown);
+    const suggestions = extra?.suggestions ? extra.suggestions.split("、").filter(Boolean) : [];
+    throw new ExerciseDeclinedError(stage, shown, suggestions);
   }
 
   /**

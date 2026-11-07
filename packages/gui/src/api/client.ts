@@ -190,7 +190,7 @@ export type LlmSettingsPatch = Partial<{
 
 /** 带状态码的 HTTP 失败；仓库类 404 带 reason，出题被拒带 code。 */
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string, readonly reason?: RepositoryMountReason, readonly code?: ExerciseDeclineCode) {
+  constructor(readonly status: number, message: string, readonly reason?: RepositoryMountReason, readonly code?: ExerciseDeclineCode, /** no_theme_hits 时的替代主题词，界面提示「换个主题试试」。 */ readonly suggestions?: string[]) {
     super(message);
     this.name = "ApiError";
   }
@@ -201,8 +201,8 @@ export const isNotFound = (error: unknown): boolean => error instanceof ApiError
 async function requestRaw(path: string, init?: RequestInit): Promise<unknown> {
   // 仅带 body 时声明 JSON Content-Type：Fastify 会以 400 拒「json 头 + 空 body」的无体请求
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
-  const body = await response.json() as { error?: string; reason?: RepositoryMountReason; code?: ExerciseDeclineCode };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason, body.code);
+  const body = await response.json() as { error?: string; reason?: RepositoryMountReason; code?: ExerciseDeclineCode; suggestions?: string[] };
+  if (!response.ok) throw new ApiError(response.status, body.error ?? "请求失败", body.reason, body.code, body.suggestions);
   return body;
 }
 

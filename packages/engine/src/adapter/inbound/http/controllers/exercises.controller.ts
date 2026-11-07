@@ -12,7 +12,7 @@ const rejected = (reply: FastifyReply, failure: ExerciseFailure): FastifyReply =
     case "tag-required": return reply.code(400).send({ error: "出题需要先填主题名称" });
     case "kind-unsupported": return reply.code(400).send({ error: "不支持的练习题型" });
     case "aborted": return reply.code(499).send({ error: "出题已取消" });
-    case "declined": return reply.code(422).send({ error: failure.message || failure.fallback, ...(failure.code ? { code: failure.code } : {}) });
+    case "declined": return reply.code(422).send({ error: failure.message || failure.fallback, ...(failure.code ? { code: failure.code } : {}), ...(failure.suggestions?.length ? { suggestions: failure.suggestions } : {}) });
   }
 };
 
