@@ -34,7 +34,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 
-  /** 恢复出厂技能：覆盖用户技能目录里出厂技能的副本（用户自建技能不动，覆盖前先备份）。 */
+  /** 恢复出厂技能：覆盖用户技能目录里出厂技能的副本（用户自建技能不动）。 */
   app.post("/api/skills/restore", async () => restoreSkillsUseCase());
 
   app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } }>("/api/repositories/:repositoryId/cost", async (request, reply) => {
