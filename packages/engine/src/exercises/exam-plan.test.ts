@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SearchCorpus } from "../source/search-code.js";
 import { buildPointIndex, type BodyOf, type LandingContext } from "./exam-points.js";
-import { examPlanBrief, judgeThemeLandings } from "./exam-plan.js";
+import { examPlanBrief, judgeThemeLandings, themeWithLandings, type ExamPlan } from "./exam-plan.js";
 
 const SKILL_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../skills", "exercise-code-concepts");
 const bundledBody: BodyOf = (name, file = "SKILL.md") => {
@@ -108,5 +108,18 @@ describe("落点概要（所有出题路径共用）", () => {
     expect(brief).toContain(judged.plan.listedPoints[0]!.id);
     const withRemaining = examPlanBrief({ ...judged.plan, remaining: 12 });
     expect(withRemaining).toContain("另有 12 处");
+  });
+});
+
+describe("主题文件集合的落点兜底", () => {
+  it("词法命成为空但判定有落点时，落点路径当主题文件；词法有命中时不掺入", () => {
+    const judged = judgeThemeLandings({ theme: "Java特性", index, ctx });
+    expect(judged.ok).toBe(true);
+    if (!judged.ok) return;
+    const empty = themeWithLandings(new Set<string>(), judged.plan);
+    expect(empty && [...empty]).toContain("src/JavaBox.java");
+    const lexical = themeWithLandings(new Set<string>(["src/Other.java"]), judged.plan);
+    expect(lexical && [...lexical]).toEqual(["src/Other.java"]);
+    expect(themeWithLandings(undefined, judged.plan)).toBeUndefined();
   });
 });

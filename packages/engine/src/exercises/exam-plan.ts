@@ -82,6 +82,19 @@ function topPointsByLandings(points: ExamPointDef[], ctx: LandingContext, limit:
     .map((entry) => entry.point);
 }
 
+/**
+  主题文件集合：词法命中为空时用落点路径兜底。
+  中文主题在英文标识符的仓里词法命中 0 是常态，不等于「没落点」——
+  落点判定（judgeThemeLandings）已经用概念同义词 + probe 找过一遍，它说有就是有，
+  否则两道门打架：判定说有，词法说没有，出不了题。
+*/
+export function themeWithLandings(theme: Set<string> | undefined, plan: ExamPlan | undefined): Set<string> | undefined {
+  if (!theme || theme.size || !plan?.landings.length) return theme;
+  const merged = new Set(theme);
+  for (const landing of plan.landings) merged.add(landing.path);
+  return merged;
+}
+
 /** 给模型看的落点概要：推荐清单 + 剩余命中提示 + 第 2 级免责。所有出题路径共用这一份。 */
 export function examPlanBrief(plan: ExamPlan): string {
   const lines = plan.listedPoints.map((point) => `- ${point.id}（${point.concepts.join("、")}）：${point.probes}`);

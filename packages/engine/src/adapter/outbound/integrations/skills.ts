@@ -259,6 +259,8 @@ function scan(directory: string, taken: Set<string>): { skills: SkillBrief[]; sk
     return { skills, skipped };
   }
   for (const dir of entries.sort()) {
+    // 恢复出厂/同步留下的备份目录不是技能：静默跳过，不当候选也不进 skipped 噪音。
+    if (dir.includes(".bak-")) continue;
     if (taken.size >= SKILL_MAX) { skipped.push({ dir, reason: `清单已满 ${SKILL_MAX} 份` }); continue; }
     if (taken.has(dir)) { skipped.push({ dir, reason: "同名技能已在更靠前的目录里装过" }); continue; }
     let text: string;

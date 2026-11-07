@@ -30,7 +30,7 @@ import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricW
 import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
 import { DEFAULT_EXERCISE_STRATEGY, exerciseStrategyOf } from "./exercise-strategy.js";
 import { buildPointIndex, type LandingContext } from "./exam-points.js";
-import { examPlanBrief, judgeThemeLandings, loadPointTiers, type JudgeResult } from "./exam-plan.js";
+import { examPlanBrief, judgeThemeLandings, loadPointTiers, themeWithLandings, type JudgeResult } from "./exam-plan.js";
 import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
 import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
 import { generateCodeExerciseSegmented, segmentedExerciseEnabled } from "./code-generate-segmented.js";
@@ -196,7 +196,7 @@ export class ExerciseService {
     if (strategyKind && isCodeKind(strategyKind) && strategy === "reference") {
       return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind: strategyKind, variantNonce: requested.variantNonce }, provider, faces, progress);
     }
-    const theme = tag ? this.themeFiles(repository, tag) : undefined;
+    const theme = themeWithLandings(tag ? this.themeFiles(repository, tag) : undefined, faces?.examPlan);
     const modelVersion = provider?.modelVersion ?? "deterministic";
     if (!kind && !requested.targetUnitId) {
       const due = repository.ports.progress.list()

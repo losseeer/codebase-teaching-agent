@@ -4,12 +4,12 @@
 
 | id | concepts | probes | 考点 | 摘法 | 测试怎么断 |
 | --- | --- | --- | --- | --- | --- |
-| `os.lock-pairing` | 并发,锁,错误 | `call:ReentrantLock.lock ∉ try; call:*.unlock ∉ finally` | 锁的获取与释放配对 | 只摘「取锁—改状态—放锁」这一段，锁本身用可控替身 | 缺陷版漏放锁时，第二次调用应卡住或状态不更新——用可判定的替身断言，不要靠真线程等待 |
-| `os.pool-policy` | 并发,线程池,队列,边界 | `text:ThreadPoolExecutor; text:reject; op:off-by-one` | 线程池参数与溢出策略 | 摘「根据队列长度与活跃线程数决定拒绝还是入队」这段纯逻辑 | 给几组容量输入，断言返回的决策值 |
-| `os.backoff` | 并发,重试,时间,边界 | `text:backoff; op:missing-cap` | 退避与重试次数计算 | 摘「算第 N 次该等多久」的纯函数，不摘真 sleep | 断言序列（含上限截断、抖动输入固定种子） |
-| `os.context-cleanup` | 并发,上下文,错误 | `text:ThreadLocal; call:remove ∉ finally` | 请求上下文存取与清理 | 摘「写入—读取—清理」三步，容器用替身 | 断言清理之后读到空 |
-| `os.expiry` | 时间,边界 | `text:expire; text:deadline; op:off-by-one` | 延时/到期判定 | 摘「给定当前时间与任务时间，是否到期」 | 断言布尔与排序结果 |
-| `os.sharding` | 边界,队列 | `text:batch; text:shard; op:off-by-one` | 批量读写分片 | 摘分片计算（每片大小、最后一片余数） | 断言分片数量与边界 |
+| `os.lock-pairing` | 并发,锁,错误,操作系统 | `call:ReentrantLock.lock ∉ try; call:*.unlock ∉ finally` | 锁的获取与释放配对 | 只摘「取锁—改状态—放锁」这一段，锁本身用可控替身 | 缺陷版漏放锁时，第二次调用应卡住或状态不更新——用可判定的替身断言，不要靠真线程等待 |
+| `os.pool-policy` | 并发,线程池,队列,边界,操作系统 | `text:ThreadPoolExecutor; text:reject; op:off-by-one` | 线程池参数与溢出策略 | 摘「根据队列长度与活跃线程数决定拒绝还是入队」这段纯逻辑 | 给几组容量输入，断言返回的决策值 |
+| `os.backoff` | 并发,重试,时间,边界,操作系统 | `text:backoff; op:missing-cap` | 退避与重试次数计算 | 摘「算第 N 次该等多久」的纯函数，不摘真 sleep | 断言序列（含上限截断、抖动输入固定种子） |
+| `os.context-cleanup` | 并发,上下文,错误,操作系统 | `text:ThreadLocal; call:remove ∉ finally` | 请求上下文存取与清理 | 摘「写入—读取—清理」三步，容器用替身 | 断言清理之后读到空 |
+| `os.expiry` | 时间,边界,操作系统 | `text:expire; text:deadline; op:off-by-one` | 延时/到期判定 | 摘「给定当前时间与任务时间，是否到期」 | 断言布尔与排序结果 |
+| `os.sharding` | 边界,队列,操作系统 | `text:batch; text:shard; op:off-by-one` | 批量读写分片 | 摘分片计算（每片大小、最后一片余数） | 断言分片数量与边界 |
 
 ## 常见误解转成的缺陷
 

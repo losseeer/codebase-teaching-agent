@@ -52,9 +52,9 @@ describe("考点词表解析", () => {
     expect(points.find((point) => point.id === "java.boxed-equality")?.probes).toBe("sym:Integer & op:Integer==");
   });
 
-  it("概念词表 31 个概念，每个都被技能条目引用（无孤儿）", () => {
+  it("概念词表 32 个概念，每个都被技能条目引用（无孤儿）", () => {
     const index = buildPointIndex(bundledBody);
-    expect(Object.keys(index.concepts)).toHaveLength(31);
+    expect(Object.keys(index.concepts)).toHaveLength(32);
     const referenced = new Set(index.points.flatMap((point) => point.concepts));
     expect(Object.keys(index.concepts).filter((concept) => !referenced.has(concept))).toEqual([]);
     expect([...referenced].filter((concept) => !(concept in index.concepts))).toEqual([]);
