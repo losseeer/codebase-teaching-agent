@@ -656,3 +656,35 @@ function openHandle(repositoryPath: string, repositoryId: string): RepositoryHan
   handles.push(handle);
   return handle;
 }
+
+/** 主题落点判定确实接在唯一入口上：零落点要在付费模型调用之前拒掉。 */
+describe("v8 主题落点判定接线", () => {
+  const SKILL_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../skills", "exercise-code-concepts");
+  const bundledBody = (name: string, file = "SKILL.md"): string | undefined => {
+    if (name !== "exercise-code-concepts") return undefined;
+    try { return readFileSync(join(SKILL_ROOT, file), "utf8"); } catch { return undefined; }
+  };
+
+  it("真技能表 + 完全无落点的主题：next() 直接判 no_theme_hits，不进模型", async () => {
+    const repository = testRepository();
+    const faces: ExerciseFaces = {
+      repoPath: repository.path,
+      skills: { brief: "", bodyOf: bundledBody }
+    };
+    await expect(new ExerciseService().next(repository, {
+      tag: "一种完全不存在的主题xyz", kind: "llm_rubric"
+    }, undefined, faces)).rejects.toMatchObject({ stage: "no_theme_hits" });
+  });
+
+  it("技能没装/表没有 id 列时显式跳过判定，不把「判定不可用」当成「有落点」", async () => {
+    const repository = testRepository();
+    const faces: ExerciseFaces = {
+      repoPath: repository.path,
+      skills: { brief: "", bodyOf: () => undefined }
+    };
+    // 只验证不会因「词表为空」抛 no_theme_hits；后续走向由原链路决定。
+    await expect(new ExerciseService().next(repository, {
+      tag: "一种完全不存在的主题xyz", kind: "llm_rubric"
+    }, undefined, faces)).rejects.not.toMatchObject({ stage: "no_theme_hits" });
+  });
+});

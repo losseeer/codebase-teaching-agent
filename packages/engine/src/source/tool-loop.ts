@@ -53,7 +53,7 @@ export interface ReadToolLoopInput {
   onProgress?: (progress: ReadToolProgress) => void;
   onTrace?: (step: ToolTraceStep) => void;
   /** 每轮工具跑完后拼在最后一条工具结果末尾交给模型的进度条。 */
-  budgetBrief?: (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }) => string | undefined;
+  budgetBrief?: (state: { round: number; maxRounds: number; filesRead: number; newFiles: number; newPaths: string[] }) => string | undefined;
   /** 场景标签，透传给每一轮 LLM 调用。 */
   scene?: string;
   /** 提供时开放 search_code 工具。 */
@@ -352,11 +352,13 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     }
     if (asked) break;
     // 进度条只加文字，不改消息结构。
+    const newPaths = [...new Set(fileReads.filter((read) => !filesBefore.has(read.path)).map((read) => read.path))];
     const brief = input.budgetBrief?.({
       round: rounds,
       maxRounds,
       filesRead: new Set(fileReads.map((read) => read.path)).size,
-      newFiles: new Set(fileReads.filter((read) => !filesBefore.has(read.path)).map((read) => read.path)).size
+      newFiles: newPaths.length,
+      newPaths
     });
     if (brief) {
       const last = messages[messages.length - 1];

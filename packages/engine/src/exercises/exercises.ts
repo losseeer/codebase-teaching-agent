@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   AttemptKind,
   Exercise,
@@ -21,12 +22,15 @@ import { EXERCISE_TYPE_KINDS, exerciseTypeOf, type ExerciseType, type SymbolInfo
 import type { LlmProvider } from "../application/port/llm-provider.js";
 import type { ExerciseFaces, ExerciseProgressSink } from "./turn-faces.js";
 import { fileReadAuditPayload } from "../source/read-file.js";
+import { buildSearchCorpus } from "../source/search-code.js";
 import { skillReadAuditPayload } from "../source/tools/types.js";
 import { graphFromData, handledExtensions, impactRadius } from "@codebase-tutor/analysis";
 import { hash } from "@codebase-tutor/platform";
 import { buildTagCandidate, EXERCISE_STEP, generateExerciseWithLlm, judgeRubricWithLlm, polishFeedbackWithLlm, refineExerciseWithLlm } from "./llm-generate.js";
 import { NO_TOPICS, topicIndex } from "./topic-tiers.js";
 import { DEFAULT_EXERCISE_STRATEGY, exerciseStrategyOf } from "./exercise-strategy.js";
+import { buildPointIndex, type LandingContext } from "./exam-points.js";
+import { judgeThemeLandings, loadPointTiers, type JudgeResult } from "./exam-plan.js";
 import { excerptClues, mechanismCandidate, tagTokens } from "./mechanism-surface.js";
 import { explainCodeAttempt, generateCodeExercise, generateCodeExerciseFromReference, verdictOf, type CodeFile, type CodeGeneration } from "./code-generate.js";
 import { generateCodeExerciseSegmented, segmentedExerciseEnabled } from "./code-generate-segmented.js";
@@ -165,6 +169,17 @@ export class ExerciseService {
   async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
+    // v8 主题落点判定：付费前、唯一入口，覆盖 llm_rubric / reference / unit 三条路径。
+    if (tag && faces?.skills) {
+      const judged = this.judgeTheme(repository, tag, faces);
+      if (judged && !judged.ok) {
+        this.decline(repository, judged.rejection.stage, familyOf(kind ?? "impact_analysis"), tag,
+          judged.rejection.reason,
+          `未找到与「${tag}」相关的源码，请更换主题。`,
+          { suggestions: judged.rejection.suggestions.join("、") });
+      }
+      if (judged?.ok) faces = { ...faces, examPlan: judged.plan };
+    }
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces, progress);
     // `type=design` 也要解析成代码题型，否则只传 type 的客户端进不了 reference 分支。
     const strategyKind = kind ?? (requested.type === "design" ? "patch_edit" : undefined);
@@ -232,6 +247,28 @@ export class ExerciseService {
   private decline(repository: PracticeRepository, stage: string, family: ExerciseFamily, tag: string, reason: string, shown: string, extra?: Record<string, string>): never {
     repository.ports.audit.append("exercise_declined", { family, tag, reason, stage, ...(extra ?? {}) });
     throw new ExerciseDeclinedError(stage, shown);
+  }
+
+  /**
+    主题落点判定（v8）：在付费模型调用之前，覆盖所有题型。
+    技能没装或考点表没补 id 列时显式告警并跳过，不静默把「判定不可用」当成「有落点」。
+  */
+  private judgeTheme(repository: PracticeRepository, theme: string, faces: ExerciseFaces): JudgeResult | undefined {
+    if (!faces.skills) return undefined;
+    const index = buildPointIndex(faces.skills.bodyOf);
+    if (!index.points.length) {
+      console.warn("[exam-plan] 考点词表未加载（技能缺失或表格没有 id 列），本趟跳过主题落点判定。");
+      return undefined;
+    }
+    const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
+    const corpus = buildSearchCorpus(repository.index, repository.analysis, summaries);
+    const ctx: LandingContext = {
+      corpus,
+      readText: (path) => {
+        try { return readFileSync(join(repository.path, path), "utf8"); } catch { return undefined; }
+      }
+    };
+    return judgeThemeLandings({ theme, index, ctx, tiers: loadPointTiers(faces.skills.bodyOf) });
   }
 
   /** 沙箱自证两跑（参考解必过、下发件必挂）后才落库。 */

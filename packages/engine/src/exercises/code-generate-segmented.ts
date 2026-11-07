@@ -7,6 +7,10 @@ import { join } from "node:path";
 import { EXERCISE_SEGMENT_ACTIVE, EXERCISE_SEGMENT_LABEL, type ExerciseLanguage, type ExerciseSegment } from "@codebase-tutor/domain";
 import type { LlmProvider, LlmUsage } from "../application/port/llm-provider.js";
 import { addUsage } from "../adapter/outbound/llm/usage.js";
+import { buildPointIndex } from "./exam-points.js";
+import { loadExamNoteStore, recordExamNotes, validateExamPoints } from "./exam-notes.js";
+import { ExamNotesBudget } from "./exam-notes-consumer.js";
+import { traceEngine } from "@codebase-tutor/platform";
 import {
   finishProposal,
   parseJsonObject,
@@ -257,6 +261,17 @@ export async function generateCodeExerciseSegmented(input: {
   const skillReads: ProposalResponse["skillReads"] = [];
   const fileReads: ProposalResponse["fileReads"] = [];
 
+  /** 阅读笔记消费器：一趟出题一个实例，管住 read_file 附注的单趟预算与丢弃计数。 */
+  const examPlan = faces.examPlan;
+  const notesBudget = examPlan ? new ExamNotesBudget({
+    plan: examPlan,
+    store: loadExamNoteStore(input.repositoryPath),
+    candidatePaths: new Set(examPlan.landings.map((landing) => landing.path)),
+    themeWords: [input.tag.toLowerCase(), ...examPlan.concepts.map((concept) => concept.toLowerCase())].filter(Boolean),
+    theme: input.tag
+  }) : undefined;
+  const userNotes = notesBudget?.forUser() ?? [];
+
   /** 无进展按段各记各的。 */
   const noProgress: Record<"prompt" | "code" | "tests", number> = { prompt: 0, code: 0, tests: 0 };
   const briefFor = (segment: ExerciseSegment) => (state: { round: number; maxRounds: number; filesRead: number; newFiles: number }): string => {
@@ -282,7 +297,13 @@ export async function generateCodeExerciseSegmented(input: {
     const scoped: ExerciseFaces = {
       ...faces,
       maxRounds: PLAN_HARD_ROUNDS,
-      budgetBrief: briefFor(segment),
+      budgetBrief: (state) => {
+        const progress = briefFor(segment)(state);
+        const notes = notesBudget
+          ? state.newPaths.map((path) => notesBudget.renderReadNotes(notesBudget.forRead(path))).filter(Boolean)
+          : [];
+        return [progress, ...notes].filter(Boolean).join("\n");
+      },
       ...(inner ? {} : {})
     };
     if (!inner) return scoped;
@@ -304,10 +325,23 @@ export async function generateCodeExerciseSegmented(input: {
 
   const planOut = await runSegment<PlanSegment>(async (attempt) => {
     announce("prompt");
+    const plan = faces.examPlan;
+    const listed = plan?.listedPoints.map((point) => ({ id: point.id, concepts: point.concepts.join(","), probes: point.probes })) ?? [];
     const response = await requestProposal({
       provider: input.provider,
       system: withSkillsBrief(promptSystem(input.kind), faces.skills),
-      user: JSON.stringify({ kind: input.kind, theme: input.tag, reference: input.reference }),
+      user: JSON.stringify({
+        kind: input.kind, theme: input.tag, reference: input.reference,
+        examPoints: plan ? {
+          sourceLevel: plan.sourceLevel,
+          note: plan.sourceLevel === 1
+            ? "下面是本主题命中的可考点；写 examPoints 时 point 只能从这些 id 里选，path 必须是这一趟真读过的文件。"
+            : "本主题未命中技能词表（走概念直检）。以下仅为写 examPoints 提供 id 参考，当趟不消费；只写你有把握的，宁缺勿滥。",
+          allowed: listed
+        } : undefined,
+        examPointsNote: "产出里带 examPoints 数组：{path,line,symbol?,point,why}；point 是可用考点的 id，why 不超过 40 字。没有把握就给空数组。",
+        ...(notesBudget && userNotes.length ? { knownNotes: notesBudget.renderUserNotes(userNotes) } : {})
+      }),
       temperature,
       ...(faces ? { faces: facesFor("prompt", attempt) } : {}),
       ...(input.onProgress ? { onProgress: input.onProgress } : {})
@@ -315,6 +349,27 @@ export async function generateCodeExerciseSegmented(input: {
     const parsed = parseJsonObject(response.text);
     if (!parsed) throw new SegmentError("shape", "题面段返回的不是可解析的 JSON。");
     if (parsed.ok === false) throw new SegmentError("shape", str(parsed.reason, 200) || "模型拒绝出题。");
+    // 阅读笔记：搭段 1 的便车，零额外调用。校验不过只丢这一条，不影响出题。
+    const legalIds = new Set(buildPointIndex(faces.skills ? (name, file) => faces.skills!.bodyOf(name, file) : () => undefined).points.map((point) => point.id));
+    const validation = validateExamPoints(parsed.examPoints, {
+      legalIds,
+      fileReads: new Set(response.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path)),
+      pointIds: new Set(plan?.pointIds ?? []),
+      sourceLevel: plan?.sourceLevel ?? 1
+    });
+    const saved = recordExamNotes(input.repositoryPath, validation.accepted, new Date().toISOString());
+    traceEngine("exam_notes", {
+      written: validation.written, accepted: validation.accepted.length, rejected: validation.rejected,
+      legalRate: Number(validation.legalRate.toFixed(3)), relatedRate: Number(validation.relatedRate.toFixed(3)),
+      saved, sourceLevel: plan?.sourceLevel ?? 1
+    }, { traceId: null });
+    if (notesBudget) {
+      const diagnostics = notesBudget.diagnostics();
+      traceEngine("exam_notes", {
+        phase: "consume", droppedByThreshold: diagnostics.droppedByThreshold,
+        readShown: diagnostics.readShown, droppedByPointMatch: JSON.stringify(diagnostics.droppedByPointMatch)
+      }, { traceId: null });
+    }
     return { data: parsePlan(parsed), usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
   }, maxRetries);
   if (planOut.failure) {

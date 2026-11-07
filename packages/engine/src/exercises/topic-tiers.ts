@@ -53,10 +53,12 @@ export function skillSection(text: string, heading: string): string {
   return rest.slice(0, end < 0 ? rest.length : end).join("\n").trim();
 }
 
-/** 第一张表的考点列（表头丢掉）。 */
+/** 第一张表的「考点」列；列位置由表头定位，不写死索引（技能表已补 id/concepts/probes 三列）。 */
 function pointNames(sectionText: string): string[] {
   const rows = tableRows(sectionText);
-  return rows.slice(1).map((cells) => cells[0] ?? "").filter(Boolean);
+  const column = (rows[0] ?? []).findIndex((cell) => cell.trim() === "考点");
+  if (column < 0) return [];
+  return rows.slice(1).map((cells) => cells[column] ?? "").filter(Boolean);
 }
 
 function promptOf(tiers: TopicTier[]): string {
