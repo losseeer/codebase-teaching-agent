@@ -8,6 +8,8 @@ export interface ZpdTarget<T> {
   id: string;
   title: string;
   value: T;
+  /** 自包含度：跨文件依赖越多值越大。只在难度距离与难度都相同时参与排序，不改难度本身。 */
+  selfContained?: number;
 }
 
 /** Selects an exercise no more than one level from the learner's latest mastery. */
@@ -18,6 +20,8 @@ export function selectZpdTarget<T>(targets: ZpdTarget<T>[], records: MasteryReco
   if (!candidates.length) return undefined;
   return [...candidates].sort((left, right) => {
     const difficultyDistance = Math.abs(left.difficulty - mastery) - Math.abs(right.difficulty - mastery);
-    return difficultyDistance || left.difficulty - right.difficulty || left.id.localeCompare(right.id);
+    return difficultyDistance || left.difficulty - right.difficulty
+      || (left.selfContained ?? 0) - (right.selfContained ?? 0)
+      || left.id.localeCompare(right.id);
   })[0];
 }

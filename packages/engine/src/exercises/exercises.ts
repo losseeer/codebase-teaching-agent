@@ -681,9 +681,19 @@ export class ExerciseService {
     if (isCodeKind(kind)) {
       // 沙箱不支持的语言不进候选。
       const supported = new Set(["typescript", "python", "java", "go"]);
+      // 自包含度：跨文件调用越多越不自足（单文件单元编不过就得靠模型写 stub，那是最贵的失败）。
+      // 只做同难度 tie-break，不加进 unitDifficulty —— 后者已经把 traps 算进复杂度，再算一次会双重计入。
+      const crossFileCalls = new Map<string, number>();
+      for (const call of repository.analysis.graph.calls ?? []) {
+        if (call.callerPath === call.calleePath) continue;
+        crossFileCalls.set(call.callerPath, (crossFileCalls.get(call.callerPath) ?? 0) + 1);
+      }
       return repository.analysis.implementations
         .filter((unit) => supported.has(unit.symbol.language))
-        .map((unit) => ({ id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind }));
+        .map((unit) => ({
+          id: unit.id, title: unit.symbol.name, difficulty: unitDifficulty(unit), value: unit, kind,
+          selfContained: (crossFileCalls.get(unit.symbol.path) ?? 0) + (unit.symbol.referenceCount ?? 0) / 10
+        }));
     }
     if (kind === "change_localization") {
       return repository.analysis.implementations

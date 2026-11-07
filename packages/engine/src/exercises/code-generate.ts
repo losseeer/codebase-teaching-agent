@@ -12,6 +12,9 @@ import { addUsage } from "../adapter/outbound/llm/usage.js";
 import type { FileReadRecord } from "../source/read-file.js";
 import { forwardToolProgress, type ExerciseFaces, type ExerciseProgressSink } from "./turn-faces.js";
 import { examPlanBrief } from "./exam-plan.js";
+import { buildPointIndex } from "./exam-points.js";
+import { recordExamNotes, validateExamPoints } from "./exam-notes.js";
+import { traceEngine } from "@codebase-tutor/platform";
 import { EXERCISE_STEP } from "./llm-generate.js";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 import { recordEgress } from "../adapter/outbound/security/egress-log.js";
@@ -38,6 +41,8 @@ export interface CodeProposal {
   defect: string;
   /** 参考模式：出题时参考了仓库里的哪几处代码（可空；why 只进 journal）。 */
   anchors?: { path: string; line: number; endLine?: number; why?: string }[];
+  /** 阅读笔记（v8 链路二）：unit 路径与 reference 一样搭出题这一趟的便车产出。 */
+  examPoints?: unknown[];
 }
 
 export type DeclineStage = "provider_error" | "proposal_shape" | "sandbox_unavailable" | "harness_validation";
@@ -215,6 +220,7 @@ export function normalizeProposal(parsed: Record<string, unknown>): { proposal?:
   }
   const clash = hidden.find((file) => given.some((slot) => slot.path === file.path));
   if (clash) return { issue: `hidden 与 given 有同名文件（${clash.path}）：下发件会被测试盖掉` };
+  const examPoints = Array.isArray(parsed.examPoints) ? parsed.examPoints : undefined;
   const anchors = Array.isArray(parsed.anchors)
     ? (parsed.anchors as unknown[]).flatMap((item) => {
         const record = (item ?? {}) as Record<string, unknown>;
@@ -226,7 +232,7 @@ export function normalizeProposal(parsed: Record<string, unknown>): { proposal?:
         return [{ path, line, ...(Number.isFinite(endLine) && endLine > line ? { endLine } : {}), ...(why ? { why } : {}) }];
       }).slice(0, 3)
     : [];
-  return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect, ...(anchors.length ? { anchors } : {}) } };
+  return { proposal: { kind, title, prompt, language, given, solution, hidden, entry, defect, ...(anchors.length ? { anchors } : {}), ...(examPoints ? { examPoints } : {}) } };
 }
 
 /** 只认这一行：`TESTS <通过> <失败>`；没有它 = 测试没跑完。 */
@@ -409,6 +415,41 @@ async function generateWithRepair(input: {
 }
 
 /** 引擎侧对 patch_edit 的额外要求：`solution` 必须逐字含仓里那段真实现。 */
+/** 去注释、去空行、trim：given 允许精简，闸只能在有效代码行上比。 */
+function effectiveLines(text: string): string[] {
+  return text.split("\n")
+    .map((line) => line.replace(/\/\/.*$/, "").replace(/#.*$/, "").replace(/\/\*.*?\*\//g, "").trim())
+    .filter((line) => line.length > 0);
+}
+
+/** 行级 LCS 差异行数（删 + 增）。 */
+export function changedLines(given: string, solution: string): number {
+  const a = effectiveLines(given);
+  const b = effectiveLines(solution);
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      table[i]![j] = a[i - 1] === b[j - 1] ? table[i - 1]![j - 1]! + 1 : Math.max(table[i - 1]![j]!, table[i]![j - 1]!);
+    }
+  }
+  const common = table[a.length]![b.length]!;
+  return (a.length - common) + (b.length - common);
+}
+
+/**
+  「改一笔」闸：给定件与参考解在有效代码行上差太多，说明模型是整份重写而不是留一处缺陷。
+  阈值按 solution 有效行数取 max(3, 30%)，不是固定 3 行——A3 允许删注释/空行/无关语句，
+  固定 3 行会把每次精简都误杀。
+*/
+export function tooFarFromSolution(proposal: CodeProposal): boolean {
+  const given = proposal.given.map((file) => file.contents).join("\n");
+  const solution = proposal.solution.map((file) => file.contents).join("\n");
+  const total = effectiveLines(solution).length;
+  const allowed = Math.max(3, Math.ceil(total * 0.3));
+  return changedLines(given, solution) > allowed;
+}
+
 function solutionMatchesSource(proposal: CodeProposal, body: string): boolean {
   const needle = body.trim().replace(/\s+/g, " ");
   if (!needle) return false;
@@ -438,7 +479,7 @@ export async function generateCodeExercise(input: { repositoryPath: string; unit
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.repair ? { repair: input.repair } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, language, solutionBody: source.body, faces: input.faces, unitPath: input.unit.symbol.path, refusal: "模型认为这个单元出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
 }
 
@@ -468,8 +509,33 @@ export async function generateCodeExerciseFromReference(input: {
     ...(input.faces ? { faces: input.faces } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.repair ? { repair: input.repair } : {}),
-    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
+    finish: (response) => finishProposal(response, { kind: input.kind, repositoryPath: input.repositoryPath, faces: input.faces, refusal: "模型认为这个主题出不了代码题。", onProgress: input.onProgress, ...(input.faces?.signal ? { signal: input.faces.signal } : {}) })
   });
+}
+
+/** unit / reference 整份产出的阅读笔记：与分段同一套校验与落盘，不另起一套口径。 */
+function recordUnitExamNotes(
+  repositoryPath: string,
+  proposal: CodeProposal,
+  input: { faces?: ExerciseFaces; fileReads: { path: string; denied?: boolean; error?: string }[]; unitPath?: string }
+): void {
+  if (!proposal.examPoints?.length || !input.faces?.skills) return;
+  const index = buildPointIndex(input.faces.skills.bodyOf);
+  if (!index.points.length || !Object.keys(index.concepts).length) return;
+  const reads = new Set(input.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path));
+  if (input.unitPath) reads.add(input.unitPath);
+  const validation = validateExamPoints(proposal.examPoints, {
+    legalIds: new Set(index.points.map((point) => point.id)),
+    fileReads: reads,
+    pointIds: new Set(input.faces.examPlan?.pointIds ?? []),
+    sourceLevel: input.faces.examPlan?.sourceLevel ?? 1
+  });
+  const saved = recordExamNotes(repositoryPath, validation.accepted, new Date().toISOString());
+  traceEngine("exam_notes", {
+    path: "whole", written: validation.written, accepted: validation.accepted.length, rejected: validation.rejected,
+    legalRate: Number(validation.legalRate.toFixed(3)), relatedRate: Number(validation.relatedRate.toFixed(3)),
+    saved, sourceLevel: input.faces.examPlan?.sourceLevel ?? 1
+  }, { traceId: null });
 }
 
 /** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
@@ -486,6 +552,10 @@ export async function finishProposal(
     onProgress?: ExerciseProgressSink;
     /** 用户取消时不再开新的沙箱运行。 */
     signal?: AbortSignal;
+    /** 阅读笔记要用：技能词表（合法 id 域）与落点判定结果。 */
+    faces?: ExerciseFaces;
+    /** 单元模式的目标文件：即使模型没 read_file，这段源码也算「读过」。 */
+    unitPath?: string;
   }
 ): Promise<CodeGeneration> {
   const audits = { usage: response.usage, skillReads: response.skillReads, fileReads: response.fileReads };
@@ -502,6 +572,12 @@ export async function finishProposal(
   if (proposal.kind === "patch_edit" && context.solutionBody && !solutionMatchesSource(proposal, context.solutionBody)) {
     return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], ...audits };
   }
+  // 改一笔闸：给定件与参考解差太多 = 整份重写，"改一笔"名不副实。
+  if (proposal.kind === "patch_edit" && tooFarFromSolution(proposal)) {
+    return { ok: false, stage: "proposal_shape", reason: "给定件与参考解的有效代码差异过大：这道题要的是「改一笔」，不是整份重写。", runs: [], ...audits };
+  }
+  // 阅读笔记：与分段同一套校验与落盘，unit 出的题也贡献笔记。
+  recordUnitExamNotes(context.repositoryPath, proposal, { faces: context.faces, fileReads: response.fileReads, unitPath: context.unitPath });
 
   let validation: { ok: boolean; reason?: string; runs: HarnessRun[] };
   try {
