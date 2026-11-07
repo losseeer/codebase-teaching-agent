@@ -3,6 +3,8 @@ import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from
 import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
+import { DangerDialog } from "../ui/DangerDialog";
+import { api } from "../api/client";
 import { usePracticeOperation } from "./practiceOperation";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
@@ -92,7 +94,7 @@ export function AgentTraceBall({ repositoryId, scope, threadId }: { repositoryId
 function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, onClose }: { runs: TraceRun[]; repositoryId: string; scope: AgentScope; threadId?: string | null; practiceOperation?: PracticeOperation; onClose: () => void }): ReactElement {
   const [tab, setTab] = useState<TraceTab>("trace");
   const [generationId, setGenerationId] = useState<string>();
-  const { surface, error, loading } = useAgentSurface(repositoryId, scope, practiceOperation);
+  const { surface, error, loading, reload } = useAgentSurface(repositoryId, scope, practiceOperation);
   // 练习区要保留 repo 级的出题历史，所以这里不按会话过滤，取回后再筛
   const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope, 100, scope === "practice" ? undefined : threadId);
   useEffect(() => {
@@ -160,7 +162,7 @@ function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, on
             </>
             )
           ) : null}
-          {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} /> : null}
+          {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} onReload={reload} /> : null}
           {tab === "tools" ? <ToolsView surface={surface} error={error} loading={loading} /> : null}
         </div>
         <div className="modal-foot">
@@ -299,10 +301,26 @@ function StepStatus({ step }: { step: TraceStep }): ReactElement {
   return <span className={`trace-dot ${tone} trace-step-status`} />;
 }
 
-function SkillsView({ surface, error, loading }: { surface: AgentSurface | null; error: string | null; loading: boolean }): ReactElement {
+function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurface | null; error: string | null; loading: boolean; onReload: () => void }): ReactElement {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   if (loading && !surface) return <p className="field-note">正在读取技能清单…</p>;
   if (error) return <p className="field-note">{error}</p>;
   if (!surface) return <p className="field-note">读不到技能清单。</p>;
+  const restore = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const result = await api.restoreSkills();
+      setNote(`已恢复 ${result.restored.length} 份出厂技能（${result.files} 个文件）${result.backupDirs.length ? `；原文件备份在 ${result.backupDirs.join("、")}` : ""}。`);
+      onReload();
+    } catch (reason: unknown) {
+      setNote(reason instanceof Error ? reason.message : "恢复出厂技能失败");
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
   return (
     <>
       {surface.skills.length ? (
@@ -324,10 +342,24 @@ function SkillsView({ surface, error, loading }: { surface: AgentSurface | null;
           {surface.skillSkipped.map((entry, index) => <SurfaceRow key={`${entry.dir}-${index}`} title={entry.dir} subtitle={entry.reason} badge={{ label: "跳过", tone: "off" }} mono />)}
         </section>
       ) : null}
+      <section className="surface-group">
+        <div className="trace-group-head"><span>出厂技能</span></div>
+        <p className="field-note">技能装在用户目录里，可以自己改。改乱了就把出厂那份覆盖回来：只动出厂技能同名目录，你自建的技能和你多放的文件都不碰，覆盖前先备份。</p>
+        <button type="button" className="btn btn-danger-ghost btn-sm" disabled={busy} onClick={() => setConfirming(true)}>恢复初始技能</button>
+        {note ? <p className="field-note">{note}</p> : null}
+      </section>
+      {confirming ? (
+        <DangerDialog
+          title="恢复出厂技能"
+          body="这会把用户技能目录里出厂技能的文件覆盖回出厂版本，你对这些文件的修改会丢失（覆盖前会自动备份一份）。你自建的技能不受影响。"
+          deleteLabel="恢复出厂版本"
+          onDelete={() => { void restore(); }}
+          onClose={() => setConfirming(false)}
+        />
+      ) : null}
     </>
   );
 }
-
 function ToolsView({ surface, error, loading }: { surface: AgentSurface | null; error: string | null; loading: boolean }): ReactElement {
   if (loading && !surface) return <p className="field-note">正在读取工具清单…</p>;
   if (error) return <p className="field-note">{error}</p>;

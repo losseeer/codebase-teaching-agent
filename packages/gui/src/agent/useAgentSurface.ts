@@ -4,10 +4,12 @@ import type { AgentScope, AgentSurface, PracticeOperation } from "@codebase-tuto
 import { api } from "../api/client";
 
 /** 只读能力面：技能与工具清单；弹窗打开或当前操作变化时取一次。 */
-export function useAgentSurface(repositoryId: string | null, scope: AgentScope, operation?: PracticeOperation): { surface: AgentSurface | null; error: string | null; loading: boolean } {
+export function useAgentSurface(repositoryId: string | null, scope: AgentScope, operation?: PracticeOperation): { surface: AgentSurface | null; error: string | null; loading: boolean; reload: () => void } {
   const [surface, setSurface] = useState<AgentSurface | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(repositoryId));
+  /** 改了技能目录后要重新拉一次清单。 */
+  const [reloadTick, setReloadTick] = useState(0);
   useEffect(() => {
     if (!repositoryId) {
       setSurface(null);
@@ -28,6 +30,6 @@ export function useAgentSurface(repositoryId: string | null, scope: AgentScope, 
         setLoading(false);
       });
     return () => { live = false; };
-  }, [repositoryId, scope, operation]);
-  return { surface, error, loading };
+  }, [repositoryId, scope, operation, reloadTick]);
+  return { surface, error, loading, reload: () => setReloadTick((value) => value + 1) };
 }

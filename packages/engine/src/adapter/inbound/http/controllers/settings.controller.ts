@@ -2,6 +2,7 @@ import { LLM_PROVIDERS, THINKING_EFFORTS } from "../../../outbound/llm/runtime.j
 import { TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../../outbound/llm/provider.js";
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../../../application/use-case/settings.js";
+import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -32,6 +33,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const result = updateLlmSettingsUseCase(request.body ?? {});
     return result.ok ? result.value : rejected(reply, result.failure);
   });
+
+  /** 恢复出厂技能：覆盖用户技能目录里出厂技能的副本（用户自建技能不动，覆盖前先备份）。 */
+  app.post("/api/skills/restore", async () => restoreSkillsUseCase());
 
   app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } }>("/api/repositories/:repositoryId/cost", async (request, reply) => {
     const result = readCostUseCase(request.params.repositoryId, request.query.sessionId);

@@ -1,5 +1,5 @@
 import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../adapter/outbound/integrations/clients.js";
-import { listSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
+import { listSkills, restoreBundledSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
 
 /** 只读能力面的静态读数：技能清单与 MCP 是否配置；不连 server、不发模型。 */
 export function staticIntegrationsUseCase() {
@@ -25,4 +25,12 @@ export async function externalSurfaceUseCase() {
     tools: (surface?.tools ?? []).map((tool) => tool.name),
     errors: surface?.errors ?? []
   };
+}
+
+/**
+  恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。
+  用户自建的技能不动；被覆盖的目录会先备份，返回值里给出备份位置。
+*/
+export function restoreSkillsUseCase(): { restored: string[]; backupDirs: string[]; files: number } {
+  return restoreBundledSkills();
 }

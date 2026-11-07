@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 /**
@@ -86,6 +86,56 @@ export function installBundledSkills(input?: { sourceDir?: string; targetDir?: s
 }
 
 /** 取 frontmatter（开头两条 `---` 之间）的单层 `key: value`；其余形状当没写。 */
+/**
+  恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。
+  - 只动出厂技能同名目录；用户自建的技能（出厂没有的）不碰；
+  - 用户在出厂技能里多放的文件保留（覆盖只针对出厂也有的那些文件）；
+  - 覆盖前把被动的技能目录备份到 `<目录>.bak-<时间戳>/`。
+  出厂技能本身只读，永不被这个流程写入。
+*/
+export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: string }): { restored: string[]; backupDirs: string[]; files: number } {
+  const target = input?.targetDir ?? skillDirectories()[0];
+  const source = input?.sourceDir ?? bundledSkillSource();
+  if (!source) return { restored: [], backupDirs: [], files: 0 };
+  const load = listSkills([source]);
+  mkdirSync(target, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const restored: string[] = [];
+  let files = 0;
+  const backupDirs: string[] = [];
+  for (const skill of load.skills) {
+    const from = join(source, skill.name);
+    const to = join(target, skill.name);
+    if (!existsSync(to)) {
+      cpSync(from, to, { recursive: true });
+      restored.push(skill.name);
+      continue;
+    }
+    const backup = `${to}.bak-${stamp}`;
+    cpSync(to, backup, { recursive: true });
+    backupDirs.push(backup);
+    for (const name of filesUnder(from)) {
+      const targetFile = join(to, name);
+      mkdirSync(dirname(targetFile), { recursive: true });
+      cpSync(join(from, name), targetFile);
+      files += 1;
+    }
+    restored.push(skill.name);
+  }
+  return { restored, backupDirs, files };
+}
+
+/** 目录下所有文件的相对路径。 */
+function filesUnder(root: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    if (statSync(path).isDirectory()) out.push(...filesUnder(path, `${prefix}${name}/`));
+    else out.push(`${prefix}${name}`);
+  }
+  return out;
+}
+
 function frontmatter(text: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!match) return {};
