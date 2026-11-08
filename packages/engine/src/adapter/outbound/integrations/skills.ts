@@ -85,7 +85,6 @@ export function installBundledSkills(input?: { sourceDir?: string; targetDir?: s
   return seed;
 }
 
-/** 取 frontmatter（开头两条 `---` 之间）的单层 `key: value`；其余形状当没写。 */
 /**
   恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。
   - 只动出厂技能同名目录；用户自建的技能（出厂没有的）不碰；
@@ -182,6 +181,7 @@ function filesUnder(root: string, prefix = ""): string[] {
   return out;
 }
 
+/** 取 frontmatter（开头两条 `---` 之间）的单层 `key: value`；其余形状当没写。 */
 function frontmatter(text: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!match) return {};
