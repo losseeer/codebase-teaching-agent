@@ -133,10 +133,7 @@ export function judgeThemeLandings(input: JudgeInput): JudgeResult {
         pointIds: hitIds,
         landings: top,
         remaining,
-        // 补足到 5 条时也要去重：listed 本身已包含 enabled 里除命中外的条目，直接 concat 会重复。
-        listedPoints: listed.length >= 5
-          ? listed
-          : listed.concat(enabled.filter((point) => !listed.some((item) => item.id === point.id))).slice(0, 10),
+        listedPoints: listed,
         greyHits
       }
     };
