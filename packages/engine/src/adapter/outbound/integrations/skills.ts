@@ -156,6 +156,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
     const to = join(target, skill.name);
     if (!existsSync(to)) {
       cpSync(from, to, { recursive: true });
+      files += filesUnder(from).length;
       restored.push(skill.name);
       continue;
     }
