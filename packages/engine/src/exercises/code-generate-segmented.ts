@@ -177,6 +177,7 @@ function parsePlan(parsed: Record<string, unknown>): PlanSegment {
     ? parsed.targets.map((item) => str(item, 200)).filter((item) => item.length > 0).slice(0, 3)
     : [];
   if (!title || !prompt || !language || !targets.length) throw new SegmentError("shape", "题面段缺 title / prompt / language / targets。");
+  if (!["typescript", "python", "java", "go"].includes(language)) throw new SegmentError("shape", `语言不在沙箱支持范围内：${language}`);
   const missing = PROMPT_SECTIONS.filter((section) => !prompt.includes(section));
   if (missing.length) throw new SegmentError("shape", `题面缺这几节：${missing.join("、")}——必须按「问题描述 / 示例 / 注意事项」三节写完整。`);
   return { title, prompt, defect: str(parsed.defect, 200), language, targets };
