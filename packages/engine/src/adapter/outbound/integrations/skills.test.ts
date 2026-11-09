@@ -50,6 +50,8 @@ describe("恢复出厂技能", () => {
     makeSource(source, "built-in");
     const result = restoreBundledSkills({ sourceDir: source, targetDir: target });
     expect(result.restored).toEqual(["built-in"]);
+    // 首次安装整目录复制也要计入文件数，与 diffBundledSkills 的预览口径一致（PR #14 回归）
+    expect(result.files).toBe(2);
     expect(readFileSync(join(target, "built-in", "SKILL.md"), "utf8")).toContain("出厂正文");
   });
 });

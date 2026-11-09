@@ -312,7 +312,7 @@ function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurfa
     setBusy(true);
     try {
       const result = await api.restoreSkills();
-      setNote(`已恢复 ${result.restored.length} 份出厂技能（覆盖 ${result.files} 个文件）。`);
+      setNote(`已恢复 ${result.restored.length} 份出厂技能（写入 ${result.files} 个文件）。`);
       onReload();
     } catch (reason: unknown) {
       setNote(reason instanceof Error ? reason.message : "恢复出厂技能失败");

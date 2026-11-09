@@ -292,7 +292,6 @@ export function listSkills(directories: string[] = skillDirectories()): SkillLoa
   return { skills: skills.slice(0, SKILL_MAX), skipped };
 }
 
-/** 按名字取一份技能的正文或目录内附属文件；取不到返回 `undefined`。 */
 /** 列出某个技能目录下的 Markdown 文件：read_skill 读错文件名时，把这份清单回给模型。 */
 export function listSkillFiles(name: string, directories: string[] = skillDirectories()): string[] {
   if (!validName(name)) return [];
@@ -308,6 +307,7 @@ export function listSkillFiles(name: string, directories: string[] = skillDirect
   return [];
 }
 
+/** 按名字取一份技能的正文或目录内附属文件；取不到返回 `undefined`。 */
 export function readSkill(name: string, file = "SKILL.md", directories: string[] = skillDirectories()): string | undefined {
   if (!validName(name)) return undefined;
   for (const directory of directories) {
