@@ -85,11 +85,11 @@ export const TEST_CONTRACT: Record<ExerciseLanguage, string> = {
 export function primaryLanguageOf(faces?: ExerciseFaces): ExerciseLanguage | undefined {
   const counts = new Map<string, number>();
   for (const entry of faces?.search?.entries ?? []) {
-    const ext = entry.path.slice(entry.path.lastIndexOf(".")).toLowerCase();
+    const ext = entry.path.slice(entry.path.lastIndexOf(".")).toLowerCase().replace(/^\.tsx$/, ".ts");
     counts.set(ext, (counts.get(ext) ?? 0) + 1);
   }
   const byExt: [string, ExerciseLanguage][] = [
-    [".java", "java"], [".go", "go"], [".py", "python"], [".ts", "typescript"], [".tsx", "typescript"]
+    [".java", "java"], [".go", "go"], [".py", "python"], [".ts", "typescript"]
   ];
   return byExt
     .map(([ext, language]) => ({ language, count: counts.get(ext) ?? 0 }))
