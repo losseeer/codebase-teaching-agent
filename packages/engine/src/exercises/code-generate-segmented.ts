@@ -169,7 +169,7 @@ const slots = (value: unknown): FileSlot[] | undefined => {
   return out;
 };
 
-function parsePlan(parsed: Record<string, unknown>): PlanSegment {
+export function parsePlan(parsed: Record<string, unknown>): PlanSegment {
   const title = str(parsed.title, MAX_TITLE);
   const prompt = str(parsed.prompt, MAX_PROMPT);
   const language = str(parsed.language, 20);

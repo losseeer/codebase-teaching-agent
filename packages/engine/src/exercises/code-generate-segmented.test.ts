@@ -1,7 +1,7 @@
 /** [DEV ONLY] 分段产出的形状校验、开关与「三段都必须带语言形状规范」这条硬要求。 */
 import { afterEach, describe, expect, it } from "vitest";
 import { TEST_CONTRACT } from "./code-generate.js";
-import { codeSystem, parseCode, promptSystem, segmentedExerciseEnabled, testsSystem } from "./code-generate-segmented.js";
+import { codeSystem, parseCode, parsePlan, promptSystem, segmentedExerciseEnabled, testsSystem } from "./code-generate-segmented.js";
 
 describe("分段产出的 system 必须带着该语言的测试形状", () => {
   it("三段都含 TEST_CONTRACT 的原文：缺了它模型会写裸 assert，判分拿不到结论行", () => {
@@ -56,5 +56,21 @@ describe("segmentedExerciseEnabled", () => {
     }
     process.env.TUTOR_EXERCISE_SEGMENTED = "1";
     expect(segmentedExerciseEnabled()).toBe(true);
+  });
+});
+
+describe("段 1 的语言白名单", () => {
+  const valid = {
+    title: "定稿题",
+    prompt: "## 问题描述\n…\n## 示例\n…\n## 注意事项\n…",
+    targets: ["src/A.java"]
+  };
+  it("四种沙箱语言放行，越界语言在段 1 就抛形状错（PR #15 回归）", () => {
+    for (const language of ["typescript", "python", "java", "go"]) {
+      expect(parsePlan({ ...valid, language }).language).toBe(language);
+    }
+    // 大小写不符、别名、误报都会让段 2/3 按退化提示词各烧一次付费调用，必须在段 1 拦下
+    expect(() => parsePlan({ ...valid, language: "TypeScript" })).toThrow(/语言不在沙箱支持范围内：TypeScript/);
+    expect(() => parsePlan({ ...valid, language: "c++" })).toThrow(/语言不在沙箱支持范围内/);
   });
 });
