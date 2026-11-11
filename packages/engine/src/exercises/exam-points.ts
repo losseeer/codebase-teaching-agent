@@ -1,13 +1,7 @@
 import type { SearchCorpus } from "../source/search-code.js";
 import { skillSection } from "./topic-tiers.js";
 
-/**
-  考点词表：从出厂技能 `exercise-code-concepts` 的附属文件解析 `id / concepts / probes`，
-  再用 `concepts.json` 把中文主题词展开成仓内符号/文本词，交给 probe 匹配器找落点。
-
-  与 `topic-tiers.ts` 的分工：那边只抽「考点原文」拼进 system prompt 给模型填 exam_point；
-  这边把同一张表的 id/concepts/probes 读出来给引擎做确定性判定。两边共用同一份表格，不另抄。
-*/
+/** 考点词表：解析出厂技能附表的 id/concepts/probes，与 topic-tiers.ts 共用一张表（模型填 id / 引擎做判定）。 */
 export type BodyOf = (name: string, file?: string) => string | undefined;
 
 const TOPIC_SKILL = "exercise-code-concepts";
@@ -74,12 +68,7 @@ export function parsePointTable(bodyOf: BodyOf): ExamPointDef[] {
   return out;
 }
 
-/**
-  概念词表。两种形状都吃：
-  - `{ "concepts": { "并发": [...] } }`（现行格式，带版本与说明）
-  - `{ "并发": [...] }`（顶层直接是概念表）
-  形状认不出来时返回空表——由调用方显式告警并跳过判定，不在这里静默当成「没有概念」。
-*/
+/** 概念词表：兼容 {concepts:{…}} 与顶层直接是概念表两种形状；认不出返回空表，由调用方显式告警。 */
 export function loadConceptTable(bodyOf: BodyOf): Record<string, string[]> {
   const raw = bodyOf(TOPIC_SKILL, "concepts.json");
   if (!raw) return {};
@@ -107,16 +96,12 @@ export function buildPointIndex(bodyOf: BodyOf): PointIndex {
     }
   }
   if (points.length && !Object.keys(concepts).length) {
-    // 有考点没有概念 = 主题判定必然全落空，这里显式喊出来，别让它悄悄退化成「永远拒绝」。
     console.warn("[exam-points] 考点表有 " + points.length + " 条，但 concepts.json 没解析出概念；主题判定会被跳过。检查 concepts.json 的形状（顶层是概念表，或包在 concepts 字段里）。");
   }
   return { points, concepts, byConcept };
 }
 
-/**
-  probe 组合：`&` 优先于 `;`，不支持嵌套。
-  返回 OR 组，每组内是 AND 项；`a & b; c & d` => [[a,b],[c,d]]。
-*/
+/** probe 组合：`&` 优先于 `;`、不支持嵌套；返回 OR 组，每组内是 AND 项。 */
 export function parseProbes(raw: string): string[][] {
   return raw.split(";")
     .map((group) => group.split("&").map((term) => term.trim()).filter(Boolean))
@@ -131,7 +116,7 @@ export function conceptsOfTheme(theme: string, table: Record<string, string[]>):
   for (const [concept, synonyms] of Object.entries(table)) {
     if (concept.toLowerCase() === needle || synonyms.some((word) => word.toLowerCase() === needle)) hits.add(concept);
   }
-  // 主题可能包含多个词（「Java 特性」「线程 池」），逐个再扫一遍包含关系
+  // 多词主题再按包含关系扫一遍
   for (const [concept, synonyms] of Object.entries(table)) {
     if ([concept, ...synonyms].some((word) => word.length >= 3 && needle.includes(word.toLowerCase()))) hits.add(concept);
   }
@@ -164,7 +149,6 @@ export interface Landing {
 /** 行级结构信号：控制流 +3、多调用/赋值+调用 +2、孤立单行 -3，三项相加（可互相抵消）。 */
 export function signalOf(lines: string[], index: number): number {
   const near = lines.slice(Math.max(0, index - 3), index + 4).join(" ");
-  // 文档第 3.3 章：三项相加（附近有控制流 +3，多调用/赋值+调用 +2，孤立单行 -3）
   let score = /\b(if|for|while|try|catch|synchronized)\b/.test(near) ? 3 : 0;
   const line = lines[index] ?? "";
   const multiCall = (line.match(/\(/g)?.length ?? 0) >= 2 || (/=/.test(line) && /\w+\(/.test(line));
@@ -179,14 +163,12 @@ const RUNNABLE = /^(sym|mod|text):/;
 interface TermHit { hit: boolean; line?: number; symbol?: string; lines?: string[] }
 
 function matchTerm(term: string, entry: SearchCorpus["entries"][number], text: string | undefined): TermHit {
-  // call:/op: 第一版只描述：在含可运行项的 AND 组里视为中性，不阻断判定；
-  // 整组都是描述项时由 matchPoint 直接跳过，避免所有条目无条件命中。
+  // call:/op: 第一版只描述：AND 组内中性，整组描述项则跳过，避免无条件命中。
   if (!RUNNABLE.test(term)) return { hit: true };
   const kind = term.slice(0, term.indexOf(":"));
   const needle = term.slice(term.indexOf(":") + 1);
   if (kind === "sym") {
     const lower = needle.toLowerCase();
-    // sym:<Type>[:<method>]：精确匹配符号名，方法名单独匹配，不用前缀（避免 sym:Integer 命中 IntegerCache）。
     const method = lower.includes(":") ? lower.slice(lower.indexOf(":") + 1) : undefined;
     const type = method ? lower.slice(0, lower.indexOf(":")) : lower;
     const symbol = entry.symbols.find((name) => name.toLowerCase() === type)

@@ -22,12 +22,11 @@ export const importJobSchema = z.object({
 });
 export type ImportJob = z.infer<typeof importJobSchema>;
 
-/** 新鲜度判定（只报告，不触发重分析）：stale = 内容与 versionStamp 不一致；drifted = HEAD 变了但内容哈希没变；unknown = 产物没记 HEAD。 */
+/** 新鲜度判定（只报告不重分析）：stale 内容不符、drifted HEAD 变而哈希没变、unknown 无 HEAD。 */
 export const repositoryFreshnessVerdictSchema = z.enum(["fresh", "drifted", "stale", "unknown"]);
 
 export const repositoryFreshnessSchema = z.object({
   verdict: repositoryFreshnessVerdictSchema,
-  /** 产物生成时间 */
   analyzedAt: z.string(),
   versionStamp: z.string(),
   contentChanged: z.boolean(),
@@ -41,7 +40,6 @@ export type RepositoryFreshness = z.infer<typeof repositoryFreshnessSchema>;
 export const repositoryCatalogEntrySchema = z.object({
   repositoryId: z.string(),
   repositoryPath: z.string(),
-  /** 目录名，界面显示用 */
   name: z.string(),
   mounted: z.boolean(),
   /** 目录是否还在；不存在时条目保留并如实标注 */
@@ -135,11 +133,11 @@ export type CostDay = z.infer<typeof costDaySchema>;
 
 export const costSummarySchema = z.object({
   sessionId: z.string().optional(),
-  /** 输入总用量（含命中那部分，与 provider 的 prompt_tokens 同口径） */
+  /** 输入总用量（含命中部分，同 prompt_tokens 口径） */
   inputTokens: z.number(),
-  /** 按未命中价计费的那部分输入 = inputTokens − cacheHitTokens（逐条相减后求和，不为负） */
+  /** 未命中价计费的输入 = inputTokens − cacheHitTokens（逐条相减求和） */
   billedInputTokens: z.number(),
-  /** 命中前缀缓存、按命中价计费的那部分输入；provider 没上报时为 0 */
+  /** 命中缓存的输入；provider 未上报为 0 */
   cacheHitTokens: z.number(),
   outputTokens: z.number(),
   estimatedCostUsd: z.number(),
@@ -150,7 +148,7 @@ export const costSummarySchema = z.object({
   turns: z.number(),
   /** 三档计费的逐项明细；estimatedCostUsd 就是这三项之和 */
   costComponents: z.array(costComponentSchema),
-  /** 三档单价全未配置时为 false：金额恒 0，预算闸门不生效。判据在 engine cost/cost.ts。 */
+  /** 三档单价全未配置时金额恒 0、闸门不生效（判据见 cost.ts） */
   pricingConfigured: z.boolean(),
   /** 因预算已达上限而走本地规则（不付 token）的回合数 */
   degradedTurns: z.number(),
@@ -176,7 +174,7 @@ export const teachingProgressSchema = z.discriminatedUnion("stage", [
 ]);
 export type TeachingProgress = z.infer<typeof teachingProgressSchema>;
 
-/** 工作区对话流的帧词表唯一登记处：新帧类必须先加在这里，两侧各有编译期穷尽守卫；done 载荷不在内。 */
+/** 对话流帧词表的唯一登记处：新帧类先加这里，两侧有编译期穷尽守卫。 */
 export const scopedStreamProgressSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thinking") }),
   z.object({ type: z.literal("reading"), path: z.string() }),
@@ -196,14 +194,14 @@ export type ScopedStreamFrame =
   | { type: "aborted"; scene: TurnScene }
   | { type: "done"; [key: string]: unknown };
 
-/** 全局广播事件；repository.updated = 产物变化，diagram_updated = 图库或当前图变化，几何拖动不广播。 */
+/** 全局广播事件：产物变化发 repository.updated，图变化发 diagram_updated；几何拖动不广播。 */
 export const serverEventSchema = z.object({
   type: z.enum(["import.progress", "repository.updated", "diagram_updated", "exercise.progress", "agent.trace"]),
   payload: z.record(z.string(), z.unknown())
 });
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 
-/** 运行轨迹的一帧：行为与读数；模型回复只留截断正文，工具返回原文不记。 */
+/** 运行轨迹一帧：模型回复留截断正文，工具返回不记原文。 */
 export const agentTracePayloadSchema = z.object({
   repositoryId: z.string(),
   runId: z.string(),
@@ -258,7 +256,7 @@ export const agentSurfaceSchema = z.object({
 });
 export type AgentSurface = z.infer<typeof agentSurfaceSchema>;
 
-/** 历史回放：journal 按 traceId 汇总出的一回合；步骤只还原审计线记下的部分。 */
+/** 历史回放：按 traceId 汇总的一回合，只还原审计线记下的步骤。 */
 export const traceHistoryRunSchema = z.object({
   runId: z.string(),
   scene: z.string(),

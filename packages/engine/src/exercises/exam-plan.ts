@@ -3,9 +3,7 @@ import {
 } from "./exam-points.js";
 
 /**
-  出题前的主题落点判定（方案 v8 第 3 章）。
-  三级回退：启用条目命中 -> 概念 kw 直检 -> 零落点拒绝。
-  灰区命中只记诊断，既不能救一个主题，也不能进推荐清单。
+  主题落点判定（v8）：启用条目命中 → 概念 kw 直检 → 零落点拒绝；灰区只记诊断。
 */
 export interface PointTiers {
   /** 抽检判为启用的条目 id；省略表示全部启用。 */
@@ -82,12 +80,7 @@ function topPointsByLandings(points: ExamPointDef[], ctx: LandingContext, limit:
     .map((entry) => entry.point);
 }
 
-/**
-  主题文件集合：词法命中为空时用落点路径兜底。
-  中文主题在英文标识符的仓里词法命中 0 是常态，不等于「没落点」——
-  落点判定（judgeThemeLandings）已经用概念同义词 + probe 找过一遍，它说有就是有，
-  否则两道门打架：判定说有，词法说没有，出不了题。
-*/
+/** 词法命中为空时用落点路径兜底：中文主题在英文标识符仓里词法命中 0 是常态，不等于没落点。 */
 export function themeWithLandings(theme: Set<string> | undefined, plan: ExamPlan | undefined): Set<string> | undefined {
   if (!theme || theme.size || !plan?.landings.length) return theme;
   const merged = new Set(theme);
@@ -109,7 +102,6 @@ export function judgeThemeLandings(input: JudgeInput): JudgeResult {
   const { theme, index, ctx, tiers } = input;
   const concepts = conceptsOfTheme(theme, index.concepts);
 
-  // 第 1 级：概念命中的技能条目里，只跑启用档；灰区另记诊断。
   const matched = [...new Map((concepts.flatMap((concept) => index.byConcept.get(concept) ?? [])).map((point) => [point.id, point])).values()];
   const enabled = matched.filter((point) => tierOf(point.id, tiers) === "enabled");
   const grey = matched.filter((point) => tierOf(point.id, tiers) === "grey");
@@ -139,7 +131,6 @@ export function judgeThemeLandings(input: JudgeInput): JudgeResult {
     };
   }
 
-  // 第 2 级：主题未命中词表（或只命中灰区），用概念同义词直接 sym:/text: 检索。
   const kw = concepts.flatMap((concept) => kwLandings(concept, index.concepts, ctx));
   if (kw.length) {
     const { top, remaining } = ranked(kw);
@@ -157,7 +148,6 @@ export function judgeThemeLandings(input: JudgeInput): JudgeResult {
     };
   }
 
-  // 第 3 级：拒绝。灰区命中不参与「有落点」的肯定证据。
   const suggestions = [...new Set(index.points
     .filter((point) => tierOf(point.id, tiers) === "enabled")
     .flatMap((point) => point.concepts))]

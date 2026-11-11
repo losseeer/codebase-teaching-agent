@@ -1,19 +1,6 @@
 import type { SymbolInfo } from "./dependency-graph.js";
 
-/**
-  ==== 静态产物层（facts）====
-
-  依赖图回答「谁指向谁」，这一层回答单个函数内部的事：控制流、数据流、类型关系、注册与配置。
-  它们与图同源（都出自同一份语法树），但形状完全不同，所以单独存一张按文件分片的表，
-  既不写进 `analysis_json`（那是最重的一列），也不参与任何缓存键与 `backendStamp`——
-  否则加一类产物就把已导入的仓全部翻键重算（红线探针 `pnpm arch:keyprobe` 钉这条）。
-
-  三条口径，破了就等于这份产物在说谎：
-  1. `backend: "none"` 与「这个文件真没有分支」是两件事，必须分开。语法树没就绪、或这个构造
-     引擎还没写规则，都落到 `skipped` 里点名，不许静默交一张空图。
-  2. 超大函数按 `truncated` 留痕，不悄悄砍。
-  3. 每类产物都要在语言能力表里有自己的一格，逐语言照实填——没有规则就填 `unsupported`。
-*/
+/** 静态产物层（facts）：函数内部控制流/数据流/类型关系/注册配置，按文件分片；不进 analysis_json 与缓存键，解析失败或截断必须留痕。 */
 export const FACT_KINDS = ["cfg", "dataflow", "typeRelations", "registry"] as const;
 
 export type FactKind = (typeof FACT_KINDS)[number];
@@ -115,14 +102,7 @@ export interface DataflowFileFact extends FactFileBase {
   skipped?: FactSkip[];
 }
 
-/**
-  类型之间「谁用到谁」的那一类边。与依赖图的 `dispatch`（implements/extends 的文件级边）分开放：
-  那边是为「让实现类接回执行流」服务的，只到文件为止；这里要的是类型名级别的全貌——
-  字段指向哪个类型、泛型实参是谁、方法返回什么、参数收什么。
-
-  落点（`toFile`）靠「类型名 → 声明了这个名字的文件」反查，与 `dispatch.supertypePath` 同一判据：
-  同名类型可能指错，所以每条边都带 `via` 说明它是怎么来的，反查不到就不写 `toFile`（不猜）。
-*/
+/** 类型间「谁用到谁」的边，与 dispatch 分开；toFile 靠类型名反查、多解不猜，边带 via 说明判据。 */
 export type TypeRelationKind = "extends" | "implements" | "field" | "parameter" | "returns" | "generic-argument" | "alias";
 
 export interface TypeRelationEdge {
@@ -152,15 +132,7 @@ export interface TypeRelationFileFact extends FactFileBase {
   skipped?: FactSkip[];
 }
 
-/**
-  注册与配置索引：运行时才连上的那批关系。
-  依赖图看不见它们——`@Autowired private OrderService svc` 没有一行调用，
-  `app.use(router)` 的实参是个导入进来的对象，`META-INF/services` 更是纯文本清单。
-
-  配置文件只记键名，绝不记值。这份产物落在被学习仓自己的 `.tutor/` 里，跟着仓库走、
-  可被随仓删掉，但它仍是明文盘上文件：把 `spring.datasource.password=...` 抄进来，
-  等于自己新开一个泄露面。值里有意义的那部分（比如「有没有配数据源」）由键名本身就能说出来。
-*/
+/** 注册与配置索引：依赖图看不见的运行时关系；只记键名不记值，避免明文产物泄露配置值。 */
 export type RegistryKind = "route" | "route-consumer" | "di-binding" | "registration" | "config-key" | "manifest";
 
 export interface RegistryEntry {

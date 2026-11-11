@@ -3,11 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { maskSecrets } from "@codebase-tutor/domain";
 
-/**
-  技能加载：读 SKILL.md 的 YAML frontmatter，name ≤64 且等于目录名，description ≤1024。
-  清单每轮进上下文，正文与附属文件由 read_skill 按需取。
-  只读用户自己装的目录，不扫被学习仓。
-*/
+/** 技能加载：读用户目录 SKILL.md 的 frontmatter，清单进上下文、正文与附属文件按需取；不扫被学习仓。 */
 
 export interface SkillBrief {
   /** frontmatter 的 `name`（已验等于目录名）。 */
@@ -27,7 +23,7 @@ export interface SkillLoad {
 const SKILL_MAX = 12;
 /** `description` 超过 1024 字判为形状不合规，不裁短。 */
 const DESCRIPTION_MAX = 1024;
-/** 一次交回的字数上限，正文与 Markdown 等附属文件共用；超出截断并留声明。JSON 附属文件（概念词表等）豁免，见 readAttached。 */
+/** 正文与 Markdown 附属文件的字数上限；.json 豁免，见 readAttached。 */
 const PAYLOAD_CHARS = 12_000;
 /** 规格：≤64、以小写字母或数字开头结尾、中间允许连字符（连续连字符另外单独判）。 */
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -49,7 +45,6 @@ export function bundledSkillSource(): string | undefined {
         return statSync(candidate).isDirectory() ? candidate : undefined;
       }
     } catch {
-      // 这一层没有 package.json，继续往上找
     }
     directory = join(directory, "..");
   }
@@ -85,12 +80,7 @@ export function installBundledSkills(input?: { sourceDir?: string; targetDir?: s
   return seed;
 }
 
-/**
-  恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本。
-  - 只动出厂技能同名目录；用户自建的技能（出厂没有的）不碰；
-  - 用户在出厂技能里多放的文件保留（覆盖只针对出厂也有的那些文件）；
-  出厂技能本身只读，永不被这个流程写入。
-*/
+/** 恢复出厂技能：逐文件覆盖同名目录，用户自建技能与多出的文件不动；出厂技能本身只读。 */
 /** 一份出厂技能与用户目录的差异。 */
 export interface SkillDiffEntry {
   skill: string;
@@ -108,10 +98,7 @@ export interface SkillDiff {
   files: number;
 }
 
-/**
-  出厂技能与用户目录的差异（只读，不写盘）。
-  供 CLI 报告与界面提示用；实际覆盖走 restoreBundledSkills。
-*/
+/** 只读预览出厂技能与用户目录的差异，供 CLI/界面报告；实际覆盖走 restoreBundledSkills。 */
 export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillDiff {
   const target = input?.targetDir ?? skillDirectories()[0];
   const source = input?.sourceDir ?? bundledSkillSource();
@@ -232,7 +219,6 @@ function readAttached(skillRoot: string, file: string): string | undefined {
     if (!statSync(real).isFile()) return undefined;
     const text = readFileSync(real, "utf8");
     if (text.includes("\0")) return undefined;
-    // JSON 是结构化数据（概念词表、档位表），截断必坏——不参与正文的那种字数上限。
     if (file.endsWith(".json")) return mask(text);
     return mask(clip(text, "附属文件"));
   } catch {
@@ -256,7 +242,7 @@ function scan(directory: string, taken: Set<string>): { skills: SkillBrief[]; sk
     return { skills, skipped };
   }
   for (const dir of entries.sort()) {
-    // 恢复出厂/同步留下的备份目录不是技能：静默跳过，不当候选也不进 skipped 噪音。
+    // 备份目录不是技能，跳过
     if (dir.includes(".bak-")) continue;
     if (taken.size >= SKILL_MAX) { skipped.push({ dir, reason: `清单已满 ${SKILL_MAX} 份` }); continue; }
     if (taken.has(dir)) { skipped.push({ dir, reason: "同名技能已在更靠前的目录里装过" }); continue; }
@@ -333,8 +319,6 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
 /** 上下文里那段技能清单，附「先调 `read_skill` 取正文」。 */
 export function skillsBriefing(skills: SkillBrief[]): string {
   if (!skills.length) return "";
-  // 把附属文件也列出来：不列的话模型只能猜文件名（曾经猜 java.md / checklist.md，
-  // 实际目录里是 cn.md / ds.md / backend.md / os.md，白调两次工具）。
   const lines = skills.map((skill) => {
     const attached = listSkillFiles(skill.name).filter((file) => file !== "SKILL.md");
     return `- ${skill.name}：${skill.description}${attached.length ? `（附属：${attached.join(" / ")}）` : ""}`;

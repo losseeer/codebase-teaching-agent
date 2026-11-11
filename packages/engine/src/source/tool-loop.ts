@@ -28,8 +28,7 @@ import {
 } from "./tools/types.js";
 
 /**
-  上限是工具轮数与累计成功的读取数；用尽时回绝未应答的 tool_call，再做一轮不带工具的收尾。
-  messages[0] 恒为首轮 user 消息。
+  工具循环：轮数与成功读取数用尽时回绝未应答的 tool_call，再走一轮无工具收尾；messages[0] 恒为首轮 user。
 */
 
 export interface ReadToolLoopInput {
@@ -199,7 +198,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     ...(input.onProgress ? { onProgress: input.onProgress } : {})
   };
   const registry = registryFor(baseContext);
-  // 暴露面每回合只算一次，中途不变。
   const exposure = exposeTools(registry, baseContext);
   const system = `${input.system}${toolIndexBrief(exposure)}`;
   const tools = exposure.always.map(toLlmTool);
@@ -220,7 +218,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     return undefined;
   };
   const collect = (outcome: ToolOutcome): void => {
-    // 审计行可能整趟结束后才落盘，带上真实发生时刻。
+    // 带真实发生时刻，审计行可能整趟结束才落盘
     const occurredAt = new Date().toISOString();
     for (const read of outcome.audits?.fileReads ?? []) {
       fileReads.push({ ...read, occurredAt: read.occurredAt ?? occurredAt });
@@ -298,7 +296,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
 
     if (input.signal?.aborted) throw new LlmAbortedError();
     const budgetStop = input.budgetGuard?.();
-    // 没有文件面时不占读文件额度
     const fileQuotaSpent = Boolean(input.repoPath) && succeededReads >= maxCalls;
     const roundsSpent = input.interruptAtLimit ? attemptRounds >= maxRounds : rounds >= maxRounds;
 
@@ -339,9 +336,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       collect(outcome);
       if (outcome.askRefused) askRefused = outcome.askRefused;
       if (outcome.stop?.reason === "await_user") {
-        // 这条调用不回灌 tool_result，等认领。
         asked = { ...outcome.stop.asked, toolCallId: call.id };
-        // 每条 tool_call 都要有配对的 tool 消息。
         const answered = new Set(messages.filter((message) => message.role === "tool").map((message) => message.toolCallId));
         for (const sibling of completion.toolCalls) {
           if (sibling.id !== call.id && !answered.has(sibling.id)) messages.push({ role: "tool", toolCallId: sibling.id, content: "本轮改为先向用户问一句，这一条没有执行。" });
@@ -351,7 +346,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
       messages.push({ role: "tool", toolCallId: call.id, content: outcome.text });
     }
     if (asked) break;
-    // 进度条只加文字，不改消息结构。
     const newPaths = [...new Set(fileReads.filter((read) => !filesBefore.has(read.path)).map((read) => read.path))];
     const brief = input.budgetBrief?.({
       round: rounds,
@@ -382,7 +376,6 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
   } catch (error) {
     attachToolLoopAudits(error, audits());
     if (isLlmAborted(error)) {
-      // 主动停止的回合不续跑。
       input.checkpoint?.clear();
     } else {
       input.checkpoint?.save(inputHash, snapshot(), "error");
@@ -424,7 +417,6 @@ export function compactTurnContext(messages: LlmMessage[], options: { keepToolRe
   const foldBoundary = roundStarts[Math.max(0, roundStarts.length - keepRounds)];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    // 最近一次 assistant 的 reasoning 要原样回传给 provider。
     if (message.role === "assistant" && index !== newestRound) message.reasoningContent = undefined;
     if (options.keepToolResults || index >= foldBoundary) continue;
     if (message.role === "tool" && message.content.length > MASK_HEAD_CHARS) {
