@@ -644,9 +644,6 @@ export async function finishProposal(
   const normalized = normalizeProposal({ ...parsed, kind: context.kind, ...(context.language ? { language: context.language } : {}) });
   if (!normalized.proposal) return { ok: false, stage: "proposal_shape", reason: normalized.issue ?? "出题结果形状不合法。", runs: [], ...audits };
   const proposal = normalized.proposal;
-  if (context.language && proposal.language !== context.language) {
-    return { ok: false, stage: "proposal_shape", reason: `模型报的语言（${proposal.language}）与目标单元（${context.language}）不一致。`, runs: [], ...audits };
-  }
   if (proposal.kind === "patch_edit" && context.solutionBody && !solutionMatchesSource(proposal, context.solutionBody)) {
     return { ok: false, stage: "proposal_shape", reason: "参考实现与仓库里那段代码对不上。", runs: [], ...audits };
   }
