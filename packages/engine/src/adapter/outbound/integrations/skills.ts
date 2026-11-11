@@ -27,7 +27,7 @@ export interface SkillLoad {
 const SKILL_MAX = 12;
 /** `description` 超过 1024 字判为形状不合规，不裁短。 */
 const DESCRIPTION_MAX = 1024;
-/** 一次交回的字数上限，正文与附属文件共用；超出截断并留声明。 */
+/** 一次交回的字数上限，正文与 Markdown 等附属文件共用；超出截断并留声明。JSON 附属文件（概念词表等）豁免，见 readAttached。 */
 const PAYLOAD_CHARS = 12_000;
 /** 规格：≤64、以小写字母或数字开头结尾、中间允许连字符（连续连字符另外单独判）。 */
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;

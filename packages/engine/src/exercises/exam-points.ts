@@ -161,7 +161,7 @@ export interface Landing {
   signal: number;
 }
 
-/** 行级结构信号：附近有控制流加分，孤立单行调用/赋值减分（两者互斥，不互相抵消）。 */
+/** 行级结构信号：控制流 +3、多调用/赋值+调用 +2、孤立单行 -3，三项相加（可互相抵消）。 */
 export function signalOf(lines: string[], index: number): number {
   const near = lines.slice(Math.max(0, index - 3), index + 4).join(" ");
   // 文档第 3.3 章：三项相加（附近有控制流 +3，多调用/赋值+调用 +2，孤立单行 -3）

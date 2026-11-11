@@ -108,6 +108,22 @@ describe("仓库主语言", () => {
     expect(primaryLanguageOf(faces)).toBe("java");
     expect(primaryLanguageOf(undefined)).toBeUndefined();
   });
+
+  it("同一语言的扩展名合并计票：.ts + .tsx 合计胜过单一扩展名的其他语言（PR #16 回归）", () => {
+    const faces = {
+      search: {
+        entries: [
+          { path: "a.ts" }, { path: "b.ts" }, { path: "c.ts" },
+          { path: "d.tsx" }, { path: "e.tsx" }, { path: "f.tsx" },
+          { path: "g.py" }, { path: "h.py" }, { path: "i.py" }, { path: "j.py" }
+        ]
+      }
+    } as unknown as Parameters<typeof primaryLanguageOf>[0];
+    expect(primaryLanguageOf(faces)).toBe("typescript");
+    // 纯 .tsx 仓库也要能认出 typescript
+    const tsxOnly = { search: { entries: [{ path: "A.tsx" }, { path: "B.tsx" }] } } as unknown as Parameters<typeof primaryLanguageOf>[0];
+    expect(primaryLanguageOf(tsxOnly)).toBe("typescript");
+  });
 });
 
 describe("prompt 的语言与题面约束", () => {

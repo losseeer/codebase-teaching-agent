@@ -24,7 +24,7 @@ export interface ExamPlan {
   landings: Landing[];
   /** 排序后没进前 20 的数量，给模型/抽检看。 */
   remaining: number;
-  /** 段 1 的推荐考点清单（第 1 级 5-10 条，第 2 级 8 条）。 */
+  /** 段 1 的推荐考点清单（第 1 级按命中优先最多 10 条，第 2 级 8 条）。 */
   listedPoints: ExamPointDef[];
   /** 灰区命中（只诊断）。 */
   greyHits: string[];
