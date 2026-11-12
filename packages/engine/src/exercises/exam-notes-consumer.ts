@@ -53,7 +53,6 @@ export class ExamNotesBudget {
       if (!item.related) this.droppedByPointMatch[this.ctx.theme] = (this.droppedByPointMatch[this.ctx.theme] ?? 0) + 1;
     }
     const kept = scored.filter((item) => item.related && item.score >= USER_THRESHOLD);
-    this.droppedByThreshold += scored.filter((item) => item.related && item.score < USER_THRESHOLD).length;
     return kept.sort((left, right) => right.score - left.score).slice(0, MAX_USER_NOTES).map((item) => item.note);
   }
 
@@ -62,7 +61,6 @@ export class ExamNotesBudget {
     if (this.annotated.has(path) || this.readShown >= MAX_READ_NOTES_PER_TRIP) return [];
     const notes = this.ctx.store.files[path]?.points ?? [];
     const related = notes.filter((note) => this.ctx.plan.pointIds.includes(note.point));
-    // 第三指标的真实来源：相关笔记被 read_file 阈值 4 挡掉（段 1 阈值 3 侧数学上恒为 0）。
     this.droppedByThreshold += related.filter((note) => scoreNote(note, this.ctx) < READ_THRESHOLD).length;
     const kept = related
       .map((note) => ({ note, score: scoreNote(note, this.ctx) }))

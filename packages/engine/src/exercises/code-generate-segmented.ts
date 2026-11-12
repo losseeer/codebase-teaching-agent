@@ -310,8 +310,7 @@ export async function generateCodeExerciseSegmented(input: {
           ? state.newPaths.map((path) => notesBudget.renderReadNotes(notesBudget.forRead(path))).filter(Boolean)
           : [];
         return [progress, ...notes].filter(Boolean).join("\n");
-      },
-      ...(inner ? {} : {})
+      }
     };
     if (!inner) return scoped;
     const prefix = attempt > 1 ? `${segment}-${attempt}` : segment;

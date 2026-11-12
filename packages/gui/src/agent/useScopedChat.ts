@@ -237,9 +237,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (stoppedByUser(target)) {
       patchDebt(target, null);
       if (replayStarted) knownRowCount.current[target] += 2; // 该轮已落库，基准同步
-      pushMessage(target, "agent", replayStarted
-        ? "已停止生成"
-        : "已停止生成", "hint");
+      pushMessage(target, "agent", "已停止生成", "hint");
       return;
     }
     if (lostInTransit(reason)) {

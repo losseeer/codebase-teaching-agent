@@ -553,11 +553,11 @@ export function diagramInventoryFor(context: DiagramWriteContext, openDiagramId?
   if (!all.length) return "画布现场：这个仓库还没有图。要画就用 draw 一次提交完整节点、边与分组，不逐格提交。";
   const lines = all.map((item) => `- ${item.name}（${item.id}，${item.source === "agent" ? "agent 画的" : "用户建的"}，${item.nodes} 节点 / ${item.edges} 边 / ${item.versions} 版，最后改动 ${versionStamp(item.updatedAt)}）${item.id === openDiagramId ? " ← 画布上正打开的这张" : ""}`);
   const open = openDiagramId ? context.store.read(openDiagramId) : undefined;
-  const refs = open ? refIndexOf(context.index, context.analysis) : undefined;
+  const refs = refIndexOf(context.index, context.analysis);
   const detail = open
     ? `正打开的「${open.name}」图元清单：\n`
       + (open.body.nodes.length ? open.body.nodes.map((node) => {
-        if (node.kind !== "module" || !refs) return `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""} 便签`;
+        if (node.kind !== "module") return `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""} 便签`;
         const files = filesOfNode(node, refs);
         return `  · ${node.id} = ${node.label}${node.sub ? `（${node.sub}）` : ""} 指 ${node.ref}${files.length ? `（${files.length} 个文件）` : ""}`;
       }).join("\n") : "  ·（还没有节点）")
