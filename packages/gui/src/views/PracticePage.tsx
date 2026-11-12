@@ -106,6 +106,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const activeGeneration = useRef<{ jobId: string; controller: AbortController } | null>(null);
   const [error, setError] = useState("");
   const [generateReason, setGenerateReason] = useState<ExerciseDeclineCode | null>(null);
+  const [fallbackConfirm, setFallbackConfirm] = useState<string | null>(null);
   /** 出题失败后读到的成本读数：仅额度真到线时给出口。 */
   const [budgetTight, setBudgetTight] = useState(false);
   const [bank, setBank] = useState<ExerciseBankEntry[]>([]);
@@ -188,7 +189,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   };
 
   // 换一题 = 换目标或换 nonce，旧题留在题库里。
-  const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType): Promise<void> => {
+  const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType, themeFallback = false): Promise<void> => {
     // 一次只发一趟，连点不并发 POST
     if (loading) return;
     const token = ++generationToken.current;
@@ -223,7 +224,8 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         ...(theme ? { tag: theme.label, tagId: theme.id } : {}),
         ...(targetUnitId ? { targetUnitId } : {}),
         ...(variantNonce !== undefined ? { variantNonce } : {}),
-        jobId
+        jobId,
+        ...(themeFallback ? { themeFallback: true } : {})
       }, controller.signal);
       refreshBank();
       // 途中换了主题或题型：这题已经进题库，但不摆到当前这一栏
@@ -232,13 +234,14 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
       setAnswering(false);
       t.setPracticeUnit(next.title);
       t.setPracticeExercise(next);
-      showToast(`新练习 · ${exerciseKindLabel(next.kind)}`);
+      showToast(themeFallback ? `新练习 · ${exerciseKindLabel(next.kind)}（未经规则验证）` : `新练习 · ${exerciseKindLabel(next.kind)}`);
     } catch (reason) {
       if (token !== generationToken.current) return;
       setGenerateReason(reason instanceof ApiError && reason.code === "theme_not_found" ? "theme_not_found" : null);
       // no_theme_hits 时把引擎给的替代主题词亮出来：否则用户只会反复撞同一个被拒的主题
       const suggestions = reason instanceof ApiError && reason.suggestions?.length ? `（可试试这些主题：${reason.suggestions.join("、")}）` : "";
       setError(`${failureText("出题失败", reason)}${suggestions}`);
+      if (reason instanceof ApiError && reason.code === "theme_not_found") setFallbackConfirm(theme?.label ?? "");
       // 只读一次免费成本读数，额度真到线才给出口。
       api.getCost(repositoryId).then((cost) => setBudgetTight(cost.mode === "degraded")).catch(() => {  });
     } finally {
@@ -490,6 +493,16 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
               deleteLabel="删除这道题"
               onDelete={() => void removeExercise(pendingDelete)}
               onClose={() => setPendingDelete(null)}
+            />
+          ) : null}
+          {fallbackConfirm !== null ? (
+            <DangerDialog
+              title="没找到相关代码位置"
+              body={`没在仓库里找到与「${fallbackConfirm}」相关的代码位置（可能只是写法不同）。是否让模型自己读代码再试？`}
+              deleteLabel="读代码再试"
+              deleteHint="会花一次完整出题的模型调用；出的题会标注「未经规则验证」。"
+              onDelete={() => { setFallbackConfirm(null); void generate(undefined, undefined, undefined, true); }}
+              onClose={() => setFallbackConfirm(null)}
             />
           ) : null}
         </aside>

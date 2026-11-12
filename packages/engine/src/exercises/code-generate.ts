@@ -342,15 +342,22 @@ export function unitFaces(faces: ExerciseFaces): ExerciseFaces {
   };
 }
 
+const THEME_FALLBACK_RULES = [
+  '这一趟没有按预设写法在仓库里找到与主题相关的代码位置，可能只是写法不同。请自己用 search_code / read_file 确认仓库里有没有与主题相关的代码。',
+  '确认有：按那段代码出题，在 anchors 里点名取材文件与行号，并写清取用了什么。',
+  '确认没有：直接返回 {"ok":false,"reason":"<面向学习者的一句话>"}，不要按主题凑一道与仓库无关的题。'
+].join("\n");
+
 export async function requestProposal(input: { provider: LlmProvider; system: string; user: string; temperature: number; faces?: ExerciseFaces; onProgress?: ExerciseProgressSink }): Promise<ProposalResponse> {
   const loop = await completeWithReadTool({
     ...(input.faces ?? {}),
     provider: input.provider,
     scope: input.faces?.scope ?? "practice",
-    // 分段路径的段 1 已在 user 里下了详细清单，这里不重复；其余代码题路径靠 system 拿到落点概要。
-    system: input.faces?.examPlan && !input.user.includes('"examPoints"')
-      ? `${input.system}\n\n${examPlanBrief(input.faces.examPlan)}`
-      : input.system,
+    system: [
+      input.system,
+      input.faces?.examPlan && !input.user.includes('"examPoints"') ? examPlanBrief(input.faces.examPlan) : "",
+      input.faces?.themeFallback ? THEME_FALLBACK_RULES : ""
+    ].filter(Boolean).join("\n\n"),
     user: input.user,
     temperature: input.temperature,
     onProgress: forwardToolProgress(input.onProgress),

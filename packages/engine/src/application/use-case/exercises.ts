@@ -132,7 +132,7 @@ function recordAbortedGeneration(repository: ImportedRepository, tag: string, pr
 }
 
 /** 出题：题型决定链路（理解题/分析题/设计题），主题只筛目标；预算到线时 provider 为 undefined。 */
-export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number; jobId?: string }): Promise<ExerciseResult<Exercise>> {
+export async function nextExerciseUseCase(repositoryId: string, input: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: unknown; tagId?: string; variantNonce?: number; jobId?: string; themeFallback?: boolean }): Promise<ExerciseResult<Exercise>> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return { ok: false, failure: { kind: "repository-missing" } };
   const tag = typeof input.tag === "string" ? input.tag : "";
@@ -149,7 +149,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   const generation = beginGeneration(repositoryId, input.jobId);
   const startedAt = Date.now();
   try {
-    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce }, provider, provider ? exerciseFaces(repository, database, "generate", trace.onTrace, generation.signal) : undefined, progress));
+    const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce, themeFallback: input.themeFallback }, provider, provider ? exerciseFaces(repository, database, "generate", trace.onTrace, generation.signal) : undefined, progress));
     trace.finish(`题目「${value.title}」`, "ok");
     return { ok: true, value };
   } catch (error) {

@@ -166,17 +166,21 @@ export class ExerciseService {
   }
 
   /** 题型决定链路：理解题吃静态分析、分析题走 rubric、设计题进沙箱；主题只筛目标单元。 */
-  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number } = {}, provider?: LlmProvider, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
+  async next(repository: PracticeRepository, requested: { kind?: ExerciseKind; type?: ExerciseType; targetUnitId?: string; tag?: string; tagId?: string; variantNonce?: number; themeFallback?: boolean } = {}, provider?: LlmProvider, faces?: ExerciseFaces, progress?: ExerciseProgressSink): Promise<Exercise> {
     const tag = (requested.tag ?? "").trim();
     const kind = requested.kind ?? (requested.type === "analysis" || (!requested.type && tag) ? "llm_rubric" : undefined);
     // v8 主题落点判定：付费前、唯一入口，覆盖 llm_rubric / reference / unit 三条路径。
     if (tag && faces?.skills) {
       const judged = this.judgeTheme(repository, tag, faces);
       if (judged && !judged.ok) {
-        this.decline(repository, judged.rejection.stage, familyOf(kind ?? "impact_analysis"), tag,
-          judged.rejection.reason,
-          `未找到与「${tag}」相关的源码，请更换主题。`,
-          { suggestions: judged.rejection.suggestions.join("、") });
+        if (requested.themeFallback) {
+          if (faces) faces = { ...faces, themeFallback: true };
+        } else {
+          this.decline(repository, judged.rejection.stage, familyOf(kind ?? "impact_analysis"), tag,
+            judged.rejection.reason,
+            `未找到与「${tag}」相关的源码，请更换主题。`,
+            { suggestions: judged.rejection.suggestions.join("、") });
+        }
       }
       if (judged?.ok) {
         faces = { ...faces, examPlan: judged.plan };
@@ -424,16 +428,16 @@ export class ExerciseService {
     const hashOf = (path: string): string => repository.index.files.find((file) => file.path === path)?.contentHash ?? `repo:${repository.analysis.versionStamp}`;
     const deps = candidates.map((candidate) => ({ path: candidate.path, hash: hashOf(candidate.path) }));
     // 键不带单元，只认被当成参考的这批文件。
-    const scope = deps.length ? `${fileScope(deps, provider.modelVersion, runnerFingerprint())}#reference` : `reference#${repository.analysis.versionStamp}#${provider.modelVersion}`;
+    const scope = (deps.length ? `${fileScope(deps, provider.modelVersion, runnerFingerprint())}#reference` : `reference#${repository.analysis.versionStamp}#${provider.modelVersion}`) + (faces?.themeFallback ? "#fallback" : "");
     const cached = repository.ports.store.get<StoredExercise>(scope, kind, targetUnitId);
     if (cached) {
-      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, title: cached.exercise.title, tag, selection, strategy: "reference" });
+      repository.ports.audit.append("exercise_generated", { source: "cache", kind: cached.exercise.kind, target_unit: targetUnitId, title: cached.exercise.title, tag, selection, strategy: "reference", ...(faces?.themeFallback ? { degraded: true } : {}) });
       return cached.exercise;
     }
     const reference = candidates.map((candidate) => `## ${candidate.path}\n${candidate.excerpt}`).join("\n\n").slice(0, 24_000);
-    const generation = segmentedExerciseEnabled()
+    const generation = segmentedExerciseEnabled() && !faces?.themeFallback
       ? await this.generateSegmentedOrWhole({ repositoryPath: repository.path, tag, kind, reference, provider, faces, progress })
-      : await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces, onProgress: progress });
+      : await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag, kind, reference, provider, faces, onProgress: progress, ...(faces?.themeFallback ? { repair: { maxRetries: 0, retryShape: false } } : {}) });
     this.auditCodeGeneration(repository, generation, generation.ok ? generation.proposal.language : "unknown", provider);
     if (!generation.ok) {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
@@ -475,7 +479,7 @@ export class ExerciseService {
     };
     if (faces?.signal?.aborted) throw new Error("出题已取消");
     repository.ports.store.put(scope, proposal.kind, targetUnitId, stored);
-    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, title: exercise.title, tag, selection, strategy: "reference", polish: "llm", polish_failure: null });
+    repository.ports.audit.append("exercise_generated", { source: "code", kind: exercise.kind, target_unit: targetUnitId, title: exercise.title, tag, selection, strategy: "reference", polish: "llm", polish_failure: null, ...(faces?.themeFallback ? { degraded: true } : {}) });
     // 锚点的 why 只进 journal，一条一个。
     for (const anchor of accepted) {
       repository.ports.audit.append("exercise_anchor", {

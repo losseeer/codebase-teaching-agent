@@ -676,6 +676,17 @@ describe("v8 主题落点判定接线", () => {
     }, undefined, faces)).rejects.toMatchObject({ stage: "no_theme_hits" });
   });
 
+  it("用户确认降级后不拒在判定闸门：零落点主题仍进模型链路", async () => {
+    const repository = testRepository();
+    const faces: ExerciseFaces = {
+      repoPath: repository.path,
+      skills: { brief: "", bodyOf: bundledBody }
+    };
+    await expect(new ExerciseService().next(repository, {
+      tag: "一种完全不存在的主题xyz", kind: "llm_rubric", themeFallback: true
+    }, undefined, faces)).rejects.not.toMatchObject({ stage: "no_theme_hits" });
+  });
+
   it("技能没装/表没有 id 列时显式跳过判定，不把「判定不可用」当成「有落点」", async () => {
     const repository = testRepository();
     const faces: ExerciseFaces = {
