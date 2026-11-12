@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { diffBundledSkills, listSkillFiles, restoreBundledSkills } from "./skills.js";
+import { readSkillVersions } from "./skill-versions.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -39,6 +40,9 @@ describe("恢复出厂技能", () => {
     expect(readFileSync(join(target, "built-in", "extra.md"), "utf8")).toBe("出厂附属\n");
     expect(readFileSync(join(target, "built-in", "mine.md"), "utf8")).toBe("我自己加的\n");
     expect(readFileSync(join(target, "my-own", "SKILL.md"), "utf8")).toContain("我自己的");
+    const history = readSkillVersions(join(target, "built-in"));
+    expect(history[0]?.source).toBe("migration");
+    expect(history.at(-1)?.source).toBe("reset");
 
   });
 

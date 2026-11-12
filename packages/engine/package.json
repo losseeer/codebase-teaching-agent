@@ -35,7 +35,8 @@
     "experiment:segmented": "tsx dev/experiment/segmented-pilot.ts",
     "skills:sync": "tsx dev/skill/sync-skills.ts",
     "skills:check": "tsx dev/skill/check-skills.ts",
-    "skills:propose": "tsx dev/skill/propose.ts"
+    "skills:propose": "tsx dev/skill/propose.ts",
+    "skills:snapshot": "tsx dev/skill/snapshot.ts"
   },
   "dependencies": {
     "@codebase-tutor/analysis": "workspace:*",

@@ -4,6 +4,7 @@ import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 import { legacyStrategyOf } from "../../../exercises/exercise-strategy.js";
+import { appendVersion, ensureCurrentVersion } from "./skill-versions.js";
 import { DESCRIPTION_MAX, SKILL_NAME_PATTERN, parseFrontmatter } from "../../../exercises/skill-spec.js";
 
 /** 技能加载：读用户目录 SKILL.md 的 frontmatter，清单进上下文、正文与附属文件按需取；不扫被学习仓。 */
@@ -149,9 +150,11 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
     if (!existsSync(to)) {
       cpSync(from, to, { recursive: true });
       files += filesUnder(from).length;
+      appendVersion(to, { source: "migration", reason: "首次安装", check: { errors: 0, warnings: 0 } });
       restored.push(skill.name);
       continue;
     }
+    ensureCurrentVersion(to, { reason: "写入前记录当前状态" });
     for (const name of filesUnder(from)) {
       const targetFile = join(to, name);
       if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) {
@@ -169,6 +172,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
       cpSync(join(from, name), targetFile);
       files += 1;
     }
+    appendVersion(to, { source: "reset", reason: "恢复出厂技能", check: { errors: 0, warnings: 0 } });
     restored.push(skill.name);
   }
   return { restored, files };
@@ -178,6 +182,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
 function filesUnder(root: string, prefix = ""): string[] {
   const out: string[] = [];
   for (const name of readdirSync(root)) {
+    if (name === ".versions") continue;
     const path = join(root, name);
     if (statSync(path).isDirectory()) out.push(...filesUnder(path, `${prefix}${name}/`));
     else out.push(`${prefix}${name}`);

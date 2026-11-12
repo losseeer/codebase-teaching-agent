@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { skillDirectories } from "../../src/adapter/outbound/integrations/skills.js";
 import { checkSkillPackage } from "../../src/exercises/skill-check.js";
+import { appendVersion, ensureCurrentVersion } from "../../src/adapter/outbound/integrations/skill-versions.js";
 import { fileReaderAt } from "./read-at.js";
 
 const SKILL = "exercise-code-concepts";
@@ -49,9 +50,15 @@ if (!apply) {
   console.log("只读检查完成；加 --apply 写入用户目录（config.json 不覆盖）。");
   process.exit(0);
 }
+ensureCurrentVersion(target, { reason: "提议落地前的当前状态", check: { errors: check.errors.length, warnings: check.warnings.length } });
 for (const name of changed) {
   const path = join(target, name);
   mkdirSync(dirname(path), { recursive: true });
   cpSync(join(candidate, SKILL, name), path);
 }
-console.log(`已写入 ${changed.length} 个文件。`);
+const version = appendVersion(target, {
+  source: "agent-proposal",
+  reason: `候选包 ${candidate}`,
+  check: { errors: check.errors.length, warnings: check.warnings.length }
+});
+console.log(`已写入 ${changed.length} 个文件，记为 v${version.version}。`);
