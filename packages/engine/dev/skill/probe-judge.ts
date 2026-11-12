@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildDependencyGraph } from "@codebase-tutor/analysis";
+import { listCatalogUseCase } from "../../src/application/use-case/repositories.js";
 import { buildImplementationUnits } from "../../src/implementation/units.js";
 import { indexRepository } from "../../src/indexer/indexer.js";
 import { buildPointIndex } from "../../src/exercises/exam-points.js";
@@ -14,7 +15,12 @@ interface Result { theme: string; ok: boolean; sourceLevel?: number; concepts?: 
 
 const here = dirname(fileURLToPath(import.meta.url));
 const baselinePath = join(here, "themes.baseline.json");
-const repoPath = "/Users/dedsecczk/Dev/Xingyan-ShortLink-Platform";
+const catalog = listCatalogUseCase().repositories;
+const repoPath = (catalog.find((entry) => entry.mounted && entry.exists) ?? catalog.find((entry) => entry.exists))?.repositoryPath;
+if (!repoPath) {
+  console.error("没有可用的已导入仓库：先在界面导入一个仓库。");
+  process.exit(1);
+}
 const dir = "/Users/dedsecczk/.codebase-tutor/skills/exercise-code-concepts";
 const bodyOf = (name: string, file = "SKILL.md"): string | undefined => {
   try {

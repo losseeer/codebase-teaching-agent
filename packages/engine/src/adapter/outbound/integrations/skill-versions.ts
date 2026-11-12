@@ -44,10 +44,6 @@ function hashesOf(skillDir: string): Record<string, string> {
   return out;
 }
 
-export function fingerprintOf(skillDir: string): string {
-  return createHash("sha256").update(JSON.stringify(hashesOf(skillDir))).digest("hex").slice(0, 16);
-}
-
 export function readSkillVersions(skillDir: string): SkillVersion[] {
   const dir = join(skillDir, VERSIONS_DIR);
   if (!existsSync(dir)) return [];
