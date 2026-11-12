@@ -196,7 +196,16 @@ export class ExerciseService {
     if (kind === "llm_rubric") return await this.nextLlm(repository, { tag, tagId: requested.tagId, variantNonce: requested.variantNonce }, provider, faces, progress);
     // `type=design` 也要解析成代码题型，否则只传 type 的客户端进不了 reference 分支。
     const strategyKind = kind ?? (requested.type === "design" ? "patch_edit" : undefined);
-    const strategy = faces?.skills ? exerciseStrategyOf(faces.skills.bodyOf) : DEFAULT_EXERCISE_STRATEGY;
+    let strategy = DEFAULT_EXERCISE_STRATEGY;
+    if (faces?.skills) {
+      try {
+        strategy = exerciseStrategyOf(faces.skills.bodyOf);
+      } catch (error) {
+        this.decline(repository, "skill_config", familyOf(kind ?? "impact_analysis"), tag,
+          error instanceof Error ? error.message : "技能配置无效",
+          "技能配置无效：请检查技能目录的 config.json，或在设置里恢复出厂技能。");
+      }
+    }
     if (strategyKind && isCodeKind(strategyKind) && strategy === "reference") {
       return await this.nextReferenceCode(repository, { tag, tagId: requested.tagId, kind: strategyKind, variantNonce: requested.variantNonce }, provider, faces, progress);
     }

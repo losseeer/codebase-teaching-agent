@@ -2,7 +2,7 @@
 
 import { attachedFiles, buildPointIndex, type BodyOf } from "./exam-points.js";
 import { exerciseStrategyOf } from "./exercise-strategy.js";
-import { DESCRIPTION_MAX, SKILL_NAME_PATTERN, parseFrontmatter } from "./skill-spec.js";
+import { DESCRIPTION_MAX, PAYLOAD_CHARS, SKILL_NAME_PATTERN, parseFrontmatter } from "./skill-spec.js";
 import { skillSection, topicIndex } from "./topic-tiers.js";
 
 export interface SkillCheckResult {
@@ -78,6 +78,10 @@ export function checkSkillPackage(bodyOf: BodyOf): SkillCheckResult {
   }
 
   const lines = main.trimEnd().split("\n").length;
-  if (lines > MAIN_LINE_LIMIT) warnings.push(`SKILL.md ${lines} 行，超过 ${MAIN_LINE_LIMIT} 行上限`);
+  if (lines > MAIN_LINE_LIMIT) errors.push(`SKILL.md ${lines} 行，超过 ${MAIN_LINE_LIMIT} 行上限`);
+  for (const file of attached.filter((name) => name.endsWith(".md"))) {
+    const chars = (bodyOf(SKILL, file) ?? "").length;
+    if (chars > PAYLOAD_CHARS) errors.push(`${file} ${chars} 字符，超过 ${PAYLOAD_CHARS} 字符上限`);
+  }
   return { errors, warnings };
 }

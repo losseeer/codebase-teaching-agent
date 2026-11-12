@@ -1,6 +1,6 @@
 /** 技能版本链：写入前记录当前状态，写入后追加一版；记录只读，不参与提示词。 */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const VERSIONS_DIR = ".versions";
@@ -58,6 +58,13 @@ export function readSkillVersions(skillDir: string): SkillVersion[] {
       try {
         return [JSON.parse(readFileSync(join(dir, name), "utf8")) as SkillVersion];
       } catch {
+        const broken = `${join(dir, name)}.corrupt`;
+        try {
+          renameSync(join(dir, name), broken);
+        } catch {
+          return [];
+        }
+        console.warn(`[skill-versions] 版本文件损坏，已改名为 ${broken}`);
         return [];
       }
     });
@@ -69,23 +76,30 @@ function writeVersion(
   files: Record<string, string>,
   changed: string[]
 ): SkillVersion {
-  const existing = readSkillVersions(skillDir);
-  const version = (existing.at(-1)?.version ?? 0) + 1;
-  const full: SkillVersion = {
-    version,
-    parent: existing.at(-1)?.version ?? null,
-    source: record.source,
-    at: record.at,
-    reason: record.reason,
-    changed,
-    ...(record.check ? { check: record.check } : {}),
-    fingerprint: createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16),
-    files
-  };
   const dir = join(skillDir, VERSIONS_DIR);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `v${String(version).padStart(3, "0")}.json`), `${JSON.stringify(full, null, 2)}\n`, "utf8");
-  return full;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const existing = readSkillVersions(skillDir);
+    const version = (existing.at(-1)?.version ?? 0) + 1;
+    const full: SkillVersion = {
+      version,
+      parent: existing.at(-1)?.version ?? null,
+      source: record.source,
+      at: record.at,
+      reason: record.reason,
+      changed,
+      ...(record.check ? { check: record.check } : {}),
+      fingerprint: createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16),
+      files
+    };
+    try {
+      writeFileSync(join(dir, `v${String(version).padStart(3, "0")}.json`), `${JSON.stringify(full, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      return full;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt === 1) throw error;
+    }
+  }
+  throw new Error("版本号冲突：并发写入未取得唯一的版本号");
 }
 
 /** 写入前调用：链为空时记迁移首版（收进用户已有内容）；当前内容与最新版不同则记一版外部改动。 */

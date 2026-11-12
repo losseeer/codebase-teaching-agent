@@ -5,7 +5,7 @@ import { maskSecrets } from "@codebase-tutor/domain";
 
 import { legacyStrategyOf } from "../../../exercises/exercise-strategy.js";
 import { appendVersion, ensureCurrentVersion } from "./skill-versions.js";
-import { DESCRIPTION_MAX, SKILL_NAME_PATTERN, parseFrontmatter } from "../../../exercises/skill-spec.js";
+import { DESCRIPTION_MAX, PAYLOAD_CHARS, SKILL_NAME_PATTERN, parseFrontmatter } from "../../../exercises/skill-spec.js";
 
 /** 技能加载：读用户目录 SKILL.md 的 frontmatter，清单进上下文、正文与附属文件按需取；不扫被学习仓。 */
 
@@ -29,8 +29,7 @@ const SKILL_MAX = 12;
 /** 由用户维护、同步不覆盖的文件；重置技能时随出厂版本恢复。 */
 const USER_OWNED_FILES = new Set(["config.json"]);
 
-/** 正文与 Markdown 附属文件的字数上限；.json 豁免，见 readAttached。 */
-const PAYLOAD_CHARS = 12_000;
+
 
 
 /** 技能目录：`TUTOR_SKILLS_DIR`（`path.delimiter` 或 `,` 分隔多处）；没配就认家目录里那两处。 */
@@ -156,8 +155,12 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
     }
     const legacyStrategy = existsSync(join(to, "SKILL.md")) ? legacyStrategyOf(readFileSync(join(to, "SKILL.md"), "utf8")) : undefined;
     ensureCurrentVersion(to, { reason: "写入前记录当前状态" });
-    for (const name of filesUnder(from)) {
-      const targetFile = join(to, name);
+    const fromFiles = filesUnder(from);
+    const backup = new Map<string, Buffer>();
+    try {
+      for (const name of fromFiles) {
+        const targetFile = join(to, name);
+        if (existsSync(targetFile)) backup.set(targetFile, readFileSync(targetFile));
       if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) {
         if (existsSync(targetFile)) continue;
         mkdirSync(dirname(targetFile), { recursive: true });
@@ -167,9 +170,21 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
         files += 1;
         continue;
       }
-      mkdirSync(dirname(targetFile), { recursive: true });
-      cpSync(join(from, name), targetFile);
-      files += 1;
+        mkdirSync(dirname(targetFile), { recursive: true });
+        cpSync(join(from, name), targetFile);
+        files += 1;
+      }
+    } catch (error) {
+      const failed: string[] = [];
+      for (const [path, body] of backup) {
+        try {
+          writeFileSync(path, body);
+        } catch {
+          failed.push(path);
+        }
+      }
+      if (failed.length) console.error(`[skills] 回滚失败，以下文件未恢复：${failed.join("、")}`);
+      throw error;
     }
     appendVersion(to, { source: "reset", reason: "恢复出厂技能" });
     restored.push(skill.name);

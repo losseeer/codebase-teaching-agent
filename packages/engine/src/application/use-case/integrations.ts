@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../adapter/outbound/integrations/clients.js";
-import { listSkills, restoreBundledSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
+import { bundledSkillSource, listSkills, restoreBundledSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
+import { checkSkillPackage } from "../../exercises/skill-check.js";
 
 /** 只读能力面的静态读数：技能清单与 MCP 是否配置；不连 server、不发模型。 */
 export function staticIntegrationsUseCase() {
@@ -27,7 +31,18 @@ export async function externalSurfaceUseCase() {
   };
 }
 
-/** 恢复出厂技能：把用户技能目录里「出厂技能」的副本逐文件覆盖回出厂版本（含用户配置）。用户自建的技能不动。 */
-export function restoreSkillsUseCase(): { restored: string[]; files: number } {
+/** 恢复出厂技能：先校验出厂包，再把用户目录里的副本逐文件覆盖回出厂版本（含用户配置）。用户自建的技能不动。 */
+export function restoreSkillsUseCase(): { restored: string[]; files: number } | { error: string } {
+  const source = bundledSkillSource();
+  if (source) {
+    const check = checkSkillPackage((name, file = "SKILL.md") => {
+      try {
+        return readFileSync(join(source, name, file), "utf8");
+      } catch {
+        return undefined;
+      }
+    });
+    if (check.errors.length) return { error: `出厂技能结构校验失败：${check.errors.join("；")}` };
+  }
   return restoreBundledSkills({ includeUserOwned: true });
 }

@@ -1,5 +1,5 @@
 /** 技能变更提议：校验候选包并与用户目录比对；--apply 才写入，config.json 保持用户所有。 */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { skillDirectories } from "../../src/adapter/outbound/integrations/skills.js";
@@ -46,15 +46,19 @@ if (check.errors.length) {
 }
 
 const packageFiles = listFiles(join(candidate, SKILL));
+const currentFiles = listFiles(target).filter((name) => !name.startsWith(".versions/") && name !== "config.json");
 const changed = packageFiles.filter((name) => name !== "config.json" && read(join(candidate, SKILL, name)) !== read(join(target, name)));
+const removed = currentFiles.filter((name) => !packageFiles.includes(name));
 console.log(`包内文件：${packageFiles.join(" / ")}`);
 console.log(`待变更：${changed.length ? changed.join(" / ") : "无"}`);
-if (!changed.length) process.exit(0);
+console.log(`待删除：${removed.length ? removed.join(" / ") : "无"}`);
+if (!changed.length && !removed.length) process.exit(0);
 if (!apply) {
-  console.log("只读检查完成；加 --apply 写入用户目录（config.json 不覆盖）。");
+  console.log("只读检查完成；--apply 会写入待变更文件并删除待删除文件（config.json 不覆盖）。");
   process.exit(0);
 }
 ensureCurrentVersion(target, { reason: "提议落地前的当前状态", check: { errors: check.errors.length, warnings: check.warnings.length } });
+for (const name of removed) rmSync(join(target, name), { force: true });
 for (const name of changed) {
   const path = join(target, name);
   mkdirSync(dirname(path), { recursive: true });
@@ -65,4 +69,4 @@ const version = appendVersion(target, {
   reason: `候选包 ${candidate}`,
   check: { errors: check.errors.length, warnings: check.warnings.length }
 });
-console.log(`已写入 ${changed.length} 个文件，记为 v${version.version}。`);
+console.log(`已写入 ${changed.length} 个、删除 ${removed.length} 个文件，记为 v${version.version}。`);

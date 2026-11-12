@@ -35,7 +35,10 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   });
 
   /** 恢复出厂技能：覆盖用户技能目录里出厂技能的副本（用户自建技能不动）。 */
-  app.post("/api/skills/restore", async () => restoreSkillsUseCase());
+  app.post("/api/skills/restore", async (_request, reply) => {
+    const result = restoreSkillsUseCase();
+    return "error" in result ? reply.code(422).send({ error: result.error }) : reply.send(result);
+  });
 
   app.get<{ Params: { repositoryId: string }; Querystring: { sessionId?: string } }>("/api/repositories/:repositoryId/cost", async (request, reply) => {
     const result = readCostUseCase(request.params.repositoryId, request.query.sessionId);
