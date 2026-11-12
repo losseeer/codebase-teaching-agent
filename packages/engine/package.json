@@ -33,7 +33,8 @@
     "reanalyze": "tsx dev/mutate/reanalyze.ts",
     "l1:reburn": "tsx dev/mutate/reburn-l1.ts",
     "experiment:segmented": "tsx dev/experiment/segmented-pilot.ts",
-    "skills:sync": "tsx dev/skill/sync-skills.ts"
+    "skills:sync": "tsx dev/skill/sync-skills.ts",
+    "skills:check": "tsx dev/skill/check-skills.ts"
   },
   "dependencies": {
     "@codebase-tutor/analysis": "workspace:*",

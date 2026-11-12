@@ -11,7 +11,11 @@
     tsx dev/skill/sync-skills.ts            # 只报告差异，不动文件
     tsx dev/skill/sync-skills.ts --force    # 真同步：覆盖出厂技能的副本（用户自建技能不动）
 */
-import { diffBundledSkills, restoreBundledSkills } from "../../src/adapter/outbound/integrations/skills.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { bundledSkillSource, diffBundledSkills, restoreBundledSkills } from "../../src/adapter/outbound/integrations/skills.js";
+import { checkSkillPackage } from "../../src/exercises/skill-check.js";
 
 const force = process.argv.includes("--force");
 const diff = diffBundledSkills();
@@ -34,6 +38,20 @@ if (!force) {
   process.exit(0);
 }
 
+const sourceRoot = bundledSkillSource();
+const bodyOf = (name: string, file = "SKILL.md"): string | undefined => {
+  try {
+    return readFileSync(join(sourceRoot ?? "", name, file), "utf8");
+  } catch {
+    return undefined;
+  }
+};
+const check = checkSkillPackage(bodyOf);
+if (check.errors.length) {
+  console.error("出厂技能结构校验失败，拒绝同步：");
+  for (const error of check.errors) console.error(`  错误  ${error}`);
+  process.exit(1);
+}
 const result = restoreBundledSkills();
 console.log(`已恢复 ${result.restored.length} 份出厂技能（覆盖 ${result.files} 个文件）。`);
-console.log("注意：SKILL.md 里的「当前策略」也在出厂文件里，会一并恢复成出厂默认。");
+console.log("config.json 由用户维护，同步不覆盖；界面「恢复出厂技能」会连同它一起恢复。");

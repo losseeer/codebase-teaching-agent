@@ -23,6 +23,9 @@ export interface SkillLoad {
 const SKILL_MAX = 12;
 /** `description` 超过 1024 字判为形状不合规，不裁短。 */
 const DESCRIPTION_MAX = 1024;
+/** 由用户维护、同步不覆盖的文件；重置技能时随出厂版本恢复。 */
+const USER_OWNED_FILES = new Set(["config.json"]);
+
 /** 正文与 Markdown 附属文件的字数上限；.json 豁免，见 readAttached。 */
 const PAYLOAD_CHARS = 12_000;
 /** 规格：≤64、以小写字母或数字开头结尾、中间允许连字符（连续连字符另外单独判）。 */
@@ -99,7 +102,7 @@ export interface SkillDiff {
 }
 
 /** 只读预览出厂技能与用户目录的差异，供 CLI/界面报告；实际覆盖走 restoreBundledSkills。 */
-export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillDiff {
+export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string; includeUserOwned?: boolean }): SkillDiff {
   const target = input?.targetDir ?? skillDirectories()[0];
   const source = input?.sourceDir ?? bundledSkillSource();
   if (!source) return { entries: [], missing: [], files: 0 };
@@ -114,8 +117,9 @@ export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: stri
       files += filesUnder(from).length;
       continue;
     }
-    const fromFiles = filesUnder(from);
-    const toFiles = new Set(filesUnder(to));
+    const keep = (name: string): boolean => input?.includeUserOwned === true || !USER_OWNED_FILES.has(name);
+    const fromFiles = filesUnder(from).filter(keep);
+    const toFiles = new Set(filesUnder(to).filter(keep));
     const differs = fromFiles.filter((name) => !toFiles.has(name) || !sameFileContent(join(from, name), join(to, name)));
     const extra = [...toFiles].filter((name) => !fromFiles.includes(name));
     if (!differs.length && !extra.length) continue;
@@ -130,7 +134,7 @@ function sameFileContent(left: string, right: string): boolean {
   try { return readFileSync(left, "utf8") === readFileSync(right, "utf8"); } catch { return false; }
 }
 
-export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: string }): { restored: string[]; files: number } {
+export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: string; includeUserOwned?: boolean }): { restored: string[]; files: number } {
   const target = input?.targetDir ?? skillDirectories()[0];
   const source = input?.sourceDir ?? bundledSkillSource();
   if (!source) return { restored: [], files: 0 };
@@ -148,6 +152,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
       continue;
     }
     for (const name of filesUnder(from)) {
+      if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) continue;
       const targetFile = join(to, name);
       mkdirSync(dirname(targetFile), { recursive: true });
       cpSync(join(from, name), targetFile);

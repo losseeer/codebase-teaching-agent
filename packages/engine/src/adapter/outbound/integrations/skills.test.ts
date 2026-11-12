@@ -56,6 +56,30 @@ describe("恢复出厂技能", () => {
   });
 });
 
+describe("用户配置的所有权", () => {
+  it("config.json 属用户所有：同步不覆盖、不计入差异；重置时随出厂恢复", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-restore-"));
+    roots.push(root);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    makeSource(source, "built-in");
+    writeFileSync(join(source, "built-in", "config.json"), '{"version":1,"exerciseStrategy":"unit"}\n', "utf8");
+    mkdirSync(join(target, "built-in"), { recursive: true });
+    writeFileSync(join(target, "built-in", "SKILL.md"), readFileSync(join(source, "built-in", "SKILL.md")), "utf8");
+    writeFileSync(join(target, "built-in", "extra.md"), readFileSync(join(source, "built-in", "extra.md")), "utf8");
+    writeFileSync(join(target, "built-in", "config.json"), '{"version":1,"exerciseStrategy":"reference"}\n', "utf8");
+
+    expect(diffBundledSkills({ sourceDir: source, targetDir: target }).entries).toEqual([]);
+    const synced = restoreBundledSkills({ sourceDir: source, targetDir: target });
+    expect(synced.files).toBe(2);
+    expect(readFileSync(join(target, "built-in", "config.json"), "utf8")).toContain("reference");
+
+    const reset = restoreBundledSkills({ sourceDir: source, targetDir: target, includeUserOwned: true });
+    expect(reset.files).toBe(3);
+    expect(readFileSync(join(target, "built-in", "config.json"), "utf8")).toContain("unit");
+  });
+});
+
 describe("出厂技能与用户目录的差异（只读）", () => {
   it("列出被改过的文件、只在用户目录的文件，以及用户目录里缺的技能", () => {
     const root = mkdtempSync(join(tmpdir(), "skills-diff-"));
