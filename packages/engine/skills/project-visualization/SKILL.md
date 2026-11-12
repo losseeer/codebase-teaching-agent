@@ -18,7 +18,7 @@ description: 绘制架构图、流程图与时序图的通用流程：确定图�
 
 ## set_diagram
 
-动作、字段与 `ref` 规则以工具内 `action=help` 的返回为准；第一次改图前先取一次。`origin` 只填 `static` 或 `code`，引擎核不到会降为 `inferred`；不要自行填写 `inferred` 或 `downgraded`。
+动作、字段与 `ref` 规则以工具内 `action=help` 的返回为准；第一次改图前先取一次。局部修正用 `add_node` / `remove_edge` / `move`，不必整张重来；用户要文本图时另给 Mermaid 作为导出，结构与画布一致。局部修正用 `add_node` / `remove_edge` / `move`，不必整张重来；用户要文本图时另给 Mermaid 作为导出，结构与画布一致。`origin` 只填 `static` 或 `code`，引擎核不到会降为 `inferred`；不要自行填写 `inferred` 或 `downgraded`。
 
 ## 产物缺失时的替代路径
 

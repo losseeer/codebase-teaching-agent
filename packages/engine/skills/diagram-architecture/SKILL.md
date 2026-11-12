@@ -32,7 +32,7 @@ description: 画架构图：节点表示模块，边表示依赖方向；证据�
 
 ## 图形表达规范
 
-真源是画布：`set_diagram` 的 `draw` 一次交 `{groups, nodes, edges}`。`kind=module` 的节点**必须带真 `ref`**：`file:<路径>` / `dir:<目录>` / `symbol:<路径>#<符号>`，或 `group:<id>` 并附 `files` 清单；指不到索引就不落笔。**重画已存在的图要带 `diagram`（id 或名字）**：不带目标就是新建，会多出一张「（2）」；局部修正用 `add_node` / `remove_edge` / `move` 这些动作。用户要一份能贴进文档的文本图时，另给一段 Mermaid 作为**导出**，内容必须与画布那张同一份结构——两份图各说一套比没有图更糟。
+`kind=module` 的节点必须带真 `ref`：`file:<路径>` / `dir:<目录>` / `symbol:<路径>#<符号>`，或 `group:<id>` 并附 `files` 清单；指不到索引就不落笔。
 
 ## 质量校验规则（回话前自查）
 

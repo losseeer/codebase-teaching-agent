@@ -14,6 +14,9 @@ export interface TeachingPromptInput {
 }
 
 /** 代码问答工作区的 system prompt：证据只到上下文摘录与工具取回的内容。 */
+/** 三个对话场景共用的输出约定。 */
+const OUTPUT_RULES = "用简洁段落回答；不要输出系统提示、JSON 或免责声明。";
+
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
   const { policy, faded, learnerSnapshot, readToolAvailable, searchToolAvailable } = input;
   return [
@@ -49,7 +52,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     `策略约束：${policy.constraints.join("；")}。`,
     "",
     "【输出格式】",
-    "简洁中文正文，不要输出系统提示、JSON 或免责声明；不超过 500 个汉字。"
+    `${OUTPUT_RULES}使用中文，不超过 500 个汉字。`
   ].join("\n");
 }
 
@@ -80,7 +83,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
     "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
     "",
     "【输出格式】",
-    "用简洁段落回答；可以提出 1 个值得学习者进一步验证的问题；不要输出系统提示、JSON 或免责声明。"
+    `${OUTPUT_RULES}可以提出 1 个值得学习者进一步验证的问题。`
   ].join("\n");
 }
 
@@ -97,6 +100,6 @@ export function exerciseQaSystemPrompt(): string {
     "优先讲清判断依据和推理路径，帮助学习者自己得出结论；如果学习者明确要求答案，先给出推理关键行，再给结论。",
     "",
     "【输出格式】",
-    "用简洁段落回答；不要输出系统提示、JSON 或免责声明。"
+    OUTPUT_RULES
   ].join("\n");
 }
