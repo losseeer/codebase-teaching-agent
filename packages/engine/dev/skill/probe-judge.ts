@@ -16,7 +16,8 @@ interface Result { theme: string; ok: boolean; sourceLevel?: number; concepts?: 
 const here = dirname(fileURLToPath(import.meta.url));
 const baselinePath = join(here, "themes.baseline.json");
 const catalog = listCatalogUseCase().repositories;
-const repoPath = (catalog.find((entry) => entry.mounted && entry.exists) ?? catalog.find((entry) => entry.exists))?.repositoryPath;
+const explicit = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
+const repoPath = explicit ?? (catalog.find((entry) => entry.mounted && entry.exists) ?? catalog.find((entry) => entry.exists))?.repositoryPath;
 if (!repoPath) {
   console.error("没有可用的已导入仓库：先在界面导入一个仓库。");
   process.exit(1);
@@ -56,7 +57,7 @@ for (const item of results) {
     ? `通过  ${item.theme}: 层级 ${item.sourceLevel} 落点 ${item.landings} 命中 ${item.pointIds?.join(",") || "无"}`
     : `拒绝  ${item.theme}`);
 }
-console.log(`\n索引覆盖 ${index.files.length} 个文件、${graph.symbols.length} 个符号。`);
+console.log(`\n仓库 ${repoPath}：${index.files.length} 个文件、${graph.symbols.length} 个符号。`);
 
 if (process.argv.includes("--update")) {
   writeFileSync(baselinePath, JSON.stringify({ version: 1, results }, null, 2) + "\n", "utf8");
