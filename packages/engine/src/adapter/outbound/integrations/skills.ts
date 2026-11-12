@@ -291,7 +291,7 @@ export function listSkillFiles(name: string, directories: string[] = skillDirect
     const skillRoot = join(directory, name);
     try {
       if (!statSync(skillRoot).isDirectory()) continue;
-      return readdirSync(skillRoot).filter((entry) => entry.endsWith(".md")).sort();
+      return readdirSync(skillRoot).sort();
     } catch {
       continue;
     }
@@ -326,7 +326,7 @@ export function readSkill(name: string, file = "SKILL.md", directories: string[]
 export function skillsBriefing(skills: SkillBrief[]): string {
   if (!skills.length) return "";
   const lines = skills.map((skill) => {
-    const attached = listSkillFiles(skill.name).filter((file) => file !== "SKILL.md");
+    const attached = listSkillFiles(skill.name).filter((file) => file.endsWith(".md") && file !== "SKILL.md");
     return `- ${skill.name}：${skill.description}${attached.length ? `（附属：${attached.join(" / ")}）` : ""}`;
   });
   return `可用技能（每份都是一套写好的做法，含命令与红线）：\n${lines.join("\n")}\n要用哪一份就先调 read_skill 取正文（附属文件用同一个工具的 file 参数取），别凭名字猜内容。`;

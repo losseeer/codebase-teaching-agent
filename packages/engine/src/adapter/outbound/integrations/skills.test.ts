@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { diffBundledSkills, restoreBundledSkills } from "./skills.js";
+import { diffBundledSkills, listSkillFiles, restoreBundledSkills } from "./skills.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -111,5 +111,31 @@ describe("出厂技能与用户目录的差异（只读）", () => {
     makeSource(source, "built-in");
     restoreBundledSkills({ sourceDir: source, targetDir: target });
     expect(diffBundledSkills({ sourceDir: source, targetDir: target }).entries).toEqual([]);
+  });
+});
+
+describe("技能文件清单", () => {
+  it("能力面列出包内全部文件（含 .json），供维护与校验使用", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-list-"));
+    roots.push(root);
+    const dir = makeSource(root, "built-in");
+    writeFileSync(join(dir, "concepts.json"), "{}", "utf8");
+    const files = listSkillFiles("built-in", [root]);
+    expect(files).toContain("SKILL.md");
+    expect(files).toContain("extra.md");
+    expect(files).toContain("concepts.json");
+  });
+});
+
+describe("技能文件清单", () => {
+  it("能力面列出包内全部文件（含 .json），供维护与校验使用", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-list-"));
+    roots.push(root);
+    const dir = makeSource(root, "built-in");
+    writeFileSync(join(dir, "concepts.json"), "{}", "utf8");
+    const files = listSkillFiles("built-in", [root]);
+    expect(files).toContain("SKILL.md");
+    expect(files).toContain("extra.md");
+    expect(files).toContain("concepts.json");
   });
 });
