@@ -60,6 +60,24 @@ describe("恢复出厂技能", () => {
   });
 });
 
+describe("旧副本的声明迁移", () => {
+  it("只有正文声明、没有 config 时，同步按声明播种而非覆盖成默认", () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-legacy-"));
+    roots.push(root);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    makeSource(source, "built-in");
+    writeFileSync(join(source, "built-in", "config.json"), '{"version":1,"exerciseStrategy":"unit"}\n', "utf8");
+    mkdirSync(join(target, "built-in"), { recursive: true });
+    writeFileSync(join(target, "built-in", "SKILL.md"), "---\nname: built-in\ndescription: 测试用\n---\n\n## 出题策略\n\n当前策略：`reference`\n", "utf8");
+
+    restoreBundledSkills({ sourceDir: source, targetDir: target });
+
+    expect(readFileSync(join(target, "built-in", "config.json"), "utf8")).toContain("reference");
+    expect(readFileSync(join(target, "built-in", "SKILL.md"), "utf8")).toContain("出厂正文");
+  });
+});
+
 describe("用户配置的所有权", () => {
   it("config.json 属用户所有：同步不覆盖、不计入差异；重置时随出厂恢复", () => {
     const root = mkdtempSync(join(tmpdir(), "skills-restore-"));
@@ -131,15 +149,4 @@ describe("技能文件清单", () => {
   });
 });
 
-describe("技能文件清单", () => {
-  it("能力面列出包内全部文件（含 .json），供维护与校验使用", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-list-"));
-    roots.push(root);
-    const dir = makeSource(root, "built-in");
-    writeFileSync(join(dir, "concepts.json"), "{}", "utf8");
-    const files = listSkillFiles("built-in", [root]);
-    expect(files).toContain("SKILL.md");
-    expect(files).toContain("extra.md");
-    expect(files).toContain("concepts.json");
-  });
-});
+

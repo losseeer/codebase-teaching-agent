@@ -35,7 +35,7 @@ export const READ_SKILL_DEFINITION: ToolDefinition = {
     const body = ctx.skills.bodyOf(name, file);
     const found = body !== undefined;
     // 读错文件名时把目录里真实存在的文件列出来：只回一句「没有」，模型会换个名字继续猜。
-    const files = found ? [] : (ctx.skills.filesOf?.(name) ?? []);
+    const files = found ? [] : (ctx.skills.filesOf?.(name) ?? []).filter((entry) => entry.endsWith(".md"));
     const hint = files.length ? `；这个技能目录里有：${files.join(" / ")}` : "";
     return {
       text: found ? (body || "（这份技能装好了，但正文是空的：只有 frontmatter，没有可照做的步骤。）") : `没有「${name}」这份技能${file ? `或它目录里的 ${file}` : ""}${hint}；清单上的名字以外都不要用。`,

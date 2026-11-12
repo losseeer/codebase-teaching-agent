@@ -150,19 +150,18 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
     if (!existsSync(to)) {
       cpSync(from, to, { recursive: true });
       files += filesUnder(from).length;
-      appendVersion(to, { source: "migration", reason: "首次安装", check: { errors: 0, warnings: 0 } });
+      appendVersion(to, { source: "migration", reason: "首次安装" });
       restored.push(skill.name);
       continue;
     }
+    const legacyStrategy = existsSync(join(to, "SKILL.md")) ? legacyStrategyOf(readFileSync(join(to, "SKILL.md"), "utf8")) : undefined;
     ensureCurrentVersion(to, { reason: "写入前记录当前状态" });
     for (const name of filesUnder(from)) {
       const targetFile = join(to, name);
       if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) {
         if (existsSync(targetFile)) continue;
         mkdirSync(dirname(targetFile), { recursive: true });
-        const legacy = name === "config.json" && existsSync(join(to, "SKILL.md"))
-          ? legacyStrategyOf(readFileSync(join(to, "SKILL.md"), "utf8"))
-          : undefined;
+        const legacy = name === "config.json" ? legacyStrategy : undefined;
         if (legacy) writeFileSync(targetFile, JSON.stringify({ version: 1, exerciseStrategy: legacy }, null, 2) + "\n", "utf8");
         else cpSync(join(from, name), targetFile);
         files += 1;
@@ -172,7 +171,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
       cpSync(join(from, name), targetFile);
       files += 1;
     }
-    appendVersion(to, { source: "reset", reason: "恢复出厂技能", check: { errors: 0, warnings: 0 } });
+    appendVersion(to, { source: "reset", reason: "恢复出厂技能" });
     restored.push(skill.name);
   }
   return { restored, files };
@@ -226,6 +225,7 @@ function readAttached(skillRoot: string, file: string): string | undefined {
     return undefined;
   }
   if (!real.startsWith(`${base}${sep}`)) return undefined;
+  if (file.startsWith(".versions/")) return undefined;
   try {
     if (!statSync(real).isFile()) return undefined;
     const text = readFileSync(real, "utf8");
@@ -289,14 +289,14 @@ export function listSkills(directories: string[] = skillDirectories()): SkillLoa
   return { skills: skills.slice(0, SKILL_MAX), skipped };
 }
 
-/** 列出某个技能目录下的 Markdown 文件：read_skill 读错文件名时，把这份清单回给模型。 */
+/** 列出技能目录内的文件（不含版本目录）；read_skill 读错文件名时据此回提示。 */
 export function listSkillFiles(name: string, directories: string[] = skillDirectories()): string[] {
   if (!validName(name)) return [];
   for (const directory of directories) {
     const skillRoot = join(directory, name);
     try {
       if (!statSync(skillRoot).isDirectory()) continue;
-      return readdirSync(skillRoot).sort();
+      return readdirSync(skillRoot).filter((entry) => entry !== ".versions").sort();
     } catch {
       continue;
     }

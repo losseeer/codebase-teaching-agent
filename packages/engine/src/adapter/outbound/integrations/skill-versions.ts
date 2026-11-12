@@ -14,7 +14,7 @@ export interface SkillVersion {
   at: string;
   reason: string;
   changed: string[];
-  check: { errors: number; warnings: number };
+  check?: { errors: number; warnings: number };
   fingerprint: string;
   files: Record<string, string>;
 }
@@ -28,6 +28,12 @@ function listFiles(root: string, prefix = ""): string[] {
     else out.push(`${prefix}${name}`);
   }
   return out;
+}
+
+/** 变更文件：内容变化或上一版有、当前没有（删除也要记）。 */
+function changedBetween(before: Record<string, string>, after: Record<string, string>): string[] {
+  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...names].filter((name) => before[name] !== after[name]).sort();
 }
 
 function hashesOf(skillDir: string): Record<string, string> {
@@ -59,7 +65,7 @@ export function readSkillVersions(skillDir: string): SkillVersion[] {
 
 function writeVersion(
   skillDir: string,
-  record: { source: VersionSource; at: string; reason: string; check: { errors: number; warnings: number } },
+  record: { source: VersionSource; at: string; reason: string; check?: { errors: number; warnings: number } },
   files: Record<string, string>,
   changed: string[]
 ): SkillVersion {
@@ -72,7 +78,7 @@ function writeVersion(
     at: record.at,
     reason: record.reason,
     changed,
-    check: record.check,
+    ...(record.check ? { check: record.check } : {}),
     fingerprint: createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16),
     files
   };
@@ -89,25 +95,25 @@ export function ensureCurrentVersion(
 ): SkillVersion {
   const existing = readSkillVersions(skillDir);
   const files = hashesOf(skillDir);
-  const check = input.check ?? { errors: 0, warnings: 0 };
+  const check = input.check;
   if (!existing.length) {
-    return writeVersion(skillDir, { source: "migration", at: new Date().toISOString(), reason: input.reason, check }, files, Object.keys(files));
+    return writeVersion(skillDir, { source: "migration", at: new Date().toISOString(), reason: input.reason, ...(check ? { check } : {}) }, files, Object.keys(files));
   }
   const latest = existing.at(-1)!;
   if (latest.fingerprint === createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16)) return latest;
-  const changed = Object.keys(files).filter((name) => files[name] !== latest.files[name]);
-  return writeVersion(skillDir, { source: "user", at: new Date().toISOString(), reason: input.reason, check }, files, changed);
+  const changed = changedBetween(latest.files, files);
+  return writeVersion(skillDir, { source: "user", at: new Date().toISOString(), reason: input.reason, ...(check ? { check } : {}) }, files, changed);
 }
 
 /** 写入后调用：内容与最新版一致时不追加。 */
 export function appendVersion(
   skillDir: string,
-  input: { source: VersionSource; reason: string; check: { errors: number; warnings: number } }
+  input: { source: VersionSource; reason: string; check?: { errors: number; warnings: number } }
 ): SkillVersion {
   const latest = readSkillVersions(skillDir).at(-1);
   const files = hashesOf(skillDir);
   const fingerprint = createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16);
   if (latest?.fingerprint === fingerprint) return latest;
-  const changed = Object.keys(files).filter((name) => files[name] !== latest?.files?.[name]);
-  return writeVersion(skillDir, { source: input.source, at: new Date().toISOString(), reason: input.reason, check: input.check }, files, changed);
+  const changed = changedBetween(latest?.files ?? {}, files);
+  return writeVersion(skillDir, { source: input.source, at: new Date().toISOString(), reason: input.reason, ...(input.check ? { check: input.check } : {}) }, files, changed);
 }

@@ -1,5 +1,5 @@
 /** 技能变更提议：校验候选包并与用户目录比对；--apply 才写入，config.json 保持用户所有。 */
-import { cpSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { skillDirectories } from "../../src/adapter/outbound/integrations/skills.js";
@@ -16,6 +16,10 @@ if (!candidate) {
 }
 
 const target = join(skillDirectories()[0], SKILL);
+if (!existsSync(target)) {
+  console.error(`用户目录没有 ${SKILL}：先安装或同步一次技能。`);
+  process.exit(1);
+}
 const listFiles = (root: string, prefix = ""): string[] => {
   const out: string[] = [];
   for (const name of readdirSync(root)) {

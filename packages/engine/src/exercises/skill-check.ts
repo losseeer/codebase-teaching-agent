@@ -11,7 +11,7 @@ export interface SkillCheckResult {
 }
 
 const SKILL = "exercise-code-concepts";
-/** 主文件行数上限；改写完成前超限只告警。 */
+/** 主文件行数上限；超限告警。 */
 const MAIN_LINE_LIMIT = 40;
 
 export function checkSkillPackage(bodyOf: BodyOf): SkillCheckResult {
@@ -33,7 +33,7 @@ export function checkSkillPackage(bodyOf: BodyOf): SkillCheckResult {
   if (!skillSection(main, "出题策略").trim()) errors.push("SKILL.md 缺少「出题策略」章节");
 
   const index = buildPointIndex(bodyOf);
-  if (!index.points.length) errors.push("考点表未解析出条目：检查六列表头与 id / concepts / probes 三列");
+  if (!index.points.length) errors.push("考点表未解析出条目：检查表头是否含 id 列");
   if (!Object.keys(index.concepts).length) errors.push("concepts.json 未解析出概念");
 
   const attached = attachedFiles(bodyOf);
@@ -47,8 +47,12 @@ export function checkSkillPackage(bodyOf: BodyOf): SkillCheckResult {
     if (!tierNames.has(file.replace(/\.md$/, ""))) errors.push(`${file} 未解析出考点：检查「能摘出来考的」章节与表头列`);
   }
   if (index.points.some((point) => !point.point.trim())) errors.push("考点表存在空「考点」列：检查表头是否含「考点」");
+  if (index.points.some((point) => !point.probes.trim())) errors.push("考点表存在空 probes 列：检查表头是否含 probes");
+  for (const [concept, words] of Object.entries(index.concepts)) {
+    if (!Array.isArray(words) || words.some((word) => typeof word !== "string")) errors.push(`概念「${concept}」的同义词必须是字符串数组`);
+  }
 
-  if (!topicIndex(bodyOf).tiers.length) errors.push("主题表未解析出档位：检查「主题 | 附属文件 | 形态」表");
+  if (!topicIndex(bodyOf).tiers.length) errors.push("主题表未解析出档位：检查「主题 | 附属文件 | 常见缺陷」表");
 
   try {
     exerciseStrategyOf(bodyOf);
