@@ -498,9 +498,9 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
           {fallbackConfirm !== null ? (
             <DangerDialog
               title="没找到相关代码位置"
-              body={`没在仓库里找到与「${fallbackConfirm}」相关的代码位置（可能只是写法不同）。是否让模型自己读代码再试？`}
-              deleteLabel="读代码再试"
-              deleteHint="会花一次完整出题的模型调用；出的题会标注「未经规则验证」。"
+              body={`仓库中可能不存在相关考点，是否继续出题？`}
+              deleteLabel="确认"
+              deleteHint=""
               onDelete={() => { setFallbackConfirm(null); void generate(undefined, undefined, undefined, true); }}
               onClose={() => setFallbackConfirm(null)}
             />
