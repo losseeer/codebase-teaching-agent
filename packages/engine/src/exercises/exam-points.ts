@@ -33,7 +33,7 @@ function markdownRows(text: string): string[][] {
 }
 
 /** 附属文件清单从 SKILL.md 的表格里取，技能加档时这里自动跟随。 */
-function attachedFiles(bodyOf: BodyOf): string[] {
+export function attachedFiles(bodyOf: BodyOf): string[] {
   const skill = bodyOf(TOPIC_SKILL) ?? "";
   return [...new Set([...skill.matchAll(/`?([a-z0-9-]+\.md)`?/g)].map((match) => match[1]))]
     .filter((file) => file !== "SKILL.md");

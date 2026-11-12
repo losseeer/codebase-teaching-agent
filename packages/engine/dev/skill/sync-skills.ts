@@ -11,11 +11,9 @@
     tsx dev/skill/sync-skills.ts            # 只报告差异，不动文件
     tsx dev/skill/sync-skills.ts --force    # 真同步：覆盖出厂技能的副本（用户自建技能不动）
 */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { bundledSkillSource, diffBundledSkills, restoreBundledSkills } from "../../src/adapter/outbound/integrations/skills.js";
 import { checkSkillPackage } from "../../src/exercises/skill-check.js";
+import { fileReaderAt } from "./read-at.js";
 
 const force = process.argv.includes("--force");
 const diff = diffBundledSkills();
@@ -39,14 +37,11 @@ if (!force) {
 }
 
 const sourceRoot = bundledSkillSource();
-const bodyOf = (name: string, file = "SKILL.md"): string | undefined => {
-  try {
-    return readFileSync(join(sourceRoot ?? "", name, file), "utf8");
-  } catch {
-    return undefined;
-  }
-};
-const check = checkSkillPackage(bodyOf);
+if (!sourceRoot) {
+  console.error("找不到出厂技能目录，拒绝同步。");
+  process.exit(1);
+}
+const check = checkSkillPackage(fileReaderAt(sourceRoot));
 if (check.errors.length) {
   console.error("出厂技能结构校验失败，拒绝同步：");
   for (const error of check.errors) console.error(`  错误  ${error}`);

@@ -11,15 +11,17 @@ describe("出题策略的声明", () => {
     expect(exerciseStrategyOf(legacy("`reference`"))).toBe("reference");
   });
 
-  it("无配置且无声明时采用默认值；声明取值越界同样回落默认值", () => {
+  it("技能未安装时采用默认值；技能存在但既无配置也无有效声明时抛错", () => {
     expect(exerciseStrategyOf(() => undefined)).toBe(DEFAULT_EXERCISE_STRATEGY);
-    expect(exerciseStrategyOf((_name: string, file = "SKILL.md") => file === "config.json" ? undefined : "# 出题\n\n## 别的\n\n- `reference`：没写当前策略就不算声明。\n")).toBe("unit");
-    expect(exerciseStrategyOf(legacy("`turbo`"))).toBe("unit");
+    const noDeclaration = (_name: string, file = "SKILL.md"): string | undefined =>
+      file === "config.json" ? undefined : "# 出题\n\n## 别的\n\n- `reference`：没写当前策略就不算声明。\n";
+    expect(() => exerciseStrategyOf(noDeclaration)).toThrow(/缺少 config.json/);
+    expect(() => exerciseStrategyOf(legacy("`turbo`"))).toThrow(/缺少 config.json/);
   });
 
-  it("解释两条策略的正文不构成声明：只认「当前策略」那一行", () => {
+  it("解释两条策略的正文不构成声明：无有效声明时报错", () => {
     const text = "# 出题\n\n## 出题策略\n\n- **`reference`**：源码只作参考。\n- **`unit`**：锚在真实代码上。\n";
-    expect(exerciseStrategyOf((_name: string, file = "SKILL.md") => file === "config.json" ? undefined : text)).toBe("unit");
+    expect(() => exerciseStrategyOf((_name: string, file = "SKILL.md") => file === "config.json" ? undefined : text)).toThrow(/缺少 config.json/);
   });
 });
 

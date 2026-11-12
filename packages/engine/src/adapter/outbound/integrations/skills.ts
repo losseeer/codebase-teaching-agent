@@ -1,7 +1,10 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { maskSecrets } from "@codebase-tutor/domain";
+
+import { legacyStrategyOf } from "../../../exercises/exercise-strategy.js";
+import { DESCRIPTION_MAX, SKILL_NAME_PATTERN, parseFrontmatter } from "../../../exercises/skill-spec.js";
 
 /** 技能加载：读用户目录 SKILL.md 的 frontmatter，清单进上下文、正文与附属文件按需取；不扫被学习仓。 */
 
@@ -21,15 +24,13 @@ export interface SkillLoad {
 
 /** 清单最多露几份。 */
 const SKILL_MAX = 12;
-/** `description` 超过 1024 字判为形状不合规，不裁短。 */
-const DESCRIPTION_MAX = 1024;
+
 /** 由用户维护、同步不覆盖的文件；重置技能时随出厂版本恢复。 */
 const USER_OWNED_FILES = new Set(["config.json"]);
 
 /** 正文与 Markdown 附属文件的字数上限；.json 豁免，见 readAttached。 */
 const PAYLOAD_CHARS = 12_000;
-/** 规格：≤64、以小写字母或数字开头结尾、中间允许连字符（连续连字符另外单独判）。 */
-const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
 
 /** 技能目录：`TUTOR_SKILLS_DIR`（`path.delimiter` 或 `,` 分隔多处）；没配就认家目录里那两处。 */
 export function skillDirectories(): string[] {
@@ -102,7 +103,7 @@ export interface SkillDiff {
 }
 
 /** 只读预览出厂技能与用户目录的差异，供 CLI/界面报告；实际覆盖走 restoreBundledSkills。 */
-export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string; includeUserOwned?: boolean }): SkillDiff {
+export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: string }): SkillDiff {
   const target = input?.targetDir ?? skillDirectories()[0];
   const source = input?.sourceDir ?? bundledSkillSource();
   if (!source) return { entries: [], missing: [], files: 0 };
@@ -117,7 +118,7 @@ export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: stri
       files += filesUnder(from).length;
       continue;
     }
-    const keep = (name: string): boolean => input?.includeUserOwned === true || !USER_OWNED_FILES.has(name);
+    const keep = (name: string): boolean => !USER_OWNED_FILES.has(name);
     const fromFiles = filesUnder(from).filter(keep);
     const toFiles = new Set(filesUnder(to).filter(keep));
     const differs = fromFiles.filter((name) => !toFiles.has(name) || !sameFileContent(join(from, name), join(to, name)));
@@ -152,8 +153,18 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
       continue;
     }
     for (const name of filesUnder(from)) {
-      if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) continue;
       const targetFile = join(to, name);
+      if (input?.includeUserOwned !== true && USER_OWNED_FILES.has(name)) {
+        if (existsSync(targetFile)) continue;
+        mkdirSync(dirname(targetFile), { recursive: true });
+        const legacy = name === "config.json" && existsSync(join(to, "SKILL.md"))
+          ? legacyStrategyOf(readFileSync(join(to, "SKILL.md"), "utf8"))
+          : undefined;
+        if (legacy) writeFileSync(targetFile, JSON.stringify({ version: 1, exerciseStrategy: legacy }, null, 2) + "\n", "utf8");
+        else cpSync(join(from, name), targetFile);
+        files += 1;
+        continue;
+      }
       mkdirSync(dirname(targetFile), { recursive: true });
       cpSync(join(from, name), targetFile);
       files += 1;
@@ -174,17 +185,7 @@ function filesUnder(root: string, prefix = ""): string[] {
   return out;
 }
 
-/** 取 frontmatter（开头两条 `---` 之间）的单层 `key: value`；其余形状当没写。 */
-function frontmatter(text: string): Record<string, string> {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  if (!match) return {};
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const entry = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.+?)\s*$/.exec(line);
-    if (entry && !fields[entry[1]]) fields[entry[1]] = entry[2];
-  }
-  return fields;
-}
+
 
 /** `SKILL.md` 的正文 = frontmatter 之后那一段。 */
 function stripFrontmatter(text: string): string {
@@ -203,7 +204,7 @@ function mask(text: string): string {
 
 /** 名字是否合规格；连续连字符单独判。 */
 function validName(name: string): boolean {
-  return NAME_PATTERN.test(name) && !name.includes("--");
+  return SKILL_NAME_PATTERN.test(name) && !name.includes("--");
 }
 
 /** 附属文件只接技能目录内的相对路径：拒绝对等路径、`~`、`..` 段与跳出目录的符号链接；含 NUL 的不接。 */
@@ -258,7 +259,7 @@ function scan(directory: string, taken: Set<string>): { skills: SkillBrief[]; sk
       skipped.push({ dir, reason: "目录里没有可读的 SKILL.md" });
       continue;
     }
-    const fields = frontmatter(text);
+    const fields = parseFrontmatter(text);
     if (!fields.name) { skipped.push({ dir, reason: "frontmatter 缺 name" }); continue; }
     if (!validName(fields.name)) { skipped.push({ dir, reason: `name 不合规格（≤${64} 字、小写字母/数字/单个连字符、首尾不能是连字符）` }); continue; }
     if (fields.name !== dir) { skipped.push({ dir, reason: `frontmatter 的 name「${fields.name}」与目录名不一致` }); continue; }
