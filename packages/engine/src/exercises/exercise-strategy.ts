@@ -37,7 +37,7 @@ export function exerciseStrategyOf(bodyOf: (name: string, file?: string) => stri
   const raw = bodyOf(STRATEGY_SKILL, CONFIG_FILE);
   if (raw !== undefined) return parseConfig(raw);
   const body = bodyOf(STRATEGY_SKILL);
-  if (body === undefined) return DEFAULT_EXERCISE_STRATEGY;
+  if (body === undefined) throw new Error(`出厂技能 ${STRATEGY_SKILL} 缺失：请在设置里恢复出厂技能。`);
   const legacy = legacyStrategyOf(body);
   if (legacy) return legacy;
   throw new Error(`技能 ${STRATEGY_SKILL} 缺少 ${CONFIG_FILE}：需要 {"exerciseStrategy":"unit"|"reference"}，或在「出题策略」一节声明当前策略。`);

@@ -11,8 +11,8 @@ describe("出题策略的声明", () => {
     expect(exerciseStrategyOf(legacy("`reference`"))).toBe("reference");
   });
 
-  it("技能未安装时采用默认值；技能存在但既无配置也无有效声明时抛错", () => {
-    expect(exerciseStrategyOf(() => undefined)).toBe(DEFAULT_EXERCISE_STRATEGY);
+  it("出厂技能缺失或既无配置也无有效声明时抛错", () => {
+    expect(() => exerciseStrategyOf(() => undefined)).toThrow(/缺失/);
     const noDeclaration = (_name: string, file = "SKILL.md"): string | undefined =>
       file === "config.json" ? undefined : "# 出题\n\n## 别的\n\n- `reference`：没写当前策略就不算声明。\n";
     expect(() => exerciseStrategyOf(noDeclaration)).toThrow(/缺少 config.json/);

@@ -1,7 +1,9 @@
 /** 技能版本链：写入前记录当前状态，写入后追加一版；记录只读，不参与提示词。 */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { listFilesUnder } from "./file-walk.js";
 
 const VERSIONS_DIR = ".versions";
 
@@ -19,17 +21,6 @@ export interface SkillVersion {
   files: Record<string, string>;
 }
 
-function listFiles(root: string, prefix = ""): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(root)) {
-    if (name === VERSIONS_DIR) continue;
-    const path = join(root, name);
-    if (statSync(path).isDirectory()) out.push(...listFiles(path, `${prefix}${name}/`));
-    else out.push(`${prefix}${name}`);
-  }
-  return out;
-}
-
 /** 变更文件：内容变化或上一版有、当前没有（删除也要记）。 */
 function changedBetween(before: Record<string, string>, after: Record<string, string>): string[] {
   const names = new Set([...Object.keys(before), ...Object.keys(after)]);
@@ -38,7 +29,7 @@ function changedBetween(before: Record<string, string>, after: Record<string, st
 
 function hashesOf(skillDir: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of listFiles(skillDir).sort()) {
+  for (const name of listFilesUnder(skillDir).sort()) {
     out[name] = createHash("sha256").update(readFileSync(join(skillDir, name))).digest("hex").slice(0, 16);
   }
   return out;

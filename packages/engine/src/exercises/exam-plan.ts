@@ -29,7 +29,8 @@ export interface ExamPlan {
 }
 
 export interface Rejection {
-  stage: "no_theme_hits";
+  /** 出厂技能不可用也走拒绝，不静默跳过判定。 */
+  stage: "no_theme_hits" | "skill_missing";
   reason: string;
   suggestions: string[];
 }

@@ -4,6 +4,7 @@ import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { maskSecrets } from "@codebase-tutor/domain";
 
 import { legacyStrategyOf } from "../../../exercises/exercise-strategy.js";
+import { listFilesUnder } from "./file-walk.js";
 import { appendVersion, ensureCurrentVersion } from "./skill-versions.js";
 import { DESCRIPTION_MAX, PAYLOAD_CHARS, SKILL_NAME_PATTERN, parseFrontmatter } from "../../../exercises/skill-spec.js";
 
@@ -115,12 +116,12 @@ export function diffBundledSkills(input?: { sourceDir?: string; targetDir?: stri
     const to = join(target, skill.name);
     if (!existsSync(to)) {
       missing.push(skill.name);
-      files += filesUnder(from).length;
+      files += listFilesUnder(from).length;
       continue;
     }
     const keep = (name: string): boolean => !USER_OWNED_FILES.has(name);
-    const fromFiles = filesUnder(from).filter(keep);
-    const toFiles = new Set(filesUnder(to).filter(keep));
+    const fromFiles = listFilesUnder(from).filter(keep);
+    const toFiles = new Set(listFilesUnder(to).filter(keep));
     const differs = fromFiles.filter((name) => !toFiles.has(name) || !sameFileContent(join(from, name), join(to, name)));
     const extra = [...toFiles].filter((name) => !fromFiles.includes(name));
     if (!differs.length && !extra.length) continue;
@@ -148,14 +149,14 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
     const to = join(target, skill.name);
     if (!existsSync(to)) {
       cpSync(from, to, { recursive: true });
-      files += filesUnder(from).length;
+      files += listFilesUnder(from).length;
       appendVersion(to, { source: "migration", reason: "首次安装" });
       restored.push(skill.name);
       continue;
     }
     const legacyStrategy = existsSync(join(to, "SKILL.md")) ? legacyStrategyOf(readFileSync(join(to, "SKILL.md"), "utf8")) : undefined;
     ensureCurrentVersion(to, { reason: "写入前记录当前状态" });
-    const fromFiles = filesUnder(from);
+    const fromFiles = listFilesUnder(from);
     const backup = new Map<string, Buffer>();
     try {
       for (const name of fromFiles) {
@@ -192,17 +193,7 @@ export function restoreBundledSkills(input?: { sourceDir?: string; targetDir?: s
   return { restored, files };
 }
 
-/** 目录下所有文件的相对路径。 */
-function filesUnder(root: string, prefix = ""): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(root)) {
-    if (name === ".versions") continue;
-    const path = join(root, name);
-    if (statSync(path).isDirectory()) out.push(...filesUnder(path, `${prefix}${name}/`));
-    else out.push(`${prefix}${name}`);
-  }
-  return out;
-}
+
 
 
 

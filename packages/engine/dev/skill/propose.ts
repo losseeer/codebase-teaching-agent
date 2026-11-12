@@ -1,10 +1,11 @@
 /** 技能变更提议：校验候选包并与用户目录比对；--apply 才写入，config.json 保持用户所有。 */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { skillDirectories } from "../../src/adapter/outbound/integrations/skills.js";
 import { checkSkillPackage } from "../../src/exercises/skill-check.js";
 import { appendVersion, ensureCurrentVersion } from "../../src/adapter/outbound/integrations/skill-versions.js";
+import { listFilesUnder } from "../../src/adapter/outbound/integrations/file-walk.js";
 import { fileReaderAt } from "./read-at.js";
 
 const SKILL = "exercise-code-concepts";
@@ -20,15 +21,6 @@ if (!existsSync(target)) {
   console.error(`用户目录没有 ${SKILL}：先安装或同步一次技能。`);
   process.exit(1);
 }
-const listFiles = (root: string, prefix = ""): string[] => {
-  const out: string[] = [];
-  for (const name of readdirSync(root)) {
-    const path = join(root, name);
-    if (statSync(path).isDirectory()) out.push(...listFiles(path, `${prefix}${name}/`));
-    else out.push(`${prefix}${name}`);
-  }
-  return out;
-};
 const read = (path: string): string | undefined => {
   try {
     return readFileSync(path, "utf8");
@@ -45,8 +37,8 @@ if (check.errors.length) {
   process.exit(1);
 }
 
-const packageFiles = listFiles(join(candidate, SKILL));
-const currentFiles = listFiles(target).filter((name) => !name.startsWith(".versions/") && name !== "config.json");
+const packageFiles = listFilesUnder(join(candidate, SKILL));
+const currentFiles = listFilesUnder(target).filter((name) => name !== "config.json");
 const changed = packageFiles.filter((name) => name !== "config.json" && read(join(candidate, SKILL, name)) !== read(join(target, name)));
 const removed = currentFiles.filter((name) => !packageFiles.includes(name));
 console.log(`包内文件：${packageFiles.join(" / ")}`);

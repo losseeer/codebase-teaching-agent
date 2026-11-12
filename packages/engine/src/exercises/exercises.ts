@@ -274,16 +274,26 @@ export class ExerciseService {
 
   /**
     主题落点判定（v8）：在付费模型调用之前，覆盖所有题型。
-    技能没装或考点表没补 id 列时显式告警并跳过，不静默把「判定不可用」当成「有落点」。
+    出厂技能缺失或考点表不可解析时返回拒绝，不静默跳过判定。
   */
   private judgeTheme(repository: PracticeRepository, theme: string, faces: ExerciseFaces): JudgeResult | undefined {
     if (!faces.skills) return undefined;
     const index = buildPointIndex(faces.skills.bodyOf);
+    if (faces.skills.bodyOf("exercise-code-concepts") === undefined) {
+      traceEngine("exam_plan", { theme, rejected: true, reason: "skill_missing" }, { traceId: null });
+      return {
+        ok: false,
+        rejection: {
+          stage: "skill_missing",
+          reason: "出厂技能 exercise-code-concepts 缺失：请在设置里恢复出厂技能后重试。",
+          suggestions: []
+        }
+      };
+    }
     if (!index.points.length || !Object.keys(index.concepts).length) {
-      // 词表缺一半时不能继续判定：conceptsOfTheme 恒空会把所有主题都判成零落点。
-      console.warn("[exam-plan] 考点表或 concepts.json 未加载（技能缺失、表格没有 id 列、词表解析失败），本趟跳过主题落点判定。");
-      // 跳过必须留痕：否则「判定没执行」和「判定通过」从日志上无法区分，出题质量回退是静默的。
-      traceEngine("exam_plan", { theme, skipped: true, reason: "concept-table-unavailable" }, { traceId: null });
+      // 技能存在但内容不完整：留痕后跳过判定，不阻断出题（写入侧由 skill-check 拦截）。
+      console.warn("[exam-plan] 考点表或 concepts.json 未解析出内容，本趟跳过主题落点判定。");
+      traceEngine("exam_plan", { theme, skipped: true, reason: "content-incomplete" }, { traceId: null });
       return undefined;
     }
     const summaries = new Map(repository.ports.summaries.latest().map((row) => [row.path, row.summary]));
