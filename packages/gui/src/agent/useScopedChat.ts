@@ -447,7 +447,18 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         const stillOpen = remembered && (current?.id === remembered || list.some((item) => item.id === remembered));
         setCurrentThread(scope, stillOpen ? remembered : (list[0]?.id ?? null));
       }
-      void refreshThreads("teaching");
+      // 教学域的当前会话要主动恢复：它的 scopeRef 只能从会话里读回，不先定线程就永远对不上
+      const { threads: teachList, current: teachCurrent } = await refreshThreads("teaching");
+      if (cancelled) return;
+      const rememberedTeach = readThreadMemory()[repositoryId]?.[CHAT_SCOPE.teaching]?.currentId;
+      const teachOpen = Boolean(rememberedTeach) && (teachCurrent?.id === rememberedTeach || teachList.some((item) => item.id === rememberedTeach));
+      if (rememberedTeach && teachOpen) {
+        markCurrentThread("teaching", rememberedTeach);
+        void loadThread("teaching", rememberedTeach);
+      } else if (rememberedTeach) {
+        // 会话已被删或属于别的仓库：只清记忆，不在刷新时报错
+        patchMemory("teaching", { currentId: null });
+      }
     };
     void boot();
     return () => { cancelled = true; };
