@@ -1,18 +1,27 @@
 #!/bin/sh
 # 出厂技能有改动时，把副本同步到用户技能目录（config.json 不覆盖）。
 # 安装：git config core.hooksPath .githooks
-# 演练：SKILLS_SYNC_DRY=1 git commit ... 只打印将执行的命令。
+# 演练：SKILLS_SYNC_DRY=1 sh .githooks/post-commit
+# 排查：.git/skills-sync.log 记录每次触发与结果（提交客户端不显示 hook 输出）。
 
 changed=$(git show --pretty=format: --name-only HEAD | grep '^packages/engine/skills/' || true)
 [ -z "$changed" ] && exit 0
 
 root=$(git rev-parse --show-toplevel)
+log="$(git rev-parse --absolute-git-dir)/skills-sync.log"
 pnpm_bin=$(command -v pnpm || echo /opt/homebrew/bin/pnpm)
-cd "$root/packages/engine" || exit 0
+count=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
 
 if [ -n "${SKILLS_SYNC_DRY:-}" ]; then
-  echo "[skills-sync] 将执行：$pnpm_bin skills:sync --force（改动 $(printf '%s\n' "$changed" | wc -l | tr -d ' ') 个技能文件）"
+  echo "[skills-sync] 将执行：$pnpm_bin skills:sync --force（改动 $count 个技能文件）"
   exit 0
 fi
 
-"$pnpm_bin" skills:sync --force || echo "[skills-sync] 同步失败：请手动运行 pnpm --filter @codebase-tutor/engine skills:sync --force"
+cd "$root/packages/engine" || exit 0
+echo "[$(date '+%F %T')] 提交 $(git rev-parse --short HEAD)：$count 个技能文件" >> "$log"
+if "$pnpm_bin" skills:sync --force >> "$log" 2>&1; then
+  echo "[$(date '+%F %T')] 同步成功" >> "$log"
+else
+  echo "[$(date '+%F %T')] 同步失败；手动运行 pnpm --filter @codebase-tutor/engine skills:sync --force" >> "$log"
+  echo "[skills-sync] 同步失败，详见 $log"
+fi
