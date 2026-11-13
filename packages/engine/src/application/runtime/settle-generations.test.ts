@@ -1,3 +1,7 @@
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { JournalEvent, JournalEventType } from "@codebase-tutor/domain";
 import { describe, expect, it } from "vitest";
 
@@ -60,6 +64,28 @@ describe("出题终态收口", () => {
     expect(settleOrphanedGenerations(line, "repo-1")).toBe(1);
     expect(line.events.at(-1)).toMatchObject({ type: "exercise_aborted", traceId: "trace-old" });
     expect(settleOrphanedGenerations(line, "repo-1")).toBe(0);
+  });
+
+  it("中断趟按工作日志补记用量，且不重复", () => {
+    const log = join(tmpdir(), `settle-usage-${Date.now()}.jsonl`);
+    writeFileSync(log, [
+      JSON.stringify({ traceId: "trace-old", scene: "practice.generate-code", inputTokens: 100, outputTokens: 20, model: "m1" }),
+      JSON.stringify({ traceId: "trace-old", scene: "practice.generate-code", inputTokens: 200, outputTokens: 30, model: "m1" }),
+      JSON.stringify({ traceId: "other", scene: "map.chat", inputTokens: 999, outputTokens: 999, model: "m1" })
+    ].join("\n"), "utf8");
+    try {
+      const old = event("exercise_model_reply", { scene: "practice.generate", attempt: 0 }, "trace-old");
+      old.at = "2026-11-13T10:00:00.000Z";
+      const line = audit([old]);
+      settleOrphanedGenerations(line, "repo-1", log);
+      const usage = line.events.filter((item) => item.type === "token_usage");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]?.payload).toMatchObject({ input_tokens: 300, output_tokens: 50, provider: "m1", scene: "exercise_generate_code", outcome: "interrupted" });
+      settleOrphanedGenerations(line, "repo-1", log);
+      expect(line.events.filter((item) => item.type === "token_usage")).toHaveLength(1);
+    } finally {
+      rmSync(log, { force: true });
+    }
   });
 
   it("仍在跑的任务不补；两趟里只补后一趟", () => {
