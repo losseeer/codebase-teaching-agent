@@ -53,29 +53,35 @@ describe("工作区对话流的过程帧契约", () => {
 
 describe("过程帧的界面文案", () => {
   it("thinking 不报轮数：连着几轮想是同一件事，轮数归引擎的账", () => {
-    expect(progressText({ type: "thinking" })).toBe("正在思考…");
+    expect(progressText({ type: "thinking" })).toEqual({ text: "正在思考…" });
   });
 
   it("reading / searching 缺字段时给通用兜底，不显示空白", () => {
-    expect(progressText({ type: "reading", path: "src/a.ts" })).toBe("正在读取 src/a.ts …");
-    expect(progressText({ type: "searching", query: "" })).toBe("正在检索代码：关键词 …");
+    expect(progressText({ type: "reading", path: "src/a.ts" })).toEqual({ text: "正在读取 a.ts …", title: "src/a.ts" });
+    expect(progressText({ type: "searching", query: "" })).toEqual({ text: "正在检索代码：关键词 …" });
   });
 
   it("取技能、改图、查产物、打外部程序各说一句人话（这些活动以前是静默的）", () => {
-    expect(progressText({ type: "loading_skill", skill: "tutor-cost-audit" })).toBe("正在加载技能 tutor-cost-audit …");
-    expect(progressText({ type: "loading_skill", skill: "" })).toBe("正在加载已装的做法 …");
-    expect(progressText({ type: "editing_diagram" })).toBe("正在修改画布上的图 …");
-    expect(progressText({ type: "querying_facts" })).toBe("正在查询已有产物 …");
-    expect(progressText({ type: "calling_external" })).toBe("正在调用外部工具 …");
+    expect(progressText({ type: "loading_skill", skill: "tutor-cost-audit" })).toEqual({ text: "正在加载技能 tutor-cost-audit …" });
+    expect(progressText({ type: "loading_skill", skill: "" })).toEqual({ text: "正在加载已装的做法 …" });
+    expect(progressText({ type: "editing_diagram" })).toEqual({ text: "正在修改画布上的图 …" });
+    expect(progressText({ type: "querying_facts" })).toEqual({ text: "正在查询已有产物 …" });
+    expect(progressText({ type: "calling_external" })).toEqual({ text: "正在调用外部工具 …" });
   });
 
   it("代码问答那条流是 `progress` 包一层 payload：文案与裸帧同一条", () => {
-    expect(progressText({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toBe("正在读取 src/b.ts …");
-    expect(progressText({ stage: "thinking" })).toBe("正在思考…");
+    expect(progressText({ type: "progress", payload: { stage: "reading", path: "src/b.ts" } })).toEqual({ text: "正在读取 b.ts …", title: "src/b.ts" });
+    expect(progressText({ stage: "thinking" })).toEqual({ text: "正在思考…" });
+  });
+
+  it("读取路径只显示文件名，完整路径留给悬停", () => {
+    const long = "sl-common/src/main/java/com/xingyan/shortlink/common/route/UaClassifier.java";
+    expect(progressText({ type: "reading", path: long })).toEqual({ text: "正在读取 UaClassifier.java …", title: long });
+    expect(progressText({ type: "reading", path: "" })).toEqual({ text: "正在读取 代码文件 …" });
   });
 
   it("整个帧缺席时给「回复生成中…」，不假装知道在哪一步", () => {
-    expect(progressText(undefined)).toBe("回复生成中…");
+    expect(progressText(undefined)).toEqual({ text: "回复生成中…" });
   });
 });
 

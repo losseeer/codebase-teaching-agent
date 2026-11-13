@@ -377,7 +377,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
         >
           {anchor ? `${anchor.path}:${anchor.line}` : "练习上下文"}
         </button>
-        <span className="fs-11 faint" title={codeNoteTitle}>{codeNote}</span>
+        <span className="fs-11 faint" title={codeNoteTitle ?? (anchor ? `${anchor.path}:${anchor.line}` : undefined)}>{codeNote}</span>
       </div>
       <SourceView source={source} emptyHint="相关代码还没读到" />
     </section>

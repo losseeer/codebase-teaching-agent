@@ -2,6 +2,7 @@ import type { ChatThread } from "@codebase-tutor/contract";
 import type { Exercise, TutorSettings } from "@codebase-tutor/domain";
 
 import type { MapBinding, Scope } from "./chatScope";
+import type { ProgressLine } from "./progressLines";
 import type { MessageExtra, ThreadItem } from "./threadItems";
 
 export interface ScopedChatApi {
@@ -66,7 +67,7 @@ export interface ScopedChatApi {
   /** 停止当前在途回合：通知引擎并中止连接；无在途回合时空操作。 */
   stopTurn: () => void;
   /** 过程指示行：最新在末尾、最多 6 行；空数组 = 无进行中任务。 */
-  progress: Record<Scope, string[]>;
+  progress: Record<Scope, ProgressLine[]>;
   liveAnswer: string;
   error: string;
   send: () => Promise<void>;

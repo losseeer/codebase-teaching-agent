@@ -61,7 +61,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
         {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
             {t.progress[scope].map((line, index) => (
-              <div key={`${index}-${line}`} className={index === t.progress[scope].length - 1 ? "msg-hint" : "msg-past"}>{line}</div>
+              <div key={`${index}-${line.text}`} title={line.title} className={index === t.progress[scope].length - 1 ? "msg-hint" : "msg-past"}>{line.text}</div>
             ))}
           </div>
         ) : null}

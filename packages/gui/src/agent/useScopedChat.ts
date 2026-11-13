@@ -9,7 +9,7 @@ import { failureText } from "../ui/toast";
 import { type Typewriter, useTypewriter } from "./useTypewriter";
 import { readDebtMap, writeDebtMap, readThreadMemory, writeThreadMemory, RECHECK_DELAYS, type TurnDebt, type ThreadMemory } from "./chatMemory";
 import { CHAT_SCOPE, loadInitialScope, SCOPES, SCOPE_STORAGE_KEY, type MapBinding, type Scope } from "./chatScope";
-import { foldProgress, interruptText, progressText } from "./progressLines";
+import { foldProgress, interruptText, progressText, type ProgressLine } from "./progressLines";
 import { threadItemsFrom, type MessageExtra, type ThreadItem, type ThreadRow } from "./threadItems";
 import { lostInTransit } from "./turnFailure";
 import type { ScopedChatApi } from "./scopedChatApi";
@@ -98,16 +98,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     void api.stopTurn(turn.turnId).catch(() => undefined);
   };
   const stopTurn = (): void => stopTurnFor(scope);
-  const [progress, setProgress] = useState<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
+  const [progress, setProgress] = useState<Record<Scope, ProgressLine[]>>({ map: [], teaching: [], practice: [] });
   /** progress 行的渲染期镜像，供异步收尾读取。 */
-  const progressLines = useRef<Record<Scope, string[]>>({ map: [], teaching: [], practice: [] });
+  const progressLines = useRef<Record<Scope, ProgressLine[]>>({ map: [], teaching: [], practice: [] });
   const resetProgress = (target: Scope): void => {
     progressLines.current[target] = [];
     setProgress((prev) => ({ ...prev, [target]: [] }));
   };
-  const logProgress = (target: Scope, text: string): void => {
-    if (!text) return;
-    progressLines.current[target] = foldProgress(progressLines.current[target], text);
+  const logProgress = (target: Scope, line: ProgressLine): void => {
+    if (!line.text) return;
+    progressLines.current[target] = foldProgress(progressLines.current[target], line);
     setProgress((prev) => ({ ...prev, [target]: progressLines.current[target] }));
   };
   const mapTypewriter = useTypewriter();
@@ -489,7 +489,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
       return;
     }
-    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", "正在准备问答上下文…");
+    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", { text: "正在准备问答上下文…" });
     const turn = beginTurn("teaching");
     const sink = turnSink("teaching");
     try {
@@ -539,7 +539,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
     if (!threadId) return;
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
-    markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, "回复生成中…");
+    markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, { text: "回复生成中…" });
     typewriter[scope].begin();
     const turn = beginTurn(scope);
     recordDebt(scope, threadId);
@@ -561,7 +561,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         : await api.practiceChat(repositoryId, { content: message, exerciseId: practiceExercise!.id, threadId }, onScopedEvent, turn);
       if (reply.interrupted) {
         // 中断轮未落库，补账基准不动
-        pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope] });
+        pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope].map((line) => line.text) });
         patchDebt(scope, null);
       } else {
         await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
