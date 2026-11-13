@@ -20,8 +20,8 @@ const SCOPE_SCENES: Record<AgentScope, readonly string[]> = {
   practice: ["practice.chat", "practice.generate"]
 };
 
-/** 出题没有回合文本，靠这三类事件认成一次运行。 */
-const GENERATION_EVENTS = new Set(["exercise_generated", "exercise_declined", "exercise_aborted"]);
+/** 出题没有回合文本，靠这些事件认成一次运行；开始事件也算，避免中断后整趟消失。 */
+const GENERATION_EVENTS = new Set(["exercise_started", "exercise_generated", "exercise_declined", "exercise_aborted"]);
 
 type HistoryStep = Omit<AgentTracePayload, "repositoryId" | "runId" | "scene" | "at" | "seq">;
 

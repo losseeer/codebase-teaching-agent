@@ -5,6 +5,8 @@ export type JournalEventType =
   | "exercise_result"
   /** 练习未送达：payload 必带 `family`(comprehension|code|llm) 与 `stage`；没带 family 的历史行按「未标族别」单列。 */
   | "exercise_declined"
+  /** 出题开始：payload = scene / job_id / tag；没有终态事件的按已中断收口。 */
+  | "exercise_started"
   /** 出题被用户取消：payload = scene / reason(user_cancel) / waited_ms，带 tag 时一并记。 */
   | "exercise_aborted"
   /** 练习送达：payload.source = llm|cache|rule|review，另带 title。 */
@@ -61,7 +63,7 @@ export type JournalEventType =
 /** 写入权分表：引擎事件由引擎写，界面接口只认 `UI_JOURNAL_EVENTS`——`file_read`/`code_egress`/`token_usage` 是审计证据，不能让被审计方填账。 */
 export const ENGINE_JOURNAL_EVENTS = [
   "exercise_result",
-  "exercise_declined", "exercise_aborted", "exercise_generated", "exercise_anchor", "exercise_model_reply", "token_usage", "file_read", "code_search",
+  "exercise_declined", "exercise_aborted", "exercise_generated", "exercise_started", "exercise_anchor", "exercise_model_reply", "token_usage", "file_read", "code_search",
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "code_egress",

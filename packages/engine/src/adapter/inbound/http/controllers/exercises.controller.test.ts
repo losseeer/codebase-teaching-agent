@@ -37,6 +37,7 @@ describe("出题轨迹与历史", () => {
     const canceled = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/exercises/${jobId}/cancel` });
     expect(canceled.json()).toEqual({ canceled: true });
     expect((await pending).statusCode).toBe(499);
+    expect(fx.eventsOf("exercise_started").at(-1)?.payload).toMatchObject({ scene: "practice.generate", job_id: jobId, tag: "registerOrder" });
     expect(fx.eventsOf("exercise_aborted").at(-1)?.payload).toMatchObject({ reason: "user_cancel" });
     expect(fx.eventsOf("exercise_generated")).toHaveLength(generatedBefore);
   });

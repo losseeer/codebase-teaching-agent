@@ -35,6 +35,12 @@ export function beginGeneration(repositoryId: string, jobId: unknown): Generatio
   };
 }
 
+/** 这一仓的这一趟是否还在跑：收口孤儿记录时据此跳过未结束的任务。 */
+export function isGenerationActive(repositoryId: string, jobId: unknown): boolean {
+  const id = typeof jobId === "string" && JOB_ID.test(jobId.trim()) ? jobId.trim() : undefined;
+  return id ? active.has(keyOf(repositoryId, id)) : false;
+}
+
 /** 中止这一仓的这一趟；不在跑时返回 false，重复点击不报错。 */
 export function abortGeneration(repositoryId: string, jobId: unknown): { canceled: boolean; waitedMs?: number } {
   const id = typeof jobId === "string" && JOB_ID.test(jobId.trim()) ? jobId.trim() : undefined;

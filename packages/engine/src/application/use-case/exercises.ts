@@ -148,6 +148,12 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   const trace = generationTrace(repository.index.repositoryId, tag ? `出题 · ${tag}` : "出题", repository.audit);
   const generation = beginGeneration(repositoryId, input.jobId);
   const startedAt = Date.now();
+  repository.audit.append("exercise_started", {
+    scene: "practice.generate",
+    job_id: generation.jobId ?? null,
+    tag: tag.trim(),
+    kind: input.kind ?? input.type ?? null
+  });
   try {
     const value = await withExercisePorts(repository.handle, (ports, database) => exercises.next(practiceView(repository, ports), { kind: input.kind, type: input.type, targetUnitId: input.targetUnitId, tag, tagId: input.tagId, variantNonce: input.variantNonce, themeFallback: input.themeFallback }, provider, provider ? exerciseFaces(repository, database, "generate", trace.onTrace, generation.signal) : undefined, progress));
     trace.finish(`题目「${value.title}」`, "ok");

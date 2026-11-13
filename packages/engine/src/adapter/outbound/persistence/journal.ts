@@ -36,7 +36,7 @@ export class Journal {
 export function auditLineFor(repositoryPath: string, repositoryId: string) {
   const journal = new Journal(repositoryPath, repositoryId);
   return {
-    append: (type: JournalEventType, payload: JournalEvent["payload"], sessionId?: string) => journal.append(type, payload, sessionId),
+    append: (type: JournalEventType, payload: JournalEvent["payload"], sessionId?: string, traceId?: string | null) => journal.append(type, payload, sessionId, traceId),
     read: () => readJournal(repositoryPath)
   };
 }
