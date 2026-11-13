@@ -384,7 +384,14 @@ h1, h2, h3, h4, p { margin-top: 0; }
   padding: 10px 12px; border-radius: var(--r-md);
   margin: 6px 0; overflow-x: auto; line-height: 1.6;
 }
-.md pre code { background: none; padding: 0; color: inherit; }
+/* 代码块内的 code 必须把行内样式全部抵消：pre 的每一行是独立行盒，
+   留着背景或边框会变成「每行一个小框」。 */
+.md pre code {
+  background: none; padding: 0; color: inherit;
+  border: 0; border-radius: 0; font-size: inherit;
+  box-decoration-break: slice; -webkit-box-decoration-break: slice;
+  overflow-wrap: normal;
+}
 /* 过程提示行（SSE progress 的中文映射）：斜体淡色 + 闪烁光标 */
 .msg-hint {
   font-size: var(--fs-12); color: var(--ink-3);
