@@ -310,6 +310,24 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
+  /** 新会话立刻进列表：会话建好、消息还没落库时，清单接口还看不到它。 */
+  const rememberThread = (scope: Scope, thread: { id: string; title?: string }): void => {
+    const list = chatThreadsRef.current[scope];
+    if (list.some((item) => item.id === thread.id)) return;
+    const now = new Date().toISOString();
+    const placeholder: ChatThread = {
+      id: thread.id,
+      repositoryId,
+      scope: CHAT_SCOPE[scope],
+      title: thread.title ?? "（新会话）",
+      createdAt: now,
+      updatedAt: now
+    };
+    const next = [placeholder, ...list];
+    setChatThreads((prev) => ({ ...prev, [scope]: next }));
+    chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: next };
+  };
+
   /** 只改当前线程 id，不动侧栏已展示的对话。 */
   const markCurrentThread = (scope: Scope, threadId: string): void => {
     setCurrentThreadId((prev) => ({ ...prev, [scope]: threadId }));
@@ -346,11 +364,14 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 清单暂时拿不到：保留上次所见，不清空选择
       return { threads: chatThreadsRef.current[scope], current: null };
     }
-    setChatThreads((prev) => ({ ...prev, [scope]: list }));
-    chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: list };
-    setUnsentThread((prev) => ({ ...prev, [scope]: current && !list.some((item) => item.id === current.id) ? current : null }));
-    patchMemory(scope, { ids: list.map((item) => item.id) });
-    if (opened && !list.some((item) => item.id === opened) && current?.id !== opened) setCurrentThread(scope, null);
+    // 服务端清单只收有正文的会话：当前这条还没落消息时，不能把它从列表与记忆里抹掉
+    const existing = chatThreadsRef.current[scope].find((item) => item.id === opened);
+    const merged = opened && existing && !list.some((item) => item.id === opened) ? [existing, ...list] : list;
+    setChatThreads((prev) => ({ ...prev, [scope]: merged }));
+    chatThreadsRef.current = { ...chatThreadsRef.current, [scope]: merged };
+    setUnsentThread((prev) => ({ ...prev, [scope]: current && !merged.some((item) => item.id === current.id) ? current : null }));
+    patchMemory(scope, { ids: merged.map((item) => item.id) });
+    if (opened && !merged.some((item) => item.id === opened) && current?.id !== opened) setCurrentThread(scope, null);
     return { threads: list, current };
   };
 
@@ -364,6 +385,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         ...(scope === "practice" && practiceExercise ? { exerciseId: practiceExercise.id } : {}),
         ...(title ? { title } : {})
       });
+      rememberThread(scope, thread);
       return thread.id;
     } catch (reason) {
       setError(scope, failureText("新建会话失败", reason));
@@ -479,7 +501,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         if (settings.pedagogy === "socratic" && settings.depth === "macro") setSettingsState(created.recommendedSettings.settings);
         markCurrentThread("teaching", active.id);
         knownRowCount.current.teaching = 0;
-        void refreshThreads("teaching");
+        rememberThread("teaching", active);
       }
       if (!active) return;
       typewriter.teaching.begin();
@@ -497,6 +519,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       endTurn("teaching");
       markSending("teaching", false);
       resetProgress("teaching");
+      // 消息落库后再拉一次清单：标题与顺序以引擎为准
+      void refreshThreads("teaching");
     }
   };
 
