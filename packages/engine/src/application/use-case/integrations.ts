@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { externalToolSurface, mcpConfigFile, readMcpConfigs } from "../../adapter/outbound/integrations/clients.js";
 import { bundledSkillSource, listSkills, restoreBundledSkills, skillDirectories } from "../../adapter/outbound/integrations/skills.js";
-import { checkSkillPackage } from "../../exercises/skill-check.js";
+import { checkSkillSet } from "../../exercises/skill-check.js";
 
 /** 只读能力面的静态读数：技能清单与 MCP 是否配置；不连 server、不发模型。 */
 export function staticIntegrationsUseCase() {
@@ -35,14 +35,22 @@ export async function externalSurfaceUseCase() {
 export function restoreSkillsUseCase(): { restored: string[]; files: number } | { error: string } {
   const source = bundledSkillSource();
   if (source) {
-    const check = checkSkillPackage((name, file = "SKILL.md") => {
+    const bodyOf = (name: string, file = "SKILL.md"): string | undefined => {
       try {
         return readFileSync(join(source, name, file), "utf8");
       } catch {
         return undefined;
       }
-    });
-    if (check.errors.length) return { error: `出厂技能结构校验失败：${check.errors.join("；")}` };
+    };
+    const loaded = listSkills([source]);
+    const report = checkSkillSet(bodyOf, loaded.skills.map((skill) => skill.name), loaded.skipped);
+    if (report.errorCount) {
+      const details = [
+        ...report.results.flatMap((item) => item.result.errors.map((error) => `${item.name}：${error}`)),
+        ...report.skipped.map((entry) => `${entry.dir}：${entry.reason}`)
+      ];
+      return { error: `出厂技能结构校验失败：${details.join("；")}` };
+    }
   }
   return restoreBundledSkills({ includeUserOwned: true });
 }

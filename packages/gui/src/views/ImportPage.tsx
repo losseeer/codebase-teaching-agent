@@ -163,12 +163,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
                 {commentMode ? <span className="badge badge-warn">更费 token</span> : null}
               </label>
             </div>
-            {/* 详细解释进悬停 */}
-            <p className="field-note" title={commentMode
-              ? "注释写得多的仓库里的中文概念词会一起进摘要，也因此更费 token。"
-              : "要连注释一起分析请在导入前选「详细导入」；导入后改设置需重新导入。"}>{commentMode
-              ? "连注释一起摘要，更费 token。"
-              : "只看代码结构，最省 token。"}</p>
+            
 
             {error ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{error}</span></div> : null}
             {orphaned ? (
