@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from "@codebase-tutor/contract";
 import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf } from "@codebase-tutor/domain";
 
@@ -114,6 +114,17 @@ function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, on
     : [];
   const selectedGeneration = generationRuns.find((run) => run.runId === generationId) ?? generationRuns.find((run) => run.status === "running") ?? generationRuns[0];
   const waitingForSession = scope !== "practice" && !threadId;
+  /** 打开时落到最新回合：轨迹异步到达，首次有内容才滚；之后不抢用户的手动滚动。 */
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const jumpedToLatest = useRef(false);
+  useEffect(() => { jumpedToLatest.current = false; }, [threadId]);
+  useEffect(() => {
+    if (jumpedToLatest.current || historyLoading || !chatRuns.length) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    body.scrollTop = body.scrollHeight;
+    jumpedToLatest.current = true;
+  }, [chatRuns.length, historyLoading]);
   const tabs: { id: TraceTab; label: string }[] = [
     { id: "trace", label: "轨迹" },
     { id: "skills", label: "技能" },
@@ -132,7 +143,7 @@ function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, on
           ))}
           <span className="trace-scope" title="当前工作区">{SCOPE_LABEL[scope]}{practiceOperation ? ` · ${PRACTICE_OPERATION_LABEL[practiceOperation]}` : ""}</span>
         </div>
-        <div className="modal-body" id="trace-panel" role="tabpanel" aria-labelledby={`trace-tab-${tab}`}>
+        <div className="modal-body" id="trace-panel" role="tabpanel" ref={bodyRef} aria-labelledby={`trace-tab-${tab}`}>
           {tab === "trace" ? (
             waitingForSession ? (
               <p className="field-note">选择一条会话后显示它的轨迹。</p>
