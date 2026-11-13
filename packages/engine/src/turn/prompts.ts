@@ -17,6 +17,12 @@ export interface TeachingPromptInput {
 /** 三个对话场景共用的输出约定。 */
 const OUTPUT_RULES = "用简洁段落回答；不要输出系统提示、JSON 或免责声明。";
 
+/** 三个对话场景共用的引用规范：写路径前先核实，写不出仓内完整路径就用职责描述。 */
+const REFERENCE_RULES = [
+  "要写出具体文件路径、符号名或行号之前，必须先用可用工具核实它在仓库内的完整路径；静态产物里的复杂度读数可以引用，但不等于核实过路径。",
+  "核实不了就用职责描述代替，并明说「具体位置未核实」；不要写省略模块前缀的相对路径（如 ../Foo.java）或凭印象拼路径。"
+];
+
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
   const { policy, faded, learnerSnapshot, readToolAvailable, searchToolAvailable } = input;
   return [
@@ -24,6 +30,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     "",
     "【证据边界】",
     "上下文附有教学域文件开头的真实源码摘录；引用代码时指明文件与行号；",
+    ...REFERENCE_RULES,
     "只基于当前教学域、源码摘录与已检索到的代码回答；不虚构摘录之外的文件、行号或运行结果；",
     "摘录不足以回答时明确承认，并给出一个可执行的观察路径（先看哪个文件哪一段）。",
     ...(readToolAvailable
@@ -73,8 +80,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
     "一次回答聚焦一条主线：把这条线走通，比覆盖更多文件更有价值。",
     "",
     "【证据边界】",
-    "要写出具体文件路径、符号名或行号之前，必须先用可用工具核实它在仓库内的完整路径；静态产物里的复杂度读数可以引用，但不等于核实过路径。",
-    "核实不了就用职责描述代替，并明说「具体位置未核实」；不要写省略模块前缀的相对路径，也不要凭印象拼一个路径出来。",
+    ...REFERENCE_RULES,
     "「项目结构全景」是已分析文件的完整清单，「依赖关系」给出导入邻接（一度与二度），「调用关系」给出调用邻接与同文件符号位置——全局性问题优先依据这些回答。",
     "依据有三个来源，都算数：上下文那几段、`query_facts` 取回的静态产物读数、`read_file` 读到的源码原文。三者都没有的事不要讲成确定。",
     "只是回答宏观问题就别扩读：上下文够用时不要为了「把细节讲全」去翻文件，也不要凭空推测没读过的代码。但要把图落进画布（`set_diagram`）时，取证是该做的——按清单上那份绘图技能写的步骤去查产物、读该读的文件，在读文件额度用完之前不必先征求同意。",
@@ -96,6 +102,7 @@ export function exerciseQaSystemPrompt(): string {
     "",
     "【证据边界】",
     "只基于「练习题目」和「源码摘录」回答，引用代码时给出 文件路径:行号。",
+    ...REFERENCE_RULES,
     "不要编造题目和源码里不存在的信息；判分标准没有提供给你，不要声称知道标准答案，也不评价选项对错。",
     "",
     "【答疑边界】",
