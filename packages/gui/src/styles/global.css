@@ -367,17 +367,22 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .msg-user .msg-bubble { background: var(--brand-700); color: var(--on-primary); border-bottom-right-radius: 4px; }
 .msg-agent { align-items: flex-start; }
 .msg-agent .msg-bubble { background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-/* Markdown 的代码：行内与代码块都用源码岛配色，任何位置渲染都一样 */
+/* Markdown 的代码：行内用浅底绿字（长路径不抢正文），代码块保留源码岛深底 */
 .md code {
-  font-family: var(--font-mono); font-size: var(--fs-12);
-  background: var(--brand-900); color: var(--code-inline-ink);
-  padding: 1px 5px; border-radius: 4px;
+  font-family: var(--font-mono); font-size: 0.92em;
+  background: var(--code-inline-bg); color: var(--code-inline-fg);
+  border: 1px solid var(--code-inline-line);
+  padding: 0 5px; border-radius: 4px;
+  /* 断行后每段各自有完整圆角与内边距，不出现半截色块 */
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+  overflow-wrap: anywhere;
 }
 .md pre {
   font-family: var(--font-mono); font-size: var(--fs-12);
-  background: var(--brand-900); color: var(--code-inline-ink);
+  background: var(--code-bg); color: var(--code-ink);
+  border: 1px solid var(--code-line);
   padding: 10px 12px; border-radius: var(--r-md);
-  margin: 6px 0; overflow-x: auto; line-height: 1.55;
+  margin: 6px 0; overflow-x: auto; line-height: 1.6;
 }
 .md pre code { background: none; padding: 0; color: inherit; }
 /* 过程提示行（SSE progress 的中文映射）：斜体淡色 + 闪烁光标 */
