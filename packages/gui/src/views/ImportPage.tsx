@@ -8,6 +8,7 @@ import { Icon } from "../ui/icons";
 import { dateText } from "../ui/labels";
 import { MenuButton, PopMenu, type MenuItem } from "../ui/PopMenu";
 import { failureText } from "../ui/toast";
+import { clearActiveImportJob, readActiveImportJob, writeActiveImportJob } from "./importJobState";
 import { PageTopbar } from "./WorkspaceChrome";
 
 // 导入仓库页：路径 → 分相进度 → 成本报告 → 已导入仓库清单。
@@ -51,6 +52,30 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
   /** 工作区切换只记一次：完成态会被轮询与广播重复渲染。 */
   const switchLogged = useRef(false);
+  /** 本趟是回读恢复：不重复切工作区、不重复记日志。 */
+  const restoredJob = useRef(false);
+
+  // 挂载时回读上次未结束的导入；读不到任务要明说，不静默清空进度
+  useEffect(() => {
+    const stored = readActiveImportJob();
+    if (!stored) return;
+    let alive = true;
+    api.getImport(stored).then((restored) => {
+      if (!alive) return;
+      // 只有回读到已完成的任务才跳过切换；进行中的任务随后正常完成仍要切工作区
+      restoredJob.current = restored.phase === "completed";
+      setJob(restored);
+    }).catch((reason: unknown) => {
+      if (!alive) return;
+      if (isNotFound(reason)) {
+        clearActiveImportJob();
+        setOrphaned(true);
+      } else {
+        setError(failureText("上次导入状态读取失败，将保留记录待重试", reason));
+      }
+    });
+    return () => { alive = false; };
+  }, []);
 
   // 进度主通道是 /api/events 的 SSE；5s 轮询只兜底断线，不担实时
   const jobId = job?.id;
@@ -72,7 +97,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
         // 404 = 引擎里已无此任务，重试读不回来
-        if (isNotFound(reason)) setOrphaned(true);
+        if (isNotFound(reason)) { clearActiveImportJob(); setOrphaned(true); }
         else setError(failureText("进度读取失败", reason));
       }),
       5000
@@ -81,13 +106,19 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   }, [jobActive, jobId]);
   useEffect(() => {
     if (job?.phase !== "completed" || !job.repositoryId) return;
-    onImported({ repositoryId: job.repositoryId, repositoryPath: job.repositoryPath });
-    api.getReport(job.repositoryId).then(setReport).catch(() => undefined);
-    if (!switchLogged.current) {
-      switchLogged.current = true;
-      emit(job.repositoryId, "repository_switched", { repository_path: job.repositoryPath, trigger: "import" });
+    if (!restoredJob.current) {
+      onImported({ repositoryId: job.repositoryId, repositoryPath: job.repositoryPath });
+      if (!switchLogged.current) {
+        switchLogged.current = true;
+        emit(job.repositoryId, "repository_switched", { repository_path: job.repositoryPath, trigger: "import" });
+      }
     }
+    api.getReport(job.repositoryId).then(setReport).catch(() => undefined);
   }, [job?.phase, job?.repositoryId]);
+
+  useEffect(() => {
+    if (job && isSettled(job.phase)) clearActiveImportJob();
+  }, [job?.phase, job?.id]);
 
   /** 发起分析：上方按钮与清单的「重新分析」共用此路径。 */
   const startImport = async (target: string): Promise<void> => {
@@ -95,7 +126,13 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     if (!pathToUse || jobActive) return;
     setPath(pathToUse); // 输入框同步显示正在分析的仓
     setError(""); setReport(null); setOrphaned(false);
-    try { setJob(await api.submitImport(pathToUse, commentMode)); } catch (reason) { setError(failureText("分析发起失败", reason)); }
+    clearActiveImportJob();
+    restoredJob.current = false;
+    try {
+      const started = await api.submitImport(pathToUse, commentMode);
+      writeActiveImportJob(started.id);
+      setJob(started);
+    } catch (reason) { setError(failureText("分析发起失败", reason)); }
   };
 
   const submit = async (): Promise<void> => startImport(path);
