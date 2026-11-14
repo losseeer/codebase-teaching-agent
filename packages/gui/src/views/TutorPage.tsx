@@ -40,8 +40,12 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     return () => { current = false; };
   }, [repositoryId, everVisible, t.dataVersion]);
 
+  /** 每个文件最后一次定位的行：切走会话再切回来时按它恢复锚点，而不是回到第 1 行。 */
+  const lastLine = useRef<Map<string, number>>(new Map());
+
   const loadSource = useCallback(async (path: string, line: number, open: { toast?: boolean; trigger?: "manual" | "auto" | "tab" } = {}): Promise<void> => {
     const seq = ++sourceSeq.current;
+    lastLine.current.set(path, line);
     try {
       const next = await api.getSource(repositoryId, path, line);
       // 迟到的响应不落格：右栏与教学域跟随最后一次点击
@@ -96,10 +100,11 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     if (!t.scopeRef) { lastAutoAnchor.current = null; return; }
     if (!t.scopeRef.startsWith("file:")) { setSource(null); return; }
     const path = t.scopeRef.slice(5);
-    const key = `${path}:1`;
+    const line = lastLine.current.get(path) ?? 1;
+    const key = `${path}:${line}`;
     if (lastAutoAnchor.current === key) return;
     lastAutoAnchor.current = key;
-    void loadSource(path, 1, { toast: false, trigger: "auto" });
+    void loadSource(path, line, { toast: false, trigger: "auto" });
   }, [t.scopeRef, loadSource]);
 
   const [searchParams] = useSearchParams();
