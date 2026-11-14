@@ -98,7 +98,12 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
   // 外部改了教学域：文件打开、目录清空源码视图；同一锚点不重复拉
   useEffect(() => {
     if (!t.scopeRef) { lastAutoAnchor.current = null; return; }
-    if (!t.scopeRef.startsWith("file:")) { setSource(null); return; }
+    if (!t.scopeRef.startsWith("file:")) {
+      // 目录会话不显示源码；去重标记也要清，否则切回文件会话会被误判为「已经加载过」而留空
+      lastAutoAnchor.current = null;
+      setSource(null);
+      return;
+    }
     const path = t.scopeRef.slice(5);
     const line = lastLine.current.get(path) ?? 1;
     const key = `${path}:${line}`;
