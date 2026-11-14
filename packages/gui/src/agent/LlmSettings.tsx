@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch } from "../api/client";
-import { toastFailure } from "../ui/toast";
+import { api, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch } from "../api/client";
+import { showToast, toastFailure } from "../ui/toast";
 import { Icon } from "../ui/icons";
 
 /** LLM 连接配置弹窗：服务商、接口地址、密钥与计价；字段失焦即 PUT。
@@ -12,6 +12,9 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   const [rejected, setRejected] = useState<string | null>(null);
   /** 区分「还没读回来」与「读不到」。 */
   const [loadFailed, setLoadFailed] = useState(false);
+  /** 用户配置过的连接（LLM profile）：切换时先让引擎做一次连通性检查。 */
+  const [profiles, setProfiles] = useState<LlmProfilesView | null>(null);
+  const [activating, setActivating] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -25,8 +28,50 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     if (!open) return;
     const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") setOpen(false); };
     window.addEventListener("keydown", onKey);
+    void api.getLlmProfiles().then(setProfiles).catch(() => undefined);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  const activate = async (id: string): Promise<void> => {
+    setActivating(true);
+    setRejected(null);
+    try {
+      const next = await api.activateLlmProfile(id);
+      setProfiles(next);
+      setLlm(await api.getLlmSettings());
+      showToast(`已切换到「${next.profiles.find((item) => item.id === id)?.name ?? id}」`);
+    } catch (error) {
+      setRejected(error instanceof Error ? error.message : "切换失败");
+      toastFailure("切换失败", error);
+    } finally {
+      setActivating(false);
+    }
+  };
+
+  const capture = async (): Promise<void> => {
+    const name = window.prompt("把这套连接存为配置，起个名字：", `配置 ${String((profiles?.profiles.length ?? 0) + 1)}`);
+    if (!name?.trim()) return;
+    try {
+      setProfiles(await api.captureLlmProfile(name.trim()));
+      showToast("已保存为新配置");
+    } catch (error) {
+      toastFailure("保存配置失败", error);
+    }
+  };
+
+  const dropProfile = async (): Promise<void> => {
+    const activeId = profiles?.activeId;
+    if (!activeId) return;
+    if (!window.confirm("删除当前配置？其中保存的密钥会一起删掉。")) return;
+    try {
+      const next = await api.deleteLlmProfile(activeId);
+      setProfiles(next);
+      if (next.activeId) await activate(next.activeId);
+      else showToast("已删除配置");
+    } catch (error) {
+      toastFailure("删除配置失败", error);
+    }
+  };
 
   const updateLlm = (partial: LlmSettingsPatch): void => {
     if (!llm) return;
@@ -85,6 +130,22 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
               <button type="button" className="icon-btn" aria-label="关闭" onClick={() => setOpen(false)}><Icon name="x" size={14} /></button>
             </div>
             <div className="modal-body">
+              <div className="profile-bar">
+                <select
+                  className="select"
+                  aria-label="切换 LLM 配置"
+                  value={profiles?.activeId ?? ""}
+                  disabled={!profiles || activating}
+                  onChange={(event) => void activate(event.target.value)}
+                >
+                  {profiles?.profiles.length
+                    ? profiles.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model || "未设模型"}</option>)
+                    : <option value="">（还没有配置）</option>}
+                </select>
+                <button type="button" className="icon-btn" title="把当前连接另存为配置" aria-label="另存为配置" onClick={() => void capture()}><Icon name="plus" size={14} /></button>
+                <button type="button" className="icon-btn" title="删除当前配置" aria-label="删除当前配置" disabled={!profiles?.activeId || profiles.profiles.length <= 1} onClick={() => void dropProfile()}><Icon name="trash" size={14} /></button>
+              </div>
+              {activating ? <p className="field-note">正在检测连接…</p> : null}
               {rejected ? <p className="error-message" role="alert">{rejected}</p> : null}
               {llm?.activeMode === "local" ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{status.hint}</span></div> : null}
               <SelectSetting

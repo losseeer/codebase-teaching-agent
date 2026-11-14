@@ -176,6 +176,24 @@ export interface LlmSettings {
 }
 
 /** PUT 的部分更新：省略 = 保持不变，空串 = 清除该项并回落 .env（apiKey 空串即删除已存密钥）。 */
+export interface LlmProfileView {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKeyMasked: string;
+  hasApiKey: boolean;
+  inputUsdPerMillion: string;
+  outputUsdPerMillion: string;
+  cacheHitUsdPerMillion: string;
+}
+
+export interface LlmProfilesView {
+  activeId: string;
+  profiles: LlmProfileView[];
+}
+
 export type LlmSettingsPatch = Partial<{
   provider: LlmProviderKind | "";
   model: string;
@@ -232,6 +250,11 @@ export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 export const api = {
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
+  getLlmProfiles: () => request<LlmProfilesView>("/api/llm/profiles"),
+  saveLlmProfile: (payload: Partial<Omit<LlmProfileView, "apiKeyMasked" | "hasApiKey">> & { apiKey?: string }) => request<LlmProfilesView>("/api/llm/profiles", { method: "POST", body: JSON.stringify(payload) }),
+  captureLlmProfile: (name: string) => request<LlmProfilesView>("/api/llm/profiles/capture", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  activateLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
   /** 打开本机目录选择窗口；取消不是错误。 */
   pickDirectory: () => request<{ path?: string; canceled?: boolean }>("/api/imports/pick-directory", { method: "POST" }),
