@@ -1,6 +1,7 @@
 import { readRepositorySettings } from "../orchestration/paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
 import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../adapter/outbound/llm/provider.js";
+import { syncActiveProfile } from "../../adapter/outbound/llm/profiles.js";
 import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
 /** 思考档位取值 = 运行时清单的成员。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
@@ -122,6 +123,17 @@ export function updateLlmSettingsUseCase(patch: LlmSettingsPatch): SettingsResul
     ...pricingPatch,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     thinking: body.thinking as ThinkingEffort
+  });
+  // 界面改的是当前配置的连接字段：同步回配置，避免两份显示不一致
+  const current = getLlmRuntimeSettings();
+  syncActiveProfile({
+    provider: current.provider,
+    model: current.model,
+    baseUrl: current.baseUrl,
+    apiKey: current.apiKey,
+    inputUsdPerMillion: current.inputUsdPerMillion,
+    outputUsdPerMillion: current.outputUsdPerMillion,
+    cacheHitUsdPerMillion: current.cacheHitUsdPerMillion
   });
   return { ok: true, value: llmSettingsView() };
 }

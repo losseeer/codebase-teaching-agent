@@ -5,12 +5,16 @@ import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsU
 import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
 import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
 import { profileChatUseCase } from "../../../../application/use-case/profile.js";
+import { activateProfileUseCase, captureCurrentProfileUseCase, deleteProfileUseCase, listProfilesUseCase, saveProfileUseCase, type ProfileFailure } from "../../../../application/use-case/profiles.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
   配置与成本面的入站翻译：GET/PUT 运行时 LLM 设置、GET 成本读数、PUT 每仓预算。
   取值与保存在 `application/use-case/settings.ts`，这里只做失败种类 → 状态码与文案。
 */
+const rejectedProfile = (reply: FastifyReply, failure: ProfileFailure, message: string): FastifyReply =>
+  failure === "not-found" ? reply.code(404).send({ error: message }) : reply.code(422).send({ error: message });
+
 const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply => {
   switch (failure.kind) {
     case "repository-missing": return reply.code(404).send({ error: REPOSITORY_NOT_MOUNTED });
@@ -30,6 +34,27 @@ const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply =
 export function registerSettingsRoutes(app: FastifyInstance): void {
   /** 运行时 LLM 设置的读取：含 `.env` 缺省值、预设模型清单与生效模型的思考能力声明。 */
   app.get("/api/llm/settings", async () => llmSettingsView());
+
+  // LLM 配置：多套连接 + 模型，切换前做一次最小连通性检查
+  app.get("/api/llm/profiles", async () => listProfilesUseCase());
+  app.post("/api/llm/profiles", async (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const result = saveProfileUseCase(body as Parameters<typeof saveProfileUseCase>[0]);
+    return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
+  });
+  app.post("/api/llm/profiles/capture", async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: unknown };
+    const result = captureCurrentProfileUseCase(typeof body.name === "string" ? body.name : "");
+    return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
+  });
+  app.delete<{ Params: { id: string } }>("/api/llm/profiles/:id", async (request, reply) => {
+    const result = deleteProfileUseCase(request.params.id);
+    return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
+  });
+  app.post<{ Params: { id: string } }>("/api/llm/profiles/:id/activate", async (request, reply) => {
+    const result = await activateProfileUseCase(request.params.id);
+    return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
+  });
 
   app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string; timeoutMs?: string } }>("/api/llm/settings", async (request, reply) => {
     const result = updateLlmSettingsUseCase(request.body ?? {});
