@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "../ui/icons";
 
@@ -48,14 +48,25 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
     };
   }, [anchor, onClose]);
 
-  if (!anchor || !items.length) return null;
-  const rect = anchor.getBoundingClientRect();
+  // hook 必须在提前返回之前：anchor 从 null 变有值时不能改变 hook 数量
   // 面板高度上限与 CSS 的 max-height 对齐，贴边时按它算，免得底部被裁。
   const maxHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.6), 420));
+  // 先渲染再量尺寸：侧栏底部的头像下方放不下时必须翻到上方，用上限估算会把菜单顶到屏幕中间
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!anchor || !items.length) { setPos(null); return; }
+    const rect = anchor.getBoundingClientRect();
+    const width = panel.current?.offsetWidth ?? 180;
+    const height = panel.current?.offsetHeight ?? Math.min(44 * items.length + 8, maxHeight);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const below = rect.bottom + 6;
+    const top = below + height <= window.innerHeight - 8 ? below : Math.max(8, rect.top - height - 6);
+    setPos({ left, top });
+  }, [anchor, items.length, maxHeight]);
+  if (!anchor || !items.length) return null;
   const style = {
     position: "fixed" as const,
-    left: Math.max(8, Math.min(rect.left, window.innerWidth - 252)),
-    top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - maxHeight - 8)),
+    ...(pos ?? { left: 8, top: 8, visibility: "hidden" as const }),
     minWidth: 168,
     maxHeight,
     zIndex: 70
