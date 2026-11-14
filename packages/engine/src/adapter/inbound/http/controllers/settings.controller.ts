@@ -4,6 +4,7 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../../../application/use-case/settings.js";
 import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
 import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
+import { readMcpConfigUseCase, saveMcpConfigUseCase } from "../../../../application/use-case/mcp.js";
 import { profileChatUseCase } from "../../../../application/use-case/profile.js";
 import { activateProfileUseCase, captureCurrentProfileUseCase, deleteProfileUseCase, listProfilesUseCase, saveProfileUseCase, type ProfileFailure } from "../../../../application/use-case/profiles.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -69,6 +70,15 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (typeof body?.profile !== "string") return reply.code(400).send({ error: "profile 必须是字符串" });
     writeProfile(body.profile);
     return { profile: readProfile(), path: profilePath() };
+  });
+
+  // MCP 服务：只接本地 command；保存前校验结构并重置外部工具缓存
+  app.get("/api/mcp/config", async () => readMcpConfigUseCase());
+  app.put("/api/mcp/config", async (request, reply) => {
+    const body = request.body as { text?: unknown } | undefined;
+    if (typeof body?.text !== "string") return reply.code(400).send({ error: "text 必须是字符串" });
+    const result = saveMcpConfigUseCase(body.text);
+    return result.ok ? result.value : reply.code(422).send({ error: result.error });
   });
 
   app.post("/api/profile/chat", async (request, reply) => {

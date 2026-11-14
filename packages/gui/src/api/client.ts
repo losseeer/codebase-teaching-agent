@@ -194,6 +194,13 @@ export interface LlmProfilesView {
   profiles: LlmProfileView[];
 }
 
+export interface McpConfigView {
+  path: string;
+  text: string;
+  servers: Array<{ name: string; command: string; args?: string[]; cwd?: string; allowedTools?: string[]; envKeys: string[] }>;
+  skipped: Array<{ server: string; reason: string }>;
+}
+
 export type LlmSettingsPatch = Partial<{
   provider: LlmProviderKind | "";
   model: string;
@@ -250,6 +257,8 @@ export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 export const api = {
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
+  getMcpConfig: () => request<McpConfigView>("/api/mcp/config"),
+  putMcpConfig: (text: string) => request<McpConfigView>("/api/mcp/config", { method: "PUT", body: JSON.stringify({ text }) }),
   getLlmProfiles: () => request<LlmProfilesView>("/api/llm/profiles"),
   saveLlmProfile: (payload: Partial<Omit<LlmProfileView, "apiKeyMasked" | "hasApiKey">> & { apiKey?: string }) => request<LlmProfilesView>("/api/llm/profiles", { method: "POST", body: JSON.stringify(payload) }),
   captureLlmProfile: (name: string) => request<LlmProfilesView>("/api/llm/profiles/capture", { method: "POST", body: JSON.stringify({ name }) }),

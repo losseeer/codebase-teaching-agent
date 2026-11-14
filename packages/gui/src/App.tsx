@@ -16,6 +16,7 @@ import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./ui/Loading";
 import { ProfileDialog } from "./views/ProfileDialog";
 import { ModelSettingsDialog } from "./views/ModelSettingsDialog";
+import { McpSettingsDialog } from "./views/McpSettingsDialog";
 import { Icon, type IconName } from "./ui/icons";
 import { DangerDialog } from "./ui/DangerDialog";
 import { PopMenu } from "./ui/PopMenu";
@@ -158,6 +159,7 @@ export function App(): ReactElement {
   const [userMenu, setUserMenu] = useState<HTMLElement | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [mcpSettingsOpen, setMcpSettingsOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -266,14 +268,14 @@ export function App(): ReactElement {
           <button
             type="button"
             className="nav-item sidebar-user"
-            aria-label="用户与偏好"
+            aria-label="用户设置"
             aria-haspopup="menu"
             aria-expanded={Boolean(userMenu)}
-            title="用户与偏好"
+            title="用户设置"
             onClick={(event) => setUserMenu(userMenu ? null : event.currentTarget)}
           >
             <span className="user-avatar" aria-hidden>我</span>
-            <span className="nav-label">用户与偏好</span>
+            <span className="nav-label">用户设置</span>
           </button>
         </div>
       </aside>
@@ -281,13 +283,15 @@ export function App(): ReactElement {
         anchor={userMenu}
         items={[
           { label: "用户画像", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } },
-          { label: "模型设置", title: "模型、思考档位与超时", onSelect: () => { setUserMenu(null); setModelSettingsOpen(true); } }
+          { label: "模型设置", title: "模型、思考档位与超时", onSelect: () => { setUserMenu(null); setModelSettingsOpen(true); } },
+          { label: "MCP 服务", title: "外部 MCP server 的配置", onSelect: () => { setUserMenu(null); setMcpSettingsOpen(true); } }
         ]}
-        ariaLabel="用户与偏好"
+        ariaLabel="用户设置"
         onClose={() => setUserMenu(null)}
       />
       {profileOpen ? <ProfileDialog onClose={() => setProfileOpen(false)} /> : null}
       {modelSettingsOpen ? <ModelSettingsDialog onClose={() => setModelSettingsOpen(false)} /> : null}
+      {mcpSettingsOpen ? <McpSettingsDialog onClose={() => setMcpSettingsOpen(false)} /> : null}
       <PracticeOperationProvider>
         <main className="main">
           {banner}
