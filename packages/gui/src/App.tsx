@@ -15,6 +15,7 @@ import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./ui/Loading";
 import { ProfileDialog } from "./views/ProfileDialog";
+import { ModelSettingsDialog } from "./views/ModelSettingsDialog";
 import { Icon, type IconName } from "./ui/icons";
 import { DangerDialog } from "./ui/DangerDialog";
 import { PopMenu } from "./ui/PopMenu";
@@ -156,6 +157,7 @@ export function App(): ReactElement {
   /** 用户头像菜单与画像面板：用户相关的入口都收在这个折叠菜单里。 */
   const [userMenu, setUserMenu] = useState<HTMLElement | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -277,11 +279,15 @@ export function App(): ReactElement {
       </aside>
       <PopMenu
         anchor={userMenu}
-        items={[{ label: "用户画像", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } }]}
+        items={[
+          { label: "用户画像", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } },
+          { label: "模型设置", title: "模型、思考档位与超时", onSelect: () => { setUserMenu(null); setModelSettingsOpen(true); } }
+        ]}
         ariaLabel="用户与偏好"
         onClose={() => setUserMenu(null)}
       />
       {profileOpen ? <ProfileDialog onClose={() => setProfileOpen(false)} /> : null}
+      {modelSettingsOpen ? <ModelSettingsDialog onClose={() => setModelSettingsOpen(false)} /> : null}
       <PracticeOperationProvider>
         <main className="main">
           {banner}

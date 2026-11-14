@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch, type ThinkingEffort } from "../api/client";
+import { api, type LlmProviderKind, type LlmSettings, type LlmSettingsPatch } from "../api/client";
 import { toastFailure } from "../ui/toast";
 import { Icon } from "../ui/icons";
 
-/** 模型入口与配置弹窗：字段失焦即 PUT 生效，无「保存」动作。 */
+/** LLM 连接配置弹窗：服务商、接口地址、密钥与计价；字段失焦即 PUT。
+  模型、思考档位与超时属于通用设置，在用户菜单的「模型设置」里改。 */
 export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "button" }): ReactElement {
   const [llm, setLlm] = useState<LlmSettings | null>(null);
   const [open, setOpen] = useState(false);
@@ -79,40 +80,13 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
         <div className="modal-mask" onClick={() => setOpen(false)}>
           <div className="modal wide" role="dialog" aria-label="模型与推理设置" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>模型与计价</h3>
+              <h3>LLM 连接与计价</h3>
               <span className="fs-11 faint" title={status.title}>{status.text}</span>
               <button type="button" className="icon-btn" aria-label="关闭" onClick={() => setOpen(false)}><Icon name="x" size={14} /></button>
             </div>
             <div className="modal-body">
               {rejected ? <p className="error-message" role="alert">{rejected}</p> : null}
-              <TextSetting
-                label="模型"
-                value={llm?.model ?? ""}
-                placeholder={llm?.envFallback.model || ".env 未配置"}
-                disabled={!llm}
-                onCommit={(model) => updateLlm({ model })}
-              />
-              <SelectSetting
-                label="思考档位（主力任务）"
-                value={llm?.thinking ?? "auto"}
-                disabled={!llm}
-                hint={THINKING_STYLE_HINT[llm?.thinkingCapability?.style ?? "unknown"]}
-                ariaLabel="思考模式与强度"
-                onChange={(thinking) => updateLlm({ thinking: thinking as ThinkingEffort })}
-                options={[
-                  { value: "auto", label: "自动（模型默认）" },
-                  ...(["off", "low", "high", "max"] as const).map((effort) => ({
-                    value: effort,
-                    label: THINKING_EFFORT_LABEL[effort],
-                    // 未下发能力声明时全部可选；off 恒可选（= 不发字段）
-                    disabled: llm?.thinkingCapability ? !effortSelectable(llm.thinkingCapability, effort) : false
-                  }))
-                ]}
-              />
-              {llm?.thinkingCapability ? <p className="field-note">{thinkingHint(llm.thinkingCapability)}</p> : null}
               {llm?.activeMode === "local" ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{status.hint}</span></div> : null}
-
-              <div className="section-title">连接</div>
               <SelectSetting
                 label="服务商"
                 value={llm?.provider ?? ""}
@@ -131,15 +105,6 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 placeholder={llm?.envFallback.baseUrl || "协议默认"}
                 disabled={!llm}
                 onCommit={(baseUrl) => updateLlm({ baseUrl })}
-              />
-              <TextSetting
-                label="超时"
-                numeric
-                value={llm?.timeoutMs ?? ""}
-                placeholder={timeoutPlaceholder(llm)}
-                disabled={!llm}
-                note="单位毫秒"
-                onCommit={(timeoutMs) => updateLlm({ timeoutMs })}
               />
               <SecretSetting
                 saved={llm?.apiKeyMasked ?? ""}
@@ -199,21 +164,6 @@ const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
   max: "最大"
 };
 
-/** 各思考能力样式的悬停提示。 */
-const THINKING_STYLE_HINT: Record<string, string> = {
-  deepseek: "DeepSeek：思考开关 + 强度档（V4 默认开启思考）",
-  openai: "OpenAI：强度档（GPT-5 / o 系 / Gemini 兼容层）",
-  anthropic: "Anthropic 兼容层：仅 thinking 开关，无强度档位",
-  none: "该模型没有思考参数",
-  unknown: "这个模型没有已知的思考档位，只能选自动或关闭"
-};
-
-/** 超时占位：留空时说明用的是 .env 的哪一份（显示单位换成秒）。 */
-function timeoutPlaceholder(llm: LlmSettings | null): string {
-  const env = llm?.envFallback.timeoutMs;
-  return env ? `默认 ${String(Math.round(env / 1000))} 秒` : "未配置";
-}
-
 /** 单价占位：留空时展示 .env 的值。 */
 function ratePlaceholder(llm: LlmSettings | null, key: "input" | "output" | "cacheHit"): string {
   const fromEnv = llm?.pricingSources?.[key] === "env";
@@ -256,25 +206,6 @@ function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: st
   const [protocol, ...model] = (llm.activeModel ?? "").split(":");
   const slug = model.join(":") || llm.activeModel || "";
   return { pill: slug, text: `${protocol} · ${slug}`, title: `${llm.activeProvider ?? ""} · ${llm.activeModel ?? ""}`, hint: "", thinking, local: false };
-}
-
-/** 说明该模型可选哪些思考档。 */
-function thinkingHint(capability: NonNullable<LlmSettings["thinkingCapability"]>): string {
-  const styleName: Record<string, string> = {
-    deepseek: "DeepSeek 格式",
-    openai: "reasoning_effort",
-    anthropic: "仅开关（无强度）",
-    none: "无思考参数",
-    unknown: "未声明思考能力"
-  };
-  const supported = (["off", "low", "high", "max"] as const).filter((effort) => effortSelectable(capability, effort)).map((effort) => THINKING_EFFORT_LABEL[effort]);
-  return `${capability.model} · ${styleName[capability.style] ?? capability.style} · 支持：${supported.length ? supported.join(" / ") : "无"}`;
-}
-
-/** off 恒可表达：无思考参数/未声明的模型选 off = 不发字段。 */
-function effortSelectable(capability: NonNullable<LlmSettings["thinkingCapability"]>, effort: "off" | "low" | "high" | "max"): boolean {
-  if (capability.efforts.includes(effort)) return true;
-  return effort === "off" && (capability.style === "none" || capability.style === "unknown");
 }
 
 /** 文本设置项：本地草稿，失焦或回车提交。 */
