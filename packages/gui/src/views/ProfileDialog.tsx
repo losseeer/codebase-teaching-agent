@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { api } from "../api/client";
 import { showToast, failureText } from "../ui/toast";
+import { DangerDialog } from "../ui/DangerDialog";
 
 /**
   用户画像：跨仓库、用户手写的 markdown。写给 agent 的长期偏好与背景，
@@ -16,6 +17,8 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
   const [ask, setAsk] = useState("");
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
+  /** 空内容保存 = 清空整份画像：破坏性动作先确认。 */
+  const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -47,19 +50,25 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
     }
   };
 
-  const save = async (): Promise<void> => {
+  const persist = async (value: string): Promise<void> => {
     setBusy(true);
     setError("");
     try {
-      const next = await api.putProfile(text);
+      const next = await api.putProfile(value);
       setText(next.profile);
-      showToast(text.trim() ? "用户画像已保存" : "用户画像已清空");
+      showToast(value.trim() ? "用户画像已保存" : "用户画像已清空");
       onClose();
     } catch (reason) {
       setError(failureText("保存用户画像失败", reason));
     } finally {
       setBusy(false);
     }
+  };
+
+  const save = async (): Promise<void> => {
+    // 留空保存会清空整份画像：先确认，不靠一行小字提示
+    if (!text.trim()) { setConfirmClear(true); return; }
+    await persist(text);
   };
 
   return (
@@ -96,11 +105,19 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
           <p className="field-note mono" title={path}>{path ? `存储于 ${path}` : "正在读取存储位置…"}</p>
         </div>
         <div className="modal-foot">
-          <span className="modal-note">留空并保存 = 清空画像</span>
           <button type="button" className="btn" onClick={onClose}>取消</button>
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存"}</button>
         </div>
       </div>
+      {confirmClear ? (
+        <DangerDialog
+          title="清空用户画像"
+          body="画像内容会被全部清空，且没有历史版本可回退。"
+          deleteLabel="清空"
+          onDelete={() => { setConfirmClear(false); void persist(""); }}
+          onClose={() => setConfirmClear(false)}
+        />
+      ) : null}
     </div>
   );
 }
