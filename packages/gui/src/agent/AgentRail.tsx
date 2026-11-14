@@ -24,11 +24,23 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
   // 切工作区不是用户上翻，恢复跟随
-  useEffect(() => { stickToBottom.current = true; }, [scope]);
+  useEffect(() => {
+    stickToBottom.current = true;
+    const el = threadRef.current;
+    if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [scope]);
+  // 新消息、过程提示与流式正文的高度都是异步撑开的：DOM 一变就在下一帧贴底，避免停在旧底部
   useEffect(() => {
     const el = threadRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [items.length, scope, t.liveAnswer, t.progress[scope]]);
+    if (!el) return;
+    const toBottom = (): void => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    };
+    const observer = new MutationObserver(() => requestAnimationFrame(toBottom));
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    requestAnimationFrame(toBottom);
+    return () => observer.disconnect();
+  }, []);
 
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
   const bound = boundFor(scope, t);
