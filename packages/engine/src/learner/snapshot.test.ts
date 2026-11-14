@@ -3,8 +3,8 @@ import type { JournalEvent, RepoLearningRecord } from "@codebase-tutor/domain";
 
 import { buildLearnerSnapshot } from "./snapshot.js";
 
-function event(at: string, payload: JournalEvent["payload"]): JournalEvent {
-  return { id: at, type: "exercise_result", at, repositoryId: "repo", payload };
+function event(at: string, payload: JournalEvent["payload"], type: JournalEvent["type"] = "exercise_result"): JournalEvent {
+  return { id: at, type, at, repositoryId: "repo", payload };
 }
 
 const record: RepoLearningRecord = {
@@ -45,5 +45,23 @@ describe("学习快照", () => {
       now: new Date("2026-11-03T00:00:00.000Z")
     });
     expect(fallback).toContain("impact:src/a.ts");
+  });
+});
+
+describe("问答互动进快照", () => {
+  it("统计近七天的文件关注与常读技能，旧记录不进", () => {
+    const snapshot = buildLearnerSnapshot({
+      record: { ...record, dueReviews: 0 },
+      events: [
+        event("2026-11-02T00:00:00.000Z", { path: "sl-jump/src/main/java/WalQueue.java", line: 3 }, "file_opened"),
+        event("2026-11-02T01:00:00.000Z", { path: "sl-jump/src/main/java/WalQueue.java", line: 9 }, "line_located"),
+        event("2026-11-02T02:00:00.000Z", { skill: "exercise-code-concepts", chars: 120, found: true }, "skill_read"),
+        event("2026-10-01T00:00:00.000Z", { path: "src/old/Old.java" }, "file_opened")
+      ],
+      now: new Date("2026-11-03T00:00:00.000Z")
+    });
+    expect(snapshot).toContain("最近在看：sl-jump/src/main/java/WalQueue.java（2 次）");
+    expect(snapshot).toContain("常读技能：exercise-code-concepts（1 次）");
+    expect(snapshot).not.toContain("Old.java");
   });
 });

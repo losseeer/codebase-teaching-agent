@@ -71,7 +71,33 @@ function groupsFromEvents(events: JournalEvent[], topicLabels: Record<string, st
   return [...groups.values()].sort((left, right) => (right.lastAt ?? "").localeCompare(left.lastAt ?? ""));
 }
 
-/** 一条紧凑的学习快照：最近练的主题 + 待复习数；不写掌握度分数与教学档位。 */
+/** 问答互动的观察窗口与数量：只看近期，避免旧兴趣压过当下。 */
+const FOCUS_DAYS = 7;
+
+function recentFocus(events: readonly JournalEvent[], now: Date): string | undefined {
+  const since = now.getTime() - FOCUS_DAYS * 86_400_000;
+  const files = new Map<string, number>();
+  const skills = new Map<string, number>();
+  for (const event of events) {
+    if (Date.parse(event.at) < since) continue;
+    if (event.type === "file_opened" || event.type === "line_located") {
+      const path = event.payload.path;
+      if (typeof path === "string" && path) files.set(path, (files.get(path) ?? 0) + 1);
+    } else if (event.type === "skill_read") {
+      const skill = event.payload.skill;
+      if (typeof skill === "string" && skill) skills.set(skill, (skills.get(skill) ?? 0) + 1);
+    }
+  }
+  const file = [...files.entries()].sort((left, right) => right[1] - left[1])[0];
+  const skill = [...skills.entries()].sort((left, right) => right[1] - left[1])[0];
+  if (!file && !skill) return undefined;
+  return [
+    file ? `最近在看：${file[0]}（${String(file[1])} 次）` : "",
+    skill ? `常读技能：${skill[0]}（${String(skill[1])} 次）` : ""
+  ].filter(Boolean).join("；");
+}
+
+/** 一条紧凑的学习快照：最近练的主题 + 待复习数 + 近期问答关注点；不写掌握度分数与教学档位。 */
 export function buildLearnerSnapshot(input: LearnerSnapshotInput): string {
   const now = input.now ?? new Date();
   const groups = groupsFromEvents(input.events ?? [], input.topicLabels ?? {});
@@ -79,11 +105,13 @@ export function buildLearnerSnapshot(input: LearnerSnapshotInput): string {
   const lead = groups[0] ?? (fallback
     ? { label: fallback.unitId, attempts: fallback.attempts, firstPasses: fallback.successes, reviewPasses: 0, lastAt: fallback.lastPracticedAt }
     : undefined);
+  const focus = recentFocus(input.events ?? [], now);
   const lines = [
     lead
       ? `${lead.label}：${String(lead.attempts)} 次，首次通过 ${String(lead.firstPasses)}，复习通过 ${String(lead.reviewPasses)}，置信度${mention(lead.attempts)}，${daysText(lead.lastAt, now)}`
       : "还没有练习记录",
-    `待复习：${String(input.record.dueReviews)} 题`
+    `待复习：${String(input.record.dueReviews)} 题`,
+    ...(focus ? [focus] : [])
   ];
   return lines.join("\n").slice(0, LEARNER_SNAPSHOT_LIMIT);
 }
