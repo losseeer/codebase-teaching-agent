@@ -3,6 +3,7 @@ import { TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../../outbound/llm/provider.j
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../../../application/use-case/settings.js";
 import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
+import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -35,6 +36,15 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   });
 
   /** 恢复出厂技能：覆盖用户技能目录里出厂技能的副本（用户自建技能不动）。 */
+  // 用户画像：跨仓库、用户手写；读写都走同一个文件，返回路径便于界面显示
+  app.get("/api/profile", async () => ({ profile: readProfile(), path: profilePath() }));
+  app.put("/api/profile", async (request, reply) => {
+    const body = request.body as { profile?: unknown } | undefined;
+    if (typeof body?.profile !== "string") return reply.code(400).send({ error: "profile 必须是字符串" });
+    writeProfile(body.profile);
+    return { profile: readProfile(), path: profilePath() };
+  });
+
   app.post("/api/skills/restore", async (_request, reply) => {
     const result = restoreSkillsUseCase();
     return "error" in result ? reply.code(422).send({ error: result.error }) : reply.send(result);

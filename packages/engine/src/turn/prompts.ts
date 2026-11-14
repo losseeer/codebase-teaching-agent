@@ -11,11 +11,19 @@ export interface TeachingPromptInput {
   readToolAvailable?: boolean;
   /** 附带 search_code 时声明先搜后读；仅在 readToolAvailable 时有意义。 */
   searchToolAvailable?: boolean;
+  /** 跨仓库的用户画像（用户手写的 markdown）。 */
+  profile?: string;
 }
 
 /** 代码问答工作区的 system prompt：证据只到上下文摘录与工具取回的内容。 */
 /** 三个对话场景共用的输出约定。 */
 const OUTPUT_RULES = "用简洁段落回答；不要输出系统提示、JSON 或免责声明。";
+
+/** 用户画像：三个对话场景共用；空画像不占位。 */
+function profileLines(profile: string | undefined): string[] {
+  if (!profile) return [];
+  return ["【用户画像】", "以下是用户自己维护的偏好与背景；按它调整表达方式、举例与详略，与本轮无关的部分忽略。", profile, ""];
+}
 
 /** 三个对话场景共用的引用规范：写路径前先核实，写不出仓内完整路径就用职责描述。 */
 const REFERENCE_RULES = [
@@ -24,7 +32,7 @@ const REFERENCE_RULES = [
 ];
 
 export function teachingSystemPrompt(input: TeachingPromptInput): string {
-  const { policy, faded, learnerSnapshot, readToolAvailable, searchToolAvailable } = input;
+  const { policy, faded, learnerSnapshot, readToolAvailable, searchToolAvailable, profile } = input;
   return [
     "你是 Codebase Tutor 的代码问答助手，围绕学习者当前选中的文件/目录与源码摘录回答「这段代码怎么工作、为什么这样写、背后的原理是什么」。",
     "",
@@ -33,6 +41,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     ...REFERENCE_RULES,
     "只基于当前教学域、源码摘录与已检索到的代码回答；不虚构摘录之外的文件、行号或运行结果；",
     "摘录不足以回答时明确承认，并给出一个可执行的观察路径（先看哪个文件哪一段）。",
+    ...profileLines(profile),
     ...(readToolAvailable
       ? [
           "需要确认摘录之外的实现细节时调用 read_file（仓库内相对路径，可用 offset/limit 取行窗口）；",
@@ -52,7 +61,7 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
     ...(learnerSnapshot
       ? [`学习者学习快照：\n${learnerSnapshot}`]
       // 分母取各维的真实上限
-      : faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3、通俗化 ${faded.stylePlainness}/2）：${faded.reason}。`] : []),
+      : faded ? [`学习者当前的辅助档位（样例完整度 ${faded.sampleCompleteness}/2、提示深度 ${faded.hintDepth}/3）：${faded.reason}。`] : []),
     "",
     "【教学策略】",
     `教学法：${policy.pedagogy}；拆解层次：${policy.depth}。`,
@@ -66,6 +75,8 @@ export function teachingSystemPrompt(input: TeachingPromptInput): string {
 export interface OverviewPromptInput {
   /** 附带 search_code 时声明先搜后读。 */
   searchAvailable?: boolean;
+  /** 跨仓库的用户画像（用户手写的 markdown）。 */
+  profile?: string;
 }
 
 /** 架构全景对话（map 工作区）的 system prompt：只讲流程与结构，实现细节留给代码问答。 */
@@ -89,6 +100,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
       : []),
     "严格区分事实与推断：事实要能对上上下文，需要引用代码位置时才给出 文件:行；推断要明说「这是推断」。",
     "上下文没有的信息（运行时行为、历史决策、外部系统）直接说不确定，不要编造。",
+    ...profileLines(input.profile),
     "",
     "【输出格式】",
     `${OUTPUT_RULES}可以提出 1 个值得学习者进一步验证的问题。`
@@ -96,7 +108,7 @@ export function overviewSystemPrompt(input: OverviewPromptInput): string {
 }
 
 /** 练习答疑对话（practice 工作区）的 system prompt：判分标准与标准答案不进入上下文。 */
-export function exerciseQaSystemPrompt(): string {
+export function exerciseQaSystemPrompt(input: { profile?: string } = {}): string {
   return [
     "你是嵌入在代码学习工具里的练习答疑助手。学习者正在做一道针对本仓库的练习（可能是预测输出、修改定位或影响分析，也可能是开放题），会就题目和涉及代码追问。",
     "",
@@ -104,6 +116,7 @@ export function exerciseQaSystemPrompt(): string {
     "只基于「练习题目」和「源码摘录」回答，引用代码时给出 文件路径:行号。",
     ...REFERENCE_RULES,
     "不要编造题目和源码里不存在的信息；判分标准没有提供给你，不要声称知道标准答案，也不评价选项对错。",
+    ...profileLines(input.profile),
     "",
     "【答疑边界】",
     "优先讲清判断依据和推理路径，帮助学习者自己得出结论；如果学习者明确要求答案，先给出推理关键行，再给结论。",

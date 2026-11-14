@@ -34,7 +34,7 @@ describe("M2.3 learner model", () => {
       pass("2026-01-02T00:00:00.000Z"),
       event("exercise_result", "2026-01-03T00:00:00.000Z", { target_unit_id: "impact:src/a.py", passed: false, score: 0 })
     ]);
-    expect(recovered).toMatchObject({ sampleCompleteness: 1, hintDepth: 3, stylePlainness: 2, transition: "replenish" });
+    expect(recovered).toMatchObject({ sampleCompleteness: 1, hintDepth: 3, transition: "replenish" });
   });
 
   // journal 里的 workflow 练习记录只留档，不进掌握度回放

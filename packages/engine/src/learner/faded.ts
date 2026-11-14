@@ -3,7 +3,6 @@ import type { FadedState, JournalEvent } from "@codebase-tutor/domain";
 const initial: FadedState = {
   sampleCompleteness: 2,
   hintDepth: 3,
-  stylePlainness: 2,
   mastered: false,
   transition: "steady",
   reason: "尚未出现掌握判定，保留完整辅助。"
@@ -30,19 +29,13 @@ export function deriveFaded(events: JournalEvent[]): FadedState {
       } else if (state.hintDepth > 0) {
         state.hintDepth = (state.hintDepth - 1) as FadedState["hintDepth"];
         state.reason = "掌握判定通过，减少一档提示深度。";
-      } else if (state.stylePlainness > 0) {
-        state.stylePlainness = (state.stylePlainness - 1) as FadedState["stylePlainness"];
-        state.reason = "掌握判定通过，减少一档通俗化表达。";
       } else {
         state.reason = "辅助已达到最低档，继续保持独立尝试。";
       }
       state.transition = "fade";
       state.updatedAt = event.at;
     } else if (state.mastered && isFailure(event)) {
-      if (state.stylePlainness < 2) {
-        state.stylePlainness = (state.stylePlainness + 1) as FadedState["stylePlainness"];
-        state.reason = "最近一次失败，回补一档通俗化表达。";
-      } else if (state.hintDepth < 3) {
+      if (state.hintDepth < 3) {
         state.hintDepth = (state.hintDepth + 1) as FadedState["hintDepth"];
         state.reason = "最近一次失败，回补一档提示深度。";
       } else if (state.sampleCompleteness < 2) {

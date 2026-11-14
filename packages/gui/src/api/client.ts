@@ -244,6 +244,8 @@ export const api = {
   getIndex: (repositoryId: string) => request<RepositoryIndex>(`/api/repositories/${repositoryId}/index`),
   /** 恢复出厂技能：把用户技能目录里出厂技能的副本覆盖回出厂版本（用户自建技能不动）。 */
   restoreSkills: () => request<{ restored: string[]; files: number }>("/api/skills/restore", { method: "POST" }),
+  getProfile: () => checked("profile", z.object({ profile: z.string(), path: z.string() }), "/api/profile"),
+  putProfile: (profile: string) => request<{ profile: string; path: string }>("/api/profile", { method: "PUT", body: JSON.stringify({ profile }) }),
   /** 只读能力面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope, operation?: PracticeOperation) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}${operation ? `&operation=${operation}` : ""}`),
   /** journal 按 traceId 汇总；给 threadId 时只取该会话。纯读。 */

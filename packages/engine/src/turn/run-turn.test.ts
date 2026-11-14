@@ -42,7 +42,7 @@ describe("provider-backed code Q&A turn", () => {
     const repository = fixtureRepository();
     let prompt = "";
     const provider: LlmProvider = { name: "fake", modelVersion: "fake-v1", complete: async (input) => { prompt = `${input.system}\n${input.user}`; return { text: "入口先读配置，再看它把什么交给下一步。", usage: { inputTokens: 20, outputTokens: 7 } }; } };
-    const result = await respondWithProvider(createSession("repo", scope.ref), scope, "这段先跑哪一步？", provider, { sampleCompleteness: 1, hintDepth: 2, stylePlainness: 1, mastered: true, transition: "fade", reason: "掌握后减少样例。" }, repository, { index });
+    const result = await respondWithProvider(createSession("repo", scope.ref), scope, "这段先跑哪一步？", provider, { sampleCompleteness: 1, hintDepth: 2, mastered: true, transition: "fade", reason: "掌握后减少样例。" }, repository, { index });
     expect(result.assistant.content).toBe("入口先读配置，再看它把什么交给下一步。");
     expect(result.provider).toBe("fake");
     expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 7 });
@@ -53,7 +53,7 @@ describe("provider-backed code Q&A turn", () => {
     expect(prompt).toContain("当前教学域: 文件 src/main.ts");
     expect(prompt).toContain("src/main.ts:1-3");
     expect(prompt).toContain("1: export const main = () => readConfig();");
-    expect(prompt).toContain("通俗化 1/2");
+    expect(prompt).toContain("样例完整度 1/2");
     expect(prompt).not.toContain("当前阶段");
     expect(prompt).not.toContain("本轮动作");
 

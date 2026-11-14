@@ -29,6 +29,7 @@ import { PRACTICE_FACE_PLAN } from "../../exercises/turn-faces.js";
 import { turnTextPayload } from "@codebase-tutor/domain";
 import { REPOSITORY_NOT_MOUNTED, repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { traceEngine } from "@codebase-tutor/platform";
+import { profileForPrompt } from "../../adapter/outbound/profile.js";
 
 /**
   架构全景与练习答疑两个对话用例，以及带外的「停止生成」。
@@ -106,6 +107,7 @@ export async function runMapChat(
     const askGiven = !(input.scopePaths?.length || input.path) && consecutiveAskedTurns(threadEvents) < ASK_STREAK_LIMIT;
     let writtenDiagram: { id: string; name: string } | undefined;
     const result = await mapChat({
+      profile: profileForPrompt(),
       repoPath: repository.path, analysis: repository.analysis, scopePaths: input.scopePaths, path: input.path, content: turn.question, history: turn.history, provider,
       search: searchCorpusFor(repository),
       // 认领的那一句必须带 resume 进循环
@@ -186,6 +188,7 @@ export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, 
   // 答疑除文件读取外只开技能；与能力清单共用同一份计划。
   const skills = PRACTICE_FACE_PLAN.chat.skills ? skillsForTurn() : undefined;
   const result = await practiceChat({
+    profile: profileForPrompt(),
     repoPath: repository.path, exercise: turn.exercise, content: turn.question, history: turn.history, provider,
     ...(turn.threadId ? { threadId: turn.threadId } : {}),
     trace: { repositoryId: repository.index.repositoryId, ...(turn.threadId ? { threadId: turn.threadId } : {}), prompt: turn.question },

@@ -120,6 +120,8 @@ export interface RespondOptions {
   trace?: TurnTraceContext;
   /** 由教学层生成并注入 system prompt；不含教学档位。 */
   learnerSnapshot?: string;
+  /** 跨仓库的用户画像；空值时提示词里不出现这一段。 */
+  profile?: string;
 }
 
 export interface TurnTraceContext {
@@ -289,7 +291,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
   });
   const readToolAvailable = Boolean(repositoryPath);
   const searchToolAvailable = readToolAvailable && Boolean(options.search);
-  const system = teachingSystemPrompt({ policy, faded, learnerSnapshot: options.learnerSnapshot, readToolAvailable, searchToolAvailable });
+  const system = teachingSystemPrompt({ policy, faded, learnerSnapshot: options.learnerSnapshot, profile: options.profile, readToolAvailable, searchToolAvailable });
   // 技能清单贴在上下文尾部，不进系统提示词
   const skillsBrief = options.skills ? `\n\n${options.skills.brief}` : "";
   const user = `学习者本轮输入：${learnerContent}\n\n可审计代码上下文：\n${context}${skillsBrief}`;
@@ -331,7 +333,7 @@ export async function respondWithProvider(session: TutorSession, scope: ScopeRef
 }
 
 /** 架构全景工作区的一轮对话，带图结构写工具与现状快照。 */
-export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
+export async function mapChat(input: { repoPath: string; analysis: RepositoryAnalysis; scopePaths?: string[]; path?: string; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; search?: SearchCorpus; threadId?: string; trace?: TurnTraceContext; onProgress?: (progress: MapChatProgress) => void; signal?: AbortSignal; profile?: string; /** 图结构改动通道；给了工具就必须给 `inventory` 现状。 */ diagram?: SetDiagramToolContext; /** 静态产物的只读查询通道。 */ facts?: FactsToolContext; /** 技能清单与正文取用通道。 */ skills?: SkillsToolContext; /** 提问通道；`resume` 表示本句是回答上一回合的提问。 */ ask?: { facets: AskFacet[]; resume?: AskResume }; /** 外部 MCP 工具面。 */ external?: ExternalToolContext; /** 回合检查点通道。 */ checkpoint?: TurnCheckpointChannel; /** 每轮工具调用前的预算检查。 */ budgetGuard?: () => string | undefined }): Promise<ScopedChatResult> {
   const { analysis, path, provider } = input;
   const sections: string[] = [];
   const egress: EgressCollector = [];
@@ -359,7 +361,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   const context = clip(sections.filter(Boolean).join("\n\n") || "（暂无可用的代码上下文）", mapContextCap());
   // 技能清单贴在上下文尾部，不进系统提示词
   const skillsBrief = input.skills ? `\n\n${input.skills.brief}` : "";
-  const system = overviewSystemPrompt({ searchAvailable: Boolean(input.search) });
+  const system = overviewSystemPrompt({ searchAvailable: Boolean(input.search), profile: input.profile });
   // 已占用字符数 = 系统提示词 + 代码上下文 + 技能清单。
   const conversation = conversationBlock(input.history, input.content, system.length + context.length + skillsBrief.length);
   const userMessage = `代码上下文：\n${context}${skillsBrief}\n\n${conversation.text}学习者的问题：${input.content}`;
@@ -406,7 +408,7 @@ export async function mapChat(input: { repoPath: string; analysis: RepositoryAna
   };
 }
 
-export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; threadId?: string; trace?: TurnTraceContext; signal?: AbortSignal; skills?: SkillsToolContext;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
+export async function practiceChat(input: { repoPath: string; exercise: Exercise; content: string; history?: ScopedChatTurn[]; provider: LlmProvider; threadId?: string; trace?: TurnTraceContext; signal?: AbortSignal; skills?: SkillsToolContext; profile?: string;   /** 过程事件回调。 */ onProgress?: (progress: MapChatProgress) => void }): Promise<ScopedChatResult> {
   const exercise = input.exercise;
   const sections: string[] = [`题型：${exercise.kind}\n题目：${exercise.title}\n${exercise.prompt}`];
   const egress: EgressCollector = [];
@@ -415,7 +417,7 @@ export async function practiceChat(input: { repoPath: string; exercise: Exercise
   }
   excerptsWithinBudget(input.repoPath, exercise.anchors.slice(0, 3), false, egress).forEach((block) => sections.push(block));
   const context = clip(sections.filter(Boolean).join("\n\n"), practiceContextCap());
-  const system = `${exerciseQaSystemPrompt()}${input.skills ? `\n\n${input.skills.brief}` : ""}`;
+  const system = `${exerciseQaSystemPrompt({ profile: input.profile })}${input.skills ? `\n\n${input.skills.brief}` : ""}`;
   const conversation = conversationBlock(input.history, input.content, system.length + context.length);
   const user = `练习上下文：\n${context}\n\n${conversation.text}学习者的追问：${input.content}`;
   recordEgress({ repositoryPath: input.repoPath, scene: "practice.chat", sessionId: input.threadId, sources: egress, sent: user });

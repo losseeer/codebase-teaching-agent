@@ -101,7 +101,6 @@ export type FadedTransition = "fade" | "replenish" | "steady";
 export interface FadedState {
   sampleCompleteness: 0 | 1 | 2;
   hintDepth: 0 | 1 | 2 | 3;
-  stylePlainness: 0 | 1 | 2;
   mastered: boolean;
   transition: FadedTransition;
   reason: string;

@@ -19,3 +19,20 @@ describe("对话提示词的引用规范", () => {
     }
   });
 });
+
+describe("用户画像注入", () => {
+  it("有画像时三个场景都带上；空画像不出现标题", () => {
+    const profile = "## 表达偏好\n严谨、具体、结构清晰。";
+    const policy = { pedagogy: "socratic" as const, depth: "macro" as const, constraints: [] };
+    for (const system of [
+      teachingSystemPrompt({ policy, profile }),
+      overviewSystemPrompt({ searchAvailable: true, profile }),
+      exerciseQaSystemPrompt({ profile })
+    ]) {
+      expect(system).toContain("【用户画像】");
+      expect(system).toContain("严谨、具体、结构清晰");
+    }
+    expect(teachingSystemPrompt({ policy })).not.toContain("【用户画像】");
+    expect(exerciseQaSystemPrompt()).not.toContain("【用户画像】");
+  });
+});

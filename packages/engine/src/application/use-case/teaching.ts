@@ -14,6 +14,7 @@ import { createSession } from "../../turn/session.js";
 import { respondWithProvider } from "../../turn/run-turn.js";
 import { deriveRepoLearningRecord } from "../../learner/model.js";
 import { recommendSettings } from "../../learner/teaching-profile.js";
+import { profileForPrompt } from "../../adapter/outbound/profile.js";
 import { deriveFaded } from "../../learner/faded.js";
 import { buildLearnerSnapshot } from "../../learner/snapshot.js";
 import type { LlmProvider } from "../port/llm-provider.js";
@@ -106,6 +107,8 @@ export interface PreparedTeachingTurn {
   question: string;
   /** 注入 system prompt 的紧凑学习快照；不含教学档位。 */
   learnerSnapshot: string;
+  /** 跨仓库的用户画像；空画像为 undefined。 */
+  profile?: string;
 }
 
 /** 回合发起前的校验与装配。 */
@@ -137,7 +140,8 @@ export async function prepareTeachingTurn(sessionId: string, input: { content?: 
       session: { ...current, settings },
       scope,
       question,
-      learnerSnapshot: buildLearnerSnapshot({ record, events, topicLabels })
+      learnerSnapshot: buildLearnerSnapshot({ record, events, topicLabels }),
+      profile: profileForPrompt()
     }
   };
 }
@@ -156,6 +160,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
   const { repository, session, scope, question } = turn;
   const outcome = await respondWithProvider(session, scope, question, provider, undefined, repository.path, {
     learnerSnapshot: turn.learnerSnapshot,
+    profile: turn.profile,
     index: repository.index,
     analysis: repository.analysis,
     search: searchCorpusFor(repository),

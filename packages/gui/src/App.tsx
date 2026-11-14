@@ -14,8 +14,10 @@ import { PracticePage } from "./views/PracticePage";
 import { InsightsPage } from "./views/InsightsPage";
 import type { WorkspaceId } from "./views/WorkspaceChrome";
 import { Loading } from "./ui/Loading";
+import { ProfileDialog } from "./views/ProfileDialog";
 import { Icon, type IconName } from "./ui/icons";
 import { DangerDialog } from "./ui/DangerDialog";
+import { PopMenu } from "./ui/PopMenu";
 import { layoutVars, useLayout } from "./ui/ColumnResizer";
 import { showToast, toastFailure, ToastHost } from "./ui/toast";
 import { emit, installJournalRetry } from "./journal";
@@ -151,6 +153,9 @@ export function App(): ReactElement {
   }, [engineUnreachable]);
   const chat = useScopedChat(workspace?.repositoryId ?? "");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  /** 用户头像菜单与画像面板：用户相关的入口都收在这个折叠菜单里。 */
+  const [userMenu, setUserMenu] = useState<HTMLElement | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -256,8 +261,27 @@ export function App(): ReactElement {
             <span className={`status-dot ${workspace && !engineUnreachable ? "online" : ""}`} />
             <span className="nav-label">{!workspace ? "等待导入仓库" : engineUnreachable ? "本地引擎未连接" : "本地引擎已连接"}</span>
           </div>
+          <button
+            type="button"
+            className="nav-item sidebar-user"
+            aria-label="用户与偏好"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(userMenu)}
+            title="用户与偏好"
+            onClick={(event) => setUserMenu(userMenu ? null : event.currentTarget)}
+          >
+            <span className="user-avatar" aria-hidden>我</span>
+            <span className="nav-label">用户与偏好</span>
+          </button>
         </div>
       </aside>
+      <PopMenu
+        anchor={userMenu}
+        items={[{ label: "用户画像", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } }]}
+        ariaLabel="用户与偏好"
+        onClose={() => setUserMenu(null)}
+      />
+      {profileOpen ? <ProfileDialog onClose={() => setProfileOpen(false)} /> : null}
       <PracticeOperationProvider>
         <main className="main">
           {banner}
