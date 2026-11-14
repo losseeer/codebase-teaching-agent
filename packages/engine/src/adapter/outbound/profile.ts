@@ -26,6 +26,40 @@ export function writeProfile(text: string): void {
   writeFileSync(path, trimmed ? `${trimmed}\n` : "", "utf8");
 }
 
+const AUTO_SECTION = "## 自动记录";
+const AUTO_LIMIT = 20;
+
+function autoRange(lines: string[]): { start: number; end: number } | undefined {
+  const start = lines.findIndex((line) => line.trim() === AUTO_SECTION);
+  if (start < 0) return undefined;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith("## ")) { end = index; break; }
+  }
+  return { start, end };
+}
+
+/** 追加一条自动记忆：去重、只裁「自动记录」小节，手写内容不动。 */
+export function appendAutoMemory(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const current = readProfile().trim();
+  if (current.includes(trimmed)) return false;
+  const lines = current ? current.split("\n") : [];
+  const stamp = new Date().toISOString().slice(0, 10);
+  const entry = `- ${stamp} · ${trimmed}`;
+  const range = autoRange(lines);
+  if (!range) {
+    lines.push("", AUTO_SECTION, entry);
+  } else {
+    const entries = lines.slice(range.start + 1, range.end).filter((line) => line.startsWith("- "));
+    const kept = [...entries, entry].slice(-AUTO_LIMIT);
+    lines.splice(range.start + 1, range.end - range.start - 1, ...kept);
+  }
+  writeProfile(lines.join("\n"));
+  return true;
+}
+
 /** 提示词用的版本：空画像返回 undefined，避免多一段空标题。 */
 export function profileForPrompt(): string | undefined {
   const text = readProfile().trim();

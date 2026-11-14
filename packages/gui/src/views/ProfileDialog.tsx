@@ -49,8 +49,8 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
         </div>
         <div className="modal-body">
           <p className="field-note">
-            跨仓库生效：写给 agent 的长期偏好与背景（表达风格、关注领域、常用技术栈）。与具体项目无关的内容放这里；
-            项目内的学习状态由运行轨迹记录，不需要手写。
+            跨仓库生效，主要由 agent 自动维护：每次对话结束后它会把值得长期记住的偏好与背景追加到
+            「## 自动记录」小节。你可以直接改或删；留空并保存会清空整份画像。
           </p>
           <textarea
             className="text-input profile-editor"
