@@ -4,6 +4,7 @@ import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-r
 import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsUseCase, type SettingsFailure } from "../../../../application/use-case/settings.js";
 import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
 import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
+import { profileChatUseCase } from "../../../../application/use-case/profile.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -43,6 +44,13 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (typeof body?.profile !== "string") return reply.code(400).send({ error: "profile 必须是字符串" });
     writeProfile(body.profile);
     return { profile: readProfile(), path: profilePath() };
+  });
+
+  app.post("/api/profile/chat", async (request, reply) => {
+    const body = request.body as { message?: unknown } | undefined;
+    if (typeof body?.message !== "string") return reply.code(400).send({ error: "message 必须是字符串" });
+    const result = await profileChatUseCase(body.message);
+    return result.ok ? result : reply.code(422).send({ error: result.error });
   });
 
   app.post("/api/skills/restore", async (_request, reply) => {

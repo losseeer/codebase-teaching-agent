@@ -12,6 +12,10 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 与 agent 的沟通：一句话让它记住 / 改 / 删，不必自己动 markdown。 */
+  const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -24,6 +28,24 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
       .catch((reason: unknown) => { if (alive) setError(failureText("读取用户画像失败", reason)); });
     return () => { alive = false; };
   }, []);
+
+  const converse = async (): Promise<void> => {
+    const message = ask.trim();
+    if (!message || asking) return;
+    setAsking(true);
+    setError("");
+    setNote("");
+    try {
+      const next = await api.chatProfile(message);
+      setText(next.profile);
+      setNote(next.reply);
+      setAsk("");
+    } catch (reason) {
+      setError(failureText("更新画像失败", reason));
+    } finally {
+      setAsking(false);
+    }
+  };
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -48,10 +70,6 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
           <button type="button" className="icon-btn" aria-label="关闭" title="关闭" onClick={onClose}><span aria-hidden>×</span></button>
         </div>
         <div className="modal-body">
-          <p className="field-note">
-            跨仓库生效，主要由 agent 自动维护：每次对话结束后它会把值得长期记住的偏好与背景追加到
-            「## 自动记录」小节。你可以直接改或删；留空并保存会清空整份画像。
-          </p>
           <textarea
             className="text-input profile-editor"
             value={text}
@@ -60,6 +78,20 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
             spellCheck={false}
             aria-label="用户画像正文"
           />
+          <div className="profile-ask">
+            <input
+              className="text-input"
+              value={ask}
+              placeholder="提问或更新，例如：以后回答短一点；把「偏好类比」删掉"
+              spellCheck={false}
+              aria-label="对画像说一句话"
+              disabled={asking}
+              onChange={(event) => setAsk(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void converse(); } }}
+            />
+            <button type="button" className="btn btn-primary" disabled={asking || !ask.trim()} onClick={() => void converse()}>{asking ? "更新中…" : "发送"}</button>
+          </div>
+          {note ? <p className="field-note">{note}</p> : null}
           {error ? <div className="banner banner-danger"><span className="banner-text">{error}</span></div> : null}
           <p className="field-note mono" title={path}>{path ? `存储于 ${path}` : "正在读取存储位置…"}</p>
         </div>

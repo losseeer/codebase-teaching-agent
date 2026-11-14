@@ -246,6 +246,7 @@ export const api = {
   restoreSkills: () => request<{ restored: string[]; files: number }>("/api/skills/restore", { method: "POST" }),
   getProfile: () => checked("profile", z.object({ profile: z.string(), path: z.string() }), "/api/profile"),
   putProfile: (profile: string) => request<{ profile: string; path: string }>("/api/profile", { method: "PUT", body: JSON.stringify({ profile }) }),
+  chatProfile: (message: string) => request<{ reply: string; profile: string }>("/api/profile/chat", { method: "POST", body: JSON.stringify({ message }) }),
   /** 只读能力面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope, operation?: PracticeOperation) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}${operation ? `&operation=${operation}` : ""}`),
   /** journal 按 traceId 汇总；给 threadId 时只取该会话。纯读。 */
