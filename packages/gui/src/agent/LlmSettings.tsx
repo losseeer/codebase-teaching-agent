@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { api, type LlmProfileView, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch } from "../api/client";
 import { showToast, toastFailure } from "../ui/toast";
 import { PopMenu } from "../ui/PopMenu";
@@ -159,7 +159,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
         <div className="modal-mask" onClick={() => setOpen(false)}>
           <div className="modal wide" role="dialog" aria-label="模型与推理设置" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>LLM 连接与计价</h3>
+              <h3>LLM 配置</h3>
               <span className="fs-11 faint" title={status.title}>{status.text}</span>
               <button type="button" className="icon-btn" aria-label="关闭" onClick={() => setOpen(false)}><Icon name="x" size={14} /></button>
             </div>
@@ -181,18 +181,12 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
               </div>
               {activating ? <p className="field-note">正在检测连接…</p> : null}
               {rejected ? <p className="error-message" role="alert">{rejected}</p> : null}
-              {llm?.activeMode === "local" ? <div className="banner banner-danger"><Icon name="alert" /><span className="banner-text">{status.hint}</span></div> : null}
-              <SelectSetting
-                label="服务商"
-                value={llm?.provider ?? ""}
+              <TextSetting
+                label="模型名称"
+                value={llm?.model ?? ""}
+                placeholder={llm?.envFallback.model || "Auto（跟随服务商默认）"}
                 disabled={!llm}
-                ariaLabel="LLM 服务商协议"
-                hint="协议决定请求格式与默认地址；选「默认」即沿用 .env 的配置"
-                onChange={(provider) => updateLlm({ provider: provider as LlmProviderKind | "" })}
-                options={[
-                  { value: "", label: `默认（${llm?.envFallback.provider || ".env 未配置"}）` },
-                  ...PROVIDER_CHOICES.map((choice) => ({ value: choice.value, label: choice.label }))
-                ]}
+                onCommit={(model) => updateLlm({ model })}
               />
               <TextSetting
                 label="接口地址"
@@ -200,7 +194,20 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 placeholder={llm?.envFallback.baseUrl || "协议默认"}
                 disabled={!llm}
                 onCommit={(baseUrl) => updateLlm({ baseUrl })}
+                trailing={(
+                  <select
+                    className="select protocol-select"
+                    aria-label="兼容协议"
+                    value={llm?.provider ?? ""}
+                    disabled={!llm}
+                    onChange={(event) => updateLlm({ provider: event.target.value as LlmProviderKind | "" })}
+                  >
+                    <option value="">协议默认</option>
+                    {PROVIDER_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                  </select>
+                )}
               />
+              <p className="field-note">Anthropic 原生协议尚未接入；Claude 需走 OpenAI 兼容端点。</p>
               <SecretSetting
                 saved={llm?.apiKeyMasked ?? ""}
                 placeholder={llm?.envFallback.hasApiKey ? ".env 已配置" : "未配置"}
@@ -208,32 +215,43 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 onSave={(apiKey) => updateLlm({ apiKey })}
                 onClear={() => updateLlm({ apiKey: "" })}
               />
-
-              <div className="section-title">单价（人民币 / 百万 token）</div>
-              <TextSetting
-                label="输入"
-                numeric
-                value={llm?.inputUsdPerMillion ?? ""}
-                placeholder={ratePlaceholder(llm, "input")}
-                disabled={!llm}
-                onCommit={(inputUsdPerMillion) => updateLlm({ inputUsdPerMillion })}
-              />
-              <TextSetting
-                label="命中"
-                numeric
-                value={llm?.cacheHitUsdPerMillion ?? ""}
-                placeholder={ratePlaceholder(llm, "cacheHit")}
-                disabled={!llm}
-                onCommit={(cacheHitUsdPerMillion) => updateLlm({ cacheHitUsdPerMillion })}
-              />
-              <TextSetting
-                label="输出"
-                numeric
-                value={llm?.outputUsdPerMillion ?? ""}
-                placeholder={ratePlaceholder(llm, "output")}
-                disabled={!llm}
-                onCommit={(outputUsdPerMillion) => updateLlm({ outputUsdPerMillion })}
-              />
+              <details className="advanced">
+                <summary>高级设置</summary>
+                <TextSetting
+                  label="超时"
+                  numeric
+                  value={llm?.timeoutMs ?? ""}
+                  placeholder={llm?.envFallback.timeoutMs ? `默认 ${String(Math.round(llm.envFallback.timeoutMs / 1000))} 秒` : "未配置"}
+                  disabled={!llm}
+                  note="单位毫秒"
+                  onCommit={(timeoutMs) => updateLlm({ timeoutMs })}
+                />
+                <div className="section-title">单价（每百万 token）</div>
+                <TextSetting
+                  label="输入"
+                  numeric
+                  value={llm?.inputUsdPerMillion ?? ""}
+                  placeholder={ratePlaceholder(llm, "input")}
+                  disabled={!llm}
+                  onCommit={(inputUsdPerMillion) => updateLlm({ inputUsdPerMillion })}
+                />
+                <TextSetting
+                  label="命中"
+                  numeric
+                  value={llm?.cacheHitUsdPerMillion ?? ""}
+                  placeholder={ratePlaceholder(llm, "cacheHit")}
+                  disabled={!llm}
+                  onCommit={(cacheHitUsdPerMillion) => updateLlm({ cacheHitUsdPerMillion })}
+                />
+                <TextSetting
+                  label="输出"
+                  numeric
+                  value={llm?.outputUsdPerMillion ?? ""}
+                  placeholder={ratePlaceholder(llm, "output")}
+                  disabled={!llm}
+                  onCommit={(outputUsdPerMillion) => updateLlm({ outputUsdPerMillion })}
+                />
+              </details>
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
@@ -306,27 +324,31 @@ function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: st
 }
 
 /** 文本设置项：本地草稿，失焦或回车提交。 */
-function TextSetting({ label, value, placeholder, list, hint, note, numeric, disabled, onCommit }: { label: string; value: string; placeholder: string; list?: string; hint?: string; note?: string; numeric?: boolean; disabled: boolean; onCommit: (next: string) => void }): ReactElement {
+function TextSetting({ label, value, placeholder, list, hint, note, numeric, disabled, onCommit, trailing }: { label: string; value: string; placeholder: string; list?: string; hint?: string; note?: string; numeric?: boolean; disabled: boolean; onCommit: (next: string) => void; trailing?: ReactNode }): ReactElement {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
   const commit = (): void => { const next = draft.trim(); if (next !== value) onCommit(next); };
   return (
-    <label className="field" title={hint}>
+    <div className="field" title={hint}>
       <span className="lbl">{label}</span>
-      <input
-        className="text-input"
-        value={draft}
-        placeholder={placeholder}
-        list={list}
-        disabled={disabled}
-        inputMode={numeric ? "decimal" : undefined}
-        spellCheck={false}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); } }}
-      />
+      <div className={trailing ? "inline-field" : undefined}>
+        <input
+          className="text-input"
+          value={draft}
+          placeholder={placeholder}
+          list={list}
+          disabled={disabled}
+          aria-label={label}
+          inputMode={numeric ? "decimal" : undefined}
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); } }}
+        />
+        {trailing}
+      </div>
       {note ? <span className="field-note">{note}</span> : null}
-    </label>
+    </div>
   );
 }
 
