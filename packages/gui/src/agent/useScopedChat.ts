@@ -251,13 +251,13 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     pushMessage(target, "agent", shown, "error");
   };
 
-  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<void>; fail: (reason: unknown) => void } => {
+  const turnSink = (target: Scope): { onDelta: (delta: string) => void; settle: (text: string, provider: string | undefined, extra?: MessageExtra) => Promise<string>; fail: (reason: unknown) => void } => {
     // replayStarted=收到过 delta，即该轮引擎已算完并落库
     let replayStarted = false;
     return {
       onDelta: (delta) => { replayStarted = true; typewriter[target].enqueue(delta); },
       // extra.options 非空 = 本回合是 agent 在向用户提问
-      settle: async (text, provider, extra) => {
+      settle: async (text, provider, extra): Promise<string> => {
         await typewriter[target].finish();
         const pushed = pushMessage(target, "agent", text, extra?.options?.length ? "ask" : undefined, extra);
         // 仅最新一句提问可认领
@@ -266,9 +266,33 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         typewriter[target].clear();
         knownRowCount.current[target] += 2; // 一问一答原子落库
         patchDebt(target, null);
+        return pushed;
       },
       fail: (reason) => triageTurnFailure(target, reason, replayStarted)
     };
+  };
+
+  /**
+    回合落库后把本地临时 id 换成服务端 id。
+    新增气泡的 id 是前端现发的，删除、定位等按服务端 id 走；不换就查不到。
+  */
+  const syncMessageIds = async (scope: Scope, threadId: string, localIds: readonly string[]): Promise<void> => {
+    if (!localIds.length) return;
+    try {
+      const { messages } = await api.getThreadMessages(threadId, localIds.length);
+      const ids = messages.slice(-localIds.length).map((message) => message.id);
+      if (ids.length !== localIds.length) return;
+      const mapping = new Map(localIds.map((local, index) => [local, ids[index]] as const));
+      setThreads((prev) => ({
+        ...prev,
+        [scope]: prev[scope].map((item) => {
+          const nextId = mapping.get(item.id);
+          return nextId && nextId !== item.id ? { ...item, id: nextId } : item;
+        })
+      }));
+    } catch {
+      // 拉不到就保留本地 id：会话仍可继续，只是这些气泡暂不可删除
+    }
   };
 
   const loadThread = async (scope: Scope, threadId: string): Promise<void> => {
@@ -506,7 +530,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (!message) return;
     // 用户说出口的话先上屏：缺教学域的守卫只补提示，不丢弃这句
     await settlePendingTurn("teaching");
-    pushMessage("teaching", "user", message);
+    const userBubbleId = pushMessage("teaching", "user", message);
     setDraft("teaching", "");
     if (!scopeRef) {
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
@@ -535,7 +559,9 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       }, turn);
       setSession(reply.session);
       setSettingsState(reply.session.settings);
-      await sink.settle(reply.message.content, reply.provider);
+      const agentBubbleId = await sink.settle(reply.message.content, reply.provider);
+      // 落库后换用服务端 id：删除与定位都按它走
+      void syncMessageIds("teaching", active.id, [userBubbleId, agentBubbleId]);
     } catch (reason) {
       sink.fail(reason);
     } finally {
@@ -553,7 +579,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (!message || !repositoryId) return;
     setLiveAsk((prev) => ({ ...prev, [scope]: null }));
     await settlePendingTurn(scope);
-    pushMessage(scope, "user", message);
+    const userBubbleId = pushMessage(scope, "user", message);
     if (answer === undefined) setDraft(scope, "");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
@@ -587,7 +613,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope].map((line) => line.text) });
         patchDebt(scope, null);
       } else {
-        await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
+        const agentBubbleId = await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
+        void syncMessageIds(scope, threadId, [userBubbleId, agentBubbleId]);
         if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
       }
     } catch (reason) {

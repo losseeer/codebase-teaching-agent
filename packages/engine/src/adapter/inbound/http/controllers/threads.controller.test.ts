@@ -84,3 +84,23 @@ describe("删除还没发言的会话", () => {
     });
   }
 });
+
+describe("删除单条消息", () => {
+  it("删用户消息连带回复；未知消息 404；审计追加 message_deleted", async () => {
+    const thread = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "删除测试" });
+    appendMessages(fx.repoDir, thread.id, [{ role: "user", content: "问" }, { role: "assistant", content: "答" }]);
+    const before = await fx.app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` });
+    const ids = (before.json() as { messages: { id: string }[] }).messages.map((message) => message.id);
+    expect(ids).toHaveLength(2);
+
+    const deleted = await fx.app.inject({ method: "DELETE", url: `/api/threads/${thread.id}/messages/${ids[0]}` });
+    expect(deleted.statusCode).toBe(200);
+    expect((deleted.json() as { deleted: string[] }).deleted).toHaveLength(2);
+
+    const after = await fx.app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` });
+    expect((after.json() as { messages: unknown[] }).messages).toEqual([]);
+    expect(fx.lastEvent("message_deleted").payload.thread_id).toBe(thread.id);
+
+    expect((await fx.app.inject({ method: "DELETE", url: `/api/threads/${thread.id}/messages/no-such` })).statusCode).toBe(404);
+  });
+});

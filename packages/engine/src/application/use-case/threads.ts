@@ -48,10 +48,11 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
 }
 
 /** 按 threadId 取线程与正文；已软删的读不到。 */
-export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
+/** `limit` 给正整数时只取最近这几条，仍按时间正序返回。 */
+export function readThreadMessages(threadId: string, limit?: number): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");
-  return { ok: true, value: { thread: located.thread, messages: importer.chatStore(located.repositoryPath).readMessages(located.thread.id) } };
+  return { ok: true, value: { thread: located.thread, messages: importer.chatStore(located.repositoryPath).readMessages(located.thread.id, limit) } };
 }
 
 export function renameThreadUseCase(threadId: string, title: string | undefined): ThreadsResult<{ thread: ChatThread }> {
@@ -68,7 +69,7 @@ export function deleteMessageUseCase(threadId: string, messageId: string): Threa
   if (!located) return fail("thread-missing");
   const deleted = importer.chatStore(located.repositoryPath).deleteMessage(located.thread.id, messageId);
   if (!deleted) return fail("message-missing");
-  importer.audit(located.repositoryPath, located.repositoryId).append("message_deleted", { thread_id: located.thread.id, message_ids: deleted.deleted }, located.thread.id);
+  importer.audit(located.repositoryPath, located.repositoryId).append("message_deleted", { thread_id: located.thread.id, message_ids: deleted.deleted.join(",") }, located.thread.id);
   return { ok: true, value: deleted };
 }
 

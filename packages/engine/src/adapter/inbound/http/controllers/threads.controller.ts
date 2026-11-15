@@ -1,5 +1,5 @@
 import { REPOSITORY_NOT_MOUNTED } from "../../../../infrastructure/composition-root.js";
-import { createThreadUseCase, deleteThreadUseCase, listScopeThreads, readThreadMessages, renameThreadUseCase, type ThreadsFailure } from "../../../../application/use-case/threads.js";
+import { createThreadUseCase, deleteMessageUseCase, deleteThreadUseCase, listScopeThreads, readThreadMessages, renameThreadUseCase, type ThreadsFailure } from "../../../../application/use-case/threads.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -29,8 +29,14 @@ export function registerThreadRoutes(app: FastifyInstance): void {
     return result.ok ? reply.code(201).send({ thread: result.value.thread }) : rejected(reply, result.failure);
   });
 
-  app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
-    const result = readThreadMessages(request.params.threadId);
+  app.get<{ Params: { threadId: string }; Querystring: { limit?: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
+    const limit = Number(request.query.limit);
+    const result = readThreadMessages(request.params.threadId, Number.isInteger(limit) && limit > 0 ? limit : undefined);
+    return result.ok ? result.value : rejected(reply, result.failure);
+  });
+
+  app.delete<{ Params: { threadId: string; messageId: string } }>("/api/threads/:threadId/messages/:messageId", async (request, reply) => {
+    const result = deleteMessageUseCase(request.params.threadId, request.params.messageId);
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 
