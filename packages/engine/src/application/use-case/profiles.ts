@@ -1,5 +1,5 @@
 /** LLM 配置：列表、保存、删除、切换。切换前做一次最小连通性检查，失败不切换。 */
-import { createLlmProvider } from "../../adapter/outbound/llm/provider.js";
+import { createLlmProvider, resolveLlmConfig } from "../../adapter/outbound/llm/provider.js";
 import { publicProfileView, readProfileFile, removeProfile, setActiveProfile, upsertProfile, type LlmProfile } from "../../adapter/outbound/llm/profiles.js";
 import { getLlmRuntimeSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
 
@@ -8,7 +8,27 @@ export type ProfileResult<T> = { ok: true; value: T } | { ok: false; failure: Pr
 
 type ProfileView = ReturnType<typeof publicProfileView>;
 
+/** 第一次打开时把当前生效的连接填成一条配置，用户不必从空白开始。 */
+export function ensureDefaultProfile(): void {
+  if (readProfileFile().profiles.length) return;
+  const runtime = getLlmRuntimeSettings();
+  const fallback = resolveLlmConfig({});
+  const profile = upsertProfile({
+    name: "默认配置",
+    provider: runtime.provider || fallback.provider || "",
+    model: runtime.model || fallback.model || "",
+    baseUrl: runtime.baseUrl || fallback.baseUrl || "",
+    // 运行时里存着明文才带上；来自 .env 的密钥不复制出来，激活时照旧回落
+    apiKey: runtime.apiKey,
+    inputUsdPerMillion: runtime.inputUsdPerMillion,
+    outputUsdPerMillion: runtime.outputUsdPerMillion,
+    cacheHitUsdPerMillion: runtime.cacheHitUsdPerMillion
+  });
+  setActiveProfile(profile.id);
+}
+
 export function listProfilesUseCase(): ProfileView {
+  ensureDefaultProfile();
   return publicProfileView();
 }
 
