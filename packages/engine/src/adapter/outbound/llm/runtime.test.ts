@@ -91,20 +91,15 @@ describe("对外视图与生效配置", () => {
     expect(maskSecret("")).toBe("");
   });
 
-  it("effectiveLlmConfig 走「GUI 覆盖 → .env → 协议默认」三层回落", () => {
+  it("effectiveLlmConfig 只认用户配置；地址留空用协议默认", () => {
     process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
     process.env.TUTOR_LLM_MODEL = "env-model";
     process.env.TUTOR_OPENAI_URL = "https://env.example.com/v1";
     process.env.OPENAI_API_KEY = "env-key";
 
-    expect(effectiveLlmConfig()).toMatchObject({ provider: "openai-compatible", model: "env-model", baseUrl: "https://env.example.com/v1", hasApiKey: true });
+    expect(effectiveLlmConfig()).toMatchObject({ provider: "", model: "", baseUrl: "https://api.openai.com/v1", hasApiKey: false });
 
-    setLlmRuntimeSettings({ model: "gui-model", apiKey: "gui-key" });
-    expect(effectiveLlmConfig()).toMatchObject({ model: "gui-model", baseUrl: "https://env.example.com/v1", hasApiKey: true });
-
-    // openai 协议且 `.env` 无端点时用协议默认端点
-    delete process.env.TUTOR_OPENAI_URL;
-    setLlmRuntimeSettings({ provider: "openai", baseUrl: "" });
+    setLlmRuntimeSettings({ provider: "openai", model: "gui-model", baseUrl: "", apiKey: "gui-key" });
     expect(effectiveLlmConfig()).toMatchObject({ provider: "openai", model: "gui-model", baseUrl: "https://api.openai.com/v1", hasApiKey: true });
   });
 

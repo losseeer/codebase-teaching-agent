@@ -289,17 +289,13 @@ export class ThinkingOverrideLlmProvider implements LlmProvider {
   }
 }
 
-function defaultModel(): string {
-  return "gpt-4o-mini";
-}
-
-/** GUI 运行时可改的 LLM 配置覆盖：省略或空串 = 该字段回落 `.env`。 */
+/** GUI 运行时可改的 LLM 配置覆盖：省略或空串 = 该字段未配置。 */
 export interface LlmConfigOverrides {
   provider?: string;
   model?: string;
   baseUrl?: string;
   apiKey?: string;
-  /** 单次请求超时（毫秒）；空串与非法值按未填回落 `.env`。 */
+  /** 单次请求超时（毫秒）；空串与非法值按未填处理。 */
   timeoutMs?: string;
 }
 
@@ -309,22 +305,21 @@ export const TIMEOUT_MIN_MS = 1_000;
 export const TIMEOUT_MAX_MS = 600_000;
 const DEFAULT_TIMEOUT_MS = 12_000;
 
-/** 单次请求超时：GUI 覆盖 → `.env` → 默认值，再钳进 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]`。 */
-export function resolveTimeoutMs(override: string | undefined, env: string | undefined): number {
-  // 取第一个读得出的正数，空串与脏串按未填处理
-  const picked = [trimmed(override), trimmed(env)].find((raw) => Number.isFinite(Number(raw)) && Number(raw) > 0);
-  const value = picked === undefined ? DEFAULT_TIMEOUT_MS : Number(picked);
+/** 单次请求超时：GUI 配置 → 默认值，再钳进 `[TIMEOUT_MIN_MS, TIMEOUT_MAX_MS]`。 */
+export function resolveTimeoutMs(override: string | undefined): number {
+  const picked = trimmed(override);
+  const value = Number.isFinite(Number(picked)) && Number(picked) > 0 ? Number(picked) : DEFAULT_TIMEOUT_MS;
   return Math.min(TIMEOUT_MAX_MS, Math.max(TIMEOUT_MIN_MS, value));
 }
 
-/** LLM 配置的三层回落：GUI 覆盖 → `.env` → 协议默认。 */
+/** LLM 配置：只认用户配置；地址留空时按协议给默认，模型留空即未配置。 */
 export function resolveLlmConfig(overrides: LlmConfigOverrides = {}): ResolvedLlmConfig {
-  const provider = (trimmed(overrides.provider) || process.env.TUTOR_LLM_PROVIDER || "").toLowerCase();
+  const provider = trimmed(overrides.provider).toLowerCase();
   const baseUrl = trimmed(overrides.baseUrl);
   const apiKey = trimmed(overrides.apiKey);
-  const model = trimmed(overrides.model) || process.env.TUTOR_LLM_MODEL || defaultModel();
-  const timeoutMs = resolveTimeoutMs(overrides.timeoutMs, process.env.TUTOR_LLM_TIMEOUT_MS);
-  return { provider, model, baseUrl: baseUrl || process.env.TUTOR_OPENAI_URL || "https://api.openai.com/v1", apiKey: apiKey || process.env.OPENAI_API_KEY, timeoutMs };
+  const model = trimmed(overrides.model);
+  const timeoutMs = resolveTimeoutMs(overrides.timeoutMs);
+  return { provider, model, baseUrl: baseUrl || "https://api.openai.com/v1", apiKey, timeoutMs };
 }
 
 export interface ResolvedLlmConfig {
@@ -338,6 +333,8 @@ export interface ResolvedLlmConfig {
 
 function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
   const { provider, model, baseUrl, apiKey, timeoutMs } = config;
+  // 模型是必填项：留空即视为未配置，不发请求
+  if (!model) return undefined;
   if (provider === "openai" || provider === "openai-compatible") {
     // openai 协议需要 key，兼容端点可以不填
     if (provider === "openai" && !apiKey) return undefined;

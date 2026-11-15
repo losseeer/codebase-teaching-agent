@@ -35,6 +35,17 @@ export function lightLlm(): LlmProvider | undefined {
   return buildLlmRuntimeProvider("light");
 }
 
+/**
+  应用层只认组合根：画像、LLM 配置与 MCP 配置的实现在适配器里，
+  经由这里转出，避免用例直接依赖具体适配器（architecture.test 的分层守卫）。
+*/
+export * as profileStore from "../adapter/outbound/profile.js";
+export * as profileMemory from "../adapter/outbound/auto-memory.js";
+export * as llmProfileStore from "../adapter/outbound/llm/profiles.js";
+export * as llmProvider from "../adapter/outbound/llm/provider.js";
+export * as llmRuntime from "../adapter/outbound/llm/runtime.js";
+export * as mcpConfig from "../adapter/outbound/integrations/clients.js";
+
 /** 仓库未挂载时给界面的一句话，各路由共用。 */
 export const REPOSITORY_NOT_MOUNTED = "这个仓库现在打不开；请重新导入。";
 

@@ -1,35 +1,32 @@
 /** LLM 配置：列表、保存、删除、切换。切换前做一次最小连通性检查，失败不切换。 */
-import { createLlmProvider, resolveLlmConfig } from "../../adapter/outbound/llm/provider.js";
-import { publicProfileView, readProfileFile, removeProfile, setActiveProfile, upsertProfile, type LlmProfile } from "../../adapter/outbound/llm/profiles.js";
-import { getLlmRuntimeSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
+import { llmProfileStore, llmProvider, llmRuntime } from "../../infrastructure/composition-root.js";
 
 export type ProfileFailure = "not-found" | "preflight" | "invalid";
 export type ProfileResult<T> = { ok: true; value: T } | { ok: false; failure: ProfileFailure; message: string };
 
-type ProfileView = ReturnType<typeof publicProfileView>;
+type ProfileView = ReturnType<typeof llmProfileStore.publicProfileView>;
+type LlmProfile = ReturnType<typeof llmProfileStore.readProfileFile>["profiles"][number];
 
 /** 第一次打开时把当前生效的连接填成一条配置，用户不必从空白开始。 */
 export function ensureDefaultProfile(): void {
-  if (readProfileFile().profiles.length) return;
-  const runtime = getLlmRuntimeSettings();
-  const fallback = resolveLlmConfig({});
-  const profile = upsertProfile({
+  if (llmProfileStore.readProfileFile().profiles.length) return;
+  const runtime = llmRuntime.getLlmRuntimeSettings();
+  const profile = llmProfileStore.upsertProfile({
     name: "默认配置",
-    provider: runtime.provider || fallback.provider || "",
-    model: runtime.model || fallback.model || "",
-    baseUrl: runtime.baseUrl || fallback.baseUrl || "",
-    // 运行时里存着明文才带上；来自 .env 的密钥不复制出来，激活时照旧回落
+    provider: runtime.provider,
+    model: runtime.model,
+    baseUrl: runtime.baseUrl,
     apiKey: runtime.apiKey,
     inputUsdPerMillion: runtime.inputUsdPerMillion,
     outputUsdPerMillion: runtime.outputUsdPerMillion,
     cacheHitUsdPerMillion: runtime.cacheHitUsdPerMillion
   });
-  setActiveProfile(profile.id);
+  llmProfileStore.setActiveProfile(profile.id);
 }
 
 export function listProfilesUseCase(): ProfileView {
   ensureDefaultProfile();
-  return publicProfileView();
+  return llmProfileStore.publicProfileView();
 }
 
 export function saveProfileUseCase(input: {
@@ -46,14 +43,14 @@ export function saveProfileUseCase(input: {
   if (input.name !== undefined && !input.name.trim()) {
     return { ok: false, failure: "invalid", message: "配置名不能为空。" };
   }
-  upsertProfile(input);
-  return { ok: true, value: publicProfileView() };
+  llmProfileStore.upsertProfile(input);
+  return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
 /** 把当前运行时设置存成一套新配置。 */
 export function captureCurrentProfileUseCase(name: string): ProfileResult<ProfileView> {
-  const current = getLlmRuntimeSettings();
-  upsertProfile({
+  const current = llmRuntime.getLlmRuntimeSettings();
+  llmProfileStore.upsertProfile({
     name: name.trim() || "当前配置",
     provider: current.provider,
     model: current.model,
@@ -63,17 +60,17 @@ export function captureCurrentProfileUseCase(name: string): ProfileResult<Profil
     outputUsdPerMillion: current.outputUsdPerMillion,
     cacheHitUsdPerMillion: current.cacheHitUsdPerMillion
   });
-  return { ok: true, value: publicProfileView() };
+  return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
 export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
-  if (!removeProfile(id)) return { ok: false, failure: "not-found", message: "这套配置不存在。" };
-  return { ok: true, value: publicProfileView() };
+  if (!llmProfileStore.removeProfile(id)) return { ok: false, failure: "not-found", message: "这套配置不存在。" };
+  return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
 /** 一次最小请求：能收到回复才算连通；超时阈值在创建 provider 时给定。 */
 async function preflight(profile: LlmProfile): Promise<string | undefined> {
-  const provider = createLlmProvider({
+  const provider = llmProvider.createLlmProvider({
     provider: profile.provider,
     model: profile.model,
     baseUrl: profile.baseUrl,
@@ -97,7 +94,7 @@ export async function testProfileUseCase(input: {
   baseUrl?: string;
   apiKey?: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
-  const stored = input.id ? readProfileFile().profiles.find((item) => item.id === input.id) : undefined;
+  const stored = input.id ? llmProfileStore.readProfileFile().profiles.find((item) => item.id === input.id) : undefined;
   const profile: LlmProfile = {
     id: input.id ?? "test",
     name: "",
@@ -114,12 +111,12 @@ export async function testProfileUseCase(input: {
 }
 
 export async function activateProfileUseCase(id: string): Promise<ProfileResult<ProfileView>> {
-  const profile = readProfileFile().profiles.find((item) => item.id === id);
+  const profile = llmProfileStore.readProfileFile().profiles.find((item) => item.id === id);
   if (!profile) return { ok: false, failure: "not-found", message: "这套配置不存在。" };
   const failure = await preflight(profile);
   if (failure) return { ok: false, failure: "preflight", message: `连接失败：${failure}（未切换）` };
   // 只覆盖连接与计价；思考档位、超时留作全局设置
-  setLlmRuntimeSettings({
+  llmRuntime.setLlmRuntimeSettings({
     provider: profile.provider,
     model: profile.model,
     baseUrl: profile.baseUrl,
@@ -128,6 +125,6 @@ export async function activateProfileUseCase(id: string): Promise<ProfileResult<
     outputUsdPerMillion: profile.outputUsdPerMillion,
     cacheHitUsdPerMillion: profile.cacheHitUsdPerMillion
   });
-  setActiveProfile(profile.id);
-  return { ok: true, value: publicProfileView() };
+  llmProfileStore.setActiveProfile(profile.id);
+  return { ok: true, value: llmProfileStore.publicProfileView() };
 }

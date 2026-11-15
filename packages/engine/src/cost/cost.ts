@@ -19,25 +19,21 @@ function rateOf(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-/** 三档单价对应的 `.env` 名。 */
-const ENV_RATE_KEYS = { input: "TUTOR_INPUT_USD_PER_MILLION", cacheHit: "TUTOR_CACHE_HIT_USD_PER_MILLION", output: "TUTOR_OUTPUT_USD_PER_MILLION" } as const;
-
 /** 当前生效的三档单价。 */
 export function currentPricing(): Pricing {
   const live = getLlmRuntimeSettings();
   return {
-    inputPerMillionUsd: rateOf(live.inputUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.input]) ?? 0,
-    cacheHitPerMillionUsd: rateOf(live.cacheHitUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.cacheHit]),
-    outputPerMillionUsd: rateOf(live.outputUsdPerMillion) ?? rateOf(process.env[ENV_RATE_KEYS.output]) ?? 0
+    inputPerMillionUsd: rateOf(live.inputUsdPerMillion) ?? 0,
+    cacheHitPerMillionUsd: rateOf(live.cacheHitUsdPerMillion),
+    outputPerMillionUsd: rateOf(live.outputUsdPerMillion) ?? 0
   };
 }
 
-/** 某一档单价当前的来源：runtime / env / unset。 */
-export function pricingSourceOf(key: "input" | "output" | "cacheHit"): "runtime" | "env" | "unset" {
+/** 某一档单价当前的来源：runtime / unset。 */
+export function pricingSourceOf(key: "input" | "output" | "cacheHit"): "runtime" | "unset" {
   const live = getLlmRuntimeSettings();
   const field = key === "input" ? live.inputUsdPerMillion : key === "output" ? live.outputUsdPerMillion : live.cacheHitUsdPerMillion;
-  if (rateOf(field) !== undefined) return "runtime";
-  return rateOf(process.env[ENV_RATE_KEYS[key]]) !== undefined ? "env" : "unset";
+  return rateOf(field) !== undefined ? "runtime" : "unset";
 }
 
 /** 三档单价是否至少配置了一档。 */

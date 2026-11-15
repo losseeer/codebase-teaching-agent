@@ -14,13 +14,11 @@ import { createSession } from "../../turn/session.js";
 import { respondWithProvider } from "../../turn/run-turn.js";
 import { deriveRepoLearningRecord } from "../../learner/model.js";
 import { recommendSettings } from "../../learner/teaching-profile.js";
-import { rememberProfileMemory } from "../../adapter/outbound/auto-memory.js";
-import { profileForPrompt } from "../../adapter/outbound/profile.js";
 import { deriveFaded } from "../../learner/faded.js";
 import { buildLearnerSnapshot } from "../../learner/snapshot.js";
 import type { LlmProvider } from "../port/llm-provider.js";
 import { LlmAbortedError } from "../port/llm-provider.js";
-import { importer, learnerStore } from "../../infrastructure/composition-root.js";
+import { importer, learnerStore, profileMemory, profileStore } from "../../infrastructure/composition-root.js";
 import { withExercisePorts } from "../../infrastructure/exercise-ports.js";
 import { dedupeFileReads, fileReadAuditPayload } from "../../source/read-file.js";
 import { codeSearchAuditPayload } from "../../source/search-code.js";
@@ -142,7 +140,7 @@ export async function prepareTeachingTurn(sessionId: string, input: { content?: 
       scope,
       question,
       learnerSnapshot: buildLearnerSnapshot({ record, events, topicLabels }),
-      profile: profileForPrompt()
+      profile: profileStore.profileForPrompt()
     }
   };
 }
@@ -195,7 +193,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
   if (outcome.usage) journal.append("token_usage", { input_tokens: outcome.usage.inputTokens, output_tokens: outcome.usage.outputTokens, cache_hit_tokens: outcome.usage.promptCacheHitTokens ?? null, provider: outcome.provider, scene: "teach" }, session.id);
   journal.append("turn_text", turnTextPayload("teach", question, outcome.assistant.content), session.id);
   // 画像主要由 agent 维护：回合落库后异步提炼一条长期记忆，失败不影响本轮回放
-  void rememberProfileMemory({ question, answer: outcome.assistant.content, provider });
+  void profileMemory.rememberProfileMemory({ question, answer: outcome.assistant.content, provider });
   for (const read of dedupeFileReads(outcome.fileReads ?? [])) {
     journal.append("file_read", fileReadAuditPayload(read), session.id);
   }

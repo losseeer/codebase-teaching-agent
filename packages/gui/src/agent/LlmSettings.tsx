@@ -184,33 +184,32 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
               <TextSetting
                 label="模型名称"
                 value={llm?.model ?? ""}
-                placeholder={llm?.envFallback.model || "Auto（跟随服务商默认）"}
+                placeholder="必填，例如 deepseek-v4-pro"
                 disabled={!llm}
                 onCommit={(model) => updateLlm({ model })}
               />
               <TextSetting
                 label="接口地址"
                 value={llm?.baseUrl ?? ""}
-                placeholder={llm?.envFallback.baseUrl || "协议默认"}
+                placeholder={llm?.defaults.baseUrl ?? ""}
                 disabled={!llm}
                 onCommit={(baseUrl) => updateLlm({ baseUrl })}
                 trailing={(
                   <select
                     className="select protocol-select"
                     aria-label="兼容协议"
-                    value={llm?.provider ?? ""}
+                    value={llm?.provider === "anthropic" ? "anthropic" : "openai-compatible"}
                     disabled={!llm}
                     onChange={(event) => updateLlm({ provider: event.target.value as LlmProviderKind | "" })}
                   >
-                    <option value="">协议默认</option>
-                    {PROVIDER_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                    <option value="openai-compatible">OpenAI 协议兼容</option>
+                    <option value="anthropic" disabled>Anthropic 协议兼容</option>
                   </select>
                 )}
               />
-              <p className="field-note">Anthropic 原生协议尚未接入；Claude 需走 OpenAI 兼容端点。</p>
               <SecretSetting
                 saved={llm?.apiKeyMasked ?? ""}
-                placeholder={llm?.envFallback.hasApiKey ? ".env 已配置" : "未配置"}
+                placeholder="未配置"
                 disabled={!llm}
                 onSave={(apiKey) => updateLlm({ apiKey })}
                 onClear={() => updateLlm({ apiKey: "" })}
@@ -221,7 +220,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                   label="超时"
                   numeric
                   value={llm?.timeoutMs ?? ""}
-                  placeholder={llm?.envFallback.timeoutMs ? `默认 ${String(Math.round(llm.envFallback.timeoutMs / 1000))} 秒` : "未配置"}
+                  placeholder={`默认 ${String(Math.round((llm?.defaults.timeoutMs ?? 12000) / 1000))} 秒`}
                   disabled={!llm}
                   note="单位毫秒"
                   onCommit={(timeoutMs) => updateLlm({ timeoutMs })}
@@ -265,12 +264,6 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     </>
   );
 }
-
-/** 服务商候选；「默认」空选项由调用处拼。 */
-const PROVIDER_CHOICES = [
-  { value: "openai-compatible", label: "OpenAI 兼容" },
-  { value: "openai", label: "OpenAI 官方" }
-] as const;
 
 const THINKING_EFFORT_LABEL: Record<"off" | "low" | "high" | "max", string> = {
   off: "关闭",

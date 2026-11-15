@@ -1,6 +1,5 @@
 /** 用户与 agent 的画像沟通：按一句话更新画像，返回回话与更新后的全文。 */
-import { lightLlm } from "../../infrastructure/composition-root.js";
-import { appendAutoMemory, readProfile, writeProfile } from "../../adapter/outbound/profile.js";
+import { lightLlm, profileStore } from "../../infrastructure/composition-root.js";
 
 const SYSTEM = [
   "你在维护用户画像（跨仓库生效的长期偏好与背景）。",
@@ -31,13 +30,13 @@ export async function profileChatUseCase(message: string): Promise<ProfileChatRe
   const provider = lightLlm();
   if (!provider) {
     // 没有可用模型：只做追加，并如实说明没做整理
-    const added = appendAutoMemory(trimmed);
-    return { ok: true, reply: added ? "已追加到自动记录（未配置模型，未做整理）。" : "这条已经记过了。", profile: readProfile() };
+    const added = profileStore.appendAutoMemory(trimmed);
+    return { ok: true, reply: added ? "已追加到自动记录（未配置模型，未做整理）。" : "这条已经记过了。", profile: profileStore.readProfile() };
   }
   try {
     const completion = await provider.complete({
       system: SYSTEM,
-      user: `当前画像：\n${readProfile() || "（空）"}\n\n用户这句话：${trimmed.slice(0, 500)}`,
+      user: `当前画像：\n${profileStore.readProfile() || "（空）"}\n\n用户这句话：${trimmed.slice(0, 500)}`,
       temperature: 0,
       maxTokens: 800,
       thinking: "off",
@@ -45,8 +44,8 @@ export async function profileChatUseCase(message: string): Promise<ProfileChatRe
     });
     const parsed = parseProfileUpdate(completion.text);
     if (!parsed) return { ok: false, error: "模型没有返回可用的画像更新，请重试或直接编辑。" };
-    writeProfile(parsed.profile);
-    return { ok: true, reply: parsed.reply, profile: readProfile() };
+    profileStore.writeProfile(parsed.profile);
+    return { ok: true, reply: parsed.reply, profile: profileStore.readProfile() };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "更新画像失败" };
   }

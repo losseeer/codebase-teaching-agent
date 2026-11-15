@@ -69,28 +69,13 @@ describe("OpenAICompatibleProvider", () => {
   });
 
 
-  it("GUI 填的超时优先于 .env；越界钳进区间而不是照收", () => {
-    const saved = process.env.TUTOR_LLM_TIMEOUT_MS;
-    process.env.TUTOR_LLM_TIMEOUT_MS = "60000";
+  it("超时只认用户配置；越界钳进区间而不是照收", () => {
     expect(resolveLlmConfig({ timeoutMs: "180000" }).timeoutMs).toBe(180_000);
-    expect(resolveLlmConfig({ timeoutMs: "" }).timeoutMs, "空串 = 没填，回落 .env").toBe(60_000);
-    expect(resolveLlmConfig({ timeoutMs: "abc" }).timeoutMs, "脏串同样按没填回落，不当 0").toBe(60_000);
-    expect(resolveLlmConfig({ timeoutMs: "999999" }).timeoutMs, "超过上限按上限生效（路由先拒，这里是第二道）").toBe(600_000);
+    expect(resolveLlmConfig({ timeoutMs: "" }).timeoutMs, "空串 = 没填，用默认").toBe(12_000);
+    expect(resolveLlmConfig({ timeoutMs: "abc" }).timeoutMs, "脏串按没填").toBe(12_000);
+    expect(resolveLlmConfig({ timeoutMs: "0" }).timeoutMs, "0ms 会把每一发请求判成超时，不给放行").toBe(12_000);
+    expect(resolveLlmConfig({ timeoutMs: "999999" }).timeoutMs, "超过上限按上限").toBe(600_000);
     expect(resolveLlmConfig({ timeoutMs: "1" }).timeoutMs, "低于下限不给放行").toBe(1_000);
-    if (saved === undefined) delete process.env.TUTOR_LLM_TIMEOUT_MS;
-    else process.env.TUTOR_LLM_TIMEOUT_MS = saved;
-  });
-
-  it("TUTOR_LLM_TIMEOUT_MS 留空或写坏都退回默认，不接受 0：0ms 会把每一发真实请求当场判成超时", () => {
-    const saved = process.env.TUTOR_LLM_TIMEOUT_MS;
-    process.env.TUTOR_LLM_TIMEOUT_MS = "";
-    expect(resolveLlmConfig().timeoutMs, '空串 `Number("")` 是 0').toBe(12_000);
-    process.env.TUTOR_LLM_TIMEOUT_MS = "abc";
-    expect(resolveLlmConfig().timeoutMs, "NaN 也按未配置").toBe(12_000);
-    process.env.TUTOR_LLM_TIMEOUT_MS = "50";
-    expect(resolveLlmConfig().timeoutMs, "过小也不给放行").toBe(1_000);
-    if (saved === undefined) delete process.env.TUTOR_LLM_TIMEOUT_MS;
-    else process.env.TUTOR_LLM_TIMEOUT_MS = saved;
   });
 
   it("max_tokens 加上推理余量（默认 6000）", async () => {
@@ -252,44 +237,21 @@ describe("createLlmProvider（单一配置）", () => {
     }) as typeof fetch);
   }
 
-  it("只认 TUTOR_LLM_* 与通用密钥名；已删的别名一个都不读", async () => {
-    process.env.TUTOR_TEACHING_PROVIDER = "openai-compatible";
-    process.env.TUTOR_TEACHING_MODEL = "legacy-model";
-    process.env.TUTOR_OPENAI_API_KEY = "alias-key";
-    expect(createLlmProvider(), "别名再也不是配置来源").toBeUndefined();
-
+  it("环境变量不再是配置来源：没有用户配置就不建实例", () => {
     process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
-    const captured = { url: "", auth: "", model: "" };
-    captureStub(captured);
-    await createLlmProvider()!.complete({ system: "s", user: "u" });
-    expect(captured.model, "legacy-model 不该从别名漏进来").toBe("gpt-4o-mini");
-    expect(captured.auth, "TUTOR_OPENAI_API_KEY 不该被当成密钥").toBe("");
-  });
-
-  it("TUTOR_LLM_* 生效，密钥只认通用名 OPENAI_API_KEY", async () => {
-    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LLM_MODEL = "glm-4.7";
+    process.env.TUTOR_LLM_MODEL = "env-model";
     process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
-    process.env.OPENAI_API_KEY = "shared-key";
-    const captured = { url: "", auth: "", model: "" };
-    captureStub(captured);
-    await createLlmProvider()!.complete({ system: "s", user: "u" });
-    expect(captured.url).toBe("https://llm.example.com/v1/chat/completions");
-    expect(captured.model).toBe("glm-4.7");
-    expect(captured.auth).toBe("Bearer shared-key");
+    process.env.OPENAI_API_KEY = "env-key";
+    expect(createLlmProvider()).toBeUndefined();
   });
 
   it("provider 未配置时返回 undefined（调用方回落本地启发式，不静默造空模型实例）", () => {
     expect(createLlmProvider()).toBeUndefined();
   });
 
-  it("GUI 覆盖模型生效；空白覆盖回落 .env", () => {
-    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LLM_MODEL = "env-model";
-    process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
-    process.env.OPENAI_API_KEY = "test-key";
-    expect(createLlmProvider({ model: "gui-model" })?.modelVersion).toContain("gui-model");
-    expect(createLlmProvider({ model: "  " })?.modelVersion).toContain("env-model");
+  it("GUI 覆盖模型生效；空白覆盖 = 未配置模型", () => {
+    expect(createLlmProvider({ provider: "openai-compatible", model: "gui-model", baseUrl: "https://gui.example.com/v1" })?.modelVersion).toContain("gui-model");
+    expect(createLlmProvider({ provider: "openai-compatible", model: "  " })).toBeUndefined();
   });
 
   it("GUI 覆盖服务商/端点/密钥：整条链路换掉，.env 的 provider 与 OPENAI_API_KEY 都不参与", async () => {
@@ -305,19 +267,15 @@ describe("createLlmProvider（单一配置）", () => {
     expect(captured.model).toBe("gui-model");
   });
 
-  it("覆盖项留空 = 逐项回落 .env（可以只换密钥不换服务商）", () => {
-    process.env.TUTOR_LLM_PROVIDER = "openai-compatible";
-    process.env.TUTOR_LLM_MODEL = "env-model";
-    process.env.TUTOR_OPENAI_URL = "https://llm.example.com/v1";
-    process.env.OPENAI_API_KEY = "env-key";
-    expect(createLlmProvider({ provider: "  ", model: "", baseUrl: "", apiKey: "" })?.modelVersion).toContain("env-model");
-    expect(createLlmProvider({ apiKey: "gui-key" })).toBeDefined();
+  it("覆盖项留空 = 未配置，不拼接任何环境变量", () => {
+    expect(createLlmProvider({ provider: "openai-compatible", model: "" })).toBeUndefined();
+    expect(createLlmProvider({ apiKey: "gui-key" }), "只有密钥不算配置").toBeUndefined();
   });
 
   it("官方 openai 缺密钥就不建实例；兼容端点允许无密钥", () => {
     for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "TUTOR_OPENAI_API_KEY"]) delete process.env[key];
-    expect(createLlmProvider({ provider: "openai" })).toBeUndefined();
-    expect(createLlmProvider({ provider: "openai-compatible" })).toBeDefined();
+    expect(createLlmProvider({ provider: "openai", model: "gpt-5" })).toBeUndefined();
+    expect(createLlmProvider({ provider: "openai-compatible", model: "gpt-5", baseUrl: "https://x/v1" })).toBeDefined();
   });
 
 });

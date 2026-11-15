@@ -1,12 +1,11 @@
 import { readRepositorySettings } from "../orchestration/paid-turn.js";
 import { currentPricing, pricingSourceOf, summarizeCost } from "../../cost/cost.js";
 import { resolveLlmConfig, teachingProviderStatus, TIMEOUT_MAX_MS, TIMEOUT_MIN_MS } from "../../adapter/outbound/llm/provider.js";
-import { syncActiveProfile } from "../../adapter/outbound/llm/profiles.js";
 import { LLM_PROVIDERS, PRICING_KEYS, THINKING_EFFORTS, effectiveLlmConfig, getLlmRuntimeSettings, normalizeRate, normalizeTimeoutMs, publicLlmSettings, setLlmRuntimeSettings } from "../../adapter/outbound/llm/runtime.js";
 /** 思考档位取值 = 运行时清单的成员。 */
 type ThinkingEffort = (typeof THINKING_EFFORTS)[number];
 import { isThinkingEffortSupported, resolveThinkingCapability, supportedThinkingEfforts } from "../../adapter/outbound/llm/thinking.js";
-import { repositoryOr404, teachingLlm } from "../../infrastructure/composition-root.js";
+import { llmProfileStore, repositoryOr404, teachingLlm } from "../../infrastructure/composition-root.js";
 
 /**
   配置与成本面的用例：运行时 LLM 设置（含密钥掩码）、每仓预算、成本读数。
@@ -43,12 +42,14 @@ function describeThinking(model: string) {
 
 /** GET/PUT 共用的响应装配：运行时设置（密钥只出掩码）+ .env 回落值 + 生效状态 + 思考能力声明。 */
 export function llmSettingsView(): Record<string, unknown> {
+  // 只用来展示协议默认地址与超时；模型、密钥一律取自用户配置
   const fallback = resolveLlmConfig({});
   const effective = effectiveLlmConfig;
   const active = teachingProviderStatus(teachingLlm());
   return {
     ...publicLlmSettings(),
-    envFallback: { provider: fallback.provider, model: fallback.model, baseUrl: fallback.baseUrl, hasApiKey: Boolean(fallback.apiKey), timeoutMs: fallback.timeoutMs },
+    // 协议给的默认地址与超时（不是环境变量，也不是用户配置）
+    defaults: { baseUrl: fallback.baseUrl, timeoutMs: fallback.timeoutMs },
     pricing: currentPricing(),
     pricingSources: { input: pricingSourceOf("input"), output: pricingSourceOf("output"), cacheHit: pricingSourceOf("cacheHit") },
     activeModel: active.model,
@@ -126,7 +127,7 @@ export function updateLlmSettingsUseCase(patch: LlmSettingsPatch): SettingsResul
   });
   // 界面改的是当前配置的连接字段：同步回配置，避免两份显示不一致
   const current = getLlmRuntimeSettings();
-  syncActiveProfile({
+  llmProfileStore.syncActiveProfile({
     provider: current.provider,
     model: current.model,
     baseUrl: current.baseUrl,

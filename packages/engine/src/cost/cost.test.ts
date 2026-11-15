@@ -123,10 +123,10 @@ describe("currentPricing（现读两层回落）", () => {
     rmSync(pricingDir, { recursive: true, force: true });
   });
 
-  it("界面留空用 .env 的值，界面填了就用界面的，两种都不需要重启", () => {
+  it("单价只认界面配置；环境变量不再参与", () => {
     process.env.TUTOR_INPUT_USD_PER_MILLION = "0.4";
-    expect(currentPricing().inputPerMillionUsd).toBe(0.4);
-    expect(pricingSourceOf("input")).toBe("env");
+    expect(currentPricing().inputPerMillionUsd).toBe(0);
+    expect(pricingSourceOf("input")).toBe("unset");
     setLlmRuntimeSettings({ inputUsdPerMillion: "0.28" });
     expect(currentPricing().inputPerMillionUsd).toBe(0.28);
     expect(pricingSourceOf("input")).toBe("runtime");

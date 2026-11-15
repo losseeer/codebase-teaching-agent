@@ -134,13 +134,10 @@ export interface ThinkingCapabilityInfo {
 }
 
 /** 引擎解析 .env 一次下发。 */
-export interface LlmEnvFallback {
-  provider: string;
-  model: string;
+export /** 协议给的默认值（不是环境变量，也不是用户配置）。 */
+interface LlmProtocolDefaults {
   baseUrl: string;
-  hasApiKey: boolean;
-  /** 留空时实际生效的超时（毫秒）。 */
-  timeoutMs?: number;
+  timeoutMs: number;
 }
 
 /** 单价某一档的来源：runtime=LLM 配置框，env=.env，unset=两层都没配。 */
@@ -156,7 +153,7 @@ export interface LlmSettings {
   /** 只回掩码，引擎从不回显明文。 */
   apiKeyMasked: string;
   hasApiKey: boolean;
-  envFallback: LlmEnvFallback;
+  defaults: LlmProtocolDefaults;
   thinkingCapability?: ThinkingCapabilityInfo;
   /** 空串 = 该档交给 .env；单位人民币/百万 token，字段名里的 USD 实指人民币。 */
   inputUsdPerMillion?: string;

@@ -2,24 +2,24 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { mcpConfigFile, readMcpConfigs, resetExternalTools, type McpServerConfig } from "../../adapter/outbound/integrations/clients.js";
+import { mcpConfig } from "../../infrastructure/composition-root.js";
 
 export interface McpConfigView {
   path: string;
   text: string;
-  servers: Array<Omit<McpServerConfig, "env"> & { envKeys: string[] }>;
+  servers: Array<{ name: string; command: string; args?: string[]; cwd?: string; allowedTools?: string[]; envKeys: string[] }>;
   skipped: { server: string; reason: string }[];
 }
 
 export function readMcpConfigUseCase(): McpConfigView {
-  const path = mcpConfigFile();
+  const path = mcpConfig.mcpConfigFile();
   let text = "";
   try {
     text = readFileSync(path, "utf8");
   } catch {
     // 还没建过配置：返回空文本，界面从模板写起
   }
-  const { servers, skipped } = readMcpConfigs(path);
+  const { servers, skipped } = mcpConfig.readMcpConfigs(path);
   return {
     path,
     text,
@@ -51,11 +51,11 @@ export function saveMcpConfigUseCase(text: string): McpSaveResult {
       return { ok: false, error: `「${name}」缺 command。` };
     }
   }
-  const path = mcpConfigFile();
+  const path = mcpConfig.mcpConfigFile();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${text.trim()}\n`, { encoding: "utf8", mode: 0o600 });
   chmodSync(path, 0o600);
   // 配置变了要让外部工具清单重连，否则下次请求还拿旧连接
-  resetExternalTools();
+  mcpConfig.resetExternalTools();
   return { ok: true, value: readMcpConfigUseCase() };
 }
