@@ -6,6 +6,7 @@
 import { createApp } from "./adapter/inbound/http/create-app.js";
 import { loadDotEnv, tboot } from "./boot.js";
 import { flushAuditLines, installShutdownHandler, releaseExternalTools, releaseMountedRepositories, runStartupReadings } from "./infrastructure/bootstrap.js";
+import { startProfileScheduler } from "./infrastructure/profile-scheduler.js";
 
 // .env 先加载：buildLlmRuntimeProvider 在运行期读取 TUTOR_LLM_* 配置
 loadDotEnv();
@@ -27,4 +28,5 @@ if (!process.env.VITEST) {
   // 信号处理先装上，再跑开机读数
   installShutdownHandler({ close: () => app.close() });
   runStartupReadings();
+  startProfileScheduler();
 }

@@ -191,6 +191,13 @@ export interface LlmProfilesView {
   profiles: LlmProfileView[];
 }
 
+export interface SkillItem {
+  name: string;
+  description: string;
+  bundled: boolean;
+  files: string[];
+}
+
 export interface McpConfigView {
   path: string;
   text: string;
@@ -254,6 +261,12 @@ export type SaveState = "synced" | "queued" | "saving" | "saved" | "failed";
 export const api = {
   getLlmSettings: () => request<LlmSettings>("/api/llm/settings"),
   updateLlmSettings: (partial: LlmSettingsPatch) => request<LlmSettings>("/api/llm/settings", { method: "PUT", body: JSON.stringify(partial) }),
+  getSkills: () => request<{ skills: SkillItem[] }>("/api/skills"),
+  readSkill: (name: string) => request<{ text: string; files: string[] }>(`/api/skills/${encodeURIComponent(name)}`),
+  writeSkill: (name: string, text: string) => request<{ files: string[] }>(`/api/skills/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ text }) }),
+  createSkill: (name: string) => request<{ text: string; files: string[] }>("/api/skills", { method: "POST", body: JSON.stringify({ name }) }),
+  uploadSkill: (name: string, fileName: string, base64: string) => request<{ files: string[] }>("/api/skills/upload", { method: "POST", body: JSON.stringify({ name, fileName, base64 }) }),
+  deleteSkill: (name: string) => request<{ name: string }>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
   getMcpConfig: () => request<McpConfigView>("/api/mcp/config"),
   putMcpConfig: (text: string) => request<McpConfigView>("/api/mcp/config", { method: "PUT", body: JSON.stringify({ text }) }),
   getLlmProfiles: () => request<LlmProfilesView>("/api/llm/profiles"),
@@ -276,6 +289,7 @@ export const api = {
   getProfile: () => checked("profile", z.object({ profile: z.string(), path: z.string() }), "/api/profile"),
   putProfile: (profile: string) => request<{ profile: string; path: string }>("/api/profile", { method: "PUT", body: JSON.stringify({ profile }) }),
   chatProfile: (message: string) => request<{ reply: string; profile: string }>("/api/profile/chat", { method: "POST", body: JSON.stringify({ message }) }),
+  polishText: (text: string, label: string, instruction?: string) => request<{ text: string }>("/api/text/edit", { method: "POST", body: JSON.stringify({ text, label, instruction }) }),
   /** 只读能力面；不发模型。 */
   getAgentSurface: (repositoryId: string, scope: AgentScope, operation?: PracticeOperation) => checked<AgentSurface>("agent-surface", agentSurfaceSchema, `/api/repositories/${repositoryId}/agent-surface?scope=${scope}${operation ? `&operation=${operation}` : ""}`),
   /** journal 按 traceId 汇总；给 threadId 时只取该会话。纯读。 */

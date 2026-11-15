@@ -17,6 +17,7 @@ import { Loading } from "./ui/Loading";
 import { ProfileDialog } from "./views/ProfileDialog";
 import { ModelSettingsDialog } from "./views/ModelSettingsDialog";
 import { McpSettingsDialog } from "./views/McpSettingsDialog";
+import { SkillsDialog } from "./views/SkillsDialog";
 import { Icon, type IconName } from "./ui/icons";
 import { DangerDialog } from "./ui/DangerDialog";
 import { PopMenu } from "./ui/PopMenu";
@@ -160,6 +161,7 @@ export function App(): ReactElement {
   const [profileOpen, setProfileOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [mcpSettingsOpen, setMcpSettingsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const toggleSidebar = (): void => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -284,7 +286,8 @@ export function App(): ReactElement {
         items={[
           { label: "用户画像", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } },
           { label: "推理设置", title: "全局思考档位（模型与超时在各自的 LLM 配置里）", onSelect: () => { setUserMenu(null); setModelSettingsOpen(true); } },
-          { label: "MCP 服务", title: "外部 MCP server 的配置", onSelect: () => { setUserMenu(null); setMcpSettingsOpen(true); } }
+          { label: "MCP 服务", title: "外部 MCP server 的配置", onSelect: () => { setUserMenu(null); setMcpSettingsOpen(true); } },
+          { label: "技能", title: "编辑、新建、上传或删除用户技能", onSelect: () => { setUserMenu(null); setSkillsOpen(true); } }
         ]}
         ariaLabel="用户设置"
         onClose={() => setUserMenu(null)}
@@ -292,6 +295,7 @@ export function App(): ReactElement {
       {profileOpen ? <ProfileDialog onClose={() => setProfileOpen(false)} /> : null}
       {modelSettingsOpen ? <ModelSettingsDialog onClose={() => setModelSettingsOpen(false)} /> : null}
       {mcpSettingsOpen ? <McpSettingsDialog onClose={() => setMcpSettingsOpen(false)} /> : null}
+      {skillsOpen ? <SkillsDialog onClose={() => setSkillsOpen(false)} /> : null}
       <PracticeOperationProvider>
         <main className="main">
           {banner}

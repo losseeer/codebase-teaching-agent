@@ -323,6 +323,18 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .msg:hover .msg-delete { opacity: 1; pointer-events: auto; }
 .msg-delete:hover { color: var(--danger); border-color: var(--danger-border); }
 
+/* 技能管理：左列表 + 右编辑区 */
+.skills-layout { display: flex; gap: var(--sp-4); min-height: 420px; }
+.skills-list { width: 220px; flex: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+.skills-new { display: flex; gap: var(--sp-1); }
+.skills-new .text-input { flex: 1; min-width: 0; }
+.skills-items { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.skills-item { display: flex; flex-direction: column; text-align: left; padding: 6px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; }
+.skills-item:hover { background: var(--surface); }
+.skills-item.active { border-color: var(--brand-600); background: var(--surface); }
+.skills-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.skills-editor .profile-editor { flex: 1; min-height: 280px; }
+
 /* 用户头像与偏好入口：折叠侧栏时只留头像 */
 .sidebar-user { width: 100%; }
 .user-avatar {

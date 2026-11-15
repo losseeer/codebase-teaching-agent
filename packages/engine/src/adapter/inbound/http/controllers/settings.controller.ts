@@ -5,6 +5,8 @@ import { llmSettingsView, readCostUseCase, saveBudgetUseCase, updateLlmSettingsU
 import { restoreSkillsUseCase } from "../../../../application/use-case/integrations.js";
 import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
 import { readMcpConfigUseCase, saveMcpConfigUseCase } from "../../../../application/use-case/mcp.js";
+import { editTextUseCase } from "../../../../application/use-case/text-edit.js";
+import { createSkillUseCase, deleteSkillUseCase, listSkillsUseCase, readSkillUseCase, uploadSkillUseCase, writeSkillUseCase, type SkillResult } from "../../../../application/use-case/skills.js";
 import { profileChatUseCase } from "../../../../application/use-case/profile.js";
 import { activateProfileUseCase, captureCurrentProfileUseCase, deleteProfileUseCase, listProfilesUseCase, saveProfileUseCase, testProfileUseCase, type ProfileFailure } from "../../../../application/use-case/profiles.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -13,6 +15,9 @@ import type { FastifyInstance, FastifyReply } from "fastify";
   配置与成本面的入站翻译：GET/PUT 运行时 LLM 设置、GET 成本读数、PUT 每仓预算。
   取值与保存在 `application/use-case/settings.ts`，这里只做失败种类 → 状态码与文案。
 */
+const skillResult = <T>(reply: FastifyReply, result: SkillResult<T>): FastifyReply =>
+  result.ok ? reply.send(result.value) : reply.code(422).send({ error: result.error });
+
 const rejectedProfile = (reply: FastifyReply, failure: ProfileFailure, message: string): FastifyReply =>
   failure === "not-found" ? reply.code(404).send({ error: message }) : reply.code(422).send({ error: message });
 
@@ -79,6 +84,29 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     return { profile: readProfile(), path: profilePath() };
   });
 
+  // 用户技能：出厂技能也允许直接编辑，写前留一份 .bak 版本
+  app.get("/api/skills", async () => ({ skills: listSkillsUseCase() }));
+  app.post("/api/skills", async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: unknown };
+    if (typeof body.name !== "string") return reply.code(400).send({ error: "name 必须是字符串" });
+    return skillResult(reply, createSkillUseCase(body.name));
+  });
+  app.post("/api/skills/upload", async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: unknown; fileName?: unknown; base64?: unknown };
+    if (typeof body.name !== "string" || typeof body.fileName !== "string" || typeof body.base64 !== "string") {
+      return reply.code(400).send({ error: "name / fileName / base64 都要是字符串" });
+    }
+    return skillResult(reply, uploadSkillUseCase(body.name, body.fileName, body.base64));
+  });
+  app.get<{ Params: { name: string } }>("/api/skills/:name", async (request, reply) =>
+    skillResult(reply, readSkillUseCase(request.params.name)));
+  app.put<{ Params: { name: string }; Body: { text?: unknown } }>("/api/skills/:name", async (request, reply) => {
+    if (typeof request.body?.text !== "string") return reply.code(400).send({ error: "text 必须是字符串" });
+    return skillResult(reply, writeSkillUseCase(request.params.name, request.body.text));
+  });
+  app.delete<{ Params: { name: string } }>("/api/skills/:name", async (request, reply) =>
+    skillResult(reply, deleteSkillUseCase(request.params.name)));
+
   // MCP 服务：只接本地 command；保存前校验结构并重置外部工具缓存
   app.get("/api/mcp/config", async () => readMcpConfigUseCase());
   app.put("/api/mcp/config", async (request, reply) => {
@@ -86,6 +114,18 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (typeof body?.text !== "string") return reply.code(400).send({ error: "text 必须是字符串" });
     const result = saveMcpConfigUseCase(body.text);
     return result.ok ? result.value : reply.code(422).send({ error: result.error });
+  });
+
+  // 画像与技能编辑器共用：润色，或按一句指令改写；只返回文本，由界面决定是否保存
+  app.post("/api/text/edit", async (request, reply) => {
+    const body = (request.body ?? {}) as { text?: unknown; label?: unknown; instruction?: unknown };
+    if (typeof body.text !== "string") return reply.code(400).send({ error: "text 必须是字符串" });
+    const result = await editTextUseCase({
+      text: body.text,
+      label: typeof body.label === "string" ? body.label : "文本",
+      instruction: typeof body.instruction === "string" ? body.instruction : undefined
+    });
+    return result.ok ? { text: result.text } : reply.code(422).send({ error: result.error });
   });
 
   app.post("/api/profile/chat", async (request, reply) => {

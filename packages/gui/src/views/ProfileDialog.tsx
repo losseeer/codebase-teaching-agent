@@ -13,6 +13,7 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [polishing, setPolishing] = useState(false);
   /** 与 agent 的沟通：一句话让它记住 / 改 / 删，不必自己动 markdown。 */
   const [ask, setAsk] = useState("");
   const [asking, setAsking] = useState(false);
@@ -65,6 +66,20 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
     }
   };
 
+  const polish = async (): Promise<void> => {
+    setPolishing(true);
+    setError("");
+    try {
+      const next = await api.polishText(text, "用户画像");
+      setText(next.text);
+      showToast("已润色，确认后点保存生效");
+    } catch (reason) {
+      setError(failureText("润色失败", reason));
+    } finally {
+      setPolishing(false);
+    }
+  };
+
   const save = async (): Promise<void> => {
     // 留空保存会清空整份画像：先确认，不靠一行小字提示
     if (!text.trim()) { setConfirmClear(true); return; }
@@ -105,6 +120,8 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
           <p className="field-note mono" title={path}>{path ? `存储于 ${path}` : "正在读取存储位置…"}</p>
         </div>
         <div className="modal-foot">
+          <button type="button" className="btn btn-ghost btn-sm" disabled={polishing || !text.trim()} onClick={() => void polish()}>{polishing ? "润色中…" : "润色"}</button>
+          <span className="modal-note" />
           <button type="button" className="btn" onClick={onClose}>取消</button>
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存"}</button>
         </div>

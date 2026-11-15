@@ -47,6 +47,7 @@ export * as llmRuntime from "../adapter/outbound/llm/runtime.js";
 export * as llmCallLog from "../adapter/outbound/llm/call-log.js";
 export * as mcpConfig from "../adapter/outbound/integrations/clients.js";
 export * as chatArchive from "../adapter/outbound/persistence/chat-store.js";
+export * as skillsFs from "../adapter/outbound/integrations/skills.js";
 
 /** 仓库未挂载时给界面的一句话，各路由共用。 */
 export const REPOSITORY_NOT_MOUNTED = "这个仓库现在打不开；请重新导入。";
