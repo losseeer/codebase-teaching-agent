@@ -434,22 +434,21 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   };
 
   /** 删除一条消息：用户消息由引擎连带删掉紧邻的回复；重拉线程避免计数错位。 */
-  const deleteMessage = async (scope: Scope, messageId: string): Promise<void> => {
+  const deleteMessage = async (scope: Scope, target: { id: string; text: string; user: boolean }): Promise<void> => {
     const threadId = currentThreadRef.current[scope];
     if (!threadId) return;
     try {
-      await api.deleteThreadMessage(threadId, messageId);
+      await api.deleteThreadMessage(threadId, target.id);
     } catch (reason) {
       if (!isNotFound(reason)) {
         setError(scope, failureText("删除消息失败", reason));
         return;
       }
-      // 气泡上可能还是本地临时 id：按内容回找服务端那一条，从后往前取最近一条
-      const item = threads[scope].find((entry) => entry.id === messageId);
+      // 气泡 id 可能已换过或还是本地临时 id：用点击时快照的正文回找服务端最近一条
       try {
         const { messages } = await api.getThreadMessages(threadId);
         const match = [...messages].reverse().find((message) =>
-          message.content === item?.text && (message.role === "user") === (item?.kind === "user"));
+          message.content === target.text && (message.role === "user") === target.user);
         if (!match) throw reason;
         await api.deleteThreadMessage(threadId, match.id);
       } catch (retry) {

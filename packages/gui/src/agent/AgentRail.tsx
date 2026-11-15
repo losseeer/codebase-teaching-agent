@@ -43,7 +43,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
   }, []);
 
   /** 待删除的消息；确认后由引擎连带删掉用户消息对应的回复。 */
-  const [pendingMessageDelete, setPendingMessageDelete] = useState<string | null>(null);
+  const [pendingMessageDelete, setPendingMessageDelete] = useState<{ id: string; text: string; user: boolean } | null>(null);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
   const bound = boundFor(scope, t);
   const unbound = bound.startsWith("未绑定") || bound === "未定位锚点" || bound === "未开始练习";
@@ -70,7 +70,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text, askId) => { void t.sendMap(text, askId); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} liveAskId={t.liveAsk[scope]} onDelete={item.kind === "user" ? () => setPendingMessageDelete(item.id) : undefined} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text, askId) => { void t.sendMap(text, askId); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} liveAskId={t.liveAsk[scope]} onDelete={item.kind === "user" ? () => setPendingMessageDelete({ id: item.id, text: item.text, user: true }) : undefined} />)}
         {/* 过程指示：有流式正文时让位，避免双重提示 */}
         {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -126,9 +126,9 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       {pendingMessageDelete ? (
         <DangerDialog
           title="删除这条消息？"
-          body="对应的回复也会一起删除。"
+          body="对应的回复也会一起删除,是否继续？"
           deleteLabel="删除"
-          onDelete={() => { const id = pendingMessageDelete; setPendingMessageDelete(null); void t.deleteMessage(scope, id); }}
+          onDelete={() => { const target = pendingMessageDelete; setPendingMessageDelete(null); void t.deleteMessage(scope, target); }}
           onClose={() => setPendingMessageDelete(null)}
         />
       ) : null}
