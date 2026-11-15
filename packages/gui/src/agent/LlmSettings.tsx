@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { api, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch } from "../api/client";
+import { api, type LlmProfileView, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch } from "../api/client";
 import { showToast, toastFailure } from "../ui/toast";
+import { PopMenu } from "../ui/PopMenu";
 import { Icon } from "../ui/icons";
 
 /** LLM 连接配置弹窗：服务商、接口地址、密钥与计价；字段失焦即 PUT。
@@ -15,6 +16,10 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   /** 用户配置过的连接（LLM profile）：切换时先让引擎做一次连通性检查。 */
   const [profiles, setProfiles] = useState<LlmProfilesView | null>(null);
   const [activating, setActivating] = useState(false);
+  /** 胶囊点击先开选择器：切换是高频动作，配置表单收进「管理配置…」。 */
+  const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
+  const [testNote, setTestNote] = useState("");
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -31,6 +36,20 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     void api.getLlmProfiles().then(setProfiles).catch(() => undefined);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  const test = async (): Promise<void> => {
+    setTesting(true);
+    setTestNote("");
+    setRejected(null);
+    try {
+      await api.testLlmProfile(profiles?.activeId ? { id: profiles.activeId } : {});
+      setTestNote("连接成功");
+    } catch (error) {
+      setRejected(error instanceof Error ? error.message : "连接失败");
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const activate = async (id: string): Promise<void> => {
     setActivating(true);
@@ -103,7 +122,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
           aria-haspopup="dialog"
           aria-expanded={open}
           title={`${status.text} · 点击配置模型与连接`}
-          onClick={() => setOpen((value) => !value)}
+          onClick={(event) => setPickerAnchor(pickerAnchor ? null : event.currentTarget)}
         >
           <Icon name={status.local ? "alert" : "zap"} size={12} />
           <span className="pill-name">{status.pill}</span>
@@ -121,6 +140,21 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
           <Icon name={status.local ? "alert" : "settings"} size={14} />模型与计价
         </button>
       )}
+      <PopMenu
+        anchor={pickerAnchor}
+        ariaLabel="切换 LLM 配置"
+        onClose={() => setPickerAnchor(null)}
+        items={[
+          ...(profiles?.profiles.length
+            ? profiles.profiles.map((item) => ({
+                key: item.id,
+                label: <ProfileOption item={item} active={item.id === profiles.activeId} />,
+                onSelect: () => { void activate(item.id); }
+              }))
+            : [{ key: "empty", label: "（还没有配置）", disabled: true, onSelect: () => undefined }]),
+          { key: "manage", label: "管理配置…", onSelect: () => setOpen(true) }
+        ]}
+      />
       {open && (
         <div className="modal-mask" onClick={() => setOpen(false)}>
           <div className="modal wide" role="dialog" aria-label="模型与推理设置" onClick={(event) => event.stopPropagation()}>
@@ -203,6 +237,8 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
+              <button type="button" className="btn btn-ghost btn-sm" disabled={testing} onClick={() => void test()}>{testing ? "测试中…" : "测试连接"}</button>
+              <span className="modal-note">{testNote}</span>
               <button type="button" className="btn btn-primary" onClick={() => setOpen(false)}>完成</button>
             </div>
           </div>
@@ -265,7 +301,7 @@ function activeSummary(llm: LlmSettings | null, loadFailed: boolean): { pill: st
     return { pill: "未配模型", text: "未配模型（不发请求）", title: llm.activeProvider ?? "", hint: "服务商或密钥没配齐：对话与 LLM 出题会被当场挡下，摘要与规则题走确定性档。", thinking, local: true };
   }
   const [protocol, ...model] = (llm.activeModel ?? "").split(":");
-  const slug = model.join(":") || llm.activeModel || "";
+  const slug = model.join(":") || llm.activeModel || "Auto";
   return { pill: slug, text: `${protocol} · ${slug}`, title: `${llm.activeProvider ?? ""} · ${llm.activeModel ?? ""}`, hint: "", thinking, local: false };
 }
 
@@ -332,5 +368,22 @@ function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: 
       </span>
       {note ? <span className="field-note">{note}</span> : null}
     </div>
+  );
+}
+
+/** 选择器里的一行：名字 + 模型（空即 Auto）+ 单价摘要 + 选中勾。 */
+function ProfileOption({ item, active }: { item: LlmProfileView; active: boolean }): ReactElement {
+  const price = item.inputUsdPerMillion || item.outputUsdPerMillion
+    ? `${item.inputUsdPerMillion || "-"} / ${item.outputUsdPerMillion || "-"} 每百万`
+    : "单价未配";
+  return (
+    <span className="profile-row">
+      <span className="profile-row-main">
+        <span className="profile-row-name">{item.name}</span>
+        <span className="profile-row-model">{item.model || "Auto"}</span>
+      </span>
+      <span className="profile-row-price">{price}</span>
+      {active ? <span className="profile-row-check" aria-hidden>✓</span> : null}
+    </span>
   );
 }

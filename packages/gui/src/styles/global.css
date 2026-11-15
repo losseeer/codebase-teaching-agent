@@ -319,6 +319,14 @@ h1, h2, h3, h4, p { margin-top: 0; }
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 700;
 }
+/* 配置选择器里的行：名字 + 模型 + 单价，选中打勾 */
+.profile-row { display: flex; align-items: center; gap: 10px; min-width: 260px; text-align: left; }
+.profile-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.profile-row-name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-row-model { font-size: var(--fs-11); color: var(--ink-2); font-family: var(--font-mono); }
+.profile-row-price { font-size: var(--fs-11); color: var(--ink-3); flex: none; }
+.profile-row-check { color: var(--brand-700); font-weight: 700; flex: none; }
+
 /* LLM 配置切换栏：下拉 + 另存为 + 删除 */
 .profile-bar { display: flex; gap: var(--sp-2); align-items: center; }
 .profile-bar .select { flex: 1; min-width: 0; }

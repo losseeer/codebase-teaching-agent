@@ -264,6 +264,7 @@ export const api = {
   captureLlmProfile: (name: string) => request<LlmProfilesView>("/api/llm/profiles/capture", { method: "POST", body: JSON.stringify({ name }) }),
   deleteLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
   activateLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" }),
+  testLlmProfile: (payload: { id?: string; provider?: string; model?: string; baseUrl?: string; apiKey?: string }) => request<{ ok: boolean }>("/api/llm/profiles/test", { method: "POST", body: JSON.stringify(payload) }),
   submitImport: (path: string, summaryHeaderComments?: boolean) => request<ImportJob>("/api/imports", { method: "POST", body: JSON.stringify({ path, ...(summaryHeaderComments === undefined ? {} : { summaryHeaderComments }) }) }),
   /** 打开本机目录选择窗口；取消不是错误。 */
   pickDirectory: () => request<{ path?: string; canceled?: boolean }>("/api/imports/pick-directory", { method: "POST" }),
