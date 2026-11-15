@@ -23,3 +23,14 @@ describe("轨迹回放与消息删除", () => {
     expect(buildTraceHistory([turn, deleted], "repo_1", 20).runs).toHaveLength(1);
   });
 });
+
+describe("按已软删的提问正文排除轨迹", () => {
+  it("同会话同正文的回合消失；别会话或别正文不受影响", () => {
+    const turn = event("e-turn", "turn_text", { scene: "teach", question: "问", answer: "答" }, "trace-1");
+    const other = event("e-other", "turn_text", { scene: "teach", question: "别的", answer: "答" }, "trace-2");
+    const removed = [{ sessionId: "s-1", content: "问" }];
+    const runs = buildTraceHistory([turn, other], "repo_1", 20, undefined, undefined, removed).runs;
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe("trace-2");
+  });
+});

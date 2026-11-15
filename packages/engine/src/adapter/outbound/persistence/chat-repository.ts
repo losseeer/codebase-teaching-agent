@@ -84,6 +84,12 @@ export class ChatRepository {
     return this.db.prepare("SELECT rowid, id, session_id, role, content, created_at, error FROM chat_message WHERE session_id = ? AND rowid > ? AND deleted_at IS NULL ORDER BY rowid ASC LIMIT 1").get(sessionId, rowid) as (ChatMessageRow & { rowid: number }) | undefined;
   }
 
+  /** 已软删的用户提问：轨迹回放按「会话 + 正文」排除对应回合。 */
+  deletedUserQuestions(): { sessionId: string; content: string }[] {
+    const rows = this.db.prepare("SELECT session_id, content FROM chat_message WHERE deleted_at IS NOT NULL AND role = 'user'").all() as { session_id: string; content: string }[];
+    return rows.map((row) => ({ sessionId: row.session_id, content: row.content }));
+  }
+
   softDeleteMessages(ids: readonly string[], at: string): void {
     const stmt = this.db.prepare("UPDATE chat_message SET deleted_at = ? WHERE id = ?");
     for (const id of ids) stmt.run(at, id);

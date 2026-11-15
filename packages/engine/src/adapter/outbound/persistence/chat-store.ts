@@ -160,6 +160,10 @@ export function softDeleteThread(repositoryPath: string, threadId: string): bool
 }
 
 /** 正文行数，不按软删过滤。 */
+export function deletedUserQuestions(repositoryPath: string): { sessionId: string; content: string }[] {
+  return withDatabase(repositoryPath, (database) => database.chats.deletedUserQuestions());
+}
+
 export function countMessagesRaw(repositoryPath: string, threadId: string): number {
   return withDatabase(repositoryPath, (database) => database.chats.countMessages(threadId));
 }
@@ -176,6 +180,7 @@ export function chatStoreFor(repositoryPath: string) {
     readMessages: (threadId: string, limit?: number) => readMessages(repositoryPath, threadId, limit),
     renameThread: (threadId: string, title: string) => renameThread(repositoryPath, threadId, title),
     deleteMessage: (threadId: string, messageId: string) => deleteMessage(repositoryPath, threadId, messageId),
+    deletedUserQuestions: () => deletedUserQuestions(repositoryPath),
     softDeleteThread: (threadId: string) => softDeleteThread(repositoryPath, threadId)
   };
 }

@@ -3,6 +3,7 @@ import type { AgentScope, TraceHistory } from "@codebase-tutor/contract";
 import { repositoryOr404 } from "../../infrastructure/composition-root.js";
 import { settleOrphanedGenerations } from "../runtime/settle-generations.js";
 import { buildTraceHistory } from "../runtime/trace-history.js";
+import { chatArchive } from "../../infrastructure/composition-root.js";
 
 const SCOPES = new Set<AgentScope>(["teaching", "map", "practice"]);
 
@@ -14,5 +15,5 @@ export function traceHistoryUseCase(repositoryId: string, rawLimit: unknown, raw
   const threadId = typeof rawThreadId === "string" && rawThreadId.trim() ? rawThreadId.trim() : undefined;
   const scope = typeof rawScope === "string" && SCOPES.has(rawScope as AgentScope) ? rawScope as AgentScope : undefined;
   settleOrphanedGenerations(repository.audit, repositoryId);
-  return buildTraceHistory(repository.audit.read(), repository.index.repositoryId, limit, threadId, scope);
+  return buildTraceHistory(repository.audit.read(), repository.index.repositoryId, limit, threadId, scope, chatArchive.deletedUserQuestions(repository.path));
 }

@@ -247,9 +247,9 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
   };
 }
 
-export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string, scope?: AgentScope): TraceHistory {
+export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string, scope?: AgentScope, deletedQuestions: readonly { sessionId: string; content: string }[] = []): TraceHistory {
   const deletedTurns = new Set(events
-    .filter((event) => event.type === "message_deleted" && typeof event.payload.trace_event_id === "string")
+    .filter((event) => event.type === "message_deleted" && typeof event.payload.trace_event_id === "string" && event.payload.trace_event_id)
     .map((event) => String(event.payload.trace_event_id)));
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
@@ -263,8 +263,10 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   }
   const allowed = scope ? SCOPE_SCENES[scope] : undefined;
   const runs: TraceHistoryRun[] = [];
+  const removedByQuestion = (event: JournalEvent): boolean => deletedQuestions.some((item) =>
+    item.sessionId === event.sessionId && item.content === event.payload.question);
   for (const [runId, list] of groups) {
-    if (list.some((event) => event.type === "turn_text" && deletedTurns.has(event.id))) continue;
+    if (list.some((event) => event.type === "turn_text" && (deletedTurns.has(event.id) || removedByQuestion(event)))) continue;
     const run = buildRun(runId, list, repositoryId);
     if (run && (!allowed || allowed.includes(run.scene))) runs.push(run);
   }
