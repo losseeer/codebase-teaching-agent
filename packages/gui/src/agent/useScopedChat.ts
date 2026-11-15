@@ -452,6 +452,11 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         if (!match) throw reason;
         await api.deleteThreadMessage(threadId, match.id);
       } catch (retry) {
+        if (isNotFound(retry)) {
+          // 服务端没有这条：多半是回合没落库（失败/中断），它只存在于界面上，直接移除本地气泡
+          setThreads((prev) => ({ ...prev, [scope]: prev[scope].filter((entry) => entry.id !== target.id) }));
+          return;
+        }
         setError(scope, failureText("删除消息失败", retry));
         return;
       }
