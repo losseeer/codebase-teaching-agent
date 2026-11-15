@@ -439,10 +439,25 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     if (!threadId) return;
     try {
       await api.deleteThreadMessage(threadId, messageId);
-      await loadThread(scope, threadId);
     } catch (reason) {
-      setError(scope, failureText("删除消息失败", reason));
+      if (!isNotFound(reason)) {
+        setError(scope, failureText("删除消息失败", reason));
+        return;
+      }
+      // 气泡上可能还是本地临时 id：按内容回找服务端那一条，从后往前取最近一条
+      const item = threads[scope].find((entry) => entry.id === messageId);
+      try {
+        const { messages } = await api.getThreadMessages(threadId);
+        const match = [...messages].reverse().find((message) =>
+          message.content === item?.text && (message.role === "user") === (item?.kind === "user"));
+        if (!match) throw reason;
+        await api.deleteThreadMessage(threadId, match.id);
+      } catch (retry) {
+        setError(scope, failureText("删除消息失败", retry));
+        return;
+      }
     }
+    await loadThread(scope, threadId);
   };
 
   /** 软删：正文与审计日志留库，仅从列表消失。 */

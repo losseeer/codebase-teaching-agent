@@ -125,8 +125,8 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
       {pendingMessageDelete ? (
         <DangerDialog
-          title="删除这条提问？"
-          body="对应的回复也会一起删除；消息记录会从会话里消失，审计日志仍保留原文。"
+          title="删除这条消息？"
+          body="对应的回复也会一起删除。"
           deleteLabel="删除"
           onDelete={() => { const id = pendingMessageDelete; setPendingMessageDelete(null); void t.deleteMessage(scope, id); }}
           onClose={() => setPendingMessageDelete(null)}
@@ -140,7 +140,7 @@ function composerForScope(scope: Scope, t: ScopedChatApi): { placeholder: string
   const canSend = !t.sending && t.content.trim().length > 0;
   if (scope === "teaching") {
     return {
-      placeholder: t.scopeRef ? `围绕「${t.scopeLabel}」说说你的推理` : "先在左栏选一个文件或目录，再说说你的推理",
+      placeholder: t.scopeRef ? `围绕「${t.scopeLabel}」说说你的理解` : "先在左栏选一个文件或目录，再说说你的理解",
       canSend,
       onSend: t.send,
     };
