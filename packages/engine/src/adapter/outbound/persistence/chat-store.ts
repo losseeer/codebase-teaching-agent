@@ -130,7 +130,7 @@ export function readMessages(repositoryPath: string, threadId: string, limit?: n
 }
 
 /** 改名：标题去空后截 120 字；空标题或线程不存在/已删返回 `undefined`。 */
-export function deleteMessage(repositoryPath: string, threadId: string, messageId: string): { deleted: string[] } | undefined {
+export function deleteMessage(repositoryPath: string, threadId: string, messageId: string): { deleted: string[]; question?: string } | undefined {
   return withDatabase(repositoryPath, (database) => {
     const row = database.chats.messageRow(messageId);
     if (!row || row.session_id !== threadId) return undefined;
@@ -140,7 +140,7 @@ export function deleteMessage(repositoryPath: string, threadId: string, messageI
       if (next?.role === "assistant") ids.push(next.id);
     }
     database.chats.softDeleteMessages(ids, new Date().toISOString());
-    return { deleted: ids };
+    return { deleted: ids, ...(row.role === "user" ? { question: row.content } : {}) };
   });
 }
 

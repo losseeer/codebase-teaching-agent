@@ -37,7 +37,7 @@ export interface ChatStore {
   /** 改名：空标题或线程不存在/已删返回 `undefined`。 */
   renameThread(threadId: string, title: string): ChatThread | undefined;
   /** 软删一条消息；删用户消息时，紧邻的助手回复一并删。消息不在返回 `undefined`。 */
-  deleteMessage(threadId: string, messageId: string): { deleted: string[] } | undefined;
+  deleteMessage(threadId: string, messageId: string): { deleted: string[]; question?: string } | undefined;
   /** 软删：重复删第二次返回 `false`。 */
   softDeleteThread(threadId: string): boolean;
 }

@@ -68,7 +68,14 @@ export function deleteMessageUseCase(threadId: string, messageId: string): Threa
   if (!located) return fail("thread-missing");
   const deleted = importer.chatStore(located.repositoryPath).deleteMessage(located.thread.id, messageId);
   if (!deleted) return fail("message-missing");
-  importer.audit(located.repositoryPath, located.repositoryId).append("message_deleted", { thread_id: located.thread.id, message_ids: deleted.deleted.join(",") }, located.thread.id);
+  const audit = importer.audit(located.repositoryPath, located.repositoryId);
+  const turnText = audit.read().filter((event) =>
+    event.type === "turn_text" && event.sessionId === located.thread.id && event.payload.question === deleted.question).at(-1);
+  audit.append("message_deleted", {
+    thread_id: located.thread.id,
+    message_ids: deleted.deleted.join(","),
+    trace_event_id: turnText?.id ?? ""
+  }, located.thread.id);
   return { ok: true, value: deleted };
 }
 

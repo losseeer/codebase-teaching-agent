@@ -248,6 +248,9 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
 }
 
 export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string, scope?: AgentScope): TraceHistory {
+  const deletedTurns = new Set(events
+    .filter((event) => event.type === "message_deleted" && typeof event.payload.trace_event_id === "string")
+    .map((event) => String(event.payload.trace_event_id)));
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
     if (!event.traceId) continue;
@@ -261,6 +264,7 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   const allowed = scope ? SCOPE_SCENES[scope] : undefined;
   const runs: TraceHistoryRun[] = [];
   for (const [runId, list] of groups) {
+    if (list.some((event) => event.type === "turn_text" && deletedTurns.has(event.id))) continue;
     const run = buildRun(runId, list, repositoryId);
     if (run && (!allowed || allowed.includes(run.scene))) runs.push(run);
   }
