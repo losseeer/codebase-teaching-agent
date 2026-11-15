@@ -48,11 +48,10 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
 }
 
 /** 按 threadId 取线程与正文；已软删的读不到。 */
-/** `limit` 给正整数时只取最近这几条，仍按时间正序返回。 */
-export function readThreadMessages(threadId: string, limit?: number): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
+export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");
-  return { ok: true, value: { thread: located.thread, messages: importer.chatStore(located.repositoryPath).readMessages(located.thread.id, limit) } };
+  return { ok: true, value: { thread: located.thread, messages: importer.chatStore(located.repositoryPath).readMessages(located.thread.id) } };
 }
 
 export function renameThreadUseCase(threadId: string, title: string | undefined): ThreadsResult<{ thread: ChatThread }> {

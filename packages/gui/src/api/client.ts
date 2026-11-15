@@ -257,7 +257,6 @@ export const api = {
   getMcpConfig: () => request<McpConfigView>("/api/mcp/config"),
   putMcpConfig: (text: string) => request<McpConfigView>("/api/mcp/config", { method: "PUT", body: JSON.stringify({ text }) }),
   getLlmProfiles: () => request<LlmProfilesView>("/api/llm/profiles"),
-  saveLlmProfile: (payload: Partial<Omit<LlmProfileView, "apiKeyMasked" | "hasApiKey">> & { apiKey?: string }) => request<LlmProfilesView>("/api/llm/profiles", { method: "POST", body: JSON.stringify(payload) }),
   captureLlmProfile: (name: string) => request<LlmProfilesView>("/api/llm/profiles/capture", { method: "POST", body: JSON.stringify({ name }) }),
   deleteLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
   activateLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" }),
@@ -319,7 +318,7 @@ export const api = {
   /** 会话清单：threads 只含已发言的会话；current 回认界面正打开的那条（未发言也认）。 */
   listThreads: (repositoryId: string, scope: ChatScope, current?: string) => checked("threads", z.object({ threads: z.array(chatThreadSchema), current: chatThreadSchema.nullable() }), `/api/repositories/${repositoryId}/threads?scope=${scope}${current ? `&current=${encodeURIComponent(current)}` : ""}`),
   createThread: (repositoryId: string, payload: { scope: ChatScope; scopeRef?: string; exerciseId?: string; title?: string }) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/repositories/${repositoryId}/threads`, { method: "POST", body: JSON.stringify(payload) }),
-  getThreadMessages: (threadId: string, limit?: number) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages${limit ? `?limit=${String(limit)}` : ""}`),
+  getThreadMessages: (threadId: string) => checked("threadMessages", z.object({ thread: chatThreadSchema, messages: z.array(chatThreadMessageSchema) }), `/api/threads/${encodeURIComponent(threadId)}/messages`),
   renameThread: (threadId: string, title: string) => checked("thread", z.object({ thread: chatThreadSchema }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteThread: (threadId: string) => checked("threadDelete", z.object({ deleted: z.boolean(), threadId: z.string() }), `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   deleteThreadMessage: (threadId: string, messageId: string) => checked("threadMessageDelete", z.object({ deleted: z.array(z.string()) }), `/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" }),

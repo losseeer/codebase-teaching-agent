@@ -130,7 +130,6 @@ export function readMessages(repositoryPath: string, threadId: string, limit?: n
 }
 
 /** 改名：标题去空后截 120 字；空标题或线程不存在/已删返回 `undefined`。 */
-/** 软删一条消息；删的是用户消息时，紧邻的下一条助手回复一并删。 */
 export function deleteMessage(repositoryPath: string, threadId: string, messageId: string): { deleted: string[] } | undefined {
   return withDatabase(repositoryPath, (database) => {
     const row = database.chats.messageRow(messageId);

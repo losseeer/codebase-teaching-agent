@@ -29,9 +29,8 @@ export function registerThreadRoutes(app: FastifyInstance): void {
     return result.ok ? reply.code(201).send({ thread: result.value.thread }) : rejected(reply, result.failure);
   });
 
-  app.get<{ Params: { threadId: string }; Querystring: { limit?: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
-    const limit = Number(request.query.limit);
-    const result = readThreadMessages(request.params.threadId, Number.isInteger(limit) && limit > 0 ? limit : undefined);
+  app.get<{ Params: { threadId: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
+    const result = readThreadMessages(request.params.threadId);
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 

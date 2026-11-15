@@ -48,7 +48,6 @@ export function llmSettingsView(): Record<string, unknown> {
   const active = teachingProviderStatus(teachingLlm());
   return {
     ...publicLlmSettings(),
-    // 协议给的默认地址与超时（不是环境变量，也不是用户配置）
     defaults: { baseUrl: fallback.baseUrl, timeoutMs: fallback.timeoutMs },
     pricing: currentPricing(),
     pricingSources: { input: pricingSourceOf("input"), output: pricingSourceOf("output"), cacheHit: pricingSourceOf("cacheHit") },

@@ -16,7 +16,6 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   /** 用户配置过的连接（LLM profile）：切换时先让引擎做一次连通性检查。 */
   const [profiles, setProfiles] = useState<LlmProfilesView | null>(null);
   const [activating, setActivating] = useState(false);
-  /** 胶囊点击先开选择器：切换是高频动作，配置表单收进「管理配置…」。 */
   const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
   const [testNote, setTestNote] = useState("");
   const [testing, setTesting] = useState(false);
@@ -358,7 +357,7 @@ function SelectSetting({ label, value, options, disabled, hint, note, ariaLabel,
 }
 
 /** API Key 只写项：引擎从不回显明文；留空提交 = 不改动，清除只走 ✕ 按钮。 */
-function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; note?: string; onSave: (key: string) => void; onClear: () => void }): ReactElement {
+function SecretSetting({ saved, placeholder, disabled, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; onSave: (key: string) => void; onClear: () => void }): ReactElement {
   const [draft, setDraft] = useState("");
   // 显式保存：失焦不写，避免「想点测试却先触发保存/关窗」
   const commit = (): void => { if (draft.trim()) { onSave(draft.trim()); setDraft(""); } };
@@ -382,12 +381,10 @@ function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: 
         <button type="button" className="btn btn-ghost btn-sm" disabled={disabled || !draft.trim()} onClick={commit}>保存</button>
         {saved ? <button type="button" className="icon-btn" title="清除已存密钥" disabled={disabled} onClick={() => { setDraft(""); onClear(); }}><Icon name="trash" size={14} /></button> : null}
       </span>
-      {note ? <span className="field-note">{note}</span> : null}
     </div>
   );
 }
 
-/** 选择器里的一行：名字 + 模型（空即 Auto）+ 单价摘要 + 选中勾。 */
 function ProfileOption({ item, active }: { item: LlmProfileView; active: boolean }): ReactElement {
   const price = item.inputUsdPerMillion || item.outputUsdPerMillion
     ? `${item.inputUsdPerMillion || "-"} / ${item.outputUsdPerMillion || "-"} 每百万`

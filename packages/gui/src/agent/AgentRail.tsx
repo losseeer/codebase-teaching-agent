@@ -42,7 +42,6 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     return () => observer.disconnect();
   }, []);
 
-  /** 待删除的消息；确认后由引擎连带删掉用户消息对应的回复。 */
   const [pendingMessageDelete, setPendingMessageDelete] = useState<{ id: string; text: string; user: boolean } | null>(null);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
   const bound = boundFor(scope, t);

@@ -28,7 +28,7 @@ export interface ScopedChatApi {
   renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
   /** 软删；AgentRail 侧有二次确认弹窗。 */
   removeThread: (scope: Scope, threadId: string) => Promise<void>;
-  /** 删除一条消息（用户消息连带对应回复）。`target` 是点击时的快照：气泡 id 可能已换过，正文用来兜底回找。 */
+  /** 删除一条消息（用户消息连带对应回复）。 */
   deleteMessage: (scope: Scope, target: { id: string; text: string; user: boolean }) => Promise<void>;
 
   /** 教学域：`file:<path>` / `dir:<path>`；null = 还没选。 */
