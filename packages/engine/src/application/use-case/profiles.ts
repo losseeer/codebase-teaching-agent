@@ -69,6 +69,30 @@ async function preflight(profile: LlmProfile): Promise<string | undefined> {
   }
 }
 
+/** 表单里的「测试连接」：用给定参数或已存配置补全后跑一次预检，不改任何状态。 */
+export async function testProfileUseCase(input: {
+  id?: string;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const stored = input.id ? readProfileFile().profiles.find((item) => item.id === input.id) : undefined;
+  const profile: LlmProfile = {
+    id: input.id ?? "test",
+    name: "",
+    provider: (input.provider ?? stored?.provider ?? "").trim(),
+    model: (input.model ?? stored?.model ?? "").trim(),
+    baseUrl: (input.baseUrl ?? stored?.baseUrl ?? "").trim(),
+    apiKey: (input.apiKey ?? stored?.apiKey ?? "").trim(),
+    inputUsdPerMillion: "",
+    outputUsdPerMillion: "",
+    cacheHitUsdPerMillion: ""
+  };
+  const failure = await preflight(profile);
+  return failure ? { ok: false, message: failure } : { ok: true };
+}
+
 export async function activateProfileUseCase(id: string): Promise<ProfileResult<ProfileView>> {
   const profile = readProfileFile().profiles.find((item) => item.id === id);
   if (!profile) return { ok: false, failure: "not-found", message: "这套配置不存在。" };

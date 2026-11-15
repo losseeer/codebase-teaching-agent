@@ -6,7 +6,7 @@ import { restoreSkillsUseCase } from "../../../../application/use-case/integrati
 import { profilePath, readProfile, writeProfile } from "../../../outbound/profile.js";
 import { readMcpConfigUseCase, saveMcpConfigUseCase } from "../../../../application/use-case/mcp.js";
 import { profileChatUseCase } from "../../../../application/use-case/profile.js";
-import { activateProfileUseCase, captureCurrentProfileUseCase, deleteProfileUseCase, listProfilesUseCase, saveProfileUseCase, type ProfileFailure } from "../../../../application/use-case/profiles.js";
+import { activateProfileUseCase, captureCurrentProfileUseCase, deleteProfileUseCase, listProfilesUseCase, saveProfileUseCase, testProfileUseCase, type ProfileFailure } from "../../../../application/use-case/profiles.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
@@ -52,6 +52,13 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const result = deleteProfileUseCase(request.params.id);
     return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
   });
+  app.post("/api/llm/profiles/test", async (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const text = (key: string): string | undefined => (typeof body[key] === "string" ? (body[key] as string) : undefined);
+    const result = await testProfileUseCase({ id: text("id"), provider: text("provider"), model: text("model"), baseUrl: text("baseUrl"), apiKey: text("apiKey") });
+    return result.ok ? { ok: true } : reply.code(422).send({ error: result.message });
+  });
+
   app.post<{ Params: { id: string } }>("/api/llm/profiles/:id/activate", async (request, reply) => {
     const result = await activateProfileUseCase(request.params.id);
     return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
