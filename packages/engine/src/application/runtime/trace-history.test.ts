@@ -34,3 +34,15 @@ describe("按已软删的提问正文排除轨迹", () => {
     expect(runs[0].runId).toBe("trace-2");
   });
 });
+
+describe("中断轮轨迹", () => {
+  const aborted = (traceId: string): JournalEvent => event("a-" + traceId, "turn_aborted", { scene: "teach" }, traceId);
+  it("有过删除事件就清掉全部「提前结束」", () => {
+    const deleted = event("e-del", "message_deleted", { thread_id: "s-1", message_ids: "" });
+    expect(buildTraceHistory([aborted("t1"), aborted("t2"), deleted], "repo_1", 20).runs).toEqual([]);
+  });
+
+  it("没删过消息时保留", () => {
+    expect(buildTraceHistory([aborted("t1")], "repo_1", 20).runs).toHaveLength(1);
+  });
+});

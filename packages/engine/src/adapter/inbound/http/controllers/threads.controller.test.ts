@@ -101,6 +101,23 @@ describe("删除单条消息", () => {
     expect((after.json() as { messages: unknown[] }).messages).toEqual([]);
     expect(fx.lastEvent("message_deleted").payload.thread_id).toBe(thread.id);
 
-    expect((await fx.app.inject({ method: "DELETE", url: `/api/threads/${thread.id}/messages/no-such` })).statusCode).toBe(404);
+    // 删除幂等：未落库的消息没有行，也要留一条事件供轨迹清掉中断轮
+    expect((await fx.app.inject({ method: "DELETE", url: `/api/threads/${thread.id}/messages/no-such` })).statusCode).toBe(200);
+  });
+});
+
+describe("本地临时 id 删除", () => {
+  it("按正文回找落库消息，连带回复一起删", async () => {
+    const thread = createThread({ repositoryPath: fx.repoDir, repositoryId: fx.repositoryId, scope: "map", title: "本地 id" });
+    appendMessages(fx.repoDir, thread.id, [{ role: "user", content: "问" }, { role: "assistant", content: "答" }]);
+    const deleted = await fx.app.inject({
+      method: "DELETE",
+      url: `/api/threads/${thread.id}/messages/1794000000000-abc123`,
+      payload: { text: "问", user: true }
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect((deleted.json() as { deleted: string[] }).deleted).toHaveLength(2);
+    const after = await fx.app.inject({ method: "GET", url: `/api/threads/${thread.id}/messages` });
+    expect((after.json() as { messages: unknown[] }).messages).toEqual([]);
   });
 });

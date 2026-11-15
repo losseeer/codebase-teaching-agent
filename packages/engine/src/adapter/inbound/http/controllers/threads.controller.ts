@@ -9,8 +9,7 @@ const REJECTED: Record<ThreadsFailure, { status: 400 | 404; error: string }> = {
   "repository-missing": { status: 404, error: REPOSITORY_NOT_MOUNTED },
   "scope-invalid": { status: 400, error: "scope 只能是 teach / map / practice" },
   "thread-missing": { status: 404, error: "会话不存在或已删除。" },
-  "title-empty": { status: 400, error: "标题不能为空" },
-  "message-missing": { status: 404, error: "消息不存在或已删除。" }
+  "title-empty": { status: 400, error: "标题不能为空" }
 };
 
 const rejected = (reply: FastifyReply, failure: ThreadsFailure): FastifyReply => reply.code(REJECTED[failure].status).send({ error: REJECTED[failure].error });
@@ -34,8 +33,10 @@ export function registerThreadRoutes(app: FastifyInstance): void {
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 
-  app.delete<{ Params: { threadId: string; messageId: string } }>("/api/threads/:threadId/messages/:messageId", async (request, reply) => {
-    const result = deleteMessageUseCase(request.params.threadId, request.params.messageId);
+  app.delete<{ Params: { threadId: string; messageId: string }; Body: { text?: unknown; user?: unknown } }>("/api/threads/:threadId/messages/:messageId", async (request, reply) => {
+    const body = request.body ?? {};
+    const result = deleteMessageUseCase(request.params.threadId, request.params.messageId,
+      text(body.text), body.user !== false);
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 

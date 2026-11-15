@@ -413,27 +413,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const deleteMessage = async (scope: Scope, target: { id: string; text: string; user: boolean }): Promise<void> => {
     const threadId = currentThreadRef.current[scope];
     if (!threadId) return;
-    const removeLocal = (): void => {
-      setThreads((prev) => {
-        const list = [...prev[scope]];
-        const index = list.findIndex((entry) => entry.id === target.id);
-        if (index < 0) return prev;
-        list.splice(index, 1);
-        while (list[index]?.kind === "agent" && list[index]?.variant) list.splice(index, 1);
-        return { ...prev, [scope]: list };
-      });
-    };
-    let id = target.id;
-    // 本地临时 id 是前端现发的：按正文找服务端那一条；找不到说明回合没落库，只删界面上的气泡
-    if (/^\d+-[a-z0-9]+$/.test(id)) {
-      const { messages } = await api.getThreadMessages(threadId);
-      const match = [...messages].reverse().find((message) =>
-        message.content === target.text && (message.role === "user") === target.user);
-      if (!match) { removeLocal(); return; }
-      id = match.id;
-    }
     try {
-      await api.deleteThreadMessage(threadId, id);
+      await api.deleteThreadMessage(threadId, target.id, target);
       await loadThread(scope, threadId);
     } catch (reason) {
       setError(scope, failureText("删除消息失败", reason));

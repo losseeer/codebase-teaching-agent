@@ -251,6 +251,7 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   const deletedTurns = new Set(events
     .filter((event) => event.type === "message_deleted" && typeof event.payload.trace_event_id === "string" && event.payload.trace_event_id)
     .map((event) => String(event.payload.trace_event_id)));
+  const hasDeletion = events.some((event) => event.type === "message_deleted");
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
     if (!event.traceId) continue;
@@ -268,6 +269,8 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   for (const [runId, list] of groups) {
     if (list.some((event) => event.type === "turn_text" && (deletedTurns.has(event.id) || removedByQuestion(event)))) continue;
     const run = buildRun(runId, list, repositoryId);
+    // 中断轮没落库、没有 turn_text，无法一一对应：发生过删除就清掉这些「提前结束」
+    if (run?.status === "aborted" && hasDeletion) continue;
     if (run && (!allowed || allowed.includes(run.scene))) runs.push(run);
   }
   return { runs: runs.sort((a, b) => (b.endedAt ?? b.startedAt).localeCompare(a.endedAt ?? a.startedAt)).slice(0, Math.max(0, limit)) };
