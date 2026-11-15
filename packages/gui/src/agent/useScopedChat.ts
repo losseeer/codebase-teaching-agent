@@ -453,8 +453,16 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         await api.deleteThreadMessage(threadId, match.id);
       } catch (retry) {
         if (isNotFound(retry)) {
-          // 服务端没有这条：多半是回合没落库（失败/中断），它只存在于界面上，直接移除本地气泡
-          setThreads((prev) => ({ ...prev, [scope]: prev[scope].filter((entry) => entry.id !== target.id) }));
+          // 服务端没有这条：多半是回合没落库（失败/中断），它只存在于界面上。
+          // 连同紧随其后的本地提示（「已停止生成」/错误/提示）一起移除，否则会留下孤儿气泡。
+          setThreads((prev) => {
+            const list = [...prev[scope]];
+            const index = list.findIndex((entry) => entry.id === target.id);
+            if (index < 0) return prev;
+            list.splice(index, 1);
+            while (list[index]?.kind === "agent" && list[index]?.variant) list.splice(index, 1);
+            return { ...prev, [scope]: list };
+          });
           return;
         }
         setError(scope, failureText("删除消息失败", retry));
