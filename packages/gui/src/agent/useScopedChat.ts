@@ -409,6 +409,18 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
+  /** 删除一条消息：用户消息由引擎连带删掉紧邻的回复；重拉线程避免计数错位。 */
+  const deleteMessage = async (scope: Scope, messageId: string): Promise<void> => {
+    const threadId = currentThreadRef.current[scope];
+    if (!threadId) return;
+    try {
+      await api.deleteThreadMessage(threadId, messageId);
+      await loadThread(scope, threadId);
+    } catch (reason) {
+      setError(scope, failureText("删除消息失败", reason));
+    }
+  };
+
   /** 软删：正文与审计日志留库，仅从列表消失。 */
   const removeThread = async (scope: Scope, threadId: string): Promise<void> => {
     try {
@@ -594,7 +606,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   return {
     scope, setScope,
     threads, pushMessage,
-    chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread,
+    chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread, deleteMessage,
     scopeRef, scopeLabel, setScopeRef, dataVersion, reloadRepositoryData,
     mapScopePaths, setMapScope, mapFile, setMapFile, mapBinding, setMapBinding,
     openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,

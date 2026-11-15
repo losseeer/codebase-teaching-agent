@@ -63,7 +63,8 @@ export const DATABASE_SCHEMA_SQL = `
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        error TEXT
+        error TEXT,
+        deleted_at TEXT
       );
       -- 静态产物层：控制流、数据流、类型关系、注册与配置索引，一文件一行。
       CREATE TABLE IF NOT EXISTS static_fact (

@@ -7,7 +7,7 @@ import { locateThread, threadJournalPayload } from "../orchestration/threads.js"
   线程 id 由引擎生成，界面只持有与回传。
   删除是软删：`chat_session` 打 `deleted_at`，`chat_message` 原文不动，journal 追加 `session_deleted`。
 */
-export type ThreadsFailure = "repository-missing" | "scope-invalid" | "thread-missing" | "title-empty";
+export type ThreadsFailure = "repository-missing" | "scope-invalid" | "thread-missing" | "title-empty" | "message-missing";
 
 export type ThreadsResult<T> = { ok: true; value: T } | { ok: false; failure: ThreadsFailure };
 
@@ -60,6 +60,16 @@ export function renameThreadUseCase(threadId: string, title: string | undefined)
   if (!title?.trim()) return fail("title-empty");
   const thread = importer.chatStore(located.repositoryPath).renameThread(located.thread.id, title);
   return thread ? { ok: true, value: { thread } } : fail("thread-missing");
+}
+
+/** 软删一条消息；删用户消息时，紧邻的助手回复一并删，并记 `message_deleted`。 */
+export function deleteMessageUseCase(threadId: string, messageId: string): ThreadsResult<{ deleted: string[] }> {
+  const located = locateThread(threadId);
+  if (!located) return fail("thread-missing");
+  const deleted = importer.chatStore(located.repositoryPath).deleteMessage(located.thread.id, messageId);
+  if (!deleted) return fail("message-missing");
+  importer.audit(located.repositoryPath, located.repositoryId).append("message_deleted", { thread_id: located.thread.id, message_ids: deleted.deleted }, located.thread.id);
+  return { ok: true, value: deleted };
 }
 
 /** 软删线程并记 `session_deleted`；会话无常驻内存态。 */

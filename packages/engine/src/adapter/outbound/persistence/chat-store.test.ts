@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendMessages, countMessagesRaw, createThread, getThread, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
+import { appendMessages, countMessagesRaw, createThread, deleteMessage, getThread, listThreads, readMessages, readThreadState, renameThread, saveThreadState, softDeleteThread } from "./chat-store.js";
 import { isChatScope } from "@codebase-tutor/contract";
 
 /** 会话持久化出入口的口径用例：软删后读侧看不见，消息行仍在库里。 */
@@ -123,5 +123,30 @@ describe("会话持久化", () => {
     expect(["teach", "map", "practice"].every(isChatScope)).toBe(true);
     expect(isChatScope("companion")).toBe(false);
     expect(isChatScope(undefined)).toBe(false);
+  });
+});
+
+describe("删除单条消息", () => {
+  it("删用户消息时，紧邻的助手回复一并软删；正文没有，行仍在库里", () => {
+    const repository = mkdtempSync(join(tmpdir(), "tutor-chat-delete-"));
+    const thread = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "map" });
+    appendMessages(repository, thread.id, [{ role: "user", content: "问" }, { role: "assistant", content: "答" }]);
+    const rows = readMessages(repository, thread.id);
+    expect(rows).toHaveLength(2);
+    expect(deleteMessage(repository, thread.id, rows[0].id)?.deleted).toHaveLength(2);
+    expect(readMessages(repository, thread.id)).toEqual([]);
+    expect(countMessagesRaw(repository, thread.id)).toBe(2);
+    rmSync(repository, { recursive: true, force: true });
+  });
+
+  it("单删助手消息不级联；不存在的消息返回 undefined", () => {
+    const repository = mkdtempSync(join(tmpdir(), "tutor-chat-delete-"));
+    const thread = createThread({ repositoryPath: repository, repositoryId: "repo_1", scope: "map" });
+    appendMessages(repository, thread.id, [{ role: "user", content: "问" }, { role: "assistant", content: "答" }]);
+    const rows = readMessages(repository, thread.id);
+    expect(deleteMessage(repository, thread.id, rows[1].id)?.deleted).toHaveLength(1);
+    expect(readMessages(repository, thread.id).map((row) => row.role)).toEqual(["user"]);
+    expect(deleteMessage(repository, thread.id, "no-such-message")).toBeUndefined();
+    rmSync(repository, { recursive: true, force: true });
   });
 });

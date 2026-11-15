@@ -42,6 +42,8 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
     return () => observer.disconnect();
   }, []);
 
+  /** 待删除的消息；确认后由引擎连带删掉用户消息对应的回复。 */
+  const [pendingMessageDelete, setPendingMessageDelete] = useState<string | null>(null);
   const { placeholder, canSend, onSend } = composerForScope(scope, t);
   const bound = boundFor(scope, t);
   const unbound = bound.startsWith("未绑定") || bound === "未定位锚点" || bound === "未开始练习";
@@ -68,7 +70,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
 
       <div className="rail-msgs" ref={threadRef} aria-live="polite">
         {items.length === 0 && !t.liveAnswer && !t.sending ? <EmptyTurn scope={scope} /> : null}
-        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text, askId) => { void t.sendMap(text, askId); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} liveAskId={t.liveAsk[scope]} />)}
+        {items.map((item) => <ThreadEntry key={item.id} item={item} onOpenDiagram={t.requestOpenDiagram} onAnswer={(text, askId) => { void t.sendMap(text, askId); }} onRetry={(text) => { void t.sendMap(text); }} answerable={!t.sending} liveAskId={t.liveAsk[scope]} onDelete={item.kind === "user" ? () => setPendingMessageDelete(item.id) : undefined} />)}
         {/* 过程指示：有流式正文时让位，避免双重提示 */}
         {t.sending && t.progress[scope].length > 0 && !t.liveAnswer ? (
           <div className="msg msg-agent">
@@ -121,6 +123,15 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
           )}
         </form>
       </div>
+      {pendingMessageDelete ? (
+        <DangerDialog
+          title="删除这条提问？"
+          body="对应的回复也会一起删除；消息记录会从会话里消失，审计日志仍保留原文。"
+          deleteLabel="删除"
+          onDelete={() => { const id = pendingMessageDelete; setPendingMessageDelete(null); void t.deleteMessage(scope, id); }}
+          onClose={() => setPendingMessageDelete(null)}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -243,7 +254,7 @@ function ThreadBar({ scope, t }: { scope: Scope; t: ScopedChatApi }): ReactEleme
 }
 
 /** thread 单条消息：agent 正文走 Markdown，error/hint 变体不走。 */
-function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable, liveAskId }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string, askId?: string) => void; onRetry?: (text: string) => void; answerable?: boolean; liveAskId?: string | null }): ReactElement {
+function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable, liveAskId, onDelete }: { item: ThreadItem; onOpenDiagram?: (diagram: { id: string; name: string }) => void; onAnswer?: (text: string, askId?: string) => void; onRetry?: (text: string) => void; answerable?: boolean; liveAskId?: string | null; onDelete?: () => void }): ReactElement {
   const agent = item.kind === "agent" ? item : null;
   const variant = agent?.variant;
   const body = agent && !variant ? <Markdown content={agent.text} /> : agent ? agent.text : item.text;
@@ -266,6 +277,11 @@ function ThreadEntry({ item, onOpenDiagram, onAnswer, onRetry, answerable, liveA
   }
   return (
     <div className={`msg msg-${agent ? "agent" : "user"}`}>
+      {onDelete ? (
+        <button type="button" className="msg-delete" title="删除这条消息（对应回复一并删除）" aria-label="删除这条消息" onClick={onDelete}>
+          <Icon name="trash" size={12} />
+        </button>
+      ) : null}
       <div className={`msg-bubble${tone}`}>{body}</div>
       {/* 提问候选只在待答的那一句上出现 */}
       {options?.length && answerable && item.id === liveAskId ? (

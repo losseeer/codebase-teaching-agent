@@ -130,6 +130,21 @@ export function readMessages(repositoryPath: string, threadId: string, limit?: n
 }
 
 /** 改名：标题去空后截 120 字；空标题或线程不存在/已删返回 `undefined`。 */
+/** 软删一条消息；删的是用户消息时，紧邻的下一条助手回复一并删。 */
+export function deleteMessage(repositoryPath: string, threadId: string, messageId: string): { deleted: string[] } | undefined {
+  return withDatabase(repositoryPath, (database) => {
+    const row = database.chats.messageRow(messageId);
+    if (!row || row.session_id !== threadId) return undefined;
+    const ids = [row.id];
+    if (row.role === "user") {
+      const next = database.chats.nextRow(row.session_id, row.rowid);
+      if (next?.role === "assistant") ids.push(next.id);
+    }
+    database.chats.softDeleteMessages(ids, new Date().toISOString());
+    return { deleted: ids };
+  });
+}
+
 export function renameThread(repositoryPath: string, threadId: string, title: string): ChatThread | undefined {
   const trimmed = title.trim().slice(0, TITLE_MAX);
   if (!trimmed) return undefined;
@@ -161,6 +176,7 @@ export function chatStoreFor(repositoryPath: string) {
     saveThreadState: (threadId: string, state: TeachingThreadState) => saveThreadState(repositoryPath, threadId, state),
     readMessages: (threadId: string, limit?: number) => readMessages(repositoryPath, threadId, limit),
     renameThread: (threadId: string, title: string) => renameThread(repositoryPath, threadId, title),
+    deleteMessage: (threadId: string, messageId: string) => deleteMessage(repositoryPath, threadId, messageId),
     softDeleteThread: (threadId: string) => softDeleteThread(repositoryPath, threadId)
   };
 }

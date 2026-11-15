@@ -15,6 +15,8 @@ export type JournalEventType =
   | "exercise_anchor"
   /** 出题一趟每次模型调用一条：attempt / step_id / round / finish_reason，正文带 reply(≤2000 字)，仅工具调用带 detail，*_truncated 标截断；不进判分与缓存键。 */
   | "exercise_model_reply"
+  /** 删除单条消息（用户消息会连带紧邻的助手回复）：payload = thread_id / message_ids。 */
+  | "message_deleted"
   | "token_usage"
   | "file_read"
   | "code_search"
@@ -67,7 +69,8 @@ export const ENGINE_JOURNAL_EVENTS = [
   "mcp_call", "skill_read",
   "turn_text", "turn_invariant", "turn_asked", "loop_round", "turn_context", "turn_aborted", "exercise_run",
   "session_created", "session_deleted", "code_egress",
-  "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored"
+  "diagram_created", "diagram_edited", "diagram_renamed", "diagram_deleted", "diagram_restored",
+  "message_deleted",
 ] as const satisfies readonly JournalEventType[];
 
 export const UI_JOURNAL_EVENTS = [

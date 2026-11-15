@@ -74,11 +74,26 @@ export class ChatRepository {
       .run(message.id, message.sessionId, message.role, message.content, message.createdAt, message.error);
   }
 
+  /** 单条消息连同 rowid；已软删的当作不存在。 */
+  messageRow(messageId: string): (ChatMessageRow & { rowid: number }) | undefined {
+    return this.db.prepare("SELECT rowid, id, session_id, role, content, created_at, error FROM chat_message WHERE id = ? AND deleted_at IS NULL").get(messageId) as (ChatMessageRow & { rowid: number }) | undefined;
+  }
+
+  /** 同一会话里 rowid 之后的下一行；用于判断用户消息后面紧跟的那条回复。 */
+  nextRow(sessionId: string, rowid: number): (ChatMessageRow & { rowid: number }) | undefined {
+    return this.db.prepare("SELECT rowid, id, session_id, role, content, created_at, error FROM chat_message WHERE session_id = ? AND rowid > ? AND deleted_at IS NULL ORDER BY rowid ASC LIMIT 1").get(sessionId, rowid) as (ChatMessageRow & { rowid: number }) | undefined;
+  }
+
+  softDeleteMessages(ids: readonly string[], at: string): void {
+    const stmt = this.db.prepare("UPDATE chat_message SET deleted_at = ? WHERE id = ?");
+    for (const id of ids) stmt.run(at, id);
+  }
+
   /** 会话正文按时间正序返回；会话已删时为空；给了 `limit` 则取最近 `limit` 条。 */
   messages(sessionId: string, limit?: number): ChatMessageRow[] {
     const base = `SELECT m.id, m.session_id, m.role, m.content, m.created_at, m.error
       FROM chat_message m JOIN chat_session s ON s.id = m.session_id
-      WHERE m.session_id = ? AND s.deleted_at IS NULL`;
+      WHERE m.session_id = ? AND s.deleted_at IS NULL AND m.deleted_at IS NULL`;
     if (!limit) {
       return this.db.prepare(`${base} ORDER BY m.rowid ASC`).all(sessionId) as ChatMessageRow[];
     }

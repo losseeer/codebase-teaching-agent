@@ -28,6 +28,8 @@ export interface ScopedChatApi {
   renameThread: (scope: Scope, threadId: string, title: string) => Promise<void>;
   /** 软删；AgentRail 侧有二次确认弹窗。 */
   removeThread: (scope: Scope, threadId: string) => Promise<void>;
+  /** 删除一条消息（用户消息会连带对应回复）；重拉线程保证计数对齐。 */
+  deleteMessage: (scope: Scope, messageId: string) => Promise<void>;
 
   /** 教学域：`file:<path>` / `dir:<path>`；null = 还没选。 */
   scopeRef: string | null;

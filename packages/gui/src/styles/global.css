@@ -311,6 +311,18 @@ h1, h2, h3, h4, p { margin-top: 0; }
   overflow: hidden;
 }
 .app.rail-hidden .rail { display: none; }
+/* 消息删除：悬停才现身，避免干扰阅读 */
+.msg { position: relative; }
+.msg-delete {
+  position: absolute; top: -6px; right: 0; z-index: 1;
+  width: 20px; height: 20px; padding: 0; border: 1px solid var(--border);
+  border-radius: 50%; background: var(--surface); color: var(--ink-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity var(--t-fast);
+}
+.msg:hover .msg-delete { opacity: 1; pointer-events: auto; }
+.msg-delete:hover { color: var(--danger); border-color: var(--danger-border); }
+
 /* 用户头像与偏好入口：折叠侧栏时只留头像 */
 .sidebar-user { width: 100%; }
 .user-avatar {
