@@ -1,5 +1,5 @@
 /** LLM 配置：列表、保存、删除、切换。切换前做一次最小连通性检查，失败不切换。 */
-import { llmProfileStore, llmProvider, llmRuntime } from "../../infrastructure/composition-root.js";
+import { llmCallLog, llmProfileStore, llmProvider, llmRuntime } from "../../infrastructure/composition-root.js";
 
 export type ProfileFailure = "not-found" | "preflight" | "invalid";
 export type ProfileResult<T> = { ok: true; value: T } | { ok: false; failure: ProfileFailure; message: string };
@@ -70,14 +70,16 @@ export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
 
 /** 一次最小请求：能收到回复才算连通；超时阈值在创建 provider 时给定。 */
 async function preflight(profile: LlmProfile): Promise<string | undefined> {
-  const provider = llmProvider.createLlmProvider({
+  const raw = llmProvider.createLlmProvider({
     provider: profile.provider,
     model: profile.model,
     baseUrl: profile.baseUrl,
     apiKey: profile.apiKey,
     timeoutMs: "10000"
   });
-  if (!provider) return "配置不完整（缺服务商、模型或密钥）";
+  if (!raw) return "配置不完整（缺服务商、模型或密钥）";
+  // 预检也要进工作日志：失败时才能查到是网络、密钥还是端点
+  const provider = new llmCallLog.LoggingLlmProvider(raw, "probe");
   try {
     await provider.complete({ system: "连通性检查：只回复 ok。", user: "ping", maxTokens: 16, temperature: 0, thinking: "off", scene: "profile.preflight" });
     return undefined;

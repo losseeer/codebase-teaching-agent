@@ -44,6 +44,7 @@ export * as profileMemory from "../adapter/outbound/auto-memory.js";
 export * as llmProfileStore from "../adapter/outbound/llm/profiles.js";
 export * as llmProvider from "../adapter/outbound/llm/provider.js";
 export * as llmRuntime from "../adapter/outbound/llm/runtime.js";
+export * as llmCallLog from "../adapter/outbound/llm/call-log.js";
 export * as mcpConfig from "../adapter/outbound/integrations/clients.js";
 
 /** 仓库未挂载时给界面的一句话，各路由共用。 */

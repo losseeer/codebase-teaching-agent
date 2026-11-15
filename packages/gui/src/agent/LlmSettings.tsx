@@ -360,7 +360,8 @@ function SelectSetting({ label, value, options, disabled, hint, note, ariaLabel,
 /** API Key 只写项：引擎从不回显明文；留空提交 = 不改动，清除只走 ✕ 按钮。 */
 function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: { saved: string; placeholder: string; disabled: boolean; note?: string; onSave: (key: string) => void; onClear: () => void }): ReactElement {
   const [draft, setDraft] = useState("");
-  const commit = (): void => { if (draft.trim()) onSave(draft.trim()); setDraft(""); };
+  // 显式保存：失焦不写，避免「想点测试却先触发保存/关窗」
+  const commit = (): void => { if (draft.trim()) { onSave(draft.trim()); setDraft(""); } };
   return (
     <div className="field">
       <label className="lbl" htmlFor="llm-api-key">API Key</label>
@@ -376,10 +377,10 @@ function SecretSetting({ saved, placeholder, disabled, note, onSave, onClear }: 
           disabled={disabled}
           aria-label="API Key"
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
           onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); commit(); } }}
         />
-        {saved ? <button type="button" className="icon-btn" title="清除已存密钥，改用 .env 的" disabled={disabled} onClick={() => { setDraft(""); onClear(); }}><Icon name="trash" size={14} /></button> : null}
+        <button type="button" className="btn btn-ghost btn-sm" disabled={disabled || !draft.trim()} onClick={commit}>保存</button>
+        {saved ? <button type="button" className="icon-btn" title="清除已存密钥" disabled={disabled} onClick={() => { setDraft(""); onClear(); }}><Icon name="trash" size={14} /></button> : null}
       </span>
       {note ? <span className="field-note">{note}</span> : null}
     </div>

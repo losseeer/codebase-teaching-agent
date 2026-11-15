@@ -9,7 +9,7 @@ import { tutorDataDir } from "@codebase-tutor/platform";
 /** LLM 调用日志：每次 `provider.complete` 落一条 JSONL，追加到 `TUTOR_LLM_LOG`。
     该变量设为 off/none/0 时只打控制台；失败照记并原样抛出。 */
 
-export type LlmCallTier = "teaching" | "light";
+export type LlmCallTier = "teaching" | "light" | "probe";
 
 export interface LlmCallRecord {
   /** ISO 时间戳 */
