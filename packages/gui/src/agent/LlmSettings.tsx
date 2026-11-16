@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { api, type LlmProfileView, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch, type ThinkingEffort } from "../api/client";
 import { showToast, toastFailure } from "../ui/toast";
 import { PopMenu } from "../ui/PopMenu";
+import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
 
 /** LLM 连接配置弹窗：服务商、接口地址、密钥与计价；字段失焦即 PUT。
@@ -19,6 +20,9 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null);
   const [testNote, setTestNote] = useState("");
   const [testing, setTesting] = useState(false);
+  const [naming, setNaming] = useState<null | "rename" | "create">(null);
+  const [confirmDrop, setConfirmDrop] = useState(false);
+  const [draftName, setDraftName] = useState("");
 
   useEffect(() => {
     let current = true;
@@ -67,35 +71,29 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     }
   };
 
-  const rename = async (): Promise<void> => {
+  /** 改名只传 id + name；另存为则抓当前连接存一条新的。 */
+  const commitNaming = async (): Promise<void> => {
+    const name = draftName.trim();
     const activeId = profiles?.activeId;
-    const current = profiles?.profiles.find((item) => item.id === activeId);
-    if (!activeId || !current) return;
-    const name = window.prompt("配置名称：", current.name);
-    if (!name?.trim() || name.trim() === current.name) return;
+    if (!name) return;
     try {
-      setProfiles(await api.saveLlmProfile({ id: activeId, name: name.trim() }));
-      showToast("已重命名");
+      if (naming === "rename") {
+        if (!activeId) return;
+        setProfiles(await api.saveLlmProfile({ id: activeId, name }));
+        showToast("已重命名");
+      } else {
+        setProfiles(await api.captureLlmProfile(name));
+        showToast("已保存为新配置");
+      }
+      setNaming(null);
     } catch (error) {
-      toastFailure("重命名失败", error);
-    }
-  };
-
-  const capture = async (): Promise<void> => {
-    const name = window.prompt("把这套连接存为配置，起个名字：", `配置 ${String((profiles?.profiles.length ?? 0) + 1)}`);
-    if (!name?.trim()) return;
-    try {
-      setProfiles(await api.captureLlmProfile(name.trim()));
-      showToast("已保存为新配置");
-    } catch (error) {
-      toastFailure("保存配置失败", error);
+      toastFailure(naming === "rename" ? "重命名失败" : "保存配置失败", error);
     }
   };
 
   const dropProfile = async (): Promise<void> => {
     const activeId = profiles?.activeId;
     if (!activeId) return;
-    if (!window.confirm("删除当前配置？其中保存的密钥会一起删掉。")) return;
     try {
       const next = await api.deleteLlmProfile(activeId);
       setProfiles(next);
@@ -156,6 +154,15 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
           <Icon name={status.local ? "alert" : "settings"} size={14} />模型与计价
         </button>
       )}
+      {confirmDrop ? (
+        <DangerDialog
+          title="删除这套配置？"
+          body="保存的密钥会一起删掉；运行时会一并清空，需要重新选一套启用。"
+          deleteLabel="删除"
+          onDelete={() => { setConfirmDrop(false); void dropProfile(); }}
+          onClose={() => setConfirmDrop(false)}
+        />
+      ) : null}
       <PopMenu
         anchor={pickerAnchor}
         ariaLabel="切换 LLM 配置"
@@ -181,21 +188,58 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
             </div>
             <div className="modal-body">
               <div className="profile-bar">
-                <select
-                  className="select"
-                  aria-label="切换 LLM 配置"
-                  value={profiles?.activeId ?? ""}
-                  disabled={!profiles || activating}
-                  onChange={(event) => void activate(event.target.value)}
-                >
-                  {profiles?.profiles.length
-                    ? profiles.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model || "未设模型"}</option>)
-                    : <option value="">{profiles ? "（还没有配置）" : "正在读取配置…"}</option>}
-                </select>
-                <button type="button" className="icon-btn" title="重命名当前配置" aria-label="重命名当前配置" disabled={!profiles?.activeId || activating} onClick={() => void rename()}><Icon name="edit" size={14} /></button>
-                <button type="button" className="icon-btn" title="重命名当前配置" aria-label="重命名当前配置" disabled={!profiles?.activeId || activating} onClick={() => void rename()}><Icon name="edit" size={14} /></button>
-                <button type="button" className="icon-btn" title="把当前连接另存为配置" aria-label="另存为配置" onClick={() => void capture()}><Icon name="plus" size={14} /></button>
-                <button type="button" className="icon-btn" title="删除当前配置" aria-label="删除当前配置" disabled={!profiles?.activeId || profiles.profiles.length <= 1} onClick={() => void dropProfile()}><Icon name="trash" size={14} /></button>
+                {naming ? (
+                  <>
+                    <input
+                      className="text-input"
+                      value={draftName}
+                      placeholder="配置名称"
+                      aria-label="配置名称"
+                      spellCheck={false}
+                      autoFocus
+                      onChange={(event) => setDraftName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void commitNaming(); }
+                        if (event.key === "Escape") { event.nativeEvent.stopPropagation(); setNaming(null); }
+                      }}
+                    />
+                    <button type="button" className="btn btn-ghost btn-sm" disabled={!draftName.trim()} onClick={() => void commitNaming()}>保存</button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setNaming(null)}>取消</button>
+                  </>
+                ) : (
+                  <>
+                    <select
+                      className="select"
+                      aria-label="切换 LLM 配置"
+                      value={profiles?.activeId ?? ""}
+                      disabled={!profiles || activating}
+                      onChange={(event) => void activate(event.target.value)}
+                    >
+                      {profiles?.profiles.length
+                        ? profiles.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model || "未设模型"}</option>)
+                        : <option value="">{profiles ? "（还没有配置）" : "正在读取配置…"}</option>}
+                    </select>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="重命名当前配置"
+                      aria-label="重命名当前配置"
+                      disabled={!profiles?.activeId || activating}
+                      onClick={() => {
+                        setDraftName(profiles?.profiles.find((item) => item.id === profiles.activeId)?.name ?? "");
+                        setNaming("rename");
+                      }}
+                    ><Icon name="edit" size={14} /></button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="把当前连接另存为配置"
+                      aria-label="另存为配置"
+                      onClick={() => { setDraftName(`配置 ${String((profiles?.profiles.length ?? 0) + 1)}`); setNaming("create"); }}
+                    ><Icon name="plus" size={14} /></button>
+                    <button type="button" className="icon-btn" title="删除当前配置" aria-label="删除当前配置" disabled={!profiles?.activeId || profiles.profiles.length <= 1} onClick={() => setConfirmDrop(true)}><Icon name="trash" size={14} /></button>
+                  </>
+                )}
               </div>
               {activating ? <p className="field-note">正在检测连接…</p> : null}
               {rejected ? <p className="error-message" role="alert">{rejected}</p> : null}
