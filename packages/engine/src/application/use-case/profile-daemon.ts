@@ -29,7 +29,6 @@ function recentTurns(since: string): string[] {
         if (event.type !== "turn_text" || !event.at || event.at < since) continue;
         lines.push(`问：${String(event.payload?.question ?? "").slice(0, 300)}\n答：${String(event.payload?.answer ?? "").slice(0, 300)}`);
       } catch {
-        // 坏行按没有这一条处理
       }
     }
   }

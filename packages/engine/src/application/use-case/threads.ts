@@ -74,16 +74,10 @@ export function deleteMessageUseCase(threadId: string, messageId: string, text?:
       message.content === text && (message.role === "user") === user);
     if (match) deleted = store.deleteMessage(located.thread.id, match.id);
   }
-  const audit = importer.audit(located.repositoryPath, located.repositoryId);
-  const question = deleted?.question ?? (user ? text : undefined);
-  const turnText = audit.read().filter((event) =>
-    event.type === "turn_text" && event.sessionId === located.thread.id && event.payload.question === question).at(-1);
-  // 未落库的中断轮没有消息行，也要留一条删除事件供轨迹清掉「提前结束」
-  audit.append("message_deleted", {
+  // 中断轮没有消息行，也留一条事件供轨迹清掉「提前结束」
+  importer.audit(located.repositoryPath, located.repositoryId).append("message_deleted", {
     thread_id: located.thread.id,
-    message_ids: (deleted?.deleted ?? []).join(","),
-    trace_event_id: turnText?.id ?? "",
-    ...(question ? { question } : {})
+    message_ids: (deleted?.deleted ?? []).join(",")
   }, located.thread.id);
   return { ok: true, value: { deleted: deleted?.deleted ?? [] } };
 }

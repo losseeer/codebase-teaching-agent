@@ -61,14 +61,14 @@ describe("配置增删的一致性", () => {
   });
 });
 
-import { networkReason } from "./profiles.js";
+import { describeError } from "@codebase-tutor/platform";
 
 describe("网络错误原因", () => {
   it("带出底层 cause 的 code 与说明；没有 cause 就用原消息", () => {
     const withCause = Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND maas.example.com" } });
-    expect(networkReason(withCause)).toBe("getaddrinfo ENOTFOUND maas.example.com（ENOTFOUND）");
-    expect(networkReason(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }))).toBe("ECONNREFUSED");
-    expect(networkReason(new Error("fetch failed"))).toBe("fetch failed");
-    expect(networkReason(new Error("bad port"))).toContain("端口被禁止");
+    expect(describeError(withCause)).toBe("fetch failed: getaddrinfo ENOTFOUND maas.example.com（ENOTFOUND）");
+    expect(describeError(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }))).toBe("fetch failed（ECONNREFUSED）");
+    expect(describeError(new Error("fetch failed"))).toBe("fetch failed");
+    expect(describeError(new Error("bad port"))).toContain("端口被禁止");
   });
 });

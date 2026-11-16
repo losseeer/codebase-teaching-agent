@@ -15,7 +15,7 @@ export type JournalEventType =
   | "exercise_anchor"
   /** 出题一趟每次模型调用一条：attempt / step_id / round / finish_reason，正文带 reply(≤2000 字)，仅工具调用带 detail，*_truncated 标截断；不进判分与缓存键。 */
   | "exercise_model_reply"
-  /** 删除单条消息（用户消息会连带紧邻的助手回复）：payload = thread_id / message_ids / trace_event_id。 */
+  /** 删除单条消息（用户消息会连带紧邻的助手回复）：payload = thread_id / message_ids。 */
   | "message_deleted"
   | "token_usage"
   | "file_read"

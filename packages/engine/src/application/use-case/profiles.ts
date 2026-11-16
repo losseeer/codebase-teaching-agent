@@ -1,3 +1,4 @@
+import { describeError } from "@codebase-tutor/platform";
 /** LLM 配置：列表、保存、删除、切换。切换前做一次最小连通性检查，失败不切换。 */
 import { llmCallLog, llmProfileStore, llmProvider, llmRuntime, llmThinking } from "../../infrastructure/composition-root.js";
 
@@ -86,18 +87,6 @@ export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
   return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
-/** fetch 只报 "fetch failed" 时没法判断是 DNS、连接被拒还是超时：把底层 cause 带出来。 */
-export function networkReason(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  // undici 对禁止端口只抛 "bad port"，看不出是哪一段
-  if (/^bad port$/i.test(error.message)) return "接口地址的端口被禁止（如 :9），请检查地址";
-  const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
-  const code = typeof cause?.code === "string" ? cause.code : "";
-  const detail = typeof cause?.message === "string" ? cause.message.trim() : "";
-  if (detail && code) return `${detail}（${code}）`;
-  return code || detail || error.message;
-}
-
 /** 一次最小请求：能收到回复才算连通；超时阈值在创建 provider 时给定。 */
 async function preflight(profile: LlmProfile): Promise<string | undefined> {
   const raw = llmProvider.createLlmProvider({
@@ -114,7 +103,7 @@ async function preflight(profile: LlmProfile): Promise<string | undefined> {
     await provider.complete({ system: "连通性检查：只回复 ok。", user: "ping", maxTokens: 16, temperature: 0, thinking: "off", scene: "profile.preflight" });
     return undefined;
   } catch (error) {
-    return networkReason(error);
+    return describeError(error);
   }
 }
 

@@ -12,9 +12,10 @@ const event = (id: string, type: JournalEventType, payload: Record<string, strin
 describe("轨迹回放与消息删除", () => {
   it("被删消息对应的那一趟轨迹不再出现", () => {
     const turn = event("e-turn", "turn_text", { scene: "teach", question: "问", answer: "答" }, "trace-1");
-    const deleted = event("e-del", "message_deleted", { thread_id: "s-1", message_ids: "m-1", trace_event_id: "e-turn" });
+    const deleted = event("e-del", "message_deleted", { thread_id: "s-1", message_ids: "m-1" });
+    const removed = [{ sessionId: "s-1", content: "问" }];
     expect(buildTraceHistory([turn], "repo_1", 20).runs).toHaveLength(1);
-    expect(buildTraceHistory([turn, deleted], "repo_1", 20).runs).toHaveLength(0);
+    expect(buildTraceHistory([turn, deleted], "repo_1", 20, undefined, undefined, removed).runs).toHaveLength(0);
   });
 
   it("删除别趟的消息不影响这一趟", () => {

@@ -11,6 +11,17 @@ import { tutorDataDir } from "../paths.js";
   对话轨迹在 journal 与 call-log 另落，靠 traceId 关联；写失败只报警告。
   */
 
+/** 把 fetch 的底层原因与禁止端口翻成人话；日志与界面共用。 */
+export function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  if (/^bad port$/i.test(error.message)) return "接口地址的端口被禁止（如 :9），请检查地址";
+  const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const code = typeof cause?.code === "string" ? cause.code : "";
+  const detail = typeof cause?.message === "string" ? cause.message.trim() : "";
+  if (!detail) return code ? `${error.message}（${code}）` : error.message;
+  return code ? `${error.message}: ${detail}（${code}）` : `${error.message}: ${detail}`;
+}
+
 const DEFAULT_LOG_FILE = join(tutorDataDir(), "engine.jsonl");
 
 /** 不回显控制台的种类（http、boot 另有出口）。 */

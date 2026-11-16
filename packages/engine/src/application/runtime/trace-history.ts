@@ -248,9 +248,6 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
 }
 
 export function buildTraceHistory(events: readonly JournalEvent[], repositoryId: string, limit: number, threadId?: string, scope?: AgentScope, deletedQuestions: readonly { sessionId: string; content: string }[] = []): TraceHistory {
-  const deletedTurns = new Set(events
-    .filter((event) => event.type === "message_deleted" && typeof event.payload.trace_event_id === "string" && event.payload.trace_event_id)
-    .map((event) => String(event.payload.trace_event_id)));
   const hasDeletion = events.some((event) => event.type === "message_deleted");
   const groups = new Map<string, JournalEvent[]>();
   for (const event of events) {
@@ -267,7 +264,7 @@ export function buildTraceHistory(events: readonly JournalEvent[], repositoryId:
   const removedByQuestion = (event: JournalEvent): boolean => deletedQuestions.some((item) =>
     item.sessionId === event.sessionId && item.content === event.payload.question);
   for (const [runId, list] of groups) {
-    if (list.some((event) => event.type === "turn_text" && (deletedTurns.has(event.id) || removedByQuestion(event)))) continue;
+    if (list.some((event) => event.type === "turn_text" && removedByQuestion(event))) continue;
     const run = buildRun(runId, list, repositoryId);
     // 中断轮没落库、没有 turn_text，无法一一对应：发生过删除就清掉这些「提前结束」
     if (run?.status === "aborted" && hasDeletion) continue;
