@@ -86,6 +86,16 @@ export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
   return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
+/** fetch 只报 "fetch failed" 时没法判断是 DNS、连接被拒还是超时：把底层 cause 带出来。 */
+export function networkReason(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const code = typeof cause?.code === "string" ? cause.code : "";
+  const detail = typeof cause?.message === "string" ? cause.message.trim() : "";
+  if (detail && code) return `${detail}（${code}）`;
+  return code || detail || error.message;
+}
+
 /** 一次最小请求：能收到回复才算连通；超时阈值在创建 provider 时给定。 */
 async function preflight(profile: LlmProfile): Promise<string | undefined> {
   const raw = llmProvider.createLlmProvider({
@@ -102,7 +112,7 @@ async function preflight(profile: LlmProfile): Promise<string | undefined> {
     await provider.complete({ system: "连通性检查：只回复 ok。", user: "ping", maxTokens: 16, temperature: 0, thinking: "off", scene: "profile.preflight" });
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error.message : "连接失败";
+    return networkReason(error);
   }
 }
 

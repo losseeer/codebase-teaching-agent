@@ -29,12 +29,12 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") setOpen(false); };
+    if (!open && !pickerAnchor) return;
+    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") { setOpen(false); setPickerAnchor(null); } };
     window.addEventListener("keydown", onKey);
     void api.getLlmProfiles().then(setProfiles).catch(() => undefined);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, pickerAnchor]);
 
   const test = async (): Promise<void> => {
     setTesting(true);
@@ -153,7 +153,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 label: <ProfileOption item={item} active={item.id === profiles.activeId} />,
                 onSelect: () => { void activate(item.id); }
               }))
-            : [{ key: "empty", label: "（还没有配置）", disabled: true, onSelect: () => undefined }]),
+            : [{ key: "empty", label: profiles ? "（还没有配置）" : "正在读取配置…", disabled: true, onSelect: () => undefined }]),
           { key: "manage", label: "管理配置…", onSelect: () => setOpen(true) }
         ]}
       />
@@ -176,7 +176,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 >
                   {profiles?.profiles.length
                     ? profiles.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model || "未设模型"}</option>)
-                    : <option value="">（还没有配置）</option>}
+                    : <option value="">{profiles ? "（还没有配置）" : "正在读取配置…"}</option>}
                 </select>
                 <button type="button" className="icon-btn" title="把当前连接另存为配置" aria-label="另存为配置" onClick={() => void capture()}><Icon name="plus" size={14} /></button>
                 <button type="button" className="icon-btn" title="删除当前配置" aria-label="删除当前配置" disabled={!profiles?.activeId || profiles.profiles.length <= 1} onClick={() => void dropProfile()}><Icon name="trash" size={14} /></button>

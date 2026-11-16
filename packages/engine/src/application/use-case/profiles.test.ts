@@ -60,3 +60,14 @@ describe("配置增删的一致性", () => {
     expect(llmProfileStore.readProfileFile().profiles.length).toBe(1);
   });
 });
+
+import { networkReason } from "./profiles.js";
+
+describe("网络错误原因", () => {
+  it("带出底层 cause 的 code 与说明；没有 cause 就用原消息", () => {
+    const withCause = Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND maas.example.com" } });
+    expect(networkReason(withCause)).toBe("getaddrinfo ENOTFOUND maas.example.com（ENOTFOUND）");
+    expect(networkReason(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }))).toBe("ECONNREFUSED");
+    expect(networkReason(new Error("fetch failed"))).toBe("fetch failed");
+  });
+});
