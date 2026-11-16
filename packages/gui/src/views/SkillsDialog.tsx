@@ -104,8 +104,8 @@ export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement
               <p className="field-note">附属文件：{files.filter((item) => item !== "SKILL.md").join("、") || "无"}</p>
               <div className="profile-ask">
                 <input className="text-input" value={ask} placeholder="让 agent 改，例如：把步骤精简成 3 步" aria-label="对技能说一句话" onChange={(event) => setAsk(event.target.value)} />
-                <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !text.trim()} onClick={() => polish()}>润色</button>
-                <button type="button" className="btn btn-primary" disabled={busy || !ask.trim() || !text.trim()} onClick={() => polish(ask.trim())}>按指令改</button>
+                {/* 一个发送口：空输入 = 润色全文，有输入 = 按指令改 */}
+                <button type="button" className="btn btn-primary" disabled={busy || !text.trim()} onClick={() => polish(ask.trim() || undefined)}>{busy ? "处理中…" : "发送"}</button>
               </div>
               {error ? <div className="banner banner-danger"><span className="banner-text">{error}</span></div> : null}
             </section>
