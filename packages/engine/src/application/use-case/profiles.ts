@@ -89,6 +89,8 @@ export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
 /** fetch 只报 "fetch failed" 时没法判断是 DNS、连接被拒还是超时：把底层 cause 带出来。 */
 export function networkReason(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
+  // undici 对禁止端口只抛 "bad port"，看不出是哪一段
+  if (/^bad port$/i.test(error.message)) return "接口地址的端口被禁止（如 :9），请检查地址";
   const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
   const code = typeof cause?.code === "string" ? cause.code : "";
   const detail = typeof cause?.message === "string" ? cause.message.trim() : "";

@@ -69,5 +69,6 @@ describe("网络错误原因", () => {
     expect(networkReason(withCause)).toBe("getaddrinfo ENOTFOUND maas.example.com（ENOTFOUND）");
     expect(networkReason(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }))).toBe("ECONNREFUSED");
     expect(networkReason(new Error("fetch failed"))).toBe("fetch failed");
+    expect(networkReason(new Error("bad port"))).toContain("端口被禁止");
   });
 });
