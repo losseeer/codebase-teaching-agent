@@ -273,6 +273,7 @@ export const api = {
   putMcpConfig: (text: string) => request<McpConfigView>("/api/mcp/config", { method: "PUT", body: JSON.stringify({ text }) }),
   getLlmProfiles: () => request<LlmProfilesView>("/api/llm/profiles"),
   captureLlmProfile: (name: string) => request<LlmProfilesView>("/api/llm/profiles/capture", { method: "POST", body: JSON.stringify({ name }) }),
+  saveLlmProfile: (payload: { id?: string; name?: string }) => request<LlmProfilesView>("/api/llm/profiles", { method: "POST", body: JSON.stringify(payload) }),
   deleteLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
   activateLlmProfile: (id: string) => request<LlmProfilesView>(`/api/llm/profiles/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   testLlmProfile: (payload: { id?: string; provider?: string; model?: string; baseUrl?: string; apiKey?: string }) => request<{ ok: boolean }>("/api/llm/profiles/test", { method: "POST", body: JSON.stringify(payload) }),

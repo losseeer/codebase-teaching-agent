@@ -67,6 +67,20 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     }
   };
 
+  const rename = async (): Promise<void> => {
+    const activeId = profiles?.activeId;
+    const current = profiles?.profiles.find((item) => item.id === activeId);
+    if (!activeId || !current) return;
+    const name = window.prompt("配置名称：", current.name);
+    if (!name?.trim() || name.trim() === current.name) return;
+    try {
+      setProfiles(await api.saveLlmProfile({ id: activeId, name: name.trim() }));
+      showToast("已重命名");
+    } catch (error) {
+      toastFailure("重命名失败", error);
+    }
+  };
+
   const capture = async (): Promise<void> => {
     const name = window.prompt("把这套连接存为配置，起个名字：", `配置 ${String((profiles?.profiles.length ?? 0) + 1)}`);
     if (!name?.trim()) return;
@@ -178,6 +192,8 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                     ? profiles.profiles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model || "未设模型"}</option>)
                     : <option value="">{profiles ? "（还没有配置）" : "正在读取配置…"}</option>}
                 </select>
+                <button type="button" className="icon-btn" title="重命名当前配置" aria-label="重命名当前配置" disabled={!profiles?.activeId || activating} onClick={() => void rename()}><Icon name="edit" size={14} /></button>
+                <button type="button" className="icon-btn" title="重命名当前配置" aria-label="重命名当前配置" disabled={!profiles?.activeId || activating} onClick={() => void rename()}><Icon name="edit" size={14} /></button>
                 <button type="button" className="icon-btn" title="把当前连接另存为配置" aria-label="另存为配置" onClick={() => void capture()}><Icon name="plus" size={14} /></button>
                 <button type="button" className="icon-btn" title="删除当前配置" aria-label="删除当前配置" disabled={!profiles?.activeId || profiles.profiles.length <= 1} onClick={() => void dropProfile()}><Icon name="trash" size={14} /></button>
               </div>
