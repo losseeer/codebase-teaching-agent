@@ -46,6 +46,16 @@ export interface LlmCallRecord {
 }
 
 /** 从结果或错误对象上取尝试次数与每次耗时。 */
+/** fetch 只报 "fetch failed" 时看不出原因：把底层 cause 拼进去。 */
+function errorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const code = typeof cause?.code === "string" ? cause.code : "";
+  const detail = typeof cause?.message === "string" ? cause.message : "";
+  if (!detail) return code ? `${error.message}（${code}）` : error.message;
+  return `${error.message}: ${detail}${code ? `（${code}）` : ""}`;
+}
+
 function attemptStats(value: unknown): { attempts?: number; attemptMs?: number[] } {
   const record = value as { attempts?: unknown; attemptMs?: unknown } | undefined;
   const attempts = typeof record?.attempts === "number" && record.attempts >= 1 ? Math.trunc(record.attempts) : undefined;
@@ -153,7 +163,7 @@ export class LoggingLlmProvider implements LlmProvider {
       });
       return completion;
     } catch (error) {
-      logLlmCall({ ...base, ok: false, ms: Date.now() - started, ...attemptStats(error), error: error instanceof Error ? error.message : String(error) });
+      logLlmCall({ ...base, ok: false, ms: Date.now() - started, ...attemptStats(error), error: errorText(error) });
       throw error;
     }
   }

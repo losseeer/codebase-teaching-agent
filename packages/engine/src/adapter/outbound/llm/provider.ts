@@ -1,3 +1,4 @@
+import { proxyFetchFor } from "./proxy-fetch.js";
 import type { LlmUsage, LlmToolCall, LlmMessage, LlmCompletionInput, ThinkingEffort, LlmCompletion, LlmProvider, TeachingProviderStatus } from "../../../application/port/llm-provider.js";
 import { DEFAULT_MAX_TOKENS, LlmAbortedError, isLlmAborted } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
@@ -338,7 +339,7 @@ function createProvider(config: ResolvedLlmConfig): LlmProvider | undefined {
   if (provider === "openai" || provider === "openai-compatible") {
     // openai 协议需要 key，兼容端点可以不填
     if (provider === "openai" && !apiKey) return undefined;
-    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: baseUrl, apiKey, model, timeoutMs }));
+    return new RetryLlmProvider(new OpenAICompatibleProvider({ endpoint: baseUrl, apiKey, model, timeoutMs, fetchImpl: proxyFetchFor(baseUrl) }));
   }
   return undefined;
 }
