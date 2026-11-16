@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { api } from "../api/client";
 import { showToast, failureText } from "../ui/toast";
 import { DangerDialog } from "../ui/DangerDialog";
+import { Icon } from "../ui/icons";
 
 /**
   用户画像：跨仓库、用户手写的 markdown。写给 agent 的长期偏好与背景，
@@ -113,7 +114,9 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
               onChange={(event) => setAsk(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void converse(); } }}
             />
-            <button type="button" className="btn btn-primary" disabled={asking || !ask.trim()} onClick={() => void converse()}>{asking ? "更新中…" : "发送"}</button>
+            <button type="button" className="send-btn" aria-label="发送" title="发送" disabled={asking || !ask.trim()} onClick={() => void converse()}>
+              <Icon name="send" />
+            </button>
           </div>
           {note ? <p className="field-note">{note}</p> : null}
           {error ? <div className="banner banner-danger"><span className="banner-text">{error}</span></div> : null}

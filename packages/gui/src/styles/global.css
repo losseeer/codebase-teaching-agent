@@ -618,6 +618,7 @@ h1, h2, h3, h4, p { margin-top: 0; }
   animation: modal-in 180ms ease;
 }
 .modal.wide { width: 560px; }
+.modal.xwide { width: min(1040px, 92vw); }
 @keyframes modal-in { from { transform: translateY(10px); opacity: 0; } }
 .modal-head { flex: none; padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border); display: flex; align-items: center; }
 .modal-head h3 { font-size: var(--fs-16); font-weight: 650; flex: 1; }

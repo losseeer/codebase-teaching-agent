@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { api, type SkillItem } from "../api/client";
 import { failureText, showToast, toastFailure } from "../ui/toast";
 import { DangerDialog } from "../ui/DangerDialog";
+import { Icon } from "../ui/icons";
 
 /** 用户技能：出厂技能也可直接编辑，写前由引擎留 .bak；支持 .md / .zip 上传与 LLM 润色。 */
 export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement {
@@ -76,7 +77,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement
 
   return (
     <div className="modal-mask" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label="技能">
+      <div className="modal xwide" role="dialog" aria-modal="true" aria-label="技能">
         <div className="modal-head"><h3>技能</h3><button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}><span aria-hidden>×</span></button></div>
         <div className="modal-body">
           <div className="skills-layout">
@@ -105,7 +106,9 @@ export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement
               <div className="profile-ask">
                 <input className="text-input" value={ask} placeholder="让 agent 改，例如：把步骤精简成 3 步" aria-label="对技能说一句话" onChange={(event) => setAsk(event.target.value)} />
                 {/* 一个发送口：空输入 = 润色全文，有输入 = 按指令改 */}
-                <button type="button" className="btn btn-primary" disabled={busy || !text.trim()} onClick={() => polish(ask.trim() || undefined)}>{busy ? "处理中…" : "发送"}</button>
+                <button type="button" className="send-btn" aria-label="发送" title="发送" disabled={busy || !text.trim()} onClick={() => polish(ask.trim() || undefined)}>
+                  <Icon name="send" />
+                </button>
               </div>
               {error ? <div className="banner banner-danger"><span className="banner-text">{error}</span></div> : null}
             </section>

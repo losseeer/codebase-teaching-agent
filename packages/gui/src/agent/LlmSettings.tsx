@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
-import { api, type LlmProfileView, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch } from "../api/client";
+import { api, type LlmProfileView, type LlmProviderKind, type LlmProfilesView, type LlmSettings, type LlmSettingsPatch, type ThinkingEffort } from "../api/client";
 import { showToast, toastFailure } from "../ui/toast";
 import { PopMenu } from "../ui/PopMenu";
 import { Icon } from "../ui/icons";
@@ -186,6 +186,18 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
                 placeholder="必填，例如 deepseek-v4-pro"
                 disabled={!llm}
                 onCommit={(model) => updateLlm({ model })}
+              />
+              <SelectSetting
+                label="思考档位（主力任务）"
+                value={llm?.thinking ?? "auto"}
+                disabled={!llm}
+                hint=""
+                ariaLabel="思考模式与强度"
+                onChange={(thinking) => updateLlm({ thinking: thinking as ThinkingEffort })}
+                options={[
+                  { value: "auto", label: "自动（模型默认）" },
+                  ...(["off", "low", "high", "max"] as const).map((effort) => ({ value: effort, label: THINKING_EFFORT_LABEL[effort] }))
+                ]}
               />
               <TextSetting
                 label="接口地址"
