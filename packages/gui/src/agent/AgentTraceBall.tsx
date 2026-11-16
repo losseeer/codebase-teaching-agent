@@ -3,8 +3,6 @@ import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from
 import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
-import { DangerDialog } from "../ui/DangerDialog";
-import { api } from "../api/client";
 import { usePracticeOperation } from "./practiceOperation";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
@@ -173,7 +171,7 @@ function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, on
             </>
             )
           ) : null}
-          {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} onReload={reload} /> : null}
+          {tab === "skills" ? <SkillsView surface={surface} error={error} loading={loading} /> : null}
           {tab === "tools" ? <ToolsView surface={surface} error={error} loading={loading} /> : null}
         </div>
         <div className="modal-foot">
@@ -312,26 +310,10 @@ function StepStatus({ step }: { step: TraceStep }): ReactElement {
   return <span className={`trace-dot ${tone} trace-step-status`} />;
 }
 
-function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurface | null; error: string | null; loading: boolean; onReload: () => void }): ReactElement {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+function SkillsView({ surface, error, loading }: { surface: AgentSurface | null; error: string | null; loading: boolean }): ReactElement {
   if (loading && !surface) return <p className="field-note">正在读取技能清单…</p>;
   if (error) return <p className="field-note">{error}</p>;
   if (!surface) return <p className="field-note">读不到技能清单。</p>;
-  const restore = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      const result = await api.restoreSkills();
-      setNote(`已恢复 ${result.restored.length} 份出厂技能（写入 ${result.files} 个文件）。`);
-      onReload();
-    } catch (reason: unknown) {
-      setNote(reason instanceof Error ? reason.message : "恢复出厂技能失败");
-    } finally {
-      setBusy(false);
-      setConfirming(false);
-    }
-  };
   return (
     <>
       {surface.skills.length ? (
@@ -352,21 +334,6 @@ function SkillsView({ surface, error, loading, onReload }: { surface: AgentSurfa
           <div className="trace-group-head"><span>未装载</span><span className="trace-count">{surface.skillSkipped.length}</span></div>
           {surface.skillSkipped.map((entry, index) => <SurfaceRow key={`${entry.dir}-${index}`} title={entry.dir} subtitle={entry.reason} badge={{ label: "跳过", tone: "off" }} mono />)}
         </section>
-      ) : null}
-      <section className="surface-group">
-        <div className="trace-group-head"><span>出厂技能</span></div>
-        <p className="field-note">技能存放于用户技能目录~/.codebase-tutor/skills，可自行修改。若修改后出现异常，可用出厂版本覆盖恢复：仅覆盖与出厂技能同名的目录，不影响自建技能及额外文件；覆盖前注意备份</p>
-        <button type="button" className="btn btn-danger-ghost btn-sm" disabled={busy} onClick={() => setConfirming(true)}>恢复初始技能</button>
-        {note ? <p className="field-note">{note}</p> : null}
-      </section>
-      {confirming ? (
-        <DangerDialog
-          title="恢复出厂技能"
-          body="确定恢复出厂skill？这将覆盖你对这些skill的改动。"
-          deleteLabel="恢复出厂版本"
-          onDelete={() => { void restore(); }}
-          onClose={() => setConfirming(false)}
-        />
       ) : null}
     </>
   );
