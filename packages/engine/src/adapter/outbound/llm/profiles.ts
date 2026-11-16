@@ -4,6 +4,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { traceEngine } from "@codebase-tutor/platform";
+
 import { maskSecret, normalizeRate } from "./runtime.js";
 
 export interface LlmProfile {
@@ -28,7 +30,7 @@ const TEXT_FIELDS = ["name", "provider", "model", "baseUrl", "apiKey"] as const;
 const RATE_FIELDS = ["inputUsdPerMillion", "outputUsdPerMillion", "cacheHitUsdPerMillion"] as const;
 
 export function profilesPath(): string {
-  return join(homedir(), ".codebase-tutor", "llm-profiles.json");
+  return process.env.TUTOR_LLM_PROFILES_FILE?.trim() || join(homedir(), ".codebase-tutor", "llm-profiles.json");
 }
 
 function blank(name = "新配置"): Omit<LlmProfile, "id"> {
@@ -62,21 +64,28 @@ export function readProfileFile(): ProfileFile {
     const profiles = Array.isArray(parsed.profiles)
       ? parsed.profiles.flatMap((item) => { const next = normalizeProfile(item); return next ? [next] : []; })
       : [];
-    const activeId = typeof parsed.activeId === "string" && profiles.some((item) => item.id === parsed.activeId) ? parsed.activeId : (profiles[0]?.id ?? "");
+    const raw = parsed.activeId;
+    // 旧文件没有这个字段：回落到第一套；显式空串是「没有激活项」，不能悄悄指向别的配置
+    const activeId = typeof raw !== "string"
+      ? (profiles[0]?.id ?? "")
+      : raw === "" || profiles.some((item) => item.id === raw) ? raw : (profiles[0]?.id ?? "");
     return { activeId, profiles };
   } catch {
     return { activeId: "", profiles: [] };
   }
 }
 
-export function writeProfileFile(next: ProfileFile): void {
+/** 写盘失败返回 `false`：调用方必须把失败暴露出去，不能提示保存成功。 */
+export function writeProfileFile(next: ProfileFile): boolean {
   const file = profilesPath();
   try {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     chmodSync(file, 0o600);
+    return true;
   } catch (error) {
     console.warn(`[llm] 配置文件没能落盘：path=${file} error=${String(error)}`);
+    return false;
   }
 }
 
@@ -94,7 +103,7 @@ export function activeProfile(): LlmProfile | undefined {
   return current.profiles.find((item) => item.id === current.activeId);
 }
 
-export function upsertProfile(input: Partial<LlmProfile> & { id?: string }): LlmProfile {
+export function upsertProfile(input: Partial<LlmProfile> & { id?: string }): LlmProfile | undefined {
   const current = readProfileFile();
   const existing = input.id ? current.profiles.find((item) => item.id === input.id) : undefined;
   const base: LlmProfile = existing ?? { id: `p_${randomUUID().slice(0, 8)}`, ...blank(`配置 ${String(current.profiles.length + 1)}`) };
@@ -111,28 +120,29 @@ export function upsertProfile(input: Partial<LlmProfile> & { id?: string }): Llm
   const profiles = existing
     ? current.profiles.map((item) => (item.id === next.id ? next : item))
     : [...current.profiles, next];
-  writeProfileFile({ activeId: current.activeId || next.id, profiles });
-  return next;
+  return writeProfileFile({ activeId: current.activeId || next.id, profiles }) ? next : undefined;
 }
 
-export function removeProfile(id: string): boolean {
+export type ProfileWrite = "ok" | "missing" | "write-failed";
+
+/** 删掉当前激活项时把 `activeId` 置空，让调用方显式决定下一套；不静默指向别的配置。 */
+export function removeProfile(id: string): ProfileWrite {
   const current = readProfileFile();
   const profiles = current.profiles.filter((item) => item.id !== id);
-  if (profiles.length === current.profiles.length) return false;
-  writeProfileFile({ activeId: current.activeId === id ? (profiles[0]?.id ?? "") : current.activeId, profiles });
-  return true;
+  if (profiles.length === current.profiles.length) return "missing";
+  return writeProfileFile({ activeId: current.activeId === id ? "" : current.activeId, profiles }) ? "ok" : "write-failed";
 }
 
-export function setActiveProfile(id: string): boolean {
+export function setActiveProfile(id: string): ProfileWrite {
   const current = readProfileFile();
-  if (!current.profiles.some((item) => item.id === id)) return false;
-  writeProfileFile({ ...current, activeId: id });
-  return true;
+  if (!current.profiles.some((item) => item.id === id)) return "missing";
+  return writeProfileFile({ ...current, activeId: id }) ? "ok" : "write-failed";
 }
 
 /** 运行时设置变更后回写当前配置，避免界面显示与配置不一致。 */
 export function syncActiveProfile(input: { provider: string; model: string; baseUrl: string; apiKey: string; inputUsdPerMillion: string; outputUsdPerMillion: string; cacheHitUsdPerMillion: string }): void {
   const current = activeProfile();
   if (!current) return;
-  upsertProfile({ id: current.id, ...input });
+  // 配置只是运行时的快照：同步失败不阻断设置保存，但必须留痕
+  if (!upsertProfile({ id: current.id, ...input })) traceEngine("degrade", { what: "llm_profile_sync" }, { traceId: null });
 }

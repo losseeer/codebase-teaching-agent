@@ -189,6 +189,8 @@ export interface LlmProfileView {
 export interface LlmProfilesView {
   activeId: string;
   profiles: LlmProfileView[];
+  /** 切换时的提醒（例如思考档位被重置）。 */
+  notice?: string;
 }
 
 export interface SkillItem {

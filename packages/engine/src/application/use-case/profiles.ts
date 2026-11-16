@@ -1,8 +1,13 @@
 /** LLM 配置：列表、保存、删除、切换。切换前做一次最小连通性检查，失败不切换。 */
-import { llmCallLog, llmProfileStore, llmProvider, llmRuntime } from "../../infrastructure/composition-root.js";
+import { llmCallLog, llmProfileStore, llmProvider, llmRuntime, llmThinking } from "../../infrastructure/composition-root.js";
 
-export type ProfileFailure = "not-found" | "preflight" | "invalid";
-export type ProfileResult<T> = { ok: true; value: T } | { ok: false; failure: ProfileFailure; message: string };
+export type ProfileFailure = "not-found" | "preflight" | "invalid" | "write-failed";
+export type ProfileResult<T> = { ok: true; value: T; notice?: string } | { ok: false; failure: ProfileFailure; message: string };
+
+const invalid = (message: string): ProfileResult<never> => ({ ok: false, failure: "invalid", message });
+const writeFailed = (): ProfileResult<never> => ({ ok: false, failure: "write-failed", message: "配置文件没写成，改动没有保存。" });
+const nameTaken = (name: string, id?: string): boolean =>
+  llmProfileStore.readProfileFile().profiles.some((item) => item.name === name && item.id !== id);
 
 type ProfileView = ReturnType<typeof llmProfileStore.publicProfileView>;
 type LlmProfile = ReturnType<typeof llmProfileStore.readProfileFile>["profiles"][number];
@@ -21,11 +26,10 @@ export function ensureDefaultProfile(): void {
     outputUsdPerMillion: runtime.outputUsdPerMillion,
     cacheHitUsdPerMillion: runtime.cacheHitUsdPerMillion
   });
-  llmProfileStore.setActiveProfile(profile.id);
+  if (profile) llmProfileStore.setActiveProfile(profile.id);
 }
 
 export function listProfilesUseCase(): ProfileView {
-  ensureDefaultProfile();
   return llmProfileStore.publicProfileView();
 }
 
@@ -40,18 +44,20 @@ export function saveProfileUseCase(input: {
   outputUsdPerMillion?: string;
   cacheHitUsdPerMillion?: string;
 }): ProfileResult<ProfileView> {
-  if (input.name !== undefined && !input.name.trim()) {
-    return { ok: false, failure: "invalid", message: "配置名不能为空。" };
-  }
-  llmProfileStore.upsertProfile(input);
+  const name = input.name?.trim();
+  if (input.name !== undefined && !name) return invalid("配置名不能为空。");
+  if (name && nameTaken(name, input.id)) return invalid("同名配置已存在。");
+  if (!llmProfileStore.upsertProfile(input)) return writeFailed();
   return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
 /** 把当前运行时设置存成一套新配置。 */
 export function captureCurrentProfileUseCase(name: string): ProfileResult<ProfileView> {
   const current = llmRuntime.getLlmRuntimeSettings();
-  llmProfileStore.upsertProfile({
-    name: name.trim() || "当前配置",
+  const label = name.trim() || "当前配置";
+  if (nameTaken(label)) return invalid("同名配置已存在。");
+  if (!llmProfileStore.upsertProfile({
+    name: label,
     provider: current.provider,
     model: current.model,
     baseUrl: current.baseUrl,
@@ -59,12 +65,24 @@ export function captureCurrentProfileUseCase(name: string): ProfileResult<Profil
     inputUsdPerMillion: current.inputUsdPerMillion,
     outputUsdPerMillion: current.outputUsdPerMillion,
     cacheHitUsdPerMillion: current.cacheHitUsdPerMillion
-  });
+  })) return writeFailed();
   return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
 export function deleteProfileUseCase(id: string): ProfileResult<ProfileView> {
-  if (!llmProfileStore.removeProfile(id)) return { ok: false, failure: "not-found", message: "这套配置不存在。" };
+  const file = llmProfileStore.readProfileFile();
+  if (file.profiles.length <= 1) return invalid("至少要保留一套配置。");
+  const wasActive = file.activeId === id;
+  const outcome = llmProfileStore.removeProfile(id);
+  if (outcome === "missing") return { ok: false, failure: "not-found", message: "这套配置不存在。" };
+  if (outcome === "write-failed") return writeFailed();
+  // 删的是当前配置：运行时一并清空，避免界面「没有配置」但实际还在用旧连接
+  if (wasActive) {
+    llmRuntime.setLlmRuntimeSettings({
+      provider: "", model: "", baseUrl: "", apiKey: "",
+      inputUsdPerMillion: "", outputUsdPerMillion: "", cacheHitUsdPerMillion: ""
+    });
+  }
   return { ok: true, value: llmProfileStore.publicProfileView() };
 }
 
@@ -118,6 +136,8 @@ export async function activateProfileUseCase(id: string): Promise<ProfileResult<
   const failure = await preflight(profile);
   if (failure) return { ok: false, failure: "preflight", message: `连接失败：${failure}（未切换）` };
   // 只覆盖连接与计价；思考档位、超时留作全局设置
+  const thinking = llmRuntime.getLlmRuntimeSettings().thinking;
+  const keepThinking = thinking === "auto" || llmThinking.isThinkingEffortSupported(profile.model, thinking);
   llmRuntime.setLlmRuntimeSettings({
     provider: profile.provider,
     model: profile.model,
@@ -125,8 +145,15 @@ export async function activateProfileUseCase(id: string): Promise<ProfileResult<
     apiKey: profile.apiKey,
     inputUsdPerMillion: profile.inputUsdPerMillion,
     outputUsdPerMillion: profile.outputUsdPerMillion,
-    cacheHitUsdPerMillion: profile.cacheHitUsdPerMillion
+    cacheHitUsdPerMillion: profile.cacheHitUsdPerMillion,
+    ...(keepThinking ? {} : { thinking: "auto" as const })
   });
-  llmProfileStore.setActiveProfile(profile.id);
-  return { ok: true, value: llmProfileStore.publicProfileView() };
+  if (llmProfileStore.setActiveProfile(profile.id) !== "ok") {
+    return { ok: false, failure: "write-failed", message: "已切换到该配置，但激活标记没能落盘：重启后会回退。" };
+  }
+  return {
+    ok: true,
+    value: llmProfileStore.publicProfileView(),
+    ...(keepThinking ? {} : { notice: "思考档位已重置为「自动」：该模型不支持原档位。" })
+  };
 }

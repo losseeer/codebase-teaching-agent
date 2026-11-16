@@ -19,7 +19,12 @@ const skillResult = <T>(reply: FastifyReply, result: SkillResult<T>): FastifyRep
   result.ok ? reply.send(result.value) : reply.code(422).send({ error: result.error });
 
 const rejectedProfile = (reply: FastifyReply, failure: ProfileFailure, message: string): FastifyReply =>
-  failure === "not-found" ? reply.code(404).send({ error: message }) : reply.code(422).send({ error: message });
+  failure === "not-found" ? reply.code(404).send({ error: message })
+    : failure === "write-failed" ? reply.code(503).send({ error: message })
+      : reply.code(422).send({ error: message });
+
+const profileReply = <T extends Record<string, unknown>>(reply: FastifyReply, result: { ok: true; value: T; notice?: string }): FastifyReply =>
+  reply.send(result.notice ? { ...result.value, notice: result.notice } : result.value);
 
 const rejected = (reply: FastifyReply, failure: SettingsFailure): FastifyReply => {
   switch (failure.kind) {
@@ -66,7 +71,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
 
   app.post<{ Params: { id: string } }>("/api/llm/profiles/:id/activate", async (request, reply) => {
     const result = await activateProfileUseCase(request.params.id);
-    return result.ok ? result.value : rejectedProfile(reply, result.failure, result.message);
+    return result.ok ? profileReply(reply, result) : rejectedProfile(reply, result.failure, result.message);
   });
 
   app.put<{ Body: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; thinking?: string; inputUsdPerMillion?: string; outputUsdPerMillion?: string; cacheHitUsdPerMillion?: string; timeoutMs?: string } }>("/api/llm/settings", async (request, reply) => {

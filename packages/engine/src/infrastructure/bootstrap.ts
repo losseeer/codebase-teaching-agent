@@ -9,6 +9,7 @@ import { installBundledSkills } from "../adapter/outbound/integrations/skills.js
 import { flushLlmLog } from "../adapter/outbound/llm/call-log.js";
 import { reprobeIsolation } from "../adapter/outbound/sandbox/isolation.js";
 import { budgetGateNotice } from "../cost/cost.js";
+import { ensureDefaultProfile } from "../application/use-case/profiles.js";
 import { importer, learnerStore } from "./composition-root.js";
 
 /** 关闭挂载仓库的文件监听与数据库句柄。 */
@@ -27,6 +28,8 @@ export async function flushAuditLines(): Promise<void> {
 
 /** 开机打印访问控制、沙箱隔离、出厂技能与预算闸门的读数。 */
 export function runStartupReadings(): void {
+  // 配置列表只在启动时补一次默认项；GET 不再有写副作用
+  ensureDefaultProfile();
   console.log("[engine] 访问控制：无认证闸（本机任意进程都能调）｜来源闸生效（只信回环与 TUTOR_ALLOWED_ORIGINS，非可信来源 403）");
   // 沙箱隔离探测放后台跑，不 await，结果就绪后打印。
   void reprobeIsolation().then((sandbox) => {

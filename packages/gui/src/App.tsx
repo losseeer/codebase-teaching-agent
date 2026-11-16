@@ -283,7 +283,7 @@ export function App(): ReactElement {
         anchor={userMenu}
         items={[
           { label: "记忆", title: "跨仓库生效的长期偏好与背景", onSelect: () => { setUserMenu(null); setProfileOpen(true); } },
-          { label: "MCP 服务器", title: "外部 MCP server 的配置", onSelect: () => { setUserMenu(null); setMcpSettingsOpen(true); } },
+          { label: "MCP 服务", title: "外部 MCP server 的配置", onSelect: () => { setUserMenu(null); setMcpSettingsOpen(true); } },
           { label: "技能", title: "编辑、新建、上传或删除用户技能", onSelect: () => { setUserMenu(null); setSkillsOpen(true); } }
         ]}
         ariaLabel="用户设置"

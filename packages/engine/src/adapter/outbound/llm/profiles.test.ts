@@ -20,21 +20,23 @@ describe("LLM 配置文件", () => {
     const first = upsertProfile({ name: "主力", provider: "openai-compatible", model: "deepseek-v4-pro", apiKey: "sk-abcdefghijkl" });
     const second = upsertProfile({ name: "备用", model: "gpt-5" });
     const file = readProfileFile();
-    expect(file.activeId).toBe(first.id);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(file.activeId).toBe(first!.id);
     expect(file.profiles.map((item) => item.name)).toEqual(["主力", "备用"]);
     const view = publicProfileView();
     expect(view.profiles[0].apiKeyMasked).not.toContain("abcdefghijkl");
     expect(view.profiles[0].hasApiKey).toBe(true);
-    expect(setActiveProfile(second.id)).toBe(true);
-    expect(readProfileFile().activeId).toBe(second.id);
+    expect(setActiveProfile(second!.id)).toBe("ok");
+    expect(readProfileFile().activeId).toBe(second!.id);
   });
 
-  it("删除当前配置后激活项落到剩余第一套", () => {
+  it("删除当前配置后激活项显式置空", () => {
     const current = readProfileFile();
     const activeId = current.activeId;
-    expect(removeProfile(activeId)).toBe(true);
+    expect(removeProfile(activeId)).toBe("ok");
     const next = readProfileFile();
     expect(next.profiles.some((item) => item.id === activeId)).toBe(false);
-    expect(next.activeId).toBe(next.profiles[0]?.id ?? "");
+    expect(next.activeId).toBe("");
   });
 });

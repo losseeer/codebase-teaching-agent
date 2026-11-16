@@ -40,8 +40,9 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     setTesting(true);
     setTestNote("");
     setRejected(null);
+    if (!profiles?.activeId) return;
     try {
-      await api.testLlmProfile(profiles?.activeId ? { id: profiles.activeId } : {});
+      await api.testLlmProfile({ id: profiles.activeId });
       setTestNote("连接成功");
     } catch (error) {
       setRejected(error instanceof Error ? error.message : "连接失败");
@@ -57,7 +58,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
       const next = await api.activateLlmProfile(id);
       setProfiles(next);
       setLlm(await api.getLlmSettings());
-      showToast(`已切换到「${next.profiles.find((item) => item.id === id)?.name ?? id}」`);
+      showToast(next.notice ?? `已切换到「${next.profiles.find((item) => item.id === id)?.name ?? id}」`);
     } catch (error) {
       setRejected(error instanceof Error ? error.message : "切换失败");
       toastFailure("切换失败", error);
@@ -84,8 +85,9 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     try {
       const next = await api.deleteLlmProfile(activeId);
       setProfiles(next);
-      if (next.activeId) await activate(next.activeId);
-      else showToast("已删除配置");
+      // 删的是当前配置：运行时已被引擎清空，这里同步刷新界面
+      setLlm(await api.getLlmSettings());
+      if (!next.activeId) showToast("已删除，请重新选一套配置启用");
     } catch (error) {
       toastFailure("删除配置失败", error);
     }
@@ -95,7 +97,8 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     if (!llm) return;
     const previous = llm;
     // 密钥不做乐观更新：本地只存掩码，明文以引擎响应为准
-    setLlm({ ...llm, provider: partial.provider ?? llm.provider, model: partial.model ?? llm.model, baseUrl: partial.baseUrl ?? llm.baseUrl, thinking: partial.thinking ?? llm.thinking });
+    const { apiKey: _ignored, ...rest } = partial;
+    setLlm({ ...llm, ...rest });
     api.updateLlmSettings(partial)
       .then((next) => {
         setLlm(next);
@@ -265,7 +268,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
               {llm?.pricing ? <p className={`field-note${pricingLive(llm) ? "" : " warn"}`}>{pricingReadout(llm)}</p> : null}
             </div>
             <div className="modal-foot">
-              <button type="button" className="btn btn-ghost btn-sm" disabled={testing} onClick={() => void test()}>{testing ? "测试中…" : "测试连接"}</button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={testing || !profiles?.activeId} onClick={() => void test()}>{testing ? "测试中…" : "测试连接"}</button>
               <span className="modal-note">{testNote}</span>
               <button type="button" className="btn btn-primary" onClick={() => setOpen(false)}>完成</button>
             </div>

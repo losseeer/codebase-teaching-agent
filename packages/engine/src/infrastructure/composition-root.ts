@@ -44,6 +44,7 @@ export * as profileMemory from "../adapter/outbound/auto-memory.js";
 export * as llmProfileStore from "../adapter/outbound/llm/profiles.js";
 export * as llmProvider from "../adapter/outbound/llm/provider.js";
 export * as llmRuntime from "../adapter/outbound/llm/runtime.js";
+export * as llmThinking from "../adapter/outbound/llm/thinking.js";
 export * as llmCallLog from "../adapter/outbound/llm/call-log.js";
 export * as mcpConfig from "../adapter/outbound/integrations/clients.js";
 export * as chatArchive from "../adapter/outbound/persistence/chat-store.js";
