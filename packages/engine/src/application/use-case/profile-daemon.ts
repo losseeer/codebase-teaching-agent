@@ -27,7 +27,8 @@ function recentTurns(since: string): string[] {
       try {
         const event = JSON.parse(line) as { type?: string; at?: string; payload?: { question?: unknown; answer?: unknown } };
         if (event.type !== "turn_text" || !event.at || event.at < since) continue;
-        lines.push(`问：${String(event.payload?.question ?? "").slice(0, 300)}\n答：${String(event.payload?.answer ?? "").slice(0, 300)}`);
+        // 只喂用户自己说的话：助手的表达风格不是用户偏好
+        lines.push(String(event.payload?.question ?? "").slice(0, 300));
       } catch {
       }
     }
@@ -52,10 +53,11 @@ export async function runProfileDaemon(force = false): Promise<void> {
     const completion = await provider.complete({
       system: [
         "你在维护跨仓库的用户画像（markdown）。",
-        "结合当前画像与最近 24 小时的问答，整份重写画像：保留长期偏好与背景，合并重复、删去过时的；项目里查得到的事实不写。",
+        "结合当前画像与最近 24 小时用户自己说的话，整份重写画像：保留用户明确说过的偏好与背景，合并重复、删去过时的；项目里查得到的事实不写。",
+        "不要把助手的表达方式、教学风格或提问方式记成用户偏好——那是助手自己的输出，不是用户的意思。",
         "只输出 JSON：{\"profile\":\"画像全文\"}"
       ].join("\n"),
-      user: `当前画像：\n${profileStore.readProfile() || "（空）"}\n\n近 24 小时问答：\n${turns.join("\n---\n").slice(0, 8_000)}`,
+      user: `当前画像：\n${profileStore.readProfile() || "（空）"}\n\n近 24 小时用户说的话：\n${turns.join("\n---\n").slice(0, 8_000)}`,
       temperature: 0,
       maxTokens: 1_200,
       thinking: "off",
