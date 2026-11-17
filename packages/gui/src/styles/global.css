@@ -509,6 +509,9 @@ h1, h2, h3, h4, p { margin-top: 0; }
   font-size: 10px; font-weight: 650; color: var(--brand-700);
 }
 .dg-card .link { color: var(--brand-700); }
+.rail-meta { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; align-self: flex-start; max-width: 100%; }
+.teaching-toggle.off { color: var(--ink-3); }
+
 .rail-model-pill {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--fs-11); color: var(--ink-2);

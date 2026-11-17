@@ -87,8 +87,20 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
       </div>
 
       <div className="rail-foot">
-        {/* 模型设置胶囊入口 */}
-        <LlmSettingsControl />
+        <div className="rail-meta">
+          <LlmSettingsControl />
+          <button
+            type="button"
+            className={`rail-model-pill teaching-toggle${t.settings.pedagogy === "explanatory" ? " off" : ""}`}
+            aria-label="切换引导式教学"
+            aria-pressed={t.settings.pedagogy !== "explanatory"}
+            title={t.settings.pedagogy === "explanatory" ? "引导式教学：关（先给结论）。点一下改回引导" : "引导式教学：开（先提问、后结论）。点一下改为直接讲解"}
+            onClick={() => t.setSettings({ ...t.settings, pedagogy: t.settings.pedagogy === "explanatory" ? "socratic" : "explanatory" })}
+          >
+            <Icon name="book" size={12} />
+            <span className="pill-name">教学·{t.settings.pedagogy === "explanatory" ? "讲解" : "引导"}</span>
+          </button>
+        </div>
         {t.error ? <p className="error-message">{t.error}</p> : null}
         <form
           className="composer"
