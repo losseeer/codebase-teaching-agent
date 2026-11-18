@@ -6,7 +6,7 @@ describe("教学档位策略", () => {
   it("讲解档只解释、不追问", () => {
     const text = policyFor({ pedagogy: "explanatory", depth: "macro" }).constraints.join(" ");
     expect(text).toContain("不追加问题");
-    expect(text).not.toContain("复述");
+    expect(text).toContain("不要求学习者复述");
   });
 
   it("引导档仍保留可验证的问题", () => {
