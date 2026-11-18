@@ -6,6 +6,7 @@ import { searchCorpusFor, turnBudgetGuard } from "../orchestration/paid-turn.js"
 import { externalAndSkills, recheckTurn } from "../orchestration/scoped-turn.js";
 import { turnCheckpointChannel } from "../runtime/turn-checkpoint.js";
 import { auditsFromResult, mcpCallPayload, recordUnfinishedTurn } from "../runtime/turn-audit.js";
+import { locateThread } from "../orchestration/threads.js";
 import { persistTeachingTurn, resolveTeachingState } from "../orchestration/teaching-turn.js";
 import { threadJournalPayload } from "../orchestration/threads.js";
 import { summarizeCost } from "../../cost/cost.js";
@@ -96,6 +97,16 @@ export function createTeachingSession(input: {
 export function readTeachingSession(sessionId: string): TeachingResult<{ session: TutorSession }> {
   const session = resolveTeachingState(sessionId);
   return session ? { ok: true, value: { session } } : fail("session-missing");
+}
+
+/** 单独更新教学档位：与发消息解耦，避免删除消息后重新读会话时被旧档位覆盖。 */
+export function updateTeachingSettingsUseCase(sessionId: string, patch: Partial<TutorSettings>): TeachingResult<{ settings: TutorSettings }> {
+  const session = resolveTeachingState(sessionId);
+  const located = locateThread(sessionId);
+  if (!session || !located) return fail("session-missing");
+  const settings = validateSettings({ ...session.settings, ...patch });
+  importer.chatStore(located.repositoryPath).saveThreadState(sessionId, { settings });
+  return { ok: true, value: { settings } };
 }
 
 /** 回合发起前备好的输入。 */

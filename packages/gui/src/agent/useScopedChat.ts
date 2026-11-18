@@ -421,6 +421,15 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     }
   };
 
+  /** 教学档位写回会话：否则删除消息后重新读会话会被旧档位覆盖。 */
+  const setPedagogy = (pedagogy: TutorSettings["pedagogy"]): void => {
+    const next = { ...settings, pedagogy };
+    setSettingsState(next);
+    const id = session?.id;
+    if (!id) return;
+    void api.updateSessionSettings(id, next).catch((reason: unknown) => setError("teaching", failureText("教学模式保存失败", reason)));
+  };
+
   /** 软删：正文与审计日志留库，仅从列表消失。 */
   const removeThread = async (scope: Scope, threadId: string): Promise<void> => {
     try {
@@ -606,7 +615,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   return {
     scope, setScope,
     threads, pushMessage,
-    chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread, deleteMessage,
+    chatThreads, currentThreadId, newThread, switchThread, renameThread, removeThread, deleteMessage, setPedagogy,
     scopeRef, scopeLabel, setScopeRef, dataVersion, reloadRepositoryData,
     mapScopePaths, setMapScope, mapFile, setMapFile, mapBinding, setMapBinding,
     openDiagram, setOpenDiagram, pendingDiagramOpen, requestOpenDiagram, clearDiagramOpen,

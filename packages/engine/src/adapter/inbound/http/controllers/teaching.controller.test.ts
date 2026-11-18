@@ -88,3 +88,26 @@ describe("LLM 工作日志的账面一致性", () => {
     await fx.verifyLlmLog({ expectAborted: false, scenes: ["teaching.turn"] });
   });
 });
+
+describe("教学档位持久化", () => {
+  it("PATCH 写回会话，重新读取仍是新档位", async () => {
+    const created = await fx.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { repositoryId: fx.repositoryId, scopeRef: `file:${MAIN_FILE}`, settings: { pedagogy: "socratic", depth: "macro" } }
+    });
+    const sessionId = (created.json() as { session: { id: string } }).session.id;
+    fx.usedThreads.add(sessionId);
+
+    const patched = await fx.app.inject({
+      method: "PATCH",
+      url: `/api/sessions/${sessionId}/settings`,
+      payload: { settings: { pedagogy: "explanatory", depth: "macro" } }
+    });
+    expect(patched.statusCode).toBe(200);
+    expect((patched.json() as { settings: { pedagogy: string } }).settings.pedagogy).toBe("explanatory");
+
+    const reread = await fx.app.inject({ method: "GET", url: `/api/sessions/${sessionId}` });
+    expect((reread.json() as { settings: { pedagogy: string } }).settings.pedagogy).toBe("explanatory");
+  });
+});

@@ -63,6 +63,8 @@ export interface ScopedChatApi {
   setPracticeUnit: (label: string) => void;
   settings: TutorSettings;
   setSettings: (next: TutorSettings | ((prev: TutorSettings) => TutorSettings)) => void;
+  /** 切换教学档位并写回会话；没有会话时只留本地，首问再带上。 */
+  setPedagogy: (pedagogy: TutorSettings["pedagogy"]) => void;
   content: string;
   setContent: (next: string) => void;
   sending: boolean;

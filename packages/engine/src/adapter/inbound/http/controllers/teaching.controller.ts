@@ -1,6 +1,6 @@
 import type { TutorSettings } from "@codebase-tutor/domain";
 
-import { createTeachingSession, prepareTeachingTurn, readTeachingSession, runTeachingTurn } from "../../../../application/use-case/teaching.js";
+import { createTeachingSession, prepareTeachingTurn, readTeachingSession, runTeachingTurn, updateTeachingSettingsUseCase } from "../../../../application/use-case/teaching.js";
 import type { TeachingFailure } from "../../../../application/use-case/teaching.js";
 import { budgetGate } from "../../../../application/orchestration/paid-turn.js";
 import { scopedChatProviderOr422 } from "../budget-gate.js";
@@ -24,6 +24,14 @@ app.get<{ Params: { sessionId: string } }>("/api/sessions/:sessionId", async (re
   const read = readTeachingSession(request.params.sessionId);
   if (!read.ok) return reject(reply, read.failure);
   return read.value.session;
+});
+
+app.patch<{ Params: { sessionId: string }; Body: { settings?: unknown } }>("/api/sessions/:sessionId/settings", async (request, reply) => {
+  const settings = request.body?.settings;
+  if (!settings || typeof settings !== "object") return reply.code(400).send({ error: "settings 必须是对象" });
+  const result = updateTeachingSettingsUseCase(request.params.sessionId, settings as Partial<TutorSettings>);
+  if (!result.ok) return reject(reply, result.failure);
+  return result.value;
 });
 
 app.post<{ Params: { sessionId: string }; Body: { content?: string; settings?: Partial<TutorSettings>; turnId?: unknown } }>("/api/sessions/:sessionId/messages", async (request, reply) => {

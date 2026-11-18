@@ -329,6 +329,7 @@ export const api = {
   getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),
   createSession: (repositoryId: string, scopeRef: string, settings?: TutorSettings) => request<{ session: TutorSession; recommendedSettings: RecommendedTutorSettings; faded: FadedState }>("/api/sessions", { method: "POST", body: JSON.stringify({ repositoryId, scopeRef, ...(settings ? { settings } : {}) }) }),
+  updateSessionSettings: (sessionId: string, settings: TutorSettings) => request<{ settings: TutorSettings }>(`/api/sessions/${encodeURIComponent(sessionId)}/settings`, { method: "PATCH", body: JSON.stringify({ settings }) }),
   /** 按 id 取代码问答会话；未命中时引擎从 chat_session + chat_message 重建。 */
   getSession: (sessionId: string) => request<TutorSession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   // 删除是软删：行仍在库，列表与正文不可见。
