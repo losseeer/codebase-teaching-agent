@@ -94,7 +94,7 @@ export function AgentRail({ chat: t }: { chat: ScopedChatApi }): ReactElement {
             className={`rail-model-pill teaching-toggle${t.settings.pedagogy === "explanatory" ? " off" : ""}`}
             aria-label="切换引导式教学"
             aria-pressed={t.settings.pedagogy !== "explanatory"}
-            title={t.settings.pedagogy === "explanatory" ? "引导式教学：关（先给结论）。点一下改回引导" : "引导式教学：开（先提问、后结论）。点一下改为直接讲解"}
+            title={t.settings.pedagogy === "explanatory" ? "引导式教学：关（只解释、不追问）。点一下改回引导" : "引导式教学：开（先提问、后结论）。点一下改为只解释"}
             onClick={() => t.setPedagogy(t.settings.pedagogy === "explanatory" ? "socratic" : "explanatory")}
           >
             <Icon name="book" size={12} />

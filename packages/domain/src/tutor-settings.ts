@@ -6,7 +6,7 @@ export function policyFor(settings: TutorSettings): TeachingPolicy {
   const pedagogy = settings.pedagogy === "socratic"
     ? ["在给出结论前先要求学习者说明推理", "每轮保留一个可验证的问题"]
     : settings.pedagogy === "explanatory"
-      ? ["先给出带锚点的简短解释，再要求学习者复述证据", "不隐藏必要结论"]
+      ? ["直接给出带锚点的解释与必要结论，整段讲完即可；不追加问题、不要求学习者复述"]
       : ["把结论改写成可执行的观察任务", "要求学习者预测改变后的影响"];
   const depth = settings.depth === "macro"
     ? ["优先解释执行路径、模块边界和调用路径"]
