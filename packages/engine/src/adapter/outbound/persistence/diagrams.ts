@@ -5,7 +5,7 @@ import { id } from "@codebase-tutor/platform";
 import type { TutorDatabase } from "./database.js";
 
 /** 画布上的一张图的读写口（表 `diagram`，一行 = 一张图）；建图规则在 `@codebase-tutor/domain` 的 diagram.ts。
-    几何写入不存版本，结构写入每趟存一版；`versions` 旧→新，超过 `DIAGRAM_VERSION_LIMIT` 丢最旧的一版。 */
+    几何写入不存版本，结构写入每次存一版；`versions` 旧→新，超过 `DIAGRAM_VERSION_LIMIT` 丢最旧的一版。 */
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 

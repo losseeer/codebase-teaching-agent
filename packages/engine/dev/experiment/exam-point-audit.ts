@@ -42,7 +42,7 @@ function corpusOf(root: string, paths: string[]): { corpus: SearchCorpus; texts:
   const texts = new Map<string, string>();
   const entries = paths.map((path) => {
     let text = "";
-    try { text = readFileSync(join(root, path), "utf8"); } catch { /* 读不到就只留路径 */ }
+    try { text = readFileSync(join(root, path), "utf8"); } catch { /* 无法读取就只留路径 */ }
     texts.set(path, text);
     const units = [...text.matchAll(/\b(?:class|interface|struct|func|function|def|method)\s+([A-Za-z_][A-Za-z0-9_]*)/g)]
       .map((match) => ({ name: match[1]!, line: text.slice(0, match.index).split("\n").length }));

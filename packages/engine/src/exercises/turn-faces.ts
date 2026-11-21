@@ -4,8 +4,8 @@ import type { ReadToolProgress } from "../source/tools/types.js";
 import type { ExamPlan } from "./exam-plan.js";
 
 /**
-  出题、判分、讲评这几趟共用的取证面。
-  形状直接取自工具循环的入参：这几趟与问答回合走同一条循环，不再各有一套特例。
+  出题、判分、讲评这几次共用的取证面。
+  形状直接取自工具循环的入参：这几次与问答回合走同一条循环，不再各有一套特例。
 */
 export type ExerciseFaces = Pick<ReadToolLoopInput, "repoPath" | "search" | "facts" | "skills" | "external" | "budgetGuard" | "signal" | "onTrace" | "budgetBrief" | "maxRounds" | "toolChoiceRequiredRounds"> & { scope?: AgentScope; /** 出题前的主题落点判定结果，由 Exercises.next() 注入。 */ examPlan?: ExamPlan; themeFallback?: boolean };
 

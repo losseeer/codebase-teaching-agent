@@ -1,4 +1,4 @@
-/** 按 (技能名, 文件名) 读取指定技能目录；读不到返回 undefined。 */
+/** 按 (技能名, 文件名) 读取指定技能目录；无法读取返回 undefined。 */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 

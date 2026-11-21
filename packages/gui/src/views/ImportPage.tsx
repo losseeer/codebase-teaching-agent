@@ -42,7 +42,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const [error, setError] = useState("");
   /** 系统目录窗口开着：避免连点开多个窗口。 */
   const [picking, setPicking] = useState(false);
-  /** 引擎里已无此任务：停止显示进度，如实报读不到。 */
+  /** 引擎里已无此任务：停止显示进度，如实报无法读取。 */
   const [orphaned, setOrphaned] = useState(false);
   const [report, setReport] = useState<Awaited<ReturnType<typeof api.getReport>> | null>(null);
   /** 开着操作菜单的行（菜单靠锚点按钮定位）。 */
@@ -52,10 +52,10 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
   const gateNotice = catalog.find((item) => item.budgetGateNotice)?.budgetGateNotice;
   /** 工作区切换只记一次：完成态会被轮询与广播重复渲染。 */
   const switchLogged = useRef(false);
-  /** 本趟是回读恢复：不重复切工作区、不重复记日志。 */
+  /** 本次是回读恢复：不重复切工作区、不重复记日志。 */
   const restoredJob = useRef(false);
 
-  // 挂载时回读上次未结束的导入；读不到任务要明说，不静默清空进度
+  // 挂载时回读上次未结束的导入；无法读取任务要明确说明，不静默清空进度
   useEffect(() => {
     const stored = readActiveImportJob();
     if (!stored) return;
@@ -77,7 +77,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     return () => { alive = false; };
   }, []);
 
-  // 进度主通道是 /api/events 的 SSE；5s 轮询只兜底断线，不担实时
+  // 进度主通道是 /api/events 的 SSE；5s 轮询只回退断线，不担实时
   const jobId = job?.id;
   /** 终态判定的唯一出口：轮询与按钮禁用共用。 */
   const isSettled = (phase: ImportJob["phase"]): boolean => phase === "completed" || phase === "failed";
@@ -96,7 +96,7 @@ export function ImportPage({ onImported, workspace, catalog, onSwitchRepository,
     });
     const interval = window.setInterval(
       () => api.getImport(jobId).then(setJob).catch((reason: unknown) => {
-        // 404 = 引擎里已无此任务，重试读不回来
+        // 404 = 引擎里已无此任务，重试仍无法读取
         if (isNotFound(reason)) { clearActiveImportJob(); setOrphaned(true); }
         else setError(failureText("进度读取失败", reason));
       }),

@@ -41,7 +41,7 @@ export interface CodeProposal {
   defect: string;
   /** 参考模式：出题时参考了仓库里的哪几处代码（可空；why 只进 journal）。 */
   anchors?: { path: string; line: number; endLine?: number; why?: string }[];
-  /** 阅读笔记（v8 链路二）：unit 路径与 reference 一样搭出题这一趟的便车产出。 */
+  /** 阅读笔记（v8 链路二）：unit 路径与 reference 一样搭出题这一次的便车产出。 */
   examPoints?: unknown[];
 }
 
@@ -61,13 +61,13 @@ export interface HarnessRun {
 export type CodeGeneration =
   | {
       ok: false; stage: DeclineStage; reason: string; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[];
-      /** 分段产出已定好的题面：自证没过时兜底沿用。 */
+      /** 分段产出已定好的题面：自证没过时回退沿用。 */
       plan?: { title: string; prompt: string; defect: string };
     }
   | { ok: true; proposal: CodeProposal; runs: HarnessRun[]; usage?: LlmUsage; skillReads: SkillReadRecord[]; fileReads?: FileReadRecord[] };
 
 const MAX_TITLE = 40;
-/** 题面目标长度见提示词；这里只做超长的硬截断兜底。 */
+/** 题面目标长度见提示词；这里只做超长的硬截断回退。 */
 const PROMPT_TARGET = 800;
 const MAX_PROMPT = 1_600;
 const MAX_FILE_BYTES = 24_000;
@@ -559,7 +559,7 @@ export async function generateCodeExerciseFromReference(input: {
   repositoryPath: string;
   tag: string;
   kind: "patch_edit" | "author_function";
-  /** 分段兜底的定稿题面：产出后由引擎覆盖回 title/prompt/defect，模型重写无效。 */
+  /** 分段回退的定稿题面：产出后由引擎覆盖回 title/prompt/defect，模型重写无效。 */
   frozenPrompt?: { title: string; prompt: string; defect: string };
   /** 参考素材：候选文件与摘录（只作参考，不要求逐字使用）。 */
   reference: string;
@@ -567,7 +567,7 @@ export async function generateCodeExerciseFromReference(input: {
   faces?: ExerciseFaces;
   onProgress?: ExerciseProgressSink;
   repair?: RepairPolicy;
-  /** 上一趟（分段）已经定好的题面：沿用，别重新选题。 */
+  /** 上一次（分段）已经定好的题面：沿用，别重新选题。 */
   priorPlan?: { title: string; prompt: string; defect: string };
 }): Promise<CodeGeneration> {
   const faces = unitFaces(input.faces ?? {});
@@ -612,8 +612,8 @@ function recordUnitExamNotes(
   }, { traceId: null });
 }
 
-/** 同一趟调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
-/** 兜底重出时题面已经定稿（做过落点判定、三节齐全），引擎直接拼回，不给模型改写的机会。 */
+/** 同一次调用之后的共同收尾：解析形状、按模式校验、沙箱两跑自证。 */
+/** 回退重出时题面已经定稿（做过落点判定、三节齐全），引擎直接拼回，不给模型改写的机会。 */
 export function applyFrozenPrompt(parsed: Record<string, unknown>, frozen?: { title: string; prompt: string; defect: string }): void {
   if (!frozen) return;
   parsed.title = frozen.title;
@@ -638,7 +638,7 @@ export async function finishProposal(
     faces?: ExerciseFaces;
     /** 单元模式的目标文件：即使模型没 read_file，这段源码也算「读过」。 */
     unitPath?: string;
-    /** 分段兜底的定稿题面：给出时覆盖产出的 title/prompt/defect，模型改写题面无效（题面已做过落点判定）。 */
+    /** 分段回退的定稿题面：给出时覆盖产出的 title/prompt/defect，模型改写题面无效（题面已做过落点判定）。 */
     frozenPrompt?: { title: string; prompt: string; defect: string };
   }
 ): Promise<CodeGeneration> {
@@ -674,7 +674,7 @@ export async function finishProposal(
   return { ok: true, proposal, runs: validation.runs, ...audits };
 }
 
-/** 按需讲评的一趟调用，先重跑沙箱拿失败原因。 */
+/** 按需讲评的一次调用，先重跑沙箱拿失败原因。 */
 export async function explainCodeAttempt(input: {
   repositoryPath: string;
   title: string;

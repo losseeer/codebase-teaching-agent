@@ -181,7 +181,7 @@ export async function runTeachingTurn(turn: PreparedTeachingTurn, provider: LlmP
     ...(await externalAndSkills()),
     ...(stream.signal ? { signal: stream.signal } : {})
   });
-  // 末趟返回之后才到达的中止不会抛错，这里按作废收尾
+  // 末次返回之后才到达的中止不会抛错，这里按作废收尾
   if (stream.signal?.aborted) {
     recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "teach", provider: provider.modelVersion, outcome: "aborted", threadId: outcome.session.id, audits: auditsFromResult(outcome) });
     throw new LlmAbortedError();

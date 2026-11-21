@@ -166,7 +166,7 @@ export async function probeIsolation(): Promise<IsolationStatus> {
   const homeControl = await runRaw({ baseline: true, language: "typescript", entry: "canary.ts", files: [{ path: "canary.ts", contents: readHomeCanary(home) }] });
   push("read-home", homeRun.stdout.includes("BLOCKED"), homeControl.stdout.includes("LEAK") ? "leaked" : "also-blocked", `${outcome(homeRun)} / 对照 ${outcome(homeControl)}`);
 
-  // 仓在家目录外时也要读不到：临时目录当仓，内含 `.tutor/tutor.db`
+  // 仓在家目录外时也要无法读取：临时目录当仓，内含 `.tutor/tutor.db`
   const standIn = mkdtempSync(join(realpathSafeDir(tmpdir()), "tutor-sandbox-repo-"));
   mkdirSync(join(standIn, ".tutor"), { recursive: true });
   writeFileSync(join(standIn, ".tutor", "tutor.db"), "SENTINEL-STANDARD-ANSWERS\n", "utf8");

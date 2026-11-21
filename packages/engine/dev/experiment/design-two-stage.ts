@@ -277,7 +277,7 @@ interface StageContext {
   provider: LlmProvider;
   faces?: ExerciseFaces;
   onProgress?: ExerciseProgressSink;
-  /** 累计用量，三段与修复回合都并进来。 */
+  /** 累计用量，三段与修复回合都纳入。 */
   usage?: LlmUsage;
   skillReads: SkillReadRecord[];
   fileReads: FileReadRecord[];

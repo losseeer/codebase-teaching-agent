@@ -49,7 +49,7 @@ interface Row {
   input_tokens: number | "缺失"; output_tokens: number | "缺失";
   model_calls: number; segments?: SegmentEvent[];
   max_segment_output_tokens?: number;
-  /** 这一趟里单次模型调用最大的输出 token；与端点快慢无关，用来量「单次输出有多大」。 */
+  /** 这一次里单次模型调用最大的输出 token；与端点快慢无关，用来量「单次输出有多大」。 */
   max_call_output_tokens: number;
   quality: { prompt_sections_complete: boolean; assertion_count: number; defect_targeted: boolean; passed: boolean };
 }

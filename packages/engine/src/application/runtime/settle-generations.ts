@@ -9,7 +9,7 @@ import type { AuditLine } from "../port/audit-sink.js";
 import { isGenerationActive } from "./generation-registry.js";
 
 const TERMINALS = new Set(["exercise_generated", "exercise_declined", "exercise_aborted"]);
-/** 无开始事件的历史记录：最后一趟模型回复后静默这么久才收口，避免误伤正在跑的任务。 */
+/** 无开始事件的历史记录：最后一次模型回复后静默这么久才收口，避免误伤正在跑的任务。 */
 const LEGACY_QUIET_MS = 30 * 60 * 1000;
 
 interface LoggedUsage { input: number; output: number; model: string }

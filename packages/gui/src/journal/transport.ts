@@ -71,7 +71,7 @@ class JournalSendError extends Error {
 let chain: Promise<unknown> = Promise.resolve();
 function schedule(task: () => Promise<unknown>): Promise<void> {
   const result = chain.then(task, task);
-  // 链上只挂吞掉结局的一份，链不断
+  // 链上只挂忽略结局的一份，链不断
   const settled = result.then(() => undefined, () => undefined);
   chain = settled;
   return settled;

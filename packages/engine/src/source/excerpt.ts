@@ -5,7 +5,7 @@ import { secretMasker } from "@codebase-tutor/domain";
 /**
   锚点取码：把锚点解析成一段可嵌入 prompt 的源码窗口。
   符号边界可信时按符号行区间取，否则按锚点行前后取固定窗口；超行或超字符上限时截断并标记。
-  仓内源码原文进请求前的最后一道密钥筛；读不到或越界返回 undefined。
+  仓内源码原文进请求前的最后一道密钥筛；无法读取或越界返回 undefined。
   */
 
 export interface ExcerptAnchor {

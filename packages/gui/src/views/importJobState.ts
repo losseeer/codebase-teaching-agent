@@ -16,5 +16,5 @@ export function writeActiveImportJob(id: string, storage: Pick<Storage, "setItem
 }
 
 export function clearActiveImportJob(storage: Pick<Storage, "removeItem"> = localStorage): void {
-  try { storage.removeItem(ACTIVE_IMPORT_KEY); } catch { /* 删不掉只影响下次回读 */ }
+  try { storage.removeItem(ACTIVE_IMPORT_KEY); } catch { /* 删除失败只影响下次回读 */ }
 }

@@ -324,7 +324,7 @@ export const api = {
   /** 已结束时返回 canceled=false。 */
   cancelExerciseGeneration: (repositoryId: string, jobId: string) => request<{ canceled: boolean }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
   submitExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<ExerciseResult>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/answer`, { method: "POST", body: JSON.stringify(answer) }),
-  /** 判分后点一次才发这一趟 LLM 调用。 */
+  /** 判分后点一次才发这一次 LLM 调用。 */
   explainExercise: (repositoryId: string, exerciseId: string, answer: ExerciseAnswer) => request<{ explanation: string }>(`/api/repositories/${repositoryId}/exercises/${encodeURIComponent(exerciseId)}/explain`, { method: "POST", body: JSON.stringify(answer) }),
   getCost: (repositoryId: string, sessionId?: string) => checked<CostSummary>("cost", costSummarySchema, `/api/repositories/${repositoryId}/cost${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`),
   setBudget: (repositoryId: string, monthlyBudgetUsd: number) => checked<CostSummary>("budget", costSummarySchema, `/api/repositories/${repositoryId}/settings`, { method: "PUT", body: JSON.stringify({ monthlyBudgetUsd }) }),

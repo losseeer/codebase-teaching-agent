@@ -104,7 +104,7 @@ describe("provider-backed code Q&A turn", () => {
     const result = await respondWithProvider(createSession("repo", scope.ref), scope, "入口的输入是什么？", provider, undefined, repository);
     expect(result.assistant.content).toContain("readConfig");
     expect(result.fileReads?.map((read) => read.path)).toEqual(["src/main.ts"]);
-    // 用量是工具循环各趟累计的那一份，不是最后一趟的
+    // 用量是工具循环各次累计的那一份，不是最后一次的
     expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
     // 轮数按「工具轮」计：一次 read_file 往返算 1 轮（journal 的 loop_round.tool_rounds 就是它）
     expect(result.toolRounds).toBe(1);

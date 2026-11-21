@@ -3,7 +3,7 @@ import type { ImplementationUnit, SymbolInfo } from "@codebase-tutor/domain";
 import { readFileLines, symbolBodyLines } from "@codebase-tutor/platform";
 
 export function buildImplementationUnits(repositoryPath: string, symbols: SymbolInfo[]): ImplementationUnit[] {
-  /** 同一文件的正文在一次构建内只读一次，读不到时该文件的符号缺席。 */
+  /** 同一文件的正文在一次构建内只读一次，无法读取时该文件的符号缺席。 */
   const linesOf = new Map<string, string[] | undefined>();
   const read = (path: string): string[] | undefined => {
     if (!linesOf.has(path)) linesOf.set(path, readFileLines(repositoryPath, path));

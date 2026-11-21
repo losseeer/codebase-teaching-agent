@@ -3,12 +3,12 @@ import type { ExamNote, ExamNoteStore } from "./exam-notes.js";
 
 /**
   阅读笔记的消费侧（方案 v8 第 5 章）。存储与消费解耦：这里只管打分、限流、丢弃计数。
-  有状态：单趟 read_file 附注预算 8 条、同一文件只附一次，状态随一次出题的 faces 存活。
+  有状态：单次 read_file 附注预算 8 条、同一文件只附一次，状态随一次出题的 faces 存活。
 */
 export interface ConsumeContext {
   plan: ExamPlan;
   store: ExamNoteStore;
-  /** 本趟候选文件（selectTagCandidates / 落点判定命中的路径）。 */
+  /** 本次候选文件（selectTagCandidates / 落点判定命中的路径）。 */
   candidatePaths: Set<string>;
   /** 主题词（小写），用于 symbolMatch。 */
   themeWords: string[];
@@ -45,7 +45,7 @@ export class ExamNotesBudget {
 
   constructor(private readonly ctx: ConsumeContext) {}
 
-  /** 段 1 的 user：pointMatch=1 且 score≥3，全趟 ≤12 条。 */
+  /** 段 1 的 user：pointMatch=1 且 score≥3，全程 ≤12 条。 */
   forUser(): ExamNote[] {
     const all = Object.values(this.ctx.store.files).flatMap((entry) => entry.points);
     const scored = all.map((note) => ({ note, score: scoreNote(note, this.ctx), related: this.ctx.plan.pointIds.includes(note.point) }));
@@ -56,7 +56,7 @@ export class ExamNotesBudget {
     return kept.sort((left, right) => right.score - left.score).slice(0, MAX_USER_NOTES).map((item) => item.note);
   }
 
-  /** read_file 附注：score≥4、每文件 ≤2 条、单趟 ≤8 条、同一文件只附一次。 */
+  /** read_file 附注：score≥4、每文件 ≤2 条、单次 ≤8 条、同一文件只附一次。 */
   forRead(path: string): string[] {
     if (this.annotated.has(path) || this.readShown >= MAX_READ_NOTES_PER_TRIP) return [];
     const notes = this.ctx.store.files[path]?.points ?? [];

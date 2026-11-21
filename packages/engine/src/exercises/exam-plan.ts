@@ -81,7 +81,7 @@ function topPointsByLandings(points: ExamPointDef[], ctx: LandingContext, limit:
     .map((entry) => entry.point);
 }
 
-/** 词法命中为空时用落点路径兜底：中文主题在英文标识符仓里词法命中 0 是常态，不等于没落点。 */
+/** 词法命中为空时用落点路径回退：中文主题在英文标识符仓里词法命中 0 是常态，不等于没落点。 */
 export function themeWithLandings(theme: Set<string> | undefined, plan: ExamPlan | undefined): Set<string> | undefined {
   if (!theme || theme.size || !plan?.landings.length) return theme;
   const merged = new Set(theme);

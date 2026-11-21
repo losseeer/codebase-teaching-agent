@@ -12,7 +12,7 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
   const [open, setOpen] = useState(false);
   /** 被引擎拒绝（422）的原因，就地显示在表单里。 */
   const [rejected, setRejected] = useState<string | null>(null);
-  /** 区分「还没读回来」与「读不到」。 */
+  /** 区分「尚未读取完成」与「无法读取」。 */
   const [loadFailed, setLoadFailed] = useState(false);
   /** 用户配置过的连接（LLM profile）：切换时先让引擎做一次连通性检查。 */
   const [profiles, setProfiles] = useState<LlmProfilesView | null>(null);

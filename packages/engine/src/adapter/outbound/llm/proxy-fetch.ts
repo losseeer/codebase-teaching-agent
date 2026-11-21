@@ -19,7 +19,7 @@ export function proxyFor(target: string): string | undefined {
 const agents = new Map<string, ProxyAgent>();
 
 export function proxyFetchFor(target: string): typeof fetch | undefined {
-  // 测试用注入的 fetchImpl 打桩，别把真实网络与代理带进来
+  // 测试用注入的 fetchImpl 打桩，别把真实网络与代理引入
   if (process.env.VITEST) return undefined;
   const proxy = proxyFor(target);
   if (!proxy) return undefined;

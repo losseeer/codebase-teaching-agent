@@ -47,7 +47,7 @@ export function createThreadUseCase(repositoryId: string, input: { scope?: strin
   return { ok: true, value: { thread } };
 }
 
-/** 按 threadId 取线程与正文；已软删的读不到。 */
+/** 按 threadId 取线程与正文；已软删的无法读取。 */
 export function readThreadMessages(threadId: string): ThreadsResult<{ thread: ChatThread; messages: ChatThreadMessage[] }> {
   const located = locateThread(threadId);
   if (!located) return fail("thread-missing");

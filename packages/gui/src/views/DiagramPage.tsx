@@ -64,7 +64,7 @@ function writeMapMemory(repositoryId: string, memory: MapMemory): void {
   }
 }
 
-/** 几何写入的去抖窗口：连续拖动合并成一趟 PUT。 */
+/** 几何写入的去抖窗口：连续拖动合并成一次 PUT。 */
 const GEOMETRY_DEBOUNCE_MS = 300;
 
 export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { workspace: Workspace; chat: ScopedChatApi; visible: boolean; onQuickPrompt?: (text: string) => void }): ReactElement {
@@ -142,7 +142,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
 
   const refreshGallery = useCallback((): void => { setGalleryNonce((value) => value + 1); }, []);
 
-  /** 取图收尾：图与引用告警一起落地，顺带处理「版本历史」入口。 */
+  /** 取图收尾：图与引用告警一起落地，同时处理「版本历史」入口。 */
   const applyDiagram = useCallback((next: Diagram): void => {
     setDiagram(next);
     if (versionsWantedFor.current === next.id) {

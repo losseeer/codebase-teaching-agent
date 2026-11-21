@@ -14,7 +14,7 @@ const symbolLineCap = () => contextShareLines(CONTEXT_SHARE.symbolLines, 12);
 const excerptBlockCap = () => contextShare(CONTEXT_SHARE.excerptBlock);
 const excerptTotalCap = () => contextShare(CONTEXT_SHARE.anchorExcerpts);
 
-/** 按锚点取带行号的源码摘录：符号边界优先，取不到时按窗口。路径越界或读不到返回空串。 */
+/** 按锚点取带行号的源码摘录：符号边界优先，取不到时按窗口。路径越界或无法读取返回空串。 */
 function excerptForAnchor(repoPath: string, anchor: SourceAnchor, readHint: boolean, egress?: EgressCollector): string {
   const slice = sliceExcerpt(
     repoPath,

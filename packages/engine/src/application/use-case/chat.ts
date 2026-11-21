@@ -88,7 +88,7 @@ export function prepareMapChat(repositoryId: string, input: { content?: string; 
   return { ok: true, value: { question, ...turn } };
 }
 
-/** map-chat 流式这一趟：SSE 已开好，这里负责发起调用、中止判定与收尾。 */
+/** map-chat 流式这一次：SSE 已开好，这里负责发起调用、中止判定与收尾。 */
 export async function runMapChat(
   repositoryId: string,
   turn: PreparedTurn,
@@ -125,7 +125,7 @@ export async function runMapChat(
       ...(await externalAndSkills()),
       ...(stream.signal ? { signal: stream.signal } : {})
     });
-    // 中止晚于最后一趟调用时，这一轮照样作废
+    // 中止晚于最后一次调用时，这一轮照样作废
     if (stream.signal?.aborted) {
       recordUnfinishedTurn({ repositoryPath: repository.path, repositoryId: repository.index.repositoryId, scene: "map_chat", provider: provider.modelVersion, outcome: "aborted", threadId: turn.threadId, audits: auditsFromResult(result) });
       throw new LlmAbortedError();
@@ -181,7 +181,7 @@ export function loadPracticeExercise(repositoryId: string, prepared: CheckedPrac
   return { ok: true, value: { ...prepared, ...threadScopedHistory(repository.chatStore, prepared.threadId), exercise: stored.exercise } };
 }
 
-/** 练习答疑这一趟：与 map-chat 同一条 SSE 协议。 */
+/** 练习答疑这一次：与 map-chat 同一条 SSE 协议。 */
 export async function runPracticeChat(repositoryId: string, turn: PracticeTurn, provider: LlmProvider, stream: ScopedTurnStream): Promise<ScopedTurnOutcome> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) throw new Error(REPOSITORY_NOT_MOUNTED);

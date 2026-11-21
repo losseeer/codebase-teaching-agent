@@ -9,7 +9,7 @@ export type ThreadItem =
 /** 线程正文一行的最小形状；断线回读只比条数。 */
 export type ThreadRow = { id: string; role: string; content: string };
 
-/** 线程正文 → 侧栏展示项；本地提示不落库、也读不回来。 */
+/** 线程正文 → 侧栏展示项；本地提示不落库、也无法重新读取。 */
 export function threadItemsFrom(messages: readonly ThreadRow[]): ThreadItem[] {
   return messages
     .filter((message) => (message.role === "user" || message.role === "assistant") && message.content)

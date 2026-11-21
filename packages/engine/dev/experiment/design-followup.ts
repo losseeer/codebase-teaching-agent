@@ -278,7 +278,7 @@ let stopped = false;
 let failure: string | undefined;
 
 try {
-  // 全仓挂载预检：任何一个仓的 state 读不出来就立即停机，绝不「跳过」后空转。
+  // 全仓挂载预检：任何一个仓的 state 无法读取就立即停机，绝不「跳过」后空转。
   for (const repo of manifest.repos) {
     try {
       mounted.set(repo.name, await mountFrozen(repo, root));
@@ -299,7 +299,7 @@ try {
       rows.push(out);
       appendFileSync(outFile, `${JSON.stringify(out)}\n`, "utf8");
       console.log(`${index} ${row.repo} / ${row.topic} / ${arm}：${out.success ? `成功${out.quality.passed ? "" : "（质量护栏未过）"}` : `失败（${out.failure_stage}）`}｜${(out.duration_ms / 1000).toFixed(1)}s｜in ${out.input_tokens} / out ${out.output_tokens}`);
-      // 余额/预算类错误立即停机，不把剩余配对烧掉；失败不静默吞掉。
+      // 余额/预算类错误立即停机，不把剩余配对烧掉；失败不静默忽略。
       if (!out.success && /402|余额|insufficient|quota|budget/i.test(`${out.failure_stage ?? ""} ${out.error ?? ""}`)) {
         failure = "检测到余额或预算不足，已停在当前配对；修正后用 --from=<配对序号> 续跑。";
         stopped = true;

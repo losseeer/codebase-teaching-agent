@@ -1,6 +1,6 @@
 import type { ExerciseKind } from "@codebase-tutor/domain";
 
-/** 中文日期文案：只显示到日；时间戳读不出时明说。 */
+/** 中文日期文案：只显示到日；时间戳无法读取时明确说明。 */
 export function dateText(iso: string): string {
   const date = new Date(iso);
   return Number.isFinite(date.getTime()) ? `${date.getMonth() + 1} 月 ${date.getDate()} 日` : "日期未上报";

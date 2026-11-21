@@ -26,7 +26,7 @@ import { emit, installJournalRetry } from "./journal";
 
 export type Workspace = _Workspace;
 
-/** 工作区校验「连不上」时的退避重试（毫秒）；404 不走这条。 */
+/** 工作区校验「连不上」时的退避重试（毫秒）。 */
 const WORKSPACE_RETRY_DELAYS = [500, 1500, 3000] as const;
 
 const WORKSPACE_STORAGE_KEY = "codebase-tutor.workspace";
@@ -69,7 +69,7 @@ function readStoredWorkspace(): _Workspace | null {
   try {
     localStorage.removeItem(WORKSPACE_STORAGE_KEY);
   } catch {
-    /* 删不掉也只是每次进来都判一趟 */
+    /* 删除失败也只是每次进入都判定一次 */
   }
   return null;
 }
@@ -77,7 +77,7 @@ function readStoredWorkspace(): _Workspace | null {
 export function App(): ReactElement {
   const [workspace, setWorkspace] = useState<_Workspace | null>(readStoredWorkspace);
   const [forgetTarget, setForgetTarget] = useState<{ repositoryId: string; name: string } | null>(null);
-  // 不预挂载仓库：校验即一次挂载请求，顺带带回新鲜度。
+  // 不预挂载仓库：校验即一次挂载请求，同时带回新鲜度。
   const [workspaceReady, setWorkspaceReady] = useState(() => workspace === null);
   /** 校验放弃（连不上/5xx 耗尽）：本地选择不删。 */
   const [engineUnreachable, setEngineUnreachable] = useState(false);
@@ -95,7 +95,7 @@ export function App(): ReactElement {
     try {
       if (value) localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(value));
       else localStorage.removeItem(WORKSPACE_STORAGE_KEY);
-    } catch { /* 落不下盘，下次进来重新选 */ }
+    } catch { /* 无法写入磁盘，下次进入重新选 */ }
   };
   const refreshCatalog = useCallback(async (): Promise<void> => {
     try {

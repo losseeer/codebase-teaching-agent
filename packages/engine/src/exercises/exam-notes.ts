@@ -3,8 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
-  阅读笔记（方案 v8 第 2.3 / 4 章）：段 1 定题那次输出顺手带上「读过的文件有哪些可考点」，
-  校验后落进 `<repo>/.tutor/exam-points.json`，下一趟出题/读文件时再消费。
+  阅读笔记（方案 v8 第 2.3 / 4 章）：段 1 定题那次输出同时记录「读过的文件有哪些可考点」，
+  校验后落进 `<repo>/.tutor/exam-points.json`，下一次出题/读文件时再消费。
   存储与消费解耦：这里只管存与校验，打分/限流在 exam-notes-consumer 里。
 */
 export const EXAM_NOTES_FILE = ".tutor/exam-points.json";
@@ -20,7 +20,7 @@ export interface ExamNote {
   /** 技能条目 id。 */
   point: string;
   why: string;
-  /** 产出这趟的主题判定级别；0 = 这一趟没做落点判定（不是「判定为第 1 级」）。 */
+  /** 产出这次的主题判定级别；0 = 这一次没做落点判定（不是「判定为第 1 级」）。 */
   sourceLevel: 0 | 1 | 2;
 }
 
@@ -38,9 +38,9 @@ export interface ExamNoteStore {
 export interface ValidationContext {
   /** 全量合法 id（技能表里的所有考点 id）。 */
   legalIds: Set<string>;
-  /** 这一趟真正读过的文件。 */
+  /** 这一次真正读过的文件。 */
   fileReads: Set<string>;
-  /** 本趟命中的技能条目 id，用于相关接受率。 */
+  /** 本次命中的技能条目 id，用于相关接受率。 */
   pointIds: Set<string>;
   sourceLevel: 0 | 1 | 2;
 }
@@ -142,7 +142,7 @@ export function contentHashOf(repoPath: string, path: string): string | undefine
   }
 }
 
-/** 把校验后的笔记写进仓；单个文件 hash 读不到就跳过该文件（不写半份）。 */
+/** 把校验后的笔记写进仓；单个文件 hash 无法读取就跳过该文件（不写半份）。 */
 export function recordExamNotes(repoPath: string, notes: ExamNote[], at: string): number {
   if (!notes.length) return 0;
   const store = loadExamNoteStore(repoPath);

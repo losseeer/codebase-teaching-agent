@@ -3,7 +3,7 @@ import { traceEngine } from "@codebase-tutor/platform";
 
 /**
   本机目录选择：调系统原生窗口，只在导入页由用户手动触发。
-  打不开就返回可读原因，界面保留手输路径作为兜底。
+  打不开就返回可读原因，界面保留手输路径作为回退。
 */
 
 export type DirectoryPickResult =

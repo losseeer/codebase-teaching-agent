@@ -10,7 +10,7 @@ export interface LearnerSnapshotInput {
   record: RepoLearningRecord;
   /** 用来分主题统计首次/复习通过次数；缺省时只报最新掌握单元。 */
   events?: JournalEvent[];
-  /** topic_id → label；没有表数据时用 topic id 兜底。 */
+  /** topic_id → label；没有表数据时用 topic id 回退。 */
   topicLabels?: Record<string, string>;
   now?: Date;
 }

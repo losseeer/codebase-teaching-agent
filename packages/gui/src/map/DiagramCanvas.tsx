@@ -191,7 +191,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     return () => resizeObserver.disconnect();
   }, [runFit]);
 
-  /** 盒子量到后补一次 fit（首帧量不到）。 */
+  /** 盒子量到后补一次 fit（首帧无法测量）。 */
   useLayoutEffect(() => { runFit(); }, [measured, runFit]);
 
   /* ---------- agent 动过结构：新出现的节点闪一下 ---------- */

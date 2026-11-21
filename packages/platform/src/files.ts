@@ -10,7 +10,7 @@ export function isWithin(root: string, candidate: string): boolean {
   return target === base || target.startsWith(`${base}${sep}`);
 }
 
-/** 读文件为行数组，统一换行口径；读不到返回 undefined。 */
+/** 读文件为行数组，统一换行口径；无法读取返回 undefined。 */
 export function readFileLines(repositoryPath: string, relativePath: string): string[] | undefined {
   const absolute = join(repositoryPath, relativePath);
   try {

@@ -37,7 +37,7 @@ export interface RepositoryIndex {
   fileTree: FileTreeNode[];
   hotspots: Hotspot[];
   /**
-    扫描期读不出来的文件（读到一半被删、权限不对、被换成特殊节点）。默认 = 一个都没有。
+    扫描期无法读取的文件（读到一半被删、权限不对、被换成特殊节点）。默认 = 一个都没有。
     这些文件被跳过而不算失败（一个坏文件不该掀掉整次导入），但必须记名：
     `totalFiles` 与后面所有「这个仓有多少代码、哪些文件没摘要」的读数都建立在「缺席是知道的」之上。
     上限 50 条，超出只按前 50 条报（够定位问题目录）。
@@ -45,7 +45,7 @@ export interface RepositoryIndex {
   unreadable?: UnreadableFile[];
 }
 
-/** 扫描期读不到的一个文件与其报错首行（原因要说得出口，不能只给「少了」）。 */
+/** 扫描期无法读取的一个文件与其报错首行（原因要说得出口，不能只给「少了」）。 */
 export interface UnreadableFile {
   path: string;
   reason: string;

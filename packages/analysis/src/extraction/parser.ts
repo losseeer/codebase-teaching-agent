@@ -141,7 +141,7 @@ function kindOf(type: string, inClass: boolean): SymbolInfo["kind"] | undefined 
   if (type === "class_definition") return "class";
   if (type === "function_definition") return inClass ? "method" : "function";
   if (type === "struct_declaration") return "class";
-  // Rust：impl 无名，体成员由递归收进来并升为 method
+  // Rust：impl 无名，体成员由递归纳入并升为 method
   if (type === "function_item") return inClass ? "method" : "function";
   if (type === "struct_item" || type === "union_item") return "class";
   if (type === "trait_item" || type === "enum_item" || type === "mod_item") return "type";

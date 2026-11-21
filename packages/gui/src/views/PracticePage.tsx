@@ -88,20 +88,20 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [codeFiles, setCodeFiles] = useState<CodeEditorFile[]>([]);
   const [activeCodePath, setActiveCodePath] = useState("");
-  /** 讲评是第二趟请求，作用于提交时的版本而非编辑器草稿。 */
+  /** 讲评是第二次请求，作用于提交时的版本而非编辑器草稿。 */
   const [submittedFiles, setSubmittedFiles] = useState<{ path: string; contents: string }[]>([]);
   const [explanation, setExplanation] = useState("");
   const [explaining, setExplaining] = useState(false);
   const [result, setResult] = useState<ExerciseResult | null>(null);
   const [loading, setLoading] = useState(false);
-  /** 这一趟出题锁定的主题名：途中换主题不跟着变。 */
+  /** 这一次出题锁定的主题名：途中换主题不跟着变。 */
   const [pendingTheme, setPendingTheme] = useState("");
   /** 出题阶段（最多留 6 条），最后一条是当前动作。 */
   const [genTrail, setGenTrail] = useState<{ stage: string; detail?: string }[]>([]);
   /** 出题中：与判分的 loading 分开，加载条只认这一路。 */
   const [generating, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  /** 换主题或题型就让在途那趟作废。 */
+  /** 换主题或题型就让在途那次作废。 */
   const generationToken = useRef(0);
   const activeGeneration = useRef<{ jobId: string; controller: AbortController } | null>(null);
   const [error, setError] = useState("");
@@ -190,7 +190,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
 
   // 换一题 = 换目标或换 nonce，旧题留在题库里。
   const generate = async (targetUnitId?: string, variantNonce?: number, typeOverride?: ExerciseType, themeFallback = false): Promise<void> => {
-    // 一次只发一趟，连点不并发 POST
+    // 每次只发一次，连点不并发 POST
     if (loading) return;
     const token = ++generationToken.current;
     const type = typeOverride ?? exerciseType;
@@ -198,7 +198,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     setPendingTheme(theme?.label ?? "");
     setGenerateReason(null);
     setLoading(true); setGenerating(true); setError(""); setResult(null); setText(""); setSelectedIds([]); setBudgetTight(false);
-    // 阶段帧走全局事件流，按 jobId 认领这一趟
+    // 阶段帧走全局事件流，按 jobId 认领这一次
     const jobId = crypto.randomUUID();
     const controller = new AbortController();
     activeGeneration.current = { jobId, controller };

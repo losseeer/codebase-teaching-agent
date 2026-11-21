@@ -22,7 +22,7 @@ const DECLARATION_PATTERNS: Record<string, RegExp> = {
   ".gradle": /^\s*(?:implementation|api|compileonly|runtimeonly|testimplementation|classpath|ext)\b/i
 };
 
-/** 一块声明至少几行才值得当素材：一行的声明读不出取舍。 */
+/** 一块声明至少几行才值得当素材：一行的声明无法读取取舍。 */
 const MIN_DECLARATIONS = 2;
 /** 声明行之间容几行空隙仍算同一块。 */
 const BLOCK_GAP = 2;

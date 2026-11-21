@@ -114,7 +114,7 @@ describe("executeSearchCode 打分与词边界", () => {
     // 测试文件原始分更高，封顶 1 分后让位。
     const both = executeSearchCode(corpus, JSON.stringify({ query: "缓存 测试" }));
     expect(both.audit.topPaths[0]).toBe("src/io/FileService.java");
-    // 只有测试文件命中时照样给出，并明说它是测试文件。
+    // 只有测试文件命中时照样给出，并明确说明它是测试文件。
     const only = executeSearchCode(corpus, JSON.stringify({ query: "命中行为" }));
     expect(only.audit.topPaths).toEqual(["src/test/java/io/FileServiceTest.java"]);
     expect(only.content).toContain("测试文件");

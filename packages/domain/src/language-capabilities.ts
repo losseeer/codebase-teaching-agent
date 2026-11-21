@@ -2,7 +2,7 @@
   纯元数据：不参与建图、不进任何缓存键（图的内容、`backendStamp`、摘要与润色缓存都与它无关）。
   与 `DependencyGraphData.lspStatus` 是两套口径：本表说引擎自己的规则有多硬，`lspStatus` 说有没有借到外部语义服务。 */
 
-/** exact = 按权威规则落点，命中即可信（不足只表现为少画一条）；approximate = 启发式或粒度偏粗（可能多连或落到同名文件）；unsupported = 无专门规则，只剩按文件名的通用兜底或不进图。未知语言一律回落 unsupported。 */
+/** exact = 按权威规则落点，命中即可信（不足只表现为少画一条）；approximate = 启发式或粒度偏粗（可能多连或落到同名文件）；unsupported = 无专门规则，只剩按文件名的通用回退或不进图。未知语言一律回落 unsupported。 */
 export type CapabilityLevel = "exact" | "approximate" | "unsupported";
 
 /** 九个能力格：GUI 与单测都按这份清单遍历，加格要一起改表与测试；前五格说依赖图，后四格说静态产物层（`static_fact` 表，不参与任何缓存键）。 */
@@ -165,7 +165,7 @@ export const LANGUAGE_CAPABILITIES = {
 /** 本表覆盖的语言 id（`languageCapabilitiesOf` 对未知语言回落的条目不在此列）。 */
 export type SupportedLanguage = keyof typeof LANGUAGE_CAPABILITIES;
 
-/** 各格全为 `unsupported` 的回落条目：未知语言用它，界面会明说「这门语言没有规则」。 */
+/** 各格全为 `unsupported` 的回落条目：未知语言用它，界面会明确说明「这门语言没有规则」。 */
 export const UNKNOWN_LANGUAGE_CAPABILITIES: LanguageCapabilities = {
   language: "unknown",
   displayName: "未知语言",

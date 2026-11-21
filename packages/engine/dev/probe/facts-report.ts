@@ -53,7 +53,7 @@ const note = (reason: string): void => void skips.set(reason, (skips.get(reason)
 const allSymbols: SymbolInfo[] = [];
 const parsed = new Map<string, { content: string; symbols: SymbolInfo[] }>();
 
-// 两趟：先收齐整仓符号表，落点反查要用
+// 两次：先收齐整仓符号表，落点反查要用
 for (const file of index.files) {
   // 与产品同一过滤：既不在 graphExtensions 也不在 registryEligible 的文件不进产物层
   if (!graphExtensions.includes(file.extension.toLowerCase()) && !registryEligible(file.path, false)) continue;

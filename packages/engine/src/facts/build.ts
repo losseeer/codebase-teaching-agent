@@ -23,7 +23,7 @@ import { analyzeFileTypes } from "@codebase-tutor/analysis";
 import { analyzeFileRegistry, registryEligible } from "@codebase-tutor/analysis";
 import { FACTS_VERSION } from "@codebase-tutor/analysis";
 
-/** 静态产物层的总装：一个文件解析一次，各类别读数在同一趟里算，产物确定性重算。 */
+/** 静态产物层的总装：一个文件解析一次，各类别读数在同一次里算，产物确定性重算。 */
 export interface FileFactRow {
   kind: FactKind;
   path: string;
@@ -68,7 +68,7 @@ export function collectFileFacts(repositoryPath: string, files: FileEntry[], sym
     try {
       content = readFileSync(join(repositoryPath, file.path), "utf8");
     } catch {
-      // 扫描期读不到的文件已在 RepositoryIndex.unreadable 记名，这里不重复报
+      // 扫描期无法读取的文件已在 RepositoryIndex.unreadable 记名，这里不重复报
       continue;
     }
     const facts = analyzeFile(file.path, content, byPath.get(file.path) ?? [], languageCapabilitiesOf(file.path).language, symbols);

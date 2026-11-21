@@ -16,7 +16,7 @@ export function tboot(label: string): void {
   traceEngine("boot", { phase: label }, { traceId: null, durationMs });
 }
 
-/** engine 版本号的唯一来源是 packages/engine/package.json；读不到时为 0.0.0。 */
+/** engine 版本号的唯一来源是 packages/engine/package.json；无法读取时为 0.0.0。 */
 export const engineVersion: string = (() => {
   try {
     const here = dirname(fileURLToPath(import.meta.url));

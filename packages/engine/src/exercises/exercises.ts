@@ -73,7 +73,7 @@ export interface PracticeRepository {
   ports: ExercisePorts;
 }
 
-/** 不点题型时的轮换范围；分析题必须带主题，不进兜底。 */
+/** 不点题型时的轮换范围；分析题必须带主题，不进回退。 */
 const kinds: ExerciseKind[] = [...EXERCISE_TYPE_KINDS.comprehension, ...EXERCISE_TYPE_KINDS.design];
 
 /** 出题缓存的作用域（填进 `exercise_cache.content_version`）。 */
@@ -361,7 +361,7 @@ export class ExerciseService {
     return exercise;
   }
 
-  /** 证据账：技能、读过的文件、自证两跑、用量；被拒的趟也要有行。 */
+  /** 证据账：技能、读过的文件、自证两跑、用量；被拒的那次也要有行。 */
   private auditCodeGeneration(repository: PracticeRepository, generation: CodeGeneration, language: string, provider: LlmProvider): void {
     for (const read of generation.skillReads) repository.ports.audit.append("skill_read", skillReadAuditPayload(read));
     for (const read of generation.fileReads ?? []) repository.ports.audit.append("file_read", fileReadAuditPayload(read));
@@ -408,9 +408,9 @@ export class ExerciseService {
       ...(input.progress ? { onProgress: input.progress } : {})
     });
     if (segmented.ok) return segmented;
-    // provider_error 不兜底。
+    // provider_error 不回退。
     if (segmented.stage === "provider_error") return segmented;
-    // 兜底沿用分段已定好的题面，只跑一次、不再修复重试。
+    // 回退沿用分段已定好的题面，只跑一次、不再修复重试。
     const whole = await generateCodeExerciseFromReference({
       repositoryPath: input.repositoryPath,
       tag: input.tag,
@@ -462,7 +462,7 @@ export class ExerciseService {
       this.decline(repository, generation.stage, "code", tag, generation.reason, "代码题生成失败，请重试。");
     }
     const proposal = generation.proposal;
-    // 锚点只认这一趟真看过的代码：预注入的摘录，或模型自己 read_file 读到的。
+    // 锚点只认这一次真看过的代码：预注入的摘录，或模型自己 read_file 读到的。
     const readPaths = new Set([
       ...candidates.map((candidate) => candidate.path),
       ...(generation.fileReads ?? []).filter((read) => !read.denied && !read.error).map((read) => read.path)
@@ -949,7 +949,7 @@ function prioritizedImpactPaths(result: ReturnType<typeof impactRadius>, changed
 }
 
 function sourceOptions(repository: PracticeRepository, preferredPaths: string[], limit = 8) {
-  // 正解只按「在不在索引里」认；扩展名闸门只管干扰项从哪儿捞。
+  // 正解只按「在不在索引里」认；扩展名闸门只管干扰项从何处选取。
   const indexed = new Set(repository.index.files.map((file) => file.path));
   const preferred = [...new Set(preferredPaths)].filter((path) => indexed.has(path)).slice(0, limit);
   const sourcePaths = repository.index.files.filter((file) => handledExtensions.has(file.extension)).map((file) => file.path);

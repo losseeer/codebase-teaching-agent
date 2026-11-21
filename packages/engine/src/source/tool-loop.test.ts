@@ -630,7 +630,7 @@ describe("回合检查点与预算闸门", () => {
 });
 
 describe("到限中断（架构全景那一档：不出成品，留快照等重试）", () => {
-  /** 每趟都带一个工具调用：要能撑到第 10 轮。 */
+  /** 每次都带一个工具调用：要能撑到第 10 轮。 */
   function loopingProvider(): { provider: LlmProvider; calls: LlmCompletionInput[] } {
     const calls: LlmCompletionInput[] = [];
     return {

@@ -218,7 +218,7 @@ export async function completeWithReadTool(input: ReadToolLoopInput): Promise<Re
     return undefined;
   };
   const collect = (outcome: ToolOutcome): void => {
-    // 带真实发生时刻，审计行可能整趟结束才落盘
+    // 带真实发生时刻，审计行可能整个流程结束才落盘
     const occurredAt = new Date().toISOString();
     for (const read of outcome.audits?.fileReads ?? []) {
       fileReads.push({ ...read, occurredAt: read.occurredAt ?? occurredAt });

@@ -20,7 +20,7 @@ const SCOPE_SCENES: Record<AgentScope, readonly string[]> = {
   practice: ["practice.chat", "practice.generate"]
 };
 
-/** 出题没有回合文本，靠这些事件认成一次运行；开始事件也算，避免中断后整趟消失。 */
+/** 出题没有回合文本，靠这些事件认成一次运行；开始事件也算，避免中断后整个流程消失。 */
 const GENERATION_EVENTS = new Set(["exercise_started", "exercise_generated", "exercise_declined", "exercise_aborted"]);
 
 type HistoryStep = Omit<AgentTracePayload, "repositoryId" | "runId" | "scene" | "at" | "seq">;
@@ -37,7 +37,7 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** 审计行可能在整趟结束后才落盘；有发生时刻就按它还原每一步。 */
+/** 审计行可能在整个流程结束后才落盘；有发生时刻就按它还原每一步。 */
 function occurredAt(event: JournalEvent): string {
   const value = event.payload.occurred_at;
   return typeof value === "string" && value ? value : event.at;
@@ -173,7 +173,7 @@ function buildRun(runId: string, events: JournalEvent[], repositoryId: string): 
           };
         })
         .filter((item) => item.reply || item.detail);
-  // token 是整趟的合计；只有一条模型回合时才挂在它上面，多条时不冒充单次读数
+  // token 是整个流程的合计；只有一条模型回合时才挂在它上面，多条时不冒充单次读数
   const showTokens = replayed.length <= 1;
 
   const parts: string[] = [];

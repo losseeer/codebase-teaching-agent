@@ -28,7 +28,7 @@ import type { ExerciseProgress } from "../../exercises/turn-faces.js";
 /**
   练习题的用例：出题、判分、按需讲评。
   判分在本地沙箱真跑，模型用于 rubric 评分、题面润色与讲评。
-  这三趟与问答回合走同一条取证循环：有仓就能读文件、检索、查静态产物。
+  这三次与问答回合走同一条取证循环：有仓就能读文件、检索、查静态产物。
 */
 export type ExerciseFailure =
   | { kind: "repository-missing" }
@@ -67,7 +67,7 @@ function exerciseFaces(repository: ImportedRepository, database: Parameters<type
   };
 }
 
-/** 出题这趟的运行轨迹：起止帧由用例发，模型与工具帧随工具循环回传。 */
+/** 出题这次的运行轨迹：起止帧由用例发，模型与工具帧随工具循环回传。 */
 function generationTrace(repositoryId: string, label: string, audit: AuditSink): { onTrace: (step: ToolTraceStep) => void; finish: (outcome: string, status: "ok" | "error" | "aborted") => void } {
   const runId = currentTraceId() ?? id();
   const startedAt = Date.now();
@@ -167,7 +167,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
     const reason = error instanceof Error ? error.message : "出题失败";
     trace.finish(reason, "error");
     // 失败也要在 journal 里留一行：悬浮球的轨迹是从 journal 回放的，而 trace.finish 只发实时帧。
-    // 一旦实时连接断过（刷新页面、出题久到重连），那趟出题就会永远显示「运行中」。
+    // 一旦实时连接断过（刷新页面、出题久到重连），那次出题就会永远显示「运行中」。
     // 已归类的拒绝（ExerciseDeclinedError）在 decline() 里写过，这里只补没人写的那些。
     if (!(error instanceof ExerciseDeclinedError)) {
       repository.audit.append("exercise_declined", {
@@ -184,7 +184,7 @@ export async function nextExerciseUseCase(repositoryId: string, input: { kind?: 
   }
 }
 
-/** 取消一趟在途出题；不在跑时返回 false（重复点击幂等）。 */
+/** 取消一次在途出题；不在跑时返回 false（重复点击幂等）。 */
 export function cancelExerciseGenerationUseCase(repositoryId: string, jobId: string): { canceled: boolean } {
   return { canceled: abortGeneration(repositoryId, jobId).canceled };
 }

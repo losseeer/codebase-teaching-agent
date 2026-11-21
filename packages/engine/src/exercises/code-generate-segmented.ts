@@ -147,7 +147,7 @@ function targetSnapshots(repositoryPath: string, targets: string[]): { path: str
       const text = readFileSync(join(repositoryPath, target), "utf8");
       out.push({ path: target, contents: text.slice(0, 12_000) });
     } catch {
-      // 读不到就不给，让模型自己检索
+      // 无法读取就不给，让模型自己检索
     }
   }
   return out;
@@ -268,7 +268,7 @@ export async function generateCodeExerciseSegmented(input: {
   const skillReads: ProposalResponse["skillReads"] = [];
   const fileReads: ProposalResponse["fileReads"] = [];
 
-  /** 阅读笔记消费器：一趟出题一个实例，管住 read_file 附注的单趟预算与丢弃计数。 */
+  /** 阅读笔记消费器：一次出题一个实例，管住 read_file 附注的单次预算与丢弃计数。 */
   const examPlan = faces.examPlan;
   const notesBudget = examPlan ? new ExamNotesBudget({
     plan: examPlan,
@@ -394,9 +394,9 @@ export async function generateCodeExerciseSegmented(input: {
       user: JSON.stringify({
         stage: "code", kind: input.kind, language: plan.language, title: plan.title, prompt: plan.prompt, defect: plan.defect,
         targets: plan.targets,
-        // 目标文件现状由引擎本地读，不花 token；读不到才留空让它自己检索。
+        // 目标文件现状由引擎本地读，不花 token；无法读取才留空让它自己检索。
         targetFiles: targetSnapshots(input.repositoryPath, plan.targets),
-        // 段 1 真正读成功过的路径，供 targets 写歪时兜底。
+        // 段 1 真正读成功过的路径，供 targets 写歪时回退。
         readPaths: planOut.fileReads.filter((read) => !read.denied && !read.error).map((read) => read.path).slice(0, 8),
         note: "targetFiles 是目标文件当前的全文，直接用；接口、函数名、导入路径都要照它来。读不到的内容自己 read_file 补。"
       }),
@@ -454,7 +454,7 @@ export async function generateCodeExerciseSegmented(input: {
   const tests = testsOut.data!;
   usage = addUsage(usage, testsOut.usage);
 
-  // anchors 缺省时用这一趟真读过的文件兜底。
+  // anchors 缺省时用这一次真读过的文件回退。
   const anchors = code.anchors.length
     ? code.anchors
     : codeOut.fileReads.filter((read) => !read.denied && !read.error).slice(0, 3)

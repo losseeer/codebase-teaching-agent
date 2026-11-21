@@ -144,7 +144,7 @@ export function analyzeFunctionDataflow(scope: FunctionScope): DataflowFunctionF
 
   const reachingLines = (site: Site): number[] => {
     const alive = new Set<string>(incoming.get(site.block) ?? []);
-    // 块内 gen 只留最后一次定义，这里按使用点行号补捞块内定义
+    // 块内 gen 只留最后一次定义，这里按使用点行号补充检索块内定义
     let lastBefore: Site | undefined;
     for (const other of defs) {
       if (other.block === site.block && other.name === site.name && other.line <= site.line && (lastBefore === undefined || other.line > lastBefore.line)) lastBefore = other;

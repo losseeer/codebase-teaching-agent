@@ -34,7 +34,7 @@ export function listIngestedPaths(repositoryPath: string, matcher: { ignores(pat
     try {
       entries = readdirSync(directory, { withFileTypes: true });
     } catch {
-      // 目录读不到时这一支按缺席处理。
+      // 目录无法读取时这一支按缺席处理。
       return;
     }
     for (const entry of entries) {
@@ -56,7 +56,7 @@ export type RepositoryScan = { index: RepositoryIndex; digests: Map<string, stri
 export function scanRepositoryWithDigests(repositoryPath: string): RepositoryScan {
   const files: FileEntry[] = [];
   const digests = new Map<string, string>();
-  /** 读不出来的文件缺席并在此记名。 */
+  /** 无法读取的文件缺席并在此记名。 */
   const unreadable: UnreadableFile[] = [];
   const ignore = createTutorIgnoreMatcher(repositoryPath);
   const visit = (directory: string): void => {
@@ -142,7 +142,7 @@ function gitHotspots(repositoryPath: string, ignore: ReturnType<typeof createTut
     return [...changes.entries()].map(([path, count]) => ({ path, changes: count }))
       .sort((a, b) => b.changes - a.changes || a.path.localeCompare(b.path)).slice(0, 30);
   } catch (error) {
-    // git 存在但历史读不出时记一条降级。
+    // git 存在但历史无法读取时记一条降级。
     traceEngine("degrade", { component: "hotspots", cause: error instanceof Error ? error.message : String(error) });
     return [];
   }

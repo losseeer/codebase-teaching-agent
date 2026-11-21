@@ -61,7 +61,7 @@ export function syncRepositoryContributions(input: { repositoryId: string; audit
   原来只有显式 `mountRepositoryUseCase` 会回放，结果「导入过但从没点过挂载」的仓，
   journal 里的 exercise_result 一条都进不了 learner.db —— 画像输入恒为空。
   不设进程级开关：readJournal 有按字节水位的增量缓存，appendContribution 是
-  INSERT OR IGNORE + 确定性 id，重复跑只读新增、不会翻倍；新仓和新判分也能自动进来。
+  INSERT OR IGNORE + 确定性 id，重复跑只读新增、不会翻倍；新仓和新判分也能自动进入。
 */
 export function backfillContributionsFromCatalog(): void {
   for (const entry of importer.catalog()) {

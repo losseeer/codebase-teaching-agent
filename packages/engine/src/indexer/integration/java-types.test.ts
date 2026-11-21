@@ -43,7 +43,7 @@ describe("dependency graph — Java/Spring", () => {
       "src/main/java/com/demo/util/Keys.java",
       "src/main/java/com/demo/util/Metrics.java"
     ]);
-    // 没人引用的同包类不会因为别人写了通配 import 就被连进来
+    // 没人引用的同包类不会因为别人写了通配 import 就被纳入
     expect([...graph.imports.values()].flat()).not.toContain("src/main/java/com/demo/util/Counters.java");
     rmSync(join(javaFixture, ".tutor"), { recursive: true, force: true });
   });

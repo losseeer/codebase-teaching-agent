@@ -103,7 +103,7 @@ function readTutorIgnore(repositoryPath: string): string[] {
   const path = join(repositoryPath, configName);
   if (!existsSync(path)) return [];
   try { return readFileSync(path, "utf8").split(/\r?\n/); }
-  // 读不到规则就抛错：静默继续会把已排除的目录全收进索引
+  // 无法读取规则就抛错：静默继续会把已排除的目录全收进索引
   catch (error) { throw new Error(`读不动 ${path}，无法确定该排除哪些目录：${String(error)}`); }
 }
 

@@ -361,7 +361,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       list = fetched.threads;
       current = fetched.current;
     } catch {
-      // 清单暂时拿不到：保留上次所见，不清空选择
+      // 清单暂时无法获取：保留上次所见，不清空选择
       return { threads: chatThreadsRef.current[scope], current: null };
     }
     // 服务端清单只收有正文的会话：当前这条还没落消息时，不能把它从列表与记忆里抹掉

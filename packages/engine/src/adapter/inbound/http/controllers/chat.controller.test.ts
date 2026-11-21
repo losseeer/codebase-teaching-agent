@@ -258,7 +258,7 @@ describe("架构全景工作区（SSE）", () => {
   function expectAbortedAudit(threadId: string, events: Record<string, unknown>[], marker: string): void {
     const reads = fx.eventsOf("file_read").filter((event) => event.sessionId === threadId);
     const allReads = fx.eventsOf("file_read");
-    /** 每趟请求里出现的工具返回内容。 */
+    /** 每次请求里出现的工具返回内容。 */
     const toolReplies = fx.sentTools.filter((entry) => entry.raw.includes(marker)).map((entry) => ["未知工具", "未知仓库", "读文件上限"].find((word) => entry.raw.includes(word)) ?? (entry.raw.includes("// line 1") ? "读到正文" : "没读到")).join(" | ");
     const scene = `本回合请求 ${fx.requestsOf(marker)} 趟（工具回话：${toolReplies}）/ 脚本剩余 ${fx.scripted.length} 段 / 帧 ${events.map((event) => event.type).join("→")} / journal 里 file_read 共 ${allReads.length} 行（本线程 ${reads.length} 行，线程号 ${[...new Set(allReads.map((event) => String(event.sessionId)))].join(" ") || "无"}）`;
     expect(fx.sentTools.some((entry) => entry.raw.includes(marker) && entry.raw.includes("// line 1")), `第二趟请求里没有 read_file 的回填正文 ⇒ 工具没执行，不是落账问题（${scene}）`).toBe(true);
@@ -279,7 +279,7 @@ describe("架构全景工作区（SSE）", () => {
   it("① 停止落在最后一趟在途：异常带着本轮读过的文件上来，收尾照样落账", async () => {
     const question = "这句会被中止但要记账·在途";
     fx.scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
-    // 第二趟留足在途窗口
+    // 第二次留足在途窗口
     fx.holdMs = 1_200;
     const threadId = await fx.newThread("map", "中止补账·在途");
     const turnId = "abort-audit-inflight";
@@ -295,7 +295,7 @@ describe("架构全景工作区（SSE）", () => {
     fx.scripted = [`@@tool read_file {"path":"${MAIN_FILE}"}`, OK_REPLY];
     const threadId = await fx.newThread("map", "中止补账·收尾");
     const turnId = "abort-audit-late";
-    // 停止落在第二趟返回之前
+    // 停止落在第二次返回之前
     fx.stopInside = { turnId, marker: question, atCall: 2, seen: 0 };
     const response = await fx.app.inject({ method: "POST", url: `/api/repositories/${fx.repositoryId}/map-chat/stream`, payload: { content: question, threadId, turnId } });
     fx.stopInside = undefined;
