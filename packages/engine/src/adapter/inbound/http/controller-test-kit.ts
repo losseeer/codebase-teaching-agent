@@ -142,10 +142,18 @@ export function createRouteFixture(): RouteFixture {
   fx.requestsOf = (marker: string) => fx.sentTools.filter((entry) => entry.raw.includes(marker)).length;
 
   fx.mount = async () => {
-    // 临时仓：单文件、每行一条注释，行号可预期
+    // 临时仓：符号落在 3-6 行且是真代码，其余行保留注释，行号可预期
     mkdirSync(join(repoDir, "src"), { recursive: true });
     fx.repositoryId = deriveRepositoryId(repoDir);
-    const source = Array.from({ length: 20 }, (_unused, index) => `// line ${index + 1}`).join("\n");
+    const source = [
+      "// line 1",
+      "// line 2",
+      "export function registerOrder(builder) {",
+      '  builder.use("schema");',
+      "  builder.run();",
+      "  return builder;",
+      ...Array.from({ length: 14 }, (_unused, index) => `// line ${index + 7}`)
+    ].join("\n");
     writeFileSync(join(repoDir, MAIN_FILE), `${source}\n`, "utf8");
 
     const now = new Date().toISOString();
