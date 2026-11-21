@@ -91,13 +91,13 @@ export function deleteDiagramUseCase(repositoryId: string, diagramId: string): D
 }
 
 /** 几何落盘：认不出的节点 id 由 `saveGeometry` 跳过，这里不因此拒绝。 */
-export function saveGeometryUseCase(repositoryId: string, diagramId: string, positions: DiagramPosition[]): DiagramResult<{ diagram: Diagram }> {
+export function saveGeometryUseCase(repositoryId: string, diagramId: string, positions: DiagramPosition[], groupPositions: DiagramPosition[] = []): DiagramResult<{ diagram: Diagram }> {
   const repository = repositoryOr404(repositoryId);
   if (!repository) return missing;
   return withDiagramContext(repository, (context) => {
     const diagram = context.store.read(diagramId);
     if (!diagram) return { ok: false, failure: { kind: "diagram-missing" } } as const;
-    return { ok: true, value: { diagram: context.store.saveGeometry(diagram, positions) } } as const;
+    return { ok: true, value: { diagram: context.store.saveGeometry(diagram, positions, groupPositions) } } as const;
   });
 }
 

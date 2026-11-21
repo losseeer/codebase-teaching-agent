@@ -110,7 +110,8 @@ export function renameDiagram(database: TutorDatabase, diagram: Diagram, name: s
 }
 
 /** 只改节点的 x/y：不碰 versions，不推 updatedAt。 */
-export function saveGeometry(database: TutorDatabase, diagram: Diagram, positions: { id: string; x: number; y: number }[]): Diagram {
+/** 分组位移只平移锚点框，成员节点由 positions 单独给；框内节点归属不在这里重算。 */
+export function saveGeometry(database: TutorDatabase, diagram: Diagram, positions: { id: string; x: number; y: number }[], groupPositions: { id: string; x: number; y: number }[] = []): Diagram {
   const byId = new Map(positions.map((item) => [item.id, item]));
   const nodes = diagram.body.nodes.map((node) => {
     const moved = byId.get(node.id);
@@ -119,7 +120,13 @@ export function saveGeometry(database: TutorDatabase, diagram: Diagram, position
     const y = Number.isFinite(moved.y) ? Math.max(0, Math.round(moved.y)) : node.y;
     return x === node.x && y === node.y ? node : { ...node, x, y };
   });
-  const next: Diagram = { ...diagram, body: { ...diagram.body, nodes } };
+  const groupById = new Map(groupPositions.map((item) => [item.id, item]));
+  const groups = diagram.body.groups.map((group) => {
+    const moved = groupById.get(group.id);
+    if (!moved || !Number.isFinite(moved.x) || !Number.isFinite(moved.y)) return group;
+    return { ...group, x: Math.max(0, Math.round(moved.x)), y: Math.max(0, Math.round(moved.y)) };
+  });
+  const next: Diagram = { ...diagram, body: { ...diagram.body, nodes, groups } };
   put(database, next);
   return next;
 }
@@ -152,7 +159,7 @@ export function diagramStoreFor(database: TutorDatabase, repositoryId: string) {
     applyStructure: (diagram: Diagram, body: DiagramBody, note: string) => applyStructure(database, diagram, body, note),
     createBlank: (name?: string) => createBlankDiagram(database, repositoryId, name),
     rename: (diagram: Diagram, name: string) => renameDiagram(database, diagram, name),
-    saveGeometry: (diagram: Diagram, positions: readonly { id: string; x: number; y: number }[]) => saveGeometry(database, diagram, [...positions]),
+    saveGeometry: (diagram: Diagram, positions: readonly { id: string; x: number; y: number }[], groupPositions?: readonly { id: string; x: number; y: number }[]) => saveGeometry(database, diagram, [...positions], groupPositions ? [...groupPositions] : []),
     restore: (diagram: Diagram, index: number) => restoreVersion(database, diagram, index),
     delete: (diagram: Diagram) => deleteDiagram(database, diagram)
   };

@@ -42,7 +42,7 @@ export function GalleryPane({ diagrams, openId, loading, error, query, onQueryCh
         <button type="button" className="icon-btn" title="新建空白图" aria-label="新建空白图" onClick={onCreate}><Icon name="plus" size={14} /></button>
       </div>
 
-      {error ? <p className="gallery-error" title={error}>图库没读到</p> : null}
+      {error ? <p className="gallery-error" title={error}>图库读取失败</p> : null}
       {!error && loading && !diagrams.length ? <p className="gallery-empty">图库读取中…</p> : null}
       {!error && !loading && !diagrams.length ? (
         <p className="gallery-empty">

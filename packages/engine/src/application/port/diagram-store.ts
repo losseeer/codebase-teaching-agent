@@ -17,7 +17,7 @@ export interface DiagramStore {
   /** 改名不存版本；返回 `undefined` 表示名字未变或为空。 */
   rename(diagram: Diagram, name: string): Diagram | undefined;
   /** 落盘几何；认不出的节点 id 跳过。 */
-  saveGeometry(diagram: Diagram, positions: readonly { id: string; x: number; y: number }[]): Diagram;
+  saveGeometry(diagram: Diagram, positions: readonly { id: string; x: number; y: number }[], groupPositions?: readonly { id: string; x: number; y: number }[]): Diagram;
   /** 恢复某一版；恢复动作本身也存一版。 */
   restore(diagram: Diagram, index: number): Diagram | undefined;
   /** 删除一张图，版本历史一并删除。 */

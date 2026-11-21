@@ -120,6 +120,20 @@ describe("分组框实际画多大", () => {
     expect(rect?.x + rect?.w, "离群的那个节点不该被这个框收走").toBeLessThan(2000);
   });
 
+  it("锚点与成员一起平移时，框整体跟着走、尺寸不变", () => {
+    const before = body([{ ...node("n1", 60, 160), group: "g1" }, { ...node("n2", 300, 180), group: "g1" }], [], [group("g1", 20, 140, 500, 100)]);
+    const boxesForGroup = boxes([["n1", { w: 132, h: 48 }], ["n2", { w: 132, h: 48 }]]);
+    const [original] = groupRects(before, boxesForGroup);
+    const dx = 200;
+    const dy = 120;
+    const after = body([
+      { ...node("n1", 60 + dx, 160 + dy), group: "g1" },
+      { ...node("n2", 300 + dx, 180 + dy), group: "g1" }
+    ], [], [group("g1", 20 + dx, 140 + dy, 500, 100)]);
+    const [moved] = groupRects(after, boxesForGroup);
+    expect(moved).toMatchObject({ x: original.x + dx, y: original.y + dy, w: original.w, h: original.h });
+  });
+
   it("空框与没有成员时原样保留（用户手动拖大的框不被缩小）", () => {
     const [rect] = groupRects(body([], [], [group("g1", 20, 140, 900, 300)]), new Map());
     expect(rect).toMatchObject({ x: 20, y: 140, w: 900, h: 300 });

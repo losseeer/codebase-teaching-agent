@@ -84,6 +84,33 @@ describe("画图工作区：图库、几何只存位置、结构归 agent", () =
     expect((empty.json() as { reason?: string }).reason, "「没改动」与「名字空了」是两种处置，界面得能分开说").toBe("name_empty");
   });
 
+  it("拖分组：节点与分组锚点一起平移，结构一格不动、版本不增", async () => {
+    const seeded = seed("拖分组");
+    const editedBefore = fx.eventsOf("diagram_edited").length;
+    const response = await fx.app.inject({
+      method: "PUT",
+      url: `${base()}/${seeded.id}/geometry`,
+      payload: {
+        positions: [{ id: "n-src", x: 140, y: 160 }, { id: "n-doc", x: 140, y: 260 }],
+        groups: [{ id: "g-1", x: 120, y: 120 }]
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    const moved = (response.json() as Single).diagram;
+    expect(moved.body.groups[0]).toMatchObject({ id: "g-1", x: 120, y: 120, w: 400, h: 300, label: "仓内写的" });
+    expect(moved.body.nodes.find((item) => item.id === "n-src")).toMatchObject({ x: 140, y: 160 });
+    expect(moved.body.edges).toEqual(seeded.body.edges);
+    expect(moved.versions).toHaveLength(seeded.versions.length);
+    expect(fx.eventsOf("diagram_edited")).toHaveLength(editedBefore);
+
+    const bogus = await fx.app.inject({
+      method: "PUT", url: `${base()}/${seeded.id}/geometry`,
+      payload: { positions: [], groups: [{ id: "不存在的框", x: 1, y: 1 }] }
+    });
+    expect(bogus.statusCode).toBe(200);
+    expect((bogus.json() as Single).diagram.body.groups).toHaveLength(1);
+  });
+
   it("拖动位置：只改坐标，一版不存、一行审计不写；图上没有的 id 被跳过而不是被造出来", async () => {
     const seeded = seed("拖一下");
     const editedBefore = fx.eventsOf("diagram_edited").length;

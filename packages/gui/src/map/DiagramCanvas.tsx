@@ -17,13 +17,15 @@ import {
 */
 
 interface DragState {
-  kind: "pan" | "node";
+  kind: "pan" | "node" | "group";
   pointerId: number;
   sx: number;
   sy: number;
-  /** pan：起手时的视野；node：起手时节点的坐标。 */
+  /** pan：起手时的视野；node/group：起手时锚点的坐标。 */
   ox: number;
   oy: number;
+  /** group：整组起手坐标，含锚点（group id）与组内节点。 */
+  origins?: { id: string; x: number; y: number }[];
   moved: boolean;
   id?: string;
   /** 拖动中的落点（世界坐标），只有 node 且有位移时才有。 */
@@ -34,6 +36,8 @@ interface DragState {
 /** 一次拖完的交付：位置交外层落盘，整份 body 交回状态。 */
 export interface DragCommit {
   positions: DiagramPosition[];
+  /** 分组框锚点的位移，只有拖分组时非空。 */
+  groups?: DiagramPosition[];
   body: DiagramBody;
 }
 
@@ -244,11 +248,21 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
 
   /* ---------- 平移与拖动（几何自由） ---------- */
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const nodeElement = (event.target as HTMLElement).closest<HTMLElement>("[data-node-id]");
+    const target = event.target as HTMLElement;
+    const nodeElement = target.closest<HTMLElement>("[data-node-id]");
+    const groupElement = target.closest<HTMLElement>("[data-group-id]");
     const base = { pointerId: event.pointerId, sx: event.clientX, sy: event.clientY, moved: false };
     const node = nodeElement?.dataset.nodeId ? bodyRef.current?.nodes.find((item) => item.id === nodeElement.dataset.nodeId) : undefined;
+    const groupId = !node ? groupElement?.dataset.groupId : undefined;
+    const group = groupId ? bodyRef.current?.groups.find((item) => item.id === groupId) : undefined;
     if (node) {
       drag.current = { ...base, kind: "node", ox: node.x, oy: node.y, id: node.id };
+    } else if (group) {
+      const members = bodyRef.current?.nodes.filter((item) => item.group === group.id) ?? [];
+      drag.current = {
+        ...base, kind: "group", ox: group.x, oy: group.y, id: group.id,
+        origins: [{ id: group.id, x: group.x, y: group.y }, ...members.map((item) => ({ id: item.id, x: item.x, y: item.y }))]
+      };
     } else {
       drag.current = { ...base, kind: "pan", ox: viewRef.current.x, oy: viewRef.current.y };
     }
@@ -298,6 +312,31 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
       });
       return;
     }
+    if (active.kind === "group" && active.id && active.origins) {
+      if (!active.moved || active.dx === undefined || active.dy === undefined) return;
+      const ddx = active.dx - active.ox;
+      const ddy = active.dy - active.oy;
+      const commit = active.origins.map((origin) => ({ id: origin.id, x: Math.round(origin.x + ddx), y: Math.round(origin.y + ddy) }));
+      const current = bodyRef.current;
+      if (!current) return;
+      const groupById = new Map(commit.map((item) => [item.id, item]));
+      onNodeMove({
+        positions: commit.filter((item) => current.nodes.some((node) => node.id === item.id)),
+        groups: commit.filter((item) => current.groups.some((group) => group.id === item.id)),
+        body: {
+          ...current,
+          nodes: current.nodes.map((node) => {
+            const moved = groupById.get(node.id);
+            return moved ? { ...node, x: moved.x, y: moved.y } : node;
+          }),
+          groups: current.groups.map((group) => {
+            const moved = groupById.get(group.id);
+            return moved ? { ...group, x: moved.x, y: moved.y } : group;
+          })
+        }
+      });
+      return;
+    }
     if (!active.moved && active.kind === "pan") {
       setSelectedId(null);
       onSelect(null);
@@ -332,7 +371,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
       <div className="map-main">
         <div className="dg-toolbar">
           <span className="dg-name static">{loading ? "图库读取中…" : "未打开图"}</span>
-          {error ? <span className="badge badge-danger" title={error}>图库没读到</span> : null}
+          {error ? <span className="badge badge-danger" title={error}>图库读取失败</span> : null}
         </div>
         <div className="dg-viewport" role="presentation">
           <EmptyCanvas onQuickPrompt={onQuickPrompt} disabled={loading} />
@@ -420,7 +459,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
             </svg>
 
             {renderedBody ? groupRects(renderedBody, measured).map((group) => (
-              <div key={group.id} className="dg-group" style={{ left: group.x, top: group.y, width: group.w, height: group.h }} title={`分组框「${group.label}」：框住的是节点，不是关系`}>
+              <div key={group.id} data-group-id={group.id} className="dg-group" style={{ left: group.x, top: group.y, width: group.w, height: group.h }} title={`分组框「${group.label}」：拖动可连同组内节点一起移动`}>
                 <span className="dg-group-label">{group.label}</span>
               </div>
             )) : null}
@@ -486,9 +525,29 @@ function centerAnchor(element: HTMLDivElement | null): { x: number; y: number } 
 /** 拖动位移只活在画布本地，松手才交外层落盘。 */
 function withDragOffsets(body: DiagramBody | null, dragging: DragState | null): DiagramBody | null {
   if (!body) return null;
-  if (!dragging || dragging.kind !== "node" || !dragging.id || dragging.dx === undefined || dragging.dy === undefined) return body;
-  const { id, dx, dy } = dragging;
-  return { ...body, nodes: body.nodes.map((node) => (node.id === id ? { ...node, x: dx, y: dy } : node)) };
+  if (!dragging || dragging.dx === undefined || dragging.dy === undefined) return body;
+  const targetX = dragging.dx;
+  const targetY = dragging.dy;
+  const ddx = targetX - dragging.ox;
+  const ddy = targetY - dragging.oy;
+  if (dragging.kind === "node" && dragging.id) {
+    return { ...body, nodes: body.nodes.map((node) => (node.id === dragging.id ? { ...node, x: targetX, y: targetY } : node)) };
+  }
+  if (dragging.kind === "group" && dragging.origins) {
+    const byId = new Map(dragging.origins.map((item) => [item.id, item]));
+    return {
+      ...body,
+      nodes: body.nodes.map((node) => {
+        const origin = byId.get(node.id);
+        return origin ? { ...node, x: origin.x + ddx, y: origin.y + ddy } : node;
+      }),
+      groups: body.groups.map((group) => {
+        const origin = byId.get(group.id);
+        return origin ? { ...group, x: origin.x + ddx, y: origin.y + ddy } : group;
+      })
+    };
+  }
+  return body;
 }
 
 /** synced 与 saved 都表示画布与盘上一致，共用 ✓。 */

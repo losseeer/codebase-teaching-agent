@@ -42,14 +42,15 @@ export function registerDiagramRoutes(app: FastifyInstance): void {
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 
-  app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
+  app.put<{ Params: { repositoryId: string; diagramId: string }; Body: { positions?: unknown; groups?: unknown } }>("/api/repositories/:repositoryId/diagrams/:diagramId/geometry", async (request, reply) => {
     const raw = request.body?.positions;
     if (!Array.isArray(raw)) return reply.code(400).send({ error: "positions 要是一个数组：[{ id, x, y }]，只给节点 id 与它的新位置" });
-    const positions = raw.flatMap((item): { id: string; x: number; y: number }[] => {
+    const toPositions = (value: unknown): { id: string; x: number; y: number }[] => (Array.isArray(value) ? value : []).flatMap((item): { id: string; x: number; y: number }[] => {
       const entry = item as { id?: unknown; x?: unknown; y?: unknown };
       return typeof entry?.id === "string" && typeof entry.x === "number" && typeof entry.y === "number" ? [{ id: entry.id, x: entry.x, y: entry.y }] : [];
     });
-    const result = saveGeometryUseCase(request.params.repositoryId, request.params.diagramId, positions);
+    const positions = toPositions(raw);
+    const result = saveGeometryUseCase(request.params.repositoryId, request.params.diagramId, positions, toPositions(request.body?.groups));
     return result.ok ? result.value : rejected(reply, result.failure);
   });
 

@@ -178,6 +178,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
   /** 换仓：上一仓的欠下位置队列作废。 */
   useEffect(() => {
     pendingPositions.current.clear();
+    pendingGroups.current.clear();
     queueOwner.current = null;
     window.clearTimeout(geometryTimer.current);
     geometryInFlight.current = false;
@@ -212,6 +213,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
 
   /* ---------- 几何落盘：去抖 + 在途合并，乐观更新本地那份 ---------- */
   const pendingPositions = useRef(new Map<string, DiagramPosition>());
+  const pendingGroups = useRef(new Map<string, DiagramPosition>());
   /** 这批位置属于哪张图；切图前先写给原图。 */
   const queueOwner = useRef<string | null>(null);
   const geometryTimer = useRef(0);
@@ -229,14 +231,16 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
   const sendGeometry = useCallback(async (): Promise<void> => {
     const diagramId = queueOwner.current;
     const entries = [...pendingPositions.current.values()];
+    const groupEntries = [...pendingGroups.current.values()];
     if (!diagramId || !entries.length || geometryInFlight.current) return;
     pendingPositions.current.clear();
+    pendingGroups.current.clear();
     queueOwner.current = null;
     geometryInFlight.current = true;
     setSaveState("saving");
     setSaveError("");
     try {
-      const { diagram: written } = await api.saveDiagramGeometry(repositoryId, diagramId, entries);
+      const { diagram: written } = await api.saveDiagramGeometry(repositoryId, diagramId, entries, groupEntries.length ? groupEntries : undefined);
       // 名字/来源/时间取引擎回读，位置保留本地拖完的那份
       setDiagram((current) => (current && current.id === written.id ? { ...current, name: written.name, source: written.source, updatedAt: written.updatedAt } : current));
       setDiagrams((current) => current.map((item) => (item.id === written.id ? { ...item, name: written.name, updatedAt: written.updatedAt } : item)));
@@ -264,6 +268,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     if (queueOwner.current && queueOwner.current !== diagramId) flushQueuedGeometry();
     setDiagram((current) => (current ? { ...current, body: commit.body } : current));
     for (const position of commit.positions) pendingPositions.current.set(position.id, position);
+    for (const group of commit.groups ?? []) pendingGroups.current.set(group.id, group);
     queueOwner.current = diagramId;
     setSaveState("queued");
     scheduleGeometry();
@@ -363,6 +368,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
         applyDiagram(restored);
         setSelected(null);
         pendingPositions.current.clear();
+        pendingGroups.current.clear();
         setSaveState("synced");
         setFitNonce((value) => value + 1);
         refreshGallery();
