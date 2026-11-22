@@ -6,37 +6,101 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22%20in%20CI-339933?logo=node.js&logoColor=white)](.github/workflows/ci.yml)
 [![pnpm](https://img.shields.io/badge/pnpm-10.11.1-F69220?logo=pnpm&logoColor=white)](package.json)
 
-English ｜ [中文](README.md)
+[中文](README.md) ｜ English
 
-## Overview
+A local-first code learning assistant: give it a repository path, and it turns the repository into structure it can explain before answering questions about it.
 
-Give it a repository path and it reads the repository into a structure it can talk about, then answers questions about that repository.
+## Contents
 
-Static analysis is the base: a symbol-level dependency graph plus per-file summaries, and four deterministic artifacts (control-flow graphs, intra-function data flow, type relations, registry and config index) stored in the `.tutor/` `static_fact` table — they enter no cache key, so adding an analysis class never re-bills an imported repository. Question answering and diagram edits go through one agent that searches, reads files and queries those artifacts itself rather than guessing; diagram modules point directly at files, directories or symbols. Exercise generation, grading and Q&A walk the same evidence loop: with a repository mounted the model can read files, search and query those artifacts itself.
-
-Everything runs on your machine and artifacts stay in the analysed repository's `.tutor/`. It starts without a model configured; with a model it bills per repository, and the monthly budget stops calls before they are sent.
+- [Features](#features)
+- [Workspaces](#workspaces)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Where data lives](#where-data-lives)
+- [Development](#development)
+- [License](#license)
 
 ## Features
 
-- Import any local repository: indexing, graph and summaries in one pass, with `.tutorignore` for exclusions
-- The code Q&A workspace is just the repository tree: selecting a file or directory sets the teaching domain, and the thread is bound to it
-- The architecture overview is a gallery plus an infinite canvas: your drags and renames are saved, node and edge changes are proposed by the agent from code evidence and written directly, with every structural edit versioned and restorable
-- Exercises in three families: rule-generated comprehension questions are graded deterministically; LLM-generated comprehension questions are graded by a model matching your answer against the rubric and reference answer (`automatic=false`); code questions are drafted by the model and graded by running tests in a sandbox; mastery and pending reviews follow your answers
-- Chat spans the architecture overview, code Q&A and practice workspaces with separate threads, streamed output and a stop action
-- The cost page reports aggregate amounts bucketed by scene, provider and day; every `LlmProvider` call is logged as one line in `~/.codebase-tutor/llm.log` with its scene and tokens (local Ollama summaries fetch on their own and never reach this line); browsing structure, diagrams and capability lists costs nothing
-- Multiple repositories mounted at once, file watching, impact analysis after changes, with chat history and audit events on disk
-- External tools (MCP) are off by default: with no server in the config file not one tool is added; for an added server, omitting `allowedTools` hands every tool it reports to the model, and writing it admits only the tools on the list. Skills follow the industry directory convention and are read from `~/.codebase-tutor/skills` and `~/.claude/skills` (never from the repository under study); secrets in a skill body are stripped
-- Isolation uses the macOS built-in Seatbelt (`/usr/bin/sandbox-exec`); Linux is not implemented yet. Off macOS or when the probe fails, the code-exercise domain stays off — and the gate is checked before anything is billed
+- **Static analysis first**: symbol-level dependency graph and per-file summaries, plus four deterministic artifact kinds (control flow, intra-function dataflow, type relations, registration/config index) stored in the `.tutor/` `static_fact` table. They stay out of cache keys, so adding an analysis kind never makes imported repositories pay for model calls again.
+- **Agent gathers its own evidence**: chat and diagram edits share one tool loop; the agent searches, reads files, and queries those artifacts instead of guessing. Diagram modules point directly at files, directories, or symbols.
+- **Exercise families**: rule-generated comprehension questions are graded deterministically; LLM-generated ones are graded against a rubric and reference answer; code questions are drafted by the model and graded by running tests in a sandbox. Mastery and pending reviews follow your answers.
+- **Cost visibility**: the cost page reports totals by scene, provider, and day. Every `LlmProvider` call writes one line to the tool's `llm.log` with its scene and token counts. Browsing structure, diagrams, and capability lists costs nothing.
+- **Optional external tools**: MCP is off by default — no server in the config means no tools added. Skills follow the standard directory convention, are read from the user skill directories (never from the repository under study), and secrets in skill bodies are stripped.
+- **Sandbox isolation**: code exercises use the macOS built-in Seatbelt (`/usr/bin/sandbox-exec`); Linux is not implemented yet. Off macOS or when the probe fails, the code-exercise domain stays off, and the gate is checked before anything is billed.
+- **Read-only learning**: no code changes, no coding-agent tool permissions or approval flow.
+
+## Workspaces
+
+| Workspace | Purpose |
+|---|---|
+| Architecture overview | Module boundaries, dependencies, and calls on an infinite canvas; drags and renames are saved, structural edits are proposed by the agent from code evidence, and every edit is versioned and restorable |
+| Code Q&A | The repository tree is the workspace: selecting a file or directory sets the teaching domain, with symbol anchors as evidence |
+| Practice | Generate, sandbox-verify, grade, and review exercises; topics are user-defined, and the question bank can be reviewed or deleted |
+
+Chat across these workspaces keeps separate threads, streams output, and supports stopping a turn.
+
+## Architecture
+
+A pnpm-workspaces monorepo in TypeScript:
+
+| Package | Responsibility |
+|---|---|
+| `packages/analysis` | Parsing, dependency graph, static fact extraction |
+| `packages/contract` | Shared API schemas and types |
+| `packages/domain` | Domain models, teaching policies, audit event definitions |
+| `packages/engine` | Fastify server, import/reanalysis, LLM tool loop, exercise sandbox, persistence |
+| `packages/gui` | Vite + React UI, canvas, three workspaces |
+| `packages/platform` | Logging, traces, paths, platform adapters |
+
+Engine and GUI talk over HTTP / SSE. Multiple repositories can be mounted with file watching and impact analysis after changes.
 
 ## Quick start
 
+Requires Node.js 22+ and pnpm 10.11.1.
+
 ```bash
 pnpm install
-cp .env.example .env   # all values may stay blank; summaries and rule-made questions use the deterministic tier
-pnpm dev               # engine 127.0.0.1:3001, UI 127.0.0.1:3000
+cp .env.example .env   # all values may be left empty
+pnpm dev               # engine 127.0.0.1:3001, GUI 127.0.0.1:3000
 ```
 
-Open `http://127.0.0.1:3000` and import a repository by absolute path. The engine reads the `.env` in this tool's own project root (not the analysed repository's), and variables already present in the environment take precedence; model, rates and usage are configured on the cost page.
+Open `http://127.0.0.1:3000` and import an absolute repository path. The engine reads `.env` from **this tool's** project root (not the analyzed repository); existing environment variables take precedence. Models, pricing, usage, and budgets are configured in "Manage Config" in the UI.
+
+## Configuration
+
+See [.env.example](.env.example) for the full list. Common settings:
+
+| Variable | Purpose |
+|---|---|
+| `TUTOR_LLM_PROVIDER` / `TUTOR_LLM_MODEL` | Provider and model; `openai-compatible` and `openai` are supported |
+| `OPENAI_API_KEY` | API key; can also be set in the UI, where only a masked value is returned |
+| `TUTOR_OPENAI_URL` / `TUTOR_OLLAMA_URL` | Custom endpoints; Ollama uses the compatible endpoint |
+| `TUTOR_INPUT_USD_PER_MILLION`, etc. | Pricing used for the pre-request budget gate |
+| `TUTOR_SUMMARY_PROVIDER` | Summary provider; deterministic fallback when no model is configured |
+| `ENGINE_PORT` | Engine port, default 3001 |
+| `TUTOR_ALLOWED_ORIGINS` | Allowed browser origins |
+
+Local models need no API key — configure the compatible endpoint for your provider.
+
+## Where data lives
+
+- **Analyzed repository `.tutor/`**: index, dependency graph, summaries, static facts, question bank, diagrams, and `journal.jsonl`. This is product data that travels with the repository; removing an address-book entry does not delete it.
+- **Tool data directory**: profile, model configs, skills, work log, and model-call log — not part of the analyzed repository.
+
+Source code is never uploaded, and the tool never commits or pushes changes for you.
+
+## Development
+
+```bash
+pnpm lint        # type-check every package
+pnpm test        # unit tests for every package
+pnpm build       # build every package
+pnpm test:e2e    # Playwright end-to-end tests
+```
+
+CI runs on pushes to `main` and on all pull requests: install → lint → test → build → Playwright.
 
 ## License
 
