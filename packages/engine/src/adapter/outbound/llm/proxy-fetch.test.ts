@@ -20,6 +20,9 @@ describe("出站代理选择", () => {
     expect(proxyFor("https://api.example.com/v1")).toBe("http://127.0.0.1:7890");
     expect(proxyFor("http://127.0.0.1:3001/x")).toBeUndefined();
     expect(proxyFor("https://svc.internal/v1")).toBeUndefined();
+    process.env.NO_PROXY = "example.com";
+    expect(proxyFor("https://notexample.com/v1"), "后缀匹配要有域名边界，否则 evil-example.com 会绕过代理").toBe("http://127.0.0.1:7890");
+    expect(proxyFor("https://sub.example.com/v1")).toBeUndefined();
   });
 
   it("没配代理直连；非法地址也不走代理", () => {

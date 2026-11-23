@@ -330,6 +330,19 @@ describe("ThinkingOverrideLlmProvider + thinking 参数", () => {
     expect(seen).toEqual(["high", undefined, "low"]);
   });
 
+  it("强制思考模型不支持 off 时不覆盖；light 任务不会因此整条失败", async () => {
+    const seen: Array<string | undefined> = [];
+    const inner: LlmProvider = {
+      name: "inner", modelVersion: "openai:kimi-k2.7-code",
+      async complete(input) { seen.push(input.thinking); return { text: "ok", finishReason: "stop" }; }
+    };
+    const wrapped = new ThinkingOverrideLlmProvider(inner, "off");
+    await wrapped.complete({ system: "s", user: "u" });
+    await wrapped.complete({ system: "s", user: "u", thinking: "low" });
+    expect(seen).toEqual([undefined, "low"]);
+  });
+
+
   it("DeepSeek usage 的 prompt_cache_hit_tokens 透传进 LlmUsage；无该字段的端点保持 undefined", async () => {
     const withCache = new OpenAICompatibleProvider({
       ...OPTIONS,

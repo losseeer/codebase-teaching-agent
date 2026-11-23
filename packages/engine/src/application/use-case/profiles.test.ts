@@ -26,15 +26,16 @@ import { llmProfileStore, llmRuntime } from "../../infrastructure/composition-ro
 
 describe("配置增删的一致性", () => {
   let dir = "";
-  const saved = { profiles: process.env.TUTOR_LLM_PROFILES_FILE, settings: process.env.TUTOR_LLM_SETTINGS_FILE };
+  const saved = { profiles: process.env.TUTOR_LLM_PROFILES_FILE, settings: process.env.TUTOR_LLM_SETTINGS_FILE, meta: process.env.TUTOR_PROFILE_META_FILE };
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "tutor-profiles-"));
     process.env.TUTOR_LLM_PROFILES_FILE = join(dir, "profiles.json");
     process.env.TUTOR_LLM_SETTINGS_FILE = join(dir, "settings.json");
+    process.env.TUTOR_PROFILE_META_FILE = join(dir, "profile-meta.json");
   });
   afterEach(() => {
-    for (const [key, value] of [["TUTOR_LLM_PROFILES_FILE", saved.profiles], ["TUTOR_LLM_SETTINGS_FILE", saved.settings]] as const) {
+    for (const [key, value] of [["TUTOR_LLM_PROFILES_FILE", saved.profiles], ["TUTOR_LLM_SETTINGS_FILE", saved.settings], ["TUTOR_PROFILE_META_FILE", saved.meta]] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }

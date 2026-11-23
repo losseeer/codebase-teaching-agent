@@ -11,7 +11,11 @@ export function proxyFor(target: string): string | undefined {
     return undefined;
   }
   const rules = (process.env.NO_PROXY || process.env.no_proxy || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-  const bypass = rules.some((rule) => rule === "*" || host === rule || host.endsWith(`.${rule}`) || host.endsWith(rule));
+  const bypass = rules.some((rule) => {
+    if (rule === "*") return true;
+    const domain = rule.startsWith(".") ? rule.slice(1) : rule;
+    return host === domain || host.endsWith(`.${domain}`);
+  });
   return bypass ? undefined : raw;
 }
 

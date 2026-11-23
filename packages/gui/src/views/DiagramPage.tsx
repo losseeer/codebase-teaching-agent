@@ -232,7 +232,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
     const diagramId = queueOwner.current;
     const entries = [...pendingPositions.current.values()];
     const groupEntries = [...pendingGroups.current.values()];
-    if (!diagramId || !entries.length || geometryInFlight.current) return;
+    if (!diagramId || (!entries.length && !groupEntries.length) || geometryInFlight.current) return;
     pendingPositions.current.clear();
     pendingGroups.current.clear();
     queueOwner.current = null;
@@ -250,7 +250,7 @@ export function DiagramPage({ workspace, chat: t, visible, onQuickPrompt }: { wo
       setSaveError(failureText("位置保存失败", reason));
     } finally {
       geometryInFlight.current = false;
-      if (pendingPositions.current.size) scheduleGeometry();
+      if (pendingPositions.current.size || pendingGroups.current.size) scheduleGeometry();
     }
   }, [repositoryId, scheduleGeometry]);
   sendNow.current = (): void => { void sendGeometry(); };

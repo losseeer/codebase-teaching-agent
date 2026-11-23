@@ -1,4 +1,5 @@
 import { proxyFetchFor } from "./proxy-fetch.js";
+import { isThinkingEffortSupported } from "./thinking.js";
 import type { LlmUsage, LlmToolCall, LlmMessage, LlmCompletionInput, ThinkingEffort, LlmCompletion, LlmProvider, TeachingProviderStatus } from "../../../application/port/llm-provider.js";
 import { DEFAULT_MAX_TOKENS, LlmAbortedError, isLlmAborted } from "../../../application/port/llm-provider.js";
 import { maskSecrets } from "@codebase-tutor/domain";
@@ -286,7 +287,14 @@ export class ThinkingOverrideLlmProvider implements LlmProvider {
   }
 
   async complete(input: LlmCompletionInput): Promise<LlmCompletion> {
-    return this.inner.complete(this.effort === "auto" || input.thinking ? input : { ...input, thinking: this.effort });
+    const requested = this.effort === "auto" ? input.thinking : (input.thinking ?? this.effort);
+    // 轻任务强制 off，但强制思考模型不支持 off：不覆盖，按模型默认行为走
+    const model = this.modelVersion.replace(/^[^:]+:/, "");
+    if (requested === "off" && !isThinkingEffortSupported(model, "off")) {
+      const { thinking: _ignored, ...rest } = input;
+      return this.inner.complete(rest);
+    }
+    return this.inner.complete(requested ? { ...input, thinking: requested } : input);
   }
 }
 

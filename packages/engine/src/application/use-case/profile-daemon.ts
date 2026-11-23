@@ -1,13 +1,17 @@
 /** 每 24h 整理一次用户画像：读近一天的问答，整份重写；失败显式记日志，不静默跳过。 */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { traceEngine } from "@codebase-tutor/platform";
+import { traceEngine, tutorDataDir } from "@codebase-tutor/platform";
 
 import { importer, lightLlm, profileStore } from "../../infrastructure/composition-root.js";
 
 const DAY_MS = 86_400_000;
-const META_PATH = join(homedir(), ".codebase-tutor", "profile-meta.json");
+const META_PATH = process.env.TUTOR_PROFILE_META_FILE?.trim() || join(tutorDataDir(), "profile-meta.json");
+
+function markRun(now: number): void {
+  try { writeFileSync(META_PATH, JSON.stringify({ lastRunAt: now }), "utf8"); }
+  catch (error) { traceEngine("degrade", { what: "profile_daemon_meta", reason: error instanceof Error ? error.message : String(error) }, { traceId: null }); }
+}
 
 function lastRunAt(): number {
   try {
@@ -41,7 +45,7 @@ export async function runProfileDaemon(force = false): Promise<void> {
   if (!force && now - lastRunAt() < DAY_MS) return;
   const turns = recentTurns(new Date(now - DAY_MS).toISOString());
   if (!turns.length) {
-    writeFileSync(META_PATH, JSON.stringify({ lastRunAt: now }), "utf8");
+    markRun(now);
     return;
   }
   const provider = lightLlm();
@@ -68,7 +72,7 @@ export async function runProfileDaemon(force = false): Promise<void> {
     const parsed = JSON.parse(match[0]) as { profile?: unknown };
     if (typeof parsed.profile !== "string" || !parsed.profile.trim()) throw new Error("模型返回空画像");
     profileStore.writeProfile(parsed.profile);
-    writeFileSync(META_PATH, JSON.stringify({ lastRunAt: now }), "utf8");
+    markRun(now);
     traceEngine("profile_daemon", { ok: true, turns: turns.length, chars: parsed.profile.length }, { traceId: null });
   } catch (error) {
     traceEngine("degrade", { what: "profile_daemon", reason: error instanceof Error ? error.message : String(error) }, { traceId: null });
