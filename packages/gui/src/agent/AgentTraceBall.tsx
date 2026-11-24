@@ -3,6 +3,7 @@ import type { AgentScope, AgentSurface, AgentToolEntry, PracticeOperation } from
 import { EXERCISE_SEGMENT_ACTIVE, exerciseSegmentOf } from "@codebase-tutor/domain";
 
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "../ui/modalLayer";
 import { usePracticeOperation } from "./practiceOperation";
 import { useAgentSurface } from "./useAgentSurface";
 import { useAgentTrace, type TraceRun, type TraceStep } from "./useAgentTrace";
@@ -95,15 +96,7 @@ function TraceModal({ runs, repositoryId, scope, threadId, practiceOperation, on
   const { surface, error, loading, reload } = useAgentSurface(repositoryId, scope, practiceOperation);
   // 练习区要保留 repo 级的出题历史，所以这里不按会话过滤，取回后再筛
   const { runs: historyRuns, error: historyError, loading: historyLoading } = useTraceHistory(repositoryId, scope, 100, scope === "practice" ? undefined : threadId);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.stopImmediatePropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKey, { capture: true });
-    return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [onClose]);
+  useModalLayer(onClose);
   const sessionHistory = historyRuns.filter((run) => inSession(run, scope, threadId));
   const merged = mergeRuns(runs, sessionHistory).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   const chatRuns = merged.filter((run) => run.scene !== "practice.generate");

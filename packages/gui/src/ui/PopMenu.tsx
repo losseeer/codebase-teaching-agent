@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "./modalLayer";
 
 /** 按钮下方的小菜单：portal 渲染防裁剪，贴边翻转，点外/Esc/滚动即关。 */
 export interface MenuItem {
@@ -22,15 +23,14 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
   ariaLabel: string;
 }): ReactElement | null {
   const panel = useRef<HTMLDivElement>(null);
+  // 没渲染菜单时不占弹层栈，否则 Esc 会被一个不存在的菜单吃掉
+  useModalLayer(onClose, Boolean(anchor && items.length));
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target as Node;
       if (panel.current?.contains(target) || anchor?.contains(target)) return;
       onClose();
-    };
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onClose();
     };
     // 菜单内部的滚动不该把菜单关了：面板自己滚一下就被关掉，滚动条等于不能用。
     const onScroll = (event: Event): void => {
@@ -39,11 +39,9 @@ export function PopMenu({ anchor, items, onClose, ariaLabel }: {
     };
     // 捕获阶段：点菜单项自身也收起
     window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchor, onClose]);

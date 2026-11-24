@@ -10,6 +10,7 @@ import { MobileSwitcher, PageTopbar, useMobilePanes } from "./WorkspaceChrome";
 import { ColumnResizer, layoutVars, useLayout } from "../ui/ColumnResizer";
 import { useEverVisible } from "../ui/useEverVisible";
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "../ui/modalLayer";
 import { emit } from "../journal";
 import { showToast } from "../ui/toast";
 import { SourceView, type SourcePayload } from "../source/SourceView";
@@ -121,6 +122,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
     // loadSource 自己按路径去重标签：已经开着就只是切过去并定位到那一行
     void loadSource(linkedFile, linkedLine, { toast: false, trigger: "manual" });
   }, [linkedFile, linkedLine, loadSource]);
+  useModalLayer(() => setPaletteOpen(false), paletteOpen);
   useEffect(() => {
     if (!isActiveWorkspace) { setPaletteOpen(false); return; }
     const onKey = (event: KeyboardEvent): void => {
@@ -128,7 +130,7 @@ export function TutorPage({ workspace, chat: t, visible }: { workspace: Workspac
         event.preventDefault();
         setPaletteOpen((open) => !open);
         setQuery("");
-      } else if (event.key === "Escape") setPaletteOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

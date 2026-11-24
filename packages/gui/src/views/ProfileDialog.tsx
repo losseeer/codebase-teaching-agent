@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { showToast, failureText } from "../ui/toast";
 import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "../ui/modalLayer";
 
 /**
   用户画像：跨仓库、用户手写的 markdown。写给 agent 的长期偏好与背景，
@@ -18,6 +19,7 @@ export function ProfileDialog({ onClose }: { onClose: () => void }): ReactElemen
   /** 与 agent 的沟通：一句话让它记住 / 改 / 删，不必自己动 markdown。 */
   const [ask, setAsk] = useState("");
   const [asking, setAsking] = useState(false);
+  useModalLayer(onClose);
   const [note, setNote] = useState("");
   /** 空内容保存 = 清空整份画像：破坏性动作先确认。 */
   const [confirmClear, setConfirmClear] = useState(false);

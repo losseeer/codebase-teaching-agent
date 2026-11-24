@@ -5,6 +5,7 @@ import { type PracticeTheme } from "./practiceThemeState";
 import { Icon } from "../ui/icons";
 import { DangerDialog } from "../ui/DangerDialog";
 import { PopMenu } from "../ui/PopMenu";
+import { useModalLayer } from "../ui/modalLayer";
 import { dateText, exerciseKindLabel } from "../ui/labels";
 
 /** 题型三档：题型决定链路，主题只筛目标。 */
@@ -86,13 +87,8 @@ export function PracticeThemes({
   const [draftName, setDraftName] = useState("");
   const [pending, setPending] = useState<{ remove?: PracticeTheme; reset?: true } | null>(null);
 
-  useEffect(() => {
-    // 确认弹窗开着时 Esc 归它管，别把管理面板一起关掉
-    if (!configOpen || pending) return;
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") setConfigOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [configOpen, pending]);
+  // 确认弹窗自己入栈，开着时 Esc 归它管
+  useModalLayer(() => setConfigOpen(false), configOpen);
 
   const remove = (item: PracticeTheme): void => {
     onRemove(item.id);

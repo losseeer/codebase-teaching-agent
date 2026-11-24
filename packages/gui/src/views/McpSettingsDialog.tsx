@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { api, type McpConfigView } from "../api/client";
 import { failureText, showToast, toastFailure } from "../ui/toast";
+import { useModalLayer } from "../ui/modalLayer";
 
 const TEMPLATE = `{
   "mcpServers": {
@@ -19,6 +20,7 @@ export function McpSettingsDialog({ onClose }: { onClose: () => void }): ReactEl
   const [text, setText] = useState(TEMPLATE);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useModalLayer(onClose);
 
   useEffect(() => {
     let alive = true;

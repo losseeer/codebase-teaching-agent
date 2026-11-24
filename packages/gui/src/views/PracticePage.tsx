@@ -15,6 +15,7 @@ import { PracticeThemes, PracticeTypePicker, PracticeBank } from "./PracticeThem
 import { Icon } from "../ui/icons";
 import { emit } from "../journal";
 import { failureText, showToast } from "../ui/toast";
+import { useModalLayer } from "../ui/modalLayer";
 import { useEverVisible } from "../ui/useEverVisible";
 import { DangerDialog } from "../ui/DangerDialog";
 import { loadActiveTheme, loadPracticeThemes, loadPracticeType, saveActiveTheme, savePracticeThemes, savePracticeType, topicToTheme, type PracticeTheme } from "./practiceThemeState";
@@ -260,12 +261,7 @@ export function PracticePage({ workspace, chat: t, visible }: { workspace: Works
     return () => { current = false; };
   }, [anchor?.path, anchor?.line, repositoryId, referenceDesign]);
 
-  useEffect(() => {
-    if (!sourceOpen) return;
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") setSourceOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sourceOpen]);
+  useModalLayer(() => setSourceOpen(false), sourceOpen);
 
   useEffect(() => {
     const slot = exercise?.code;

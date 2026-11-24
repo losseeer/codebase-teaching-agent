@@ -4,6 +4,7 @@ import { showToast, toastFailure } from "../ui/toast";
 import { PopMenu } from "../ui/PopMenu";
 import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "../ui/modalLayer";
 
 /** LLM 连接配置弹窗：服务商、接口地址、密钥与计价；字段失焦即 PUT。
   模型、思考档位与超时属于通用设置，在用户菜单的「模型设置」里改。 */
@@ -32,17 +33,11 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
     return () => { current = false; };
   }, []);
 
+  useModalLayer(() => { setOpen(false); setPickerAnchor(null); }, open);
   useEffect(() => {
     if (!open && !pickerAnchor) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      if (confirmDrop || naming) return; // 嵌套弹窗自己处理 Esc，别连父窗一起关
-      setOpen(false); setPickerAnchor(null);
-    };
-    window.addEventListener("keydown", onKey);
     void api.getLlmProfiles().then(setProfiles).catch(() => undefined);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, pickerAnchor, confirmDrop, naming]);
+  }, [open, pickerAnchor]);
 
   const test = async (): Promise<void> => {
     setTesting(true);

@@ -1,5 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
 
+import { useModalLayer } from "./modalLayer";
+
 /** 破坏性动作确认弹窗：默认焦点落在非破坏按钮。 */
 export function DangerDialog({ title, body, keepLabel, deleteLabel, deleteHint, onKeep, onDelete, onClose }: {
   title: string;
@@ -13,12 +15,8 @@ export function DangerDialog({ title, body, keepLabel, deleteLabel, deleteHint, 
   onClose: () => void;
 }): ReactElement {
   const safe = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    safe.current?.focus();
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEffect(() => { safe.current?.focus(); }, []);
+  useModalLayer(onClose);
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" role="alertdialog" aria-label={title} onClick={(event) => event.stopPropagation()}>

@@ -4,6 +4,7 @@ import { api, type SkillItem } from "../api/client";
 import { failureText, showToast, toastFailure } from "../ui/toast";
 import { DangerDialog } from "../ui/DangerDialog";
 import { Icon } from "../ui/icons";
+import { useModalLayer } from "../ui/modalLayer";
 
 /** 用户技能：出厂技能也可直接编辑，写前由引擎留 .bak；支持 .md / .zip 上传与 LLM 润色。 */
 export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement {
@@ -17,6 +18,7 @@ export function SkillsDialog({ onClose }: { onClose: () => void }): ReactElement
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const upload = useRef<HTMLInputElement>(null);
+  useModalLayer(onClose);
 
   const load = async (select?: string): Promise<void> => {
     const next = await api.getSkills();
