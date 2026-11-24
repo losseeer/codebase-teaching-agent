@@ -34,11 +34,15 @@ export function LlmSettingsControl({ variant = "pill" }: { variant?: "pill" | "b
 
   useEffect(() => {
     if (!open && !pickerAnchor) return;
-    const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") { setOpen(false); setPickerAnchor(null); } };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      if (confirmDrop || naming) return; // 嵌套弹窗自己处理 Esc，别连父窗一起关
+      setOpen(false); setPickerAnchor(null);
+    };
     window.addEventListener("keydown", onKey);
     void api.getLlmProfiles().then(setProfiles).catch(() => undefined);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, pickerAnchor]);
+  }, [open, pickerAnchor, confirmDrop, naming]);
 
   const test = async (): Promise<void> => {
     setTesting(true);

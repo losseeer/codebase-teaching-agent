@@ -149,6 +149,11 @@ export function edgeOffsets(body: DiagramBody): Map<string, number> {
 /** 分组框宣称「框住的是节点」，那它就得真包住：这是卡片与框之间留的呼吸位。 */
 const GROUP_PAD = 12;
 
+/** 成员判据：显式 group 归属或坐标落在框内；渲染与拖动必须共用，否则框会甩掉成员。 */
+export function groupMembers(body: DiagramBody, group: DiagramBody["groups"][number]): DiagramNode[] {
+  return body.nodes.filter((node) => node.group === group.id || (node.x >= group.x && node.y >= group.y && node.x < group.x + group.w && node.y < group.y + group.h));
+}
+
 /** 分组框只放大到装下成员（按 `group` 归属或已落在框内），绝不缩小，用户拖大的框不被推翻。 */
 export function groupRects(body: DiagramBody, boxes: NodeBoxes): { id: string; label: string; x: number; y: number; w: number; h: number }[] {
   return body.groups.map((group) => {
@@ -156,9 +161,7 @@ export function groupRects(body: DiagramBody, boxes: NodeBoxes): { id: string; l
     let minY = group.y;
     let maxX = group.x + group.w;
     let maxY = group.y + group.h;
-    for (const node of body.nodes) {
-      const inside = node.group === group.id || (node.x >= group.x && node.y >= group.y && node.x < group.x + group.w && node.y < group.y + group.h);
-      if (!inside) continue;
+    for (const node of groupMembers(body, group)) {
       const size = boxOf(boxes, node.id);
       minX = Math.min(minX, node.x - GROUP_PAD);
       minY = Math.min(minY, node.y - GROUP_PAD);

@@ -18,6 +18,7 @@ import {
   edgeOffsets,
   edgePoints,
   fitView,
+  groupMembers,
   groupRects,
   notePreview,
   relativeTime,
@@ -132,6 +133,11 @@ describe("分组框实际画多大", () => {
     ], [], [group("g1", 20 + dx, 140 + dy, 500, 100)]);
     const [moved] = groupRects(after, boxesForGroup);
     expect(moved).toMatchObject({ x: original.x + dx, y: original.y + dy, w: original.w, h: original.h });
+  });
+
+  it("分组成员判据：坐标落在框内也算，渲染与拖动共用同一份", () => {
+    const diagram = body([node("n-inside", 60, 160), { ...node("n-outside", 2000, 2000), group: "other" }], [], [group("g1", 20, 140, 500, 100)]);
+    expect(groupMembers(diagram, diagram.groups[0]).map((item) => item.id)).toEqual(["n-inside"]);
   });
 
   it("空框与没有成员时原样保留（用户手动拖大的框不被缩小）", () => {

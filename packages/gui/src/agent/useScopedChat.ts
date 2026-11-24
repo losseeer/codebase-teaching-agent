@@ -76,6 +76,8 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
   const error = errorsByScope[scope];
   const setError = (target: Scope, message: string): void => setErrorByScope((prev) => ({ ...prev, [target]: message }));
   const activeTurn = useRef<Partial<Record<Scope, { turnId: string; controller: AbortController }>>>({});
+  // 渲染期 sending 要等 setState 才翻转，连按会用同一句草稿起两个回合；这里同步占位
+  const sendLock = useRef<Partial<Record<Scope, boolean>>>({});
   const beginTurn = (target: Scope): StreamTurn => {
     const controller = new AbortController();
     const turnId = crypto.randomUUID();
@@ -512,13 +514,15 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
 
   const send = async (): Promise<void> => {
     const message = draftOf("teaching").trim();
-    if (!message) return;
+    if (!message || sendLock.current.teaching) return;
+    sendLock.current.teaching = true;
     // 用户说出口的话先上屏：缺教学域的守卫只补提示，不丢弃这句
     await settlePendingTurn("teaching");
     pushMessage("teaching", "user", message);
     setDraft("teaching", "");
     if (!scopeRef) {
       pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
+      sendLock.current.teaching = false;
       return;
     }
     markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", { text: "正在准备问答上下文…" });
@@ -554,22 +558,25 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       // 消息落库后再拉一次清单：标题与顺序以引擎为准
       void refreshThreads("teaching");
     }
+    sendLock.current.teaching = false;
   };
 
   // GUI 只上送这一句，历史由引擎按 threadId 自取；answer 代替输入框发送，resumeAsk 是提问的认领句柄。
   const sendScoped = async (scope: "map" | "practice", answer?: string, resumeAsk?: string): Promise<void> => {
     const message = (answer ?? draftOf(scope)).trim();
-    if (!message || !repositoryId) return;
+    if (!message || !repositoryId || sendLock.current[scope]) return;
+    sendLock.current[scope] = true;
     setLiveAsk((prev) => ({ ...prev, [scope]: null }));
     await settlePendingTurn(scope);
     pushMessage(scope, "user", message);
     if (answer === undefined) setDraft(scope, "");
     if (scope === "practice" && !practiceExercise) {
       pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
+      sendLock.current[scope] = false;
       return;
     }
     const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
-    if (!threadId) return;
+    if (!threadId) { sendLock.current[scope] = false; return; }
     if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
     markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, { text: "回复生成中…" });
     typewriter[scope].begin();
@@ -608,6 +615,7 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       resetProgress(scope);
       void refreshThreads(scope);
     }
+    sendLock.current[scope] = false;
   };
   const sendMap = (answer?: string, resumeAsk?: string): Promise<void> => sendScoped("map", answer, resumeAsk);
   const sendPractice = (answer?: string): Promise<void> => sendScoped("practice", answer);

@@ -7,7 +7,7 @@ import { Icon } from "../ui/icons";
 import { InlineName, PopMenu, type MenuItem } from "../ui/PopMenu";
 import {
   DEFAULT_VIEW, EDGE_ORIGINS, ORIGIN_SHORT, ZOOM_MAX, ZOOM_MIN,
-  edgeOffsets, edgePoints, fitView, groupRects, notePreview, relativeTime, safeFileName, sameBandLanes, subLineOf, versionTime, worldSizeOf, zoomAt,
+  boundsOf, edgeOffsets, edgePoints, fitView, groupMembers, groupRects, notePreview, relativeTime, safeFileName, sameBandLanes, subLineOf, versionTime, worldSizeOf, zoomAt,
   type NodeBoxes, type Size, type View
 } from "./diagramView";
 
@@ -73,7 +73,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
   const bodyRef = useRef<DiagramBody | null>(body);
   bodyRef.current = body;
   /** 空图：视野用默认值。 */
-  const blank = !body || !body.nodes.length;
+  const blank = !body || (!body.nodes.length && !body.groups.length);
 
   const viewCache = useRef(new Map<string, View>()).current;
   const [view, setView] = useState<View>(DEFAULT_VIEW);
@@ -121,7 +121,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (!pendingFit.current) return;
     const element = viewportRef.current;
     const current = bodyRef.current;
-    if (!element || !current || !current.nodes.length) return;
+    if (!element || !current || boundsOf(current, boxesRef.current) === null) return;
     const width = element.clientWidth;
     const height = element.clientHeight;
     if (!width || !height) return; // 宽度 0：交给 ResizeObserver 再跑
@@ -258,7 +258,7 @@ export function DiagramCanvas({ diagram, warnings, saveState, saveError, loading
     if (node) {
       drag.current = { ...base, kind: "node", ox: node.x, oy: node.y, id: node.id };
     } else if (group) {
-      const members = bodyRef.current?.nodes.filter((item) => item.group === group.id) ?? [];
+      const members = bodyRef.current ? groupMembers(bodyRef.current, group) : [];
       drag.current = {
         ...base, kind: "group", ox: group.x, oy: group.y, id: group.id,
         origins: [{ id: group.id, x: group.x, y: group.y }, ...members.map((item) => ({ id: item.id, x: item.x, y: item.y }))]

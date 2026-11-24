@@ -397,7 +397,7 @@ function ackKey(repositoryId: string): string {
 }
 
 function ackToken(freshness: RepositoryFreshness): string {
-  return `${freshness.verdict}:${freshness.headNow ?? freshness.versionStamp}`;
+  return `${freshness.verdict}:${freshness.versionStamp}:${freshness.headNow ?? ""}`;
 }
 
 function acknowledged(freshness: RepositoryFreshness, repositoryId: string): boolean {
