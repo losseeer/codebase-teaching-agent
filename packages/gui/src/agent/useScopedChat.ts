@@ -516,19 +516,20 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const message = draftOf("teaching").trim();
     if (!message || sendLock.current.teaching) return;
     sendLock.current.teaching = true;
-    // 用户说出口的话先上屏：缺教学域的守卫只补提示，不丢弃这句
-    await settlePendingTurn("teaching");
-    pushMessage("teaching", "user", message);
-    setDraft("teaching", "");
-    if (!scopeRef) {
-      pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
-      sendLock.current.teaching = false;
-      return;
-    }
-    markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", { text: "正在准备问答上下文…" });
-    const turn = beginTurn("teaching");
-    const sink = turnSink("teaching");
+    let turn: StreamTurn | undefined;
+    let sink: ReturnType<typeof turnSink> | undefined;
     try {
+      // 用户说出口的话先上屏：缺教学域的守卫只补提示，不丢弃这句
+      await settlePendingTurn("teaching");
+      pushMessage("teaching", "user", message);
+      setDraft("teaching", "");
+      if (!scopeRef) {
+        pushMessage("teaching", "agent", "先在左栏选一个文件或目录，再回到这里对话。", "hint");
+        return;
+      }
+      markSending("teaching", true); setError("teaching", ""); resetProgress("teaching"); logProgress("teaching", { text: "正在准备问答上下文…" });
+      turn = beginTurn("teaching");
+      sink = turnSink("teaching");
       let active = session;
       if (!active) {
         const created = await api.createSession(repositoryId, scopeRef, settings);
@@ -543,22 +544,23 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
       typewriter.teaching.begin();
       recordDebt("teaching", active.id);
       const reply = await api.sendMessageStream(active.id, message, settings, (event) => {
-        if (event.type === "delta") sink.onDelta(event.delta);
+        if (event.type === "delta") sink!.onDelta(event.delta);
         else if (event.type === "progress") logProgress("teaching", progressText(event.payload));
       }, turn);
       setSession(reply.session);
       setSettingsState(reply.session.settings);
-      await sink.settle(reply.message.content, reply.provider);
+      await sink!.settle(reply.message.content, reply.provider);
     } catch (reason) {
-      sink.fail(reason);
+      sink?.fail(reason);
     } finally {
-      endTurn("teaching");
+      if (turn) endTurn("teaching");
       markSending("teaching", false);
       resetProgress("teaching");
       // 消息落库后再拉一次清单：标题与顺序以引擎为准
       void refreshThreads("teaching");
+      // settlePendingTurn 也在 try 内：任何异常出口都释放，按钮不会永久锁死
+      sendLock.current.teaching = false;
     }
-    sendLock.current.teaching = false;
   };
 
   // GUI 只上送这一句，历史由引擎按 threadId 自取；answer 代替输入框发送，resumeAsk 是提问的认领句柄。
@@ -566,28 +568,29 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
     const message = (answer ?? draftOf(scope)).trim();
     if (!message || !repositoryId || sendLock.current[scope]) return;
     sendLock.current[scope] = true;
-    setLiveAsk((prev) => ({ ...prev, [scope]: null }));
-    await settlePendingTurn(scope);
-    pushMessage(scope, "user", message);
-    if (answer === undefined) setDraft(scope, "");
-    if (scope === "practice" && !practiceExercise) {
-      pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
-      sendLock.current[scope] = false;
-      return;
-    }
-    const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
-    if (!threadId) { sendLock.current[scope] = false; return; }
-    if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
-    markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, { text: "回复生成中…" });
-    typewriter[scope].begin();
-    const turn = beginTurn(scope);
-    recordDebt(scope, threadId);
-    const sink = turnSink(scope);
-    const onScopedEvent = (event: ScopedStreamProgress): void => {
-      if (event.type === "delta") sink.onDelta(event.delta);
-      else logProgress(scope, progressText(event));
-    };
+    let turn: StreamTurn | undefined;
+    let sink: ReturnType<typeof turnSink> | undefined;
     try {
+      setLiveAsk((prev) => ({ ...prev, [scope]: null }));
+      await settlePendingTurn(scope);
+      pushMessage(scope, "user", message);
+      if (answer === undefined) setDraft(scope, "");
+      if (scope === "practice" && !practiceExercise) {
+        pushMessage("practice", "agent", "先在练习页生成一道练习，再在这里追问。", "hint");
+        return;
+      }
+      const threadId = currentThreadRef.current[scope] ?? await createThreadFor(scope, message);
+      if (!threadId) return;
+      if (!currentThreadRef.current[scope]) { markCurrentThread(scope, threadId); knownRowCount.current[scope] = 0; }
+      markSending(scope, true); setError(scope, ""); resetProgress(scope); logProgress(scope, { text: "回复生成中…" });
+      typewriter[scope].begin();
+      turn = beginTurn(scope);
+      recordDebt(scope, threadId);
+      sink = turnSink(scope);
+      const onScopedEvent = (event: ScopedStreamProgress): void => {
+        if (event.type === "delta") sink!.onDelta(event.delta);
+        else logProgress(scope, progressText(event));
+      };
       const reply = scope === "map"
         ? await api.mapChatStream(repositoryId, {
             content: message,
@@ -603,19 +606,19 @@ useEffect(() => { setScopeRefState(null); setMapScopePaths([]); setMapFile(""); 
         pushMessage(scope, "agent", interruptText(reply.interrupted.reason), "warn", { retry: message, lines: progressLines.current[scope].map((line) => line.text) });
         patchDebt(scope, null);
       } else {
-        await sink.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
+        await sink!.settle(reply.reply, reply.provider, reply.asked ? { options: reply.asked.options, askId: reply.asked.toolCallId } : undefined);
         if (scope === "map" && reply.diagram?.id) pushMessage("map", "agent", "", undefined, { card: { diagramId: reply.diagram.id, name: reply.diagram.name || "未命名图" } });
       }
     } catch (reason) {
-      sink.fail(reason);
+      sink?.fail(reason);
     } finally {
       typewriter[scope].stop();
-      endTurn(scope);
+      if (turn) endTurn(scope);
       markSending(scope, false);
       resetProgress(scope);
       void refreshThreads(scope);
+      sendLock.current[scope] = false;
     }
-    sendLock.current[scope] = false;
   };
   const sendMap = (answer?: string, resumeAsk?: string): Promise<void> => sendScoped("map", answer, resumeAsk);
   const sendPractice = (answer?: string): Promise<void> => sendScoped("practice", answer);
