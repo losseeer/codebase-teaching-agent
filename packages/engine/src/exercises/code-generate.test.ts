@@ -23,6 +23,11 @@ import type { ExerciseFaces } from "./turn-faces.js";
   代码题的集成用例：假 provider 交手工 harness（零模型调用），自证、判分、讲评都真起沙箱。
   环境不支持嵌套 `sandbox-exec` 时整片跳过。
 */
+/** 沙箱进程压根没起来：既没正常退出也没超时。超时说明跑过了，不算。 */
+function sandboxNeverLaunched(runs: { exitCode: number | null; timedOut: boolean }[]): boolean {
+  return runs.length > 0 && runs.every((run) => run.exitCode === null && !run.timedOut);
+}
+
 const capability = nestedSandboxUsable();
 if (!capability.usable) console.warn(`[code-exercise] 本机起不了嵌套 sandbox-exec（${capability.detail}）：整份代码题集成用例按「环境不支持」跳过，这不是通过`);
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../../test-fixtures/frozen-demo-repo");
@@ -120,6 +125,16 @@ function targetUnit(repository: PracticeRepository): string {
   return unit.id;
 }
 
+describe("沙箱执行结果的归类", () => {
+  it("只有「进程没起来」才算环境问题；超时和正常失败都不算", () => {
+    expect(sandboxNeverLaunched([{ exitCode: null, timedOut: false }])).toBe(true);
+    expect(sandboxNeverLaunched([{ exitCode: null, timedOut: true }]), "超时说明进程跑过，不是没起来").toBe(false);
+    expect(sandboxNeverLaunched([{ exitCode: 1, timedOut: false }])).toBe(false);
+    expect(sandboxNeverLaunched([{ exitCode: null, timedOut: false }, { exitCode: 0, timedOut: false }]), "只要有一次真跑了，就不是环境问题").toBe(false);
+    expect(sandboxNeverLaunched([])).toBe(false);
+  });
+});
+
 describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_000 }, () => {
   it("参考模式：模型点名的参考文件落成锚点，池外路径丢掉", async () => {
     const repository = testRepository();
@@ -150,19 +165,26 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     expect(readJournal(repository.path).find((event) => event.type === "exercise_generated" && event.payload.source === "code")?.payload.selection).toBe("none");
   });
 
-  it.skipIf(!resolveToolchain().go)("Go 参考模式：自证两跑由真 go run 判定", async () => {
+  it.skipIf(!resolveToolchain().go)("Go 参考模式：自证两跑由真 go run 判定", async (ctx) => {
     const repository = testRepository();
     const go = { given: "package main\n\nfunc Greeting(name string) string {\n\treturn \"hallo\" + name\n}\n", solution: "package main\n\nfunc Greeting(name string) string {\n\treturn \"hello\" + name\n}\n" };
     const tests = 'package main\n\nimport (\n\t"fmt"\n\t"os"\n)\n\nfunc main() {\n\tpass, fail := 0, 0\n\tif Greeting("") == "hello" {\n\t\tpass++\n\t} else {\n\t\tfail++\n\t}\n\tif Greeting("Ann") == "helloAnn" {\n\t\tpass++\n\t} else {\n\t\tfail++\n\t}\n\tfmt.Printf("TESTS %d %d\\n", pass, fail)\n\tif fail > 0 {\n\t\tos.Exit(1)\n\t}\n}\n';
     const reply = JSON.stringify({ ok: true, language: "go", title: "修正问候前缀", prompt: "把默认问候改回 hello。", defect: "默认前缀拼错了。", given: [{ path: "target.go", contents: go.given }], solution: [{ path: "target.go", contents: go.solution }], hidden: [{ path: "tests.go", contents: tests }], entry: "tests.go" });
     const result = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "go", kind: "author_function", reference: "", provider: fakeProvider(() => reply), faces: referenceFaces() });
+    // 进程压根没起来（sandbox-exec 在某些上下文里被拒）：取不到证据，按环境不支持跳过
+    if (!result.ok && sandboxNeverLaunched(result.runs)) {
+      console.warn(`[code-exercise] Go 用例的沙箱进程没起来（${result.reason}）：按环境不支持跳过，这不是通过`);
+      ctx.skip();
+      return;
+    }
+    if (!result.ok) console.warn(`[code-exercise] Go 用例失败：${result.reason}；runs=${JSON.stringify(result.runs.map((run) => ({ label: run.label, exitCode: run.exitCode, timedOut: run.timedOut, ran: run.ran })))}`);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.proposal.language).toBe("go");
       expect(result.proposal.entry).toBe("tests.go");
       expect(result.runs.map((run) => [run.label, run.verdict])).toEqual([["solution", { passed: 2, failed: 0 }], ["given", { passed: 0, failed: 2 }]]);
     }
-  }, 120_000);
+  }, 180_000);
 
   it("形状错误默认也修复一次", async () => {
     const repository = testRepository();
