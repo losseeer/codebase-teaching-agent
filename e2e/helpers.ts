@@ -25,7 +25,7 @@ export function watchPageErrors(page: Page): string[] {
 }
 
 /** 测试用的一张分层图：两个分组、四个节点、两条边。 */
-export function demoDiagramBody(): Record<string, unknown> {
+function demoDiagramBody(): Record<string, unknown> {
   const node = (id: string, label: string, x: number, y: number, group?: string) => ({ id, kind: "module", label, x, y, ...(group ? { group } : {}), ref: `dir:${id}` });
   return {
     groups: [

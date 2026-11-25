@@ -36,7 +36,6 @@ test("点击节点打开说明抽屉，关闭后抽屉消失", async ({ page }) 
   await expect(node).toBeVisible({ timeout: 20_000 });
   await node.click();
   await expect(page.getByText("短链服务").first()).toBeVisible();
-  // 抽屉里应有「关联文件」一类的读法
   await expect(page.getByText(/关联文件|说明/).first()).toBeVisible();
 });
 
@@ -54,7 +53,6 @@ test("拖动节点后保存状态落到已保存，刷新后位置保持", async
   await page.mouse.down();
   await page.mouse.move(startX + 120, startY + 60, { steps: 10 });
   await page.mouse.up();
-  // 拖完应排队保存并最终显示已保存
   await expect(page.getByText(/已保存|位置待存|保存中/).first()).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(1200);
   await page.reload();

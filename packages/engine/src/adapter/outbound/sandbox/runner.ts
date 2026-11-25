@@ -56,7 +56,7 @@ export interface SandboxRun {
   memoryGuarded: boolean;
 }
 
-const DEFAULTS = { timeoutMs: 8_000, memoryMb: 128, maxOutputBytes: 64_000, goTimeoutMs: 60_000 };
+const DEFAULTS = { timeoutMs: 8_000, memoryMb: 128, maxOutputBytes: 64_000, goTimeoutMs: 20_000 };
 
 interface StepPlan {
   command: string;
@@ -240,7 +240,7 @@ export async function runRaw(options: SandboxRunOptions): Promise<SandboxRun> {
   const files = options.files.map((file) => ({ ...file, path: assertSafePath(file.path, language) }));
   const backend = isolationBackend();
   if (!backend.available && !baseline) throw new Error(`沙箱不可用：${backend.reason}`);
-  // Go 的 `go run` 要 fork 编译器与链接器，冷缓存外加并发负载时 20s 余量不足；显式 timeoutMs 仍可覆盖。
+  // Go 首跑要编译标准库依赖链，默认预算比其余语言宽；显式 timeoutMs 仍可覆盖。
   const timeoutMs = options.timeoutMs ?? (language === "go" ? DEFAULTS.goTimeoutMs : DEFAULTS.timeoutMs);
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULTS.maxOutputBytes;
   const toolchain = toolchainOrThrow(language);
