@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 export const PROFILE_LIMIT = 4000;
 
 export function profilePath(): string {
-  return join(homedir(), ".codebase-tutor", "profile.md");
+  return process.env.TUTOR_PROFILE_FILE?.trim() || join(homedir(), ".codebase-tutor", "profile.md");
 }
 
 export function readProfile(): string {
