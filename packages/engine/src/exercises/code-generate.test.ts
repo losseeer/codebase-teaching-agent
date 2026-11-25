@@ -154,9 +154,9 @@ describe.skipIf(!capability.usable)("代码题出题自证链", { timeout: 60_00
     const repository = testRepository();
     const go = { given: "package main\n\nfunc Greeting(name string) string {\n\treturn \"hallo\" + name\n}\n", solution: "package main\n\nfunc Greeting(name string) string {\n\treturn \"hello\" + name\n}\n" };
     const tests = 'package main\n\nimport (\n\t"fmt"\n\t"os"\n)\n\nfunc main() {\n\tpass, fail := 0, 0\n\tif Greeting("") == "hello" {\n\t\tpass++\n\t} else {\n\t\tfail++\n\t}\n\tif Greeting("Ann") == "helloAnn" {\n\t\tpass++\n\t} else {\n\t\tfail++\n\t}\n\tfmt.Printf("TESTS %d %d\\n", pass, fail)\n\tif fail > 0 {\n\t\tos.Exit(1)\n\t}\n}\n';
-    const reply = JSON.stringify({ ok: true, language: "go", title: "修正问候前缀", prompt: "把默认问候改回 hello。", defect: "默认前缀拼错了。", given: [{ path: "target.go", contents: go.given }], solution: [{ path: "target.go", contents: go.solution }], hidden: [{ path: "tests.go", contents: tests }], entry: "tests.go" });
+    const reply = JSON.stringify({ ok: true, language: "go", title: "修正问候前缀", prompt: "## 问题描述\nGreeting 的默认拼接写错了，改到测试全过。\n\n## 示例\nGreeting(\"\") => \"hello\"\n\n## 注意事项\n只能用标准库，不要改函数签名。", defect: "默认前缀拼错了。", given: [{ path: "target.go", contents: go.given }], solution: [{ path: "target.go", contents: go.solution }], hidden: [{ path: "tests.go", contents: tests }], entry: "tests.go" });
     const result = await generateCodeExerciseFromReference({ repositoryPath: repository.path, tag: "go", kind: "author_function", reference: "", provider: fakeProvider(() => reply), faces: referenceFaces() });
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.ok ? "" : `${result.reason} ｜ ${JSON.stringify(result.runs.map((run) => [run.label, run.verdict ?? null, run.exitCode, run.timedOut, run.ran]))}`).toBe(true);
     if (result.ok) {
       expect(result.proposal.language).toBe("go");
       expect(result.proposal.entry).toBe("tests.go");
