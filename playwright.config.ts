@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,8 @@ import { defineConfig } from "@playwright/test";
 /** e2e 用独立的数据目录与不可达的模型端点：不碰 ~/.codebase-tutor，也不发真实请求。 */
 const dataDir = join(tmpdir(), "codebase-tutor-e2e");
 mkdirSync(dataDir, { recursive: true });
+// 只清会话库：里面的旧会话会让下一轮用例读到旧档位。配置类文件要保留，否则 capture 没有基准配置
+for (const suffix of ["", "-wal", "-shm"]) rmSync(join(dataDir, `learner.db${suffix}`), { force: true });
 
 const isolatedEnv = {
   TUTOR_REGISTRY_FILE: join(dataDir, "repositories.json"),
@@ -26,8 +28,8 @@ const isolatedEnv = {
 
 export default defineConfig({
   testDir: "./e2e",
-  // 真实模型与沙箱的用例默认不跑：E2E_LIVE=1 才纳入，避免拖慢且偶发不稳定的日常回归
-  ...(process.env.E2E_LIVE ? {} : { testIgnore: ["**/live.spec.ts"] }),
+  // 默认包含真实模型与沙箱的用例（e2e 的价值就在真实链路）；E2E_FAST=1 时排除，做快速 UI 回归
+  ...(process.env.E2E_FAST ? { testIgnore: ["**/zz-live.spec.ts"] } : {}),
   timeout: 60_000,
   // 共用一个引擎与一份地址簿：串行跑，避免互相污染
   workers: 1,

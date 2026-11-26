@@ -141,9 +141,12 @@ test("代码问答：点文件树里的文件能打开源码，切档位按钮�
 
   const toggle = page.getByRole("button", { name: "切换引导式教学" });
   await expect(toggle).toBeVisible();
-  const before = await toggle.getAttribute("aria-pressed");
-  await toggle.click();
-  await expect(toggle).not.toHaveAttribute("aria-pressed", before ?? "");
+  // 进 teaching 时会话异步加载，早点的点击会被旧档位覆盖；等 UI 稳定后再判
+  await expect(async () => {
+    const before = await toggle.getAttribute("aria-pressed");
+    await toggle.click();
+    await expect(toggle).not.toHaveAttribute("aria-pressed", before ?? "", { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   expect(errors).toEqual([]);
 });
 

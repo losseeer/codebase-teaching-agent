@@ -1,6 +1,7 @@
 /**
-  打 @live 的用例会真调模型、真跑沙箱：默认不纳入 `pnpm test:e2e`（config 里 testIgnore），
-  需要时 `E2E_LIVE=1 pnpm test:e2e`。跑完整组会覆盖掉 e2e 的伪端点，所以 afterEach 复原。
+  真实模型与沙箱的用例，默认随 e2e 一起跑；E2E_FAST=1 时排除。
+  文件名排在最后：这两条会在共享库里留下真实会话与练习产物，放最后才不影响其它用例。
+  运行时把引擎切到 .env 的真实配置，afterEach 复原成伪端点。
 */
 import { expect, test } from "@playwright/test";
 
