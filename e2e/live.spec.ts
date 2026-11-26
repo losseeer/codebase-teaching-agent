@@ -36,20 +36,20 @@ test.describe("@live 真实模型与沙箱", () => {
     await useLiveLlm(page);
 
     await page.goto("/app?workspace=practice");
-    // 设计题按主题挑代码：先建一个自定义主题并选中
-    const themeName = `e2e 主题 ${Date.now()}`;
-    await page.getByRole("button", { name: "管理主题" }).click();
-    await page.getByLabel("新增主题名称").fill(themeName);
-    await page.getByRole("button", { name: "添加" }).click();
-    await page.getByRole("button", { name: "完成" }).click();
-    await page.getByRole("tab", { name: themeName }).click();
-
-    // 改代码是默认的 radio 形式，不用再点
+    // 用引擎自带主题：自定义名字匹配不到考点，会直接判「出题失败」
     await page.getByRole("tab", { name: "程序设计" }).click();
+    await page.getByRole("tab", { name: "线程池" }).click();
 
     const generate = page.getByRole("button", { name: /生成练习/ });
     await expect(generate, "选了主题后应可生成").toBeEnabled({ timeout: 20_000 });
     await generate.click();
+
+    // 演示仓可能没有相关代码位置，引擎会先问一句；确认后继续，不确认就会一直卡住
+    const confirm = page.getByRole("alertdialog", { name: "没找到相关代码位置" });
+    await confirm.waitFor({ state: "visible", timeout: 30_000 }).then(
+      () => confirm.getByRole("button", { name: "确认" }).click(),
+      () => undefined
+    );
 
     await expect(page.locator(".exercise-title"), "真实出题应产出题目").toBeVisible({ timeout: 240_000 });
     await expect(page.getByText(/难度/).first()).toBeVisible();
