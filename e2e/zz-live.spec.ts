@@ -5,9 +5,12 @@
 */
 import { expect, test } from "@playwright/test";
 
-import { ensureWorkspace, sandboxNestedUsable, useFakeLlm, useLiveLlm } from "./helpers";
+import { ensureWorkspace, readLiveLlm, sandboxNestedUsable, useFakeLlm, useLiveLlm } from "./helpers";
 
 test.describe("@live 真实模型与沙箱", () => {
+  // CI 上没有 .env，也没有真实模型凭证；这是环境差异，跳过而不是判失败
+  test.skip(!readLiveLlm(), "没有 .env 真实模型凭证");
+
   test.afterEach(async ({ page }) => {
     await useFakeLlm(page);
   });
@@ -37,9 +40,15 @@ test.describe("@live 真实模型与沙箱", () => {
     await useLiveLlm(page);
 
     await page.goto("/app?workspace=practice");
-    // 用引擎自带主题：自定义名字匹配不到考点，会直接判「出题失败」
+    // e2e 数据目录里没有用户积累的主题，要自己建一个；名字带引擎建议的考点词
+    const themeName = `错误 ${Date.now()}`;
+    await page.getByRole("button", { name: "管理主题" }).click();
+    await page.getByLabel("新增主题名称").fill(themeName);
+    await page.getByRole("button", { name: "添加" }).click();
+    await page.getByRole("button", { name: "完成" }).click();
+    await page.getByRole("tab", { name: themeName }).click();
+
     await page.getByRole("tab", { name: "程序设计" }).click();
-    await page.getByRole("tab", { name: "线程池" }).click();
 
     const generate = page.getByRole("button", { name: /生成练习/ });
     await expect(generate, "选了主题后应可生成").toBeEnabled({ timeout: 20_000 });

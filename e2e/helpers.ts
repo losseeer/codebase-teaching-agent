@@ -80,25 +80,28 @@ export function sandboxNestedUsable(): boolean {
   return probe.status === 0;
 }
 
-/** 从项目根 .env 读真实模型配置；@live 用例用它临时替代 e2e 的伪端点。 */
-export function readLiveLlm(): { provider: string; model: string; baseUrl: string; apiKey: string } {
+/** 从项目根 .env 读真实模型配置；CI 上没有 .env，返回 null 让 live 用例跳过。 */
+export function readLiveLlm(): { provider: string; model: string; baseUrl: string; apiKey: string } | null {
+  let text: string;
+  try { text = readFileSync(join(process.cwd(), ".env"), "utf8"); } catch { return null; }
   const entries = new Map<string, string>();
-  for (const line of readFileSync(join(process.cwd(), ".env"), "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     const matched = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
     if (matched) entries.set(matched[1]!, matched[2]!.trim().replace(/^["']|["']$/g, ""));
   }
-  return {
+  const live = {
     provider: entries.get("TUTOR_LLM_PROVIDER") || "openai-compatible",
     model: entries.get("TUTOR_LLM_MODEL") || "",
     baseUrl: entries.get("TUTOR_OPENAI_URL") || "",
     apiKey: entries.get("OPENAI_API_KEY") || ""
   };
+  return live.model && live.baseUrl && live.apiKey ? live : null;
 }
 
 /** 运行时切到真实模型；调用方负责用 useFakeLlm 复原，别让后续用例打到真实端点。 */
 export async function useLiveLlm(page: Page): Promise<void> {
   const live = readLiveLlm();
-  expect(live.model && live.baseUrl && live.apiKey, ".env 里的 TUTOR_LLM_MODEL / TUTOR_OPENAI_URL / OPENAI_API_KEY 不全，@live 用例跑不了").toBeTruthy();
+  if (!live) throw new Error("没有真实模型凭证：live 用例应先被 skip");
   const response = await page.request.put("/api/llm/settings", { data: live });
   expect(response.ok(), `切换真实模型失败：${await response.text()}`).toBeTruthy();
 }
