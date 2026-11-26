@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, type Page } from "@playwright/test";
@@ -66,4 +68,41 @@ export async function seedDiagram(page: Page, name = "E2E 分层图"): Promise<v
     database.close();
   }
   await page.reload();
+}
+
+/**
+  e2e 进程能否真起一次 Seatbelt。某些 agent 的执行环境不允许嵌套 sandbox-exec，
+  trae 之类不会出这个问题——所以这是环境差异，代码题用例据此跳过而不是判失败。
+*/
+export function sandboxNestedUsable(): boolean {
+  if (process.platform !== "darwin") return false;
+  const probe = spawnSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { encoding: "utf8", timeout: 10_000 });
+  return probe.status === 0;
+}
+
+/** 从项目根 .env 读真实模型配置；@live 用例用它临时替代 e2e 的伪端点。 */
+export function readLiveLlm(): { provider: string; model: string; baseUrl: string; apiKey: string } {
+  const entries = new Map<string, string>();
+  for (const line of readFileSync(join(process.cwd(), ".env"), "utf8").split("\n")) {
+    const matched = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+    if (matched) entries.set(matched[1]!, matched[2]!.trim().replace(/^["']|["']$/g, ""));
+  }
+  return {
+    provider: entries.get("TUTOR_LLM_PROVIDER") || "openai-compatible",
+    model: entries.get("TUTOR_LLM_MODEL") || "",
+    baseUrl: entries.get("TUTOR_OPENAI_URL") || "",
+    apiKey: entries.get("OPENAI_API_KEY") || ""
+  };
+}
+
+/** 运行时切到真实模型；调用方负责用 useFakeLlm 复原，别让后续用例打到真实端点。 */
+export async function useLiveLlm(page: Page): Promise<void> {
+  const live = readLiveLlm();
+  expect(live.model && live.baseUrl && live.apiKey, ".env 里的 TUTOR_LLM_MODEL / TUTOR_OPENAI_URL / OPENAI_API_KEY 不全，@live 用例跑不了").toBeTruthy();
+  const response = await page.request.put("/api/llm/settings", { data: live });
+  expect(response.ok(), `切换真实模型失败：${await response.text()}`).toBeTruthy();
+}
+
+export async function useFakeLlm(page: Page): Promise<void> {
+  await page.request.put("/api/llm/settings", { data: { provider: "openai-compatible", model: "e2e-fixture", baseUrl: "http://127.0.0.1:9/v1", apiKey: "e2e-key" } });
 }

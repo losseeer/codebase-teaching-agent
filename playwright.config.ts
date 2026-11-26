@@ -16,6 +16,7 @@ const isolatedEnv = {
   TUTOR_MCP_SETTINGS_FILE: join(dataDir, "mcp.json"),
   TUTOR_PROFILE_META_FILE: join(dataDir, "profile-meta.json"),
   TUTOR_PROFILE_FILE: join(dataDir, "profile.md"),
+  TUTOR_SKILLS_DIR: join(dataDir, "skills"),
   TUTOR_ENGINE_LOG: "off",
   TUTOR_LLM_PROVIDER: "openai-compatible",
   TUTOR_LLM_MODEL: "e2e-fixture",
@@ -25,6 +26,8 @@ const isolatedEnv = {
 
 export default defineConfig({
   testDir: "./e2e",
+  // 真实模型与沙箱的用例默认不跑：E2E_LIVE=1 才纳入，避免拖慢且偶发不稳定的日常回归
+  ...(process.env.E2E_LIVE ? {} : { testIgnore: ["**/live.spec.ts"] }),
   timeout: 60_000,
   // 共用一个引擎与一份地址簿：串行跑，避免互相污染
   workers: 1,
