@@ -32,12 +32,22 @@ export default defineConfig({
   // 共用一个引擎与一份地址簿：串行跑，避免互相污染
   workers: 1,
   fullyParallel: false,
-  use: { baseURL: "http://127.0.0.1:3000" },
-  webServer: {
-    command: "pnpm dev",
-    url: "http://127.0.0.1:3000",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    env: { ...(process.env as Record<string, string>), ...isolatedEnv }
-  }
+  use: { baseURL: "http://127.0.0.1:3100" },
+  // 独立端口 + 不复用：复用用户自己起的 dev server 会让上面的隔离 env 全部失效，写穿 ~/.codebase-tutor
+  webServer: [
+    {
+      command: "pnpm --filter @codebase-tutor/engine dev",
+      url: "http://127.0.0.1:3101/api/health",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: { ...(process.env as Record<string, string>), ...isolatedEnv, ENGINE_PORT: "3101" }
+    },
+    {
+      command: "pnpm --filter @codebase-tutor/gui dev --port 3100",
+      url: "http://127.0.0.1:3100",
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: { ...(process.env as Record<string, string>), VITE_ENGINE_ORIGIN: "http://127.0.0.1:3101" }
+    }
+  ]
 });
