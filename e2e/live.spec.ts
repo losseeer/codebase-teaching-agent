@@ -44,8 +44,8 @@ test.describe("@live 真实模型与沙箱", () => {
     await page.getByRole("button", { name: "完成" }).click();
     await page.getByRole("tab", { name: themeName }).click();
 
+    // 改代码是默认的 radio 形式，不用再点
     await page.getByRole("tab", { name: "程序设计" }).click();
-    await page.getByRole("button", { name: "改代码" }).click();
 
     const generate = page.getByRole("button", { name: /生成练习/ });
     await expect(generate, "选了主题后应可生成").toBeEnabled({ timeout: 20_000 });
